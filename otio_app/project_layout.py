@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -56,6 +57,17 @@ def safe_path_is_dir(path: Path) -> bool:
         return False
 
 
+def is_probably_icloud_path(path: Path) -> bool:
+    """Erkennt typische iCloud-/CloudDocs-Pfade auf dem Mac."""
+    resolved = str(path.expanduser().resolve())
+    markers = (
+        "Mobile Documents",
+        "com~apple~CloudDocs",
+        "iCloud Drive",
+    )
+    return any(marker in resolved for marker in markers)
+
+
 def _names_match(left: str, right: str) -> bool:
     return left.strip().casefold() == right.strip().casefold()
 
@@ -82,30 +94,172 @@ def resolve_voice_over_folder_name(
     return detect_voice_over_folder(subdirectory_names)
 
 
-def list_project_subdirectories(project_root: Path) -> tuple[list[str], str | None]:
-    """Liest alle Unterordner im Projektroot."""
-    if not safe_path_is_dir(project_root):
-        return [], "Projektordner nicht gefunden oder nicht lesbar."
+@dataclass(frozen=True)
+class PathDiagnostic:
+    input_path: str
+    resolved_path: str
+    exists: bool
+    is_directory: bool
+    total_entries: int
+    subdirectory_names: list[str]
+    file_names: list[str]
+    unreadable_entries: list[str]
+    read_error: str | None
+    icloud_path: bool
+    used_icloud_fallback: bool
 
-    names: list[str] = []
+    @property
+    def has_entries(self) -> bool:
+        return self.total_entries > 0
+
+
+def diagnose_project_root(project_root: Path) -> PathDiagnostic:
+    """Liefert eine ausführliche Diagnose für den Projektordner."""
+    resolved = project_root.expanduser().resolve()
+    exists = False
+    is_directory = False
     try:
-        entries = sorted(project_root.iterdir(), key=lambda path: path.name.lower())
+        exists = resolved.exists()
+        is_directory = resolved.is_dir()
     except OSError as exc:
-        return [], f"Ordner konnte nicht gelesen werden: {exc}"
+        return PathDiagnostic(
+            input_path=str(project_root),
+            resolved_path=str(resolved),
+            exists=False,
+            is_directory=False,
+            total_entries=0,
+            subdirectory_names=[],
+            file_names=[],
+            unreadable_entries=[],
+            read_error=str(exc),
+            icloud_path=is_probably_icloud_path(resolved),
+            used_icloud_fallback=False,
+        )
 
-    for entry in entries:
-        try:
-            if entry.is_dir() and not entry.name.startswith("."):
-                names.append(entry.name)
-        except OSError:
+    raw_names: list[str] = []
+    read_error: str | None = None
+    for lister in (_list_names_iterdir, _list_names_os_listdir, _list_names_glob):
+        raw_names, read_error = lister(resolved)
+        if raw_names or read_error:
+            break
+
+    subdirectory_names: list[str] = []
+    file_names: list[str] = []
+    unreadable_entries: list[str] = []
+    used_icloud_fallback = False
+
+    for name in raw_names:
+        if name.startswith("."):
             continue
+        child = resolved / name
+        try:
+            if child.is_dir():
+                subdirectory_names.append(name)
+            elif child.is_file():
+                file_names.append(name)
+            else:
+                unreadable_entries.append(name)
+        except OSError:
+            unreadable_entries.append(name)
+
+    if not subdirectory_names and raw_names and is_probably_icloud_path(resolved):
+        subdirectory_names = sorted(
+            name for name in raw_names if not name.startswith(".")
+        )
+        used_icloud_fallback = bool(subdirectory_names)
+
+    return PathDiagnostic(
+        input_path=str(project_root),
+        resolved_path=str(resolved),
+        exists=exists,
+        is_directory=is_directory,
+        total_entries=len(raw_names),
+        subdirectory_names=sorted(subdirectory_names, key=str.lower),
+        file_names=sorted(file_names, key=str.lower),
+        unreadable_entries=sorted(unreadable_entries, key=str.lower),
+        read_error=read_error,
+        icloud_path=is_probably_icloud_path(resolved),
+        used_icloud_fallback=used_icloud_fallback,
+    )
+
+
+def _list_names_iterdir(path: Path) -> tuple[list[str], str | None]:
+    try:
+        return [entry.name for entry in path.iterdir()], None
+    except OSError as exc:
+        return [], str(exc)
+
+
+def _list_names_os_listdir(path: Path) -> tuple[list[str], str | None]:
+    try:
+        return list(os.listdir(path)), None
+    except OSError as exc:
+        return [], str(exc)
+
+
+def _list_names_glob(path: Path) -> tuple[list[str], str | None]:
+    try:
+        return [entry.name for entry in path.glob("*")], None
+    except OSError as exc:
+        return [], str(exc)
+
+
+def list_project_subdirectories(
+    project_root: Path,
+) -> tuple[list[str], str | None, PathDiagnostic, str | None]:
+    """Liest alle Unterordner im Projektroot."""
+    diagnostic = diagnose_project_root(project_root)
+
+    if not diagnostic.exists:
+        return (
+            [],
+            f"Projektordner existiert nicht: {diagnostic.resolved_path}",
+            diagnostic,
+            None,
+        )
+    if not diagnostic.is_directory:
+        return (
+            [],
+            f"Pfad ist kein Verzeichnis: {diagnostic.resolved_path}",
+            diagnostic,
+            None,
+        )
+    if diagnostic.read_error:
+        return (
+            [],
+            (
+                f"Ordner konnte nicht gelesen werden ({diagnostic.resolved_path}): "
+                f"{diagnostic.read_error}"
+            ),
+            diagnostic,
+            None,
+        )
+
+    names = list(diagnostic.subdirectory_names)
+    warning: str | None = None
+    if diagnostic.used_icloud_fallback:
+        warning = (
+            "iCloud-Ordner erkannt: Unterordner wurden über Dateinamen erkannt. "
+            "Bitte im Finder lokal laden, falls Inhalte fehlen."
+        )
 
     if not names:
-        return [], (
-            "Keine Unterordner gefunden. Prüfe den Pfad, entferne Anführungszeichen "
-            "und lade iCloud-Ordner im Finder ggf. erst lokal herunter."
+        hint = (
+            f"Keine Unterordner in `{diagnostic.resolved_path}` gefunden "
+            f"({diagnostic.total_entries} Einträge insgesamt)."
         )
-    return names, None
+        if diagnostic.icloud_path:
+            hint += (
+                " Dies ist ein iCloud-Pfad — öffne den Ordner im Finder und lade "
+                "die Inhalte lokal herunter (Wolke-Symbol verschwindet)."
+            )
+        elif diagnostic.file_names:
+            hint += (
+                f" Gefundene Dateien im Root: {', '.join(diagnostic.file_names[:5])}."
+            )
+        return [], hint, diagnostic, warning
+
+    return names, None, diagnostic, warning
 
 
 @dataclass(frozen=True)
@@ -122,6 +276,8 @@ class ProjectStructureScan:
     voice_over_language_dir: Path | None = None
     voice_over_language_exists: bool = False
     error: str | None = None
+    warning: str | None = None
+    diagnostic: PathDiagnostic | None = None
 
     @property
     def ok(self) -> bool:
@@ -134,6 +290,9 @@ def classify_subdirectories(
     work_dir: Path,
     project_root: Path,
     language: str,
+    *,
+    warning: str | None = None,
+    diagnostic: PathDiagnostic | None = None,
 ) -> ProjectStructureScan:
     """Ordnet Unterordner in Assets, Voice-over und System ein."""
     voice_over_folder_name = resolve_voice_over_folder_name(
@@ -183,6 +342,8 @@ def classify_subdirectories(
         voice_over_dir=voice_over_dir,
         voice_over_language_dir=voice_over_language_dir,
         voice_over_language_exists=voice_over_language_exists,
+        warning=warning,
+        diagnostic=diagnostic,
     )
 
 
@@ -193,21 +354,26 @@ def scan_project_structure(
     language: str,
 ) -> ProjectStructureScan:
     """Scannt den Projektordner und klassifiziert alle Unterordner."""
-    subdirectory_names, error = list_project_subdirectories(project_root)
+    subdirectory_names, error, diagnostic, warning = list_project_subdirectories(
+        project_root
+    )
     if error:
         return ProjectStructureScan(
-            project_root=project_root,
+            project_root=project_root.expanduser().resolve(),
             work_dir=work_dir,
             voice_over_subdir=voice_over_subdir.strip(),
             language=language,
             error=error,
+            diagnostic=diagnostic,
         )
     return classify_subdirectories(
         subdirectory_names,
         voice_over_subdir,
         work_dir,
-        project_root,
+        project_root.expanduser().resolve(),
         language,
+        warning=warning,
+        diagnostic=diagnostic,
     )
 
 

@@ -30,8 +30,34 @@ PREVIEW_KEY = "project_preview"
 PENDING_KEY = "pending_project"
 
 
+def _render_path_diagnostic(diagnostic) -> None:
+    with st.expander("Pfad-Diagnose", expanded=True):
+        st.write(f"**Eingabe:** `{diagnostic.input_path}`")
+        st.write(f"**Aufgelöst:** `{diagnostic.resolved_path}`")
+        st.write(f"**Existiert:** {'ja' if diagnostic.exists else 'nein'}")
+        st.write(f"**Ist Ordner:** {'ja' if diagnostic.is_directory else 'nein'}")
+        st.write(f"**Einträge gesamt:** {diagnostic.total_entries}")
+        st.write(f"**iCloud-Pfad:** {'ja' if diagnostic.icloud_path else 'nein'}")
+        if diagnostic.subdirectory_names:
+            st.write(
+                "**Erkannte Unterordner:** "
+                + ", ".join(f"`{name}`" for name in diagnostic.subdirectory_names[:20])
+            )
+        if diagnostic.file_names:
+            st.caption(
+                "Dateien im Projektroot: "
+                + ", ".join(f"`{name}`" for name in diagnostic.file_names[:10])
+            )
+        if diagnostic.read_error:
+            st.error(f"Lesefehler: {diagnostic.read_error}")
+
+
 def _render_structure_overview(scan) -> None:
     st.subheader("Erkannte Struktur")
+    if scan.warning:
+        st.warning(scan.warning)
+    if scan.diagnostic is not None:
+        st.caption(f"Aufgelöster Pfad: `{scan.diagnostic.resolved_path}`")
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -227,6 +253,10 @@ if page == PAGE_NEW:
                 "project": project_data.model_dump(mode="json"),
                 "all_subdirs": scan.all_subdirectory_names,
                 "scan_error": scan.error,
+                "scan_warning": scan.warning,
+                "diagnostic": (
+                    scan.diagnostic.__dict__ if scan.diagnostic is not None else None
+                ),
             }
             st.session_state.pop(PENDING_KEY, None)
 
@@ -236,10 +266,33 @@ if page == PAGE_NEW:
 
         if preview.get("scan_error"):
             st.error(preview["scan_error"])
+        if preview.get("scan_warning"):
+            st.warning(preview["scan_warning"])
+        if preview.get("diagnostic"):
+            from otio_app.project_layout import PathDiagnostic
+
+            _render_path_diagnostic(PathDiagnostic(**preview["diagnostic"]))
 
         all_subdirs = preview.get("all_subdirs", [])
         if not all_subdirs:
             if st.button("Erneut scannen"):
+                scan = scan_project_structure(
+                    project_data.project_root_path,
+                    project_data.work_dir_path,
+                    project_data.voice_over_subdir,
+                    project_data.language,
+                )
+                st.session_state[PREVIEW_KEY] = {
+                    "project": preview["project"],
+                    "all_subdirs": scan.all_subdirectory_names,
+                    "scan_error": scan.error,
+                    "scan_warning": scan.warning,
+                    "diagnostic": (
+                        scan.diagnostic.__dict__
+                        if scan.diagnostic is not None
+                        else None
+                    ),
+                }
                 st.rerun()
         else:
             project_root = project_data.project_root_path

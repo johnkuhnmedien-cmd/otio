@@ -7,6 +7,7 @@ from pathlib import Path
 from otio_app.project_layout import (
     classify_subdirectories,
     detect_voice_over_folder,
+    diagnose_project_root,
     discover_asset_subdir_names,
     get_inventory_path,
     get_voice_analysis_path,
@@ -42,7 +43,6 @@ def test_discover_asset_subdir_names(temp_project_layout: dict[str, Path]) -> No
 
 
 def test_resolve_voice_over_case_insensitive(temp_project_layout: dict[str, Path]) -> None:
-    project_root = temp_project_layout["project_root"]
     all_names = ["Grand Canyon", "voice over", "Yellowstone"]
     resolved = resolve_voice_over_folder_name(all_names, "Voice Over")
     assert resolved == "voice over"
@@ -53,6 +53,15 @@ def test_detect_voice_over_folder() -> None:
     assert detect_voice_over_folder(names) == "Voice Over"
 
 
+def test_diagnose_project_root(temp_project_layout: dict[str, Path]) -> None:
+    project_root = temp_project_layout["project_root"]
+    diagnostic = diagnose_project_root(project_root)
+    assert diagnostic.exists is True
+    assert diagnostic.is_directory is True
+    assert "Grand Canyon" in diagnostic.subdirectory_names
+    assert "Voice over" in diagnostic.subdirectory_names
+
+
 def test_scan_project_structure(temp_project_layout: dict[str, Path]) -> None:
     project_root = temp_project_layout["project_root"]
     work_dir = project_root / "_otio"
@@ -61,6 +70,7 @@ def test_scan_project_structure(temp_project_layout: dict[str, Path]) -> None:
     assert scan.voice_over_folder_name == "Voice over"
     assert scan.voice_over_language_exists is True
     assert scan.asset_subdir_names == ["Grand Canyon", "Yellowstone"]
+    assert scan.diagnostic is not None
 
 
 def test_classify_excludes_selected_voice_over(temp_project_layout: dict[str, Path]) -> None:
