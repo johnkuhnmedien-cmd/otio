@@ -30,8 +30,14 @@ def test_check_ffmpeg_not_found(monkeypatch) -> None:
     assert "nicht gefunden" in result.message
 
 
-def test_run_all_checks_returns_four() -> None:
+def test_run_all_checks_returns_five() -> None:
     results = run_all_checks()
-    assert len(results) == 4
+    assert len(results) == 5
     names = {r.name for r in results}
-    assert names == {"Python", "FFmpeg", "ffprobe", "OpenTimelineIO"}
+    assert names == {
+        "Python",
+        "FFmpeg",
+        "ffprobe",
+        "OpenTimelineIO",
+        "Whisper (faster-whisper)",
+    }

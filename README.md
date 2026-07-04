@@ -2,25 +2,27 @@
 
 Lokale Streamlit-App zur Erstellung validierter Schnittpläne und OTIO-Dateien aus Voice-over und Medien-Assets.
 
-**Aktueller Stand:** Meilenstein 2 — Projekt bearbeiten, Voice-over- und Asset-Analyse (Gemini).
+**Aktueller Stand:** Meilenstein 2 — Projekt bearbeiten, Asset-Analyse (Gemini), Voice-over (Whisper lokal oder Gemini).
 
 ## Projekt bearbeiten
 
 In der Sidebar **„Projekt bearbeiten“**:
 
 - Ordnerauswahl (alle / ausgewählte)
-- **Voice-over analysieren** → `voice_over_analysis.json`
+- **Voice-over analysieren** → `voice_over_analysis.json` (Standard: **Whisper lokal**, kostenlos)
 - **Ausgewählte Ordner (Gemini)** → `inventory.json` (pro Mediendatei eine Beschreibung)
-- **Alles bearbeiten** → beides für alle Asset-Ordner
+- **Alles bearbeiten** → Voice-over + alle Asset-Ordner
 
 Gemini-Aufrufe nur nach Checkbox-Bestätigung. API-Schlüssel in `.env`:
 
 ```env
 GEMINI_API_KEY=dein_schlüssel
 GEMINI_MODEL=gemini-2.0-flash
+VOICE_OVER_BACKEND=whisper
+WHISPER_MODEL=small
 ```
 
-Unter **Projekt bearbeiten** kann das Gemini-Modell pro Sitzung in der UI gewählt werden (Standard kommt aus `GEMINI_MODEL`).
+Unter **Projekt bearbeiten** kann das Gemini-Modell pro Sitzung gewählt werden. Voice-over standardmäßig mit **Whisper** (lokal, keine API-Kosten) — auf Apple Silicon (M4) empfohlen: `small` oder `medium`.
 
 ## Projektstruktur (Benutzerordner)
 

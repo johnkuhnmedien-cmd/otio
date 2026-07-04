@@ -6,6 +6,32 @@ DEFAULT_WORK_SUBDIR = "_otio"
 DEFAULT_VOICE_OVER_SUBDIR = "Voice over"
 DEFAULT_FRAMES_PER_SHOT = 3
 DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+DEFAULT_VOICE_BACKEND = "whisper"
+DEFAULT_WHISPER_MODEL = "small"
+VOICE_BACKEND_WHISPER = "whisper"
+VOICE_BACKEND_GEMINI = "gemini"
+VOICE_BACKEND_CHOICES = (
+    VOICE_BACKEND_WHISPER,
+    VOICE_BACKEND_GEMINI,
+)
+VOICE_BACKEND_LABELS = {
+    VOICE_BACKEND_WHISPER: "Whisper (lokal, kostenlos)",
+    VOICE_BACKEND_GEMINI: "Gemini (Cloud, kostenpflichtig)",
+}
+WHISPER_MODEL_CHOICES = (
+    "tiny",
+    "base",
+    "small",
+    "medium",
+    "large-v3",
+)
+WHISPER_MODEL_LABELS = {
+    "tiny": "Whisper tiny — am schnellsten, grober",
+    "base": "Whisper base — schnell",
+    "small": "Whisper small — empfohlen (Standard)",
+    "medium": "Whisper medium — genauer, langsamer",
+    "large-v3": "Whisper large-v3 — beste Qualität, am langsamsten",
+}
 GEMINI_MODEL_CHOICES = (
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
@@ -26,3 +52,15 @@ GEMINI_MODEL_LABELS = {
 }
 INVENTORY_FILENAME = "inventory.json"
 VOICE_ANALYSIS_FILENAME = "voice_over_analysis.json"
+
+
+def resolve_voice_backend(backend: str | None) -> str:
+    if backend and backend.strip() in VOICE_BACKEND_CHOICES:
+        return backend.strip()
+    return DEFAULT_VOICE_BACKEND
+
+
+def resolve_whisper_model(model: str | None) -> str:
+    if model and model.strip() in WHISPER_MODEL_CHOICES:
+        return model.strip()
+    return DEFAULT_WHISPER_MODEL

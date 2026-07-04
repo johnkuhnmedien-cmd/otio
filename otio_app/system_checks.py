@@ -82,10 +82,36 @@ def check_opentimelineio() -> CheckResult:
     )
 
 
+def check_whisper() -> CheckResult:
+    try:
+        import faster_whisper
+    except ImportError:
+        return CheckResult(
+            name="Whisper (faster-whisper)",
+            ok=False,
+            version=None,
+            message="faster-whisper nicht installiert — `pip install -r requirements.txt`",
+        )
+
+    version = getattr(faster_whisper, "__version__", None)
+    message = (
+        f"faster-whisper {version} installiert (lokale Voice-over-Transkription)"
+        if version
+        else "faster-whisper installiert (lokale Voice-over-Transkription)"
+    )
+    return CheckResult(
+        name="Whisper (faster-whisper)",
+        ok=True,
+        version=version,
+        message=message,
+    )
+
+
 def run_all_checks() -> list[CheckResult]:
     return [
         check_python(),
         check_ffmpeg(),
         check_ffprobe(),
         check_opentimelineio(),
+        check_whisper(),
     ]
