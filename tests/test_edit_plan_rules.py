@@ -7,9 +7,11 @@ from pathlib import Path
 from otio_app.analysis_models import EditPlanRule, EditPlanRulesDocument, EditPlanShot
 from otio_app.models import Project
 from otio_app.services.edit_plan_rules import (
+    RULE_CUSTOM_NOTE,
     RULE_MAX_ASSET_USES,
     RULE_NO_CONSECUTIVE_SAME_ASSET,
     apply_edit_plan_rules,
+    available_rule_templates,
     default_rules,
     load_edit_plan_rules,
     save_edit_plan_rules,
@@ -49,6 +51,16 @@ def test_default_rules_include_max_and_consecutive(tmp_path: Path) -> None:
     types = {rule.rule_type for rule in document.rules}
     assert RULE_MAX_ASSET_USES in types
     assert RULE_NO_CONSECUTIVE_SAME_ASSET in types
+    assert len(document.rules) == 2
+
+
+def test_available_templates_allows_custom_notes_and_placeholders(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    document = default_rules(project)
+    available = available_rule_templates(document)
+    types = {template.rule_type for template in available}
+    assert RULE_CUSTOM_NOTE in types
+    assert len(available) >= 3
 
 
 def test_save_and_load_rules(tmp_path: Path) -> None:

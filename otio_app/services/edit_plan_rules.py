@@ -12,6 +12,9 @@ from otio_app.models import Project
 
 RULE_MAX_ASSET_USES = "max_asset_uses"
 RULE_NO_CONSECUTIVE_SAME_ASSET = "no_consecutive_same_asset"
+RULE_MIN_SHOTS_BETWEEN_SAME_ASSET = "min_shots_between_same_asset"
+RULE_PREFER_LEAST_USED_ASSET = "prefer_least_used_asset"
+RULE_CUSTOM_NOTE = "custom_note"
 
 
 @dataclass(frozen=True)
@@ -20,6 +23,8 @@ class EditPlanRuleTemplate:
     label: str
     description: str
     default_params: dict[str, int | float | str | bool]
+    implemented: bool = True
+    allow_multiple: bool = False
 
 
 EDIT_PLAN_RULE_TEMPLATES: tuple[EditPlanRuleTemplate, ...] = (
@@ -28,12 +33,36 @@ EDIT_PLAN_RULE_TEMPLATES: tuple[EditPlanRuleTemplate, ...] = (
         label="Max. Asset-Nutzung",
         description="Dasselbe Asset höchstens N-mal im gesamten Video.",
         default_params={"max_count": 2},
+        implemented=True,
     ),
     EditPlanRuleTemplate(
         rule_type=RULE_NO_CONSECUTIVE_SAME_ASSET,
         label="Nicht zweimal hintereinander",
         description="Dasselbe Asset darf nicht in zwei aufeinanderfolgenden Shots vorkommen.",
         default_params={},
+        implemented=True,
+    ),
+    EditPlanRuleTemplate(
+        rule_type=RULE_MIN_SHOTS_BETWEEN_SAME_ASSET,
+        label="Min. Abstand zwischen Wiederholungen",
+        description="Dasselbe Asset erst wieder nach mindestens N anderen Shots.",
+        default_params={"min_gap": 3},
+        implemented=False,
+    ),
+    EditPlanRuleTemplate(
+        rule_type=RULE_PREFER_LEAST_USED_ASSET,
+        label="Selten genutzte Assets bevorzugen",
+        description="Bevorzugt Assets, die im Schnittplan bisher seltener vorkamen.",
+        default_params={},
+        implemented=False,
+    ),
+    EditPlanRuleTemplate(
+        rule_type=RULE_CUSTOM_NOTE,
+        label="Eigene Notiz / Regel",
+        description="Freitext-Regel — wird gespeichert, aber noch nicht automatisch angewendet.",
+        default_params={"note": ""},
+        implemented=False,
+        allow_multiple=True,
     ),
 )
 
@@ -49,16 +78,24 @@ def rules_path(project: Project) -> Path:
 def default_rules(project: Project) -> EditPlanRulesDocument:
     rules: list[EditPlanRule] = []
     for template in EDIT_PLAN_RULE_TEMPLATES:
-        rules.append(
-            EditPlanRule(
-                id=str(uuid.uuid4()),
-                rule_type=template.rule_type,
-                enabled=True,
-                params=dict(template.default_params),
-                label=template.label,
-            )
-        )
+        if not template.implemented:
+            continue
+        rules.append(create_rule_from_template(template.rule_type))
     return EditPlanRulesDocument(project_id=project.id, rules=rules)
+
+
+def is_rule_implemented(rule_type: str) -> bool:
+    template = _template_map().get(rule_type)
+    return bool(template and template.implemented)
+
+
+def available_rule_templates(existing: EditPlanRulesDocument) -> list[EditPlanRuleTemplate]:
+    used_types = {rule.rule_type for rule in existing.rules}
+    available: list[EditPlanRuleTemplate] = []
+    for template in EDIT_PLAN_RULE_TEMPLATES:
+        if template.allow_multiple or template.rule_type not in used_types:
+            available.append(template)
+    return available
 
 
 def load_edit_plan_rules(project: Project) -> EditPlanRulesDocument:
@@ -113,7 +150,11 @@ def _asset_key(asset_path: str | None) -> str | None:
 
 
 def _enabled_rules(rules_doc: EditPlanRulesDocument) -> list[EditPlanRule]:
-    return [rule for rule in rules_doc.rules if rule.enabled]
+    return [
+        rule
+        for rule in rules_doc.rules
+        if rule.enabled and is_rule_implemented(rule.rule_type)
+    ]
 
 
 def _max_count(rules: list[EditPlanRule]) -> int | None:
