@@ -265,10 +265,6 @@ def render_edit_plan_page() -> None:
             format_func=format_gemini_model_label,
             key=f"plan_gemini_{project.id}",
         )
-        api_confirmed = st.checkbox(
-            "Kostenpflichtige Gemini-Aufrufe für Schnittplan bestätigen",
-            key=f"plan_api_{project.id}",
-        )
 
     with tab_generate:
         st.markdown(
@@ -279,35 +275,32 @@ def render_edit_plan_page() -> None:
             st.warning("Ohne GEMINI_API_KEY wird nur eine einfache Text-Trennung genutzt.")
 
         if st.button("Schnittplan vorschlagen", key=f"build_plan_{project.id}", type="primary"):
-            use_gemini = api_confirmed and is_gemini_configured()
-            if is_gemini_configured() and not api_confirmed:
-                st.warning("Bitte Gemini-Aufrufe bestätigen — sonst nur Text-Trennung.")
-            else:
-                settings = EditPlanSettings(
-                    shot_min_sec=float(shot_min),
-                    shot_max_sec=float(shot_max),
-                    audio_offset_sec=float(audio_offset),
-                    text_splitters=[
-                        piece.strip()
-                        for piece in splitters.split(",")
-                        if piece.strip()
-                    ],
-                    fallback_order=list(DEFAULT_FALLBACK_ORDER),
-                    gemini_model=gemini_model,
-                )
-                try:
-                    with st.spinner(f"Schnittplan für {selected_folder} wird erstellt…"):
-                        document = build_edit_plan(
-                            project,
-                            settings,
-                            use_api=use_gemini,
-                            folder_names=[selected_folder],
-                        )
-                    _set_draft(document, selected_folder)
-                    st.success(f"{len(document.shots)} Shots vorgeschlagen.")
-                    st.rerun()
-                except (GeminiNotConfiguredError, ValueError, FileNotFoundError) as exc:
-                    st.error(str(exc))
+            use_gemini = is_gemini_configured()
+            settings = EditPlanSettings(
+                shot_min_sec=float(shot_min),
+                shot_max_sec=float(shot_max),
+                audio_offset_sec=float(audio_offset),
+                text_splitters=[
+                    piece.strip()
+                    for piece in splitters.split(",")
+                    if piece.strip()
+                ],
+                fallback_order=list(DEFAULT_FALLBACK_ORDER),
+                gemini_model=gemini_model,
+            )
+            try:
+                with st.spinner(f"Schnittplan für {selected_folder} wird erstellt…"):
+                    document = build_edit_plan(
+                        project,
+                        settings,
+                        use_api=use_gemini,
+                        folder_names=[selected_folder],
+                    )
+                _set_draft(document, selected_folder)
+                st.success(f"{len(document.shots)} Shots vorgeschlagen.")
+                st.rerun()
+            except (GeminiNotConfiguredError, ValueError, FileNotFoundError) as exc:
+                st.error(str(exc))
 
         draft = _get_draft(project.id, selected_folder) or saved
         if draft is not None:
