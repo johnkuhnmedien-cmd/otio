@@ -10,7 +10,7 @@ In der Sidebar **„Projekt bearbeiten“**:
 
 - Ordnerauswahl (alle / ausgewählte)
 - **Voice-over analysieren** → `voice_over_analysis.json` (Standard: **Whisper lokal**, kostenlos)
-- **Ausgewählte Ordner (Gemini)** → `inventory.json` (pro Mediendatei eine Beschreibung)
+- **Ausgewählte Ordner (Gemini)** → `_otio/inventory/<Ordner>.json` (pro Ordner eine Datei mit Asset-Beschreibungen)
 - **Alles bearbeiten** → Voice-over + alle Asset-Ordner
 
 Gemini-Aufrufe nur nach Checkbox-Bestätigung. API-Schlüssel in `.env`:
@@ -38,10 +38,12 @@ USA/
 └── _otio/               # App-Arbeitsordner (Cache, Frames — wird angelegt)
 ```
 
-Nach der Analyse (spätere Meilensteine) entstehen im Projektordner:
+Nach der Analyse entstehen im Projektordner bzw. unter `_otio/`:
 
-- `inventory.json` — Beschreibungen aller Mediendateien je Asset-Unterordner
+- `_otio/inventory/<Ordner>.json` — Beschreibungen aller Mediendateien je Asset-Unterordner (z. B. `Florida_Keys.json`)
 - `voice_over_analysis.json` — Audio-Analyse mit Timestamps pro Satz/Passage
+
+Ältere Projekte mit zentraler `inventory.json` im Projektroot werden beim Laden automatisch aufgeteilt.
 
 ## Voraussetzungen
 

@@ -51,6 +51,7 @@ GEMINI_MODEL_LABELS = {
     "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview — beste Qualität (Preview, teurer)",
 }
 INVENTORY_FILENAME = "inventory.json"
+INVENTORY_SUBDIR = "inventory"
 VOICE_ANALYSIS_FILENAME = "voice_over_analysis.json"
 VOICE_FOLDER_MAPPING_FILENAME = "voice_folder_mapping.json"
 EDIT_PLAN_FILENAME = "edit_plan.json"

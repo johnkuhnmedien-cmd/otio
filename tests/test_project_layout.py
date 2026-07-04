@@ -9,12 +9,15 @@ from otio_app.project_layout import (
     detect_voice_over_folder,
     diagnose_project_root,
     discover_asset_subdir_names,
+    get_folder_inventory_path,
+    get_inventory_dir,
     get_inventory_path,
     get_voice_analysis_path,
     get_voice_over_dir,
     language_folder_name,
     resolve_voice_over_folder_name,
     scan_project_structure,
+    safe_folder_slug,
 )
 
 
@@ -31,7 +34,11 @@ def test_get_voice_over_dir(temp_project_layout: dict[str, Path]) -> None:
 
 def test_output_paths(temp_project_layout: dict[str, Path]) -> None:
     project_root = temp_project_layout["project_root"]
+    work_dir = temp_project_layout["work_dir"]
     assert get_inventory_path(project_root).name == "inventory.json"
+    assert get_inventory_dir(work_dir).name == "inventory"
+    assert safe_folder_slug("Florida Keys") == "Florida_Keys"
+    assert get_folder_inventory_path(work_dir, "Florida Keys").name == "Florida_Keys.json"
     assert get_voice_analysis_path(project_root).name == "voice_over_analysis.json"
 
 

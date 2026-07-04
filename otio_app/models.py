@@ -25,6 +25,8 @@ from otio_app.paths import (
 )
 from otio_app.project_layout import (
     get_edit_plan_path,
+    get_folder_inventory_path,
+    get_inventory_dir,
     get_inventory_path,
     get_voice_analysis_path,
     get_voice_folder_mapping_path,
@@ -159,6 +161,13 @@ class ProjectCreate(BaseModel):
         return get_inventory_path(self.project_root_path)
 
     @property
+    def inventory_dir(self) -> Path:
+        return get_inventory_dir(self.work_dir_path)
+
+    def folder_inventory_path(self, folder_name: str) -> Path:
+        return get_folder_inventory_path(self.work_dir_path, folder_name)
+
+    @property
     def voice_analysis_path(self) -> Path:
         return get_voice_analysis_path(self.project_root_path)
 
@@ -222,6 +231,13 @@ class Project(BaseModel):
     @property
     def inventory_path(self) -> Path:
         return get_inventory_path(self.project_root_path)
+
+    @property
+    def inventory_dir(self) -> Path:
+        return get_inventory_dir(self.work_dir_path)
+
+    def folder_inventory_path(self, folder_name: str) -> Path:
+        return get_folder_inventory_path(self.work_dir_path, folder_name)
 
     @property
     def voice_analysis_path(self) -> Path:

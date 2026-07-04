@@ -11,6 +11,7 @@ from otio_app.defaults import (
     DEFAULT_WORK_SUBDIR,
     EDIT_PLAN_FILENAME,
     INVENTORY_FILENAME,
+    INVENTORY_SUBDIR,
     VOICE_ANALYSIS_FILENAME,
     VOICE_FOLDER_MAPPING_FILENAME,
 )
@@ -48,7 +49,23 @@ def get_voice_over_dir(
     return project_root / voice_over_subdir / language_folder_name(language)
 
 
+def safe_folder_slug(value: str) -> str:
+    """Dateiname-sicherer Slug für Ordner- und Medien-Cache."""
+    return value.replace(" ", "_").replace("/", "_")
+
+
+def get_inventory_dir(work_dir: Path) -> Path:
+    """Verzeichnis für pro-Ordner-Inventar-JSONs unter dem Arbeitsordner."""
+    return work_dir / INVENTORY_SUBDIR
+
+
+def get_folder_inventory_path(work_dir: Path, folder_name: str) -> Path:
+    """Pfad zur Inventar-JSON eines Asset-Ordners (z. B. _otio/inventory/Florida_Keys.json)."""
+    return get_inventory_dir(work_dir) / f"{safe_folder_slug(folder_name)}.json"
+
+
 def get_inventory_path(project_root: Path) -> Path:
+    """Legacy-Pfad zur zentralen inventory.json im Projektroot (Migration)."""
     return project_root / INVENTORY_FILENAME
 
 

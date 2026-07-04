@@ -91,9 +91,11 @@ def test_build_edit_plan_without_gemini(
             )
         ],
     )
-    project.inventory_path.write_text(
-        inventory.model_dump_json(indent=2),
-        encoding="utf-8",
+    from otio_app.services.inventory_loader import save_folder_inventory
+
+    save_folder_inventory(
+        project.folder_inventory_path("Grand Canyon"),
+        inventory.items[0],
     )
 
     document = build_edit_plan(project, use_api=False)

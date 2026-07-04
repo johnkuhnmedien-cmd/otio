@@ -321,9 +321,15 @@ def render_project_workbench() -> None:
             st.code(project.voice_analysis_path.read_text(encoding="utf-8")[:4000])
         else:
             st.caption("Voice-over-Analyse noch nicht erstellt.")
-        if project.inventory_path.is_file():
-            st.markdown("**inventory.json**")
-            st.code(project.inventory_path.read_text(encoding="utf-8")[:4000])
+        if project.inventory_dir.is_dir():
+            inventory_files = sorted(project.inventory_dir.glob("*.json"))
+            if inventory_files:
+                st.markdown("**Inventar (pro Ordner)**")
+                for inv_file in inventory_files:
+                    st.caption(str(inv_file.name))
+                    st.code(inv_file.read_text(encoding="utf-8")[:2000])
+            else:
+                st.caption("Inventar noch nicht erstellt.")
         else:
             st.caption("Inventar noch nicht erstellt.")
 

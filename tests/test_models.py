@@ -43,7 +43,10 @@ def test_project_create_voice_over_dir(temp_project_layout: dict[str, Path]) -> 
 def test_project_create_output_paths(temp_project_layout: dict[str, Path]) -> None:
     data = _make_create(temp_project_layout)
     project_root = temp_project_layout["project_root"]
+    work_dir = temp_project_layout["work_dir"]
     assert data.inventory_path == project_root / "inventory.json"
+    assert data.inventory_dir == work_dir / "inventory"
+    assert data.folder_inventory_path("Grand Canyon") == work_dir / "inventory" / "Grand_Canyon.json"
     assert data.voice_analysis_path == project_root / "voice_over_analysis.json"
 
 

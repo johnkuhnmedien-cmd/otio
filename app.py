@@ -123,7 +123,8 @@ def _show_saved_project(saved) -> None:
             "voice_over_pfad": str(saved.voice_over_dir),
             "alle_asset_ordner": saved.asset_subdir_names,
             "ausgewaehlte_ordner": saved.selected_asset_subdirs,
-            "inventory_path": str(saved.inventory_path),
+            "inventory_dir": str(saved.inventory_dir),
+            "legacy_inventory_path": str(saved.inventory_path),
             "voice_analysis_path": str(saved.voice_analysis_path),
             "frames_per_shot": saved.frames_per_shot,
         }
@@ -450,7 +451,7 @@ elif page == PAGE_LIST:
                     )
                 )
                 st.write(
-                    f"**Geplante Ausgaben:** `{project.inventory_path}`, "
+                    f"**Geplante Ausgaben:** `{project.inventory_dir}/<Ordner>.json`, "
                     f"`{project.voice_analysis_path}`"
                 )
                 st.write(
