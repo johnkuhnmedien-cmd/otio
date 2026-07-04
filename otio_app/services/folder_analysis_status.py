@@ -7,8 +7,7 @@ from enum import Enum
 from otio_app.models import Project
 from otio_app.services.media_inventory_cache import (
     is_completed_analysis,
-    load_cached_media,
-    media_cache_path,
+    load_cached_media_for_asset,
 )
 from otio_app.services.inventory_loader import should_skip_folder_analysis
 from otio_app.services.media_utils import list_media_files
@@ -41,8 +40,7 @@ def get_folder_analysis_state(project: Project, folder_name: str) -> FolderAnaly
 
     completed = 0
     for media_path in media_paths:
-        cache_file = media_cache_path(project, folder_name, media_path)
-        cached = load_cached_media(cache_file)
+        cached = load_cached_media_for_asset(project, folder_name, media_path)
         if cached is not None and is_completed_analysis(cached):
             completed += 1
 

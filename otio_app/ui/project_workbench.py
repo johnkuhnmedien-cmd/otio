@@ -252,7 +252,12 @@ def render_project_workbench() -> None:
         return
 
     render_workflow_progress(project, current_step="analysis")
-    sync_folder_inventories_from_cache(project)
+    created_inventories = sync_folder_inventories_from_cache(project)
+    if created_inventories:
+        st.success(
+            "Ordner-Inventare aus Cache erstellt: "
+            + ", ".join(f"`{name}`" for name in created_inventories)
+        )
     render_output_status(project)
     st.caption(
         f"Status: {project.status.value} · "

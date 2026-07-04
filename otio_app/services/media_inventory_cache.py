@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Optional
 
 from otio_app.analysis_models import AssetMediaAnalysis
 from otio_app.models import Project
-from otio_app.project_layout import safe_folder_slug
+from otio_app.project_layout import get_inventory_dir, safe_folder_slug
 
 
 def media_cache_path(project: Project, folder_name: str, media_path: Path) -> Path:
@@ -20,6 +21,27 @@ def media_cache_path(project: Project, folder_name: str, media_path: Path) -> Pa
     )
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / f"{safe_folder_slug(media_path.name)}.json"
+
+
+def legacy_per_asset_cache_path(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+) -> Path:
+    """Alter Pfad: _otio/inventory/<Ordner>/<Datei>.json (vor cache/inventory)."""
+    cache_dir = get_inventory_dir(project.work_dir_path) / safe_folder_slug(folder_name)
+    return cache_dir / f"{safe_folder_slug(media_path.name)}.json"
+
+
+def cached_media_paths_for_asset(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+) -> list[Path]:
+    return [
+        media_cache_path(project, folder_name, media_path),
+        legacy_per_asset_cache_path(project, folder_name, media_path),
+    ]
 
 
 def load_cached_media(cache_file: Path) -> Optional[AssetMediaAnalysis]:
@@ -37,6 +59,70 @@ def load_cached_media(cache_file: Path) -> Optional[AssetMediaAnalysis]:
         return None
 
 
+def load_cached_media_for_asset(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+) -> Optional[AssetMediaAnalysis]:
+    """Lädt Cache-Eintrag aus neuem oder altem Speicherort."""
+    for cache_file in cached_media_paths_for_asset(project, folder_name, media_path):
+        cached = load_cached_media(cache_file)
+        if cached is not None:
+            return cached
+    return None
+
+
+def migrate_legacy_per_asset_cache_file(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+) -> None:
+    """Verschiebt einen alten Cache-Eintrag nach _otio/cache/inventory/."""
+    legacy_path = legacy_per_asset_cache_path(project, folder_name, media_path)
+    if not legacy_path.is_file():
+        return
+    target_path = media_cache_path(project, folder_name, media_path)
+    if target_path.is_file():
+        try:
+            legacy_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    cached = load_cached_media(legacy_path)
+    if cached is None:
+        return
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.move(str(legacy_path), str(target_path))
+    except OSError:
+        save_cached_media(target_path, cached)
+        try:
+            legacy_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def migrate_legacy_per_asset_cache_folder(
+    project: Project,
+    folder_name: str,
+) -> None:
+    """Räumt alten Ordner _otio/inventory/<Ordner>/ auf (Dateien -> cache/inventory)."""
+    legacy_dir = get_inventory_dir(project.work_dir_path) / safe_folder_slug(folder_name)
+    if not legacy_dir.is_dir():
+        return
+
+    from otio_app.services.media_utils import list_media_files
+
+    for media_path in list_media_files(project.project_root_path / folder_name):
+        migrate_legacy_per_asset_cache_file(project, folder_name, media_path)
+
+    try:
+        if legacy_dir.is_dir() and not any(legacy_dir.iterdir()):
+            legacy_dir.rmdir()
+    except OSError:
+        pass
+
+
 def is_completed_analysis(entry: AssetMediaAnalysis) -> bool:
     """True, wenn dieses Asset bereits analysiert wurde (Erfolg oder dokumentierter Fehler)."""
     if entry.description.strip():
@@ -45,4 +131,5 @@ def is_completed_analysis(entry: AssetMediaAnalysis) -> bool:
 
 
 def save_cached_media(cache_file: Path, entry: AssetMediaAnalysis) -> None:
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
     cache_file.write_text(entry.model_dump_json(indent=2), encoding="utf-8")

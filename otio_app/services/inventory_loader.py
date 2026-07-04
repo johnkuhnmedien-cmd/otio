@@ -11,7 +11,9 @@ from otio_app.project_layout import get_folder_inventory_path, get_inventory_dir
 from otio_app.services.media_inventory_cache import (
     is_completed_analysis,
     load_cached_media,
+    load_cached_media_for_asset,
     media_cache_path,
+    migrate_legacy_per_asset_cache_folder,
 )
 from otio_app.services.media_utils import list_media_files
 
@@ -92,9 +94,11 @@ def materialize_folder_inventory_from_cache(
     if existing is not None:
         return existing
 
+    migrate_legacy_per_asset_cache_folder(project, folder_name)
+
     assets: list[AssetMediaAnalysis] = []
     for media_path in media_paths:
-        cached = load_cached_media(media_cache_path(project, folder_name, media_path))
+        cached = load_cached_media_for_asset(project, folder_name, media_path)
         if cached is None or not is_completed_analysis(cached):
             return None
         assets.append(cached)
@@ -121,6 +125,7 @@ def sync_folder_inventories_from_cache(
     targets = folder_names if folder_names is not None else project.asset_subdir_names
     created: list[str] = []
     for folder_name in targets:
+        migrate_legacy_per_asset_cache_folder(project, folder_name)
         out_path = get_folder_inventory_path(project.work_dir_path, folder_name)
         existed_before = out_path.is_file()
         if materialize_folder_inventory_from_cache(project, folder_name) is not None:
@@ -217,7 +222,7 @@ def load_folder_inventory(project: Project, folder_name: str) -> AssetFolderAnal
 
     assets: list[AssetMediaAnalysis] = []
     for media_path in media_paths:
-        cached = load_cached_media(media_cache_path(project, folder_name, media_path))
+        cached = load_cached_media_for_asset(project, folder_name, media_path)
         if cached is not None:
             assets.append(cached)
         else:
