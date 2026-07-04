@@ -66,45 +66,56 @@ def folder_inventory_is_complete(item: AssetFolderAnalysis) -> bool:
     return all(is_successfully_analyzed(asset) for asset in item.assets)
 
 
+def delete_folder_inventory(project: Project, folder_name: str) -> None:
+    path = get_folder_inventory_path(project.work_dir_path, folder_name)
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def folder_is_green(project: Project, folder_name: str) -> bool:
+    """Grün = alle Assets erfolgreich analysiert oder manuell freigegeben."""
+    media_paths = list_media_files(project.project_root_path / folder_name)
+    if not media_paths:
+        return False
+    if folder_is_fully_analyzed(project, folder_name):
+        return True
+    return is_manually_complete(project, folder_name)
+
+
+def sync_folder_inventory_with_status(project: Project, folder_name: str) -> bool:
+    """Grün → Inventory-JSON erstellen/aktualisieren. Nicht grün → JSON entfernen."""
+    media_paths = list_media_files(project.project_root_path / folder_name)
+    if not media_paths:
+        delete_folder_inventory(project, folder_name)
+        return False
+
+    auto_complete = folder_is_fully_analyzed(project, folder_name)
+    manual_complete = is_manually_complete(project, folder_name)
+
+    if not auto_complete and not manual_complete:
+        delete_folder_inventory(project, folder_name)
+        return False
+
+    allow_partial = manual_complete and not auto_complete
+    item, _error = materialize_folder_inventory_from_cache(
+        project,
+        folder_name,
+        allow_partial=allow_partial,
+    )
+    return item is not None
+
+
 def remove_stale_folder_inventory(
     project: Project,
     folder_name: str,
     media_paths: list[Path] | None = None,
 ) -> None:
-    """Entfernt gebündelte JSON, wenn nicht alle Medien erfolgreich analysiert sind."""
-    if is_manually_complete(project, folder_name):
+    """Entfernt Inventory-JSON, wenn der Ordner nicht grün ist."""
+    if folder_is_green(project, folder_name):
         return
-    if media_paths is None:
-        media_paths = list_media_files(project.project_root_path / folder_name)
-    path = get_folder_inventory_path(project.work_dir_path, folder_name)
-    if not path.is_file():
-        return
-    item = load_folder_inventory_file(path)
-    if item is None:
-        return
-    if not media_paths:
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return
-    if not folder_inventory_matches_media(item, media_paths):
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return
-    if not folder_inventory_is_complete(item):
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return
-    if not folder_is_fully_analyzed(project, folder_name):
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
+    delete_folder_inventory(project, folder_name)
 
 
 def should_skip_folder_analysis(
@@ -114,7 +125,6 @@ def should_skip_folder_analysis(
 ) -> AssetFolderAnalysis | None:
     """Liefert Inventar nur wenn alle Medien erfolgreich analysiert sind."""
     if not folder_is_fully_analyzed(project, folder_name):
-        remove_stale_folder_inventory(project, folder_name, media_paths)
         return None
 
     path = get_folder_inventory_path(project.work_dir_path, folder_name)
@@ -243,41 +253,42 @@ def sync_folder_inventories_from_cache(
 
     for folder_name in targets:
         migrate_legacy_per_asset_cache_folder(project, folder_name)
-        media_paths = list_media_files(project.project_root_path / folder_name)
-        remove_stale_folder_inventory(project, folder_name, media_paths)
         out_path = get_folder_inventory_path(project.work_dir_path, folder_name)
         existed_before = out_path.is_file()
         media_count = len(list_media_files(project.project_root_path / folder_name))
         cache_count = len(scan_folder_cache_assets(project, folder_name))
 
-        item, error = materialize_folder_inventory_from_cache(project, folder_name)
-        if item is not None and not existed_before and out_path.is_file():
+        created_now = sync_folder_inventory_with_status(project, folder_name)
+        if out_path.is_file() and not existed_before:
             created.append(folder_name)
             statuses.append(
                 FolderInventorySyncStatus(
                     folder=folder_name,
                     state="created",
-                    detail=f"Neu erstellt: `{out_path.name}`",
+                    detail=f"Neu erstellt (Ordner grün): `{out_path.name}`",
                     cache_files=cache_count,
-                    media_files=media_count or len(item.assets),
+                    media_files=media_count,
                 )
             )
-        elif item is not None and existed_before:
+        elif out_path.is_file():
             statuses.append(
                 FolderInventorySyncStatus(
                     folder=folder_name,
                     state="exists",
-                    detail=f"Vorhanden: `{out_path.name}`",
+                    detail=f"Vorhanden (Ordner grün): `{out_path.name}`",
                     cache_files=cache_count,
-                    media_files=media_count or len(item.assets),
+                    media_files=media_count,
                 )
             )
         else:
+            detail = "Kein Inventar — Ordner noch nicht grün"
+            if folder_is_green(project, folder_name):
+                detail = "Ordner grün, aber Inventar konnte nicht erstellt werden"
             statuses.append(
                 FolderInventorySyncStatus(
                     folder=folder_name,
                     state="incomplete",
-                    detail=error or "Unvollständig",
+                    detail=detail,
                     cache_files=cache_count,
                     media_files=media_count,
                 )
@@ -360,15 +371,15 @@ def list_folder_inventory_paths(project: Project) -> list[Path]:
 
 
 def selected_folders_have_inventory(project: Project) -> bool:
-    """True, wenn alle ausgewählten Asset-Ordner fertig oder manuell freigegeben sind."""
+    """True, wenn alle ausgewählten Ordner grün sind und je eine Inventory-JSON haben."""
     if not project.selected_asset_subdirs:
         return False
     for folder_name in project.selected_asset_subdirs:
-        if folder_is_fully_analyzed(project, folder_name):
-            continue
-        if is_manually_complete(project, folder_name):
-            continue
-        return False
+        if not folder_is_green(project, folder_name):
+            return False
+        sync_folder_inventory_with_status(project, folder_name)
+        if not get_folder_inventory_path(project.work_dir_path, folder_name).is_file():
+            return False
     return True
 
 

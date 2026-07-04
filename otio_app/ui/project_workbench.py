@@ -50,7 +50,6 @@ from otio_app.services.folder_analysis_status import (
     list_open_folder_names,
 )
 from otio_app.services.folder_asset_status import folder_is_fully_analyzed
-from otio_app.services.inventory_loader import materialize_folder_inventory_from_cache
 from otio_app.services.manual_folder_completion import is_manually_complete, set_manually_complete
 from otio_app.ui.project_context import (
     render_file_paths,
@@ -251,9 +250,6 @@ def _render_folder_selection(project) -> list[str]:
                     key=f"manual_{project.id}_{folder_name}",
                     help="Manuell als fertig markieren",
                 ):
-                    materialize_folder_inventory_from_cache(
-                        project, folder_name, allow_partial=True
-                    )
                     set_manually_complete(project, folder_name, complete=True)
                     st.rerun()
 

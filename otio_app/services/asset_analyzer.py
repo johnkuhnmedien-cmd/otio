@@ -11,7 +11,7 @@ from otio_app.analysis_models import (
     InventoryDocument,
 )
 from otio_app.models import Project, validate_asset_selection
-from otio_app.project_layout import get_folder_inventory_path, safe_folder_slug
+from otio_app.project_layout import safe_folder_slug
 from otio_app.services.analysis_progress import AnalysisRunReport, ProgressCallback, noop_progress
 from otio_app.services.folder_asset_status import folder_is_fully_analyzed
 from otio_app.services.frame_extract import extract_frames
@@ -20,9 +20,8 @@ from otio_app.services.gemini_client import (
     describe_media_from_frames,
 )
 from otio_app.services.inventory_loader import (
-    remove_stale_folder_inventory,
-    save_folder_inventory,
     should_skip_folder_analysis,
+    sync_folder_inventory_with_status,
 )
 from otio_app.services.media_inventory_cache import (
     is_successfully_analyzed,
@@ -109,33 +108,6 @@ def _analyze_single_media(
     return entry, "fehler"
 
 
-def _save_folder_inventory_if_complete(
-    project: Project,
-    folder_name: str,
-    media_paths: list[Path],
-    assets: list[AssetMediaAnalysis],
-) -> bool:
-    if len(assets) != len(media_paths):
-        remove_stale_folder_inventory(project, folder_name, media_paths)
-        return False
-    if not all(is_successfully_analyzed(asset) for asset in assets):
-        remove_stale_folder_inventory(project, folder_name, media_paths)
-        return False
-
-    item = AssetFolderAnalysis(
-        folder=folder_name,
-        media_files=[str(media_path) for media_path in media_paths],
-        assets=assets,
-        frames_used=[frame for asset in assets for frame in asset.frames_used],
-        description=_folder_summary(assets),
-    )
-    save_folder_inventory(
-        get_folder_inventory_path(project.work_dir_path, folder_name),
-        item,
-    )
-    return True
-
-
 def _analyze_folder(
     project: Project,
     folder_name: str,
@@ -149,7 +121,6 @@ def _analyze_folder(
 ) -> AssetFolderAnalysis:
     folder_path = project.project_root_path / folder_name
     media_paths = list_media_files(folder_path)
-    remove_stale_folder_inventory(project, folder_name, media_paths)
 
     existing = should_skip_folder_analysis(project, folder_name, media_paths)
     if existing is not None:
@@ -254,9 +225,7 @@ def _analyze_folder(
     if not assets:
         item.description = "Keine analysierbaren Medien gefunden."
 
-    inventory_saved = _save_folder_inventory_if_complete(
-        project, folder_name, media_paths, assets
-    )
+    inventory_saved = sync_folder_inventory_with_status(project, folder_name)
     if report is not None:
         report.folders_processed.append(folder_name)
     on_progress(

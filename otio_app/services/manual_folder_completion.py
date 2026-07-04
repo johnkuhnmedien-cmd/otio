@@ -56,3 +56,7 @@ def set_manually_complete(
         folders.discard(folder_name)
     document.folders = sorted(folders, key=str.casefold)
     save_manual_completion(project, document)
+
+    from otio_app.services.inventory_loader import sync_folder_inventory_with_status
+
+    sync_folder_inventory_with_status(project, folder_name)
