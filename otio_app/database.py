@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS projects (
     target_platform     TEXT NOT NULL DEFAULT 'YouTube',
     status              TEXT NOT NULL DEFAULT 'DRAFT',
     asset_subdir_names  TEXT NOT NULL DEFAULT '[]',
+    selected_asset_subdirs TEXT NOT NULL DEFAULT '[]',
     notes               TEXT,
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL
@@ -46,6 +47,19 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "asset_subdir_names" not in column_names:
         conn.execute(
             "ALTER TABLE projects ADD COLUMN asset_subdir_names TEXT NOT NULL DEFAULT '[]'"
+        )
+        column_names.add("asset_subdir_names")
+
+    if "selected_asset_subdirs" not in column_names:
+        conn.execute(
+            "ALTER TABLE projects ADD COLUMN selected_asset_subdirs TEXT NOT NULL DEFAULT '[]'"
+        )
+        conn.execute(
+            """
+            UPDATE projects
+            SET selected_asset_subdirs = asset_subdir_names
+            WHERE selected_asset_subdirs = '[]' AND asset_subdir_names != '[]'
+            """
         )
 
 

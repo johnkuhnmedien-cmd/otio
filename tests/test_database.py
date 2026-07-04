@@ -34,6 +34,7 @@ def test_schema_creates_projects_table(temp_db_path: Path) -> None:
             "target_platform",
             "status",
             "asset_subdir_names",
+            "selected_asset_subdirs",
             "notes",
             "created_at",
             "updated_at",

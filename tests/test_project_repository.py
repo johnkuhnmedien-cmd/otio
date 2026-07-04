@@ -22,10 +22,16 @@ def test_create_and_list(
     temp_db_path: Path,
 ) -> None:
     data = _sample_create(temp_project_layout)
-    saved = create_project(data, db_path=temp_db_path)
+    saved = create_project(
+        data,
+        db_path=temp_db_path,
+        asset_subdir_names=["Grand Canyon", "Yellowstone"],
+        selected_asset_subdirs=["Yellowstone"],
+    )
     assert saved.status == ProjectStatus.DRAFT
     assert saved.notes == "Testnotiz"
-    assert len(saved.asset_subdir_names) == 2
+    assert saved.asset_subdir_names == ["Grand Canyon", "Yellowstone"]
+    assert saved.selected_asset_subdirs == ["Yellowstone"]
 
     projects = list_projects(db_path=temp_db_path)
     assert len(projects) == 1
@@ -37,7 +43,12 @@ def test_get_by_id(
     temp_project_layout: dict[str, Path],
     temp_db_path: Path,
 ) -> None:
-    saved = create_project(_sample_create(temp_project_layout), db_path=temp_db_path)
+    saved = create_project(
+        _sample_create(temp_project_layout),
+        db_path=temp_db_path,
+        asset_subdir_names=["Grand Canyon", "Yellowstone"],
+        selected_asset_subdirs=["Grand Canyon", "Yellowstone"],
+    )
     loaded = get_project_by_id(saved.id, db_path=temp_db_path)
     assert loaded is not None
     assert loaded.name == saved.name

@@ -7,11 +7,16 @@ import sqlite3
 from pathlib import Path
 
 from otio_app.database import get_connection
-from otio_app.models import Project, ProjectCreate, ProjectStatus
+from otio_app.models import (
+    Project,
+    ProjectCreate,
+    ProjectStatus,
+    validate_asset_selection,
+)
 from otio_app.project_layout import discover_asset_subdir_names
 
 
-def _parse_asset_subdir_names(raw: str | None) -> list[str]:
+def _parse_json_string_list(raw: str | None) -> list[str]:
     if not raw:
         return []
     try:
@@ -24,6 +29,11 @@ def _parse_asset_subdir_names(raw: str | None) -> list[str]:
 
 
 def _row_to_project(row: sqlite3.Row) -> Project:
+    asset_subdir_names = _parse_json_string_list(row["asset_subdir_names"])
+    selected_asset_subdirs = _parse_json_string_list(row["selected_asset_subdirs"])
+    if not selected_asset_subdirs and asset_subdir_names:
+        selected_asset_subdirs = list(asset_subdir_names)
+
     return Project(
         id=row["id"],
         name=row["name"],
@@ -38,7 +48,8 @@ def _row_to_project(row: sqlite3.Row) -> Project:
         aspect_ratio=row["aspect_ratio"],
         target_platform=row["target_platform"],
         status=ProjectStatus(row["status"]),
-        asset_subdir_names=_parse_asset_subdir_names(row["asset_subdir_names"]),
+        asset_subdir_names=asset_subdir_names,
+        selected_asset_subdirs=selected_asset_subdirs,
         notes=row["notes"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -49,6 +60,7 @@ def create_project(
     data: ProjectCreate,
     db_path: Path | None = None,
     asset_subdir_names: list[str] | None = None,
+    selected_asset_subdirs: list[str] | None = None,
 ) -> Project:
     """Legt ein neues Projekt in der Datenbank an."""
     if asset_subdir_names is None:
@@ -57,7 +69,19 @@ def create_project(
             data.work_dir_path,
             data.voice_over_subdir,
         )
-    project = Project.from_create(data, asset_subdir_names)
+    if selected_asset_subdirs is None:
+        selected_asset_subdirs = list(asset_subdir_names)
+    else:
+        selected_asset_subdirs = validate_asset_selection(
+            asset_subdir_names,
+            selected_asset_subdirs,
+        )
+
+    project = Project.from_create(
+        data,
+        asset_subdir_names,
+        selected_asset_subdirs,
+    )
     conn = get_connection(db_path)
     try:
         conn.execute(
@@ -65,9 +89,9 @@ def create_project(
             INSERT INTO projects (
                 id, name, project_root, work_dir, voice_over_subdir,
                 language, frames_per_shot, fps, width, height, aspect_ratio,
-                target_platform, status, asset_subdir_names, notes,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                target_platform, status, asset_subdir_names,
+                selected_asset_subdirs, notes, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project.id,
@@ -84,6 +108,7 @@ def create_project(
                 project.target_platform,
                 project.status.value,
                 json.dumps(project.asset_subdir_names, ensure_ascii=False),
+                json.dumps(project.selected_asset_subdirs, ensure_ascii=False),
                 project.notes,
                 project.created_at.isoformat(),
                 project.updated_at.isoformat(),

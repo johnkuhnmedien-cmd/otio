@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from otio_app.defaults import DEFAULT_FRAMES_PER_SHOT
-from otio_app.models import Project, ProjectCreate, ProjectStatus
+from otio_app.models import Project, ProjectCreate, ProjectStatus, validate_asset_selection
 
 
 def _make_create(layout: dict[str, Path]) -> ProjectCreate:
@@ -84,7 +84,22 @@ def test_project_from_create_sets_draft_status(
     temp_project_layout: dict[str, Path],
 ) -> None:
     data = _make_create(temp_project_layout)
-    project = Project.from_create(data, asset_subdir_names=["Grand Canyon", "Yellowstone"])
+    project = Project.from_create(
+        data,
+        asset_subdir_names=["Grand Canyon", "Yellowstone"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
     assert project.status == ProjectStatus.DRAFT
     assert project.name == "USA Reise"
     assert project.asset_subdir_names == ["Grand Canyon", "Yellowstone"]
+    assert project.selected_asset_subdirs == ["Grand Canyon"]
+
+
+def test_validate_asset_selection_rejects_empty() -> None:
+    with pytest.raises(ValueError, match="Mindestens ein"):
+        validate_asset_selection(["Grand Canyon"], [])
+
+
+def test_validate_asset_selection_rejects_unknown() -> None:
+    with pytest.raises(ValueError, match="Ungültige"):
+        validate_asset_selection(["Grand Canyon"], ["Unknown"])

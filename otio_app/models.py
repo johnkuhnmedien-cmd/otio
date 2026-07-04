@@ -29,6 +29,22 @@ class ProjectStatus(str, Enum):
     DRAFT = "DRAFT"
 
 
+def validate_asset_selection(
+    available: list[str],
+    selected: list[str],
+) -> list[str]:
+    """Prüft, dass die Auswahl eine nicht-leere Teilmenge der verfügbaren Ordner ist."""
+    if not selected:
+        raise ValueError("Mindestens ein Asset-Ordner muss ausgewählt werden.")
+    available_set = set(available)
+    invalid = [name for name in selected if name not in available_set]
+    if invalid:
+        raise ValueError(
+            "Ungültige Ordnerauswahl: " + ", ".join(invalid)
+        )
+    return selected
+
+
 class ProjectCreate(BaseModel):
     name: str
     project_root: str
@@ -150,6 +166,7 @@ class Project(BaseModel):
     target_platform: str = "YouTube"
     status: ProjectStatus = ProjectStatus.DRAFT
     asset_subdir_names: list[str]
+    selected_asset_subdirs: list[str]
     notes: str | None = None
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
@@ -175,6 +192,10 @@ class Project(BaseModel):
         )
 
     @property
+    def selected_asset_subdirs_paths(self) -> list[Path]:
+        return [self.project_root_path / name for name in self.selected_asset_subdirs]
+
+    @property
     def asset_subdirs(self) -> list[Path]:
         return [self.project_root_path / name for name in self.asset_subdir_names]
 
@@ -187,7 +208,12 @@ class Project(BaseModel):
         return get_voice_analysis_path(self.project_root_path)
 
     @classmethod
-    def from_create(cls, data: ProjectCreate, asset_subdir_names: list[str]) -> Project:
+    def from_create(
+        cls,
+        data: ProjectCreate,
+        asset_subdir_names: list[str],
+        selected_asset_subdirs: list[str],
+    ) -> Project:
         now = datetime.now(timezone.utc)
         return cls(
             name=data.name,
@@ -202,6 +228,7 @@ class Project(BaseModel):
             aspect_ratio=data.aspect_ratio,
             target_platform=data.target_platform,
             asset_subdir_names=asset_subdir_names,
+            selected_asset_subdirs=selected_asset_subdirs,
             notes=data.notes,
             status=ProjectStatus.DRAFT,
             created_at=now,

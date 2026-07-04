@@ -22,6 +22,7 @@ PAGE_NEW = "Neues Projekt"
 PAGE_LIST = "Gespeicherte Projekte"
 PAGE_STATUS = "Systemstatus"
 
+PREVIEW_KEY = "project_preview"
 PENDING_KEY = "pending_project"
 
 
@@ -29,14 +30,14 @@ def _show_saved_project(saved) -> None:
     st.success(
         f"Projekt '{saved.name}' gespeichert (Status: {saved.status.value})."
     )
-    asset_names = saved.asset_subdir_names
     st.json(
         {
             "id": saved.id,
             "project_root": saved.project_root,
             "work_dir": saved.work_dir,
             "voice_over_dir": str(saved.voice_over_dir),
-            "asset_subdirs": asset_names,
+            "alle_asset_ordner": saved.asset_subdir_names,
+            "ausgewaehlte_ordner": saved.selected_asset_subdirs,
             "inventory_path": str(saved.inventory_path),
             "voice_analysis_path": str(saved.voice_analysis_path),
             "frames_per_shot": saved.frames_per_shot,
@@ -44,15 +45,48 @@ def _show_saved_project(saved) -> None:
     )
 
 
+def _finalize_project_save(
+    project_data: ProjectCreate,
+    available_assets: list[str],
+    selected_assets: list[str],
+) -> None:
+    if not selected_assets:
+        st.error("Bitte mindestens einen Ordner auswählen.")
+        return
+
+    work_path = normalize_path(project_data.work_dir)
+    if not work_path.exists():
+        st.session_state[PENDING_KEY] = {
+            "project": project_data.model_dump(mode="json"),
+            "available_assets": available_assets,
+            "selected_asset_subdirs": selected_assets,
+        }
+        st.session_state.pop(PREVIEW_KEY, None)
+        return
+
+    saved = create_project(
+        project_data,
+        asset_subdir_names=available_assets,
+        selected_asset_subdirs=selected_assets,
+    )
+    st.session_state.pop(PREVIEW_KEY, None)
+    st.session_state.pop(PENDING_KEY, None)
+    _show_saved_project(saved)
+
+
 def _save_pending_project() -> None:
     raw = st.session_state.pop(PENDING_KEY, None)
     if raw is None:
         return
-    project_data = ProjectCreate.model_validate(raw)
+    project_data = ProjectCreate.model_validate(raw["project"])
     work_path = normalize_path(project_data.work_dir)
     if not work_path.exists():
         create_work_dir(work_path)
-    saved = create_project(project_data)
+    saved = create_project(
+        project_data,
+        asset_subdir_names=raw["available_assets"],
+        selected_asset_subdirs=raw["selected_asset_subdirs"],
+    )
     _show_saved_project(saved)
 
 
@@ -70,8 +104,8 @@ if page == PAGE_NEW:
 
     st.markdown(
         """
-        Gib den **Projektordner** an (z. B. `.../USA`). Darin liegen die
-        Asset-Unterordner (Grand Canyon, Yellowstone, …) und der Voice-over-Ordner.
+        Gib den **Projektordner** an (z. B. `.../USA`). Danach wählst du aus,
+        welche Asset-Unterordner bearbeitet werden sollen.
         """
     )
 
@@ -111,7 +145,7 @@ if page == PAGE_NEW:
             height = st.number_input("Höhe (px)", value=2160, min_value=1, step=1)
 
         notes = st.text_area("Notizen", value="")
-        submitted = st.form_submit_button("Projekt speichern")
+        submitted = st.form_submit_button("Ordner erfassen")
 
     if submitted:
         try:
@@ -130,53 +164,83 @@ if page == PAGE_NEW:
                 notes=notes or None,
             )
         except ValidationError as exc:
+            st.session_state.pop(PREVIEW_KEY, None)
             st.session_state.pop(PENDING_KEY, None)
             for error in exc.errors():
                 st.error(error["msg"])
         else:
             with st.spinner("Projektordner wird geprüft …"):
-                asset_names = project_data.asset_subdir_names
-            st.subheader("Erkannte Struktur")
-            st.write(f"**Asset-Unterordner ({len(asset_names)}):**")
-            if asset_names:
-                st.write(", ".join(f"`{name}`" for name in asset_names))
-            else:
-                st.info(
-                    "Keine Asset-Unterordner gefunden. "
-                    "Bei iCloud-Ordnern ggf. Dateien erst lokal laden."
-                )
+                available_assets = project_data.asset_subdir_names
+            st.session_state[PREVIEW_KEY] = {
+                "project": project_data.model_dump(mode="json"),
+                "available_assets": available_assets,
+            }
+            st.session_state.pop(PENDING_KEY, None)
 
-            voice_dir = project_data.voice_over_dir
-            if safe_path_is_dir(voice_dir):
-                st.success(f"Voice-over-Ordner gefunden: `{voice_dir}`")
-            else:
-                st.warning(
-                    f"Voice-over-Ordner noch nicht vorhanden: `{voice_dir}` "
-                    "(wird später für die Audio-Analyse benötigt)."
-                )
+    if PREVIEW_KEY in st.session_state:
+        preview = st.session_state[PREVIEW_KEY]
+        project_data = ProjectCreate.model_validate(preview["project"])
+        available_assets = preview["available_assets"]
 
-            st.caption(
-                f"Inventar später: `{project_data.inventory_path}` · "
-                f"Voice-over-Analyse später: `{project_data.voice_analysis_path}`"
+        st.subheader("Erkannte Struktur")
+        st.write(f"**Gefundene Asset-Unterordner ({len(available_assets)}):**")
+        if available_assets:
+            st.write(", ".join(f"`{name}`" for name in available_assets))
+        else:
+            st.info(
+                "Keine Asset-Unterordner gefunden. "
+                "Bei iCloud-Ordnern ggf. Dateien erst lokal laden."
             )
 
-            work_path = normalize_path(project_data.work_dir)
-            if work_path.exists():
-                saved = create_project(project_data)
-                _show_saved_project(saved)
-            else:
-                st.session_state[PENDING_KEY] = project_data.model_dump(mode="json")
+        voice_dir = project_data.voice_over_dir
+        if safe_path_is_dir(voice_dir):
+            st.success(f"Voice-over-Ordner gefunden: `{voice_dir}`")
+        else:
+            st.warning(
+                f"Voice-over-Ordner noch nicht vorhanden: `{voice_dir}` "
+                "(wird später für die Audio-Analyse benötigt)."
+            )
+
+        st.subheader("Ordnerauswahl")
+        selected_assets = st.multiselect(
+            "Zu bearbeitende Ordner *",
+            options=available_assets,
+            default=available_assets,
+            help="Nur ausgewählte Ordner werden später analysiert und ins Inventar aufgenommen.",
+        )
+        st.caption(f"Ausgewählt: {len(selected_assets)} von {len(available_assets)}")
+
+        col_save, col_cancel = st.columns(2)
+        with col_save:
+            if st.button(
+                "Projekt speichern",
+                disabled=not available_assets or not selected_assets,
+            ):
+                _finalize_project_save(
+                    project_data,
+                    available_assets,
+                    selected_assets,
+                )
+        with col_cancel:
+            if st.button("Auswahl verwerfen"):
+                st.session_state.pop(PREVIEW_KEY, None)
+                st.rerun()
 
     if PENDING_KEY in st.session_state:
-        pending = ProjectCreate.model_validate(st.session_state[PENDING_KEY])
-        work_path = normalize_path(pending.work_dir)
-        default_path = default_work_dir(normalize_path(pending.project_root))
+        pending = st.session_state[PENDING_KEY]
+        project_data = ProjectCreate.model_validate(pending["project"])
+        work_path = normalize_path(project_data.work_dir)
+        default_path = default_work_dir(normalize_path(project_data.project_root))
         st.warning(f"Der Arbeitsordner existiert noch nicht:\n`{work_path}`")
         if work_path == default_path:
             st.info(
                 "Standard-Arbeitsordner `_otio` wird für Cache, Frames und "
                 "Zwischenergebnisse verwendet. Originalmedien bleiben unverändert."
             )
+        st.write(
+            "**Ausgewählte Ordner:** "
+            + ", ".join(f"`{name}`" for name in pending["selected_asset_subdirs"])
+        )
         create_confirmed = st.checkbox(
             "Arbeitsordner jetzt anlegen",
             key="confirm_create_work_dir",
@@ -200,15 +264,26 @@ elif page == PAGE_LIST:
         st.info("Noch keine Projekte gespeichert.")
     else:
         for project in projects:
-            asset_names = project.asset_subdir_names
             with st.expander(f"{project.name}  ({project.status.value})"):
                 st.write(f"**ID:** `{project.id}`")
                 st.write(f"**Projektordner:** `{project.project_root}`")
                 st.write(f"**Arbeitsordner:** `{project.work_dir}`")
                 st.write(f"**Voice-over:** `{project.voice_over_dir}`")
                 st.write(
-                    f"**Asset-Unterordner ({len(asset_names)}):** "
-                    + (", ".join(f"`{n}`" for n in asset_names) if asset_names else "—")
+                    f"**Gefundene Ordner ({len(project.asset_subdir_names)}):** "
+                    + (
+                        ", ".join(f"`{n}`" for n in project.asset_subdir_names)
+                        if project.asset_subdir_names
+                        else "—"
+                    )
+                )
+                st.write(
+                    f"**Zu bearbeiten ({len(project.selected_asset_subdirs)}):** "
+                    + (
+                        ", ".join(f"`{n}`" for n in project.selected_asset_subdirs)
+                        if project.selected_asset_subdirs
+                        else "—"
+                    )
                 )
                 st.write(
                     f"**Geplante Ausgaben:** `{project.inventory_path}`, "
