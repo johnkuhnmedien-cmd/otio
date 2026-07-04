@@ -57,7 +57,7 @@ def test_analyze_asset_folders_processes_every_media_file(
     )
 
     project = _sample_project(temp_project_layout)
-    document = analyze_asset_folders(project, ["Grand Canyon"], use_api=True)
+    document, report = analyze_asset_folders(project, ["Grand Canyon"], use_api=True)
 
     assert calls == ["clip.mp4", "clip2.mp4"]
     item = document.items[0]
@@ -154,7 +154,7 @@ def test_analyze_asset_folders_recovers_from_corrupt_cache(
         fake_describe,
     )
 
-    document = analyze_asset_folders(project, ["Grand Canyon"], use_api=True)
+    document, report = analyze_asset_folders(project, ["Grand Canyon"], use_api=True)
 
     assert calls == ["clip.mp4"]
     assert document.items[0].assets[0].description.startswith("Beschreibung für")
