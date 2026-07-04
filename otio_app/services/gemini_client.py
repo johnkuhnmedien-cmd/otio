@@ -51,6 +51,47 @@ def _extract_json(text: str) -> Any:
     return json.loads(cleaned)
 
 
+def describe_media_from_frames(
+    media_name: str,
+    folder_name: str,
+    frame_paths: list[Path],
+    language: str,
+    *,
+    model: Optional[str] = None,
+) -> str:
+    """Sendet Frames eines einzelnen Assets an Gemini und liefert eine Beschreibung."""
+    if not frame_paths:
+        return "Keine Frames verfügbar."
+
+    client = _get_client()
+    from google.genai import types
+
+    parts: list[types.Part] = [
+        types.Part.from_text(
+            text=(
+                f"Du analysierst die Mediendatei '{media_name}' aus dem Ordner "
+                f"'{folder_name}'. "
+                f"Sprache der Antwort: {language}. "
+                "Beschreibe kurz und sachlich, was zu sehen ist (Ort, Motiv, Stimmung, "
+                "Kameraperspektive). Maximal 6 Sätze."
+            )
+        )
+    ]
+    for frame_path in frame_paths:
+        parts.append(
+            types.Part.from_bytes(
+                data=frame_path.read_bytes(),
+                mime_type="image/jpeg",
+            )
+        )
+
+    response = client.models.generate_content(
+        model=resolve_gemini_model(model),
+        contents=[types.Content(role="user", parts=parts)],
+    )
+    return (response.text or "").strip()
+
+
 def describe_folder_from_frames(
     folder_name: str,
     frame_paths: list[Path],
@@ -58,7 +99,7 @@ def describe_folder_from_frames(
     *,
     model: Optional[str] = None,
 ) -> str:
-    """Sendet nur Frame-Bilder an Gemini und liefert eine Ordnerbeschreibung."""
+    """Sendet Frame-Bilder an Gemini und liefert eine Ordnerbeschreibung."""
     if not frame_paths:
         return "Keine Frames verfügbar."
 

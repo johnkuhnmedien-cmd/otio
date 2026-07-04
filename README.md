@@ -10,7 +10,7 @@ In der Sidebar **„Projekt bearbeiten“**:
 
 - Ordnerauswahl (alle / ausgewählte)
 - **Voice-over analysieren** → `voice_over_analysis.json`
-- **Ausgewählte Ordner (Gemini)** → `inventory.json`
+- **Ausgewählte Ordner (Gemini)** → `inventory.json` (pro Mediendatei eine Beschreibung)
 - **Alles bearbeiten** → beides für alle Asset-Ordner
 
 Gemini-Aufrufe nur nach Checkbox-Bestätigung. API-Schlüssel in `.env`:
@@ -38,7 +38,7 @@ USA/
 
 Nach der Analyse (spätere Meilensteine) entstehen im Projektordner:
 
-- `inventory.json` — gebündelte Beschreibungen aller Asset-Unterordner
+- `inventory.json` — Beschreibungen aller Mediendateien je Asset-Unterordner
 - `voice_over_analysis.json` — Audio-Analyse mit Timestamps pro Satz/Passage
 
 ## Voraussetzungen

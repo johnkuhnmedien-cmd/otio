@@ -28,11 +28,19 @@ class VoiceAnalysisDocument(BaseModel):
     files: List[VoiceFileAnalysis] = Field(default_factory=list)
 
 
+class AssetMediaAnalysis(BaseModel):
+    path: str
+    description: str = ""
+    frames_used: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
 class AssetFolderAnalysis(BaseModel):
     folder: str
     description: str = ""
     media_files: List[str] = Field(default_factory=list)
     frames_used: List[str] = Field(default_factory=list)
+    assets: List[AssetMediaAnalysis] = Field(default_factory=list)
     error: Optional[str] = None
 
 

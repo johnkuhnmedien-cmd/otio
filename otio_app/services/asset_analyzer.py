@@ -6,47 +6,97 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from otio_app.analysis_models import AssetFolderAnalysis, InventoryDocument
+from otio_app.analysis_models import (
+    AssetFolderAnalysis,
+    AssetMediaAnalysis,
+    InventoryDocument,
+)
 from otio_app.models import Project, validate_asset_selection
 from otio_app.services.frame_extract import extract_frames
 from otio_app.services.gemini_client import (
     GeminiNotConfiguredError,
-    describe_folder_from_frames,
+    describe_media_from_frames,
 )
 from otio_app.services.media_utils import list_media_files
 
 
-def _folder_cache_path(project: Project, folder_name: str) -> Path:
-    cache_dir = project.work_dir_path / "cache" / "inventory"
+def _safe_cache_name(value: str) -> str:
+    return value.replace(" ", "_").replace("/", "_")
+
+
+def _media_cache_path(project: Project, folder_name: str, media_path: Path) -> Path:
+    cache_dir = (
+        project.work_dir_path
+        / "cache"
+        / "inventory"
+        / _safe_cache_name(folder_name)
+    )
     cache_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = folder_name.replace(" ", "_").replace("/", "_")
-    return cache_dir / f"{safe_name}.json"
+    return cache_dir / f"{_safe_cache_name(media_path.stem)}.json"
 
 
-def _collect_frames_for_folder(
+def _frames_dir(project: Project, folder_name: str, media_path: Path) -> Path:
+    return (
+        project.work_dir_path
+        / "frames"
+        / _safe_cache_name(folder_name)
+        / _safe_cache_name(media_path.stem)
+    )
+
+
+def _folder_summary(assets: list[AssetMediaAnalysis]) -> str:
+    parts: list[str] = []
+    for asset in assets:
+        if asset.description:
+            parts.append(f"{Path(asset.path).name}: {asset.description}")
+    return "\n\n".join(parts)
+
+
+def _analyze_single_media(
     project: Project,
-    folder_path: Path,
     folder_name: str,
-) -> tuple[list[Path], list[str]]:
-    media_files = list_media_files(folder_path)
-    if not media_files:
-        return [], []
-
-    frames_root = project.work_dir_path / "frames" / folder_name.replace(" ", "_")
-    all_frames: list[Path] = []
-    used_media: list[str] = []
+    media_path: Path,
+    *,
+    use_api: bool,
+    model: Optional[str],
+) -> AssetMediaAnalysis:
+    cache_file = _media_cache_path(project, folder_name, media_path)
+    if cache_file.is_file():
+        payload = json.loads(cache_file.read_text(encoding="utf-8"))
+        return AssetMediaAnalysis.model_validate(payload)
 
     per_file = max(1, project.frames_per_shot)
-    for media_path in media_files:
-        frame_dir = frames_root / media_path.stem
-        frames = extract_frames(media_path, frame_dir, per_file)
-        if frames:
-            used_media.append(str(media_path))
-            all_frames.extend(frames)
-        if len(all_frames) >= project.frames_per_shot:
-            break
+    frames = extract_frames(
+        media_path,
+        _frames_dir(project, folder_name, media_path),
+        per_file,
+    )
+    entry = AssetMediaAnalysis(
+        path=str(media_path),
+        frames_used=[str(frame) for frame in frames],
+    )
 
-    return all_frames[: project.frames_per_shot], used_media
+    if not frames:
+        entry.description = "Keine analysierbaren Medien gefunden."
+    elif use_api:
+        try:
+            entry.description = describe_media_from_frames(
+                media_path.name,
+                folder_name,
+                frames,
+                project.language,
+                model=model,
+            )
+        except GeminiNotConfiguredError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            entry.error = str(exc)
+            entry.description = ""
+    else:
+        entry.error = "API-Aufruf nicht bestätigt."
+
+    cache_file.write_text(entry.model_dump_json(indent=2), encoding="utf-8")
+    return entry
 
 
 def analyze_asset_folders(
@@ -56,46 +106,35 @@ def analyze_asset_folders(
     use_api: bool = True,
     model: Optional[str] = None,
 ) -> InventoryDocument:
-    """Analysiert ausgewählte Asset-Ordner und schreibt inventory.json."""
+    """Analysiert alle Medien in ausgewählten Asset-Ordnern und schreibt inventory.json."""
     selected = validate_asset_selection(project.asset_subdir_names, folder_names)
     items: list[AssetFolderAnalysis] = []
 
     for folder_name in selected:
-        cache_file = _folder_cache_path(project, folder_name)
-        if cache_file.is_file():
-            payload = json.loads(cache_file.read_text(encoding="utf-8"))
-            items.append(AssetFolderAnalysis.model_validate(payload))
-            continue
-
         folder_path = project.project_root_path / folder_name
-        media_files = [str(path) for path in list_media_files(folder_path)]
-        item = AssetFolderAnalysis(folder=folder_name, media_files=media_files)
+        media_paths = list_media_files(folder_path)
+        assets = [
+            _analyze_single_media(
+                project,
+                folder_name,
+                media_path,
+                use_api=use_api,
+                model=model,
+            )
+            for media_path in media_paths
+        ]
 
-        frames, used_media = _collect_frames_for_folder(
-            project, folder_path, folder_name
+        item = AssetFolderAnalysis(
+            folder=folder_name,
+            media_files=[asset.path for asset in assets],
+            assets=assets,
+            frames_used=[
+                frame for asset in assets for frame in asset.frames_used
+            ],
+            description=_folder_summary(assets),
         )
-        item.frames_used = [str(path) for path in frames]
-        item.media_files = used_media or media_files
-
-        if not frames:
+        if not assets:
             item.description = "Keine analysierbaren Medien gefunden."
-        elif use_api:
-            try:
-                item.description = describe_folder_from_frames(
-                    folder_name,
-                    frames,
-                    project.language,
-                    model=model,
-                )
-            except GeminiNotConfiguredError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                item.error = str(exc)
-                item.description = ""
-        else:
-            item.error = "API-Aufruf nicht bestätigt."
-
-        cache_file.write_text(item.model_dump_json(indent=2), encoding="utf-8")
         items.append(item)
 
     document = InventoryDocument(project_id=project.id, items=items)
