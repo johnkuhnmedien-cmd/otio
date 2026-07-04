@@ -14,7 +14,8 @@ RULE_MAX_ASSET_USES = "max_asset_uses"
 RULE_NO_CONSECUTIVE_SAME_ASSET = "no_consecutive_same_asset"
 RULE_MIN_SHOTS_BETWEEN_SAME_ASSET = "min_shots_between_same_asset"
 RULE_PREFER_LEAST_USED_ASSET = "prefer_least_used_asset"
-RULE_CUSTOM_NOTE = "custom_note"
+RULE_CUSTOM = "custom"
+RULE_CUSTOM_NOTE = "custom_note"  # Legacy — wird wie RULE_CUSTOM behandelt
 
 
 @dataclass(frozen=True)
@@ -56,14 +57,6 @@ EDIT_PLAN_RULE_TEMPLATES: tuple[EditPlanRuleTemplate, ...] = (
         default_params={},
         implemented=False,
     ),
-    EditPlanRuleTemplate(
-        rule_type=RULE_CUSTOM_NOTE,
-        label="Eigene Notiz / Regel",
-        description="Freitext-Regel — wird gespeichert, aber noch nicht automatisch angewendet.",
-        default_params={"note": ""},
-        implemented=False,
-        allow_multiple=True,
-    ),
 )
 
 
@@ -90,12 +83,35 @@ def is_rule_implemented(rule_type: str) -> bool:
 
 
 def available_rule_templates(existing: EditPlanRulesDocument) -> list[EditPlanRuleTemplate]:
-    used_types = {rule.rule_type for rule in existing.rules}
+    used_types = {rule.rule_type for rule in existing.rules if not is_custom_rule(rule)}
     available: list[EditPlanRuleTemplate] = []
     for template in EDIT_PLAN_RULE_TEMPLATES:
         if template.allow_multiple or template.rule_type not in used_types:
             available.append(template)
     return available
+
+
+def is_custom_rule(rule: EditPlanRule) -> bool:
+    return rule.rule_type in {RULE_CUSTOM, RULE_CUSTOM_NOTE}
+
+
+def list_custom_rules(rules_doc: EditPlanRulesDocument, *, enabled_only: bool = False) -> list[EditPlanRule]:
+    rules = [rule for rule in rules_doc.rules if is_custom_rule(rule)]
+    if enabled_only:
+        rules = [rule for rule in rules if rule.enabled]
+    return rules
+
+
+def create_custom_rule(title: str, text: str) -> EditPlanRule:
+    clean_title = title.strip() or "Eigene Regel"
+    clean_text = text.strip()
+    return EditPlanRule(
+        id=str(uuid.uuid4()),
+        rule_type=RULE_CUSTOM,
+        enabled=True,
+        params={"title": clean_title, "text": clean_text},
+        label=clean_title,
+    )
 
 
 def load_edit_plan_rules(project: Project) -> EditPlanRulesDocument:
@@ -121,6 +137,14 @@ def save_edit_plan_rules(project: Project, document: EditPlanRulesDocument) -> P
 
 
 def rule_label(rule: EditPlanRule) -> str:
+    if is_custom_rule(rule):
+        title = str(rule.params.get("title") or rule.label or "").strip()
+        if title:
+            return title
+        legacy_note = str(rule.params.get("note", "")).strip()
+        if legacy_note:
+            return legacy_note.splitlines()[0][:80]
+        return "Eigene Regel"
     if rule.label.strip():
         return rule.label.strip()
     template = _template_map().get(rule.rule_type)
@@ -128,6 +152,9 @@ def rule_label(rule: EditPlanRule) -> str:
 
 
 def rule_description(rule: EditPlanRule) -> str:
+    if is_custom_rule(rule):
+        text = str(rule.params.get("text") or rule.params.get("note") or "").strip()
+        return text or "Eigene Regel — manuell beim Schnitt beachten."
     template = _template_map().get(rule.rule_type)
     return template.description if template else ""
 

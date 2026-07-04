@@ -26,12 +26,14 @@ from otio_app.services.gemini_client import (
     get_default_gemini_model,
     is_gemini_configured,
 )
-from otio_app.services.edit_plan_rules import validate_shots_against_rules
-from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
-from otio_app.ui.edit_plan_rules_ui import (
-    get_edit_plan_rules_for_project,
-    render_edit_plan_rules_manager,
+from otio_app.services.edit_plan_rules import (
+    list_custom_rules,
+    rule_description,
+    rule_label,
+    validate_shots_against_rules,
 )
+from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
+from otio_app.ui.edit_plan_rules_ui import render_edit_plan_rules_manager
 from otio_app.ui.project_context import (
     render_file_paths,
     render_project_selector,
@@ -204,6 +206,11 @@ def render_edit_plan_page() -> None:
         st.markdown(f"**{len(draft.shots)} Shots** — Audio-Offset: {draft.settings.audio_offset_sec}s")
         rules_doc = get_edit_plan_rules_for_project(project)
         violations = validate_shots_against_rules(draft.shots, rules_doc)
+        custom_rules = list_custom_rules(rules_doc, enabled_only=True)
+        if custom_rules:
+            st.markdown("**Deine Regeln (Checkliste)**")
+            for rule in custom_rules:
+                st.caption(f"• **{rule_label(rule)}** — {rule_description(rule)}")
         if violations:
             st.warning(f"{len(violations)} Regelverletzung(en) im aktuellen Vorschlag.")
         for index, shot in enumerate(draft.shots):
