@@ -7,7 +7,8 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from otio_app.config import get_env, get_gemini_model_from_env
+from otio_app.config import get_gemini_model_from_env
+from otio_app.services.api_keys import get_api_key
 from otio_app.defaults import GEMINI_MODEL_CHOICES, GEMINI_MODEL_LABELS
 
 
@@ -33,14 +34,15 @@ def format_gemini_model_label(model_id: str) -> str:
 
 
 def _get_client():
-    api_key = get_env("GEMINI_API_KEY")
-    if not api_key or not api_key.strip():
+    api_key = get_api_key("GEMINI_API_KEY")
+    if not api_key:
         raise GeminiNotConfiguredError(
-            "GEMINI_API_KEY ist nicht gesetzt. Bitte in .env eintragen."
+            "GEMINI_API_KEY ist nicht gesetzt. "
+            "Bitte unter Systemstatus → API-Schlüssel oder in .env eintragen."
         )
     from google import genai
 
-    return genai.Client(api_key=api_key.strip())
+    return genai.Client(api_key=api_key)
 
 
 def _extract_json(text: str) -> Any:
@@ -227,5 +229,4 @@ def plan_passage_assets(
 
 
 def is_gemini_configured() -> bool:
-    key = get_env("GEMINI_API_KEY")
-    return bool(key and key.strip())
+    return bool(get_api_key("GEMINI_API_KEY"))

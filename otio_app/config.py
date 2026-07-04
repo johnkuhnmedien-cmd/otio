@@ -28,6 +28,8 @@ APP_ROOT = PACKAGE_DIR.parent
 DATA_DIR = APP_ROOT / "data"
 
 load_dotenv(APP_ROOT / ".env")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+load_dotenv(DATA_DIR / "user_secrets.env", override=True)
 
 
 def get_db_path() -> Path:

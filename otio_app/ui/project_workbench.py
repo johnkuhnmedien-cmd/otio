@@ -246,7 +246,7 @@ def _render_analysis_actions(
         if selected_voice_backend == VOICE_BACKEND_GEMINI and not api_confirmed:
             st.warning("Bitte Gemini-API-Aufrufe in den Einstellungen bestätigen.")
         elif selected_voice_backend == VOICE_BACKEND_GEMINI and not is_gemini_configured():
-            st.error("GEMINI_API_KEY fehlt in `.env`.")
+            st.error("GEMINI_API_KEY fehlt — unter **Systemstatus → API-Schlüssel** oder in `.env`.")
         elif selected_voice_backend == VOICE_BACKEND_WHISPER and not is_whisper_available():
             st.error("Whisper nicht installiert — `pip install -r requirements.txt`.")
         else:
@@ -300,7 +300,7 @@ def _render_analysis_actions(
         if not api_confirmed:
             st.warning("Bitte Gemini-API-Aufrufe bestätigen (für Asset-Ordner).")
         elif not is_gemini_configured():
-            st.error("GEMINI_API_KEY fehlt in `.env`.")
+            st.error("GEMINI_API_KEY fehlt — unter **Systemstatus → API-Schlüssel** oder in `.env`.")
         elif (
             selected_voice_backend == VOICE_BACKEND_WHISPER
             and not is_whisper_available()
@@ -387,7 +387,7 @@ def render_project_workbench() -> None:
 
         with st.expander("⚙️ Einstellungen (Modelle & API)", expanded=False):
             if not is_gemini_configured():
-                st.warning("GEMINI_API_KEY fehlt — Asset-Analysen nicht möglich.")
+                st.warning("GEMINI_API_KEY fehlt — unter **Systemstatus → API-Schlüssel** eintragen.")
             if not is_whisper_available():
                 st.caption("Whisper fehlt — nur Voice-over via Gemini möglich.")
 
@@ -414,6 +414,7 @@ def render_project_workbench() -> None:
                 "Kostenpflichtige Gemini-Aufrufe bestätigen (Asset-Ordner)",
                 key=f"confirm_api_{project.id}",
             )
+            st.caption("API-Schlüssel wechseln: **Systemstatus → API-Schlüssel**")
 
         voice_backend, whisper_model, gemini_model = _init_model_settings()
         api_confirmed = st.session_state.get(f"confirm_api_{project.id}", False)

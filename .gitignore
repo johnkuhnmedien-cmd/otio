@@ -11,6 +11,7 @@ build/
 .env
 data/*.db
 data/cache/
+data/user_secrets.env
 logs/
 *.log
 
