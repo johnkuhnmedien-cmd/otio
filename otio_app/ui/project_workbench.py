@@ -1,4 +1,4 @@
-"""Streamlit-UI: Projekt bearbeiten und Analysen starten."""
+"""Streamlit-UI: Projekt analysieren (Voice-over + Assets)."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from otio_app.defaults import (
 from otio_app.models import ProjectStatus
 from otio_app.project_repository import (
     get_project_by_id,
-    list_projects,
     update_project_selection,
     update_project_status,
 )
@@ -36,13 +35,12 @@ from otio_app.services.whisper_transcriber import (
     get_default_whisper_model,
     is_whisper_available,
 )
-
-
-def _output_status(path: Path, label: str) -> None:
-    if path.is_file():
-        st.success(f"{label} vorhanden: `{path}`")
-    else:
-        st.caption(f"{label} noch nicht erstellt: `{path}`")
+from otio_app.ui.project_context import (
+    render_file_paths,
+    render_output_status,
+    render_project_selector,
+    render_workflow_progress,
+)
 
 
 def _run_with_feedback(action_label: str, callback) -> bool:
@@ -62,60 +60,10 @@ def _run_with_feedback(action_label: str, callback) -> bool:
     return False
 
 
-def render_project_workbench() -> None:
-    st.header("Projekt bearbeiten")
-
-    projects = list_projects()
-    if not projects:
-        st.info("Noch kein Projekt vorhanden. Lege zuerst ein Projekt an.")
-        return
-
-    labels = {project.id: project.name for project in projects}
-    default_id = st.session_state.get("workbench_project_id", projects[0].id)
-    if default_id not in labels:
-        default_id = projects[0].id
-
-    selected_id = st.selectbox(
-        "Projekt wählen",
-        options=list(labels.keys()),
-        format_func=lambda pid: labels[pid],
-        index=list(labels.keys()).index(default_id),
-    )
-    st.session_state["workbench_project_id"] = selected_id
-    project = get_project_by_id(selected_id)
-    if project is None:
-        st.error("Projekt konnte nicht geladen werden.")
-        return
-
+def _render_folder_selection(project) -> list[str]:
     folder_state_key = f"workbench_folders_{project.id}"
-
-    st.subheader(project.name)
-    st.caption(
-        f"Status: {project.status.value} · "
-        f"{len(project.selected_asset_subdirs)} Ordner gespeichert"
-    )
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write(f"**Projektordner:** `{project.project_root}`")
-        st.write(f"**Voice-over:** `{project.voice_over_dir}`")
-    with col2:
-        _output_status(project.voice_analysis_path, "Voice-over-Analyse")
-        _output_status(project.inventory_path, "Inventar")
-
-    if not is_gemini_configured():
-        st.warning(
-            "GEMINI_API_KEY ist nicht gesetzt. "
-            "Asset-Analysen und Voice-over via Gemini benötigen den Schlüssel in `.env`."
-        )
-
-    if not is_whisper_available():
-        st.caption(
-            "Whisper (lokal) ist noch nicht installiert. "
-            "Nach `pip install -r requirements.txt` steht kostenlose Voice-over-Analyse zur Verfügung."
-        )
-
-    st.markdown("### Ordnerauswahl")
+    if folder_state_key not in st.session_state:
+        st.session_state[folder_state_key] = list(project.selected_asset_subdirs)
 
     btn_col1, btn_col2 = st.columns(2)
     with btn_col1:
@@ -127,40 +75,29 @@ def render_project_workbench() -> None:
             st.session_state[folder_state_key] = list(project.selected_asset_subdirs)
             st.rerun()
 
-    if folder_state_key not in st.session_state:
-        st.session_state[folder_state_key] = list(project.selected_asset_subdirs)
-
     selected_folders = st.multiselect(
         "Zu bearbeitende Asset-Ordner",
         options=project.asset_subdir_names,
         key=folder_state_key,
     )
-    st.caption(f"{len(selected_folders)} von {len(project.asset_subdir_names)} Ordnern ausgewählt")
+    st.caption(
+        f"{len(selected_folders)} von {len(project.asset_subdir_names)} Ordnern ausgewählt"
+    )
 
-    if st.button("Auswahl im Projekt speichern", key=f"save_sel_{project.id}"):
+    if st.button("Auswahl speichern", key=f"save_sel_{project.id}"):
         update_project_selection(project.id, selected_folders)
         st.success("Ordnerauswahl gespeichert.")
         st.rerun()
 
-    st.markdown("### Analysen")
-    st.info(
-        "Asset-Ordner: Gemini (nur Frame-Bilder, kostenpflichtig). "
-        "Voice-over: standardmäßig **Whisper lokal** (kostenlos) — optional Gemini."
-    )
+    return selected_folders
 
+
+def _init_model_settings() -> tuple[str, str, str]:
     default_voice_backend = get_voice_backend_from_env()
     if "voice_backend" not in st.session_state:
         st.session_state["voice_backend"] = default_voice_backend
     if st.session_state["voice_backend"] not in VOICE_BACKEND_CHOICES:
         st.session_state["voice_backend"] = default_voice_backend
-
-    selected_voice_backend = st.selectbox(
-        "Voice-over-Engine",
-        options=list(VOICE_BACKEND_CHOICES),
-        format_func=lambda value: VOICE_BACKEND_LABELS[value],
-        key="voice_backend",
-        help="Whisper läuft lokal auf deinem Mac — gut für lange Voice-overs ohne API-Kosten.",
-    )
 
     default_whisper_model = get_default_whisper_model()
     if "whisper_model" not in st.session_state:
@@ -168,37 +105,28 @@ def render_project_workbench() -> None:
     if st.session_state["whisper_model"] not in WHISPER_MODEL_CHOICES:
         st.session_state["whisper_model"] = default_whisper_model
 
-    selected_whisper_model = st.selectbox(
-        "Whisper-Modell",
-        options=list(WHISPER_MODEL_CHOICES),
-        format_func=lambda value: WHISPER_MODEL_LABELS[value],
-        key="whisper_model",
-        disabled=selected_voice_backend != VOICE_BACKEND_WHISPER,
-        help="Auf Apple Silicon (z. B. M4): small oder medium empfohlen. Beim ersten Lauf wird das Modell heruntergeladen.",
-    )
-
     default_model = get_default_gemini_model()
     if "gemini_model" not in st.session_state:
         st.session_state["gemini_model"] = default_model
     if st.session_state["gemini_model"] not in GEMINI_MODEL_CHOICES:
         st.session_state["gemini_model"] = default_model
 
-    selected_model = st.selectbox(
-        "Gemini-Modell (Assets" + (
-            " + Voice-over" if selected_voice_backend == VOICE_BACKEND_GEMINI else ""
-        ) + ")",
-        options=list(GEMINI_MODEL_CHOICES),
-        format_func=format_gemini_model_label,
-        key="gemini_model",
-        help="Standard aus `.env` (GEMINI_MODEL). Für Asset-Ordner und optional Voice-over via Gemini.",
+    return (
+        st.session_state["voice_backend"],
+        st.session_state["whisper_model"],
+        st.session_state["gemini_model"],
     )
 
-    api_confirmed = st.checkbox(
-        "Ich bestätige kostenpflichtige Gemini-API-Aufrufe (Asset-Ordner"
-        + (" und Voice-over" if selected_voice_backend == VOICE_BACKEND_GEMINI else "")
-        + ")",
-        key=f"confirm_api_{project.id}",
-    )
+
+def _render_analysis_actions(
+    project,
+    selected_folders: list[str],
+    selected_voice_backend: str,
+    selected_whisper_model: str,
+    selected_model: str,
+    api_confirmed: bool,
+) -> None:
+    folder_state_key = f"workbench_folders_{project.id}"
 
     def _analyze_voice_for_project() -> None:
         current = get_project_by_id(project.id)
@@ -215,82 +143,154 @@ def render_project_workbench() -> None:
         _analyze_voice_for_project()
         update_project_status(project.id, ProjectStatus.READY)
 
-    col_v, col_s, col_all = st.columns(3)
+    st.markdown("**Voice-over** — lokal mit Whisper (Standard) oder optional Gemini.")
+    if st.button("🎙️ Voice-over analysieren", key=f"voice_{project.id}", type="primary"):
+        if selected_voice_backend == VOICE_BACKEND_GEMINI and not api_confirmed:
+            st.warning("Bitte Gemini-API-Aufrufe in den Einstellungen bestätigen.")
+        elif selected_voice_backend == VOICE_BACKEND_GEMINI and not is_gemini_configured():
+            st.error("GEMINI_API_KEY fehlt in `.env`.")
+        elif selected_voice_backend == VOICE_BACKEND_WHISPER and not is_whisper_available():
+            st.error("Whisper nicht installiert — `pip install -r requirements.txt`.")
+        else:
+            update_project_status(project.id, ProjectStatus.ANALYZING)
+            if _run_with_feedback("Voice-over-Analyse", _run_voice_analysis):
+                st.rerun()
 
-    with col_v:
-        if st.button("🎙️ Voice-over analysieren", key=f"voice_{project.id}"):
-            if selected_voice_backend == VOICE_BACKEND_GEMINI and not api_confirmed:
-                st.warning("Bitte Gemini-API-Aufrufe bestätigen.")
-            elif selected_voice_backend == VOICE_BACKEND_GEMINI and not is_gemini_configured():
-                st.error("GEMINI_API_KEY fehlt in `.env`.")
-            elif selected_voice_backend == VOICE_BACKEND_WHISPER and not is_whisper_available():
-                st.error(
-                    "Whisper ist nicht installiert. "
-                    "Bitte `pip install -r requirements.txt` ausführen."
+    st.divider()
+    st.markdown("**Asset-Ordner** — Gemini analysiert nur Frame-Bilder (kostenpflichtig).")
+    if st.button("📁 Ausgewählte Ordner analysieren", key=f"assets_{project.id}"):
+        if not selected_folders:
+            st.warning("Bitte mindestens einen Ordner unter „Ordner“ auswählen.")
+        elif not api_confirmed:
+            st.warning("Bitte Gemini-API-Aufrufe in den Einstellungen bestätigen.")
+        else:
+            folders = list(selected_folders)
+            update_project_selection(project.id, folders)
+            update_project_status(project.id, ProjectStatus.ANALYZING)
+
+            def _asset_job() -> None:
+                current = get_project_by_id(project.id)
+                assert current is not None
+                analyze_asset_folders(
+                    current, folders, use_api=True, model=selected_model
                 )
-            else:
-                update_project_status(project.id, ProjectStatus.ANALYZING)
-                if _run_with_feedback("Voice-over-Analyse", _run_voice_analysis):
-                    st.rerun()
+                update_project_status(project.id, ProjectStatus.READY)
 
-    with col_s:
-        if st.button("📁 Ausgewählte Ordner (Gemini)", key=f"assets_{project.id}"):
-            if not selected_folders:
-                st.warning("Bitte mindestens einen Ordner auswählen.")
-            elif not api_confirmed:
-                st.warning("Bitte API-Aufrufe bestätigen.")
-            else:
-                folders = list(selected_folders)
-                update_project_selection(project.id, folders)
-                update_project_status(project.id, ProjectStatus.ANALYZING)
+            if _run_with_feedback("Asset-Analyse", _asset_job):
+                st.rerun()
 
-                def _asset_job() -> None:
-                    current = get_project_by_id(project.id)
-                    assert current is not None
-                    analyze_asset_folders(
-                        current, folders, use_api=True, model=selected_model
-                    )
-                    update_project_status(project.id, ProjectStatus.READY)
+    st.divider()
+    if st.button("⚡ Voice-over + alle Ordner", key=f"all_run_{project.id}"):
+        if not api_confirmed:
+            st.warning("Bitte Gemini-API-Aufrufe bestätigen (für Asset-Ordner).")
+        elif not is_gemini_configured():
+            st.error("GEMINI_API_KEY fehlt in `.env`.")
+        elif (
+            selected_voice_backend == VOICE_BACKEND_WHISPER
+            and not is_whisper_available()
+        ):
+            st.error("Whisper nicht installiert.")
+        else:
+            all_folders = list(project.asset_subdir_names)
+            st.session_state[folder_state_key] = all_folders
+            update_project_selection(project.id, all_folders)
+            update_project_status(project.id, ProjectStatus.ANALYZING)
 
-                if _run_with_feedback("Asset-Analyse", _asset_job):
-                    st.rerun()
-
-    with col_all:
-        if st.button("⚡ Alles bearbeiten", key=f"all_run_{project.id}"):
-            if not api_confirmed:
-                st.warning("Bitte Gemini-API-Aufrufe bestätigen (Asset-Ordner).")
-            elif not is_gemini_configured():
-                st.error("GEMINI_API_KEY fehlt in `.env` (für Asset-Ordner).")
-            elif (
-                selected_voice_backend == VOICE_BACKEND_WHISPER
-                and not is_whisper_available()
-            ):
-                st.error(
-                    "Whisper ist nicht installiert. "
-                    "Bitte `pip install -r requirements.txt` ausführen."
+            def _full_job() -> None:
+                _analyze_voice_for_project()
+                current = get_project_by_id(project.id)
+                assert current is not None
+                analyze_asset_folders(
+                    current, all_folders, use_api=True, model=selected_model
                 )
-            else:
-                all_folders = list(project.asset_subdir_names)
-                st.session_state[folder_state_key] = all_folders
-                update_project_selection(project.id, all_folders)
-                update_project_status(project.id, ProjectStatus.ANALYZING)
+                update_project_status(project.id, ProjectStatus.READY)
 
-                def _full_job() -> None:
-                    _analyze_voice_for_project()
-                    current = get_project_by_id(project.id)
-                    assert current is not None
-                    analyze_asset_folders(
-                        current, all_folders, use_api=True, model=selected_model
-                    )
-                    update_project_status(project.id, ProjectStatus.READY)
+            if _run_with_feedback("Vollständige Analyse", _full_job):
+                st.rerun()
 
-                if _run_with_feedback("Vollständige Analyse", _full_job):
-                    st.rerun()
 
-    with st.expander("Ausgabe-Vorschau"):
+def render_project_workbench() -> None:
+    st.header("① Analysen")
+
+    project = render_project_selector()
+    if project is None:
+        return
+
+    render_workflow_progress(project, current_step="analysis")
+    render_output_status(project)
+    st.caption(
+        f"Status: {project.status.value} · "
+        f"{len(project.selected_asset_subdirs)} Ordner gespeichert"
+    )
+
+    tab_folders, tab_run, tab_results = st.tabs(
+        ["📁 Ordner", "▶️ Analysen starten", "📄 Ergebnisse"]
+    )
+
+    with tab_folders:
+        st.markdown("Welche Asset-Ordner sollen beschrieben werden?")
+        selected_folders = _render_folder_selection(project)
+
+    with tab_run:
+        selected_folders = st.session_state.get(
+            f"workbench_folders_{project.id}",
+            list(project.selected_asset_subdirs),
+        )
+
+        with st.expander("⚙️ Einstellungen (Modelle & API)", expanded=False):
+            if not is_gemini_configured():
+                st.warning("GEMINI_API_KEY fehlt — Asset-Analysen nicht möglich.")
+            if not is_whisper_available():
+                st.caption("Whisper fehlt — nur Voice-over via Gemini möglich.")
+
+            selected_voice_backend = st.selectbox(
+                "Voice-over-Engine",
+                options=list(VOICE_BACKEND_CHOICES),
+                format_func=lambda value: VOICE_BACKEND_LABELS[value],
+                key="voice_backend",
+            )
+            st.selectbox(
+                "Whisper-Modell",
+                options=list(WHISPER_MODEL_CHOICES),
+                format_func=lambda value: WHISPER_MODEL_LABELS[value],
+                key="whisper_model",
+                disabled=selected_voice_backend != VOICE_BACKEND_WHISPER,
+            )
+            st.selectbox(
+                "Gemini-Modell",
+                options=list(GEMINI_MODEL_CHOICES),
+                format_func=format_gemini_model_label,
+                key="gemini_model",
+            )
+            api_confirmed = st.checkbox(
+                "Kostenpflichtige Gemini-Aufrufe bestätigen (Asset-Ordner)",
+                key=f"confirm_api_{project.id}",
+            )
+
+        voice_backend, whisper_model, gemini_model = _init_model_settings()
+        api_confirmed = st.session_state.get(f"confirm_api_{project.id}", False)
+
+        _render_analysis_actions(
+            project,
+            selected_folders,
+            voice_backend,
+            whisper_model,
+            gemini_model,
+            api_confirmed,
+        )
+
+        st.caption(f"Aktuell {len(selected_folders)} Ordner für Asset-Analyse ausgewählt.")
+
+    with tab_results:
         if project.voice_analysis_path.is_file():
             st.markdown("**voice_over_analysis.json**")
             st.code(project.voice_analysis_path.read_text(encoding="utf-8")[:4000])
+        else:
+            st.caption("Voice-over-Analyse noch nicht erstellt.")
         if project.inventory_path.is_file():
             st.markdown("**inventory.json**")
             st.code(project.inventory_path.read_text(encoding="utf-8")[:4000])
+        else:
+            st.caption("Inventar noch nicht erstellt.")
+
+    render_file_paths(project)

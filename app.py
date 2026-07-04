@@ -16,6 +16,16 @@ from otio_app.project_layout import (
 from otio_app.project_repository import create_project, list_projects
 from otio_app.services.gemini_client import format_gemini_model_label, get_default_gemini_model
 from otio_app.system_checks import run_all_checks
+from otio_app.ui.edit_plan_placeholder import render_edit_plan_placeholder
+from otio_app.ui.navigation import (
+    NAVIGATION_OPTIONS,
+    PAGE_ANALYSIS,
+    PAGE_EDIT_PLAN,
+    PAGE_LIST,
+    PAGE_MAPPING,
+    PAGE_NEW,
+    PAGE_STATUS,
+)
 from otio_app.ui.project_workbench import render_project_workbench
 from otio_app.ui.voice_folder_mapping import render_voice_folder_mapping
 
@@ -25,11 +35,7 @@ st.set_page_config(
     layout="wide",
 )
 
-PAGE_NEW = "Neues Projekt"
-PAGE_LIST = "Gespeicherte Projekte"
-PAGE_WORK = "Projekt bearbeiten"
-PAGE_MAP = "Voice-over zuordnen"
-PAGE_STATUS = "Systemstatus"
+PAGE_WORK = PAGE_ANALYSIS  # alias für ältere session_state-Keys
 
 PREVIEW_KEY = "project_preview"
 PENDING_KEY = "pending_project"
@@ -171,13 +177,16 @@ def _save_pending_project() -> None:
 
 with st.sidebar:
     st.title("OTIO Schnittplaner")
-    st.caption("Meilenstein 3 — Zuordnung & Analyse")
+    st.caption("Schritt für Schritt zum Schnittplan")
+    st.markdown("**Projekt**")
     page = st.radio(
         "Navigation",
-        [PAGE_NEW, PAGE_LIST, PAGE_WORK, PAGE_MAP, PAGE_STATUS],
+        NAVIGATION_OPTIONS,
         label_visibility="collapsed",
         key="sidebar_nav",
     )
+    st.divider()
+    st.caption("Workflow: ① → ② → ③ · Details unter Systemstatus")
 
 if page == PAGE_NEW:
     st.header("Neues Projekt anlegen")
@@ -460,11 +469,14 @@ elif page == PAGE_LIST:
                     st.session_state["sidebar_nav"] = PAGE_WORK
                     st.rerun()
 
-elif page == PAGE_WORK:
+elif page == PAGE_ANALYSIS:
     render_project_workbench()
 
-elif page == PAGE_MAP:
+elif page == PAGE_MAPPING:
     render_voice_folder_mapping()
+
+elif page == PAGE_EDIT_PLAN:
+    render_edit_plan_placeholder()
 
 elif page == PAGE_STATUS:
     st.header("Systemstatus")

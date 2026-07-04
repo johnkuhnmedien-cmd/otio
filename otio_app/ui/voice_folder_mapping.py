@@ -7,12 +7,16 @@ from pathlib import Path
 import streamlit as st
 
 from otio_app.analysis_models import VoiceFolderMappingDocument, VoiceFolderMappingEntry
-from otio_app.project_repository import get_project_by_id, list_projects
 from otio_app.services.voice_folder_matcher import (
     load_voice_folder_mapping,
     merge_with_saved_mapping,
     save_voice_folder_mapping,
     suggest_voice_folder_mappings,
+)
+from otio_app.ui.project_context import (
+    render_file_paths,
+    render_project_selector,
+    render_workflow_progress,
 )
 
 
@@ -32,41 +36,23 @@ def _get_mapping_entries(project_id: str) -> list[VoiceFolderMappingEntry]:
 
 
 def render_voice_folder_mapping() -> None:
-    st.header("Voice-over ↔ Ordner zuordnen")
+    st.header("② Zuordnung")
+
+    project = render_project_selector()
+    if project is None:
+        return
+
+    render_workflow_progress(project, current_step="mapping")
 
     st.markdown(
-        """
-        Die App erkennt den **Asset-Ordnernamen im Voice-over-Dateinamen**
-        (z. B. `USA_Florida Keys_VO.wav` → Ordner **Florida Keys**).
-        Bitte Vorschläge prüfen und bestätigen.
-        """
+        "Ordnername im **Voice-over-Dateinamen** erkennen "
+        "(z. B. `USA_Florida Keys_VO.wav` → **Florida Keys**), prüfen und bestätigen."
     )
-
-    projects = list_projects()
-    if not projects:
-        st.info("Noch kein Projekt vorhanden.")
-        return
-
-    labels = {project.id: project.name for project in projects}
-    default_id = st.session_state.get("mapping_project_id", projects[0].id)
-    if default_id not in labels:
-        default_id = projects[0].id
-
-    selected_id = st.selectbox(
-        "Projekt wählen",
-        options=list(labels.keys()),
-        format_func=lambda pid: labels[pid],
-        index=list(labels.keys()).index(default_id),
-    )
-    st.session_state["mapping_project_id"] = selected_id
-    project = get_project_by_id(selected_id)
-    if project is None:
-        st.error("Projekt konnte nicht geladen werden.")
-        return
 
     suggestions = suggest_voice_folder_mappings(project)
     if not suggestions:
-        st.warning(f"Keine Voice-over-Dateien in `{project.voice_over_dir}` gefunden.")
+        st.warning(f"Keine Voice-over-Dateien in `{project.voice_over_dir}`.")
+        render_file_paths(project)
         return
 
     state_key = _mapping_state_key(project.id)
@@ -78,17 +64,14 @@ def render_voice_folder_mapping() -> None:
 
     saved = load_voice_folder_mapping(project.voice_folder_mapping_path)
     if saved is not None and saved.confirmed:
-        st.success(
-            f"Bestätigte Zuordnung vorhanden: `{project.voice_folder_mapping_path}`"
-        )
+        st.success("Zuordnung bestätigt und gespeichert.")
     elif saved is not None:
-        st.info("Entwurf gespeichert — bitte prüfen und bestätigen.")
+        st.info("Entwurf vorhanden — bitte prüfen und bestätigen.")
 
-    if st.button("Zuordnung neu aus Dateinamen erkennen", key=f"rematch_{project.id}"):
+    if st.button("Neu aus Dateinamen erkennen", key=f"rematch_{project.id}"):
         _init_mapping_state(project.id, suggest_voice_folder_mappings(project))
         st.rerun()
 
-    st.markdown("### Zuordnungen")
     folder_options = ["— nicht zugeordnet —", *project.asset_subdir_names]
     entries = _get_mapping_entries(project.id)
     updated_entries: list[VoiceFolderMappingEntry] = []
@@ -102,19 +85,17 @@ def render_voice_folder_mapping() -> None:
         col1, col2, col3 = st.columns([2, 2, 1])
         with col1:
             st.write(f"**{Path(entry.voice_file).name}**")
-            st.caption(entry.voice_file)
         with col2:
             choice = st.selectbox(
                 "Asset-Ordner",
                 options=option_list,
                 index=option_list.index(selected_folder),
                 key=f"map_folder_{project.id}_{index}",
+                label_visibility="collapsed",
             )
             folder_value = None if choice == "— nicht zugeordnet —" else choice
             if folder_value == entry.folder:
                 method = entry.match_method
-            elif folder_value is None:
-                method = "manual"
             else:
                 method = "manual"
             updated_entries.append(
@@ -144,21 +125,20 @@ def render_voice_folder_mapping() -> None:
         if entry.folder and entry.match_method == "filename"
     )
     st.caption(
-        f"{auto_matched} automatisch erkannt · "
-        f"{unassigned} ohne Zuordnung · "
-        f"{len(updated_entries)} Voice-over-Dateien gesamt"
+        f"{auto_matched} automatisch · {unassigned} offen · "
+        f"{len(updated_entries)} Dateien"
     )
 
     confirm = st.checkbox(
-        "Ich habe alle Zuordnungen geprüft und bestätige sie.",
+        "Zuordnung geprüft und bestätigt",
         key=f"confirm_mapping_{project.id}",
     )
 
-    if st.button("Zuordnung speichern", key=f"save_mapping_{project.id}"):
+    if st.button("Speichern", key=f"save_mapping_{project.id}", type="primary"):
         if unassigned > 0:
-            st.warning("Es gibt noch Voice-over-Dateien ohne Ordner-Zuordnung.")
+            st.warning("Noch Voice-over-Dateien ohne Ordner.")
         elif not confirm:
-            st.warning("Bitte die Zuordnung bestätigen.")
+            st.warning("Bitte bestätigen.")
         else:
             confirmed_entries = [
                 entry.model_copy(update={"confirmed": True})
@@ -170,13 +150,15 @@ def render_voice_folder_mapping() -> None:
                 confirmed=True,
             )
             _init_mapping_state(project.id, document.entries)
-            st.success(f"Zuordnung gespeichert: `{project.voice_folder_mapping_path}`")
+            st.success("Gespeichert.")
             st.rerun()
 
-    with st.expander("JSON-Vorschau"):
+    with st.expander("JSON-Vorschau", expanded=False):
         preview = VoiceFolderMappingDocument(
             project_id=project.id,
             confirmed=bool(saved and saved.confirmed),
             entries=updated_entries,
         )
         st.code(preview.model_dump_json(indent=2)[:4000])
+
+    render_file_paths(project)
