@@ -90,6 +90,22 @@ class EditPlanSettings(BaseModel):
     gemini_model: str = "gemini-2.0-flash"
 
 
+class EditPlanRule(BaseModel):
+    """Eine Schnittregel — dauerhaft pro Projekt gespeichert."""
+
+    id: str
+    rule_type: str
+    enabled: bool = True
+    params: dict[str, int | float | str | bool] = Field(default_factory=dict)
+    label: str = ""
+
+
+class EditPlanRulesDocument(BaseModel):
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    project_id: str
+    rules: List[EditPlanRule] = Field(default_factory=list)
+
+
 class EditPlanShot(BaseModel):
     voice_file: str
     folder: str

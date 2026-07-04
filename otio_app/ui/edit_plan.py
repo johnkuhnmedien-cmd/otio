@@ -26,7 +26,11 @@ from otio_app.services.gemini_client import (
     get_default_gemini_model,
     is_gemini_configured,
 )
-from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
+from otio_app.services.edit_plan_rules import validate_shots_against_rules
+from otio_app.ui.edit_plan_rules_ui import (
+    get_edit_plan_rules_for_project,
+    render_edit_plan_rules_manager,
+)
 from otio_app.ui.project_context import (
     render_file_paths,
     render_project_selector,
@@ -76,7 +80,9 @@ def render_edit_plan_page() -> None:
     )
 
     with tab_settings:
-        st.markdown("**Schnittregeln**")
+        rules_doc = render_edit_plan_rules_manager(project)
+        st.divider()
+        st.markdown("**Timing & Gemini**")
         col1, col2, col3 = st.columns(3)
         with col1:
             shot_min = st.number_input(
@@ -176,9 +182,16 @@ def render_edit_plan_page() -> None:
         draft = _get_draft(project.id) or saved
         if draft is not None:
             missing = sum(1 for shot in draft.shots if shot.asset_source == "missing")
+            violations = validate_shots_against_rules(draft.shots, rules_doc)
             st.caption(
                 f"{len(draft.shots)} Shots · {missing} ohne passendes lokales Asset"
             )
+            if violations:
+                st.warning("Regelverletzungen — ggf. unter „Regeln“ anpassen und neu generieren:")
+                for line in violations[:15]:
+                    st.caption(f"• {line}")
+                if len(violations) > 15:
+                    st.caption(f"… und {len(violations) - 15} weitere")
 
     with tab_review:
         draft = _get_draft(project.id) or saved
@@ -188,6 +201,10 @@ def render_edit_plan_page() -> None:
             return
 
         st.markdown(f"**{len(draft.shots)} Shots** — Audio-Offset: {draft.settings.audio_offset_sec}s")
+        rules_doc = get_edit_plan_rules_for_project(project)
+        violations = validate_shots_against_rules(draft.shots, rules_doc)
+        if violations:
+            st.warning(f"{len(violations)} Regelverletzung(en) im aktuellen Vorschlag.")
         for index, shot in enumerate(draft.shots):
             icon = "🟢" if shot.asset_path else "🟡"
             with st.expander(

@@ -21,6 +21,7 @@ from otio_app.defaults import (
     FALLBACK_SOURCE_MISSING,
 )
 from otio_app.models import Project
+from otio_app.services.edit_plan_rules import apply_edit_plan_rules, load_edit_plan_rules
 from otio_app.services.gemini_client import GeminiNotConfiguredError, plan_passage_assets
 from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.shot_timing import TimedPart, allocate_time_by_text, shots_from_timed_parts
@@ -133,6 +134,7 @@ def build_edit_plan(
         }
 
     shots: list[EditPlanShot] = []
+    assets_by_folder: dict[str, list[str]] = {}
     for voice_path, folder_name in mapping_by_voice.items():
         voice_entry = voice_files.get(voice_path)
         if voice_entry is None:
@@ -145,6 +147,7 @@ def build_edit_plan(
             if asset.description or asset.path
         ]
         allowed_paths = {asset["path"] for asset in asset_payload}
+        assets_by_folder[folder_name] = [asset["path"] for asset in asset_payload]
 
         for segment in voice_entry.segments:
             if not segment.text.strip():
@@ -202,6 +205,9 @@ def build_edit_plan(
                         confidence=part.confidence,
                     )
                 )
+
+    rules_doc = load_edit_plan_rules(project)
+    shots = apply_edit_plan_rules(shots, rules_doc, assets_by_folder)
 
     return EditPlanDocument(
         project_id=project.id,
