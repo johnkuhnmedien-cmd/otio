@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS projects (
     aspect_ratio        TEXT NOT NULL DEFAULT '16:9',
     target_platform     TEXT NOT NULL DEFAULT 'YouTube',
     status              TEXT NOT NULL DEFAULT 'DRAFT',
+    asset_subdir_names  TEXT NOT NULL DEFAULT '[]',
     notes               TEXT,
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL
@@ -37,12 +38,15 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         return
 
     column_names = {row[1] for row in rows}
-    if "project_root" in column_names:
+    if "project_root" not in column_names:
+        conn.execute("DROP TABLE projects")
+        conn.executescript(SCHEMA)
         return
 
-    # Altes Meilenstein-1-Schema ohne project_root — Tabelle neu anlegen.
-    conn.execute("DROP TABLE projects")
-    conn.executescript(SCHEMA)
+    if "asset_subdir_names" not in column_names:
+        conn.execute(
+            "ALTER TABLE projects ADD COLUMN asset_subdir_names TEXT NOT NULL DEFAULT '[]'"
+        )
 
 
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:

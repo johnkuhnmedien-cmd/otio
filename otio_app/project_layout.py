@@ -61,17 +61,45 @@ def discover_asset_subdirs(
     voice_over_subdir: str,
 ) -> list[Path]:
     """Listet Asset-Unterordner im Projektroot (nur lesen, keine Änderungen)."""
+    return [
+        project_root / name
+        for name in discover_asset_subdir_names(project_root, work_dir, voice_over_subdir)
+    ]
+
+
+def discover_asset_subdir_names(
+    project_root: Path,
+    work_dir: Path,
+    voice_over_subdir: str,
+) -> list[str]:
+    """Listet Asset-Unterordner-Namen — bricht bei iCloud-/Netzwerkfehlern nicht ab."""
     if not project_root.is_dir():
         return []
 
     reserved = reserved_subdir_names(project_root, work_dir, voice_over_subdir)
-    subdirs: list[Path] = []
-    for entry in sorted(project_root.iterdir()):
-        if not entry.is_dir():
+    names: list[str] = []
+    try:
+        entries = sorted(project_root.iterdir())
+    except OSError:
+        return []
+
+    for entry in entries:
+        try:
+            if not entry.is_dir():
+                continue
+        except OSError:
             continue
         if entry.name.startswith("."):
             continue
         if entry.name in reserved:
             continue
-        subdirs.append(entry)
-    return subdirs
+        names.append(entry.name)
+    return names
+
+
+def safe_path_is_dir(path: Path) -> bool:
+    """Prüft ein Verzeichnis ohne Hänger bei nicht verfügbaren Cloud-Dateien."""
+    try:
+        return path.is_dir()
+    except OSError:
+        return False

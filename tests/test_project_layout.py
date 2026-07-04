@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from otio_app.project_layout import (
+    discover_asset_subdir_names,
     discover_asset_subdirs,
     get_inventory_path,
     get_voice_analysis_path,
@@ -30,12 +31,8 @@ def test_output_paths(temp_project_layout: dict[str, Path]) -> None:
     assert get_voice_analysis_path(project_root).name == "voice_over_analysis.json"
 
 
-def test_discover_asset_subdirs_excludes_voice_over_and_work(
-    temp_project_layout: dict[str, Path],
-) -> None:
+def test_discover_asset_subdir_names(temp_project_layout: dict[str, Path]) -> None:
     project_root = temp_project_layout["project_root"]
     work_dir = project_root / "_otio"
-    names = {p.name for p in discover_asset_subdirs(project_root, work_dir, "Voice over")}
-    assert "Voice over" not in names
-    assert "_otio" not in names
-    assert "Grand Canyon" in names
+    names = discover_asset_subdir_names(project_root, work_dir, "Voice over")
+    assert names == ["Grand Canyon", "Yellowstone"]

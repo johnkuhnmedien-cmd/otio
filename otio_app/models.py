@@ -18,7 +18,7 @@ from otio_app.paths import (
     validate_project_layout,
 )
 from otio_app.project_layout import (
-    discover_asset_subdirs,
+    discover_asset_subdir_names,
     get_inventory_path,
     get_voice_analysis_path,
     get_voice_over_dir,
@@ -115,12 +115,16 @@ class ProjectCreate(BaseModel):
         )
 
     @property
-    def asset_subdirs(self) -> list[Path]:
-        return discover_asset_subdirs(
+    def asset_subdir_names(self) -> list[str]:
+        return discover_asset_subdir_names(
             self.project_root_path,
             self.work_dir_path,
             self.voice_over_subdir,
         )
+
+    @property
+    def asset_subdirs(self) -> list[Path]:
+        return [self.project_root_path / name for name in self.asset_subdir_names]
 
     @property
     def inventory_path(self) -> Path:
@@ -145,6 +149,7 @@ class Project(BaseModel):
     aspect_ratio: str = "16:9"
     target_platform: str = "YouTube"
     status: ProjectStatus = ProjectStatus.DRAFT
+    asset_subdir_names: list[str]
     notes: str | None = None
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
@@ -171,11 +176,7 @@ class Project(BaseModel):
 
     @property
     def asset_subdirs(self) -> list[Path]:
-        return discover_asset_subdirs(
-            self.project_root_path,
-            self.work_dir_path,
-            self.voice_over_subdir,
-        )
+        return [self.project_root_path / name for name in self.asset_subdir_names]
 
     @property
     def inventory_path(self) -> Path:
@@ -186,7 +187,7 @@ class Project(BaseModel):
         return get_voice_analysis_path(self.project_root_path)
 
     @classmethod
-    def from_create(cls, data: ProjectCreate) -> Project:
+    def from_create(cls, data: ProjectCreate, asset_subdir_names: list[str]) -> Project:
         now = datetime.now(timezone.utc)
         return cls(
             name=data.name,
@@ -200,6 +201,7 @@ class Project(BaseModel):
             height=data.height,
             aspect_ratio=data.aspect_ratio,
             target_platform=data.target_platform,
+            asset_subdir_names=asset_subdir_names,
             notes=data.notes,
             status=ProjectStatus.DRAFT,
             created_at=now,

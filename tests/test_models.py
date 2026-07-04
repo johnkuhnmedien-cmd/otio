@@ -84,6 +84,7 @@ def test_project_from_create_sets_draft_status(
     temp_project_layout: dict[str, Path],
 ) -> None:
     data = _make_create(temp_project_layout)
-    project = Project.from_create(data)
+    project = Project.from_create(data, asset_subdir_names=["Grand Canyon", "Yellowstone"])
     assert project.status == ProjectStatus.DRAFT
     assert project.name == "USA Reise"
+    assert project.asset_subdir_names == ["Grand Canyon", "Yellowstone"]

@@ -25,7 +25,7 @@ def test_create_and_list(
     saved = create_project(data, db_path=temp_db_path)
     assert saved.status == ProjectStatus.DRAFT
     assert saved.notes == "Testnotiz"
-    assert len(saved.asset_subdirs) == 2
+    assert len(saved.asset_subdir_names) == 2
 
     projects = list_projects(db_path=temp_db_path)
     assert len(projects) == 1

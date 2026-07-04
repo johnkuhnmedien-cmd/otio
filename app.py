@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from otio_app.defaults import DEFAULT_FRAMES_PER_SHOT, DEFAULT_VOICE_OVER_SUBDIR
 from otio_app.models import ProjectCreate
 from otio_app.paths import create_work_dir, normalize_path
-from otio_app.project_layout import default_work_dir
+from otio_app.project_layout import default_work_dir, safe_path_is_dir
 from otio_app.project_repository import create_project, list_projects
 from otio_app.system_checks import run_all_checks
 
@@ -29,7 +29,7 @@ def _show_saved_project(saved) -> None:
     st.success(
         f"Projekt '{saved.name}' gespeichert (Status: {saved.status.value})."
     )
-    asset_names = [path.name for path in saved.asset_subdirs]
+    asset_names = saved.asset_subdir_names
     st.json(
         {
             "id": saved.id,
@@ -133,16 +133,20 @@ if page == PAGE_NEW:
             for error in exc.errors():
                 st.error(error["msg"])
         else:
+            with st.spinner("Projektordner wird geprüft …"):
+                asset_names = project_data.asset_subdir_names
             st.subheader("Erkannte Struktur")
-            asset_names = [path.name for path in project_data.asset_subdirs]
             st.write(f"**Asset-Unterordner ({len(asset_names)}):**")
             if asset_names:
                 st.write(", ".join(f"`{name}`" for name in asset_names))
             else:
-                st.info("Keine Asset-Unterordner gefunden.")
+                st.info(
+                    "Keine Asset-Unterordner gefunden. "
+                    "Bei iCloud-Ordnern ggf. Dateien erst lokal laden."
+                )
 
             voice_dir = project_data.voice_over_dir
-            if voice_dir.is_dir():
+            if safe_path_is_dir(voice_dir):
                 st.success(f"Voice-over-Ordner gefunden: `{voice_dir}`")
             else:
                 st.warning(
@@ -195,7 +199,7 @@ elif page == PAGE_LIST:
         st.info("Noch keine Projekte gespeichert.")
     else:
         for project in projects:
-            asset_names = [path.name for path in project.asset_subdirs]
+            asset_names = project.asset_subdir_names
             with st.expander(f"{project.name}  ({project.status.value})"):
                 st.write(f"**ID:** `{project.id}`")
                 st.write(f"**Projektordner:** `{project.project_root}`")

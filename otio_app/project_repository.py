@@ -2,11 +2,25 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 from otio_app.database import get_connection
 from otio_app.models import Project, ProjectCreate, ProjectStatus
+from otio_app.project_layout import discover_asset_subdir_names
+
+
+def _parse_asset_subdir_names(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(data, list):
+        return [str(item) for item in data]
+    return []
 
 
 def _row_to_project(row: sqlite3.Row) -> Project:
@@ -24,6 +38,7 @@ def _row_to_project(row: sqlite3.Row) -> Project:
         aspect_ratio=row["aspect_ratio"],
         target_platform=row["target_platform"],
         status=ProjectStatus(row["status"]),
+        asset_subdir_names=_parse_asset_subdir_names(row["asset_subdir_names"]),
         notes=row["notes"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -33,9 +48,16 @@ def _row_to_project(row: sqlite3.Row) -> Project:
 def create_project(
     data: ProjectCreate,
     db_path: Path | None = None,
+    asset_subdir_names: list[str] | None = None,
 ) -> Project:
     """Legt ein neues Projekt in der Datenbank an."""
-    project = Project.from_create(data)
+    if asset_subdir_names is None:
+        asset_subdir_names = discover_asset_subdir_names(
+            data.project_root_path,
+            data.work_dir_path,
+            data.voice_over_subdir,
+        )
+    project = Project.from_create(data, asset_subdir_names)
     conn = get_connection(db_path)
     try:
         conn.execute(
@@ -43,8 +65,9 @@ def create_project(
             INSERT INTO projects (
                 id, name, project_root, work_dir, voice_over_subdir,
                 language, frames_per_shot, fps, width, height, aspect_ratio,
-                target_platform, status, notes, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                target_platform, status, asset_subdir_names, notes,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project.id,
@@ -60,6 +83,7 @@ def create_project(
                 project.aspect_ratio,
                 project.target_platform,
                 project.status.value,
+                json.dumps(project.asset_subdir_names, ensure_ascii=False),
                 project.notes,
                 project.created_at.isoformat(),
                 project.updated_at.isoformat(),

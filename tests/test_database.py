@@ -33,6 +33,7 @@ def test_schema_creates_projects_table(temp_db_path: Path) -> None:
             "aspect_ratio",
             "target_platform",
             "status",
+            "asset_subdir_names",
             "notes",
             "created_at",
             "updated_at",
