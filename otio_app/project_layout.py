@@ -10,6 +10,7 @@ from pathlib import Path
 from otio_app.defaults import (
     DEFAULT_WORK_SUBDIR,
     EDIT_PLAN_FILENAME,
+    EDIT_PLAN_SUBDIR,
     INVENTORY_FILENAME,
     INVENTORY_SUBDIR,
     VOICE_ANALYSIS_FILENAME,
@@ -78,7 +79,18 @@ def get_voice_folder_mapping_path(project_root: Path) -> Path:
 
 
 def get_edit_plan_path(project_root: Path) -> Path:
+    """Legacy-Pfad zur zentralen edit_plan.json im Projektroot (Migration)."""
     return project_root / EDIT_PLAN_FILENAME
+
+
+def get_edit_plan_dir(work_dir: Path) -> Path:
+    """Verzeichnis für pro-Ort-Schnittpläne unter dem Arbeitsordner."""
+    return work_dir / EDIT_PLAN_SUBDIR
+
+
+def get_folder_edit_plan_path(work_dir: Path, folder_name: str) -> Path:
+    """Pfad zur Schnittplan-JSON eines Asset-Ordners (z. B. _otio/edit_plan/Florida_Keys.json)."""
+    return get_edit_plan_dir(work_dir) / f"{safe_folder_slug(folder_name)}.json"
 
 
 def safe_path_is_dir(path: Path) -> bool:

@@ -122,6 +122,7 @@ class EditPlanShot(BaseModel):
 class EditPlanDocument(BaseModel):
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     project_id: str
+    folder_name: Optional[str] = None
     confirmed: bool = False
     settings: EditPlanSettings = Field(default_factory=EditPlanSettings)
     shots: List[EditPlanShot] = Field(default_factory=list)

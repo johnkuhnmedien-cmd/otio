@@ -24,7 +24,9 @@ from otio_app.paths import (
     validate_project_layout,
 )
 from otio_app.project_layout import (
+    get_edit_plan_dir,
     get_edit_plan_path,
+    get_folder_edit_plan_path,
     get_folder_inventory_path,
     get_inventory_dir,
     get_inventory_path,
@@ -179,6 +181,13 @@ class ProjectCreate(BaseModel):
     def edit_plan_path(self) -> Path:
         return get_edit_plan_path(self.project_root_path)
 
+    @property
+    def edit_plan_dir(self) -> Path:
+        return get_edit_plan_dir(self.work_dir_path)
+
+    def folder_edit_plan_path(self, folder_name: str) -> Path:
+        return get_folder_edit_plan_path(self.work_dir_path, folder_name)
+
 
 class Project(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
@@ -250,6 +259,13 @@ class Project(BaseModel):
     @property
     def edit_plan_path(self) -> Path:
         return get_edit_plan_path(self.project_root_path)
+
+    @property
+    def edit_plan_dir(self) -> Path:
+        return get_edit_plan_dir(self.work_dir_path)
+
+    def folder_edit_plan_path(self, folder_name: str) -> Path:
+        return get_folder_edit_plan_path(self.work_dir_path, folder_name)
 
     @classmethod
     def from_create(

@@ -15,10 +15,12 @@ from otio_app.defaults import (
     FALLBACK_SOURCE_LABELS,
     GEMINI_MODEL_CHOICES,
 )
-from otio_app.services.edit_plan_builder import build_edit_plan, load_edit_plan, save_edit_plan
-from otio_app.services.folder_analysis_status import (
-    FolderAnalysisState,
-    count_folder_states,
+from otio_app.project_layout import safe_folder_slug
+from otio_app.services.edit_plan_builder import (
+    build_edit_plan,
+    list_saved_edit_plan_folders,
+    load_edit_plan,
+    save_edit_plan,
 )
 from otio_app.services.gemini_client import (
     GeminiNotConfiguredError,
@@ -44,19 +46,36 @@ from otio_app.ui.project_context import (
 )
 
 
-def _plan_state_key(project_id: str) -> str:
-    return f"edit_plan_draft_{project_id}"
+def _plan_state_key(project_id: str, folder_name: str) -> str:
+    return f"edit_plan_draft_{project_id}_{safe_folder_slug(folder_name)}"
 
 
-def _get_draft(project_id: str) -> EditPlanDocument | None:
-    raw = st.session_state.get(_plan_state_key(project_id))
+def _folder_state_key(project_id: str) -> str:
+    return f"edit_plan_active_folder_{project_id}"
+
+
+def _get_draft(project_id: str, folder_name: str) -> EditPlanDocument | None:
+    raw = st.session_state.get(_plan_state_key(project_id, folder_name))
     if not raw:
         return None
     return EditPlanDocument.model_validate(raw)
 
 
-def _set_draft(document: EditPlanDocument) -> None:
-    st.session_state[_plan_state_key(document.project_id)] = document.model_dump(mode="json")
+def _set_draft(document: EditPlanDocument, folder_name: str) -> None:
+    st.session_state[_plan_state_key(document.project_id, folder_name)] = (
+        document.model_dump(mode="json")
+    )
+
+
+def _render_folder_status(mapped_folders: list[str], saved_folders: list[str], project) -> None:
+    for folder_name in mapped_folders:
+        saved = load_edit_plan(project, folder_name)
+        if saved is not None and saved.confirmed:
+            st.caption(f"✅ **{folder_name}** — bestätigt")
+        elif folder_name in saved_folders or (saved is not None and saved.shots):
+            st.caption(f"📝 **{folder_name}** — Entwurf vorhanden")
+        else:
+            st.caption(f"⬜ **{folder_name}** — noch offen")
 
 
 def render_edit_plan_page() -> None:
@@ -77,9 +96,36 @@ def render_edit_plan_page() -> None:
     mapped_folders = sorted(
         {entry.folder for entry in mapping.entries if entry.folder and entry.confirmed}
     )
-    saved = load_edit_plan(project)
+    if not mapped_folders:
+        st.warning("Keine bestätigten Voice-over-Zuordnungen zu Asset-Ordnern.")
+        render_file_paths(project)
+        return
+
+    saved_folders = list_saved_edit_plan_folders(project)
+    folder_key = _folder_state_key(project.id)
+    default_folder = st.session_state.get(folder_key, mapped_folders[0])
+    if default_folder not in mapped_folders:
+        default_folder = mapped_folders[0]
+
+    st.markdown("**Ort bearbeiten**")
+    selected_folder = st.selectbox(
+        "Asset-Ordner",
+        options=mapped_folders,
+        index=mapped_folders.index(default_folder),
+        key=f"plan_folder_select_{project.id}",
+        label_visibility="collapsed",
+    )
+    st.session_state[folder_key] = selected_folder
+
+    plan_path = project.folder_edit_plan_path(selected_folder)
+    st.caption(f"Speicherort: `{plan_path}`")
+
+    with st.expander("Status aller Orte", expanded=False):
+        _render_folder_status(mapped_folders, saved_folders, project)
+
+    saved = load_edit_plan(project, selected_folder)
     if saved is not None and saved.confirmed:
-        st.success(f"Schnittplan bestätigt: `{project.edit_plan_path}`")
+        st.success(f"Schnittplan für **{selected_folder}** bestätigt.")
 
     tab_settings, tab_generate, tab_review = st.tabs(
         ["⚙️ Regeln", "▶️ Vorschlag", "✅ Prüfen & Speichern"]
@@ -140,16 +186,10 @@ def render_edit_plan_page() -> None:
             key=f"plan_api_{project.id}",
         )
 
-        folder_filter = st.multiselect(
-            "Nur diese Ordner planen (leer = alle zugeordneten)",
-            options=mapped_folders,
-            key=f"plan_folders_{project.id}",
-        )
-
     with tab_generate:
         st.markdown(
-            "Gemini erhält **nur Text** (Whisper) + **Asset-Beschreibungen** und schlägt Shots vor. "
-            "Mehrere Orte in einem Satz werden in mehrere Shots zerlegt."
+            f"Vorschlag für **{selected_folder}** — Gemini erhält **nur Text** (Whisper) "
+            "+ **Asset-Beschreibungen** und schlägt Shots vor."
         )
         if not is_gemini_configured():
             st.warning("Ohne GEMINI_API_KEY wird nur eine einfache Text-Trennung genutzt.")
@@ -172,20 +212,20 @@ def render_edit_plan_page() -> None:
                     gemini_model=gemini_model,
                 )
                 try:
-                    with st.spinner("Schnittplan wird erstellt…"):
+                    with st.spinner(f"Schnittplan für {selected_folder} wird erstellt…"):
                         document = build_edit_plan(
                             project,
                             settings,
                             use_api=use_gemini,
-                            folder_names=folder_filter or None,
+                            folder_names=[selected_folder],
                         )
-                    _set_draft(document)
+                    _set_draft(document, selected_folder)
                     st.success(f"{len(document.shots)} Shots vorgeschlagen.")
                     st.rerun()
                 except (GeminiNotConfiguredError, ValueError, FileNotFoundError) as exc:
                     st.error(str(exc))
 
-        draft = _get_draft(project.id) or saved
+        draft = _get_draft(project.id, selected_folder) or saved
         if draft is not None:
             missing = sum(1 for shot in draft.shots if shot.asset_source == "missing")
             violations = validate_shots_against_rules(draft.shots, rules_doc)
@@ -200,13 +240,19 @@ def render_edit_plan_page() -> None:
                     st.caption(f"… und {len(violations) - 15} weitere")
 
     with tab_review:
-        draft = _get_draft(project.id) or saved
+        draft = _get_draft(project.id, selected_folder) or saved
         if draft is None or not draft.shots:
-            st.info("Noch kein Vorschlag — zuerst unter „Vorschlag“ generieren.")
+            st.info(
+                f"Noch kein Vorschlag für **{selected_folder}** — "
+                "zuerst unter „Vorschlag“ generieren."
+            )
             render_file_paths(project)
             return
 
-        st.markdown(f"**{len(draft.shots)} Shots** — Audio-Offset: {draft.settings.audio_offset_sec}s")
+        st.markdown(
+            f"**{selected_folder}** · {len(draft.shots)} Shots "
+            f"— Audio-Offset: {draft.settings.audio_offset_sec}s"
+        )
         rules_doc = get_edit_plan_rules_for_project(project)
         violations = validate_shots_against_rules(draft.shots, rules_doc)
         custom_rules = list_custom_rules(rules_doc, enabled_only=True)
@@ -231,20 +277,24 @@ def render_edit_plan_page() -> None:
                     st.warning("Kein lokales Asset — Fallback folgt später (Adobe Stock / Pexels / KI).")
 
         confirm = st.checkbox(
-            "Schnittplan geprüft und bestätigt",
-            key=f"confirm_plan_{project.id}",
+            f"Schnittplan für {selected_folder} geprüft und bestätigt",
+            key=f"confirm_plan_{project.id}_{safe_folder_slug(selected_folder)}",
         )
-        if st.button("Schnittplan speichern", key=f"save_plan_{project.id}", type="primary"):
+        if st.button(
+            "Schnittplan speichern",
+            key=f"save_plan_{project.id}_{safe_folder_slug(selected_folder)}",
+            type="primary",
+        ):
             if not confirm:
                 st.warning("Bitte bestätigen.")
             else:
-                confirmed = draft.model_copy(update={"confirmed": True})
+                confirmed = draft.model_copy(update={"confirmed": True, "folder_name": selected_folder})
                 for shot in confirmed.shots:
                     if not shot.asset_path:
                         shot.asset_source = "missing"
-                save_edit_plan(project, confirmed)
-                _set_draft(confirmed)
-                st.success(f"Gespeichert: `{project.edit_plan_path}`")
+                save_edit_plan(project, confirmed, selected_folder)
+                _set_draft(confirmed, selected_folder)
+                st.success(f"Gespeichert: `{plan_path}`")
                 st.rerun()
 
         with st.expander("JSON-Vorschau", expanded=False):

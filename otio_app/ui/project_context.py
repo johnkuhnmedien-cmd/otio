@@ -9,7 +9,11 @@ import streamlit as st
 
 from otio_app.models import Project
 from otio_app.project_repository import get_project_by_id, list_projects
-from otio_app.services.edit_plan_builder import load_edit_plan
+from otio_app.services.edit_plan_builder import (
+    list_saved_edit_plan_folders,
+    load_edit_plan,
+    mapped_folders_have_confirmed_plans,
+)
 from otio_app.services.inventory_loader import selected_folders_have_inventory
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 from otio_app.ui.navigation import ACTIVE_PROJECT_KEY
@@ -29,12 +33,19 @@ class WorkflowStatus:
 
 def get_workflow_status(project: Project) -> WorkflowStatus:
     mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
-    edit_plan = load_edit_plan(project)
+    mapped_folders = sorted(
+        {
+            entry.folder
+            for entry in (mapping.entries if mapping else [])
+            if entry.folder and entry.confirmed
+        }
+    )
+    edit_plan_done = mapped_folders_have_confirmed_plans(project, mapped_folders)
     return WorkflowStatus(
         voice_analysis_done=project.voice_analysis_path.is_file(),
         inventory_done=selected_folders_have_inventory(project),
         mapping_confirmed=bool(mapping and mapping.confirmed),
-        edit_plan_done=bool(edit_plan and edit_plan.confirmed),
+        edit_plan_done=edit_plan_done,
     )
 
 
@@ -101,4 +112,10 @@ def render_file_paths(project: Project) -> None:
         st.write(f"**Voice-Analyse:** `{project.voice_analysis_path}`")
         st.write(f"**Inventar:** `{project.inventory_dir}` (pro Ordner eine JSON)")
         st.write(f"**Zuordnung:** `{project.voice_folder_mapping_path}`")
-        st.write(f"**Schnittplan:** `{project.edit_plan_path}`")
+        st.write(f"**Schnittpläne:** `{project.edit_plan_dir}` (pro Ort eine JSON)")
+        saved_folders = list_saved_edit_plan_folders(project)
+        if saved_folders:
+            st.caption("Gespeichert: " + ", ".join(f"`{name}`" for name in saved_folders))
+        legacy = project.edit_plan_path
+        if legacy.is_file():
+            st.caption(f"Legacy-Datei (wird beim Laden migriert): `{legacy}`")

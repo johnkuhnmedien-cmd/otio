@@ -21,6 +21,11 @@ from otio_app.defaults import (
     FALLBACK_SOURCE_MISSING,
 )
 from otio_app.models import Project
+from otio_app.project_layout import (
+    get_edit_plan_dir,
+    get_edit_plan_path,
+    get_folder_edit_plan_path,
+)
 from otio_app.services.edit_plan_rules import apply_edit_plan_rules, load_edit_plan_rules
 from otio_app.services.gemini_client import GeminiNotConfiguredError, plan_passage_assets
 from otio_app.services.inventory_loader import load_folder_inventory
@@ -133,6 +138,10 @@ def build_edit_plan(
             if folder in allowed
         }
 
+    primary_folder: str | None = None
+    if folder_names is not None and len(folder_names) == 1:
+        primary_folder = folder_names[0]
+
     shots: list[EditPlanShot] = []
     assets_by_folder: dict[str, list[str]] = {}
     for voice_path, folder_name in mapping_by_voice.items():
@@ -211,20 +220,14 @@ def build_edit_plan(
 
     return EditPlanDocument(
         project_id=project.id,
+        folder_name=primary_folder,
         confirmed=False,
         settings=plan_settings,
         shots=shots,
     )
 
 
-def save_edit_plan(project: Project, document: EditPlanDocument) -> Path:
-    path = project.edit_plan_path
-    path.write_text(document.model_dump_json(indent=2), encoding="utf-8")
-    return path
-
-
-def load_edit_plan(project: Project) -> EditPlanDocument | None:
-    path = project.edit_plan_path
+def _read_edit_plan_file(path: Path) -> EditPlanDocument | None:
     if not path.is_file():
         return None
     try:
@@ -232,3 +235,104 @@ def load_edit_plan(project: Project) -> EditPlanDocument | None:
         return EditPlanDocument.model_validate(payload)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
         return None
+
+
+def migrate_legacy_edit_plan(project: Project) -> list[Path]:
+    """Teilt eine alte edit_plan.json im Projektroot in pro-Ort-Dateien auf."""
+    legacy_path = get_edit_plan_path(project.project_root_path)
+    if not legacy_path.is_file():
+        return []
+
+    document = _read_edit_plan_file(legacy_path)
+    if document is None or not document.shots:
+        return []
+
+    saved: list[Path] = []
+    by_folder: dict[str, list] = {}
+    for shot in document.shots:
+        by_folder.setdefault(shot.folder, []).append(shot)
+
+    for folder_name, shots in by_folder.items():
+        target = get_folder_edit_plan_path(project.work_dir_path, folder_name)
+        if target.is_file():
+            continue
+        folder_doc = document.model_copy(
+            update={
+                "folder_name": folder_name,
+                "shots": shots,
+            }
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(folder_doc.model_dump_json(indent=2), encoding="utf-8")
+        saved.append(target)
+
+    if saved:
+        backup = legacy_path.with_suffix(".json.migrated")
+        legacy_path.rename(backup)
+    return saved
+
+
+def list_saved_edit_plan_folders(project: Project) -> list[str]:
+    """Ordnernamen mit gespeicherter Schnittplan-JSON (nach Migration)."""
+    migrate_legacy_edit_plan(project)
+    edit_plan_dir = get_edit_plan_dir(project.work_dir_path)
+    if not edit_plan_dir.is_dir():
+        return []
+
+    folders: list[str] = []
+    for path in sorted(edit_plan_dir.glob("*.json")):
+        document = _read_edit_plan_file(path)
+        if document is None:
+            continue
+        folder_name = document.folder_name or _folder_name_from_shots(document)
+        if folder_name:
+            folders.append(folder_name)
+    return folders
+
+
+def _folder_name_from_shots(document: EditPlanDocument) -> str | None:
+    folders = {shot.folder for shot in document.shots if shot.folder}
+    if len(folders) == 1:
+        return next(iter(folders))
+    return None
+
+
+def load_edit_plan(project: Project, folder_name: str) -> EditPlanDocument | None:
+    migrate_legacy_edit_plan(project)
+    path = get_folder_edit_plan_path(project.work_dir_path, folder_name)
+    document = _read_edit_plan_file(path)
+    if document is None:
+        return None
+    if document.folder_name is None:
+        document = document.model_copy(update={"folder_name": folder_name})
+    return document
+
+
+def save_edit_plan(
+    project: Project,
+    document: EditPlanDocument,
+    folder_name: str,
+) -> Path:
+    path = get_folder_edit_plan_path(project.work_dir_path, folder_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    normalized = document.model_copy(
+        update={
+            "project_id": project.id,
+            "folder_name": folder_name,
+        }
+    )
+    path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
+    return path
+
+
+def mapped_folders_have_confirmed_plans(
+    project: Project,
+    folder_names: list[str],
+) -> bool:
+    if not folder_names:
+        return False
+    for folder_name in folder_names:
+        document = load_edit_plan(project, folder_name)
+        if document is None or not document.confirmed:
+            return False
+    return True
