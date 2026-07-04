@@ -6,6 +6,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from otio_app.defaults import GEMINI_MODEL_CHOICES
 from otio_app.models import ProjectStatus
 from otio_app.project_repository import (
     get_project_by_id,
@@ -14,7 +15,12 @@ from otio_app.project_repository import (
     update_project_status,
 )
 from otio_app.services.asset_analyzer import analyze_asset_folders
-from otio_app.services.gemini_client import GeminiNotConfiguredError, is_gemini_configured
+from otio_app.services.gemini_client import (
+    GeminiNotConfiguredError,
+    format_gemini_model_label,
+    get_default_gemini_model,
+    is_gemini_configured,
+)
 from otio_app.services.voice_analyzer import analyze_voice_over
 
 
@@ -119,6 +125,20 @@ def render_project_workbench() -> None:
         "Es werden nur Voice-over-Audios bzw. extrahierte Frame-Bilder gesendet — keine Videos."
     )
 
+    default_model = get_default_gemini_model()
+    if "gemini_model" not in st.session_state:
+        st.session_state["gemini_model"] = default_model
+    if st.session_state["gemini_model"] not in GEMINI_MODEL_CHOICES:
+        st.session_state["gemini_model"] = default_model
+
+    selected_model = st.selectbox(
+        "Gemini-Modell",
+        options=list(GEMINI_MODEL_CHOICES),
+        format_func=format_gemini_model_label,
+        key="gemini_model",
+        help="Standard kommt aus `.env` (GEMINI_MODEL). Die Auswahl gilt für alle Analysen in dieser Sitzung.",
+    )
+
     api_confirmed = st.checkbox(
         "Ich bestätige kostenpflichtige Gemini-API-Aufrufe",
         key=f"confirm_api_{project.id}",
@@ -136,7 +156,7 @@ def render_project_workbench() -> None:
                 def _voice_job() -> None:
                     current = get_project_by_id(project.id)
                     assert current is not None
-                    analyze_voice_over(current, use_api=True)
+                    analyze_voice_over(current, use_api=True, model=selected_model)
                     update_project_status(project.id, ProjectStatus.READY)
 
                 if _run_with_feedback("Voice-over-Analyse", _voice_job):
@@ -156,7 +176,9 @@ def render_project_workbench() -> None:
                 def _asset_job() -> None:
                     current = get_project_by_id(project.id)
                     assert current is not None
-                    analyze_asset_folders(current, folders, use_api=True)
+                    analyze_asset_folders(
+                        current, folders, use_api=True, model=selected_model
+                    )
                     update_project_status(project.id, ProjectStatus.READY)
 
                 if _run_with_feedback("Asset-Analyse", _asset_job):
@@ -175,8 +197,10 @@ def render_project_workbench() -> None:
                 def _full_job() -> None:
                     current = get_project_by_id(project.id)
                     assert current is not None
-                    analyze_voice_over(current, use_api=True)
-                    analyze_asset_folders(current, all_folders, use_api=True)
+                    analyze_voice_over(current, use_api=True, model=selected_model)
+                    analyze_asset_folders(
+                        current, all_folders, use_api=True, model=selected_model
+                    )
                     update_project_status(project.id, ProjectStatus.READY)
 
                 if _run_with_feedback("Vollständige Analyse", _full_job):

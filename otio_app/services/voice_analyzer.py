@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 from otio_app.analysis_models import (
     VoiceAnalysisDocument,
@@ -30,6 +31,7 @@ def analyze_voice_over(
     project: Project,
     *,
     use_api: bool = True,
+    model: Optional[str] = None,
 ) -> VoiceAnalysisDocument:
     """Analysiert alle Audios im Voice-over-Ordner."""
     voice_dir = project.voice_over_dir
@@ -52,7 +54,9 @@ def analyze_voice_over(
         entry = VoiceFileAnalysis(path=str(audio_path), duration_sec=duration)
         if use_api:
             try:
-                payload = analyze_voice_over_file(audio_path, project.language)
+                payload = analyze_voice_over_file(
+                    audio_path, project.language, model=model
+                )
                 segments = payload.get("segments", [])
                 entry.segments = [
                     VoiceSegment(

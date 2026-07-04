@@ -5,5 +5,18 @@ from __future__ import annotations
 DEFAULT_WORK_SUBDIR = "_otio"
 DEFAULT_VOICE_OVER_SUBDIR = "Voice over"
 DEFAULT_FRAMES_PER_SHOT = 3
+DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL_CHOICES = (
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+)
+GEMINI_MODEL_LABELS = {
+    "gemini-2.0-flash": "Gemini 2.0 Flash — schnell, günstig (Standard)",
+    "gemini-2.0-flash-lite": "Gemini 2.0 Flash Lite — sehr günstig",
+    "gemini-2.5-flash": "Gemini 2.5 Flash — neuer, ausgewogen",
+    "gemini-2.5-pro": "Gemini 2.5 Pro — höhere Qualität, teurer",
+}
 INVENTORY_FILENAME = "inventory.json"
 VOICE_ANALYSIS_FILENAME = "voice_over_analysis.json"

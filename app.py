@@ -14,6 +14,7 @@ from otio_app.project_layout import (
     scan_project_structure,
 )
 from otio_app.project_repository import create_project, list_projects
+from otio_app.services.gemini_client import format_gemini_model_label, get_default_gemini_model
 from otio_app.system_checks import run_all_checks
 from otio_app.ui.project_workbench import render_project_workbench
 
@@ -468,3 +469,13 @@ elif page == PAGE_STATUS:
         st.write(result.message)
         if result.version:
             st.caption(f"Version: {result.version}")
+
+    default_model = get_default_gemini_model()
+    st.subheader("🤖 Gemini")
+    st.write(
+        f"Standardmodell (aus `.env` oder App-Default): "
+        f"**{format_gemini_model_label(default_model)}** (`{default_model}`)"
+    )
+    st.caption(
+        "Unter „Projekt bearbeiten“ kann pro Sitzung ein anderes Modell gewählt werden."
+    )

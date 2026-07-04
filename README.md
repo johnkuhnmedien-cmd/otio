@@ -17,7 +17,10 @@ Gemini-Aufrufe nur nach Checkbox-Bestätigung. API-Schlüssel in `.env`:
 
 ```env
 GEMINI_API_KEY=dein_schlüssel
+GEMINI_MODEL=gemini-2.0-flash
 ```
+
+Unter **Projekt bearbeiten** kann das Gemini-Modell pro Sitzung in der UI gewählt werden (Standard kommt aus `GEMINI_MODEL`).
 
 ## Projektstruktur (Benutzerordner)
 
@@ -83,7 +86,5 @@ pytest -v
 
 ## Nächste Meilensteine
 
-1. Asset-Inventar: pro Unterordner Frames extrahieren, an Gemini senden, `inventory.json` schreiben
-2. Voice-over-Analyse: Timestamps pro Satz/Passage, `voice_over_analysis.json` schreiben
-3. Zuordnung Voice-over ↔ Assets
-4. `edit_plan.json` validieren und OTIO exportieren
+1. Voice-over ↔ Assets zuordnen
+2. `edit_plan.json` validieren und OTIO exportieren

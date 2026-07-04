@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 from otio_app.analysis_models import AssetFolderAnalysis, InventoryDocument
 from otio_app.models import Project, validate_asset_selection
@@ -53,6 +54,7 @@ def analyze_asset_folders(
     folder_names: list[str],
     *,
     use_api: bool = True,
+    model: Optional[str] = None,
 ) -> InventoryDocument:
     """Analysiert ausgewählte Asset-Ordner und schreibt inventory.json."""
     selected = validate_asset_selection(project.asset_subdir_names, folder_names)
@@ -83,6 +85,7 @@ def analyze_asset_folders(
                     folder_name,
                     frames,
                     project.language,
+                    model=model,
                 )
             except GeminiNotConfiguredError:
                 raise

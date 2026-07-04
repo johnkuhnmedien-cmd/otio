@@ -7,13 +7,29 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from otio_app.config import get_env
-
-DEFAULT_MODEL = "gemini-2.0-flash"
+from otio_app.config import get_env, get_gemini_model_from_env
+from otio_app.defaults import GEMINI_MODEL_CHOICES, GEMINI_MODEL_LABELS
 
 
 class GeminiNotConfiguredError(RuntimeError):
     """GEMINI_API_KEY fehlt."""
+
+
+def resolve_gemini_model(model: Optional[str] = None) -> str:
+    """Ermittelt das zu nutzende Modell (UI-Auswahl > .env > Standard)."""
+    if model and model.strip() in GEMINI_MODEL_CHOICES:
+        return model.strip()
+    return get_gemini_model_from_env()
+
+
+def get_default_gemini_model() -> str:
+    """Standardmodell für die UI (aus .env oder App-Default)."""
+    return get_gemini_model_from_env()
+
+
+def format_gemini_model_label(model_id: str) -> str:
+    """Anzeigename für ein Modell in der UI."""
+    return GEMINI_MODEL_LABELS.get(model_id, model_id)
 
 
 def _get_client():
@@ -39,6 +55,8 @@ def describe_folder_from_frames(
     folder_name: str,
     frame_paths: list[Path],
     language: str,
+    *,
+    model: Optional[str] = None,
 ) -> str:
     """Sendet nur Frame-Bilder an Gemini und liefert eine Ordnerbeschreibung."""
     if not frame_paths:
@@ -66,7 +84,7 @@ def describe_folder_from_frames(
         )
 
     response = client.models.generate_content(
-        model=DEFAULT_MODEL,
+        model=resolve_gemini_model(model),
         contents=[types.Content(role="user", parts=parts)],
     )
     return (response.text or "").strip()
@@ -75,6 +93,8 @@ def describe_folder_from_frames(
 def analyze_voice_over_file(
     audio_path: Path,
     language: str,
+    *,
+    model: Optional[str] = None,
 ) -> dict[str, Any]:
     """Analysiert Voice-over-Audio mit Timestamps pro Passage."""
     client = _get_client()
@@ -101,7 +121,7 @@ def analyze_voice_over_file(
         types.Part.from_bytes(data=audio_path.read_bytes(), mime_type=mime_type),
     ]
     response = client.models.generate_content(
-        model=DEFAULT_MODEL,
+        model=resolve_gemini_model(model),
         contents=[types.Content(role="user", parts=parts)],
     )
     text = response.text or "{}"
