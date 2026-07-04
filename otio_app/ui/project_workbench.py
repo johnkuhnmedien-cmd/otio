@@ -181,20 +181,23 @@ def _run_asset_analysis(
     return None
 
 
-def _render_folder_selection(project) -> list[str]:
+def _render_folder_picker(project) -> list[str]:
+    """Multiselect und Schnellauswahl — oben in der Analyse-Ansicht."""
     folder_state_key = f"workbench_folders_{project.id}"
     if folder_state_key not in st.session_state:
         st.session_state[folder_state_key] = list(project.selected_asset_subdirs)
 
-    counts = count_folder_states(project, project.asset_subdir_names)
+    selected_folders = st.multiselect(
+        "Zu bearbeitende Asset-Ordner",
+        options=project.asset_subdir_names,
+        format_func=lambda name: format_folder_with_status(project, name),
+        key=folder_state_key,
+    )
     st.caption(
-        f"🟢 {counts[FolderAnalysisState.COMPLETE]} fertig · "
-        f"🟡 {counts[FolderAnalysisState.PARTIAL]} teilweise · "
-        f"⚪ {counts[FolderAnalysisState.PENDING]} offen · "
-        f"➖ {counts[FolderAnalysisState.EMPTY]} leer"
+        f"{len(selected_folders)} von {len(project.asset_subdir_names)} Ordnern ausgewählt"
     )
 
-    btn_col1, btn_col2, btn_col3 = st.columns(3)
+    btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
     with btn_col1:
         if st.button("Alle Ordner auswählen", key=f"all_{project.id}"):
             st.session_state[folder_state_key] = list(project.asset_subdir_names)
@@ -209,6 +212,24 @@ def _render_folder_selection(project) -> list[str]:
         if st.button("Gespeicherte Auswahl", key=f"reload_{project.id}"):
             st.session_state[folder_state_key] = list(project.selected_asset_subdirs)
             st.rerun()
+    with btn_col4:
+        if st.button("Auswahl speichern", key=f"save_sel_{project.id}"):
+            update_project_selection(project.id, selected_folders)
+            st.success("Ordnerauswahl gespeichert.")
+            st.rerun()
+
+    return selected_folders
+
+
+def _render_folder_status_overview(project) -> None:
+    """Statusübersicht aller Asset-Ordner (Tab „Ordner“)."""
+    counts = count_folder_states(project, project.asset_subdir_names)
+    st.caption(
+        f"🟢 {counts[FolderAnalysisState.COMPLETE]} fertig · "
+        f"🟡 {counts[FolderAnalysisState.PARTIAL]} teilweise · "
+        f"⚪ {counts[FolderAnalysisState.PENDING]} offen · "
+        f"➖ {counts[FolderAnalysisState.EMPTY]} leer"
+    )
 
     for folder_name in project.asset_subdir_names:
         state = get_folder_analysis_state(project, folder_name)
@@ -254,23 +275,6 @@ def _render_folder_selection(project) -> list[str]:
                     st.rerun()
 
     st.caption("Rechts: ✓ = manuell als fertig markieren · ↩ = Markierung aufheben")
-
-    selected_folders = st.multiselect(
-        "Zu bearbeitende Asset-Ordner",
-        options=project.asset_subdir_names,
-        format_func=lambda name: format_folder_with_status(project, name),
-        key=folder_state_key,
-    )
-    st.caption(
-        f"{len(selected_folders)} von {len(project.asset_subdir_names)} Ordnern ausgewählt"
-    )
-
-    if st.button("Auswahl speichern", key=f"save_sel_{project.id}"):
-        update_project_selection(project.id, selected_folders)
-        st.success("Ordnerauswahl gespeichert.")
-        st.rerun()
-
-    return selected_folders
 
 
 def _init_model_settings() -> tuple[str, str, str]:
@@ -425,17 +429,21 @@ def render_project_workbench() -> None:
         f"{len(project.selected_asset_subdirs)} Ordner gespeichert"
     )
 
+    selected_folders = _render_folder_picker(project)
+    st.divider()
+
     tab_folders, tab_run, tab_results = st.tabs(
         ["📁 Ordner", "▶️ Analysen starten", "📄 Ergebnisse"]
     )
 
     with tab_folders:
-        st.markdown("Welche Asset-Ordner sollen beschrieben werden?")
-        selected_folders = _render_folder_selection(project)
+        st.markdown("Status aller Asset-Ordner")
+        _render_folder_status_overview(project)
 
     with tab_run:
+        folder_state_key = f"workbench_folders_{project.id}"
         selected_folders = st.session_state.get(
-            f"workbench_folders_{project.id}",
+            folder_state_key,
             list(project.selected_asset_subdirs),
         )
 
