@@ -5,9 +5,9 @@ from __future__ import annotations
 DEFAULT_WORK_SUBDIR = "_otio"
 DEFAULT_VOICE_OVER_SUBDIR = "Voice over"
 DEFAULT_FRAMES_PER_SHOT = 3
-DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_VOICE_BACKEND = "whisper"
-DEFAULT_WHISPER_MODEL = "small"
+DEFAULT_WHISPER_MODEL = "large-v3"
 VOICE_BACKEND_WHISPER = "whisper"
 VOICE_BACKEND_GEMINI = "gemini"
 VOICE_BACKEND_CHOICES = (
@@ -28,9 +28,9 @@ WHISPER_MODEL_CHOICES = (
 WHISPER_MODEL_LABELS = {
     "tiny": "Whisper tiny — am schnellsten, grober",
     "base": "Whisper base — schnell",
-    "small": "Whisper small — empfohlen (Standard)",
+    "small": "Whisper small — schnell, ausgewogen",
     "medium": "Whisper medium — genauer, langsamer",
-    "large-v3": "Whisper large-v3 — beste Qualität, am langsamsten",
+    "large-v3": "Whisper large-v3 — beste Qualität, am langsamsten (Standard)",
 }
 GEMINI_MODEL_CHOICES = (
     "gemini-2.0-flash",
@@ -42,12 +42,12 @@ GEMINI_MODEL_CHOICES = (
     "gemini-3.1-pro-preview",
 )
 GEMINI_MODEL_LABELS = {
-    "gemini-2.0-flash": "Gemini 2.0 Flash — schnell, günstig (Standard)",
+    "gemini-2.0-flash": "Gemini 2.0 Flash — schnell, günstig",
     "gemini-2.0-flash-lite": "Gemini 2.0 Flash Lite — sehr günstig",
     "gemini-2.5-flash": "Gemini 2.5 Flash — ausgewogen",
     "gemini-2.5-pro": "Gemini 2.5 Pro — höhere Qualität, teurer",
     "gemini-3-flash-preview": "Gemini 3 Flash Preview — schnell, Pro-Niveau (Preview)",
-    "gemini-3.1-flash-lite": "Gemini 3.1 Flash Lite — günstig, Preview",
+    "gemini-3.1-flash-lite": "Gemini 3.1 Flash Lite — günstig, Preview (Standard)",
     "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview — beste Qualität (Preview, teurer)",
 }
 INVENTORY_FILENAME = "inventory.json"

@@ -7,6 +7,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
+from otio_app.defaults import DEFAULT_GEMINI_MODEL
+
 
 class VoiceWord(BaseModel):
     start_sec: float

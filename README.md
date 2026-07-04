@@ -17,12 +17,12 @@ Gemini-Aufrufe nur nach Checkbox-Bestätigung. API-Schlüssel in `.env`:
 
 ```env
 GEMINI_API_KEY=dein_schlüssel
-GEMINI_MODEL=gemini-2.0-flash
+GEMINI_MODEL=gemini-3.1-flash-lite
 VOICE_OVER_BACKEND=whisper
-WHISPER_MODEL=small
+WHISPER_MODEL=large-v3
 ```
 
-Unter **Projekt bearbeiten** kann das Gemini-Modell pro Sitzung gewählt werden. Voice-over standardmäßig mit **Whisper** (lokal, keine API-Kosten) — auf Apple Silicon (M4) empfohlen: `small` oder `medium`.
+Unter **Projekt bearbeiten** kann das Gemini-Modell pro Sitzung gewählt werden. Voice-over standardmäßig mit **Whisper large-v3** (lokal, beste Qualität, langsamer).
 
 ## Projektstruktur (Benutzerordner)
 
