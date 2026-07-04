@@ -5,10 +5,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+from typing import Optional
+
 try:
     from typing import Self
 except ImportError:  # Python < 3.11
     from typing_extensions import Self
+
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -51,7 +54,7 @@ def validate_asset_selection(
 class ProjectCreate(BaseModel):
     name: str
     project_root: str
-    work_dir: str | None = None
+    work_dir: Optional[str] = None
     voice_over_subdir: str = DEFAULT_VOICE_OVER_SUBDIR
     language: str = "de"
     frames_per_shot: int = DEFAULT_FRAMES_PER_SHOT
@@ -60,7 +63,7 @@ class ProjectCreate(BaseModel):
     height: int = 2160
     aspect_ratio: str = "16:9"
     target_platform: str = "YouTube"
-    notes: str | None = None
+    notes: Optional[str] = None
 
     @field_validator("name")
     @classmethod
@@ -172,7 +175,7 @@ class Project(BaseModel):
     status: ProjectStatus = ProjectStatus.DRAFT
     asset_subdir_names: list[str]
     selected_asset_subdirs: list[str]
-    notes: str | None = None
+    notes: Optional[str] = None
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
