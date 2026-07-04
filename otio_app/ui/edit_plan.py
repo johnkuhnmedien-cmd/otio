@@ -33,7 +33,10 @@ from otio_app.services.edit_plan_rules import (
     validate_shots_against_rules,
 )
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
-from otio_app.ui.edit_plan_rules_ui import render_edit_plan_rules_manager
+from otio_app.ui.edit_plan_rules_ui import (
+    get_edit_plan_rules_for_project,
+    render_edit_plan_rules_manager,
+)
 from otio_app.ui.project_context import (
     render_file_paths,
     render_project_selector,
