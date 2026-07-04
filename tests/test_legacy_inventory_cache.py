@@ -30,7 +30,8 @@ def test_materialize_reads_legacy_inventory_subfolder_cache(
         AssetMediaAnalysis(path=str(media_path), description="Legacy-Cache"),
     )
 
-    item = materialize_folder_inventory_from_cache(project, "Grand Canyon")
+    item, error = materialize_folder_inventory_from_cache(project, "Grand Canyon")
+    assert error is None
     assert item is not None
     assert project.folder_inventory_path("Grand Canyon").is_file()
     assert item.assets[0].description == "Legacy-Cache"

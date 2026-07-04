@@ -3,19 +3,29 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis, InventoryDocument
 from otio_app.models import Project
-from otio_app.project_layout import get_folder_inventory_path, get_inventory_dir
+from otio_app.project_layout import get_folder_inventory_path, get_inventory_dir, safe_folder_slug
 from otio_app.services.media_inventory_cache import (
     is_completed_analysis,
     load_cached_media,
     load_cached_media_for_asset,
-    media_cache_path,
     migrate_legacy_per_asset_cache_folder,
+    scan_folder_cache_assets,
 )
 from otio_app.services.media_utils import list_media_files
+
+
+@dataclass(frozen=True)
+class FolderInventorySyncStatus:
+    folder: str
+    state: str
+    detail: str
+    cache_files: int = 0
+    media_files: int = 0
 
 
 def load_folder_inventory_file(path: Path) -> AssetFolderAnalysis | None:
@@ -80,28 +90,70 @@ def _folder_summary_from_assets(assets: list[AssetMediaAnalysis]) -> str:
     return "\n\n".join(parts)
 
 
+def _cached_assets_by_filename(
+    project: Project,
+    folder_name: str,
+) -> dict[str, AssetMediaAnalysis]:
+    indexed: dict[str, AssetMediaAnalysis] = {}
+    for asset in scan_folder_cache_assets(project, folder_name):
+        indexed[Path(asset.path).name.casefold()] = asset
+    return indexed
+
+
+def _resolve_cached_asset(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+    indexed_cache: dict[str, AssetMediaAnalysis],
+) -> AssetMediaAnalysis | None:
+    cached = load_cached_media_for_asset(project, folder_name, media_path)
+    if cached is not None:
+        return cached
+    return indexed_cache.get(media_path.name.casefold())
+
+
 def materialize_folder_inventory_from_cache(
     project: Project,
     folder_name: str,
-) -> AssetFolderAnalysis | None:
+) -> tuple[AssetFolderAnalysis | None, str | None]:
     """Erstellt eine Ordner-JSON aus vollständigem Medien-Cache (ohne Gemini)."""
     folder_path = project.project_root_path / folder_name
     media_paths = list_media_files(folder_path)
+    indexed_cache = _cached_assets_by_filename(project, folder_name)
+
+    if not media_paths and indexed_cache:
+        media_paths = sorted(
+            {Path(asset.path) for asset in indexed_cache.values()},
+            key=lambda path: path.name.casefold(),
+        )
+
     if not media_paths:
-        return None
+        if indexed_cache:
+            return None, "Medienordner leer/unlesbar, Cache vorhanden — Ordner im Finder lokal laden."
+        return None, "Keine Medien und kein Cache gefunden."
 
     existing = should_skip_folder_analysis(project, folder_name, media_paths)
     if existing is not None:
-        return existing
+        return existing, None
 
     migrate_legacy_per_asset_cache_folder(project, folder_name)
+    indexed_cache = _cached_assets_by_filename(project, folder_name)
 
     assets: list[AssetMediaAnalysis] = []
+    missing: list[str] = []
     for media_path in media_paths:
-        cached = load_cached_media_for_asset(project, folder_name, media_path)
+        cached = _resolve_cached_asset(project, folder_name, media_path, indexed_cache)
         if cached is None or not is_completed_analysis(cached):
-            return None
+            missing.append(media_path.name)
+            continue
         assets.append(cached)
+
+    if missing:
+        return (
+            None,
+            f"{len(assets)}/{len(media_paths)} Assets im Cache — fehlt: {', '.join(missing[:5])}"
+            + (" …" if len(missing) > 5 else ""),
+        )
 
     item = AssetFolderAnalysis(
         folder=folder_name,
@@ -110,28 +162,68 @@ def materialize_folder_inventory_from_cache(
         frames_used=[frame for asset in assets for frame in asset.frames_used],
         description=_folder_summary_from_assets(assets),
     )
-    save_folder_inventory(
-        get_folder_inventory_path(project.work_dir_path, folder_name),
-        item,
-    )
-    return item
+    try:
+        save_folder_inventory(
+            get_folder_inventory_path(project.work_dir_path, folder_name),
+            item,
+        )
+    except OSError as exc:
+        return None, f"Schreiben fehlgeschlagen: {exc}"
+    return item, None
 
 
 def sync_folder_inventories_from_cache(
     project: Project,
     folder_names: list[str] | None = None,
-) -> list[str]:
-    """Baut fehlende Ordner-JSONs aus vollständigem Cache auf. Liefert neu erzeugte Ordner."""
+) -> tuple[list[str], list[FolderInventorySyncStatus]]:
+    """Baut fehlende Ordner-JSONs auf. Liefert neu erzeugte Ordner und Status je Ordner."""
+    migrate_legacy_inventory(project)
+
     targets = folder_names if folder_names is not None else project.asset_subdir_names
     created: list[str] = []
+    statuses: list[FolderInventorySyncStatus] = []
+
     for folder_name in targets:
         migrate_legacy_per_asset_cache_folder(project, folder_name)
         out_path = get_folder_inventory_path(project.work_dir_path, folder_name)
         existed_before = out_path.is_file()
-        if materialize_folder_inventory_from_cache(project, folder_name) is not None:
-            if not existed_before:
-                created.append(folder_name)
-    return created
+        media_count = len(list_media_files(project.project_root_path / folder_name))
+        cache_count = len(scan_folder_cache_assets(project, folder_name))
+
+        item, error = materialize_folder_inventory_from_cache(project, folder_name)
+        if item is not None and not existed_before and out_path.is_file():
+            created.append(folder_name)
+            statuses.append(
+                FolderInventorySyncStatus(
+                    folder=folder_name,
+                    state="created",
+                    detail=f"Neu erstellt: `{out_path.name}`",
+                    cache_files=cache_count,
+                    media_files=media_count or len(item.assets),
+                )
+            )
+        elif item is not None and existed_before:
+            statuses.append(
+                FolderInventorySyncStatus(
+                    folder=folder_name,
+                    state="exists",
+                    detail=f"Vorhanden: `{out_path.name}`",
+                    cache_files=cache_count,
+                    media_files=media_count or len(item.assets),
+                )
+            )
+        else:
+            statuses.append(
+                FolderInventorySyncStatus(
+                    folder=folder_name,
+                    state="incomplete",
+                    detail=error or "Unvollständig",
+                    cache_files=cache_count,
+                    media_files=media_count,
+                )
+            )
+
+    return created, statuses
 
 
 def migrate_legacy_inventory(project: Project) -> None:
@@ -152,7 +244,10 @@ def migrate_legacy_inventory(project: Project) -> None:
     for item in document.items:
         out_path = get_folder_inventory_path(project.work_dir_path, item.folder)
         if not out_path.is_file():
-            save_folder_inventory(out_path, item)
+            try:
+                save_folder_inventory(out_path, item)
+            except OSError:
+                continue
 
 
 def load_inventory_document(project: Project) -> InventoryDocument | None:
@@ -220,9 +315,10 @@ def load_folder_inventory(project: Project, folder_name: str) -> AssetFolderAnal
             if folder_item.folder == folder_name:
                 return folder_item
 
+    indexed_cache = _cached_assets_by_filename(project, folder_name)
     assets: list[AssetMediaAnalysis] = []
     for media_path in media_paths:
-        cached = load_cached_media_for_asset(project, folder_name, media_path)
+        cached = _resolve_cached_asset(project, folder_name, media_path, indexed_cache)
         if cached is not None:
             assets.append(cached)
         else:

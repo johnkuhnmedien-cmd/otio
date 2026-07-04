@@ -102,6 +102,36 @@ def migrate_legacy_per_asset_cache_file(
             pass
 
 
+def list_cache_dirs_for_folder(project: Project, folder_name: str) -> list[Path]:
+    slug = safe_folder_slug(folder_name)
+    return [
+        project.work_dir_path / "cache" / "inventory" / slug,
+        get_inventory_dir(project.work_dir_path) / slug,
+    ]
+
+
+def scan_folder_cache_assets(
+    project: Project,
+    folder_name: str,
+) -> list[AssetMediaAnalysis]:
+    """Liest alle gültigen Cache-Einträge für einen Ordner (beide Layouts)."""
+    indexed: dict[str, AssetMediaAnalysis] = {}
+    for cache_dir in list_cache_dirs_for_folder(project, folder_name):
+        if not cache_dir.is_dir():
+            continue
+        try:
+            cache_files = sorted(cache_dir.glob("*.json"))
+        except OSError:
+            continue
+        for cache_file in cache_files:
+            cached = load_cached_media(cache_file)
+            if cached is None or not is_completed_analysis(cached):
+                continue
+            key = Path(cached.path).name.casefold()
+            indexed[key] = cached
+    return list(indexed.values())
+
+
 def migrate_legacy_per_asset_cache_folder(
     project: Project,
     folder_name: str,
@@ -113,8 +143,21 @@ def migrate_legacy_per_asset_cache_folder(
 
     from otio_app.services.media_utils import list_media_files
 
-    for media_path in list_media_files(project.project_root_path / folder_name):
-        migrate_legacy_per_asset_cache_file(project, folder_name, media_path)
+    media_paths = list_media_files(project.project_root_path / folder_name)
+    if media_paths:
+        for media_path in media_paths:
+            migrate_legacy_per_asset_cache_file(project, folder_name, media_path)
+    else:
+        try:
+            for cache_file in legacy_dir.glob("*.json"):
+                cached = load_cached_media(cache_file)
+                if cached is None:
+                    continue
+                media_path = Path(cached.path)
+                if media_path.name:
+                    migrate_legacy_per_asset_cache_file(project, folder_name, media_path)
+        except OSError:
+            return
 
     try:
         if legacy_dir.is_dir() and not any(legacy_dir.iterdir()):

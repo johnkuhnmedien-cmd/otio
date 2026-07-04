@@ -252,12 +252,37 @@ def render_project_workbench() -> None:
         return
 
     render_workflow_progress(project, current_step="analysis")
-    created_inventories = sync_folder_inventories_from_cache(project)
+    created_inventories, sync_statuses = sync_folder_inventories_from_cache(project)
     if created_inventories:
         st.success(
-            "Ordner-Inventare aus Cache erstellt: "
+            "Ordner-Inventare erstellt: "
             + ", ".join(f"`{name}`" for name in created_inventories)
         )
+    with st.expander("Inventar-Sync (Diagnose)", expanded=not project.inventory_dir.is_dir()):
+        st.caption(f"Zielordner: `{project.inventory_dir}`")
+        st.caption(f"Cache: `{project.work_dir_path / 'cache' / 'inventory'}`")
+        if project.inventory_path.is_file():
+            st.caption(f"Legacy: `{project.inventory_path}` wird beim Sync aufgeteilt.")
+        if not sync_statuses:
+            st.write("Noch keine Asset-Ordner gescannt.")
+        for status in sync_statuses:
+            label = (
+                f"**{status.folder}** — {status.detail} "
+                f"({status.cache_files} Cache / {status.media_files} Medien)"
+            )
+            if status.state == "created":
+                st.success(label)
+            elif status.state == "exists":
+                st.info(label)
+            else:
+                st.warning(label)
+        if st.button("Inventar jetzt aus Cache aufbauen", key=f"sync_inv_{project.id}"):
+            created, refreshed = sync_folder_inventories_from_cache(project)
+            if created:
+                st.success("Erstellt: " + ", ".join(created))
+            else:
+                st.warning("Keine neuen Ordner-Inventare erstellt — siehe Status oben.")
+            st.rerun()
     render_output_status(project)
     st.caption(
         f"Status: {project.status.value} · "

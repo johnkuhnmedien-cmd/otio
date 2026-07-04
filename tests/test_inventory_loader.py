@@ -12,6 +12,7 @@ from otio_app.services.inventory_loader import (
     migrate_legacy_inventory,
     save_folder_inventory,
     selected_folders_have_inventory,
+    sync_folder_inventories_from_cache,
 )
 
 
@@ -94,10 +95,40 @@ def test_materialize_folder_inventory_from_cache(temp_project_layout: dict[str, 
 
     from otio_app.services.inventory_loader import materialize_folder_inventory_from_cache
 
-    item = materialize_folder_inventory_from_cache(project, "Grand Canyon")
+    item, error = materialize_folder_inventory_from_cache(project, "Grand Canyon")
+    assert error is None
     assert item is not None
     assert project.inventory_dir.is_dir()
     assert project.folder_inventory_path("Grand Canyon").is_file()
+
+
+def test_sync_creates_inventory_from_root_legacy_file(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    project = Project(
+        id="legacy-root-test",
+        name="Test",
+        project_root=str(temp_project_layout["project_root"]),
+        work_dir=str(temp_project_layout["work_dir"]),
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    media_path = str(temp_project_layout["project_root"] / "Grand Canyon" / "clip.mp4")
+    legacy = InventoryDocument(
+        project_id=project.id,
+        items=[
+            AssetFolderAnalysis(
+                folder="Grand Canyon",
+                media_files=[media_path],
+                assets=[AssetMediaAnalysis(path=media_path, description="Aus Root-JSON")],
+            )
+        ],
+    )
+    project.inventory_path.write_text(legacy.model_dump_json(indent=2), encoding="utf-8")
+
+    created, statuses = sync_folder_inventories_from_cache(project)
+    assert project.folder_inventory_path("Grand Canyon").is_file()
+    assert created == ["Grand Canyon"] or statuses[0].state in {"created", "exists"}
 
 
 def test_selected_folders_have_inventory(temp_project_layout: dict[str, Path]) -> None:
