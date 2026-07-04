@@ -16,6 +16,7 @@ from otio_app.project_layout import (
 from otio_app.project_repository import create_project, list_projects
 from otio_app.services.gemini_client import format_gemini_model_label, get_default_gemini_model
 from otio_app.system_checks import run_all_checks
+from otio_app.ui.analysis_jobs_ui import render_analysis_jobs_banner
 from otio_app.ui.api_keys_settings import render_api_keys_settings
 from otio_app.ui.edit_plan import render_edit_plan_page
 from otio_app.ui.navigation import (
