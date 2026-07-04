@@ -30,7 +30,7 @@ def test_analyze_asset_folders_processes_every_media_file(
 
     calls: list[str] = []
 
-    def fake_extract(media_path: Path, output_dir: Path, count: int) -> list[Path]:
+    def fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None) -> list[Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
         frame = output_dir / "frame_001.jpg"
         frame.write_bytes(b"jpeg")
@@ -77,7 +77,7 @@ def test_analyze_asset_folders_skips_completed_cache(
 ) -> None:
     calls: list[str] = []
 
-    def fake_extract(media_path: Path, output_dir: Path, count: int) -> list[Path]:
+    def fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None) -> list[Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
         frame = output_dir / "frame_001.jpg"
         frame.write_bytes(b"jpeg")
@@ -128,7 +128,7 @@ def test_analyze_asset_folders_recovers_from_corrupt_cache(
 
     calls: list[str] = []
 
-    def fake_extract(media_path: Path, output_dir: Path, count: int) -> list[Path]:
+    def fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None) -> list[Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
         frame = output_dir / "frame_001.jpg"
         frame.write_bytes(b"jpeg")
@@ -167,7 +167,7 @@ def test_analyze_asset_folders_skips_completed_folder_json(
 ) -> None:
     calls: list[str] = []
 
-    def fake_extract(media_path: Path, output_dir: Path, count: int) -> list[Path]:
+    def fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None) -> list[Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
         frame = output_dir / "frame_001.jpg"
         frame.write_bytes(b"jpeg")

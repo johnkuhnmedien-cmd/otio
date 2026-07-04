@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+import time
 
 import streamlit as st
 
@@ -13,6 +13,8 @@ from otio_app.services.asset_analysis_job import (
     get_asset_analysis_job_manager,
 )
 from otio_app.ui.analysis_report import render_analysis_report
+
+_POLL_SECONDS = 2.0
 
 
 def _format_progress_line(state: AssetAnalysisJobState) -> str:
@@ -36,6 +38,21 @@ def _format_progress_line(state: AssetAnalysisJobState) -> str:
     return "Asset-Analyse läuft …"
 
 
+def _render_running_job(state: AssetAnalysisJobState, *, stop_key: str) -> None:
+    total = max(state.total_media, 1)
+    done = min(state.done_media, total)
+    st.progress(done / total, text=f"{done} / {total} Assets")
+    st.caption(_format_progress_line(state))
+    if state.cancel_requested:
+        st.warning(
+            "Stop angefordert — aktueller FFmpeg-/Gemini-Schritt wird noch beendet, "
+            "danach bricht die Analyse ab."
+        )
+    if st.button("⏹ Asset-Analyse stoppen", key=stop_key, disabled=state.cancel_requested):
+        get_asset_analysis_job_manager().request_cancel(state.project_id)
+        st.rerun()
+
+
 def render_asset_analysis_job_banner(project_id: str) -> None:
     """Globales Banner — auf allen Seiten sichtbar, solange ein Job aktiv ist."""
     manager = get_asset_analysis_job_manager()
@@ -46,12 +63,22 @@ def render_asset_analysis_job_banner(project_id: str) -> None:
     if state.status == JobStatus.RUNNING:
         col_info, col_stop = st.columns([5, 1])
         with col_info:
+            line = _format_progress_line(state)
+            extra = (
+                " **(Stop angefordert …)**"
+                if state.cancel_requested
+                else ""
+            )
             st.info(
-                f"⏳ Asset-Analyse läuft im Hintergrund — {_format_progress_line(state)}. "
-                "Du kannst zu **③ Schnittplan** wechseln; die Analyse läuft weiter."
+                f"⏳ Asset-Analyse läuft im Hintergrund — {line}{extra} "
+                "Du kannst zu **③ Schnittplan** wechseln."
             )
         with col_stop:
-            if st.button("⏹ Stoppen", key=f"global_stop_assets_{project_id}"):
+            if st.button(
+                "⏹ Stoppen",
+                key=f"global_stop_assets_{project_id}",
+                disabled=state.cancel_requested,
+            ):
                 manager.request_cancel(project_id)
                 st.rerun()
         return
@@ -70,22 +97,17 @@ def render_asset_analysis_job_banner(project_id: str) -> None:
         st.rerun()
 
 
-@st.fragment(run_every=timedelta(seconds=2))
 def render_asset_analysis_job_monitor(project, *, expanded: bool = True) -> None:
-    """Fortschrittsanzeige auf der Analyse-Seite (aktualisiert sich automatisch)."""
+    """Fortschrittsanzeige auf der Analyse-Seite."""
     manager = get_asset_analysis_job_manager()
     state = manager.get_state(project.id)
     if state is None:
         return
 
     if state.status == JobStatus.RUNNING:
-        total = max(state.total_media, 1)
-        done = min(state.done_media, total)
-        st.progress(done / total, text=f"{done} / {total} Assets")
-        st.caption(_format_progress_line(state))
-        if st.button("⏹ Asset-Analyse stoppen", key=f"stop_assets_{project.id}"):
-            manager.request_cancel(project.id)
-            st.rerun()
+        _render_running_job(state, stop_key=f"stop_assets_{project.id}")
+        time.sleep(_POLL_SECONDS)
+        st.rerun()
         return
 
     if not expanded:

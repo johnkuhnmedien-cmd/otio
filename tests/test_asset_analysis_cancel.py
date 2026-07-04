@@ -32,7 +32,7 @@ def test_analyze_asset_folders_can_be_cancelled(
     calls: list[str] = []
     cancel_after = {"count": 0}
 
-    def fake_extract(media_path: Path, output_dir: Path, count: int) -> list[Path]:
+    def fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None) -> list[Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
         frame = output_dir / "frame_001.jpg"
         frame.write_bytes(b"jpeg")
@@ -93,7 +93,7 @@ def test_asset_analysis_job_manager_cancel(
 
     describe_calls = {"count": 0}
 
-    def fake_extract(media_path: Path, output_dir: Path, count: int) -> list[Path]:
+    def fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None) -> list[Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
         frame = output_dir / "frame_001.jpg"
         frame.write_bytes(b"jpeg")

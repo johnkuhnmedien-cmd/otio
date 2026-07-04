@@ -62,7 +62,7 @@ def test_inventory_written_only_when_all_assets_done(
 ) -> None:
     project = _project(temp_project_layout)
 
-    def fake_extract(media_path: Path, output_dir: Path, count: int) -> list[Path]:
+    def fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None) -> list[Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
         frame = output_dir / "frame_001.jpg"
         frame.write_bytes(b"jpeg")

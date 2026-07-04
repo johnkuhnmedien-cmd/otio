@@ -27,7 +27,7 @@ def test_analysis_log_records_missing_asset_run(
         AssetMediaAnalysis(path=str(clip1), description="OK"),
     )
 
-    def fake_extract(media_path: Path, output_dir: Path, count: int) -> list[Path]:
+    def fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None) -> list[Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
         frame = output_dir / "frame_001.jpg"
         frame.write_bytes(b"jpeg")

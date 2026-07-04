@@ -6,10 +6,15 @@ import copy
 import threading
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 from otio_app.models import Project, ProjectStatus
 from otio_app.project_repository import get_project_by_id, update_project_status
+from otio_app.services.analysis_cancel import (
+    clear_cancel_flag,
+    make_should_cancel,
+    request_cancel_flag,
+)
+from otio_app.services.analysis_log import append_analysis_log
 from otio_app.services.analysis_progress import AnalysisPhase, AnalysisRunReport
 from otio_app.services.asset_analyzer import analyze_asset_folders
 
@@ -33,6 +38,7 @@ class AssetAnalysisJobState:
     phase_data: dict = field(default_factory=dict)
     done_media: int = 0
     total_media: int = 0
+    cancel_requested: bool = False
 
 
 class AssetAnalysisJobManager:
@@ -42,6 +48,7 @@ class AssetAnalysisJobManager:
         self._lock = threading.Lock()
         self._jobs: dict[str, AssetAnalysisJobState] = {}
         self._cancel_events: dict[str, threading.Event] = {}
+        self._projects: dict[str, Project] = {}
 
     def is_running(self, project_id: str) -> bool:
         with self._lock:
@@ -62,12 +69,15 @@ class AssetAnalysisJobManager:
                 return False
             cancel_event = threading.Event()
             self._cancel_events[project.id] = cancel_event
+            self._projects[project.id] = project
             self._jobs[project.id] = AssetAnalysisJobState(
                 project_id=project.id,
                 status=JobStatus.RUNNING,
                 folders=list(folders),
                 model=model,
             )
+
+        clear_cancel_flag(project)
 
         def _run() -> None:
             project_id = project.id
@@ -76,6 +86,8 @@ class AssetAnalysisJobManager:
                 if current is None:
                     raise RuntimeError("Projekt nicht gefunden")
 
+                should_cancel = make_should_cancel(current, cancel_event.is_set)
+
                 def on_progress(phase: AnalysisPhase, data: dict) -> None:
                     with self._lock:
                         job = self._jobs.get(project_id)
@@ -83,6 +95,7 @@ class AssetAnalysisJobManager:
                             return
                         job.phase = phase
                         job.phase_data = dict(data)
+                        job.cancel_requested = should_cancel()
                         if phase == "start":
                             job.total_media = max(int(data.get("total_media", 0)), 1)
                             job.done_media = 0
@@ -95,28 +108,35 @@ class AssetAnalysisJobManager:
                     use_api=True,
                     model=model,
                     on_progress=on_progress,
-                    should_cancel=cancel_event.is_set,
+                    should_cancel=should_cancel,
                 )
                 update_project_status(project_id, ProjectStatus.READY)
+                clear_cancel_flag(current)
                 with self._lock:
                     job = self._jobs.get(project_id)
                     if job is None:
                         return
                     job.report = report
+                    job.cancel_requested = False
                     job.status = (
                         JobStatus.CANCELLED if report.cancelled else JobStatus.COMPLETED
                     )
             except Exception as exc:  # noqa: BLE001
                 update_project_status(project_id, ProjectStatus.READY)
+                stored = self._projects.get(project_id)
+                if stored is not None:
+                    clear_cancel_flag(stored)
                 with self._lock:
                     job = self._jobs.get(project_id)
                     if job is None:
                         return
                     job.status = JobStatus.FAILED
                     job.error = str(exc)
+                    job.cancel_requested = False
             finally:
                 with self._lock:
                     self._cancel_events.pop(project_id, None)
+                    self._projects.pop(project_id, None)
 
         thread = threading.Thread(target=_run, daemon=True, name=f"asset-analysis-{project.id}")
         thread.start()
@@ -125,10 +145,16 @@ class AssetAnalysisJobManager:
     def request_cancel(self, project_id: str) -> bool:
         with self._lock:
             event = self._cancel_events.get(project_id)
-            if event is None:
+            project = self._projects.get(project_id)
+            job = self._jobs.get(project_id)
+            if event is None or job is None or job.status != JobStatus.RUNNING:
                 return False
             event.set()
-            return True
+            job.cancel_requested = True
+        if project is not None:
+            request_cancel_flag(project)
+            append_analysis_log(project, "STOP angefordert — Analyse wird nach aktuellem Schritt beendet")
+        return True
 
     def dismiss(self, project_id: str) -> None:
         """Entfernt abgeschlossene Jobs aus der Anzeige."""

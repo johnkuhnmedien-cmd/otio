@@ -13,6 +13,7 @@ from otio_app.analysis_models import (
 )
 from otio_app.models import Project, validate_asset_selection
 from otio_app.project_layout import safe_folder_slug
+from otio_app.services.analysis_cancel import AnalysisCancelledError
 from otio_app.services.analysis_log import append_analysis_log
 from otio_app.services.analysis_progress import AnalysisRunReport, ProgressCallback, noop_progress
 from otio_app.services.frame_extract import extract_frames, list_existing_frame_jpegs
@@ -42,10 +43,6 @@ from otio_app.services.media_utils import (
 
 
 ShouldCancel = Callable[[], bool]
-
-
-class AnalysisCancelledError(Exception):
-    """Asset-Analyse wurde vom Nutzer abgebrochen."""
 
 
 def _frames_dir(project: Project, folder_name: str, media_path: Path) -> Path:
@@ -88,6 +85,7 @@ def _analyze_single_media(
     *,
     use_api: bool,
     model: Optional[str],
+    should_cancel: ShouldCancel | None = None,
 ) -> tuple[AssetMediaAnalysis, str]:
     resolved_path = resolve_media_for_analysis(project, folder_name, media_path)
     cache_file = media_cache_path(project, folder_name, resolved_path)
@@ -115,15 +113,24 @@ def _analyze_single_media(
         _log(project, f"FAIL (nicht lesbar) {folder_name}/{resolved_path.name}: {entry.error}")
         return entry, "fehler"
 
+    if _is_cancelled(should_cancel):
+        _log(project, f"ABBRUCH vor Start {folder_name}/{resolved_path.name}")
+        raise AnalysisCancelledError()
+
     frames_dir = _frames_dir(project, folder_name, resolved_path)
     frame_count = 1 if is_image_media(resolved_path) else per_file
 
-    frames = extract_frames(resolved_path, frames_dir, frame_count)
+    frames = extract_frames(resolved_path, frames_dir, frame_count, should_cancel=should_cancel)
     if not frames:
         frames = list_existing_frame_jpegs(frames_dir)[:frame_count]
     if not frames:
         shutil.rmtree(frames_dir, ignore_errors=True)
-        frames = extract_frames(resolved_path, frames_dir, frame_count)
+        if _is_cancelled(should_cancel):
+            _log(project, f"ABBRUCH bei Frames {folder_name}/{resolved_path.name}")
+            raise AnalysisCancelledError()
+        frames = extract_frames(
+            resolved_path, frames_dir, frame_count, should_cancel=should_cancel
+        )
     if not frames:
         frames = list_existing_frame_jpegs(frames_dir)[:frame_count]
 
@@ -147,6 +154,9 @@ def _analyze_single_media(
             f"-> {cache_file.name} written={cache_file.is_file()}",
         )
         return entry, "fehler"
+    if _is_cancelled(should_cancel):
+        _log(project, f"ABBRUCH vor Gemini {folder_name}/{resolved_path.name}")
+        raise AnalysisCancelledError()
     if use_api:
         try:
             entry.description = describe_media_from_frames(
@@ -280,6 +290,7 @@ def _analyze_folder(
                 media_path,
                 use_api=use_api,
                 model=model,
+                should_cancel=should_cancel,
             )
             analyzed[media_stem_slug(media_path)] = entry
             if report is not None:
@@ -308,6 +319,14 @@ def _analyze_folder(
                     "error": entry.error,
                 },
             )
+        except AnalysisCancelledError:
+            cancelled_mid_folder = True
+            _log(
+                project,
+                f"ORDNER-ABBRUCH {folder_name} während {media_path.name} "
+                f"({media_index - 1}/{len(missing_cache)} fertig)",
+            )
+            break
         except GeminiNotConfiguredError:
             raise
         except Exception as exc:  # noqa: BLE001

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
+from otio_app.services.analysis_cancel import AnalysisCancelledError
 from otio_app.services.media_utils import IMAGE_EXTENSIONS, probe_duration_seconds
 
 _FALLBACK_OFFSETS_SEC = (0.0, 2.0, 5.0, 10.0, 20.0, 40.0, 60.0)
@@ -66,8 +68,12 @@ def extract_frames(
     media_path: Path,
     output_dir: Path,
     count: int,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> list[Path]:
     """Extrahiert count Frames aus Video oder kopiert Bild-Referenzen."""
+    if should_cancel and should_cancel():
+        raise AnalysisCancelledError()
     output_dir.mkdir(parents=True, exist_ok=True)
     suffix = media_path.suffix.lower()
     per_file = max(1, count)
@@ -84,6 +90,8 @@ def extract_frames(
     used_timestamps: set[float] = set()
 
     for index, timestamp in enumerate(timestamps, start=1):
+        if should_cancel and should_cancel():
+            raise AnalysisCancelledError()
         used_timestamps.add(timestamp)
         frame_path = _extract_frame_at(
             media_path,
@@ -97,6 +105,8 @@ def extract_frames(
     if len(frames) < per_file:
         next_index = len(frames) + 1
         for offset in _FALLBACK_OFFSETS_SEC:
+            if should_cancel and should_cancel():
+                raise AnalysisCancelledError()
             if len(frames) >= per_file:
                 break
             if offset in used_timestamps:

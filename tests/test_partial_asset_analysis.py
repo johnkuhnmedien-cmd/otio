@@ -65,7 +65,7 @@ def test_partial_folder_analyzes_only_assets_without_json(
 
     calls: list[str] = []
 
-    def fake_extract(media_path: Path, output_dir: Path, count: int) -> list[Path]:
+    def fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None) -> list[Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
         frame = output_dir / "frame_001.jpg"
         frame.write_bytes(b"jpeg")
@@ -156,7 +156,7 @@ def test_partial_folder_not_skipped_when_frame_dir_exists_without_json(
 
     calls: list[str] = []
 
-    def fake_extract(media_path: Path, output_dir: Path, count: int) -> list[Path]:
+    def fake_extract(media_path: Path, output_dir: Path, count: int, *, should_cancel=None) -> list[Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
         frame = output_dir / "frame_001.jpg"
         frame.write_bytes(b"jpeg")
