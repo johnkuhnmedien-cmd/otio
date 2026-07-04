@@ -52,6 +52,7 @@ GEMINI_MODEL_LABELS = {
 }
 INVENTORY_FILENAME = "inventory.json"
 INVENTORY_SUBDIR = "inventory"
+MANUAL_FOLDER_COMPLETION_FILENAME = "manual_folder_completion.json"
 VOICE_ANALYSIS_FILENAME = "voice_over_analysis.json"
 VOICE_FOLDER_MAPPING_FILENAME = "voice_folder_mapping.json"
 EDIT_PLAN_FILENAME = "edit_plan.json"

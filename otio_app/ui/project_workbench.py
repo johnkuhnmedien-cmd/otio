@@ -49,6 +49,9 @@ from otio_app.services.folder_analysis_status import (
     get_folder_analysis_state,
     list_open_folder_names,
 )
+from otio_app.services.folder_asset_status import folder_is_fully_analyzed
+from otio_app.services.inventory_loader import materialize_folder_inventory_from_cache
+from otio_app.services.manual_folder_completion import is_manually_complete, set_manually_complete
 from otio_app.ui.project_context import (
     render_file_paths,
     render_output_status,
@@ -211,24 +214,50 @@ def _render_folder_selection(project) -> list[str]:
     for folder_name in project.asset_subdir_names:
         state = get_folder_analysis_state(project, folder_name)
         label = format_folder_with_status(project, folder_name)
-        if state == FolderAnalysisState.COMPLETE:
-            st.success(label)
-        elif state == FolderAnalysisState.PARTIAL:
-            st.warning(label)
-            gaps = list_missing_or_failed_assets(project, folder_name)
-            if gaps:
-                with st.expander(f"Details · {folder_name}", expanded=False):
-                    for gap in gaps:
-                        if gap.state == AssetAnalysisState.MISSING:
-                            st.caption(f"⚪ `{gap.path.name}` — noch nicht analysiert")
-                        else:
-                            st.caption(
-                                f"❌ `{gap.path.name}` — {gap.error or 'Fehler ohne Details'}"
-                            )
-        elif state == FolderAnalysisState.EMPTY:
-            st.caption(label)
-        else:
-            st.info(label)
+        col_status, col_action = st.columns([5, 1])
+        with col_status:
+            if state == FolderAnalysisState.COMPLETE:
+                st.success(label)
+            elif state == FolderAnalysisState.PARTIAL:
+                st.warning(label)
+                gaps = list_missing_or_failed_assets(project, folder_name)
+                if gaps:
+                    with st.expander(f"Details · {folder_name}", expanded=False):
+                        for gap in gaps:
+                            if gap.state == AssetAnalysisState.MISSING:
+                                st.caption(f"⚪ `{gap.path.name}` — noch nicht analysiert")
+                            else:
+                                st.caption(
+                                    f"❌ `{gap.path.name}` — {gap.error or 'Fehler ohne Details'}"
+                                )
+            elif state == FolderAnalysisState.EMPTY:
+                st.caption(label)
+            else:
+                st.info(label)
+        with col_action:
+            if folder_is_fully_analyzed(project, folder_name):
+                st.caption("✓")
+            elif is_manually_complete(project, folder_name):
+                if st.button(
+                    "↩",
+                    key=f"unmanual_{project.id}_{folder_name}",
+                    help="Manuelle Markierung aufheben",
+                ):
+                    set_manually_complete(project, folder_name, complete=False)
+                    st.rerun()
+            elif state in {FolderAnalysisState.PARTIAL, FolderAnalysisState.PENDING}:
+                if st.button(
+                    "✓",
+                    key=f"manual_{project.id}_{folder_name}",
+                    help="Manuell als fertig markieren",
+                ):
+                    materialize_folder_inventory_from_cache(
+                        project, folder_name, allow_partial=True
+                    )
+                    set_manually_complete(project, folder_name, complete=True)
+                    st.rerun()
+
+    st.caption("Rechts: ✓ = manuell als fertig markieren · ↩ = Markierung aufheben")
 
     selected_folders = st.multiselect(
         "Zu bearbeitende Asset-Ordner",

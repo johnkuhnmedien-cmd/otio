@@ -57,6 +57,12 @@ class InventoryDocument(BaseModel):
     items: List[AssetFolderAnalysis] = Field(default_factory=list)
 
 
+class ManualFolderCompletionDocument(BaseModel):
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    project_id: str
+    folders: List[str] = Field(default_factory=list)
+
+
 class VoiceFolderMappingEntry(BaseModel):
     voice_file: str
     folder: Optional[str] = None

@@ -10,6 +10,7 @@ from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis, In
 from otio_app.models import Project
 from otio_app.project_layout import get_folder_inventory_path, get_inventory_dir, safe_folder_slug
 from otio_app.services.folder_asset_status import folder_is_fully_analyzed
+from otio_app.services.manual_folder_completion import is_manually_complete
 from otio_app.services.media_inventory_cache import (
     is_successfully_analyzed,
     load_cached_media,
@@ -71,6 +72,8 @@ def remove_stale_folder_inventory(
     media_paths: list[Path] | None = None,
 ) -> None:
     """Entfernt gebündelte JSON, wenn nicht alle Medien erfolgreich analysiert sind."""
+    if is_manually_complete(project, folder_name):
+        return
     if media_paths is None:
         media_paths = list_media_files(project.project_root_path / folder_name)
     path = get_folder_inventory_path(project.work_dir_path, folder_name)
@@ -160,8 +163,10 @@ def _resolve_cached_asset(
 def materialize_folder_inventory_from_cache(
     project: Project,
     folder_name: str,
+    *,
+    allow_partial: bool = False,
 ) -> tuple[AssetFolderAnalysis | None, str | None]:
-    """Erstellt eine Ordner-JSON aus vollständigem Medien-Cache (ohne Gemini)."""
+    """Erstellt eine Ordner-JSON aus dem Medien-Cache (optional auch unvollständig)."""
     folder_path = project.project_root_path / folder_name
     media_paths = list_media_files(folder_path)
     indexed_cache = _cached_assets_by_filename(project, folder_name)
@@ -193,16 +198,24 @@ def materialize_folder_inventory_from_cache(
             continue
         assets.append(cached)
 
-    if missing:
+    if missing and not allow_partial:
         return (
             None,
             f"{len(assets)}/{len(media_paths)} Assets im Cache — fehlt: {', '.join(missing[:5])}"
             + (" …" if len(missing) > 5 else ""),
         )
 
+    if not assets:
+        return None, "Kein analysierter Cache vorhanden."
+
+    saved_media_paths = (
+        media_paths
+        if not missing
+        else [path for path in media_paths if path.name not in missing]
+    )
     item = AssetFolderAnalysis(
         folder=folder_name,
-        media_files=[str(media_path) for media_path in media_paths],
+        media_files=[str(media_path) for media_path in saved_media_paths],
         assets=assets,
         frames_used=[frame for asset in assets for frame in asset.frames_used],
         description=_folder_summary_from_assets(assets),
@@ -347,12 +360,15 @@ def list_folder_inventory_paths(project: Project) -> list[Path]:
 
 
 def selected_folders_have_inventory(project: Project) -> bool:
-    """True, wenn alle ausgewählten Asset-Ordner vollständig analysiert sind."""
+    """True, wenn alle ausgewählten Asset-Ordner fertig oder manuell freigegeben sind."""
     if not project.selected_asset_subdirs:
         return False
     for folder_name in project.selected_asset_subdirs:
-        if not folder_is_fully_analyzed(project, folder_name):
-            return False
+        if folder_is_fully_analyzed(project, folder_name):
+            continue
+        if is_manually_complete(project, folder_name):
+            continue
+        return False
     return True
 
 

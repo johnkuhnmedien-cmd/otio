@@ -7,6 +7,7 @@ from enum import Enum
 from otio_app.models import Project
 from otio_app.services.folder_asset_status import folder_is_fully_analyzed
 from otio_app.services.inventory_loader import remove_stale_folder_inventory
+from otio_app.services.manual_folder_completion import is_manually_complete
 from otio_app.services.media_inventory_cache import (
     is_successfully_analyzed,
     load_cached_media_for_asset,
@@ -29,8 +30,14 @@ FOLDER_STATE_LABELS = {
 }
 
 
+def is_manual_complete_only(project: Project, folder_name: str) -> bool:
+    return is_manually_complete(project, folder_name) and not folder_is_fully_analyzed(
+        project, folder_name
+    )
+
+
 def get_folder_analysis_state(project: Project, folder_name: str) -> FolderAnalysisState:
-    """Grün nur wenn jedes Medium erfolgreich analysiert wurde."""
+    """Grün bei vollständiger Analyse oder manueller Freigabe."""
     folder_path = project.project_root_path / folder_name
     media_paths = list_media_files(folder_path)
     if not media_paths:
@@ -39,6 +46,9 @@ def get_folder_analysis_state(project: Project, folder_name: str) -> FolderAnaly
     remove_stale_folder_inventory(project, folder_name, media_paths)
 
     if folder_is_fully_analyzed(project, folder_name):
+        return FolderAnalysisState.COMPLETE
+
+    if is_manually_complete(project, folder_name):
         return FolderAnalysisState.COMPLETE
 
     completed = 0
@@ -54,11 +64,14 @@ def get_folder_analysis_state(project: Project, folder_name: str) -> FolderAnaly
 
 def format_folder_with_status(project: Project, folder_name: str) -> str:
     state = get_folder_analysis_state(project, folder_name)
-    return f"{FOLDER_STATE_LABELS[state]} · {folder_name}"
+    label = FOLDER_STATE_LABELS[state]
+    if state == FolderAnalysisState.COMPLETE and is_manual_complete_only(project, folder_name):
+        label = "🟢 Fertig (manuell)"
+    return f"{label} · {folder_name}"
 
 
 def list_open_folder_names(project: Project, folder_names: list[str]) -> list[str]:
-    """Ordner, die noch nicht vollständig analysiert sind (ohne leere)."""
+    """Ordner, die noch nicht vollständig oder manuell freigegeben sind."""
     open_names: list[str] = []
     for folder_name in folder_names:
         state = get_folder_analysis_state(project, folder_name)
