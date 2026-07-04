@@ -173,6 +173,59 @@ def analyze_voice_over_file(
     return payload
 
 
+def plan_passage_assets(
+    passage_text: str,
+    folder_name: str,
+    assets: list[dict[str, str]],
+    language: str,
+    *,
+    model: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Zerlegt eine Passage in Motive und ordnet lokale Assets zu (nur Text an Gemini)."""
+    if not passage_text.strip():
+        return []
+
+    client = _get_client()
+    from google.genai import types
+
+    asset_lines = "\n".join(
+        f'- path="{item["path"]}" description="{item.get("description", "")}"'
+        for item in assets
+    )
+    prompt = (
+        f"Du planst Video-Shots für den Ordner '{folder_name}'. Sprache: {language}.\n"
+        f"Passage: {passage_text.strip()}\n\n"
+        "Verfügbare lokale Assets:\n"
+        f"{asset_lines or '- (keine)'}\n\n"
+        "Wenn die Passage mehrere Sehenswürdigkeiten/Motive nennt, erstelle mehrere Teile.\n"
+        "Antworte NUR als JSON:\n"
+        '{"parts":[{"text":"...","motif":"...","asset_path":"exakter path oder null","confidence":"high|low"}]}\n'
+        "asset_path muss exakt einem path aus der Liste entsprechen oder null sein."
+    )
+    response = client.models.generate_content(
+        model=resolve_gemini_model(model),
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
+    )
+    text = response.text or "{}"
+    try:
+        payload = _extract_json(text)
+    except json.JSONDecodeError:
+        payload = {
+            "parts": [
+                {
+                    "text": passage_text.strip(),
+                    "motif": passage_text.strip()[:80],
+                    "asset_path": assets[0]["path"] if assets else None,
+                    "confidence": "low",
+                }
+            ]
+        }
+    parts = payload.get("parts", [])
+    if not isinstance(parts, list):
+        return []
+    return [part for part in parts if isinstance(part, dict)]
+
+
 def is_gemini_configured() -> bool:
     key = get_env("GEMINI_API_KEY")
     return bool(key and key.strip())

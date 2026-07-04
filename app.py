@@ -16,7 +16,7 @@ from otio_app.project_layout import (
 from otio_app.project_repository import create_project, list_projects
 from otio_app.services.gemini_client import format_gemini_model_label, get_default_gemini_model
 from otio_app.system_checks import run_all_checks
-from otio_app.ui.edit_plan_placeholder import render_edit_plan_placeholder
+from otio_app.ui.edit_plan import render_edit_plan_page
 from otio_app.ui.navigation import (
     NAVIGATION_OPTIONS,
     PAGE_ANALYSIS,
@@ -476,7 +476,7 @@ elif page == PAGE_MAPPING:
     render_voice_folder_mapping()
 
 elif page == PAGE_EDIT_PLAN:
-    render_edit_plan_placeholder()
+    render_edit_plan_page()
 
 elif page == PAGE_STATUS:
     st.header("Systemstatus")

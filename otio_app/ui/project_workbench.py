@@ -35,6 +35,13 @@ from otio_app.services.whisper_transcriber import (
     get_default_whisper_model,
     is_whisper_available,
 )
+from otio_app.services.folder_analysis_status import (
+    FolderAnalysisState,
+    count_folder_states,
+    format_folder_with_status,
+    get_folder_analysis_state,
+    list_open_folder_names,
+)
 from otio_app.ui.project_context import (
     render_file_paths,
     render_output_status,
@@ -65,19 +72,46 @@ def _render_folder_selection(project) -> list[str]:
     if folder_state_key not in st.session_state:
         st.session_state[folder_state_key] = list(project.selected_asset_subdirs)
 
-    btn_col1, btn_col2 = st.columns(2)
+    counts = count_folder_states(project, project.asset_subdir_names)
+    st.caption(
+        f"🟢 {counts[FolderAnalysisState.COMPLETE]} fertig · "
+        f"🟡 {counts[FolderAnalysisState.PARTIAL]} teilweise · "
+        f"⚪ {counts[FolderAnalysisState.PENDING]} offen · "
+        f"➖ {counts[FolderAnalysisState.EMPTY]} leer"
+    )
+
+    btn_col1, btn_col2, btn_col3 = st.columns(3)
     with btn_col1:
         if st.button("Alle Ordner auswählen", key=f"all_{project.id}"):
             st.session_state[folder_state_key] = list(project.asset_subdir_names)
             st.rerun()
     with btn_col2:
-        if st.button("Gespeicherte Auswahl laden", key=f"reload_{project.id}"):
+        if st.button("Nur offene Ordner", key=f"open_{project.id}"):
+            st.session_state[folder_state_key] = list_open_folder_names(
+                project, project.asset_subdir_names
+            )
+            st.rerun()
+    with btn_col3:
+        if st.button("Gespeicherte Auswahl", key=f"reload_{project.id}"):
             st.session_state[folder_state_key] = list(project.selected_asset_subdirs)
             st.rerun()
+
+    for folder_name in project.asset_subdir_names:
+        state = get_folder_analysis_state(project, folder_name)
+        label = format_folder_with_status(project, folder_name)
+        if state == FolderAnalysisState.COMPLETE:
+            st.success(label)
+        elif state == FolderAnalysisState.PARTIAL:
+            st.warning(label)
+        elif state == FolderAnalysisState.EMPTY:
+            st.caption(label)
+        else:
+            st.info(label)
 
     selected_folders = st.multiselect(
         "Zu bearbeitende Asset-Ordner",
         options=project.asset_subdir_names,
+        format_func=lambda name: format_folder_with_status(project, name),
         key=folder_state_key,
     )
     st.caption(

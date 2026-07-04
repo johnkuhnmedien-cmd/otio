@@ -26,3 +26,4 @@ def test_workflow_status_detects_completed_steps(temp_project_layout: dict[str, 
     assert status.inventory_done is True
     assert status.analysis_done is True
     assert status.mapping_confirmed is False
+    assert status.edit_plan_done is False
