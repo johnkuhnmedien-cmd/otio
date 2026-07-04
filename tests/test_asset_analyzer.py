@@ -67,7 +67,7 @@ def test_analyze_asset_folders_processes_every_media_file(
     assert "clip2.mp4:" in item.description
 
 
-def test_analyze_asset_folders_uses_per_media_cache(
+def test_analyze_asset_folders_skips_completed_cache(
     temp_project_layout: dict[str, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -104,3 +104,54 @@ def test_analyze_asset_folders_uses_per_media_cache(
     analyze_asset_folders(project, ["Grand Canyon"], use_api=True)
 
     assert calls == ["clip.mp4"]
+
+
+def test_analyze_asset_folders_recovers_from_corrupt_cache(
+    temp_project_layout: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _sample_project(temp_project_layout)
+    media_path = temp_project_layout["project_root"] / "Grand Canyon" / "clip.mp4"
+    cache_file = (
+        project.work_dir_path
+        / "cache"
+        / "inventory"
+        / "Grand_Canyon"
+        / "clip.mp4.json"
+    )
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_bytes(b"\xceinvalid")
+
+    calls: list[str] = []
+
+    def fake_extract(media_path: Path, output_dir: Path, count: int) -> list[Path]:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        frame = output_dir / "frame_001.jpg"
+        frame.write_bytes(b"jpeg")
+        return [frame]
+
+    def fake_describe(
+        media_name: str,
+        folder_name: str,
+        frame_paths: list[Path],
+        language: str,
+        *,
+        model: str | None = None,
+    ) -> str:
+        calls.append(media_name)
+        return f"Beschreibung für {media_name}"
+
+    monkeypatch.setattr(
+        "otio_app.services.asset_analyzer.extract_frames",
+        fake_extract,
+    )
+    monkeypatch.setattr(
+        "otio_app.services.asset_analyzer.describe_media_from_frames",
+        fake_describe,
+    )
+
+    document = analyze_asset_folders(project, ["Grand Canyon"], use_api=True)
+
+    assert calls == ["clip.mp4"]
+    assert document.items[0].assets[0].description.startswith("Beschreibung für")
+    assert not cache_file.exists() or cache_file.read_text(encoding="utf-8").startswith("{")

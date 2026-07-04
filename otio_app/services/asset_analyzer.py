@@ -32,7 +32,33 @@ def _media_cache_path(project: Project, folder_name: str, media_path: Path) -> P
         / _safe_cache_name(folder_name)
     )
     cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir / f"{_safe_cache_name(media_path.stem)}.json"
+    return cache_dir / f"{_safe_cache_name(media_path.name)}.json"
+
+
+def _load_cached_media(cache_file: Path) -> Optional[AssetMediaAnalysis]:
+    """Lädt einen gültigen Cache-Eintrag oder None bei Fehler/kaputtem Cache."""
+    if not cache_file.is_file():
+        return None
+    try:
+        payload = json.loads(cache_file.read_text(encoding="utf-8"))
+        return AssetMediaAnalysis.model_validate(payload)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        try:
+            cache_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+
+
+def _is_completed_analysis(entry: AssetMediaAnalysis) -> bool:
+    """True, wenn dieses Asset bereits analysiert wurde (Erfolg oder dokumentierter Fehler)."""
+    if entry.description.strip():
+        return True
+    return bool(entry.error)
+
+
+def _save_cached_media(cache_file: Path, entry: AssetMediaAnalysis) -> None:
+    cache_file.write_text(entry.model_dump_json(indent=2), encoding="utf-8")
 
 
 def _frames_dir(project: Project, folder_name: str, media_path: Path) -> Path:
@@ -61,9 +87,9 @@ def _analyze_single_media(
     model: Optional[str],
 ) -> AssetMediaAnalysis:
     cache_file = _media_cache_path(project, folder_name, media_path)
-    if cache_file.is_file():
-        payload = json.loads(cache_file.read_text(encoding="utf-8"))
-        return AssetMediaAnalysis.model_validate(payload)
+    cached = _load_cached_media(cache_file)
+    if cached is not None and _is_completed_analysis(cached):
+        return cached
 
     per_file = max(1, project.frames_per_shot)
     frames = extract_frames(
@@ -87,6 +113,7 @@ def _analyze_single_media(
                 project.language,
                 model=model,
             )
+            entry.error = None
         except GeminiNotConfiguredError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -95,7 +122,7 @@ def _analyze_single_media(
     else:
         entry.error = "API-Aufruf nicht bestätigt."
 
-    cache_file.write_text(entry.model_dump_json(indent=2), encoding="utf-8")
+    _save_cached_media(cache_file, entry)
     return entry
 
 
@@ -113,16 +140,27 @@ def analyze_asset_folders(
     for folder_name in selected:
         folder_path = project.project_root_path / folder_name
         media_paths = list_media_files(folder_path)
-        assets = [
-            _analyze_single_media(
-                project,
-                folder_name,
-                media_path,
-                use_api=use_api,
-                model=model,
-            )
-            for media_path in media_paths
-        ]
+        assets: list[AssetMediaAnalysis] = []
+        for media_path in media_paths:
+            try:
+                assets.append(
+                    _analyze_single_media(
+                        project,
+                        folder_name,
+                        media_path,
+                        use_api=use_api,
+                        model=model,
+                    )
+                )
+            except GeminiNotConfiguredError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                assets.append(
+                    AssetMediaAnalysis(
+                        path=str(media_path),
+                        error=str(exc),
+                    )
+                )
 
         item = AssetFolderAnalysis(
             folder=folder_name,
