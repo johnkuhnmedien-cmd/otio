@@ -16,6 +16,13 @@ from otio_app.paths import (
 from otio_app.project_layout import default_work_dir, discover_asset_subdirs
 
 
+def test_normalize_path_strips_quotes(temp_project_layout: dict[str, Path]) -> None:
+    project_root = temp_project_layout["project_root"]
+    quoted = f"'{project_root}'"
+    result = normalize_path(quoted)
+    assert result == project_root.resolve()
+
+
 def test_normalize_path_resolves(temp_project_layout: dict[str, Path]) -> None:
     project_root = temp_project_layout["project_root"]
     result = normalize_path(str(project_root))

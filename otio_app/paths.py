@@ -12,15 +12,35 @@ class PathValidationError(ValueError):
     """Fehler bei der Pfadvalidierung."""
 
 
+def clean_user_path_input(raw: str) -> str:
+    """Entfernt Leerzeichen und umschließende Anführungszeichen aus Benutzereingaben."""
+    cleaned = raw.strip()
+    while len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in "'\"`":
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
+
+
 def normalize_path(raw: str) -> Path:
     """Normalisiert einen Benutzerpfad mit expanduser() und resolve()."""
-    return Path(raw).expanduser().resolve()
+    cleaned = clean_user_path_input(raw)
+    if not cleaned:
+        raise PathValidationError("Pfad darf nicht leer sein.")
+    return Path(cleaned).expanduser().resolve()
 
 
 def validate_readonly_dir(path: Path) -> Path:
-    """Prüft, ob der Pfad ein existierendes Verzeichnis ist."""
+    """Prüft, ob der Pfad ein existierende Verzeichnis ist."""
     if not path.exists():
-        raise PathValidationError(f"Verzeichnis existiert nicht: {path}")
+        message = f"Verzeichnis existiert nicht: {path}"
+        path_text = str(path)
+        if path_text.startswith("/Users/"):
+            message += (
+                " — Dieser Mac-Pfad ist nur verfügbar, wenn die App lokal auf "
+                "deinem Mac läuft. Pfad ohne Anführungszeichen eingeben."
+            )
+        elif "'" in path_text or '"' in path_text:
+            message += " — Bitte Pfad ohne Anführungszeichen eingeben."
+        raise PathValidationError(message)
     if not path.is_dir():
         raise PathValidationError(f"Pfad ist kein Verzeichnis: {path}")
     return path

@@ -79,7 +79,8 @@ if page == PAGE_NEW:
         name = st.text_input("Projektname *")
         project_root = st.text_input(
             "Projektordner *",
-            help="Hauptordner des Projekts, z. B. /Users/.../USA",
+            help="Hauptordner des Projekts, z. B. /Users/.../USA — ohne Anführungszeichen",
+            placeholder="/Users/claudiakuhn/Documents/YT/Unglaubliche Welt/USA",
         )
         voice_over_subdir = st.text_input(
             "Voice-over-Unterordner",
