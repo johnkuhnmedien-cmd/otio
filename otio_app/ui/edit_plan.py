@@ -17,9 +17,11 @@ from otio_app.defaults import (
 )
 from otio_app.project_layout import safe_folder_slug
 from otio_app.services.edit_plan_builder import (
+    EditPlanLocationState,
+    EditPlanLocationStatus,
     build_edit_plan,
-    list_saved_edit_plan_folders,
     load_edit_plan,
+    resolve_edit_plan_location_state,
     save_edit_plan,
 )
 from otio_app.services.gemini_client import (
@@ -67,15 +69,97 @@ def _set_draft(document: EditPlanDocument, folder_name: str) -> None:
     )
 
 
-def _render_folder_status(mapped_folders: list[str], saved_folders: list[str], project) -> None:
+def _location_state_label(state: EditPlanLocationState) -> str:
+    labels = {
+        EditPlanLocationState.CONFIRMED: "Abgeschlossen",
+        EditPlanLocationState.DRAFT: "In Arbeit",
+        EditPlanLocationState.OPEN: "Offen",
+    }
+    return labels[state]
+
+
+def _location_state_icon(state: EditPlanLocationState) -> str:
+    icons = {
+        EditPlanLocationState.CONFIRMED: "✅",
+        EditPlanLocationState.DRAFT: "📝",
+        EditPlanLocationState.OPEN: "⬜",
+    }
+    return icons[state]
+
+
+def _collect_location_statuses(
+    project,
+    project_id: str,
+    mapped_folders: list[str],
+) -> list[EditPlanLocationStatus]:
+    statuses: list[EditPlanLocationStatus] = []
     for folder_name in mapped_folders:
         saved = load_edit_plan(project, folder_name)
-        if saved is not None and saved.confirmed:
-            st.caption(f"✅ **{folder_name}** — bestätigt")
-        elif folder_name in saved_folders or (saved is not None and saved.shots):
-            st.caption(f"📝 **{folder_name}** — Entwurf vorhanden")
+        draft = _get_draft(project_id, folder_name)
+        status = resolve_edit_plan_location_state(folder_name, saved, draft)
+        statuses.append(
+            EditPlanLocationStatus(
+                folder_name=folder_name,
+                state=status.state,
+                shot_count=status.shot_count,
+            )
+        )
+    return statuses
+
+
+def _folder_select_label(
+    project,
+    project_id: str,
+    folder_name: str,
+) -> str:
+    saved = load_edit_plan(project, folder_name)
+    draft = _get_draft(project_id, folder_name)
+    status = resolve_edit_plan_location_state(folder_name, saved, draft)
+    return f"{_location_state_icon(status.state)} {folder_name} · {_location_state_label(status.state)}"
+
+
+def _render_location_progress(project, project_id: str, mapped_folders: list[str]) -> None:
+    statuses = _collect_location_statuses(project, project_id, mapped_folders)
+    confirmed = [item for item in statuses if item.state == EditPlanLocationState.CONFIRMED]
+    drafts = [item for item in statuses if item.state == EditPlanLocationState.DRAFT]
+    open_items = [item for item in statuses if item.state == EditPlanLocationState.OPEN]
+
+    st.markdown("**Fortschritt pro Ort**")
+    metric_col1, metric_col2, metric_col3 = st.columns(3)
+    with metric_col1:
+        st.metric("Abgeschlossen", f"{len(confirmed)}/{len(mapped_folders)}")
+    with metric_col2:
+        st.metric("In Arbeit", len(drafts))
+    with metric_col3:
+        st.metric("Offen", len(open_items))
+
+    done_col, progress_col, open_col = st.columns(3)
+    with done_col:
+        st.markdown("**✅ Abgeschlossen**")
+        if confirmed:
+            for item in confirmed:
+                st.success(f"**{item.folder_name}** · {item.shot_count} Shots")
         else:
-            st.caption(f"⬜ **{folder_name}** — noch offen")
+            st.caption("Noch kein Ort abgeschlossen.")
+
+    with progress_col:
+        st.markdown("**📝 In Arbeit**")
+        if drafts:
+            for item in drafts:
+                st.info(f"**{item.folder_name}** · {item.shot_count} Shots · noch nicht bestätigt")
+        else:
+            st.caption("Keine Entwürfe.")
+
+    with open_col:
+        st.markdown("**⬜ Noch offen**")
+        if open_items:
+            for item in open_items:
+                st.warning(f"**{item.folder_name}** · noch kein Schnittplan")
+        else:
+            st.caption("Alle Orte haben mindestens einen Entwurf.")
+
+    if len(confirmed) == len(mapped_folders):
+        st.success("Alle Orte abgeschlossen — Schnittplan für das gesamte Projekt fertig.")
 
 
 def render_edit_plan_page() -> None:
@@ -101,17 +185,20 @@ def render_edit_plan_page() -> None:
         render_file_paths(project)
         return
 
-    saved_folders = list_saved_edit_plan_folders(project)
     folder_key = _folder_state_key(project.id)
     default_folder = st.session_state.get(folder_key, mapped_folders[0])
     if default_folder not in mapped_folders:
         default_folder = mapped_folders[0]
+
+    _render_location_progress(project, project.id, mapped_folders)
+    st.divider()
 
     st.markdown("**Ort bearbeiten**")
     selected_folder = st.selectbox(
         "Asset-Ordner",
         options=mapped_folders,
         index=mapped_folders.index(default_folder),
+        format_func=lambda folder_name: _folder_select_label(project, project.id, folder_name),
         key=f"plan_folder_select_{project.id}",
         label_visibility="collapsed",
     )
@@ -119,9 +206,6 @@ def render_edit_plan_page() -> None:
 
     plan_path = project.folder_edit_plan_path(selected_folder)
     st.caption(f"Speicherort: `{plan_path}`")
-
-    with st.expander("Status aller Orte", expanded=False):
-        _render_folder_status(mapped_folders, saved_folders, project)
 
     saved = load_edit_plan(project, selected_folder)
     if saved is not None and saved.confirmed:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from otio_app.analysis_models import (
@@ -31,6 +33,54 @@ from otio_app.services.gemini_client import GeminiNotConfiguredError, plan_passa
 from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.shot_timing import TimedPart, allocate_time_by_text, shots_from_timed_parts
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
+
+
+class EditPlanLocationState(str, Enum):
+    OPEN = "open"
+    DRAFT = "draft"
+    CONFIRMED = "confirmed"
+
+
+@dataclass(frozen=True)
+class EditPlanLocationStatus:
+    folder_name: str
+    state: EditPlanLocationState
+    shot_count: int = 0
+
+
+def resolve_edit_plan_location_state(
+    folder_name: str,
+    saved: EditPlanDocument | None,
+    draft: EditPlanDocument | None = None,
+) -> EditPlanLocationStatus:
+    """Ermittelt den Status eines Ortes aus gespeicherter Datei und optionalem Entwurf."""
+    effective = draft or saved
+    if effective is None or not effective.shots:
+        return EditPlanLocationStatus(folder_name=folder_name, state=EditPlanLocationState.OPEN)
+    if effective.confirmed:
+        return EditPlanLocationStatus(
+            folder_name=folder_name,
+            state=EditPlanLocationState.CONFIRMED,
+            shot_count=len(effective.shots),
+        )
+    return EditPlanLocationStatus(
+        folder_name=folder_name,
+        state=EditPlanLocationState.DRAFT,
+        shot_count=len(effective.shots),
+    )
+
+
+def get_mapped_folders(project: Project) -> list[str]:
+    mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
+    if mapping is None:
+        return []
+    return sorted(
+        {
+            entry.folder
+            for entry in mapping.entries
+            if entry.folder and entry.confirmed
+        }
+    )
 
 
 def load_voice_analysis(project: Project) -> VoiceAnalysisDocument:

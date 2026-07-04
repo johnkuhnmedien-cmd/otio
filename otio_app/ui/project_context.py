@@ -10,6 +10,7 @@ import streamlit as st
 from otio_app.models import Project
 from otio_app.project_repository import get_project_by_id, list_projects
 from otio_app.services.edit_plan_builder import (
+    get_mapped_folders,
     list_saved_edit_plan_folders,
     load_edit_plan,
     mapped_folders_have_confirmed_plans,
@@ -33,13 +34,7 @@ class WorkflowStatus:
 
 def get_workflow_status(project: Project) -> WorkflowStatus:
     mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
-    mapped_folders = sorted(
-        {
-            entry.folder
-            for entry in (mapping.entries if mapping else [])
-            if entry.folder and entry.confirmed
-        }
-    )
+    mapped_folders = get_mapped_folders(project)
     edit_plan_done = mapped_folders_have_confirmed_plans(project, mapped_folders)
     return WorkflowStatus(
         voice_analysis_done=project.voice_analysis_path.is_file(),
@@ -47,6 +42,19 @@ def get_workflow_status(project: Project) -> WorkflowStatus:
         mapping_confirmed=bool(mapping and mapping.confirmed),
         edit_plan_done=edit_plan_done,
     )
+
+
+def get_edit_plan_location_progress(project: Project) -> tuple[int, int]:
+    """Anzahl bestätigter Orte und Gesamtzahl zugeordneter Orte."""
+    mapped_folders = get_mapped_folders(project)
+    if not mapped_folders:
+        return 0, 0
+    confirmed = sum(
+        1
+        for folder_name in mapped_folders
+        if (document := load_edit_plan(project, folder_name)) is not None and document.confirmed
+    )
+    return confirmed, len(mapped_folders)
 
 
 def render_project_selector(label: str = "Projekt") -> Project | None:
@@ -89,6 +97,10 @@ def render_workflow_progress(project: Project, current_step: str) -> None:
     for column, (title, done, active) in zip(columns, steps):
         with column:
             st.caption(_step_label(title, done, active))
+
+    confirmed_count, total_count = get_edit_plan_location_progress(project)
+    if total_count > 0 and not status.edit_plan_done:
+        st.caption(f"Schnittplan-Fortschritt: **{confirmed_count}/{total_count}** Orte abgeschlossen")
 
 
 def render_output_status(project: Project) -> None:

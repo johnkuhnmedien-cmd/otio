@@ -104,6 +104,42 @@ def test_list_saved_edit_plan_folders(tmp_path: Path) -> None:
     assert folders == ["Florida Keys"]
 
 
+def test_resolve_edit_plan_location_state() -> None:
+    from otio_app.services.edit_plan_builder import (
+        EditPlanLocationState,
+        resolve_edit_plan_location_state,
+    )
+
+    open_status = resolve_edit_plan_location_state("Florida Keys", None, None)
+    assert open_status.state == EditPlanLocationState.OPEN
+
+    draft_status = resolve_edit_plan_location_state(
+        "Florida Keys",
+        None,
+        EditPlanDocument(
+            project_id="x",
+            folder_name="Florida Keys",
+            confirmed=False,
+            shots=[_sample_shot("Florida Keys", 1)],
+        ),
+    )
+    assert draft_status.state == EditPlanLocationState.DRAFT
+    assert draft_status.shot_count == 1
+
+    confirmed_status = resolve_edit_plan_location_state(
+        "Florida Keys",
+        EditPlanDocument(
+            project_id="x",
+            folder_name="Florida Keys",
+            confirmed=True,
+            shots=[_sample_shot("Florida Keys", 1), _sample_shot("Florida Keys", 2)],
+        ),
+        None,
+    )
+    assert confirmed_status.state == EditPlanLocationState.CONFIRMED
+    assert confirmed_status.shot_count == 2
+
+
 def test_mapped_folders_have_confirmed_plans(tmp_path: Path) -> None:
     project = _project(tmp_path)
     assert mapped_folders_have_confirmed_plans(project, ["Florida Keys"]) is False
