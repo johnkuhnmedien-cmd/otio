@@ -18,6 +18,14 @@ MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS | AUDIO_EXTENSIONS
 NO_ANALYZABLE_MEDIA_DESCRIPTION = "Keine analysierbaren Medien gefunden."
 
 
+def is_video_media(path: Path) -> bool:
+    return path.suffix.lower() in VIDEO_EXTENSIONS
+
+
+def is_image_media(path: Path) -> bool:
+    return path.suffix.lower() in IMAGE_EXTENSIONS
+
+
 def _is_media_filename(name: str) -> bool:
     return Path(name).suffix.lower() in MEDIA_EXTENSIONS
 

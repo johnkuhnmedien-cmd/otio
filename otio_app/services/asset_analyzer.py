@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -65,15 +66,18 @@ def _analyze_single_media(
     use_api: bool,
     model: Optional[str],
 ) -> tuple[AssetMediaAnalysis, str]:
+    cache_file = media_cache_path(project, folder_name, media_path)
+    per_file = max(1, project.frames_per_shot)
     cached = load_cached_media_for_asset(project, folder_name, media_path)
     if cached is not None and is_successfully_analyzed(cached):
         return cached, "cache"
 
-    cache_file = media_cache_path(project, folder_name, media_path)
-    per_file = max(1, project.frames_per_shot)
+    frames_dir = _frames_dir(project, folder_name, media_path)
+    shutil.rmtree(frames_dir, ignore_errors=True)
+
     frames = extract_frames(
         media_path,
-        _frames_dir(project, folder_name, media_path),
+        frames_dir,
         per_file,
     )
     entry = AssetMediaAnalysis(

@@ -16,6 +16,9 @@ from otio_app.services.media_utils import (
     list_media_files,
 )
 
+_PREFERRED_VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm")
+_PREFERRED_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".heic", ".tif", ".tiff")
+
 
 def media_cache_path(project: Project, folder_name: str, media_path: Path) -> Path:
     cache_dir = (
@@ -186,13 +189,61 @@ def is_successfully_analyzed(entry: AssetMediaAnalysis) -> bool:
     return True
 
 
+def _merge_media_path(
+    by_name: dict[str, Path],
+    folder_path: Path,
+    media_path: Path,
+) -> None:
+    by_name[media_path.name.casefold()] = media_path
+
+
+def _discover_media_from_frame_dirs(
+    project: Project,
+    folder_name: str,
+    by_name: dict[str, Path],
+) -> None:
+    """Ergänzt Medien, für die bereits Frame-Ordner existieren (z. B. nach Teilanalyse)."""
+    folder_path = project.project_root_path / folder_name
+    frames_root = project.work_dir_path / "frames" / safe_folder_slug(folder_name)
+    if not frames_root.is_dir():
+        return
+
+    slug_to_path = {
+        safe_folder_slug(path.stem): path for path in list_media_files(folder_path)
+    }
+    slug_to_path.update(
+        {safe_folder_slug(path.stem): path for path in by_name.values()}
+    )
+
+    try:
+        frame_dirs = sorted(frames_root.iterdir(), key=lambda path: path.name.casefold())
+    except OSError:
+        return
+
+    for frame_dir in frame_dirs:
+        if not frame_dir.is_dir():
+            continue
+        slug = frame_dir.name
+        matched = slug_to_path.get(slug)
+        if matched is not None:
+            _merge_media_path(by_name, folder_path, matched)
+            continue
+        for ext in _PREFERRED_VIDEO_EXTENSIONS + _PREFERRED_IMAGE_EXTENSIONS:
+            if ext not in MEDIA_EXTENSIONS:
+                continue
+            candidate = folder_path / f"{slug}{ext}"
+            if candidate.name.casefold() not in by_name:
+                _merge_media_path(by_name, folder_path, candidate)
+                break
+
+
 def discover_folder_media_paths(project: Project, folder_name: str) -> list[Path]:
-    """Medien im Ordner: Dateisystem plus Pfade aus dem Analyse-Cache vereinen."""
+    """Medien im Ordner: Dateisystem plus Cache und Frame-Arbeit vereinen."""
     folder_path = project.project_root_path / folder_name
     by_name: dict[str, Path] = {}
 
     for media_path in list_media_files(folder_path):
-        by_name[media_path.name.casefold()] = media_path
+        _merge_media_path(by_name, folder_path, media_path)
 
     for cache_dir in list_cache_dirs_for_folder(project, folder_name):
         if not cache_dir.is_dir():
@@ -211,6 +262,8 @@ def discover_folder_media_paths(project: Project, folder_name: str) -> list[Path
             key = name.casefold()
             if key not in by_name:
                 by_name[key] = folder_path / name
+
+    _discover_media_from_frame_dirs(project, folder_name, by_name)
 
     return sorted(by_name.values(), key=lambda path: path.name.casefold())
 
