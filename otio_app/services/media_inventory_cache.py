@@ -173,6 +173,11 @@ def is_completed_analysis(entry: AssetMediaAnalysis) -> bool:
     return bool(entry.error)
 
 
+def is_successfully_analyzed(entry: AssetMediaAnalysis) -> bool:
+    """True nur bei erfolgreicher Beschreibung (kein reiner Fehler-Eintrag)."""
+    return bool(entry.description.strip())
+
+
 def save_cached_media(cache_file: Path, entry: AssetMediaAnalysis) -> None:
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     cache_file.write_text(entry.model_dump_json(indent=2), encoding="utf-8")

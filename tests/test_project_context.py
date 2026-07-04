@@ -22,6 +22,7 @@ def test_workflow_status_detects_completed_steps(temp_project_layout: dict[str, 
 
     from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis
     from otio_app.services.inventory_loader import save_folder_inventory
+    from otio_app.services.media_inventory_cache import media_cache_path, save_cached_media
 
     media_path = str(root / "Grand Canyon" / "clip.mp4")
     save_folder_inventory(
@@ -31,6 +32,10 @@ def test_workflow_status_detects_completed_steps(temp_project_layout: dict[str, 
             media_files=[media_path],
             assets=[AssetMediaAnalysis(path=media_path, description="Fertig")],
         ),
+    )
+    save_cached_media(
+        media_cache_path(project, "Grand Canyon", root / "Grand Canyon" / "clip.mp4"),
+        AssetMediaAnalysis(path=media_path, description="Fertig"),
     )
 
     status = get_workflow_status(project)

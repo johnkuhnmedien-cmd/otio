@@ -13,19 +13,20 @@ from otio_app.analysis_models import (
 from otio_app.models import Project, validate_asset_selection
 from otio_app.project_layout import get_folder_inventory_path, safe_folder_slug
 from otio_app.services.analysis_progress import AnalysisRunReport, ProgressCallback, noop_progress
+from otio_app.services.folder_asset_status import folder_is_fully_analyzed
 from otio_app.services.frame_extract import extract_frames
 from otio_app.services.gemini_client import (
     GeminiNotConfiguredError,
     describe_media_from_frames,
 )
 from otio_app.services.inventory_loader import (
-    materialize_folder_inventory_from_cache,
+    remove_stale_folder_inventory,
     save_folder_inventory,
     should_skip_folder_analysis,
 )
 from otio_app.services.media_inventory_cache import (
-    is_completed_analysis,
-    load_cached_media,
+    is_successfully_analyzed,
+    load_cached_media_for_asset,
     media_cache_path,
     save_cached_media,
 )
@@ -64,13 +65,11 @@ def _analyze_single_media(
     use_api: bool,
     model: Optional[str],
 ) -> tuple[AssetMediaAnalysis, str]:
-    cache_file = media_cache_path(project, folder_name, media_path)
-    cached = load_cached_media(cache_file)
-    if cached is not None and is_completed_analysis(cached):
-        if cached.error and not cached.description.strip():
-            return cached, "fehler"
+    cached = load_cached_media_for_asset(project, folder_name, media_path)
+    if cached is not None and is_successfully_analyzed(cached):
         return cached, "cache"
 
+    cache_file = media_cache_path(project, folder_name, media_path)
     per_file = max(1, project.frames_per_shot)
     frames = extract_frames(
         media_path,
@@ -110,6 +109,33 @@ def _analyze_single_media(
     return entry, "fehler"
 
 
+def _save_folder_inventory_if_complete(
+    project: Project,
+    folder_name: str,
+    media_paths: list[Path],
+    assets: list[AssetMediaAnalysis],
+) -> bool:
+    if len(assets) != len(media_paths):
+        remove_stale_folder_inventory(project, folder_name, media_paths)
+        return False
+    if not all(is_successfully_analyzed(asset) for asset in assets):
+        remove_stale_folder_inventory(project, folder_name, media_paths)
+        return False
+
+    item = AssetFolderAnalysis(
+        folder=folder_name,
+        media_files=[str(media_path) for media_path in media_paths],
+        assets=assets,
+        frames_used=[frame for asset in assets for frame in asset.frames_used],
+        description=_folder_summary(assets),
+    )
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, folder_name),
+        item,
+    )
+    return True
+
+
 def _analyze_folder(
     project: Project,
     folder_name: str,
@@ -123,8 +149,7 @@ def _analyze_folder(
 ) -> AssetFolderAnalysis:
     folder_path = project.project_root_path / folder_name
     media_paths = list_media_files(folder_path)
-
-    materialize_folder_inventory_from_cache(project, folder_name)
+    remove_stale_folder_inventory(project, folder_name, media_paths)
 
     existing = should_skip_folder_analysis(project, folder_name, media_paths)
     if existing is not None:
@@ -134,7 +159,7 @@ def _analyze_folder(
                 "folder": folder_name,
                 "folder_index": folder_index,
                 "folder_count": folder_count,
-                "reason": "Ordner-Inventar bereits vollständig",
+                "reason": "Alle Assets analysiert, Inventar vorhanden",
             },
         )
         if report is not None:
@@ -229,8 +254,9 @@ def _analyze_folder(
     if not assets:
         item.description = "Keine analysierbaren Medien gefunden."
 
-    out_path = get_folder_inventory_path(project.work_dir_path, folder_name)
-    save_folder_inventory(out_path, item)
+    inventory_saved = _save_folder_inventory_if_complete(
+        project, folder_name, media_paths, assets
+    )
     if report is not None:
         report.folders_processed.append(folder_name)
     on_progress(
@@ -240,6 +266,7 @@ def _analyze_folder(
             "folder_index": folder_index,
             "folder_count": folder_count,
             "asset_count": len(assets),
+            "inventory_saved": inventory_saved,
         },
     )
     return item
@@ -253,7 +280,7 @@ def analyze_asset_folders(
     model: Optional[str] = None,
     on_progress: ProgressCallback = noop_progress,
 ) -> tuple[InventoryDocument, AnalysisRunReport]:
-    """Analysiert Asset-Ordner und schreibt pro Ordner eine JSON unter _otio/inventory/."""
+    """Analysiert Asset-Ordner; Inventar-JSON nur bei vollständigem Ordner."""
     selected = validate_asset_selection(project.asset_subdir_names, folder_names)
     report = AnalysisRunReport()
     total_media = _count_media_for_folders(project, selected)
@@ -266,25 +293,24 @@ def analyze_asset_folders(
     )
 
     items: list[AssetFolderAnalysis] = []
-    media_step = 0
 
     for folder_index, folder_name in enumerate(selected, start=1):
-        item = _analyze_folder(
-            project,
-            folder_name,
-            use_api=use_api,
-            model=model,
-            on_progress=on_progress,
-            folder_index=folder_index,
-            folder_count=len(selected),
-            report=report,
+        items.append(
+            _analyze_folder(
+                project,
+                folder_name,
+                use_api=use_api,
+                model=model,
+                on_progress=on_progress,
+                folder_index=folder_index,
+                folder_count=len(selected),
+                report=report,
+            )
         )
-        items.append(item)
 
     on_progress(
         "complete",
         {
-            "processed_media": media_step,
             "total_media": max(total_media, 1),
             "done": True,
         },

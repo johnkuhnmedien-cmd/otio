@@ -9,11 +9,13 @@ from pathlib import Path
 from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis, InventoryDocument
 from otio_app.models import Project
 from otio_app.project_layout import get_folder_inventory_path, get_inventory_dir, safe_folder_slug
+from otio_app.services.folder_asset_status import folder_is_fully_analyzed
 from otio_app.services.media_inventory_cache import (
-    is_completed_analysis,
+    is_successfully_analyzed,
     load_cached_media,
     load_cached_media_for_asset,
     migrate_legacy_per_asset_cache_folder,
+    save_cached_media,
     scan_folder_cache_assets,
 )
 from otio_app.services.media_utils import list_media_files
@@ -60,7 +62,46 @@ def folder_inventory_matches_media(
 def folder_inventory_is_complete(item: AssetFolderAnalysis) -> bool:
     if not item.assets:
         return False
-    return all(is_completed_analysis(asset) for asset in item.assets)
+    return all(is_successfully_analyzed(asset) for asset in item.assets)
+
+
+def remove_stale_folder_inventory(
+    project: Project,
+    folder_name: str,
+    media_paths: list[Path] | None = None,
+) -> None:
+    """Entfernt gebündelte JSON, wenn nicht alle Medien erfolgreich analysiert sind."""
+    if media_paths is None:
+        media_paths = list_media_files(project.project_root_path / folder_name)
+    path = get_folder_inventory_path(project.work_dir_path, folder_name)
+    if not path.is_file():
+        return
+    item = load_folder_inventory_file(path)
+    if item is None:
+        return
+    if not media_paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    if not folder_inventory_matches_media(item, media_paths):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    if not folder_inventory_is_complete(item):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    if not folder_is_fully_analyzed(project, folder_name):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def should_skip_folder_analysis(
@@ -68,7 +109,11 @@ def should_skip_folder_analysis(
     folder_name: str,
     media_paths: list[Path],
 ) -> AssetFolderAnalysis | None:
-    """Liefert vorhandenes Inventar, wenn der Ordner bereits vollständig analysiert ist."""
+    """Liefert Inventar nur wenn alle Medien erfolgreich analysiert sind."""
+    if not folder_is_fully_analyzed(project, folder_name):
+        remove_stale_folder_inventory(project, folder_name, media_paths)
+        return None
+
     path = get_folder_inventory_path(project.work_dir_path, folder_name)
     item = load_folder_inventory_file(path)
     if item is None:
@@ -143,7 +188,7 @@ def materialize_folder_inventory_from_cache(
     missing: list[str] = []
     for media_path in media_paths:
         cached = _resolve_cached_asset(project, folder_name, media_path, indexed_cache)
-        if cached is None or not is_completed_analysis(cached):
+        if cached is None or not is_successfully_analyzed(cached):
             missing.append(media_path.name)
             continue
         assets.append(cached)
@@ -185,6 +230,8 @@ def sync_folder_inventories_from_cache(
 
     for folder_name in targets:
         migrate_legacy_per_asset_cache_folder(project, folder_name)
+        media_paths = list_media_files(project.project_root_path / folder_name)
+        remove_stale_folder_inventory(project, folder_name, media_paths)
         out_path = get_folder_inventory_path(project.work_dir_path, folder_name)
         existed_before = out_path.is_file()
         media_count = len(list_media_files(project.project_root_path / folder_name))
@@ -242,6 +289,23 @@ def migrate_legacy_inventory(project: Project) -> None:
     inventory_dir.mkdir(parents=True, exist_ok=True)
 
     for item in document.items:
+        if not folder_inventory_is_complete(item):
+            continue
+        for asset in item.assets:
+            if not asset.path or not is_successfully_analyzed(asset):
+                continue
+            media_path = Path(asset.path)
+            cache_path = (
+                project.work_dir_path
+                / "cache"
+                / "inventory"
+                / safe_folder_slug(item.folder)
+                / f"{safe_folder_slug(media_path.name)}.json"
+            )
+            try:
+                save_cached_media(cache_path, asset)
+            except OSError:
+                continue
         out_path = get_folder_inventory_path(project.work_dir_path, item.folder)
         if not out_path.is_file():
             try:
@@ -283,15 +347,11 @@ def list_folder_inventory_paths(project: Project) -> list[Path]:
 
 
 def selected_folders_have_inventory(project: Project) -> bool:
-    """True, wenn alle ausgewählten Asset-Ordner eine vollständige Inventar-JSON haben."""
+    """True, wenn alle ausgewählten Asset-Ordner vollständig analysiert sind."""
     if not project.selected_asset_subdirs:
         return False
     for folder_name in project.selected_asset_subdirs:
-        folder_path = project.project_root_path / folder_name
-        media_paths = list_media_files(folder_path)
-        if not media_paths:
-            continue
-        if should_skip_folder_analysis(project, folder_name, media_paths) is None:
+        if not folder_is_fully_analyzed(project, folder_name):
             return False
     return True
 

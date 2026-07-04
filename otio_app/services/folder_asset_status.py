@@ -8,7 +8,7 @@ from pathlib import Path
 
 from otio_app.models import Project
 from otio_app.services.media_inventory_cache import (
-    is_completed_analysis,
+    is_successfully_analyzed,
     load_cached_media_for_asset,
 )
 from otio_app.services.media_utils import list_media_files
@@ -44,7 +44,7 @@ def get_folder_asset_statuses(
                 )
             )
             continue
-        if is_completed_analysis(cached) and cached.description.strip():
+        if is_successfully_analyzed(cached):
             statuses.append(
                 AssetAnalysisStatus(
                     path=media_path,
@@ -53,7 +53,7 @@ def get_folder_asset_statuses(
                 )
             )
             continue
-        if is_completed_analysis(cached) and cached.error:
+        if cached.error:
             statuses.append(
                 AssetAnalysisStatus(
                     path=media_path,
@@ -81,3 +81,16 @@ def list_missing_or_failed_assets(
         for status in get_folder_asset_statuses(project, folder_name)
         if status.state != AssetAnalysisState.COMPLETE
     ]
+
+
+def folder_is_fully_analyzed(project: Project, folder_name: str) -> bool:
+    """True, wenn jedes Medium im Ordner eine erfolgreiche Beschreibung hat."""
+    folder_path = project.project_root_path / folder_name
+    media_paths = list_media_files(folder_path)
+    if not media_paths:
+        return False
+    for media_path in media_paths:
+        cached = load_cached_media_for_asset(project, folder_name, media_path)
+        if cached is None or not is_successfully_analyzed(cached):
+            return False
+    return True

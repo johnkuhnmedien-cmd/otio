@@ -14,6 +14,7 @@ from otio_app.services.inventory_loader import (
     selected_folders_have_inventory,
     sync_folder_inventories_from_cache,
 )
+from otio_app.services.media_inventory_cache import media_cache_path, save_cached_media
 
 
 def _sample_project(layout: dict[str, Path], *, selected: list[str] | None = None) -> Project:
@@ -144,5 +145,9 @@ def test_selected_folders_have_inventory(temp_project_layout: dict[str, Path]) -
     save_folder_inventory(
         get_folder_inventory_path(project.work_dir_path, "Grand Canyon"),
         item,
+    )
+    save_cached_media(
+        media_cache_path(project, "Grand Canyon", Path(media_path)),
+        item.assets[0],
     )
     assert selected_folders_have_inventory(project) is True

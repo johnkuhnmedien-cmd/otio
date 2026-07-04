@@ -1,15 +1,16 @@
-"""Analyse-Status pro Asset-Ordner (Cache-Auswertung)."""
+"""Analyse-Status pro Asset-Ordner."""
 
 from __future__ import annotations
 
 from enum import Enum
 
 from otio_app.models import Project
+from otio_app.services.folder_asset_status import folder_is_fully_analyzed
+from otio_app.services.inventory_loader import remove_stale_folder_inventory
 from otio_app.services.media_inventory_cache import (
-    is_completed_analysis,
+    is_successfully_analyzed,
     load_cached_media_for_asset,
 )
-from otio_app.services.inventory_loader import should_skip_folder_analysis
 from otio_app.services.media_utils import list_media_files
 
 
@@ -29,19 +30,21 @@ FOLDER_STATE_LABELS = {
 
 
 def get_folder_analysis_state(project: Project, folder_name: str) -> FolderAnalysisState:
-    """Ermittelt den Analyse-Status anhand der Ordner-JSON und des Medien-Caches."""
+    """Grün nur wenn jedes Medium erfolgreich analysiert wurde."""
     folder_path = project.project_root_path / folder_name
     media_paths = list_media_files(folder_path)
     if not media_paths:
         return FolderAnalysisState.EMPTY
 
-    if should_skip_folder_analysis(project, folder_name, media_paths) is not None:
+    remove_stale_folder_inventory(project, folder_name, media_paths)
+
+    if folder_is_fully_analyzed(project, folder_name):
         return FolderAnalysisState.COMPLETE
 
     completed = 0
     for media_path in media_paths:
         cached = load_cached_media_for_asset(project, folder_name, media_path)
-        if cached is not None and is_completed_analysis(cached):
+        if cached is not None and is_successfully_analyzed(cached):
             completed += 1
 
     if completed == 0:
