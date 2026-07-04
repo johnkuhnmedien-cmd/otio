@@ -29,6 +29,7 @@ from otio_app.services.gemini_client import (
     get_default_gemini_model,
     is_gemini_configured,
 )
+from otio_app.services.inventory_loader import sync_folder_inventories_from_cache
 from otio_app.services.voice_analyzer import analyze_voice_over
 from otio_app.services.whisper_transcriber import (
     WhisperNotAvailableError,
@@ -251,6 +252,7 @@ def render_project_workbench() -> None:
         return
 
     render_workflow_progress(project, current_step="analysis")
+    sync_folder_inventories_from_cache(project)
     render_output_status(project)
     st.caption(
         f"Status: {project.status.value} · "

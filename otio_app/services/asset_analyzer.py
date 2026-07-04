@@ -18,6 +18,7 @@ from otio_app.services.gemini_client import (
     describe_media_from_frames,
 )
 from otio_app.services.inventory_loader import (
+    materialize_folder_inventory_from_cache,
     save_folder_inventory,
     should_skip_folder_analysis,
 )
@@ -104,6 +105,8 @@ def _analyze_folder(
 ) -> AssetFolderAnalysis:
     folder_path = project.project_root_path / folder_name
     media_paths = list_media_files(folder_path)
+
+    materialize_folder_inventory_from_cache(project, folder_name)
 
     existing = should_skip_folder_analysis(project, folder_name, media_paths)
     if existing is not None:

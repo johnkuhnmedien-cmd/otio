@@ -75,6 +75,31 @@ def test_migrate_legacy_inventory(temp_project_layout: dict[str, Path]) -> None:
     assert loaded.assets[0].description == "Legacy-Beschreibung"
 
 
+def test_materialize_folder_inventory_from_cache(temp_project_layout: dict[str, Path]) -> None:
+    project = Project(
+        id="inv-test",
+        name="Test",
+        project_root=str(temp_project_layout["project_root"]),
+        work_dir=str(temp_project_layout["work_dir"]),
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    media_path = temp_project_layout["project_root"] / "Grand Canyon" / "clip.mp4"
+    from otio_app.services.media_inventory_cache import save_cached_media, media_cache_path
+
+    save_cached_media(
+        media_cache_path(project, "Grand Canyon", media_path),
+        AssetMediaAnalysis(path=str(media_path), description="Aus Cache"),
+    )
+
+    from otio_app.services.inventory_loader import materialize_folder_inventory_from_cache
+
+    item = materialize_folder_inventory_from_cache(project, "Grand Canyon")
+    assert item is not None
+    assert project.inventory_dir.is_dir()
+    assert project.folder_inventory_path("Grand Canyon").is_file()
+
+
 def test_selected_folders_have_inventory(temp_project_layout: dict[str, Path]) -> None:
     project = _sample_project(temp_project_layout)
     assert selected_folders_have_inventory(project) is False

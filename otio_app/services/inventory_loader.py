@@ -70,6 +70,65 @@ def should_skip_folder_analysis(
     return item
 
 
+def _folder_summary_from_assets(assets: list[AssetMediaAnalysis]) -> str:
+    parts: list[str] = []
+    for asset in assets:
+        if asset.description:
+            parts.append(f"{Path(asset.path).name}: {asset.description}")
+    return "\n\n".join(parts)
+
+
+def materialize_folder_inventory_from_cache(
+    project: Project,
+    folder_name: str,
+) -> AssetFolderAnalysis | None:
+    """Erstellt eine Ordner-JSON aus vollständigem Medien-Cache (ohne Gemini)."""
+    folder_path = project.project_root_path / folder_name
+    media_paths = list_media_files(folder_path)
+    if not media_paths:
+        return None
+
+    existing = should_skip_folder_analysis(project, folder_name, media_paths)
+    if existing is not None:
+        return existing
+
+    assets: list[AssetMediaAnalysis] = []
+    for media_path in media_paths:
+        cached = load_cached_media(media_cache_path(project, folder_name, media_path))
+        if cached is None or not is_completed_analysis(cached):
+            return None
+        assets.append(cached)
+
+    item = AssetFolderAnalysis(
+        folder=folder_name,
+        media_files=[str(media_path) for media_path in media_paths],
+        assets=assets,
+        frames_used=[frame for asset in assets for frame in asset.frames_used],
+        description=_folder_summary_from_assets(assets),
+    )
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, folder_name),
+        item,
+    )
+    return item
+
+
+def sync_folder_inventories_from_cache(
+    project: Project,
+    folder_names: list[str] | None = None,
+) -> list[str]:
+    """Baut fehlende Ordner-JSONs aus vollständigem Cache auf. Liefert neu erzeugte Ordner."""
+    targets = folder_names if folder_names is not None else project.asset_subdir_names
+    created: list[str] = []
+    for folder_name in targets:
+        out_path = get_folder_inventory_path(project.work_dir_path, folder_name)
+        existed_before = out_path.is_file()
+        if materialize_folder_inventory_from_cache(project, folder_name) is not None:
+            if not existed_before:
+                created.append(folder_name)
+    return created
+
+
 def migrate_legacy_inventory(project: Project) -> None:
     """Teilt eine alte zentrale inventory.json in pro-Ordner-Dateien auf."""
     legacy_path = project.inventory_path

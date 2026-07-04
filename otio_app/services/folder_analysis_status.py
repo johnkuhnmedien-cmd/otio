@@ -48,8 +48,6 @@ def get_folder_analysis_state(project: Project, folder_name: str) -> FolderAnaly
 
     if completed == 0:
         return FolderAnalysisState.PENDING
-    if completed >= len(media_paths):
-        return FolderAnalysisState.COMPLETE
     return FolderAnalysisState.PARTIAL
 
 
