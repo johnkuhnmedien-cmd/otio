@@ -8,7 +8,11 @@ from pydantic import ValidationError
 from otio_app.defaults import DEFAULT_FRAMES_PER_SHOT, DEFAULT_VOICE_OVER_SUBDIR
 from otio_app.models import ProjectCreate
 from otio_app.paths import create_work_dir, normalize_path
-from otio_app.project_layout import default_work_dir, safe_path_is_dir
+from otio_app.project_layout import (
+    classify_subdirectories,
+    default_work_dir,
+    scan_project_structure,
+)
 from otio_app.project_repository import create_project, list_projects
 from otio_app.system_checks import run_all_checks
 
@@ -26,6 +30,49 @@ PREVIEW_KEY = "project_preview"
 PENDING_KEY = "pending_project"
 
 
+def _render_structure_overview(scan) -> None:
+    st.subheader("Erkannte Struktur")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Unterordner gesamt", len(scan.all_subdirectory_names))
+    with col2:
+        st.metric("Asset-Ordner", len(scan.asset_subdir_names))
+    with col3:
+        st.metric("Voice-over", scan.voice_over_folder_name or "—")
+
+    st.markdown("#### 🎙️ Voice-over-Ordner")
+    if scan.voice_over_folder_name and scan.voice_over_dir is not None:
+        st.info(f"**Hauptordner:** `{scan.voice_over_dir}`")
+        if scan.voice_over_language_dir is not None:
+            if scan.voice_over_language_exists:
+                st.success(
+                    f"**Audios (Sprache {scan.language}):** `{scan.voice_over_language_dir}`"
+                )
+            else:
+                st.warning(
+                    f"**Audios (Sprache {scan.language}) fehlen noch:** "
+                    f"`{scan.voice_over_language_dir}`"
+                )
+    else:
+        st.error(
+            "Kein Voice-over-Ordner erkannt. Bitte unten den richtigen Ordner auswählen."
+        )
+
+    if scan.system_folder_names:
+        st.markdown("#### ⚙️ Systemordner")
+        st.caption(", ".join(f"`{name}`" for name in scan.system_folder_names))
+
+    st.markdown("#### 📁 Asset-Ordner")
+    if scan.asset_subdir_names:
+        st.write(", ".join(f"`{name}`" for name in scan.asset_subdir_names))
+    else:
+        st.warning(
+            "Keine Asset-Ordner gefunden. Prüfe den Projektpfad, den Voice-over-Ordner "
+            "und lade iCloud-Inhalte ggf. im Finder lokal herunter."
+        )
+
+
 def _show_saved_project(saved) -> None:
     st.success(
         f"Projekt '{saved.name}' gespeichert (Status: {saved.status.value})."
@@ -35,7 +82,8 @@ def _show_saved_project(saved) -> None:
             "id": saved.id,
             "project_root": saved.project_root,
             "work_dir": saved.work_dir,
-            "voice_over_dir": str(saved.voice_over_dir),
+            "voice_over_ordner": saved.voice_over_subdir,
+            "voice_over_pfad": str(saved.voice_over_dir),
             "alle_asset_ordner": saved.asset_subdir_names,
             "ausgewaehlte_ordner": saved.selected_asset_subdirs,
             "inventory_path": str(saved.inventory_path),
@@ -169,62 +217,89 @@ if page == PAGE_NEW:
             for error in exc.errors():
                 st.error(error["msg"])
         else:
-            with st.spinner("Projektordner wird geprüft …"):
-                available_assets = project_data.asset_subdir_names
+            scan = scan_project_structure(
+                project_data.project_root_path,
+                project_data.work_dir_path,
+                project_data.voice_over_subdir,
+                project_data.language,
+            )
             st.session_state[PREVIEW_KEY] = {
                 "project": project_data.model_dump(mode="json"),
-                "available_assets": available_assets,
+                "all_subdirs": scan.all_subdirectory_names,
+                "scan_error": scan.error,
             }
             st.session_state.pop(PENDING_KEY, None)
 
     if PREVIEW_KEY in st.session_state:
         preview = st.session_state[PREVIEW_KEY]
         project_data = ProjectCreate.model_validate(preview["project"])
-        available_assets = preview["available_assets"]
 
-        st.subheader("Erkannte Struktur")
-        st.write(f"**Gefundene Asset-Unterordner ({len(available_assets)}):**")
-        if available_assets:
-            st.write(", ".join(f"`{name}`" for name in available_assets))
-        else:
-            st.info(
-                "Keine Asset-Unterordner gefunden. "
-                "Bei iCloud-Ordnern ggf. Dateien erst lokal laden."
-            )
+        if preview.get("scan_error"):
+            st.error(preview["scan_error"])
 
-        voice_dir = project_data.voice_over_dir
-        if safe_path_is_dir(voice_dir):
-            st.success(f"Voice-over-Ordner gefunden: `{voice_dir}`")
-        else:
-            st.warning(
-                f"Voice-over-Ordner noch nicht vorhanden: `{voice_dir}` "
-                "(wird später für die Audio-Analyse benötigt)."
-            )
-
-        st.subheader("Ordnerauswahl")
-        selected_assets = st.multiselect(
-            "Zu bearbeitende Ordner *",
-            options=available_assets,
-            default=available_assets,
-            help="Nur ausgewählte Ordner werden später analysiert und ins Inventar aufgenommen.",
-        )
-        st.caption(f"Ausgewählt: {len(selected_assets)} von {len(available_assets)}")
-
-        col_save, col_cancel = st.columns(2)
-        with col_save:
-            if st.button(
-                "Projekt speichern",
-                disabled=not available_assets or not selected_assets,
-            ):
-                _finalize_project_save(
-                    project_data,
-                    available_assets,
-                    selected_assets,
-                )
-        with col_cancel:
-            if st.button("Auswahl verwerfen"):
-                st.session_state.pop(PREVIEW_KEY, None)
+        all_subdirs = preview.get("all_subdirs", [])
+        if not all_subdirs:
+            if st.button("Erneut scannen"):
                 st.rerun()
+        else:
+            project_root = project_data.project_root_path
+            work_dir = project_data.work_dir_path
+
+            default_voice = project_data.voice_over_subdir
+            default_index = 0
+            for index, name in enumerate(all_subdirs):
+                if name.casefold() == default_voice.casefold():
+                    default_index = index
+                    break
+
+            voice_over_choice = st.selectbox(
+                "🎙️ Welcher Unterordner ist Voice-over?",
+                options=all_subdirs,
+                index=default_index,
+                help="Dieser Ordner enthält die Audios und wird nicht als Asset bearbeitet.",
+            )
+
+            scan = classify_subdirectories(
+                all_subdirs,
+                voice_over_choice,
+                work_dir,
+                project_root,
+                project_data.language,
+            )
+            _render_structure_overview(scan)
+            available_assets = scan.asset_subdir_names
+
+            updated_project = ProjectCreate.model_validate(
+                {
+                    **preview["project"],
+                    "voice_over_subdir": voice_over_choice,
+                }
+            )
+
+            st.subheader("Ordnerauswahl")
+            selected_assets = st.multiselect(
+                "Zu bearbeitende Asset-Ordner *",
+                options=available_assets,
+                default=available_assets,
+                help="Nur ausgewählte Ordner werden später analysiert und ins Inventar aufgenommen.",
+            )
+            st.caption(f"Ausgewählt: {len(selected_assets)} von {len(available_assets)}")
+
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                if st.button(
+                    "Projekt speichern",
+                    disabled=not available_assets or not selected_assets,
+                ):
+                    _finalize_project_save(
+                        updated_project,
+                        available_assets,
+                        selected_assets,
+                    )
+            with col_cancel:
+                if st.button("Auswahl verwerfen"):
+                    st.session_state.pop(PREVIEW_KEY, None)
+                    st.rerun()
 
     if PENDING_KEY in st.session_state:
         pending = st.session_state[PENDING_KEY]
@@ -268,7 +343,8 @@ elif page == PAGE_LIST:
                 st.write(f"**ID:** `{project.id}`")
                 st.write(f"**Projektordner:** `{project.project_root}`")
                 st.write(f"**Arbeitsordner:** `{project.work_dir}`")
-                st.write(f"**Voice-over:** `{project.voice_over_dir}`")
+                st.write(f"**🎙️ Voice-over-Ordner:** `{project.voice_over_subdir}`")
+                st.write(f"**🎙️ Voice-over Audios:** `{project.voice_over_dir}`")
                 st.write(
                     f"**Gefundene Ordner ({len(project.asset_subdir_names)}):** "
                     + (

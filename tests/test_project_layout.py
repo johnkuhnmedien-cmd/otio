@@ -5,12 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from otio_app.project_layout import (
+    classify_subdirectories,
+    detect_voice_over_folder,
     discover_asset_subdir_names,
-    discover_asset_subdirs,
     get_inventory_path,
     get_voice_analysis_path,
     get_voice_over_dir,
     language_folder_name,
+    resolve_voice_over_folder_name,
+    scan_project_structure,
 )
 
 
@@ -36,3 +39,40 @@ def test_discover_asset_subdir_names(temp_project_layout: dict[str, Path]) -> No
     work_dir = project_root / "_otio"
     names = discover_asset_subdir_names(project_root, work_dir, "Voice over")
     assert names == ["Grand Canyon", "Yellowstone"]
+
+
+def test_resolve_voice_over_case_insensitive(temp_project_layout: dict[str, Path]) -> None:
+    project_root = temp_project_layout["project_root"]
+    all_names = ["Grand Canyon", "voice over", "Yellowstone"]
+    resolved = resolve_voice_over_folder_name(all_names, "Voice Over")
+    assert resolved == "voice over"
+
+
+def test_detect_voice_over_folder() -> None:
+    names = ["Grand Canyon", "Voice Over", "Yellowstone"]
+    assert detect_voice_over_folder(names) == "Voice Over"
+
+
+def test_scan_project_structure(temp_project_layout: dict[str, Path]) -> None:
+    project_root = temp_project_layout["project_root"]
+    work_dir = project_root / "_otio"
+    scan = scan_project_structure(project_root, work_dir, "Voice over", "de")
+    assert scan.ok
+    assert scan.voice_over_folder_name == "Voice over"
+    assert scan.voice_over_language_exists is True
+    assert scan.asset_subdir_names == ["Grand Canyon", "Yellowstone"]
+
+
+def test_classify_excludes_selected_voice_over(temp_project_layout: dict[str, Path]) -> None:
+    project_root = temp_project_layout["project_root"]
+    work_dir = project_root / "_otio"
+    all_names = ["Grand Canyon", "Voice over", "Yellowstone", "USA"]
+    scan = classify_subdirectories(
+        all_names,
+        "Voice over",
+        work_dir,
+        project_root,
+        "de",
+    )
+    assert "Voice over" not in scan.asset_subdir_names
+    assert "USA" in scan.asset_subdir_names

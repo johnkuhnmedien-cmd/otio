@@ -13,7 +13,7 @@ from otio_app.models import (
     ProjectStatus,
     validate_asset_selection,
 )
-from otio_app.project_layout import discover_asset_subdir_names
+from otio_app.project_layout import scan_project_structure
 
 
 def _parse_json_string_list(raw: str | None) -> list[str]:
@@ -64,11 +64,13 @@ def create_project(
 ) -> Project:
     """Legt ein neues Projekt in der Datenbank an."""
     if asset_subdir_names is None:
-        asset_subdir_names = discover_asset_subdir_names(
+        scan = scan_project_structure(
             data.project_root_path,
             data.work_dir_path,
             data.voice_over_subdir,
+            data.language,
         )
+        asset_subdir_names = scan.asset_subdir_names
     if selected_asset_subdirs is None:
         selected_asset_subdirs = list(asset_subdir_names)
     else:

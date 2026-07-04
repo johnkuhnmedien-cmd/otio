@@ -18,10 +18,10 @@ from otio_app.paths import (
     validate_project_layout,
 )
 from otio_app.project_layout import (
-    discover_asset_subdir_names,
     get_inventory_path,
     get_voice_analysis_path,
     get_voice_over_dir,
+    scan_project_structure,
 )
 
 
@@ -132,11 +132,13 @@ class ProjectCreate(BaseModel):
 
     @property
     def asset_subdir_names(self) -> list[str]:
-        return discover_asset_subdir_names(
+        scan = scan_project_structure(
             self.project_root_path,
             self.work_dir_path,
             self.voice_over_subdir,
+            self.language,
         )
+        return scan.asset_subdir_names
 
     @property
     def asset_subdirs(self) -> list[Path]:
