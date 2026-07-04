@@ -12,6 +12,7 @@ from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPla
 from otio_app.models import Project
 from otio_app.project_layout import get_otio_export_path
 from otio_app.services.edit_plan_builder import load_edit_plan
+from otio_app.services.media_utils import probe_duration_seconds
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 
 
@@ -94,9 +95,10 @@ def merge_confirmed_edit_plans(
     )
 
 
-def _to_file_url(path: str) -> str:
-    resolved = Path(unquote(urlparse(path).path) if path.startswith("file:") else path)
-    return resolved.expanduser().resolve().as_uri()
+def _resolve_media_path(path: str) -> Path:
+    if path.startswith("file:"):
+        return Path(unquote(urlparse(path).path)).expanduser().resolve()
+    return Path(path).expanduser().resolve()
 
 
 def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> otio.opentime.TimeRange:
@@ -104,6 +106,73 @@ def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> 
         start_time=otio.opentime.RationalTime(start_sec, rate),
         duration=otio.opentime.RationalTime(duration_sec, rate),
     )
+
+
+def _media_reference(path: str, rate: float) -> otio.schema.ExternalReference:
+    """Absolute Medienpfad — Resolve verlinkt damit zuverlässiger als file://-URLs."""
+    resolved = _resolve_media_path(path)
+    available_duration = probe_duration_seconds(resolved)
+    if available_duration is None or available_duration <= 0:
+        available_duration = 3600.0
+    available_range = _time_range(available_duration, rate)
+    return otio.schema.ExternalReference(
+        target_url=str(resolved),
+        available_range=available_range,
+    )
+
+
+def _append_video_item(
+    track: otio.schema.Track,
+    shot: EditPlanShot,
+    *,
+    index: int,
+    rate: float,
+) -> None:
+    duration_sec = max(0.01, float(shot.duration_sec))
+    duration = _time_range(duration_sec, rate)
+    label = shot.motif or f"Shot {index}"
+    clip_name = f"{index:03d} · {shot.folder} · {label}"
+
+    if shot.asset_path:
+        video_clip = otio.schema.Clip(
+            name=clip_name[:120],
+            media_reference=_media_reference(shot.asset_path, rate),
+        )
+        video_clip.source_range = duration
+        video_clip.metadata["folder"] = shot.folder
+        video_clip.metadata["motif"] = shot.motif
+        video_clip.metadata["passage_text"] = shot.passage_text
+        track.append(video_clip)
+        return
+
+    gap = otio.schema.Gap(name=f"Missing · {clip_name[:100]}", source_range=duration)
+    gap.metadata["folder"] = shot.folder
+    gap.metadata["motif"] = shot.motif
+    gap.metadata["passage_text"] = shot.passage_text
+    track.append(gap)
+
+
+def _append_audio_item(
+    track: otio.schema.Track,
+    shot: EditPlanShot,
+    *,
+    index: int,
+    rate: float,
+) -> None:
+    voice_duration = max(0.01, float(shot.voice_end_sec - shot.voice_start_sec))
+    voice_name = f"{index:03d} · {Path(shot.voice_file).stem}"
+    voice_clip = otio.schema.Clip(
+        name=voice_name[:120],
+        media_reference=_media_reference(shot.voice_file, rate),
+    )
+    voice_clip.source_range = _time_range(
+        voice_duration,
+        rate,
+        start_sec=float(shot.voice_start_sec),
+    )
+    voice_clip.metadata["folder"] = shot.folder
+    voice_clip.metadata["passage_text"] = shot.passage_text
+    track.append(voice_clip)
 
 
 def build_otio_timeline(
@@ -116,59 +185,20 @@ def build_otio_timeline(
     timeline = otio.schema.Timeline(name=project.name)
     timeline.metadata["project_id"] = project.id
     timeline.metadata["included_folders"] = list(merged.included_folders)
+    timeline.global_start_time = otio.opentime.RationalTime(0, rate)
 
-    video_track = otio.schema.Track(name="Video", kind=otio.schema.TrackKind.Video)
-    audio_track = otio.schema.Track(name="Voice-over", kind=otio.schema.TrackKind.Audio)
-    video_stack = otio.schema.Stack(name="Video Clips")
-    audio_stack = otio.schema.Stack(name="Voice-over Clips")
+    video_track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    audio_track = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
 
     if settings.audio_offset_sec > 0:
         offset = _time_range(settings.audio_offset_sec, rate)
-        video_stack.append(otio.schema.Gap(name="Audio Offset", source_range=offset))
-        audio_stack.append(otio.schema.Gap(name="Audio Offset", source_range=offset))
+        video_track.append(otio.schema.Gap(name="Audio Offset", source_range=offset))
+        audio_track.append(otio.schema.Gap(name="Audio Offset", source_range=offset))
 
     for index, shot in enumerate(merged.shots, start=1):
-        duration_sec = max(0.01, float(shot.duration_sec))
-        duration = _time_range(duration_sec, rate)
-        label = shot.motif or f"Shot {index}"
+        _append_video_item(video_track, shot, index=index, rate=rate)
+        _append_audio_item(audio_track, shot, index=index, rate=rate)
 
-        if shot.asset_path:
-            video_clip = otio.schema.Clip(
-                name=Path(shot.asset_path).name,
-                media_reference=otio.schema.ExternalReference(
-                    target_url=_to_file_url(shot.asset_path),
-                ),
-            )
-            video_clip.source_range = duration
-            video_clip.metadata["folder"] = shot.folder
-            video_clip.metadata["motif"] = shot.motif
-            video_clip.metadata["passage_text"] = shot.passage_text
-            video_stack.append(video_clip)
-        else:
-            gap = otio.schema.Gap(name=f"Missing · {label}", source_range=duration)
-            gap.metadata["folder"] = shot.folder
-            gap.metadata["motif"] = shot.motif
-            gap.metadata["passage_text"] = shot.passage_text
-            video_stack.append(gap)
-
-        voice_duration = max(0.01, float(shot.voice_end_sec - shot.voice_start_sec))
-        voice_clip = otio.schema.Clip(
-            name=Path(shot.voice_file).name,
-            media_reference=otio.schema.ExternalReference(
-                target_url=_to_file_url(shot.voice_file),
-            ),
-        )
-        voice_clip.source_range = _time_range(
-            voice_duration,
-            rate,
-            start_sec=float(shot.voice_start_sec),
-        )
-        voice_clip.metadata["folder"] = shot.folder
-        voice_clip.metadata["passage_text"] = shot.passage_text
-        audio_stack.append(voice_clip)
-
-    video_track.append(video_stack)
-    audio_track.append(audio_stack)
     timeline.tracks.append(video_track)
     timeline.tracks.append(audio_track)
     return timeline

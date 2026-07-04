@@ -120,8 +120,10 @@ def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
     timeline = otio.adapters.read_from_file(str(export_path))
     assert timeline.name == "USA"
     assert len(timeline.tracks) == 2
-    assert timeline.tracks[0].name == "Video"
-    assert timeline.tracks[1].name == "Voice-over"
+    assert timeline.tracks[0].name == "V1"
+    assert timeline.tracks[1].name == "A1"
+    assert all(not isinstance(item, otio.schema.Stack) for item in timeline.tracks[0])
+    assert all(isinstance(item, (otio.schema.Clip, otio.schema.Gap)) for item in timeline.tracks[0])
 
     built = build_otio_timeline(project, merged)
     assert list(built.metadata["included_folders"]) == ["Florida Keys", "Grand Canyon"]
