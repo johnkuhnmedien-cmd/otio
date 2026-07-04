@@ -48,3 +48,17 @@ class InventoryDocument(BaseModel):
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     project_id: str
     items: List[AssetFolderAnalysis] = Field(default_factory=list)
+
+
+class VoiceFolderMappingEntry(BaseModel):
+    voice_file: str
+    folder: Optional[str] = None
+    match_method: str = "filename"
+    confirmed: bool = False
+
+
+class VoiceFolderMappingDocument(BaseModel):
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    project_id: str
+    confirmed: bool = False
+    entries: List[VoiceFolderMappingEntry] = Field(default_factory=list)

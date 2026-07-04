@@ -52,6 +52,7 @@ GEMINI_MODEL_LABELS = {
 }
 INVENTORY_FILENAME = "inventory.json"
 VOICE_ANALYSIS_FILENAME = "voice_over_analysis.json"
+VOICE_FOLDER_MAPPING_FILENAME = "voice_folder_mapping.json"
 
 
 def resolve_voice_backend(backend: str | None) -> str:

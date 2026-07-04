@@ -7,7 +7,12 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from otio_app.defaults import DEFAULT_WORK_SUBDIR, INVENTORY_FILENAME, VOICE_ANALYSIS_FILENAME
+from otio_app.defaults import (
+    DEFAULT_WORK_SUBDIR,
+    INVENTORY_FILENAME,
+    VOICE_ANALYSIS_FILENAME,
+    VOICE_FOLDER_MAPPING_FILENAME,
+)
 
 LANGUAGE_FOLDER_NAMES: dict[str, str] = {
     "de": "DE",
@@ -48,6 +53,10 @@ def get_inventory_path(project_root: Path) -> Path:
 
 def get_voice_analysis_path(project_root: Path) -> Path:
     return project_root / VOICE_ANALYSIS_FILENAME
+
+
+def get_voice_folder_mapping_path(project_root: Path) -> Path:
+    return project_root / VOICE_FOLDER_MAPPING_FILENAME
 
 
 def safe_path_is_dir(path: Path) -> bool:

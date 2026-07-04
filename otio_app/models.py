@@ -26,6 +26,7 @@ from otio_app.paths import (
 from otio_app.project_layout import (
     get_inventory_path,
     get_voice_analysis_path,
+    get_voice_folder_mapping_path,
     get_voice_over_dir,
     scan_project_structure,
 )
@@ -160,6 +161,10 @@ class ProjectCreate(BaseModel):
     def voice_analysis_path(self) -> Path:
         return get_voice_analysis_path(self.project_root_path)
 
+    @property
+    def voice_folder_mapping_path(self) -> Path:
+        return get_voice_folder_mapping_path(self.project_root_path)
+
 
 class Project(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
@@ -216,6 +221,10 @@ class Project(BaseModel):
     @property
     def voice_analysis_path(self) -> Path:
         return get_voice_analysis_path(self.project_root_path)
+
+    @property
+    def voice_folder_mapping_path(self) -> Path:
+        return get_voice_folder_mapping_path(self.project_root_path)
 
     @classmethod
     def from_create(

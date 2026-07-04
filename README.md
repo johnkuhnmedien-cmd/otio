@@ -88,5 +88,6 @@ pytest -v
 
 ## Nächste Meilensteine
 
-1. Voice-over ↔ Assets zuordnen
-2. `edit_plan.json` validieren und OTIO exportieren
+1. Voice-over ↔ Asset-Ordner zuordnen (Dateiname → Ordner, mit Bestätigung)
+2. Voice-over-Abschnitte ↔ konkrete Assets zuordnen
+3. `edit_plan.json` validieren und OTIO exportieren

@@ -17,6 +17,7 @@ from otio_app.project_repository import create_project, list_projects
 from otio_app.services.gemini_client import format_gemini_model_label, get_default_gemini_model
 from otio_app.system_checks import run_all_checks
 from otio_app.ui.project_workbench import render_project_workbench
+from otio_app.ui.voice_folder_mapping import render_voice_folder_mapping
 
 st.set_page_config(
     page_title="OTIO Schnittplaner",
@@ -27,6 +28,7 @@ st.set_page_config(
 PAGE_NEW = "Neues Projekt"
 PAGE_LIST = "Gespeicherte Projekte"
 PAGE_WORK = "Projekt bearbeiten"
+PAGE_MAP = "Voice-over zuordnen"
 PAGE_STATUS = "Systemstatus"
 
 PREVIEW_KEY = "project_preview"
@@ -169,10 +171,10 @@ def _save_pending_project() -> None:
 
 with st.sidebar:
     st.title("OTIO Schnittplaner")
-    st.caption("Meilenstein 2 — Analyse-Workflow")
+    st.caption("Meilenstein 3 — Zuordnung & Analyse")
     page = st.radio(
         "Navigation",
-        [PAGE_NEW, PAGE_LIST, PAGE_WORK, PAGE_STATUS],
+        [PAGE_NEW, PAGE_LIST, PAGE_WORK, PAGE_MAP, PAGE_STATUS],
         label_visibility="collapsed",
         key="sidebar_nav",
     )
@@ -460,6 +462,9 @@ elif page == PAGE_LIST:
 
 elif page == PAGE_WORK:
     render_project_workbench()
+
+elif page == PAGE_MAP:
+    render_voice_folder_mapping()
 
 elif page == PAGE_STATUS:
     st.header("Systemstatus")
