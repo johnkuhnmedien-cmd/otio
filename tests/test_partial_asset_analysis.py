@@ -11,6 +11,7 @@ from otio_app.models import Project
 from otio_app.project_layout import safe_folder_slug
 from otio_app.services.asset_analyzer import analyze_asset_folders
 from otio_app.services.media_inventory_cache import (
+    discover_folder_media_paths,
     has_successful_asset_cache,
     list_assets_missing_successful_cache,
     media_cache_path,
@@ -93,6 +94,42 @@ def test_partial_folder_analyzes_only_assets_without_json(
     cache_file = media_cache_path(project, "Grand Canyon", clip2)
     assert cache_file.is_file()
     assert has_successful_asset_cache(project, "Grand Canyon", clip2)
+
+
+def test_discover_missing_asset_from_cache_number_gap(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    project = Project(
+        id="cache-gap-test",
+        name="Test",
+        project_root=str(temp_project_layout["project_root"]),
+        work_dir=str(temp_project_layout["work_dir"]),
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    folder_name = "Grand Canyon"
+    folder = temp_project_layout["project_root"] / folder_name
+    asset14 = folder / "Florida_Keys_Asset14.mp4"
+    asset16 = folder / "Florida_Keys_Asset16.mp4"
+    asset14.write_bytes(b"v14")
+    asset16.write_bytes(b"v16")
+
+    save_cached_media(
+        media_cache_path(project, folder_name, asset14),
+        AssetMediaAnalysis(path=str(asset14), description="OK 14"),
+    )
+    save_cached_media(
+        media_cache_path(project, folder_name, asset16),
+        AssetMediaAnalysis(path=str(asset16), description="OK 16"),
+    )
+
+    missing = list_assets_missing_successful_cache(project, folder_name)
+    names = {path.name for path in missing}
+    assert "Florida_Keys_Asset15.mp4" in names
+
+    discovered = discover_folder_media_paths(project, folder_name)
+    discovered_names = {path.name for path in discovered}
+    assert "Florida_Keys_Asset15.mp4" in discovered_names
 
 
 def test_partial_folder_not_skipped_when_frame_dir_exists_without_json(

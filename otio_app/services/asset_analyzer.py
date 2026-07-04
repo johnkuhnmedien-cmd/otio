@@ -15,7 +15,7 @@ from otio_app.models import Project, validate_asset_selection
 from otio_app.project_layout import safe_folder_slug
 from otio_app.services.analysis_progress import AnalysisRunReport, ProgressCallback, noop_progress
 from otio_app.services.folder_asset_status import folder_is_fully_analyzed
-from otio_app.services.frame_extract import extract_frames
+from otio_app.services.frame_extract import extract_frames, list_existing_frame_jpegs
 from otio_app.services.gemini_client import (
     GeminiNotConfiguredError,
     describe_media_from_frames,
@@ -31,7 +31,7 @@ from otio_app.services.media_inventory_cache import (
     load_cached_media_for_asset,
     media_cache_path,
     media_stem_slug,
-    save_cached_media,
+    _save_cached_media_safe,
 )
 from otio_app.services.media_utils import (
     NO_ANALYZABLE_MEDIA_DESCRIPTION,
@@ -80,14 +80,17 @@ def _analyze_single_media(
         return cached, "cache"
 
     frames_dir = _frames_dir(project, folder_name, media_path)
-    shutil.rmtree(frames_dir, ignore_errors=True)
-
     frame_count = 1 if is_image_media(media_path) else per_file
-    frames = extract_frames(
-        media_path,
-        frames_dir,
-        frame_count,
-    )
+
+    frames = extract_frames(media_path, frames_dir, frame_count)
+    if not frames:
+        frames = list_existing_frame_jpegs(frames_dir)[:frame_count]
+    if not frames:
+        shutil.rmtree(frames_dir, ignore_errors=True)
+        frames = extract_frames(media_path, frames_dir, frame_count)
+    if not frames:
+        frames = list_existing_frame_jpegs(frames_dir)[:frame_count]
+
     entry = AssetMediaAnalysis(
         path=str(media_path),
         frames_used=[str(frame) for frame in frames],
@@ -95,7 +98,7 @@ def _analyze_single_media(
 
     if not frames:
         entry.description = NO_ANALYZABLE_MEDIA_DESCRIPTION
-        save_cached_media(cache_file, entry)
+        entry = _save_cached_media_safe(cache_file, entry)
         return entry, "fehler"
     if use_api:
         try:
@@ -107,17 +110,19 @@ def _analyze_single_media(
                 model=model,
             )
             entry.error = None
-            save_cached_media(cache_file, entry)
+            entry = _save_cached_media_safe(cache_file, entry)
+            if entry.error and "Cache konnte nicht geschrieben werden" in entry.error:
+                return entry, "fehler"
             return entry, "neu"
         except GeminiNotConfiguredError:
             raise
         except Exception as exc:  # noqa: BLE001
             entry.error = str(exc)
             entry.description = ""
-            save_cached_media(cache_file, entry)
+            entry = _save_cached_media_safe(cache_file, entry)
             return entry, "fehler"
     entry.error = "API-Aufruf nicht bestätigt."
-    save_cached_media(cache_file, entry)
+    entry = _save_cached_media_safe(cache_file, entry)
     return entry, "fehler"
 
 
@@ -135,6 +140,11 @@ def _analyze_folder(
     media_paths = discover_folder_media_paths(project, folder_name)
     missing_cache = list_assets_missing_successful_cache(project, folder_name)
     missing_slugs = {media_stem_slug(path) for path in missing_cache}
+
+    paths_by_slug = {media_stem_slug(path): path for path in media_paths}
+    for path in missing_cache:
+        paths_by_slug[media_stem_slug(path)] = path
+    media_paths = sorted(paths_by_slug.values(), key=lambda path: path.name.casefold())
 
     if not missing_cache:
         existing = should_skip_folder_analysis(project, folder_name, media_paths)
@@ -217,6 +227,7 @@ def _analyze_folder(
             raise
         except Exception as exc:  # noqa: BLE001
             entry = AssetMediaAnalysis(path=str(media_path), error=str(exc))
+            _save_cached_media_safe(media_cache_path(project, folder_name, media_path), entry)
             assets.append(entry)
             if report is not None:
                 report.media_failed += 1

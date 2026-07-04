@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -18,9 +19,11 @@ from otio_app.services.media_utils import (
 
 _PREFERRED_VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm")
 _PREFERRED_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".heic", ".tif", ".tiff")
+_NUMBERED_ASSET_STEM_RE = re.compile(r"^(.+_Asset)(\d+)$", re.IGNORECASE)
 
 
 def media_cache_path(project: Project, folder_name: str, media_path: Path) -> Path:
+    """Pfad zur Analyse-JSON — immer slug-basiert (iCloud-/Leerzeichen-tolerant)."""
     cache_dir = (
         project.work_dir_path
         / "cache"
@@ -28,7 +31,8 @@ def media_cache_path(project: Project, folder_name: str, media_path: Path) -> Pa
         / safe_folder_slug(folder_name)
     )
     cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir / f"{safe_folder_slug(media_path.name)}.json"
+    canonical_name = f"{safe_folder_slug(media_path.stem)}{media_path.suffix.lower()}"
+    return cache_dir / f"{safe_folder_slug(canonical_name)}.json"
 
 
 def legacy_per_asset_cache_path(
@@ -283,6 +287,39 @@ def _merge_media_path(
     by_slug[slug] = _prefer_discovered_media_path(existing, resolved)
 
 
+def _discover_gaps_from_cache_dir(
+    project: Project,
+    folder_name: str,
+    folder_path: Path,
+    by_slug: dict[str, Path],
+) -> None:
+    """Findet Lücken wie Asset15, wenn Asset14+Asset16-JSONs existieren."""
+    prefixes: dict[str, set[int]] = {}
+    for cache_dir in list_cache_dirs_for_folder(project, folder_name):
+        if not cache_dir.is_dir():
+            continue
+        try:
+            cache_files = sorted(cache_dir.glob("*.json"))
+        except OSError:
+            continue
+        for cache_file in cache_files:
+            media_stem = Path(cache_file.name[:-5]).stem
+            match = _NUMBERED_ASSET_STEM_RE.match(safe_folder_slug(media_stem))
+            if match is None:
+                continue
+            prefixes.setdefault(match.group(1), set()).add(int(match.group(2)))
+
+    for prefix, numbers in prefixes.items():
+        if len(numbers) < 2:
+            continue
+        for number in range(min(numbers), max(numbers) + 1):
+            if number in numbers:
+                continue
+            stem = f"{prefix}{number}"
+            candidate = resolve_media_path_for_slug(folder_path, stem)
+            _merge_media_path(by_slug, folder_path, candidate)
+
+
 def _discover_media_from_frame_dirs(
     project: Project,
     folder_name: str,
@@ -310,13 +347,8 @@ def _discover_media_from_frame_dirs(
         if matched is not None:
             _merge_media_path(by_slug, folder_path, matched)
             continue
-        for ext in _PREFERRED_VIDEO_EXTENSIONS + _PREFERRED_IMAGE_EXTENSIONS:
-            if ext not in MEDIA_EXTENSIONS:
-                continue
-            candidate = folder_path / f"{frame_dir.name}{ext}"
-            if media_stem_slug(candidate) not in by_slug:
-                _merge_media_path(by_slug, folder_path, candidate)
-                break
+        candidate = resolve_media_path_for_slug(folder_path, frame_dir.name)
+        _merge_media_path(by_slug, folder_path, candidate)
 
 
 def discover_folder_media_paths(project: Project, folder_name: str) -> list[Path]:
@@ -343,11 +375,41 @@ def discover_folder_media_paths(project: Project, folder_name: str) -> list[Path
                 continue
             _merge_media_path(by_slug, folder_path, folder_path / name)
 
+    _discover_gaps_from_cache_dir(project, folder_name, folder_path, by_slug)
     _discover_media_from_frame_dirs(project, folder_name, by_slug)
 
     return sorted(by_slug.values(), key=lambda path: path.name.casefold())
 
 
+def resolve_media_path_for_slug(folder_path: Path, slug: str) -> Path:
+    """Findet eine Mediendatei zu einem Frame-/Cache-Slug im Ordner."""
+    slug_cf = slug.casefold()
+    for media_path in list_media_files(folder_path):
+        if media_stem_slug(media_path) == slug_cf:
+            return media_path
+    for ext in _PREFERRED_VIDEO_EXTENSIONS + _PREFERRED_IMAGE_EXTENSIONS:
+        if ext not in MEDIA_EXTENSIONS:
+            continue
+        candidate = folder_path / f"{slug}{ext}"
+        if media_stem_slug(candidate) == slug_cf:
+            return candidate
+    return folder_path / f"{slug}.mp4"
+
+
 def save_cached_media(cache_file: Path, entry: AssetMediaAnalysis) -> None:
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     cache_file.write_text(entry.model_dump_json(indent=2), encoding="utf-8")
+
+
+def _save_cached_media_safe(
+    cache_file: Path,
+    entry: AssetMediaAnalysis,
+) -> AssetMediaAnalysis:
+    """Speichert Cache-JSON; bei Schreibfehler bleibt der Fehler im Eintrag."""
+    try:
+        save_cached_media(cache_file, entry)
+        return entry
+    except OSError as exc:
+        entry.error = f"Cache konnte nicht geschrieben werden: {exc}"
+        entry.description = ""
+        return entry

@@ -111,3 +111,17 @@ def extract_frames(
                 next_index += 1
 
     return frames
+
+
+def list_existing_frame_jpegs(output_dir: Path) -> list[Path]:
+    """Vorhandene extrahierte JPG-Frames (Fallback bei iCloud-Schreibfehlern)."""
+    if not output_dir.is_dir():
+        return []
+    frames: list[Path] = []
+    for frame_path in sorted(output_dir.glob("frame_*.jpg")):
+        try:
+            if frame_path.is_file() and frame_path.stat().st_size > 0:
+                frames.append(frame_path)
+        except OSError:
+            continue
+    return frames

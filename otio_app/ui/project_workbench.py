@@ -31,7 +31,10 @@ from otio_app.services.gemini_client import (
     is_gemini_configured,
 )
 from otio_app.services.inventory_loader import sync_folder_inventories_from_cache
-from otio_app.services.media_inventory_cache import discover_folder_media_paths
+from otio_app.services.media_inventory_cache import (
+    discover_folder_media_paths,
+    list_assets_missing_successful_cache,
+)
 from otio_app.services.voice_analyzer import analyze_voice_over
 from otio_app.services.whisper_transcriber import (
     WhisperNotAvailableError,
@@ -343,6 +346,17 @@ def _render_analysis_actions(
 
     st.divider()
     st.markdown("**Asset-Ordner** — Gemini analysiert nur Frame-Bilder (kostenpflichtig).")
+    if selected_folders:
+        for folder_name in selected_folders:
+            missing = list_assets_missing_successful_cache(project, folder_name)
+            total = len(discover_folder_media_paths(project, folder_name))
+            if missing:
+                labels = ", ".join(f"`{path.name}`" for path in missing[:8])
+                suffix = " …" if len(missing) > 8 else ""
+                st.warning(
+                    f"**{folder_name}:** {len(missing)} von {total} Assets ohne Analyse-JSON "
+                    f"({labels}{suffix})"
+                )
     if st.button("📁 Ausgewählte Ordner analysieren", key=f"assets_{project.id}"):
         if not selected_folders:
             st.warning("Bitte mindestens einen Ordner unter „Ordner“ auswählen.")
