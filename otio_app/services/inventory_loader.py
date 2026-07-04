@@ -12,6 +12,7 @@ from otio_app.project_layout import get_folder_inventory_path, get_inventory_dir
 from otio_app.services.folder_asset_status import folder_is_fully_analyzed
 from otio_app.services.manual_folder_completion import is_manually_complete
 from otio_app.services.media_inventory_cache import (
+    discover_folder_media_paths,
     is_successfully_analyzed,
     load_cached_media,
     load_cached_media_for_asset,
@@ -19,7 +20,6 @@ from otio_app.services.media_inventory_cache import (
     save_cached_media,
     scan_folder_cache_assets,
 )
-from otio_app.services.media_utils import list_media_files
 
 
 @dataclass(frozen=True)
@@ -76,7 +76,7 @@ def delete_folder_inventory(project: Project, folder_name: str) -> None:
 
 def folder_is_green(project: Project, folder_name: str) -> bool:
     """Grün = alle Assets erfolgreich analysiert oder manuell freigegeben."""
-    media_paths = list_media_files(project.project_root_path / folder_name)
+    media_paths = discover_folder_media_paths(project, folder_name)
     if not media_paths:
         return False
     if folder_is_fully_analyzed(project, folder_name):
@@ -86,7 +86,7 @@ def folder_is_green(project: Project, folder_name: str) -> bool:
 
 def sync_folder_inventory_with_status(project: Project, folder_name: str) -> bool:
     """Grün → Inventory-JSON erstellen/aktualisieren. Nicht grün → JSON entfernen."""
-    media_paths = list_media_files(project.project_root_path / folder_name)
+    media_paths = discover_folder_media_paths(project, folder_name)
     if not media_paths:
         delete_folder_inventory(project, folder_name)
         return False
@@ -178,14 +178,8 @@ def materialize_folder_inventory_from_cache(
 ) -> tuple[AssetFolderAnalysis | None, str | None]:
     """Erstellt eine Ordner-JSON aus dem Medien-Cache (optional auch unvollständig)."""
     folder_path = project.project_root_path / folder_name
-    media_paths = list_media_files(folder_path)
+    media_paths = discover_folder_media_paths(project, folder_name)
     indexed_cache = _cached_assets_by_filename(project, folder_name)
-
-    if not media_paths and indexed_cache:
-        media_paths = sorted(
-            {Path(asset.path) for asset in indexed_cache.values()},
-            key=lambda path: path.name.casefold(),
-        )
 
     if not media_paths:
         if indexed_cache:
@@ -255,7 +249,7 @@ def sync_folder_inventories_from_cache(
         migrate_legacy_per_asset_cache_folder(project, folder_name)
         out_path = get_folder_inventory_path(project.work_dir_path, folder_name)
         existed_before = out_path.is_file()
-        media_count = len(list_media_files(project.project_root_path / folder_name))
+        media_count = len(discover_folder_media_paths(project, folder_name))
         cache_count = len(scan_folder_cache_assets(project, folder_name))
 
         created_now = sync_folder_inventory_with_status(project, folder_name)
@@ -388,7 +382,7 @@ def load_folder_inventory(project: Project, folder_name: str) -> AssetFolderAnal
     migrate_legacy_inventory(project)
 
     folder_path = project.project_root_path / folder_name
-    media_paths = list_media_files(folder_path)
+    media_paths = discover_folder_media_paths(project, folder_name)
 
     path = get_folder_inventory_path(project.work_dir_path, folder_name)
     item = load_folder_inventory_file(path)

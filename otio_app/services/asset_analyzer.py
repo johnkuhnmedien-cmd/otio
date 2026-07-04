@@ -24,12 +24,13 @@ from otio_app.services.inventory_loader import (
     sync_folder_inventory_with_status,
 )
 from otio_app.services.media_inventory_cache import (
+    discover_folder_media_paths,
     is_successfully_analyzed,
     load_cached_media_for_asset,
     media_cache_path,
     save_cached_media,
 )
-from otio_app.services.media_utils import list_media_files
+from otio_app.services.media_utils import NO_ANALYZABLE_MEDIA_DESCRIPTION
 
 
 def _frames_dir(project: Project, folder_name: str, media_path: Path) -> Path:
@@ -52,7 +53,7 @@ def _folder_summary(assets: list[AssetMediaAnalysis]) -> str:
 def _count_media_for_folders(project: Project, folder_names: list[str]) -> int:
     total = 0
     for folder_name in folder_names:
-        total += len(list_media_files(project.project_root_path / folder_name))
+        total += len(discover_folder_media_paths(project, folder_name))
     return total
 
 
@@ -81,7 +82,7 @@ def _analyze_single_media(
     )
 
     if not frames:
-        entry.description = "Keine analysierbaren Medien gefunden."
+        entry.description = NO_ANALYZABLE_MEDIA_DESCRIPTION
         save_cached_media(cache_file, entry)
         return entry, "fehler"
     if use_api:
@@ -120,7 +121,7 @@ def _analyze_folder(
     report: AnalysisRunReport | None = None,
 ) -> AssetFolderAnalysis:
     folder_path = project.project_root_path / folder_name
-    media_paths = list_media_files(folder_path)
+    media_paths = discover_folder_media_paths(project, folder_name)
 
     existing = should_skip_folder_analysis(project, folder_name, media_paths)
     if existing is not None:
@@ -223,7 +224,7 @@ def _analyze_folder(
         description=_folder_summary(assets),
     )
     if not assets:
-        item.description = "Keine analysierbaren Medien gefunden."
+        item.description = NO_ANALYZABLE_MEDIA_DESCRIPTION
 
     inventory_saved = sync_folder_inventory_with_status(project, folder_name)
     if report is not None:

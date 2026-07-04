@@ -9,10 +9,10 @@ from otio_app.services.folder_asset_status import folder_is_fully_analyzed
 from otio_app.services.inventory_loader import sync_folder_inventory_with_status
 from otio_app.services.manual_folder_completion import is_manually_complete
 from otio_app.services.media_inventory_cache import (
+    discover_folder_media_paths,
     is_successfully_analyzed,
     load_cached_media_for_asset,
 )
-from otio_app.services.media_utils import list_media_files
 
 
 class FolderAnalysisState(str, Enum):
@@ -38,8 +38,7 @@ def is_manual_complete_only(project: Project, folder_name: str) -> bool:
 
 def get_folder_analysis_state(project: Project, folder_name: str) -> FolderAnalysisState:
     """Grün bei vollständiger Analyse oder manueller Freigabe; dann Inventory-JSON sync."""
-    folder_path = project.project_root_path / folder_name
-    media_paths = list_media_files(folder_path)
+    media_paths = discover_folder_media_paths(project, folder_name)
     if not media_paths:
         return FolderAnalysisState.EMPTY
 

@@ -10,6 +10,11 @@ from typing import Optional
 from otio_app.analysis_models import AssetMediaAnalysis
 from otio_app.models import Project
 from otio_app.project_layout import get_inventory_dir, safe_folder_slug
+from otio_app.services.media_utils import (
+    MEDIA_EXTENSIONS,
+    NO_ANALYZABLE_MEDIA_DESCRIPTION,
+    list_media_files,
+)
 
 
 def media_cache_path(project: Project, folder_name: str, media_path: Path) -> Path:
@@ -141,9 +146,7 @@ def migrate_legacy_per_asset_cache_folder(
     if not legacy_dir.is_dir():
         return
 
-    from otio_app.services.media_utils import list_media_files
-
-    media_paths = list_media_files(project.project_root_path / folder_name)
+    media_paths = discover_folder_media_paths(project, folder_name)
     if media_paths:
         for media_path in media_paths:
             migrate_legacy_per_asset_cache_file(project, folder_name, media_path)
@@ -175,7 +178,41 @@ def is_completed_analysis(entry: AssetMediaAnalysis) -> bool:
 
 def is_successfully_analyzed(entry: AssetMediaAnalysis) -> bool:
     """True nur bei erfolgreicher Beschreibung (kein reiner Fehler-Eintrag)."""
-    return bool(entry.description.strip())
+    description = entry.description.strip()
+    if not description:
+        return False
+    if description == NO_ANALYZABLE_MEDIA_DESCRIPTION:
+        return False
+    return True
+
+
+def discover_folder_media_paths(project: Project, folder_name: str) -> list[Path]:
+    """Medien im Ordner: Dateisystem plus Pfade aus dem Analyse-Cache vereinen."""
+    folder_path = project.project_root_path / folder_name
+    by_name: dict[str, Path] = {}
+
+    for media_path in list_media_files(folder_path):
+        by_name[media_path.name.casefold()] = media_path
+
+    for cache_dir in list_cache_dirs_for_folder(project, folder_name):
+        if not cache_dir.is_dir():
+            continue
+        try:
+            cache_files = sorted(cache_dir.glob("*.json"))
+        except OSError:
+            continue
+        for cache_file in cache_files:
+            cached = load_cached_media(cache_file)
+            if cached is None or not cached.path:
+                continue
+            name = Path(cached.path).name
+            if not name or Path(name).suffix.lower() not in MEDIA_EXTENSIONS:
+                continue
+            key = name.casefold()
+            if key not in by_name:
+                by_name[key] = folder_path / name
+
+    return sorted(by_name.values(), key=lambda path: path.name.casefold())
 
 
 def save_cached_media(cache_file: Path, entry: AssetMediaAnalysis) -> None:

@@ -31,7 +31,7 @@ from otio_app.services.gemini_client import (
     is_gemini_configured,
 )
 from otio_app.services.inventory_loader import sync_folder_inventories_from_cache
-from otio_app.services.media_utils import list_media_files
+from otio_app.services.media_inventory_cache import discover_folder_media_paths
 from otio_app.services.voice_analyzer import analyze_voice_over
 from otio_app.services.whisper_transcriber import (
     WhisperNotAvailableError,
@@ -159,7 +159,7 @@ def _run_asset_analysis(
     current = get_project_by_id(project.id)
     assert current is not None
     total_media = sum(
-        len(list_media_files(current.project_root_path / folder_name))
+        len(discover_folder_media_paths(current, folder_name))
         for folder_name in folders
     )
     on_progress = _make_asset_progress_ui(total_media)
