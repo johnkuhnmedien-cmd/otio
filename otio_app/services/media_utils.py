@@ -150,7 +150,6 @@ def probe_duration_seconds(path: Path) -> Optional[float]:
                 str(path),
             ],
             capture_output=True,
-            text=True,
             check=False,
         )
     except FileNotFoundError:
@@ -158,7 +157,8 @@ def probe_duration_seconds(path: Path) -> Optional[float]:
     if result.returncode != 0:
         return None
     try:
-        payload = json.loads(result.stdout or "{}")
+        stdout = (result.stdout or b"").decode("utf-8", errors="replace")
+        payload = json.loads(stdout or "{}")
         duration = payload.get("format", {}).get("duration")
         return float(duration) if duration is not None else None
     except (json.JSONDecodeError, ValueError, TypeError):

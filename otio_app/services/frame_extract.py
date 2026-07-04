@@ -33,24 +33,26 @@ def _extract_frame_at(
     frame_index: int,
 ) -> Path | None:
     frame_path = output_dir / f"frame_{frame_index:03d}.jpg"
-    result = subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            f"{timestamp:.3f}",
-            "-i",
-            str(media_path),
-            "-frames:v",
-            "1",
-            "-q:v",
-            "2",
-            str(frame_path),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                f"{timestamp:.3f}",
+                "-i",
+                str(media_path),
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
+                str(frame_path),
+            ],
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return None
     if result.returncode == 0 and frame_path.is_file() and frame_path.stat().st_size > 0:
         return frame_path
     try:
