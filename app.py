@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from otio_app.defaults import DEFAULT_FRAMES_PER_SHOT, DEFAULT_VOICE_OVER_SUBDIR
 from otio_app.models import ProjectCreate
-from otio_app.paths import create_work_dir, normalize_path
+from otio_app.paths import clean_user_path_input, create_work_dir, normalize_path
 from otio_app.project_layout import (
     classify_subdirectories,
     default_work_dir,
@@ -184,12 +184,12 @@ if page == PAGE_NEW:
     )
 
     with st.form("project_form"):
-        name = st.text_input("Projektname *")
         project_root = st.text_input(
             "Projektordner *",
-            help="Hauptordner des Projekts, z. B. /Users/.../USA — ohne Anführungszeichen",
+            help="Hauptordner des Projekts — ohne Anführungszeichen",
             placeholder="/Users/claudiakuhn/Documents/YT/Unglaubliche Welt/USA",
         )
+        name = st.text_input("Projektname *")
         voice_over_subdir = st.text_input(
             "Voice-over-Unterordner",
             value=DEFAULT_VOICE_OVER_SUBDIR,
@@ -222,43 +222,55 @@ if page == PAGE_NEW:
         submitted = st.form_submit_button("Ordner erfassen")
 
     if submitted:
-        try:
-            project_data = ProjectCreate(
-                name=name,
-                project_root=project_root,
-                work_dir=work_dir or None,
-                voice_over_subdir=voice_over_subdir,
-                language=language,
-                frames_per_shot=int(frames_per_shot),
-                fps=float(fps),
-                width=int(width),
-                height=int(height),
-                aspect_ratio=aspect_ratio,
-                target_platform=target_platform,
-                notes=notes or None,
+        if not clean_user_path_input(project_root):
+            st.error(
+                "Bitte den **Projektordner** eintragen (erstes Feld im Formular). "
+                "Tipp: Im Finder Rechtsklick auf den USA-Ordner → "
+                "Option gedrückt halten → „Pfadname kopieren“."
             )
-        except ValidationError as exc:
-            st.session_state.pop(PREVIEW_KEY, None)
-            st.session_state.pop(PENDING_KEY, None)
-            for error in exc.errors():
-                st.error(error["msg"])
+        elif not name.strip():
+            st.error("Bitte einen **Projektname** eintragen.")
         else:
-            scan = scan_project_structure(
-                project_data.project_root_path,
-                project_data.work_dir_path,
-                project_data.voice_over_subdir,
-                project_data.language,
-            )
-            st.session_state[PREVIEW_KEY] = {
-                "project": project_data.model_dump(mode="json"),
-                "all_subdirs": scan.all_subdirectory_names,
-                "scan_error": scan.error,
-                "scan_warning": scan.warning,
-                "diagnostic": (
-                    scan.diagnostic.__dict__ if scan.diagnostic is not None else None
-                ),
-            }
-            st.session_state.pop(PENDING_KEY, None)
+            try:
+                project_data = ProjectCreate(
+                    name=name,
+                    project_root=project_root,
+                    work_dir=work_dir or None,
+                    voice_over_subdir=voice_over_subdir,
+                    language=language,
+                    frames_per_shot=int(frames_per_shot),
+                    fps=float(fps),
+                    width=int(width),
+                    height=int(height),
+                    aspect_ratio=aspect_ratio,
+                    target_platform=target_platform,
+                    notes=notes or None,
+                )
+            except ValidationError as exc:
+                st.session_state.pop(PREVIEW_KEY, None)
+                st.session_state.pop(PENDING_KEY, None)
+                for error in exc.errors():
+                    st.error(error["msg"])
+            else:
+                scan = scan_project_structure(
+                    project_data.project_root_path,
+                    project_data.work_dir_path,
+                    project_data.voice_over_subdir,
+                    project_data.language,
+                )
+                st.session_state[PREVIEW_KEY] = {
+                    "project": project_data.model_dump(mode="json"),
+                    "all_subdirs": scan.all_subdirectory_names,
+                    "scan_error": scan.error,
+                    "scan_warning": scan.warning,
+                    "diagnostic": (
+                        scan.diagnostic.__dict__
+                        if scan.diagnostic is not None
+                        else None
+                    ),
+                }
+                st.session_state.pop(PENDING_KEY, None)
+                st.rerun()
 
     if PREVIEW_KEY in st.session_state:
         preview = st.session_state[PREVIEW_KEY]
@@ -274,6 +286,14 @@ if page == PAGE_NEW:
             _render_path_diagnostic(PathDiagnostic(**preview["diagnostic"]))
 
         all_subdirs = preview.get("all_subdirs", [])
+        if all_subdirs:
+            st.success(f"{len(all_subdirs)} Unterordner erkannt.")
+        elif not preview.get("scan_error"):
+            st.warning(
+                "Keine Unterordner gefunden. Prüfe die Pfad-Diagnose unten "
+                "oder klicke „Erneut scannen“."
+            )
+
         if not all_subdirs:
             if st.button("Erneut scannen"):
                 scan = scan_project_structure(

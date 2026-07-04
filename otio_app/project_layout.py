@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -113,6 +114,38 @@ class PathDiagnostic:
         return self.total_entries > 0
 
 
+def _list_names_subprocess(path: Path) -> tuple[list[str], list[str], str | None]:
+    """Fallback für macOS/iCloud: Ordner mit /bin/ls -1p lesen (ohne shell=True)."""
+    try:
+        result = subprocess.run(
+            ["/bin/ls", "-1p", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        return [], [], str(exc)
+
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or "").strip()
+        return [], [], message or f"ls exit {result.returncode}"
+
+    subdirs: list[str] = []
+    all_names: list[str] = []
+    for line in result.stdout.splitlines():
+        entry = line.strip()
+        if not entry:
+            continue
+        if entry.endswith("/"):
+            name = entry.rstrip("/")
+            if not name.startswith("."):
+                subdirs.append(name)
+                all_names.append(name)
+        elif not entry.startswith("."):
+            all_names.append(entry)
+    return subdirs, all_names, None
+
+
 def diagnose_project_root(project_root: Path) -> PathDiagnostic:
     """Liefert eine ausführliche Diagnose für den Projektordner."""
     resolved = project_root.expanduser().resolve()
@@ -167,6 +200,16 @@ def diagnose_project_root(project_root: Path) -> PathDiagnostic:
             name for name in raw_names if not name.startswith(".")
         )
         used_icloud_fallback = bool(subdirectory_names)
+
+    if not subdirectory_names and exists and is_directory:
+        ls_subdirs, ls_all, ls_error = _list_names_subprocess(resolved)
+        if ls_subdirs:
+            subdirectory_names = sorted(ls_subdirs, key=str.lower)
+            if not raw_names:
+                raw_names = ls_all
+            used_icloud_fallback = True
+        elif ls_error and not read_error:
+            read_error = ls_error
 
     return PathDiagnostic(
         input_path=str(project_root),
