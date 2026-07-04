@@ -86,9 +86,15 @@ def _collect_media_filenames(directory: Path) -> tuple[list[str], bool]:
         _list_media_names_glob,
     ):
         found, _error = lister(directory)
-        if found:
-            names.update(found)
-            break
+        names.update(found)
+
+    if directory.is_dir():
+        for ext in MEDIA_EXTENSIONS:
+            try:
+                for entry in directory.glob(f"*{ext}"):
+                    names.add(entry.name)
+            except OSError:
+                pass
 
     if not names:
         ls_names, _ls_error = _list_media_names_subprocess(directory)
@@ -108,7 +114,7 @@ def list_media_files(directory: Path) -> list[Path]:
     if not directory.is_dir():
         return []
 
-    media_names, used_subprocess = _collect_media_filenames(directory)
+    media_names, _used_subprocess = _collect_media_filenames(directory)
     files: list[Path] = []
     for name in media_names:
         child = directory / name
@@ -118,8 +124,7 @@ def list_media_files(directory: Path) -> list[Path]:
                 continue
         except OSError:
             pass
-        if used_subprocess:
-            files.append(child)
+        files.append(child)
     return files
 
 

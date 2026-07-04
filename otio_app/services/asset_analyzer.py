@@ -26,12 +26,17 @@ from otio_app.services.inventory_loader import (
 )
 from otio_app.services.media_inventory_cache import (
     discover_folder_media_paths,
-    is_successfully_analyzed,
+    has_successful_asset_cache,
+    list_assets_missing_successful_cache,
     load_cached_media_for_asset,
     media_cache_path,
+    media_stem_slug,
     save_cached_media,
 )
-from otio_app.services.media_utils import NO_ANALYZABLE_MEDIA_DESCRIPTION
+from otio_app.services.media_utils import (
+    NO_ANALYZABLE_MEDIA_DESCRIPTION,
+    is_image_media,
+)
 
 
 def _frames_dir(project: Project, folder_name: str, media_path: Path) -> Path:
@@ -68,17 +73,20 @@ def _analyze_single_media(
 ) -> tuple[AssetMediaAnalysis, str]:
     cache_file = media_cache_path(project, folder_name, media_path)
     per_file = max(1, project.frames_per_shot)
-    cached = load_cached_media_for_asset(project, folder_name, media_path)
-    if cached is not None and is_successfully_analyzed(cached):
+
+    if has_successful_asset_cache(project, folder_name, media_path):
+        cached = load_cached_media_for_asset(project, folder_name, media_path)
+        assert cached is not None
         return cached, "cache"
 
     frames_dir = _frames_dir(project, folder_name, media_path)
     shutil.rmtree(frames_dir, ignore_errors=True)
 
+    frame_count = 1 if is_image_media(media_path) else per_file
     frames = extract_frames(
         media_path,
         frames_dir,
-        per_file,
+        frame_count,
     )
     entry = AssetMediaAnalysis(
         path=str(media_path),
@@ -124,23 +132,25 @@ def _analyze_folder(
     folder_count: int = 1,
     report: AnalysisRunReport | None = None,
 ) -> AssetFolderAnalysis:
-    folder_path = project.project_root_path / folder_name
     media_paths = discover_folder_media_paths(project, folder_name)
+    missing_cache = list_assets_missing_successful_cache(project, folder_name)
+    missing_slugs = {media_stem_slug(path) for path in missing_cache}
 
-    existing = should_skip_folder_analysis(project, folder_name, media_paths)
-    if existing is not None:
-        on_progress(
-            "folder_skip",
-            {
-                "folder": folder_name,
-                "folder_index": folder_index,
-                "folder_count": folder_count,
-                "reason": "Alle Assets analysiert, Inventar vorhanden",
-            },
-        )
-        if report is not None:
-            report.folders_skipped.append(folder_name)
-        return existing
+    if not missing_cache:
+        existing = should_skip_folder_analysis(project, folder_name, media_paths)
+        if existing is not None:
+            on_progress(
+                "folder_skip",
+                {
+                    "folder": folder_name,
+                    "folder_index": folder_index,
+                    "folder_count": folder_count,
+                    "reason": "Alle Assets haben Analyse-JSON, Inventar vorhanden",
+                },
+            )
+            if report is not None:
+                report.folders_skipped.append(folder_name)
+            return existing
 
     on_progress(
         "folder_start",
@@ -149,11 +159,13 @@ def _analyze_folder(
             "folder_index": folder_index,
             "folder_count": folder_count,
             "media_count": len(media_paths),
+            "missing_cache_count": len(missing_cache),
         },
     )
 
     assets: list[AssetMediaAnalysis] = []
     for media_index, media_path in enumerate(media_paths, start=1):
+        needs_analysis = media_stem_slug(media_path) in missing_slugs
         on_progress(
             "media_start",
             {
@@ -163,6 +175,7 @@ def _analyze_folder(
                 "media_count": len(media_paths),
                 "folder_index": folder_index,
                 "folder_count": folder_count,
+                "needs_analysis": needs_analysis,
             },
         )
         try:

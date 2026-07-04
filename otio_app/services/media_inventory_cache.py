@@ -67,17 +67,97 @@ def load_cached_media(cache_file: Path) -> Optional[AssetMediaAnalysis]:
         return None
 
 
+def media_stem_slug(media_path: Path) -> str:
+    """Einheitlicher Slug für Medien-Dateien (Cache, Frames, iCloud-Namen)."""
+    return safe_folder_slug(media_path.stem).casefold()
+
+
+def cache_json_stem_slug(cache_filename: str) -> str:
+    """Slug aus einem Cache-Dateinamen (z. B. Florida_Keys_Asset15.mp4.json)."""
+    base = cache_filename[:-5] if cache_filename.endswith(".json") else cache_filename
+    return safe_folder_slug(Path(base).stem).casefold()
+
+
+def all_cache_paths_for_asset(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+) -> list[Path]:
+    """Alle möglichen Cache-Pfade für ein Medium (exakt + Slug-Match)."""
+    seen: set[str] = set()
+    ordered: list[Path] = []
+    for cache_file in cached_media_paths_for_asset(project, folder_name, media_path):
+        key = str(cache_file)
+        if key not in seen:
+            seen.add(key)
+            ordered.append(cache_file)
+
+    target_slug = media_stem_slug(media_path)
+    for cache_dir in list_cache_dirs_for_folder(project, folder_name):
+        if not cache_dir.is_dir():
+            continue
+        try:
+            cache_files = sorted(cache_dir.glob("*.json"))
+        except OSError:
+            continue
+        for cache_file in cache_files:
+            if cache_json_stem_slug(cache_file.name) != target_slug:
+                continue
+            key = str(cache_file)
+            if key not in seen:
+                seen.add(key)
+                ordered.append(cache_file)
+    return ordered
+
+
 def load_cached_media_for_asset(
     project: Project,
     folder_name: str,
     media_path: Path,
 ) -> Optional[AssetMediaAnalysis]:
     """Lädt Cache-Eintrag aus neuem oder altem Speicherort."""
-    for cache_file in cached_media_paths_for_asset(project, folder_name, media_path):
+    for cache_file in all_cache_paths_for_asset(project, folder_name, media_path):
         cached = load_cached_media(cache_file)
         if cached is not None:
             return cached
     return None
+
+
+def has_successful_asset_cache(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+) -> bool:
+    """True, wenn für dieses Medium eine erfolgreiche Analyse-JSON existiert."""
+    cached = load_cached_media_for_asset(project, folder_name, media_path)
+    return cached is not None and is_successfully_analyzed(cached)
+
+
+def list_assets_missing_successful_cache(
+    project: Project,
+    folder_name: str,
+) -> list[Path]:
+    """Medien ohne gültige Analyse-JSON — diese müssen (neu) analysiert werden."""
+    return [
+        media_path
+        for media_path in discover_folder_media_paths(project, folder_name)
+        if not has_successful_asset_cache(project, folder_name, media_path)
+    ]
+
+
+def _prefer_discovered_media_path(current: Path, candidate: Path) -> Path:
+    try:
+        candidate_is_file = candidate.is_file()
+        current_is_file = current.is_file()
+    except OSError:
+        return current
+    if candidate_is_file and not current_is_file:
+        return candidate
+    if current_is_file and not candidate_is_file:
+        return current
+    if len(candidate.name) < len(current.name):
+        return candidate
+    return current
 
 
 def migrate_legacy_per_asset_cache_file(
@@ -190,17 +270,23 @@ def is_successfully_analyzed(entry: AssetMediaAnalysis) -> bool:
 
 
 def _merge_media_path(
-    by_name: dict[str, Path],
+    by_slug: dict[str, Path],
     folder_path: Path,
     media_path: Path,
 ) -> None:
-    by_name[media_path.name.casefold()] = media_path
+    slug = media_stem_slug(media_path)
+    resolved = folder_path / media_path.name if media_path.parent != folder_path else media_path
+    existing = by_slug.get(slug)
+    if existing is None:
+        by_slug[slug] = resolved
+        return
+    by_slug[slug] = _prefer_discovered_media_path(existing, resolved)
 
 
 def _discover_media_from_frame_dirs(
     project: Project,
     folder_name: str,
-    by_name: dict[str, Path],
+    by_slug: dict[str, Path],
 ) -> None:
     """Ergänzt Medien, für die bereits Frame-Ordner existieren (z. B. nach Teilanalyse)."""
     folder_path = project.project_root_path / folder_name
@@ -208,12 +294,8 @@ def _discover_media_from_frame_dirs(
     if not frames_root.is_dir():
         return
 
-    slug_to_path = {
-        safe_folder_slug(path.stem): path for path in list_media_files(folder_path)
-    }
-    slug_to_path.update(
-        {safe_folder_slug(path.stem): path for path in by_name.values()}
-    )
+    slug_to_path = {media_stem_slug(path): path for path in list_media_files(folder_path)}
+    slug_to_path.update({media_stem_slug(path): path for path in by_slug.values()})
 
     try:
         frame_dirs = sorted(frames_root.iterdir(), key=lambda path: path.name.casefold())
@@ -223,27 +305,27 @@ def _discover_media_from_frame_dirs(
     for frame_dir in frame_dirs:
         if not frame_dir.is_dir():
             continue
-        slug = frame_dir.name
+        slug = frame_dir.name.casefold()
         matched = slug_to_path.get(slug)
         if matched is not None:
-            _merge_media_path(by_name, folder_path, matched)
+            _merge_media_path(by_slug, folder_path, matched)
             continue
         for ext in _PREFERRED_VIDEO_EXTENSIONS + _PREFERRED_IMAGE_EXTENSIONS:
             if ext not in MEDIA_EXTENSIONS:
                 continue
-            candidate = folder_path / f"{slug}{ext}"
-            if candidate.name.casefold() not in by_name:
-                _merge_media_path(by_name, folder_path, candidate)
+            candidate = folder_path / f"{frame_dir.name}{ext}"
+            if media_stem_slug(candidate) not in by_slug:
+                _merge_media_path(by_slug, folder_path, candidate)
                 break
 
 
 def discover_folder_media_paths(project: Project, folder_name: str) -> list[Path]:
     """Medien im Ordner: Dateisystem plus Cache und Frame-Arbeit vereinen."""
     folder_path = project.project_root_path / folder_name
-    by_name: dict[str, Path] = {}
+    by_slug: dict[str, Path] = {}
 
     for media_path in list_media_files(folder_path):
-        _merge_media_path(by_name, folder_path, media_path)
+        _merge_media_path(by_slug, folder_path, media_path)
 
     for cache_dir in list_cache_dirs_for_folder(project, folder_name):
         if not cache_dir.is_dir():
@@ -259,13 +341,11 @@ def discover_folder_media_paths(project: Project, folder_name: str) -> list[Path
             name = Path(cached.path).name
             if not name or Path(name).suffix.lower() not in MEDIA_EXTENSIONS:
                 continue
-            key = name.casefold()
-            if key not in by_name:
-                by_name[key] = folder_path / name
+            _merge_media_path(by_slug, folder_path, folder_path / name)
 
-    _discover_media_from_frame_dirs(project, folder_name, by_name)
+    _discover_media_from_frame_dirs(project, folder_name, by_slug)
 
-    return sorted(by_name.values(), key=lambda path: path.name.casefold())
+    return sorted(by_slug.values(), key=lambda path: path.name.casefold())
 
 
 def save_cached_media(cache_file: Path, entry: AssetMediaAnalysis) -> None:
