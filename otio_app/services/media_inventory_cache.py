@@ -381,6 +381,21 @@ def discover_folder_media_paths(project: Project, folder_name: str) -> list[Path
     return sorted(by_slug.values(), key=lambda path: path.name.casefold())
 
 
+def media_file_is_accessible(media_path: Path) -> tuple[bool, str | None]:
+    """Prüft, ob eine Mediendatei lokal lesbar ist (iCloud-Check)."""
+    try:
+        if not media_path.is_file():
+            return False, (
+                f"Mediendatei nicht lokal verfügbar: `{media_path.name}` "
+                "(iCloud — bitte im Finder laden)"
+            )
+        with media_path.open("rb") as handle:
+            handle.read(1)
+        return True, None
+    except OSError as exc:
+        return False, f"Mediendatei nicht lesbar: `{media_path.name}` — {exc}"
+
+
 def resolve_media_path_for_slug(folder_path: Path, slug: str) -> Path:
     """Findet eine Mediendatei zu einem Frame-/Cache-Slug im Ordner."""
     slug_cf = slug.casefold()
@@ -394,6 +409,17 @@ def resolve_media_path_for_slug(folder_path: Path, slug: str) -> Path:
         if media_stem_slug(candidate) == slug_cf:
             return candidate
     return folder_path / f"{slug}.mp4"
+
+
+def resolve_media_for_analysis(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+) -> Path:
+    """Ermittelt den echten Mediendatei-Pfad (Slug-Match im Ordner)."""
+    folder_path = project.project_root_path / folder_name
+    slug = safe_folder_slug(media_path.stem)
+    return resolve_media_path_for_slug(folder_path, slug)
 
 
 def save_cached_media(cache_file: Path, entry: AssetMediaAnalysis) -> None:

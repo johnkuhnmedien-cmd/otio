@@ -13,8 +13,8 @@ from otio_app.analysis_models import (
 )
 from otio_app.models import Project, validate_asset_selection
 from otio_app.project_layout import safe_folder_slug
+from otio_app.services.analysis_log import append_analysis_log
 from otio_app.services.analysis_progress import AnalysisRunReport, ProgressCallback, noop_progress
-from otio_app.services.folder_asset_status import folder_is_fully_analyzed
 from otio_app.services.frame_extract import extract_frames, list_existing_frame_jpegs
 from otio_app.services.gemini_client import (
     GeminiNotConfiguredError,
@@ -30,7 +30,9 @@ from otio_app.services.media_inventory_cache import (
     list_assets_missing_successful_cache,
     load_cached_media_for_asset,
     media_cache_path,
+    media_file_is_accessible,
     media_stem_slug,
+    resolve_media_for_analysis,
     _save_cached_media_safe,
 )
 from otio_app.services.media_utils import (
@@ -56,11 +58,16 @@ def _folder_summary(assets: list[AssetMediaAnalysis]) -> str:
     return "\n\n".join(parts)
 
 
-def _count_media_for_folders(project: Project, folder_names: list[str]) -> int:
+def _count_media_to_analyze(project: Project, folder_names: list[str]) -> int:
     total = 0
     for folder_name in folder_names:
-        total += len(discover_folder_media_paths(project, folder_name))
+        missing = list_assets_missing_successful_cache(project, folder_name)
+        total += len(missing)
     return total
+
+
+def _log(project: Project, message: str) -> None:
+    append_analysis_log(project, message)
 
 
 def _analyze_single_media(
@@ -71,39 +78,68 @@ def _analyze_single_media(
     use_api: bool,
     model: Optional[str],
 ) -> tuple[AssetMediaAnalysis, str]:
-    cache_file = media_cache_path(project, folder_name, media_path)
+    resolved_path = resolve_media_for_analysis(project, folder_name, media_path)
+    cache_file = media_cache_path(project, folder_name, resolved_path)
     per_file = max(1, project.frames_per_shot)
 
-    if has_successful_asset_cache(project, folder_name, media_path):
-        cached = load_cached_media_for_asset(project, folder_name, media_path)
+    _log(
+        project,
+        f"START {folder_name}/{resolved_path.name} "
+        f"cache={cache_file.name} resolved={resolved_path}",
+    )
+
+    if has_successful_asset_cache(project, folder_name, resolved_path):
+        cached = load_cached_media_for_asset(project, folder_name, resolved_path)
         assert cached is not None
+        _log(project, f"SKIP (Cache ok) {folder_name}/{resolved_path.name}")
         return cached, "cache"
 
-    frames_dir = _frames_dir(project, folder_name, media_path)
-    frame_count = 1 if is_image_media(media_path) else per_file
+    accessible, access_error = media_file_is_accessible(resolved_path)
+    if not accessible:
+        entry = AssetMediaAnalysis(
+            path=str(resolved_path),
+            error=access_error or "Mediendatei nicht lesbar",
+        )
+        entry = _save_cached_media_safe(cache_file, entry)
+        _log(project, f"FAIL (nicht lesbar) {folder_name}/{resolved_path.name}: {entry.error}")
+        return entry, "fehler"
 
-    frames = extract_frames(media_path, frames_dir, frame_count)
+    frames_dir = _frames_dir(project, folder_name, resolved_path)
+    frame_count = 1 if is_image_media(resolved_path) else per_file
+
+    frames = extract_frames(resolved_path, frames_dir, frame_count)
     if not frames:
         frames = list_existing_frame_jpegs(frames_dir)[:frame_count]
     if not frames:
         shutil.rmtree(frames_dir, ignore_errors=True)
-        frames = extract_frames(media_path, frames_dir, frame_count)
+        frames = extract_frames(resolved_path, frames_dir, frame_count)
     if not frames:
         frames = list_existing_frame_jpegs(frames_dir)[:frame_count]
 
+    _log(
+        project,
+        f"FRAMES {folder_name}/{resolved_path.name}: {len(frames)}/{frame_count} "
+        f"in {frames_dir}",
+    )
+
     entry = AssetMediaAnalysis(
-        path=str(media_path),
+        path=str(resolved_path),
         frames_used=[str(frame) for frame in frames],
     )
 
     if not frames:
         entry.description = NO_ANALYZABLE_MEDIA_DESCRIPTION
         entry = _save_cached_media_safe(cache_file, entry)
+        _log(
+            project,
+            f"FAIL (keine Frames) {folder_name}/{resolved_path.name} "
+            f"-> {cache_file.name} written={cache_file.is_file()}",
+        )
         return entry, "fehler"
     if use_api:
         try:
             entry.description = describe_media_from_frames(
-                media_path.name,
+                resolved_path.name,
                 folder_name,
                 frames,
                 project.language,
@@ -112,7 +148,13 @@ def _analyze_single_media(
             entry.error = None
             entry = _save_cached_media_safe(cache_file, entry)
             if entry.error and "Cache konnte nicht geschrieben werden" in entry.error:
+                _log(project, f"FAIL (Cache-Schreibfehler) {folder_name}/{resolved_path.name}: {entry.error}")
                 return entry, "fehler"
+            _log(
+                project,
+                f"OK (Gemini) {folder_name}/{resolved_path.name} -> {cache_file.name} "
+                f"written={cache_file.is_file()}",
+            )
             return entry, "neu"
         except GeminiNotConfiguredError:
             raise
@@ -120,10 +162,32 @@ def _analyze_single_media(
             entry.error = str(exc)
             entry.description = ""
             entry = _save_cached_media_safe(cache_file, entry)
+            _log(project, f"FAIL (Gemini) {folder_name}/{resolved_path.name}: {exc}")
             return entry, "fehler"
     entry.error = "API-Aufruf nicht bestätigt."
     entry = _save_cached_media_safe(cache_file, entry)
+    _log(project, f"FAIL (API nicht bestätigt) {folder_name}/{resolved_path.name}")
     return entry, "fehler"
+
+
+def _build_folder_assets(
+    project: Project,
+    folder_name: str,
+    media_paths: list[Path],
+    analyzed: dict[str, AssetMediaAnalysis],
+) -> list[AssetMediaAnalysis]:
+    assets: list[AssetMediaAnalysis] = []
+    for media_path in media_paths:
+        slug = media_stem_slug(media_path)
+        if slug in analyzed:
+            assets.append(analyzed[slug])
+            continue
+        cached = load_cached_media_for_asset(project, folder_name, media_path)
+        if cached is not None:
+            assets.append(cached)
+        else:
+            assets.append(AssetMediaAnalysis(path=str(media_path)))
+    return assets
 
 
 def _analyze_folder(
@@ -139,16 +203,18 @@ def _analyze_folder(
 ) -> AssetFolderAnalysis:
     media_paths = discover_folder_media_paths(project, folder_name)
     missing_cache = list_assets_missing_successful_cache(project, folder_name)
-    missing_slugs = {media_stem_slug(path) for path in missing_cache}
 
-    paths_by_slug = {media_stem_slug(path): path for path in media_paths}
-    for path in missing_cache:
-        paths_by_slug[media_stem_slug(path)] = path
-    media_paths = sorted(paths_by_slug.values(), key=lambda path: path.name.casefold())
+    _log(
+        project,
+        f"ORDNER {folder_name}: {len(media_paths)} Medien, "
+        f"{len(missing_cache)} ohne JSON: "
+        + ", ".join(path.name for path in missing_cache),
+    )
 
     if not missing_cache:
         existing = should_skip_folder_analysis(project, folder_name, media_paths)
         if existing is not None:
+            _log(project, f"ORDNER-SKIP {folder_name}: alle JSONs vorhanden")
             on_progress(
                 "folder_skip",
                 {
@@ -168,24 +234,23 @@ def _analyze_folder(
             "folder": folder_name,
             "folder_index": folder_index,
             "folder_count": folder_count,
-            "media_count": len(media_paths),
+            "media_count": len(missing_cache),
             "missing_cache_count": len(missing_cache),
         },
     )
 
-    assets: list[AssetMediaAnalysis] = []
-    for media_index, media_path in enumerate(media_paths, start=1):
-        needs_analysis = media_stem_slug(media_path) in missing_slugs
+    analyzed: dict[str, AssetMediaAnalysis] = {}
+    for media_index, media_path in enumerate(missing_cache, start=1):
         on_progress(
             "media_start",
             {
                 "folder": folder_name,
                 "media_name": media_path.name,
                 "media_index": media_index,
-                "media_count": len(media_paths),
+                "media_count": len(missing_cache),
                 "folder_index": folder_index,
                 "folder_count": folder_count,
-                "needs_analysis": needs_analysis,
+                "needs_analysis": True,
             },
         )
         try:
@@ -196,7 +261,7 @@ def _analyze_folder(
                 use_api=use_api,
                 model=model,
             )
-            assets.append(entry)
+            analyzed[media_stem_slug(media_path)] = entry
             if report is not None:
                 if outcome == "cache":
                     report.media_cached += 1
@@ -216,7 +281,7 @@ def _analyze_folder(
                     "folder": folder_name,
                     "media_name": media_path.name,
                     "media_index": media_index,
-                    "media_count": len(media_paths),
+                    "media_count": len(missing_cache),
                     "folder_index": folder_index,
                     "folder_count": folder_count,
                     "outcome": outcome,
@@ -227,8 +292,16 @@ def _analyze_folder(
             raise
         except Exception as exc:  # noqa: BLE001
             entry = AssetMediaAnalysis(path=str(media_path), error=str(exc))
-            _save_cached_media_safe(media_cache_path(project, folder_name, media_path), entry)
-            assets.append(entry)
+            _save_cached_media_safe(
+                media_cache_path(
+                    project,
+                    folder_name,
+                    resolve_media_for_analysis(project, folder_name, media_path),
+                ),
+                entry,
+            )
+            analyzed[media_stem_slug(media_path)] = entry
+            _log(project, f"FAIL (Exception) {folder_name}/{media_path.name}: {exc}")
             if report is not None:
                 report.media_failed += 1
                 report.failures.append(f"{folder_name}/{media_path.name}: {exc}")
@@ -238,12 +311,13 @@ def _analyze_folder(
                     "folder": folder_name,
                     "media_name": media_path.name,
                     "media_index": media_index,
-                    "media_count": len(media_paths),
+                    "media_count": len(missing_cache),
                     "outcome": "fehler",
                     "error": str(exc),
                 },
             )
 
+    assets = _build_folder_assets(project, folder_name, media_paths, analyzed)
     item = AssetFolderAnalysis(
         folder=folder_name,
         media_files=[asset.path for asset in assets],
@@ -255,6 +329,11 @@ def _analyze_folder(
         item.description = NO_ANALYZABLE_MEDIA_DESCRIPTION
 
     inventory_saved = sync_folder_inventory_with_status(project, folder_name)
+    _log(
+        project,
+        f"ORDNER-FERTIG {folder_name}: {len(missing_cache)} analysiert, "
+        f"inventory_saved={inventory_saved}",
+    )
     if report is not None:
         report.folders_processed.append(folder_name)
     on_progress(
@@ -278,10 +357,16 @@ def analyze_asset_folders(
     model: Optional[str] = None,
     on_progress: ProgressCallback = noop_progress,
 ) -> tuple[InventoryDocument, AnalysisRunReport]:
-    """Analysiert Asset-Ordner; Inventar-JSON nur bei vollständigem Ordner."""
+    """Analysiert fehlende Assets in Ordnern; Inventar-JSON nur bei vollständigem Ordner."""
     selected = validate_asset_selection(project.asset_subdir_names, folder_names)
     report = AnalysisRunReport()
-    total_media = _count_media_for_folders(project, selected)
+    total_media = _count_media_to_analyze(project, selected)
+    if total_media == 0:
+        total_media = sum(
+            len(discover_folder_media_paths(project, folder_name))
+            for folder_name in selected
+        )
+    _log(project, f"RUN START folders={selected} missing_assets={total_media}")
     on_progress(
         "start",
         {
@@ -306,6 +391,11 @@ def analyze_asset_folders(
             )
         )
 
+    _log(
+        project,
+        f"RUN END analyzed={report.media_analyzed} cached={report.media_cached} "
+        f"failed={report.media_failed} failures={report.failures}",
+    )
     on_progress(
         "complete",
         {

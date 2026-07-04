@@ -23,6 +23,7 @@ from otio_app.project_repository import (
     update_project_status,
 )
 from otio_app.services.analysis_progress import AnalysisRunReport
+from otio_app.services.analysis_log import read_analysis_log_tail
 from otio_app.services.asset_analyzer import analyze_asset_folders
 from otio_app.services.gemini_client import (
     GeminiNotConfiguredError,
@@ -127,7 +128,7 @@ def _make_asset_progress_ui(total_media: int):
             )
         elif phase == "media_start":
             detail_box.markdown(
-                f"Prüfe `{data['media_name']}` "
+                f"**Analysiere** `{data['media_name']}` "
                 f"({data['media_index']}/{data['media_count']} in {data['folder']})"
             )
         elif phase == "media_done":
@@ -162,9 +163,14 @@ def _run_asset_analysis(
     current = get_project_by_id(project.id)
     assert current is not None
     total_media = sum(
-        len(discover_folder_media_paths(current, folder_name))
+        len(list_assets_missing_successful_cache(current, folder_name))
         for folder_name in folders
     )
+    if total_media == 0:
+        total_media = sum(
+            len(discover_folder_media_paths(current, folder_name))
+            for folder_name in folders
+        )
     on_progress = _make_asset_progress_ui(total_media)
     try:
         _, report = analyze_asset_folders(
@@ -176,6 +182,10 @@ def _run_asset_analysis(
         )
         update_project_status(project.id, ProjectStatus.READY)
         _render_analysis_report(report)
+        log_tail = read_analysis_log_tail(current)
+        if log_tail:
+            with st.expander("Analyse-Protokoll (Details)", expanded=bool(report.failures)):
+                st.code(log_tail)
         return report
     except GeminiNotConfiguredError as exc:
         st.error(str(exc))
