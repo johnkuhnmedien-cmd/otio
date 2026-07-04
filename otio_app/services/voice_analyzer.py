@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
@@ -18,6 +19,12 @@ from otio_app.defaults import (
 )
 from otio_app.models import Project
 from otio_app.project_layout import safe_path_is_dir
+from otio_app.services.analysis_cancel import AnalysisCancelledError
+from otio_app.services.analysis_progress import (
+    ProgressCallback,
+    VoiceAnalysisRunReport,
+    noop_progress,
+)
 from otio_app.services.gemini_client import (
     GeminiNotConfiguredError,
     analyze_voice_over_file,
@@ -27,6 +34,8 @@ from otio_app.services.whisper_transcriber import (
     WhisperNotAvailableError,
     transcribe_audio_file,
 )
+
+ShouldCancel = Callable[[], bool]
 
 
 def _safe_cache_name(value: str) -> str:
@@ -87,6 +96,27 @@ def _segments_from_payload(payload: dict) -> list[VoiceSegment]:
     ]
 
 
+def _is_cancelled(should_cancel: ShouldCancel | None) -> bool:
+    return bool(should_cancel and should_cancel())
+
+
+def _write_voice_document(project: Project, results: list[VoiceFileAnalysis]) -> bool:
+    if not results:
+        return False
+    document = VoiceAnalysisDocument(
+        project_id=project.id,
+        language=project.language,
+        files=results,
+    )
+    output_path = project.voice_analysis_path
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        document.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    return True
+
+
 def _analyze_single_voice_file(
     project: Project,
     audio_path: Path,
@@ -95,7 +125,8 @@ def _analyze_single_voice_file(
     gemini_model: Optional[str],
     whisper_model: Optional[str],
     use_api: bool,
-) -> VoiceFileAnalysis:
+    should_cancel: ShouldCancel | None = None,
+) -> tuple[VoiceFileAnalysis, str]:
     resolved_backend = resolve_voice_backend(backend)
     engine_model = whisper_model or "small"
     if resolved_backend == VOICE_BACKEND_GEMINI:
@@ -104,7 +135,10 @@ def _analyze_single_voice_file(
     cache_file = _cache_path(project, audio_path, resolved_backend, engine_model)
     cached = _load_cached_voice(cache_file)
     if cached is not None and _is_completed_voice(cached):
-        return cached
+        return cached, "cache"
+
+    if _is_cancelled(should_cancel):
+        raise AnalysisCancelledError()
 
     duration = probe_duration_seconds(audio_path)
     entry = VoiceFileAnalysis(path=str(audio_path), duration_sec=duration)
@@ -112,7 +146,10 @@ def _analyze_single_voice_file(
     if not use_api:
         entry.error = "Analyse nicht bestätigt."
         _save_cached_voice(cache_file, entry)
-        return entry
+        return entry, "fehler"
+
+    if _is_cancelled(should_cancel):
+        raise AnalysisCancelledError()
 
     try:
         if resolved_backend == VOICE_BACKEND_WHISPER:
@@ -131,13 +168,15 @@ def _analyze_single_voice_file(
             )
         entry.segments = _segments_from_payload(payload)
         entry.error = None
+        outcome = "neu"
     except (GeminiNotConfiguredError, WhisperNotAvailableError):
         raise
     except Exception as exc:  # noqa: BLE001
         entry.error = str(exc)
+        outcome = "fehler"
 
     _save_cached_voice(cache_file, entry)
-    return entry
+    return entry, outcome
 
 
 def analyze_voice_over(
@@ -147,8 +186,11 @@ def analyze_voice_over(
     backend: str = VOICE_BACKEND_WHISPER,
     model: Optional[str] = None,
     whisper_model: Optional[str] = None,
-) -> VoiceAnalysisDocument:
+    on_progress: ProgressCallback = noop_progress,
+    should_cancel: ShouldCancel | None = None,
+) -> tuple[VoiceAnalysisDocument, VoiceAnalysisRunReport]:
     """Analysiert alle Audios im Voice-over-Ordner."""
+    report = VoiceAnalysisRunReport()
     voice_dir = project.voice_over_dir
     if not safe_path_is_dir(voice_dir):
         raise FileNotFoundError(f"Voice-over-Ordner nicht gefunden: {voice_dir}")
@@ -157,38 +199,106 @@ def analyze_voice_over(
     if not audio_files:
         raise FileNotFoundError(f"Keine Audiodateien in {voice_dir}")
 
+    on_progress(
+        "start",
+        {
+            "total_files": len(audio_files),
+            "backend": backend,
+        },
+    )
+
     results: list[VoiceFileAnalysis] = []
-    for audio_path in audio_files:
+    cancelled = False
+
+    for file_index, audio_path in enumerate(audio_files, start=1):
+        if _is_cancelled(should_cancel):
+            cancelled = True
+            break
+        on_progress(
+            "file_start",
+            {
+                "file_name": audio_path.name,
+                "file_index": file_index,
+                "file_count": len(audio_files),
+            },
+        )
         try:
-            results.append(
-                _analyze_single_voice_file(
-                    project,
-                    audio_path,
-                    backend=backend,
-                    gemini_model=model,
-                    whisper_model=whisper_model,
-                    use_api=use_api,
-                )
+            entry, outcome = _analyze_single_voice_file(
+                project,
+                audio_path,
+                backend=backend,
+                gemini_model=model,
+                whisper_model=whisper_model,
+                use_api=use_api,
+                should_cancel=should_cancel,
             )
+            results.append(entry)
+            if outcome == "cache":
+                report.files_cached += 1
+            elif outcome == "neu":
+                report.files_analyzed += 1
+            else:
+                report.files_failed += 1
+                if entry.error:
+                    report.failures.append(f"{audio_path.name}: {entry.error}")
+            on_progress(
+                "file_done",
+                {
+                    "file_name": audio_path.name,
+                    "file_index": file_index,
+                    "file_count": len(audio_files),
+                    "outcome": outcome,
+                    "error": entry.error,
+                },
+            )
+        except AnalysisCancelledError:
+            cancelled = True
+            break
         except (GeminiNotConfiguredError, WhisperNotAvailableError):
             raise
         except Exception as exc:  # noqa: BLE001
-            results.append(
-                VoiceFileAnalysis(
-                    path=str(audio_path),
-                    duration_sec=probe_duration_seconds(audio_path),
-                    error=str(exc),
-                )
+            entry = VoiceFileAnalysis(
+                path=str(audio_path),
+                duration_sec=probe_duration_seconds(audio_path),
+                error=str(exc),
             )
+            results.append(entry)
+            report.files_failed += 1
+            report.failures.append(f"{audio_path.name}: {exc}")
+            on_progress(
+                "file_done",
+                {
+                    "file_name": audio_path.name,
+                    "file_index": file_index,
+                    "file_count": len(audio_files),
+                    "outcome": "fehler",
+                    "error": str(exc),
+                },
+            )
+
+    report.cancelled = cancelled
+    report.output_written = _write_voice_document(project, results)
+
+    if cancelled:
+        on_progress(
+            "cancelled",
+            {
+                "total_files": len(audio_files),
+                "done": len(results),
+            },
+        )
+    else:
+        on_progress(
+            "complete",
+            {
+                "total_files": len(audio_files),
+                "done": len(results),
+            },
+        )
 
     document = VoiceAnalysisDocument(
         project_id=project.id,
         language=project.language,
         files=results,
     )
-    output_path = project.voice_analysis_path
-    output_path.write_text(
-        document.model_dump_json(indent=2),
-        encoding="utf-8",
-    )
-    return document
+    return document, report

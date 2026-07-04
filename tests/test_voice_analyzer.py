@@ -49,7 +49,7 @@ def test_analyze_voice_over_uses_whisper_backend(
     )
 
     project = _sample_project(temp_project_layout)
-    document = analyze_voice_over(
+    document, report = analyze_voice_over(
         project,
         use_api=True,
         backend=VOICE_BACKEND_WHISPER,
@@ -58,6 +58,7 @@ def test_analyze_voice_over_uses_whisper_backend(
 
     assert calls == ["voiceover.wav"]
     assert document.files[0].segments[0].text == "Hallo Florida Keys."
+    assert report.files_analyzed == 1
 
 
 def test_analyze_voice_over_whisper_cache_skips_second_run(
@@ -119,7 +120,7 @@ def test_analyze_voice_over_gemini_backend(
     )
 
     project = _sample_project(temp_project_layout)
-    document = analyze_voice_over(
+    document, _ = analyze_voice_over(
         project,
         use_api=True,
         backend=VOICE_BACKEND_GEMINI,

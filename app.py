@@ -16,7 +16,7 @@ from otio_app.project_layout import (
 from otio_app.project_repository import create_project, list_projects
 from otio_app.services.gemini_client import format_gemini_model_label, get_default_gemini_model
 from otio_app.system_checks import run_all_checks
-from otio_app.ui.asset_analysis_job_ui import render_asset_analysis_job_banner
+from otio_app.ui.analysis_jobs_ui import render_analysis_jobs_banner
 from otio_app.ui.edit_plan import render_edit_plan_page
 from otio_app.ui.navigation import (
     ACTIVE_PROJECT_KEY,
@@ -193,7 +193,7 @@ with st.sidebar:
 
 active_project_id = st.session_state.get(ACTIVE_PROJECT_KEY)
 if active_project_id and page != PAGE_ANALYSIS:
-    render_asset_analysis_job_banner(active_project_id)
+    render_analysis_jobs_banner(active_project_id)
 
 if page == PAGE_NEW:
     st.header("Neues Projekt anlegen")

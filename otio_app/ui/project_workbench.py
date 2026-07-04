@@ -18,13 +18,12 @@ from otio_app.defaults import (
 )
 from otio_app.models import ProjectStatus
 from otio_app.project_repository import (
-    get_project_by_id,
     update_project_selection,
     update_project_status,
 )
 from otio_app.services.asset_analysis_job import get_asset_analysis_job_manager
+from otio_app.services.voice_analysis_job import get_voice_analysis_job_manager
 from otio_app.services.gemini_client import (
-    GeminiNotConfiguredError,
     format_gemini_model_label,
     get_default_gemini_model,
     is_gemini_configured,
@@ -34,9 +33,7 @@ from otio_app.services.media_inventory_cache import (
     discover_folder_media_paths,
     list_assets_missing_successful_cache,
 )
-from otio_app.services.voice_analyzer import analyze_voice_over
 from otio_app.services.whisper_transcriber import (
-    WhisperNotAvailableError,
     get_default_whisper_model,
     is_whisper_available,
 )
@@ -53,7 +50,7 @@ from otio_app.services.folder_analysis_status import (
 )
 from otio_app.services.folder_asset_status import folder_is_fully_analyzed
 from otio_app.services.manual_folder_completion import is_manually_complete, set_manually_complete
-from otio_app.ui.asset_analysis_job_ui import render_asset_analysis_job_monitor
+from otio_app.ui.analysis_jobs_ui import render_analysis_jobs_monitor
 from otio_app.ui.project_context import (
     render_file_paths,
     render_output_status,
@@ -62,21 +59,31 @@ from otio_app.ui.project_context import (
 )
 
 
-def _run_with_feedback(action_label: str, callback) -> bool:
-    with st.spinner(action_label):
-        try:
-            callback()
-            st.success(f"{action_label} abgeschlossen.")
-            return True
-        except GeminiNotConfiguredError as exc:
-            st.error(str(exc))
-        except WhisperNotAvailableError as exc:
-            st.error(str(exc))
-        except FileNotFoundError as exc:
-            st.error(str(exc))
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Fehler: {exc}")
-    return False
+def _start_voice_analysis_background(
+    project,
+    *,
+    backend: str,
+    whisper_model: str,
+    gemini_model: str,
+    chain_asset_folders: list[str] | None = None,
+    chain_asset_model: str = "",
+) -> bool:
+    manager = get_voice_analysis_job_manager()
+    if manager.is_running(project.id):
+        st.warning("Voice-over-Analyse läuft bereits — bitte warten oder stoppen.")
+        return False
+    if not manager.start(
+        project,
+        backend=backend,
+        whisper_model=whisper_model,
+        gemini_model=gemini_model,
+        chain_asset_folders=chain_asset_folders,
+        chain_asset_model=chain_asset_model,
+    ):
+        st.warning("Voice-over-Analyse konnte nicht gestartet werden.")
+        return False
+    update_project_status(project.id, ProjectStatus.ANALYZING)
+    return True
 
 
 def _start_asset_analysis_background(project, folders: list[str], model: str) -> bool:
@@ -224,24 +231,18 @@ def _render_analysis_actions(
 ) -> None:
     folder_state_key = f"workbench_folders_{project.id}"
     asset_job_running = get_asset_analysis_job_manager().is_running(project.id)
-
-    def _analyze_voice_for_project() -> None:
-        current = get_project_by_id(project.id)
-        assert current is not None
-        analyze_voice_over(
-            current,
-            use_api=True,
-            backend=selected_voice_backend,
-            model=selected_model,
-            whisper_model=selected_whisper_model,
-        )
-
-    def _run_voice_analysis() -> None:
-        _analyze_voice_for_project()
-        update_project_status(project.id, ProjectStatus.READY)
+    voice_job_running = get_voice_analysis_job_manager().is_running(project.id)
+    any_job_running = asset_job_running or voice_job_running
 
     st.markdown("**Voice-over** — lokal mit Whisper (Standard) oder optional Gemini.")
-    if st.button("🎙️ Voice-over analysieren", key=f"voice_{project.id}", type="primary"):
+    if voice_job_running:
+        st.caption("Voice-over-Analyse läuft im Hintergrund — Fortschritt siehe oben.")
+    if st.button(
+        "🎙️ Voice-over analysieren",
+        key=f"voice_{project.id}",
+        type="primary",
+        disabled=any_job_running,
+    ):
         if selected_voice_backend == VOICE_BACKEND_GEMINI and not api_confirmed:
             st.warning("Bitte Gemini-API-Aufrufe in den Einstellungen bestätigen.")
         elif selected_voice_backend == VOICE_BACKEND_GEMINI and not is_gemini_configured():
@@ -249,8 +250,12 @@ def _render_analysis_actions(
         elif selected_voice_backend == VOICE_BACKEND_WHISPER and not is_whisper_available():
             st.error("Whisper nicht installiert — `pip install -r requirements.txt`.")
         else:
-            update_project_status(project.id, ProjectStatus.ANALYZING)
-            if _run_with_feedback("Voice-over-Analyse", _run_voice_analysis):
+            if _start_voice_analysis_background(
+                project,
+                backend=selected_voice_backend,
+                whisper_model=selected_whisper_model,
+                gemini_model=selected_model,
+            ):
                 st.rerun()
 
     st.divider()
@@ -274,7 +279,7 @@ def _render_analysis_actions(
     if st.button(
         "📁 Ausgewählte Ordner analysieren",
         key=f"assets_{project.id}",
-        disabled=asset_job_running,
+        disabled=any_job_running,
     ):
         if not selected_folders:
             st.warning("Bitte mindestens einen Ordner unter „Ordner“ auswählen.")
@@ -290,7 +295,7 @@ def _render_analysis_actions(
     if st.button(
         "⚡ Voice-over + alle Ordner",
         key=f"all_run_{project.id}",
-        disabled=asset_job_running,
+        disabled=any_job_running,
     ):
         if not api_confirmed:
             st.warning("Bitte Gemini-API-Aufrufe bestätigen (für Asset-Ordner).")
@@ -305,18 +310,15 @@ def _render_analysis_actions(
             all_folders = list(project.asset_subdir_names)
             st.session_state[folder_state_key] = all_folders
             update_project_selection(project.id, all_folders)
-            try:
-                with st.spinner("Voice-over-Analyse …"):
-                    _analyze_voice_for_project()
-                    update_project_status(project.id, ProjectStatus.READY)
-                if _start_asset_analysis_background(project, all_folders, selected_model):
-                    st.rerun()
-            except WhisperNotAvailableError as exc:
-                st.error(str(exc))
-            except GeminiNotConfiguredError as exc:
-                st.error(str(exc))
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Fehler: {exc}")
+            if _start_voice_analysis_background(
+                project,
+                backend=selected_voice_backend,
+                whisper_model=selected_whisper_model,
+                gemini_model=selected_model,
+                chain_asset_folders=all_folders,
+                chain_asset_model=selected_model,
+            ):
+                st.rerun()
 
 
 def render_project_workbench() -> None:
@@ -327,7 +329,7 @@ def render_project_workbench() -> None:
         return
 
     render_workflow_progress(project, current_step="analysis")
-    render_asset_analysis_job_monitor(project)
+    render_analysis_jobs_monitor(project)
     created_inventories, sync_statuses = sync_folder_inventories_from_cache(project)
     if created_inventories:
         st.success(
