@@ -1,0 +1,69 @@
+"""Anwendungskonfiguration — alle Pfade relativ zum Repository-Root."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from otio_app.defaults import (
+    DEFAULT_FRAMES_PER_SHOT,
+    DEFAULT_GEMINI_MODEL,
+    DEFAULT_VOICE_OVER_SUBDIR,
+    DEFAULT_WORK_SUBDIR,
+    GEMINI_MODEL_CHOICES,
+    INVENTORY_FILENAME,
+    VOICE_ANALYSIS_FILENAME,
+)
+
+PACKAGE_DIR = Path(__file__).resolve().parent
+APP_ROOT = PACKAGE_DIR.parent
+DATA_DIR = APP_ROOT / "data"
+
+load_dotenv(APP_ROOT / ".env")
+
+
+def get_db_path() -> Path:
+    """Pfad zur SQLite-Datenbank für das Projektregister."""
+    return DATA_DIR / "projects.db"
+
+
+def ensure_data_dir() -> Path:
+    """Stellt sicher, dass das Laufzeitverzeichnis existiert."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return DATA_DIR
+
+
+def get_env(key: str, default: str | None = None) -> str | None:
+    """Liest eine Umgebungsvariable (z. B. API-Schlüssel)."""
+    return os.environ.get(key, default)
+
+
+def get_gemini_model_from_env() -> str:
+    """Liest das Standard-Gemini-Modell aus .env oder liefert den App-Default."""
+    raw = get_env("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+    if not raw:
+        return DEFAULT_GEMINI_MODEL
+    model = raw.strip()
+    if model in GEMINI_MODEL_CHOICES:
+        return model
+    return DEFAULT_GEMINI_MODEL
+
+
+__all__ = [
+    "APP_ROOT",
+    "DATA_DIR",
+    "DEFAULT_FRAMES_PER_SHOT",
+    "DEFAULT_GEMINI_MODEL",
+    "DEFAULT_VOICE_OVER_SUBDIR",
+    "DEFAULT_WORK_SUBDIR",
+    "GEMINI_MODEL_CHOICES",
+    "INVENTORY_FILENAME",
+    "PACKAGE_DIR",
+    "VOICE_ANALYSIS_FILENAME",
+    "ensure_data_dir",
+    "get_db_path",
+    "get_env",
+    "get_gemini_model_from_env",
+]
