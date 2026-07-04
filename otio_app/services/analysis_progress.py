@@ -14,6 +14,7 @@ AnalysisPhase = Literal[
     "media_done",
     "folder_done",
     "complete",
+    "cancelled",
 ]
 
 ProgressCallback = Callable[[AnalysisPhase, dict], None]
@@ -27,6 +28,7 @@ class AnalysisRunReport:
     media_cached: int = 0
     media_failed: int = 0
     failures: list[str] = field(default_factory=list)
+    cancelled: bool = False
 
 
 def noop_progress(_phase: AnalysisPhase, _data: dict) -> None:

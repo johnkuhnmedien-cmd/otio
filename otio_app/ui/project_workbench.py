@@ -22,9 +22,7 @@ from otio_app.project_repository import (
     update_project_selection,
     update_project_status,
 )
-from otio_app.services.analysis_progress import AnalysisRunReport
-from otio_app.services.analysis_log import read_analysis_log_tail
-from otio_app.services.asset_analyzer import analyze_asset_folders
+from otio_app.services.asset_analysis_job import get_asset_analysis_job_manager
 from otio_app.services.gemini_client import (
     GeminiNotConfiguredError,
     format_gemini_model_label,
@@ -55,6 +53,7 @@ from otio_app.services.folder_analysis_status import (
 )
 from otio_app.services.folder_asset_status import folder_is_fully_analyzed
 from otio_app.services.manual_folder_completion import is_manually_complete, set_manually_complete
+from otio_app.ui.asset_analysis_job_ui import render_asset_analysis_job_monitor
 from otio_app.ui.project_context import (
     render_file_paths,
     render_output_status,
@@ -80,118 +79,17 @@ def _run_with_feedback(action_label: str, callback) -> bool:
     return False
 
 
-def _render_analysis_report(report: AnalysisRunReport) -> None:
-    st.markdown("**Analyse-Bericht**")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Neu analysiert", report.media_analyzed)
-    with col2:
-        st.metric("Aus Cache", report.media_cached)
-    with col3:
-        st.metric("Fehler", report.media_failed)
-    with col4:
-        st.metric("Ordner übersprungen", len(report.folders_skipped))
-    if report.failures:
-        st.warning("Fehlerhafte oder unvollständige Assets:")
-        for line in report.failures[:20]:
-            st.caption(f"• {line}")
-        if len(report.failures) > 20:
-            st.caption(f"… und {len(report.failures) - 20} weitere")
-
-
-def _make_asset_progress_ui(total_media: int):
-    progress_bar = st.progress(0.0, text="Analyse startet …")
-    status_box = st.empty()
-    detail_box = st.empty()
-    state = {"done": 0, "total": max(total_media, 1), "running": True}
-
-    outcome_labels = {
-        "neu": "✅ neu analysiert",
-        "cache": "⏭️ aus Cache",
-        "fehler": "❌ Fehler",
-    }
-
-    def on_progress(phase: str, data: dict) -> None:
-        if phase == "start":
-            state["total"] = max(int(data.get("total_media", 1)), 1)
-            progress_bar.progress(0.0, text=f"0 / {state['total']} Assets")
-            status_box.info("Analyse läuft …")
-        elif phase == "folder_skip":
-            detail_box.caption(
-                f"Ordner **{data['folder']}** übersprungen — {data.get('reason', '')}"
-            )
-        elif phase == "folder_start":
-            status_box.info(
-                f"Ordner **{data['folder']}** "
-                f"({data['folder_index']}/{data['folder_count']}) — "
-                f"{data['media_count']} Assets"
-            )
-        elif phase == "media_start":
-            detail_box.markdown(
-                f"**Analysiere** `{data['media_name']}` "
-                f"({data['media_index']}/{data['media_count']} in {data['folder']})"
-            )
-        elif phase == "media_done":
-            state["done"] += 1
-            fraction = min(state["done"] / state["total"], 1.0)
-            outcome = outcome_labels.get(str(data.get("outcome")), data.get("outcome", ""))
-            progress_bar.progress(
-                fraction,
-                text=f"{state['done']} / {state['total']} Assets",
-            )
-            line = f"`{data['media_name']}` — {outcome}"
-            if data.get("error"):
-                line += f" — {data['error']}"
-            detail_box.markdown(line)
-        elif phase == "folder_done":
-            detail_box.caption(
-                f"Ordner **{data['folder']}** abgeschlossen ({data['asset_count']} Assets)."
-            )
-        elif phase == "complete":
-            state["running"] = False
-            progress_bar.progress(1.0, text=f"{state['done']} / {state['total']} Assets")
-            status_box.success("Asset-Analyse abgeschlossen.")
-
-    return on_progress
-
-
-def _run_asset_analysis(
-    project,
-    folders: list[str],
-    model: str,
-) -> AnalysisRunReport | None:
-    current = get_project_by_id(project.id)
-    assert current is not None
-    total_media = sum(
-        len(list_assets_missing_successful_cache(current, folder_name))
-        for folder_name in folders
-    )
-    if total_media == 0:
-        total_media = sum(
-            len(discover_folder_media_paths(current, folder_name))
-            for folder_name in folders
-        )
-    on_progress = _make_asset_progress_ui(total_media)
-    try:
-        _, report = analyze_asset_folders(
-            current,
-            folders,
-            use_api=True,
-            model=model,
-            on_progress=on_progress,
-        )
-        update_project_status(project.id, ProjectStatus.READY)
-        _render_analysis_report(report)
-        log_tail = read_analysis_log_tail(current)
-        if log_tail:
-            with st.expander("Analyse-Protokoll (Details)", expanded=bool(report.failures)):
-                st.code(log_tail)
-        return report
-    except GeminiNotConfiguredError as exc:
-        st.error(str(exc))
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"Fehler: {exc}")
-    return None
+def _start_asset_analysis_background(project, folders: list[str], model: str) -> bool:
+    """Startet Asset-Analyse im Hintergrund — UI bleibt bedienbar."""
+    manager = get_asset_analysis_job_manager()
+    if manager.is_running(project.id):
+        st.warning("Asset-Analyse läuft bereits — bitte warten oder stoppen.")
+        return False
+    if not manager.start(project, folders, model):
+        st.warning("Asset-Analyse konnte nicht gestartet werden.")
+        return False
+    update_project_status(project.id, ProjectStatus.ANALYZING)
+    return True
 
 
 def _render_folder_picker(project) -> list[str]:
@@ -325,6 +223,7 @@ def _render_analysis_actions(
     api_confirmed: bool,
 ) -> None:
     folder_state_key = f"workbench_folders_{project.id}"
+    asset_job_running = get_asset_analysis_job_manager().is_running(project.id)
 
     def _analyze_voice_for_project() -> None:
         current = get_project_by_id(project.id)
@@ -356,6 +255,11 @@ def _render_analysis_actions(
 
     st.divider()
     st.markdown("**Asset-Ordner** — Gemini analysiert nur Frame-Bilder (kostenpflichtig).")
+    if asset_job_running:
+        st.caption(
+            "Asset-Analyse läuft im Hintergrund — Fortschritt siehe oben. "
+            "Du kannst zu **③ Schnittplan** wechseln."
+        )
     if selected_folders:
         for folder_name in selected_folders:
             missing = list_assets_missing_successful_cache(project, folder_name)
@@ -367,7 +271,11 @@ def _render_analysis_actions(
                     f"**{folder_name}:** {len(missing)} von {total} Assets ohne Analyse-JSON "
                     f"({labels}{suffix})"
                 )
-    if st.button("📁 Ausgewählte Ordner analysieren", key=f"assets_{project.id}"):
+    if st.button(
+        "📁 Ausgewählte Ordner analysieren",
+        key=f"assets_{project.id}",
+        disabled=asset_job_running,
+    ):
         if not selected_folders:
             st.warning("Bitte mindestens einen Ordner unter „Ordner“ auswählen.")
         elif not api_confirmed:
@@ -375,12 +283,15 @@ def _render_analysis_actions(
         else:
             folders = list(selected_folders)
             update_project_selection(project.id, folders)
-            update_project_status(project.id, ProjectStatus.ANALYZING)
-            if _run_asset_analysis(project, folders, selected_model):
+            if _start_asset_analysis_background(project, folders, selected_model):
                 st.rerun()
 
     st.divider()
-    if st.button("⚡ Voice-over + alle Ordner", key=f"all_run_{project.id}"):
+    if st.button(
+        "⚡ Voice-over + alle Ordner",
+        key=f"all_run_{project.id}",
+        disabled=asset_job_running,
+    ):
         if not api_confirmed:
             st.warning("Bitte Gemini-API-Aufrufe bestätigen (für Asset-Ordner).")
         elif not is_gemini_configured():
@@ -394,12 +305,12 @@ def _render_analysis_actions(
             all_folders = list(project.asset_subdir_names)
             st.session_state[folder_state_key] = all_folders
             update_project_selection(project.id, all_folders)
-            update_project_status(project.id, ProjectStatus.ANALYZING)
             try:
                 with st.spinner("Voice-over-Analyse …"):
                     _analyze_voice_for_project()
-                _run_asset_analysis(project, all_folders, selected_model)
-                st.rerun()
+                    update_project_status(project.id, ProjectStatus.READY)
+                if _start_asset_analysis_background(project, all_folders, selected_model):
+                    st.rerun()
             except WhisperNotAvailableError as exc:
                 st.error(str(exc))
             except GeminiNotConfiguredError as exc:
@@ -416,6 +327,7 @@ def render_project_workbench() -> None:
         return
 
     render_workflow_progress(project, current_step="analysis")
+    render_asset_analysis_job_monitor(project)
     created_inventories, sync_statuses = sync_folder_inventories_from_cache(project)
     if created_inventories:
         st.success(

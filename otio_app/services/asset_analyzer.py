@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from otio_app.analysis_models import (
     AssetFolderAnalysis,
@@ -41,6 +41,13 @@ from otio_app.services.media_utils import (
 )
 
 
+ShouldCancel = Callable[[], bool]
+
+
+class AnalysisCancelledError(Exception):
+    """Asset-Analyse wurde vom Nutzer abgebrochen."""
+
+
 def _frames_dir(project: Project, folder_name: str, media_path: Path) -> Path:
     return (
         project.work_dir_path
@@ -68,6 +75,10 @@ def _count_media_to_analyze(project: Project, folder_names: list[str]) -> int:
 
 def _log(project: Project, message: str) -> None:
     append_analysis_log(project, message)
+
+
+def _is_cancelled(should_cancel: ShouldCancel | None) -> bool:
+    return bool(should_cancel and should_cancel())
 
 
 def _analyze_single_media(
@@ -197,6 +208,7 @@ def _analyze_folder(
     use_api: bool,
     model: Optional[str],
     on_progress: ProgressCallback = noop_progress,
+    should_cancel: ShouldCancel | None = None,
     folder_index: int = 0,
     folder_count: int = 1,
     report: AnalysisRunReport | None = None,
@@ -240,7 +252,15 @@ def _analyze_folder(
     )
 
     analyzed: dict[str, AssetMediaAnalysis] = {}
+    cancelled_mid_folder = False
     for media_index, media_path in enumerate(missing_cache, start=1):
+        if _is_cancelled(should_cancel):
+            cancelled_mid_folder = True
+            _log(
+                project,
+                f"ORDNER-ABBRUCH {folder_name} nach {media_index - 1}/{len(missing_cache)} Assets",
+            )
+            break
         on_progress(
             "media_start",
             {
@@ -331,8 +351,9 @@ def _analyze_folder(
     inventory_saved = sync_folder_inventory_with_status(project, folder_name)
     _log(
         project,
-        f"ORDNER-FERTIG {folder_name}: {len(missing_cache)} analysiert, "
-        f"inventory_saved={inventory_saved}",
+        f"ORDNER-FERTIG {folder_name}: {len(missing_cache)} geplant, "
+        f"{len(analyzed)} analysiert, inventory_saved={inventory_saved}"
+        + (" (abgebrochen)" if cancelled_mid_folder else ""),
     )
     if report is not None:
         report.folders_processed.append(folder_name)
@@ -356,6 +377,7 @@ def analyze_asset_folders(
     use_api: bool = True,
     model: Optional[str] = None,
     on_progress: ProgressCallback = noop_progress,
+    should_cancel: ShouldCancel | None = None,
 ) -> tuple[InventoryDocument, AnalysisRunReport]:
     """Analysiert fehlende Assets in Ordnern; Inventar-JSON nur bei vollständigem Ordner."""
     selected = validate_asset_selection(project.asset_subdir_names, folder_names)
@@ -376,8 +398,13 @@ def analyze_asset_folders(
     )
 
     items: list[AssetFolderAnalysis] = []
+    cancelled = False
 
     for folder_index, folder_name in enumerate(selected, start=1):
+        if _is_cancelled(should_cancel):
+            cancelled = True
+            _log(project, f"RUN CANCELLED before folder {folder_name}")
+            break
         items.append(
             _analyze_folder(
                 project,
@@ -385,23 +412,43 @@ def analyze_asset_folders(
                 use_api=use_api,
                 model=model,
                 on_progress=on_progress,
+                should_cancel=should_cancel,
                 folder_index=folder_index,
                 folder_count=len(selected),
                 report=report,
             )
         )
+        if _is_cancelled(should_cancel):
+            cancelled = True
+            _log(project, f"RUN CANCELLED after folder {folder_name}")
+            break
 
-    _log(
-        project,
-        f"RUN END analyzed={report.media_analyzed} cached={report.media_cached} "
-        f"failed={report.media_failed} failures={report.failures}",
-    )
-    on_progress(
-        "complete",
-        {
-            "total_media": max(total_media, 1),
-            "done": True,
-        },
-    )
+    report.cancelled = cancelled
+    if cancelled:
+        _log(
+            project,
+            f"RUN END (CANCELLED) analyzed={report.media_analyzed} "
+            f"cached={report.media_cached} failed={report.media_failed}",
+        )
+        on_progress(
+            "cancelled",
+            {
+                "total_media": max(total_media, 1),
+                "done": report.media_analyzed + report.media_cached + report.media_failed,
+            },
+        )
+    else:
+        _log(
+            project,
+            f"RUN END analyzed={report.media_analyzed} cached={report.media_cached} "
+            f"failed={report.media_failed} failures={report.failures}",
+        )
+        on_progress(
+            "complete",
+            {
+                "total_media": max(total_media, 1),
+                "done": True,
+            },
+        )
     document = InventoryDocument(project_id=project.id, items=items)
     return document, report
