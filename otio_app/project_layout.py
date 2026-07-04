@@ -93,6 +93,19 @@ def get_folder_edit_plan_path(work_dir: Path, folder_name: str) -> Path:
     return get_edit_plan_dir(work_dir) / f"{safe_folder_slug(folder_name)}.json"
 
 
+def get_exports_dir(work_dir: Path) -> Path:
+    """Verzeichnis für OTIO-Exporte unter dem Arbeitsordner."""
+    from otio_app.defaults import EXPORTS_SUBDIR
+
+    return work_dir / EXPORTS_SUBDIR
+
+
+def get_otio_export_path(work_dir: Path, project_name: str) -> Path:
+    """Standard-Pfad für den OTIO-Export eines Projekts."""
+    safe_name = safe_folder_slug(project_name) or "timeline"
+    return get_exports_dir(work_dir) / f"{safe_name}.otio"
+
+
 def safe_path_is_dir(path: Path) -> bool:
     """Prüft ein Verzeichnis ohne Hänger bei nicht verfügbaren Cloud-Dateien."""
     try:

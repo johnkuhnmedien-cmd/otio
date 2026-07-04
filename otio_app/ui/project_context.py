@@ -125,6 +125,7 @@ def render_file_paths(project: Project) -> None:
         st.write(f"**Inventar:** `{project.inventory_dir}` (pro Ordner eine JSON)")
         st.write(f"**Zuordnung:** `{project.voice_folder_mapping_path}`")
         st.write(f"**Schnittpläne:** `{project.edit_plan_dir}` (pro Ort eine JSON)")
+        st.write(f"**OTIO-Export:** `{project.work_dir_path / 'exports'}`")
         saved_folders = list_saved_edit_plan_folders(project)
         if saved_folders:
             st.caption("Gespeichert: " + ", ".join(f"`{name}`" for name in saved_folders))

@@ -57,6 +57,7 @@ VOICE_ANALYSIS_FILENAME = "voice_over_analysis.json"
 VOICE_FOLDER_MAPPING_FILENAME = "voice_folder_mapping.json"
 EDIT_PLAN_FILENAME = "edit_plan.json"
 EDIT_PLAN_SUBDIR = "edit_plan"
+EXPORTS_SUBDIR = "exports"
 DEFAULT_SHOT_MIN_SEC = 3.0
 DEFAULT_SHOT_MAX_SEC = 8.0
 DEFAULT_AUDIO_OFFSET_SEC = 1.0

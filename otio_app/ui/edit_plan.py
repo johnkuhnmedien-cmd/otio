@@ -15,7 +15,7 @@ from otio_app.defaults import (
     FALLBACK_SOURCE_LABELS,
     GEMINI_MODEL_CHOICES,
 )
-from otio_app.project_layout import safe_folder_slug
+from otio_app.project_layout import get_otio_export_path, safe_folder_slug
 from otio_app.services.edit_plan_builder import (
     EditPlanLocationState,
     EditPlanLocationStatus,
@@ -36,6 +36,7 @@ from otio_app.services.edit_plan_rules import (
     rule_label,
     validate_shots_against_rules,
 )
+from otio_app.services.otio_exporter import export_otio_timeline, merge_confirmed_edit_plans
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 from otio_app.ui.edit_plan_rules_ui import (
     get_edit_plan_rules_for_project,
@@ -211,8 +212,8 @@ def render_edit_plan_page() -> None:
     if saved is not None and saved.confirmed:
         st.success(f"Schnittplan für **{selected_folder}** bestätigt.")
 
-    tab_settings, tab_generate, tab_review = st.tabs(
-        ["⚙️ Regeln", "▶️ Vorschlag", "✅ Prüfen & Speichern"]
+    tab_settings, tab_generate, tab_review, tab_export = st.tabs(
+        ["⚙️ Regeln", "▶️ Vorschlag", "✅ Prüfen & Speichern", "📤 OTIO Export"]
     )
 
     with tab_settings:
@@ -376,5 +377,69 @@ def render_edit_plan_page() -> None:
 
         with st.expander("JSON-Vorschau", expanded=False):
             st.code(draft.model_dump_json(indent=2)[:6000])
+
+    with tab_export:
+        default_export_path = get_otio_export_path(project.work_dir_path, project.name)
+        st.markdown("**OTIO-Timeline aus bestätigten Schnittplänen**")
+        st.caption(
+            "Alle bestätigten Orte werden in der Reihenfolge der Voice-over-Zuordnung "
+            f"zu einer Timeline zusammengeführt. Export nach `{default_export_path}`"
+        )
+
+        export_folders = st.multiselect(
+            "Orte exportieren (leer = alle bestätigten)",
+            options=mapped_folders,
+            default=[
+                folder_name
+                for folder_name in mapped_folders
+                if (plan := load_edit_plan(project, folder_name)) is not None and plan.confirmed
+            ],
+            key=f"otio_export_folders_{project.id}",
+        )
+
+        preview = merge_confirmed_edit_plans(
+            project,
+            folder_names=export_folders or None,
+        )
+        if preview.included_folders:
+            st.success(
+                "Enthalten: "
+                + ", ".join(f"**{name}**" for name in preview.included_folders)
+                + f" · **{len(preview.shots)}** Shots"
+            )
+        if preview.skipped_folders:
+            st.warning(
+                "Noch nicht bestätigt: "
+                + ", ".join(f"`{name}`" for name in preview.skipped_folders)
+            )
+        for warning in preview.warnings:
+            st.caption(f"• {warning}")
+
+        if preview.ready:
+            total_duration = sum(shot.duration_sec for shot in preview.shots)
+            st.caption(
+                f"Geschätzte Videospur: {total_duration:.1f}s · "
+                f"Audio-Offset: {preview.settings.audio_offset_sec}s · "
+                f"{project.fps} fps"
+            )
+
+        if st.button(
+            "📤 OTIO-Timeline exportieren",
+            key=f"export_otio_{project.id}",
+            type="primary",
+            disabled=not preview.ready,
+        ):
+            try:
+                export_path = export_otio_timeline(project, preview)
+                st.success(f"Timeline exportiert: `{export_path}`")
+            except (OSError, ValueError) as exc:
+                st.error(str(exc))
+
+        st.markdown("**In Resolve / Premiere / OTIO**")
+        st.caption(
+            "Die `.otio`-Datei enthält eine **Video**-Spur (Assets nacheinander) "
+            "und eine **Voice-over**-Spur (Audio-Snippets passend zu jedem Shot). "
+            "In DaVinci Resolve: **File → Import → Timeline → OpenTimelineIO**."
+        )
 
     render_file_paths(project)
