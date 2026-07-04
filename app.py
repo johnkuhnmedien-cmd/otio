@@ -15,6 +15,7 @@ from otio_app.project_layout import (
 )
 from otio_app.project_repository import create_project, list_projects
 from otio_app.system_checks import run_all_checks
+from otio_app.ui.project_workbench import render_project_workbench
 
 st.set_page_config(
     page_title="OTIO Schnittplaner",
@@ -24,6 +25,7 @@ st.set_page_config(
 
 PAGE_NEW = "Neues Projekt"
 PAGE_LIST = "Gespeicherte Projekte"
+PAGE_WORK = "Projekt bearbeiten"
 PAGE_STATUS = "Systemstatus"
 
 PREVIEW_KEY = "project_preview"
@@ -166,11 +168,12 @@ def _save_pending_project() -> None:
 
 with st.sidebar:
     st.title("OTIO Schnittplaner")
-    st.caption("Meilenstein 1 — Projektordner-Workflow")
+    st.caption("Meilenstein 2 — Analyse-Workflow")
     page = st.radio(
         "Navigation",
-        [PAGE_NEW, PAGE_LIST, PAGE_STATUS],
+        [PAGE_NEW, PAGE_LIST, PAGE_WORK, PAGE_STATUS],
         label_visibility="collapsed",
+        key="sidebar_nav",
     )
 
 if page == PAGE_NEW:
@@ -449,8 +452,15 @@ elif page == PAGE_LIST:
                     f"Erstellt: {project.created_at.isoformat()} · "
                     f"Aktualisiert: {project.updated_at.isoformat()}"
                 )
+                if st.button("Projekt bearbeiten", key=f"open_{project.id}"):
+                    st.session_state["workbench_project_id"] = project.id
+                    st.session_state["sidebar_nav"] = PAGE_WORK
+                    st.rerun()
 
-else:
+elif page == PAGE_WORK:
+    render_project_workbench()
+
+elif page == PAGE_STATUS:
     st.header("Systemstatus")
     for result in run_all_checks():
         icon = "✅" if result.ok else "❌"

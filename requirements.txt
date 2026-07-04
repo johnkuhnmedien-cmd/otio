@@ -4,3 +4,4 @@ python-dotenv>=1.0
 opentimelineio>=0.15
 typing_extensions>=4.0
 eval_type_backport>=0.2
+google-genai>=1.0

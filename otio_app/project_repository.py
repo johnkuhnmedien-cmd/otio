@@ -150,3 +150,62 @@ def get_project_by_id(
     if row is None:
         return None
     return _row_to_project(row)
+
+
+def update_project_selection(
+    project_id: str,
+    selected_asset_subdirs: list[str],
+    db_path: Path | None = None,
+) -> Project:
+    """Aktualisiert die ausgewählten Asset-Ordner."""
+    project = get_project_by_id(project_id, db_path=db_path)
+    if project is None:
+        raise ValueError(f"Projekt nicht gefunden: {project_id}")
+
+    validated = validate_asset_selection(
+        project.asset_subdir_names,
+        selected_asset_subdirs,
+    )
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            """
+            UPDATE projects
+            SET selected_asset_subdirs = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (json.dumps(validated, ensure_ascii=False), now, project_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    updated = get_project_by_id(project_id, db_path=db_path)
+    assert updated is not None
+    return updated
+
+
+def update_project_status(
+    project_id: str,
+    status: ProjectStatus,
+    db_path: Path | None = None,
+) -> Project:
+    """Setzt den Projektstatus."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "UPDATE projects SET status = ?, updated_at = ? WHERE id = ?",
+            (status.value, now, project_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    updated = get_project_by_id(project_id, db_path=db_path)
+    if updated is None:
+        raise ValueError(f"Projekt nicht gefunden: {project_id}")
+    return updated

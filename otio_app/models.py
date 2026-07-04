@@ -33,6 +33,8 @@ from otio_app.project_layout import (
 
 class ProjectStatus(str, Enum):
     DRAFT = "DRAFT"
+    ANALYZING = "ANALYZING"
+    READY = "READY"
 
 
 def validate_asset_selection(

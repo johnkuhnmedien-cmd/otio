@@ -2,7 +2,22 @@
 
 Lokale Streamlit-App zur Erstellung validierter Schnittpläne und OTIO-Dateien aus Voice-over und Medien-Assets.
 
-**Aktueller Stand:** Meilenstein 1 — Projektordner-Workflow, SQLite-Speicherung, Systemstatus.
+**Aktueller Stand:** Meilenstein 2 — Projekt bearbeiten, Voice-over- und Asset-Analyse (Gemini).
+
+## Projekt bearbeiten
+
+In der Sidebar **„Projekt bearbeiten“**:
+
+- Ordnerauswahl (alle / ausgewählte)
+- **Voice-over analysieren** → `voice_over_analysis.json`
+- **Ausgewählte Ordner (Gemini)** → `inventory.json`
+- **Alles bearbeiten** → beides für alle Asset-Ordner
+
+Gemini-Aufrufe nur nach Checkbox-Bestätigung. API-Schlüssel in `.env`:
+
+```env
+GEMINI_API_KEY=dein_schlüssel
+```
 
 ## Projektstruktur (Benutzerordner)
 
