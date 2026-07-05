@@ -9,6 +9,7 @@ from otio_app.models import Project
 from otio_app.services.edit_plan_rules import (
     RULE_AUTO_ZOOM_FILL,
     RULE_CUSTOM,
+    RULE_FOLDER_TITLE,
     RULE_MAX_ASSET_USES,
     RULE_NO_CONSECUTIVE_SAME_ASSET,
     RULE_TRIM_LEADING,
@@ -58,7 +59,10 @@ def test_default_rules_include_max_and_consecutive(tmp_path: Path) -> None:
     assert RULE_NO_CONSECUTIVE_SAME_ASSET in types
     assert RULE_TRIM_LEADING in types
     assert RULE_AUTO_ZOOM_FILL in types
-    assert len(document.rules) == 4
+    assert RULE_FOLDER_TITLE in types
+    assert len(document.rules) == 5
+    folder_title = next(rule for rule in document.rules if rule.rule_type == RULE_FOLDER_TITLE)
+    assert folder_title.enabled is False
 
 
 def test_export_rule_options_reads_trim_and_zoom(tmp_path: Path) -> None:
@@ -82,6 +86,25 @@ def test_export_rule_options_reads_trim_and_zoom(tmp_path: Path) -> None:
     opts = export_rule_options(document)
     assert opts.trim_leading_sec == 0.5
     assert opts.auto_zoom_fill is True
+
+
+def test_export_rule_options_reads_folder_title(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    document = EditPlanRulesDocument(
+        project_id=project.id,
+        rules=[
+            EditPlanRule(
+                id="title",
+                rule_type=RULE_FOLDER_TITLE,
+                enabled=True,
+                params={"font_name": "Phosphate", "duration_sec": 5.0},
+            ),
+        ],
+    )
+    opts = export_rule_options(document)
+    assert opts.folder_title_enabled is True
+    assert opts.folder_title_font == "Phosphate"
+    assert opts.folder_title_duration_sec == 5.0
 
 
 def test_available_templates_excludes_only_used_system_rules(tmp_path: Path) -> None:

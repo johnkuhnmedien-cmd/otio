@@ -1,4 +1,4 @@
-"""Zoom- und Trim-Hilfen für OTIO-Export und Clean Media."""
+"""Zoom-, Titel- und Trim-Hilfen für OTIO-Export und Clean Media."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ from otio_app.services.clean_media import (
     load_clean_media_manifest,
     probe_media,
 )
+from otio_app.services.edit_plan_rules import ExportRuleOptions
+from otio_app.services.font_utils import resolve_font_path
 from otio_app.services.media_utils import is_image_media
 
 
@@ -108,14 +110,125 @@ def aspect_fill_warning(
     return None
 
 
-def ensure_zoomed_media_for_export(
+def format_folder_display_name(folder_name: str) -> str:
+    """Ordnername für Overlay — Unterstriche werden zu Leerzeichen."""
+    return folder_name.replace("_", " ").strip()
+
+
+def escape_drawtext_value(value: str) -> str:
+    """Escaping für ffmpeg drawtext text=/fontfile=."""
+    escaped = value.replace("\\", "\\\\")
+    escaped = escaped.replace(":", "\\:")
+    escaped = escaped.replace("'", "\\'")
+    escaped = escaped.replace("%", "\\%")
+    return escaped
+
+
+def ffmpeg_folder_title_filter(
+    *,
+    text: str,
+    font_path: Path,
+    duration_sec: float,
+    target_width: int,
+    target_height: int,
+) -> str:
+    """drawtext-Filter: unten links, Schatten, nur erste N Sekunden."""
+    safe_text = escape_drawtext_value(text)
+    safe_font = escape_drawtext_value(str(font_path.resolve()))
+    margin_x = max(24, target_width // 100)
+    margin_y = max(24, target_height // 100)
+    duration = max(0.1, duration_sec)
+    return (
+        f"drawtext=fontfile='{safe_font}':"
+        f"text='{safe_text}':"
+        f"fontsize=max(28\\,min(96\\,h/14)):"
+        f"fontcolor=white:"
+        f"x={margin_x}:"
+        f"y=h-th-{margin_y}:"
+        f"shadowcolor=black@0.65:"
+        f"shadowx=3:"
+        f"shadowy=3:"
+        f"enable='lte(t\\,{duration:.3f})'"
+    )
+
+
+def build_export_video_filter(
+    *,
+    source_width: int | None,
+    source_height: int | None,
+    project: Project,
+    folder_name: str,
+    export_opts: ExportRuleOptions,
+) -> tuple[str | None, int | None, int | None, str | None]:
+    """Baut vf-Kette für Zoom und/oder Ordner-Titel. Liefert (filter, w, h, error)."""
+    parts: list[str] = []
+    expected_width: int | None = None
+    expected_height: int | None = None
+
+    if export_opts.auto_zoom_fill and source_width and source_height:
+        scale = ffmpeg_scale_crop_filter(
+            source_width,
+            source_height,
+            project.width,
+            project.height,
+        )
+        if scale:
+            parts.append(scale)
+            expected_width = project.width
+            expected_height = project.height
+
+    if export_opts.folder_title_enabled:
+        font_path = resolve_font_path(export_opts.folder_title_font)
+        if font_path is None:
+            return None, None, None, (
+                f"Schriftart nicht gefunden: {export_opts.folder_title_font}"
+            )
+        overlay_width = expected_width or source_width or project.width
+        overlay_height = expected_height or source_height or project.height
+        parts.append(
+            ffmpeg_folder_title_filter(
+                text=format_folder_display_name(folder_name),
+                font_path=font_path,
+                duration_sec=export_opts.folder_title_duration_sec,
+                target_width=overlay_width,
+                target_height=overlay_height,
+            )
+        )
+        if expected_width is None and source_width and source_height:
+            expected_width = source_width
+            expected_height = source_height
+        elif expected_width is None:
+            expected_width = project.width
+            expected_height = project.height
+
+    if not parts:
+        return None, None, None, None
+    return ",".join(parts), expected_width, expected_height, None
+
+
+def export_processing_required(
+    export_opts: ExportRuleOptions,
+    *,
+    is_image: bool,
+    needs_zoom: bool,
+) -> bool:
+    if is_image:
+        return False
+    if export_opts.folder_title_enabled:
+        return True
+    if export_opts.auto_zoom_fill and needs_zoom:
+        return True
+    return False
+
+
+def ensure_export_media_for_export(
     project: Project,
     folder_name: str,
     original_path: Path,
     *,
     notes: list[str] | None = None,
 ) -> Path:
-    """Prüft jedes Asset, transkodiert bei Bedarf und verifiziert die Ausgabe-Auflösung."""
+    """Transkodiert bei Bedarf (Zoom/Titel) und verifiziert die Ausgabe."""
     from otio_app.services.clean_media import (
         CLEAN_STATUS_FAILED,
         process_media_file,
@@ -125,20 +238,19 @@ def ensure_zoomed_media_for_export(
 
     opts = export_rule_options(load_edit_plan_rules(project))
     fallback = resolve_effective_media_path(project, folder_name, original_path)
-    if not opts.auto_zoom_fill or is_image_media(original_path):
+    if is_image_media(original_path):
         return fallback
 
     src_w, src_h = media_resolution_probe(original_path)
     if not src_w or not src_h:
         src_w, src_h = resolve_media_dimensions(project, folder_name, original_path)
-    if not src_w or not src_h:
-        if notes is not None:
-            notes.append(
-                f"{original_path.name}: Quell-Auflösung nicht lesbar — Zoom übersprungen."
-            )
-        return fallback
 
-    if not media_needs_aspect_fill(src_w, src_h, project.width, project.height):
+    needs_zoom = bool(
+        src_w
+        and src_h
+        and media_needs_aspect_fill(src_w, src_h, project.width, project.height)
+    )
+    if not export_processing_required(opts, is_image=False, needs_zoom=needs_zoom):
         return fallback
 
     def _resolved_path(entry) -> Path:
@@ -150,8 +262,13 @@ def ensure_zoomed_media_for_export(
     media_path = _resolved_path(entry)
 
     out_w, out_h = media_resolution_probe(media_path)
-    still_wrong = not media_matches_target_resolution(out_w, out_h, project.width, project.height)
-    if still_wrong:
+    still_wrong = opts.auto_zoom_fill and needs_zoom and not media_matches_target_resolution(
+        out_w,
+        out_h,
+        project.width,
+        project.height,
+    )
+    if still_wrong or (entry.status == CLEAN_STATUS_FAILED and opts.folder_title_enabled):
         entry = process_media_file(
             project,
             folder_name,
@@ -160,19 +277,43 @@ def ensure_zoomed_media_for_export(
         )
         media_path = _resolved_path(entry)
         if entry.status == CLEAN_STATUS_FAILED and entry.error and notes is not None:
-            notes.append(f"{original_path.name}: Zoom-Transcode fehlgeschlagen — {entry.error}")
+            notes.append(f"{original_path.name}: Export-Transcode fehlgeschlagen — {entry.error}")
         out_w, out_h = media_resolution_probe(media_path)
 
-    warning = aspect_fill_warning(project, media_path, label=original_path.name)
-    if warning:
-        if notes is not None:
-            notes.append(warning)
-    elif notes is not None and out_w and out_h:
+    if opts.folder_title_enabled and entry.status == CLEAN_STATUS_CLEAN and notes is not None:
+        display = format_folder_display_name(folder_name)
         notes.append(
-            f"{original_path.name}: {src_w}×{src_h} → {out_w}×{out_h} · `{media_path}`"
+            f"{original_path.name}: Titel «{display}» ({opts.folder_title_duration_sec:.0f}s, "
+            f"{opts.folder_title_font}) · `{media_path}`"
         )
 
+    if opts.auto_zoom_fill and needs_zoom:
+        warning = aspect_fill_warning(project, media_path, label=original_path.name)
+        if warning:
+            if notes is not None:
+                notes.append(warning)
+        elif notes is not None and src_w and src_h and out_w and out_h:
+            notes.append(
+                f"{original_path.name}: {src_w}×{src_h} → {out_w}×{out_h} · `{media_path}`"
+            )
+
     return media_path
+
+
+def ensure_zoomed_media_for_export(
+    project: Project,
+    folder_name: str,
+    original_path: Path,
+    *,
+    notes: list[str] | None = None,
+) -> Path:
+    """Abwärtskompatibel — delegiert an ensure_export_media_for_export."""
+    return ensure_export_media_for_export(
+        project,
+        folder_name,
+        original_path,
+        notes=notes,
+    )
 
 
 def ffmpeg_scale_crop_filter(

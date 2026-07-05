@@ -16,8 +16,10 @@ from otio_app.services.edit_plan_rules import ExportRuleOptions, export_rule_opt
 from otio_app.services.media_utils import is_image_media
 from otio_app.services.otio_media_transform import (
     compute_fill_zoom_factor,
+    ensure_export_media_for_export,
     ensure_zoomed_media_for_export,
     ffmpeg_scale_crop_filter,
+    format_folder_display_name,
     media_needs_aspect_fill,
     resolve_media_dimensions,
 )
@@ -331,8 +333,10 @@ def _append_video_item(
 ) -> None:
     if shot.asset_path:
         original = _resolve_media_path(shot.asset_path)
-        if export_rules.auto_zoom_fill and not is_image_media(original):
-            media_path = ensure_zoomed_media_for_export(
+        if (export_rules.auto_zoom_fill or export_rules.folder_title_enabled) and not is_image_media(
+            original
+        ):
+            media_path = ensure_export_media_for_export(
                 project,
                 shot.folder,
                 original,
@@ -360,6 +364,11 @@ def _append_video_item(
         video_clip.metadata["passage_text"] = shot.passage_text
         video_clip.metadata["original_asset_path"] = shot.asset_path
         video_clip.metadata["resolved_media_path"] = str(media_path)
+
+        if export_rules.folder_title_enabled and not is_image_media(original):
+            video_clip.metadata["folder_title"] = format_folder_display_name(shot.folder)
+            video_clip.metadata["folder_title_font"] = export_rules.folder_title_font
+            video_clip.metadata["folder_title_duration_sec"] = export_rules.folder_title_duration_sec
 
         if export_rules.auto_zoom_fill and not is_image_media(original):
             src_w, src_h = resolve_media_dimensions(project, shot.folder, original)
@@ -470,6 +479,10 @@ def build_otio_timeline(
         timeline.metadata["trim_leading_sec"] = export_rules.trim_leading_sec
     if export_rules.auto_zoom_fill:
         timeline.metadata["auto_zoom_fill"] = True
+    if export_rules.folder_title_enabled:
+        timeline.metadata["folder_title_overlay"] = True
+        timeline.metadata["folder_title_font"] = export_rules.folder_title_font
+        timeline.metadata["folder_title_duration_sec"] = export_rules.folder_title_duration_sec
     timeline.global_start_time = otio.opentime.RationalTime.from_seconds(0, rate)
 
     video_track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
@@ -499,6 +512,7 @@ def build_otio_timeline(
             or "Letterboxing" in note
             or "Zoom" in note
             or "Auflösung" in note
+            or "Titel" in note
         ]
         if zoom_notes:
             timeline.metadata["aspect_fill_notes"] = zoom_notes

@@ -16,6 +16,7 @@ RULE_MIN_SHOTS_BETWEEN_SAME_ASSET = "min_shots_between_same_asset"
 RULE_PREFER_LEAST_USED_ASSET = "prefer_least_used_asset"
 RULE_TRIM_LEADING = "trim_leading"
 RULE_AUTO_ZOOM_FILL = "auto_zoom_fill"
+RULE_FOLDER_TITLE = "folder_title_overlay"
 RULE_CUSTOM = "custom"
 RULE_CUSTOM_NOTE = "custom_note"  # Legacy — wird wie RULE_CUSTOM behandelt
 
@@ -28,6 +29,7 @@ class EditPlanRuleTemplate:
     default_params: dict[str, int | float | str | bool]
     implemented: bool = True
     allow_multiple: bool = False
+    default_enabled: bool = True
 
 
 EDIT_PLAN_RULE_TEMPLATES: tuple[EditPlanRuleTemplate, ...] = (
@@ -79,6 +81,17 @@ EDIT_PLAN_RULE_TEMPLATES: tuple[EditPlanRuleTemplate, ...] = (
         ),
         default_params={},
         implemented=True,
+    ),
+    EditPlanRuleTemplate(
+        rule_type=RULE_FOLDER_TITLE,
+        label="Ordner-Titel einblenden",
+        description=(
+            "Ordnername in den ersten Sekunden unten links ins Bild einbrennen "
+            "(ffmpeg drawtext mit Schatten)."
+        ),
+        default_params={"font_name": "Phosphate", "duration_sec": 5.0},
+        implemented=True,
+        default_enabled=False,
     ),
 )
 
@@ -187,7 +200,7 @@ def create_rule_from_template(rule_type: str) -> EditPlanRule:
     return EditPlanRule(
         id=str(uuid.uuid4()),
         rule_type=template.rule_type,
-        enabled=True,
+        enabled=template.default_enabled,
         params=dict(template.default_params),
         label=template.label,
     )
@@ -228,11 +241,17 @@ class ExportRuleOptions:
 
     trim_leading_sec: float = 0.0
     auto_zoom_fill: bool = False
+    folder_title_enabled: bool = False
+    folder_title_font: str = "Phosphate"
+    folder_title_duration_sec: float = 5.0
 
 
 def export_rule_options(rules_doc: EditPlanRulesDocument) -> ExportRuleOptions:
     trim_sec = 0.0
     auto_zoom = False
+    folder_title = False
+    folder_font = "Phosphate"
+    folder_duration = 5.0
     for rule in _enabled_rules(rules_doc):
         if rule.rule_type == RULE_TRIM_LEADING:
             raw = rule.params.get("trim_sec", 0.5)
@@ -242,7 +261,22 @@ def export_rule_options(rules_doc: EditPlanRulesDocument) -> ExportRuleOptions:
                 trim_sec = 0.5
         elif rule.rule_type == RULE_AUTO_ZOOM_FILL:
             auto_zoom = True
-    return ExportRuleOptions(trim_leading_sec=trim_sec, auto_zoom_fill=auto_zoom)
+        elif rule.rule_type == RULE_FOLDER_TITLE:
+            folder_title = True
+            raw_font = rule.params.get("font_name", "Phosphate")
+            folder_font = str(raw_font).strip() if raw_font else "Phosphate"
+            raw_duration = rule.params.get("duration_sec", 5.0)
+            try:
+                folder_duration = max(0.1, min(30.0, float(raw_duration)))
+            except (TypeError, ValueError):
+                folder_duration = 5.0
+    return ExportRuleOptions(
+        trim_leading_sec=trim_sec,
+        auto_zoom_fill=auto_zoom,
+        folder_title_enabled=folder_title,
+        folder_title_font=folder_font,
+        folder_title_duration_sec=folder_duration,
+    )
 
 
 def validate_shots_against_rules(

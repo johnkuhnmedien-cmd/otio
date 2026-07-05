@@ -93,6 +93,10 @@ def test_process_media_file_transcodes_on_decode_failure(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
+    save_edit_plan_rules(
+        project,
+        EditPlanRulesDocument(project_id=project.id, rules=[]),
+    )
     media = project.project_root_path / "Florida Keys" / "clip.mp4"
 
     def _fake_transcode(

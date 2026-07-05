@@ -5,9 +5,10 @@ from __future__ import annotations
 import streamlit as st
 
 from otio_app.analysis_models import EditPlanRule, EditPlanRulesDocument
-from otio_app.models import Project
+from otio_app.services.font_utils import FOLDER_TITLE_FONT_OPTIONS
 from otio_app.services.edit_plan_rules import (
     RULE_AUTO_ZOOM_FILL,
+    RULE_FOLDER_TITLE,
     RULE_MAX_ASSET_USES,
     RULE_TRIM_LEADING,
     available_rule_templates,
@@ -113,6 +114,32 @@ def _render_rule_card(
                 "Aktiv: Zoom-Faktor wird pro Asset aus Auflösung vs. Projekt berechnet "
                 f"({project.width}×{project.height})."
             )
+        elif rule.rule_type == RULE_FOLDER_TITLE:
+            font_options = list(FOLDER_TITLE_FONT_OPTIONS)
+            current_font = str(params.get("font_name", "Phosphate"))
+            if current_font not in font_options:
+                font_options = [current_font, *font_options]
+            params["font_name"] = st.selectbox(
+                "Schriftart",
+                options=font_options,
+                index=font_options.index(current_font),
+                key=f"rule_folder_title_font_{project.id}_{rule.id}",
+                help="Phosphate muss auf dem System installiert sein (Mac: ~/Library/Fonts).",
+            )
+            params["duration_sec"] = float(
+                st.number_input(
+                    "Dauer (Sekunden)",
+                    min_value=0.5,
+                    max_value=15.0,
+                    value=float(params.get("duration_sec", 5.0)),
+                    step=0.5,
+                    key=f"rule_folder_title_duration_{project.id}_{rule.id}",
+                )
+            )
+            st.caption(
+                "Ordnername unten links einblenden — Unterstriche (_) werden zu Leerzeichen. "
+                "Wird beim OTIO-Export per ffmpeg ins Bild eingebrannt."
+            )
         elif is_custom_rule(rule):
             label = st.text_input(
                 "Titel",
@@ -140,7 +167,7 @@ def render_edit_plan_rules_manager(project: Project) -> EditPlanRulesDocument:
     st.markdown("**Schnittregeln**")
     st.caption(
         "Automatische Regeln wirken beim Erzeugen des Schnittplans (Asset-Auswahl) "
-        "oder beim OTIO-Export (Anfang abschneiden, Zoom). "
+        "oder beim OTIO-Export (Anfang abschneiden, Zoom, Ordner-Titel). "
         "Eigene Regeln speicherst du als Checkliste für den manuellen Schnitt. "
         f"Datei: `{project.work_dir_path / 'edit_plan_rules.json'}`"
     )

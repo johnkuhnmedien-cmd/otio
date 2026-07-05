@@ -14,6 +14,7 @@ from otio_app.models import Project
 from otio_app.project_layout import (
     aspect_filled_output_path_for_media,
     clean_output_path_for_media,
+    export_processed_output_path_for_media,
     get_clean_media_output_dir,
     get_folder_clean_manifest_path,
     get_folder_clean_output_dir,
@@ -140,13 +141,16 @@ def find_clean_file_for_media(
     from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
 
     export_opts = export_rule_options(load_edit_plan_rules(project))
-    if export_opts.auto_zoom_fill and not is_image_media(media_path):
-        filled = aspect_filled_output_path_for_media(
+    if (export_opts.auto_zoom_fill or export_opts.folder_title_enabled) and not is_image_media(
+        media_path
+    ):
+        filled = export_processed_output_path_for_media(
             project.work_dir_path,
             folder_name,
             media_path,
             width=project.width,
             height=project.height,
+            with_title=export_opts.folder_title_enabled,
         )
         if path_is_readable_file(filled):
             filled_probe = probe_media(filled)
@@ -160,6 +164,26 @@ def find_clean_file_for_media(
                 )
             ):
                 return filled
+        if not export_opts.folder_title_enabled:
+            filled = aspect_filled_output_path_for_media(
+                project.work_dir_path,
+                folder_name,
+                media_path,
+                width=project.width,
+                height=project.height,
+            )
+            if path_is_readable_file(filled):
+                filled_probe = probe_media(filled)
+                if (
+                    not filled_probe.width
+                    or not filled_probe.height
+                    or _probe_matches_target_resolution(
+                        filled_probe,
+                        project.width,
+                        project.height,
+                    )
+                ):
+                    return filled
 
     expected = clean_output_path_for_media(
         project.work_dir_path,
@@ -517,14 +541,21 @@ def process_media_file(
 
     entry = validate_media_file(media_path)
     source_probe = entry.probe or probe_media(media_path)
+    from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
+
+    export_opts = export_rule_options(load_edit_plan_rules(project))
     zoom_transcode = _zoom_transcode_required(project, media_path, source_probe)
-    if zoom_transcode:
-        output_path = aspect_filled_output_path_for_media(
+    title_transcode = export_opts.folder_title_enabled and not is_image_media(media_path)
+    export_transcode = zoom_transcode or title_transcode
+
+    if export_transcode:
+        output_path = export_processed_output_path_for_media(
             project.work_dir_path,
             folder_name,
             media_path,
             width=project.width,
             height=project.height,
+            with_title=title_transcode,
         )
     else:
         output_path = clean_output_path_for_media(
@@ -533,18 +564,21 @@ def process_media_file(
             media_path,
         )
 
-    if zoom_transcode and path_is_readable_file(output_path) and not force_transcode:
+    if export_transcode and path_is_readable_file(output_path) and not force_transcode:
         valid, validation_error = validate_clean_output(output_path)
         if valid:
-            filled_probe = probe_media(output_path)
-            if _probe_matches_target_resolution(
-                filled_probe,
+            processed_probe = probe_media(output_path)
+            resolution_ok = True
+            if zoom_transcode and not _probe_matches_target_resolution(
+                processed_probe,
                 project.width,
                 project.height,
             ):
+                resolution_ok = False
+            if resolution_ok:
                 entry.clean_path = str(output_path.resolve())
                 entry.status = CLEAN_STATUS_CLEAN
-                entry.probe = filled_probe
+                entry.probe = processed_probe
                 entry.error = None
                 entry.transcoded_at = entry.transcoded_at or datetime.now(timezone.utc)
                 return entry
@@ -552,7 +586,7 @@ def process_media_file(
             entry.error = validation_error
 
     existing_clean = find_clean_file_for_media(project, folder_name, media_path)
-    if existing_clean is not None and not force_transcode and not zoom_transcode:
+    if existing_clean is not None and not force_transcode and not export_transcode:
         valid, validation_error = validate_clean_output(existing_clean)
         if valid:
             clean_probe = probe_media(existing_clean)
@@ -570,38 +604,41 @@ def process_media_file(
                 pass
         entry.error = validation_error
 
-    if not entry.needs_transcode and not force_transcode and not zoom_transcode:
+    if not entry.needs_transcode and not force_transcode and not export_transcode:
         return entry
 
-    from otio_app.services.otio_media_transform import ffmpeg_scale_crop_filter
+    from otio_app.services.otio_media_transform import build_export_video_filter
 
-    video_filter: str | None = None
-    expected_width: int | None = None
-    expected_height: int | None = None
-    if zoom_transcode:
-        if not source_probe.width or not source_probe.height:
-            source_probe = probe_media(media_path)
-        if source_probe.width and source_probe.height:
-            video_filter = ffmpeg_scale_crop_filter(
-                source_probe.width,
-                source_probe.height,
-                project.width,
-                project.height,
-            )
-            expected_width = project.width
-            expected_height = project.height
-        elif not force_transcode:
-            entry.status = CLEAN_STATUS_FAILED
-            entry.error = "Quell-Auflösung nicht lesbar — Zoom-Transcode nicht möglich"
-            return entry
+    if not source_probe.width or not source_probe.height:
+        source_probe = probe_media(media_path)
+
+    video_filter, expected_width, expected_height, filter_error = build_export_video_filter(
+        source_width=source_probe.width,
+        source_height=source_probe.height,
+        project=project,
+        folder_name=folder_name,
+        export_opts=export_opts,
+    )
+    if filter_error:
+        entry.status = CLEAN_STATUS_FAILED
+        entry.error = filter_error
+        return entry
+    if export_transcode and not video_filter:
+        entry.status = CLEAN_STATUS_FAILED
+        entry.error = "Export-Filter konnte nicht erstellt werden"
+        return entry
+    if zoom_transcode and not source_probe.width and not force_transcode:
+        entry.status = CLEAN_STATUS_FAILED
+        entry.error = "Quell-Auflösung nicht lesbar — Zoom-Transcode nicht möglich"
+        return entry
 
     try:
         transcode_to_clean(
             media_path,
             output_path,
             video_filter=video_filter,
-            expected_width=expected_width,
-            expected_height=expected_height,
+            expected_width=expected_width if zoom_transcode else None,
+            expected_height=expected_height if zoom_transcode else None,
         )
     except OSError as exc:
         entry.status = CLEAN_STATUS_FAILED
