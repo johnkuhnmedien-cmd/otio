@@ -32,7 +32,7 @@ from otio_app.ui.project_context import (
     render_project_selector,
     render_workflow_progress,
 )
-from otio_app.ui.polling import running_job_fragment
+from otio_app.ui.polling import poll_while_running
 
 _STATUS_LABELS = {
     CLEAN_STATUS_OK: "✅ Original OK",
@@ -80,10 +80,13 @@ def _render_job_monitor(project) -> None:
             st.rerun()
         return
     if state.status == JobStatus.RUNNING:
-        _clean_media_running_panel(project)
+        manager = get_clean_media_job_manager()
+        poll_while_running(
+            lambda: _clean_media_running_panel(project),
+            lambda: manager.is_running(project.id),
+        )
 
 
-@running_job_fragment()
 def _clean_media_running_panel(project) -> None:
     manager = get_clean_media_job_manager()
     state = manager.get_state(project.id)

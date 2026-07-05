@@ -195,6 +195,16 @@ class VoiceAnalysisJobManager:
             append_analysis_log(project, "STOP angefordert — Voice-over-Analyse wird beendet")
         return True
 
+    def cancel_all_running(self) -> None:
+        with self._lock:
+            project_ids = [
+                project_id
+                for project_id, job in self._jobs.items()
+                if job.status == JobStatus.RUNNING
+            ]
+        for project_id in project_ids:
+            self.request_cancel(project_id)
+
     def dismiss(self, project_id: str) -> None:
         with self._lock:
             job = self._jobs.get(project_id)

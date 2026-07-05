@@ -91,6 +91,16 @@ class CleanMediaJobManager:
             job.cancel_requested = True
         return True
 
+    def cancel_all_running(self) -> None:
+        with self._lock:
+            project_ids = [
+                project_id
+                for project_id, job in self._jobs.items()
+                if job.status == JobStatus.RUNNING
+            ]
+        for project_id in project_ids:
+            self.request_cancel(project_id)
+
     def force_reset(self, project_id: str) -> None:
         """Hängenden oder blockierten Job sofort aus der Anzeige nehmen."""
         with self._lock:

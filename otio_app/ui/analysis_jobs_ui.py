@@ -16,7 +16,7 @@ from otio_app.services.voice_analysis_job import (
     get_voice_analysis_job_manager,
 )
 from otio_app.ui.analysis_report import render_analysis_report
-from otio_app.ui.polling import running_job_fragment
+from otio_app.ui.polling import poll_while_running
 
 
 def _format_asset_progress_line(state: AssetAnalysisJobState) -> str:
@@ -161,6 +161,13 @@ def render_analysis_jobs_banner(project_id: str) -> None:
             st.rerun()
 
 
+def _analysis_job_is_running(project_id: str) -> bool:
+    return (
+        get_voice_analysis_job_manager().is_running(project_id)
+        or get_asset_analysis_job_manager().is_running(project_id)
+    )
+
+
 def render_analysis_jobs_monitor(project, *, expanded: bool = True) -> None:
     """Fortschritt Voice + Assets auf der Analyse-Seite."""
     voice_manager = get_voice_analysis_job_manager()
@@ -173,7 +180,10 @@ def render_analysis_jobs_monitor(project, *, expanded: bool = True) -> None:
     ) or (asset_state is not None and asset_state.status == JobStatus.RUNNING)
 
     if any_running:
-        _analysis_jobs_running_panel(project)
+        poll_while_running(
+            lambda: _render_analysis_jobs_running_panel(project),
+            lambda: _analysis_job_is_running(project.id),
+        )
         return
 
     if voice_state is not None and expanded:
@@ -208,8 +218,7 @@ def render_analysis_jobs_monitor(project, *, expanded: bool = True) -> None:
             st.rerun()
 
 
-@running_job_fragment()
-def _analysis_jobs_running_panel(project) -> None:
+def _render_analysis_jobs_running_panel(project) -> None:
     voice_state = get_voice_analysis_job_manager().get_state(project.id)
     asset_state = get_asset_analysis_job_manager().get_state(project.id)
 

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from otio_app.shutdown import is_shutting_down, register_shutdown_handlers
+
+register_shutdown_handlers()
+
 import streamlit as st
 from pydantic import ValidationError
 
@@ -197,7 +201,8 @@ with st.sidebar:
 
 if st.session_state.get(LAST_NAV_PAGE_KEY) != page:
     st.session_state[LAST_NAV_PAGE_KEY] = page
-    st.rerun()
+    if not is_shutting_down():
+        st.rerun()
 
 active_project_id = st.session_state.get(ACTIVE_PROJECT_KEY)
 if active_project_id and page != PAGE_ANALYSIS:

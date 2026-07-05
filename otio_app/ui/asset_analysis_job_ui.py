@@ -11,7 +11,7 @@ from otio_app.services.asset_analysis_job import (
     get_asset_analysis_job_manager,
 )
 from otio_app.ui.analysis_report import render_analysis_report
-from otio_app.ui.polling import running_job_fragment
+from otio_app.ui.polling import poll_while_running
 
 
 def _format_progress_line(state: AssetAnalysisJobState) -> str:
@@ -94,6 +94,13 @@ def render_asset_analysis_job_banner(project_id: str) -> None:
         st.rerun()
 
 
+def _render_asset_running_panel(project) -> None:
+    state = get_asset_analysis_job_manager().get_state(project.id)
+    if state is None or state.status != JobStatus.RUNNING:
+        return
+    _render_running_job(state, stop_key=f"stop_assets_{project.id}")
+
+
 def render_asset_analysis_job_monitor(project, *, expanded: bool = True) -> None:
     """Fortschrittsanzeige auf der Analyse-Seite."""
     manager = get_asset_analysis_job_manager()
@@ -102,7 +109,10 @@ def render_asset_analysis_job_monitor(project, *, expanded: bool = True) -> None
         return
 
     if state.status == JobStatus.RUNNING:
-        _asset_analysis_running_panel(project)
+        poll_while_running(
+            lambda: _render_asset_running_panel(project),
+            lambda: manager.is_running(project.id),
+        )
         return
 
     if not expanded:
@@ -127,11 +137,3 @@ def render_asset_analysis_job_monitor(project, *, expanded: bool = True) -> None
     if st.button("Bericht schließen", key=f"dismiss_job_report_{project.id}"):
         manager.dismiss(project.id)
         st.rerun()
-
-
-@running_job_fragment()
-def _asset_analysis_running_panel(project) -> None:
-    state = get_asset_analysis_job_manager().get_state(project.id)
-    if state is None or state.status != JobStatus.RUNNING:
-        return
-    _render_running_job(state, stop_key=f"stop_assets_{project.id}")

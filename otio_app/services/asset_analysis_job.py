@@ -156,6 +156,16 @@ class AssetAnalysisJobManager:
             append_analysis_log(project, "STOP angefordert — Asset-Analyse wird beendet")
         return True
 
+    def cancel_all_running(self) -> None:
+        with self._lock:
+            project_ids = [
+                project_id
+                for project_id, job in self._jobs.items()
+                if job.status == JobStatus.RUNNING
+            ]
+        for project_id in project_ids:
+            self.request_cancel(project_id)
+
     def dismiss(self, project_id: str) -> None:
         """Entfernt abgeschlossene Jobs aus der Anzeige."""
         with self._lock:
