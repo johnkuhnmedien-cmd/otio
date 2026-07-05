@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from otio_app.shutdown import is_shutting_down, register_shutdown_handlers
+from otio_app.shutdown import register_shutdown_handlers
 
 register_shutdown_handlers()
 
@@ -18,27 +18,8 @@ from otio_app.project_layout import (
     scan_project_structure,
 )
 from otio_app.project_repository import create_project, list_projects
-from otio_app.services.gemini_client import format_gemini_model_label, get_default_gemini_model
-from otio_app.system_checks import run_all_checks
-from otio_app.ui.analysis_jobs_ui import render_analysis_jobs_banner
-from otio_app.ui.api_keys_settings import render_api_keys_settings
-from otio_app.ui.edit_plan import render_edit_plan_page
-from otio_app.ui.navigation import (
-    ACTIVE_PROJECT_KEY,
-    LAST_NAV_PAGE_KEY,
-    NAVIGATION_OPTIONS,
-    PAGE_ANALYSIS,
-    PAGE_CLEAN_MEDIA,
-    PAGE_EDIT_PLAN,
-    PAGE_LIST,
-    PAGE_MAPPING,
-    PAGE_NEW,
-    PAGE_STATUS,
-)
-from otio_app.ui.clean_media import render_clean_media_page
-from otio_app.ui.page_state import clear_page_widget_state
-from otio_app.ui.project_workbench import render_project_workbench
-from otio_app.ui.voice_folder_mapping import render_voice_folder_mapping
+from otio_app.ui.navigation import PAGE_ANALYSIS, PAGE_NEW, PAGE_WORK
+from otio_app.ui.routing import run_app_navigation
 
 st.set_page_config(
     page_title="OTIO Schnittplaner",
@@ -190,29 +171,9 @@ def _save_pending_project() -> None:
 with st.sidebar:
     st.title("OTIO Schnittplaner")
     st.caption("Schritt für Schritt zum Schnittplan")
-    st.markdown("**Projekt**")
-    page = st.radio(
-        "Navigation",
-        NAVIGATION_OPTIONS,
-        label_visibility="collapsed",
-        key="sidebar_nav",
-    )
-    st.divider()
-    st.caption("Workflow: ⓪ → ① → ② → ③ · Details unter Systemstatus")
 
-previous_page = st.session_state.get(LAST_NAV_PAGE_KEY)
-if previous_page != page:
-    if previous_page is not None:
-        clear_page_widget_state(previous_page)
-    st.session_state[LAST_NAV_PAGE_KEY] = page
-    if not is_shutting_down():
-        st.rerun()
 
-active_project_id = st.session_state.get(ACTIVE_PROJECT_KEY)
-if active_project_id and page != PAGE_ANALYSIS:
-    render_analysis_jobs_banner(active_project_id)
-
-if page == PAGE_NEW:
+def render_new_project_page() -> None:
     st.header("Neues Projekt anlegen")
 
     st.markdown(
@@ -444,7 +405,8 @@ if page == PAGE_NEW:
                 st.session_state.pop(PENDING_KEY, None)
                 st.rerun()
 
-elif page == PAGE_LIST:
+
+def render_project_list_page() -> None:
     st.header("Gespeicherte Projekte")
     projects = list_projects()
     if not projects:
@@ -490,42 +452,14 @@ elif page == PAGE_LIST:
                 )
                 if st.button("Projekt bearbeiten", key=f"open_{project.id}"):
                     st.session_state["workbench_project_id"] = project.id
-                    st.session_state["sidebar_nav"] = PAGE_WORK
-                    st.rerun()
+                    if hasattr(st, "switch_page"):
+                        st.switch_page("analysen")
+                    else:
+                        st.session_state["sidebar_nav"] = PAGE_WORK
+                        st.rerun()
 
-elif page == PAGE_CLEAN_MEDIA:
-    with st.container(key="page-clean-media"):
-        render_clean_media_page()
 
-elif page == PAGE_ANALYSIS:
-    with st.container(key="page-analysis"):
-        render_project_workbench()
-
-elif page == PAGE_MAPPING:
-    with st.container(key="page-mapping"):
-        render_voice_folder_mapping()
-
-elif page == PAGE_EDIT_PLAN:
-    with st.container(key="page-edit-plan"):
-        render_edit_plan_page()
-
-elif page == PAGE_STATUS:
-    st.header("Systemstatus")
-    render_api_keys_settings()
-    st.divider()
-    for result in run_all_checks():
-        icon = "✅" if result.ok else "❌"
-        st.subheader(f"{icon} {result.name}")
-        st.write(result.message)
-        if result.version:
-            st.caption(f"Version: {result.version}")
-
-    default_model = get_default_gemini_model()
-    st.subheader("🤖 Gemini")
-    st.write(
-        f"Standardmodell (aus `.env` oder App-Default): "
-        f"**{format_gemini_model_label(default_model)}** (`{default_model}`)"
-    )
-    st.caption(
-        "Unter „Projekt bearbeiten“ kann pro Sitzung ein anderes Modell gewählt werden."
-    )
+run_app_navigation(
+    render_new_project=render_new_project_page,
+    render_project_list=render_project_list_page,
+)

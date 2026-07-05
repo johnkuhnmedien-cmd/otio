@@ -49,13 +49,37 @@ class AssetAnalysisJobManager:
         self._jobs: dict[str, AssetAnalysisJobState] = {}
         self._cancel_events: dict[str, threading.Event] = {}
         self._projects: dict[str, Project] = {}
+        self._threads: dict[str, threading.Thread] = {}
+
+    def reconcile_stuck_job(self, project_id: str) -> None:
+        with self._lock:
+            job = self._jobs.get(project_id)
+            thread = self._threads.get(project_id)
+            if job is None or job.status != JobStatus.RUNNING:
+                return
+            if thread is not None and thread.is_alive():
+                return
+            job.status = JobStatus.FAILED
+            job.error = job.error or "Hintergrund-Job unerwartet beendet — bitte erneut starten"
+            self._cancel_events.pop(project_id, None)
+            self._threads.pop(project_id, None)
+            self._projects.pop(project_id, None)
+
+    def thread_alive(self, project_id: str) -> bool | None:
+        with self._lock:
+            thread = self._threads.get(project_id)
+            if thread is None:
+                return None
+            return thread.is_alive()
 
     def is_running(self, project_id: str) -> bool:
+        self.reconcile_stuck_job(project_id)
         with self._lock:
             job = self._jobs.get(project_id)
             return job is not None and job.status == JobStatus.RUNNING
 
     def get_state(self, project_id: str) -> AssetAnalysisJobState | None:
+        self.reconcile_stuck_job(project_id)
         with self._lock:
             job = self._jobs.get(project_id)
             if job is None:
@@ -137,8 +161,11 @@ class AssetAnalysisJobManager:
                 with self._lock:
                     self._cancel_events.pop(project_id, None)
                     self._projects.pop(project_id, None)
+                    self._threads.pop(project_id, None)
 
         thread = threading.Thread(target=_run, daemon=True, name=f"asset-analysis-{project.id}")
+        with self._lock:
+            self._threads[project.id] = thread
         thread.start()
         return True
 
@@ -165,6 +192,20 @@ class AssetAnalysisJobManager:
             ]
         for project_id in project_ids:
             self.request_cancel(project_id)
+
+    def force_reset(self, project_id: str) -> None:
+        with self._lock:
+            event = self._cancel_events.get(project_id)
+            if event is not None:
+                event.set()
+            job = self._jobs.get(project_id)
+            if job is not None and job.status == JobStatus.RUNNING:
+                job.status = JobStatus.CANCELLED
+                job.cancel_requested = True
+                job.error = job.error or "Manuell zurückgesetzt"
+            self._cancel_events.pop(project_id, None)
+            self._threads.pop(project_id, None)
+            self._projects.pop(project_id, None)
 
     def dismiss(self, project_id: str) -> None:
         """Entfernt abgeschlossene Jobs aus der Anzeige."""

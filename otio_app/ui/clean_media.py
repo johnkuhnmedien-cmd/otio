@@ -84,6 +84,7 @@ def _render_job_monitor(project) -> None:
         poll_while_running(
             lambda: _clean_media_running_panel(project),
             lambda: manager.is_running(project.id),
+            refresh_key=f"clean_refresh_poll_{project.id}",
         )
 
 

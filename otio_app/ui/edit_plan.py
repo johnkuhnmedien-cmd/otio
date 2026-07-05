@@ -386,28 +386,6 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
         f"Einstellungen in `{project.work_dir_path / 'otio_export_settings.json'}`"
     )
 
-    timing_col1, timing_col2 = st.columns(2)
-    with timing_col1:
-        export_audio_offset = st.number_input(
-            "Audio-Start je Ordner (+Sek.)",
-            min_value=0.0,
-            max_value=30.0,
-            step=0.5,
-            value=float(saved_export_settings.audio_offset_sec),
-            key=f"export_audio_offset_{project.id}",
-            help="Nächstes Voice-over startet so viele Sekunden nach dem ersten Asset des Ordners.",
-        )
-    with timing_col2:
-        export_section_outro = st.number_input(
-            "Ordner-Ausklingen (Sek.)",
-            min_value=0.0,
-            max_value=60.0,
-            step=0.5,
-            value=float(saved_export_settings.section_outro_sec),
-            key=f"export_section_outro_{project.id}",
-            help="Letztes Asset eines Ordners wird auf der Timeline verlängert (Ausklingen).",
-        )
-
     export_folders = st.multiselect(
         "Orte exportieren (leer = alle bestätigten)",
         options=mapped_folders,
@@ -437,6 +415,66 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
     for warning in preview.warnings:
         st.caption(f"• {warning}")
 
+    if not preview.ready:
+        st.info(
+            "Export noch nicht möglich — wähle mindestens einen **bestätigten** Ort "
+            "oder bestätige Schnittpläne unter „Prüfen & Speichern“."
+        )
+
+    if st.button(
+        "📤 OTIO-Timeline exportieren",
+        key=f"export_otio_{project.id}",
+        type="primary",
+        disabled=not preview.ready,
+        use_container_width=True,
+    ):
+        export_audio_offset = float(
+            st.session_state.get(f"export_audio_offset_{project.id}", saved_export_settings.audio_offset_sec)
+        )
+        export_section_outro = float(
+            st.session_state.get(
+                f"export_section_outro_{project.id}",
+                saved_export_settings.section_outro_sec,
+            )
+        )
+        try:
+            export_settings = OtioExportSettings(
+                audio_offset_sec=export_audio_offset,
+                section_outro_sec=export_section_outro,
+            )
+            save_otio_export_settings(project, export_settings)
+            export_path = export_otio_timeline(
+                project,
+                preview,
+                export_settings=export_settings,
+            )
+            st.success(f"Timeline exportiert: `{export_path}`")
+        except (OSError, ValueError) as exc:
+            st.error(str(exc))
+
+    st.divider()
+    timing_col1, timing_col2 = st.columns(2)
+    with timing_col1:
+        export_audio_offset = st.number_input(
+            "Audio-Start je Ordner (+Sek.)",
+            min_value=0.0,
+            max_value=30.0,
+            step=0.5,
+            value=float(saved_export_settings.audio_offset_sec),
+            key=f"export_audio_offset_{project.id}",
+            help="Nächstes Voice-over startet so viele Sekunden nach dem ersten Asset des Ordners.",
+        )
+    with timing_col2:
+        export_section_outro = st.number_input(
+            "Ordner-Ausklingen (Sek.)",
+            min_value=0.0,
+            max_value=60.0,
+            step=0.5,
+            value=float(saved_export_settings.section_outro_sec),
+            key=f"export_section_outro_{project.id}",
+            help="Letztes Asset eines Ordners wird auf der Timeline verlängert (Ausklingen).",
+        )
+
     if preview.ready:
         export_cfg = OtioExportSettings(
             audio_offset_sec=float(export_audio_offset),
@@ -465,32 +503,6 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                 f"• **{section.folder}** — Video ab {section.video_start_sec:.1f}s "
                 f"({section.video_duration_sec:.1f}s), Voice ab {section.voice_start_sec:.1f}s"
             )
-    else:
-        st.info(
-            "Export noch nicht möglich — wähle mindestens einen **bestätigten** Ort "
-            "oder bestätige Schnittpläne unter „Prüfen & Speichern“."
-        )
-
-    if st.button(
-        "📤 OTIO-Timeline exportieren",
-        key=f"export_otio_{project.id}",
-        type="primary",
-        disabled=not preview.ready,
-    ):
-        try:
-            export_settings = OtioExportSettings(
-                audio_offset_sec=float(export_audio_offset),
-                section_outro_sec=float(export_section_outro),
-            )
-            save_otio_export_settings(project, export_settings)
-            export_path = export_otio_timeline(
-                project,
-                preview,
-                export_settings=export_settings,
-            )
-            st.success(f"Timeline exportiert: `{export_path}`")
-        except (OSError, ValueError) as exc:
-            st.error(str(exc))
 
     st.markdown("**In Resolve / Premiere / OTIO**")
     st.caption(

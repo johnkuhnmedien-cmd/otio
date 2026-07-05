@@ -1,9 +1,8 @@
-"""Auto-Refresh für laufende Jobs — nur Fragment, nicht die ganze App."""
+"""Job-Fortschritt — ohne Auto-Polling (verhindert Rerun-Stürme und heiße CPUs)."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import timedelta
 
 import streamlit as st
 
@@ -16,41 +15,30 @@ def poll_while_running(
     render_fn: Callable[[], None],
     is_running_fn: Callable[[], bool],
     *,
-    interval_seconds: float = DEFAULT_POLL_SECONDS,
+    interval_seconds: float = DEFAULT_POLL_SECONDS,  # noqa: ARG001 — API compat
+    refresh_key: str = "job_refresh",
 ) -> None:
-    """Aktualisiert nur den Job-Bereich, solange ein Hintergrund-Job läuft."""
+    """Rendert Job-UI einmal; optional manuell aktualisieren statt run_every."""
     if is_shutting_down():
         return
 
+    render_fn()
+
     if not is_running_fn():
-        render_fn()
         return
 
-    if not hasattr(st, "fragment"):
-        render_fn()
-        return
-
-    @st.fragment(run_every=timedelta(seconds=interval_seconds))
-    def _polling_fragment() -> None:
-        if is_shutting_down() or not is_running_fn():
-            return
-        render_fn()
-
-    _polling_fragment()
+    st.caption("Job läuft im Hintergrund — Fortschritt mit **Aktualisieren** holen.")
+    if st.button("🔄 Aktualisieren", key=refresh_key):
+        st.rerun()
 
 
-def running_job_fragment(*, interval_seconds: float = DEFAULT_POLL_SECONDS):
-    """Abwärtskompatibler Decorator — bevorzugt poll_while_running() mit is_running_fn."""
+def running_job_fragment(*, interval_seconds: float = DEFAULT_POLL_SECONDS):  # noqa: ARG001
+    """Abwärtskompatibel — ruft nur noch render_fn ohne Fragment auf."""
 
     def decorator(func):
         def wrapper(*args, **kwargs):
             if is_shutting_down():
-                return
-            if hasattr(st, "fragment"):
-                fragment_func = st.fragment(run_every=timedelta(seconds=interval_seconds))(
-                    func
-                )
-                return fragment_func(*args, **kwargs)
+                return None
             return func(*args, **kwargs)
 
         wrapper.__name__ = func.__name__

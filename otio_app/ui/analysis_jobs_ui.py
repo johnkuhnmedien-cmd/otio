@@ -183,6 +183,7 @@ def render_analysis_jobs_monitor(project, *, expanded: bool = True) -> None:
         poll_while_running(
             lambda: _render_analysis_jobs_running_panel(project),
             lambda: _analysis_job_is_running(project.id),
+            refresh_key=f"analysis_refresh_poll_{project.id}",
         )
         return
 

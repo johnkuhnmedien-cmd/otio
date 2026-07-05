@@ -112,6 +112,7 @@ def render_asset_analysis_job_monitor(project, *, expanded: bool = True) -> None
         poll_while_running(
             lambda: _render_asset_running_panel(project),
             lambda: manager.is_running(project.id),
+            refresh_key=f"asset_refresh_poll_{project.id}",
         )
         return
 
