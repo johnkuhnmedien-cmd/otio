@@ -7,13 +7,16 @@ from pathlib import Path
 from otio_app.analysis_models import EditPlanRule, EditPlanRulesDocument, EditPlanShot
 from otio_app.models import Project
 from otio_app.services.edit_plan_rules import (
+    RULE_AUTO_ZOOM_FILL,
     RULE_CUSTOM,
     RULE_MAX_ASSET_USES,
     RULE_NO_CONSECUTIVE_SAME_ASSET,
+    RULE_TRIM_LEADING,
     apply_edit_plan_rules,
     available_rule_templates,
     create_custom_rule,
     default_rules,
+    export_rule_options,
     is_custom_rule,
     load_edit_plan_rules,
     save_edit_plan_rules,
@@ -53,7 +56,32 @@ def test_default_rules_include_max_and_consecutive(tmp_path: Path) -> None:
     types = {rule.rule_type for rule in document.rules}
     assert RULE_MAX_ASSET_USES in types
     assert RULE_NO_CONSECUTIVE_SAME_ASSET in types
-    assert len(document.rules) == 2
+    assert RULE_TRIM_LEADING in types
+    assert RULE_AUTO_ZOOM_FILL in types
+    assert len(document.rules) == 4
+
+
+def test_export_rule_options_reads_trim_and_zoom(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    document = EditPlanRulesDocument(
+        project_id=project.id,
+        rules=[
+            EditPlanRule(
+                id="trim",
+                rule_type=RULE_TRIM_LEADING,
+                enabled=True,
+                params={"trim_sec": 0.5},
+            ),
+            EditPlanRule(
+                id="zoom",
+                rule_type=RULE_AUTO_ZOOM_FILL,
+                enabled=True,
+            ),
+        ],
+    )
+    opts = export_rule_options(document)
+    assert opts.trim_leading_sec == 0.5
+    assert opts.auto_zoom_fill is True
 
 
 def test_available_templates_excludes_only_used_system_rules(tmp_path: Path) -> None:

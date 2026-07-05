@@ -7,7 +7,9 @@ import streamlit as st
 from otio_app.analysis_models import EditPlanRule, EditPlanRulesDocument
 from otio_app.models import Project
 from otio_app.services.edit_plan_rules import (
+    RULE_AUTO_ZOOM_FILL,
     RULE_MAX_ASSET_USES,
+    RULE_TRIM_LEADING,
     available_rule_templates,
     create_custom_rule,
     create_rule_from_template,
@@ -94,6 +96,23 @@ def _render_rule_card(
                     key=f"rule_max_{project.id}_{rule.id}",
                 )
             )
+        elif rule.rule_type == RULE_TRIM_LEADING:
+            params["trim_sec"] = float(
+                st.number_input(
+                    "Sekunden am Anfang überspringen",
+                    min_value=0.0,
+                    max_value=5.0,
+                    value=float(params.get("trim_sec", 0.5)),
+                    step=0.1,
+                    key=f"rule_trim_{project.id}_{rule.id}",
+                    help="Gilt beim OTIO-Export — schneidet z. B. schwarze Erstframes weg.",
+                )
+            )
+        elif rule.rule_type == RULE_AUTO_ZOOM_FILL:
+            st.caption(
+                "Aktiv: Zoom-Faktor wird pro Asset aus Auflösung vs. Projekt berechnet "
+                f"({project.width}×{project.height})."
+            )
         elif is_custom_rule(rule):
             label = st.text_input(
                 "Titel",
@@ -120,7 +139,8 @@ def render_edit_plan_rules_manager(project: Project) -> EditPlanRulesDocument:
     """Regeln anzeigen, bearbeiten und dauerhaft speichern."""
     st.markdown("**Schnittregeln**")
     st.caption(
-        "Automatische Regeln wirken beim Erzeugen des Schnittplans. "
+        "Automatische Regeln wirken beim Erzeugen des Schnittplans (Asset-Auswahl) "
+        "oder beim OTIO-Export (Anfang abschneiden, Zoom). "
         "Eigene Regeln speicherst du als Checkliste für den manuellen Schnitt. "
         f"Datei: `{project.work_dir_path / 'edit_plan_rules.json'}`"
     )

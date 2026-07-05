@@ -85,7 +85,7 @@ def test_process_media_file_transcodes_on_decode_failure(
     project = _project(tmp_path)
     media = project.project_root_path / "Florida Keys" / "clip.mp4"
 
-    def _fake_transcode(original: Path, output_path: Path) -> None:
+    def _fake_transcode(original: Path, output_path: Path, *, video_filter: str | None = None) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"clean")
 

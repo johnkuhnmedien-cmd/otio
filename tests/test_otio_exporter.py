@@ -216,6 +216,24 @@ def test_clip_source_range_starts_at_embedded_timecode(tmp_path: Path) -> None:
     assert notes == []
 
 
+def test_clip_source_range_applies_trim_leading(tmp_path: Path) -> None:
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"x")
+    timing = MediaTiming(start_sec=0.0, duration_sec=10.0, rate=25.0)
+
+    with patch("otio_app.services.otio_exporter.probe_media_timing", return_value=timing):
+        source_range, play_sec, notes = _clip_source_range_for_media(
+            media,
+            fallback_rate=25.0,
+            requested_duration_sec=5.0,
+            trim_leading_sec=0.5,
+        )
+
+    assert source_range.start_time.to_seconds() == 0.5
+    assert play_sec == 5.0
+    assert any("0.5s" in note for note in notes)
+
+
 def test_clip_name_for_media_uses_filename() -> None:
     assert _clip_name_for_media(Path("/tmp/Arches_National_Park_Asset03.mp4"), index=3) == (
         "Arches_National_Park_Asset03.mp4"

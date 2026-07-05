@@ -269,7 +269,12 @@ def needs_transcode(path: Path, probe: MediaProbeInfo, decode_ok: bool) -> bool:
     return _codec_needs_transcode(probe, path)
 
 
-def transcode_to_clean(original: Path, output_path: Path) -> None:
+def transcode_to_clean(
+    original: Path,
+    output_path: Path,
+    *,
+    video_filter: str | None = None,
+) -> None:
     """Transkodiert zu H.264/AAC MP4 (Resolve-freundlich, High Profile)."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     video_flags = [
@@ -322,6 +327,8 @@ def transcode_to_clean(original: Path, output_path: Path) -> None:
             command.extend(["-map", "0:a:0", "-c:a", "aac", "-b:a", "192k"])
         else:
             command.append("-an")
+        if video_filter:
+            command.extend(["-vf", video_filter])
         command.extend([
             "-fflags",
             "+genpts",
@@ -423,8 +430,23 @@ def process_media_file(
     if not entry.needs_transcode and not force_transcode:
         return entry
 
+    from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
+    from otio_app.services.otio_media_transform import ffmpeg_scale_crop_filter
+
+    video_filter: str | None = None
+    export_opts = export_rule_options(load_edit_plan_rules(project))
+    if export_opts.auto_zoom_fill and not is_image_media(media_path):
+        probe = entry.probe or probe_media(media_path)
+        if probe.width and probe.height:
+            video_filter = ffmpeg_scale_crop_filter(
+                probe.width,
+                probe.height,
+                project.width,
+                project.height,
+            )
+
     try:
-        transcode_to_clean(media_path, output_path)
+        transcode_to_clean(media_path, output_path, video_filter=video_filter)
     except OSError as exc:
         entry.status = CLEAN_STATUS_FAILED
         entry.error = str(exc)

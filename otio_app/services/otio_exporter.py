@@ -12,6 +12,12 @@ from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPla
 from otio_app.models import Project
 from otio_app.project_layout import get_otio_export_path
 from otio_app.services.edit_plan_builder import load_edit_plan
+from otio_app.services.edit_plan_rules import ExportRuleOptions, export_rule_options, load_edit_plan_rules
+from otio_app.services.otio_media_transform import (
+    build_resolve_zoom_effect,
+    compute_fill_zoom_factor,
+    resolve_media_dimensions,
+)
 from otio_app.services.clean_media import (
     path_is_readable_file,
     resolve_effective_media_path,
@@ -192,19 +198,27 @@ def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> 
     )
 
 
-def _media_reference(path: str, fallback_rate: float) -> otio.schema.ExternalReference:
+def _media_reference(
+    path: str,
+    fallback_rate: float,
+    *,
+    trim_leading_sec: float = 0.0,
+) -> otio.schema.ExternalReference:
     """Medienreferenz mit available_range passend zum eingebetteten Datei-Timecode."""
     resolved = _resolve_media_path(path)
     timing = probe_media_timing(resolved, default_rate=fallback_rate)
     media_rate = timing.rate or fallback_rate
+    start_sec = timing.start_sec + max(0.0, trim_leading_sec)
     duration_sec = timing.duration_sec
     if duration_sec is None or duration_sec <= 0:
         duration_sec = probe_duration_seconds(resolved)
+    if duration_sec is not None and trim_leading_sec > 0:
+        duration_sec = max(0.0, duration_sec - trim_leading_sec)
     if duration_sec is None or duration_sec <= 0:
         return otio.schema.ExternalReference(target_url=_media_target_url(resolved))
     return otio.schema.ExternalReference(
         target_url=_media_target_url(resolved),
-        available_range=_time_range(duration_sec, media_rate, start_sec=timing.start_sec),
+        available_range=_time_range(duration_sec, media_rate, start_sec=start_sec),
     )
 
 
@@ -213,9 +227,11 @@ def _clip_source_range_for_media(
     *,
     fallback_rate: float,
     requested_duration_sec: float,
+    trim_leading_sec: float = 0.0,
 ) -> tuple[otio.opentime.TimeRange, float, list[str]]:
     """source_range im selben TC-Raum wie die Datei; Dauer ggf. auf Datei gekappt."""
     notes: list[str] = []
+    trim = max(0.0, trim_leading_sec)
     if is_image_media(media_path):
         return (
             _time_range(max(0.01, requested_duration_sec), fallback_rate),
@@ -225,10 +241,12 @@ def _clip_source_range_for_media(
 
     timing = probe_media_timing(media_path, default_rate=fallback_rate)
     media_rate = timing.rate or fallback_rate
-    start_sec = timing.start_sec
+    start_sec = timing.start_sec + trim
     available_sec = timing.duration_sec
     if available_sec is None or available_sec <= 0:
         available_sec = probe_duration_seconds(media_path)
+    if available_sec is not None and trim > 0:
+        available_sec = max(0.0, available_sec - trim)
     if available_sec is None or available_sec <= 0:
         return (
             _time_range(max(0.01, requested_duration_sec), media_rate, start_sec=start_sec),
@@ -237,6 +255,8 @@ def _clip_source_range_for_media(
         )
 
     play_sec = min(requested_duration_sec, available_sec)
+    if trim > 0:
+        notes.append(f"{media_path.name}: erste {trim:.1f}s übersprungen")
     if play_sec + 0.05 < requested_duration_sec:
         notes.append(
             f"{media_path.name}: Shot {requested_duration_sec:.1f}s, Datei nur "
@@ -302,22 +322,25 @@ def _append_video_item(
     index: int,
     rate: float,
     duration_sec: float,
+    export_rules: ExportRuleOptions,
     timing_notes: list[str] | None = None,
 ) -> None:
     if shot.asset_path:
         original = _resolve_media_path(shot.asset_path)
         media_path = resolve_effective_media_path(project, shot.folder, original)
         clip_name = _clip_name_for_media(media_path, index=index)
+        trim = export_rules.trim_leading_sec
         source_range, _, notes = _clip_source_range_for_media(
             media_path,
             fallback_rate=rate,
             requested_duration_sec=max(0.01, duration_sec),
+            trim_leading_sec=trim,
         )
         if timing_notes is not None:
             timing_notes.extend(notes)
         video_clip = otio.schema.Clip(
             name=clip_name,
-            media_reference=_media_reference(str(media_path), rate),
+            media_reference=_media_reference(str(media_path), rate, trim_leading_sec=trim),
         )
         video_clip.source_range = source_range
         video_clip.metadata["folder"] = shot.folder
@@ -325,6 +348,22 @@ def _append_video_item(
         video_clip.metadata["passage_text"] = shot.passage_text
         video_clip.metadata["original_asset_path"] = shot.asset_path
         video_clip.metadata["resolved_media_path"] = str(media_path)
+
+        if export_rules.auto_zoom_fill and not is_image_media(media_path):
+            width, height = resolve_media_dimensions(project, shot.folder, media_path)
+            if width and height:
+                zoom = compute_fill_zoom_factor(
+                    width,
+                    height,
+                    project.width,
+                    project.height,
+                )
+                if zoom is not None:
+                    video_clip.metadata["asset_width"] = width
+                    video_clip.metadata["asset_height"] = height
+                    video_clip.metadata["zoom_factor"] = round(zoom, 4)
+                    video_clip.effects.append(build_resolve_zoom_effect(zoom))
+
         track.append(video_clip)
         return
 
@@ -343,6 +382,7 @@ def _append_aligned_voice_track(
     rate: float,
     *,
     track_index: int,
+    export_rules: ExportRuleOptions,
 ) -> None:
     """Eine Audiospur pro Voice-over — Originaldatei, ein Stück pro Ordner-Abschnitt."""
     track = otio.schema.Track(
@@ -365,11 +405,16 @@ def _append_aligned_voice_track(
             probe_duration_seconds(resolved) or section.voice_play_duration_sec,
             section.voice_play_duration_sec,
         ),
+        trim_leading_sec=export_rules.trim_leading_sec,
     )
 
     voice_clip = otio.schema.Clip(
         name=Path(section.voice_file).stem,
-        media_reference=_media_reference(section.voice_file, rate),
+        media_reference=_media_reference(
+            section.voice_file,
+            rate,
+            trim_leading_sec=export_rules.trim_leading_sec,
+        ),
     )
     voice_clip.source_range = source_range
     voice_clip.metadata["voice_file"] = section.voice_file
@@ -400,11 +445,16 @@ def build_otio_timeline(
         )
 
     sections = _compute_timeline_sections(merged.shots, settings)
+    export_rules = export_rule_options(load_edit_plan_rules(project))
     timeline = otio.schema.Timeline(name=project.name)
     timeline.metadata["project_id"] = project.id
     timeline.metadata["included_folders"] = list(merged.included_folders)
     timeline.metadata["audio_offset_sec"] = settings.audio_offset_sec
     timeline.metadata["section_outro_sec"] = settings.section_outro_sec
+    if export_rules.trim_leading_sec > 0:
+        timeline.metadata["trim_leading_sec"] = export_rules.trim_leading_sec
+    if export_rules.auto_zoom_fill:
+        timeline.metadata["auto_zoom_fill"] = True
     timeline.global_start_time = otio.opentime.RationalTime.from_seconds(0, rate)
 
     video_track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
@@ -420,6 +470,7 @@ def build_otio_timeline(
             index=index,
             rate=rate,
             duration_sec=duration_sec,
+            export_rules=export_rules,
             timing_notes=timing_notes,
         )
 
@@ -438,6 +489,7 @@ def build_otio_timeline(
             section,
             rate,
             track_index=audio_index,
+            export_rules=export_rules,
         )
         audio_index += 1
 

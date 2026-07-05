@@ -14,6 +14,8 @@ RULE_MAX_ASSET_USES = "max_asset_uses"
 RULE_NO_CONSECUTIVE_SAME_ASSET = "no_consecutive_same_asset"
 RULE_MIN_SHOTS_BETWEEN_SAME_ASSET = "min_shots_between_same_asset"
 RULE_PREFER_LEAST_USED_ASSET = "prefer_least_used_asset"
+RULE_TRIM_LEADING = "trim_leading"
+RULE_AUTO_ZOOM_FILL = "auto_zoom_fill"
 RULE_CUSTOM = "custom"
 RULE_CUSTOM_NOTE = "custom_note"  # Legacy — wird wie RULE_CUSTOM behandelt
 
@@ -56,6 +58,27 @@ EDIT_PLAN_RULE_TEMPLATES: tuple[EditPlanRuleTemplate, ...] = (
         description="Bevorzugt Assets, die im Schnittplan bisher seltener vorkamen.",
         default_params={},
         implemented=False,
+    ),
+    EditPlanRuleTemplate(
+        rule_type=RULE_TRIM_LEADING,
+        label="Anfang abschneiden",
+        description=(
+            "Beim OTIO-Export die ersten Sekunden jedes Assets überspringen "
+            "(z. B. schwarzer Erstframe)."
+        ),
+        default_params={"trim_sec": 0.5},
+        implemented=True,
+    ),
+    EditPlanRuleTemplate(
+        rule_type=RULE_AUTO_ZOOM_FILL,
+        label="Zoom für nicht-16:9",
+        description=(
+            "Beim OTIO-Export Zoom berechnen (z. B. 1,07× bei 4096×2160), "
+            "damit Letterboxing in Resolve entfällt. Beim Transcode wird "
+            "das Seitenverhältnis mit eingebettet."
+        ),
+        default_params={},
+        implemented=True,
     ),
 )
 
@@ -197,6 +220,29 @@ def _max_count(rules: list[EditPlanRule]) -> int | None:
 
 def _no_consecutive(rules: list[EditPlanRule]) -> bool:
     return any(rule.rule_type == RULE_NO_CONSECUTIVE_SAME_ASSET for rule in rules)
+
+
+@dataclass(frozen=True)
+class ExportRuleOptions:
+    """Regeln, die beim OTIO-Export / Transcode wirken (nicht bei Asset-Auswahl)."""
+
+    trim_leading_sec: float = 0.0
+    auto_zoom_fill: bool = False
+
+
+def export_rule_options(rules_doc: EditPlanRulesDocument) -> ExportRuleOptions:
+    trim_sec = 0.0
+    auto_zoom = False
+    for rule in _enabled_rules(rules_doc):
+        if rule.rule_type == RULE_TRIM_LEADING:
+            raw = rule.params.get("trim_sec", 0.5)
+            try:
+                trim_sec = max(0.0, float(raw))
+            except (TypeError, ValueError):
+                trim_sec = 0.5
+        elif rule.rule_type == RULE_AUTO_ZOOM_FILL:
+            auto_zoom = True
+    return ExportRuleOptions(trim_leading_sec=trim_sec, auto_zoom_fill=auto_zoom)
 
 
 def validate_shots_against_rules(
