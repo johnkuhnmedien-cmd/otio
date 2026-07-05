@@ -90,7 +90,7 @@ def render_voice_folder_mapping() -> None:
                 "Asset-Ordner",
                 options=option_list,
                 index=option_list.index(selected_folder),
-                key=f"map_folder_{project.id}_{index}",
+                key=f"mapping_folder_{project.id}_{index}",
                 label_visibility="collapsed",
             )
             folder_value = None if choice == "— nicht zugeordnet —" else choice

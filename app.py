@@ -21,6 +21,7 @@ from otio_app.ui.api_keys_settings import render_api_keys_settings
 from otio_app.ui.edit_plan import render_edit_plan_page
 from otio_app.ui.navigation import (
     ACTIVE_PROJECT_KEY,
+    LAST_NAV_PAGE_KEY,
     NAVIGATION_OPTIONS,
     PAGE_ANALYSIS,
     PAGE_CLEAN_MEDIA,
@@ -193,6 +194,10 @@ with st.sidebar:
     )
     st.divider()
     st.caption("Workflow: ⓪ → ① → ② → ③ · Details unter Systemstatus")
+
+if st.session_state.get(LAST_NAV_PAGE_KEY) != page:
+    st.session_state[LAST_NAV_PAGE_KEY] = page
+    st.rerun()
 
 active_project_id = st.session_state.get(ACTIVE_PROJECT_KEY)
 if active_project_id and page != PAGE_ANALYSIS:

@@ -342,59 +342,57 @@ def render_edit_plan_page() -> None:
                 f"Noch kein Vorschlag für **{selected_folder}** — "
                 "zuerst unter „Vorschlag“ generieren."
             )
-            render_file_paths(project)
-            return
+        else:
+            st.markdown(
+                f"**{selected_folder}** · {len(draft.shots)} Shots "
+                f"— Audio-Offset: {draft.settings.audio_offset_sec}s"
+            )
+            rules_doc = get_edit_plan_rules_for_project(project)
+            violations = validate_shots_against_rules(draft.shots, rules_doc)
+            custom_rules = list_custom_rules(rules_doc, enabled_only=True)
+            if custom_rules:
+                st.markdown("**Deine Regeln (Checkliste)**")
+                for rule in custom_rules:
+                    st.caption(f"• **{rule_label(rule)}** — {rule_description(rule)}")
+            if violations:
+                st.warning(f"{len(violations)} Regelverletzung(en) im aktuellen Vorschlag.")
+            for index, shot in enumerate(draft.shots):
+                icon = "🟢" if shot.asset_path else "🟡"
+                with st.expander(
+                    f"{icon} Shot {index + 1} · {shot.folder} · {shot.duration_sec:.1f}s",
+                    expanded=index < 2,
+                ):
+                    st.write(f"**Motiv:** {shot.motif or '—'}")
+                    st.write(f"**Voice:** {shot.voice_start_sec:.1f}–{shot.voice_end_sec:.1f}s")
+                    st.caption(shot.passage_text)
+                    if shot.asset_path:
+                        st.write(f"**Asset:** `{Path(shot.asset_path).name}`")
+                    else:
+                        st.warning("Kein lokales Asset — Fallback folgt später (Adobe Stock / Pexels / KI).")
 
-        st.markdown(
-            f"**{selected_folder}** · {len(draft.shots)} Shots "
-            f"— Audio-Offset: {draft.settings.audio_offset_sec}s"
-        )
-        rules_doc = get_edit_plan_rules_for_project(project)
-        violations = validate_shots_against_rules(draft.shots, rules_doc)
-        custom_rules = list_custom_rules(rules_doc, enabled_only=True)
-        if custom_rules:
-            st.markdown("**Deine Regeln (Checkliste)**")
-            for rule in custom_rules:
-                st.caption(f"• **{rule_label(rule)}** — {rule_description(rule)}")
-        if violations:
-            st.warning(f"{len(violations)} Regelverletzung(en) im aktuellen Vorschlag.")
-        for index, shot in enumerate(draft.shots):
-            icon = "🟢" if shot.asset_path else "🟡"
-            with st.expander(
-                f"{icon} Shot {index + 1} · {shot.folder} · {shot.duration_sec:.1f}s",
-                expanded=index < 2,
+            confirm = st.checkbox(
+                f"Schnittplan für {selected_folder} geprüft und bestätigt",
+                key=f"confirm_plan_{project.id}_{safe_folder_slug(selected_folder)}",
+            )
+            if st.button(
+                "Schnittplan speichern",
+                key=f"save_plan_{project.id}_{safe_folder_slug(selected_folder)}",
+                type="primary",
             ):
-                st.write(f"**Motiv:** {shot.motif or '—'}")
-                st.write(f"**Voice:** {shot.voice_start_sec:.1f}–{shot.voice_end_sec:.1f}s")
-                st.caption(shot.passage_text)
-                if shot.asset_path:
-                    st.write(f"**Asset:** `{Path(shot.asset_path).name}`")
+                if not confirm:
+                    st.warning("Bitte bestätigen.")
                 else:
-                    st.warning("Kein lokales Asset — Fallback folgt später (Adobe Stock / Pexels / KI).")
+                    confirmed = draft.model_copy(update={"confirmed": True, "folder_name": selected_folder})
+                    for shot in confirmed.shots:
+                        if not shot.asset_path:
+                            shot.asset_source = "missing"
+                    save_edit_plan(project, confirmed, selected_folder)
+                    _set_draft(confirmed, selected_folder)
+                    st.success(f"Gespeichert: `{plan_path}`")
+                    st.rerun()
 
-        confirm = st.checkbox(
-            f"Schnittplan für {selected_folder} geprüft und bestätigt",
-            key=f"confirm_plan_{project.id}_{safe_folder_slug(selected_folder)}",
-        )
-        if st.button(
-            "Schnittplan speichern",
-            key=f"save_plan_{project.id}_{safe_folder_slug(selected_folder)}",
-            type="primary",
-        ):
-            if not confirm:
-                st.warning("Bitte bestätigen.")
-            else:
-                confirmed = draft.model_copy(update={"confirmed": True, "folder_name": selected_folder})
-                for shot in confirmed.shots:
-                    if not shot.asset_path:
-                        shot.asset_source = "missing"
-                save_edit_plan(project, confirmed, selected_folder)
-                _set_draft(confirmed, selected_folder)
-                st.success(f"Gespeichert: `{plan_path}`")
-                st.rerun()
-
-        with st.expander("JSON-Vorschau", expanded=False):
-            st.code(draft.model_dump_json(indent=2)[:6000])
+            with st.expander("JSON-Vorschau", expanded=False):
+                st.code(draft.model_dump_json(indent=2)[:6000])
 
     with tab_export:
         default_export_path = get_otio_export_path(project.work_dir_path, project.name)

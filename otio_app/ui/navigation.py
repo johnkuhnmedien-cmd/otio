@@ -23,3 +23,4 @@ NAVIGATION_OPTIONS = (
 )
 
 ACTIVE_PROJECT_KEY = "active_project_id"
+LAST_NAV_PAGE_KEY = "_last_nav_page"
