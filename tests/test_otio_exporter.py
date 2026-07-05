@@ -146,7 +146,7 @@ def test_clip_durations_use_seconds_not_frames(tmp_path: Path) -> None:
     assert clips[0].source_range.duration.to_seconds() == 3.0
     assert clips[1].source_range.duration.to_seconds() == 8.0
     assert clips[0].name == "Florida_Keys_1.mp4"
-    assert clips[0].media_reference.target_url.startswith("file://")
+    assert clips[0].media_reference.target_url.startswith("/")
 
 
 def test_audio_offset_and_outro_on_export(tmp_path: Path) -> None:
@@ -169,12 +169,17 @@ def test_audio_offset_and_outro_on_export(tmp_path: Path) -> None:
     assert canyon_audio[0].source_range.duration.to_seconds() == 12.0
 
 
-def test_media_target_url_uses_file_scheme(tmp_path: Path) -> None:
-    media = tmp_path / "Arches_National_Park_Asset03.mp4"
+def test_media_target_url_uses_absolute_posix_path(tmp_path: Path) -> None:
+    folder = tmp_path / "Unglaubliche Welt"
+    folder.mkdir()
+    media = folder / "Apostle_Islands_Asset01.mp4"
     media.write_bytes(b"x")
     url = _media_target_url(media)
-    assert url.startswith("file://")
-    assert "Arches_National_Park_Asset03.mp4" in url
+    assert url.startswith("/")
+    assert "file://" not in url
+    assert "Apostle_Islands_Asset01.mp4" in url
+    assert "%20" not in url
+    assert "Unglaubliche Welt" in url
 
 
 def test_clip_name_for_media_uses_filename() -> None:

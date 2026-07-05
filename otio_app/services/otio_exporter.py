@@ -160,11 +160,16 @@ def _resolve_media_path(path: str) -> Path:
 
 
 def _media_target_url(path: Path) -> str:
-    """Absolute file://-URL — DaVinci Resolve erwartet URLs, keine bloßen Pfade."""
+    """Absoluter POSIX-Pfad für target_url.
+
+    DaVinci Resolve importiert OTIO mit ``file://``-URLs oft nicht zuverlässig
+    (sucht dann nur nach Dateinamen → „File not found in search directories“).
+    """
     try:
-        return path.expanduser().resolve().as_uri()
+        resolved = path.expanduser().resolve()
     except OSError:
-        return path.expanduser().as_uri()
+        resolved = path.expanduser()
+    return resolved.as_posix()
 
 
 def _clip_name_for_media(media_path: Path, *, index: int) -> str:
@@ -184,7 +189,7 @@ def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> 
 
 
 def _media_reference(path: str, rate: float) -> otio.schema.ExternalReference:
-    """Absolute Medien-URL (file://) — Resolve findet Dateien zuverlässiger als mit Rohpfaden."""
+    """Absoluter Medienpfad für Resolve-kompatiblen OTIO-Import."""
     resolved = _resolve_media_path(path)
     available_duration = probe_duration_seconds(resolved)
     if available_duration is None or available_duration <= 0:
