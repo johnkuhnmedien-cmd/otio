@@ -24,6 +24,19 @@ _RUN_COUNT_KEY = "_otio_run_count"
 _LOG_FILE_NAME = "ui_activity.log"
 
 
+def log_heavy_operation(label: str, *, page: str = "") -> None:
+    """Protokolliert teure Operationen (z. B. ffmpeg) für die Diagnose."""
+    suffix = f" · page={page}" if page else ""
+    line = f"{datetime.now(timezone.utc).isoformat()} · HEAVY · {label}{suffix}"
+    log: deque[str] = st.session_state.get(_RUN_LOG_KEY, deque(maxlen=30))
+    if not isinstance(log, deque):
+        log = deque(maxlen=30)
+    log.appendleft(line)
+    st.session_state[_RUN_LOG_KEY] = log
+    logger.warning(line)
+    _append_log_file(line)
+
+
 def record_script_run(page: str) -> None:
     """Zählt Script-Läufe und protokolliert die aktuelle Seite."""
     count = int(st.session_state.get(_RUN_COUNT_KEY, 0)) + 1

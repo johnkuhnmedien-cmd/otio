@@ -18,6 +18,9 @@ from otio_app.ui.system_status import render_system_status_page
 from otio_app.ui.voice_folder_mapping import render_voice_folder_mapping
 
 
+_CURRENT_PAGE_KEY = "_otio_current_page"
+
+
 def _wrap_page(
     page_id: str,
     render_fn: Callable[[], None],
@@ -26,10 +29,14 @@ def _wrap_page(
     purge_mapping_on_enter: bool = False,
 ) -> Callable[[], None]:
     def wrapped() -> None:
+        previous_page = st.session_state.get(_CURRENT_PAGE_KEY)
+        if previous_page != page_id:
+            if purge_mapping_on_enter:
+                clear_page_widget_state(PAGE_MAPPING)
+            st.session_state[_CURRENT_PAGE_KEY] = page_id
+
         reconcile_all_jobs()
         record_script_run(page_id)
-        if purge_mapping_on_enter:
-            clear_page_widget_state(PAGE_MAPPING)
         if show_jobs_banner:
             project_id = st.session_state.get(ACTIVE_PROJECT_KEY)
             if project_id:

@@ -37,7 +37,11 @@ from otio_app.services.edit_plan_rules import (
     rule_label,
     validate_shots_against_rules,
 )
-from otio_app.services.otio_exporter import export_otio_timeline, merge_confirmed_edit_plans
+from otio_app.services.otio_exporter import (
+    export_otio_timeline,
+    merge_confirmed_edit_plans,
+    verify_shot_media_paths,
+)
 from otio_app.services.otio_export_settings import (
     OtioExportSettings,
     load_otio_export_settings,
@@ -48,6 +52,8 @@ from otio_app.ui.edit_plan_rules_ui import (
     get_edit_plan_rules_for_project,
     render_edit_plan_rules_manager,
 )
+from otio_app.ui.activity import log_heavy_operation
+from otio_app.ui.navigation import PAGE_EDIT_PLAN
 from otio_app.ui.project_context import (
     render_file_paths,
     render_project_selector,
@@ -383,7 +389,8 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
     st.caption(
         "Orte werden in Voice-over-Reihenfolge zusammengeführt. "
         f"Export nach `{default_export_path}` · "
-        f"Einstellungen in `{project.work_dir_path / 'otio_export_settings.json'}`"
+        f"Einstellungen in `{project.work_dir_path / 'otio_export_settings.json'}` · "
+        "Vorschau ohne ffmpeg — volle Medienprüfung erst beim Export-Klick."
     )
 
     export_folders = st.multiselect(
@@ -442,15 +449,37 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                 audio_offset_sec=export_audio_offset,
                 section_outro_sec=export_section_outro,
             )
-            save_otio_export_settings(project, export_settings)
-            export_path = export_otio_timeline(
-                project,
-                preview,
-                export_settings=export_settings,
-            )
+            with st.spinner("Medien mit ffmpeg prüfen und OTIO schreiben …"):
+                log_heavy_operation(
+                    f"OTIO-Export ({len(preview.shots)} Shots)",
+                    page=PAGE_EDIT_PLAN,
+                )
+                save_otio_export_settings(project, export_settings)
+                export_path = export_otio_timeline(
+                    project,
+                    preview,
+                    export_settings=export_settings,
+                )
             st.success(f"Timeline exportiert: `{export_path}`")
         except (OSError, ValueError) as exc:
             st.error(str(exc))
+
+    if preview.ready and st.button(
+        "🔍 Medien jetzt tief prüfen (ffmpeg)",
+        key=f"export_deep_check_{project.id}",
+    ):
+        with st.spinner("ffmpeg prüft alle Shot-Medien …"):
+            log_heavy_operation(
+                f"Tiefe Medienprüfung ({len(preview.shots)} Shots)",
+                page=PAGE_EDIT_PLAN,
+            )
+            deep_issues = verify_shot_media_paths(project, preview.shots, strict=True)
+        if deep_issues:
+            st.warning("Probleme gefunden:")
+            for line in deep_issues[:15]:
+                st.caption(f"• {line}")
+        else:
+            st.success("Alle Shot-Medien Resolve-ready.")
 
     st.divider()
     timing_col1, timing_col2 = st.columns(2)

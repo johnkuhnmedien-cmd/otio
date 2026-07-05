@@ -49,8 +49,13 @@ class TimelineSection:
     voice_play_duration_sec: float
 
 
-def verify_shot_media_paths(project: Project, shots: list[EditPlanShot]) -> list[str]:
-    """Prüft vor dem Export, ob alle Shot-Medien lesbar und Resolve-ready sind."""
+def verify_shot_media_paths(
+    project: Project,
+    shots: list[EditPlanShot],
+    *,
+    strict: bool = False,
+) -> list[str]:
+    """Prüft Shot-Medien. strict=False: nur Pfade (schnell). strict=True: ffmpeg-Decode."""
     warnings: list[str] = []
     for index, shot in enumerate(shots, start=1):
         if not shot.asset_path:
@@ -64,7 +69,7 @@ def verify_shot_media_paths(project: Project, shots: list[EditPlanShot]) -> list
                 f"`{resolved}` nicht lesbar (Clean Media erneut ausführen?)"
             )
             continue
-        if resolved.suffix.lower() in {".mp4", ".mov", ".m4v"}:
+        if strict and resolved.suffix.lower() in {".mp4", ".mov", ".m4v"}:
             valid, validation_error = validate_clean_output(resolved)
             if not valid:
                 warnings.append(
@@ -380,6 +385,15 @@ def export_otio_timeline(
     """Schreibt die zusammengeführte Timeline als .otio-Datei."""
     if not merged.ready:
         raise ValueError("Keine Shots zum Export — zuerst Schnittpläne bestätigen.")
+
+    media_issues = verify_shot_media_paths(project, merged.shots, strict=True)
+    if media_issues:
+        preview = "\n".join(f"• {line}" for line in media_issues[:12])
+        extra = f"\n… und {len(media_issues) - 12} weitere" if len(media_issues) > 12 else ""
+        raise ValueError(
+            "Medien nicht exportierbar — Clean Media prüfen oder Schnittplan anpassen:\n"
+            f"{preview}{extra}"
+        )
 
     settings = export_settings or load_otio_export_settings(project)
     save_otio_export_settings(project, settings)

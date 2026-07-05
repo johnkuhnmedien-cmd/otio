@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import opentimelineio as otio
 
@@ -182,16 +183,43 @@ def test_clip_name_for_media_uses_filename() -> None:
     )
 
 
+def test_merge_skips_ffmpeg_decode_on_preview(tmp_path: Path, monkeypatch) -> None:
+    project = _project(tmp_path)
+    _setup_mapping_and_plans(project, tmp_path)
+    calls: list[Path] = []
+
+    def _fake_validate(path: Path) -> tuple[bool, str | None]:
+        calls.append(path)
+        return True, None
+
+    monkeypatch.setattr(
+        "otio_app.services.otio_exporter.validate_clean_output",
+        _fake_validate,
+    )
+    monkeypatch.setattr(
+        "otio_app.services.otio_exporter.path_is_readable_file",
+        lambda _path: True,
+    )
+
+    merged = merge_confirmed_edit_plans(project)
+    assert merged.ready is True
+    assert calls == []
+
+
 def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _setup_mapping_and_plans(project, tmp_path)
     merged = merge_confirmed_edit_plans(project)
 
-    export_path = export_otio_timeline(
-        project,
-        merged,
-        export_settings=OtioExportSettings(audio_offset_sec=1.0, section_outro_sec=5.0),
-    )
+    with patch(
+        "otio_app.services.otio_exporter.verify_shot_media_paths",
+        return_value=[],
+    ):
+        export_path = export_otio_timeline(
+            project,
+            merged,
+            export_settings=OtioExportSettings(audio_offset_sec=1.0, section_outro_sec=5.0),
+        )
     assert export_path.is_file()
     assert (project.work_dir_path / "otio_export_settings.json").is_file()
 
