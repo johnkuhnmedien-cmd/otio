@@ -7,6 +7,7 @@ from collections.abc import Callable
 import streamlit as st
 
 from otio_app.services.job_registry import reconcile_all_jobs
+from otio_app.build_info import expected_feature_markers, format_build_label
 from otio_app.ui.activity import record_script_run, render_activity_panel
 from otio_app.ui.analysis_jobs_ui import render_analysis_jobs_banner
 from otio_app.ui.clean_media import render_clean_media_page
@@ -101,6 +102,7 @@ def run_app_navigation(
     ]
 
     with st.sidebar:
+        st.caption(f"Build: **{format_build_label()}**")
         st.caption("Workflow: ⓪ → ① → ② → ③ · Diagnose unter Systemstatus")
         render_activity_panel()
 
