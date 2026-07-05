@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from otio_app.project_layout import (
     clean_output_path_for_media,
     get_clean_media_output_dir,
     get_folder_clean_manifest_path,
+    get_folder_clean_output_dir,
     safe_folder_slug,
 )
 from otio_app.services.media_utils import (
@@ -28,6 +30,8 @@ CLEAN_STATUS_CLEAN = "clean"
 CLEAN_STATUS_FAILED = "failed"
 CLEAN_STATUS_PENDING = "pending"
 CLEAN_STATUS_NEEDS_TRANSCODE = "needs_transcode"
+
+_ASSET_NUMBER_RE = re.compile(r"asset[_\s-]*(\d+)", re.IGNORECASE)
 
 _RESOLVE_FRIENDLY_VIDEO_CODECS = frozenset(
     {"h264", "avc", "avc1", "libx264", "mpeg4", "mp4v"}
@@ -49,7 +53,95 @@ _PROBLEMATIC_VIDEO_CODECS = frozenset(
     }
 )
 
-ShouldCancel = Callable[[], bool]
+def media_asset_number(path: Path) -> int | None:
+    """Extrahiert Asset-Nummer aus Dateinamen (z. B. …_Asset03… → 3)."""
+    match = _ASSET_NUMBER_RE.search(path.name)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def media_stem_key(path: Path) -> str:
+    return safe_folder_slug(path.stem).casefold()
+
+
+def path_is_readable_file(path: Path) -> bool:
+    try:
+        if not path.is_file():
+            return False
+        with path.open("rb") as handle:
+            handle.read(1)
+        return True
+    except OSError:
+        return False
+
+
+def _probe_has_audio(path: Path) -> bool:
+    probe = probe_media(path)
+    return bool(probe.audio_codec)
+
+
+def validate_clean_output(path: Path) -> tuple[bool, str | None]:
+    """Prüft, ob eine Clean-Datei für Resolve/DaVinci wirklich nutzbar ist."""
+    if not path_is_readable_file(path):
+        return False, "Clean-Datei fehlt oder ist nicht lesbar"
+    if path.stat().st_size < 1024:
+        return False, "Clean-Datei ist leer"
+
+    probe = probe_media(path)
+    if not probe.video_codec and not is_image_media(path):
+        return False, "Clean-Datei enthält keinen Video-Stream"
+    if probe.video_codec and _codec_needs_transcode(probe, path):
+        return False, f"Clean-Datei nicht Resolve-freundlich ({probe.video_codec})"
+
+    decode_ok, decode_error = test_decode(path, timeout_sec=180)
+    if not decode_ok:
+        return False, decode_error or "Decode-Test der Clean-Datei fehlgeschlagen"
+
+    duration = probe.duration_sec
+    if not is_image_media(path) and (duration is None or duration <= 0):
+        return False, "Clean-Datei ohne gültige Dauer"
+    return True, None
+
+
+def list_clean_files_in_folder(project: Project, folder_name: str) -> list[Path]:
+    clean_dir = get_folder_clean_output_dir(project.work_dir_path, folder_name)
+    if not clean_dir.is_dir():
+        return []
+    files: list[Path] = []
+    for pattern in ("*.mp4", "*.mov", "*.m4v"):
+        try:
+            files.extend(clean_dir.glob(pattern))
+        except OSError:
+            continue
+    return sorted({path.resolve() for path in files if path_is_readable_file(path)}, key=lambda p: p.name.casefold())
+
+
+def find_clean_file_for_media(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+) -> Path | None:
+    """Sucht Clean-Datei per erwartetem Pfad, Asset-Nummer oder Stem-Slug."""
+    expected = clean_output_path_for_media(
+        project.work_dir_path,
+        folder_name,
+        media_path,
+    )
+    if path_is_readable_file(expected):
+        return expected
+
+    asset_number = media_asset_number(media_path)
+    stem_key = media_stem_key(media_path)
+    for candidate in list_clean_files_in_folder(project, folder_name):
+        if asset_number is not None and media_asset_number(candidate) == asset_number:
+            return candidate
+        if media_stem_key(candidate) == stem_key:
+            return candidate
+    return None
 
 
 def _run_command(command: list[str], *, timeout_sec: int = 600) -> subprocess.CompletedProcess[str]:
@@ -168,8 +260,24 @@ def needs_transcode(path: Path, probe: MediaProbeInfo, decode_ok: bool) -> bool:
 
 
 def transcode_to_clean(original: Path, output_path: Path) -> None:
-    """Transkodiert zu H.264/AAC MP4 (Resolve-freundlich)."""
+    """Transkodiert zu H.264/AAC MP4 (Resolve-freundlich, High Profile)."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    video_flags = [
+        "-c:v",
+        "libx264",
+        "-profile:v",
+        "high",
+        "-level",
+        "4.2",
+        "-preset",
+        "medium",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+    ]
     if is_image_media(original):
         command = [
             "ffmpeg",
@@ -179,17 +287,16 @@ def transcode_to_clean(original: Path, output_path: Path) -> None:
             "1",
             "-i",
             str(original),
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
+            *video_flags,
             "-t",
             "5",
-            "-movflags",
-            "+faststart",
             str(output_path),
         ]
     else:
+        probe = probe_media(original)
+        if not probe.video_codec:
+            raise RuntimeError("Kein Video-Stream in Quelldatei")
+        has_audio = bool(probe.audio_codec)
         command = [
             "ffmpeg",
             "-y",
@@ -197,25 +304,13 @@ def transcode_to_clean(original: Path, output_path: Path) -> None:
             "-i",
             str(original),
             "-map",
-            "0:v:0?",
-            "-map",
-            "0:a:0?",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "medium",
-            "-crf",
-            "18",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-movflags",
-            "+faststart",
-            str(output_path),
+            "0:v:0",
         ]
+        if has_audio:
+            command.extend(["-map", "0:a:0", "-c:a", "aac", "-b:a", "192k"])
+        else:
+            command.append("-an")
+        command.extend([*video_flags, str(output_path)])
 
     try:
         result = _run_command(command, timeout_sec=3600)
@@ -228,16 +323,24 @@ def transcode_to_clean(original: Path, output_path: Path) -> None:
         message = (result.stderr or result.stdout or "").strip()
         raise RuntimeError(message or f"Transcode fehlgeschlagen (Exit {result.returncode})")
 
-    if not output_path.is_file() or output_path.stat().st_size == 0:
+    if not path_is_readable_file(output_path) or output_path.stat().st_size < 1024:
         raise RuntimeError("Transcode lieferte keine gültige Ausgabedatei")
+
+    valid, validation_error = validate_clean_output(output_path)
+    if not valid:
+        try:
+            output_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RuntimeError(validation_error or "Clean-Datei nach Transcode ungültig")
 
 
 def validate_media_file(path: Path) -> CleanMediaEntry:
     """Prüft eine Datei (Probe + Decode) ohne Transcode."""
     entry = CleanMediaEntry(original_path=str(path.resolve()))
-    if not path.is_file():
+    if not path_is_readable_file(path):
         entry.status = CLEAN_STATUS_FAILED
-        entry.error = "Datei nicht gefunden"
+        entry.error = "Datei nicht gefunden oder nicht lesbar (iCloud?)"
         entry.decode_ok = False
         return entry
 
@@ -265,18 +368,42 @@ def process_media_file(
     force_transcode: bool = False,
 ) -> CleanMediaEntry:
     """Validiert und transkodiert bei Bedarf; Original bleibt unverändert."""
+    if not path_is_readable_file(media_path):
+        entry = CleanMediaEntry(
+            original_path=str(media_path),
+            status=CLEAN_STATUS_FAILED,
+            error="Original nicht lesbar (iCloud?)",
+            decode_ok=False,
+        )
+        return entry
+
     entry = validate_media_file(media_path)
-    if entry.status == CLEAN_STATUS_FAILED:
-        return entry
-
-    if not entry.needs_transcode and not force_transcode:
-        return entry
-
     output_path = clean_output_path_for_media(
         project.work_dir_path,
         folder_name,
         media_path,
     )
+
+    existing_clean = find_clean_file_for_media(project, folder_name, media_path)
+    if existing_clean is not None and not force_transcode:
+        valid, validation_error = validate_clean_output(existing_clean)
+        if valid:
+            entry.clean_path = str(existing_clean.resolve())
+            entry.status = CLEAN_STATUS_CLEAN
+            entry.probe = probe_media(existing_clean)
+            entry.error = None
+            entry.transcoded_at = entry.transcoded_at or datetime.now(timezone.utc)
+            return entry
+        if existing_clean != output_path:
+            try:
+                existing_clean.unlink(missing_ok=True)
+            except OSError:
+                pass
+        entry.error = validation_error
+
+    if not entry.needs_transcode and not force_transcode:
+        return entry
+
     try:
         transcode_to_clean(media_path, output_path)
     except OSError as exc:
@@ -290,6 +417,7 @@ def process_media_file(
 
     entry.clean_path = str(output_path.resolve())
     entry.status = CLEAN_STATUS_CLEAN
+    entry.probe = probe_media(output_path)
     entry.transcoded_at = datetime.now(timezone.utc)
     entry.error = None
     return entry
@@ -406,64 +534,181 @@ def resolve_effective_media_path(
     folder_name: str,
     media_path: Path,
 ) -> Path:
-    """Liefert clean-Pfad wenn vorhanden, sonst Original."""
+    """Liefert clean-Pfad wenn vorhanden und gültig, sonst lesbares Original."""
     try:
         resolved = media_path.expanduser().resolve()
     except OSError:
         resolved = media_path.expanduser()
 
-    clean_root = get_clean_media_output_dir(project.work_dir_path)
-    try:
-        if clean_root in resolved.parents and resolved.is_file():
-            return resolved
-    except OSError:
-        pass
+    clean_candidate = find_clean_file_for_media(project, folder_name, resolved)
+    if clean_candidate is not None:
+        valid, _ = validate_clean_output(clean_candidate)
+        if valid:
+            return clean_candidate
 
     manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
     entry = _entry_for_original(manifest, resolved)
-    if entry is None:
+    if entry is not None:
+        if entry.status == CLEAN_STATUS_CLEAN:
+            for candidate in (
+                Path(entry.clean_path) if entry.clean_path else None,
+                clean_output_path_for_media(
+                    project.work_dir_path,
+                    folder_name,
+                    Path(entry.original_path),
+                ),
+            ):
+                if candidate is None:
+                    continue
+                try:
+                    candidate = candidate.expanduser().resolve()
+                except OSError:
+                    candidate = candidate.expanduser()
+                if path_is_readable_file(candidate):
+                    valid, _ = validate_clean_output(candidate)
+                    if valid:
+                        return candidate
+
+        if entry.status == CLEAN_STATUS_OK:
+            original = Path(entry.original_path).expanduser()
+            try:
+                original = original.resolve()
+            except OSError:
+                pass
+            if path_is_readable_file(original):
+                return original
+
+    if path_is_readable_file(resolved):
         return resolved
 
-    if entry.status == CLEAN_STATUS_CLEAN and entry.clean_path:
-        clean = Path(entry.clean_path).expanduser()
-        try:
-            clean = clean.resolve()
-        except OSError:
-            pass
-        if clean.is_file():
-            return clean
-        expected = clean_output_path_for_media(
-            project.work_dir_path,
-            folder_name,
-            Path(entry.original_path),
-        )
-        if expected.is_file():
-            return expected
-
-    if entry.status == CLEAN_STATUS_OK:
-        original = Path(entry.original_path).expanduser()
-        try:
-            original = original.resolve()
-        except OSError:
-            pass
-        if original.is_file():
-            return original
+    if clean_candidate is not None:
+        return clean_candidate
 
     return resolved
 
 
-def folder_clean_media_ready(project: Project, folder_name: str) -> bool:
-    """True wenn Manifest existiert und alle Medien ok/clean sind."""
-    manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
-    if manifest is None:
+def entry_is_ready_on_disk(
+    project: Project,
+    folder_name: str,
+    entry: CleanMediaEntry,
+) -> bool:
+    if entry.status == CLEAN_STATUS_FAILED:
         return False
+    if entry.status == CLEAN_STATUS_NEEDS_TRANSCODE or entry.status == CLEAN_STATUS_PENDING:
+        return False
+    if entry.status == CLEAN_STATUS_CLEAN:
+        clean = find_clean_file_for_media(
+            project,
+            folder_name,
+            Path(entry.original_path),
+        )
+        if clean is None and entry.clean_path:
+            clean = Path(entry.clean_path)
+        if clean is None:
+            return False
+        valid, _ = validate_clean_output(clean)
+        return valid
+    if entry.status == CLEAN_STATUS_OK:
+        original = Path(entry.original_path)
+        return path_is_readable_file(original)
+    return False
+
+
+def folder_clean_media_ready(project: Project, folder_name: str) -> bool:
+    """True wenn alle Medien auf Disk nutzbar sind (Original ok oder gültige Clean-Datei)."""
     media_files = list_folder_media(project, folder_name)
     if not media_files:
         return True
-    if len(manifest.entries) < len(media_files):
+
+    manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
+    if manifest is None:
         return False
-    ok_statuses = {CLEAN_STATUS_OK, CLEAN_STATUS_CLEAN}
-    return all(entry.status in ok_statuses for entry in manifest.entries)
+
+    entries_by_original: dict[str, CleanMediaEntry] = {}
+    for entry in manifest.entries:
+        entries_by_original[entry.original_path] = entry
+        entries_by_original[Path(entry.original_path).name.casefold()] = entry
+        number = media_asset_number(Path(entry.original_path))
+        if number is not None:
+            entries_by_original[f"asset:{number}"] = entry
+
+    for media_path in media_files:
+        key = str(media_path.resolve()) if path_is_readable_file(media_path) else str(media_path)
+        entry = entries_by_original.get(key)
+        if entry is None:
+            entry = entries_by_original.get(media_path.name.casefold())
+        if entry is None:
+            number = media_asset_number(media_path)
+            if number is not None:
+                entry = entries_by_original.get(f"asset:{number}")
+        if entry is None:
+            return False
+        if not entry_is_ready_on_disk(project, folder_name, entry):
+            return False
+    return True
+
+
+def audit_folder_clean_media(
+    project: Project,
+    folder_name: str,
+) -> list[dict[str, str]]:
+    """Diagnose je Medium — für UI und OTIO-Export-Warnungen."""
+    issues: list[dict[str, str]] = []
+    manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
+
+    for media_path in list_folder_media(project, folder_name):
+        name = media_path.name
+        resolved = resolve_effective_media_path(project, folder_name, media_path)
+        valid, validation_error = (
+            validate_clean_output(resolved)
+            if resolved.suffix.lower() in {".mp4", ".mov", ".m4v"}
+            else (path_is_readable_file(resolved), None)
+        )
+        if not path_is_readable_file(resolved):
+            issues.append(
+                {
+                    "media": name,
+                    "issue": "Keine lesbare Datei gefunden",
+                    "resolved_path": str(resolved),
+                }
+            )
+            continue
+        if not valid:
+            issues.append(
+                {
+                    "media": name,
+                    "issue": validation_error or "Datei nicht Resolve-ready",
+                    "resolved_path": str(resolved),
+                }
+            )
+            continue
+
+        entry = _entry_for_original(manifest, media_path) if manifest else None
+        if entry and entry.status == CLEAN_STATUS_NEEDS_TRANSCODE:
+            issues.append(
+                {
+                    "media": name,
+                    "issue": "Transcode noch ausstehend",
+                    "resolved_path": str(resolved),
+                }
+            )
+    return issues
+
+
+def repair_folder_manifest(
+    project: Project,
+    folder_name: str,
+    *,
+    should_cancel: ShouldCancel | None = None,
+    on_progress: Callable[[str, CleanMediaEntry], None] | None = None,
+) -> CleanMediaManifest:
+    """Synchronisiert Manifest mit Dateien auf Disk; transkodiert fehlende/ungültige Clean-Dateien."""
+    return process_folder(
+        project,
+        folder_name,
+        should_cancel=should_cancel,
+        on_progress=on_progress,
+    )
 
 
 def selected_folders_have_clean_media(project: Project) -> bool:

@@ -2,20 +2,17 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
-from otio_app.analysis_models import CleanMediaEntry, CleanMediaManifest, MediaProbeInfo
+from otio_app.analysis_models import CleanMediaEntry, CleanMediaManifest, EditPlanSettings, EditPlanShot, MediaProbeInfo
 from otio_app.models import Project
 from otio_app.services.clean_media import (
     CLEAN_STATUS_CLEAN,
-    CLEAN_STATUS_NEEDS_TRANSCODE,
     CLEAN_STATUS_OK,
+    find_clean_file_for_media,
     folder_clean_media_ready,
-    load_clean_media_manifest,
+    media_asset_number,
     needs_transcode,
     process_media_file,
     resolve_effective_media_path,
@@ -23,14 +20,12 @@ from otio_app.services.clean_media import (
     validate_media_file,
 )
 from otio_app.services.media_inventory_cache import resolve_media_for_analysis
-from otio_app.services.otio_exporter import build_otio_timeline
-from otio_app.analysis_models import EditPlanSettings, EditPlanShot
-from otio_app.services.otio_exporter import MergedEditPlanResult
+from otio_app.services.otio_exporter import MergedEditPlanResult, build_otio_timeline
 
 
-def _project(tmp_path: Path) -> Project:
+def _project(tmp_path: Path, *, folder_name: str = "Florida Keys") -> Project:
     root = tmp_path / "USA"
-    folder = root / "Florida Keys"
+    folder = root / folder_name
     folder.mkdir(parents=True)
     (folder / "clip.mp4").write_bytes(b"video")
     return Project(
@@ -38,8 +33,8 @@ def _project(tmp_path: Path) -> Project:
         name="USA",
         project_root=str(root),
         work_dir=str(root / "_otio"),
-        asset_subdir_names=["Florida Keys"],
-        selected_asset_subdirs=["Florida Keys"],
+        asset_subdir_names=[folder_name],
+        selected_asset_subdirs=[folder_name],
     )
 
 
@@ -53,6 +48,12 @@ def test_needs_transcode_accepts_h264_mp4() -> None:
     probe = MediaProbeInfo(video_codec="h264", container="mp4", pixel_format="yuv420p")
     path = Path("/tmp/sample.mp4")
     assert needs_transcode(path, probe, decode_ok=True) is False
+
+
+def test_media_asset_number_parses_common_names() -> None:
+    assert media_asset_number(Path("Arches_National_Park_Asset03.mp4")) == 3
+    assert media_asset_number(Path("Arches National Park_Asset12.MOV")) == 12
+    assert media_asset_number(Path("clip.mp4")) is None
 
 
 @patch("otio_app.services.clean_media.test_decode", return_value=(True, None))
@@ -70,6 +71,7 @@ def test_validate_media_file_ok(mock_probe, _mock_decode, tmp_path: Path) -> Non
     assert entry.needs_transcode is False
 
 
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
 @patch("otio_app.services.clean_media.transcode_to_clean")
 @patch("otio_app.services.clean_media.test_decode", return_value=(False, "decode error"))
 @patch("otio_app.services.clean_media.probe_media")
@@ -77,6 +79,7 @@ def test_process_media_file_transcodes_on_decode_failure(
     mock_probe,
     _mock_decode,
     mock_transcode,
+    _mock_validate,
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
@@ -95,7 +98,25 @@ def test_process_media_file_transcodes_on_decode_failure(
     assert Path(entry.clean_path).is_file()
 
 
-def test_resolve_effective_media_path_uses_manifest(tmp_path: Path) -> None:
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+def test_find_clean_by_asset_number(_mock_validate, tmp_path: Path) -> None:
+    project = _project(tmp_path, folder_name="Arches National Park")
+    original = project.project_root_path / "Arches National Park" / "Arches National Park_Asset03.MOV"
+    original.write_bytes(b"mov")
+    clean = project.work_dir_path / "clean" / "Arches_National_Park" / "Arches_National_Park_Asset03.mp4"
+    clean.parent.mkdir(parents=True, exist_ok=True)
+    clean.write_bytes(b"mp4")
+
+    found = find_clean_file_for_media(project, "Arches National Park", original)
+    assert found == clean
+
+    from_edit_plan = project.work_dir_path / "clean" / "Arches_National_Park" / "Arches_National_Park_Asset03.mp4"
+    found2 = find_clean_file_for_media(project, "Arches National Park", from_edit_plan)
+    assert found2 == clean
+
+
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+def test_resolve_effective_media_path_uses_manifest(_mock_validate, tmp_path: Path) -> None:
     project = _project(tmp_path)
     original = project.project_root_path / "Florida Keys" / "clip.mp4"
     clean = project.work_dir_path / "clean" / "Florida_Keys" / "clip.mp4"
@@ -120,7 +141,10 @@ def test_resolve_effective_media_path_uses_manifest(tmp_path: Path) -> None:
     assert resolved == clean
 
 
-def test_resolve_effective_media_path_falls_back_to_expected_clean_path(tmp_path: Path) -> None:
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+def test_resolve_effective_media_path_falls_back_to_expected_clean_path(
+    _mock_validate, tmp_path: Path
+) -> None:
     project = _project(tmp_path)
     original = project.project_root_path / "Florida Keys" / "clip.mp4"
     expected_clean = project.work_dir_path / "clean" / "Florida_Keys" / "clip.mp4"
@@ -147,7 +171,8 @@ def test_resolve_effective_media_path_falls_back_to_expected_clean_path(tmp_path
     assert resolved == expected_clean
 
 
-def test_resolve_media_for_analysis_prefers_clean(tmp_path: Path) -> None:
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+def test_resolve_media_for_analysis_prefers_clean(_mock_validate, tmp_path: Path) -> None:
     project = _project(tmp_path)
     original = project.project_root_path / "Florida Keys" / "clip.mp4"
     clean = project.work_dir_path / "clean" / "Florida_Keys" / "clip.mp4"
@@ -194,7 +219,9 @@ def test_folder_clean_media_ready_with_ok_manifest(tmp_path: Path) -> None:
     assert folder_clean_media_ready(project, "Florida Keys") is True
 
 
-def test_otio_export_uses_clean_path(tmp_path: Path) -> None:
+@patch("otio_app.services.otio_exporter.validate_clean_output", return_value=(True, None))
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+def test_otio_export_uses_clean_path(_mock_clean, _mock_export, tmp_path: Path) -> None:
     project = _project(tmp_path)
     original = project.project_root_path / "Florida Keys" / "clip.mp4"
     clean = project.work_dir_path / "clean" / "Florida_Keys" / "clip.mp4"

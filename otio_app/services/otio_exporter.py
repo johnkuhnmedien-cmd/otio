@@ -12,7 +12,11 @@ from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPla
 from otio_app.models import Project
 from otio_app.project_layout import get_otio_export_path
 from otio_app.services.edit_plan_builder import load_edit_plan
-from otio_app.services.clean_media import resolve_effective_media_path
+from otio_app.services.clean_media import (
+    path_is_readable_file,
+    resolve_effective_media_path,
+    validate_clean_output,
+)
 from otio_app.services.media_utils import probe_duration_seconds
 from otio_app.services.otio_export_settings import (
     OtioExportSettings,
@@ -43,6 +47,31 @@ class TimelineSection:
     video_duration_sec: float
     voice_start_sec: float
     voice_play_duration_sec: float
+
+
+def verify_shot_media_paths(project: Project, shots: list[EditPlanShot]) -> list[str]:
+    """Prüft vor dem Export, ob alle Shot-Medien lesbar und Resolve-ready sind."""
+    warnings: list[str] = []
+    for index, shot in enumerate(shots, start=1):
+        if not shot.asset_path:
+            warnings.append(f"Shot {index:03d} ({shot.folder}): kein Asset zugeordnet")
+            continue
+        original = _resolve_media_path(shot.asset_path)
+        resolved = resolve_effective_media_path(project, shot.folder, original)
+        if not path_is_readable_file(resolved):
+            warnings.append(
+                f"Shot {index:03d} ({shot.folder}): Medien offline — "
+                f"`{resolved}` nicht lesbar (Clean Media erneut ausführen?)"
+            )
+            continue
+        if resolved.suffix.lower() in {".mp4", ".mov", ".m4v"}:
+            valid, validation_error = validate_clean_output(resolved)
+            if not valid:
+                warnings.append(
+                    f"Shot {index:03d} ({shot.folder}): `{resolved.name}` — "
+                    f"{validation_error or 'nicht Resolve-ready'}"
+                )
+    return warnings
 
 
 def merge_confirmed_edit_plans(
@@ -104,6 +133,8 @@ def merge_confirmed_edit_plans(
     missing_assets = sum(1 for shot in merged_shots if not shot.asset_path)
     if missing_assets:
         warnings.append(f"{missing_assets} Shot(s) ohne lokales Asset — werden als Lücken exportiert.")
+
+    warnings.extend(verify_shot_media_paths(project, merged_shots))
 
     if not merged_shots and not skipped:
         warnings.append("Keine bestätigten Schnittpläne zum Export gefunden.")

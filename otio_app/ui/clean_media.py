@@ -13,10 +13,13 @@ from otio_app.services.clean_media import (
     CLEAN_STATUS_NEEDS_TRANSCODE,
     CLEAN_STATUS_OK,
     CLEAN_STATUS_PENDING,
+    audit_folder_clean_media,
     count_folder_clean_status,
+    find_clean_file_for_media,
     folder_clean_media_ready,
     folder_manifest_path,
     load_clean_media_manifest,
+    path_is_readable_file,
     selected_folders_have_clean_media,
 )
 from otio_app.services.clean_media_job import (
@@ -118,11 +121,28 @@ def _render_folder_details(project, folder_name: str) -> None:
         line = f"{label} — `{name}`"
         if entry.probe and entry.probe.video_codec:
             line += f" ({entry.probe.video_codec})"
-        if entry.clean_path and entry.status == CLEAN_STATUS_CLEAN:
-            line += f" → `{Path(entry.clean_path).name}`"
+        if entry.status == CLEAN_STATUS_CLEAN:
+            clean = find_clean_file_for_media(project, folder_name, Path(entry.original_path))
+            if clean is None and entry.clean_path:
+                clean = Path(entry.clean_path)
+            if clean is not None:
+                disk = "✓" if path_is_readable_file(clean) else "✗ offline"
+                line += f" → `{clean.name}` [{disk}]"
+        elif entry.status == CLEAN_STATUS_OK:
+            disk = "✓" if path_is_readable_file(Path(entry.original_path)) else "✗ offline"
+            line += f" [Original {disk}]"
         if entry.error:
             line += f" — {entry.error[:120]}"
         st.caption(line)
+
+    issues = audit_folder_clean_media(project, folder_name)
+    if issues:
+        st.warning("Probleme erkannt:")
+        for issue in issues[:12]:
+            st.caption(
+                f"• `{issue['media']}` — {issue['issue']} "
+                f"(`{Path(issue['resolved_path']).name}`)"
+            )
 
 
 def render_clean_media_page() -> None:
@@ -171,7 +191,7 @@ def render_clean_media_page() -> None:
     elif selected_folders:
         st.info("Mindestens ein Ordner braucht noch Prüfung oder Transcode.")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         validate_clicked = st.button(
             "🔍 Nur prüfen",
@@ -186,6 +206,13 @@ def render_clean_media_page() -> None:
             disabled=job_running or not selected_folders,
         )
     with col3:
+        repair_clicked = st.button(
+            "🔧 Reparieren",
+            key=f"clean_repair_{project.id}",
+            disabled=job_running or not selected_folders,
+            help="Fehlende oder ungültige Clean-Dateien erneut erzeugen und Manifest synchronisieren",
+        )
+    with col4:
         all_clicked = st.button(
             "Alle Ordner verarbeiten",
             key=f"clean_all_{project.id}",
@@ -200,6 +227,12 @@ def render_clean_media_page() -> None:
             st.warning("Clean-Media-Job läuft bereits.")
     if process_clicked and selected_folders:
         if manager.start(project, selected_folders, mode=CleanMediaJobMode.PROCESS):
+            st.rerun()
+        else:
+            st.warning("Clean-Media-Job läuft bereits.")
+    if repair_clicked and selected_folders:
+        if manager.start(project, selected_folders, mode=CleanMediaJobMode.PROCESS):
+            st.info("Reparatur-Lauf gestartet — fehlende/ungültige Clean-Dateien werden neu erzeugt.")
             st.rerun()
         else:
             st.warning("Clean-Media-Job läuft bereits.")
