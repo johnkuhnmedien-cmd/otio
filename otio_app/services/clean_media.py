@@ -386,6 +386,28 @@ def validate_media_file(path: Path) -> CleanMediaEntry:
     return entry
 
 
+def _zoom_transcode_required(
+    project: Project,
+    media_path: Path,
+    probe: MediaProbeInfo,
+) -> bool:
+    """True wenn die Zoom-Regel aktiv ist und die Medienauflösung nicht zum Projekt passt."""
+    from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
+    from otio_app.services.otio_media_transform import media_needs_aspect_fill
+
+    opts = export_rule_options(load_edit_plan_rules(project))
+    if not opts.auto_zoom_fill or is_image_media(media_path):
+        return False
+    if not probe.width or not probe.height:
+        return False
+    return media_needs_aspect_fill(
+        probe.width,
+        probe.height,
+        project.width,
+        project.height,
+    )
+
+
 def process_media_file(
     project: Project,
     folder_name: str,
@@ -414,12 +436,14 @@ def process_media_file(
     if existing_clean is not None and not force_transcode:
         valid, validation_error = validate_clean_output(existing_clean)
         if valid:
-            entry.clean_path = str(existing_clean.resolve())
-            entry.status = CLEAN_STATUS_CLEAN
-            entry.probe = probe_media(existing_clean)
-            entry.error = None
-            entry.transcoded_at = entry.transcoded_at or datetime.now(timezone.utc)
-            return entry
+            clean_probe = probe_media(existing_clean)
+            if not _zoom_transcode_required(project, media_path, clean_probe):
+                entry.clean_path = str(existing_clean.resolve())
+                entry.status = CLEAN_STATUS_CLEAN
+                entry.probe = clean_probe
+                entry.error = None
+                entry.transcoded_at = entry.transcoded_at or datetime.now(timezone.utc)
+                return entry
         if existing_clean != output_path:
             try:
                 existing_clean.unlink(missing_ok=True)
@@ -427,23 +451,21 @@ def process_media_file(
                 pass
         entry.error = validation_error
 
-    if not entry.needs_transcode and not force_transcode:
+    source_probe = entry.probe or probe_media(media_path)
+    zoom_transcode = _zoom_transcode_required(project, media_path, source_probe)
+    if not entry.needs_transcode and not force_transcode and not zoom_transcode:
         return entry
 
-    from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
     from otio_app.services.otio_media_transform import ffmpeg_scale_crop_filter
 
     video_filter: str | None = None
-    export_opts = export_rule_options(load_edit_plan_rules(project))
-    if export_opts.auto_zoom_fill and not is_image_media(media_path):
-        probe = entry.probe or probe_media(media_path)
-        if probe.width and probe.height:
-            video_filter = ffmpeg_scale_crop_filter(
-                probe.width,
-                probe.height,
-                project.width,
-                project.height,
-            )
+    if zoom_transcode and source_probe.width and source_probe.height:
+        video_filter = ffmpeg_scale_crop_filter(
+            source_probe.width,
+            source_probe.height,
+            project.width,
+            project.height,
+        )
 
     try:
         transcode_to_clean(media_path, output_path, video_filter=video_filter)

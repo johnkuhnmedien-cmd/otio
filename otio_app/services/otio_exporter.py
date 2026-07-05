@@ -13,13 +13,17 @@ from otio_app.models import Project
 from otio_app.project_layout import get_otio_export_path
 from otio_app.services.edit_plan_builder import load_edit_plan
 from otio_app.services.edit_plan_rules import ExportRuleOptions, export_rule_options, load_edit_plan_rules
+from otio_app.services.media_utils import is_image_media
 from otio_app.services.otio_media_transform import (
-    build_resolve_zoom_effect,
     compute_fill_zoom_factor,
+    ensure_zoomed_media_for_export,
+    ffmpeg_scale_crop_filter,
+    media_needs_aspect_fill,
     resolve_media_dimensions,
 )
 from otio_app.services.clean_media import (
     path_is_readable_file,
+    probe_media,
     resolve_effective_media_path,
     validate_clean_output,
 )
@@ -327,7 +331,10 @@ def _append_video_item(
 ) -> None:
     if shot.asset_path:
         original = _resolve_media_path(shot.asset_path)
-        media_path = resolve_effective_media_path(project, shot.folder, original)
+        if export_rules.auto_zoom_fill and not is_image_media(original):
+            media_path = ensure_zoomed_media_for_export(project, shot.folder, original)
+        else:
+            media_path = resolve_effective_media_path(project, shot.folder, original)
         clip_name = _clip_name_for_media(media_path, index=index)
         trim = export_rules.trim_leading_sec
         source_range, _, notes = _clip_source_range_for_media(
@@ -349,20 +356,23 @@ def _append_video_item(
         video_clip.metadata["original_asset_path"] = shot.asset_path
         video_clip.metadata["resolved_media_path"] = str(media_path)
 
-        if export_rules.auto_zoom_fill and not is_image_media(media_path):
-            width, height = resolve_media_dimensions(project, shot.folder, media_path)
-            if width and height:
+        if export_rules.auto_zoom_fill and not is_image_media(original):
+            src_w, src_h = resolve_media_dimensions(project, shot.folder, original)
+            out_probe = probe_media(media_path) if media_path != original else None
+            if src_w and src_h:
                 zoom = compute_fill_zoom_factor(
-                    width,
-                    height,
+                    src_w,
+                    src_h,
                     project.width,
                     project.height,
                 )
                 if zoom is not None:
-                    video_clip.metadata["asset_width"] = width
-                    video_clip.metadata["asset_height"] = height
+                    video_clip.metadata["asset_width"] = src_w
+                    video_clip.metadata["asset_height"] = src_h
                     video_clip.metadata["zoom_factor"] = round(zoom, 4)
-                    video_clip.effects.append(build_resolve_zoom_effect(zoom))
+                    if out_probe and out_probe.width and out_probe.height:
+                        video_clip.metadata["output_width"] = out_probe.width
+                        video_clip.metadata["output_height"] = out_probe.height
 
         track.append(video_clip)
         return

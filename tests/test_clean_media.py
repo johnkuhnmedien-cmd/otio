@@ -5,7 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from otio_app.analysis_models import CleanMediaEntry, CleanMediaManifest, EditPlanSettings, EditPlanShot, MediaProbeInfo
+from otio_app.analysis_models import (
+    CleanMediaEntry,
+    CleanMediaManifest,
+    EditPlanRule,
+    EditPlanRulesDocument,
+    EditPlanSettings,
+    EditPlanShot,
+    MediaProbeInfo,
+)
 from otio_app.models import Project
 from otio_app.services.clean_media import (
     CLEAN_STATUS_CLEAN,
@@ -19,8 +27,10 @@ from otio_app.services.clean_media import (
     save_clean_media_manifest,
     validate_media_file,
 )
+from otio_app.services.edit_plan_rules import RULE_AUTO_ZOOM_FILL, save_edit_plan_rules
 from otio_app.services.media_inventory_cache import resolve_media_for_analysis
 from otio_app.services.otio_exporter import MergedEditPlanResult, build_otio_timeline
+from otio_app.services.otio_media_transform import ensure_zoomed_media_for_export
 
 
 def _project(tmp_path: Path, *, folder_name: str = "Florida Keys") -> Project:
@@ -267,3 +277,202 @@ def test_otio_export_uses_clean_path(_mock_clean, _mock_export, tmp_path: Path) 
     video_clip = timeline.tracks[0][0]
     assert clean.name in video_clip.media_reference.target_url
     assert video_clip.name == clean.name
+
+
+def _enable_zoom_rule(project: Project) -> None:
+    save_edit_plan_rules(
+        project,
+        EditPlanRulesDocument(
+            project_id=project.id,
+            rules=[
+                EditPlanRule(
+                    id="zoom",
+                    rule_type=RULE_AUTO_ZOOM_FILL,
+                    enabled=True,
+                )
+            ],
+        ),
+    )
+
+
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+@patch("otio_app.services.clean_media.transcode_to_clean")
+@patch("otio_app.services.clean_media.test_decode", return_value=(True, None))
+@patch("otio_app.services.clean_media.probe_media")
+def test_process_media_retranscodes_clean_with_wrong_aspect(
+    mock_probe,
+    _mock_decode,
+    mock_transcode,
+    _mock_validate,
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path, folder_name="Arches National Park")
+    _enable_zoom_rule(project)
+    original = (
+        project.project_root_path
+        / "Arches National Park"
+        / "Arches_National_Park_Asset03.mp4"
+    )
+    original.write_bytes(b"original")
+    clean = (
+        project.work_dir_path
+        / "clean"
+        / "Arches_National_Park"
+        / "Arches_National_Park_Asset03.mp4"
+    )
+    clean.parent.mkdir(parents=True, exist_ok=True)
+    clean.write_bytes(b"old-clean")
+
+    wide = MediaProbeInfo(
+        video_codec="h264",
+        container="mp4",
+        pixel_format="yuv420p",
+        width=4096,
+        height=2160,
+    )
+    filled = MediaProbeInfo(
+        video_codec="h264",
+        container="mp4",
+        pixel_format="yuv420p",
+        width=3840,
+        height=2160,
+    )
+    mock_probe.side_effect = [wide, wide, filled]
+
+    captured: dict[str, str | None] = {}
+
+    def _fake_transcode(
+        original_path: Path,
+        output_path: Path,
+        *,
+        video_filter: str | None = None,
+    ) -> None:
+        captured["video_filter"] = video_filter
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"new-clean")
+
+    mock_transcode.side_effect = _fake_transcode
+
+    entry = process_media_file(project, "Arches National Park", original)
+    assert entry.status == CLEAN_STATUS_CLEAN
+    assert mock_transcode.called
+    assert captured["video_filter"] is not None
+    assert "scale=3840:2160" in captured["video_filter"]
+    assert "crop=3840:2160" in captured["video_filter"]
+
+
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+@patch("otio_app.services.clean_media.transcode_to_clean")
+@patch("otio_app.services.clean_media.test_decode", return_value=(True, None))
+@patch("otio_app.services.clean_media.probe_media")
+def test_process_media_transcodes_ok_original_for_zoom(
+    mock_probe,
+    _mock_decode,
+    mock_transcode,
+    _mock_validate,
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path, folder_name="Arches National Park")
+    _enable_zoom_rule(project)
+    original = (
+        project.project_root_path
+        / "Arches National Park"
+        / "Arches_National_Park_Asset03.mp4"
+    )
+    original.write_bytes(b"original")
+
+    wide = MediaProbeInfo(
+        video_codec="h264",
+        container="mp4",
+        pixel_format="yuv420p",
+        width=4096,
+        height=2160,
+    )
+    filled = MediaProbeInfo(
+        video_codec="h264",
+        container="mp4",
+        pixel_format="yuv420p",
+        width=3840,
+        height=2160,
+    )
+    mock_probe.side_effect = [wide, filled]
+
+    captured: dict[str, str | None] = {}
+
+    def _fake_transcode(
+        original_path: Path,
+        output_path: Path,
+        *,
+        video_filter: str | None = None,
+    ) -> None:
+        captured["video_filter"] = video_filter
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"clean")
+
+    mock_transcode.side_effect = _fake_transcode
+
+    entry = process_media_file(project, "Arches National Park", original)
+    assert entry.status == CLEAN_STATUS_CLEAN
+    assert mock_transcode.called
+    assert captured["video_filter"] is not None
+    assert "crop=3840:2160" in captured["video_filter"]
+
+
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+@patch("otio_app.services.clean_media.transcode_to_clean")
+@patch("otio_app.services.clean_media.test_decode", return_value=(True, None))
+@patch("otio_app.services.clean_media.probe_media")
+def test_ensure_zoomed_media_for_export_returns_rezoomed_clean(
+    mock_probe,
+    _mock_decode,
+    mock_transcode,
+    _mock_validate,
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path, folder_name="Arches National Park")
+    _enable_zoom_rule(project)
+    original = (
+        project.project_root_path
+        / "Arches National Park"
+        / "Arches_National_Park_Asset03.mp4"
+    )
+    original.write_bytes(b"original")
+    clean = (
+        project.work_dir_path
+        / "clean"
+        / "Arches_National_Park"
+        / "Arches_National_Park_Asset03.mp4"
+    )
+    clean.parent.mkdir(parents=True, exist_ok=True)
+    clean.write_bytes(b"old-clean")
+
+    wide = MediaProbeInfo(
+        video_codec="h264",
+        container="mp4",
+        pixel_format="yuv420p",
+        width=4096,
+        height=2160,
+    )
+    filled = MediaProbeInfo(
+        video_codec="h264",
+        container="mp4",
+        pixel_format="yuv420p",
+        width=3840,
+        height=2160,
+    )
+    mock_probe.side_effect = [wide, wide, filled]
+
+    def _fake_transcode(
+        original_path: Path,
+        output_path: Path,
+        *,
+        video_filter: str | None = None,
+    ) -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"new-clean")
+
+    mock_transcode.side_effect = _fake_transcode
+
+    resolved = ensure_zoomed_media_for_export(project, "Arches National Park", original)
+    assert resolved == clean
+    assert mock_transcode.called

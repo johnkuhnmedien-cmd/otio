@@ -13,6 +13,7 @@ from otio_app.services.clean_media import (
     load_clean_media_manifest,
     probe_media,
 )
+from otio_app.services.media_utils import is_image_media
 
 
 def compute_fill_zoom_factor(
@@ -46,6 +47,45 @@ def resolve_media_dimensions(
             return entry.probe.width, entry.probe.height
     probe = probe_media(media_path)
     return probe.width, probe.height
+
+
+def media_needs_aspect_fill(
+    asset_width: int,
+    asset_height: int,
+    target_width: int,
+    target_height: int,
+    *,
+    tolerance: float = 0.005,
+) -> bool:
+    return (
+        compute_fill_zoom_factor(
+            asset_width,
+            asset_height,
+            target_width,
+            target_height,
+            tolerance=tolerance,
+        )
+        is not None
+    )
+
+
+def ensure_zoomed_media_for_export(
+    project: Project,
+    folder_name: str,
+    original_path: Path,
+) -> Path:
+    """Liefert einen auf Projekt-Seitenverhältnis gezoomten Clean-Pfad (falls Regel aktiv)."""
+    from otio_app.services.clean_media import process_media_file, resolve_effective_media_path
+    from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
+
+    opts = export_rule_options(load_edit_plan_rules(project))
+    if not opts.auto_zoom_fill or is_image_media(original_path):
+        return resolve_effective_media_path(project, folder_name, original_path)
+
+    entry = process_media_file(project, folder_name, original_path)
+    if entry.clean_path:
+        return Path(entry.clean_path).expanduser().resolve()
+    return resolve_effective_media_path(project, folder_name, original_path)
 
 
 def ffmpeg_scale_crop_filter(
