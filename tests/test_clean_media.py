@@ -95,11 +95,23 @@ def test_process_media_file_transcodes_on_decode_failure(
     project = _project(tmp_path)
     media = project.project_root_path / "Florida Keys" / "clip.mp4"
 
-    def _fake_transcode(original: Path, output_path: Path, *, video_filter: str | None = None) -> None:
+    def _fake_transcode(
+        original: Path,
+        output_path: Path,
+        *,
+        video_filter: str | None = None,
+        expected_width: int | None = None,
+        expected_height: int | None = None,
+    ) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"clean")
 
-    mock_probe.return_value = MediaProbeInfo(video_codec="hevc", container="mp4")
+    mock_probe.return_value = MediaProbeInfo(
+        video_codec="hevc",
+        container="mp4",
+        width=1920,
+        height=1080,
+    )
     mock_transcode.side_effect = _fake_transcode
 
     entry = process_media_file(project, "Florida Keys", media)
@@ -314,14 +326,20 @@ def test_process_media_retranscodes_clean_with_wrong_aspect(
         / "Arches_National_Park_Asset03.mp4"
     )
     original.write_bytes(b"original")
-    clean = (
+    old_clean = (
         project.work_dir_path
         / "clean"
         / "Arches_National_Park"
         / "Arches_National_Park_Asset03.mp4"
     )
-    clean.parent.mkdir(parents=True, exist_ok=True)
-    clean.write_bytes(b"old-clean-still-wide")
+    filled_clean = (
+        project.work_dir_path
+        / "clean"
+        / "Arches_National_Park"
+        / "Arches_National_Park_Asset03_3840x2160.mp4"
+    )
+    old_clean.parent.mkdir(parents=True, exist_ok=True)
+    old_clean.write_bytes(b"old-clean-still-wide")
 
     wide = MediaProbeInfo(
         video_codec="h264",
@@ -337,7 +355,7 @@ def test_process_media_retranscodes_clean_with_wrong_aspect(
         width=3840,
         height=2160,
     )
-    mock_probe.side_effect = [wide, wide, filled]
+    mock_probe.side_effect = lambda path: filled if Path(path).name.endswith("_3840x2160.mp4") else wide
 
     captured: dict[str, str | None] = {}
 
@@ -346,6 +364,8 @@ def test_process_media_retranscodes_clean_with_wrong_aspect(
         output_path: Path,
         *,
         video_filter: str | None = None,
+        expected_width: int | None = None,
+        expected_height: int | None = None,
     ) -> None:
         captured["video_filter"] = video_filter
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -359,6 +379,8 @@ def test_process_media_retranscodes_clean_with_wrong_aspect(
     assert captured["video_filter"] is not None
     assert "scale=3840:2160" in captured["video_filter"]
     assert "crop=3840:2160" in captured["video_filter"]
+    assert entry.clean_path is not None
+    assert entry.clean_path.endswith("_3840x2160.mp4")
 
 
 @patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
@@ -395,7 +417,7 @@ def test_process_media_transcodes_ok_original_for_zoom(
         width=3840,
         height=2160,
     )
-    mock_probe.side_effect = [wide, filled]
+    mock_probe.side_effect = lambda path: filled if Path(path).name.endswith("_3840x2160.mp4") else wide
 
     captured: dict[str, str | None] = {}
 
@@ -404,10 +426,12 @@ def test_process_media_transcodes_ok_original_for_zoom(
         output_path: Path,
         *,
         video_filter: str | None = None,
+        expected_width: int | None = None,
+        expected_height: int | None = None,
     ) -> None:
         captured["video_filter"] = video_filter
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(b"clean")
+        output_path.write_bytes(b"clean-zoomed")
 
     mock_transcode.side_effect = _fake_transcode
 
@@ -416,6 +440,8 @@ def test_process_media_transcodes_ok_original_for_zoom(
     assert mock_transcode.called
     assert captured["video_filter"] is not None
     assert "crop=3840:2160" in captured["video_filter"]
+    assert entry.clean_path is not None
+    assert entry.clean_path.endswith("_3840x2160.mp4")
 
 
 @patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
@@ -437,14 +463,20 @@ def test_ensure_zoomed_media_for_export_returns_rezoomed_clean(
         / "Arches_National_Park_Asset03.mp4"
     )
     original.write_bytes(b"original")
-    clean = (
+    old_clean = (
         project.work_dir_path
         / "clean"
         / "Arches_National_Park"
         / "Arches_National_Park_Asset03.mp4"
     )
-    clean.parent.mkdir(parents=True, exist_ok=True)
-    clean.write_bytes(b"old-clean-still-wide")
+    filled_clean = (
+        project.work_dir_path
+        / "clean"
+        / "Arches_National_Park"
+        / "Arches_National_Park_Asset03_3840x2160.mp4"
+    )
+    old_clean.parent.mkdir(parents=True, exist_ok=True)
+    old_clean.write_bytes(b"old-clean-still-wide")
 
     wide = MediaProbeInfo(
         video_codec="h264",
@@ -477,6 +509,8 @@ def test_ensure_zoomed_media_for_export_returns_rezoomed_clean(
         output_path: Path,
         *,
         video_filter: str | None = None,
+        expected_width: int | None = None,
+        expected_height: int | None = None,
     ) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"new-clean-zoomed")
@@ -490,6 +524,6 @@ def test_ensure_zoomed_media_for_export_returns_rezoomed_clean(
         original,
         notes=notes,
     )
-    assert resolved == clean
+    assert resolved == filled_clean
     assert mock_transcode.called
     assert any("3840" in note for note in notes)

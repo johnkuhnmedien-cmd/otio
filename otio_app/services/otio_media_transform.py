@@ -77,13 +77,22 @@ def media_resolution_probe(path: Path) -> tuple[int | None, int | None]:
     return probe.width, probe.height
 
 
+def media_matches_target_resolution(
+    width: int | None,
+    height: int | None,
+    target_width: int,
+    target_height: int,
+) -> bool:
+    return width == target_width and height == target_height
+
+
 def aspect_fill_warning(
     project: Project,
     media_path: Path,
     *,
     label: str | None = None,
 ) -> str | None:
-    """Warntext, wenn die Datei nicht zum Projekt-Seitenverhältnis passt."""
+    """Warntext, wenn die Datei nicht exakt zur Projektauflösung passt."""
     width, height = media_resolution_probe(media_path)
     name = label or media_path.name
     if not width or not height:
@@ -91,10 +100,10 @@ def aspect_fill_warning(
             f"{name}: Auflösung nicht lesbar (ffprobe) — "
             "Zoom-Regel konnte nicht geprüft werden."
         )
-    if media_needs_aspect_fill(width, height, project.width, project.height):
+    if not media_matches_target_resolution(width, height, project.width, project.height):
         return (
             f"{name}: {width}×{height} statt Ziel {project.width}×{project.height} — "
-            "Letterboxing möglich."
+            f"Resolve verweist evtl. auf eine andere Datei. Pfad: `{media_path}`"
         )
     return None
 
@@ -141,11 +150,7 @@ def ensure_zoomed_media_for_export(
     media_path = _resolved_path(entry)
 
     out_w, out_h = media_resolution_probe(media_path)
-    still_wrong = (
-        not out_w
-        or not out_h
-        or media_needs_aspect_fill(out_w, out_h, project.width, project.height)
-    )
+    still_wrong = not media_matches_target_resolution(out_w, out_h, project.width, project.height)
     if still_wrong:
         entry = process_media_file(
             project,
@@ -164,7 +169,7 @@ def ensure_zoomed_media_for_export(
             notes.append(warning)
     elif notes is not None and out_w and out_h:
         notes.append(
-            f"{original_path.name}: {src_w}×{src_h} → {out_w}×{out_h} (16:9 angepasst)"
+            f"{original_path.name}: {src_w}×{src_h} → {out_w}×{out_h} · `{media_path}`"
         )
 
     return media_path

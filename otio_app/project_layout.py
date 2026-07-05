@@ -132,6 +132,19 @@ def clean_output_path_for_media(
     return get_folder_clean_output_dir(work_dir, folder_name) / f"{stem}.mp4"
 
 
+def aspect_filled_output_path_for_media(
+    work_dir: Path,
+    folder_name: str,
+    original_path: Path,
+    *,
+    width: int,
+    height: int,
+) -> Path:
+    """Eigener Dateiname für Zoom/Crop — Resolve verwechselt ihn nicht mit dem Original."""
+    stem = safe_folder_slug(original_path.stem) or "media"
+    return get_folder_clean_output_dir(work_dir, folder_name) / f"{stem}_{width}x{height}.mp4"
+
+
 def get_otio_export_path(work_dir: Path, project_name: str) -> Path:
     """Standard-Pfad für den OTIO-Export eines Projekts."""
     safe_name = safe_folder_slug(project_name) or "timeline"

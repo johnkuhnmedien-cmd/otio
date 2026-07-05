@@ -560,7 +560,10 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
         "Video (**V1**) startet bei 0. Pro Voice-over-Datei eine **eigene Audiospur** — "
         "Originaldatei ab Sekunde 0, **nicht** pro Shot geschnitten. "
         "Die Länge pro Abschnitt verhindert Überlappungen (keine Verzerrung durch mehrere VO gleichzeitig). "
-        "In DaVinci Resolve: **File → Import → Timeline → OpenTimelineIO**."
+        "In DaVinci Resolve: **File → Import → Timeline → OpenTimelineIO**. "
+        "Bei Zoom-Regeln entstehen Dateien wie `Asset03_3840x2160.mp4` — "
+        "alte Clips im Media Pool vor dem Import löschen, sonst verlinkt Resolve evtl. "
+        "noch die 4096×2160-Originaldatei."
     )
 
 

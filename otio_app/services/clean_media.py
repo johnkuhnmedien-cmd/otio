@@ -12,6 +12,7 @@ from typing import Callable, Optional
 from otio_app.analysis_models import CleanMediaEntry, CleanMediaManifest, MediaProbeInfo
 from otio_app.models import Project
 from otio_app.project_layout import (
+    aspect_filled_output_path_for_media,
     clean_output_path_for_media,
     get_clean_media_output_dir,
     get_folder_clean_manifest_path,
@@ -136,21 +137,85 @@ def find_clean_file_for_media(
     media_path: Path,
 ) -> Path | None:
     """Sucht Clean-Datei per erwartetem Pfad, Asset-Nummer oder Stem-Slug."""
+    from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
+
+    export_opts = export_rule_options(load_edit_plan_rules(project))
+    if export_opts.auto_zoom_fill and not is_image_media(media_path):
+        filled = aspect_filled_output_path_for_media(
+            project.work_dir_path,
+            folder_name,
+            media_path,
+            width=project.width,
+            height=project.height,
+        )
+        if path_is_readable_file(filled):
+            filled_probe = probe_media(filled)
+            if (
+                not filled_probe.width
+                or not filled_probe.height
+                or _probe_matches_target_resolution(
+                    filled_probe,
+                    project.width,
+                    project.height,
+                )
+            ):
+                return filled
+
     expected = clean_output_path_for_media(
         project.work_dir_path,
         folder_name,
         media_path,
     )
     if path_is_readable_file(expected):
-        return expected
+        if not export_opts.auto_zoom_fill or is_image_media(media_path):
+            return expected
+        expected_probe = probe_media(expected)
+        if (
+            not expected_probe.width
+            or not expected_probe.height
+            or _probe_matches_target_resolution(
+                expected_probe,
+                project.width,
+                project.height,
+            )
+        ):
+            return expected
 
     asset_number = media_asset_number(media_path)
     stem_key = media_stem_key(media_path)
     for candidate in list_clean_files_in_folder(project, folder_name):
         if asset_number is not None and media_asset_number(candidate) == asset_number:
-            return candidate
+            if export_opts.auto_zoom_fill and not is_image_media(media_path):
+                candidate_probe = probe_media(candidate)
+                if (
+                    candidate_probe.width
+                    and candidate_probe.height
+                    and not _probe_matches_target_resolution(
+                        candidate_probe,
+                        project.width,
+                        project.height,
+                    )
+                ):
+                    continue
+                return candidate
+            else:
+                return candidate
         if media_stem_key(candidate) == stem_key:
-            return candidate
+            if export_opts.auto_zoom_fill and not is_image_media(media_path):
+                candidate_probe = probe_media(candidate)
+                if (
+                    candidate_probe.width
+                    and candidate_probe.height
+                    and not _probe_matches_target_resolution(
+                        candidate_probe,
+                        project.width,
+                        project.height,
+                    )
+                ):
+                    continue
+                return candidate
+            else:
+                return candidate
     return None
 
 
@@ -274,16 +339,19 @@ def transcode_to_clean(
     output_path: Path,
     *,
     video_filter: str | None = None,
+    expected_width: int | None = None,
+    expected_height: int | None = None,
 ) -> None:
     """Transkodiert zu H.264/AAC MP4 (Resolve-freundlich, High Profile)."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    h264_level = "5.1" if (expected_width or 0) >= 3840 or (expected_height or 0) >= 2160 else "4.2"
     video_flags = [
         "-c:v",
         "libx264",
         "-profile:v",
         "high",
         "-level",
-        "4.2",
+        h264_level,
         "-preset",
         "medium",
         "-crf",
@@ -360,6 +428,22 @@ def transcode_to_clean(
             pass
         raise RuntimeError(validation_error or "Clean-Datei nach Transcode ungültig")
 
+    if expected_width and expected_height:
+        out_probe = probe_media(output_path)
+        if out_probe.width != expected_width or out_probe.height != expected_height:
+            try:
+                output_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            actual = (
+                f"{out_probe.width}×{out_probe.height}"
+                if out_probe.width and out_probe.height
+                else "unbekannt"
+            )
+            raise RuntimeError(
+                f"Transcode lieferte {actual}, erwartet {expected_width}×{expected_height}"
+            )
+
 
 def validate_media_file(path: Path) -> CleanMediaEntry:
     """Prüft eine Datei (Probe + Decode) ohne Transcode."""
@@ -386,23 +470,29 @@ def validate_media_file(path: Path) -> CleanMediaEntry:
     return entry
 
 
+def _probe_matches_target_resolution(
+    probe: MediaProbeInfo,
+    target_width: int,
+    target_height: int,
+) -> bool:
+    return probe.width == target_width and probe.height == target_height
+
+
 def _zoom_transcode_required(
     project: Project,
     media_path: Path,
     probe: MediaProbeInfo,
 ) -> bool:
-    """True wenn die Zoom-Regel aktiv ist und die Medienauflösung nicht zum Projekt passt."""
+    """True wenn die Zoom-Regel aktiv ist und die Pixel-Auflösung nicht exakt passt."""
     from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
-    from otio_app.services.otio_media_transform import media_needs_aspect_fill
 
     opts = export_rule_options(load_edit_plan_rules(project))
     if not opts.auto_zoom_fill or is_image_media(media_path):
         return False
     if not probe.width or not probe.height:
-        return False
-    return media_needs_aspect_fill(
-        probe.width,
-        probe.height,
+        return True
+    return not _probe_matches_target_resolution(
+        probe,
         project.width,
         project.height,
     )
@@ -426,14 +516,43 @@ def process_media_file(
         return entry
 
     entry = validate_media_file(media_path)
-    output_path = clean_output_path_for_media(
-        project.work_dir_path,
-        folder_name,
-        media_path,
-    )
+    source_probe = entry.probe or probe_media(media_path)
+    zoom_transcode = _zoom_transcode_required(project, media_path, source_probe)
+    if zoom_transcode:
+        output_path = aspect_filled_output_path_for_media(
+            project.work_dir_path,
+            folder_name,
+            media_path,
+            width=project.width,
+            height=project.height,
+        )
+    else:
+        output_path = clean_output_path_for_media(
+            project.work_dir_path,
+            folder_name,
+            media_path,
+        )
+
+    if zoom_transcode and path_is_readable_file(output_path) and not force_transcode:
+        valid, validation_error = validate_clean_output(output_path)
+        if valid:
+            filled_probe = probe_media(output_path)
+            if _probe_matches_target_resolution(
+                filled_probe,
+                project.width,
+                project.height,
+            ):
+                entry.clean_path = str(output_path.resolve())
+                entry.status = CLEAN_STATUS_CLEAN
+                entry.probe = filled_probe
+                entry.error = None
+                entry.transcoded_at = entry.transcoded_at or datetime.now(timezone.utc)
+                return entry
+        if validation_error:
+            entry.error = validation_error
 
     existing_clean = find_clean_file_for_media(project, folder_name, media_path)
-    if existing_clean is not None and not force_transcode:
+    if existing_clean is not None and not force_transcode and not zoom_transcode:
         valid, validation_error = validate_clean_output(existing_clean)
         if valid:
             clean_probe = probe_media(existing_clean)
@@ -451,24 +570,39 @@ def process_media_file(
                 pass
         entry.error = validation_error
 
-    source_probe = entry.probe or probe_media(media_path)
-    zoom_transcode = _zoom_transcode_required(project, media_path, source_probe)
     if not entry.needs_transcode and not force_transcode and not zoom_transcode:
         return entry
 
     from otio_app.services.otio_media_transform import ffmpeg_scale_crop_filter
 
     video_filter: str | None = None
-    if zoom_transcode and source_probe.width and source_probe.height:
-        video_filter = ffmpeg_scale_crop_filter(
-            source_probe.width,
-            source_probe.height,
-            project.width,
-            project.height,
-        )
+    expected_width: int | None = None
+    expected_height: int | None = None
+    if zoom_transcode:
+        if not source_probe.width or not source_probe.height:
+            source_probe = probe_media(media_path)
+        if source_probe.width and source_probe.height:
+            video_filter = ffmpeg_scale_crop_filter(
+                source_probe.width,
+                source_probe.height,
+                project.width,
+                project.height,
+            )
+            expected_width = project.width
+            expected_height = project.height
+        elif not force_transcode:
+            entry.status = CLEAN_STATUS_FAILED
+            entry.error = "Quell-Auflösung nicht lesbar — Zoom-Transcode nicht möglich"
+            return entry
 
     try:
-        transcode_to_clean(media_path, output_path, video_filter=video_filter)
+        transcode_to_clean(
+            media_path,
+            output_path,
+            video_filter=video_filter,
+            expected_width=expected_width,
+            expected_height=expected_height,
+        )
     except OSError as exc:
         entry.status = CLEAN_STATUS_FAILED
         entry.error = str(exc)
