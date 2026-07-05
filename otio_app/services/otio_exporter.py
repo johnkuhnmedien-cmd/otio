@@ -102,9 +102,10 @@ def _resolve_media_path(path: str) -> Path:
 
 
 def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> otio.opentime.TimeRange:
+    """Sekunden → OTIO-Zeit. RationalTime(6, 25) wäre 6 Frames — nicht 6 Sekunden."""
     return otio.opentime.TimeRange(
-        start_time=otio.opentime.RationalTime(start_sec, rate),
-        duration=otio.opentime.RationalTime(duration_sec, rate),
+        start_time=otio.opentime.RationalTime.from_seconds(start_sec, rate),
+        duration=otio.opentime.RationalTime.from_seconds(duration_sec, rate),
     )
 
 
@@ -185,7 +186,7 @@ def build_otio_timeline(
     timeline = otio.schema.Timeline(name=project.name)
     timeline.metadata["project_id"] = project.id
     timeline.metadata["included_folders"] = list(merged.included_folders)
-    timeline.global_start_time = otio.opentime.RationalTime(0, rate)
+    timeline.global_start_time = otio.opentime.RationalTime.from_seconds(0, rate)
 
     video_track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
     audio_track = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)

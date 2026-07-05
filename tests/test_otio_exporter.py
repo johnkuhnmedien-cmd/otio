@@ -109,6 +109,27 @@ def test_merge_confirmed_edit_plans_in_mapping_order(tmp_path: Path) -> None:
     assert merged.shots[-1].folder == "Grand Canyon"
 
 
+def test_clip_durations_use_seconds_not_frames(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _setup_mapping_and_plans(project, tmp_path)
+    merged = merge_confirmed_edit_plans(project)
+
+    timeline = build_otio_timeline(project, merged)
+    video_track = timeline.tracks[0]
+    clips = [item for item in video_track if isinstance(item, otio.schema.Clip)]
+    assert clips
+    first = clips[0]
+    duration_sec = first.source_range.duration.to_seconds()
+    assert duration_sec == 3.0
+
+    clip_total = sum(
+        item.source_range.duration.to_seconds()
+        for item in video_track
+        if isinstance(item, otio.schema.Clip)
+    )
+    assert clip_total == 9.0
+
+
 def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _setup_mapping_and_plans(project, tmp_path)
