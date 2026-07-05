@@ -20,11 +20,25 @@ def test_workflow_status_detects_completed_steps(temp_project_layout: dict[str, 
     )
     project.voice_analysis_path.write_text("{}", encoding="utf-8")
 
-    from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis
+    from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis, CleanMediaEntry, CleanMediaManifest
+    from otio_app.services.clean_media import CLEAN_STATUS_OK, save_clean_media_manifest
     from otio_app.services.inventory_loader import save_folder_inventory
     from otio_app.services.media_inventory_cache import media_cache_path, save_cached_media
 
     media_path = str(root / "Grand Canyon" / "clip.mp4")
+    save_clean_media_manifest(
+        temp_project_layout["work_dir"] / "clean_media" / "Grand_Canyon.json",
+        CleanMediaManifest(
+            project_id="wf-test",
+            folder="Grand Canyon",
+            entries=[
+                CleanMediaEntry(
+                    original_path=media_path,
+                    status=CLEAN_STATUS_OK,
+                )
+            ],
+        ),
+    )
     save_folder_inventory(
         project.folder_inventory_path("Grand Canyon"),
         AssetFolderAnalysis(
@@ -39,6 +53,7 @@ def test_workflow_status_detects_completed_steps(temp_project_layout: dict[str, 
     )
 
     status = get_workflow_status(project)
+    assert status.clean_media_done is True
     assert status.voice_analysis_done is True
     assert status.inventory_done is True
     assert status.analysis_done is True

@@ -37,6 +37,34 @@ class VoiceAnalysisDocument(BaseModel):
     files: List[VoiceFileAnalysis] = Field(default_factory=list)
 
 
+class MediaProbeInfo(BaseModel):
+    duration_sec: Optional[float] = None
+    video_codec: Optional[str] = None
+    audio_codec: Optional[str] = None
+    pixel_format: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    container: Optional[str] = None
+
+
+class CleanMediaEntry(BaseModel):
+    original_path: str
+    clean_path: Optional[str] = None
+    status: str = "pending"
+    needs_transcode: bool = False
+    decode_ok: bool = True
+    probe: Optional[MediaProbeInfo] = None
+    error: Optional[str] = None
+    transcoded_at: Optional[datetime] = None
+
+
+class CleanMediaManifest(BaseModel):
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    project_id: str
+    folder: str
+    entries: List[CleanMediaEntry] = Field(default_factory=list)
+
+
 class AssetMediaAnalysis(BaseModel):
     path: str
     description: str = ""

@@ -100,6 +100,38 @@ def get_exports_dir(work_dir: Path) -> Path:
     return work_dir / EXPORTS_SUBDIR
 
 
+def get_clean_media_output_dir(work_dir: Path) -> Path:
+    """Transcodierte Medien: _otio/clean/<Ordner>/…"""
+    from otio_app.defaults import CLEAN_MEDIA_OUTPUT_SUBDIR
+
+    return work_dir / CLEAN_MEDIA_OUTPUT_SUBDIR
+
+
+def get_clean_media_manifest_dir(work_dir: Path) -> Path:
+    """Manifeste original → clean: _otio/clean_media/<Ordner>.json"""
+    from otio_app.defaults import CLEAN_MEDIA_MANIFEST_SUBDIR
+
+    return work_dir / CLEAN_MEDIA_MANIFEST_SUBDIR
+
+
+def get_folder_clean_manifest_path(work_dir: Path, folder_name: str) -> Path:
+    return get_clean_media_manifest_dir(work_dir) / f"{safe_folder_slug(folder_name)}.json"
+
+
+def get_folder_clean_output_dir(work_dir: Path, folder_name: str) -> Path:
+    return get_clean_media_output_dir(work_dir) / safe_folder_slug(folder_name)
+
+
+def clean_output_path_for_media(
+    work_dir: Path,
+    folder_name: str,
+    original_path: Path,
+) -> Path:
+    """Zielpfad für eine transcodierte MP4-Datei."""
+    stem = safe_folder_slug(original_path.stem) or "media"
+    return get_folder_clean_output_dir(work_dir, folder_name) / f"{stem}.mp4"
+
+
 def get_otio_export_path(work_dir: Path, project_name: str) -> Path:
     """Standard-Pfad für den OTIO-Export eines Projekts."""
     safe_name = safe_folder_slug(project_name) or "timeline"

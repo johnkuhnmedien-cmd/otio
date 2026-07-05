@@ -23,12 +23,14 @@ from otio_app.ui.navigation import (
     ACTIVE_PROJECT_KEY,
     NAVIGATION_OPTIONS,
     PAGE_ANALYSIS,
+    PAGE_CLEAN_MEDIA,
     PAGE_EDIT_PLAN,
     PAGE_LIST,
     PAGE_MAPPING,
     PAGE_NEW,
     PAGE_STATUS,
 )
+from otio_app.ui.clean_media import render_clean_media_page
 from otio_app.ui.project_workbench import render_project_workbench
 from otio_app.ui.voice_folder_mapping import render_voice_folder_mapping
 
@@ -190,7 +192,7 @@ with st.sidebar:
         key="sidebar_nav",
     )
     st.divider()
-    st.caption("Workflow: ① → ② → ③ · Details unter Systemstatus")
+    st.caption("Workflow: ⓪ → ① → ② → ③ · Details unter Systemstatus")
 
 active_project_id = st.session_state.get(ACTIVE_PROJECT_KEY)
 if active_project_id and page != PAGE_ANALYSIS:
@@ -476,6 +478,9 @@ elif page == PAGE_LIST:
                     st.session_state["workbench_project_id"] = project.id
                     st.session_state["sidebar_nav"] = PAGE_WORK
                     st.rerun()
+
+elif page == PAGE_CLEAN_MEDIA:
+    render_clean_media_page()
 
 elif page == PAGE_ANALYSIS:
     render_project_workbench()

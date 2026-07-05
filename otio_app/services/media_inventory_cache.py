@@ -11,6 +11,7 @@ from typing import Optional
 from otio_app.analysis_models import AssetMediaAnalysis
 from otio_app.models import Project
 from otio_app.project_layout import get_inventory_dir, safe_folder_slug
+from otio_app.services.clean_media import resolve_effective_media_path
 from otio_app.services.media_utils import (
     MEDIA_EXTENSIONS,
     NO_ANALYZABLE_MEDIA_DESCRIPTION,
@@ -416,10 +417,11 @@ def resolve_media_for_analysis(
     folder_name: str,
     media_path: Path,
 ) -> Path:
-    """Ermittelt den echten Mediendatei-Pfad (Slug-Match im Ordner)."""
+    """Ermittelt den echten Mediendatei-Pfad (Slug-Match, ggf. Clean Media)."""
     folder_path = project.project_root_path / folder_name
     slug = safe_folder_slug(media_path.stem)
-    return resolve_media_path_for_slug(folder_path, slug)
+    resolved = resolve_media_path_for_slug(folder_path, slug)
+    return resolve_effective_media_path(project, folder_name, resolved)
 
 
 def save_cached_media(cache_file: Path, entry: AssetMediaAnalysis) -> None:

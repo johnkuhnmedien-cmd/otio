@@ -16,12 +16,14 @@ from otio_app.services.edit_plan_builder import (
     mapped_folders_have_confirmed_plans,
 )
 from otio_app.services.inventory_loader import selected_folders_have_inventory
+from otio_app.services.clean_media import selected_folders_have_clean_media
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 from otio_app.ui.navigation import ACTIVE_PROJECT_KEY
 
 
 @dataclass(frozen=True)
 class WorkflowStatus:
+    clean_media_done: bool
     voice_analysis_done: bool
     inventory_done: bool
     mapping_confirmed: bool
@@ -37,6 +39,7 @@ def get_workflow_status(project: Project) -> WorkflowStatus:
     mapped_folders = get_mapped_folders(project)
     edit_plan_done = mapped_folders_have_confirmed_plans(project, mapped_folders)
     return WorkflowStatus(
+        clean_media_done=selected_folders_have_clean_media(project),
         voice_analysis_done=project.voice_analysis_path.is_file(),
         inventory_done=selected_folders_have_inventory(project),
         mapping_confirmed=bool(mapping and mapping.confirmed),
@@ -89,6 +92,7 @@ def render_workflow_progress(project: Project, current_step: str) -> None:
     """Kompakte Workflow-Leiste über den Workflow-Seiten."""
     status = get_workflow_status(project)
     steps = [
+        ("⓪ Clean Media", status.clean_media_done, current_step == "clean_media"),
         ("① Analysen", status.analysis_done, current_step == "analysis"),
         ("② Zuordnung", status.mapping_confirmed, current_step == "mapping"),
         ("③ Schnittplan", status.edit_plan_done, current_step == "edit_plan"),
@@ -106,14 +110,16 @@ def render_workflow_progress(project: Project, current_step: str) -> None:
 def render_output_status(project: Project) -> None:
     """Kurzüberblick über erzeugte Dateien."""
     status = get_workflow_status(project)
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        st.metric("Voice-over", "✓" if status.voice_analysis_done else "—")
+        st.metric("Clean Media", "✓" if status.clean_media_done else "—")
     with col2:
-        st.metric("Inventar", "✓" if status.inventory_done else "—")
+        st.metric("Voice-over", "✓" if status.voice_analysis_done else "—")
     with col3:
-        st.metric("Zuordnung", "✓" if status.mapping_confirmed else "—")
+        st.metric("Inventar", "✓" if status.inventory_done else "—")
     with col4:
+        st.metric("Zuordnung", "✓" if status.mapping_confirmed else "—")
+    with col5:
         st.metric("Schnittplan", "✓" if status.edit_plan_done else "—")
 
 
@@ -123,6 +129,8 @@ def render_file_paths(project: Project) -> None:
         st.write(f"**Voice-over:** `{project.voice_over_dir}`")
         st.write(f"**Voice-Analyse:** `{project.voice_analysis_path}`")
         st.write(f"**Inventar:** `{project.inventory_dir}` (pro Ordner eine JSON)")
+        st.write(f"**Clean Media:** `{project.work_dir_path / 'clean'}` (Transcodes)")
+        st.write(f"**Clean-Manifeste:** `{project.work_dir_path / 'clean_media'}`")
         st.write(f"**Zuordnung:** `{project.voice_folder_mapping_path}`")
         st.write(f"**Schnittpläne:** `{project.edit_plan_dir}` (pro Ort eine JSON)")
         st.write(f"**OTIO-Export:** `{project.work_dir_path / 'exports'}`")

@@ -51,6 +51,7 @@ from otio_app.services.folder_analysis_status import (
 from otio_app.services.folder_asset_status import folder_is_fully_analyzed
 from otio_app.services.manual_folder_completion import is_manually_complete, set_manually_complete
 from otio_app.ui.analysis_jobs_ui import render_analysis_jobs_monitor
+from otio_app.services.clean_media import selected_folders_have_clean_media
 from otio_app.ui.project_context import (
     render_file_paths,
     render_output_status,
@@ -324,6 +325,11 @@ def render_project_workbench() -> None:
         return
 
     render_workflow_progress(project, current_step="analysis")
+    if not selected_folders_have_clean_media(project):
+        st.warning(
+            "**Clean Media noch nicht abgeschlossen** — unter **⓪ Clean Media** Medien "
+            "prüfen und ggf. transcodieren, bevor du analysierst."
+        )
     render_analysis_jobs_monitor(project)
     created_inventories, sync_statuses = sync_folder_inventories_from_cache(project)
     if created_inventories:

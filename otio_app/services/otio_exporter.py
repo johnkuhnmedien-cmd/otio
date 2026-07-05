@@ -12,6 +12,7 @@ from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPla
 from otio_app.models import Project
 from otio_app.project_layout import get_otio_export_path
 from otio_app.services.edit_plan_builder import load_edit_plan
+from otio_app.services.clean_media import resolve_effective_media_path
 from otio_app.services.media_utils import probe_duration_seconds
 from otio_app.services.otio_export_settings import (
     OtioExportSettings,
@@ -191,6 +192,7 @@ def _append_video_item(
     track: otio.schema.Track,
     shot: EditPlanShot,
     *,
+    project: Project,
     index: int,
     rate: float,
     duration_sec: float,
@@ -200,9 +202,11 @@ def _append_video_item(
     clip_name = f"{index:03d} · {shot.folder} · {label}"
 
     if shot.asset_path:
+        original = _resolve_media_path(shot.asset_path)
+        media_path = resolve_effective_media_path(project, shot.folder, original)
         video_clip = otio.schema.Clip(
             name=clip_name[:120],
-            media_reference=_media_reference(shot.asset_path, rate),
+            media_reference=_media_reference(str(media_path), rate),
         )
         video_clip.source_range = duration
         video_clip.metadata["folder"] = shot.folder
@@ -292,6 +296,7 @@ def build_otio_timeline(
         _append_video_item(
             video_track,
             shot,
+            project=project,
             index=index,
             rate=rate,
             duration_sec=duration_sec,
