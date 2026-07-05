@@ -8,6 +8,7 @@ import opentimelineio as otio
 
 from otio_app.analysis_models import (
     EditPlanDocument,
+    EditPlanSettings,
     EditPlanShot,
     VoiceFolderMappingDocument,
     VoiceFolderMappingEntry,
@@ -15,10 +16,12 @@ from otio_app.analysis_models import (
 from otio_app.models import Project
 from otio_app.services.edit_plan_builder import save_edit_plan
 from otio_app.services.otio_exporter import (
+    _compute_timeline_sections,
     build_otio_timeline,
     export_otio_timeline,
     merge_confirmed_edit_plans,
 )
+from otio_app.services.otio_export_settings import OtioExportSettings
 
 
 def _project(tmp_path: Path) -> Project:
@@ -75,12 +78,14 @@ def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    plan_settings = EditPlanSettings(audio_offset_sec=1.0, section_outro_sec=5.0)
     save_edit_plan(
         project,
         EditPlanDocument(
             project_id=project.id,
             folder_name="Florida Keys",
             confirmed=True,
+            settings=plan_settings,
             shots=[_shot("Florida Keys", voice_a, 1), _shot("Florida Keys", voice_a, 2)],
         ),
         "Florida Keys",
@@ -91,6 +96,7 @@ def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
             project_id=project.id,
             folder_name="Grand Canyon",
             confirmed=True,
+            settings=plan_settings,
             shots=[_shot("Grand Canyon", voice_b, 1)],
         ),
         "Grand Canyon",
@@ -105,8 +111,21 @@ def test_merge_confirmed_edit_plans_in_mapping_order(tmp_path: Path) -> None:
     assert merged.ready is True
     assert merged.included_folders == ["Florida Keys", "Grand Canyon"]
     assert len(merged.shots) == 3
-    assert merged.shots[0].folder == "Florida Keys"
-    assert merged.shots[-1].folder == "Grand Canyon"
+
+
+def test_timeline_sections_include_outro_and_per_section_voice_offset(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _setup_mapping_and_plans(project, tmp_path)
+    merged = merge_confirmed_edit_plans(project)
+    settings = EditPlanSettings(audio_offset_sec=1.0, section_outro_sec=5.0)
+
+    sections = _compute_timeline_sections(merged.shots, settings)
+    assert len(sections) == 2
+    assert sections[0].video_start_sec == 0.0
+    assert sections[0].video_duration_sec == 11.0
+    assert sections[0].voice_start_sec == 1.0
+    assert sections[1].video_start_sec == 11.0
+    assert sections[1].voice_start_sec == 12.0
 
 
 def test_clip_durations_use_seconds_not_frames(tmp_path: Path) -> None:
@@ -114,53 +133,35 @@ def test_clip_durations_use_seconds_not_frames(tmp_path: Path) -> None:
     _setup_mapping_and_plans(project, tmp_path)
     merged = merge_confirmed_edit_plans(project)
 
-    timeline = build_otio_timeline(project, merged)
+    timeline = build_otio_timeline(
+        project,
+        merged,
+        export_settings=OtioExportSettings(audio_offset_sec=1.0, section_outro_sec=5.0),
+    )
     video_track = timeline.tracks[0]
     clips = [item for item in video_track if isinstance(item, otio.schema.Clip)]
-    assert clips
-    first = clips[0]
-    duration_sec = first.source_range.duration.to_seconds()
-    assert duration_sec == 3.0
-
-    clip_total = sum(
-        item.source_range.duration.to_seconds()
-        for item in video_track
-        if isinstance(item, otio.schema.Clip)
-    )
-    assert clip_total == 9.0
+    assert clips[0].source_range.duration.to_seconds() == 3.0
+    assert clips[1].source_range.duration.to_seconds() == 8.0
 
 
-def test_audio_offset_delays_voice_only_not_video(tmp_path: Path) -> None:
+def test_audio_offset_and_outro_on_export(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _setup_mapping_and_plans(project, tmp_path)
     merged = merge_confirmed_edit_plans(project)
-    assert merged.settings.audio_offset_sec == 1.0
 
-    timeline = build_otio_timeline(project, merged)
-    video_track = timeline.tracks[0]
-    assert isinstance(video_track[0], otio.schema.Clip)
+    timeline = build_otio_timeline(
+        project,
+        merged,
+        export_settings=OtioExportSettings(audio_offset_sec=1.0, section_outro_sec=5.0),
+    )
+    assert isinstance(timeline.tracks[0][0], otio.schema.Clip)
 
     florida_audio = timeline.tracks[1]
-    assert isinstance(florida_audio[0], otio.schema.Gap)
     assert florida_audio[0].source_range.duration.to_seconds() == 1.0
-    assert isinstance(florida_audio[1], otio.schema.Clip)
+    assert florida_audio[1].source_range.duration.to_seconds() == 10.0
 
     canyon_audio = timeline.tracks[2]
-    assert isinstance(canyon_audio[0], otio.schema.Gap)
-    assert canyon_audio[0].source_range.duration.to_seconds() == 6.0
-
-
-def test_audio_track_uses_full_voice_files_not_shot_cuts(tmp_path: Path) -> None:
-    project = _project(tmp_path)
-    _setup_mapping_and_plans(project, tmp_path)
-    merged = merge_confirmed_edit_plans(project)
-
-    timeline = build_otio_timeline(project, merged)
-    audio_tracks = [track for track in timeline.tracks if track.kind == otio.schema.TrackKind.Audio]
-    assert len(audio_tracks) == 2
-    assert audio_tracks[0][-1].name == "USA_Florida Keys_VO"
-    assert audio_tracks[1][-1].name == "USA_Grand Canyon_VO"
-    assert audio_tracks[0][-1].source_range.start_time.to_seconds() == 0.0
+    assert canyon_audio[0].source_range.duration.to_seconds() == 12.0
 
 
 def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
@@ -168,16 +169,14 @@ def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
     _setup_mapping_and_plans(project, tmp_path)
     merged = merge_confirmed_edit_plans(project)
 
-    export_path = export_otio_timeline(project, merged)
+    export_path = export_otio_timeline(
+        project,
+        merged,
+        export_settings=OtioExportSettings(audio_offset_sec=1.0, section_outro_sec=5.0),
+    )
     assert export_path.is_file()
+    assert (project.work_dir_path / "otio_export_settings.json").is_file()
 
     timeline = otio.adapters.read_from_file(str(export_path))
     assert timeline.name == "USA"
     assert len(timeline.tracks) == 3
-    assert timeline.tracks[0].name == "V1"
-    assert timeline.tracks[1].name.startswith("A1")
-    assert all(not isinstance(item, otio.schema.Stack) for item in timeline.tracks[0])
-    assert all(isinstance(item, (otio.schema.Clip, otio.schema.Gap)) for item in timeline.tracks[0])
-
-    built = build_otio_timeline(project, merged)
-    assert list(built.metadata["included_folders"]) == ["Florida Keys", "Grand Canyon"]

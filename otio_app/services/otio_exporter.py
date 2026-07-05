@@ -13,6 +13,11 @@ from otio_app.models import Project
 from otio_app.project_layout import get_otio_export_path
 from otio_app.services.edit_plan_builder import load_edit_plan
 from otio_app.services.media_utils import probe_duration_seconds
+from otio_app.services.otio_export_settings import (
+    OtioExportSettings,
+    load_otio_export_settings,
+    save_otio_export_settings,
+)
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 
 
@@ -27,6 +32,16 @@ class MergedEditPlanResult:
     @property
     def ready(self) -> bool:
         return bool(self.shots)
+
+
+@dataclass(frozen=True)
+class TimelineSection:
+    voice_file: str
+    folder: str
+    video_start_sec: float
+    video_duration_sec: float
+    voice_start_sec: float
+    voice_play_duration_sec: float
 
 
 def merge_confirmed_edit_plans(
@@ -49,6 +64,13 @@ def merge_confirmed_edit_plans(
     skipped: list[str] = []
     warnings: list[str] = []
     settings = EditPlanSettings()
+    export_settings = load_otio_export_settings(project)
+    settings = settings.model_copy(
+        update={
+            "audio_offset_sec": export_settings.audio_offset_sec,
+            "section_outro_sec": export_settings.section_outro_sec,
+        }
+    )
 
     for entry in mapping.entries:
         if not entry.confirmed or not entry.folder:
@@ -64,8 +86,6 @@ def merge_confirmed_edit_plans(
             continue
 
         if folder_name not in included:
-            if not included:
-                settings = plan.settings
             included.append(folder_name)
 
         voice_shots = [
@@ -111,16 +131,60 @@ def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> 
 
 
 def _media_reference(path: str, rate: float) -> otio.schema.ExternalReference:
-    """Absolute Medienpfad — Resolve verlinkt damit zuverlässiger als file://-URLs."""
+    """Absolute Medienpfad — kein Re-Encoding, nur Verweis auf Originaldatei."""
     resolved = _resolve_media_path(path)
     available_duration = probe_duration_seconds(resolved)
     if available_duration is None or available_duration <= 0:
         available_duration = 3600.0
-    available_range = _time_range(available_duration, rate)
     return otio.schema.ExternalReference(
         target_url=str(resolved),
-        available_range=available_range,
+        available_range=_time_range(available_duration, rate),
     )
+
+
+def _compute_timeline_sections(
+    shots: list[EditPlanShot],
+    settings: EditPlanSettings,
+) -> list[TimelineSection]:
+    """Ordner-Abschnitte inkl. Ausklingen und Voice-Start je Abschnitt."""
+    sections: list[TimelineSection] = []
+    video_cursor = 0.0
+    index = 0
+    while index < len(shots):
+        folder = shots[index].folder
+        voice_file = shots[index].voice_file
+        section_start = video_cursor
+        section_duration = 0.0
+        end_index = index
+        while end_index < len(shots) and shots[end_index].folder == folder:
+            section_duration += max(0.01, float(shots[end_index].duration_sec))
+            end_index += 1
+        if end_index < len(shots):
+            section_duration += max(0.0, float(settings.section_outro_sec))
+
+        offset = max(0.0, float(settings.audio_offset_sec))
+        voice_start = section_start + offset
+        voice_play = max(0.01, section_duration - offset)
+
+        sections.append(
+            TimelineSection(
+                voice_file=voice_file,
+                folder=folder,
+                video_start_sec=section_start,
+                video_duration_sec=section_duration,
+                voice_start_sec=voice_start,
+                voice_play_duration_sec=voice_play,
+            )
+        )
+        video_cursor = section_start + section_duration
+        index = end_index
+    return sections
+
+
+def _is_last_shot_in_folder(shots: list[EditPlanShot], index: int) -> bool:
+    if index + 1 >= len(shots):
+        return True
+    return shots[index + 1].folder != shots[index].folder
 
 
 def _append_video_item(
@@ -129,9 +193,9 @@ def _append_video_item(
     *,
     index: int,
     rate: float,
+    duration_sec: float,
 ) -> None:
-    duration_sec = max(0.01, float(shot.duration_sec))
-    duration = _time_range(duration_sec, rate)
+    duration = _time_range(max(0.01, duration_sec), rate)
     label = shot.motif or f"Shot {index}"
     clip_name = f"{index:03d} · {shot.folder} · {label}"
 
@@ -154,58 +218,43 @@ def _append_video_item(
     track.append(gap)
 
 
-def _voice_section_starts(
-    shots: list[EditPlanShot],
-    audio_offset_sec: float,
-) -> list[tuple[str, float]]:
-    """Pro Voice-over-Datei: Startzeit auf der Timeline (Video ab 0, Voice mit Offset)."""
-    sections: list[tuple[str, float]] = []
-    video_cursor = 0.0
-    current_voice: str | None = None
-
-    for shot in shots:
-        if shot.voice_file != current_voice:
-            start_sec = video_cursor
-            if current_voice is None:
-                start_sec = max(0.0, audio_offset_sec)
-            sections.append((shot.voice_file, start_sec))
-            current_voice = shot.voice_file
-        video_cursor += max(0.01, float(shot.duration_sec))
-    return sections
-
-
 def _append_aligned_voice_track(
     timeline: otio.schema.Timeline,
-    voice_file: str,
-    start_sec: float,
+    section: TimelineSection,
     rate: float,
     *,
     track_index: int,
 ) -> None:
-    """Eigene Audiospur pro Voice-over — ungeschnitten, per Gap auf Video-Abschnitt ausgerichtet."""
+    """Eine Audiospur pro Voice-over — Originaldatei, ein Stück pro Ordner-Abschnitt."""
     track = otio.schema.Track(
-        name=f"A{track_index} · {Path(voice_file).stem}"[:120],
+        name=f"A{track_index} · {Path(section.voice_file).stem}"[:120],
         kind=otio.schema.TrackKind.Audio,
     )
-    if start_sec > 0:
+    if section.voice_start_sec > 0:
         track.append(
             otio.schema.Gap(
                 name="Voice Start",
-                source_range=_time_range(start_sec, rate),
+                source_range=_time_range(section.voice_start_sec, rate),
             )
         )
 
-    resolved = _resolve_media_path(voice_file)
-    duration = probe_duration_seconds(resolved)
-    if duration is None or duration <= 0:
-        duration = 3600.0
+    resolved = _resolve_media_path(section.voice_file)
+    file_duration = probe_duration_seconds(resolved)
+    if file_duration is None or file_duration <= 0:
+        file_duration = section.voice_play_duration_sec
+    play_duration = min(file_duration, section.voice_play_duration_sec)
 
     voice_clip = otio.schema.Clip(
-        name=Path(voice_file).stem,
-        media_reference=_media_reference(voice_file, rate),
+        name=Path(section.voice_file).stem,
+        media_reference=_media_reference(section.voice_file, rate),
     )
-    voice_clip.source_range = _time_range(duration, rate, start_sec=0.0)
-    voice_clip.metadata["voice_file"] = voice_file
+    voice_clip.source_range = _time_range(play_duration, rate, start_sec=0.0)
+    voice_clip.metadata["voice_file"] = section.voice_file
+    voice_clip.metadata["folder"] = section.folder
+    voice_clip.metadata["otio_note"] = (
+        "Ungeschnittene Originaldatei ab Sekunde 0 — Länge begrenzt auf Abschnitt, "
+        "damit sich Voice-overs nicht überlappen."
+    )
     track.append(voice_clip)
     timeline.tracks.append(track)
 
@@ -213,39 +262,57 @@ def _append_aligned_voice_track(
 def build_otio_timeline(
     project: Project,
     merged: MergedEditPlanResult,
+    *,
+    export_settings: OtioExportSettings | None = None,
 ) -> otio.schema.Timeline:
     """Erzeugt eine OTIO-Timeline mit Video- und Voice-over-Spur."""
     rate = float(project.fps)
     settings = merged.settings
+    if export_settings is not None:
+        settings = settings.model_copy(
+            update={
+                "audio_offset_sec": export_settings.audio_offset_sec,
+                "section_outro_sec": export_settings.section_outro_sec,
+            }
+        )
+
+    sections = _compute_timeline_sections(merged.shots, settings)
     timeline = otio.schema.Timeline(name=project.name)
     timeline.metadata["project_id"] = project.id
     timeline.metadata["included_folders"] = list(merged.included_folders)
+    timeline.metadata["audio_offset_sec"] = settings.audio_offset_sec
+    timeline.metadata["section_outro_sec"] = settings.section_outro_sec
     timeline.global_start_time = otio.opentime.RationalTime.from_seconds(0, rate)
 
     video_track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
-
     for index, shot in enumerate(merged.shots, start=1):
-        _append_video_item(video_track, shot, index=index, rate=rate)
+        duration_sec = float(shot.duration_sec)
+        if _is_last_shot_in_folder(merged.shots, index - 1) and index < len(merged.shots):
+            duration_sec += max(0.0, float(settings.section_outro_sec))
+        _append_video_item(
+            video_track,
+            shot,
+            index=index,
+            rate=rate,
+            duration_sec=duration_sec,
+        )
 
     timeline.tracks.append(video_track)
 
-    voice_sections = _voice_section_starts(merged.shots, settings.audio_offset_sec)
     seen_voices: set[str] = set()
     audio_index = 1
-    for voice_file, start_sec in voice_sections:
-        if voice_file in seen_voices:
+    for section in sections:
+        if section.voice_file in seen_voices:
             continue
-        seen_voices.add(voice_file)
+        seen_voices.add(section.voice_file)
         _append_aligned_voice_track(
             timeline,
-            voice_file,
-            start_sec,
+            section,
             rate,
             track_index=audio_index,
         )
         audio_index += 1
 
-    timeline.metadata["audio_offset_sec"] = settings.audio_offset_sec
     return timeline
 
 
@@ -254,12 +321,16 @@ def export_otio_timeline(
     merged: MergedEditPlanResult,
     *,
     output_path: Path | None = None,
+    export_settings: OtioExportSettings | None = None,
 ) -> Path:
     """Schreibt die zusammengeführte Timeline als .otio-Datei."""
     if not merged.ready:
         raise ValueError("Keine Shots zum Export — zuerst Schnittpläne bestätigen.")
 
-    timeline = build_otio_timeline(project, merged)
+    settings = export_settings or load_otio_export_settings(project)
+    save_otio_export_settings(project, settings)
+
+    timeline = build_otio_timeline(project, merged, export_settings=settings)
     path = output_path or get_otio_export_path(project.work_dir_path, project.name)
     path.parent.mkdir(parents=True, exist_ok=True)
     otio.adapters.write_to_file(timeline, str(path))

@@ -10,6 +10,7 @@ from otio_app.analysis_models import EditPlanDocument, EditPlanSettings
 from otio_app.defaults import (
     DEFAULT_AUDIO_OFFSET_SEC,
     DEFAULT_FALLBACK_ORDER,
+    DEFAULT_SECTION_OUTRO_SEC,
     DEFAULT_SHOT_MAX_SEC,
     DEFAULT_SHOT_MIN_SEC,
     FALLBACK_SOURCE_LABELS,
@@ -37,6 +38,11 @@ from otio_app.services.edit_plan_rules import (
     validate_shots_against_rules,
 )
 from otio_app.services.otio_exporter import export_otio_timeline, merge_confirmed_edit_plans
+from otio_app.services.otio_export_settings import (
+    OtioExportSettings,
+    load_otio_export_settings,
+    save_otio_export_settings,
+)
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 from otio_app.ui.edit_plan_rules_ui import (
     get_edit_plan_rules_for_project,
@@ -220,7 +226,7 @@ def render_edit_plan_page() -> None:
         rules_doc = render_edit_plan_rules_manager(project)
         st.divider()
         st.markdown("**Timing & Gemini**")
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             shot_min = st.number_input(
                 "Min. Shot (Sek.)",
@@ -247,6 +253,17 @@ def render_edit_plan_page() -> None:
                 max_value=10.0,
                 step=0.5,
                 key=f"plan_offset_{project.id}",
+                help="Voice-over startet so viele Sekunden nach dem ersten Asset eines Ordners.",
+            )
+        with col4:
+            section_outro = st.number_input(
+                "Ordner-Ausklingen (Sek.)",
+                value=float(DEFAULT_SECTION_OUTRO_SEC),
+                min_value=0.0,
+                max_value=30.0,
+                step=0.5,
+                key=f"plan_outro_{project.id}",
+                help="Letztes Asset eines Ordners bleibt auf der Timeline so viele Sekunden länger.",
             )
 
         splitters = st.text_input(
@@ -277,10 +294,11 @@ def render_edit_plan_page() -> None:
 
         if st.button("Schnittplan vorschlagen", key=f"build_plan_{project.id}", type="primary"):
             use_gemini = is_gemini_configured()
-            settings = EditPlanSettings(
-                shot_min_sec=float(shot_min),
-                shot_max_sec=float(shot_max),
-                audio_offset_sec=float(audio_offset),
+                settings = EditPlanSettings(
+                    shot_min_sec=float(shot_min),
+                    shot_max_sec=float(shot_max),
+                    audio_offset_sec=float(audio_offset),
+                    section_outro_sec=float(section_outro),
                 text_splitters=[
                     piece.strip()
                     for piece in splitters.split(",")
@@ -380,11 +398,35 @@ def render_edit_plan_page() -> None:
 
     with tab_export:
         default_export_path = get_otio_export_path(project.work_dir_path, project.name)
+        saved_export_settings = load_otio_export_settings(project)
         st.markdown("**OTIO-Timeline aus bestätigten Schnittplänen**")
         st.caption(
-            "Alle bestätigten Orte werden in der Reihenfolge der Voice-over-Zuordnung "
-            f"zu einer Timeline zusammengeführt. Export nach `{default_export_path}`"
+            "Orte werden in Voice-over-Reihenfolge zusammengeführt. "
+            f"Export nach `{default_export_path}` · "
+            f"Einstellungen in `{project.work_dir_path / 'otio_export_settings.json'}`"
         )
+
+        timing_col1, timing_col2 = st.columns(2)
+        with timing_col1:
+            export_audio_offset = st.number_input(
+                "Audio-Start je Ordner (+Sek.)",
+                min_value=0.0,
+                max_value=30.0,
+                step=0.5,
+                value=float(saved_export_settings.audio_offset_sec),
+                key=f"export_audio_offset_{project.id}",
+                help="Nächstes Voice-over startet so viele Sekunden nach dem ersten Asset des Ordners.",
+            )
+        with timing_col2:
+            export_section_outro = st.number_input(
+                "Ordner-Ausklingen (Sek.)",
+                min_value=0.0,
+                max_value=60.0,
+                step=0.5,
+                value=float(saved_export_settings.section_outro_sec),
+                key=f"export_section_outro_{project.id}",
+                help="Letztes Asset eines Ordners wird auf der Timeline verlängert (Ausklingen).",
+            )
 
         export_folders = st.multiselect(
             "Orte exportieren (leer = alle bestätigten)",
@@ -416,12 +458,33 @@ def render_edit_plan_page() -> None:
             st.caption(f"• {warning}")
 
         if preview.ready:
-            total_duration = sum(shot.duration_sec for shot in preview.shots)
+            export_cfg = OtioExportSettings(
+                audio_offset_sec=float(export_audio_offset),
+                section_outro_sec=float(export_section_outro),
+            )
+            from otio_app.services.otio_exporter import _compute_timeline_sections
+
+            timeline_sections = _compute_timeline_sections(
+                preview.shots,
+                preview.settings.model_copy(
+                    update={
+                        "audio_offset_sec": export_cfg.audio_offset_sec,
+                        "section_outro_sec": export_cfg.section_outro_sec,
+                    }
+                ),
+            )
+            total_duration = sum(section.video_duration_sec for section in timeline_sections)
             st.caption(
                 f"Geschätzte Videospur: {total_duration:.1f}s · "
-                f"Audio-Offset: {preview.settings.audio_offset_sec}s · "
+                f"Audio-Start: {export_cfg.audio_offset_sec}s · "
+                f"Ausklingen: {export_cfg.section_outro_sec}s · "
                 f"{project.fps} fps"
             )
+            for section in timeline_sections:
+                st.caption(
+                    f"• **{section.folder}** — Video ab {section.video_start_sec:.1f}s "
+                    f"({section.video_duration_sec:.1f}s), Voice ab {section.voice_start_sec:.1f}s"
+                )
 
         if st.button(
             "📤 OTIO-Timeline exportieren",
@@ -430,16 +493,25 @@ def render_edit_plan_page() -> None:
             disabled=not preview.ready,
         ):
             try:
-                export_path = export_otio_timeline(project, preview)
+                export_settings = OtioExportSettings(
+                    audio_offset_sec=float(export_audio_offset),
+                    section_outro_sec=float(export_section_outro),
+                )
+                save_otio_export_settings(project, export_settings)
+                export_path = export_otio_timeline(
+                    project,
+                    preview,
+                    export_settings=export_settings,
+                )
                 st.success(f"Timeline exportiert: `{export_path}`")
             except (OSError, ValueError) as exc:
                 st.error(str(exc))
 
         st.markdown("**In Resolve / Premiere / OTIO**")
         st.caption(
-            "Die `.otio`-Datei enthält **V1** (Video ab Sekunde 0) und pro Voice-over-Datei "
-            "eine **eigene Audiospur** (ungeschnitten). **Audio-Start (+Sek.)** verzögert "
-            "nur das Voice-over — nicht die Video-Clips. "
+            "Video (**V1**) startet bei 0. Pro Voice-over-Datei eine **eigene Audiospur** — "
+            "Originaldatei ab Sekunde 0, **nicht** pro Shot geschnitten. "
+            "Die Länge pro Abschnitt verhindert Überlappungen (keine Verzerrung durch mehrere VO gleichzeitig). "
             "In DaVinci Resolve: **File → Import → Timeline → OpenTimelineIO**."
         )
 

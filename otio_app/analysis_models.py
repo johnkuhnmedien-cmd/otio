@@ -83,6 +83,7 @@ class EditPlanSettings(BaseModel):
     shot_min_sec: float = 3.0
     shot_max_sec: float = 8.0
     audio_offset_sec: float = 1.0
+    section_outro_sec: float = 5.0
     text_splitters: List[str] = Field(default_factory=lambda: [", und ", ", ", " und "])
     fallback_order: List[str] = Field(
         default_factory=lambda: ["local", "adobe_stock", "pexels", "gemini_image"]
