@@ -230,6 +230,7 @@ def ensure_export_media_for_export(
 ) -> Path:
     """Transkodiert bei Bedarf (Zoom/Titel) und verifiziert die Ausgabe."""
     from otio_app.services.clean_media import (
+        CLEAN_STATUS_CLEAN,
         CLEAN_STATUS_FAILED,
         process_media_file,
         resolve_effective_media_path,
