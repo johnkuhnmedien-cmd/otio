@@ -169,6 +169,338 @@ def _render_location_progress(project, project_id: str, mapped_folders: list[str
         st.success("Alle Orte abgeschlossen — Schnittplan für das gesamte Projekt fertig.")
 
 
+def _edit_plan_tab_key(project_id: str) -> str:
+    return f"edit_plan_active_tab_{project_id}"
+
+
+TAB_RULES = "⚙️ Regeln"
+TAB_GENERATE = "▶️ Vorschlag"
+TAB_REVIEW = "✅ Prüfen & Speichern"
+TAB_EXPORT = "📤 OTIO Export"
+EDIT_PLAN_TABS = (TAB_RULES, TAB_GENERATE, TAB_REVIEW, TAB_EXPORT)
+
+
+def _plan_number_setting(project_id: str, suffix: str, default: float) -> float:
+    return float(st.session_state.get(f"plan_{suffix}_{project_id}", default))
+
+
+def _plan_text_setting(project_id: str, suffix: str, default: str) -> str:
+    return str(st.session_state.get(f"plan_{suffix}_{project_id}", default))
+
+
+def _plan_gemini_model(project_id: str) -> str:
+    default_model = get_default_gemini_model()
+    return str(st.session_state.get(f"plan_gemini_{project_id}", default_model))
+
+
+def _render_tab_settings(project) -> None:
+    render_edit_plan_rules_manager(project)
+    st.divider()
+    st.markdown("**Timing & Gemini**")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.number_input(
+            "Min. Shot (Sek.)",
+            value=float(DEFAULT_SHOT_MIN_SEC),
+            min_value=1.0,
+            max_value=30.0,
+            step=0.5,
+            key=f"plan_min_{project.id}",
+        )
+    with col2:
+        st.number_input(
+            "Max. Shot (Sek.)",
+            value=float(DEFAULT_SHOT_MAX_SEC),
+            min_value=1.0,
+            max_value=60.0,
+            step=0.5,
+            key=f"plan_max_{project.id}",
+        )
+    with col3:
+        st.number_input(
+            "Audio-Start (+Sek.)",
+            value=float(DEFAULT_AUDIO_OFFSET_SEC),
+            min_value=0.0,
+            max_value=10.0,
+            step=0.5,
+            key=f"plan_offset_{project.id}",
+            help="Voice-over startet so viele Sekunden nach dem ersten Asset eines Ordners.",
+        )
+    with col4:
+        st.number_input(
+            "Ordner-Ausklingen (Sek.)",
+            value=float(DEFAULT_SECTION_OUTRO_SEC),
+            min_value=0.0,
+            max_value=30.0,
+            step=0.5,
+            key=f"plan_outro_{project.id}",
+            help="Letztes Asset eines Ordners bleibt auf der Timeline so viele Sekunden länger.",
+        )
+
+    st.text_input(
+        "Text-Trenner (kommagetrennt)",
+        value=", und ,, , und ",
+        key=f"plan_split_{project.id}",
+    )
+    st.caption("Fallback-Reihenfolge (Adobe Stock / Pexels / KI folgen später):")
+    for source in DEFAULT_FALLBACK_ORDER:
+        st.write(f"- {FALLBACK_SOURCE_LABELS.get(source, source)}")
+
+    default_model = get_default_gemini_model()
+    st.selectbox(
+        "Gemini-Modell (Motiv → Asset)",
+        options=list(GEMINI_MODEL_CHOICES),
+        index=list(GEMINI_MODEL_CHOICES).index(default_model),
+        format_func=format_gemini_model_label,
+        key=f"plan_gemini_{project.id}",
+    )
+
+
+def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument | None) -> None:
+    st.markdown(
+        f"Vorschlag für **{selected_folder}** — Gemini erhält **nur Text** (Whisper) "
+        "+ **Asset-Beschreibungen** und schlägt Shots vor."
+    )
+    if not is_gemini_configured():
+        st.warning("Ohne GEMINI_API_KEY wird nur eine einfache Text-Trennung genutzt.")
+
+    splitters = _plan_text_setting(project.id, "split", ", und ,, , und ")
+    if st.button("Schnittplan vorschlagen", key=f"build_plan_{project.id}", type="primary"):
+        use_gemini = is_gemini_configured()
+        settings = EditPlanSettings(
+            shot_min_sec=_plan_number_setting(project.id, "min", DEFAULT_SHOT_MIN_SEC),
+            shot_max_sec=_plan_number_setting(project.id, "max", DEFAULT_SHOT_MAX_SEC),
+            audio_offset_sec=_plan_number_setting(project.id, "offset", DEFAULT_AUDIO_OFFSET_SEC),
+            section_outro_sec=_plan_number_setting(project.id, "outro", DEFAULT_SECTION_OUTRO_SEC),
+            text_splitters=[
+                piece.strip()
+                for piece in splitters.split(",")
+                if piece.strip()
+            ],
+            fallback_order=list(DEFAULT_FALLBACK_ORDER),
+            gemini_model=_plan_gemini_model(project.id),
+        )
+        try:
+            with st.spinner(f"Schnittplan für {selected_folder} wird erstellt…"):
+                document = build_edit_plan(
+                    project,
+                    settings,
+                    use_api=use_gemini,
+                    folder_names=[selected_folder],
+                )
+            _set_draft(document, selected_folder)
+            st.success(f"{len(document.shots)} Shots vorgeschlagen.")
+            st.rerun()
+        except (GeminiNotConfiguredError, ValueError, FileNotFoundError) as exc:
+            st.error(str(exc))
+
+    draft = _get_draft(project.id, selected_folder) or saved
+    if draft is not None:
+        rules_doc = get_edit_plan_rules_for_project(project)
+        missing = sum(1 for shot in draft.shots if shot.asset_source == "missing")
+        violations = validate_shots_against_rules(draft.shots, rules_doc)
+        st.caption(
+            f"{len(draft.shots)} Shots · {missing} ohne passendes lokales Asset"
+        )
+        if violations:
+            st.warning("Regelverletzungen — ggf. unter „Regeln“ anpassen und neu generieren:")
+            for line in violations[:15]:
+                st.caption(f"• {line}")
+            if len(violations) > 15:
+                st.caption(f"… und {len(violations) - 15} weitere")
+
+
+def _render_tab_review(
+    project,
+    selected_folder: str,
+    saved: EditPlanDocument | None,
+    plan_path: Path,
+) -> None:
+    draft = _get_draft(project.id, selected_folder) or saved
+    if draft is None or not draft.shots:
+        st.info(
+            f"Noch kein Vorschlag für **{selected_folder}** — "
+            "zuerst unter „Vorschlag“ generieren."
+        )
+        return
+
+    st.markdown(
+        f"**{selected_folder}** · {len(draft.shots)} Shots "
+        f"— Audio-Offset: {draft.settings.audio_offset_sec}s"
+    )
+    rules_doc = get_edit_plan_rules_for_project(project)
+    violations = validate_shots_against_rules(draft.shots, rules_doc)
+    custom_rules = list_custom_rules(rules_doc, enabled_only=True)
+    if custom_rules:
+        st.markdown("**Deine Regeln (Checkliste)**")
+        for rule in custom_rules:
+            st.caption(f"• **{rule_label(rule)}** — {rule_description(rule)}")
+    if violations:
+        st.warning(f"{len(violations)} Regelverletzung(en) im aktuellen Vorschlag.")
+    for index, shot in enumerate(draft.shots):
+        icon = "🟢" if shot.asset_path else "🟡"
+        with st.expander(
+            f"{icon} Shot {index + 1} · {shot.folder} · {shot.duration_sec:.1f}s",
+            expanded=index < 2,
+        ):
+            st.write(f"**Motiv:** {shot.motif or '—'}")
+            st.write(f"**Voice:** {shot.voice_start_sec:.1f}–{shot.voice_end_sec:.1f}s")
+            st.caption(shot.passage_text)
+            if shot.asset_path:
+                st.write(f"**Asset:** `{Path(shot.asset_path).name}`")
+            else:
+                st.warning("Kein lokales Asset — Fallback folgt später (Adobe Stock / Pexels / KI).")
+
+    confirm = st.checkbox(
+        f"Schnittplan für {selected_folder} geprüft und bestätigt",
+        key=f"confirm_plan_{project.id}_{safe_folder_slug(selected_folder)}",
+    )
+    if st.button(
+        "Schnittplan speichern",
+        key=f"save_plan_{project.id}_{safe_folder_slug(selected_folder)}",
+        type="primary",
+    ):
+        if not confirm:
+            st.warning("Bitte bestätigen.")
+        else:
+            confirmed = draft.model_copy(update={"confirmed": True, "folder_name": selected_folder})
+            for shot in confirmed.shots:
+                if not shot.asset_path:
+                    shot.asset_source = "missing"
+            save_edit_plan(project, confirmed, selected_folder)
+            _set_draft(confirmed, selected_folder)
+            st.success(f"Gespeichert: `{plan_path}`")
+            st.rerun()
+
+    with st.expander("JSON-Vorschau", expanded=False):
+        st.code(draft.model_dump_json(indent=2)[:6000])
+
+
+def _render_tab_export(project, mapped_folders: list[str]) -> None:
+    default_export_path = get_otio_export_path(project.work_dir_path, project.name)
+    saved_export_settings = load_otio_export_settings(project)
+    st.markdown("**OTIO-Timeline aus bestätigten Schnittplänen**")
+    st.caption(
+        "Orte werden in Voice-over-Reihenfolge zusammengeführt. "
+        f"Export nach `{default_export_path}` · "
+        f"Einstellungen in `{project.work_dir_path / 'otio_export_settings.json'}`"
+    )
+
+    timing_col1, timing_col2 = st.columns(2)
+    with timing_col1:
+        export_audio_offset = st.number_input(
+            "Audio-Start je Ordner (+Sek.)",
+            min_value=0.0,
+            max_value=30.0,
+            step=0.5,
+            value=float(saved_export_settings.audio_offset_sec),
+            key=f"export_audio_offset_{project.id}",
+            help="Nächstes Voice-over startet so viele Sekunden nach dem ersten Asset des Ordners.",
+        )
+    with timing_col2:
+        export_section_outro = st.number_input(
+            "Ordner-Ausklingen (Sek.)",
+            min_value=0.0,
+            max_value=60.0,
+            step=0.5,
+            value=float(saved_export_settings.section_outro_sec),
+            key=f"export_section_outro_{project.id}",
+            help="Letztes Asset eines Ordners wird auf der Timeline verlängert (Ausklingen).",
+        )
+
+    export_folders = st.multiselect(
+        "Orte exportieren (leer = alle bestätigten)",
+        options=mapped_folders,
+        default=[
+            folder_name
+            for folder_name in mapped_folders
+            if (plan := load_edit_plan(project, folder_name)) is not None and plan.confirmed
+        ],
+        key=f"otio_export_folders_{project.id}",
+    )
+
+    preview = merge_confirmed_edit_plans(
+        project,
+        folder_names=export_folders or None,
+    )
+    if preview.included_folders:
+        st.success(
+            "Enthalten: "
+            + ", ".join(f"**{name}**" for name in preview.included_folders)
+            + f" · **{len(preview.shots)}** Shots"
+        )
+    if preview.skipped_folders:
+        st.warning(
+            "Noch nicht bestätigt: "
+            + ", ".join(f"`{name}`" for name in preview.skipped_folders)
+        )
+    for warning in preview.warnings:
+        st.caption(f"• {warning}")
+
+    if preview.ready:
+        export_cfg = OtioExportSettings(
+            audio_offset_sec=float(export_audio_offset),
+            section_outro_sec=float(export_section_outro),
+        )
+        from otio_app.services.otio_exporter import _compute_timeline_sections
+
+        timeline_sections = _compute_timeline_sections(
+            preview.shots,
+            preview.settings.model_copy(
+                update={
+                    "audio_offset_sec": export_cfg.audio_offset_sec,
+                    "section_outro_sec": export_cfg.section_outro_sec,
+                }
+            ),
+        )
+        total_duration = sum(section.video_duration_sec for section in timeline_sections)
+        st.caption(
+            f"Geschätzte Videospur: {total_duration:.1f}s · "
+            f"Audio-Start: {export_cfg.audio_offset_sec}s · "
+            f"Ausklingen: {export_cfg.section_outro_sec}s · "
+            f"{project.fps} fps"
+        )
+        for section in timeline_sections:
+            st.caption(
+                f"• **{section.folder}** — Video ab {section.video_start_sec:.1f}s "
+                f"({section.video_duration_sec:.1f}s), Voice ab {section.voice_start_sec:.1f}s"
+            )
+    else:
+        st.info(
+            "Export noch nicht möglich — wähle mindestens einen **bestätigten** Ort "
+            "oder bestätige Schnittpläne unter „Prüfen & Speichern“."
+        )
+
+    if st.button(
+        "📤 OTIO-Timeline exportieren",
+        key=f"export_otio_{project.id}",
+        type="primary",
+        disabled=not preview.ready,
+    ):
+        try:
+            export_settings = OtioExportSettings(
+                audio_offset_sec=float(export_audio_offset),
+                section_outro_sec=float(export_section_outro),
+            )
+            save_otio_export_settings(project, export_settings)
+            export_path = export_otio_timeline(
+                project,
+                preview,
+                export_settings=export_settings,
+            )
+            st.success(f"Timeline exportiert: `{export_path}`")
+        except (OSError, ValueError) as exc:
+            st.error(str(exc))
+
+    st.markdown("**In Resolve / Premiere / OTIO**")
+    st.caption(
+        "Video (**V1**) startet bei 0. Pro Voice-over-Datei eine **eigene Audiospur** — "
+        "Originaldatei ab Sekunde 0, **nicht** pro Shot geschnitten. "
+        "Die Länge pro Abschnitt verhindert Überlappungen (keine Verzerrung durch mehrere VO gleichzeitig). "
+        "In DaVinci Resolve: **File → Import → Timeline → OpenTimelineIO**."
+    )
+
+
 def render_edit_plan_page() -> None:
     st.header("③ Schnittplan")
 
@@ -218,299 +550,23 @@ def render_edit_plan_page() -> None:
     if saved is not None and saved.confirmed:
         st.success(f"Schnittplan für **{selected_folder}** bestätigt.")
 
-    tab_settings, tab_generate, tab_review, tab_export = st.tabs(
-        ["⚙️ Regeln", "▶️ Vorschlag", "✅ Prüfen & Speichern", "📤 OTIO Export"]
+    active_tab = st.radio(
+        "Schnittplan-Schritt",
+        options=EDIT_PLAN_TABS,
+        horizontal=True,
+        key=_edit_plan_tab_key(project.id),
+        label_visibility="collapsed",
     )
+    st.divider()
 
-    with tab_settings:
-        rules_doc = render_edit_plan_rules_manager(project)
-        st.divider()
-        st.markdown("**Timing & Gemini**")
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            shot_min = st.number_input(
-                "Min. Shot (Sek.)",
-                value=float(DEFAULT_SHOT_MIN_SEC),
-                min_value=1.0,
-                max_value=30.0,
-                step=0.5,
-                key=f"plan_min_{project.id}",
-            )
-        with col2:
-            shot_max = st.number_input(
-                "Max. Shot (Sek.)",
-                value=float(DEFAULT_SHOT_MAX_SEC),
-                min_value=1.0,
-                max_value=60.0,
-                step=0.5,
-                key=f"plan_max_{project.id}",
-            )
-        with col3:
-            audio_offset = st.number_input(
-                "Audio-Start (+Sek.)",
-                value=float(DEFAULT_AUDIO_OFFSET_SEC),
-                min_value=0.0,
-                max_value=10.0,
-                step=0.5,
-                key=f"plan_offset_{project.id}",
-                help="Voice-over startet so viele Sekunden nach dem ersten Asset eines Ordners.",
-            )
-        with col4:
-            section_outro = st.number_input(
-                "Ordner-Ausklingen (Sek.)",
-                value=float(DEFAULT_SECTION_OUTRO_SEC),
-                min_value=0.0,
-                max_value=30.0,
-                step=0.5,
-                key=f"plan_outro_{project.id}",
-                help="Letztes Asset eines Ordners bleibt auf der Timeline so viele Sekunden länger.",
-            )
-
-        splitters = st.text_input(
-            "Text-Trenner (kommagetrennt)",
-            value=", und ,, , und ",
-            key=f"plan_split_{project.id}",
-        )
-        st.caption("Fallback-Reihenfolge (Adobe Stock / Pexels / KI folgen später):")
-        for source in DEFAULT_FALLBACK_ORDER:
-            st.write(f"- {FALLBACK_SOURCE_LABELS.get(source, source)}")
-
-        default_model = get_default_gemini_model()
-        gemini_model = st.selectbox(
-            "Gemini-Modell (Motiv → Asset)",
-            options=list(GEMINI_MODEL_CHOICES),
-            index=list(GEMINI_MODEL_CHOICES).index(default_model),
-            format_func=format_gemini_model_label,
-            key=f"plan_gemini_{project.id}",
-        )
-
-    with tab_generate:
-        st.markdown(
-            f"Vorschlag für **{selected_folder}** — Gemini erhält **nur Text** (Whisper) "
-            "+ **Asset-Beschreibungen** und schlägt Shots vor."
-        )
-        if not is_gemini_configured():
-            st.warning("Ohne GEMINI_API_KEY wird nur eine einfache Text-Trennung genutzt.")
-
-        if st.button("Schnittplan vorschlagen", key=f"build_plan_{project.id}", type="primary"):
-            use_gemini = is_gemini_configured()
-            settings = EditPlanSettings(
-                shot_min_sec=float(shot_min),
-                shot_max_sec=float(shot_max),
-                audio_offset_sec=float(audio_offset),
-                section_outro_sec=float(section_outro),
-                text_splitters=[
-                    piece.strip()
-                    for piece in splitters.split(",")
-                    if piece.strip()
-                ],
-                fallback_order=list(DEFAULT_FALLBACK_ORDER),
-                gemini_model=gemini_model,
-            )
-            try:
-                with st.spinner(f"Schnittplan für {selected_folder} wird erstellt…"):
-                    document = build_edit_plan(
-                        project,
-                        settings,
-                        use_api=use_gemini,
-                        folder_names=[selected_folder],
-                    )
-                _set_draft(document, selected_folder)
-                st.success(f"{len(document.shots)} Shots vorgeschlagen.")
-                st.rerun()
-            except (GeminiNotConfiguredError, ValueError, FileNotFoundError) as exc:
-                st.error(str(exc))
-
-        draft = _get_draft(project.id, selected_folder) or saved
-        if draft is not None:
-            missing = sum(1 for shot in draft.shots if shot.asset_source == "missing")
-            violations = validate_shots_against_rules(draft.shots, rules_doc)
-            st.caption(
-                f"{len(draft.shots)} Shots · {missing} ohne passendes lokales Asset"
-            )
-            if violations:
-                st.warning("Regelverletzungen — ggf. unter „Regeln“ anpassen und neu generieren:")
-                for line in violations[:15]:
-                    st.caption(f"• {line}")
-                if len(violations) > 15:
-                    st.caption(f"… und {len(violations) - 15} weitere")
-
-    with tab_review:
-        draft = _get_draft(project.id, selected_folder) or saved
-        if draft is None or not draft.shots:
-            st.info(
-                f"Noch kein Vorschlag für **{selected_folder}** — "
-                "zuerst unter „Vorschlag“ generieren."
-            )
-        else:
-            st.markdown(
-                f"**{selected_folder}** · {len(draft.shots)} Shots "
-                f"— Audio-Offset: {draft.settings.audio_offset_sec}s"
-            )
-            rules_doc = get_edit_plan_rules_for_project(project)
-            violations = validate_shots_against_rules(draft.shots, rules_doc)
-            custom_rules = list_custom_rules(rules_doc, enabled_only=True)
-            if custom_rules:
-                st.markdown("**Deine Regeln (Checkliste)**")
-                for rule in custom_rules:
-                    st.caption(f"• **{rule_label(rule)}** — {rule_description(rule)}")
-            if violations:
-                st.warning(f"{len(violations)} Regelverletzung(en) im aktuellen Vorschlag.")
-            for index, shot in enumerate(draft.shots):
-                icon = "🟢" if shot.asset_path else "🟡"
-                with st.expander(
-                    f"{icon} Shot {index + 1} · {shot.folder} · {shot.duration_sec:.1f}s",
-                    expanded=index < 2,
-                ):
-                    st.write(f"**Motiv:** {shot.motif or '—'}")
-                    st.write(f"**Voice:** {shot.voice_start_sec:.1f}–{shot.voice_end_sec:.1f}s")
-                    st.caption(shot.passage_text)
-                    if shot.asset_path:
-                        st.write(f"**Asset:** `{Path(shot.asset_path).name}`")
-                    else:
-                        st.warning("Kein lokales Asset — Fallback folgt später (Adobe Stock / Pexels / KI).")
-
-            confirm = st.checkbox(
-                f"Schnittplan für {selected_folder} geprüft und bestätigt",
-                key=f"confirm_plan_{project.id}_{safe_folder_slug(selected_folder)}",
-            )
-            if st.button(
-                "Schnittplan speichern",
-                key=f"save_plan_{project.id}_{safe_folder_slug(selected_folder)}",
-                type="primary",
-            ):
-                if not confirm:
-                    st.warning("Bitte bestätigen.")
-                else:
-                    confirmed = draft.model_copy(update={"confirmed": True, "folder_name": selected_folder})
-                    for shot in confirmed.shots:
-                        if not shot.asset_path:
-                            shot.asset_source = "missing"
-                    save_edit_plan(project, confirmed, selected_folder)
-                    _set_draft(confirmed, selected_folder)
-                    st.success(f"Gespeichert: `{plan_path}`")
-                    st.rerun()
-
-            with st.expander("JSON-Vorschau", expanded=False):
-                st.code(draft.model_dump_json(indent=2)[:6000])
-
-    with tab_export:
-        default_export_path = get_otio_export_path(project.work_dir_path, project.name)
-        saved_export_settings = load_otio_export_settings(project)
-        st.markdown("**OTIO-Timeline aus bestätigten Schnittplänen**")
-        st.caption(
-            "Orte werden in Voice-over-Reihenfolge zusammengeführt. "
-            f"Export nach `{default_export_path}` · "
-            f"Einstellungen in `{project.work_dir_path / 'otio_export_settings.json'}`"
-        )
-
-        timing_col1, timing_col2 = st.columns(2)
-        with timing_col1:
-            export_audio_offset = st.number_input(
-                "Audio-Start je Ordner (+Sek.)",
-                min_value=0.0,
-                max_value=30.0,
-                step=0.5,
-                value=float(saved_export_settings.audio_offset_sec),
-                key=f"export_audio_offset_{project.id}",
-                help="Nächstes Voice-over startet so viele Sekunden nach dem ersten Asset des Ordners.",
-            )
-        with timing_col2:
-            export_section_outro = st.number_input(
-                "Ordner-Ausklingen (Sek.)",
-                min_value=0.0,
-                max_value=60.0,
-                step=0.5,
-                value=float(saved_export_settings.section_outro_sec),
-                key=f"export_section_outro_{project.id}",
-                help="Letztes Asset eines Ordners wird auf der Timeline verlängert (Ausklingen).",
-            )
-
-        export_folders = st.multiselect(
-            "Orte exportieren (leer = alle bestätigten)",
-            options=mapped_folders,
-            default=[
-                folder_name
-                for folder_name in mapped_folders
-                if (plan := load_edit_plan(project, folder_name)) is not None and plan.confirmed
-            ],
-            key=f"otio_export_folders_{project.id}",
-        )
-
-        preview = merge_confirmed_edit_plans(
-            project,
-            folder_names=export_folders or None,
-        )
-        if preview.included_folders:
-            st.success(
-                "Enthalten: "
-                + ", ".join(f"**{name}**" for name in preview.included_folders)
-                + f" · **{len(preview.shots)}** Shots"
-            )
-        if preview.skipped_folders:
-            st.warning(
-                "Noch nicht bestätigt: "
-                + ", ".join(f"`{name}`" for name in preview.skipped_folders)
-            )
-        for warning in preview.warnings:
-            st.caption(f"• {warning}")
-
-        if preview.ready:
-            export_cfg = OtioExportSettings(
-                audio_offset_sec=float(export_audio_offset),
-                section_outro_sec=float(export_section_outro),
-            )
-            from otio_app.services.otio_exporter import _compute_timeline_sections
-
-            timeline_sections = _compute_timeline_sections(
-                preview.shots,
-                preview.settings.model_copy(
-                    update={
-                        "audio_offset_sec": export_cfg.audio_offset_sec,
-                        "section_outro_sec": export_cfg.section_outro_sec,
-                    }
-                ),
-            )
-            total_duration = sum(section.video_duration_sec for section in timeline_sections)
-            st.caption(
-                f"Geschätzte Videospur: {total_duration:.1f}s · "
-                f"Audio-Start: {export_cfg.audio_offset_sec}s · "
-                f"Ausklingen: {export_cfg.section_outro_sec}s · "
-                f"{project.fps} fps"
-            )
-            for section in timeline_sections:
-                st.caption(
-                    f"• **{section.folder}** — Video ab {section.video_start_sec:.1f}s "
-                    f"({section.video_duration_sec:.1f}s), Voice ab {section.voice_start_sec:.1f}s"
-                )
-
-        if st.button(
-            "📤 OTIO-Timeline exportieren",
-            key=f"export_otio_{project.id}",
-            type="primary",
-            disabled=not preview.ready,
-        ):
-            try:
-                export_settings = OtioExportSettings(
-                    audio_offset_sec=float(export_audio_offset),
-                    section_outro_sec=float(export_section_outro),
-                )
-                save_otio_export_settings(project, export_settings)
-                export_path = export_otio_timeline(
-                    project,
-                    preview,
-                    export_settings=export_settings,
-                )
-                st.success(f"Timeline exportiert: `{export_path}`")
-            except (OSError, ValueError) as exc:
-                st.error(str(exc))
-
-        st.markdown("**In Resolve / Premiere / OTIO**")
-        st.caption(
-            "Video (**V1**) startet bei 0. Pro Voice-over-Datei eine **eigene Audiospur** — "
-            "Originaldatei ab Sekunde 0, **nicht** pro Shot geschnitten. "
-            "Die Länge pro Abschnitt verhindert Überlappungen (keine Verzerrung durch mehrere VO gleichzeitig). "
-            "In DaVinci Resolve: **File → Import → Timeline → OpenTimelineIO**."
-        )
+    with st.container(key=f"edit-plan-panel-{project.id}"):
+        if active_tab == TAB_RULES:
+            _render_tab_settings(project)
+        elif active_tab == TAB_GENERATE:
+            _render_tab_generate(project, selected_folder, saved)
+        elif active_tab == TAB_REVIEW:
+            _render_tab_review(project, selected_folder, saved, plan_path)
+        elif active_tab == TAB_EXPORT:
+            _render_tab_export(project, mapped_folders)
 
     render_file_paths(project)

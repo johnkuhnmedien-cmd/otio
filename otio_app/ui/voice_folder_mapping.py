@@ -76,43 +76,44 @@ def render_voice_folder_mapping() -> None:
     entries = _get_mapping_entries(project.id)
     updated_entries: list[VoiceFolderMappingEntry] = []
 
-    for index, entry in enumerate(entries):
-        selected_folder = entry.folder or "— nicht zugeordnet —"
-        option_list = folder_options
-        if selected_folder not in option_list and selected_folder != "— nicht zugeordnet —":
-            option_list = [*option_list, selected_folder]
+    with st.container(key=f"mapping-rows-{project.id}"):
+        for index, entry in enumerate(entries):
+            selected_folder = entry.folder or "— nicht zugeordnet —"
+            option_list = folder_options
+            if selected_folder not in option_list and selected_folder != "— nicht zugeordnet —":
+                option_list = [*option_list, selected_folder]
 
-        col1, col2, col3 = st.columns([2, 2, 1])
-        with col1:
-            st.write(f"**{Path(entry.voice_file).name}**")
-        with col2:
-            choice = st.selectbox(
-                "Asset-Ordner",
-                options=option_list,
-                index=option_list.index(selected_folder),
-                key=f"mapping_folder_{project.id}_{index}",
-                label_visibility="collapsed",
-            )
-            folder_value = None if choice == "— nicht zugeordnet —" else choice
-            if folder_value == entry.folder:
-                method = entry.match_method
-            else:
-                method = "manual"
-            updated_entries.append(
-                VoiceFolderMappingEntry(
-                    voice_file=entry.voice_file,
-                    folder=folder_value,
-                    match_method=method if folder_value else "manual",
-                    confirmed=False,
+            col1, col2, col3 = st.columns([2, 2, 1])
+            with col1:
+                st.write(f"**{Path(entry.voice_file).name}**")
+            with col2:
+                choice = st.selectbox(
+                    "Asset-Ordner",
+                    options=option_list,
+                    index=option_list.index(selected_folder),
+                    key=f"mapping_folder_{project.id}_{index}",
+                    label_visibility="collapsed",
                 )
-            )
-        with col3:
-            if folder_value is None:
-                st.error("Fehlt")
-            elif method == "filename":
-                st.success("Auto")
-            else:
-                st.info("Manuell")
+                folder_value = None if choice == "— nicht zugeordnet —" else choice
+                if folder_value == entry.folder:
+                    method = entry.match_method
+                else:
+                    method = "manual"
+                updated_entries.append(
+                    VoiceFolderMappingEntry(
+                        voice_file=entry.voice_file,
+                        folder=folder_value,
+                        match_method=method if folder_value else "manual",
+                        confirmed=False,
+                    )
+                )
+            with col3:
+                if folder_value is None:
+                    st.error("Fehlt")
+                elif method == "filename":
+                    st.success("Auto")
+                else:
+                    st.info("Manuell")
 
     st.session_state[state_key] = [
         entry.model_dump(mode="json") for entry in updated_entries

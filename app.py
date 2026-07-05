@@ -36,6 +36,7 @@ from otio_app.ui.navigation import (
     PAGE_STATUS,
 )
 from otio_app.ui.clean_media import render_clean_media_page
+from otio_app.ui.page_state import clear_page_widget_state
 from otio_app.ui.project_workbench import render_project_workbench
 from otio_app.ui.voice_folder_mapping import render_voice_folder_mapping
 
@@ -199,7 +200,10 @@ with st.sidebar:
     st.divider()
     st.caption("Workflow: ⓪ → ① → ② → ③ · Details unter Systemstatus")
 
-if st.session_state.get(LAST_NAV_PAGE_KEY) != page:
+previous_page = st.session_state.get(LAST_NAV_PAGE_KEY)
+if previous_page != page:
+    if previous_page is not None:
+        clear_page_widget_state(previous_page)
     st.session_state[LAST_NAV_PAGE_KEY] = page
     if not is_shutting_down():
         st.rerun()
@@ -490,16 +494,20 @@ elif page == PAGE_LIST:
                     st.rerun()
 
 elif page == PAGE_CLEAN_MEDIA:
-    render_clean_media_page()
+    with st.container(key="page-clean-media"):
+        render_clean_media_page()
 
 elif page == PAGE_ANALYSIS:
-    render_project_workbench()
+    with st.container(key="page-analysis"):
+        render_project_workbench()
 
 elif page == PAGE_MAPPING:
-    render_voice_folder_mapping()
+    with st.container(key="page-mapping"):
+        render_voice_folder_mapping()
 
 elif page == PAGE_EDIT_PLAN:
-    render_edit_plan_page()
+    with st.container(key="page-edit-plan"):
+        render_edit_plan_page()
 
 elif page == PAGE_STATUS:
     st.header("Systemstatus")
