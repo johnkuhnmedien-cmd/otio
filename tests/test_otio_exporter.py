@@ -272,14 +272,14 @@ def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
         "otio_app.services.otio_exporter.verify_shot_media_paths",
         return_value=[],
     ):
-        export_path = export_otio_timeline(
+        export_result = export_otio_timeline(
             project,
             merged,
             export_settings=OtioExportSettings(audio_offset_sec=1.0, section_outro_sec=5.0),
         )
-    assert export_path.is_file()
+    assert export_result.path.is_file()
     assert (project.work_dir_path / "otio_export_settings.json").is_file()
 
-    timeline = otio.adapters.read_from_file(str(export_path))
+    timeline = otio.adapters.read_from_file(str(export_result.path))
     assert timeline.name == "USA"
     assert len(timeline.tracks) == 3

@@ -321,7 +321,7 @@ def test_process_media_retranscodes_clean_with_wrong_aspect(
         / "Arches_National_Park_Asset03.mp4"
     )
     clean.parent.mkdir(parents=True, exist_ok=True)
-    clean.write_bytes(b"old-clean")
+    clean.write_bytes(b"old-clean-still-wide")
 
     wide = MediaProbeInfo(
         video_codec="h264",
@@ -349,7 +349,7 @@ def test_process_media_retranscodes_clean_with_wrong_aspect(
     ) -> None:
         captured["video_filter"] = video_filter
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(b"new-clean")
+        output_path.write_bytes(b"new-clean-zoomed")
 
     mock_transcode.side_effect = _fake_transcode
 
@@ -444,7 +444,7 @@ def test_ensure_zoomed_media_for_export_returns_rezoomed_clean(
         / "Arches_National_Park_Asset03.mp4"
     )
     clean.parent.mkdir(parents=True, exist_ok=True)
-    clean.write_bytes(b"old-clean")
+    clean.write_bytes(b"old-clean-still-wide")
 
     wide = MediaProbeInfo(
         video_codec="h264",
@@ -460,7 +460,17 @@ def test_ensure_zoomed_media_for_export_returns_rezoomed_clean(
         width=3840,
         height=2160,
     )
-    mock_probe.side_effect = [wide, wide, filled]
+
+    def _probe_side_effect(path: str | Path) -> MediaProbeInfo:
+        probe_path = Path(path)
+        try:
+            if probe_path.is_file() and probe_path.stat().st_size == len(b"new-clean-zoomed"):
+                return filled
+        except OSError:
+            pass
+        return wide
+
+    mock_probe.side_effect = _probe_side_effect
 
     def _fake_transcode(
         original_path: Path,
@@ -469,10 +479,17 @@ def test_ensure_zoomed_media_for_export_returns_rezoomed_clean(
         video_filter: str | None = None,
     ) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(b"new-clean")
+        output_path.write_bytes(b"new-clean-zoomed")
 
     mock_transcode.side_effect = _fake_transcode
 
-    resolved = ensure_zoomed_media_for_export(project, "Arches National Park", original)
+    notes: list[str] = []
+    resolved = ensure_zoomed_media_for_export(
+        project,
+        "Arches National Park",
+        original,
+        notes=notes,
+    )
     assert resolved == clean
     assert mock_transcode.called
+    assert any("3840" in note for note in notes)

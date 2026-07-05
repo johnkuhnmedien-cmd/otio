@@ -470,12 +470,17 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                         f"OTIO-Export ({len(merged.shots)} Shots)",
                         page=PAGE_EDIT_PLAN,
                     )
-                    export_path = export_otio_timeline(
+                    export_result = export_otio_timeline(
                         project,
                         merged,
                         export_settings=export_settings,
                     )
-                    st.success(f"Timeline exportiert: `{export_path}`")
+                    st.success(f"Timeline exportiert: `{export_result.path}`")
+                    for note in export_result.aspect_fill_notes:
+                        if "Letterboxing" in note or "fehlgeschlagen" in note or "nicht lesbar" in note:
+                            st.warning(note)
+                        else:
+                            st.caption(f"• {note}")
         except (OSError, ValueError) as exc:
             st.error(str(exc))
 

@@ -332,7 +332,12 @@ def _append_video_item(
     if shot.asset_path:
         original = _resolve_media_path(shot.asset_path)
         if export_rules.auto_zoom_fill and not is_image_media(original):
-            media_path = ensure_zoomed_media_for_export(project, shot.folder, original)
+            media_path = ensure_zoomed_media_for_export(
+                project,
+                shot.folder,
+                original,
+                notes=timing_notes,
+            )
         else:
             media_path = resolve_effective_media_path(project, shot.folder, original)
         clip_name = _clip_name_for_media(media_path, index=index)
@@ -487,6 +492,16 @@ def build_otio_timeline(
     timeline.tracks.append(video_track)
     if timing_notes:
         timeline.metadata["media_timing_notes"] = list(timing_notes)
+        zoom_notes = [
+            note
+            for note in timing_notes
+            if "×" in note
+            or "Letterboxing" in note
+            or "Zoom" in note
+            or "Auflösung" in note
+        ]
+        if zoom_notes:
+            timeline.metadata["aspect_fill_notes"] = zoom_notes
 
     seen_voices: set[str] = set()
     audio_index = 1
@@ -506,13 +521,19 @@ def build_otio_timeline(
     return timeline
 
 
+@dataclass(frozen=True)
+class OtioExportResult:
+    path: Path
+    aspect_fill_notes: list[str] = field(default_factory=list)
+
+
 def export_otio_timeline(
     project: Project,
     merged: MergedEditPlanResult,
     *,
     output_path: Path | None = None,
     export_settings: OtioExportSettings | None = None,
-) -> Path:
+) -> OtioExportResult:
     """Schreibt die zusammengeführte Timeline als .otio-Datei."""
     if not merged.ready:
         raise ValueError("Keine Shots zum Export — zuerst Schnittpläne bestätigen.")
@@ -533,4 +554,5 @@ def export_otio_timeline(
     path = output_path or get_otio_export_path(project.work_dir_path, project.name)
     path.parent.mkdir(parents=True, exist_ok=True)
     otio.adapters.write_to_file(timeline, str(path))
-    return path
+    aspect_notes = list(timeline.metadata.get("aspect_fill_notes", []))
+    return OtioExportResult(path=path, aspect_fill_notes=aspect_notes)
