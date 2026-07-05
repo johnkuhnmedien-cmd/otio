@@ -130,6 +130,21 @@ def test_clip_durations_use_seconds_not_frames(tmp_path: Path) -> None:
     assert clip_total == 9.0
 
 
+def test_audio_track_uses_full_voice_files_not_shot_cuts(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _setup_mapping_and_plans(project, tmp_path)
+    merged = merge_confirmed_edit_plans(project)
+
+    timeline = build_otio_timeline(project, merged)
+    audio_track = timeline.tracks[1]
+    audio_clips = [item for item in audio_track if isinstance(item, otio.schema.Clip)]
+
+    assert len(audio_clips) == 2
+    assert audio_clips[0].name == "USA_Florida Keys_VO"
+    assert audio_clips[1].name == "USA_Grand Canyon_VO"
+    assert audio_clips[0].source_range.start_time.to_seconds() == 0.0
+
+
 def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _setup_mapping_and_plans(project, tmp_path)
