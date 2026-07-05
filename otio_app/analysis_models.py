@@ -133,6 +133,7 @@ class EditPlanRulesDocument(BaseModel):
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     project_id: str
     rules: List[EditPlanRule] = Field(default_factory=list)
+    gemini_prompt: str = ""
 
 
 class EditPlanShot(BaseModel):

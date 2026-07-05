@@ -182,6 +182,7 @@ def plan_passage_assets(
     language: str,
     *,
     model: Optional[str] = None,
+    extra_instructions: str = "",
 ) -> list[dict[str, Any]]:
     """Zerlegt eine Passage in Motive und ordnet lokale Assets zu (nur Text an Gemini)."""
     if not passage_text.strip():
@@ -194,15 +195,12 @@ def plan_passage_assets(
         f'- path="{item["path"]}" description="{item.get("description", "")}"'
         for item in assets
     )
-    prompt = (
-        f"Du planst Video-Shots für den Ordner '{folder_name}'. Sprache: {language}.\n"
-        f"Passage: {passage_text.strip()}\n\n"
-        "Verfügbare lokale Assets:\n"
-        f"{asset_lines or '- (keine)'}\n\n"
-        "Wenn die Passage mehrere Sehenswürdigkeiten/Motive nennt, erstelle mehrere Teile.\n"
-        "Antworte NUR als JSON:\n"
-        '{"parts":[{"text":"...","motif":"...","asset_path":"exakter path oder null","confidence":"high|low"}]}\n'
-        "asset_path muss exakt einem path aus der Liste entsprechen oder null sein."
+    prompt = build_plan_passage_prompt(
+        passage_text=passage_text,
+        folder_name=folder_name,
+        asset_lines=asset_lines,
+        language=language,
+        extra_instructions=extra_instructions,
     )
     response = client.models.generate_content(
         model=resolve_gemini_model(model),
@@ -226,6 +224,42 @@ def plan_passage_assets(
     if not isinstance(parts, list):
         return []
     return [part for part in parts if isinstance(part, dict)]
+
+
+def build_plan_passage_prompt(
+    *,
+    passage_text: str,
+    folder_name: str,
+    asset_lines: str,
+    language: str,
+    extra_instructions: str = "",
+) -> str:
+    """Prompt für Motiv-Zerlegung und Asset-Zuordnung."""
+    sections = [
+        f"Du planst Video-Shots für den Ordner '{folder_name}'. Sprache: {language}.",
+        f"Passage: {passage_text.strip()}",
+        "Verfügbare lokale Assets:",
+        asset_lines or "- (keine)",
+    ]
+    instructions = extra_instructions.strip()
+    if instructions:
+        sections.extend(
+            [
+                "",
+                "Zusätzliche Anweisungen des Editors (unbedingt beachten):",
+                instructions,
+            ]
+        )
+    sections.extend(
+        [
+            "",
+            "Wenn die Passage mehrere Sehenswürdigkeiten/Motive nennt, erstelle mehrere Teile.",
+            "Antworte NUR als JSON:",
+            '{"parts":[{"text":"...","motif":"...","asset_path":"exakter path oder null","confidence":"high|low"}]}',
+            "asset_path muss exakt einem path aus der Liste entsprechen oder null sein.",
+        ]
+    )
+    return "\n".join(sections)
 
 
 def is_gemini_configured() -> bool:

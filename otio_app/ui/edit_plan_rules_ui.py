@@ -5,18 +5,15 @@ from __future__ import annotations
 import streamlit as st
 
 from otio_app.analysis_models import EditPlanRule, EditPlanRulesDocument
-from otio_app.services.font_utils import FOLDER_TITLE_FONT_OPTIONS
+from otio_app.models import Project
 from otio_app.services.edit_plan_rules import (
     RULE_AUTO_ZOOM_FILL,
-    RULE_FOLDER_TITLE,
     RULE_MAX_ASSET_USES,
     RULE_TRIM_LEADING,
     available_rule_templates,
-    create_custom_rule,
     create_rule_from_template,
     is_custom_rule,
     is_rule_implemented,
-    list_custom_rules,
     load_edit_plan_rules,
     rule_description,
     rule_label,
@@ -65,9 +62,7 @@ def _render_rule_card(
     with st.container(border=True):
         cols = st.columns([4, 1])
         title = rule_label(rule)
-        if is_custom_rule(rule):
-            title += " · *eigene Regel*"
-        elif not is_rule_implemented(rule.rule_type):
+        if not is_rule_implemented(rule.rule_type):
             title += " *(demnächst)*"
         with cols[0]:
             enabled = st.checkbox(
@@ -75,9 +70,8 @@ def _render_rule_card(
                 value=rule.enabled,
                 key=f"rule_enabled_{project.id}_{rule.id}",
             )
-            if not is_custom_rule(rule):
-                st.caption(rule_description(rule))
-            if not is_rule_implemented(rule.rule_type) and not is_custom_rule(rule):
+            st.caption(rule_description(rule))
+            if not is_rule_implemented(rule.rule_type):
                 st.caption("Wird gespeichert, aber noch nicht automatisch im Schnittplan angewendet.")
         with cols[1]:
             if st.button("🗑️", key=f"rule_remove_{project.id}_{rule.id}", help="Regel entfernen"):
@@ -114,7 +108,10 @@ def _render_rule_card(
                 "Aktiv: Zoom-Faktor wird pro Asset aus Auflösung vs. Projekt berechnet "
                 f"({project.width}×{project.height})."
             )
-        elif rule.rule_type == RULE_FOLDER_TITLE:
+        from otio_app.services.edit_plan_rules import RULE_FOLDER_TITLE
+        from otio_app.services.font_utils import FOLDER_TITLE_FONT_OPTIONS
+
+        if rule.rule_type == RULE_FOLDER_TITLE:
             font_options = list(FOLDER_TITLE_FONT_OPTIONS)
             current_font = str(params.get("font_name", "Phosphate"))
             if current_font not in font_options:
@@ -140,22 +137,6 @@ def _render_rule_card(
                 "Ordnername unten links einblenden — Unterstriche (_) werden zu Leerzeichen. "
                 "Wird beim OTIO-Export per ffmpeg ins Bild eingebrannt."
             )
-        elif is_custom_rule(rule):
-            label = st.text_input(
-                "Titel",
-                value=str(params.get("title") or rule.label or "Eigene Regel"),
-                key=f"rule_custom_title_{project.id}_{rule.id}",
-            )
-            params["title"] = label.strip() or "Eigene Regel"
-            legacy_text = str(params.get("text") or params.get("note") or "")
-            params["text"] = st.text_area(
-                "Regeltext",
-                value=legacy_text,
-                key=f"rule_custom_text_{project.id}_{rule.id}",
-                height=100,
-                placeholder="z. B. Keine Drohnenaufnahmen direkt hintereinander …",
-            )
-            params.pop("note", None)
 
         if rule.id in remove_ids:
             return None
@@ -166,9 +147,9 @@ def render_edit_plan_rules_manager(project: Project) -> EditPlanRulesDocument:
     """Regeln anzeigen, bearbeiten und dauerhaft speichern."""
     st.markdown("**Schnittregeln**")
     st.caption(
-        "Automatische Regeln wirken beim Erzeugen des Schnittplans (Asset-Auswahl) "
-        "oder beim OTIO-Export (Anfang abschneiden, Zoom, Ordner-Titel). "
-        "Eigene Regeln speicherst du als Checkliste für den manuellen Schnitt. "
+        "System-Regeln wirken automatisch (Asset-Auswahl beim Vorschlag, Zoom/Titel beim Export). "
+        "Unter **Gemini-Zusatzhinweise** kannst du freie Anweisungen formulieren — "
+        "die werden beim Schnittplan-Vorschlag an Gemini geschickt. "
         f"Datei: `{project.work_dir_path / 'edit_plan_rules.json'}`"
     )
 
@@ -177,9 +158,8 @@ def render_edit_plan_rules_manager(project: Project) -> EditPlanRulesDocument:
     updated_rules: list[EditPlanRule] = []
 
     system_rules = [rule for rule in document.rules if not is_custom_rule(rule)]
-    custom_rules = list_custom_rules(document)
 
-    st.markdown("**Automatische Regeln**")
+    st.markdown("**Automatische System-Regeln**")
     if not system_rules:
         st.caption("Keine System-Regeln — unten eine vordefinierte Regel hinzufügen.")
     for rule in system_rules:
@@ -188,37 +168,25 @@ def render_edit_plan_rules_manager(project: Project) -> EditPlanRulesDocument:
             updated_rules.append(updated)
 
     st.divider()
-    st.markdown("**Deine eigenen Regeln**")
-    st.caption("Frei formuliert — beliebig viele, dauerhaft speicherbar, jederzeit löschbar.")
-
-    if not custom_rules:
-        st.info("Noch keine eigenen Regeln.")
-
-    for rule in custom_rules:
-        updated = _render_rule_card(project, rule, remove_ids)
-        if updated is not None:
-            updated_rules.append(updated)
-
-    with st.container(border=True):
-        new_title = st.text_input(
-            "Titel der neuen Regel",
-            placeholder="z. B. Keine Wiederholung von Intro-Shots",
-            key=f"custom_rule_title_new_{project.id}",
-        )
-        new_text = st.text_area(
-            "Regeltext",
-            placeholder="Beschreibe die Regel in eigenen Worten …",
-            key=f"custom_rule_text_new_{project.id}",
-            height=100,
-        )
-        if st.button("➕ Eigene Regel hinzufügen", key=f"custom_rule_add_{project.id}", type="primary"):
-            if not new_text.strip() and not new_title.strip():
-                st.warning("Bitte mindestens Titel oder Regeltext eingeben.")
-            else:
-                updated_rules.append(create_custom_rule(new_title, new_text))
-                document = document.model_copy(update={"rules": updated_rules})
-                _set_rules_document(document)
-                st.rerun()
+    st.markdown("**Gemini-Zusatzhinweise**")
+    st.caption(
+        "Freitext für Gemini beim **Schnittplan vorschlagen** — z. B. "
+        "«Jedes Asset soll bis zum Beginn des nächsten Satzes laufen» oder "
+        "«Keine Drohnenaufnahmen hintereinander». "
+        "Nach dem Speichern Schnittplan **neu generieren**."
+    )
+    gemini_prompt = st.text_area(
+        "Zusatzhinweise für Gemini",
+        value=document.gemini_prompt,
+        height=160,
+        key=f"gemini_prompt_{project.id}",
+        placeholder=(
+            "Beispiel:\n"
+            "- Assets laufen bis zum Beginn des nächsten Satzes\n"
+            "- Bevorzuge Weitwinkel bei Landschaften"
+        ),
+        label_visibility="collapsed",
+    )
 
     st.divider()
     st.markdown("**Vordefinierte Regel hinzufügen**")
@@ -239,11 +207,13 @@ def render_edit_plan_rules_manager(project: Project) -> EditPlanRulesDocument:
     with add_col2:
         if st.button("➕ System-Regel", key=f"rule_add_{project.id}", disabled=not templates):
             updated_rules.append(create_rule_from_template(selected_type))
-            document = document.model_copy(update={"rules": updated_rules})
+            document = document.model_copy(
+                update={"rules": updated_rules, "gemini_prompt": gemini_prompt}
+            )
             _set_rules_document(document)
             st.rerun()
 
-    document = document.model_copy(update={"rules": updated_rules})
+    document = document.model_copy(update={"rules": updated_rules, "gemini_prompt": gemini_prompt})
 
     save_col1, save_col2 = st.columns(2)
     with save_col1:

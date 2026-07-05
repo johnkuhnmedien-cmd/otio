@@ -159,9 +159,45 @@ def load_edit_plan_rules(project: Project) -> EditPlanRulesDocument:
         document = EditPlanRulesDocument.model_validate(payload)
         if document.project_id != project.id:
             document = document.model_copy(update={"project_id": project.id})
-        return document
+        return normalize_rules_document(document)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
         return default_rules(project)
+
+
+def normalize_rules_document(document: EditPlanRulesDocument) -> EditPlanRulesDocument:
+    """Legacy eigene Regeln → gemini_prompt; Custom-Regeln aus der Liste entfernen."""
+    custom_rules = list_custom_rules(document)
+    if not custom_rules:
+        return document
+
+    lines: list[str] = []
+    existing = document.gemini_prompt.strip()
+    if existing:
+        lines.append(existing)
+
+    for rule in custom_rules:
+        if not rule.enabled:
+            continue
+        title = str(rule.params.get("title") or rule.label or "").strip()
+        text = str(rule.params.get("text") or rule.params.get("note") or "").strip()
+        if title and text:
+            lines.append(f"{title}: {text}")
+        elif text:
+            lines.append(text)
+        elif title:
+            lines.append(title)
+
+    system_rules = [rule for rule in document.rules if not is_custom_rule(rule)]
+    return document.model_copy(
+        update={
+            "rules": system_rules,
+            "gemini_prompt": "\n".join(lines).strip(),
+        }
+    )
+
+
+def gemini_prompt_text(rules_doc: EditPlanRulesDocument) -> str:
+    return rules_doc.gemini_prompt.strip()
 
 
 def save_edit_plan_rules(project: Project, document: EditPlanRulesDocument) -> Path:

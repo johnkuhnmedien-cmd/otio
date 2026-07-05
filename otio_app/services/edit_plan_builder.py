@@ -28,7 +28,11 @@ from otio_app.project_layout import (
     get_edit_plan_path,
     get_folder_edit_plan_path,
 )
-from otio_app.services.edit_plan_rules import apply_edit_plan_rules, load_edit_plan_rules
+from otio_app.services.edit_plan_rules import (
+    apply_edit_plan_rules,
+    gemini_prompt_text,
+    load_edit_plan_rules,
+)
 from otio_app.services.gemini_client import GeminiNotConfiguredError, plan_passage_assets
 from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.shot_timing import TimedPart, allocate_time_by_text, shots_from_timed_parts
@@ -123,6 +127,7 @@ def _parts_from_gemini_or_local(
     *,
     use_api: bool,
     gemini_model: str | None,
+    gemini_prompt: str = "",
 ) -> list[dict]:
     if use_api:
         try:
@@ -132,6 +137,7 @@ def _parts_from_gemini_or_local(
                 assets,
                 language,
                 model=gemini_model or settings.gemini_model,
+                extra_instructions=gemini_prompt,
             )
             if parts:
                 return parts
@@ -172,6 +178,8 @@ def build_edit_plan(
         audio_offset_sec=DEFAULT_AUDIO_OFFSET_SEC,
         fallback_order=list(DEFAULT_FALLBACK_ORDER),
     )
+    rules_doc = load_edit_plan_rules(project)
+    gemini_prompt = gemini_prompt_text(rules_doc)
 
     voice_files = {entry.path: entry for entry in voice_doc.files}
     mapping_by_voice = {
@@ -219,6 +227,7 @@ def build_edit_plan(
                 plan_settings,
                 use_api=use_api,
                 gemini_model=plan_settings.gemini_model,
+                gemini_prompt=gemini_prompt,
             )
             texts = [str(part.get("text", "")).strip() for part in raw_parts]
             time_ranges = allocate_time_by_text(
@@ -265,7 +274,6 @@ def build_edit_plan(
                     )
                 )
 
-    rules_doc = load_edit_plan_rules(project)
     shots = apply_edit_plan_rules(shots, rules_doc, assets_by_folder)
 
     return EditPlanDocument(

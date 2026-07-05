@@ -31,12 +31,7 @@ from otio_app.services.gemini_client import (
     get_default_gemini_model,
     is_gemini_configured,
 )
-from otio_app.services.edit_plan_rules import (
-    list_custom_rules,
-    rule_description,
-    rule_label,
-    validate_shots_against_rules,
-)
+from otio_app.services.edit_plan_rules import validate_shots_against_rules
 from otio_app.services.otio_exporter import (
     MergedEditPlanResult,
     export_otio_timeline,
@@ -249,8 +244,8 @@ def _render_tab_settings(project) -> None:
 
 def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument | None) -> None:
     st.markdown(
-        f"Vorschlag für **{selected_folder}** — Gemini erhält **nur Text** (Whisper) "
-        "+ **Asset-Beschreibungen** und schlägt Shots vor."
+        f"Vorschlag für **{selected_folder}** — Gemini erhält **Whisper-Text**, "
+        "**Asset-Beschreibungen** und deine **Zusatzhinweise** (Tab Regeln)."
     )
     if not is_gemini_configured():
         st.warning("Ohne GEMINI_API_KEY wird nur eine einfache Text-Trennung genutzt.")
@@ -321,11 +316,8 @@ def _render_tab_review(
     )
     rules_doc = get_edit_plan_rules_for_project(project)
     violations = validate_shots_against_rules(draft.shots, rules_doc)
-    custom_rules = list_custom_rules(rules_doc, enabled_only=True)
-    if custom_rules:
-        st.markdown("**Deine Regeln (Checkliste)**")
-        for rule in custom_rules:
-            st.caption(f"• **{rule_label(rule)}** — {rule_description(rule)}")
+    if rules_doc.gemini_prompt.strip():
+        st.caption("Gemini-Zusatzhinweise sind aktiv — beim Neu-Generieren berücksichtigt.")
     if violations:
         st.warning(f"{len(violations)} Regelverletzung(en) im aktuellen Vorschlag.")
     for index, shot in enumerate(draft.shots):

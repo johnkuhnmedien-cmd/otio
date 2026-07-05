@@ -18,8 +18,8 @@ from otio_app.services.edit_plan_rules import (
     create_custom_rule,
     default_rules,
     export_rule_options,
-    is_custom_rule,
     load_edit_plan_rules,
+    normalize_rules_document,
     save_edit_plan_rules,
     validate_shots_against_rules,
 )
@@ -116,11 +116,13 @@ def test_available_templates_excludes_only_used_system_rules(tmp_path: Path) -> 
     assert len(available) >= 2
 
 
-def test_create_custom_rule(tmp_path: Path) -> None:
+def test_create_custom_rule_migrates_to_gemini_prompt(tmp_path: Path) -> None:
     rule = create_custom_rule("Keine Intro-Wiederholung", "Intro-Clips nicht doppelt nutzen.")
     assert rule.rule_type == RULE_CUSTOM
-    assert rule.params["title"] == "Keine Intro-Wiederholung"
-    assert is_custom_rule(rule)
+    document = normalize_rules_document(
+        EditPlanRulesDocument(project_id="p1", rules=[rule])
+    )
+    assert "Intro-Clips nicht doppelt nutzen." in document.gemini_prompt
 
 
 def test_save_and_load_rules(tmp_path: Path) -> None:
