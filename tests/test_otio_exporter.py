@@ -19,6 +19,7 @@ from otio_app.services.edit_plan_builder import save_edit_plan
 from otio_app.services.otio_exporter import (
     _clip_name_for_media,
     _compute_timeline_sections,
+    _media_reference,
     _media_target_url,
     build_otio_timeline,
     export_otio_timeline,
@@ -167,6 +168,14 @@ def test_audio_offset_and_outro_on_export(tmp_path: Path) -> None:
 
     canyon_audio = timeline.tracks[2]
     assert canyon_audio[0].source_range.duration.to_seconds() == 12.0
+
+
+def test_media_reference_omits_available_range_for_resolve(tmp_path: Path) -> None:
+    media = tmp_path / "Arches_National_Park_Asset03.mp4"
+    media.write_bytes(b"x")
+    ref = _media_reference(str(media), 25.0)
+    assert ref.available_range is None
+    assert "Arches_National_Park_Asset03.mp4" in ref.target_url
 
 
 def test_media_target_url_uses_absolute_posix_path(tmp_path: Path) -> None:

@@ -315,6 +315,8 @@ def transcode_to_clean(original: Path, output_path: Path) -> None:
             str(original),
             "-map",
             "0:v:0",
+            "-reset_timestamps",
+            "1",
         ]
         if has_audio:
             command.extend(["-map", "0:a:0", "-c:a", "aac", "-b:a", "192k"])

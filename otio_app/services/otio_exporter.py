@@ -189,15 +189,14 @@ def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> 
 
 
 def _media_reference(path: str, rate: float) -> otio.schema.ExternalReference:
-    """Absoluter Medienpfad für Resolve-kompatiblen OTIO-Import."""
+    """Absoluter Medienpfad für Resolve-kompatiblen OTIO-Import.
+
+  ``available_range`` bewusst weggelassen: Resolve vergleicht sonst unsere
+  00:00:00:00-Angabe mit eingebettetem Datei-Timecode (z. B. Resolve-ProRes-
+  Exporte ab 00:00:15:01) und meldet „Mismatch between specified target timecodes“.
+    """
     resolved = _resolve_media_path(path)
-    available_duration = probe_duration_seconds(resolved)
-    if available_duration is None or available_duration <= 0:
-        available_duration = 3600.0
-    return otio.schema.ExternalReference(
-        target_url=_media_target_url(resolved),
-        available_range=_time_range(available_duration, rate),
-    )
+    return otio.schema.ExternalReference(target_url=_media_target_url(resolved))
 
 
 def _compute_timeline_sections(
