@@ -16,7 +16,9 @@ from otio_app.analysis_models import (
 from otio_app.models import Project
 from otio_app.services.edit_plan_builder import save_edit_plan
 from otio_app.services.otio_exporter import (
+    _clip_name_for_media,
     _compute_timeline_sections,
+    _media_target_url,
     build_otio_timeline,
     export_otio_timeline,
     merge_confirmed_edit_plans,
@@ -142,6 +144,8 @@ def test_clip_durations_use_seconds_not_frames(tmp_path: Path) -> None:
     clips = [item for item in video_track if isinstance(item, otio.schema.Clip)]
     assert clips[0].source_range.duration.to_seconds() == 3.0
     assert clips[1].source_range.duration.to_seconds() == 8.0
+    assert clips[0].name == "Florida_Keys_1.mp4"
+    assert clips[0].media_reference.target_url.startswith("file://")
 
 
 def test_audio_offset_and_outro_on_export(tmp_path: Path) -> None:
@@ -162,6 +166,20 @@ def test_audio_offset_and_outro_on_export(tmp_path: Path) -> None:
 
     canyon_audio = timeline.tracks[2]
     assert canyon_audio[0].source_range.duration.to_seconds() == 12.0
+
+
+def test_media_target_url_uses_file_scheme(tmp_path: Path) -> None:
+    media = tmp_path / "Arches_National_Park_Asset03.mp4"
+    media.write_bytes(b"x")
+    url = _media_target_url(media)
+    assert url.startswith("file://")
+    assert "Arches_National_Park_Asset03.mp4" in url
+
+
+def test_clip_name_for_media_uses_filename() -> None:
+    assert _clip_name_for_media(Path("/tmp/Arches_National_Park_Asset03.mp4"), index=3) == (
+        "Arches_National_Park_Asset03.mp4"
+    )
 
 
 def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:

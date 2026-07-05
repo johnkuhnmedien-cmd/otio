@@ -12,6 +12,7 @@ from otio_app.analysis_models import CleanMediaEntry, CleanMediaManifest, MediaP
 from otio_app.models import Project
 from otio_app.project_layout import (
     clean_output_path_for_media,
+    get_clean_media_output_dir,
     get_folder_clean_manifest_path,
     safe_folder_slug,
 )
@@ -374,13 +375,29 @@ def _entry_for_original(
 ) -> CleanMediaEntry | None:
     if manifest is None:
         return None
-    target = str(original_path.resolve())
+    try:
+        target = str(original_path.expanduser().resolve())
+    except OSError:
+        target = str(original_path.expanduser())
     target_name = original_path.name.casefold()
+    target_stem = safe_folder_slug(original_path.stem).casefold()
+
     for entry in manifest.entries:
         if entry.original_path == target:
             return entry
-        if Path(entry.original_path).name.casefold() == target_name:
+        if entry.clean_path and entry.clean_path == target:
             return entry
+        orig = Path(entry.original_path)
+        if orig.name.casefold() == target_name:
+            return entry
+        if safe_folder_slug(orig.stem).casefold() == target_stem:
+            return entry
+        if entry.clean_path:
+            clean = Path(entry.clean_path)
+            if clean.name.casefold() == target_name:
+                return entry
+            if safe_folder_slug(clean.stem).casefold() == target_stem:
+                return entry
     return None
 
 
@@ -390,15 +407,49 @@ def resolve_effective_media_path(
     media_path: Path,
 ) -> Path:
     """Liefert clean-Pfad wenn vorhanden, sonst Original."""
+    try:
+        resolved = media_path.expanduser().resolve()
+    except OSError:
+        resolved = media_path.expanduser()
+
+    clean_root = get_clean_media_output_dir(project.work_dir_path)
+    try:
+        if clean_root in resolved.parents and resolved.is_file():
+            return resolved
+    except OSError:
+        pass
+
     manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
-    entry = _entry_for_original(manifest, media_path)
+    entry = _entry_for_original(manifest, resolved)
     if entry is None:
-        return media_path
+        return resolved
+
     if entry.status == CLEAN_STATUS_CLEAN and entry.clean_path:
-        clean = Path(entry.clean_path)
+        clean = Path(entry.clean_path).expanduser()
+        try:
+            clean = clean.resolve()
+        except OSError:
+            pass
         if clean.is_file():
             return clean
-    return media_path
+        expected = clean_output_path_for_media(
+            project.work_dir_path,
+            folder_name,
+            Path(entry.original_path),
+        )
+        if expected.is_file():
+            return expected
+
+    if entry.status == CLEAN_STATUS_OK:
+        original = Path(entry.original_path).expanduser()
+        try:
+            original = original.resolve()
+        except OSError:
+            pass
+        if original.is_file():
+            return original
+
+    return resolved
 
 
 def folder_clean_media_ready(project: Project, folder_name: str) -> bool:

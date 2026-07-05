@@ -120,6 +120,33 @@ def test_resolve_effective_media_path_uses_manifest(tmp_path: Path) -> None:
     assert resolved == clean
 
 
+def test_resolve_effective_media_path_falls_back_to_expected_clean_path(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    original = project.project_root_path / "Florida Keys" / "clip.mp4"
+    expected_clean = project.work_dir_path / "clean" / "Florida_Keys" / "clip.mp4"
+    expected_clean.parent.mkdir(parents=True, exist_ok=True)
+    expected_clean.write_bytes(b"clean")
+
+    manifest = CleanMediaManifest(
+        project_id=project.id,
+        folder="Florida Keys",
+        entries=[
+            CleanMediaEntry(
+                original_path=str(original.resolve()),
+                clean_path="/nonexistent/stale_clean.mp4",
+                status=CLEAN_STATUS_CLEAN,
+            )
+        ],
+    )
+    save_clean_media_manifest(
+        project.work_dir_path / "clean_media" / "Florida_Keys.json",
+        manifest,
+    )
+
+    resolved = resolve_effective_media_path(project, "Florida Keys", original)
+    assert resolved == expected_clean
+
+
 def test_resolve_media_for_analysis_prefers_clean(tmp_path: Path) -> None:
     project = _project(tmp_path)
     original = project.project_root_path / "Florida Keys" / "clip.mp4"
@@ -211,4 +238,5 @@ def test_otio_export_uses_clean_path(tmp_path: Path) -> None:
         timeline = build_otio_timeline(project, merged)
 
     video_clip = timeline.tracks[0][0]
-    assert str(clean) in video_clip.media_reference.target_url
+    assert clean.name in video_clip.media_reference.target_url
+    assert video_clip.name == clean.name

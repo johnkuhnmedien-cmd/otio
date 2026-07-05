@@ -123,6 +123,22 @@ def _resolve_media_path(path: str) -> Path:
     return Path(path).expanduser().resolve()
 
 
+def _media_target_url(path: Path) -> str:
+    """Absolute file://-URL — DaVinci Resolve erwartet URLs, keine bloßen Pfade."""
+    try:
+        return path.expanduser().resolve().as_uri()
+    except OSError:
+        return path.expanduser().as_uri()
+
+
+def _clip_name_for_media(media_path: Path, *, index: int) -> str:
+    """Clip-Name in Resolve = Dateiname (nicht Motiv-Text)."""
+    name = media_path.name.strip()
+    if name:
+        return name[:120]
+    return f"Shot_{index:03d}"
+
+
 def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> otio.opentime.TimeRange:
     """Sekunden → OTIO-Zeit. RationalTime(6, 25) wäre 6 Frames — nicht 6 Sekunden."""
     return otio.opentime.TimeRange(
@@ -132,13 +148,13 @@ def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> 
 
 
 def _media_reference(path: str, rate: float) -> otio.schema.ExternalReference:
-    """Absolute Medienpfad — kein Re-Encoding, nur Verweis auf Originaldatei."""
+    """Absolute Medien-URL (file://) — Resolve findet Dateien zuverlässiger als mit Rohpfaden."""
     resolved = _resolve_media_path(path)
     available_duration = probe_duration_seconds(resolved)
     if available_duration is None or available_duration <= 0:
         available_duration = 3600.0
     return otio.schema.ExternalReference(
-        target_url=str(resolved),
+        target_url=_media_target_url(resolved),
         available_range=_time_range(available_duration, rate),
     )
 
@@ -198,24 +214,26 @@ def _append_video_item(
     duration_sec: float,
 ) -> None:
     duration = _time_range(max(0.01, duration_sec), rate)
-    label = shot.motif or f"Shot {index}"
-    clip_name = f"{index:03d} · {shot.folder} · {label}"
 
     if shot.asset_path:
         original = _resolve_media_path(shot.asset_path)
         media_path = resolve_effective_media_path(project, shot.folder, original)
+        clip_name = _clip_name_for_media(media_path, index=index)
         video_clip = otio.schema.Clip(
-            name=clip_name[:120],
+            name=clip_name,
             media_reference=_media_reference(str(media_path), rate),
         )
         video_clip.source_range = duration
         video_clip.metadata["folder"] = shot.folder
         video_clip.metadata["motif"] = shot.motif
         video_clip.metadata["passage_text"] = shot.passage_text
+        video_clip.metadata["original_asset_path"] = shot.asset_path
+        video_clip.metadata["resolved_media_path"] = str(media_path)
         track.append(video_clip)
         return
 
-    gap = otio.schema.Gap(name=f"Missing · {clip_name[:100]}", source_range=duration)
+    label = shot.motif or f"Shot {index}"
+    gap = otio.schema.Gap(name=f"Missing · {label[:100]}", source_range=duration)
     gap.metadata["folder"] = shot.folder
     gap.metadata["motif"] = shot.motif
     gap.metadata["passage_text"] = shot.passage_text
