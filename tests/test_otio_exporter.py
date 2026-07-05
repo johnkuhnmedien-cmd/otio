@@ -16,8 +16,10 @@ from otio_app.analysis_models import (
 )
 from otio_app.models import Project
 from otio_app.services.edit_plan_builder import save_edit_plan
+from otio_app.services.media_utils import MediaTiming
 from otio_app.services.otio_exporter import (
     _clip_name_for_media,
+    _clip_source_range_for_media,
     _compute_timeline_sections,
     _media_reference,
     _media_target_url,
@@ -170,11 +172,17 @@ def test_audio_offset_and_outro_on_export(tmp_path: Path) -> None:
     assert canyon_audio[0].source_range.duration.to_seconds() == 12.0
 
 
-def test_media_reference_omits_available_range_for_resolve(tmp_path: Path) -> None:
+def test_media_reference_aligns_available_range_with_embedded_timecode(tmp_path: Path) -> None:
     media = tmp_path / "Arches_National_Park_Asset03.mp4"
     media.write_bytes(b"x")
-    ref = _media_reference(str(media), 25.0)
-    assert ref.available_range is None
+
+    timing = MediaTiming(start_sec=15.04, duration_sec=14.88, rate=25.0)
+    with patch("otio_app.services.otio_exporter.probe_media_timing", return_value=timing):
+        ref = _media_reference(str(media), 25.0)
+
+    assert ref.available_range is not None
+    assert ref.available_range.start_time.to_seconds() == 15.04
+    assert abs(ref.available_range.duration.to_seconds() - 14.88) < 0.01
     assert "Arches_National_Park_Asset03.mp4" in ref.target_url
 
 
@@ -189,6 +197,23 @@ def test_media_target_url_uses_absolute_posix_path(tmp_path: Path) -> None:
     assert "Apostle_Islands_Asset01.mp4" in url
     assert "%20" not in url
     assert "Unglaubliche Welt" in url
+
+
+def test_clip_source_range_starts_at_embedded_timecode(tmp_path: Path) -> None:
+    media = tmp_path / "Arches_National_Park_Asset03.mp4"
+    media.write_bytes(b"x")
+    timing = MediaTiming(start_sec=15.04, duration_sec=14.88, rate=25.0)
+
+    with patch("otio_app.services.otio_exporter.probe_media_timing", return_value=timing):
+        source_range, play_sec, notes = _clip_source_range_for_media(
+            media,
+            fallback_rate=25.0,
+            requested_duration_sec=14.88,
+        )
+
+    assert source_range.start_time.to_seconds() == 15.04
+    assert abs(play_sec - 14.88) < 0.01
+    assert notes == []
 
 
 def test_clip_name_for_media_uses_filename() -> None:

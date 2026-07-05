@@ -322,7 +322,14 @@ def transcode_to_clean(original: Path, output_path: Path) -> None:
             command.extend(["-map", "0:a:0", "-c:a", "aac", "-b:a", "192k"])
         else:
             command.append("-an")
-        command.extend([*video_flags, str(output_path)])
+        command.extend([
+            "-fflags",
+            "+genpts",
+            "-avoid_negative_ts",
+            "make_zero",
+            *video_flags,
+            str(output_path),
+        ])
 
     try:
         result = _run_command(command, timeout_sec=3600)

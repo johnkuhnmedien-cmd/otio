@@ -5,7 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
+from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +19,129 @@ AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"}
 MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS | AUDIO_EXTENSIONS
 
 NO_ANALYZABLE_MEDIA_DESCRIPTION = "Keine analysierbaren Medien gefunden."
+
+_TIMECODE_RE = re.compile(
+    r"^(?P<h>\d{2}):(?P<m>\d{2}):(?P<s>\d{2})[:;](?P<f>\d{2})$"
+)
+
+
+@dataclass(frozen=True)
+class MediaTiming:
+    """Eingebetteter Medien-Start und Dauer für OTIO available/source_range."""
+
+    start_sec: float = 0.0
+    duration_sec: float | None = None
+    rate: float = 25.0
+
+
+def parse_r_frame_rate(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        if "/" in value:
+            return float(Fraction(value))
+        return float(value)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def parse_smpte_timecode(value: str, rate: float) -> float | None:
+    match = _TIMECODE_RE.match(value.strip())
+    if not match:
+        return None
+    hours = int(match.group("h"))
+    minutes = int(match.group("m"))
+    seconds = int(match.group("s"))
+    frames = int(match.group("f"))
+    if rate <= 0:
+        return None
+    return hours * 3600 + minutes * 60 + seconds + frames / rate
+
+
+def probe_media_timing(path: Path, *, default_rate: float = 25.0) -> MediaTiming:
+    """Liest Start-Timecode/PTS und Dauer — für Resolve-konforme OTIO-Ranges."""
+    rate = default_rate
+    start_sec = 0.0
+    duration_sec: float | None = None
+
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration:stream=index,codec_type,r_frame_rate,start_time:"
+                "stream_tags=timecode:format_tags=timecode",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        duration_sec = probe_duration_seconds(path)
+        return MediaTiming(start_sec=0.0, duration_sec=duration_sec, rate=rate)
+
+    if result.returncode != 0:
+        duration_sec = probe_duration_seconds(path)
+        return MediaTiming(start_sec=0.0, duration_sec=duration_sec, rate=rate)
+
+    try:
+        payload = json.loads((result.stdout or b"").decode("utf-8", errors="replace") or "{}")
+    except json.JSONDecodeError:
+        duration_sec = probe_duration_seconds(path)
+        return MediaTiming(start_sec=0.0, duration_sec=duration_sec, rate=rate)
+
+    format_info = payload.get("format", {})
+    raw_duration = format_info.get("duration")
+    if raw_duration is not None:
+        try:
+            duration_sec = float(raw_duration)
+        except (TypeError, ValueError):
+            duration_sec = None
+
+    streams = payload.get("streams", [])
+    preferred = [
+        stream
+        for stream in streams
+        if (stream.get("codec_type") or "").lower() in {"video", "audio"}
+    ] or streams
+
+    embedded_tc: str | None = None
+    stream_start: float | None = None
+
+    for stream in preferred:
+        stream_rate = parse_r_frame_rate(stream.get("r_frame_rate"))
+        if stream_rate:
+            rate = stream_rate
+        tags = stream.get("tags") or {}
+        if tags.get("timecode"):
+            embedded_tc = str(tags["timecode"])
+        raw_start = stream.get("start_time")
+        if raw_start is not None:
+            try:
+                stream_start = float(raw_start)
+            except (TypeError, ValueError):
+                pass
+
+    format_tags = format_info.get("tags") or {}
+    if format_tags.get("timecode"):
+        embedded_tc = str(format_tags["timecode"])
+
+    if embedded_tc:
+        parsed = parse_smpte_timecode(embedded_tc, rate)
+        if parsed is not None:
+            start_sec = parsed
+    elif stream_start is not None and stream_start > 0.001:
+        start_sec = stream_start
+
+    if duration_sec is None:
+        duration_sec = probe_duration_seconds(path)
+
+    return MediaTiming(start_sec=start_sec, duration_sec=duration_sec, rate=rate)
 
 
 def is_video_media(path: Path) -> bool:

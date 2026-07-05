@@ -17,7 +17,11 @@ from otio_app.services.clean_media import (
     resolve_effective_media_path,
     validate_clean_output,
 )
-from otio_app.services.media_utils import probe_duration_seconds
+from otio_app.services.media_utils import (
+    is_image_media,
+    probe_duration_seconds,
+    probe_media_timing,
+)
 from otio_app.services.otio_export_settings import (
     OtioExportSettings,
     load_otio_export_settings,
@@ -188,15 +192,61 @@ def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> 
     )
 
 
-def _media_reference(path: str, rate: float) -> otio.schema.ExternalReference:
-    """Absoluter Medienpfad für Resolve-kompatiblen OTIO-Import.
-
-  ``available_range`` bewusst weggelassen: Resolve vergleicht sonst unsere
-  00:00:00:00-Angabe mit eingebettetem Datei-Timecode (z. B. Resolve-ProRes-
-  Exporte ab 00:00:15:01) und meldet „Mismatch between specified target timecodes“.
-    """
+def _media_reference(path: str, fallback_rate: float) -> otio.schema.ExternalReference:
+    """Medienreferenz mit available_range passend zum eingebetteten Datei-Timecode."""
     resolved = _resolve_media_path(path)
-    return otio.schema.ExternalReference(target_url=_media_target_url(resolved))
+    timing = probe_media_timing(resolved, default_rate=fallback_rate)
+    media_rate = timing.rate or fallback_rate
+    duration_sec = timing.duration_sec
+    if duration_sec is None or duration_sec <= 0:
+        duration_sec = probe_duration_seconds(resolved)
+    if duration_sec is None or duration_sec <= 0:
+        return otio.schema.ExternalReference(target_url=_media_target_url(resolved))
+    return otio.schema.ExternalReference(
+        target_url=_media_target_url(resolved),
+        available_range=_time_range(duration_sec, media_rate, start_sec=timing.start_sec),
+    )
+
+
+def _clip_source_range_for_media(
+    media_path: Path,
+    *,
+    fallback_rate: float,
+    requested_duration_sec: float,
+) -> tuple[otio.opentime.TimeRange, float, list[str]]:
+    """source_range im selben TC-Raum wie die Datei; Dauer ggf. auf Datei gekappt."""
+    notes: list[str] = []
+    if is_image_media(media_path):
+        return (
+            _time_range(max(0.01, requested_duration_sec), fallback_rate),
+            requested_duration_sec,
+            notes,
+        )
+
+    timing = probe_media_timing(media_path, default_rate=fallback_rate)
+    media_rate = timing.rate or fallback_rate
+    start_sec = timing.start_sec
+    available_sec = timing.duration_sec
+    if available_sec is None or available_sec <= 0:
+        available_sec = probe_duration_seconds(media_path)
+    if available_sec is None or available_sec <= 0:
+        return (
+            _time_range(max(0.01, requested_duration_sec), media_rate, start_sec=start_sec),
+            requested_duration_sec,
+            notes,
+        )
+
+    play_sec = min(requested_duration_sec, available_sec)
+    if play_sec + 0.05 < requested_duration_sec:
+        notes.append(
+            f"{media_path.name}: Shot {requested_duration_sec:.1f}s, Datei nur "
+            f"{available_sec:.1f}s ab TC {start_sec:.2f}s"
+        )
+    return (
+        _time_range(max(0.01, play_sec), media_rate, start_sec=start_sec),
+        play_sec,
+        notes,
+    )
 
 
 def _compute_timeline_sections(
@@ -252,18 +302,24 @@ def _append_video_item(
     index: int,
     rate: float,
     duration_sec: float,
+    timing_notes: list[str] | None = None,
 ) -> None:
-    duration = _time_range(max(0.01, duration_sec), rate)
-
     if shot.asset_path:
         original = _resolve_media_path(shot.asset_path)
         media_path = resolve_effective_media_path(project, shot.folder, original)
         clip_name = _clip_name_for_media(media_path, index=index)
+        source_range, _, notes = _clip_source_range_for_media(
+            media_path,
+            fallback_rate=rate,
+            requested_duration_sec=max(0.01, duration_sec),
+        )
+        if timing_notes is not None:
+            timing_notes.extend(notes)
         video_clip = otio.schema.Clip(
             name=clip_name,
             media_reference=_media_reference(str(media_path), rate),
         )
-        video_clip.source_range = duration
+        video_clip.source_range = source_range
         video_clip.metadata["folder"] = shot.folder
         video_clip.metadata["motif"] = shot.motif
         video_clip.metadata["passage_text"] = shot.passage_text
@@ -272,6 +328,7 @@ def _append_video_item(
         track.append(video_clip)
         return
 
+    duration = _time_range(max(0.01, duration_sec), rate)
     label = shot.motif or f"Shot {index}"
     gap = otio.schema.Gap(name=f"Missing · {label[:100]}", source_range=duration)
     gap.metadata["folder"] = shot.folder
@@ -301,16 +358,20 @@ def _append_aligned_voice_track(
         )
 
     resolved = _resolve_media_path(section.voice_file)
-    file_duration = probe_duration_seconds(resolved)
-    if file_duration is None or file_duration <= 0:
-        file_duration = section.voice_play_duration_sec
-    play_duration = min(file_duration, section.voice_play_duration_sec)
+    source_range, _, _notes = _clip_source_range_for_media(
+        resolved,
+        fallback_rate=rate,
+        requested_duration_sec=min(
+            probe_duration_seconds(resolved) or section.voice_play_duration_sec,
+            section.voice_play_duration_sec,
+        ),
+    )
 
     voice_clip = otio.schema.Clip(
         name=Path(section.voice_file).stem,
         media_reference=_media_reference(section.voice_file, rate),
     )
-    voice_clip.source_range = _time_range(play_duration, rate, start_sec=0.0)
+    voice_clip.source_range = source_range
     voice_clip.metadata["voice_file"] = section.voice_file
     voice_clip.metadata["folder"] = section.folder
     voice_clip.metadata["otio_note"] = (
@@ -347,6 +408,7 @@ def build_otio_timeline(
     timeline.global_start_time = otio.opentime.RationalTime.from_seconds(0, rate)
 
     video_track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    timing_notes: list[str] = []
     for index, shot in enumerate(merged.shots, start=1):
         duration_sec = float(shot.duration_sec)
         if _is_last_shot_in_folder(merged.shots, index - 1) and index < len(merged.shots):
@@ -358,9 +420,12 @@ def build_otio_timeline(
             index=index,
             rate=rate,
             duration_sec=duration_sec,
+            timing_notes=timing_notes,
         )
 
     timeline.tracks.append(video_track)
+    if timing_notes:
+        timeline.metadata["media_timing_notes"] = list(timing_notes)
 
     seen_voices: set[str] = set()
     audio_index = 1
