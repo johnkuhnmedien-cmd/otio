@@ -16,7 +16,6 @@ from otio_app.services.clean_media import (
     audit_folder_clean_media,
     count_folder_clean_status,
     find_clean_file_for_media,
-    folder_clean_media_ready,
     folder_manifest_path,
     load_clean_media_manifest,
     path_is_readable_file,
@@ -47,13 +46,14 @@ _STATUS_LABELS = {
 
 
 def _folder_status_label(project, folder_name: str) -> str:
-    if folder_clean_media_ready(project, folder_name):
-        return f"✅ {folder_name}"
+    """Schnelles Label für Multiselect — ohne ffmpeg pro Datei."""
     counts = count_folder_clean_status(project, folder_name)
     if counts[CLEAN_STATUS_FAILED] > 0:
         return f"❌ {folder_name}"
     if counts[CLEAN_STATUS_NEEDS_TRANSCODE] > 0 or counts[CLEAN_STATUS_PENDING] > 0:
         return f"⚠️ {folder_name}"
+    if counts[CLEAN_STATUS_OK] + counts[CLEAN_STATUS_CLEAN] > 0:
+        return f"✅ {folder_name}"
     return f"⬜ {folder_name}"
 
 
@@ -135,14 +135,21 @@ def _render_folder_details(project, folder_name: str) -> None:
             line += f" — {entry.error[:120]}"
         st.caption(line)
 
-    issues = audit_folder_clean_media(project, folder_name)
-    if issues:
-        st.warning("Probleme erkannt:")
-        for issue in issues[:12]:
-            st.caption(
-                f"• `{issue['media']}` — {issue['issue']} "
-                f"(`{Path(issue['resolved_path']).name}`)"
-            )
+    diag_key = f"clean_diag_{project.id}_{folder_name}"
+    if st.button("🔍 Tiefe Diagnose (ffmpeg)", key=diag_key):
+        st.session_state[f"show_diag_{project.id}_{folder_name}"] = True
+    if st.session_state.get(f"show_diag_{project.id}_{folder_name}"):
+        with st.spinner("Prüfe Medien mit ffmpeg …"):
+            issues = audit_folder_clean_media(project, folder_name, strict=True)
+        if issues:
+            st.warning("Probleme erkannt:")
+            for issue in issues[:20]:
+                st.caption(
+                    f"• `{issue['media']}` — {issue['issue']} "
+                    f"(`{Path(issue['resolved_path']).name}`)"
+                )
+        else:
+            st.success("Alle Medien Resolve-ready.")
 
 
 def render_clean_media_page() -> None:

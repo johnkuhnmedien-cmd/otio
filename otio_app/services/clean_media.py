@@ -79,6 +79,16 @@ def path_is_readable_file(path: Path) -> bool:
         return False
 
 
+def clean_file_is_present(path: Path | None) -> bool:
+    """Schnell: Datei vorhanden und nicht leer — ohne ffmpeg."""
+    if path is None:
+        return False
+    try:
+        return path_is_readable_file(path) and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def _probe_has_audio(path: Path) -> bool:
     probe = probe_media(path)
     return bool(probe.audio_codec)
@@ -541,10 +551,8 @@ def resolve_effective_media_path(
         resolved = media_path.expanduser()
 
     clean_candidate = find_clean_file_for_media(project, folder_name, resolved)
-    if clean_candidate is not None:
-        valid, _ = validate_clean_output(clean_candidate)
-        if valid:
-            return clean_candidate
+    if clean_file_is_present(clean_candidate):
+        return clean_candidate
 
     manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
     entry = _entry_for_original(manifest, resolved)
@@ -564,10 +572,8 @@ def resolve_effective_media_path(
                     candidate = candidate.expanduser().resolve()
                 except OSError:
                     candidate = candidate.expanduser()
-                if path_is_readable_file(candidate):
-                    valid, _ = validate_clean_output(candidate)
-                    if valid:
-                        return candidate
+                if clean_file_is_present(candidate):
+                    return candidate
 
         if entry.status == CLEAN_STATUS_OK:
             original = Path(entry.original_path).expanduser()
@@ -591,6 +597,8 @@ def entry_is_ready_on_disk(
     project: Project,
     folder_name: str,
     entry: CleanMediaEntry,
+    *,
+    strict: bool = False,
 ) -> bool:
     if entry.status == CLEAN_STATUS_FAILED:
         return False
@@ -606,16 +614,23 @@ def entry_is_ready_on_disk(
             clean = Path(entry.clean_path)
         if clean is None:
             return False
-        valid, _ = validate_clean_output(clean)
-        return valid
+        if strict:
+            valid, _ = validate_clean_output(clean)
+            return valid
+        return clean_file_is_present(clean)
     if entry.status == CLEAN_STATUS_OK:
         original = Path(entry.original_path)
         return path_is_readable_file(original)
     return False
 
 
-def folder_clean_media_ready(project: Project, folder_name: str) -> bool:
-    """True wenn alle Medien auf Disk nutzbar sind (Original ok oder gültige Clean-Datei)."""
+def folder_clean_media_ready(
+    project: Project,
+    folder_name: str,
+    *,
+    strict: bool = False,
+) -> bool:
+    """True wenn alle Medien laut Manifest bereit sind (strict = mit ffmpeg-Decode-Test)."""
     media_files = list_folder_media(project, folder_name)
     if not media_files:
         return True
@@ -643,7 +658,7 @@ def folder_clean_media_ready(project: Project, folder_name: str) -> bool:
                 entry = entries_by_original.get(f"asset:{number}")
         if entry is None:
             return False
-        if not entry_is_ready_on_disk(project, folder_name, entry):
+        if not entry_is_ready_on_disk(project, folder_name, entry, strict=strict):
             return False
     return True
 
@@ -651,19 +666,16 @@ def folder_clean_media_ready(project: Project, folder_name: str) -> bool:
 def audit_folder_clean_media(
     project: Project,
     folder_name: str,
+    *,
+    strict: bool = True,
 ) -> list[dict[str, str]]:
-    """Diagnose je Medium — für UI und OTIO-Export-Warnungen."""
+    """Diagnose je Medium — ffmpeg-Tests nur bei strict=True (nicht beim Seitenladen)."""
     issues: list[dict[str, str]] = []
     manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
 
     for media_path in list_folder_media(project, folder_name):
         name = media_path.name
         resolved = resolve_effective_media_path(project, folder_name, media_path)
-        valid, validation_error = (
-            validate_clean_output(resolved)
-            if resolved.suffix.lower() in {".mp4", ".mov", ".m4v"}
-            else (path_is_readable_file(resolved), None)
-        )
         if not path_is_readable_file(resolved):
             issues.append(
                 {
@@ -673,15 +685,17 @@ def audit_folder_clean_media(
                 }
             )
             continue
-        if not valid:
-            issues.append(
-                {
-                    "media": name,
-                    "issue": validation_error or "Datei nicht Resolve-ready",
-                    "resolved_path": str(resolved),
-                }
-            )
-            continue
+        if strict and resolved.suffix.lower() in {".mp4", ".mov", ".m4v"}:
+            valid, validation_error = validate_clean_output(resolved)
+            if not valid:
+                issues.append(
+                    {
+                        "media": name,
+                        "issue": validation_error or "Datei nicht Resolve-ready",
+                        "resolved_path": str(resolved),
+                    }
+                )
+                continue
 
         entry = _entry_for_original(manifest, media_path) if manifest else None
         if entry and entry.status == CLEAN_STATUS_NEEDS_TRANSCODE:
@@ -712,10 +726,33 @@ def repair_folder_manifest(
 
 
 def selected_folders_have_clean_media(project: Project) -> bool:
+    """Schneller Workflow-Check — nur Manifest + Datei vorhanden, kein ffmpeg."""
     folders = project.selected_asset_subdirs
     if not folders:
         return False
-    return all(folder_clean_media_ready(project, folder) for folder in folders)
+    for folder_name in folders:
+        manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
+        if manifest is None or not manifest.entries:
+            return False
+        if manifest_needs_processing(manifest):
+            return False
+        for entry in manifest.entries:
+            if entry.status == CLEAN_STATUS_FAILED:
+                return False
+            if entry.status == CLEAN_STATUS_CLEAN:
+                clean = find_clean_file_for_media(
+                    project,
+                    folder_name,
+                    Path(entry.original_path),
+                )
+                if clean is None and entry.clean_path:
+                    clean = Path(entry.clean_path)
+                if not clean_file_is_present(clean):
+                    return False
+            elif entry.status == CLEAN_STATUS_OK:
+                if not path_is_readable_file(Path(entry.original_path)):
+                    return False
+    return True
 
 
 def count_folder_clean_status(
