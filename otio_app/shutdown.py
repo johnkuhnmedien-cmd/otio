@@ -51,6 +51,15 @@ def register_shutdown_handlers() -> None:
     if _handlers_registered:
         return
     _handlers_registered = True
-    signal.signal(signal.SIGINT, _handle_signal)
-    signal.signal(signal.SIGTERM, _handle_signal)
     atexit.register(cancel_all_background_jobs)
+
+    # Streamlit (and similar hosts) execute app.py in a script-runner thread.
+    # signal.signal() is only valid on the process main thread.
+    if threading.current_thread() is not threading.main_thread():
+        return
+
+    try:
+        signal.signal(signal.SIGINT, _handle_signal)
+        signal.signal(signal.SIGTERM, _handle_signal)
+    except ValueError:
+        pass
