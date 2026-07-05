@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import time
-
 import streamlit as st
 
 from otio_app.services.analysis_log import read_analysis_log_tail
@@ -18,8 +16,7 @@ from otio_app.services.voice_analysis_job import (
     get_voice_analysis_job_manager,
 )
 from otio_app.ui.analysis_report import render_analysis_report
-
-_POLL_SECONDS = 2.0
+from otio_app.ui.polling import running_job_fragment
 
 
 def _format_asset_progress_line(state: AssetAnalysisJobState) -> str:
@@ -171,52 +168,58 @@ def render_analysis_jobs_monitor(project, *, expanded: bool = True) -> None:
     voice_state = voice_manager.get_state(project.id)
     asset_state = asset_manager.get_state(project.id)
 
-    any_running = False
-
-    if voice_state is not None:
-        if voice_state.status == JobStatus.RUNNING:
-            any_running = True
-            st.markdown("**🎙️ Voice-over-Analyse**")
-            _render_running_voice_job(voice_state, stop_key=f"stop_voice_{project.id}")
-        elif expanded:
-            if voice_state.status == JobStatus.CANCELLED:
-                st.warning("Voice-over gestoppt — Teilergebnisse gespeichert.")
-            elif voice_state.status == JobStatus.FAILED:
-                st.error(f"Voice-over fehlgeschlagen: {voice_state.error or 'Unbekannt'}")
-            elif voice_state.status == JobStatus.COMPLETED:
-                st.success("Voice-over-Analyse abgeschlossen.")
-            if voice_state.report is not None:
-                _render_voice_report(voice_state.report)
-            if st.button("Voice-Bericht schließen", key=f"dismiss_voice_report_{project.id}"):
-                voice_manager.dismiss(project.id)
-                st.rerun()
-
-    if asset_state is not None:
-        if asset_state.status == JobStatus.RUNNING:
-            any_running = True
-            st.markdown("**📁 Asset-Analyse**")
-            _render_running_asset_job(asset_state, stop_key=f"stop_assets_{project.id}")
-        elif expanded:
-            if asset_state.status == JobStatus.CANCELLED:
-                st.warning("Asset-Analyse gestoppt — Teilergebnisse gespeichert.")
-            elif asset_state.status == JobStatus.FAILED:
-                st.error(f"Asset-Analyse fehlgeschlagen: {asset_state.error or 'Unbekannt'}")
-            elif asset_state.status == JobStatus.COMPLETED:
-                st.success("Asset-Analyse abgeschlossen.")
-            if asset_state.report is not None:
-                render_analysis_report(asset_state.report)
-            log_tail = read_analysis_log_tail(project)
-            if log_tail:
-                failures = asset_state.report.failures if asset_state.report else []
-                with st.expander("Analyse-Protokoll (Details)", expanded=bool(failures)):
-                    st.code(log_tail)
-            if st.button("Asset-Bericht schließen", key=f"dismiss_asset_report_{project.id}"):
-                asset_manager.dismiss(project.id)
-                st.rerun()
+    any_running = (
+        voice_state is not None and voice_state.status == JobStatus.RUNNING
+    ) or (asset_state is not None and asset_state.status == JobStatus.RUNNING)
 
     if any_running:
-        time.sleep(_POLL_SECONDS)
-        st.rerun()
+        _analysis_jobs_running_panel(project)
+        return
+
+    if voice_state is not None and expanded:
+        if voice_state.status == JobStatus.CANCELLED:
+            st.warning("Voice-over gestoppt — Teilergebnisse gespeichert.")
+        elif voice_state.status == JobStatus.FAILED:
+            st.error(f"Voice-over fehlgeschlagen: {voice_state.error or 'Unbekannt'}")
+        elif voice_state.status == JobStatus.COMPLETED:
+            st.success("Voice-over-Analyse abgeschlossen.")
+        if voice_state.report is not None:
+            _render_voice_report(voice_state.report)
+        if st.button("Voice-Bericht schließen", key=f"dismiss_voice_report_{project.id}"):
+            voice_manager.dismiss(project.id)
+            st.rerun()
+
+    if asset_state is not None and expanded:
+        if asset_state.status == JobStatus.CANCELLED:
+            st.warning("Asset-Analyse gestoppt — Teilergebnisse gespeichert.")
+        elif asset_state.status == JobStatus.FAILED:
+            st.error(f"Asset-Analyse fehlgeschlagen: {asset_state.error or 'Unbekannter Fehler'}")
+        elif asset_state.status == JobStatus.COMPLETED:
+            st.success("Asset-Analyse abgeschlossen.")
+        if asset_state.report is not None:
+            render_analysis_report(asset_state.report)
+        log_tail = read_analysis_log_tail(project)
+        if log_tail:
+            failures = asset_state.report.failures if asset_state.report else []
+            with st.expander("Analyse-Protokoll (Details)", expanded=bool(failures)):
+                st.code(log_tail)
+        if st.button("Asset-Bericht schließen", key=f"dismiss_asset_report_{project.id}"):
+            asset_manager.dismiss(project.id)
+            st.rerun()
+
+
+@running_job_fragment()
+def _analysis_jobs_running_panel(project) -> None:
+    voice_state = get_voice_analysis_job_manager().get_state(project.id)
+    asset_state = get_asset_analysis_job_manager().get_state(project.id)
+
+    if voice_state is not None and voice_state.status == JobStatus.RUNNING:
+        st.markdown("**🎙️ Voice-over-Analyse**")
+        _render_running_voice_job(voice_state, stop_key=f"stop_voice_{project.id}")
+
+    if asset_state is not None and asset_state.status == JobStatus.RUNNING:
+        st.markdown("**📁 Asset-Analyse**")
+        _render_running_asset_job(asset_state, stop_key=f"stop_assets_{project.id}")
 
 
 # Abwärtskompatibilität

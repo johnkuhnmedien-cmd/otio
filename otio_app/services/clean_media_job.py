@@ -12,10 +12,6 @@ from otio_app.analysis_models import CleanMediaManifest
 from otio_app.models import Project
 from otio_app.project_repository import get_project_by_id
 from otio_app.services.clean_media import (
-    CLEAN_STATUS_CLEAN,
-    CLEAN_STATUS_FAILED,
-    CLEAN_STATUS_NEEDS_TRANSCODE,
-    CLEAN_STATUS_OK,
     list_folder_media,
     process_folder,
     validate_folder,
@@ -54,27 +50,68 @@ class CleanMediaJobManager:
         self._lock = threading.Lock()
         self._jobs: dict[str, CleanMediaJobState] = {}
         self._cancel_events: dict[str, threading.Event] = {}
+        self._threads: dict[str, threading.Thread] = {}
+
+    def reconcile_stuck_job(self, project_id: str) -> None:
+        """Markiert Jobs als beendet, wenn der Hintergrund-Thread nicht mehr läuft."""
+        with self._lock:
+            job = self._jobs.get(project_id)
+            thread = self._threads.get(project_id)
+            if job is None or job.status != JobStatus.RUNNING:
+                return
+            if thread is not None and thread.is_alive():
+                return
+            job.status = JobStatus.FAILED
+            job.error = job.error or "Hintergrund-Job unerwartet beendet — bitte erneut starten"
+            self._cancel_events.pop(project_id, None)
+            self._threads.pop(project_id, None)
 
     def is_running(self, project_id: str) -> bool:
+        self.reconcile_stuck_job(project_id)
         with self._lock:
             job = self._jobs.get(project_id)
             return job is not None and job.status == JobStatus.RUNNING
 
     def get_state(self, project_id: str) -> CleanMediaJobState | None:
+        self.reconcile_stuck_job(project_id)
         with self._lock:
             job = self._jobs.get(project_id)
             if job is None:
                 return None
             return copy.deepcopy(job)
 
-    def request_cancel(self, project_id: str) -> None:
+    def request_cancel(self, project_id: str) -> bool:
+        with self._lock:
+            event = self._cancel_events.get(project_id)
+            job = self._jobs.get(project_id)
+            if job is None or job.status != JobStatus.RUNNING:
+                return False
+            if event is not None:
+                event.set()
+            job.cancel_requested = True
+        return True
+
+    def force_reset(self, project_id: str) -> None:
+        """Hängenden oder blockierten Job sofort aus der Anzeige nehmen."""
         with self._lock:
             event = self._cancel_events.get(project_id)
             if event is not None:
                 event.set()
             job = self._jobs.get(project_id)
-            if job is not None:
+            if job is not None and job.status == JobStatus.RUNNING:
+                job.status = JobStatus.CANCELLED
                 job.cancel_requested = True
+                job.error = job.error or "Manuell zurückgesetzt"
+            self._cancel_events.pop(project_id, None)
+            self._threads.pop(project_id, None)
+
+    def dismiss(self, project_id: str) -> None:
+        with self._lock:
+            job = self._jobs.get(project_id)
+            if job is not None and job.status != JobStatus.RUNNING:
+                del self._jobs[project_id]
+                self._cancel_events.pop(project_id, None)
+                self._threads.pop(project_id, None)
 
     def start(
         self,
@@ -83,10 +120,15 @@ class CleanMediaJobManager:
         *,
         mode: CleanMediaJobMode = CleanMediaJobMode.PROCESS,
     ) -> bool:
+        self.reconcile_stuck_job(project.id)
         with self._lock:
             existing = self._jobs.get(project.id)
             if existing is not None and existing.status == JobStatus.RUNNING:
-                return False
+                thread = self._threads.get(project.id)
+                if thread is not None and thread.is_alive():
+                    return False
+                existing.status = JobStatus.FAILED
+                existing.error = "Vorheriger Job hing fest — wird neu gestartet"
             cancel_event = threading.Event()
             self._cancel_events[project.id] = cancel_event
             self._jobs[project.id] = CleanMediaJobState(
@@ -128,6 +170,8 @@ class CleanMediaJobManager:
 
                     def on_progress(phase: str, entry) -> None:
                         nonlocal done_media
+                        if should_cancel():
+                            return
                         done_media += 1
                         with self._lock:
                             job = self._jobs.get(project_id)
@@ -171,8 +215,18 @@ class CleanMediaJobManager:
                     if job is not None:
                         job.status = JobStatus.FAILED
                         job.error = str(exc)
+            finally:
+                with self._lock:
+                    self._cancel_events.pop(project_id, None)
+                    self._threads.pop(project_id, None)
 
-        thread = threading.Thread(target=_run, daemon=True)
+        thread = threading.Thread(
+            target=_run,
+            daemon=True,
+            name=f"clean-media-{project.id}",
+        )
+        with self._lock:
+            self._threads[project.id] = thread
         thread.start()
         return True
 
@@ -188,6 +242,13 @@ def get_clean_media_job_manager() -> CleanMediaJobManager:
 
 
 def summarize_manifest(manifest: CleanMediaManifest) -> dict[str, int]:
+    from otio_app.services.clean_media import (
+        CLEAN_STATUS_CLEAN,
+        CLEAN_STATUS_FAILED,
+        CLEAN_STATUS_NEEDS_TRANSCODE,
+        CLEAN_STATUS_OK,
+    )
+
     counts = {
         CLEAN_STATUS_OK: 0,
         CLEAN_STATUS_CLEAN: 0,

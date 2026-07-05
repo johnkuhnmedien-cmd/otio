@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 import streamlit as st
@@ -33,8 +32,7 @@ from otio_app.ui.project_context import (
     render_project_selector,
     render_workflow_progress,
 )
-
-_POLL_SECONDS = 2.0
+from otio_app.ui.polling import running_job_fragment
 
 _STATUS_LABELS = {
     CLEAN_STATUS_OK: "✅ Original OK",
@@ -59,16 +57,36 @@ def _folder_status_label(project, folder_name: str) -> str:
 
 def _render_job_monitor(project) -> None:
     manager = get_clean_media_job_manager()
+    manager.reconcile_stuck_job(project.id)
     state = manager.get_state(project.id)
-    if state is None or state.status == JobStatus.RUNNING:
-        pass
-    elif state.status == JobStatus.COMPLETED:
+    if state is None:
+        return
+    if state.status == JobStatus.COMPLETED:
         st.success("Clean-Media-Lauf abgeschlossen.")
-    elif state.status == JobStatus.CANCELLED:
+        if st.button("Hinweis schließen", key=f"clean_dismiss_{project.id}"):
+            manager.dismiss(project.id)
+            st.rerun()
+        return
+    if state.status == JobStatus.CANCELLED:
         st.warning("Clean-Media-Lauf abgebrochen.")
-    elif state.status == JobStatus.FAILED:
+        if st.button("Hinweis schließen", key=f"clean_dismiss_cancel_{project.id}"):
+            manager.dismiss(project.id)
+            st.rerun()
+        return
+    if state.status == JobStatus.FAILED:
         st.error(f"Clean-Media-Lauf fehlgeschlagen: {state.error or 'Unbekannter Fehler'}")
+        if st.button("Hinweis schließen", key=f"clean_dismiss_fail_{project.id}"):
+            manager.dismiss(project.id)
+            st.rerun()
+        return
+    if state.status == JobStatus.RUNNING:
+        _clean_media_running_panel(project)
 
+
+@running_job_fragment()
+def _clean_media_running_panel(project) -> None:
+    manager = get_clean_media_job_manager()
+    state = manager.get_state(project.id)
     if state is None or state.status != JobStatus.RUNNING:
         return
 
@@ -89,7 +107,7 @@ def _render_job_monitor(project) -> None:
     if state.cancel_requested:
         st.caption("Abbruch angefordert …")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("Abbrechen", key=f"clean_cancel_{project.id}"):
             manager.request_cancel(project.id)
@@ -97,9 +115,10 @@ def _render_job_monitor(project) -> None:
     with col2:
         if st.button("Aktualisieren", key=f"clean_refresh_{project.id}"):
             st.rerun()
-
-    time.sleep(_POLL_SECONDS)
-    st.rerun()
+    with col3:
+        if st.button("Job zurücksetzen", key=f"clean_reset_{project.id}"):
+            manager.force_reset(project.id)
+            st.rerun()
 
 
 def _render_folder_details(project, folder_name: str) -> None:
