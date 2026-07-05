@@ -17,12 +17,12 @@ from otio_app.defaults import (
     GEMINI_MODEL_CHOICES,
 )
 from otio_app.project_layout import get_otio_export_path, safe_folder_slug
+from otio_app.services.edit_plan_cache import collect_folder_statuses
 from otio_app.services.edit_plan_builder import (
     EditPlanLocationState,
     EditPlanLocationStatus,
     build_edit_plan,
     load_edit_plan,
-    resolve_edit_plan_location_state,
     save_edit_plan,
 )
 from otio_app.services.gemini_client import (
@@ -106,34 +106,22 @@ def _collect_location_statuses(
     project_id: str,
     mapped_folders: list[str],
 ) -> list[EditPlanLocationStatus]:
-    statuses: list[EditPlanLocationStatus] = []
-    for folder_name in mapped_folders:
-        saved = load_edit_plan(project, folder_name)
-        draft = _get_draft(project_id, folder_name)
-        status = resolve_edit_plan_location_state(folder_name, saved, draft)
-        statuses.append(
-            EditPlanLocationStatus(
-                folder_name=folder_name,
-                state=status.state,
-                shot_count=status.shot_count,
-            )
-        )
-    return statuses
+    return collect_folder_statuses(
+        project,
+        project_id,
+        mapped_folders,
+        get_draft=_get_draft,
+    )
 
 
-def _folder_select_label(
-    project,
-    project_id: str,
-    folder_name: str,
-) -> str:
-    saved = load_edit_plan(project, folder_name)
-    draft = _get_draft(project_id, folder_name)
-    status = resolve_edit_plan_location_state(folder_name, saved, draft)
-    return f"{_location_state_icon(status.state)} {folder_name} · {_location_state_label(status.state)}"
+def _folder_label_from_status(folder_name: str, status: EditPlanLocationStatus) -> str:
+    return (
+        f"{_location_state_icon(status.state)} {folder_name} · "
+        f"{_location_state_label(status.state)}"
+    )
 
 
-def _render_location_progress(project, project_id: str, mapped_folders: list[str]) -> None:
-    statuses = _collect_location_statuses(project, project_id, mapped_folders)
+def _render_location_progress(statuses: list[EditPlanLocationStatus], mapped_folders: list[str]) -> None:
     confirmed = [item for item in statuses if item.state == EditPlanLocationState.CONFIRMED]
     drafts = [item for item in statuses if item.state == EditPlanLocationState.DRAFT]
     open_items = [item for item in statuses if item.state == EditPlanLocationState.OPEN]
@@ -609,8 +597,6 @@ def render_edit_plan_page() -> None:
     if project is None:
         return
 
-    render_workflow_progress(project, current_step="edit_plan")
-
     mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
     if mapping is None or not mapping.confirmed:
         st.warning("Bitte zuerst unter „② Zuordnung“ die Voice-over-Zuordnung bestätigen.")
@@ -625,12 +611,23 @@ def render_edit_plan_page() -> None:
         render_file_paths(project)
         return
 
+    location_statuses = _collect_location_statuses(project, project.id, mapped_folders)
+    status_by_folder = {item.folder_name: item for item in location_statuses}
+
+    render_workflow_progress(
+        project,
+        current_step="edit_plan",
+        lightweight=True,
+        location_statuses=location_statuses,
+    )
+
     folder_key = _folder_state_key(project.id)
     default_folder = st.session_state.get(folder_key, mapped_folders[0])
     if default_folder not in mapped_folders:
         default_folder = mapped_folders[0]
 
-    _render_location_progress(project, project.id, mapped_folders)
+    with st.expander("Fortschritt pro Ort", expanded=False):
+        _render_location_progress(location_statuses, mapped_folders)
     st.divider()
 
     st.markdown("**Ort bearbeiten**")
@@ -638,7 +635,10 @@ def render_edit_plan_page() -> None:
         "Asset-Ordner",
         options=mapped_folders,
         index=mapped_folders.index(default_folder),
-        format_func=lambda folder_name: _folder_select_label(project, project.id, folder_name),
+        format_func=lambda folder_name: _folder_label_from_status(
+            folder_name,
+            status_by_folder[folder_name],
+        ),
         key=f"plan_folder_select_{project.id}",
         label_visibility="collapsed",
     )

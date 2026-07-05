@@ -10,13 +10,17 @@ import streamlit as st
 from otio_app.models import Project
 from otio_app.project_repository import get_project_by_id, list_projects
 from otio_app.services.edit_plan_builder import (
+    EditPlanLocationState,
     get_mapped_folders,
     list_saved_edit_plan_folders,
-    load_edit_plan,
     mapped_folders_have_confirmed_plans,
 )
-from otio_app.services.inventory_loader import selected_folders_have_inventory
-from otio_app.services.clean_media import selected_folders_have_clean_media
+from otio_app.project_layout import get_folder_inventory_path
+from otio_app.services.clean_media import (
+    folder_manifest_path,
+    load_clean_media_manifest,
+    manifest_needs_processing,
+)
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 from otio_app.ui.navigation import ACTIVE_PROJECT_KEY
 
@@ -34,10 +38,44 @@ class WorkflowStatus:
         return self.voice_analysis_done and self.inventory_done
 
 
-def get_workflow_status(project: Project) -> WorkflowStatus:
+def _fast_clean_media_ready(project: Project) -> bool:
+    """Manifest-Check ohne Datei-Stat pro Medium."""
+    folders = project.selected_asset_subdirs
+    if not folders:
+        return False
+    for folder_name in folders:
+        manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
+        if manifest is None or not manifest.entries or manifest_needs_processing(manifest):
+            return False
+    return True
+
+
+def _fast_inventory_ready(project: Project) -> bool:
+    """Prüft nur, ob je Ordner eine Inventory-JSON existiert — ohne Media-Scan."""
+    folders = project.selected_asset_subdirs
+    if not folders:
+        return False
+    for folder_name in folders:
+        if not get_folder_inventory_path(project.work_dir_path, folder_name).is_file():
+            return False
+    return True
+
+
+def get_workflow_status(project: Project, *, lightweight: bool = False) -> WorkflowStatus:
     mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
     mapped_folders = get_mapped_folders(project)
     edit_plan_done = mapped_folders_have_confirmed_plans(project, mapped_folders)
+    if lightweight:
+        return WorkflowStatus(
+            clean_media_done=_fast_clean_media_ready(project),
+            voice_analysis_done=project.voice_analysis_path.is_file(),
+            inventory_done=_fast_inventory_ready(project),
+            mapping_confirmed=bool(mapping and mapping.confirmed),
+            edit_plan_done=edit_plan_done,
+        )
+    from otio_app.services.clean_media import selected_folders_have_clean_media
+    from otio_app.services.inventory_loader import selected_folders_have_inventory
+
     return WorkflowStatus(
         clean_media_done=selected_folders_have_clean_media(project),
         voice_analysis_done=project.voice_analysis_path.is_file(),
@@ -49,15 +87,12 @@ def get_workflow_status(project: Project) -> WorkflowStatus:
 
 def get_edit_plan_location_progress(project: Project) -> tuple[int, int]:
     """Anzahl bestätigter Orte und Gesamtzahl zugeordneter Orte."""
+    from otio_app.services.edit_plan_cache import count_confirmed_folders
+
     mapped_folders = get_mapped_folders(project)
     if not mapped_folders:
         return 0, 0
-    confirmed = sum(
-        1
-        for folder_name in mapped_folders
-        if (document := load_edit_plan(project, folder_name)) is not None and document.confirmed
-    )
-    return confirmed, len(mapped_folders)
+    return count_confirmed_folders(project, mapped_folders), len(mapped_folders)
 
 
 def render_project_selector(label: str = "Projekt") -> Project | None:
@@ -88,9 +123,15 @@ def _step_label(title: str, done: bool, active: bool) -> str:
     return f"{icon} {title}"
 
 
-def render_workflow_progress(project: Project, current_step: str) -> None:
+def render_workflow_progress(
+    project: Project,
+    current_step: str,
+    *,
+    lightweight: bool = False,
+    location_statuses: list | None = None,
+) -> None:
     """Kompakte Workflow-Leiste über den Workflow-Seiten."""
-    status = get_workflow_status(project)
+    status = get_workflow_status(project, lightweight=lightweight)
     steps = [
         ("⓪ Clean Media", status.clean_media_done, current_step == "clean_media"),
         ("① Analysen", status.analysis_done, current_step == "analysis"),
@@ -102,7 +143,13 @@ def render_workflow_progress(project: Project, current_step: str) -> None:
         with column:
             st.caption(_step_label(title, done, active))
 
-    confirmed_count, total_count = get_edit_plan_location_progress(project)
+    if location_statuses is not None:
+        confirmed_count = sum(
+            1 for item in location_statuses if item.state == EditPlanLocationState.CONFIRMED
+        )
+        total_count = len(location_statuses)
+    else:
+        confirmed_count, total_count = get_edit_plan_location_progress(project)
     if total_count > 0 and not status.edit_plan_done:
         st.caption(f"Schnittplan-Fortschritt: **{confirmed_count}/{total_count}** Orte abgeschlossen")
 

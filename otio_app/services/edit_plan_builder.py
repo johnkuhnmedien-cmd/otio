@@ -348,14 +348,9 @@ def _folder_name_from_shots(document: EditPlanDocument) -> str | None:
 
 
 def load_edit_plan(project: Project, folder_name: str) -> EditPlanDocument | None:
-    migrate_legacy_edit_plan(project)
-    path = get_folder_edit_plan_path(project.work_dir_path, folder_name)
-    document = _read_edit_plan_file(path)
-    if document is None:
-        return None
-    if document.folder_name is None:
-        document = document.model_copy(update={"folder_name": folder_name})
-    return document
+    from otio_app.services.edit_plan_cache import load_edit_plan_cached
+
+    return load_edit_plan_cached(project, folder_name)
 
 
 def save_edit_plan(
@@ -372,6 +367,9 @@ def save_edit_plan(
         }
     )
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
+    from otio_app.services.edit_plan_cache import invalidate_edit_plan_cache
+
+    invalidate_edit_plan_cache(project.id, folder_name)
     return path
 
 
@@ -379,10 +377,6 @@ def mapped_folders_have_confirmed_plans(
     project: Project,
     folder_names: list[str],
 ) -> bool:
-    if not folder_names:
-        return False
-    for folder_name in folder_names:
-        document = load_edit_plan(project, folder_name)
-        if document is None or not document.confirmed:
-            return False
-    return True
+    from otio_app.services.edit_plan_cache import mapped_folders_all_confirmed
+
+    return mapped_folders_all_confirmed(project, folder_names)
