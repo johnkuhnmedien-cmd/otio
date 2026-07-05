@@ -294,11 +294,11 @@ def render_edit_plan_page() -> None:
 
         if st.button("Schnittplan vorschlagen", key=f"build_plan_{project.id}", type="primary"):
             use_gemini = is_gemini_configured()
-                settings = EditPlanSettings(
-                    shot_min_sec=float(shot_min),
-                    shot_max_sec=float(shot_max),
-                    audio_offset_sec=float(audio_offset),
-                    section_outro_sec=float(section_outro),
+            settings = EditPlanSettings(
+                shot_min_sec=float(shot_min),
+                shot_max_sec=float(shot_max),
+                audio_offset_sec=float(audio_offset),
+                section_outro_sec=float(section_outro),
                 text_splitters=[
                     piece.strip()
                     for piece in splitters.split(",")
