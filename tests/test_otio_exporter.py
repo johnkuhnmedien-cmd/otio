@@ -130,19 +130,37 @@ def test_clip_durations_use_seconds_not_frames(tmp_path: Path) -> None:
     assert clip_total == 9.0
 
 
+def test_audio_offset_delays_voice_only_not_video(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _setup_mapping_and_plans(project, tmp_path)
+    merged = merge_confirmed_edit_plans(project)
+    assert merged.settings.audio_offset_sec == 1.0
+
+    timeline = build_otio_timeline(project, merged)
+    video_track = timeline.tracks[0]
+    assert isinstance(video_track[0], otio.schema.Clip)
+
+    florida_audio = timeline.tracks[1]
+    assert isinstance(florida_audio[0], otio.schema.Gap)
+    assert florida_audio[0].source_range.duration.to_seconds() == 1.0
+    assert isinstance(florida_audio[1], otio.schema.Clip)
+
+    canyon_audio = timeline.tracks[2]
+    assert isinstance(canyon_audio[0], otio.schema.Gap)
+    assert canyon_audio[0].source_range.duration.to_seconds() == 6.0
+
+
 def test_audio_track_uses_full_voice_files_not_shot_cuts(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _setup_mapping_and_plans(project, tmp_path)
     merged = merge_confirmed_edit_plans(project)
 
     timeline = build_otio_timeline(project, merged)
-    audio_track = timeline.tracks[1]
-    audio_clips = [item for item in audio_track if isinstance(item, otio.schema.Clip)]
-
-    assert len(audio_clips) == 2
-    assert audio_clips[0].name == "USA_Florida Keys_VO"
-    assert audio_clips[1].name == "USA_Grand Canyon_VO"
-    assert audio_clips[0].source_range.start_time.to_seconds() == 0.0
+    audio_tracks = [track for track in timeline.tracks if track.kind == otio.schema.TrackKind.Audio]
+    assert len(audio_tracks) == 2
+    assert audio_tracks[0][-1].name == "USA_Florida Keys_VO"
+    assert audio_tracks[1][-1].name == "USA_Grand Canyon_VO"
+    assert audio_tracks[0][-1].source_range.start_time.to_seconds() == 0.0
 
 
 def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
@@ -155,9 +173,9 @@ def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
 
     timeline = otio.adapters.read_from_file(str(export_path))
     assert timeline.name == "USA"
-    assert len(timeline.tracks) == 2
+    assert len(timeline.tracks) == 3
     assert timeline.tracks[0].name == "V1"
-    assert timeline.tracks[1].name == "A1"
+    assert timeline.tracks[1].name.startswith("A1")
     assert all(not isinstance(item, otio.schema.Stack) for item in timeline.tracks[0])
     assert all(isinstance(item, (otio.schema.Clip, otio.schema.Gap)) for item in timeline.tracks[0])
 

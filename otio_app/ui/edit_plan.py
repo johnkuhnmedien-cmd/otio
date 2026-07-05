@@ -437,9 +437,9 @@ def render_edit_plan_page() -> None:
 
         st.markdown("**In Resolve / Premiere / OTIO**")
         st.caption(
-            "Die `.otio`-Datei enthält eine **Video**-Spur (Assets nacheinander) "
-            "und eine **Voice-over**-Spur (jede Voice-over-Datei **ungeschnitten**, "
-            "startet passend zum zugehörigen Video-Abschnitt). "
+            "Die `.otio`-Datei enthält **V1** (Video ab Sekunde 0) und pro Voice-over-Datei "
+            "eine **eigene Audiospur** (ungeschnitten). **Audio-Start (+Sek.)** verzögert "
+            "nur das Voice-over — nicht die Video-Clips. "
             "In DaVinci Resolve: **File → Import → Timeline → OpenTimelineIO**."
         )
 

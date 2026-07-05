@@ -63,8 +63,9 @@ def merge_confirmed_edit_plans(
                 skipped.append(folder_name)
             continue
 
-        settings = plan.settings
         if folder_name not in included:
+            if not included:
+                settings = plan.settings
             included.append(folder_name)
 
         voice_shots = [
@@ -157,55 +158,56 @@ def _voice_section_starts(
     shots: list[EditPlanShot],
     audio_offset_sec: float,
 ) -> list[tuple[str, float]]:
-    """Pro Voice-over-Datei: Startposition auf der Timeline (passend zum Video-Abschnitt)."""
+    """Pro Voice-over-Datei: Startzeit auf der Timeline (Video ab 0, Voice mit Offset)."""
     sections: list[tuple[str, float]] = []
-    cursor = max(0.0, audio_offset_sec)
+    video_cursor = 0.0
     current_voice: str | None = None
 
     for shot in shots:
         if shot.voice_file != current_voice:
-            sections.append((shot.voice_file, cursor))
+            start_sec = video_cursor
+            if current_voice is None:
+                start_sec = max(0.0, audio_offset_sec)
+            sections.append((shot.voice_file, start_sec))
             current_voice = shot.voice_file
-        cursor += max(0.01, float(shot.duration_sec))
+        video_cursor += max(0.01, float(shot.duration_sec))
     return sections
 
 
-def _append_full_voice_clips(
-    track: otio.schema.Track,
-    sections: list[tuple[str, float]],
+def _append_aligned_voice_track(
+    timeline: otio.schema.Timeline,
+    voice_file: str,
+    start_sec: float,
     rate: float,
+    *,
+    track_index: int,
 ) -> None:
-    """Eine ungeschnittene Voice-over-Datei pro Abschnitt — nicht pro Shot."""
-    audio_cursor = 0.0
-    seen_voices: set[str] = set()
-
-    for voice_file, start_sec in sections:
-        if voice_file in seen_voices:
-            continue
-        seen_voices.add(voice_file)
-
-        if start_sec > audio_cursor:
-            track.append(
-                otio.schema.Gap(
-                    name="Voice Pause",
-                    source_range=_time_range(start_sec - audio_cursor, rate),
-                )
+    """Eigene Audiospur pro Voice-over — ungeschnitten, per Gap auf Video-Abschnitt ausgerichtet."""
+    track = otio.schema.Track(
+        name=f"A{track_index} · {Path(voice_file).stem}"[:120],
+        kind=otio.schema.TrackKind.Audio,
+    )
+    if start_sec > 0:
+        track.append(
+            otio.schema.Gap(
+                name="Voice Start",
+                source_range=_time_range(start_sec, rate),
             )
-            audio_cursor = start_sec
-
-        resolved = _resolve_media_path(voice_file)
-        duration = probe_duration_seconds(resolved)
-        if duration is None or duration <= 0:
-            duration = 3600.0
-
-        voice_clip = otio.schema.Clip(
-            name=Path(voice_file).stem,
-            media_reference=_media_reference(voice_file, rate),
         )
-        voice_clip.source_range = _time_range(duration, rate, start_sec=0.0)
-        voice_clip.metadata["voice_file"] = voice_file
-        track.append(voice_clip)
-        audio_cursor += duration
+
+    resolved = _resolve_media_path(voice_file)
+    duration = probe_duration_seconds(resolved)
+    if duration is None or duration <= 0:
+        duration = 3600.0
+
+    voice_clip = otio.schema.Clip(
+        name=Path(voice_file).stem,
+        media_reference=_media_reference(voice_file, rate),
+    )
+    voice_clip.source_range = _time_range(duration, rate, start_sec=0.0)
+    voice_clip.metadata["voice_file"] = voice_file
+    track.append(voice_clip)
+    timeline.tracks.append(track)
 
 
 def build_otio_timeline(
@@ -221,20 +223,29 @@ def build_otio_timeline(
     timeline.global_start_time = otio.opentime.RationalTime.from_seconds(0, rate)
 
     video_track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
-    audio_track = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
-
-    if settings.audio_offset_sec > 0:
-        offset = _time_range(settings.audio_offset_sec, rate)
-        video_track.append(otio.schema.Gap(name="Audio Offset", source_range=offset))
 
     for index, shot in enumerate(merged.shots, start=1):
         _append_video_item(video_track, shot, index=index, rate=rate)
 
-    voice_sections = _voice_section_starts(merged.shots, settings.audio_offset_sec)
-    _append_full_voice_clips(audio_track, voice_sections, rate)
-
     timeline.tracks.append(video_track)
-    timeline.tracks.append(audio_track)
+
+    voice_sections = _voice_section_starts(merged.shots, settings.audio_offset_sec)
+    seen_voices: set[str] = set()
+    audio_index = 1
+    for voice_file, start_sec in voice_sections:
+        if voice_file in seen_voices:
+            continue
+        seen_voices.add(voice_file)
+        _append_aligned_voice_track(
+            timeline,
+            voice_file,
+            start_sec,
+            rate,
+            track_index=audio_index,
+        )
+        audio_index += 1
+
+    timeline.metadata["audio_offset_sec"] = settings.audio_offset_sec
     return timeline
 
 
