@@ -18,7 +18,7 @@ from otio_app.project_layout import (
     scan_project_structure,
 )
 from otio_app.project_repository import create_project, list_projects
-from otio_app.ui.navigation import PAGE_ANALYSIS, PAGE_NEW, PAGE_WORK
+from otio_app.ui.navigation import PAGE_ANALYSIS, PAGE_NEW
 from otio_app.ui.routing import run_app_navigation
 
 st.set_page_config(
