@@ -412,7 +412,7 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
     saved_export_settings = load_otio_export_settings(project)
     st.markdown("**OTIO-Timeline aus bestätigten Schnittplänen**")
     st.caption(
-        "Es wird **keine** OTIO-Datei erstellt, bis du unten auf **Exportieren** klickst. "
+        "Orte und Timing wählen, dann **OTIO exportieren** — Vorschau ist optional. "
         f"Ziel: `{default_export_path}` · "
         f"Einstellungen: `{project.work_dir_path / 'otio_export_settings.json'}`"
     )
@@ -461,29 +461,53 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
     preview = _load_cached_export_preview(project.id)
     preview_stale = preview is not None and cached_folders != folder_selection
 
-    action_col1, action_col2 = st.columns(2)
-    with action_col1:
-        preview_clicked = st.button(
-            "📋 Vorschau berechnen",
-            key=f"export_preview_{project.id}",
-            use_container_width=True,
-        )
-    with action_col2:
-        export_clicked = st.button(
-            "📤 OTIO exportieren",
-            key=f"export_otio_{project.id}",
-            type="primary",
-            disabled=preview is None or preview_stale or not preview.ready,
-            use_container_width=True,
-        )
+    export_clicked = st.button(
+        "📤 OTIO exportieren",
+        key=f"export_otio_{project.id}",
+        type="primary",
+        use_container_width=True,
+    )
+    preview_clicked = st.button(
+        "📋 Vorschau anzeigen (optional)",
+        key=f"export_preview_{project.id}",
+        use_container_width=True,
+    )
 
-    if preview is None:
-        st.info(
-            "Orte und Timing wählen, dann **Vorschau berechnen** — "
-            "erst danach wird exportiert."
-        )
-    elif preview_stale:
-        st.warning("Orte geändert — bitte **Vorschau berechnen** vor dem Export.")
+    if preview_stale:
+        st.caption("Vorschau veraltet — bei Bedarf erneut **Vorschau anzeigen**.")
+
+    if export_clicked:
+        try:
+            export_settings = OtioExportSettings(
+                audio_offset_sec=float(export_audio_offset),
+                section_outro_sec=float(export_section_outro),
+            )
+            with st.spinner("Schnittpläne zusammenführen, Medien prüfen und OTIO schreiben …"):
+                merged = merge_confirmed_edit_plans(
+                    project,
+                    folder_names=list(folder_selection) if folder_selection else None,
+                )
+                if not merged.ready:
+                    st.warning(
+                        "Export nicht möglich — wähle mindestens einen **bestätigten** Ort "
+                        "oder bestätige Schnittpläne unter „Prüfen & Speichern“."
+                    )
+                    for warning in merged.warnings:
+                        st.caption(f"• {warning}")
+                else:
+                    log_heavy_operation(
+                        f"OTIO-Export ({len(merged.shots)} Shots)",
+                        page=PAGE_EDIT_PLAN,
+                    )
+                    save_otio_export_settings(project, export_settings)
+                    export_path = export_otio_timeline(
+                        project,
+                        merged,
+                        export_settings=export_settings,
+                    )
+                    st.success(f"Timeline exportiert: `{export_path}`")
+        except (OSError, ValueError) as exc:
+            st.error(str(exc))
 
     if preview_clicked:
         with st.spinner("Schnittpläne zusammenführen …"):
@@ -493,27 +517,6 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
             )
             _cache_export_preview(project.id, preview, folder_selection)
         st.rerun()
-
-    if export_clicked and preview is not None and preview.ready and not preview_stale:
-        try:
-            export_settings = OtioExportSettings(
-                audio_offset_sec=float(export_audio_offset),
-                section_outro_sec=float(export_section_outro),
-            )
-            with st.spinner("Medien mit ffmpeg prüfen und OTIO schreiben …"):
-                log_heavy_operation(
-                    f"OTIO-Export ({len(preview.shots)} Shots)",
-                    page=PAGE_EDIT_PLAN,
-                )
-                save_otio_export_settings(project, export_settings)
-                export_path = export_otio_timeline(
-                    project,
-                    preview,
-                    export_settings=export_settings,
-                )
-            st.success(f"Timeline exportiert: `{export_path}`")
-        except (OSError, ValueError) as exc:
-            st.error(str(exc))
 
     if preview is not None and not preview_stale:
         if preview.included_folders:
