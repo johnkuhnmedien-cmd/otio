@@ -43,11 +43,7 @@ from otio_app.services.otio_exporter import (
     merge_confirmed_edit_plans,
     verify_shot_media_paths,
 )
-from otio_app.services.otio_export_settings import (
-    OtioExportSettings,
-    load_otio_export_settings,
-    save_otio_export_settings,
-)
+from otio_app.services.otio_export_settings import load_otio_export_settings
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 from otio_app.ui.edit_plan_rules_ui import (
     get_edit_plan_rules_for_project,
@@ -428,28 +424,6 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
         key=f"otio_export_folders_{project.id}",
     )
 
-    timing_col1, timing_col2 = st.columns(2)
-    with timing_col1:
-        export_audio_offset = st.number_input(
-            "Audio-Start je Ordner (+Sek.)",
-            min_value=0.0,
-            max_value=30.0,
-            step=0.5,
-            value=float(saved_export_settings.audio_offset_sec),
-            key=f"export_audio_offset_{project.id}",
-            help="Nächstes Voice-over startet so viele Sekunden nach dem ersten Asset des Ordners.",
-        )
-    with timing_col2:
-        export_section_outro = st.number_input(
-            "Ordner-Ausklingen (Sek.)",
-            min_value=0.0,
-            max_value=60.0,
-            step=0.5,
-            value=float(saved_export_settings.section_outro_sec),
-            key=f"export_section_outro_{project.id}",
-            help="Letztes Asset eines Ordners wird auf der Timeline verlängert (Ausklingen).",
-        )
-
     folder_selection = tuple(sorted(export_folders)) if export_folders else tuple(
         sorted(
             folder_name
@@ -478,10 +452,7 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
 
     if export_clicked:
         try:
-            export_settings = OtioExportSettings(
-                audio_offset_sec=float(export_audio_offset),
-                section_outro_sec=float(export_section_outro),
-            )
+            export_settings = saved_export_settings
             with st.spinner("Schnittpläne zusammenführen, Medien prüfen und OTIO schreiben …"):
                 merged = merge_confirmed_edit_plans(
                     project,
@@ -499,7 +470,6 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                         f"OTIO-Export ({len(merged.shots)} Shots)",
                         page=PAGE_EDIT_PLAN,
                     )
-                    save_otio_export_settings(project, export_settings)
                     export_path = export_otio_timeline(
                         project,
                         merged,
@@ -534,26 +504,22 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
             st.caption(f"• {warning}")
 
         if preview.ready:
-            export_cfg = OtioExportSettings(
-                audio_offset_sec=float(export_audio_offset),
-                section_outro_sec=float(export_section_outro),
-            )
             from otio_app.services.otio_exporter import _compute_timeline_sections
 
             timeline_sections = _compute_timeline_sections(
                 preview.shots,
                 preview.settings.model_copy(
                     update={
-                        "audio_offset_sec": export_cfg.audio_offset_sec,
-                        "section_outro_sec": export_cfg.section_outro_sec,
+                        "audio_offset_sec": saved_export_settings.audio_offset_sec,
+                        "section_outro_sec": saved_export_settings.section_outro_sec,
                     }
                 ),
             )
             total_duration = sum(section.video_duration_sec for section in timeline_sections)
             st.caption(
                 f"Geschätzte Videospur: {total_duration:.1f}s · "
-                f"Audio-Start: {export_cfg.audio_offset_sec}s · "
-                f"Ausklingen: {export_cfg.section_outro_sec}s · "
+                f"Audio-Start: {saved_export_settings.audio_offset_sec}s · "
+                f"Ausklingen: {saved_export_settings.section_outro_sec}s · "
                 f"{project.fps} fps"
             )
             for section in timeline_sections:
@@ -653,6 +619,10 @@ def render_edit_plan_page() -> None:
     saved = load_edit_plan(project, selected_folder)
     if saved is not None and saved.confirmed:
         st.success(f"Schnittplan für **{selected_folder}** bestätigt.")
+        st.caption(
+            "Regeln geändert? Unter **Vorschlag** erneut **Schnittplan vorschlagen**, "
+            "dann unter **Prüfen & Speichern** neu bestätigen."
+        )
 
     active_tab = st.radio(
         "Schnittplan-Schritt",
