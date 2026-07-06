@@ -61,6 +61,12 @@ from otio_app.services.otio_export_settings import (
     OtioExportSettings,
     load_otio_export_settings,
 )
+from otio_app.services.edit_plan_timing_settings import (
+    DEFAULT_TEXT_SPLIT_INPUT,
+    EditPlanTimingSettings,
+    load_edit_plan_timing_settings,
+    save_edit_plan_timing_settings,
+)
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 from otio_app.ui.edit_plan_rules_ui import (
     get_edit_plan_rules_for_project,
@@ -216,14 +222,39 @@ def _number_input_with_seeded_state(
 
 
 def _seed_timing_widgets(project) -> None:
-    """Lädt gespeicherte Export-Timing-Werte in die Widgets (einmalig pro Session)."""
-    saved = load_otio_export_settings(project)
-    offset_key = f"plan_offset_{project.id}"
-    outro_key = f"plan_outro_{project.id}"
-    if offset_key not in st.session_state:
-        st.session_state[offset_key] = float(saved.audio_offset_sec)
-    if outro_key not in st.session_state:
-        st.session_state[outro_key] = float(saved.section_outro_sec)
+    """Lädt gespeicherte Timing-/Gemini-Werte in die Widgets (einmalig pro Session).
+
+    Vorher wurden Min./Max. Shot, Text-Trenner und Gemini-Modell NIE persistiert
+    und fielen nach jedem Reload/Neustart stillschweigend auf die Defaults
+    zurück — unabhängig davon, was zuvor eingestellt war. Jetzt werden alle
+    Timing-/Gemini-Werte aus `edit_plan_timing_settings.json` geladen.
+    """
+    saved = load_edit_plan_timing_settings(project)
+    seed_map = {
+        f"plan_min_{project.id}": float(saved.shot_min_sec),
+        f"plan_max_{project.id}": float(saved.shot_max_sec),
+        f"plan_offset_{project.id}": float(saved.audio_offset_sec),
+        f"plan_outro_{project.id}": float(saved.section_outro_sec),
+        f"plan_split_{project.id}": saved.text_splitters,
+        f"plan_gemini_{project.id}": saved.gemini_model,
+    }
+    for key, value in seed_map.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+def _persist_timing_widgets(project) -> None:
+    """Speichert die aktuellen Timing-/Gemini-Widget-Werte dauerhaft, sobald der
+    Regeln-Tab gerendert wird — analog zum automatischen Speichern der Regeln."""
+    settings = EditPlanTimingSettings(
+        shot_min_sec=_plan_number_setting(project.id, "min", DEFAULT_SHOT_MIN_SEC),
+        shot_max_sec=_plan_number_setting(project.id, "max", DEFAULT_SHOT_MAX_SEC),
+        audio_offset_sec=_plan_number_setting(project.id, "offset", DEFAULT_AUDIO_OFFSET_SEC),
+        section_outro_sec=_plan_number_setting(project.id, "outro", DEFAULT_SECTION_OUTRO_SEC),
+        text_splitters=_plan_text_setting(project.id, "split", DEFAULT_TEXT_SPLIT_INPUT),
+        gemini_model=_plan_gemini_model(project.id),
+    )
+    save_edit_plan_timing_settings(project, settings)
 
 
 def _export_timing_settings(project) -> OtioExportSettings:
@@ -294,23 +325,33 @@ def _render_tab_settings(project) -> None:
             help="Letztes Asset eines Ordners bleibt auf der Timeline so viele Sekunden länger (nur OTIO-Export).",
         )
 
-    st.text_input(
-        "Text-Trenner (kommagetrennt)",
-        value=", und ,, , und ",
-        key=f"plan_split_{project.id}",
-    )
+    split_key = f"plan_split_{project.id}"
+    split_kwargs = {"key": split_key}
+    if split_key not in st.session_state:
+        split_kwargs["value"] = DEFAULT_TEXT_SPLIT_INPUT
+    st.text_input("Text-Trenner (kommagetrennt)", **split_kwargs)
     st.caption("Fallback-Reihenfolge (Adobe Stock / Pexels / KI folgen später):")
     for source in DEFAULT_FALLBACK_ORDER:
         st.write(f"- {FALLBACK_SOURCE_LABELS.get(source, source)}")
 
-    default_model = get_default_gemini_model()
-    st.selectbox(
-        "Gemini-Modell (Motiv → Asset)",
-        options=list(GEMINI_MODEL_CHOICES),
-        index=list(GEMINI_MODEL_CHOICES).index(default_model),
-        format_func=format_gemini_model_label,
-        key=f"plan_gemini_{project.id}",
-    )
+    gemini_key = f"plan_gemini_{project.id}"
+    model_choices = list(GEMINI_MODEL_CHOICES)
+    selectbox_kwargs = {
+        "options": model_choices,
+        "format_func": format_gemini_model_label,
+        "key": gemini_key,
+    }
+    if gemini_key not in st.session_state:
+        default_model = get_default_gemini_model()
+        selectbox_kwargs["index"] = (
+            model_choices.index(default_model) if default_model in model_choices else 0
+        )
+    elif st.session_state[gemini_key] not in model_choices:
+        st.session_state[gemini_key] = get_default_gemini_model()
+    st.selectbox("Gemini-Modell (Motiv → Asset)", **selectbox_kwargs)
+
+    st.caption("💾 Timing- und Gemini-Einstellungen werden automatisch gespeichert.")
+    _persist_timing_widgets(project)
 
 
 def _export_blockers_message(merged: MergedEditPlanResult, folder_selection: tuple[str, ...]) -> str:
@@ -414,7 +455,7 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
     if not is_gemini_configured():
         st.warning("Ohne GEMINI_API_KEY wird nur eine einfache Text-Trennung genutzt.")
 
-    splitters = _plan_text_setting(project.id, "split", ", und ,, , und ")
+    splitters = _plan_text_setting(project.id, "split", DEFAULT_TEXT_SPLIT_INPUT)
     if st.button("Schnittplan vorschlagen", key=f"build_plan_{project.id}", type="primary"):
         use_gemini = is_gemini_configured()
         settings = EditPlanSettings(
