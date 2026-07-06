@@ -264,9 +264,62 @@ def test_pexels_without_api_key_is_config_missing(monkeypatch: pytest.MonkeyPatc
         passage_text="Test",
         selected_source=SUPPLEMENT_SOURCE_PEXELS,
     )
-    candidate = adapter.search(request)[0]
-    assert candidate.is_mock is True
-    assert candidate.download_enabled is False
+    assert adapter.search(request) == []
+
+
+def test_pexels_ready_maps_real_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PEXELS_API_KEY", "test-key")
+    seen_urls: list[str] = []
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return (
+                b'{"total_results":1,"videos":[{"id":123,"url":"https://www.pexels.com/video/123",'
+                b'"image":"https://images.pexels.com/preview.jpg","width":1920,"height":1080,'
+                b'"duration":12,"user":{"name":"Creator","url":"https://www.pexels.com/@creator"},'
+                b'"video_files":[{"id":1,"quality":"sd","file_type":"video/mp4","width":640,"height":360,'
+                b'"fps":24,"link":"https://videos.pexels.com/sd.mp4"},'
+                b'{"id":2,"quality":"hd","file_type":"video/mp4","width":1920,"height":1080,'
+                b'"fps":30,"link":"https://videos.pexels.com/hd.mp4"}]}]}'
+            )
+
+    def fake_urlopen(request, timeout=20):
+        seen_urls.append(request.full_url)
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_api",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        location_name="Antelope Canyon",
+        beat_id="beat_api",
+        passage_text="Narrow light",
+        visual_requirement="slot canyon light",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+    )
+    candidates = PexelsAdapter().search(request)
+    assert seen_urls
+    assert "https://api.pexels.com/v1/videos/search" in seen_urls[0]
+    assert candidates
+    candidate = candidates[0]
+    assert candidate.is_mock is False
+    assert candidate.status == "CANDIDATE_FOUND"
+    assert candidate.download_url == "https://videos.pexels.com/hd.mp4"
+    assert candidate.pexels_video_file_id == "2"
+    assert candidate.creator == "Creator"
+    assert candidate.creator_url
+    assert candidate.query_used.startswith("Antelope Canyon")
+    assert candidate.location_match in {"exact", "likely"}
 
 
 def test_pexels_download_failure_writes_error_without_placeholder(
@@ -477,9 +530,9 @@ def test_search_stores_candidates(tmp_path: Path) -> None:
     )
     upsert_requests(project, [request])
     found = search_supplement_candidates(project, request)
-    assert found
+    assert found == []
     loaded = load_supplement_requests(project)
-    assert loaded.candidates
+    assert loaded.candidates == []
 
 
 def test_keyword_query_prefers_short_visual_terms() -> None:

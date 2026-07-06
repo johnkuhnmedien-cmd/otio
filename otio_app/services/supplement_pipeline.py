@@ -35,6 +35,7 @@ from otio_app.defaults import (
     RIGHTS_STATUS_NEEDS_LICENSE_REVIEW,
     REQUEST_STATUS_ACQUIRE_FAILED,
     REQUEST_STATUS_ANALYSIS_PENDING,
+    REQUEST_STATUS_CANDIDATES_FOUND,
     REQUEST_STATUS_INVENTORY_UPDATED,
     REQUEST_STATUS_READY_FOR_REPLAN,
     SUPPLEMENT_SOURCE_ADOBE,
@@ -91,8 +92,11 @@ def record_supplement_error(
     error_message: str,
     candidate_id: str = "",
     url: str = "",
+    query_used: str = "",
     action_required: str = "",
     provider_status_at_failure: str = "",
+    http_status: int = 0,
+    content_type: str = "",
 ) -> None:
     path = get_supplement_errors_path(project.work_dir_path)
     document = SupplementErrorDocument(project_id=project.id)
@@ -109,8 +113,11 @@ def record_supplement_error(
             candidate_id=candidate_id,
             provider=provider,
             url=url,
+            query_used=query_used,
             error_type=error_type,
             error_message=error_message,
+            http_status=http_status,
+            content_type=content_type,
             action_required=action_required,
             provider_status_at_failure=provider_status_at_failure,
         )
@@ -164,12 +171,72 @@ def search_supplement_candidates(
         raise ValueError("Keine Supplement-Quelle gewählt.")
     adapter = get_supplement_adapter(source)
     readiness = adapter.readiness()
-    candidates = adapter.search(request)
+    if readiness.status == "CONFIG_MISSING":
+        record_supplement_error(
+            project,
+            request_id=request.supplement_request_id,
+            provider=source,
+            error_type="CONFIG_MISSING",
+            error_message=readiness.message,
+            query_used=request.query_used or "",
+            action_required="API-Key konfigurieren oder andere Quelle wählen.",
+            provider_status_at_failure=readiness.status,
+        )
+        update_request(
+            project,
+            request.supplement_request_id,
+            status=REQUEST_STATUS_ACQUIRE_FAILED,
+            last_error=readiness.message,
+            last_error_at=datetime.now(timezone.utc),
+            provider_status_at_failure=readiness.status,
+        )
+        return []
+    try:
+        candidates = adapter.search(request)
+    except Exception as exc:
+        record_supplement_error(
+            project,
+            request_id=request.supplement_request_id,
+            provider=source,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            query_used=request.query_used or "",
+            action_required="Provider-Konfiguration/Netzwerk prüfen oder andere Quelle wählen.",
+            provider_status_at_failure=readiness.status,
+        )
+        update_request(
+            project,
+            request.supplement_request_id,
+            status=REQUEST_STATUS_ACQUIRE_FAILED,
+            last_error=str(exc),
+            last_error_at=datetime.now(timezone.utc),
+            provider_status_at_failure=readiness.status,
+        )
+        return []
     add_candidates(project, candidates)
+    attempted = []
+    if candidates:
+        attempted = sorted({candidate.query_used for candidate in candidates if candidate.query_used})
+    elif request.query_used:
+        attempted = [request.query_used]
+    if not candidates:
+        record_supplement_error(
+            project,
+            request_id=request.supplement_request_id,
+            provider=source,
+            error_type="NO_CANDIDATES",
+            error_message="Keine echten Kandidaten gefunden.",
+            query_used=request.query_used or "",
+            action_required="Query vereinfachen, andere Quelle wählen oder Manual Import nutzen.",
+            provider_status_at_failure=readiness.status,
+        )
     update_request(
         project,
         request.supplement_request_id,
-        status="CANDIDATES_FOUND",
+        status=REQUEST_STATUS_CANDIDATES_FOUND,
+        search_queries_attempted=attempted or request.search_queries_attempted,
+        best_query=attempted[0] if attempted else request.best_query,
+        query_used=attempted[0] if attempted else request.query_used,
     )
     return candidates
 
@@ -194,6 +261,7 @@ def acquire_supplement_candidate(
             candidate_id=candidate.candidate_id,
             provider=candidate.provider,
             url=candidate.download_url,
+            query_used=candidate.query_used,
             error_type="MOCK_CANDIDATE_BLOCKED",
             error_message=message,
             action_required="Echte Quelle konfigurieren oder manuellen Import nutzen.",
@@ -235,6 +303,7 @@ def acquire_supplement_candidate(
             candidate_id=candidate.candidate_id,
             provider=candidate.provider,
             url=candidate.download_url,
+            query_used=candidate.query_used,
             error_type=type(exc).__name__,
             error_message=str(exc),
             action_required="Kandidat prüfen oder andere Quelle wählen.",
@@ -258,8 +327,9 @@ def acquire_supplement_candidate(
     update_request(
         project,
         request.supplement_request_id,
-        status="ACQUIRED",
+        status=REQUEST_STATUS_ANALYSIS_PENDING,
         selected_source=candidate.provider,
+        query_used=candidate.query_used,
     )
     return SupplementAsset(local_path=asset.local_path, sidecar=sidecar)
 
@@ -329,7 +399,7 @@ def import_manual_supplement_asset(
     update_request(
         project,
         request.supplement_request_id,
-        status="ACQUIRED",
+        status=REQUEST_STATUS_ANALYSIS_PENDING,
         selected_source=source_provider,
     )
     return SupplementAsset(local_path=local_path, sidecar=sidecar)

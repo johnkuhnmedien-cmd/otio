@@ -691,6 +691,12 @@ def _render_tab_review(
                             status="SOURCE_SELECTED",
                         )
                     request = request_with_keyword_query(request)
+                    request = request.model_copy(
+                        update={
+                            "query_used": request.search_queries.get("en", [""])[0],
+                            "location_name": selected_folder,
+                        }
+                    )
                     requests.append(request)
                 upsert_requests(project, requests)
 

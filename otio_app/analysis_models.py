@@ -307,6 +307,8 @@ class SupplementRequest(BaseModel):
     supplement_request_id: str
     section_id: str
     folder_name: str
+    location_name: str = ""
+    search_context: str = ""
     beat_id: str
     passage_text: str
     visual_requirement: str = ""
@@ -323,6 +325,10 @@ class SupplementRequest(BaseModel):
     )
     selected_source: Optional[str] = None
     search_queries: dict[str, List[str]] = Field(default_factory=dict)
+    search_queries_attempted: List[str] = Field(default_factory=list)
+    best_query: str = ""
+    query_used: str = ""
+    allow_broader_search: bool = False
     generation_prompt: Optional[str] = None
     last_error: str = ""
     last_error_at: Optional[datetime] = None
@@ -342,8 +348,10 @@ class SupplementCandidate(BaseModel):
     preview_url: str = ""
     download_url: str = ""
     creator: str = ""
+    creator_url: str = ""
     license: str = ""
     license_url: str = ""
+    rights_status: str = ""
     media_type: str = "video"
     width: int = 0
     height: int = 0
@@ -360,6 +368,18 @@ class SupplementCandidate(BaseModel):
     download_enabled: bool = True
     last_error: str = ""
     failed_url: str = ""
+    query_used: str = ""
+    folder_name: str = ""
+    location_name: str = ""
+    location_terms_required: List[str] = Field(default_factory=list)
+    location_terms_present: List[str] = Field(default_factory=list)
+    location_match: str = ""
+    pexels_video_file_id: str = ""
+    pexels_quality: str = ""
+    pexels_file_type: str = ""
+    pexels_fps: float = 0.0
+    selected_video_file_width: int = 0
+    selected_video_file_height: int = 0
 
 
 class SupplementAssetSidecar(BaseModel):
@@ -369,9 +389,13 @@ class SupplementAssetSidecar(BaseModel):
     provider_asset_id: str = ""
     source_url: str = ""
     download_url: str = ""
+    query_used: str = ""
+    location_name: str = ""
+    location_match: str = ""
     license: str = ""
     license_url: str = ""
     creator: str = ""
+    creator_url: str = ""
     acquisition_method: str = ""
     prompt: str = ""
     search_query: str = ""
@@ -420,8 +444,11 @@ class SupplementErrorEntry(BaseModel):
     candidate_id: str = ""
     provider: str
     url: str = ""
+    query_used: str = ""
     error_type: str
     error_message: str
+    http_status: int = 0
+    content_type: str = ""
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     action_required: str = ""
     provider_status_at_failure: str = ""

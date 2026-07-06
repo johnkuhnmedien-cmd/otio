@@ -79,12 +79,14 @@ def _candidates_for_source(
     *,
     request_id: str,
     selected_source: str,
+    demo_mode: bool = False,
 ) -> list[SupplementCandidate]:
     return [
         candidate
         for candidate in candidates
         if candidate.supplement_request_id == request_id
         and candidate.provider == selected_source
+        and (demo_mode or (not candidate.is_mock and candidate.status != "CANDIDATE_MOCK_ONLY"))
     ]
 
 
@@ -121,6 +123,8 @@ def _materialize_requests_from_plan(project, folder_name: str) -> int:
                     supplement_request_id=request_id,
                     section_id=section_id_for_folder(folder_name),
                     folder_name=folder_name,
+                    location_name=folder_name,
+                    search_context=shot.motif or passage,
                     beat_id=shot.beat_id or f"shot_{index:03d}",
                     passage_text=passage,
                     visual_requirement=shot.motif or passage,
@@ -222,7 +226,7 @@ def render_supplement_assets_page() -> None:
     created_from_plan = _materialize_requests_from_plan(project, selected_folder)
     document = load_supplement_requests(project)
     folder_requests = requests_for_folder(document, selected_folder)
-    required = [req for req in folder_requests if req.status != "ACQUIRED"]
+    required = [req for req in folder_requests if req.status not in {"READY_FOR_REPLAN", "INVENTORY_UPDATED"}]
 
     if created_from_plan:
         st.info(
@@ -335,6 +339,7 @@ def render_supplement_assets_page() -> None:
                         request.supplement_request_id,
                         selected_source=source,
                         search_queries=request_for_search.search_queries,
+                        query_used=query,
                         status="SOURCE_SELECTED",
                     )
                     if updated is None:
@@ -367,6 +372,26 @@ def render_supplement_assets_page() -> None:
                 candidate: SupplementCandidate = candidates[selected_idx]
                 if candidate.is_mock or not candidate.download_enabled:
                     st.warning("Demo / Mock-Kandidat — kein produktiver Download möglich.")
+                if candidate.provider == SUPPLEMENT_SOURCE_PEXELS and not candidate.is_mock:
+                    st.caption(
+                        f"Query: `{candidate.query_used or '—'}` · "
+                        f"Ort: {candidate.location_name or '—'} · "
+                        f"location_match: **{candidate.location_match or '—'}**"
+                    )
+                    st.caption(
+                        f"Dauer: {candidate.duration_sec:.1f}s · "
+                        f"Auflösung: {candidate.width}×{candidate.height} · "
+                        f"Download: {candidate.selected_video_file_width}×{candidate.selected_video_file_height} "
+                        f"{candidate.pexels_quality or ''}"
+                    )
+                    if candidate.creator:
+                        st.caption(f"Creator: {candidate.creator}")
+                    if candidate.preview_url:
+                        st.image(candidate.preview_url, caption="Pexels Preview")
+                    if candidate.source_page_url:
+                        st.link_button("Pexels-Seite öffnen", candidate.source_page_url)
+                    if candidate.location_match == "missing":
+                        st.warning("Ort wurde im Kandidaten nicht erkannt — manuelle Freigabe erforderlich.")
 
                 if candidate.provider == SUPPLEMENT_SOURCE_ADOBE:
                     st.warning(
@@ -442,7 +467,11 @@ def render_supplement_assets_page() -> None:
         )
 
     if analyze_clicked or inventory_clicked:
-        acquired = [req for req in folder_requests if req.status == "ACQUIRED"]
+        acquired = [
+            req
+            for req in folder_requests
+            if req.status in {"ACQUIRED", "ASSET_ACQUIRED", "ANALYSIS_PENDING", "ANALYSIS_COMPLETE"}
+        ]
         if not acquired:
             st.warning("Noch keine heruntergeladenen Supplement-Assets.")
         else:

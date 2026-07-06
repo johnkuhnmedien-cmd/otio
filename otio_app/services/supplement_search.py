@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from otio_app.analysis_models import SupplementRequest
+from otio_app.analysis_models import SupplementCandidate, SupplementRequest
 
 _STOPWORDS = {
     "aber",
@@ -110,15 +110,44 @@ def build_keyword_query(
     return " ".join(_dedupe_keep_order(terms)[:max_terms])
 
 
+def base_location_for_request(request: SupplementRequest) -> str:
+    return (request.location_name or request.folder_name).strip()
+
+
+def ensure_location_in_query(query: str, location_name: str) -> str:
+    location = location_name.strip()
+    cleaned = " ".join(query.split())
+    if not location:
+        return cleaned
+    if location.casefold() in cleaned.casefold():
+        return cleaned
+    return f"{location} {cleaned}".strip()
+
+
+def build_pexels_query_variants(request: SupplementRequest) -> list[str]:
+    location = base_location_for_request(request)
+    preferred = ensure_location_in_query(preferred_search_query(request), location)
+    variants = [
+        preferred,
+        location,
+        f"{location} slot canyon",
+        f"{location} sandstone",
+        f"{location} person",
+        f"{location} walking",
+        f"{location} tour",
+    ]
+    return _dedupe_keep_order([variant for variant in variants if variant.strip()])
+
+
 def preferred_search_query(request: SupplementRequest) -> str:
     for language in ("en", "de"):
         queries = request.search_queries.get(language, [])
         if queries:
             query = str(queries[0]).strip()
             if query:
-                return query
+                return ensure_location_in_query(query, base_location_for_request(request))
     return build_keyword_query(
-        folder_name=request.folder_name,
+        folder_name=base_location_for_request(request),
         visual_requirement=request.visual_requirement,
         passage_text=request.passage_text,
     )
@@ -130,7 +159,24 @@ def request_with_keyword_query(request: SupplementRequest, query: str | None = N
         update={
             "search_queries": {
                 **request.search_queries,
-                "en": [selected],
+                "en": [ensure_location_in_query(selected, base_location_for_request(request))],
             }
         }
     )
+
+
+def location_terms(location_name: str) -> list[str]:
+    return _tokens(location_name)
+
+
+def location_match_for_text(text: str, location_name: str, *, broadened: bool = False) -> tuple[str, list[str], list[str]]:
+    required = location_terms(location_name)
+    present_tokens = set(_tokens(text))
+    present = [token for token in required if token in present_tokens]
+    if broadened:
+        return "broadened", required, present
+    if required and len(present) == len(required):
+        return "exact", required, present
+    if present:
+        return "likely", required, present
+    return "missing", required, present

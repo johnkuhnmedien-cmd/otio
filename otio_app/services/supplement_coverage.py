@@ -155,6 +155,8 @@ def coverage_to_supplement_request(
         supplement_request_id=request_id or f"supp_req_{uuid.uuid4().hex[:8]}",
         section_id=section_id_for_folder(coverage.folder_name),
         folder_name=coverage.folder_name,
+        location_name=coverage.folder_name,
+        search_context=coverage.visual_requirement,
         beat_id=coverage.beat_id,
         passage_text=coverage.passage_text,
         visual_requirement=coverage.visual_requirement,
@@ -166,6 +168,8 @@ def coverage_to_supplement_request(
             "de": [coverage.visual_requirement[:120]],
             "en": [keyword_query],
         },
+        best_query=keyword_query,
+        query_used=keyword_query,
         created_at=now,
         updated_at=now,
     )
