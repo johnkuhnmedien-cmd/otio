@@ -126,12 +126,20 @@ def build_narration_filler_items(
     trim_leading_sec: float,
     usage_by_asset_id: dict[str, int] | None = None,
     max_asset_usage: int | None = None,
+    min_sec: float = MIN_DURATION_SEC,
+    max_sec: float = MAX_DURATION_SEC,
 ) -> tuple[list[TimelineItem], list[str]]:
     """Fügt generic_narration_visual-Elemente ein, bis target_end_sec erreicht ist."""
     errors: list[str] = []
     gap = target_end_sec - section_cursor_sec
     if gap <= 0.05:
         return [], errors
+
+    # min_sec/max_sec kommen aus den projektspezifischen Timing-Regeln
+    # (Tab „Regeln → Timing & Gemini“), nicht aus den globalen Defaults —
+    # sonst würden Filler-Elemente die Nutzer-Konfiguration ignorieren.
+    max_sec = max(0.1, float(max_sec))
+    min_sec = min(float(min_sec), max_sec)
 
     section_id = section_id_for_folder(folder_name)
     remaining = gap
@@ -140,10 +148,10 @@ def build_narration_filler_items(
     index = item_index_start
 
     while remaining > 0.05:
-        chunk = min(remaining, MAX_DURATION_SEC)
-        if chunk < MIN_DURATION_SEC and remaining > MIN_DURATION_SEC:
-            chunk = MIN_DURATION_SEC
-        elif chunk < MIN_DURATION_SEC:
+        chunk = min(remaining, max_sec)
+        if chunk < min_sec and remaining > min_sec:
+            chunk = min_sec
+        elif chunk < min_sec:
             chunk = remaining
 
         candidates = select_generic_outro_assets(
@@ -230,14 +238,21 @@ def build_outro_timeline_items(
     trim_leading_sec: float,
     usage_by_asset_id: dict[str, int] | None = None,
     max_asset_usage: int | None = None,
+    min_sec: float = MIN_DURATION_SEC,
+    max_sec: float = MAX_DURATION_SEC,
 ) -> tuple[list[TimelineItem], list[str]]:
-    """Erzeugt 1..n Outro-Elemente (je max. 8 s) mit explizit gewähltem Ordner-Asset."""
+    """Erzeugt 1..n Outro-Elemente (je max. `max_sec`) mit explizit gewähltem Ordner-Asset."""
     errors: list[str] = []
     if outro_total_sec <= 0.05:
         return [], errors
 
+    # min_sec/max_sec kommen aus den projektspezifischen Timing-Regeln, nicht
+    # aus den globalen Defaults (siehe build_narration_filler_items oben).
+    max_sec = max(0.1, float(max_sec))
+    min_sec = min(float(min_sec), max_sec)
+
     section_id = section_id_for_folder(folder_name)
-    durations = split_total_duration(outro_total_sec)
+    durations = split_total_duration(outro_total_sec, min_sec=min_sec, max_sec=max_sec)
     candidates = select_generic_outro_assets(
         folder_assets,
         used_paths=used_paths,
@@ -381,6 +396,8 @@ def build_timeline_items_for_folder(
             trim_leading_sec=trim_leading_sec,
             usage_by_asset_id=usage,
             max_asset_usage=max_asset_usage,
+            min_sec=settings.shot_min_sec,
+            max_sec=settings.shot_max_sec,
         )
         errors.extend(filler_errors)
         items.extend(filler_items)
@@ -404,6 +421,8 @@ def build_timeline_items_for_folder(
         trim_leading_sec=trim_leading_sec,
         usage_by_asset_id=usage,
         max_asset_usage=max_asset_usage,
+        min_sec=settings.shot_min_sec,
+        max_sec=settings.shot_max_sec,
     )
     errors.extend(outro_errors)
     items.extend(outro_items)

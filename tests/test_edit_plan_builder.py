@@ -367,3 +367,140 @@ def test_segment_coverage_reconciled_when_all_shots_get_local_asset(
         coverage.coverage_status == COVERAGE_LOCAL_GOOD for coverage in document.segment_coverage
     )
     assert not document.supplement_request_ids
+
+
+def test_outro_items_respect_configured_max_shot_sec(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    """Regression: Das Ordner-Ausklingen wurde bisher immer in Blöcken à
+    max. 8s (hardcoded Default) aufgeteilt — unabhängig davon, welchen
+    Max.-Shot-Wert der Nutzer in den Timing-Regeln konfiguriert hat."""
+    project = _sample_project(temp_project_layout)
+    voice_path = str(temp_project_layout["voice_file"])
+    media_path = str(temp_project_layout["project_root"] / "Grand Canyon" / "clip.mp4")
+    broll_path = str(temp_project_layout["project_root"] / "Grand Canyon" / "broll.mp4")
+    broll2_path = str(temp_project_layout["project_root"] / "Grand Canyon" / "broll2.mp4")
+
+    mapping = VoiceFolderMappingDocument(
+        project_id=project.id,
+        confirmed=True,
+        entries=[
+            VoiceFolderMappingEntry(voice_file=voice_path, folder="Grand Canyon", confirmed=True)
+        ],
+    )
+    project.voice_folder_mapping_path.write_text(mapping.model_dump_json(indent=2), encoding="utf-8")
+
+    voice_doc = VoiceAnalysisDocument(
+        project_id=project.id,
+        language="de",
+        files=[
+            VoiceFileAnalysis(
+                path=voice_path,
+                segments=[VoiceSegment(start_sec=0.0, end_sec=6.0, text="Kurzer Text über den Canyon.")],
+            )
+        ],
+    )
+    project.voice_analysis_path.write_text(voice_doc.model_dump_json(indent=2), encoding="utf-8")
+
+    Path(media_path).write_bytes(b"mp4")
+    Path(broll_path).write_bytes(b"mp4")
+    Path(broll2_path).write_bytes(b"mp4")
+
+    from otio_app.services.inventory_loader import save_folder_inventory
+
+    save_folder_inventory(
+        project.folder_inventory_path("Grand Canyon"),
+        AssetFolderAnalysis(
+            folder="Grand Canyon",
+            assets=[
+                AssetMediaAnalysis(path=media_path, description="Canyon Weitwinkel", asset_id="asset_clip"),
+                AssetMediaAnalysis(path=broll_path, description="Establishing Landschaft", asset_id="asset_broll"),
+                AssetMediaAnalysis(path=broll2_path, description="Panorama Übersicht", asset_id="asset_broll2"),
+            ],
+        ),
+    )
+
+    settings = EditPlanSettings(shot_min_sec=2.0, shot_max_sec=5.0, section_outro_sec=10.0)
+    document = build_edit_plan(project, settings=settings, use_api=False)
+
+    outro_shots = [shot for shot in document.shots if shot.section_outro]
+    assert outro_shots, "Es sollten Outro-Shots erzeugt worden sein."
+    assert all(shot.duration_sec <= 5.0 + 0.01 for shot in outro_shots), (
+        "Kein Outro-Shot darf die konfigurierte Max.-Shot-Regel (5.0s) verletzen."
+    )
+
+
+def test_local_fallback_picks_best_matching_asset_not_just_first(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    """Regression: Ohne Gemini (z.B. Netzwerkfehler) wurde bisher IMMER das
+    erste Asset im Ordner gewählt, unabhängig vom Inhalt. Das führte u.a.
+    dazu, dass frisch supplementierte Assets nie für ihre eigentliche Passage
+    verwendet wurden (sie blieben "ungenutzt" und wurden stattdessen vom
+    generischen Outro-Filler eingesammelt — wirkte wie eine feste Bindung an
+    eine andere Stelle). Jetzt wird das inhaltlich beste Asset gewählt."""
+    project = _sample_project(temp_project_layout)
+    voice_path = str(temp_project_layout["voice_file"])
+    irrelevant_path = str(temp_project_layout["project_root"] / "Grand Canyon" / "irrelevant.mp4")
+    matching_path = str(temp_project_layout["project_root"] / "Grand Canyon" / "matching.mp4")
+
+    mapping = VoiceFolderMappingDocument(
+        project_id=project.id,
+        confirmed=True,
+        entries=[
+            VoiceFolderMappingEntry(voice_file=voice_path, folder="Grand Canyon", confirmed=True)
+        ],
+    )
+    project.voice_folder_mapping_path.write_text(mapping.model_dump_json(indent=2), encoding="utf-8")
+
+    voice_doc = VoiceAnalysisDocument(
+        project_id=project.id,
+        language="de",
+        files=[
+            VoiceFileAnalysis(
+                path=voice_path,
+                segments=[
+                    VoiceSegment(
+                        start_sec=0.0,
+                        end_sec=6.0,
+                        text="Ein schmaler Slot Canyon mit warmem orangenem Licht.",
+                    )
+                ],
+            )
+        ],
+    )
+    project.voice_analysis_path.write_text(voice_doc.model_dump_json(indent=2), encoding="utf-8")
+
+    Path(irrelevant_path).write_bytes(b"mp4")
+    Path(matching_path).write_bytes(b"mp4")
+
+    from otio_app.services.inventory_loader import save_folder_inventory
+
+    save_folder_inventory(
+        project.folder_inventory_path("Grand Canyon"),
+        AssetFolderAnalysis(
+            folder="Grand Canyon",
+            assets=[
+                # Absichtlich zuerst in der Liste, aber inhaltlich irrelevant.
+                AssetMediaAnalysis(
+                    path=irrelevant_path,
+                    description="Parkplatz und Souvenirshop am Eingang",
+                    asset_id="asset_irrelevant",
+                ),
+                AssetMediaAnalysis(
+                    path=matching_path,
+                    description="Schmaler Slot Canyon mit warmem orangenem Licht",
+                    asset_id="asset_matching",
+                ),
+            ],
+        ),
+    )
+
+    document = build_edit_plan(project, use_api=False)
+
+    non_outro_shots = [shot for shot in document.shots if not shot.section_outro]
+    assert non_outro_shots
+    assert any(shot.asset_id == "asset_matching" for shot in non_outro_shots), (
+        "Das inhaltlich passende Asset sollte für die Narration gewählt werden, "
+        "nicht blind das erste Asset im Ordner."
+    )

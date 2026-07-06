@@ -283,7 +283,7 @@ def _render_tab_settings(project) -> None:
         "Min./Max. Shot und Gemini-Modell gelten beim **Schnittplan vorschlagen**. "
         "**Audio-Start** beim OTIO-Export. **Ordner-Ausklingen** wird beim "
         "**Schnittplan vorschlagen** als eigene(s) Element(e) aus dem Ordner geplant "
-        "(je max. 8 s). Der Export übernimmt `timeline_items` unverändert."
+        "(je max. **Max. Shot** Sek., siehe unten). Der Export übernimmt `timeline_items` unverändert."
     )
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -323,6 +323,15 @@ def _render_tab_settings(project) -> None:
             step=0.5,
             key=f"plan_outro_{project.id}",
             help="Letztes Asset eines Ordners bleibt auf der Timeline so viele Sekunden länger (nur OTIO-Export).",
+        )
+
+    current_min = _plan_number_setting(project.id, "min", DEFAULT_SHOT_MIN_SEC)
+    current_max = _plan_number_setting(project.id, "max", DEFAULT_SHOT_MAX_SEC)
+    if current_min > current_max:
+        st.error(
+            f"⚠️ Min. Shot ({current_min:.1f}s) ist größer als Max. Shot ({current_max:.1f}s) — "
+            "das erzeugt zwangsläufig Shots, die die Max.-Regel verletzen. Bitte Min. Shot "
+            "senken oder Max. Shot erhöhen."
         )
 
     split_key = f"plan_split_{project.id}"

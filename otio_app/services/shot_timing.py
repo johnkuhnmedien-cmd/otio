@@ -65,7 +65,11 @@ def shots_from_timed_parts(
         if duration <= 0:
             continue
         if duration <= max_sec:
-            clamped_duration = max(min_sec, duration)
+            # max_sec ist die harte Obergrenze — falls min_sec (Fehlkonfiguration:
+            # min > max) größer als max_sec ist, darf min_sec sie trotzdem NICHT
+            # überschreiben. Sonst entstehen Shots, die die eigene Max-Regel
+            # verletzen (siehe Validierung „final_duration_sec > max“).
+            clamped_duration = min(max_sec, max(min_sec, duration))
             result.append(
                 TimedPart(
                     text=part.text,
@@ -84,7 +88,7 @@ def shots_from_timed_parts(
         for sub_start, sub_end in split_duration_evenly(
             part.start_sec, part.end_sec, parts_needed
         ):
-            sub_duration = max(min_sec, min(max_sec, sub_end - sub_start))
+            sub_duration = min(max_sec, max(min_sec, sub_end - sub_start))
             result.append(
                 TimedPart(
                     text=part.text,

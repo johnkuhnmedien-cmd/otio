@@ -217,18 +217,33 @@ def validate_timeline_items(
     narration_items = [item for item in items if _is_narration_item(item)]
     outro_items = [item for item in items if _is_outro_item(item)]
 
+    # Die Min./Max.-Shot-Regeln sind projektspezifisch konfigurierbar (Tab
+    # „Regeln → Timing & Gemini“). Zuvor wurden hier fest verdrahtete
+    # Default-Konstanten (3.0/8.0s) geprüft — unabhängig davon, was der Nutzer
+    # tatsächlich eingestellt hatte. Das führte u.a. dazu, dass Meldungen wie
+    # "> 8.0s" erschienen, obwohl der Nutzer z.B. 10s erlaubt hatte, oder dass
+    # ein durch fehlerhafte Konfiguration (min > max) entstandener Ausreißer
+    # nicht als das erkannt wurde, was er ist.
+    max_duration_sec = float(settings.shot_max_sec) if settings.shot_max_sec else MAX_DURATION_SEC
+    min_duration_sec = float(settings.shot_min_sec) if settings.shot_min_sec else MIN_DURATION_SEC
+    if min_duration_sec > max_duration_sec:
+        result.warnings.append(
+            f"Konfiguration: Min. Shot ({min_duration_sec:.1f}s) > Max. Shot "
+            f"({max_duration_sec:.1f}s) — Max. Shot wird als harte Obergrenze verwendet."
+        )
+
     for item in items:
         if _is_opening_title_item(item):
             continue
         duration = item.final_duration_sec or item.duration_sec
-        if duration > MAX_DURATION_SEC + 0.01:
+        if duration > max_duration_sec + 0.01:
             result.errors.append(
-                f"{item.timeline_item_id}: final_duration_sec {duration:.1f}s > {MAX_DURATION_SEC}s"
+                f"{item.timeline_item_id}: final_duration_sec {duration:.1f}s > {max_duration_sec}s"
             )
-        if duration < MIN_DURATION_SEC - 0.01 and not item.allow_black:
+        if duration < min_duration_sec - 0.01 and not item.allow_black:
             if item.type != "generic_narration_visual":
                 result.errors.append(
-                    f"{item.timeline_item_id}: duration_sec {duration:.1f}s < {MIN_DURATION_SEC}s"
+                    f"{item.timeline_item_id}: duration_sec {duration:.1f}s < {min_duration_sec}s"
                 )
         if not item.resolved_media_path and not item.allow_black:
             result.errors.append(f"{item.timeline_item_id}: kein resolved_media_path")

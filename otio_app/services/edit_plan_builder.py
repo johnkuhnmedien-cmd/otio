@@ -146,6 +146,38 @@ def _validate_asset_path(asset_path: str | None, allowed_paths: set[str]) -> str
     return None
 
 
+def _best_matching_asset(
+    passage_text: str,
+    assets: list[dict[str, str]],
+) -> dict[str, str] | None:
+    """Wählt das inhaltlich am besten passende Asset für einen Textabschnitt.
+
+    Vorher griff der lokale Fallback (ohne Gemini bzw. bei Gemini-Netzwerkfehlern)
+    immer blind auf `assets[0]` zu — unabhängig vom Inhalt. Das führte dazu, dass
+    frisch supplementierte Assets (die inhaltlich oft am besten zu genau der
+    Passage passen, für die sie angefordert wurden) für die eigentliche Narration
+    NIE gewählt wurden, sondern ungenutzt blieben und anschließend vom generischen
+    Outro-/Filler-Auswahlmechanismus „eingesammelt“ wurden — was wie eine feste
+    Bindung an eine andere Stelle (Ausklingen) wirkte.
+    """
+    if not assets:
+        return None
+    scored = [
+        (
+            score_asset_match(
+                passage_text=passage_text,
+                visual_requirement=passage_text,
+                description=asset.get("description") or Path(asset["path"]).stem,
+            ),
+            index,
+        )
+        for index, asset in enumerate(assets)
+    ]
+    scored.sort(key=lambda entry: (-entry[0], entry[1]))
+    best_index = scored[0][1]
+    return assets[best_index]
+
+
 def _parts_from_gemini_or_local(
     passage_text: str,
     folder_name: str,
@@ -181,7 +213,7 @@ def _parts_from_gemini_or_local(
         {
             "text": piece,
             "motif": piece[:80],
-            "asset_path": assets[0]["path"] if assets else None,
+            "asset_path": (_best_matching_asset(piece, assets) or {}).get("path"),
             "confidence": "low",
         }
         for piece in texts
