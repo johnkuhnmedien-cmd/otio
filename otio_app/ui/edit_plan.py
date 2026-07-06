@@ -633,6 +633,19 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
             save_edit_plan_rules(project, rules_doc)
             export_opts = export_rule_options(rules_doc)
             title_notes: list[str] = []
+            progress_bar = st.progress(0.0)
+            progress_text = st.empty()
+
+            def _on_plan_progress(folder_name: str, index: int, total: int) -> None:
+                fraction = index / total if total else 1.0
+                progress_bar.progress(min(1.0, fraction))
+                progress_text.caption(
+                    f"Segment {index}/{total} für **{folder_name}** — "
+                    f"Gemini: {format_gemini_model_label(timing.gemini_model)} "
+                    "(größere Modelle wie „Pro Preview“ brauchen pro Segment "
+                    "spürbar länger als „Flash“)."
+                )
+
             with st.spinner(f"Schnittplan für {selected_folder} wird erstellt…"):
                 document = build_edit_plan(
                     project,
@@ -640,14 +653,17 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
                     use_api=use_gemini,
                     folder_names=[selected_folder],
                     rules_doc=rules_doc,
+                    progress_callback=_on_plan_progress,
                 )
-                export_opts = export_rule_options(rules_doc)
-                if export_opts.folder_title_enabled:
-                    timeline_items, title_notes = ensure_opening_titles_rendered(
-                        project,
-                        document.timeline_items,
-                    )
-                    document = document.model_copy(update={"timeline_items": timeline_items})
+            progress_bar.empty()
+            progress_text.empty()
+            export_opts = export_rule_options(rules_doc)
+            if export_opts.folder_title_enabled:
+                timeline_items, title_notes = ensure_opening_titles_rendered(
+                    project,
+                    document.timeline_items,
+                )
+                document = document.model_copy(update={"timeline_items": timeline_items})
             _set_draft(document, selected_folder)
             st.success(f"{len(document.shots)} Shots vorgeschlagen.")
             title_item = next(

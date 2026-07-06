@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from enum import Enum
@@ -231,6 +232,7 @@ def build_edit_plan(
     use_api: bool = True,
     folder_names: list[str] | None = None,
     rules_doc: EditPlanRulesDocument | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> EditPlanDocument:
     """Erzeugt einen Schnittplan-Vorschlag für bestätigte Voice-over-Zuordnungen."""
     mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
@@ -318,12 +320,19 @@ def build_edit_plan(
         assets_payload_by_folder[folder_name] = list(asset_payload)
         usage_by_folder[folder_name] = {}
 
+        total_segments = sum(1 for segment in voice_entry.segments if segment.text.strip())
         beat_index = 0
         for segment in voice_entry.segments:
             if not segment.text.strip():
                 continue
             beat_index += 1
             beat_id = f"beat_{beat_index:03d}"
+            if progress_callback is not None:
+                # Wird VOR dem (potenziell langsamen, z.B. Gemini 3.1 Pro
+                # Preview) API-Call pro Segment aufgerufen — damit die UI bei
+                # vielen Segmenten sichtbaren Fortschritt zeigen kann, statt
+                # minutenlang ohne Rückmeldung zu blockieren.
+                progress_callback(folder_name, beat_index, total_segments)
             coverage = evaluate_segment_coverage(
                 beat_id=beat_id,
                 segment=segment,
