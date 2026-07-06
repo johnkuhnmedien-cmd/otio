@@ -49,10 +49,12 @@ from otio_app.services.supplement_pipeline import (
     acquire_supplement_candidate,
     acquire_top_candidates,
     acquire_top_candidates_for_folder,
+    analyze_and_update_inventory_for_folder,
     analyze_supplement_asset,
     extend_folder_inventory,
     import_manual_supplement_asset,
     load_sidecar,
+    run_full_supplement_pipeline_for_folder,
     save_sidecar,
     search_supplement_candidates,
 )
@@ -1326,6 +1328,76 @@ def test_acquire_top_candidates_for_folder_processes_stale_selected_source(tmp_p
     assert len(summary) == 1
     assert summary[0]["skipped"] is False
     assert summary[0]["downloaded"] == 1
+
+
+def test_run_full_supplement_pipeline_downloads_analyzes_and_updates_inventory(
+    tmp_path: Path,
+) -> None:
+    """Ein-Klick-Ablauf: Suchen + Herunterladen + Analysieren + Inventory in einem
+    Aufruf für alle offenen Anfragen eines Ordners."""
+    project = _project(tmp_path)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_full_pipeline",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Eine Person geht durch den engen Slot Canyon.",
+        visual_requirement="Person narrow slot canyon walking",
+    )
+    upsert_requests(project, [request])
+
+    def fake_search(_project, req):
+        return [_pexels_candidate(0)]
+
+    def fake_acquire(candidate, _dest):
+        asset = _mock_asset_for_candidate(candidate, tmp_path)
+        # Datei muss im tatsächlichen Provider-Ordner liegen, damit die
+        # Analyse-/Inventory-Schleife sie findet.
+        real_dir = project.project_root_path / "Antelope Canyon" / "_supplemental" / "_pexels"
+        real_dir.mkdir(parents=True, exist_ok=True)
+        real_path = real_dir / asset.local_path.name
+        real_path.write_bytes(asset.local_path.read_bytes())
+        return asset.__class__(
+            local_path=real_path,
+            sidecar=asset.sidecar.model_copy(update={"local_path": str(real_path)}),
+        )
+
+    with patch.object(PexelsAdapter, "readiness") as mock_readiness, patch(
+        "otio_app.services.supplement_pipeline.search_supplement_candidates",
+        side_effect=fake_search,
+    ), patch.object(PexelsAdapter, "acquire", side_effect=fake_acquire), patch(
+        "otio_app.services.supplement_pipeline.extract_frames",
+        return_value=[tmp_path / "frame1.jpg"],
+    ), patch(
+        "otio_app.services.supplement_pipeline.is_gemini_configured",
+        return_value=False,
+    ):
+        from otio_app.services.supplement_sources.base import ProviderReadiness
+
+        mock_readiness.return_value = ProviderReadiness(
+            provider=SUPPLEMENT_SOURCE_PEXELS,
+            status="READY",
+            message="ok",
+            acquire_enabled=True,
+        )
+        result = run_full_supplement_pipeline_for_folder(project, "Antelope Canyon", max_per_request=3)
+
+    assert result["total_downloaded"] == 1
+    assert result["analyzed"] == 1
+    # Ohne Gemini bleibt die Beschreibung ein Platzhalter → keine PASS-Validierung
+    # → korrekt NICHT ins Inventory übernommen (kein falsches Grün).
+    assert result["inventory_added"] == 0
+    assert result["inventory_skipped"]
+
+
+def test_analyze_and_update_inventory_for_folder_returns_untouched_when_empty(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    result = analyze_and_update_inventory_for_folder(project, "Antelope Canyon")
+    assert result["touched"] is False
+    assert result["analyzed"] == 0
+    assert result["inventory_added"] == 0
 
 
 def test_keyword_query_prefers_short_visual_terms() -> None:

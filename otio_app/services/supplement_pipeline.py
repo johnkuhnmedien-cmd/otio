@@ -484,6 +484,92 @@ def acquire_top_candidates_for_folder(
     return results
 
 
+def analyze_and_update_inventory_for_folder(
+    project: Project,
+    folder_name: str,
+) -> dict:
+    """Scannt alle Supplement-Provider-Ordner eines Ordners einmal, analysiert
+    jedes neue Asset (Frames + Gemini-Beschreibung + Content-Revalidierung) und
+    übernimmt es ins Inventory, sofern die Validierung PASS ergibt. Ein
+    fehlgeschlagenes/abgelehntes Asset bricht den restlichen Batch nicht ab."""
+    document = load_supplement_requests(project)
+    folder_requests = [entry for entry in document.requests if entry.folder_name == folder_name]
+    relevant_statuses = {
+        "ACQUIRED",
+        "ASSET_ACQUIRED",
+        REQUEST_STATUS_ANALYSIS_PENDING,
+        "ANALYSIS_COMPLETE",
+    }
+    provider_dirs = {
+        _destination_folder(project, folder_name, req.selected_source or SUPPLEMENT_SOURCE_PEXELS)
+        for req in folder_requests
+        if req.status in relevant_statuses
+    }
+
+    analyzed = 0
+    inventory_added = 0
+    inventory_skipped: list[str] = []
+    touched = False
+
+    for provider_dir in provider_dirs:
+        if not provider_dir.is_dir():
+            continue
+        for media_path in sorted(provider_dir.glob("*")):
+            if media_path.suffix.lower() == ".json":
+                continue
+            sidecar = load_sidecar(media_path)
+            if sidecar is None:
+                continue
+            touched = True
+            asset = analyze_supplement_asset(
+                project,
+                folder_name=folder_name,
+                local_path=media_path,
+                sidecar=sidecar,
+            )
+            analyzed += 1
+            try:
+                extend_folder_inventory(project, folder_name=folder_name, asset=asset)
+                inventory_added += 1
+            except ValueError as exc:
+                inventory_skipped.append(f"{media_path.name}: {exc}")
+
+    if inventory_added:
+        mark_edit_plans_stale_for_folder(project, folder_name)
+
+    return {
+        "touched": touched,
+        "analyzed": analyzed,
+        "inventory_added": inventory_added,
+        "inventory_skipped": inventory_skipped,
+    }
+
+
+def run_full_supplement_pipeline_for_folder(
+    project: Project,
+    folder_name: str,
+    *,
+    max_per_request: int = 3,
+    provider: str = SUPPLEMENT_SOURCE_PEXELS,
+) -> dict:
+    """Ein-Klick-Ablauf: sucht, lädt herunter, analysiert und aktualisiert das
+    Inventory für alle offenen Supplement-Anfragen eines Ordners in einem Rutsch."""
+    download_summary = acquire_top_candidates_for_folder(
+        project,
+        folder_name,
+        max_per_request=max_per_request,
+        provider=provider,
+    )
+    analysis_summary = analyze_and_update_inventory_for_folder(project, folder_name)
+    return {
+        "downloads": download_summary,
+        "total_downloaded": sum(entry["downloaded"] for entry in download_summary),
+        "analyzed": analysis_summary["analyzed"],
+        "inventory_added": analysis_summary["inventory_added"],
+        "inventory_skipped": analysis_summary["inventory_skipped"],
+    }
+
+
 def _extension_from_candidate(candidate: SupplementCandidate) -> str:
     parsed = urllib.parse.urlparse(candidate.download_url or candidate.preview_url)
     suffix = Path(urllib.parse.unquote(parsed.path)).suffix.lower()

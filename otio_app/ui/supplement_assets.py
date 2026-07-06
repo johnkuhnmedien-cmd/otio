@@ -38,12 +38,13 @@ from otio_app.services.supplement_pipeline import (
     acquire_supplement_candidate,
     acquire_top_candidates,
     acquire_top_candidates_for_folder,
+    analyze_and_update_inventory_for_folder,
     analyze_supplement_asset,
     approve_adobe_candidate,
-    extend_folder_inventory,
     import_manual_supplement_asset,
     mark_edit_plans_stale_for_folder,
     run_coverage_for_folder,
+    run_full_supplement_pipeline_for_folder,
     search_supplement_candidates,
 )
 from otio_app.services.supplement_search import (
@@ -585,24 +586,32 @@ def render_supplement_assets_page() -> None:
     auto_col, coverage_col = st.columns(2)
     with auto_col:
         if st.button(
-            "Top 3 pro offene Anfrage automatisch herunterladen (Pexels)",
-            key=f"auto_folder_{project.id}_{safe_folder_slug(selected_folder)}",
+            "Alles automatisch: Top 3 suchen, herunterladen, analysieren, Inventar aktualisieren",
+            key=f"auto_full_{project.id}_{safe_folder_slug(selected_folder)}",
             type="primary",
             disabled=pexels_readiness_for_folder.status != "READY",
         ):
-            with st.spinner("Suche und lade Top-Kandidaten für alle offenen Anfragen …"):
-                summary = acquire_top_candidates_for_folder(
+            with st.spinner("Suche, Download, Analyse und Inventory laufen für alle offenen Anfragen …"):
+                result = run_full_supplement_pipeline_for_folder(
                     project,
                     selected_folder,
                     max_per_request=3,
                 )
+            summary = result["downloads"]
             processed = [entry for entry in summary if not entry["skipped"]]
             skipped = [entry for entry in summary if entry["skipped"]]
-            total_downloaded = sum(entry["downloaded"] for entry in processed)
             st.success(
-                f"{total_downloaded} Asset(s) über {len(processed)} Anfrage(n) heruntergeladen "
-                f"({len(skipped)} übersprungen)."
+                f"{result['total_downloaded']} Asset(s) über {len(processed)} Anfrage(n) heruntergeladen "
+                f"({len(skipped)} übersprungen) · {result['analyzed']} analysiert · "
+                f"{result['inventory_added']} ins Inventory übernommen."
             )
+            if result["inventory_skipped"]:
+                st.warning(
+                    f"{len(result['inventory_skipped'])} Asset(s) nicht ins Inventory übernommen "
+                    "(Validierung nicht bestanden):"
+                )
+                for skip_reason in result["inventory_skipped"]:
+                    st.caption(f"⚠️ {skip_reason}")
             with st.expander("Details pro Anfrage", expanded=False):
                 for entry in summary:
                     if entry["skipped"]:
@@ -718,7 +727,7 @@ def render_supplement_assets_page() -> None:
             disabled=not can_replan,
         )
 
-    if analyze_clicked or inventory_clicked:
+    if analyze_clicked:
         relevant_statuses = analyzable_statuses | {"ANALYSIS_COMPLETE"}
         acquired = [req for req in folder_requests if req.status in relevant_statuses]
         if not acquired:
@@ -726,9 +735,6 @@ def render_supplement_assets_page() -> None:
         else:
             processed_dirs: set[Path] = set()
             analyzed_count = 0
-            inventory_added = 0
-            inventory_skipped: list[str] = []
-            any_asset_touched = False
             for acquired_request in acquired:
                 provider_dir = (
                     Path(project.project_root_path)
@@ -742,54 +748,41 @@ def render_supplement_assets_page() -> None:
                 for media_path in sorted(provider_dir.glob("*")):
                     if media_path.suffix.lower() in {".json"}:
                         continue
-                    sidecar_path = media_path.with_suffix(media_path.suffix + ".asset.json")
-                    if not sidecar_path.is_file():
-                        continue
                     from otio_app.services.supplement_pipeline import load_sidecar
 
                     sidecar = load_sidecar(media_path)
                     if sidecar is None:
                         continue
-                    any_asset_touched = True
-                    if analyze_clicked:
-                        analyze_supplement_asset(
-                            project,
-                            folder_name=selected_folder,
-                            local_path=media_path,
-                            sidecar=sidecar,
-                        )
-                        analyzed_count += 1
-                    if inventory_clicked:
-                        asset = analyze_supplement_asset(
-                            project,
-                            folder_name=selected_folder,
-                            local_path=media_path,
-                            sidecar=sidecar,
-                        )
-                        try:
-                            extend_folder_inventory(project, folder_name=selected_folder, asset=asset)
-                            inventory_added += 1
-                        except ValueError as exc:
-                            inventory_skipped.append(f"{media_path.name}: {exc}")
-            if inventory_clicked and inventory_added > 0:
-                mark_edit_plans_stale_for_folder(project, selected_folder)
-            if not any_asset_touched:
+                    analyze_supplement_asset(
+                        project,
+                        folder_name=selected_folder,
+                        local_path=media_path,
+                        sidecar=sidecar,
+                    )
+                    analyzed_count += 1
+            if analyzed_count == 0:
                 st.warning("Keine analysierbaren Supplement-Assets (Datei + Sidecar) gefunden.")
-            if analyze_clicked:
+            else:
                 st.success(f"Analyse abgeschlossen für {analyzed_count} Asset(s).")
-            if inventory_clicked:
-                if inventory_added:
-                    st.success(
-                        f"{inventory_added} Asset(s) ins Inventory übernommen — "
-                        "alter Schnittplan als stale markiert."
-                    )
-                if inventory_skipped:
-                    st.warning(
-                        f"{len(inventory_skipped)} Asset(s) nicht übernommen (Validierung nicht bestanden):"
-                    )
-                    for skip_reason in inventory_skipped:
-                        st.caption(f"⚠️ {skip_reason}")
             st.rerun()
+
+    if inventory_clicked:
+        inventory_result = analyze_and_update_inventory_for_folder(project, selected_folder)
+        if not inventory_result["touched"]:
+            st.warning("Keine analysierbaren Supplement-Assets (Datei + Sidecar) gefunden.")
+        elif inventory_result["inventory_added"]:
+            st.success(
+                f"{inventory_result['inventory_added']} Asset(s) ins Inventory übernommen "
+                "— alter Schnittplan als stale markiert."
+            )
+        if inventory_result["inventory_skipped"]:
+            st.warning(
+                f"{len(inventory_result['inventory_skipped'])} Asset(s) nicht ins Inventory übernommen "
+                "(Validierung nicht bestanden):"
+            )
+            for skip_reason in inventory_result["inventory_skipped"]:
+                st.caption(f"⚠️ {skip_reason}")
+        st.rerun()
 
     if replan_clicked:
         rules_doc = get_edit_plan_rules_for_project(project)
