@@ -131,6 +131,7 @@ def test_timeline_sections_include_outro_and_per_section_voice_offset(tmp_path: 
     assert sections[0].video_duration_sec == 11.0
     assert sections[0].voice_start_sec == 1.0
     assert sections[1].video_start_sec == 11.0
+    assert sections[1].video_duration_sec == 8.0
     assert sections[1].voice_start_sec == 12.0
 
 
@@ -148,6 +149,7 @@ def test_clip_durations_use_seconds_not_frames(tmp_path: Path) -> None:
     clips = [item for item in video_track if isinstance(item, otio.schema.Clip)]
     assert clips[0].source_range.duration.to_seconds() == 3.0
     assert clips[1].source_range.duration.to_seconds() == 8.0
+    assert clips[2].source_range.duration.to_seconds() == 8.0
     assert clips[0].name == "Florida_Keys_1.mp4"
     assert clips[0].media_reference.target_url.startswith("/")
 
@@ -170,6 +172,34 @@ def test_audio_offset_and_outro_on_export(tmp_path: Path) -> None:
 
     canyon_audio = timeline.tracks[2]
     assert canyon_audio[0].source_range.duration.to_seconds() == 12.0
+    assert canyon_audio[1].source_range.duration.to_seconds() == 7.0
+
+
+def test_video_section_padded_when_media_shorter_than_planned(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _setup_mapping_and_plans(project, tmp_path)
+    merged = merge_confirmed_edit_plans(project)
+    short_timing = MediaTiming(start_sec=0.0, duration_sec=2.0, rate=25.0)
+
+    with patch(
+        "otio_app.services.otio_exporter.probe_media_timing",
+        return_value=short_timing,
+    ), patch(
+        "otio_app.services.otio_exporter.probe_duration_seconds",
+        return_value=2.0,
+    ):
+        timeline = build_otio_timeline(
+            project,
+            merged,
+            export_settings=OtioExportSettings(audio_offset_sec=1.0, section_outro_sec=5.0),
+        )
+
+    video_track = timeline.tracks[0]
+    gaps = [item for item in video_track if isinstance(item, otio.schema.Gap)]
+    assert gaps
+    assert any("Ausklingen" in gap.name for gap in gaps)
+    total_video = sum(item.source_range.duration.to_seconds() for item in video_track)
+    assert total_video == 19.0
 
 
 def test_media_reference_aligns_available_range_with_embedded_timecode(tmp_path: Path) -> None:

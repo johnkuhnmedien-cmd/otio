@@ -275,6 +275,15 @@ def _clip_source_range_for_media(
     )
 
 
+def _track_duration_sec(track: otio.schema.Track, *, start_index: int = 0) -> float:
+    """Summiert source_range-Dauern ab start_index."""
+    total = 0.0
+    for item in track[start_index:]:
+        if item.source_range is not None:
+            total += item.source_range.duration.to_seconds()
+    return total
+
+
 def _compute_timeline_sections(
     shots: list[EditPlanShot],
     settings: EditPlanSettings,
@@ -292,8 +301,7 @@ def _compute_timeline_sections(
         while end_index < len(shots) and shots[end_index].folder == folder:
             section_duration += max(0.01, float(shots[end_index].duration_sec))
             end_index += 1
-        if end_index < len(shots):
-            section_duration += max(0.0, float(settings.section_outro_sec))
+        section_duration += max(0.0, float(settings.section_outro_sec))
 
         offset = max(0.0, float(settings.audio_offset_sec))
         voice_start = section_start + offset
@@ -330,7 +338,8 @@ def _append_video_item(
     duration_sec: float,
     export_rules: ExportRuleOptions,
     timing_notes: list[str] | None = None,
-) -> None:
+) -> float:
+    """Hängt Clip oder Gap an die Videospur; liefert die tatsächliche Dauer in Sekunden."""
     if shot.asset_path:
         original = _resolve_media_path(shot.asset_path)
         if (export_rules.auto_zoom_fill or export_rules.folder_title_enabled) and not is_image_media(
@@ -389,7 +398,7 @@ def _append_video_item(
                         video_clip.metadata["output_height"] = out_probe.height
 
         track.append(video_clip)
-        return
+        return source_range.duration.to_seconds()
 
     duration = _time_range(max(0.01, duration_sec), rate)
     label = shot.motif or f"Shot {index}"
@@ -398,6 +407,7 @@ def _append_video_item(
     gap.metadata["motif"] = shot.motif
     gap.metadata["passage_text"] = shot.passage_text
     track.append(gap)
+    return duration.duration.to_seconds()
 
 
 def _append_aligned_voice_track(
@@ -487,9 +497,12 @@ def build_otio_timeline(
 
     video_track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
     timing_notes: list[str] = []
+    section_index = 0
+    section_track_start = 0
     for index, shot in enumerate(merged.shots, start=1):
         duration_sec = float(shot.duration_sec)
-        if _is_last_shot_in_folder(merged.shots, index - 1) and index < len(merged.shots):
+        is_last_in_folder = _is_last_shot_in_folder(merged.shots, index - 1)
+        if is_last_in_folder:
             duration_sec += max(0.0, float(settings.section_outro_sec))
         _append_video_item(
             video_track,
@@ -501,6 +514,27 @@ def build_otio_timeline(
             export_rules=export_rules,
             timing_notes=timing_notes,
         )
+        if is_last_in_folder:
+            section = sections[section_index]
+            actual_sec = _track_duration_sec(video_track, start_index=section_track_start)
+            pad_sec = section.video_duration_sec - actual_sec
+            if pad_sec > 0.05:
+                pad = otio.schema.Gap(
+                    name=f"Ausklingen · {section.folder}"[:120],
+                    source_range=_time_range(pad_sec, rate),
+                )
+                pad.metadata["folder"] = section.folder
+                pad.metadata["otio_note"] = (
+                    "Videospur aufgefüllt — Medien kürzer als geplanter Abschnitt "
+                    f"(+{pad_sec:.1f}s bis Voice-Ende)."
+                )
+                video_track.append(pad)
+                timing_notes.append(
+                    f"{section.folder}: Videospur um {pad_sec:.1f}s aufgefüllt "
+                    f"(Ziel {section.video_duration_sec:.1f}s)"
+                )
+            section_index += 1
+            section_track_start = len(video_track)
 
     timeline.tracks.append(video_track)
     if timing_notes:
