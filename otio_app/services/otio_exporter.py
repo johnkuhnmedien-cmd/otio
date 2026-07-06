@@ -39,7 +39,6 @@ from otio_app.services.otio_export_settings import (
     load_otio_export_settings,
     save_otio_export_settings,
 )
-from otio_app.services.generic_outro import resolve_generic_outro_media
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 
 
@@ -304,12 +303,18 @@ def _compute_timeline_sections(
         voice_file = shots[index].voice_file
         section_start = video_cursor
         narration_duration = 0.0
+        section_duration = 0.0
         end_index = index
         while end_index < len(shots) and shots[end_index].folder == folder:
-            narration_duration += max(0.01, float(shots[end_index].duration_sec))
+            shot_duration = max(0.01, float(shots[end_index].duration_sec))
+            section_duration += shot_duration
+            if not shots[end_index].section_outro:
+                narration_duration += shot_duration
             end_index += 1
-        outro_sec = max(0.0, float(settings.section_outro_sec))
-        section_duration = narration_duration + outro_sec
+        # Legacy: alte Pläne ohne Ausklingen-Shot — Outro-Dauer aus Einstellungen
+        if narration_duration > 0 and narration_duration == section_duration:
+            legacy_outro = max(0.0, float(settings.section_outro_sec))
+            section_duration += legacy_outro
 
         offset = max(0.0, float(settings.audio_offset_sec))
         voice_start = section_start + offset
@@ -334,44 +339,6 @@ def _is_last_shot_in_folder(shots: list[EditPlanShot], index: int) -> bool:
     if index + 1 >= len(shots):
         return True
     return shots[index + 1].folder != shots[index].folder
-
-
-def _append_generic_outro_clip(
-    track: otio.schema.Track,
-    *,
-    media_path: Path,
-    folder: str,
-    duration_sec: float,
-    project: Project,
-    rate: float,
-    export_rules: ExportRuleOptions,
-    timing_notes: list[str] | None = None,
-) -> float:
-    """Ausklingen nach dem letzten Wort — eigenes Generic-Asset, Shot bleibt ≤ Max.-Dauer."""
-    trim = export_rules.trim_leading_sec
-    source_range, _, notes = _clip_source_range_for_media(
-        media_path,
-        fallback_rate=rate,
-        requested_duration_sec=max(0.01, duration_sec),
-        trim_leading_sec=trim,
-        hold_last_frame=True,
-    )
-    if timing_notes is not None:
-        timing_notes.extend(notes)
-    clip = otio.schema.Clip(
-        name=_clip_name_for_media(media_path, index=0),
-        media_reference=_media_reference(str(media_path), rate, trim_leading_sec=trim),
-    )
-    clip.source_range = source_range
-    clip.metadata["folder"] = folder
-    clip.metadata["motif"] = "Ausklingen (Generic)"
-    clip.metadata["generic_outro"] = True
-    clip.metadata["resolved_media_path"] = str(media_path)
-    clip.metadata["otio_note"] = (
-        f"Generic-Asset nach letztem Wort · {folder} · {duration_sec:.1f}s"
-    )
-    track.append(clip)
-    return source_range.duration.to_seconds()
 
 
 def _extend_clip_hold_last_frame(
@@ -439,6 +406,8 @@ def _append_video_item(
         video_clip.metadata["passage_text"] = shot.passage_text
         video_clip.metadata["original_asset_path"] = shot.asset_path
         video_clip.metadata["resolved_media_path"] = str(media_path)
+        if shot.section_outro:
+            video_clip.metadata["section_outro"] = True
 
         if export_rules.folder_title_enabled and not is_image_media(original):
             video_clip.metadata["folder_title"] = format_folder_display_name(shot.folder)
@@ -546,14 +515,11 @@ def build_otio_timeline(
 
     sections = _compute_timeline_sections(merged.shots, settings)
     export_rules = export_rule_options(load_edit_plan_rules(project))
-    generic_outro_media = resolve_generic_outro_media(project)
     timeline = otio.schema.Timeline(name=project.name)
     timeline.metadata["project_id"] = project.id
     timeline.metadata["included_folders"] = list(merged.included_folders)
     timeline.metadata["audio_offset_sec"] = settings.audio_offset_sec
     timeline.metadata["section_outro_sec"] = settings.section_outro_sec
-    if generic_outro_media is not None:
-        timeline.metadata["generic_outro_media"] = str(generic_outro_media)
     if export_rules.trim_leading_sec > 0:
         timeline.metadata["trim_leading_sec"] = export_rules.trim_leading_sec
     if export_rules.auto_zoom_fill:
@@ -580,37 +546,10 @@ def build_otio_timeline(
             duration_sec=duration_sec,
             export_rules=export_rules,
             timing_notes=timing_notes,
+            hold_last_frame=shot.section_outro,
         )
         if is_last_in_folder:
             section = sections[section_index]
-            outro_sec = max(0.0, float(settings.section_outro_sec))
-            if outro_sec > 0.05:
-                if generic_outro_media is not None:
-                    _append_generic_outro_clip(
-                        video_track,
-                        media_path=generic_outro_media,
-                        folder=section.folder,
-                        duration_sec=outro_sec,
-                        project=project,
-                        rate=rate,
-                        export_rules=export_rules,
-                        timing_notes=timing_notes,
-                    )
-                else:
-                    gap = otio.schema.Gap(
-                        name=f"Ausklingen · {section.folder}"[:120],
-                        source_range=_time_range(outro_sec, rate),
-                    )
-                    gap.metadata["folder"] = section.folder
-                    gap.metadata["otio_note"] = (
-                        "Kein Generic-Asset gefunden — lege z. B. "
-                        "`Generic/generic.mp4` im Projektordner an."
-                    )
-                    video_track.append(gap)
-                    timing_notes.append(
-                        f"{section.folder}: kein Generic-Asset — Gap {outro_sec:.1f}s"
-                    )
-
             actual_sec = _track_duration_sec(video_track, start_index=section_track_start)
             pad_sec = section.video_duration_sec - actual_sec
             if pad_sec > 0.05:
@@ -623,7 +562,7 @@ def build_otio_timeline(
                         folder=section.folder,
                     )
                     timing_notes.append(
-                        f"{section.folder}: Ausklingen um {pad_sec:.1f}s verlängert "
+                        f"{section.folder}: letzter Clip um {pad_sec:.1f}s verlängert "
                         f"(Ziel {section.video_duration_sec:.1f}s)"
                     )
                 else:

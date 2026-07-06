@@ -147,6 +147,7 @@ class EditPlanShot(BaseModel):
     motif: str = ""
     passage_text: str = ""
     confidence: Optional[str] = None
+    section_outro: bool = False
 
 
 class EditPlanDocument(BaseModel):

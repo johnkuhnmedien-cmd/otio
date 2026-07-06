@@ -35,7 +35,12 @@ from otio_app.services.edit_plan_rules import (
 )
 from otio_app.services.gemini_client import GeminiNotConfiguredError, plan_passage_assets
 from otio_app.services.inventory_loader import load_folder_inventory
-from otio_app.services.shot_timing import TimedPart, allocate_time_by_text, shots_from_timed_parts
+from otio_app.services.shot_timing import (
+    TimedPart,
+    allocate_time_by_text,
+    append_folder_outro_shot,
+    shots_from_timed_parts,
+)
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 
 
@@ -273,6 +278,14 @@ def build_edit_plan(
                         confidence=part.confidence,
                     )
                 )
+
+        append_folder_outro_shot(
+            shots,
+            folder_name=folder_name,
+            voice_file=voice_path,
+            outro_sec=plan_settings.section_outro_sec,
+            max_sec=plan_settings.shot_max_sec,
+        )
 
     shots = apply_edit_plan_rules(shots, rules_doc, assets_by_folder)
 

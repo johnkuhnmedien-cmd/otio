@@ -56,16 +56,27 @@ def _shot(folder: str, voice_file: str, index: int) -> EditPlanShot:
     )
 
 
+def _outro_shot(folder: str, voice_file: str, *, after_index: int) -> EditPlanShot:
+    end_voice = float(after_index * 3 + 3)
+    return EditPlanShot(
+        voice_file=voice_file,
+        folder=folder,
+        voice_start_sec=end_voice,
+        voice_end_sec=end_voice,
+        duration_sec=5.0,
+        asset_path=str(Path(f"/media/{folder.replace(' ', '_')}_outro.mp4")),
+        motif="Ausklingen",
+        passage_text="",
+        section_outro=True,
+    )
+
+
 def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
     voice_a = str(tmp_path / "USA" / "Voice over" / "DE" / "USA_Florida Keys_VO.wav")
     voice_b = str(tmp_path / "USA" / "Voice over" / "DE" / "USA_Grand Canyon_VO.wav")
     Path(voice_a).parent.mkdir(parents=True, exist_ok=True)
     Path(voice_a).write_bytes(b"wav")
     Path(voice_b).write_bytes(b"wav")
-
-    generic_dir = tmp_path / "USA" / "Generic"
-    generic_dir.mkdir(parents=True, exist_ok=True)
-    (generic_dir / "generic.mp4").write_bytes(b"mp4")
 
     mapping = VoiceFolderMappingDocument(
         project_id=project.id,
@@ -96,7 +107,11 @@ def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
             folder_name="Florida Keys",
             confirmed=True,
             settings=plan_settings,
-            shots=[_shot("Florida Keys", voice_a, 1), _shot("Florida Keys", voice_a, 2)],
+            shots=[
+                _shot("Florida Keys", voice_a, 1),
+                _shot("Florida Keys", voice_a, 2),
+                _outro_shot("Florida Keys", voice_a, after_index=2),
+            ],
         ),
         "Florida Keys",
     )
@@ -107,7 +122,10 @@ def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
             folder_name="Grand Canyon",
             confirmed=True,
             settings=plan_settings,
-            shots=[_shot("Grand Canyon", voice_b, 1)],
+            shots=[
+                _shot("Grand Canyon", voice_b, 1),
+                _outro_shot("Grand Canyon", voice_b, after_index=1),
+            ],
         ),
         "Grand Canyon",
     )
@@ -120,7 +138,7 @@ def test_merge_confirmed_edit_plans_in_mapping_order(tmp_path: Path) -> None:
     merged = merge_confirmed_edit_plans(project)
     assert merged.ready is True
     assert merged.included_folders == ["Florida Keys", "Grand Canyon"]
-    assert len(merged.shots) == 3
+    assert len(merged.shots) == 5
 
 
 def test_timeline_sections_include_outro_and_per_section_voice_offset(tmp_path: Path) -> None:
@@ -154,7 +172,7 @@ def test_clip_durations_use_seconds_not_frames(tmp_path: Path) -> None:
     clips = [item for item in video_track if isinstance(item, otio.schema.Clip)]
     assert clips[0].source_range.duration.to_seconds() == 3.0
     assert clips[1].source_range.duration.to_seconds() == 3.0
-    assert clips[2].name == "generic.mp4"
+    assert clips[2].name == "Florida_Keys_outro.mp4"
     assert clips[2].source_range.duration.to_seconds() == 5.0
     assert clips[3].source_range.duration.to_seconds() == 3.0
     assert clips[4].source_range.duration.to_seconds() == 5.0
@@ -207,9 +225,9 @@ def test_video_section_padded_when_media_shorter_than_planned(tmp_path: Path) ->
     assert not gaps
     clips = [item for item in video_track if isinstance(item, otio.schema.Clip)]
     assert clips[1].source_range.duration.to_seconds() <= 2.0
-    assert clips[2].name == "generic.mp4"
+    assert clips[2].name == "Florida_Keys_outro.mp4"
     assert clips[2].source_range.duration.to_seconds() >= 5.0
-    assert clips[4].source_range.duration.to_seconds() >= 5.0
+    assert clips[4].name == "Grand_Canyon_outro.mp4"
     total_video = sum(item.source_range.duration.to_seconds() for item in video_track)
     assert total_video == 19.0
 

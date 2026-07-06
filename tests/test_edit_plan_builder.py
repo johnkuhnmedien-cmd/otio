@@ -101,4 +101,7 @@ def test_build_edit_plan_without_gemini(
     document = build_edit_plan(project, use_api=False)
     assert document.shots
     assert document.shots[0].folder == "Grand Canyon"
-    assert all(shot.duration_sec >= 3.0 for shot in document.shots)
+    assert all(shot.duration_sec >= 3.0 for shot in document.shots if not shot.section_outro)
+    assert document.shots[-1].section_outro is True
+    assert document.shots[-1].duration_sec == 5.0
+    assert document.shots[-1].motif == "Ausklingen"
