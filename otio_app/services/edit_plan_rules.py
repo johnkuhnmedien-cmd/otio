@@ -9,6 +9,7 @@ from pathlib import Path
 
 from otio_app.analysis_models import EditPlanRule, EditPlanRulesDocument, EditPlanShot
 from otio_app.models import Project
+from otio_app.services.generic_outro_selector import asset_id_for_path
 
 RULE_MAX_ASSET_USES = "max_asset_uses"
 RULE_NO_CONSECUTIVE_SAME_ASSET = "no_consecutive_same_asset"
@@ -246,7 +247,7 @@ def create_rule_from_template(rule_type: str) -> EditPlanRule:
 def _asset_key(asset_path: str | None) -> str | None:
     if not asset_path:
         return None
-    return Path(asset_path).name
+    return asset_id_for_path(asset_path)
 
 
 def _enabled_rules(rules_doc: EditPlanRulesDocument) -> list[EditPlanRule]:

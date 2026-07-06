@@ -91,9 +91,14 @@ def _shot_to_timeline_item(
         selection_reason="Motiv aus Schnittplan-Vorschlag",
         confidence=confidence,
         transform=TimelineItemTransform(scaling_mode="fill"),
-        media_source_type=shot.asset_source,
+        media_source_type=shot.asset_source or "local",
         motif=shot.motif,
         passage_text=shot.passage_text,
+        asset_origin=shot.asset_origin,
+        supplement_request_id=shot.supplement_request_id,
+        rights_status=shot.rights_status,
+        source_url=shot.source_url,
+        provider=shot.provider,
     )
 
 
@@ -108,6 +113,8 @@ def build_narration_filler_items(
     last_asset_path: str | None,
     item_index_start: int,
     trim_leading_sec: float,
+    usage_by_asset_id: dict[str, int] | None = None,
+    max_asset_usage: int | None = None,
 ) -> tuple[list[TimelineItem], list[str]]:
     """Fügt generic_narration_visual-Elemente ein, bis target_end_sec erreicht ist."""
     errors: list[str] = []
@@ -133,6 +140,8 @@ def build_narration_filler_items(
             used_paths=used_paths,
             last_asset_path=last_asset_path,
             count=1,
+            usage_by_asset_id=usage_by_asset_id,
+            max_asset_usage=max_asset_usage,
         )
         if not candidates:
             errors.append(
@@ -187,6 +196,8 @@ def build_narration_filler_items(
         )
         used_paths.add(candidate.path)
         last_path = candidate.path
+        if usage_by_asset_id is not None:
+            usage_by_asset_id[candidate.asset_id] = usage_by_asset_id.get(candidate.asset_id, 0) + 1
         cursor = timeline_out
         remaining = target_end_sec - cursor
         index += 1
@@ -206,6 +217,8 @@ def build_outro_timeline_items(
     last_asset_path: str | None,
     item_index_start: int,
     trim_leading_sec: float,
+    usage_by_asset_id: dict[str, int] | None = None,
+    max_asset_usage: int | None = None,
 ) -> tuple[list[TimelineItem], list[str]]:
     """Erzeugt 1..n Outro-Elemente (je max. 8 s) mit explizit gewähltem Ordner-Asset."""
     errors: list[str] = []
@@ -219,6 +232,8 @@ def build_outro_timeline_items(
         used_paths=used_paths,
         last_asset_path=last_asset_path,
         count=len(durations),
+        usage_by_asset_id=usage_by_asset_id,
+        max_asset_usage=max_asset_usage,
     )
     if len(candidates) < len(durations):
         errors.append(
@@ -292,14 +307,19 @@ def build_timeline_items_for_folder(
     opening_title_font_size: float | None = None,
     work_dir: Path | None = None,
     project: Project | None = None,
+    usage_by_asset_id: dict[str, int] | None = None,
+    max_asset_usage: int | None = None,
 ) -> tuple[list[TimelineItem], VoiceoverPlan, list[str]]:
     """Baut alle Timeline-Items einer Sektion (Titel + Narration + Filler + Outro)."""
+    from otio_app.services.asset_usage import usage_count_by_asset_id_from_shots
+
     errors: list[str] = []
     section_id = section_id_for_folder(folder_name)
     items: list[TimelineItem] = []
     cursor = 0.0
     used_paths: set[str] = set()
     last_path: str | None = None
+    usage = dict(usage_by_asset_id or usage_count_by_asset_id_from_shots(narration_shots))
 
     if opening_title_enabled and work_dir is not None and project is not None:
         from otio_app.services.opening_title_renderer import build_opening_title_item
@@ -334,6 +354,8 @@ def build_timeline_items_for_folder(
         if shot.asset_path:
             used_paths.add(shot.asset_path)
             last_path = shot.asset_path
+            if shot.asset_id:
+                usage[shot.asset_id] = usage.get(shot.asset_id, 0) + 1
         items.append(item)
 
     visual_narration_end = cursor
@@ -348,6 +370,8 @@ def build_timeline_items_for_folder(
             last_asset_path=last_path,
             item_index_start=item_index_start + len(narration),
             trim_leading_sec=trim_leading_sec,
+            usage_by_asset_id=usage,
+            max_asset_usage=max_asset_usage,
         )
         errors.extend(filler_errors)
         items.extend(filler_items)
@@ -369,6 +393,8 @@ def build_timeline_items_for_folder(
             [i for i in items if i.type == "generic_narration_visual"]
         ),
         trim_leading_sec=trim_leading_sec,
+        usage_by_asset_id=usage,
+        max_asset_usage=max_asset_usage,
     )
     errors.extend(outro_errors)
     items.extend(outro_items)

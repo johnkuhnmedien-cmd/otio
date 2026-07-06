@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from otio_app.analysis_models import EditPlanSettings, TimelineItem, VoiceoverPlan
+from otio_app.analysis_models import EditPlanRulesDocument, EditPlanSettings, TimelineItem, VoiceoverPlan
+from otio_app.defaults import RIGHTS_STATUS_NEEDS_LICENSE_REVIEW, RIGHTS_STATUS_NEEDS_REVIEW
+from otio_app.services.asset_usage import append_max_usage_to_validation_report, validate_max_asset_usage_blockers
 from otio_app.services.clean_media import path_is_readable_file
 from otio_app.services.duration_rules import MAX_DURATION_SEC, MIN_DURATION_SEC
 from otio_app.services.media_utils import is_image_media
@@ -202,6 +204,8 @@ def validate_timeline_items(
     voiceover: VoiceoverPlan | None = None,
     opening_title_required: bool = False,
     require_rendered_media: bool = False,
+    rules_doc: EditPlanRulesDocument | None = None,
+    work_dir_path: Path | None = None,
 ) -> TimelineValidationResult:
     """Prüft Dauerregeln, Voice-Abdeckung und Outro-Planung."""
     result = TimelineValidationResult()
@@ -314,6 +318,32 @@ def validate_timeline_items(
         result.status = ValidationStatus.AWAITING_APPROVAL
     elif voice_result.status == ValidationStatus.BLOCKED and result.status == ValidationStatus.OK:
         result.status = ValidationStatus.BLOCKED
+
+    if rules_doc is not None:
+        usage_violations = validate_max_asset_usage_blockers(
+            timeline_items=items,
+            rules_doc=rules_doc,
+        )
+        for violation in usage_violations:
+            result.errors.append(
+                f"max_asset_usage: `{violation.asset_id}` {violation.usage_count}× "
+                f"(max {violation.max_allowed})"
+            )
+        if usage_violations:
+            result.status = ValidationStatus.BLOCKED
+            if work_dir_path is not None:
+                append_max_usage_to_validation_report(work_dir_path, usage_violations)
+
+    for item in items:
+        if item.rights_status in {
+            RIGHTS_STATUS_NEEDS_LICENSE_REVIEW,
+            RIGHTS_STATUS_NEEDS_REVIEW,
+        }:
+            result.errors.append(
+                f"{item.timeline_item_id}: rights_status={item.rights_status} — "
+                "manuelle Rechtefreigabe erforderlich."
+            )
+            result.status = ValidationStatus.BLOCKED
 
     if result.errors:
         hard_block_markers = (

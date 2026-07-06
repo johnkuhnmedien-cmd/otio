@@ -70,6 +70,19 @@ class AssetMediaAnalysis(BaseModel):
     description: str = ""
     frames_used: List[str] = Field(default_factory=list)
     error: Optional[str] = None
+    asset_id: str = ""
+    asset_origin: str = "local_original"
+    supplement_request_id: str = ""
+    rights_status: str = ""
+    source_url: str = ""
+    provider: str = ""
+    generated_prompt: str = ""
+    search_query: str = ""
+    license_metadata: dict[str, str] = Field(default_factory=dict)
+    analysis_status: str = ""
+    description_model: str = ""
+    description_prompt_version: str = ""
+    description_generated_at: Optional[datetime] = None
 
 
 class AssetFolderAnalysis(BaseModel):
@@ -162,10 +175,18 @@ class EditPlanShot(BaseModel):
     duration_sec: float
     asset_path: Optional[str] = None
     asset_source: str = "local"
+    asset_id: str = ""
+    asset_origin: str = ""
+    supplement_request_id: str = ""
+    rights_status: str = ""
+    source_url: str = ""
+    provider: str = ""
     motif: str = ""
     passage_text: str = ""
     confidence: Optional[str] = None
     section_outro: bool = False
+    beat_id: str = ""
+    coverage_status: str = ""
 
 
 class TimelineItemTransform(BaseModel):
@@ -256,6 +277,155 @@ class TimelineItem(BaseModel):
     render_required: bool = False
     rendered_media_path: str = ""
     render_hash: str = ""
+    asset_origin: str = ""
+    supplement_request_id: str = ""
+    rights_status: str = ""
+    source_url: str = ""
+    provider: str = ""
+
+
+class SegmentCoverage(BaseModel):
+    beat_id: str
+    passage_text: str
+    visual_requirement: str = ""
+    required_asset_type: str = "video_preferred"
+    preferred_mood: str = ""
+    preferred_shot_type: str = ""
+    must_show: List[str] = Field(default_factory=list)
+    avoid_showing: List[str] = Field(default_factory=list)
+    local_candidate_asset_ids: List[str] = Field(default_factory=list)
+    best_local_match_score: float = 0.0
+    best_local_asset_id: str = ""
+    coverage_status: str = "LOCAL_MISSING"
+    supplement_request_id: Optional[str] = None
+    voice_file: str = ""
+    folder_name: str = ""
+    duration_needed_sec: float = 0.0
+
+
+class SupplementRequest(BaseModel):
+    supplement_request_id: str
+    section_id: str
+    folder_name: str
+    beat_id: str
+    passage_text: str
+    visual_requirement: str = ""
+    required_asset_type: str = "video_preferred"
+    acceptable_asset_types: List[str] = Field(default_factory=lambda: ["video", "image"])
+    duration_needed_sec: float = 5.0
+    priority: str = "must_have"
+    reason: str = ""
+    local_best_asset_id: str = ""
+    local_best_match_score: float = 0.0
+    status: str = "PENDING_SOURCE_SELECTION"
+    allowed_sources: List[str] = Field(
+        default_factory=lambda: ["adobe_stock", "pexels", "google_search", "nano_banana"]
+    )
+    selected_source: Optional[str] = None
+    search_queries: dict[str, List[str]] = Field(default_factory=dict)
+    generation_prompt: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class SupplementCandidate(BaseModel):
+    candidate_id: str
+    supplement_request_id: str
+    provider: str
+    provider_asset_id: str = ""
+    title: str = ""
+    description: str = ""
+    preview_url: str = ""
+    download_url: str = ""
+    creator: str = ""
+    license: str = ""
+    license_url: str = ""
+    media_type: str = "video"
+    width: int = 0
+    height: int = 0
+    duration_sec: float = 0.0
+    source_page_url: str = ""
+    estimated_cost: float = 0.0
+    requires_purchase: bool = False
+    requires_user_approval: bool = True
+    match_score: float = 0.0
+    match_reason: str = ""
+    status: str = "CANDIDATE"
+
+
+class SupplementAssetSidecar(BaseModel):
+    asset_id: str
+    supplement_request_id: str
+    provider: str
+    provider_asset_id: str = ""
+    source_url: str = ""
+    download_url: str = ""
+    license: str = ""
+    license_url: str = ""
+    creator: str = ""
+    acquisition_method: str = ""
+    prompt: str = ""
+    search_query: str = ""
+    downloaded_at: Optional[datetime] = None
+    generated_at: Optional[datetime] = None
+    original_filename: str = ""
+    local_path: str = ""
+    file_hash: str = ""
+    rights_status: str = ""
+    cost: float = 0.0
+    requires_attribution: bool = False
+    approval_status: str = ""
+    model: str = ""
+    negative_prompt: str = ""
+    aspect_ratio: str = ""
+    output_resolution: str = ""
+    generation_settings: dict[str, str | float | bool] = Field(default_factory=dict)
+    synthid_expected: bool = False
+
+
+class SupplementRequestsDocument(BaseModel):
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    project_id: str
+    requests: List[SupplementRequest] = Field(default_factory=list)
+    candidates: List[SupplementCandidate] = Field(default_factory=list)
+
+
+class SupplementManifestEntry(BaseModel):
+    supplement_request_id: str
+    asset_id: str
+    local_path: str
+    provider: str
+    rights_status: str
+    acquired_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class SupplementManifest(BaseModel):
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    project_id: str
+    entries: List[SupplementManifestEntry] = Field(default_factory=list)
+
+
+class InventoryDeltaEntry(BaseModel):
+    asset_id: str
+    path: str
+    asset_origin: str
+    supplement_request_id: str = ""
+    added_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class InventoryDeltaDocument(BaseModel):
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    project_id: str
+    folder_name: str
+    entries: List[InventoryDeltaEntry] = Field(default_factory=list)
+
+
+class MaxAssetUsageViolation(BaseModel):
+    rule: str = "max_asset_usage"
+    asset_id: str
+    usage_count: int
+    max_allowed: int
+    severity: str = "BLOCKER"
 
 
 class EditPlanDocument(BaseModel):
@@ -268,3 +438,6 @@ class EditPlanDocument(BaseModel):
     shots: List[EditPlanShot] = Field(default_factory=list)
     timeline_items: List[TimelineItem] = Field(default_factory=list)
     allow_black_outro: bool = False
+    segment_coverage: List[SegmentCoverage] = Field(default_factory=list)
+    inventory_hash_at_plan_time: str = ""
+    supplement_request_ids: List[str] = Field(default_factory=list)

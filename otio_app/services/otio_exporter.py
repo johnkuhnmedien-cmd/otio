@@ -19,6 +19,7 @@ from otio_app.models import Project
 from otio_app.project_layout import get_otio_export_path
 from otio_app.services.edit_plan_builder import load_edit_plan
 from otio_app.services.edit_plan_rules import ExportRuleOptions, export_rule_options, load_edit_plan_rules
+from otio_app.services.inventory_hash import inventory_hash_is_stale
 from otio_app.services.media_utils import is_image_media
 from otio_app.services.otio_media_transform import (
     compute_fill_zoom_factor,
@@ -228,6 +229,17 @@ def merge_confirmed_edit_plans(
                 skipped.append(folder_name)
             continue
 
+        if plan.inventory_hash_at_plan_time and inventory_hash_is_stale(
+            project,
+            folder_name,
+            plan.inventory_hash_at_plan_time,
+        ):
+            all_validation_errors.append(
+                f"{folder_name}: Inventory geändert — bitte Schnittplan neu vorschlagen "
+                f"(inventory_hash stale)."
+            )
+            worst_status = ValidationStatus.BLOCKED
+
         if folder_name not in included:
             included.append(folder_name)
 
@@ -262,6 +274,8 @@ def merge_confirmed_edit_plans(
             fps=float(project.fps),
             voiceover=voice_for_check,
             opening_title_required=export_rules.folder_title_enabled,
+            rules_doc=load_edit_plan_rules(project),
+            work_dir_path=project.work_dir_path,
         )
         all_validation_errors.extend(f"{folder_name}: {err}" for err in validation.errors)
         warnings.extend(validation.warnings)

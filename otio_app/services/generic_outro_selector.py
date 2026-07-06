@@ -107,8 +107,13 @@ def select_generic_outro_assets(
     last_asset_path: str | None,
     count: int,
     min_duration_sec: float = 3.0,
+    excluded_asset_ids: set[str] | None = None,
+    usage_by_asset_id: dict[str, int] | None = None,
+    max_asset_usage: int | None = None,
 ) -> list[GenericAssetCandidate]:
     """Wählt bis zu ``count`` unterschiedliche Outro-Kandidaten aus dem Ordner."""
+    excluded = excluded_asset_ids or set()
+    usage = usage_by_asset_id or {}
     candidates = [
         _score_asset(
             asset["path"],
@@ -124,12 +129,18 @@ def select_generic_outro_assets(
     chosen: list[GenericAssetCandidate] = []
     chosen_paths: set[str] = set()
     for candidate in candidates:
+        if candidate.asset_id in excluded:
+            continue
+        if max_asset_usage is not None and usage.get(candidate.asset_id, 0) >= max_asset_usage:
+            continue
         if candidate.score < 0.2:
             continue
         if candidate.path in chosen_paths:
             continue
         chosen.append(candidate)
         chosen_paths.add(candidate.path)
+        if max_asset_usage is not None:
+            usage[candidate.asset_id] = usage.get(candidate.asset_id, 0) + 1
         if len(chosen) >= count:
             break
     return chosen

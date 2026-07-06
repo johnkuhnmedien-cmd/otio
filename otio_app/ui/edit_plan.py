@@ -36,11 +36,14 @@ from otio_app.services.edit_plan_rules import (
     save_edit_plan_rules,
     validate_shots_against_rules,
 )
+from otio_app.services.asset_usage import validate_max_asset_usage_blockers
+from otio_app.services.inventory_hash import current_folder_inventory_hash, inventory_hash_is_stale
 from otio_app.services.edit_plan_validator import ValidationStatus, validate_timeline_items
 from otio_app.services.opening_title_renderer import (
     ensure_opening_titles_rendered,
     title_render_is_stale,
 )
+from otio_app.services.supplement_coverage import COVERAGE_SUPPLEMENT_REQUIRED
 from otio_app.services.title_style import extract_title_style
 from otio_app.services.timeline_plan_builder import build_voiceover_plan
 from otio_app.services.otio_exporter import (
@@ -346,12 +349,23 @@ def _finalize_plan_for_confirm(
     document = document.model_copy(update={"timeline_items": timeline_items})
     notes.extend(title_notes)
 
+    if plan.inventory_hash_at_plan_time and inventory_hash_is_stale(
+        project,
+        selected_folder,
+        plan.inventory_hash_at_plan_time,
+    ):
+        raise ValueError(
+            "Inventory geändert — bitte Schnittplan mit neuen Assets neu vorschlagen."
+        )
+
     validation = validate_timeline_items(
         document.timeline_items,
         settings=document.settings,
         voiceover=document.voiceover,
         opening_title_required=rules.folder_title_enabled,
         require_rendered_media=False,
+        rules_doc=rules_doc,
+        work_dir_path=project.work_dir_path,
     )
     if validation.status == ValidationStatus.BLOCKED:
         preview = "; ".join(validation.errors[:6])
@@ -459,6 +473,62 @@ def _render_tab_review(
         )
         return
 
+    rules_doc = get_edit_plan_rules_for_project(project)
+    rules = export_rule_options(rules_doc)
+    if draft.inventory_hash_at_plan_time and inventory_hash_is_stale(
+        project,
+        selected_folder,
+        draft.inventory_hash_at_plan_time,
+    ):
+        st.error(
+            "Inventory changed — please regenerate cut plan. "
+            f"(Plan-Hash `{draft.inventory_hash_at_plan_time}`, "
+            f"aktuell `{current_folder_inventory_hash(project, selected_folder)}`)"
+        )
+
+    usage_blockers = validate_max_asset_usage_blockers(
+        timeline_items=draft.timeline_items,
+        rules_doc=rules_doc,
+    )
+    if usage_blockers:
+        st.error("max_asset_usage verletzt — Bestätigung blockiert:")
+        for violation in usage_blockers:
+            st.caption(
+                f"• `{violation.asset_id}`: {violation.usage_count}× "
+                f"(max {violation.max_allowed})"
+            )
+
+    supplement_beats = [
+        coverage
+        for coverage in draft.segment_coverage
+        if coverage.coverage_status == COVERAGE_SUPPLEMENT_REQUIRED
+    ]
+    weak_with_asset = [
+        shot
+        for shot in draft.shots
+        if shot.asset_path
+        and shot.coverage_status == COVERAGE_SUPPLEMENT_REQUIRED
+    ]
+    if supplement_beats:
+        st.warning(
+            f"{len(supplement_beats)} Beat(s) mit SUPPLEMENT_REQUIRED — "
+            "bitte unter **②½ Supplement Assets** ergänzen."
+        )
+    if weak_with_asset:
+        st.warning(
+            f"{len(weak_with_asset)} Shot(s) nutzen trotz Supplement-Bedarf ein schwaches lokales Asset."
+        )
+    google_items = [
+        item
+        for item in draft.timeline_items
+        if item.rights_status == "NEEDS_LICENSE_REVIEW"
+    ]
+    if google_items:
+        st.warning(
+            f"{len(google_items)} Google-Search-Asset(s) ohne Rechtefreigabe — "
+            "locked edit_plan blockiert."
+        )
+
     if not draft.timeline_items:
         st.warning(
             "Dieser Schnittplan ist veraltet (`timeline_items` fehlt). "
@@ -532,8 +602,16 @@ def _render_tab_review(
             st.caption(shot.passage_text)
             if shot.asset_path:
                 st.write(f"**Asset:** `{Path(shot.asset_path).name}`")
+                if shot.asset_origin and shot.asset_origin != "local_original":
+                    st.caption(
+                        f"Supplement: {shot.provider or shot.asset_origin} · "
+                        f"rights={shot.rights_status or '—'}"
+                    )
             else:
-                st.warning("Kein lokales Asset — Fallback folgt später (Adobe Stock / Pexels / KI).")
+                st.warning(
+                    "Kein Asset — bitte unter **②½ Supplement Assets** ergänzen "
+                    "oder Schnittplan neu vorschlagen."
+                )
 
     confirm = st.checkbox(
         f"Ich habe den Schnittplan für {selected_folder} geprüft und möchte ihn bestätigen",
@@ -554,21 +632,24 @@ def _render_tab_review(
                 "ohne Bestätigung wird der Schnittplan nicht exportierbar gespeichert."
             )
         else:
-            try:
-                with st.spinner("Schnittplan prüfen und speichern …"):
-                    confirmed, finalize_notes = _finalize_plan_for_confirm(
-                        project,
-                        draft,
-                        selected_folder,
-                    )
-                    save_edit_plan(project, confirmed, selected_folder)
-                    _set_draft(confirmed, selected_folder)
-                st.success(f"Bestätigt und gespeichert: `{plan_path}`")
-                for note in finalize_notes:
-                    st.caption(f"• {note}")
-                st.rerun()
-            except (OSError, ValueError) as exc:
-                st.error(str(exc))
+            if usage_blockers:
+                st.error("Bestätigung blockiert wegen max_asset_usage-Verstoß.")
+            else:
+                try:
+                    with st.spinner("Schnittplan prüfen und speichern …"):
+                        confirmed, finalize_notes = _finalize_plan_for_confirm(
+                            project,
+                            draft,
+                            selected_folder,
+                        )
+                        save_edit_plan(project, confirmed, selected_folder)
+                        _set_draft(confirmed, selected_folder)
+                    st.success(f"Bestätigt und gespeichert: `{plan_path}`")
+                    for note in finalize_notes:
+                        st.caption(f"• {note}")
+                    st.rerun()
+                except (OSError, ValueError) as exc:
+                    st.error(str(exc))
 
     with st.expander("JSON-Vorschau", expanded=False):
         st.code(draft.model_dump_json(indent=2)[:6000])

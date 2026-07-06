@@ -12,9 +12,10 @@ from otio_app.ui.activity import record_script_run, render_activity_panel
 from otio_app.ui.analysis_jobs_ui import render_analysis_jobs_banner
 from otio_app.ui.clean_media import render_clean_media_page
 from otio_app.ui.edit_plan import render_edit_plan_page
-from otio_app.ui.navigation import ACTIVE_PROJECT_KEY, PAGE_ANALYSIS, PAGE_MAPPING
+from otio_app.ui.navigation import ACTIVE_PROJECT_KEY, PAGE_ANALYSIS, PAGE_MAPPING, PAGE_SUPPLEMENT
 from otio_app.ui.page_state import clear_page_widget_state
 from otio_app.ui.project_workbench import render_project_workbench
+from otio_app.ui.supplement_assets import render_supplement_assets_page
 from otio_app.ui.system_status import render_system_status_page
 from otio_app.ui.voice_folder_mapping import render_voice_folder_mapping
 
@@ -61,9 +62,8 @@ def run_app_navigation(
         PAGE_MAPPING,
         PAGE_NEW,
         PAGE_STATUS,
+        PAGE_SUPPLEMENT,
     )
-
-    if not hasattr(st, "navigation"):
         _run_legacy_pages(
             render_new_project=render_new_project,
             render_project_list=render_project_list,
@@ -89,6 +89,11 @@ def run_app_navigation(
             url_path="zuordnung",
         ),
         st.Page(
+            _wrap_page(PAGE_SUPPLEMENT, render_supplement_assets_page, show_jobs_banner=True),
+            title=PAGE_SUPPLEMENT,
+            url_path="supplement-assets",
+        ),
+        st.Page(
             _wrap_page(
                 PAGE_EDIT_PLAN,
                 render_edit_plan_page,
@@ -103,7 +108,7 @@ def run_app_navigation(
 
     with st.sidebar:
         st.caption(f"Build: **{format_build_label()}**")
-        st.caption("Workflow: ⓪ → ① → ② → ③ · Diagnose unter Systemstatus")
+        st.caption("Workflow: ⓪ → ① → ② → ②½ → ③ · Diagnose unter Systemstatus")
         render_activity_panel()
 
     navigation = st.navigation(pages, position="sidebar")
@@ -126,6 +131,7 @@ def _run_legacy_pages(
         PAGE_MAPPING,
         PAGE_NEW,
         PAGE_STATUS,
+        PAGE_SUPPLEMENT,
     )
 
     with st.sidebar:
@@ -155,6 +161,8 @@ def _run_legacy_pages(
         _wrap_page(PAGE_ANALYSIS, render_project_workbench)()
     elif page == PAGE_MAPPING:
         _wrap_page(PAGE_MAPPING, render_voice_folder_mapping, show_jobs_banner=True)()
+    elif page == PAGE_SUPPLEMENT:
+        _wrap_page(PAGE_SUPPLEMENT, render_supplement_assets_page, show_jobs_banner=True)()
     elif page == PAGE_EDIT_PLAN:
         _wrap_page(
             PAGE_EDIT_PLAN,

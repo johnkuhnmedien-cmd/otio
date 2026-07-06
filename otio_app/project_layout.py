@@ -93,6 +93,41 @@ def get_folder_edit_plan_path(work_dir: Path, folder_name: str) -> Path:
     return get_edit_plan_dir(work_dir) / f"{safe_folder_slug(folder_name)}.json"
 
 
+def get_supplement_dir(work_dir: Path) -> Path:
+    """Verzeichnis für Supplement-Workflow-Dateien."""
+    from otio_app.defaults import SUPPLEMENT_SUBDIR
+
+    return work_dir / SUPPLEMENT_SUBDIR
+
+
+def get_supplement_requests_path(work_dir: Path) -> Path:
+    from otio_app.defaults import SUPPLEMENT_REQUESTS_FILENAME
+
+    return get_supplement_dir(work_dir) / SUPPLEMENT_REQUESTS_FILENAME
+
+
+def get_supplement_manifest_path(work_dir: Path) -> Path:
+    from otio_app.defaults import SUPPLEMENT_MANIFEST_FILENAME
+
+    return get_supplement_dir(work_dir) / SUPPLEMENT_MANIFEST_FILENAME
+
+
+def get_folder_inventory_delta_path(work_dir: Path, folder_name: str) -> Path:
+    from otio_app.defaults import INVENTORY_DELTA_SUFFIX
+
+    return get_inventory_dir(work_dir) / f"{safe_folder_slug(folder_name)}{INVENTORY_DELTA_SUFFIX}"
+
+
+def get_folder_supplemental_dir(project_root: Path, folder_name: str) -> Path:
+    from otio_app.defaults import SUPPLEMENTAL_FOLDER_NAME
+
+    return project_root / folder_name / SUPPLEMENTAL_FOLDER_NAME
+
+
+def get_provider_supplemental_dir(project_root: Path, folder_name: str, provider: str) -> Path:
+    return get_folder_supplemental_dir(project_root, folder_name) / f"_{provider}"
+
+
 def get_exports_dir(work_dir: Path) -> Path:
     """Verzeichnis für OTIO-Exporte unter dem Arbeitsordner."""
     from otio_app.defaults import EXPORTS_SUBDIR

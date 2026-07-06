@@ -35,8 +35,23 @@ from otio_app.services.edit_plan_rules import (
     gemini_prompt_text,
     load_edit_plan_rules,
 )
+from otio_app.services.asset_usage import (
+    filter_assets_by_usage,
+    max_asset_usage_limit,
+    usage_count_by_asset_id_from_shots,
+)
+from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.gemini_client import GeminiNotConfiguredError, plan_passage_assets
+from otio_app.services.inventory_hash import compute_folder_inventory_hash
 from otio_app.services.inventory_loader import load_folder_inventory
+from otio_app.services.supplement_coverage import (
+    COVERAGE_SUPPLEMENT_REQUIRED,
+    coverage_to_supplement_request,
+    evaluate_segment_coverage,
+    score_asset_match,
+)
+from otio_app.services.supplement_requests import upsert_requests
+from otio_app.defaults import DEFAULT_COVERAGE_THRESHOLD
 from otio_app.services.shot_timing import (
     TimedPart,
     allocate_time_by_text,
@@ -226,28 +241,68 @@ def build_edit_plan(
     shots: list[EditPlanShot] = []
     assets_by_folder: dict[str, list[str]] = {}
     assets_payload_by_folder: dict[str, list[dict[str, str]]] = {}
+    segment_coverages: list = []
+    supplement_request_ids: list[str] = []
+    pending_supplement_requests: list = []
+    inventory_hashes: dict[str, str] = {}
+    max_count = max_asset_usage_limit(rules_doc)
+    usage_by_folder: dict[str, dict[str, int]] = {}
+
     for voice_path, folder_name in mapping_by_voice.items():
         voice_entry = voice_files.get(voice_path)
         if voice_entry is None:
             continue
 
         folder_inventory = load_folder_inventory(project, folder_name)
+        inventory_hashes[folder_name] = compute_folder_inventory_hash(folder_inventory)
         asset_payload = [
-            {"path": asset.path, "description": asset.description}
+            {
+                "path": asset.path,
+                "description": asset.description,
+                "asset_id": asset.asset_id or asset_id_for_path(asset.path),
+                "asset_origin": asset.asset_origin or "local_original",
+                "rights_status": asset.rights_status,
+                "provider": asset.provider,
+                "source_url": asset.source_url,
+                "supplement_request_id": asset.supplement_request_id,
+            }
             for asset in folder_inventory.assets
             if asset.description or asset.path
         ]
         allowed_paths = {asset["path"] for asset in asset_payload}
         assets_by_folder[folder_name] = [asset["path"] for asset in asset_payload]
         assets_payload_by_folder[folder_name] = list(asset_payload)
+        usage_by_folder[folder_name] = {}
 
+        beat_index = 0
         for segment in voice_entry.segments:
             if not segment.text.strip():
                 continue
+            beat_index += 1
+            beat_id = f"beat_{beat_index:03d}"
+            coverage = evaluate_segment_coverage(
+                beat_id=beat_id,
+                segment=segment,
+                folder_name=folder_name,
+                voice_file=voice_path,
+                assets=folder_inventory.assets,
+            )
+            segment_coverages.append(coverage)
+            supplement_request = coverage_to_supplement_request(coverage)
+            if supplement_request is not None:
+                pending_supplement_requests.append(supplement_request)
+                supplement_request_ids.append(supplement_request.supplement_request_id)
+
+            folder_usage = usage_by_folder[folder_name]
+            allowed_assets = filter_assets_by_usage(
+                asset_payload,
+                usage=folder_usage,
+                max_count=max_count,
+            )
             raw_parts = _parts_from_gemini_or_local(
                 segment.text,
                 folder_name,
-                asset_payload,
+                allowed_assets,
                 voice_doc.language,
                 plan_settings,
                 use_api=use_api,
@@ -266,6 +321,43 @@ def build_edit_plan(
                     part.get("asset_path"),
                     allowed_paths,
                 )
+                asset_meta = next(
+                    (asset for asset in asset_payload if asset["path"] == asset_path),
+                    None,
+                )
+                if asset_path and coverage.coverage_status == COVERAGE_SUPPLEMENT_REQUIRED:
+                    description = asset_meta.get("description", "") if asset_meta else ""
+                    match_score = score_asset_match(
+                        passage_text=segment.text,
+                        visual_requirement=coverage.visual_requirement,
+                        description=description,
+                        must_show=coverage.must_show,
+                    )
+                    if match_score < DEFAULT_COVERAGE_THRESHOLD:
+                        asset_path = None
+                        asset_meta = None
+                asset_id = ""
+                asset_origin = ""
+                supplement_request_id = ""
+                rights_status = ""
+                source_url = ""
+                provider = ""
+                asset_source = FALLBACK_SOURCE_MISSING
+                if asset_meta is not None:
+                    asset_id = str(asset_meta.get("asset_id", ""))
+                    asset_origin = str(asset_meta.get("asset_origin", "local_original"))
+                    supplement_request_id = str(asset_meta.get("supplement_request_id", ""))
+                    rights_status = str(asset_meta.get("rights_status", ""))
+                    source_url = str(asset_meta.get("source_url", ""))
+                    provider = str(asset_meta.get("provider", ""))
+                    asset_source = asset_origin if asset_origin else FALLBACK_SOURCE_LOCAL
+                elif asset_path:
+                    asset_id = asset_id_for_path(asset_path)
+                    asset_source = FALLBACK_SOURCE_LOCAL
+                if asset_id:
+                    usage_by_folder[folder_name][asset_id] = (
+                        usage_by_folder[folder_name].get(asset_id, 0) + 1
+                    )
                 timed_parts.append(
                     TimedPart(
                         text=str(part.get("text", "")).strip(),
@@ -284,6 +376,10 @@ def build_edit_plan(
             )
             for part in normalized:
                 source = FALLBACK_SOURCE_LOCAL if part.asset_path else FALLBACK_SOURCE_MISSING
+                meta = next(
+                    (asset for asset in asset_payload if asset["path"] == part.asset_path),
+                    None,
+                )
                 shots.append(
                     EditPlanShot(
                         voice_file=voice_path,
@@ -292,12 +388,25 @@ def build_edit_plan(
                         voice_end_sec=part.end_sec,
                         duration_sec=max(0.0, part.end_sec - part.start_sec),
                         asset_path=part.asset_path,
-                        asset_source=source,
+                        asset_source=meta.get("asset_origin", source) if meta else source,
+                        asset_id=meta.get("asset_id", "") if meta else (
+                            asset_id_for_path(part.asset_path) if part.asset_path else ""
+                        ),
+                        asset_origin=meta.get("asset_origin", "") if meta else "",
+                        supplement_request_id=meta.get("supplement_request_id", "") if meta else "",
+                        rights_status=meta.get("rights_status", "") if meta else "",
+                        source_url=meta.get("source_url", "") if meta else "",
+                        provider=meta.get("provider", "") if meta else "",
                         motif=part.motif,
                         passage_text=part.text,
                         confidence=part.confidence,
+                        beat_id=beat_id,
+                        coverage_status=coverage.coverage_status,
                     )
                 )
+
+    if pending_supplement_requests:
+        upsert_requests(project, pending_supplement_requests)
 
     shots = apply_edit_plan_rules(shots, rules_doc, assets_by_folder)
 
@@ -327,6 +436,8 @@ def build_edit_plan(
             opening_title_font_size=export_opts.folder_title_font_size,
             work_dir=project.work_dir_path,
             project=project,
+            usage_by_asset_id=usage_count_by_asset_id_from_shots(folder_shots),
+            max_asset_usage=max_count,
         )
         plan_errors.extend(errors)
         timeline_items.extend(section_items)
@@ -338,6 +449,12 @@ def build_edit_plan(
 
     shots = shots_from_timeline_items(timeline_items)
 
+    plan_inventory_hash = ""
+    if primary_folder:
+        plan_inventory_hash = inventory_hashes.get(primary_folder, "")
+    elif inventory_hashes:
+        plan_inventory_hash = next(iter(inventory_hashes.values()))
+
     return EditPlanDocument(
         project_id=project.id,
         folder_name=primary_folder,
@@ -346,6 +463,9 @@ def build_edit_plan(
         voiceover=voiceover_plan,
         shots=shots,
         timeline_items=timeline_items,
+        segment_coverage=segment_coverages,
+        inventory_hash_at_plan_time=plan_inventory_hash,
+        supplement_request_ids=sorted(set(supplement_request_ids)),
     )
 
 
