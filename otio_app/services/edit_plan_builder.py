@@ -325,9 +325,8 @@ def build_edit_plan(
             opening_title_font=export_opts.folder_title_font,
             opening_title_duration_sec=export_opts.folder_title_duration_sec,
             opening_title_font_size=export_opts.folder_title_font_size,
-            video_width=project.width,
-            video_height=project.height,
             work_dir=project.work_dir_path,
+            project=project,
         )
         plan_errors.extend(errors)
         timeline_items.extend(section_items)

@@ -37,7 +37,11 @@ from otio_app.services.edit_plan_rules import (
     validate_shots_against_rules,
 )
 from otio_app.services.edit_plan_validator import ValidationStatus, validate_timeline_items
-from otio_app.services.opening_title_renderer import apply_opening_titles_to_plan
+from otio_app.services.opening_title_renderer import (
+    ensure_opening_titles_rendered,
+    title_render_is_stale,
+)
+from otio_app.services.title_style import extract_title_style
 from otio_app.services.timeline_plan_builder import build_voiceover_plan
 from otio_app.services.otio_exporter import (
     MergedEditPlanResult,
@@ -335,11 +339,9 @@ def _finalize_plan_for_confirm(
             "Bitte unter „Vorschlag“ den Schnittplan neu generieren."
         )
 
-    timeline_items, title_notes = apply_opening_titles_to_plan(
+    timeline_items, title_notes = ensure_opening_titles_rendered(
         project,
         document.timeline_items,
-        folder_name=selected_folder,
-        export_opts=rules,
     )
     document = document.model_copy(update={"timeline_items": timeline_items})
     notes.extend(title_notes)
@@ -401,32 +403,28 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
                 )
                 export_opts = export_rule_options(rules_doc)
                 if export_opts.folder_title_enabled:
-                    timeline_items, title_notes = apply_opening_titles_to_plan(
+                    timeline_items, title_notes = ensure_opening_titles_rendered(
                         project,
                         document.timeline_items,
-                        folder_name=selected_folder,
-                        export_opts=export_opts,
                     )
                     document = document.model_copy(update={"timeline_items": timeline_items})
             _set_draft(document, selected_folder)
             st.success(f"{len(document.shots)} Shots vorgeschlagen.")
-            if export_opts.folder_title_enabled and title_notes:
-                for note in title_notes:
-                    st.caption(f"• {note}")
                 title_item = next(
                     (item for item in document.timeline_items if item.type == "opening_title"),
                     None,
                 )
-                if title_item is not None:
-                    size_label = (
-                        f"{int(round(title_item.font_size))}px"
-                        if export_opts.folder_title_font_size is not None
-                        else f"{int(round(title_item.font_size))}px (auto)"
-                    )
+                if title_item is not None and title_item.title_style is not None:
+                    style = title_item.title_style
                     st.caption(
-                        f"Titel: **{title_item.requested_font_family}** · {size_label} · "
-                        f"{title_item.duration_sec:.1f}s"
+                        f"Titel: **{style.text}** · {style.requested_font_family} "
+                        f"→ {style.resolved_font_family} · **{int(style.font_size_px)}px** · "
+                        f"{style.duration_sec:.1f}s · hash `{style.render_hash}`"
                     )
+                    if style.font_fallback_used:
+                        st.warning("Font-Fallback aktiv — siehe validation_report.json.")
+                for note in title_notes:
+                    st.caption(f"• {note}")
             st.rerun()
         except (GeminiNotConfiguredError, ValueError, FileNotFoundError) as exc:
             st.error(str(exc))
@@ -466,6 +464,51 @@ def _render_tab_review(
             "Dieser Schnittplan ist veraltet (`timeline_items` fehlt). "
             "Bitte unter **Vorschlag** erneut **Schnittplan vorschlagen**."
         )
+
+    title_item = next((item for item in draft.timeline_items if item.type == "opening_title"), None)
+    if title_item is not None:
+        try:
+            style = extract_title_style(title_item, project)
+            stale = title_render_is_stale(title_item, project)
+            st.markdown("**Opening Title**")
+            st.caption(
+                f"Text: **{style.text}** · Schrift: {style.requested_font_family} "
+                f"→ {style.resolved_font_family} · **{int(style.font_size_px)} px** · "
+                f"{style.duration_sec:.1f}s · Position: {style.position}"
+            )
+            st.caption(
+                f"Shadow: {'ja' if style.shadow_enabled else 'nein'} "
+                f"({style.shadow_opacity:.0%}, offset {style.shadow_offset_x:.0f}/"
+                f"{style.shadow_offset_y:.0f}) · Hash: `{style.render_hash or '—'}`"
+            )
+            if style.font_fallback_used:
+                st.warning(f"Font-Fallback: {style.font_resolution_warning or style.resolved_font_family}")
+            if stale:
+                st.warning(
+                    "Title settings changed — title render is stale. "
+                    "Bitte Schnittplan neu vorschlagen oder **Titel neu rendern**."
+                )
+            if style.output_png_path and Path(style.output_png_path).is_file():
+                st.image(style.output_png_path, caption="Titel-Preview (PNG mit Alpha)")
+            rerender_col1, _ = st.columns([1, 3])
+            with rerender_col1:
+                if st.button(
+                    "Titel neu rendern",
+                    key=f"rerender_title_{project.id}_{safe_folder_slug(selected_folder)}",
+                ):
+                    with st.spinner("Titel wird neu gerendert …"):
+                        items, notes = ensure_opening_titles_rendered(
+                            project,
+                            draft.timeline_items,
+                            force=True,
+                        )
+                        draft = draft.model_copy(update={"timeline_items": items})
+                        _set_draft(draft, selected_folder)
+                    for note in notes:
+                        st.caption(f"• {note}")
+                    st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
 
     st.markdown(
         f"**{selected_folder}** · {len(draft.shots)} Shots "

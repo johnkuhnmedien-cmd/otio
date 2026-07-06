@@ -715,34 +715,50 @@ def _append_opening_title_clip(
     *,
     rate: float,
 ) -> None:
-    """Platziert gerenderten Opening-Title-Clip auf V2."""
+    """Platziert gerenderten Opening-Title-Clip auf V2 — nur rendered_media_path aus Plan."""
     media_path = Path(item.rendered_media_path or item.resolved_media_path)
+    if media_path.suffix.lower() in {".jpg", ".jpeg"}:
+        raise ValueError(f"JPG darf nicht als Titel-Overlay verwendet werden: {media_path}")
+
     duration_sec = item.final_duration_sec or item.duration_sec
     media_rate = rate
     timing = probe_media_timing(media_path, default_rate=rate)
     if timing.rate:
         media_rate = timing.rate
 
+    style = item.title_style
+    display_text = style.text if style is not None else item.text
     title_clip = otio.schema.Clip(
-        name=f"Title · {item.text[:80]}",
+        name=f"Title · {display_text[:80]}",
         media_reference=_media_reference(str(media_path), rate, trim_leading_sec=0.0),
     )
     title_clip.source_range = _time_range(max(0.01, duration_sec), media_rate, start_sec=0.0)
     title_clip.metadata["timeline_item_id"] = item.timeline_item_id
     title_clip.metadata["type"] = "opening_title"
-    title_clip.metadata["track"] = "V2"
-    title_clip.metadata["text"] = item.text
-    title_clip.metadata["folder"] = item.folder_name
-    title_clip.metadata["requested_font_family"] = item.requested_font_family
-    title_clip.metadata["resolved_font_family"] = item.resolved_font_family
-    title_clip.metadata["font_fallback_used"] = item.font_fallback_used
-    title_clip.metadata["font_size"] = item.font_size
-    title_clip.metadata["shadow_enabled"] = item.shadow_enabled
-    title_clip.metadata["shadow_opacity"] = item.shadow_opacity
-    title_clip.metadata["position"] = item.position
-    title_clip.metadata["fade_in_sec"] = item.fade_in_sec
-    title_clip.metadata["fade_out_sec"] = item.fade_out_sec
+    title_clip.metadata["track"] = item.track or "V2"
+    title_clip.metadata["timeline_in_sec"] = round(item.timeline_in_sec, 4)
+    title_clip.metadata["timeline_out_sec"] = round(item.timeline_out_sec, 4)
+    title_clip.metadata["duration_sec"] = round(duration_sec, 4)
     title_clip.metadata["rendered_media_path"] = str(media_path)
+    title_clip.metadata["folder"] = item.folder_name
+    if style is not None:
+        title_clip.metadata["text"] = style.text
+        title_clip.metadata["render_hash"] = style.render_hash
+        title_clip.metadata["requested_font_family"] = style.requested_font_family
+        title_clip.metadata["resolved_font_family"] = style.resolved_font_family
+        title_clip.metadata["font_fallback_used"] = style.font_fallback_used
+        title_clip.metadata["font_size_px"] = style.font_size_px
+        title_clip.metadata["shadow_enabled"] = style.shadow_enabled
+        title_clip.metadata["shadow_opacity"] = style.shadow_opacity
+        title_clip.metadata["shadow_offset_x"] = style.shadow_offset_x
+        title_clip.metadata["shadow_offset_y"] = style.shadow_offset_y
+        title_clip.metadata["position"] = style.position
+        title_clip.metadata["fade_in_sec"] = style.fade_in_sec
+        title_clip.metadata["fade_out_sec"] = style.fade_out_sec
+        title_clip.metadata["render_manifest_path"] = style.render_manifest_path
+    else:
+        title_clip.metadata["text"] = item.text
+        title_clip.metadata["font_size_px"] = item.font_size_px or item.font_size
     track.append(title_clip)
 
 

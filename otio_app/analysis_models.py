@@ -176,6 +176,39 @@ class TimelineItemTransform(BaseModel):
     position_y: float = 0.0
 
 
+class TitleStyle(BaseModel):
+    """Stil für opening_title — einzige Quelle für Title-Renderer."""
+
+    text: str = ""
+    timeline_width: int = 1920
+    timeline_height: int = 1080
+    duration_sec: float = 5.0
+    fps: float = 25.0
+    requested_font_family: str = ""
+    resolved_font_family: str = ""
+    resolved_font_file_path: str = ""
+    font_fallback_used: bool = False
+    font_resolution_warning: str = ""
+    font_size_px: float = 72.0
+    font_color: str = "#FFFFFF"
+    shadow_enabled: bool = True
+    shadow_color: str = "#000000"
+    shadow_opacity: float = 0.5
+    shadow_offset_x: float = 3.0
+    shadow_offset_y: float = 3.0
+    position: str = "lower_third"
+    margin_x: int = 76
+    margin_y: int = 108
+    fade_in_sec: float = 0.35
+    fade_out_sec: float = 0.35
+    render_format: str = "prores4444"
+    alpha_required: bool = True
+    render_hash: str = ""
+    render_manifest_path: str = ""
+    output_mov_path: str = ""
+    output_png_path: str = ""
+
+
 class TimelineItem(BaseModel):
     timeline_item_id: str
     type: str
@@ -204,20 +237,25 @@ class TimelineItem(BaseModel):
     passage_text: str = ""
     allow_black: bool = False
     track: str = "V1"
+    title_style: Optional[TitleStyle] = None
+    # Legacy-Felder — nur für opening_title / Migration; video_shot bleibt leer.
     text: str = ""
     requested_font_family: str = ""
     resolved_font_family: str = ""
+    resolved_font_file_path: str = ""
     font_fallback_used: bool = False
-    font_size: float = 72.0
-    shadow_enabled: bool = True
-    shadow_opacity: float = 0.5
-    shadow_offset_x: float = 3.0
-    shadow_offset_y: float = 3.0
-    position: str = "lower_third"
-    fade_in_sec: float = 0.5
-    fade_out_sec: float = 0.5
+    font_size_px: float = 0.0
+    font_size: float = 0.0
+    shadow_enabled: bool = False
+    shadow_opacity: float = 0.0
+    shadow_offset_x: float = 0.0
+    shadow_offset_y: float = 0.0
+    position: str = ""
+    fade_in_sec: float = 0.0
+    fade_out_sec: float = 0.0
     render_required: bool = False
     rendered_media_path: str = ""
+    render_hash: str = ""
 
 
 class EditPlanDocument(BaseModel):
