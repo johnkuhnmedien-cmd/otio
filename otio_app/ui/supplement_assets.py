@@ -35,6 +35,7 @@ from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.supplement_coverage import COVERAGE_SUPPLEMENT_REQUIRED, coverage_to_supplement_request
 from otio_app.services.supplement_pipeline import (
     acquire_supplement_candidate,
+    acquire_google_candidate_for_private_use,
     analyze_supplement_asset,
     approve_adobe_candidate,
     extend_folder_inventory,
@@ -349,17 +350,33 @@ def render_supplement_assets_page() -> None:
                             st.error(str(exc))
                 elif candidate.provider == SUPPLEMENT_SOURCE_GOOGLE:
                     st.warning(
-                        "Google Suche ist nur Discovery. Dieses Asset wird nicht automatisch "
-                        "heruntergeladen und darf erst nach Rechteprüfung verwendet werden."
+                        "Google Suche liefert externe Treffer. Für private Nutzung kannst du "
+                        "die gefundene Medien-URL automatisch herunterladen."
                     )
                     if candidate.source_page_url:
                         st.link_button("Google-Treffer im Browser öffnen", candidate.source_page_url)
                     if candidate.download_url:
                         st.caption(f"Gefundene Medien-URL: `{candidate.download_url}`")
-                    st.caption(
-                        "Nächster Schritt: Datei nach Rechteprüfung manuell speichern "
-                        "und als manuelles Supplement-Asset übernehmen."
+                    private_ok = st.checkbox(
+                        "Ich nutze dieses Google-Asset nur privat und möchte es automatisch herunterladen",
+                        key=f"google_private_ok_{request.supplement_request_id}",
                     )
+                    if st.button(
+                        "Google-Asset automatisch herunterladen",
+                        key=f"google_download_{request.supplement_request_id}",
+                        disabled=not private_ok or not bool(candidate.download_url),
+                    ):
+                        try:
+                            downloaded = acquire_google_candidate_for_private_use(
+                                project,
+                                candidate,
+                                request,
+                            )
+                            st.success(f"Google-Asset gespeichert: `{downloaded.local_path}`")
+                            st.rerun()
+                        except (OSError, ValueError, PermissionError, RuntimeError) as exc:
+                            st.error(str(exc))
+                    st.caption("Alternativ kannst du weiterhin eine manuell heruntergeladene Datei übernehmen.")
                     manual_path = st.text_input(
                         "Lokaler Pfad nach manuellem Download",
                         key=f"manual_path_{request.supplement_request_id}",

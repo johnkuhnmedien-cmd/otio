@@ -42,6 +42,7 @@ from otio_app.services.supplement_coverage import (
     score_asset_match,
 )
 from otio_app.services.supplement_pipeline import (
+    acquire_google_candidate_for_private_use,
     acquire_supplement_candidate,
     analyze_supplement_asset,
     extend_folder_inventory,
@@ -193,8 +194,10 @@ def test_google_candidate_needs_license_review(tmp_path: Path) -> None:
     assert candidate.requires_user_approval is True
 
 
-def test_google_candidate_is_discovery_only(tmp_path: Path) -> None:
+def test_google_candidate_can_download_for_private_use(tmp_path: Path) -> None:
     project = _project(tmp_path)
+    source = tmp_path / "google-source.jpg"
+    source.write_bytes(b"google-image")
     request = SupplementRequest(
         supplement_request_id="supp_req_google_discovery",
         section_id="section_antelope_canyon",
@@ -206,8 +209,12 @@ def test_google_candidate_is_discovery_only(tmp_path: Path) -> None:
     from otio_app.services.supplement_sources.google_search import GoogleSearchAdapter
 
     candidate = GoogleSearchAdapter().search(request)[0]
-    with pytest.raises(PermissionError, match="Discovery"):
-        acquire_supplement_candidate(project, candidate, request)
+    candidate = candidate.model_copy(update={"download_url": source.as_uri()})
+    asset = acquire_google_candidate_for_private_use(project, candidate, request)
+    assert asset.local_path.is_file()
+    assert asset.sidecar.provider == SUPPLEMENT_SOURCE_GOOGLE
+    assert asset.sidecar.rights_status == RIGHTS_STATUS_APPROVED
+    assert asset.sidecar.approval_status == "PRIVATE_USE_ACKNOWLEDGED"
 
 
 def test_manual_import_creates_sidecar(tmp_path: Path) -> None:

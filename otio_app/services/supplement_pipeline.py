@@ -5,6 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -162,6 +165,67 @@ def acquire_supplement_candidate(
         selected_source=candidate.provider,
     )
     return SupplementAsset(local_path=asset.local_path, sidecar=sidecar)
+
+
+def _extension_from_candidate(candidate: SupplementCandidate) -> str:
+    parsed = urllib.parse.urlparse(candidate.download_url or candidate.preview_url)
+    suffix = Path(urllib.parse.unquote(parsed.path)).suffix.lower()
+    if suffix:
+        return suffix
+    if candidate.media_type == "image":
+        return ".jpg"
+    return ".mp4"
+
+
+def acquire_google_candidate_for_private_use(
+    project: Project,
+    candidate: SupplementCandidate,
+    request: SupplementRequest,
+) -> SupplementAsset:
+    """Lädt einen Google-Discovery-Treffer nach expliziter Privatnutzungs-Bestätigung."""
+    if candidate.provider != SUPPLEMENT_SOURCE_GOOGLE:
+        raise ValueError(f"Kein Google-Kandidat: {candidate.provider}")
+    if not candidate.download_url:
+        raise ValueError("Google-Kandidat hat keine download_url.")
+
+    destination = _destination_folder(project, request.folder_name, SUPPLEMENT_SOURCE_GOOGLE)
+    destination.mkdir(parents=True, exist_ok=True)
+    extension = _extension_from_candidate(candidate)
+    local_path = destination / (
+        f"{request.supplement_request_id}_google_{candidate.provider_asset_id}{extension}"
+    )
+    try:
+        with urllib.request.urlopen(candidate.download_url, timeout=60) as response:
+            local_path.write_bytes(response.read())
+    except (urllib.error.URLError, OSError) as exc:
+        raise RuntimeError(f"Google-Medien-Download fehlgeschlagen: {exc}") from exc
+
+    sidecar = SupplementAssetSidecar(
+        asset_id=f"asset_google_{candidate.provider_asset_id}",
+        supplement_request_id=request.supplement_request_id,
+        provider=SUPPLEMENT_SOURCE_GOOGLE,
+        provider_asset_id=candidate.provider_asset_id,
+        source_url=candidate.source_page_url,
+        download_url=candidate.download_url,
+        license=candidate.license or "Google Discovery — private Nutzung bestätigt",
+        license_url=candidate.license_url,
+        creator=candidate.creator,
+        acquisition_method="google_private_download",
+        downloaded_at=datetime.now(timezone.utc),
+        original_filename=Path(urllib.parse.urlparse(candidate.download_url).path).name,
+        local_path=str(local_path),
+        file_hash=_file_hash(local_path),
+        rights_status=RIGHTS_STATUS_APPROVED,
+        approval_status="PRIVATE_USE_ACKNOWLEDGED",
+    )
+    save_sidecar(sidecar)
+    update_request(
+        project,
+        request.supplement_request_id,
+        status="ACQUIRED",
+        selected_source=SUPPLEMENT_SOURCE_GOOGLE,
+    )
+    return SupplementAsset(local_path=local_path, sidecar=sidecar)
 
 
 def import_manual_supplement_asset(
