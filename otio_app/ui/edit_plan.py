@@ -410,21 +410,21 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
                     document = document.model_copy(update={"timeline_items": timeline_items})
             _set_draft(document, selected_folder)
             st.success(f"{len(document.shots)} Shots vorgeschlagen.")
-                title_item = next(
-                    (item for item in document.timeline_items if item.type == "opening_title"),
-                    None,
+            title_item = next(
+                (item for item in document.timeline_items if item.type == "opening_title"),
+                None,
+            )
+            if title_item is not None and title_item.title_style is not None:
+                style = title_item.title_style
+                st.caption(
+                    f"Titel: **{style.text}** · {style.requested_font_family} "
+                    f"→ {style.resolved_font_family} · **{int(style.font_size_px)}px** · "
+                    f"{style.duration_sec:.1f}s · hash `{style.render_hash}`"
                 )
-                if title_item is not None and title_item.title_style is not None:
-                    style = title_item.title_style
-                    st.caption(
-                        f"Titel: **{style.text}** · {style.requested_font_family} "
-                        f"→ {style.resolved_font_family} · **{int(style.font_size_px)}px** · "
-                        f"{style.duration_sec:.1f}s · hash `{style.render_hash}`"
-                    )
-                    if style.font_fallback_used:
-                        st.warning("Font-Fallback aktiv — siehe validation_report.json.")
-                for note in title_notes:
-                    st.caption(f"• {note}")
+                if style.font_fallback_used:
+                    st.warning("Font-Fallback aktiv — siehe validation_report.json.")
+            for note in title_notes:
+                st.caption(f"• {note}")
             st.rerun()
         except (GeminiNotConfiguredError, ValueError, FileNotFoundError) as exc:
             st.error(str(exc))
