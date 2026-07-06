@@ -128,13 +128,37 @@ def build_pexels_query_variants(request: SupplementRequest) -> list[str]:
     location = base_location_for_request(request)
     preferred = ensure_location_in_query(preferred_search_query(request), location)
     variants = [
-        preferred,
         location,
+        f"{location} narrow",
         f"{location} slot canyon",
         f"{location} sandstone",
+        f"{location} canyon",
+        f"{location} walking",
         f"{location} person",
+        f"{location} tour",
+        preferred,
+    ]
+    if request.allow_broader_search:
+        variants.extend(
+            [
+                "slot canyon",
+                "narrow canyon",
+                "person in canyon",
+            ]
+        )
+    return _dedupe_keep_order([variant for variant in variants if variant.strip()])
+
+
+def build_pexels_photo_query_variants(request: SupplementRequest) -> list[str]:
+    location = base_location_for_request(request)
+    variants = [
+        location,
+        f"{location} sandstone",
+        f"{location} slot canyon",
+        f"{location} narrow",
         f"{location} walking",
         f"{location} tour",
+        ensure_location_in_query(preferred_search_query(request), location),
     ]
     return _dedupe_keep_order([variant for variant in variants if variant.strip()])
 

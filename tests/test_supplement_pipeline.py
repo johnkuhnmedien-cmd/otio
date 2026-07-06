@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -55,6 +56,7 @@ from otio_app.services.supplement_pipeline import (
 )
 from otio_app.services.supplement_requests import load_supplement_requests, upsert_requests
 from otio_app.services.supplement_search import build_keyword_query
+from otio_app.services.supplement_search import build_pexels_query_variants
 from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
 from otio_app.services.supplement_sources.google_search import GoogleSearchAdapter
 from otio_app.services.supplement_sources.pexels import PexelsAdapter
@@ -371,6 +373,168 @@ def test_pexels_ready_maps_real_response(monkeypatch: pytest.MonkeyPatch) -> Non
     assert candidate.location_match in {"exact", "likely"}
 
 
+def test_pexels_query_variants_start_short_with_location() -> None:
+    request = SupplementRequest(
+        supplement_request_id="supp_req_query",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        location_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Wegen der charakteristischen Felsspalten steht eine Person im Canyon.",
+        visual_requirement="Ein Mensch in engen Felsspalten",
+    )
+    variants = build_pexels_query_variants(request)
+    assert variants[:7] == [
+        "Antelope Canyon",
+        "Antelope Canyon narrow",
+        "Antelope Canyon slot canyon",
+        "Antelope Canyon sandstone",
+        "Antelope Canyon canyon",
+        "Antelope Canyon walking",
+        "Antelope Canyon person",
+    ]
+    assert all("Antelope Canyon" in query for query in variants[:7])
+    assert not any("charakteristischen" in query or "steht" in query for query in variants[:7])
+
+
+def test_pexels_rejects_portrait_video(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PEXELS_API_KEY", "test-key")
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return (
+                b'{"videos":[{"id":321,"url":"https://www.pexels.com/video/321",'
+                b'"image":"https://images.pexels.com/preview.jpg","width":1080,"height":1920,'
+                b'"duration":9,"user":{"name":"Creator","url":"https://www.pexels.com/@creator"},'
+                b'"video_files":[{"id":1,"quality":"hd","file_type":"video/mp4","width":1080,"height":1920,'
+                b'"fps":30,"link":"https://videos.pexels.com/portrait.mp4"}]}]}'
+            )
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: FakeResponse())
+    request = SupplementRequest(
+        supplement_request_id="supp_req_portrait",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        visual_requirement="Antelope Canyon",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+        required_asset_type="video",
+    )
+    candidate = PexelsAdapter().search(request)[0]
+    assert candidate.status == "REJECTED_ASPECT_RATIO"
+    assert candidate.download_enabled is False
+    assert candidate.is_16_9 is False
+
+
+def test_video_preferred_falls_back_to_photos_and_writes_debug(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    monkeypatch.setenv("PEXELS_API_KEY", "test-key")
+    calls: list[str] = []
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def __init__(self, body: bytes):
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return self._body
+
+    def fake_urlopen(request, timeout=20):
+        calls.append(request.full_url)
+        if "/videos/search" in request.full_url:
+            return FakeResponse(b'{"videos":[]}')
+        return FakeResponse(
+            b'{"photos":[{"id":456,"url":"https://www.pexels.com/photo/456",'
+            b'"alt":"Antelope Canyon sandstone","width":3840,"height":2160,'
+            b'"photographer":"Photo Creator","photographer_url":"https://www.pexels.com/@photo",'
+            b'"src":{"original":"https://images.pexels.com/photo.jpg","medium":"https://images.pexels.com/medium.jpg"}}]}'
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_photo_fallback",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        visual_requirement="Antelope Canyon sandstone",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+        required_asset_type="video_preferred",
+    )
+    upsert_requests(project, [request])
+    candidates = search_supplement_candidates(project, request)
+    assert any("/videos/search" in url for url in calls)
+    assert any("/v1/search" in url for url in calls)
+    assert candidates[0].media_type == "image"
+    assert candidates[0].is_16_9 is True
+    from otio_app.project_layout import get_pexels_debug_report_path
+
+    report = json.loads(get_pexels_debug_report_path(project.work_dir_path).read_text(encoding="utf-8"))
+    assert report["raw_video_result_count"] == 0
+    assert report["raw_photo_result_count"] == 1
+    assert report["final_photo_candidate_count"] == 1
+
+
+def test_pexels_photo_timeline_item_uses_vintage_background(tmp_path: Path) -> None:
+    from otio_app.analysis_models import EditPlanSettings
+    from otio_app.services.timeline_plan_builder import build_timeline_items_for_folder
+
+    project = _project(tmp_path)
+    image_path = tmp_path / "photo.jpg"
+    image_path.write_bytes(b"jpeg")
+    voice_path = tmp_path / "voice.wav"
+    voice_path.write_bytes(b"wav")
+    shot = EditPlanShot(
+        voice_file=str(voice_path),
+        folder="Antelope Canyon",
+        voice_start_sec=0.0,
+        voice_end_sec=4.0,
+        duration_sec=4.0,
+        asset_path=str(image_path),
+        asset_id="asset_pexels_photo",
+        asset_origin="pexels",
+        asset_source="pexels",
+        provider="pexels",
+        media_type="image",
+        rights_status=RIGHTS_STATUS_APPROVED,
+    )
+    items, _voiceover, _errors = build_timeline_items_for_folder(
+        [shot],
+        folder_name="Antelope Canyon",
+        voice_file=str(voice_path),
+        settings=EditPlanSettings(section_outro_sec=0.0),
+        folder_assets=[],
+    )
+    item = next(entry for entry in items if entry.asset_id == "asset_pexels_photo")
+    assert item.type == "image_with_background"
+    assert item.asset_type == "image"
+    assert item.background_style == "vintage"
+    assert item.transform.scaling_mode == "fit"
+    assert item.transform.zoom_x == 0.8
+    assert item.transform.zoom_y == 0.8
+
+
 def test_pexels_download_failure_writes_error_without_placeholder(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -471,6 +635,8 @@ def test_inventory_extended_and_delta_written(tmp_path: Path) -> None:
         asset_origin="pexels",
         rights_status=RIGHTS_STATUS_APPROVED,
         analysis_status="complete",
+        supplement_validation_status="PASS",
+        approved_for_cut_plan=True,
     )
     Path(asset.path).write_bytes(b"valid-media")
     from otio_app.analysis_models import SupplementAssetSidecar

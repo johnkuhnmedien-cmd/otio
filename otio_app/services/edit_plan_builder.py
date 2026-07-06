@@ -267,6 +267,7 @@ def build_edit_plan(
                 "asset_origin": asset.asset_origin or "local_original",
                 "rights_status": asset.rights_status,
                 "provider": asset.provider,
+                "media_type": asset.media_type,
                 "source_url": asset.source_url,
                 "supplement_request_id": asset.supplement_request_id,
             }
@@ -357,6 +358,7 @@ def build_edit_plan(
                     rights_status = str(asset_meta.get("rights_status", ""))
                     source_url = str(asset_meta.get("source_url", ""))
                     provider = str(asset_meta.get("provider", ""))
+                    media_type = str(asset_meta.get("media_type", ""))
                     asset_source = asset_origin if asset_origin else FALLBACK_SOURCE_LOCAL
                 elif asset_path:
                     asset_id = asset_id_for_path(asset_path)
@@ -389,6 +391,7 @@ def build_edit_plan(
                 rights_status = ""
                 source_url = ""
                 provider = ""
+                media_type = ""
                 if meta is not None:
                     asset_id = str(meta.get("asset_id", ""))
                     asset_origin = str(meta.get("asset_origin", ""))
@@ -396,6 +399,7 @@ def build_edit_plan(
                     rights_status = str(meta.get("rights_status", ""))
                     source_url = str(meta.get("source_url", ""))
                     provider = str(meta.get("provider", ""))
+                    media_type = str(meta.get("media_type", ""))
                 elif part.asset_path:
                     asset_id = asset_id_for_path(part.asset_path)
 
@@ -413,6 +417,7 @@ def build_edit_plan(
                     rights_status = ""
                     source_url = ""
                     provider = ""
+                    media_type = ""
 
                 if asset_id:
                     usage_by_folder[folder_name][asset_id] = (
@@ -434,6 +439,7 @@ def build_edit_plan(
                         rights_status=rights_status,
                         source_url=source_url,
                         provider=provider,
+                        media_type=media_type,
                         motif=part.motif,
                         passage_text=part.text,
                         confidence=part.confidence,

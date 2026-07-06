@@ -48,6 +48,7 @@ from otio_app.models import Project
 from otio_app.project_layout import (
     get_folder_inventory_delta_path,
     get_folder_inventory_path,
+    get_pexels_debug_report_path,
     get_provider_supplemental_dir,
     get_supplement_errors_path,
     get_supplement_manifest_path,
@@ -213,9 +214,18 @@ def search_supplement_candidates(
             provider_status_at_failure=readiness.status,
         )
         return []
+    if source == SUPPLEMENT_SOURCE_PEXELS and getattr(adapter, "last_debug_report", None):
+        path = get_pexels_debug_report_path(project.work_dir_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(adapter.last_debug_report, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
     add_candidates(project, candidates)
     attempted = []
-    if candidates:
+    if source == SUPPLEMENT_SOURCE_PEXELS and getattr(adapter, "last_debug_report", None):
+        attempted = list(adapter.last_debug_report.get("queries_attempted", []))
+    elif candidates:
         attempted = sorted({candidate.query_used for candidate in candidates if candidate.query_used})
     elif request.query_used:
         attempted = [request.query_used]
@@ -451,6 +461,15 @@ def analyze_supplement_asset(
         rights_status=sidecar.rights_status,
         source_url=sidecar.source_url,
         provider=sidecar.provider,
+        media_type=sidecar.media_type,
+        aspect_ratio=sidecar.aspect_ratio,
+        aspect_ratio_policy=sidecar.aspect_ratio_policy,
+        is_16_9=sidecar.is_16_9,
+        supplement_validation_status=sidecar.supplement_validation_status or (
+            "PASS" if sidecar.approved_for_cut_plan else "NEEDS_USER_REVIEW"
+        ),
+        supplement_validation_score=sidecar.supplement_validation_score,
+        approved_for_cut_plan=sidecar.approved_for_cut_plan,
         generated_prompt=sidecar.prompt,
         search_query=sidecar.search_query,
         analysis_status="complete" if description and frames else "failed",
@@ -486,6 +505,10 @@ def extend_folder_inventory(
     if asset.analysis_status != "complete" or not asset.frames_used or not asset.description:
         raise ValueError(
             f"Asset wurde nicht erfolgreich analysiert und darf nicht ins Inventory: {asset.path}"
+        )
+    if not asset.approved_for_cut_plan and asset.supplement_validation_status != "PASS":
+        raise ValueError(
+            f"Supplement-Asset ist nicht für den Schnittplan freigegeben: {asset.path}"
         )
     if not load_sidecar(asset_path):
         raise ValueError(f"Sidecar-Metadaten fehlen: {asset.path}")

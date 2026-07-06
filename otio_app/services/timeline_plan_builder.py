@@ -63,7 +63,10 @@ def _shot_to_timeline_item(
     asset_path = shot.asset_path or ""
     source_in = trim_leading_sec if asset_path and not is_image_media(Path(asset_path)) else 0.0
     source_out = source_in + duration
-    item_type = "image_shot" if asset_path and is_image_media(Path(asset_path)) else "video_shot"
+    is_image = bool(asset_path and is_image_media(Path(asset_path)))
+    item_type = "image_shot" if is_image else "video_shot"
+    if is_image and shot.asset_origin == "pexels":
+        item_type = "image_with_background"
     confidence = 0.0
     if shot.confidence:
         try:
@@ -90,7 +93,11 @@ def _shot_to_timeline_item(
         voice_end_sec=shot.voice_end_sec,
         selection_reason="Motiv aus Schnittplan-Vorschlag",
         confidence=confidence,
-        transform=TimelineItemTransform(scaling_mode="fill"),
+        transform=TimelineItemTransform(
+            scaling_mode="fit" if item_type == "image_with_background" else "fill",
+            zoom_x=0.8 if item_type == "image_with_background" else 1.0,
+            zoom_y=0.8 if item_type == "image_with_background" else 1.0,
+        ),
         media_source_type=shot.asset_source or "local",
         motif=shot.motif,
         passage_text=shot.passage_text,
@@ -99,6 +106,10 @@ def _shot_to_timeline_item(
         rights_status=shot.rights_status,
         source_url=shot.source_url,
         provider=shot.provider,
+        asset_type="image" if item_type == "image_with_background" else ("image" if is_image else "video"),
+        background_style="vintage" if item_type == "image_with_background" else "",
+        image_zoom_x=0.8 if item_type == "image_with_background" else 1.0,
+        image_zoom_y=0.8 if item_type == "image_with_background" else 1.0,
     )
 
 
@@ -444,6 +455,7 @@ def shots_from_timeline_items(items: list[TimelineItem]) -> list[EditPlanShot]:
                     rights_status=item.rights_status,
                     source_url=item.source_url,
                     provider=item.provider,
+                    media_type=item.asset_type,
                     motif=item.motif,
                     passage_text=item.passage_text,
                     section_outro=True,
@@ -465,6 +477,7 @@ def shots_from_timeline_items(items: list[TimelineItem]) -> list[EditPlanShot]:
                     rights_status=item.rights_status,
                     source_url=item.source_url,
                     provider=item.provider,
+                    media_type=item.asset_type,
                     motif=item.motif,
                     passage_text=item.passage_text,
                     confidence=str(item.confidence) if item.confidence else None,

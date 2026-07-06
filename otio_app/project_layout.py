@@ -118,6 +118,12 @@ def get_supplement_errors_path(work_dir: Path) -> Path:
     return get_supplement_dir(work_dir) / SUPPLEMENT_ERRORS_FILENAME
 
 
+def get_pexels_debug_report_path(work_dir: Path) -> Path:
+    from otio_app.defaults import PEXELS_DEBUG_REPORT_FILENAME
+
+    return get_supplement_dir(work_dir) / PEXELS_DEBUG_REPORT_FILENAME
+
+
 def get_folder_inventory_delta_path(work_dir: Path, folder_name: str) -> Path:
     from otio_app.defaults import INVENTORY_DELTA_SUFFIX
 

@@ -76,6 +76,13 @@ class AssetMediaAnalysis(BaseModel):
     rights_status: str = ""
     source_url: str = ""
     provider: str = ""
+    media_type: str = ""
+    aspect_ratio: float = 0.0
+    aspect_ratio_policy: str = ""
+    is_16_9: bool = False
+    supplement_validation_status: str = ""
+    supplement_validation_score: float = 0.0
+    approved_for_cut_plan: bool = False
     generated_prompt: str = ""
     search_query: str = ""
     license_metadata: dict[str, str] = Field(default_factory=dict)
@@ -181,6 +188,7 @@ class EditPlanShot(BaseModel):
     rights_status: str = ""
     source_url: str = ""
     provider: str = ""
+    media_type: str = ""
     motif: str = ""
     passage_text: str = ""
     confidence: Optional[str] = None
@@ -282,6 +290,10 @@ class TimelineItem(BaseModel):
     rights_status: str = ""
     source_url: str = ""
     provider: str = ""
+    asset_type: str = ""
+    background_style: str = ""
+    image_zoom_x: float = 1.0
+    image_zoom_y: float = 1.0
 
 
 class SegmentCoverage(BaseModel):
@@ -329,6 +341,8 @@ class SupplementRequest(BaseModel):
     best_query: str = ""
     query_used: str = ""
     allow_broader_search: bool = False
+    photo_aspect_policy: str = "prefer_16_9"
+    video_aspect_ratio_tolerance: float = 0.03
     generation_prompt: Optional[str] = None
     last_error: str = ""
     last_error_at: Optional[datetime] = None
@@ -380,6 +394,13 @@ class SupplementCandidate(BaseModel):
     pexels_fps: float = 0.0
     selected_video_file_width: int = 0
     selected_video_file_height: int = 0
+    selected_video_file_aspect_ratio: float = 0.0
+    aspect_ratio: float = 0.0
+    aspect_ratio_policy: str = ""
+    is_16_9: bool = False
+    supplement_validation_status: str = ""
+    supplement_validation_score: float = 0.0
+    approved_for_cut_plan: bool = False
 
 
 class SupplementAssetSidecar(BaseModel):
@@ -392,6 +413,13 @@ class SupplementAssetSidecar(BaseModel):
     query_used: str = ""
     location_name: str = ""
     location_match: str = ""
+    media_type: str = ""
+    aspect_ratio: float = 0.0
+    aspect_ratio_policy: str = ""
+    is_16_9: bool = False
+    supplement_validation_status: str = ""
+    supplement_validation_score: float = 0.0
+    approved_for_cut_plan: bool = False
     license: str = ""
     license_url: str = ""
     creator: str = ""

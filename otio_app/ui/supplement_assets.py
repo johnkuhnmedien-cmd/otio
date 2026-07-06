@@ -276,19 +276,32 @@ def _render_query_controls(request: SupplementRequest, provider: str) -> str:
 
 
 def _render_pexels_candidate_card(project, request: SupplementRequest, candidate: SupplementCandidate, index: int) -> None:
+    media_label = "Video" if candidate.media_type == "video" else "Foto"
     with st.expander(
-        f"{index + 1}. {candidate.title[:80]} · {candidate.duration_sec:.1f}s · "
+        f"{index + 1}. {media_label} · {candidate.title[:80]} · "
         f"{candidate.width}×{candidate.height} · {candidate.location_match}",
         expanded=index == 0,
     ):
         if candidate.preview_url:
             st.image(candidate.preview_url, caption="Preview")
         st.caption(f"Query: `{candidate.query_used}`")
-        st.caption(
-            f"Creator: {candidate.creator or '—'} · Dauer: {candidate.duration_sec:.1f}s · "
-            f"Download-Datei: {candidate.selected_video_file_width}×{candidate.selected_video_file_height} "
-            f"{candidate.pexels_quality}"
-        )
+        if candidate.media_type == "video":
+            st.caption(
+                f"Creator: {candidate.creator or '—'} · Dauer: {candidate.duration_sec:.1f}s · "
+                f"Auflösung: {candidate.width}×{candidate.height} · "
+                f"Aspect Ratio: {candidate.aspect_ratio:.3f} · "
+                f"16:9: {'PASS' if candidate.is_16_9 else 'FAIL'}"
+            )
+            st.caption(
+                f"Download-Datei: {candidate.selected_video_file_width}×{candidate.selected_video_file_height} "
+                f"{candidate.pexels_quality}"
+            )
+        else:
+            st.caption(
+                f"Creator: {candidate.creator or '—'} · Foto-Auflösung: {candidate.width}×{candidate.height} · "
+                f"Aspect Ratio: {candidate.aspect_ratio:.3f} · Regel: {candidate.aspect_ratio_policy}"
+            )
+            st.info("Foto wird später als Vintage-Hintergrund mit Bild-Zoom 0.8 geplant.")
         st.caption(f"Location Match: **{candidate.location_match or '—'}**")
         if candidate.source_page_url:
             st.link_button("Pexels-Link öffnen", candidate.source_page_url)
@@ -311,6 +324,14 @@ def _render_pexels_candidate_card(project, request: SupplementRequest, candidate
 def _render_pexels_tab(project, request: SupplementRequest, readiness: ProviderReadiness, document: SupplementRequestsDocument) -> None:
     st.markdown("#### Pexels")
     st.caption(f"Status: **{readiness.status}** — {readiness.message}")
+    st.caption(
+        f"Suchmodus: **{request.required_asset_type}** · "
+        "Videos: nur 16:9 · Fotos: prefer_16_9 / Hintergrund möglich"
+    )
+    with st.expander("Technische Suchdetails", expanded=False):
+        st.caption("Video Endpoint: `https://api.pexels.com/v1/videos/search`")
+        st.caption("Photo Endpoint: `https://api.pexels.com/v1/search`")
+        st.caption("Video orientation: `landscape`, per_page: `15`")
     query = _render_query_controls(request, SUPPLEMENT_SOURCE_PEXELS)
     if readiness.status != "READY":
         st.warning("PEXELS_API_KEY fehlt. Bitte unter Systemstatus/API-Schlüssel oder .env setzen.")
