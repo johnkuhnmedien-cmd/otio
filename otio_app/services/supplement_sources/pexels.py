@@ -35,6 +35,12 @@ PEXELS_VIDEO_SEARCH_ENDPOINT = "https://api.pexels.com/v1/videos/search"
 PEXELS_PHOTO_SEARCH_ENDPOINT = "https://api.pexels.com/v1/search"
 MIN_DOWNLOAD_BYTES = 100 * 1024
 TARGET_VIDEO_ASPECT_RATIO = 16 / 9
+# Pexels/Cloudflare blockiert den Standard-Python-User-Agent (HTTP 403, error code 1010).
+# Ein normaler Browser-User-Agent verhindert diese Bot-Signatur-Sperre.
+PEXELS_REQUEST_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 
 class PexelsAdapter(SupplementSourceAdapter):
@@ -118,7 +124,14 @@ class PexelsAdapter(SupplementSourceAdapter):
 
     def _request_json(self, endpoint: str, params: dict, api_key: str) -> tuple[int, dict]:
         url = f"{endpoint}?{urllib.parse.urlencode(params)}"
-        req = urllib.request.Request(url, headers={"Authorization": api_key})
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": api_key,
+                "User-Agent": PEXELS_REQUEST_USER_AGENT,
+                "Accept": "application/json",
+            },
+        )
         with urllib.request.urlopen(req, timeout=20) as response:
             status = int(getattr(response, "status", 200) or 200)
             return status, json.loads(response.read().decode("utf-8"))
@@ -427,8 +440,12 @@ class PexelsAdapter(SupplementSourceAdapter):
             f"{folder_slug}_{candidate.supplement_request_id}_pexels_{candidate.provider_asset_id}{extension}"
         )
         local_path = destination_folder / filename
+        download_request = urllib.request.Request(
+            candidate.download_url,
+            headers={"User-Agent": PEXELS_REQUEST_USER_AGENT},
+        )
         try:
-            with urllib.request.urlopen(candidate.download_url, timeout=60) as response:
+            with urllib.request.urlopen(download_request, timeout=60) as response:
                 status = int(getattr(response, "status", 200) or 200)
                 if status != 200:
                     raise RuntimeError(f"HTTP Status {status}")

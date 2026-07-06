@@ -805,6 +805,46 @@ def test_pexels_http_error_surfaces_as_request_error_not_silent_zero(
     assert report["errors"][0]["status"] == 401
 
 
+def test_pexels_request_sends_browser_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pexels/Cloudflare blockiert den Standard-Python-User-Agent (HTTP 403, code 1010)."""
+    monkeypatch.setenv("PEXELS_API_KEY", "test-key")
+    captured_headers: list[dict] = []
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"videos":[]}'
+
+    def fake_urlopen(request, timeout=20):
+        captured_headers.append(dict(request.header_items()))
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_ua",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        visual_requirement="Antelope Canyon",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+        required_asset_type="video",
+    )
+    PexelsAdapter().search(request)
+    assert captured_headers
+    header_keys = {key.lower(): value for key, value in captured_headers[0].items()}
+    assert "user-agent" in header_keys
+    assert "python-urllib" not in header_keys["user-agent"].lower()
+
+
 def test_pexels_adapter_does_not_raise_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PEXELS_API_KEY", "bad-key")
     import urllib.error
