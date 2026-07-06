@@ -64,6 +64,8 @@ def run_app_navigation(
         PAGE_STATUS,
         PAGE_SUPPLEMENT,
     )
+
+    if not hasattr(st, "navigation"):
         _run_legacy_pages(
             render_new_project=render_new_project,
             render_project_list=render_project_list,
