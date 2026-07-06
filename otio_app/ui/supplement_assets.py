@@ -36,6 +36,7 @@ from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.supplement_coverage import COVERAGE_SUPPLEMENT_REQUIRED, coverage_to_supplement_request
 from otio_app.services.supplement_pipeline import (
     acquire_supplement_candidate,
+    acquire_top_candidates,
     analyze_supplement_asset,
     approve_adobe_candidate,
     extend_folder_inventory,
@@ -411,6 +412,30 @@ def _render_pexels_tab(project, request: SupplementRequest, readiness: ProviderR
         st.button("Query vereinfachen und erneut suchen", key=f"simplify_pexels_{request.supplement_request_id}", disabled=True)
         st.caption("Du kannst oben eine kürzere Query mit Ortsnamen eintragen und erneut suchen.")
         return
+
+    downloadable = [
+        candidate
+        for candidate in candidates
+        if candidate.download_enabled and not candidate.is_mock and candidate.location_match != "missing"
+    ]
+    auto_count = min(3, len(downloadable))
+    if auto_count > 0:
+        if st.button(
+            f"Top {auto_count} automatisch herunterladen",
+            key=f"auto_download_pexels_{request.supplement_request_id}",
+            type="primary",
+        ):
+            results = acquire_top_candidates(project, candidates, request, max_count=3)
+            successes = [r for r in results if r[1] is not None]
+            failures = [r for r in results if r[1] is None]
+            if successes:
+                st.success(
+                    f"{len(successes)} Asset(s) automatisch heruntergeladen: "
+                    + ", ".join(Path(asset.local_path).name for _c, asset, _e in successes)
+                )
+            for candidate, _asset, error in failures:
+                st.error(f"Download fehlgeschlagen für `{candidate.title[:60]}`: {error}")
+            st.rerun()
     for index, candidate in enumerate(candidates):
         _render_pexels_candidate_card(project, request, candidate, index)
 

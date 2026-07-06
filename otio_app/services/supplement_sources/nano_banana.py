@@ -86,7 +86,7 @@ class NanoBananaAdapter(SupplementSourceAdapter):
             local_path=str(local_path),
             rights_status=RIGHTS_STATUS_GENERATED_APPROVED,
             model=self.model,
-            aspect_ratio="16:9",
+            generation_aspect_ratio="16:9",
             output_resolution="1920x1080",
             generation_settings={"prompt_version": self.prompt_version},
             synthid_expected=True,

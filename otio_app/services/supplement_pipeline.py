@@ -375,6 +375,36 @@ def acquire_supplement_candidate(
     return SupplementAsset(local_path=asset.local_path, sidecar=sidecar)
 
 
+def acquire_top_candidates(
+    project: Project,
+    candidates: list[SupplementCandidate],
+    request: SupplementRequest,
+    *,
+    max_count: int = 3,
+) -> list[tuple[SupplementCandidate, SupplementAsset | None, str | None]]:
+    """Lädt automatisch bis zu ``max_count`` downloadbare Kandidaten herunter.
+
+    Bricht bei einem Fehler nicht die restlichen Downloads ab — jeder Kandidat
+    wird unabhängig versucht und das Ergebnis (Erfolg oder Fehlermeldung) pro
+    Kandidat zurückgegeben.
+    """
+    eligible = [
+        candidate
+        for candidate in candidates
+        if candidate.download_enabled
+        and not candidate.is_mock
+        and candidate.location_match != "missing"
+    ]
+    results: list[tuple[SupplementCandidate, SupplementAsset | None, str | None]] = []
+    for candidate in eligible[: max(0, max_count)]:
+        try:
+            asset = acquire_supplement_candidate(project, candidate, request)
+            results.append((candidate, asset, None))
+        except (OSError, ValueError, PermissionError, RuntimeError) as exc:
+            results.append((candidate, None, str(exc)))
+    return results
+
+
 def _extension_from_candidate(candidate: SupplementCandidate) -> str:
     parsed = urllib.parse.urlparse(candidate.download_url or candidate.preview_url)
     suffix = Path(urllib.parse.unquote(parsed.path)).suffix.lower()

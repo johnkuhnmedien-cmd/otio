@@ -47,6 +47,7 @@ from otio_app.services.supplement_coverage import (
 )
 from otio_app.services.supplement_pipeline import (
     acquire_supplement_candidate,
+    acquire_top_candidates,
     analyze_supplement_asset,
     extend_folder_inventory,
     import_manual_supplement_asset,
@@ -864,6 +865,161 @@ def test_pexels_adapter_does_not_raise_on_http_error(monkeypatch: pytest.MonkeyP
     )
     candidates = PexelsAdapter().search(request)
     assert candidates == []
+
+
+def test_sidecar_accepts_float_pexels_aspect_ratio() -> None:
+    """Regression: SupplementAssetSidecar.aspect_ratio darf kein str-only-Feld sein
+    (Kollision mit Nano-Banana-Feld hat frueher Downloads mit float aspect_ratio blockiert)."""
+    from otio_app.analysis_models import SupplementAssetSidecar
+
+    sidecar = SupplementAssetSidecar(
+        asset_id="asset_pexels_1",
+        supplement_request_id="supp_req_1",
+        provider=SUPPLEMENT_SOURCE_PEXELS,
+        aspect_ratio=1.777778,
+    )
+    assert sidecar.aspect_ratio == pytest.approx(1.777778)
+
+
+def _pexels_candidate(index: int, *, location_match: str = "exact") -> SupplementCandidate:
+    return SupplementCandidate(
+        candidate_id=f"cand_{index}",
+        supplement_request_id="supp_req_auto",
+        provider=SUPPLEMENT_SOURCE_PEXELS,
+        provider_asset_id=str(1000 + index),
+        title=f"Video {index}",
+        download_url=f"https://videos.pexels.com/video-{index}.mp4",
+        download_enabled=True,
+        is_mock=False,
+        location_match=location_match,
+        media_type="video",
+    )
+
+
+def _mock_asset_for_candidate(candidate: SupplementCandidate, tmp_path: Path):
+    from otio_app.analysis_models import SupplementAssetSidecar
+    from otio_app.services.supplement_sources.base import SupplementAsset
+
+    local = tmp_path / f"asset_{candidate.provider_asset_id}.mp4"
+    local.write_bytes(b"video")
+    sidecar = SupplementAssetSidecar(
+        asset_id=f"asset_pexels_{candidate.provider_asset_id}",
+        supplement_request_id=candidate.supplement_request_id,
+        provider=SUPPLEMENT_SOURCE_PEXELS,
+        provider_asset_id=candidate.provider_asset_id,
+        local_path=str(local),
+        rights_status=RIGHTS_STATUS_APPROVED,
+    )
+    return SupplementAsset(local_path=local, sidecar=sidecar)
+
+
+def test_acquire_top_candidates_downloads_up_to_three(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_auto",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+    )
+    candidates = [_pexels_candidate(i) for i in range(5)]
+
+    with patch.object(PexelsAdapter, "acquire") as mock_acquire:
+        mock_acquire.side_effect = lambda candidate, _dest: _mock_asset_for_candidate(candidate, tmp_path)
+        results = acquire_top_candidates(project, candidates, request, max_count=3)
+
+    assert len(results) == 3
+    assert all(asset is not None for _c, asset, _e in results)
+    assert mock_acquire.call_count == 3
+
+
+def test_acquire_top_candidates_downloads_fewer_when_available(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_auto_two",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+    )
+    candidates = [_pexels_candidate(i) for i in range(2)]
+
+    with patch.object(PexelsAdapter, "acquire") as mock_acquire:
+        mock_acquire.side_effect = lambda candidate, _dest: _mock_asset_for_candidate(candidate, tmp_path)
+        results = acquire_top_candidates(project, candidates, request, max_count=3)
+
+    assert len(results) == 2
+    assert mock_acquire.call_count == 2
+
+
+def test_acquire_top_candidates_with_single_candidate(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_auto_one",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+    )
+    candidates = [_pexels_candidate(0)]
+
+    with patch.object(PexelsAdapter, "acquire") as mock_acquire:
+        mock_acquire.side_effect = lambda candidate, _dest: _mock_asset_for_candidate(candidate, tmp_path)
+        results = acquire_top_candidates(project, candidates, request, max_count=3)
+
+    assert len(results) == 1
+    assert results[0][1] is not None
+
+
+def test_acquire_top_candidates_skips_missing_location_match(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_auto_missing",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+    )
+    candidates = [_pexels_candidate(0, location_match="missing"), _pexels_candidate(1)]
+
+    with patch.object(PexelsAdapter, "acquire") as mock_acquire:
+        mock_acquire.side_effect = lambda candidate, _dest: _mock_asset_for_candidate(candidate, tmp_path)
+        results = acquire_top_candidates(project, candidates, request, max_count=3)
+
+    assert len(results) == 1
+    assert results[0][0].provider_asset_id == "1001"
+
+
+def test_acquire_top_candidates_continues_after_individual_failure(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_auto_fail",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+    )
+    candidates = [_pexels_candidate(i) for i in range(3)]
+
+    def flaky_acquire(candidate, _dest):
+        if candidate.provider_asset_id == "1001":
+            raise RuntimeError("Pexels-Download fehlgeschlagen: boom")
+        return _mock_asset_for_candidate(candidate, tmp_path)
+
+    with patch.object(PexelsAdapter, "acquire", side_effect=flaky_acquire):
+        results = acquire_top_candidates(project, candidates, request, max_count=3)
+
+    assert len(results) == 3
+    successes = [r for r in results if r[1] is not None]
+    failures = [r for r in results if r[1] is None]
+    assert len(successes) == 2
+    assert len(failures) == 1
+    assert "boom" in failures[0][2]
 
 
 def test_keyword_query_prefers_short_visual_terms() -> None:

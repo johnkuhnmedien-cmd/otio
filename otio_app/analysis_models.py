@@ -439,7 +439,7 @@ class SupplementAssetSidecar(BaseModel):
     approval_status: str = ""
     model: str = ""
     negative_prompt: str = ""
-    aspect_ratio: str = ""
+    generation_aspect_ratio: str = ""
     output_resolution: str = ""
     generation_settings: dict[str, str | float | bool] = Field(default_factory=dict)
     synthid_expected: bool = False
