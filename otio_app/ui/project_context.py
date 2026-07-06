@@ -22,7 +22,7 @@ from otio_app.services.clean_media import (
     manifest_needs_processing,
 )
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
-from otio_app.ui.navigation import ACTIVE_PROJECT_KEY
+from otio_app.ui.navigation import ACTIVE_PROJECT_KEY, PAGE_ANALYSIS, PAGE_CLEAN_MEDIA, PAGE_EDIT_PLAN, PAGE_MAPPING, PAGE_SUPPLEMENT
 
 
 @dataclass(frozen=True)
@@ -133,10 +133,11 @@ def render_workflow_progress(
     """Kompakte Workflow-Leiste über den Workflow-Seiten."""
     status = get_workflow_status(project, lightweight=lightweight)
     steps = [
-        ("⓪ Clean Media", status.clean_media_done, current_step == "clean_media"),
-        ("① Analysen", status.analysis_done, current_step == "analysis"),
-        ("② Zuordnung", status.mapping_confirmed, current_step == "mapping"),
-        ("③ Schnittplan", status.edit_plan_done, current_step == "edit_plan"),
+        (PAGE_CLEAN_MEDIA, status.clean_media_done, current_step in {"clean_media", PAGE_CLEAN_MEDIA}),
+        (PAGE_ANALYSIS, status.analysis_done, current_step in {"analysis", PAGE_ANALYSIS}),
+        (PAGE_MAPPING, status.mapping_confirmed, current_step in {"mapping", PAGE_MAPPING}),
+        (PAGE_SUPPLEMENT, status.mapping_confirmed, current_step == PAGE_SUPPLEMENT),
+        (PAGE_EDIT_PLAN, status.edit_plan_done, current_step in {"edit_plan", PAGE_EDIT_PLAN}),
     ]
     columns = st.columns(len(steps))
     for column, (title, done, active) in zip(columns, steps):

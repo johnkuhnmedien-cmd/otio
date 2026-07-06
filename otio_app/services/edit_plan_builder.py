@@ -287,11 +287,14 @@ def build_edit_plan(
                 voice_file=voice_path,
                 assets=folder_inventory.assets,
             )
-            segment_coverages.append(coverage)
             supplement_request = coverage_to_supplement_request(coverage)
             if supplement_request is not None:
+                coverage = coverage.model_copy(
+                    update={"supplement_request_id": supplement_request.supplement_request_id}
+                )
                 pending_supplement_requests.append(supplement_request)
                 supplement_request_ids.append(supplement_request.supplement_request_id)
+            segment_coverages.append(coverage)
 
             folder_usage = usage_by_folder[folder_name]
             allowed_assets = filter_assets_by_usage(

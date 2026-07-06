@@ -6,7 +6,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from otio_app.analysis_models import EditPlanSettings, SupplementCandidate
+from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, SupplementCandidate, SupplementRequest
 from otio_app.defaults import (
     DEFAULT_AUDIO_OFFSET_SEC,
     DEFAULT_FALLBACK_ORDER,
@@ -23,9 +23,10 @@ from otio_app.defaults import (
 from otio_app.project_layout import safe_folder_slug
 from otio_app.services.edit_plan_builder import build_edit_plan, load_edit_plan
 from otio_app.services.edit_plan_rules import save_edit_plan_rules
+from otio_app.services.generic_outro_selector import section_id_for_folder
 from otio_app.services.gemini_client import is_gemini_configured
 from otio_app.services.inventory_loader import load_folder_inventory
-from otio_app.services.supplement_coverage import COVERAGE_SUPPLEMENT_REQUIRED
+from otio_app.services.supplement_coverage import COVERAGE_SUPPLEMENT_REQUIRED, coverage_to_supplement_request
 from otio_app.services.supplement_pipeline import (
     acquire_supplement_candidate,
     analyze_supplement_asset,
@@ -40,12 +41,81 @@ from otio_app.services.supplement_requests import (
     pending_supplement_count,
     requests_for_folder,
     update_request,
+    upsert_requests,
 )
 from otio_app.services.edit_plan_builder import load_voice_analysis
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 from otio_app.ui.edit_plan_rules_ui import get_edit_plan_rules_for_project
 from otio_app.ui.navigation import PAGE_SUPPLEMENT
 from otio_app.ui.project_context import render_project_selector, render_workflow_progress
+
+
+def _plan_state_key(project_id: str, folder_name: str) -> str:
+    return f"edit_plan_draft_{project_id}_{safe_folder_slug(folder_name)}"
+
+
+def _load_current_plan(project, folder_name: str) -> EditPlanDocument | None:
+    raw = st.session_state.get(_plan_state_key(project.id, folder_name))
+    if raw:
+        try:
+            return EditPlanDocument.model_validate(raw)
+        except ValueError:
+            pass
+    return load_edit_plan(project, folder_name)
+
+
+def _materialize_requests_from_plan(project, folder_name: str) -> int:
+    """Erzeugt Requests aus aktuellem Schnittplan/Draft, wenn noch keine Datei existiert."""
+    plan = _load_current_plan(project, folder_name)
+    if plan is None:
+        return 0
+
+    existing = load_supplement_requests(project)
+    existing_ids = {request.supplement_request_id for request in existing.requests}
+    new_requests: list[SupplementRequest] = []
+
+    for coverage in plan.segment_coverage:
+        if coverage.coverage_status != COVERAGE_SUPPLEMENT_REQUIRED:
+            continue
+        request_id = (
+            coverage.supplement_request_id
+            or f"supp_req_{safe_folder_slug(folder_name)}_{coverage.beat_id}"
+        )
+        request = coverage_to_supplement_request(coverage, request_id=request_id)
+        if request is not None and request.supplement_request_id not in existing_ids:
+            new_requests.append(request)
+            existing_ids.add(request.supplement_request_id)
+
+    for index, shot in enumerate(plan.shots, start=1):
+        if shot.asset_path:
+            continue
+        request_id = shot.supplement_request_id or f"supp_req_{safe_folder_slug(folder_name)}_{index:03d}"
+        if request_id in existing_ids:
+            continue
+        passage = shot.passage_text or shot.motif or f"Shot {index}"
+        new_requests.append(
+            SupplementRequest(
+                supplement_request_id=request_id,
+                section_id=section_id_for_folder(folder_name),
+                folder_name=folder_name,
+                beat_id=shot.beat_id or f"shot_{index:03d}",
+                passage_text=passage,
+                visual_requirement=shot.motif or passage,
+                duration_needed_sec=max(0.1, shot.duration_sec),
+                reason=(
+                    "Schnittplan enthält für dieses Voice-over-Segment kein Asset. "
+                    "Bitte supplementieren oder lokalen Kandidaten manuell akzeptieren."
+                ),
+                local_best_asset_id=shot.asset_id,
+                local_best_match_score=0.0,
+                status="PENDING_SOURCE_SELECTION",
+            )
+        )
+        existing_ids.add(request_id)
+
+    if new_requests:
+        upsert_requests(project, new_requests)
+    return len(new_requests)
 
 
 def render_supplement_assets_page() -> None:
@@ -67,9 +137,15 @@ def render_supplement_assets_page() -> None:
         return
 
     selected_folder = st.selectbox("Asset-Ordner", folders, key=f"supplement_folder_{project.id}")
+    created_from_plan = _materialize_requests_from_plan(project, selected_folder)
     document = load_supplement_requests(project)
     folder_requests = requests_for_folder(document, selected_folder)
     required = [req for req in folder_requests if req.status != "ACQUIRED"]
+
+    if created_from_plan:
+        st.info(
+            f"{created_from_plan} Supplement Request(s) aus dem aktuellen Schnittplan übernommen."
+        )
 
     st.markdown(
         f"**{len(required)}** offene Supplement-Anforderungen für **{selected_folder}** "
