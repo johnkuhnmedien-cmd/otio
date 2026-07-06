@@ -165,21 +165,6 @@ def _plan_section_items(plan: EditPlanDocument, folder_name: str, voice_file: st
     return []
 
 
-def _voiceover_for_validation(
-    voiceover: VoiceoverPlan | None,
-    audio_offset_sec: float,
-) -> VoiceoverPlan | None:
-    """Voiceover-Zeiten an Export-Audio-Offset anpassen (Abschnitts-lokal)."""
-    if voiceover is None:
-        return None
-    return voiceover.model_copy(
-        update={
-            "timeline_start_sec": audio_offset_sec,
-            "timeline_end_sec": audio_offset_sec + voiceover.duration_sec,
-        }
-    )
-
-
 def merge_confirmed_edit_plans(
     project: Project,
     *,
@@ -203,13 +188,6 @@ def merge_confirmed_edit_plans(
     skipped: list[str] = []
     warnings: list[str] = []
     settings = EditPlanSettings()
-    export_settings = load_otio_export_settings(project)
-    settings = settings.model_copy(
-        update={
-            "audio_offset_sec": export_settings.audio_offset_sec,
-            "section_outro_sec": export_settings.section_outro_sec,
-        }
-    )
     global_cursor = 0.0
     export_rules = export_rule_options(load_edit_plan_rules(project))
 
@@ -257,22 +235,19 @@ def merge_confirmed_edit_plans(
         )
         merged_voiceovers.append(section_voiceover)
 
-        validation_settings = plan.settings.model_copy(
-            update={
-                "audio_offset_sec": export_settings.audio_offset_sec,
-                "section_outro_sec": export_settings.section_outro_sec,
-            }
-        )
-        voice_for_check = _voiceover_for_validation(
-            section_voiceover,
-            export_settings.audio_offset_sec,
-        )
+        # Audio-Start und Ordner-Ausklingen werden fest beim Bestätigen dieses
+        # Ordners eingebaut (plan.settings / plan.voiceover). Ein späterer
+        # globaler Export-Override (frühere otio_export_settings.json-Werte)
+        # führte hier zu Geisterfehlern: die Validierung prüfte gegen einen
+        # Wert, mit dem die Timeline-Items nie gebaut wurden — z. B.
+        # "section_outro_sec (8.5s) nicht vollständig geplant (4.0s)", obwohl
+        # der Schnittplan selbst vollkommen konsistent war.
         validation = validate_timeline_items(
             section_items,
-            settings=validation_settings,
+            settings=plan.settings,
             allow_black_outro=plan.allow_black_outro,
             fps=float(project.fps),
-            voiceover=voice_for_check,
+            voiceover=section_voiceover,
             opening_title_required=export_rules.folder_title_enabled,
             rules_doc=load_edit_plan_rules(project),
             work_dir_path=project.work_dir_path,
@@ -597,14 +572,19 @@ def _append_aligned_voice_track(
     rate: float,
     *,
     track_index: int,
-    audio_offset_sec: float,
 ) -> None:
-    """Eine Audiospur pro Voice-over — volle WAV-Dauer, ohne Head-Trim."""
+    """Eine Audiospur pro Voice-over — volle WAV-Dauer, ohne Head-Trim.
+
+    Nutzt section.voiceover.timeline_start_sec (beim Bestätigen dieses Ordners
+    fest eingebaut), NICHT einen separaten globalen Export-Wert — sonst
+    können Video- und Audiospur auseinanderlaufen, sobald sich die globale
+    Audio-Start-Einstellung nach dem Bestätigen geändert hat.
+    """
     track = otio.schema.Track(
         name=f"A{track_index} · {Path(section.voice_file).stem}"[:120],
         kind=otio.schema.TrackKind.Audio,
     )
-    gap_sec = max(0.0, section.video_start_sec + audio_offset_sec)
+    gap_sec = max(0.0, section.video_start_sec + section.voiceover.timeline_start_sec)
     if gap_sec > 0.001:
         track.append(
             otio.schema.Gap(
@@ -807,7 +787,15 @@ def build_otio_timeline(
     *,
     export_settings: OtioExportSettings | None = None,
 ) -> otio.schema.Timeline:
-    """Erzeugt OTIO nur aus expliziten Timeline-Items — ohne Regeländerungen."""
+    """Erzeugt OTIO nur aus expliziten Timeline-Items — ohne Regeländerungen.
+
+    `export_settings` wird nur noch für die informative `timeline.metadata`
+    verwendet — die tatsächliche Audio-/Video-Platzierung nutzt IMMER die pro
+    Ordner beim Bestätigen fest eingebauten Werte (siehe
+    `_append_aligned_voice_track`). Ein globaler Override hätte sonst zu
+    Video-/Audio-Drift geführt, sobald sich die globale Timing-Einstellung
+    nach dem Bestätigen eines Schnittplans geändert hat.
+    """
     rate = float(project.fps)
     settings = merged.settings
     if export_settings is not None:
@@ -869,7 +857,6 @@ def build_otio_timeline(
             section,
             rate,
             track_index=audio_index,
-            audio_offset_sec=settings.audio_offset_sec,
         )
         audio_index += 1
 

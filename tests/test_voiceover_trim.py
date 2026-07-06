@@ -68,7 +68,7 @@ def test_audio_offset_creates_a1_gap(tmp_path: Path) -> None:
     )
     Path(voice.path).write_bytes(b"wav")
     with patch("otio_app.services.otio_exporter.probe_media_timing", return_value=MediaTiming(0, 10, 25)):
-        _append_aligned_voice_track(timeline, section, 25.0, track_index=1, audio_offset_sec=1.0)
+        _append_aligned_voice_track(timeline, section, 25.0, track_index=1)
 
     track = timeline.tracks[0]
     assert isinstance(track[0], otio.schema.Gap)
@@ -148,7 +148,6 @@ def test_wav_never_trimmed_by_video_head_trim(tmp_path: Path) -> None:
             TimelineSection(str(media), "Canyon", 0.0, 40.0, voice),
             25.0,
             track_index=1,
-            audio_offset_sec=1.0,
         )
     clip = timeline.tracks[0][1]
     assert clip.source_range.start_time.to_seconds() == 0.0

@@ -929,12 +929,13 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
     export_timing = _export_timing_settings(project)
     st.markdown("**OTIO-Timeline aus bestätigten Schnittplänen**")
     st.caption(
-        "Orte und Timing wählen, dann **OTIO exportieren** — Vorschau ist optional. "
-        f"Audio-Start und Ausklingen aus Tab **Regeln → Timing & Gemini** "
-        f"({export_timing.audio_offset_sec}s / {export_timing.section_outro_sec}s). "
-        f"Ausklingen ist der letzte Shot pro Ordner im Schnittplan. "
-        f"Ziel: `{default_export_path}` · "
-        f"Einstellungen: `{project.work_dir_path / 'otio_export_settings.json'}`"
+        "Orte wählen, dann **OTIO exportieren** — Vorschau ist optional. "
+        "Audio-Start und Ausklingen sind **pro Ort fest im Schnittplan verankert** "
+        "(Wert beim **Schnittplan vorschlagen/bestätigen**, Tab **Regeln → Timing & Gemini**) — "
+        "der Export übernimmt sie unverändert je Ort, unabhängig von der aktuell "
+        "eingestellten globalen Regel. Um Audio-Start/Ausklingen für einen Ort zu ändern, "
+        "Schnittplan dort neu vorschlagen und erneut bestätigen. "
+        f"Ziel: `{default_export_path}`"
     )
 
     export_folders = st.multiselect(
@@ -1038,28 +1039,23 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
         if preview.ready:
             from otio_app.services.otio_exporter import _compute_timeline_sections
 
+            # Zeigt die TATSÄCHLICH je Ort fest verankerten Werte (aus dem
+            # jeweiligen bestätigten Schnittplan) — nicht die aktuelle globale
+            # Regeln-Einstellung, die inzwischen davon abweichen kann.
             timeline_sections = _compute_timeline_sections(
                 preview.timeline_items,
-                preview.settings.model_copy(
-                    update={
-                        "audio_offset_sec": export_timing.audio_offset_sec,
-                        "section_outro_sec": export_timing.section_outro_sec,
-                    }
-                ),
+                preview.settings,
                 preview.voiceovers,
             )
             total_duration = sum(section.video_duration_sec for section in timeline_sections)
-            st.caption(
-                f"Geschätzte Videospur: {total_duration:.1f}s · "
-                f"Audio-Start: {export_timing.audio_offset_sec}s · "
-                f"Ausklingen: {export_timing.section_outro_sec}s · "
-                f"{project.fps} fps"
-            )
+            st.caption(f"Geschätzte Videospur: {total_duration:.1f}s · {project.fps} fps")
             for section in timeline_sections:
                 voice_start = section.video_start_sec + section.voiceover.timeline_start_sec
                 st.caption(
                     f"• **{section.folder}** — Video ab {section.video_start_sec:.1f}s "
-                    f"({section.video_duration_sec:.1f}s), Voice ab {voice_start:.1f}s"
+                    f"({section.video_duration_sec:.1f}s), Voice ab {voice_start:.1f}s "
+                    f"(Audio-Start {section.voiceover.timeline_start_sec:.1f}s, "
+                    f"im Schnittplan verankert)"
                 )
 
             if st.button(

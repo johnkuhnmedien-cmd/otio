@@ -289,6 +289,44 @@ def test_merge_does_not_false_block_second_section_global_coords(tmp_path: Path)
     )
 
 
+def test_export_ignores_stale_global_export_settings_override(tmp_path: Path) -> None:
+    """Regression: otio_export_settings.json wurde bisher benutzt, um
+    section_outro_sec/audio_offset_sec beim Export GLOBAL zu überschreiben —
+    unabhängig davon, mit welchen Werten der jeweilige Schnittplan tatsächlich
+    gebaut/bestätigt wurde. Wenn sich die globale Timing-Konfiguration NACH
+    dem Bestätigen änderte (z. B. andere Regeln für einen anderen Ort),
+    entstanden Geisterfehler wie 'section_outro_sec (8.5s) nicht vollständig
+    als Outro-Elemente geplant (4.0s)' oder 'Visuelles Loch', obwohl der
+    Schnittplan selbst vollkommen konsistent war. Jetzt zählt ausschließlich
+    das, was im jeweiligen Schnittplan (plan.settings / plan.voiceover) fest
+    eingebaut ist."""
+    from otio_app.services.otio_export_settings import OtioExportSettings, save_otio_export_settings
+
+    project = _project(tmp_path)
+    _setup_mapping_and_plans(project, tmp_path)  # baked-in: audio_offset=1.0, section_outro=5.0
+
+    # Simuliert eine geänderte globale Timing-Konfiguration NACH dem Bestätigen
+    # (z. B. weil der Nutzer für einen anderen Ort andere Werte eingestellt hat).
+    save_otio_export_settings(
+        project,
+        OtioExportSettings(audio_offset_sec=2.0, section_outro_sec=8.5),
+    )
+
+    merged = merge_confirmed_edit_plans(project)
+    assert merged.validation_status == "OK", merged.warnings
+    assert merged.ready is True
+
+    timeline = build_otio_timeline(
+        project,
+        merged,
+        export_settings=OtioExportSettings(audio_offset_sec=2.0, section_outro_sec=8.5),
+    )
+    florida_audio = timeline.tracks[1]
+    # Audio-Gap muss dem im Schnittplan verankerten Offset (1.0s) folgen,
+    # NICHT der stale globalen Konfiguration (2.0s).
+    assert florida_audio[0].source_range.duration.to_seconds() == 1.0
+
+
 def test_merge_confirmed_edit_plans_in_mapping_order(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _setup_mapping_and_plans(project, tmp_path)
