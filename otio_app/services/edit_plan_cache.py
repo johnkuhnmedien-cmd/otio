@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from otio_app.analysis_models import EditPlanDocument
@@ -13,6 +14,15 @@ from otio_app.services.edit_plan_builder import (
     EditPlanLocationState,
     EditPlanLocationStatus,
 )
+
+
+def _parse_generated_at(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
 
 _legacy_migrated_projects: set[str] = set()
 _document_cache: dict[tuple[str, str], tuple[float, EditPlanDocument | None]] = {}
@@ -24,6 +34,7 @@ class EditPlanFolderMeta:
     folder_name: str
     confirmed: bool
     shot_count: int
+    generated_at: str = ""
 
     @property
     def has_shots(self) -> bool:
@@ -98,6 +109,7 @@ def load_edit_plan_folder_meta(project: Project, folder_name: str) -> EditPlanFo
             folder_name=folder_name,
             confirmed=bool(payload.get("confirmed")),
             shot_count=len(shots) if isinstance(shots, list) else 0,
+            generated_at=str(payload.get("generated_at") or ""),
         )
     except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
         meta = EditPlanFolderMeta(folder_name=folder_name, confirmed=False, shot_count=0)
@@ -136,6 +148,26 @@ def resolve_location_status_from_meta(
     meta: EditPlanFolderMeta,
     draft: EditPlanDocument | None = None,
 ) -> EditPlanLocationStatus:
+    """Bevorzugt den neueren Stand zwischen In-Session-Entwurf und Datei.
+
+    Ein Session-Entwurf gewann bisher immer bedingungslos gegenüber der
+    gespeicherten Datei — dadurch zeigte die Orts-Auswahl einen veralteten
+    Shot-Count/Status an, sobald z. B. der Supplement-Assets-Workflow einen
+    frischeren Schnittplan direkt auf die Festplatte geschrieben hatte,
+    während im Browser noch ein älterer Entwurf im session_state lag.
+    """
+    if draft is not None:
+        meta_generated_at = _parse_generated_at(meta.generated_at)
+        draft_generated_at = draft.generated_at
+        prefer_meta = (
+            meta.has_shots
+            and meta_generated_at is not None
+            and draft_generated_at is not None
+            and meta_generated_at > draft_generated_at
+        )
+        if prefer_meta:
+            draft = None
+
     if draft is not None:
         effective = draft
         if not effective.shots:

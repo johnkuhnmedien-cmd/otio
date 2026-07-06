@@ -105,6 +105,37 @@ def _set_draft(document: EditPlanDocument, folder_name: str) -> None:
     )
 
 
+def _clear_draft(project_id: str, folder_name: str) -> None:
+    st.session_state.pop(_plan_state_key(project_id, folder_name), None)
+
+
+def _effective_draft(
+    project_id: str,
+    folder_name: str,
+    saved: EditPlanDocument | None,
+) -> EditPlanDocument | None:
+    """Bevorzugt den NEUEREN Stand zwischen In-Session-Entwurf und
+    gespeicherter Datei (nach generated_at).
+
+    Ohne diesen Vergleich gewann der Session-Entwurf immer bedingungslos —
+    das führte dazu, dass ein extern (z. B. von der ②½ Supplement-Assets-
+    Seite per Auto-Replan) frisch auf die Festplatte geschriebener,
+    aktuellerer Schnittplan im Tab „Prüfen & Speichern“ nicht sichtbar war,
+    solange im Browser noch ein älterer Entwurf im session_state lag —
+    inklusive dessen veraltetem inventory_hash_at_plan_time und
+    segment_coverage (z. B. „Inventory changed“ / „Beats mit
+    SUPPLEMENT_REQUIRED“, obwohl der neue Plan das längst behoben hat).
+    """
+    draft = _get_draft(project_id, folder_name)
+    if draft is None:
+        return saved
+    if saved is None:
+        return draft
+    if saved.generated_at > draft.generated_at:
+        return saved
+    return draft
+
+
 def _location_state_label(state: EditPlanLocationState) -> str:
     labels = {
         EditPlanLocationState.CONFIRMED: "Abgeschlossen",
@@ -562,7 +593,7 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
         except (GeminiNotConfiguredError, ValueError, FileNotFoundError) as exc:
             st.error(str(exc))
 
-    draft = _get_draft(project.id, selected_folder) or saved
+    draft = _effective_draft(project.id, selected_folder, saved)
     if draft is not None:
         rules_doc = get_edit_plan_rules_for_project(project)
         missing = sum(1 for shot in draft.shots if shot.asset_source == "missing")
@@ -584,7 +615,7 @@ def _render_tab_review(
     saved: EditPlanDocument | None,
     plan_path: Path,
 ) -> None:
-    draft = _get_draft(project.id, selected_folder) or saved
+    draft = _effective_draft(project.id, selected_folder, saved)
     if draft is None or (not draft.shots and not draft.timeline_items):
         st.info(
             f"Noch kein Vorschlag für **{selected_folder}** — "

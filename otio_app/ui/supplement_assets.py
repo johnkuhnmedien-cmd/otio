@@ -585,7 +585,8 @@ def render_supplement_assets_page() -> None:
     auto_col, coverage_col = st.columns(2)
     with auto_col:
         if st.button(
-            "Alles automatisch: Top 3 suchen, herunterladen, analysieren, Inventar aktualisieren",
+            "Alles automatisch: Top 3 suchen, herunterladen, analysieren, "
+            "Inventar aktualisieren & Schnittplan neu vorschlagen",
             key=f"auto_full_{project.id}_{safe_folder_slug(selected_folder)}",
             type="primary",
             disabled=pexels_readiness_for_folder.status != "READY",
@@ -722,9 +723,14 @@ def render_supplement_assets_page() -> None:
         )
     with action_col2:
         inventory_clicked = st.button(
-            "Inventory aktualisieren",
+            "Inventory aktualisieren & Schnittplan neu vorschlagen",
             key=f"inventory_{project.id}",
             disabled=not can_update_inventory,
+            help=(
+                "Übernimmt neue Assets ins Inventory UND schlägt automatisch "
+                "einen neuen (noch nicht bestätigten) Schnittplan für diesen "
+                "Ort vor."
+            ),
         )
     with action_col3:
         replan_clicked = st.button(
