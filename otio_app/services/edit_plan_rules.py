@@ -37,8 +37,12 @@ EDIT_PLAN_RULE_TEMPLATES: tuple[EditPlanRuleTemplate, ...] = (
     EditPlanRuleTemplate(
         rule_type=RULE_MAX_ASSET_USES,
         label="Max. Asset-Nutzung",
-        description="Dasselbe Asset höchstens N-mal im gesamten Video.",
-        default_params={"max_count": 2},
+        description=(
+            "Dasselbe Asset höchstens N-mal im gesamten Video. Optional: "
+            "Mindestabstand (in anderen Shots), bevor dasselbe Asset erneut "
+            "verwendet werden darf — vermeidet zu schnelle Wiederholungen."
+        ),
+        default_params={"max_count": 2, "min_gap": 0},
         implemented=True,
     ),
     EditPlanRuleTemplate(
@@ -269,6 +273,21 @@ def _max_count(rules: list[EditPlanRule]) -> int | None:
     return None
 
 
+def _min_gap(rules: list[EditPlanRule]) -> int:
+    """Mindestabstand (in anderen Shots) bis zur erneuten Nutzung desselben Assets.
+
+    Lebt als Zusatzparameter bei RULE_MAX_ASSET_USES statt als eigene Regel,
+    da beide dieselbe Wiederholungs-Problematik adressieren (0 = deaktiviert)."""
+    for rule in rules:
+        if rule.rule_type == RULE_MAX_ASSET_USES:
+            raw = rule.params.get("min_gap", 0)
+            try:
+                return max(0, int(raw))
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
+
 def _no_consecutive(rules: list[EditPlanRule]) -> bool:
     return any(rule.rule_type == RULE_NO_CONSECUTIVE_SAME_ASSET for rule in rules)
 
@@ -337,7 +356,9 @@ def validate_shots_against_rules(
 
     violations: list[str] = []
     max_count = _max_count(rules)
+    min_gap = _min_gap(rules)
     usage: dict[str, int] = {}
+    last_used_at: dict[str, int] = {}
     previous_key: str | None = None
 
     for index, shot in enumerate(shots, start=1):
@@ -355,6 +376,13 @@ def validate_shots_against_rules(
             violations.append(
                 f"Shot {index}: `{key}` direkt nach Shot {index - 1} wiederholt"
             )
+        if min_gap > 0 and key in last_used_at and (index - last_used_at[key]) <= min_gap:
+            violations.append(
+                f"Shot {index}: `{key}` erneut nach nur "
+                f"{index - last_used_at[key] - 1} anderen Shot(s) "
+                f"(Mindestabstand {min_gap})"
+            )
+        last_used_at[key] = index
         previous_key = key
     return violations
 
@@ -370,12 +398,14 @@ def apply_edit_plan_rules(
         return shots
 
     max_count = _max_count(rules)
+    min_gap = _min_gap(rules)
     consecutive = _no_consecutive(rules)
     usage: dict[str, int] = {}
+    last_used_at: dict[str, int] = {}
     previous_key: str | None = None
     adjusted: list[EditPlanShot] = []
 
-    for shot in shots:
+    for position, shot in enumerate(shots):
         folder_assets = assets_by_folder.get(shot.folder, [])
         chosen = shot.asset_path if shot.asset_path in folder_assets else None
         chosen_key = _asset_key(chosen)
@@ -387,6 +417,12 @@ def apply_edit_plan_rules(
             if max_count is not None and usage.get(key, 0) >= max_count:
                 return True
             if consecutive and previous_key is not None and key == previous_key:
+                return True
+            if (
+                min_gap > 0
+                and key in last_used_at
+                and (position - last_used_at[key]) <= min_gap
+            ):
                 return True
             return False
 
@@ -407,6 +443,7 @@ def apply_edit_plan_rules(
 
         if chosen_key is not None:
             usage[chosen_key] = usage.get(chosen_key, 0) + 1
+            last_used_at[chosen_key] = position
             previous_key = chosen_key
         else:
             previous_key = None

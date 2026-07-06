@@ -56,6 +56,9 @@ def merge_rule_widgets_from_session(
             max_key = f"rule_max_{project.id}_{rule.id}"
             if max_key in state:
                 params["max_count"] = int(state[max_key])
+            min_gap_key = f"rule_min_gap_{project.id}_{rule.id}"
+            if min_gap_key in state:
+                params["min_gap"] = int(state[min_gap_key])
         elif rule.rule_type == RULE_TRIM_LEADING:
             trim_key = f"rule_trim_{project.id}_{rule.id}"
             if trim_key in state:
@@ -125,16 +128,34 @@ def _render_rule_card(
         label = rule.label
 
         if rule.rule_type == RULE_MAX_ASSET_USES:
-            params["max_count"] = int(
-                st.number_input(
-                    "Max. Nutzungen pro Asset",
-                    min_value=1,
-                    max_value=20,
-                    value=int(params.get("max_count", 2)),
-                    step=1,
-                    key=f"rule_max_{project.id}_{rule.id}",
+            max_cols = st.columns(2)
+            with max_cols[0]:
+                params["max_count"] = int(
+                    st.number_input(
+                        "Max. Nutzungen pro Asset",
+                        min_value=1,
+                        max_value=20,
+                        value=int(params.get("max_count", 2)),
+                        step=1,
+                        key=f"rule_max_{project.id}_{rule.id}",
+                    )
                 )
-            )
+            with max_cols[1]:
+                params["min_gap"] = int(
+                    st.number_input(
+                        "Min. Abstand (Shots) bis Wiederverwendung",
+                        min_value=0,
+                        max_value=50,
+                        value=int(params.get("min_gap", 0)),
+                        step=1,
+                        key=f"rule_min_gap_{project.id}_{rule.id}",
+                        help=(
+                            "0 = deaktiviert. Sonst muss ein Asset erst nach so vielen "
+                            "ANDEREN Shots erneut verwendet werden — vermeidet zu "
+                            "schnelle Wiederholungen desselben Assets."
+                        ),
+                    )
+                )
         elif rule.rule_type == RULE_TRIM_LEADING:
             params["trim_sec"] = float(
                 st.number_input(

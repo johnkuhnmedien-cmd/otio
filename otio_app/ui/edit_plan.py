@@ -38,7 +38,10 @@ from otio_app.services.edit_plan_rules import (
     validate_shots_against_rules,
 )
 from otio_app.services.asset_usage import validate_max_asset_usage_blockers
+from otio_app.services.edit_plan_gap_fill import GAP_FILLABLE_TYPES, fill_missing_timeline_assets
+from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.inventory_hash import current_folder_inventory_hash, inventory_hash_is_stale
+from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.edit_plan_validator import ValidationStatus, validate_timeline_items
 from otio_app.services.opening_title_renderer import (
     ensure_opening_titles_rendered,
@@ -49,7 +52,7 @@ from otio_app.services.supplement_pipeline import search_supplement_candidates
 from otio_app.services.supplement_search import request_with_keyword_query
 from otio_app.services.supplement_requests import load_supplement_requests, update_request, upsert_requests
 from otio_app.services.title_style import extract_title_style
-from otio_app.services.timeline_plan_builder import build_voiceover_plan
+from otio_app.services.timeline_plan_builder import build_voiceover_plan, shots_from_timeline_items
 from otio_app.services.generic_outro_selector import section_id_for_folder
 from otio_app.services.otio_exporter import (
     MergedEditPlanResult,
@@ -427,6 +430,44 @@ def _finalize_plan_for_confirm(
     document = document.model_copy(update={"timeline_items": timeline_items})
     notes.extend(title_notes)
 
+    # Manuelles Bestätigen darf nicht daran scheitern, dass für einzelne
+    # Shots kein Supplement-Asset gefunden wurde: statt hart zu blockieren,
+    # wird automatisch das inhaltlich nächstbeste verfügbare Asset aus
+    # demselben Ordner zugewiesen (mit deutlicher Warnung als Hinweis).
+    missing_before = sum(
+        1
+        for item in document.timeline_items
+        if item.type in GAP_FILLABLE_TYPES and not item.resolved_media_path and not item.allow_black
+    )
+    if missing_before:
+        rules_doc_for_fill = get_edit_plan_rules_for_project(project)
+        folder_names = {item.folder_name for item in document.timeline_items if item.folder_name}
+        folder_assets: dict[str, list[dict[str, str]]] = {}
+        for folder_name in folder_names:
+            inventory = load_folder_inventory(project, folder_name)
+            folder_assets[folder_name] = [
+                {
+                    "path": asset.path,
+                    "description": asset.description,
+                    "asset_id": asset.asset_id or asset_id_for_path(asset.path),
+                    "asset_origin": asset.asset_origin or "local_original",
+                }
+                for asset in inventory.assets
+                if asset.path
+            ]
+        filled_items, fill_notes = fill_missing_timeline_assets(
+            document.timeline_items,
+            folder_assets=folder_assets,
+            rules_doc=rules_doc_for_fill,
+        )
+        document = document.model_copy(
+            update={
+                "timeline_items": filled_items,
+                "shots": shots_from_timeline_items(filled_items),
+            }
+        )
+        notes.extend(fill_notes)
+
     if document.inventory_hash_at_plan_time and inventory_hash_is_stale(
         project,
         selected_folder,
@@ -790,7 +831,9 @@ def _render_tab_review(
             else:
                 st.warning(
                     "Kein Asset — bitte unter **②½ Supplement Assets** ergänzen "
-                    "oder Schnittplan neu vorschlagen."
+                    "oder Schnittplan neu vorschlagen. Beim Bestätigen wird "
+                    "andernfalls automatisch das nächstbeste verfügbare Asset "
+                    "aus dem Ordner verwendet."
                 )
 
     confirm = st.checkbox(

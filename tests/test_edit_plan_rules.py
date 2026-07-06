@@ -198,3 +198,87 @@ def test_apply_rules_avoids_consecutive_and_max_uses(tmp_path: Path) -> None:
     assert paths[1] != "/media/a.mp4"
     assert paths.count("/media/a.mp4") <= 2
     assert validate_shots_against_rules(adjusted, rules) == []
+
+
+def test_apply_rules_respects_min_gap_between_reuse(tmp_path: Path) -> None:
+    """Regression: 'Min. Abstand (Shots) bis Wiederverwendung' — dasselbe Asset
+    darf erst nach min_gap ANDEREN Shots erneut verwendet werden."""
+    project = _project(tmp_path)
+    rules = EditPlanRulesDocument(
+        project_id=project.id,
+        rules=[
+            EditPlanRule(
+                id="r1",
+                rule_type=RULE_MAX_ASSET_USES,
+                enabled=True,
+                params={"max_count": 10, "min_gap": 2},
+            ),
+        ],
+    )
+    assets = {
+        "Folder": [
+            "/media/a.mp4",
+            "/media/b.mp4",
+            "/media/c.mp4",
+        ]
+    }
+    shots = [
+        _shot(1, "/media/a.mp4"),
+        _shot(2, "/media/a.mp4"),
+        _shot(3, "/media/a.mp4"),
+        _shot(4, "/media/a.mp4"),
+    ]
+    adjusted = apply_edit_plan_rules(shots, rules, assets)
+    paths = [shot.asset_path for shot in adjusted]
+    assert paths[0] == "/media/a.mp4"
+    # a.mp4 darf erst wieder auftauchen, wenn mind. 2 andere Shots dazwischen liegen.
+    last_a_index = -100
+    for index, path in enumerate(paths):
+        if path == "/media/a.mp4":
+            if last_a_index >= 0:
+                assert index - last_a_index > 2, (index, last_a_index, paths)
+            last_a_index = index
+    assert validate_shots_against_rules(adjusted, rules) == []
+
+
+def test_validate_shots_reports_min_gap_violation(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    rules = EditPlanRulesDocument(
+        project_id=project.id,
+        rules=[
+            EditPlanRule(
+                id="r1",
+                rule_type=RULE_MAX_ASSET_USES,
+                enabled=True,
+                params={"max_count": 10, "min_gap": 3},
+            ),
+        ],
+    )
+    shots = [
+        _shot(1, "/media/a.mp4"),
+        _shot(2, "/media/b.mp4"),
+        _shot(3, "/media/a.mp4"),
+    ]
+    violations = validate_shots_against_rules(shots, rules)
+    assert any("Mindestabstand" in v for v in violations)
+
+
+def test_min_gap_defaults_to_zero_and_disabled(tmp_path: Path) -> None:
+    """min_gap=0 (Default) darf bestehendes Verhalten nicht verändern."""
+    project = _project(tmp_path)
+    rules = EditPlanRulesDocument(
+        project_id=project.id,
+        rules=[
+            EditPlanRule(
+                id="r1",
+                rule_type=RULE_MAX_ASSET_USES,
+                enabled=True,
+                params={"max_count": 10},
+            ),
+        ],
+    )
+    shots = [
+        _shot(1, "/media/a.mp4"),
+        _shot(2, "/media/a.mp4"),
+    ]
+    assert validate_shots_against_rules(shots, rules) == []
