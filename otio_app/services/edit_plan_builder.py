@@ -496,7 +496,11 @@ def build_edit_plan(
                     )
                 )
 
-    shots = apply_edit_plan_rules(shots, rules_doc, assets_by_folder)
+    # Volle Asset-Payloads (inkl. asset_origin/rights_status/provider/...)
+    # übergeben, nicht nur Pfade — sonst blieben bei einer regelbedingten
+    # Asset-Neuzuweisung (max_asset_usage/Min. Abstand) die Metadaten des
+    # VORHER zugewiesenen Assets fälschlich stehen.
+    shots = apply_edit_plan_rules(shots, rules_doc, assets_payload_by_folder)
 
     # Die Coverage-Bewertung pro Beat ist nur eine grobe Vorab-Schätzung
     # (Keyword-Heuristik auf den GESAMTEN Beat-Text, bevor Gemini/Regeln den

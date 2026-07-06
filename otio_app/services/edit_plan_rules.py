@@ -387,10 +387,25 @@ def validate_shots_against_rules(
     return violations
 
 
+def _normalize_folder_assets(entries: list) -> dict[str, dict[str, str]]:
+    """Akzeptiert sowohl reine Pfadlisten (Alt-API) als auch volle
+    Asset-Payloads (Pfad + Metadaten wie asset_origin/rights_status/...).
+
+    Wird für die Metadaten-Auffrischung beim Neu-Zuweisen eines Assets
+    benötigt (siehe apply_edit_plan_rules)."""
+    by_path: dict[str, dict[str, str]] = {}
+    for entry in entries:
+        if isinstance(entry, str):
+            by_path.setdefault(entry, {"path": entry})
+        elif isinstance(entry, dict) and entry.get("path"):
+            by_path[entry["path"]] = entry
+    return by_path
+
+
 def apply_edit_plan_rules(
     shots: list[EditPlanShot],
     rules_doc: EditPlanRulesDocument,
-    assets_by_folder: dict[str, list[str]],
+    assets_by_folder: dict[str, list],
 ) -> list[EditPlanShot]:
     """Weist Assets so zu, dass aktive Regeln eingehalten werden."""
     rules = _enabled_rules(rules_doc)
@@ -405,9 +420,13 @@ def apply_edit_plan_rules(
     previous_key: str | None = None
     adjusted: list[EditPlanShot] = []
 
+    normalized_by_folder = {
+        folder: _normalize_folder_assets(entries) for folder, entries in assets_by_folder.items()
+    }
+
     for position, shot in enumerate(shots):
-        folder_assets = assets_by_folder.get(shot.folder, [])
-        chosen = shot.asset_path if shot.asset_path in folder_assets else None
+        folder_asset_map = normalized_by_folder.get(shot.folder, {})
+        chosen = shot.asset_path if shot.asset_path in folder_asset_map else None
         chosen_key = _asset_key(chosen)
 
         def violates(candidate: str | None) -> bool:
@@ -430,9 +449,9 @@ def apply_edit_plan_rules(
             chosen = None
             chosen_key = None
 
-        if chosen is None and folder_assets:
+        if chosen is None and folder_asset_map:
             candidates = sorted(
-                folder_assets,
+                folder_asset_map.keys(),
                 key=lambda path: (usage.get(_asset_key(path) or "", 0), path),
             )
             for candidate in candidates:
@@ -448,13 +467,35 @@ def apply_edit_plan_rules(
         else:
             previous_key = None
 
-        adjusted.append(
-            shot.model_copy(
-                update={
-                    "asset_path": chosen,
-                    "asset_id": asset_id_for_path(chosen) if chosen else "",
-                    "asset_source": "local" if chosen else "missing",
+        update: dict[str, object] = {
+            "asset_path": chosen,
+            "asset_source": "local" if chosen else "missing",
+        }
+        chosen_meta = folder_asset_map.get(chosen or "", {})
+        if chosen_meta.get("asset_id"):
+            update["asset_id"] = chosen_meta["asset_id"]
+        else:
+            update["asset_id"] = asset_id_for_path(chosen) if chosen else ""
+
+        # Wenn die Regelanwendung ein ANDERES Asset zugewiesen hat als
+        # ursprünglich geplant (chosen != shot.asset_path), müssen auch die
+        # vom Asset abhängigen Metadaten-Felder aufgefrischt werden — sonst
+        # blieben rights_status/asset_origin/provider/... vom vorher
+        # zugewiesenen (jetzt nicht mehr gültigen) Asset stehen. Das führte
+        # z. B. dazu, dass ein per Regel neu zugewiesenes Supplement-Asset
+        # fälschlich weiterhin als "local_original" (oder mit leerem
+        # asset_origin) im Schnittplan auftauchte.
+        if chosen != shot.asset_path:
+            update.update(
+                {
+                    "asset_origin": chosen_meta.get("asset_origin", ""),
+                    "rights_status": chosen_meta.get("rights_status", ""),
+                    "source_url": chosen_meta.get("source_url", ""),
+                    "provider": chosen_meta.get("provider", ""),
+                    "media_type": chosen_meta.get("media_type", ""),
+                    "supplement_request_id": chosen_meta.get("supplement_request_id", ""),
                 }
             )
-        )
+
+        adjusted.append(shot.model_copy(update=update))
     return adjusted

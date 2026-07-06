@@ -80,3 +80,32 @@ def st_value(at: AppTest, prefix: str) -> str:
         if element.value.startswith(prefix):
             return element.value[len(prefix):]
     raise AssertionError(f"Keine Markdown-Ausgabe mit Prefix {prefix!r} gefunden")
+
+
+def test_generate_button_shows_error_for_any_exception_type(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Regression: Nutzer berichtete, dass beim Bestätigen/Vorschlagen
+    scheinbar 'nichts passiert'. Vorher wurden nur GeminiNotConfiguredError/
+    ValueError/FileNotFoundError abgefangen — jeder ANDERE Fehler (z. B.
+    aus dem Opening-Title-Rendering) führte zu einem unbehandelten Absturz
+    (sichtbar als at.exception) statt einer klaren Fehlermeldung. Jetzt wird
+    JEDE Exception abgefangen und als Fehlermeldung angezeigt."""
+    monkeypatch.setenv("REPRO_ROOT", str(tmp_path))
+
+    at = AppTest.from_file(str(SCRIPT_PATH))
+    at.run()
+    at.radio(key="edit_plan_active_tab_repro-project").set_value("▶️ Vorschlag").run()
+    assert not at.exception
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("Simulierter unerwarteter Fehler beim Bauen des Plans")
+
+    with patch("otio_app.ui.edit_plan.build_edit_plan", side_effect=_boom):
+        at.button(key="build_plan_repro-project").click().run()
+
+    assert not at.exception, (
+        f"Unbehandelte Exception statt sichtbarer Fehlermeldung: {at.exception}"
+    )
+    error_texts = [element.value for element in at.error]
+    assert any("Simulierter unerwarteter Fehler" in text for text in error_texts), error_texts

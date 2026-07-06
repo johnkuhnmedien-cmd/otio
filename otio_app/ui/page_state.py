@@ -28,6 +28,8 @@ _PAGE_WIDGET_MARKERS: dict[str, tuple[str, ...]] = {
         "plan_gemini_",
         "plan_folder_select_",
         "confirm_plan_",
+        "confirm_result_",
+        "generate_result_",
         "save_plan_",
         "build_plan_",
         "export_audio_offset_",

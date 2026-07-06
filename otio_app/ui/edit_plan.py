@@ -92,6 +92,14 @@ def _folder_state_key(project_id: str) -> str:
     return f"edit_plan_active_folder_{project_id}"
 
 
+def _confirm_result_key(project_id: str, folder_name: str) -> str:
+    return f"confirm_result_{project_id}_{safe_folder_slug(folder_name)}"
+
+
+def _generate_result_key(project_id: str, folder_name: str) -> str:
+    return f"generate_result_{project_id}_{safe_folder_slug(folder_name)}"
+
+
 def _get_draft(project_id: str, folder_name: str) -> EditPlanDocument | None:
     raw = st.session_state.get(_plan_state_key(project_id, folder_name))
     if not raw:
@@ -607,6 +615,19 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
     if not is_gemini_configured():
         st.warning("Ohne GEMINI_API_KEY wird nur eine einfache Text-Trennung genutzt.")
 
+    generate_result_key = _generate_result_key(project.id, selected_folder)
+    pending_generate_result = st.session_state.pop(generate_result_key, None)
+    if pending_generate_result is not None:
+        if pending_generate_result["ok"]:
+            st.success(pending_generate_result["message"])
+            for note in pending_generate_result.get("notes", []):
+                st.caption(f"• {note}")
+        else:
+            st.error(pending_generate_result["message"])
+            if pending_generate_result.get("traceback"):
+                with st.expander("Technische Details (Traceback)", expanded=False):
+                    st.code(pending_generate_result["traceback"])
+
     timing = _current_timing_settings(project)
     st.caption(
         f"Gemini-Modell für diesen Vorschlag: **{format_gemini_model_label(timing.gemini_model)}** "
@@ -628,6 +649,8 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
             fallback_order=list(DEFAULT_FALLBACK_ORDER),
             gemini_model=timing.gemini_model,
         )
+        progress_bar = None
+        progress_text = None
         try:
             rules_doc = get_edit_plan_rules_for_project(project)
             save_edit_plan_rules(project, rules_doc)
@@ -665,25 +688,45 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
                 )
                 document = document.model_copy(update={"timeline_items": timeline_items})
             _set_draft(document, selected_folder)
-            st.success(f"{len(document.shots)} Shots vorgeschlagen.")
+            st.toast(f"✅ {len(document.shots)} Shots für {selected_folder} vorgeschlagen.", icon="✅")
+            generate_notes = list(title_notes)
             title_item = next(
                 (item for item in document.timeline_items if item.type == "opening_title"),
                 None,
             )
             if title_item is not None and title_item.title_style is not None:
                 style = title_item.title_style
-                st.caption(
+                generate_notes.insert(
+                    0,
                     f"Titel: **{style.text}** · {style.requested_font_family} "
                     f"→ {style.resolved_font_family} · **{int(style.font_size_px)}px** · "
                     f"{style.duration_sec:.1f}s · hash `{style.render_hash}`"
+                    + (" · Font-Fallback aktiv (siehe validation_report.json)." if style.font_fallback_used else ""),
                 )
-                if style.font_fallback_used:
-                    st.warning("Font-Fallback aktiv — siehe validation_report.json.")
-            for note in title_notes:
-                st.caption(f"• {note}")
+            st.session_state[generate_result_key] = {
+                "ok": True,
+                "message": f"{len(document.shots)} Shots vorgeschlagen.",
+                "notes": generate_notes,
+            }
             st.rerun()
-        except (GeminiNotConfiguredError, ValueError, FileNotFoundError) as exc:
-            st.error(str(exc))
+        except Exception as exc:  # noqa: BLE001 — Nutzer muss IMMER eine
+            # sichtbare Fehlermeldung bekommen (vorher wurden nur
+            # GeminiNotConfiguredError/ValueError/FileNotFoundError
+            # abgefangen — jeder andere Fehler führte zu einem
+            # unbehandelten Absturz).
+            import traceback
+
+            if progress_bar is not None:
+                progress_bar.empty()
+            if progress_text is not None:
+                progress_text.empty()
+            st.toast(f"❌ Fehler beim Vorschlagen: {exc}", icon="❌")
+            st.session_state[generate_result_key] = {
+                "ok": False,
+                "message": f"Fehler beim Vorschlagen: {exc}",
+                "traceback": traceback.format_exc(),
+            }
+            st.rerun()
 
     draft = _effective_draft(project.id, selected_folder, saved)
     if draft is not None:
@@ -1001,6 +1044,25 @@ def _render_tab_review(
                     "aus dem Ordner verwendet."
                 )
 
+    # Ergebnis eines vorherigen Bestätigen-Klicks prominent anzeigen — auch
+    # nach dem durch st.rerun() ausgelösten Neuladen. Auf einer langen Seite
+    # (viele Shot-Expander oberhalb) kann eine Inline-Meldung direkt nach dem
+    # Button sonst unbemerkt bleiben, wenn der Browser beim Rerun nach oben
+    # scrollt — der Nutzer hat dann den Eindruck, der Klick habe "nichts
+    # gemacht", obwohl im Hintergrund ein Fehler aufgetreten ist.
+    result_key = _confirm_result_key(project.id, selected_folder)
+    pending_result = st.session_state.pop(result_key, None)
+    if pending_result is not None:
+        if pending_result["ok"]:
+            st.success(pending_result["message"])
+            for note in pending_result.get("notes", []):
+                st.caption(f"• {note}")
+        else:
+            st.error(pending_result["message"])
+            if pending_result.get("traceback"):
+                with st.expander("Technische Details (Traceback)", expanded=False):
+                    st.code(pending_result["traceback"])
+
     confirm = st.checkbox(
         f"Ich habe den Schnittplan für {selected_folder} geprüft und möchte ihn bestätigen",
         key=f"confirm_plan_{project.id}_{safe_folder_slug(selected_folder)}",
@@ -1015,29 +1077,46 @@ def _render_tab_review(
         type="primary",
     ):
         if not confirm:
+            st.toast("⚠️ Bitte zuerst die Checkbox aktivieren.", icon="⚠️")
             st.warning(
                 "Bitte zuerst die Checkbox **oben** aktivieren — "
                 "ohne Bestätigung wird der Schnittplan nicht exportierbar gespeichert."
             )
+        elif usage_blockers:
+            st.toast("❌ Bestätigung blockiert (max_asset_usage).", icon="❌")
+            st.error("Bestätigung blockiert wegen max_asset_usage-Verstoß.")
         else:
-            if usage_blockers:
-                st.error("Bestätigung blockiert wegen max_asset_usage-Verstoß.")
-            else:
-                try:
-                    with st.spinner("Schnittplan prüfen und speichern …"):
-                        confirmed, finalize_notes = _finalize_plan_for_confirm(
-                            project,
-                            draft,
-                            selected_folder,
-                        )
-                        save_edit_plan(project, confirmed, selected_folder)
-                        _set_draft(confirmed, selected_folder)
-                    st.success(f"Bestätigt und gespeichert: `{plan_path}`")
-                    for note in finalize_notes:
-                        st.caption(f"• {note}")
-                    st.rerun()
-                except (OSError, ValueError) as exc:
-                    st.error(str(exc))
+            try:
+                with st.spinner("Schnittplan prüfen und speichern …"):
+                    confirmed, finalize_notes = _finalize_plan_for_confirm(
+                        project,
+                        draft,
+                        selected_folder,
+                    )
+                    save_edit_plan(project, confirmed, selected_folder)
+                    _set_draft(confirmed, selected_folder)
+                st.toast(f"✅ {selected_folder} bestätigt und gespeichert.", icon="✅")
+                st.session_state[result_key] = {
+                    "ok": True,
+                    "message": f"Bestätigt und gespeichert: `{plan_path}`",
+                    "notes": finalize_notes,
+                }
+                st.rerun()
+            except Exception as exc:  # noqa: BLE001 — Nutzer muss IMMER eine
+                # sichtbare Fehlermeldung bekommen, egal welcher Fehlertyp
+                # auftritt (vorher wurden nur OSError/ValueError abgefangen —
+                # jeder andere Fehler, z. B. beim Opening-Title-Rendering,
+                # führte zu einem unbehandelten Absturz, der wie "nichts
+                # passiert" wirken konnte, wenn die Meldung überscrollt war).
+                import traceback
+
+                st.toast(f"❌ Fehler beim Bestätigen: {exc}", icon="❌")
+                st.session_state[result_key] = {
+                    "ok": False,
+                    "message": f"Fehler beim Bestätigen: {exc}",
+                    "traceback": traceback.format_exc(),
+                }
+                st.rerun()
 
     with st.expander("JSON-Vorschau", expanded=False):
         st.code(draft.model_dump_json(indent=2)[:6000])

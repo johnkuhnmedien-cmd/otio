@@ -200,6 +200,81 @@ def test_apply_rules_avoids_consecutive_and_max_uses(tmp_path: Path) -> None:
     assert validate_shots_against_rules(adjusted, rules) == []
 
 
+def test_apply_rules_refreshes_metadata_when_reassigning_asset(tmp_path: Path) -> None:
+    """Regression: Wenn apply_edit_plan_rules einem Shot wegen eines
+    Regelverstoßes (max_asset_usage) ein ANDERES Asset zuweist, müssen auch
+    die vom Asset abhängigen Metadaten-Felder (asset_origin, rights_status,
+    provider, source_url, supplement_request_id) aufgefrischt werden.
+    Vorher blieben diese Felder vom VORHER zugewiesenen (jetzt ungültigen)
+    Asset stehen — z. B. zeigte ein neu zugewiesenes Supplement-Asset
+    fälschlich weiterhin asset_origin='local_original' oder ''."""
+    project = _project(tmp_path)
+    rules = EditPlanRulesDocument(
+        project_id=project.id,
+        rules=[
+            EditPlanRule(
+                id="r1",
+                rule_type=RULE_MAX_ASSET_USES,
+                enabled=True,
+                params={"max_count": 1},
+            ),
+        ],
+    )
+    assets = {
+        "Folder": [
+            {"path": "/media/a.mp4", "asset_id": "asset_a", "asset_origin": "local_original"},
+            {
+                "path": "/media/supplement.mp4",
+                "asset_id": "asset_supplement",
+                "asset_origin": "pexels",
+                "rights_status": "APPROVED",
+                "provider": "pexels",
+                "source_url": "https://pexels.example/123",
+                "supplement_request_id": "supp_req_001",
+            },
+        ]
+    }
+    shots = [
+        EditPlanShot(
+            voice_file="voice.wav",
+            folder="Folder",
+            voice_start_sec=0.0,
+            voice_end_sec=3.0,
+            duration_sec=3.0,
+            asset_path="/media/a.mp4",
+            asset_id="asset_a",
+            asset_origin="local_original",
+        ),
+        # Zweiter Shot will DASSELBE Asset — verletzt max_count=1, muss auf
+        # das Supplement-Asset umgelenkt werden.
+        EditPlanShot(
+            voice_file="voice.wav",
+            folder="Folder",
+            voice_start_sec=3.0,
+            voice_end_sec=6.0,
+            duration_sec=3.0,
+            asset_path="/media/a.mp4",
+            asset_id="asset_a",
+            asset_origin="local_original",
+        ),
+    ]
+
+    adjusted = apply_edit_plan_rules(shots, rules, assets)
+
+    assert adjusted[0].asset_path == "/media/a.mp4"
+    assert adjusted[0].asset_origin == "local_original"
+
+    assert adjusted[1].asset_path == "/media/supplement.mp4"
+    assert adjusted[1].asset_id == "asset_supplement"
+    assert adjusted[1].asset_origin == "pexels", (
+        f"asset_origin blieb fälschlich stehen: {adjusted[1].asset_origin!r}"
+    )
+    assert adjusted[1].rights_status == "APPROVED"
+    assert adjusted[1].provider == "pexels"
+    assert adjusted[1].source_url == "https://pexels.example/123"
+    assert adjusted[1].supplement_request_id == "supp_req_001"
+
+
 def test_apply_rules_respects_min_gap_between_reuse(tmp_path: Path) -> None:
     """Regression: 'Min. Abstand (Shots) bis Wiederverwendung' — dasselbe Asset
     darf erst nach min_gap ANDEREN Shots erneut verwendet werden."""
