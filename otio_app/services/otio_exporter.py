@@ -234,6 +234,7 @@ def _clip_source_range_for_media(
     fallback_rate: float,
     requested_duration_sec: float,
     trim_leading_sec: float = 0.0,
+    hold_last_frame: bool = False,
 ) -> tuple[otio.opentime.TimeRange, float, list[str]]:
     """source_range im selben TC-Raum wie die Datei; Dauer ggf. auf Datei gekappt."""
     notes: list[str] = []
@@ -260,13 +261,18 @@ def _clip_source_range_for_media(
             notes,
         )
 
-    play_sec = min(requested_duration_sec, available_sec)
+    play_sec = requested_duration_sec if hold_last_frame else min(requested_duration_sec, available_sec)
     if trim > 0:
         notes.append(f"{media_path.name}: erste {trim:.1f}s übersprungen")
-    if play_sec + 0.05 < requested_duration_sec:
+    if play_sec + 0.05 < requested_duration_sec and not hold_last_frame:
         notes.append(
             f"{media_path.name}: Shot {requested_duration_sec:.1f}s, Datei nur "
             f"{available_sec:.1f}s ab TC {start_sec:.2f}s"
+        )
+    elif hold_last_frame and play_sec > available_sec + 0.05:
+        notes.append(
+            f"{media_path.name}: letztes Frame {play_sec - available_sec:.1f}s gehalten "
+            f"(Ordner-Ausklingen)"
         )
     return (
         _time_range(max(0.01, play_sec), media_rate, start_sec=start_sec),
@@ -328,6 +334,24 @@ def _is_last_shot_in_folder(shots: list[EditPlanShot], index: int) -> bool:
     return shots[index + 1].folder != shots[index].folder
 
 
+def _extend_clip_hold_last_frame(
+    clip: otio.schema.Clip,
+    *,
+    extra_sec: float,
+    rate: float,
+    folder: str,
+) -> None:
+    """Verlängert einen Clip über die Medienlänge — Resolve friert das letzte Frame ein."""
+    if clip.source_range is None or extra_sec <= 0.05:
+        return
+    start_sec = clip.source_range.start_time.to_seconds()
+    new_dur = clip.source_range.duration.to_seconds() + extra_sec
+    clip.source_range = _time_range(new_dur, rate, start_sec=start_sec)
+    clip.metadata["otio_note"] = (
+        f"Letztes Frame {extra_sec:.1f}s gehalten (Ordner-Ausklingen · {folder})"
+    )
+
+
 def _append_video_item(
     track: otio.schema.Track,
     shot: EditPlanShot,
@@ -338,6 +362,7 @@ def _append_video_item(
     duration_sec: float,
     export_rules: ExportRuleOptions,
     timing_notes: list[str] | None = None,
+    hold_last_frame: bool = False,
 ) -> float:
     """Hängt Clip oder Gap an die Videospur; liefert die tatsächliche Dauer in Sekunden."""
     if shot.asset_path:
@@ -360,6 +385,7 @@ def _append_video_item(
             fallback_rate=rate,
             requested_duration_sec=max(0.01, duration_sec),
             trim_leading_sec=trim,
+            hold_last_frame=hold_last_frame,
         )
         if timing_notes is not None:
             timing_notes.extend(notes)
@@ -513,26 +539,36 @@ def build_otio_timeline(
             duration_sec=duration_sec,
             export_rules=export_rules,
             timing_notes=timing_notes,
+            hold_last_frame=is_last_in_folder and settings.section_outro_sec > 0,
         )
         if is_last_in_folder:
             section = sections[section_index]
             actual_sec = _track_duration_sec(video_track, start_index=section_track_start)
             pad_sec = section.video_duration_sec - actual_sec
             if pad_sec > 0.05:
-                pad = otio.schema.Gap(
-                    name=f"Ausklingen · {section.folder}"[:120],
-                    source_range=_time_range(pad_sec, rate),
-                )
-                pad.metadata["folder"] = section.folder
-                pad.metadata["otio_note"] = (
-                    "Videospur aufgefüllt — Medien kürzer als geplanter Abschnitt "
-                    f"(+{pad_sec:.1f}s bis Voice-Ende)."
-                )
-                video_track.append(pad)
-                timing_notes.append(
-                    f"{section.folder}: Videospur um {pad_sec:.1f}s aufgefüllt "
-                    f"(Ziel {section.video_duration_sec:.1f}s)"
-                )
+                last_item = video_track[-1]
+                if isinstance(last_item, otio.schema.Clip):
+                    _extend_clip_hold_last_frame(
+                        last_item,
+                        extra_sec=pad_sec,
+                        rate=rate,
+                        folder=section.folder,
+                    )
+                    timing_notes.append(
+                        f"{section.folder}: letztes Asset um {pad_sec:.1f}s verlängert "
+                        f"(Ziel {section.video_duration_sec:.1f}s)"
+                    )
+                else:
+                    pad = otio.schema.Gap(
+                        name=f"Ausklingen · {section.folder}"[:120],
+                        source_range=_time_range(pad_sec, rate),
+                    )
+                    pad.metadata["folder"] = section.folder
+                    video_track.append(pad)
+                    timing_notes.append(
+                        f"{section.folder}: Videospur um {pad_sec:.1f}s aufgefüllt "
+                        f"(Ziel {section.video_duration_sec:.1f}s)"
+                    )
             section_index += 1
             section_track_start = len(video_track)
 

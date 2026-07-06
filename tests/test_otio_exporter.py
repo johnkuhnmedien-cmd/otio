@@ -196,10 +196,30 @@ def test_video_section_padded_when_media_shorter_than_planned(tmp_path: Path) ->
 
     video_track = timeline.tracks[0]
     gaps = [item for item in video_track if isinstance(item, otio.schema.Gap)]
-    assert gaps
-    assert any("Ausklingen" in gap.name for gap in gaps)
+    assert not any("Ausklingen" in gap.name for gap in gaps)
+    clips = [item for item in video_track if isinstance(item, otio.schema.Clip)]
+    assert clips[1].source_range.duration.to_seconds() > 8.0
+    assert clips[2].source_range.duration.to_seconds() == 8.0
     total_video = sum(item.source_range.duration.to_seconds() for item in video_track)
     assert total_video == 19.0
+
+
+def test_clip_source_range_hold_last_frame_beyond_media(tmp_path: Path) -> None:
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"x")
+    timing = MediaTiming(start_sec=0.0, duration_sec=5.0, rate=25.0)
+
+    with patch("otio_app.services.otio_exporter.probe_media_timing", return_value=timing):
+        source_range, play_sec, notes = _clip_source_range_for_media(
+            media,
+            fallback_rate=25.0,
+            requested_duration_sec=12.0,
+            hold_last_frame=True,
+        )
+
+    assert play_sec == 12.0
+    assert source_range.duration.to_seconds() == 12.0
+    assert any("gehalten" in note for note in notes)
 
 
 def test_media_reference_aligns_available_range_with_embedded_timecode(tmp_path: Path) -> None:
