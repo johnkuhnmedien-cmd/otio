@@ -597,7 +597,10 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                 if not merged.ready:
                     st.warning(_export_blockers_message(merged, folder_selection))
                     for warning in merged.warnings:
-                        st.caption(f"• {warning}")
+                        if warning.startswith("Validierung:"):
+                            st.error(warning)
+                        else:
+                            st.caption(f"• {warning}")
                 else:
                     log_heavy_operation(
                         f"OTIO-Export ({len(merged.timeline_items)} Timeline-Items)",
@@ -639,7 +642,10 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                 + ", ".join(f"`{name}`" for name in preview.skipped_folders)
             )
         for warning in preview.warnings:
-            st.caption(f"• {warning}")
+            if warning.startswith("Validierung:"):
+                st.error(warning)
+            else:
+                st.caption(f"• {warning}")
 
         if preview.ready:
             from otio_app.services.otio_exporter import _compute_timeline_sections

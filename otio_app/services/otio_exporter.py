@@ -164,6 +164,21 @@ def _plan_section_items(plan: EditPlanDocument, folder_name: str, voice_file: st
     return []
 
 
+def _voiceover_for_validation(
+    voiceover: VoiceoverPlan | None,
+    audio_offset_sec: float,
+) -> VoiceoverPlan | None:
+    """Voiceover-Zeiten an Export-Audio-Offset anpassen (Abschnitts-lokal)."""
+    if voiceover is None:
+        return None
+    return voiceover.model_copy(
+        update={
+            "timeline_start_sec": audio_offset_sec,
+            "timeline_end_sec": audio_offset_sec + voiceover.duration_sec,
+        }
+    )
+
+
 def merge_confirmed_edit_plans(
     project: Project,
     *,
@@ -194,9 +209,11 @@ def merge_confirmed_edit_plans(
             "section_outro_sec": export_settings.section_outro_sec,
         }
     )
-    allow_black_outro = False
     global_cursor = 0.0
     export_rules = export_rule_options(load_edit_plan_rules(project))
+
+    worst_status = ValidationStatus.OK
+    all_validation_errors: list[str] = []
 
     for entry in mapping.entries:
         if not entry.confirmed or not entry.folder:
@@ -221,10 +238,40 @@ def merge_confirmed_edit_plans(
             )
             continue
 
-        if plan.voiceover is not None:
-            merged_voiceovers.append(plan.voiceover)
-        else:
-            merged_voiceovers.append(build_voiceover_plan(entry.voice_file, plan.settings))
+        section_voiceover = (
+            plan.voiceover
+            if plan.voiceover is not None
+            else build_voiceover_plan(entry.voice_file, plan.settings)
+        )
+        merged_voiceovers.append(section_voiceover)
+
+        validation_settings = plan.settings.model_copy(
+            update={
+                "audio_offset_sec": export_settings.audio_offset_sec,
+                "section_outro_sec": export_settings.section_outro_sec,
+            }
+        )
+        voice_for_check = _voiceover_for_validation(
+            section_voiceover,
+            export_settings.audio_offset_sec,
+        )
+        validation = validate_timeline_items(
+            section_items,
+            settings=validation_settings,
+            allow_black_outro=plan.allow_black_outro,
+            fps=float(project.fps),
+            voiceover=voice_for_check,
+            opening_title_required=export_rules.folder_title_enabled,
+        )
+        all_validation_errors.extend(f"{folder_name}: {err}" for err in validation.errors)
+        warnings.extend(validation.warnings)
+        if validation.status == ValidationStatus.BLOCKED:
+            worst_status = ValidationStatus.BLOCKED
+        elif (
+            validation.status == ValidationStatus.AWAITING_APPROVAL
+            and worst_status != ValidationStatus.BLOCKED
+        ):
+            worst_status = ValidationStatus.AWAITING_APPROVAL
 
         positioned = assign_global_timeline_positions(
             section_items,
@@ -235,46 +282,9 @@ def merge_confirmed_edit_plans(
             (item.timeline_out_sec for item in positioned),
             default=global_cursor,
         )
-        if plan.allow_black_outro:
-            allow_black_outro = True
 
     shots = shots_from_timeline_items(merged_items)
     warnings.extend(verify_timeline_media_paths(project, merged_items))
-
-    worst_status = ValidationStatus.OK
-    all_validation_errors: list[str] = []
-    section_index = 0
-    while section_index < len(merged_items):
-        folder = merged_items[section_index].folder_name
-        voice_file = merged_items[section_index].voice_file
-        section_items: list[TimelineItem] = []
-        while (
-            section_index < len(merged_items)
-            and merged_items[section_index].folder_name == folder
-        ):
-            section_items.append(merged_items[section_index])
-            section_index += 1
-        section_voiceover = next(
-            (vo for vo in merged_voiceovers if vo.path == voice_file),
-            build_voiceover_plan(voice_file, settings),
-        )
-        validation = validate_timeline_items(
-            section_items,
-            settings=settings,
-            allow_black_outro=allow_black_outro,
-            fps=float(project.fps),
-            voiceover=section_voiceover,
-            opening_title_required=export_rules.folder_title_enabled,
-        )
-        all_validation_errors.extend(validation.errors)
-        warnings.extend(validation.warnings)
-        if validation.status == ValidationStatus.BLOCKED:
-            worst_status = ValidationStatus.BLOCKED
-        elif (
-            validation.status == ValidationStatus.AWAITING_APPROVAL
-            and worst_status != ValidationStatus.BLOCKED
-        ):
-            worst_status = ValidationStatus.AWAITING_APPROVAL
 
     if all_validation_errors:
         for line in all_validation_errors:

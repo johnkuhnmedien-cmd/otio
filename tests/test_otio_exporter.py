@@ -113,6 +113,40 @@ def _voiceover_plan(voice_file: str, *, duration: float, offset: float = 1.0) ->
     )
 
 
+def _timeline_filler(
+    folder: str,
+    voice_file: str,
+    *,
+    timeline_in: float,
+    duration: float = 1.0,
+) -> TimelineItem:
+    path = str(Path(f"/media/{folder.replace(' ', '_')}_filler.mp4"))
+    return TimelineItem(
+        timeline_item_id=f"filler_{folder.replace(' ', '_')}",
+        type="generic_narration_visual",
+        section_id=_section_id(folder),
+        folder_name=folder,
+        voice_file=voice_file,
+        asset_id="asset_filler",
+        shot_id="filler_001",
+        resolved_media_path=path,
+        original_asset_path=path,
+        asset_role="generic_narration_visual",
+        timeline_in_sec=timeline_in,
+        timeline_out_sec=timeline_in + duration,
+        duration_sec=duration,
+        final_duration_sec=duration,
+        source_in_sec=0.5,
+        source_out_sec=0.5 + duration,
+        voice_start_sec=timeline_in,
+        voice_end_sec=timeline_in + duration,
+        selection_reason="Filler bis Voice-Ende",
+        confidence=0.5,
+        transform=TimelineItemTransform(),
+        motif="Filler",
+    )
+
+
 def _timeline_outro(
     folder: str,
     voice_file: str,
@@ -205,6 +239,7 @@ def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
     canyon_voice_end = 4.0
     canyon_items = [
         _timeline_narration("Grand Canyon", voice_b, 1, timeline_in=0.0),
+        _timeline_filler("Grand Canyon", voice_b, timeline_in=3.0, duration=1.0),
         _timeline_outro(
             "Grand Canyon",
             voice_b,
@@ -240,6 +275,20 @@ def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
     )
 
 
+def test_merge_does_not_false_block_second_section_global_coords(tmp_path: Path) -> None:
+    """Outro-Position global darf nicht mit lokalem voiceover.timeline_end verglichen werden."""
+    project = _project(tmp_path)
+    _setup_mapping_and_plans(project, tmp_path)
+
+    merged = merge_confirmed_edit_plans(project)
+    assert merged.validation_status == "OK"
+    assert merged.ready is True
+    assert not any(
+        "generic_outro startet bei" in warning and "Grand Canyon" in warning
+        for warning in merged.warnings
+    )
+
+
 def test_merge_confirmed_edit_plans_in_mapping_order(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _setup_mapping_and_plans(project, tmp_path)
@@ -247,7 +296,7 @@ def test_merge_confirmed_edit_plans_in_mapping_order(tmp_path: Path) -> None:
     merged = merge_confirmed_edit_plans(project)
     assert merged.ready is True
     assert merged.included_folders == ["Florida Keys", "Grand Canyon"]
-    assert len(merged.timeline_items) == 5
+    assert len(merged.timeline_items) == 6
 
 
 def test_timeline_sections_include_outro_and_per_section_voice_offset(tmp_path: Path) -> None:
@@ -263,8 +312,9 @@ def test_timeline_sections_include_outro_and_per_section_voice_offset(tmp_path: 
     assert sections[0].voiceover.timeline_start_sec == 1.0
     assert sections[0].voiceover.duration_sec == 5.0
     assert sections[1].video_start_sec == 11.0
-    assert sections[1].video_duration_sec == 8.0
+    assert sections[1].video_duration_sec == 9.0
     assert sections[1].voiceover.timeline_start_sec == 1.0
+    assert sections[1].voiceover.duration_sec == 3.0
 
 
 def test_clip_durations_use_seconds_not_frames(tmp_path: Path) -> None:
@@ -284,7 +334,9 @@ def test_clip_durations_use_seconds_not_frames(tmp_path: Path) -> None:
     assert clips[2].name == "Florida_Keys_outro.mp4"
     assert clips[2].source_range.duration.to_seconds() == 5.0
     assert clips[3].source_range.duration.to_seconds() == 3.0
-    assert clips[4].source_range.duration.to_seconds() == 5.0
+    assert clips[4].source_range.duration.to_seconds() == 1.0
+    assert clips[5].name == "Grand_Canyon_outro.mp4"
+    assert clips[5].source_range.duration.to_seconds() == 5.0
     assert clips[0].name == "Florida_Keys_1.mp4"
     assert clips[0].media_reference.target_url.startswith("/")
 
@@ -329,7 +381,7 @@ def test_video_section_keeps_planned_durations(tmp_path: Path) -> None:
     assert clips[2].name == "Florida_Keys_outro.mp4"
     assert clips[2].source_range.duration.to_seconds() == 5.0
     total_video = sum(item.source_range.duration.to_seconds() for item in video_track)
-    assert total_video == 19.0
+    assert total_video == 20.0
 
 
 def test_clip_source_range_hold_last_frame_beyond_media(tmp_path: Path) -> None:
