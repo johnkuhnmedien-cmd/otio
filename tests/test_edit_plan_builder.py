@@ -118,6 +118,71 @@ def test_build_edit_plan_without_gemini(
     assert document.shots[-1].motif == "Ausklingen"
 
 
+def test_build_edit_plan_falls_back_when_gemini_network_fails(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    project = _sample_project(temp_project_layout)
+    voice_path = str(temp_project_layout["voice_file"])
+    media_path = str(temp_project_layout["project_root"] / "Grand Canyon" / "clip.mp4")
+
+    mapping = VoiceFolderMappingDocument(
+        project_id=project.id,
+        confirmed=True,
+        entries=[
+            VoiceFolderMappingEntry(
+                voice_file=voice_path,
+                folder="Grand Canyon",
+                confirmed=True,
+            )
+        ],
+    )
+    project.voice_folder_mapping_path.write_text(mapping.model_dump_json(indent=2), encoding="utf-8")
+    voice_doc = VoiceAnalysisDocument(
+        project_id=project.id,
+        language="de",
+        files=[
+            VoiceFileAnalysis(
+                path=voice_path,
+                segments=[
+                    VoiceSegment(
+                        start_sec=0.0,
+                        end_sec=5.0,
+                        text="Der Canyon ist eng und hell.",
+                    )
+                ],
+            )
+        ],
+    )
+    project.voice_analysis_path.write_text(voice_doc.model_dump_json(indent=2), encoding="utf-8")
+
+    from otio_app.services.inventory_loader import save_folder_inventory
+
+    save_folder_inventory(
+        project.folder_inventory_path("Grand Canyon"),
+        AssetFolderAnalysis(
+            folder="Grand Canyon",
+            assets=[
+                AssetMediaAnalysis(
+                    path=media_path,
+                    description="Enger Canyon mit Licht",
+                    asset_id="asset_clip",
+                )
+            ],
+        ),
+    )
+
+    from unittest.mock import patch
+
+    with patch(
+        "otio_app.services.edit_plan_builder.plan_passage_assets",
+        side_effect=RuntimeError("network down"),
+    ):
+        document = build_edit_plan(project, use_api=True)
+
+    assert document.shots
+    assert document.shots[0].asset_path == media_path
+
+
 def test_max_asset_usage_applies_after_timing_split(
     temp_project_layout: dict[str, Path],
 ) -> None:

@@ -169,6 +169,10 @@ def _parts_from_gemini_or_local(
                 return parts
         except GeminiNotConfiguredError:
             raise
+        except Exception:
+            # Netzwerk-/DNS-Probleme der Gemini-API dürfen den Schnittplan-Workflow
+            # nicht abbrechen. In diesem Fall planen wir lokal weiter.
+            pass
 
     texts = local_split_passage(passage_text, settings.text_splitters)
     return [
