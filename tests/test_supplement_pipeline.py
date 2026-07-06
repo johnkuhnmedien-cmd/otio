@@ -397,6 +397,22 @@ def test_pexels_query_variants_start_short_with_location() -> None:
     assert not any("charakteristischen" in query or "steht" in query for query in variants[:7])
 
 
+def test_pexels_ui_default_query_uses_short_location_query() -> None:
+    from otio_app.ui.supplement_assets import _default_query_for_provider
+
+    request = SupplementRequest(
+        supplement_request_id="supp_req_ui_query",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        location_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Wegen der charakteristischen Felsspalten steht eine Person im Canyon.",
+        visual_requirement="Ein Mensch in engen Felsspalten",
+        search_queries={"en": ["Antelope Canyon person narrow charakteristischen slot canyon canyons steht"]},
+    )
+    assert _default_query_for_provider(request, SUPPLEMENT_SOURCE_PEXELS) == "Antelope Canyon"
+
+
 def test_pexels_rejects_portrait_video(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PEXELS_API_KEY", "test-key")
 

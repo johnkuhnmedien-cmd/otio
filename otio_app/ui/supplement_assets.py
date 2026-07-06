@@ -44,7 +44,11 @@ from otio_app.services.supplement_pipeline import (
     run_coverage_for_folder,
     search_supplement_candidates,
 )
-from otio_app.services.supplement_search import preferred_search_query, request_with_keyword_query
+from otio_app.services.supplement_search import (
+    build_pexels_query_variants,
+    preferred_search_query,
+    request_with_keyword_query,
+)
 from otio_app.services.supplement_sources import get_provider_readiness, list_provider_readiness
 from otio_app.services.supplement_requests import (
     load_supplement_requests,
@@ -264,7 +268,7 @@ def _save_source_and_query(project, request: SupplementRequest, provider: str, q
 def _render_query_controls(request: SupplementRequest, provider: str) -> str:
     location = request.location_name or request.folder_name
     st.caption(f"Ort / location_name: **{location}**")
-    generated = preferred_search_query(request)
+    generated = _default_query_for_provider(request, provider)
     query = st.text_input(
         "Suchquery",
         value=generated,
@@ -273,6 +277,12 @@ def _render_query_controls(request: SupplementRequest, provider: str) -> str:
     if location and location.casefold() not in query.casefold():
         st.warning("Die Query enthält den Ortsnamen nicht. Produktive Suche sollte den Ort enthalten.")
     return query
+
+
+def _default_query_for_provider(request: SupplementRequest, provider: str) -> str:
+    if provider == SUPPLEMENT_SOURCE_PEXELS:
+        return build_pexels_query_variants(request)[0]
+    return preferred_search_query(request)
 
 
 def _render_pexels_candidate_card(project, request: SupplementRequest, candidate: SupplementCandidate, index: int) -> None:
