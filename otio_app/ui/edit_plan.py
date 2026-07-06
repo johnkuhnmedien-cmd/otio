@@ -255,6 +255,22 @@ def _number_input_with_seeded_state(
     st.number_input(label, **kwargs)
 
 
+_TIMING_NUMERIC_SUFFIXES = ("min", "max", "offset", "outro")
+# Widget-Untergrenzen von Min./Max. Shot, Audio-Start, Ausklingen (siehe
+# _number_input_with_seeded_state-Aufrufe unten). Wenn ALLE VIER
+# gleichzeitig exakt auf diesem Minimum stehen, ist das praktisch nie eine
+# bewusste Nutzer-Eingabe (z. B. "1 Sekunde pro Shot" ist unbrauchbar) —
+# sondern ein Indiz dafür, dass die Widgets aus unbekanntem Grund
+# "leer"/frisch gerendert wurden, statt aus session_state/Datei befüllt zu
+# werden. Wir behandeln das defensiv als Reset-Artefakt: nie persistieren,
+# und beim Seeden aus der zuletzt gespeicherten Datei überschreiben.
+_TIMING_WIDGET_FLOORS = (1.0, 1.0, 0.0, 0.0)
+
+
+def _looks_like_widget_reset_artifact(values: tuple[float, float, float, float]) -> bool:
+    return values == _TIMING_WIDGET_FLOORS
+
+
 def _seed_timing_widgets(project) -> None:
     """Lädt gespeicherte Timing-/Gemini-Werte in die Widgets (einmalig pro Session).
 
@@ -262,8 +278,27 @@ def _seed_timing_widgets(project) -> None:
     und fielen nach jedem Reload/Neustart stillschweigend auf die Defaults
     zurück — unabhängig davon, was zuvor eingestellt war. Jetzt werden alle
     Timing-/Gemini-Werte aus `edit_plan_timing_settings.json` geladen.
+
+    Selbstheilung: Falls die Widgets bereits einen Wert im session_state
+    haben, der wie ein Reset-Artefakt aussieht (Min./Max. Shot, Audio-Start
+    und Ausklingen ALLE gleichzeitig auf ihrem Minimum 1.0/1.0/0.0/0.0),
+    UND die gespeicherte Datei andere, plausible Werte enthält, werden die
+    betroffenen Keys verworfen und aus der Datei neu geseedet.
     """
     saved = load_edit_plan_timing_settings(project)
+    numeric_keys = [f"plan_{suffix}_{project.id}" for suffix in _TIMING_NUMERIC_SUFFIXES]
+    if all(key in st.session_state for key in numeric_keys):
+        current_values = tuple(float(st.session_state[key]) for key in numeric_keys)
+        saved_values = (
+            float(saved.shot_min_sec),
+            float(saved.shot_max_sec),
+            float(saved.audio_offset_sec),
+            float(saved.section_outro_sec),
+        )
+        if _looks_like_widget_reset_artifact(current_values) and saved_values != _TIMING_WIDGET_FLOORS:
+            for key in numeric_keys:
+                del st.session_state[key]
+
     seed_map = {
         f"plan_min_{project.id}": float(saved.shot_min_sec),
         f"plan_max_{project.id}": float(saved.shot_max_sec),
@@ -279,12 +314,27 @@ def _seed_timing_widgets(project) -> None:
 
 def _persist_timing_widgets(project) -> None:
     """Speichert die aktuellen Timing-/Gemini-Widget-Werte dauerhaft, sobald der
-    Regeln-Tab gerendert wird — analog zum automatischen Speichern der Regeln."""
+    Regeln-Tab gerendert wird — analog zum automatischen Speichern der Regeln.
+
+    Schreibt NICHT, wenn Min./Max. Shot, Audio-Start und Ausklingen
+    gleichzeitig auf ihrem Widget-Minimum stehen (1.0/1.0/0.0/0.0) — dieser
+    praktisch unbrauchbare Zustand ("1 Sekunde pro Shot") deutet auf ein
+    Reset-Artefakt hin und würde sonst eine zuvor korrekt gespeicherte
+    Konfiguration dauerhaft überschreiben (siehe _seed_timing_widgets).
+    """
+    current_values = (
+        _plan_number_setting(project.id, "min", DEFAULT_SHOT_MIN_SEC),
+        _plan_number_setting(project.id, "max", DEFAULT_SHOT_MAX_SEC),
+        _plan_number_setting(project.id, "offset", DEFAULT_AUDIO_OFFSET_SEC),
+        _plan_number_setting(project.id, "outro", DEFAULT_SECTION_OUTRO_SEC),
+    )
+    if _looks_like_widget_reset_artifact(current_values):
+        return
     settings = EditPlanTimingSettings(
-        shot_min_sec=_plan_number_setting(project.id, "min", DEFAULT_SHOT_MIN_SEC),
-        shot_max_sec=_plan_number_setting(project.id, "max", DEFAULT_SHOT_MAX_SEC),
-        audio_offset_sec=_plan_number_setting(project.id, "offset", DEFAULT_AUDIO_OFFSET_SEC),
-        section_outro_sec=_plan_number_setting(project.id, "outro", DEFAULT_SECTION_OUTRO_SEC),
+        shot_min_sec=current_values[0],
+        shot_max_sec=current_values[1],
+        audio_offset_sec=current_values[2],
+        section_outro_sec=current_values[3],
         text_splitters=_plan_text_setting(project.id, "split", DEFAULT_TEXT_SPLIT_INPUT),
         gemini_model=_plan_gemini_model(project.id),
     )

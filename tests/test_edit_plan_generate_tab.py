@@ -13,7 +13,12 @@ from otio_app.services.edit_plan_timing_settings import (
     save_edit_plan_timing_settings,
 )
 from otio_app.services.supplement_coverage import COVERAGE_SUPPLEMENT_REQUIRED
-from otio_app.ui.edit_plan import _current_timing_settings, _missing_asset_breakdown
+from otio_app.ui.edit_plan import (
+    _current_timing_settings,
+    _missing_asset_breakdown,
+    _persist_timing_widgets,
+    _seed_timing_widgets,
+)
 
 
 def _project(tmp_path: Path) -> Project:
@@ -115,3 +120,70 @@ def test_missing_asset_breakdown_zero_when_all_shots_have_assets() -> None:
     )
     total, coverage_gap, rule_blocked = _missing_asset_breakdown(draft)
     assert (total, coverage_gap, rule_blocked) == (0, 0, 0)
+
+
+def test_seed_timing_widgets_heals_reset_artifact_against_saved_file(tmp_path: Path) -> None:
+    """Regression: Nutzer berichtete, dass Min./Max. Shot, Audio-Start und
+    Ausklingen manchmal gleichzeitig auf 1.0/1.0/0.0/0.0 (den Widget-
+    Untergrenzen) stehen — ein praktisch unbrauchbarer Zustand ('1 Sekunde
+    pro Asset'). Die exakte Ursache für das erstmalige Auftreten dieses
+    Widget-Zustands konnte nicht reproduziert werden (mehrere gezielte
+    AppTest-Simulationen des kompletten 'Schnittplan vorschlagen'-Ablaufs
+    inkl. Tab-Wechsel zeigten kein solches Verhalten) — als Schutzmaßnahme
+    erkennt _seed_timing_widgets dieses Muster jetzt und stellt die zuletzt
+    gespeicherten (plausiblen) Werte wieder her, statt es unverändert zu
+    übernehmen."""
+    project = _project(tmp_path)
+    st.session_state.clear()
+    save_edit_plan_timing_settings(
+        project,
+        EditPlanTimingSettings(
+            shot_min_sec=3.5,
+            shot_max_sec=7.0,
+            audio_offset_sec=1.0,
+            section_outro_sec=5.0,
+            gemini_model="gemini-3.1-pro-preview",
+        ),
+    )
+    # Simuliert den beobachteten Reset-Zustand direkt im session_state.
+    st.session_state[f"plan_min_{project.id}"] = 1.0
+    st.session_state[f"plan_max_{project.id}"] = 1.0
+    st.session_state[f"plan_offset_{project.id}"] = 0.0
+    st.session_state[f"plan_outro_{project.id}"] = 0.0
+    st.session_state[f"plan_gemini_{project.id}"] = "gemini-2.0-flash"
+
+    _seed_timing_widgets(project)
+
+    assert st.session_state[f"plan_min_{project.id}"] == 3.5
+    assert st.session_state[f"plan_max_{project.id}"] == 7.0
+    assert st.session_state[f"plan_offset_{project.id}"] == 1.0
+    assert st.session_state[f"plan_outro_{project.id}"] == 5.0
+
+
+def test_persist_timing_widgets_refuses_to_save_reset_artifact(tmp_path: Path) -> None:
+    """Selbst wenn die Widgets (aus welchem Grund auch immer) den
+    Reset-Zustand zeigen, darf _persist_timing_widgets ihn NICHT in die
+    Datei schreiben — sonst würde eine zuvor korrekt gespeicherte
+    Konfiguration dauerhaft überschrieben."""
+    project = _project(tmp_path)
+    st.session_state.clear()
+    save_edit_plan_timing_settings(
+        project,
+        EditPlanTimingSettings(shot_min_sec=3.5, shot_max_sec=7.0, audio_offset_sec=1.0, section_outro_sec=5.0),
+    )
+    st.session_state[f"plan_min_{project.id}"] = 1.0
+    st.session_state[f"plan_max_{project.id}"] = 1.0
+    st.session_state[f"plan_offset_{project.id}"] = 0.0
+    st.session_state[f"plan_outro_{project.id}"] = 0.0
+
+    _persist_timing_widgets(project)
+
+    reloaded = load_edit_plan_timing_settings_helper(project)
+    assert reloaded.shot_min_sec == 3.5
+    assert reloaded.shot_max_sec == 7.0
+
+
+def load_edit_plan_timing_settings_helper(project):
+    from otio_app.services.edit_plan_timing_settings import load_edit_plan_timing_settings
+
+    return load_edit_plan_timing_settings(project)
