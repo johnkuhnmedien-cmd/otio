@@ -580,6 +580,12 @@ def render_supplement_assets_page() -> None:
         f"**{len(required)}** offene Supplement-Anforderungen für **{selected_folder}** "
         f"(gesamt pending: {pending_supplement_count(document)})"
     )
+    st.caption(
+        "Zählt Beats/Anfragen, nicht Shots — ein Beat kann mehrere Shots erzeugen. "
+        "Die Shot-Anzahl im Schnittplan-Tab (Vorschlag/Prüfen & Speichern) kann daher "
+        "höher sein, u. a. wenn zusätzlich Shots durch Wiederverwendungsregeln "
+        "(Max. Asset-Nutzung / Min. Abstand) ohne Asset geblieben sind."
+    )
 
     pexels_readiness_for_folder = get_provider_readiness(SUPPLEMENT_SOURCE_PEXELS)
     auto_col, coverage_col = st.columns(2)

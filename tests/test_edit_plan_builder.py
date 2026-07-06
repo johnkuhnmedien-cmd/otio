@@ -116,6 +116,12 @@ def test_build_edit_plan_without_gemini(
     assert document.shots[-1].section_outro is True
     assert document.shots[-1].duration_sec == 5.0
     assert document.shots[-1].motif == "Ausklingen"
+    # Regression: Ohne explizit übergebene settings darf build_edit_plan
+    # NICHT auf ein anderes Gemini-Modell zurückfallen als der App-weite
+    # Standard (vorher hardcoded "gemini-2.0-flash" in EditPlanSettings).
+    from otio_app.services.gemini_client import get_default_gemini_model
+
+    assert document.settings.gemini_model == get_default_gemini_model()
 
 
 def test_build_edit_plan_falls_back_when_gemini_network_fails(

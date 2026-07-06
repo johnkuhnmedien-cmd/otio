@@ -304,9 +304,30 @@ def _plan_text_setting(project_id: str, suffix: str, default: str) -> str:
     return str(st.session_state.get(f"plan_{suffix}_{project_id}", default))
 
 
-def _plan_gemini_model(project_id: str) -> str:
-    default_model = get_default_gemini_model()
-    return str(st.session_state.get(f"plan_gemini_{project_id}", default_model))
+def _plan_gemini_model(project_id: str, default: str | None = None) -> str:
+    fallback = default if default is not None else get_default_gemini_model()
+    return str(st.session_state.get(f"plan_gemini_{project_id}", fallback))
+
+
+def _current_timing_settings(project) -> EditPlanTimingSettings:
+    """Liefert die aktuell wirksamen Timing-/Gemini-Werte für den nächsten
+    Schnittplan-Vorschlag: bevorzugt den Live-Widget-Wert aus dem Regeln-Tab
+    (session_state), fällt aber — falls der Widget-Key aus irgendeinem Grund
+    fehlt — auf die zuletzt GESPEICHERTE Datei zurück statt auf die globalen
+    App-Defaults. Ohne diesen Fallback konnte z. B. ein ausgewähltes
+    Gemini-Modell (etwa „gemini-3.1-pro-preview“) unbemerkt auf den
+    App-Default zurückspringen, sobald der jeweilige session_state-Key aus
+    irgendeinem Grund nicht (mehr) gesetzt war.
+    """
+    saved = load_edit_plan_timing_settings(project)
+    return EditPlanTimingSettings(
+        shot_min_sec=_plan_number_setting(project.id, "min", saved.shot_min_sec),
+        shot_max_sec=_plan_number_setting(project.id, "max", saved.shot_max_sec),
+        audio_offset_sec=_plan_number_setting(project.id, "offset", saved.audio_offset_sec),
+        section_outro_sec=_plan_number_setting(project.id, "outro", saved.section_outro_sec),
+        text_splitters=_plan_text_setting(project.id, "split", saved.text_splitters),
+        gemini_model=_plan_gemini_model(project.id, saved.gemini_model),
+    )
 
 
 def _render_tab_settings(project) -> None:
@@ -536,21 +557,26 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
     if not is_gemini_configured():
         st.warning("Ohne GEMINI_API_KEY wird nur eine einfache Text-Trennung genutzt.")
 
-    splitters = _plan_text_setting(project.id, "split", DEFAULT_TEXT_SPLIT_INPUT)
+    timing = _current_timing_settings(project)
+    st.caption(
+        f"Gemini-Modell für diesen Vorschlag: **{format_gemini_model_label(timing.gemini_model)}** "
+        f"· Min/Max Shot: {timing.shot_min_sec:.1f}s/{timing.shot_max_sec:.1f}s "
+        "(Tab **Regeln → Timing & Gemini** ändern)."
+    )
     if st.button("Schnittplan vorschlagen", key=f"build_plan_{project.id}", type="primary"):
         use_gemini = is_gemini_configured()
         settings = EditPlanSettings(
-            shot_min_sec=_plan_number_setting(project.id, "min", DEFAULT_SHOT_MIN_SEC),
-            shot_max_sec=_plan_number_setting(project.id, "max", DEFAULT_SHOT_MAX_SEC),
-            audio_offset_sec=_plan_number_setting(project.id, "offset", DEFAULT_AUDIO_OFFSET_SEC),
-            section_outro_sec=_plan_number_setting(project.id, "outro", DEFAULT_SECTION_OUTRO_SEC),
+            shot_min_sec=timing.shot_min_sec,
+            shot_max_sec=timing.shot_max_sec,
+            audio_offset_sec=timing.audio_offset_sec,
+            section_outro_sec=timing.section_outro_sec,
             text_splitters=[
                 piece.strip()
-                for piece in splitters.split(",")
+                for piece in timing.text_splitters.split(",")
                 if piece.strip()
             ],
             fallback_order=list(DEFAULT_FALLBACK_ORDER),
-            gemini_model=_plan_gemini_model(project.id),
+            gemini_model=timing.gemini_model,
         )
         try:
             rules_doc = get_edit_plan_rules_for_project(project)
@@ -596,17 +622,49 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
     draft = _effective_draft(project.id, selected_folder, saved)
     if draft is not None:
         rules_doc = get_edit_plan_rules_for_project(project)
-        missing = sum(1 for shot in draft.shots if shot.asset_source == "missing")
+        missing, coverage_gap, rule_blocked = _missing_asset_breakdown(draft)
         violations = validate_shots_against_rules(draft.shots, rules_doc)
-        st.caption(
-            f"{len(draft.shots)} Shots · {missing} ohne passendes lokales Asset"
-        )
+        st.caption(f"{len(draft.shots)} Shots · {missing} ohne Asset")
+        if missing:
+            st.caption(
+                f"↳ davon {coverage_gap} durch Coverage-Lücke (→ ②½ Supplement Assets) "
+                f"· {rule_blocked} durch Wiederverwendungsregel blockiert "
+                "(→ Regeln lockern oder mehr lokale Assets, Supplementieren hilft hier nicht)"
+            )
         if violations:
             st.warning("Regelverletzungen — ggf. unter „Regeln“ anpassen und neu generieren:")
             for line in violations[:15]:
                 st.caption(f"• {line}")
             if len(violations) > 15:
                 st.caption(f"… und {len(violations) - 15} weitere")
+
+
+def _missing_asset_breakdown(draft: EditPlanDocument) -> tuple[int, int, int]:
+    """Zerlegt „Shots ohne Asset“ in zwei unterschiedliche Ursachen.
+
+    Bisher zeigten Vorschlag-Tab (Shot-Anzahl), Prüfen & Speichern-Tab
+    (Beat-Anzahl mit SUPPLEMENT_REQUIRED) und Supplement-Assets-Tab
+    (Request-Anzahl) unterschiedliche Zahlen (z. B. 11 / 4 / 4) — was wie ein
+    Fehler wirkte. Tatsächlich zählen sie unterschiedliche Dinge:
+
+    - coverage_gap: Shot gehört zu einem Beat, für den lokal kein inhaltlich
+      passendes Asset gefunden wurde (SUPPLEMENT_REQUIRED). Hier hilft
+      Supplementieren unter ②½.
+    - rule_blocked: Für den Beat GÄBE es inhaltlich ein passendes Asset,
+      aber eine Wiederverwendungsregel (Max. Asset-Nutzung / Min. Abstand)
+      hat es blockiert. Hier hilft NUR Regeln lockern oder mehr lokale
+      Assets — Supplementieren für DIESEN Beat bringt nichts, da die
+      inhaltliche Abdeckung bereits ausreicht.
+
+    Ein einzelner Beat kann mehrere Shots erzeugen (Textaufteilung) — daher
+    ist die Shot-Anzahl grundsätzlich >= der Beat-/Request-Anzahl.
+    """
+    missing_shots = [shot for shot in draft.shots if not shot.asset_path]
+    coverage_gap = sum(
+        1 for shot in missing_shots if shot.coverage_status == COVERAGE_SUPPLEMENT_REQUIRED
+    )
+    rule_blocked = len(missing_shots) - coverage_gap
+    return len(missing_shots), coverage_gap, rule_blocked
 
 
 def _render_tab_review(
@@ -659,10 +717,20 @@ def _render_tab_review(
         if shot.asset_path
         and shot.coverage_status == COVERAGE_SUPPLEMENT_REQUIRED
     ]
+    missing, coverage_gap, rule_blocked = _missing_asset_breakdown(draft)
     if supplement_beats:
         st.warning(
             f"{len(supplement_beats)} Beat(s) mit SUPPLEMENT_REQUIRED — "
             "bitte unter **②½ Supplement Assets** ergänzen."
+        )
+    if missing:
+        st.caption(
+            f"Insgesamt {missing} Shot(s) ohne Asset — davon {coverage_gap} durch "
+            f"Coverage-Lücke (s. o.) · {rule_blocked} durch Wiederverwendungsregel "
+            "(Max. Asset-Nutzung / Min. Abstand) blockiert, obwohl inhaltlich "
+            "ausreichend lokale Assets vorhanden wären. Ein einzelner Beat kann "
+            "mehrere Shots erzeugen — daher ist die Shot-Anzahl hier höher als "
+            "die Beat-/Request-Anzahl oben bzw. unter ②½."
         )
     if weak_with_asset:
         st.warning(

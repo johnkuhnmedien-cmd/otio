@@ -41,7 +41,11 @@ from otio_app.services.asset_usage import (
     max_asset_usage_limit,
 )
 from otio_app.services.generic_outro_selector import asset_id_for_path
-from otio_app.services.gemini_client import GeminiNotConfiguredError, plan_passage_assets
+from otio_app.services.gemini_client import (
+    GeminiNotConfiguredError,
+    get_default_gemini_model,
+    plan_passage_assets,
+)
 from otio_app.services.inventory_hash import compute_folder_inventory_hash
 from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.supplement_coverage import (
@@ -242,6 +246,7 @@ def build_edit_plan(
         shot_max_sec=DEFAULT_SHOT_MAX_SEC,
         audio_offset_sec=DEFAULT_AUDIO_OFFSET_SEC,
         fallback_order=list(DEFAULT_FALLBACK_ORDER),
+        gemini_model=get_default_gemini_model(),
     )
     rules_doc = rules_doc or load_edit_plan_rules(project)
     gemini_prompt = gemini_prompt_text(rules_doc)

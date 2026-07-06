@@ -141,7 +141,7 @@ class EditPlanSettings(BaseModel):
     fallback_order: List[str] = Field(
         default_factory=lambda: ["local", "adobe_stock", "pexels", "gemini_image"]
     )
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = DEFAULT_GEMINI_MODEL
 
 
 class VoiceoverPlan(BaseModel):
