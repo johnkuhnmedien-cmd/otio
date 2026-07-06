@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 from otio_app.analysis_models import TimelineItem
@@ -60,6 +61,23 @@ def append_validation_report(
     return path
 
 
+@lru_cache(maxsize=1)
+def ffmpeg_has_drawtext() -> bool:
+    """Prüft, ob ffmpeg den drawtext-Filter enthält (fehlt bei manchen macOS-Builds)."""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-filters"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    output = f"{result.stdout}\n{result.stderr}"
+    return " drawtext " in output or output.strip().endswith("drawtext")
+
+
 def build_opening_title_item(
     *,
     folder_name: str,
@@ -82,6 +100,10 @@ def build_opening_title_item(
         warnings.append(
             f"Keine Schrift verfügbar (angefragt: {requested_font_family}, "
             f"Fallback: {OPENING_TITLE_FALLBACK_FONT})."
+        )
+    if not ffmpeg_has_drawtext():
+        warnings.append(
+            "ffmpeg ohne drawtext-Filter — Titel wird per Pillow gerendert."
         )
 
     target_path = opening_title_media_path(work_dir, section_id)
@@ -125,8 +147,6 @@ def build_opening_title_item(
 
 
 def _ffmpeg_opening_title_filter(item: TimelineItem, font_path: Path, project: Project) -> str:
-    from otio_app.services.otio_media_transform import escape_drawtext_value
-
     safe_text = escape_drawtext_value(item.text)
     safe_font = escape_drawtext_value(str(font_path.resolve()))
     shadow_opacity = max(0.0, min(1.0, float(item.shadow_opacity)))
@@ -163,13 +183,149 @@ def _ffmpeg_opening_title_filter(item: TimelineItem, font_path: Path, project: P
     )
 
 
+def _render_title_png_pillow(
+    item: TimelineItem,
+    font_path: Path,
+    project: Project,
+    output_png: Path,
+) -> None:
+    """Transparente PNG mit Pillow — funktioniert ohne ffmpeg drawtext."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError as exc:
+        raise RuntimeError(
+            "Pillow fehlt — bitte `pip install Pillow` ausführen "
+            "(benötigt für Opening Titles ohne ffmpeg drawtext)."
+        ) from exc
+
+    width = max(320, int(project.width))
+    height = max(240, int(project.height))
+    fontsize = max(12, int(round(item.font_size)))
+    image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype(str(font_path), fontsize)
+    except OSError as exc:
+        raise RuntimeError(f"Schriftdatei nicht lesbar: {font_path}") from exc
+
+    bbox = draw.textbbox((0, 0), item.text, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    if item.position == "center":
+        x = (width - text_w) // 2 - bbox[0]
+        y = (height - text_h) // 2 - bbox[1]
+    else:
+        margin_x = max(24, width // 100)
+        margin_y = max(24, height // 100)
+        x = margin_x - bbox[0]
+        y = height - text_h - margin_y - bbox[1]
+
+    if item.shadow_enabled:
+        shadow_x = int(round(item.shadow_offset_x))
+        shadow_y = int(round(item.shadow_offset_y))
+        shadow_alpha = int(max(0, min(255, round(float(item.shadow_opacity) * 255))))
+        draw.text(
+            (x + shadow_x, y + shadow_y),
+            item.text,
+            font=font,
+            fill=(0, 0, 0, shadow_alpha),
+        )
+    draw.text((x, y), item.text, font=font, fill=(255, 255, 255, 255))
+    output_png.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output_png)
+
+
+def _encode_png_to_title_mov(
+    png_path: Path,
+    output_mov: Path,
+    *,
+    duration: float,
+    fps: int,
+) -> bool:
+    """PNG → transparentes ProRes MOV (ohne drawtext)."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-loop",
+        "1",
+        "-i",
+        str(png_path),
+        "-t",
+        f"{duration:.3f}",
+        "-r",
+        str(fps),
+        "-c:v",
+        "prores_ks",
+        "-profile:v",
+        "4444",
+        "-pix_fmt",
+        "yuva444p10le",
+        str(output_mov),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return result.returncode == 0 and output_mov.is_file()
+
+
+def _render_with_ffmpeg_drawtext(
+    project: Project,
+    item: TimelineItem,
+    font_path: Path,
+    output_path: Path,
+) -> bool:
+    duration = max(0.1, float(item.duration_sec))
+    fps = max(1, int(project.fps))
+    width = max(320, int(project.width))
+    height = max(240, int(project.height))
+    vf = _ffmpeg_opening_title_filter(item, font_path, project)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=c=black@0.0:s={width}x{height}:d={duration:.3f}:r={fps}",
+        "-vf",
+        f"format=rgba,{vf}",
+        "-c:v",
+        "prores_ks",
+        "-profile:v",
+        "4444",
+        "-pix_fmt",
+        "yuva444p10le",
+        str(output_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return result.returncode == 0 and output_path.is_file()
+
+
+def _render_with_pillow(
+    project: Project,
+    item: TimelineItem,
+    font_path: Path,
+    output_path: Path,
+) -> Path:
+    png_path = output_path.with_suffix(".png")
+    _render_title_png_pillow(item, font_path, project, png_path)
+    duration = max(0.1, float(item.duration_sec))
+    fps = max(1, int(project.fps))
+    if _encode_png_to_title_mov(png_path, output_path, duration=duration, fps=fps):
+        return output_path
+    return png_path
+
+
 def render_opening_title_media(
     project: Project,
     item: TimelineItem,
     *,
     font_warnings: list[dict[str, str | bool]] | None = None,
 ) -> Path:
-    """Rendert transparentes ProRes 4444 MOV für einen Opening Title."""
+    """Rendert transparentes ProRes 4444 MOV (oder PNG-Fallback) für einen Opening Title."""
     if item.type != "opening_title":
         raise ValueError(f"Kein opening_title-Item: {item.type}")
 
@@ -196,58 +352,10 @@ def render_opening_title_media(
             }
         )
 
-    duration = max(0.1, float(item.duration_sec))
-    fps = max(1, int(project.fps))
-    width = max(320, int(project.width))
-    height = max(240, int(project.height))
-    vf = _ffmpeg_opening_title_filter(item, font_path, project)
+    if ffmpeg_has_drawtext() and _render_with_ffmpeg_drawtext(project, item, font_path, output_path):
+        return output_path
 
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-f",
-        "lavfi",
-        "-i",
-        f"color=c=black@0.0:s={width}x{height}:d={duration:.3f}:r={fps}",
-        "-vf",
-        f"format=rgba,{vf}",
-        "-c:v",
-        "prores_ks",
-        "-profile:v",
-        "4444",
-        "-pix_fmt",
-        "yuva444p10le",
-        str(output_path),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if result.returncode != 0 or not output_path.is_file():
-        png_path = output_path.with_suffix(".png")
-        png_cmd = [
-            "ffmpeg",
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            f"color=c=black@0.0:s={width}x{height}:d={duration:.3f}:r={fps}",
-            "-frames:v",
-            "1",
-            "-vf",
-            f"format=rgba,{vf}",
-            str(png_path),
-        ]
-        png_result = subprocess.run(png_cmd, capture_output=True, text=True, check=False)
-        if png_result.returncode != 0 or not png_path.is_file():
-            detail = (result.stderr or png_result.stderr or "ffmpeg fehlgeschlagen").strip()
-            raise RuntimeError(f"Opening-Title-Render fehlgeschlagen: {detail}")
-        return png_path
-
-    return output_path
+    return _render_with_pillow(project, item, font_path, output_path)
 
 
 def ensure_opening_titles_rendered(
@@ -282,7 +390,8 @@ def ensure_opening_titles_rendered(
                 }
             )
         )
-        report_warnings.append(f"Opening Title gerendert: {rendered}")
+        backend = "ffmpeg drawtext" if ffmpeg_has_drawtext() and rendered.suffix.lower() == ".mov" else "Pillow"
+        report_warnings.append(f"Opening Title gerendert ({backend}): {rendered}")
 
     if font_warnings or report_warnings:
         append_validation_report(

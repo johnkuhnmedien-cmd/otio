@@ -22,6 +22,7 @@ from otio_app.services.opening_title_renderer import (
     build_opening_title_item,
     ensure_opening_titles_rendered,
     opening_title_media_path,
+    render_opening_title_media,
 )
 from otio_app.services.otio_exporter import build_otio_timeline, validate_otio_readback
 from otio_app.services.otio_media_transform import format_folder_display_name
@@ -242,6 +243,45 @@ def test_voiceover_still_starts_at_audio_offset(tmp_path: Path) -> None:
     assert audio_tracks[0][0].source_range.duration.to_seconds() == 1.0
 
 
+@patch("otio_app.services.opening_title_renderer.ffmpeg_has_drawtext", return_value=False)
+def test_pillow_fallback_when_drawtext_missing(
+    _no_drawtext: pytest.Mock,
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    font_file = tmp_path / "font.ttf"
+    font_file.write_bytes(b"font")
+    item = build_opening_title_item(
+        folder_name="Antelope Canyon",
+        voice_file="/v.wav",
+        section_id="section_antelope_canyon",
+        work_dir=project.work_dir_path,
+    )
+
+    def _fake_png(_item, _font, _project, output_png: Path) -> None:
+        output_png.parent.mkdir(parents=True, exist_ok=True)
+        output_png.write_bytes(b"png")
+
+    def _fake_encode(_png: Path, mov: Path, **_: object) -> bool:
+        mov.parent.mkdir(parents=True, exist_ok=True)
+        mov.write_bytes(b"mov")
+        return True
+
+    with patch(
+        "otio_app.services.opening_title_renderer.resolve_font_with_fallback",
+        return_value=(font_file, "Phosphate", False),
+    ), patch(
+        "otio_app.services.opening_title_renderer._render_title_png_pillow",
+        side_effect=_fake_png,
+    ), patch(
+        "otio_app.services.opening_title_renderer._encode_png_to_title_mov",
+        side_effect=_fake_encode,
+    ):
+        rendered = render_opening_title_media(project, item)
+    assert rendered.suffix.lower() == ".mov"
+    assert rendered.is_file()
+
+
 @patch("otio_app.services.opening_title_renderer.subprocess.run")
 def test_rendered_media_path_created(mock_run: pytest.Mock, tmp_path: Path) -> None:
     project = _project(tmp_path)
@@ -256,9 +296,11 @@ def test_rendered_media_path_created(mock_run: pytest.Mock, tmp_path: Path) -> N
     def _fake_run(cmd, **kwargs):
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(b"mov")
+
         class R:
             returncode = 0
             stderr = ""
+
         return R()
 
     mock_run.side_effect = _fake_run

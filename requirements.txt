@@ -6,3 +6,4 @@ typing_extensions>=4.0
 eval_type_backport>=0.2
 google-genai>=1.0
 faster-whisper>=1.0
+Pillow>=10.0
