@@ -97,7 +97,7 @@ def test_export_rule_options_reads_folder_title(tmp_path: Path) -> None:
                 id="title",
                 rule_type=RULE_FOLDER_TITLE,
                 enabled=True,
-                params={"font_name": "Phosphate", "duration_sec": 5.0},
+                params={"font_name": "Phosphate", "duration_sec": 5.0, "font_size": 48.0},
             ),
         ],
     )
@@ -105,6 +105,24 @@ def test_export_rule_options_reads_folder_title(tmp_path: Path) -> None:
     assert opts.folder_title_enabled is True
     assert opts.folder_title_font == "Phosphate"
     assert opts.folder_title_duration_sec == 5.0
+    assert opts.folder_title_font_size == 48.0
+
+
+def test_export_rule_options_auto_font_size_when_zero(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    document = EditPlanRulesDocument(
+        project_id=project.id,
+        rules=[
+            EditPlanRule(
+                id="title",
+                rule_type=RULE_FOLDER_TITLE,
+                enabled=True,
+                params={"font_name": "Helvetica Neue", "duration_sec": 5.0, "font_size": 0.0},
+            ),
+        ],
+    )
+    opts = export_rule_options(document)
+    assert opts.folder_title_font_size is None
 
 
 def test_available_templates_excludes_only_used_system_rules(tmp_path: Path) -> None:

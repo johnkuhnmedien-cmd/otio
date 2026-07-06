@@ -90,7 +90,7 @@ EDIT_PLAN_RULE_TEMPLATES: tuple[EditPlanRuleTemplate, ...] = (
             "Wird als eigenes Timeline-Element im Schnittplan geplant und "
             "vor dem OTIO-Export als transparentes ProRes 4444 gerendert."
         ),
-        default_params={"font_name": "Helvetica Neue", "duration_sec": 5.0},
+        default_params={"font_name": "Helvetica Neue", "duration_sec": 5.0, "font_size": 0.0},
         implemented=True,
         default_enabled=False,
     ),
@@ -281,6 +281,7 @@ class ExportRuleOptions:
     folder_title_enabled: bool = False
     folder_title_font: str = "Helvetica Neue"
     folder_title_duration_sec: float = 5.0
+    folder_title_font_size: float | None = None
 
 
 def export_rule_options(rules_doc: EditPlanRulesDocument) -> ExportRuleOptions:
@@ -289,6 +290,7 @@ def export_rule_options(rules_doc: EditPlanRulesDocument) -> ExportRuleOptions:
     folder_title = False
     folder_font = "Helvetica Neue"
     folder_duration = 5.0
+    folder_font_size: float | None = None
     for rule in _enabled_rules(rules_doc):
         if rule.rule_type == RULE_TRIM_LEADING:
             raw = rule.params.get("trim_sec", 0.5)
@@ -300,19 +302,26 @@ def export_rule_options(rules_doc: EditPlanRulesDocument) -> ExportRuleOptions:
             auto_zoom = True
         elif rule.rule_type == RULE_FOLDER_TITLE:
             folder_title = True
-            raw_font = rule.params.get("font_name", "Phosphate")
-            folder_font = str(raw_font).strip() if raw_font else "Phosphate"
+            raw_font = rule.params.get("font_name", "Helvetica Neue")
+            folder_font = str(raw_font).strip() if raw_font else "Helvetica Neue"
             raw_duration = rule.params.get("duration_sec", 5.0)
             try:
                 folder_duration = max(0.1, min(30.0, float(raw_duration)))
             except (TypeError, ValueError):
                 folder_duration = 5.0
+            raw_font_size = rule.params.get("font_size", 0.0)
+            try:
+                parsed_size = float(raw_font_size)
+                folder_font_size = None if parsed_size <= 0 else max(12.0, min(200.0, parsed_size))
+            except (TypeError, ValueError):
+                folder_font_size = None
     return ExportRuleOptions(
         trim_leading_sec=trim_sec,
         auto_zoom_fill=auto_zoom,
         folder_title_enabled=folder_title,
         folder_title_font=folder_font,
         folder_title_duration_sec=folder_duration,
+        folder_title_font_size=folder_font_size,
     )
 
 

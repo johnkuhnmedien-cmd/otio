@@ -31,9 +31,16 @@ from otio_app.services.gemini_client import (
     get_default_gemini_model,
     is_gemini_configured,
 )
-from otio_app.services.edit_plan_rules import validate_shots_against_rules, export_rule_options
+from otio_app.services.edit_plan_rules import (
+    export_rule_options,
+    save_edit_plan_rules,
+    validate_shots_against_rules,
+)
 from otio_app.services.edit_plan_validator import ValidationStatus, validate_timeline_items
-from otio_app.services.opening_title_renderer import ensure_opening_titles_rendered
+from otio_app.services.opening_title_renderer import (
+    ensure_opening_titles_rendered,
+    sync_opening_titles_from_rules,
+)
 from otio_app.services.timeline_plan_builder import build_voiceover_plan
 from otio_app.services.otio_exporter import (
     MergedEditPlanResult,
@@ -321,7 +328,8 @@ def _finalize_plan_for_confirm(
         )
         notes.append("Voice-over-Block aus WAV-Datei ergänzt.")
 
-    rules = export_rule_options(get_edit_plan_rules_for_project(project))
+    rules_doc = get_edit_plan_rules_for_project(project)
+    rules = export_rule_options(rules_doc)
     if rules.folder_title_enabled and not any(
         item.type == "opening_title" for item in document.timeline_items
     ):
@@ -329,6 +337,17 @@ def _finalize_plan_for_confirm(
             "Ordner-Titel-Regel ist aktiv, aber der Schnittplan enthält kein opening_title. "
             "Bitte unter „Vorschlag“ den Schnittplan neu generieren."
         )
+
+    synced_items, title_changed = sync_opening_titles_from_rules(
+        project,
+        document.timeline_items,
+        folder_name=selected_folder,
+        export_opts=rules,
+    )
+    if title_changed:
+        document = document.model_copy(update={"timeline_items": synced_items})
+        notes.append("Opening Title aus aktuellen Regeln aktualisiert.")
+
     if any(item.type == "opening_title" for item in document.timeline_items):
         rendered_items, render_notes = ensure_opening_titles_rendered(project, document.timeline_items)
         document = document.model_copy(update={"timeline_items": rendered_items})
@@ -377,12 +396,15 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
             gemini_model=_plan_gemini_model(project.id),
         )
         try:
+            rules_doc = get_edit_plan_rules_for_project(project)
+            save_edit_plan_rules(project, rules_doc)
             with st.spinner(f"Schnittplan für {selected_folder} wird erstellt…"):
                 document = build_edit_plan(
                     project,
                     settings,
                     use_api=use_gemini,
                     folder_names=[selected_folder],
+                    rules_doc=rules_doc,
                 )
             _set_draft(document, selected_folder)
             st.success(f"{len(document.shots)} Shots vorgeschlagen.")

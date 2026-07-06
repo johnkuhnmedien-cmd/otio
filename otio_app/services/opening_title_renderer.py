@@ -12,6 +12,8 @@ from otio_app.analysis_models import TimelineItem
 from otio_app.models import Project
 from otio_app.services.clean_media import path_is_readable_file
 from otio_app.services.font_utils import OPENING_TITLE_FALLBACK_FONT, resolve_font_with_fallback
+from otio_app.services.edit_plan_rules import ExportRuleOptions
+from otio_app.services.generic_outro_selector import section_id_for_folder
 from otio_app.services.otio_media_transform import escape_drawtext_value, format_folder_display_name
 
 GENERATED_TITLES_SUBDIR = "generated_titles"
@@ -161,6 +163,64 @@ def build_opening_title_item(
         warnings=warnings,
         media_source_type="generated",
     )
+
+
+def _opening_title_signature(item: TimelineItem) -> tuple:
+    return (
+        item.text,
+        item.requested_font_family,
+        round(float(item.font_size), 2),
+        round(float(item.duration_sec), 2),
+        item.position,
+    )
+
+
+def sync_opening_titles_from_rules(
+    project: Project,
+    items: list[TimelineItem],
+    *,
+    folder_name: str,
+    export_opts: ExportRuleOptions,
+) -> tuple[list[TimelineItem], bool]:
+    """Passt opening_title-Items an aktuelle Regeln an (oder entfernt sie)."""
+    voice_file = next((item.voice_file for item in items if item.voice_file), "")
+    non_titles = [item for item in items if item.type != "opening_title"]
+    existing = next((item for item in items if item.type == "opening_title"), None)
+
+    if not export_opts.folder_title_enabled:
+        return non_titles, existing is not None
+
+    section_id = section_id_for_folder(folder_name)
+    refreshed = build_opening_title_item(
+        folder_name=folder_name,
+        voice_file=voice_file,
+        section_id=section_id,
+        work_dir=project.work_dir_path,
+        requested_font_family=export_opts.folder_title_font,
+        duration_sec=export_opts.folder_title_duration_sec,
+        font_size=export_opts.folder_title_font_size,
+        video_width=project.width,
+        video_height=project.height,
+    )
+    if existing is not None:
+        refreshed = refreshed.model_copy(
+            update={
+                "timeline_item_id": existing.timeline_item_id,
+                "timeline_in_sec": existing.timeline_in_sec,
+                "timeline_out_sec": existing.timeline_out_sec,
+            }
+        )
+
+    changed = existing is None or _opening_title_signature(existing) != _opening_title_signature(refreshed)
+    if changed and existing is not None and existing.rendered_media_path:
+        stale = Path(existing.rendered_media_path)
+        if stale.is_file():
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+
+    return [refreshed, *non_titles], changed
 
 
 def _title_layout(

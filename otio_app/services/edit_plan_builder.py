@@ -9,6 +9,7 @@ from pathlib import Path
 
 from otio_app.analysis_models import (
     EditPlanDocument,
+    EditPlanRulesDocument,
     EditPlanSettings,
     EditPlanShot,
     VoiceAnalysisDocument,
@@ -172,6 +173,7 @@ def build_edit_plan(
     *,
     use_api: bool = True,
     folder_names: list[str] | None = None,
+    rules_doc: EditPlanRulesDocument | None = None,
 ) -> EditPlanDocument:
     """Erzeugt einen Schnittplan-Vorschlag für bestätigte Voice-over-Zuordnungen."""
     mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
@@ -188,7 +190,7 @@ def build_edit_plan(
         audio_offset_sec=DEFAULT_AUDIO_OFFSET_SEC,
         fallback_order=list(DEFAULT_FALLBACK_ORDER),
     )
-    rules_doc = load_edit_plan_rules(project)
+    rules_doc = rules_doc or load_edit_plan_rules(project)
     gemini_prompt = gemini_prompt_text(rules_doc)
     trim_leading_sec = export_rule_options(rules_doc).trim_leading_sec
     export_opts = export_rule_options(rules_doc)
@@ -322,6 +324,7 @@ def build_edit_plan(
             opening_title_enabled=export_opts.folder_title_enabled,
             opening_title_font=export_opts.folder_title_font,
             opening_title_duration_sec=export_opts.folder_title_duration_sec,
+            opening_title_font_size=export_opts.folder_title_font_size,
             video_width=project.width,
             video_height=project.height,
             work_dir=project.work_dir_path,

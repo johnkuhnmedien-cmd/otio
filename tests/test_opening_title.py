@@ -47,6 +47,53 @@ def _project(tmp_path: Path) -> Project:
     )
 
 
+def test_sync_opening_titles_updates_font_from_rules(tmp_path: Path) -> None:
+    from otio_app.services.edit_plan_rules import ExportRuleOptions
+    from otio_app.services.opening_title_renderer import sync_opening_titles_from_rules
+
+    project = _project(tmp_path)
+    existing = build_opening_title_item(
+        folder_name="Antelope Canyon",
+        voice_file="/v.wav",
+        section_id="section_antelope_canyon",
+        work_dir=project.work_dir_path,
+        requested_font_family="Phosphate",
+        font_size=96.0,
+    )
+    video = TimelineItem(
+        timeline_item_id="v1",
+        type="video_shot",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        voice_file="/v.wav",
+        resolved_media_path="/a.mp4",
+        duration_sec=5.0,
+        final_duration_sec=5.0,
+        timeline_in_sec=0.0,
+        timeline_out_sec=5.0,
+        source_in_sec=0.5,
+        source_out_sec=5.5,
+        transform=TimelineItemTransform(),
+    )
+    opts = ExportRuleOptions(
+        folder_title_enabled=True,
+        folder_title_font="Helvetica Neue",
+        folder_title_duration_sec=4.0,
+        folder_title_font_size=40.0,
+    )
+    items, changed = sync_opening_titles_from_rules(
+        project,
+        [existing, video],
+        folder_name="Antelope Canyon",
+        export_opts=opts,
+    )
+    assert changed is True
+    title = next(item for item in items if item.type == "opening_title")
+    assert title.requested_font_family == "Helvetica Neue"
+    assert title.font_size == 40.0
+    assert title.duration_sec == 4.0
+
+
 def test_lower_third_style_defaults(tmp_path: Path) -> None:
     project = _project(tmp_path)
     item = build_opening_title_item(

@@ -290,6 +290,7 @@ def build_timeline_items_for_folder(
     opening_title_enabled: bool = False,
     opening_title_font: str = DEFAULT_OPENING_TITLE_FONT,
     opening_title_duration_sec: float = 5.0,
+    opening_title_font_size: float | None = None,
     video_width: int = 1920,
     video_height: int = 1080,
     work_dir: Path | None = None,
@@ -312,6 +313,7 @@ def build_timeline_items_for_folder(
             work_dir=work_dir,
             requested_font_family=opening_title_font,
             duration_sec=opening_title_duration_sec,
+            font_size=opening_title_font_size,
             video_width=video_width,
             video_height=video_height,
         )

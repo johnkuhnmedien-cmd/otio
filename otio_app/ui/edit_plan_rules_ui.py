@@ -133,10 +133,23 @@ def _render_rule_card(
                     key=f"rule_folder_title_duration_{project.id}_{rule.id}",
                 )
             )
+            params["font_size"] = float(
+                st.number_input(
+                    "Schriftgröße (px)",
+                    min_value=0.0,
+                    max_value=200.0,
+                    value=float(params.get("font_size", 0.0)),
+                    step=2.0,
+                    key=f"rule_folder_title_font_size_{project.id}_{rule.id}",
+                    help="0 = automatisch (Lower Third, abhängig von der Projektauflösung).",
+                )
+            )
             st.caption(
                 "Ordnername als Lower Third unten links (Clean-and-Simple-Stil) — "
                 "Unterstriche (_) werden zu Leerzeichen. "
-                "Wird vor dem OTIO-Export als transparentes Overlay auf V2 gerendert."
+                "Wird vor dem OTIO-Export als transparentes Overlay auf V2 gerendert. "
+                "**Wirkt nach Speichern** und **Schnittplan vorschlagen** "
+                "(oder beim **Bestätigen & speichern** für Titel-Einstellungen)."
             )
 
         if rule.id in remove_ids:
@@ -148,7 +161,8 @@ def render_edit_plan_rules_manager(project: Project) -> EditPlanRulesDocument:
     """Regeln anzeigen, bearbeiten und dauerhaft speichern."""
     st.markdown("**Schnittregeln**")
     st.caption(
-        "System-Regeln wirken automatisch (Asset-Auswahl beim Vorschlag, Zoom/Titel beim Export). "
+        "System-Regeln wirken nach **Speichern** — Titel/Zoom beim **Schnittplan vorschlagen**, "
+        "Asset-Regeln ebenfalls beim Vorschlag. "
         "Unter **Gemini-Zusatzhinweise** kannst du freie Anweisungen formulieren — "
         "die werden beim Schnittplan-Vorschlag an Gemini geschickt. "
         f"Datei: `{project.work_dir_path / 'edit_plan_rules.json'}`"
