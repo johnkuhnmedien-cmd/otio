@@ -38,6 +38,7 @@ def validate_opening_titles(
     items: list[TimelineItem],
     *,
     opening_title_required: bool = False,
+    require_rendered_media: bool = False,
 ) -> TimelineValidationResult:
     """Prüft Opening-Title-Elemente vor OTIO-Export."""
     result = TimelineValidationResult()
@@ -46,7 +47,8 @@ def validate_opening_titles(
     if opening_title_required and not title_items:
         result.status = ValidationStatus.AWAITING_APPROVAL
         result.errors.append(
-            "Ordner-Titel-Regel aktiv, aber kein opening_title im Schnittplan."
+            "Ordner-Titel-Regel aktiv, aber kein opening_title im Schnittplan. "
+            "Bitte unter „Vorschlag“ den Schnittplan neu generieren."
         )
         return result
 
@@ -62,7 +64,7 @@ def validate_opening_titles(
         media_path = item.rendered_media_path or item.resolved_media_path
         if not media_path:
             result.errors.append(f"{item.timeline_item_id}: rendered_media_path fehlt.")
-        elif not path_is_readable_file(Path(media_path)):
+        elif require_rendered_media and not path_is_readable_file(Path(media_path)):
             result.errors.append(
                 f"{item.timeline_item_id}: gerenderte Titeldatei nicht lesbar: {media_path}"
             )
@@ -199,6 +201,7 @@ def validate_timeline_items(
     fps: float = 25.0,
     voiceover: VoiceoverPlan | None = None,
     opening_title_required: bool = False,
+    require_rendered_media: bool = False,
 ) -> TimelineValidationResult:
     """Prüft Dauerregeln, Voice-Abdeckung und Outro-Planung."""
     result = TimelineValidationResult()
@@ -295,6 +298,7 @@ def validate_timeline_items(
     title_result = validate_opening_titles(
         items,
         opening_title_required=opening_title_required,
+        require_rendered_media=require_rendered_media,
     )
     result.errors.extend(title_result.errors)
     result.warnings.extend(title_result.warnings)

@@ -45,7 +45,11 @@ from otio_app.services.otio_export_settings import (
     load_otio_export_settings,
     save_otio_export_settings,
 )
-from otio_app.services.edit_plan_validator import ValidationStatus, validate_timeline_items
+from otio_app.services.edit_plan_validator import (
+    ValidationStatus,
+    validate_opening_titles,
+    validate_timeline_items,
+)
 from otio_app.services.timeline_plan_builder import (
     assign_global_timeline_positions,
     build_voiceover_plan,
@@ -1009,6 +1013,16 @@ def export_otio_timeline(
         warnings=list(merged.warnings) + _render_notes,
         validation_status=merged.validation_status,
     )
+
+    export_rules = export_rule_options(load_edit_plan_rules(project))
+    post_render_validation = validate_opening_titles(
+        merged.timeline_items,
+        opening_title_required=export_rules.folder_title_enabled,
+        require_rendered_media=True,
+    )
+    if post_render_validation.errors:
+        details = "; ".join(post_render_validation.errors[:5])
+        raise ValueError(f"Opening-Title-Validierung nach Render fehlgeschlagen: {details}")
 
     media_issues = verify_timeline_media_paths(project, merged.timeline_items, strict=True)
     if media_issues:

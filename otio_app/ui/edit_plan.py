@@ -6,7 +6,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPlanShot, TimelineItem
+from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPlanShot, TimelineItem, VoiceoverPlan
 from otio_app.defaults import (
     DEFAULT_AUDIO_OFFSET_SEC,
     DEFAULT_FALLBACK_ORDER,
@@ -31,7 +31,10 @@ from otio_app.services.gemini_client import (
     get_default_gemini_model,
     is_gemini_configured,
 )
-from otio_app.services.edit_plan_rules import validate_shots_against_rules
+from otio_app.services.edit_plan_rules import validate_shots_against_rules, export_rule_options
+from otio_app.services.edit_plan_validator import ValidationStatus, validate_timeline_items
+from otio_app.services.opening_title_renderer import ensure_opening_titles_rendered
+from otio_app.services.timeline_plan_builder import build_voiceover_plan
 from otio_app.services.otio_exporter import (
     MergedEditPlanResult,
     export_otio_timeline,
@@ -271,6 +274,84 @@ def _render_tab_settings(project) -> None:
     )
 
 
+def _export_blockers_message(merged: MergedEditPlanResult, folder_selection: tuple[str, ...]) -> str:
+    if not folder_selection:
+        return (
+            "Kein Ort zum Export ausgewählt — wähle mindestens einen **bestätigten** Ort "
+            "oder bestätige Schnittpläne unter „Prüfen & Speichern“."
+        )
+    if merged.skipped_folders and not merged.included_folders:
+        return (
+            "Keine bestätigten Schnittpläne für die gewählten Orte — "
+            "unter **Prüfen & Speichern** die Checkbox aktivieren und "
+            "**Bestätigen & speichern** klicken."
+        )
+    if not merged.timeline_items:
+        return (
+            "Keine `timeline_items` im Schnittplan — bitte unter **Vorschlag** "
+            "den Schnittplan **neu generieren** und erneut bestätigen."
+        )
+    if merged.validation_status != ValidationStatus.OK.value:
+        return (
+            f"Schnittplan-Validierung: **{merged.validation_status}** — "
+            "Details unten. Oft hilft: Schnittplan neu vorschlagen und bestätigen."
+        )
+    return "Export nicht möglich — bitte Validierungsmeldungen prüfen."
+
+
+def _finalize_plan_for_confirm(
+    project,
+    draft: EditPlanDocument,
+    selected_folder: str,
+) -> tuple[EditPlanDocument, list[str]]:
+    """Voice-over-Block ergänzen, Opening Titles vorab rendern, Timeline prüfen."""
+    notes: list[str] = []
+    document = draft.model_copy(update={"confirmed": True, "folder_name": selected_folder})
+
+    if not document.timeline_items:
+        raise ValueError(
+            "Kein moderner Schnittplan (`timeline_items` fehlt). "
+            "Bitte unter „Vorschlag“ **Schnittplan vorschlagen** und erneut bestätigen."
+        )
+
+    voice_files = {item.voice_file for item in document.timeline_items if item.voice_file}
+    if document.voiceover is None and voice_files:
+        document = document.model_copy(
+            update={"voiceover": build_voiceover_plan(next(iter(voice_files)), document.settings)}
+        )
+        notes.append("Voice-over-Block aus WAV-Datei ergänzt.")
+
+    rules = export_rule_options(get_edit_plan_rules_for_project(project))
+    if rules.folder_title_enabled and not any(
+        item.type == "opening_title" for item in document.timeline_items
+    ):
+        raise ValueError(
+            "Ordner-Titel-Regel ist aktiv, aber der Schnittplan enthält kein opening_title. "
+            "Bitte unter „Vorschlag“ den Schnittplan neu generieren."
+        )
+    if any(item.type == "opening_title" for item in document.timeline_items):
+        rendered_items, render_notes = ensure_opening_titles_rendered(project, document.timeline_items)
+        document = document.model_copy(update={"timeline_items": rendered_items})
+        notes.extend(render_notes)
+
+    validation = validate_timeline_items(
+        document.timeline_items,
+        settings=document.settings,
+        voiceover=document.voiceover,
+        opening_title_required=rules.folder_title_enabled,
+        require_rendered_media=False,
+    )
+    if validation.status == ValidationStatus.BLOCKED:
+        preview = "; ".join(validation.errors[:6])
+        raise ValueError(f"Schnittplan ungültig — bitte zuerst beheben: {preview}")
+
+    for shot in document.shots:
+        if not shot.asset_path:
+            shot.asset_source = "missing"
+
+    return document, notes
+
+
 def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument | None) -> None:
     st.markdown(
         f"Vorschlag für **{selected_folder}** — Gemini erhält **Whisper-Text**, "
@@ -332,15 +413,22 @@ def _render_tab_review(
     plan_path: Path,
 ) -> None:
     draft = _get_draft(project.id, selected_folder) or saved
-    if draft is None or not draft.shots:
+    if draft is None or (not draft.shots and not draft.timeline_items):
         st.info(
             f"Noch kein Vorschlag für **{selected_folder}** — "
             "zuerst unter „Vorschlag“ generieren."
         )
         return
 
+    if not draft.timeline_items:
+        st.warning(
+            "Dieser Schnittplan ist veraltet (`timeline_items` fehlt). "
+            "Bitte unter **Vorschlag** erneut **Schnittplan vorschlagen**."
+        )
+
     st.markdown(
         f"**{selected_folder}** · {len(draft.shots)} Shots "
+        f"· {len(draft.timeline_items)} Timeline-Items "
         f"— Audio-Offset: {draft.settings.audio_offset_sec}s"
     )
     rules_doc = get_edit_plan_rules_for_project(project)
@@ -364,25 +452,39 @@ def _render_tab_review(
                 st.warning("Kein lokales Asset — Fallback folgt später (Adobe Stock / Pexels / KI).")
 
     confirm = st.checkbox(
-        f"Schnittplan für {selected_folder} geprüft und bestätigt",
+        f"Ich habe den Schnittplan für {selected_folder} geprüft und möchte ihn bestätigen",
         key=f"confirm_plan_{project.id}_{safe_folder_slug(selected_folder)}",
     )
+    st.caption(
+        "Nur mit aktivierter Checkbox wird der Ort als **bestätigt** gespeichert "
+        "und steht für den OTIO-Export bereit."
+    )
     if st.button(
-        "Schnittplan speichern",
+        "Bestätigen & speichern",
         key=f"save_plan_{project.id}_{safe_folder_slug(selected_folder)}",
         type="primary",
     ):
         if not confirm:
-            st.warning("Bitte bestätigen.")
+            st.warning(
+                "Bitte zuerst die Checkbox **oben** aktivieren — "
+                "ohne Bestätigung wird der Schnittplan nicht exportierbar gespeichert."
+            )
         else:
-            confirmed = draft.model_copy(update={"confirmed": True, "folder_name": selected_folder})
-            for shot in confirmed.shots:
-                if not shot.asset_path:
-                    shot.asset_source = "missing"
-            save_edit_plan(project, confirmed, selected_folder)
-            _set_draft(confirmed, selected_folder)
-            st.success(f"Gespeichert: `{plan_path}`")
-            st.rerun()
+            try:
+                with st.spinner("Schnittplan prüfen und speichern …"):
+                    confirmed, finalize_notes = _finalize_plan_for_confirm(
+                        project,
+                        draft,
+                        selected_folder,
+                    )
+                    save_edit_plan(project, confirmed, selected_folder)
+                    _set_draft(confirmed, selected_folder)
+                st.success(f"Bestätigt und gespeichert: `{plan_path}`")
+                for note in finalize_notes:
+                    st.caption(f"• {note}")
+                st.rerun()
+            except (OSError, ValueError) as exc:
+                st.error(str(exc))
 
     with st.expander("JSON-Vorschau", expanded=False):
         st.code(draft.model_dump_json(indent=2)[:6000])
@@ -409,6 +511,7 @@ def _cache_export_preview(
         "skipped_folders": preview.skipped_folders,
         "warnings": preview.warnings,
         "validation_status": preview.validation_status,
+        "voiceovers": [vo.model_dump(mode="json") for vo in preview.voiceovers],
     }
     st.session_state[_export_preview_folders_key(project_id)] = list(folders)
 
@@ -423,6 +526,9 @@ def _load_cached_export_preview(project_id: str) -> MergedEditPlanResult | None:
         ],
         shots=[EditPlanShot.model_validate(shot) for shot in raw["shots"]],
         settings=EditPlanSettings.model_validate(raw["settings"]),
+        voiceovers=[
+            VoiceoverPlan.model_validate(vo) for vo in raw.get("voiceovers", [])
+        ],
         included_folders=list(raw["included_folders"]),
         skipped_folders=list(raw["skipped_folders"]),
         warnings=list(raw["warnings"]),
@@ -489,15 +595,12 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                     folder_names=list(folder_selection) if folder_selection else None,
                 )
                 if not merged.ready:
-                    st.warning(
-                        "Export nicht möglich — wähle mindestens einen **bestätigten** Ort "
-                        "oder bestätige Schnittpläne unter „Prüfen & Speichern“."
-                    )
+                    st.warning(_export_blockers_message(merged, folder_selection))
                     for warning in merged.warnings:
                         st.caption(f"• {warning}")
                 else:
                     log_heavy_operation(
-                        f"OTIO-Export ({len(preview.timeline_items)} Timeline-Items)",
+                        f"OTIO-Export ({len(merged.timeline_items)} Timeline-Items)",
                         page=PAGE_EDIT_PLAN,
                     )
                     export_result = export_otio_timeline(
@@ -549,6 +652,7 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                         "section_outro_sec": export_timing.section_outro_sec,
                     }
                 ),
+                preview.voiceovers,
             )
             total_duration = sum(section.video_duration_sec for section in timeline_sections)
             st.caption(
@@ -558,9 +662,10 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                 f"{project.fps} fps"
             )
             for section in timeline_sections:
+                voice_start = section.video_start_sec + section.voiceover.timeline_start_sec
                 st.caption(
                     f"• **{section.folder}** — Video ab {section.video_start_sec:.1f}s "
-                    f"({section.video_duration_sec:.1f}s), Voice ab {section.voice_start_sec:.1f}s"
+                    f"({section.video_duration_sec:.1f}s), Voice ab {voice_start:.1f}s"
                 )
 
             if st.button(
@@ -582,10 +687,7 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                 else:
                     st.success("Alle Shot-Medien Resolve-ready.")
         else:
-            st.info(
-                "Export noch nicht möglich — wähle mindestens einen **bestätigten** Ort "
-                "oder bestätige Schnittpläne unter „Prüfen & Speichern“."
-            )
+            st.info(_export_blockers_message(preview, folder_selection))
 
     st.markdown("**In Resolve / Premiere / OTIO**")
     st.caption(
