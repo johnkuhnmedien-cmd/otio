@@ -38,7 +38,10 @@ from otio_app.services.otio_exporter import (
     merge_confirmed_edit_plans,
     verify_shot_media_paths,
 )
-from otio_app.services.otio_export_settings import load_otio_export_settings
+from otio_app.services.otio_export_settings import (
+    OtioExportSettings,
+    load_otio_export_settings,
+)
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 from otio_app.ui.edit_plan_rules_ui import (
     get_edit_plan_rules_for_project,
@@ -170,6 +173,26 @@ def _plan_number_setting(project_id: str, suffix: str, default: float) -> float:
     return float(st.session_state.get(f"plan_{suffix}_{project_id}", default))
 
 
+def _seed_timing_widgets(project) -> None:
+    """Lädt gespeicherte Export-Timing-Werte in die Widgets (einmalig pro Session)."""
+    saved = load_otio_export_settings(project)
+    offset_key = f"plan_offset_{project.id}"
+    outro_key = f"plan_outro_{project.id}"
+    if offset_key not in st.session_state:
+        st.session_state[offset_key] = float(saved.audio_offset_sec)
+    if outro_key not in st.session_state:
+        st.session_state[outro_key] = float(saved.section_outro_sec)
+
+
+def _export_timing_settings(project) -> OtioExportSettings:
+    """Audio-Start und Ausklingen aus Tab „Timing & Gemini“ (Fallback: gespeicherte JSON)."""
+    saved = load_otio_export_settings(project)
+    return OtioExportSettings(
+        audio_offset_sec=_plan_number_setting(project.id, "offset", saved.audio_offset_sec),
+        section_outro_sec=_plan_number_setting(project.id, "outro", saved.section_outro_sec),
+    )
+
+
 def _plan_text_setting(project_id: str, suffix: str, default: str) -> str:
     return str(st.session_state.get(f"plan_{suffix}_{project_id}", default))
 
@@ -183,6 +206,11 @@ def _render_tab_settings(project) -> None:
     render_edit_plan_rules_manager(project)
     st.divider()
     st.markdown("**Timing & Gemini**")
+    st.caption(
+        "Min./Max. Shot und Gemini-Modell gelten beim **Schnittplan vorschlagen**. "
+        "**Audio-Start** und **Ordner-Ausklingen** werden erst beim **OTIO-Export** "
+        "auf die Timeline angewendet — nicht an Gemini übergeben."
+    )
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.number_input(
@@ -220,7 +248,7 @@ def _render_tab_settings(project) -> None:
             max_value=30.0,
             step=0.5,
             key=f"plan_outro_{project.id}",
-            help="Letztes Asset eines Ordners bleibt auf der Timeline so viele Sekunden länger.",
+            help="Letztes Asset eines Ordners bleibt auf der Timeline so viele Sekunden länger (nur OTIO-Export).",
         )
 
     st.text_input(
@@ -397,10 +425,12 @@ def _load_cached_export_preview(project_id: str) -> MergedEditPlanResult | None:
 
 def _render_tab_export(project, mapped_folders: list[str]) -> None:
     default_export_path = get_otio_export_path(project.work_dir_path, project.name)
-    saved_export_settings = load_otio_export_settings(project)
+    export_timing = _export_timing_settings(project)
     st.markdown("**OTIO-Timeline aus bestätigten Schnittplänen**")
     st.caption(
         "Orte und Timing wählen, dann **OTIO exportieren** — Vorschau ist optional. "
+        f"Audio-Start und Ausklingen aus Tab **Regeln → Timing & Gemini** "
+        f"({export_timing.audio_offset_sec}s / {export_timing.section_outro_sec}s). "
         f"Ziel: `{default_export_path}` · "
         f"Einstellungen: `{project.work_dir_path / 'otio_export_settings.json'}`"
     )
@@ -444,7 +474,7 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
 
     if export_clicked:
         try:
-            export_settings = saved_export_settings
+            export_settings = export_timing
             with st.spinner("Schnittpläne zusammenführen, Medien prüfen und OTIO schreiben …"):
                 merged = merge_confirmed_edit_plans(
                     project,
@@ -507,16 +537,16 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                 preview.shots,
                 preview.settings.model_copy(
                     update={
-                        "audio_offset_sec": saved_export_settings.audio_offset_sec,
-                        "section_outro_sec": saved_export_settings.section_outro_sec,
+                        "audio_offset_sec": export_timing.audio_offset_sec,
+                        "section_outro_sec": export_timing.section_outro_sec,
                     }
                 ),
             )
             total_duration = sum(section.video_duration_sec for section in timeline_sections)
             st.caption(
                 f"Geschätzte Videospur: {total_duration:.1f}s · "
-                f"Audio-Start: {saved_export_settings.audio_offset_sec}s · "
-                f"Ausklingen: {saved_export_settings.section_outro_sec}s · "
+                f"Audio-Start: {export_timing.audio_offset_sec}s · "
+                f"Ausklingen: {export_timing.section_outro_sec}s · "
                 f"{project.fps} fps"
             )
             for section in timeline_sections:
@@ -582,6 +612,8 @@ def render_edit_plan_page() -> None:
 
     location_statuses = _collect_location_statuses(project, project.id, mapped_folders)
     status_by_folder = {item.folder_name: item for item in location_statuses}
+
+    _seed_timing_widgets(project)
 
     render_workflow_progress(
         project,
