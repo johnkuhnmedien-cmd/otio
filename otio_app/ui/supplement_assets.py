@@ -35,7 +35,6 @@ from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.supplement_coverage import COVERAGE_SUPPLEMENT_REQUIRED, coverage_to_supplement_request
 from otio_app.services.supplement_pipeline import (
     acquire_supplement_candidate,
-    acquire_google_candidate_for_private_use,
     analyze_supplement_asset,
     approve_adobe_candidate,
     extend_folder_inventory,
@@ -45,6 +44,7 @@ from otio_app.services.supplement_pipeline import (
     search_supplement_candidates,
 )
 from otio_app.services.supplement_search import preferred_search_query, request_with_keyword_query
+from otio_app.services.supplement_sources import get_provider_readiness, list_provider_readiness
 from otio_app.services.supplement_requests import (
     load_supplement_requests,
     pending_supplement_count,
@@ -72,6 +72,20 @@ def _load_current_plan(project, folder_name: str) -> EditPlanDocument | None:
         except ValueError:
             pass
     return load_edit_plan(project, folder_name)
+
+
+def _candidates_for_source(
+    candidates: list[SupplementCandidate],
+    *,
+    request_id: str,
+    selected_source: str,
+) -> list[SupplementCandidate]:
+    return [
+        candidate
+        for candidate in candidates
+        if candidate.supplement_request_id == request_id
+        and candidate.provider == selected_source
+    ]
 
 
 def _materialize_requests_from_plan(project, folder_name: str) -> int:
@@ -199,6 +213,12 @@ def render_supplement_assets_page() -> None:
         return
 
     selected_folder = st.selectbox("Asset-Ordner", folders, key=f"supplement_folder_{project.id}")
+    with st.expander("Provider-Status", expanded=False):
+        for provider, readiness in list_provider_readiness().items():
+            st.caption(
+                f"**{SUPPLEMENT_SOURCE_LABELS.get(provider, provider)}**: "
+                f"{readiness.status} — {readiness.message}"
+            )
     created_from_plan = _materialize_requests_from_plan(project, selected_folder)
     document = load_supplement_requests(project)
     folder_requests = requests_for_folder(document, selected_folder)
@@ -269,12 +289,18 @@ def render_supplement_assets_page() -> None:
             )
             st.caption(f"Verwendete Query: `{query}`")
 
+            source_options = list(SUPPLEMENT_SOURCE_LABELS.keys())
+            current_source = request.selected_source if request.selected_source in source_options else source_options[0]
             source = st.selectbox(
                 "Quelle",
-                options=list(SUPPLEMENT_SOURCE_LABELS.keys()),
+                options=source_options,
                 format_func=lambda key: SUPPLEMENT_SOURCE_LABELS[key],
                 key=f"source_{request.supplement_request_id}",
-                index=0,
+                index=source_options.index(current_source),
+            )
+            selected_readiness = get_provider_readiness(source)
+            st.caption(
+                f"Provider-Status: **{selected_readiness.status}** — {selected_readiness.message}"
             )
             if st.button("Quelle speichern", key=f"save_source_{request.supplement_request_id}"):
                 update_request(
@@ -285,16 +311,23 @@ def render_supplement_assets_page() -> None:
                 )
                 st.rerun()
 
-            candidates = [
-                candidate
-                for candidate in document.candidates
-                if candidate.supplement_request_id == request.supplement_request_id
-            ]
+            candidates = _candidates_for_source(
+                document.candidates,
+                request_id=request.supplement_request_id,
+                selected_source=source,
+            )
             if request.status == "CANDIDATES_FOUND":
                 st.success(f"{len(candidates)} Kandidat(en) gefunden.")
             elif candidates:
                 st.info(f"{len(candidates)} gespeicherte Kandidat(en) vorhanden.")
-            if st.button("Supplement-Kandidaten suchen", key=f"search_{request.supplement_request_id}"):
+            if not candidates:
+                st.info("Für diese Quelle wurden noch keine Kandidaten gesucht.")
+            search_label = (
+                "Mock-Suche anzeigen"
+                if selected_readiness.is_mock or selected_readiness.status == "CONFIG_MISSING"
+                else "Supplement-Kandidaten für diese Quelle suchen"
+            )
+            if st.button(search_label, key=f"search_{request.supplement_request_id}"):
                 try:
                     request_for_search = request_with_keyword_query(request, query)
                     updated = update_request(
@@ -322,7 +355,7 @@ def render_supplement_assets_page() -> None:
 
             if candidates:
                 labels = [
-                    f"{candidate.provider} · {candidate.title[:50]} · score={candidate.match_score:.2f}"
+                    f"{candidate.provider} · {candidate.title[:50]} · {candidate.status} · score={candidate.match_score:.2f}"
                     for candidate in candidates
                 ]
                 selected_idx = st.selectbox(
@@ -332,6 +365,8 @@ def render_supplement_assets_page() -> None:
                     key=f"candidate_{request.supplement_request_id}",
                 )
                 candidate: SupplementCandidate = candidates[selected_idx]
+                if candidate.is_mock or not candidate.download_enabled:
+                    st.warning("Demo / Mock-Kandidat — kein produktiver Download möglich.")
 
                 if candidate.provider == SUPPLEMENT_SOURCE_ADOBE:
                     st.warning(
@@ -340,6 +375,7 @@ def render_supplement_assets_page() -> None:
                     if st.button(
                         "Adobe Asset lizenzieren und herunterladen",
                         key=f"adobe_license_{request.supplement_request_id}",
+                        disabled=candidate.is_mock or not candidate.download_enabled,
                     ):
                         try:
                             approved = approve_adobe_candidate(candidate)
@@ -350,33 +386,11 @@ def render_supplement_assets_page() -> None:
                             st.error(str(exc))
                 elif candidate.provider == SUPPLEMENT_SOURCE_GOOGLE:
                     st.warning(
-                        "Google Suche liefert externe Treffer. Für private Nutzung kannst du "
-                        "die gefundene Medien-URL automatisch herunterladen."
+                        "Google Suche ist aktuell Browser-Discovery. Kein automatischer Download; "
+                        "bitte Treffer öffnen, Datei lokal laden und manuell importieren."
                     )
                     if candidate.source_page_url:
                         st.link_button("Google-Treffer im Browser öffnen", candidate.source_page_url)
-                    if candidate.download_url:
-                        st.caption(f"Gefundene Medien-URL: `{candidate.download_url}`")
-                    private_ok = st.checkbox(
-                        "Ich nutze dieses Google-Asset nur privat und möchte es automatisch herunterladen",
-                        key=f"google_private_ok_{request.supplement_request_id}",
-                    )
-                    if st.button(
-                        "Google-Asset automatisch herunterladen",
-                        key=f"google_download_{request.supplement_request_id}",
-                        disabled=not private_ok or not bool(candidate.download_url),
-                    ):
-                        try:
-                            downloaded = acquire_google_candidate_for_private_use(
-                                project,
-                                candidate,
-                                request,
-                            )
-                            st.success(f"Google-Asset gespeichert: `{downloaded.local_path}`")
-                            st.rerun()
-                        except (OSError, ValueError, PermissionError, RuntimeError) as exc:
-                            st.error(str(exc))
-                    st.caption("Alternativ kannst du weiterhin eine manuell heruntergeladene Datei übernehmen.")
                     manual_path = st.text_input(
                         "Lokaler Pfad nach manuellem Download",
                         key=f"manual_path_{request.supplement_request_id}",
@@ -397,6 +411,8 @@ def render_supplement_assets_page() -> None:
                                 source_path=Path(manual_path).expanduser(),
                                 source_url=candidate.source_page_url,
                                 rights_status="APPROVED" if rights_ok else "NEEDS_LICENSE_REVIEW",
+                                source_provider=SUPPLEMENT_SOURCE_GOOGLE,
+                                acquisition_method="manual_download",
                             )
                             st.success(f"Manuelles Asset übernommen: `{imported.local_path}`")
                             st.rerun()
@@ -405,6 +421,7 @@ def render_supplement_assets_page() -> None:
                 elif st.button(
                     "Ausgewähltes Asset herunterladen/generieren",
                     key=f"acquire_{request.supplement_request_id}",
+                    disabled=candidate.is_mock or not candidate.download_enabled,
                 ):
                     try:
                         asset = acquire_supplement_candidate(project, candidate, request)

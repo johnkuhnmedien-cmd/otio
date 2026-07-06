@@ -19,16 +19,24 @@ from otio_app.analysis_models import (
     InventoryDeltaEntry,
     SupplementAssetSidecar,
     SupplementCandidate,
+    SupplementErrorDocument,
+    SupplementErrorEntry,
     SupplementManifest,
     SupplementManifestEntry,
     SupplementRequest,
 )
 from otio_app.defaults import (
+    CANDIDATE_STATUS_DOWNLOAD_FAILED,
+    PROVIDER_STATUS_MOCK,
     ASSET_ORIGIN_GOOGLE,
     ASSET_ORIGIN_NANO_BANANA,
     ASSET_ORIGIN_PEXELS,
     RIGHTS_STATUS_APPROVED,
     RIGHTS_STATUS_NEEDS_LICENSE_REVIEW,
+    REQUEST_STATUS_ACQUIRE_FAILED,
+    REQUEST_STATUS_ANALYSIS_PENDING,
+    REQUEST_STATUS_INVENTORY_UPDATED,
+    REQUEST_STATUS_READY_FOR_REPLAN,
     SUPPLEMENT_SOURCE_ADOBE,
     SUPPLEMENT_SOURCE_GOOGLE,
     SUPPLEMENT_SOURCE_MANUAL,
@@ -40,6 +48,7 @@ from otio_app.project_layout import (
     get_folder_inventory_delta_path,
     get_folder_inventory_path,
     get_provider_supplemental_dir,
+    get_supplement_errors_path,
     get_supplement_manifest_path,
 )
 from otio_app.services.edit_plan_builder import load_edit_plan, save_edit_plan
@@ -57,7 +66,7 @@ from otio_app.services.supplement_requests import (
     update_request,
     upsert_requests,
 )
-from otio_app.services.supplement_sources import get_supplement_adapter
+from otio_app.services.supplement_sources import get_provider_readiness, get_supplement_adapter
 from otio_app.services.supplement_sources.base import SupplementAsset
 
 
@@ -71,6 +80,43 @@ def _file_hash(path: Path) -> str:
 
 def _sidecar_path(local_path: Path) -> Path:
     return local_path.with_suffix(local_path.suffix + ".asset.json")
+
+
+def record_supplement_error(
+    project: Project,
+    *,
+    request_id: str,
+    provider: str,
+    error_type: str,
+    error_message: str,
+    candidate_id: str = "",
+    url: str = "",
+    action_required: str = "",
+    provider_status_at_failure: str = "",
+) -> None:
+    path = get_supplement_errors_path(project.work_dir_path)
+    document = SupplementErrorDocument(project_id=project.id)
+    if path.is_file():
+        try:
+            document = SupplementErrorDocument.model_validate(
+                json.loads(path.read_text(encoding="utf-8"))
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+            pass
+    document.errors.append(
+        SupplementErrorEntry(
+            request_id=request_id,
+            candidate_id=candidate_id,
+            provider=provider,
+            url=url,
+            error_type=error_type,
+            error_message=error_message,
+            action_required=action_required,
+            provider_status_at_failure=provider_status_at_failure,
+        )
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(document.model_dump_json(indent=2), encoding="utf-8")
 
 
 def save_sidecar(sidecar: SupplementAssetSidecar) -> Path:
@@ -117,9 +163,14 @@ def search_supplement_candidates(
     if not source:
         raise ValueError("Keine Supplement-Quelle gewählt.")
     adapter = get_supplement_adapter(source)
+    readiness = adapter.readiness()
     candidates = adapter.search(request)
     add_candidates(project, candidates)
-    update_request(project, request.supplement_request_id, status="CANDIDATES_FOUND")
+    update_request(
+        project,
+        request.supplement_request_id,
+        status="CANDIDATES_FOUND",
+    )
     return candidates
 
 
@@ -134,25 +185,71 @@ def acquire_supplement_candidate(
 ) -> SupplementAsset:
     adapter = get_supplement_adapter(candidate.provider)
     destination = _destination_folder(project, request.folder_name, candidate.provider)
-
-    if candidate.provider == SUPPLEMENT_SOURCE_ADOBE:
-        if candidate.status != "ADOBE_LICENSE_APPROVED":
-            raise PermissionError(
-                "Adobe Asset darf nur nach Klick auf «Adobe Asset lizenzieren und herunterladen» "
-                "heruntergeladen werden."
-            )
-        asset = adapter.acquire(candidate, destination)
-    elif candidate.provider == SUPPLEMENT_SOURCE_NANO_BANANA:
-        asset = adapter.generate(request, destination)
-    elif candidate.provider == SUPPLEMENT_SOURCE_GOOGLE:
-        raise PermissionError(
-            "Google Search ist nur Discovery. Bitte Treffer öffnen, Rechte prüfen "
-            "und die Datei anschließend manuell als Supplement-Asset übernehmen."
+    readiness = adapter.readiness()
+    if candidate.is_mock or not candidate.download_enabled or readiness.is_mock:
+        message = "Mock-/Demo-Kandidaten dürfen nicht als echte Assets übernommen werden."
+        record_supplement_error(
+            project,
+            request_id=request.supplement_request_id,
+            candidate_id=candidate.candidate_id,
+            provider=candidate.provider,
+            url=candidate.download_url,
+            error_type="MOCK_CANDIDATE_BLOCKED",
+            error_message=message,
+            action_required="Echte Quelle konfigurieren oder manuellen Import nutzen.",
+            provider_status_at_failure=readiness.status,
         )
-    elif candidate.provider == SUPPLEMENT_SOURCE_MANUAL:
-        raise ValueError("Manueller Modus: bitte lokales Asset im Schnittplan akzeptieren.")
-    else:
-        asset = adapter.acquire(candidate, destination)
+        update_request(
+            project,
+            request.supplement_request_id,
+            status=REQUEST_STATUS_ACQUIRE_FAILED,
+            last_error=message,
+            last_error_at=datetime.now(timezone.utc),
+            failed_url=candidate.download_url,
+            provider_status_at_failure=readiness.status,
+        )
+        raise PermissionError(message)
+
+    try:
+        if candidate.provider == SUPPLEMENT_SOURCE_ADOBE:
+            if candidate.status != "ADOBE_LICENSE_APPROVED":
+                raise PermissionError(
+                    "Adobe Asset darf nur nach Klick auf «Adobe Asset lizenzieren und herunterladen» "
+                    "heruntergeladen werden."
+                )
+            asset = adapter.acquire(candidate, destination)
+        elif candidate.provider == SUPPLEMENT_SOURCE_NANO_BANANA:
+            asset = adapter.generate(request, destination)
+        elif candidate.provider == SUPPLEMENT_SOURCE_GOOGLE:
+            raise PermissionError(
+                "Google Search ist Discovery. Bitte Treffer öffnen und Datei manuell importieren."
+            )
+        elif candidate.provider == SUPPLEMENT_SOURCE_MANUAL:
+            raise ValueError("Manueller Modus: bitte lokalen Dateipfad importieren.")
+        else:
+            asset = adapter.acquire(candidate, destination)
+    except Exception as exc:
+        record_supplement_error(
+            project,
+            request_id=request.supplement_request_id,
+            candidate_id=candidate.candidate_id,
+            provider=candidate.provider,
+            url=candidate.download_url,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            action_required="Kandidat prüfen oder andere Quelle wählen.",
+            provider_status_at_failure=readiness.status,
+        )
+        update_request(
+            project,
+            request.supplement_request_id,
+            status=REQUEST_STATUS_ACQUIRE_FAILED,
+            last_error=str(exc),
+            last_error_at=datetime.now(timezone.utc),
+            failed_url=candidate.download_url,
+            provider_status_at_failure=readiness.status,
+        )
+        raise
 
     sidecar = asset.sidecar.model_copy(
         update={"file_hash": _file_hash(asset.local_path)}
@@ -182,50 +279,11 @@ def acquire_google_candidate_for_private_use(
     candidate: SupplementCandidate,
     request: SupplementRequest,
 ) -> SupplementAsset:
-    """Lädt einen Google-Discovery-Treffer nach expliziter Privatnutzungs-Bestätigung."""
-    if candidate.provider != SUPPLEMENT_SOURCE_GOOGLE:
-        raise ValueError(f"Kein Google-Kandidat: {candidate.provider}")
-    if not candidate.download_url:
-        raise ValueError("Google-Kandidat hat keine download_url.")
-
-    destination = _destination_folder(project, request.folder_name, SUPPLEMENT_SOURCE_GOOGLE)
-    destination.mkdir(parents=True, exist_ok=True)
-    extension = _extension_from_candidate(candidate)
-    local_path = destination / (
-        f"{request.supplement_request_id}_google_{candidate.provider_asset_id}{extension}"
+    """Deprecated: Google ist nur Discovery, kein automatischer Download."""
+    raise PermissionError(
+        "Google Search ist aktuell nur Discovery. Bitte Datei lokal herunterladen "
+        "und per manuellem Import übernehmen."
     )
-    try:
-        with urllib.request.urlopen(candidate.download_url, timeout=60) as response:
-            local_path.write_bytes(response.read())
-    except (urllib.error.URLError, OSError) as exc:
-        raise RuntimeError(f"Google-Medien-Download fehlgeschlagen: {exc}") from exc
-
-    sidecar = SupplementAssetSidecar(
-        asset_id=f"asset_google_{candidate.provider_asset_id}",
-        supplement_request_id=request.supplement_request_id,
-        provider=SUPPLEMENT_SOURCE_GOOGLE,
-        provider_asset_id=candidate.provider_asset_id,
-        source_url=candidate.source_page_url,
-        download_url=candidate.download_url,
-        license=candidate.license or "Google Discovery — private Nutzung bestätigt",
-        license_url=candidate.license_url,
-        creator=candidate.creator,
-        acquisition_method="google_private_download",
-        downloaded_at=datetime.now(timezone.utc),
-        original_filename=Path(urllib.parse.urlparse(candidate.download_url).path).name,
-        local_path=str(local_path),
-        file_hash=_file_hash(local_path),
-        rights_status=RIGHTS_STATUS_APPROVED,
-        approval_status="PRIVATE_USE_ACKNOWLEDGED",
-    )
-    save_sidecar(sidecar)
-    update_request(
-        project,
-        request.supplement_request_id,
-        status="ACQUIRED",
-        selected_source=SUPPLEMENT_SOURCE_GOOGLE,
-    )
-    return SupplementAsset(local_path=local_path, sidecar=sidecar)
 
 
 def import_manual_supplement_asset(
@@ -235,12 +293,14 @@ def import_manual_supplement_asset(
     source_path: Path,
     source_url: str = "",
     rights_status: str = RIGHTS_STATUS_NEEDS_LICENSE_REVIEW,
+    source_provider: str = SUPPLEMENT_SOURCE_MANUAL,
+    acquisition_method: str = "manual_import",
 ) -> SupplementAsset:
     """Übernimmt eine manuell beschaffte Datei ins passende Supplement-Verzeichnis."""
     if not source_path.is_file():
         raise FileNotFoundError(f"Manuelles Supplement-Asset nicht gefunden: {source_path}")
 
-    destination = _destination_folder(project, request.folder_name, SUPPLEMENT_SOURCE_MANUAL)
+    destination = _destination_folder(project, request.folder_name, source_provider)
     destination.mkdir(parents=True, exist_ok=True)
     safe_stem = "".join(
         char if char.isalnum() or char in {"-", "_"} else "_"
@@ -251,14 +311,15 @@ def import_manual_supplement_asset(
     shutil.copy2(source_path, local_path)
 
     sidecar = SupplementAssetSidecar(
-        asset_id=f"asset_manual_{request.supplement_request_id}",
+        asset_id=f"asset_{source_provider}_{request.supplement_request_id}",
         supplement_request_id=request.supplement_request_id,
-        provider=SUPPLEMENT_SOURCE_MANUAL,
+        provider=source_provider,
         provider_asset_id=source_path.stem,
         source_url=source_url,
-        acquisition_method="manual_import",
+        acquisition_method=acquisition_method,
         downloaded_at=datetime.now(timezone.utc),
         original_filename=source_path.name,
+        original_local_path=str(source_path),
         local_path=str(local_path),
         file_hash=_file_hash(local_path),
         rights_status=rights_status,
@@ -269,7 +330,7 @@ def import_manual_supplement_asset(
         project,
         request.supplement_request_id,
         status="ACQUIRED",
-        selected_source=SUPPLEMENT_SOURCE_MANUAL,
+        selected_source=source_provider,
     )
     return SupplementAsset(local_path=local_path, sidecar=sidecar)
 
@@ -282,6 +343,8 @@ def analyze_supplement_asset(
     sidecar: SupplementAssetSidecar,
     language: str = "de",
 ) -> AssetMediaAnalysis:
+    if not local_path.is_file() or local_path.stat().st_size <= 0:
+        raise ValueError(f"Supplement-Datei fehlt oder ist leer: {local_path}")
     frames_dir = (
         project.work_dir_path
         / "frames"
@@ -320,7 +383,7 @@ def analyze_supplement_asset(
         provider=sidecar.provider,
         generated_prompt=sidecar.prompt,
         search_query=sidecar.search_query,
-        analysis_status="complete" if description else "partial",
+        analysis_status="complete" if description and frames else "failed",
         description_model=project.gemini_model if is_gemini_configured() else "",
         description_prompt_version="supplement_v1",
         description_generated_at=datetime.now(timezone.utc),
@@ -333,6 +396,11 @@ def analyze_supplement_asset(
         / f"{local_path.name}.json"
     )
     save_cached_media(cache_file, asset)
+    update_request(
+        project,
+        sidecar.supplement_request_id,
+        status=REQUEST_STATUS_ANALYSIS_PENDING if asset.analysis_status != "complete" else "ANALYSIS_COMPLETE",
+    )
     return asset
 
 
@@ -342,6 +410,15 @@ def extend_folder_inventory(
     folder_name: str,
     asset: AssetMediaAnalysis,
 ) -> AssetFolderAnalysis:
+    asset_path = Path(asset.path)
+    if not asset_path.is_file() or asset_path.stat().st_size <= 0:
+        raise ValueError(f"Asset-Datei fehlt oder ist leer: {asset.path}")
+    if asset.analysis_status != "complete" or not asset.frames_used or not asset.description:
+        raise ValueError(
+            f"Asset wurde nicht erfolgreich analysiert und darf nicht ins Inventory: {asset.path}"
+        )
+    if not load_sidecar(asset_path):
+        raise ValueError(f"Sidecar-Metadaten fehlen: {asset.path}")
     path = get_folder_inventory_path(project.work_dir_path, folder_name)
     existing = load_folder_inventory(project, folder_name)
     if existing is None:
@@ -401,6 +478,11 @@ def extend_folder_inventory(
     )
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    update_request(
+        project,
+        asset.supplement_request_id,
+        status=REQUEST_STATUS_READY_FOR_REPLAN,
+    )
     return item
 
 

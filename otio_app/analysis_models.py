@@ -324,6 +324,10 @@ class SupplementRequest(BaseModel):
     selected_source: Optional[str] = None
     search_queries: dict[str, List[str]] = Field(default_factory=dict)
     generation_prompt: Optional[str] = None
+    last_error: str = ""
+    last_error_at: Optional[datetime] = None
+    failed_url: str = ""
+    provider_status_at_failure: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -351,6 +355,11 @@ class SupplementCandidate(BaseModel):
     match_score: float = 0.0
     match_reason: str = ""
     status: str = "CANDIDATE"
+    provider_status: str = ""
+    is_mock: bool = False
+    download_enabled: bool = True
+    last_error: str = ""
+    failed_url: str = ""
 
 
 class SupplementAssetSidecar(BaseModel):
@@ -366,6 +375,7 @@ class SupplementAssetSidecar(BaseModel):
     acquisition_method: str = ""
     prompt: str = ""
     search_query: str = ""
+    original_local_path: str = ""
     downloaded_at: Optional[datetime] = None
     generated_at: Optional[datetime] = None
     original_filename: str = ""
@@ -403,6 +413,24 @@ class SupplementManifest(BaseModel):
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     project_id: str
     entries: List[SupplementManifestEntry] = Field(default_factory=list)
+
+
+class SupplementErrorEntry(BaseModel):
+    request_id: str
+    candidate_id: str = ""
+    provider: str
+    url: str = ""
+    error_type: str
+    error_message: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    action_required: str = ""
+    provider_status_at_failure: str = ""
+
+
+class SupplementErrorDocument(BaseModel):
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    project_id: str
+    errors: List[SupplementErrorEntry] = Field(default_factory=list)
 
 
 class InventoryDeltaEntry(BaseModel):

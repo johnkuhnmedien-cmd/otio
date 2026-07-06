@@ -5,12 +5,21 @@ from __future__ import annotations
 import uuid
 
 from otio_app.analysis_models import SupplementCandidate, SupplementRequest
-from otio_app.defaults import SUPPLEMENT_SOURCE_MANUAL
-from otio_app.services.supplement_sources.base import SupplementSourceAdapter
+from otio_app.defaults import PROVIDER_STATUS_READY, SUPPLEMENT_SOURCE_MANUAL
+from otio_app.services.supplement_sources.base import ProviderReadiness, SupplementSourceAdapter
 
 
 class ManualAdapter(SupplementSourceAdapter):
     provider = SUPPLEMENT_SOURCE_MANUAL
+
+    def readiness(self) -> ProviderReadiness:
+        return ProviderReadiness(
+            provider=self.provider,
+            status=PROVIDER_STATUS_READY,
+            message="Manueller Import ist verfügbar.",
+            search_enabled=True,
+            acquire_enabled=True,
+        )
 
     def search(self, request: SupplementRequest) -> list[SupplementCandidate]:
         if not request.local_best_asset_id:

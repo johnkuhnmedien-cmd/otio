@@ -11,14 +11,39 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from otio_app.analysis_models import SupplementAssetSidecar, SupplementCandidate, SupplementRequest
-from otio_app.defaults import RIGHTS_STATUS_APPROVED, SUPPLEMENT_SOURCE_PEXELS
+from otio_app.defaults import (
+    CANDIDATE_STATUS_DOWNLOAD_FAILED,
+    CANDIDATE_STATUS_FOUND,
+    CANDIDATE_STATUS_MOCK_ONLY,
+    PROVIDER_STATUS_CONFIG_MISSING,
+    PROVIDER_STATUS_READY,
+    RIGHTS_STATUS_APPROVED,
+    SUPPLEMENT_SOURCE_PEXELS,
+)
 from otio_app.services.api_keys import get_api_key
 from otio_app.services.supplement_search import preferred_search_query
-from otio_app.services.supplement_sources.base import SupplementAsset, SupplementSourceAdapter
+from otio_app.services.supplement_sources.base import ProviderReadiness, SupplementAsset, SupplementSourceAdapter
 
 
 class PexelsAdapter(SupplementSourceAdapter):
     provider = SUPPLEMENT_SOURCE_PEXELS
+
+    def readiness(self) -> ProviderReadiness:
+        if get_api_key("PEXELS_API_KEY"):
+            return ProviderReadiness(
+                provider=self.provider,
+                status=PROVIDER_STATUS_READY,
+                message="Pexels API-Key vorhanden.",
+                search_enabled=True,
+                acquire_enabled=True,
+            )
+        return ProviderReadiness(
+            provider=self.provider,
+            status=PROVIDER_STATUS_CONFIG_MISSING,
+            message="PEXELS_API_KEY fehlt.",
+            search_enabled=True,
+            acquire_enabled=False,
+        )
 
     def search(self, request: SupplementRequest) -> list[SupplementCandidate]:
         query = preferred_search_query(request)
@@ -48,7 +73,11 @@ class PexelsAdapter(SupplementSourceAdapter):
                 requires_purchase=False,
                 requires_user_approval=True,
                 match_score=0.68,
-                match_reason="Pexels Vorschau",
+                match_reason="Demo-Kandidat — PEXELS_API_KEY fehlt",
+                status=CANDIDATE_STATUS_MOCK_ONLY,
+                provider_status=PROVIDER_STATUS_CONFIG_MISSING,
+                is_mock=True,
+                download_enabled=False,
             )
         ]
 
@@ -88,6 +117,10 @@ class PexelsAdapter(SupplementSourceAdapter):
                     requires_user_approval=True,
                     match_score=0.7,
                     match_reason="Pexels API Treffer",
+                    status=CANDIDATE_STATUS_FOUND,
+                    provider_status=PROVIDER_STATUS_READY,
+                    is_mock=False,
+                    download_enabled=True,
                 )
             )
         return candidates
@@ -97,19 +130,29 @@ class PexelsAdapter(SupplementSourceAdapter):
         candidate: SupplementCandidate,
         destination_folder: Path,
     ) -> SupplementAsset:
+        if not get_api_key("PEXELS_API_KEY"):
+            raise PermissionError("PEXELS_API_KEY fehlt — Pexels-Download ist deaktiviert.")
+        if candidate.is_mock or not candidate.download_enabled:
+            raise PermissionError("Mock-/Demo-Kandidaten dürfen nicht heruntergeladen werden.")
+        if not candidate.download_url:
+            raise ValueError("Pexels-Kandidat hat keine download_url.")
+
         destination_folder.mkdir(parents=True, exist_ok=True)
         filename = (
             f"{candidate.supplement_request_id}_pexels_{candidate.provider_asset_id}.mp4"
         )
         local_path = destination_folder / filename
-        if candidate.download_url:
-            try:
-                with urllib.request.urlopen(candidate.download_url, timeout=60) as response:
-                    local_path.write_bytes(response.read())
-            except (urllib.error.URLError, OSError):
-                local_path.write_bytes(b"pexels-placeholder")
-        else:
-            local_path.write_bytes(b"pexels-placeholder")
+        try:
+            with urllib.request.urlopen(candidate.download_url, timeout=60) as response:
+                content_type = response.headers.get("Content-Type", "")
+                if not (content_type.startswith("video/") or content_type.startswith("image/")):
+                    raise ValueError(f"Unerwarteter Content-Type: {content_type or 'unbekannt'}")
+                data = response.read()
+        except (urllib.error.URLError, OSError) as exc:
+            raise RuntimeError(f"Pexels-Download fehlgeschlagen: {exc}") from exc
+        if len(data) < 1024:
+            raise RuntimeError("Pexels-Download zu klein — vermutlich kein gültiges Asset.")
+        local_path.write_bytes(data)
         sidecar = SupplementAssetSidecar(
             asset_id=f"asset_pexels_{candidate.provider_asset_id}",
             supplement_request_id=candidate.supplement_request_id,

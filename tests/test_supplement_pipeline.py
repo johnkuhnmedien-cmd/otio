@@ -20,8 +20,11 @@ from otio_app.analysis_models import (
     VoiceSegment,
 )
 from otio_app.defaults import (
+    CANDIDATE_STATUS_MOCK_ONLY,
+    PROVIDER_STATUS_CONFIG_MISSING,
     RIGHTS_STATUS_APPROVED,
     RIGHTS_STATUS_NEEDS_LICENSE_REVIEW,
+    SUPPLEMENT_SOURCE_ADOBE,
     SUPPLEMENT_SOURCE_GOOGLE,
     SUPPLEMENT_SOURCE_NANO_BANANA,
     SUPPLEMENT_SOURCE_PEXELS,
@@ -42,7 +45,6 @@ from otio_app.services.supplement_coverage import (
     score_asset_match,
 )
 from otio_app.services.supplement_pipeline import (
-    acquire_google_candidate_for_private_use,
     acquire_supplement_candidate,
     analyze_supplement_asset,
     extend_folder_inventory,
@@ -54,6 +56,7 @@ from otio_app.services.supplement_pipeline import (
 from otio_app.services.supplement_requests import load_supplement_requests, upsert_requests
 from otio_app.services.supplement_search import build_keyword_query
 from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
+from otio_app.services.supplement_sources.google_search import GoogleSearchAdapter
 from otio_app.services.supplement_sources.pexels import PexelsAdapter
 
 
@@ -174,7 +177,7 @@ def test_adobe_not_licensed_without_approval(tmp_path: Path) -> None:
         passage_text="Test",
     )
     candidate = AdobeStockAdapter().search(request)[0]
-    with pytest.raises(PermissionError, match="Adobe Asset"):
+    with pytest.raises(PermissionError, match="Mock"):
         acquire_supplement_candidate(project, candidate, request)
 
 
@@ -187,14 +190,15 @@ def test_google_candidate_needs_license_review(tmp_path: Path) -> None:
         passage_text="Test",
         selected_source=SUPPLEMENT_SOURCE_GOOGLE,
     )
-    from otio_app.services.supplement_sources.google_search import GoogleSearchAdapter
-
     candidate = GoogleSearchAdapter().search(request)[0]
     assert "Rechteprüfung" in candidate.license
     assert candidate.requires_user_approval is True
+    assert candidate.status == CANDIDATE_STATUS_MOCK_ONLY
+    assert candidate.download_enabled is False
+    assert "example.com" not in candidate.download_url
 
 
-def test_google_candidate_can_download_for_private_use(tmp_path: Path) -> None:
+def test_google_candidate_allows_manual_import_only(tmp_path: Path) -> None:
     project = _project(tmp_path)
     source = tmp_path / "google-source.jpg"
     source.write_bytes(b"google-image")
@@ -206,15 +210,108 @@ def test_google_candidate_can_download_for_private_use(tmp_path: Path) -> None:
         passage_text="Test",
         selected_source=SUPPLEMENT_SOURCE_GOOGLE,
     )
-    from otio_app.services.supplement_sources.google_search import GoogleSearchAdapter
-
     candidate = GoogleSearchAdapter().search(request)[0]
-    candidate = candidate.model_copy(update={"download_url": source.as_uri()})
-    asset = acquire_google_candidate_for_private_use(project, candidate, request)
+    assert candidate.download_url == ""
+    with pytest.raises(PermissionError, match="Mock"):
+        acquire_supplement_candidate(project, candidate, request)
+    asset = import_manual_supplement_asset(
+        project,
+        request=request,
+        source_path=source,
+        source_url=candidate.source_page_url,
+        source_provider=SUPPLEMENT_SOURCE_GOOGLE,
+        acquisition_method="manual_download",
+    )
     assert asset.local_path.is_file()
     assert asset.sidecar.provider == SUPPLEMENT_SOURCE_GOOGLE
-    assert asset.sidecar.rights_status == RIGHTS_STATUS_APPROVED
-    assert asset.sidecar.approval_status == "PRIVATE_USE_ACKNOWLEDGED"
+    assert asset.sidecar.rights_status == RIGHTS_STATUS_NEEDS_LICENSE_REVIEW
+    assert asset.sidecar.approval_status == "MANUAL_IMPORTED"
+
+
+def test_candidates_are_filtered_by_selected_source() -> None:
+    from otio_app.ui.supplement_assets import _candidates_for_source
+
+    candidates = [
+        SupplementCandidate(
+            candidate_id="c_google",
+            supplement_request_id="req1",
+            provider=SUPPLEMENT_SOURCE_GOOGLE,
+        ),
+        SupplementCandidate(
+            candidate_id="c_adobe",
+            supplement_request_id="req1",
+            provider=SUPPLEMENT_SOURCE_ADOBE,
+        ),
+    ]
+    filtered = _candidates_for_source(
+        candidates,
+        request_id="req1",
+        selected_source=SUPPLEMENT_SOURCE_ADOBE,
+    )
+    assert [candidate.candidate_id for candidate in filtered] == ["c_adobe"]
+
+
+def test_pexels_without_api_key_is_config_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+    adapter = PexelsAdapter()
+    readiness = adapter.readiness()
+    assert readiness.status == PROVIDER_STATUS_CONFIG_MISSING
+    request = SupplementRequest(
+        supplement_request_id="supp_req_pexels_missing",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat_003",
+        passage_text="Test",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+    )
+    candidate = adapter.search(request)[0]
+    assert candidate.is_mock is True
+    assert candidate.download_enabled is False
+
+
+def test_pexels_download_failure_writes_error_without_placeholder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    monkeypatch.setenv("PEXELS_API_KEY", "test-key")
+    candidate = SupplementCandidate(
+        candidate_id="cand_fail",
+        supplement_request_id="supp_req_fail",
+        provider=SUPPLEMENT_SOURCE_PEXELS,
+        provider_asset_id="123",
+        download_url="https://pexels.invalid/video.mp4",
+        media_type="video",
+        download_enabled=True,
+        is_mock=False,
+    )
+    request = SupplementRequest(
+        supplement_request_id="supp_req_fail",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat_003",
+        passage_text="Test",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+    )
+
+    import urllib.error
+
+    def fail_urlopen(*args, **kwargs):
+        raise urllib.error.URLError("network failed")
+
+    monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
+    with pytest.raises(RuntimeError, match="Pexels-Download"):
+        acquire_supplement_candidate(project, candidate, request)
+
+    from otio_app.project_layout import get_provider_supplemental_dir, get_supplement_errors_path
+
+    provider_dir = get_provider_supplemental_dir(
+        project.project_root_path,
+        "Antelope Canyon",
+        SUPPLEMENT_SOURCE_PEXELS,
+    )
+    assert not list(provider_dir.glob("*")) if provider_dir.exists() else True
+    assert get_supplement_errors_path(project.work_dir_path).is_file()
 
 
 def test_manual_import_creates_sidecar(tmp_path: Path) -> None:
@@ -241,7 +338,7 @@ def test_manual_import_creates_sidecar(tmp_path: Path) -> None:
     assert load_sidecar(asset.local_path) is not None
 
 
-def test_nano_banana_stores_prompt_metadata(tmp_path: Path) -> None:
+def test_nano_banana_mock_does_not_generate_productive_asset(tmp_path: Path) -> None:
     project = _project(tmp_path)
     request = SupplementRequest(
         supplement_request_id="supp_req_nano",
@@ -255,10 +352,11 @@ def test_nano_banana_stores_prompt_metadata(tmp_path: Path) -> None:
     from otio_app.services.supplement_sources.nano_banana import NanoBananaAdapter
 
     dest = project.project_root_path / "Antelope Canyon" / "_supplemental" / "_nano_banana"
-    asset = NanoBananaAdapter().generate(request, dest)
-    assert asset.sidecar.prompt
-    assert asset.sidecar.model
-    assert asset.local_path.is_file()
+    candidate = NanoBananaAdapter().search(request)[0]
+    assert candidate.is_mock is True
+    assert candidate.download_enabled is False
+    with pytest.raises(PermissionError, match="nicht produktiv"):
+        NanoBananaAdapter().generate(request, dest)
 
 
 def test_inventory_extended_and_delta_written(tmp_path: Path) -> None:
@@ -266,11 +364,25 @@ def test_inventory_extended_and_delta_written(tmp_path: Path) -> None:
     asset = AssetMediaAnalysis(
         path=str(tmp_path / "new.mp4"),
         description="Gewitter über Wüste",
+        frames_used=[str(tmp_path / "frame.jpg")],
         asset_id="asset_supp_001",
         asset_origin="pexels",
         rights_status=RIGHTS_STATUS_APPROVED,
+        analysis_status="complete",
     )
-    Path(asset.path).write_bytes(b"v")
+    Path(asset.path).write_bytes(b"valid-media")
+    from otio_app.analysis_models import SupplementAssetSidecar
+    from otio_app.services.supplement_pipeline import save_sidecar
+
+    save_sidecar(
+        SupplementAssetSidecar(
+            asset_id=asset.asset_id,
+            supplement_request_id="supp_req_inventory",
+            provider="pexels",
+            local_path=asset.path,
+            rights_status=RIGHTS_STATUS_APPROVED,
+        )
+    )
     extend_folder_inventory(project, folder_name="Antelope Canyon", asset=asset)
     from otio_app.project_layout import get_folder_inventory_delta_path, get_folder_inventory_path
 

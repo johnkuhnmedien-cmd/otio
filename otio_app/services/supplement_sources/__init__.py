@@ -10,7 +10,7 @@ from otio_app.defaults import (
     SUPPLEMENT_SOURCE_PEXELS,
 )
 from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
-from otio_app.services.supplement_sources.base import SupplementSourceAdapter
+from otio_app.services.supplement_sources.base import ProviderReadiness, SupplementSourceAdapter
 from otio_app.services.supplement_sources.google_search import GoogleSearchAdapter
 from otio_app.services.supplement_sources.manual import ManualAdapter
 from otio_app.services.supplement_sources.nano_banana import NanoBananaAdapter
@@ -30,3 +30,11 @@ def get_supplement_adapter(provider: str) -> SupplementSourceAdapter:
     if adapter is None:
         raise ValueError(f"Unbekannte Supplement-Quelle: {provider}")
     return adapter
+
+
+def get_provider_readiness(provider: str) -> ProviderReadiness:
+    return get_supplement_adapter(provider).readiness()
+
+
+def list_provider_readiness() -> dict[str, ProviderReadiness]:
+    return {provider: adapter.readiness() for provider, adapter in _ADAPTERS.items()}

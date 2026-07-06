@@ -7,14 +7,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from otio_app.analysis_models import SupplementAssetSidecar, SupplementCandidate, SupplementRequest
-from otio_app.defaults import RIGHTS_STATUS_GENERATED_APPROVED, SUPPLEMENT_SOURCE_NANO_BANANA
-from otio_app.services.supplement_sources.base import SupplementAsset, SupplementSourceAdapter
+from otio_app.defaults import (
+    CANDIDATE_STATUS_MOCK_ONLY,
+    PROVIDER_STATUS_MOCK,
+    RIGHTS_STATUS_GENERATED_APPROVED,
+    SUPPLEMENT_SOURCE_NANO_BANANA,
+)
+from otio_app.services.supplement_sources.base import ProviderReadiness, SupplementAsset, SupplementSourceAdapter
 
 
 class NanoBananaAdapter(SupplementSourceAdapter):
     provider = SUPPLEMENT_SOURCE_NANO_BANANA
     model = "gemini-2.0-flash-preview-image-generation"
     prompt_version = "supplement_v1"
+
+    def readiness(self) -> ProviderReadiness:
+        return ProviderReadiness(
+            provider=self.provider,
+            status=PROVIDER_STATUS_MOCK,
+            message="Gemini Image / Nano Banana ist noch nicht echt angebunden.",
+            search_enabled=True,
+            generate_enabled=False,
+            is_mock=True,
+        )
 
     def search(self, request: SupplementRequest) -> list[SupplementCandidate]:
         prompt = request.generation_prompt or request.visual_requirement or request.passage_text
@@ -33,6 +48,10 @@ class NanoBananaAdapter(SupplementSourceAdapter):
                 requires_user_approval=True,
                 match_score=0.8,
                 match_reason="KI-Generierung geplant",
+                status=CANDIDATE_STATUS_MOCK_ONLY,
+                provider_status=PROVIDER_STATUS_MOCK,
+                is_mock=True,
+                download_enabled=False,
             )
         ]
 
@@ -41,6 +60,7 @@ class NanoBananaAdapter(SupplementSourceAdapter):
         request: SupplementRequest,
         destination_folder: Path,
     ) -> SupplementAsset:
+        raise PermissionError("Nano Banana/Gemini Image ist noch nicht produktiv angebunden.")
         destination_folder.mkdir(parents=True, exist_ok=True)
         prompt = request.generation_prompt or request.visual_requirement or request.passage_text
         filename = f"{request.supplement_request_id}_generated.png"
