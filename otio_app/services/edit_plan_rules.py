@@ -86,11 +86,11 @@ EDIT_PLAN_RULE_TEMPLATES: tuple[EditPlanRuleTemplate, ...] = (
         rule_type=RULE_FOLDER_TITLE,
         label="Ordner-Titel einblenden",
         description=(
-            "Opening Title zu Beginn jeder Sektion (5 s, V2-Overlay). "
+            "Opening Title zu Beginn jeder Sektion (Lower Third, 5 s, V2-Overlay). "
             "Wird als eigenes Timeline-Element im Schnittplan geplant und "
             "vor dem OTIO-Export als transparentes ProRes 4444 gerendert."
         ),
-        default_params={"font_name": "Phosphate", "duration_sec": 5.0},
+        default_params={"font_name": "Helvetica Neue", "duration_sec": 5.0},
         implemented=True,
         default_enabled=False,
     ),
@@ -279,7 +279,7 @@ class ExportRuleOptions:
     trim_leading_sec: float = 0.0
     auto_zoom_fill: bool = False
     folder_title_enabled: bool = False
-    folder_title_font: str = "Phosphate"
+    folder_title_font: str = "Helvetica Neue"
     folder_title_duration_sec: float = 5.0
 
 
@@ -287,7 +287,7 @@ def export_rule_options(rules_doc: EditPlanRulesDocument) -> ExportRuleOptions:
     trim_sec = 0.0
     auto_zoom = False
     folder_title = False
-    folder_font = "Phosphate"
+    folder_font = "Helvetica Neue"
     folder_duration = 5.0
     for rule in _enabled_rules(rules_doc):
         if rule.rule_type == RULE_TRIM_LEADING:

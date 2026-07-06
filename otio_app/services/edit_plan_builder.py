@@ -322,6 +322,8 @@ def build_edit_plan(
             opening_title_enabled=export_opts.folder_title_enabled,
             opening_title_font=export_opts.folder_title_font,
             opening_title_duration_sec=export_opts.folder_title_duration_sec,
+            video_width=project.width,
+            video_height=project.height,
             work_dir=project.work_dir_path,
         )
         plan_errors.extend(errors)

@@ -208,12 +208,12 @@ class TimelineItem(BaseModel):
     requested_font_family: str = ""
     resolved_font_family: str = ""
     font_fallback_used: bool = False
-    font_size: float = 96.0
+    font_size: float = 72.0
     shadow_enabled: bool = True
-    shadow_opacity: float = 0.65
-    shadow_offset_x: float = 6.0
-    shadow_offset_y: float = 6.0
-    position: str = "center"
+    shadow_opacity: float = 0.5
+    shadow_offset_x: float = 3.0
+    shadow_offset_y: float = 3.0
+    position: str = "lower_third"
     fade_in_sec: float = 0.5
     fade_out_sec: float = 0.5
     render_required: bool = False

@@ -47,6 +47,38 @@ def _project(tmp_path: Path) -> Project:
     )
 
 
+def test_lower_third_style_defaults(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    item = build_opening_title_item(
+        folder_name="Antelope_Canyon",
+        voice_file="/voice.wav",
+        section_id="section_antelope_canyon",
+        work_dir=project.work_dir_path,
+        video_width=1920,
+        video_height=1080,
+    )
+    assert item.position == "lower_third"
+    assert item.font_size == 72.0
+    assert item.shadow_opacity == 0.5
+    assert item.requested_font_family == "Helvetica Neue"
+
+
+def test_ffmpeg_lower_third_filter_uses_bottom_left(tmp_path: Path) -> None:
+    from otio_app.services.opening_title_renderer import _ffmpeg_opening_title_filter
+
+    project = _project(tmp_path)
+    item = build_opening_title_item(
+        folder_name="Antelope Canyon",
+        voice_file="/voice.wav",
+        section_id="section_antelope_canyon",
+        work_dir=project.work_dir_path,
+    )
+    vf = _ffmpeg_opening_title_filter(item, tmp_path / "font.ttf", project)
+    assert "y=h-th-" in vf
+    assert "x=76" in vf
+    assert "fontsize=72" in vf
+
+
 def test_folder_name_becomes_title_text(tmp_path: Path) -> None:
     project = _project(tmp_path)
     item = build_opening_title_item(
@@ -96,7 +128,7 @@ def test_opening_title_created_as_edit_plan_element(tmp_path: Path) -> None:
     assert title.timeline_in_sec == 0.0
     assert title.timeline_out_sec == 5.0
     assert title.render_required is True
-    assert title.rendered_media_path.endswith("_opening_title_v001.mov")
+    assert title.rendered_media_path.endswith("_opening_title_v002.mov")
 
 
 def test_title_on_v2_not_only_metadata(tmp_path: Path) -> None:

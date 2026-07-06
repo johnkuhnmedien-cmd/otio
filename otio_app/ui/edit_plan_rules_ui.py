@@ -113,7 +113,7 @@ def _render_rule_card(
 
         if rule.rule_type == RULE_FOLDER_TITLE:
             font_options = list(FOLDER_TITLE_FONT_OPTIONS)
-            current_font = str(params.get("font_name", "Phosphate"))
+            current_font = str(params.get("font_name", "Helvetica Neue"))
             if current_font not in font_options:
                 font_options = [current_font, *font_options]
             params["font_name"] = st.selectbox(
@@ -134,8 +134,9 @@ def _render_rule_card(
                 )
             )
             st.caption(
-                "Ordnername unten links einblenden — Unterstriche (_) werden zu Leerzeichen. "
-                "Wird beim OTIO-Export per ffmpeg ins Bild eingebrannt."
+                "Ordnername als Lower Third unten links (Clean-and-Simple-Stil) — "
+                "Unterstriche (_) werden zu Leerzeichen. "
+                "Wird vor dem OTIO-Export als transparentes Overlay auf V2 gerendert."
             )
 
         if rule.id in remove_ids:

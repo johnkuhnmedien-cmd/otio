@@ -16,7 +16,21 @@ from otio_app.services.otio_media_transform import escape_drawtext_value, format
 
 GENERATED_TITLES_SUBDIR = "generated_titles"
 DEFAULT_OPENING_TITLE_DURATION_SEC = 5.0
-DEFAULT_OPENING_TITLE_FONT_SIZE = 96.0
+DEFAULT_OPENING_TITLE_FONT = "Helvetica Neue"
+DEFAULT_OPENING_TITLE_FONT_SIZE = 72.0
+OPENING_TITLE_POSITION_LOWER_THIRD = "lower_third"
+
+
+def lower_third_font_size(video_height: int) -> float:
+    """Responsive Schriftgröße — ähnlich Resolve „Clean and Simple Lower Third“."""
+    return max(28.0, min(72.0, video_height / 14.0))
+
+
+def lower_third_margins(video_width: int, video_height: int) -> tuple[int, int]:
+    """Abstand unten links in Pixeln."""
+    margin_x = max(48, video_width // 25)
+    margin_y = max(54, video_height // 10)
+    return margin_x, margin_y
 
 
 def generated_titles_dir(work_dir: Path) -> Path:
@@ -24,7 +38,7 @@ def generated_titles_dir(work_dir: Path) -> Path:
 
 
 def opening_title_media_path(work_dir: Path, section_id: str) -> Path:
-    return generated_titles_dir(work_dir) / f"{section_id}_opening_title_v001.mov"
+    return generated_titles_dir(work_dir) / f"{section_id}_opening_title_v002.mov"
 
 
 def validation_report_path(work_dir: Path) -> Path:
@@ -84,13 +98,16 @@ def build_opening_title_item(
     voice_file: str,
     section_id: str,
     work_dir: Path,
-    requested_font_family: str = "Phosphate",
+    requested_font_family: str = DEFAULT_OPENING_TITLE_FONT,
     duration_sec: float = DEFAULT_OPENING_TITLE_DURATION_SEC,
-    font_size: float = DEFAULT_OPENING_TITLE_FONT_SIZE,
+    font_size: float | None = None,
+    video_width: int = 1920,
+    video_height: int = 1080,
 ) -> TimelineItem:
     """Erzeugt ein opening_title-Timeline-Element für den Schnittplan."""
     text = format_folder_display_name(folder_name)
     font_path, resolved_font, fallback_used = resolve_font_with_fallback(requested_font_family)
+    resolved_font_size = font_size if font_size is not None else lower_third_font_size(video_height)
     warnings: list[str] = []
     if fallback_used:
         warnings.append(
@@ -127,14 +144,14 @@ def build_opening_title_item(
         requested_font_family=requested_font_family,
         resolved_font_family=resolved_font,
         font_fallback_used=fallback_used,
-        font_size=font_size,
+        font_size=resolved_font_size,
         shadow_enabled=True,
-        shadow_opacity=0.65,
-        shadow_offset_x=6.0,
-        shadow_offset_y=6.0,
-        position="center",
-        fade_in_sec=0.5,
-        fade_out_sec=0.5,
+        shadow_opacity=0.5,
+        shadow_offset_x=3.0,
+        shadow_offset_y=3.0,
+        position=OPENING_TITLE_POSITION_LOWER_THIRD,
+        fade_in_sec=0.35,
+        fade_out_sec=0.35,
         render_required=True,
         rendered_media_path=str(target_path),
         resolved_media_path=str(target_path),
@@ -146,23 +163,29 @@ def build_opening_title_item(
     )
 
 
+def _title_layout(
+    item: TimelineItem,
+    project: Project,
+) -> tuple[str, str, int, int, int]:
+    """Liefert (x_expr, y_expr, margin_x, margin_y, fontsize) für ffmpeg/Pillow."""
+    fontsize = max(12, int(round(item.font_size)))
+    duration = max(0.1, float(item.duration_sec))
+
+    if item.position == "center":
+        return "(w-text_w)/2", "(h-text_h)/2", 0, 0, fontsize
+
+    margin_x, margin_y = lower_third_margins(project.width, project.height)
+    return str(margin_x), f"h-th-{margin_y}", margin_x, margin_y, fontsize
+
+
 def _ffmpeg_opening_title_filter(item: TimelineItem, font_path: Path, project: Project) -> str:
     safe_text = escape_drawtext_value(item.text)
     safe_font = escape_drawtext_value(str(font_path.resolve()))
     shadow_opacity = max(0.0, min(1.0, float(item.shadow_opacity)))
     shadow_x = int(round(item.shadow_offset_x))
     shadow_y = int(round(item.shadow_offset_y))
-    fontsize = max(12, int(round(item.font_size)))
+    x_expr, y_expr, _, _, fontsize = _title_layout(item, project)
     duration = max(0.1, float(item.duration_sec))
-
-    if item.position == "center":
-        x_expr = "(w-text_w)/2"
-        y_expr = "(h-text_h)/2"
-    else:
-        margin_x = max(24, project.width // 100)
-        margin_y = max(24, project.height // 100)
-        x_expr = str(margin_x)
-        y_expr = f"h-th-{margin_y}"
 
     shadow = ""
     if item.shadow_enabled:
@@ -211,12 +234,11 @@ def _render_title_png_pillow(
     bbox = draw.textbbox((0, 0), item.text, font=font)
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
+    _, _, margin_x, margin_y, _ = _title_layout(item, project)
     if item.position == "center":
         x = (width - text_w) // 2 - bbox[0]
         y = (height - text_h) // 2 - bbox[1]
     else:
-        margin_x = max(24, width // 100)
-        margin_y = max(24, height // 100)
         x = margin_x - bbox[0]
         y = height - text_h - margin_y - bbox[1]
 

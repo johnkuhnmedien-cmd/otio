@@ -13,6 +13,8 @@ from otio_app.analysis_models import (
     VoiceoverPlan,
 )
 from otio_app.services.duration_rules import MAX_DURATION_SEC, MIN_DURATION_SEC, split_total_duration
+from otio_app.services.opening_title_renderer import DEFAULT_OPENING_TITLE_FONT
+from otio_app.services.opening_title_renderer import DEFAULT_OPENING_TITLE_FONT
 from otio_app.services.generic_outro_selector import (
     GenericAssetCandidate,
     asset_id_for_path,
@@ -286,8 +288,10 @@ def build_timeline_items_for_folder(
     trim_leading_sec: float = 0.0,
     item_index_start: int = 1,
     opening_title_enabled: bool = False,
-    opening_title_font: str = "Phosphate",
+    opening_title_font: str = DEFAULT_OPENING_TITLE_FONT,
     opening_title_duration_sec: float = 5.0,
+    video_width: int = 1920,
+    video_height: int = 1080,
     work_dir: Path | None = None,
 ) -> tuple[list[TimelineItem], VoiceoverPlan, list[str]]:
     """Baut alle Timeline-Items einer Sektion (Titel + Narration + Filler + Outro)."""
@@ -308,6 +312,8 @@ def build_timeline_items_for_folder(
             work_dir=work_dir,
             requested_font_family=opening_title_font,
             duration_sec=opening_title_duration_sec,
+            video_width=video_width,
+            video_height=video_height,
         )
         items.append(title_item)
         if title_item.warnings:
