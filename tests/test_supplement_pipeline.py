@@ -1400,6 +1400,104 @@ def test_analyze_and_update_inventory_for_folder_returns_untouched_when_empty(
     assert result["inventory_added"] == 0
 
 
+def test_materialize_requests_prunes_stale_untouched_supplement_requests(tmp_path: Path) -> None:
+    """Regression: Wenn ein Neu-Vorschlag zeigt, dass alle Shots eines Ordners
+    jetzt ein lokales Asset haben (Coverage reconciled -> keine
+    SUPPLEMENT_REQUIRED-Beats mehr), müssen alte, noch nicht bearbeitete
+    Supplement Requests für diesen Ordner automatisch entfernt werden statt
+    dauerhaft als 'offen' sichtbar zu bleiben."""
+    from otio_app.analysis_models import EditPlanDocument, EditPlanShot
+    from otio_app.services.edit_plan_builder import save_edit_plan
+    from otio_app.ui.supplement_assets import _materialize_requests_from_plan
+
+    project = _project(tmp_path)
+
+    stale_requests = [
+        SupplementRequest(
+            supplement_request_id=f"supp_req_stale_{i}",
+            section_id="section_antelope_canyon",
+            folder_name="Antelope Canyon",
+            beat_id=f"beat_{i:03d}",
+            passage_text=f"Test {i}",
+            status="PENDING_SOURCE_SELECTION",
+        )
+        for i in range(3)
+    ]
+    upsert_requests(project, stale_requests)
+
+    plan = EditPlanDocument(
+        project_id=project.id,
+        folder_name="Antelope Canyon",
+        confirmed=False,
+        shots=[
+            EditPlanShot(
+                voice_file="/v.wav",
+                folder="Antelope Canyon",
+                voice_start_sec=0.0,
+                voice_end_sec=3.0,
+                duration_sec=3.0,
+                asset_path="/a/x.mp4",
+                asset_id="asset_x",
+            )
+        ],
+        segment_coverage=[],
+    )
+    save_edit_plan(project, plan, "Antelope Canyon")
+
+    created = _materialize_requests_from_plan(project, "Antelope Canyon")
+    assert created == 0
+
+    remaining = requests_for_folder(load_supplement_requests(project), "Antelope Canyon")
+    assert remaining == []
+
+
+def test_materialize_requests_keeps_in_progress_requests(tmp_path: Path) -> None:
+    """Requests, an denen der Nutzer schon gearbeitet hat (Quelle gewählt,
+    Kandidaten gesucht etc.), dürfen NICHT automatisch entfernt werden, auch
+    wenn die aktuelle Coverage sie nicht mehr als aktiv listet."""
+    from otio_app.analysis_models import EditPlanDocument, EditPlanShot
+    from otio_app.services.edit_plan_builder import save_edit_plan
+    from otio_app.ui.supplement_assets import _materialize_requests_from_plan
+
+    project = _project(tmp_path)
+
+    in_progress = SupplementRequest(
+        supplement_request_id="supp_req_in_progress",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat_001",
+        passage_text="Test",
+        status="SOURCE_SELECTED",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+    )
+    upsert_requests(project, [in_progress])
+
+    plan = EditPlanDocument(
+        project_id=project.id,
+        folder_name="Antelope Canyon",
+        confirmed=False,
+        shots=[
+            EditPlanShot(
+                voice_file="/v.wav",
+                folder="Antelope Canyon",
+                voice_start_sec=0.0,
+                voice_end_sec=3.0,
+                duration_sec=3.0,
+                asset_path="/a/x.mp4",
+                asset_id="asset_x",
+            )
+        ],
+        segment_coverage=[],
+    )
+    save_edit_plan(project, plan, "Antelope Canyon")
+
+    _materialize_requests_from_plan(project, "Antelope Canyon")
+
+    remaining = requests_for_folder(load_supplement_requests(project), "Antelope Canyon")
+    assert len(remaining) == 1
+    assert remaining[0].supplement_request_id == "supp_req_in_progress"
+
+
 def test_keyword_query_prefers_short_visual_terms() -> None:
     query = build_keyword_query(
         folder_name="Antelope Canyon",

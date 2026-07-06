@@ -45,6 +45,8 @@ from otio_app.services.gemini_client import GeminiNotConfiguredError, plan_passa
 from otio_app.services.inventory_hash import compute_folder_inventory_hash
 from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.supplement_coverage import (
+    COVERAGE_LOCAL_GOOD,
+    COVERAGE_LOCAL_WEAK,
     COVERAGE_SUPPLEMENT_REQUIRED,
     coverage_to_supplement_request,
     evaluate_segment_coverage,
@@ -448,10 +450,55 @@ def build_edit_plan(
                     )
                 )
 
+    shots = apply_edit_plan_rules(shots, rules_doc, assets_by_folder)
+
+    # Die Coverage-Bewertung pro Beat ist nur eine grobe Vorab-Schätzung
+    # (Keyword-Heuristik auf den GESAMTEN Beat-Text, bevor Gemini/Regeln den
+    # tatsächlichen Shot-Asset zuweisen). Sobald feststeht, dass alle aus einem
+    # Beat entstandenen Shots am Ende wirklich ein lokales Asset bekommen haben,
+    # darf die Coverage nicht mehr SUPPLEMENT_REQUIRED anzeigen — sonst entsteht
+    # der widersprüchliche Zustand "0 Shots ohne Asset" + "N Beats offen".
+    shots_by_beat: dict[tuple[str, str, str], list[EditPlanShot]] = {}
+    for shot in shots:
+        if shot.beat_id:
+            shots_by_beat.setdefault((shot.folder, shot.voice_file, shot.beat_id), []).append(shot)
+
+    def _beat_resolved(folder: str, voice_file: str, beat_id: str) -> bool:
+        beat_shots = shots_by_beat.get((folder, voice_file, beat_id), [])
+        return bool(beat_shots) and all(shot.asset_path for shot in beat_shots)
+
+    resolved_request_ids: set[str] = set()
+    reconciled_coverages: list = []
+    for coverage in segment_coverages:
+        if coverage.coverage_status in {COVERAGE_SUPPLEMENT_REQUIRED, COVERAGE_LOCAL_WEAK} and _beat_resolved(
+            coverage.folder_name, coverage.voice_file, coverage.beat_id
+        ):
+            if coverage.supplement_request_id:
+                resolved_request_ids.add(coverage.supplement_request_id)
+            coverage = coverage.model_copy(
+                update={"coverage_status": COVERAGE_LOCAL_GOOD, "supplement_request_id": None}
+            )
+        reconciled_coverages.append(coverage)
+    segment_coverages = reconciled_coverages
+
+    shots = [
+        shot.model_copy(update={"coverage_status": ""})
+        if shot.coverage_status == COVERAGE_SUPPLEMENT_REQUIRED
+        and _beat_resolved(shot.folder, shot.voice_file, shot.beat_id)
+        else shot
+        for shot in shots
+    ]
+
+    if resolved_request_ids:
+        pending_supplement_requests = [
+            req for req in pending_supplement_requests if req.supplement_request_id not in resolved_request_ids
+        ]
+        supplement_request_ids = [
+            request_id for request_id in supplement_request_ids if request_id not in resolved_request_ids
+        ]
+
     if pending_supplement_requests:
         upsert_requests(project, pending_supplement_requests)
-
-    shots = apply_edit_plan_rules(shots, rules_doc, assets_by_folder)
 
     timeline_items: list = []
     plan_errors: list[str] = []

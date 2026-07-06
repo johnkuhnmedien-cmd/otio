@@ -227,30 +227,35 @@ def _materialize_requests_from_plan(project, folder_name: str) -> int:
                 new_requests.append(request)
                 existing_ids.add(request.supplement_request_id)
 
-    if active_request_ids:
-        keep_statuses = {"ACQUIRED", "DOWNLOADED", "GENERATED"}
-        kept_requests = [
-            request
-            for request in existing.requests
-            if request.folder_name != folder_name
-            or request.supplement_request_id in active_request_ids
-            or request.status in keep_statuses
-        ]
-        kept_ids = {request.supplement_request_id for request in kept_requests}
-        kept_candidates = [
-            candidate
-            for candidate in existing.candidates
-            if candidate.supplement_request_id in kept_ids or candidate.supplement_request_id in active_request_ids
-        ]
-        if len(kept_requests) != len(existing.requests):
-            save_supplement_requests(
-                project,
-                SupplementRequestsDocument(
-                    project_id=project.id,
-                    requests=kept_requests,
-                    candidates=kept_candidates,
-                ),
-            )
+    # Bereinigung läuft immer, auch wenn active_request_ids leer ist — z. B.
+    # wenn nach einem Neu-Vorschlag alle Beats des Ordners jetzt ein gutes
+    # lokales Asset haben. Sonst blieben veraltete Supplement Requests für
+    # bereits gelöste Beats für immer sichtbar/aktiv.
+    # Nur komplett unberührte Requests (noch keine Quelle gewählt) werden
+    # entfernt — alles, woran der Nutzer schon gearbeitet hat, bleibt erhalten.
+    untouched_status = "PENDING_SOURCE_SELECTION"
+    kept_requests = [
+        request
+        for request in existing.requests
+        if request.folder_name != folder_name
+        or request.supplement_request_id in active_request_ids
+        or request.status != untouched_status
+    ]
+    kept_ids = {request.supplement_request_id for request in kept_requests}
+    kept_candidates = [
+        candidate
+        for candidate in existing.candidates
+        if candidate.supplement_request_id in kept_ids or candidate.supplement_request_id in active_request_ids
+    ]
+    if len(kept_requests) != len(existing.requests):
+        save_supplement_requests(
+            project,
+            SupplementRequestsDocument(
+                project_id=project.id,
+                requests=kept_requests,
+                candidates=kept_candidates,
+            ),
+        )
 
     if new_requests:
         upsert_requests(project, new_requests)
