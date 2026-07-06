@@ -48,6 +48,7 @@ from otio_app.services.supplement_coverage import (
 from otio_app.services.supplement_pipeline import (
     acquire_supplement_candidate,
     acquire_top_candidates,
+    acquire_top_candidates_for_folder,
     analyze_supplement_asset,
     extend_folder_inventory,
     import_manual_supplement_asset,
@@ -1020,6 +1021,246 @@ def test_acquire_top_candidates_continues_after_individual_failure(tmp_path: Pat
     assert len(successes) == 2
     assert len(failures) == 1
     assert "boom" in failures[0][2]
+
+
+def test_revalidate_supplement_asset_heuristic_fail_without_match() -> None:
+    """Ohne Gemini muss die heuristische Prüfung ein unpassendes Asset ablehnen,
+    statt es allein wegen Aspect-Ratio/Location als 'passend' gelten zu lassen."""
+    from otio_app.services.supplement_pipeline import revalidate_supplement_asset_against_request
+
+    request = SupplementRequest(
+        supplement_request_id="supp_req_validate",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Ein Gewitter zieht Wasser tief in den Canyon.",
+        visual_requirement="Gewitter über der Wüste und Wasser im Canyon",
+    )
+    with patch("otio_app.services.supplement_pipeline.is_gemini_configured", return_value=False):
+        result = revalidate_supplement_asset_against_request(
+            description="Ein ruhiger sonniger Strand mit Palmen und blauem Meer.",
+            request=request,
+        )
+    assert result["status"] in {"FAIL", "NEEDS_USER_REVIEW"}
+
+
+def test_revalidate_supplement_asset_heuristic_pass_with_overlap() -> None:
+    from otio_app.services.supplement_pipeline import revalidate_supplement_asset_against_request
+
+    request = SupplementRequest(
+        supplement_request_id="supp_req_validate_ok",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Eine Person geht durch den engen Slot Canyon.",
+        visual_requirement="Person narrow slot canyon walking",
+    )
+    with patch("otio_app.services.supplement_pipeline.is_gemini_configured", return_value=False):
+        result = revalidate_supplement_asset_against_request(
+            description="A person walking through a narrow slot canyon with sandstone walls.",
+            request=request,
+        )
+    # Ohne Gemini ist dies nur eine Keyword-Heuristik — sie darf ein Asset mit
+    # deutlicher Begriffsüberlappung nicht als FAIL ablehnen.
+    assert result["status"] in {"WEAK_PASS", "PASS", "NEEDS_USER_REVIEW"}
+    assert result["score"] > 0.3
+
+
+def test_revalidate_supplement_asset_uses_gemini_when_configured() -> None:
+    """Wenn Gemini konfiguriert ist, muss die echte Content-Validierung aufgerufen
+    werden statt der Keyword-Heuristik."""
+    from otio_app.services.supplement_pipeline import revalidate_supplement_asset_against_request
+
+    request = SupplementRequest(
+        supplement_request_id="supp_req_validate_gemini",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Ein Gewitter zieht Wasser tief in den Canyon.",
+        visual_requirement="Gewitter über der Wüste und Wasser im Canyon",
+    )
+    with patch(
+        "otio_app.services.supplement_pipeline.is_gemini_configured", return_value=True
+    ), patch(
+        "otio_app.services.supplement_pipeline.validate_supplement_asset_match",
+        return_value={"status": "PASS", "score": 0.9, "reason": "Passt gut."},
+    ) as mock_validate:
+        result = revalidate_supplement_asset_against_request(
+            description="Storm clouds over the desert with water flowing into the canyon.",
+            request=request,
+        )
+    mock_validate.assert_called_once()
+    assert result["status"] == "PASS"
+    assert result["score"] == 0.9
+
+
+def test_revalidate_supplement_asset_missing_request_needs_review() -> None:
+    from otio_app.services.supplement_pipeline import revalidate_supplement_asset_against_request
+
+    result = revalidate_supplement_asset_against_request(description="Some description", request=None)
+    assert result["status"] == "NEEDS_USER_REVIEW"
+
+
+def test_analyze_supplement_asset_sets_validation_from_request(tmp_path: Path) -> None:
+    """analyze_supplement_asset muss die Sidecar-Validierung durch eine echte
+    Prüfung gegen den ursprünglichen Satz ersetzen, nicht nur die
+    Aspect-Ratio-Heuristik vom Download übernehmen."""
+    project = _project(tmp_path)
+    from otio_app.analysis_models import SupplementAssetSidecar
+
+    request = SupplementRequest(
+        supplement_request_id="supp_req_analyze",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Ein Gewitter zieht Wasser tief in den Canyon.",
+        visual_requirement="Gewitter über der Wüste und Wasser im Canyon",
+    )
+    upsert_requests(project, [request])
+
+    media_path = tmp_path / "clip.mp4"
+    media_path.write_bytes(b"fake-video-bytes")
+    sidecar = SupplementAssetSidecar(
+        asset_id="asset_pexels_999",
+        supplement_request_id=request.supplement_request_id,
+        provider=SUPPLEMENT_SOURCE_PEXELS,
+        local_path=str(media_path),
+        rights_status=RIGHTS_STATUS_APPROVED,
+        # Sidecar behauptet PASS allein aufgrund von Aspect Ratio/Location — muss
+        # durch die inhaltliche Prüfung ersetzt werden.
+        supplement_validation_status="PASS",
+        approved_for_cut_plan=True,
+    )
+
+    with patch(
+        "otio_app.services.supplement_pipeline.extract_frames",
+        return_value=[tmp_path / "frame1.jpg"],
+    ), patch(
+        "otio_app.services.supplement_pipeline.is_gemini_configured",
+        return_value=False,
+    ):
+        asset = analyze_supplement_asset(
+            project,
+            folder_name="Antelope Canyon",
+            local_path=media_path,
+            sidecar=sidecar,
+        )
+
+    # Ohne Gemini-Beschreibung (Platzhaltertext) darf das Asset nicht automatisch
+    # als PASS/approved gelten.
+    assert asset.approved_for_cut_plan is False
+    assert asset.supplement_validation_status != "PASS" or not asset.approved_for_cut_plan
+
+    reloaded_sidecar = load_sidecar(media_path)
+    assert reloaded_sidecar is not None
+    assert reloaded_sidecar.approved_for_cut_plan == asset.approved_for_cut_plan
+
+
+def test_extend_folder_inventory_rejects_non_pass_supplement_asset(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    asset = AssetMediaAnalysis(
+        path=str(tmp_path / "bad.mp4"),
+        description="Ein ruhiger Strand.",
+        frames_used=[str(tmp_path / "frame.jpg")],
+        asset_id="asset_bad",
+        asset_origin="pexels",
+        rights_status=RIGHTS_STATUS_APPROVED,
+        analysis_status="complete",
+        supplement_validation_status="NEEDS_USER_REVIEW",
+        approved_for_cut_plan=False,
+    )
+    Path(asset.path).write_bytes(b"valid-media")
+    from otio_app.analysis_models import SupplementAssetSidecar
+
+    save_sidecar(
+        SupplementAssetSidecar(
+            asset_id=asset.asset_id,
+            supplement_request_id="supp_req_bad",
+            provider="pexels",
+            local_path=asset.path,
+            rights_status=RIGHTS_STATUS_APPROVED,
+        )
+    )
+    with pytest.raises(ValueError, match="nicht.*freigegeben"):
+        extend_folder_inventory(project, folder_name="Antelope Canyon", asset=asset)
+
+
+def test_acquire_top_candidates_for_folder_downloads_across_open_requests(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    request_a = SupplementRequest(
+        supplement_request_id="supp_req_folder_a",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat_a",
+        passage_text="Test A",
+        visual_requirement="Antelope Canyon narrow",
+    )
+    request_b = SupplementRequest(
+        supplement_request_id="supp_req_folder_b",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat_b",
+        passage_text="Test B",
+        visual_requirement="Antelope Canyon sandstone",
+    )
+    upsert_requests(project, [request_a, request_b])
+
+    def fake_search(_project, request):
+        return [_pexels_candidate(0), _pexels_candidate(1)]
+
+    with patch.object(PexelsAdapter, "readiness") as mock_readiness, patch(
+        "otio_app.services.supplement_pipeline.search_supplement_candidates",
+        side_effect=fake_search,
+    ), patch.object(PexelsAdapter, "acquire") as mock_acquire:
+        from otio_app.services.supplement_sources.base import ProviderReadiness
+
+        mock_readiness.return_value = ProviderReadiness(
+            provider=SUPPLEMENT_SOURCE_PEXELS,
+            status="READY",
+            message="ok",
+            acquire_enabled=True,
+        )
+        mock_acquire.side_effect = lambda candidate, _dest: _mock_asset_for_candidate(candidate, tmp_path)
+        summary = acquire_top_candidates_for_folder(project, "Antelope Canyon", max_per_request=3)
+
+    assert len(summary) == 2
+    assert all(not entry["skipped"] for entry in summary)
+    assert all(entry["downloaded"] == 2 for entry in summary)
+
+
+def test_acquire_top_candidates_for_folder_skips_already_acquired(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_folder_done",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        status="ANALYSIS_COMPLETE",
+    )
+    upsert_requests(project, [request])
+
+    summary = acquire_top_candidates_for_folder(project, "Antelope Canyon", max_per_request=3)
+    assert len(summary) == 1
+    assert summary[0]["skipped"] is True
+
+
+def test_acquire_top_candidates_for_folder_skips_other_selected_source(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_folder_other",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        selected_source=SUPPLEMENT_SOURCE_GOOGLE,
+    )
+    upsert_requests(project, [request])
+
+    summary = acquire_top_candidates_for_folder(project, "Antelope Canyon", max_per_request=3)
+    assert len(summary) == 1
+    assert summary[0]["skipped"] is True
+    assert "Quelle" in summary[0]["reason"]
 
 
 def test_keyword_query_prefers_short_visual_terms() -> None:

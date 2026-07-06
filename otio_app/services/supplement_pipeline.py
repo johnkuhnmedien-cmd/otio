@@ -55,12 +55,17 @@ from otio_app.project_layout import (
 )
 from otio_app.services.edit_plan_builder import load_edit_plan, save_edit_plan
 from otio_app.services.frame_extract import extract_frames
-from otio_app.services.gemini_client import describe_media_from_frames, is_gemini_configured
+from otio_app.services.gemini_client import (
+    GeminiNotConfiguredError,
+    describe_media_from_frames,
+    is_gemini_configured,
+    validate_supplement_asset_match,
+)
 from otio_app.services.inventory_hash import compute_folder_inventory_hash
 from otio_app.services.inventory_loader import load_folder_inventory, save_folder_inventory
 from otio_app.services.media_inventory_cache import save_cached_media
 from otio_app.services.media_utils import is_image_media
-from otio_app.services.supplement_coverage import evaluate_folder_coverage
+from otio_app.services.supplement_coverage import derive_must_show_keywords, evaluate_folder_coverage, score_asset_match
 from otio_app.services.supplement_requests import (
     add_candidates,
     load_supplement_requests,
@@ -405,6 +410,83 @@ def acquire_top_candidates(
     return results
 
 
+def acquire_top_candidates_for_folder(
+    project: Project,
+    folder_name: str,
+    *,
+    max_per_request: int = 3,
+    provider: str = SUPPLEMENT_SOURCE_PEXELS,
+) -> list[dict]:
+    """Sucht und lädt für jede offene Supplement-Anfrage eines Ordners automatisch
+    bis zu ``max_per_request`` Kandidaten herunter (Standard: Pexels, da aktuell
+    der einzige produktive Provider). Requests mit bereits gewählter anderer
+    Quelle oder bereits vorhandenem Asset werden übersprungen, nicht überschrieben."""
+    document = load_supplement_requests(project)
+    folder_requests = [entry for entry in document.requests if entry.folder_name == folder_name]
+    skip_statuses = {
+        REQUEST_STATUS_ANALYSIS_PENDING,
+        "ANALYSIS_COMPLETE",
+        REQUEST_STATUS_INVENTORY_UPDATED,
+        REQUEST_STATUS_READY_FOR_REPLAN,
+    }
+    results: list[dict] = []
+    readiness = get_provider_readiness(provider)
+    for request in folder_requests:
+        if request.status in skip_statuses:
+            results.append(
+                {
+                    "supplement_request_id": request.supplement_request_id,
+                    "skipped": True,
+                    "reason": f"Bereits Asset vorhanden (Status {request.status}).",
+                    "downloaded": 0,
+                    "candidates_found": 0,
+                    "errors": [],
+                }
+            )
+            continue
+        if request.selected_source and request.selected_source != provider:
+            results.append(
+                {
+                    "supplement_request_id": request.supplement_request_id,
+                    "skipped": True,
+                    "reason": f"Andere Quelle bereits gewählt ({request.selected_source}).",
+                    "downloaded": 0,
+                    "candidates_found": 0,
+                    "errors": [],
+                }
+            )
+            continue
+        if readiness.status != "READY":
+            results.append(
+                {
+                    "supplement_request_id": request.supplement_request_id,
+                    "skipped": True,
+                    "reason": f"Provider {provider} nicht READY ({readiness.status}).",
+                    "downloaded": 0,
+                    "candidates_found": 0,
+                    "errors": [],
+                }
+            )
+            continue
+
+        current = update_request(project, request.supplement_request_id, selected_source=provider) or request
+        candidates = search_supplement_candidates(project, current)
+        acquire_results = acquire_top_candidates(project, candidates, current, max_count=max_per_request)
+        downloaded = [r for r in acquire_results if r[1] is not None]
+        errors = [f"{c.title[:60]}: {err}" for c, _a, err in acquire_results if err]
+        results.append(
+            {
+                "supplement_request_id": request.supplement_request_id,
+                "skipped": False,
+                "reason": "",
+                "downloaded": len(downloaded),
+                "candidates_found": len(candidates),
+                "errors": errors,
+            }
+        )
+    return results
+
+
 def _extension_from_candidate(candidate: SupplementCandidate) -> str:
     parsed = urllib.parse.urlparse(candidate.download_url or candidate.preview_url)
     suffix = Path(urllib.parse.unquote(parsed.path)).suffix.lower()
@@ -476,6 +558,66 @@ def import_manual_supplement_asset(
     return SupplementAsset(local_path=local_path, sidecar=sidecar)
 
 
+def _find_supplement_request(project: Project, request_id: str) -> SupplementRequest | None:
+    if not request_id:
+        return None
+    document = load_supplement_requests(project)
+    return next(
+        (entry for entry in document.requests if entry.supplement_request_id == request_id),
+        None,
+    )
+
+
+def revalidate_supplement_asset_against_request(
+    *,
+    description: str,
+    request: SupplementRequest | None,
+    language: str = "de",
+    model: str | None = None,
+) -> dict:
+    """Prüft, ob die (Gemini-)Beschreibung des heruntergeladenen Assets wirklich
+    zum ursprünglichen Voice-over-Satz passt. Ein Asset darf nicht allein wegen
+    Aspect-Ratio/Location-Text als 'passend' gelten — das wird hier inhaltlich
+    gegen passage_text/visual_requirement geprüft."""
+    if request is None:
+        return {"status": "NEEDS_USER_REVIEW", "score": 0.5, "reason": "Supplement Request nicht gefunden."}
+    if not description.strip():
+        return {"status": "FAIL", "score": 0.0, "reason": "Keine Beschreibung verfügbar."}
+
+    must_show = derive_must_show_keywords(request.visual_requirement or request.passage_text)
+    if is_gemini_configured():
+        try:
+            return validate_supplement_asset_match(
+                passage_text=request.passage_text,
+                visual_requirement=request.visual_requirement,
+                description=description,
+                location_name=request.location_name or request.folder_name,
+                must_show=must_show,
+                language=language,
+                model=model,
+            )
+        except GeminiNotConfiguredError:
+            pass
+
+    score = score_asset_match(
+        passage_text=request.passage_text,
+        visual_requirement=request.visual_requirement,
+        description=description,
+        must_show=must_show,
+    )
+    if score >= 0.7:
+        status = "WEAK_PASS"
+    elif score >= 0.35:
+        status = "NEEDS_USER_REVIEW"
+    else:
+        status = "FAIL"
+    return {
+        "status": status,
+        "score": score,
+        "reason": "Heuristische Prüfung ohne Gemini (Keyword-Überlappung).",
+    }
+
+
 def analyze_supplement_asset(
     project: Project,
     *,
@@ -512,6 +654,18 @@ def analyze_supplement_asset(
         SUPPLEMENT_SOURCE_NANO_BANANA: ASSET_ORIGIN_NANO_BANANA,
         SUPPLEMENT_SOURCE_ADOBE: "adobe_stock",
     }
+
+    source_request = _find_supplement_request(project, sidecar.supplement_request_id)
+    validation = revalidate_supplement_asset_against_request(
+        description=description,
+        request=source_request,
+        language=language,
+        model=project.gemini_model if is_gemini_configured() else None,
+    )
+    validation_status = validation["status"]
+    validation_score = validation["score"]
+    approved_for_cut_plan = validation_status == "PASS"
+
     asset = AssetMediaAnalysis(
         path=str(local_path),
         description=description,
@@ -526,11 +680,9 @@ def analyze_supplement_asset(
         aspect_ratio=sidecar.aspect_ratio,
         aspect_ratio_policy=sidecar.aspect_ratio_policy,
         is_16_9=sidecar.is_16_9,
-        supplement_validation_status=sidecar.supplement_validation_status or (
-            "PASS" if sidecar.approved_for_cut_plan else "NEEDS_USER_REVIEW"
-        ),
-        supplement_validation_score=sidecar.supplement_validation_score,
-        approved_for_cut_plan=sidecar.approved_for_cut_plan,
+        supplement_validation_status=validation_status,
+        supplement_validation_score=validation_score,
+        approved_for_cut_plan=approved_for_cut_plan,
         generated_prompt=sidecar.prompt,
         search_query=sidecar.search_query,
         analysis_status="complete" if description and frames else "failed",
@@ -546,6 +698,15 @@ def analyze_supplement_asset(
         / f"{local_path.name}.json"
     )
     save_cached_media(cache_file, asset)
+
+    updated_sidecar = sidecar.model_copy(
+        update={
+            "supplement_validation_status": validation_status,
+            "supplement_validation_score": validation_score,
+            "approved_for_cut_plan": approved_for_cut_plan,
+        }
+    )
+    save_sidecar(updated_sidecar)
     update_request(
         project,
         sidecar.supplement_request_id,

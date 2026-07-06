@@ -37,6 +37,7 @@ from otio_app.services.supplement_coverage import COVERAGE_SUPPLEMENT_REQUIRED, 
 from otio_app.services.supplement_pipeline import (
     acquire_supplement_candidate,
     acquire_top_candidates,
+    acquire_top_candidates_for_folder,
     analyze_supplement_asset,
     approve_adobe_candidate,
     extend_folder_inventory,
@@ -579,7 +580,46 @@ def render_supplement_assets_page() -> None:
         f"(gesamt pending: {pending_supplement_count(document)})"
     )
 
-    if st.button("Coverage prüfen & Supplement Requests erzeugen", key=f"coverage_{project.id}"):
+    pexels_readiness_for_folder = get_provider_readiness(SUPPLEMENT_SOURCE_PEXELS)
+    auto_col, coverage_col = st.columns(2)
+    with auto_col:
+        if st.button(
+            "Top 3 pro offene Anfrage automatisch herunterladen (Pexels)",
+            key=f"auto_folder_{project.id}_{safe_folder_slug(selected_folder)}",
+            type="primary",
+            disabled=pexels_readiness_for_folder.status != "READY",
+        ):
+            with st.spinner("Suche und lade Top-Kandidaten für alle offenen Anfragen …"):
+                summary = acquire_top_candidates_for_folder(
+                    project,
+                    selected_folder,
+                    max_per_request=3,
+                )
+            processed = [entry for entry in summary if not entry["skipped"]]
+            skipped = [entry for entry in summary if entry["skipped"]]
+            total_downloaded = sum(entry["downloaded"] for entry in processed)
+            st.success(
+                f"{total_downloaded} Asset(s) über {len(processed)} Anfrage(n) heruntergeladen "
+                f"({len(skipped)} übersprungen)."
+            )
+            with st.expander("Details pro Anfrage", expanded=False):
+                for entry in summary:
+                    if entry["skipped"]:
+                        st.caption(f"⏭️ `{entry['supplement_request_id']}`: {entry['reason']}")
+                    else:
+                        st.caption(
+                            f"✅ `{entry['supplement_request_id']}`: "
+                            f"{entry['downloaded']}/{entry['candidates_found']} heruntergeladen"
+                        )
+                        for error in entry["errors"]:
+                            st.caption(f"   ⚠️ {error}")
+            st.rerun()
+    if pexels_readiness_for_folder.status != "READY":
+        st.caption("Pexels ist nicht READY — bitte PEXELS_API_KEY setzen.")
+
+    with coverage_col:
+        run_coverage_clicked = st.button("Coverage prüfen & Supplement Requests erzeugen", key=f"coverage_{project.id}")
+    if run_coverage_clicked:
         try:
             voice_doc = load_voice_analysis(project)
             inventory = load_folder_inventory(project, selected_folder)
@@ -653,9 +693,10 @@ def render_supplement_assets_page() -> None:
                 document=document,
             )
 
-    can_analyze = request.status in {"ANALYSIS_PENDING", "ASSET_ACQUIRED", "ACQUIRED"}
-    can_update_inventory = request.status == "ANALYSIS_COMPLETE"
-    can_replan = request.status == "READY_FOR_REPLAN"
+    analyzable_statuses = {"ACQUIRED", "ASSET_ACQUIRED", "ANALYSIS_PENDING"}
+    can_analyze = any(req.status in analyzable_statuses for req in folder_requests)
+    can_update_inventory = any(req.status == "ANALYSIS_COMPLETE" for req in folder_requests)
+    can_replan = any(req.status == "READY_FOR_REPLAN" for req in folder_requests)
     action_col1, action_col2, action_col3 = st.columns(3)
     with action_col1:
         analyze_clicked = st.button(
@@ -677,19 +718,26 @@ def render_supplement_assets_page() -> None:
         )
 
     if analyze_clicked or inventory_clicked:
-        acquired = [
-            request
-            if request.status in {"ACQUIRED", "ASSET_ACQUIRED", "ANALYSIS_PENDING", "ANALYSIS_COMPLETE"}
-            else None
-        ]
-        acquired = [req for req in acquired if req is not None]
+        relevant_statuses = analyzable_statuses | {"ANALYSIS_COMPLETE"}
+        acquired = [req for req in folder_requests if req.status in relevant_statuses]
         if not acquired:
             st.warning("Noch keine heruntergeladenen Supplement-Assets.")
         else:
-            for request in acquired:
-                provider_dir = Path(project.project_root_path) / selected_folder / "_supplemental" / f"_{request.selected_source or 'pexels'}"
-                if not provider_dir.is_dir():
+            processed_dirs: set[Path] = set()
+            analyzed_count = 0
+            inventory_added = 0
+            inventory_skipped: list[str] = []
+            any_asset_touched = False
+            for acquired_request in acquired:
+                provider_dir = (
+                    Path(project.project_root_path)
+                    / selected_folder
+                    / "_supplemental"
+                    / f"_{acquired_request.selected_source or 'pexels'}"
+                )
+                if provider_dir in processed_dirs or not provider_dir.is_dir():
                     continue
+                processed_dirs.add(provider_dir)
                 for media_path in sorted(provider_dir.glob("*")):
                     if media_path.suffix.lower() in {".json"}:
                         continue
@@ -701,6 +749,7 @@ def render_supplement_assets_page() -> None:
                     sidecar = load_sidecar(media_path)
                     if sidecar is None:
                         continue
+                    any_asset_touched = True
                     if analyze_clicked:
                         analyze_supplement_asset(
                             project,
@@ -708,6 +757,7 @@ def render_supplement_assets_page() -> None:
                             local_path=media_path,
                             sidecar=sidecar,
                         )
+                        analyzed_count += 1
                     if inventory_clicked:
                         asset = analyze_supplement_asset(
                             project,
@@ -715,12 +765,29 @@ def render_supplement_assets_page() -> None:
                             local_path=media_path,
                             sidecar=sidecar,
                         )
-                        extend_folder_inventory(project, folder_name=selected_folder, asset=asset)
-                        mark_edit_plans_stale_for_folder(project, selected_folder)
+                        try:
+                            extend_folder_inventory(project, folder_name=selected_folder, asset=asset)
+                            inventory_added += 1
+                        except ValueError as exc:
+                            inventory_skipped.append(f"{media_path.name}: {exc}")
+            if inventory_clicked and inventory_added > 0:
+                mark_edit_plans_stale_for_folder(project, selected_folder)
+            if not any_asset_touched:
+                st.warning("Keine analysierbaren Supplement-Assets (Datei + Sidecar) gefunden.")
             if analyze_clicked:
-                st.success("Analyse abgeschlossen.")
+                st.success(f"Analyse abgeschlossen für {analyzed_count} Asset(s).")
             if inventory_clicked:
-                st.success("Inventory erweitert — alter Schnittplan als stale markiert.")
+                if inventory_added:
+                    st.success(
+                        f"{inventory_added} Asset(s) ins Inventory übernommen — "
+                        "alter Schnittplan als stale markiert."
+                    )
+                if inventory_skipped:
+                    st.warning(
+                        f"{len(inventory_skipped)} Asset(s) nicht übernommen (Validierung nicht bestanden):"
+                    )
+                    for skip_reason in inventory_skipped:
+                        st.caption(f"⚠️ {skip_reason}")
             st.rerun()
 
     if replan_clicked:

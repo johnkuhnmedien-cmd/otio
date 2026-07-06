@@ -94,6 +94,66 @@ def describe_media_from_frames(
     return (response.text or "").strip()
 
 
+SUPPLEMENT_VALIDATION_STATUSES = ("PASS", "WEAK_PASS", "NEEDS_USER_REVIEW", "FAIL")
+
+
+def validate_supplement_asset_match(
+    *,
+    passage_text: str,
+    visual_requirement: str,
+    description: str,
+    location_name: str = "",
+    must_show: Optional[list[str]] = None,
+    avoid_showing: Optional[list[str]] = None,
+    language: str = "de",
+    model: Optional[str] = None,
+) -> dict[str, Any]:
+    """Prüft mit Gemini, ob ein supplementiertes Asset wirklich zum Voice-over-Satz passt.
+
+    Vergleicht die (Gemini-)Beschreibung des heruntergeladenen Assets gegen den
+    ursprünglichen Bedarf (passage_text/visual_requirement/must_show/avoid_showing)
+    und liefert PASS/WEAK_PASS/NEEDS_USER_REVIEW/FAIL statt das Asset ungeprüft
+    zu übernehmen.
+    """
+    client = _get_client()
+    from google.genai import types
+
+    must_show_line = ", ".join(must_show or []) or "keine besonderen Vorgaben"
+    avoid_line = ", ".join(avoid_showing or []) or "keine"
+    prompt = (
+        "Du prüfst, ob ein gefundenes Video-/Bild-Asset zu einem Voice-over-Satz passt.\n"
+        f"Ort/Ordner: {location_name or 'unbekannt'}\n"
+        f"Voice-over-Satz: {passage_text.strip()}\n"
+        f"Visuelle Anforderung: {visual_requirement.strip() or passage_text.strip()}\n"
+        f"Muss zeigen: {must_show_line}\n"
+        f"Darf nicht zeigen: {avoid_line}\n"
+        f"Beschreibung des gefundenen Assets: {description.strip()}\n\n"
+        "Bewerte, ob dieses Asset inhaltlich zum Satz passt. Antworte NUR als JSON:\n"
+        '{"status":"PASS|WEAK_PASS|NEEDS_USER_REVIEW|FAIL","score":0.0,"reason":"..."}\n'
+        "PASS = passt eindeutig. WEAK_PASS = passt teilweise/generisch. "
+        "NEEDS_USER_REVIEW = unklar, manuelle Prüfung nötig. FAIL = passt nicht "
+        "oder zeigt verbotene Inhalte."
+    )
+    response = client.models.generate_content(
+        model=resolve_gemini_model(model),
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
+    )
+    text = response.text or "{}"
+    try:
+        payload = _extract_json(text)
+    except json.JSONDecodeError:
+        payload = {"status": "NEEDS_USER_REVIEW", "score": 0.5, "reason": "Antwort nicht auswertbar."}
+    status = str(payload.get("status", "NEEDS_USER_REVIEW")).upper()
+    if status not in SUPPLEMENT_VALIDATION_STATUSES:
+        status = "NEEDS_USER_REVIEW"
+    try:
+        score = float(payload.get("score", 0.5))
+    except (TypeError, ValueError):
+        score = 0.5
+    reason = str(payload.get("reason", "")).strip()
+    return {"status": status, "score": max(0.0, min(1.0, score)), "reason": reason}
+
+
 def describe_folder_from_frames(
     folder_name: str,
     frame_paths: list[Path],
