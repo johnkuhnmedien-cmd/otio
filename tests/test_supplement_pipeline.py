@@ -54,7 +54,11 @@ from otio_app.services.supplement_pipeline import (
     save_sidecar,
     search_supplement_candidates,
 )
-from otio_app.services.supplement_requests import load_supplement_requests, upsert_requests
+from otio_app.services.supplement_requests import (
+    load_supplement_requests,
+    requests_for_folder,
+    upsert_requests,
+)
 from otio_app.services.supplement_search import build_keyword_query
 from otio_app.services.supplement_search import build_pexels_primary_query, build_pexels_query_variants
 from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
@@ -757,6 +761,69 @@ def test_search_stores_candidates(tmp_path: Path) -> None:
     assert found == []
     loaded = load_supplement_requests(project)
     assert loaded.candidates == []
+
+
+def test_pexels_http_error_surfaces_as_request_error_not_silent_zero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ein HTTP-Fehler (z. B. 401) darf nicht als stilles '0 gefunden' erscheinen."""
+    project = _project(tmp_path)
+    monkeypatch.setenv("PEXELS_API_KEY", "bad-key")
+
+    import urllib.error
+
+    def fail_urlopen(request, timeout=20):
+        raise urllib.error.HTTPError(
+            request.full_url, 401, "Unauthorized", {}, None
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_http_error",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        location_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        visual_requirement="Antelope Canyon",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+    )
+    upsert_requests(project, [request])
+
+    candidates = search_supplement_candidates(project, request)
+    assert candidates == []
+
+    updated = requests_for_folder(load_supplement_requests(project), "Antelope Canyon")[0]
+    assert updated.status == "ACQUIRE_FAILED"
+    assert "401" in updated.last_error
+
+    from otio_app.project_layout import get_pexels_debug_report_path
+
+    report = json.loads(get_pexels_debug_report_path(project.work_dir_path).read_text(encoding="utf-8"))
+    assert report["errors"]
+    assert report["errors"][0]["status"] == 401
+
+
+def test_pexels_adapter_does_not_raise_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PEXELS_API_KEY", "bad-key")
+    import urllib.error
+
+    def fail_urlopen(request, timeout=20):
+        raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", {}, None)
+
+    monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_429",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        visual_requirement="Antelope Canyon",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+    )
+    candidates = PexelsAdapter().search(request)
+    assert candidates == []
 
 
 def test_keyword_query_prefers_short_visual_terms() -> None:

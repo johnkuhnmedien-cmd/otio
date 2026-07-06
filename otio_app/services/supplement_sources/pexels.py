@@ -113,6 +113,7 @@ class PexelsAdapter(SupplementSourceAdapter):
             "filter_rejections": [],
             "final_video_candidate_count": 0,
             "final_photo_candidate_count": 0,
+            "errors": [],
         }
 
     def _request_json(self, endpoint: str, params: dict, api_key: str) -> tuple[int, dict]:
@@ -122,6 +123,36 @@ class PexelsAdapter(SupplementSourceAdapter):
             status = int(getattr(response, "status", 200) or 200)
             return status, json.loads(response.read().decode("utf-8"))
 
+    def _request_json_safe(
+        self,
+        endpoint: str,
+        params: dict,
+        api_key: str,
+        *,
+        query: str,
+    ) -> tuple[int, dict] | None:
+        """Führt die Pexels-Anfrage aus; Fehler werden im Debug-Report festgehalten
+        statt die ganze Suche stillschweigend abzubrechen."""
+        try:
+            return self._request_json(endpoint, params, api_key)
+        except urllib.error.HTTPError as exc:
+            try:
+                body = exc.read().decode("utf-8", errors="replace")[:300]
+            except Exception:
+                body = ""
+            message = body or exc.reason or str(exc)
+            self.last_debug_report["http_status_by_query"][query] = exc.code
+            self.last_debug_report["errors"].append(
+                {"query": query, "endpoint": endpoint, "status": exc.code, "message": message}
+            )
+            return None
+        except (urllib.error.URLError, json.JSONDecodeError, OSError) as exc:
+            self.last_debug_report["http_status_by_query"][query] = 0
+            self.last_debug_report["errors"].append(
+                {"query": query, "endpoint": endpoint, "status": 0, "message": str(exc)}
+            )
+            return None
+
     def _search_videos(self, request: SupplementRequest, api_key: str) -> list[SupplementCandidate]:
         candidates: list[SupplementCandidate] = []
         location = base_location_for_request(request)
@@ -129,7 +160,10 @@ class PexelsAdapter(SupplementSourceAdapter):
             params = {"query": query, "per_page": 15, "orientation": "landscape"}
             self.last_debug_report["queries_attempted"].append(query)
             self.last_debug_report["params_without_api_key"] = params
-            status, payload = self._request_json(PEXELS_VIDEO_SEARCH_ENDPOINT, params, api_key)
+            result = self._request_json_safe(PEXELS_VIDEO_SEARCH_ENDPOINT, params, api_key, query=query)
+            if result is None:
+                continue
+            status, payload = result
             self.last_debug_report["http_status_by_query"][query] = status
             videos = payload.get("videos", []) or []
             self.last_debug_report["raw_video_result_count"] += len(videos)
@@ -164,7 +198,10 @@ class PexelsAdapter(SupplementSourceAdapter):
             params = {"query": query, "per_page": 15, "orientation": "landscape"}
             self.last_debug_report["queries_attempted"].append(query)
             self.last_debug_report["params_without_api_key"] = params
-            status, payload = self._request_json(PEXELS_PHOTO_SEARCH_ENDPOINT, params, api_key)
+            result = self._request_json_safe(PEXELS_PHOTO_SEARCH_ENDPOINT, params, api_key, query=query)
+            if result is None:
+                continue
+            status, payload = result
             self.last_debug_report["http_status_by_query"][query] = status
             photos = payload.get("photos", []) or []
             self.last_debug_report["raw_photo_result_count"] += len(photos)

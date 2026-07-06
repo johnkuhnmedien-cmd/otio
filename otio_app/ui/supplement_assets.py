@@ -332,6 +332,20 @@ def _render_pexels_candidate_card(project, request: SupplementRequest, candidate
                 st.error(str(exc))
 
 
+def _load_pexels_debug_report(project) -> dict | None:
+    from otio_app.project_layout import get_pexels_debug_report_path
+
+    path = get_pexels_debug_report_path(project.work_dir_path)
+    if not path.is_file():
+        return None
+    try:
+        import json
+
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+
+
 def _render_pexels_tab(project, request: SupplementRequest, readiness: ProviderReadiness, document: SupplementRequestsDocument) -> None:
     st.markdown("#### Pexels")
     st.caption(f"Status: **{readiness.status}** — {readiness.message}")
@@ -339,10 +353,30 @@ def _render_pexels_tab(project, request: SupplementRequest, readiness: ProviderR
         f"Suchmodus: **{request.required_asset_type}** · "
         "Videos: nur 16:9 · Fotos: prefer_16_9 / Hintergrund möglich"
     )
-    with st.expander("Technische Suchdetails", expanded=False):
+    debug_report = _load_pexels_debug_report(project)
+    with st.expander("Technische Suchdetails", expanded=bool(debug_report and debug_report.get("errors"))):
         st.caption("Video Endpoint: `https://api.pexels.com/v1/videos/search`")
         st.caption("Photo Endpoint: `https://api.pexels.com/v1/search`")
         st.caption("Video orientation: `landscape`, per_page: `15`")
+        if debug_report and debug_report.get("request_id") == request.supplement_request_id:
+            st.caption(f"Queries versucht: {', '.join(debug_report.get('queries_attempted', [])) or '—'}")
+            st.caption(
+                f"Raw Videos: {debug_report.get('raw_video_result_count', 0)} · "
+                f"Raw Fotos: {debug_report.get('raw_photo_result_count', 0)} · "
+                f"Verworfen (Videos): {debug_report.get('rejected_video_count', 0)}"
+            )
+            statuses = debug_report.get("http_status_by_query", {})
+            if statuses:
+                st.caption("HTTP-Status pro Query: " + ", ".join(f"`{q}`→{s}" for q, s in statuses.items()))
+            errors = debug_report.get("errors", [])
+            if errors:
+                st.error("Pexels-API-Fehler bei der letzten Suche:")
+                for entry in errors:
+                    st.caption(
+                        f"HTTP {entry.get('status')} · Query `{entry.get('query')}` · {entry.get('message')}"
+                    )
+    if request.last_error and request.status == "ACQUIRE_FAILED":
+        st.error(f"Letzter Fehler: {request.last_error}")
     query = _render_query_controls(request, SUPPLEMENT_SOURCE_PEXELS)
     if readiness.status != "READY":
         st.warning("PEXELS_API_KEY fehlt. Bitte unter Systemstatus/API-Schlüssel oder .env setzen.")
@@ -352,7 +386,20 @@ def _render_pexels_tab(project, request: SupplementRequest, readiness: ProviderR
         updated = _save_source_and_query(project, request, SUPPLEMENT_SOURCE_PEXELS, query)
         if updated is not None:
             found = search_supplement_candidates(project, updated)
-            st.success(f"{len(found)} echte Pexels-Kandidaten gefunden.")
+            if found:
+                st.success(f"{len(found)} echte Pexels-Kandidaten gefunden.")
+            else:
+                refreshed = requests_for_folder(
+                    load_supplement_requests(project), request.folder_name
+                )
+                current = next(
+                    (r for r in refreshed if r.supplement_request_id == request.supplement_request_id),
+                    None,
+                )
+                if current is not None and current.last_error:
+                    st.error(f"Pexels-Suche fehlgeschlagen: {current.last_error}")
+                else:
+                    st.warning("0 echte Pexels-Kandidaten gefunden — siehe Technische Suchdetails.")
             st.rerun()
     candidates = _candidates_for_source(
         document.candidates,

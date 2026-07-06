@@ -163,6 +163,12 @@ def run_coverage_for_folder(
     return coverages, requests
 
 
+def _write_pexels_debug_report(project: Project, report: dict) -> None:
+    path = get_pexels_debug_report_path(project.work_dir_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def search_supplement_candidates(
     project: Project,
     request: SupplementRequest,
@@ -195,6 +201,8 @@ def search_supplement_candidates(
     try:
         candidates = adapter.search(request)
     except Exception as exc:
+        if source == SUPPLEMENT_SOURCE_PEXELS and getattr(adapter, "last_debug_report", None):
+            _write_pexels_debug_report(project, adapter.last_debug_report)
         record_supplement_error(
             project,
             request_id=request.supplement_request_id,
@@ -215,12 +223,35 @@ def search_supplement_candidates(
         )
         return []
     if source == SUPPLEMENT_SOURCE_PEXELS and getattr(adapter, "last_debug_report", None):
-        path = get_pexels_debug_report_path(project.work_dir_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(adapter.last_debug_report, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        _write_pexels_debug_report(project, adapter.last_debug_report)
+        api_errors = adapter.last_debug_report.get("errors") or []
+        if api_errors and not candidates:
+            first_error = api_errors[0]
+            error_message = (
+                f"Pexels-API-Fehler (HTTP {first_error.get('status')}): "
+                f"{first_error.get('message')}"
+            )
+            record_supplement_error(
+                project,
+                request_id=request.supplement_request_id,
+                provider=source,
+                error_type="PEXELS_API_ERROR",
+                error_message=error_message,
+                query_used=first_error.get("query", ""),
+                url=first_error.get("endpoint", ""),
+                action_required="API-Key/Query prüfen oder erneut versuchen.",
+                provider_status_at_failure=readiness.status,
+                http_status=int(first_error.get("status") or 0),
+            )
+            update_request(
+                project,
+                request.supplement_request_id,
+                status=REQUEST_STATUS_ACQUIRE_FAILED,
+                last_error=error_message,
+                last_error_at=datetime.now(timezone.utc),
+                provider_status_at_failure=readiness.status,
+            )
+            return []
     add_candidates(project, candidates)
     attempted = []
     if source == SUPPLEMENT_SOURCE_PEXELS and getattr(adapter, "last_debug_report", None):
