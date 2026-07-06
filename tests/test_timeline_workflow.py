@@ -12,6 +12,7 @@ from otio_app.analysis_models import (
     EditPlanShot,
     TimelineItem,
     TimelineItemTransform,
+    VoiceoverPlan,
 )
 from otio_app.services.duration_rules import MAX_DURATION_SEC, MIN_DURATION_SEC, split_total_duration
 from otio_app.services.edit_plan_validator import ValidationStatus, validate_timeline_items
@@ -53,16 +54,30 @@ def _item(
 
 
 def test_final_duration_never_exceeds_8s() -> None:
-    settings = EditPlanSettings(section_outro_sec=0.0)
+    settings = EditPlanSettings(
+        section_outro_sec=0.0,
+        video_head_trim_policy="disabled",
+    )
+    voiceover = VoiceoverPlan(
+        path="/voice.wav",
+        timeline_start_sec=1.0,
+        source_in_sec=0.0,
+        source_out_sec=7.0,
+        duration_sec=7.0,
+        timeline_end_sec=8.0,
+        duration_source="ffprobe",
+        trim_policy="disabled",
+    )
     items = [
         _item(
             item_id="i1",
             item_type="video_shot",
-            duration=7.0,
+            duration=8.0,
             path="/media/ok.mp4",
         )
     ]
-    result = validate_timeline_items(items, settings=settings)
+    items[0] = items[0].model_copy(update={"voice_end_sec": 7.0})
+    result = validate_timeline_items(items, settings=settings, voiceover=voiceover)
     assert result.status == ValidationStatus.OK
 
     bad = [_item(item_id="i2", item_type="video_shot", duration=12.0)]

@@ -112,11 +112,29 @@ class EditPlanSettings(BaseModel):
     shot_max_sec: float = 8.0
     audio_offset_sec: float = 1.0
     section_outro_sec: float = 5.0
+    video_head_trim_sec: float = 0.5
+    video_head_trim_policy: str = "fixed_trim"
+    voiceover_trim_policy: str = "disabled"
+    voiceover_trim_start_sec: float = 0.0
+    voiceover_trim_end_sec: float = 0.0
     text_splitters: List[str] = Field(default_factory=lambda: [", und ", ", ", " und "])
     fallback_order: List[str] = Field(
         default_factory=lambda: ["local", "adobe_stock", "pexels", "gemini_image"]
     )
     gemini_model: str = "gemini-2.0-flash"
+
+
+class VoiceoverPlan(BaseModel):
+    """Voice-over-Block im Schnittplan — keine Head-Trim-Regel auf Audio."""
+
+    path: str
+    timeline_start_sec: float = 0.0
+    source_in_sec: float = 0.0
+    source_out_sec: float = 0.0
+    duration_sec: float = 0.0
+    timeline_end_sec: float = 0.0
+    duration_source: str = "ffprobe"
+    trim_policy: str = "disabled"
 
 
 class EditPlanRule(BaseModel):
@@ -193,6 +211,7 @@ class EditPlanDocument(BaseModel):
     folder_name: Optional[str] = None
     confirmed: bool = False
     settings: EditPlanSettings = Field(default_factory=EditPlanSettings)
+    voiceover: Optional[VoiceoverPlan] = None
     shots: List[EditPlanShot] = Field(default_factory=list)
     timeline_items: List[TimelineItem] = Field(default_factory=list)
     allow_black_outro: bool = False

@@ -16,6 +16,7 @@ from otio_app.analysis_models import (
     TimelineItemTransform,
     VoiceFolderMappingDocument,
     VoiceFolderMappingEntry,
+    VoiceoverPlan,
 )
 from otio_app.models import Project
 from otio_app.services.edit_plan_builder import save_edit_plan
@@ -68,6 +69,7 @@ def _timeline_narration(
     index: int,
     *,
     timeline_in: float,
+    source_in: float = 0.5,
 ) -> TimelineItem:
     duration = 3.0
     path = str(Path(f"/media/{folder.replace(' ', '_')}_{index}.mp4"))
@@ -86,15 +88,28 @@ def _timeline_narration(
         timeline_out_sec=timeline_in + duration,
         duration_sec=duration,
         final_duration_sec=duration,
-        source_in_sec=0.0,
-        source_out_sec=duration,
-        voice_start_sec=float(index * 3),
-        voice_end_sec=float(index * 3 + 3),
+        source_in_sec=source_in,
+        source_out_sec=source_in + duration,
+        voice_start_sec=float((index - 1) * 3),
+        voice_end_sec=float(min((index - 1) * 3 + 3, 5.0)),
         selection_reason="test",
         confidence=0.8,
         transform=TimelineItemTransform(),
         motif=f"motif {index}",
         passage_text=f"text {index}",
+    )
+
+
+def _voiceover_plan(voice_file: str, *, duration: float, offset: float = 1.0) -> VoiceoverPlan:
+    return VoiceoverPlan(
+        path=voice_file,
+        timeline_start_sec=offset,
+        source_in_sec=0.0,
+        source_out_sec=duration,
+        duration_sec=duration,
+        timeline_end_sec=offset + duration,
+        duration_source="ffprobe",
+        trim_policy="disabled",
     )
 
 
@@ -104,6 +119,7 @@ def _timeline_outro(
     *,
     timeline_in: float,
     after_index: int,
+    source_in: float = 0.5,
 ) -> TimelineItem:
     duration = 5.0
     path = str(Path(f"/media/{folder.replace(' ', '_')}_outro.mp4"))
@@ -123,8 +139,8 @@ def _timeline_outro(
         timeline_out_sec=timeline_in + duration,
         duration_sec=duration,
         final_duration_sec=duration,
-        source_in_sec=0.0,
-        source_out_sec=duration,
+        source_in_sec=source_in,
+        source_out_sec=source_in + duration,
         voice_start_sec=end_voice,
         voice_end_sec=end_voice,
         selection_reason="Neutraler Shot aus derselben Sektion",
@@ -168,15 +184,33 @@ def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    plan_settings = EditPlanSettings(audio_offset_sec=1.0, section_outro_sec=5.0)
+    plan_settings = EditPlanSettings(
+        audio_offset_sec=1.0,
+        section_outro_sec=5.0,
+        video_head_trim_sec=0.5,
+        video_head_trim_policy="fixed_trim",
+        voiceover_trim_policy="disabled",
+    )
+    florida_voice_end = 6.0
     florida_items = [
         _timeline_narration("Florida Keys", voice_a, 1, timeline_in=0.0),
         _timeline_narration("Florida Keys", voice_a, 2, timeline_in=3.0),
-        _timeline_outro("Florida Keys", voice_a, timeline_in=6.0, after_index=2),
+        _timeline_outro(
+            "Florida Keys",
+            voice_a,
+            timeline_in=florida_voice_end,
+            after_index=2,
+        ),
     ]
+    canyon_voice_end = 4.0
     canyon_items = [
         _timeline_narration("Grand Canyon", voice_b, 1, timeline_in=0.0),
-        _timeline_outro("Grand Canyon", voice_b, timeline_in=3.0, after_index=1),
+        _timeline_outro(
+            "Grand Canyon",
+            voice_b,
+            timeline_in=canyon_voice_end,
+            after_index=1,
+        ),
     ]
     save_edit_plan(
         project,
@@ -185,6 +219,7 @@ def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
             folder_name="Florida Keys",
             confirmed=True,
             settings=plan_settings,
+            voiceover=_voiceover_plan(voice_a, duration=5.0),
             shots=_shots_from_items(florida_items),
             timeline_items=florida_items,
         ),
@@ -197,6 +232,7 @@ def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
             folder_name="Grand Canyon",
             confirmed=True,
             settings=plan_settings,
+            voiceover=_voiceover_plan(voice_b, duration=3.0),
             shots=_shots_from_items(canyon_items),
             timeline_items=canyon_items,
         ),
@@ -220,15 +256,15 @@ def test_timeline_sections_include_outro_and_per_section_voice_offset(tmp_path: 
     merged = merge_confirmed_edit_plans(project)
     settings = EditPlanSettings(audio_offset_sec=1.0, section_outro_sec=5.0)
 
-    sections = _compute_timeline_sections(merged.timeline_items, settings)
+    sections = _compute_timeline_sections(merged.timeline_items, settings, merged.voiceovers)
     assert len(sections) == 2
     assert sections[0].video_start_sec == 0.0
     assert sections[0].video_duration_sec == 11.0
-    assert sections[0].voice_start_sec == 1.0
-    assert sections[0].voice_play_duration_sec == 5.0
+    assert sections[0].voiceover.timeline_start_sec == 1.0
+    assert sections[0].voiceover.duration_sec == 5.0
     assert sections[1].video_start_sec == 11.0
     assert sections[1].video_duration_sec == 8.0
-    assert sections[1].voice_start_sec == 12.0
+    assert sections[1].voiceover.timeline_start_sec == 1.0
 
 
 def test_clip_durations_use_seconds_not_frames(tmp_path: Path) -> None:
@@ -268,10 +304,12 @@ def test_audio_offset_and_outro_on_export(tmp_path: Path) -> None:
     florida_audio = timeline.tracks[1]
     assert florida_audio[0].source_range.duration.to_seconds() == 1.0
     assert florida_audio[1].source_range.duration.to_seconds() == 5.0
+    assert florida_audio[1].source_range.start_time.to_seconds() == 0.0
 
     canyon_audio = timeline.tracks[2]
     assert canyon_audio[0].source_range.duration.to_seconds() == 12.0
-    assert canyon_audio[1].source_range.duration.to_seconds() == 2.0
+    assert canyon_audio[1].source_range.duration.to_seconds() == 3.0
+    assert canyon_audio[1].source_range.start_time.to_seconds() == 0.0
 
 
 def test_video_section_keeps_planned_durations(tmp_path: Path) -> None:

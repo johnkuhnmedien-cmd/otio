@@ -191,6 +191,15 @@ def build_edit_plan(
     rules_doc = load_edit_plan_rules(project)
     gemini_prompt = gemini_prompt_text(rules_doc)
     trim_leading_sec = export_rule_options(rules_doc).trim_leading_sec
+    plan_settings = plan_settings.model_copy(
+        update={
+            "video_head_trim_sec": trim_leading_sec,
+            "video_head_trim_policy": "fixed_trim" if trim_leading_sec > 0 else "disabled",
+            "voiceover_trim_policy": "disabled",
+            "voiceover_trim_start_sec": 0.0,
+            "voiceover_trim_end_sec": 0.0,
+        }
+    )
 
     voice_files = {entry.path: entry for entry in voice_doc.files}
     mapping_by_voice = {
@@ -291,6 +300,7 @@ def build_edit_plan(
 
     timeline_items: list = []
     plan_errors: list[str] = []
+    voiceover_plan = None
     item_counter = 1
     grouped: dict[tuple[str, str], list] = {}
     for shot in shots:
@@ -300,7 +310,7 @@ def build_edit_plan(
 
     for (folder_name, voice_path), folder_shots in grouped.items():
         folder_shots.sort(key=lambda s: (s.voice_start_sec, s.voice_end_sec))
-        section_items, errors = build_timeline_items_for_folder(
+        section_items, section_voiceover, errors = build_timeline_items_for_folder(
             folder_shots,
             folder_name=folder_name,
             voice_file=voice_path,
@@ -311,6 +321,7 @@ def build_edit_plan(
         )
         plan_errors.extend(errors)
         timeline_items.extend(section_items)
+        voiceover_plan = section_voiceover
         item_counter += len(section_items)
 
     if plan_errors and not timeline_items:
@@ -323,6 +334,7 @@ def build_edit_plan(
         folder_name=primary_folder,
         confirmed=False,
         settings=plan_settings,
+        voiceover=voiceover_plan,
         shots=shots,
         timeline_items=timeline_items,
     )

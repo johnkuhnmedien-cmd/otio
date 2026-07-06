@@ -8,7 +8,13 @@ from urllib.parse import unquote, urlparse
 
 import opentimelineio as otio
 
-from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPlanShot, TimelineItem
+from otio_app.analysis_models import (
+    EditPlanDocument,
+    EditPlanSettings,
+    EditPlanShot,
+    TimelineItem,
+    VoiceoverPlan,
+)
 from otio_app.models import Project
 from otio_app.project_layout import get_otio_export_path
 from otio_app.services.edit_plan_builder import load_edit_plan
@@ -40,7 +46,11 @@ from otio_app.services.otio_export_settings import (
     save_otio_export_settings,
 )
 from otio_app.services.edit_plan_validator import ValidationStatus, validate_timeline_items
-from otio_app.services.timeline_plan_builder import assign_global_timeline_positions, shots_from_timeline_items
+from otio_app.services.timeline_plan_builder import (
+    assign_global_timeline_positions,
+    build_voiceover_plan,
+    shots_from_timeline_items,
+)
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 
 
@@ -49,6 +59,7 @@ class MergedEditPlanResult:
     timeline_items: list[TimelineItem]
     shots: list[EditPlanShot]
     settings: EditPlanSettings
+    voiceovers: list[VoiceoverPlan] = field(default_factory=list)
     included_folders: list[str] = field(default_factory=list)
     skipped_folders: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -65,8 +76,7 @@ class TimelineSection:
     folder: str
     video_start_sec: float
     video_duration_sec: float
-    voice_start_sec: float
-    voice_play_duration_sec: float
+    voiceover: VoiceoverPlan
 
 
 def verify_shot_media_paths(
@@ -156,6 +166,7 @@ def merge_confirmed_edit_plans(
 
     allowed_folders = set(folder_names) if folder_names is not None else None
     merged_items: list[TimelineItem] = []
+    merged_voiceovers: list[VoiceoverPlan] = []
     included: list[str] = []
     skipped: list[str] = []
     warnings: list[str] = []
@@ -193,27 +204,62 @@ def merge_confirmed_edit_plans(
             )
             continue
 
+        if plan.voiceover is not None:
+            merged_voiceovers.append(plan.voiceover)
+        else:
+            merged_voiceovers.append(build_voiceover_plan(entry.voice_file, plan.settings))
+
         positioned = assign_global_timeline_positions(
             section_items,
             section_start_sec=global_cursor,
         )
         merged_items.extend(positioned)
-        global_cursor = positioned[-1].timeline_out_sec if positioned else global_cursor
+        global_cursor = max(
+            (item.timeline_out_sec for item in positioned),
+            default=global_cursor,
+        )
         if plan.allow_black_outro:
             allow_black_outro = True
 
     shots = shots_from_timeline_items(merged_items)
     warnings.extend(verify_timeline_media_paths(project, merged_items))
 
-    validation = validate_timeline_items(
-        merged_items,
-        settings=settings,
-        allow_black_outro=allow_black_outro,
-        fps=float(project.fps),
-    )
-    warnings.extend(validation.warnings)
-    if validation.errors:
-        for line in validation.errors:
+    worst_status = ValidationStatus.OK
+    all_validation_errors: list[str] = []
+    section_index = 0
+    while section_index < len(merged_items):
+        folder = merged_items[section_index].folder_name
+        voice_file = merged_items[section_index].voice_file
+        section_items: list[TimelineItem] = []
+        while (
+            section_index < len(merged_items)
+            and merged_items[section_index].folder_name == folder
+        ):
+            section_items.append(merged_items[section_index])
+            section_index += 1
+        section_voiceover = next(
+            (vo for vo in merged_voiceovers if vo.path == voice_file),
+            build_voiceover_plan(voice_file, settings),
+        )
+        validation = validate_timeline_items(
+            section_items,
+            settings=settings,
+            allow_black_outro=allow_black_outro,
+            fps=float(project.fps),
+            voiceover=section_voiceover,
+        )
+        all_validation_errors.extend(validation.errors)
+        warnings.extend(validation.warnings)
+        if validation.status == ValidationStatus.BLOCKED:
+            worst_status = ValidationStatus.BLOCKED
+        elif (
+            validation.status == ValidationStatus.AWAITING_APPROVAL
+            and worst_status != ValidationStatus.BLOCKED
+        ):
+            worst_status = ValidationStatus.AWAITING_APPROVAL
+
+    if all_validation_errors:
+        for line in all_validation_errors:
             warnings.append(f"Validierung: {line}")
 
     if not merged_items and not skipped:
@@ -223,10 +269,11 @@ def merge_confirmed_edit_plans(
         timeline_items=merged_items,
         shots=shots,
         settings=settings,
+        voiceovers=merged_voiceovers,
         included_folders=included,
         skipped_folders=skipped,
         warnings=warnings,
-        validation_status=validation.status.value,
+        validation_status=worst_status.value,
     )
 
 
@@ -354,31 +401,30 @@ def _track_duration_sec(track: otio.schema.Track, *, start_index: int = 0) -> fl
 def _compute_timeline_sections(
     items: list[TimelineItem],
     settings: EditPlanSettings,
+    voiceovers: list[VoiceoverPlan],
 ) -> list[TimelineSection]:
-    """Ordner-Abschnitte inkl. Ausklingen und Voice-Start je Abschnitt."""
+    """Ordner-Abschnitte inkl. Voice-over-Plan je Abschnitt."""
     sections: list[TimelineSection] = []
     if not items:
         return sections
 
+    voiceover_by_file = {vo.path: vo for vo in voiceovers}
     index = 0
     while index < len(items):
         folder = items[index].folder_name
         voice_file = items[index].voice_file
         section_start = items[index].timeline_in_sec
-        narration_duration = 0.0
         section_duration = 0.0
         end_index = index
         while end_index < len(items) and items[end_index].folder_name == folder:
             item = items[end_index]
             duration = max(0.01, float(item.duration_sec))
             section_duration += duration
-            if item.type != "generic_outro_visual":
-                narration_duration += duration
             end_index += 1
 
-        offset = max(0.0, float(settings.audio_offset_sec))
-        voice_start = section_start + offset
-        voice_play = max(0.01, narration_duration - offset)
+        voiceover = voiceover_by_file.get(voice_file)
+        if voiceover is None:
+            voiceover = build_voiceover_plan(voice_file, settings)
 
         sections.append(
             TimelineSection(
@@ -386,8 +432,7 @@ def _compute_timeline_sections(
                 folder=folder,
                 video_start_sec=section_start,
                 video_duration_sec=section_duration,
-                voice_start_sec=voice_start,
-                voice_play_duration_sec=voice_play,
+                voiceover=voiceover,
             )
         )
         index = end_index
@@ -510,46 +555,50 @@ def _append_aligned_voice_track(
     rate: float,
     *,
     track_index: int,
-    export_rules: ExportRuleOptions,
+    audio_offset_sec: float,
 ) -> None:
-    """Eine Audiospur pro Voice-over — Originaldatei, ein Stück pro Ordner-Abschnitt."""
+    """Eine Audiospur pro Voice-over — volle WAV-Dauer, ohne Head-Trim."""
     track = otio.schema.Track(
         name=f"A{track_index} · {Path(section.voice_file).stem}"[:120],
         kind=otio.schema.TrackKind.Audio,
     )
-    if section.voice_start_sec > 0:
+    gap_sec = max(0.0, section.video_start_sec + audio_offset_sec)
+    if gap_sec > 0.001:
         track.append(
             otio.schema.Gap(
                 name="Voice Start",
-                source_range=_time_range(section.voice_start_sec, rate),
+                source_range=_time_range(gap_sec, rate),
             )
         )
 
+    voiceover = section.voiceover
     resolved = _resolve_media_path(section.voice_file)
-    source_range, _, _notes = _clip_source_range_for_media(
-        resolved,
-        fallback_rate=rate,
-        requested_duration_sec=min(
-            probe_duration_seconds(resolved) or section.voice_play_duration_sec,
-            section.voice_play_duration_sec,
-        ),
-        trim_leading_sec=export_rules.trim_leading_sec,
-    )
+    play_sec = max(0.01, voiceover.duration_sec)
+    source_in = voiceover.source_in_sec
 
     voice_clip = otio.schema.Clip(
         name=Path(section.voice_file).stem,
         media_reference=_media_reference(
             section.voice_file,
             rate,
-            trim_leading_sec=export_rules.trim_leading_sec,
+            trim_leading_sec=0.0,
         ),
     )
-    voice_clip.source_range = source_range
+    media_rate = rate
+    timing = probe_media_timing(resolved, default_rate=rate)
+    if timing.rate:
+        media_rate = timing.rate
+    voice_clip.source_range = _time_range(play_sec, media_rate, start_sec=source_in)
     voice_clip.metadata["voice_file"] = section.voice_file
     voice_clip.metadata["folder"] = section.folder
     voice_clip.metadata["otio_note"] = (
-        "Ungeschnittene Originaldatei ab Sekunde 0 — Länge begrenzt auf Abschnitt, "
-        "damit sich Voice-overs nicht überlappen."
+        "Ungeschnittene Originaldatei ab Sekunde 0 — volle ffprobe-Dauer, kein Head-Trim."
+    )
+    voice_clip.metadata["voiceover_timeline_start_sec"] = round(
+        section.video_start_sec + voiceover.timeline_start_sec, 4
+    )
+    voice_clip.metadata["voiceover_timeline_end_sec"] = round(
+        section.video_start_sec + voiceover.timeline_end_sec, 4
     )
     track.append(voice_clip)
     timeline.tracks.append(track)
@@ -652,7 +701,7 @@ def build_otio_timeline(
         )
 
     items = merged.timeline_items
-    sections = _compute_timeline_sections(items, settings)
+    sections = _compute_timeline_sections(items, settings, merged.voiceovers)
     export_rules = export_rule_options(load_edit_plan_rules(project))
     timeline = otio.schema.Timeline(name=project.name)
     timeline.metadata["project_id"] = project.id
@@ -695,7 +744,7 @@ def build_otio_timeline(
             section,
             rate,
             track_index=audio_index,
-            export_rules=export_rules,
+            audio_offset_sec=settings.audio_offset_sec,
         )
         audio_index += 1
 
@@ -703,9 +752,116 @@ def build_otio_timeline(
 
 
 @dataclass(frozen=True)
+class OtioReadbackReport:
+    voiceover_timeline_start_sec: float
+    voiceover_source_in_sec: float
+    voiceover_duration_sec: float
+    voiceover_timeline_end_sec: float
+    expected_voiceover_timeline_end_sec: float
+    audio_offset_sec: float
+    generic_outro_timeline_start_sec: float | None
+    visual_coverage_until_sec: float
+    ok: bool
+    errors: list[str] = field(default_factory=list)
+
+
+def _visual_coverage_until_sec(items: list[TimelineItem]) -> float:
+    visual_types = {"video_shot", "image_shot", "generic_narration_visual", "generic_outro_visual"}
+    return max(
+        (item.timeline_out_sec for item in items if item.type in visual_types),
+        default=0.0,
+    )
+
+
+def _first_outro_start_sec(items: list[TimelineItem]) -> float | None:
+    outros = [item.timeline_in_sec for item in items if item.type == "generic_outro_visual"]
+    return min(outros) if outros else None
+
+
+def validate_otio_readback(
+    timeline: otio.schema.Timeline,
+    *,
+    sections: list[TimelineSection],
+    items: list[TimelineItem],
+    audio_offset_sec: float,
+) -> list[OtioReadbackReport]:
+    """Prüft geschriebene OTIO gegen Voice-over-Regeln."""
+    reports: list[OtioReadbackReport] = []
+    audio_tracks = [
+        track
+        for track in timeline.tracks
+        if track.kind == otio.schema.TrackKind.Audio
+    ]
+
+    for section_index, section in enumerate(sections):
+        voiceover = section.voiceover
+        section_items = [item for item in items if item.folder_name == section.folder]
+        expected_end = section.video_start_sec + voiceover.timeline_end_sec
+        expected_start = section.video_start_sec + voiceover.timeline_start_sec
+        visual_coverage = _visual_coverage_until_sec(section_items)
+        outro_start = _first_outro_start_sec(section_items)
+
+        errors: list[str] = []
+        voice_source_in = 0.0
+        voice_duration = 0.0
+        voice_timeline_start = expected_start
+        voice_timeline_end = expected_start
+
+        if section_index < len(audio_tracks):
+            track = audio_tracks[section_index]
+            cursor = 0.0
+            for child in track:
+                if isinstance(child, otio.schema.Gap):
+                    if child.source_range is not None:
+                        cursor += child.source_range.duration.to_seconds()
+                elif isinstance(child, otio.schema.Clip):
+                    voice_timeline_start = cursor
+                    if child.source_range is not None:
+                        voice_source_in = child.source_range.start_time.to_seconds()
+                        voice_duration = child.source_range.duration.to_seconds()
+                        voice_timeline_end = cursor + voice_duration
+                    cursor += voice_duration
+
+        if abs(voice_source_in) > 0.001:
+            errors.append(f"voiceover_source_in_sec={voice_source_in:.3f}, erwartet 0.0")
+        if abs(voice_timeline_start - expected_start) > 0.1:
+            errors.append(
+                f"voiceover_timeline_start_sec={voice_timeline_start:.2f}, "
+                f"erwartet {expected_start:.2f}"
+            )
+        if voice_timeline_end + 0.1 < expected_end:
+            errors.append(
+                f"voiceover_timeline_end_sec={voice_timeline_end:.2f} < "
+                f"expected {expected_end:.2f}"
+            )
+        if outro_start is not None and outro_start + 0.05 < expected_end:
+            errors.append(
+                f"generic_outro_timeline_start_sec={outro_start:.2f} < "
+                f"voiceover_timeline_end_sec={expected_end:.2f}"
+            )
+
+        reports.append(
+            OtioReadbackReport(
+                voiceover_timeline_start_sec=round(voice_timeline_start, 4),
+                voiceover_source_in_sec=round(voice_source_in, 4),
+                voiceover_duration_sec=round(voice_duration, 4),
+                voiceover_timeline_end_sec=round(voice_timeline_end, 4),
+                expected_voiceover_timeline_end_sec=round(expected_end, 4),
+                audio_offset_sec=audio_offset_sec,
+                generic_outro_timeline_start_sec=round(outro_start, 4) if outro_start else None,
+                visual_coverage_until_sec=round(visual_coverage, 4),
+                ok=not errors,
+                errors=errors,
+            )
+        )
+    return reports
+
+
+@dataclass(frozen=True)
 class OtioExportResult:
     path: Path
     aspect_fill_notes: list[str] = field(default_factory=list)
+    readback_reports: list[OtioReadbackReport] = field(default_factory=list)
 
 
 def export_otio_timeline(
@@ -739,4 +895,45 @@ def export_otio_timeline(
     path.parent.mkdir(parents=True, exist_ok=True)
     otio.adapters.write_to_file(timeline, str(path))
     aspect_notes = list(timeline.metadata.get("aspect_fill_notes", []))
-    return OtioExportResult(path=path, aspect_fill_notes=aspect_notes)
+
+    readback_timeline = otio.adapters.read_from_file(str(path))
+    sections = _compute_timeline_sections(
+        merged.timeline_items,
+        merged.settings,
+        merged.voiceovers,
+    )
+    readback_reports = validate_otio_readback(
+        readback_timeline,
+        sections=sections,
+        items=merged.timeline_items,
+        audio_offset_sec=settings.audio_offset_sec,
+    )
+    timeline.metadata["otio_readback"] = [
+        {
+            "voiceover_timeline_start_sec": report.voiceover_timeline_start_sec,
+            "voiceover_source_in_sec": report.voiceover_source_in_sec,
+            "voiceover_duration_sec": report.voiceover_duration_sec,
+            "voiceover_timeline_end_sec": report.voiceover_timeline_end_sec,
+            "expected_voiceover_timeline_end_sec": report.expected_voiceover_timeline_end_sec,
+            "audio_offset_sec": report.audio_offset_sec,
+            "generic_outro_timeline_start_sec": report.generic_outro_timeline_start_sec,
+            "visual_coverage_until_sec": report.visual_coverage_until_sec,
+            "ok": report.ok,
+            "errors": report.errors,
+        }
+        for report in readback_reports
+    ]
+    otio.adapters.write_to_file(timeline, str(path))
+
+    failed = [report for report in readback_reports if not report.ok]
+    if failed:
+        details = "; ".join(
+            f"{report.errors[0]}" for report in failed if report.errors
+        )
+        raise ValueError(f"OTIO Readback fehlgeschlagen: {details}")
+
+    return OtioExportResult(
+        path=path,
+        aspect_fill_notes=aspect_notes,
+        readback_reports=readback_reports,
+    )
