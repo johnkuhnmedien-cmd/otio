@@ -38,6 +38,7 @@ from otio_app.services.supplement_pipeline import (
     analyze_supplement_asset,
     approve_adobe_candidate,
     extend_folder_inventory,
+    import_manual_supplement_asset,
     mark_edit_plans_stale_for_folder,
     run_coverage_for_folder,
     search_supplement_candidates,
@@ -310,7 +311,7 @@ def render_supplement_assets_page() -> None:
                             f"{len(found)} Kandidat(en) gefunden mit Query: {query}"
                         )
                         st.rerun()
-                except (OSError, ValueError, PermissionError) as exc:
+                except (OSError, ValueError, PermissionError, NotImplementedError) as exc:
                     st.error(str(exc))
             status_message = st.session_state.get(
                 f"supplement_search_status_{request.supplement_request_id}"
@@ -344,7 +345,45 @@ def render_supplement_assets_page() -> None:
                             asset = acquire_supplement_candidate(project, approved, request)
                             st.success(f"Adobe-Asset gespeichert: `{asset.local_path}`")
                             st.rerun()
-                        except (OSError, ValueError, PermissionError) as exc:
+                        except (OSError, ValueError, PermissionError, NotImplementedError) as exc:
+                            st.error(str(exc))
+                elif candidate.provider == SUPPLEMENT_SOURCE_GOOGLE:
+                    st.warning(
+                        "Google Suche ist nur Discovery. Dieses Asset wird nicht automatisch "
+                        "heruntergeladen und darf erst nach Rechteprüfung verwendet werden."
+                    )
+                    if candidate.source_page_url:
+                        st.link_button("Google-Treffer im Browser öffnen", candidate.source_page_url)
+                    if candidate.download_url:
+                        st.caption(f"Gefundene Medien-URL: `{candidate.download_url}`")
+                    st.caption(
+                        "Nächster Schritt: Datei nach Rechteprüfung manuell speichern "
+                        "und als manuelles Supplement-Asset übernehmen."
+                    )
+                    manual_path = st.text_input(
+                        "Lokaler Pfad nach manuellem Download",
+                        key=f"manual_path_{request.supplement_request_id}",
+                        placeholder="/Users/.../Downloads/asset.mp4",
+                    )
+                    rights_ok = st.checkbox(
+                        "Rechte geprüft / Nutzung freigegeben",
+                        key=f"manual_rights_{request.supplement_request_id}",
+                    )
+                    if st.button(
+                        "Manuell heruntergeladene Datei übernehmen",
+                        key=f"manual_import_{request.supplement_request_id}",
+                    ):
+                        try:
+                            imported = import_manual_supplement_asset(
+                                project,
+                                request=request,
+                                source_path=Path(manual_path).expanduser(),
+                                source_url=candidate.source_page_url,
+                                rights_status="APPROVED" if rights_ok else "NEEDS_LICENSE_REVIEW",
+                            )
+                            st.success(f"Manuelles Asset übernommen: `{imported.local_path}`")
+                            st.rerun()
+                        except (OSError, ValueError, PermissionError, NotImplementedError) as exc:
                             st.error(str(exc))
                 elif st.button(
                     "Ausgewähltes Asset herunterladen/generieren",
@@ -354,7 +393,7 @@ def render_supplement_assets_page() -> None:
                         asset = acquire_supplement_candidate(project, candidate, request)
                         st.success(f"Asset gespeichert: `{asset.local_path}`")
                         st.rerun()
-                    except (OSError, ValueError, PermissionError) as exc:
+                    except (OSError, ValueError, PermissionError, NotImplementedError) as exc:
                         st.error(str(exc))
 
     action_col1, action_col2, action_col3 = st.columns(3)

@@ -192,6 +192,29 @@ def _plan_number_setting(project_id: str, suffix: str, default: float) -> float:
     return float(st.session_state.get(f"plan_{suffix}_{project_id}", default))
 
 
+def _number_input_with_seeded_state(
+    label: str,
+    *,
+    key: str,
+    default: float,
+    min_value: float,
+    max_value: float,
+    step: float,
+    help: str | None = None,
+) -> None:
+    kwargs = {
+        "min_value": min_value,
+        "max_value": max_value,
+        "step": step,
+        "key": key,
+    }
+    if help:
+        kwargs["help"] = help
+    if key not in st.session_state:
+        kwargs["value"] = float(default)
+    st.number_input(label, **kwargs)
+
+
 def _seed_timing_widgets(project) -> None:
     """Lädt gespeicherte Export-Timing-Werte in die Widgets (einmalig pro Session)."""
     saved = load_otio_export_settings(project)
@@ -233,27 +256,27 @@ def _render_tab_settings(project) -> None:
     )
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.number_input(
+        _number_input_with_seeded_state(
             "Min. Shot (Sek.)",
-            value=float(DEFAULT_SHOT_MIN_SEC),
+            default=float(DEFAULT_SHOT_MIN_SEC),
             min_value=1.0,
             max_value=30.0,
             step=0.5,
             key=f"plan_min_{project.id}",
         )
     with col2:
-        st.number_input(
+        _number_input_with_seeded_state(
             "Max. Shot (Sek.)",
-            value=float(DEFAULT_SHOT_MAX_SEC),
+            default=float(DEFAULT_SHOT_MAX_SEC),
             min_value=1.0,
             max_value=60.0,
             step=0.5,
             key=f"plan_max_{project.id}",
         )
     with col3:
-        st.number_input(
+        _number_input_with_seeded_state(
             "Audio-Start (+Sek.)",
-            value=float(DEFAULT_AUDIO_OFFSET_SEC),
+            default=float(DEFAULT_AUDIO_OFFSET_SEC),
             min_value=0.0,
             max_value=10.0,
             step=0.5,
@@ -261,9 +284,9 @@ def _render_tab_settings(project) -> None:
             help="Voice-over startet so viele Sekunden nach dem ersten Asset eines Ordners.",
         )
     with col4:
-        st.number_input(
+        _number_input_with_seeded_state(
             "Ordner-Ausklingen (Sek.)",
-            value=float(DEFAULT_SECTION_OUTRO_SEC),
+            default=float(DEFAULT_SECTION_OUTRO_SEC),
             min_value=0.0,
             max_value=30.0,
             step=0.5,

@@ -45,6 +45,7 @@ from otio_app.services.supplement_pipeline import (
     acquire_supplement_candidate,
     analyze_supplement_asset,
     extend_folder_inventory,
+    import_manual_supplement_asset,
     load_sidecar,
     save_sidecar,
     search_supplement_candidates,
@@ -177,7 +178,6 @@ def test_adobe_not_licensed_without_approval(tmp_path: Path) -> None:
 
 
 def test_google_candidate_needs_license_review(tmp_path: Path) -> None:
-    project = _project(tmp_path)
     request = SupplementRequest(
         supplement_request_id="supp_req_google",
         section_id="section_antelope_canyon",
@@ -189,26 +189,49 @@ def test_google_candidate_needs_license_review(tmp_path: Path) -> None:
     from otio_app.services.supplement_sources.google_search import GoogleSearchAdapter
 
     candidate = GoogleSearchAdapter().search(request)[0]
-    dest = project.project_root_path / "Antelope Canyon" / "_supplemental" / "_google_search"
-    with patch(
-        "otio_app.services.supplement_sources.google_search.GoogleSearchAdapter.acquire"
-    ) as mock_acquire:
-        from otio_app.analysis_models import SupplementAssetSidecar
-        from otio_app.services.supplement_sources.base import SupplementAsset
+    assert "Rechteprüfung" in candidate.license
+    assert candidate.requires_user_approval is True
 
-        local = dest / "img.jpg"
-        local.parent.mkdir(parents=True)
-        local.write_bytes(b"j")
-        sidecar = SupplementAssetSidecar(
-            asset_id="asset_google_1",
-            supplement_request_id=request.supplement_request_id,
-            provider=SUPPLEMENT_SOURCE_GOOGLE,
-            local_path=str(local),
-            rights_status=RIGHTS_STATUS_NEEDS_LICENSE_REVIEW,
-        )
-        mock_acquire.return_value = SupplementAsset(local_path=local, sidecar=sidecar)
-        asset = acquire_supplement_candidate(project, candidate, request)
-    assert asset.sidecar.rights_status == RIGHTS_STATUS_NEEDS_LICENSE_REVIEW
+
+def test_google_candidate_is_discovery_only(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_google_discovery",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat_003",
+        passage_text="Test",
+        selected_source=SUPPLEMENT_SOURCE_GOOGLE,
+    )
+    from otio_app.services.supplement_sources.google_search import GoogleSearchAdapter
+
+    candidate = GoogleSearchAdapter().search(request)[0]
+    with pytest.raises(PermissionError, match="Discovery"):
+        acquire_supplement_candidate(project, candidate, request)
+
+
+def test_manual_import_creates_sidecar(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    source = tmp_path / "downloaded.mp4"
+    source.write_bytes(b"manual")
+    request = SupplementRequest(
+        supplement_request_id="supp_req_manual",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat_003",
+        passage_text="Test",
+    )
+    asset = import_manual_supplement_asset(
+        project,
+        request=request,
+        source_path=source,
+        source_url="https://example.com/source",
+        rights_status=RIGHTS_STATUS_APPROVED,
+    )
+    assert asset.local_path.is_file()
+    assert asset.sidecar.provider == "manual"
+    assert asset.sidecar.rights_status == RIGHTS_STATUS_APPROVED
+    assert load_sidecar(asset.local_path) is not None
 
 
 def test_nano_banana_stores_prompt_metadata(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -141,8 +142,10 @@ def acquire_supplement_candidate(
     elif candidate.provider == SUPPLEMENT_SOURCE_NANO_BANANA:
         asset = adapter.generate(request, destination)
     elif candidate.provider == SUPPLEMENT_SOURCE_GOOGLE:
-        asset = adapter.acquire(candidate, destination)
-        asset.sidecar.rights_status = RIGHTS_STATUS_NEEDS_LICENSE_REVIEW
+        raise PermissionError(
+            "Google Search ist nur Discovery. Bitte Treffer öffnen, Rechte prüfen "
+            "und die Datei anschließend manuell als Supplement-Asset übernehmen."
+        )
     elif candidate.provider == SUPPLEMENT_SOURCE_MANUAL:
         raise ValueError("Manueller Modus: bitte lokales Asset im Schnittplan akzeptieren.")
     else:
@@ -159,6 +162,52 @@ def acquire_supplement_candidate(
         selected_source=candidate.provider,
     )
     return SupplementAsset(local_path=asset.local_path, sidecar=sidecar)
+
+
+def import_manual_supplement_asset(
+    project: Project,
+    *,
+    request: SupplementRequest,
+    source_path: Path,
+    source_url: str = "",
+    rights_status: str = RIGHTS_STATUS_NEEDS_LICENSE_REVIEW,
+) -> SupplementAsset:
+    """Übernimmt eine manuell beschaffte Datei ins passende Supplement-Verzeichnis."""
+    if not source_path.is_file():
+        raise FileNotFoundError(f"Manuelles Supplement-Asset nicht gefunden: {source_path}")
+
+    destination = _destination_folder(project, request.folder_name, SUPPLEMENT_SOURCE_MANUAL)
+    destination.mkdir(parents=True, exist_ok=True)
+    safe_stem = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "_"
+        for char in source_path.stem
+    ).strip("_") or "manual_asset"
+    filename = f"{request.supplement_request_id}_manual_{safe_stem}{source_path.suffix.lower()}"
+    local_path = destination / filename
+    shutil.copy2(source_path, local_path)
+
+    sidecar = SupplementAssetSidecar(
+        asset_id=f"asset_manual_{request.supplement_request_id}",
+        supplement_request_id=request.supplement_request_id,
+        provider=SUPPLEMENT_SOURCE_MANUAL,
+        provider_asset_id=source_path.stem,
+        source_url=source_url,
+        acquisition_method="manual_import",
+        downloaded_at=datetime.now(timezone.utc),
+        original_filename=source_path.name,
+        local_path=str(local_path),
+        file_hash=_file_hash(local_path),
+        rights_status=rights_status,
+        approval_status="MANUAL_IMPORTED",
+    )
+    save_sidecar(sidecar)
+    update_request(
+        project,
+        request.supplement_request_id,
+        status="ACQUIRED",
+        selected_source=SUPPLEMENT_SOURCE_MANUAL,
+    )
+    return SupplementAsset(local_path=local_path, sidecar=sidecar)
 
 
 def analyze_supplement_asset(
