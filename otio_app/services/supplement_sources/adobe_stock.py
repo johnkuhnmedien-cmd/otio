@@ -8,6 +8,7 @@ from pathlib import Path
 
 from otio_app.analysis_models import SupplementAssetSidecar, SupplementCandidate, SupplementRequest
 from otio_app.defaults import RIGHTS_STATUS_NEEDS_LICENSE_REVIEW, SUPPLEMENT_SOURCE_ADOBE
+from otio_app.services.supplement_search import preferred_search_query
 from otio_app.services.supplement_sources.base import SupplementAsset, SupplementSourceAdapter
 
 
@@ -15,7 +16,7 @@ class AdobeStockAdapter(SupplementSourceAdapter):
     provider = SUPPLEMENT_SOURCE_ADOBE
 
     def search(self, request: SupplementRequest) -> list[SupplementCandidate]:
-        query = request.visual_requirement[:80] or request.passage_text[:80]
+        query = preferred_search_query(request)
         return [
             SupplementCandidate(
                 candidate_id=f"cand_{uuid.uuid4().hex[:8]}",

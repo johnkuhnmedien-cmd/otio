@@ -17,6 +17,7 @@ from otio_app.defaults import DEFAULT_COVERAGE_THRESHOLD
 from otio_app.models import Project
 from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.generic_outro_selector import section_id_for_folder
+from otio_app.services.supplement_search import build_keyword_query
 
 
 COVERAGE_LOCAL_GOOD = "LOCAL_GOOD"
@@ -145,6 +146,11 @@ def coverage_to_supplement_request(
         f"Lokale Assets unzureichend (Score {coverage.best_local_match_score:.2f}). "
         f"Benötigt: {coverage.visual_requirement[:120]}"
     )
+    keyword_query = build_keyword_query(
+        folder_name=coverage.folder_name,
+        visual_requirement=coverage.visual_requirement,
+        passage_text=coverage.passage_text,
+    )
     return SupplementRequest(
         supplement_request_id=request_id or f"supp_req_{uuid.uuid4().hex[:8]}",
         section_id=section_id_for_folder(coverage.folder_name),
@@ -158,7 +164,7 @@ def coverage_to_supplement_request(
         local_best_match_score=coverage.best_local_match_score,
         search_queries={
             "de": [coverage.visual_requirement[:120]],
-            "en": [],
+            "en": [keyword_query],
         },
         created_at=now,
         updated_at=now,

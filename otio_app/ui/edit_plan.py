@@ -46,6 +46,7 @@ from otio_app.services.opening_title_renderer import (
 )
 from otio_app.services.supplement_coverage import COVERAGE_SUPPLEMENT_REQUIRED
 from otio_app.services.supplement_pipeline import search_supplement_candidates
+from otio_app.services.supplement_search import request_with_keyword_query
 from otio_app.services.supplement_requests import load_supplement_requests, update_request, upsert_requests
 from otio_app.services.title_style import extract_title_style
 from otio_app.services.timeline_plan_builder import build_voiceover_plan
@@ -666,6 +667,7 @@ def _render_tab_review(
                             selected_source=source,
                             status="SOURCE_SELECTED",
                         )
+                    request = request_with_keyword_query(request)
                     requests.append(request)
                 upsert_requests(project, requests)
 

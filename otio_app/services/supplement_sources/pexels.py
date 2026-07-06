@@ -13,6 +13,7 @@ from pathlib import Path
 from otio_app.analysis_models import SupplementAssetSidecar, SupplementCandidate, SupplementRequest
 from otio_app.defaults import RIGHTS_STATUS_APPROVED, SUPPLEMENT_SOURCE_PEXELS
 from otio_app.services.api_keys import get_api_key
+from otio_app.services.supplement_search import preferred_search_query
 from otio_app.services.supplement_sources.base import SupplementAsset, SupplementSourceAdapter
 
 
@@ -20,7 +21,7 @@ class PexelsAdapter(SupplementSourceAdapter):
     provider = SUPPLEMENT_SOURCE_PEXELS
 
     def search(self, request: SupplementRequest) -> list[SupplementCandidate]:
-        query = request.visual_requirement[:80] or request.passage_text[:80]
+        query = preferred_search_query(request)
         api_key = get_api_key("PEXELS_API_KEY")
         if api_key:
             try:

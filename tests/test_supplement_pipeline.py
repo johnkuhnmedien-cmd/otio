@@ -50,6 +50,7 @@ from otio_app.services.supplement_pipeline import (
     search_supplement_candidates,
 )
 from otio_app.services.supplement_requests import load_supplement_requests, upsert_requests
+from otio_app.services.supplement_search import build_keyword_query
 from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
 from otio_app.services.supplement_sources.pexels import PexelsAdapter
 
@@ -337,6 +338,17 @@ def test_search_stores_candidates(tmp_path: Path) -> None:
     assert found
     loaded = load_supplement_requests(project)
     assert loaded.candidates
+
+
+def test_keyword_query_prefers_short_visual_terms() -> None:
+    query = build_keyword_query(
+        folder_name="Antelope Canyon",
+        visual_requirement="Ein Mensch steht in engen Felsspalten mit Licht.",
+        passage_text="Wegen der spirituellen Bedeutung führen Navajo-Guides durch die engen Gänge.",
+    )
+    assert query.startswith("Antelope Canyon")
+    assert "narrow" in query
+    assert "light" in query
 
 
 def test_timeline_google_rights_blocks_validation() -> None:

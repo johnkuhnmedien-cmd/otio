@@ -6,6 +6,7 @@ import uuid
 
 from otio_app.analysis_models import SupplementCandidate, SupplementRequest
 from otio_app.defaults import SUPPLEMENT_SOURCE_GOOGLE
+from otio_app.services.supplement_search import preferred_search_query
 from otio_app.services.supplement_sources.base import SupplementSourceAdapter
 
 
@@ -13,7 +14,7 @@ class GoogleSearchAdapter(SupplementSourceAdapter):
     provider = SUPPLEMENT_SOURCE_GOOGLE
 
     def search(self, request: SupplementRequest) -> list[SupplementCandidate]:
-        query = request.visual_requirement[:80] or request.passage_text[:80]
+        query = preferred_search_query(request)
         return [
             SupplementCandidate(
                 candidate_id=f"cand_{uuid.uuid4().hex[:8]}",
@@ -32,7 +33,7 @@ class GoogleSearchAdapter(SupplementSourceAdapter):
                 requires_purchase=False,
                 requires_user_approval=True,
                 match_score=0.55,
-                match_reason="Google Discovery — Rechteprüfung nötig",
+                match_reason=f"Google Discovery für Query: {query} — Rechteprüfung nötig",
                 status="CANDIDATE",
             )
         ]

@@ -100,5 +100,5 @@ def pending_supplement_count(document: SupplementRequestsDocument) -> int:
     return sum(
         1
         for entry in document.requests
-        if entry.status in {"PENDING_SOURCE_SELECTION", "SUPPLEMENT_REQUIRED"}
+        if entry.status not in {"ACQUIRED", "DOWNLOADED", "GENERATED", "CANCELLED"}
     )

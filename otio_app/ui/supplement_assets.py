@@ -42,6 +42,7 @@ from otio_app.services.supplement_pipeline import (
     run_coverage_for_folder,
     search_supplement_candidates,
 )
+from otio_app.services.supplement_search import preferred_search_query, request_with_keyword_query
 from otio_app.services.supplement_requests import (
     load_supplement_requests,
     pending_supplement_count,
@@ -114,6 +115,21 @@ def _materialize_requests_from_plan(project, folder_name: str) -> int:
                     ),
                     local_best_asset_id=shot.asset_id,
                     local_best_match_score=0.0,
+                search_queries={
+                    "en": [
+                        preferred_search_query(
+                            SupplementRequest(
+                                supplement_request_id=request_id,
+                                section_id=section_id_for_folder(folder_name),
+                                folder_name=folder_name,
+                                beat_id=shot.beat_id or f"shot_{index:03d}",
+                                passage_text=passage,
+                                visual_requirement=shot.motif or passage,
+                            )
+                        )
+                    ],
+                    "de": [shot.motif or passage],
+                },
                     status="PENDING_SOURCE_SELECTION",
                 )
             )
@@ -242,6 +258,14 @@ def render_supplement_assets_page() -> None:
                 f"Dauer {request.duration_needed_sec:.1f}s"
             )
             st.caption(f"**Warum unzureichend:** {request.reason}")
+            query_key = f"search_query_{request.supplement_request_id}"
+            query = st.text_input(
+                "Suchbegriffe",
+                value=preferred_search_query(request),
+                key=query_key,
+                help="Kurze Keywords funktionieren besser als ganze Sätze, z. B. Antelope Canyon narrow light.",
+            )
+            st.caption(f"Verwendete Query: `{query}`")
 
             source = st.selectbox(
                 "Quelle",
@@ -264,21 +288,35 @@ def render_supplement_assets_page() -> None:
                 for candidate in document.candidates
                 if candidate.supplement_request_id == request.supplement_request_id
             ]
+            if request.status == "CANDIDATES_FOUND":
+                st.success(f"{len(candidates)} Kandidat(en) gefunden.")
+            elif candidates:
+                st.info(f"{len(candidates)} gespeicherte Kandidat(en) vorhanden.")
             if st.button("Supplement-Kandidaten suchen", key=f"search_{request.supplement_request_id}"):
                 try:
+                    request_for_search = request_with_keyword_query(request, query)
                     updated = update_request(
                         project,
                         request.supplement_request_id,
                         selected_source=source,
+                        search_queries=request_for_search.search_queries,
+                        status="SOURCE_SELECTED",
                     )
                     if updated is None:
                         st.error("Request nicht gefunden.")
                     else:
                         found = search_supplement_candidates(project, updated)
-                        st.success(f"{len(found)} Kandidat(en) gefunden.")
+                        st.session_state[f"supplement_search_status_{request.supplement_request_id}"] = (
+                            f"{len(found)} Kandidat(en) gefunden mit Query: {query}"
+                        )
                         st.rerun()
                 except (OSError, ValueError, PermissionError) as exc:
                     st.error(str(exc))
+            status_message = st.session_state.get(
+                f"supplement_search_status_{request.supplement_request_id}"
+            )
+            if status_message:
+                st.success(status_message)
 
             if candidates:
                 labels = [
