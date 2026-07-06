@@ -58,6 +58,7 @@ from otio_app.services.frame_extract import extract_frames
 from otio_app.services.gemini_client import (
     GeminiNotConfiguredError,
     describe_media_from_frames,
+    get_default_gemini_model,
     is_gemini_configured,
     validate_supplement_asset_match,
 )
@@ -419,8 +420,16 @@ def acquire_top_candidates_for_folder(
 ) -> list[dict]:
     """Sucht und lädt für jede offene Supplement-Anfrage eines Ordners automatisch
     bis zu ``max_per_request`` Kandidaten herunter (Standard: Pexels, da aktuell
-    der einzige produktive Provider). Requests mit bereits gewählter anderer
-    Quelle oder bereits vorhandenem Asset werden übersprungen, nicht überschrieben."""
+    der einzige produktive Provider). Requests mit bereits vorhandenem Asset
+    werden übersprungen, nicht überschrieben.
+
+    Hinweis: ``selected_source`` wird hier bewusst NICHT als Ausschlusskriterium
+    verwendet — solange kein Asset erfolgreich übernommen wurde (Status noch
+    PENDING_SOURCE_SELECTION/SOURCE_SELECTED/CANDIDATES_FOUND/ACQUIRE_FAILED),
+    gilt die Quelle nicht als endgültig festgelegt, und der Auto-Download darf
+    trotzdem laufen. Andernfalls würden z. B. durch das bloße Öffnen eines
+    anderen Tabs verursachte Altdaten einzelne Requests fälschlich blockieren.
+    """
     document = load_supplement_requests(project)
     folder_requests = [entry for entry in document.requests if entry.folder_name == folder_name]
     skip_statuses = {
@@ -438,18 +447,6 @@ def acquire_top_candidates_for_folder(
                     "supplement_request_id": request.supplement_request_id,
                     "skipped": True,
                     "reason": f"Bereits Asset vorhanden (Status {request.status}).",
-                    "downloaded": 0,
-                    "candidates_found": 0,
-                    "errors": [],
-                }
-            )
-            continue
-        if request.selected_source and request.selected_source != provider:
-            results.append(
-                {
-                    "supplement_request_id": request.supplement_request_id,
-                    "skipped": True,
-                    "reason": f"Andere Quelle bereits gewählt ({request.selected_source}).",
                     "downloaded": 0,
                     "candidates_found": 0,
                     "errors": [],
@@ -636,6 +633,7 @@ def analyze_supplement_asset(
     )
     frame_count = 1 if is_image_media(local_path) else max(1, project.frames_per_shot)
     frames = extract_frames(local_path, frames_dir, frame_count)
+    gemini_model = get_default_gemini_model()
     description = ""
     if frames and is_gemini_configured():
         description = describe_media_from_frames(
@@ -643,7 +641,7 @@ def analyze_supplement_asset(
             folder_name,
             frames,
             language,
-            model=project.gemini_model,
+            model=gemini_model,
         )
     elif frames:
         description = f"Supplement-Asset {local_path.name}"
@@ -660,7 +658,7 @@ def analyze_supplement_asset(
         description=description,
         request=source_request,
         language=language,
-        model=project.gemini_model if is_gemini_configured() else None,
+        model=gemini_model if is_gemini_configured() else None,
     )
     validation_status = validation["status"]
     validation_score = validation["score"]
@@ -686,7 +684,7 @@ def analyze_supplement_asset(
         generated_prompt=sidecar.prompt,
         search_query=sidecar.search_query,
         analysis_status="complete" if description and frames else "failed",
-        description_model=project.gemini_model if is_gemini_configured() else "",
+        description_model=gemini_model if is_gemini_configured() else "",
         description_prompt_version="supplement_v1",
         description_generated_at=datetime.now(timezone.utc),
     )

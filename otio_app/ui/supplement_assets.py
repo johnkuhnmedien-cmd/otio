@@ -525,11 +525,12 @@ def _render_source_tab(
     readiness: ProviderReadiness,
     document: SupplementRequestsDocument,
 ) -> None:
-    update_request(
-        project,
-        request.supplement_request_id,
-        selected_source=request.selected_source or provider,
-    )
+    # Wichtig: st.tabs() rendert ALLE Tab-Inhalte im selben Skriptlauf (nicht nur
+    # den sichtbaren Tab). `selected_source` darf deshalb NICHT als Nebeneffekt des
+    # bloßen Renderns gesetzt werden — sonst gewinnt immer der zuletzt gerenderte
+    # Tab (z. B. "manual") und überschreibt eine zuvor bewusst gewählte Quelle wie
+    # "pexels". Das Setzen von selected_source passiert ausschließlich durch
+    # explizite Nutzeraktionen (Suchen/Download-Button).
     if provider == SUPPLEMENT_SOURCE_PEXELS:
         _render_pexels_tab(project, request, readiness, document)
     elif provider == SUPPLEMENT_SOURCE_GOOGLE:

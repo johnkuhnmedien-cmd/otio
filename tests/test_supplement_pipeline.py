@@ -412,6 +412,49 @@ def test_pexels_ui_default_query_uses_short_location_query() -> None:
     assert _default_query_for_provider(request, SUPPLEMENT_SOURCE_PEXELS) == "Antelope Canyon person narrow slot canyon"
 
 
+def test_pexels_search_caps_candidates_at_three(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pro Szene/Request duerfen hoechstens 3 Kandidaten zur Auswahl stehen."""
+    monkeypatch.setenv("PEXELS_API_KEY", "test-key")
+
+    def make_video(video_id: int) -> bytes:
+        return (
+            b'{"id":%d,"url":"https://www.pexels.com/video/%d","image":"https://images.pexels.com/p.jpg",'
+            b'"width":1920,"height":1080,"duration":10,'
+            b'"user":{"name":"Creator","url":"https://www.pexels.com/@creator"},'
+            b'"video_files":[{"id":1,"quality":"hd","file_type":"video/mp4","width":1920,"height":1080,'
+            b'"fps":30,"link":"https://videos.pexels.com/%d.mp4"}]}' % (video_id, video_id, video_id)
+        )
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            videos = b",".join(make_video(i) for i in range(6))
+            return b'{"videos":[' + videos + b"]}"
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: FakeResponse())
+    request = SupplementRequest(
+        supplement_request_id="supp_req_cap",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        location_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        visual_requirement="Antelope Canyon",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+        required_asset_type="video",
+    )
+    candidates = PexelsAdapter().search(request)
+    assert len(candidates) == 3
+
+
 def test_pexels_rejects_portrait_video(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PEXELS_API_KEY", "test-key")
 
@@ -1245,22 +1288,44 @@ def test_acquire_top_candidates_for_folder_skips_already_acquired(tmp_path: Path
     assert summary[0]["skipped"] is True
 
 
-def test_acquire_top_candidates_for_folder_skips_other_selected_source(tmp_path: Path) -> None:
+def test_acquire_top_candidates_for_folder_processes_stale_selected_source(tmp_path: Path) -> None:
+    """Regression: st.tabs() rendert alle Tabs im selben Skriptlauf, wodurch
+    selected_source frueher auf den zuletzt gerenderten Tab (z. B. 'manual')
+    ueberschrieben wurde, obwohl kein Asset uebernommen wurde. Solche Requests
+    duerfen vom Ordner-Auto-Download nicht faelschlich uebersprungen werden."""
     project = _project(tmp_path)
     request = SupplementRequest(
-        supplement_request_id="supp_req_folder_other",
+        supplement_request_id="supp_req_folder_stale",
         section_id="section_antelope_canyon",
         folder_name="Antelope Canyon",
         beat_id="beat",
         passage_text="Test",
         selected_source=SUPPLEMENT_SOURCE_GOOGLE,
+        status="PENDING_SOURCE_SELECTION",
     )
     upsert_requests(project, [request])
 
-    summary = acquire_top_candidates_for_folder(project, "Antelope Canyon", max_per_request=3)
+    def fake_search(_project, req):
+        return [_pexels_candidate(0)]
+
+    with patch.object(PexelsAdapter, "readiness") as mock_readiness, patch(
+        "otio_app.services.supplement_pipeline.search_supplement_candidates",
+        side_effect=fake_search,
+    ), patch.object(PexelsAdapter, "acquire") as mock_acquire:
+        from otio_app.services.supplement_sources.base import ProviderReadiness
+
+        mock_readiness.return_value = ProviderReadiness(
+            provider=SUPPLEMENT_SOURCE_PEXELS,
+            status="READY",
+            message="ok",
+            acquire_enabled=True,
+        )
+        mock_acquire.side_effect = lambda candidate, _dest: _mock_asset_for_candidate(candidate, tmp_path)
+        summary = acquire_top_candidates_for_folder(project, "Antelope Canyon", max_per_request=3)
+
     assert len(summary) == 1
-    assert summary[0]["skipped"] is True
-    assert "Quelle" in summary[0]["reason"]
+    assert summary[0]["skipped"] is False
+    assert summary[0]["downloaded"] == 1
 
 
 def test_keyword_query_prefers_short_visual_terms() -> None:

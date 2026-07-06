@@ -35,6 +35,8 @@ PEXELS_VIDEO_SEARCH_ENDPOINT = "https://api.pexels.com/v1/videos/search"
 PEXELS_PHOTO_SEARCH_ENDPOINT = "https://api.pexels.com/v1/search"
 MIN_DOWNLOAD_BYTES = 100 * 1024
 TARGET_VIDEO_ASPECT_RATIO = 16 / 9
+# Pro Szene/Request soll die UI höchstens diese Anzahl an Kandidaten zur Auswahl anbieten.
+MAX_CANDIDATES_PER_REQUEST = 3
 # Pexels/Cloudflare blockiert den Standard-Python-User-Agent (HTTP 403, error code 1010).
 # Ein normaler Browser-User-Agent verhindert diese Bot-Signatur-Sperre.
 PEXELS_REQUEST_USER_AGENT = (
@@ -86,10 +88,10 @@ class PexelsAdapter(SupplementSourceAdapter):
             ]
             if mode == "video":
                 self._finalize_debug(candidates)
-                return candidates
+                return self._cap_candidates(candidates)
             if mode == "video_preferred" and productive_videos:
                 self._finalize_debug(candidates)
-                return candidates
+                return self._cap_candidates(candidates)
 
         if mode in {"image", "image_preferred", "video_preferred", "any"}:
             candidates.extend(self._search_photos(request, api_key))
@@ -98,7 +100,22 @@ class PexelsAdapter(SupplementSourceAdapter):
             candidates.extend(self._search_videos(request, api_key))
 
         self._finalize_debug(candidates)
-        return candidates
+        return self._cap_candidates(candidates)
+
+    def _cap_candidates(
+        self,
+        candidates: list[SupplementCandidate],
+        *,
+        max_count: int = MAX_CANDIDATES_PER_REQUEST,
+    ) -> list[SupplementCandidate]:
+        """Begrenzt die Auswahl pro Szene auf ``max_count`` Kandidaten — echte,
+        downloadbare Treffer mit passendem Ort werden bevorzugt, damit ein
+        verworfener/nicht-16:9-Kandidat nicht einen guten Treffer verdrängt."""
+        eligible = [
+            c for c in candidates if c.download_enabled and c.location_match != "missing"
+        ]
+        others = [c for c in candidates if c not in eligible]
+        return (eligible + others)[:max_count]
 
     def _empty_debug(self, request: SupplementRequest, mode: str) -> dict:
         return {
