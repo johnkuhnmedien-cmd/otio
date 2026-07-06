@@ -209,7 +209,9 @@ def _render_tab_settings(project) -> None:
     st.caption(
         "Min./Max. Shot und Gemini-Modell gelten beim **Schnittplan vorschlagen**. "
         "**Audio-Start** und **Ordner-Ausklingen** werden erst beim **OTIO-Export** "
-        "auf die Timeline angewendet — nicht an Gemini übergeben."
+        "auf die Timeline angewendet — nicht an Gemini übergeben. "
+        "Ausklingen nutzt ein **Generic-Asset** (`Generic/generic.mp4` im Projektordner) "
+        "nach dem letzten Wort; Schnittplan-Shots bleiben dabei ≤ Max.-Shot."
     )
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -431,6 +433,7 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
         "Orte und Timing wählen, dann **OTIO exportieren** — Vorschau ist optional. "
         f"Audio-Start und Ausklingen aus Tab **Regeln → Timing & Gemini** "
         f"({export_timing.audio_offset_sec}s / {export_timing.section_outro_sec}s). "
+        f"Ausklingen: Generic-Clip nach letztem Wort (`Generic/generic.mp4`). "
         f"Ziel: `{default_export_path}` · "
         f"Einstellungen: `{project.work_dir_path / 'otio_export_settings.json'}`"
     )

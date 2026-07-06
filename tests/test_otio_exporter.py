@@ -63,6 +63,10 @@ def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
     Path(voice_a).write_bytes(b"wav")
     Path(voice_b).write_bytes(b"wav")
 
+    generic_dir = tmp_path / "USA" / "Generic"
+    generic_dir.mkdir(parents=True, exist_ok=True)
+    (generic_dir / "generic.mp4").write_bytes(b"mp4")
+
     mapping = VoiceFolderMappingDocument(
         project_id=project.id,
         confirmed=True,
@@ -130,6 +134,7 @@ def test_timeline_sections_include_outro_and_per_section_voice_offset(tmp_path: 
     assert sections[0].video_start_sec == 0.0
     assert sections[0].video_duration_sec == 11.0
     assert sections[0].voice_start_sec == 1.0
+    assert sections[0].voice_play_duration_sec == 5.0
     assert sections[1].video_start_sec == 11.0
     assert sections[1].video_duration_sec == 8.0
     assert sections[1].voice_start_sec == 12.0
@@ -148,8 +153,11 @@ def test_clip_durations_use_seconds_not_frames(tmp_path: Path) -> None:
     video_track = timeline.tracks[0]
     clips = [item for item in video_track if isinstance(item, otio.schema.Clip)]
     assert clips[0].source_range.duration.to_seconds() == 3.0
-    assert clips[1].source_range.duration.to_seconds() == 8.0
-    assert clips[2].source_range.duration.to_seconds() == 8.0
+    assert clips[1].source_range.duration.to_seconds() == 3.0
+    assert clips[2].name == "generic.mp4"
+    assert clips[2].source_range.duration.to_seconds() == 5.0
+    assert clips[3].source_range.duration.to_seconds() == 3.0
+    assert clips[4].source_range.duration.to_seconds() == 5.0
     assert clips[0].name == "Florida_Keys_1.mp4"
     assert clips[0].media_reference.target_url.startswith("/")
 
@@ -168,11 +176,11 @@ def test_audio_offset_and_outro_on_export(tmp_path: Path) -> None:
 
     florida_audio = timeline.tracks[1]
     assert florida_audio[0].source_range.duration.to_seconds() == 1.0
-    assert florida_audio[1].source_range.duration.to_seconds() == 10.0
+    assert florida_audio[1].source_range.duration.to_seconds() == 5.0
 
     canyon_audio = timeline.tracks[2]
     assert canyon_audio[0].source_range.duration.to_seconds() == 12.0
-    assert canyon_audio[1].source_range.duration.to_seconds() == 7.0
+    assert canyon_audio[1].source_range.duration.to_seconds() == 2.0
 
 
 def test_video_section_padded_when_media_shorter_than_planned(tmp_path: Path) -> None:
@@ -196,10 +204,12 @@ def test_video_section_padded_when_media_shorter_than_planned(tmp_path: Path) ->
 
     video_track = timeline.tracks[0]
     gaps = [item for item in video_track if isinstance(item, otio.schema.Gap)]
-    assert not any("Ausklingen" in gap.name for gap in gaps)
+    assert not gaps
     clips = [item for item in video_track if isinstance(item, otio.schema.Clip)]
-    assert clips[1].source_range.duration.to_seconds() > 8.0
-    assert clips[2].source_range.duration.to_seconds() == 8.0
+    assert clips[1].source_range.duration.to_seconds() <= 2.0
+    assert clips[2].name == "generic.mp4"
+    assert clips[2].source_range.duration.to_seconds() >= 5.0
+    assert clips[4].source_range.duration.to_seconds() >= 5.0
     total_video = sum(item.source_range.duration.to_seconds() for item in video_track)
     assert total_video == 19.0
 
