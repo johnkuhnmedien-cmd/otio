@@ -77,7 +77,7 @@ def _shot_to_timeline_item(
         section_id=section_id,
         folder_name=shot.folder,
         voice_file=shot.voice_file,
-        asset_id=asset_id_for_path(asset_path) if asset_path else "",
+        asset_id=shot.asset_id or (asset_id_for_path(asset_path) if asset_path else ""),
         shot_id=f"shot_{item_index:03d}",
         resolved_media_path=asset_path,
         original_asset_path=asset_path or None,
@@ -311,15 +311,13 @@ def build_timeline_items_for_folder(
     max_asset_usage: int | None = None,
 ) -> tuple[list[TimelineItem], VoiceoverPlan, list[str]]:
     """Baut alle Timeline-Items einer Sektion (Titel + Narration + Filler + Outro)."""
-    from otio_app.services.asset_usage import usage_count_by_asset_id_from_shots
-
     errors: list[str] = []
     section_id = section_id_for_folder(folder_name)
     items: list[TimelineItem] = []
     cursor = 0.0
     used_paths: set[str] = set()
     last_path: str | None = None
-    usage = dict(usage_by_asset_id or usage_count_by_asset_id_from_shots(narration_shots))
+    usage = dict(usage_by_asset_id or {})
 
     if opening_title_enabled and work_dir is not None and project is not None:
         from otio_app.services.opening_title_renderer import build_opening_title_item
@@ -440,6 +438,12 @@ def shots_from_timeline_items(items: list[TimelineItem]) -> list[EditPlanShot]:
                     duration_sec=item.duration_sec,
                     asset_path=item.resolved_media_path or None,
                     asset_source=item.media_source_type,
+                    asset_id=item.asset_id,
+                    asset_origin=item.asset_origin,
+                    supplement_request_id=item.supplement_request_id,
+                    rights_status=item.rights_status,
+                    source_url=item.source_url,
+                    provider=item.provider,
                     motif=item.motif,
                     passage_text=item.passage_text,
                     section_outro=True,
@@ -455,6 +459,12 @@ def shots_from_timeline_items(items: list[TimelineItem]) -> list[EditPlanShot]:
                     duration_sec=item.duration_sec,
                     asset_path=item.resolved_media_path or None,
                     asset_source=item.media_source_type,
+                    asset_id=item.asset_id,
+                    asset_origin=item.asset_origin,
+                    supplement_request_id=item.supplement_request_id,
+                    rights_status=item.rights_status,
+                    source_url=item.source_url,
+                    provider=item.provider,
                     motif=item.motif,
                     passage_text=item.passage_text,
                     confidence=str(item.confidence) if item.confidence else None,

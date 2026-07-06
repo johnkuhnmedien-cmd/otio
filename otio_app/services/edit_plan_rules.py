@@ -415,6 +415,7 @@ def apply_edit_plan_rules(
             shot.model_copy(
                 update={
                     "asset_path": chosen,
+                    "asset_id": asset_id_for_path(chosen) if chosen else "",
                     "asset_source": "local" if chosen else "missing",
                 }
             )

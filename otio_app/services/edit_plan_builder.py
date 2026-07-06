@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from enum import Enum
 from pathlib import Path
 
@@ -38,7 +39,6 @@ from otio_app.services.edit_plan_rules import (
 from otio_app.services.asset_usage import (
     filter_assets_by_usage,
     max_asset_usage_limit,
-    usage_count_by_asset_id_from_shots,
 )
 from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.gemini_client import GeminiNotConfiguredError, plan_passage_assets
@@ -357,10 +357,6 @@ def build_edit_plan(
                 elif asset_path:
                     asset_id = asset_id_for_path(asset_path)
                     asset_source = FALLBACK_SOURCE_LOCAL
-                if asset_id:
-                    usage_by_folder[folder_name][asset_id] = (
-                        usage_by_folder[folder_name].get(asset_id, 0) + 1
-                    )
                 timed_parts.append(
                     TimedPart(
                         text=str(part.get("text", "")).strip(),
@@ -383,6 +379,42 @@ def build_edit_plan(
                     (asset for asset in asset_payload if asset["path"] == part.asset_path),
                     None,
                 )
+                asset_id = ""
+                asset_origin = ""
+                supplement_request_id = ""
+                rights_status = ""
+                source_url = ""
+                provider = ""
+                if meta is not None:
+                    asset_id = str(meta.get("asset_id", ""))
+                    asset_origin = str(meta.get("asset_origin", ""))
+                    supplement_request_id = str(meta.get("supplement_request_id", ""))
+                    rights_status = str(meta.get("rights_status", ""))
+                    source_url = str(meta.get("source_url", ""))
+                    provider = str(meta.get("provider", ""))
+                elif part.asset_path:
+                    asset_id = asset_id_for_path(part.asset_path)
+
+                if (
+                    asset_id
+                    and max_count is not None
+                    and usage_by_folder[folder_name].get(asset_id, 0) >= max_count
+                ):
+                    part = dataclass_replace(part, asset_path=None)
+                    source = FALLBACK_SOURCE_MISSING
+                    meta = None
+                    asset_id = ""
+                    asset_origin = ""
+                    supplement_request_id = ""
+                    rights_status = ""
+                    source_url = ""
+                    provider = ""
+
+                if asset_id:
+                    usage_by_folder[folder_name][asset_id] = (
+                        usage_by_folder[folder_name].get(asset_id, 0) + 1
+                    )
+
                 shots.append(
                     EditPlanShot(
                         voice_file=voice_path,
@@ -392,14 +424,12 @@ def build_edit_plan(
                         duration_sec=max(0.0, part.end_sec - part.start_sec),
                         asset_path=part.asset_path,
                         asset_source=meta.get("asset_origin", source) if meta else source,
-                        asset_id=meta.get("asset_id", "") if meta else (
-                            asset_id_for_path(part.asset_path) if part.asset_path else ""
-                        ),
-                        asset_origin=meta.get("asset_origin", "") if meta else "",
-                        supplement_request_id=meta.get("supplement_request_id", "") if meta else "",
-                        rights_status=meta.get("rights_status", "") if meta else "",
-                        source_url=meta.get("source_url", "") if meta else "",
-                        provider=meta.get("provider", "") if meta else "",
+                        asset_id=asset_id,
+                        asset_origin=asset_origin,
+                        supplement_request_id=supplement_request_id,
+                        rights_status=rights_status,
+                        source_url=source_url,
+                        provider=provider,
                         motif=part.motif,
                         passage_text=part.text,
                         confidence=part.confidence,
@@ -439,7 +469,7 @@ def build_edit_plan(
             opening_title_font_size=export_opts.folder_title_font_size,
             work_dir=project.work_dir_path,
             project=project,
-            usage_by_asset_id=usage_count_by_asset_id_from_shots(folder_shots),
+            usage_by_asset_id={},
             max_asset_usage=max_count,
         )
         plan_errors.extend(errors)
