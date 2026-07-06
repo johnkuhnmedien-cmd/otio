@@ -8,17 +8,11 @@ import streamlit as st
 
 from otio_app.analysis_models import (
     EditPlanDocument,
-    EditPlanSettings,
     SupplementCandidate,
     SupplementRequest,
     SupplementRequestsDocument,
 )
 from otio_app.defaults import (
-    DEFAULT_AUDIO_OFFSET_SEC,
-    DEFAULT_FALLBACK_ORDER,
-    DEFAULT_SECTION_OUTRO_SEC,
-    DEFAULT_SHOT_MAX_SEC,
-    DEFAULT_SHOT_MIN_SEC,
     SUPPLEMENT_SOURCE_ADOBE,
     SUPPLEMENT_SOURCE_GOOGLE,
     SUPPLEMENT_SOURCE_LABELS,
@@ -28,10 +22,9 @@ from otio_app.defaults import (
 )
 from otio_app.services.supplement_sources.base import ProviderReadiness
 from otio_app.project_layout import safe_folder_slug
-from otio_app.services.edit_plan_builder import build_edit_plan, load_edit_plan
+from otio_app.services.edit_plan_builder import load_edit_plan
 from otio_app.services.edit_plan_rules import save_edit_plan_rules
 from otio_app.services.generic_outro_selector import section_id_for_folder
-from otio_app.services.gemini_client import is_gemini_configured
 from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.supplement_coverage import COVERAGE_SUPPLEMENT_REQUIRED, coverage_to_supplement_request
 from otio_app.services.supplement_pipeline import (
@@ -43,6 +36,7 @@ from otio_app.services.supplement_pipeline import (
     approve_adobe_candidate,
     import_manual_supplement_asset,
     mark_edit_plans_stale_for_folder,
+    replan_folder_after_supplement,
     run_coverage_for_folder,
     run_full_supplement_pipeline_for_folder,
     search_supplement_candidates,
@@ -610,6 +604,13 @@ def render_supplement_assets_page() -> None:
                 f"({len(skipped)} übersprungen) · {result['analyzed']} analysiert · "
                 f"{result['inventory_added']} ins Inventory übernommen."
             )
+            if result["replanned"]:
+                st.success(
+                    f"Schnittplan automatisch neu vorgeschlagen: {result['replan_shot_count']} Shots "
+                    "(noch nicht bestätigt — bitte unter **③ Schnittplan → Prüfen & Speichern** prüfen)."
+                )
+            elif result["inventory_added"] and result["replan_error"]:
+                st.warning(f"Automatischer Replan fehlgeschlagen: {result['replan_error']}")
             if result["inventory_skipped"]:
                 st.warning(
                     f"{len(result['inventory_skipped'])} Asset(s) nicht ins Inventory übernommen "
@@ -772,14 +773,22 @@ def render_supplement_assets_page() -> None:
             st.rerun()
 
     if inventory_clicked:
-        inventory_result = analyze_and_update_inventory_for_folder(project, selected_folder)
+        inventory_result = analyze_and_update_inventory_for_folder(
+            project, selected_folder, auto_replan=True
+        )
         if not inventory_result["touched"]:
             st.warning("Keine analysierbaren Supplement-Assets (Datei + Sidecar) gefunden.")
         elif inventory_result["inventory_added"]:
             st.success(
-                f"{inventory_result['inventory_added']} Asset(s) ins Inventory übernommen "
-                "— alter Schnittplan als stale markiert."
+                f"{inventory_result['inventory_added']} Asset(s) ins Inventory übernommen."
             )
+            if inventory_result["replanned"]:
+                st.success(
+                    f"Schnittplan automatisch neu vorgeschlagen: {inventory_result['replan_shot_count']} "
+                    "Shots (noch nicht bestätigt — bitte unter **③ Schnittplan → Prüfen & Speichern** prüfen)."
+                )
+            elif inventory_result["replan_error"]:
+                st.warning(f"Automatischer Replan fehlgeschlagen: {inventory_result['replan_error']}")
         if inventory_result["inventory_skipped"]:
             st.warning(
                 f"{len(inventory_result['inventory_skipped'])} Asset(s) nicht ins Inventory übernommen "
@@ -792,27 +801,13 @@ def render_supplement_assets_page() -> None:
     if replan_clicked:
         rules_doc = get_edit_plan_rules_for_project(project)
         save_edit_plan_rules(project, rules_doc)
-        settings = EditPlanSettings(
-            shot_min_sec=DEFAULT_SHOT_MIN_SEC,
-            shot_max_sec=DEFAULT_SHOT_MAX_SEC,
-            audio_offset_sec=DEFAULT_AUDIO_OFFSET_SEC,
-            section_outro_sec=DEFAULT_SECTION_OUTRO_SEC,
-            fallback_order=list(DEFAULT_FALLBACK_ORDER),
-        )
-        try:
-            plan = build_edit_plan(
-                project,
-                settings,
-                use_api=is_gemini_configured(),
-                folder_names=[selected_folder],
-                rules_doc=rules_doc,
-            )
-            from otio_app.services.edit_plan_builder import save_edit_plan
-
-            save_edit_plan(project, plan, selected_folder)
-            st.success(f"Schnittplan neu vorgeschlagen: {len(plan.shots)} Shots.")
-        except (OSError, ValueError) as exc:
-            st.error(str(exc))
+        # Nutzt dieselbe Logik wie der automatische Replan nach Inventory-
+        # Update (persistierte Timing-/Gemini-Einstellungen statt Defaults).
+        replan_result = replan_folder_after_supplement(project, selected_folder)
+        if replan_result["replanned"]:
+            st.success(f"Schnittplan neu vorgeschlagen: {replan_result['shot_count']} Shots.")
+        else:
+            st.error(replan_result["error"] or "Schnittplan konnte nicht neu vorgeschlagen werden.")
 
     existing_plan = load_edit_plan(project, selected_folder)
     if existing_plan and existing_plan.inventory_hash_at_plan_time:

@@ -743,6 +743,43 @@ def test_inventory_hash_detects_stale_plan(tmp_path: Path) -> None:
     assert inventory_hash_is_stale(project, "Antelope Canyon", old_hash)
 
 
+def test_mark_edit_plans_stale_for_folder_does_not_raise(tmp_path: Path) -> None:
+    """Regression: mark_edit_plans_stale_for_folder rief save_edit_plan(project,
+    plan) ohne das erforderliche folder_name-Argument auf -> TypeError bei
+    jedem Aufruf mit tatsächlich veraltetem Inventory-Hash."""
+    from otio_app.analysis_models import EditPlanDocument
+    from otio_app.project_layout import get_folder_inventory_path
+    from otio_app.services.edit_plan_builder import load_edit_plan, save_edit_plan
+    from otio_app.services.inventory_loader import save_folder_inventory
+    from otio_app.services.supplement_pipeline import mark_edit_plans_stale_for_folder
+
+    project = _project(tmp_path)
+    save_edit_plan(
+        project,
+        EditPlanDocument(
+            project_id=project.id,
+            folder_name="Antelope Canyon",
+            confirmed=True,
+            shots=[],
+            inventory_hash_at_plan_time="old-hash",
+        ),
+        "Antelope Canyon",
+    )
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, "Antelope Canyon"),
+        AssetFolderAnalysis(
+            folder="Antelope Canyon",
+            assets=[AssetMediaAnalysis(path="/new.mp4", description="neu", asset_id="a_new")],
+        ),
+    )
+
+    mark_edit_plans_stale_for_folder(project, "Antelope Canyon")
+
+    reloaded = load_edit_plan(project, "Antelope Canyon")
+    assert reloaded is not None
+    assert reloaded.confirmed is False
+
+
 def test_max_asset_usage_hard_blocker() -> None:
     rules = _rules_max_one()
     shots = [
@@ -1398,6 +1435,151 @@ def test_analyze_and_update_inventory_for_folder_returns_untouched_when_empty(
     assert result["touched"] is False
     assert result["analyzed"] == 0
     assert result["inventory_added"] == 0
+    assert result["replanned"] is False
+
+
+def test_analyze_and_update_inventory_auto_replan_triggers_build_edit_plan(
+    tmp_path: Path,
+) -> None:
+    """Regression: Nach einer Inventory-Aktualisierung mit neuen Assets soll
+    optional (auto_replan=True) automatisch ein neuer Schnittplan-Vorschlag
+    für den Ordner gebaut und gespeichert werden, statt dass der Nutzer das
+    manuell im Schnittplan-Tab anstoßen muss."""
+    from otio_app.analysis_models import EditPlanDocument
+
+    project = _project(tmp_path)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_replan",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Ein schmaler Slot Canyon.",
+        visual_requirement="narrow slot canyon",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+        status="ACQUIRED",
+    )
+    upsert_requests(project, [request])
+
+    provider_dir = project.project_root_path / "Antelope Canyon" / "_supplemental" / "_pexels"
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    media_path = provider_dir / "clip.mp4"
+    media_path.write_bytes(b"mp4")
+
+    fake_asset = AssetMediaAnalysis(
+        path=str(media_path),
+        description="Schmaler Slot Canyon",
+        asset_id="asset_new",
+    )
+    fake_plan = EditPlanDocument(
+        project_id=project.id,
+        folder_name="Antelope Canyon",
+        confirmed=False,
+        shots=[],
+    )
+
+    with patch(
+        "otio_app.services.supplement_pipeline.load_sidecar",
+    ) as mock_load_sidecar, patch(
+        "otio_app.services.supplement_pipeline.analyze_supplement_asset",
+        return_value=fake_asset,
+    ), patch(
+        "otio_app.services.supplement_pipeline.extend_folder_inventory",
+    ) as mock_extend, patch(
+        "otio_app.services.edit_plan_builder.build_edit_plan",
+        return_value=fake_plan,
+    ) as mock_build_plan, patch(
+        "otio_app.services.supplement_pipeline.mark_edit_plans_stale_for_folder",
+    ):
+        mock_load_sidecar.return_value = object()
+        result = analyze_and_update_inventory_for_folder(
+            project, "Antelope Canyon", auto_replan=True
+        )
+
+    assert mock_extend.called
+    assert result["inventory_added"] == 1
+    assert result["replanned"] is True
+    assert result["replan_shot_count"] == 0
+    mock_build_plan.assert_called_once()
+    _, kwargs = mock_build_plan.call_args
+    assert kwargs["folder_names"] == ["Antelope Canyon"]
+
+
+def test_analyze_and_update_inventory_without_auto_replan_does_not_build_plan(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_no_replan",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+        status="ACQUIRED",
+    )
+    upsert_requests(project, [request])
+
+    provider_dir = project.project_root_path / "Antelope Canyon" / "_supplemental" / "_pexels"
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    media_path = provider_dir / "clip.mp4"
+    media_path.write_bytes(b"mp4")
+
+    fake_asset = AssetMediaAnalysis(path=str(media_path), description="Test", asset_id="asset_new")
+
+    with patch(
+        "otio_app.services.supplement_pipeline.load_sidecar",
+        return_value=object(),
+    ), patch(
+        "otio_app.services.supplement_pipeline.analyze_supplement_asset",
+        return_value=fake_asset,
+    ), patch(
+        "otio_app.services.supplement_pipeline.extend_folder_inventory",
+    ), patch(
+        "otio_app.services.edit_plan_builder.build_edit_plan",
+    ) as mock_build_plan, patch(
+        "otio_app.services.supplement_pipeline.mark_edit_plans_stale_for_folder",
+    ):
+        result = analyze_and_update_inventory_for_folder(project, "Antelope Canyon")
+
+    assert result["inventory_added"] == 1
+    assert result["replanned"] is False
+    mock_build_plan.assert_not_called()
+
+
+def test_replan_folder_after_supplement_uses_persisted_timing_settings(tmp_path: Path) -> None:
+    """Regression: Der automatische Replan (und der manuelle 'Schnittplan mit
+    neuen Assets neu vorschlagen'-Button) darf NICHT die Hardcoded-Defaults
+    verwenden, sondern muss die persistierten Timing-/Gemini-Einstellungen
+    (edit_plan_timing_settings.json) respektieren."""
+    from otio_app.analysis_models import EditPlanDocument
+    from otio_app.services.edit_plan_timing_settings import (
+        EditPlanTimingSettings,
+        save_edit_plan_timing_settings,
+    )
+    from otio_app.services.supplement_pipeline import replan_folder_after_supplement
+
+    project = _project(tmp_path)
+    save_edit_plan_timing_settings(
+        project,
+        EditPlanTimingSettings(shot_min_sec=4.5, shot_max_sec=12.0, gemini_model="gemini-custom"),
+    )
+
+    fake_plan = EditPlanDocument(
+        project_id=project.id, folder_name="Antelope Canyon", confirmed=False, shots=[]
+    )
+    with patch(
+        "otio_app.services.edit_plan_builder.build_edit_plan",
+        return_value=fake_plan,
+    ) as mock_build_plan:
+        result = replan_folder_after_supplement(project, "Antelope Canyon")
+
+    assert result["replanned"] is True
+    mock_build_plan.assert_called_once()
+    args, kwargs = mock_build_plan.call_args
+    used_settings = args[1] if len(args) > 1 else kwargs["settings"]
+    assert used_settings.shot_min_sec == 4.5
+    assert used_settings.shot_max_sec == 12.0
+    assert used_settings.gemini_model == "gemini-custom"
 
 
 def test_materialize_requests_prunes_stale_untouched_supplement_requests(tmp_path: Path) -> None:

@@ -487,6 +487,8 @@ def acquire_top_candidates_for_folder(
 def analyze_and_update_inventory_for_folder(
     project: Project,
     folder_name: str,
+    *,
+    auto_replan: bool = False,
 ) -> dict:
     """Scannt alle Supplement-Provider-Ordner eines Ordners einmal, analysiert
     jedes neue Asset (Frames + Gemini-Beschreibung + Content-Revalidierung) und
@@ -534,14 +536,20 @@ def analyze_and_update_inventory_for_folder(
             except ValueError as exc:
                 inventory_skipped.append(f"{media_path.name}: {exc}")
 
+    replan_result: dict = {"replanned": False, "error": "", "shot_count": 0}
     if inventory_added:
         mark_edit_plans_stale_for_folder(project, folder_name)
+        if auto_replan:
+            replan_result = replan_folder_after_supplement(project, folder_name)
 
     return {
         "touched": touched,
         "analyzed": analyzed,
         "inventory_added": inventory_added,
         "inventory_skipped": inventory_skipped,
+        "replanned": replan_result["replanned"],
+        "replan_error": replan_result["error"],
+        "replan_shot_count": replan_result["shot_count"],
     }
 
 
@@ -551,22 +559,30 @@ def run_full_supplement_pipeline_for_folder(
     *,
     max_per_request: int = 3,
     provider: str = SUPPLEMENT_SOURCE_PEXELS,
+    auto_replan: bool = True,
 ) -> dict:
-    """Ein-Klick-Ablauf: sucht, lädt herunter, analysiert und aktualisiert das
-    Inventory für alle offenen Supplement-Anfragen eines Ordners in einem Rutsch."""
+    """Ein-Klick-Ablauf: sucht, lädt herunter, analysiert, aktualisiert das
+    Inventory UND schlägt (sofern neue Assets übernommen wurden) automatisch
+    einen neuen Schnittplan für den Ordner vor — für alle offenen Supplement-
+    Anfragen eines Ordners in einem Rutsch."""
     download_summary = acquire_top_candidates_for_folder(
         project,
         folder_name,
         max_per_request=max_per_request,
         provider=provider,
     )
-    analysis_summary = analyze_and_update_inventory_for_folder(project, folder_name)
+    analysis_summary = analyze_and_update_inventory_for_folder(
+        project, folder_name, auto_replan=auto_replan
+    )
     return {
         "downloads": download_summary,
         "total_downloaded": sum(entry["downloaded"] for entry in download_summary),
         "analyzed": analysis_summary["analyzed"],
         "inventory_added": analysis_summary["inventory_added"],
         "inventory_skipped": analysis_summary["inventory_skipped"],
+        "replanned": analysis_summary["replanned"],
+        "replan_error": analysis_summary["replan_error"],
+        "replan_shot_count": analysis_summary["replan_shot_count"],
     }
 
 
@@ -892,7 +908,51 @@ def mark_edit_plans_stale_for_folder(project: Project, folder_name: str) -> None
     current_hash = compute_folder_inventory_hash(load_folder_inventory(project, folder_name))
     if plan.inventory_hash_at_plan_time and plan.inventory_hash_at_plan_time != current_hash:
         plan = plan.model_copy(update={"confirmed": False})
-        save_edit_plan(project, plan)
+        save_edit_plan(project, plan, folder_name)
+
+
+def replan_folder_after_supplement(
+    project: Project,
+    folder_name: str,
+) -> dict:
+    """Baut nach einer Inventory-Aktualisierung automatisch einen neuen
+    Schnittplan-Vorschlag für den Ordner (Entwurf, nicht bestätigt) — der
+    Nutzer muss ihn weiterhin unter „Prüfen & Speichern“ bestätigen.
+
+    Nutzt die persistierten Timing-/Gemini-Einstellungen (edit_plan_timing_
+    settings.json) und Regeln (edit_plan_rules.json) — nicht Hardcoded-
+    Defaults —, damit der automatische Replan dieselben Werte verwendet wie
+    ein manueller Klick auf „Schnittplan vorschlagen“.
+    """
+    from otio_app.analysis_models import EditPlanSettings
+    from otio_app.defaults import DEFAULT_FALLBACK_ORDER
+    from otio_app.services.edit_plan_builder import build_edit_plan
+    from otio_app.services.edit_plan_rules import load_edit_plan_rules
+    from otio_app.services.edit_plan_timing_settings import load_edit_plan_timing_settings
+
+    rules_doc = load_edit_plan_rules(project)
+    timing = load_edit_plan_timing_settings(project)
+    settings = EditPlanSettings(
+        shot_min_sec=timing.shot_min_sec,
+        shot_max_sec=timing.shot_max_sec,
+        audio_offset_sec=timing.audio_offset_sec,
+        section_outro_sec=timing.section_outro_sec,
+        gemini_model=timing.gemini_model,
+        fallback_order=list(DEFAULT_FALLBACK_ORDER),
+    )
+    try:
+        plan = build_edit_plan(
+            project,
+            settings,
+            use_api=is_gemini_configured(),
+            folder_names=[folder_name],
+            rules_doc=rules_doc,
+        )
+    except (OSError, ValueError) as exc:
+        return {"replanned": False, "error": str(exc), "shot_count": 0}
+
+    save_edit_plan(project, plan, folder_name)
+    return {"replanned": True, "error": "", "shot_count": len(plan.shots)}
 
 
 def approve_adobe_candidate(candidate: SupplementCandidate) -> SupplementCandidate:
