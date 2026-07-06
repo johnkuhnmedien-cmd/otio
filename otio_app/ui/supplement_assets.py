@@ -6,7 +6,13 @@ from pathlib import Path
 
 import streamlit as st
 
-from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, SupplementCandidate, SupplementRequest
+from otio_app.analysis_models import (
+    EditPlanDocument,
+    EditPlanSettings,
+    SupplementCandidate,
+    SupplementRequest,
+    SupplementRequestsDocument,
+)
 from otio_app.defaults import (
     DEFAULT_AUDIO_OFFSET_SEC,
     DEFAULT_FALLBACK_ORDER,
@@ -40,6 +46,7 @@ from otio_app.services.supplement_requests import (
     load_supplement_requests,
     pending_supplement_count,
     requests_for_folder,
+    save_supplement_requests,
     update_request,
     upsert_requests,
 )
@@ -73,45 +80,82 @@ def _materialize_requests_from_plan(project, folder_name: str) -> int:
     existing = load_supplement_requests(project)
     existing_ids = {request.supplement_request_id for request in existing.requests}
     new_requests: list[SupplementRequest] = []
+    active_request_ids: set[str] = set()
 
-    for coverage in plan.segment_coverage:
-        if coverage.coverage_status != COVERAGE_SUPPLEMENT_REQUIRED:
-            continue
-        request_id = (
-            coverage.supplement_request_id
-            or f"supp_req_{safe_folder_slug(folder_name)}_{coverage.beat_id}"
-        )
-        request = coverage_to_supplement_request(coverage, request_id=request_id)
-        if request is not None and request.supplement_request_id not in existing_ids:
-            new_requests.append(request)
-            existing_ids.add(request.supplement_request_id)
+    missing_shots = [shot for shot in plan.shots if not shot.asset_path]
 
-    for index, shot in enumerate(plan.shots, start=1):
-        if shot.asset_path:
-            continue
-        request_id = shot.supplement_request_id or f"supp_req_{safe_folder_slug(folder_name)}_{index:03d}"
-        if request_id in existing_ids:
-            continue
-        passage = shot.passage_text or shot.motif or f"Shot {index}"
-        new_requests.append(
-            SupplementRequest(
-                supplement_request_id=request_id,
-                section_id=section_id_for_folder(folder_name),
-                folder_name=folder_name,
-                beat_id=shot.beat_id or f"shot_{index:03d}",
-                passage_text=passage,
-                visual_requirement=shot.motif or passage,
-                duration_needed_sec=max(0.1, shot.duration_sec),
-                reason=(
-                    "Schnittplan enthält für dieses Voice-over-Segment kein Asset. "
-                    "Bitte supplementieren oder lokalen Kandidaten manuell akzeptieren."
-                ),
-                local_best_asset_id=shot.asset_id,
-                local_best_match_score=0.0,
-                status="PENDING_SOURCE_SELECTION",
+    # If the concrete cut plan already tells us which shots are missing, use that
+    # actionable list instead of broad coverage hints. Otherwise one missing shot
+    # can be hidden among many weak-but-still-used local matches.
+    if missing_shots:
+        for index, shot in enumerate(plan.shots, start=1):
+            if shot.asset_path:
+                continue
+            request_id = (
+                shot.supplement_request_id
+                or f"supp_req_{safe_folder_slug(folder_name)}_{index:03d}"
             )
-        )
-        existing_ids.add(request_id)
+            active_request_ids.add(request_id)
+            if request_id in existing_ids:
+                continue
+            passage = shot.passage_text or shot.motif or f"Shot {index}"
+            new_requests.append(
+                SupplementRequest(
+                    supplement_request_id=request_id,
+                    section_id=section_id_for_folder(folder_name),
+                    folder_name=folder_name,
+                    beat_id=shot.beat_id or f"shot_{index:03d}",
+                    passage_text=passage,
+                    visual_requirement=shot.motif or passage,
+                    duration_needed_sec=max(0.1, shot.duration_sec),
+                    reason=(
+                        "Schnittplan enthält für dieses Voice-over-Segment kein Asset. "
+                        "Bitte supplementieren oder lokalen Kandidaten manuell akzeptieren."
+                    ),
+                    local_best_asset_id=shot.asset_id,
+                    local_best_match_score=0.0,
+                    status="PENDING_SOURCE_SELECTION",
+                )
+            )
+            existing_ids.add(request_id)
+    else:
+        for coverage in plan.segment_coverage:
+            if coverage.coverage_status != COVERAGE_SUPPLEMENT_REQUIRED:
+                continue
+            request_id = (
+                coverage.supplement_request_id
+                or f"supp_req_{safe_folder_slug(folder_name)}_{coverage.beat_id}"
+            )
+            active_request_ids.add(request_id)
+            request = coverage_to_supplement_request(coverage, request_id=request_id)
+            if request is not None and request.supplement_request_id not in existing_ids:
+                new_requests.append(request)
+                existing_ids.add(request.supplement_request_id)
+
+    if active_request_ids:
+        keep_statuses = {"ACQUIRED", "DOWNLOADED", "GENERATED"}
+        kept_requests = [
+            request
+            for request in existing.requests
+            if request.folder_name != folder_name
+            or request.supplement_request_id in active_request_ids
+            or request.status in keep_statuses
+        ]
+        kept_ids = {request.supplement_request_id for request in kept_requests}
+        kept_candidates = [
+            candidate
+            for candidate in existing.candidates
+            if candidate.supplement_request_id in kept_ids or candidate.supplement_request_id in active_request_ids
+        ]
+        if len(kept_requests) != len(existing.requests):
+            save_supplement_requests(
+                project,
+                SupplementRequestsDocument(
+                    project_id=project.id,
+                    requests=kept_requests,
+                    candidates=kept_candidates,
+                ),
+            )
 
     if new_requests:
         upsert_requests(project, new_requests)
