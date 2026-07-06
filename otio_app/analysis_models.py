@@ -203,6 +203,21 @@ class TimelineItem(BaseModel):
     motif: str = ""
     passage_text: str = ""
     allow_black: bool = False
+    track: str = "V1"
+    text: str = ""
+    requested_font_family: str = ""
+    resolved_font_family: str = ""
+    font_fallback_used: bool = False
+    font_size: float = 96.0
+    shadow_enabled: bool = True
+    shadow_opacity: float = 0.65
+    shadow_offset_x: float = 6.0
+    shadow_offset_y: float = 6.0
+    position: str = "center"
+    fade_in_sec: float = 0.5
+    fade_out_sec: float = 0.5
+    render_required: bool = False
+    rendered_media_path: str = ""
 
 
 class EditPlanDocument(BaseModel):

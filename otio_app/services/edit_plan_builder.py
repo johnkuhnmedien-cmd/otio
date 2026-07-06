@@ -191,6 +191,7 @@ def build_edit_plan(
     rules_doc = load_edit_plan_rules(project)
     gemini_prompt = gemini_prompt_text(rules_doc)
     trim_leading_sec = export_rule_options(rules_doc).trim_leading_sec
+    export_opts = export_rule_options(rules_doc)
     plan_settings = plan_settings.model_copy(
         update={
             "video_head_trim_sec": trim_leading_sec,
@@ -318,6 +319,10 @@ def build_edit_plan(
             folder_assets=assets_payload_by_folder.get(folder_name, []),
             trim_leading_sec=trim_leading_sec,
             item_index_start=item_counter,
+            opening_title_enabled=export_opts.folder_title_enabled,
+            opening_title_font=export_opts.folder_title_font,
+            opening_title_duration_sec=export_opts.folder_title_duration_sec,
+            work_dir=project.work_dir_path,
         )
         plan_errors.extend(errors)
         timeline_items.extend(section_items)

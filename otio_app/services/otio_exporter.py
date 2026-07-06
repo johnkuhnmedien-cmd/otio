@@ -51,6 +51,7 @@ from otio_app.services.timeline_plan_builder import (
     build_voiceover_plan,
     shots_from_timeline_items,
 )
+from otio_app.services.opening_title_renderer import ensure_opening_titles_rendered
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 
 
@@ -118,6 +119,17 @@ def verify_timeline_media_paths(
     """Prüft Medien der Timeline-Items."""
     warnings: list[str] = []
     for item in items:
+        if item.type == "opening_title":
+            media_path = item.rendered_media_path or item.resolved_media_path
+            if not media_path:
+                warnings.append(f"{item.timeline_item_id} ({item.folder_name}): kein gerenderter Titel")
+                continue
+            resolved = Path(media_path).expanduser().resolve()
+            if not path_is_readable_file(resolved):
+                warnings.append(
+                    f"{item.timeline_item_id} ({item.folder_name}): Titel offline — `{resolved}`"
+                )
+            continue
         if not item.resolved_media_path:
             warnings.append(f"{item.timeline_item_id} ({item.folder_name}): kein Medium")
             continue
@@ -180,6 +192,7 @@ def merge_confirmed_edit_plans(
     )
     allow_black_outro = False
     global_cursor = 0.0
+    export_rules = export_rule_options(load_edit_plan_rules(project))
 
     for entry in mapping.entries:
         if not entry.confirmed or not entry.folder:
@@ -247,6 +260,7 @@ def merge_confirmed_edit_plans(
             allow_black_outro=allow_black_outro,
             fps=float(project.fps),
             voiceover=section_voiceover,
+            opening_title_required=export_rules.folder_title_enabled,
         )
         all_validation_errors.extend(validation.errors)
         warnings.extend(validation.warnings)
@@ -669,9 +683,7 @@ def _append_timeline_item_clip(
     if export_rules.folder_title_enabled and item.type != "generic_outro_visual" and not is_image_media(
         original
     ):
-        video_clip.metadata["folder_title"] = format_folder_display_name(item.folder_name)
-        video_clip.metadata["folder_title_font"] = export_rules.folder_title_font
-        video_clip.metadata["folder_title_duration_sec"] = export_rules.folder_title_duration_sec
+        pass  # Opening Title liegt als eigenes V2-Element im Schnittplan — nicht in V1-Metadata.
 
     if export_rules.auto_zoom_fill and not is_image_media(original):
         src_w, src_h = resolve_media_dimensions(project, item.folder_name, original)
@@ -681,6 +693,68 @@ def _append_timeline_item_clip(
                 video_clip.metadata["zoom_factor"] = round(zoom, 4)
 
     track.append(video_clip)
+
+
+def _append_opening_title_clip(
+    track: otio.schema.Track,
+    item: TimelineItem,
+    *,
+    rate: float,
+) -> None:
+    """Platziert gerenderten Opening-Title-Clip auf V2."""
+    media_path = Path(item.rendered_media_path or item.resolved_media_path)
+    duration_sec = item.final_duration_sec or item.duration_sec
+    media_rate = rate
+    timing = probe_media_timing(media_path, default_rate=rate)
+    if timing.rate:
+        media_rate = timing.rate
+
+    title_clip = otio.schema.Clip(
+        name=f"Title · {item.text[:80]}",
+        media_reference=_media_reference(str(media_path), rate, trim_leading_sec=0.0),
+    )
+    title_clip.source_range = _time_range(max(0.01, duration_sec), media_rate, start_sec=0.0)
+    title_clip.metadata["timeline_item_id"] = item.timeline_item_id
+    title_clip.metadata["type"] = "opening_title"
+    title_clip.metadata["track"] = "V2"
+    title_clip.metadata["text"] = item.text
+    title_clip.metadata["folder"] = item.folder_name
+    title_clip.metadata["requested_font_family"] = item.requested_font_family
+    title_clip.metadata["resolved_font_family"] = item.resolved_font_family
+    title_clip.metadata["font_fallback_used"] = item.font_fallback_used
+    title_clip.metadata["font_size"] = item.font_size
+    title_clip.metadata["shadow_enabled"] = item.shadow_enabled
+    title_clip.metadata["shadow_opacity"] = item.shadow_opacity
+    title_clip.metadata["position"] = item.position
+    title_clip.metadata["fade_in_sec"] = item.fade_in_sec
+    title_clip.metadata["fade_out_sec"] = item.fade_out_sec
+    title_clip.metadata["rendered_media_path"] = str(media_path)
+    track.append(title_clip)
+
+
+def _build_v2_title_track(
+    title_items: list[TimelineItem],
+    *,
+    rate: float,
+) -> otio.schema.Track | None:
+    """Baut V2 mit Gaps und Opening-Title-Clips an geplanten Positionen."""
+    if not title_items:
+        return None
+    track = otio.schema.Track(name="V2", kind=otio.schema.TrackKind.Video)
+    cursor = 0.0
+    for item in sorted(title_items, key=lambda entry: entry.timeline_in_sec):
+        gap_sec = item.timeline_in_sec - cursor
+        if gap_sec > 0.001:
+            track.append(
+                otio.schema.Gap(
+                    name="Title Gap",
+                    source_range=_time_range(gap_sec, rate),
+                )
+            )
+            cursor += gap_sec
+        _append_opening_title_clip(track, item, rate=rate)
+        cursor += item.duration_sec
+    return track
 
 
 def build_otio_timeline(
@@ -712,13 +786,14 @@ def build_otio_timeline(
         timeline.metadata["trim_leading_sec"] = export_rules.trim_leading_sec
     if export_rules.auto_zoom_fill:
         timeline.metadata["auto_zoom_fill"] = True
-    if export_rules.folder_title_enabled:
-        timeline.metadata["folder_title_overlay"] = True
     timeline.global_start_time = otio.opentime.RationalTime.from_seconds(0, rate)
+
+    v1_items = [item for item in items if item.type != "opening_title"]
+    title_items = [item for item in items if item.type == "opening_title"]
 
     video_track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
     timing_notes: list[str] = []
-    for index, item in enumerate(items, start=1):
+    for index, item in enumerate(v1_items, start=1):
         _append_timeline_item_clip(
             video_track,
             item,
@@ -730,6 +805,12 @@ def build_otio_timeline(
         )
 
     timeline.tracks.append(video_track)
+
+    title_track = _build_v2_title_track(title_items, rate=rate)
+    if title_track is not None:
+        timeline.tracks.append(title_track)
+        timeline.metadata["opening_title_count"] = len(title_items)
+
     if timing_notes:
         timeline.metadata["media_timing_notes"] = list(timing_notes)
 
@@ -762,6 +843,8 @@ class OtioReadbackReport:
     generic_outro_timeline_start_sec: float | None
     visual_coverage_until_sec: float
     ok: bool
+    opening_title_on_v2: bool = False
+    opening_title_timeline_start_sec: float | None = None
     errors: list[str] = field(default_factory=list)
 
 
@@ -840,6 +923,36 @@ def validate_otio_readback(
                 f"voiceover_timeline_end_sec={expected_end:.2f}"
             )
 
+        opening_title_on_v2 = False
+        opening_title_start: float | None = None
+        v2_tracks = [
+            track
+            for track in timeline.tracks
+            if track.kind == otio.schema.TrackKind.Video and track.name == "V2"
+        ]
+        section_title = next(
+            (item for item in section_items if item.type == "opening_title"),
+            None,
+        )
+        if section_title is not None:
+            if not v2_tracks:
+                errors.append("V2 fehlt — Opening Title nicht auf separater Spur.")
+            else:
+                cursor_v2 = section.video_start_sec
+                for child in v2_tracks[0]:
+                    if isinstance(child, otio.schema.Gap):
+                        if child.source_range is not None:
+                            cursor_v2 += child.source_range.duration.to_seconds()
+                    elif isinstance(child, otio.schema.Clip):
+                        if child.metadata.get("type") == "opening_title":
+                            if abs(cursor_v2 - (section.video_start_sec + section_title.timeline_in_sec)) < 0.15:
+                                opening_title_on_v2 = True
+                                opening_title_start = cursor_v2
+                        if child.source_range is not None:
+                            cursor_v2 += child.source_range.duration.to_seconds()
+                if not opening_title_on_v2:
+                    errors.append("Opening Title nicht auf V2 gefunden.")
+
         reports.append(
             OtioReadbackReport(
                 voiceover_timeline_start_sec=round(voice_timeline_start, 4),
@@ -850,6 +963,10 @@ def validate_otio_readback(
                 audio_offset_sec=audio_offset_sec,
                 generic_outro_timeline_start_sec=round(outro_start, 4) if outro_start else None,
                 visual_coverage_until_sec=round(visual_coverage, 4),
+                opening_title_on_v2=opening_title_on_v2,
+                opening_title_timeline_start_sec=(
+                    round(opening_title_start, 4) if opening_title_start is not None else None
+                ),
                 ok=not errors,
                 errors=errors,
             )
@@ -878,6 +995,21 @@ def export_otio_timeline(
             + "; ".join(merged.warnings[:5])
         )
 
+    settings = export_settings or load_otio_export_settings(project)
+    save_otio_export_settings(project, settings)
+
+    rendered_items, _render_notes = ensure_opening_titles_rendered(project, merged.timeline_items)
+    merged = MergedEditPlanResult(
+        timeline_items=rendered_items,
+        shots=merged.shots,
+        settings=merged.settings,
+        voiceovers=merged.voiceovers,
+        included_folders=merged.included_folders,
+        skipped_folders=merged.skipped_folders,
+        warnings=list(merged.warnings) + _render_notes,
+        validation_status=merged.validation_status,
+    )
+
     media_issues = verify_timeline_media_paths(project, merged.timeline_items, strict=True)
     if media_issues:
         preview = "\n".join(f"• {line}" for line in media_issues[:12])
@@ -886,9 +1018,6 @@ def export_otio_timeline(
             "Medien nicht exportierbar — Clean Media prüfen oder Schnittplan anpassen:\n"
             f"{preview}{extra}"
         )
-
-    settings = export_settings or load_otio_export_settings(project)
-    save_otio_export_settings(project, settings)
 
     timeline = build_otio_timeline(project, merged, export_settings=settings)
     path = output_path or get_otio_export_path(project.work_dir_path, project.name)
@@ -918,6 +1047,8 @@ def export_otio_timeline(
             "audio_offset_sec": report.audio_offset_sec,
             "generic_outro_timeline_start_sec": report.generic_outro_timeline_start_sec,
             "visual_coverage_until_sec": report.visual_coverage_until_sec,
+            "opening_title_on_v2": report.opening_title_on_v2,
+            "opening_title_timeline_start_sec": report.opening_title_timeline_start_sec,
             "ok": report.ok,
             "errors": report.errors,
         }

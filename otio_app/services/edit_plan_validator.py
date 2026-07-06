@@ -7,6 +7,7 @@ from enum import Enum
 from pathlib import Path
 
 from otio_app.analysis_models import EditPlanSettings, TimelineItem, VoiceoverPlan
+from otio_app.services.clean_media import path_is_readable_file
 from otio_app.services.duration_rules import MAX_DURATION_SEC, MIN_DURATION_SEC
 from otio_app.services.media_utils import is_image_media
 from otio_app.services.timeline_plan_builder import NARRATION_VISUAL_TYPES, VISUAL_VIDEO_TYPES
@@ -27,6 +28,48 @@ class TimelineValidationResult:
     @property
     def ready(self) -> bool:
         return self.status == ValidationStatus.OK
+
+
+def _is_opening_title_item(item: TimelineItem) -> bool:
+    return item.type == "opening_title"
+
+
+def validate_opening_titles(
+    items: list[TimelineItem],
+    *,
+    opening_title_required: bool = False,
+) -> TimelineValidationResult:
+    """Prüft Opening-Title-Elemente vor OTIO-Export."""
+    result = TimelineValidationResult()
+    title_items = [item for item in items if _is_opening_title_item(item)]
+
+    if opening_title_required and not title_items:
+        result.status = ValidationStatus.AWAITING_APPROVAL
+        result.errors.append(
+            "Ordner-Titel-Regel aktiv, aber kein opening_title im Schnittplan."
+        )
+        return result
+
+    for item in title_items:
+        if item.duration_sec <= 0.01:
+            result.errors.append(f"{item.timeline_item_id}: duration_sec muss > 0 sein.")
+        if item.timeline_in_sec < -0.001:
+            result.errors.append(f"{item.timeline_item_id}: timeline_in_sec muss >= 0 sein.")
+        if item.track != "V2":
+            result.errors.append(f"{item.timeline_item_id}: track muss V2 sein (ist {item.track!r}).")
+        if not item.text.strip():
+            result.errors.append(f"{item.timeline_item_id}: text fehlt.")
+        media_path = item.rendered_media_path or item.resolved_media_path
+        if not media_path:
+            result.errors.append(f"{item.timeline_item_id}: rendered_media_path fehlt.")
+        elif not path_is_readable_file(Path(media_path)):
+            result.errors.append(
+                f"{item.timeline_item_id}: gerenderte Titeldatei nicht lesbar: {media_path}"
+            )
+
+    if result.errors:
+        result.status = ValidationStatus.BLOCKED
+    return result
 
 
 def _is_narration_item(item: TimelineItem) -> bool:
@@ -155,6 +198,7 @@ def validate_timeline_items(
     allow_black_outro: bool = False,
     fps: float = 25.0,
     voiceover: VoiceoverPlan | None = None,
+    opening_title_required: bool = False,
 ) -> TimelineValidationResult:
     """Prüft Dauerregeln, Voice-Abdeckung und Outro-Planung."""
     result = TimelineValidationResult()
@@ -167,6 +211,8 @@ def validate_timeline_items(
     outro_items = [item for item in items if _is_outro_item(item)]
 
     for item in items:
+        if _is_opening_title_item(item):
+            continue
         duration = item.final_duration_sec or item.duration_sec
         if duration > MAX_DURATION_SEC + 0.01:
             result.errors.append(
@@ -245,6 +291,17 @@ def validate_timeline_items(
                 result.errors.append(
                     "Ungeplantes visuelles Loch nach Voice-over vor Outro-Elementen."
                 )
+
+    title_result = validate_opening_titles(
+        items,
+        opening_title_required=opening_title_required,
+    )
+    result.errors.extend(title_result.errors)
+    result.warnings.extend(title_result.warnings)
+    if title_result.status == ValidationStatus.AWAITING_APPROVAL:
+        result.status = ValidationStatus.AWAITING_APPROVAL
+    elif title_result.status == ValidationStatus.BLOCKED and result.status == ValidationStatus.OK:
+        result.status = ValidationStatus.BLOCKED
 
     voice_result = validate_voiceover_plan(voiceover, settings=settings, items=items)
     result.errors.extend(voice_result.errors)

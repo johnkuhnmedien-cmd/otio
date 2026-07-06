@@ -86,8 +86,9 @@ EDIT_PLAN_RULE_TEMPLATES: tuple[EditPlanRuleTemplate, ...] = (
         rule_type=RULE_FOLDER_TITLE,
         label="Ordner-Titel einblenden",
         description=(
-            "Ordnername in den ersten Sekunden unten links ins Bild einbrennen "
-            "(ffmpeg drawtext mit Schatten)."
+            "Opening Title zu Beginn jeder Sektion (5 s, V2-Overlay). "
+            "Wird als eigenes Timeline-Element im Schnittplan geplant und "
+            "vor dem OTIO-Export als transparentes ProRes 4444 gerendert."
         ),
         default_params={"font_name": "Phosphate", "duration_sec": 5.0},
         implemented=True,

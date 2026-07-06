@@ -10,9 +10,12 @@ FOLDER_TITLE_FONT_OPTIONS: tuple[str, ...] = (
     "Phosphate",
     "Arial Bold",
     "Helvetica Neue",
+    "Helvetica Neue Condensed Bold",
     "Impact",
     "Futura",
 )
+
+OPENING_TITLE_FALLBACK_FONT = "Helvetica Neue Condensed Bold"
 
 _FONT_SEARCH_DIRS: tuple[Path, ...] = (
     Path("/System/Library/Fonts"),
@@ -81,3 +84,20 @@ def _resolve_via_fontconfig(font_name: str) -> Path | None:
     if name_key not in stem_key:
         return None
     return path
+
+
+def resolve_font_with_fallback(
+    requested_font: str,
+    *,
+    fallback_font: str = OPENING_TITLE_FALLBACK_FONT,
+) -> tuple[Path | None, str, bool]:
+    """Liefert (font_path, resolved_name, fallback_used)."""
+    requested = requested_font.strip() or "Phosphate"
+    path = resolve_font_path(requested)
+    if path is not None:
+        return path, requested, False
+    fallback = fallback_font.strip() or OPENING_TITLE_FALLBACK_FONT
+    fallback_path = resolve_font_path(fallback)
+    if fallback_path is not None:
+        return fallback_path, fallback, True
+    return None, fallback, True

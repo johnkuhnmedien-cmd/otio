@@ -285,14 +285,33 @@ def build_timeline_items_for_folder(
     folder_assets: list[dict[str, str]],
     trim_leading_sec: float = 0.0,
     item_index_start: int = 1,
+    opening_title_enabled: bool = False,
+    opening_title_font: str = "Phosphate",
+    opening_title_duration_sec: float = 5.0,
+    work_dir: Path | None = None,
 ) -> tuple[list[TimelineItem], VoiceoverPlan, list[str]]:
-    """Baut alle Timeline-Items einer Sektion (Narration + Filler + aufgeteiltes Outro)."""
+    """Baut alle Timeline-Items einer Sektion (Titel + Narration + Filler + Outro)."""
     errors: list[str] = []
     section_id = section_id_for_folder(folder_name)
     items: list[TimelineItem] = []
     cursor = 0.0
     used_paths: set[str] = set()
     last_path: str | None = None
+
+    if opening_title_enabled and work_dir is not None:
+        from otio_app.services.opening_title_renderer import build_opening_title_item
+
+        title_item = build_opening_title_item(
+            folder_name=folder_name,
+            voice_file=voice_file,
+            section_id=section_id,
+            work_dir=work_dir,
+            requested_font_family=opening_title_font,
+            duration_sec=opening_title_duration_sec,
+        )
+        items.append(title_item)
+        if title_item.warnings:
+            errors.extend(f"{folder_name}: {w}" for w in title_item.warnings)
 
     voiceover = build_voiceover_plan(voice_file, settings)
 

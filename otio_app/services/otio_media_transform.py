@@ -214,8 +214,6 @@ def export_processing_required(
 ) -> bool:
     if is_image:
         return False
-    if export_opts.folder_title_enabled:
-        return True
     if export_opts.auto_zoom_fill and needs_zoom:
         return True
     return False
