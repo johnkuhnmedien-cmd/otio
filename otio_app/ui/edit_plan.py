@@ -377,10 +377,10 @@ def _finalize_plan_for_confirm(
     document = document.model_copy(update={"timeline_items": timeline_items})
     notes.extend(title_notes)
 
-    if plan.inventory_hash_at_plan_time and inventory_hash_is_stale(
+    if document.inventory_hash_at_plan_time and inventory_hash_is_stale(
         project,
         selected_folder,
-        plan.inventory_hash_at_plan_time,
+        document.inventory_hash_at_plan_time,
     ):
         raise ValueError(
             "Inventory geändert — bitte Schnittplan mit neuen Assets neu vorschlagen."
