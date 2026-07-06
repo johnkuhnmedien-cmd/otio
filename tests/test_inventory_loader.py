@@ -8,6 +8,7 @@ from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis, In
 from otio_app.models import Project
 from otio_app.project_layout import get_folder_inventory_path
 from otio_app.services.inventory_loader import (
+    folder_inventory_matches_media,
     load_folder_inventory,
     migrate_legacy_inventory,
     save_folder_inventory,
@@ -130,6 +131,73 @@ def test_sync_creates_inventory_from_root_legacy_file(
     created, statuses = sync_folder_inventories_from_cache(project)
     assert project.folder_inventory_path("Grand Canyon").is_file()
     assert created == ["Grand Canyon"] or statuses[0].state in {"created", "exists"}
+
+
+def test_folder_inventory_matches_media_ignores_supplemental_assets(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    """Regression: Supplement-Assets liegen unter `<Ordner>/_supplemental/
+    <provider>/` und werden vom Top-Level-Medien-Scan (discover_folder_
+    media_paths) nicht erfasst. Ohne Ausschluss dieser Pfade wurde JEDES
+    gespeicherte Inventar mit Supplement-Assets fälschlich als 'nicht mehr
+    aktuell' erkannt — mit der Folge, dass build_edit_plan() und die
+    Stale-Hash-Prüfung unterschiedliche Inventar-Stände lasen und sofort
+    nach einem frischen, korrekten Schnittplan ein 'Inventory changed'-
+    Fehler auftauchte."""
+    folder = temp_project_layout["project_root"] / "Grand Canyon"
+    original_path = str(folder / "clip.mp4")
+    supplement_path = str(folder / "_supplemental" / "_pexels" / "new_asset.mp4")
+
+    item = AssetFolderAnalysis(
+        folder="Grand Canyon",
+        media_files=[original_path, supplement_path],
+        assets=[
+            AssetMediaAnalysis(path=original_path, description="Original"),
+            AssetMediaAnalysis(path=supplement_path, description="Supplement", asset_origin="pexels"),
+        ],
+    )
+
+    # discover_folder_media_paths würde hier NUR die Top-Level-Datei finden
+    # (das Supplement-Asset liegt in einem Unterordner und wird von einem
+    # nicht-rekursiven Scan nicht erfasst).
+    media_paths = [Path(original_path)]
+
+    assert folder_inventory_matches_media(item, media_paths) is True
+
+
+def test_load_folder_inventory_keeps_supplement_assets(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    project = _sample_project(temp_project_layout)
+    folder = temp_project_layout["project_root"] / "Grand Canyon"
+    original_path = folder / "clip.mp4"
+    supplement_dir = folder / "_supplemental" / "_pexels"
+    supplement_dir.mkdir(parents=True, exist_ok=True)
+    supplement_path = supplement_dir / "new_asset.mp4"
+    supplement_path.write_bytes(b"mp4")
+
+    item = AssetFolderAnalysis(
+        folder="Grand Canyon",
+        media_files=[str(original_path), str(supplement_path)],
+        assets=[
+            AssetMediaAnalysis(path=str(original_path), description="Original", asset_id="asset_original"),
+            AssetMediaAnalysis(
+                path=str(supplement_path),
+                description="Supplement",
+                asset_origin="pexels",
+                asset_id="asset_supplement",
+            ),
+        ],
+    )
+    save_folder_inventory(get_folder_inventory_path(project.work_dir_path, "Grand Canyon"), item)
+
+    loaded = load_folder_inventory(project, "Grand Canyon")
+    loaded_ids = {asset.asset_id for asset in loaded.assets}
+    assert "asset_supplement" in loaded_ids, (
+        "Supplement-Asset wurde beim Laden fälschlich verworfen — "
+        f"geladene assets: {loaded.assets}"
+    )
+    assert "asset_original" in loaded_ids
 
 
 def test_selected_folders_have_inventory(temp_project_layout: dict[str, Path]) -> None:

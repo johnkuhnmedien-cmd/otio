@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis, InventoryDocument
+from otio_app.defaults import SUPPLEMENTAL_FOLDER_NAME
 from otio_app.models import Project
 from otio_app.project_layout import get_folder_inventory_path, get_inventory_dir, safe_folder_slug
 from otio_app.services.folder_asset_status import folder_is_fully_analyzed
@@ -55,8 +56,25 @@ def folder_inventory_matches_media(
     item: AssetFolderAnalysis,
     media_paths: list[Path],
 ) -> bool:
-    current = sorted(str(path) for path in media_paths)
-    saved = sorted(item.media_files)
+    """Vergleicht nur lokale Original-Assets im Top-Level-Ordner.
+
+    Supplement-Assets liegen in `<Ordner>/_supplemental/<provider>/` und
+    werden von `discover_folder_media_paths` (bewusst nicht-rekursiver
+    Top-Level-Scan) nicht bzw. nur mit falsch rekonstruiertem Pfad erfasst
+    (Cache-Merge nimmt fälschlich `folder_path / dateiname` an). Ohne diesen
+    Ausschluss wurde ein gespeichertes Inventar mit Supplement-Assets HIER
+    IMMER als "nicht mehr aktuell" erkannt und verworfen — mit der Folge,
+    dass build_edit_plan() und die Stale-Hash-Prüfung unterschiedliche,
+    inkonsistente Inventar-Stände lasen. Das erzeugte sofort nach einem
+    frischen, korrekten Schnittplan-Rebuild einen falschen
+    "Inventory changed"-Fehler.
+    """
+    current = sorted(
+        str(path) for path in media_paths if SUPPLEMENTAL_FOLDER_NAME not in path.parts
+    )
+    saved = sorted(
+        path for path in item.media_files if SUPPLEMENTAL_FOLDER_NAME not in Path(path).parts
+    )
     return current == saved
 
 

@@ -513,6 +513,22 @@ def analyze_and_update_inventory_for_folder(
     inventory_skipped: list[str] = []
     touched = False
 
+    # Bereits erfolgreich analysierte Assets NICHT erneut analysieren.
+    # analyze_supplement_asset() ruft Gemini erneut auf — dessen Beschreibung
+    # ist nicht garantiert deterministisch (leicht andere Formulierung bei
+    # jedem Aufruf). Ohne diese Idempotenz-Prüfung änderte ein wiederholter
+    # Klick auf "Inventory aktualisieren"/"Neue Assets analysieren" (z. B.
+    # aus Unsicherheit erneut ausgelöst) die description bereits fertig
+    # analysierter Assets minimal — und damit den Inventory-Hash — obwohl
+    # sich am eigentlichen Inhalt nichts geändert hat. Das ließ einen gerade
+    # erst frisch gebauten, korrekten Schnittplan sofort wieder als "stale"
+    # erscheinen ("Inventory changed"), obwohl inhaltlich nichts Neues da war.
+    already_analyzed_paths = {
+        asset.path
+        for asset in load_folder_inventory(project, folder_name).assets
+        if asset.analysis_status == "complete"
+    }
+
     for provider_dir in provider_dirs:
         if not provider_dir.is_dir():
             continue
@@ -523,6 +539,8 @@ def analyze_and_update_inventory_for_folder(
             if sidecar is None:
                 continue
             touched = True
+            if str(media_path) in already_analyzed_paths:
+                continue
             asset = analyze_supplement_asset(
                 project,
                 folder_name=folder_name,

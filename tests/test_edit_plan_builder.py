@@ -497,6 +497,94 @@ def test_outro_items_respect_configured_max_shot_sec(
     )
 
 
+def test_inventory_hash_not_stale_immediately_after_build_with_supplement_asset(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    """Regression: Nach dem Hinzufügen eines Supplement-Assets (liegt unter
+    `<Ordner>/_supplemental/<provider>/`) und einem frischen build_edit_plan()
+    zeigte die Stale-Hash-Prüfung sofort 'Inventory changed', obwohl sich am
+    Inventar seit dem Bauen des Plans nichts geändert hatte. Ursache:
+    load_folder_inventory() verglich das gespeicherte Inventar mit einem
+    NICHT-rekursiven Top-Level-Dateiscan, der Supplement-Assets im
+    Unterordner grundsätzlich nicht findet — und verwarf das gespeicherte
+    Inventar dadurch fälschlich als 'veraltet'."""
+    from otio_app.analysis_models import SupplementAssetSidecar
+    from otio_app.services.inventory_hash import inventory_hash_is_stale
+    from otio_app.services.supplement_pipeline import extend_folder_inventory, save_sidecar
+
+    project = _sample_project(temp_project_layout)
+    voice_path = str(temp_project_layout["voice_file"])
+    media_path = str(temp_project_layout["project_root"] / "Grand Canyon" / "clip.mp4")
+
+    mapping = VoiceFolderMappingDocument(
+        project_id=project.id,
+        confirmed=True,
+        entries=[
+            VoiceFolderMappingEntry(voice_file=voice_path, folder="Grand Canyon", confirmed=True)
+        ],
+    )
+    project.voice_folder_mapping_path.write_text(mapping.model_dump_json(indent=2), encoding="utf-8")
+
+    voice_doc = VoiceAnalysisDocument(
+        project_id=project.id,
+        language="de",
+        files=[
+            VoiceFileAnalysis(
+                path=voice_path,
+                segments=[VoiceSegment(start_sec=0.0, end_sec=6.0, text="Ein Canyon mit Fluss.")],
+            )
+        ],
+    )
+    project.voice_analysis_path.write_text(voice_doc.model_dump_json(indent=2), encoding="utf-8")
+    Path(media_path).write_bytes(b"mp4")
+
+    from otio_app.services.inventory_loader import save_folder_inventory
+
+    save_folder_inventory(
+        project.folder_inventory_path("Grand Canyon"),
+        AssetFolderAnalysis(
+            folder="Grand Canyon",
+            assets=[AssetMediaAnalysis(path=media_path, description="Canyon", asset_id="asset_clip")],
+        ),
+    )
+
+    supplement_dir = (
+        temp_project_layout["project_root"] / "Grand Canyon" / "_supplemental" / "_pexels"
+    )
+    supplement_dir.mkdir(parents=True, exist_ok=True)
+    supplement_path = supplement_dir / "new_asset.mp4"
+    supplement_path.write_bytes(b"mp4")
+    save_sidecar(
+        SupplementAssetSidecar(
+            asset_id="asset_supplement",
+            supplement_request_id="supp_req_test",
+            provider="pexels",
+            local_path=str(supplement_path),
+        )
+    )
+    extend_folder_inventory(
+        project,
+        folder_name="Grand Canyon",
+        asset=AssetMediaAnalysis(
+            path=str(supplement_path),
+            description="Neuer Supplement-Canyon-Shot",
+            asset_id="asset_supplement",
+            asset_origin="pexels",
+            analysis_status="complete",
+            frames_used=["frame1.jpg"],
+            approved_for_cut_plan=True,
+            supplement_validation_status="PASS",
+        ),
+    )
+
+    document = build_edit_plan(project, use_api=False)
+
+    assert document.inventory_hash_at_plan_time
+    assert inventory_hash_is_stale(
+        project, "Grand Canyon", document.inventory_hash_at_plan_time
+    ) is False
+
+
 def test_local_fallback_picks_best_matching_asset_not_just_first(
     temp_project_layout: dict[str, Path],
 ) -> None:

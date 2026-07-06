@@ -1438,6 +1438,62 @@ def test_analyze_and_update_inventory_for_folder_returns_untouched_when_empty(
     assert result["replanned"] is False
 
 
+def test_analyze_and_update_inventory_skips_already_analyzed_assets(tmp_path: Path) -> None:
+    """Regression: Ein wiederholter Aufruf (z.B. erneuter Klick auf 'Inventory
+    aktualisieren'/'Neue Assets analysieren') durfte bereits erfolgreich
+    analysierte Assets NICHT erneut über Gemini analysieren. Gemini-
+    Beschreibungen sind nicht garantiert deterministisch — eine leicht
+    andere Formulierung bei jedem Aufruf ändert den Inventory-Hash, obwohl
+    sich am eigentlichen Assetinhalt nichts geändert hat. Das ließ einen
+    gerade erst frisch gebauten Schnittplan sofort wieder als 'stale'
+    erscheinen ('Inventory changed'), ohne dass wirklich etwas Neues da war."""
+    project = _project(tmp_path)
+    request = SupplementRequest(
+        supplement_request_id="supp_req_idempotent",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+        status="ACQUIRED",
+    )
+    upsert_requests(project, [request])
+
+    provider_dir = project.project_root_path / "Antelope Canyon" / "_supplemental" / "_pexels"
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    media_path = provider_dir / "clip.mp4"
+    media_path.write_bytes(b"mp4")
+
+    fake_asset = AssetMediaAnalysis(
+        path=str(media_path),
+        description="Test-Beschreibung",
+        asset_id="asset_new",
+        analysis_status="complete",
+        frames_used=["frame1.jpg"],
+        approved_for_cut_plan=True,
+        supplement_validation_status="PASS",
+    )
+
+    with patch(
+        "otio_app.services.supplement_pipeline.load_sidecar",
+        return_value=object(),
+    ), patch(
+        "otio_app.services.supplement_pipeline.analyze_supplement_asset",
+        return_value=fake_asset,
+    ) as mock_analyze, patch(
+        "otio_app.services.supplement_pipeline.mark_edit_plans_stale_for_folder",
+    ):
+        first_result = analyze_and_update_inventory_for_folder(project, "Antelope Canyon")
+        assert first_result["analyzed"] == 1
+        assert first_result["inventory_added"] == 1
+        assert mock_analyze.call_count == 1
+
+        second_result = analyze_and_update_inventory_for_folder(project, "Antelope Canyon")
+        assert second_result["analyzed"] == 0
+        assert second_result["inventory_added"] == 0
+        assert mock_analyze.call_count == 1, "analyze_supplement_asset wurde erneut aufgerufen"
+
+
 def test_analyze_and_update_inventory_auto_replan_triggers_build_edit_plan(
     tmp_path: Path,
 ) -> None:
