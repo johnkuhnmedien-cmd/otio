@@ -45,6 +45,7 @@ from otio_app.services.supplement_pipeline import (
     search_supplement_candidates,
 )
 from otio_app.services.supplement_search import (
+    build_pexels_primary_query,
     build_pexels_query_variants,
     preferred_search_query,
     request_with_keyword_query,
@@ -281,7 +282,7 @@ def _render_query_controls(request: SupplementRequest, provider: str) -> str:
 
 def _default_query_for_provider(request: SupplementRequest, provider: str) -> str:
     if provider == SUPPLEMENT_SOURCE_PEXELS:
-        return build_pexels_query_variants(request)[0]
+        return build_pexels_primary_query(request)
     return preferred_search_query(request)
 
 
@@ -339,7 +340,7 @@ def _render_pexels_tab(project, request: SupplementRequest, readiness: ProviderR
         "Videos: nur 16:9 · Fotos: prefer_16_9 / Hintergrund möglich"
     )
     with st.expander("Technische Suchdetails", expanded=False):
-        st.caption("Video Endpoint: `https://api.pexels.com/videos/search`")
+        st.caption("Video Endpoint: `https://api.pexels.com/v1/videos/search`")
         st.caption("Photo Endpoint: `https://api.pexels.com/v1/search`")
         st.caption("Video orientation: `landscape`, per_page: `15`")
     query = _render_query_controls(request, SUPPLEMENT_SOURCE_PEXELS)

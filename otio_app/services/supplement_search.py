@@ -63,6 +63,35 @@ _VISUAL_TRANSLATIONS = {
     "gewitter": "storm",
     "wuste": "desert",
     "wüstenlandschaft": "desert landscape",
+    "gang": "walkway",
+    "gaenge": "walkway",
+    "gänge": "walkway",
+    "guide": "tour",
+    "guides": "tour",
+    "navajo": "tour",
+    "sandstein": "sandstone",
+    "spirituell": "spiritual",
+    "spirituellen": "spiritual",
+}
+
+_PEXELS_ALLOWED_TERMS = {
+    "canyon",
+    "desert",
+    "landscape",
+    "light",
+    "light beam",
+    "light beams",
+    "narrow",
+    "person",
+    "rock",
+    "sandstone",
+    "slot canyon",
+    "sunlight",
+    "tour",
+    "walking",
+    "walkway",
+    "water",
+    "storm",
 }
 
 
@@ -126,8 +155,13 @@ def ensure_location_in_query(query: str, location_name: str) -> str:
 
 def build_pexels_query_variants(request: SupplementRequest) -> list[str]:
     location = base_location_for_request(request)
+    primary = build_pexels_primary_query(request)
     preferred = ensure_location_in_query(preferred_search_query(request), location)
     variants = [
+        primary,
+        f"{location} narrow slot canyon",
+        f"{location} narrow light",
+        f"{location} person narrow",
         location,
         f"{location} narrow",
         f"{location} slot canyon",
@@ -151,7 +185,11 @@ def build_pexels_query_variants(request: SupplementRequest) -> list[str]:
 
 def build_pexels_photo_query_variants(request: SupplementRequest) -> list[str]:
     location = base_location_for_request(request)
+    primary = build_pexels_primary_query(request)
     variants = [
+        primary,
+        f"{location} sandstone formations",
+        f"{location} narrow light",
         location,
         f"{location} sandstone",
         f"{location} slot canyon",
@@ -161,6 +199,21 @@ def build_pexels_photo_query_variants(request: SupplementRequest) -> list[str]:
         ensure_location_in_query(preferred_search_query(request), location),
     ]
     return _dedupe_keep_order([variant for variant in variants if variant.strip()])
+
+
+def build_pexels_primary_query(request: SupplementRequest, *, max_terms: int = 5) -> str:
+    """Ort + englische visuelle Schlagwörter; keine deutschen Resttokens."""
+    location = base_location_for_request(request)
+    text = f"{request.visual_requirement} {request.passage_text}"
+    terms: list[str] = []
+    for token in _tokens(text):
+        if token in _STOPWORDS:
+            continue
+        translated = _VISUAL_TRANSLATIONS.get(token)
+        if translated and translated in _PEXELS_ALLOWED_TERMS:
+            terms.append(translated)
+    deduped = _dedupe_keep_order(terms)
+    return " ".join([location, *deduped[:max_terms]]).strip()
 
 
 def preferred_search_query(request: SupplementRequest) -> str:

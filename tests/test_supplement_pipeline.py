@@ -56,7 +56,7 @@ from otio_app.services.supplement_pipeline import (
 )
 from otio_app.services.supplement_requests import load_supplement_requests, upsert_requests
 from otio_app.services.supplement_search import build_keyword_query
-from otio_app.services.supplement_search import build_pexels_query_variants
+from otio_app.services.supplement_search import build_pexels_primary_query, build_pexels_query_variants
 from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
 from otio_app.services.supplement_sources.google_search import GoogleSearchAdapter
 from otio_app.services.supplement_sources.pexels import PexelsAdapter
@@ -360,7 +360,7 @@ def test_pexels_ready_maps_real_response(monkeypatch: pytest.MonkeyPatch) -> Non
     )
     candidates = PexelsAdapter().search(request)
     assert seen_urls
-    assert "https://api.pexels.com/videos/search" in seen_urls[0]
+    assert "https://api.pexels.com/v1/videos/search" in seen_urls[0]
     assert candidates
     candidate = candidates[0]
     assert candidate.is_mock is False
@@ -384,17 +384,10 @@ def test_pexels_query_variants_start_short_with_location() -> None:
         visual_requirement="Ein Mensch in engen Felsspalten",
     )
     variants = build_pexels_query_variants(request)
-    assert variants[:7] == [
-        "Antelope Canyon",
-        "Antelope Canyon narrow",
-        "Antelope Canyon slot canyon",
-        "Antelope Canyon sandstone",
-        "Antelope Canyon canyon",
-        "Antelope Canyon walking",
-        "Antelope Canyon person",
-    ]
+    assert variants[0] == "Antelope Canyon person narrow slot canyon"
     assert all("Antelope Canyon" in query for query in variants[:7])
     assert not any("charakteristischen" in query or "steht" in query for query in variants[:7])
+    assert build_pexels_primary_query(request) == "Antelope Canyon person narrow slot canyon"
 
 
 def test_pexels_ui_default_query_uses_short_location_query() -> None:
@@ -410,7 +403,7 @@ def test_pexels_ui_default_query_uses_short_location_query() -> None:
         visual_requirement="Ein Mensch in engen Felsspalten",
         search_queries={"en": ["Antelope Canyon person narrow charakteristischen slot canyon canyons steht"]},
     )
-    assert _default_query_for_provider(request, SUPPLEMENT_SOURCE_PEXELS) == "Antelope Canyon"
+    assert _default_query_for_provider(request, SUPPLEMENT_SOURCE_PEXELS) == "Antelope Canyon person narrow slot canyon"
 
 
 def test_pexels_rejects_portrait_video(monkeypatch: pytest.MonkeyPatch) -> None:

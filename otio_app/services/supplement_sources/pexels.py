@@ -31,7 +31,7 @@ from otio_app.services.supplement_search import (
 )
 from otio_app.services.supplement_sources.base import ProviderReadiness, SupplementAsset, SupplementSourceAdapter
 
-PEXELS_VIDEO_SEARCH_ENDPOINT = "https://api.pexels.com/videos/search"
+PEXELS_VIDEO_SEARCH_ENDPOINT = "https://api.pexels.com/v1/videos/search"
 PEXELS_PHOTO_SEARCH_ENDPOINT = "https://api.pexels.com/v1/search"
 MIN_DOWNLOAD_BYTES = 100 * 1024
 TARGET_VIDEO_ASPECT_RATIO = 16 / 9
