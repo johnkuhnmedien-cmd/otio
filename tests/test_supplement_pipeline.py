@@ -241,6 +241,8 @@ def test_candidates_are_filtered_by_selected_source() -> None:
             candidate_id="c_adobe",
             supplement_request_id="req1",
             provider=SUPPLEMENT_SOURCE_ADOBE,
+            is_mock=False,
+            status="CANDIDATE_FOUND",
         ),
     ]
     filtered = _candidates_for_source(
@@ -249,6 +251,53 @@ def test_candidates_are_filtered_by_selected_source() -> None:
         selected_source=SUPPLEMENT_SOURCE_ADOBE,
     )
     assert [candidate.candidate_id for candidate in filtered] == ["c_adobe"]
+
+
+def test_mock_candidates_hidden_when_demo_mode_false() -> None:
+    from otio_app.ui.supplement_assets import _candidates_for_source
+
+    candidates = [
+        SupplementCandidate(
+            candidate_id="mock",
+            supplement_request_id="req1",
+            provider=SUPPLEMENT_SOURCE_ADOBE,
+            is_mock=True,
+            status="CANDIDATE_MOCK_ONLY",
+        )
+    ]
+    assert _candidates_for_source(
+        candidates,
+        request_id="req1",
+        selected_source=SUPPLEMENT_SOURCE_ADOBE,
+    ) == []
+    assert _candidates_for_source(
+        candidates,
+        request_id="req1",
+        selected_source=SUPPLEMENT_SOURCE_ADOBE,
+        demo_mode=True,
+    )
+
+
+def test_provider_tab_labels_and_status_chain() -> None:
+    from otio_app.services.supplement_sources import get_provider_readiness
+    from otio_app.ui.supplement_assets import _provider_tab_label, _status_chain
+
+    assert "Pexels" in _provider_tab_label(
+        SUPPLEMENT_SOURCE_PEXELS,
+        get_provider_readiness(SUPPLEMENT_SOURCE_PEXELS),
+    )
+    chain = _status_chain(
+        SupplementRequest(
+            supplement_request_id="req",
+            section_id="section",
+            folder_name="Antelope Canyon",
+            beat_id="beat",
+            passage_text="text",
+            status="READY_FOR_REPLAN",
+        )
+    )
+    assert "Inventory aktualisiert" in chain
+    assert "Schnittplan neu vorschlagen" in chain
 
 
 def test_pexels_without_api_key_is_config_missing(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -26,6 +26,7 @@ from otio_app.defaults import (
     SUPPLEMENT_SOURCE_NANO_BANANA,
     SUPPLEMENT_SOURCE_PEXELS,
 )
+from otio_app.services.supplement_sources.base import ProviderReadiness
 from otio_app.project_layout import safe_folder_slug
 from otio_app.services.edit_plan_builder import build_edit_plan, load_edit_plan
 from otio_app.services.edit_plan_rules import save_edit_plan_rules
@@ -88,6 +89,56 @@ def _candidates_for_source(
         and candidate.provider == selected_source
         and (demo_mode or (not candidate.is_mock and candidate.status != "CANDIDATE_MOCK_ONLY"))
     ]
+
+
+def _provider_tab_label(provider: str, readiness: ProviderReadiness) -> str:
+    label = SUPPLEMENT_SOURCE_LABELS.get(provider, provider)
+    if readiness.status == "READY":
+        marker = "✅ READY"
+    elif provider == SUPPLEMENT_SOURCE_GOOGLE:
+        marker = "🔎 Discovery"
+    elif readiness.status == "CONFIG_MISSING":
+        marker = "⚠️ CONFIG"
+    elif readiness.status == "ERROR":
+        marker = "🔴 ERROR"
+    else:
+        marker = "🟡 Mock"
+    return f"{label} {marker}"
+
+
+def _status_chain(request: SupplementRequest) -> str:
+    steps = [
+        ("Request erstellt", True),
+        ("Quelle gewählt", request.status not in {"PENDING_SOURCE_SELECTION"}),
+        ("Kandidaten gefunden", request.status in {
+            "CANDIDATES_FOUND",
+            "ASSET_ACQUIRED",
+            "ANALYSIS_PENDING",
+            "ANALYSIS_COMPLETE",
+            "INVENTORY_UPDATED",
+            "READY_FOR_REPLAN",
+        }),
+        ("Asset übernommen", request.status in {
+            "ASSET_ACQUIRED",
+            "ANALYSIS_PENDING",
+            "ANALYSIS_COMPLETE",
+            "INVENTORY_UPDATED",
+            "READY_FOR_REPLAN",
+        }),
+        ("Analyse fertig", request.status in {
+            "ANALYSIS_COMPLETE",
+            "INVENTORY_UPDATED",
+            "READY_FOR_REPLAN",
+        }),
+        ("Inventory aktualisiert", request.status in {"INVENTORY_UPDATED", "READY_FOR_REPLAN"}),
+        ("Schnittplan neu vorschlagen", request.status == "READY_FOR_REPLAN"),
+    ]
+    return " → ".join(("✅ " if done else "⬜ ") + label for label, done in steps)
+
+
+def _query_contains_location(query: str, request: SupplementRequest) -> bool:
+    location = (request.location_name or request.folder_name).strip()
+    return bool(location and location.casefold() in query.casefold())
 
 
 def _materialize_requests_from_plan(project, folder_name: str) -> int:
@@ -198,6 +249,192 @@ def _materialize_requests_from_plan(project, folder_name: str) -> int:
     return len(new_requests)
 
 
+def _save_source_and_query(project, request: SupplementRequest, provider: str, query: str) -> SupplementRequest | None:
+    request_for_search = request_with_keyword_query(request, query)
+    return update_request(
+        project,
+        request.supplement_request_id,
+        selected_source=provider,
+        search_queries=request_for_search.search_queries,
+        query_used=request_for_search.search_queries.get("en", [query])[0],
+        status="SOURCE_SELECTED",
+    )
+
+
+def _render_query_controls(request: SupplementRequest, provider: str) -> str:
+    location = request.location_name or request.folder_name
+    st.caption(f"Ort / location_name: **{location}**")
+    generated = preferred_search_query(request)
+    query = st.text_input(
+        "Suchquery",
+        value=generated,
+        key=f"query_{request.supplement_request_id}_{provider}",
+    )
+    if location and location.casefold() not in query.casefold():
+        st.warning("Die Query enthält den Ortsnamen nicht. Produktive Suche sollte den Ort enthalten.")
+    return query
+
+
+def _render_pexels_candidate_card(project, request: SupplementRequest, candidate: SupplementCandidate, index: int) -> None:
+    with st.expander(
+        f"{index + 1}. {candidate.title[:80]} · {candidate.duration_sec:.1f}s · "
+        f"{candidate.width}×{candidate.height} · {candidate.location_match}",
+        expanded=index == 0,
+    ):
+        if candidate.preview_url:
+            st.image(candidate.preview_url, caption="Preview")
+        st.caption(f"Query: `{candidate.query_used}`")
+        st.caption(
+            f"Creator: {candidate.creator or '—'} · Dauer: {candidate.duration_sec:.1f}s · "
+            f"Download-Datei: {candidate.selected_video_file_width}×{candidate.selected_video_file_height} "
+            f"{candidate.pexels_quality}"
+        )
+        st.caption(f"Location Match: **{candidate.location_match or '—'}**")
+        if candidate.source_page_url:
+            st.link_button("Pexels-Link öffnen", candidate.source_page_url)
+        disabled = not candidate.download_enabled or candidate.location_match == "missing"
+        if candidate.location_match == "missing":
+            st.warning("Ort fehlt im Kandidaten — keine automatische Nutzung ohne manuelle Freigabe.")
+        if st.button(
+            "Dieses Asset herunterladen",
+            key=f"download_pexels_{candidate.candidate_id}",
+            disabled=disabled,
+        ):
+            try:
+                asset = acquire_supplement_candidate(project, candidate, request)
+                st.success(f"Asset gespeichert: `{asset.local_path}`")
+                st.rerun()
+            except (OSError, ValueError, PermissionError, NotImplementedError, RuntimeError) as exc:
+                st.error(str(exc))
+
+
+def _render_pexels_tab(project, request: SupplementRequest, readiness: ProviderReadiness, document: SupplementRequestsDocument) -> None:
+    st.markdown("#### Pexels")
+    st.caption(f"Status: **{readiness.status}** — {readiness.message}")
+    query = _render_query_controls(request, SUPPLEMENT_SOURCE_PEXELS)
+    if readiness.status != "READY":
+        st.warning("PEXELS_API_KEY fehlt. Bitte unter Systemstatus/API-Schlüssel oder .env setzen.")
+        st.info("Alternative: Manual Import oder Google-Discovery verwenden.")
+        return
+    if st.button("Pexels-Kandidaten suchen", key=f"search_pexels_{request.supplement_request_id}"):
+        updated = _save_source_and_query(project, request, SUPPLEMENT_SOURCE_PEXELS, query)
+        if updated is not None:
+            found = search_supplement_candidates(project, updated)
+            st.success(f"{len(found)} echte Pexels-Kandidaten gefunden.")
+            st.rerun()
+    candidates = _candidates_for_source(
+        document.candidates,
+        request_id=request.supplement_request_id,
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+    )
+    if not candidates:
+        st.info("0 echte Pexels-Kandidaten gefunden oder noch nicht gesucht.")
+        st.button("Query vereinfachen und erneut suchen", key=f"simplify_pexels_{request.supplement_request_id}", disabled=True)
+        st.caption("Du kannst oben eine kürzere Query mit Ortsnamen eintragen und erneut suchen.")
+        return
+    for index, candidate in enumerate(candidates):
+        _render_pexels_candidate_card(project, request, candidate, index)
+
+
+def _render_google_tab(project, request: SupplementRequest) -> None:
+    st.markdown("#### Google Suche")
+    query = _render_query_controls(request, SUPPLEMENT_SOURCE_GOOGLE)
+    search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+    st.link_button("Google-Suche im Browser öffnen", search_url)
+    st.info("Google liefert keine automatisch freigegebenen Produktionsassets. Bitte Datei manuell herunterladen.")
+    manual_path = st.text_input(
+        "Lokalen Pfad nach manuellem Download einfügen",
+        key=f"google_manual_path_{request.supplement_request_id}",
+        placeholder="/Users/.../Downloads/asset.mp4",
+    )
+    source_url = st.text_input(
+        "Quell-URL / Website",
+        value=search_url,
+        key=f"google_source_url_{request.supplement_request_id}",
+    )
+    if st.button("Manuell heruntergeladenes Google-Asset übernehmen", key=f"import_google_{request.supplement_request_id}"):
+        try:
+            imported = import_manual_supplement_asset(
+                project,
+                request=request,
+                source_path=Path(manual_path).expanduser(),
+                source_url=source_url,
+                rights_status="NEEDS_LICENSE_REVIEW",
+                source_provider=SUPPLEMENT_SOURCE_GOOGLE,
+                acquisition_method="manual_download",
+            )
+            st.success(f"Asset übernommen: `{imported.local_path}`")
+            st.rerun()
+        except (OSError, ValueError, PermissionError) as exc:
+            st.error(str(exc))
+
+
+def _render_mock_provider_tab(provider: str, readiness: ProviderReadiness, request: SupplementRequest) -> None:
+    st.markdown(f"#### {SUPPLEMENT_SOURCE_LABELS.get(provider, provider)}")
+    st.caption(f"Status: **{readiness.status}** — {readiness.message}")
+    _render_query_controls(request, provider)
+    if provider == SUPPLEMENT_SOURCE_NANO_BANANA:
+        st.caption(f"Prompt-Vorschlag: {request.generation_prompt or request.visual_requirement or request.passage_text}")
+    st.warning("Noch nicht produktiv angebunden. Keine Mock-Dateien werden ins Inventory geschrieben.")
+
+
+def _render_manual_tab(project, request: SupplementRequest) -> None:
+    st.markdown("#### Manual Import")
+    destination = Path(project.project_root_path) / request.folder_name / "_supplemental" / "_manual"
+    st.caption("Status: **READY** — Manueller Import ist verfügbar.")
+    st.caption(f"Zielordner: `{destination}`")
+    manual_path = st.text_input(
+        "Lokaler Dateipfad",
+        key=f"manual_path_{request.supplement_request_id}",
+        placeholder="/Users/.../Downloads/asset.mp4",
+    )
+    source_url = st.text_input("Optionale Source-URL", key=f"manual_source_{request.supplement_request_id}")
+    rights_status = st.selectbox(
+        "Rechte-/Lizenzstatus",
+        options=["APPROVED", "NEEDS_LICENSE_REVIEW", "PRIVATE_ONLY"],
+        index=1,
+        key=f"manual_rights_status_{request.supplement_request_id}",
+    )
+    if st.button("Datei übernehmen", key=f"manual_import_{request.supplement_request_id}"):
+        try:
+            imported = import_manual_supplement_asset(
+                project,
+                request=request,
+                source_path=Path(manual_path).expanduser(),
+                source_url=source_url,
+                rights_status=rights_status,
+                source_provider=SUPPLEMENT_SOURCE_MANUAL,
+                acquisition_method="manual_import",
+            )
+            st.success(f"Asset übernommen: `{imported.local_path}`")
+            st.rerun()
+        except (OSError, ValueError, PermissionError) as exc:
+            st.error(str(exc))
+
+
+def _render_source_tab(
+    *,
+    project,
+    request: SupplementRequest,
+    provider: str,
+    readiness: ProviderReadiness,
+    document: SupplementRequestsDocument,
+) -> None:
+    update_request(
+        project,
+        request.supplement_request_id,
+        selected_source=request.selected_source or provider,
+    )
+    if provider == SUPPLEMENT_SOURCE_PEXELS:
+        _render_pexels_tab(project, request, readiness, document)
+    elif provider == SUPPLEMENT_SOURCE_GOOGLE:
+        _render_google_tab(project, request)
+    elif provider == SUPPLEMENT_SOURCE_MANUAL:
+        _render_manual_tab(project, request)
+    else:
+        _render_mock_provider_tab(provider, readiness, request)
+
+
 def render_supplement_assets_page() -> None:
     st.header("②½ Supplement Assets")
     project = render_project_selector(PAGE_SUPPLEMENT)
@@ -271,207 +508,77 @@ def render_supplement_assets_page() -> None:
         st.info("Keine Supplement Requests — Coverage-Prüfung ausführen oder Schnittplan vorschlagen.")
         return
 
-    for request in folder_requests:
-        with st.expander(
-            f"{request.supplement_request_id} · {request.beat_id} · {request.status}",
-            expanded=request.status != "ACQUIRED",
-        ):
-            st.write(request.passage_text)
-            st.caption(f"**Motiv:** {request.visual_requirement}")
-            st.caption(
-                f"Bester lokaler Kandidat: `{request.local_best_asset_id or '—'}` "
-                f"(Score {request.local_best_match_score:.2f}) · "
-                f"Dauer {request.duration_needed_sec:.1f}s"
-            )
-            st.caption(f"**Warum unzureichend:** {request.reason}")
-            query_key = f"search_query_{request.supplement_request_id}"
-            query = st.text_input(
-                "Suchbegriffe",
-                value=preferred_search_query(request),
-                key=query_key,
-                help="Kurze Keywords funktionieren besser als ganze Sätze, z. B. Antelope Canyon narrow light.",
-            )
-            st.caption(f"Verwendete Query: `{query}`")
+    request_labels = [
+        f"{req.beat_id} · {req.status} · {req.visual_requirement[:60] or req.passage_text[:60]}"
+        for req in folder_requests
+    ]
+    selected_request_idx = st.selectbox(
+        "Supplement Request",
+        options=range(len(folder_requests)),
+        format_func=lambda index: request_labels[index],
+        key=f"supplement_request_select_{project.id}_{safe_folder_slug(selected_folder)}",
+    )
+    request = folder_requests[selected_request_idx]
 
-            source_options = list(SUPPLEMENT_SOURCE_LABELS.keys())
-            current_source = request.selected_source if request.selected_source in source_options else source_options[0]
-            source = st.selectbox(
-                "Quelle",
-                options=source_options,
-                format_func=lambda key: SUPPLEMENT_SOURCE_LABELS[key],
-                key=f"source_{request.supplement_request_id}",
-                index=source_options.index(current_source),
-            )
-            selected_readiness = get_provider_readiness(source)
-            st.caption(
-                f"Provider-Status: **{selected_readiness.status}** — {selected_readiness.message}"
-            )
-            if st.button("Quelle speichern", key=f"save_source_{request.supplement_request_id}"):
-                update_request(
-                    project,
-                    request.supplement_request_id,
-                    selected_source=source,
-                    status="SOURCE_SELECTED",
-                )
-                st.rerun()
+    st.markdown("### Fehlendes Motiv")
+    st.write(request.passage_text)
+    st.caption(
+        f"**Motiv:** {request.visual_requirement or '—'} · "
+        f"**Dauer:** {request.duration_needed_sec:.1f}s · "
+        f"**Ort:** {request.location_name or request.folder_name}"
+    )
+    st.caption(f"**Warum Supplement nötig:** {request.reason or '—'}")
+    st.caption(_status_chain(request))
 
-            candidates = _candidates_for_source(
-                document.candidates,
-                request_id=request.supplement_request_id,
-                selected_source=source,
+    source_order = [
+        SUPPLEMENT_SOURCE_PEXELS,
+        SUPPLEMENT_SOURCE_GOOGLE,
+        SUPPLEMENT_SOURCE_NANO_BANANA,
+        SUPPLEMENT_SOURCE_ADOBE,
+        SUPPLEMENT_SOURCE_MANUAL,
+    ]
+    readiness = {provider: get_provider_readiness(provider) for provider in source_order}
+    tabs = st.tabs([_provider_tab_label(provider, readiness[provider]) for provider in source_order])
+    for provider, tab in zip(source_order, tabs):
+        with tab:
+            _render_source_tab(
+                project=project,
+                request=request,
+                provider=provider,
+                readiness=readiness[provider],
+                document=document,
             )
-            if request.status == "CANDIDATES_FOUND":
-                st.success(f"{len(candidates)} Kandidat(en) gefunden.")
-            elif candidates:
-                st.info(f"{len(candidates)} gespeicherte Kandidat(en) vorhanden.")
-            if not candidates:
-                st.info("Für diese Quelle wurden noch keine Kandidaten gesucht.")
-            search_label = (
-                "Mock-Suche anzeigen"
-                if selected_readiness.is_mock or selected_readiness.status == "CONFIG_MISSING"
-                else "Supplement-Kandidaten für diese Quelle suchen"
-            )
-            if st.button(search_label, key=f"search_{request.supplement_request_id}"):
-                try:
-                    request_for_search = request_with_keyword_query(request, query)
-                    updated = update_request(
-                        project,
-                        request.supplement_request_id,
-                        selected_source=source,
-                        search_queries=request_for_search.search_queries,
-                        query_used=query,
-                        status="SOURCE_SELECTED",
-                    )
-                    if updated is None:
-                        st.error("Request nicht gefunden.")
-                    else:
-                        found = search_supplement_candidates(project, updated)
-                        st.session_state[f"supplement_search_status_{request.supplement_request_id}"] = (
-                            f"{len(found)} Kandidat(en) gefunden mit Query: {query}"
-                        )
-                        st.rerun()
-                except (OSError, ValueError, PermissionError, NotImplementedError) as exc:
-                    st.error(str(exc))
-            status_message = st.session_state.get(
-                f"supplement_search_status_{request.supplement_request_id}"
-            )
-            if status_message:
-                st.success(status_message)
 
-            if candidates:
-                labels = [
-                    f"{candidate.provider} · {candidate.title[:50]} · {candidate.status} · score={candidate.match_score:.2f}"
-                    for candidate in candidates
-                ]
-                selected_idx = st.selectbox(
-                    "Kandidat",
-                    range(len(candidates)),
-                    format_func=lambda index: labels[index],
-                    key=f"candidate_{request.supplement_request_id}",
-                )
-                candidate: SupplementCandidate = candidates[selected_idx]
-                if candidate.is_mock or not candidate.download_enabled:
-                    st.warning("Demo / Mock-Kandidat — kein produktiver Download möglich.")
-                if candidate.provider == SUPPLEMENT_SOURCE_PEXELS and not candidate.is_mock:
-                    st.caption(
-                        f"Query: `{candidate.query_used or '—'}` · "
-                        f"Ort: {candidate.location_name or '—'} · "
-                        f"location_match: **{candidate.location_match or '—'}**"
-                    )
-                    st.caption(
-                        f"Dauer: {candidate.duration_sec:.1f}s · "
-                        f"Auflösung: {candidate.width}×{candidate.height} · "
-                        f"Download: {candidate.selected_video_file_width}×{candidate.selected_video_file_height} "
-                        f"{candidate.pexels_quality or ''}"
-                    )
-                    if candidate.creator:
-                        st.caption(f"Creator: {candidate.creator}")
-                    if candidate.preview_url:
-                        st.image(candidate.preview_url, caption="Pexels Preview")
-                    if candidate.source_page_url:
-                        st.link_button("Pexels-Seite öffnen", candidate.source_page_url)
-                    if candidate.location_match == "missing":
-                        st.warning("Ort wurde im Kandidaten nicht erkannt — manuelle Freigabe erforderlich.")
-
-                if candidate.provider == SUPPLEMENT_SOURCE_ADOBE:
-                    st.warning(
-                        "Adobe Stock: Lizenzierung ist kostenpflichtig — nur nach expliziter Freigabe."
-                    )
-                    if st.button(
-                        "Adobe Asset lizenzieren und herunterladen",
-                        key=f"adobe_license_{request.supplement_request_id}",
-                        disabled=candidate.is_mock or not candidate.download_enabled,
-                    ):
-                        try:
-                            approved = approve_adobe_candidate(candidate)
-                            asset = acquire_supplement_candidate(project, approved, request)
-                            st.success(f"Adobe-Asset gespeichert: `{asset.local_path}`")
-                            st.rerun()
-                        except (OSError, ValueError, PermissionError, NotImplementedError) as exc:
-                            st.error(str(exc))
-                elif candidate.provider == SUPPLEMENT_SOURCE_GOOGLE:
-                    st.warning(
-                        "Google Suche ist aktuell Browser-Discovery. Kein automatischer Download; "
-                        "bitte Treffer öffnen, Datei lokal laden und manuell importieren."
-                    )
-                    if candidate.source_page_url:
-                        st.link_button("Google-Treffer im Browser öffnen", candidate.source_page_url)
-                    manual_path = st.text_input(
-                        "Lokaler Pfad nach manuellem Download",
-                        key=f"manual_path_{request.supplement_request_id}",
-                        placeholder="/Users/.../Downloads/asset.mp4",
-                    )
-                    rights_ok = st.checkbox(
-                        "Rechte geprüft / Nutzung freigegeben",
-                        key=f"manual_rights_{request.supplement_request_id}",
-                    )
-                    if st.button(
-                        "Manuell heruntergeladene Datei übernehmen",
-                        key=f"manual_import_{request.supplement_request_id}",
-                    ):
-                        try:
-                            imported = import_manual_supplement_asset(
-                                project,
-                                request=request,
-                                source_path=Path(manual_path).expanduser(),
-                                source_url=candidate.source_page_url,
-                                rights_status="APPROVED" if rights_ok else "NEEDS_LICENSE_REVIEW",
-                                source_provider=SUPPLEMENT_SOURCE_GOOGLE,
-                                acquisition_method="manual_download",
-                            )
-                            st.success(f"Manuelles Asset übernommen: `{imported.local_path}`")
-                            st.rerun()
-                        except (OSError, ValueError, PermissionError, NotImplementedError) as exc:
-                            st.error(str(exc))
-                elif st.button(
-                    "Ausgewähltes Asset herunterladen/generieren",
-                    key=f"acquire_{request.supplement_request_id}",
-                    disabled=candidate.is_mock or not candidate.download_enabled,
-                ):
-                    try:
-                        asset = acquire_supplement_candidate(project, candidate, request)
-                        st.success(f"Asset gespeichert: `{asset.local_path}`")
-                        st.rerun()
-                    except (OSError, ValueError, PermissionError, NotImplementedError) as exc:
-                        st.error(str(exc))
-
+    can_analyze = request.status in {"ANALYSIS_PENDING", "ASSET_ACQUIRED", "ACQUIRED"}
+    can_update_inventory = request.status == "ANALYSIS_COMPLETE"
+    can_replan = request.status == "READY_FOR_REPLAN"
     action_col1, action_col2, action_col3 = st.columns(3)
     with action_col1:
-        analyze_clicked = st.button("Neue Assets analysieren", key=f"analyze_{project.id}")
+        analyze_clicked = st.button(
+            "Neue Assets analysieren",
+            key=f"analyze_{project.id}",
+            disabled=not can_analyze,
+        )
     with action_col2:
-        inventory_clicked = st.button("Inventory aktualisieren", key=f"inventory_{project.id}")
+        inventory_clicked = st.button(
+            "Inventory aktualisieren",
+            key=f"inventory_{project.id}",
+            disabled=not can_update_inventory,
+        )
     with action_col3:
         replan_clicked = st.button(
             "Schnittplan mit neuen Assets neu vorschlagen",
             key=f"replan_{project.id}",
+            disabled=not can_replan,
         )
 
     if analyze_clicked or inventory_clicked:
         acquired = [
-            req
-            for req in folder_requests
-            if req.status in {"ACQUIRED", "ASSET_ACQUIRED", "ANALYSIS_PENDING", "ANALYSIS_COMPLETE"}
+            request
+            if request.status in {"ACQUIRED", "ASSET_ACQUIRED", "ANALYSIS_PENDING", "ANALYSIS_COMPLETE"}
+            else None
         ]
+        acquired = [req for req in acquired if req is not None]
         if not acquired:
             st.warning("Noch keine heruntergeladenen Supplement-Assets.")
         else:
