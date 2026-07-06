@@ -339,7 +339,7 @@ def _render_pexels_tab(project, request: SupplementRequest, readiness: ProviderR
         "Videos: nur 16:9 · Fotos: prefer_16_9 / Hintergrund möglich"
     )
     with st.expander("Technische Suchdetails", expanded=False):
-        st.caption("Video Endpoint: `https://api.pexels.com/v1/videos/search`")
+        st.caption("Video Endpoint: `https://api.pexels.com/videos/search`")
         st.caption("Photo Endpoint: `https://api.pexels.com/v1/search`")
         st.caption("Video orientation: `landscape`, per_page: `15`")
     query = _render_query_controls(request, SUPPLEMENT_SOURCE_PEXELS)

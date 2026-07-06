@@ -360,7 +360,7 @@ def test_pexels_ready_maps_real_response(monkeypatch: pytest.MonkeyPatch) -> Non
     )
     candidates = PexelsAdapter().search(request)
     assert seen_urls
-    assert "https://api.pexels.com/v1/videos/search" in seen_urls[0]
+    assert "https://api.pexels.com/videos/search" in seen_urls[0]
     assert candidates
     candidate = candidates[0]
     assert candidate.is_mock is False
