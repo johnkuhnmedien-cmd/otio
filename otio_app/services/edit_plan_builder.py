@@ -30,6 +30,7 @@ from otio_app.project_layout import (
 )
 from otio_app.services.edit_plan_rules import (
     apply_edit_plan_rules,
+    export_rule_options,
     gemini_prompt_text,
     load_edit_plan_rules,
 )
@@ -38,8 +39,12 @@ from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.shot_timing import (
     TimedPart,
     allocate_time_by_text,
-    append_folder_outro_shot,
     shots_from_timed_parts,
+)
+from otio_app.services.timeline_plan_builder import (
+    assign_global_timeline_positions,
+    build_timeline_items_for_folder,
+    shots_from_timeline_items,
 )
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 
@@ -185,6 +190,7 @@ def build_edit_plan(
     )
     rules_doc = load_edit_plan_rules(project)
     gemini_prompt = gemini_prompt_text(rules_doc)
+    trim_leading_sec = export_rule_options(rules_doc).trim_leading_sec
 
     voice_files = {entry.path: entry for entry in voice_doc.files}
     mapping_by_voice = {
@@ -207,6 +213,7 @@ def build_edit_plan(
 
     shots: list[EditPlanShot] = []
     assets_by_folder: dict[str, list[str]] = {}
+    assets_payload_by_folder: dict[str, list[dict[str, str]]] = {}
     for voice_path, folder_name in mapping_by_voice.items():
         voice_entry = voice_files.get(voice_path)
         if voice_entry is None:
@@ -220,6 +227,7 @@ def build_edit_plan(
         ]
         allowed_paths = {asset["path"] for asset in asset_payload}
         assets_by_folder[folder_name] = [asset["path"] for asset in asset_payload]
+        assets_payload_by_folder[folder_name] = list(asset_payload)
 
         for segment in voice_entry.segments:
             if not segment.text.strip():
@@ -279,15 +287,36 @@ def build_edit_plan(
                     )
                 )
 
-        append_folder_outro_shot(
-            shots,
+    shots = apply_edit_plan_rules(shots, rules_doc, assets_by_folder)
+
+    timeline_items: list = []
+    plan_errors: list[str] = []
+    item_counter = 1
+    grouped: dict[tuple[str, str], list] = {}
+    for shot in shots:
+        if shot.section_outro:
+            continue
+        grouped.setdefault((shot.folder, shot.voice_file), []).append(shot)
+
+    for (folder_name, voice_path), folder_shots in grouped.items():
+        folder_shots.sort(key=lambda s: (s.voice_start_sec, s.voice_end_sec))
+        section_items, errors = build_timeline_items_for_folder(
+            folder_shots,
             folder_name=folder_name,
             voice_file=voice_path,
-            outro_sec=plan_settings.section_outro_sec,
-            max_sec=plan_settings.shot_max_sec,
+            settings=plan_settings,
+            folder_assets=assets_payload_by_folder.get(folder_name, []),
+            trim_leading_sec=trim_leading_sec,
+            item_index_start=item_counter,
         )
+        plan_errors.extend(errors)
+        timeline_items.extend(section_items)
+        item_counter += len(section_items)
 
-    shots = apply_edit_plan_rules(shots, rules_doc, assets_by_folder)
+    if plan_errors and not timeline_items:
+        raise ValueError("\n".join(plan_errors))
+
+    shots = shots_from_timeline_items(timeline_items)
 
     return EditPlanDocument(
         project_id=project.id,
@@ -295,6 +324,7 @@ def build_edit_plan(
         confirmed=False,
         settings=plan_settings,
         shots=shots,
+        timeline_items=timeline_items,
     )
 
 

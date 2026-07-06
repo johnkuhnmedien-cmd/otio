@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from otio_app.analysis_models import EditPlanShot
 
 
 @dataclass(frozen=True)
@@ -100,43 +96,3 @@ def shots_from_timed_parts(
                 )
             )
     return result
-
-
-def append_folder_outro_shot(
-    shots: list[EditPlanShot],
-    *,
-    folder_name: str,
-    voice_file: str,
-    outro_sec: float,
-    max_sec: float,
-) -> None:
-    """Hängt einen Ausklingen-Shot nach dem letzten Wort an (Asset folgt via Regeln)."""
-    from otio_app.analysis_models import EditPlanShot
-    from otio_app.defaults import FALLBACK_SOURCE_MISSING
-
-    if outro_sec <= 0.05:
-        return
-    folder_shots = [
-        shot
-        for shot in shots
-        if shot.folder == folder_name and shot.voice_file == voice_file and not shot.section_outro
-    ]
-    if not folder_shots:
-        return
-    last = folder_shots[-1]
-    duration = min(outro_sec, max_sec)
-    end_voice = last.voice_end_sec
-    shots.append(
-        EditPlanShot(
-            voice_file=voice_file,
-            folder=folder_name,
-            voice_start_sec=end_voice,
-            voice_end_sec=end_voice,
-            duration_sec=duration,
-            asset_path=None,
-            asset_source=FALLBACK_SOURCE_MISSING,
-            motif="Ausklingen",
-            passage_text="",
-            section_outro=True,
-        )
-    )

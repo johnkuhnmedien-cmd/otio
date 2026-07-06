@@ -13,6 +13,8 @@ from otio_app.analysis_models import (
     EditPlanSettings,
     EditPlanShot,
     MediaProbeInfo,
+    TimelineItem,
+    TimelineItemTransform,
 )
 from otio_app.models import Project
 from otio_app.services.clean_media import (
@@ -279,12 +281,34 @@ def test_otio_export_uses_clean_path(_mock_clean, _mock_export, tmp_path: Path) 
         motif="test",
         passage_text="text",
     )
+    item = TimelineItem(
+        timeline_item_id="item_001",
+        type="video_shot",
+        section_id="section_florida_keys",
+        folder_name="Florida Keys",
+        voice_file="/voice/test.wav",
+        resolved_media_path=str(original),
+        original_asset_path=str(original),
+        timeline_in_sec=0.0,
+        timeline_out_sec=3.0,
+        duration_sec=3.0,
+        final_duration_sec=3.0,
+        source_in_sec=0.0,
+        source_out_sec=3.0,
+        voice_start_sec=0.0,
+        voice_end_sec=3.0,
+        transform=TimelineItemTransform(),
+        motif="test",
+        passage_text="text",
+    )
     merged = MergedEditPlanResult(
+        timeline_items=[item],
         shots=[shot],
-        settings=EditPlanSettings(),
+        settings=EditPlanSettings(section_outro_sec=0.0),
         included_folders=["Florida Keys"],
         skipped_folders=[],
         warnings=[],
+        validation_status="OK",
     )
 
     with patch("otio_app.services.otio_exporter.probe_duration_seconds", return_value=10.0):

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPlanShot
+from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPlanShot, TimelineItem
 from otio_app.defaults import (
     DEFAULT_AUDIO_OFFSET_SEC,
     DEFAULT_FALLBACK_ORDER,
@@ -36,7 +36,7 @@ from otio_app.services.otio_exporter import (
     MergedEditPlanResult,
     export_otio_timeline,
     merge_confirmed_edit_plans,
-    verify_shot_media_paths,
+    verify_timeline_media_paths,
 )
 from otio_app.services.otio_export_settings import (
     OtioExportSettings,
@@ -208,9 +208,9 @@ def _render_tab_settings(project) -> None:
     st.markdown("**Timing & Gemini**")
     st.caption(
         "Min./Max. Shot und Gemini-Modell gelten beim **Schnittplan vorschlagen**. "
-        "**Audio-Start** und **Ordner-Ausklingen** werden beim **Schnittplan vorschlagen** "
-        "als letzter Shot pro Ordner angelegt (Asset aus dem Ordner, ≤ Max.-Shot). "
-        "Der OTIO-Export übernimmt die Shots unverändert."
+        "**Audio-Start** beim OTIO-Export. **Ordner-Ausklingen** wird beim "
+        "**Schnittplan vorschlagen** als eigene(s) Element(e) aus dem Ordner geplant "
+        "(je max. 8 s). Der Export übernimmt `timeline_items` unverändert."
     )
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -402,11 +402,13 @@ def _cache_export_preview(
     folders: tuple[str, ...],
 ) -> None:
     st.session_state[_export_preview_cache_key(project_id)] = {
+        "timeline_items": [item.model_dump(mode="json") for item in preview.timeline_items],
         "shots": [shot.model_dump(mode="json") for shot in preview.shots],
         "settings": preview.settings.model_dump(mode="json"),
         "included_folders": preview.included_folders,
         "skipped_folders": preview.skipped_folders,
         "warnings": preview.warnings,
+        "validation_status": preview.validation_status,
     }
     st.session_state[_export_preview_folders_key(project_id)] = list(folders)
 
@@ -416,11 +418,15 @@ def _load_cached_export_preview(project_id: str) -> MergedEditPlanResult | None:
     if not raw:
         return None
     return MergedEditPlanResult(
+        timeline_items=[
+            TimelineItem.model_validate(item) for item in raw.get("timeline_items", [])
+        ],
         shots=[EditPlanShot.model_validate(shot) for shot in raw["shots"]],
         settings=EditPlanSettings.model_validate(raw["settings"]),
         included_folders=list(raw["included_folders"]),
         skipped_folders=list(raw["skipped_folders"]),
         warnings=list(raw["warnings"]),
+        validation_status=str(raw.get("validation_status", "OK")),
     )
 
 
@@ -491,7 +497,7 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                         st.caption(f"• {warning}")
                 else:
                     log_heavy_operation(
-                        f"OTIO-Export ({len(merged.shots)} Shots)",
+                        f"OTIO-Export ({len(preview.timeline_items)} Timeline-Items)",
                         page=PAGE_EDIT_PLAN,
                     )
                     export_result = export_otio_timeline(
@@ -536,7 +542,7 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
             from otio_app.services.otio_exporter import _compute_timeline_sections
 
             timeline_sections = _compute_timeline_sections(
-                preview.shots,
+                preview.timeline_items,
                 preview.settings.model_copy(
                     update={
                         "audio_offset_sec": export_timing.audio_offset_sec,
@@ -563,10 +569,12 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
             ):
                 with st.spinner("ffmpeg prüft alle Shot-Medien …"):
                     log_heavy_operation(
-                        f"Tiefe Medienprüfung ({len(preview.shots)} Shots)",
+                        f"Tiefe Medienprüfung ({len(preview.timeline_items)} Items)",
                         page=PAGE_EDIT_PLAN,
                     )
-                    deep_issues = verify_shot_media_paths(project, preview.shots, strict=True)
+                    deep_issues = verify_timeline_media_paths(
+                        project, preview.timeline_items, strict=True
+                    )
                 if deep_issues:
                     st.warning("Probleme gefunden:")
                     for line in deep_issues[:15]:

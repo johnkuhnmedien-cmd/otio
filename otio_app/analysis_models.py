@@ -150,6 +150,43 @@ class EditPlanShot(BaseModel):
     section_outro: bool = False
 
 
+class TimelineItemTransform(BaseModel):
+    scaling_mode: str = "fill"
+    zoom_x: float = 1.0
+    zoom_y: float = 1.0
+    position_x: float = 0.0
+    position_y: float = 0.0
+
+
+class TimelineItem(BaseModel):
+    timeline_item_id: str
+    type: str
+    section_id: str
+    folder_name: str
+    voice_file: str = ""
+    asset_id: str = ""
+    shot_id: str = ""
+    resolved_media_path: str = ""
+    original_asset_path: Optional[str] = None
+    asset_role: str = ""
+    timeline_in_sec: float = 0.0
+    timeline_out_sec: float = 0.0
+    duration_sec: float = 0.0
+    final_duration_sec: float = 0.0
+    source_in_sec: float = 0.0
+    source_out_sec: float = 0.0
+    voice_start_sec: float = 0.0
+    voice_end_sec: float = 0.0
+    selection_reason: str = ""
+    confidence: float = 0.0
+    transform: TimelineItemTransform = Field(default_factory=TimelineItemTransform)
+    warnings: List[str] = Field(default_factory=list)
+    media_source_type: str = "local"
+    motif: str = ""
+    passage_text: str = ""
+    allow_black: bool = False
+
+
 class EditPlanDocument(BaseModel):
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     project_id: str
@@ -157,3 +194,5 @@ class EditPlanDocument(BaseModel):
     confirmed: bool = False
     settings: EditPlanSettings = Field(default_factory=EditPlanSettings)
     shots: List[EditPlanShot] = Field(default_factory=list)
+    timeline_items: List[TimelineItem] = Field(default_factory=list)
+    allow_black_outro: bool = False

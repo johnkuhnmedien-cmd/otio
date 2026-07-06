@@ -8,7 +8,7 @@ from urllib.parse import unquote, urlparse
 
 import opentimelineio as otio
 
-from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPlanShot
+from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPlanShot, TimelineItem
 from otio_app.models import Project
 from otio_app.project_layout import get_otio_export_path
 from otio_app.services.edit_plan_builder import load_edit_plan
@@ -39,20 +39,24 @@ from otio_app.services.otio_export_settings import (
     load_otio_export_settings,
     save_otio_export_settings,
 )
+from otio_app.services.edit_plan_validator import ValidationStatus, validate_timeline_items
+from otio_app.services.timeline_plan_builder import assign_global_timeline_positions, shots_from_timeline_items
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 
 
 @dataclass(frozen=True)
 class MergedEditPlanResult:
+    timeline_items: list[TimelineItem]
     shots: list[EditPlanShot]
     settings: EditPlanSettings
     included_folders: list[str] = field(default_factory=list)
     skipped_folders: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    validation_status: str = ValidationStatus.OK.value
 
     @property
     def ready(self) -> bool:
-        return bool(self.shots)
+        return bool(self.timeline_items) and self.validation_status == ValidationStatus.OK.value
 
 
 @dataclass(frozen=True)
@@ -95,22 +99,63 @@ def verify_shot_media_paths(
     return warnings
 
 
+def verify_timeline_media_paths(
+    project: Project,
+    items: list[TimelineItem],
+    *,
+    strict: bool = False,
+) -> list[str]:
+    """Prüft Medien der Timeline-Items."""
+    warnings: list[str] = []
+    for item in items:
+        if not item.resolved_media_path:
+            warnings.append(f"{item.timeline_item_id} ({item.folder_name}): kein Medium")
+            continue
+        original = _resolve_media_path(item.resolved_media_path)
+        resolved = resolve_effective_media_path(project, item.folder_name, original)
+        if not path_is_readable_file(resolved):
+            warnings.append(
+                f"{item.timeline_item_id} ({item.folder_name}): offline — `{resolved}`"
+            )
+            continue
+        if strict and resolved.suffix.lower() in {".mp4", ".mov", ".m4v"}:
+            valid, validation_error = validate_clean_output(resolved)
+            if not valid:
+                warnings.append(
+                    f"{item.timeline_item_id}: `{resolved.name}` — "
+                    f"{validation_error or 'nicht Resolve-ready'}"
+                )
+    return warnings
+
+
+def _plan_section_items(plan: EditPlanDocument, folder_name: str, voice_file: str) -> list[TimelineItem]:
+    if plan.timeline_items:
+        return [
+            item
+            for item in plan.timeline_items
+            if item.folder_name == folder_name and item.voice_file == voice_file
+        ]
+    return []
+
+
 def merge_confirmed_edit_plans(
     project: Project,
     *,
     folder_names: list[str] | None = None,
 ) -> MergedEditPlanResult:
-    """Führt bestätigte pro-Ort-Schnittpläne in Voice-over-Reihenfolge zusammen."""
+    """Führt bestätigte Schnittpläne in Voice-over-Reihenfolge zusammen."""
     mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
     if mapping is None or not mapping.confirmed:
         return MergedEditPlanResult(
+            timeline_items=[],
             shots=[],
             settings=EditPlanSettings(),
             warnings=["Voice-over-Zuordnung fehlt oder ist nicht bestätigt."],
+            validation_status=ValidationStatus.BLOCKED.value,
         )
 
     allowed_folders = set(folder_names) if folder_names is not None else None
-    merged_shots: list[EditPlanShot] = []
+    merged_items: list[TimelineItem] = []
     included: list[str] = []
     skipped: list[str] = []
     warnings: list[str] = []
@@ -122,6 +167,8 @@ def merge_confirmed_edit_plans(
             "section_outro_sec": export_settings.section_outro_sec,
         }
     )
+    allow_black_outro = False
+    global_cursor = 0.0
 
     for entry in mapping.entries:
         if not entry.confirmed or not entry.folder:
@@ -139,33 +186,47 @@ def merge_confirmed_edit_plans(
         if folder_name not in included:
             included.append(folder_name)
 
-        voice_shots = [
-            shot
-            for shot in plan.shots
-            if shot.voice_file == entry.voice_file and shot.folder == folder_name
-        ]
-        voice_shots.sort(key=lambda shot: (shot.voice_start_sec, shot.voice_end_sec))
-        if not voice_shots:
+        section_items = _plan_section_items(plan, folder_name, entry.voice_file)
+        if not section_items:
             warnings.append(
-                f"{folder_name}: keine Shots für `{Path(entry.voice_file).name}`."
+                f"{folder_name}: kein timeline_items im Schnittplan — bitte neu vorschlagen."
             )
-        merged_shots.extend(voice_shots)
+            continue
 
-    missing_assets = sum(1 for shot in merged_shots if not shot.asset_path)
-    if missing_assets:
-        warnings.append(f"{missing_assets} Shot(s) ohne lokales Asset — werden als Lücken exportiert.")
+        positioned = assign_global_timeline_positions(
+            section_items,
+            section_start_sec=global_cursor,
+        )
+        merged_items.extend(positioned)
+        global_cursor = positioned[-1].timeline_out_sec if positioned else global_cursor
+        if plan.allow_black_outro:
+            allow_black_outro = True
 
-    warnings.extend(verify_shot_media_paths(project, merged_shots))
+    shots = shots_from_timeline_items(merged_items)
+    warnings.extend(verify_timeline_media_paths(project, merged_items))
 
-    if not merged_shots and not skipped:
+    validation = validate_timeline_items(
+        merged_items,
+        settings=settings,
+        allow_black_outro=allow_black_outro,
+        fps=float(project.fps),
+    )
+    warnings.extend(validation.warnings)
+    if validation.errors:
+        for line in validation.errors:
+            warnings.append(f"Validierung: {line}")
+
+    if not merged_items and not skipped:
         warnings.append("Keine bestätigten Schnittpläne zum Export gefunden.")
 
     return MergedEditPlanResult(
-        shots=merged_shots,
+        timeline_items=merged_items,
+        shots=shots,
         settings=settings,
         included_folders=included,
         skipped_folders=skipped,
         warnings=warnings,
+        validation_status=validation.status.value,
     )
 
 
@@ -291,30 +352,29 @@ def _track_duration_sec(track: otio.schema.Track, *, start_index: int = 0) -> fl
 
 
 def _compute_timeline_sections(
-    shots: list[EditPlanShot],
+    items: list[TimelineItem],
     settings: EditPlanSettings,
 ) -> list[TimelineSection]:
     """Ordner-Abschnitte inkl. Ausklingen und Voice-Start je Abschnitt."""
     sections: list[TimelineSection] = []
-    video_cursor = 0.0
+    if not items:
+        return sections
+
     index = 0
-    while index < len(shots):
-        folder = shots[index].folder
-        voice_file = shots[index].voice_file
-        section_start = video_cursor
+    while index < len(items):
+        folder = items[index].folder_name
+        voice_file = items[index].voice_file
+        section_start = items[index].timeline_in_sec
         narration_duration = 0.0
         section_duration = 0.0
         end_index = index
-        while end_index < len(shots) and shots[end_index].folder == folder:
-            shot_duration = max(0.01, float(shots[end_index].duration_sec))
-            section_duration += shot_duration
-            if not shots[end_index].section_outro:
-                narration_duration += shot_duration
+        while end_index < len(items) and items[end_index].folder_name == folder:
+            item = items[end_index]
+            duration = max(0.01, float(item.duration_sec))
+            section_duration += duration
+            if item.type != "generic_outro_visual":
+                narration_duration += duration
             end_index += 1
-        # Legacy: alte Pläne ohne Ausklingen-Shot — Outro-Dauer aus Einstellungen
-        if narration_duration > 0 and narration_duration == section_duration:
-            legacy_outro = max(0.0, float(settings.section_outro_sec))
-            section_duration += legacy_outro
 
         offset = max(0.0, float(settings.audio_offset_sec))
         voice_start = section_start + offset
@@ -330,7 +390,6 @@ def _compute_timeline_sections(
                 voice_play_duration_sec=voice_play,
             )
         )
-        video_cursor = section_start + section_duration
         index = end_index
     return sections
 
@@ -496,13 +555,92 @@ def _append_aligned_voice_track(
     timeline.tracks.append(track)
 
 
+def _append_timeline_item_clip(
+    track: otio.schema.Track,
+    item: TimelineItem,
+    *,
+    project: Project,
+    index: int,
+    rate: float,
+    export_rules: ExportRuleOptions,
+    timing_notes: list[str] | None = None,
+) -> None:
+    """Schreibt ein Timeline-Item 1:1 — ohne Daueränderung oder Asset-Auswahl."""
+    media_path = _resolve_media_path(item.resolved_media_path)
+    original = (
+        _resolve_media_path(item.original_asset_path)
+        if item.original_asset_path
+        else media_path
+    )
+    if (export_rules.auto_zoom_fill or export_rules.folder_title_enabled) and not is_image_media(
+        original
+    ):
+        effective = ensure_export_media_for_export(
+            project,
+            item.folder_name,
+            original,
+            notes=timing_notes,
+        )
+    else:
+        effective = resolve_effective_media_path(project, item.folder_name, original)
+
+    duration_sec = item.final_duration_sec or item.duration_sec
+    source_in = item.source_in_sec
+    source_out = item.source_out_sec or (source_in + duration_sec)
+    play_sec = max(0.01, source_out - source_in)
+    media_rate = rate
+    timing = probe_media_timing(effective, default_rate=rate)
+    if timing.rate:
+        media_rate = timing.rate
+
+    video_clip = otio.schema.Clip(
+        name=_clip_name_for_media(effective, index=index),
+        media_reference=_media_reference(
+            str(effective),
+            rate,
+            trim_leading_sec=0.0,
+        ),
+    )
+    video_clip.source_range = _time_range(play_sec, media_rate, start_sec=source_in)
+    video_clip.metadata["timeline_item_id"] = item.timeline_item_id
+    video_clip.metadata["type"] = item.type
+    video_clip.metadata["folder"] = item.folder_name
+    video_clip.metadata["motif"] = item.motif
+    video_clip.metadata["passage_text"] = item.passage_text
+    video_clip.metadata["resolved_media_path"] = str(effective)
+    video_clip.metadata["asset_role"] = item.asset_role
+    video_clip.metadata["selection_reason"] = item.selection_reason
+    if item.type == "generic_outro_visual":
+        video_clip.metadata["section_outro"] = True
+    if item.warnings:
+        video_clip.metadata["warnings"] = list(item.warnings)
+    if timing_notes is not None and item.warnings:
+        timing_notes.extend(f"{effective.name}: {w}" for w in item.warnings)
+
+    if export_rules.folder_title_enabled and item.type != "generic_outro_visual" and not is_image_media(
+        original
+    ):
+        video_clip.metadata["folder_title"] = format_folder_display_name(item.folder_name)
+        video_clip.metadata["folder_title_font"] = export_rules.folder_title_font
+        video_clip.metadata["folder_title_duration_sec"] = export_rules.folder_title_duration_sec
+
+    if export_rules.auto_zoom_fill and not is_image_media(original):
+        src_w, src_h = resolve_media_dimensions(project, item.folder_name, original)
+        if src_w and src_h:
+            zoom = compute_fill_zoom_factor(src_w, src_h, project.width, project.height)
+            if zoom is not None:
+                video_clip.metadata["zoom_factor"] = round(zoom, 4)
+
+    track.append(video_clip)
+
+
 def build_otio_timeline(
     project: Project,
     merged: MergedEditPlanResult,
     *,
     export_settings: OtioExportSettings | None = None,
 ) -> otio.schema.Timeline:
-    """Erzeugt eine OTIO-Timeline mit Video- und Voice-over-Spur."""
+    """Erzeugt OTIO nur aus expliziten Timeline-Items — ohne Regeländerungen."""
     rate = float(project.fps)
     settings = merged.settings
     if export_settings is not None:
@@ -513,7 +651,8 @@ def build_otio_timeline(
             }
         )
 
-    sections = _compute_timeline_sections(merged.shots, settings)
+    items = merged.timeline_items
+    sections = _compute_timeline_sections(items, settings)
     export_rules = export_rule_options(load_edit_plan_rules(project))
     timeline = otio.schema.Timeline(name=project.name)
     timeline.metadata["project_id"] = project.id
@@ -526,73 +665,24 @@ def build_otio_timeline(
         timeline.metadata["auto_zoom_fill"] = True
     if export_rules.folder_title_enabled:
         timeline.metadata["folder_title_overlay"] = True
-        timeline.metadata["folder_title_font"] = export_rules.folder_title_font
-        timeline.metadata["folder_title_duration_sec"] = export_rules.folder_title_duration_sec
     timeline.global_start_time = otio.opentime.RationalTime.from_seconds(0, rate)
 
     video_track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
     timing_notes: list[str] = []
-    section_index = 0
-    section_track_start = 0
-    for index, shot in enumerate(merged.shots, start=1):
-        duration_sec = float(shot.duration_sec)
-        is_last_in_folder = _is_last_shot_in_folder(merged.shots, index - 1)
-        _append_video_item(
+    for index, item in enumerate(items, start=1):
+        _append_timeline_item_clip(
             video_track,
-            shot,
+            item,
             project=project,
             index=index,
             rate=rate,
-            duration_sec=duration_sec,
             export_rules=export_rules,
             timing_notes=timing_notes,
-            hold_last_frame=shot.section_outro,
         )
-        if is_last_in_folder:
-            section = sections[section_index]
-            actual_sec = _track_duration_sec(video_track, start_index=section_track_start)
-            pad_sec = section.video_duration_sec - actual_sec
-            if pad_sec > 0.05:
-                last_item = video_track[-1]
-                if isinstance(last_item, otio.schema.Clip):
-                    _extend_clip_hold_last_frame(
-                        last_item,
-                        extra_sec=pad_sec,
-                        rate=rate,
-                        folder=section.folder,
-                    )
-                    timing_notes.append(
-                        f"{section.folder}: letzter Clip um {pad_sec:.1f}s verlängert "
-                        f"(Ziel {section.video_duration_sec:.1f}s)"
-                    )
-                else:
-                    pad = otio.schema.Gap(
-                        name=f"Ausklingen · {section.folder}"[:120],
-                        source_range=_time_range(pad_sec, rate),
-                    )
-                    pad.metadata["folder"] = section.folder
-                    video_track.append(pad)
-                    timing_notes.append(
-                        f"{section.folder}: Videospur um {pad_sec:.1f}s aufgefüllt "
-                        f"(Ziel {section.video_duration_sec:.1f}s)"
-                    )
-            section_index += 1
-            section_track_start = len(video_track)
 
     timeline.tracks.append(video_track)
     if timing_notes:
         timeline.metadata["media_timing_notes"] = list(timing_notes)
-        zoom_notes = [
-            note
-            for note in timing_notes
-            if "×" in note
-            or "Letterboxing" in note
-            or "Zoom" in note
-            or "Auflösung" in note
-            or "Titel" in note
-        ]
-        if zoom_notes:
-            timeline.metadata["aspect_fill_notes"] = zoom_notes
 
     seen_voices: set[str] = set()
     audio_index = 1
@@ -627,9 +717,12 @@ def export_otio_timeline(
 ) -> OtioExportResult:
     """Schreibt die zusammengeführte Timeline als .otio-Datei."""
     if not merged.ready:
-        raise ValueError("Keine Shots zum Export — zuerst Schnittpläne bestätigen.")
+        raise ValueError(
+            "Export blockiert — Schnittplan validieren oder neu vorschlagen. "
+            + "; ".join(merged.warnings[:5])
+        )
 
-    media_issues = verify_shot_media_paths(project, merged.shots, strict=True)
+    media_issues = verify_timeline_media_paths(project, merged.timeline_items, strict=True)
     if media_issues:
         preview = "\n".join(f"• {line}" for line in media_issues[:12])
         extra = f"\n… und {len(media_issues) - 12} weitere" if len(media_issues) > 12 else ""

@@ -77,6 +77,8 @@ def test_build_edit_plan_without_gemini(
         encoding="utf-8",
     )
 
+    (temp_project_layout["project_root"] / "Grand Canyon" / "broll.mp4").write_bytes(b"mp4")
+
     inventory = InventoryDocument(
         project_id=project.id,
         items=[
@@ -86,7 +88,11 @@ def test_build_edit_plan_without_gemini(
                     AssetMediaAnalysis(
                         path=media_path,
                         description="Steile Felswand und Fluss",
-                    )
+                    ),
+                    AssetMediaAnalysis(
+                        path=str(temp_project_layout["project_root"] / "Grand Canyon" / "broll.mp4"),
+                        description="Ruhige Landschaft establishing overview",
+                    ),
                 ],
             )
         ],

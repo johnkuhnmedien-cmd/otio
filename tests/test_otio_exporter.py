@@ -6,11 +6,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 import opentimelineio as otio
+import pytest
 
 from otio_app.analysis_models import (
     EditPlanDocument,
     EditPlanSettings,
     EditPlanShot,
+    TimelineItem,
+    TimelineItemTransform,
     VoiceFolderMappingDocument,
     VoiceFolderMappingEntry,
 )
@@ -30,6 +33,18 @@ from otio_app.services.otio_exporter import (
 from otio_app.services.otio_export_settings import OtioExportSettings
 
 
+@pytest.fixture(autouse=True)
+def _readable_media(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "otio_app.services.otio_exporter.path_is_readable_file",
+        lambda _path: True,
+    )
+    monkeypatch.setattr(
+        "otio_app.services.otio_exporter.validate_clean_output",
+        lambda _path: (True, None),
+    )
+
+
 def _project(tmp_path: Path) -> Project:
     root = tmp_path / "USA"
     root.mkdir()
@@ -43,32 +58,86 @@ def _project(tmp_path: Path) -> Project:
     )
 
 
-def _shot(folder: str, voice_file: str, index: int) -> EditPlanShot:
-    return EditPlanShot(
+def _section_id(folder: str) -> str:
+    return f"section_{folder.replace(' ', '_').lower()}"
+
+
+def _timeline_narration(
+    folder: str,
+    voice_file: str,
+    index: int,
+    *,
+    timeline_in: float,
+) -> TimelineItem:
+    duration = 3.0
+    path = str(Path(f"/media/{folder.replace(' ', '_')}_{index}.mp4"))
+    return TimelineItem(
+        timeline_item_id=f"item_{folder}_{index}",
+        type="video_shot",
+        section_id=_section_id(folder),
+        folder_name=folder,
         voice_file=voice_file,
-        folder=folder,
+        asset_id=f"asset_{index}",
+        shot_id=f"shot_{index:03d}",
+        resolved_media_path=path,
+        original_asset_path=path,
+        asset_role="narration",
+        timeline_in_sec=timeline_in,
+        timeline_out_sec=timeline_in + duration,
+        duration_sec=duration,
+        final_duration_sec=duration,
+        source_in_sec=0.0,
+        source_out_sec=duration,
         voice_start_sec=float(index * 3),
         voice_end_sec=float(index * 3 + 3),
-        duration_sec=3.0,
-        asset_path=str(Path(f"/media/{folder.replace(' ', '_')}_{index}.mp4")),
+        selection_reason="test",
+        confidence=0.8,
+        transform=TimelineItemTransform(),
         motif=f"motif {index}",
         passage_text=f"text {index}",
     )
 
 
-def _outro_shot(folder: str, voice_file: str, *, after_index: int) -> EditPlanShot:
+def _timeline_outro(
+    folder: str,
+    voice_file: str,
+    *,
+    timeline_in: float,
+    after_index: int,
+) -> TimelineItem:
+    duration = 5.0
+    path = str(Path(f"/media/{folder.replace(' ', '_')}_outro.mp4"))
     end_voice = float(after_index * 3 + 3)
-    return EditPlanShot(
+    return TimelineItem(
+        timeline_item_id=f"outro_{folder.replace(' ', '_')}",
+        type="generic_outro_visual",
+        section_id=_section_id(folder),
+        folder_name=folder,
         voice_file=voice_file,
-        folder=folder,
+        asset_id="asset_outro",
+        shot_id="outro_001",
+        resolved_media_path=path,
+        original_asset_path=path,
+        asset_role="generic_section_outro",
+        timeline_in_sec=timeline_in,
+        timeline_out_sec=timeline_in + duration,
+        duration_sec=duration,
+        final_duration_sec=duration,
+        source_in_sec=0.0,
+        source_out_sec=duration,
         voice_start_sec=end_voice,
         voice_end_sec=end_voice,
-        duration_sec=5.0,
-        asset_path=str(Path(f"/media/{folder.replace(' ', '_')}_outro.mp4")),
+        selection_reason="Neutraler Shot aus derselben Sektion",
+        confidence=0.8,
+        transform=TimelineItemTransform(),
         motif="Ausklingen",
-        passage_text="",
-        section_outro=True,
     )
+
+
+def _shots_from_items(items: list[TimelineItem]) -> list[EditPlanShot]:
+    from otio_app.services.timeline_plan_builder import shots_from_timeline_items
+
+    return shots_from_timeline_items(items)
 
 
 def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
@@ -100,6 +169,15 @@ def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
     )
 
     plan_settings = EditPlanSettings(audio_offset_sec=1.0, section_outro_sec=5.0)
+    florida_items = [
+        _timeline_narration("Florida Keys", voice_a, 1, timeline_in=0.0),
+        _timeline_narration("Florida Keys", voice_a, 2, timeline_in=3.0),
+        _timeline_outro("Florida Keys", voice_a, timeline_in=6.0, after_index=2),
+    ]
+    canyon_items = [
+        _timeline_narration("Grand Canyon", voice_b, 1, timeline_in=0.0),
+        _timeline_outro("Grand Canyon", voice_b, timeline_in=3.0, after_index=1),
+    ]
     save_edit_plan(
         project,
         EditPlanDocument(
@@ -107,11 +185,8 @@ def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
             folder_name="Florida Keys",
             confirmed=True,
             settings=plan_settings,
-            shots=[
-                _shot("Florida Keys", voice_a, 1),
-                _shot("Florida Keys", voice_a, 2),
-                _outro_shot("Florida Keys", voice_a, after_index=2),
-            ],
+            shots=_shots_from_items(florida_items),
+            timeline_items=florida_items,
         ),
         "Florida Keys",
     )
@@ -122,10 +197,8 @@ def _setup_mapping_and_plans(project: Project, tmp_path: Path) -> None:
             folder_name="Grand Canyon",
             confirmed=True,
             settings=plan_settings,
-            shots=[
-                _shot("Grand Canyon", voice_b, 1),
-                _outro_shot("Grand Canyon", voice_b, after_index=1),
-            ],
+            shots=_shots_from_items(canyon_items),
+            timeline_items=canyon_items,
         ),
         "Grand Canyon",
     )
@@ -138,7 +211,7 @@ def test_merge_confirmed_edit_plans_in_mapping_order(tmp_path: Path) -> None:
     merged = merge_confirmed_edit_plans(project)
     assert merged.ready is True
     assert merged.included_folders == ["Florida Keys", "Grand Canyon"]
-    assert len(merged.shots) == 5
+    assert len(merged.timeline_items) == 5
 
 
 def test_timeline_sections_include_outro_and_per_section_voice_offset(tmp_path: Path) -> None:
@@ -147,7 +220,7 @@ def test_timeline_sections_include_outro_and_per_section_voice_offset(tmp_path: 
     merged = merge_confirmed_edit_plans(project)
     settings = EditPlanSettings(audio_offset_sec=1.0, section_outro_sec=5.0)
 
-    sections = _compute_timeline_sections(merged.shots, settings)
+    sections = _compute_timeline_sections(merged.timeline_items, settings)
     assert len(sections) == 2
     assert sections[0].video_start_sec == 0.0
     assert sections[0].video_duration_sec == 11.0
@@ -201,33 +274,22 @@ def test_audio_offset_and_outro_on_export(tmp_path: Path) -> None:
     assert canyon_audio[1].source_range.duration.to_seconds() == 2.0
 
 
-def test_video_section_padded_when_media_shorter_than_planned(tmp_path: Path) -> None:
+def test_video_section_keeps_planned_durations(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _setup_mapping_and_plans(project, tmp_path)
     merged = merge_confirmed_edit_plans(project)
-    short_timing = MediaTiming(start_sec=0.0, duration_sec=2.0, rate=25.0)
-
-    with patch(
-        "otio_app.services.otio_exporter.probe_media_timing",
-        return_value=short_timing,
-    ), patch(
-        "otio_app.services.otio_exporter.probe_duration_seconds",
-        return_value=2.0,
-    ):
-        timeline = build_otio_timeline(
-            project,
-            merged,
-            export_settings=OtioExportSettings(audio_offset_sec=1.0, section_outro_sec=5.0),
-        )
-
+    timeline = build_otio_timeline(
+        project,
+        merged,
+        export_settings=OtioExportSettings(audio_offset_sec=1.0, section_outro_sec=5.0),
+    )
     video_track = timeline.tracks[0]
     gaps = [item for item in video_track if isinstance(item, otio.schema.Gap)]
     assert not gaps
     clips = [item for item in video_track if isinstance(item, otio.schema.Clip)]
-    assert clips[1].source_range.duration.to_seconds() <= 2.0
+    assert clips[1].source_range.duration.to_seconds() == 3.0
     assert clips[2].name == "Florida_Keys_outro.mp4"
-    assert clips[2].source_range.duration.to_seconds() >= 5.0
-    assert clips[4].name == "Grand_Canyon_outro.mp4"
+    assert clips[2].source_range.duration.to_seconds() == 5.0
     total_video = sum(item.source_range.duration.to_seconds() for item in video_track)
     assert total_video == 19.0
 
@@ -347,7 +409,7 @@ def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
     merged = merge_confirmed_edit_plans(project)
 
     with patch(
-        "otio_app.services.otio_exporter.verify_shot_media_paths",
+        "otio_app.services.otio_exporter.verify_timeline_media_paths",
         return_value=[],
     ):
         export_result = export_otio_timeline(
