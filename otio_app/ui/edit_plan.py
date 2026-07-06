@@ -37,10 +37,7 @@ from otio_app.services.edit_plan_rules import (
     validate_shots_against_rules,
 )
 from otio_app.services.edit_plan_validator import ValidationStatus, validate_timeline_items
-from otio_app.services.opening_title_renderer import (
-    ensure_opening_titles_rendered,
-    sync_opening_titles_from_rules,
-)
+from otio_app.services.opening_title_renderer import apply_opening_titles_to_plan
 from otio_app.services.timeline_plan_builder import build_voiceover_plan
 from otio_app.services.otio_exporter import (
     MergedEditPlanResult,
@@ -338,20 +335,14 @@ def _finalize_plan_for_confirm(
             "Bitte unter „Vorschlag“ den Schnittplan neu generieren."
         )
 
-    synced_items, title_changed = sync_opening_titles_from_rules(
+    timeline_items, title_notes = apply_opening_titles_to_plan(
         project,
         document.timeline_items,
         folder_name=selected_folder,
         export_opts=rules,
     )
-    if title_changed:
-        document = document.model_copy(update={"timeline_items": synced_items})
-        notes.append("Opening Title aus aktuellen Regeln aktualisiert.")
-
-    if any(item.type == "opening_title" for item in document.timeline_items):
-        rendered_items, render_notes = ensure_opening_titles_rendered(project, document.timeline_items)
-        document = document.model_copy(update={"timeline_items": rendered_items})
-        notes.extend(render_notes)
+    document = document.model_copy(update={"timeline_items": timeline_items})
+    notes.extend(title_notes)
 
     validation = validate_timeline_items(
         document.timeline_items,
@@ -398,6 +389,8 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
         try:
             rules_doc = get_edit_plan_rules_for_project(project)
             save_edit_plan_rules(project, rules_doc)
+            export_opts = export_rule_options(rules_doc)
+            title_notes: list[str] = []
             with st.spinner(f"Schnittplan für {selected_folder} wird erstellt…"):
                 document = build_edit_plan(
                     project,
@@ -406,8 +399,20 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
                     folder_names=[selected_folder],
                     rules_doc=rules_doc,
                 )
+                export_opts = export_rule_options(rules_doc)
+                if export_opts.folder_title_enabled:
+                    timeline_items, title_notes = apply_opening_titles_to_plan(
+                        project,
+                        document.timeline_items,
+                        folder_name=selected_folder,
+                        export_opts=export_opts,
+                    )
+                    document = document.model_copy(update={"timeline_items": timeline_items})
             _set_draft(document, selected_folder)
             st.success(f"{len(document.shots)} Shots vorgeschlagen.")
+            if export_opts.folder_title_enabled and title_notes:
+                for note in title_notes:
+                    st.caption(f"• {note}")
             st.rerun()
         except (GeminiNotConfiguredError, ValueError, FileNotFoundError) as exc:
             st.error(str(exc))

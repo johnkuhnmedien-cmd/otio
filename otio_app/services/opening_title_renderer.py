@@ -212,13 +212,10 @@ def sync_opening_titles_from_rules(
         )
 
     changed = existing is None or _opening_title_signature(existing) != _opening_title_signature(refreshed)
-    if changed and existing is not None and existing.rendered_media_path:
-        stale = Path(existing.rendered_media_path)
-        if stale.is_file():
-            try:
-                stale.unlink()
-            except OSError:
-                pass
+    if changed:
+        _invalidate_title_render_cache(
+            Path(existing.rendered_media_path) if existing and existing.rendered_media_path else None
+        )
 
     return [refreshed, *non_titles], changed
 
@@ -440,11 +437,75 @@ def render_opening_title_media(
     return _render_with_pillow(project, item, font_path, output_path)
 
 
+def _title_render_meta_path(media_path: Path) -> Path:
+    return media_path.parent / f"{media_path.stem}.render.json"
+
+
+def _write_title_render_meta(media_path: Path, item: TimelineItem) -> None:
+    meta_path = _title_render_meta_path(media_path)
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(
+        json.dumps(list(_opening_title_signature(item)), ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _title_render_cache_matches(item: TimelineItem, media_path: Path) -> bool:
+    if not path_is_readable_file(media_path):
+        return False
+    meta_path = _title_render_meta_path(media_path)
+    if not meta_path.is_file():
+        return False
+    try:
+        stored = json.loads(meta_path.read_text(encoding="utf-8"))
+        return tuple(stored) == _opening_title_signature(item)
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+
+
+def _invalidate_title_render_cache(media_path: Path | None) -> None:
+    if media_path is None:
+        return
+    for path in (media_path, _title_render_meta_path(media_path)):
+        if path.is_file():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
+def apply_opening_titles_to_plan(
+    project: Project,
+    items: list[TimelineItem],
+    *,
+    folder_name: str,
+    export_opts: ExportRuleOptions,
+) -> tuple[list[TimelineItem], list[str]]:
+    """Synchronisiert Titel mit Regeln und rendert bei Bedarf neu."""
+    notes: list[str] = []
+    if not export_opts.folder_title_enabled:
+        return [item for item in items if item.type != "opening_title"], notes
+
+    synced_items, changed = sync_opening_titles_from_rules(
+        project,
+        items,
+        folder_name=folder_name,
+        export_opts=export_opts,
+    )
+    if changed:
+        notes.append("Opening Title aus Regeln übernommen.")
+    rendered_items, render_notes = ensure_opening_titles_rendered(project, synced_items)
+    notes.extend(render_notes)
+    return rendered_items, notes
+
+
 def ensure_opening_titles_rendered(
     project: Project,
     items: list[TimelineItem],
+    *,
+    force: bool = False,
 ) -> tuple[list[TimelineItem], list[str]]:
-    """Rendert fehlende Opening Titles und aktualisiert Pfade."""
+    """Rendert Opening Titles neu, wenn Datei fehlt oder Render-Parameter geändert wurden."""
     font_warnings: list[dict[str, str | bool]] = []
     report_warnings: list[str] = []
     updated: list[TimelineItem] = []
@@ -454,7 +515,11 @@ def ensure_opening_titles_rendered(
             updated.append(item)
             continue
         media_path = Path(item.rendered_media_path) if item.rendered_media_path else None
-        if media_path is not None and path_is_readable_file(media_path):
+        if (
+            not force
+            and media_path is not None
+            and _title_render_cache_matches(item, media_path)
+        ):
             updated.append(
                 item.model_copy(
                     update={
@@ -463,7 +528,10 @@ def ensure_opening_titles_rendered(
                 )
             )
             continue
+
+        _invalidate_title_render_cache(media_path)
         rendered = render_opening_title_media(project, item, font_warnings=font_warnings)
+        _write_title_render_meta(rendered, item)
         updated.append(
             item.model_copy(
                 update={

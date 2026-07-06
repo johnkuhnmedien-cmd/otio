@@ -14,7 +14,6 @@ from otio_app.analysis_models import (
 )
 from otio_app.services.duration_rules import MAX_DURATION_SEC, MIN_DURATION_SEC, split_total_duration
 from otio_app.services.opening_title_renderer import DEFAULT_OPENING_TITLE_FONT
-from otio_app.services.opening_title_renderer import DEFAULT_OPENING_TITLE_FONT
 from otio_app.services.generic_outro_selector import (
     GenericAssetCandidate,
     asset_id_for_path,

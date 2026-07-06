@@ -361,6 +361,54 @@ def test_pillow_fallback_when_drawtext_missing(
     assert rendered.is_file()
 
 
+def test_ensure_opening_titles_rerenders_when_signature_changes(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    item = build_opening_title_item(
+        folder_name="Antelope Canyon",
+        voice_file="/v.wav",
+        section_id="section_antelope_canyon",
+        work_dir=project.work_dir_path,
+        requested_font_family="Phosphate",
+        font_size=96.0,
+    )
+    output = Path(item.rendered_media_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(b"old-mov")
+    from otio_app.services.opening_title_renderer import _write_title_render_meta
+
+    _write_title_render_meta(output, item)
+
+    updated_item = item.model_copy(update={"font_size": 40.0, "requested_font_family": "Helvetica Neue"})
+    with patch(
+        "otio_app.services.opening_title_renderer.render_opening_title_media",
+        return_value=output,
+    ) as mock_render:
+        rendered_items, notes = ensure_opening_titles_rendered(project, [updated_item])
+    mock_render.assert_called_once()
+    assert notes
+    assert rendered_items[0].font_size == 40.0
+
+
+def test_ensure_opening_titles_skips_valid_cache(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    item = build_opening_title_item(
+        folder_name="Antelope Canyon",
+        voice_file="/v.wav",
+        section_id="section_antelope_canyon",
+        work_dir=project.work_dir_path,
+    )
+    output = Path(item.rendered_media_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(b"mov")
+    from otio_app.services.opening_title_renderer import _write_title_render_meta
+
+    _write_title_render_meta(output, item)
+
+    with patch("otio_app.services.opening_title_renderer.render_opening_title_media") as mock_render:
+        ensure_opening_titles_rendered(project, [item])
+    mock_render.assert_not_called()
+
+
 @patch("otio_app.services.opening_title_renderer.subprocess.run")
 def test_rendered_media_path_created(mock_run: pytest.Mock, tmp_path: Path) -> None:
     project = _project(tmp_path)
