@@ -6,7 +6,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPlanShot, TimelineItem, VoiceoverPlan
+from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPlanShot, SupplementRequest, TimelineItem, VoiceoverPlan
 from otio_app.defaults import (
     DEFAULT_AUDIO_OFFSET_SEC,
     DEFAULT_FALLBACK_ORDER,
@@ -15,6 +15,7 @@ from otio_app.defaults import (
     DEFAULT_SHOT_MIN_SEC,
     FALLBACK_SOURCE_LABELS,
     GEMINI_MODEL_CHOICES,
+    SUPPLEMENT_SOURCE_LABELS,
 )
 from otio_app.project_layout import get_otio_export_path, safe_folder_slug
 from otio_app.services.edit_plan_cache import collect_folder_statuses
@@ -44,8 +45,11 @@ from otio_app.services.opening_title_renderer import (
     title_render_is_stale,
 )
 from otio_app.services.supplement_coverage import COVERAGE_SUPPLEMENT_REQUIRED
+from otio_app.services.supplement_pipeline import search_supplement_candidates
+from otio_app.services.supplement_requests import load_supplement_requests, update_request, upsert_requests
 from otio_app.services.title_style import extract_title_style
 from otio_app.services.timeline_plan_builder import build_voiceover_plan
+from otio_app.services.generic_outro_selector import section_id_for_folder
 from otio_app.services.otio_exporter import (
     MergedEditPlanResult,
     export_otio_timeline,
@@ -591,6 +595,101 @@ def _render_tab_review(
         st.caption("Gemini-Zusatzhinweise sind aktiv — beim Neu-Generieren berücksichtigt.")
     if violations:
         st.warning(f"{len(violations)} Regelverletzung(en) im aktuellen Vorschlag.")
+
+    missing_shots = [
+        (index, shot)
+        for index, shot in enumerate(draft.shots, start=1)
+        if not shot.asset_path
+    ]
+    if missing_shots:
+        st.markdown("### Fehlende Assets supplementieren")
+        st.caption(
+            f"{len(missing_shots)} Shot(s) ohne Asset. "
+            "Hier kannst du für alle fehlenden Shots in einem Durchlauf Supplement-Kandidaten suchen."
+        )
+        source = st.selectbox(
+            "Quelle für alle fehlenden Assets",
+            options=list(SUPPLEMENT_SOURCE_LABELS.keys()),
+            format_func=lambda key: SUPPLEMENT_SOURCE_LABELS[key],
+            key=f"batch_supplement_source_{project.id}_{safe_folder_slug(selected_folder)}",
+        )
+        if source == "google_search":
+            st.warning(
+                "Google Suche ist nur Discovery. Gefundene Assets brauchen manuelle Rechtefreigabe."
+            )
+        if source == "adobe_stock":
+            st.warning(
+                "Adobe Stock: Diese Suche lizenziert nichts. Kauf/Lizenzierung braucht später einen separaten Button."
+            )
+
+        if st.button(
+            "Alle fehlenden Supplement-Kandidaten suchen",
+            key=f"batch_supplement_search_{project.id}_{safe_folder_slug(selected_folder)}",
+        ):
+            try:
+                existing = load_supplement_requests(project)
+                existing_ids = {request.supplement_request_id for request in existing.requests}
+                requests: list[SupplementRequest] = []
+                for shot_index, shot in missing_shots:
+                    request_id = (
+                        shot.supplement_request_id
+                        or f"supp_req_{safe_folder_slug(selected_folder)}_{shot_index:03d}"
+                    )
+                    if request_id in existing_ids:
+                        existing_request = next(
+                            request
+                            for request in existing.requests
+                            if request.supplement_request_id == request_id
+                        )
+                        request = existing_request.model_copy(
+                            update={
+                                "selected_source": source,
+                                "status": "SOURCE_SELECTED",
+                            }
+                        )
+                    else:
+                        passage = shot.passage_text or shot.motif or f"Shot {shot_index}"
+                        request = SupplementRequest(
+                            supplement_request_id=request_id,
+                            section_id=section_id_for_folder(selected_folder),
+                            folder_name=selected_folder,
+                            beat_id=shot.beat_id or f"shot_{shot_index:03d}",
+                            passage_text=passage,
+                            visual_requirement=shot.motif or passage,
+                            duration_needed_sec=max(0.1, shot.duration_sec),
+                            reason=(
+                                "Schnittplan enthält für dieses Voice-over-Segment kein Asset. "
+                                "Batch-Suche aus dem Schnittplan gestartet."
+                            ),
+                            local_best_asset_id=shot.asset_id,
+                            local_best_match_score=0.0,
+                            selected_source=source,
+                            status="SOURCE_SELECTED",
+                        )
+                    requests.append(request)
+                upsert_requests(project, requests)
+
+                total_candidates = 0
+                for request in requests:
+                    updated = update_request(
+                        project,
+                        request.supplement_request_id,
+                        selected_source=source,
+                        status="SOURCE_SELECTED",
+                    )
+                    if updated is None:
+                        continue
+                    total_candidates += len(search_supplement_candidates(project, updated))
+
+                st.success(
+                    f"{len(requests)} Supplement Request(s) verarbeitet, "
+                    f"{total_candidates} Kandidat(en) gefunden. "
+                    "Öffne ②½ Supplement Assets zum Auswählen/Download/Generieren."
+                )
+                st.rerun()
+            except (OSError, ValueError, PermissionError) as exc:
+                st.error(str(exc))
+
     for index, shot in enumerate(draft.shots):
         icon = "🟢" if shot.asset_path else "🟡"
         with st.expander(
