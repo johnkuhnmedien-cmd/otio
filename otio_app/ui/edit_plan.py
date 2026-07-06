@@ -413,6 +413,20 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
             if export_opts.folder_title_enabled and title_notes:
                 for note in title_notes:
                     st.caption(f"• {note}")
+                title_item = next(
+                    (item for item in document.timeline_items if item.type == "opening_title"),
+                    None,
+                )
+                if title_item is not None:
+                    size_label = (
+                        f"{int(round(title_item.font_size))}px"
+                        if export_opts.folder_title_font_size is not None
+                        else f"{int(round(title_item.font_size))}px (auto)"
+                    )
+                    st.caption(
+                        f"Titel: **{title_item.requested_font_family}** · {size_label} · "
+                        f"{title_item.duration_sec:.1f}s"
+                    )
             st.rerun()
         except (GeminiNotConfiguredError, ValueError, FileNotFoundError) as exc:
             st.error(str(exc))

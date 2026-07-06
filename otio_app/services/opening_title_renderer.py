@@ -541,7 +541,9 @@ def ensure_opening_titles_rendered(
             )
         )
         backend = "ffmpeg drawtext" if ffmpeg_has_drawtext() and rendered.suffix.lower() == ".mov" else "Pillow"
-        report_warnings.append(f"Opening Title gerendert ({backend}): {rendered}")
+        report_warnings.append(
+            f"Opening Title gerendert ({backend}, {int(round(item.font_size))}px): {rendered}"
+        )
 
     if font_warnings or report_warnings:
         append_validation_report(

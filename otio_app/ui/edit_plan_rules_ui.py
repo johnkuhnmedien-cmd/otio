@@ -8,6 +8,7 @@ from otio_app.analysis_models import EditPlanRule, EditPlanRulesDocument
 from otio_app.models import Project
 from otio_app.services.edit_plan_rules import (
     RULE_AUTO_ZOOM_FILL,
+    RULE_FOLDER_TITLE,
     RULE_MAX_ASSET_USES,
     RULE_TRIM_LEADING,
     available_rule_templates,
@@ -36,12 +37,55 @@ def _set_rules_document(document: EditPlanRulesDocument) -> None:
     st.session_state[_rules_state_key(document.project_id)] = document.model_dump(mode="json")
 
 
+def merge_rule_widgets_from_session(
+    project: Project,
+    document: EditPlanRulesDocument,
+    *,
+    session: dict | None = None,
+) -> EditPlanRulesDocument:
+    """Widget-Werte aus session_state in Regeln übernehmen (auch ohne aktiven Regeln-Tab)."""
+    state = session if session is not None else st.session_state
+    updated_rules: list[EditPlanRule] = []
+
+    for rule in document.rules:
+        enabled_key = f"rule_enabled_{project.id}_{rule.id}"
+        enabled = bool(state.get(enabled_key, rule.enabled))
+        params = dict(rule.params)
+
+        if rule.rule_type == RULE_MAX_ASSET_USES:
+            max_key = f"rule_max_{project.id}_{rule.id}"
+            if max_key in state:
+                params["max_count"] = int(state[max_key])
+        elif rule.rule_type == RULE_TRIM_LEADING:
+            trim_key = f"rule_trim_{project.id}_{rule.id}"
+            if trim_key in state:
+                params["trim_sec"] = float(state[trim_key])
+        elif rule.rule_type == RULE_FOLDER_TITLE:
+            font_key = f"rule_folder_title_font_{project.id}_{rule.id}"
+            size_key = f"rule_folder_title_font_size_{project.id}_{rule.id}"
+            duration_key = f"rule_folder_title_duration_{project.id}_{rule.id}"
+            if font_key in state:
+                params["font_name"] = str(state[font_key])
+            if size_key in state:
+                params["font_size"] = float(state[size_key])
+            if duration_key in state:
+                params["duration_sec"] = float(state[duration_key])
+
+        updated_rules.append(rule.model_copy(update={"enabled": enabled, "params": params}))
+
+    gemini_key = f"gemini_prompt_{project.id}"
+    gemini_prompt = str(state.get(gemini_key, document.gemini_prompt))
+    return document.model_copy(update={"rules": updated_rules, "gemini_prompt": gemini_prompt})
+
+
 def get_edit_plan_rules_for_project(project: Project) -> EditPlanRulesDocument:
-    """Aktuelle Regeln (Session-Entwurf oder gespeicherte Datei)."""
+    """Aktuelle Regeln inkl. Widget-Werte (Session oder Datei)."""
     key = _rules_state_key(project.id)
     if key in st.session_state:
-        return EditPlanRulesDocument.model_validate(st.session_state[key])
-    return load_edit_plan_rules(project)
+        document = EditPlanRulesDocument.model_validate(st.session_state[key])
+    else:
+        document = load_edit_plan_rules(project)
+    return merge_rule_widgets_from_session(project, document)
 
 
 def _template_option_label(rule_type: str) -> str:
