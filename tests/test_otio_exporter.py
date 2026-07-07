@@ -545,6 +545,63 @@ def test_timeline_item_clip_source_range_includes_embedded_timecode(tmp_path: Pa
     assert src_end <= avail_end + 0.01, "source_range endet nach available_range"
 
 
+def test_timeline_item_clip_source_range_clamped_to_available_media_duration(
+    tmp_path: Path,
+) -> None:
+    """Regression: Wenn die geplante Shot-Dauer länger ist als die
+    tatsächlich verfügbare Restlänge der Quelldatei (z. B. ein kurzer
+    Clip), muss source_range auf available_range gekürzt werden — sonst
+    meldet Resolve ebenfalls einen Timecode-/Media-Offline-Mismatch. Der
+    ältere, Shot-basierte Export-Pfad (_clip_source_range_for_media) hatte
+    diese Begrenzung bereits; im moderneren TimelineItem-Pfad
+    (_append_timeline_item_clip) fehlte sie."""
+    from otio_app.services.edit_plan_rules import ExportRuleOptions
+    from otio_app.services.otio_exporter import _append_timeline_item_clip
+
+    project = _project(tmp_path)
+    media = project.project_root_path / "Grand Canyon" / "Asset06.mp4"
+    media.parent.mkdir(parents=True, exist_ok=True)
+    media.write_bytes(b"x")
+
+    item = TimelineItem(
+        timeline_item_id="item_006",
+        type="video_shot",
+        section_id="section_grand_canyon",
+        folder_name="Grand Canyon",
+        voice_file=str(tmp_path / "voice.wav"),
+        resolved_media_path=str(media),
+        original_asset_path=str(media),
+        duration_sec=7.0,
+        final_duration_sec=7.0,
+        source_in_sec=2.0,
+        source_out_sec=9.0,
+        transform=TimelineItemTransform(),
+    )
+
+    # Datei ist nur 8.18s lang (kürzer als die angeforderten 7s ab Sekunde 2 = bis 9s).
+    timing = MediaTiming(start_sec=0.0, duration_sec=8.18, rate=29.97)
+    track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    notes: list[str] = []
+    with patch("otio_app.services.otio_exporter.probe_media_timing", return_value=timing):
+        _append_timeline_item_clip(
+            track,
+            item,
+            project=project,
+            index=1,
+            rate=29.97,
+            export_rules=ExportRuleOptions(),
+            timing_notes=notes,
+        )
+
+    clip = track[0]
+    available_range = clip.media_reference.available_range
+    avail_end = available_range.start_time.to_seconds() + available_range.duration.to_seconds()
+    src_start = clip.source_range.start_time.to_seconds()
+    src_end = src_start + clip.source_range.duration.to_seconds()
+    assert src_end <= avail_end + 0.01, "source_range endet nach available_range"
+    assert any("gekürzt" in note for note in notes)
+
+
 def test_timeline_item_clip_source_range_unaffected_when_no_embedded_timecode(
     tmp_path: Path,
 ) -> None:

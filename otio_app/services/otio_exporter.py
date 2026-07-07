@@ -678,6 +678,27 @@ def _append_timeline_item_clip(
     embedded_offset = timing.start_sec
     source_in = embedded_offset + item.source_in_sec
     source_out = embedded_offset + (item.source_out_sec or (item.source_in_sec + duration_sec))
+
+    # source_range darf available_range (die TATSÄCHLICHE Dateidauer inkl.
+    # eingebettetem Timecode) nicht überschreiten — sonst meldet Resolve
+    # ebenfalls einen Timecode-/Media-Offline-Mismatch, selbst wenn
+    # embedded_offset korrekt berücksichtigt ist. Das passiert, wenn die
+    # geplante Shot-Dauer länger ist als die tatsächlich verfügbare
+    # Restlänge der Quelldatei (z. B. sehr kurze Clips). Der ältere,
+    # Shot-basierte Export-Pfad (_clip_source_range_for_media) hat diese
+    # Begrenzung bereits — hier fehlte sie im moderneren TimelineItem-Pfad.
+    if timing.duration_sec is not None:
+        available_end = embedded_offset + timing.duration_sec
+        if source_out > available_end + 0.01:
+            if timing_notes is not None:
+                timing_notes.append(
+                    f"{effective.name}: Shot {source_out - source_in:.1f}s angefordert, "
+                    f"Datei nur bis {max(0.0, available_end - source_in):.1f}s verfügbar — Ende gekürzt."
+                )
+            source_out = available_end
+        if source_in > available_end:
+            source_in = max(embedded_offset, available_end - 0.01)
+
     play_sec = max(0.01, source_out - source_in)
 
     video_clip = otio.schema.Clip(
