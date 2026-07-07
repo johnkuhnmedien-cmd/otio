@@ -26,6 +26,8 @@ from otio_app.services.clean_media_job import (
     get_clean_media_job_manager,
     summarize_manifest,
 )
+from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
+from otio_app.services.media_utils import ffmpeg_has_drawtext
 from otio_app.system_checks import check_ffmpeg, check_ffprobe
 from otio_app.ui.project_context import (
     render_file_paths,
@@ -205,6 +207,15 @@ def render_clean_media_page() -> None:
     if not ffmpeg_ok or not ffprobe_ok:
         st.error("FFmpeg und ffprobe werden für Clean Media benötigt — siehe **Systemstatus**.")
         return
+
+    export_opts = export_rule_options(load_edit_plan_rules(project))
+    if export_opts.folder_title_enabled and not ffmpeg_has_drawtext():
+        st.warning(
+            "Die Regel **Ordner-Titel** ist aktiv, aber dein ffmpeg wurde ohne "
+            "**drawtext**-Filter gebaut. Clean Media transcodiert deshalb **ohne "
+            "eingebetteten Titel** in die Videodatei. Die Titel werden beim "
+            "**OTIO-Export** als separate Overlay-Clips gerendert (Pillow-Fallback)."
+        )
 
     job_running = get_clean_media_job_manager().is_running(project.id)
     _render_job_monitor(project)

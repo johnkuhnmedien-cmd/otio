@@ -51,8 +51,9 @@ def test_escape_drawtext_value() -> None:
     assert escape_drawtext_value("A:B") == "A\\:B"
 
 
+@patch("otio_app.services.otio_media_transform.ffmpeg_has_drawtext", return_value=True)
 @patch("otio_app.services.otio_media_transform.resolve_font_path")
-def test_build_export_video_filter_with_title(mock_font: object) -> None:
+def test_build_export_video_filter_with_title(mock_font: object, _mock_drawtext: object) -> None:
     mock_font.return_value = Path("/fonts/Phosphate.ttf")
     project = Project(
         id="t",
@@ -83,6 +84,41 @@ def test_build_export_video_filter_with_title(mock_font: object) -> None:
     assert "shadow" in vf
     assert expected_w == 3840
     assert expected_h == 2160
+
+
+@patch("otio_app.services.otio_media_transform.ffmpeg_has_drawtext", return_value=False)
+@patch("otio_app.services.otio_media_transform.resolve_font_path")
+def test_build_export_video_filter_skips_title_without_drawtext(
+    mock_font: object,
+    _mock_drawtext: object,
+) -> None:
+    mock_font.return_value = Path("/fonts/Phosphate.ttf")
+    project = Project(
+        id="t",
+        name="USA",
+        project_root="/tmp",
+        work_dir="/tmp/_otio",
+        asset_subdir_names=["Folder"],
+        selected_asset_subdirs=["Folder"],
+        width=3840,
+        height=2160,
+    )
+    opts = ExportRuleOptions(
+        folder_title_enabled=True,
+        folder_title_font="Phosphate",
+        folder_title_duration_sec=5.0,
+    )
+    vf, expected_w, expected_h, error = build_export_video_filter(
+        source_width=3840,
+        source_height=2160,
+        project=project,
+        folder_name="Bisti",
+        export_opts=opts,
+    )
+    assert error is None
+    assert vf is None
+    assert expected_w is None
+    assert expected_h is None
 
 
 def test_ffmpeg_folder_title_filter_includes_duration_and_position() -> None:

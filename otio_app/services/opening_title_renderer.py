@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import subprocess
 from datetime import datetime, timezone
-from functools import lru_cache
 from pathlib import Path
 
 from otio_app.analysis_models import TimelineItem, TitleStyle
 from otio_app.models import Project
 from otio_app.services.clean_media import path_is_readable_file
+from otio_app.services.media_utils import ffmpeg_has_drawtext
 from otio_app.services.otio_media_transform import escape_drawtext_value, format_folder_display_name
 from otio_app.services.title_style import (
     DEFAULT_OPENING_TITLE_DURATION_SEC,
@@ -67,22 +67,6 @@ def append_validation_report(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
-
-
-@lru_cache(maxsize=1)
-def ffmpeg_has_drawtext() -> bool:
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-filters"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=15,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    output = f"{result.stdout}\n{result.stderr}"
-    return " drawtext " in output or output.strip().endswith("drawtext")
 
 
 def _mirror_legacy_title_fields(style: TitleStyle) -> dict:

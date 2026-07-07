@@ -9,6 +9,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -316,3 +317,24 @@ def probe_duration_seconds(path: Path) -> Optional[float]:
         return float(duration) if duration is not None else None
     except (json.JSONDecodeError, ValueError, TypeError):
         return None
+
+
+def ffmpeg_has_drawtext() -> bool:
+    """Prüft, ob die lokale ffmpeg-Installation den drawtext-Filter enthält."""
+    return _probe_ffmpeg_drawtext()
+
+
+@lru_cache(maxsize=1)
+def _probe_ffmpeg_drawtext() -> bool:
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-filters"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    output = f"{result.stdout}\n{result.stderr}"
+    return " drawtext " in output or output.strip().endswith("drawtext")

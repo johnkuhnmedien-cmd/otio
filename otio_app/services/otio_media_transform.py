@@ -15,7 +15,7 @@ from otio_app.services.clean_media import (
 )
 from otio_app.services.edit_plan_rules import ExportRuleOptions
 from otio_app.services.font_utils import resolve_font_path
-from otio_app.services.media_utils import is_image_media
+from otio_app.services.media_utils import ffmpeg_has_drawtext, is_image_media
 
 
 def compute_fill_zoom_factor(
@@ -177,7 +177,7 @@ def build_export_video_filter(
             expected_width = project.width
             expected_height = project.height
 
-    if export_opts.folder_title_enabled:
+    if export_opts.folder_title_enabled and ffmpeg_has_drawtext():
         font_path = resolve_font_path(export_opts.folder_title_font)
         if font_path is None:
             return None, None, None, (

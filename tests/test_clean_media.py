@@ -30,7 +30,11 @@ from otio_app.services.clean_media import (
     transcode_to_clean,
     validate_media_file,
 )
-from otio_app.services.edit_plan_rules import RULE_AUTO_ZOOM_FILL, save_edit_plan_rules
+from otio_app.services.edit_plan_rules import (
+    RULE_AUTO_ZOOM_FILL,
+    RULE_FOLDER_TITLE,
+    save_edit_plan_rules,
+)
 from otio_app.services.media_inventory_cache import resolve_media_for_analysis
 from otio_app.services.otio_exporter import MergedEditPlanResult, build_otio_timeline
 from otio_app.services.otio_media_transform import ensure_zoomed_media_for_export
@@ -330,6 +334,23 @@ def _enable_zoom_rule(project: Project) -> None:
                     id="zoom",
                     rule_type=RULE_AUTO_ZOOM_FILL,
                     enabled=True,
+                )
+            ],
+        ),
+    )
+
+
+def _enable_folder_title_rule(project: Project) -> None:
+    save_edit_plan_rules(
+        project,
+        EditPlanRulesDocument(
+            project_id=project.id,
+            rules=[
+                EditPlanRule(
+                    id="title",
+                    rule_type=RULE_FOLDER_TITLE,
+                    enabled=True,
+                    params={"font_name": "Helvetica Neue", "duration_sec": 5.0},
                 )
             ],
         ),
@@ -639,3 +660,122 @@ def test_transcode_to_clean_hides_banner_so_real_errors_surface(
     command = mock_run_command.call_args[0][0]
     assert "-hide_banner" in command
     assert "-loglevel" in command
+
+
+@patch("otio_app.services.otio_media_transform.ffmpeg_has_drawtext", return_value=False)
+@patch("otio_app.services.clean_media.ffmpeg_has_drawtext", return_value=False)
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+@patch("otio_app.services.clean_media.transcode_to_clean")
+@patch("otio_app.services.clean_media.test_decode", return_value=(True, None))
+@patch("otio_app.services.clean_media.probe_media")
+def test_process_media_skips_title_burnin_without_drawtext(
+    mock_probe,
+    _mock_decode,
+    mock_transcode,
+    _mock_validate,
+    _mock_drawtext_clean,
+    _mock_drawtext_transform,
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path, folder_name="Bisti")
+    _enable_folder_title_rule(project)
+    original = (
+        project.project_root_path
+        / "Bisti"
+        / "Bisti_De_Na_Zin_Wilderness_Asset01.mp4"
+    )
+    original.write_bytes(b"original")
+
+    mock_probe.return_value = MediaProbeInfo(
+        video_codec="h264",
+        container="mp4",
+        pixel_format="yuv420p",
+        width=3840,
+        height=2160,
+    )
+
+    captured: dict[str, str | None] = {}
+
+    def _fake_transcode(
+        original_path: Path,
+        output_path: Path,
+        *,
+        video_filter: str | None = None,
+        expected_width: int | None = None,
+        expected_height: int | None = None,
+    ) -> None:
+        captured["video_filter"] = video_filter
+        captured["output_name"] = output_path.name
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"clean")
+
+    mock_transcode.side_effect = _fake_transcode
+
+    entry = process_media_file(project, "Bisti", original)
+    assert entry.status == CLEAN_STATUS_OK
+    assert not mock_transcode.called
+    assert captured.get("video_filter") is None
+
+
+@patch("otio_app.services.otio_media_transform.ffmpeg_has_drawtext", return_value=False)
+@patch("otio_app.services.clean_media.ffmpeg_has_drawtext", return_value=False)
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+@patch("otio_app.services.clean_media.transcode_to_clean")
+@patch("otio_app.services.clean_media.test_decode", return_value=(True, None))
+@patch("otio_app.services.clean_media.probe_media")
+def test_process_media_transcodes_prores_without_drawtext_title_burnin(
+    mock_probe,
+    _mock_decode,
+    mock_transcode,
+    _mock_validate,
+    _mock_drawtext_clean,
+    _mock_drawtext_transform,
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path, folder_name="Bisti")
+    _enable_folder_title_rule(project)
+    original = (
+        project.project_root_path
+        / "Bisti"
+        / "Bisti_De_Na_Zin_Wilderness_Asset06.mp4"
+    )
+    original.write_bytes(b"original")
+
+    prores = MediaProbeInfo(
+        video_codec="prores",
+        container="mp4",
+        pixel_format="yuv422p10le",
+        width=3840,
+        height=2160,
+    )
+    clean = MediaProbeInfo(
+        video_codec="h264",
+        container="mp4",
+        pixel_format="yuv420p",
+        width=3840,
+        height=2160,
+    )
+    mock_probe.side_effect = lambda path: clean if "clean" in str(path) else prores
+
+    captured: dict[str, str | None] = {}
+
+    def _fake_transcode(
+        original_path: Path,
+        output_path: Path,
+        *,
+        video_filter: str | None = None,
+        expected_width: int | None = None,
+        expected_height: int | None = None,
+    ) -> None:
+        captured["video_filter"] = video_filter
+        captured["output_name"] = output_path.name
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"clean" * 300)
+
+    mock_transcode.side_effect = _fake_transcode
+
+    entry = process_media_file(project, "Bisti", original)
+    assert entry.status == CLEAN_STATUS_CLEAN
+    assert mock_transcode.called
+    assert captured.get("video_filter") is None
+    assert "_title" not in (captured.get("output_name") or "")
