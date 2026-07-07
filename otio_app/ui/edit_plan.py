@@ -992,7 +992,7 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
         st.warning(
             f"Kein API-Key für **{format_plan_model_label(timing.gemini_model)}** — "
             "es wird nur eine einfache Text-Trennung genutzt. "
-            "Schlüssel unter **Systemstatus → API-Schlüssel** hinterlegen."
+            "Schlüssel unter **🔑 API-Schlüssel** hinterlegen."
         )
 
     generate_result_key = _generate_result_key(project.id, selected_folder)

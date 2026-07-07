@@ -83,7 +83,7 @@ def _generate_gemini_text(*, prompt: str, model: str) -> str:
     if not api_key:
         raise PlanLlmNotConfiguredError(
             "GEMINI_API_KEY ist nicht gesetzt. "
-            "Bitte unter Systemstatus → API-Schlüssel oder in .env eintragen."
+            "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
         )
     from google import genai
     from google.genai import types
@@ -104,7 +104,7 @@ def _generate_openai_text(*, prompt: str, model: str) -> str:
     if not api_key:
         raise PlanLlmNotConfiguredError(
             "OPENAI_API_KEY ist nicht gesetzt. "
-            "Bitte unter Systemstatus → API-Schlüssel oder in .env eintragen."
+            "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
         )
     from openai import OpenAI
 
@@ -123,7 +123,7 @@ def _generate_anthropic_text(*, prompt: str, model: str) -> str:
     if not api_key:
         raise PlanLlmNotConfiguredError(
             "ANTHROPIC_API_KEY ist nicht gesetzt. "
-            "Bitte unter Systemstatus → API-Schlüssel oder in .env eintragen."
+            "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
         )
     from anthropic import Anthropic
 

@@ -47,7 +47,7 @@ def _get_client():
     if not api_key:
         raise GeminiNotConfiguredError(
             "GEMINI_API_KEY ist nicht gesetzt. "
-            "Bitte unter Systemstatus → API-Schlüssel oder in .env eintragen."
+            "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
         )
     from google import genai
 

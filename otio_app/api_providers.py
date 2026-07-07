@@ -27,7 +27,7 @@ API_PROVIDERS: tuple[ApiProvider, ...] = (
     ApiProvider(
         env_key="OPENAI_API_KEY",
         label="OpenAI (ChatGPT)",
-        description="Schnittplan-Vorschläge mit GPT-4.1 / GPT-4.1 mini (experimentell).",
+        description="Schnittplan-Vorschläge mit GPT-5.5 / GPT-5.4 mini (experimentell).",
         placeholder="sk-…",
         docs_url="https://platform.openai.com/api-keys",
         implemented=True,
@@ -35,7 +35,7 @@ API_PROVIDERS: tuple[ApiProvider, ...] = (
     ApiProvider(
         env_key="ANTHROPIC_API_KEY",
         label="Claude (Anthropic)",
-        description="Schnittplan-Vorschläge mit Claude Opus / Haiku (experimentell).",
+        description="Schnittplan-Vorschläge mit Claude Opus 4.8 / Sonnet 5 (experimentell).",
         placeholder="sk-ant-…",
         docs_url="https://console.anthropic.com/settings/keys",
         implemented=True,

@@ -12,10 +12,11 @@ from otio_app.ui.activity import record_script_run, render_activity_panel
 from otio_app.ui.analysis_jobs_ui import render_analysis_jobs_banner
 from otio_app.ui.clean_media import render_clean_media_page
 from otio_app.ui.edit_plan import render_edit_plan_page
-from otio_app.ui.navigation import ACTIVE_PROJECT_KEY, PAGE_ANALYSIS, PAGE_MAPPING, PAGE_SUPPLEMENT
+from otio_app.ui.navigation import ACTIVE_PROJECT_KEY, PAGE_ANALYSIS, PAGE_API_KEYS, PAGE_MAPPING, PAGE_SUPPLEMENT
 from otio_app.ui.page_state import clear_page_widget_state
 from otio_app.ui.project_workbench import render_project_workbench
 from otio_app.ui.supplement_assets import render_supplement_assets_page
+from otio_app.ui.api_keys_page import render_api_keys_page
 from otio_app.ui.system_status import render_system_status_page
 from otio_app.ui.voice_folder_mapping import render_voice_folder_mapping
 
@@ -56,6 +57,7 @@ def run_app_navigation(
 ) -> None:
     """Startet st.navigation — nur die aktive Seite wird gerendert."""
     from otio_app.ui.navigation import (
+        PAGE_API_KEYS,
         PAGE_CLEAN_MEDIA,
         PAGE_EDIT_PLAN,
         PAGE_LIST,
@@ -105,12 +107,13 @@ def run_app_navigation(
             title=PAGE_EDIT_PLAN,
             url_path="schnittplan",
         ),
+        st.Page(render_api_keys_page, title=PAGE_API_KEYS, url_path="api-schluessel"),
         st.Page(render_system_status_page, title=PAGE_STATUS, url_path="systemstatus"),
     ]
 
     with st.sidebar:
         st.caption(f"Build: **{format_build_label()}**")
-        st.caption("Workflow: ⓪ → ① → ② → ②½ → ③ · Diagnose unter Systemstatus")
+        st.caption("Workflow: ⓪ → ① → ② → ②½ → ③ · API-Keys & Diagnose in der Sidebar")
         render_activity_panel()
 
     navigation = st.navigation(pages, position="sidebar")
@@ -172,5 +175,7 @@ def _run_legacy_pages(
             show_jobs_banner=True,
             purge_mapping_on_enter=True,
         )()
+    elif page == PAGE_API_KEYS:
+        render_api_keys_page()
     elif page == PAGE_STATUS:
         render_system_status_page()

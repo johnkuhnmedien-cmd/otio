@@ -381,7 +381,7 @@ def _render_pexels_tab(project, request: SupplementRequest, readiness: ProviderR
         st.error(f"Letzter Fehler: {request.last_error}")
     query = _render_query_controls(request, SUPPLEMENT_SOURCE_PEXELS)
     if readiness.status != "READY":
-        st.warning("PEXELS_API_KEY fehlt. Bitte unter Systemstatus/API-Schlüssel oder .env setzen.")
+        st.warning("PEXELS_API_KEY fehlt. Bitte unter 🔑 API-Schlüssel oder .env setzen.")
         st.info("Alternative: Manual Import oder Google-Discovery verwenden.")
         return
     if st.button("Pexels-Kandidaten suchen", key=f"search_pexels_{request.supplement_request_id}"):

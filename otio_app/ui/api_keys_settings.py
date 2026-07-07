@@ -27,8 +27,7 @@ def _apply_runtime_from_session() -> None:
 
 
 def render_api_keys_settings() -> None:
-    """Formular für API-Schlüssel (Systemstatus)."""
-    st.subheader("🔑 API-Schlüssel")
+    """Formular für API-Schlüssel."""
     st.caption(
         "Schlüssel können hier eingegeben werden — ohne Terminal. "
         "**Nur Sitzung** wirkt sofort bis zum Neustart; **Speichern** legt sie in "

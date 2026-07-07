@@ -52,20 +52,20 @@ GEMINI_MODEL_LABELS = {
 }
 
 OPENAI_PLAN_MODEL_CHOICES = (
-    "openai:gpt-4.1",
-    "openai:gpt-4.1-mini",
+    "openai:gpt-5.5",
+    "openai:gpt-5.4-mini",
 )
 ANTHROPIC_PLAN_MODEL_CHOICES = (
-    "anthropic:claude-opus-4-6",
-    "anthropic:claude-haiku-4-5",
+    "anthropic:claude-opus-4-8",
+    "anthropic:claude-sonnet-5",
 )
 EDIT_PLAN_MODEL_CHOICES = GEMINI_MODEL_CHOICES + OPENAI_PLAN_MODEL_CHOICES + ANTHROPIC_PLAN_MODEL_CHOICES
 EDIT_PLAN_MODEL_LABELS = {
     **GEMINI_MODEL_LABELS,
-    "openai:gpt-4.1": "ChatGPT GPT-4.1 — Flagship, beste Qualität",
-    "openai:gpt-4.1-mini": "ChatGPT GPT-4.1 mini — günstig, schnell",
-    "anthropic:claude-opus-4-6": "Claude Opus 4.6 — Flagship, beste Qualität",
-    "anthropic:claude-haiku-4-5": "Claude Haiku 4.5 — günstig, schnell",
+    "openai:gpt-5.5": "ChatGPT GPT-5.5 — Flagship, beste Qualität",
+    "openai:gpt-5.4-mini": "ChatGPT GPT-5.4 mini — günstig, schnell",
+    "anthropic:claude-opus-4-8": "Claude Opus 4.8 — Flagship, beste Qualität",
+    "anthropic:claude-sonnet-5": "Claude Sonnet 5 — ausgewogen, günstiger",
 }
 INVENTORY_FILENAME = "inventory.json"
 INVENTORY_SUBDIR = "inventory"

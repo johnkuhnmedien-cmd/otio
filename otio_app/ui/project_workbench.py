@@ -244,7 +244,7 @@ def _render_analysis_actions(
         disabled=any_job_running,
     ):
         if selected_voice_backend == VOICE_BACKEND_GEMINI and not is_gemini_configured():
-            st.error("GEMINI_API_KEY fehlt — unter **Systemstatus → API-Schlüssel** oder in `.env`.")
+            st.error("GEMINI_API_KEY fehlt — unter **🔑 API-Schlüssel** oder in `.env`.")
         elif selected_voice_backend == VOICE_BACKEND_WHISPER and not is_whisper_available():
             st.error("Whisper nicht installiert — `pip install -r requirements.txt`.")
         else:
@@ -282,7 +282,7 @@ def _render_analysis_actions(
         if not selected_folders:
             st.warning("Bitte mindestens einen Ordner unter „Ordner“ auswählen.")
         elif not is_gemini_configured():
-            st.error("GEMINI_API_KEY fehlt — unter **Systemstatus → API-Schlüssel** oder in `.env`.")
+            st.error("GEMINI_API_KEY fehlt — unter **🔑 API-Schlüssel** oder in `.env`.")
         else:
             folders = list(selected_folders)
             update_project_selection(project.id, folders)
@@ -296,7 +296,7 @@ def _render_analysis_actions(
         disabled=any_job_running,
     ):
         if not is_gemini_configured():
-            st.error("GEMINI_API_KEY fehlt — unter **Systemstatus → API-Schlüssel** oder in `.env`.")
+            st.error("GEMINI_API_KEY fehlt — unter **🔑 API-Schlüssel** oder in `.env`.")
         elif (
             selected_voice_backend == VOICE_BACKEND_WHISPER
             and not is_whisper_available()
@@ -388,7 +388,7 @@ def render_project_workbench() -> None:
 
         with st.expander("⚙️ Einstellungen (Modelle & API)", expanded=False):
             if not is_gemini_configured():
-                st.warning("GEMINI_API_KEY fehlt — unter **Systemstatus → API-Schlüssel** eintragen.")
+                st.warning("GEMINI_API_KEY fehlt — unter **🔑 API-Schlüssel** eintragen.")
             if not is_whisper_available():
                 st.caption("Whisper fehlt — nur Voice-over via Gemini möglich.")
 
@@ -411,7 +411,7 @@ def render_project_workbench() -> None:
                 format_func=format_gemini_model_label,
                 key="gemini_model",
             )
-            st.caption("API-Schlüssel wechseln: **Systemstatus → API-Schlüssel**")
+            st.caption("API-Schlüssel wechseln: **🔑 API-Schlüssel**")
 
         voice_backend, whisper_model, gemini_model = _init_model_settings()
 
