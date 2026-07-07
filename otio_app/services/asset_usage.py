@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 
 from otio_app.analysis_models import EditPlanShot, MaxAssetUsageViolation, TimelineItem
-from otio_app.services.edit_plan_rules import RULE_MAX_ASSET_USES, _enabled_rules, _max_count
+from otio_app.services.edit_plan_rules import _enabled_rules, _max_count, _min_gap
 from otio_app.services.edit_plan_rules import EditPlanRulesDocument
 from otio_app.services.generic_outro_selector import asset_id_for_path
 
@@ -56,8 +57,31 @@ def usage_count_by_asset_id_from_timeline(items: list[TimelineItem]) -> dict[str
     return dict(counts)
 
 
+@dataclass(frozen=True)
+class AssetUsageRules:
+    max_asset_usage: int | None
+    min_asset_reuse_distance_shots: int
+    asset_reuse_policy: str = "hard_block"
+
+    def to_dict(self) -> dict[str, int | str | None]:
+        return {
+            "max_asset_usage": self.max_asset_usage,
+            "min_asset_reuse_distance_shots": self.min_asset_reuse_distance_shots,
+            "asset_reuse_policy": self.asset_reuse_policy,
+        }
+
+
+def get_asset_usage_rules(rules_doc: EditPlanRulesDocument) -> AssetUsageRules:
+    """Lädt globale Asset-Nutzungsregeln aus dem Regel-Dokument."""
+    enabled = _enabled_rules(rules_doc)
+    return AssetUsageRules(
+        max_asset_usage=_max_count(enabled),
+        min_asset_reuse_distance_shots=_min_gap(enabled),
+    )
+
+
 def max_asset_usage_limit(rules_doc: EditPlanRulesDocument) -> int | None:
-    return _max_count(_enabled_rules(rules_doc))
+    return get_asset_usage_rules(rules_doc).max_asset_usage
 
 
 def filter_assets_by_usage(

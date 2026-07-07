@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from otio_app.defaults import (
@@ -18,6 +19,45 @@ _QUALITY_RANK = {
     MATCH_QUALITY_UNPASSEND: 3,
     "": 4,
 }
+
+
+@dataclass(frozen=True)
+class AllowedPartsBounds:
+    min_parts: int
+    max_parts: int
+    short_segment_allowed: bool
+
+    def to_dict(self) -> dict[str, int | bool]:
+        return {
+            "min_parts": self.min_parts,
+            "max_parts": self.max_parts,
+            "short_segment_allowed": self.short_segment_allowed,
+        }
+
+
+def allowed_parts_for_segment(
+    segment_duration: float,
+    *,
+    min_sec: float,
+    max_sec: float,
+) -> AllowedPartsBounds:
+    """Erlaubte Gemini-parts pro Voice-Segment unter Min./Max.-Shot-Regeln."""
+    if segment_duration <= 0.05 or min_sec <= 0 or max_sec <= 0:
+        return AllowedPartsBounds(min_parts=1, max_parts=1, short_segment_allowed=True)
+
+    if segment_duration + 0.01 < min_sec:
+        return AllowedPartsBounds(min_parts=1, max_parts=1, short_segment_allowed=True)
+
+    min_parts = max(1, math.ceil(segment_duration / max_sec))
+    max_parts = max(1, math.floor(segment_duration / min_sec))
+    if min_parts > max_parts:
+        max_parts = min_parts
+
+    return AllowedPartsBounds(
+        min_parts=min_parts,
+        max_parts=max_parts,
+        short_segment_allowed=False,
+    )
 
 
 def max_parts_for_segment(segment_duration: float, *, min_sec: float) -> int:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from otio_app.analysis_models import EditPlanRulesDocument, EditPlanSettings, TimelineItem, VoiceoverPlan
 from otio_app.defaults import RIGHTS_STATUS_NEEDS_LICENSE_REVIEW, RIGHTS_STATUS_NEEDS_REVIEW
@@ -13,6 +14,110 @@ from otio_app.services.clean_media import path_is_readable_file
 from otio_app.services.duration_rules import MAX_DURATION_SEC, MIN_DURATION_SEC
 from otio_app.services.media_utils import is_image_media
 from otio_app.services.timeline_plan_builder import NARRATION_VISUAL_TYPES, VISUAL_VIDEO_TYPES
+
+
+RETRYABLE_ERROR_TYPES = frozenset(
+    {
+        "SHOT_TOO_SHORT",
+        "SHOT_TOO_LONG",
+        "ASSET_USAGE_LIMIT_EXCEEDED",
+        "ASSET_REUSE_DISTANCE_TOO_SHORT",
+        "INSUFFICIENT_PARTS",
+    }
+)
+
+
+@dataclass
+class PlanValidationError:
+    """Strukturierter Validierungsfehler für Retry-Loop und Reports."""
+
+    type: str
+    message: str = ""
+    asset_id: str | None = None
+    usage_count: int | None = None
+    max_allowed: int | None = None
+    timeline_item_ids: list[str] | None = None
+    timeline_item_id: str | None = None
+    duration_sec: float | None = None
+    min_sec: float | None = None
+    max_sec: float | None = None
+    segment_id: str | None = None
+    reason: str | None = None
+    previous_item_id: str | None = None
+    current_item_id: str | None = None
+    actual_distance_shots: int | None = None
+    required_distance_shots: int | None = None
+    beat_id: str | None = None
+    allowed_parts_min: int | None = None
+    allowed_parts_max: int | None = None
+    actual_parts: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"type": self.type}
+        if self.message:
+            payload["message"] = self.message
+        for key in (
+            "asset_id",
+            "usage_count",
+            "max_allowed",
+            "timeline_item_ids",
+            "timeline_item_id",
+            "duration_sec",
+            "min_sec",
+            "max_sec",
+            "segment_id",
+            "reason",
+            "previous_item_id",
+            "current_item_id",
+            "actual_distance_shots",
+            "required_distance_shots",
+            "beat_id",
+            "allowed_parts_min",
+            "allowed_parts_max",
+            "actual_parts",
+        ):
+            value = getattr(self, key)
+            if value is not None:
+                payload[key] = value
+        return payload
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PlanValidationError:
+        known = {field.name for field in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+        kwargs = {key: data[key] for key in data if key in known}
+        if "type" not in kwargs:
+            kwargs["type"] = str(data.get("type", "UNKNOWN"))
+        return cls(**kwargs)
+
+    def is_retryable(self) -> bool:
+        return self.type in RETRYABLE_ERROR_TYPES
+
+
+def plan_validation_error_to_message(error: PlanValidationError) -> str:
+    """Menschenlesbare Zeile für UI und Gemini-Korrektur."""
+    if error.message:
+        return error.message
+    if error.type == "ASSET_USAGE_LIMIT_EXCEEDED" and error.asset_id:
+        return (
+            f"ASSET_USAGE_LIMIT_EXCEEDED: `{error.asset_id}` "
+            f"{error.usage_count}× (max {error.max_allowed})"
+        )
+    if error.type == "ASSET_REUSE_DISTANCE_TOO_SHORT" and error.asset_id:
+        return (
+            f"ASSET_REUSE_DISTANCE_TOO_SHORT: `{error.asset_id}` "
+            f"Abstand {error.actual_distance_shots} Shots (min {error.required_distance_shots})"
+        )
+    if error.type == "SHOT_TOO_SHORT" and error.timeline_item_id:
+        return (
+            f"SHOT_TOO_SHORT: {error.timeline_item_id} "
+            f"{error.duration_sec:.1f}s < {error.min_sec:.1f}s"
+        )
+    if error.type == "SHOT_TOO_LONG" and error.timeline_item_id:
+        return (
+            f"SHOT_TOO_LONG: {error.timeline_item_id} "
+            f"{error.duration_sec:.1f}s > {error.max_sec:.1f}s"
+        )
+    return f"{error.type}: {error.to_dict()}"
 
 
 class ValidationStatus(str, Enum):
