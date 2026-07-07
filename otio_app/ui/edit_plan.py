@@ -179,9 +179,11 @@ def _match_quality_label(match_quality: str) -> str:
 
 def _shot_expander_title(index: int, shot: EditPlanShot) -> str:
     base = f"Shot {index + 1} · {shot.folder} · {shot.duration_sec:.1f}s"
-    if shot.section_outro:
-        return f"{base} · Ordner-Ausklingen"
     label = _match_quality_label(shot.match_quality)
+    if shot.section_outro:
+        if label:
+            return f"{base} · Ordner-Ausklingen · Passung: {label}"
+        return f"{base} · Ordner-Ausklingen"
     if label:
         return f"{base} · Passung: {label}"
     return f"{base} · Passung: —"
@@ -212,11 +214,7 @@ def _voice_segment_count_for_folder(project, folder_name: str) -> int:
 
 def _render_match_quality_badge(shot: EditPlanShot) -> None:
     if shot.section_outro:
-        st.caption(
-            "**Ordner-Ausklingen** — kein Voice-over-Shot. Gemini bewertet nur "
-            "Narration-Shots (Sehr gut / Gut / Mittel / Unpassend)."
-        )
-        return
+        st.caption("**Ordner-Ausklingen** — im selben Gemini-Call mitgeplant.")
     if shot.match_quality == MATCH_QUALITY_SEHR_GUT:
         st.success("**Passung (Gemini): Sehr gut**")
     elif shot.match_quality == MATCH_QUALITY_GUT:
@@ -237,26 +235,22 @@ def _render_match_quality_badge(shot: EditPlanShot) -> None:
 
 
 def _render_match_quality_summary(shots: list[EditPlanShot]) -> None:
-    narrative = [shot for shot in shots if not shot.section_outro]
-    if not narrative:
-        return
-    counts = Counter(shot.match_quality or "" for shot in narrative)
-    rated = sum(counts.values()) - counts.get("", 0)
-    if rated == 0:
+    rated_shots = [shot for shot in shots if shot.match_quality]
+    if not rated_shots:
         st.warning(
             "Keine Gemini-Passungsbewertungen in diesem Schnittplan — bitte unter "
-            "**Vorschlag** den Schnittplan **neu generieren** (aktuelle Version bewertet "
-            "jeden Shot mit Sehr gut / Gut / Mittel / Unpassend)."
+            "**Vorschlag** den Schnittplan **neu generieren**."
         )
         return
+    counts = Counter(shot.match_quality for shot in rated_shots)
     parts = [
         f"**Sehr gut:** {counts.get(MATCH_QUALITY_SEHR_GUT, 0)}",
         f"**Gut:** {counts.get(MATCH_QUALITY_GUT, 0)}",
         f"**Mittel:** {counts.get(MATCH_QUALITY_MITTEL, 0)}",
         f"**Unpassend:** {counts.get(MATCH_QUALITY_UNPASSEND, 0)}",
     ]
-    st.markdown("**Gemini-Passung (Narration-Shots):** " + " · ".join(parts))
-    unrated = [shot for shot in narrative if not shot.match_quality]
+    st.markdown("**Gemini-Passung (alle Shots inkl. Ausklingen):** " + " · ".join(parts))
+    unrated = [shot for shot in shots if not shot.match_quality and not shot.section_outro]
     if unrated:
         st.warning(
             f"{len(unrated)} Narration-Shot(s) ohne Bewertung — bitte unter **Vorschlag** "
@@ -496,9 +490,9 @@ def _render_tab_settings(project) -> None:
     st.markdown("**Timing & Gemini**")
     st.caption(
         "Min./Max. Shot und Gemini-Modell gelten beim **Schnittplan vorschlagen**. "
-        "**Audio-Start** beim OTIO-Export. **Ordner-Ausklingen** wird beim "
-        "**Schnittplan vorschlagen** als eigene(s) Element(e) aus dem Ordner geplant "
-        "(je max. **Max. Shot** Sek., siehe unten). Der Export übernimmt `timeline_items` unverändert."
+        "**Audio-Start** beim OTIO-Export. **Ordner-Ausklingen** wird im **selben "
+        "Gemini-Call** mitgeplant (Dauer hier, Asset + Passung von Gemini; je max. "
+        "**Max. Shot** Sek. aufgeteilt). Heuristik nur als Fallback."
     )
     col1, col2, col3, col4 = st.columns(4)
     with col1:

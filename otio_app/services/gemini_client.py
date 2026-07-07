@@ -326,9 +326,11 @@ def plan_folder_assets(
     language: str,
     model: Optional[str] = None,
     extra_instructions: str = "",
+    section_outro_sec: float = 0.0,
+    shot_max_sec: float = 8.0,
 ) -> list[dict[str, Any]]:
-    """Plant alle Voice-over-Segmente eines Ordners in einem Gemini-Call."""
-    if not segments:
+    """Plant alle Voice-over-Segmente und optional das Ordner-Ausklingen in einem Call."""
+    if not segments and section_outro_sec <= 0.05:
         return []
 
     client = _get_client()
@@ -344,6 +346,8 @@ def plan_folder_assets(
         asset_lines=asset_lines,
         language=language,
         extra_instructions=extra_instructions,
+        section_outro_sec=section_outro_sec,
+        shot_max_sec=shot_max_sec,
     )
     response = client.models.generate_content(
         model=resolve_gemini_model(model),
@@ -382,8 +386,12 @@ def build_plan_folder_prompt(
     asset_lines: str,
     language: str,
     extra_instructions: str = "",
+    section_outro_sec: float = 0.0,
+    shot_max_sec: float = 8.0,
 ) -> str:
     """Prompt für gesamtheitliche Motiv-Planung und Asset-Zuordnung."""
+    from otio_app.defaults import OUTRO_BEAT_ID
+
     sections = [
         f"Du planst Video-Shots für den Ordner '{folder_name}'. Sprache: {language}.",
         "",
@@ -393,6 +401,19 @@ def build_plan_folder_prompt(
         "Verfügbare lokale Assets:",
         asset_lines or "- (keine)",
     ]
+    if section_outro_sec > 0.05:
+        sections.extend(
+            [
+                "",
+                "Zusätzlich — Ordner-Ausklingen nach dem letzten Voice-over-Segment:",
+                f'- beat_id="{OUTRO_BEAT_ID}" duration_sec={section_outro_sec} '
+                f'(kein Voice-over-Text, motif immer "Ausklingen")',
+                "Wähle ruhige Establishing-/Luftaufnahme-/Landschafts-Assets als visuelles Ausklingen.",
+                f"Wenn die Dauer länger als {shot_max_sec}s ist, erstelle mehrere parts (je max. "
+                f"{shot_max_sec}s).",
+                "Bewerte auch die Passung des Ausklingen-Assets (sehr_gut/gut/mittel/unpassend).",
+            ]
+        )
     instructions = extra_instructions.strip()
     if instructions:
         sections.extend(
@@ -405,13 +426,16 @@ def build_plan_folder_prompt(
     sections.extend(
         [
             "",
-            "WICHTIG: Betrachte ALLE Segmente und ALLE Assets gesamtheitlich.",
+            "WICHTIG: Betrachte ALLE Segmente, das Ausklingen (falls gefordert) und ALLE Assets "
+            "gesamtheitlich.",
             "Wähle für jeden Shot das inhaltlich passendste Asset aus der gesamten Liste.",
             "Vermeide unnötige Wiederholungen, aber inhaltliche Passung hat Priorität.",
             "Wenn die Passage mehrere Sehenswürdigkeiten/Motive nennt, erstelle mehrere Teile.",
             "Bewerte die visuelle Passung jedes Teils: sehr_gut, gut, mittel oder unpassend.",
-            "Bei unpassend: wähle kein spezifisches Motiv-Asset — asset_path auf null setzen "
+            "Bei unpassend (Narration): asset_path auf null setzen "
             "(ein generisches Platzhalter-Asset wird lokal ergänzt).",
+            "Bei unpassend (Ausklingen): wähle trotzdem das beste verfügbare ruhige "
+            "Establishing-Asset und setze match_quality auf unpassend.",
             "",
             "Antworte NUR als JSON:",
             (
@@ -419,7 +443,12 @@ def build_plan_folder_prompt(
                 '"asset_path":"exakter path oder null",'
                 '"match_quality":"sehr_gut|gut|mittel|unpassend"}]}]}'
             ),
-            "beat_id muss exakt einem beat_id aus den Segmenten entsprechen.",
+            "beat_id muss exakt einem beat_id aus den Segmenten entsprechen"
+            + (
+                f' oder "{OUTRO_BEAT_ID}" für das Ausklingen.'
+                if section_outro_sec > 0.05
+                else "."
+            ),
             "asset_path muss exakt einem path aus der Asset-Liste entsprechen oder null sein.",
         ]
     )

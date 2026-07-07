@@ -21,6 +21,31 @@ from otio_app.services.gemini_client import (
 )
 
 
+def test_build_plan_folder_prompt_includes_outro_when_configured() -> None:
+    prompt = build_plan_folder_prompt(
+        folder_name="Caddo Lake",
+        segment_lines='- beat_id="beat_001" start_sec=0.0 end_sec=5.0 text="Text."',
+        asset_lines='- path="/a.mp4" description="See"',
+        language="de",
+        section_outro_sec=5.0,
+        shot_max_sec=8.0,
+    )
+    assert "outro_001" in prompt
+    assert "Ausklingen" in prompt
+    assert "5.0" in prompt or "duration_sec=5" in prompt
+
+
+def test_build_plan_folder_prompt_omits_outro_when_zero() -> None:
+    prompt = build_plan_folder_prompt(
+        folder_name="Folder",
+        segment_lines="- (keine)",
+        asset_lines="- (keine)",
+        language="de",
+        section_outro_sec=0.0,
+    )
+    assert "Ordner-Ausklingen nach" not in prompt
+
+
 def test_build_plan_folder_prompt_includes_segments_and_holistic_instruction() -> None:
     prompt = build_plan_folder_prompt(
         folder_name="Arches National Park",

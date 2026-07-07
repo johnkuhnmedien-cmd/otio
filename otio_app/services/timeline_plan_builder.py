@@ -12,6 +12,7 @@ from otio_app.analysis_models import (
     TimelineItemTransform,
     VoiceoverPlan,
 )
+from otio_app.defaults import OUTRO_BEAT_ID
 from otio_app.services.duration_rules import MAX_DURATION_SEC, MIN_DURATION_SEC, split_total_duration
 from otio_app.services.opening_title_renderer import DEFAULT_OPENING_TITLE_FONT
 from otio_app.services.generic_outro_selector import (
@@ -243,19 +244,110 @@ def build_outro_timeline_items(
     max_asset_usage: int | None = None,
     min_sec: float = MIN_DURATION_SEC,
     max_sec: float = MAX_DURATION_SEC,
+    planned_parts: list[dict[str, str]] | None = None,
 ) -> tuple[list[TimelineItem], list[str]]:
-    """Erzeugt 1..n Outro-Elemente (je max. `max_sec`) mit explizit gewähltem Ordner-Asset."""
+    """Erzeugt Outro-Elemente — Asset aus Gemini-Plan oder Heuristik-Fallback."""
     errors: list[str] = []
     if outro_total_sec <= 0.05:
         return [], errors
 
-    # min_sec/max_sec kommen aus den projektspezifischen Timing-Regeln, nicht
-    # aus den globalen Defaults (siehe build_narration_filler_items oben).
+    from otio_app.defaults import OUTRO_BEAT_ID
+    from otio_app.services.gemini_client import normalize_match_quality
+
     max_sec = max(0.1, float(max_sec))
     min_sec = min(float(min_sec), max_sec)
 
     section_id = section_id_for_folder(folder_name)
     durations = split_total_duration(outro_total_sec, min_sec=min_sec, max_sec=max_sec)
+
+    if planned_parts:
+        normalized_parts: list[dict] = []
+        allowed_paths = {asset.get("path", "") for asset in folder_assets if asset.get("path")}
+        for part in planned_parts:
+            if not isinstance(part, dict):
+                continue
+            asset_path = part.get("asset_path")
+            if asset_path and asset_path not in allowed_paths:
+                asset_path = None
+            normalized_parts.append(
+                {
+                    "asset_path": asset_path,
+                    "match_quality": normalize_match_quality(str(part.get("match_quality", ""))),
+                    "motif": str(part.get("motif", "Ausklingen")).strip() or "Ausklingen",
+                }
+            )
+        if not normalized_parts:
+            planned_parts = None
+        else:
+            while len(normalized_parts) < len(durations):
+                normalized_parts.append(normalized_parts[-1])
+            candidates: list[GenericAssetCandidate] = []
+            for part in normalized_parts[: len(durations)]:
+                path = part.get("asset_path")
+                if not path:
+                    continue
+                meta = next((asset for asset in folder_assets if asset.get("path") == path), {})
+                candidates.append(
+                    GenericAssetCandidate(
+                        path=path,
+                        asset_id=meta.get("asset_id") or asset_id_for_path(path),
+                        description=meta.get("description", ""),
+                        score=0.7,
+                        selection_reason="Ordner-Ausklingen (Gemini)",
+                        warnings=[],
+                    )
+                )
+            if len(candidates) < len(durations):
+                errors.append(
+                    f"{folder_name}: Gemini-Ausklingen unvollständig "
+                    f"({len(candidates)}/{len(durations)} benötigt)."
+                )
+                planned_parts = None
+            else:
+                items: list[TimelineItem] = []
+                cursor = section_cursor_sec
+                for offset, (duration, part, candidate) in enumerate(
+                    zip(durations, normalized_parts[: len(durations)], candidates)
+                ):
+                    source_in = trim_leading_sec
+                    media_duration = probe_duration_seconds(Path(candidate.path))
+                    if media_duration is not None:
+                        source_out = min(source_in + duration, media_duration)
+                    else:
+                        source_out = source_in + duration
+                    items.append(
+                        TimelineItem(
+                            timeline_item_id=_new_item_id("outro"),
+                            type="generic_outro_visual",
+                            section_id=section_id,
+                            folder_name=folder_name,
+                            voice_file=voice_file,
+                            asset_id=candidate.asset_id,
+                            shot_id=f"outro_{item_index_start + offset:03d}",
+                            resolved_media_path=candidate.path,
+                            original_asset_path=candidate.path,
+                            asset_role="generic_section_outro",
+                            timeline_in_sec=round(cursor, 4),
+                            timeline_out_sec=round(cursor + duration, 4),
+                            duration_sec=duration,
+                            final_duration_sec=duration,
+                            source_in_sec=source_in,
+                            source_out_sec=round(source_out, 4),
+                            voice_start_sec=voice_end_sec,
+                            voice_end_sec=voice_end_sec,
+                            selection_reason=candidate.selection_reason,
+                            confidence=candidate.score,
+                            transform=TimelineItemTransform(scaling_mode="fill"),
+                            warnings=list(candidate.warnings),
+                            media_source_type="local",
+                            motif=part.get("motif", "Ausklingen"),
+                            match_quality=part.get("match_quality", ""),
+                            beat_id=OUTRO_BEAT_ID,
+                        )
+                    )
+                    cursor += duration
+                return items, errors
+
     candidates = select_generic_outro_assets(
         folder_assets,
         used_paths=used_paths,
@@ -315,6 +407,7 @@ def build_outro_timeline_items(
                 warnings=list(candidate.warnings),
                 media_source_type="local",
                 motif="Ausklingen",
+                beat_id=OUTRO_BEAT_ID,
             )
         )
         cursor = timeline_out
@@ -338,6 +431,7 @@ def build_timeline_items_for_folder(
     project: Project | None = None,
     usage_by_asset_id: dict[str, int] | None = None,
     max_asset_usage: int | None = None,
+    outro_parts: list[dict] | None = None,
 ) -> tuple[list[TimelineItem], VoiceoverPlan, list[str]]:
     """Baut alle Timeline-Items einer Sektion (Titel + Narration + Filler + Outro)."""
     errors: list[str] = []
@@ -426,6 +520,7 @@ def build_timeline_items_for_folder(
         max_asset_usage=max_asset_usage,
         min_sec=settings.shot_min_sec,
         max_sec=settings.shot_max_sec,
+        planned_parts=outro_parts,
     )
     errors.extend(outro_errors)
     items.extend(outro_items)
@@ -481,6 +576,8 @@ def shots_from_timeline_items(items: list[TimelineItem]) -> list[EditPlanShot]:
                     motif=item.motif,
                     passage_text=item.passage_text,
                     section_outro=True,
+                    match_quality=item.match_quality,
+                    beat_id=item.beat_id or OUTRO_BEAT_ID,
                 )
             )
         elif item.type in {"video_shot", "image_shot", "generic_narration_visual"}:

@@ -25,7 +25,10 @@ from otio_app.defaults import (
     DEFAULT_SHOT_MIN_SEC,
     FALLBACK_SOURCE_LOCAL,
     FALLBACK_SOURCE_MISSING,
+    MATCH_QUALITY_GUT,
+    MATCH_QUALITY_MITTEL,
     MATCH_QUALITY_UNPASSEND,
+    OUTRO_BEAT_ID,
 )
 from otio_app.models import Project
 from otio_app.project_layout import (
@@ -67,6 +70,7 @@ from otio_app.services.shot_timing import (
     allocate_time_by_text,
     shots_from_timed_parts,
 )
+from otio_app.services.duration_rules import split_total_duration
 from otio_app.services.timeline_plan_builder import (
     assign_global_timeline_positions,
     build_timeline_items_for_folder,
@@ -252,6 +256,103 @@ def _parse_folder_beats(beats: list[dict]) -> dict[str, list[dict]]:
     return result
 
 
+def _outro_parts_from_heuristic(
+    assets: list[dict[str, str]],
+    *,
+    outro_total_sec: float,
+    min_duration_sec: float,
+    max_duration_sec: float,
+    used_paths: set[str],
+    last_asset_path: str | None,
+    usage: dict[str, int],
+    max_count: int | None,
+) -> list[dict]:
+    """Lokaler Fallback für Ordner-Ausklingen ohne Gemini."""
+    durations = split_total_duration(
+        outro_total_sec,
+        min_sec=min_duration_sec,
+        max_sec=max_duration_sec,
+    )
+    if not durations:
+        return []
+    candidates = select_generic_outro_assets(
+        assets,
+        used_paths=used_paths,
+        last_asset_path=last_asset_path,
+        count=len(durations),
+        min_duration_sec=min_duration_sec,
+        usage_by_asset_id=usage,
+        max_asset_usage=max_count,
+    )
+    parts: list[dict] = []
+    for candidate in candidates:
+        quality = MATCH_QUALITY_GUT if candidate.score >= 0.55 else MATCH_QUALITY_MITTEL
+        parts.append(
+            {
+                "text": "",
+                "motif": "Ausklingen",
+                "asset_path": candidate.path,
+                "match_quality": quality,
+                "confidence": "low",
+            }
+        )
+    return parts
+
+
+def _ensure_outro_parts(
+    beats_plan: dict[str, list[dict]],
+    *,
+    assets: list[dict[str, str]],
+    settings: EditPlanSettings,
+    used_paths: set[str],
+    last_asset_path: str | None,
+    usage: dict[str, int],
+    max_count: int | None,
+) -> list[dict]:
+    """Liefert normalisierte Outro-Parts aus Gemini oder Heuristik."""
+    if settings.section_outro_sec <= 0.05:
+        return []
+    raw_parts = beats_plan.get(OUTRO_BEAT_ID, [])
+    parts: list[dict] = []
+    for part in raw_parts:
+        if not isinstance(part, dict):
+            continue
+        match_quality = normalize_match_quality(str(part.get("match_quality", "")))
+        asset_path = part.get("asset_path")
+        if match_quality == MATCH_QUALITY_UNPASSEND and not asset_path:
+            fallback = _select_establishing_fallback(
+                assets,
+                used_paths=used_paths,
+                last_asset_path=last_asset_path,
+                min_duration_sec=settings.shot_min_sec,
+                usage=usage,
+                max_count=max_count,
+            )
+            if fallback is not None:
+                asset_path = fallback.get("path")
+        parts.append(
+            {
+                "text": "",
+                "motif": "Ausklingen",
+                "asset_path": asset_path,
+                "match_quality": match_quality or MATCH_QUALITY_MITTEL,
+                "confidence": str(part.get("confidence", "low")),
+            }
+        )
+    if parts:
+        return parts
+    return _outro_parts_from_heuristic(
+        assets,
+        outro_total_sec=settings.section_outro_sec,
+        min_duration_sec=settings.shot_min_sec,
+        max_duration_sec=settings.shot_max_sec,
+        used_paths=used_paths,
+        last_asset_path=last_asset_path,
+        usage=usage,
+        max_count=max_count,
+    )
+
+
 def _beats_from_gemini_holistic_or_local(
     segments_with_beats: list[tuple[str, VoiceSegment]],
     folder_name: str,
@@ -281,6 +382,8 @@ def _beats_from_gemini_holistic_or_local(
                 language=language,
                 model=gemini_model or settings.gemini_model,
                 extra_instructions=gemini_prompt,
+                section_outro_sec=settings.section_outro_sec,
+                shot_max_sec=settings.shot_max_sec,
             )
             parsed = _parse_folder_beats(beats)
             if parsed:
@@ -318,6 +421,17 @@ def _beats_from_gemini_holistic_or_local(
                 }
             )
         result[beat_id] = parts
+    if settings.section_outro_sec > 0.05 and OUTRO_BEAT_ID not in result:
+        result[OUTRO_BEAT_ID] = _outro_parts_from_heuristic(
+            assets,
+            outro_total_sec=settings.section_outro_sec,
+            min_duration_sec=settings.shot_min_sec,
+            max_duration_sec=settings.shot_max_sec,
+            used_paths=set(),
+            last_asset_path=None,
+            usage={},
+            max_count=None,
+        )
     return result
 
 
@@ -388,6 +502,7 @@ def build_edit_plan(
     inventory_hashes: dict[str, str] = {}
     max_count = max_asset_usage_limit(rules_doc)
     usage_by_folder: dict[str, dict[str, int]] = {}
+    outro_parts_by_folder: dict[str, list[dict]] = {}
 
     for voice_path, folder_name in mapping_by_voice.items():
         voice_entry = voice_files.get(voice_path)
@@ -641,6 +756,16 @@ def build_edit_plan(
                     )
                 )
 
+        outro_parts_by_folder[folder_name] = _ensure_outro_parts(
+            beats_plan,
+            assets=asset_payload,
+            settings=plan_settings,
+            used_paths=used_paths_in_folder,
+            last_asset_path=last_asset_in_folder,
+            usage=usage_by_folder[folder_name],
+            max_count=max_count,
+        )
+
     # Volle Asset-Payloads (inkl. asset_origin/rights_status/provider/...)
     # übergeben, nicht nur Pfade — sonst blieben bei einer regelbedingten
     # Asset-Neuzuweisung (max_asset_usage/Min. Abstand) die Metadaten des
@@ -725,6 +850,7 @@ def build_edit_plan(
             project=project,
             usage_by_asset_id={},
             max_asset_usage=max_count,
+            outro_parts=outro_parts_by_folder.get(folder_name),
         )
         plan_errors.extend(errors)
         timeline_items.extend(section_items)
