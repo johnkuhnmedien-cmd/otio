@@ -50,6 +50,23 @@ GEMINI_MODEL_LABELS = {
     "gemini-3.1-flash-lite": "Gemini 3.1 Flash Lite — günstig, Preview (Standard)",
     "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview — beste Qualität (Preview, teurer)",
 }
+
+OPENAI_PLAN_MODEL_CHOICES = (
+    "openai:gpt-4.1",
+    "openai:gpt-4.1-mini",
+)
+ANTHROPIC_PLAN_MODEL_CHOICES = (
+    "anthropic:claude-opus-4-6",
+    "anthropic:claude-haiku-4-5",
+)
+EDIT_PLAN_MODEL_CHOICES = GEMINI_MODEL_CHOICES + OPENAI_PLAN_MODEL_CHOICES + ANTHROPIC_PLAN_MODEL_CHOICES
+EDIT_PLAN_MODEL_LABELS = {
+    **GEMINI_MODEL_LABELS,
+    "openai:gpt-4.1": "ChatGPT GPT-4.1 — Flagship, beste Qualität",
+    "openai:gpt-4.1-mini": "ChatGPT GPT-4.1 mini — günstig, schnell",
+    "anthropic:claude-opus-4-6": "Claude Opus 4.6 — Flagship, beste Qualität",
+    "anthropic:claude-haiku-4-5": "Claude Haiku 4.5 — günstig, schnell",
+}
 INVENTORY_FILENAME = "inventory.json"
 INVENTORY_SUBDIR = "inventory"
 MANUAL_FOLDER_COMPLETION_FILENAME = "manual_folder_completion.json"

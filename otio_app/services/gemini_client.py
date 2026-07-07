@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from otio_app.config import get_gemini_model_from_env
 from otio_app.services.api_keys import get_api_key
+from otio_app.services.plan_llm_client import generate_plan_text
 from otio_app.defaults import (
     GEMINI_MODEL_CHOICES,
     GEMINI_MODEL_LABELS,
@@ -364,9 +365,6 @@ def plan_folder_assets(
     if not segments and section_outro_sec <= 0.05:
         return []
 
-    client = _get_client()
-    from google.genai import types
-
     asset_lines = _format_asset_lines(assets)
     if prompt_mode == "free":
         prompt = build_plan_folder_free_prompt(
@@ -396,11 +394,7 @@ def plan_folder_assets(
             max_asset_usage=max_asset_usage,
             min_asset_reuse_distance_shots=min_asset_reuse_distance_shots,
         )
-    response = client.models.generate_content(
-        model=resolve_gemini_model(model),
-        contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
-    )
-    text = response.text or "{}"
+    text = generate_plan_text(prompt=prompt, model=model)
     try:
         payload = _extract_json(text)
     except json.JSONDecodeError:

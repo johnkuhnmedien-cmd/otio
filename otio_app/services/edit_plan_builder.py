@@ -56,6 +56,7 @@ from otio_app.services.gemini_client import (
     normalize_match_quality,
     plan_folder_assets,
 )
+from otio_app.services.plan_llm_client import PlanLlmNotConfiguredError
 from otio_app.services.edit_plan_validator import (
     PlanValidationError,
     plan_validation_error_to_message,
@@ -513,7 +514,7 @@ def _beats_from_gemini_holistic_or_local(
             parsed = _parse_folder_beats(beats)
             if parsed:
                 return parsed
-        except GeminiNotConfiguredError:
+        except (GeminiNotConfiguredError, PlanLlmNotConfiguredError):
             raise
         except Exception:
             pass

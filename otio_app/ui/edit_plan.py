@@ -16,7 +16,7 @@ from otio_app.defaults import (
     DEFAULT_SECTION_OUTRO_SEC,
     DEFAULT_SHOT_MAX_SEC,
     DEFAULT_SHOT_MIN_SEC,
-    GEMINI_MODEL_CHOICES,
+    EDIT_PLAN_MODEL_CHOICES,
     MATCH_QUALITY_LABELS,
     MATCH_QUALITY_MITTEL,
     MATCH_QUALITY_SEHR_GUT,
@@ -43,11 +43,10 @@ from otio_app.services.edit_plan_builder import (
     load_voice_analysis,
     save_edit_plan,
 )
-from otio_app.services.gemini_client import (
-    GeminiNotConfiguredError,
-    format_gemini_model_label,
-    get_default_gemini_model,
-    is_gemini_configured,
+from otio_app.services.gemini_client import get_default_gemini_model
+from otio_app.services.plan_llm_client import (
+    format_plan_model_label,
+    is_plan_model_configured,
 )
 from otio_app.services.edit_plan_rules import (
     export_rule_options,
@@ -603,10 +602,10 @@ def _render_timing_gemini_controls(project) -> None:
         )
 
     gemini_key = f"plan_gemini_{project.id}"
-    model_choices = list(GEMINI_MODEL_CHOICES)
+    model_choices = list(EDIT_PLAN_MODEL_CHOICES)
     selectbox_kwargs = {
         "options": model_choices,
-        "format_func": format_gemini_model_label,
+        "format_func": format_plan_model_label,
         "key": gemini_key,
     }
     if gemini_key not in st.session_state:
@@ -616,7 +615,7 @@ def _render_timing_gemini_controls(project) -> None:
         )
     elif st.session_state[gemini_key] not in model_choices:
         st.session_state[gemini_key] = get_default_gemini_model()
-    st.selectbox("Gemini-Modell (Motiv → Asset)", **selectbox_kwargs)
+    st.selectbox("Planungs-Modell (Motiv → Asset)", **selectbox_kwargs)
 
     st.caption("💾 Timing- und Gemini-Einstellungen werden automatisch gespeichert.")
     _persist_timing_widgets(project)
@@ -855,7 +854,8 @@ def _run_suggest_edit_plan(
     _seed_timing_widgets(project)
     timing = _current_timing_settings(project)
     save_edit_plan_timing_settings(project, timing)
-    use_gemini = is_gemini_configured()
+    timing = _current_timing_settings(project)
+    use_api = is_plan_model_configured(timing.gemini_model)
     settings = EditPlanSettings(
         shot_min_sec=timing.shot_min_sec,
         shot_max_sec=timing.shot_max_sec,
@@ -890,7 +890,7 @@ def _run_suggest_edit_plan(
                 progress_text.markdown(
                     f"**Ein Gemini-Call** für **{folder_name}** — "
                     f"**{segment_count}** Whisper-Segmente + alle Asset-Beschreibungen "
-                    f"gebündelt ({format_gemini_model_label(timing.gemini_model)}). "
+                    f"gebündelt ({format_plan_model_label(timing.gemini_model)}). "
                     "Es wird **nicht** segmentweise aufgerufen — bitte warten …"
                 )
             else:
@@ -906,7 +906,7 @@ def _run_suggest_edit_plan(
             result = build_edit_plan(
                 project,
                 settings,
-                use_api=use_gemini,
+                use_api=use_api,
                 folder_names=[selected_folder],
                 rules_doc=rules_doc,
                 progress_callback=_on_plan_progress,
@@ -987,8 +987,13 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
         "**alle Asset-Beschreibungen** und deine **Zusatzhinweise** in **einem** "
         "gesamtheitlichen Call (Tab Regeln)."
     )
-    if not is_gemini_configured():
-        st.warning("Ohne GEMINI_API_KEY wird nur eine einfache Text-Trennung genutzt.")
+    timing = _current_timing_settings(project)
+    if not is_plan_model_configured(timing.gemini_model):
+        st.warning(
+            f"Kein API-Key für **{format_plan_model_label(timing.gemini_model)}** — "
+            "es wird nur eine einfache Text-Trennung genutzt. "
+            "Schlüssel unter **Systemstatus → API-Schlüssel** hinterlegen."
+        )
 
     generate_result_key = _generate_result_key(project.id, selected_folder)
     pending_generate_result = st.session_state.pop(generate_result_key, None)

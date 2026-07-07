@@ -92,6 +92,9 @@ def render_api_keys_settings() -> None:
             st.rerun()
 
     if is_gemini_configured():
-        st.success("Gemini ist konfiguriert — Asset-Analysen möglich.")
+        st.success("Gemini ist konfiguriert — Asset-Analysen und Gemini-Schnittpläne möglich.")
     else:
-        st.warning("Gemini-Key fehlt — Asset-Analysen und Gemini-Voice-over nicht möglich.")
+        st.caption(
+            "Gemini-Key fehlt — Asset-Analysen und Gemini-Modelle im Schnittplan nicht verfügbar. "
+            "OpenAI/Claude-Keys ermöglichen alternative Planungsmodelle im Tab **Vorschlag**."
+        )
