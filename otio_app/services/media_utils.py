@@ -71,7 +71,7 @@ def probe_media_timing(path: Path, *, default_rate: float = 25.0) -> MediaTiming
                 "-v",
                 "error",
                 "-show_entries",
-                "format=duration:stream=index,codec_type,r_frame_rate,start_time:"
+                "format=duration:stream=index,codec_type,codec_tag_string,r_frame_rate,start_time:"
                 "stream_tags=timecode:format_tags=timecode",
                 "-of",
                 "json",
@@ -117,15 +117,42 @@ def probe_media_timing(path: Path, *, default_rate: float = 25.0) -> MediaTiming
         stream_rate = parse_r_frame_rate(stream.get("r_frame_rate"))
         if stream_rate:
             rate = stream_rate
-        tags = stream.get("tags") or {}
-        if tags.get("timecode"):
-            embedded_tc = str(tags["timecode"])
         raw_start = stream.get("start_time")
         if raw_start is not None:
             try:
                 stream_start = float(raw_start)
             except (TypeError, ValueError):
                 pass
+
+    # SMPTE-Timecode-Metadaten liegen bei professionellen Kameras (Canon,
+    # Sony, ARRI, ...) oft NICHT auf der Video-/Audiospur, sondern auf einer
+    # eigenen "tmcd"-Datenspur (codec_type=data, codec_tag_string=tmcd). Die
+    # vorherige Suche war auf video/audio-Streams beschränkt und hat diese
+    # Spur ignoriert — dadurch wurde für viele Dateien fälschlich
+    # start_sec=0.0 angenommen, obwohl die Datei einen von Null abweichenden
+    # eingebetteten Timecode hat. Beim OTIO-Export entstand dadurch ein
+    # Mismatch zwischen dem in der Timeline angenommenen (0-basierten)
+    # Timecode und dem, was DaVinci Resolve beim Reconnect/Import
+    # tatsächlich in der Datei findet ("Media Offline" / "No overlap
+    # between specified target timecodes and located file timecodes").
+    # Daher werden JETZT ALLE Streams durchsucht, mit Vorrang für die
+    # dedizierte tmcd-Spur (die kanonische SMPTE-Timecode-Quelle).
+    tmcd_tc: str | None = None
+    other_stream_tc: str | None = None
+    for stream in streams:
+        tags = stream.get("tags") or {}
+        tag_value = tags.get("timecode")
+        if not tag_value:
+            continue
+        is_tmcd_track = (stream.get("codec_type") or "").lower() == "data" or (
+            stream.get("codec_tag_string") or ""
+        ).lower() == "tmcd"
+        if is_tmcd_track and tmcd_tc is None:
+            tmcd_tc = str(tag_value)
+        elif other_stream_tc is None:
+            other_stream_tc = str(tag_value)
+    if tmcd_tc or other_stream_tc:
+        embedded_tc = tmcd_tc or other_stream_tc
 
     format_tags = format_info.get("tags") or {}
     if format_tags.get("timecode"):
