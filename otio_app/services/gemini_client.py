@@ -327,6 +327,7 @@ def plan_folder_assets(
     model: Optional[str] = None,
     extra_instructions: str = "",
     section_outro_sec: float = 0.0,
+    shot_min_sec: float = 3.0,
     shot_max_sec: float = 8.0,
 ) -> list[dict[str, Any]]:
     """Plant alle Voice-over-Segmente und optional das Ordner-Ausklingen in einem Call."""
@@ -347,6 +348,7 @@ def plan_folder_assets(
         language=language,
         extra_instructions=extra_instructions,
         section_outro_sec=section_outro_sec,
+        shot_min_sec=shot_min_sec,
         shot_max_sec=shot_max_sec,
     )
     response = client.models.generate_content(
@@ -387,6 +389,7 @@ def build_plan_folder_prompt(
     language: str,
     extra_instructions: str = "",
     section_outro_sec: float = 0.0,
+    shot_min_sec: float = 3.0,
     shot_max_sec: float = 8.0,
 ) -> str:
     """Prompt für gesamtheitliche Motiv-Planung und Asset-Zuordnung."""
@@ -400,6 +403,12 @@ def build_plan_folder_prompt(
         "",
         "Verfügbare lokale Assets:",
         asset_lines or "- (keine)",
+        "",
+        "Timing-Regeln für Shots (vom Editor vorgegeben):",
+        f"- Ziel-Shotlänge pro Teil (part): mindestens {shot_min_sec}s, höchstens {shot_max_sec}s.",
+        f"- Erstelle lieber weniger, längere parts statt vieler kurzer Teile unter {shot_min_sec}s.",
+        "- Die Voice-over-Zeiten pro Beat sind durch start_sec/end_sec vorgegeben; teile den Text "
+        "so auf, dass jeder part einen sinnvollen Anteil des Beats abdeckt.",
     ]
     if section_outro_sec > 0.05:
         sections.extend(

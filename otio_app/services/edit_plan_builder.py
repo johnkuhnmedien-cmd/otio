@@ -68,8 +68,10 @@ from otio_app.services.supplement_requests import upsert_requests
 from otio_app.services.shot_timing import (
     TimedPart,
     allocate_time_by_text,
+    merge_short_voice_windows,
     shots_from_timed_parts,
 )
+from otio_app.services.media_utils import probe_duration_seconds
 from otio_app.services.duration_rules import split_total_duration
 from otio_app.services.timeline_plan_builder import (
     assign_global_timeline_positions,
@@ -353,6 +355,22 @@ def _ensure_outro_parts(
     )
 
 
+def _clamp_voice_segment(segment: VoiceSegment, *, max_end_sec: float | None) -> VoiceSegment:
+    """Begrenzt Whisper-Segment-Enden auf die reale Audiodatei-Länge."""
+    if max_end_sec is None or max_end_sec <= 0:
+        return segment
+    end_sec = min(segment.end_sec, max_end_sec)
+    start_sec = min(segment.start_sec, end_sec)
+    if abs(start_sec - segment.start_sec) < 0.001 and abs(end_sec - segment.end_sec) < 0.001:
+        return segment
+    return VoiceSegment(
+        start_sec=start_sec,
+        end_sec=end_sec,
+        text=segment.text,
+        words=segment.words,
+    )
+
+
 def _beats_from_gemini_holistic_or_local(
     segments_with_beats: list[tuple[str, VoiceSegment]],
     folder_name: str,
@@ -383,6 +401,7 @@ def _beats_from_gemini_holistic_or_local(
                 model=gemini_model or settings.gemini_model,
                 extra_instructions=gemini_prompt,
                 section_outro_sec=settings.section_outro_sec,
+                shot_min_sec=settings.shot_min_sec,
                 shot_max_sec=settings.shot_max_sec,
             )
             parsed = _parse_folder_beats(beats)
@@ -531,14 +550,21 @@ def build_edit_plan(
         assets_payload_by_folder[folder_name] = list(asset_payload)
         usage_by_folder[folder_name] = {}
 
+        file_duration = probe_duration_seconds(Path(voice_path))
+        if file_duration is None or file_duration <= 0:
+            file_duration = voice_entry.duration_sec
+
         segments_with_beats: list[tuple[str, VoiceSegment]] = []
         beat_index = 0
         for segment in voice_entry.segments:
             if not segment.text.strip():
                 continue
+            clamped_segment = _clamp_voice_segment(segment, max_end_sec=file_duration)
+            if clamped_segment.end_sec - clamped_segment.start_sec <= 0.05:
+                continue
             beat_index += 1
             beat_id = f"beat_{beat_index:03d}"
-            segments_with_beats.append((beat_id, segment))
+            segments_with_beats.append((beat_id, clamped_segment))
 
         if progress_callback is not None and segments_with_beats:
             progress_callback(folder_name, 0, 1)
@@ -618,6 +644,10 @@ def build_edit_plan(
                     )
                 )
 
+            timed_parts = merge_short_voice_windows(
+                timed_parts,
+                min_sec=plan_settings.shot_min_sec,
+            )
             normalized = shots_from_timed_parts(
                 timed_parts,
                 min_sec=plan_settings.shot_min_sec,

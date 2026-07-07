@@ -242,9 +242,13 @@ def validate_timeline_items(
             )
         if duration < min_duration_sec - 0.01 and not item.allow_black:
             if item.type != "generic_narration_visual":
-                result.errors.append(
-                    f"{item.timeline_item_id}: duration_sec {duration:.1f}s < {min_duration_sec}s"
-                )
+                voice_span = max(0.0, item.voice_end_sec - item.voice_start_sec)
+                if voice_span + 0.01 < min_duration_sec:
+                    pass
+                else:
+                    result.errors.append(
+                        f"{item.timeline_item_id}: duration_sec {duration:.1f}s < {min_duration_sec}s"
+                    )
         if not item.resolved_media_path and not item.allow_black:
             result.errors.append(f"{item.timeline_item_id}: kein resolved_media_path")
 

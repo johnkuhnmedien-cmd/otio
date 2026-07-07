@@ -28,11 +28,29 @@ def test_build_plan_folder_prompt_includes_outro_when_configured() -> None:
         asset_lines='- path="/a.mp4" description="See"',
         language="de",
         section_outro_sec=5.0,
+        shot_min_sec=3.0,
         shot_max_sec=8.0,
     )
     assert "outro_001" in prompt
     assert "Ausklingen" in prompt
     assert "5.0" in prompt or "duration_sec=5" in prompt
+    assert "mindestens 3.0s" in prompt
+    assert "höchstens 8.0s" in prompt
+
+
+def test_build_plan_folder_prompt_includes_shot_timing_rules() -> None:
+    prompt = build_plan_folder_prompt(
+        folder_name="Folder",
+        segment_lines='- beat_id="beat_001" start_sec=0.0 end_sec=10.0 text="Text."',
+        asset_lines="- (keine)",
+        language="de",
+        shot_min_sec=4.0,
+        shot_max_sec=10.0,
+    )
+    assert "Timing-Regeln für Shots" in prompt
+    assert "mindestens 4.0s" in prompt
+    assert "höchstens 10.0s" in prompt
+    assert "weniger, längere parts" in prompt
 
 
 def test_build_plan_folder_prompt_omits_outro_when_zero() -> None:

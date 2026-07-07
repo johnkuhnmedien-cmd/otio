@@ -198,6 +198,40 @@ def test_voiceover_not_clipped_to_last_text_segment() -> None:
     assert voiceover.duration_sec > items[0].voice_end_sec
 
 
+def test_voiceover_validation_allows_last_shot_within_file_duration() -> None:
+    """Regression: letzter Shot darf nicht über die WAV-Länge hinaus planen."""
+    voiceover = VoiceoverPlan(
+        path="/voice.wav",
+        timeline_start_sec=1.0,
+        source_in_sec=0.0,
+        source_out_sec=94.88,
+        duration_sec=94.88,
+        timeline_end_sec=95.88,
+        duration_source="ffprobe",
+        trim_policy="disabled",
+    )
+    items = [
+        TimelineItem(
+            timeline_item_id="n1",
+            type="video_shot",
+            section_id="s1",
+            folder_name="Caddo Lake",
+            voice_file="/voice.wav",
+            resolved_media_path="/a.mp4",
+            timeline_in_sec=90.0,
+            timeline_out_sec=94.88,
+            duration_sec=4.88,
+            final_duration_sec=4.88,
+            source_in_sec=0.5,
+            source_out_sec=5.38,
+            voice_start_sec=90.0,
+            voice_end_sec=94.88,
+        )
+    ]
+    result = validate_voiceover_plan(voiceover, settings=_settings(), items=items)
+    assert not any("Textsegment" in e for e in result.errors)
+
+
 def test_filler_when_visuals_end_before_voice(tmp_path: Path) -> None:
     shots = [
         EditPlanShot(

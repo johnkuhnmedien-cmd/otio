@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import pytest
+
 from otio_app.services.duration_rules import split_total_duration
-from otio_app.services.shot_timing import TimedPart, shots_from_timed_parts
+from otio_app.services.shot_timing import (
+    TimedPart,
+    allocate_time_by_text,
+    merge_short_voice_windows,
+    shots_from_timed_parts,
+)
 
 
 def test_split_total_duration_14_seconds() -> None:
@@ -74,3 +81,25 @@ def test_shots_from_timed_parts_splitting_respects_misconfigured_min_max() -> No
     for part in result:
         duration = part.end_sec - part.start_sec
         assert duration <= 8.0 + 1e-6, f"duration {duration}s verletzt max_sec=8.0s"
+
+
+def test_shots_from_timed_parts_never_extends_past_voice_end() -> None:
+    """Regression: Min.-Shot darf voice_end nicht über part.end_sec (Dateiende) schieben."""
+    parts = [TimedPart("Ende", "Motiv", 94.31, 94.88, "/tmp/clip.mp4", None)]
+    result = shots_from_timed_parts(parts, min_sec=3.0, max_sec=8.0)
+    assert len(result) == 1
+    assert result[0].end_sec <= 94.88 + 1e-6
+    assert result[0].end_sec - result[0].start_sec == pytest.approx(0.57, abs=0.01)
+
+
+def test_merge_short_voice_windows_combines_tail_slices() -> None:
+    texts = ["a", "b", "c", "d"]
+    ranges = allocate_time_by_text(88.0, 94.88, texts)
+    timed = [
+        TimedPart(t, "m", start, end, "/tmp/clip.mp4", None)
+        for t, (start, end) in zip(texts, ranges)
+    ]
+    merged = merge_short_voice_windows(timed, min_sec=3.0)
+    assert len(merged) < len(timed)
+    assert merged[-1].end_sec == pytest.approx(94.88, abs=0.01)
+    assert all(part.end_sec - part.start_sec + 0.01 >= 3.0 for part in merged[:-1])
