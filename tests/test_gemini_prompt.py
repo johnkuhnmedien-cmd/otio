@@ -14,7 +14,31 @@ from otio_app.services.edit_plan_rules import (
     normalize_rules_document,
     save_edit_plan_rules,
 )
-from otio_app.services.gemini_client import build_plan_passage_prompt
+from otio_app.services.gemini_client import (
+    build_plan_folder_prompt,
+    build_plan_passage_prompt,
+    normalize_match_quality,
+)
+
+
+def test_build_plan_folder_prompt_includes_segments_and_holistic_instruction() -> None:
+    prompt = build_plan_folder_prompt(
+        folder_name="Arches National Park",
+        segment_lines='- beat_id="beat_001" start_sec=0.0 end_sec=5.0 text="Wir besuchen den Park."',
+        asset_lines='- path="/a.mp4" description="Felsbogen"',
+        language="de",
+        extra_instructions="Assets laufen bis zum nächsten Satz.",
+    )
+    assert "beat_001" in prompt
+    assert "gesamtheitlich" in prompt.lower()
+    assert "match_quality" in prompt
+    assert "Assets laufen bis zum nächsten Satz." in prompt
+
+
+def test_normalize_match_quality_aliases() -> None:
+    assert normalize_match_quality("Sehr gut") == "sehr_gut"
+    assert normalize_match_quality("UNPASSEND") == "unpassend"
+    assert normalize_match_quality("good") == "gut"
 
 
 def test_build_plan_passage_prompt_includes_extra_instructions() -> None:

@@ -13,7 +13,13 @@ from otio_app.analysis_models import (
     SupplementRequest,
     VoiceSegment,
 )
-from otio_app.defaults import DEFAULT_COVERAGE_THRESHOLD
+from otio_app.defaults import (
+    DEFAULT_COVERAGE_THRESHOLD,
+    MATCH_QUALITY_GUT,
+    MATCH_QUALITY_MITTEL,
+    MATCH_QUALITY_SEHR_GUT,
+    MATCH_QUALITY_UNPASSEND,
+)
 from otio_app.models import Project
 from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.generic_outro_selector import section_id_for_folder
@@ -51,6 +57,77 @@ def score_asset_match(
         if must_tokens and not must_tokens & desc_tokens:
             return min(base, 0.35)
     return round(min(1.0, base), 4)
+
+
+def match_quality_from_score(
+    score: float,
+    *,
+    threshold: float = DEFAULT_COVERAGE_THRESHOLD,
+) -> str:
+    """Leitet eine Passungsstufe aus einem lokalen Match-Score ab."""
+    if score >= max(threshold, 0.8):
+        return MATCH_QUALITY_SEHR_GUT
+    if score >= threshold:
+        return MATCH_QUALITY_GUT
+    if score >= threshold * 0.65:
+        return MATCH_QUALITY_MITTEL
+    return MATCH_QUALITY_UNPASSEND
+
+
+def coverage_status_from_match_quality(match_quality: str) -> str:
+    if match_quality == MATCH_QUALITY_UNPASSEND:
+        return COVERAGE_SUPPLEMENT_REQUIRED
+    if match_quality == MATCH_QUALITY_MITTEL:
+        return COVERAGE_LOCAL_WEAK
+    if match_quality in {MATCH_QUALITY_SEHR_GUT, MATCH_QUALITY_GUT}:
+        return COVERAGE_LOCAL_GOOD
+    return COVERAGE_LOCAL_WEAK
+
+
+def supplement_request_from_unpassend_shot(
+    *,
+    folder_name: str,
+    voice_file: str,
+    beat_id: str,
+    passage_text: str,
+    motif: str,
+    duration_sec: float,
+    shot_index: int,
+    request_id: str | None = None,
+) -> SupplementRequest:
+    """Erzeugt einen Supplement-Request für einen als unpassend bewerteten Shot."""
+    now = datetime.now(timezone.utc)
+    visual_requirement = motif or passage_text
+    keyword_query = build_keyword_query(
+        folder_name=folder_name,
+        visual_requirement=visual_requirement,
+        passage_text=passage_text,
+    )
+    return SupplementRequest(
+        supplement_request_id=request_id or f"supp_req_{uuid.uuid4().hex[:8]}",
+        section_id=section_id_for_folder(folder_name),
+        folder_name=folder_name,
+        location_name=folder_name,
+        search_context=visual_requirement,
+        beat_id=beat_id or f"shot_{shot_index:03d}",
+        passage_text=passage_text,
+        visual_requirement=visual_requirement,
+        duration_needed_sec=max(0.1, duration_sec),
+        reason=(
+            "Gemini bewertete das lokale Asset als unpassend. "
+            f"Benötigt: {visual_requirement[:120]}"
+        ),
+        local_best_asset_id="",
+        local_best_match_score=0.0,
+        search_queries={
+            "de": [visual_requirement[:120]],
+            "en": [keyword_query],
+        },
+        best_query=keyword_query,
+        query_used=keyword_query,
+        created_at=now,
+        updated_at=now,
+    )
 
 
 def derive_visual_requirement(passage_text: str) -> str:

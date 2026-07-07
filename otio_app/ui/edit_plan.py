@@ -15,6 +15,11 @@ from otio_app.defaults import (
     DEFAULT_SHOT_MIN_SEC,
     FALLBACK_SOURCE_LABELS,
     GEMINI_MODEL_CHOICES,
+    MATCH_QUALITY_LABELS,
+    MATCH_QUALITY_MITTEL,
+    MATCH_QUALITY_SEHR_GUT,
+    MATCH_QUALITY_GUT,
+    MATCH_QUALITY_UNPASSEND,
     SUPPLEMENT_SOURCE_LABELS,
 )
 from otio_app.project_layout import get_otio_export_path, safe_folder_slug
@@ -160,6 +165,35 @@ def _location_state_icon(state: EditPlanLocationState) -> str:
         EditPlanLocationState.OPEN: "⬜",
     }
     return icons[state]
+
+
+def _match_quality_icon(match_quality: str) -> str:
+    icons = {
+        MATCH_QUALITY_SEHR_GUT: "🟢",
+        MATCH_QUALITY_GUT: "🟢",
+        MATCH_QUALITY_MITTEL: "🟡",
+        MATCH_QUALITY_UNPASSEND: "🔴",
+    }
+    return icons.get(match_quality, "⚪")
+
+
+def _match_quality_label(match_quality: str) -> str:
+    if not match_quality:
+        return "—"
+    return MATCH_QUALITY_LABELS.get(match_quality, match_quality)
+
+
+def _render_match_quality_badge(shot: EditPlanShot) -> None:
+    if not shot.match_quality:
+        return
+    label = _match_quality_label(shot.match_quality)
+    icon = _match_quality_icon(shot.match_quality)
+    st.write(f"**Passung (Gemini):** {icon} {label}")
+    if shot.match_quality == MATCH_QUALITY_UNPASSEND:
+        st.caption(
+            "Als unpassend bewertet — bitte unter **②½ Supplement Assets** "
+            "oder über die Batch-Suche unten ergänzen."
+        )
 
 
 def _collect_location_statuses(
@@ -609,8 +643,9 @@ def _finalize_plan_for_confirm(
 
 def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument | None) -> None:
     st.markdown(
-        f"Vorschlag für **{selected_folder}** — Gemini erhält **Whisper-Text**, "
-        "**Asset-Beschreibungen** und deine **Zusatzhinweise** (Tab Regeln)."
+        f"Vorschlag für **{selected_folder}** — Gemini erhält **alle Whisper-Segmente**, "
+        "**alle Asset-Beschreibungen** und deine **Zusatzhinweise** in **einem** "
+        "gesamtheitlichen Call (Tab Regeln)."
     )
     if not is_gemini_configured():
         st.warning("Ohne GEMINI_API_KEY wird nur eine einfache Text-Trennung genutzt.")
@@ -660,13 +695,11 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
             progress_text = st.empty()
 
             def _on_plan_progress(folder_name: str, index: int, total: int) -> None:
-                fraction = index / total if total else 1.0
-                progress_bar.progress(min(1.0, fraction))
+                progress_bar.progress(min(1.0, index / total if total else 1.0))
                 progress_text.caption(
-                    f"Segment {index}/{total} für **{folder_name}** — "
-                    f"Gemini: {format_gemini_model_label(timing.gemini_model)} "
-                    "(größere Modelle wie „Pro Preview“ brauchen pro Segment "
-                    "spürbar länger als „Flash“)."
+                    f"Gemini plant **{folder_name}** gesamtheitlich "
+                    f"({format_gemini_model_label(timing.gemini_model)}) — "
+                    "alle Segmente und Assets in einem Call."
                 )
 
             with st.spinner(f"Schnittplan für {selected_folder} wird erstellt…"):
@@ -815,11 +848,15 @@ def _render_tab_review(
                 f"(max {violation.max_allowed})"
             )
 
-    supplement_beats = [
-        coverage
-        for coverage in draft.segment_coverage
-        if coverage.coverage_status == COVERAGE_SUPPLEMENT_REQUIRED
+    unpassend_shots = [
+        shot for shot in draft.shots if shot.match_quality == MATCH_QUALITY_UNPASSEND
     ]
+    if unpassend_shots:
+        st.warning(
+            f"{len(unpassend_shots)} Shot(s) als **unpassend** bewertet — "
+            "bitte unter **②½ Supplement Assets** ergänzen."
+        )
+
     weak_with_asset = [
         shot
         for shot in draft.shots
@@ -827,7 +864,12 @@ def _render_tab_review(
         and shot.coverage_status == COVERAGE_SUPPLEMENT_REQUIRED
     ]
     missing, coverage_gap, rule_blocked = _missing_asset_breakdown(draft)
-    if supplement_beats:
+    supplement_beats = [
+        coverage
+        for coverage in draft.segment_coverage
+        if coverage.coverage_status == COVERAGE_SUPPLEMENT_REQUIRED
+    ]
+    if supplement_beats and not unpassend_shots:
         st.warning(
             f"{len(supplement_beats)} Beat(s) mit SUPPLEMENT_REQUIRED — "
             "bitte unter **②½ Supplement Assets** ergänzen."
@@ -1021,14 +1063,19 @@ def _render_tab_review(
                 st.error(str(exc))
 
     for index, shot in enumerate(draft.shots):
-        icon = "🟢" if shot.asset_path else "🟡"
+        quality_icon = _match_quality_icon(shot.match_quality)
+        asset_icon = "🟢" if shot.asset_path else "🟡"
+        quality_label = _match_quality_label(shot.match_quality)
+        title_quality = f" · {quality_label}" if shot.match_quality else ""
         with st.expander(
-            f"{icon} Shot {index + 1} · {shot.folder} · {shot.duration_sec:.1f}s",
+            f"{asset_icon}{quality_icon} Shot {index + 1} · {shot.folder} · "
+            f"{shot.duration_sec:.1f}s{title_quality}",
             expanded=index < 2,
         ):
             st.write(f"**Motiv:** {shot.motif or '—'}")
             st.write(f"**Voice:** {shot.voice_start_sec:.1f}–{shot.voice_end_sec:.1f}s")
             st.caption(shot.passage_text)
+            _render_match_quality_badge(shot)
             if shot.asset_path:
                 st.write(f"**Asset:** `{Path(shot.asset_path).name}`")
                 if shot.asset_origin and shot.asset_origin != "local_original":

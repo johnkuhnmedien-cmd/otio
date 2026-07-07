@@ -9,7 +9,15 @@ from typing import Any, Optional
 
 from otio_app.config import get_gemini_model_from_env
 from otio_app.services.api_keys import get_api_key
-from otio_app.defaults import GEMINI_MODEL_CHOICES, GEMINI_MODEL_LABELS
+from otio_app.defaults import (
+    GEMINI_MODEL_CHOICES,
+    GEMINI_MODEL_LABELS,
+    MATCH_QUALITY_CHOICES,
+    MATCH_QUALITY_GUT,
+    MATCH_QUALITY_MITTEL,
+    MATCH_QUALITY_SEHR_GUT,
+    MATCH_QUALITY_UNPASSEND,
+)
 
 
 class GeminiNotConfiguredError(RuntimeError):
@@ -284,6 +292,137 @@ def plan_passage_assets(
     if not isinstance(parts, list):
         return []
     return [part for part in parts if isinstance(part, dict)]
+
+
+def normalize_match_quality(value: str | None) -> str:
+    """Normalisiert Gemini-Antworten auf die vier festen Passungsstufen."""
+    if not value:
+        return ""
+    normalized = value.strip().lower().replace(" ", "_").replace("-", "_")
+    aliases = {
+        "sehrgut": MATCH_QUALITY_SEHR_GUT,
+        "very_good": MATCH_QUALITY_SEHR_GUT,
+        "excellent": MATCH_QUALITY_SEHR_GUT,
+        "good": MATCH_QUALITY_GUT,
+        "medium": MATCH_QUALITY_MITTEL,
+        "moderate": MATCH_QUALITY_MITTEL,
+        "ok": MATCH_QUALITY_MITTEL,
+        "poor": MATCH_QUALITY_UNPASSEND,
+        "bad": MATCH_QUALITY_UNPASSEND,
+        "unsuitable": MATCH_QUALITY_UNPASSEND,
+        "unpassend": MATCH_QUALITY_UNPASSEND,
+        "nicht_passend": MATCH_QUALITY_UNPASSEND,
+    }
+    if normalized in MATCH_QUALITY_CHOICES:
+        return normalized
+    return aliases.get(normalized, "")
+
+
+def plan_folder_assets(
+    *,
+    folder_name: str,
+    segments: list[dict[str, Any]],
+    assets: list[dict[str, str]],
+    language: str,
+    model: Optional[str] = None,
+    extra_instructions: str = "",
+) -> list[dict[str, Any]]:
+    """Plant alle Voice-over-Segmente eines Ordners in einem Gemini-Call."""
+    if not segments:
+        return []
+
+    client = _get_client()
+    from google.genai import types
+
+    asset_lines = "\n".join(
+        f'- path="{item["path"]}" description="{item.get("description", "")}"'
+        for item in assets
+    )
+    prompt = build_plan_folder_prompt(
+        folder_name=folder_name,
+        segment_lines=_format_segment_lines(segments),
+        asset_lines=asset_lines,
+        language=language,
+        extra_instructions=extra_instructions,
+    )
+    response = client.models.generate_content(
+        model=resolve_gemini_model(model),
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
+    )
+    text = response.text or "{}"
+    try:
+        payload = _extract_json(text)
+    except json.JSONDecodeError:
+        payload = {"beats": []}
+    beats = payload.get("beats", [])
+    if not isinstance(beats, list):
+        return []
+    return [beat for beat in beats if isinstance(beat, dict)]
+
+
+def _format_segment_lines(segments: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for segment in segments:
+        beat_id = str(segment.get("beat_id", "")).strip()
+        text = str(segment.get("text", "")).strip()
+        start_sec = segment.get("start_sec", 0.0)
+        end_sec = segment.get("end_sec", 0.0)
+        if not text:
+            continue
+        lines.append(
+            f'- beat_id="{beat_id}" start_sec={start_sec} end_sec={end_sec} text="{text}"'
+        )
+    return "\n".join(lines) or "- (keine)"
+
+
+def build_plan_folder_prompt(
+    *,
+    folder_name: str,
+    segment_lines: str,
+    asset_lines: str,
+    language: str,
+    extra_instructions: str = "",
+) -> str:
+    """Prompt für gesamtheitliche Motiv-Planung und Asset-Zuordnung."""
+    sections = [
+        f"Du planst Video-Shots für den Ordner '{folder_name}'. Sprache: {language}.",
+        "",
+        "Voice-over-Segmente (in chronologischer Reihenfolge):",
+        segment_lines,
+        "",
+        "Verfügbare lokale Assets:",
+        asset_lines or "- (keine)",
+    ]
+    instructions = extra_instructions.strip()
+    if instructions:
+        sections.extend(
+            [
+                "",
+                "Zusätzliche Anweisungen des Editors (unbedingt beachten):",
+                instructions,
+            ]
+        )
+    sections.extend(
+        [
+            "",
+            "WICHTIG: Betrachte ALLE Segmente und ALLE Assets gesamtheitlich.",
+            "Wähle für jeden Shot das inhaltlich passendste Asset aus der gesamten Liste.",
+            "Vermeide unnötige Wiederholungen, aber inhaltliche Passung hat Priorität.",
+            "Wenn die Passage mehrere Sehenswürdigkeiten/Motive nennt, erstelle mehrere Teile.",
+            "Bewerte die visuelle Passung jedes Teils: sehr_gut, gut, mittel oder unpassend.",
+            "Bei unpassend: asset_path auf null setzen.",
+            "",
+            "Antworte NUR als JSON:",
+            (
+                '{"beats":[{"beat_id":"beat_001","parts":[{"text":"...","motif":"...",'
+                '"asset_path":"exakter path oder null",'
+                '"match_quality":"sehr_gut|gut|mittel|unpassend"}]}]}'
+            ),
+            "beat_id muss exakt einem beat_id aus den Segmenten entsprechen.",
+            "asset_path muss exakt einem path aus der Asset-Liste entsprechen oder null sein.",
+        ]
+    )
+    return "\n".join(sections)
 
 
 def build_plan_passage_prompt(

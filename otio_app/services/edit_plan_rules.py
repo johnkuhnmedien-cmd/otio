@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from otio_app.analysis_models import EditPlanRule, EditPlanRulesDocument, EditPlanShot
+from otio_app.defaults import MATCH_QUALITY_UNPASSEND
 from otio_app.models import Project
 from otio_app.services.generic_outro_selector import asset_id_for_path
 
@@ -408,6 +409,11 @@ def apply_edit_plan_rules(
     }
 
     for position, shot in enumerate(shots):
+        if shot.match_quality == MATCH_QUALITY_UNPASSEND:
+            adjusted.append(shot)
+            previous_key = None
+            continue
+
         folder_asset_map = normalized_by_folder.get(shot.folder, {})
         chosen = shot.asset_path if shot.asset_path in folder_asset_map else None
         chosen_key = _asset_key(chosen)

@@ -13,6 +13,7 @@ class TimedPart:
     end_sec: float
     asset_path: str | None
     confidence: str | None
+    match_quality: str | None = None
 
 
 def split_duration_evenly(start_sec: float, end_sec: float, parts: int) -> list[tuple[float, float]]:
@@ -78,6 +79,7 @@ def shots_from_timed_parts(
                     end_sec=part.start_sec + clamped_duration,
                     asset_path=part.asset_path,
                     confidence=part.confidence,
+                    match_quality=part.match_quality,
                 )
             )
             continue
@@ -97,6 +99,7 @@ def shots_from_timed_parts(
                     end_sec=sub_start + sub_duration,
                     asset_path=part.asset_path,
                     confidence=part.confidence,
+                    match_quality=part.match_quality,
                 )
             )
     return result

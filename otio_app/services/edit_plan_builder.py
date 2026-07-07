@@ -16,6 +16,7 @@ from otio_app.analysis_models import (
     EditPlanShot,
     VoiceAnalysisDocument,
     VoiceFileAnalysis,
+    VoiceSegment,
 )
 from otio_app.defaults import (
     DEFAULT_AUDIO_OFFSET_SEC,
@@ -24,6 +25,7 @@ from otio_app.defaults import (
     DEFAULT_SHOT_MIN_SEC,
     FALLBACK_SOURCE_LOCAL,
     FALLBACK_SOURCE_MISSING,
+    MATCH_QUALITY_UNPASSEND,
 )
 from otio_app.models import Project
 from otio_app.project_layout import (
@@ -38,14 +40,14 @@ from otio_app.services.edit_plan_rules import (
     load_edit_plan_rules,
 )
 from otio_app.services.asset_usage import (
-    filter_assets_by_usage,
     max_asset_usage_limit,
 )
 from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.gemini_client import (
     GeminiNotConfiguredError,
     get_default_gemini_model,
-    plan_passage_assets,
+    normalize_match_quality,
+    plan_folder_assets,
 )
 from otio_app.services.inventory_hash import compute_folder_inventory_hash
 from otio_app.services.inventory_loader import load_folder_inventory
@@ -53,12 +55,13 @@ from otio_app.services.supplement_coverage import (
     COVERAGE_LOCAL_GOOD,
     COVERAGE_LOCAL_WEAK,
     COVERAGE_SUPPLEMENT_REQUIRED,
-    coverage_to_supplement_request,
+    coverage_status_from_match_quality,
     evaluate_segment_coverage,
+    match_quality_from_score,
     score_asset_match,
+    supplement_request_from_unpassend_shot,
 )
 from otio_app.services.supplement_requests import upsert_requests
-from otio_app.defaults import DEFAULT_COVERAGE_THRESHOLD
 from otio_app.services.shot_timing import (
     TimedPart,
     allocate_time_by_text,
@@ -183,8 +186,43 @@ def _best_matching_asset(
     return assets[best_index]
 
 
-def _parts_from_gemini_or_local(
-    passage_text: str,
+def _parse_folder_beats(beats: list[dict]) -> dict[str, list[dict]]:
+    result: dict[str, list[dict]] = {}
+    for beat in beats:
+        beat_id = str(beat.get("beat_id", "")).strip()
+        if not beat_id:
+            continue
+        parts = beat.get("parts", [])
+        if not isinstance(parts, list):
+            continue
+        normalized_parts: list[dict] = []
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            match_quality = normalize_match_quality(str(part.get("match_quality", "")))
+            asset_path = part.get("asset_path")
+            if match_quality == MATCH_QUALITY_UNPASSEND:
+                asset_path = None
+            normalized_parts.append(
+                {
+                    "text": str(part.get("text", "")).strip(),
+                    "motif": str(part.get("motif", "")).strip(),
+                    "asset_path": asset_path,
+                    "match_quality": match_quality,
+                    "confidence": (
+                        "high"
+                        if match_quality and match_quality != MATCH_QUALITY_UNPASSEND
+                        else "low"
+                    ),
+                }
+            )
+        if normalized_parts:
+            result[beat_id] = normalized_parts
+    return result
+
+
+def _beats_from_gemini_holistic_or_local(
+    segments_with_beats: list[tuple[str, VoiceSegment]],
     folder_name: str,
     assets: list[dict[str, str]],
     language: str,
@@ -193,36 +231,65 @@ def _parts_from_gemini_or_local(
     use_api: bool,
     gemini_model: str | None,
     gemini_prompt: str = "",
-) -> list[dict]:
+) -> dict[str, list[dict]]:
     if use_api:
         try:
-            parts = plan_passage_assets(
-                passage_text,
-                folder_name,
-                assets,
-                language,
+            segment_payload = [
+                {
+                    "beat_id": beat_id,
+                    "text": segment.text,
+                    "start_sec": segment.start_sec,
+                    "end_sec": segment.end_sec,
+                }
+                for beat_id, segment in segments_with_beats
+            ]
+            beats = plan_folder_assets(
+                folder_name=folder_name,
+                segments=segment_payload,
+                assets=assets,
+                language=language,
                 model=gemini_model or settings.gemini_model,
                 extra_instructions=gemini_prompt,
             )
-            if parts:
-                return parts
+            parsed = _parse_folder_beats(beats)
+            if parsed:
+                return parsed
         except GeminiNotConfiguredError:
             raise
         except Exception:
-            # Netzwerk-/DNS-Probleme der Gemini-API dürfen den Schnittplan-Workflow
-            # nicht abbrechen. In diesem Fall planen wir lokal weiter.
             pass
 
-    texts = local_split_passage(passage_text, settings.text_splitters)
-    return [
-        {
-            "text": piece,
-            "motif": piece[:80],
-            "asset_path": (_best_matching_asset(piece, assets) or {}).get("path"),
-            "confidence": "low",
-        }
-        for piece in texts
-    ]
+    result: dict[str, list[dict]] = {}
+    for beat_id, segment in segments_with_beats:
+        texts = local_split_passage(segment.text, settings.text_splitters)
+        parts: list[dict] = []
+        for piece in texts:
+            asset = _best_matching_asset(piece, assets)
+            asset_path = asset.get("path") if asset else None
+            description = asset.get("description", "") if asset else ""
+            score = (
+                score_asset_match(
+                    passage_text=piece,
+                    visual_requirement=piece,
+                    description=description,
+                )
+                if asset_path
+                else 0.0
+            )
+            match_quality = match_quality_from_score(score)
+            if match_quality == MATCH_QUALITY_UNPASSEND:
+                asset_path = None
+            parts.append(
+                {
+                    "text": piece,
+                    "motif": piece[:80],
+                    "asset_path": asset_path,
+                    "match_quality": match_quality,
+                    "confidence": "low",
+                }
+            )
+        result[beat_id] = parts
+    return result
 
 
 def build_edit_plan(
@@ -320,19 +387,31 @@ def build_edit_plan(
         assets_payload_by_folder[folder_name] = list(asset_payload)
         usage_by_folder[folder_name] = {}
 
-        total_segments = sum(1 for segment in voice_entry.segments if segment.text.strip())
+        segments_with_beats: list[tuple[str, VoiceSegment]] = []
         beat_index = 0
         for segment in voice_entry.segments:
             if not segment.text.strip():
                 continue
             beat_index += 1
             beat_id = f"beat_{beat_index:03d}"
-            if progress_callback is not None:
-                # Wird VOR dem (potenziell langsamen, z.B. Gemini 3.1 Pro
-                # Preview) API-Call pro Segment aufgerufen — damit die UI bei
-                # vielen Segmenten sichtbaren Fortschritt zeigen kann, statt
-                # minutenlang ohne Rückmeldung zu blockieren.
-                progress_callback(folder_name, beat_index, total_segments)
+            segments_with_beats.append((beat_id, segment))
+
+        if progress_callback is not None and segments_with_beats:
+            progress_callback(folder_name, 1, 1)
+
+        beats_plan = _beats_from_gemini_holistic_or_local(
+            segments_with_beats,
+            folder_name,
+            asset_payload,
+            voice_doc.language,
+            plan_settings,
+            use_api=use_api,
+            gemini_model=plan_settings.gemini_model,
+            gemini_prompt=gemini_prompt,
+        )
+
+        shot_index_in_folder = 0
+        for beat_id, segment in segments_with_beats:
             coverage = evaluate_segment_coverage(
                 beat_id=beat_id,
                 segment=segment,
@@ -340,31 +419,20 @@ def build_edit_plan(
                 voice_file=voice_path,
                 assets=folder_inventory.assets,
             )
-            supplement_request = coverage_to_supplement_request(coverage)
-            if supplement_request is not None:
-                coverage = coverage.model_copy(
-                    update={"supplement_request_id": supplement_request.supplement_request_id}
-                )
-                pending_supplement_requests.append(supplement_request)
-                supplement_request_ids.append(supplement_request.supplement_request_id)
             segment_coverages.append(coverage)
 
-            folder_usage = usage_by_folder[folder_name]
-            allowed_assets = filter_assets_by_usage(
-                asset_payload,
-                usage=folder_usage,
-                max_count=max_count,
-            )
-            raw_parts = _parts_from_gemini_or_local(
-                segment.text,
-                folder_name,
-                allowed_assets,
-                voice_doc.language,
-                plan_settings,
-                use_api=use_api,
-                gemini_model=plan_settings.gemini_model,
-                gemini_prompt=gemini_prompt,
-            )
+            raw_parts = beats_plan.get(beat_id)
+            if not raw_parts:
+                raw_parts = [
+                    {
+                        "text": segment.text.strip(),
+                        "motif": segment.text.strip()[:80],
+                        "asset_path": None,
+                        "match_quality": MATCH_QUALITY_UNPASSEND,
+                        "confidence": "low",
+                    }
+                ]
+
             texts = [str(part.get("text", "")).strip() for part in raw_parts]
             time_ranges = allocate_time_by_text(
                 segment.start_sec,
@@ -373,44 +441,13 @@ def build_edit_plan(
             )
             timed_parts: list[TimedPart] = []
             for part, (start_sec, end_sec) in zip(raw_parts, time_ranges):
+                match_quality = normalize_match_quality(str(part.get("match_quality", "")))
                 asset_path = _validate_asset_path(
                     part.get("asset_path"),
                     allowed_paths,
                 )
-                asset_meta = next(
-                    (asset for asset in asset_payload if asset["path"] == asset_path),
-                    None,
-                )
-                if asset_path and coverage.coverage_status == COVERAGE_SUPPLEMENT_REQUIRED:
-                    description = asset_meta.get("description", "") if asset_meta else ""
-                    match_score = score_asset_match(
-                        passage_text=segment.text,
-                        visual_requirement=coverage.visual_requirement,
-                        description=description,
-                        must_show=coverage.must_show,
-                    )
-                    if match_score < DEFAULT_COVERAGE_THRESHOLD:
-                        asset_path = None
-                        asset_meta = None
-                asset_id = ""
-                asset_origin = ""
-                supplement_request_id = ""
-                rights_status = ""
-                source_url = ""
-                provider = ""
-                asset_source = FALLBACK_SOURCE_MISSING
-                if asset_meta is not None:
-                    asset_id = str(asset_meta.get("asset_id", ""))
-                    asset_origin = str(asset_meta.get("asset_origin", "local_original"))
-                    supplement_request_id = str(asset_meta.get("supplement_request_id", ""))
-                    rights_status = str(asset_meta.get("rights_status", ""))
-                    source_url = str(asset_meta.get("source_url", ""))
-                    provider = str(asset_meta.get("provider", ""))
-                    media_type = str(asset_meta.get("media_type", ""))
-                    asset_source = asset_origin if asset_origin else FALLBACK_SOURCE_LOCAL
-                elif asset_path:
-                    asset_id = asset_id_for_path(asset_path)
-                    asset_source = FALLBACK_SOURCE_LOCAL
+                if match_quality == MATCH_QUALITY_UNPASSEND:
+                    asset_path = None
                 timed_parts.append(
                     TimedPart(
                         text=str(part.get("text", "")).strip(),
@@ -419,6 +456,7 @@ def build_edit_plan(
                         end_sec=end_sec,
                         asset_path=asset_path,
                         confidence=str(part.get("confidence")) if part.get("confidence") else None,
+                        match_quality=match_quality or None,
                     )
                 )
 
@@ -440,6 +478,12 @@ def build_edit_plan(
                 source_url = ""
                 provider = ""
                 media_type = ""
+                match_quality = part.match_quality or ""
+                coverage_status = (
+                    coverage_status_from_match_quality(match_quality)
+                    if match_quality
+                    else coverage.coverage_status
+                )
                 if meta is not None:
                     asset_id = str(meta.get("asset_id", ""))
                     asset_origin = str(meta.get("asset_origin", ""))
@@ -466,6 +510,30 @@ def build_edit_plan(
                     source_url = ""
                     provider = ""
                     media_type = ""
+                    coverage_status = COVERAGE_SUPPLEMENT_REQUIRED
+
+                if not part.asset_path and match_quality != MATCH_QUALITY_UNPASSEND:
+                    coverage_status = COVERAGE_SUPPLEMENT_REQUIRED
+
+                if match_quality == MATCH_QUALITY_UNPASSEND or (
+                    not part.asset_path and coverage_status == COVERAGE_SUPPLEMENT_REQUIRED
+                ):
+                    shot_index_in_folder += 1
+                    supplement_request = supplement_request_from_unpassend_shot(
+                        folder_name=folder_name,
+                        voice_file=voice_path,
+                        beat_id=beat_id,
+                        passage_text=part.text or segment.text,
+                        motif=part.motif,
+                        duration_sec=max(0.0, part.end_sec - part.start_sec),
+                        shot_index=shot_index_in_folder,
+                    )
+                    supplement_request_id = supplement_request.supplement_request_id
+                    pending_supplement_requests.append(supplement_request)
+                    supplement_request_ids.append(supplement_request.supplement_request_id)
+                    coverage_status = COVERAGE_SUPPLEMENT_REQUIRED
+                else:
+                    shot_index_in_folder += 1
 
                 if asset_id:
                     usage_by_folder[folder_name][asset_id] = (
@@ -492,7 +560,8 @@ def build_edit_plan(
                         passage_text=part.text,
                         confidence=part.confidence,
                         beat_id=beat_id,
-                        coverage_status=coverage.coverage_status,
+                        coverage_status=coverage_status,
+                        match_quality=match_quality,
                     )
                 )
 

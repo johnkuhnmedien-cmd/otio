@@ -195,6 +195,7 @@ class EditPlanShot(BaseModel):
     section_outro: bool = False
     beat_id: str = ""
     coverage_status: str = ""
+    match_quality: str = ""
 
 
 class TimelineItemTransform(BaseModel):
@@ -291,6 +292,9 @@ class TimelineItem(BaseModel):
     source_url: str = ""
     provider: str = ""
     asset_type: str = ""
+    match_quality: str = ""
+    beat_id: str = ""
+    coverage_status: str = ""
     background_style: str = ""
     image_zoom_x: float = 1.0
     image_zoom_y: float = 1.0

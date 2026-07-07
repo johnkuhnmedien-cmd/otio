@@ -124,14 +124,11 @@ def test_build_edit_plan_without_gemini(
     assert document.settings.gemini_model == get_default_gemini_model()
 
 
-def test_build_edit_plan_calls_progress_callback_per_segment(
+def test_build_edit_plan_calls_progress_callback_per_folder(
     temp_project_layout: dict[str, Path],
 ) -> None:
-    """Regression: Bei vielen Voice-over-Segmenten (v.a. mit langsameren
-    Gemini-Modellen wie 'Pro Preview') kann 'Schnittplan vorschlagen'
-    mehrere Minuten dauern, ohne dass die UI Fortschritt anzeigt. Ein
-    optionaler progress_callback erlaubt es der UI, den Fortschritt pro
-    Segment sichtbar zu machen."""
+    """Regression: Der gesamtheitliche Gemini-Call meldet Fortschritt einmal
+    pro Ordner statt pro Segment."""
     project = _sample_project(temp_project_layout)
     voice_path = str(temp_project_layout["voice_file"])
     media_path = str(temp_project_layout["project_root"] / "Grand Canyon" / "clip.mp4")
@@ -154,7 +151,7 @@ def test_build_edit_plan_calls_progress_callback_per_segment(
                 segments=[
                     VoiceSegment(start_sec=0.0, end_sec=5.0, text="Erstes Segment."),
                     VoiceSegment(start_sec=5.0, end_sec=10.0, text="Zweites Segment."),
-                    VoiceSegment(start_sec=10.0, end_sec=12.0, text="   "),  # leer -> übersprungen
+                    VoiceSegment(start_sec=10.0, end_sec=12.0, text="   "),
                 ],
             )
         ],
@@ -179,10 +176,7 @@ def test_build_edit_plan_calls_progress_callback_per_segment(
         progress_callback=lambda folder, index, total: progress_calls.append((folder, index, total)),
     )
 
-    assert progress_calls == [
-        ("Grand Canyon", 1, 2),
-        ("Grand Canyon", 2, 2),
-    ]
+    assert progress_calls == [("Grand Canyon", 1, 1)]
 
 
 def test_build_edit_plan_falls_back_when_gemini_network_fails(
@@ -241,13 +235,16 @@ def test_build_edit_plan_falls_back_when_gemini_network_fails(
     from unittest.mock import patch
 
     with patch(
-        "otio_app.services.edit_plan_builder.plan_passage_assets",
+        "otio_app.services.edit_plan_builder.plan_folder_assets",
         side_effect=RuntimeError("network down"),
     ):
         document = build_edit_plan(project, use_api=True)
 
     assert document.shots
-    assert document.shots[0].asset_path == media_path
+    narrative = next(shot for shot in document.shots if not shot.section_outro)
+    assert narrative.match_quality
+    if narrative.match_quality != "unpassend":
+        assert narrative.asset_path == media_path
 
 
 def test_max_asset_usage_applies_after_timing_split(
@@ -398,25 +395,30 @@ def test_segment_coverage_reconciled_when_all_shots_get_local_asset(
         ),
     )
 
-    def fake_plan_passage_assets(passage_text, folder_name, assets, language, **kwargs):
+    def fake_plan_folder_assets(**kwargs):
         return [
             {
-                "text": "Ein Wasserfall stürzt tosend in die Tiefe",
-                "motif": "Wasserfall",
-                "asset_path": waterfall_path,
-                "confidence": "high",
-            },
-            {
-                "text": "ein Adler majestätisch über dem Tal kreist",
-                "motif": "Adler",
-                "asset_path": eagle_path,
-                "confidence": "high",
-            },
+                "beat_id": "beat_001",
+                "parts": [
+                    {
+                        "text": "Ein Wasserfall stürzt tosend in die Tiefe",
+                        "motif": "Wasserfall",
+                        "asset_path": waterfall_path,
+                        "match_quality": "sehr_gut",
+                    },
+                    {
+                        "text": "ein Adler majestätisch über dem Tal kreist",
+                        "motif": "Adler",
+                        "asset_path": eagle_path,
+                        "match_quality": "gut",
+                    },
+                ],
+            }
         ]
 
     with patch(
-        "otio_app.services.edit_plan_builder.plan_passage_assets",
-        side_effect=fake_plan_passage_assets,
+        "otio_app.services.edit_plan_builder.plan_folder_assets",
+        side_effect=fake_plan_folder_assets,
     ):
         document = build_edit_plan(project, use_api=True)
 
@@ -659,3 +661,87 @@ def test_local_fallback_picks_best_matching_asset_not_just_first(
         "Das inhaltlich passende Asset sollte für die Narration gewählt werden, "
         "nicht blind das erste Asset im Ordner."
     )
+
+
+def test_unpassend_match_quality_creates_supplement_request(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    from unittest.mock import patch
+
+    from otio_app.defaults import MATCH_QUALITY_UNPASSEND
+
+    project = _sample_project(temp_project_layout)
+    voice_path = str(temp_project_layout["voice_file"])
+    media_path = str(temp_project_layout["project_root"] / "Grand Canyon" / "clip.mp4")
+
+    mapping = VoiceFolderMappingDocument(
+        project_id=project.id,
+        confirmed=True,
+        entries=[
+            VoiceFolderMappingEntry(voice_file=voice_path, folder="Grand Canyon", confirmed=True)
+        ],
+    )
+    project.voice_folder_mapping_path.write_text(mapping.model_dump_json(indent=2), encoding="utf-8")
+    voice_doc = VoiceAnalysisDocument(
+        project_id=project.id,
+        language="de",
+        files=[
+            VoiceFileAnalysis(
+                path=voice_path,
+                segments=[
+                    VoiceSegment(
+                        start_sec=0.0,
+                        end_sec=6.0,
+                        text="Ein Wasserfall stürzt tosend in die Tiefe.",
+                    )
+                ],
+            )
+        ],
+    )
+    project.voice_analysis_path.write_text(voice_doc.model_dump_json(indent=2), encoding="utf-8")
+    Path(media_path).write_bytes(b"mp4")
+
+    from otio_app.services.inventory_loader import save_folder_inventory
+
+    save_folder_inventory(
+        project.folder_inventory_path("Grand Canyon"),
+        AssetFolderAnalysis(
+            folder="Grand Canyon",
+            assets=[
+                AssetMediaAnalysis(
+                    path=media_path,
+                    description="Parkplatz und Souvenirshop",
+                    asset_id="asset_irrelevant",
+                )
+            ],
+        ),
+    )
+
+    def fake_plan_folder_assets(**kwargs):
+        return [
+            {
+                "beat_id": "beat_001",
+                "parts": [
+                    {
+                        "text": "Ein Wasserfall stürzt tosend in die Tiefe.",
+                        "motif": "Wasserfall",
+                        "asset_path": None,
+                        "match_quality": "unpassend",
+                    }
+                ],
+            }
+        ]
+
+    with patch(
+        "otio_app.services.edit_plan_builder.plan_folder_assets",
+        side_effect=fake_plan_folder_assets,
+    ):
+        document = build_edit_plan(project, use_api=True)
+
+    narrative_shots = [shot for shot in document.shots if not shot.section_outro]
+    assert len(narrative_shots) == 1
+    shot = narrative_shots[0]
+    assert shot.match_quality == MATCH_QUALITY_UNPASSEND
+    assert shot.asset_path is None
+    assert shot.supplement_request_id
+    assert document.supplement_request_ids

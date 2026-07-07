@@ -107,6 +107,9 @@ def _shot_to_timeline_item(
         source_url=shot.source_url,
         provider=shot.provider,
         asset_type="image" if item_type == "image_with_background" else ("image" if is_image else "video"),
+        match_quality=shot.match_quality,
+        beat_id=shot.beat_id,
+        coverage_status=shot.coverage_status,
         background_style="vintage" if item_type == "image_with_background" else "",
         image_zoom_x=0.8 if item_type == "image_with_background" else 1.0,
         image_zoom_y=0.8 if item_type == "image_with_background" else 1.0,
@@ -500,6 +503,7 @@ def shots_from_timeline_items(items: list[TimelineItem]) -> list[EditPlanShot]:
                     motif=item.motif,
                     passage_text=item.passage_text,
                     confidence=str(item.confidence) if item.confidence else None,
+                    match_quality=item.match_quality,
                 )
             )
     return shots
