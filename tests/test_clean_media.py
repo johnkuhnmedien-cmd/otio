@@ -666,6 +666,64 @@ def test_transcode_to_clean_hides_banner_so_real_errors_surface(
 @patch("otio_app.services.clean_media.transcode_to_clean")
 @patch("otio_app.services.clean_media.test_decode", return_value=(True, None))
 @patch("otio_app.services.clean_media.probe_media")
+def test_process_media_auto_zoom_scales_same_aspect_resolution(
+    mock_probe,
+    _mock_decode,
+    mock_transcode,
+    _mock_validate,
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path, folder_name="Bisti")
+    _enable_zoom_rule(project)
+    original = (
+        project.project_root_path
+        / "Bisti"
+        / "Bisti_De_Na_Zin_Wilderness_Asset01.mp4"
+    )
+    original.write_bytes(b"original")
+
+    hd = MediaProbeInfo(
+        video_codec="h264",
+        container="mp4",
+        pixel_format="yuv420p",
+        width=1920,
+        height=1080,
+    )
+    uhd = MediaProbeInfo(
+        video_codec="h264",
+        container="mp4",
+        pixel_format="yuv420p",
+        width=3840,
+        height=2160,
+    )
+    mock_probe.side_effect = lambda path: uhd if "3840x2160" in str(path) else hd
+
+    captured: dict[str, str | None] = {}
+
+    def _fake_transcode(
+        original_path: Path,
+        output_path: Path,
+        *,
+        video_filter: str | None = None,
+        expected_width: int | None = None,
+        expected_height: int | None = None,
+    ) -> None:
+        captured["video_filter"] = video_filter
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"clean" * 300)
+
+    mock_transcode.side_effect = _fake_transcode
+
+    entry = process_media_file(project, "Bisti", original)
+    assert entry.status == CLEAN_STATUS_CLEAN
+    assert mock_transcode.called
+    assert captured["video_filter"] == "scale=3840:2160"
+
+
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+@patch("otio_app.services.clean_media.transcode_to_clean")
+@patch("otio_app.services.clean_media.test_decode", return_value=(True, None))
+@patch("otio_app.services.clean_media.probe_media")
 def test_process_media_ignores_folder_title_rule(
     mock_probe,
     _mock_decode,

@@ -164,7 +164,7 @@ def build_export_video_filter(
     expected_height: int | None = None
 
     if export_opts.auto_zoom_fill and source_width and source_height:
-        scale = ffmpeg_scale_crop_filter(
+        scale = ffmpeg_video_filter_for_target_resolution(
             source_width,
             source_height,
             project.width,
@@ -296,6 +296,23 @@ def ffmpeg_scale_crop_filter(
         f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
         f"crop={target_width}:{target_height}"
     )
+
+
+def ffmpeg_video_filter_for_target_resolution(
+    asset_width: int,
+    asset_height: int,
+    target_width: int,
+    target_height: int,
+) -> str | None:
+    """Liefert den passenden ffmpeg-vf für die Zielauflösung (Fill-Zoom oder einfaches Scale)."""
+    if asset_width <= 0 or asset_height <= 0 or target_width <= 0 or target_height <= 0:
+        return None
+    if asset_width == target_width and asset_height == target_height:
+        return None
+    fill = ffmpeg_scale_crop_filter(asset_width, asset_height, target_width, target_height)
+    if fill:
+        return fill
+    return f"scale={target_width}:{target_height}"
 
 
 def build_resolve_zoom_effect(zoom: float) -> otio.schema.Effect:

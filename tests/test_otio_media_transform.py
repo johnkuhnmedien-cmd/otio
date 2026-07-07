@@ -16,6 +16,7 @@ from otio_app.services.otio_media_transform import (
     escape_drawtext_value,
     ffmpeg_folder_title_filter,
     ffmpeg_scale_crop_filter,
+    ffmpeg_video_filter_for_target_resolution,
     format_folder_display_name,
 )
 
@@ -108,6 +109,36 @@ def test_build_export_video_filter_ignores_folder_title_rule() -> None:
     assert vf is None
     assert expected_w is None
     assert expected_h is None
+
+
+def test_build_export_video_filter_scales_same_aspect_different_resolution() -> None:
+    project = Project(
+        id="t",
+        name="USA",
+        project_root="/tmp",
+        work_dir="/tmp/_otio",
+        asset_subdir_names=["Folder"],
+        selected_asset_subdirs=["Folder"],
+        width=3840,
+        height=2160,
+    )
+    opts = ExportRuleOptions(auto_zoom_fill=True)
+    vf, expected_w, expected_h, error = build_export_video_filter(
+        source_width=1920,
+        source_height=1080,
+        project=project,
+        export_opts=opts,
+    )
+    assert error is None
+    assert vf == "scale=3840:2160"
+    assert expected_w == 3840
+    assert expected_h == 2160
+
+
+def test_ffmpeg_video_filter_for_target_resolution_uses_fill_for_dci() -> None:
+    vf = ffmpeg_video_filter_for_target_resolution(4096, 2160, 3840, 2160)
+    assert vf is not None
+    assert "crop=3840:2160" in vf
 
 
 def test_ffmpeg_folder_title_filter_includes_duration_and_position() -> None:

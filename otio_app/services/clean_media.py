@@ -605,8 +605,16 @@ def process_media_file(
         entry.error = filter_error
         return entry
     if export_transcode and not video_filter:
+        dims = (
+            f"{source_probe.width}×{source_probe.height}"
+            if source_probe.width and source_probe.height
+            else "unbekannt"
+        )
         entry.status = CLEAN_STATUS_FAILED
-        entry.error = "Export-Filter konnte nicht erstellt werden"
+        entry.error = (
+            f"Auto-Zoom-Filter konnte nicht erstellt werden "
+            f"(Quelle {dims}, Ziel {project.width}×{project.height})"
+        )
         return entry
     if zoom_transcode and not source_probe.width and not force_transcode:
         entry.status = CLEAN_STATUS_FAILED
