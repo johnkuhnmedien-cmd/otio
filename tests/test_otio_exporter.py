@@ -484,6 +484,107 @@ def test_clip_source_range_starts_at_embedded_timecode(tmp_path: Path) -> None:
     assert notes == []
 
 
+def test_timeline_item_clip_source_range_includes_embedded_timecode(tmp_path: Path) -> None:
+    """Regression: _append_timeline_item_clip() (der moderne TimelineItem-
+    basierte Export-Pfad) hat item.source_in_sec/source_out_sec bisher 1:1
+    aus dem Schnittplan übernommen — diese wurden beim Schnittplan-Bau IMMER
+    relativ zu einem bei Null beginnenden Timecode berechnet. Für Dateien
+    mit einem von Null abweichenden eingebetteten SMPTE-Timecode (typisch
+    bei professionellem Kamera-Footage) entstand dadurch ein Mismatch
+    zwischen source_range und available_range: DaVinci Resolve meldete beim
+    Import/Reconnect 'No overlap between specified target timecodes and
+    located file timecodes', obwohl die richtige Datei referenziert wurde.
+    source_range muss denselben eingebetteten Timecode-Offset wie
+    available_range enthalten."""
+    from otio_app.services.edit_plan_rules import ExportRuleOptions
+    from otio_app.services.otio_exporter import _append_timeline_item_clip
+
+    project = _project(tmp_path)
+    media = project.project_root_path / "Grand Canyon" / "Asset16.mp4"
+    media.parent.mkdir(parents=True, exist_ok=True)
+    media.write_bytes(b"x")
+
+    item = TimelineItem(
+        timeline_item_id="item_016",
+        type="video_shot",
+        section_id="section_grand_canyon",
+        folder_name="Grand Canyon",
+        voice_file=str(tmp_path / "voice.wav"),
+        resolved_media_path=str(media),
+        original_asset_path=str(media),
+        duration_sec=5.0,
+        final_duration_sec=5.0,
+        source_in_sec=2.0,
+        source_out_sec=0.0,
+        transform=TimelineItemTransform(),
+    )
+
+    embedded_tc_sec = 2 * 3600 + 23 * 60 + 45.0  # ~02:23:45, wie im Bugreport
+    timing = MediaTiming(start_sec=embedded_tc_sec, duration_sec=600.0, rate=29.97)
+
+    track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    with patch("otio_app.services.otio_exporter.probe_media_timing", return_value=timing):
+        _append_timeline_item_clip(
+            track,
+            item,
+            project=project,
+            index=1,
+            rate=29.97,
+            export_rules=ExportRuleOptions(),
+        )
+
+    clip = track[0]
+    assert clip.source_range.start_time.to_seconds() == pytest.approx(embedded_tc_sec + 2.0, abs=0.01)
+
+    available_range = clip.media_reference.available_range
+    avail_start = available_range.start_time.to_seconds()
+    avail_end = avail_start + available_range.duration.to_seconds()
+    src_start = clip.source_range.start_time.to_seconds()
+    src_end = src_start + clip.source_range.duration.to_seconds()
+    assert avail_start <= src_start + 0.01, "source_range beginnt vor available_range"
+    assert src_end <= avail_end + 0.01, "source_range endet nach available_range"
+
+
+def test_timeline_item_clip_source_range_unaffected_when_no_embedded_timecode(
+    tmp_path: Path,
+) -> None:
+    """Ohne eingebetteten Timecode (start_sec=0.0, der Normalfall) darf sich
+    das Verhalten nicht ändern."""
+    from otio_app.services.edit_plan_rules import ExportRuleOptions
+    from otio_app.services.otio_exporter import _append_timeline_item_clip
+
+    project = _project(tmp_path)
+    media = project.project_root_path / "Grand Canyon" / "Asset01.mp4"
+    media.parent.mkdir(parents=True, exist_ok=True)
+    media.write_bytes(b"x")
+
+    item = TimelineItem(
+        timeline_item_id="item_001",
+        type="video_shot",
+        section_id="section_grand_canyon",
+        folder_name="Grand Canyon",
+        voice_file=str(tmp_path / "voice.wav"),
+        resolved_media_path=str(media),
+        original_asset_path=str(media),
+        duration_sec=5.0,
+        final_duration_sec=5.0,
+        source_in_sec=2.0,
+        source_out_sec=7.0,
+        transform=TimelineItemTransform(),
+    )
+
+    timing = MediaTiming(start_sec=0.0, duration_sec=600.0, rate=29.97)
+    track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    with patch("otio_app.services.otio_exporter.probe_media_timing", return_value=timing):
+        _append_timeline_item_clip(
+            track, item, project=project, index=1, rate=29.97, export_rules=ExportRuleOptions()
+        )
+
+    clip = track[0]
+    assert clip.source_range.start_time.to_seconds() == pytest.approx(2.0, abs=0.01)
+    assert clip.source_range.duration.to_seconds() == pytest.approx(5.0, abs=0.01)
+
+
 def test_clip_source_range_applies_trim_leading(tmp_path: Path) -> None:
     media = tmp_path / "clip.mp4"
     media.write_bytes(b"x")

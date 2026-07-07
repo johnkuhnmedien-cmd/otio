@@ -596,7 +596,6 @@ def _append_aligned_voice_track(
     voiceover = section.voiceover
     resolved = _resolve_media_path(section.voice_file)
     play_sec = max(0.01, voiceover.duration_sec)
-    source_in = voiceover.source_in_sec
 
     voice_clip = otio.schema.Clip(
         name=Path(section.voice_file).stem,
@@ -610,6 +609,10 @@ def _append_aligned_voice_track(
     timing = probe_media_timing(resolved, default_rate=rate)
     if timing.rate:
         media_rate = timing.rate
+    # Konsistent mit available_range (siehe _append_timeline_item_clip):
+    # falls die WAV-Datei einen eingebetteten Timecode ungleich Null hat,
+    # muss source_range diesen Offset ebenfalls berücksichtigen.
+    source_in = timing.start_sec + voiceover.source_in_sec
     voice_clip.source_range = _time_range(play_sec, media_rate, start_sec=source_in)
     voice_clip.metadata["voice_file"] = section.voice_file
     voice_clip.metadata["folder"] = section.folder
@@ -656,13 +659,26 @@ def _append_timeline_item_clip(
         effective = resolve_effective_media_path(project, item.folder_name, original)
 
     duration_sec = item.final_duration_sec or item.duration_sec
-    source_in = item.source_in_sec
-    source_out = item.source_out_sec or (source_in + duration_sec)
-    play_sec = max(0.01, source_out - source_in)
     media_rate = rate
     timing = probe_media_timing(effective, default_rate=rate)
     if timing.rate:
         media_rate = timing.rate
+
+    # source_range muss im selben Zeit-Koordinatensystem wie available_range
+    # liegen (siehe _media_reference unten, trim_leading_sec=0.0 -> deren
+    # start_time = eingebetteter Timecode der Datei). item.source_in_sec/
+    # source_out_sec wurden beim Schnittplan-Bau IMMER relativ zu einem bei
+    # Null beginnenden Timecode berechnet (nur video_head_trim_sec
+    # berücksichtigt) — für Dateien mit einem von Null abweichenden
+    # eingebetteten SMPTE-Timecode (z. B. Kamera-Footage) muss dieser Offset
+    # hier nachträglich ergänzt werden. Sonst fällt source_range außerhalb
+    # von available_range, und Resolve meldet beim Import/Reconnect einen
+    # Timecode-Mismatch ("No overlap between specified target timecodes and
+    # located file timecodes"), obwohl die richtige Datei referenziert wird.
+    embedded_offset = timing.start_sec
+    source_in = embedded_offset + item.source_in_sec
+    source_out = embedded_offset + (item.source_out_sec or (item.source_in_sec + duration_sec))
+    play_sec = max(0.01, source_out - source_in)
 
     video_clip = otio.schema.Clip(
         name=_clip_name_for_media(effective, index=index),
