@@ -13,7 +13,7 @@ from otio_app.analysis_models import (
     TimelineItemTransform,
 )
 from otio_app.models import Project
-from otio_app.services.edit_plan_validator import TimelineValidationResult, ValidationStatus
+from otio_app.services.edit_plan_validator import FinalPlanValidationResult, ValidationStatus
 from otio_app.ui.edit_plan import _finalize_plan_for_confirm
 
 
@@ -72,8 +72,8 @@ def test_finalize_plan_for_confirm_does_not_raise_nameerror(tmp_path: Path) -> N
         "otio_app.ui.edit_plan.inventory_hash_is_stale",
         return_value=False,
     ), patch(
-        "otio_app.ui.edit_plan.validate_timeline_items",
-        return_value=TimelineValidationResult(status=ValidationStatus.OK),
+        "otio_app.ui.edit_plan.validate_document_for_confirm",
+        return_value=FinalPlanValidationResult(ok=True, status=ValidationStatus.OK),
     ):
         document, notes = _finalize_plan_for_confirm(project, draft, "Antelope Canyon")
 
@@ -201,3 +201,88 @@ def test_finalize_plan_for_confirm_fills_missing_asset_instead_of_blocking(
     assert document.confirmed is True
     assert document.timeline_items[0].resolved_media_path == str(fallback_media)
     assert any("nächstbestes Asset" in note for note in notes)
+
+
+def test_finalize_plan_for_confirm_blocks_blocked_candidate(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    draft = EditPlanDocument(
+        project_id=project.id,
+        folder_name="Antelope Canyon",
+        confirmed=False,
+        candidate_status="BLOCKED",
+        validation_status="FAIL",
+        settings=EditPlanSettings(),
+        timeline_items=[],
+    )
+
+    try:
+        _finalize_plan_for_confirm(project, draft, "Antelope Canyon")
+        assert False, "Erwartete ValueError bei BLOCKED candidate_status"
+    except ValueError as exc:
+        assert "BLOCKED" in str(exc)
+
+
+def test_finalize_plan_for_confirm_blocks_on_final_validation(tmp_path: Path) -> None:
+    from otio_app.services.edit_plan_validator import PlanValidationError
+
+    project = _project(tmp_path)
+    media_path = tmp_path / "clip.mp4"
+    media_path.write_bytes(b"video")
+
+    draft = EditPlanDocument(
+        project_id=project.id,
+        folder_name="Antelope Canyon",
+        confirmed=False,
+        candidate_status="ACCEPTED",
+        validation_status="PASS",
+        settings=EditPlanSettings(),
+        timeline_items=[
+            TimelineItem(
+                timeline_item_id="item_001",
+                type="video_shot",
+                section_id="section_antelope_canyon",
+                folder_name="Antelope Canyon",
+                voice_file=str(tmp_path / "voice.wav"),
+                resolved_media_path=str(media_path),
+                duration_sec=5.0,
+                final_duration_sec=5.0,
+                timeline_in_sec=0.0,
+                timeline_out_sec=5.0,
+                source_in_sec=0.0,
+                source_out_sec=5.0,
+                transform=TimelineItemTransform(),
+            )
+        ],
+        inventory_hash_at_plan_time="abc123",
+    )
+
+    with patch(
+        "otio_app.ui.edit_plan.get_edit_plan_rules_for_project",
+        return_value=EditPlanRulesDocument(project_id=project.id, rules=[]),
+    ), patch(
+        "otio_app.ui.edit_plan.ensure_opening_titles_rendered",
+        side_effect=lambda _project, items: (items, []),
+    ), patch(
+        "otio_app.ui.edit_plan.inventory_hash_is_stale",
+        return_value=False,
+    ), patch(
+        "otio_app.ui.edit_plan.validate_document_for_confirm",
+        return_value=FinalPlanValidationResult(
+            ok=False,
+            status=ValidationStatus.BLOCKED,
+            errors=[
+                PlanValidationError(
+                    type="ASSET_USAGE_LIMIT_EXCEEDED",
+                    asset_id="dup.mp4",
+                    usage_count=2,
+                    max_allowed=1,
+                )
+            ],
+        ),
+    ):
+        try:
+            _finalize_plan_for_confirm(project, draft, "Antelope Canyon")
+            assert False, "Erwartete ValueError bei finaler Validierung"
+        except ValueError as exc:
+            assert "Validierung" in str(exc)
+            assert "ASSET_USAGE" in str(exc) or "dup.mp4" in str(exc)

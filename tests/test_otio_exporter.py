@@ -10,6 +10,8 @@ import pytest
 
 from otio_app.analysis_models import (
     EditPlanDocument,
+    EditPlanRule,
+    EditPlanRulesDocument,
     EditPlanSettings,
     EditPlanShot,
     TimelineItem,
@@ -20,6 +22,7 @@ from otio_app.analysis_models import (
 )
 from otio_app.models import Project
 from otio_app.services.edit_plan_builder import save_edit_plan
+from otio_app.services.edit_plan_rules import RULE_MAX_ASSET_USES, save_edit_plan_rules
 from otio_app.services.media_utils import MediaTiming
 from otio_app.services.otio_exporter import (
     _clip_name_for_media,
@@ -711,3 +714,124 @@ def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
     timeline = otio.adapters.read_from_file(str(export_result.path))
     assert timeline.name == "USA"
     assert len(timeline.tracks) == 3
+
+
+def test_merge_blocks_duplicate_asset_globally(tmp_path: Path) -> None:
+    """Globale Asset-Nutzung über alle bestätigten Orte muss beim Merge prüfen."""
+    project = _project(tmp_path)
+    voice_a = str(tmp_path / "USA" / "Voice over" / "DE" / "USA_Florida Keys_VO.wav")
+    voice_b = str(tmp_path / "USA" / "Voice over" / "DE" / "USA_Grand Canyon_VO.wav")
+    Path(voice_a).parent.mkdir(parents=True, exist_ok=True)
+    Path(voice_a).write_bytes(b"wav")
+    Path(voice_b).write_bytes(b"wav")
+
+    mapping = VoiceFolderMappingDocument(
+        project_id=project.id,
+        confirmed=True,
+        entries=[
+            VoiceFolderMappingEntry(voice_file=voice_a, folder="Florida Keys", confirmed=True),
+            VoiceFolderMappingEntry(voice_file=voice_b, folder="Grand Canyon", confirmed=True),
+        ],
+    )
+    project.voice_folder_mapping_path.write_text(
+        mapping.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    shared_asset = "shared_asset.mp4"
+    plan_settings = EditPlanSettings(
+        audio_offset_sec=1.0,
+        section_outro_sec=5.0,
+        video_head_trim_sec=0.5,
+        video_head_trim_policy="fixed_trim",
+        voiceover_trim_policy="disabled",
+    )
+
+    def _single_shot(folder: str, voice_file: str, timeline_in: float) -> TimelineItem:
+        duration = 3.0
+        path = f"/media/{folder.replace(' ', '_')}.mp4"
+        return TimelineItem(
+            timeline_item_id=f"item_{folder.replace(' ', '_')}",
+            type="video_shot",
+            section_id=_section_id(folder),
+            folder_name=folder,
+            voice_file=voice_file,
+            asset_id=shared_asset,
+            shot_id="shot_001",
+            resolved_media_path=path,
+            original_asset_path=path,
+            asset_role="narration",
+            timeline_in_sec=timeline_in,
+            timeline_out_sec=timeline_in + duration,
+            duration_sec=duration,
+            final_duration_sec=duration,
+            source_in_sec=0.0,
+            source_out_sec=duration,
+            voice_start_sec=0.0,
+            voice_end_sec=5.0,
+            beat_id="beat_001",
+            transform=TimelineItemTransform(),
+        )
+
+    florida_items = [_single_shot("Florida Keys", voice_a, 0.0)]
+    canyon_items = [_single_shot("Grand Canyon", voice_b, 0.0)]
+
+    for folder_name, items, voice_file, duration in (
+        ("Florida Keys", florida_items, voice_a, 5.0),
+        ("Grand Canyon", canyon_items, voice_b, 5.0),
+    ):
+        save_edit_plan(
+            project,
+            EditPlanDocument(
+                project_id=project.id,
+                folder_name=folder_name,
+                confirmed=True,
+                candidate_status="ACCEPTED",
+                validation_status="PASS",
+                settings=plan_settings,
+                voiceover=_voiceover_plan(voice_file, duration=duration),
+                shots=_shots_from_items(items),
+                timeline_items=items,
+            ),
+            folder_name,
+        )
+
+    save_edit_plan_rules(
+        project,
+        EditPlanRulesDocument(
+            project_id=project.id,
+            rules=[
+                EditPlanRule(
+                    id="max",
+                    rule_type=RULE_MAX_ASSET_USES,
+                    enabled=True,
+                    params={"max_count": 1, "min_gap": 0},
+                )
+            ],
+        ),
+    )
+
+    merged = merge_confirmed_edit_plans(project)
+    assert merged.validation_status == "BLOCKED"
+    assert merged.ready is False
+    assert any("Global:" in warning for warning in merged.warnings)
+
+
+def test_merge_skips_blocked_candidate_plan(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _setup_mapping_and_plans(project, tmp_path)
+
+    blocked_plan = EditPlanDocument(
+        project_id=project.id,
+        folder_name="Grand Canyon",
+        confirmed=True,
+        candidate_status="BLOCKED",
+        validation_status="FAIL",
+        settings=EditPlanSettings(),
+        timeline_items=[],
+    )
+    save_edit_plan(project, blocked_plan, "Grand Canyon")
+
+    merged = merge_confirmed_edit_plans(project)
+    assert merged.validation_status == "BLOCKED"
+    assert "Grand Canyon" in merged.skipped_folders

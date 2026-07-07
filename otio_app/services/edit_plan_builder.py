@@ -112,6 +112,7 @@ class EditPlanBuildResult:
     validation_status: str = "FAIL"
     candidate_status: str = "BLOCKED"
     retry_attempts: int = 0
+    used_rules: dict | None = None
     reports: dict | None = None
     plan_generation_notes: list[str] | None = None
 
@@ -1225,6 +1226,7 @@ def build_edit_plan(
                 validation_status="PASS",
                 candidate_status="ACCEPTED",
                 retry_attempts=attempt,
+                used_rules=used_rules,
                 reports=reports,
                 plan_generation_notes=plan_generation_notes,
             )
@@ -1281,6 +1283,7 @@ def build_edit_plan(
         validation_status="FAIL",
         candidate_status="BLOCKED",
         retry_attempts=max_attempts,
+        used_rules=used_rules,
         reports=reports,
         plan_generation_notes=plan_generation_notes,
     )

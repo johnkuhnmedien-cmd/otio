@@ -49,9 +49,11 @@ from otio_app.services.otio_export_settings import (
 )
 from otio_app.services.edit_plan_validator import (
     ValidationStatus,
+    plan_validation_error_to_message,
     validate_opening_titles,
     validate_timeline_items,
 )
+from otio_app.services.plan_validation_reports import global_validation_blocked
 from otio_app.services.timeline_plan_builder import (
     assign_global_timeline_positions,
     build_voiceover_plan,
@@ -190,7 +192,8 @@ def merge_confirmed_edit_plans(
     warnings: list[str] = []
     settings = EditPlanSettings()
     global_cursor = 0.0
-    export_rules = export_rule_options(load_edit_plan_rules(project))
+    rules_doc = load_edit_plan_rules(project)
+    export_rules = export_rule_options(rules_doc)
 
     worst_status = ValidationStatus.OK
     all_validation_errors: list[str] = []
@@ -208,6 +211,15 @@ def merge_confirmed_edit_plans(
                 skipped.append(folder_name)
             continue
 
+        if plan.candidate_status == "BLOCKED":
+            all_validation_errors.append(
+                f"{folder_name}: Schnittplan BLOCKED — bitte unter „Vorschlag“ neu generieren."
+            )
+            worst_status = ValidationStatus.BLOCKED
+            if folder_name not in skipped:
+                skipped.append(folder_name)
+            continue
+
         if plan.inventory_hash_at_plan_time and inventory_hash_is_stale(
             project,
             folder_name,
@@ -221,6 +233,7 @@ def merge_confirmed_edit_plans(
 
         if folder_name not in included:
             included.append(folder_name)
+            settings = plan.settings
 
         section_items = _plan_section_items(plan, folder_name, entry.voice_file)
         if not section_items:
@@ -250,7 +263,7 @@ def merge_confirmed_edit_plans(
             fps=float(project.fps),
             voiceover=section_voiceover,
             opening_title_required=export_rules.folder_title_enabled,
-            rules_doc=load_edit_plan_rules(project),
+            rules_doc=rules_doc,
             work_dir_path=project.work_dir_path,
         )
         all_validation_errors.extend(f"{folder_name}: {err}" for err in validation.errors)
@@ -275,6 +288,19 @@ def merge_confirmed_edit_plans(
 
     shots = shots_from_timeline_items(merged_items)
     warnings.extend(verify_timeline_media_paths(project, merged_items))
+
+    if merged_items:
+        global_validation = global_validation_blocked(
+            merged_items,
+            settings=settings,
+            rules_doc=rules_doc,
+        )
+        if not global_validation.ok:
+            worst_status = ValidationStatus.BLOCKED
+            for error in global_validation.errors:
+                all_validation_errors.append(
+                    f"Global: {plan_validation_error_to_message(error)}"
+                )
 
     if all_validation_errors:
         for line in all_validation_errors:

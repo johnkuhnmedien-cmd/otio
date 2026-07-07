@@ -57,7 +57,16 @@ from otio_app.services.edit_plan_validator import (
     PlanValidationError,
     ValidationStatus,
     plan_validation_error_to_message,
-    validate_timeline_items,
+)
+from otio_app.services.plan_validation_reports import (
+    format_used_rules_summary,
+    format_validation_error_entries,
+    gemini_attempts_label,
+    latest_retry_attempt_summary,
+    load_edit_plan_validation_report,
+    plan_is_confirmable,
+    validate_document_for_confirm,
+    validation_status_label,
 )
 from otio_app.services.opening_title_renderer import (
     ensure_opening_titles_rendered,
@@ -606,6 +615,48 @@ def _export_blockers_message(merged: MergedEditPlanResult, folder_selection: tup
     return "Export nicht möglich — bitte Validierungsmeldungen prüfen."
 
 
+def _render_plan_validation_panel(
+    project,
+    draft: EditPlanDocument | None,
+    *,
+    work_dir: Path | None = None,
+) -> None:
+    """Zeigt verwendete Regeln, Gemini-Versuche und Validierungsstatus."""
+    if draft is None:
+        return
+
+    used_rules = draft.used_rules or {}
+    report = load_edit_plan_validation_report(work_dir or project.work_dir_path)
+    if not used_rules and report:
+        used_rules = report.get("used_rules") or {}
+
+    status = draft.validation_status or (report or {}).get("final_status", "")
+    candidate = draft.candidate_status or (report or {}).get("candidate_status", "")
+    attempts = draft.gemini_retry_attempts or (report or {}).get("retry_attempts", 0)
+
+    blocked = candidate == "BLOCKED" or status == "FAIL"
+    ok = status in {"PASS", "OK"} and not blocked
+    label = validation_status_label(ok=ok, blocked=blocked)
+
+    st.markdown("**Plan-Validierung**")
+    st.caption(
+        f"Status: **{label}**"
+        + (f" · Gemini-Versuche: **{gemini_attempts_label(attempts)}**" if attempts else "")
+    )
+    for line in format_used_rules_summary(used_rules):
+        st.caption(f"• {line}")
+
+    retry_summary = latest_retry_attempt_summary(work_dir or project.work_dir_path)
+    if retry_summary:
+        st.caption(f"Letzter Gemini-Lauf: {retry_summary}")
+
+    if blocked:
+        st.error(
+            "Dieser Schnittplan ist BLOCKED — bitte unter **Vorschlag** neu generieren. "
+            "Bestätigung und OTIO-Export sind gesperrt."
+        )
+
+
 def _finalize_plan_for_confirm(
     project,
     draft: EditPlanDocument,
@@ -613,6 +664,11 @@ def _finalize_plan_for_confirm(
 ) -> tuple[EditPlanDocument, list[str]]:
     """Voice-over-Block ergänzen, Opening Titles vorab rendern, Timeline prüfen."""
     notes: list[str] = []
+    if not plan_is_confirmable(draft):
+        raise ValueError(
+            "Schnittplan ist BLOCKED oder fehlgeschlagen — bitte unter „Vorschlag“ "
+            "neu generieren."
+        )
     document = draft.model_copy(update={"confirmed": True, "folder_name": selected_folder})
 
     if not document.timeline_items:
@@ -692,18 +748,17 @@ def _finalize_plan_for_confirm(
             "Inventory geändert — bitte Schnittplan mit neuen Assets neu vorschlagen."
         )
 
-    validation = validate_timeline_items(
-        document.timeline_items,
-        settings=document.settings,
-        voiceover=document.voiceover,
-        opening_title_required=rules.folder_title_enabled,
-        require_rendered_media=False,
+    validation = validate_document_for_confirm(
+        document,
         rules_doc=rules_doc,
-        work_dir_path=project.work_dir_path,
     )
-    if validation.status == ValidationStatus.BLOCKED:
-        preview = "; ".join(validation.errors[:6])
-        raise ValueError(f"Schnittplan ungültig — bitte zuerst beheben: {preview}")
+    if not validation.ok:
+        preview = "; ".join(
+            format_validation_error_entries(validation.errors)[:6]
+        )
+        raise ValueError(
+            f"Schnittplan-Validierung fehlgeschlagen — bitte zuerst beheben: {preview}"
+        )
 
     for shot in document.shots:
         if not shot.asset_path:
@@ -726,10 +781,29 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
     if pending_generate_result is not None:
         if pending_generate_result["ok"]:
             st.success(pending_generate_result["message"])
+            status = pending_generate_result.get("validation_status")
+            attempts = pending_generate_result.get("gemini_retry_attempts", 0)
+            if status or attempts:
+                st.caption(
+                    f"Validierung: **{status or 'PASS'}**"
+                    + (
+                        f" · Gemini-Versuche: **{gemini_attempts_label(attempts)}**"
+                        if attempts
+                        else ""
+                    )
+                )
+            for line in format_used_rules_summary(pending_generate_result.get("used_rules")):
+                st.caption(f"Regel: {line}")
             for note in pending_generate_result.get("notes", []):
                 st.caption(f"• {note}")
         else:
             st.error(pending_generate_result["message"])
+            for line in pending_generate_result.get("validation_errors", []):
+                st.caption(f"• {line}")
+            for line in format_used_rules_summary(pending_generate_result.get("used_rules")):
+                st.caption(f"Regel: {line}")
+            for note in pending_generate_result.get("notes", []):
+                st.caption(f"• {note}")
             if pending_generate_result.get("traceback"):
                 with st.expander("Technische Details (Traceback)", expanded=False):
                     st.code(pending_generate_result["traceback"])
@@ -807,7 +881,7 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
                     "message": f"Schnittplan BLOCKED nach {result.retry_attempts} Versuchen.",
                     "blocked": True,
                     "validation_errors": error_lines[:12],
-                    "used_rules": (result.reports or {}),
+                    "used_rules": result.used_rules or {},
                     "notes": list(result.plan_generation_notes or []),
                 }
                 st.rerun()
@@ -840,6 +914,9 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
                 "ok": True,
                 "message": f"{len(document.shots)} Shots vorgeschlagen.",
                 "notes": generate_notes,
+                "used_rules": document.used_rules,
+                "validation_status": document.validation_status,
+                "gemini_retry_attempts": document.gemini_retry_attempts,
             }
             st.rerun()
         except Exception as exc:  # noqa: BLE001 — Nutzer muss IMMER eine
@@ -925,6 +1002,17 @@ def _render_tab_review(
 
     rules_doc = get_edit_plan_rules_for_project(project)
     rules = export_rule_options(rules_doc)
+    _render_plan_validation_panel(project, draft)
+
+    final_validation = validate_document_for_confirm(draft, rules_doc=rules_doc)
+    final_validation_errors = format_validation_error_entries(final_validation.errors)
+    if not plan_is_confirmable(draft):
+        st.error("Bestätigung blockiert — Schnittplan ist BLOCKED oder fehlgeschlagen.")
+    elif not final_validation.ok:
+        st.error("Finale Validierung fehlgeschlagen — Bestätigung blockiert:")
+        for line in final_validation_errors[:12]:
+            st.caption(f"• {line}")
+
     if draft.inventory_hash_at_plan_time and inventory_hash_is_stale(
         project,
         selected_folder,
@@ -939,6 +1027,11 @@ def _render_tab_review(
     usage_blockers = validate_max_asset_usage_blockers(
         timeline_items=draft.timeline_items,
         rules_doc=rules_doc,
+    )
+    confirm_blocked = (
+        not plan_is_confirmable(draft)
+        or not final_validation.ok
+        or bool(usage_blockers)
     )
     if usage_blockers:
         st.error("max_asset_usage verletzt — Bestätigung blockiert:")
@@ -1243,6 +1336,12 @@ def _render_tab_review(
         elif usage_blockers:
             st.toast("❌ Bestätigung blockiert (max_asset_usage).", icon="❌")
             st.error("Bestätigung blockiert wegen max_asset_usage-Verstoß.")
+        elif confirm_blocked:
+            st.toast("❌ Bestätigung blockiert (Validierung).", icon="❌")
+            st.error(
+                "Bestätigung blockiert — bitte Validierungsfehler oben beheben "
+                "oder Schnittplan neu vorschlagen."
+            )
         else:
             try:
                 with st.spinner("Schnittplan prüfen und speichern …"):
