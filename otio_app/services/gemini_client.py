@@ -331,6 +331,8 @@ def plan_folder_assets(
     shot_max_sec: float = 8.0,
     audio_offset_sec: float = 1.0,
     correction_instructions: str = "",
+    max_asset_usage: int | None = None,
+    min_asset_reuse_distance_shots: int = 0,
 ) -> list[dict[str, Any]]:
     """Plant alle Voice-over-Segmente und optional das Ordner-Ausklingen in einem Call."""
     if not segments and section_outro_sec <= 0.05:
@@ -345,7 +347,11 @@ def plan_folder_assets(
     )
     prompt = build_plan_folder_prompt(
         folder_name=folder_name,
-        segment_lines=_format_segment_lines(segments, shot_min_sec=shot_min_sec),
+        segment_lines=_format_segment_lines(
+            segments,
+            shot_min_sec=shot_min_sec,
+            shot_max_sec=shot_max_sec,
+        ),
         asset_lines=asset_lines,
         language=language,
         extra_instructions=extra_instructions,
@@ -354,6 +360,8 @@ def plan_folder_assets(
         shot_max_sec=shot_max_sec,
         audio_offset_sec=audio_offset_sec,
         correction_instructions=correction_instructions,
+        max_asset_usage=max_asset_usage,
+        min_asset_reuse_distance_shots=min_asset_reuse_distance_shots,
     )
     response = client.models.generate_content(
         model=resolve_gemini_model(model),
@@ -374,8 +382,9 @@ def _format_segment_lines(
     segments: list[dict[str, Any]],
     *,
     shot_min_sec: float = 3.0,
+    shot_max_sec: float = 8.0,
 ) -> str:
-    from otio_app.services.shot_timing import max_parts_for_segment
+    from otio_app.services.shot_timing import allowed_parts_for_segment
 
     lines: list[str] = []
     for segment in segments:
@@ -386,12 +395,103 @@ def _format_segment_lines(
         if not text:
             continue
         duration = max(0.0, float(end_sec) - float(start_sec))
-        max_parts = max_parts_for_segment(duration, min_sec=shot_min_sec)
+        bounds = allowed_parts_for_segment(duration, min_sec=shot_min_sec, max_sec=shot_max_sec)
         lines.append(
-            f'- beat_id="{beat_id}" start_sec={start_sec} end_sec={end_sec} '
-            f'max_parts={max_parts} text="{text}"'
+            f'- beat_id="{beat_id}" segment_start_sec={start_sec} segment_end_sec={end_sec} '
+            f"segment_duration_sec={duration:.3f} shot_min_sec={shot_min_sec} "
+            f"shot_max_sec={shot_max_sec} allowed_parts_min={bounds.min_parts} "
+            f"allowed_parts_max={bounds.max_parts} "
+            f"short_segment_allowed={'true' if bounds.short_segment_allowed else 'false'} "
+            f'text="{text}"'
         )
     return "\n".join(lines) or "- (keine)"
+
+
+def _asset_usage_rule_summary_json(
+    *,
+    max_asset_usage: int | None,
+    min_asset_reuse_distance_shots: int,
+) -> str:
+    import json
+
+    return json.dumps(
+        {
+            "max_asset_usage": max_asset_usage,
+            "min_asset_reuse_distance_shots": min_asset_reuse_distance_shots,
+            "asset_reuse_policy": "hard_block",
+        },
+        ensure_ascii=False,
+    )
+
+
+def _asset_usage_prompt_section(
+    *,
+    max_asset_usage: int | None,
+    min_asset_reuse_distance_shots: int,
+) -> list[str]:
+    if max_asset_usage is None and min_asset_reuse_distance_shots <= 0:
+        return []
+
+    lines = [
+        "SYSTEM RULE: Asset usage limit",
+    ]
+    if max_asset_usage is not None:
+        lines.extend(
+            [
+                f"- max_asset_usage = {max_asset_usage}",
+                f"- Each asset_id may appear at most {max_asset_usage} times in the entire edit plan.",
+                "- This includes normal video shots, image shots, generic visuals and supplemental "
+                "assets, unless an item is explicitly marked as exempt.",
+            ]
+        )
+        if max_asset_usage == 1:
+            lines.extend(
+                [
+                    "- If max_asset_usage = 1, every asset_id must be unique in the final plan.",
+                    "- Do not reuse the same asset_id in different shots.",
+                ]
+            )
+        lines.extend(
+            [
+                "- If there are not enough suitable assets, create or preserve a supplement_request "
+                "instead of reusing an asset.",
+                "- Do not solve missing coverage by violating max_asset_usage.",
+            ]
+        )
+    if min_asset_reuse_distance_shots > 0:
+        lines.extend(
+            [
+                f"- The same asset_id may only be reused after at least "
+                f"{min_asset_reuse_distance_shots} other shots.",
+                "- This rule is secondary to max_asset_usage.",
+            ]
+        )
+        if max_asset_usage == 1:
+            lines.append("- If max_asset_usage = 1, reuse is forbidden regardless of distance.")
+    lines.extend(
+        [
+            "",
+            "Machine-readable rule summary:",
+            _asset_usage_rule_summary_json(
+                max_asset_usage=max_asset_usage,
+                min_asset_reuse_distance_shots=min_asset_reuse_distance_shots,
+            ),
+        ]
+    )
+    return lines
+
+
+def _shot_parts_prompt_section(*, shot_min_sec: float, shot_max_sec: float) -> list[str]:
+    return [
+        "For each voice-over segment, return between allowed_parts_min and allowed_parts_max parts.",
+        "Each returned part will become one visual shot.",
+        f"Each visual shot must be at least {shot_min_sec}s and at most {shot_max_sec}s.",
+        "Exception: If short_segment_allowed = true, return exactly 1 part.",
+        "Do not return more parts than allowed_parts_max.",
+        "Do not return fewer parts than allowed_parts_min.",
+        "If you cannot satisfy this with available assets, create a supplement_request instead of "
+        "violating timing rules.",
+    ]
 
 
 def build_plan_folder_prompt(
@@ -406,6 +506,8 @@ def build_plan_folder_prompt(
     shot_max_sec: float = 8.0,
     audio_offset_sec: float = 1.0,
     correction_instructions: str = "",
+    max_asset_usage: int | None = None,
+    min_asset_reuse_distance_shots: int = 0,
 ) -> str:
     """Prompt für gesamtheitliche Motiv-Planung und Asset-Zuordnung."""
     from otio_app.defaults import OUTRO_BEAT_ID
@@ -419,15 +521,25 @@ def build_plan_folder_prompt(
         "Verfügbare lokale Assets:",
         asset_lines or "- (keine)",
         "",
+    ]
+    asset_rules = _asset_usage_prompt_section(
+        max_asset_usage=max_asset_usage,
+        min_asset_reuse_distance_shots=min_asset_reuse_distance_shots,
+    )
+    if asset_rules:
+        sections.extend(asset_rules)
+        sections.append("")
+    sections.extend(
+        [
         "Timing-Regeln für Shots (vom Editor vorgegeben):",
         f"- Ziel-Shotlänge pro Teil (part): mindestens {shot_min_sec}s, höchstens {shot_max_sec}s.",
-        f"- Erstelle lieber weniger, längere parts statt vieler kurzer Teile unter {shot_min_sec}s.",
-        "- Die Voice-over-Zeiten pro Beat sind durch start_sec/end_sec vorgegeben; teile den Text "
-        "so auf, dass jeder part einen sinnvollen Anteil des Beats abdeckt.",
-        f"- Pro Beat höchstens max_parts aus der Segment-Zeile (mehr parts werden lokal zusammengeführt).",
+        *_shot_parts_prompt_section(shot_min_sec=shot_min_sec, shot_max_sec=shot_max_sec),
+        "- Die Voice-over-Zeiten pro Segment sind durch segment_start_sec/segment_end_sec vorgegeben; "
+        "teile den Text so auf, dass jeder part einen sinnvollen Anteil des Segments abdeckt.",
         f"- Audio-Start (Timeline): Das Voice-over beginnt auf der Schnittspur bei {audio_offset_sec}s "
         "(kein Head-Trim auf der Audio-Datei; nur für Export-Positionierung).",
-    ]
+        ]
+    )
     correction = correction_instructions.strip()
     if correction:
         sections.extend(["", correction])
@@ -459,7 +571,8 @@ def build_plan_folder_prompt(
             "WICHTIG: Betrachte ALLE Segmente, das Ausklingen (falls gefordert) und ALLE Assets "
             "gesamtheitlich.",
             "Wähle für jeden Shot das inhaltlich passendste Asset aus der gesamten Liste.",
-            "Vermeide unnötige Wiederholungen, aber inhaltliche Passung hat Priorität.",
+            "Vermeide unnötige Wiederholungen — asset usage limits are hard rules (see above).",
+            "Inhaltliche Passung hat Priorität, aber never violate max_asset_usage or timing rules.",
             "Wenn die Passage mehrere Sehenswürdigkeiten/Motive nennt, erstelle mehrere Teile.",
             "Bewerte die visuelle Passung jedes Teils: sehr_gut, gut, mittel oder unpassend.",
             "Bei unpassend (Narration): asset_path auf null setzen "
@@ -523,6 +636,75 @@ def compact_beats_plan_json_for_retry(beats_plan: dict[str, list[dict[str, Any]]
     return json.dumps({"beats": beats}, ensure_ascii=False, indent=2)
 
 
+def _structured_correction_hints(
+    structured_errors: list[Any],
+) -> list[str]:
+    from otio_app.services.edit_plan_validator import PlanValidationError
+
+    hints: list[str] = []
+    asset_violations: list[PlanValidationError] = []
+    for raw in structured_errors:
+        error = raw if isinstance(raw, PlanValidationError) else PlanValidationError.from_dict(raw)
+        if error.type == "ASSET_USAGE_LIMIT_EXCEEDED":
+            asset_violations.append(error)
+        elif error.type == "ASSET_REUSE_DISTANCE_TOO_SHORT":
+            hints.append(
+                "The previous plan violates asset reuse distance rules.\n"
+                f"- asset_id `{error.asset_id}` reused too soon "
+                f"(distance {error.actual_distance_shots} shots, required "
+                f"{error.required_distance_shots}).\n"
+                f"- Previous item: {error.previous_item_id}; current item: {error.current_item_id}.\n"
+                "Required fix: choose a different asset_id or insert supplement_request."
+            )
+        elif error.type == "SHOT_TOO_SHORT":
+            hints.append(
+                f"SHOT_TOO_SHORT: {error.timeline_item_id} is {error.duration_sec:.1f}s "
+                f"(min {error.min_sec:.1f}s) in segment {error.segment_id or error.beat_id or '?'}. "
+                "Split into more parts or merge text so each shot is at least shot_min_sec."
+            )
+        elif error.type == "SHOT_TOO_LONG":
+            hints.append(
+                f"SHOT_TOO_LONG: {error.timeline_item_id} is {error.duration_sec:.1f}s "
+                f"(max {error.max_sec:.1f}s) in segment {error.segment_id or error.beat_id or '?'}. "
+                "Return more parts for this segment (see allowed_parts_min/max)."
+            )
+        elif error.type == "INSUFFICIENT_PARTS":
+            hints.append(
+                f"INSUFFICIENT_PARTS: segment {error.segment_id or error.beat_id} returned "
+                f"{error.actual_parts} part(s), but allowed_parts_min is {error.allowed_parts_min} "
+                f"and allowed_parts_max is {error.allowed_parts_max}. "
+                "Return more parts so no single shot exceeds shot_max_sec."
+            )
+
+    if asset_violations:
+        lines = [
+            "The previous plan violates asset usage rules.",
+            "",
+            "Violations:",
+        ]
+        for error in asset_violations:
+            item_ids = ", ".join(error.timeline_item_ids or [])
+            lines.append(
+                f'- asset_id "{error.asset_id}" used {error.usage_count} times '
+                f"(max_asset_usage is {error.max_allowed})."
+            )
+            if item_ids:
+                lines.append(f"  Timeline items: {item_ids}")
+        lines.extend(
+            [
+                "",
+                "Required fix:",
+                "- Keep at most max_asset_usage usages per asset_id across the entire plan.",
+                "- Replace duplicate occurrences with different suitable assets.",
+                "- If no suitable asset exists, create/keep a supplement_request for that beat.",
+                "- Do not reuse the same asset_id again.",
+            ]
+        )
+        hints.insert(0, "\n".join(lines))
+
+    return hints
+
+
 def build_plan_folder_correction_instructions(
     *,
     errors: list[str],
@@ -532,43 +714,62 @@ def build_plan_folder_correction_instructions(
     file_duration_sec: float | None,
     shot_min_sec: float,
     shot_max_sec: float,
+    structured_errors: list[Any] | None = None,
 ) -> str:
-    """Korrektur-Block für einen erneuten Gemini-Lauf nach Timing-Validierung."""
-    error_lines = "\n".join(f"- {error}" for error in errors) or "- (unbekannt)"
+    """Korrektur-Block für einen erneuten Gemini-Lauf nach Plan-Validierung."""
+    from otio_app.services.edit_plan_validator import (
+        PlanValidationError,
+        plan_validation_error_to_message,
+    )
+
+    message_lines = list(errors)
+    if structured_errors:
+        for raw in structured_errors:
+            if isinstance(raw, PlanValidationError):
+                message_lines.append(plan_validation_error_to_message(raw))
+            elif isinstance(raw, dict):
+                message_lines.append(plan_validation_error_to_message(PlanValidationError.from_dict(raw)))
+            else:
+                message_lines.append(str(raw))
+
+    error_lines = "\n".join(f"- {error}" for error in message_lines) or "- (unbekannt)"
     duration_hint = (
         f"{file_duration_sec:.2f}s"
         if file_duration_sec is not None and file_duration_sec > 0
         else "unbekannt"
     )
-    return "\n".join(
-        [
-            f"AUTOMATISCHE KORREKTUR — Versuch {attempt} von {max_attempts}",
-            "",
-            "Die lokale Timing-Validierung hat den vorherigen Plan abgelehnt.",
-            "Erstelle einen NEUEN vollständigen Plan (komplettes JSON mit allen beats), "
-            "der diese Probleme behebt — kein partieller Patch.",
-            "",
-            "Fehler der Code-Validierung:",
-            error_lines,
-            "",
-            f"Voice-over-Dateilänge (ffprobe): {duration_hint}. "
-            "Kein Narration-Shot darf über diese Dauer hinaus planen.",
-            "",
-            "Zusammenfassung deines abgelehnten Plans:",
-            summarize_beats_plan_for_retry(previous_beats),
-            "",
-            "Struktur des abgelehnten Plans (Referenz, gekürzt):",
-            compact_beats_plan_json_for_retry(previous_beats),
-            "",
-            "Korrektur-Hinweise:",
-            f"- Reduziere parts in betroffenen Beats (Ziel: {shot_min_sec}s–{shot_max_sec}s pro part).",
-            "- Weniger, längere parts statt vieler kurzer Teile am Beat-Ende.",
-            f"- Pro Beat maximal so viele parts, dass jedes Teil mindestens {shot_min_sec}s Voice-Zeit "
-            "bekommen kann (siehe max_parts in der Segment-Liste).",
-            "- Behalte inhaltliche Passung und sinnvolle Asset-Zuordnung so gut wie möglich bei.",
-            "- Wiederhole nicht dieselbe Aufteilung, wenn sie die Fehler verursacht hat.",
-        ]
-    )
+    structured_hints = _structured_correction_hints(structured_errors or [])
+    sections = [
+        f"AUTOMATISCHE KORREKTUR — Versuch {attempt} von {max_attempts}",
+        "",
+        "Die lokale Plan-Validierung hat den vorherigen Plan abgelehnt.",
+        "Erstelle einen NEUEN vollständigen Plan (komplettes JSON mit allen beats), "
+        "der diese Probleme behebt — kein partieller Patch.",
+        "",
+        "Fehler der Code-Validierung:",
+        error_lines,
+        "",
+        f"Voice-over-Dateilänge (ffprobe): {duration_hint}. "
+        "Kein Narration-Shot darf über diese Dauer hinaus planen.",
+        "",
+        "Zusammenfassung deines abgelehnten Plans:",
+        summarize_beats_plan_for_retry(previous_beats),
+        "",
+        "Struktur des abgelehnten Plans (Referenz, gekürzt):",
+        compact_beats_plan_json_for_retry(previous_beats),
+        "",
+        "Korrektur-Hinweise:",
+        f"- Ziel pro part/shot: {shot_min_sec}s–{shot_max_sec}s (siehe allowed_parts_min/max).",
+        "- Weniger, längere parts nur wenn allowed_parts_max es erlaubt.",
+        "- Mehr parts wenn SHOT_TOO_LONG oder INSUFFICIENT_PARTS gemeldet wurde.",
+        "- Bei ASSET_USAGE_LIMIT_EXCEEDED: anderes asset_id oder supplement_request — "
+        "niemals dieselbe asset_id erneut wiederverwenden.",
+        "- Behalte inhaltliche Passung so gut wie möglich bei.",
+        "- Wiederhole nicht dieselbe Aufteilung, wenn sie die Fehler verursacht hat.",
+    ]
+    if structured_hints:
+        sections.extend(["", "Konkrete Korrekturen:", *structured_hints])
+    return "\n".join(sections)
 
 
 def build_plan_passage_prompt(

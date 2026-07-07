@@ -44,6 +44,8 @@ from otio_app.services.edit_plan_rules import (
     load_edit_plan_rules,
 )
 from otio_app.services.asset_usage import (
+    AssetUsageRules,
+    get_asset_usage_rules,
     max_asset_usage_limit,
 )
 from otio_app.services.generic_outro_selector import asset_id_for_path, select_generic_outro_assets
@@ -391,6 +393,7 @@ def _beats_from_gemini_holistic_or_local(
     gemini_model: str | None,
     gemini_prompt: str = "",
     correction_instructions: str = "",
+    asset_usage_rules: AssetUsageRules | None = None,
 ) -> dict[str, list[dict]]:
     if use_api:
         try:
@@ -415,6 +418,12 @@ def _beats_from_gemini_holistic_or_local(
                 shot_max_sec=settings.shot_max_sec,
                 audio_offset_sec=settings.audio_offset_sec,
                 correction_instructions=correction_instructions,
+                max_asset_usage=(
+                    asset_usage_rules.max_asset_usage if asset_usage_rules else None
+                ),
+                min_asset_reuse_distance_shots=(
+                    asset_usage_rules.min_asset_reuse_distance_shots if asset_usage_rules else 0
+                ),
             )
             parsed = _parse_folder_beats(beats)
             if parsed:
@@ -775,6 +784,7 @@ def build_edit_plan(
     pending_supplement_requests: list = []
     inventory_hashes: dict[str, str] = {}
     max_count = max_asset_usage_limit(rules_doc)
+    asset_usage_rules = get_asset_usage_rules(rules_doc)
     usage_by_folder: dict[str, dict[str, int]] = {}
     outro_parts_by_folder: dict[str, list[dict]] = {}
     plan_generation_notes: list[str] = []
@@ -844,6 +854,7 @@ def build_edit_plan(
                 gemini_model=plan_settings.gemini_model,
                 gemini_prompt=gemini_prompt,
                 correction_instructions=correction_instructions,
+                asset_usage_rules=asset_usage_rules,
             )
 
             folder_build = _folder_shots_from_beats_plan(
