@@ -504,6 +504,8 @@ def shots_from_timeline_items(items: list[TimelineItem]) -> list[EditPlanShot]:
                     passage_text=item.passage_text,
                     confidence=str(item.confidence) if item.confidence else None,
                     match_quality=item.match_quality,
+                    beat_id=item.beat_id,
+                    coverage_status=item.coverage_status,
                 )
             )
     return shots
