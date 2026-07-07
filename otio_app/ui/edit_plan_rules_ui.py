@@ -7,7 +7,6 @@ import streamlit as st
 from otio_app.analysis_models import EditPlanRule, EditPlanRulesDocument
 from otio_app.models import Project
 from otio_app.services.edit_plan_rules import (
-    RULE_AUTO_ZOOM_FILL,
     RULE_FOLDER_TITLE,
     RULE_MAX_ASSET_USES,
     RULE_TRIM_LEADING,
@@ -167,11 +166,6 @@ def _render_rule_card(
                     key=f"rule_trim_{project.id}_{rule.id}",
                     help="Gilt beim OTIO-Export — schneidet z. B. schwarze Erstframes weg.",
                 )
-            )
-        elif rule.rule_type == RULE_AUTO_ZOOM_FILL:
-            st.caption(
-                "Aktiv: Zoom-Faktor wird pro Asset aus Auflösung vs. Projekt berechnet "
-                f"({project.width}×{project.height})."
             )
         from otio_app.services.edit_plan_rules import RULE_FOLDER_TITLE
         from otio_app.services.font_utils import FOLDER_TITLE_FONT_OPTIONS

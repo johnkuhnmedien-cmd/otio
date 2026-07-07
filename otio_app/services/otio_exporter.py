@@ -18,6 +18,7 @@ from otio_app.analysis_models import (
 from otio_app.models import Project
 from otio_app.project_layout import get_otio_export_path
 from otio_app.services.edit_plan_builder import load_edit_plan
+from otio_app.services.clean_media_settings import load_clean_media_settings
 from otio_app.services.edit_plan_rules import ExportRuleOptions, export_rule_options, load_edit_plan_rules
 from otio_app.services.inventory_hash import inventory_hash_is_stale
 from otio_app.services.media_utils import is_image_media
@@ -489,13 +490,14 @@ def _append_video_item(
     rate: float,
     duration_sec: float,
     export_rules: ExportRuleOptions,
+    auto_zoom_fill: bool,
     timing_notes: list[str] | None = None,
     hold_last_frame: bool = False,
 ) -> float:
     """Hängt Clip oder Gap an die Videospur; liefert die tatsächliche Dauer in Sekunden."""
     if shot.asset_path:
         original = _resolve_media_path(shot.asset_path)
-        if export_rules.auto_zoom_fill and not is_image_media(
+        if auto_zoom_fill and not is_image_media(
             original
         ):
             media_path = ensure_export_media_for_export(
@@ -535,7 +537,7 @@ def _append_video_item(
             video_clip.metadata["folder_title_font"] = export_rules.folder_title_font
             video_clip.metadata["folder_title_duration_sec"] = export_rules.folder_title_duration_sec
 
-        if export_rules.auto_zoom_fill and not is_image_media(original):
+        if auto_zoom_fill and not is_image_media(original):
             src_w, src_h = resolve_media_dimensions(project, shot.folder, original)
             out_probe = probe_media(media_path) if media_path != original else None
             if src_w and src_h:
@@ -637,6 +639,7 @@ def _append_timeline_item_clip(
     index: int,
     rate: float,
     export_rules: ExportRuleOptions,
+    auto_zoom_fill: bool,
     timing_notes: list[str] | None = None,
 ) -> None:
     """Schreibt ein Timeline-Item 1:1 — ohne Daueränderung oder Asset-Auswahl."""
@@ -646,7 +649,7 @@ def _append_timeline_item_clip(
         if item.original_asset_path
         else media_path
     )
-    if export_rules.auto_zoom_fill and not is_image_media(
+    if auto_zoom_fill and not is_image_media(
         original
     ):
         effective = ensure_export_media_for_export(
@@ -730,7 +733,7 @@ def _append_timeline_item_clip(
     ):
         pass  # Opening Title liegt als eigenes V2-Element im Schnittplan — nicht in V1-Metadata.
 
-    if export_rules.auto_zoom_fill and not is_image_media(original):
+    if auto_zoom_fill and not is_image_media(original):
         src_w, src_h = resolve_media_dimensions(project, item.folder_name, original)
         if src_w and src_h:
             zoom = compute_fill_zoom_factor(src_w, src_h, project.width, project.height)
@@ -846,6 +849,7 @@ def build_otio_timeline(
     items = merged.timeline_items
     sections = _compute_timeline_sections(items, settings, merged.voiceovers)
     export_rules = export_rule_options(load_edit_plan_rules(project))
+    auto_zoom_fill = load_clean_media_settings(project).auto_zoom_fill
     timeline = otio.schema.Timeline(name=project.name)
     timeline.metadata["project_id"] = project.id
     timeline.metadata["included_folders"] = list(merged.included_folders)
@@ -853,7 +857,7 @@ def build_otio_timeline(
     timeline.metadata["section_outro_sec"] = settings.section_outro_sec
     if export_rules.trim_leading_sec > 0:
         timeline.metadata["trim_leading_sec"] = export_rules.trim_leading_sec
-    if export_rules.auto_zoom_fill:
+    if auto_zoom_fill:
         timeline.metadata["auto_zoom_fill"] = True
     timeline.global_start_time = otio.opentime.RationalTime.from_seconds(0, rate)
 
@@ -870,6 +874,7 @@ def build_otio_timeline(
             index=index,
             rate=rate,
             export_rules=export_rules,
+            auto_zoom_fill=auto_zoom_fill,
             timing_notes=timing_notes,
         )
 

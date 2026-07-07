@@ -30,8 +30,8 @@ from otio_app.services.clean_media import (
     transcode_to_clean,
     validate_media_file,
 )
+from otio_app.services.clean_media_settings import CleanMediaSettings, save_clean_media_settings
 from otio_app.services.edit_plan_rules import (
-    RULE_AUTO_ZOOM_FILL,
     RULE_FOLDER_TITLE,
     save_edit_plan_rules,
 )
@@ -325,19 +325,7 @@ def test_otio_export_uses_clean_path(_mock_clean, _mock_export, tmp_path: Path) 
 
 
 def _enable_zoom_rule(project: Project) -> None:
-    save_edit_plan_rules(
-        project,
-        EditPlanRulesDocument(
-            project_id=project.id,
-            rules=[
-                EditPlanRule(
-                    id="zoom",
-                    rule_type=RULE_AUTO_ZOOM_FILL,
-                    enabled=True,
-                )
-            ],
-        ),
-    )
+    save_clean_media_settings(project, CleanMediaSettings(auto_zoom_fill=True))
 
 
 def _enable_folder_title_rule(project: Project) -> None:

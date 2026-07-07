@@ -26,6 +26,12 @@ from otio_app.services.media_utils import (
     probe_duration_seconds,
 )
 
+
+def _auto_zoom_enabled(project: Project) -> bool:
+    from otio_app.services.clean_media_settings import load_clean_media_settings
+
+    return load_clean_media_settings(project).auto_zoom_fill
+
 CLEAN_STATUS_OK = "ok"
 CLEAN_STATUS_CLEAN = "clean"
 CLEAN_STATUS_FAILED = "failed"
@@ -137,10 +143,10 @@ def find_clean_file_for_media(
     media_path: Path,
 ) -> Path | None:
     """Sucht Clean-Datei per erwartetem Pfad, Asset-Nummer oder Stem-Slug."""
-    from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
+    from otio_app.services.clean_media_settings import load_clean_media_settings
 
-    export_opts = export_rule_options(load_edit_plan_rules(project))
-    if export_opts.auto_zoom_fill and not is_image_media(media_path):
+    auto_zoom_fill = load_clean_media_settings(project).auto_zoom_fill
+    if auto_zoom_fill and not is_image_media(media_path):
         filled = export_processed_output_path_for_media(
             project.work_dir_path,
             folder_name,
@@ -167,7 +173,7 @@ def find_clean_file_for_media(
         media_path,
     )
     if path_is_readable_file(expected):
-        if not export_opts.auto_zoom_fill or is_image_media(media_path):
+        if not auto_zoom_fill or is_image_media(media_path):
             return expected
         expected_probe = probe_media(expected)
         if (
@@ -185,7 +191,7 @@ def find_clean_file_for_media(
     stem_key = media_stem_key(media_path)
     for candidate in list_clean_files_in_folder(project, folder_name):
         if asset_number is not None and media_asset_number(candidate) == asset_number:
-            if export_opts.auto_zoom_fill and not is_image_media(media_path):
+            if auto_zoom_fill and not is_image_media(media_path):
                 candidate_probe = probe_media(candidate)
                 if (
                     candidate_probe.width
@@ -201,7 +207,7 @@ def find_clean_file_for_media(
             else:
                 return candidate
         if media_stem_key(candidate) == stem_key:
-            if export_opts.auto_zoom_fill and not is_image_media(media_path):
+            if auto_zoom_fill and not is_image_media(media_path):
                 candidate_probe = probe_media(candidate)
                 if (
                     candidate_probe.width
@@ -491,11 +497,8 @@ def _zoom_transcode_required(
     media_path: Path,
     probe: MediaProbeInfo,
 ) -> bool:
-    """True wenn die Zoom-Regel aktiv ist und die Pixel-Auflösung nicht exakt passt."""
-    from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
-
-    opts = export_rule_options(load_edit_plan_rules(project))
-    if not opts.auto_zoom_fill or is_image_media(media_path):
+    """True wenn Auto-Zoom aktiv ist und die Pixel-Auflösung nicht exakt passt."""
+    if not _auto_zoom_enabled(project) or is_image_media(media_path):
         return False
     if not probe.width or not probe.height:
         return True
@@ -527,9 +530,9 @@ def process_media_file(
     source_probe = entry.probe or probe_media(media_path)
     from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
 
-    export_opts = export_rule_options(load_edit_plan_rules(project))
     zoom_transcode = _zoom_transcode_required(project, media_path, source_probe)
     export_transcode = zoom_transcode
+    auto_zoom_fill = _auto_zoom_enabled(project)
 
     if export_transcode:
         output_path = export_processed_output_path_for_media(
@@ -598,7 +601,7 @@ def process_media_file(
         source_width=source_probe.width,
         source_height=source_probe.height,
         project=project,
-        export_opts=export_opts,
+        auto_zoom_fill=auto_zoom_fill,
     )
     if filter_error:
         entry.status = CLEAN_STATUS_FAILED

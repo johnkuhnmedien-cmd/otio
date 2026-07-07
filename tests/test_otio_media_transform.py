@@ -8,7 +8,6 @@ from unittest.mock import patch
 import opentimelineio as otio
 
 from otio_app.models import Project
-from otio_app.services.edit_plan_rules import ExportRuleOptions
 from otio_app.services.otio_media_transform import (
     build_export_video_filter,
     build_resolve_zoom_effect,
@@ -63,17 +62,11 @@ def test_build_export_video_filter_zoom_only() -> None:
         width=3840,
         height=2160,
     )
-    opts = ExportRuleOptions(
-        auto_zoom_fill=True,
-        folder_title_enabled=True,
-        folder_title_font="Phosphate",
-        folder_title_duration_sec=5.0,
-    )
     vf, expected_w, expected_h, error = build_export_video_filter(
         source_width=4096,
         source_height=2160,
         project=project,
-        export_opts=opts,
+        auto_zoom_fill=True,
     )
     assert error is None
     assert vf is not None
@@ -83,7 +76,7 @@ def test_build_export_video_filter_zoom_only() -> None:
     assert expected_h == 2160
 
 
-def test_build_export_video_filter_ignores_folder_title_rule() -> None:
+def test_build_export_video_filter_off_when_auto_zoom_disabled() -> None:
     project = Project(
         id="t",
         name="USA",
@@ -94,16 +87,11 @@ def test_build_export_video_filter_ignores_folder_title_rule() -> None:
         width=3840,
         height=2160,
     )
-    opts = ExportRuleOptions(
-        folder_title_enabled=True,
-        folder_title_font="Phosphate",
-        folder_title_duration_sec=5.0,
-    )
     vf, expected_w, expected_h, error = build_export_video_filter(
         source_width=3840,
         source_height=2160,
         project=project,
-        export_opts=opts,
+        auto_zoom_fill=False,
     )
     assert error is None
     assert vf is None
@@ -122,12 +110,11 @@ def test_build_export_video_filter_scales_same_aspect_different_resolution() -> 
         width=3840,
         height=2160,
     )
-    opts = ExportRuleOptions(auto_zoom_fill=True)
     vf, expected_w, expected_h, error = build_export_video_filter(
         source_width=1920,
         source_height=1080,
         project=project,
-        export_opts=opts,
+        auto_zoom_fill=True,
     )
     assert error is None
     assert vf == "scale=3840:2160"

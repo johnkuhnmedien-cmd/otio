@@ -16,7 +16,6 @@ RULE_NO_CONSECUTIVE_SAME_ASSET = "no_consecutive_same_asset"
 RULE_MIN_SHOTS_BETWEEN_SAME_ASSET = "min_shots_between_same_asset"
 RULE_PREFER_LEAST_USED_ASSET = "prefer_least_used_asset"
 RULE_TRIM_LEADING = "trim_leading"
-RULE_AUTO_ZOOM_FILL = "auto_zoom_fill"
 RULE_FOLDER_TITLE = "folder_title_overlay"
 RULE_CUSTOM = "custom"
 RULE_CUSTOM_NOTE = "custom_note"  # Legacy — wird wie RULE_CUSTOM behandelt
@@ -74,17 +73,6 @@ EDIT_PLAN_RULE_TEMPLATES: tuple[EditPlanRuleTemplate, ...] = (
             "(z. B. schwarzer Erstframe)."
         ),
         default_params={"trim_sec": 0.5},
-        implemented=True,
-    ),
-    EditPlanRuleTemplate(
-        rule_type=RULE_AUTO_ZOOM_FILL,
-        label="Zoom für nicht-16:9",
-        description=(
-            "Beim OTIO-Export Zoom berechnen (z. B. 1,07× bei 4096×2160), "
-            "damit Letterboxing in Resolve entfällt. Beim Transcode wird "
-            "das Seitenverhältnis mit eingebettet."
-        ),
-        default_params={},
         implemented=True,
     ),
     EditPlanRuleTemplate(
@@ -294,10 +282,9 @@ def _no_consecutive(rules: list[EditPlanRule]) -> bool:
 
 @dataclass(frozen=True)
 class ExportRuleOptions:
-    """Regeln, die beim OTIO-Export / Transcode wirken (nicht bei Asset-Auswahl)."""
+    """Regeln, die beim OTIO-Export wirken (nicht bei Asset-Auswahl)."""
 
     trim_leading_sec: float = 0.0
-    auto_zoom_fill: bool = False
     folder_title_enabled: bool = False
     folder_title_font: str = "Helvetica Neue"
     folder_title_duration_sec: float = 5.0
@@ -306,7 +293,6 @@ class ExportRuleOptions:
 
 def export_rule_options(rules_doc: EditPlanRulesDocument) -> ExportRuleOptions:
     trim_sec = 0.0
-    auto_zoom = False
     folder_title = False
     folder_font = "Helvetica Neue"
     folder_duration = 5.0
@@ -318,8 +304,6 @@ def export_rule_options(rules_doc: EditPlanRulesDocument) -> ExportRuleOptions:
                 trim_sec = max(0.0, float(raw))
             except (TypeError, ValueError):
                 trim_sec = 0.5
-        elif rule.rule_type == RULE_AUTO_ZOOM_FILL:
-            auto_zoom = True
         elif rule.rule_type == RULE_FOLDER_TITLE:
             folder_title = True
             raw_font = rule.params.get("font_name", "Helvetica Neue")
@@ -337,7 +321,6 @@ def export_rule_options(rules_doc: EditPlanRulesDocument) -> ExportRuleOptions:
                 folder_font_size = None
     return ExportRuleOptions(
         trim_leading_sec=trim_sec,
-        auto_zoom_fill=auto_zoom,
         folder_title_enabled=folder_title,
         folder_title_font=folder_font,
         folder_title_duration_sec=folder_duration,

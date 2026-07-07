@@ -181,6 +181,43 @@ def _render_folder_details(project, folder_name: str) -> None:
             st.success("Alle Medien Resolve-ready.")
 
 
+def _render_clean_media_settings(project) -> None:
+    from otio_app.services.clean_media_settings import (
+        CleanMediaSettings,
+        load_clean_media_settings,
+        save_clean_media_settings,
+    )
+
+    settings_key = f"clean_media_settings_{project.id}"
+    if settings_key not in st.session_state:
+        st.session_state[settings_key] = load_clean_media_settings(project).model_dump(mode="json")
+
+    stored = CleanMediaSettings.model_validate(st.session_state[settings_key])
+    with st.expander("Einstellungen", expanded=stored.auto_zoom_fill):
+        auto_zoom = st.toggle(
+            "Auflösung auf Projektziel anpassen (Auto-Zoom)",
+            value=stored.auto_zoom_fill,
+            key=f"clean_auto_zoom_{project.id}",
+            help=(
+                f"Beim Transcode auf {project.width}×{project.height} skalieren oder "
+                "beschneiden — z. B. bei 4096×2160 oder 1920×1080."
+            ),
+        )
+        if auto_zoom != stored.auto_zoom_fill:
+            updated = stored.model_copy(update={"auto_zoom_fill": auto_zoom})
+            st.session_state[settings_key] = updated.model_dump(mode="json")
+            save_clean_media_settings(project, updated)
+            stored = updated
+        if stored.auto_zoom_fill:
+            st.caption(
+                f"Clean-Ausgabe mit Zielauflösung: `Asset03_{project.width}x{project.height}.mp4`"
+            )
+        else:
+            st.caption(
+                "Nur Codec-Konvertierung (z. B. ProRes → H.264) — ohne Auflösungsänderung."
+            )
+
+
 def render_clean_media_page() -> None:
     st.header("⓪ Clean Media")
 
@@ -205,6 +242,8 @@ def render_clean_media_page() -> None:
     if not ffmpeg_ok or not ffprobe_ok:
         st.error("FFmpeg und ffprobe werden für Clean Media benötigt — siehe **Systemstatus**.")
         return
+
+    _render_clean_media_settings(project)
 
     job_running = get_clean_media_job_manager().is_running(project.id)
     _render_job_monitor(project)

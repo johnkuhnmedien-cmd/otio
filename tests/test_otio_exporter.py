@@ -531,6 +531,7 @@ def test_timeline_item_clip_source_range_includes_embedded_timecode(tmp_path: Pa
             index=1,
             rate=29.97,
             export_rules=ExportRuleOptions(),
+            auto_zoom_fill=False,
         )
 
     clip = track[0]
@@ -590,6 +591,7 @@ def test_timeline_item_clip_source_range_clamped_to_available_media_duration(
             index=1,
             rate=29.97,
             export_rules=ExportRuleOptions(),
+            auto_zoom_fill=False,
             timing_notes=notes,
         )
 
@@ -633,9 +635,9 @@ def test_timeline_item_clip_source_range_unaffected_when_no_embedded_timecode(
     timing = MediaTiming(start_sec=0.0, duration_sec=600.0, rate=29.97)
     track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
     with patch("otio_app.services.otio_exporter.probe_media_timing", return_value=timing):
-        _append_timeline_item_clip(
-            track, item, project=project, index=1, rate=29.97, export_rules=ExportRuleOptions()
-        )
+            _append_timeline_item_clip(
+                track, item, project=project, index=1, rate=29.97, export_rules=ExportRuleOptions(), auto_zoom_fill=False
+            )
 
     clip = track[0]
     assert clip.source_range.start_time.to_seconds() == pytest.approx(2.0, abs=0.01)

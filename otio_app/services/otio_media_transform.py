@@ -13,7 +13,6 @@ from otio_app.services.clean_media import (
     load_clean_media_manifest,
     probe_media,
 )
-from otio_app.services.edit_plan_rules import ExportRuleOptions
 from otio_app.services.media_utils import is_image_media
 
 
@@ -156,14 +155,14 @@ def build_export_video_filter(
     source_width: int | None,
     source_height: int | None,
     project: Project,
-    export_opts: ExportRuleOptions,
+    auto_zoom_fill: bool,
 ) -> tuple[str | None, int | None, int | None, str | None]:
     """Baut vf-Kette für Zoom/Crop. Liefert (filter, w, h, error)."""
     parts: list[str] = []
     expected_width: int | None = None
     expected_height: int | None = None
 
-    if export_opts.auto_zoom_fill and source_width and source_height:
+    if auto_zoom_fill and source_width and source_height:
         scale = ffmpeg_video_filter_for_target_resolution(
             source_width,
             source_height,
@@ -181,14 +180,14 @@ def build_export_video_filter(
 
 
 def export_processing_required(
-    export_opts: ExportRuleOptions,
     *,
+    auto_zoom_fill: bool,
     is_image: bool,
     needs_zoom: bool,
 ) -> bool:
     if is_image:
         return False
-    if export_opts.auto_zoom_fill and needs_zoom:
+    if auto_zoom_fill and needs_zoom:
         return True
     return False
 
@@ -207,9 +206,11 @@ def ensure_export_media_for_export(
         process_media_file,
         resolve_effective_media_path,
     )
-    from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
+    from otio_app.services.clean_media_settings import load_clean_media_settings
+    from otio_app.services.edit_plan_rules import load_edit_plan_rules
 
-    opts = export_rule_options(load_edit_plan_rules(project))
+    clean_settings = load_clean_media_settings(project)
+    auto_zoom_fill = clean_settings.auto_zoom_fill
     fallback = resolve_effective_media_path(project, folder_name, original_path)
     if is_image_media(original_path):
         return fallback
@@ -223,7 +224,11 @@ def ensure_export_media_for_export(
         and src_h
         and media_needs_aspect_fill(src_w, src_h, project.width, project.height)
     )
-    if not export_processing_required(opts, is_image=False, needs_zoom=needs_zoom):
+    if not export_processing_required(
+        auto_zoom_fill=auto_zoom_fill,
+        is_image=False,
+        needs_zoom=needs_zoom,
+    ):
         return fallback
 
     def _resolved_path(entry) -> Path:
@@ -235,7 +240,7 @@ def ensure_export_media_for_export(
     media_path = _resolved_path(entry)
 
     out_w, out_h = media_resolution_probe(media_path)
-    still_wrong = opts.auto_zoom_fill and needs_zoom and not media_matches_target_resolution(
+    still_wrong = auto_zoom_fill and needs_zoom and not media_matches_target_resolution(
         out_w,
         out_h,
         project.width,
@@ -253,7 +258,7 @@ def ensure_export_media_for_export(
             notes.append(f"{original_path.name}: Export-Transcode fehlgeschlagen — {entry.error}")
         out_w, out_h = media_resolution_probe(media_path)
 
-    if opts.auto_zoom_fill and needs_zoom:
+    if auto_zoom_fill and needs_zoom:
         warning = aspect_fill_warning(project, media_path, label=original_path.name)
         if warning:
             if notes is not None:
