@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from collections import Counter
+
 import streamlit as st
 
 from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPlanShot, SupplementRequest, TimelineItem, VoiceoverPlan
@@ -22,13 +24,14 @@ from otio_app.defaults import (
     MATCH_QUALITY_UNPASSEND,
     SUPPLEMENT_SOURCE_LABELS,
 )
-from otio_app.project_layout import get_otio_export_path, safe_folder_slug
+from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 from otio_app.services.edit_plan_cache import collect_folder_statuses
 from otio_app.services.edit_plan_builder import (
     EditPlanLocationState,
     EditPlanLocationStatus,
     build_edit_plan,
     load_edit_plan,
+    load_voice_analysis,
     save_edit_plan,
 )
 from otio_app.services.gemini_client import (
@@ -167,33 +170,78 @@ def _location_state_icon(state: EditPlanLocationState) -> str:
     return icons[state]
 
 
-def _match_quality_icon(match_quality: str) -> str:
-    icons = {
-        MATCH_QUALITY_SEHR_GUT: "🟢",
-        MATCH_QUALITY_GUT: "🟢",
-        MATCH_QUALITY_MITTEL: "🟡",
-        MATCH_QUALITY_UNPASSEND: "🔴",
-    }
-    return icons.get(match_quality, "⚪")
-
-
 def _match_quality_label(match_quality: str) -> str:
     if not match_quality:
-        return "—"
+        return "Nicht bewertet"
     return MATCH_QUALITY_LABELS.get(match_quality, match_quality)
 
 
+def _voice_segment_count_for_folder(project, folder_name: str) -> int:
+    """Anzahl Whisper-Segmente für den Ordner (nur zur Fortschritts-Anzeige)."""
+    try:
+        mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
+        voice_doc = load_voice_analysis(project)
+    except (OSError, ValueError, FileNotFoundError):
+        return 0
+    if mapping is None:
+        return 0
+    voice_files = {
+        entry.voice_file
+        for entry in mapping.entries
+        if entry.folder == folder_name and entry.confirmed
+    }
+    total = 0
+    for voice_file in voice_files:
+        voice_entry = next((entry for entry in voice_doc.files if entry.path == voice_file), None)
+        if voice_entry is None:
+            continue
+        total += sum(1 for segment in voice_entry.segments if segment.text.strip())
+    return total
+
+
 def _render_match_quality_badge(shot: EditPlanShot) -> None:
-    if not shot.match_quality:
-        return
     label = _match_quality_label(shot.match_quality)
-    icon = _match_quality_icon(shot.match_quality)
-    st.write(f"**Passung (Gemini):** {icon} {label}")
-    if shot.match_quality == MATCH_QUALITY_UNPASSEND:
+    if shot.match_quality == MATCH_QUALITY_SEHR_GUT:
+        st.success(f"**Passung (Gemini): Sehr gut**")
+    elif shot.match_quality == MATCH_QUALITY_GUT:
+        st.info(f"**Passung (Gemini): Gut**")
+    elif shot.match_quality == MATCH_QUALITY_MITTEL:
+        st.warning(f"**Passung (Gemini): Mittel**")
+    elif shot.match_quality == MATCH_QUALITY_UNPASSEND:
+        st.error(f"**Passung (Gemini): Unpassend**")
         st.caption(
             "Platzhalter-Asset (Establishing/Luftaufnahme) — für ein passendes Motiv "
             "kannst du unten **Supplement Assets** starten oder unter **②½** ergänzen."
         )
+    else:
+        st.warning(
+            "**Passung (Gemini): Nicht bewertet** — dieser Schnittplan stammt vermutlich "
+            "aus einer älteren Version. Bitte unter **Vorschlag** neu **Schnittplan vorschlagen**."
+        )
+
+
+def _render_match_quality_summary(shots: list[EditPlanShot]) -> None:
+    narrative = [shot for shot in shots if not shot.section_outro]
+    if not narrative:
+        return
+    counts = Counter(shot.match_quality or "" for shot in narrative)
+    rated = sum(counts.values()) - counts.get("", 0)
+    if rated == 0:
+        st.warning(
+            "Keine Gemini-Passungsbewertungen in diesem Schnittplan — bitte unter "
+            "**Vorschlag** den Schnittplan **neu generieren** (aktuelle Version bewertet "
+            "jeden Shot mit Sehr gut / Gut / Mittel / Unpassend)."
+        )
+        return
+    parts = [
+        f"**Sehr gut:** {counts.get(MATCH_QUALITY_SEHR_GUT, 0)}",
+        f"**Gut:** {counts.get(MATCH_QUALITY_GUT, 0)}",
+        f"**Mittel:** {counts.get(MATCH_QUALITY_MITTEL, 0)}",
+        f"**Unpassend:** {counts.get(MATCH_QUALITY_UNPASSEND, 0)}",
+    ]
+    if counts.get("", 0):
+        parts.append(f"**Nicht bewertet:** {counts['']}")
+    st.markdown("**Gemini-Passung (alle Shots):** " + " · ".join(parts))
 
 
 def _collect_location_statuses(
@@ -693,16 +741,27 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
             title_notes: list[str] = []
             progress_bar = st.progress(0.0)
             progress_text = st.empty()
+            segment_count = _voice_segment_count_for_folder(project, selected_folder)
 
             def _on_plan_progress(folder_name: str, index: int, total: int) -> None:
-                progress_bar.progress(min(1.0, index / total if total else 1.0))
-                progress_text.caption(
-                    f"Gemini plant **{folder_name}** gesamtheitlich "
-                    f"({format_gemini_model_label(timing.gemini_model)}) — "
-                    "alle Segmente und Assets in einem Call."
-                )
+                if index <= 0:
+                    progress_bar.progress(0.08)
+                    progress_text.markdown(
+                        f"**Ein Gemini-Call** für **{folder_name}** — "
+                        f"**{segment_count}** Whisper-Segmente + alle Asset-Beschreibungen "
+                        f"gebündelt ({format_gemini_model_label(timing.gemini_model)}). "
+                        "Es wird **nicht** segmentweise aufgerufen — bitte warten …"
+                    )
+                else:
+                    progress_bar.progress(1.0)
+                    progress_text.caption(
+                        f"Gemini-Antwort für **{folder_name}** wird verarbeitet …"
+                    )
 
-            with st.spinner(f"Schnittplan für {selected_folder} wird erstellt…"):
+            with st.spinner(
+                f"Gemini plant {selected_folder} gesamtheitlich "
+                f"({segment_count} Segmente in einem Call) …"
+            ):
                 document = build_edit_plan(
                     project,
                     settings,
@@ -954,6 +1013,7 @@ def _render_tab_review(
         f"· {len(draft.timeline_items)} Timeline-Items "
         f"— Audio-Offset: {draft.settings.audio_offset_sec}s"
     )
+    _render_match_quality_summary(draft.shots)
     rules_doc = get_edit_plan_rules_for_project(project)
     violations = validate_shots_against_rules(draft.shots, rules_doc)
     if rules_doc.gemini_prompt.strip():
@@ -1076,19 +1136,16 @@ def _render_tab_review(
                 st.error(str(exc))
 
     for index, shot in enumerate(draft.shots):
-        quality_icon = _match_quality_icon(shot.match_quality)
-        asset_icon = "🟢" if shot.asset_path else "🟡"
         quality_label = _match_quality_label(shot.match_quality)
-        title_quality = f" · {quality_label}" if shot.match_quality else ""
         with st.expander(
-            f"{asset_icon}{quality_icon} Shot {index + 1} · {shot.folder} · "
-            f"{shot.duration_sec:.1f}s{title_quality}",
+            f"Shot {index + 1} · {shot.folder} · {shot.duration_sec:.1f}s · "
+            f"Passung: {quality_label}",
             expanded=index < 2,
         ):
+            _render_match_quality_badge(shot)
             st.write(f"**Motiv:** {shot.motif or '—'}")
             st.write(f"**Voice:** {shot.voice_start_sec:.1f}–{shot.voice_end_sec:.1f}s")
             st.caption(shot.passage_text)
-            _render_match_quality_badge(shot)
             if shot.asset_path:
                 st.write(f"**Asset:** `{Path(shot.asset_path).name}`")
                 if shot.match_quality == MATCH_QUALITY_UNPASSEND:

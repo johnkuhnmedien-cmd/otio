@@ -176,7 +176,7 @@ def test_build_edit_plan_calls_progress_callback_per_folder(
         progress_callback=lambda folder, index, total: progress_calls.append((folder, index, total)),
     )
 
-    assert progress_calls == [("Grand Canyon", 1, 1)]
+    assert progress_calls == [("Grand Canyon", 0, 1), ("Grand Canyon", 1, 1)]
 
 
 def test_build_edit_plan_falls_back_when_gemini_network_fails(

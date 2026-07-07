@@ -426,7 +426,7 @@ def build_edit_plan(
             segments_with_beats.append((beat_id, segment))
 
         if progress_callback is not None and segments_with_beats:
-            progress_callback(folder_name, 1, 1)
+            progress_callback(folder_name, 0, 1)
 
         beats_plan = _beats_from_gemini_holistic_or_local(
             segments_with_beats,
@@ -438,6 +438,9 @@ def build_edit_plan(
             gemini_model=plan_settings.gemini_model,
             gemini_prompt=gemini_prompt,
         )
+
+        if progress_callback is not None and segments_with_beats:
+            progress_callback(folder_name, 1, 1)
 
         shot_index_in_folder = 0
         used_paths_in_folder: set[str] = set()
