@@ -26,6 +26,13 @@ RETRYABLE_ERROR_TYPES = frozenset(
     }
 )
 
+ASSET_RULE_ERROR_TYPES = frozenset(
+    {
+        "ASSET_USAGE_LIMIT_EXCEEDED",
+        "ASSET_REUSE_DISTANCE_TOO_SHORT",
+    }
+)
+
 
 @dataclass
 class PlanValidationError:

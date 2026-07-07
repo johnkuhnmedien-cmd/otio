@@ -235,6 +235,74 @@ def test_finalize_plan_for_confirm_blocks_on_final_validation(tmp_path: Path) ->
         confirmed=False,
         candidate_status="ACCEPTED",
         validation_status="PASS",
+        settings=EditPlanSettings(shot_min_sec=3.0, shot_max_sec=8.0),
+        timeline_items=[
+            TimelineItem(
+                timeline_item_id="item_001",
+                type="video_shot",
+                section_id="section_antelope_canyon",
+                folder_name="Antelope Canyon",
+                voice_file=str(tmp_path / "voice.wav"),
+                resolved_media_path=str(media_path),
+                duration_sec=1.0,
+                final_duration_sec=1.0,
+                timeline_in_sec=0.0,
+                timeline_out_sec=1.0,
+                source_in_sec=0.0,
+                source_out_sec=1.0,
+                voice_start_sec=0.0,
+                voice_end_sec=10.0,
+                beat_id="beat_001",
+                transform=TimelineItemTransform(),
+            )
+        ],
+        inventory_hash_at_plan_time="abc123",
+    )
+
+    with patch(
+        "otio_app.ui.edit_plan.get_edit_plan_rules_for_project",
+        return_value=EditPlanRulesDocument(project_id=project.id, rules=[]),
+    ), patch(
+        "otio_app.ui.edit_plan.ensure_opening_titles_rendered",
+        side_effect=lambda _project, items: (items, []),
+    ), patch(
+        "otio_app.ui.edit_plan.inventory_hash_is_stale",
+        return_value=False,
+    ), patch(
+        "otio_app.ui.edit_plan.validate_document_for_confirm",
+        return_value=FinalPlanValidationResult(
+            ok=False,
+            status=ValidationStatus.BLOCKED,
+            errors=[
+                PlanValidationError(
+                    type="SHOT_TOO_SHORT",
+                    timeline_item_id="item_001",
+                    duration_sec=1.0,
+                    min_sec=3.0,
+                )
+            ],
+        ),
+    ):
+        try:
+            _finalize_plan_for_confirm(project, draft, "Antelope Canyon")
+            assert False, "Erwartete ValueError bei finaler Validierung"
+        except ValueError as exc:
+            assert "Validierung" in str(exc)
+
+
+def test_finalize_plan_for_confirm_allows_asset_usage_override(tmp_path: Path) -> None:
+    from otio_app.services.edit_plan_validator import PlanValidationError
+
+    project = _project(tmp_path)
+    media_path = tmp_path / "clip.mp4"
+    media_path.write_bytes(b"video")
+
+    draft = EditPlanDocument(
+        project_id=project.id,
+        folder_name="Antelope Canyon",
+        confirmed=False,
+        candidate_status="ACCEPTED",
+        validation_status="PASS",
         settings=EditPlanSettings(),
         timeline_items=[
             TimelineItem(
@@ -268,8 +336,8 @@ def test_finalize_plan_for_confirm_blocks_on_final_validation(tmp_path: Path) ->
     ), patch(
         "otio_app.ui.edit_plan.validate_document_for_confirm",
         return_value=FinalPlanValidationResult(
-            ok=False,
-            status=ValidationStatus.BLOCKED,
+            ok=True,
+            status=ValidationStatus.AWAITING_APPROVAL,
             errors=[
                 PlanValidationError(
                     type="ASSET_USAGE_LIMIT_EXCEEDED",
@@ -280,9 +348,7 @@ def test_finalize_plan_for_confirm_blocks_on_final_validation(tmp_path: Path) ->
             ],
         ),
     ):
-        try:
-            _finalize_plan_for_confirm(project, draft, "Antelope Canyon")
-            assert False, "Erwartete ValueError bei finaler Validierung"
-        except ValueError as exc:
-            assert "Validierung" in str(exc)
-            assert "ASSET_USAGE" in str(exc) or "dup.mp4" in str(exc)
+        document, notes = _finalize_plan_for_confirm(project, draft, "Antelope Canyon")
+
+    assert document.confirmed is True
+    assert any("Regel-Hinweis" in note for note in notes)

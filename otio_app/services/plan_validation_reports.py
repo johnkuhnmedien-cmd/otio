@@ -13,6 +13,7 @@ from otio_app.services.edit_plan_builder import (
     gemini_retry_report_path,
 )
 from otio_app.services.edit_plan_validator import (
+    ASSET_RULE_ERROR_TYPES,
     FinalPlanValidationResult,
     PlanValidationError,
     ValidationStatus,
@@ -82,12 +83,31 @@ def validate_document_for_confirm(
     document: EditPlanDocument,
     *,
     rules_doc: EditPlanRulesDocument,
+    allow_asset_rule_overrides: bool = True,
 ) -> FinalPlanValidationResult:
-    return validate_final_edit_plan(
+    result = validate_final_edit_plan(
         document.timeline_items,
         settings=document.settings,
         voiceover=document.voiceover,
         rules_doc=rules_doc,
+    )
+    if not allow_asset_rule_overrides:
+        return result
+    blocking_errors = [
+        error for error in result.errors if error.type not in ASSET_RULE_ERROR_TYPES
+    ]
+    if blocking_errors:
+        return FinalPlanValidationResult(
+            ok=False,
+            status=ValidationStatus.BLOCKED,
+            errors=blocking_errors,
+            warnings=result.warnings,
+        )
+    return FinalPlanValidationResult(
+        ok=True,
+        status=result.status if result.status != ValidationStatus.BLOCKED else ValidationStatus.AWAITING_APPROVAL,
+        errors=[error for error in result.errors if error.type in ASSET_RULE_ERROR_TYPES],
+        warnings=result.warnings,
     )
 
 

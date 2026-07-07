@@ -68,6 +68,73 @@ def test_gemini_attempts_label() -> None:
     assert gemini_attempts_label(0) == "0/3"
 
 
+def test_validate_document_for_confirm_allows_asset_rule_override() -> None:
+    from unittest.mock import patch
+
+    from otio_app.analysis_models import EditPlanDocument, EditPlanSettings
+    from otio_app.services.edit_plan_rules import EditPlanRulesDocument
+    from otio_app.services.edit_plan_validator import (
+        FinalPlanValidationResult,
+        PlanValidationError,
+        ValidationStatus,
+    )
+    from otio_app.services.plan_validation_reports import validate_document_for_confirm
+
+    document = EditPlanDocument(project_id="p", settings=EditPlanSettings())
+    rules = EditPlanRulesDocument(project_id="p", rules=[])
+    asset_error = PlanValidationError(
+        type="ASSET_USAGE_LIMIT_EXCEEDED",
+        asset_id="dup.mp4",
+        usage_count=2,
+        max_allowed=1,
+    )
+    timeline_error = PlanValidationError(
+        type="TIMELINE_VALIDATION",
+        message="Visuelles Loch während aktivem Voice-over",
+    )
+    validation_result = FinalPlanValidationResult(
+        ok=False,
+        status=ValidationStatus.BLOCKED,
+        errors=[asset_error],
+    )
+
+    with patch(
+        "otio_app.services.plan_validation_reports.validate_final_edit_plan",
+        return_value=validation_result,
+    ):
+        strict = validate_document_for_confirm(
+            document,
+            rules_doc=rules,
+            allow_asset_rule_overrides=False,
+        )
+        relaxed = validate_document_for_confirm(
+            document,
+            rules_doc=rules,
+            allow_asset_rule_overrides=True,
+        )
+
+    assert strict.ok is False
+    assert relaxed.ok is True
+    assert len(relaxed.errors) == 1
+    assert relaxed.errors[0].type == "ASSET_USAGE_LIMIT_EXCEEDED"
+
+    mixed_result = FinalPlanValidationResult(
+        ok=False,
+        status=ValidationStatus.BLOCKED,
+        errors=[asset_error, timeline_error],
+    )
+    with patch(
+        "otio_app.services.plan_validation_reports.validate_final_edit_plan",
+        return_value=mixed_result,
+    ):
+        mixed_relaxed = validate_document_for_confirm(
+            document,
+            rules_doc=rules,
+            allow_asset_rule_overrides=True,
+        )
+    assert mixed_relaxed.ok is False
+
+
 def test_load_reports_and_latest_retry_summary(tmp_path: Path) -> None:
     work_dir = tmp_path / "_otio"
     work_dir.mkdir()

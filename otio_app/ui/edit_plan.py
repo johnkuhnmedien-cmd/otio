@@ -54,6 +54,7 @@ from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.inventory_hash import current_folder_inventory_hash, inventory_hash_is_stale
 from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.edit_plan_validator import (
+    ASSET_RULE_ERROR_TYPES,
     PlanValidationError,
     ValidationStatus,
     plan_validation_error_to_message,
@@ -751,6 +752,7 @@ def _finalize_plan_for_confirm(
     validation = validate_document_for_confirm(
         document,
         rules_doc=rules_doc,
+        allow_asset_rule_overrides=True,
     )
     if not validation.ok:
         preview = "; ".join(
@@ -759,6 +761,13 @@ def _finalize_plan_for_confirm(
         raise ValueError(
             f"Schnittplan-Validierung fehlgeschlagen — bitte zuerst beheben: {preview}"
         )
+
+    asset_override_errors = [
+        error for error in validation.errors if error.type in ASSET_RULE_ERROR_TYPES
+    ]
+    if asset_override_errors:
+        for line in format_validation_error_entries(asset_override_errors)[:6]:
+            notes.append(f"Regel-Hinweis (manuell bestätigt): {line}")
 
     for shot in document.shots:
         if not shot.asset_path:
@@ -1004,13 +1013,21 @@ def _render_tab_review(
     rules = export_rule_options(rules_doc)
     _render_plan_validation_panel(project, draft)
 
-    final_validation = validate_document_for_confirm(draft, rules_doc=rules_doc)
-    final_validation_errors = format_validation_error_entries(final_validation.errors)
+    final_validation = validate_document_for_confirm(
+        draft,
+        rules_doc=rules_doc,
+        allow_asset_rule_overrides=True,
+    )
+    blocking_validation_errors = [
+        error
+        for error in final_validation.errors
+        if error.type not in ASSET_RULE_ERROR_TYPES
+    ]
     if not plan_is_confirmable(draft):
         st.error("Bestätigung blockiert — Schnittplan ist BLOCKED oder fehlgeschlagen.")
-    elif not final_validation.ok:
+    elif blocking_validation_errors:
         st.error("Finale Validierung fehlgeschlagen — Bestätigung blockiert:")
-        for line in final_validation_errors[:12]:
+        for line in format_validation_error_entries(blocking_validation_errors)[:12]:
             st.caption(f"• {line}")
 
     if draft.inventory_hash_at_plan_time and inventory_hash_is_stale(
@@ -1028,13 +1045,9 @@ def _render_tab_review(
         timeline_items=draft.timeline_items,
         rules_doc=rules_doc,
     )
-    confirm_blocked = (
-        not plan_is_confirmable(draft)
-        or not final_validation.ok
-        or bool(usage_blockers)
-    )
+    confirm_blocked = not plan_is_confirmable(draft) or bool(blocking_validation_errors)
     if usage_blockers:
-        st.error("max_asset_usage verletzt — Bestätigung blockiert:")
+        st.warning("max_asset_usage verletzt — Bestätigung trotzdem möglich:")
         for violation in usage_blockers:
             st.caption(
                 f"• `{violation.asset_id}`: {violation.usage_count}× "
@@ -1333,9 +1346,6 @@ def _render_tab_review(
                 "Bitte zuerst die Checkbox **oben** aktivieren — "
                 "ohne Bestätigung wird der Schnittplan nicht exportierbar gespeichert."
             )
-        elif usage_blockers:
-            st.toast("❌ Bestätigung blockiert (max_asset_usage).", icon="❌")
-            st.error("Bestätigung blockiert wegen max_asset_usage-Verstoß.")
         elif confirm_blocked:
             st.toast("❌ Bestätigung blockiert (Validierung).", icon="❌")
             st.error(
