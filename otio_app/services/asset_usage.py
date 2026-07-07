@@ -21,6 +21,12 @@ USAGE_COUNTING_TYPES = frozenset(
 )
 
 
+def visual_usage_timeline_items(items: list[TimelineItem]) -> list[TimelineItem]:
+    """Visual shots mit asset_id in Timeline-Reihenfolge."""
+    visual = [item for item in items if item.type in USAGE_COUNTING_TYPES]
+    return sorted(visual, key=lambda item: (item.timeline_in_sec, item.timeline_item_id))
+
+
 def asset_id_from_shot(shot: EditPlanShot) -> str | None:
     if shot.asset_id:
         return shot.asset_id

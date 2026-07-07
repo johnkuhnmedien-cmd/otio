@@ -22,12 +22,16 @@ from otio_app.analysis_models import (
 )
 from otio_app.models import Project
 from otio_app.services.edit_plan_rules import RULE_MAX_ASSET_USES
-from otio_app.services.edit_plan_builder import build_edit_plan
+from otio_app.services.edit_plan_builder import build_edit_plan, unwrap_accepted_edit_plan
+
+
+def _build_plan(project, **kwargs):
+    return unwrap_accepted_edit_plan(build_edit_plan(project, **kwargs))
 from otio_app.services.asset_usage import usage_count_by_asset_id_from_shots
 
 
 def _sample_project(layout: dict[str, Path]) -> Project:
-    return Project(
+    project = Project(
         id="plan-test",
         name="Test",
         project_root=str(layout["project_root"]),
@@ -35,6 +39,14 @@ def _sample_project(layout: dict[str, Path]) -> Project:
         asset_subdir_names=["Grand Canyon"],
         selected_asset_subdirs=["Grand Canyon"],
     )
+    from otio_app.services.edit_plan_rules import RULE_MAX_ASSET_USES, default_rules, save_edit_plan_rules
+
+    rules_doc = default_rules(project)
+    for rule in rules_doc.rules:
+        if rule.rule_type == RULE_MAX_ASSET_USES:
+            rule.enabled = False
+    save_edit_plan_rules(project, rules_doc)
+    return project
 
 
 def test_build_edit_plan_without_gemini(
@@ -109,7 +121,7 @@ def test_build_edit_plan_without_gemini(
         inventory.items[0],
     )
 
-    document = build_edit_plan(project, use_api=False)
+    document = _build_plan(project, use_api=False)
     assert document.shots
     assert document.shots[0].folder == "Grand Canyon"
     assert all(shot.duration_sec >= 3.0 for shot in document.shots if not shot.section_outro)
@@ -170,10 +182,12 @@ def test_build_edit_plan_calls_progress_callback_per_folder(
     )
 
     progress_calls: list[tuple[str, int, int]] = []
-    build_edit_plan(
-        project,
-        use_api=False,
-        progress_callback=lambda folder, index, total: progress_calls.append((folder, index, total)),
+    unwrap_accepted_edit_plan(
+        build_edit_plan(
+            project,
+            use_api=False,
+            progress_callback=lambda folder, index, total: progress_calls.append((folder, index, total)),
+        )
     )
 
     assert progress_calls == [("Grand Canyon", 0, 1), ("Grand Canyon", 1, 1)]
@@ -238,7 +252,7 @@ def test_build_edit_plan_falls_back_when_gemini_network_fails(
         "otio_app.services.edit_plan_builder.plan_folder_assets",
         side_effect=RuntimeError("network down"),
     ):
-        document = build_edit_plan(project, use_api=True)
+        document = unwrap_accepted_edit_plan(build_edit_plan(project, use_api=True))
 
     assert document.shots
     narrative = next(shot for shot in document.shots if not shot.section_outro)
@@ -319,7 +333,7 @@ def test_max_asset_usage_applies_after_timing_split(
         section_outro_sec=0.0,
     )
 
-    document = build_edit_plan(project, settings=settings, use_api=False, rules_doc=rules)
+    document = _build_plan(project, settings=settings, use_api=False, rules_doc=rules)
     counts = usage_count_by_asset_id_from_shots(
         [shot for shot in document.shots if not shot.section_outro]
     )
@@ -420,7 +434,7 @@ def test_segment_coverage_reconciled_when_all_shots_get_local_asset(
         "otio_app.services.edit_plan_builder.plan_folder_assets",
         side_effect=fake_plan_folder_assets,
     ):
-        document = build_edit_plan(project, use_api=True)
+        document = unwrap_accepted_edit_plan(build_edit_plan(project, use_api=True))
 
     non_outro_shots = [shot for shot in document.shots if not shot.section_outro]
     assert non_outro_shots
@@ -490,7 +504,7 @@ def test_outro_items_respect_configured_max_shot_sec(
     )
 
     settings = EditPlanSettings(shot_min_sec=2.0, shot_max_sec=5.0, section_outro_sec=10.0)
-    document = build_edit_plan(project, settings=settings, use_api=False)
+    document = _build_plan(project, settings=settings, use_api=False)
 
     outro_shots = [shot for shot in document.shots if shot.section_outro]
     assert outro_shots, "Es sollten Outro-Shots erzeugt worden sein."
@@ -579,7 +593,7 @@ def test_inventory_hash_not_stale_immediately_after_build_with_supplement_asset(
         ),
     )
 
-    document = build_edit_plan(project, use_api=False)
+    document = _build_plan(project, use_api=False)
 
     assert document.inventory_hash_at_plan_time
     assert inventory_hash_is_stale(
@@ -653,7 +667,7 @@ def test_local_fallback_picks_best_matching_asset_not_just_first(
         ),
     )
 
-    document = build_edit_plan(project, use_api=False)
+    document = _build_plan(project, use_api=False)
 
     non_outro_shots = [shot for shot in document.shots if not shot.section_outro]
     assert non_outro_shots
@@ -743,7 +757,7 @@ def test_unpassend_match_quality_creates_supplement_request(
         "otio_app.services.edit_plan_builder.plan_folder_assets",
         side_effect=fake_plan_folder_assets,
     ):
-        document = build_edit_plan(project, use_api=True)
+        document = unwrap_accepted_edit_plan(build_edit_plan(project, use_api=True))
 
     narrative_shots = [shot for shot in document.shots if not shot.section_outro]
     assert len(narrative_shots) == 1

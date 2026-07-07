@@ -32,6 +32,7 @@ from otio_app.services.edit_plan_builder import (
     EditPlanLocationState,
     EditPlanLocationStatus,
     build_edit_plan,
+    EditPlanBuildStatus,
     load_edit_plan,
     load_voice_analysis,
     save_edit_plan,
@@ -52,7 +53,12 @@ from otio_app.services.edit_plan_gap_fill import GAP_FILLABLE_TYPES, fill_missin
 from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.inventory_hash import current_folder_inventory_hash, inventory_hash_is_stale
 from otio_app.services.inventory_loader import load_folder_inventory
-from otio_app.services.edit_plan_validator import ValidationStatus, validate_timeline_items
+from otio_app.services.edit_plan_validator import (
+    PlanValidationError,
+    ValidationStatus,
+    plan_validation_error_to_message,
+    validate_timeline_items,
+)
 from otio_app.services.opening_title_renderer import (
     ensure_opening_titles_rendered,
     title_render_is_stale,
@@ -779,7 +785,7 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
                 f"Gemini plant {selected_folder} gesamtheitlich "
                 f"({segment_count} Segmente in einem Call) …"
             ):
-                document = build_edit_plan(
+                result = build_edit_plan(
                     project,
                     settings,
                     use_api=use_gemini,
@@ -789,6 +795,23 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
                 )
             progress_bar.empty()
             progress_text.empty()
+            if result.status == EditPlanBuildStatus.BLOCKED or result.document is None:
+                error_lines = [
+                    plan_validation_error_to_message(PlanValidationError.from_dict(entry))
+                    if isinstance(entry, dict)
+                    else str(entry)
+                    for entry in (result.validation_errors or [])
+                ]
+                st.session_state[generate_result_key] = {
+                    "ok": False,
+                    "message": f"Schnittplan BLOCKED nach {result.retry_attempts} Versuchen.",
+                    "blocked": True,
+                    "validation_errors": error_lines[:12],
+                    "used_rules": (result.reports or {}),
+                    "notes": list(result.plan_generation_notes or []),
+                }
+                st.rerun()
+            document = result.document
             export_opts = export_rule_options(rules_doc)
             if export_opts.folder_title_enabled:
                 timeline_items, title_notes = ensure_opening_titles_rendered(

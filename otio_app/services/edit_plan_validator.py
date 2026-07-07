@@ -90,7 +90,21 @@ class PlanValidationError:
         return cls(**kwargs)
 
     def is_retryable(self) -> bool:
-        return self.type in RETRYABLE_ERROR_TYPES
+        if self.type in RETRYABLE_ERROR_TYPES:
+            return True
+        if self.type == "TIMELINE_VALIDATION" and self.message:
+            markers = (
+                "Textsegment",
+                "duration_sec",
+                "final_duration_sec",
+                "Voice-over",
+                "Visuelles Loch",
+                "SHOT_TOO",
+                "ASSET_",
+                "INSUFFICIENT_PARTS",
+            )
+            return any(marker in self.message for marker in markers)
+        return False
 
 
 def plan_validation_error_to_message(error: PlanValidationError) -> str:
@@ -509,7 +523,268 @@ TIMING_VALIDATION_MARKERS = (
     "nicht vollständig als",
     "Min. Shot",
     "unter Min. Shot",
+    "ASSET_USAGE_LIMIT_EXCEEDED",
+    "ASSET_REUSE_DISTANCE_TOO_SHORT",
+    "SHOT_TOO_SHORT",
+    "SHOT_TOO_LONG",
+    "INSUFFICIENT_PARTS",
 )
+
+
+SHOT_DURATION_RULE_TYPES = frozenset(
+    {
+        "video_shot",
+        "image_with_background",
+        "generic_narration_visual",
+        "generic_outro_visual",
+    }
+)
+
+
+def _is_soft_timeline_message(message: str) -> bool:
+    return any(
+        phrase in message
+        for phrase in (
+            "kein resolved_media_path",
+            "section_outro_sec > 0, aber keine",
+            "nicht vollständig als Outro-Elemente geplant",
+            "generic_narration_visual fehlt",
+        )
+    )
+
+
+@dataclass
+class FinalPlanValidationResult:
+    ok: bool
+    status: ValidationStatus
+    errors: list[PlanValidationError] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def has_retryable_errors(self) -> bool:
+        return any(error.is_retryable() for error in self.errors)
+
+    @property
+    def retryable_errors(self) -> list[PlanValidationError]:
+        return [error for error in self.errors if error.is_retryable()]
+
+
+def validate_shot_duration_rules(
+    items: list[TimelineItem],
+    *,
+    settings: EditPlanSettings,
+) -> list[PlanValidationError]:
+    """Harte Min./Max.-Shot-Prüfung auf finalen Visual-Shots."""
+    min_sec = float(settings.shot_min_sec) if settings.shot_min_sec else MIN_DURATION_SEC
+    max_sec = float(settings.shot_max_sec) if settings.shot_max_sec else MAX_DURATION_SEC
+
+    segment_spans: dict[str, float] = {}
+    for item in items:
+        if item.type not in SHOT_DURATION_RULE_TYPES or not item.beat_id:
+            continue
+        segment_spans.setdefault(item.beat_id, 0.0)
+        span = max(0.0, item.voice_end_sec - item.voice_start_sec)
+        segment_spans[item.beat_id] = max(segment_spans[item.beat_id], span)
+
+    errors: list[PlanValidationError] = []
+    for item in items:
+        if item.type not in SHOT_DURATION_RULE_TYPES:
+            continue
+        duration = item.final_duration_sec or item.duration_sec
+        segment_id = item.beat_id or ""
+        segment_span = segment_spans.get(segment_id, duration)
+
+        if duration > max_sec + 0.01:
+            errors.append(
+                PlanValidationError(
+                    type="SHOT_TOO_LONG",
+                    timeline_item_id=item.timeline_item_id,
+                    duration_sec=duration,
+                    max_sec=max_sec,
+                    segment_id=segment_id or None,
+                    beat_id=segment_id or None,
+                    reason="Shot longer than maximum duration",
+                )
+            )
+        if duration + 0.01 < min_sec:
+            if segment_span + 0.01 < min_sec:
+                continue
+            errors.append(
+                PlanValidationError(
+                    type="SHOT_TOO_SHORT",
+                    timeline_item_id=item.timeline_item_id,
+                    duration_sec=duration,
+                    min_sec=min_sec,
+                    segment_id=segment_id or None,
+                    beat_id=segment_id or None,
+                    reason="Shot shorter than minimum duration",
+                )
+            )
+    return errors
+
+
+def validate_asset_usage_rules(
+    items: list[TimelineItem],
+    *,
+    rules_doc: EditPlanRulesDocument,
+) -> list[PlanValidationError]:
+    """Globale Asset-Nutzung und Mindestabstand auf finalen timeline_items."""
+    from otio_app.services.asset_usage import (
+        asset_id_from_timeline_item,
+        get_asset_usage_rules,
+        visual_usage_timeline_items,
+    )
+
+    rules = get_asset_usage_rules(rules_doc)
+    errors: list[PlanValidationError] = []
+    visual_items = visual_usage_timeline_items(items)
+    usage_to_item_ids: dict[str, list[str]] = {}
+
+    for item in visual_items:
+        asset_id = asset_id_from_timeline_item(item)
+        if not asset_id:
+            continue
+        usage_to_item_ids.setdefault(asset_id, []).append(item.timeline_item_id)
+
+    if rules.max_asset_usage is not None:
+        for asset_id, item_ids in sorted(usage_to_item_ids.items()):
+            count = len(item_ids)
+            if count > rules.max_asset_usage:
+                errors.append(
+                    PlanValidationError(
+                        type="ASSET_USAGE_LIMIT_EXCEEDED",
+                        asset_id=asset_id,
+                        usage_count=count,
+                        max_allowed=rules.max_asset_usage,
+                        timeline_item_ids=item_ids,
+                    )
+                )
+
+    if rules.min_asset_reuse_distance_shots > 0:
+        last_used_at: dict[str, tuple[int, str]] = {}
+        for index, item in enumerate(visual_items, start=1):
+            asset_id = asset_id_from_timeline_item(item)
+            if not asset_id:
+                continue
+            if asset_id in last_used_at:
+                previous_index, previous_item_id = last_used_at[asset_id]
+                actual_distance = index - previous_index - 1
+                if (index - previous_index) <= rules.min_asset_reuse_distance_shots:
+                    errors.append(
+                        PlanValidationError(
+                            type="ASSET_REUSE_DISTANCE_TOO_SHORT",
+                            asset_id=asset_id,
+                            previous_item_id=previous_item_id,
+                            current_item_id=item.timeline_item_id,
+                            actual_distance_shots=actual_distance,
+                            required_distance_shots=rules.min_asset_reuse_distance_shots,
+                        )
+                    )
+            last_used_at[asset_id] = (index, item.timeline_item_id)
+
+    return errors
+
+
+def _timeline_errors_to_plan_errors(messages: list[str]) -> list[PlanValidationError]:
+    errors: list[PlanValidationError] = []
+    for message in messages:
+        if "ASSET_USAGE_LIMIT_EXCEEDED" in message or message.startswith("max_asset_usage"):
+            continue
+        retryable = any(marker in message for marker in TIMING_VALIDATION_MARKERS)
+        error_type = "TIMELINE_VALIDATION"
+        if "SHOT_TOO_SHORT" in message or (
+            "duration_sec" in message and "<" in message
+        ):
+            error_type = "SHOT_TOO_SHORT"
+        elif "SHOT_TOO_LONG" in message or (
+            "final_duration_sec" in message and ">" in message
+        ):
+            error_type = "SHOT_TOO_LONG"
+        elif "INSUFFICIENT_PARTS" in message:
+            error_type = "INSUFFICIENT_PARTS"
+        errors.append(PlanValidationError(type=error_type, message=message))
+    return errors
+
+
+def validate_final_edit_plan(
+    items: list[TimelineItem],
+    *,
+    settings: EditPlanSettings,
+    voiceover: VoiceoverPlan | None,
+    rules_doc: EditPlanRulesDocument | None = None,
+    extra_errors: list[PlanValidationError] | None = None,
+) -> FinalPlanValidationResult:
+    """Zentrale harte Validierung auf finalen timeline_items."""
+    errors: list[PlanValidationError] = list(extra_errors or [])
+    errors.extend(validate_shot_duration_rules(items, settings=settings))
+    if rules_doc is not None:
+        errors.extend(validate_asset_usage_rules(items, rules_doc=rules_doc))
+
+    timeline_result = validate_timeline_items(
+        items,
+        settings=settings,
+        voiceover=voiceover,
+        opening_title_required=False,
+        require_rendered_media=False,
+        rules_doc=None,
+    )
+    errors.extend(_timeline_errors_to_plan_errors(timeline_result.errors))
+
+    # Shot-Dauer-Fehler kommen strukturiert — String-Duplikate vermeiden.
+    errors = [
+        error
+        for error in errors
+        if not (
+            error.type == "TIMELINE_VALIDATION"
+            and error.message
+            and ("duration_sec" in error.message or "final_duration_sec" in error.message)
+        )
+    ]
+
+    hard_blockers = [
+        error
+        for error in errors
+        if error.is_retryable()
+        or (
+            error.type == "TIMELINE_VALIDATION"
+            and error.message
+            and not _is_soft_timeline_message(error.message)
+        )
+    ]
+    effective_status = timeline_result.status
+    if timeline_result.status == ValidationStatus.BLOCKED and timeline_result.errors:
+        if all(_is_soft_timeline_message(message) for message in timeline_result.errors):
+            effective_status = ValidationStatus.AWAITING_APPROVAL
+    ok = not hard_blockers and effective_status in {
+        ValidationStatus.OK,
+        ValidationStatus.AWAITING_APPROVAL,
+    }
+    return FinalPlanValidationResult(
+        ok=ok,
+        status=ValidationStatus.BLOCKED if hard_blockers else effective_status,
+        errors=hard_blockers,
+        warnings=timeline_result.warnings,
+    )
+
+
+def retryable_validation_errors(errors: list[PlanValidationError | str]) -> list[PlanValidationError]:
+    structured: list[PlanValidationError] = []
+    for entry in errors:
+        if isinstance(entry, PlanValidationError):
+            if entry.is_retryable():
+                structured.append(entry)
+        elif any(marker in entry for marker in TIMING_VALIDATION_MARKERS):
+            structured.append(PlanValidationError(type="TIMELINE_VALIDATION", message=entry))
+    return structured
+
+
+def should_retry_gemini_for_validation(errors: list[PlanValidationError | str]) -> bool:
+    return bool(retryable_validation_errors(errors))
+
+
+def timing_validation_errors(errors: list[str]) -> list[str]:
+    """Filtert Validierungsfehler, die ein erneuter Gemini-Lauf beheben könnte."""
+    return [error for error in errors if any(marker in error for marker in TIMING_VALIDATION_MARKERS)]
 
 
 def collect_min_shot_violations(
@@ -542,13 +817,10 @@ def collect_min_shot_violations(
     return errors
 
 
-def timing_validation_errors(errors: list[str]) -> list[str]:
-    """Filtert Validierungsfehler, die ein erneuter Gemini-Lauf beheben könnte."""
-    return [error for error in errors if any(marker in error for marker in TIMING_VALIDATION_MARKERS)]
-
-
 def should_retry_gemini_for_timing(errors: list[str]) -> bool:
-    return bool(timing_validation_errors(errors))
+    return should_retry_gemini_for_validation(
+        [PlanValidationError(type="TIMELINE_VALIDATION", message=error) for error in errors]
+    )
 
 
 def validate_folder_plan_timing(

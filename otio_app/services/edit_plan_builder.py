@@ -57,10 +57,10 @@ from otio_app.services.gemini_client import (
     plan_folder_assets,
 )
 from otio_app.services.edit_plan_validator import (
-    collect_min_shot_violations,
-    should_retry_gemini_for_timing,
-    timing_validation_errors,
-    validate_folder_plan_timing,
+    PlanValidationError,
+    plan_validation_error_to_message,
+    should_retry_gemini_for_validation,
+    validate_final_edit_plan,
 )
 from otio_app.services.inventory_hash import compute_folder_inventory_hash
 from otio_app.services.inventory_loader import load_folder_inventory
@@ -96,6 +96,72 @@ class EditPlanLocationState(str, Enum):
     OPEN = "open"
     DRAFT = "draft"
     CONFIRMED = "confirmed"
+
+
+class EditPlanBuildStatus(str, Enum):
+    ACCEPTED = "ACCEPTED"
+    BLOCKED = "BLOCKED"
+
+
+@dataclass
+class EditPlanBuildResult:
+    status: EditPlanBuildStatus
+    document: EditPlanDocument | None = None
+    failed_candidate: dict | None = None
+    validation_errors: list[dict] | None = None
+    validation_status: str = "FAIL"
+    candidate_status: str = "BLOCKED"
+    retry_attempts: int = 0
+    reports: dict | None = None
+    plan_generation_notes: list[str] | None = None
+
+
+def edit_plan_validation_report_path(work_dir: Path) -> Path:
+    return work_dir / "edit_plan_validation_report.json"
+
+
+def gemini_retry_report_path(work_dir: Path) -> Path:
+    return work_dir / "gemini_retry_report.json"
+
+
+def edit_plan_candidate_failed_path(work_dir: Path) -> Path:
+    return work_dir / "edit_plan_candidate.failed.json"
+
+
+def _write_plan_validation_reports(
+    work_dir: Path,
+    *,
+    used_rules: dict,
+    validation_errors: list[PlanValidationError],
+    retry_attempts: int,
+    final_status: str,
+    gemini_retry_report: list[dict],
+    failed_candidate: dict | None = None,
+) -> dict[str, str]:
+    work_dir.mkdir(parents=True, exist_ok=True)
+    validation_path = edit_plan_validation_report_path(work_dir)
+    retry_path = gemini_retry_report_path(work_dir)
+    validation_payload = {
+        "used_rules": used_rules,
+        "max_asset_usage": used_rules.get("max_asset_usage"),
+        "min_asset_reuse_distance_shots": used_rules.get("min_asset_reuse_distance_shots"),
+        "shot_min_sec": used_rules.get("shot_min_sec"),
+        "shot_max_sec": used_rules.get("shot_max_sec"),
+        "violations": [error.to_dict() for error in validation_errors],
+        "retry_attempts": retry_attempts,
+        "final_status": final_status,
+    }
+    validation_path.write_text(json.dumps(validation_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    retry_path.write_text(json.dumps({"attempts": gemini_retry_report}, indent=2, ensure_ascii=False), encoding="utf-8")
+    reports = {
+        "edit_plan_validation_report": str(validation_path),
+        "gemini_retry_report": str(retry_path),
+    }
+    if failed_candidate is not None:
+        failed_path = edit_plan_candidate_failed_path(work_dir)
+        failed_path.write_text(json.dumps(failed_candidate, indent=2, ensure_ascii=False), encoding="utf-8")
+        reports["edit_plan_candidate_failed"] = str(failed_path)
+    return reports
 
 
 @dataclass(frozen=True)
@@ -475,12 +541,47 @@ def _beats_from_gemini_holistic_or_local(
     return result
 
 
+def _ensure_minimum_parts(
+    parts: list[dict],
+    *,
+    segment_text: str,
+    min_parts: int,
+    text_splitters: list[str],
+) -> list[dict]:
+    if len(parts) >= min_parts:
+        return parts
+    split_texts = local_split_passage(segment_text, text_splitters)
+    if len(split_texts) < min_parts:
+        words = segment_text.split()
+        if len(words) >= min_parts:
+            chunk = max(1, len(words) // min_parts)
+            split_texts = [
+                " ".join(words[index : index + chunk])
+                for index in range(0, len(words), chunk)
+            ][:min_parts]
+        else:
+            split_texts = [segment_text] * min_parts
+    template = dict(parts[0]) if parts else {"asset_path": None, "match_quality": MATCH_QUALITY_UNPASSEND}
+    expanded: list[dict] = []
+    for index in range(min_parts):
+        text = split_texts[index] if index < len(split_texts) else segment_text
+        expanded.append(
+            {
+                **template,
+                "text": text,
+                "motif": text[:80],
+            }
+        )
+    return expanded
+
+
 @dataclass
 class FolderShotBuildResult:
     shots: list[EditPlanShot]
     segment_coverages: list
     supplement_request_ids: list[str]
     pending_supplement_requests: list
+    part_validation_errors: list[PlanValidationError]
 
 
 def _folder_shots_from_beats_plan(
@@ -500,6 +601,7 @@ def _folder_shots_from_beats_plan(
     segment_coverages: list = []
     supplement_request_ids: list[str] = []
     pending_supplement_requests: list = []
+    part_validation_errors: list[PlanValidationError] = []
     shot_index_in_folder = 0
     used_paths_in_folder: set[str] = set()
     last_asset_in_folder: str | None = None
@@ -534,6 +636,37 @@ def _folder_shots_from_beats_plan(
             max_sec=plan_settings.shot_max_sec,
         )
         raw_parts = normalized_parts.parts
+        if not normalized_parts.part_count_ok and normalized_parts.allowed_parts_min > len(raw_parts):
+            raw_parts = _ensure_minimum_parts(
+                raw_parts,
+                segment_text=segment.text.strip(),
+                min_parts=normalized_parts.allowed_parts_min,
+                text_splitters=plan_settings.text_splitters,
+            )
+            normalized_parts = normalize_gemini_parts_for_segment(
+                raw_parts,
+                segment_duration=segment_duration,
+                min_sec=plan_settings.shot_min_sec,
+                max_sec=plan_settings.shot_max_sec,
+            )
+            raw_parts = normalized_parts.parts
+        if not normalized_parts.part_count_ok and normalized_parts.part_count_error_type:
+            part_validation_errors.append(
+                PlanValidationError(
+                    type=normalized_parts.part_count_error_type,
+                    beat_id=beat_id,
+                    segment_id=beat_id,
+                    allowed_parts_min=normalized_parts.allowed_parts_min,
+                    allowed_parts_max=normalized_parts.allowed_parts_max,
+                    actual_parts=normalized_parts.actual_parts,
+                    message=(
+                        f"{normalized_parts.part_count_error_type}: {beat_id} "
+                        f"hat {normalized_parts.actual_parts} part(s), "
+                        f"erlaubt {normalized_parts.allowed_parts_min}–"
+                        f"{normalized_parts.allowed_parts_max}"
+                    ),
+                )
+            )
 
         texts = [str(part.get("text", "")).strip() for part in raw_parts]
         time_ranges = allocate_time_with_constraints(
@@ -718,6 +851,7 @@ def _folder_shots_from_beats_plan(
         segment_coverages=segment_coverages,
         supplement_request_ids=supplement_request_ids,
         pending_supplement_requests=pending_supplement_requests,
+        part_validation_errors=part_validation_errors,
     )
 
 
@@ -729,7 +863,7 @@ def build_edit_plan(
     folder_names: list[str] | None = None,
     rules_doc: EditPlanRulesDocument | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
-) -> EditPlanDocument:
+) -> EditPlanBuildResult:
     """Erzeugt einen Schnittplan-Vorschlag für bestätigte Voice-over-Zuordnungen."""
     mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
     if mapping is None or not mapping.confirmed:
@@ -779,18 +913,16 @@ def build_edit_plan(
     if folder_names is not None and len(folder_names) == 1:
         primary_folder = folder_names[0]
 
-    shots: list[EditPlanShot] = []
-    assets_by_folder: dict[str, list[str]] = {}
-    assets_payload_by_folder: dict[str, list[dict[str, str]]] = {}
-    segment_coverages: list = []
-    supplement_request_ids: list[str] = []
-    pending_supplement_requests: list = []
-    inventory_hashes: dict[str, str] = {}
     max_count = max_asset_usage_limit(rules_doc)
     asset_usage_rules = get_asset_usage_rules(rules_doc)
-    usage_by_folder: dict[str, dict[str, int]] = {}
-    outro_parts_by_folder: dict[str, list[dict]] = {}
-    plan_generation_notes: list[str] = []
+    used_rules = {
+        **asset_usage_rules.to_dict(),
+        "shot_min_sec": plan_settings.shot_min_sec,
+        "shot_max_sec": plan_settings.shot_max_sec,
+    }
+    inventory_hashes: dict[str, str] = {}
+    assets_payload_by_folder: dict[str, list[dict[str, str]]] = {}
+    folder_build_contexts: list[dict] = []
 
     for voice_path, folder_name in mapping_by_voice.items():
         voice_entry = voice_files.get(voice_path)
@@ -814,10 +946,8 @@ def build_edit_plan(
             for asset in folder_inventory.assets
             if asset.description or asset.path
         ]
-        allowed_paths = {asset["path"] for asset in asset_payload}
-        assets_by_folder[folder_name] = [asset["path"] for asset in asset_payload]
         assets_payload_by_folder[folder_name] = list(asset_payload)
-        usage_by_folder[folder_name] = {}
+        allowed_paths = {asset["path"] for asset in asset_payload}
 
         file_duration = probe_duration_seconds(Path(voice_path))
         if file_duration is None or file_duration <= 0:
@@ -835,18 +965,49 @@ def build_edit_plan(
             beat_id = f"beat_{beat_index:03d}"
             segments_with_beats.append((beat_id, clamped_segment))
 
-        if progress_callback is not None and segments_with_beats:
-            progress_callback(folder_name, 0, 1)
+        folder_build_contexts.append(
+            {
+                "voice_path": voice_path,
+                "folder_name": folder_name,
+                "segments_with_beats": segments_with_beats,
+                "asset_payload": asset_payload,
+                "allowed_paths": allowed_paths,
+                "folder_inventory": folder_inventory,
+                "file_duration": file_duration,
+            }
+        )
 
-        max_attempts = MAX_GEMINI_PLAN_ATTEMPTS if use_api else 1
-        correction_instructions = ""
-        beats_plan: dict[str, list[dict]] = {}
-        folder_build: FolderShotBuildResult | None = None
-        folder_outro_parts: list[dict] = []
+    max_attempts = MAX_GEMINI_PLAN_ATTEMPTS if use_api else 1
+    correction_instructions = ""
+    plan_generation_notes: list[str] = []
+    gemini_retry_report: list[dict] = []
+    last_validation_errors: list[PlanValidationError] = []
+    last_beats_by_folder: dict[str, dict[str, list[dict]]] = {}
+    last_timeline_items: list = []
+    last_shots: list[EditPlanShot] = []
+    last_segment_coverages: list = []
 
-        for attempt in range(1, max_attempts + 1):
-            usage_by_folder[folder_name] = {}
+    for attempt in range(1, max_attempts + 1):
+        shots: list[EditPlanShot] = []
+        segment_coverages: list = []
+        supplement_request_ids: list[str] = []
+        pending_supplement_requests: list = []
+        outro_parts_by_folder: dict[str, list[dict]] = {}
+        part_validation_errors: list[PlanValidationError] = []
+        beats_by_folder: dict[str, dict[str, list[dict]]] = {}
 
+        for context in folder_build_contexts:
+            folder_name = context["folder_name"]
+            voice_path = context["voice_path"]
+            segments_with_beats = context["segments_with_beats"]
+            asset_payload = context["asset_payload"]
+            allowed_paths = context["allowed_paths"]
+            folder_inventory = context["folder_inventory"]
+
+            if progress_callback is not None and segments_with_beats:
+                progress_callback(folder_name, 0, 1)
+
+            usage_by_folder: dict[str, int] = {}
             beats_plan = _beats_from_gemini_holistic_or_local(
                 segments_with_beats,
                 folder_name,
@@ -859,6 +1020,7 @@ def build_edit_plan(
                 correction_instructions=correction_instructions,
                 asset_usage_rules=asset_usage_rules,
             )
+            beats_by_folder[folder_name] = beats_plan
 
             folder_build = _folder_shots_from_beats_plan(
                 beats_plan=beats_plan,
@@ -869,9 +1031,10 @@ def build_edit_plan(
                 allowed_paths=allowed_paths,
                 folder_inventory=folder_inventory,
                 plan_settings=plan_settings,
-                usage_by_folder=usage_by_folder[folder_name],
+                usage_by_folder=usage_by_folder,
                 max_count=max_count,
             )
+            part_validation_errors.extend(folder_build.part_validation_errors)
 
             used_paths_in_folder = {
                 shot.asset_path for shot in folder_build.shots if shot.asset_path
@@ -885,18 +1048,89 @@ def build_edit_plan(
                 settings=plan_settings,
                 used_paths=used_paths_in_folder,
                 last_asset_path=last_asset_in_folder,
-                usage=usage_by_folder[folder_name],
+                usage=usage_by_folder,
                 max_count=max_count,
             )
 
-            preview_items, preview_voiceover, _preview_errors = build_timeline_items_for_folder(
-                folder_build.shots,
+            shots.extend(folder_build.shots)
+            segment_coverages.extend(folder_build.segment_coverages)
+            pending_supplement_requests.extend(folder_build.pending_supplement_requests)
+            supplement_request_ids.extend(folder_build.supplement_request_ids)
+            outro_parts_by_folder[folder_name] = folder_outro_parts
+
+            if progress_callback is not None and segments_with_beats:
+                progress_callback(folder_name, 1, 1)
+
+        shots = apply_edit_plan_rules(shots, rules_doc, assets_payload_by_folder)
+
+        shots_by_beat: dict[tuple[str, str, str], list[EditPlanShot]] = {}
+        for shot in shots:
+            if shot.beat_id:
+                shots_by_beat.setdefault((shot.folder, shot.voice_file, shot.beat_id), []).append(shot)
+
+        def _beat_resolved(folder: str, voice_file: str, beat_id: str) -> bool:
+            beat_shots = shots_by_beat.get((folder, voice_file, beat_id), [])
+            if any(s.match_quality == MATCH_QUALITY_UNPASSEND for s in beat_shots):
+                return False
+            return bool(beat_shots) and all(s.asset_path for s in beat_shots)
+
+        resolved_request_ids: set[str] = set()
+        reconciled_coverages: list = []
+        for coverage in segment_coverages:
+            if coverage.coverage_status in {COVERAGE_SUPPLEMENT_REQUIRED, COVERAGE_LOCAL_WEAK} and _beat_resolved(
+                coverage.folder_name, coverage.voice_file, coverage.beat_id
+            ):
+                if coverage.supplement_request_id:
+                    resolved_request_ids.add(coverage.supplement_request_id)
+                coverage = coverage.model_copy(
+                    update={"coverage_status": COVERAGE_LOCAL_GOOD, "supplement_request_id": None}
+                )
+            reconciled_coverages.append(coverage)
+        segment_coverages = reconciled_coverages
+
+        shots = [
+            shot.model_copy(update={"coverage_status": ""})
+            if shot.coverage_status == COVERAGE_SUPPLEMENT_REQUIRED
+            and _beat_resolved(shot.folder, shot.voice_file, shot.beat_id)
+            else shot
+            for shot in shots
+        ]
+
+        if resolved_request_ids:
+            pending_supplement_requests = [
+                req
+                for req in pending_supplement_requests
+                if req.supplement_request_id not in resolved_request_ids
+            ]
+            supplement_request_ids = [
+                request_id
+                for request_id in supplement_request_ids
+                if request_id not in resolved_request_ids
+            ]
+
+        if pending_supplement_requests:
+            upsert_requests(project, pending_supplement_requests)
+
+        timeline_items: list = []
+        plan_errors: list[str] = []
+        voiceover_plan = None
+        item_counter = 1
+        grouped: dict[tuple[str, str], list] = {}
+        for shot in shots:
+            if shot.section_outro:
+                continue
+            grouped.setdefault((shot.folder, shot.voice_file), []).append(shot)
+
+        for (folder_name, voice_path), folder_shots in grouped.items():
+            folder_shots.sort(key=lambda s: (s.voice_start_sec, s.voice_end_sec))
+            section_items, section_voiceover, errors = build_timeline_items_for_folder(
+                folder_shots,
                 folder_name=folder_name,
                 voice_file=voice_path,
                 settings=plan_settings,
-                folder_assets=asset_payload,
+                folder_assets=assets_payload_by_folder.get(folder_name, []),
                 trim_leading_sec=trim_leading_sec,
-                item_index_start=1,
+                item_index_start=item_counter,
                 opening_title_enabled=export_opts.folder_title_enabled,
                 opening_title_font=export_opts.folder_title_font,
                 opening_title_duration_sec=export_opts.folder_title_duration_sec,
@@ -905,180 +1139,159 @@ def build_edit_plan(
                 project=project,
                 usage_by_asset_id={},
                 max_asset_usage=max_count,
-                outro_parts=folder_outro_parts,
+                outro_parts=outro_parts_by_folder.get(folder_name),
             )
-            timing_validation = validate_folder_plan_timing(
-                preview_items,
-                settings=plan_settings,
-                voiceover=preview_voiceover,
-            )
-            timing_errors = timing_validation_errors(timing_validation.errors)
-            timing_errors.extend(
-                collect_min_shot_violations(
-                    folder_build.shots,
-                    min_sec=plan_settings.shot_min_sec,
+            plan_errors.extend(errors)
+            timeline_items.extend(section_items)
+            voiceover_plan = section_voiceover
+            item_counter += len(section_items)
+
+        if plan_errors and not timeline_items:
+            raise ValueError("\n".join(plan_errors))
+
+        validation = validate_final_edit_plan(
+            timeline_items,
+            settings=plan_settings,
+            voiceover=voiceover_plan,
+            rules_doc=rules_doc,
+            extra_errors=part_validation_errors,
+        )
+        last_validation_errors = validation.errors
+        last_beats_by_folder = beats_by_folder
+        last_timeline_items = timeline_items
+        last_shots = shots_from_timeline_items(timeline_items)
+        last_segment_coverages = segment_coverages
+
+        combined_beats: dict[str, list[dict]] = {}
+        for folder_name, beats_plan in beats_by_folder.items():
+            for beat_id, parts in beats_plan.items():
+                combined_beats[f"{folder_name}::{beat_id}"] = parts
+
+        gemini_retry_report.append(
+            {
+                "attempt_number": attempt,
+                "prompt_rule_summary": used_rules,
+                "correction_errors_sent_to_gemini": [
+                    error.to_dict() for error in last_validation_errors
+                ]
+                if attempt > 1
+                else [],
+                "validation_errors_returned": [error.to_dict() for error in validation.errors],
+                "accepted": validation.ok,
+                "rejected": not validation.ok,
+            }
+        )
+
+        if validation.ok:
+            plan_inventory_hash = ""
+            if primary_folder:
+                plan_inventory_hash = inventory_hashes.get(primary_folder, "")
+            elif inventory_hashes:
+                plan_inventory_hash = next(iter(inventory_hashes.values()))
+
+            if attempt > 1:
+                plan_generation_notes.append(
+                    f"Plan akzeptiert nach Gemini-Korrektur (Versuch {attempt}/{max_attempts})."
                 )
+
+            document = EditPlanDocument(
+                project_id=project.id,
+                folder_name=primary_folder,
+                confirmed=False,
+                settings=plan_settings,
+                voiceover=voiceover_plan,
+                shots=last_shots,
+                timeline_items=timeline_items,
+                segment_coverage=segment_coverages,
+                inventory_hash_at_plan_time=plan_inventory_hash,
+                supplement_request_ids=sorted(set(supplement_request_ids)),
+                plan_generation_notes=plan_generation_notes,
+                candidate_status="ACCEPTED",
+                validation_status="PASS",
+                gemini_retry_attempts=attempt,
+                used_rules=used_rules,
             )
-            should_retry = (
-                use_api
-                and attempt < max_attempts
-                and should_retry_gemini_for_timing(timing_errors)
+            reports = _write_plan_validation_reports(
+                project.work_dir_path,
+                used_rules=used_rules,
+                validation_errors=[],
+                retry_attempts=attempt,
+                final_status="PASS",
+                gemini_retry_report=gemini_retry_report,
+            )
+            return EditPlanBuildResult(
+                status=EditPlanBuildStatus.ACCEPTED,
+                document=document,
+                validation_status="PASS",
+                candidate_status="ACCEPTED",
+                retry_attempts=attempt,
+                reports=reports,
+                plan_generation_notes=plan_generation_notes,
             )
 
-            if not should_retry:
-                if attempt > 1:
-                    plan_generation_notes.append(
-                        f"{folder_name}: Gemini-Korrektur nach Timing-Validierung "
-                        f"(Versuch {attempt}/{max_attempts})."
-                    )
-                elif timing_errors and use_api:
-                    plan_generation_notes.append(
-                        f"{folder_name}: Timing-Hinweise nach {max_attempts} Versuchen: "
-                        + "; ".join(timing_errors[:3])
-                    )
-                break
-
+        if attempt < max_attempts and validation.has_retryable_errors:
             plan_generation_notes.append(
-                f"{folder_name}: Timing-Validierung fehlgeschlagen (Versuch {attempt}/{max_attempts}) "
-                f"— erneuter Gemini-Lauf."
+                f"Plan-Validierung fehlgeschlagen (Versuch {attempt}/{max_attempts}) — "
+                "erneuter Gemini-Lauf."
+            )
+            retry_messages = [
+                plan_validation_error_to_message(error) for error in validation.retryable_errors
+            ]
+            primary_file_duration = (
+                folder_build_contexts[0]["file_duration"] if folder_build_contexts else None
             )
             correction_instructions = build_plan_folder_correction_instructions(
-                errors=timing_errors,
-                previous_beats=beats_plan,
+                errors=retry_messages,
+                structured_errors=validation.retryable_errors,
+                previous_beats=combined_beats,
                 attempt=attempt + 1,
                 max_attempts=max_attempts,
-                file_duration_sec=file_duration,
+                file_duration_sec=primary_file_duration,
                 shot_min_sec=plan_settings.shot_min_sec,
                 shot_max_sec=plan_settings.shot_max_sec,
             )
-
-        if folder_build is None:
             continue
 
-        shots.extend(folder_build.shots)
-        segment_coverages.extend(folder_build.segment_coverages)
-        pending_supplement_requests.extend(folder_build.pending_supplement_requests)
-        supplement_request_ids.extend(folder_build.supplement_request_ids)
-        outro_parts_by_folder[folder_name] = folder_outro_parts
+        break
 
-        if progress_callback is not None and segments_with_beats:
-            progress_callback(folder_name, 1, 1)
-
-    # Volle Asset-Payloads (inkl. asset_origin/rights_status/provider/...)
-    # übergeben, nicht nur Pfade — sonst blieben bei einer regelbedingten
-    # Asset-Neuzuweisung (max_asset_usage/Min. Abstand) die Metadaten des
-    # VORHER zugewiesenen Assets fälschlich stehen.
-    shots = apply_edit_plan_rules(shots, rules_doc, assets_payload_by_folder)
-
-    # Die Coverage-Bewertung pro Beat ist nur eine grobe Vorab-Schätzung
-    # (Keyword-Heuristik auf den GESAMTEN Beat-Text, bevor Gemini/Regeln den
-    # tatsächlichen Shot-Asset zuweisen). Sobald feststeht, dass alle aus einem
-    # Beat entstandenen Shots am Ende wirklich ein lokales Asset bekommen haben,
-    # darf die Coverage nicht mehr SUPPLEMENT_REQUIRED anzeigen — sonst entsteht
-    # der widersprüchliche Zustand "0 Shots ohne Asset" + "N Beats offen".
-    shots_by_beat: dict[tuple[str, str, str], list[EditPlanShot]] = {}
-    for shot in shots:
-        if shot.beat_id:
-            shots_by_beat.setdefault((shot.folder, shot.voice_file, shot.beat_id), []).append(shot)
-
-    def _beat_resolved(folder: str, voice_file: str, beat_id: str) -> bool:
-        beat_shots = shots_by_beat.get((folder, voice_file, beat_id), [])
-        if any(shot.match_quality == MATCH_QUALITY_UNPASSEND for shot in beat_shots):
-            return False
-        return bool(beat_shots) and all(shot.asset_path for shot in beat_shots)
-
-    resolved_request_ids: set[str] = set()
-    reconciled_coverages: list = []
-    for coverage in segment_coverages:
-        if coverage.coverage_status in {COVERAGE_SUPPLEMENT_REQUIRED, COVERAGE_LOCAL_WEAK} and _beat_resolved(
-            coverage.folder_name, coverage.voice_file, coverage.beat_id
-        ):
-            if coverage.supplement_request_id:
-                resolved_request_ids.add(coverage.supplement_request_id)
-            coverage = coverage.model_copy(
-                update={"coverage_status": COVERAGE_LOCAL_GOOD, "supplement_request_id": None}
-            )
-        reconciled_coverages.append(coverage)
-    segment_coverages = reconciled_coverages
-
-    shots = [
-        shot.model_copy(update={"coverage_status": ""})
-        if shot.coverage_status == COVERAGE_SUPPLEMENT_REQUIRED
-        and _beat_resolved(shot.folder, shot.voice_file, shot.beat_id)
-        else shot
-        for shot in shots
-    ]
-
-    if resolved_request_ids:
-        pending_supplement_requests = [
-            req for req in pending_supplement_requests if req.supplement_request_id not in resolved_request_ids
-        ]
-        supplement_request_ids = [
-            request_id for request_id in supplement_request_ids if request_id not in resolved_request_ids
-        ]
-
-    if pending_supplement_requests:
-        upsert_requests(project, pending_supplement_requests)
-
-    timeline_items: list = []
-    plan_errors: list[str] = []
-    voiceover_plan = None
-    item_counter = 1
-    grouped: dict[tuple[str, str], list] = {}
-    for shot in shots:
-        if shot.section_outro:
-            continue
-        grouped.setdefault((shot.folder, shot.voice_file), []).append(shot)
-
-    for (folder_name, voice_path), folder_shots in grouped.items():
-        folder_shots.sort(key=lambda s: (s.voice_start_sec, s.voice_end_sec))
-        section_items, section_voiceover, errors = build_timeline_items_for_folder(
-            folder_shots,
-            folder_name=folder_name,
-            voice_file=voice_path,
-            settings=plan_settings,
-            folder_assets=assets_payload_by_folder.get(folder_name, []),
-            trim_leading_sec=trim_leading_sec,
-            item_index_start=item_counter,
-            opening_title_enabled=export_opts.folder_title_enabled,
-            opening_title_font=export_opts.folder_title_font,
-            opening_title_duration_sec=export_opts.folder_title_duration_sec,
-            opening_title_font_size=export_opts.folder_title_font_size,
-            work_dir=project.work_dir_path,
-            project=project,
-            usage_by_asset_id={},
-            max_asset_usage=max_count,
-            outro_parts=outro_parts_by_folder.get(folder_name),
-        )
-        plan_errors.extend(errors)
-        timeline_items.extend(section_items)
-        voiceover_plan = section_voiceover
-        item_counter += len(section_items)
-
-    if plan_errors and not timeline_items:
-        raise ValueError("\n".join(plan_errors))
-
-    shots = shots_from_timeline_items(timeline_items)
-
-    plan_inventory_hash = ""
-    if primary_folder:
-        plan_inventory_hash = inventory_hashes.get(primary_folder, "")
-    elif inventory_hashes:
-        plan_inventory_hash = next(iter(inventory_hashes.values()))
-
-    return EditPlanDocument(
-        project_id=project.id,
-        folder_name=primary_folder,
-        confirmed=False,
-        settings=plan_settings,
-        voiceover=voiceover_plan,
-        shots=shots,
-        timeline_items=timeline_items,
-        segment_coverage=segment_coverages,
-        inventory_hash_at_plan_time=plan_inventory_hash,
-        supplement_request_ids=sorted(set(supplement_request_ids)),
+    failed_candidate = {
+        "candidate_status": "BLOCKED",
+        "validation_status": "FAIL",
+        "shots": [shot.model_dump() for shot in last_shots],
+        "timeline_items": [item.model_dump() for item in last_timeline_items],
+        "beats_by_folder": last_beats_by_folder,
+    }
+    reports = _write_plan_validation_reports(
+        project.work_dir_path,
+        used_rules=used_rules,
+        validation_errors=last_validation_errors,
+        retry_attempts=max_attempts,
+        final_status="BLOCKED",
+        gemini_retry_report=gemini_retry_report,
+        failed_candidate=failed_candidate,
+    )
+    plan_generation_notes.append(
+        f"Plan BLOCKED nach {max_attempts} Validierungsversuchen — kein Draft übernommen."
+    )
+    return EditPlanBuildResult(
+        status=EditPlanBuildStatus.BLOCKED,
+        document=None,
+        failed_candidate=failed_candidate,
+        validation_errors=[error.to_dict() for error in last_validation_errors],
+        validation_status="FAIL",
+        candidate_status="BLOCKED",
+        retry_attempts=max_attempts,
+        reports=reports,
         plan_generation_notes=plan_generation_notes,
     )
+
+
+def unwrap_accepted_edit_plan(result: EditPlanBuildResult) -> EditPlanDocument:
+    """Hilfsfunktion für Tests und Aufrufer, die ein akzeptiertes Document erwarten."""
+    if result.status != EditPlanBuildStatus.ACCEPTED or result.document is None:
+        errors = result.validation_errors or []
+        raise ValueError(f"Schnittplan blockiert ({result.status.value}): {errors[:5]}")
+    return result.document
 
 
 def _read_edit_plan_file(path: Path) -> EditPlanDocument | None:

@@ -529,3 +529,7 @@ class EditPlanDocument(BaseModel):
     inventory_hash_at_plan_time: str = ""
     supplement_request_ids: List[str] = Field(default_factory=list)
     plan_generation_notes: List[str] = Field(default_factory=list)
+    candidate_status: str = ""
+    validation_status: str = ""
+    gemini_retry_attempts: int = 0
+    used_rules: dict = Field(default_factory=dict)
