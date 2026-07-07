@@ -19,13 +19,24 @@ from otio_app.analysis_models import EditPlanDocument
 SCRIPT_PATH = Path(__file__).parent / "_apptest_scripts" / "timing_widget_repro.py"
 
 
+from otio_app.services.edit_plan_builder import (
+    EditPlanBuildResult,
+    EditPlanBuildStatus,
+)
+
+
 def _fake_build_edit_plan(project, settings, **kwargs):
-    return EditPlanDocument(
+    document = EditPlanDocument(
         project_id=project.id,
         folder_name="Folder",
         confirmed=False,
         settings=settings,
         shots=[],
+    )
+    return EditPlanBuildResult(
+        status=EditPlanBuildStatus.ACCEPTED,
+        document=document,
+        validation_status="PASS",
     )
 
 
@@ -36,19 +47,13 @@ def test_timing_widgets_survive_tab_switch_and_button_click(tmp_path: Path, monk
     at.run()
     assert not at.exception
 
-    # Werte ändern (wie ein Nutzer, der Min/Max/Modell im Regeln-Tab setzt).
+    # Werte im Vorschlag-Tab ändern.
+    at.radio(key="edit_plan_active_tab_repro-project").set_value("▶️ Vorschlag").run()
     at.number_input(key="plan_min_repro-project").set_value(3.5).run()
     at.number_input(key="plan_max_repro-project").set_value(7.0).run()
     at.selectbox(key="plan_gemini_repro-project").select("gemini-3.1-pro-preview").run()
     assert not at.exception
 
-    assert st_value(at, "MIN=") == "3.5"
-    assert st_value(at, "MAX=") == "7.0"
-    assert st_value(at, "GEMINI=") == "gemini-3.1-pro-preview"
-
-    # Zu "Vorschlag" wechseln.
-    at.radio(key="edit_plan_active_tab_repro-project").set_value("▶️ Vorschlag").run()
-    assert not at.exception
     assert st_value(at, "MIN=") == "3.5"
     assert st_value(at, "MAX=") == "7.0"
     assert st_value(at, "GEMINI=") == "gemini-3.1-pro-preview"
@@ -66,9 +71,8 @@ def test_timing_widgets_survive_tab_switch_and_button_click(tmp_path: Path, monk
     at.radio(key="edit_plan_active_tab_repro-project").set_value("✅ Prüfen & Speichern").run()
     assert not at.exception, at.exception
 
-    # Zurück zu "Regeln" wechseln — DAS ist der Moment, in dem der Nutzer
-    # den Reset beobachtet hat.
-    at.radio(key="edit_plan_active_tab_repro-project").set_value("⚙️ Regeln").run()
+    # Zurück zu "Vorschlag" — Werte müssen erhalten bleiben.
+    at.radio(key="edit_plan_active_tab_repro-project").set_value("▶️ Vorschlag").run()
     assert not at.exception
     assert st_value(at, "MIN=") == "3.5", "Min. Shot wurde zurückgesetzt!"
     assert st_value(at, "MAX=") == "7.0", "Max. Shot wurde zurückgesetzt!"

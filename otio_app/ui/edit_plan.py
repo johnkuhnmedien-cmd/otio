@@ -16,7 +16,6 @@ from otio_app.defaults import (
     DEFAULT_SECTION_OUTRO_SEC,
     DEFAULT_SHOT_MAX_SEC,
     DEFAULT_SHOT_MIN_SEC,
-    FALLBACK_SOURCE_LABELS,
     GEMINI_MODEL_CHOICES,
     MATCH_QUALITY_LABELS,
     MATCH_QUALITY_MITTEL,
@@ -98,7 +97,6 @@ from otio_app.services.otio_export_settings import (
     load_otio_export_settings,
 )
 from otio_app.services.edit_plan_timing_settings import (
-    DEFAULT_TEXT_SPLIT_INPUT,
     EditPlanTimingSettings,
     load_edit_plan_timing_settings,
     save_edit_plan_timing_settings,
@@ -393,9 +391,23 @@ def _plan_number_setting(project_id: str, suffix: str, default: float) -> float:
     return float(st.session_state.get(f"plan_{suffix}_{project_id}", default))
 
 
+def _timing_widget_default(project, suffix: str, hard_default: float) -> float:
+    """Fallback für Timing-Widgets: gespeicherte Datei vor Hardcoded-Default."""
+    saved = load_edit_plan_timing_settings(project)
+    attr_map = {
+        "min": "shot_min_sec",
+        "max": "shot_max_sec",
+        "offset": "audio_offset_sec",
+        "outro": "section_outro_sec",
+    }
+    return float(getattr(saved, attr_map[suffix], hard_default))
+
+
 def _number_input_with_seeded_state(
     label: str,
     *,
+    project,
+    suffix: str,
     key: str,
     default: float,
     min_value: float,
@@ -412,7 +424,7 @@ def _number_input_with_seeded_state(
     if help:
         kwargs["help"] = help
     if key not in st.session_state:
-        kwargs["value"] = float(default)
+        kwargs["value"] = _timing_widget_default(project, suffix, float(default))
     st.number_input(label, **kwargs)
 
 
@@ -468,14 +480,34 @@ def _seed_timing_widgets(project) -> None:
         f"plan_split_{project.id}": saved.text_splitters,
         f"plan_gemini_{project.id}": saved.gemini_model,
     }
+    hard_defaults = {
+        f"plan_min_{project.id}": float(DEFAULT_SHOT_MIN_SEC),
+        f"plan_max_{project.id}": float(DEFAULT_SHOT_MAX_SEC),
+        f"plan_offset_{project.id}": float(DEFAULT_AUDIO_OFFSET_SEC),
+        f"plan_outro_{project.id}": float(DEFAULT_SECTION_OUTRO_SEC),
+    }
     for key, value in seed_map.items():
         if key not in st.session_state:
             st.session_state[key] = value
+            continue
+        hard_default = hard_defaults.get(key)
+        if hard_default is None:
+            continue
+        current = float(st.session_state[key])
+        saved_value = float(value)
+        if abs(current - hard_default) < 0.001 and abs(saved_value - current) > 0.001:
+            st.session_state[key] = saved_value
+
+    gemini_key = f"plan_gemini_{project.id}"
+    default_model = get_default_gemini_model()
+    if gemini_key in st.session_state:
+        current_model = str(st.session_state[gemini_key])
+        if current_model == default_model and saved.gemini_model != current_model:
+            st.session_state[gemini_key] = saved.gemini_model
 
 
 def _persist_timing_widgets(project) -> None:
-    """Speichert die aktuellen Timing-/Gemini-Widget-Werte dauerhaft, sobald der
-    Regeln-Tab gerendert wird — analog zum automatischen Speichern der Regeln.
+    """Speichert Timing-/Gemini-Widget-Werte beim Rendern des Vorschlag-Tabs.
 
     Schreibt NICHT, wenn Min./Max. Shot, Audio-Start und Ausklingen
     gleichzeitig auf ihrem Widget-Minimum stehen (1.0/1.0/0.0/0.0) — dieser
@@ -491,72 +523,34 @@ def _persist_timing_widgets(project) -> None:
     )
     if _looks_like_widget_reset_artifact(current_values):
         return
+    saved = load_edit_plan_timing_settings(project)
     settings = EditPlanTimingSettings(
         shot_min_sec=current_values[0],
         shot_max_sec=current_values[1],
         audio_offset_sec=current_values[2],
         section_outro_sec=current_values[3],
-        text_splitters=_plan_text_setting(project.id, "split", DEFAULT_TEXT_SPLIT_INPUT),
+        text_splitters=saved.text_splitters,
         gemini_model=_plan_gemini_model(project.id),
     )
     save_edit_plan_timing_settings(project, settings)
 
 
-def _export_timing_settings(project) -> OtioExportSettings:
-    """Audio-Start und Ausklingen aus Tab „Timing & Gemini“ (Fallback: gespeicherte JSON)."""
-    saved = load_otio_export_settings(project)
-    return OtioExportSettings(
-        audio_offset_sec=_plan_number_setting(project.id, "offset", saved.audio_offset_sec),
-        section_outro_sec=_plan_number_setting(project.id, "outro", saved.section_outro_sec),
-    )
-
-
-def _plan_text_setting(project_id: str, suffix: str, default: str) -> str:
-    return str(st.session_state.get(f"plan_{suffix}_{project_id}", default))
-
-
-def _plan_gemini_model(project_id: str, default: str | None = None) -> str:
-    fallback = default if default is not None else get_default_gemini_model()
-    return str(st.session_state.get(f"plan_gemini_{project_id}", fallback))
-
-
-def _current_timing_settings(project) -> EditPlanTimingSettings:
-    """Liefert die aktuell wirksamen Timing-/Gemini-Werte für den nächsten
-    Schnittplan-Vorschlag: bevorzugt den Live-Widget-Wert aus dem Regeln-Tab
-    (session_state), fällt aber — falls der Widget-Key aus irgendeinem Grund
-    fehlt — auf die zuletzt GESPEICHERTE Datei zurück statt auf die globalen
-    App-Defaults. Ohne diesen Fallback konnte z. B. ein ausgewähltes
-    Gemini-Modell (etwa „gemini-3.1-pro-preview“) unbemerkt auf den
-    App-Default zurückspringen, sobald der jeweilige session_state-Key aus
-    irgendeinem Grund nicht (mehr) gesetzt war.
-    """
-    saved = load_edit_plan_timing_settings(project)
-    return EditPlanTimingSettings(
-        shot_min_sec=_plan_number_setting(project.id, "min", saved.shot_min_sec),
-        shot_max_sec=_plan_number_setting(project.id, "max", saved.shot_max_sec),
-        audio_offset_sec=_plan_number_setting(project.id, "offset", saved.audio_offset_sec),
-        section_outro_sec=_plan_number_setting(project.id, "outro", saved.section_outro_sec),
-        text_splitters=_plan_text_setting(project.id, "split", saved.text_splitters),
-        gemini_model=_plan_gemini_model(project.id, saved.gemini_model),
-    )
-
-
-def _render_tab_settings(project) -> None:
-    render_edit_plan_rules_manager(project)
-    st.divider()
+def _render_timing_gemini_controls(project) -> None:
+    """Min./Max. Shot, Audio-Start, Ausklingen und Gemini-Modell im Vorschlag-Tab."""
+    _seed_timing_widgets(project)
     st.markdown("**Timing & Gemini**")
     st.caption(
-        "Min./Max. Shot und Gemini-Modell gelten beim **Schnittplan vorschlagen**. "
-        "**Audio-Start** beim OTIO-Export (auch im Gemini-Prompt als Kontext). "
-        "**Ordner-Ausklingen** wird im **selben Gemini-Call** mitgeplant "
-        "(Dauer hier, Asset + Passung von Gemini; je max. **Max. Shot** Sek. "
-        "aufgeteilt). Bei Timing-Fehlern: automatischer Korrektur-Lauf an Gemini "
-        f"(max. {MAX_GEMINI_PLAN_ATTEMPTS} Versuche). Heuristik nur als Fallback."
+        "Diese Werte gelten für den nächsten **Schnittplan vorschlagen**. "
+        "**Audio-Start** und **Ordner-Ausklingen** werden im Schnittplan verankert "
+        "und beim OTIO-Export je Ort übernommen. Bei Timing-Fehlern: automatischer "
+        f"Korrektur-Lauf an Gemini (max. {MAX_GEMINI_PLAN_ATTEMPTS} Versuche)."
     )
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         _number_input_with_seeded_state(
             "Min. Shot (Sek.)",
+            project=project,
+            suffix="min",
             default=float(DEFAULT_SHOT_MIN_SEC),
             min_value=1.0,
             max_value=30.0,
@@ -566,6 +560,8 @@ def _render_tab_settings(project) -> None:
     with col2:
         _number_input_with_seeded_state(
             "Max. Shot (Sek.)",
+            project=project,
+            suffix="max",
             default=float(DEFAULT_SHOT_MAX_SEC),
             min_value=1.0,
             max_value=60.0,
@@ -575,6 +571,8 @@ def _render_tab_settings(project) -> None:
     with col3:
         _number_input_with_seeded_state(
             "Audio-Start (+Sek.)",
+            project=project,
+            suffix="offset",
             default=float(DEFAULT_AUDIO_OFFSET_SEC),
             min_value=0.0,
             max_value=10.0,
@@ -585,6 +583,8 @@ def _render_tab_settings(project) -> None:
     with col4:
         _number_input_with_seeded_state(
             "Ordner-Ausklingen (Sek.)",
+            project=project,
+            suffix="outro",
             default=float(DEFAULT_SECTION_OUTRO_SEC),
             min_value=0.0,
             max_value=30.0,
@@ -601,15 +601,6 @@ def _render_tab_settings(project) -> None:
             "das erzeugt zwangsläufig Shots, die die Max.-Regel verletzen. Bitte Min. Shot "
             "senken oder Max. Shot erhöhen."
         )
-
-    split_key = f"plan_split_{project.id}"
-    split_kwargs = {"key": split_key}
-    if split_key not in st.session_state:
-        split_kwargs["value"] = DEFAULT_TEXT_SPLIT_INPUT
-    st.text_input("Text-Trenner (kommagetrennt)", **split_kwargs)
-    st.caption("Fallback-Reihenfolge (Adobe Stock / Pexels / KI folgen später):")
-    for source in DEFAULT_FALLBACK_ORDER:
-        st.write(f"- {FALLBACK_SOURCE_LABELS.get(source, source)}")
 
     gemini_key = f"plan_gemini_{project.id}"
     model_choices = list(GEMINI_MODEL_CHOICES)
@@ -629,6 +620,41 @@ def _render_tab_settings(project) -> None:
 
     st.caption("💾 Timing- und Gemini-Einstellungen werden automatisch gespeichert.")
     _persist_timing_widgets(project)
+
+
+def _render_tab_settings(project) -> None:
+    render_edit_plan_rules_manager(project)
+
+
+def _export_timing_settings(project) -> OtioExportSettings:
+    """Audio-Start und Ausklingen aus dem Vorschlag-Tab (Fallback: gespeicherte JSON)."""
+    saved = load_otio_export_settings(project)
+    return OtioExportSettings(
+        audio_offset_sec=_plan_number_setting(project.id, "offset", saved.audio_offset_sec),
+        section_outro_sec=_plan_number_setting(project.id, "outro", saved.section_outro_sec),
+    )
+
+
+def _plan_text_setting(project_id: str, suffix: str, default: str) -> str:
+    return str(st.session_state.get(f"plan_{suffix}_{project_id}", default))
+
+
+def _plan_gemini_model(project_id: str, default: str | None = None) -> str:
+    fallback = default if default is not None else get_default_gemini_model()
+    return str(st.session_state.get(f"plan_gemini_{project_id}", fallback))
+
+
+def _current_timing_settings(project) -> EditPlanTimingSettings:
+    """Liefert die aktuell wirksamen Timing-/Gemini-Werte für den nächsten Vorschlag."""
+    saved = load_edit_plan_timing_settings(project)
+    return EditPlanTimingSettings(
+        shot_min_sec=_plan_number_setting(project.id, "min", saved.shot_min_sec),
+        shot_max_sec=_plan_number_setting(project.id, "max", saved.shot_max_sec),
+        audio_offset_sec=_plan_number_setting(project.id, "offset", saved.audio_offset_sec),
+        section_outro_sec=_plan_number_setting(project.id, "outro", saved.section_outro_sec),
+        text_splitters=_plan_text_setting(project.id, "split", saved.text_splitters),
+        gemini_model=_plan_gemini_model(project.id, saved.gemini_model),
+    )
 
 
 def _export_blockers_message(merged: MergedEditPlanResult, folder_selection: tuple[str, ...]) -> str:
@@ -826,7 +852,9 @@ def _run_suggest_edit_plan(
 ) -> None:
     """Gemeinsamer Ablauf für alle Vorschlags-Buttons im Tab Vorschlag."""
     generate_result_key = _generate_result_key(project.id, selected_folder)
+    _seed_timing_widgets(project)
     timing = _current_timing_settings(project)
+    save_edit_plan_timing_settings(project, timing)
     use_gemini = is_gemini_configured()
     settings = EditPlanSettings(
         shot_min_sec=timing.shot_min_sec,
@@ -994,12 +1022,8 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
                 with st.expander("Technische Details (Traceback)", expanded=False):
                     st.code(pending_generate_result["traceback"])
 
-    timing = _current_timing_settings(project)
-    st.caption(
-        f"Gemini-Modell für diesen Vorschlag: **{format_gemini_model_label(timing.gemini_model)}** "
-        f"· Min/Max Shot: {timing.shot_min_sec:.1f}s/{timing.shot_max_sec:.1f}s "
-        "(Tab **Regeln → Timing & Gemini** ändern)."
-    )
+    _render_timing_gemini_controls(project)
+    st.divider()
     col_primary, col_no_val, col_free = st.columns(3)
     with col_primary:
         if st.button(
@@ -1570,7 +1594,7 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
     st.caption(
         "Orte wählen, Dateiname anpassen, dann **OTIO exportieren** — Vorschau ist optional. "
         "Audio-Start und Ausklingen sind **pro Ort fest im Schnittplan verankert** "
-        "(Wert beim **Schnittplan vorschlagen/bestätigen**, Tab **Regeln → Timing & Gemini**) — "
+        "(Wert beim **Schnittplan vorschlagen/bestätigen**, Tab **Vorschlag → Timing & Gemini**) — "
         "der Export übernimmt sie unverändert je Ort, unabhängig von der aktuell "
         "eingestellten globalen Regel. Um Audio-Start/Ausklingen für einen Ort zu ändern, "
         "Schnittplan dort neu vorschlagen und erneut bestätigen."
