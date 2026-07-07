@@ -8,9 +8,11 @@ from otio_app.services.duration_rules import split_total_duration
 from otio_app.services.shot_timing import (
     TimedPart,
     allocate_time_by_text,
+    allocate_time_with_constraints,
     coalesce_gemini_parts_for_min_shot,
     max_parts_for_segment,
     merge_short_voice_windows,
+    normalize_gemini_parts_for_segment,
     shots_from_timed_parts,
 )
 
@@ -118,7 +120,13 @@ def test_max_parts_for_segment_respects_min_shot() -> None:
 
 def test_merge_short_voice_windows_combines_tail_slices() -> None:
     texts = ["a", "b", "c", "d"]
-    ranges = allocate_time_by_text(88.0, 94.88, texts)
+    ranges = allocate_time_with_constraints(
+        88.0,
+        94.88,
+        texts,
+        min_sec=3.0,
+        max_sec=8.0,
+    )
     timed = [
         TimedPart(t, "m", start, end, "/tmp/clip.mp4", None)
         for t, (start, end) in zip(texts, ranges)
@@ -127,3 +135,73 @@ def test_merge_short_voice_windows_combines_tail_slices() -> None:
     assert len(merged) < len(timed)
     assert merged[-1].end_sec == pytest.approx(94.88, abs=0.01)
     assert all(part.end_sec - part.start_sec + 0.01 >= 3.0 for part in merged[:-1])
+
+
+def test_allocate_time_with_constraints_respects_min_and_max() -> None:
+    """Regression: textgewichtete Aufteilung darf keine Shots < min oder > max erzeugen."""
+    texts = ["kurz", "sehr langer Textanteil mit vielen Wörtern"]
+    ranges = allocate_time_with_constraints(
+        0.0,
+        10.0,
+        texts,
+        min_sec=3.0,
+        max_sec=8.0,
+    )
+    durations = [end - start for start, end in ranges]
+    assert len(durations) == 2
+    assert sum(durations) == pytest.approx(10.0, abs=0.05)
+    assert all(3.0 - 0.05 <= duration <= 8.0 + 0.05 for duration in durations)
+
+
+def test_allocate_time_with_constraints_short_segment_single_range() -> None:
+    ranges = allocate_time_with_constraints(
+        5.0,
+        7.4,
+        ["kurzer Text"],
+        min_sec=3.0,
+        max_sec=8.0,
+    )
+    assert ranges == [(5.0, 7.4)]
+
+
+def test_normalize_gemini_parts_merges_when_too_many() -> None:
+    parts = [
+        {"text": f"Teil {index}", "motif": "m", "asset_path": f"/{index}.mp4"}
+        for index in range(6)
+    ]
+    result = normalize_gemini_parts_for_segment(
+        parts,
+        segment_duration=18.0,
+        min_sec=3.0,
+        max_sec=8.0,
+    )
+    assert result.part_count_ok is True
+    assert len(result.parts) <= 6
+    assert len(result.parts) >= 3
+
+
+def test_normalize_gemini_parts_flags_insufficient_parts_for_long_segment() -> None:
+    parts = [{"text": "Ein langer Block", "motif": "m", "asset_path": "/a.mp4"}]
+    result = normalize_gemini_parts_for_segment(
+        parts,
+        segment_duration=18.0,
+        min_sec=3.0,
+        max_sec=8.0,
+    )
+    assert result.part_count_ok is False
+    assert result.part_count_error_type == "INSUFFICIENT_PARTS"
+    assert result.allowed_parts_min == 3
+    assert result.actual_parts == 1
+
+
+def test_normalize_gemini_parts_allows_single_part_for_short_segment() -> None:
+    parts = [{"text": "Kurz", "motif": "m", "asset_path": "/a.mp4"}]
+    result = normalize_gemini_parts_for_segment(
+        parts,
+        segment_duration=2.4,
+        min_sec=3.0,
+        max_sec=8.0,
+    )
+    assert result.part_count_ok is True
+    assert result.short_segment_allowed is True
+    assert len(result.parts) == 1

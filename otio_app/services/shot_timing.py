@@ -99,19 +99,27 @@ def coalesce_gemini_parts_for_min_shot(
     max_sec: float,
 ) -> list[dict]:
     """Führt Gemini-parts zusammen, bevor die Zeit verteilt wird (Min.-Shot erzwingen)."""
-    if not parts:
-        return []
+    return normalize_gemini_parts_for_segment(
+        parts,
+        segment_duration=segment_duration,
+        min_sec=min_sec,
+        max_sec=max_sec,
+    ).parts
+
+
+@dataclass(frozen=True)
+class NormalizePartsResult:
+    parts: list[dict]
+    part_count_ok: bool
+    part_count_error_type: str | None = None
+    allowed_parts_min: int = 1
+    allowed_parts_max: int = 1
+    actual_parts: int = 0
+    short_segment_allowed: bool = False
+
+
+def _merge_parts_down_to_count(parts: list[dict], target_count: int) -> list[dict]:
     merged = [dict(part) for part in parts]
-    if segment_duration <= 0.05:
-        return merged
-
-    target_count = max_parts_for_segment(segment_duration, min_sec=min_sec)
-    if segment_duration + 0.01 < min_sec:
-        combined = merged[0]
-        for part in merged[1:]:
-            combined = _merge_gemini_parts(combined, part)
-        return [combined]
-
     while len(merged) > target_count:
         best_index = 0
         best_weight = len(str(merged[0].get("text", ""))) + len(str(merged[1].get("text", "")))
@@ -124,8 +132,69 @@ def coalesce_gemini_parts_for_min_shot(
                 best_index = index
         merged[best_index] = _merge_gemini_parts(merged[best_index], merged[best_index + 1])
         merged.pop(best_index + 1)
-
     return merged
+
+
+def normalize_gemini_parts_for_segment(
+    parts: list[dict],
+    *,
+    segment_duration: float,
+    min_sec: float,
+    max_sec: float,
+) -> NormalizePartsResult:
+    """Normalisiert Gemini-parts auf erlaubte Anzahl; meldet zu wenige/zu viele Parts."""
+    bounds = allowed_parts_for_segment(segment_duration, min_sec=min_sec, max_sec=max_sec)
+    if not parts:
+        return NormalizePartsResult(
+            parts=[],
+            part_count_ok=True,
+            allowed_parts_min=bounds.min_parts,
+            allowed_parts_max=bounds.max_parts,
+            short_segment_allowed=bounds.short_segment_allowed,
+        )
+
+    merged = [dict(part) for part in parts]
+    if segment_duration <= 0.05:
+        return NormalizePartsResult(
+            parts=merged,
+            part_count_ok=True,
+            allowed_parts_min=bounds.min_parts,
+            allowed_parts_max=bounds.max_parts,
+            actual_parts=len(merged),
+            short_segment_allowed=bounds.short_segment_allowed,
+        )
+
+    if bounds.short_segment_allowed:
+        combined = merged[0]
+        for part in merged[1:]:
+            combined = _merge_gemini_parts(combined, part)
+        return NormalizePartsResult(
+            parts=[combined],
+            part_count_ok=True,
+            allowed_parts_min=bounds.min_parts,
+            allowed_parts_max=bounds.max_parts,
+            actual_parts=1,
+            short_segment_allowed=True,
+        )
+
+    merged = _merge_parts_down_to_count(merged, bounds.max_parts)
+    actual = len(merged)
+    part_count_ok = bounds.min_parts <= actual <= bounds.max_parts
+    error_type: str | None = None
+    if actual < bounds.min_parts:
+        error_type = "INSUFFICIENT_PARTS"
+    elif actual > bounds.max_parts:
+        error_type = "TOO_MANY_PARTS"
+
+    return NormalizePartsResult(
+        parts=merged,
+        part_count_ok=part_count_ok,
+        part_count_error_type=error_type,
+        allowed_parts_min=bounds.min_parts,
+        allowed_parts_max=bounds.max_parts,
+        actual_parts=actual,
+        short_segment_allowed=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -228,6 +297,87 @@ def allocate_time_by_text(
             part_duration = total * (weight / total_weight)
             ranges.append((cursor, cursor + part_duration))
             cursor += part_duration
+    return ranges
+
+
+def _round_to_frame_boundary(sec: float, fps: float) -> float:
+    if fps <= 0:
+        return sec
+    frame = 1.0 / fps
+    return round(sec / frame) * frame
+
+
+def allocate_time_with_constraints(
+    start_sec: float,
+    end_sec: float,
+    texts: list[str],
+    *,
+    min_sec: float,
+    max_sec: float,
+    fps: float = 25.0,
+) -> list[tuple[float, float]]:
+    """Verteilt Segmentzeit auf Parts — harte Min./Max.-Shot-Grenzen, Text nur als Gewicht."""
+    if not texts:
+        return []
+    part_count = len(texts)
+    total = max(0.0, end_sec - start_sec)
+    if part_count == 1 or total + 0.01 < min_sec:
+        return [(start_sec, end_sec)]
+
+    weights = [max(1.0, float(len(text.strip()))) for text in texts]
+    weight_sum = sum(weights)
+    durations = [total * weight / weight_sum for weight in weights]
+
+    for _ in range(part_count * 4):
+        changed = False
+        for index, duration in enumerate(durations):
+            if duration > max_sec + 1e-9:
+                surplus = duration - max_sec
+                durations[index] = max_sec
+                recipients = [
+                    recipient
+                    for recipient in range(part_count)
+                    if recipient != index and durations[recipient] < max_sec - 1e-9
+                ]
+                for recipient in recipients:
+                    headroom = max_sec - durations[recipient]
+                    give = min(surplus / max(1, len(recipients)), headroom)
+                    durations[recipient] += give
+                    surplus -= give
+                changed = True
+        for index, duration in enumerate(durations):
+            if duration < min_sec - 1e-9:
+                deficit = min_sec - duration
+                durations[index] = min_sec
+                donors = [
+                    donor
+                    for donor in range(part_count)
+                    if donor != index and durations[donor] > min_sec + 1e-9
+                ]
+                for donor in donors:
+                    available = durations[donor] - min_sec
+                    take = min(deficit / max(1, len(donors)), available)
+                    durations[donor] -= take
+                    deficit -= take
+                changed = True
+        if not changed:
+            break
+
+    drift = total - sum(durations)
+    if abs(drift) > 1e-6:
+        durations[-1] += drift
+
+    cursor = start_sec
+    ranges: list[tuple[float, float]] = []
+    for index, duration in enumerate(durations):
+        if index == part_count - 1:
+            ranges.append((cursor, end_sec))
+            continue
+        next_cursor = _round_to_frame_boundary(cursor + duration, fps)
+        if next_cursor <= cursor + 1e-9:
+            next_cursor = cursor + duration
+        ranges.append((cursor, next_cursor))
+        cursor = next_cursor
     return ranges
 
 

@@ -77,9 +77,9 @@ from otio_app.services.supplement_coverage import (
 from otio_app.services.supplement_requests import upsert_requests
 from otio_app.services.shot_timing import (
     TimedPart,
-    allocate_time_by_text,
-    coalesce_gemini_parts_for_min_shot,
+    allocate_time_with_constraints,
     merge_short_voice_windows,
+    normalize_gemini_parts_for_segment,
     shots_from_timed_parts,
 )
 from otio_app.services.media_utils import probe_duration_seconds
@@ -527,18 +527,21 @@ def _folder_shots_from_beats_plan(
             ]
 
         segment_duration = max(0.0, segment.end_sec - segment.start_sec)
-        raw_parts = coalesce_gemini_parts_for_min_shot(
+        normalized_parts = normalize_gemini_parts_for_segment(
             raw_parts,
             segment_duration=segment_duration,
             min_sec=plan_settings.shot_min_sec,
             max_sec=plan_settings.shot_max_sec,
         )
+        raw_parts = normalized_parts.parts
 
         texts = [str(part.get("text", "")).strip() for part in raw_parts]
-        time_ranges = allocate_time_by_text(
+        time_ranges = allocate_time_with_constraints(
             segment.start_sec,
             segment.end_sec,
             texts,
+            min_sec=plan_settings.shot_min_sec,
+            max_sec=plan_settings.shot_max_sec,
         )
         timed_parts: list[TimedPart] = []
         for part, (start_sec, end_sec) in zip(raw_parts, time_ranges):
