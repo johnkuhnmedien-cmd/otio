@@ -27,6 +27,7 @@ from otio_app.services.clean_media import (
     process_media_file,
     resolve_effective_media_path,
     save_clean_media_manifest,
+    transcode_to_clean,
     validate_media_file,
 )
 from otio_app.services.edit_plan_rules import RULE_AUTO_ZOOM_FILL, save_edit_plan_rules
@@ -555,3 +556,48 @@ def test_ensure_zoomed_media_for_export_returns_rezoomed_clean(
     assert resolved == filled_clean
     assert mock_transcode.called
     assert any("3840" in note for note in notes)
+
+
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+@patch("otio_app.services.clean_media.path_is_readable_file", return_value=True)
+@patch("otio_app.services.clean_media._run_command")
+@patch("otio_app.services.clean_media.probe_media")
+def test_transcode_to_clean_strips_all_metadata(
+    mock_probe,
+    mock_run_command,
+    _mock_readable,
+    _mock_validate,
+    tmp_path: Path,
+) -> None:
+    """Regression: Der Clean-Media-Transcode mappt bewusst nur Video-/
+    Audio-Stream (kein tmcd-Datenstream) und setzt -reset_timestamps 1 —
+    die Frames der Ausgabedatei starten also faktisch bei Null. Ohne
+    -map_metadata -1 kopiert ffmpeg per Default aber trotzdem GLOBALE
+    Container-Metadaten (inkl. eines eventuellen format-level
+    'timecode'-Tags) vom Original in die Ausgabedatei. Dadurch behauptete
+    die 'clean' Datei weiterhin den ALTEN (Kamera-)Timecode, obwohl ihr
+    tatsächlicher Frame-Inhalt bei Null zurückgesetzt wurde — ein
+    Metadaten-/Inhalt-Mismatch, der beim OTIO-Export zu falschen
+    available_range-Werten und in DaVinci Resolve zu 'Media Offline'/
+    Timecode-Mismatch-Meldungen führen konnte, obwohl die richtige Datei
+    referenziert wurde."""
+    original = tmp_path / "Bisti_De_Na_Zin_Wilderness_Asset16.mp4"
+    original.write_bytes(b"x")
+    output_path = tmp_path / "clean" / "Bisti_De_Na_Zin_Wilderness_Asset16.mp4"
+
+    mock_probe.return_value = MediaProbeInfo(video_codec="h264", audio_codec="aac", container="mp4")
+
+    def _fake_run_command(command, **kwargs):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"x" * 2000)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    mock_run_command.side_effect = _fake_run_command
+
+    transcode_to_clean(original, output_path)
+
+    assert mock_run_command.called
+    command = mock_run_command.call_args[0][0]
+    assert "-map_metadata" in command, f"'-map_metadata -1' fehlt im ffmpeg-Kommando: {command}"
+    idx = command.index("-map_metadata")
+    assert command[idx + 1] == "-1"

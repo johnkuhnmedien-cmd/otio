@@ -412,6 +412,8 @@ def transcode_to_clean(
             str(original),
             "-map",
             "0:v:0",
+            "-map_metadata",
+            "-1",
             "-reset_timestamps",
             "1",
         ]
