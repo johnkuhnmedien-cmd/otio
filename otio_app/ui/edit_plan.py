@@ -191,8 +191,8 @@ def _render_match_quality_badge(shot: EditPlanShot) -> None:
     st.write(f"**Passung (Gemini):** {icon} {label}")
     if shot.match_quality == MATCH_QUALITY_UNPASSEND:
         st.caption(
-            "Als unpassend bewertet — bitte unter **②½ Supplement Assets** "
-            "oder über die Batch-Suche unten ergänzen."
+            "Platzhalter-Asset (Establishing/Luftaufnahme) — für ein passendes Motiv "
+            "kannst du unten **Supplement Assets** starten oder unter **②½** ergänzen."
         )
 
 
@@ -854,7 +854,7 @@ def _render_tab_review(
     if unpassend_shots:
         st.warning(
             f"{len(unpassend_shots)} Shot(s) als **unpassend** bewertet — "
-            "bitte unter **②½ Supplement Assets** ergänzen."
+            "nutzen ein Platzhalter-Asset. Du kannst unten **Supplement Assets** starten."
         )
 
     weak_with_asset = [
@@ -961,19 +961,29 @@ def _render_tab_review(
     if violations:
         st.warning(f"{len(violations)} Regelverletzung(en) im aktuellen Vorschlag.")
 
-    missing_shots = [
+    supplementable_shots = [
         (index, shot)
         for index, shot in enumerate(draft.shots, start=1)
-        if not shot.asset_path
+        if not shot.asset_path or shot.match_quality == MATCH_QUALITY_UNPASSEND
     ]
-    if missing_shots:
-        st.markdown("### Fehlende Assets supplementieren")
+    if supplementable_shots:
+        unpassend_count = sum(
+            1 for _, shot in supplementable_shots if shot.match_quality == MATCH_QUALITY_UNPASSEND
+        )
+        missing_count = len(supplementable_shots) - unpassend_count
+        st.markdown("### Supplement Assets starten")
+        detail_parts: list[str] = []
+        if unpassend_count:
+            detail_parts.append(f"{unpassend_count} unpassend (Platzhalter aktiv)")
+        if missing_count:
+            detail_parts.append(f"{missing_count} ohne Asset")
         st.caption(
-            f"{len(missing_shots)} Shot(s) ohne Asset. "
-            "Hier kannst du für alle fehlenden Shots in einem Durchlauf Supplement-Kandidaten suchen."
+            f"{len(supplementable_shots)} Shot(s) — "
+            + " · ".join(detail_parts)
+            + ". Batch-Suche startet Supplement-Kandidaten für alle."
         )
         source = st.selectbox(
-            "Quelle für alle fehlenden Assets",
+            "Quelle für Supplement-Suche",
             options=list(SUPPLEMENT_SOURCE_LABELS.keys()),
             format_func=lambda key: SUPPLEMENT_SOURCE_LABELS[key],
             key=f"batch_supplement_source_{project.id}_{safe_folder_slug(selected_folder)}",
@@ -988,14 +998,14 @@ def _render_tab_review(
             )
 
         if st.button(
-            "Alle fehlenden Supplement-Kandidaten suchen",
+            "Supplement-Kandidaten suchen",
             key=f"batch_supplement_search_{project.id}_{safe_folder_slug(selected_folder)}",
         ):
             try:
                 existing = load_supplement_requests(project)
                 existing_ids = {request.supplement_request_id for request in existing.requests}
                 requests: list[SupplementRequest] = []
-                for shot_index, shot in missing_shots:
+                for shot_index, shot in supplementable_shots:
                     request_id = (
                         shot.supplement_request_id
                         or f"supp_req_{safe_folder_slug(selected_folder)}_{shot_index:03d}"
@@ -1014,6 +1024,12 @@ def _render_tab_review(
                         )
                     else:
                         passage = shot.passage_text or shot.motif or f"Shot {shot_index}"
+                        reason = (
+                            "Gemini bewertete das Asset als unpassend — Supplement-Suche gestartet."
+                            if shot.match_quality == MATCH_QUALITY_UNPASSEND
+                            else "Schnittplan enthält für dieses Voice-over-Segment kein Asset. "
+                            "Batch-Suche aus dem Schnittplan gestartet."
+                        )
                         request = SupplementRequest(
                             supplement_request_id=request_id,
                             section_id=section_id_for_folder(selected_folder),
@@ -1022,10 +1038,7 @@ def _render_tab_review(
                             passage_text=passage,
                             visual_requirement=shot.motif or passage,
                             duration_needed_sec=max(0.1, shot.duration_sec),
-                            reason=(
-                                "Schnittplan enthält für dieses Voice-over-Segment kein Asset. "
-                                "Batch-Suche aus dem Schnittplan gestartet."
-                            ),
+                            reason=reason,
                             local_best_asset_id=shot.asset_id,
                             local_best_match_score=0.0,
                             selected_source=source,
@@ -1078,6 +1091,8 @@ def _render_tab_review(
             _render_match_quality_badge(shot)
             if shot.asset_path:
                 st.write(f"**Asset:** `{Path(shot.asset_path).name}`")
+                if shot.match_quality == MATCH_QUALITY_UNPASSEND:
+                    st.caption("Platzhalter-Asset (Establishing/Luftaufnahme)")
                 if shot.asset_origin and shot.asset_origin != "local_original":
                     st.caption(
                         f"Supplement: {shot.provider or shot.asset_origin} · "

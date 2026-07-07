@@ -712,10 +712,17 @@ def test_unpassend_match_quality_creates_supplement_request(
                     path=media_path,
                     description="Parkplatz und Souvenirshop",
                     asset_id="asset_irrelevant",
-                )
+                ),
+                AssetMediaAnalysis(
+                    path=str(temp_project_layout["project_root"] / "Grand Canyon" / "aerial.mp4"),
+                    description="Luftaufnahme Establishing Overview der Landschaft",
+                    asset_id="asset_aerial",
+                ),
             ],
         ),
     )
+    aerial_path = str(temp_project_layout["project_root"] / "Grand Canyon" / "aerial.mp4")
+    Path(aerial_path).write_bytes(b"mp4")
 
     def fake_plan_folder_assets(**kwargs):
         return [
@@ -742,6 +749,7 @@ def test_unpassend_match_quality_creates_supplement_request(
     assert len(narrative_shots) == 1
     shot = narrative_shots[0]
     assert shot.match_quality == MATCH_QUALITY_UNPASSEND
-    assert shot.asset_path is None
+    assert shot.asset_path is not None
+    assert shot.asset_id == "asset_aerial"
     assert shot.supplement_request_id
     assert document.supplement_request_ids

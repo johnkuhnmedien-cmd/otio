@@ -94,6 +94,7 @@ def supplement_request_from_unpassend_shot(
     duration_sec: float,
     shot_index: int,
     request_id: str | None = None,
+    placeholder_asset_id: str = "",
 ) -> SupplementRequest:
     """Erzeugt einen Supplement-Request für einen als unpassend bewerteten Shot."""
     now = datetime.now(timezone.utc)
@@ -102,6 +103,11 @@ def supplement_request_from_unpassend_shot(
         folder_name=folder_name,
         visual_requirement=visual_requirement,
         passage_text=passage_text,
+    )
+    placeholder_note = (
+        f" Platzhalter-Asset: {placeholder_asset_id}."
+        if placeholder_asset_id
+        else ""
     )
     return SupplementRequest(
         supplement_request_id=request_id or f"supp_req_{uuid.uuid4().hex[:8]}",
@@ -114,10 +120,10 @@ def supplement_request_from_unpassend_shot(
         visual_requirement=visual_requirement,
         duration_needed_sec=max(0.1, duration_sec),
         reason=(
-            "Gemini bewertete das lokale Asset als unpassend. "
-            f"Benötigt: {visual_requirement[:120]}"
+            "Gemini bewertete das lokale Asset als unpassend."
+            f"{placeholder_note} Benötigt: {visual_requirement[:120]}"
         ),
-        local_best_asset_id="",
+        local_best_asset_id=placeholder_asset_id,
         local_best_match_score=0.0,
         search_queries={
             "de": [visual_requirement[:120]],

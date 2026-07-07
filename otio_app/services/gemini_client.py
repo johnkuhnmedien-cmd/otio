@@ -410,7 +410,8 @@ def build_plan_folder_prompt(
             "Vermeide unnötige Wiederholungen, aber inhaltliche Passung hat Priorität.",
             "Wenn die Passage mehrere Sehenswürdigkeiten/Motive nennt, erstelle mehrere Teile.",
             "Bewerte die visuelle Passung jedes Teils: sehr_gut, gut, mittel oder unpassend.",
-            "Bei unpassend: asset_path auf null setzen.",
+            "Bei unpassend: wähle kein spezifisches Motiv-Asset — asset_path auf null setzen "
+            "(ein generisches Platzhalter-Asset wird lokal ergänzt).",
             "",
             "Antworte NUR als JSON:",
             (

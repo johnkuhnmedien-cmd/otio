@@ -410,8 +410,17 @@ def apply_edit_plan_rules(
 
     for position, shot in enumerate(shots):
         if shot.match_quality == MATCH_QUALITY_UNPASSEND:
+            if shot.asset_path:
+                chosen_key = _asset_key(shot.asset_path)
+                if chosen_key is not None:
+                    usage[chosen_key] = usage.get(chosen_key, 0) + 1
+                    last_used_at[chosen_key] = position
+                    previous_key = chosen_key
+                else:
+                    previous_key = None
+            else:
+                previous_key = None
             adjusted.append(shot)
-            previous_key = None
             continue
 
         folder_asset_map = normalized_by_folder.get(shot.folder, {})
