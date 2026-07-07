@@ -174,6 +174,39 @@ def _effective_draft(
     return draft
 
 
+def _sync_draft_from_saved_if_newer(
+    project,
+    folder_name: str,
+    saved: EditPlanDocument | None,
+) -> None:
+    """Übernimmt einen frisch gespeicherten Plan (z. B. nach Supplement-Replan)
+    in den Session-Entwurf, wenn der Browser noch einen veralteten Stand hat."""
+    if saved is None:
+        return
+    draft = _get_draft(project.id, folder_name)
+    should_replace = draft is None
+    if draft is not None:
+        if saved.generated_at > draft.generated_at:
+            should_replace = True
+        elif (
+            draft.inventory_hash_at_plan_time
+            and inventory_hash_is_stale(
+                project,
+                folder_name,
+                draft.inventory_hash_at_plan_time,
+            )
+            and saved.inventory_hash_at_plan_time
+            and not inventory_hash_is_stale(
+                project,
+                folder_name,
+                saved.inventory_hash_at_plan_time,
+            )
+        ):
+            should_replace = True
+    if should_replace:
+        _set_draft(saved, folder_name)
+
+
 def _location_state_label(state: EditPlanLocationState) -> str:
     labels = {
         EditPlanLocationState.CONFIRMED: "Abgeschlossen",
@@ -1039,8 +1072,8 @@ def _render_tab_review(
         selected_folder,
         draft.inventory_hash_at_plan_time,
     ):
-        st.error(
-            "Inventory changed — please regenerate cut plan. "
+        st.warning(
+            "Inventory geändert — bitte Schnittplan mit neuen Assets neu vorschlagen. "
             f"(Plan-Hash `{draft.inventory_hash_at_plan_time}`, "
             f"aktuell `{current_folder_inventory_hash(project, selected_folder)}`)"
         )
@@ -1711,12 +1744,28 @@ def render_edit_plan_page() -> None:
     st.caption(f"Speicherort: `{plan_path}`")
 
     saved = load_edit_plan(project, selected_folder)
+    _sync_draft_from_saved_if_newer(project, selected_folder, saved)
     if saved is not None and saved.confirmed:
-        st.success(f"Schnittplan für **{selected_folder}** bestätigt.")
-        st.caption(
-            "Regeln geändert? Unter **Vorschlag** erneut **Schnittplan vorschlagen**, "
-            "dann unter **Prüfen & Speichern** neu bestätigen."
+        inventory_stale = (
+            saved.inventory_hash_at_plan_time
+            and inventory_hash_is_stale(
+                project,
+                selected_folder,
+                saved.inventory_hash_at_plan_time,
+            )
         )
+        if inventory_stale:
+            st.warning(
+                f"Schnittplan für **{selected_folder}** war bestätigt, "
+                "aber das Inventory hat sich geändert — bitte unter **Vorschlag** "
+                "neu vorschlagen und erneut bestätigen."
+            )
+        else:
+            st.success(f"Schnittplan für **{selected_folder}** bestätigt.")
+            st.caption(
+                "Regeln geändert? Unter **Vorschlag** erneut **Schnittplan vorschlagen**, "
+                "dann unter **Prüfen & Speichern** neu bestätigen."
+            )
 
     active_tab = st.radio(
         "Schnittplan-Schritt",

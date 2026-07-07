@@ -1297,6 +1297,17 @@ def unwrap_accepted_edit_plan(result: EditPlanBuildResult) -> EditPlanDocument:
     return result.document
 
 
+def persist_accepted_edit_plan(
+    project: Project,
+    result: EditPlanBuildResult,
+    folder_name: str,
+) -> EditPlanDocument:
+    """Speichert ein akzeptiertes Build-Ergebnis als Ordner-Schnittplan."""
+    document = unwrap_accepted_edit_plan(result)
+    save_edit_plan(project, document, folder_name)
+    return document
+
+
 def _read_edit_plan_file(path: Path) -> EditPlanDocument | None:
     if not path.is_file():
         return None

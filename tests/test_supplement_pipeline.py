@@ -1532,6 +1532,7 @@ def test_analyze_and_update_inventory_auto_replan_triggers_build_edit_plan(
         confirmed=False,
         shots=[],
     )
+    from otio_app.services.edit_plan_builder import EditPlanBuildResult, EditPlanBuildStatus
 
     with patch(
         "otio_app.services.supplement_pipeline.load_sidecar",
@@ -1542,7 +1543,10 @@ def test_analyze_and_update_inventory_auto_replan_triggers_build_edit_plan(
         "otio_app.services.supplement_pipeline.extend_folder_inventory",
     ) as mock_extend, patch(
         "otio_app.services.edit_plan_builder.build_edit_plan",
-        return_value=fake_plan,
+        return_value=EditPlanBuildResult(
+            status=EditPlanBuildStatus.ACCEPTED,
+            document=fake_plan,
+        ),
     ) as mock_build_plan, patch(
         "otio_app.services.supplement_pipeline.mark_edit_plans_stale_for_folder",
     ):
@@ -1608,6 +1612,7 @@ def test_replan_folder_after_supplement_uses_persisted_timing_settings(tmp_path:
     verwenden, sondern muss die persistierten Timing-/Gemini-Einstellungen
     (edit_plan_timing_settings.json) respektieren."""
     from otio_app.analysis_models import EditPlanDocument
+    from otio_app.services.edit_plan_builder import EditPlanBuildResult, EditPlanBuildStatus
     from otio_app.services.edit_plan_timing_settings import (
         EditPlanTimingSettings,
         save_edit_plan_timing_settings,
@@ -1625,7 +1630,10 @@ def test_replan_folder_after_supplement_uses_persisted_timing_settings(tmp_path:
     )
     with patch(
         "otio_app.services.edit_plan_builder.build_edit_plan",
-        return_value=fake_plan,
+        return_value=EditPlanBuildResult(
+            status=EditPlanBuildStatus.ACCEPTED,
+            document=fake_plan,
+        ),
     ) as mock_build_plan:
         result = replan_folder_after_supplement(project, "Antelope Canyon")
 
@@ -1636,6 +1644,44 @@ def test_replan_folder_after_supplement_uses_persisted_timing_settings(tmp_path:
     assert used_settings.shot_min_sec == 4.5
     assert used_settings.shot_max_sec == 12.0
     assert used_settings.gemini_model == "gemini-custom"
+
+
+def test_replan_folder_after_supplement_persists_accepted_document(tmp_path: Path) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from otio_app.analysis_models import EditPlanDocument
+    from otio_app.services.edit_plan_builder import (
+        EditPlanBuildResult,
+        EditPlanBuildStatus,
+        load_edit_plan,
+    )
+    from otio_app.services.supplement_pipeline import replan_folder_after_supplement
+
+    project = _project(tmp_path)
+    now = datetime.now(timezone.utc)
+    fresh_plan = EditPlanDocument(
+        generated_at=now,
+        project_id=project.id,
+        folder_name="Antelope Canyon",
+        confirmed=False,
+        shots=[EditPlanShot(voice_file="v", folder="Antelope Canyon", voice_start_sec=0.0, voice_end_sec=3.0, duration_sec=3.0)],
+        inventory_hash_at_plan_time="fresh-hash",
+    )
+
+    with patch(
+        "otio_app.services.edit_plan_builder.build_edit_plan",
+        return_value=EditPlanBuildResult(
+            status=EditPlanBuildStatus.ACCEPTED,
+            document=fresh_plan,
+        ),
+    ):
+        result = replan_folder_after_supplement(project, "Antelope Canyon")
+
+    assert result["replanned"] is True
+    saved = load_edit_plan(project, "Antelope Canyon")
+    assert saved is not None
+    assert saved.inventory_hash_at_plan_time == "fresh-hash"
+    assert len(saved.shots) == 1
 
 
 def test_materialize_requests_prunes_stale_untouched_supplement_requests(tmp_path: Path) -> None:

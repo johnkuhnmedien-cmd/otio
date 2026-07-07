@@ -944,7 +944,12 @@ def replan_folder_after_supplement(
     """
     from otio_app.analysis_models import EditPlanSettings
     from otio_app.defaults import DEFAULT_FALLBACK_ORDER
-    from otio_app.services.edit_plan_builder import build_edit_plan
+    from otio_app.services.edit_plan_builder import (
+        EditPlanBuildResult,
+        EditPlanBuildStatus,
+        build_edit_plan,
+        persist_accepted_edit_plan,
+    )
     from otio_app.services.edit_plan_rules import load_edit_plan_rules
     from otio_app.services.edit_plan_timing_settings import load_edit_plan_timing_settings
 
@@ -959,7 +964,7 @@ def replan_folder_after_supplement(
         fallback_order=list(DEFAULT_FALLBACK_ORDER),
     )
     try:
-        plan = build_edit_plan(
+        result = build_edit_plan(
             project,
             settings,
             use_api=is_gemini_configured(),
@@ -969,8 +974,21 @@ def replan_folder_after_supplement(
     except (OSError, ValueError) as exc:
         return {"replanned": False, "error": str(exc), "shot_count": 0}
 
-    save_edit_plan(project, plan, folder_name)
-    return {"replanned": True, "error": "", "shot_count": len(plan.shots)}
+    if result.status == EditPlanBuildStatus.BLOCKED or result.document is None:
+        preview = "; ".join(
+            str(entry.get("message", entry))
+            if isinstance(entry, dict)
+            else str(entry)
+            for entry in (result.validation_errors or [])[:3]
+        )
+        return {
+            "replanned": False,
+            "error": f"Schnittplan BLOCKED nach Supplement-Update: {preview or 'Validierung fehlgeschlagen'}",
+            "shot_count": 0,
+        }
+
+    document = persist_accepted_edit_plan(project, result, folder_name)
+    return {"replanned": True, "error": "", "shot_count": len(document.shots)}
 
 
 def approve_adobe_candidate(candidate: SupplementCandidate) -> SupplementCandidate:

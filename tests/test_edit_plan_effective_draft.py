@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import streamlit as st
 
 from otio_app.analysis_models import EditPlanDocument, EditPlanShot
 from otio_app.models import Project
-from otio_app.ui.edit_plan import _effective_draft, _set_draft
+from otio_app.ui.edit_plan import _effective_draft, _set_draft, _sync_draft_from_saved_if_newer
 
 
 def _project(tmp_path: Path) -> Project:
@@ -70,6 +71,39 @@ def test_effective_draft_prefers_newer_saved_over_stale_session_draft(tmp_path: 
     assert effective is not None
     assert len(effective.shots) == 3
     assert effective.inventory_hash_at_plan_time == "new-hash"
+
+
+def test_sync_draft_from_saved_replaces_stale_inventory_hash(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    st.session_state.clear()
+
+    stale_draft = EditPlanDocument(
+        project_id=project.id,
+        folder_name="Badlands National Park",
+        confirmed=False,
+        shots=[_shot(0)],
+        inventory_hash_at_plan_time="old-hash",
+    )
+    _set_draft(stale_draft, "Badlands National Park")
+
+    fresh_saved = EditPlanDocument(
+        project_id=project.id,
+        folder_name="Badlands National Park",
+        confirmed=False,
+        shots=[_shot(0), _shot(1)],
+        inventory_hash_at_plan_time="new-hash",
+    )
+
+    with patch(
+        "otio_app.ui.edit_plan.inventory_hash_is_stale",
+        side_effect=lambda _project, _folder, plan_hash: plan_hash == "old-hash",
+    ):
+        _sync_draft_from_saved_if_newer(project, "Badlands National Park", fresh_saved)
+
+    effective = _effective_draft(project.id, "Badlands National Park", fresh_saved)
+    assert effective is not None
+    assert effective.inventory_hash_at_plan_time == "new-hash"
+    assert len(effective.shots) == 2
 
 
 def test_effective_draft_keeps_newer_session_draft_over_older_saved(tmp_path: Path) -> None:
