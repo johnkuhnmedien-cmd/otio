@@ -694,6 +694,26 @@ def test_merge_skips_ffmpeg_decode_on_preview(tmp_path: Path, monkeypatch) -> No
     assert calls == []
 
 
+def test_export_otio_timeline_writes_custom_output_path(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _setup_mapping_and_plans(project, tmp_path)
+    merged = merge_confirmed_edit_plans(project)
+    custom_path = project.work_dir_path / "exports" / "Arches_National_Park.otio"
+
+    with patch(
+        "otio_app.services.otio_exporter.verify_timeline_media_paths",
+        return_value=[],
+    ):
+        export_result = export_otio_timeline(
+            project,
+            merged,
+            export_settings=OtioExportSettings(audio_offset_sec=1.0, section_outro_sec=5.0),
+            output_path=custom_path,
+        )
+    assert export_result.path == custom_path
+    assert custom_path.is_file()
+
+
 def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _setup_mapping_and_plans(project, tmp_path)
@@ -716,8 +736,8 @@ def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
     assert len(timeline.tracks) == 3
 
 
-def test_merge_blocks_duplicate_asset_globally(tmp_path: Path) -> None:
-    """Globale Asset-Nutzung über alle bestätigten Orte muss beim Merge prüfen."""
+def test_merge_warns_on_duplicate_asset_but_allows_export(tmp_path: Path) -> None:
+    """Globale Asset-Doppelung wird gemeldet, blockiert den Export aber nicht mehr."""
     project = _project(tmp_path)
     voice_a = str(tmp_path / "USA" / "Voice over" / "DE" / "USA_Florida Keys_VO.wav")
     voice_b = str(tmp_path / "USA" / "Voice over" / "DE" / "USA_Grand Canyon_VO.wav")
@@ -747,38 +767,35 @@ def test_merge_blocks_duplicate_asset_globally(tmp_path: Path) -> None:
         voiceover_trim_policy="disabled",
     )
 
-    def _single_shot(folder: str, voice_file: str, timeline_in: float) -> TimelineItem:
-        duration = 3.0
-        path = f"/media/{folder.replace(' ', '_')}.mp4"
-        return TimelineItem(
-            timeline_item_id=f"item_{folder.replace(' ', '_')}",
-            type="video_shot",
-            section_id=_section_id(folder),
-            folder_name=folder,
-            voice_file=voice_file,
-            asset_id=shared_asset,
-            shot_id="shot_001",
-            resolved_media_path=path,
-            original_asset_path=path,
-            asset_role="narration",
-            timeline_in_sec=timeline_in,
-            timeline_out_sec=timeline_in + duration,
-            duration_sec=duration,
-            final_duration_sec=duration,
-            source_in_sec=0.0,
-            source_out_sec=duration,
-            voice_start_sec=0.0,
-            voice_end_sec=5.0,
-            beat_id="beat_001",
-            transform=TimelineItemTransform(),
-        )
-
-    florida_items = [_single_shot("Florida Keys", voice_a, 0.0)]
-    canyon_items = [_single_shot("Grand Canyon", voice_b, 0.0)]
+    florida_voice_end = 6.0
+    florida_items = [
+        _timeline_narration("Florida Keys", voice_a, 1, timeline_in=0.0),
+        _timeline_narration("Florida Keys", voice_a, 2, timeline_in=3.0),
+        _timeline_outro(
+            "Florida Keys",
+            voice_a,
+            timeline_in=florida_voice_end,
+            after_index=2,
+        ),
+    ]
+    canyon_voice_end = 4.0
+    canyon_items = [
+        _timeline_narration("Grand Canyon", voice_b, 1, timeline_in=0.0),
+        _timeline_filler("Grand Canyon", voice_b, timeline_in=3.0, duration=1.0),
+        _timeline_outro(
+            "Grand Canyon",
+            voice_b,
+            timeline_in=canyon_voice_end,
+            after_index=1,
+        ),
+    ]
+    for item in florida_items + canyon_items:
+        if item.type == "video_shot":
+            item.asset_id = shared_asset
 
     for folder_name, items, voice_file, duration in (
         ("Florida Keys", florida_items, voice_a, 5.0),
-        ("Grand Canyon", canyon_items, voice_b, 5.0),
+        ("Grand Canyon", canyon_items, voice_b, 3.0),
     ):
         save_edit_plan(
             project,
@@ -812,9 +829,12 @@ def test_merge_blocks_duplicate_asset_globally(tmp_path: Path) -> None:
     )
 
     merged = merge_confirmed_edit_plans(project)
-    assert merged.validation_status == "BLOCKED"
-    assert merged.ready is False
-    assert any("Global:" in warning for warning in merged.warnings)
+    assert merged.validation_status == "OK"
+    assert merged.ready is True
+    assert any(
+        warning.startswith("Regel-Hinweis (Export trotzdem möglich):")
+        for warning in merged.warnings
+    )
 
 
 def test_merge_skips_blocked_candidate_plan(tmp_path: Path) -> None:

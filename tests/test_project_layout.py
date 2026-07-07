@@ -6,6 +6,7 @@ from pathlib import Path
 
 from otio_app.project_layout import (
     classify_subdirectories,
+    default_otio_export_basename,
     detect_voice_over_folder,
     diagnose_project_root,
     discover_asset_subdir_names,
@@ -15,6 +16,7 @@ from otio_app.project_layout import (
     get_voice_analysis_path,
     get_voice_over_dir,
     language_folder_name,
+    resolve_otio_export_path,
     resolve_voice_over_folder_name,
     scan_project_structure,
     safe_folder_slug,
@@ -40,6 +42,33 @@ def test_output_paths(temp_project_layout: dict[str, Path]) -> None:
     assert safe_folder_slug("Florida Keys") == "Florida_Keys"
     assert get_folder_inventory_path(work_dir, "Florida Keys").name == "Florida_Keys.json"
     assert get_voice_analysis_path(project_root).name == "voice_over_analysis.json"
+
+
+def test_default_otio_export_basename_single_folder_uses_folder_name() -> None:
+    assert (
+        default_otio_export_basename(
+            project_name="USA",
+            folder_names=("Arches National Park",),
+        )
+        == "Arches_National_Park"
+    )
+
+
+def test_default_otio_export_basename_multiple_folders_uses_project_name() -> None:
+    assert (
+        default_otio_export_basename(
+            project_name="USA Trip",
+            folder_names=("Arches National Park", "Grand Canyon"),
+        )
+        == "USA_Trip"
+    )
+
+
+def test_resolve_otio_export_path_strips_otio_suffix(temp_project_layout: dict[str, Path]) -> None:
+    work_dir = temp_project_layout["work_dir"]
+    path = resolve_otio_export_path(work_dir, basename="Arches National Park.otio")
+    assert path.name == "Arches_National_Park.otio"
+    assert path.parent.name == "exports"
 
 
 def test_discover_asset_subdir_names(temp_project_layout: dict[str, Path]) -> None:

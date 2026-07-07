@@ -211,7 +211,23 @@ def export_processed_output_path_for_media(
 
 def get_otio_export_path(work_dir: Path, project_name: str) -> Path:
     """Standard-Pfad für den OTIO-Export eines Projekts."""
-    safe_name = safe_folder_slug(project_name) or "timeline"
+    return resolve_otio_export_path(work_dir, basename=project_name)
+
+
+def default_otio_export_basename(*, project_name: str, folder_names: tuple[str, ...] | list[str]) -> str:
+    """Standard-Dateiname ohne Endung — ein Ort → Ordnername, sonst Projektname."""
+    folders = tuple(folder_names)
+    if len(folders) == 1:
+        return safe_folder_slug(folders[0]) or safe_folder_slug(project_name) or "timeline"
+    return safe_folder_slug(project_name) or "timeline"
+
+
+def resolve_otio_export_path(work_dir: Path, *, basename: str) -> Path:
+    """Zielpfad für OTIO-Export aus einem vom Nutzer gewählten Basisnamen."""
+    cleaned = basename.strip()
+    if cleaned.lower().endswith(".otio"):
+        cleaned = cleaned[:-5].strip()
+    safe_name = safe_folder_slug(cleaned) or "timeline"
     return get_exports_dir(work_dir) / f"{safe_name}.otio"
 
 

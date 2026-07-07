@@ -332,6 +332,7 @@ def validate_timeline_items(
     require_rendered_media: bool = False,
     rules_doc: EditPlanRulesDocument | None = None,
     work_dir_path: Path | None = None,
+    allow_asset_rule_overrides: bool = False,
 ) -> TimelineValidationResult:
     """Prüft Dauerregeln, Voice-Abdeckung und Outro-Planung."""
     result = TimelineValidationResult()
@@ -478,11 +479,17 @@ def validate_timeline_items(
             rules_doc=rules_doc,
         )
         for violation in usage_violations:
-            result.errors.append(
+            message = (
                 f"max_asset_usage: `{violation.asset_id}` {violation.usage_count}× "
                 f"(max {violation.max_allowed})"
             )
-        if usage_violations:
+            if allow_asset_rule_overrides:
+                result.warnings.append(
+                    f"Regel-Hinweis (Export trotzdem möglich): {message}"
+                )
+            else:
+                result.errors.append(message)
+        if usage_violations and not allow_asset_rule_overrides:
             result.status = ValidationStatus.BLOCKED
             if work_dir_path is not None:
                 append_max_usage_to_validation_report(work_dir_path, usage_violations)

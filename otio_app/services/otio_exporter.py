@@ -265,6 +265,7 @@ def merge_confirmed_edit_plans(
             opening_title_required=export_rules.folder_title_enabled,
             rules_doc=rules_doc,
             work_dir_path=project.work_dir_path,
+            allow_asset_rule_overrides=True,
         )
         all_validation_errors.extend(f"{folder_name}: {err}" for err in validation.errors)
         warnings.extend(validation.warnings)
@@ -294,12 +295,19 @@ def merge_confirmed_edit_plans(
             merged_items,
             settings=settings,
             rules_doc=rules_doc,
+            allow_asset_rule_overrides=True,
         )
         if not global_validation.ok:
             worst_status = ValidationStatus.BLOCKED
             for error in global_validation.errors:
                 all_validation_errors.append(
                     f"Global: {plan_validation_error_to_message(error)}"
+                )
+        elif global_validation.errors:
+            for error in global_validation.errors:
+                warnings.append(
+                    "Regel-Hinweis (Export trotzdem möglich): "
+                    f"{plan_validation_error_to_message(error)}"
                 )
 
     if all_validation_errors:

@@ -25,7 +25,11 @@ from otio_app.defaults import (
     MAX_GEMINI_PLAN_ATTEMPTS,
     SUPPLEMENT_SOURCE_LABELS,
 )
-from otio_app.project_layout import get_otio_export_path, safe_folder_slug
+from otio_app.project_layout import (
+    default_otio_export_basename,
+    resolve_otio_export_path,
+    safe_folder_slug,
+)
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
 from otio_app.services.edit_plan_cache import collect_folder_statuses
 from otio_app.services.edit_plan_builder import (
@@ -1435,18 +1439,43 @@ def _load_cached_export_preview(project_id: str) -> MergedEditPlanResult | None:
     )
 
 
+def _export_warning_is_error(warning: str) -> bool:
+    return warning.startswith("Validierung:") and not warning.startswith(
+        "Regel-Hinweis (Export trotzdem möglich):"
+    )
+
+
+def _sync_export_filename_widget(
+    project_id: str,
+    folder_selection: tuple[str, ...],
+    project_name: str,
+) -> str:
+    """Hält den Dateinamen-Default synchron, wenn sich die Ortsauswahl ändert."""
+    name_key = f"otio_export_name_{project_id}"
+    folders_key = f"otio_export_name_folders_{project_id}"
+    default_basename = default_otio_export_basename(
+        project_name=project_name,
+        folder_names=folder_selection,
+    )
+    if (
+        name_key not in st.session_state
+        or st.session_state.get(folders_key) != folder_selection
+    ):
+        st.session_state[name_key] = default_basename
+        st.session_state[folders_key] = folder_selection
+    return str(st.session_state[name_key])
+
+
 def _render_tab_export(project, mapped_folders: list[str]) -> None:
-    default_export_path = get_otio_export_path(project.work_dir_path, project.name)
     export_timing = _export_timing_settings(project)
     st.markdown("**OTIO-Timeline aus bestätigten Schnittplänen**")
     st.caption(
-        "Orte wählen, dann **OTIO exportieren** — Vorschau ist optional. "
+        "Orte wählen, Dateiname anpassen, dann **OTIO exportieren** — Vorschau ist optional. "
         "Audio-Start und Ausklingen sind **pro Ort fest im Schnittplan verankert** "
         "(Wert beim **Schnittplan vorschlagen/bestätigen**, Tab **Regeln → Timing & Gemini**) — "
         "der Export übernimmt sie unverändert je Ort, unabhängig von der aktuell "
         "eingestellten globalen Regel. Um Audio-Start/Ausklingen für einen Ort zu ändern, "
-        "Schnittplan dort neu vorschlagen und erneut bestätigen. "
-        f"Ziel: `{default_export_path}`"
+        "Schnittplan dort neu vorschlagen und erneut bestätigen."
     )
 
     export_folders = st.multiselect(
@@ -1467,6 +1496,18 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
             if (plan := load_edit_plan(project, folder_name)) is not None and plan.confirmed
         )
     )
+    export_basename = _sync_export_filename_widget(
+        project.id,
+        folder_selection,
+        project.name,
+    )
+    export_basename = st.text_input(
+        "Dateiname (ohne .otio)",
+        key=f"otio_export_name_{project.id}",
+        help="Standard bei genau einem Ort: Ordnername. Bei mehreren Orten: Projektname.",
+    )
+    export_path = resolve_otio_export_path(project.work_dir_path, basename=export_basename)
+    st.caption(f"Ziel: `{export_path}`")
     cached_folders = tuple(st.session_state.get(_export_preview_folders_key(project.id), []))
     preview = _load_cached_export_preview(project.id)
     preview_stale = preview is not None and cached_folders != folder_selection
@@ -1497,8 +1538,10 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                 if not merged.ready:
                     st.warning(_export_blockers_message(merged, folder_selection))
                     for warning in merged.warnings:
-                        if warning.startswith("Validierung:"):
+                        if _export_warning_is_error(warning):
                             st.error(warning)
+                        elif warning.startswith("Regel-Hinweis (Export trotzdem möglich):"):
+                            st.warning(warning)
                         else:
                             st.caption(f"• {warning}")
                 else:
@@ -1510,8 +1553,12 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                         project,
                         merged,
                         export_settings=export_settings,
+                        output_path=export_path,
                     )
                     st.success(f"Timeline exportiert: `{export_result.path}`")
+                    for warning in merged.warnings:
+                        if warning.startswith("Regel-Hinweis (Export trotzdem möglich):"):
+                            st.warning(warning)
                     for note in export_result.aspect_fill_notes:
                         if "Letterboxing" in note or "fehlgeschlagen" in note or "nicht lesbar" in note:
                             st.warning(note)
@@ -1542,8 +1589,10 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
                 + ", ".join(f"`{name}`" for name in preview.skipped_folders)
             )
         for warning in preview.warnings:
-            if warning.startswith("Validierung:"):
+            if _export_warning_is_error(warning):
                 st.error(warning)
+            elif warning.startswith("Regel-Hinweis (Export trotzdem möglich):"):
+                st.warning(warning)
             else:
                 st.caption(f"• {warning}")
 

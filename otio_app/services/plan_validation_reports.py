@@ -79,6 +79,27 @@ def plan_is_confirmable(document: EditPlanDocument) -> bool:
     return True
 
 
+def apply_asset_rule_overrides(result: FinalPlanValidationResult) -> FinalPlanValidationResult:
+    """Asset-Regelverletzungen als Hinweis behandeln, andere Fehler blockieren."""
+    blocking_errors = [
+        error for error in result.errors if error.type not in ASSET_RULE_ERROR_TYPES
+    ]
+    if blocking_errors:
+        return FinalPlanValidationResult(
+            ok=False,
+            status=ValidationStatus.BLOCKED,
+            errors=blocking_errors,
+            warnings=result.warnings,
+        )
+    asset_errors = [error for error in result.errors if error.type in ASSET_RULE_ERROR_TYPES]
+    return FinalPlanValidationResult(
+        ok=True,
+        status=result.status if result.status != ValidationStatus.BLOCKED else ValidationStatus.AWAITING_APPROVAL,
+        errors=asset_errors,
+        warnings=result.warnings,
+    )
+
+
 def validate_document_for_confirm(
     document: EditPlanDocument,
     *,
@@ -93,22 +114,7 @@ def validate_document_for_confirm(
     )
     if not allow_asset_rule_overrides:
         return result
-    blocking_errors = [
-        error for error in result.errors if error.type not in ASSET_RULE_ERROR_TYPES
-    ]
-    if blocking_errors:
-        return FinalPlanValidationResult(
-            ok=False,
-            status=ValidationStatus.BLOCKED,
-            errors=blocking_errors,
-            warnings=result.warnings,
-        )
-    return FinalPlanValidationResult(
-        ok=True,
-        status=result.status if result.status != ValidationStatus.BLOCKED else ValidationStatus.AWAITING_APPROVAL,
-        errors=[error for error in result.errors if error.type in ASSET_RULE_ERROR_TYPES],
-        warnings=result.warnings,
-    )
+    return apply_asset_rule_overrides(result)
 
 
 def global_validation_blocked(
@@ -116,17 +122,20 @@ def global_validation_blocked(
     *,
     settings: EditPlanSettings,
     rules_doc: EditPlanRulesDocument,
+    allow_asset_rule_overrides: bool = True,
 ) -> FinalPlanValidationResult:
     """Globale Validierung über alle Ordner (Asset-Nutzung, Shot-Min/Max)."""
     errors: list[PlanValidationError] = []
     errors.extend(validate_shot_duration_rules(timeline_items, settings=settings))
     errors.extend(validate_asset_usage_rules(timeline_items, rules_doc=rules_doc))
-    ok = not errors
-    return FinalPlanValidationResult(
-        ok=ok,
+    result = FinalPlanValidationResult(
+        ok=not errors,
         status=ValidationStatus.BLOCKED if errors else ValidationStatus.OK,
         errors=errors,
     )
+    if not allow_asset_rule_overrides:
+        return result
+    return apply_asset_rule_overrides(result)
 
 
 def format_used_rules_summary(used_rules: dict[str, Any] | None) -> list[str]:
