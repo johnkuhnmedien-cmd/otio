@@ -14,8 +14,7 @@ from otio_app.services.clean_media import (
     probe_media,
 )
 from otio_app.services.edit_plan_rules import ExportRuleOptions
-from otio_app.services.font_utils import resolve_font_path
-from otio_app.services.media_utils import ffmpeg_has_drawtext, is_image_media
+from otio_app.services.media_utils import is_image_media
 
 
 def compute_fill_zoom_factor(
@@ -157,10 +156,9 @@ def build_export_video_filter(
     source_width: int | None,
     source_height: int | None,
     project: Project,
-    folder_name: str,
     export_opts: ExportRuleOptions,
 ) -> tuple[str | None, int | None, int | None, str | None]:
-    """Baut vf-Kette für Zoom und/oder Ordner-Titel. Liefert (filter, w, h, error)."""
+    """Baut vf-Kette für Zoom/Crop. Liefert (filter, w, h, error)."""
     parts: list[str] = []
     expected_width: int | None = None
     expected_height: int | None = None
@@ -174,30 +172,6 @@ def build_export_video_filter(
         )
         if scale:
             parts.append(scale)
-            expected_width = project.width
-            expected_height = project.height
-
-    if export_opts.folder_title_enabled and ffmpeg_has_drawtext():
-        font_path = resolve_font_path(export_opts.folder_title_font)
-        if font_path is None:
-            return None, None, None, (
-                f"Schriftart nicht gefunden: {export_opts.folder_title_font}"
-            )
-        overlay_width = expected_width or source_width or project.width
-        overlay_height = expected_height or source_height or project.height
-        parts.append(
-            ffmpeg_folder_title_filter(
-                text=format_folder_display_name(folder_name),
-                font_path=font_path,
-                duration_sec=export_opts.folder_title_duration_sec,
-                target_width=overlay_width,
-                target_height=overlay_height,
-            )
-        )
-        if expected_width is None and source_width and source_height:
-            expected_width = source_width
-            expected_height = source_height
-        elif expected_width is None:
             expected_width = project.width
             expected_height = project.height
 
@@ -226,7 +200,7 @@ def ensure_export_media_for_export(
     *,
     notes: list[str] | None = None,
 ) -> Path:
-    """Transkodiert bei Bedarf (Zoom/Titel) und verifiziert die Ausgabe."""
+    """Transkodiert bei Bedarf (Zoom) und verifiziert die Ausgabe."""
     from otio_app.services.clean_media import (
         CLEAN_STATUS_CLEAN,
         CLEAN_STATUS_FAILED,
@@ -267,7 +241,7 @@ def ensure_export_media_for_export(
         project.width,
         project.height,
     )
-    if still_wrong or (entry.status == CLEAN_STATUS_FAILED and opts.folder_title_enabled):
+    if still_wrong:
         entry = process_media_file(
             project,
             folder_name,
@@ -278,13 +252,6 @@ def ensure_export_media_for_export(
         if entry.status == CLEAN_STATUS_FAILED and entry.error and notes is not None:
             notes.append(f"{original_path.name}: Export-Transcode fehlgeschlagen — {entry.error}")
         out_w, out_h = media_resolution_probe(media_path)
-
-    if opts.folder_title_enabled and entry.status == CLEAN_STATUS_CLEAN and notes is not None:
-        display = format_folder_display_name(folder_name)
-        notes.append(
-            f"{original_path.name}: Titel «{display}» ({opts.folder_title_duration_sec:.0f}s, "
-            f"{opts.folder_title_font}) · `{media_path}`"
-        )
 
     if opts.auto_zoom_fill and needs_zoom:
         warning = aspect_fill_warning(project, media_path, label=original_path.name)

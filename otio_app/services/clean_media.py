@@ -12,7 +12,6 @@ from typing import Callable, Optional
 from otio_app.analysis_models import CleanMediaEntry, CleanMediaManifest, MediaProbeInfo
 from otio_app.models import Project
 from otio_app.project_layout import (
-    aspect_filled_output_path_for_media,
     clean_output_path_for_media,
     export_processed_output_path_for_media,
     get_clean_media_output_dir,
@@ -21,7 +20,6 @@ from otio_app.project_layout import (
     safe_folder_slug,
 )
 from otio_app.services.media_utils import (
-    ffmpeg_has_drawtext,
     is_image_media,
     is_video_media,
     list_media_files,
@@ -142,17 +140,13 @@ def find_clean_file_for_media(
     from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
 
     export_opts = export_rule_options(load_edit_plan_rules(project))
-    title_burnin = export_opts.folder_title_enabled and ffmpeg_has_drawtext()
-    if (export_opts.auto_zoom_fill or title_burnin) and not is_image_media(
-        media_path
-    ):
+    if export_opts.auto_zoom_fill and not is_image_media(media_path):
         filled = export_processed_output_path_for_media(
             project.work_dir_path,
             folder_name,
             media_path,
             width=project.width,
             height=project.height,
-            with_title=title_burnin,
         )
         if path_is_readable_file(filled):
             filled_probe = probe_media(filled)
@@ -166,26 +160,6 @@ def find_clean_file_for_media(
                 )
             ):
                 return filled
-        if not title_burnin:
-            filled = aspect_filled_output_path_for_media(
-                project.work_dir_path,
-                folder_name,
-                media_path,
-                width=project.width,
-                height=project.height,
-            )
-            if path_is_readable_file(filled):
-                filled_probe = probe_media(filled)
-                if (
-                    not filled_probe.width
-                    or not filled_probe.height
-                    or _probe_matches_target_resolution(
-                        filled_probe,
-                        project.width,
-                        project.height,
-                    )
-                ):
-                    return filled
 
     expected = clean_output_path_for_media(
         project.work_dir_path,
@@ -555,9 +529,7 @@ def process_media_file(
 
     export_opts = export_rule_options(load_edit_plan_rules(project))
     zoom_transcode = _zoom_transcode_required(project, media_path, source_probe)
-    title_burnin = export_opts.folder_title_enabled and ffmpeg_has_drawtext()
-    title_transcode = title_burnin and not is_image_media(media_path)
-    export_transcode = zoom_transcode or title_transcode
+    export_transcode = zoom_transcode
 
     if export_transcode:
         output_path = export_processed_output_path_for_media(
@@ -566,7 +538,6 @@ def process_media_file(
             media_path,
             width=project.width,
             height=project.height,
-            with_title=title_transcode,
         )
     else:
         output_path = clean_output_path_for_media(
@@ -627,7 +598,6 @@ def process_media_file(
         source_width=source_probe.width,
         source_height=source_probe.height,
         project=project,
-        folder_name=folder_name,
         export_opts=export_opts,
     )
     if filter_error:

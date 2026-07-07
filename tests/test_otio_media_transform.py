@@ -51,10 +51,7 @@ def test_escape_drawtext_value() -> None:
     assert escape_drawtext_value("A:B") == "A\\:B"
 
 
-@patch("otio_app.services.otio_media_transform.ffmpeg_has_drawtext", return_value=True)
-@patch("otio_app.services.otio_media_transform.resolve_font_path")
-def test_build_export_video_filter_with_title(mock_font: object, _mock_drawtext: object) -> None:
-    mock_font.return_value = Path("/fonts/Phosphate.ttf")
+def test_build_export_video_filter_zoom_only() -> None:
     project = Project(
         id="t",
         name="USA",
@@ -66,33 +63,26 @@ def test_build_export_video_filter_with_title(mock_font: object, _mock_drawtext:
         height=2160,
     )
     opts = ExportRuleOptions(
+        auto_zoom_fill=True,
         folder_title_enabled=True,
         folder_title_font="Phosphate",
         folder_title_duration_sec=5.0,
     )
     vf, expected_w, expected_h, error = build_export_video_filter(
-        source_width=3840,
+        source_width=4096,
         source_height=2160,
         project=project,
-        folder_name="Arches_National_Park",
         export_opts=opts,
     )
     assert error is None
     assert vf is not None
-    assert "drawtext=" in vf
-    assert "Arches National Park" in vf
-    assert "shadow" in vf
+    assert "drawtext=" not in vf
+    assert "scale=3840:2160" in vf
     assert expected_w == 3840
     assert expected_h == 2160
 
 
-@patch("otio_app.services.otio_media_transform.ffmpeg_has_drawtext", return_value=False)
-@patch("otio_app.services.otio_media_transform.resolve_font_path")
-def test_build_export_video_filter_skips_title_without_drawtext(
-    mock_font: object,
-    _mock_drawtext: object,
-) -> None:
-    mock_font.return_value = Path("/fonts/Phosphate.ttf")
+def test_build_export_video_filter_ignores_folder_title_rule() -> None:
     project = Project(
         id="t",
         name="USA",
@@ -112,7 +102,6 @@ def test_build_export_video_filter_skips_title_without_drawtext(
         source_width=3840,
         source_height=2160,
         project=project,
-        folder_name="Bisti",
         export_opts=opts,
     )
     assert error is None

@@ -495,7 +495,7 @@ def _append_video_item(
     """Hängt Clip oder Gap an die Videospur; liefert die tatsächliche Dauer in Sekunden."""
     if shot.asset_path:
         original = _resolve_media_path(shot.asset_path)
-        if (export_rules.auto_zoom_fill or export_rules.folder_title_enabled) and not is_image_media(
+        if export_rules.auto_zoom_fill and not is_image_media(
             original
         ):
             media_path = ensure_export_media_for_export(
@@ -646,7 +646,7 @@ def _append_timeline_item_clip(
         if item.original_asset_path
         else media_path
     )
-    if (export_rules.auto_zoom_fill or export_rules.folder_title_enabled) and not is_image_media(
+    if export_rules.auto_zoom_fill and not is_image_media(
         original
     ):
         effective = ensure_export_media_for_export(

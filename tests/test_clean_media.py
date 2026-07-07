@@ -662,19 +662,15 @@ def test_transcode_to_clean_hides_banner_so_real_errors_surface(
     assert "-loglevel" in command
 
 
-@patch("otio_app.services.otio_media_transform.ffmpeg_has_drawtext", return_value=False)
-@patch("otio_app.services.clean_media.ffmpeg_has_drawtext", return_value=False)
 @patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
 @patch("otio_app.services.clean_media.transcode_to_clean")
 @patch("otio_app.services.clean_media.test_decode", return_value=(True, None))
 @patch("otio_app.services.clean_media.probe_media")
-def test_process_media_skips_title_burnin_without_drawtext(
+def test_process_media_ignores_folder_title_rule(
     mock_probe,
     _mock_decode,
     mock_transcode,
     _mock_validate,
-    _mock_drawtext_clean,
-    _mock_drawtext_transform,
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path, folder_name="Bisti")
@@ -694,42 +690,20 @@ def test_process_media_skips_title_burnin_without_drawtext(
         height=2160,
     )
 
-    captured: dict[str, str | None] = {}
-
-    def _fake_transcode(
-        original_path: Path,
-        output_path: Path,
-        *,
-        video_filter: str | None = None,
-        expected_width: int | None = None,
-        expected_height: int | None = None,
-    ) -> None:
-        captured["video_filter"] = video_filter
-        captured["output_name"] = output_path.name
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(b"clean")
-
-    mock_transcode.side_effect = _fake_transcode
-
     entry = process_media_file(project, "Bisti", original)
     assert entry.status == CLEAN_STATUS_OK
     assert not mock_transcode.called
-    assert captured.get("video_filter") is None
 
 
-@patch("otio_app.services.otio_media_transform.ffmpeg_has_drawtext", return_value=False)
-@patch("otio_app.services.clean_media.ffmpeg_has_drawtext", return_value=False)
 @patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
 @patch("otio_app.services.clean_media.transcode_to_clean")
 @patch("otio_app.services.clean_media.test_decode", return_value=(True, None))
 @patch("otio_app.services.clean_media.probe_media")
-def test_process_media_transcodes_prores_without_drawtext_title_burnin(
+def test_process_media_transcodes_prores_even_with_folder_title_rule(
     mock_probe,
     _mock_decode,
     mock_transcode,
     _mock_validate,
-    _mock_drawtext_clean,
-    _mock_drawtext_transform,
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path, folder_name="Bisti")
