@@ -14,8 +14,8 @@ from otio_app.defaults import (
     DEFAULT_AUDIO_OFFSET_SEC,
     DEFAULT_FALLBACK_ORDER,
     DEFAULT_SECTION_OUTRO_SEC,
-    DEFAULT_SHOT_MAX_SEC,
     DEFAULT_SHOT_MIN_SEC,
+    DEFAULT_SHOT_MAX_SEC,
     EDIT_PLAN_MODEL_CHOICES,
     MATCH_QUALITY_LABELS,
     MATCH_QUALITY_MITTEL,
@@ -23,6 +23,7 @@ from otio_app.defaults import (
     MATCH_QUALITY_GUT,
     MATCH_QUALITY_UNPASSEND,
     MAX_GEMINI_PLAN_ATTEMPTS,
+    MODEL_COMPARISON_PRESETS,
     SUPPLEMENT_SOURCE_LABELS,
 )
 from otio_app.project_layout import (
@@ -47,6 +48,17 @@ from otio_app.services.gemini_client import get_default_gemini_model
 from otio_app.services.plan_llm_client import (
     format_plan_model_label,
     is_plan_model_configured,
+    plan_model_provider,
+)
+from otio_app.services.model_comparison_runner import (
+    ModelComparisonSpec,
+    run_model_comparison_batch,
+)
+from otio_app.services.model_comparison_storage import (
+    comparison_run_dir,
+    list_comparison_ids_for_folder,
+    load_comparison_summary,
+    load_run_artifact,
 )
 from otio_app.services.edit_plan_rules import (
     export_rule_options,
@@ -877,6 +889,203 @@ def _finalize_plan_for_confirm(
     return document, notes
 
 
+def _model_comparison_last_key(project_id: str, folder_name: str) -> str:
+    return f"model_cmp_last_{project_id}_{safe_folder_slug(folder_name)}"
+
+
+def _collect_model_comparison_specs(project: Project) -> list[ModelComparisonSpec]:
+    specs: list[ModelComparisonSpec] = []
+    for provider, presets in MODEL_COMPARISON_PRESETS.items():
+        enabled_key = f"cmp_enable_{provider}_{project.id}"
+        model_key = f"cmp_model_{provider}_{project.id}"
+        if not st.session_state.get(enabled_key, False):
+            continue
+        preset = st.session_state.get(f"cmp_preset_{provider}_{project.id}", presets[0])
+        custom = str(st.session_state.get(model_key, "")).strip()
+        model_id = custom or str(preset)
+        if model_id not in EDIT_PLAN_MODEL_CHOICES and not custom:
+            model_id = presets[0]
+        specs.append(ModelComparisonSpec(model_id=model_id, provider=provider))
+    return specs
+
+
+def _run_model_comparison(project: Project, selected_folder: str) -> None:
+    """Diagnose-Workflow: speichert nur Vergleichsartefakte, kein Produktionsplan."""
+    specs = _collect_model_comparison_specs(project)
+    if not specs:
+        st.warning("Bitte mindestens ein Modell für den LLM-Vergleich aktivieren.")
+        return
+
+    timing = _current_timing_settings(project)
+    progress_bar = st.progress(0.0)
+    progress_text = st.empty()
+    total = len(specs)
+
+    def _on_progress(model_id: str, index: int, total_models: int) -> None:
+        progress_bar.progress(index / max(1, total_models))
+        progress_text.markdown(
+            f"**Modell {index}/{total_models} läuft** — "
+            f"{format_plan_model_label(model_id)}"
+        )
+
+    try:
+        with st.spinner(f"LLM-Vergleich für {selected_folder} ({total} Modell(e)) …"):
+            result = run_model_comparison_batch(
+                project,
+                folder_name=selected_folder,
+                model_specs=specs,
+                shot_min_sec=timing.shot_min_sec,
+                shot_max_sec=timing.shot_max_sec,
+                progress_callback=_on_progress,
+            )
+        progress_bar.progress(1.0)
+        progress_text.empty()
+        st.session_state[_model_comparison_last_key(project.id, selected_folder)] = (
+            result.comparison_id
+        )
+        st.success(
+            f"LLM-Vergleich abgeschlossen — {len(result.runs)} Run(s), "
+            f"comparison_id `{result.comparison_id[:8]}…`"
+        )
+        for error in result.errors:
+            st.warning(error)
+        st.rerun()
+    except Exception as exc:
+        progress_bar.empty()
+        progress_text.empty()
+        st.error(f"LLM-Vergleich fehlgeschlagen: {exc}")
+
+
+def _render_model_comparison_controls(project: Project, selected_folder: str) -> None:
+    st.markdown("### LLM-Vergleich (Diagnose)")
+    st.caption(
+        "Experimenteller Modellvergleich — speichert Raw-LLM-Antworten und Delta-Reports. "
+        "**Erzeugt keinen Schnittplan-Entwurf, keine Bestätigung, keinen OTIO-Export.**"
+    )
+    col_g, col_a, col_o = st.columns(3)
+    provider_columns = [
+        ("gemini", "Gemini", col_g),
+        ("anthropic", "Anthropic / Claude", col_a),
+        ("openai", "OpenAI / GPT", col_o),
+    ]
+    for provider, label, column in provider_columns:
+        presets = list(MODEL_COMPARISON_PRESETS[provider])
+        with column:
+            st.checkbox(
+                f"{label} einschließen",
+                key=f"cmp_enable_{provider}_{project.id}",
+                value=provider == "gemini",
+            )
+            st.selectbox(
+                "Preset",
+                options=presets,
+                format_func=format_plan_model_label,
+                key=f"cmp_preset_{provider}_{project.id}",
+            )
+            st.text_input(
+                "Modell (optional überschreiben)",
+                key=f"cmp_model_{provider}_{project.id}",
+                placeholder=presets[0],
+            )
+    if st.button(
+        "LLM-Vergleich starten",
+        key=f"model_comparison_start_{project.id}_{safe_folder_slug(selected_folder)}",
+        use_container_width=True,
+    ):
+        _run_model_comparison(project, selected_folder)
+    _render_model_comparison_results(project, selected_folder)
+
+
+def _render_model_comparison_results(project: Project, selected_folder: str) -> None:
+    comparison_ids = list_comparison_ids_for_folder(project, selected_folder)
+    if not comparison_ids:
+        st.caption("Noch keine LLM-Vergleiche für diesen Ordner.")
+        return
+
+    last_id = st.session_state.get(_model_comparison_last_key(project.id, selected_folder))
+    default_index = 0
+    if last_id and last_id in comparison_ids:
+        default_index = comparison_ids.index(last_id)
+
+    selected_comparison_id = st.selectbox(
+        "Frühere Vergleiche",
+        options=comparison_ids,
+        index=default_index,
+        format_func=lambda cid: f"{cid[:8]}… ({cid})",
+        key=f"cmp_history_{project.id}_{safe_folder_slug(selected_folder)}",
+    )
+    summary = load_comparison_summary(project, selected_comparison_id)
+    if summary is None:
+        st.warning("Vergleichs-Summary nicht gefunden.")
+        return
+
+    rows = []
+    for run in summary.runs:
+        rows.append(
+            {
+                "provider": run.provider,
+                "model": format_plan_model_label(run.model),
+                "run_id": run.run_id[:8] + "…",
+                "raw_parts": run.raw_part_count,
+                "final_parts": run.final_part_count,
+                "asset_Δ": run.asset_changes_count,
+                "duration_Δ": run.duration_changes_count,
+                "preview": run.preview_status,
+                "validation": run.validation_status,
+                "latency_ms": run.latency_ms,
+            }
+        )
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    for run in summary.runs:
+        run_dir = comparison_run_dir(project, selected_comparison_id, run.run_id)
+        title = f"{run.provider} · {format_plan_model_label(run.model)} · {run.run_id[:8]}…"
+        with st.expander(title, expanded=False):
+            if run.parse_error:
+                st.error(run.parse_error)
+            for label, filename in (
+                ("Raw LLM", "raw_llm_response.json"),
+                ("Parsed Candidate", "parsed_llm_candidate.json"),
+                ("Python Preview", "conformed_preview_candidate.json"),
+                ("Delta", "llm_vs_python_delta.json"),
+                ("Effective Rules", "effective_rules.json"),
+                ("Validation", "validation_report.json"),
+            ):
+                payload = load_run_artifact(run_dir, filename)
+                if payload:
+                    st.markdown(f"**{label}**")
+                    st.json(payload)
+
+            parsed = load_run_artifact(run_dir, "parsed_llm_candidate.json") or {}
+            preview = load_run_artifact(run_dir, "conformed_preview_candidate.json") or {}
+            delta = load_run_artifact(run_dir, "llm_vs_python_delta.json") or {}
+            beat_text_by_id = {
+                beat.get("beat_id", ""): " / ".join(
+                    str(part.get("text", "")) for part in beat.get("parts", [])
+                )
+                for beat in parsed.get("beats", [])
+            }
+            beat_rows = []
+            for beat_summary in delta.get("beat_summaries", []):
+                beat_id = beat_summary.get("beat_id", "")
+                beat_rows.append(
+                    {
+                        "beat_id": beat_id,
+                        "voice_text": beat_text_by_id.get(beat_id, ""),
+                        "llm_parts": beat_summary.get("llm_part_count"),
+                        "preview_parts": beat_summary.get("final_part_count"),
+                        "asset_changed": beat_summary.get("asset_changed"),
+                        "reasons": ", ".join(beat_summary.get("change_reasons", [])),
+                    }
+                )
+            if beat_rows:
+                st.markdown("**Beat-Vergleich**")
+                st.dataframe(beat_rows, use_container_width=True, hide_index=True)
+            preview_shots = preview.get("shots", [])
+            if preview_shots:
+                st.caption(f"Preview-Shots: {len(preview_shots)}")
+
+
 def _run_suggest_edit_plan(
     project: Project,
     selected_folder: str,
@@ -1137,6 +1346,8 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
         "Deshalb sehen Timelines verschiedener Modelle oft fast identisch aus — "
         "für stärkere Modell-Unterschiede **Holistic v1** nutzen."
     )
+
+    _render_model_comparison_controls(project, selected_folder)
 
     draft = _effective_draft(project.id, selected_folder, saved)
     if draft is not None:

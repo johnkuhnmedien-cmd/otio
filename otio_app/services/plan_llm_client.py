@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from dataclasses import dataclass, field
 from typing import Optional
 
 from otio_app.config import get_gemini_model_from_env
@@ -23,6 +25,16 @@ class PlanLlmNotConfiguredError(RuntimeError):
     """API-Schlüssel für das gewählte Planungsmodell fehlt."""
 
 
+@dataclass
+class PlanLlmResponse:
+    provider: str
+    model: str
+    raw_text: str
+    latency_ms: int = 0
+    token_usage: dict[str, int] = field(default_factory=dict)
+    resolved_model_id: str = ""
+
+
 def plan_model_provider(model_id: str | None) -> str:
     value = (model_id or "").strip()
     if value.startswith("openai:"):
@@ -40,8 +52,15 @@ def _provider_api_model(model_id: str) -> str:
 
 def resolve_plan_model(model: Optional[str] = None) -> str:
     """Ermittelt das Planungsmodell (UI-Auswahl > .env > Standard)."""
-    if model and model.strip() in EDIT_PLAN_MODEL_CHOICES:
-        return model.strip()
+    if model and model.strip():
+        value = model.strip()
+        if value in EDIT_PLAN_MODEL_CHOICES:
+            return value
+        if value.startswith("openai:") or value.startswith("anthropic:"):
+            return value
+        if value in GEMINI_MODEL_CHOICES:
+            return value
+        return value
     return get_gemini_model_from_env()
 
 
@@ -65,20 +84,55 @@ def is_any_plan_llm_configured() -> bool:
 
 def generate_plan_text(*, prompt: str, model: Optional[str] = None) -> str:
     """Sendet den Schnittplan-Prompt an das gewählte Text-LLM."""
+    return generate_plan_text_with_metadata(prompt=prompt, model=model).raw_text
+
+
+def generate_plan_text_with_metadata(*, prompt: str, model: Optional[str] = None) -> PlanLlmResponse:
+    """Wie generate_plan_text, inkl. Latenz und Token-Nutzung für Diagnose-Runs."""
     resolved = resolve_plan_model(model)
     provider = plan_model_provider(resolved)
     api_model = _provider_api_model(resolved)
+    started = time.perf_counter()
 
     if provider == PROVIDER_GEMINI:
-        return _generate_gemini_text(prompt=prompt, model=api_model)
-    if provider == PROVIDER_OPENAI:
-        return _generate_openai_text(prompt=prompt, model=api_model)
-    if provider == PROVIDER_ANTHROPIC:
-        return _generate_anthropic_text(prompt=prompt, model=api_model)
-    raise PlanLlmNotConfiguredError(f"Unbekannter Planungs-Provider für Modell `{resolved}`.")
+        raw_text, token_usage = _generate_gemini_text_with_usage(prompt=prompt, model=api_model)
+    elif provider == PROVIDER_OPENAI:
+        raw_text, token_usage = _generate_openai_text_with_usage(prompt=prompt, model=api_model)
+    elif provider == PROVIDER_ANTHROPIC:
+        raw_text, token_usage = _generate_anthropic_text_with_usage(prompt=prompt, model=api_model)
+    else:
+        raise PlanLlmNotConfiguredError(f"Unbekannter Planungs-Provider für Modell `{resolved}`.")
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    return PlanLlmResponse(
+        provider=provider,
+        model=api_model,
+        raw_text=raw_text,
+        latency_ms=latency_ms,
+        token_usage=token_usage,
+        resolved_model_id=resolved,
+    )
 
 
-def _generate_gemini_text(*, prompt: str, model: str) -> str:
+def _token_usage_dict(
+    *,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    total_tokens: int | None = None,
+) -> dict[str, int]:
+    usage: dict[str, int] = {}
+    if input_tokens is not None:
+        usage["input_tokens"] = int(input_tokens)
+    if output_tokens is not None:
+        usage["output_tokens"] = int(output_tokens)
+    if total_tokens is not None:
+        usage["total_tokens"] = int(total_tokens)
+    elif input_tokens is not None and output_tokens is not None:
+        usage["total_tokens"] = int(input_tokens) + int(output_tokens)
+    return usage
+
+
+def _generate_gemini_text_with_usage(*, prompt: str, model: str) -> tuple[str, dict[str, int]]:
     api_key = get_api_key("GEMINI_API_KEY")
     if not api_key:
         raise PlanLlmNotConfiguredError(
@@ -96,10 +150,16 @@ def _generate_gemini_text(*, prompt: str, model: str) -> str:
         model=model,
         contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
     )
-    return response.text or "{}"
+    usage_meta = getattr(response, "usage_metadata", None)
+    token_usage = _token_usage_dict(
+        input_tokens=getattr(usage_meta, "prompt_token_count", None),
+        output_tokens=getattr(usage_meta, "candidates_token_count", None),
+        total_tokens=getattr(usage_meta, "total_token_count", None),
+    )
+    return response.text or "{}", token_usage
 
 
-def _generate_openai_text(*, prompt: str, model: str) -> str:
+def _generate_openai_text_with_usage(*, prompt: str, model: str) -> tuple[str, dict[str, int]]:
     api_key = get_api_key("OPENAI_API_KEY")
     if not api_key:
         raise PlanLlmNotConfiguredError(
@@ -115,10 +175,16 @@ def _generate_openai_text(*, prompt: str, model: str) -> str:
         temperature=0.2,
     )
     message = response.choices[0].message.content if response.choices else None
-    return (message or "").strip() or "{}"
+    usage = getattr(response, "usage", None)
+    token_usage = _token_usage_dict(
+        input_tokens=getattr(usage, "prompt_tokens", None),
+        output_tokens=getattr(usage, "completion_tokens", None),
+        total_tokens=getattr(usage, "total_tokens", None),
+    )
+    return (message or "").strip() or "{}", token_usage
 
 
-def _generate_anthropic_text(*, prompt: str, model: str) -> str:
+def _generate_anthropic_text_with_usage(*, prompt: str, model: str) -> tuple[str, dict[str, int]]:
     api_key = get_api_key("ANTHROPIC_API_KEY")
     if not api_key:
         raise PlanLlmNotConfiguredError(
@@ -135,4 +201,9 @@ def _generate_anthropic_text(*, prompt: str, model: str) -> str:
         messages=[{"role": "user", "content": prompt}],
     )
     parts = [block.text for block in response.content if getattr(block, "type", "") == "text"]
-    return "\n".join(parts).strip() or "{}"
+    usage = getattr(response, "usage", None)
+    token_usage = _token_usage_dict(
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+    )
+    return "\n".join(parts).strip() or "{}", token_usage

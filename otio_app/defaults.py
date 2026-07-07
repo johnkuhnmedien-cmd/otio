@@ -66,6 +66,13 @@ VOICE_ANALYSIS_FILENAME = "voice_over_analysis.json"
 VOICE_FOLDER_MAPPING_FILENAME = "voice_folder_mapping.json"
 EDIT_PLAN_FILENAME = "edit_plan.json"
 EDIT_PLAN_SUBDIR = "edit_plan"
+MODEL_COMPARISON_SUBDIR = "model_comparison_runs"
+MODEL_COMPARISON_SUMMARY_FILENAME = "model_comparison_summary.json"
+MODEL_COMPARISON_PRESETS: dict[str, tuple[str, ...]] = {
+    "gemini": ("gemini-3.1-pro-preview", "gemini-3.1-flash-lite"),
+    "anthropic": ("anthropic:claude-sonnet-5", "anthropic:claude-opus-4-8"),
+    "openai": ("openai:gpt-5.5", "openai:gpt-5.4-mini"),
+}
 EXPORTS_SUBDIR = "exports"
 CLEAN_MEDIA_OUTPUT_SUBDIR = "clean"
 CLEAN_MEDIA_MANIFEST_SUBDIR = "clean_media"

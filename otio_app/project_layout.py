@@ -88,6 +88,26 @@ def get_edit_plan_dir(work_dir: Path) -> Path:
     return work_dir / EDIT_PLAN_SUBDIR
 
 
+def get_model_comparison_runs_dir(work_dir: Path) -> Path:
+    from otio_app.defaults import MODEL_COMPARISON_SUBDIR
+
+    return work_dir / MODEL_COMPARISON_SUBDIR
+
+
+def get_model_comparison_batch_dir(work_dir: Path, comparison_id: str) -> Path:
+    return get_model_comparison_runs_dir(work_dir) / comparison_id
+
+
+def get_model_comparison_run_dir(work_dir: Path, comparison_id: str, run_id: str) -> Path:
+    return get_model_comparison_batch_dir(work_dir, comparison_id) / run_id
+
+
+def get_model_comparison_summary_path(work_dir: Path, comparison_id: str) -> Path:
+    from otio_app.defaults import MODEL_COMPARISON_SUMMARY_FILENAME
+
+    return get_model_comparison_batch_dir(work_dir, comparison_id) / MODEL_COMPARISON_SUMMARY_FILENAME
+
+
 def get_folder_edit_plan_path(work_dir: Path, folder_name: str) -> Path:
     """Pfad zur Schnittplan-JSON eines Asset-Ordners (z. B. _otio/edit_plan/Florida_Keys.json)."""
     return get_edit_plan_dir(work_dir) / f"{safe_folder_slug(folder_name)}.json"

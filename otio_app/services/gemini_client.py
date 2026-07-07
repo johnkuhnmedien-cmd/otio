@@ -713,6 +713,64 @@ def build_plan_folder_holistic_v1_prompt(
     return "\n".join(sections)
 
 
+def build_plan_folder_model_comparison_prompt(
+    *,
+    folder_name: str,
+    segment_lines: str,
+    asset_lines: str,
+    language: str,
+    editor_hint: str = "",
+) -> str:
+    """Neutraler Vergleichs-Prompt ohne harte Timing- oder Asset-Nutzungsregeln."""
+    sections = [
+        (
+            f"Du planst Video-Shots für den Ordner '{folder_name}' als kreativen, "
+            f"semantischen Vorschlag. Sprache: {language}."
+        ),
+        "",
+        "Voice-over-Segmente (in chronologischer Reihenfolge):",
+        segment_lines,
+        "",
+        "Verfügbare lokale Assets:",
+        asset_lines,
+    ]
+    hint = editor_hint.strip()
+    if hint:
+        sections.extend(
+            [
+                "",
+                "Zusätzliche Anweisungen des Editors (Hinweis, keine harten technischen Regeln):",
+                hint,
+            ]
+        )
+    sections.extend(
+        [
+            "",
+            "WICHTIG: Betrachte ALLE Segmente und ALLE Assets gesamtheitlich.",
+            "Wähle für jeden Teil das inhaltlich passendste Asset.",
+            "Wenn die Passage mehrere Motive nennt, darfst du mehrere Teile vorschlagen.",
+            "Bewerte die visuelle Passung: sehr_gut, gut, mittel oder unpassend.",
+            "Bei unpassend: asset_path auf null setzen.",
+            "Du darfst optional desired_duration_sec, visual_intent, reason und confidence angeben.",
+            "Es gibt KEINE harten Min-/Max-Shot-Regeln und KEINE Asset-Wiederverwendungslimits.",
+            "",
+            "Antworte NUR als JSON:",
+            (
+                '{"beats":[{"beat_id":"beat_001","parts":[{"text":"...","motif":"...",'
+                '"asset_path":"exakter path oder null",'
+                '"match_quality":"sehr_gut|gut|mittel|unpassend",'
+                '"visual_intent":"optional",'
+                '"reason":"optional",'
+                '"confidence":"optional",'
+                '"desired_duration_sec":6.0}]}]}'
+            ),
+            "beat_id muss exakt einem beat_id aus den Segmenten entsprechen.",
+            "asset_path muss exakt einem path aus der Asset-Liste entsprechen oder null sein.",
+        ]
+    )
+    return "\n".join(sections)
+
+
 def build_plan_folder_free_prompt(
     *,
     folder_name: str,
