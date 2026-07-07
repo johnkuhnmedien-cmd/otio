@@ -1,0 +1,187 @@
+"""Zentrale Standardwerte — unabhängig von Pfad- und DB-Konfiguration."""
+
+from __future__ import annotations
+
+DEFAULT_WORK_SUBDIR = "_otio"
+DEFAULT_VOICE_OVER_SUBDIR = "Voice over"
+DEFAULT_FRAMES_PER_SHOT = 3
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
+DEFAULT_VOICE_BACKEND = "whisper"
+DEFAULT_WHISPER_MODEL = "large-v3"
+VOICE_BACKEND_WHISPER = "whisper"
+VOICE_BACKEND_GEMINI = "gemini"
+VOICE_BACKEND_CHOICES = (
+    VOICE_BACKEND_WHISPER,
+    VOICE_BACKEND_GEMINI,
+)
+VOICE_BACKEND_LABELS = {
+    VOICE_BACKEND_WHISPER: "Whisper (lokal, kostenlos)",
+    VOICE_BACKEND_GEMINI: "Gemini (Cloud, kostenpflichtig)",
+}
+WHISPER_MODEL_CHOICES = (
+    "tiny",
+    "base",
+    "small",
+    "medium",
+    "large-v3",
+)
+WHISPER_MODEL_LABELS = {
+    "tiny": "Whisper tiny — am schnellsten, grober",
+    "base": "Whisper base — schnell",
+    "small": "Whisper small — schnell, ausgewogen",
+    "medium": "Whisper medium — genauer, langsamer",
+    "large-v3": "Whisper large-v3 — beste Qualität, am langsamsten (Standard)",
+}
+GEMINI_MODEL_CHOICES = (
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite",
+    "gemini-3.1-pro-preview",
+)
+GEMINI_MODEL_LABELS = {
+    "gemini-2.0-flash": "Gemini 2.0 Flash — schnell, günstig",
+    "gemini-2.0-flash-lite": "Gemini 2.0 Flash Lite — sehr günstig",
+    "gemini-2.5-flash": "Gemini 2.5 Flash — ausgewogen",
+    "gemini-2.5-pro": "Gemini 2.5 Pro — höhere Qualität, teurer",
+    "gemini-3-flash-preview": "Gemini 3 Flash Preview — schnell, Pro-Niveau (Preview)",
+    "gemini-3.1-flash-lite": "Gemini 3.1 Flash Lite — günstig, Preview (Standard)",
+    "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview — beste Qualität (Preview, teurer)",
+}
+INVENTORY_FILENAME = "inventory.json"
+INVENTORY_SUBDIR = "inventory"
+MANUAL_FOLDER_COMPLETION_FILENAME = "manual_folder_completion.json"
+VOICE_ANALYSIS_FILENAME = "voice_over_analysis.json"
+VOICE_FOLDER_MAPPING_FILENAME = "voice_folder_mapping.json"
+EDIT_PLAN_FILENAME = "edit_plan.json"
+EDIT_PLAN_SUBDIR = "edit_plan"
+EXPORTS_SUBDIR = "exports"
+CLEAN_MEDIA_OUTPUT_SUBDIR = "clean"
+CLEAN_MEDIA_MANIFEST_SUBDIR = "clean_media"
+DEFAULT_SHOT_MIN_SEC = 3.0
+DEFAULT_SHOT_MAX_SEC = 8.0
+DEFAULT_AUDIO_OFFSET_SEC = 1.0
+DEFAULT_SECTION_OUTRO_SEC = 5.0
+MAX_GEMINI_PLAN_ATTEMPTS = 3
+OUTRO_BEAT_ID = "outro_001"
+DEFAULT_TEXT_SPLITTERS = (", und ", ", ", " und ")
+FALLBACK_SOURCE_LOCAL = "local"
+FALLBACK_SOURCE_MISSING = "missing"
+FALLBACK_SOURCE_ADOBE_STOCK = "adobe_stock"
+FALLBACK_SOURCE_PEXELS = "pexels"
+FALLBACK_SOURCE_GEMINI_IMAGE = "gemini_image"
+FALLBACK_SOURCE_CHOICES = (
+    FALLBACK_SOURCE_LOCAL,
+    FALLBACK_SOURCE_ADOBE_STOCK,
+    FALLBACK_SOURCE_PEXELS,
+    FALLBACK_SOURCE_GEMINI_IMAGE,
+)
+FALLBACK_SOURCE_LABELS = {
+    FALLBACK_SOURCE_LOCAL: "Lokale Assets",
+    FALLBACK_SOURCE_ADOBE_STOCK: "Adobe Stock",
+    FALLBACK_SOURCE_PEXELS: "Pexels & Co.",
+    FALLBACK_SOURCE_GEMINI_IMAGE: "KI-Bild (Gemini)",
+}
+DEFAULT_FALLBACK_ORDER = (
+    FALLBACK_SOURCE_LOCAL,
+    FALLBACK_SOURCE_ADOBE_STOCK,
+    FALLBACK_SOURCE_PEXELS,
+    FALLBACK_SOURCE_GEMINI_IMAGE,
+)
+
+SUPPLEMENT_SUBDIR = "supplement"
+SUPPLEMENT_REQUESTS_FILENAME = "supplement_requests.json"
+SUPPLEMENT_MANIFEST_FILENAME = "supplement_manifest.json"
+SUPPLEMENT_ERRORS_FILENAME = "supplement_errors.json"
+PEXELS_DEBUG_REPORT_FILENAME = "pexels_debug_report.json"
+INVENTORY_DELTA_SUFFIX = ".inventory_delta.json"
+SUPPLEMENTAL_FOLDER_NAME = "_supplemental"
+DEFAULT_COVERAGE_THRESHOLD = 0.55
+
+MATCH_QUALITY_SEHR_GUT = "sehr_gut"
+MATCH_QUALITY_GUT = "gut"
+MATCH_QUALITY_MITTEL = "mittel"
+MATCH_QUALITY_UNPASSEND = "unpassend"
+
+MATCH_QUALITY_CHOICES = (
+    MATCH_QUALITY_SEHR_GUT,
+    MATCH_QUALITY_GUT,
+    MATCH_QUALITY_MITTEL,
+    MATCH_QUALITY_UNPASSEND,
+)
+
+MATCH_QUALITY_LABELS = {
+    MATCH_QUALITY_SEHR_GUT: "Sehr gut",
+    MATCH_QUALITY_GUT: "Gut",
+    MATCH_QUALITY_MITTEL: "Mittel",
+    MATCH_QUALITY_UNPASSEND: "Unpassend",
+}
+
+PROVIDER_STATUS_MOCK = "MOCK"
+PROVIDER_STATUS_CONFIG_MISSING = "CONFIG_MISSING"
+PROVIDER_STATUS_READY = "READY"
+PROVIDER_STATUS_ERROR = "ERROR"
+
+CANDIDATE_STATUS_FOUND = "CANDIDATE_FOUND"
+CANDIDATE_STATUS_MOCK_ONLY = "CANDIDATE_MOCK_ONLY"
+CANDIDATE_STATUS_SELECTED = "SELECTED"
+CANDIDATE_STATUS_ACQUIRE_STARTED = "ACQUIRE_STARTED"
+CANDIDATE_STATUS_ACQUIRED = "ACQUIRED"
+CANDIDATE_STATUS_DOWNLOAD_FAILED = "DOWNLOAD_FAILED"
+CANDIDATE_STATUS_REJECTED_ASPECT_RATIO = "REJECTED_ASPECT_RATIO"
+CANDIDATE_STATUS_NOT_DOWNLOADABLE_16_9 = "NOT_DOWNLOADABLE_16_9"
+CANDIDATE_STATUS_GENERATION_FAILED = "GENERATION_FAILED"
+CANDIDATE_STATUS_IMPORTED_MANUALLY = "IMPORTED_MANUALLY"
+CANDIDATE_STATUS_ANALYSIS_PENDING = "ANALYSIS_PENDING"
+CANDIDATE_STATUS_ANALYSIS_COMPLETE = "ANALYSIS_COMPLETE"
+CANDIDATE_STATUS_INVENTORY_ADDED = "INVENTORY_ADDED"
+
+REQUEST_STATUS_PENDING_SOURCE = "PENDING_SOURCE_SELECTION"
+REQUEST_STATUS_SOURCE_SELECTED = "SOURCE_SELECTED"
+REQUEST_STATUS_CANDIDATES_FOUND = "CANDIDATES_FOUND"
+REQUEST_STATUS_AWAITING_SELECTION = "AWAITING_USER_SELECTION"
+REQUEST_STATUS_ACQUIRE_FAILED = "ACQUIRE_FAILED"
+REQUEST_STATUS_ASSET_ACQUIRED = "ASSET_ACQUIRED"
+REQUEST_STATUS_ANALYSIS_PENDING = "ANALYSIS_PENDING"
+REQUEST_STATUS_INVENTORY_UPDATED = "INVENTORY_UPDATED"
+REQUEST_STATUS_READY_FOR_REPLAN = "READY_FOR_REPLAN"
+
+SUPPLEMENT_SOURCE_ADOBE = "adobe_stock"
+SUPPLEMENT_SOURCE_PEXELS = "pexels"
+SUPPLEMENT_SOURCE_GOOGLE = "google_search"
+SUPPLEMENT_SOURCE_NANO_BANANA = "nano_banana"
+SUPPLEMENT_SOURCE_MANUAL = "manual"
+
+SUPPLEMENT_SOURCE_LABELS = {
+    SUPPLEMENT_SOURCE_ADOBE: "Adobe Stock",
+    SUPPLEMENT_SOURCE_PEXELS: "Pexels",
+    SUPPLEMENT_SOURCE_GOOGLE: "Google Suche",
+    SUPPLEMENT_SOURCE_NANO_BANANA: "Nano Banana / KI-Bild",
+    SUPPLEMENT_SOURCE_MANUAL: "Manuell später",
+}
+
+ASSET_ORIGIN_LOCAL = "local_original"
+ASSET_ORIGIN_ADOBE = "adobe_stock"
+ASSET_ORIGIN_PEXELS = "pexels"
+ASSET_ORIGIN_GOOGLE = "google_search"
+ASSET_ORIGIN_NANO_BANANA = "nano_banana"
+ASSET_ORIGIN_MANUAL = "manual"
+
+RIGHTS_STATUS_APPROVED = "APPROVED"
+RIGHTS_STATUS_NEEDS_LICENSE_REVIEW = "NEEDS_LICENSE_REVIEW"
+RIGHTS_STATUS_GENERATED_APPROVED = "GENERATED_APPROVED"
+RIGHTS_STATUS_NEEDS_REVIEW = "NEEDS_REVIEW"
+
+
+def resolve_voice_backend(backend: str | None) -> str:
+    if backend and backend.strip() in VOICE_BACKEND_CHOICES:
+        return backend.strip()
+    return DEFAULT_VOICE_BACKEND
+
+
+def resolve_whisper_model(model: str | None) -> str:
+    if model and model.strip() in WHISPER_MODEL_CHOICES:
+        return model.strip()
+    return DEFAULT_WHISPER_MODEL
