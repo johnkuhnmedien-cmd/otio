@@ -36,9 +36,11 @@ def test_build_plan_folder_prompt_includes_outro_when_configured() -> None:
     )
     assert "outro_001" in prompt
     assert "Ausklingen" in prompt
-    assert "5.0" in prompt or "duration_sec=5" in prompt
-    assert "mindestens 3.0s" in prompt
-    assert "höchstens 8.0s" in prompt
+    assert "5.0" in prompt
+    assert "## Harte Regeln: Shot-Timing" in prompt
+    assert "shot_min_sec" in prompt
+    assert "3.0" in prompt
+    assert "8.0" in prompt
 
 
 def test_build_plan_folder_prompt_includes_shot_timing_rules() -> None:
@@ -50,11 +52,13 @@ def test_build_plan_folder_prompt_includes_shot_timing_rules() -> None:
         shot_min_sec=4.0,
         shot_max_sec=10.0,
     )
-    assert "Timing-Regeln für Shots" in prompt
-    assert "mindestens 4.0s" in prompt
-    assert "höchstens 10.0s" in prompt
-    assert "allowed_parts_min" in prompt
-    assert "allowed_parts_max" in prompt
+    assert "## Harte Regeln: Shot-Timing" in prompt
+    assert "shot_min_sec" in prompt
+    assert "4.0" in prompt
+    assert "shot_max_sec" in prompt
+    assert "10.0" in prompt
+    assert "parts_min" in prompt
+    assert "parts_max" in prompt
 
 
 def test_build_plan_folder_prompt_omits_outro_when_zero() -> None:
@@ -65,7 +69,7 @@ def test_build_plan_folder_prompt_omits_outro_when_zero() -> None:
         language="de",
         section_outro_sec=0.0,
     )
-    assert "Ordner-Ausklingen nach" not in prompt
+    assert "## Zusatz: Ordner-Ausklingen" not in prompt
 
 
 def test_build_plan_folder_prompt_includes_segments_and_holistic_instruction() -> None:
@@ -96,11 +100,12 @@ def test_build_plan_folder_prompt_includes_asset_usage_rules() -> None:
         max_asset_usage=1,
         min_asset_reuse_distance_shots=2,
     )
-    assert "SYSTEM RULE: Asset usage limit" in prompt
+    assert "## Harte Regeln: Asset-Nutzung" in prompt
     assert "max_asset_usage" in prompt
     assert "max_asset_usage = 1" in prompt
-    assert "min_asset_reuse_distance_shots" in prompt
-    assert '"asset_reuse_policy": "hard_block"' in prompt
+    assert "min_reuse_distance_shots" in prompt
+    assert "asset_reuse_policy" in prompt
+    assert "hard_block" in prompt
 
 
 def test_format_segment_lines_includes_allowed_parts_bounds() -> None:
@@ -122,12 +127,15 @@ def test_format_segment_lines_includes_allowed_parts_bounds() -> None:
         shot_min_sec=3.0,
         shot_max_sec=8.0,
     )
-    assert "allowed_parts_min=3" in lines
-    assert "allowed_parts_max=6" in lines
-    assert "short_segment_allowed=false" in lines
-    assert "allowed_parts_min=1" in lines
-    assert "allowed_parts_max=1" in lines
-    assert "short_segment_allowed=true" in lines
+    assert "| beat_001 |" in lines
+    assert "| 3 |" in lines
+    assert "| 6 |" in lines
+    assert "| nein |" in lines
+    assert "| beat_002 |" in lines
+    assert "| 1 |" in lines
+    assert "| ja |" in lines
+    assert "parts_min" in lines
+    assert "parts_max" in lines
 
 
 def test_build_plan_folder_correction_includes_structured_asset_and_shot_errors() -> None:

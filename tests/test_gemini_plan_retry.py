@@ -42,8 +42,8 @@ def test_build_plan_folder_prompt_includes_audio_offset() -> None:
         language="de",
         audio_offset_sec=2.5,
     )
-    assert "Audio-Start" in prompt
-    assert "2.5s" in prompt
+    assert "audio_offset_sec" in prompt
+    assert "2.5" in prompt
 
 
 def test_build_plan_folder_correction_instructions_include_errors_and_previous_plan() -> None:
@@ -63,10 +63,10 @@ def test_build_plan_folder_correction_instructions_include_errors_and_previous_p
         shot_min_sec=5.0,
         shot_max_sec=10.0,
     )
-    assert "AUTOMATISCHE KORREKTUR" in prompt
+    assert "## Korrektur" in prompt
     assert "94.88s < 97.31s" in prompt
     assert "beat_020: 3 part(s)" in prompt
-    assert "NEUEN vollständigen Plan" in prompt
+    assert "neuen vollständigen Plan" in prompt
     assert '"beat_id": "beat_020"' in prompt
 
 
@@ -203,7 +203,7 @@ def test_build_edit_plan_retries_gemini_on_timing_validation_failure(
     assert document is not None
     assert len(gemini_calls) == 2
     assert gemini_calls[0].get("correction_instructions", "") == ""
-    assert "AUTOMATISCHE KORREKTUR" in gemini_calls[1]["correction_instructions"]
+    assert "## Korrektur" in gemini_calls[1]["correction_instructions"]
     assert validation_calls == 2
     assert any("erneuter Gemini-Lauf" in note for note in document.plan_generation_notes)
 
