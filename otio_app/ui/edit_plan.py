@@ -173,8 +173,18 @@ def _location_state_icon(state: EditPlanLocationState) -> str:
 
 def _match_quality_label(match_quality: str) -> str:
     if not match_quality:
-        return "Nicht bewertet"
+        return ""
     return MATCH_QUALITY_LABELS.get(match_quality, match_quality)
+
+
+def _shot_expander_title(index: int, shot: EditPlanShot) -> str:
+    base = f"Shot {index + 1} · {shot.folder} · {shot.duration_sec:.1f}s"
+    if shot.section_outro:
+        return f"{base} · Ordner-Ausklingen"
+    label = _match_quality_label(shot.match_quality)
+    if label:
+        return f"{base} · Passung: {label}"
+    return f"{base} · Passung: —"
 
 
 def _voice_segment_count_for_folder(project, folder_name: str) -> int:
@@ -201,23 +211,28 @@ def _voice_segment_count_for_folder(project, folder_name: str) -> int:
 
 
 def _render_match_quality_badge(shot: EditPlanShot) -> None:
-    label = _match_quality_label(shot.match_quality)
+    if shot.section_outro:
+        st.caption(
+            "**Ordner-Ausklingen** — kein Voice-over-Shot. Gemini bewertet nur "
+            "Narration-Shots (Sehr gut / Gut / Mittel / Unpassend)."
+        )
+        return
     if shot.match_quality == MATCH_QUALITY_SEHR_GUT:
-        st.success(f"**Passung (Gemini): Sehr gut**")
+        st.success("**Passung (Gemini): Sehr gut**")
     elif shot.match_quality == MATCH_QUALITY_GUT:
-        st.info(f"**Passung (Gemini): Gut**")
+        st.info("**Passung (Gemini): Gut**")
     elif shot.match_quality == MATCH_QUALITY_MITTEL:
-        st.warning(f"**Passung (Gemini): Mittel**")
+        st.warning("**Passung (Gemini): Mittel**")
     elif shot.match_quality == MATCH_QUALITY_UNPASSEND:
-        st.error(f"**Passung (Gemini): Unpassend**")
+        st.error("**Passung (Gemini): Unpassend**")
         st.caption(
             "Platzhalter-Asset (Establishing/Luftaufnahme) — für ein passendes Motiv "
             "kannst du unten **Supplement Assets** starten oder unter **②½** ergänzen."
         )
     else:
         st.warning(
-            "**Passung (Gemini): Nicht bewertet** — dieser Schnittplan stammt vermutlich "
-            "aus einer älteren Version. Bitte unter **Vorschlag** neu **Schnittplan vorschlagen**."
+            "Für diesen Narration-Shot fehlt die Gemini-Bewertung — bitte unter "
+            "**Vorschlag** den Schnittplan **neu vorschlagen**."
         )
 
 
@@ -240,9 +255,13 @@ def _render_match_quality_summary(shots: list[EditPlanShot]) -> None:
         f"**Mittel:** {counts.get(MATCH_QUALITY_MITTEL, 0)}",
         f"**Unpassend:** {counts.get(MATCH_QUALITY_UNPASSEND, 0)}",
     ]
-    if counts.get("", 0):
-        parts.append(f"**Nicht bewertet:** {counts['']}")
-    st.markdown("**Gemini-Passung (alle Shots):** " + " · ".join(parts))
+    st.markdown("**Gemini-Passung (Narration-Shots):** " + " · ".join(parts))
+    unrated = [shot for shot in narrative if not shot.match_quality]
+    if unrated:
+        st.warning(
+            f"{len(unrated)} Narration-Shot(s) ohne Bewertung — bitte unter **Vorschlag** "
+            "den Schnittplan **neu vorschlagen**."
+        )
 
 
 def _collect_location_statuses(
@@ -1137,11 +1156,9 @@ def _render_tab_review(
                 st.error(str(exc))
 
     for index, shot in enumerate(draft.shots):
-        quality_label = _match_quality_label(shot.match_quality)
         with st.expander(
-            f"Shot {index + 1} · {shot.folder} · {shot.duration_sec:.1f}s · "
-            f"Passung: {quality_label}",
-            expanded=index < 2,
+            _shot_expander_title(index, shot),
+            expanded=index < 2 and not shot.section_outro,
         ):
             _render_match_quality_badge(shot)
             st.write(f"**Motiv:** {shot.motif or '—'}")
