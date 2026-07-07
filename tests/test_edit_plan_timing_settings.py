@@ -86,21 +86,20 @@ def test_seeded_widgets_survive_fresh_session(tmp_path: Path) -> None:
     import streamlit as st
 
     from otio_app.ui.edit_plan import (
-        _persist_timing_widgets,
         _plan_number_setting,
-        _plan_text_setting,
+        _save_vorschlag_timing_settings,
         _seed_timing_widgets,
     )
 
     project = _project(tmp_path)
 
-    # Session 1: Nutzer stellt individuelle Werte ein und die Auto-Persistenz greift.
+    # Session 1: Nutzer stellt individuelle Werte ein und speichert explizit.
     st.session_state.clear()
     _seed_timing_widgets(project)
     st.session_state[f"plan_min_{project.id}"] = 4.5
     st.session_state[f"plan_max_{project.id}"] = 15.0
-    st.session_state[f"plan_split_{project.id}"] = ", danach , dann "
-    _persist_timing_widgets(project)
+    st.session_state[f"plan_gemini_{project.id}"] = "gemini-3.1-pro"
+    _save_vorschlag_timing_settings(project, force=True)
 
     # Session 2 (frischer session_state, z.B. nach Seitenwechsel/Neustart).
     st.session_state.clear()
@@ -108,4 +107,24 @@ def test_seeded_widgets_survive_fresh_session(tmp_path: Path) -> None:
 
     assert _plan_number_setting(project.id, "min", DEFAULT_SHOT_MIN_SEC) == 4.5
     assert _plan_number_setting(project.id, "max", DEFAULT_SHOT_MAX_SEC) == 15.0
-    assert _plan_text_setting(project.id, "split", "") == ", danach , dann "
+    assert st.session_state[f"plan_gemini_{project.id}"] == "gemini-3.1-pro"
+
+
+def test_save_vorschlag_timing_settings_force_persists_min_max_model(tmp_path: Path) -> None:
+    import streamlit as st
+
+    from otio_app.ui.edit_plan import _save_vorschlag_timing_settings, _seed_timing_widgets
+
+    project = _project(tmp_path)
+    st.session_state.clear()
+    _seed_timing_widgets(project)
+    st.session_state[f"plan_min_{project.id}"] = 2.5
+    st.session_state[f"plan_max_{project.id}"] = 9.0
+    st.session_state[f"plan_gemini_{project.id}"] = "claude-opus-4-8"
+
+    assert _save_vorschlag_timing_settings(project, force=True) is True
+
+    reloaded = load_edit_plan_timing_settings(project)
+    assert reloaded.shot_min_sec == 2.5
+    assert reloaded.shot_max_sec == 9.0
+    assert reloaded.gemini_model == "claude-opus-4-8"

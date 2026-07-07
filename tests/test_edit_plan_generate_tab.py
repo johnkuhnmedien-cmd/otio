@@ -160,6 +160,28 @@ def test_seed_timing_widgets_heals_reset_artifact_against_saved_file(tmp_path: P
     assert st.session_state[f"plan_outro_{project.id}"] == 5.0
 
 
+def test_save_vorschlag_timing_settings_force_allows_widget_floor_values(tmp_path: Path) -> None:
+    """Expliziter Speichern-Button darf auch 1.0/1.0/0.0/0.0 persistieren."""
+    import streamlit as st
+
+    from otio_app.ui.edit_plan import _save_vorschlag_timing_settings
+
+    project = _project(tmp_path)
+    st.session_state.clear()
+    st.session_state[f"plan_min_{project.id}"] = 1.0
+    st.session_state[f"plan_max_{project.id}"] = 1.0
+    st.session_state[f"plan_offset_{project.id}"] = 0.0
+    st.session_state[f"plan_outro_{project.id}"] = 0.0
+    st.session_state[f"plan_gemini_{project.id}"] = "gpt-5.5"
+
+    assert _save_vorschlag_timing_settings(project, force=True) is True
+
+    reloaded = load_edit_plan_timing_settings_helper(project)
+    assert reloaded.shot_min_sec == 1.0
+    assert reloaded.shot_max_sec == 1.0
+    assert reloaded.gemini_model == "gpt-5.5"
+
+
 def test_persist_timing_widgets_refuses_to_save_reset_artifact(tmp_path: Path) -> None:
     """Selbst wenn die Widgets (aus welchem Grund auch immer) den
     Reset-Zustand zeigen, darf _persist_timing_widgets ihn NICHT in die

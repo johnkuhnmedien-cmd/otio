@@ -505,14 +505,12 @@ def _seed_timing_widgets(project) -> None:
             st.session_state[gemini_key] = saved.gemini_model
 
 
-def _persist_timing_widgets(project) -> None:
-    """Speichert Timing-/Gemini-Widget-Werte beim Rendern des Vorschlag-Tabs.
+def _save_vorschlag_timing_settings(project, *, force: bool = False) -> bool:
+    """Schreibt Min./Max. Shot und Planungs-Modell in die Projektdatei.
 
-    Schreibt NICHT, wenn Min./Max. Shot, Audio-Start und Ausklingen
-    gleichzeitig auf ihrem Widget-Minimum stehen (1.0/1.0/0.0/0.0) — dieser
-    praktisch unbrauchbare Zustand ("1 Sekunde pro Shot") deutet auf ein
-    Reset-Artefakt hin und würde sonst eine zuvor korrekt gespeicherte
-    Konfiguration dauerhaft überschreiben (siehe _seed_timing_widgets).
+    Mit ``force=True`` (expliziter Speichern-Button) werden die Werte immer
+    übernommen. Ohne ``force`` wird der Reset-Zustand 1.0/1.0/0.0/0.0 nicht
+    persistiert (Schutz vor Widget-Artefakten).
     """
     current_values = (
         _plan_number_setting(project.id, "min", DEFAULT_SHOT_MIN_SEC),
@@ -520,8 +518,8 @@ def _persist_timing_widgets(project) -> None:
         _plan_number_setting(project.id, "offset", DEFAULT_AUDIO_OFFSET_SEC),
         _plan_number_setting(project.id, "outro", DEFAULT_SECTION_OUTRO_SEC),
     )
-    if _looks_like_widget_reset_artifact(current_values):
-        return
+    if not force and _looks_like_widget_reset_artifact(current_values):
+        return False
     saved = load_edit_plan_timing_settings(project)
     settings = EditPlanTimingSettings(
         shot_min_sec=current_values[0],
@@ -529,9 +527,15 @@ def _persist_timing_widgets(project) -> None:
         audio_offset_sec=current_values[2],
         section_outro_sec=current_values[3],
         text_splitters=saved.text_splitters,
-        gemini_model=_plan_gemini_model(project.id),
+        gemini_model=_plan_gemini_model(project.id, saved.gemini_model),
     )
     save_edit_plan_timing_settings(project, settings)
+    return True
+
+
+def _persist_timing_widgets(project) -> None:
+    """Legacy-Hilfsfunktion: stiller Auto-Save (nur wenn kein Reset-Artefakt)."""
+    _save_vorschlag_timing_settings(project, force=False)
 
 
 def _render_timing_gemini_controls(project) -> None:
@@ -609,16 +613,48 @@ def _render_timing_gemini_controls(project) -> None:
         "key": gemini_key,
     }
     if gemini_key not in st.session_state:
-        default_model = get_default_gemini_model()
+        saved_model = load_edit_plan_timing_settings(project).gemini_model
+        preferred_model = (
+            saved_model if saved_model in model_choices else get_default_gemini_model()
+        )
         selectbox_kwargs["index"] = (
-            model_choices.index(default_model) if default_model in model_choices else 0
+            model_choices.index(preferred_model) if preferred_model in model_choices else 0
         )
     elif st.session_state[gemini_key] not in model_choices:
         st.session_state[gemini_key] = get_default_gemini_model()
     st.selectbox("Planungs-Modell (Motiv → Asset)", **selectbox_kwargs)
 
-    st.caption("💾 Timing- und Gemini-Einstellungen werden automatisch gespeichert.")
-    _persist_timing_widgets(project)
+    saved_settings = load_edit_plan_timing_settings(project)
+    save_col, info_col = st.columns([1, 3])
+    with save_col:
+        if st.button(
+            "Speichern",
+            key=f"save_vorschlag_timing_{project.id}",
+            type="secondary",
+            use_container_width=True,
+            help="Min./Max. Shot und Planungs-Modell dauerhaft für dieses Projekt merken.",
+        ):
+            if _plan_number_setting(project.id, "min", DEFAULT_SHOT_MIN_SEC) > _plan_number_setting(
+                project.id, "max", DEFAULT_SHOT_MAX_SEC
+            ):
+                st.error(
+                    "Min. Shot darf nicht größer als Max. Shot sein — bitte korrigieren und erneut speichern."
+                )
+            else:
+                _save_vorschlag_timing_settings(project, force=True)
+                saved_settings = load_edit_plan_timing_settings(project)
+                st.success("Einstellungen gespeichert.")
+    with info_col:
+        st.caption(
+            "Gespeichert: "
+            f"Min. {saved_settings.shot_min_sec:.1f}s · "
+            f"Max. {saved_settings.shot_max_sec:.1f}s · "
+            f"{format_plan_model_label(saved_settings.gemini_model)}"
+        )
+    st.caption(
+        "Min./Max. Shot und Planungs-Modell bleiben nach **Speichern** auch nach "
+        "Seitenwechsel oder Neuladen erhalten, bis du sie erneut änderst."
+    )
 
 
 def _render_tab_settings(project) -> None:
