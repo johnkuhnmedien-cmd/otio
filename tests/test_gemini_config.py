@@ -11,15 +11,15 @@ from otio_app.services.gemini_client import resolve_gemini_model
 
 def test_resolve_gemini_model_prefers_ui_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GEMINI_MODEL", raising=False)
-    assert resolve_gemini_model("gemini-2.5-pro") == "gemini-2.5-pro"
+    assert resolve_gemini_model("gemini-3.1-pro-preview") == "gemini-3.1-pro-preview"
 
 
 def test_resolve_gemini_model_falls_back_to_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
-    assert resolve_gemini_model(None) == "gemini-2.5-flash"
-    assert resolve_gemini_model("") == "gemini-2.5-flash"
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3-flash-preview")
+    assert resolve_gemini_model(None) == "gemini-3-flash-preview"
+    assert resolve_gemini_model("") == "gemini-3-flash-preview"
 
 
 def test_resolve_gemini_model_ignores_invalid_values(

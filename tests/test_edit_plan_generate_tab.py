@@ -150,7 +150,7 @@ def test_seed_timing_widgets_heals_reset_artifact_against_saved_file(tmp_path: P
     st.session_state[f"plan_max_{project.id}"] = 1.0
     st.session_state[f"plan_offset_{project.id}"] = 0.0
     st.session_state[f"plan_outro_{project.id}"] = 0.0
-    st.session_state[f"plan_gemini_{project.id}"] = "gemini-2.0-flash"
+    st.session_state[f"plan_gemini_{project.id}"] = "gemini-3-flash-preview"
 
     _seed_timing_widgets(project)
 

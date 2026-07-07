@@ -124,7 +124,7 @@ def test_analyze_voice_over_gemini_backend(
         project,
         use_api=True,
         backend=VOICE_BACKEND_GEMINI,
-        model="gemini-2.0-flash",
+        model="gemini-3.1-flash-lite",
     )
 
     assert document.files[0].segments[0].text == "Gemini Transkript."

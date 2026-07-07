@@ -13,6 +13,7 @@ from otio_app.analysis_models import (
     VoiceSegment,
 )
 from otio_app.defaults import (
+    DEFAULT_GEMINI_MODEL,
     VOICE_BACKEND_GEMINI,
     VOICE_BACKEND_WHISPER,
     resolve_voice_backend,
@@ -130,7 +131,7 @@ def _analyze_single_voice_file(
     resolved_backend = resolve_voice_backend(backend)
     engine_model = whisper_model or "small"
     if resolved_backend == VOICE_BACKEND_GEMINI:
-        engine_model = gemini_model or "gemini-2.0-flash"
+        engine_model = gemini_model or DEFAULT_GEMINI_MODEL
 
     cache_file = _cache_path(project, audio_path, resolved_backend, engine_model)
     cached = _load_cached_voice(cache_file)
