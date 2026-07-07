@@ -8,6 +8,8 @@ from otio_app.services.duration_rules import split_total_duration
 from otio_app.services.shot_timing import (
     TimedPart,
     allocate_time_by_text,
+    coalesce_gemini_parts_for_min_shot,
+    max_parts_for_segment,
     merge_short_voice_windows,
     shots_from_timed_parts,
 )
@@ -90,6 +92,28 @@ def test_shots_from_timed_parts_never_extends_past_voice_end() -> None:
     assert len(result) == 1
     assert result[0].end_sec <= 94.88 + 1e-6
     assert result[0].end_sec - result[0].start_sec == pytest.approx(0.57, abs=0.01)
+
+
+def test_coalesce_gemini_parts_merges_micro_fragments_for_min_shot() -> None:
+    parts = [
+        {"text": "Das spanische Moos hängt", "motif": "Moos", "asset_path": "/a.mp4", "match_quality": "gut"},
+        {"text": "Bäume.", "motif": "Detail", "asset_path": "/b.mp4", "match_quality": "gut"},
+        {"text": "Jahrhundert.", "motif": "Detail", "asset_path": "/c.mp4", "match_quality": "mittel"},
+    ]
+    merged = coalesce_gemini_parts_for_min_shot(
+        parts,
+        segment_duration=7.5,
+        min_sec=5.0,
+        max_sec=10.0,
+    )
+    assert len(merged) == 1
+    assert "Bäume" in merged[0]["text"]
+
+
+def test_max_parts_for_segment_respects_min_shot() -> None:
+    assert max_parts_for_segment(7.5, min_sec=5.0) == 1
+    assert max_parts_for_segment(12.0, min_sec=5.0) == 2
+    assert max_parts_for_segment(2.8, min_sec=5.0) == 1
 
 
 def test_merge_short_voice_windows_combines_tail_slices() -> None:

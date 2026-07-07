@@ -4,6 +4,89 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from otio_app.defaults import (
+    MATCH_QUALITY_GUT,
+    MATCH_QUALITY_MITTEL,
+    MATCH_QUALITY_SEHR_GUT,
+    MATCH_QUALITY_UNPASSEND,
+)
+
+_QUALITY_RANK = {
+    MATCH_QUALITY_SEHR_GUT: 0,
+    MATCH_QUALITY_GUT: 1,
+    MATCH_QUALITY_MITTEL: 2,
+    MATCH_QUALITY_UNPASSEND: 3,
+    "": 4,
+}
+
+
+def max_parts_for_segment(segment_duration: float, *, min_sec: float) -> int:
+    """Maximale sinnvolle parts-Anzahl, damit jeder Teil mindestens min_sec erhalten kann."""
+    if segment_duration <= 0.05 or min_sec <= 0:
+        return 1
+    if segment_duration + 0.01 < min_sec:
+        return 1
+    return max(1, int(segment_duration // min_sec))
+
+
+def _pick_better_match_quality(left: str, right: str) -> str:
+    left_rank = _QUALITY_RANK.get(left, 4)
+    right_rank = _QUALITY_RANK.get(right, 4)
+    return left if left_rank <= right_rank else right
+
+
+def _merge_gemini_parts(left: dict, right: dict) -> dict:
+    left_quality = str(left.get("match_quality", "")).strip()
+    right_quality = str(right.get("match_quality", "")).strip()
+    asset_path = left.get("asset_path") or right.get("asset_path")
+    if left.get("asset_path") and right.get("asset_path"):
+        if _QUALITY_RANK.get(right_quality, 4) < _QUALITY_RANK.get(left_quality, 4):
+            asset_path = right.get("asset_path")
+    return {
+        "text": f"{str(left.get('text', '')).strip()} {str(right.get('text', '')).strip()}".strip(),
+        "motif": str(left.get("motif", "")).strip() or str(right.get("motif", "")).strip(),
+        "asset_path": asset_path,
+        "match_quality": _pick_better_match_quality(left_quality, right_quality),
+        "confidence": left.get("confidence") or right.get("confidence") or "low",
+    }
+
+
+def coalesce_gemini_parts_for_min_shot(
+    parts: list[dict],
+    *,
+    segment_duration: float,
+    min_sec: float,
+    max_sec: float,
+) -> list[dict]:
+    """Führt Gemini-parts zusammen, bevor die Zeit verteilt wird (Min.-Shot erzwingen)."""
+    if not parts:
+        return []
+    merged = [dict(part) for part in parts]
+    if segment_duration <= 0.05:
+        return merged
+
+    target_count = max_parts_for_segment(segment_duration, min_sec=min_sec)
+    if segment_duration + 0.01 < min_sec:
+        combined = merged[0]
+        for part in merged[1:]:
+            combined = _merge_gemini_parts(combined, part)
+        return [combined]
+
+    while len(merged) > target_count:
+        best_index = 0
+        best_weight = len(str(merged[0].get("text", ""))) + len(str(merged[1].get("text", "")))
+        for index in range(len(merged) - 1):
+            weight = len(str(merged[index].get("text", ""))) + len(
+                str(merged[index + 1].get("text", ""))
+            )
+            if weight < best_weight:
+                best_weight = weight
+                best_index = index
+        merged[best_index] = _merge_gemini_parts(merged[best_index], merged[best_index + 1])
+        merged.pop(best_index + 1)
+
+    return merged
+
 
 @dataclass(frozen=True)
 class TimedPart:

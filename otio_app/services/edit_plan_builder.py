@@ -55,6 +55,7 @@ from otio_app.services.gemini_client import (
     plan_folder_assets,
 )
 from otio_app.services.edit_plan_validator import (
+    collect_min_shot_violations,
     should_retry_gemini_for_timing,
     timing_validation_errors,
     validate_folder_plan_timing,
@@ -75,6 +76,7 @@ from otio_app.services.supplement_requests import upsert_requests
 from otio_app.services.shot_timing import (
     TimedPart,
     allocate_time_by_text,
+    coalesce_gemini_parts_for_min_shot,
     merge_short_voice_windows,
     shots_from_timed_parts,
 )
@@ -515,6 +517,14 @@ def _folder_shots_from_beats_plan(
                 }
             ]
 
+        segment_duration = max(0.0, segment.end_sec - segment.start_sec)
+        raw_parts = coalesce_gemini_parts_for_min_shot(
+            raw_parts,
+            segment_duration=segment_duration,
+            min_sec=plan_settings.shot_min_sec,
+            max_sec=plan_settings.shot_max_sec,
+        )
+
         texts = [str(part.get("text", "")).strip() for part in raw_parts]
         time_ranges = allocate_time_by_text(
             segment.start_sec,
@@ -889,10 +899,16 @@ def build_edit_plan(
                 voiceover=preview_voiceover,
             )
             timing_errors = timing_validation_errors(timing_validation.errors)
+            timing_errors.extend(
+                collect_min_shot_violations(
+                    folder_build.shots,
+                    min_sec=plan_settings.shot_min_sec,
+                )
+            )
             should_retry = (
                 use_api
                 and attempt < max_attempts
-                and should_retry_gemini_for_timing(timing_validation.errors)
+                and should_retry_gemini_for_timing(timing_errors)
             )
 
             if not should_retry:

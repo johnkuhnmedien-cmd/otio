@@ -345,7 +345,7 @@ def plan_folder_assets(
     )
     prompt = build_plan_folder_prompt(
         folder_name=folder_name,
-        segment_lines=_format_segment_lines(segments),
+        segment_lines=_format_segment_lines(segments, shot_min_sec=shot_min_sec),
         asset_lines=asset_lines,
         language=language,
         extra_instructions=extra_instructions,
@@ -370,7 +370,13 @@ def plan_folder_assets(
     return [beat for beat in beats if isinstance(beat, dict)]
 
 
-def _format_segment_lines(segments: list[dict[str, Any]]) -> str:
+def _format_segment_lines(
+    segments: list[dict[str, Any]],
+    *,
+    shot_min_sec: float = 3.0,
+) -> str:
+    from otio_app.services.shot_timing import max_parts_for_segment
+
     lines: list[str] = []
     for segment in segments:
         beat_id = str(segment.get("beat_id", "")).strip()
@@ -379,8 +385,11 @@ def _format_segment_lines(segments: list[dict[str, Any]]) -> str:
         end_sec = segment.get("end_sec", 0.0)
         if not text:
             continue
+        duration = max(0.0, float(end_sec) - float(start_sec))
+        max_parts = max_parts_for_segment(duration, min_sec=shot_min_sec)
         lines.append(
-            f'- beat_id="{beat_id}" start_sec={start_sec} end_sec={end_sec} text="{text}"'
+            f'- beat_id="{beat_id}" start_sec={start_sec} end_sec={end_sec} '
+            f'max_parts={max_parts} text="{text}"'
         )
     return "\n".join(lines) or "- (keine)"
 
@@ -415,6 +424,7 @@ def build_plan_folder_prompt(
         f"- Erstelle lieber weniger, längere parts statt vieler kurzer Teile unter {shot_min_sec}s.",
         "- Die Voice-over-Zeiten pro Beat sind durch start_sec/end_sec vorgegeben; teile den Text "
         "so auf, dass jeder part einen sinnvollen Anteil des Beats abdeckt.",
+        f"- Pro Beat höchstens max_parts aus der Segment-Zeile (mehr parts werden lokal zusammengeführt).",
         f"- Audio-Start (Timeline): Das Voice-over beginnt auf der Schnittspur bei {audio_offset_sec}s "
         "(kein Head-Trim auf der Audio-Datei; nur für Export-Positionierung).",
     ]
@@ -553,6 +563,8 @@ def build_plan_folder_correction_instructions(
             "Korrektur-Hinweise:",
             f"- Reduziere parts in betroffenen Beats (Ziel: {shot_min_sec}s–{shot_max_sec}s pro part).",
             "- Weniger, längere parts statt vieler kurzer Teile am Beat-Ende.",
+            f"- Pro Beat maximal so viele parts, dass jedes Teil mindestens {shot_min_sec}s Voice-Zeit "
+            "bekommen kann (siehe max_parts in der Segment-Liste).",
             "- Behalte inhaltliche Passung und sinnvolle Asset-Zuordnung so gut wie möglich bei.",
             "- Wiederhole nicht dieselbe Aufteilung, wenn sie die Fehler verursacht hat.",
         ]

@@ -67,12 +67,13 @@ def test_build_plan_folder_prompt_omits_outro_when_zero() -> None:
 def test_build_plan_folder_prompt_includes_segments_and_holistic_instruction() -> None:
     prompt = build_plan_folder_prompt(
         folder_name="Arches National Park",
-        segment_lines='- beat_id="beat_001" start_sec=0.0 end_sec=5.0 text="Wir besuchen den Park."',
+        segment_lines='- beat_id="beat_001" start_sec=0.0 end_sec=12.0 max_parts=2 text="Wir besuchen den Park."',
         asset_lines='- path="/a.mp4" description="Felsbogen"',
         language="de",
         extra_instructions="Assets laufen bis zum nächsten Satz.",
     )
     assert "beat_001" in prompt
+    assert "max_parts" in prompt
     assert "gesamtheitlich" in prompt.lower()
     assert "match_quality" in prompt
     assert "Assets laufen bis zum nächsten Satz." in prompt

@@ -217,6 +217,14 @@ def validate_timeline_items(
     narration_items = [item for item in items if _is_narration_item(item)]
     outro_items = [item for item in items if _is_outro_item(item)]
 
+    beat_spans: dict[str, float] = {}
+    for beat_id in {item.beat_id for item in narration_items if item.beat_id}:
+        beat_items = [item for item in narration_items if item.beat_id == beat_id]
+        if beat_items:
+            beat_spans[beat_id] = max(item.voice_end_sec for item in beat_items) - min(
+                item.voice_start_sec for item in beat_items
+            )
+
     # Die Min./Max.-Shot-Regeln sind projektspezifisch konfigurierbar (Tab
     # „Regeln → Timing & Gemini“). Zuvor wurden hier fest verdrahtete
     # Default-Konstanten (3.0/8.0s) geprüft — unabhängig davon, was der Nutzer
@@ -242,8 +250,8 @@ def validate_timeline_items(
             )
         if duration < min_duration_sec - 0.01 and not item.allow_black:
             if item.type != "generic_narration_visual":
-                voice_span = max(0.0, item.voice_end_sec - item.voice_start_sec)
-                if voice_span + 0.01 < min_duration_sec:
+                beat_total = beat_spans.get(item.beat_id or "", duration)
+                if beat_total + 0.01 < min_duration_sec:
                     pass
                 else:
                     result.errors.append(
@@ -394,7 +402,39 @@ TIMING_VALIDATION_MARKERS = (
     "voiceover.source",
     "video source_in_sec",
     "nicht vollständig als",
+    "Min. Shot",
+    "unter Min. Shot",
 )
+
+
+def collect_min_shot_violations(
+    shots,
+    *,
+    min_sec: float,
+) -> list[str]:
+    """Findet Narration-Shots unter Min. Shot, wenn der Beat lang genug wäre."""
+    from collections import defaultdict
+
+    by_beat: dict[str, list] = defaultdict(list)
+    for shot in shots:
+        if getattr(shot, "section_outro", False):
+            continue
+        beat_id = getattr(shot, "beat_id", "") or "_unscoped"
+        by_beat[beat_id].append(shot)
+
+    errors: list[str] = []
+    for beat_id, beat_shots in by_beat.items():
+        beat_total = max(s.voice_end_sec for s in beat_shots) - min(s.voice_start_sec for s in beat_shots)
+        if beat_total + 0.01 < min_sec:
+            continue
+        for shot in beat_shots:
+            if shot.duration_sec + 0.01 < min_sec:
+                label = beat_id if beat_id != "_unscoped" else shot.folder
+                errors.append(
+                    f"{label}: Shot {shot.duration_sec:.1f}s unter Min. Shot {min_sec:.1f}s "
+                    f"(Beat-Dauer {beat_total:.1f}s)"
+                )
+    return errors
 
 
 def timing_validation_errors(errors: list[str]) -> list[str]:
