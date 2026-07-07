@@ -1,0 +1,82 @@
+"""Definitionen externer API-Anbieter (Schlüssel-Namen & Metadaten)."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ApiProvider:
+    env_key: str
+    label: str
+    description: str
+    placeholder: str
+    docs_url: str = ""
+    implemented: bool = False
+
+
+API_PROVIDERS: tuple[ApiProvider, ...] = (
+    ApiProvider(
+        env_key="GEMINI_API_KEY",
+        label="Google Gemini",
+        description="Asset-Analyse (Frames) und optional Voice-over via Cloud.",
+        placeholder="AIza…",
+        docs_url="https://aistudio.google.com/apikey",
+        implemented=True,
+    ),
+    ApiProvider(
+        env_key="OPENAI_API_KEY",
+        label="OpenAI",
+        description="Geplant für alternative Transkription, Bildgenerierung oder Schnitt-Vorschläge.",
+        placeholder="sk-…",
+        docs_url="https://platform.openai.com/api-keys",
+        implemented=False,
+    ),
+    ApiProvider(
+        env_key="ANTHROPIC_API_KEY",
+        label="Claude (Anthropic)",
+        description="Geplant für Text-/Schnitt-Assistenz und alternative Analysen.",
+        placeholder="sk-ant-…",
+        docs_url="https://console.anthropic.com/settings/keys",
+        implemented=False,
+    ),
+    ApiProvider(
+        env_key="PEXELS_API_KEY",
+        label="Pexels",
+        description="Geplant für Stock-Foto/Video-Fallback im Schnittplan.",
+        placeholder="…",
+        docs_url="https://www.pexels.com/api/",
+        implemented=False,
+    ),
+    ApiProvider(
+        env_key="ADOBE_STOCK_API_KEY",
+        label="Adobe Stock",
+        description="Geplant für lizenzierte Stock-Assets als Fallback.",
+        placeholder="…",
+        docs_url="https://developer.adobe.com/stock/",
+        implemented=False,
+    ),
+    ApiProvider(
+        env_key="UNSPLASH_ACCESS_KEY",
+        label="Unsplash",
+        description="Geplant für Bild-Fallback über die Unsplash API.",
+        placeholder="…",
+        docs_url="https://unsplash.com/developers",
+        implemented=False,
+    ),
+    ApiProvider(
+        env_key="PIXABAY_API_KEY",
+        label="Pixabay",
+        description="Geplant für freie Stock-Bilder/Videos als Fallback.",
+        placeholder="…",
+        docs_url="https://pixabay.com/api/docs/",
+        implemented=False,
+    ),
+)
+
+
+def get_provider(env_key: str) -> ApiProvider | None:
+    for provider in API_PROVIDERS:
+        if provider.env_key == env_key:
+            return provider
+    return None
