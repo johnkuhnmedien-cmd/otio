@@ -103,6 +103,16 @@ class EditPlanBuildStatus(str, Enum):
     BLOCKED = "BLOCKED"
 
 
+class EditPlanPromptMode(str, Enum):
+    FULL = "full"
+    FREE = "free"
+
+
+class EditPlanValidationMode(str, Enum):
+    STRICT = "strict"
+    SKIP = "skip"
+
+
 @dataclass
 class EditPlanBuildResult:
     status: EditPlanBuildStatus
@@ -461,6 +471,7 @@ def _beats_from_gemini_holistic_or_local(
     gemini_prompt: str = "",
     correction_instructions: str = "",
     asset_usage_rules: AssetUsageRules | None = None,
+    prompt_mode: EditPlanPromptMode = EditPlanPromptMode.FULL,
 ) -> dict[str, list[dict]]:
     if use_api:
         try:
@@ -480,17 +491,24 @@ def _beats_from_gemini_holistic_or_local(
                 language=language,
                 model=gemini_model or settings.gemini_model,
                 extra_instructions=gemini_prompt,
-                section_outro_sec=settings.section_outro_sec,
+                section_outro_sec=(
+                    settings.section_outro_sec if prompt_mode == EditPlanPromptMode.FULL else 0.0
+                ),
                 shot_min_sec=settings.shot_min_sec,
                 shot_max_sec=settings.shot_max_sec,
                 audio_offset_sec=settings.audio_offset_sec,
                 correction_instructions=correction_instructions,
                 max_asset_usage=(
-                    asset_usage_rules.max_asset_usage if asset_usage_rules else None
+                    asset_usage_rules.max_asset_usage
+                    if asset_usage_rules and prompt_mode == EditPlanPromptMode.FULL
+                    else None
                 ),
                 min_asset_reuse_distance_shots=(
-                    asset_usage_rules.min_asset_reuse_distance_shots if asset_usage_rules else 0
+                    asset_usage_rules.min_asset_reuse_distance_shots
+                    if asset_usage_rules and prompt_mode == EditPlanPromptMode.FULL
+                    else 0
                 ),
+                prompt_mode=prompt_mode.value,
             )
             parsed = _parse_folder_beats(beats)
             if parsed:
@@ -864,6 +882,8 @@ def build_edit_plan(
     folder_names: list[str] | None = None,
     rules_doc: EditPlanRulesDocument | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    prompt_mode: EditPlanPromptMode = EditPlanPromptMode.FULL,
+    validation_mode: EditPlanValidationMode = EditPlanValidationMode.STRICT,
 ) -> EditPlanBuildResult:
     """Erzeugt einen Schnittplan-Vorschlag für bestätigte Voice-over-Zuordnungen."""
     mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
@@ -916,11 +936,20 @@ def build_edit_plan(
 
     max_count = max_asset_usage_limit(rules_doc)
     asset_usage_rules = get_asset_usage_rules(rules_doc)
-    used_rules = {
-        **asset_usage_rules.to_dict(),
-        "shot_min_sec": plan_settings.shot_min_sec,
-        "shot_max_sec": plan_settings.shot_max_sec,
+    used_rules: dict = {
+        "prompt_mode": prompt_mode.value,
+        "validation_mode": validation_mode.value,
     }
+    if prompt_mode == EditPlanPromptMode.FULL:
+        used_rules.update(
+            {
+                **asset_usage_rules.to_dict(),
+                "shot_min_sec": plan_settings.shot_min_sec,
+                "shot_max_sec": plan_settings.shot_max_sec,
+            }
+        )
+    else:
+        used_rules["gemini_prompt"] = gemini_prompt
     inventory_hashes: dict[str, str] = {}
     assets_payload_by_folder: dict[str, list[dict[str, str]]] = {}
     folder_build_contexts: list[dict] = []
@@ -978,7 +1007,10 @@ def build_edit_plan(
             }
         )
 
-    max_attempts = MAX_GEMINI_PLAN_ATTEMPTS if use_api else 1
+    if validation_mode == EditPlanValidationMode.SKIP:
+        max_attempts = 1
+    else:
+        max_attempts = MAX_GEMINI_PLAN_ATTEMPTS if use_api else 1
     correction_instructions = ""
     plan_generation_notes: list[str] = []
     gemini_retry_report: list[dict] = []
@@ -1020,6 +1052,7 @@ def build_edit_plan(
                 gemini_prompt=gemini_prompt,
                 correction_instructions=correction_instructions,
                 asset_usage_rules=asset_usage_rules,
+                prompt_mode=prompt_mode,
             )
             beats_by_folder[folder_name] = beats_plan
 
@@ -1183,16 +1216,25 @@ def build_edit_plan(
             }
         )
 
-        if validation.ok:
+        if validation.ok or validation_mode == EditPlanValidationMode.SKIP:
             plan_inventory_hash = ""
             if primary_folder:
                 plan_inventory_hash = inventory_hashes.get(primary_folder, "")
             elif inventory_hashes:
                 plan_inventory_hash = next(iter(inventory_hashes.values()))
 
+            final_validation_status = "PASS" if validation.ok else "SKIPPED"
             if attempt > 1:
                 plan_generation_notes.append(
                     f"Plan akzeptiert nach Gemini-Korrektur (Versuch {attempt}/{max_attempts})."
+                )
+            if validation_mode == EditPlanValidationMode.SKIP and not validation.ok:
+                plan_generation_notes.append(
+                    "Plan ohne lokale Validierung übernommen — Regelverletzungen möglich."
+                )
+            if prompt_mode == EditPlanPromptMode.FREE:
+                plan_generation_notes.append(
+                    "Freier Schnittplan: nur Gemini-Freitext-Regel an Gemini übergeben."
                 )
 
             document = EditPlanDocument(
@@ -1208,22 +1250,22 @@ def build_edit_plan(
                 supplement_request_ids=sorted(set(supplement_request_ids)),
                 plan_generation_notes=plan_generation_notes,
                 candidate_status="ACCEPTED",
-                validation_status="PASS",
+                validation_status=final_validation_status,
                 gemini_retry_attempts=attempt,
                 used_rules=used_rules,
             )
             reports = _write_plan_validation_reports(
                 project.work_dir_path,
                 used_rules=used_rules,
-                validation_errors=[],
+                validation_errors=validation.errors if not validation.ok else [],
                 retry_attempts=attempt,
-                final_status="PASS",
+                final_status=final_validation_status,
                 gemini_retry_report=gemini_retry_report,
             )
             return EditPlanBuildResult(
                 status=EditPlanBuildStatus.ACCEPTED,
                 document=document,
-                validation_status="PASS",
+                validation_status=final_validation_status,
                 candidate_status="ACCEPTED",
                 retry_attempts=attempt,
                 used_rules=used_rules,

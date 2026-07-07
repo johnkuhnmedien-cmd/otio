@@ -17,11 +17,29 @@ from otio_app.services.edit_plan_rules import (
 from otio_app.services.gemini_client import (
     _format_segment_lines,
     build_plan_folder_correction_instructions,
+    build_plan_folder_free_prompt,
     build_plan_folder_prompt,
     build_plan_passage_prompt,
     normalize_match_quality,
 )
 from otio_app.services.edit_plan_validator import PlanValidationError
+
+
+def test_build_plan_folder_free_prompt_includes_rule_and_segments() -> None:
+    prompt = build_plan_folder_free_prompt(
+        folder_name="Arches National Park",
+        segment_lines="| beat_001 | 0.0 | 5.0 | 5.0 | Park text |",
+        asset_lines="| /a.mp4 | asset1 | Rock arch |",
+        language="de",
+        rule_text="Prefer wide shots at golden hour.",
+    )
+    assert 'Create a timeline for "Arches National Park"' in prompt
+    assert "follow this rule" in prompt
+    assert "Prefer wide shots at golden hour." in prompt
+    assert "## Voice-over segments" in prompt
+    assert "## Available assets" in prompt
+    assert "beat_001" in prompt
+    assert "## Harte Regeln" not in prompt
 
 
 def test_build_plan_folder_prompt_includes_outro_when_configured() -> None:

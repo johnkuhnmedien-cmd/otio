@@ -9,6 +9,7 @@ from collections import Counter
 import streamlit as st
 
 from otio_app.analysis_models import EditPlanDocument, EditPlanSettings, EditPlanShot, SupplementRequest, TimelineItem, VoiceoverPlan
+from otio_app.models import Project
 from otio_app.defaults import (
     DEFAULT_AUDIO_OFFSET_SEC,
     DEFAULT_FALLBACK_ORDER,
@@ -37,6 +38,8 @@ from otio_app.services.edit_plan_builder import (
     EditPlanLocationStatus,
     build_edit_plan,
     EditPlanBuildStatus,
+    EditPlanPromptMode,
+    EditPlanValidationMode,
     load_edit_plan,
     load_voice_analysis,
     save_edit_plan,
@@ -813,6 +816,143 @@ def _finalize_plan_for_confirm(
     return document, notes
 
 
+def _run_suggest_edit_plan(
+    project: Project,
+    selected_folder: str,
+    *,
+    prompt_mode: EditPlanPromptMode,
+    validation_mode: EditPlanValidationMode,
+    action_label: str,
+) -> None:
+    """Gemeinsamer Ablauf für alle Vorschlags-Buttons im Tab Vorschlag."""
+    generate_result_key = _generate_result_key(project.id, selected_folder)
+    timing = _current_timing_settings(project)
+    use_gemini = is_gemini_configured()
+    settings = EditPlanSettings(
+        shot_min_sec=timing.shot_min_sec,
+        shot_max_sec=timing.shot_max_sec,
+        audio_offset_sec=timing.audio_offset_sec,
+        section_outro_sec=timing.section_outro_sec,
+        text_splitters=[
+            piece.strip()
+            for piece in timing.text_splitters.split(",")
+            if piece.strip()
+        ],
+        fallback_order=list(DEFAULT_FALLBACK_ORDER),
+        gemini_model=timing.gemini_model,
+    )
+    progress_bar = None
+    progress_text = None
+    try:
+        rules_doc = get_edit_plan_rules_for_project(project)
+        if prompt_mode == EditPlanPromptMode.FREE and not rules_doc.gemini_prompt.strip():
+            st.warning(
+                "Freier Schnittplan: Bitte unter **Regeln** einen **Gemini-Freitext** "
+                "eintragen — nur dieser wird an Gemini übergeben."
+            )
+        save_edit_plan_rules(project, rules_doc)
+        title_notes: list[str] = []
+        progress_bar = st.progress(0.0)
+        progress_text = st.empty()
+        segment_count = _voice_segment_count_for_folder(project, selected_folder)
+
+        def _on_plan_progress(folder_name: str, index: int, total: int) -> None:
+            if index <= 0:
+                progress_bar.progress(0.08)
+                progress_text.markdown(
+                    f"**Ein Gemini-Call** für **{folder_name}** — "
+                    f"**{segment_count}** Whisper-Segmente + alle Asset-Beschreibungen "
+                    f"gebündelt ({format_gemini_model_label(timing.gemini_model)}). "
+                    "Es wird **nicht** segmentweise aufgerufen — bitte warten …"
+                )
+            else:
+                progress_bar.progress(1.0)
+                progress_text.caption(
+                    f"Gemini-Antwort für **{folder_name}** wird verarbeitet …"
+                )
+
+        with st.spinner(
+            f"Gemini plant {selected_folder} gesamtheitlich "
+            f"({segment_count} Segmente in einem Call) …"
+        ):
+            result = build_edit_plan(
+                project,
+                settings,
+                use_api=use_gemini,
+                folder_names=[selected_folder],
+                rules_doc=rules_doc,
+                progress_callback=_on_plan_progress,
+                prompt_mode=prompt_mode,
+                validation_mode=validation_mode,
+            )
+        progress_bar.empty()
+        progress_text.empty()
+        if result.status == EditPlanBuildStatus.BLOCKED or result.document is None:
+            error_lines = [
+                plan_validation_error_to_message(PlanValidationError.from_dict(entry))
+                if isinstance(entry, dict)
+                else str(entry)
+                for entry in (result.validation_errors or [])
+            ]
+            st.session_state[generate_result_key] = {
+                "ok": False,
+                "message": f"{action_label} BLOCKED nach {result.retry_attempts} Versuchen.",
+                "blocked": True,
+                "validation_errors": error_lines[:12],
+                "used_rules": result.used_rules or {},
+                "notes": list(result.plan_generation_notes or []),
+            }
+            st.rerun()
+        document = result.document
+        export_opts = export_rule_options(rules_doc)
+        if export_opts.folder_title_enabled:
+            timeline_items, title_notes = ensure_opening_titles_rendered(
+                project,
+                document.timeline_items,
+            )
+            document = document.model_copy(update={"timeline_items": timeline_items})
+        _set_draft(document, selected_folder)
+        st.toast(f"✅ {len(document.shots)} Shots für {selected_folder} vorgeschlagen.", icon="✅")
+        generate_notes = list(title_notes)
+        generate_notes.extend(document.plan_generation_notes)
+        title_item = next(
+            (item for item in document.timeline_items if item.type == "opening_title"),
+            None,
+        )
+        if title_item is not None and title_item.title_style is not None:
+            style = title_item.title_style
+            generate_notes.insert(
+                0,
+                f"Titel: **{style.text}** · {style.requested_font_family} "
+                f"→ {style.resolved_font_family} · **{int(style.font_size_px)}px** · "
+                f"{style.duration_sec:.1f}s · hash `{style.render_hash}`"
+                + (" · Font-Fallback aktiv (siehe validation_report.json)." if style.font_fallback_used else ""),
+            )
+        st.session_state[generate_result_key] = {
+            "ok": True,
+            "message": f"{action_label}: {len(document.shots)} Shots vorgeschlagen.",
+            "notes": generate_notes,
+            "used_rules": document.used_rules,
+            "validation_status": document.validation_status,
+            "gemini_retry_attempts": document.gemini_retry_attempts,
+        }
+        st.rerun()
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+
+        if progress_bar is not None:
+            progress_bar.empty()
+        if progress_text is not None:
+            progress_text.empty()
+        st.toast(f"❌ Fehler beim Vorschlagen: {exc}", icon="❌")
+        st.session_state[generate_result_key] = {
+            "ok": False,
+            "message": f"Fehler bei {action_label}: {exc}",
+            "traceback": traceback.format_exc(),
+        }
+        st.rerun()
+
+
 def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument | None) -> None:
     st.markdown(
         f"Vorschlag für **{selected_folder}** — Gemini erhält **alle Whisper-Segmente**, "
@@ -860,129 +1000,54 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
         f"· Min/Max Shot: {timing.shot_min_sec:.1f}s/{timing.shot_max_sec:.1f}s "
         "(Tab **Regeln → Timing & Gemini** ändern)."
     )
-    if st.button("Schnittplan vorschlagen", key=f"build_plan_{project.id}", type="primary"):
-        use_gemini = is_gemini_configured()
-        settings = EditPlanSettings(
-            shot_min_sec=timing.shot_min_sec,
-            shot_max_sec=timing.shot_max_sec,
-            audio_offset_sec=timing.audio_offset_sec,
-            section_outro_sec=timing.section_outro_sec,
-            text_splitters=[
-                piece.strip()
-                for piece in timing.text_splitters.split(",")
-                if piece.strip()
-            ],
-            fallback_order=list(DEFAULT_FALLBACK_ORDER),
-            gemini_model=timing.gemini_model,
-        )
-        progress_bar = None
-        progress_text = None
-        try:
-            rules_doc = get_edit_plan_rules_for_project(project)
-            save_edit_plan_rules(project, rules_doc)
-            export_opts = export_rule_options(rules_doc)
-            title_notes: list[str] = []
-            progress_bar = st.progress(0.0)
-            progress_text = st.empty()
-            segment_count = _voice_segment_count_for_folder(project, selected_folder)
-
-            def _on_plan_progress(folder_name: str, index: int, total: int) -> None:
-                if index <= 0:
-                    progress_bar.progress(0.08)
-                    progress_text.markdown(
-                        f"**Ein Gemini-Call** für **{folder_name}** — "
-                        f"**{segment_count}** Whisper-Segmente + alle Asset-Beschreibungen "
-                        f"gebündelt ({format_gemini_model_label(timing.gemini_model)}). "
-                        "Es wird **nicht** segmentweise aufgerufen — bitte warten …"
-                    )
-                else:
-                    progress_bar.progress(1.0)
-                    progress_text.caption(
-                        f"Gemini-Antwort für **{folder_name}** wird verarbeitet …"
-                    )
-
-            with st.spinner(
-                f"Gemini plant {selected_folder} gesamtheitlich "
-                f"({segment_count} Segmente in einem Call) …"
-            ):
-                result = build_edit_plan(
-                    project,
-                    settings,
-                    use_api=use_gemini,
-                    folder_names=[selected_folder],
-                    rules_doc=rules_doc,
-                    progress_callback=_on_plan_progress,
-                )
-            progress_bar.empty()
-            progress_text.empty()
-            if result.status == EditPlanBuildStatus.BLOCKED or result.document is None:
-                error_lines = [
-                    plan_validation_error_to_message(PlanValidationError.from_dict(entry))
-                    if isinstance(entry, dict)
-                    else str(entry)
-                    for entry in (result.validation_errors or [])
-                ]
-                st.session_state[generate_result_key] = {
-                    "ok": False,
-                    "message": f"Schnittplan BLOCKED nach {result.retry_attempts} Versuchen.",
-                    "blocked": True,
-                    "validation_errors": error_lines[:12],
-                    "used_rules": result.used_rules or {},
-                    "notes": list(result.plan_generation_notes or []),
-                }
-                st.rerun()
-            document = result.document
-            export_opts = export_rule_options(rules_doc)
-            if export_opts.folder_title_enabled:
-                timeline_items, title_notes = ensure_opening_titles_rendered(
-                    project,
-                    document.timeline_items,
-                )
-                document = document.model_copy(update={"timeline_items": timeline_items})
-            _set_draft(document, selected_folder)
-            st.toast(f"✅ {len(document.shots)} Shots für {selected_folder} vorgeschlagen.", icon="✅")
-            generate_notes = list(title_notes)
-            generate_notes.extend(document.plan_generation_notes)
-            title_item = next(
-                (item for item in document.timeline_items if item.type == "opening_title"),
-                None,
+    col_primary, col_no_val, col_free = st.columns(3)
+    with col_primary:
+        if st.button(
+            "Schnittplan vorschlagen",
+            key=f"build_plan_{project.id}",
+            type="primary",
+            use_container_width=True,
+        ):
+            _run_suggest_edit_plan(
+                project,
+                selected_folder,
+                prompt_mode=EditPlanPromptMode.FULL,
+                validation_mode=EditPlanValidationMode.STRICT,
+                action_label="Schnittplan vorschlagen",
             )
-            if title_item is not None and title_item.title_style is not None:
-                style = title_item.title_style
-                generate_notes.insert(
-                    0,
-                    f"Titel: **{style.text}** · {style.requested_font_family} "
-                    f"→ {style.resolved_font_family} · **{int(style.font_size_px)}px** · "
-                    f"{style.duration_sec:.1f}s · hash `{style.render_hash}`"
-                    + (" · Font-Fallback aktiv (siehe validation_report.json)." if style.font_fallback_used else ""),
-                )
-            st.session_state[generate_result_key] = {
-                "ok": True,
-                "message": f"{len(document.shots)} Shots vorgeschlagen.",
-                "notes": generate_notes,
-                "used_rules": document.used_rules,
-                "validation_status": document.validation_status,
-                "gemini_retry_attempts": document.gemini_retry_attempts,
-            }
-            st.rerun()
-        except Exception as exc:  # noqa: BLE001 — Nutzer muss IMMER eine
-            # sichtbare Fehlermeldung bekommen (vorher wurden nur
-            # GeminiNotConfiguredError/ValueError/FileNotFoundError
-            # abgefangen — jeder andere Fehler führte zu einem
-            # unbehandelten Absturz).
-            import traceback
-
-            if progress_bar is not None:
-                progress_bar.empty()
-            if progress_text is not None:
-                progress_text.empty()
-            st.toast(f"❌ Fehler beim Vorschlagen: {exc}", icon="❌")
-            st.session_state[generate_result_key] = {
-                "ok": False,
-                "message": f"Fehler beim Vorschlagen: {exc}",
-                "traceback": traceback.format_exc(),
-            }
-            st.rerun()
+    with col_no_val:
+        if st.button(
+            "Ohne Validierung vorschlagen",
+            key=f"build_plan_no_val_{project.id}",
+            use_container_width=True,
+            help="Alle Regeln an Gemini, aber kein lokaler Validierungs-Retry — Entwurf wird direkt übernommen.",
+        ):
+            _run_suggest_edit_plan(
+                project,
+                selected_folder,
+                prompt_mode=EditPlanPromptMode.FULL,
+                validation_mode=EditPlanValidationMode.SKIP,
+                action_label="Schnittplan ohne Validierung",
+            )
+    with col_free:
+        if st.button(
+            "Freien Schnittplan erstellen",
+            key=f"build_plan_free_{project.id}",
+            use_container_width=True,
+            help="Nur Gemini-Freitext aus Regeln — keine System-Regeln (Timing, Asset-Nutzung) an Gemini.",
+        ):
+            _run_suggest_edit_plan(
+                project,
+                selected_folder,
+                prompt_mode=EditPlanPromptMode.FREE,
+                validation_mode=EditPlanValidationMode.SKIP,
+                action_label="Freier Schnittplan",
+            )
+    st.caption(
+        "**Schnittplan vorschlagen** = Regeln + Validierung · "
+        "**Ohne Validierung** = Regeln, kein Retry · "
+        "**Freier Schnittplan** = nur Freitext-Regel aus Tab Regeln."
+    )
 
     draft = _effective_draft(project.id, selected_folder, saved)
     if draft is not None:

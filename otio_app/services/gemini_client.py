@@ -318,6 +318,31 @@ def normalize_match_quality(value: str | None) -> str:
     return aliases.get(normalized, "")
 
 
+def _format_segment_lines_basic(segments: list[dict[str, Any]]) -> str:
+    rows: list[list[Any]] = []
+    for segment in segments:
+        beat_id = str(segment.get("beat_id", "")).strip()
+        text = str(segment.get("text", "")).strip()
+        start_sec = segment.get("start_sec", 0.0)
+        end_sec = segment.get("end_sec", 0.0)
+        if not text:
+            continue
+        duration = max(0.0, float(end_sec) - float(start_sec))
+        rows.append(
+            [
+                beat_id,
+                f"{float(start_sec):.3f}",
+                f"{float(end_sec):.3f}",
+                f"{duration:.3f}",
+                text,
+            ]
+        )
+    return _markdown_table(
+        ["beat_id", "start_sec", "end_sec", "duration_sec", "text"],
+        rows,
+    )
+
+
 def plan_folder_assets(
     *,
     folder_name: str,
@@ -333,6 +358,7 @@ def plan_folder_assets(
     correction_instructions: str = "",
     max_asset_usage: int | None = None,
     min_asset_reuse_distance_shots: int = 0,
+    prompt_mode: str = "full",
 ) -> list[dict[str, Any]]:
     """Plant alle Voice-over-Segmente und optional das Ordner-Ausklingen in einem Call."""
     if not segments and section_outro_sec <= 0.05:
@@ -342,24 +368,34 @@ def plan_folder_assets(
     from google.genai import types
 
     asset_lines = _format_asset_lines(assets)
-    prompt = build_plan_folder_prompt(
-        folder_name=folder_name,
-        segment_lines=_format_segment_lines(
-            segments,
+    if prompt_mode == "free":
+        prompt = build_plan_folder_free_prompt(
+            folder_name=folder_name,
+            segment_lines=_format_segment_lines_basic(segments),
+            asset_lines=asset_lines,
+            language=language,
+            rule_text=extra_instructions,
+            correction_instructions=correction_instructions,
+        )
+    else:
+        prompt = build_plan_folder_prompt(
+            folder_name=folder_name,
+            segment_lines=_format_segment_lines(
+                segments,
+                shot_min_sec=shot_min_sec,
+                shot_max_sec=shot_max_sec,
+            ),
+            asset_lines=asset_lines,
+            language=language,
+            extra_instructions=extra_instructions,
+            section_outro_sec=section_outro_sec,
             shot_min_sec=shot_min_sec,
             shot_max_sec=shot_max_sec,
-        ),
-        asset_lines=asset_lines,
-        language=language,
-        extra_instructions=extra_instructions,
-        section_outro_sec=section_outro_sec,
-        shot_min_sec=shot_min_sec,
-        shot_max_sec=shot_max_sec,
-        audio_offset_sec=audio_offset_sec,
-        correction_instructions=correction_instructions,
-        max_asset_usage=max_asset_usage,
-        min_asset_reuse_distance_shots=min_asset_reuse_distance_shots,
-    )
+            audio_offset_sec=audio_offset_sec,
+            correction_instructions=correction_instructions,
+            max_asset_usage=max_asset_usage,
+            min_asset_reuse_distance_shots=min_asset_reuse_distance_shots,
+        )
     response = client.models.generate_content(
         model=resolve_gemini_model(model),
         contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
@@ -596,6 +632,59 @@ def build_plan_folder_prompt(
             "- `beat_id` muss exakt einem Segment entsprechen"
             + (f' oder `{OUTRO_BEAT_ID}` für das Ausklingen.' if section_outro_sec > 0.05 else "."),
             "- `asset_path` muss exakt einem `path` aus der Asset-Tabelle entsprechen oder null sein.",
+        ]
+    )
+    return "\n".join(sections)
+
+
+def build_plan_folder_free_prompt(
+    *,
+    folder_name: str,
+    segment_lines: str,
+    asset_lines: str,
+    language: str,
+    rule_text: str,
+    correction_instructions: str = "",
+) -> str:
+    """Freier Schnittplan: nur Segmente, Assets und der Gemini-Freitext aus den Regeln."""
+    rule_clause = rule_text.strip() or "(no additional rule)"
+    sections = [
+        (
+            f'Create a timeline for "{folder_name}" with the following scenes/voice over '
+            f'segments and follow this rule "{rule_clause}".'
+        ),
+        "",
+        f"Language: {language}.",
+        "",
+        "## Voice-over segments",
+        segment_lines or "_No segments._",
+        "",
+        "## Available assets",
+        asset_lines or "_No assets._",
+    ]
+    correction = correction_instructions.strip()
+    if correction:
+        sections.extend(["", correction])
+    sections.extend(
+        [
+            "",
+            "## Planning notes",
+            "- Choose the best matching asset per part from the full asset list.",
+            "- Multiple motifs in one segment → multiple parts.",
+            "- `match_quality`: sehr_gut | gut | mittel | unpassend.",
+            "- If no suitable asset: `asset_path` = null.",
+            "",
+            "## Output format",
+            "Respond **only** as JSON (no markdown, no prose):",
+            "```json",
+            (
+                '{"beats":[{"beat_id":"beat_001","parts":[{"text":"...","motif":"...",'
+                '"asset_path":"exact path or null",'
+                '"match_quality":"sehr_gut|gut|mittel|unpassend"}]}]}'
+            ),
+            "```",
+            "- `beat_id` must match a segment beat_id exactly.",
+            "- `asset_path` must match a `path` from the asset table exactly or be null.",
         ]
     )
     return "\n".join(sections)
