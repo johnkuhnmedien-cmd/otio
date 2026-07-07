@@ -329,6 +329,8 @@ def plan_folder_assets(
     section_outro_sec: float = 0.0,
     shot_min_sec: float = 3.0,
     shot_max_sec: float = 8.0,
+    audio_offset_sec: float = 1.0,
+    correction_instructions: str = "",
 ) -> list[dict[str, Any]]:
     """Plant alle Voice-over-Segmente und optional das Ordner-Ausklingen in einem Call."""
     if not segments and section_outro_sec <= 0.05:
@@ -350,6 +352,8 @@ def plan_folder_assets(
         section_outro_sec=section_outro_sec,
         shot_min_sec=shot_min_sec,
         shot_max_sec=shot_max_sec,
+        audio_offset_sec=audio_offset_sec,
+        correction_instructions=correction_instructions,
     )
     response = client.models.generate_content(
         model=resolve_gemini_model(model),
@@ -391,6 +395,8 @@ def build_plan_folder_prompt(
     section_outro_sec: float = 0.0,
     shot_min_sec: float = 3.0,
     shot_max_sec: float = 8.0,
+    audio_offset_sec: float = 1.0,
+    correction_instructions: str = "",
 ) -> str:
     """Prompt für gesamtheitliche Motiv-Planung und Asset-Zuordnung."""
     from otio_app.defaults import OUTRO_BEAT_ID
@@ -409,7 +415,12 @@ def build_plan_folder_prompt(
         f"- Erstelle lieber weniger, längere parts statt vieler kurzer Teile unter {shot_min_sec}s.",
         "- Die Voice-over-Zeiten pro Beat sind durch start_sec/end_sec vorgegeben; teile den Text "
         "so auf, dass jeder part einen sinnvollen Anteil des Beats abdeckt.",
+        f"- Audio-Start (Timeline): Das Voice-over beginnt auf der Schnittspur bei {audio_offset_sec}s "
+        "(kein Head-Trim auf der Audio-Datei; nur für Export-Positionierung).",
     ]
+    correction = correction_instructions.strip()
+    if correction:
+        sections.extend(["", correction])
     if section_outro_sec > 0.05:
         sections.extend(
             [
@@ -462,6 +473,90 @@ def build_plan_folder_prompt(
         ]
     )
     return "\n".join(sections)
+
+
+def summarize_beats_plan_for_retry(beats_plan: dict[str, list[dict[str, Any]]]) -> str:
+    """Kompakte Zusammenfassung des abgelehnten Plans für einen Korrektur-Lauf."""
+    from otio_app.defaults import OUTRO_BEAT_ID
+
+    lines: list[str] = []
+    for beat_id in sorted(beats_plan, key=lambda value: (value != OUTRO_BEAT_ID, value)):
+        parts = beats_plan.get(beat_id, [])
+        if beat_id == OUTRO_BEAT_ID:
+            lines.append(f"- {beat_id}: Ausklingen, {len(parts)} part(s)")
+            continue
+        qualities = [str(part.get("match_quality") or "?") for part in parts]
+        lines.append(f"- {beat_id}: {len(parts)} part(s), Passung: {', '.join(qualities)}")
+    return "\n".join(lines) if lines else "- (kein vorheriger Plan)"
+
+
+def compact_beats_plan_json_for_retry(beats_plan: dict[str, list[dict[str, Any]]]) -> str:
+    """Struktur des abgelehnten Plans — ohne Asset-Pfade, Text gekürzt."""
+    from otio_app.defaults import OUTRO_BEAT_ID
+
+    beats: list[dict[str, Any]] = []
+    for beat_id in sorted(beats_plan, key=lambda value: (value != OUTRO_BEAT_ID, value)):
+        parts = beats_plan.get(beat_id, [])
+        beats.append(
+            {
+                "beat_id": beat_id,
+                "parts": [
+                    {
+                        "text": str(part.get("text", ""))[:80],
+                        "motif": str(part.get("motif", ""))[:60],
+                        "match_quality": part.get("match_quality"),
+                    }
+                    for part in parts[:12]
+                ],
+            }
+        )
+    return json.dumps({"beats": beats}, ensure_ascii=False, indent=2)
+
+
+def build_plan_folder_correction_instructions(
+    *,
+    errors: list[str],
+    previous_beats: dict[str, list[dict[str, Any]]],
+    attempt: int,
+    max_attempts: int,
+    file_duration_sec: float | None,
+    shot_min_sec: float,
+    shot_max_sec: float,
+) -> str:
+    """Korrektur-Block für einen erneuten Gemini-Lauf nach Timing-Validierung."""
+    error_lines = "\n".join(f"- {error}" for error in errors) or "- (unbekannt)"
+    duration_hint = (
+        f"{file_duration_sec:.2f}s"
+        if file_duration_sec is not None and file_duration_sec > 0
+        else "unbekannt"
+    )
+    return "\n".join(
+        [
+            f"AUTOMATISCHE KORREKTUR — Versuch {attempt} von {max_attempts}",
+            "",
+            "Die lokale Timing-Validierung hat den vorherigen Plan abgelehnt.",
+            "Erstelle einen NEUEN vollständigen Plan (komplettes JSON mit allen beats), "
+            "der diese Probleme behebt — kein partieller Patch.",
+            "",
+            "Fehler der Code-Validierung:",
+            error_lines,
+            "",
+            f"Voice-over-Dateilänge (ffprobe): {duration_hint}. "
+            "Kein Narration-Shot darf über diese Dauer hinaus planen.",
+            "",
+            "Zusammenfassung deines abgelehnten Plans:",
+            summarize_beats_plan_for_retry(previous_beats),
+            "",
+            "Struktur des abgelehnten Plans (Referenz, gekürzt):",
+            compact_beats_plan_json_for_retry(previous_beats),
+            "",
+            "Korrektur-Hinweise:",
+            f"- Reduziere parts in betroffenen Beats (Ziel: {shot_min_sec}s–{shot_max_sec}s pro part).",
+            "- Weniger, längere parts statt vieler kurzer Teile am Beat-Ende.",
+            "- Behalte inhaltliche Passung und sinnvolle Asset-Zuordnung so gut wie möglich bei.",
+            "- Wiederhole nicht dieselbe Aufteilung, wenn sie die Fehler verursacht hat.",
+        ]
+    )
 
 
 def build_plan_passage_prompt(

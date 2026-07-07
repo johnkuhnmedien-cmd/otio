@@ -381,6 +381,48 @@ def validate_timeline_items(
     return result
 
 
+TIMING_VALIDATION_MARKERS = (
+    "Textsegment",
+    "duration_sec",
+    "final_duration_sec",
+    "section_outro_sec",
+    "Voice-over bis",
+    "Visuelles Loch",
+    "generic_outro startet",
+    "voiceover.timeline",
+    "voiceover.duration",
+    "voiceover.source",
+    "video source_in_sec",
+    "nicht vollständig als",
+)
+
+
+def timing_validation_errors(errors: list[str]) -> list[str]:
+    """Filtert Validierungsfehler, die ein erneuter Gemini-Lauf beheben könnte."""
+    return [error for error in errors if any(marker in error for marker in TIMING_VALIDATION_MARKERS)]
+
+
+def should_retry_gemini_for_timing(errors: list[str]) -> bool:
+    return bool(timing_validation_errors(errors))
+
+
+def validate_folder_plan_timing(
+    items: list[TimelineItem],
+    *,
+    settings: EditPlanSettings,
+    voiceover: VoiceoverPlan | None,
+) -> TimelineValidationResult:
+    """Timing-Validierung für einen Ordner-Vorschauplan (vor Bestätigen)."""
+    return validate_timeline_items(
+        items,
+        settings=settings,
+        voiceover=voiceover,
+        opening_title_required=False,
+        require_rendered_media=False,
+        rules_doc=None,
+    )
+
+
 def validate_no_exporter_asset_selection() -> None:
     """Dokumentations-Hook — der Exporter wählt keine Assets (nur Lesen)."""
     return None

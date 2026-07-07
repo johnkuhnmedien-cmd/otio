@@ -22,6 +22,7 @@ from otio_app.defaults import (
     MATCH_QUALITY_SEHR_GUT,
     MATCH_QUALITY_GUT,
     MATCH_QUALITY_UNPASSEND,
+    MAX_GEMINI_PLAN_ATTEMPTS,
     SUPPLEMENT_SOURCE_LABELS,
 )
 from otio_app.project_layout import get_otio_export_path, safe_folder_slug
@@ -490,9 +491,11 @@ def _render_tab_settings(project) -> None:
     st.markdown("**Timing & Gemini**")
     st.caption(
         "Min./Max. Shot und Gemini-Modell gelten beim **Schnittplan vorschlagen**. "
-        "**Audio-Start** beim OTIO-Export. **Ordner-Ausklingen** wird im **selben "
-        "Gemini-Call** mitgeplant (Dauer hier, Asset + Passung von Gemini; je max. "
-        "**Max. Shot** Sek. aufgeteilt). Heuristik nur als Fallback."
+        "**Audio-Start** beim OTIO-Export (auch im Gemini-Prompt als Kontext). "
+        "**Ordner-Ausklingen** wird im **selben Gemini-Call** mitgeplant "
+        "(Dauer hier, Asset + Passung von Gemini; je max. **Max. Shot** Sek. "
+        "aufgeteilt). Bei Timing-Fehlern: automatischer Korrektur-Lauf an Gemini "
+        f"(max. {MAX_GEMINI_PLAN_ATTEMPTS} Versuche). Heuristik nur als Fallback."
     )
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -796,6 +799,7 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
             _set_draft(document, selected_folder)
             st.toast(f"✅ {len(document.shots)} Shots für {selected_folder} vorgeschlagen.", icon="✅")
             generate_notes = list(title_notes)
+            generate_notes.extend(document.plan_generation_notes)
             title_item = next(
                 (item for item in document.timeline_items if item.type == "opening_title"),
                 None,

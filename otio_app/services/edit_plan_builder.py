@@ -28,6 +28,7 @@ from otio_app.defaults import (
     MATCH_QUALITY_GUT,
     MATCH_QUALITY_MITTEL,
     MATCH_QUALITY_UNPASSEND,
+    MAX_GEMINI_PLAN_ATTEMPTS,
     OUTRO_BEAT_ID,
 )
 from otio_app.models import Project
@@ -48,9 +49,15 @@ from otio_app.services.asset_usage import (
 from otio_app.services.generic_outro_selector import asset_id_for_path, select_generic_outro_assets
 from otio_app.services.gemini_client import (
     GeminiNotConfiguredError,
+    build_plan_folder_correction_instructions,
     get_default_gemini_model,
     normalize_match_quality,
     plan_folder_assets,
+)
+from otio_app.services.edit_plan_validator import (
+    should_retry_gemini_for_timing,
+    timing_validation_errors,
+    validate_folder_plan_timing,
 )
 from otio_app.services.inventory_hash import compute_folder_inventory_hash
 from otio_app.services.inventory_loader import load_folder_inventory
@@ -381,6 +388,7 @@ def _beats_from_gemini_holistic_or_local(
     use_api: bool,
     gemini_model: str | None,
     gemini_prompt: str = "",
+    correction_instructions: str = "",
 ) -> dict[str, list[dict]]:
     if use_api:
         try:
@@ -403,6 +411,8 @@ def _beats_from_gemini_holistic_or_local(
                 section_outro_sec=settings.section_outro_sec,
                 shot_min_sec=settings.shot_min_sec,
                 shot_max_sec=settings.shot_max_sec,
+                audio_offset_sec=settings.audio_offset_sec,
+                correction_instructions=correction_instructions,
             )
             parsed = _parse_folder_beats(beats)
             if parsed:
@@ -452,6 +462,241 @@ def _beats_from_gemini_holistic_or_local(
             max_count=None,
         )
     return result
+
+
+@dataclass
+class FolderShotBuildResult:
+    shots: list[EditPlanShot]
+    segment_coverages: list
+    supplement_request_ids: list[str]
+    pending_supplement_requests: list
+
+
+def _folder_shots_from_beats_plan(
+    *,
+    beats_plan: dict[str, list[dict]],
+    segments_with_beats: list[tuple[str, VoiceSegment]],
+    folder_name: str,
+    voice_path: str,
+    asset_payload: list[dict[str, str]],
+    allowed_paths: set[str],
+    folder_inventory,
+    plan_settings: EditPlanSettings,
+    usage_by_folder: dict[str, int],
+    max_count: int | None,
+) -> FolderShotBuildResult:
+    shots: list[EditPlanShot] = []
+    segment_coverages: list = []
+    supplement_request_ids: list[str] = []
+    pending_supplement_requests: list = []
+    shot_index_in_folder = 0
+    used_paths_in_folder: set[str] = set()
+    last_asset_in_folder: str | None = None
+
+    for beat_id, segment in segments_with_beats:
+        coverage = evaluate_segment_coverage(
+            beat_id=beat_id,
+            segment=segment,
+            folder_name=folder_name,
+            voice_file=voice_path,
+            assets=folder_inventory.assets,
+        )
+        segment_coverages.append(coverage)
+
+        raw_parts = beats_plan.get(beat_id)
+        if not raw_parts:
+            raw_parts = [
+                {
+                    "text": segment.text.strip(),
+                    "motif": segment.text.strip()[:80],
+                    "asset_path": None,
+                    "match_quality": MATCH_QUALITY_UNPASSEND,
+                    "confidence": "low",
+                }
+            ]
+
+        texts = [str(part.get("text", "")).strip() for part in raw_parts]
+        time_ranges = allocate_time_by_text(
+            segment.start_sec,
+            segment.end_sec,
+            texts,
+        )
+        timed_parts: list[TimedPart] = []
+        for part, (start_sec, end_sec) in zip(raw_parts, time_ranges):
+            match_quality = normalize_match_quality(str(part.get("match_quality", "")))
+            asset_path = _validate_asset_path(
+                part.get("asset_path"),
+                allowed_paths,
+            )
+            if match_quality == MATCH_QUALITY_UNPASSEND:
+                fallback_meta = _select_establishing_fallback(
+                    asset_payload,
+                    used_paths=used_paths_in_folder,
+                    last_asset_path=last_asset_in_folder,
+                    min_duration_sec=plan_settings.shot_min_sec,
+                    usage=usage_by_folder,
+                    max_count=max_count,
+                )
+                if fallback_meta is not None:
+                    asset_path = fallback_meta.get("path")
+            timed_parts.append(
+                TimedPart(
+                    text=str(part.get("text", "")).strip(),
+                    motif=str(part.get("motif", "")).strip(),
+                    start_sec=start_sec,
+                    end_sec=end_sec,
+                    asset_path=asset_path,
+                    confidence=str(part.get("confidence")) if part.get("confidence") else None,
+                    match_quality=match_quality or None,
+                )
+            )
+
+        timed_parts = merge_short_voice_windows(
+            timed_parts,
+            min_sec=plan_settings.shot_min_sec,
+        )
+        normalized = shots_from_timed_parts(
+            timed_parts,
+            min_sec=plan_settings.shot_min_sec,
+            max_sec=plan_settings.shot_max_sec,
+        )
+        for part in normalized:
+            source = FALLBACK_SOURCE_LOCAL if part.asset_path else FALLBACK_SOURCE_MISSING
+            meta = next(
+                (asset for asset in asset_payload if asset["path"] == part.asset_path),
+                None,
+            )
+            asset_id = ""
+            asset_origin = ""
+            supplement_request_id = ""
+            rights_status = ""
+            source_url = ""
+            provider = ""
+            media_type = ""
+            match_quality = part.match_quality or ""
+            coverage_status = (
+                coverage_status_from_match_quality(match_quality)
+                if match_quality
+                else coverage.coverage_status
+            )
+            if meta is not None:
+                asset_id = str(meta.get("asset_id", ""))
+                asset_origin = str(meta.get("asset_origin", ""))
+                supplement_request_id = str(meta.get("supplement_request_id", ""))
+                rights_status = str(meta.get("rights_status", ""))
+                source_url = str(meta.get("source_url", ""))
+                provider = str(meta.get("provider", ""))
+                media_type = str(meta.get("media_type", ""))
+            elif part.asset_path:
+                asset_id = asset_id_for_path(part.asset_path)
+
+            if (
+                asset_id
+                and max_count is not None
+                and usage_by_folder.get(asset_id, 0) >= max_count
+            ):
+                part = dataclass_replace(part, asset_path=None)
+                source = FALLBACK_SOURCE_MISSING
+                meta = None
+                asset_id = ""
+                asset_origin = ""
+                supplement_request_id = ""
+                rights_status = ""
+                source_url = ""
+                provider = ""
+                media_type = ""
+                coverage_status = COVERAGE_SUPPLEMENT_REQUIRED
+
+            if match_quality == MATCH_QUALITY_UNPASSEND and not part.asset_path:
+                fallback_meta = _select_establishing_fallback(
+                    asset_payload,
+                    used_paths=used_paths_in_folder,
+                    last_asset_path=last_asset_in_folder,
+                    min_duration_sec=plan_settings.shot_min_sec,
+                    usage=usage_by_folder,
+                    max_count=max_count,
+                )
+                if fallback_meta is not None:
+                    part = dataclass_replace(part, asset_path=fallback_meta.get("path"))
+                    meta = fallback_meta
+                    asset_id = str(fallback_meta.get("asset_id", "")) or asset_id_for_path(
+                        fallback_meta["path"]
+                    )
+                    asset_origin = str(fallback_meta.get("asset_origin", "local_original"))
+                    source = FALLBACK_SOURCE_LOCAL
+
+            if match_quality == MATCH_QUALITY_UNPASSEND:
+                shot_index_in_folder += 1
+                supplement_request = supplement_request_from_unpassend_shot(
+                    folder_name=folder_name,
+                    voice_file=voice_path,
+                    beat_id=beat_id,
+                    passage_text=part.text or segment.text,
+                    motif=part.motif,
+                    duration_sec=max(0.0, part.end_sec - part.start_sec),
+                    shot_index=shot_index_in_folder,
+                    placeholder_asset_id=asset_id,
+                )
+                supplement_request_id = supplement_request.supplement_request_id
+                pending_supplement_requests.append(supplement_request)
+                supplement_request_ids.append(supplement_request.supplement_request_id)
+                coverage_status = COVERAGE_SUPPLEMENT_REQUIRED
+            elif not part.asset_path:
+                coverage_status = COVERAGE_SUPPLEMENT_REQUIRED
+                shot_index_in_folder += 1
+                supplement_request = supplement_request_from_unpassend_shot(
+                    folder_name=folder_name,
+                    voice_file=voice_path,
+                    beat_id=beat_id,
+                    passage_text=part.text or segment.text,
+                    motif=part.motif,
+                    duration_sec=max(0.0, part.end_sec - part.start_sec),
+                    shot_index=shot_index_in_folder,
+                )
+                supplement_request_id = supplement_request.supplement_request_id
+                pending_supplement_requests.append(supplement_request)
+                supplement_request_ids.append(supplement_request.supplement_request_id)
+            else:
+                shot_index_in_folder += 1
+
+            if part.asset_path:
+                used_paths_in_folder.add(part.asset_path)
+                last_asset_in_folder = part.asset_path
+
+            if asset_id:
+                usage_by_folder[asset_id] = usage_by_folder.get(asset_id, 0) + 1
+
+            shots.append(
+                EditPlanShot(
+                    voice_file=voice_path,
+                    folder=folder_name,
+                    voice_start_sec=part.start_sec,
+                    voice_end_sec=part.end_sec,
+                    duration_sec=max(0.0, part.end_sec - part.start_sec),
+                    asset_path=part.asset_path,
+                    asset_source=meta.get("asset_origin", source) if meta else source,
+                    asset_id=asset_id,
+                    asset_origin=asset_origin,
+                    supplement_request_id=supplement_request_id,
+                    rights_status=rights_status,
+                    source_url=source_url,
+                    provider=provider,
+                    media_type=media_type,
+                    motif=part.motif,
+                    passage_text=part.text,
+                    confidence=part.confidence,
+                    beat_id=beat_id,
+                    coverage_status=coverage_status,
+                    match_quality=match_quality,
+                )
+            )
+
+    return FolderShotBuildResult(
+        shots=shots,
+        segment_coverages=segment_coverages,
+        supplement_request_ids=supplement_request_ids,
+        pending_supplement_requests=pending_supplement_requests,
+    )
 
 
 def build_edit_plan(
@@ -522,6 +767,7 @@ def build_edit_plan(
     max_count = max_asset_usage_limit(rules_doc)
     usage_by_folder: dict[str, dict[str, int]] = {}
     outro_parts_by_folder: dict[str, list[dict]] = {}
+    plan_generation_notes: list[str] = []
 
     for voice_path, folder_name in mapping_by_voice.items():
         voice_entry = voice_files.get(voice_path)
@@ -569,232 +815,124 @@ def build_edit_plan(
         if progress_callback is not None and segments_with_beats:
             progress_callback(folder_name, 0, 1)
 
-        beats_plan = _beats_from_gemini_holistic_or_local(
-            segments_with_beats,
-            folder_name,
-            asset_payload,
-            voice_doc.language,
-            plan_settings,
-            use_api=use_api,
-            gemini_model=plan_settings.gemini_model,
-            gemini_prompt=gemini_prompt,
-        )
+        max_attempts = MAX_GEMINI_PLAN_ATTEMPTS if use_api else 1
+        correction_instructions = ""
+        beats_plan: dict[str, list[dict]] = {}
+        folder_build: FolderShotBuildResult | None = None
+        folder_outro_parts: list[dict] = []
+
+        for attempt in range(1, max_attempts + 1):
+            usage_by_folder[folder_name] = {}
+
+            beats_plan = _beats_from_gemini_holistic_or_local(
+                segments_with_beats,
+                folder_name,
+                asset_payload,
+                voice_doc.language,
+                plan_settings,
+                use_api=use_api,
+                gemini_model=plan_settings.gemini_model,
+                gemini_prompt=gemini_prompt,
+                correction_instructions=correction_instructions,
+            )
+
+            folder_build = _folder_shots_from_beats_plan(
+                beats_plan=beats_plan,
+                segments_with_beats=segments_with_beats,
+                folder_name=folder_name,
+                voice_path=voice_path,
+                asset_payload=asset_payload,
+                allowed_paths=allowed_paths,
+                folder_inventory=folder_inventory,
+                plan_settings=plan_settings,
+                usage_by_folder=usage_by_folder[folder_name],
+                max_count=max_count,
+            )
+
+            used_paths_in_folder = {
+                shot.asset_path for shot in folder_build.shots if shot.asset_path
+            }
+            last_asset_in_folder = (
+                folder_build.shots[-1].asset_path if folder_build.shots else None
+            )
+            folder_outro_parts = _ensure_outro_parts(
+                beats_plan,
+                assets=asset_payload,
+                settings=plan_settings,
+                used_paths=used_paths_in_folder,
+                last_asset_path=last_asset_in_folder,
+                usage=usage_by_folder[folder_name],
+                max_count=max_count,
+            )
+
+            preview_items, preview_voiceover, _preview_errors = build_timeline_items_for_folder(
+                folder_build.shots,
+                folder_name=folder_name,
+                voice_file=voice_path,
+                settings=plan_settings,
+                folder_assets=asset_payload,
+                trim_leading_sec=trim_leading_sec,
+                item_index_start=1,
+                opening_title_enabled=export_opts.folder_title_enabled,
+                opening_title_font=export_opts.folder_title_font,
+                opening_title_duration_sec=export_opts.folder_title_duration_sec,
+                opening_title_font_size=export_opts.folder_title_font_size,
+                work_dir=project.work_dir_path,
+                project=project,
+                usage_by_asset_id={},
+                max_asset_usage=max_count,
+                outro_parts=folder_outro_parts,
+            )
+            timing_validation = validate_folder_plan_timing(
+                preview_items,
+                settings=plan_settings,
+                voiceover=preview_voiceover,
+            )
+            timing_errors = timing_validation_errors(timing_validation.errors)
+            should_retry = (
+                use_api
+                and attempt < max_attempts
+                and should_retry_gemini_for_timing(timing_validation.errors)
+            )
+
+            if not should_retry:
+                if attempt > 1:
+                    plan_generation_notes.append(
+                        f"{folder_name}: Gemini-Korrektur nach Timing-Validierung "
+                        f"(Versuch {attempt}/{max_attempts})."
+                    )
+                elif timing_errors and use_api:
+                    plan_generation_notes.append(
+                        f"{folder_name}: Timing-Hinweise nach {max_attempts} Versuchen: "
+                        + "; ".join(timing_errors[:3])
+                    )
+                break
+
+            plan_generation_notes.append(
+                f"{folder_name}: Timing-Validierung fehlgeschlagen (Versuch {attempt}/{max_attempts}) "
+                f"— erneuter Gemini-Lauf."
+            )
+            correction_instructions = build_plan_folder_correction_instructions(
+                errors=timing_errors,
+                previous_beats=beats_plan,
+                attempt=attempt + 1,
+                max_attempts=max_attempts,
+                file_duration_sec=file_duration,
+                shot_min_sec=plan_settings.shot_min_sec,
+                shot_max_sec=plan_settings.shot_max_sec,
+            )
+
+        if folder_build is None:
+            continue
+
+        shots.extend(folder_build.shots)
+        segment_coverages.extend(folder_build.segment_coverages)
+        pending_supplement_requests.extend(folder_build.pending_supplement_requests)
+        supplement_request_ids.extend(folder_build.supplement_request_ids)
+        outro_parts_by_folder[folder_name] = folder_outro_parts
 
         if progress_callback is not None and segments_with_beats:
             progress_callback(folder_name, 1, 1)
-
-        shot_index_in_folder = 0
-        used_paths_in_folder: set[str] = set()
-        last_asset_in_folder: str | None = None
-        for beat_id, segment in segments_with_beats:
-            coverage = evaluate_segment_coverage(
-                beat_id=beat_id,
-                segment=segment,
-                folder_name=folder_name,
-                voice_file=voice_path,
-                assets=folder_inventory.assets,
-            )
-            segment_coverages.append(coverage)
-
-            raw_parts = beats_plan.get(beat_id)
-            if not raw_parts:
-                raw_parts = [
-                    {
-                        "text": segment.text.strip(),
-                        "motif": segment.text.strip()[:80],
-                        "asset_path": None,
-                        "match_quality": MATCH_QUALITY_UNPASSEND,
-                        "confidence": "low",
-                    }
-                ]
-
-            texts = [str(part.get("text", "")).strip() for part in raw_parts]
-            time_ranges = allocate_time_by_text(
-                segment.start_sec,
-                segment.end_sec,
-                texts,
-            )
-            timed_parts: list[TimedPart] = []
-            for part, (start_sec, end_sec) in zip(raw_parts, time_ranges):
-                match_quality = normalize_match_quality(str(part.get("match_quality", "")))
-                asset_path = _validate_asset_path(
-                    part.get("asset_path"),
-                    allowed_paths,
-                )
-                if match_quality == MATCH_QUALITY_UNPASSEND:
-                    fallback_meta = _select_establishing_fallback(
-                        asset_payload,
-                        used_paths=used_paths_in_folder,
-                        last_asset_path=last_asset_in_folder,
-                        min_duration_sec=plan_settings.shot_min_sec,
-                        usage=usage_by_folder[folder_name],
-                        max_count=max_count,
-                    )
-                    if fallback_meta is not None:
-                        asset_path = fallback_meta.get("path")
-                timed_parts.append(
-                    TimedPart(
-                        text=str(part.get("text", "")).strip(),
-                        motif=str(part.get("motif", "")).strip(),
-                        start_sec=start_sec,
-                        end_sec=end_sec,
-                        asset_path=asset_path,
-                        confidence=str(part.get("confidence")) if part.get("confidence") else None,
-                        match_quality=match_quality or None,
-                    )
-                )
-
-            timed_parts = merge_short_voice_windows(
-                timed_parts,
-                min_sec=plan_settings.shot_min_sec,
-            )
-            normalized = shots_from_timed_parts(
-                timed_parts,
-                min_sec=plan_settings.shot_min_sec,
-                max_sec=plan_settings.shot_max_sec,
-            )
-            for part in normalized:
-                source = FALLBACK_SOURCE_LOCAL if part.asset_path else FALLBACK_SOURCE_MISSING
-                meta = next(
-                    (asset for asset in asset_payload if asset["path"] == part.asset_path),
-                    None,
-                )
-                asset_id = ""
-                asset_origin = ""
-                supplement_request_id = ""
-                rights_status = ""
-                source_url = ""
-                provider = ""
-                media_type = ""
-                match_quality = part.match_quality or ""
-                coverage_status = (
-                    coverage_status_from_match_quality(match_quality)
-                    if match_quality
-                    else coverage.coverage_status
-                )
-                if meta is not None:
-                    asset_id = str(meta.get("asset_id", ""))
-                    asset_origin = str(meta.get("asset_origin", ""))
-                    supplement_request_id = str(meta.get("supplement_request_id", ""))
-                    rights_status = str(meta.get("rights_status", ""))
-                    source_url = str(meta.get("source_url", ""))
-                    provider = str(meta.get("provider", ""))
-                    media_type = str(meta.get("media_type", ""))
-                elif part.asset_path:
-                    asset_id = asset_id_for_path(part.asset_path)
-
-                if (
-                    asset_id
-                    and max_count is not None
-                    and usage_by_folder[folder_name].get(asset_id, 0) >= max_count
-                ):
-                    part = dataclass_replace(part, asset_path=None)
-                    source = FALLBACK_SOURCE_MISSING
-                    meta = None
-                    asset_id = ""
-                    asset_origin = ""
-                    supplement_request_id = ""
-                    rights_status = ""
-                    source_url = ""
-                    provider = ""
-                    media_type = ""
-                    coverage_status = COVERAGE_SUPPLEMENT_REQUIRED
-
-                if match_quality == MATCH_QUALITY_UNPASSEND and not part.asset_path:
-                    fallback_meta = _select_establishing_fallback(
-                        asset_payload,
-                        used_paths=used_paths_in_folder,
-                        last_asset_path=last_asset_in_folder,
-                        min_duration_sec=plan_settings.shot_min_sec,
-                        usage=usage_by_folder[folder_name],
-                        max_count=max_count,
-                    )
-                    if fallback_meta is not None:
-                        part = dataclass_replace(part, asset_path=fallback_meta.get("path"))
-                        meta = fallback_meta
-                        asset_id = str(fallback_meta.get("asset_id", "")) or asset_id_for_path(
-                            fallback_meta["path"]
-                        )
-                        asset_origin = str(fallback_meta.get("asset_origin", "local_original"))
-                        source = FALLBACK_SOURCE_LOCAL
-
-                if match_quality == MATCH_QUALITY_UNPASSEND:
-                    shot_index_in_folder += 1
-                    supplement_request = supplement_request_from_unpassend_shot(
-                        folder_name=folder_name,
-                        voice_file=voice_path,
-                        beat_id=beat_id,
-                        passage_text=part.text or segment.text,
-                        motif=part.motif,
-                        duration_sec=max(0.0, part.end_sec - part.start_sec),
-                        shot_index=shot_index_in_folder,
-                        placeholder_asset_id=asset_id,
-                    )
-                    supplement_request_id = supplement_request.supplement_request_id
-                    pending_supplement_requests.append(supplement_request)
-                    supplement_request_ids.append(supplement_request.supplement_request_id)
-                    coverage_status = COVERAGE_SUPPLEMENT_REQUIRED
-                elif not part.asset_path:
-                    coverage_status = COVERAGE_SUPPLEMENT_REQUIRED
-                    shot_index_in_folder += 1
-                    supplement_request = supplement_request_from_unpassend_shot(
-                        folder_name=folder_name,
-                        voice_file=voice_path,
-                        beat_id=beat_id,
-                        passage_text=part.text or segment.text,
-                        motif=part.motif,
-                        duration_sec=max(0.0, part.end_sec - part.start_sec),
-                        shot_index=shot_index_in_folder,
-                    )
-                    supplement_request_id = supplement_request.supplement_request_id
-                    pending_supplement_requests.append(supplement_request)
-                    supplement_request_ids.append(supplement_request.supplement_request_id)
-                else:
-                    shot_index_in_folder += 1
-
-                if part.asset_path:
-                    used_paths_in_folder.add(part.asset_path)
-                    last_asset_in_folder = part.asset_path
-
-                if asset_id:
-                    usage_by_folder[folder_name][asset_id] = (
-                        usage_by_folder[folder_name].get(asset_id, 0) + 1
-                    )
-
-                shots.append(
-                    EditPlanShot(
-                        voice_file=voice_path,
-                        folder=folder_name,
-                        voice_start_sec=part.start_sec,
-                        voice_end_sec=part.end_sec,
-                        duration_sec=max(0.0, part.end_sec - part.start_sec),
-                        asset_path=part.asset_path,
-                        asset_source=meta.get("asset_origin", source) if meta else source,
-                        asset_id=asset_id,
-                        asset_origin=asset_origin,
-                        supplement_request_id=supplement_request_id,
-                        rights_status=rights_status,
-                        source_url=source_url,
-                        provider=provider,
-                        media_type=media_type,
-                        motif=part.motif,
-                        passage_text=part.text,
-                        confidence=part.confidence,
-                        beat_id=beat_id,
-                        coverage_status=coverage_status,
-                        match_quality=match_quality,
-                    )
-                )
-
-        outro_parts_by_folder[folder_name] = _ensure_outro_parts(
-            beats_plan,
-            assets=asset_payload,
-            settings=plan_settings,
-            used_paths=used_paths_in_folder,
-            last_asset_path=last_asset_in_folder,
-            usage=usage_by_folder[folder_name],
-            max_count=max_count,
-        )
 
     # Volle Asset-Payloads (inkl. asset_origin/rights_status/provider/...)
     # übergeben, nicht nur Pfade — sonst blieben bei einer regelbedingten
@@ -909,6 +1047,7 @@ def build_edit_plan(
         segment_coverage=segment_coverages,
         inventory_hash_at_plan_time=plan_inventory_hash,
         supplement_request_ids=sorted(set(supplement_request_ids)),
+        plan_generation_notes=plan_generation_notes,
     )
 
 

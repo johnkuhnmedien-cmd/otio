@@ -528,3 +528,4 @@ class EditPlanDocument(BaseModel):
     segment_coverage: List[SegmentCoverage] = Field(default_factory=list)
     inventory_hash_at_plan_time: str = ""
     supplement_request_ids: List[str] = Field(default_factory=list)
+    plan_generation_notes: List[str] = Field(default_factory=list)
