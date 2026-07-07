@@ -601,3 +601,41 @@ def test_transcode_to_clean_strips_all_metadata(
     assert "-map_metadata" in command, f"'-map_metadata -1' fehlt im ffmpeg-Kommando: {command}"
     idx = command.index("-map_metadata")
     assert command[idx + 1] == "-1"
+
+
+@patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
+@patch("otio_app.services.clean_media.path_is_readable_file", return_value=True)
+@patch("otio_app.services.clean_media._run_command")
+@patch("otio_app.services.clean_media.probe_media")
+def test_transcode_to_clean_hides_banner_so_real_errors_surface(
+    mock_probe,
+    mock_run_command,
+    _mock_readable,
+    _mock_validate,
+    tmp_path: Path,
+) -> None:
+    """Regression: Ohne '-hide_banner'/'-loglevel' beginnt ffmpegs stderr bei
+    JEDEM Aufruf mit dem mehrzeiligen Versions-/Build-Banner. Da die UI
+    Fehlermeldungen anzeigt (teils gekürzt), verdeckte dieses Banner die
+    eigentliche, für die Diagnose relevante Fehlerursache vollständig —
+    egal ob der Fehler wirklich existierte oder nicht. '-hide_banner' plus
+    ein reduziertes Loglevel stellen sicher, dass ein etwaiger echter
+    ffmpeg-Fehler an erster Stelle in stderr steht."""
+    original = tmp_path / "Bisti_De_Na_Zin_Wilderness_Asset01.mp4"
+    original.write_bytes(b"x")
+    output_path = tmp_path / "clean" / "Bisti_De_Na_Zin_Wilderness_Asset01.mp4"
+
+    mock_probe.return_value = MediaProbeInfo(video_codec="h264", audio_codec="aac", container="mp4")
+
+    def _fake_run_command(command, **kwargs):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"x" * 2000)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    mock_run_command.side_effect = _fake_run_command
+
+    transcode_to_clean(original, output_path)
+
+    command = mock_run_command.call_args[0][0]
+    assert "-hide_banner" in command
+    assert "-loglevel" in command

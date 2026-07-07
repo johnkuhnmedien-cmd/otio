@@ -154,9 +154,15 @@ def _render_folder_details(project, folder_name: str) -> None:
         elif entry.status == CLEAN_STATUS_OK:
             disk = "✓" if path_is_readable_file(Path(entry.original_path)) else "✗ offline"
             line += f" [Original {disk}]"
+        short_error = None
         if entry.error:
-            line += f" — {entry.error[:120]}"
+            first_line = entry.error.strip().splitlines()[0] if entry.error.strip() else ""
+            short_error = first_line[:200]
+            line += f" — {short_error}"
         st.caption(line)
+        if entry.error and (len(entry.error) > len(short_error or "") or "\n" in entry.error):
+            with st.expander(f"Vollständige Fehlermeldung — {name}", expanded=False):
+                st.code(entry.error, language=None)
 
     diag_key = f"clean_diag_{project.id}_{folder_name}"
     if st.button("🔍 Tiefe Diagnose (ffmpeg)", key=diag_key):
