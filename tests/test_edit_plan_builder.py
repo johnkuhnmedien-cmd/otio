@@ -984,3 +984,138 @@ def test_build_edit_plan_free_mode_passes_prompt_mode_to_gemini(
     assert captured[0]["max_asset_usage"] is None
     assert result.used_rules.get("prompt_mode") == "free"
     assert result.used_rules.get("gemini_prompt") == "Use cinematic pacing."
+
+
+def test_build_edit_plan_holistic_v1_skips_normalization_and_rules(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    from unittest.mock import patch
+
+    from otio_app.services.edit_plan_rules import load_edit_plan_rules, save_edit_plan_rules
+
+    project = _sample_project(temp_project_layout)
+    voice_path = str(temp_project_layout["voice_file"])
+    media_path = str(temp_project_layout["project_root"] / "Grand Canyon" / "clip.mp4")
+
+    doc = load_edit_plan_rules(project)
+    doc = doc.model_copy(update={"gemini_prompt": "Klassische Schnittführung."})
+    save_edit_plan_rules(project, doc)
+
+    mapping = VoiceFolderMappingDocument(
+        project_id=project.id,
+        confirmed=True,
+        entries=[
+            VoiceFolderMappingEntry(voice_file=voice_path, folder="Grand Canyon", confirmed=True)
+        ],
+    )
+    project.voice_folder_mapping_path.write_text(mapping.model_dump_json(indent=2), encoding="utf-8")
+
+    voice_doc = VoiceAnalysisDocument(
+        project_id=project.id,
+        language="de",
+        files=[
+            VoiceFileAnalysis(
+                path=voice_path,
+                duration_sec=18.0,
+                segments=[
+                    VoiceSegment(
+                        start_sec=0.0,
+                        end_sec=18.0,
+                        text="Langer Abschnitt mit mehreren Motiven im Park.",
+                    )
+                ],
+            )
+        ],
+    )
+    project.voice_analysis_path.write_text(voice_doc.model_dump_json(indent=2), encoding="utf-8")
+    Path(media_path).write_bytes(b"mp4")
+
+    from otio_app.services.inventory_loader import save_folder_inventory
+
+    save_folder_inventory(
+        project.folder_inventory_path("Grand Canyon"),
+        AssetFolderAnalysis(
+            folder="Grand Canyon",
+            assets=[
+                AssetMediaAnalysis(
+                    path=media_path,
+                    description="Landschaft",
+                    asset_id="asset_1",
+                )
+            ],
+        ),
+    )
+
+    captured: list[dict] = []
+    normalize_calls: list[dict] = []
+    rules_calls: list[int] = []
+
+    def fake_plan_folder_assets(**kwargs):
+        captured.append(kwargs)
+        return [
+            {
+                "beat_id": "beat_001",
+                "parts": [
+                    {
+                        "text": "Erstes Motiv.",
+                        "motif": "Landschaft",
+                        "asset_path": media_path,
+                        "match_quality": "gut",
+                    },
+                    {
+                        "text": "Zweites Motiv.",
+                        "motif": "Detail",
+                        "asset_path": None,
+                        "match_quality": "unpassend",
+                    },
+                ],
+            }
+        ]
+
+    def fake_normalize(**kwargs):
+        normalize_calls.append(kwargs)
+        raise AssertionError("normalize_gemini_parts_for_segment should not run in holistic v1")
+
+    def fake_apply_rules(shots, rules_doc, assets_payload_by_folder):
+        rules_calls.append(len(shots))
+        return shots
+
+    with (
+        patch(
+            "otio_app.services.edit_plan_builder.plan_folder_assets",
+            side_effect=fake_plan_folder_assets,
+        ),
+        patch(
+            "otio_app.services.edit_plan_builder.normalize_gemini_parts_for_segment",
+            side_effect=fake_normalize,
+        ),
+        patch(
+            "otio_app.services.edit_plan_builder.apply_edit_plan_rules",
+            side_effect=fake_apply_rules,
+        ),
+        patch(
+            "otio_app.services.timeline_plan_builder.probe_duration_seconds",
+            return_value=18.0,
+        ),
+    ):
+        result = build_edit_plan(
+            project,
+            use_api=True,
+            prompt_mode=EditPlanPromptMode.HOLISTIC_V1,
+            validation_mode=EditPlanValidationMode.SKIP,
+        )
+
+    assert result.status == EditPlanBuildStatus.ACCEPTED
+    assert captured
+    assert captured[0]["prompt_mode"] == "holistic_v1"
+    assert captured[0]["section_outro_sec"] == 0.0
+    assert captured[0]["max_asset_usage"] is None
+    assert not normalize_calls
+    assert not rules_calls
+    assert result.used_rules.get("prompt_mode") == "holistic_v1"
+    assert result.used_rules.get("pipeline") == "holistic_v1"
+    assert result.document is not None
+    narrative_shots = [shot for shot in result.document.shots if not shot.section_outro]
+    assert len(narrative_shots) >= 2
+    assert any(shot.asset_path is None for shot in narrative_shots)
+    assert any("Holistic v1" in note for note in (result.plan_generation_notes or []))

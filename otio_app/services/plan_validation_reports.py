@@ -142,6 +142,11 @@ def format_used_rules_summary(used_rules: dict[str, Any] | None) -> list[str]:
     if not used_rules:
         return []
     lines: list[str] = []
+    prompt_mode = used_rules.get("prompt_mode")
+    if prompt_mode == "holistic_v1":
+        lines.append("Pipeline: Holistic v1 (klassisch)")
+    elif prompt_mode == "free":
+        lines.append("Pipeline: Freier Schnittplan")
     shot_min = used_rules.get("shot_min_sec")
     shot_max = used_rules.get("shot_max_sec")
     if shot_min is not None and shot_max is not None:

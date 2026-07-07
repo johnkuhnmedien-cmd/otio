@@ -375,6 +375,14 @@ def plan_folder_assets(
             rule_text=extra_instructions,
             correction_instructions=correction_instructions,
         )
+    elif prompt_mode == "holistic_v1":
+        prompt = build_plan_folder_holistic_v1_prompt(
+            folder_name=folder_name,
+            segment_lines=_format_segment_lines_holistic_v1(segments),
+            asset_lines=_format_asset_lines_holistic_v1(assets),
+            language=language,
+            extra_instructions=extra_instructions,
+        )
     else:
         prompt = build_plan_folder_prompt(
             folder_name=folder_name,
@@ -464,6 +472,30 @@ def _format_segment_lines(
         ],
         rows,
     )
+
+
+def _format_segment_lines_holistic_v1(segments: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for segment in segments:
+        beat_id = str(segment.get("beat_id", "")).strip()
+        text = str(segment.get("text", "")).strip()
+        start_sec = segment.get("start_sec", 0.0)
+        end_sec = segment.get("end_sec", 0.0)
+        if not text:
+            continue
+        lines.append(
+            f'- beat_id="{beat_id}" start_sec={float(start_sec)} end_sec={float(end_sec)} text="{text}"'
+        )
+    return "\n".join(lines) or "- (keine)"
+
+
+def _format_asset_lines_holistic_v1(assets: list[dict[str, str]]) -> str:
+    lines = [
+        f'- path="{item.get("path", "")}" description="{item.get("description", "")}"'
+        for item in assets
+        if item.get("path")
+    ]
+    return "\n".join(lines) or "- (keine)"
 
 
 def _format_asset_lines(assets: list[dict[str, str]]) -> str:
@@ -626,6 +658,56 @@ def build_plan_folder_prompt(
             "- `beat_id` muss exakt einem Segment entsprechen"
             + (f' oder `{OUTRO_BEAT_ID}` für das Ausklingen.' if section_outro_sec > 0.05 else "."),
             "- `asset_path` muss exakt einem `path` aus der Asset-Tabelle entsprechen oder null sein.",
+        ]
+    )
+    return "\n".join(sections)
+
+
+def build_plan_folder_holistic_v1_prompt(
+    *,
+    folder_name: str,
+    segment_lines: str,
+    asset_lines: str,
+    language: str,
+    extra_instructions: str = "",
+) -> str:
+    """Ursprünglicher Holistic-Prompt (v1): keine Shot-Timing- oder Asset-Nutzungsregeln an das LLM."""
+    sections = [
+        f"Du planst Video-Shots für den Ordner '{folder_name}'. Sprache: {language}.",
+        "",
+        "Voice-over-Segmente (in chronologischer Reihenfolge):",
+        segment_lines,
+        "",
+        "Verfügbare lokale Assets:",
+        asset_lines,
+    ]
+    instructions = extra_instructions.strip()
+    if instructions:
+        sections.extend(
+            [
+                "",
+                "Zusätzliche Anweisungen des Editors (unbedingt beachten):",
+                instructions,
+            ]
+        )
+    sections.extend(
+        [
+            "",
+            "WICHTIG: Betrachte ALLE Segmente und ALLE Assets gesamtheitlich.",
+            "Wähle für jeden Shot das inhaltlich passendste Asset aus der gesamten Liste.",
+            "Vermeide unnötige Wiederholungen, aber inhaltliche Passung hat Priorität.",
+            "Wenn die Passage mehrere Sehenswürdigkeiten/Motive nennt, erstelle mehrere Teile.",
+            "Bewerte die visuelle Passung jedes Teils: sehr_gut, gut, mittel oder unpassend.",
+            "Bei unpassend: asset_path auf null setzen.",
+            "",
+            "Antworte NUR als JSON:",
+            (
+                '{"beats":[{"beat_id":"beat_001","parts":[{"text":"...","motif":"...",'
+                '"asset_path":"exakter path oder null",'
+                '"match_quality":"sehr_gut|gut|mittel|unpassend"}]}]}'
+            ),
+            "beat_id muss exakt einem beat_id aus den Segmenten entsprechen.",
+            "asset_path muss exakt einem path aus der Asset-Liste entsprechen oder null sein.",
         ]
     )
     return "\n".join(sections)

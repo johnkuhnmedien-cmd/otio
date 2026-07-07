@@ -57,7 +57,9 @@ def test_format_used_rules_summary() -> None:
     assert any("Wiederverwendungsabstand" in line for line in lines)
 
 
-def test_validation_status_label() -> None:
+def test_format_used_rules_summary_holistic_v1() -> None:
+    lines = format_used_rules_summary({"prompt_mode": "holistic_v1"})
+    assert any("Holistic v1" in line for line in lines)
     assert validation_status_label(ok=True, blocked=False) == "PASS"
     assert validation_status_label(ok=False, blocked=True) == "BLOCKED"
     assert validation_status_label(ok=False, blocked=False, retrying=True) == "RETRYING"

@@ -78,6 +78,7 @@ from otio_app.services.supplement_coverage import (
 from otio_app.services.supplement_requests import upsert_requests
 from otio_app.services.shot_timing import (
     TimedPart,
+    allocate_time_by_text,
     allocate_time_with_constraints,
     merge_short_voice_windows,
     normalize_gemini_parts_for_segment,
@@ -107,6 +108,7 @@ class EditPlanBuildStatus(str, Enum):
 class EditPlanPromptMode(str, Enum):
     FULL = "full"
     FREE = "free"
+    HOLISTIC_V1 = "holistic_v1"
 
 
 class EditPlanValidationMode(str, Enum):
@@ -493,7 +495,9 @@ def _beats_from_gemini_holistic_or_local(
                 model=gemini_model or settings.gemini_model,
                 extra_instructions=gemini_prompt,
                 section_outro_sec=(
-                    settings.section_outro_sec if prompt_mode == EditPlanPromptMode.FULL else 0.0
+                    settings.section_outro_sec
+                    if prompt_mode == EditPlanPromptMode.FULL
+                    else 0.0
                 ),
                 shot_min_sec=settings.shot_min_sec,
                 shot_max_sec=settings.shot_max_sec,
@@ -616,7 +620,9 @@ def _folder_shots_from_beats_plan(
     plan_settings: EditPlanSettings,
     usage_by_folder: dict[str, int],
     max_count: int | None,
+    pipeline_mode: str = "standard",
 ) -> FolderShotBuildResult:
+    holistic_v1 = pipeline_mode == "holistic_v1"
     shots: list[EditPlanShot] = []
     segment_coverages: list = []
     supplement_request_ids: list[str] = []
@@ -649,20 +655,7 @@ def _folder_shots_from_beats_plan(
             ]
 
         segment_duration = max(0.0, segment.end_sec - segment.start_sec)
-        normalized_parts = normalize_gemini_parts_for_segment(
-            raw_parts,
-            segment_duration=segment_duration,
-            min_sec=plan_settings.shot_min_sec,
-            max_sec=plan_settings.shot_max_sec,
-        )
-        raw_parts = normalized_parts.parts
-        if not normalized_parts.part_count_ok and normalized_parts.allowed_parts_min > len(raw_parts):
-            raw_parts = _ensure_minimum_parts(
-                raw_parts,
-                segment_text=segment.text.strip(),
-                min_parts=normalized_parts.allowed_parts_min,
-                text_splitters=plan_settings.text_splitters,
-            )
+        if not holistic_v1:
             normalized_parts = normalize_gemini_parts_for_segment(
                 raw_parts,
                 segment_duration=segment_duration,
@@ -670,32 +663,53 @@ def _folder_shots_from_beats_plan(
                 max_sec=plan_settings.shot_max_sec,
             )
             raw_parts = normalized_parts.parts
-        if not normalized_parts.part_count_ok and normalized_parts.part_count_error_type:
-            part_validation_errors.append(
-                PlanValidationError(
-                    type=normalized_parts.part_count_error_type,
-                    beat_id=beat_id,
-                    segment_id=beat_id,
-                    allowed_parts_min=normalized_parts.allowed_parts_min,
-                    allowed_parts_max=normalized_parts.allowed_parts_max,
-                    actual_parts=normalized_parts.actual_parts,
-                    message=(
-                        f"{normalized_parts.part_count_error_type}: {beat_id} "
-                        f"hat {normalized_parts.actual_parts} part(s), "
-                        f"erlaubt {normalized_parts.allowed_parts_min}–"
-                        f"{normalized_parts.allowed_parts_max}"
-                    ),
+            if not normalized_parts.part_count_ok and normalized_parts.allowed_parts_min > len(raw_parts):
+                raw_parts = _ensure_minimum_parts(
+                    raw_parts,
+                    segment_text=segment.text.strip(),
+                    min_parts=normalized_parts.allowed_parts_min,
+                    text_splitters=plan_settings.text_splitters,
                 )
-            )
+                normalized_parts = normalize_gemini_parts_for_segment(
+                    raw_parts,
+                    segment_duration=segment_duration,
+                    min_sec=plan_settings.shot_min_sec,
+                    max_sec=plan_settings.shot_max_sec,
+                )
+                raw_parts = normalized_parts.parts
+            if not normalized_parts.part_count_ok and normalized_parts.part_count_error_type:
+                part_validation_errors.append(
+                    PlanValidationError(
+                        type=normalized_parts.part_count_error_type,
+                        beat_id=beat_id,
+                        segment_id=beat_id,
+                        allowed_parts_min=normalized_parts.allowed_parts_min,
+                        allowed_parts_max=normalized_parts.allowed_parts_max,
+                        actual_parts=normalized_parts.actual_parts,
+                        message=(
+                            f"{normalized_parts.part_count_error_type}: {beat_id} "
+                            f"hat {normalized_parts.actual_parts} part(s), "
+                            f"erlaubt {normalized_parts.allowed_parts_min}–"
+                            f"{normalized_parts.allowed_parts_max}"
+                        ),
+                    )
+                )
 
         texts = [str(part.get("text", "")).strip() for part in raw_parts]
-        time_ranges = allocate_time_with_constraints(
-            segment.start_sec,
-            segment.end_sec,
-            texts,
-            min_sec=plan_settings.shot_min_sec,
-            max_sec=plan_settings.shot_max_sec,
-        )
+        if holistic_v1:
+            time_ranges = allocate_time_by_text(
+                segment.start_sec,
+                segment.end_sec,
+                texts,
+            )
+        else:
+            time_ranges = allocate_time_with_constraints(
+                segment.start_sec,
+                segment.end_sec,
+                texts,
+                min_sec=plan_settings.shot_min_sec,
+                max_sec=plan_settings.shot_max_sec,
+            )
         timed_parts: list[TimedPart] = []
         for part, (start_sec, end_sec) in zip(raw_parts, time_ranges):
             match_quality = normalize_match_quality(str(part.get("match_quality", "")))
@@ -703,7 +717,9 @@ def _folder_shots_from_beats_plan(
                 part.get("asset_path"),
                 allowed_paths,
             )
-            if match_quality == MATCH_QUALITY_UNPASSEND:
+            if match_quality == MATCH_QUALITY_UNPASSEND and holistic_v1:
+                asset_path = None
+            elif match_quality == MATCH_QUALITY_UNPASSEND and not holistic_v1:
                 fallback_meta = _select_establishing_fallback(
                     asset_payload,
                     used_paths=used_paths_in_folder,
@@ -726,10 +742,11 @@ def _folder_shots_from_beats_plan(
                 )
             )
 
-        timed_parts = merge_short_voice_windows(
-            timed_parts,
-            min_sec=plan_settings.shot_min_sec,
-        )
+        if not holistic_v1:
+            timed_parts = merge_short_voice_windows(
+                timed_parts,
+                min_sec=plan_settings.shot_min_sec,
+            )
         normalized = shots_from_timed_parts(
             timed_parts,
             min_sec=plan_settings.shot_min_sec,
@@ -766,7 +783,8 @@ def _folder_shots_from_beats_plan(
                 asset_id = asset_id_for_path(part.asset_path)
 
             if (
-                asset_id
+                not holistic_v1
+                and asset_id
                 and max_count is not None
                 and usage_by_folder.get(asset_id, 0) >= max_count
             ):
@@ -782,7 +800,7 @@ def _folder_shots_from_beats_plan(
                 media_type = ""
                 coverage_status = COVERAGE_SUPPLEMENT_REQUIRED
 
-            if match_quality == MATCH_QUALITY_UNPASSEND and not part.asset_path:
+            if not holistic_v1 and match_quality == MATCH_QUALITY_UNPASSEND and not part.asset_path:
                 fallback_meta = _select_establishing_fallback(
                     asset_payload,
                     used_paths=used_paths_in_folder,
@@ -949,6 +967,9 @@ def build_edit_plan(
                 "shot_max_sec": plan_settings.shot_max_sec,
             }
         )
+    elif prompt_mode == EditPlanPromptMode.HOLISTIC_V1:
+        used_rules["pipeline"] = "holistic_v1"
+        used_rules["gemini_prompt"] = gemini_prompt
     else:
         used_rules["gemini_prompt"] = gemini_prompt
     inventory_hashes: dict[str, str] = {}
@@ -1021,6 +1042,10 @@ def build_edit_plan(
     last_shots: list[EditPlanShot] = []
     last_segment_coverages: list = []
 
+    pipeline_mode = (
+        "holistic_v1" if prompt_mode == EditPlanPromptMode.HOLISTIC_V1 else "standard"
+    )
+
     for attempt in range(1, max_attempts + 1):
         shots: list[EditPlanShot] = []
         segment_coverages: list = []
@@ -1068,6 +1093,7 @@ def build_edit_plan(
                 plan_settings=plan_settings,
                 usage_by_folder=usage_by_folder,
                 max_count=max_count,
+                pipeline_mode=pipeline_mode,
             )
             part_validation_errors.extend(folder_build.part_validation_errors)
 
@@ -1096,7 +1122,8 @@ def build_edit_plan(
             if progress_callback is not None and segments_with_beats:
                 progress_callback(folder_name, 1, 1)
 
-        shots = apply_edit_plan_rules(shots, rules_doc, assets_payload_by_folder)
+        if prompt_mode != EditPlanPromptMode.HOLISTIC_V1:
+            shots = apply_edit_plan_rules(shots, rules_doc, assets_payload_by_folder)
 
         shots_by_beat: dict[tuple[str, str, str], list[EditPlanShot]] = {}
         for shot in shots:
@@ -1236,6 +1263,11 @@ def build_edit_plan(
             if prompt_mode == EditPlanPromptMode.FREE:
                 plan_generation_notes.append(
                     "Freier Schnittplan: nur Gemini-Freitext-Regel an Gemini übergeben."
+                )
+            if prompt_mode == EditPlanPromptMode.HOLISTIC_V1:
+                plan_generation_notes.append(
+                    "Holistic v1: klassischer Workflow — LLM wählt Teile/Assets, "
+                    "keine lokale Part-Normalisierung oder Establishing-Fallbacks."
                 )
 
             document = EditPlanDocument(

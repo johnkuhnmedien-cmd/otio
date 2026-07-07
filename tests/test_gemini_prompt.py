@@ -18,6 +18,7 @@ from otio_app.services.gemini_client import (
     _format_segment_lines,
     build_plan_folder_correction_instructions,
     build_plan_folder_free_prompt,
+    build_plan_folder_holistic_v1_prompt,
     build_plan_folder_prompt,
     build_plan_passage_prompt,
     normalize_match_quality,
@@ -124,6 +125,24 @@ def test_build_plan_folder_prompt_includes_asset_usage_rules() -> None:
     assert "min_reuse_distance_shots" in prompt
     assert "asset_reuse_policy" in prompt
     assert "hard_block" in prompt
+
+
+def test_build_plan_folder_holistic_v1_prompt_omits_timing_and_asset_rules() -> None:
+    prompt = build_plan_folder_holistic_v1_prompt(
+        folder_name="Badlands National Park",
+        segment_lines='- beat_id="beat_001" start_sec=0.0 end_sec=12.0 text="Wir besuchen den Park."',
+        asset_lines='- path="/a.mp4" description="Felsformation"',
+        language="de",
+        extra_instructions="Ruhige Establishing-Shots bevorzugen.",
+    )
+    assert "Badlands National Park" in prompt
+    assert "gesamtheitlich" in prompt.lower()
+    assert "beat_001" in prompt
+    assert "Ruhige Establishing-Shots bevorzugen." in prompt
+    assert "Harte Regeln" not in prompt
+    assert "parts_min" not in prompt
+    assert "shot_min" not in prompt
+    assert "max_asset_usage" not in prompt
 
 
 def test_format_segment_lines_includes_allowed_parts_bounds() -> None:

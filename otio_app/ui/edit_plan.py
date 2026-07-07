@@ -1029,7 +1029,7 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
 
     _render_timing_gemini_controls(project)
     st.divider()
-    col_primary, col_no_val, col_free = st.columns(3)
+    col_primary, col_no_val, col_free, col_holistic = st.columns(4)
     with col_primary:
         if st.button(
             "Schnittplan vorschlagen",
@@ -1072,10 +1072,34 @@ def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument 
                 validation_mode=EditPlanValidationMode.SKIP,
                 action_label="Freier Schnittplan",
             )
+    with col_holistic:
+        if st.button(
+            "Klassisch (Holistic v1)",
+            key=f"build_plan_holistic_{project.id}",
+            use_container_width=True,
+            help=(
+                "Ursprünglicher Workflow: LLM plant Teile und Assets gesamtheitlich, "
+                "Python normalisiert nicht die Part-Anzahl und ersetzt keine Lücken."
+            ),
+        ):
+            _run_suggest_edit_plan(
+                project,
+                selected_folder,
+                prompt_mode=EditPlanPromptMode.HOLISTIC_V1,
+                validation_mode=EditPlanValidationMode.SKIP,
+                action_label="Holistic v1",
+            )
     st.caption(
         "**Schnittplan vorschlagen** = Regeln + Validierung · "
         "**Ohne Validierung** = Regeln, kein Retry · "
-        "**Freier Schnittplan** = nur Freitext-Regel aus Tab Regeln."
+        "**Freier Schnittplan** = nur Freitext-Regel · "
+        "**Klassisch (Holistic v1)** = alter Workflow mit weniger Nachbearbeitung."
+    )
+    st.caption(
+        "Standard- und Frei-Modus laufen nach dem LLM durch dieselbe Python-Pipeline "
+        "(Part-Normalisierung, Min/Max-Timing, Establishing-Fallbacks). "
+        "Deshalb sehen Timelines verschiedener Modelle oft fast identisch aus — "
+        "für stärkere Modell-Unterschiede **Holistic v1** nutzen."
     )
 
     draft = _effective_draft(project.id, selected_folder, saved)
