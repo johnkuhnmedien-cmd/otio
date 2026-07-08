@@ -16,8 +16,11 @@ werden. Phase 9.1 ergänzt eine isolierte EditPlan-Bridge (siehe
 cut_plan_edit_plan_bridge.py/cut_plan_edit_plan_trace.py): der bestätigte
 Cut Plan wird deterministisch in einen EditPlanDocument-kompatiblen Draft
 übersetzt — komplett getrennt von der bestehenden Produktions-EditPlan-
-Pipeline. Weiterhin KEIN locked EditPlan, kein OTIO-Export, kein Render,
-keine neue LLM-Planung."""
+Pipeline. Phase 9.2 härtet diese Bridge: Boundary-Chaining pro Track
+verhindert 1-Frame-Gaps/-Overlaps, eine strukturierte bridge_audio_plan.json
+ersetzt das Rätselraten am TimelineItem-Sondertyp 'voiceover_audio', und die
+Bridge-Validierung wurde verschärft. Weiterhin KEIN locked EditPlan, kein
+OTIO-Export, kein Render, keine neue LLM-Planung."""
 
 from __future__ import annotations
 
@@ -41,6 +44,7 @@ from otio_app.models import Project
 from otio_app.project_layout import (
     get_cut_plan_confirmed_path,
     get_cut_plan_draft_path,
+    get_cut_plan_edit_plan_bridge_audio_plan_path,
     get_cut_plan_edit_plan_bridge_draft_path,
     get_cut_plan_settings_path,
     get_cut_plan_supplement_requests_path,
@@ -83,10 +87,13 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     search_candidates_for_cut_plan_request,
 )
 from otio_app.services.voiceover_generation.cut_plan_edit_plan_bridge import (
+    build_bridge_audio_plan_from_confirmed_cut_plan,
     build_edit_plan_draft_from_confirmed_cut_plan,
     is_edit_plan_bridge_stale,
+    load_bridge_audio_plan,
     load_edit_plan_bridge_draft,
     load_edit_plan_bridge_validation_report,
+    save_bridge_audio_plan,
     save_edit_plan_bridge_draft,
     validate_edit_plan_bridge,
 )
@@ -727,7 +734,7 @@ def _render_confirmed_cut_plan(project: Project, draft: CutPlanDocument) -> None
 
 
 def _render_edit_plan_bridge(project: Project) -> None:
-    """Phase 9.1: isolierte EditPlan-Bridge. Übersetzt ausschließlich einen
+    """Phase 9.1/9.2: isolierte EditPlan-Bridge. Übersetzt ausschließlich einen
     bereits BESTÄTIGTEN Cut Plan deterministisch in einen EditPlanDocument-
     kompatiblen Draft — kein Rebuild, keine Asset-Auswahl, keine Supplement-
     Suche, keine LLM-Aufrufe. Kein locked EditPlan, kein OTIO-Export."""
@@ -736,6 +743,9 @@ def _render_edit_plan_bridge(project: Project) -> None:
         "Übersetzt den bestätigten Cut Plan deterministisch in einen isolierten, "
         "EditPlanDocument-kompatiblen Draft — getrennt von `_otio/edit_plan/` und "
         "`_otio/exports/`. Keine neue Asset-Auswahl, keine Supplement-Suche, kein LLM-Aufruf."
+    )
+    st.warning(
+        "Dieser Bridge-Draft ist noch kein locked Produktions-EditPlan und nicht OTIO-exportbereit."
     )
 
     confirmed = load_confirmed_cut_plan(project)
@@ -767,6 +777,8 @@ def _render_edit_plan_bridge(project: Project) -> None:
             with st.spinner("EditPlan Bridge Draft wird erstellt…"):
                 edit_plan = build_edit_plan_draft_from_confirmed_cut_plan(project)
                 edit_plan = save_edit_plan_bridge_draft(project, edit_plan)
+                audio_plan = build_bridge_audio_plan_from_confirmed_cut_plan(project)
+                audio_plan = save_bridge_audio_plan(project, audio_plan)
                 trace = build_edit_plan_bridge_trace(project, confirmed, edit_plan)
                 save_edit_plan_bridge_trace(project, trace)
                 report = validate_edit_plan_bridge(project, edit_plan)
@@ -774,7 +786,7 @@ def _render_edit_plan_bridge(project: Project) -> None:
             visual_count = len(edit_plan.timeline_items) - audio_count
             st.success(
                 f"EditPlan Bridge Draft erzeugt: {len(edit_plan.timeline_items)} TimelineItems "
-                f"({audio_count} Audio, {visual_count} Visual), "
+                f"({audio_count} Audio, {visual_count} Visual), {len(audio_plan.items)} BridgeAudioPlanItem(s), "
                 f"{len(report.warnings)} Warnings, {len(report.blockers)} Blocker."
             )
             st.rerun()
@@ -797,6 +809,29 @@ def _render_edit_plan_bridge(project: Project) -> None:
         st.metric("Visual Items", len(visual_items))
 
     st.caption(f"Bridge Draft Pfad: `{get_cut_plan_edit_plan_bridge_draft_path(project.work_dir_path)}`")
+
+    audio_plan = load_bridge_audio_plan(project)
+    trace = load_edit_plan_bridge_trace(project)
+    rounded_count = sum(1 for entry in trace.entries if entry.frame_rounded) if trace is not None else 0
+    boundary_chained_count = (
+        sum(1 for entry in trace.entries if entry.boundary_chained) if trace is not None else 0
+    )
+
+    col7, col8, col9, col10 = st.columns(4)
+    with col7:
+        st.metric("Bridge Audio Plan", "✅ Ja" if audio_plan is not None else "❌ Nein")
+    with col8:
+        st.metric("AudioPlanItems", len(audio_plan.items) if audio_plan is not None else 0)
+    with col9:
+        st.metric("Frame-gerundete Items", rounded_count)
+    with col10:
+        st.metric("Boundary-gechainte Items", boundary_chained_count)
+    st.caption(
+        "Boundary-Chaining angewendet: "
+        + ("✅ Ja" if boundary_chained_count > 0 else "— Nein (keine Anpassung nötig)")
+    )
+    if audio_plan is not None:
+        st.caption(f"Bridge Audio Plan Pfad: `{get_cut_plan_edit_plan_bridge_audio_plan_path(project.work_dir_path)}`")
 
     report = load_edit_plan_bridge_validation_report(project)
     if report is not None:
@@ -835,7 +870,6 @@ def _render_edit_plan_bridge(project: Project) -> None:
     else:
         st.info("Noch kein Bridge Validation Report vorhanden.")
 
-    trace = load_edit_plan_bridge_trace(project)
     if trace is not None and trace.entries:
         with st.expander("EditPlan Bridge Trace", expanded=False):
             rows = [
@@ -848,15 +882,42 @@ def _render_edit_plan_bridge(project: Project) -> None:
                     "timeline_item_type": entry.timeline_item_type,
                     "track": entry.track,
                     "asset_id": entry.asset_id or "—",
+                    "original_timeline_in_sec": entry.original_timeline_in_sec,
+                    "original_timeline_out_sec": entry.original_timeline_out_sec,
+                    "rounded_timeline_in_sec": entry.rounded_timeline_in_sec,
+                    "rounded_timeline_out_sec": entry.rounded_timeline_out_sec,
                     "timeline_in_sec": entry.timeline_in_sec,
                     "timeline_out_sec": entry.timeline_out_sec,
                     "source_in_sec": entry.source_in_sec,
                     "source_out_sec": entry.source_out_sec,
                     "frame_rounded": entry.frame_rounded,
                     "frame_rounding_delta_sec": entry.frame_rounding_delta_sec,
+                    "boundary_chained": entry.boundary_chained,
+                    "boundary_chain_delta_sec": entry.boundary_chain_delta_sec,
+                    "source_duration_adjusted": entry.source_duration_adjusted,
+                    "source_duration_delta_sec": entry.source_duration_delta_sec,
                     "reason": entry.reason or "—",
                 }
                 for entry in trace.entries
+            ]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    if audio_plan is not None and audio_plan.items:
+        with st.expander("Bridge Audio Plan", expanded=False):
+            rows = [
+                {
+                    "scope": item.scope,
+                    "folder_name": item.folder_name or "—",
+                    "timeline_item_id": item.timeline_item_id,
+                    "timeline_in_sec": item.timeline_in_sec,
+                    "timeline_out_sec": item.timeline_out_sec,
+                    "source_in_sec": item.source_in_sec,
+                    "source_out_sec": item.source_out_sec,
+                    "duration_sec": item.duration_sec,
+                    "track": item.track,
+                    "source_cut_plan_audio_index": item.source_cut_plan_audio_index,
+                }
+                for item in audio_plan.items
             ]
             st.dataframe(rows, use_container_width=True, hide_index=True)
 

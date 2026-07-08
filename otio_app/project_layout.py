@@ -452,6 +452,14 @@ def get_cut_plan_edit_plan_bridge_validation_report_path(work_dir: Path) -> Path
     return get_cut_plan_edit_plan_bridge_dir(work_dir) / CUT_PLAN_EDIT_PLAN_BRIDGE_VALIDATION_REPORT_FILENAME
 
 
+def get_cut_plan_edit_plan_bridge_audio_plan_path(work_dir: Path) -> Path:
+    """Phase 9.2: strukturierte Audio-Plan-Datei — vermeidet, dass eine
+    spätere Phase aus dem TimelineItem-Sondertyp 'voiceover_audio' raten muss."""
+    from otio_app.defaults import CUT_PLAN_EDIT_PLAN_BRIDGE_AUDIO_PLAN_FILENAME
+
+    return get_cut_plan_edit_plan_bridge_dir(work_dir) / CUT_PLAN_EDIT_PLAN_BRIDGE_AUDIO_PLAN_FILENAME
+
+
 def get_supplement_dir(work_dir: Path) -> Path:
     """Verzeichnis für Supplement-Workflow-Dateien."""
     from otio_app.defaults import SUPPLEMENT_SUBDIR

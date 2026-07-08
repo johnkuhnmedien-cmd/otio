@@ -1,13 +1,18 @@
-"""Phase 9.1: Isolierte Brücke von cut_plan.confirmed.json zu einem
+"""Phase 9.1/9.2: Isolierte Brücke von cut_plan.confirmed.json zu einem
 EditPlanDocument-kompatiblen Draft.
 
 Der bestätigte Cut Plan bleibt die Quelle der Wahrheit. Diese Brücke
 übersetzt ihn DETERMINISTISCH und rein python-seitig:
 
-- CutPlanAudioItem -> Audio-TimelineItem (Track A1)
+- CutPlanAudioItem -> Audio-TimelineItem (Track A1) + BridgeAudioPlanItem
+  (strukturierte, providerunabhängige Audio-Beschreibung, Phase 9.2)
 - VisualSegment -> Video-/Bild-TimelineItem (Track V1)
 - CutPlanItem/source_refs -> Traceability (siehe cut_plan_edit_plan_trace.py)
 - Warnings/Blocker des bestätigten Cut Plans -> Bridge-Validierung
+
+Phase 9.2 härtet Phase 9.1: Frame-Rundung erfolgt jetzt per BOUNDARY-CHAINING
+pro Track (siehe normalize_timeline_boundaries_by_track), damit unabhängige
+Rundung keine 1-Frame-Gaps/-Overlaps mehr erzeugen kann.
 
 Es wird NICHTS neu geplant: keine LLM-Aufrufe, keine erneute Asset-Auswahl,
 keine Supplement-Suche, keine Provider-Calls. Die Modelle `EditPlanDocument`,
@@ -34,6 +39,8 @@ from otio_app.defaults import (
     EDIT_PLAN_BRIDGE_ERROR_ASSET_FILE_MISSING,
     EDIT_PLAN_BRIDGE_ERROR_AUDIO_FILE_MISSING,
     EDIT_PLAN_BRIDGE_ERROR_AUDIO_ITEM_MISSING,
+    EDIT_PLAN_BRIDGE_ERROR_AUDIO_PLAN_MISMATCH,
+    EDIT_PLAN_BRIDGE_ERROR_AUDIO_PLAN_MISSING,
     EDIT_PLAN_BRIDGE_ERROR_AUDIO_SOURCE_NOT_ZERO,
     EDIT_PLAN_BRIDGE_ERROR_BLACK_GAP_DURING_AUDIO,
     EDIT_PLAN_BRIDGE_ERROR_CONFIRMED_CUT_PLAN_HAS_BLOCKERS,
@@ -42,8 +49,11 @@ from otio_app.defaults import (
     EDIT_PLAN_BRIDGE_ERROR_CONFIRMED_CUT_PLAN_STALE,
     EDIT_PLAN_BRIDGE_ERROR_NON_MONOTONIC_TIMELINE,
     EDIT_PLAN_BRIDGE_ERROR_SECRET_LEAK_DETECTED,
+    EDIT_PLAN_BRIDGE_ERROR_SOURCE_RANGE_INVALID,
     EDIT_PLAN_BRIDGE_ERROR_TIMELINE_OVERLAP,
+    EDIT_PLAN_BRIDGE_ERROR_VIDEO_SOURCE_EXCEEDS_DURATION,
     EDIT_PLAN_BRIDGE_ERROR_VISUAL_ITEM_MISSING,
+    EDIT_PLAN_BRIDGE_ERROR_VISUAL_TIMELINE_GAP,
     EDIT_PLAN_BRIDGE_ERROR_ZERO_OR_NEGATIVE_DURATION,
     EDIT_PLAN_BRIDGE_TIMELINE_ITEM_TYPE_VOICEOVER_AUDIO,
     EDIT_PLAN_BRIDGE_VALIDATION_STATUS_BLOCKED,
@@ -55,15 +65,20 @@ from otio_app.defaults import (
 from otio_app.models import Project
 from otio_app.project_layout import (
     get_cut_plan_confirmed_path,
+    get_cut_plan_edit_plan_bridge_audio_plan_path,
     get_cut_plan_edit_plan_bridge_draft_path,
+    get_cut_plan_edit_plan_bridge_trace_path,
     get_cut_plan_edit_plan_bridge_validation_report_path,
 )
 from otio_app.services.api_keys import get_api_key
+from otio_app.services.media_utils import probe_duration_seconds
 from otio_app.services.voiceover_generation.cut_plan_confirm_service import (
     is_confirmed_cut_plan_stale,
     load_confirmed_cut_plan,
 )
 from otio_app.services.voiceover_generation.cut_plan_edit_plan_models import (
+    BridgeAudioPlanDocument,
+    BridgeAudioPlanItem,
     EditPlanBridgeValidationError,
     EditPlanBridgeValidationReport,
 )
@@ -72,11 +87,18 @@ from otio_app.services.voiceover_generation.llm_trace_service import content_has
 
 __all__ = [
     "build_edit_plan_draft_from_confirmed_cut_plan",
+    "build_bridge_audio_plan_from_confirmed_cut_plan",
     "load_edit_plan_bridge_draft",
     "save_edit_plan_bridge_draft",
+    "load_bridge_audio_plan",
+    "save_bridge_audio_plan",
     "is_edit_plan_bridge_stale",
     "validate_edit_plan_bridge",
     "load_edit_plan_bridge_validation_report",
+    "normalize_timeline_boundaries_by_track",
+    "normalize_visual_boundaries",
+    "normalize_audio_boundaries",
+    "extract_note_value",
     "round_to_frame",
     "ceil_to_frame",
     "round_audio_times_to_frame",
@@ -85,8 +107,13 @@ __all__ = [
 ]
 
 _TIME_EPSILON = 1e-6
+_GAP_TOLERANCE = 0.01
 _SOURCE_CUT_PLAN_HASH_PREFIX = "source_cut_plan_hash="
-_SOURCE_PIPELINE_NOTE = "source_pipeline=voiceover_generation_cut_plan"
+_SOURCE_CUT_PLAN_PATH_PREFIX = "source_cut_plan_path="
+_SOURCE_PIPELINE_PREFIX = "source_pipeline="
+_BRIDGE_AUDIO_PLAN_PATH_PREFIX = "bridge_audio_plan_path="
+_EDIT_PLAN_BRIDGE_TRACE_PATH_PREFIX = "edit_plan_bridge_trace_path="
+_SOURCE_PIPELINE_VALUE = "voiceover_generation_cut_plan"
 
 
 # --- Reine Frame-/Timing-Hilfsfunktionen (keine Seiteneffekte) ---
@@ -169,6 +196,107 @@ def round_visual_times_to_frame(
         or abs(rounded_source_out - source_out_sec) > _TIME_EPSILON
     )
     return rounded_in, rounded_out, rounded_source_in, rounded_source_out, frame_rounded, delta
+
+
+# --- Boundary-Chaining pro Track (Phase 9.2 §1) ---
+#
+# Phase 9.1 rundete jedes Item unabhängig — validiert, aber in Randfällen
+# konnten dadurch 1-Frame-Gaps/-Overlaps entstehen (zwei unabhängig
+# gerundete Werte, die eigentlich an derselben Stelle liegen sollten, aber
+# in unterschiedliche Richtungen runden). Die folgenden Funktionen nehmen
+# bereits EINZELN frame-gerundete TimelineItems und verketten sie NACHGELAGERT
+# pro Track, damit die tatsächlich geschriebenen Werte lückenlos anschließen.
+
+
+def normalize_visual_boundaries(items: list[TimelineItem], fps: int) -> list[TimelineItem]:
+    """V1: nach timeline_in_sec sortieren. Das erste Visual behält seinen
+    gerundeten Start. Jedes folgende Visual beginnt exakt dort, wo das
+    vorherige endet (kein Mikro-Gap/-Overlap mehr durch Rundung). Das Ende
+    bleibt das ursprünglich gerundete Ende, mindestens aber start + 1 Frame.
+    source_out_sec wird aus source_in_sec + neuer Timeline-Dauer neu
+    abgeleitet — ob das bei Video die reale Dateidauer überschreitet, prüft
+    die Validierung (§5), nicht diese reine Funktion."""
+    if not items:
+        return []
+    frame_duration = 1.0 / fps if fps > 0 else 0.0
+    sorted_items = sorted(items, key=lambda entry: entry.timeline_in_sec)
+
+    chained: list[TimelineItem] = []
+    previous_out: float | None = None
+    for item in sorted_items:
+        new_in = item.timeline_in_sec if previous_out is None else previous_out
+        new_out = max(item.timeline_out_sec, new_in + frame_duration)
+        new_duration = new_out - new_in
+        new_source_out = item.source_in_sec + new_duration
+        chained.append(
+            item.model_copy(
+                update={
+                    "timeline_in_sec": new_in,
+                    "timeline_out_sec": new_out,
+                    "duration_sec": new_duration,
+                    "final_duration_sec": new_duration,
+                    "source_out_sec": new_source_out,
+                }
+            )
+        )
+        previous_out = new_out
+    return chained
+
+
+def normalize_audio_boundaries(items: list[TimelineItem], fps: int) -> list[TimelineItem]:
+    """A1: KEIN Back-to-back-Chaining — geplante Pausen zwischen Sektionen
+    bleiben bestehen. Nur falls unabhängige Rundung zweier Items einen
+    Overlap erzeugt hat, wird der Start des ZWEITEN Items minimal auf das
+    Ende des ersten verschoben — die Dauer bleibt dabei exakt erhalten
+    (Audio wird nie gekürzt), nur die Position rutscht."""
+    if not items:
+        return []
+    sorted_items = sorted(items, key=lambda entry: entry.timeline_in_sec)
+
+    normalized: list[TimelineItem] = []
+    previous_out: float | None = None
+    for item in sorted_items:
+        duration = item.timeline_out_sec - item.timeline_in_sec
+        new_in = item.timeline_in_sec
+        if previous_out is not None and new_in < previous_out - _TIME_EPSILON:
+            new_in = previous_out  # Overlap durch Rundung beheben, ohne zu kürzen
+        new_out = new_in + duration
+        normalized.append(
+            item.model_copy(
+                update={
+                    "timeline_in_sec": new_in,
+                    "timeline_out_sec": new_out,
+                    "duration_sec": duration,
+                    "final_duration_sec": duration,
+                }
+            )
+        )
+        previous_out = new_out
+    return normalized
+
+
+def normalize_timeline_boundaries_by_track(items: list[TimelineItem], fps: int) -> list[TimelineItem]:
+    """Orchestriert das Boundary-Chaining je Track: V1 wird lückenlos
+    verkettet, A1 wird nur bei Rundungs-Overlaps minimal verschoben (Pausen
+    bleiben erhalten), alle anderen Tracks (z. B. zukünftige V2-Titel)
+    bleiben unverändert. Ergebnis chronologisch nach timeline_in_sec
+    sortiert (Track-Reihenfolge ist für eine flache TimelineItem-Liste nicht
+    bedeutungstragend)."""
+    by_track: dict[str, list[TimelineItem]] = {}
+    for item in items:
+        by_track.setdefault(item.track, []).append(item)
+
+    result: list[TimelineItem] = []
+    for track, track_items in by_track.items():
+        if track == "V1":
+            result.extend(normalize_visual_boundaries(track_items, fps))
+        elif track == "A1":
+            result.extend(normalize_audio_boundaries(track_items, fps))
+        else:
+            result.extend(track_items)
+
+    result.sort(key=lambda entry: (entry.timeline_in_sec, entry.track, entry.timeline_item_id))
+    return result
 
 
 def safe_timeline_item_component(value: str) -> str:
@@ -264,15 +392,7 @@ def _visual_segment_to_timeline_item(item: CutPlanItem, segment: VisualSegment, 
     )
 
 
-def build_edit_plan_draft_from_confirmed_cut_plan(project: Project) -> EditPlanDocument:
-    """Liest AUSSCHLIESSLICH cut_plan.confirmed.json und übersetzt ihn
-    deterministisch in einen EditPlanDocument-kompatiblen Draft. Reine
-    Funktion — speichert nichts (siehe save_edit_plan_bridge_draft).
-
-    Keine Asset-Auswahl, keine Cut-Plan-Validierung, keine Supplement-Suche,
-    keine Provider-/LLM-Aufrufe. Wirft ValueError, wenn kein bestätigter Cut
-    Plan vorhanden, veraltet, nicht CONFIRMED oder blockiert ist."""
-    confirmed = load_confirmed_cut_plan(project)
+def _validate_confirmed_cut_plan_for_bridge(project: Project, confirmed: CutPlanDocument | None) -> None:
     if confirmed is None:
         raise ValueError("Kein bestätigter Cut Plan (cut_plan.confirmed.json) vorhanden.")
     if is_confirmed_cut_plan_stale(project, confirmed):
@@ -285,14 +405,45 @@ def build_edit_plan_draft_from_confirmed_cut_plan(project: Project) -> EditPlanD
     if confirmed.blockers:
         raise ValueError(f"Bestätigter Cut Plan hat {len(confirmed.blockers)} Blocker.")
 
+
+def _build_note(prefix: str, value: str) -> str:
+    return f"{prefix}{value}"
+
+
+def extract_note_value(notes: list[str], prefix: str) -> str:
+    """Extrahiert deterministisch den Wert einer 'prefix<value>'-Notiz aus
+    plan_generation_notes — stabile, parsebare Konvention (§4), solange
+    EditPlanDocument kein generisches Metadaten-Feld hat."""
+    for note in notes:
+        if note.startswith(prefix):
+            return note[len(prefix):]
+    return ""
+
+
+def _build_edit_plan_and_audio_plan(
+    project: Project,
+) -> tuple[CutPlanDocument, EditPlanDocument, BridgeAudioPlanDocument]:
+    """Interner, gemeinsamer Kern für build_edit_plan_draft_from_confirmed_
+    cut_plan UND build_bridge_audio_plan_from_confirmed_cut_plan — läuft
+    EINMAL, damit beide Ergebnisse garantiert konsistent aus DENSELBEN
+    (frame-gerundeten + boundary-gechainten) TimelineItems abgeleitet werden,
+    statt durch zwei unabhängige Berechnungen zu driften."""
+    confirmed = load_confirmed_cut_plan(project)
+    _validate_confirmed_cut_plan_for_bridge(project, confirmed)
+    assert confirmed is not None  # für Typprüfer; _validate wirft sonst
+
     fps = confirmed.timeline_fps or 25
 
-    timeline_items: list[TimelineItem] = [
+    raw_items: list[TimelineItem] = [
         _audio_item_to_timeline_item(audio_item, fps) for audio_item in confirmed.audio_items
     ]
     for item in confirmed.items:
         for segment in item.planned_visual_segments:
-            timeline_items.append(_visual_segment_to_timeline_item(item, segment, fps))
+            raw_items.append(_visual_segment_to_timeline_item(item, segment, fps))
+
+    # Phase 9.2 §1: Boundary-Chaining NACH der individuellen Frame-Rundung,
+    # damit unabhängige Rundung keine 1-Frame-Gaps/-Overlaps mehr erzeugt.
+    final_items = normalize_timeline_boundaries_by_track(raw_items, fps)
 
     snapshot = confirmed.settings_snapshot or {}
     defaults = EditPlanSettings()
@@ -302,24 +453,82 @@ def build_edit_plan_draft_from_confirmed_cut_plan(project: Project) -> EditPlanD
         video_head_trim_sec=snapshot.get("video_head_trim_sec", defaults.video_head_trim_sec),
     )
 
+    confirmed_hash = content_hash_of_model(confirmed)
     notes = [
-        _SOURCE_PIPELINE_NOTE,
-        f"source_cut_plan_path={get_cut_plan_confirmed_path(project.work_dir_path)}",
-        f"{_SOURCE_CUT_PLAN_HASH_PREFIX}{content_hash_of_model(confirmed)}",
+        _build_note(_SOURCE_PIPELINE_PREFIX, _SOURCE_PIPELINE_VALUE),
+        _build_note(_SOURCE_CUT_PLAN_PATH_PREFIX, str(get_cut_plan_confirmed_path(project.work_dir_path))),
+        _build_note(_SOURCE_CUT_PLAN_HASH_PREFIX, confirmed_hash),
+        _build_note(
+            _BRIDGE_AUDIO_PLAN_PATH_PREFIX, str(get_cut_plan_edit_plan_bridge_audio_plan_path(project.work_dir_path))
+        ),
+        _build_note(
+            _EDIT_PLAN_BRIDGE_TRACE_PATH_PREFIX,
+            str(get_cut_plan_edit_plan_bridge_trace_path(project.work_dir_path)),
+        ),
     ]
 
-    return EditPlanDocument(
+    edit_plan = EditPlanDocument(
         project_id=project.id,
         folder_name=None,
         confirmed=False,
         settings=edit_plan_settings,
         voiceover=None,
         shots=[],
-        timeline_items=timeline_items,
+        timeline_items=final_items,
         candidate_status=EDIT_PLAN_BRIDGE_CANDIDATE_STATUS_MARKER,
         validation_status="",
         plan_generation_notes=notes,
     )
+
+    final_audio_by_id = {item.timeline_item_id: item for item in final_items if item.track == "A1"}
+    audio_plan_items: list[BridgeAudioPlanItem] = []
+    for index, audio_item in enumerate(confirmed.audio_items):
+        timeline_item_id = _audio_timeline_item_id(audio_item)
+        final_item = final_audio_by_id.get(timeline_item_id)
+        if final_item is None:
+            continue  # defensiv: sollte durch den Aufbau oben nie eintreten
+        audio_plan_items.append(
+            BridgeAudioPlanItem(
+                scope=audio_item.scope or AUDIO_SCOPE_INTRO,
+                folder_name=audio_item.folder_name,
+                audio_path=audio_item.audio_path,
+                timeline_in_sec=final_item.timeline_in_sec,
+                timeline_out_sec=final_item.timeline_out_sec,
+                source_in_sec=final_item.source_in_sec,
+                source_out_sec=final_item.source_out_sec,
+                duration_sec=final_item.timeline_out_sec - final_item.timeline_in_sec,
+                track=final_item.track,
+                source_cut_plan_audio_index=index,
+                timeline_item_id=timeline_item_id,
+            )
+        )
+    bridge_audio_plan = BridgeAudioPlanDocument(
+        project_id=project.id, source_cut_plan_hash=confirmed_hash, items=audio_plan_items
+    )
+
+    return confirmed, edit_plan, bridge_audio_plan
+
+
+def build_edit_plan_draft_from_confirmed_cut_plan(project: Project) -> EditPlanDocument:
+    """Liest AUSSCHLIESSLICH cut_plan.confirmed.json und übersetzt ihn
+    deterministisch in einen EditPlanDocument-kompatiblen Draft. Reine
+    Funktion — speichert nichts (siehe save_edit_plan_bridge_draft).
+
+    Keine Asset-Auswahl, keine Cut-Plan-Validierung, keine Supplement-Suche,
+    keine Provider-/LLM-Aufrufe. Wirft ValueError, wenn kein bestätigter Cut
+    Plan vorhanden, veraltet, nicht CONFIRMED oder blockiert ist."""
+    _confirmed, edit_plan, _audio_plan = _build_edit_plan_and_audio_plan(project)
+    return edit_plan
+
+
+def build_bridge_audio_plan_from_confirmed_cut_plan(project: Project) -> BridgeAudioPlanDocument:
+    """Phase 9.2 §3: strukturierte, providerunabhängige Audio-Plan-Datei —
+    abgeleitet aus DENSELBEN finalen (frame-gerundeten + boundary-gechainten)
+    Audio-TimelineItems wie build_edit_plan_draft_from_confirmed_cut_plan,
+    damit beide Artefakte garantiert konsistent bleiben. Reine Funktion —
+    speichert nichts (siehe save_bridge_audio_plan)."""
+    _confirmed, _edit_plan, audio_plan = _build_edit_plan_and_audio_plan(project)
+    return audio_plan
 
 
 def load_edit_plan_bridge_draft(project: Project) -> EditPlanDocument | None:
@@ -341,11 +550,23 @@ def save_edit_plan_bridge_draft(project: Project, edit_plan: EditPlanDocument) -
     return normalized
 
 
-def _extract_source_cut_plan_hash(edit_plan: EditPlanDocument) -> str:
-    for note in edit_plan.plan_generation_notes:
-        if note.startswith(_SOURCE_CUT_PLAN_HASH_PREFIX):
-            return note[len(_SOURCE_CUT_PLAN_HASH_PREFIX):]
-    return ""
+def save_bridge_audio_plan(project: Project, audio_plan: BridgeAudioPlanDocument) -> BridgeAudioPlanDocument:
+    normalized = audio_plan.model_copy(update={"project_id": project.id})
+    path = get_cut_plan_edit_plan_bridge_audio_plan_path(project.work_dir_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
+    return normalized
+
+
+def load_bridge_audio_plan(project: Project) -> BridgeAudioPlanDocument | None:
+    path = get_cut_plan_edit_plan_bridge_audio_plan_path(project.work_dir_path)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return BridgeAudioPlanDocument.model_validate(payload)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return None
 
 
 def is_edit_plan_bridge_stale(project: Project, edit_plan: EditPlanDocument) -> bool:
@@ -355,7 +576,8 @@ def is_edit_plan_bridge_stale(project: Project, edit_plan: EditPlanDocument) -> 
     confirmed = load_confirmed_cut_plan(project)
     if confirmed is None:
         return True
-    return _extract_source_cut_plan_hash(edit_plan) != content_hash_of_model(confirmed)
+    stored_hash = extract_note_value(edit_plan.plan_generation_notes, _SOURCE_CUT_PLAN_HASH_PREFIX)
+    return stored_hash != content_hash_of_model(confirmed)
 
 
 # --- Validierung (§10) ---
@@ -493,6 +715,16 @@ def validate_edit_plan_bridge(project: Project, edit_plan: EditPlanDocument) -> 
                     message=f"{timeline_item.timeline_item_id}: Timeline-Dauer <= 0.",
                 )
             )
+        if timeline_item.source_out_sec <= timeline_item.source_in_sec:
+            blockers.append(
+                _make_error(
+                    EDIT_PLAN_BRIDGE_ERROR_SOURCE_RANGE_INVALID,
+                    severity=READINESS_SEVERITY_BLOCKER,
+                    scope="asset",
+                    timeline_item_id=timeline_item.timeline_item_id,
+                    message=f"{timeline_item.timeline_item_id}: source_out_sec <= source_in_sec.",
+                )
+            )
 
     for audio_timeline_item in audio_items:
         if abs(audio_timeline_item.source_in_sec) > _TIME_EPSILON:
@@ -529,6 +761,21 @@ def validate_edit_plan_bridge(project: Project, edit_plan: EditPlanDocument) -> 
                     message=f"{visual_timeline_item.timeline_item_id}: Asset-Datei fehlt ('{asset_path}').",
                 )
             )
+            continue
+        if visual_timeline_item.type == "video_shot":
+            real_duration = probe_duration_seconds(Path(asset_path))
+            if real_duration is not None and visual_timeline_item.source_out_sec > real_duration + _GAP_TOLERANCE:
+                blockers.append(
+                    _make_error(
+                        EDIT_PLAN_BRIDGE_ERROR_VIDEO_SOURCE_EXCEEDS_DURATION,
+                        severity=READINESS_SEVERITY_BLOCKER,
+                        scope="asset",
+                        timeline_item_id=visual_timeline_item.timeline_item_id,
+                        message=f"{visual_timeline_item.timeline_item_id}: source_out_sec "
+                        f"({visual_timeline_item.source_out_sec:.2f}s) > Video-Dauer ({real_duration:.2f}s) "
+                        f"— vermutlich durch Boundary-Chaining verlängert.",
+                    )
+                )
 
     by_track: dict[str, list[TimelineItem]] = {}
     for timeline_item in edit_plan.timeline_items:
@@ -558,6 +805,68 @@ def validate_edit_plan_bridge(project: Project, edit_plan: EditPlanDocument) -> 
                         f"'{next_item.timeline_item_id}'.",
                     )
                 )
+            elif track == "V1" and next_item.timeline_in_sec > previous_item.timeline_out_sec + _GAP_TOLERANCE:
+                # V1 muss nach dem Boundary-Chaining (§1) lückenlos sein — ein
+                # verbleibender Gap deutet auf einen manuell veränderten oder
+                # nicht durch die Bridge selbst erzeugten Draft hin.
+                blockers.append(
+                    _make_error(
+                        EDIT_PLAN_BRIDGE_ERROR_VISUAL_TIMELINE_GAP,
+                        severity=READINESS_SEVERITY_BLOCKER,
+                        scope="visual",
+                        timeline_item_id=next_item.timeline_item_id,
+                        message=f"Lücke auf Track 'V1' zwischen '{previous_item.timeline_item_id}' und "
+                        f"'{next_item.timeline_item_id}'.",
+                    )
+                )
+
+    audio_plan = load_bridge_audio_plan(project)
+    voiceover_audio_items = [
+        item for item in audio_items if item.type == EDIT_PLAN_BRIDGE_TIMELINE_ITEM_TYPE_VOICEOVER_AUDIO
+    ]
+    if voiceover_audio_items and audio_plan is None:
+        blockers.append(
+            _make_error(
+                EDIT_PLAN_BRIDGE_ERROR_AUDIO_PLAN_MISSING,
+                severity=READINESS_SEVERITY_BLOCKER,
+                scope="audio",
+                message="Es gibt Audio-TimelineItems (voiceover_audio), aber keinen bridge_audio_plan.json.",
+            )
+        )
+    elif audio_plan is not None:
+        timeline_audio_ids = {item.timeline_item_id for item in voiceover_audio_items}
+        audio_plan_ids = {entry.timeline_item_id for entry in audio_plan.items}
+        for missing_id in sorted(timeline_audio_ids - audio_plan_ids):
+            blockers.append(
+                _make_error(
+                    EDIT_PLAN_BRIDGE_ERROR_AUDIO_PLAN_MISMATCH,
+                    severity=READINESS_SEVERITY_BLOCKER,
+                    scope="audio",
+                    timeline_item_id=missing_id,
+                    message=f"TimelineItem '{missing_id}' (voiceover_audio) hat keinen entsprechenden "
+                    "BridgeAudioPlan-Eintrag.",
+                )
+            )
+        for orphan_id in sorted(audio_plan_ids - timeline_audio_ids):
+            blockers.append(
+                _make_error(
+                    EDIT_PLAN_BRIDGE_ERROR_AUDIO_PLAN_MISMATCH,
+                    severity=READINESS_SEVERITY_BLOCKER,
+                    scope="audio",
+                    timeline_item_id=orphan_id,
+                    message=f"BridgeAudioPlan-Eintrag '{orphan_id}' hat kein entsprechendes TimelineItem.",
+                )
+            )
+        if len(audio_plan.items) != len(confirmed.audio_items):
+            blockers.append(
+                _make_error(
+                    EDIT_PLAN_BRIDGE_ERROR_AUDIO_PLAN_MISMATCH,
+                    severity=READINESS_SEVERITY_BLOCKER,
+                    scope="audio",
+                    message=f"BridgeAudioPlan hat {len(audio_plan.items)} Eintrag/Einträge, "
+                    f"bestätigter Cut Plan hat {len(confirmed.audio_items)} AudioItem(s).",
+                )
+            )
 
     visual_coverage = [(item.timeline_in_sec, item.timeline_out_sec) for item in visual_items]
     for audio_timeline_item in audio_items:

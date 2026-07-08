@@ -321,9 +321,17 @@ def test_trace_contains_source_sentence_or_hook_beat_id(tmp_path: Path) -> None:
 
 
 def test_bridge_report_pass_in_happy_path(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.cut_plan_edit_plan_bridge import (
+        build_bridge_audio_plan_from_confirmed_cut_plan,
+        save_bridge_audio_plan,
+    )
+
     project = _build_confirmed_project(tmp_path)
     edit_plan = build_edit_plan_draft_from_confirmed_cut_plan(project)
     save_edit_plan_bridge_draft(project, edit_plan)
+    # Seit Phase 9.2 gehört ein passender bridge_audio_plan.json zum
+    # vollständigen, validen Bridge-Draft (siehe AUDIO_PLAN_MISSING-Check).
+    save_bridge_audio_plan(project, build_bridge_audio_plan_from_confirmed_cut_plan(project))
     report = validate_edit_plan_bridge(project, edit_plan)
     assert report.status == EDIT_PLAN_BRIDGE_VALIDATION_STATUS_PASS
     assert report.blockers == []
@@ -637,9 +645,15 @@ def test_is_edit_plan_bridge_stale_true_without_confirmed_cut_plan(tmp_path: Pat
 
 
 def test_load_edit_plan_bridge_validation_report_returns_saved_report(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.cut_plan_edit_plan_bridge import (
+        build_bridge_audio_plan_from_confirmed_cut_plan,
+        save_bridge_audio_plan,
+    )
+
     project = _build_confirmed_project(tmp_path)
     edit_plan = build_edit_plan_draft_from_confirmed_cut_plan(project)
     save_edit_plan_bridge_draft(project, edit_plan)
+    save_bridge_audio_plan(project, build_bridge_audio_plan_from_confirmed_cut_plan(project))
     validate_edit_plan_bridge(project, edit_plan)
 
     loaded_report = load_edit_plan_bridge_validation_report(project)

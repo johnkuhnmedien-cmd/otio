@@ -21,6 +21,8 @@ __all__ = [
     "EditPlanBridgeValidationReport",
     "EditPlanBridgeTraceEntry",
     "EditPlanBridgeTraceDocument",
+    "BridgeAudioPlanItem",
+    "BridgeAudioPlanDocument",
 ]
 
 
@@ -65,6 +67,9 @@ class EditPlanBridgeTraceEntry(BaseModel):
     track: str = ""
     asset_id: str = ""
     asset_path: str = ""
+    # timeline_in/out_sec und source_in/out_sec sind die FINALEN, nach
+    # Boundary-Chaining (Phase 9.2) im edit_plan tatsächlich verwendeten
+    # Werte — identisch zum entsprechenden TimelineItem.
     timeline_in_sec: float = 0.0
     timeline_out_sec: float = 0.0
     source_in_sec: float = 0.0
@@ -77,6 +82,18 @@ class EditPlanBridgeTraceEntry(BaseModel):
     # aber explizit in §3 („Ziel“) gefordert:
     original_chosen_asset_id: str = ""
     duration_strategy: str = ""
+    # Phase 9.2: die drei Stufen der Zeit-Transformation nachvollziehbar
+    # machen — Rohwert aus dem Cut Plan, Ergebnis der reinen Frame-Rundung
+    # (vor Boundary-Chaining) und ob/wie stark das Boundary-Chaining bzw. die
+    # Source-Dauer-Anpassung das Ergebnis danach noch verändert hat.
+    original_timeline_in_sec: float = 0.0
+    original_timeline_out_sec: float = 0.0
+    rounded_timeline_in_sec: float = 0.0
+    rounded_timeline_out_sec: float = 0.0
+    boundary_chained: bool = False
+    boundary_chain_delta_sec: float = 0.0
+    source_duration_adjusted: bool = False
+    source_duration_delta_sec: float = 0.0
 
 
 class EditPlanBridgeTraceDocument(BaseModel):
@@ -85,3 +102,30 @@ class EditPlanBridgeTraceDocument(BaseModel):
     source_cut_plan_hash: str = ""
     edit_plan_hash: str = ""
     entries: list[EditPlanBridgeTraceEntry] = Field(default_factory=list)
+
+
+class BridgeAudioPlanItem(BaseModel):
+    """Phase 9.2: strukturierte, providerunabhängige Beschreibung EINES
+    Audio-Elements des Bridge-Drafts — vermeidet, dass eine spätere Phase aus
+    dem TimelineItem-Sondertyp 'voiceover_audio' raten muss."""
+
+    scope: str = ""  # intro|folder
+    folder_name: str = ""
+    audio_path: str = ""
+    timeline_in_sec: float = 0.0
+    timeline_out_sec: float = 0.0
+    source_in_sec: float = 0.0
+    source_out_sec: float = 0.0
+    duration_sec: float = 0.0
+    track: str = "A1"
+    source_cut_plan_audio_index: int = 0
+    # Additiv, für die Bridge-Validation (§5): eindeutige Korrelation mit dem
+    # entsprechenden Audio-TimelineItem im edit_plan.
+    timeline_item_id: str = ""
+
+
+class BridgeAudioPlanDocument(BaseModel):
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    source_cut_plan_hash: str = ""
+    items: list[BridgeAudioPlanItem] = Field(default_factory=list)
