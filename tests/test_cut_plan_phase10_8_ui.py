@@ -1,12 +1,11 @@
-"""Phase 10.7: UI für Voice Folder Mapping Merge.
+"""Phase 10.8: UI für OTIO Export Readiness Check (promotete Folder).
 
-Nutzt dasselbe isolierte AppTest-Repro-Skript wie Phase 10.4/10.5/10.6
-(tests/_apptest_scripts/production_edit_plan_staging_repro.py), da der neue
-Mapping-Merge-Unterbereich Teil derselben
-`_render_production_edit_plan_staging`-Funktion ist.
+Nutzt dasselbe isolierte AppTest-Repro-Skript wie Phase 10.4-10.7
+(tests/_apptest_scripts/production_edit_plan_staging_repro.py).
 
 Kein OTIO-Export, kein Render, kein Lock-Konzept, keine
-save_edit_plan()/build_edit_plan()-Aufrufe."""
+save_edit_plan()/build_edit_plan()-Aufrufe, kein Aufruf der bestehenden
+Produktions-Export-Pipeline."""
 
 from __future__ import annotations
 
@@ -15,9 +14,9 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis, VoiceFolderMappingEntry
+from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis
 from otio_app.models import Project, ProjectMode
-from otio_app.project_layout import get_exports_dir, get_folder_inventory_path, get_supplement_dir
+from otio_app.project_layout import get_exports_dir, get_folder_inventory_path
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping, save_voice_folder_mapping
 from otio_app.services.voiceover_generation.cut_plan_builder import (
     apply_asset_selection_to_draft,
@@ -66,6 +65,10 @@ from otio_app.services.voiceover_generation.production_edit_plan_staging_service
 )
 from otio_app.services.voiceover_generation.production_edit_plan_validation import (
     validate_production_edit_plan_staging,
+)
+from otio_app.services.voiceover_generation.production_edit_plan_voice_folder_mapping_merge import (
+    merge_voice_folder_mapping,
+    save_voice_folder_mapping_merge_manifest,
 )
 
 FOLDER_A = "Grand Canyon"
@@ -150,7 +153,7 @@ def _build_confirmed_bridge_project(tmp_path: Path) -> Project:
     return project
 
 
-def _promoted_project_with_patch(tmp_path: Path) -> Project:
+def _promoted_and_mapped_project(tmp_path: Path) -> Project:
     project = _build_confirmed_bridge_project(tmp_path)
     build_and_save_production_edit_plan_staging(project)
     validate_production_edit_plan_staging(project)
@@ -162,6 +165,10 @@ def _promoted_project_with_patch(tmp_path: Path) -> Project:
     manifest = save_production_edit_plan_promote_manifest(project, manifest)
     patch = build_voice_folder_mapping_patch(project, manifest)
     save_voice_folder_mapping_patch(project, patch)
+    merge_manifest = merge_voice_folder_mapping(project, mark_entries_confirmed=True)
+    save_voice_folder_mapping_merge_manifest(project, merge_manifest)
+    mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
+    save_voice_folder_mapping(project, list(mapping.entries), confirmed=True)
     return project
 
 
@@ -183,138 +190,66 @@ def _all_text(at: AppTest, *element_types: str) -> list[str]:
     return texts
 
 
-def test_ui_shows_mapping_merge_section(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _promoted_project_with_patch(tmp_path)
+def test_ui_shows_otio_readiness_section(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _promoted_and_mapped_project(tmp_path)
     at = _run_repro(tmp_path, monkeypatch)
-    assert any("Voice Folder Mapping übernehmen" in text for text in _all_text(at, "subheader"))
+    assert any("OTIO Export Readiness" in text for text in _all_text(at, "subheader"))
 
 
-def test_ui_shows_write_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _promoted_project_with_patch(tmp_path)
+def test_ui_shows_no_export_hint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _promoted_and_mapped_project(tmp_path)
     at = _run_repro(tmp_path, monkeypatch)
-    combined = " ".join(_all_text(at, "warning"))
-    assert "voice_folder_mapping.json" in combined
+    combined = " ".join(_all_text(at, "caption"))
+    assert "exportiert selbst nichts" in combined
 
 
-def test_ui_shows_conflict_resolution_when_needs_review(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    project = _build_confirmed_bridge_project(tmp_path)
-    save_voice_folder_mapping(
-        project,
-        [VoiceFolderMappingEntry(voice_file="/old/voice.mp3", folder=FOLDER_A, confirmed=True)],
-        confirmed=True,
-    )
-    build_and_save_production_edit_plan_staging(project)
-    validate_production_edit_plan_staging(project)
-    readiness = build_production_edit_plan_promote_readiness(project)
-    save_production_edit_plan_promote_readiness(project, readiness)
-    dry_run_trace = build_production_edit_plan_promote_dry_run_trace(project, readiness)
-    save_production_edit_plan_promote_dry_run_trace(project, dry_run_trace)
-    manifest = promote_production_edit_plans(project)
-    manifest = save_production_edit_plan_promote_manifest(project, manifest)
-    patch = build_voice_folder_mapping_patch(project, manifest)
-    save_voice_folder_mapping_patch(project, patch)
-
+def test_ui_check_button_shows_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _promoted_and_mapped_project(tmp_path)
     at = _run_repro(tmp_path, monkeypatch)
-    radio_labels = [radio.label for radio in at.radio]
-    assert any(FOLDER_A in label for label in radio_labels)
-
-    merge_button = next(b for b in at.button if b.label == "Voice Folder Mapping aktualisieren")
-    assert merge_button.disabled is True
-
-
-def test_ui_merge_button_executes_and_writes_mapping(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    project = _promoted_project_with_patch(tmp_path)
-    at = _run_repro(tmp_path, monkeypatch)
-    merge_button = next(b for b in at.button if b.label == "Voice Folder Mapping aktualisieren")
-    assert merge_button.disabled is False
-    at = merge_button.click().run()
+    check_button = next(b for b in at.button if b.label == "OTIO Export Readiness prüfen")
+    at = check_button.click().run()
     assert not at.exception, at.exception
-    mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
-    assert mapping is not None
-    assert any(entry.folder == FOLDER_A for entry in mapping.entries)
+    combined = " ".join(_all_text(at, "success"))
+    assert "READY" in combined
 
 
-def test_ui_shows_manifest_after_merge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _promoted_project_with_patch(tmp_path)
+def test_ui_shows_folder_table_after_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _promoted_and_mapped_project(tmp_path)
     at = _run_repro(tmp_path, monkeypatch)
-    merge_button = next(b for b in at.button if b.label == "Voice Folder Mapping aktualisieren")
-    at = merge_button.click().run()
+    check_button = next(b for b in at.button if b.label == "OTIO Export Readiness prüfen")
+    at = check_button.click().run()
     assert not at.exception, at.exception
-    combined = " ".join(_all_text(at, "markdown"))
-    assert "Voice Folder Mapping Merge Manifest" in combined
+    dfs = [df.value for df in at.dataframe]
+    assert any("edit_plan_confirmed" in df.columns and "in_confirmed_mapping" in df.columns for df in dfs)
 
 
-def test_ui_resolving_conflict_enables_merge_button(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    project = _build_confirmed_bridge_project(tmp_path)
-    save_voice_folder_mapping(
-        project,
-        [VoiceFolderMappingEntry(voice_file="/old/voice.mp3", folder=FOLDER_A, confirmed=True)],
-        confirmed=True,
-    )
-    build_and_save_production_edit_plan_staging(project)
-    validate_production_edit_plan_staging(project)
-    readiness = build_production_edit_plan_promote_readiness(project)
-    save_production_edit_plan_promote_readiness(project, readiness)
-    dry_run_trace = build_production_edit_plan_promote_dry_run_trace(project, readiness)
-    save_production_edit_plan_promote_dry_run_trace(project, dry_run_trace)
-    manifest = promote_production_edit_plans(project)
-    manifest = save_production_edit_plan_promote_manifest(project, manifest)
-    patch = build_voice_folder_mapping_patch(project, manifest)
-    save_voice_folder_mapping_patch(project, patch)
-
+def test_no_otio_file_written_via_ui(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = _promoted_and_mapped_project(tmp_path)
     at = _run_repro(tmp_path, monkeypatch)
-    radio_key = f"voice_folder_mapping_merge_resolution_{PROJECT_ID}_{FOLDER_A}"
-    at = at.radio(key=radio_key).set_value("Neuen Voice-over übernehmen (APPLY)").run()
-    assert not at.exception, at.exception
-    merge_button = next(b for b in at.button if b.label == "Voice Folder Mapping aktualisieren")
-    assert merge_button.disabled is False
-
-    at = merge_button.click().run()
-    assert not at.exception, at.exception
-    mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
-    entry = next(e for e in mapping.entries if e.folder == FOLDER_A)
-    assert entry.voice_file != "/old/voice.mp3"
-
-
-def test_no_files_written_under_exports_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    project = _promoted_project_with_patch(tmp_path)
-    at = _run_repro(tmp_path, monkeypatch)
-    merge_button = next(b for b in at.button if b.label == "Voice Folder Mapping aktualisieren")
-    merge_button.click().run()
+    check_button = next(b for b in at.button if b.label == "OTIO Export Readiness prüfen")
+    check_button.click().run()
     assert not get_exports_dir(project.work_dir_path).exists()
 
 
-def test_no_files_written_under_supplement_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    project = _promoted_project_with_patch(tmp_path)
-    at = _run_repro(tmp_path, monkeypatch)
-    merge_button = next(b for b in at.button if b.label == "Voice Folder Mapping aktualisieren")
-    merge_button.click().run()
-    assert not get_supplement_dir(project.work_dir_path).exists()
-
-
-def test_no_original_media_modified(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    project = _promoted_project_with_patch(tmp_path)
+def test_no_original_media_modified_via_ui(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = _promoted_and_mapped_project(tmp_path)
     photo_path = project.project_root_path / FOLDER_A / "photo_a.jpg"
     original = photo_path.read_bytes()
     at = _run_repro(tmp_path, monkeypatch)
-    merge_button = next(b for b in at.button if b.label == "Voice Folder Mapping aktualisieren")
-    merge_button.click().run()
+    check_button = next(b for b in at.button if b.label == "OTIO Export Readiness prüfen")
+    check_button.click().run()
     assert photo_path.read_bytes() == original
 
 
-def test_ui_has_no_real_otio_export_button(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Phase 10.8 fügt einen rein lesenden, vollständig isolierten „OTIO
-    Export Readiness prüfen“-Button hinzu (kein Export, kein Aufruf der
-    Produktions-Export-Pipeline) — hier wird geprüft, dass kein Button mit
-    tatsächlicher Export-Semantik existiert."""
-    _promoted_project_with_patch(tmp_path)
-    at = _run_repro(tmp_path, monkeypatch)
-    labels = [button.label for button in at.button]
-    assert not any("exportieren" in label.lower() for label in labels)
-
-
 def test_ui_has_no_lock_button(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _promoted_project_with_patch(tmp_path)
+    _promoted_and_mapped_project(tmp_path)
     at = _run_repro(tmp_path, monkeypatch)
     labels = [button.label for button in at.button]
     assert not any("lock" in label.lower() for label in labels)
+
+
+def test_ui_has_no_real_export_button(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _promoted_and_mapped_project(tmp_path)
+    at = _run_repro(tmp_path, monkeypatch)
+    labels = [button.label for button in at.button]
+    assert not any("exportieren" in label.lower() for label in labels)

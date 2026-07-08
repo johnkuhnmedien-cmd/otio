@@ -216,11 +216,15 @@ def test_ui_shows_overwrite_confirmation_for_would_overwrite(tmp_path: Path, mon
     assert any("Überschreiben erlauben" in label for label in checkbox_labels)
 
 
-def test_ui_has_no_otio_button(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ui_has_no_real_otio_export_button(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 10.8 fügt einen rein lesenden, vollständig isolierten „OTIO
+    Export Readiness prüfen“-Button hinzu (kein Export, kein Aufruf der
+    Produktions-Export-Pipeline) — hier wird geprüft, dass kein Button mit
+    tatsächlicher Export-Semantik existiert."""
     _happy_project_with_dry_run(tmp_path)
     at = _run_repro(tmp_path, monkeypatch)
     labels = [button.label for button in at.button]
-    assert not any("otio" in label.lower() for label in labels)
+    assert not any("exportieren" in label.lower() for label in labels)
 
 
 def test_ui_has_no_lock_button(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

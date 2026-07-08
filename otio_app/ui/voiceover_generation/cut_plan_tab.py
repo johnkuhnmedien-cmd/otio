@@ -44,6 +44,9 @@ from otio_app.defaults import (
     PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_ALREADY_PRESENT,
     PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_NEEDS_REVIEW,
     PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_WOULD_ADD,
+    PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_BLOCKED,
+    PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_NOT_READY,
+    PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_READY,
     VOICE_FOLDER_MAPPING_MERGE_MANIFEST_STATUS_BLOCKED,
     VOICE_FOLDER_MAPPING_MERGE_MANIFEST_STATUS_MERGED,
     VOICE_FOLDER_MAPPING_MERGE_RESOLUTION_APPLY,
@@ -169,6 +172,11 @@ from otio_app.services.voiceover_generation.production_edit_plan_voice_folder_ma
     load_voice_folder_mapping_merge_manifest,
     merge_voice_folder_mapping,
     save_voice_folder_mapping_merge_manifest,
+)
+from otio_app.services.voiceover_generation.production_edit_plan_otio_export_readiness import (
+    build_otio_export_readiness_report,
+    load_otio_export_readiness_report,
+    save_otio_export_readiness_report,
 )
 from otio_app.services.voiceover_generation.production_edit_plan_promote_readiness import (
     build_production_edit_plan_promote_dry_run_trace,
@@ -1422,8 +1430,11 @@ def _render_production_edit_plan_staging(project: Project) -> None:
     st.divider()
     _render_voice_folder_mapping_merge(project)
 
+    st.divider()
+    _render_otio_export_readiness(project)
+
     st.caption(
-        "Kein OTIO-Button, kein Lock-Button — diese Schritte folgen erst in einer späteren Phase."
+        "Kein OTIO-Export-Button, kein Lock-Button — diese Schritte folgen erst in einer späteren Phase."
     )
 
 
@@ -1881,6 +1892,89 @@ def _render_voice_folder_mapping_merge(project: Project) -> None:
         st.caption(
             "Bitte im Tab „② Zuordnung“ prüfen, ob die Gesamt-Zuordnung weiterhin vollständig bestätigt ist."
         )
+
+
+def _render_otio_export_readiness(project: Project) -> None:
+    """Phase 10.8: OTIO Export Readiness Check — rein lesende, vollständig
+    isolierte Struktur-Diagnose für bereits promotete (Phase 10.6) UND
+    gemappte (Phase 10.7) Folder. Ruft KEINE Funktion der bestehenden
+    Produktions-Export-Pipeline auf — prüft eigenständig dieselben
+    grundlegenden Voraussetzungen (bestätigte Zuordnung, bestätigter
+    EditPlan, nicht-leere Timeline/Shots). Kein Export, keine .otio-Datei,
+    kein ffprobe, kein Render, kein Lock."""
+    st.subheader("OTIO Export Readiness (promotete Folder)")
+    st.caption(
+        "Prüft rein lesend und vollständig isoliert, ob die grundlegenden Voraussetzungen für einen "
+        "späteren OTIO-Export erfüllt sind — exportiert selbst nichts, schreibt keine .otio-Datei und "
+        "ruft die bestehende Export-Pipeline nicht auf."
+    )
+
+    if st.button(
+        "OTIO Export Readiness prüfen",
+        key=f"otio_export_readiness_check_{project.id}",
+        help="Rein strukturelle, vollständig isolierte Prüfung (bestätigte Zuordnung, bestätigter "
+        "EditPlan, nicht-leere Timeline/Shots) für die zuletzt promoteten Folder — kein Export, kein "
+        "ffprobe, kein Schreiben, kein Aufruf der Produktions-Export-Pipeline.",
+    ):
+        with st.spinner("OTIO Export Readiness wird geprüft…"):
+            report = build_otio_export_readiness_report(project)
+            save_otio_export_readiness_report(project, report)
+        st.rerun()
+
+    report = load_otio_export_readiness_report(project)
+    if report is None:
+        st.info("Noch kein OTIO Export Readiness Check ausgeführt.")
+        return
+
+    report_status_label = {
+        PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_READY: "✅ READY",
+        PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_NOT_READY: "⚠️ NOT_READY",
+        PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_BLOCKED: "❌ BLOCKED",
+    }.get(report.status, report.status)
+
+    if report.status == PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_READY:
+        st.success("READY — die grundlegenden Voraussetzungen sind für alle geprüften Folder erfüllt.")
+    elif report.status == PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_NOT_READY:
+        st.warning("NOT_READY — mindestens ein geprüfter Folder erfüllt die Voraussetzungen noch nicht.")
+    else:
+        st.error("BLOCKED — die grundlegenden Voraussetzungen sind aktuell nicht erfüllt.")
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Status", report_status_label)
+    with col2:
+        st.metric("Geprüfte Folder", len(report.checked_folders))
+    with col3:
+        st.metric("TimelineItems (Vorschau)", report.total_timeline_items)
+    with col4:
+        st.metric("Shots gesamt", report.total_shots)
+    st.caption(f"voice_folder_mapping.json bestätigt: {'✅ Ja' if report.mapping_confirmed else '❌ Nein'}")
+
+    rows = [
+        {
+            "folder_name": folder.folder_name,
+            "status": folder.status,
+            "edit_plan_exists": folder.edit_plan_exists,
+            "edit_plan_confirmed": folder.edit_plan_confirmed,
+            "in_confirmed_mapping": folder.in_confirmed_mapping,
+            "has_voiceover": folder.has_voiceover,
+            "shot_count": folder.shot_count,
+            "timeline_item_count": folder.timeline_item_count,
+            "warnings": ", ".join(folder.warnings) or "—",
+        }
+        for folder in report.folders
+    ]
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    if report.warnings:
+        with st.expander("Warnungen", expanded=False):
+            for warning in report.warnings:
+                st.warning(warning)
+
+    st.caption(
+        "Für eine verbindliche Aussage und einen tatsächlichen Export bitte den bestehenden Tab "
+        "„③ Schnittplan → 📤 OTIO Export“ verwenden."
+    )
 
 
 def render_cut_plan_page() -> None:

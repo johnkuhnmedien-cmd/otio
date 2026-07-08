@@ -599,6 +599,14 @@ def get_voice_folder_mapping_merge_backup_run_dir(work_dir: Path, merge_run_id: 
     return get_voice_folder_mapping_merge_backups_dir(work_dir) / safe_run_id
 
 
+def get_otio_export_readiness_report_path(work_dir: Path) -> Path:
+    """Phase 10.8: rein lesende OTIO-Export-Readiness-Prüfung für bereits
+    promotete/gemappte Folder — kein Export, keine .otio-Datei."""
+    from otio_app.defaults import PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_REPORT_FILENAME
+
+    return get_production_edit_plan_staging_dir(work_dir) / PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_REPORT_FILENAME
+
+
 def get_supplement_dir(work_dir: Path) -> Path:
     """Verzeichnis für Supplement-Workflow-Dateien."""
     from otio_app.defaults import SUPPLEMENT_SUBDIR

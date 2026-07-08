@@ -640,6 +640,27 @@ VOICE_FOLDER_MAPPING_MERGE_ACTION_SKIPPED_CONFLICT_UNRESOLVED = "SKIPPED_CONFLIC
 VOICE_FOLDER_MAPPING_MERGE_RESOLUTION_APPLY = "APPLY"
 VOICE_FOLDER_MAPPING_MERGE_RESOLUTION_SKIP = "SKIP"
 
+# --- Phase 10.8: OTIO Export Readiness Check für bereits promotete/gemappte
+# Folder. Bewusste, eng begrenzte Ausnahme von der sonst strikten Isolation:
+# nutzt otio_exporter.merge_confirmed_edit_plans() (rein lesende Vorschau-
+# Funktion der bestehenden Produktionspipeline, KEIN Export, KEIN ffprobe,
+# KEIN Schreiben) — NUR für bereits explizit promotete (Phase 10.6) UND
+# gemappte (Phase 10.7) Folder, die zu diesem Zeitpunkt bereits vollwertige
+# Produktionsdaten sind. build_otio_timeline()/export_otio_timeline() bleiben
+# weiterhin tabu (siehe production_edit_plan_otio_export_readiness.py
+# Modul-Docstring). ---
+PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_REPORT_FILENAME = "production_edit_plan_otio_export_readiness_report.json"
+
+# OtioExportReadinessReport.status
+PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_READY = "READY"
+PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_NOT_READY = "NOT_READY"
+PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_BLOCKED = "BLOCKED"
+
+# OtioExportReadinessFolderResult.status
+PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_FOLDER_STATUS_READY = "READY"
+PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_FOLDER_STATUS_NOT_READY = "NOT_READY"
+PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_FOLDER_STATUS_SKIPPED = "SKIPPED"
+
 # Cut Plan Settings — Defaults (verbindliche Werte laut Nutzerentscheidung §1/§3/§5)
 CUT_PLAN_DEFAULT_INITIAL_AUDIO_OFFSET_SEC = 1.0
 CUT_PLAN_DEFAULT_PAUSE_BETWEEN_SECTIONS_SEC = 0.25

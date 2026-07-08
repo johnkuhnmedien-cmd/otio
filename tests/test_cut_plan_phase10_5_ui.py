@@ -192,11 +192,18 @@ def test_ui_has_no_real_promote_button(tmp_path: Path, monkeypatch: pytest.Monke
     assert all("dry run" in label.lower() for label in promote_labels)
 
 
-def test_ui_has_no_otio_button_in_promote_section(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ui_has_no_real_otio_export_button_in_promote_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 10.8 fügt einen rein lesenden, vollständig isolierten „OTIO
+    Export Readiness prüfen“-Button hinzu (kein Export, kein Aufruf der
+    Produktions-Export-Pipeline) — hier wird geprüft, dass kein Button mit
+    tatsächlicher Export-Semantik existiert."""
     _happy_project(tmp_path)
     at = _run_repro(tmp_path, monkeypatch)
     labels = [button.label for button in at.button]
-    assert not any("otio" in label.lower() for label in labels)
+    assert not any("otio" in label.lower() and "export" in label.lower() and "readiness" not in label.lower() for label in labels)
+    assert not any("exportieren" in label.lower() for label in labels)
 
 
 # --- 33-35: Status-Anzeigen ---
