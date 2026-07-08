@@ -577,6 +577,269 @@ def test_load_confirmed_plan_returns_none_when_missing(tmp_path: Path) -> None:
     assert load_confirmed_voiceover_project_plan(project) is None
 
 
+# --- Audit-Hardening: expliziter AUDIO_READY_WITH_WARNINGS-Blocker (§1) ---
+
+
+def test_audio_ready_with_warnings_with_real_duration_still_blocks_ready_for_cut(tmp_path: Path) -> None:
+    """Edge Case aus dem Audit: AUDIO_READY_WITH_WARNINGS MUSS READY_FOR_CUT
+    explizit verhindern — auch wenn (hypothetisch, hier manuell erzwungen)
+    eine reale Dauer > 0, Alignment und vollständiges Asset-Mapping vorliegen
+    und keine sonstigen Blocker existieren. Vor dem Fix schlug dieser Test
+    fehl (Status wurde faelschlich READY_FOR_CUT)."""
+    project = _make_fully_ready_project(tmp_path)
+    from otio_app.services.voiceover_generation.tts_orchestration_service import (
+        load_audio_manifest,
+        save_audio_manifest,
+    )
+
+    baseline_plan = build_confirmed_voiceover_project_plan(project)
+    assert baseline_plan.status == PLAN_STATUS_READY_FOR_CUT  # Ausgangslage: alles sauber
+
+    manifest = load_audio_manifest(project)
+    updated_items = [
+        item.model_copy(update={"status": "AUDIO_READY_WITH_WARNINGS"})
+        if item.folder_name == FOLDER_NAME
+        else item
+        for item in manifest.items
+    ]
+    save_audio_manifest(project, manifest.model_copy(update={"items": updated_items}))
+
+    plan = build_confirmed_voiceover_project_plan(project)
+    folder_item = next(f for f in plan.folders if f.folder_name == FOLDER_NAME)
+    # Dauer und Alignment bleiben unveraendert (real > 0 / vorhanden) —
+    # trotzdem darf der Status nicht READY_FOR_CUT sein.
+    assert folder_item.audio_status == "AUDIO_READY_WITH_WARNINGS"
+    assert folder_item.audio_duration_sec > 0
+    assert folder_item.alignment_items
+
+    assert plan.status != PLAN_STATUS_READY_FOR_CUT
+    assert plan.readiness.all_required_audio_ready is False
+    assert any(error.type == "AUDIO_DURATION_MISSING" for error in plan.warnings)
+    assert not plan.blockers  # nur Warning, kein Blocker -> NEEDS_REVIEW waere falsch
+
+
+def test_missing_alignment_with_present_audio_prevents_ready_for_cut(tmp_path: Path) -> None:
+    """Audit-Lücke (§5.2): Audio vorhanden, aber Alignment fehlt (z. B.
+    gelöscht/nicht gebaut) -> darf niemals READY_FOR_CUT ergeben."""
+    project = _make_fully_ready_project(tmp_path)
+    baseline_plan = build_confirmed_voiceover_project_plan(project)
+    assert baseline_plan.status == PLAN_STATUS_READY_FOR_CUT
+
+    alignment_path = Path(baseline_plan.folders[0].alignment_path)
+    assert alignment_path.is_file()
+    alignment_path.unlink()
+
+    plan = build_confirmed_voiceover_project_plan(project)
+    assert plan.folders[0].alignment_items == []
+    assert plan.status != PLAN_STATUS_READY_FOR_CUT
+    assert any(error.type == "MISSING_ALIGNMENT" for error in plan.warnings)
+
+
+# --- Audit-Hardening: Konstanten statt Literale (§2) ---
+
+
+def test_final_plan_service_uses_status_constants_not_raw_literals() -> None:
+    """Statischer Guard: Status-/Error-Typ-Strings, für die defaults.py eine
+    Konstante bereitstellt, dürfen in final_plan_service.py nicht mehr als
+    rohes String-Literal auftauchen (Audit-Fund §2)."""
+    import inspect
+
+    from otio_app.services.voiceover_generation import final_plan_service
+
+    source = inspect.getsource(final_plan_service)
+    forbidden_literal_patterns = [
+        'type="MISSING_CONFIRMED_DRAMATURGY"',
+        'type="MISSING_CONFIRMED_INTRO"',
+        'type="MISSING_FOLDER_VOICEOVER"',
+        'type="EMPTY_TEXT"',
+        'type="EMPTY_VISUAL_BEATS"',
+        'type="EMPTY_SENTENCE_ITEMS"',
+        'type="AUDIO_FAILED"',
+        'type="AUDIO_STALE"',
+        'type="AUDIO_DURATION_MISSING"',
+        'type="MISSING_ALIGNMENT"',
+        'type="MISSING_AUDIO"',
+        'type="NEEDS_USER_REVIEW"',
+        'severity="WARNING"',
+        'severity="BLOCKER"',
+        'asset_mapping_status = "BLOCKED"',
+        'asset_mapping_status = "WARNINGS"',
+        'asset_mapping_status = "PASS"',
+        'readiness_status = "BLOCKED"',
+        'readiness_status = "WARNING"',
+        'readiness_status = "READY"',
+        'return "MISSING_AUDIO"',
+        'return "BLOCKED"',
+        'return "WARNING"',
+        'return "STALE_AUDIO"',
+        'return "MISSING_ALIGNMENT"',
+        'return "READY"',
+        'validation_status = "UNKNOWN"',
+        'scope == "intro"',
+        'scope == "folder"',
+    ]
+    for pattern in forbidden_literal_patterns:
+        assert pattern not in source, (
+            f"final_plan_service.py verwendet noch das Literal {pattern!r} statt einer Konstante aus defaults.py."
+        )
+
+
+def test_readiness_error_types_match_defaults_constants(tmp_path: Path) -> None:
+    """Stellt sicher, dass die tatsächlich erzeugten ReadinessError.type-Werte
+    den defaults.py-Konstanten entsprechen (nicht nur zufällig übereinstimmen)."""
+    from otio_app.defaults import (
+        READINESS_ERROR_MISSING_CONFIRMED_DRAMATURGY,
+        READINESS_ERROR_MISSING_CONFIRMED_INTRO,
+    )
+
+    project_root = tmp_path / "USA"
+    (project_root / FOLDER_NAME).mkdir(parents=True)
+    project = Project(
+        id="no-dramaturgy-project",
+        name="No Dramaturgy",
+        project_root=str(project_root),
+        work_dir=str(project_root / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=[FOLDER_NAME],
+        selected_asset_subdirs=[FOLDER_NAME],
+    )
+    plan = build_confirmed_voiceover_project_plan(project)
+    blocker_types = {error.type for error in plan.blockers}
+    assert READINESS_ERROR_MISSING_CONFIRMED_DRAMATURGY in blocker_types
+    assert READINESS_ERROR_MISSING_CONFIRMED_INTRO in blocker_types
+
+
+# --- Audit-Hardening: Markdown zeigt fehlende aktive Ordner (§3) ---
+
+
+def test_markdown_shows_active_unconfirmed_folder_as_incomplete(tmp_path: Path) -> None:
+    """2 aktive Ordner laut bestätigter Dramaturgie, nur 1 bestätigtes
+    Voice-over -> confirmed_voiceover_project_plan.json enthält weiterhin nur
+    den bestätigten Ordner, aber das Markdown macht den fehlenden Ordner in
+    einer eigenen Sektion sichtbar (Audit-Fund §3 / §12)."""
+    second_folder = "Antelope Canyon"
+    project_root = tmp_path / "USA"
+    (project_root / FOLDER_NAME).mkdir(parents=True)
+    (project_root / second_folder).mkdir(parents=True)
+    project = Project(
+        id="two-folder-project",
+        name="Two Folder Test",
+        project_root=str(project_root),
+        work_dir=str(project_root / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=[FOLDER_NAME, second_folder],
+        selected_asset_subdirs=[FOLDER_NAME, second_folder],
+    )
+    for folder in (FOLDER_NAME, second_folder):
+        inv_path = get_folder_inventory_path(project.work_dir_path, folder)
+        inv_path.parent.mkdir(parents=True, exist_ok=True)
+        analysis = AssetFolderAnalysis(
+            folder=folder, assets=[AssetMediaAnalysis(path=f"{folder}/clip1.mp4", description="Aufnahme.")]
+        )
+        inv_path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
+
+    save_project_brief(project, ProjectBrief(project_id=project.id, video_title="Zwei Ordner", language="DE"))
+    save_confirmed_dramaturgy(
+        project,
+        DramaturgyPlan(
+            project_id=project.id,
+            project_title="Zwei Ordner",
+            recommended_folder_order=[
+                DramaturgyFolderEntry(folder_name=FOLDER_NAME, order_index=1, enabled=True),
+                DramaturgyFolderEntry(folder_name=second_folder, order_index=2, enabled=True),
+            ],
+        ),
+    )
+    save_folder_voiceover_settings(project, build_default_folder_voiceover_settings(project))
+
+    _confirm_folder_voiceover(project)  # bestätigt nur FOLDER_NAME, nicht second_folder
+    _confirm_intro(project)
+
+    plan = build_confirmed_voiceover_project_plan(project)
+    assert len(plan.folders) == 1  # confirmed_voiceover_project_plan.json bleibt "nur bestätigte"
+    assert plan.folders[0].folder_name == FOLDER_NAME
+
+    path = export_voiceover_project_plan_markdown(project, plan)
+    content = path.read_text(encoding="utf-8")
+    assert "## Fehlende / unvollständige aktive Ordner" in content
+    assert second_folder in content
+    assert "MISSING_FOLDER_VOICEOVER" in content
+
+
+# --- Audit-Hardening: Intro readiness_status nicht irreführend (§4) ---
+
+
+def test_intro_readiness_status_is_warning_when_visual_beat_has_weak_asset_match(tmp_path: Path) -> None:
+    project = _make_base_project(tmp_path)
+    _confirm_folder_voiceover(project)
+    candidates_doc = IntroHookCandidatesDocument(
+        project_id=project.id,
+        candidates=[
+            IntroHookCandidate(
+                hook_id="hook_001",
+                hook_text="Ein Ort voller Geheimnisse wartet auf jeden mutigen Reisenden heute schon lange.",
+                hook_type="mystery",
+                used_folders=[FOLDER_NAME],
+                visual_beats=[
+                    IntroHookVisualBeat(
+                        hook_beat_id="hook_beat_001",
+                        text="x",
+                        primary_asset_id="asset_clip1",
+                        asset_confidence=0.05,
+                    )
+                ],
+            )
+        ],
+        llm_run_id="fake-run",
+    )
+    save_intro_hook_candidates(project, candidates_doc)
+    confirm_intro_hook(project, "hook_001")
+    _synthesize_everything(project)
+
+    plan = build_confirmed_voiceover_project_plan(project)
+    assert any(
+        error.type == "WEAK_ASSET_MATCH" and error.scope == "sentence" and error.sentence_id == "hook_beat_001"
+        for error in plan.warnings
+    )
+    assert plan.intro.readiness_status == "WARNING"
+
+
+def test_intro_readiness_status_is_blocked_when_visual_beat_has_no_asset_mapping(tmp_path: Path) -> None:
+    """Fehlendes Asset-Mapping (kein primary_asset_id UND
+    needs_supplement_asset=False) ist ein echter Blocker — intro.readiness_status
+    darf dann nicht mehr READY sein (Audit-Fund §4)."""
+    project = _make_base_project(tmp_path)
+    _confirm_folder_voiceover(project)
+    candidates_doc = IntroHookCandidatesDocument(
+        project_id=project.id,
+        candidates=[
+            IntroHookCandidate(
+                hook_id="hook_001",
+                hook_text="Ein Ort voller Geheimnisse wartet auf jeden mutigen Reisenden heute schon lange.",
+                hook_type="mystery",
+                used_folders=[FOLDER_NAME],
+                visual_beats=[
+                    IntroHookVisualBeat(
+                        hook_beat_id="hook_beat_001",
+                        text="x",
+                        primary_asset_id="",
+                        needs_supplement_asset=False,
+                    )
+                ],
+            )
+        ],
+        llm_run_id="fake-run",
+    )
+    save_intro_hook_candidates(project, candidates_doc)
+    confirm_intro_hook(project, "hook_001")
+    _synthesize_everything(project)
+
+    plan = build_confirmed_voiceover_project_plan(project)
+    assert any(error.type == VO_ERROR_MISSING_ASSET_MAPPING for error in plan.blockers)
+    assert plan.intro.readiness_status == "BLOCKED"
+    assert plan.status == PLAN_STATUS_NEEDS_REVIEW
+
+
 def test_final_plan_service_never_references_production_edit_plan_symbols() -> None:
     """Statischer Schutz: final_plan_service.py darf keine Produktions-Symbole
     aus edit_plan_builder.py / otio_exporter.py referenzieren (§12)."""

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from otio_app.defaults import PLAN_STATUS_READY_FOR_CUT
+from otio_app.defaults import AUDIO_STATUS_MISSING, PLAN_STATUS_READY_FOR_CUT
 from otio_app.models import Project
 from otio_app.project_layout import (
     get_confirmed_voiceover_project_plan_path,
@@ -35,8 +35,8 @@ def _render_status_overview(project: Project, plan: ConfirmedVoiceoverProjectPla
     active_folders = get_active_dramaturgy_folder_names(project)
     confirmed_folders = get_confirmed_folder_voiceover_names(project)
     audio_ready_count = sum(
-        1 for f in plan.folders if f.audio_status not in ("MISSING",)
-    ) + (1 if plan.intro.audio_status not in ("MISSING",) else 0)
+        1 for f in plan.folders if f.audio_status != AUDIO_STATUS_MISSING
+    ) + (1 if plan.intro.audio_status != AUDIO_STATUS_MISSING else 0)
     alignment_ready_count = sum(1 for f in plan.folders if f.alignment_items) + (
         1 if plan.intro.alignment_items else 0
     )

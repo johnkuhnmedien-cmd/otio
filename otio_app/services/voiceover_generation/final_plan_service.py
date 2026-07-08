@@ -16,19 +16,45 @@ from pathlib import Path
 from typing import Any
 
 from otio_app.defaults import (
+    ASSET_MAPPING_STATUS_BLOCKED,
+    ASSET_MAPPING_STATUS_PASS,
+    ASSET_MAPPING_STATUS_WARNINGS,
+    AUDIO_SCOPE_FOLDER,
+    AUDIO_SCOPE_INTRO,
     AUDIO_STATUS_FAILED,
     AUDIO_STATUS_MISSING,
     AUDIO_STATUS_READY_WITH_WARNINGS,
     AUDIO_STATUS_STALE,
+    ITEM_READINESS_BLOCKED,
+    ITEM_READINESS_MISSING_ALIGNMENT,
+    ITEM_READINESS_MISSING_AUDIO,
+    ITEM_READINESS_READY,
+    ITEM_READINESS_STALE_AUDIO,
+    ITEM_READINESS_WARNING,
     PLAN_STATUS_AUDIO_PENDING,
     PLAN_STATUS_AUDIO_READY,
     PLAN_STATUS_NEEDS_REVIEW,
     PLAN_STATUS_READY_FOR_CUT,
     PLAN_STATUS_TEXT_READY,
+    READINESS_ERROR_AUDIO_DURATION_MISSING,
+    READINESS_ERROR_AUDIO_FAILED,
+    READINESS_ERROR_AUDIO_STALE,
+    READINESS_ERROR_EMPTY_SENTENCE_ITEMS,
+    READINESS_ERROR_EMPTY_TEXT,
+    READINESS_ERROR_EMPTY_VISUAL_BEATS,
+    READINESS_ERROR_MISSING_ALIGNMENT,
+    READINESS_ERROR_MISSING_AUDIO,
+    READINESS_ERROR_MISSING_CONFIRMED_DRAMATURGY,
+    READINESS_ERROR_MISSING_CONFIRMED_INTRO,
+    READINESS_ERROR_MISSING_FOLDER_VOICEOVER,
+    READINESS_ERROR_NEEDS_USER_REVIEW,
+    READINESS_SEVERITY_BLOCKER,
+    READINESS_SEVERITY_WARNING,
     VO_ERROR_MISSING_ASSET_MAPPING,
     VO_ERROR_MISSING_SUPPLEMENT_REASON,
     VO_ERROR_WEAK_ASSET_MATCH,
     VOICEOVER_STATUS_NEEDS_USER_REVIEW,
+    VOICEOVER_STATUS_UNKNOWN,
     WEAK_ASSET_MATCH_CONFIDENCE_THRESHOLD,
 )
 from otio_app.models import Project
@@ -89,7 +115,7 @@ def _lookup_audio_item(manifest: VoiceoverAudioManifest, scope: str, folder_name
     for item in manifest.items:
         if item.scope != scope:
             continue
-        if scope == "intro":
+        if scope == AUDIO_SCOPE_INTRO:
             return item
         if item.folder_name == folder_name:
             return item
@@ -98,16 +124,16 @@ def _lookup_audio_item(manifest: VoiceoverAudioManifest, scope: str, folder_name
 
 def _item_readiness_status(audio_status: str, has_alignment: bool, *, allow_blocked: bool) -> str:
     if audio_status == AUDIO_STATUS_MISSING:
-        return "MISSING_AUDIO"
+        return ITEM_READINESS_MISSING_AUDIO
     if audio_status == AUDIO_STATUS_FAILED:
-        return "BLOCKED" if allow_blocked else "WARNING"
+        return ITEM_READINESS_BLOCKED if allow_blocked else ITEM_READINESS_WARNING
     if audio_status == AUDIO_STATUS_STALE:
-        return "STALE_AUDIO"
+        return ITEM_READINESS_STALE_AUDIO
     if not has_alignment:
-        return "MISSING_ALIGNMENT"
+        return ITEM_READINESS_MISSING_ALIGNMENT
     if audio_status == AUDIO_STATUS_READY_WITH_WARNINGS:
-        return "WARNING"
-    return "READY"
+        return ITEM_READINESS_WARNING
+    return ITEM_READINESS_READY
 
 
 def _build_intro_plan_item(
@@ -116,16 +142,39 @@ def _build_intro_plan_item(
     if confirmed_hook is None:
         return ConfirmedIntroPlanItem()
 
-    audio_item = _lookup_audio_item(audio_manifest, "intro", "")
+    audio_item = _lookup_audio_item(audio_manifest, AUDIO_SCOPE_INTRO, "")
     audio_status = audio_item.status if audio_item is not None else AUDIO_STATUS_MISSING
     audio_path = audio_item.audio_path if audio_item is not None else ""
     audio_duration_sec = audio_item.audio_duration_sec if audio_item is not None else 0.0
 
-    alignment = load_alignment(project, "intro", "")
+    alignment = load_alignment(project, AUDIO_SCOPE_INTRO, "")
     alignment_path = str(get_intro_alignment_path(project.work_dir_path)) if alignment is not None else ""
     alignment_items = alignment.items if alignment is not None else []
 
     readiness_status = _item_readiness_status(audio_status, bool(alignment_items), allow_blocked=False)
+    # Hardening (Audit §4): Intro darf nicht als READY erscheinen, wenn eines
+    # seiner visual_beats ein Asset-Mapping-Problem hat — sonst wirkt die
+    # Intro-Karte optimistischer als der reale Zustand (Warnung steckt sonst
+    # nur versteckt in plan.warnings).
+    if readiness_status == ITEM_READINESS_READY:
+        missing_mapping = any(
+            not beat.primary_asset_id and not beat.needs_supplement_asset for beat in confirmed_hook.visual_beats
+        )
+        missing_supplement_reason = any(
+            beat.needs_supplement_asset and not beat.supplement_reason.strip()
+            for beat in confirmed_hook.visual_beats
+        )
+        weak_match = any(
+            beat.primary_asset_id and beat.asset_confidence < WEAK_ASSET_MATCH_CONFIDENCE_THRESHOLD
+            for beat in confirmed_hook.visual_beats
+        )
+        if missing_mapping:
+            # Datenmodell erlaubt BLOCKED additiv auch für Intro (str-Feld,
+            # kein Enum) — der eigentliche Blocker bleibt zusätzlich in
+            # plan.blockers und steuert den Gesamtstatus.
+            readiness_status = ITEM_READINESS_BLOCKED
+        elif missing_supplement_reason or weak_match:
+            readiness_status = ITEM_READINESS_WARNING
 
     return ConfirmedIntroPlanItem(
         hook_text=confirmed_hook.hook_text,
@@ -150,12 +199,12 @@ def _build_folder_plan_item(
     audio_manifest: VoiceoverAudioManifest,
     validation_reports,
 ) -> ConfirmedFolderPlanItem:
-    audio_item = _lookup_audio_item(audio_manifest, "folder", entry.folder_name)
+    audio_item = _lookup_audio_item(audio_manifest, AUDIO_SCOPE_FOLDER, entry.folder_name)
     audio_status = audio_item.status if audio_item is not None else AUDIO_STATUS_MISSING
     audio_path = audio_item.audio_path if audio_item is not None else ""
     audio_duration_sec = audio_item.audio_duration_sec if audio_item is not None else 0.0
 
-    alignment = load_alignment(project, "folder", entry.folder_name)
+    alignment = load_alignment(project, AUDIO_SCOPE_FOLDER, entry.folder_name)
     alignment_path = (
         str(get_folder_alignment_path(project.work_dir_path, entry.order_index, entry.folder_name))
         if alignment is not None
@@ -164,7 +213,7 @@ def _build_folder_plan_item(
     alignment_items = alignment.items if alignment is not None else []
 
     report = validation_reports.reports.get(entry.folder_name)
-    validation_status = report.status if report is not None else "UNKNOWN"
+    validation_status = report.status if report is not None else VOICEOVER_STATUS_UNKNOWN
 
     missing_mapping = any(
         not item.primary_asset_id and not item.needs_supplement_asset for item in draft.sentence_items
@@ -177,17 +226,17 @@ def _build_folder_plan_item(
         for item in draft.sentence_items
     )
     if missing_mapping:
-        asset_mapping_status = "BLOCKED"
+        asset_mapping_status = ASSET_MAPPING_STATUS_BLOCKED
     elif missing_supplement_reason or weak_match:
-        asset_mapping_status = "WARNINGS"
+        asset_mapping_status = ASSET_MAPPING_STATUS_WARNINGS
     else:
-        asset_mapping_status = "PASS"
+        asset_mapping_status = ASSET_MAPPING_STATUS_PASS
 
     readiness_status = _item_readiness_status(audio_status, bool(alignment_items), allow_blocked=True)
-    if readiness_status == "READY" and asset_mapping_status == "BLOCKED":
-        readiness_status = "BLOCKED"
-    elif readiness_status == "READY" and asset_mapping_status == "WARNINGS":
-        readiness_status = "WARNING"
+    if readiness_status == ITEM_READINESS_READY and asset_mapping_status == ASSET_MAPPING_STATUS_BLOCKED:
+        readiness_status = ITEM_READINESS_BLOCKED
+    elif readiness_status == ITEM_READINESS_READY and asset_mapping_status == ASSET_MAPPING_STATUS_WARNINGS:
+        readiness_status = ITEM_READINESS_WARNING
 
     return ConfirmedFolderPlanItem(
         folder_name=entry.folder_name,
@@ -295,7 +344,8 @@ def _append_audio_alignment_errors(
     if audio_status == AUDIO_STATUS_MISSING:
         warnings.append(
             ReadinessError(
-                type="MISSING_AUDIO", severity="WARNING", scope="audio", folder_name=folder_name,
+                type=READINESS_ERROR_MISSING_AUDIO, severity=READINESS_SEVERITY_WARNING, scope="audio",
+                folder_name=folder_name,
                 message=f"Audio fehlt noch ({label}).",
                 fix_hint="Unter Audio / ElevenLabs vertonen.",
             )
@@ -304,7 +354,8 @@ def _append_audio_alignment_errors(
     if audio_status == AUDIO_STATUS_FAILED:
         blockers.append(
             ReadinessError(
-                type="AUDIO_FAILED", severity="BLOCKER", scope="audio", folder_name=folder_name,
+                type=READINESS_ERROR_AUDIO_FAILED, severity=READINESS_SEVERITY_BLOCKER, scope="audio",
+                folder_name=folder_name,
                 message=f"Audio-Erzeugung ist fehlgeschlagen ({label}).",
                 fix_hint="Unter Audio / ElevenLabs erneut vertonen.",
             )
@@ -312,7 +363,8 @@ def _append_audio_alignment_errors(
     elif audio_status == AUDIO_STATUS_STALE:
         blockers.append(
             ReadinessError(
-                type="AUDIO_STALE", severity="BLOCKER", scope="audio", folder_name=folder_name,
+                type=READINESS_ERROR_AUDIO_STALE, severity=READINESS_SEVERITY_BLOCKER, scope="audio",
+                folder_name=folder_name,
                 message=f"Audio ist veraltet — Text wurde nach der Vertonung geändert ({label}).",
                 fix_hint="Unter Audio / ElevenLabs neu vertonen.",
             )
@@ -320,14 +372,16 @@ def _append_audio_alignment_errors(
     elif audio_status == AUDIO_STATUS_READY_WITH_WARNINGS:
         warnings.append(
             ReadinessError(
-                type="AUDIO_DURATION_MISSING", severity="WARNING", scope="audio", folder_name=folder_name,
+                type=READINESS_ERROR_AUDIO_DURATION_MISSING, severity=READINESS_SEVERITY_WARNING, scope="audio",
+                folder_name=folder_name,
                 message=f"Audio-Dauer konnte nicht ermittelt werden (ffprobe) ({label}).",
             )
         )
     if not has_alignment:
         warnings.append(
             ReadinessError(
-                type="MISSING_ALIGNMENT", severity="WARNING", scope="alignment", folder_name=folder_name,
+                type=READINESS_ERROR_MISSING_ALIGNMENT, severity=READINESS_SEVERITY_WARNING, scope="alignment",
+                folder_name=folder_name,
                 message=f"Alignment fehlt ({label}).",
             )
         )
@@ -347,7 +401,7 @@ def _append_asset_mapping_errors(
     if not primary_asset_id and not needs_supplement_asset:
         blockers.append(
             ReadinessError(
-                type=VO_ERROR_MISSING_ASSET_MAPPING, severity="BLOCKER", scope="sentence",
+                type=VO_ERROR_MISSING_ASSET_MAPPING, severity=READINESS_SEVERITY_BLOCKER, scope="sentence",
                 folder_name=folder_name, sentence_id=sentence_id,
                 message="Kein Asset zugeordnet und needs_supplement_asset ist nicht gesetzt.",
                 fix_hint="Voice-over-Text bearbeiten oder Asset-Zuordnung ergänzen.",
@@ -356,7 +410,7 @@ def _append_asset_mapping_errors(
     if needs_supplement_asset and not supplement_reason.strip():
         warnings.append(
             ReadinessError(
-                type=VO_ERROR_MISSING_SUPPLEMENT_REASON, severity="WARNING", scope="sentence",
+                type=VO_ERROR_MISSING_SUPPLEMENT_REASON, severity=READINESS_SEVERITY_WARNING, scope="sentence",
                 folder_name=folder_name, sentence_id=sentence_id,
                 message="needs_supplement_asset ist gesetzt, aber supplement_reason fehlt.",
             )
@@ -364,7 +418,7 @@ def _append_asset_mapping_errors(
     if primary_asset_id and asset_confidence < WEAK_ASSET_MATCH_CONFIDENCE_THRESHOLD:
         warnings.append(
             ReadinessError(
-                type=VO_ERROR_WEAK_ASSET_MATCH, severity="WARNING", scope="sentence",
+                type=VO_ERROR_WEAK_ASSET_MATCH, severity=READINESS_SEVERITY_WARNING, scope="sentence",
                 folder_name=folder_name, sentence_id=sentence_id,
                 message=f"Niedrige Asset-Confidence ({asset_confidence}).",
             )
@@ -389,21 +443,23 @@ def validate_voiceover_project_plan_readiness(
     if not has_confirmed_dramaturgy:
         blockers.append(
             ReadinessError(
-                type="MISSING_CONFIRMED_DRAMATURGY", severity="BLOCKER", scope="project",
+                type=READINESS_ERROR_MISSING_CONFIRMED_DRAMATURGY, severity=READINESS_SEVERITY_BLOCKER,
+                scope="project",
                 message="Keine bestätigte Dramaturgie vorhanden.", fix_hint="Dramaturgie bestätigen.",
             )
         )
     if not has_confirmed_intro:
         blockers.append(
             ReadinessError(
-                type="MISSING_CONFIRMED_INTRO", severity="BLOCKER", scope="intro",
+                type=READINESS_ERROR_MISSING_CONFIRMED_INTRO, severity=READINESS_SEVERITY_BLOCKER, scope="intro",
                 message="Kein bestätigter Intro-Hook vorhanden.", fix_hint="Intro-Hook bestätigen.",
             )
         )
     for missing_name in missing_folders:
         blockers.append(
             ReadinessError(
-                type="MISSING_FOLDER_VOICEOVER", severity="BLOCKER", scope="folder", folder_name=missing_name,
+                type=READINESS_ERROR_MISSING_FOLDER_VOICEOVER, severity=READINESS_SEVERITY_BLOCKER, scope="folder",
+                folder_name=missing_name,
                 message=f"Ordner '{missing_name}' hat noch keinen bestätigten Voice-over-Text.",
                 fix_hint="Voice-over für diesen Ordner bestätigen.",
             )
@@ -413,11 +469,17 @@ def validate_voiceover_project_plan_readiness(
     if has_confirmed_intro:
         if not intro.hook_text.strip():
             blockers.append(
-                ReadinessError(type="EMPTY_TEXT", severity="BLOCKER", scope="intro", message="Intro-Hook-Text ist leer.")
+                ReadinessError(
+                    type=READINESS_ERROR_EMPTY_TEXT, severity=READINESS_SEVERITY_BLOCKER, scope="intro",
+                    message="Intro-Hook-Text ist leer.",
+                )
             )
         if not intro.visual_beats:
             warnings.append(
-                ReadinessError(type="EMPTY_VISUAL_BEATS", severity="WARNING", scope="intro", message="Intro hat keine visual_beats.")
+                ReadinessError(
+                    type=READINESS_ERROR_EMPTY_VISUAL_BEATS, severity=READINESS_SEVERITY_WARNING, scope="intro",
+                    message="Intro hat keine visual_beats.",
+                )
             )
         _append_audio_alignment_errors(
             warnings, blockers, folder_name="", label="Intro", audio_status=intro.audio_status,
@@ -434,14 +496,16 @@ def validate_voiceover_project_plan_readiness(
         if not folder_item.voiceover_text_full.strip():
             blockers.append(
                 ReadinessError(
-                    type="EMPTY_TEXT", severity="BLOCKER", scope="folder", folder_name=folder_item.folder_name,
+                    type=READINESS_ERROR_EMPTY_TEXT, severity=READINESS_SEVERITY_BLOCKER, scope="folder",
+                    folder_name=folder_item.folder_name,
                     message="Voice-over-Text ist leer.",
                 )
             )
         if not folder_item.sentence_items:
             blockers.append(
                 ReadinessError(
-                    type="EMPTY_SENTENCE_ITEMS", severity="BLOCKER", scope="folder", folder_name=folder_item.folder_name,
+                    type=READINESS_ERROR_EMPTY_SENTENCE_ITEMS, severity=READINESS_SEVERITY_BLOCKER, scope="folder",
+                    folder_name=folder_item.folder_name,
                     message="Keine sentence_items vorhanden.",
                 )
             )
@@ -459,7 +523,8 @@ def validate_voiceover_project_plan_readiness(
         if folder_item.validation_status == VOICEOVER_STATUS_NEEDS_USER_REVIEW:
             warnings.append(
                 ReadinessError(
-                    type="NEEDS_USER_REVIEW", severity="WARNING", scope="folder", folder_name=folder_item.folder_name,
+                    type=READINESS_ERROR_NEEDS_USER_REVIEW, severity=READINESS_SEVERITY_WARNING, scope="folder",
+                    folder_name=folder_item.folder_name,
                     message="Validierung hat NEEDS_USER_REVIEW ergeben.",
                 )
             )
@@ -476,6 +541,13 @@ def validate_voiceover_project_plan_readiness(
     no_stale_or_failed = intro.audio_status not in (AUDIO_STATUS_STALE, AUDIO_STATUS_FAILED) and all(
         f.audio_status not in (AUDIO_STATUS_STALE, AUDIO_STATUS_FAILED) for f in plan.folders
     )
+    # Audit-Fix (Hardening §1): explizit prüfen statt sich implizit auf
+    # "audio_duration_sec == 0.0 bei AUDIO_READY_WITH_WARNINGS" zu verlassen.
+    # Ein Item mit Warnungen darf NIE als vollständig schnittbereit gelten,
+    # unabhängig davon, ob eine Dauer ermittelt werden konnte.
+    no_warning_audio = intro.audio_status != AUDIO_STATUS_READY_WITH_WARNINGS and all(
+        f.audio_status != AUDIO_STATUS_READY_WITH_WARNINGS for f in plan.folders
+    )
     all_durations_known = (
         intro.audio_duration_sec > 0 if intro.audio_status != AUDIO_STATUS_MISSING else True
     ) and all(
@@ -487,7 +559,7 @@ def validate_voiceover_project_plan_readiness(
         has_confirmed_dramaturgy=has_confirmed_dramaturgy,
         has_confirmed_intro=has_confirmed_intro,
         all_active_folders_have_confirmed_voiceover=all_folders_confirmed,
-        all_required_audio_ready=all_audio_present and no_stale_or_failed,
+        all_required_audio_ready=all_audio_present and no_stale_or_failed and no_warning_audio,
         all_alignments_ready=all_alignments_present,
         has_asset_mapping_for_all_items=all_asset_mapped,
         has_no_blockers=not has_blockers,
@@ -501,11 +573,13 @@ def validate_voiceover_project_plan_readiness(
         status = PLAN_STATUS_TEXT_READY
     elif not all_audio_present:
         status = PLAN_STATUS_AUDIO_PENDING
-    elif all_alignments_present and no_stale_or_failed and all_durations_known and all_asset_mapped:
+    elif all_alignments_present and no_stale_or_failed and no_warning_audio and all_durations_known and all_asset_mapped:
         status = PLAN_STATUS_READY_FOR_CUT
     else:
         # Audio+Alignment technisch da, aber z. B. AUDIO_READY_WITH_WARNINGS
-        # (Dauer unbekannt) oder fehlende Alignments -> nicht schnittbereit.
+        # (Dauer unbekannt/Warnung) oder fehlende Alignments -> nicht
+        # schnittbereit, maximal AUDIO_READY (oder NEEDS_REVIEW bei Blockern,
+        # siehe oben).
         status = PLAN_STATUS_AUDIO_READY
 
     updated_folders = [
@@ -578,6 +652,45 @@ def _markdown_escape_cell(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ")
 
 
+def _build_incomplete_active_folders(
+    project: Project, plan: ConfirmedVoiceoverProjectPlan
+) -> list[tuple[int, str, list[str]]]:
+    """Aktive Ordner laut bestätigter Dramaturgie, die im finalen Plan fehlen
+    oder Blocker/fehlendes Audio/Alignment haben (Audit-Hardening §3).
+
+    Rein für die menschenlesbare Markdown-Kontrolle — verändert NICHT
+    plan.folders, das weiterhin ausschließlich bestätigte Items enthält."""
+    dramaturgy_plan = load_confirmed_dramaturgy(project)
+    if dramaturgy_plan is None:
+        return []
+    order_by_name = {entry.folder_name: entry.order_index for entry in dramaturgy_plan.recommended_folder_order}
+    active_folder_names = get_active_dramaturgy_folder_names(project)
+    plan_folder_by_name = {folder.folder_name: folder for folder in plan.folders}
+
+    entries: list[tuple[int, str, list[str]]] = []
+    for folder_name in active_folder_names:
+        folder_item = plan_folder_by_name.get(folder_name)
+        if folder_item is None:
+            entries.append((order_by_name.get(folder_name, 0), folder_name, [READINESS_ERROR_MISSING_FOLDER_VOICEOVER]))
+            continue
+
+        reasons: list[str] = []
+        if folder_item.audio_status == AUDIO_STATUS_MISSING:
+            reasons.append(READINESS_ERROR_MISSING_AUDIO)
+        elif folder_item.audio_status == AUDIO_STATUS_FAILED:
+            reasons.append(READINESS_ERROR_AUDIO_FAILED)
+        elif folder_item.audio_status == AUDIO_STATUS_STALE:
+            reasons.append(ITEM_READINESS_STALE_AUDIO)
+        if folder_item.audio_status != AUDIO_STATUS_MISSING and not folder_item.alignment_items:
+            reasons.append(READINESS_ERROR_MISSING_ALIGNMENT)
+        if folder_item.blockers:
+            reasons.extend(folder_item.blockers)
+        if reasons:
+            entries.append((folder_item.order_index, folder_name, reasons))
+
+    return sorted(entries, key=lambda entry: entry[0])
+
+
 def export_voiceover_project_plan_markdown(
     project: Project, plan: ConfirmedVoiceoverProjectPlan
 ) -> Path:
@@ -632,6 +745,18 @@ def export_voiceover_project_plan_markdown(
                 f"{sentence_item.needs_supplement_asset} | {audio_start} | {audio_end} |"
             )
         lines.append("")
+
+    lines.append("## Fehlende / unvollständige aktive Ordner")
+    lines.append("")
+    incomplete_active_folders = _build_incomplete_active_folders(project, plan)
+    if not incomplete_active_folders:
+        lines.append("(keine — alle aktiven Ordner sind bestätigt und vollständig)")
+    else:
+        lines.append("| Order | Folder | Grund |")
+        lines.append("|---|---|---|")
+        for order_index, folder_name, reasons in incomplete_active_folders:
+            lines.append(f"| {order_index} | {folder_name} | {', '.join(reasons)} |")
+    lines.append("")
 
     lines.append("## Warnings / Blockers")
     lines.append("")

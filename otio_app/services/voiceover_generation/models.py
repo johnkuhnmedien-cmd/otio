@@ -606,7 +606,9 @@ class ConfirmedIntroPlanItem(BaseModel):
     alignment_path: str = ""
     alignment_items: list[AlignmentItem] = Field(default_factory=list)
     audio_status: str = AUDIO_STATUS_MISSING
-    # READY|MISSING_AUDIO|MISSING_ALIGNMENT|STALE_AUDIO|WARNING
+    # READY|MISSING_AUDIO|MISSING_ALIGNMENT|STALE_AUDIO|WARNING|BLOCKED
+    # (BLOCKED additiv erlaubt für fehlendes Asset-Mapping in visual_beats,
+    # str-Feld ohne strikte Enum-Validierung — siehe Audit-Hardening §4)
     readiness_status: str = ITEM_READINESS_MISSING_AUDIO
 
 
