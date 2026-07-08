@@ -559,6 +559,85 @@ def test_visual_coverage_extensions_run_after_supplement() -> None:
     assert "initial_preroll_extension" in segment.reason.split("+")
 
 
+# --- Vorab-Hardening (Phase 8.7): mehrfach akzeptierte Supplement Candidates ---
+
+
+def _search_and_accept_image(
+    project: Project, request_id: str, *, candidate_id: str = "cand_fake01", force_replace: bool = False
+):
+    fake_candidate = _fake_candidate(candidate_id=candidate_id, request_id=request_id, media_type="image", duration_sec=0.0)
+    mock_adapter = MagicMock()
+    mock_adapter.search.return_value = [fake_candidate]
+
+    def _fake_acquire(candidate, destination_folder):
+        destination_folder.mkdir(parents=True, exist_ok=True)
+        target = destination_folder / f"{candidate.candidate_id}.jpg"
+        target.write_bytes(b"FAKE_IMAGE_BYTES")
+        sidecar = SupplementAssetSidecar(asset_id="asset_x", supplement_request_id=request_id, provider="pexels")
+        return SupplementAsset(local_path=target, sidecar=sidecar)
+
+    mock_adapter.acquire.side_effect = _fake_acquire
+
+    with patch(f"{_BRIDGE_MODULE}.get_supplement_adapter", return_value=mock_adapter):
+        search_candidates_for_cut_plan_request(project, request_id, {"provider": "pexels"})
+        return accept_cut_plan_supplement_candidate(project, request_id, candidate_id, force_replace=force_replace)
+
+
+def test_second_accept_without_force_replace_is_blocked(tmp_path: Path) -> None:
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    _search_and_accept_image(project, request_id, candidate_id="cand_first")
+
+    with pytest.raises(ValueError, match="already has an accepted candidate"):
+        _search_and_accept_image(project, request_id, candidate_id="cand_second")
+
+
+def test_accept_with_force_replace_replaces_deliberately(tmp_path: Path) -> None:
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+    cut_item_id = document.requests[0].cut_item_id
+
+    _search_and_accept_image(project, request_id, candidate_id="cand_first")
+    first_request = load_cut_plan_supplement_requests(project).requests[0]
+    assert first_request.accepted_candidate_id == "cand_first"
+
+    updated = _search_and_accept_image(project, request_id, candidate_id="cand_second", force_replace=True)
+    item = next(i for i in updated.items if i.cut_item_id == cut_item_id)
+    assert "cand_second" in item.chosen_asset_id
+
+    second_request = load_cut_plan_supplement_requests(project).requests[0]
+    assert second_request.accepted_candidate_id == "cand_second"
+
+
+def test_old_item_state_not_silently_overwritten_on_blocked_second_accept(tmp_path: Path) -> None:
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+    cut_item_id = document.requests[0].cut_item_id
+
+    _search_and_accept_image(project, request_id, candidate_id="cand_first")
+    draft_after_first_accept = load_cut_plan_draft(project)
+    item_after_first = next(i for i in draft_after_first_accept.items if i.cut_item_id == cut_item_id)
+    assert "cand_first" in item_after_first.chosen_asset_id
+
+    with pytest.raises(ValueError):
+        _search_and_accept_image(project, request_id, candidate_id="cand_second")
+
+    draft_after_blocked_second = load_cut_plan_draft(project)
+    item_after_blocked = next(i for i in draft_after_blocked_second.items if i.cut_item_id == cut_item_id)
+    # Der ursprüngliche, erste akzeptierte Zustand darf unverändert bleiben.
+    assert item_after_blocked.chosen_asset_id == item_after_first.chosen_asset_id
+
+
 # --- 22-24: UI ---
 
 

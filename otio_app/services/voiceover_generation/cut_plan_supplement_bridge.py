@@ -349,7 +349,11 @@ def search_candidates_for_cut_plan_request(
     )
     _save_candidates_document(project, document)
 
-    if candidates:
+    # Ein bereits ACCEPTED-Request darf durch eine erneute Suche nicht still
+    # auf CANDIDATES_FOUND zurückgesetzt werden — das würde die Vorab-
+    # Hardening gegen mehrfaches Akzeptieren aushebeln (die den aktuellen
+    # request.status prüft).
+    if candidates and request.status != CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED:
         _update_request(project, request_id, status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_CANDIDATES_FOUND)
     return document
 
@@ -449,13 +453,19 @@ def apply_accepted_supplement_to_cut_plan_item(
 
 
 def accept_cut_plan_supplement_candidate(
-    project: Project, request_id: str, candidate_id: str
+    project: Project, request_id: str, candidate_id: str, force_replace: bool = False
 ) -> CutPlanDocument:
     """I/O-Orchestrator: lädt Request/Kandidat/Draft, lädt den Kandidaten
     über den technischen Provider-Adapter herunter (NUR bei diesem expliziten
     Aufruf — niemals automatisch), speichert die Datei unter
     cut_plan/supplement_assets/{request_id}/, aktualisiert das CutPlanItem
     und speichert den Draft sowie den Request-Status neu.
+
+    Vorab-Hardening (Phase 8.7): Ist der Request bereits ACCEPTED und
+    force_replace=False, wird NICHT still überschrieben — es wird ein
+    ValueError geworfen, bevor irgendetwas heruntergeladen oder mutiert wird.
+    Erst force_replace=True erlaubt das bewusste Ersetzen eines bereits
+    akzeptierten Kandidaten.
 
     Nutzt ausschließlich `SupplementSourceAdapter.acquire` (technischer
     Adapter) — NICHT die höherstufige Produktions-Beschaffungsorchestrierung.
@@ -467,6 +477,10 @@ def accept_cut_plan_supplement_candidate(
     request = next((entry for entry in requests_document.requests if entry.request_id == request_id), None)
     if request is None:
         raise ValueError(f"Supplement Request '{request_id}' nicht gefunden.")
+    if request.status == CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED and not force_replace:
+        raise ValueError(
+            "Supplement request already has an accepted candidate. Use replace explicitly."
+        )
 
     candidates_document = load_cut_plan_supplement_candidates_for_request(project, request_id)
     if candidates_document is None:
