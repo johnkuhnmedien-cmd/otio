@@ -27,6 +27,10 @@ from otio_app.defaults import (
     FACTUALITY_MODE_CHOICES,
     FACTUALITY_MODE_LABELS,
     FACTUALITY_MODE_NORMAL_SAFE_GENERAL_KNOWLEDGE,
+    AUDIO_SCOPE_FOLDER,
+    AUDIO_STATUS_MISSING,
+    ELEVENLABS_DEFAULT_MODEL_ID,
+    ELEVENLABS_DEFAULT_OUTPUT_FORMAT,
     INTRO_HOOK_DEFAULT_MAX_WORDS,
     INTRO_HOOK_DEFAULT_MIN_WORDS,
     INTRO_HOOK_DEFAULT_TARGET_WORDS,
@@ -34,6 +38,7 @@ from otio_app.defaults import (
     INTRO_HOOK_STATUS_DRAFT,
     INTRO_HOOK_TYPE_CINEMATIC_PROMISE,
     MAX_VOICEOVER_REVIEW_ATTEMPTS,
+    TTS_RUN_STATUS_FAIL,
     VO_ERROR_TYPES_ALL,
     VO_ERROR_TYPES_DETERMINISTIC,
     VO_ERROR_TYPES_LLM_REVIEW,
@@ -102,6 +107,12 @@ __all__ = [
     "IntroHookCandidate",
     "IntroHookCandidatesDocument",
     "ConfirmedIntroHook",
+    "ElevenLabsSettings",
+    "TtsRunManifest",
+    "VoiceoverAudioItem",
+    "VoiceoverAudioManifest",
+    "AlignmentItem",
+    "VoiceoverAlignment",
 ]
 
 
@@ -466,3 +477,98 @@ class ConfirmedIntroHook(BaseModel):
     llm_run_id: str = ""
     status: str = INTRO_HOOK_STATUS_CONFIRMED
     risks: list[str] = Field(default_factory=list)
+
+
+# --- Phase 6: ElevenLabs Audio/TTS ---
+
+
+class ElevenLabsSettings(BaseModel):
+    """Niemals den API-Key enthalten — der kommt ausschließlich aus dem
+    bestehenden Environment-/User-Secrets-System (otio_app.services.api_keys)."""
+
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    voice_id: str = ""
+    model_id: str = ELEVENLABS_DEFAULT_MODEL_ID
+    output_format: str = ELEVENLABS_DEFAULT_OUTPUT_FORMAT
+    stability: float = 0.5
+    similarity_boost: float = 0.75
+    style: float = 0.0
+    use_speaker_boost: bool = True
+    speed: float = 1.0
+    language_code: str = ""
+
+
+class TtsRunManifest(BaseModel):
+    """Traceability für einen einzelnen TTS-Aufruf — niemals API-Key/Header."""
+
+    tts_run_id: str
+    project_id: str
+    created_at: datetime = Field(default_factory=_utcnow)
+    scope: str = AUDIO_SCOPE_FOLDER  # intro|folder
+    folder_name: str = ""
+    order_index: int = 0
+    text_hash: str = ""
+    tts_provider: str = "elevenlabs"
+    voice_id: str = ""
+    model_id: str = ""
+    output_format: str = ""
+    status: str = TTS_RUN_STATUS_FAIL  # PASS|FAIL
+    audio_path: str = ""
+    timestamps_path: str = ""
+    error_path: str = ""
+
+
+class VoiceoverAudioItem(BaseModel):
+    scope: str = AUDIO_SCOPE_FOLDER  # intro|folder
+    folder_name: str = ""
+    order_index: int = 0
+    voiceover_text_hash: str = ""
+    audio_path: str = ""
+    audio_version: int = 0
+    audio_duration_sec: float = 0.0
+    timestamps_path: str = ""
+    alignment_path: str = ""
+    tts_run_id: str = ""
+    status: str = AUDIO_STATUS_MISSING  # AUDIO_READY|STALE|FAILED|MISSING
+    created_at: datetime = Field(default_factory=_utcnow)
+    error_message: str = ""
+
+
+class VoiceoverAudioManifest(BaseModel):
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    tts_provider: str = "elevenlabs"
+    tts_model: str = ""
+    voice_id: str = ""
+    output_format: str = ""
+    items: list[VoiceoverAudioItem] = Field(default_factory=list)
+
+
+class AlignmentItem(BaseModel):
+    """sentence_id kann bei Intro-Alignment auch ein hook_beat_id sein."""
+
+    sentence_id: str = ""
+    beat_id: str = ""
+    text: str = ""
+    audio_start_sec: float = 0.0
+    audio_end_sec: float = 0.0
+    duration_sec: float = 0.0
+    primary_asset_id: str = ""
+    backup_asset_ids: list[str] = Field(default_factory=list)
+    visual_intent: str = ""
+    asset_confidence: float = 0.0
+    needs_supplement_asset: bool = False
+    supplement_reason: str = ""
+
+
+class VoiceoverAlignment(BaseModel):
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    scope: str = AUDIO_SCOPE_FOLDER  # intro|folder
+    folder_name: str = ""
+    audio_path: str = ""
+    audio_duration_sec: float = 0.0
+    alignment_source: str = "elevenlabs_timestamps"
+    items: list[AlignmentItem] = Field(default_factory=list)
+    alignment_warnings: list[str] = Field(default_factory=list)

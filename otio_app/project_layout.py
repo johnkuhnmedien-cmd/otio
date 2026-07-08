@@ -308,6 +308,35 @@ def get_llm_run_dir(work_dir: Path, run_id: str) -> Path:
     return get_llm_runs_dir(work_dir) / run_id
 
 
+def get_intro_tts_runs_dir(work_dir: Path) -> Path:
+    from otio_app.defaults import VOICEOVER_GENERATION_TTS_RUNS_SUBDIR
+
+    return get_intro_audio_dir(work_dir) / VOICEOVER_GENERATION_TTS_RUNS_SUBDIR
+
+
+def get_intro_tts_run_dir(work_dir: Path, tts_run_id: str) -> Path:
+    return get_intro_tts_runs_dir(work_dir) / tts_run_id
+
+
+def get_folder_alignment_path(work_dir: Path, order_index: int, folder_name: str) -> Path:
+    from otio_app.defaults import AUDIO_ALIGNMENT_FILENAME
+
+    return get_folder_voiceover_audio_dir(work_dir, order_index, folder_name) / AUDIO_ALIGNMENT_FILENAME
+
+
+def get_intro_alignment_path(work_dir: Path) -> Path:
+    from otio_app.defaults import AUDIO_ALIGNMENT_FILENAME
+
+    return get_intro_audio_dir(work_dir) / AUDIO_ALIGNMENT_FILENAME
+
+
+def get_audio_test_dir(work_dir: Path) -> Path:
+    """Für 'Test Voice' — kein Manifest-Eintrag, nur zum Anhören der Einstellungen."""
+    from otio_app.defaults import AUDIO_TEST_SUBDIR
+
+    return get_voiceover_generation_audio_dir(work_dir) / AUDIO_TEST_SUBDIR
+
+
 def get_supplement_dir(work_dir: Path) -> Path:
     """Verzeichnis für Supplement-Workflow-Dateien."""
     from otio_app.defaults import SUPPLEMENT_SUBDIR

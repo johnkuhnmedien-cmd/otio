@@ -41,6 +41,14 @@ API_PROVIDERS: tuple[ApiProvider, ...] = (
         implemented=True,
     ),
     ApiProvider(
+        env_key="ELEVENLABS_API_KEY",
+        label="ElevenLabs",
+        description="Text-to-Speech für die Voice-over-Generierungs-Pipeline (Projekt ohne Voice-Over).",
+        placeholder="sk_…",
+        docs_url="https://elevenlabs.io/app/settings/api-keys",
+        implemented=True,
+    ),
+    ApiProvider(
         env_key="PEXELS_API_KEY",
         label="Pexels",
         description="Geplant für Stock-Foto/Video-Fallback im Schnittplan.",
