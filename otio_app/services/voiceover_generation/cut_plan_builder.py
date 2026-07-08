@@ -16,13 +16,20 @@ import json
 from otio_app.defaults import CUT_PLAN_STATUS_DRAFT, CUT_PLAN_STATUS_NEEDS_REVIEW
 from otio_app.models import Project
 from otio_app.project_layout import get_confirmed_voiceover_project_plan_path, get_cut_plan_draft_path
+from otio_app.services.voiceover_generation.cut_plan_asset_selector import apply_asset_selection_to_cut_plan
 from otio_app.services.voiceover_generation.cut_plan_models import CutPlanDocument
 from otio_app.services.voiceover_generation.cut_plan_settings_service import load_cut_plan_settings
 from otio_app.services.voiceover_generation.cut_plan_timeline_service import build_cut_plan_timeline_skeleton
 from otio_app.services.voiceover_generation.final_plan_service import load_confirmed_voiceover_project_plan
 from otio_app.services.voiceover_generation.llm_trace_service import content_hash_of_model
 
-__all__ = ["build_cut_plan_draft", "load_cut_plan_draft", "save_cut_plan_draft"]
+__all__ = [
+    "build_cut_plan_draft",
+    "load_cut_plan_draft",
+    "save_cut_plan_draft",
+    "is_cut_plan_draft_stale",
+    "apply_asset_selection_to_draft",
+]
 
 
 def build_cut_plan_draft(project: Project) -> CutPlanDocument:
@@ -82,3 +89,29 @@ def save_cut_plan_draft(project: Project, document: CutPlanDocument) -> CutPlanD
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
+
+
+def is_cut_plan_draft_stale(project: Project, cut_plan: CutPlanDocument) -> bool:
+    """True, wenn sich der bestätigte Voice-over-Projektplan seit der
+    Cut-Plan-Erzeugung geändert hat (Vergleich über source_plan_hash, analog
+    is_project_plan_stale in Phase 7). Kein Auto-Update, kein Auto-Overwrite
+    — die UI zeigt nur eine Warnung an."""
+    current_source_plan = load_confirmed_voiceover_project_plan(project)
+    current_hash = content_hash_of_model(current_source_plan)
+    return cut_plan.source_plan_hash != current_hash
+
+
+def apply_asset_selection_to_draft(project: Project) -> CutPlanDocument:
+    """Lädt den bestehenden cut_plan.draft.json, wendet Asset-Auswahl/
+    Fallback/Dauer-/Split-/Merge-Strategie an (Phase 8.3) und speichert das
+    Ergebnis wieder als cut_plan.draft.json. Schreibt ausdrücklich NICHT
+    cut_plan.confirmed.json, keinen Validation Report und kein Trace-File —
+    diese Schritte folgen erst in späteren Sub-Phasen.
+
+    Wirft ValueError, wenn noch kein Draft existiert."""
+    draft = load_cut_plan_draft(project)
+    if draft is None:
+        raise ValueError("Kein Cut Plan Draft vorhanden — bitte zuerst einen Draft erzeugen.")
+
+    updated_draft = apply_asset_selection_to_cut_plan(project, draft)
+    return save_cut_plan_draft(project, updated_draft)

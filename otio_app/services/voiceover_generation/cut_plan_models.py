@@ -139,6 +139,7 @@ class CutPlanItem(BaseModel):
     asset_selection_reason: str = ""
     fallback_reason: str = ""
     needs_supplement_asset: bool = False
+    supplement_reason: str = ""
     supplement_request_id: str = ""
     warnings: list[str] = Field(default_factory=list)
     blockers: list[str] = Field(default_factory=list)

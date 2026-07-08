@@ -1,13 +1,20 @@
-"""Phase 8.2: Cut-Plan-Tab mit Timeline-/Audio-Platzierung + Item-Skeletten.
+"""Phase 8.3: Cut-Plan-Tab mit Asset-Auswahl, Fallback, Dauer-/Split-/Merge.
 
-Baut einen ersten technischen Cut-Plan-Entwurf (reine Zeit-Mathematik, siehe
-cut_plan_timeline_service.py) — noch OHNE Asset-Auswahl, Split-/Merge-
-Heuristik, Supplement Requests, vollständige Validierung oder Confirm/Lock.
-Diese Schritte folgen in späteren Sub-Phasen (8.3ff)."""
+Baut auf dem Phase-8.2-Entwurf auf (Timeline-/Audio-Platzierung, siehe
+cut_plan_timeline_service.py) und wendet jetzt Asset-Auswahl an (siehe
+cut_plan_asset_selector.py). Noch KEINE Supplement-Suche/-Beschaffung,
+keine vollständige Validierung, kein Confirm/Lock, kein EditPlanDocument,
+kein OTIO-Export. Diese Schritte folgen in späteren Sub-Phasen (8.4ff)."""
 
 from __future__ import annotations
 
-from otio_app.defaults import PLAN_STATUS_READY_FOR_CUT
+from otio_app.defaults import (
+    CUT_PLAN_ASSET_SELECTION_BACKUP_USED,
+    CUT_PLAN_ASSET_SELECTION_BLOCKED,
+    CUT_PLAN_ASSET_SELECTION_PRIMARY_USED,
+    CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED,
+    PLAN_STATUS_READY_FOR_CUT,
+)
 from otio_app.models import Project
 from otio_app.project_layout import (
     get_cut_plan_confirmed_path,
@@ -18,7 +25,9 @@ from otio_app.project_layout import (
     get_cut_plan_validation_report_path,
 )
 from otio_app.services.voiceover_generation.cut_plan_builder import (
+    apply_asset_selection_to_draft,
     build_cut_plan_draft,
+    is_cut_plan_draft_stale,
     load_cut_plan_draft,
     save_cut_plan_draft,
 )
@@ -165,8 +174,8 @@ def _render_settings_editor(project: Project) -> CutPlanSettings:
 def _render_future_artifact_paths(project: Project) -> None:
     st.subheader("Künftige Artefakt-Pfade")
     st.caption(
-        "Diese Dateien werden ab Phase 8.2ff. erzeugt. In Phase 8.1 existieren "
-        "höchstens `cut_plan_settings.json`, sofern bereits gespeichert."
+        "cut_plan_settings.json und cut_plan.draft.json existieren bereits, sobald "
+        "gespeichert bzw. erzeugt. Die übrigen Dateien folgen in späteren Sub-Phasen."
     )
     st.caption(f"Cut Plan Settings: `{get_cut_plan_settings_path(project.work_dir_path)}`")
     st.caption(f"Cut Plan Draft: `{get_cut_plan_draft_path(project.work_dir_path)}`")
@@ -178,8 +187,43 @@ def _render_future_artifact_paths(project: Project) -> None:
     )
 
 
-def _render_cut_plan_draft(draft: CutPlanDocument) -> None:
+def _render_visual_segments(item) -> None:
+    if not item.planned_visual_segments:
+        st.caption("Keine VisualSegments geplant.")
+        return
+    rows = [
+        {
+            "segment_id": segment.segment_id,
+            "timeline_in_sec": segment.timeline_in_sec,
+            "timeline_out_sec": segment.timeline_out_sec,
+            "duration_sec": segment.duration_sec,
+            "asset_id": segment.asset_id,
+            "asset_type": segment.asset_type,
+            "source_in_sec": segment.source_in_sec,
+            "source_out_sec": segment.source_out_sec,
+            "reason": segment.reason,
+        }
+        for segment in item.planned_visual_segments
+    ]
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
+def _render_cut_plan_draft(project: Project, draft: CutPlanDocument) -> None:
     st.subheader("Cut Plan Draft")
+
+    if is_cut_plan_draft_stale(project, draft):
+        st.warning("Der Cut Plan Draft ist veraltet. Bitte neu erzeugen.")
+
+    status_counts = {
+        CUT_PLAN_ASSET_SELECTION_PRIMARY_USED: 0,
+        CUT_PLAN_ASSET_SELECTION_BACKUP_USED: 0,
+        CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED: 0,
+        CUT_PLAN_ASSET_SELECTION_BLOCKED: 0,
+    }
+    for item in draft.items:
+        if item.asset_selection_status in status_counts:
+            status_counts[item.asset_selection_status] += 1
+    total_segments = sum(len(item.planned_visual_segments) for item in draft.items)
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -189,14 +233,25 @@ def _render_cut_plan_draft(draft: CutPlanDocument) -> None:
     with col3:
         st.metric("Cut Plan Items", len(draft.items))
     with col4:
+        st.metric("VisualSegments", total_segments)
+
+    col5, col6, col7, col8 = st.columns(4)
+    with col5:
+        st.metric("PRIMARY_USED", status_counts[CUT_PLAN_ASSET_SELECTION_PRIMARY_USED])
+    with col6:
+        st.metric("BACKUP_USED", status_counts[CUT_PLAN_ASSET_SELECTION_BACKUP_USED])
+    with col7:
+        st.metric("SUPPLEMENT_REQUIRED", status_counts[CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED])
+    with col8:
+        st.metric("BLOCKED", status_counts[CUT_PLAN_ASSET_SELECTION_BLOCKED])
+
+    col9, col10 = st.columns(2)
+    with col9:
+        st.metric("Warnings", len(draft.warnings))
+    with col10:
         st.metric("Blocker", len(draft.blockers))
 
-    st.caption(
-        "chosen_asset_id ist noch überall leer, asset_selection_status noch "
-        "überall UNRESOLVED — Asset-Auswahl folgt erst in Phase 8.3."
-    )
-
-    with st.expander("Audio Items (A1)", expanded=True):
+    with st.expander("Audio Items (A1)", expanded=False):
         if not draft.audio_items:
             st.caption("Keine Audio Items vorhanden.")
         else:
@@ -214,7 +269,7 @@ def _render_cut_plan_draft(draft: CutPlanDocument) -> None:
             ]
             st.dataframe(rows, use_container_width=True, hide_index=True)
 
-    with st.expander("Cut Plan Items (Skelette)", expanded=True):
+    with st.expander("Cut Plan Items", expanded=True):
         if not draft.items:
             st.caption("Keine Cut Plan Items vorhanden.")
         else:
@@ -229,9 +284,27 @@ def _render_cut_plan_draft(draft: CutPlanDocument) -> None:
                     "primary_asset_id": item.primary_asset_id,
                     "chosen_asset_id": item.chosen_asset_id or "—",
                     "asset_selection_status": item.asset_selection_status,
+                    "duration_strategy": item.duration_strategy or "—",
+                    "number_of_visual_segments": len(item.planned_visual_segments),
+                    "asset_selection_reason": item.asset_selection_reason or "—",
+                    "fallback_reason": item.fallback_reason or "—",
+                    "warnings": ", ".join(item.warnings) or "—",
                     "blockers": ", ".join(item.blockers) or "—",
                 }
                 for item in draft.items
+            ]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        with st.expander("VisualSegments je Item", expanded=False):
+            for item in draft.items:
+                st.caption(f"**{item.cut_item_id}** — {item.text[:80]}")
+                _render_visual_segments(item)
+
+    if draft.asset_usage_summary:
+        with st.expander("Asset Usage Summary", expanded=False):
+            rows = [
+                {"asset_id": asset_id, "usage_count": count}
+                for asset_id, count in sorted(draft.asset_usage_summary.items())
             ]
             st.dataframe(rows, use_container_width=True, hide_index=True)
 
@@ -243,6 +316,8 @@ def _render_cut_plan_draft(draft: CutPlanDocument) -> None:
             for error in draft.warnings:
                 location = f" ({error.scope}: {error.folder_name})" if error.folder_name else f" ({error.scope})"
                 st.warning(f"[{error.type}]{location}: {error.message}")
+
+    st.caption("🚧 Vollständige Validierung und Bestätigung folgen in Phase 8.4.")
 
 
 def render_cut_plan_page() -> None:
@@ -273,32 +348,68 @@ def render_cut_plan_page() -> None:
     source_plan = load_confirmed_voiceover_project_plan(project)
     existing_draft = load_cut_plan_draft(project)
 
-    button_label = "Cut Plan Draft erzeugen" if existing_draft is None else "Cut Plan Draft neu erzeugen"
-    if st.button(
-        button_label,
-        key=f"cut_plan_generate_draft_{project.id}",
-        disabled=source_plan is None,
-        type="primary",
-        help="Baut Timeline-/Audio-Platzierung und Cut-Plan-Item-Skelette aus dem "
-        "bestätigten Voice-over-Projektplan. Noch keine Asset-Auswahl (folgt in Phase 8.3).",
-    ):
-        try:
-            with st.spinner("Cut Plan Draft wird erstellt…"):
-                new_draft = build_cut_plan_draft(project)
-                save_cut_plan_draft(project, new_draft)
-            st.success("Cut Plan Draft erstellt.")
-            st.rerun()
-        except ValueError as exc:
-            st.error(str(exc))
+    col_generate, col_asset_selection = st.columns(2)
+    with col_generate:
+        button_label = "Cut Plan Draft erzeugen" if existing_draft is None else "Cut Plan Draft neu erzeugen"
+        if st.button(
+            button_label,
+            key=f"cut_plan_generate_draft_{project.id}",
+            disabled=source_plan is None,
+            type="primary",
+            help="Baut Timeline-/Audio-Platzierung und Cut-Plan-Item-Skelette aus dem "
+            "bestätigten Voice-over-Projektplan neu (Asset-Auswahl geht dabei verloren).",
+        ):
+            try:
+                with st.spinner("Cut Plan Draft wird erstellt…"):
+                    new_draft = build_cut_plan_draft(project)
+                    save_cut_plan_draft(project, new_draft)
+                st.success("Cut Plan Draft erstellt.")
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+    with col_asset_selection:
+        if st.button(
+            "Asset-Auswahl anwenden",
+            key=f"cut_plan_apply_asset_selection_{project.id}",
+            disabled=existing_draft is None,
+            help="Wendet Asset-Auswahl, Fallback-Logik sowie Dauer-/Split-/Merge-"
+            "Strategie auf den bestehenden Draft an. Noch keine Supplement-Suche, "
+            "keine vollständige Validierung, kein Confirm/Lock.",
+        ):
+            try:
+                with st.spinner("Asset-Auswahl wird angewendet…"):
+                    updated_draft = apply_asset_selection_to_draft(project)
+                status_counts = {
+                    CUT_PLAN_ASSET_SELECTION_PRIMARY_USED: 0,
+                    CUT_PLAN_ASSET_SELECTION_BACKUP_USED: 0,
+                    CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED: 0,
+                    CUT_PLAN_ASSET_SELECTION_BLOCKED: 0,
+                }
+                for item in updated_draft.items:
+                    if item.asset_selection_status in status_counts:
+                        status_counts[item.asset_selection_status] += 1
+                total_segments = sum(len(item.planned_visual_segments) for item in updated_draft.items)
+                st.success(
+                    f"Asset-Auswahl angewendet: {len(updated_draft.items)} Items, "
+                    f"{total_segments} VisualSegments, "
+                    f"{status_counts[CUT_PLAN_ASSET_SELECTION_PRIMARY_USED]} PRIMARY_USED, "
+                    f"{status_counts[CUT_PLAN_ASSET_SELECTION_BACKUP_USED]} BACKUP_USED, "
+                    f"{status_counts[CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED]} SUPPLEMENT_REQUIRED, "
+                    f"{status_counts[CUT_PLAN_ASSET_SELECTION_BLOCKED]} BLOCKED, "
+                    f"{len(updated_draft.warnings)} Warnings, {len(updated_draft.blockers)} Blocker."
+                )
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
 
     st.caption(
-        "🚧 Asset-Auswahl, Split-/Merge-Heuristik, Supplement Requests, vollständige "
-        "Validierung sowie Confirm/Lock folgen in späteren Sub-Phasen (8.3ff)."
+        "🚧 Supplement-Suche/-Beschaffung, vollständige Validierung sowie Confirm/Lock "
+        "folgen in späteren Sub-Phasen (8.4ff)."
     )
 
     if existing_draft is not None:
         st.divider()
-        _render_cut_plan_draft(existing_draft)
+        _render_cut_plan_draft(project, existing_draft)
     elif source_plan is not None:
         st.info("Noch kein Cut Plan Draft vorhanden.")
     else:
