@@ -422,6 +422,36 @@ def get_cut_plan_supplement_manifest_path(work_dir: Path) -> Path:
     return get_cut_plan_dir(work_dir) / CUT_PLAN_SUPPLEMENT_MANIFEST_FILENAME
 
 
+# --- EditPlan Bridge (Phase 9.1): isolierte Brücke von cut_plan.confirmed.json
+# zu einem EditPlanDocument-kompatiblen Draft — getrennt von _otio/edit_plan/
+# und _otio/exports/. ---
+
+
+def get_cut_plan_edit_plan_bridge_dir(work_dir: Path) -> Path:
+    """Wurzel aller EditPlan-Bridge-Artefakte (Phase 9.1)."""
+    from otio_app.defaults import CUT_PLAN_EDIT_PLAN_BRIDGE_SUBDIR
+
+    return get_cut_plan_dir(work_dir) / CUT_PLAN_EDIT_PLAN_BRIDGE_SUBDIR
+
+
+def get_cut_plan_edit_plan_bridge_draft_path(work_dir: Path) -> Path:
+    from otio_app.defaults import CUT_PLAN_EDIT_PLAN_BRIDGE_DRAFT_FILENAME
+
+    return get_cut_plan_edit_plan_bridge_dir(work_dir) / CUT_PLAN_EDIT_PLAN_BRIDGE_DRAFT_FILENAME
+
+
+def get_cut_plan_edit_plan_bridge_trace_path(work_dir: Path) -> Path:
+    from otio_app.defaults import CUT_PLAN_EDIT_PLAN_BRIDGE_TRACE_FILENAME
+
+    return get_cut_plan_edit_plan_bridge_dir(work_dir) / CUT_PLAN_EDIT_PLAN_BRIDGE_TRACE_FILENAME
+
+
+def get_cut_plan_edit_plan_bridge_validation_report_path(work_dir: Path) -> Path:
+    from otio_app.defaults import CUT_PLAN_EDIT_PLAN_BRIDGE_VALIDATION_REPORT_FILENAME
+
+    return get_cut_plan_edit_plan_bridge_dir(work_dir) / CUT_PLAN_EDIT_PLAN_BRIDGE_VALIDATION_REPORT_FILENAME
+
+
 def get_supplement_dir(work_dir: Path) -> Path:
     """Verzeichnis für Supplement-Workflow-Dateien."""
     from otio_app.defaults import SUPPLEMENT_SUBDIR

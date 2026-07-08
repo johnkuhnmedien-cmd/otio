@@ -1,4 +1,5 @@
-"""Phase 8.4-8.7: Cut-Plan-Tab — Validierung, Visual Coverage, Supplement Bridge, Confirm+Trace.
+"""Phase 8.4-9.1: Cut-Plan-Tab — Validierung, Visual Coverage, Supplement Bridge,
+Confirm+Trace, isolierte EditPlan-Bridge.
 
 Baut auf Phase 8.2 (Timeline-/Audio-Platzierung) und Phase 8.3 (Asset-
 Auswahl, Fallback, Dauer-/Split-/Merge) auf und ergänzt die vollständige
@@ -11,8 +12,12 @@ Kandidatensuche und Downloads laufen AUSSCHLIESSLICH bei explizitem
 Nutzerklick, niemals automatisch. Phase 8.7 ergänzt Confirm + Trace (siehe
 cut_plan_confirm_service.py/cut_plan_trace_service.py): ein bereits
 validierter Draft kann explizit als unveränderlicher Snapshot bestätigt
-werden. Weiterhin KEIN EditPlanDocument, kein OTIO-Export, kein locked
-EditPlan, kein LLM-Konfliktlöser."""
+werden. Phase 9.1 ergänzt eine isolierte EditPlan-Bridge (siehe
+cut_plan_edit_plan_bridge.py/cut_plan_edit_plan_trace.py): der bestätigte
+Cut Plan wird deterministisch in einen EditPlanDocument-kompatiblen Draft
+übersetzt — komplett getrennt von der bestehenden Produktions-EditPlan-
+Pipeline. Weiterhin KEIN locked EditPlan, kein OTIO-Export, kein Render,
+keine neue LLM-Planung."""
 
 from __future__ import annotations
 
@@ -26,6 +31,9 @@ from otio_app.defaults import (
     CUT_PLAN_VALIDATION_STATUS_BLOCKED,
     CUT_PLAN_VALIDATION_STATUS_PASS,
     CUT_PLAN_VALIDATION_STATUS_WARNING,
+    EDIT_PLAN_BRIDGE_VALIDATION_STATUS_BLOCKED,
+    EDIT_PLAN_BRIDGE_VALIDATION_STATUS_PASS,
+    EDIT_PLAN_BRIDGE_VALIDATION_STATUS_WARNING,
     PLAN_STATUS_READY_FOR_CUT,
     SUPPLEMENT_SOURCE_PEXELS,
 )
@@ -33,6 +41,7 @@ from otio_app.models import Project
 from otio_app.project_layout import (
     get_cut_plan_confirmed_path,
     get_cut_plan_draft_path,
+    get_cut_plan_edit_plan_bridge_draft_path,
     get_cut_plan_settings_path,
     get_cut_plan_supplement_requests_path,
     get_cut_plan_trace_path,
@@ -72,6 +81,19 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     load_cut_plan_supplement_requests,
     save_cut_plan_supplement_requests,
     search_candidates_for_cut_plan_request,
+)
+from otio_app.services.voiceover_generation.cut_plan_edit_plan_bridge import (
+    build_edit_plan_draft_from_confirmed_cut_plan,
+    is_edit_plan_bridge_stale,
+    load_edit_plan_bridge_draft,
+    load_edit_plan_bridge_validation_report,
+    save_edit_plan_bridge_draft,
+    validate_edit_plan_bridge,
+)
+from otio_app.services.voiceover_generation.cut_plan_edit_plan_trace import (
+    build_edit_plan_bridge_trace,
+    load_edit_plan_bridge_trace,
+    save_edit_plan_bridge_trace,
 )
 from otio_app.services.voiceover_generation.cut_plan_trace_service import load_cut_plan_trace
 from otio_app.services.voiceover_generation.cut_plan_validator import (
@@ -701,7 +723,144 @@ def _render_confirmed_cut_plan(project: Project, draft: CutPlanDocument) -> None
             )
         st.dataframe(rows, use_container_width=True, hide_index=True)
 
-    st.caption("Kein EditPlan-Button, kein OTIO-Button — diese Schritte folgen erst in Phase 9.")
+    st.caption("Die isolierte EditPlan-Bridge (Phase 9.1) folgt im nächsten Bereich unten.")
+
+
+def _render_edit_plan_bridge(project: Project) -> None:
+    """Phase 9.1: isolierte EditPlan-Bridge. Übersetzt ausschließlich einen
+    bereits BESTÄTIGTEN Cut Plan deterministisch in einen EditPlanDocument-
+    kompatiblen Draft — kein Rebuild, keine Asset-Auswahl, keine Supplement-
+    Suche, keine LLM-Aufrufe. Kein locked EditPlan, kein OTIO-Export."""
+    st.subheader("EditPlan Bridge")
+    st.caption(
+        "Übersetzt den bestätigten Cut Plan deterministisch in einen isolierten, "
+        "EditPlanDocument-kompatiblen Draft — getrennt von `_otio/edit_plan/` und "
+        "`_otio/exports/`. Keine neue Asset-Auswahl, keine Supplement-Suche, kein LLM-Aufruf."
+    )
+
+    confirmed = load_confirmed_cut_plan(project)
+    if confirmed is None:
+        st.info("Noch kein bestätigter Cut Plan vorhanden — bitte zuerst im Bereich oben bestätigen.")
+        return
+
+    if is_confirmed_cut_plan_stale(project, confirmed):
+        st.warning(
+            "Der bestätigte Cut Plan ist veraltet (Voice-over-Projektplan oder Cut-Plan-Settings haben "
+            "sich seit der Bestätigung geändert). Die Bridge kann trotzdem erzeugt werden, spiegelt dann "
+            "aber einen veralteten Stand wider."
+        )
+
+    existing_bridge_draft = load_edit_plan_bridge_draft(project)
+    if existing_bridge_draft is not None and is_edit_plan_bridge_stale(project, existing_bridge_draft):
+        st.warning(
+            "Der EditPlan-Bridge-Draft basiert auf einem älteren bestätigten Cut Plan. Bitte bei Bedarf "
+            "neu erzeugen."
+        )
+
+    button_label = (
+        "EditPlan Draft aus bestätigtem Cut Plan erzeugen"
+        if existing_bridge_draft is None
+        else "EditPlan Draft neu erzeugen"
+    )
+    if st.button(button_label, key=f"cut_plan_edit_plan_bridge_build_{project.id}", type="primary"):
+        try:
+            with st.spinner("EditPlan Bridge Draft wird erstellt…"):
+                edit_plan = build_edit_plan_draft_from_confirmed_cut_plan(project)
+                edit_plan = save_edit_plan_bridge_draft(project, edit_plan)
+                trace = build_edit_plan_bridge_trace(project, confirmed, edit_plan)
+                save_edit_plan_bridge_trace(project, trace)
+                report = validate_edit_plan_bridge(project, edit_plan)
+            audio_count = sum(1 for item in edit_plan.timeline_items if item.track == "A1")
+            visual_count = len(edit_plan.timeline_items) - audio_count
+            st.success(
+                f"EditPlan Bridge Draft erzeugt: {len(edit_plan.timeline_items)} TimelineItems "
+                f"({audio_count} Audio, {visual_count} Visual), "
+                f"{len(report.warnings)} Warnings, {len(report.blockers)} Blocker."
+            )
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+    bridge_draft = load_edit_plan_bridge_draft(project)
+    if bridge_draft is None:
+        return
+
+    audio_items = [item for item in bridge_draft.timeline_items if item.track == "A1"]
+    visual_items = [item for item in bridge_draft.timeline_items if item.track != "A1"]
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("TimelineItems", len(bridge_draft.timeline_items))
+    with col2:
+        st.metric("Audio Items", len(audio_items))
+    with col3:
+        st.metric("Visual Items", len(visual_items))
+
+    st.caption(f"Bridge Draft Pfad: `{get_cut_plan_edit_plan_bridge_draft_path(project.work_dir_path)}`")
+
+    report = load_edit_plan_bridge_validation_report(project)
+    if report is not None:
+        col4, col5, col6 = st.columns(3)
+        with col4:
+            if report.status == EDIT_PLAN_BRIDGE_VALIDATION_STATUS_PASS:
+                st.metric("Validation Status", "✅ PASS")
+            elif report.status == EDIT_PLAN_BRIDGE_VALIDATION_STATUS_WARNING:
+                st.metric("Validation Status", "⚠️ WARNING")
+            elif report.status == EDIT_PLAN_BRIDGE_VALIDATION_STATUS_BLOCKED:
+                st.metric("Validation Status", "❌ BLOCKED")
+            else:
+                st.metric("Validation Status", report.status)
+        with col5:
+            st.metric("Warnings", len(report.warnings))
+        with col6:
+            st.metric("Blockers", len(report.blockers))
+
+        if report.warnings or report.blockers:
+            rows = [
+                {
+                    "type": error.type,
+                    "severity": error.severity,
+                    "scope": error.scope,
+                    "cut_item_id": error.cut_item_id or "—",
+                    "visual_segment_id": error.visual_segment_id or "—",
+                    "timeline_item_id": error.timeline_item_id or "—",
+                    "message": error.message,
+                    "fix_hint": error.fix_hint or "—",
+                }
+                for error in (report.blockers + report.warnings)
+            ]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+        else:
+            st.success("Keine Warnungen oder Blocker.")
+    else:
+        st.info("Noch kein Bridge Validation Report vorhanden.")
+
+    trace = load_edit_plan_bridge_trace(project)
+    if trace is not None and trace.entries:
+        with st.expander("EditPlan Bridge Trace", expanded=False):
+            rows = [
+                {
+                    "cut_item_id": entry.cut_item_id or "—",
+                    "visual_segment_id": entry.visual_segment_id or "—",
+                    "source_scope": entry.source_scope or "—",
+                    "folder_name": entry.folder_name or "—",
+                    "timeline_item_id": entry.timeline_item_id,
+                    "timeline_item_type": entry.timeline_item_type,
+                    "track": entry.track,
+                    "asset_id": entry.asset_id or "—",
+                    "timeline_in_sec": entry.timeline_in_sec,
+                    "timeline_out_sec": entry.timeline_out_sec,
+                    "source_in_sec": entry.source_in_sec,
+                    "source_out_sec": entry.source_out_sec,
+                    "frame_rounded": entry.frame_rounded,
+                    "frame_rounding_delta_sec": entry.frame_rounding_delta_sec,
+                    "reason": entry.reason or "—",
+                }
+                for entry in trace.entries
+            ]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    st.caption("Kein OTIO-Button, kein Lock-Button — diese Schritte folgen erst in einer späteren Sub-Phase.")
 
 
 def render_cut_plan_page() -> None:
@@ -827,7 +986,7 @@ def render_cut_plan_page() -> None:
                 st.error(str(exc))
 
     st.caption(
-        "🚧 EditPlanDocument-Übersetzung, locked EditPlan und OTIO-Export folgen erst in Phase 9."
+        "🚧 Locked EditPlan, Render und OTIO-Export folgen erst in einer späteren Sub-Phase (9.2ff)."
     )
 
     if existing_draft is not None:
@@ -837,6 +996,8 @@ def render_cut_plan_page() -> None:
         _render_cut_plan_draft(project, existing_draft)
         st.divider()
         _render_confirmed_cut_plan(project, existing_draft)
+        st.divider()
+        _render_edit_plan_bridge(project)
     elif source_plan is not None:
         st.info("Noch kein Cut Plan Draft vorhanden.")
     else:
