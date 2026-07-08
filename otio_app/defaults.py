@@ -80,6 +80,9 @@ VOICEOVER_GENERATION_LLM_RUNS_SUBDIR = "llm_runs"
 VOICEOVER_GENERATION_AUDIO_SUBDIR = "audio"
 VOICEOVER_GENERATION_TTS_RUNS_SUBDIR = "tts_runs"
 VOICEOVER_GENERATION_INTRO_AUDIO_FOLDER_NAME = "000_intro"
+STYLE_REFERENCES_SUBDIR = "style_references"
+STYLE_REFERENCES_UPLOADS_SUBDIR = "uploads"
+MODEL_SETTINGS_FILENAME = "model_settings.json"
 
 PROJECT_BRIEF_FILENAME = "project_brief.json"
 VOICEOVER_STYLE_REFERENCES_FILENAME = "voiceover_style_references.json"
@@ -99,6 +102,85 @@ CONFIRMED_VOICEOVER_PROJECT_PLAN_FILENAME = "confirmed_voiceover_project_plan.js
 VOICEOVER_PROJECT_PLAN_JSON_FILENAME = "voiceover_project_plan.json"
 VOICEOVER_PROJECT_PLAN_MD_FILENAME = "voiceover_project_plan.md"
 VOICEOVER_PROJECT_PLAN_CSV_FILENAME = "voiceover_project_plan.csv"
+
+# --- LLM-Provider/Modell-Presets für die Voice-over-Generierungs-Pipeline ---
+# Eigenständig von EDIT_PLAN_MODEL_CHOICES: hier werden provider und model als
+# getrennte Felder gespeichert (siehe VoiceoverGenerationModelSettings), daher
+# ohne "anthropic:"/"openai:"-Präfix.
+VOICEOVER_GEN_PROVIDERS = ("anthropic", "openai", "gemini")
+VOICEOVER_GEN_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
+    "anthropic": ("claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"),
+    "openai": ("gpt-5.5", "gpt-5.4-mini"),
+    "gemini": ("gemini-3.1-pro-preview", "gemini-3.1-flash-lite"),
+}
+VOICEOVER_GEN_ROLE_STYLE_PROFILE = "style_profile"
+VOICEOVER_GEN_ROLE_DRAMATURGY = "dramaturgy"
+VOICEOVER_GEN_ROLE_VOICEOVER_AUTHOR = "voiceover_author"
+VOICEOVER_GEN_ROLE_VOICEOVER_REVIEW = "voiceover_review"
+VOICEOVER_GEN_ROLE_INTRO = "intro"
+VOICEOVER_GEN_ROLES = (
+    VOICEOVER_GEN_ROLE_STYLE_PROFILE,
+    VOICEOVER_GEN_ROLE_DRAMATURGY,
+    VOICEOVER_GEN_ROLE_VOICEOVER_AUTHOR,
+    VOICEOVER_GEN_ROLE_VOICEOVER_REVIEW,
+    VOICEOVER_GEN_ROLE_INTRO,
+)
+VOICEOVER_GEN_ROLE_LABELS = {
+    VOICEOVER_GEN_ROLE_STYLE_PROFILE: "Style Profile",
+    VOICEOVER_GEN_ROLE_DRAMATURGY: "Dramaturgie",
+    VOICEOVER_GEN_ROLE_VOICEOVER_AUTHOR: "Voice-over Autor",
+    VOICEOVER_GEN_ROLE_VOICEOVER_REVIEW: "Voice-over Review",
+    VOICEOVER_GEN_ROLE_INTRO: "Intro",
+}
+VOICEOVER_GEN_DEFAULT_PROVIDER = "anthropic"
+VOICEOVER_GEN_DEFAULT_MODEL = "claude-sonnet-5"
+
+# --- Project Brief: feste Auswahllisten ---
+BRIEF_LANGUAGE_CHOICES = ("DE", "EN", "FR", "ES", "PT", "IT")
+BRIEF_TONE_TAG_CHOICES = (
+    "cinematic",
+    "documentary",
+    "discovery",
+    "calm",
+    "dramatic",
+    "premium travel",
+    "mysterious",
+    "energetic",
+    "poetic but factual",
+    "high-end YouTube documentary",
+)
+BRIEF_NEGATIVE_RULE_NO_INVENTED_FACTS = "no_invented_facts"
+BRIEF_NEGATIVE_RULE_NO_EXAGGERATED_SUPERLATIVES = "no_exaggerated_superlatives"
+BRIEF_NEGATIVE_RULE_NO_CLICKBAIT_PHRASES = "no_clickbait_phrases"
+BRIEF_NEGATIVE_RULE_NO_REPETITION = "no_repetition"
+BRIEF_NEGATIVE_RULE_NO_DIRECT_VIEWER_ADDRESS = "no_direct_viewer_address"
+BRIEF_NEGATIVE_RULE_NO_IN_THIS_VIDEO_PHRASING = "no_in_this_video_phrasing"
+BRIEF_NEGATIVE_RULE_NO_UNVERIFIED_HISTORICAL_CLAIMS = "no_unverified_historical_claims"
+BRIEF_NEGATIVE_RULE_NOT_JUST_ASSET_DESCRIPTIONS = "not_just_asset_descriptions"
+BRIEF_NEGATIVE_RULE_DOCUMENTARY_PROSE_REQUIRED = "documentary_prose_required"
+BRIEF_NEGATIVE_RULE_FLAGS = (
+    BRIEF_NEGATIVE_RULE_NO_INVENTED_FACTS,
+    BRIEF_NEGATIVE_RULE_NO_EXAGGERATED_SUPERLATIVES,
+    BRIEF_NEGATIVE_RULE_NO_CLICKBAIT_PHRASES,
+    BRIEF_NEGATIVE_RULE_NO_REPETITION,
+    BRIEF_NEGATIVE_RULE_NO_DIRECT_VIEWER_ADDRESS,
+    BRIEF_NEGATIVE_RULE_NO_IN_THIS_VIDEO_PHRASING,
+    BRIEF_NEGATIVE_RULE_NO_UNVERIFIED_HISTORICAL_CLAIMS,
+    BRIEF_NEGATIVE_RULE_NOT_JUST_ASSET_DESCRIPTIONS,
+    BRIEF_NEGATIVE_RULE_DOCUMENTARY_PROSE_REQUIRED,
+)
+BRIEF_NEGATIVE_RULE_LABELS = {
+    BRIEF_NEGATIVE_RULE_NO_INVENTED_FACTS: "Keine erfundenen Fakten",
+    BRIEF_NEGATIVE_RULE_NO_EXAGGERATED_SUPERLATIVES: "Keine übertriebenen Superlative",
+    BRIEF_NEGATIVE_RULE_NO_CLICKBAIT_PHRASES: "Keine Clickbait-Floskeln",
+    BRIEF_NEGATIVE_RULE_NO_REPETITION: "Keine Wiederholungen",
+    BRIEF_NEGATIVE_RULE_NO_DIRECT_VIEWER_ADDRESS: "Keine direkte Zuschaueransprache",
+    BRIEF_NEGATIVE_RULE_NO_IN_THIS_VIDEO_PHRASING: 'Keine Formulierungen wie "in diesem Video"',
+    BRIEF_NEGATIVE_RULE_NO_UNVERIFIED_HISTORICAL_CLAIMS: "Keine unbelegten historischen Behauptungen",
+    BRIEF_NEGATIVE_RULE_NOT_JUST_ASSET_DESCRIPTIONS: "Nicht nur Assetbeschreibungen",
+    BRIEF_NEGATIVE_RULE_DOCUMENTARY_PROSE_REQUIRED: "Text muss wie echte Doku-Prosa klingen",
+}
+DEFAULT_NEGATIVE_RULE_FLAGS: dict[str, bool] = {flag: True for flag in BRIEF_NEGATIVE_RULE_FLAGS}
 MODEL_COMPARISON_SUBDIR = "model_comparison_runs"
 MODEL_COMPARISON_SUMMARY_FILENAME = "model_comparison_summary.json"
 MODEL_COMPARISON_PRESETS: dict[str, tuple[str, ...]] = {

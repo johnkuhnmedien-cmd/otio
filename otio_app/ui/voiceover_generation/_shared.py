@@ -49,3 +49,16 @@ def render_placeholder_page(
 def get_active_voiceover_gen_project() -> Project | None:
     """Hilfsfunktion für spätere Phasen — identisch zur bestehenden Projekt-Auswahl."""
     return render_project_selector("Projekt")
+
+
+def require_without_voiceover_mode(project: Project) -> bool:
+    """Zeigt eine Warnung und liefert False, wenn das Projekt nicht im Modus
+    "ohne Voice-Over" ist. Aufrufer dürfen dann nichts schreiben."""
+    if project.project_mode != ProjectMode.WITHOUT_VOICEOVER:
+        st.warning(
+            "Dieses Projekt ist auf „Projekt mit Voice-Over“ eingestellt. "
+            "Diese Seite gehört zur Pipeline „Projekt ohne Voice-Over“ und "
+            "speichert hier nichts."
+        )
+        return False
+    return True

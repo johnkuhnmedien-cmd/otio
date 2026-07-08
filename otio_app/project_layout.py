@@ -137,6 +137,26 @@ def get_voiceover_style_references_path(work_dir: Path) -> Path:
     return get_voiceover_generation_dir(work_dir) / VOICEOVER_STYLE_REFERENCES_FILENAME
 
 
+def get_style_references_dir(work_dir: Path) -> Path:
+    """Verzeichnis für hochgeladene Style-Referenz-Rohtexte (Audit, nicht die Quelle der Wahrheit)."""
+    from otio_app.defaults import STYLE_REFERENCES_SUBDIR
+
+    return get_voiceover_generation_dir(work_dir) / STYLE_REFERENCES_SUBDIR
+
+
+def get_style_references_uploads_dir(work_dir: Path) -> Path:
+    from otio_app.defaults import STYLE_REFERENCES_UPLOADS_SUBDIR
+
+    return get_style_references_dir(work_dir) / STYLE_REFERENCES_UPLOADS_SUBDIR
+
+
+def get_model_settings_path(work_dir: Path) -> Path:
+    """Provider-/Modell-Einstellungen pro Rolle (style_profile, dramaturgy, …)."""
+    from otio_app.defaults import MODEL_SETTINGS_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / MODEL_SETTINGS_FILENAME
+
+
 def get_voiceover_style_profile_path(work_dir: Path) -> Path:
     from otio_app.defaults import VOICEOVER_STYLE_PROFILE_FILENAME
 
