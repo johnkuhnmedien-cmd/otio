@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from otio_app.services.voiceover_generation.models import (
+    FolderInventorySummary,
     ProjectBrief,
+    VoiceoverStyleProfile,
     VoiceoverStyleReferences,
 )
-from otio_app.services.voiceover_generation.prompts import build_style_profile_prompt
+from otio_app.services.voiceover_generation.prompts import (
+    build_dramaturgy_prompt,
+    build_style_profile_prompt,
+)
 
 
 def _sample_brief() -> ProjectBrief:
@@ -74,3 +79,101 @@ def test_prompt_handles_empty_references_gracefully() -> None:
     empty_refs = VoiceoverStyleReferences(project_id="p1")
     prompt = build_style_profile_prompt(_sample_brief(), empty_refs)
     assert "(keine)" in prompt
+
+
+# --- build_dramaturgy_prompt (Phase 3) ---
+
+
+def _sample_style_profile() -> VoiceoverStyleProfile:
+    return VoiceoverStyleProfile(
+        project_id="p1",
+        overall_tone="calm, cinematic",
+        style_summary_for_prompts="Calm, cinematic, third-person narration with sensory imagery.",
+    )
+
+
+def _sample_folder_summaries() -> list[FolderInventorySummary]:
+    return [
+        FolderInventorySummary(
+            folder_name="Grand Canyon",
+            asset_count=10,
+            video_count=8,
+            image_count=2,
+            visual_strength_score=0.9,
+            asset_diversity_score=0.8,
+            estimated_voiceover_word_count=140,
+            estimated_min_words=126,
+            estimated_max_words=154,
+            dominant_visual_themes=["schlucht", "sonnenuntergang"],
+        ),
+        FolderInventorySummary(
+            folder_name="Yellowstone",
+            asset_count=3,
+            video_count=1,
+            image_count=2,
+            visual_strength_score=0.4,
+            asset_diversity_score=0.3,
+            estimated_voiceover_word_count=65,
+            estimated_min_words=59,
+            estimated_max_words=72,
+            risks=["VERY_FEW_ASSETS"],
+        ),
+    ]
+
+
+def test_dramaturgy_prompt_contains_project_title() -> None:
+    prompt = build_dramaturgy_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        folder_summaries=_sample_folder_summaries(),
+    )
+    assert "Wunder der Wüste" in prompt
+
+
+def test_dramaturgy_prompt_contains_style_summary() -> None:
+    prompt = build_dramaturgy_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        folder_summaries=_sample_folder_summaries(),
+    )
+    assert "Calm, cinematic, third-person narration with sensory imagery." in prompt
+
+
+def test_dramaturgy_prompt_contains_all_folder_summaries() -> None:
+    prompt = build_dramaturgy_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        folder_summaries=_sample_folder_summaries(),
+    )
+    assert "Grand Canyon" in prompt
+    assert "Yellowstone" in prompt
+    assert "VERY_FEW_ASSETS" in prompt
+
+
+def test_dramaturgy_prompt_requests_json_only() -> None:
+    prompt = build_dramaturgy_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        folder_summaries=_sample_folder_summaries(),
+    )
+    assert "JSON ONLY" in prompt
+    assert "recommended_folder_order" in prompt
+
+
+def test_dramaturgy_prompt_does_not_sort_alphabetically_or_by_count() -> None:
+    prompt = build_dramaturgy_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        folder_summaries=_sample_folder_summaries(),
+    )
+    assert "Do NOT simply sort alphabetically" in prompt
+    assert "Do NOT simply sort by asset count" in prompt
+
+
+def test_dramaturgy_prompt_handles_missing_style_profile() -> None:
+    prompt = build_dramaturgy_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        folder_summaries=_sample_folder_summaries(),
+    )
+    assert "kein Style Profile vorhanden" in prompt

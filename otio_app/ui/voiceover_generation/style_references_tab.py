@@ -238,6 +238,7 @@ def render_style_references_page() -> None:
         # Aktuelle Formularwerte zuerst speichern, damit das Style Profile immer
         # aus dem tatsächlich gerade angezeigten Stand erzeugt wird.
         saved_refs = save_style_references(project, current_refs)
+        st.info("Aktuelle Referenzen wurden gespeichert und für das Style Profile verwendet.")
         brief = load_project_brief(project)
         settings = load_model_settings(project)
         with st.spinner("Style Profile wird erzeugt…"):

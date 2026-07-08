@@ -157,6 +157,13 @@ def get_model_settings_path(work_dir: Path) -> Path:
     return get_voiceover_generation_dir(work_dir) / MODEL_SETTINGS_FILENAME
 
 
+def get_folder_inventory_summaries_path(work_dir: Path) -> Path:
+    """Debug-Artefakt: alle pro-Ordner-Zusammenfassungen, die an das Dramaturgie-LLM gingen."""
+    from otio_app.defaults import FOLDER_INVENTORY_SUMMARIES_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / FOLDER_INVENTORY_SUMMARIES_FILENAME
+
+
 def get_voiceover_style_profile_path(work_dir: Path) -> Path:
     from otio_app.defaults import VOICEOVER_STYLE_PROFILE_FILENAME
 

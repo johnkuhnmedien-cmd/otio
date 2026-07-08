@@ -17,8 +17,15 @@ from otio_app.defaults import (
     BRIEF_NEGATIVE_RULE_LABELS,
     BRIEF_TONE_TAG_CHOICES,
     DEFAULT_NEGATIVE_RULE_FLAGS,
+    DRAMATURGY_ROLE_LABELS,
+    DRAMATURGY_ROLES,
+    DRAMATURGY_STATUS_CONFIRMED,
+    DRAMATURGY_STATUS_DRAFT,
     VOICEOVER_GEN_DEFAULT_MODEL,
     VOICEOVER_GEN_DEFAULT_PROVIDER,
+    VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT,
+    VOICEOVER_GEN_MAX_FOLDER_WORDS,
+    VOICEOVER_GEN_MIN_FOLDER_WORDS,
     VOICEOVER_GEN_MODEL_PRESETS,
     VOICEOVER_GEN_PROVIDERS,
     VOICEOVER_GEN_ROLE_LABELS,
@@ -31,8 +38,15 @@ __all__ = [
     "BRIEF_NEGATIVE_RULE_LABELS",
     "BRIEF_TONE_TAG_CHOICES",
     "DEFAULT_NEGATIVE_RULE_FLAGS",
+    "DRAMATURGY_ROLE_LABELS",
+    "DRAMATURGY_ROLES",
+    "DRAMATURGY_STATUS_CONFIRMED",
+    "DRAMATURGY_STATUS_DRAFT",
     "VOICEOVER_GEN_DEFAULT_MODEL",
     "VOICEOVER_GEN_DEFAULT_PROVIDER",
+    "VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT",
+    "VOICEOVER_GEN_MAX_FOLDER_WORDS",
+    "VOICEOVER_GEN_MIN_FOLDER_WORDS",
     "VOICEOVER_GEN_MODEL_PRESETS",
     "VOICEOVER_GEN_PROVIDERS",
     "VOICEOVER_GEN_ROLE_LABELS",
@@ -43,6 +57,10 @@ __all__ = [
     "LlmRoleSettings",
     "VoiceoverGenerationModelSettings",
     "LlmRunManifest",
+    "FolderInventorySummary",
+    "FolderInventorySummariesDocument",
+    "DramaturgyFolderEntry",
+    "DramaturgyPlan",
 ]
 
 
@@ -124,3 +142,71 @@ def as_str_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     return []
+
+
+class FolderInventorySummary(BaseModel):
+    """Reine Python-Aggregation aus dem Inventory — kein LLM-Call (Phase 3 §1)."""
+
+    folder_name: str
+    asset_count: int = 0
+    video_count: int = 0
+    image_count: int = 0
+    total_video_duration_sec: float = 0.0
+    average_video_duration_sec: float = 0.0
+    has_people: bool = False
+    has_motion: bool = False
+    has_wide_shots: bool = False
+    has_detail_shots: bool = False
+    has_establishing_shots: bool = False
+    dominant_visual_themes: list[str] = Field(default_factory=list)
+    notable_asset_descriptions: list[str] = Field(default_factory=list)
+    visual_strength_score: float = 0.0
+    asset_diversity_score: float = 0.0
+    estimated_voiceover_word_count: int = 0
+    estimated_min_words: int = 0
+    estimated_max_words: int = 0
+    risks: list[str] = Field(default_factory=list)
+
+
+class FolderInventorySummariesDocument(BaseModel):
+    """Debug-Artefakt: exakt das, was an das Dramaturgie-LLM ging."""
+
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    folder_summaries: list[FolderInventorySummary] = Field(default_factory=list)
+
+
+class DramaturgyFolderEntry(BaseModel):
+    folder_name: str
+    order_index: int
+    enabled: bool = True
+    dramaturgy_role: str = "setup"
+    reason: str = ""
+    visual_strength_score: float = 0.0
+    asset_diversity_score: float = 0.0
+    hook_potential_score: float = 0.0
+    recommended_word_count: int = 0
+    recommended_min_words: int = 0
+    recommended_max_words: int = 0
+    transition_goal_to_next: str = ""
+    transition_from_previous_hint: str = ""
+    contrast_or_commonality_hint: str = ""
+    risks: list[str] = Field(default_factory=list)
+
+
+class DramaturgyPlan(BaseModel):
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    confirmed_at: datetime | None = None
+    language: str = "DE"
+    project_title: str = ""
+    core_promise: str = ""
+    narrative_arc: str = ""
+    recommended_folder_order: list[DramaturgyFolderEntry] = Field(default_factory=list)
+    global_transition_strategy: str = ""
+    inventory_summary_hash: str = ""
+    project_brief_hash: str = ""
+    style_profile_hash: str = ""
+    llm_run_id: str = ""
+    status: str = DRAMATURGY_STATUS_DRAFT
+    risks: list[str] = Field(default_factory=list)

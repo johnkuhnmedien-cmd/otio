@@ -1,9 +1,16 @@
-"""Prompt-Builder für die Voice-over-Generierungs-Pipeline (Phase 2: Style Profile)."""
+"""Prompt-Builder für die Voice-over-Generierungs-Pipeline.
+
+Phase 2: build_style_profile_prompt()
+Phase 3: build_dramaturgy_prompt()
+"""
 
 from __future__ import annotations
 
 from otio_app.services.voiceover_generation.models import (
+    FolderInventorySummary,
     ProjectBrief,
+    VoiceoverGenerationModelSettings,
+    VoiceoverStyleProfile,
     VoiceoverStyleReferences,
 )
 
@@ -106,4 +113,127 @@ this shape:
 
 IMPORTANT: Do not copy phrases or sentences from the reference scripts. Extract \
 style characteristics only.
+"""
+
+
+def _folder_summary_block(summary: FolderInventorySummary) -> str:
+    themes = ", ".join(summary.dominant_visual_themes) or "-"
+    notable = "; ".join(summary.notable_asset_descriptions) or "-"
+    risks = ", ".join(summary.risks) or "-"
+    return (
+        f"[{summary.folder_name}]\n"
+        f"- asset_count: {summary.asset_count} (video: {summary.video_count}, "
+        f"image: {summary.image_count})\n"
+        f"- total_video_duration_sec: {summary.total_video_duration_sec}\n"
+        f"- visual_strength_score: {summary.visual_strength_score}\n"
+        f"- asset_diversity_score: {summary.asset_diversity_score}\n"
+        f"- has_people: {summary.has_people}, has_motion: {summary.has_motion}, "
+        f"has_wide_shots: {summary.has_wide_shots}, has_detail_shots: {summary.has_detail_shots}\n"
+        f"- dominant_visual_themes: {themes}\n"
+        f"- notable_asset_descriptions: {notable}\n"
+        f"- estimated_voiceover_word_count: {summary.estimated_voiceover_word_count} "
+        f"({summary.estimated_min_words}-{summary.estimated_max_words})\n"
+        f"- risks: {risks}"
+    )
+
+
+def build_dramaturgy_prompt(
+    *,
+    project_brief: ProjectBrief,
+    style_profile: VoiceoverStyleProfile | None,
+    folder_summaries: list[FolderInventorySummary],
+    model_settings: VoiceoverGenerationModelSettings | None = None,
+) -> str:
+    """Baut den Prompt zur Dramaturgieplanung über alle Ordner.
+
+    `model_settings` ist Teil der Signatur für API-Symmetrie mit den anderen
+    Rollen, wird aber aktuell nicht in den Prompt-Text eingebettet — welches
+    Modell aufgerufen wird, ist eine Aufrufer-Entscheidung, kein Prompt-Inhalt.
+    """
+    del model_settings
+
+    tone_tags = ", ".join(project_brief.tone_tags) or "(keine Angabe)"
+    active_negative_rules = ", ".join(
+        flag for flag, enabled in project_brief.negative_rule_flags.items() if enabled
+    ) or "(keine Angabe)"
+
+    style_block = "(kein Style Profile vorhanden — neutraler Standardstil)"
+    if style_profile is not None:
+        style_block = (
+            f"- overall_tone: {style_profile.overall_tone or '-'}\n"
+            f"- narration_style: {style_profile.narration_style or '-'}\n"
+            f"- pacing: {style_profile.pacing or '-'}\n"
+            f"- intro_hook_style: {style_profile.intro_hook_style or '-'}\n"
+            f"- style_summary_for_prompts: {style_profile.style_summary_for_prompts or '-'}"
+        )
+
+    folders_block = (
+        "\n\n".join(_folder_summary_block(summary) for summary in folder_summaries)
+        or "(keine Ordner-Zusammenfassungen verfügbar)"
+    )
+
+    return f"""You are a documentary story editor. Plan the DRAMATURGY (narrative \
+structure) of a travel/nature documentary across multiple locations (folders). \
+This is NOT about describing assets — it is about ORDER, TENSION ARC, and the \
+ROLE each location plays in the overall video.
+
+## Project
+- Project title: {project_brief.video_title or "(untitled)"}
+- Target language: {project_brief.language}
+- Desired tone tags: {tone_tags}
+- Active negative rules: {active_negative_rules}
+- Additional editor instructions: {project_brief.global_extra_prompt or "(none)"}
+
+## Style Profile (already extracted — do not re-derive, just respect it)
+{style_block}
+
+## Location / folder summaries (one per location)
+{folders_block}
+
+## Task
+Decide, for the whole set of locations above:
+- Which location works best as the OPENER (hooks attention immediately)?
+- Where does a CONTRAST between locations create interest?
+- Which location works as the CLIMAX / escalation point?
+- Which location works as a calm RESOLUTION / closer?
+- What is the most compelling overall narrative arc connecting them?
+- For EACH location: its role, a short reason, recommended word count for its \
+voice-over section, and a transition idea toward the NEXT location.
+
+Do NOT simply sort alphabetically. Do NOT simply sort by asset count. Consider \
+visual strength, diversity, hook potential, contrasts between locations, and the \
+overall narrative arc.
+
+Respond with JSON ONLY, no markdown code fences, no commentary, matching exactly \
+this shape:
+
+{{
+  "project_title": "...",
+  "core_promise": "...",
+  "narrative_arc": "...",
+  "global_transition_strategy": "...",
+  "recommended_folder_order": [
+    {{
+      "folder_name": "...",
+      "order_index": 1,
+      "enabled": true,
+      "dramaturgy_role": "opener|setup|contrast|escalation|climax|resolution",
+      "reason": "...",
+      "visual_strength_score": 0.0,
+      "asset_diversity_score": 0.0,
+      "hook_potential_score": 0.0,
+      "recommended_word_count": 90,
+      "recommended_min_words": 80,
+      "recommended_max_words": 100,
+      "transition_goal_to_next": "...",
+      "transition_from_previous_hint": "...",
+      "contrast_or_commonality_hint": "...",
+      "risks": []
+    }}
+  ],
+  "risks": []
+}}
+
+Include exactly one entry per location listed above, using the EXACT folder_name \
+values given. order_index must be unique and start at 1.
 """
