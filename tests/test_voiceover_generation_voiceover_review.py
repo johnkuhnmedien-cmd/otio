@@ -275,6 +275,30 @@ def test_llm_traceability_writes_voiceover_correction_run(tmp_path: Path) -> Non
     assert manifest["stage"] == "voiceover_correction"
 
 
+def test_unknown_llm_review_error_type_is_kept_as_warning(tmp_path: Path) -> None:
+    """Hardening: ein unbekannter Fehlertyp vom Review-LLM darf nicht mehr
+    stillschweigend verworfen werden — er wird als UNKNOWN_LLM_REVIEW_ERROR
+    mit Severity WARNING gespeichert (kein Blocker, Loop kann trotzdem PASSen)."""
+    project = _make_project(tmp_path)
+    _generate_draft(project)
+
+    unknown_error = [{"type": "SOME_MADE_UP_TYPE", "severity": "BLOCKER", "message": "x"}]
+    with patch(f"{_REVIEW_MODULE}.generate_plan_text_with_metadata", return_value=_review_response(unknown_error)):
+        report = run_folder_voiceover_review_loop(
+            project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5"
+        )
+
+    # Kein Silent Drop: der unbekannte Typ taucht in errors ODER warnings auf.
+    all_seen_types = {error.type for error in report.errors} | {
+        warning.type for warning in report.warnings
+    }
+    assert "UNKNOWN_LLM_REVIEW_ERROR" in all_seen_types
+    # Da UNKNOWN_LLM_REVIEW_ERROR als WARNING (nicht BLOCKER) gespeichert wird,
+    # blockiert es den PASS-Status nicht.
+    assert report.status == "PASS"
+    assert any("SOME_MADE_UP_TYPE" in warning.message for warning in report.warnings)
+
+
 def test_validation_report_saved_to_disk(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     _generate_draft(project)

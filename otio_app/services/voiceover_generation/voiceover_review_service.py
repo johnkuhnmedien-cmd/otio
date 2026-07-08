@@ -19,6 +19,7 @@ from otio_app.defaults import (
     VO_ERROR_MISSING_CONTRAST_OR_COMMONALITY,
     VO_ERROR_MISSING_TRANSITION,
     VO_ERROR_TYPES_LLM_REVIEW,
+    VO_ERROR_UNKNOWN_LLM_REVIEW_ERROR,
     VO_ERROR_WORD_COUNT_OUT_OF_RANGE,
     VOICEOVER_STATUS_CONFIRMED,
     VOICEOVER_STATUS_NEEDS_USER_REVIEW,
@@ -178,26 +179,48 @@ def run_deterministic_checks(
 
 
 def _parse_llm_review_errors(raw_errors: Any, folder_name: str) -> list[ValidationError]:
+    """Parst die Fehlerliste aus dem Review-LLM.
+
+    Unbekannte Fehlertypen werden NICHT stillschweigend verworfen (Hardening
+    nach Phase 4) — sie werden als UNKNOWN_LLM_REVIEW_ERROR mit Severity
+    WARNING gespeichert, damit sie in der UI sichtbar bleiben und kein
+    Modellverhalten unbemerkt verloren geht."""
     errors: list[ValidationError] = []
     if not isinstance(raw_errors, list):
         return errors
     for raw in raw_errors:
         if not isinstance(raw, dict):
             continue
-        error_type = str(raw.get("type", "")).strip().upper()
-        if error_type not in VO_ERROR_TYPES_LLM_REVIEW:
-            continue  # nur die angefragten weichen Kriterien akzeptieren
+        raw_type = str(raw.get("type", "")).strip()
+        error_type = raw_type.upper()
         severity = str(raw.get("severity", "WARNING")).strip().upper()
         if severity not in {"WARNING", "BLOCKER"}:
             severity = "WARNING"
+        sentence_id = str(raw.get("sentence_id", ""))
+        fix_hint = str(raw.get("fix_hint", ""))
+
+        if error_type not in VO_ERROR_TYPES_LLM_REVIEW:
+            errors.append(
+                ValidationError(
+                    type=VO_ERROR_UNKNOWN_LLM_REVIEW_ERROR,
+                    severity="WARNING",
+                    folder_name=folder_name,
+                    sentence_id=sentence_id,
+                    message=f"LLM returned unknown review error type: {raw_type or '(empty)'}",
+                    fix_hint=fix_hint,
+                    retryable=False,
+                )
+            )
+            continue
+
         errors.append(
             ValidationError(
                 type=error_type,
                 severity=severity,
                 folder_name=folder_name,
-                sentence_id=str(raw.get("sentence_id", "")),
+                sentence_id=sentence_id,
                 message=str(raw.get("message", "")),
-                fix_hint=str(raw.get("fix_hint", "")),
+                fix_hint=fix_hint,
             )
         )
     return errors

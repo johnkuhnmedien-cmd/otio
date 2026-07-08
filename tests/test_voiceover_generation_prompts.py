@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from otio_app.services.voiceover_generation.models import (
     DramaturgyFolderEntry,
+    DramaturgyPlan,
     FolderInventorySummary,
     FolderVoiceoverDraft,
     FolderVoiceoverSetting,
+    IntroHookSettings,
     ProjectBrief,
     SentenceItem,
     ValidationError,
@@ -16,6 +18,7 @@ from otio_app.services.voiceover_generation.models import (
 from otio_app.services.voiceover_generation.prompts import (
     build_dramaturgy_prompt,
     build_folder_voiceover_prompt,
+    build_intro_hook_prompt,
     build_style_profile_prompt,
     build_voiceover_correction_prompt,
     build_voiceover_review_prompt,
@@ -341,3 +344,136 @@ def test_voiceover_correction_prompt_contains_original_text_and_errors() -> None
     assert "Zwischen den roten Felswänden" in prompt
     assert "TOO_ASSET_DESCRIPTIVE" in prompt
     assert "Klingt wie eine Assetbeschreibung." in prompt
+
+
+# --- build_intro_hook_prompt (Phase 5) ---
+
+
+def _sample_intro_settings() -> IntroHookSettings:
+    return IntroHookSettings(project_id="p1", target_words=70, min_words=60, max_words=80)
+
+
+def _sample_dramaturgy_plan() -> DramaturgyPlan:
+    return DramaturgyPlan(
+        project_id="p1",
+        narrative_arc="Von ruhig zu überwältigend.",
+        core_promise="Eine Reise durch die eindrucksvollsten Naturwunder.",
+        recommended_folder_order=[
+            DramaturgyFolderEntry(folder_name="Grand Canyon", order_index=1, dramaturgy_role="opener"),
+            DramaturgyFolderEntry(folder_name="Yellowstone", order_index=2, dramaturgy_role="climax"),
+        ],
+    )
+
+
+def _sample_confirmed_folder_voiceovers() -> list[FolderVoiceoverDraft]:
+    return [
+        FolderVoiceoverDraft(
+            project_id="p1",
+            folder_name="Grand Canyon",
+            order_index=1,
+            voiceover_text_full="Zwischen den roten Felswänden scheint das Licht von innen zu leuchten.",
+            word_count=11,
+            sentence_items=[
+                SentenceItem(
+                    sentence_id="sentence_001",
+                    text="Zwischen den roten Felswänden scheint das Licht von innen zu leuchten.",
+                    primary_asset_id="asset_clip1",
+                )
+            ],
+        ),
+        FolderVoiceoverDraft(
+            project_id="p1",
+            folder_name="Yellowstone",
+            order_index=2,
+            voiceover_text_full="Heiße Quellen brodeln unter einem Himmel aus Dampf.",
+            word_count=8,
+            sentence_items=[
+                SentenceItem(
+                    sentence_id="sentence_001",
+                    text="Heiße Quellen brodeln unter einem Himmel aus Dampf.",
+                    primary_asset_id="asset_geyser1",
+                )
+            ],
+        ),
+    ]
+
+
+def test_intro_hook_prompt_contains_project_title() -> None:
+    prompt = build_intro_hook_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        dramaturgy_plan=_sample_dramaturgy_plan(),
+        confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
+        settings=_sample_intro_settings(),
+    )
+    assert "Wunder der Wüste" in prompt
+
+
+def test_intro_hook_prompt_contains_style_summary() -> None:
+    style_profile = _sample_style_profile()
+    prompt = build_intro_hook_prompt(
+        project_brief=_sample_brief(),
+        style_profile=style_profile,
+        dramaturgy_plan=_sample_dramaturgy_plan(),
+        confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
+        settings=_sample_intro_settings(),
+    )
+    assert style_profile.style_summary_for_prompts in prompt
+
+
+def test_intro_hook_prompt_contains_confirmed_folder_voiceovers() -> None:
+    prompt = build_intro_hook_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_plan=_sample_dramaturgy_plan(),
+        confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
+        settings=_sample_intro_settings(),
+    )
+    assert "Zwischen den roten Felswänden scheint das Licht von innen zu leuchten." in prompt
+    assert "Heiße Quellen brodeln unter einem Himmel aus Dampf." in prompt
+
+
+def test_intro_hook_prompt_contains_sentence_items() -> None:
+    prompt = build_intro_hook_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_plan=_sample_dramaturgy_plan(),
+        confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
+        settings=_sample_intro_settings(),
+    )
+    assert "sentence_001" in prompt
+    assert "asset_clip1" in prompt
+    assert "asset_geyser1" in prompt
+
+
+def test_intro_hook_prompt_requests_exactly_5_candidates() -> None:
+    prompt = build_intro_hook_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_plan=_sample_dramaturgy_plan(),
+        confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
+        settings=_sample_intro_settings(),
+    )
+    assert "EXACTLY 5" in prompt
+
+
+def test_intro_hook_prompt_contains_do_not_merely_summarize() -> None:
+    prompt = build_intro_hook_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_plan=_sample_dramaturgy_plan(),
+        confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
+        settings=_sample_intro_settings(),
+    )
+    assert "Do not merely summarize" in prompt
+
+
+def test_intro_hook_prompt_forbids_inventing_asset_ids() -> None:
+    prompt = build_intro_hook_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_plan=_sample_dramaturgy_plan(),
+        confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
+        settings=_sample_intro_settings(),
+    )
+    assert "Do not invent asset IDs" in prompt

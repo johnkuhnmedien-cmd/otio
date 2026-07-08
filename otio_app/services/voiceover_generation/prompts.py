@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from otio_app.services.voiceover_generation.models import (
     DramaturgyFolderEntry,
+    DramaturgyPlan,
     FolderInventorySummary,
     FolderVoiceoverDraft,
     FolderVoiceoverSetting,
+    IntroHookSettings,
     ProjectBrief,
     ValidationError,
     VoiceoverGenerationModelSettings,
@@ -570,5 +572,159 @@ same shape as before:
   "callback_to_previous_used": false,
   "contrast_or_commonality_used": false,
   "risks": []
+}}
+"""
+
+
+def _folder_voiceover_block(
+    entry: DramaturgyFolderEntry | None,
+    draft: FolderVoiceoverDraft,
+    inventory_assets: list[dict],
+) -> str:
+    role = entry.dramaturgy_role if entry is not None else "-"
+    sentence_lines = "\n".join(
+        f"    - sentence_id={item.sentence_id} primary_asset_id={item.primary_asset_id or '(none)'}: {item.text}"
+        for item in draft.sentence_items
+    ) or "    (keine sentence_items)"
+    inventory_lines = "\n".join(
+        f"    - asset_id: {asset.get('asset_id', '')} | type: {asset.get('media_type', '?')} "
+        f"| description: {asset.get('description', '')}"
+        for asset in inventory_assets
+    ) or "    (kein zusätzliches Inventory verfügbar)"
+    return (
+        f"[{draft.folder_name}] (dramaturgy_role: {role})\n"
+        f"  Full voice-over text:\n  {draft.voiceover_text_full}\n"
+        f"  Sentence/beat breakdown:\n{sentence_lines}\n"
+        f"  Additional inventory for this location (for supplement options):\n{inventory_lines}"
+    )
+
+
+def build_intro_hook_prompt(
+    *,
+    project_brief: ProjectBrief,
+    style_profile: VoiceoverStyleProfile | None,
+    dramaturgy_plan: DramaturgyPlan,
+    confirmed_folder_voiceovers: list[FolderVoiceoverDraft],
+    settings: IntroHookSettings,
+    inventory_by_folder: dict[str, list[dict]] | None = None,
+) -> str:
+    """Baut den Prompt zur Erzeugung von genau 5 Intro-Hook-Kandidaten.
+
+    Fordert echte Doku-Prosa (kein Assetlisten-Stil, keine reine
+    Zusammenfassung) UND eine vollständige visuelle Zuordnung (visual_beats)
+    für jeden Kandidaten im selben JSON-Response."""
+    inventory_by_folder = inventory_by_folder or {}
+    entries_by_folder = {entry.folder_name: entry for entry in dramaturgy_plan.recommended_folder_order}
+
+    tone_tags = ", ".join(project_brief.tone_tags) or "(keine Angabe)"
+    active_negative_rules = ", ".join(
+        flag for flag, enabled in project_brief.negative_rule_flags.items() if enabled
+    ) or "(keine Angabe)"
+    forbidden_phrases = list(project_brief.forbidden_phrases)
+    if style_profile is not None:
+        forbidden_phrases.extend(style_profile.forbidden_phrases)
+    forbidden_phrases.extend(settings.forbidden_phrases)
+    forbidden_phrases.extend(settings.must_avoid)
+    forbidden_block = "\n".join(f"- {phrase}" for phrase in forbidden_phrases) or "(keine)"
+
+    folder_blocks = "\n\n".join(
+        _folder_voiceover_block(
+            entries_by_folder.get(draft.folder_name), draft, inventory_by_folder.get(draft.folder_name, [])
+        )
+        for draft in confirmed_folder_voiceovers
+    ) or "(keine bestätigten Folder Voice-overs verfügbar)"
+
+    must_include_block = ", ".join(settings.must_include) or "(keine Angabe)"
+
+    return f"""You are a documentary editor writing the OPENING HOOK for a \
+multi-location travel/nature documentary. You have all confirmed location \
+voice-overs available below.
+
+Do not merely summarize the folder voice-overs. Create a strong documentary \
+opening hook.
+
+Do not invent asset IDs. Use only asset IDs present in the provided confirmed \
+sentence_items or inventory summaries below.
+
+## Project
+- Project title: {project_brief.video_title or "(untitled)"}
+- Target language: {settings.language or project_brief.language}
+- Desired tone tags: {tone_tags}
+- Hook tone (from settings): {settings.tone}
+- Active global negative rules: {active_negative_rules}
+- Forbidden phrases (global + style + hook settings):
+{forbidden_block}
+- Core narrative arc: {dramaturgy_plan.narrative_arc or "-"}
+- Core promise: {dramaturgy_plan.core_promise or "-"}
+
+## Style Profile (respect it — do not copy any reference text)
+{_style_summary_block(style_profile)}
+
+## Hook rules for this project
+- allow_questions: {settings.allow_questions}
+- allow_strong_claim: {settings.allow_strong_claim}
+- allow_direct_place_name: {settings.allow_direct_place_name}
+- allow_tease_multiple_places: {settings.allow_tease_multiple_places}
+- must include (topics/ideas, not literal phrases): {must_include_block}
+- editor's extra instructions: {settings.freeform_rule_for_llm or "(none)"}
+- target_words: {settings.target_words} (min {settings.min_words}, max {settings.max_words})
+
+## All confirmed location voice-overs (source material for the hook)
+{folder_blocks}
+
+## Task
+Analyze all locations above and decide:
+- Which location has the STRONGEST hook potential?
+- Which CONTRAST between locations works best as an opener?
+- What OPEN QUESTION creates suspense?
+- Which visual motif works best as an entry point?
+- Which COMBINATION of locations creates the strongest opening?
+- Which hook best matches the desired documentary style?
+
+Produce EXACTLY 5 hook candidates (exactly 5, no more, no fewer), each a \
+distinct strategic approach (e.g. mystery, contrast, surprise, \
+cinematic_promise, question, emotional). Each hook must read like real \
+documentary prose — never like a list of assets or a plot summary.
+
+For each candidate, also provide visual_beats: a full sentence/beat-to-asset \
+breakdown of the hook text itself, exactly like the folder voice-over sentence \
+breakdown above. Each visual_beat's primary_asset_id MUST be an asset_id taken \
+from the sentence_items or inventory listed above — either reference an \
+existing sentence_id from a folder (source_sentence_id) if you reuse that \
+moment, or reference a fitting inventory asset_id directly. If nothing fits, \
+set primary_asset_id to "", needs_supplement_asset=true, and give a concrete \
+supplement_reason.
+
+Respond with JSON ONLY, no markdown code fences, no commentary, matching exactly \
+this shape:
+
+{{
+  "candidates": [
+    {{
+      "hook_id": "hook_001",
+      "hook_text": "...",
+      "hook_type": "mystery|contrast|surprise|cinematic_promise|question|emotional",
+      "used_folders": [],
+      "used_sentence_ids": [],
+      "visual_beats": [
+        {{
+          "hook_beat_id": "hook_beat_001",
+          "text": "...",
+          "visual_intent": "...",
+          "source_folder_name": "...",
+          "source_sentence_id": "",
+          "primary_asset_id": "...",
+          "backup_asset_ids": [],
+          "asset_match_reason": "...",
+          "asset_confidence": 0.0,
+          "needs_supplement_asset": false,
+          "supplement_reason": ""
+        }}
+      ],
+      "hook_potential_score": 0.0,
+      "reason": "...",
+      "risks": []
+    }}
+  ]
 }}
 """

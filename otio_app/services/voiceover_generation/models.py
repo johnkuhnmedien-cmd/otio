@@ -27,6 +27,12 @@ from otio_app.defaults import (
     FACTUALITY_MODE_CHOICES,
     FACTUALITY_MODE_LABELS,
     FACTUALITY_MODE_NORMAL_SAFE_GENERAL_KNOWLEDGE,
+    INTRO_HOOK_DEFAULT_MAX_WORDS,
+    INTRO_HOOK_DEFAULT_MIN_WORDS,
+    INTRO_HOOK_DEFAULT_TARGET_WORDS,
+    INTRO_HOOK_STATUS_CONFIRMED,
+    INTRO_HOOK_STATUS_DRAFT,
+    INTRO_HOOK_TYPE_CINEMATIC_PROMISE,
     MAX_VOICEOVER_REVIEW_ATTEMPTS,
     VO_ERROR_TYPES_ALL,
     VO_ERROR_TYPES_DETERMINISTIC,
@@ -91,6 +97,11 @@ __all__ = [
     "ValidationError",
     "FolderVoiceoverValidationReport",
     "FolderVoiceoverValidationReportsDocument",
+    "IntroHookSettings",
+    "IntroHookVisualBeat",
+    "IntroHookCandidate",
+    "IntroHookCandidatesDocument",
+    "ConfirmedIntroHook",
 ]
 
 
@@ -370,3 +381,88 @@ class FolderVoiceoverValidationReportsDocument(BaseModel):
     project_id: str
     generated_at: datetime = Field(default_factory=_utcnow)
     reports: dict[str, FolderVoiceoverValidationReport] = Field(default_factory=dict)
+
+
+# --- Phase 5: Intro-Hook ---
+
+
+class IntroHookSettings(BaseModel):
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    language: str = "DE"
+    target_words: int = INTRO_HOOK_DEFAULT_TARGET_WORDS
+    min_words: int = INTRO_HOOK_DEFAULT_MIN_WORDS
+    max_words: int = INTRO_HOOK_DEFAULT_MAX_WORDS
+    word_tolerance_percent: int = VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT
+    tone: str = "cinematic"
+    freeform_rule_for_llm: str = ""
+    forbidden_phrases: list[str] = Field(default_factory=list)
+    allow_questions: bool = True
+    allow_strong_claim: bool = True
+    allow_direct_place_name: bool = True
+    allow_tease_multiple_places: bool = True
+    must_include: list[str] = Field(default_factory=list)
+    must_avoid: list[str] = Field(default_factory=list)
+
+
+class IntroHookVisualBeat(BaseModel):
+    """Visuelle Zuordnung für einen Teil des Intro-Hooks — der Schnittplan
+    (spätere Phase) muss wissen, welche Assets im Intro verwendet werden."""
+
+    hook_beat_id: str
+    text: str = ""
+    visual_intent: str = ""
+    source_folder_name: str = ""
+    source_sentence_id: str = ""
+    primary_asset_id: str = ""
+    backup_asset_ids: list[str] = Field(default_factory=list)
+    asset_match_reason: str = ""
+    asset_confidence: float = 0.0
+    needs_supplement_asset: bool = False
+    supplement_reason: str = ""
+
+
+class IntroHookCandidate(BaseModel):
+    hook_id: str
+    hook_text: str = ""
+    word_count: int = 0
+    hook_type: str = INTRO_HOOK_TYPE_CINEMATIC_PROMISE
+    used_folders: list[str] = Field(default_factory=list)
+    used_sentence_ids: list[str] = Field(default_factory=list)
+    visual_beats: list[IntroHookVisualBeat] = Field(default_factory=list)
+    hook_potential_score: float = 0.0
+    reason: str = ""
+    risks: list[str] = Field(default_factory=list)
+
+
+class IntroHookCandidatesDocument(BaseModel):
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    language: str = "DE"
+    target_words: int = INTRO_HOOK_DEFAULT_TARGET_WORDS
+    min_words: int = INTRO_HOOK_DEFAULT_MIN_WORDS
+    max_words: int = INTRO_HOOK_DEFAULT_MAX_WORDS
+    candidates: list[IntroHookCandidate] = Field(default_factory=list)
+    llm_run_id: str = ""
+    status: str = INTRO_HOOK_STATUS_DRAFT  # DRAFT|READY|PARSE_FAILED|FAIL
+    # Additiv über die Vorgabe hinaus: dokumentiert z. B. eine abweichende
+    # Kandidatenanzahl (siehe intro_hook_service — bewusste Entscheidung §12.18).
+    risks: list[str] = Field(default_factory=list)
+
+
+class ConfirmedIntroHook(BaseModel):
+    project_id: str
+    confirmed_at: datetime = Field(default_factory=_utcnow)
+    language: str = "DE"
+    hook_id: str
+    hook_text: str = ""
+    word_count: int = 0
+    hook_type: str = ""
+    used_folders: list[str] = Field(default_factory=list)
+    used_sentence_ids: list[str] = Field(default_factory=list)
+    visual_beats: list[IntroHookVisualBeat] = Field(default_factory=list)
+    hook_potential_score: float = 0.0
+    reason: str = ""
+    llm_run_id: str = ""
+    status: str = INTRO_HOOK_STATUS_CONFIRMED
+    risks: list[str] = Field(default_factory=list)
