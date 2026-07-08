@@ -47,6 +47,10 @@ from otio_app.defaults import (
     PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_BLOCKED,
     PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_NOT_READY,
     PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_READY,
+    PRODUCTION_EDIT_PLAN_PIPELINE_OVERALL_STATUS_BLOCKED,
+    PRODUCTION_EDIT_PLAN_PIPELINE_OVERALL_STATUS_COMPLETE,
+    PRODUCTION_EDIT_PLAN_PIPELINE_OVERALL_STATUS_IN_PROGRESS,
+    PRODUCTION_EDIT_PLAN_PIPELINE_OVERALL_STATUS_NOT_STARTED,
     VOICE_FOLDER_MAPPING_MERGE_MANIFEST_STATUS_BLOCKED,
     VOICE_FOLDER_MAPPING_MERGE_MANIFEST_STATUS_MERGED,
     VOICE_FOLDER_MAPPING_MERGE_RESOLUTION_APPLY,
@@ -177,6 +181,9 @@ from otio_app.services.voiceover_generation.production_edit_plan_otio_export_rea
     build_otio_export_readiness_report,
     load_otio_export_readiness_report,
     save_otio_export_readiness_report,
+)
+from otio_app.services.voiceover_generation.production_edit_plan_pipeline_overview import (
+    build_production_edit_plan_pipeline_overview,
 )
 from otio_app.services.voiceover_generation.production_edit_plan_promote_readiness import (
     build_production_edit_plan_promote_dry_run_trace,
@@ -1185,6 +1192,55 @@ def _render_production_plan_readonly_hint(project: Project, section: object) -> 
     )
 
 
+def _render_production_edit_plan_pipeline_overview(project: Project) -> None:
+    """Phase 10.9: Gesamt-Übersichts-Dashboard — rein lesende, live
+    berechnete Aggregation des Status aller Phasen (Staging/Validation/
+    Promote-Readiness/Promote/Voice-Folder-Mapping-Merge/OTIO-Export-
+    Readiness). Kein neues Artefakt, kein Seiteneffekt. Bewusst als
+    EIGENSTÄNDIGER Abschnitt VOR „Production EditPlan Staging“ platziert
+    (nicht als verschachtelter Aufruf innerhalb dieser Funktion), damit
+    Build-/Validate-/Promote-Button-Handler dieser und nachgelagerter
+    Abschnitte unberührt bleiben."""
+    st.subheader("Production EditPlan Pipeline — Übersicht")
+    st.caption(
+        "Gesamt-Status aller Phasen auf einen Blick — rein lesend, keine Aktion, kein neues Artefakt."
+    )
+    overview = build_production_edit_plan_pipeline_overview(project)
+
+    overall_status_label = {
+        PRODUCTION_EDIT_PLAN_PIPELINE_OVERALL_STATUS_NOT_STARTED: "⚪ Noch nicht gestartet",
+        PRODUCTION_EDIT_PLAN_PIPELINE_OVERALL_STATUS_IN_PROGRESS: "🔵 In Bearbeitung",
+        PRODUCTION_EDIT_PLAN_PIPELINE_OVERALL_STATUS_BLOCKED: "❌ Blockiert",
+        PRODUCTION_EDIT_PLAN_PIPELINE_OVERALL_STATUS_COMPLETE: "✅ Vollständig durchlaufen",
+    }.get(overview.overall_status, overview.overall_status)
+
+    st.markdown(f"**Gesamt-Status: {overall_status_label}**")
+
+    columns = st.columns(len(overview.stages))
+    for column, stage in zip(columns, overview.stages):
+        with column:
+            if not stage.exists:
+                st.metric(stage.label, "—")
+            else:
+                stage_label = stage.status
+                if stage.is_stale:
+                    stage_label = f"{stage_label} ⚠️"
+                st.metric(stage.label, stage_label)
+            st.caption(stage.detail)
+
+    if any(stage.is_stale for stage in overview.stages if stage.exists):
+        st.warning(
+            "Mindestens eine Phase ist veraltet (⚠️) — bitte die betroffene Phase unten erneut ausführen, "
+            "bevor du dich auf nachgelagerte Phasen verlässt."
+        )
+
+    not_started_stages = [stage for stage in overview.stages if not stage.exists]
+    if not_started_stages and overview.overall_status != PRODUCTION_EDIT_PLAN_PIPELINE_OVERALL_STATUS_NOT_STARTED:
+        st.caption(
+            "Noch nicht ausgeführt: " + ", ".join(f"„{stage.label}“" for stage in not_started_stages)
+        )
+
+
 def _render_production_edit_plan_staging(project: Project) -> None:
     """Phase 10.4: UI für das isolierte Production-EditPlan-Staging (Phase
     10.1-10.3). Rein anzeigend/erzeugend/validierend — kein Promote nach
@@ -1224,6 +1280,7 @@ def _render_production_edit_plan_staging(project: Project) -> None:
             try:
                 with st.spinner("Production EditPlan Staging wird erzeugt…"):
                     new_package = build_and_save_production_edit_plan_staging(project)
+                package = new_package
                 total_timeline_items = sum(section.timeline_item_count for section in new_package.sections)
                 st.success(
                     f"Staging erzeugt: {len(new_package.sections)} Sektion(en), "
@@ -2112,6 +2169,8 @@ def render_cut_plan_page() -> None:
         _render_confirmed_cut_plan(project, existing_draft)
         st.divider()
         _render_edit_plan_bridge(project)
+        st.divider()
+        _render_production_edit_plan_pipeline_overview(project)
         st.divider()
         _render_production_edit_plan_staging(project)
     elif source_plan is not None:
