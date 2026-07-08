@@ -145,7 +145,10 @@ def _make_project_with_confirmed_content(tmp_path: Path) -> Project:
 
 def test_synthesize_folder_voiceover_saves_audio_file(tmp_path: Path) -> None:
     project = _make_project_with_confirmed_content(tmp_path)
-    with patch(f"{_TTS_MODULE}.synthesize_speech_with_timestamps", return_value=_fake_tts_result()):
+    with (
+        patch(f"{_TTS_MODULE}.synthesize_speech_with_timestamps", return_value=_fake_tts_result()),
+        patch(f"{_TTS_MODULE}.probe_duration_seconds", return_value=5.0),
+    ):
         item = synthesize_folder_voiceover(project, "Grand Canyon")
 
     assert item.status == AUDIO_STATUS_READY
@@ -156,7 +159,10 @@ def test_synthesize_folder_voiceover_saves_audio_file(tmp_path: Path) -> None:
 
 def test_synthesize_intro_saves_audio_file(tmp_path: Path) -> None:
     project = _make_project_with_confirmed_content(tmp_path)
-    with patch(f"{_TTS_MODULE}.synthesize_speech_with_timestamps", return_value=_fake_tts_result()):
+    with (
+        patch(f"{_TTS_MODULE}.synthesize_speech_with_timestamps", return_value=_fake_tts_result()),
+        patch(f"{_TTS_MODULE}.probe_duration_seconds", return_value=5.0),
+    ):
         item = synthesize_intro(project)
 
     assert item.status == AUDIO_STATUS_READY
@@ -306,6 +312,52 @@ def test_synthesize_all_confirmed_voiceovers_processes_intro_and_folders(tmp_pat
     assert (AUDIO_SCOPE_INTRO, "") in scopes
     assert (AUDIO_SCOPE_FOLDER, "Grand Canyon") in scopes
     assert progress_calls[0] == ("Intro", 1, 2)
+
+
+def test_ffprobe_failure_produces_audio_ready_with_warnings(tmp_path: Path) -> None:
+    """Hardening (vor Phase 7): ffprobe-Fehler darf NICHT stillschweigend als
+    AUDIO_READY durchgehen — es muss AUDIO_READY_WITH_WARNINGS sein."""
+    project = _make_project_with_confirmed_content(tmp_path)
+    with (
+        patch(f"{_TTS_MODULE}.synthesize_speech_with_timestamps", return_value=_fake_tts_result()),
+        patch(f"{_TTS_MODULE}.probe_duration_seconds", return_value=None),
+    ):
+        item = synthesize_folder_voiceover(project, "Grand Canyon")
+
+    assert item.status == "AUDIO_READY_WITH_WARNINGS"
+    assert item.audio_duration_sec == 0.0
+    assert item.error_message
+
+
+def test_ffprobe_failure_adds_audio_duration_unknown_alignment_warning(tmp_path: Path) -> None:
+    project = _make_project_with_confirmed_content(tmp_path)
+    with (
+        patch(f"{_TTS_MODULE}.synthesize_speech_with_timestamps", return_value=_fake_tts_result()),
+        patch(f"{_TTS_MODULE}.probe_duration_seconds", return_value=None),
+    ):
+        item = synthesize_folder_voiceover(project, "Grand Canyon")
+
+    from otio_app.services.voiceover_generation.audio_alignment_service import load_alignment
+
+    alignment = load_alignment(project, "folder", "Grand Canyon")
+    assert alignment is not None
+    assert "AUDIO_DURATION_UNKNOWN" in alignment.alignment_warnings
+    assert item.tts_run_id  # sanity
+
+
+def test_unchanged_text_with_warnings_status_does_not_retrigger_tts(tmp_path: Path) -> None:
+    """Auch AUDIO_READY_WITH_WARNINGS gilt als 'bereits aktiv' — unveränderter
+    Text löst keinen erneuten TTS-Call aus."""
+    project = _make_project_with_confirmed_content(tmp_path)
+    with (
+        patch(f"{_TTS_MODULE}.synthesize_speech_with_timestamps", return_value=_fake_tts_result()) as mock_tts,
+        patch(f"{_TTS_MODULE}.probe_duration_seconds", return_value=None),
+    ):
+        first = synthesize_folder_voiceover(project, "Grand Canyon")
+        second = synthesize_folder_voiceover(project, "Grand Canyon")
+
+    assert first.status == second.status == "AUDIO_READY_WITH_WARNINGS"
+    assert mock_tts.call_count == 1
 
 
 def test_get_next_audio_version_path_starts_at_1(tmp_path: Path) -> None:

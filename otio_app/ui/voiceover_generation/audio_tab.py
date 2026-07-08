@@ -6,6 +6,7 @@ from otio_app.defaults import (
     AUDIO_SCOPE_FOLDER,
     AUDIO_SCOPE_INTRO,
     AUDIO_STATUS_READY,
+    AUDIO_STATUS_READY_WITH_WARNINGS,
     AUDIO_STATUS_STALE,
     ELEVENLABS_MODEL_PRESETS,
 )
@@ -323,7 +324,7 @@ def _render_folder_table(project: Project, *, can_tts: bool) -> None:
             with col4:
                 st.metric("Version", item.audio_version if item is not None else 0)
 
-            label = "Neu vertonen" if item is not None and item.status in (AUDIO_STATUS_READY, AUDIO_STATUS_STALE) else "Vertonen"
+            label = "Neu vertonen" if item is not None and item.status in (AUDIO_STATUS_READY, AUDIO_STATUS_READY_WITH_WARNINGS, AUDIO_STATUS_STALE) else "Vertonen"
             if st.button(label, key=f"vo_audio_synth_folder_{draft.folder_name}_{project.id}", disabled=not can_tts):
                 with st.spinner(f"„{draft.folder_name}“ wird vertont…"):
                     try:
@@ -353,7 +354,7 @@ def _render_intro_section(project: Project, *, can_tts: bool) -> None:
     with col2:
         st.metric("Audio-Status", status)
 
-    label = "Neu vertonen" if item is not None and item.status in (AUDIO_STATUS_READY, AUDIO_STATUS_STALE) else "Vertonen"
+    label = "Neu vertonen" if item is not None and item.status in (AUDIO_STATUS_READY, AUDIO_STATUS_READY_WITH_WARNINGS, AUDIO_STATUS_STALE) else "Vertonen"
     if st.button(label, key=f"vo_audio_synth_intro_row_{project.id}", disabled=not can_tts):
         with st.spinner("Intro wird vertont…"):
             try:

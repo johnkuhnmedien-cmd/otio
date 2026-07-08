@@ -13,10 +13,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from otio_app.defaults import (
+    ALIGNMENT_WARNING_AUDIO_DURATION_UNKNOWN,
     AUDIO_SCOPE_FOLDER,
     AUDIO_SCOPE_INTRO,
     AUDIO_STATUS_FAILED,
     AUDIO_STATUS_READY,
+    AUDIO_STATUS_READY_WITH_WARNINGS,
     AUDIO_STATUS_STALE,
     TTS_RUN_STATUS_FAIL,
     TTS_RUN_STATUS_PASS,
@@ -159,7 +161,7 @@ def mark_stale_audio_if_needed(project: Project) -> VoiceoverAudioManifest:
     updated_items: list[VoiceoverAudioItem] = []
     changed = False
     for item in manifest.items:
-        if item.status not in (AUDIO_STATUS_READY, AUDIO_STATUS_STALE):
+        if item.status not in (AUDIO_STATUS_READY, AUDIO_STATUS_READY_WITH_WARNINGS, AUDIO_STATUS_STALE):
             updated_items.append(item)
             continue
 
@@ -288,13 +290,32 @@ def _run_tts_and_update_manifest(
             alignment = build_folder_alignment(
                 project, folder_name, audio_item_for_alignment, result.alignment
             )
+        if duration_missing:
+            # ffprobe konnte die Dauer nicht ermitteln — Alignment trotzdem
+            # speichern, aber deutlich als unsicher markieren (Hardening §Vorab).
+            alignment = alignment.model_copy(
+                update={
+                    "alignment_warnings": [
+                        *alignment.alignment_warnings,
+                        ALIGNMENT_WARNING_AUDIO_DURATION_UNKNOWN,
+                    ]
+                }
+            )
         alignment_path = save_alignment(project, scope, folder_name, alignment)
         alignment_path_str = str(alignment_path)
     except ValueError:
         # Kein bestätigter Text (mehr) vorhanden — Audio bleibt trotzdem erhalten.
         alignment_path_str = ""
 
-    error_message = "ffprobe konnte die Audiodauer nicht ermitteln." if duration_missing else ""
+    if duration_missing:
+        status = AUDIO_STATUS_READY_WITH_WARNINGS
+        error_message = (
+            "ffprobe konnte die Audiodauer nicht ermitteln — Audio wurde trotzdem "
+            "gespeichert, gilt aber nicht als vollständig schnittbereit."
+        )
+    else:
+        status = AUDIO_STATUS_READY
+        error_message = ""
 
     item = VoiceoverAudioItem(
         scope=scope,
@@ -307,7 +328,7 @@ def _run_tts_and_update_manifest(
         timestamps_path=str(timestamps_path),
         alignment_path=alignment_path_str,
         tts_run_id=tts_run_id,
-        status=AUDIO_STATUS_READY,
+        status=status,
         error_message=error_message,
     )
     manifest = load_audio_manifest(project)
@@ -344,7 +365,11 @@ def synthesize_folder_voiceover(project: Project, folder_name: str) -> Voiceover
         (item for item in manifest.items if item.scope == AUDIO_SCOPE_FOLDER and item.folder_name == folder_name),
         None,
     )
-    if existing is not None and existing.voiceover_text_hash == text_hash and existing.status == AUDIO_STATUS_READY:
+    if (
+        existing is not None
+        and existing.voiceover_text_hash == text_hash
+        and existing.status in (AUDIO_STATUS_READY, AUDIO_STATUS_READY_WITH_WARNINGS)
+    ):
         return existing
 
     return _run_tts_and_update_manifest(
@@ -369,7 +394,11 @@ def synthesize_intro(project: Project) -> VoiceoverAudioItem:
 
     manifest = load_audio_manifest(project)
     existing = next((item for item in manifest.items if item.scope == AUDIO_SCOPE_INTRO), None)
-    if existing is not None and existing.voiceover_text_hash == text_hash and existing.status == AUDIO_STATUS_READY:
+    if (
+        existing is not None
+        and existing.voiceover_text_hash == text_hash
+        and existing.status in (AUDIO_STATUS_READY, AUDIO_STATUS_READY_WITH_WARNINGS)
+    ):
         return existing
 
     return _run_tts_and_update_manifest(
