@@ -460,6 +460,34 @@ def get_cut_plan_edit_plan_bridge_audio_plan_path(work_dir: Path) -> Path:
     return get_cut_plan_edit_plan_bridge_dir(work_dir) / CUT_PLAN_EDIT_PLAN_BRIDGE_AUDIO_PLAN_FILENAME
 
 
+# --- EditPlan Bridge Confirm/Freeze (Phase 9.3): isolierte Snapshot-Dateien,
+# NIEMALS ein Produktions-EditPlan unter _otio/edit_plan/. ---
+
+
+def get_cut_plan_edit_plan_bridge_confirmed_draft_path(work_dir: Path) -> Path:
+    from otio_app.defaults import CUT_PLAN_EDIT_PLAN_BRIDGE_CONFIRMED_DRAFT_FILENAME
+
+    return get_cut_plan_edit_plan_bridge_dir(work_dir) / CUT_PLAN_EDIT_PLAN_BRIDGE_CONFIRMED_DRAFT_FILENAME
+
+
+def get_cut_plan_edit_plan_bridge_confirmed_audio_plan_path(work_dir: Path) -> Path:
+    from otio_app.defaults import CUT_PLAN_EDIT_PLAN_BRIDGE_CONFIRMED_AUDIO_PLAN_FILENAME
+
+    return get_cut_plan_edit_plan_bridge_dir(work_dir) / CUT_PLAN_EDIT_PLAN_BRIDGE_CONFIRMED_AUDIO_PLAN_FILENAME
+
+
+def get_cut_plan_edit_plan_bridge_confirmed_trace_path(work_dir: Path) -> Path:
+    from otio_app.defaults import CUT_PLAN_EDIT_PLAN_BRIDGE_CONFIRMED_TRACE_FILENAME
+
+    return get_cut_plan_edit_plan_bridge_dir(work_dir) / CUT_PLAN_EDIT_PLAN_BRIDGE_CONFIRMED_TRACE_FILENAME
+
+
+def get_cut_plan_edit_plan_bridge_confirm_manifest_path(work_dir: Path) -> Path:
+    from otio_app.defaults import CUT_PLAN_EDIT_PLAN_BRIDGE_CONFIRM_MANIFEST_FILENAME
+
+    return get_cut_plan_edit_plan_bridge_dir(work_dir) / CUT_PLAN_EDIT_PLAN_BRIDGE_CONFIRM_MANIFEST_FILENAME
+
+
 def get_supplement_dir(work_dir: Path) -> Path:
     """Verzeichnis für Supplement-Workflow-Dateien."""
     from otio_app.defaults import SUPPLEMENT_SUBDIR

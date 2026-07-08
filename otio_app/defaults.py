@@ -429,6 +429,14 @@ CUT_PLAN_EDIT_PLAN_BRIDGE_DRAFT_FILENAME = "edit_plan_from_cut_plan.draft.json"
 CUT_PLAN_EDIT_PLAN_BRIDGE_TRACE_FILENAME = "edit_plan_bridge_trace.json"
 CUT_PLAN_EDIT_PLAN_BRIDGE_VALIDATION_REPORT_FILENAME = "edit_plan_bridge_validation_report.json"
 CUT_PLAN_EDIT_PLAN_BRIDGE_AUDIO_PLAN_FILENAME = "bridge_audio_plan.json"
+# Phase 9.3: Confirm/Freeze der EditPlan Bridge — weiterhin isolierter
+# Snapshot, KEIN Produktions-EditPlan, KEIN locked Plan, KEIN OTIO-Export.
+CUT_PLAN_EDIT_PLAN_BRIDGE_CONFIRMED_DRAFT_FILENAME = "edit_plan_from_cut_plan.confirmed.json"
+CUT_PLAN_EDIT_PLAN_BRIDGE_CONFIRMED_AUDIO_PLAN_FILENAME = "bridge_audio_plan.confirmed.json"
+CUT_PLAN_EDIT_PLAN_BRIDGE_CONFIRMED_TRACE_FILENAME = "edit_plan_bridge_trace.confirmed.json"
+CUT_PLAN_EDIT_PLAN_BRIDGE_CONFIRM_MANIFEST_FILENAME = "edit_plan_bridge_confirm_manifest.json"
+
+EDIT_PLAN_BRIDGE_CONFIRM_STATUS_CONFIRMED = "CONFIRMED"
 
 EDIT_PLAN_BRIDGE_VALIDATION_STATUS_PASS = "PASS"
 EDIT_PLAN_BRIDGE_VALIDATION_STATUS_WARNING = "WARNING"

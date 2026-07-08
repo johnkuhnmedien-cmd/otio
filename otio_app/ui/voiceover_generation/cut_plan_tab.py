@@ -19,8 +19,11 @@ Cut Plan wird deterministisch in einen EditPlanDocument-kompatiblen Draft
 Pipeline. Phase 9.2 härtet diese Bridge: Boundary-Chaining pro Track
 verhindert 1-Frame-Gaps/-Overlaps, eine strukturierte bridge_audio_plan.json
 ersetzt das Rätselraten am TimelineItem-Sondertyp 'voiceover_audio', und die
-Bridge-Validierung wurde verschärft. Weiterhin KEIN locked EditPlan, kein
-OTIO-Export, kein Render, keine neue LLM-Planung."""
+Bridge-Validierung wurde verschärft. Phase 9.3 ergänzt Confirm/Freeze (siehe
+cut_plan_edit_plan_confirm_service.py): ein bereits validierter Bridge-Draft
+kann explizit als unveränderlicher Snapshot eingefroren werden — weiterhin
+KEIN Produktions-EditPlan, KEIN locked Produktionsplan, KEIN OTIO-Export,
+kein Render, keine neue LLM-Planung."""
 
 from __future__ import annotations
 
@@ -96,6 +99,16 @@ from otio_app.services.voiceover_generation.cut_plan_edit_plan_bridge import (
     save_bridge_audio_plan,
     save_edit_plan_bridge_draft,
     validate_edit_plan_bridge,
+)
+from otio_app.services.voiceover_generation.cut_plan_edit_plan_confirm_service import (
+    can_confirm_edit_plan_bridge,
+    confirm_edit_plan_bridge,
+    is_confirmed_edit_plan_bridge_stale,
+    load_confirmed_bridge_audio_plan,
+    load_confirmed_bridge_trace,
+    load_confirmed_edit_plan_bridge,
+    load_edit_plan_bridge_confirm_manifest,
+    unconfirm_edit_plan_bridge,
 )
 from otio_app.services.voiceover_generation.cut_plan_edit_plan_trace import (
     build_edit_plan_bridge_trace,
@@ -921,7 +934,97 @@ def _render_edit_plan_bridge(project: Project) -> None:
             ]
             st.dataframe(rows, use_container_width=True, hide_index=True)
 
+    st.divider()
+    _render_edit_plan_bridge_confirm(project)
+
     st.caption("Kein OTIO-Button, kein Lock-Button — diese Schritte folgen erst in einer späteren Sub-Phase.")
+
+
+def _render_edit_plan_bridge_confirm(project: Project) -> None:
+    """Phase 9.3: EditPlan Bridge Confirm/Freeze. Übernimmt ausschließlich
+    bereits validierte Bridge-Dateien unverändert als Snapshot — kein
+    Rebuild, keine erneute Übersetzung, keine erneute Validierung. Weiterhin
+    ein isolierter Bridge-Snapshot: KEIN Produktions-EditPlan, KEIN locked
+    Produktionsplan, KEIN OTIO-Export."""
+    st.subheader("EditPlan Bridge bestätigen")
+
+    manifest = load_edit_plan_bridge_confirm_manifest(project)
+
+    if manifest is not None:
+        confirmed_edit_plan = load_confirmed_edit_plan_bridge(project)
+        confirmed_audio_plan = load_confirmed_bridge_audio_plan(project)
+        confirmed_trace = load_confirmed_bridge_trace(project)
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Status", manifest.status)
+        with col2:
+            st.metric("TimelineItems", len(confirmed_edit_plan.timeline_items) if confirmed_edit_plan else 0)
+        with col3:
+            st.metric("AudioPlanItems", len(confirmed_audio_plan.items) if confirmed_audio_plan else 0)
+        with col4:
+            st.metric("TraceEntries", len(confirmed_trace.entries) if confirmed_trace else 0)
+
+        st.caption(f"confirmed_at: `{manifest.confirmed_at}`")
+        st.caption(f"source_cut_plan_hash: `{manifest.source_cut_plan_hash}`")
+        st.caption(f"edit_plan_hash: `{manifest.edit_plan_hash}`")
+        st.caption(f"bridge_audio_plan_hash: `{manifest.bridge_audio_plan_hash}`")
+        for label, path_str in manifest.confirmed_files.items():
+            st.caption(f"{label}: `{path_str}`")
+
+        if is_confirmed_edit_plan_bridge_stale(project):
+            st.warning("Der bestätigte Bridge-Snapshot ist veraltet. Bitte neu bestätigen.")
+        st.info(
+            "Es gibt einen bestätigten Bridge-Snapshot. Aktuelle Draft-Änderungen ersetzen ihn nicht automatisch."
+        )
+
+        if st.button("Bridge-Bestätigung zurücknehmen", key=f"cut_plan_edit_plan_bridge_unconfirm_{project.id}"):
+            unconfirm_edit_plan_bridge(project)
+            st.success("Bridge-Bestätigung zurückgenommen — confirmed-Dateien entfernt.")
+            st.rerun()
+    else:
+        st.info("Noch kein bestätigter EditPlan-Bridge-Snapshot vorhanden.")
+
+    eligible, reasons = can_confirm_edit_plan_bridge(project)
+    if eligible:
+        st.success("Alle Confirm-Bedingungen sind erfüllt.")
+    else:
+        st.warning("Confirm-Bedingungen sind noch nicht erfüllt:")
+        for reason in reasons:
+            st.write(f"❌ {reason}")
+
+    if manifest is not None:
+        st.warning(
+            "Achtung: Dies ersetzt den bisherigen bestätigten Bridge-Snapshot unwiderruflich mit dem "
+            "aktuellen Draft-Stand."
+        )
+        button_label = "Aktuellen Bridge Draft bestätigen und bestehenden Snapshot ersetzen"
+    else:
+        button_label = "EditPlan Bridge bestätigen"
+
+    if st.button(
+        button_label,
+        key=f"cut_plan_edit_plan_bridge_confirm_{project.id}",
+        disabled=not eligible,
+        type="primary",
+        help="Übernimmt die bereits validierten Bridge-Dateien unverändert als Snapshot. Kein Rebuild, "
+        "keine erneute Übersetzung/Validierung. Kein Produktions-EditPlan, kein OTIO-Export.",
+    ):
+        try:
+            with st.spinner("EditPlan Bridge wird bestätigt…"):
+                confirm_edit_plan_bridge(project)
+            st.success(
+                "EditPlan Bridge bestätigt — edit_plan_from_cut_plan.confirmed.json, "
+                "bridge_audio_plan.confirmed.json, edit_plan_bridge_trace.confirmed.json und "
+                "edit_plan_bridge_confirm_manifest.json wurden geschrieben."
+            )
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+    st.caption(
+        "Dieser Bridge-Snapshot ist noch kein Produktions-EditPlan und nicht OTIO-exportbereit."
+    )
 
 
 def render_cut_plan_page() -> None:

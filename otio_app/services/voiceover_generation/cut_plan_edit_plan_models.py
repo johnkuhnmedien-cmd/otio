@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 from otio_app.defaults import (
+    EDIT_PLAN_BRIDGE_CONFIRM_STATUS_CONFIRMED,
     EDIT_PLAN_BRIDGE_VALIDATION_STATUS_PASS,
     READINESS_SEVERITY_WARNING,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "EditPlanBridgeTraceDocument",
     "BridgeAudioPlanItem",
     "BridgeAudioPlanDocument",
+    "EditPlanBridgeConfirmManifest",
 ]
 
 
@@ -129,3 +131,22 @@ class BridgeAudioPlanDocument(BaseModel):
     generated_at: datetime = Field(default_factory=_utcnow)
     source_cut_plan_hash: str = ""
     items: list[BridgeAudioPlanItem] = Field(default_factory=list)
+
+
+class EditPlanBridgeConfirmManifest(BaseModel):
+    """Phase 9.3: Manifest EINES bestätigten/eingefrorenen Bridge-Snapshots.
+    Weiterhin ein isolierter Snapshot — KEIN Produktions-EditPlan, KEIN
+    locked Plan, KEIN OTIO-Export."""
+
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    confirmed_at: datetime = Field(default_factory=_utcnow)
+    status: str = EDIT_PLAN_BRIDGE_CONFIRM_STATUS_CONFIRMED
+    source_cut_plan_hash: str = ""
+    edit_plan_hash: str = ""
+    bridge_audio_plan_hash: str = ""
+    bridge_trace_hash: str = ""
+    validation_report_hash: str = ""
+    source_files: dict[str, str] = Field(default_factory=dict)
+    confirmed_files: dict[str, str] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)

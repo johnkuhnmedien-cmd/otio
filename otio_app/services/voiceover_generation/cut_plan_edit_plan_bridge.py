@@ -637,9 +637,20 @@ def _scan_for_leaked_secrets(edit_plan: EditPlanDocument) -> list[str]:
 
 def validate_edit_plan_bridge(project: Project, edit_plan: EditPlanDocument) -> EditPlanBridgeValidationReport:
     """Validiert einen bereits gebauten Bridge-Draft (§10) und speichert das
-    Ergebnis in edit_plan_bridge_validation_report.json."""
+    Ergebnis in edit_plan_bridge_validation_report.json.
+
+    Phase 9.3 §1: ein kleiner In-Memory-Cache (dict[path, duration_sec |
+    None]) sorgt dafür, dass probe_duration_seconds pro Video-Pfad nur
+    einmal pro Validierungslauf aufgerufen wird — kein persistenter Cache,
+    keine Architekturänderung (analog zu Phase 8.5 im Cut-Plan-Validator)."""
     warnings: list[EditPlanBridgeValidationError] = []
     blockers: list[EditPlanBridgeValidationError] = []
+    duration_cache: dict[str, float | None] = {}
+
+    def _cached_probe_duration(path_str: str) -> float | None:
+        if path_str not in duration_cache:
+            duration_cache[path_str] = probe_duration_seconds(Path(path_str))
+        return duration_cache[path_str]
 
     confirmed = load_confirmed_cut_plan(project)
     if confirmed is None:
@@ -763,7 +774,7 @@ def validate_edit_plan_bridge(project: Project, edit_plan: EditPlanDocument) -> 
             )
             continue
         if visual_timeline_item.type == "video_shot":
-            real_duration = probe_duration_seconds(Path(asset_path))
+            real_duration = _cached_probe_duration(asset_path)
             if real_duration is not None and visual_timeline_item.source_out_sec > real_duration + _GAP_TOLERANCE:
                 blockers.append(
                     _make_error(
