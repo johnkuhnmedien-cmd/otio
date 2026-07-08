@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 from otio_app.services.voiceover_generation.models import (
+    DramaturgyFolderEntry,
     FolderInventorySummary,
+    FolderVoiceoverDraft,
+    FolderVoiceoverSetting,
     ProjectBrief,
+    SentenceItem,
+    ValidationError,
     VoiceoverStyleProfile,
     VoiceoverStyleReferences,
 )
 from otio_app.services.voiceover_generation.prompts import (
     build_dramaturgy_prompt,
+    build_folder_voiceover_prompt,
     build_style_profile_prompt,
+    build_voiceover_correction_prompt,
+    build_voiceover_review_prompt,
 )
 
 
@@ -177,3 +185,159 @@ def test_dramaturgy_prompt_handles_missing_style_profile() -> None:
         folder_summaries=_sample_folder_summaries(),
     )
     assert "kein Style Profile vorhanden" in prompt
+
+
+# --- build_folder_voiceover_prompt / build_voiceover_review_prompt /
+#     build_voiceover_correction_prompt (Phase 4) ---
+
+
+def _sample_dramaturgy_entry() -> DramaturgyFolderEntry:
+    return DramaturgyFolderEntry(
+        folder_name="Grand Canyon",
+        order_index=1,
+        dramaturgy_role="opener",
+        reason="Starkes visuelles Material.",
+        transition_goal_to_next="Steigerung zum nächsten Ort.",
+    )
+
+
+def _sample_setting() -> FolderVoiceoverSetting:
+    return FolderVoiceoverSetting(
+        folder_name="Grand Canyon",
+        order_index=1,
+        target_words=140,
+        min_words=126,
+        max_words=154,
+        must_avoid=["breathtaking"],
+    )
+
+
+def _sample_inventory_assets() -> list[dict]:
+    return [
+        {
+            "asset_id": "asset_clip1",
+            "path": "Grand Canyon/clip1.mp4",
+            "media_type": "video",
+            "duration_sec": 8.5,
+            "description": "Weite Schlucht bei Sonnenuntergang.",
+        },
+        {
+            "asset_id": "asset_clip2",
+            "path": "Grand Canyon/clip2.mp4",
+            "media_type": "video",
+            "duration_sec": 5.0,
+            "description": "Wanderer am Rand der Schlucht.",
+        },
+    ]
+
+
+def test_folder_voiceover_prompt_contains_style_summary() -> None:
+    style_profile = _sample_style_profile()
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=style_profile,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert style_profile.style_summary_for_prompts in prompt
+
+
+def test_folder_voiceover_prompt_contains_inventory_asset_ids() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "asset_clip1" in prompt
+    assert "asset_clip2" in prompt
+
+
+def test_folder_voiceover_prompt_contains_do_not_merely_describe_hint() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "Do not merely describe the assets" in prompt
+
+
+def test_folder_voiceover_prompt_contains_target_word_count() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "140" in prompt
+
+
+def test_folder_voiceover_prompt_forbids_inventing_asset_ids() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "invent" in prompt.lower()
+
+
+def _sample_draft() -> FolderVoiceoverDraft:
+    return FolderVoiceoverDraft(
+        project_id="p1",
+        folder_name="Grand Canyon",
+        voiceover_text_full="Zwischen den roten Felswänden scheint das Licht von innen zu leuchten.",
+        word_count=11,
+        sentence_items=[
+            SentenceItem(sentence_id="sentence_001", text="Zwischen den roten Felswänden...")
+        ],
+    )
+
+
+def test_voiceover_review_prompt_contains_error_type_list() -> None:
+    prompt = build_voiceover_review_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        setting=_sample_setting(),
+        draft=_sample_draft(),
+    )
+    for error_type in ("TOO_GENERIC", "HALLUCINATED_FACT", "STYLE_PROFILE_MISMATCH"):
+        assert error_type in prompt
+
+
+def test_voiceover_correction_prompt_contains_original_text_and_errors() -> None:
+    errors = [
+        ValidationError(
+            type="TOO_ASSET_DESCRIPTIVE",
+            severity="BLOCKER",
+            sentence_id="sentence_001",
+            message="Klingt wie eine Assetbeschreibung.",
+            fix_hint="Umformulieren als echte Erzählung.",
+        )
+    ]
+    prompt = build_voiceover_correction_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        setting=_sample_setting(),
+        draft=_sample_draft(),
+        errors=errors,
+    )
+    assert "Zwischen den roten Felswänden" in prompt
+    assert "TOO_ASSET_DESCRIPTIVE" in prompt
+    assert "Klingt wie eine Assetbeschreibung." in prompt

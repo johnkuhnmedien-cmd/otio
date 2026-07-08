@@ -21,6 +21,16 @@ from otio_app.defaults import (
     DRAMATURGY_ROLES,
     DRAMATURGY_STATUS_CONFIRMED,
     DRAMATURGY_STATUS_DRAFT,
+    ENERGY_CHOICES,
+    ENERGY_LABELS,
+    ENERGY_MEDIUM,
+    FACTUALITY_MODE_CHOICES,
+    FACTUALITY_MODE_LABELS,
+    FACTUALITY_MODE_NORMAL_SAFE_GENERAL_KNOWLEDGE,
+    MAX_VOICEOVER_REVIEW_ATTEMPTS,
+    VO_ERROR_TYPES_ALL,
+    VO_ERROR_TYPES_DETERMINISTIC,
+    VO_ERROR_TYPES_LLM_REVIEW,
     VOICEOVER_GEN_DEFAULT_MODEL,
     VOICEOVER_GEN_DEFAULT_PROVIDER,
     VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT,
@@ -30,6 +40,9 @@ from otio_app.defaults import (
     VOICEOVER_GEN_PROVIDERS,
     VOICEOVER_GEN_ROLE_LABELS,
     VOICEOVER_GEN_ROLES,
+    VOICEOVER_SETTING_STATUS_PENDING,
+    VOICEOVER_STATUS_DRAFT,
+    WEAK_ASSET_MATCH_CONFIDENCE_THRESHOLD,
 )
 
 __all__ = [
@@ -42,6 +55,14 @@ __all__ = [
     "DRAMATURGY_ROLES",
     "DRAMATURGY_STATUS_CONFIRMED",
     "DRAMATURGY_STATUS_DRAFT",
+    "ENERGY_CHOICES",
+    "ENERGY_LABELS",
+    "FACTUALITY_MODE_CHOICES",
+    "FACTUALITY_MODE_LABELS",
+    "MAX_VOICEOVER_REVIEW_ATTEMPTS",
+    "VO_ERROR_TYPES_ALL",
+    "VO_ERROR_TYPES_DETERMINISTIC",
+    "VO_ERROR_TYPES_LLM_REVIEW",
     "VOICEOVER_GEN_DEFAULT_MODEL",
     "VOICEOVER_GEN_DEFAULT_PROVIDER",
     "VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT",
@@ -51,6 +72,7 @@ __all__ = [
     "VOICEOVER_GEN_PROVIDERS",
     "VOICEOVER_GEN_ROLE_LABELS",
     "VOICEOVER_GEN_ROLES",
+    "WEAK_ASSET_MATCH_CONFIDENCE_THRESHOLD",
     "ProjectBrief",
     "VoiceoverStyleReferences",
     "VoiceoverStyleProfile",
@@ -61,6 +83,14 @@ __all__ = [
     "FolderInventorySummariesDocument",
     "DramaturgyFolderEntry",
     "DramaturgyPlan",
+    "FolderVoiceoverSetting",
+    "FolderVoiceoverSettingsDocument",
+    "SentenceItem",
+    "FolderVoiceoverDraft",
+    "FolderVoiceoversDocument",
+    "ValidationError",
+    "FolderVoiceoverValidationReport",
+    "FolderVoiceoverValidationReportsDocument",
 ]
 
 
@@ -210,3 +240,133 @@ class DramaturgyPlan(BaseModel):
     llm_run_id: str = ""
     status: str = DRAMATURGY_STATUS_DRAFT
     risks: list[str] = Field(default_factory=list)
+
+
+# --- Phase 4: Folder Voice-overs ---
+
+
+class FolderVoiceoverSetting(BaseModel):
+    """Pro-Ordner-Einstellungen für die Voice-over-Erzeugung.
+
+    Defaults werden aus dem bestätigten Dramaturgie-Eintrag vorbefüllt
+    (siehe folder_voiceover_settings_service.build_default_folder_voiceover_settings)."""
+
+    folder_name: str
+    order_index: int = 0
+    enabled: bool = True
+    dramaturgy_role: str = "setup"
+    target_words: int = 90
+    min_words: int = 80
+    max_words: int = 100
+    word_tolerance_percent: int = VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT
+    transition_from_previous: bool = False
+    callback_to_previous: bool = False
+    use_contrast_with_previous: bool = False
+    use_commonality_with_previous: bool = False
+    folder_extra_prompt: str = ""
+    must_include: list[str] = Field(default_factory=list)
+    must_avoid: list[str] = Field(default_factory=list)
+    factuality_mode: str = FACTUALITY_MODE_NORMAL_SAFE_GENERAL_KNOWLEDGE
+    energy: str = ENERGY_MEDIUM
+    status: str = VOICEOVER_SETTING_STATUS_PENDING
+
+
+class FolderVoiceoverSettingsDocument(BaseModel):
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    dramaturgy_hash: str = ""
+    settings: list[FolderVoiceoverSetting] = Field(default_factory=list)
+
+
+class SentenceItem(BaseModel):
+    """Ein Satz/Beat der Voice-over-Prosa mit strukturierter Asset-Zuordnung.
+
+    Der Zuschauer sieht nur den Fließtext (voiceover_text_full) — sentence_items
+    sind die interne, maschinenlesbare Grundlage für Schnittplan, TTS-Alignment
+    und Supplement Requests in späteren Phasen."""
+
+    sentence_id: str
+    beat_id: str = ""
+    text: str = ""
+    visual_intent: str = ""
+    primary_asset_id: str = ""
+    backup_asset_ids: list[str] = Field(default_factory=list)
+    asset_match_reason: str = ""
+    asset_confidence: float = 0.0
+    estimated_duration_sec: float = 0.0
+    must_show: list[str] = Field(default_factory=list)
+    avoid_showing: list[str] = Field(default_factory=list)
+    needs_supplement_asset: bool = False
+    supplement_reason: str = ""
+    source_inventory_asset_ids_considered: list[str] = Field(default_factory=list)
+
+
+class FolderVoiceoverDraft(BaseModel):
+    project_id: str
+    folder_name: str
+    order_index: int = 0
+    language: str = "DE"
+    target_words: int = 0
+    min_words: int = 0
+    max_words: int = 0
+    voiceover_text_full: str = ""
+    word_count: int = 0
+    sentence_items: list[SentenceItem] = Field(default_factory=list)
+    transition_from_previous_used: bool = False
+    callback_to_previous_used: bool = False
+    contrast_or_commonality_used: bool = False
+    used_asset_evidence: list[str] = Field(default_factory=list)
+    author_run_id: str = ""
+    review_run_id: str = ""
+    correction_run_ids: list[str] = Field(default_factory=list)
+    status: str = VOICEOVER_STATUS_DRAFT
+    risks: list[str] = Field(default_factory=list)
+    generated_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+    confirmed_at: datetime | None = None
+    # Staleness-Hashes (§13) — welche Eingaben galten zum Zeitpunkt der Erzeugung.
+    project_brief_hash: str = ""
+    style_profile_hash: str = ""
+    dramaturgy_hash: str = ""
+    settings_hash: str = ""
+    inventory_hash: str = ""
+
+
+class FolderVoiceoversDocument(BaseModel):
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    language: str = "DE"
+    items: list[FolderVoiceoverDraft] = Field(default_factory=list)
+    status: str = VOICEOVER_STATUS_DRAFT
+
+
+class ValidationError(BaseModel):
+    type: str
+    severity: str = "BLOCKER"  # WARNING|BLOCKER
+    folder_name: str = ""
+    sentence_id: str = ""
+    message: str = ""
+    fix_hint: str = ""
+    retryable: bool = True
+
+
+class FolderVoiceoverValidationReport(BaseModel):
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    folder_name: str
+    attempt_count: int = 1
+    status: str = "PASS"  # PASS|NEEDS_USER_REVIEW|FAIL
+    errors: list[ValidationError] = Field(default_factory=list)
+    warnings: list[ValidationError] = Field(default_factory=list)
+    author_run_ids: list[str] = Field(default_factory=list)
+    review_run_ids: list[str] = Field(default_factory=list)
+    correction_run_ids: list[str] = Field(default_factory=list)
+
+
+class FolderVoiceoverValidationReportsDocument(BaseModel):
+    """Ein Dokument für alle Ordner — Pfad ist projektweit singular, Inhalt
+    ist eine Sammlung pro-Ordner-Reports (Key: folder_name)."""
+
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    reports: dict[str, FolderVoiceoverValidationReport] = Field(default_factory=dict)

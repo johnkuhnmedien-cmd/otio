@@ -39,6 +39,19 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def content_hash_of_model(model: Any, *, exclude: set[str] | None = None) -> str:
+    """Wie content_hash(), aber schließt volatile Felder (z. B. generated_at)
+    aus. Wichtig für Staleness-Vergleiche (§13): Ohne diesen Ausschluss würde
+    ein nie gespeichertes Default-Objekt (z. B. ProjectBrief ohne project_brief
+    .json) bei jedem Laden einen neuen Zeitstempel und damit fälschlich einen
+    neuen Hash bekommen, obwohl sich der Inhalt nicht geändert hat."""
+    if model is None:
+        return ""
+    exclude_fields = {"generated_at"} | (exclude or set())
+    payload = model.model_dump(mode="json", exclude=exclude_fields)
+    return content_hash(json.dumps(payload, sort_keys=True, ensure_ascii=False))
+
+
 def create_llm_run_dir(project: Project, stage: str) -> tuple[str, Path]:
     """Erzeugt einen eindeutigen run_id-Ordner. `stage` wird nur für Logging/Debug
     genutzt — die Verzeichnisstruktur selbst enthält keine Stage-Unterordner,

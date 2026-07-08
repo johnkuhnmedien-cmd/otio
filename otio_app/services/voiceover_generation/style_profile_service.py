@@ -24,6 +24,7 @@ from otio_app.services.voiceover_generation.llm_trace_service import (
     STATUS_PARSE_FAILED,
     STATUS_PASS,
     content_hash,
+    content_hash_of_model,
     create_llm_run_dir,
     write_llm_manifest,
     write_llm_parsed_response,
@@ -177,8 +178,8 @@ def build_style_profile(
         forbidden_phrases=as_str_list(payload.get("forbidden_phrases")),
         avoid_copying_reference_text=bool(payload.get("avoid_copying_reference_text", True)),
         style_summary_for_prompts=str(payload.get("style_summary_for_prompts", "")),
-        source_reference_hash=content_hash(style_references.model_dump_json()),
-        project_brief_hash=content_hash(project_brief.model_dump_json()),
+        source_reference_hash=content_hash_of_model(style_references),
+        project_brief_hash=content_hash_of_model(project_brief),
         llm_run_id=run_id,
     )
     saved = save_style_profile(project, profile)
