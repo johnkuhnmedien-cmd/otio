@@ -37,7 +37,9 @@ from otio_app.defaults import (
     INTRO_HOOK_STATUS_CONFIRMED,
     INTRO_HOOK_STATUS_DRAFT,
     INTRO_HOOK_TYPE_CINEMATIC_PROMISE,
+    ITEM_READINESS_MISSING_AUDIO,
     MAX_VOICEOVER_REVIEW_ATTEMPTS,
+    PLAN_STATUS_TEXT_READY,
     TTS_RUN_STATUS_FAIL,
     VO_ERROR_TYPES_ALL,
     VO_ERROR_TYPES_DETERMINISTIC,
@@ -113,6 +115,11 @@ __all__ = [
     "VoiceoverAudioManifest",
     "AlignmentItem",
     "VoiceoverAlignment",
+    "ReadinessError",
+    "ConfirmedIntroPlanItem",
+    "ConfirmedFolderPlanItem",
+    "ProjectPlanReadiness",
+    "ConfirmedVoiceoverProjectPlan",
 ]
 
 
@@ -572,3 +579,92 @@ class VoiceoverAlignment(BaseModel):
     alignment_source: str = "elevenlabs_timestamps"
     items: list[AlignmentItem] = Field(default_factory=list)
     alignment_warnings: list[str] = Field(default_factory=list)
+
+
+# --- Phase 7: Final Output / confirmed_voiceover_project_plan ---
+
+
+class ReadinessError(BaseModel):
+    type: str
+    severity: str = "WARNING"  # WARNING|BLOCKER
+    scope: str = "project"  # project|intro|folder|sentence|audio|alignment
+    folder_name: str = ""
+    sentence_id: str = ""
+    message: str = ""
+    fix_hint: str = ""
+
+
+class ConfirmedIntroPlanItem(BaseModel):
+    hook_text: str = ""
+    word_count: int = 0
+    hook_type: str = ""
+    used_folders: list[str] = Field(default_factory=list)
+    used_sentence_ids: list[str] = Field(default_factory=list)
+    visual_beats: list[IntroHookVisualBeat] = Field(default_factory=list)
+    audio_path: str = ""
+    audio_duration_sec: float = 0.0
+    alignment_path: str = ""
+    alignment_items: list[AlignmentItem] = Field(default_factory=list)
+    audio_status: str = AUDIO_STATUS_MISSING
+    # READY|MISSING_AUDIO|MISSING_ALIGNMENT|STALE_AUDIO|WARNING
+    readiness_status: str = ITEM_READINESS_MISSING_AUDIO
+
+
+class ConfirmedFolderPlanItem(BaseModel):
+    folder_name: str
+    order_index: int = 0
+    dramaturgy_role: str = ""
+    enabled: bool = True
+    voiceover_text_full: str = ""
+    word_count: int = 0
+    target_words: int = 0
+    min_words: int = 0
+    max_words: int = 0
+    sentence_items: list[SentenceItem] = Field(default_factory=list)
+    audio_path: str = ""
+    audio_duration_sec: float = 0.0
+    alignment_path: str = ""
+    alignment_items: list[AlignmentItem] = Field(default_factory=list)
+    audio_status: str = AUDIO_STATUS_MISSING
+    validation_status: str = "UNKNOWN"  # PASS|NEEDS_USER_REVIEW|UNKNOWN
+    asset_mapping_status: str = "PASS"  # PASS|WARNINGS|BLOCKED
+    # READY|MISSING_AUDIO|MISSING_ALIGNMENT|STALE_AUDIO|WARNING|BLOCKED
+    readiness_status: str = ITEM_READINESS_MISSING_AUDIO
+    warnings: list[str] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+
+
+class ProjectPlanReadiness(BaseModel):
+    has_confirmed_dramaturgy: bool = False
+    has_confirmed_intro: bool = False
+    all_active_folders_have_confirmed_voiceover: bool = False
+    all_required_audio_ready: bool = False
+    all_alignments_ready: bool = False
+    has_asset_mapping_for_all_items: bool = False
+    has_no_blockers: bool = False
+
+
+class ConfirmedVoiceoverProjectPlan(BaseModel):
+    """Redaktionelle Quelle der Wahrheit für die spätere Schnittplan-Pipeline.
+
+    Aggregiert NUR bestätigte Artefakte — erzeugt keinen Schnittplan und
+    keinen OTIO-Export, plant nichts neu von Gemini/Claude."""
+
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    project_title: str = ""
+    language: str = "DE"
+    # TEXT_READY|AUDIO_PENDING|AUDIO_READY|READY_FOR_CUT|NEEDS_REVIEW
+    status: str = PLAN_STATUS_TEXT_READY
+    readiness: ProjectPlanReadiness = Field(default_factory=ProjectPlanReadiness)
+    project_brief_hash: str = ""
+    style_profile_hash: str = ""
+    dramaturgy_hash: str = ""
+    folder_voiceovers_hash: str = ""
+    intro_hook_hash: str = ""
+    audio_manifest_hash: str = ""
+    intro: ConfirmedIntroPlanItem = Field(default_factory=ConfirmedIntroPlanItem)
+    folders: list[ConfirmedFolderPlanItem] = Field(default_factory=list)
+    warnings: list[ReadinessError] = Field(default_factory=list)
+    blockers: list[ReadinessError] = Field(default_factory=list)
+    source_artifacts: dict[str, Any] = Field(default_factory=dict)
