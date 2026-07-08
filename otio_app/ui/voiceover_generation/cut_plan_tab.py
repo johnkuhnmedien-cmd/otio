@@ -1,4 +1,4 @@
-"""Phase 8.4/8.5/8.6: Cut-Plan-Tab — Validierung, Visual Coverage, Supplement Bridge.
+"""Phase 8.4-8.7: Cut-Plan-Tab — Validierung, Visual Coverage, Supplement Bridge, Confirm+Trace.
 
 Baut auf Phase 8.2 (Timeline-/Audio-Platzierung) und Phase 8.3 (Asset-
 Auswahl, Fallback, Dauer-/Split-/Merge) auf und ergänzt die vollständige
@@ -8,9 +8,11 @@ während der Asset-Auswahl automatisch angewendet wird, damit initialer
 Audio-Vorlauf und Sektions-Pausen nicht zu Schwarzbild führen. Phase 8.6
 ergänzt eine isolierte Supplement Bridge (siehe cut_plan_supplement_bridge.py):
 Kandidatensuche und Downloads laufen AUSSCHLIESSLICH bei explizitem
-Nutzerklick, niemals automatisch. Noch KEIN Confirm/Lock, kein
-EditPlanDocument, kein OTIO-Export, kein LLM-Konfliktlöser. Diese Schritte
-folgen in späteren Sub-Phasen (8.7ff)."""
+Nutzerklick, niemals automatisch. Phase 8.7 ergänzt Confirm + Trace (siehe
+cut_plan_confirm_service.py/cut_plan_trace_service.py): ein bereits
+validierter Draft kann explizit als unveränderlicher Snapshot bestätigt
+werden. Weiterhin KEIN EditPlanDocument, kein OTIO-Export, kein locked
+EditPlan, kein LLM-Konfliktlöser."""
 
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ from otio_app.defaults import (
     CUT_PLAN_ASSET_SELECTION_PRIMARY_USED,
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED,
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_USED,
+    CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
     CUT_PLAN_VALIDATION_STATUS_BLOCKED,
     CUT_PLAN_VALIDATION_STATUS_PASS,
     CUT_PLAN_VALIDATION_STATUS_WARNING,
@@ -46,6 +49,13 @@ from otio_app.services.voiceover_generation.cut_plan_builder import (
     save_cut_plan_draft,
     validate_cut_plan_draft,
 )
+from otio_app.services.voiceover_generation.cut_plan_confirm_service import (
+    can_confirm_cut_plan,
+    confirm_cut_plan,
+    is_confirmed_cut_plan_stale,
+    load_confirmed_cut_plan,
+    unconfirm_cut_plan,
+)
 from otio_app.services.voiceover_generation.cut_plan_models import (
     CutPlanDocument,
     CutPlanSettings,
@@ -63,7 +73,11 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     save_cut_plan_supplement_requests,
     search_candidates_for_cut_plan_request,
 )
-from otio_app.services.voiceover_generation.cut_plan_validator import load_cut_plan_validation_report
+from otio_app.services.voiceover_generation.cut_plan_trace_service import load_cut_plan_trace
+from otio_app.services.voiceover_generation.cut_plan_validator import (
+    content_hash_of_cut_plan_content,
+    load_cut_plan_validation_report,
+)
 from otio_app.services.voiceover_generation.final_plan_service import (
     load_confirmed_voiceover_project_plan,
 )
@@ -364,7 +378,7 @@ def _render_validation_report(project: Project, draft: CutPlanDocument) -> None:
         st.info("Noch kein Validation Report vorhanden. Bitte „Cut Plan validieren“ klicken.")
         return
 
-    current_hash = content_hash_of_model(draft)
+    current_hash = content_hash_of_cut_plan_content(draft)
     if report.cut_plan_hash != current_hash:
         st.warning(
             "Der Validation Report ist veraltet — der Cut Plan hat sich seit der letzten "
@@ -521,6 +535,7 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                 st.caption("Letzte Suche ergab keine Kandidaten.")
                 continue
 
+            is_already_accepted = request.status == CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED
             for candidate in candidates_document.candidates:
                 candidate_cols = st.columns([3, 1])
                 with candidate_cols[0]:
@@ -536,8 +551,35 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                         st.caption(f"Quelle: {candidate.source_url}")
                     if candidate.risks:
                         st.warning(f"Risiken: {', '.join(candidate.risks)}")
+                    if is_already_accepted and candidate.candidate_id == request.accepted_candidate_id:
+                        st.caption("✅ Dies ist der aktuell akzeptierte Kandidat.")
                 with candidate_cols[1]:
-                    if st.button(
+                    if is_already_accepted:
+                        # Vorab-Hardening (Phase 8.7): ein bereits akzeptierter
+                        # Request darf nicht still durch einen zweiten Klick
+                        # überschrieben werden — nur ein expliziter,
+                        # klar gewarnter „Ersetzen“-Button ist erlaubt.
+                        st.warning("Bereits akzeptiert.")
+                        if st.button(
+                            "Akzeptierten Candidate ersetzen",
+                            key=(
+                                f"cut_plan_supplement_replace_{project.id}_"
+                                f"{request.request_id}_{candidate.candidate_id}"
+                            ),
+                            help="Ersetzt bewusst das bereits akzeptierte Supplement-Asset dieses Requests.",
+                        ):
+                            try:
+                                with st.spinner("Kandidat wird ersetzt…"):
+                                    accept_cut_plan_supplement_candidate(
+                                        project, request.request_id, candidate.candidate_id, force_replace=True
+                                    )
+                                st.success(
+                                    "Supplement-Asset ersetzt. Bitte Cut Plan erneut validieren."
+                                )
+                                st.rerun()
+                            except ValueError as exc:
+                                st.error(str(exc))
+                    elif st.button(
                         "Akzeptieren",
                         key=f"cut_plan_supplement_accept_{project.id}_{request.request_id}_{candidate.candidate_id}",
                     ):
@@ -552,6 +594,114 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                             st.rerun()
                         except ValueError as exc:
                             st.error(str(exc))
+
+
+def _render_confirmed_cut_plan(project: Project, draft: CutPlanDocument) -> None:
+    """Phase 8.7: Confirm + Trace. Kein Rebuild, keine erneute Asset-Auswahl,
+    keine erneute Validierung — nur der bereits validierte Draft wird als
+    unveränderlicher Snapshot übernommen. Ein bestehender bestätigter Cut
+    Plan wird NIEMALS automatisch durch Draft-/Asset-Auswahl-/Validierungs-
+    Änderungen ersetzt, nur durch einen expliziten, klar gewarnten Klick."""
+    st.subheader("Bestätigter Cut Plan")
+
+    confirmed = load_confirmed_cut_plan(project)
+    trace = load_cut_plan_trace(project)
+
+    if confirmed is not None:
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Status", confirmed.status)
+        with col2:
+            st.metric("Cut Plan Items", len(confirmed.items))
+        with col3:
+            st.metric("Audio Items", len(confirmed.audio_items))
+        with col4:
+            total_segments = sum(len(item.planned_visual_segments) for item in confirmed.items)
+            st.metric("VisualSegments", total_segments)
+
+        st.caption(f"generated_at: `{confirmed.generated_at}` · confirmed_at: `{confirmed.confirmed_at or '—'}`")
+        st.caption(f"source_plan_hash: `{confirmed.source_plan_hash}`")
+        st.caption(f"Trace vorhanden: {'✅ Ja' if trace is not None else '❌ Nein'}")
+
+        if is_confirmed_cut_plan_stale(project, confirmed):
+            st.warning(
+                "Es gibt einen neueren/anderen Draft (der bestätigte Voice-over-Projektplan oder die "
+                "Cut-Plan-Settings haben sich seit der Bestätigung geändert). Confirmed Plan bleibt "
+                "unverändert."
+            )
+        st.info(
+            "Es gibt bereits einen bestätigten Cut Plan. Änderungen am Draft ersetzen ihn nicht automatisch."
+        )
+
+        if st.button("Bestätigung zurücknehmen", key=f"cut_plan_unconfirm_{project.id}"):
+            unconfirm_cut_plan(project)
+            st.success("Bestätigung zurückgenommen — cut_plan.confirmed.json entfernt.")
+            st.rerun()
+    else:
+        st.info("Noch kein bestätigter Cut Plan vorhanden.")
+
+    st.divider()
+    st.subheader("Cut Plan bestätigen")
+
+    report = load_cut_plan_validation_report(project)
+    eligible, reasons = can_confirm_cut_plan(project, draft, report)
+
+    if eligible:
+        st.success("Alle Confirm-Bedingungen sind erfüllt.")
+    else:
+        st.warning("Confirm-Bedingungen sind noch nicht erfüllt:")
+        for reason in reasons:
+            st.write(f"❌ {reason}")
+
+    if confirmed is not None:
+        st.warning(
+            "Achtung: Dies ersetzt den bisherigen bestätigten Cut Plan unwiderruflich mit dem aktuellen "
+            "Draft-Stand."
+        )
+        button_label = "Aktuellen Draft bestätigen und bestätigten Cut Plan ersetzen"
+    else:
+        button_label = "Cut Plan bestätigen"
+
+    if st.button(
+        button_label,
+        key=f"cut_plan_confirm_{project.id}",
+        disabled=not eligible,
+        type="primary",
+        help="Übernimmt den bereits validierten Draft unverändert als cut_plan.confirmed.json und "
+        "schreibt cut_plan.trace.json. Kein Rebuild, keine erneute Asset-Auswahl, keine erneute "
+        "Validierung. Kein EditPlanDocument, kein OTIO-Export.",
+    ):
+        try:
+            with st.spinner("Cut Plan wird bestätigt…"):
+                confirm_cut_plan(project)
+            st.success("Cut Plan bestätigt — cut_plan.confirmed.json und cut_plan.trace.json wurden geschrieben.")
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+    if trace is not None and trace.entries:
+        st.divider()
+        st.subheader("Trace")
+        rows = []
+        for entry in trace.entries:
+            first_ref = entry.source_refs[0] if entry.source_refs else None
+            rows.append(
+                {
+                    "cut_item_id": entry.cut_item_id,
+                    "source_scope": first_ref.source_scope if first_ref else "—",
+                    "folder_name": first_ref.folder_name if first_ref else "—",
+                    "chosen_asset_id": entry.chosen_asset_id or "—",
+                    "fallback_used": entry.fallback_used,
+                    "used_supplement_asset": entry.used_supplement_asset,
+                    "duration_strategy": entry.duration_strategy or "—",
+                    "visual_segment_count": entry.visual_segment_count,
+                    "validation_warnings": ", ".join(entry.validation_warnings) or "—",
+                    "validation_blockers": ", ".join(entry.validation_blockers) or "—",
+                }
+            )
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    st.caption("Kein EditPlan-Button, kein OTIO-Button — diese Schritte folgen erst in Phase 9.")
 
 
 def render_cut_plan_page() -> None:
@@ -677,7 +827,7 @@ def render_cut_plan_page() -> None:
                 st.error(str(exc))
 
     st.caption(
-        "🚧 Confirm/Lock, EditPlanDocument-Übersetzung und OTIO-Export folgen in späteren Sub-Phasen (8.7ff)."
+        "🚧 EditPlanDocument-Übersetzung, locked EditPlan und OTIO-Export folgen erst in Phase 9."
     )
 
     if existing_draft is not None:
@@ -685,6 +835,8 @@ def render_cut_plan_page() -> None:
         _render_supplement_requests(project, existing_draft)
         st.divider()
         _render_cut_plan_draft(project, existing_draft)
+        st.divider()
+        _render_confirmed_cut_plan(project, existing_draft)
     elif source_plan is not None:
         st.info("Noch kein Cut Plan Draft vorhanden.")
     else:

@@ -190,6 +190,10 @@ class CutPlanDocument(BaseModel):
     source_plan_path: str = ""
     source_plan_hash: str = ""
     status: str = CUT_PLAN_STATUS_DRAFT  # DRAFT|VALIDATED|NEEDS_REVIEW|CONFIRMED|BLOCKED
+    # Phase 8.7: additiv ergänzt — generated_at bleibt der ursprüngliche
+    # Erzeugungszeitpunkt des Drafts, confirmed_at wird erst beim Bestätigen
+    # gesetzt (siehe cut_plan_confirm_service.confirm_cut_plan).
+    confirmed_at: datetime | None = None
     timeline_fps: int = CUT_PLAN_DEFAULT_TIMELINE_FPS
     initial_audio_offset_sec: float = CUT_PLAN_DEFAULT_INITIAL_AUDIO_OFFSET_SEC
     pause_between_sections_sec: float = CUT_PLAN_DEFAULT_PAUSE_BETWEEN_SECTIONS_SEC
@@ -228,6 +232,16 @@ class CutPlanTraceEntry(BaseModel):
     timeline_end_sec: float = 0.0
     validation_warnings: list[str] = Field(default_factory=list)
     validation_blockers: list[str] = Field(default_factory=list)
+    # Phase 8.7: additiv ergänzt.
+    asset_selection_status: str = ""
+    visual_segment_ids: list[str] = Field(default_factory=list)
+    visual_segment_count: int = 0
+    used_supplement_asset: bool = False
+    fallback_reason: str = ""
+    # Distinkte '+'-getrennte reason-Marker aus allen VisualSegments dieses
+    # Items, z. B. initial_preroll_extension, section_pause_hold,
+    # merged_short_sentence, split_long_sentence_continuation, supplement_asset.
+    visual_segment_reason_markers: list[str] = Field(default_factory=list)
 
 
 class CutPlanTraceDocument(BaseModel):

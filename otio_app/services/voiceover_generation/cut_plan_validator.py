@@ -60,7 +60,7 @@ from otio_app.services.voiceover_generation.cut_plan_models import (
     CutPlanValidationReport,
     VisualSegment,
 )
-from otio_app.services.voiceover_generation.llm_trace_service import content_hash_of_model
+from otio_app.services.voiceover_generation.llm_trace_service import content_hash, content_hash_of_model
 from otio_app.services.voiceover_generation.final_plan_service import load_confirmed_voiceover_project_plan
 
 __all__ = [
@@ -70,6 +70,7 @@ __all__ = [
     "load_cut_plan_validation_report",
     "classify_cut_plan_status",
     "attach_validation_to_cut_plan",
+    "content_hash_of_cut_plan_content",
     "validate_source_plan_readiness",
     "validate_audio_items",
     "validate_cut_items",
@@ -199,6 +200,36 @@ def _reason_has_marker(reason: str, marker: str) -> bool:
     Pause abdeckt (siehe cut_plan_visual_coverage._combine_reason,
     Phase 8.5)."""
     return marker in reason.split("+")
+
+
+def content_hash_of_cut_plan_content(cut_plan: CutPlanDocument) -> str:
+    """Hash NUR des redaktionellen/technischen Cut-Plan-Inhalts (Items,
+    VisualSegments, Audio-Platzierung, Settings-Snapshot) — schließt die
+    Validierungsergebnisse SELBST aus (status, warnings, blockers auf
+    Dokument- UND Item-Ebene, generated_at, confirmed_at).
+
+    Ohne diesen Ausschluss würde ein frisch validierter Cut Plan sofort als
+    „seit der Validierung geändert“ gelten: attach_validation_to_cut_plan
+    schreibt genau diese Felder (status/warnings/blockers), wodurch ein
+    naiver Hash-Vergleich (content_hash_of_model) IMMER einen Unterschied
+    zwischen dem beim Validieren berechneten Hash und dem Hash des
+    anschließend gespeicherten Drafts gefunden hätte — das hätte Confirm
+    (Phase 8.7) permanent blockiert. Diese Funktion ist daher die einzige
+    Quelle für CutPlanValidationReport.cut_plan_hash UND für jeden späteren
+    Staleness-Vergleich (UI, can_confirm_cut_plan), damit beide Seiten
+    konsistent denselben Hash berechnen."""
+    payload = cut_plan.model_dump(
+        mode="json",
+        exclude={
+            "status": True,
+            "warnings": True,
+            "blockers": True,
+            "generated_at": True,
+            "confirmed_at": True,
+            "items": {"__all__": {"warnings", "blockers"}},
+        },
+    )
+    return content_hash(json.dumps(payload, sort_keys=True, ensure_ascii=False))
 
 
 def _cached_probe_duration(asset_path: str, cache: dict[str, float | None]) -> float | None:
@@ -809,7 +840,7 @@ def validate_cut_plan(project: Project, cut_plan: CutPlanDocument) -> CutPlanVal
 
     return CutPlanValidationReport(
         project_id=project.id,
-        cut_plan_hash=content_hash_of_model(cut_plan),
+        cut_plan_hash=content_hash_of_cut_plan_content(cut_plan),
         status=report_status,
         errors=warnings + blockers,
         warnings=warnings,
