@@ -652,6 +652,43 @@ def settings_from_snapshot(project: Project, cut_plan: CutPlanDocument) -> CutPl
     return CutPlanSettings(project_id=project.id, **cut_plan.settings_snapshot)
 
 
+def aggregate_item_level_errors(
+    items: list[CutPlanItem],
+) -> tuple[list[CutPlanValidationError], list[CutPlanValidationError]]:
+    """Sammelt item.warnings/item.blockers (einfache Typ-Strings) zu
+    vollständigen CutPlanValidationError-Einträgen auf Dokument-Ebene.
+    Gemeinsam genutzt von apply_asset_selection_to_cut_plan (Phase 8.3) und
+    apply_accepted_supplement_to_cut_plan_item (Phase 8.6), damit beide
+    Stellen dieselbe Aggregations-Semantik verwenden."""
+    warnings: list[CutPlanValidationError] = []
+    blockers: list[CutPlanValidationError] = []
+    for item in items:
+        scope = "sentence" if item.source_scope == AUDIO_SCOPE_FOLDER else "intro"
+        for warning_type in item.warnings:
+            warnings.append(
+                CutPlanValidationError(
+                    type=warning_type,
+                    severity=READINESS_SEVERITY_WARNING,
+                    scope=scope,
+                    cut_item_id=item.cut_item_id,
+                    folder_name=item.folder_name,
+                    message=f"{item.cut_item_id}: {warning_type}",
+                )
+            )
+        for blocker_type in item.blockers:
+            blockers.append(
+                CutPlanValidationError(
+                    type=blocker_type,
+                    severity=READINESS_SEVERITY_BLOCKER,
+                    scope=scope,
+                    cut_item_id=item.cut_item_id,
+                    folder_name=item.folder_name,
+                    message=f"{item.cut_item_id}: {blocker_type}",
+                )
+            )
+    return warnings, blockers
+
+
 def apply_asset_selection_to_cut_plan(project: Project, cut_plan: CutPlanDocument) -> CutPlanDocument:
     """Wendet Asset-Auswahl, Fallback-Logik sowie Dauer-/Split-/Merge-
     Strategie auf einen bestehenden Cut-Plan-Entwurf an. Lädt den
@@ -699,31 +736,7 @@ def apply_asset_selection_to_cut_plan(project: Project, cut_plan: CutPlanDocumen
 
     asset_usage_summary = update_asset_usage_summary(coverage_cut_plan)
 
-    warnings: list[CutPlanValidationError] = []
-    blockers: list[CutPlanValidationError] = []
-    for item in updated_items:
-        for warning_type in item.warnings:
-            warnings.append(
-                CutPlanValidationError(
-                    type=warning_type,
-                    severity=READINESS_SEVERITY_WARNING,
-                    scope="sentence" if item.source_scope == AUDIO_SCOPE_FOLDER else "intro",
-                    cut_item_id=item.cut_item_id,
-                    folder_name=item.folder_name,
-                    message=f"{item.cut_item_id}: {warning_type}",
-                )
-            )
-        for blocker_type in item.blockers:
-            blockers.append(
-                CutPlanValidationError(
-                    type=blocker_type,
-                    severity=READINESS_SEVERITY_BLOCKER,
-                    scope="sentence" if item.source_scope == AUDIO_SCOPE_FOLDER else "intro",
-                    cut_item_id=item.cut_item_id,
-                    folder_name=item.folder_name,
-                    message=f"{item.cut_item_id}: {blocker_type}",
-                )
-            )
+    warnings, blockers = aggregate_item_level_errors(updated_items)
 
     status = CUT_PLAN_STATUS_NEEDS_REVIEW if blockers else CUT_PLAN_STATUS_DRAFT
 

@@ -1,14 +1,16 @@
-"""Phase 8.4/8.5: Cut-Plan-Tab mit vollständiger Validierung + Visual Coverage.
+"""Phase 8.4/8.5/8.6: Cut-Plan-Tab — Validierung, Visual Coverage, Supplement Bridge.
 
 Baut auf Phase 8.2 (Timeline-/Audio-Platzierung) und Phase 8.3 (Asset-
 Auswahl, Fallback, Dauer-/Split-/Merge) auf und ergänzt die vollständige
 Cut-Plan-Validierung (siehe cut_plan_validator.py). Phase 8.5 ergänzt den
 Visual-Coverage-Fix (siehe cut_plan_visual_coverage.py), der bereits
 während der Asset-Auswahl automatisch angewendet wird, damit initialer
-Audio-Vorlauf und Sektions-Pausen nicht zu Schwarzbild führen. Noch KEIN
-Confirm/Lock, kein EditPlanDocument, kein OTIO-Export, keine Supplement-
-Suche/-Beschaffung, kein LLM-Konfliktlöser. Diese Schritte folgen in
-späteren Sub-Phasen (8.6ff)."""
+Audio-Vorlauf und Sektions-Pausen nicht zu Schwarzbild führen. Phase 8.6
+ergänzt eine isolierte Supplement Bridge (siehe cut_plan_supplement_bridge.py):
+Kandidatensuche und Downloads laufen AUSSCHLIESSLICH bei explizitem
+Nutzerklick, niemals automatisch. Noch KEIN Confirm/Lock, kein
+EditPlanDocument, kein OTIO-Export, kein LLM-Konfliktlöser. Diese Schritte
+folgen in späteren Sub-Phasen (8.7ff)."""
 
 from __future__ import annotations
 
@@ -17,10 +19,12 @@ from otio_app.defaults import (
     CUT_PLAN_ASSET_SELECTION_BLOCKED,
     CUT_PLAN_ASSET_SELECTION_PRIMARY_USED,
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED,
+    CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_USED,
     CUT_PLAN_VALIDATION_STATUS_BLOCKED,
     CUT_PLAN_VALIDATION_STATUS_PASS,
     CUT_PLAN_VALIDATION_STATUS_WARNING,
     PLAN_STATUS_READY_FOR_CUT,
+    SUPPLEMENT_SOURCE_PEXELS,
 )
 from otio_app.models import Project
 from otio_app.project_layout import (
@@ -31,6 +35,8 @@ from otio_app.project_layout import (
     get_cut_plan_trace_path,
     get_cut_plan_validation_report_path,
 )
+from otio_app.services.api_keys import get_api_key
+from otio_app.services.supplement_search import build_keyword_query
 from otio_app.services.voiceover_generation.cut_plan_builder import (
     apply_asset_selection_to_draft,
     build_cut_plan_draft,
@@ -48,6 +54,14 @@ from otio_app.services.voiceover_generation.cut_plan_models import (
 from otio_app.services.voiceover_generation.cut_plan_settings_service import (
     load_cut_plan_settings,
     save_cut_plan_settings,
+)
+from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
+    accept_cut_plan_supplement_candidate,
+    build_supplement_requests_from_cut_plan,
+    load_cut_plan_supplement_candidates_for_request,
+    load_cut_plan_supplement_requests,
+    save_cut_plan_supplement_requests,
+    search_candidates_for_cut_plan_request,
 )
 from otio_app.services.voiceover_generation.cut_plan_validator import load_cut_plan_validation_report
 from otio_app.services.voiceover_generation.final_plan_service import (
@@ -235,6 +249,7 @@ def _render_cut_plan_draft(project: Project, draft: CutPlanDocument) -> None:
         CUT_PLAN_ASSET_SELECTION_PRIMARY_USED: 0,
         CUT_PLAN_ASSET_SELECTION_BACKUP_USED: 0,
         CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED: 0,
+        CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_USED: 0,
         CUT_PLAN_ASSET_SELECTION_BLOCKED: 0,
     }
     for item in draft.items:
@@ -252,7 +267,7 @@ def _render_cut_plan_draft(project: Project, draft: CutPlanDocument) -> None:
     with col4:
         st.metric("VisualSegments", total_segments)
 
-    col5, col6, col7, col8 = st.columns(4)
+    col5, col6, col7, col8, col9 = st.columns(5)
     with col5:
         st.metric("PRIMARY_USED", status_counts[CUT_PLAN_ASSET_SELECTION_PRIMARY_USED])
     with col6:
@@ -260,12 +275,14 @@ def _render_cut_plan_draft(project: Project, draft: CutPlanDocument) -> None:
     with col7:
         st.metric("SUPPLEMENT_REQUIRED", status_counts[CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED])
     with col8:
+        st.metric("SUPPLEMENT_USED", status_counts[CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_USED])
+    with col9:
         st.metric("BLOCKED", status_counts[CUT_PLAN_ASSET_SELECTION_BLOCKED])
 
-    col9, col10 = st.columns(2)
-    with col9:
-        st.metric("Warnings", len(draft.warnings))
+    col10, col11 = st.columns(2)
     with col10:
+        st.metric("Warnings", len(draft.warnings))
+    with col11:
         st.metric("Blocker", len(draft.blockers))
 
     with st.expander("Audio Items (A1)", expanded=False):
@@ -390,6 +407,153 @@ def _render_validation_report(project: Project, draft: CutPlanDocument) -> None:
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
 
+def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> None:
+    """Phase 8.6: isolierte Supplement Bridge. Externe Provider-Suche und
+    Downloads laufen ausschließlich bei explizitem Klick auf „Kandidaten
+    suchen“ bzw. „Akzeptieren“ — niemals automatisch beim Laden dieser Seite."""
+    st.subheader("Supplement Requests")
+    st.caption(
+        "Isolierte Supplement Requests aus dem Cut Plan — getrennt von der "
+        "produktionsseitigen Supplement-Pipeline (`_otio/supplement/`). Suche und "
+        "Download laufen ausschließlich bei explizitem Klick, nie automatisch."
+    )
+
+    requests_document = load_cut_plan_supplement_requests(project)
+    current_hash = content_hash_of_model(draft)
+
+    if requests_document is None:
+        if st.button(
+            "Supplement Requests aus Cut Plan erzeugen",
+            key=f"cut_plan_supplement_build_requests_{project.id}",
+        ):
+            new_document = build_supplement_requests_from_cut_plan(project, draft)
+            save_cut_plan_supplement_requests(project, new_document)
+            st.success(f"{len(new_document.requests)} Supplement Request(s) erzeugt.")
+            st.rerun()
+        return
+
+    if requests_document.source_cut_plan_hash != current_hash:
+        st.warning(
+            "Die Supplement Requests wurden aus einer älteren Version des Cut Plans erzeugt. "
+            "Bitte bei Bedarf neu erzeugen."
+        )
+    if st.button(
+        "Supplement Requests neu erzeugen",
+        key=f"cut_plan_supplement_rebuild_requests_{project.id}",
+    ):
+        new_document = build_supplement_requests_from_cut_plan(project, draft)
+        save_cut_plan_supplement_requests(project, new_document)
+        st.success(f"{len(new_document.requests)} Supplement Request(s) erzeugt.")
+        st.rerun()
+
+    if not requests_document.requests:
+        st.info("Keine Supplement Requests — kein Item benötigt aktuell ein Supplement-Asset.")
+        return
+
+    rows = [
+        {
+            "request_id": request.request_id,
+            "cut_item_id": request.cut_item_id,
+            "source_scope": request.source_scope,
+            "folder_name": request.folder_name or "—",
+            "text": request.text,
+            "visual_intent": request.visual_intent or "—",
+            "needed_duration_sec": request.needed_duration_sec,
+            "reason": request.reason,
+            "status": request.status,
+        }
+        for request in requests_document.requests
+    ]
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    pexels_ready = bool(get_api_key("PEXELS_API_KEY"))
+    if not pexels_ready:
+        st.warning("PEXELS_API_KEY fehlt — die Kandidatensuche liefert ohne Key keine Treffer.")
+
+    for request in requests_document.requests:
+        with st.expander(f"{request.request_id} — {request.status}", expanded=False):
+            st.write(f"**Cut Item:** {request.cut_item_id} ({request.source_scope}, {request.folder_name or '—'})")
+            st.write(f"**Text:** {request.text}")
+            st.write(f"**Visual Intent:** {request.visual_intent or '—'}")
+            st.write(f"**Needed duration:** {request.needed_duration_sec:.2f}s")
+            st.write(f"**Reason:** {request.reason}")
+            if request.accepted_asset_id:
+                st.success(
+                    f"Akzeptiertes Asset: `{request.accepted_asset_id}` "
+                    f"(`{request.accepted_asset_path}`)."
+                )
+
+            query_preview = build_keyword_query(
+                folder_name=request.folder_name,
+                visual_requirement=request.visual_intent or request.reason,
+                passage_text=request.text,
+            )
+            st.caption(f"Provider: {SUPPLEMENT_SOURCE_PEXELS} · Query-Vorschau: `{query_preview}`")
+            st.caption(
+                "⚠️ Die Suche kann API-Kontingent beim Provider verbrauchen. Wird nur bei Klick ausgelöst."
+            )
+
+            if st.button(
+                "Supplement-Kandidaten suchen",
+                key=f"cut_plan_supplement_search_{project.id}_{request.request_id}",
+                disabled=not pexels_ready,
+            ):
+                with st.spinner("Kandidaten werden gesucht…"):
+                    candidates_document = search_candidates_for_cut_plan_request(
+                        project, request.request_id, {"provider": SUPPLEMENT_SOURCE_PEXELS}
+                    )
+                if candidates_document.status == "FAILED":
+                    st.error(f"Suche fehlgeschlagen: {candidates_document.error_message}")
+                elif not candidates_document.candidates:
+                    st.info("Keine Kandidaten gefunden.")
+                else:
+                    st.success(f"{len(candidates_document.candidates)} Kandidat(en) gefunden.")
+                st.rerun()
+
+            candidates_document = load_cut_plan_supplement_candidates_for_request(project, request.request_id)
+            if candidates_document is None:
+                st.caption("Noch keine Kandidatensuche durchgeführt.")
+                continue
+            if candidates_document.status == "FAILED":
+                st.error(f"Letzte Suche fehlgeschlagen: {candidates_document.error_message}")
+                continue
+            if not candidates_document.candidates:
+                st.caption("Letzte Suche ergab keine Kandidaten.")
+                continue
+
+            for candidate in candidates_document.candidates:
+                candidate_cols = st.columns([3, 1])
+                with candidate_cols[0]:
+                    st.write(f"**{candidate.title or candidate.candidate_id}** ({candidate.provider})")
+                    st.caption(
+                        f"asset_type={candidate.asset_type} · duration={candidate.duration_sec:.2f}s · "
+                        f"{candidate.width}x{candidate.height} · score={candidate.score:.2f} · "
+                        f"license={candidate.license or '—'}"
+                    )
+                    if candidate.preview_url:
+                        st.caption(f"Preview: {candidate.preview_url}")
+                    if candidate.source_url:
+                        st.caption(f"Quelle: {candidate.source_url}")
+                    if candidate.risks:
+                        st.warning(f"Risiken: {', '.join(candidate.risks)}")
+                with candidate_cols[1]:
+                    if st.button(
+                        "Akzeptieren",
+                        key=f"cut_plan_supplement_accept_{project.id}_{request.request_id}_{candidate.candidate_id}",
+                    ):
+                        try:
+                            with st.spinner("Kandidat wird übernommen…"):
+                                accept_cut_plan_supplement_candidate(
+                                    project, request.request_id, candidate.candidate_id
+                                )
+                            st.success(
+                                "Supplement-Asset übernommen. Bitte Cut Plan erneut validieren."
+                            )
+                            st.rerun()
+                        except ValueError as exc:
+                            st.error(str(exc))
+
+
 def render_cut_plan_page() -> None:
     st.header("⑧ Cut Plan")
 
@@ -455,6 +619,7 @@ def render_cut_plan_page() -> None:
                     CUT_PLAN_ASSET_SELECTION_PRIMARY_USED: 0,
                     CUT_PLAN_ASSET_SELECTION_BACKUP_USED: 0,
                     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED: 0,
+                    CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_USED: 0,
                     CUT_PLAN_ASSET_SELECTION_BLOCKED: 0,
                 }
                 for item in updated_draft.items:
@@ -512,10 +677,12 @@ def render_cut_plan_page() -> None:
                 st.error(str(exc))
 
     st.caption(
-        "🚧 Supplement-Suche/-Beschaffung sowie Confirm/Lock folgen in späteren Sub-Phasen (8.6ff)."
+        "🚧 Confirm/Lock, EditPlanDocument-Übersetzung und OTIO-Export folgen in späteren Sub-Phasen (8.7ff)."
     )
 
     if existing_draft is not None:
+        st.divider()
+        _render_supplement_requests(project, existing_draft)
         st.divider()
         _render_cut_plan_draft(project, existing_draft)
     elif source_plan is not None:

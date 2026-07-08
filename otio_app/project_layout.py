@@ -385,6 +385,43 @@ def get_cut_plan_supplement_requests_path(work_dir: Path) -> Path:
     return get_cut_plan_dir(work_dir) / CUT_PLAN_SUPPLEMENT_REQUESTS_FILENAME
 
 
+def get_cut_plan_supplement_candidates_path(work_dir: Path) -> Path:
+    """Isolierter Kandidaten-Speicher (Phase 8.6) — NIEMALS identisch mit
+    _otio/supplement/supplement_requests.json (Produktion, dort sind
+    Kandidaten Teil desselben Dokuments)."""
+    from otio_app.defaults import CUT_PLAN_SUPPLEMENT_CANDIDATES_FILENAME
+
+    return get_cut_plan_dir(work_dir) / CUT_PLAN_SUPPLEMENT_CANDIDATES_FILENAME
+
+
+def get_cut_plan_supplement_assets_dir(work_dir: Path) -> Path:
+    """Wurzel aller heruntergeladenen Cut-Plan-Supplement-Assets — getrennt
+    von {folder}/_supplemental/ (Produktions-Konvention)."""
+    from otio_app.defaults import CUT_PLAN_SUPPLEMENT_ASSETS_SUBDIR
+
+    return get_cut_plan_dir(work_dir) / CUT_PLAN_SUPPLEMENT_ASSETS_SUBDIR
+
+
+def get_cut_plan_supplement_asset_request_dir(work_dir: Path, request_id: str) -> Path:
+    """Unterordner je Supplement Request unter supplement_assets/."""
+    safe_request_id = "".join(char if char.isalnum() or char in "-_" else "_" for char in request_id) or "request"
+    return get_cut_plan_supplement_assets_dir(work_dir) / safe_request_id
+
+
+def get_cut_plan_supplement_runs_dir(work_dir: Path) -> Path:
+    """Wurzel für optionale Such-/Beschaffungslauf-Protokolle (Phase 8.6)."""
+    from otio_app.defaults import CUT_PLAN_SUPPLEMENT_RUNS_SUBDIR
+
+    return get_cut_plan_dir(work_dir) / CUT_PLAN_SUPPLEMENT_RUNS_SUBDIR
+
+
+def get_cut_plan_supplement_manifest_path(work_dir: Path) -> Path:
+    """Optionales Gesamt-Manifest aller akzeptierten Cut-Plan-Supplement-Assets."""
+    from otio_app.defaults import CUT_PLAN_SUPPLEMENT_MANIFEST_FILENAME
+
+    return get_cut_plan_dir(work_dir) / CUT_PLAN_SUPPLEMENT_MANIFEST_FILENAME
+
+
 def get_supplement_dir(work_dir: Path) -> Path:
     """Verzeichnis für Supplement-Workflow-Dateien."""
     from otio_app.defaults import SUPPLEMENT_SUBDIR
