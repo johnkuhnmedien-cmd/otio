@@ -488,6 +488,57 @@ def get_cut_plan_edit_plan_bridge_confirm_manifest_path(work_dir: Path) -> Path:
     return get_cut_plan_edit_plan_bridge_dir(work_dir) / CUT_PLAN_EDIT_PLAN_BRIDGE_CONFIRM_MANIFEST_FILENAME
 
 
+# --- Production EditPlan Staging (Phase 10.1): isoliertes Staging-Paket aus
+# dem bestätigten EditPlan-Bridge-Snapshot — Geschwister von edit_plan_bridge/
+# unter demselben cut_plan/-Wurzelverzeichnis. NIEMALS unter _otio/edit_plan/
+# (das erfolgt erst in einer separaten, späteren Promote-Phase). ---
+
+
+def get_production_edit_plan_staging_dir(work_dir: Path) -> Path:
+    """Wurzel aller Production-EditPlan-Staging-Artefakte (Phase 10.1)."""
+    from otio_app.defaults import PRODUCTION_EDIT_PLAN_STAGING_SUBDIR
+
+    return get_cut_plan_dir(work_dir) / PRODUCTION_EDIT_PLAN_STAGING_SUBDIR
+
+
+def get_production_edit_plan_package_path(work_dir: Path) -> Path:
+    from otio_app.defaults import PRODUCTION_EDIT_PLAN_PACKAGE_FILENAME
+
+    return get_production_edit_plan_staging_dir(work_dir) / PRODUCTION_EDIT_PLAN_PACKAGE_FILENAME
+
+
+def get_staged_edit_plans_dir(work_dir: Path) -> Path:
+    from otio_app.defaults import PRODUCTION_EDIT_PLAN_STAGED_EDIT_PLANS_SUBDIR
+
+    return get_production_edit_plan_staging_dir(work_dir) / PRODUCTION_EDIT_PLAN_STAGED_EDIT_PLANS_SUBDIR
+
+
+def get_staged_edit_plan_dir(work_dir: Path, staging_section_id: str) -> Path:
+    """Unterordner je Sektion unter staged_edit_plans/ — dateinamensicher."""
+    safe_section_id = (
+        "".join(char if char.isalnum() or char in "-_" else "_" for char in staging_section_id) or "section"
+    )
+    return get_staged_edit_plans_dir(work_dir) / safe_section_id
+
+
+def get_staged_edit_plan_path(work_dir: Path, staging_section_id: str) -> Path:
+    from otio_app.defaults import PRODUCTION_EDIT_PLAN_STAGED_EDIT_PLAN_FILENAME
+
+    return get_staged_edit_plan_dir(work_dir, staging_section_id) / PRODUCTION_EDIT_PLAN_STAGED_EDIT_PLAN_FILENAME
+
+
+def get_production_edit_plan_mapping_trace_path(work_dir: Path) -> Path:
+    from otio_app.defaults import PRODUCTION_EDIT_PLAN_MAPPING_TRACE_FILENAME
+
+    return get_production_edit_plan_staging_dir(work_dir) / PRODUCTION_EDIT_PLAN_MAPPING_TRACE_FILENAME
+
+
+def get_production_edit_plan_validation_report_path(work_dir: Path) -> Path:
+    from otio_app.defaults import PRODUCTION_EDIT_PLAN_VALIDATION_REPORT_FILENAME
+
+    return get_production_edit_plan_staging_dir(work_dir) / PRODUCTION_EDIT_PLAN_VALIDATION_REPORT_FILENAME
+
+
 def get_supplement_dir(work_dir: Path) -> Path:
     """Verzeichnis für Supplement-Workflow-Dateien."""
     from otio_app.defaults import SUPPLEMENT_SUBDIR
