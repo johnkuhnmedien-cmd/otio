@@ -441,12 +441,18 @@ def test_cut_plan_modules_exist_and_are_discovered() -> None:
 
 def test_cut_plan_modules_never_reference_forbidden_production_symbols() -> None:
     import importlib
+    import re
 
     for module_name in _cut_plan_module_names():
         module = importlib.import_module(module_name)
         source = inspect.getsource(module)
         for forbidden in _FORBIDDEN_SYMBOLS:
-            assert forbidden not in source, (
+            # Wort-Grenzen-Suche statt reiner Substring-Suche: verhindert
+            # False Positives durch legitime, längere Bridge-Funktionsnamen
+            # wie build_edit_plan_draft_from_confirmed_cut_plan (Phase 9.1),
+            # die 'build_edit_plan' nur als Präfix enthalten, nicht als
+            # eigenständigen Aufruf/Bezeichner.
+            assert not re.search(rf"\b{re.escape(forbidden)}\b", source), (
                 f"{module_name} referenziert verbotenes Produktions-Symbol '{forbidden}'."
             )
 

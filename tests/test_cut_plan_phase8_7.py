@@ -661,6 +661,8 @@ _FORBIDDEN_SYMBOLS = (
 
 
 def test_cut_plan_modules_never_reference_forbidden_production_symbols() -> None:
+    import re
+
     import otio_app.services.voiceover_generation.cut_plan_asset_selector as asset_selector_module
     import otio_app.services.voiceover_generation.cut_plan_builder as builder_module
     import otio_app.services.voiceover_generation.cut_plan_confirm_service as confirm_module
@@ -678,7 +680,9 @@ def test_cut_plan_modules_never_reference_forbidden_production_symbols() -> None
     ):
         source = inspect.getsource(module)
         for forbidden in _FORBIDDEN_SYMBOLS:
-            assert forbidden not in source, f"{module.__name__} referenziert verbotenes Symbol '{forbidden}'."
+            assert not re.search(rf"\b{re.escape(forbidden)}\b", source), (
+                f"{module.__name__} referenziert verbotenes Symbol '{forbidden}'."
+            )
 
 
 def test_with_voiceover_workflow_unaffected() -> None:

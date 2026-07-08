@@ -101,6 +101,8 @@ def test_placeholder_page_writes_no_edit_plan_document(
 def test_placeholder_pages_never_reference_production_edit_plan_functions() -> None:
     """Statischer Schutz: Kein Modul dieser Pipeline darf Produktions-Symbole
     aus edit_plan_builder.py / otio_exporter.py / edit_plan.py referenzieren."""
+    import re
+
     package_path = Path(voiceover_generation_pkg.__file__).parent
     for module_info in pkgutil.iter_modules([str(package_path)]):
         module = importlib.import_module(
@@ -108,7 +110,10 @@ def test_placeholder_pages_never_reference_production_edit_plan_functions() -> N
         )
         source = inspect.getsource(module)
         for forbidden in FORBIDDEN_SYMBOLS:
-            assert forbidden not in source, (
+            # Wort-Grenzen statt Substring-Suche: vermeidet False Positives
+            # durch legitime, isolierte Bridge-Funktionsnamen (Phase 9.1), die
+            # z. B. 'build_edit_plan' nur als Präfix enthalten.
+            assert not re.search(rf"\b{re.escape(forbidden)}\b", source), (
                 f"{module.__name__} referenziert verbotenes Produktions-Symbol "
                 f"'{forbidden}' — der neue Workflow muss vom Produktionspfad "
                 "getrennt bleiben."
