@@ -1,10 +1,11 @@
-"""Phase 8.3: Cut-Plan-Tab mit Asset-Auswahl, Fallback, Dauer-/Split-/Merge.
+"""Phase 8.4: Cut-Plan-Tab mit vollständiger Validierung.
 
-Baut auf dem Phase-8.2-Entwurf auf (Timeline-/Audio-Platzierung, siehe
-cut_plan_timeline_service.py) und wendet jetzt Asset-Auswahl an (siehe
-cut_plan_asset_selector.py). Noch KEINE Supplement-Suche/-Beschaffung,
-keine vollständige Validierung, kein Confirm/Lock, kein EditPlanDocument,
-kein OTIO-Export. Diese Schritte folgen in späteren Sub-Phasen (8.4ff)."""
+Baut auf Phase 8.2 (Timeline-/Audio-Platzierung) und Phase 8.3 (Asset-
+Auswahl, Fallback, Dauer-/Split-/Merge) auf und ergänzt jetzt die
+vollständige Cut-Plan-Validierung (siehe cut_plan_validator.py). Noch KEIN
+Confirm/Lock, kein EditPlanDocument, kein OTIO-Export, keine Supplement-
+Suche/-Beschaffung, kein LLM-Konfliktlöser. Diese Schritte folgen in
+späteren Sub-Phasen (8.5ff)."""
 
 from __future__ import annotations
 
@@ -13,6 +14,9 @@ from otio_app.defaults import (
     CUT_PLAN_ASSET_SELECTION_BLOCKED,
     CUT_PLAN_ASSET_SELECTION_PRIMARY_USED,
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED,
+    CUT_PLAN_VALIDATION_STATUS_BLOCKED,
+    CUT_PLAN_VALIDATION_STATUS_PASS,
+    CUT_PLAN_VALIDATION_STATUS_WARNING,
     PLAN_STATUS_READY_FOR_CUT,
 )
 from otio_app.models import Project
@@ -28,17 +32,25 @@ from otio_app.services.voiceover_generation.cut_plan_builder import (
     apply_asset_selection_to_draft,
     build_cut_plan_draft,
     is_cut_plan_draft_stale,
+    is_cut_plan_settings_stale,
     load_cut_plan_draft,
     save_cut_plan_draft,
+    validate_cut_plan_draft,
 )
-from otio_app.services.voiceover_generation.cut_plan_models import CutPlanDocument, CutPlanSettings
+from otio_app.services.voiceover_generation.cut_plan_models import (
+    CutPlanDocument,
+    CutPlanSettings,
+    CutPlanValidationReport,
+)
 from otio_app.services.voiceover_generation.cut_plan_settings_service import (
     load_cut_plan_settings,
     save_cut_plan_settings,
 )
+from otio_app.services.voiceover_generation.cut_plan_validator import load_cut_plan_validation_report
 from otio_app.services.voiceover_generation.final_plan_service import (
     load_confirmed_voiceover_project_plan,
 )
+from otio_app.services.voiceover_generation.llm_trace_service import content_hash_of_model
 from otio_app.ui.project_context import render_project_selector
 from otio_app.ui.voiceover_generation._shared import require_without_voiceover_mode
 
@@ -213,6 +225,8 @@ def _render_cut_plan_draft(project: Project, draft: CutPlanDocument) -> None:
 
     if is_cut_plan_draft_stale(project, draft):
         st.warning("Der Cut Plan Draft ist veraltet. Bitte neu erzeugen.")
+    if is_cut_plan_settings_stale(project, draft):
+        st.warning("Die Cut-Plan-Settings wurden seit Draft-Erzeugung geändert. Bitte Draft neu erzeugen.")
 
     status_counts = {
         CUT_PLAN_ASSET_SELECTION_PRIMARY_USED: 0,
@@ -317,7 +331,60 @@ def _render_cut_plan_draft(project: Project, draft: CutPlanDocument) -> None:
                 location = f" ({error.scope}: {error.folder_name})" if error.folder_name else f" ({error.scope})"
                 st.warning(f"[{error.type}]{location}: {error.message}")
 
-    st.caption("🚧 Vollständige Validierung und Bestätigung folgen in Phase 8.4.")
+    st.divider()
+    _render_validation_report(project, draft)
+    st.caption("🚧 Confirm/Lock, EditPlanDocument-Übersetzung, OTIO-Export folgen in späteren Sub-Phasen.")
+
+
+def _render_validation_report(project: Project, draft: CutPlanDocument) -> None:
+    st.subheader("Validation Report")
+    report: CutPlanValidationReport | None = load_cut_plan_validation_report(project)
+
+    if report is None:
+        st.info("Noch kein Validation Report vorhanden. Bitte „Cut Plan validieren“ klicken.")
+        return
+
+    current_hash = content_hash_of_model(draft)
+    if report.cut_plan_hash != current_hash:
+        st.warning(
+            "Der Validation Report ist veraltet — der Cut Plan hat sich seit der letzten "
+            "Validierung geändert (z. B. durch erneute Asset-Auswahl). Bitte erneut validieren."
+        )
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if report.status == CUT_PLAN_VALIDATION_STATUS_PASS:
+            st.metric("Validation Status", "✅ PASS")
+        elif report.status == CUT_PLAN_VALIDATION_STATUS_WARNING:
+            st.metric("Validation Status", "⚠️ WARNING")
+        elif report.status == CUT_PLAN_VALIDATION_STATUS_BLOCKED:
+            st.metric("Validation Status", "❌ BLOCKED")
+        else:
+            st.metric("Validation Status", report.status)
+    with col2:
+        st.metric("Warnings", len(report.warnings))
+    with col3:
+        st.metric("Blockers", len(report.blockers))
+
+    if not report.errors:
+        st.success("Keine Warnungen oder Blocker.")
+        return
+
+    rows = [
+        {
+            "type": error.type,
+            "severity": error.severity,
+            "scope": error.scope,
+            "cut_item_id": error.cut_item_id or "—",
+            "folder_name": error.folder_name or "—",
+            "message": error.message,
+            "fix_hint": error.fix_hint or "—",
+            "must_be_fixed_by": error.must_be_fixed_by,
+            "is_retryable_by_llm": error.is_retryable_by_llm,
+        }
+        for error in report.errors
+    ]
+    st.dataframe(rows, use_container_width=True, hide_index=True)
 
 
 def render_cut_plan_page() -> None:
@@ -347,8 +414,9 @@ def render_cut_plan_page() -> None:
 
     source_plan = load_confirmed_voiceover_project_plan(project)
     existing_draft = load_cut_plan_draft(project)
+    settings_stale = existing_draft is not None and is_cut_plan_settings_stale(project, existing_draft)
 
-    col_generate, col_asset_selection = st.columns(2)
+    col_generate, col_asset_selection, col_validate = st.columns(3)
     with col_generate:
         button_label = "Cut Plan Draft erzeugen" if existing_draft is None else "Cut Plan Draft neu erzeugen"
         if st.button(
@@ -371,10 +439,11 @@ def render_cut_plan_page() -> None:
         if st.button(
             "Asset-Auswahl anwenden",
             key=f"cut_plan_apply_asset_selection_{project.id}",
-            disabled=existing_draft is None,
+            disabled=existing_draft is None or settings_stale,
             help="Wendet Asset-Auswahl, Fallback-Logik sowie Dauer-/Split-/Merge-"
-            "Strategie auf den bestehenden Draft an. Noch keine Supplement-Suche, "
-            "keine vollständige Validierung, kein Confirm/Lock.",
+            "Strategie auf den bestehenden Draft an (verwendet cut_plan.settings_snapshot). "
+            "Noch keine Supplement-Suche, keine vollständige Validierung, kein Confirm/Lock."
+            + (" Deaktiviert, da die Cut-Plan-Settings seit Draft-Erzeugung geändert wurden." if settings_stale else ""),
         ):
             try:
                 with st.spinner("Asset-Auswahl wird angewendet…"):
@@ -401,10 +470,33 @@ def render_cut_plan_page() -> None:
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))
+    with col_validate:
+        if st.button(
+            "Cut Plan validieren",
+            key=f"cut_plan_validate_{project.id}",
+            disabled=existing_draft is None,
+            help="Führt die vollständige Cut-Plan-Validierung durch (Phase 8.4) und "
+            "speichert cut_plan.validation_report.json. Kein Confirm/Lock, kein OTIO.",
+        ):
+            try:
+                with st.spinner("Cut Plan wird validiert…"):
+                    validated_draft, report = validate_cut_plan_draft(project)
+                if report.status == CUT_PLAN_VALIDATION_STATUS_PASS:
+                    st.success(f"Validierung: PASS — Status {validated_draft.status}.")
+                elif report.status == CUT_PLAN_VALIDATION_STATUS_WARNING:
+                    st.warning(
+                        f"Validierung: WARNING ({len(report.warnings)} Warnings) — Status {validated_draft.status}."
+                    )
+                else:
+                    st.error(
+                        f"Validierung: BLOCKED ({len(report.blockers)} Blocker) — Status {validated_draft.status}."
+                    )
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
 
     st.caption(
-        "🚧 Supplement-Suche/-Beschaffung, vollständige Validierung sowie Confirm/Lock "
-        "folgen in späteren Sub-Phasen (8.4ff)."
+        "🚧 Supplement-Suche/-Beschaffung sowie Confirm/Lock folgen in späteren Sub-Phasen (8.5ff)."
     )
 
     if existing_draft is not None:

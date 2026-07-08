@@ -48,7 +48,6 @@ from otio_app.services.voiceover_generation.cut_plan_models import (
     CutPlanValidationError,
     VisualSegment,
 )
-from otio_app.services.voiceover_generation.cut_plan_settings_service import load_cut_plan_settings
 from otio_app.services.voiceover_generation.final_plan_service import load_confirmed_voiceover_project_plan
 from otio_app.services.voiceover_generation.models import ConfirmedVoiceoverProjectPlan
 
@@ -68,6 +67,7 @@ __all__ = [
     "build_visual_segments_for_item",
     "determine_duration_strategy",
     "update_asset_usage_summary",
+    "settings_from_snapshot",
 ]
 
 # Segmentdauern innerhalb dieser Toleranz gelten als "am Frame" — vermeidet
@@ -643,18 +643,27 @@ def update_asset_usage_summary(cut_plan: CutPlanDocument) -> dict[str, int]:
     return summary
 
 
+def settings_from_snapshot(project: Project, cut_plan: CutPlanDocument) -> CutPlanSettings:
+    """Baut CutPlanSettings aus cut_plan.settings_snapshot — der eingefrorene
+    Stand zum Zeitpunkt der Draft-Erzeugung, NICHT die ggf. inzwischen
+    geänderte cut_plan_settings.json (Vorab-Hardening vor Phase 8.4, siehe
+    is_cut_plan_settings_stale in cut_plan_builder.py)."""
+    return CutPlanSettings(project_id=project.id, **cut_plan.settings_snapshot)
+
+
 def apply_asset_selection_to_cut_plan(project: Project, cut_plan: CutPlanDocument) -> CutPlanDocument:
     """Wendet Asset-Auswahl, Fallback-Logik sowie Dauer-/Split-/Merge-
     Strategie auf einen bestehenden Cut-Plan-Entwurf an. Lädt den
-    bestätigten Voice-over-Projektplan und die aktuellen Cut-Plan-Settings
-    selbst — reine Funktion, speichert nichts."""
+    bestätigten Voice-over-Projektplan selbst, verwendet aber IMMER
+    cut_plan.settings_snapshot statt der aktuellen cut_plan_settings.json —
+    reine Funktion, speichert nichts."""
     source_plan = load_confirmed_voiceover_project_plan(project)
     if source_plan is None:
         raise ValueError(
             "Kein bestätigter Voice-over-Projektplan (confirmed_voiceover_project_plan.json) vorhanden."
         )
 
-    settings = load_cut_plan_settings(project)
+    settings = settings_from_snapshot(project, cut_plan)
     lookup = load_asset_lookup_for_cut_plan(project, source_plan, cut_plan)
     usage_tracker = UsageTracker()
 
