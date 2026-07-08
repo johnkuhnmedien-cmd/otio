@@ -553,6 +553,32 @@ def get_production_edit_plan_promote_dry_run_trace_path(work_dir: Path) -> Path:
     return get_production_edit_plan_staging_dir(work_dir) / PRODUCTION_EDIT_PLAN_PROMOTE_DRY_RUN_TRACE_FILENAME
 
 
+def get_production_edit_plan_promote_manifest_path(work_dir: Path) -> Path:
+    """Phase 10.6: Promote-Manifest EINES tatsächlichen Promote-Laufs."""
+    from otio_app.defaults import PRODUCTION_EDIT_PLAN_PROMOTE_MANIFEST_FILENAME
+
+    return get_production_edit_plan_staging_dir(work_dir) / PRODUCTION_EDIT_PLAN_PROMOTE_MANIFEST_FILENAME
+
+
+def get_production_edit_plan_voice_folder_mapping_patch_path(work_dir: Path) -> Path:
+    """Phase 10.6: reiner Vorbereitungs-Patch — verändert `voice_folder_mapping.json`
+    selbst NICHT."""
+    from otio_app.defaults import PRODUCTION_EDIT_PLAN_VOICE_FOLDER_MAPPING_PATCH_FILENAME
+
+    return get_production_edit_plan_staging_dir(work_dir) / PRODUCTION_EDIT_PLAN_VOICE_FOLDER_MAPPING_PATCH_FILENAME
+
+
+def get_production_edit_plan_promote_backups_dir(work_dir: Path) -> Path:
+    from otio_app.defaults import PRODUCTION_EDIT_PLAN_PROMOTE_BACKUPS_SUBDIR
+
+    return get_production_edit_plan_staging_dir(work_dir) / PRODUCTION_EDIT_PLAN_PROMOTE_BACKUPS_SUBDIR
+
+
+def get_production_edit_plan_promote_backup_run_dir(work_dir: Path, promote_run_id: str) -> Path:
+    safe_run_id = "".join(char if char.isalnum() or char in "-_" else "_" for char in promote_run_id) or "run"
+    return get_production_edit_plan_promote_backups_dir(work_dir) / safe_run_id
+
+
 def get_supplement_dir(work_dir: Path) -> Path:
     """Verzeichnis für Supplement-Workflow-Dateien."""
     from otio_app.defaults import SUPPLEMENT_SUBDIR

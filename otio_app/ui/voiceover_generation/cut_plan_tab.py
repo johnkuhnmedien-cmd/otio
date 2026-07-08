@@ -41,10 +41,16 @@ from otio_app.defaults import (
     EDIT_PLAN_BRIDGE_VALIDATION_STATUS_PASS,
     EDIT_PLAN_BRIDGE_VALIDATION_STATUS_WARNING,
     PLAN_STATUS_READY_FOR_CUT,
+    PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_ALREADY_PRESENT,
+    PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_NEEDS_REVIEW,
+    PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_WOULD_ADD,
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_BLOCKED,
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_CREATE,
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_OVERWRITE,
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_SKIP_INTRO,
+    PRODUCTION_EDIT_PLAN_PROMOTE_MANIFEST_STATUS_BLOCKED,
+    PRODUCTION_EDIT_PLAN_PROMOTE_MANIFEST_STATUS_NEEDS_REVIEW,
+    PRODUCTION_EDIT_PLAN_PROMOTE_MANIFEST_STATUS_PROMOTED,
     PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_BLOCKED,
     PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_NEEDS_REVIEW,
     PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_READY,
@@ -69,7 +75,9 @@ from otio_app.project_layout import (
     get_folder_edit_plan_path,
     get_production_edit_plan_mapping_trace_path,
     get_production_edit_plan_package_path,
+    get_production_edit_plan_promote_manifest_path,
     get_production_edit_plan_validation_report_path,
+    get_production_edit_plan_voice_folder_mapping_patch_path,
 )
 from otio_app.services.api_keys import get_api_key
 from otio_app.services.supplement_search import build_keyword_query
@@ -141,6 +149,16 @@ from otio_app.services.voiceover_generation.final_plan_service import (
     load_confirmed_voiceover_project_plan,
 )
 from otio_app.services.voiceover_generation.llm_trace_service import content_hash_of_model
+from otio_app.services.voiceover_generation.production_edit_plan_promote_execute import (
+    build_voice_folder_mapping_patch,
+    can_promote_production_edit_plans,
+    is_production_edit_plan_promote_manifest_stale,
+    load_production_edit_plan_promote_manifest,
+    load_voice_folder_mapping_patch,
+    promote_production_edit_plans,
+    save_production_edit_plan_promote_manifest,
+    save_voice_folder_mapping_patch,
+)
 from otio_app.services.voiceover_generation.production_edit_plan_promote_readiness import (
     build_production_edit_plan_promote_dry_run_trace,
     build_production_edit_plan_promote_readiness,
@@ -1387,9 +1405,11 @@ def _render_production_edit_plan_staging(project: Project) -> None:
     st.divider()
     _render_production_edit_plan_promote_readiness(project, package, report)
 
+    st.divider()
+    _render_production_edit_plan_promote_execute(project)
+
     st.caption(
-        "Kein Promote-Button, kein OTIO-Button, kein Lock-Button — diese Schritte folgen erst "
-        "in einer späteren Phase."
+        "Kein OTIO-Button, kein Lock-Button — diese Schritte folgen erst in einer späteren Phase."
     )
 
 
@@ -1532,6 +1552,198 @@ def _render_production_edit_plan_promote_readiness(
                 for entry in dry_run_trace.entries
             ]
             st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
+def _render_production_edit_plan_promote_execute(project: Project) -> None:
+    """Phase 10.6: Actual Production EditPlan Promote — Backup, Manifest,
+    Kollisionsschutz. Dies ist die EINZIGE Stelle, an der nach
+    `_otio/edit_plan/` geschrieben wird — ausschließlich über
+    promote_production_edit_plans() in production_edit_plan_promote_execute
+    .py. Kein OTIO-Export, kein Render, kein Lock-Konzept, keine
+    LLM-Planung, keine automatische Neuplanung, keine automatische
+    Supplement-Suche."""
+    st.subheader("Production EditPlan Promote")
+    st.warning("Dieser Schritt schreibt nach `_otio/edit_plan/`.")
+    st.caption("Bestehende Produktionspläne werden nur überschrieben, wenn du das explizit bestätigst.")
+    st.caption("Intro wird in dieser Phase nicht promotet.")
+    st.caption("Es wird kein OTIO exportiert.")
+
+    readiness = load_production_edit_plan_promote_readiness(project)
+    if readiness is None:
+        st.info("Bitte zuerst oben einen Promote Dry Run ausführen.")
+        return
+
+    readiness_status_label = {
+        PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_READY: "✅ READY",
+        PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_NEEDS_REVIEW: "⚠️ NEEDS_REVIEW",
+        PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_BLOCKED: "❌ BLOCKED",
+    }.get(readiness.status, readiness.status)
+    would_create = sum(
+        1 for s in readiness.sections if s.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_CREATE
+    )
+    would_overwrite_sections = [
+        s for s in readiness.sections if s.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_OVERWRITE
+    ]
+    would_skip_intro = sum(
+        1 for s in readiness.sections if s.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_SKIP_INTRO
+    )
+    would_block = sum(
+        1 for s in readiness.sections if s.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_BLOCKED
+    )
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        st.metric("Readiness Status", readiness_status_label)
+    with col2:
+        st.metric("WOULD_CREATE", would_create)
+    with col3:
+        st.metric("WOULD_OVERWRITE", len(would_overwrite_sections))
+    with col4:
+        st.metric("WOULD_SKIP_INTRO", would_skip_intro)
+    with col5:
+        st.metric("BLOCKED", would_block)
+
+    allow_overwrite_section_ids: list[str] = []
+    if would_overwrite_sections:
+        st.markdown("**Overwrite-Bestätigung erforderlich**")
+        rows = [
+            {
+                "staging_section_id": section.staging_section_id,
+                "folder_name": section.folder_name,
+                "target_edit_plan_path": section.target_edit_plan_path or "—",
+                "existing_confirmed": section.existing_confirmed if section.existing_confirmed is not None else "—",
+            }
+            for section in would_overwrite_sections
+        ]
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        overwrite_confirmed = st.checkbox(
+            "Ich bestätige, dass bestehende Produktionspläne für die ausgewählten Folder überschrieben "
+            "werden dürfen.",
+            key=f"production_edit_plan_promote_overwrite_confirm_{project.id}",
+        )
+        for section in would_overwrite_sections:
+            checked = st.checkbox(
+                f"Überschreiben erlauben: {section.folder_name} ({section.staging_section_id})",
+                key=f"production_edit_plan_promote_overwrite_{project.id}_{section.staging_section_id}",
+                disabled=not overwrite_confirmed,
+            )
+            if overwrite_confirmed and checked:
+                allow_overwrite_section_ids.append(section.staging_section_id)
+
+    eligible, reasons = can_promote_production_edit_plans(
+        project, allow_overwrite_section_ids=allow_overwrite_section_ids
+    )
+    if not eligible:
+        with st.expander("Promote-Voraussetzungen nicht erfüllt", expanded=False):
+            for reason in reasons:
+                st.write(f"❌ {reason}")
+
+    if st.button(
+        "Production EditPlans promoten",
+        key=f"production_edit_plan_promote_execute_{project.id}",
+        disabled=not eligible,
+        type="primary",
+        help="Schreibt alle Nicht-Intro-Sections des validierten Staging-Pakets nach "
+        "_otio/edit_plan/{folder}.json (confirmed=true). Vor jedem Überschreiben wird ein Backup "
+        "erzeugt. Kein OTIO-Export, kein Render, kein Lock. voice_folder_mapping.json wird nicht "
+        "verändert — stattdessen wird ein Vorbereitungs-Patch geschrieben.",
+    ):
+        try:
+            with st.spinner("Production EditPlans werden promotet…"):
+                manifest = promote_production_edit_plans(
+                    project, allow_overwrite_section_ids=allow_overwrite_section_ids
+                )
+                manifest = save_production_edit_plan_promote_manifest(project, manifest)
+                patch = build_voice_folder_mapping_patch(project, manifest)
+                save_voice_folder_mapping_patch(project, patch)
+            st.success(
+                f"Promote abgeschlossen: {manifest.created_count} neu erstellt, "
+                f"{manifest.overwritten_count} überschrieben, {manifest.skipped_intro_count} Intro "
+                f"übersprungen. Backup-Verzeichnis: `{manifest.backup_dir or '—'}`. Manifest: "
+                f"`{get_production_edit_plan_promote_manifest_path(project.work_dir_path)}`. "
+                f"Mapping Patch: `{get_production_edit_plan_voice_folder_mapping_patch_path(project.work_dir_path)}`."
+            )
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+    # --- §12 Manifest-Anzeige ---
+    manifest = load_production_edit_plan_promote_manifest(project)
+    if manifest is not None:
+        st.markdown("**Promote Manifest**")
+        if is_production_edit_plan_promote_manifest_stale(project, manifest):
+            st.warning(
+                "Das Promote Manifest ist veraltet (Readiness/Staging/Validation haben sich seit diesem "
+                "Promote-Lauf geändert)."
+            )
+
+        manifest_status_label = {
+            PRODUCTION_EDIT_PLAN_PROMOTE_MANIFEST_STATUS_PROMOTED: "✅ PROMOTED",
+            PRODUCTION_EDIT_PLAN_PROMOTE_MANIFEST_STATUS_NEEDS_REVIEW: "⚠️ NEEDS_REVIEW",
+            PRODUCTION_EDIT_PLAN_PROMOTE_MANIFEST_STATUS_BLOCKED: "❌ BLOCKED",
+        }.get(manifest.status, manifest.status)
+
+        mcol1, mcol2, mcol3, mcol4, mcol5 = st.columns(5)
+        with mcol1:
+            st.metric("Status", manifest_status_label)
+        with mcol2:
+            st.metric("promote_run_id", manifest.promote_run_id or "—")
+        with mcol3:
+            st.metric("Created", manifest.created_count)
+        with mcol4:
+            st.metric("Overwritten", manifest.overwritten_count)
+        with mcol5:
+            st.metric("Skipped Intro", manifest.skipped_intro_count)
+        st.metric("Blocked", manifest.blocked_count)
+        st.caption(f"backup_dir: `{manifest.backup_dir or '—'}`")
+
+        section_rows = [
+            {
+                "staging_section_id": section.staging_section_id,
+                "folder_name": section.folder_name,
+                "is_intro": section.is_intro,
+                "promote_action": section.promote_action,
+                "target_edit_plan_path": section.target_edit_plan_path or "—",
+                "source_hash": section.source_hash,
+                "target_hash_after": section.target_hash_after or "—",
+                "backup_path": section.backup_path or "—",
+                "backup_hash": section.backup_hash or "—",
+                "confirmed_set_to_true": section.confirmed_set_to_true,
+                "warnings": len(section.warnings),
+                "blockers": len(section.blockers),
+            }
+            for section in manifest.sections
+        ]
+        st.dataframe(section_rows, use_container_width=True, hide_index=True)
+
+        # --- §12 Mapping Patch Anzeige ---
+        patch = load_voice_folder_mapping_patch(project)
+        if patch is not None:
+            st.markdown("**Voice Folder Mapping Patch**")
+            st.caption(
+                "voice_folder_mapping.json wurde nicht geändert. Dieser Patch ist nur Vorbereitung "
+                "für eine spätere Mapping-/Export-Phase."
+            )
+            patch_action_label = {
+                PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_WOULD_ADD: "WOULD_ADD",
+                PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_ALREADY_PRESENT: "ALREADY_PRESENT",
+                PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_NEEDS_REVIEW: "NEEDS_REVIEW",
+            }
+            patch_rows = [
+                {
+                    "folder_name": entry.folder_name,
+                    "edit_plan_path": entry.edit_plan_path,
+                    "voiceover_path": entry.voiceover_path or "—",
+                    "voiceover_duration_sec": entry.voiceover_duration_sec,
+                    "action": patch_action_label.get(entry.action, entry.action),
+                    "reason": entry.reason,
+                }
+                for entry in patch.entries
+            ]
+            st.dataframe(patch_rows, use_container_width=True, hide_index=True)
+            for warning in patch.warnings:
+                st.warning(warning)
 
 
 def render_cut_plan_page() -> None:

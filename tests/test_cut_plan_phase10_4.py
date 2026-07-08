@@ -189,11 +189,22 @@ def test_ui_shows_not_a_production_edit_plan_hint(tmp_path: Path, monkeypatch: p
     assert "Promote nach" in combined
 
 
-def test_ui_has_no_promote_button(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _make_project(tmp_path)
+def test_ui_has_no_unguarded_promote_button(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 10.4 hatte noch gar keinen Promote-Button. Phase 10.5/10.6 fügen
+    einen expliziten, streng gegateten Promote-Dry-Run- bzw. Promote-Button
+    hinzu — hier wird stattdessen geprüft, dass jeder 'promote'-Button ohne
+    vollständig erfüllte Voraussetzungen deaktiviert ist (kein ungeschützter
+    Promote möglich)."""
+    project = _build_confirmed_bridge_project(tmp_path)
+    from otio_app.services.voiceover_generation.production_edit_plan_staging_service import (
+        build_and_save_production_edit_plan_staging,
+    )
+
+    build_and_save_production_edit_plan_staging(project)  # Package existiert, aber (noch) kein Validation Report.
     at = _run_repro(tmp_path, monkeypatch)
-    labels = [button.label for button in at.button]
-    assert not any("promote" in label.lower() for label in labels)
+    promote_buttons = [button for button in at.button if "promote" in button.label.lower()]
+    assert promote_buttons
+    assert all(button.disabled for button in promote_buttons)
 
 
 def test_ui_has_no_otio_button(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
