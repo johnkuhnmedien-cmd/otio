@@ -608,8 +608,13 @@ def test_duration_above_max_produces_split_with_multiple_segments(tmp_path: Path
 
 
 def test_14_seconds_produces_approximately_two_seven_second_segments(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
     project = _make_project(tmp_path)
     _write_inventory(project, FOLDER_A, [("photo_a.jpg", "a")])
+    # initial_audio_offset_sec=0.0: kein Phase-8.5-Coverage-Vorlauf, der die
+    # reine Split-Dauer-Berechnung hier verzerren würde.
+    save_cut_plan_settings(project, _settings(project, initial_audio_offset_sec=0.0))
     plan = ConfirmedVoiceoverProjectPlan(
         project_id=project.id,
         intro=ConfirmedIntroPlanItem(),
@@ -625,8 +630,11 @@ def test_14_seconds_produces_approximately_two_seven_second_segments(tmp_path: P
 
 
 def test_20_seconds_produces_approximately_three_667_second_segments(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
     project = _make_project(tmp_path)
     _write_inventory(project, FOLDER_A, [("photo_a.jpg", "a")])
+    save_cut_plan_settings(project, _settings(project, initial_audio_offset_sec=0.0))
     plan = ConfirmedVoiceoverProjectPlan(
         project_id=project.id,
         intro=ConfirmedIntroPlanItem(),
@@ -645,8 +653,11 @@ def test_20_seconds_produces_approximately_three_667_second_segments(tmp_path: P
 
 
 def test_visual_segment_source_in_respects_video_head_trim(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
     project = _make_project(tmp_path)
     _write_inventory(project, FOLDER_A, [("clip_a.mp4", "video")])
+    save_cut_plan_settings(project, _settings(project, initial_audio_offset_sec=0.0))
     plan = ConfirmedVoiceoverProjectPlan(
         project_id=project.id,
         intro=ConfirmedIntroPlanItem(),
@@ -664,8 +675,11 @@ def test_visual_segment_source_in_respects_video_head_trim(tmp_path: Path) -> No
 
 
 def test_visual_segment_source_in_is_zero_for_images(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
     project = _make_project(tmp_path)
     _write_inventory(project, FOLDER_A, [("photo_a.jpg", "a")])
+    save_cut_plan_settings(project, _settings(project, initial_audio_offset_sec=0.0))
     plan = ConfirmedVoiceoverProjectPlan(
         project_id=project.id,
         intro=ConfirmedIntroPlanItem(),

@@ -1,11 +1,14 @@
-"""Phase 8.4: Cut-Plan-Tab mit vollständiger Validierung.
+"""Phase 8.4/8.5: Cut-Plan-Tab mit vollständiger Validierung + Visual Coverage.
 
 Baut auf Phase 8.2 (Timeline-/Audio-Platzierung) und Phase 8.3 (Asset-
-Auswahl, Fallback, Dauer-/Split-/Merge) auf und ergänzt jetzt die
-vollständige Cut-Plan-Validierung (siehe cut_plan_validator.py). Noch KEIN
+Auswahl, Fallback, Dauer-/Split-/Merge) auf und ergänzt die vollständige
+Cut-Plan-Validierung (siehe cut_plan_validator.py). Phase 8.5 ergänzt den
+Visual-Coverage-Fix (siehe cut_plan_visual_coverage.py), der bereits
+während der Asset-Auswahl automatisch angewendet wird, damit initialer
+Audio-Vorlauf und Sektions-Pausen nicht zu Schwarzbild führen. Noch KEIN
 Confirm/Lock, kein EditPlanDocument, kein OTIO-Export, keine Supplement-
 Suche/-Beschaffung, kein LLM-Konfliktlöser. Diese Schritte folgen in
-späteren Sub-Phasen (8.5ff)."""
+späteren Sub-Phasen (8.6ff)."""
 
 from __future__ import annotations
 
@@ -467,6 +470,19 @@ def render_cut_plan_page() -> None:
                     f"{status_counts[CUT_PLAN_ASSET_SELECTION_BLOCKED]} BLOCKED, "
                     f"{len(updated_draft.warnings)} Warnings, {len(updated_draft.blockers)} Blocker."
                 )
+                coverage_extended_count = sum(
+                    1
+                    for item in updated_draft.items
+                    for segment in item.planned_visual_segments
+                    if "initial_preroll_extension" in segment.reason.split("+")
+                    or "section_pause_hold" in segment.reason.split("+")
+                )
+                if coverage_extended_count:
+                    st.info(
+                        "Visuelle Coverage für Start-Offset/Pausen wurde angewendet "
+                        f"({coverage_extended_count} VisualSegment(s) verlängert, um Schwarzbild während "
+                        "initial_audio_offset_sec/pause_between_sections_sec zu vermeiden)."
+                    )
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))
@@ -496,7 +512,7 @@ def render_cut_plan_page() -> None:
                 st.error(str(exc))
 
     st.caption(
-        "🚧 Supplement-Suche/-Beschaffung sowie Confirm/Lock folgen in späteren Sub-Phasen (8.5ff)."
+        "🚧 Supplement-Suche/-Beschaffung sowie Confirm/Lock folgen in späteren Sub-Phasen (8.6ff)."
     )
 
     if existing_draft is not None:

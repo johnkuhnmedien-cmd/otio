@@ -176,6 +176,40 @@ def _dedupe(values: list[str]) -> list[str]:
     return result
 
 
+def _dedupe_errors(errors: list[CutPlanValidationError]) -> list[CutPlanValidationError]:
+    """Phase 8.5 §7: Zwei Fehler gelten als identisch, wenn type, severity,
+    scope, cut_item_id, folder_name UND message übereinstimmen — reduziert
+    nur doppelte Anzeige, ändert nicht die Semantik (z. B. bleiben eine
+    WARNING und ein BLOCKER desselben Typs für dasselbe Item bewusst
+    getrennt, da severity abweicht)."""
+    seen: set[tuple[str, str, str, str, str, str]] = set()
+    result: list[CutPlanValidationError] = []
+    for error in errors:
+        key = (error.type, error.severity, error.scope, error.cut_item_id, error.folder_name, error.message)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(error)
+    return result
+
+
+def _reason_has_marker(reason: str, marker: str) -> bool:
+    """VisualSegment.reason kann mehrere '+'-getrennte Marker enthalten,
+    wenn ein Segment sowohl den initialen Vorlauf als auch eine Sektions-
+    Pause abdeckt (siehe cut_plan_visual_coverage._combine_reason,
+    Phase 8.5)."""
+    return marker in reason.split("+")
+
+
+def _cached_probe_duration(asset_path: str, cache: dict[str, float | None]) -> float | None:
+    """Phase 8.5 §8: ein kleiner In-Memory-Cache pro Validierungslauf, damit
+    dieselbe Videodatei nicht mehrfach per ffprobe abgefragt wird. Keine
+    Persistenz, keine Architekturänderung."""
+    if asset_path not in cache:
+        cache[asset_path] = probe_duration_seconds(Path(asset_path))
+    return cache[asset_path]
+
+
 # --- 1. Source Plan Readiness (§6) ---
 
 
@@ -375,11 +409,20 @@ def validate_cut_items(
 
 
 def validate_visual_segments(
-    project: Project, cut_plan: CutPlanDocument
+    project: Project,
+    cut_plan: CutPlanDocument,
+    *,
+    duration_cache: dict[str, float | None] | None = None,
 ) -> tuple[list[CutPlanValidationError], list[CutPlanValidationError]]:
+    """duration_cache (Phase 8.5 §8): optionaler In-Memory-Cache für
+    probe_duration_seconds, damit dieselbe Videodatei innerhalb eines
+    Validierungslaufs nicht mehrfach per ffprobe abgefragt wird. Wird nicht
+    übergeben, wird ein frischer (leerer) Cache nur für diesen Aufruf
+    verwendet — kein Verhaltensunterschied nach außen, nur Performance."""
     warnings: list[CutPlanValidationError] = []
     blockers: list[CutPlanValidationError] = []
     settings = settings_from_snapshot(project, cut_plan)
+    duration_cache = {} if duration_cache is None else duration_cache
 
     for item in cut_plan.items:
         scope = "sentence" if item.source_scope == AUDIO_SCOPE_FOLDER else "intro"
@@ -431,7 +474,7 @@ def validate_visual_segments(
 
             asset_path = Path(segment.asset_path) if segment.asset_path else None
             if segment.asset_type == "video" and asset_path is not None and asset_path.is_file():
-                real_duration = probe_duration_seconds(asset_path)
+                real_duration = _cached_probe_duration(segment.asset_path, duration_cache)
                 if real_duration is not None and segment.source_out_sec > real_duration + _TIME_TOLERANCE:
                     blockers.append(_make_error(CUT_PLAN_ERROR_ASSET_TOO_SHORT, scope=scope, cut_item_id=cid,
                                                  folder_name=folder,
@@ -441,9 +484,14 @@ def validate_visual_segments(
                 blockers.append(_make_error(CUT_PLAN_ERROR_SOURCE_RANGE_INVALID, scope=scope, cut_item_id=cid,
                                              folder_name=folder, message=f"{sid}: Bild mit source_in_sec != 0.0."))
 
-            # Shot-Dauer (§12) — Merge/Split-Fortsetzungen sind ausdrücklich erlaubt.
+            # Shot-Dauer (§12) — Merge-/Split-Fortsetzungen UND die Phase-8.5-
+            # Coverage-Erweiterungen (initial_preroll_extension,
+            # section_pause_hold) sind ausdrücklich erlaubt/legitim. Ein
+            # Segment kann mehrere '+'-getrennte Marker tragen (siehe
+            # _reason_has_marker), z. B. wenn dasselbe Segment sowohl den
+            # Vorlauf als auch eine anschließende Pause abdeckt.
             if segment.duration_sec < settings.shot_min_sec - _DURATION_EPSILON:
-                if segment.reason == "merged_short_sentence":
+                if _reason_has_marker(segment.reason, "merged_short_sentence"):
                     pass  # Merge ist erlaubt (§12)
                 elif segment.duration_sec < 1.0:
                     blockers.append(_make_error(CUT_PLAN_ERROR_SHOT_TOO_SHORT, scope=scope, cut_item_id=cid,
@@ -455,11 +503,19 @@ def validate_visual_segments(
                                                  message=f"{sid}: duration_sec ({segment.duration_sec:.2f}s) < "
                                                  f"shot_min_sec ({settings.shot_min_sec}s)."))
             if segment.duration_sec > settings.shot_max_sec + _DURATION_EPSILON:
-                if segment.reason in ("split_long_sentence", "split_long_sentence_continuation"):
+                if any(
+                    _reason_has_marker(segment.reason, marker)
+                    for marker in (
+                        "split_long_sentence",
+                        "split_long_sentence_continuation",
+                        "initial_preroll_extension",
+                        "section_pause_hold",
+                    )
+                ):
                     warnings.append(_make_error(CUT_PLAN_ERROR_SHOT_TOO_LONG, scope=scope, cut_item_id=cid,
                                                  folder_name=folder,
-                                                 message=f"{sid}: duration_sec > shot_max_sec, aber als Split "
-                                                 "markiert."))
+                                                 message=f"{sid}: duration_sec > shot_max_sec, aber als Split/"
+                                                 "Coverage-Erweiterung markiert."))
                 elif item.duration_strategy == CUT_PLAN_DURATION_STRATEGY_SPLIT:
                     warnings.append(_make_error(CUT_PLAN_ERROR_SHOT_TOO_LONG, scope=scope, cut_item_id=cid,
                                                  folder_name=folder,
@@ -496,7 +552,7 @@ def validate_asset_usage(
         if not segment.asset_id:
             continue
         recomputed_summary[segment.asset_id] = recomputed_summary.get(segment.asset_id, 0) + 1
-        is_continuation = segment.reason in _CONTINUATION_REASONS
+        is_continuation = any(_reason_has_marker(segment.reason, marker) for marker in _CONTINUATION_REASONS)
         scope = "sentence" if item.source_scope == AUDIO_SCOPE_FOLDER else "intro"
 
         if not is_continuation:
@@ -715,15 +771,20 @@ def validate_frame_rounding(
 
 def validate_cut_plan(project: Project, cut_plan: CutPlanDocument) -> CutPlanValidationReport:
     """Führt alle Teil-Validatoren aus und aggregiert das Ergebnis. Reine
-    Funktion — speichert nichts (siehe save_cut_plan_validation_report)."""
+    Funktion — speichert nichts (siehe save_cut_plan_validation_report).
+
+    Phase 8.5 §8: ein einziger duration_cache wird über den gesamten Lauf
+    geteilt, damit dieselbe Videodatei nicht mehrfach per ffprobe abgefragt
+    wird (aktuell nur von validate_visual_segments genutzt)."""
     warnings: list[CutPlanValidationError] = []
     blockers: list[CutPlanValidationError] = []
+    duration_cache: dict[str, float | None] = {}
 
     for validator in (
         validate_source_plan_readiness,
         validate_audio_items,
         validate_cut_items,
-        validate_visual_segments,
+        lambda project, cut_plan: validate_visual_segments(project, cut_plan, duration_cache=duration_cache),
         validate_asset_usage,
         validate_timeline_continuity,
         validate_no_black_gap_during_voiceover,
@@ -732,6 +793,12 @@ def validate_cut_plan(project: Project, cut_plan: CutPlanDocument) -> CutPlanVal
         item_warnings, item_blockers = validator(project, cut_plan)
         warnings.extend(item_warnings)
         blockers.extend(item_blockers)
+
+    # Phase 8.5 §7: doppelte Fehler (identisch in type/severity/scope/
+    # cut_item_id/folder_name/message) reduzieren — reine Anzeige-
+    # Bereinigung, keine Semantikänderung.
+    warnings = _dedupe_errors(warnings)
+    blockers = _dedupe_errors(blockers)
 
     if blockers:
         report_status = CUT_PLAN_VALIDATION_STATUS_BLOCKED

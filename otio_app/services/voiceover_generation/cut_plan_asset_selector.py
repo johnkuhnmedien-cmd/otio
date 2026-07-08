@@ -48,6 +48,7 @@ from otio_app.services.voiceover_generation.cut_plan_models import (
     CutPlanValidationError,
     VisualSegment,
 )
+from otio_app.services.voiceover_generation.cut_plan_visual_coverage import apply_visual_coverage_extensions
 from otio_app.services.voiceover_generation.final_plan_service import load_confirmed_voiceover_project_plan
 from otio_app.services.voiceover_generation.models import ConfirmedVoiceoverProjectPlan
 
@@ -686,9 +687,17 @@ def apply_asset_selection_to_cut_plan(project: Project, cut_plan: CutPlanDocumen
         updated_items.append(updated_item)
         previous_item = updated_item
 
-    asset_usage_summary = update_asset_usage_summary(
-        cut_plan.model_copy(update={"items": updated_items})
+    # Visual Coverage Fix (Phase 8.5): läuft NACH der Asset-Auswahl, BEVOR
+    # validiert wird — erweitert bereits gewählte VisualSegments über den
+    # initialen Audio-Vorlauf und die Sektions-Pausen, statt eine neue
+    # redaktionelle Asset-Entscheidung zu treffen. Audio-Zeiten bleiben
+    # unverändert.
+    coverage_cut_plan = apply_visual_coverage_extensions(
+        cut_plan.model_copy(update={"items": updated_items}), settings
     )
+    updated_items = coverage_cut_plan.items
+
+    asset_usage_summary = update_asset_usage_summary(coverage_cut_plan)
 
     warnings: list[CutPlanValidationError] = []
     blockers: list[CutPlanValidationError] = []
