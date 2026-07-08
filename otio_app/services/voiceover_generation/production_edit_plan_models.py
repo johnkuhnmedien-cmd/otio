@@ -43,6 +43,10 @@ class ProductionEditPlanSection(BaseModel):
     shot_count: int = 0
     timeline_item_count: int = 0
     has_voiceover: bool = False
+    # Phase 10.2 §7: additiv ergänzt — erlaubt Staleness-Erkennung auf
+    # Datei-Ebene, ohne die gesamte staged edit_plan.json neu laden zu
+    # müssen, nur um festzustellen, ob sie sich seit dem Staging geändert hat.
+    staged_edit_plan_hash: str = ""
     warnings: list[str] = Field(default_factory=list)
     blockers: list[str] = Field(default_factory=list)
 
