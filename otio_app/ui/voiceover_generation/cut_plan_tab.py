@@ -1,10 +1,9 @@
-"""Phase 8.1: Grundgerüst für den Cut-Plan-Tab.
+"""Phase 8.2: Cut-Plan-Tab mit Timeline-/Audio-Platzierung + Item-Skeletten.
 
-Baut noch KEINEN Cut Plan Draft — nur Status-Anzeige des bestätigten
-Voice-over-Projektplans, Cut-Plan-Settings (eigene Datei, siehe
-cut_plan_settings_service.py) und die künftigen Artefakt-Pfade. Die
-Draft-Erzeugung (Timeline-Mathematik, Asset-Auswahl, Split/Merge,
-Validierung) folgt erst in späteren Sub-Phasen (8.2ff)."""
+Baut einen ersten technischen Cut-Plan-Entwurf (reine Zeit-Mathematik, siehe
+cut_plan_timeline_service.py) — noch OHNE Asset-Auswahl, Split-/Merge-
+Heuristik, Supplement Requests, vollständige Validierung oder Confirm/Lock.
+Diese Schritte folgen in späteren Sub-Phasen (8.3ff)."""
 
 from __future__ import annotations
 
@@ -18,7 +17,12 @@ from otio_app.project_layout import (
     get_cut_plan_trace_path,
     get_cut_plan_validation_report_path,
 )
-from otio_app.services.voiceover_generation.cut_plan_models import CutPlanSettings
+from otio_app.services.voiceover_generation.cut_plan_builder import (
+    build_cut_plan_draft,
+    load_cut_plan_draft,
+    save_cut_plan_draft,
+)
+from otio_app.services.voiceover_generation.cut_plan_models import CutPlanDocument, CutPlanSettings
 from otio_app.services.voiceover_generation.cut_plan_settings_service import (
     load_cut_plan_settings,
     save_cut_plan_settings,
@@ -174,6 +178,73 @@ def _render_future_artifact_paths(project: Project) -> None:
     )
 
 
+def _render_cut_plan_draft(draft: CutPlanDocument) -> None:
+    st.subheader("Cut Plan Draft")
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Status", draft.status)
+    with col2:
+        st.metric("Audio Items", len(draft.audio_items))
+    with col3:
+        st.metric("Cut Plan Items", len(draft.items))
+    with col4:
+        st.metric("Blocker", len(draft.blockers))
+
+    st.caption(
+        "chosen_asset_id ist noch überall leer, asset_selection_status noch "
+        "überall UNRESOLVED — Asset-Auswahl folgt erst in Phase 8.3."
+    )
+
+    with st.expander("Audio Items (A1)", expanded=True):
+        if not draft.audio_items:
+            st.caption("Keine Audio Items vorhanden.")
+        else:
+            rows = [
+                {
+                    "scope": item.scope,
+                    "folder_name": item.folder_name,
+                    "audio_path": item.audio_path,
+                    "timeline_start_sec": item.timeline_start_sec,
+                    "timeline_end_sec": item.timeline_end_sec,
+                    "duration_sec": item.duration_sec,
+                    "track": item.track,
+                }
+                for item in draft.audio_items
+            ]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    with st.expander("Cut Plan Items (Skelette)", expanded=True):
+        if not draft.items:
+            st.caption("Keine Cut Plan Items vorhanden.")
+        else:
+            rows = [
+                {
+                    "cut_item_id": item.cut_item_id,
+                    "scope": item.source_scope,
+                    "folder_name": item.folder_name,
+                    "text": item.text,
+                    "timeline_start_sec": item.timeline_start_sec,
+                    "timeline_end_sec": item.timeline_end_sec,
+                    "primary_asset_id": item.primary_asset_id,
+                    "chosen_asset_id": item.chosen_asset_id or "—",
+                    "asset_selection_status": item.asset_selection_status,
+                    "blockers": ", ".join(item.blockers) or "—",
+                }
+                for item in draft.items
+            ]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    if draft.blockers or draft.warnings:
+        with st.expander("Warnungen / Blocker", expanded=bool(draft.blockers)):
+            for error in draft.blockers:
+                location = f" ({error.scope}: {error.folder_name})" if error.folder_name else f" ({error.scope})"
+                st.error(f"[{error.type}]{location}: {error.message}")
+            for error in draft.warnings:
+                location = f" ({error.scope}: {error.folder_name})" if error.folder_name else f" ({error.scope})"
+                st.warning(f"[{error.type}]{location}: {error.message}")
+
+
 def render_cut_plan_page() -> None:
     st.header("⑧ Cut Plan")
 
@@ -199,11 +270,39 @@ def render_cut_plan_page() -> None:
     _render_future_artifact_paths(project)
     st.divider()
 
-    st.subheader("Cut Plan Draft")
-    st.info("🚧 Die Erzeugung des Cut-Plan-Entwurfs folgt in Phase 8.2.")
-    st.button(
-        "Cut Plan Draft erzeugen",
+    source_plan = load_confirmed_voiceover_project_plan(project)
+    existing_draft = load_cut_plan_draft(project)
+
+    button_label = "Cut Plan Draft erzeugen" if existing_draft is None else "Cut Plan Draft neu erzeugen"
+    if st.button(
+        button_label,
         key=f"cut_plan_generate_draft_{project.id}",
-        disabled=True,
-        help="Noch nicht implementiert — folgt in Phase 8.2 (Timeline-Mathematik + Asset-Auswahl).",
+        disabled=source_plan is None,
+        type="primary",
+        help="Baut Timeline-/Audio-Platzierung und Cut-Plan-Item-Skelette aus dem "
+        "bestätigten Voice-over-Projektplan. Noch keine Asset-Auswahl (folgt in Phase 8.3).",
+    ):
+        try:
+            with st.spinner("Cut Plan Draft wird erstellt…"):
+                new_draft = build_cut_plan_draft(project)
+                save_cut_plan_draft(project, new_draft)
+            st.success("Cut Plan Draft erstellt.")
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+    st.caption(
+        "🚧 Asset-Auswahl, Split-/Merge-Heuristik, Supplement Requests, vollständige "
+        "Validierung sowie Confirm/Lock folgen in späteren Sub-Phasen (8.3ff)."
     )
+
+    if existing_draft is not None:
+        st.divider()
+        _render_cut_plan_draft(existing_draft)
+    elif source_plan is not None:
+        st.info("Noch kein Cut Plan Draft vorhanden.")
+    else:
+        st.caption(
+            f"Beim Klick würde standardmäßig hier gespeichert: "
+            f"`{get_cut_plan_draft_path(project.work_dir_path)}`"
+        )
