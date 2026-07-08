@@ -113,6 +113,168 @@ def get_folder_edit_plan_path(work_dir: Path, folder_name: str) -> Path:
     return get_edit_plan_dir(work_dir) / f"{safe_folder_slug(folder_name)}.json"
 
 
+# --- "Projekt ohne Voice-Over": Dramaturgie- & Voice-over-Generierungs-Pipeline ---
+# Eigener Artefaktbaum, komplett getrennt von edit_plan/exports. Siehe
+# otio_app.defaults für die Datei-/Unterordnernamen.
+
+
+def get_voiceover_generation_dir(work_dir: Path) -> Path:
+    """Wurzel aller Artefakte der Dramaturgie-/Voice-over-Generierungs-Pipeline."""
+    from otio_app.defaults import VOICEOVER_GENERATION_SUBDIR
+
+    return work_dir / VOICEOVER_GENERATION_SUBDIR
+
+
+def get_project_brief_path(work_dir: Path) -> Path:
+    from otio_app.defaults import PROJECT_BRIEF_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / PROJECT_BRIEF_FILENAME
+
+
+def get_voiceover_style_references_path(work_dir: Path) -> Path:
+    from otio_app.defaults import VOICEOVER_STYLE_REFERENCES_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / VOICEOVER_STYLE_REFERENCES_FILENAME
+
+
+def get_voiceover_style_profile_path(work_dir: Path) -> Path:
+    from otio_app.defaults import VOICEOVER_STYLE_PROFILE_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / VOICEOVER_STYLE_PROFILE_FILENAME
+
+
+def get_dramaturgy_plan_draft_path(work_dir: Path) -> Path:
+    from otio_app.defaults import DRAMATURGY_PLAN_DRAFT_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / DRAMATURGY_PLAN_DRAFT_FILENAME
+
+
+def get_dramaturgy_plan_confirmed_path(work_dir: Path) -> Path:
+    from otio_app.defaults import DRAMATURGY_PLAN_CONFIRMED_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / DRAMATURGY_PLAN_CONFIRMED_FILENAME
+
+
+def get_folder_voiceover_settings_path(work_dir: Path) -> Path:
+    from otio_app.defaults import FOLDER_VOICEOVER_SETTINGS_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / FOLDER_VOICEOVER_SETTINGS_FILENAME
+
+
+def get_folder_voiceovers_draft_path(work_dir: Path) -> Path:
+    from otio_app.defaults import FOLDER_VOICEOVERS_DRAFT_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / FOLDER_VOICEOVERS_DRAFT_FILENAME
+
+
+def get_folder_voiceover_validation_report_path(work_dir: Path) -> Path:
+    from otio_app.defaults import FOLDER_VOICEOVER_VALIDATION_REPORT_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / FOLDER_VOICEOVER_VALIDATION_REPORT_FILENAME
+
+
+def get_folder_voiceovers_confirmed_path(work_dir: Path) -> Path:
+    from otio_app.defaults import FOLDER_VOICEOVERS_CONFIRMED_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / FOLDER_VOICEOVERS_CONFIRMED_FILENAME
+
+
+def get_intro_hook_candidates_path(work_dir: Path) -> Path:
+    from otio_app.defaults import INTRO_HOOK_CANDIDATES_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / INTRO_HOOK_CANDIDATES_FILENAME
+
+
+def get_intro_hook_confirmed_path(work_dir: Path) -> Path:
+    from otio_app.defaults import INTRO_HOOK_CONFIRMED_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / INTRO_HOOK_CONFIRMED_FILENAME
+
+
+def get_elevenlabs_settings_path(work_dir: Path) -> Path:
+    """Persistente ElevenLabs-Einstellungen (Voice/Modell/Stimm-Parameter) — niemals den API-Key."""
+    from otio_app.defaults import ELEVENLABS_SETTINGS_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / ELEVENLABS_SETTINGS_FILENAME
+
+
+def get_voiceover_audio_manifest_path(work_dir: Path) -> Path:
+    from otio_app.defaults import VOICEOVER_AUDIO_MANIFEST_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / VOICEOVER_AUDIO_MANIFEST_FILENAME
+
+
+def get_voiceover_audio_qa_report_path(work_dir: Path) -> Path:
+    from otio_app.defaults import VOICEOVER_AUDIO_QA_REPORT_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / VOICEOVER_AUDIO_QA_REPORT_FILENAME
+
+
+def get_confirmed_voiceover_project_plan_path(work_dir: Path) -> Path:
+    """Redaktionelle Quelle der Wahrheit für die spätere Schnittplan-Pipeline."""
+    from otio_app.defaults import CONFIRMED_VOICEOVER_PROJECT_PLAN_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / CONFIRMED_VOICEOVER_PROJECT_PLAN_FILENAME
+
+
+def get_voiceover_project_plan_json_path(work_dir: Path) -> Path:
+    from otio_app.defaults import VOICEOVER_PROJECT_PLAN_JSON_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / VOICEOVER_PROJECT_PLAN_JSON_FILENAME
+
+
+def get_voiceover_project_plan_md_path(work_dir: Path) -> Path:
+    from otio_app.defaults import VOICEOVER_PROJECT_PLAN_MD_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / VOICEOVER_PROJECT_PLAN_MD_FILENAME
+
+
+def get_voiceover_project_plan_csv_path(work_dir: Path) -> Path:
+    from otio_app.defaults import VOICEOVER_PROJECT_PLAN_CSV_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / VOICEOVER_PROJECT_PLAN_CSV_FILENAME
+
+
+def get_voiceover_generation_audio_dir(work_dir: Path) -> Path:
+    """Wurzel aller erzeugten Audiodateien (TTS) dieser Pipeline."""
+    from otio_app.defaults import VOICEOVER_GENERATION_AUDIO_SUBDIR
+
+    return get_voiceover_generation_dir(work_dir) / VOICEOVER_GENERATION_AUDIO_SUBDIR
+
+
+def get_intro_audio_dir(work_dir: Path) -> Path:
+    from otio_app.defaults import VOICEOVER_GENERATION_INTRO_AUDIO_FOLDER_NAME
+
+    return get_voiceover_generation_audio_dir(work_dir) / VOICEOVER_GENERATION_INTRO_AUDIO_FOLDER_NAME
+
+
+def get_folder_voiceover_audio_dir(work_dir: Path, order_index: int, folder_name: str) -> Path:
+    """Audio-Verzeichnis eines Ortes: audio/{order_index}_{safe_folder_name}/."""
+    return get_voiceover_generation_audio_dir(work_dir) / f"{order_index}_{safe_folder_slug(folder_name)}"
+
+
+def get_folder_tts_runs_dir(work_dir: Path, order_index: int, folder_name: str) -> Path:
+    from otio_app.defaults import VOICEOVER_GENERATION_TTS_RUNS_SUBDIR
+
+    return get_folder_voiceover_audio_dir(work_dir, order_index, folder_name) / VOICEOVER_GENERATION_TTS_RUNS_SUBDIR
+
+
+def get_tts_run_dir(work_dir: Path, order_index: int, folder_name: str, tts_run_id: str) -> Path:
+    """Ein nachvollziehbarer TTS-Lauf: Request/Response-Metadaten, Timestamps, Fehler — nie den API-Key."""
+    return get_folder_tts_runs_dir(work_dir, order_index, folder_name) / tts_run_id
+
+
+def get_llm_runs_dir(work_dir: Path) -> Path:
+    """Wurzel aller nachvollziehbaren LLM-Läufe dieser Pipeline (Raw/Parsed/Review/Correction)."""
+    from otio_app.defaults import VOICEOVER_GENERATION_LLM_RUNS_SUBDIR
+
+    return get_voiceover_generation_dir(work_dir) / VOICEOVER_GENERATION_LLM_RUNS_SUBDIR
+
+
+def get_llm_run_dir(work_dir: Path, run_id: str) -> Path:
+    return get_llm_runs_dir(work_dir) / run_id
+
+
 def get_supplement_dir(work_dir: Path) -> Path:
     """Verzeichnis für Supplement-Workflow-Dateien."""
     from otio_app.defaults import SUPPLEMENT_SUBDIR
@@ -616,6 +778,75 @@ def scan_project_structure(
         work_dir,
         project_root.expanduser().resolve(),
         language,
+        warning=warning,
+        diagnostic=diagnostic,
+    )
+
+
+def classify_subdirectories_no_voiceover(
+    subdirectory_names: list[str],
+    work_dir: Path,
+    project_root: Path,
+    *,
+    warning: str | None = None,
+    diagnostic: PathDiagnostic | None = None,
+) -> ProjectStructureScan:
+    """Wie classify_subdirectories(), aber ohne Voice-over-Erkennung/-Ausschluss.
+
+    Für "Projekt ohne Voice-Over": Es gibt keinen Voice-over-Ordner, der aus der
+    Asset-Auswahl ausgenommen werden müsste — alle Unterordner (außer dem
+    Arbeitsordner _otio) gelten als Asset-Ordner.
+    """
+    reserved_names: set[str] = {DEFAULT_WORK_SUBDIR.casefold()}
+    if work_dir.parent == project_root:
+        reserved_names.add(work_dir.name.casefold())
+
+    asset_names: list[str] = []
+    system_names: list[str] = []
+    for name in subdirectory_names:
+        if name.casefold() in reserved_names:
+            system_names.append(name)
+        else:
+            asset_names.append(name)
+
+    return ProjectStructureScan(
+        project_root=project_root,
+        work_dir=work_dir,
+        voice_over_subdir="",
+        language="",
+        all_subdirectory_names=list(subdirectory_names),
+        asset_subdir_names=sorted(asset_names, key=str.lower),
+        system_folder_names=sorted(system_names, key=str.lower),
+        voice_over_folder_name=None,
+        voice_over_dir=None,
+        voice_over_language_dir=None,
+        voice_over_language_exists=False,
+        warning=warning,
+        diagnostic=diagnostic,
+    )
+
+
+def scan_project_structure_no_voiceover(
+    project_root: Path,
+    work_dir: Path,
+) -> ProjectStructureScan:
+    """Scannt den Projektordner für "Projekt ohne Voice-Over" (keine Voice-over-Klassifikation)."""
+    subdirectory_names, error, diagnostic, warning = list_project_subdirectories(
+        project_root
+    )
+    if error:
+        return ProjectStructureScan(
+            project_root=project_root.expanduser().resolve(),
+            work_dir=work_dir,
+            voice_over_subdir="",
+            language="",
+            error=error,
+            diagnostic=diagnostic,
+        )
+    return classify_subdirectories_no_voiceover(
+        subdirectory_names,
+        work_dir,
+        project_root.expanduser().resolve(),
         warning=warning,
         diagnostic=diagnostic,
     )

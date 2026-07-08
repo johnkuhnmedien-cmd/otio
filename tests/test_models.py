@@ -8,7 +8,13 @@ import pytest
 from pydantic import ValidationError
 
 from otio_app.defaults import DEFAULT_FRAMES_PER_SHOT
-from otio_app.models import Project, ProjectCreate, ProjectStatus, validate_asset_selection
+from otio_app.models import (
+    Project,
+    ProjectCreate,
+    ProjectMode,
+    ProjectStatus,
+    validate_asset_selection,
+)
 
 
 def _make_create(layout: dict[str, Path]) -> ProjectCreate:
@@ -106,3 +112,69 @@ def test_validate_asset_selection_rejects_empty() -> None:
 def test_validate_asset_selection_rejects_unknown() -> None:
     with pytest.raises(ValueError, match="Ungültige"):
         validate_asset_selection(["Grand Canyon"], ["Unknown"])
+
+
+def test_project_create_defaults_to_with_voiceover(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    data = _make_create(temp_project_layout)
+    assert data.project_mode == ProjectMode.WITH_VOICEOVER
+
+
+def test_project_create_accepts_without_voiceover_mode(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    data = ProjectCreate(
+        name="Ohne VO",
+        project_root=str(temp_project_layout["project_root"]),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+    )
+    assert data.project_mode == ProjectMode.WITHOUT_VOICEOVER
+
+
+def test_project_from_create_preserves_project_mode(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    data = ProjectCreate(
+        name="Ohne VO",
+        project_root=str(temp_project_layout["project_root"]),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+    )
+    project = Project.from_create(
+        data,
+        asset_subdir_names=["Grand Canyon", "Yellowstone"],
+        selected_asset_subdirs=["Grand Canyon", "Yellowstone"],
+    )
+    assert project.project_mode == ProjectMode.WITHOUT_VOICEOVER
+    assert project.is_without_voiceover is True
+
+
+def test_project_default_mode_is_with_voiceover_when_omitted(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    data = _make_create(temp_project_layout)
+    project = Project.from_create(
+        data,
+        asset_subdir_names=["Grand Canyon", "Yellowstone"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    assert project.project_mode == ProjectMode.WITH_VOICEOVER
+    assert project.is_without_voiceover is False
+
+
+def test_voiceover_generation_dir_property(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    data = ProjectCreate(
+        name="Ohne VO",
+        project_root=str(temp_project_layout["project_root"]),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+    )
+    project = Project.from_create(
+        data,
+        asset_subdir_names=["Grand Canyon", "Yellowstone"],
+        selected_asset_subdirs=["Grand Canyon", "Yellowstone"],
+    )
+    assert project.voiceover_generation_dir == (
+        temp_project_layout["work_dir"] / "voiceover_generation"
+    )

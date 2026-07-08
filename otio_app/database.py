@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS projects (
     name                TEXT NOT NULL,
     project_root        TEXT NOT NULL,
     work_dir            TEXT NOT NULL,
+    project_mode        TEXT NOT NULL DEFAULT 'with_voiceover',
     voice_over_subdir   TEXT NOT NULL DEFAULT 'Voice over',
     language            TEXT NOT NULL DEFAULT 'de',
     frames_per_shot     INTEGER NOT NULL DEFAULT 3,
@@ -60,6 +61,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             SET selected_asset_subdirs = asset_subdir_names
             WHERE selected_asset_subdirs = '[]' AND asset_subdir_names != '[]'
             """
+        )
+
+    if "project_mode" not in column_names:
+        # Bestandsprojekte sind ausnahmslos der bisherige Workflow — der neue
+        # Diagnose-/Generierungsworkflow existierte zum Zeitpunkt ihrer Anlage nicht.
+        conn.execute(
+            "ALTER TABLE projects ADD COLUMN project_mode TEXT NOT NULL DEFAULT 'with_voiceover'"
         )
 
 

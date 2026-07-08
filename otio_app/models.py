@@ -33,6 +33,7 @@ from otio_app.project_layout import (
     get_voice_analysis_path,
     get_voice_folder_mapping_path,
     get_voice_over_dir,
+    get_voiceover_generation_dir,
     scan_project_structure,
 )
 
@@ -41,6 +42,20 @@ class ProjectStatus(str, Enum):
     DRAFT = "DRAFT"
     ANALYZING = "ANALYZING"
     READY = "READY"
+
+
+class ProjectMode(str, Enum):
+    """Grundsätzlicher Pipeline-Typ eines Projekts — wird bei Anlage einmalig festgelegt.
+
+    WITH_VOICEOVER: bestehender Workflow (Clean Media → Analysen → Zuordnung →
+    Supplement → Schnittplan → OTIO-Export), unverändert.
+
+    WITHOUT_VOICEOVER: neue Dramaturgie-/Voice-over-Generierungs-Pipeline. Es gibt
+    absichtlich kein nachträgliches Umschalten und keinen Mischmodus.
+    """
+
+    WITH_VOICEOVER = "with_voiceover"
+    WITHOUT_VOICEOVER = "without_voiceover"
 
 
 def validate_asset_selection(
@@ -63,6 +78,7 @@ class ProjectCreate(BaseModel):
     name: str
     project_root: str
     work_dir: Optional[str] = None
+    project_mode: ProjectMode = ProjectMode.WITH_VOICEOVER
     voice_over_subdir: str = DEFAULT_VOICE_OVER_SUBDIR
     language: str = "de"
     frames_per_shot: int = DEFAULT_FRAMES_PER_SHOT
@@ -194,6 +210,7 @@ class Project(BaseModel):
     name: str
     project_root: str
     work_dir: str
+    project_mode: ProjectMode = ProjectMode.WITH_VOICEOVER
     voice_over_subdir: str = DEFAULT_VOICE_OVER_SUBDIR
     language: str = "de"
     frames_per_shot: int = DEFAULT_FRAMES_PER_SHOT
@@ -267,6 +284,15 @@ class Project(BaseModel):
     def folder_edit_plan_path(self, folder_name: str) -> Path:
         return get_folder_edit_plan_path(self.work_dir_path, folder_name)
 
+    @property
+    def voiceover_generation_dir(self) -> Path:
+        """Wurzel der Artefakte für "Projekt ohne Voice-Over" (Dramaturgie/VO-Generierung)."""
+        return get_voiceover_generation_dir(self.work_dir_path)
+
+    @property
+    def is_without_voiceover(self) -> bool:
+        return self.project_mode == ProjectMode.WITHOUT_VOICEOVER
+
     @classmethod
     def from_create(
         cls,
@@ -279,6 +305,7 @@ class Project(BaseModel):
             name=data.name,
             project_root=data.project_root,
             work_dir=data.work_dir,
+            project_mode=data.project_mode,
             voice_over_subdir=data.voice_over_subdir,
             language=data.language,
             frames_per_shot=data.frames_per_shot,

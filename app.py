@@ -9,13 +9,21 @@ register_shutdown_handlers()
 import streamlit as st
 from pydantic import ValidationError
 
-from otio_app.defaults import DEFAULT_FRAMES_PER_SHOT, DEFAULT_VOICE_OVER_SUBDIR
-from otio_app.models import ProjectCreate
+from otio_app.defaults import (
+    DEFAULT_FRAMES_PER_SHOT,
+    DEFAULT_VOICE_OVER_SUBDIR,
+    PROJECT_MODE_LABELS,
+    PROJECT_MODE_WITH_VOICEOVER,
+    PROJECT_MODE_WITHOUT_VOICEOVER,
+)
+from otio_app.models import ProjectCreate, ProjectMode
 from otio_app.paths import clean_user_path_input, create_work_dir, normalize_path
 from otio_app.project_layout import (
     classify_subdirectories,
+    classify_subdirectories_no_voiceover,
     default_work_dir,
     scan_project_structure,
+    scan_project_structure_no_voiceover,
 )
 from otio_app.project_repository import create_project, list_projects
 from otio_app.ui.navigation import PAGE_ANALYSIS, PAGE_NEW
@@ -55,7 +63,7 @@ def _render_path_diagnostic(diagnostic) -> None:
             st.error(f"Lesefehler: {diagnostic.read_error}")
 
 
-def _render_structure_overview(scan) -> None:
+def _render_structure_overview(scan, *, show_voice_over_section: bool = True) -> None:
     st.subheader("Erkannte Struktur")
     if scan.warning:
         st.warning(scan.warning)
@@ -68,24 +76,33 @@ def _render_structure_overview(scan) -> None:
     with col2:
         st.metric("Asset-Ordner", len(scan.asset_subdir_names))
     with col3:
-        st.metric("Voice-over", scan.voice_over_folder_name or "—")
+        if show_voice_over_section:
+            st.metric("Voice-over", scan.voice_over_folder_name or "—")
+        else:
+            st.metric("Modus", "ohne Voice-Over")
 
-    st.markdown("#### 🎙️ Voice-over-Ordner")
-    if scan.voice_over_folder_name and scan.voice_over_dir is not None:
-        st.info(f"**Hauptordner:** `{scan.voice_over_dir}`")
-        if scan.voice_over_language_dir is not None:
-            if scan.voice_over_language_exists:
-                st.success(
-                    f"**Audios (Sprache {scan.language}):** `{scan.voice_over_language_dir}`"
-                )
-            else:
-                st.warning(
-                    f"**Audios (Sprache {scan.language}) fehlen noch:** "
-                    f"`{scan.voice_over_language_dir}`"
-                )
+    if show_voice_over_section:
+        st.markdown("#### 🎙️ Voice-over-Ordner")
+        if scan.voice_over_folder_name and scan.voice_over_dir is not None:
+            st.info(f"**Hauptordner:** `{scan.voice_over_dir}`")
+            if scan.voice_over_language_dir is not None:
+                if scan.voice_over_language_exists:
+                    st.success(
+                        f"**Audios (Sprache {scan.language}):** `{scan.voice_over_language_dir}`"
+                    )
+                else:
+                    st.warning(
+                        f"**Audios (Sprache {scan.language}) fehlen noch:** "
+                        f"`{scan.voice_over_language_dir}`"
+                    )
+        else:
+            st.error(
+                "Kein Voice-over-Ordner erkannt. Bitte unten den richtigen Ordner auswählen."
+            )
     else:
-        st.error(
-            "Kein Voice-over-Ordner erkannt. Bitte unten den richtigen Ordner auswählen."
+        st.caption(
+            "Projekt ohne Voice-Over: Alle Unterordner unten gelten als Asset-Ordner. "
+            "Voice-over-Texte werden später in der neuen Pipeline generiert."
         )
 
     if scan.system_folder_names:
@@ -106,21 +123,24 @@ def _show_saved_project(saved) -> None:
     st.success(
         f"Projekt '{saved.name}' gespeichert (Status: {saved.status.value})."
     )
-    st.json(
-        {
-            "id": saved.id,
-            "project_root": saved.project_root,
-            "work_dir": saved.work_dir,
-            "voice_over_ordner": saved.voice_over_subdir,
-            "voice_over_pfad": str(saved.voice_over_dir),
-            "alle_asset_ordner": saved.asset_subdir_names,
-            "ausgewaehlte_ordner": saved.selected_asset_subdirs,
-            "inventory_dir": str(saved.inventory_dir),
-            "legacy_inventory_path": str(saved.inventory_path),
-            "voice_analysis_path": str(saved.voice_analysis_path),
-            "frames_per_shot": saved.frames_per_shot,
-        }
-    )
+    details = {
+        "id": saved.id,
+        "project_mode": saved.project_mode.value,
+        "project_root": saved.project_root,
+        "work_dir": saved.work_dir,
+        "alle_asset_ordner": saved.asset_subdir_names,
+        "ausgewaehlte_ordner": saved.selected_asset_subdirs,
+        "inventory_dir": str(saved.inventory_dir),
+        "legacy_inventory_path": str(saved.inventory_path),
+        "frames_per_shot": saved.frames_per_shot,
+    }
+    if saved.is_without_voiceover:
+        details["voiceover_generation_dir"] = str(saved.voiceover_generation_dir)
+    else:
+        details["voice_over_ordner"] = saved.voice_over_subdir
+        details["voice_over_pfad"] = str(saved.voice_over_dir)
+        details["voice_analysis_path"] = str(saved.voice_analysis_path)
+    st.json(details)
 
 
 def _finalize_project_save(
@@ -183,6 +203,32 @@ def render_new_project_page() -> None:
         """
     )
 
+    mode_labels = {
+        PROJECT_MODE_WITH_VOICEOVER: PROJECT_MODE_LABELS[PROJECT_MODE_WITH_VOICEOVER],
+        PROJECT_MODE_WITHOUT_VOICEOVER: PROJECT_MODE_LABELS[PROJECT_MODE_WITHOUT_VOICEOVER],
+    }
+    project_mode_value = st.radio(
+        "Projektmodus *",
+        options=list(mode_labels.keys()),
+        format_func=lambda value: mode_labels[value],
+        key="new_project_mode",
+        help=(
+            "„Projekt mit Voice-Over“ ist der bestehende Workflow mit vorhandenen "
+            "Voice-over-Dateien. „Projekt ohne Voice-Over“ startet die neue "
+            "Dramaturgie-/Voice-over-Generierungs-Pipeline — der Modus kann später "
+            "nicht mehr umgeschaltet werden."
+        ),
+    )
+    is_with_voiceover = project_mode_value == PROJECT_MODE_WITH_VOICEOVER
+    if not is_with_voiceover:
+        st.info(
+            "🆕 Projekt ohne Voice-Over: Clean Media und Analysen/Inventory werden "
+            "wiederverwendet. Voice-over-Texte, Dramaturgie, Intro und Vertonung "
+            "werden danach in einer eigenen Pipeline erzeugt (Project Brief → "
+            "Style References → Dramaturgie → Folder Voice-overs → Intro → "
+            "Audio/ElevenLabs → Final Output)."
+        )
+
     with st.form("project_form"):
         project_root = st.text_input(
             "Projektordner *",
@@ -190,11 +236,18 @@ def render_new_project_page() -> None:
             placeholder="/Users/claudiakuhn/Documents/YT/Unglaubliche Welt/USA",
         )
         name = st.text_input("Projektname *")
-        voice_over_subdir = st.text_input(
-            "Voice-over-Unterordner",
-            value=DEFAULT_VOICE_OVER_SUBDIR,
-            help="Name des Unterordners für Audios, Standard: Voice over",
-        )
+        if is_with_voiceover:
+            voice_over_subdir = st.text_input(
+                "Voice-over-Unterordner",
+                value=DEFAULT_VOICE_OVER_SUBDIR,
+                help="Name des Unterordners für Audios, Standard: Voice over",
+            )
+        else:
+            voice_over_subdir = DEFAULT_VOICE_OVER_SUBDIR
+            st.caption(
+                "Kein Voice-over-Unterordner nötig — alle Unterordner werden als "
+                "Asset-Ordner erkannt."
+            )
         work_dir = st.text_input(
             "Arbeitsordner (optional)",
             value="",
@@ -236,6 +289,7 @@ def render_new_project_page() -> None:
                     name=name,
                     project_root=project_root,
                     work_dir=work_dir or None,
+                    project_mode=project_mode_value,
                     voice_over_subdir=voice_over_subdir,
                     language=language,
                     frames_per_shot=int(frames_per_shot),
@@ -252,12 +306,18 @@ def render_new_project_page() -> None:
                 for error in exc.errors():
                     st.error(error["msg"])
             else:
-                scan = scan_project_structure(
-                    project_data.project_root_path,
-                    project_data.work_dir_path,
-                    project_data.voice_over_subdir,
-                    project_data.language,
-                )
+                if project_data.project_mode == ProjectMode.WITHOUT_VOICEOVER:
+                    scan = scan_project_structure_no_voiceover(
+                        project_data.project_root_path,
+                        project_data.work_dir_path,
+                    )
+                else:
+                    scan = scan_project_structure(
+                        project_data.project_root_path,
+                        project_data.work_dir_path,
+                        project_data.voice_over_subdir,
+                        project_data.language,
+                    )
                 st.session_state[PREVIEW_KEY] = {
                     "project": project_data.model_dump(mode="json"),
                     "all_subdirs": scan.all_subdirectory_names,
@@ -294,14 +354,22 @@ def render_new_project_page() -> None:
                 "oder klicke „Erneut scannen“."
             )
 
+        is_with_voiceover_preview = project_data.project_mode == ProjectMode.WITH_VOICEOVER
+
         if not all_subdirs:
             if st.button("Erneut scannen"):
-                scan = scan_project_structure(
-                    project_data.project_root_path,
-                    project_data.work_dir_path,
-                    project_data.voice_over_subdir,
-                    project_data.language,
-                )
+                if is_with_voiceover_preview:
+                    scan = scan_project_structure(
+                        project_data.project_root_path,
+                        project_data.work_dir_path,
+                        project_data.voice_over_subdir,
+                        project_data.language,
+                    )
+                else:
+                    scan = scan_project_structure_no_voiceover(
+                        project_data.project_root_path,
+                        project_data.work_dir_path,
+                    )
                 st.session_state[PREVIEW_KEY] = {
                     "project": preview["project"],
                     "all_subdirs": scan.all_subdirectory_names,
@@ -314,6 +382,45 @@ def render_new_project_page() -> None:
                     ),
                 }
                 st.rerun()
+        elif not is_with_voiceover_preview:
+            project_root = project_data.project_root_path
+            work_dir = project_data.work_dir_path
+
+            scan = classify_subdirectories_no_voiceover(
+                all_subdirs,
+                work_dir,
+                project_root,
+            )
+            _render_structure_overview(scan, show_voice_over_section=False)
+            available_assets = scan.asset_subdir_names
+
+            updated_project = project_data
+
+            st.subheader("Ordnerauswahl")
+            selected_assets = st.multiselect(
+                "Zu bearbeitende Asset-Ordner *",
+                options=available_assets,
+                default=available_assets,
+                help="Nur ausgewählte Ordner werden später analysiert und ins Inventar aufgenommen.",
+            )
+            st.caption(f"Ausgewählt: {len(selected_assets)} von {len(available_assets)}")
+
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                if st.button(
+                    "Projekt speichern",
+                    disabled=not available_assets or not selected_assets,
+                    key="save_project_no_voiceover",
+                ):
+                    _finalize_project_save(
+                        updated_project,
+                        available_assets,
+                        selected_assets,
+                    )
+            with col_cancel:
+                if st.button("Auswahl verwerfen", key="discard_no_voiceover"):
+                    st.session_state.pop(PREVIEW_KEY, None)
+                    st.rerun()
         else:
             project_root = project_data.project_root_path
             work_dir = project_data.work_dir_path
@@ -415,10 +522,12 @@ def render_project_list_page() -> None:
         for project in projects:
             with st.expander(f"{project.name}  ({project.status.value})"):
                 st.write(f"**ID:** `{project.id}`")
+                st.write(f"**Projektmodus:** {PROJECT_MODE_LABELS[project.project_mode.value]}")
                 st.write(f"**Projektordner:** `{project.project_root}`")
                 st.write(f"**Arbeitsordner:** `{project.work_dir}`")
-                st.write(f"**🎙️ Voice-over-Ordner:** `{project.voice_over_subdir}`")
-                st.write(f"**🎙️ Voice-over Audios:** `{project.voice_over_dir}`")
+                if not project.is_without_voiceover:
+                    st.write(f"**🎙️ Voice-over-Ordner:** `{project.voice_over_subdir}`")
+                    st.write(f"**🎙️ Voice-over Audios:** `{project.voice_over_dir}`")
                 st.write(
                     f"**Gefundene Ordner ({len(project.asset_subdir_names)}):** "
                     + (

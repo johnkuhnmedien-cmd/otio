@@ -26,5 +26,32 @@ NAVIGATION_OPTIONS = (
     PAGE_STATUS,
 )
 
+# --- "Projekt ohne Voice-Over": eigene Seitenliste, ersetzt Zuordnung/Supplement/Schnittplan ---
+PAGE_PROJECT_BRIEF = "① Project Brief"
+PAGE_STYLE_REFERENCES = "② Style References"
+PAGE_DRAMATURGY = "③ Dramaturgie"
+PAGE_FOLDER_VOICEOVERS = "④ Folder Voice-overs"
+PAGE_INTRO = "⑤ Intro"
+PAGE_AUDIO = "⑥ Audio / ElevenLabs"
+PAGE_FINAL_OUTPUT = "⑦ Final Output"
+
+VOICEOVER_GEN_WORKFLOW_PAGES = (
+    PAGE_CLEAN_MEDIA,
+    PAGE_ANALYSIS,
+    PAGE_PROJECT_BRIEF,
+    PAGE_STYLE_REFERENCES,
+    PAGE_DRAMATURGY,
+    PAGE_FOLDER_VOICEOVERS,
+    PAGE_INTRO,
+    PAGE_AUDIO,
+    PAGE_FINAL_OUTPUT,
+)
+
+VOICEOVER_GEN_NAVIGATION_OPTIONS = (
+    (PAGE_NEW, PAGE_LIST)
+    + VOICEOVER_GEN_WORKFLOW_PAGES
+    + (PAGE_API_KEYS, PAGE_STATUS)
+)
+
 ACTIVE_PROJECT_KEY = "active_project_id"
 LAST_NAV_PAGE_KEY = "_last_nav_page"

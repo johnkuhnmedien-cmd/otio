@@ -10,6 +10,7 @@ from otio_app.database import get_connection
 from otio_app.models import (
     Project,
     ProjectCreate,
+    ProjectMode,
     ProjectStatus,
     validate_asset_selection,
 )
@@ -34,11 +35,15 @@ def _row_to_project(row: sqlite3.Row) -> Project:
     if not selected_asset_subdirs and asset_subdir_names:
         selected_asset_subdirs = list(asset_subdir_names)
 
+    row_keys = row.keys()
+    project_mode = ProjectMode(row["project_mode"]) if "project_mode" in row_keys else ProjectMode.WITH_VOICEOVER
+
     return Project(
         id=row["id"],
         name=row["name"],
         project_root=row["project_root"],
         work_dir=row["work_dir"],
+        project_mode=project_mode,
         voice_over_subdir=row["voice_over_subdir"],
         language=row["language"],
         frames_per_shot=row["frames_per_shot"],
@@ -89,17 +94,18 @@ def create_project(
         conn.execute(
             """
             INSERT INTO projects (
-                id, name, project_root, work_dir, voice_over_subdir,
+                id, name, project_root, work_dir, project_mode, voice_over_subdir,
                 language, frames_per_shot, fps, width, height, aspect_ratio,
                 target_platform, status, asset_subdir_names,
                 selected_asset_subdirs, notes, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project.id,
                 project.name,
                 project.project_root,
                 project.work_dir,
+                project.project_mode.value,
                 project.voice_over_subdir,
                 project.language,
                 project.frames_per_shot,

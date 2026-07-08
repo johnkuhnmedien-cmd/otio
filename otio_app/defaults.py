@@ -66,6 +66,39 @@ VOICE_ANALYSIS_FILENAME = "voice_over_analysis.json"
 VOICE_FOLDER_MAPPING_FILENAME = "voice_folder_mapping.json"
 EDIT_PLAN_FILENAME = "edit_plan.json"
 EDIT_PLAN_SUBDIR = "edit_plan"
+
+PROJECT_MODE_WITH_VOICEOVER = "with_voiceover"
+PROJECT_MODE_WITHOUT_VOICEOVER = "without_voiceover"
+PROJECT_MODE_CHOICES = (PROJECT_MODE_WITH_VOICEOVER, PROJECT_MODE_WITHOUT_VOICEOVER)
+PROJECT_MODE_LABELS = {
+    PROJECT_MODE_WITH_VOICEOVER: "Projekt mit Voice-Over",
+    PROJECT_MODE_WITHOUT_VOICEOVER: "Projekt ohne Voice-Over",
+}
+
+VOICEOVER_GENERATION_SUBDIR = "voiceover_generation"
+VOICEOVER_GENERATION_LLM_RUNS_SUBDIR = "llm_runs"
+VOICEOVER_GENERATION_AUDIO_SUBDIR = "audio"
+VOICEOVER_GENERATION_TTS_RUNS_SUBDIR = "tts_runs"
+VOICEOVER_GENERATION_INTRO_AUDIO_FOLDER_NAME = "000_intro"
+
+PROJECT_BRIEF_FILENAME = "project_brief.json"
+VOICEOVER_STYLE_REFERENCES_FILENAME = "voiceover_style_references.json"
+VOICEOVER_STYLE_PROFILE_FILENAME = "voiceover_style_profile.json"
+DRAMATURGY_PLAN_DRAFT_FILENAME = "dramaturgy_plan.draft.json"
+DRAMATURGY_PLAN_CONFIRMED_FILENAME = "dramaturgy_plan.confirmed.json"
+FOLDER_VOICEOVER_SETTINGS_FILENAME = "folder_voiceover_settings.json"
+FOLDER_VOICEOVERS_DRAFT_FILENAME = "folder_voiceovers.draft.json"
+FOLDER_VOICEOVER_VALIDATION_REPORT_FILENAME = "folder_voiceover_validation_report.json"
+FOLDER_VOICEOVERS_CONFIRMED_FILENAME = "folder_voiceovers.confirmed.json"
+INTRO_HOOK_CANDIDATES_FILENAME = "intro_hook_candidates.json"
+INTRO_HOOK_CONFIRMED_FILENAME = "intro_hook.confirmed.json"
+ELEVENLABS_SETTINGS_FILENAME = "elevenlabs_settings.json"
+VOICEOVER_AUDIO_MANIFEST_FILENAME = "voiceover_audio_manifest.json"
+VOICEOVER_AUDIO_QA_REPORT_FILENAME = "voiceover_audio_qa_report.json"
+CONFIRMED_VOICEOVER_PROJECT_PLAN_FILENAME = "confirmed_voiceover_project_plan.json"
+VOICEOVER_PROJECT_PLAN_JSON_FILENAME = "voiceover_project_plan.json"
+VOICEOVER_PROJECT_PLAN_MD_FILENAME = "voiceover_project_plan.md"
+VOICEOVER_PROJECT_PLAN_CSV_FILENAME = "voiceover_project_plan.csv"
 MODEL_COMPARISON_SUBDIR = "model_comparison_runs"
 MODEL_COMPARISON_SUMMARY_FILENAME = "model_comparison_summary.json"
 MODEL_COMPARISON_PRESETS: dict[str, tuple[str, ...]] = {
