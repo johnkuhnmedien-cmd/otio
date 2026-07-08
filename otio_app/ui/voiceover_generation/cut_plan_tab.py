@@ -41,6 +41,13 @@ from otio_app.defaults import (
     EDIT_PLAN_BRIDGE_VALIDATION_STATUS_PASS,
     EDIT_PLAN_BRIDGE_VALIDATION_STATUS_WARNING,
     PLAN_STATUS_READY_FOR_CUT,
+    PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_BLOCKED,
+    PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_CREATE,
+    PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_OVERWRITE,
+    PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_SKIP_INTRO,
+    PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_BLOCKED,
+    PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_NEEDS_REVIEW,
+    PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_READY,
     PRODUCTION_EDIT_PLAN_STATUS_BLOCKED,
     PRODUCTION_EDIT_PLAN_STATUS_NEEDS_REVIEW,
     PRODUCTION_EDIT_PLAN_STATUS_STAGED,
@@ -134,6 +141,15 @@ from otio_app.services.voiceover_generation.final_plan_service import (
     load_confirmed_voiceover_project_plan,
 )
 from otio_app.services.voiceover_generation.llm_trace_service import content_hash_of_model
+from otio_app.services.voiceover_generation.production_edit_plan_promote_readiness import (
+    build_production_edit_plan_promote_dry_run_trace,
+    build_production_edit_plan_promote_readiness,
+    is_production_edit_plan_promote_readiness_stale,
+    load_production_edit_plan_promote_dry_run_trace,
+    load_production_edit_plan_promote_readiness,
+    save_production_edit_plan_promote_dry_run_trace,
+    save_production_edit_plan_promote_readiness,
+)
 from otio_app.services.voiceover_generation.production_edit_plan_staging_service import (
     build_and_save_production_edit_plan_staging,
     can_build_production_edit_plan_staging,
@@ -1368,10 +1384,154 @@ def _render_production_edit_plan_staging(project: Project) -> None:
     elif get_production_edit_plan_mapping_trace_path(project.work_dir_path).is_file():
         st.caption("Mapping Trace existiert, enthält aber keine Einträge.")
 
+    st.divider()
+    _render_production_edit_plan_promote_readiness(project, package, report)
+
     st.caption(
         "Kein Promote-Button, kein OTIO-Button, kein Lock-Button — diese Schritte folgen erst "
         "in einer späteren Phase."
     )
+
+
+def _render_production_edit_plan_promote_readiness(
+    project: Project, package: object, report: object
+) -> None:
+    """Phase 10.5: Promote Readiness / Dry Run — rein prüfend, was ein
+    SPÄTERER Promote nach `_otio/edit_plan/` tun würde. Kein tatsächliches
+    Kopieren, kein Lock, kein OTIO-Export, kein Render, kein Aufruf der
+    Save- oder Build-Funktionen der bestehenden Produktions-EditPlan-
+    Pipeline, keine Änderung an `voice_folder_mapping.json`."""
+    st.subheader("Promote Readiness / Dry Run")
+    st.caption(
+        "Dieser Dry Run schreibt nichts nach `_otio/edit_plan/`. Er zeigt nur, was ein späterer "
+        "Promote tun würde."
+    )
+
+    if st.button(
+        "Promote Dry Run ausführen",
+        key=f"production_edit_plan_promote_dry_run_{project.id}",
+        disabled=package is None or report is None,
+        type="primary",
+        help="Prüft rein lesend, ob und wie das validierte Staging-Paket später nach "
+        "_otio/edit_plan/ übertragen werden könnte — inkl. Kollisionsprüfung gegen "
+        "bereits existierende Produktionspläne. Schreibt ausschließlich "
+        "production_edit_plan_promote_readiness.json und "
+        "production_edit_plan_promote_dry_run_trace.json.",
+    ):
+        readiness = build_production_edit_plan_promote_readiness(project)
+        readiness = save_production_edit_plan_promote_readiness(project, readiness)
+        dry_run_trace = build_production_edit_plan_promote_dry_run_trace(project, readiness)
+        save_production_edit_plan_promote_dry_run_trace(project, dry_run_trace)
+        st.success(f"Promote Dry Run ausgeführt — Status {readiness.status}.")
+        st.rerun()
+
+    readiness = load_production_edit_plan_promote_readiness(project)
+    if readiness is None:
+        st.info("Noch kein Promote Dry Run ausgeführt.")
+        return
+
+    if is_production_edit_plan_promote_readiness_stale(project, readiness):
+        st.warning("Der Promote Dry Run ist veraltet (Staging oder Validation Report haben sich geändert).")
+
+    would_create = sum(
+        1 for s in readiness.sections if s.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_CREATE
+    )
+    would_overwrite = sum(
+        1 for s in readiness.sections if s.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_OVERWRITE
+    )
+    would_skip_intro = sum(
+        1 for s in readiness.sections if s.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_SKIP_INTRO
+    )
+    would_block = sum(
+        1 for s in readiness.sections if s.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_BLOCKED
+    )
+
+    readiness_status_label = {
+        PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_READY: "✅ READY",
+        PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_NEEDS_REVIEW: "⚠️ NEEDS_REVIEW",
+        PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_BLOCKED: "❌ BLOCKED",
+    }.get(readiness.status, readiness.status)
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Status", readiness_status_label)
+    with col2:
+        st.metric("WOULD_CREATE", would_create)
+    with col3:
+        st.metric("WOULD_OVERWRITE", would_overwrite)
+    with col4:
+        st.metric("WOULD_SKIP_INTRO", would_skip_intro)
+
+    col5, col6, col7 = st.columns(3)
+    with col5:
+        st.metric("BLOCKED", would_block)
+    with col6:
+        st.metric("Warnings", len(readiness.warnings))
+    with col7:
+        st.metric("Blockers", len(readiness.blockers))
+
+    if readiness.status == PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_READY:
+        st.success("Dry Run bereit. Ein späterer Promote könnte neue Produktions-EditPlans erzeugen.")
+    elif readiness.status == PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_NEEDS_REVIEW:
+        if would_overwrite:
+            st.warning(
+                "Für mindestens einen Ordner existiert bereits ein Produktionsplan. Ein späterer "
+                "Promote müsste ausdrücklich bestätigt werden."
+            )
+        else:
+            st.warning("Dry Run enthält Warnungen. Bitte prüfen.")
+    elif readiness.status == PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_BLOCKED:
+        st.error("Dry Run blockiert. Bitte Staging/Validation prüfen.")
+
+    section_rows = [
+        {
+            "staging_section_id": section.staging_section_id,
+            "folder_name": section.folder_name,
+            "is_intro": section.is_intro,
+            "promote_action": section.promote_action,
+            "target_exists": section.target_exists,
+            "target_edit_plan_path": section.target_edit_plan_path or "—",
+            "existing_confirmed": section.existing_confirmed if section.existing_confirmed is not None else "—",
+            "existing_candidate_status": section.existing_candidate_status or "—",
+            "existing_shot_count": section.existing_shot_count if section.existing_shot_count is not None else "—",
+            "existing_timeline_item_count": (
+                section.existing_timeline_item_count if section.existing_timeline_item_count is not None else "—"
+            ),
+            "warnings": len(section.warnings),
+            "blockers": len(section.blockers),
+        }
+        for section in readiness.sections
+    ]
+    st.dataframe(section_rows, use_container_width=True, hide_index=True)
+
+    if readiness.warnings or readiness.blockers:
+        with st.expander("Dry Run Warnungen / Blocker", expanded=bool(readiness.blockers)):
+            for blocker in readiness.blockers:
+                st.error(blocker)
+            for warning in readiness.warnings:
+                st.warning(warning)
+
+    dry_run_trace = load_production_edit_plan_promote_dry_run_trace(project)
+    if dry_run_trace is not None and dry_run_trace.entries:
+        with st.expander("Promote Dry Run Trace", expanded=False):
+            rows = [
+                {
+                    "trace_id": entry.trace_id,
+                    "staging_section_id": entry.staging_section_id,
+                    "production_section_id": entry.production_section_id,
+                    "folder_name": entry.folder_name,
+                    "is_intro": entry.is_intro,
+                    "target_edit_plan_path": entry.target_edit_plan_path or "—",
+                    "promote_action": entry.promote_action,
+                    "reason": entry.reason,
+                    "would_write": entry.would_write,
+                    "would_overwrite": entry.would_overwrite,
+                    "warnings": ", ".join(entry.warnings) or "—",
+                    "blockers": ", ".join(entry.blockers) or "—",
+                }
+                for entry in dry_run_trace.entries
+            ]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
 
 
 def render_cut_plan_page() -> None:

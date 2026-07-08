@@ -539,6 +539,20 @@ def get_production_edit_plan_validation_report_path(work_dir: Path) -> Path:
     return get_production_edit_plan_staging_dir(work_dir) / PRODUCTION_EDIT_PLAN_VALIDATION_REPORT_FILENAME
 
 
+def get_production_edit_plan_promote_readiness_path(work_dir: Path) -> Path:
+    """Phase 10.5: Promote Readiness / Dry Run — rein prüfend, kein Schreiben
+    nach `_otio/edit_plan/`."""
+    from otio_app.defaults import PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_FILENAME
+
+    return get_production_edit_plan_staging_dir(work_dir) / PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_FILENAME
+
+
+def get_production_edit_plan_promote_dry_run_trace_path(work_dir: Path) -> Path:
+    from otio_app.defaults import PRODUCTION_EDIT_PLAN_PROMOTE_DRY_RUN_TRACE_FILENAME
+
+    return get_production_edit_plan_staging_dir(work_dir) / PRODUCTION_EDIT_PLAN_PROMOTE_DRY_RUN_TRACE_FILENAME
+
+
 def get_supplement_dir(work_dir: Path) -> Path:
     """Verzeichnis für Supplement-Workflow-Dateien."""
     from otio_app.defaults import SUPPLEMENT_SUBDIR
