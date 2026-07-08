@@ -41,6 +41,12 @@ from otio_app.defaults import (
     EDIT_PLAN_BRIDGE_VALIDATION_STATUS_PASS,
     EDIT_PLAN_BRIDGE_VALIDATION_STATUS_WARNING,
     PLAN_STATUS_READY_FOR_CUT,
+    PRODUCTION_EDIT_PLAN_STATUS_BLOCKED,
+    PRODUCTION_EDIT_PLAN_STATUS_NEEDS_REVIEW,
+    PRODUCTION_EDIT_PLAN_STATUS_STAGED,
+    PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_BLOCKED,
+    PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_PASS,
+    PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_WARNING,
     SUPPLEMENT_SOURCE_PEXELS,
 )
 from otio_app.models import Project
@@ -53,6 +59,10 @@ from otio_app.project_layout import (
     get_cut_plan_supplement_requests_path,
     get_cut_plan_trace_path,
     get_cut_plan_validation_report_path,
+    get_folder_edit_plan_path,
+    get_production_edit_plan_mapping_trace_path,
+    get_production_edit_plan_package_path,
+    get_production_edit_plan_validation_report_path,
 )
 from otio_app.services.api_keys import get_api_key
 from otio_app.services.supplement_search import build_keyword_query
@@ -124,6 +134,21 @@ from otio_app.services.voiceover_generation.final_plan_service import (
     load_confirmed_voiceover_project_plan,
 )
 from otio_app.services.voiceover_generation.llm_trace_service import content_hash_of_model
+from otio_app.services.voiceover_generation.production_edit_plan_staging_service import (
+    build_and_save_production_edit_plan_staging,
+    can_build_production_edit_plan_staging,
+    is_production_edit_plan_staging_stale,
+    load_production_edit_plan_staging_package,
+    load_staged_edit_plan,
+)
+from otio_app.services.voiceover_generation.production_edit_plan_trace import (
+    load_production_edit_plan_mapping_trace,
+)
+from otio_app.services.voiceover_generation.production_edit_plan_validation import (
+    is_production_edit_plan_validation_report_stale,
+    load_production_edit_plan_validation_report,
+    validate_production_edit_plan_staging,
+)
 from otio_app.ui.project_context import render_project_selector
 from otio_app.ui.voiceover_generation._shared import require_without_voiceover_mode
 
@@ -1027,6 +1052,328 @@ def _render_edit_plan_bridge_confirm(project: Project) -> None:
     )
 
 
+def _render_staged_edit_plan_preview(project: Project, section: object) -> None:
+    """Phase 10.4: Vorschau EINES gestagten EditPlanDocument — rein lesend,
+    lädt nur bereits vorhandene Staging-Dateien."""
+    document = load_staged_edit_plan(project, section.staging_section_id)
+    if document is None:
+        st.caption("staged edit_plan.json konnte nicht geladen werden.")
+        return
+
+    if document.voiceover is not None:
+        voiceover = document.voiceover
+        st.write("**Voiceover**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.caption(f"path: `{voiceover.path}`")
+            st.caption(f"timeline_start_sec: {voiceover.timeline_start_sec:.3f}")
+        with col2:
+            st.caption(f"timeline_end_sec: {voiceover.timeline_end_sec:.3f}")
+            st.caption(f"duration_sec: {voiceover.duration_sec:.3f}")
+        with col3:
+            st.caption(f"duration_source: `{voiceover.duration_source}`")
+            st.caption(f"trim_policy: `{voiceover.trim_policy}`")
+    else:
+        st.caption("Kein Voiceover in diesem gestagten EditPlanDocument.")
+
+    st.write("**TimelineItems**")
+    if not document.timeline_items:
+        st.caption("Keine TimelineItems.")
+    else:
+        rows = [
+            {
+                "timeline_item_id": item.timeline_item_id,
+                "type": item.type,
+                "section_id": item.section_id,
+                "folder_name": item.folder_name,
+                "asset_id": item.asset_id or "—",
+                "asset_path": item.resolved_media_path or "—",
+                "timeline_in_sec": item.timeline_in_sec,
+                "timeline_out_sec": item.timeline_out_sec,
+                "source_in_sec": item.source_in_sec,
+                "source_out_sec": item.source_out_sec,
+                "selection_reason": item.selection_reason or "—",
+            }
+            for item in document.timeline_items
+        ]
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    st.write("**Shots**")
+    if not document.shots:
+        st.caption("Keine Shots.")
+    else:
+        rows = [
+            {
+                "shot_id": getattr(shot, "shot_id", "") or "—",
+                "asset_id": shot.asset_id or "—",
+                "asset_path": shot.asset_path or "—",
+                "duration_sec": shot.duration_sec,
+                "voice_start_sec": shot.voice_start_sec,
+                "voice_end_sec": shot.voice_end_sec,
+                "beat_id": shot.beat_id or "—",
+                "motif": shot.motif or "—",
+                "passage_text": shot.passage_text or "—",
+            }
+            for shot in document.shots
+        ]
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
+def _render_production_plan_readonly_hint(project: Project, section: object) -> None:
+    """Phase 10.4 §10: rein lesender Hinweis, ob für diese Sektion bereits ein
+    Produktionsplan existiert — kein Blockieren, kein Merge, kein Schreiben."""
+    if section.is_intro:
+        st.caption("Intro ist eine synthetische Staging-Sektion und hat noch keinen Produktions-Zielpfad.")
+        return
+    existing_path = get_folder_edit_plan_path(project.work_dir_path, section.folder_name)
+    exists = existing_path.is_file()
+    st.caption(
+        f"Produktionsplan existiert bereits: {'✅ Ja' if exists else '❌ Nein'} (`{existing_path}`)"
+    )
+
+
+def _render_production_edit_plan_staging(project: Project) -> None:
+    """Phase 10.4: UI für das isolierte Production-EditPlan-Staging (Phase
+    10.1-10.3). Rein anzeigend/erzeugend/validierend — kein Promote nach
+    `_otio/edit_plan/`, kein Lock, kein OTIO-Export, kein Render, kein Aufruf
+    der Save- oder Build-Funktionen der bestehenden Produktions-EditPlan-
+    Pipeline, keine Produktions-Dateien werden überschrieben."""
+    st.subheader("Production EditPlan Staging")
+    st.warning(
+        "Dieses Staging-Paket ist noch kein Produktions-EditPlan. Es wird nicht nach "
+        "`_otio/edit_plan/` geschrieben und ist noch nicht OTIO-exportbereit."
+    )
+    st.caption("Promote nach `_otio/edit_plan/` erfolgt erst in einer späteren Phase.")
+
+    st.markdown("**Voraussetzungen**")
+    eligible, reasons = can_build_production_edit_plan_staging(project)
+    if eligible:
+        st.success("Alle Voraussetzungen sind erfüllt.")
+    else:
+        st.warning("Voraussetzungen sind noch nicht erfüllt:")
+        for reason in reasons:
+            st.write(f"❌ {reason}")
+
+    package = load_production_edit_plan_staging_package(project)
+
+    col_build, col_validate = st.columns(2)
+    with col_build:
+        if st.button(
+            "Production EditPlan Staging erzeugen",
+            key=f"production_edit_plan_staging_build_{project.id}",
+            disabled=not eligible,
+            type="primary",
+            help="Übersetzt den bestätigten EditPlan-Bridge-Snapshot in ein isoliertes "
+            "Staging-Paket (Package + gestagte EditPlanDocuments + Mapping-Trace). Kein "
+            "Rebuild der Bridge, kein Promote, kein OTIO-Export. Führt keine automatische "
+            "Validierung durch — dafür bitte separat unten „validieren“ klicken.",
+        ):
+            try:
+                with st.spinner("Production EditPlan Staging wird erzeugt…"):
+                    new_package = build_and_save_production_edit_plan_staging(project)
+                total_timeline_items = sum(section.timeline_item_count for section in new_package.sections)
+                st.success(
+                    f"Staging erzeugt: {len(new_package.sections)} Sektion(en), "
+                    f"{len(new_package.sections)} gestagte(s) EditPlanDocument(e), "
+                    f"{total_timeline_items} TimelineItem(s) gesamt, Package-Status "
+                    f"{new_package.status}. Pfad: "
+                    f"`{get_production_edit_plan_package_path(project.work_dir_path)}`"
+                )
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+    with col_validate:
+        if st.button(
+            "Production EditPlan Staging validieren",
+            key=f"production_edit_plan_staging_validate_{project.id}",
+            disabled=package is None,
+            help="Führt die vollständige Revalidierung des Staging-Pakets durch (Phase "
+            "10.3) und speichert production_edit_plan_validation_report.json. Rein "
+            "prüfend — keine automatische Reparatur, kein Promote, kein OTIO-Export. "
+            "Verändert production_edit_plan_package.json nicht.",
+        ):
+            try:
+                with st.spinner("Staging wird validiert…"):
+                    validation_report = validate_production_edit_plan_staging(project)
+                if validation_report.status == PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_PASS:
+                    st.success("Validierung: PASS.")
+                elif validation_report.status == PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_WARNING:
+                    st.warning(f"Validierung: WARNING ({len(validation_report.warnings)} Warnings).")
+                else:
+                    st.error(f"Validierung: BLOCKED ({len(validation_report.blockers)} Blocker).")
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+
+    if package is None:
+        st.info("Noch kein Production EditPlan Staging erzeugt.")
+        return
+
+    package_stale = is_production_edit_plan_staging_stale(project, package)
+    report = load_production_edit_plan_validation_report(project)
+    report_stale = report is not None and is_production_edit_plan_validation_report_stale(project, report)
+
+    # --- §11 Status-Logik ---
+    if report is None:
+        st.info("Staging erzeugt, aber noch nicht validiert.")
+    elif report.status == PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_PASS:
+        st.success("Staging ist validiert und bereit für spätere Promote-Planung.")
+    elif report.status == PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_WARNING:
+        st.warning("Staging ist validiert, enthält aber Warnungen.")
+    elif report.status == PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_BLOCKED:
+        st.error("Staging ist blockiert. Bitte Fehler prüfen.")
+    if package_stale:
+        st.warning("Das Staging-Paket ist veraltet. Bitte neu erzeugen.")
+    if report_stale:
+        st.warning("Der Validation Report ist veraltet. Bitte erneut validieren.")
+
+    # --- §6 Package-Anzeige ---
+    st.markdown("**Package**")
+    total_timeline_items = sum(section.timeline_item_count for section in package.sections)
+    total_shots = sum(section.shot_count for section in package.sections)
+    sections_with_voiceover = sum(1 for section in package.sections if section.has_voiceover)
+
+    package_status_label = {
+        PRODUCTION_EDIT_PLAN_STATUS_STAGED: "✅ STAGED",
+        PRODUCTION_EDIT_PLAN_STATUS_NEEDS_REVIEW: "⚠️ NEEDS_REVIEW",
+        PRODUCTION_EDIT_PLAN_STATUS_BLOCKED: "❌ BLOCKED",
+    }.get(package.status, package.status)
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Package Status", package_status_label)
+    with col2:
+        st.metric("Sektionen", len(package.sections))
+    with col3:
+        st.metric("TimelineItems gesamt", total_timeline_items)
+    with col4:
+        st.metric("Shots gesamt", total_shots)
+
+    col5, col6, col7 = st.columns(3)
+    with col5:
+        st.metric("Sektionen mit Voiceover", sections_with_voiceover)
+    with col6:
+        st.metric("Staging veraltet", "⚠️ Ja" if package_stale else "✅ Nein")
+    with col7:
+        st.caption(f"source_bridge_manifest_hash: `{package.source_bridge_manifest_hash}`")
+        st.caption(f"source_cut_plan_hash: `{package.source_cut_plan_hash}`")
+
+    section_rows = [
+        {
+            "staging_section_id": section.staging_section_id,
+            "production_section_id": section.production_section_id,
+            "folder_name": section.folder_name,
+            "is_intro": section.is_intro,
+            "shot_count": section.shot_count,
+            "timeline_item_count": section.timeline_item_count,
+            "has_voiceover": section.has_voiceover,
+            "staged_edit_plan_hash": section.staged_edit_plan_hash,
+            "warnings": len(section.warnings),
+            "blockers": len(section.blockers),
+            "staged_edit_plan_path": section.staged_edit_plan_path,
+        }
+        for section in package.sections
+    ]
+    st.dataframe(section_rows, use_container_width=True, hide_index=True)
+
+    # --- §7 Staged EditPlan Preview + §10 Read-only Produktionsplan-Hinweis ---
+    st.markdown("**Gestagte EditPlanDocuments**")
+    for section in package.sections:
+        with st.expander(
+            f"{section.staging_section_id} — {section.folder_name or 'Intro'}", expanded=False
+        ):
+            _render_production_plan_readonly_hint(project, section)
+            _render_staged_edit_plan_preview(project, section)
+
+    # --- §8 Validation Report Anzeige ---
+    st.markdown("**Validation Report**")
+    if report is None:
+        st.info("Noch kein Validation Report vorhanden.")
+    else:
+        report_status_label = {
+            PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_PASS: "✅ PASS",
+            PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_WARNING: "⚠️ WARNING",
+            PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_BLOCKED: "❌ BLOCKED",
+        }.get(report.status, report.status)
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Validation Status", report_status_label)
+        with col2:
+            st.metric("Warnings", len(report.warnings))
+        with col3:
+            st.metric("Blockers", len(report.blockers))
+        st.caption(f"generated_at: `{report.generated_at}`")
+        st.caption(f"package_hash: `{report.package_hash}`")
+        st.caption(f"source_bridge_manifest_hash: `{report.source_bridge_manifest_hash}`")
+        st.caption(
+            f"Validation Report Pfad: `{get_production_edit_plan_validation_report_path(project.work_dir_path)}`"
+        )
+
+        if report.warnings or report.blockers:
+            rows = [
+                {
+                    "type": error.type,
+                    "severity": error.severity,
+                    "scope": error.scope,
+                    "staging_section_id": error.staging_section_id or "—",
+                    "production_section_id": error.production_section_id or "—",
+                    "timeline_item_id": error.timeline_item_id or "—",
+                    "message": error.message,
+                    "fix_hint": error.fix_hint or "—",
+                }
+                for error in (report.blockers + report.warnings)
+            ]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+        else:
+            st.success("Keine Warnungen oder Blocker.")
+
+        if report_stale:
+            st.warning("Der Validation Report ist veraltet. Bitte Production EditPlan Staging erneut validieren.")
+
+    # --- §9 Mapping Trace Anzeige ---
+    trace = load_production_edit_plan_mapping_trace(project)
+    if trace is not None and trace.entries:
+        with st.expander("Mapping Trace", expanded=False):
+            rows = [
+                {
+                    "trace_id": entry.trace_id,
+                    "source_bridge_timeline_item_id": entry.source_bridge_timeline_item_id or "—",
+                    "source_bridge_audio_plan_index": (
+                        entry.source_bridge_audio_plan_index
+                        if entry.source_bridge_audio_plan_index is not None
+                        else "—"
+                    ),
+                    "source_cut_item_id": entry.source_cut_item_id or "—",
+                    "source_visual_segment_id": entry.source_visual_segment_id or "—",
+                    "resulting_staging_section_id": entry.resulting_staging_section_id,
+                    "resulting_production_section_id": entry.resulting_production_section_id,
+                    "resulting_timeline_item_id": entry.resulting_timeline_item_id or "—",
+                    "folder_name": entry.folder_name,
+                    "is_intro": entry.is_intro,
+                    "original_timeline_in_sec": entry.original_timeline_in_sec,
+                    "original_timeline_out_sec": entry.original_timeline_out_sec,
+                    "local_timeline_in_sec": entry.local_timeline_in_sec,
+                    "local_timeline_out_sec": entry.local_timeline_out_sec,
+                    "asset_id": entry.asset_id or "—",
+                    "asset_path": entry.asset_path or "—",
+                    "mapping_reason": entry.mapping_reason,
+                    "fields_defaulted": ", ".join(entry.fields_defaulted) or "—",
+                    "fields_dropped": ", ".join(entry.fields_dropped) or "—",
+                    "warnings": ", ".join(entry.warnings) or "—",
+                }
+                for entry in trace.entries
+            ]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+    elif get_production_edit_plan_mapping_trace_path(project.work_dir_path).is_file():
+        st.caption("Mapping Trace existiert, enthält aber keine Einträge.")
+
+    st.caption(
+        "Kein Promote-Button, kein OTIO-Button, kein Lock-Button — diese Schritte folgen erst "
+        "in einer späteren Phase."
+    )
+
+
 def render_cut_plan_page() -> None:
     st.header("⑧ Cut Plan")
 
@@ -1162,6 +1509,8 @@ def render_cut_plan_page() -> None:
         _render_confirmed_cut_plan(project, existing_draft)
         st.divider()
         _render_edit_plan_bridge(project)
+        st.divider()
+        _render_production_edit_plan_staging(project)
     elif source_plan is not None:
         st.info("Noch kein Cut Plan Draft vorhanden.")
     else:
