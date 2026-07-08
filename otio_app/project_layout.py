@@ -579,6 +579,26 @@ def get_production_edit_plan_promote_backup_run_dir(work_dir: Path, promote_run_
     return get_production_edit_plan_promote_backups_dir(work_dir) / safe_run_id
 
 
+def get_voice_folder_mapping_merge_manifest_path(work_dir: Path) -> Path:
+    """Phase 10.7: Merge-Manifest EINES tatsächlichen Voice-Folder-Mapping-
+    Merge-Laufs — dokumentiert, was in `voice_folder_mapping.json`
+    tatsächlich verändert wurde."""
+    from otio_app.defaults import VOICE_FOLDER_MAPPING_MERGE_MANIFEST_FILENAME
+
+    return get_production_edit_plan_staging_dir(work_dir) / VOICE_FOLDER_MAPPING_MERGE_MANIFEST_FILENAME
+
+
+def get_voice_folder_mapping_merge_backups_dir(work_dir: Path) -> Path:
+    from otio_app.defaults import VOICE_FOLDER_MAPPING_MERGE_BACKUPS_SUBDIR
+
+    return get_production_edit_plan_staging_dir(work_dir) / VOICE_FOLDER_MAPPING_MERGE_BACKUPS_SUBDIR
+
+
+def get_voice_folder_mapping_merge_backup_run_dir(work_dir: Path, merge_run_id: str) -> Path:
+    safe_run_id = "".join(char if char.isalnum() or char in "-_" else "_" for char in merge_run_id) or "run"
+    return get_voice_folder_mapping_merge_backups_dir(work_dir) / safe_run_id
+
+
 def get_supplement_dir(work_dir: Path) -> Path:
     """Verzeichnis für Supplement-Workflow-Dateien."""
     from otio_app.defaults import SUPPLEMENT_SUBDIR

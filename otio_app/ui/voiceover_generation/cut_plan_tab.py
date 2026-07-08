@@ -44,6 +44,10 @@ from otio_app.defaults import (
     PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_ALREADY_PRESENT,
     PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_NEEDS_REVIEW,
     PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_WOULD_ADD,
+    VOICE_FOLDER_MAPPING_MERGE_MANIFEST_STATUS_BLOCKED,
+    VOICE_FOLDER_MAPPING_MERGE_MANIFEST_STATUS_MERGED,
+    VOICE_FOLDER_MAPPING_MERGE_RESOLUTION_APPLY,
+    VOICE_FOLDER_MAPPING_MERGE_RESOLUTION_SKIP,
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_BLOCKED,
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_CREATE,
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_OVERWRITE,
@@ -158,6 +162,13 @@ from otio_app.services.voiceover_generation.production_edit_plan_promote_execute
     promote_production_edit_plans,
     save_production_edit_plan_promote_manifest,
     save_voice_folder_mapping_patch,
+)
+from otio_app.services.voiceover_generation.production_edit_plan_voice_folder_mapping_merge import (
+    can_merge_voice_folder_mapping,
+    is_voice_folder_mapping_merge_manifest_stale,
+    load_voice_folder_mapping_merge_manifest,
+    merge_voice_folder_mapping,
+    save_voice_folder_mapping_merge_manifest,
 )
 from otio_app.services.voiceover_generation.production_edit_plan_promote_readiness import (
     build_production_edit_plan_promote_dry_run_trace,
@@ -1408,6 +1419,9 @@ def _render_production_edit_plan_staging(project: Project) -> None:
     st.divider()
     _render_production_edit_plan_promote_execute(project)
 
+    st.divider()
+    _render_voice_folder_mapping_merge(project)
+
     st.caption(
         "Kein OTIO-Button, kein Lock-Button — diese Schritte folgen erst in einer späteren Phase."
     )
@@ -1744,6 +1758,129 @@ def _render_production_edit_plan_promote_execute(project: Project) -> None:
             st.dataframe(patch_rows, use_container_width=True, hide_index=True)
             for warning in patch.warnings:
                 st.warning(warning)
+
+
+def _render_voice_folder_mapping_merge(project: Project) -> None:
+    """Phase 10.7: Voice Folder Mapping Merge — explizit bestätigte,
+    selektive Übernahme des Vorbereitungs-Patches (Phase 10.6) in die echte
+    `voice_folder_mapping.json`. Dies ist die EINZIGE Stelle, an der diese
+    Datei tatsächlich verändert wird — ausschließlich über
+    merge_voice_folder_mapping() in
+    production_edit_plan_voice_folder_mapping_merge.py. Kein OTIO-Export,
+    kein Render, kein Lock, keine automatische Neuplanung."""
+    st.subheader("Voice Folder Mapping übernehmen")
+    st.warning("Dieser Schritt schreibt nach `voice_folder_mapping.json`.")
+    st.caption("Konflikte (NEEDS_REVIEW) müssen explizit aufgelöst werden, bevor der Merge ausgeführt werden kann.")
+    st.caption(
+        "Die Gesamt-Zuordnung wird dadurch NICHT automatisch als vollständig bestätigt markiert — das bleibt "
+        "Aufgabe des Tabs „② Zuordnung“."
+    )
+
+    patch = load_voice_folder_mapping_patch(project)
+    if patch is None:
+        st.info("Bitte zuerst oben einen Production EditPlan Promote ausführen (erzeugt den Mapping Patch).")
+        return
+
+    needs_review_entries = [
+        entry for entry in patch.entries if entry.action == PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_NEEDS_REVIEW
+    ]
+    folder_resolutions: dict[str, str] = {}
+    if needs_review_entries:
+        st.markdown("**Konflikte auflösen**")
+        for entry in needs_review_entries:
+            st.write(f"**{entry.folder_name}**: {entry.reason}")
+            choice = st.radio(
+                f"Auflösung für {entry.folder_name}",
+                options=[
+                    "Nicht entschieden",
+                    "Neuen Voice-over übernehmen (APPLY)",
+                    "Bestehenden Eintrag behalten (SKIP)",
+                ],
+                key=f"voice_folder_mapping_merge_resolution_{project.id}_{entry.folder_name}",
+                label_visibility="collapsed",
+            )
+            if choice.startswith("Neuen"):
+                folder_resolutions[entry.folder_name] = VOICE_FOLDER_MAPPING_MERGE_RESOLUTION_APPLY
+            elif choice.startswith("Bestehenden"):
+                folder_resolutions[entry.folder_name] = VOICE_FOLDER_MAPPING_MERGE_RESOLUTION_SKIP
+
+    mark_entries_confirmed = st.checkbox(
+        "Übernommene Einträge zusätzlich als bestätigt markieren (überspringt die manuelle Prüfung im Tab "
+        "„② Zuordnung“).",
+        key=f"voice_folder_mapping_merge_mark_confirmed_{project.id}",
+    )
+
+    eligible, reasons = can_merge_voice_folder_mapping(project, folder_resolutions=folder_resolutions)
+    if not eligible:
+        with st.expander("Merge-Voraussetzungen nicht erfüllt", expanded=False):
+            for reason in reasons:
+                st.write(f"❌ {reason}")
+
+    if st.button(
+        "Voice Folder Mapping aktualisieren",
+        key=f"voice_folder_mapping_merge_execute_{project.id}",
+        disabled=not eligible,
+        type="primary",
+        help="Übernimmt den Mapping Patch selektiv in voice_folder_mapping.json — mit Backup vor jedem "
+        "Überschreiben. Kein OTIO-Export, kein Render, kein Lock.",
+    ):
+        try:
+            with st.spinner("Voice Folder Mapping wird aktualisiert…"):
+                manifest = merge_voice_folder_mapping(
+                    project,
+                    folder_resolutions=folder_resolutions,
+                    mark_entries_confirmed=mark_entries_confirmed,
+                )
+                manifest = save_voice_folder_mapping_merge_manifest(project, manifest)
+            st.success(
+                f"Merge abgeschlossen: {manifest.added_count} neu hinzugefügt, "
+                f"{manifest.updated_count} aktualisiert, {manifest.skipped_count} übersprungen. "
+                f"Backup: `{manifest.backup_path or '—'}`."
+            )
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+    manifest = load_voice_folder_mapping_merge_manifest(project)
+    if manifest is not None:
+        st.markdown("**Voice Folder Mapping Merge Manifest**")
+        if is_voice_folder_mapping_merge_manifest_stale(project, manifest):
+            st.warning(
+                "Das Merge Manifest ist veraltet (Mapping Patch oder voice_folder_mapping.json haben sich seit "
+                "diesem Merge-Lauf geändert)."
+            )
+
+        manifest_status_label = {
+            VOICE_FOLDER_MAPPING_MERGE_MANIFEST_STATUS_MERGED: "✅ MERGED",
+            VOICE_FOLDER_MAPPING_MERGE_MANIFEST_STATUS_BLOCKED: "❌ BLOCKED",
+        }.get(manifest.status, manifest.status)
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Status", manifest_status_label)
+        with col2:
+            st.metric("Added", manifest.added_count)
+        with col3:
+            st.metric("Updated", manifest.updated_count)
+        with col4:
+            st.metric("Skipped", manifest.skipped_count)
+        st.caption(f"backup_path: `{manifest.backup_path or '—'}`")
+
+        rows = [
+            {
+                "folder_name": entry.folder_name,
+                "action": entry.action,
+                "previous_voice_file": entry.previous_voice_file or "—",
+                "new_voice_file": entry.new_voice_file or "—",
+                "applied": entry.applied,
+                "reason": entry.reason,
+            }
+            for entry in manifest.entries
+        ]
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.caption(
+            "Bitte im Tab „② Zuordnung“ prüfen, ob die Gesamt-Zuordnung weiterhin vollständig bestätigt ist."
+        )
 
 
 def render_cut_plan_page() -> None:
