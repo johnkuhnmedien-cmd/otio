@@ -22,6 +22,7 @@ from otio_app.ui.api_keys_page import render_api_keys_page
 from otio_app.ui.system_status import render_system_status_page
 from otio_app.ui.voice_folder_mapping import render_voice_folder_mapping
 from otio_app.ui.voiceover_generation.audio_tab import render_audio_page
+from otio_app.ui.voiceover_generation.cut_plan_tab import render_cut_plan_page
 from otio_app.ui.voiceover_generation.dramaturgy_tab import render_dramaturgy_page
 from otio_app.ui.voiceover_generation.final_output_tab import render_final_output_page
 from otio_app.ui.voiceover_generation.folder_voiceovers_tab import render_folder_voiceovers_page
@@ -136,6 +137,7 @@ def _build_without_voiceover_pages(
         PAGE_API_KEYS,
         PAGE_AUDIO,
         PAGE_CLEAN_MEDIA,
+        PAGE_CUT_PLAN,
         PAGE_DRAMATURGY,
         PAGE_FINAL_OUTPUT,
         PAGE_FOLDER_VOICEOVERS,
@@ -195,6 +197,11 @@ def _build_without_voiceover_pages(
             title=PAGE_FINAL_OUTPUT,
             url_path="final-output",
         ),
+        st.Page(
+            _wrap_page(PAGE_CUT_PLAN, render_cut_plan_page),
+            title=PAGE_CUT_PLAN,
+            url_path="cut-plan",
+        ),
         st.Page(render_api_keys_page, title=PAGE_API_KEYS, url_path="api-schluessel"),
         st.Page(render_system_status_page, title=PAGE_STATUS, url_path="systemstatus"),
     ]
@@ -216,7 +223,7 @@ def run_app_navigation(
     mode = _active_project_mode()
     if mode == ProjectMode.WITHOUT_VOICEOVER:
         pages = _build_without_voiceover_pages(render_new_project, render_project_list)
-        workflow_caption = "Workflow (ohne Voice-Over): ⓪ → ① → ① Brief → ② → ③ → ④ → ⑤ → ⑥ → ⑦"
+        workflow_caption = "Workflow (ohne Voice-Over): ⓪ → ① → ① Brief → ② → ③ → ④ → ⑤ → ⑥ → ⑦ → ⑧"
     else:
         pages = _build_with_voiceover_pages(render_new_project, render_project_list)
         workflow_caption = "Workflow: ⓪ → ① → ② → ②½ → ③ · API-Keys & Diagnose in der Sidebar"
@@ -242,6 +249,7 @@ def _run_legacy_pages(
         NAVIGATION_OPTIONS,
         PAGE_AUDIO,
         PAGE_CLEAN_MEDIA,
+        PAGE_CUT_PLAN,
         PAGE_DRAMATURGY,
         PAGE_EDIT_PLAN,
         PAGE_FINAL_OUTPUT,
@@ -314,6 +322,8 @@ def _run_legacy_pages(
         _wrap_page(PAGE_AUDIO, render_audio_page)()
     elif page == PAGE_FINAL_OUTPUT:
         _wrap_page(PAGE_FINAL_OUTPUT, render_final_output_page)()
+    elif page == PAGE_CUT_PLAN:
+        _wrap_page(PAGE_CUT_PLAN, render_cut_plan_page)()
     elif page == PAGE_API_KEYS:
         render_api_keys_page()
     elif page == PAGE_STATUS:

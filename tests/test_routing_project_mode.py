@@ -94,6 +94,7 @@ def test_without_voiceover_pages_replace_mapping_supplement_editplan() -> None:
         "⑤ Intro",
         "⑥ Audio / ElevenLabs",
         "⑦ Final Output",
+        "⑧ Cut Plan",
         "🔑 API-Schlüssel",
         "Systemstatus",
     ]

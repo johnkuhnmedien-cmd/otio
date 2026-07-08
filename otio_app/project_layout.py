@@ -337,6 +337,54 @@ def get_audio_test_dir(work_dir: Path) -> Path:
     return get_voiceover_generation_audio_dir(work_dir) / AUDIO_TEST_SUBDIR
 
 
+# --- Cut Plan (Phase 8): eigener Unterordner, getrennt von _otio/edit_plan/ ---
+
+
+def get_cut_plan_dir(work_dir: Path) -> Path:
+    """Wurzel aller Cut-Plan-Artefakte (Phase 8) — getrennt von _otio/edit_plan/."""
+    from otio_app.defaults import CUT_PLAN_SUBDIR
+
+    return get_voiceover_generation_dir(work_dir) / CUT_PLAN_SUBDIR
+
+
+def get_cut_plan_settings_path(work_dir: Path) -> Path:
+    from otio_app.defaults import CUT_PLAN_SETTINGS_FILENAME
+
+    return get_cut_plan_dir(work_dir) / CUT_PLAN_SETTINGS_FILENAME
+
+
+def get_cut_plan_draft_path(work_dir: Path) -> Path:
+    from otio_app.defaults import CUT_PLAN_DRAFT_FILENAME
+
+    return get_cut_plan_dir(work_dir) / CUT_PLAN_DRAFT_FILENAME
+
+
+def get_cut_plan_validation_report_path(work_dir: Path) -> Path:
+    from otio_app.defaults import CUT_PLAN_VALIDATION_REPORT_FILENAME
+
+    return get_cut_plan_dir(work_dir) / CUT_PLAN_VALIDATION_REPORT_FILENAME
+
+
+def get_cut_plan_confirmed_path(work_dir: Path) -> Path:
+    from otio_app.defaults import CUT_PLAN_CONFIRMED_FILENAME
+
+    return get_cut_plan_dir(work_dir) / CUT_PLAN_CONFIRMED_FILENAME
+
+
+def get_cut_plan_trace_path(work_dir: Path) -> Path:
+    from otio_app.defaults import CUT_PLAN_TRACE_FILENAME
+
+    return get_cut_plan_dir(work_dir) / CUT_PLAN_TRACE_FILENAME
+
+
+def get_cut_plan_supplement_requests_path(work_dir: Path) -> Path:
+    """Isolierte Supplement-Requests aus dem Cut-Plan-Workflow — NIEMALS
+    identisch mit _otio/supplement/supplement_requests.json (Produktion)."""
+    from otio_app.defaults import CUT_PLAN_SUPPLEMENT_REQUESTS_FILENAME
+
+    return get_cut_plan_dir(work_dir) / CUT_PLAN_SUPPLEMENT_REQUESTS_FILENAME
+
+
 def get_supplement_dir(work_dir: Path) -> Path:
     """Verzeichnis für Supplement-Workflow-Dateien."""
     from otio_app.defaults import SUPPLEMENT_SUBDIR
