@@ -9,7 +9,7 @@ from otio_app.defaults import (
     VOICEOVER_STATUS_PASS,
 )
 from otio_app.models import Project
-from otio_app.project_layout import get_folder_inventory_path
+from otio_app.services.inventory_loader import folder_has_usable_inventory_data
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
     build_default_folder_voiceover_settings,
@@ -303,7 +303,7 @@ def render_folder_voiceovers_page() -> None:
     missing_inventory = [
         entry.folder_name
         for entry in active_entries
-        if not get_folder_inventory_path(project.work_dir_path, entry.folder_name).is_file()
+        if not folder_has_usable_inventory_data(project, entry.folder_name)
     ]
     if missing_inventory:
         st.warning("Für folgende aktive Ordner fehlt das Inventory: " + ", ".join(missing_inventory))

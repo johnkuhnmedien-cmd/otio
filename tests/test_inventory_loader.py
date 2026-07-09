@@ -8,6 +8,7 @@ from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis, In
 from otio_app.models import Project
 from otio_app.project_layout import get_folder_inventory_path
 from otio_app.services.inventory_loader import (
+    folder_has_usable_inventory_data,
     folder_inventory_matches_media,
     load_folder_inventory,
     migrate_legacy_inventory,
@@ -219,3 +220,70 @@ def test_selected_folders_have_inventory(temp_project_layout: dict[str, Path]) -
         item.assets[0],
     )
     assert selected_folders_have_inventory(project) is True
+
+
+def test_folder_has_usable_inventory_data_false_when_nothing_exists(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    project = _sample_project(temp_project_layout)
+    (temp_project_layout["project_root"] / "Grand Canyon").mkdir(parents=True, exist_ok=True)
+    assert folder_has_usable_inventory_data(project, "Grand Canyon") is False
+
+
+def test_folder_has_usable_inventory_data_true_from_flat_inventory_file(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    project = _sample_project(temp_project_layout)
+    media_path = str(temp_project_layout["project_root"] / "Grand Canyon" / "clip.mp4")
+    item = AssetFolderAnalysis(
+        folder="Grand Canyon",
+        media_files=[media_path],
+        assets=[AssetMediaAnalysis(path=media_path, description="Steile Felswand")],
+    )
+    save_folder_inventory(get_folder_inventory_path(project.work_dir_path, "Grand Canyon"), item)
+
+    assert folder_has_usable_inventory_data(project, "Grand Canyon") is True
+
+
+def test_folder_has_usable_inventory_data_true_from_cache_when_flat_file_missing(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    """Regression (Nutzerfeedback Juli 2026): Dramaturgie zeigte 'für keinen
+    Ordner liegt ein Inventory vor', obwohl alle Assets erfolgreich analysiert
+    waren. Ursache: sync_folder_inventory_with_status() löscht die flache
+    Inventar-Datei wieder, sobald auch nur ein Asset im Ordner nicht als
+    vollständig ("grün") analysiert gilt — obwohl im Cache bereits
+    erfolgreich analysierte Assets liegen. folder_has_usable_inventory_data()
+    muss diesen Fall trotzdem als 'hat Inventory' erkennen, weil genau dieser
+    Cache-Fallback auch von der Dramaturgie-Planung selbst verwendet wird."""
+    project = _sample_project(temp_project_layout)
+    folder_dir = temp_project_layout["project_root"] / "Grand Canyon"
+    folder_dir.mkdir(parents=True, exist_ok=True)
+    media_path = folder_dir / "clip.mp4"
+    media_path.write_bytes(b"mp4")
+
+    # Keine flache Inventar-JSON vorhanden — nur der Analyse-Cache.
+    inventory_path = get_folder_inventory_path(project.work_dir_path, "Grand Canyon")
+    assert not inventory_path.is_file()
+
+    save_cached_media(
+        media_cache_path(project, "Grand Canyon", media_path),
+        AssetMediaAnalysis(path=str(media_path), description="Steile Felswand aus Cache"),
+    )
+
+    assert folder_has_usable_inventory_data(project, "Grand Canyon") is True
+
+
+def test_folder_has_usable_inventory_data_false_when_cache_has_only_placeholder(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    project = _sample_project(temp_project_layout)
+    folder_dir = temp_project_layout["project_root"] / "Grand Canyon"
+    folder_dir.mkdir(parents=True, exist_ok=True)
+    media_path = folder_dir / "clip.mp4"
+    media_path.write_bytes(b"mp4")
+
+    # Kein Cache-Eintrag und keine Inventar-JSON — nur eine leere Platzhalter-
+    # Beschreibung, wie sie load_folder_inventory() für nicht-gecachte Medien
+    # synthetisiert.
+    assert folder_has_usable_inventory_data(project, "Grand Canyon") is False

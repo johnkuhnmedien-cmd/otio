@@ -428,3 +428,20 @@ def load_folder_inventory(project: Project, folder_name: str) -> AssetFolderAnal
         media_files=[asset.path for asset in assets],
         assets=assets,
     )
+
+
+def folder_has_usable_inventory_data(project: Project, folder_name: str) -> bool:
+    """True, wenn für diesen Ordner mindestens ein erfolgreich analysiertes Asset
+    vorliegt — aus der fertigen Inventar-JSON ODER (Fallback) direkt aus dem
+    Analyse-Cache, via load_folder_inventory().
+
+    Bewusst NICHT dasselbe wie folder_is_green()/get_folder_inventory_path(...).
+    is_file(): Diese Datei wird von sync_folder_inventory_with_status() wieder
+    gelöscht, sobald auch nur EIN einzelnes Asset im Ordner nicht als vollständig
+    analysiert gilt (z. B. nach Clean-Media-Umbenennungen) — obwohl die
+    Dramaturgie-Planung selbst (build_and_save_folder_inventory_summaries) genau
+    denselben Cache-Fallback nutzt und daher KEINEN "grünen" Ordner braucht.
+    Nur diese lockerere Prüfung sollte für Bereit-Zustände der "Projekt ohne
+    Voice-Over"-Pipeline verwendet werden, nicht die strikte Datei-Prüfung."""
+    analysis = load_folder_inventory(project, folder_name)
+    return any(is_successfully_analyzed(asset) for asset in analysis.assets)

@@ -8,10 +8,10 @@ from otio_app.models import Project
 from otio_app.project_layout import (
     get_dramaturgy_plan_confirmed_path,
     get_dramaturgy_plan_draft_path,
-    get_folder_inventory_path,
     get_folder_inventory_summaries_path,
     get_llm_run_dir,
 )
+from otio_app.services.inventory_loader import folder_has_usable_inventory_data
 from otio_app.services.voiceover_generation.dramaturgy_service import (
     build_dramaturgy_plan,
     confirm_dramaturgy_plan,
@@ -36,10 +36,17 @@ from otio_app.ui.voiceover_generation._shared import (
 
 
 def _inventory_counts(project: Project) -> tuple[int, int]:
-    """(Anzahl Ordner, Anzahl Ordner mit Inventory)."""
+    """(Anzahl Ordner, Anzahl Ordner mit Inventory).
+
+    Nutzt folder_has_usable_inventory_data() statt einer reinen Datei-
+    Existenzprüfung — diese erkennt auch Ordner, deren flache Inventar-JSON
+    von sync_folder_inventory_with_status() wieder gelöscht wurde, weil nicht
+    ALLE Assets im Ordner als "grün" gelten, obwohl bereits erfolgreich
+    analysierte Daten im Cache vorliegen (genau das, was die Dramaturgie-
+    Planung selbst ohnehin verwendet)."""
     folders = project.selected_asset_subdirs
     with_inventory = sum(
-        1 for name in folders if get_folder_inventory_path(project.work_dir_path, name).is_file()
+        1 for name in folders if folder_has_usable_inventory_data(project, name)
     )
     return len(folders), with_inventory
 
