@@ -356,6 +356,11 @@ class SentenceItem(BaseModel):
     needs_supplement_asset: bool = False
     supplement_reason: str = ""
     source_inventory_asset_ids_considered: list[str] = Field(default_factory=list)
+    # Qualitative Pause NACH diesem Satz/Beat ("", "short", "medium", "long")
+    # — siehe PAUSE_AFTER_CHOICES/ELEVENLABS_V3_PAUSE_TAGS in defaults.py.
+    # Wird nur für das eleven_v3-Modell tatsächlich als Pause-Tag beim TTS
+    # eingefügt (siehe tts_text_builder.build_tts_ready_text).
+    pause_after: str = ""
 
 
 class FolderVoiceoverDraft(BaseModel):

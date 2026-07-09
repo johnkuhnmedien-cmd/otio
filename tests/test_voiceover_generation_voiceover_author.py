@@ -198,6 +198,42 @@ def test_generated_draft_defaults_transition_to_next_used_to_false_when_absent(
     assert result.draft.transition_to_next_used is False
 
 
+def test_generated_draft_parses_valid_pause_after(tmp_path: Path) -> None:
+    """Nutzerfeedback: Pausen zwischen Abschnitten — pause_after aus der
+    Modell-Antwort muss ins SentenceItem übernommen werden."""
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    response_with_pause = json.loads(VALID_AUTHOR_RESPONSE)
+    response_with_pause["sentence_items"][0]["pause_after"] = "long"
+    raw_text = json.dumps(response_with_pause)
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response(raw_text)):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    assert result.status == STATUS_PASS
+    assert result.draft.sentence_items[0].pause_after == "long"
+
+
+def test_generated_draft_defaults_pause_after_to_empty_when_absent(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    assert result.draft.sentence_items[0].pause_after == ""
+
+
+def test_generated_draft_rejects_invalid_pause_after_value(tmp_path: Path) -> None:
+    """Schutz vor beliebigem Text als ElevenLabs-Pause-Tag (siehe
+    tts_text_builder) — ein nicht erlaubter Wert wird auf '' zurückgesetzt,
+    statt unverändert übernommen zu werden."""
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    response_with_invalid_pause = json.loads(VALID_AUTHOR_RESPONSE)
+    response_with_invalid_pause["sentence_items"][0]["pause_after"] = "<script>alert(1)</script>"
+    raw_text = json.dumps(response_with_invalid_pause)
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response(raw_text)):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    assert result.draft.sentence_items[0].pause_after == ""
+
+
 def test_generate_raises_for_disabled_folder(tmp_path: Path) -> None:
     project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"], enabled={"Grand Canyon": True, "Yellowstone": False})
     with pytest.raises(ValueError):

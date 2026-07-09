@@ -199,6 +199,69 @@ def test_folder_alignment_preserves_primary_asset_id_and_supplement_flag(tmp_pat
     assert alignment.items[0].supplement_reason == "Kein Asset gefunden."
 
 
+def test_build_folder_alignment_uses_tts_text_when_provided(tmp_path: Path) -> None:
+    """Nutzerfeedback (Pausen): bei eleven_v3 kann der tatsächlich an
+    ElevenLabs gesendete Text (mit Pause-Tag) von voiceover_text_full
+    abweichen — build_folder_alignment muss dann gegen DIESEN Text aligned
+    werden, nicht gegen den ungetaggten Fließtext."""
+    project = _make_project(tmp_path)
+    draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name="Grand Canyon",
+        voiceover_text_full="Erster Satz. Zweiter Satz.",
+        sentence_items=[
+            SentenceItem(sentence_id="sentence_001", text="Erster Satz.", pause_after="long"),
+            SentenceItem(sentence_id="sentence_002", text="Zweiter Satz."),
+        ],
+    )
+    save_folder_voiceovers_confirmed(project, FolderVoiceoversDocument(project_id=project.id, items=[draft]))
+
+    # Das ist der Text, der TATSÄCHLICH an ElevenLabs gesendet wurde (inkl.
+    # Pause-Tag) — länger als voiceover_text_full.
+    tts_text = "Erster Satz. [long pause] Zweiter Satz."
+    alignment_data = {
+        "characters": list(tts_text),
+        "character_start_times_seconds": [i * 0.1 for i in range(len(tts_text))],
+        "character_end_times_seconds": [(i + 1) * 0.1 for i in range(len(tts_text))],
+    }
+    audio_item = VoiceoverAudioItem(scope="folder", folder_name="Grand Canyon")
+
+    alignment = build_folder_alignment(
+        project, "Grand Canyon", audio_item, alignment_data, tts_text=tts_text
+    )
+
+    # Ohne tts_text würde "Zweiter Satz." NICHT an der erwarteten (späteren)
+    # Position im kürzeren voiceover_text_full gefunden -> hier muss es aber
+    # korrekt und ohne Fallback-Warnung ausgerichtet sein.
+    assert ALIGNMENT_WARNING_TEXT_SEGMENT_NOT_FOUND not in "".join(alignment.alignment_warnings)
+    assert alignment.items[1].audio_start_sec > alignment.items[0].audio_end_sec
+
+
+def test_build_folder_alignment_falls_back_to_voiceover_text_full_without_tts_text(
+    tmp_path: Path,
+) -> None:
+    """Rückwärtskompatibilität: ohne tts_text-Parameter verhält sich
+    build_folder_alignment exakt wie vorher."""
+    project = _make_project(tmp_path)
+    draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name="Grand Canyon",
+        voiceover_text_full="Hello world.",
+        sentence_items=[SentenceItem(sentence_id="sentence_001", text="Hello world.")],
+    )
+    save_folder_voiceovers_confirmed(project, FolderVoiceoversDocument(project_id=project.id, items=[draft]))
+    full_text = draft.voiceover_text_full
+    alignment_data = {
+        "characters": list(full_text),
+        "character_start_times_seconds": [i * 0.1 for i in range(len(full_text))],
+        "character_end_times_seconds": [(i + 1) * 0.1 for i in range(len(full_text))],
+    }
+    audio_item = VoiceoverAudioItem(scope="folder", folder_name="Grand Canyon")
+    alignment = build_folder_alignment(project, "Grand Canyon", audio_item, alignment_data)
+    assert alignment.items[0].audio_start_sec == 0.0
+    assert alignment.items[0].audio_end_sec > 0.0
+
+
 # --- build_intro_alignment ---
 
 

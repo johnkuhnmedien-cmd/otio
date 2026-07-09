@@ -8,7 +8,7 @@ Phase 4: build_folder_voiceover_prompt(), build_voiceover_review_prompt(),
 
 from __future__ import annotations
 
-from otio_app.defaults import BRIEF_NEGATIVE_RULE_INSTRUCTIONS
+from otio_app.defaults import BRIEF_NEGATIVE_RULE_INSTRUCTIONS, PAUSE_AFTER_CHOICES
 from otio_app.services.voiceover_generation.models import (
     DramaturgyFolderEntry,
     DramaturgyPlan,
@@ -373,8 +373,13 @@ the stone glow from within."
 - next location in the video: {next_folder_name or "(none — this is the last location)"}
 - use a transition from the previous location (as a segue near the START of \
 this section): {setting.transition_from_previous}
-- end this section with a brief, non-spoiling teaser toward the NEXT location \
-(use the transition goal above, do not reveal details): {setting.transition_to_next}
+- end this section with a brief teaser toward "{next_folder_name or "-"}", which is \
+the VERY NEXT section of the video (immediately after this one, not later, not \
+eventually — the viewer will see it right after this): {setting.transition_to_next}. \
+Use the transition goal above. Do NOT reveal details about it, but ALSO do not use \
+deferral language that implies it is far away or will be covered "later"/"eventually" \
+in the video (e.g. avoid phrasing like "von der später noch die Rede sein wird", \
+"later in this video", "eventually", "in due time") — it comes right after this section.
 - callback to the previous location later in the text: {setting.callback_to_previous}
 - use a contrast with the previous location: {setting.use_contrast_with_previous}
 - use a commonality with the previous location: {setting.use_commonality_with_previous}
@@ -406,6 +411,11 @@ Rules for sentence_items:
 and give a concrete supplement_reason (what visual is missing).
 - asset_confidence: 0.0-1.0, honestly reflecting how well the asset matches the sentence.
 - Not every asset in the inventory needs to be used.
+- Optionally set pause_after on a sentence_item to mark a deliberate narrative \
+pause AFTER that sentence — one of {list(PAUSE_AFTER_CHOICES)} ("" = no pause, \
+"short"/"medium"/"long" = increasingly longer pause). Use pauses sparingly, only \
+at genuine dramatic beats (e.g. after a striking statement, before a topic shift) \
+— not after every sentence. Never set pause_after on the LAST sentence_item.
 
 Respond with JSON ONLY, no markdown code fences, no commentary, matching exactly \
 this shape:
@@ -427,7 +437,8 @@ this shape:
       "avoid_showing": [],
       "needs_supplement_asset": false,
       "supplement_reason": "",
-      "source_inventory_asset_ids_considered": []
+      "source_inventory_asset_ids_considered": [],
+      "pause_after": ""
     }}
   ],
   "transition_from_previous_used": false,
@@ -592,7 +603,8 @@ same shape as before:
       "avoid_showing": [],
       "needs_supplement_asset": false,
       "supplement_reason": "",
-      "source_inventory_asset_ids_considered": []
+      "source_inventory_asset_ids_considered": [],
+      "pause_after": ""
     }}
   ],
   "transition_from_previous_used": false,

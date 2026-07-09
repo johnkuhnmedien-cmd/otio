@@ -44,6 +44,8 @@ from otio_app.services.voiceover_generation.tts_orchestration_service import (
 )
 from otio_app.services.voiceover_generation.voiceover_author_service import (
     generate_folder_voiceover,
+    load_folder_voiceovers_confirmed,
+    save_folder_voiceovers_confirmed,
     update_folder_voiceover_text,
 )
 from otio_app.services.voiceover_generation.voiceover_review_service import confirm_folder_voiceover
@@ -374,6 +376,79 @@ def test_no_edit_plan_documents_created(tmp_path: Path) -> None:
 
     assert not (project.work_dir_path / "edit_plan").exists()
     assert not (project.work_dir_path / "exports").exists()
+
+
+def _set_first_sentence_pause_after(project, folder_name: str, pause_after: str) -> None:
+    """Setzt pause_after auf dem ersten sentence_item eines bestätigten
+    Ordner-Voice-overs, OHNE voiceover_text_full zu ändern — simuliert eine
+    reine Pausen-Änderung."""
+    document = load_folder_voiceovers_confirmed(project)
+    updated_items = []
+    for item in document.items:
+        if item.folder_name == folder_name and item.sentence_items:
+            new_sentence_items = list(item.sentence_items)
+            new_sentence_items[0] = new_sentence_items[0].model_copy(
+                update={"pause_after": pause_after}
+            )
+            item = item.model_copy(update={"sentence_items": new_sentence_items})
+        updated_items.append(item)
+    save_folder_voiceovers_confirmed(project, document.model_copy(update={"items": updated_items}))
+
+
+def test_synthesize_folder_voiceover_inserts_pause_tag_for_v3_model(tmp_path: Path) -> None:
+    """Nutzerfeedback: Pausen zwischen Abschnitten — bei eleven_v3 muss der
+    tatsächlich an ElevenLabs gesendete Text den Pause-Tag enthalten."""
+    project = _make_project_with_confirmed_content(tmp_path)
+    save_elevenlabs_settings(
+        project,
+        ElevenLabsSettings(project_id=project.id, voice_id="voice-abc", model_id="eleven_v3"),
+    )
+    _set_first_sentence_pause_after(project, "Grand Canyon", "long")
+
+    with patch(
+        f"{_TTS_MODULE}.synthesize_speech_with_timestamps", return_value=_fake_tts_result()
+    ) as mock_tts:
+        synthesize_folder_voiceover(project, "Grand Canyon")
+
+    sent_text = mock_tts.call_args.args[0]
+    assert "[long pause]" in sent_text
+
+
+def test_synthesize_folder_voiceover_no_pause_tag_for_default_model(tmp_path: Path) -> None:
+    """Default-Modell ist NICHT eleven_v3 — derselbe pause_after-Wert darf
+    keinen Tag im gesendeten Text erzeugen (würde sonst vorgelesen)."""
+    project = _make_project_with_confirmed_content(tmp_path)
+    _set_first_sentence_pause_after(project, "Grand Canyon", "long")
+
+    with patch(
+        f"{_TTS_MODULE}.synthesize_speech_with_timestamps", return_value=_fake_tts_result()
+    ) as mock_tts:
+        synthesize_folder_voiceover(project, "Grand Canyon")
+
+    sent_text = mock_tts.call_args.args[0]
+    assert "[" not in sent_text
+    confirmed = load_folder_voiceovers_confirmed(project)
+    draft = next(item for item in confirmed.items if item.folder_name == "Grand Canyon")
+    assert sent_text == draft.voiceover_text_full
+
+
+def test_pause_only_change_marks_existing_audio_stale_for_v3_model(tmp_path: Path) -> None:
+    """Nutzerfeedback-Risiko (selbst benannt): eine reine Pausen-Änderung
+    (ohne Textänderung) muss trotzdem als veraltet erkannt werden, weil sich
+    der tatsächlich an ElevenLabs gesendete Text ändert."""
+    project = _make_project_with_confirmed_content(tmp_path)
+    save_elevenlabs_settings(
+        project,
+        ElevenLabsSettings(project_id=project.id, voice_id="voice-abc", model_id="eleven_v3"),
+    )
+    with patch(f"{_TTS_MODULE}.synthesize_speech_with_timestamps", return_value=_fake_tts_result()):
+        synthesize_folder_voiceover(project, "Grand Canyon")
+
+    _set_first_sentence_pause_after(project, "Grand Canyon", "long")
+    manifest = mark_stale_audio_if_needed(project)
+
+    item = next(i for i in manifest.items if i.folder_name == "Grand Canyon")
+    assert item.status == AUDIO_STATUS_STALE
 
 
 def test_original_media_files_are_not_touched(tmp_path: Path) -> None:

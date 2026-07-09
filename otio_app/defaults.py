@@ -392,6 +392,23 @@ ELEVENLABS_MODEL_PRESETS = (
 ELEVENLABS_DEFAULT_MODEL_ID = "eleven_multilingual_v2"
 ELEVENLABS_DEFAULT_OUTPUT_FORMAT = "mp3_44100_128"
 ELEVENLABS_API_BASE_URL = "https://api.elevenlabs.io/v1"
+ELEVENLABS_MODEL_ID_V3 = "eleven_v3"
+
+# --- Pausen innerhalb eines Folder-Voice-overs (Nutzerfeedback Juli 2026) ---
+# Qualitativ statt exakter Sekundenzahl: eleven_v3 unterstützt KEINE
+# SSML-<break time="Xs"/>-Tags mit exakter Dauer, sondern nur die drei
+# nicht-numerischen Tags unten. Für alle anderen ElevenLabs-Modelle werden
+# diese Tags NICHT eingefügt (dort würden sie als Text vorgelesen).
+PAUSE_AFTER_NONE = ""
+PAUSE_AFTER_SHORT = "short"
+PAUSE_AFTER_MEDIUM = "medium"
+PAUSE_AFTER_LONG = "long"
+PAUSE_AFTER_CHOICES = (PAUSE_AFTER_NONE, PAUSE_AFTER_SHORT, PAUSE_AFTER_MEDIUM, PAUSE_AFTER_LONG)
+ELEVENLABS_V3_PAUSE_TAGS = {
+    PAUSE_AFTER_SHORT: "[short pause]",
+    PAUSE_AFTER_MEDIUM: "[pause]",
+    PAUSE_AFTER_LONG: "[long pause]",
+}
 
 AUDIO_ALIGNMENT_FILENAME = "voiceover_alignment.json"
 TTS_RUN_MANIFEST_FILENAME = "tts_run_manifest.json"

@@ -52,10 +52,12 @@ from otio_app.services.voiceover_generation.intro_hook_service import load_confi
 from otio_app.services.voiceover_generation.llm_trace_service import content_hash
 from otio_app.services.voiceover_generation.models import (
     ElevenLabsSettings,
+    FolderVoiceoverDraft,
     TtsRunManifest,
     VoiceoverAudioItem,
     VoiceoverAudioManifest,
 )
+from otio_app.services.voiceover_generation.tts_text_builder import build_tts_ready_text
 from otio_app.services.voiceover_generation.voiceover_author_service import (
     load_folder_voiceovers_confirmed,
 )
@@ -150,13 +152,19 @@ def get_next_audio_version_path(project: Project, scope: str, folder_name: str) 
 
 def mark_stale_audio_if_needed(project: Project) -> VoiceoverAudioManifest:
     """Markiert Manifest-Items als STALE, wenn sich der zugehörige bestätigte
-    Text geändert hat. Erzeugt NIEMALS automatisch neues Audio (§10)."""
+    Text geändert hat. Erzeugt NIEMALS automatisch neues Audio (§10).
+
+    Für Ordner wird der tatsächlich an ElevenLabs gesendete Text verglichen
+    (inkl. eleven_v3-Pause-Tags, siehe build_tts_ready_text) — sonst würde
+    eine reine Änderung der Pausen-Einstellung (ohne Textänderung) nicht als
+    veraltet erkannt."""
     manifest = load_audio_manifest(project)
     confirmed_folder_doc = load_folder_voiceovers_confirmed(project)
-    confirmed_folder_texts = {
-        item.folder_name: item.voiceover_text_full for item in confirmed_folder_doc.items
+    confirmed_folder_drafts: dict[str, FolderVoiceoverDraft] = {
+        item.folder_name: item for item in confirmed_folder_doc.items
     }
     confirmed_hook = load_confirmed_intro_hook(project)
+    settings = load_elevenlabs_settings(project)
 
     updated_items: list[VoiceoverAudioItem] = []
     changed = False
@@ -168,7 +176,10 @@ def mark_stale_audio_if_needed(project: Project) -> VoiceoverAudioManifest:
         if item.scope == AUDIO_SCOPE_INTRO:
             current_text = confirmed_hook.hook_text if confirmed_hook is not None else None
         else:
-            current_text = confirmed_folder_texts.get(item.folder_name)
+            draft = confirmed_folder_drafts.get(item.folder_name)
+            current_text = (
+                build_tts_ready_text(draft, settings.model_id) if draft is not None else None
+            )
 
         if current_text is None:
             updated_items.append(item)
@@ -288,7 +299,7 @@ def _run_tts_and_update_manifest(
             alignment = build_intro_alignment(project, audio_item_for_alignment, result.alignment)
         else:
             alignment = build_folder_alignment(
-                project, folder_name, audio_item_for_alignment, result.alignment
+                project, folder_name, audio_item_for_alignment, result.alignment, tts_text=text
             )
         if duration_missing:
             # ffprobe konnte die Dauer nicht ermitteln — Alignment trotzdem
@@ -356,9 +367,9 @@ def synthesize_folder_voiceover(project: Project, folder_name: str) -> Voiceover
         raise ValueError(f"Kein bestätigter Voice-over-Text für '{folder_name}' vorhanden.")
 
     order_index = _resolve_order_index(project, folder_name)
-    text = draft.voiceover_text_full
-    text_hash = _text_hash(text)
     settings = load_elevenlabs_settings(project)
+    text = build_tts_ready_text(draft, settings.model_id)
+    text_hash = _text_hash(text)
 
     manifest = load_audio_manifest(project)
     existing = next(

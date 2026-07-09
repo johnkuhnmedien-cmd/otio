@@ -32,6 +32,10 @@ from otio_app.services.voiceover_generation.models import (
     VoiceoverAlignment,
     VoiceoverAudioItem,
 )
+from otio_app.services.voiceover_generation.text_segment_matching import (
+    build_normalized_index_map,
+    find_segment_span,
+)
 from otio_app.services.voiceover_generation.voiceover_author_service import (
     load_folder_voiceovers_confirmed,
 )
@@ -50,59 +54,6 @@ def _resolve_order_index(project: Project, folder_name: str) -> int:
         return 0
     entry = next((e for e in plan.recommended_folder_order if e.folder_name == folder_name), None)
     return entry.order_index if entry is not None else 0
-
-
-def _build_normalized_index_map(text: str) -> tuple[str, list[int]]:
-    """Baut eine kompakte, case-/whitespace-/punctuation-normalisierte Version
-    von `text` plus eine Rückabbildung jedes behaltenen Zeichens auf seinen
-    ORIGINAL-Index — ElevenLabs' Character-Timestamps sind exakt an die
-    Originalzeichen von `text` gekoppelt, deshalb muss die Rückabbildung
-    exakt sein, auch wenn für den Vergleich Satzzeichen ignoriert werden."""
-    normalized_chars: list[str] = []
-    index_map: list[int] = []
-    previous_was_space = False
-    for index, ch in enumerate(text):
-        if ch.isspace():
-            if normalized_chars and not previous_was_space:
-                normalized_chars.append(" ")
-                index_map.append(index)
-            previous_was_space = True
-            continue
-        if not ch.isalnum():
-            previous_was_space = False
-            continue
-        previous_was_space = False
-        normalized_chars.append(ch.lower())
-        index_map.append(index)
-    while normalized_chars and normalized_chars[0] == " ":
-        normalized_chars.pop(0)
-        index_map.pop(0)
-    while normalized_chars and normalized_chars[-1] == " ":
-        normalized_chars.pop()
-        index_map.pop()
-    return "".join(normalized_chars), index_map
-
-
-def _find_segment_span(
-    normalized_full: str,
-    index_map: list[int],
-    normalized_segment: str,
-    *,
-    search_from: int,
-) -> tuple[int, int, int] | None:
-    """Sucht normalized_segment in normalized_full ab Position search_from.
-
-    Gibt (original_start_index, original_end_index_exclusive, neue
-    normalisierte Cursor-Position) zurück, oder None wenn nicht gefunden."""
-    if not normalized_segment:
-        return None
-    position = normalized_full.find(normalized_segment, search_from)
-    if position == -1:
-        return None
-    start = index_map[position]
-    end_normalized_index = position + len(normalized_segment) - 1
-    end = index_map[end_normalized_index] + 1
-    return start, end, position + len(normalized_segment)
 
 
 def _segment_times_from_char_range(
@@ -142,7 +93,7 @@ def _align_segments(
     ):
         warnings.append(ALIGNMENT_WARNING_NON_MONOTONIC_TIMESTAMPS)
 
-    normalized_full, index_map = _build_normalized_index_map(full_text)
+    normalized_full, index_map = build_normalized_index_map(full_text)
     total_duration = ends[-1] if ends else 0.0
     total_chars = sum(len(text) for _, text in segments) or 1
 
@@ -156,8 +107,8 @@ def _align_segments(
             results[segment_id] = (cursor_time, cursor_time)
             continue
 
-        normalized_segment, _ = _build_normalized_index_map(segment_text)
-        span = _find_segment_span(normalized_full, index_map, normalized_segment, search_from=search_from)
+        normalized_segment, _ = build_normalized_index_map(segment_text)
+        span = find_segment_span(normalized_full, index_map, normalized_segment, search_from=search_from)
         if span is not None:
             orig_start, orig_end, new_cursor = span
             times = _segment_times_from_char_range(starts, ends, orig_start, orig_end)
@@ -185,14 +136,22 @@ def build_folder_alignment(
     folder_name: str,
     audio_item: VoiceoverAudioItem,
     elevenlabs_timestamps: dict[str, Any],
+    *,
+    tts_text: str | None = None,
 ) -> VoiceoverAlignment:
+    """tts_text sollte der EXAKT an ElevenLabs gesendete Text sein (siehe
+    tts_text_builder.build_tts_ready_text) — bei eleven_v3 kann dieser sich
+    von draft.voiceover_text_full unterscheiden, wenn Pause-Tags eingefügt
+    wurden. Ohne tts_text (z. B. ältere Aufrufer, Tests) wird wie bisher
+    draft.voiceover_text_full verwendet."""
     confirmed_document = load_folder_voiceovers_confirmed(project)
     draft = next((item for item in confirmed_document.items if item.folder_name == folder_name), None)
     if draft is None:
         raise ValueError(f"Kein bestätigter Voice-over-Text für '{folder_name}' vorhanden.")
 
+    full_text = tts_text if tts_text is not None else draft.voiceover_text_full
     segments = [(item.sentence_id, item.text) for item in draft.sentence_items]
-    times_by_id, warnings = _align_segments(draft.voiceover_text_full, segments, elevenlabs_timestamps)
+    times_by_id, warnings = _align_segments(full_text, segments, elevenlabs_timestamps)
 
     items: list[AlignmentItem] = []
     for sentence_item in draft.sentence_items:

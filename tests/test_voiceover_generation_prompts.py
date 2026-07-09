@@ -375,15 +375,52 @@ def test_folder_voiceover_prompt_contains_transition_to_next_instruction() -> No
         next_folder_name="Yellowstone",
         inventory_assets=_sample_inventory_assets(),
     )
-    teaser_line = next(
-        line for line in prompt.splitlines() if "teaser toward the NEXT location" in line
-    )
-    assert teaser_line.strip().endswith("True")
+    assert 'teaser toward "Yellowstone"' in prompt
     # Die beiden Zeilen dürfen nicht identisch sein.
     transition_from_previous_line = next(
         line for line in prompt.splitlines() if "transition from the previous location" in line
     )
+    teaser_line = next(line for line in prompt.splitlines() if "brief teaser toward" in line)
     assert transition_from_previous_line != teaser_line
+
+
+def test_folder_voiceover_prompt_contains_pause_after_instruction() -> None:
+    """Nutzerfeedback: Pausen zwischen Abschnitten wie in den Style-References-
+    Beispielen ('[pause 4 seconds]'). Der Prompt muss pause_after als
+    qualitatives Feld (kurz/mittel/lang, nicht exakte Sekunden) einführen."""
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "pause_after" in prompt
+    assert "'short', 'medium', 'long'" in prompt
+    assert '"pause_after": ""' in prompt
+
+
+def test_folder_voiceover_prompt_forbids_deferral_language_for_transition_to_next() -> None:
+    """Nutzerfeedback (Live-Test): 'von der später noch die Rede sein wird'
+    impliziert, dass der nächste Ort erst viel später im Video kommt — der
+    Prompt muss explizit klarmachen, dass es der UNMITTELBAR nächste Abschnitt
+    ist, und aufschiebende Formulierungen verbieten."""
+    setting = _sample_setting().model_copy(update={"transition_to_next": True})
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=setting,
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "VERY NEXT section" in prompt
+    assert "immediately after this one" in prompt
+    assert "von der später noch die Rede sein wird" in prompt  # als verbotenes Beispiel genannt
+    assert "deferral language" in prompt
 
 
 def test_folder_voiceover_prompt_json_schema_includes_transition_to_next_used() -> None:

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from otio_app.defaults import (
+    PAUSE_AFTER_CHOICES,
     VO_ERROR_INVALID_ASSET_ID,
     VO_ERROR_MISSING_ASSET_MAPPING,
     VO_ERROR_MISSING_SUPPLEMENT_REASON,
@@ -195,9 +196,18 @@ def _parse_sentence_items(raw_items: Any) -> list[SentenceItem]:
                 source_inventory_asset_ids_considered=as_str_list(
                     raw.get("source_inventory_asset_ids_considered")
                 ),
+                pause_after=_valid_pause_after(raw.get("pause_after")),
             )
         )
     return items
+
+
+def _valid_pause_after(value: Any) -> str:
+    """Fällt auf 'kein Pause-Tag' (leerer String) zurück, falls das Modell
+    einen nicht erlaubten Wert liefert — verhindert, dass beliebiger Text als
+    ElevenLabs-Pause-Tag interpretiert werden könnte (siehe tts_text_builder)."""
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in PAUSE_AFTER_CHOICES else ""
 
 
 def _sanitize_sentence_items(
