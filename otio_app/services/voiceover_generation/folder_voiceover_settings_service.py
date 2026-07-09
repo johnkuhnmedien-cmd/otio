@@ -39,11 +39,22 @@ def build_default_folder_voiceover_settings(project: Project) -> FolderVoiceover
     """Leitet Default-Settings aus dramaturgy_plan.confirmed.json ab.
 
     Fehlen Wortanzahl-Werte im Dramaturgie-Eintrag (0 oder nicht gesetzt),
-    wird auf die Phase-3-Heuristik zurückgegriffen."""
+    wird auf die Phase-3-Heuristik zurückgegriffen.
+
+    transition_from_previous/use_contrast_with_previous (rückwärtsgerichtet)
+    werden für den ERSTEN aktivierten Ordner immer auf False gezwungen — es
+    gibt dort nichts Vorheriges, auf das sich beziehen ließe. transition_to_next
+    (vorwärtsgerichtet) wird spiegelbildlich für den LETZTEN aktivierten
+    Ordner immer auf False gezwungen — dort gibt es nichts Nächstes."""
     plan = load_confirmed_dramaturgy(project)
     settings: list[FolderVoiceoverSetting] = []
     if plan is not None:
-        for entry in sorted(plan.recommended_folder_order, key=lambda item: item.order_index):
+        sorted_entries = sorted(plan.recommended_folder_order, key=lambda item: item.order_index)
+        enabled_entries = [entry for entry in sorted_entries if entry.enabled]
+        first_enabled_folder_name = enabled_entries[0].folder_name if enabled_entries else None
+        last_enabled_folder_name = enabled_entries[-1].folder_name if enabled_entries else None
+
+        for entry in sorted_entries:
             target_words = entry.recommended_word_count
             min_words = entry.recommended_min_words
             max_words = entry.recommended_max_words
@@ -52,6 +63,9 @@ def build_default_folder_voiceover_settings(project: Project) -> FolderVoiceover
                 target_words = target_words or summary.estimated_voiceover_word_count
                 min_words = min_words or summary.estimated_min_words
                 max_words = max_words or summary.estimated_max_words
+
+            is_first_enabled = entry.folder_name == first_enabled_folder_name
+            is_last_enabled = entry.folder_name == last_enabled_folder_name
 
             settings.append(
                 FolderVoiceoverSetting(
@@ -62,8 +76,15 @@ def build_default_folder_voiceover_settings(project: Project) -> FolderVoiceover
                     target_words=target_words,
                     min_words=min_words,
                     max_words=max_words,
-                    transition_from_previous=bool(entry.transition_from_previous_hint),
-                    use_contrast_with_previous=bool(entry.contrast_or_commonality_hint),
+                    transition_from_previous=(
+                        bool(entry.transition_from_previous_hint) and not is_first_enabled
+                    ),
+                    use_contrast_with_previous=(
+                        bool(entry.contrast_or_commonality_hint) and not is_first_enabled
+                    ),
+                    transition_to_next=(
+                        bool(entry.transition_goal_to_next) and not is_last_enabled
+                    ),
                 )
             )
 
@@ -121,6 +142,7 @@ def update_folder_voiceover_settings(
             "max_words",
             "word_tolerance_percent",
             "transition_from_previous",
+            "transition_to_next",
             "callback_to_previous",
             "use_contrast_with_previous",
             "use_commonality_with_previous",

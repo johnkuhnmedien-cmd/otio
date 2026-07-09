@@ -167,6 +167,37 @@ def test_generated_draft_contains_author_run_id(tmp_path: Path) -> None:
     assert (run_dir / "llm_request_manifest.json").is_file()
 
 
+def test_generated_draft_parses_transition_to_next_used(tmp_path: Path) -> None:
+    """Nutzerfeedback: neue Spalte/Feld 'Übergang zum nächsten Kapitel' — das
+    vom Modell selbst zurückgemeldete transition_to_next_used muss ins
+    FolderVoiceoverDraft übernommen werden, genau wie die drei bestehenden
+    *_used-Flags."""
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    response_with_transition_to_next = json.loads(VALID_AUTHOR_RESPONSE)
+    response_with_transition_to_next["transition_to_next_used"] = True
+    raw_text = json.dumps(response_with_transition_to_next)
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(raw_text),
+    ):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    assert result.status == STATUS_PASS
+    assert result.draft.transition_to_next_used is True
+
+
+def test_generated_draft_defaults_transition_to_next_used_to_false_when_absent(
+    tmp_path: Path,
+) -> None:
+    """VALID_AUTHOR_RESPONSE enthält (noch) kein transition_to_next_used —
+    das Draft muss trotzdem sauber mit False befüllt werden, nicht crashen."""
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    assert result.draft.transition_to_next_used is False
+
+
 def test_generate_raises_for_disabled_folder(tmp_path: Path) -> None:
     project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"], enabled={"Grand Canyon": True, "Yellowstone": False})
     with pytest.raises(ValueError):

@@ -64,6 +64,7 @@ def _render_settings_table(project: Project, settings_doc: FolderVoiceoverSettin
             "min_words": setting.min_words,
             "max_words": setting.max_words,
             "transition_from_previous": setting.transition_from_previous,
+            "transition_to_next": setting.transition_to_next,
             "callback_to_previous": setting.callback_to_previous,
             "use_contrast_with_previous": setting.use_contrast_with_previous,
             "use_commonality_with_previous": setting.use_commonality_with_previous,
@@ -88,8 +89,25 @@ def _render_settings_table(project: Project, settings_doc: FolderVoiceoverSettin
             "target_words": st.column_config.NumberColumn("Ziel-Wörter", min_value=0, step=5),
             "min_words": st.column_config.NumberColumn("Min. Wörter", min_value=0, step=5),
             "max_words": st.column_config.NumberColumn("Max. Wörter", min_value=0, step=5),
-            "transition_from_previous": st.column_config.CheckboxColumn("Übergang von vorher"),
-            "callback_to_previous": st.column_config.CheckboxColumn("Rückbezug"),
+            "transition_from_previous": st.column_config.CheckboxColumn(
+                "Übergang von vorher",
+                help=(
+                    "Segue am ANFANG des Textes, das an den vorherigen Ort anknüpft. "
+                    "Ergibt beim ersten Ort keinen Sinn (nichts kommt davor)."
+                ),
+            ),
+            "transition_to_next": st.column_config.CheckboxColumn(
+                "Übergang zum nächsten Kapitel",
+                help=(
+                    "Kurzer, nicht spoilernder Teaser am ENDE des Textes, der auf den "
+                    "nächsten Ort neugierig macht. Ergibt beim letzten Ort keinen Sinn "
+                    "(nichts kommt danach)."
+                ),
+            ),
+            "callback_to_previous": st.column_config.CheckboxColumn(
+                "Rückbezug",
+                help="Erwähnung des vorherigen Ortes SPÄTER im Text (nicht am Anfang wie der Übergang).",
+            ),
             "use_contrast_with_previous": st.column_config.CheckboxColumn("Kontrast"),
             "use_commonality_with_previous": st.column_config.CheckboxColumn("Gemeinsamkeit"),
             "factuality_mode": st.column_config.SelectboxColumn(

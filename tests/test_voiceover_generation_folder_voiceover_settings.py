@@ -144,3 +144,163 @@ def test_update_folder_voiceover_settings_applies_edits(tmp_path: Path) -> None:
 
     reloaded = load_folder_voiceover_settings(project)
     assert reloaded.settings == updated.settings
+
+
+def _make_project_with_three_enabled_folders(tmp_path: Path) -> Project:
+    """Drei aktivierte Ordner mit durchgängig nicht-leeren Dramaturgie-Hinweisen
+    — deckt Übergang-von-vorher/Kontrast (rückwärts) sowie Übergang-zum-
+    naechsten-Kapitel (vorwärts) für ersten/mittleren/letzten Ordner ab."""
+    project_root = tmp_path / "USA"
+    project_root.mkdir()
+    folders = ["Grand Canyon", "Yellowstone", "Zion"]
+    for folder in folders:
+        (project_root / folder).mkdir()
+    project = Project(
+        id="settings-project-3",
+        name="Settings Test 3",
+        project_root=str(project_root),
+        work_dir=str(project_root / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=folders,
+        selected_asset_subdirs=folders,
+    )
+    for folder in folders:
+        path = get_folder_inventory_path(project.work_dir_path, folder)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        analysis = AssetFolderAnalysis(
+            folder=folder,
+            assets=[AssetMediaAnalysis(path=f"{folder}/clip1.mp4", description=f"{folder} view")],
+        )
+        path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
+
+    plan = DramaturgyPlan(
+        project_id=project.id,
+        recommended_folder_order=[
+            DramaturgyFolderEntry(
+                folder_name="Grand Canyon",
+                order_index=1,
+                enabled=True,
+                dramaturgy_role="opener",
+                recommended_word_count=140,
+                recommended_min_words=126,
+                recommended_max_words=154,
+                transition_from_previous_hint="",
+                contrast_or_commonality_hint="",
+                transition_goal_to_next="Segue to the geysers of Yellowstone.",
+            ),
+            DramaturgyFolderEntry(
+                folder_name="Yellowstone",
+                order_index=2,
+                enabled=True,
+                dramaturgy_role="setup",
+                recommended_word_count=140,
+                recommended_min_words=126,
+                recommended_max_words=154,
+                transition_from_previous_hint="Leaving the canyon behind.",
+                contrast_or_commonality_hint="Contrast rock vs. geothermal.",
+                transition_goal_to_next="Segue to Zion's red cliffs.",
+            ),
+            DramaturgyFolderEntry(
+                folder_name="Zion",
+                order_index=3,
+                enabled=True,
+                dramaturgy_role="climax",
+                recommended_word_count=140,
+                recommended_min_words=126,
+                recommended_max_words=154,
+                transition_from_previous_hint="From geysers to red rock.",
+                contrast_or_commonality_hint="Contrast heat vs. stone.",
+                transition_goal_to_next="",
+            ),
+        ],
+    )
+    save_confirmed_dramaturgy(project, plan)
+    return project
+
+
+def test_first_enabled_folder_never_gets_backward_transition_or_contrast(
+    tmp_path: Path,
+) -> None:
+    """Nutzerfeedback: 'Beim ersten Ort macht Übergang von vorher/Kontrast
+    keinen Sinn und muss immer aus sein.' — auch wenn der Dramaturgie-Hinweis
+    nicht leer ist."""
+    project = _make_project_with_three_enabled_folders(tmp_path)
+    document = build_default_folder_voiceover_settings(project)
+    by_folder = {setting.folder_name: setting for setting in document.settings}
+
+    first = by_folder["Grand Canyon"]
+    assert first.transition_from_previous is False
+    assert first.use_contrast_with_previous is False
+
+
+def test_last_enabled_folder_never_gets_forward_transition(tmp_path: Path) -> None:
+    """Übergang zum nächsten Kapitel ist beim LETZTEN Ordner immer aus —
+    unabhängig davon, ob transition_goal_to_next gesetzt ist (hier ist er es
+    nicht, aber die Regel muss auch bei gesetztem Hinweis greifen — siehe
+    nächster Test)."""
+    project = _make_project_with_three_enabled_folders(tmp_path)
+    document = build_default_folder_voiceover_settings(project)
+    by_folder = {setting.folder_name: setting for setting in document.settings}
+
+    last = by_folder["Zion"]
+    assert last.transition_to_next is False
+
+
+def test_middle_folder_gets_both_backward_and_forward_transitions_from_hints(
+    tmp_path: Path,
+) -> None:
+    """Ein mittlerer Ordner mit nicht-leeren Hinweisen in BEIDE Richtungen
+    bekommt sowohl den rückwärtigen als auch den vorwärtigen Übergang aktiv."""
+    project = _make_project_with_three_enabled_folders(tmp_path)
+    document = build_default_folder_voiceover_settings(project)
+    by_folder = {setting.folder_name: setting for setting in document.settings}
+
+    middle = by_folder["Yellowstone"]
+    assert middle.transition_from_previous is True
+    assert middle.use_contrast_with_previous is True
+    assert middle.transition_to_next is True
+
+
+def test_first_folder_still_gets_forward_transition_when_hint_present(
+    tmp_path: Path,
+) -> None:
+    """Gegenprobe zur Korrektur aus dem Nutzergespräch: der ERSTE Ordner darf
+    (im Gegensatz zum rückwärtigen Übergang) den VORWÄRTIGEN Übergang
+    weiterhin aktiv bekommen, wenn ein transition_goal_to_next-Hinweis da ist —
+    dort gibt es ja tatsächlich einen nächsten Ort."""
+    project = _make_project_with_three_enabled_folders(tmp_path)
+    document = build_default_folder_voiceover_settings(project)
+    by_folder = {setting.folder_name: setting for setting in document.settings}
+
+    first = by_folder["Grand Canyon"]
+    assert first.transition_to_next is True
+
+
+def test_single_enabled_folder_gets_neither_backward_nor_forward_transition(
+    tmp_path: Path,
+) -> None:
+    """Edge Case: ein einziger aktivierter Ordner ist gleichzeitig 'erster' UND
+    'letzter' — beide Regeln müssen gleichzeitig greifen."""
+    project = _make_project_with_confirmed_dramaturgy(tmp_path)
+    document = build_default_folder_voiceover_settings(project)
+    enabled = enabled_settings(document)
+    assert len(enabled) == 1
+    assert enabled[0].transition_from_previous is False
+    assert enabled[0].use_contrast_with_previous is False
+    assert enabled[0].transition_to_next is False
+
+
+def test_update_folder_voiceover_settings_persists_transition_to_next(
+    tmp_path: Path,
+) -> None:
+    project = _make_project_with_confirmed_dramaturgy(tmp_path)
+    document = build_default_folder_voiceover_settings(project)
+    save_folder_voiceover_settings(project, document)
+
+    edited_rows = [
+        {"folder_name": "Grand Canyon", "transition_to_next": True, "enabled": True},
+        {"folder_name": "Yellowstone", "enabled": False},
+    ]
+    updated = update_folder_voiceover_settings(project, edited_rows)
+    by_folder = {setting.folder_name: setting for setting in updated.settings}
+    assert by_folder["Grand Canyon"].transition_to_next is True

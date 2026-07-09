@@ -18,6 +18,7 @@ from otio_app.defaults import (
     VO_ERROR_FORBIDDEN_TERM_USED,
     VO_ERROR_MISSING_CONTRAST_OR_COMMONALITY,
     VO_ERROR_MISSING_TRANSITION,
+    VO_ERROR_MISSING_TRANSITION_TO_NEXT,
     VO_ERROR_TYPES_LLM_REVIEW,
     VO_ERROR_UNKNOWN_LLM_REVIEW_ERROR,
     VO_ERROR_WORD_COUNT_OUT_OF_RANGE,
@@ -158,6 +159,16 @@ def run_deterministic_checks(
                 folder_name=folder_name,
                 message="Übergang vom vorherigen Ort wurde angefordert, aber nicht verwendet.",
                 fix_hint="Übergang zu Beginn des Textes ergänzen.",
+            )
+        )
+    if setting.transition_to_next and not draft.transition_to_next_used:
+        errors.append(
+            ValidationError(
+                type=VO_ERROR_MISSING_TRANSITION_TO_NEXT,
+                severity="WARNING",
+                folder_name=folder_name,
+                message="Übergang zum nächsten Ort wurde angefordert, aber nicht verwendet.",
+                fix_hint="Teaser auf den nächsten Ort am Ende des Textes ergänzen.",
             )
         )
     if (
@@ -368,6 +379,9 @@ def apply_corrected_voiceover(
             "sentence_items": sentence_items,
             "transition_from_previous_used": bool(
                 payload.get("transition_from_previous_used", draft.transition_from_previous_used)
+            ),
+            "transition_to_next_used": bool(
+                payload.get("transition_to_next_used", draft.transition_to_next_used)
             ),
             "callback_to_previous_used": bool(
                 payload.get("callback_to_previous_used", draft.callback_to_previous_used)

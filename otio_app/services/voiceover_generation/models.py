@@ -316,6 +316,7 @@ class FolderVoiceoverSetting(BaseModel):
     max_words: int = 100
     word_tolerance_percent: int = VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT
     transition_from_previous: bool = False
+    transition_to_next: bool = False
     callback_to_previous: bool = False
     use_contrast_with_previous: bool = False
     use_commonality_with_previous: bool = False
@@ -369,6 +370,7 @@ class FolderVoiceoverDraft(BaseModel):
     word_count: int = 0
     sentence_items: list[SentenceItem] = Field(default_factory=list)
     transition_from_previous_used: bool = False
+    transition_to_next_used: bool = False
     callback_to_previous_used: bool = False
     contrast_or_commonality_used: bool = False
     used_asset_evidence: list[str] = Field(default_factory=list)

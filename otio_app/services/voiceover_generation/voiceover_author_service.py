@@ -581,6 +581,7 @@ def generate_folder_voiceover(
         word_count=_count_words(voiceover_text_full),
         sentence_items=sentence_items,
         transition_from_previous_used=bool(payload.get("transition_from_previous_used", False)),
+        transition_to_next_used=bool(payload.get("transition_to_next_used", False)),
         callback_to_previous_used=bool(payload.get("callback_to_previous_used", False)),
         contrast_or_commonality_used=bool(payload.get("contrast_or_commonality_used", False)),
         used_asset_evidence=[item.primary_asset_id for item in sentence_items if item.primary_asset_id],

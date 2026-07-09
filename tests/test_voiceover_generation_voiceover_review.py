@@ -20,15 +20,23 @@ from otio_app.services.voiceover_generation.folder_voiceover_settings_service im
     build_default_folder_voiceover_settings,
     save_folder_voiceover_settings,
 )
-from otio_app.services.voiceover_generation.models import DramaturgyFolderEntry, DramaturgyPlan
+from otio_app.defaults import VO_ERROR_MISSING_TRANSITION_TO_NEXT
+from otio_app.services.voiceover_generation.models import (
+    DramaturgyFolderEntry,
+    DramaturgyPlan,
+    FolderVoiceoverDraft,
+    FolderVoiceoverSetting,
+)
 from otio_app.services.voiceover_generation.voiceover_author_service import (
     generate_folder_voiceover,
     load_folder_voiceovers_confirmed,
     load_folder_voiceovers_draft,
 )
 from otio_app.services.voiceover_generation.voiceover_review_service import (
+    apply_corrected_voiceover,
     confirm_folder_voiceover,
     load_validation_reports,
+    run_deterministic_checks,
     run_folder_voiceover_review_loop,
     unconfirm_folder_voiceover,
 )
@@ -112,6 +120,96 @@ def _review_response(errors: list[dict]) -> PlanLlmResponse:
     return PlanLlmResponse(
         provider="anthropic", model="claude-sonnet-5", raw_text=json.dumps({"errors": errors})
     )
+
+
+def test_deterministic_check_flags_missing_transition_to_next(tmp_path: Path) -> None:
+    """Nutzerfeedback: neue Spalte 'Übergang zum nächsten Kapitel' — wenn
+    angefordert, aber vom Modell nicht verwendet, muss run_deterministic_checks
+    das als WARNING melden (analog zu MISSING_TRANSITION für die rückwärtige
+    Richtung)."""
+    project = _make_project(tmp_path)
+    setting = FolderVoiceoverSetting(
+        folder_name="Grand Canyon",
+        target_words=10,
+        min_words=5,
+        max_words=15,
+        transition_to_next=True,
+    )
+    draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name="Grand Canyon",
+        voiceover_text_full="Ein Text ohne jeden Übergang.",
+        word_count=5,
+        transition_to_next_used=False,
+    )
+    errors = run_deterministic_checks(project, "Grand Canyon", draft, setting)
+    matching = [error for error in errors if error.type == VO_ERROR_MISSING_TRANSITION_TO_NEXT]
+    assert len(matching) == 1
+    assert matching[0].severity == "WARNING"
+
+
+def test_deterministic_check_passes_when_transition_to_next_used(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    setting = FolderVoiceoverSetting(
+        folder_name="Grand Canyon",
+        target_words=10,
+        min_words=5,
+        max_words=15,
+        transition_to_next=True,
+    )
+    draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name="Grand Canyon",
+        voiceover_text_full="Ein Text mit einem Teaser auf den nächsten Ort.",
+        word_count=8,
+        transition_to_next_used=True,
+    )
+    errors = run_deterministic_checks(project, "Grand Canyon", draft, setting)
+    assert not any(error.type == VO_ERROR_MISSING_TRANSITION_TO_NEXT for error in errors)
+
+
+def test_deterministic_check_ignores_transition_to_next_when_not_requested(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    setting = FolderVoiceoverSetting(
+        folder_name="Grand Canyon",
+        target_words=10,
+        min_words=5,
+        max_words=15,
+        transition_to_next=False,
+    )
+    draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name="Grand Canyon",
+        voiceover_text_full="Ein Text ohne jeden Übergang.",
+        word_count=5,
+        transition_to_next_used=False,
+    )
+    errors = run_deterministic_checks(project, "Grand Canyon", draft, setting)
+    assert not any(error.type == VO_ERROR_MISSING_TRANSITION_TO_NEXT for error in errors)
+
+
+def test_apply_corrected_voiceover_preserves_transition_to_next_used(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    original_draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name="Grand Canyon",
+        voiceover_text_full="Alter Text.",
+        word_count=2,
+        transition_to_next_used=False,
+    )
+    correction_response = _valid_author_response("Neuer Text mit Teaser auf den nächsten Ort.")
+    payload = json.loads(correction_response)
+    payload["transition_to_next_used"] = True
+    updated = apply_corrected_voiceover(
+        project,
+        "Grand Canyon",
+        original_draft,
+        json.dumps(payload),
+        correction_run_id="correction-run-1",
+    )
+    assert updated.transition_to_next_used is True
 
 
 def test_review_loop_passes_with_no_errors(tmp_path: Path) -> None:

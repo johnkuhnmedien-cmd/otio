@@ -371,7 +371,10 @@ the stone glow from within."
 - transition goal toward the NEXT location: {dramaturgy_entry.transition_goal_to_next or "-"}
 - previous location in the video: {previous_folder_name or "(none — this is the first location)"}
 - next location in the video: {next_folder_name or "(none — this is the last location)"}
-- use a transition from the previous location: {setting.transition_from_previous}
+- use a transition from the previous location (as a segue near the START of \
+this section): {setting.transition_from_previous}
+- end this section with a brief, non-spoiling teaser toward the NEXT location \
+(use the transition goal above, do not reveal details): {setting.transition_to_next}
 - callback to the previous location later in the text: {setting.callback_to_previous}
 - use a contrast with the previous location: {setting.use_contrast_with_previous}
 - use a commonality with the previous location: {setting.use_commonality_with_previous}
@@ -428,6 +431,7 @@ this shape:
     }}
   ],
   "transition_from_previous_used": false,
+  "transition_to_next_used": false,
   "callback_to_previous_used": false,
   "contrast_or_commonality_used": false,
   "risks": []
@@ -592,6 +596,7 @@ same shape as before:
     }}
   ],
   "transition_from_previous_used": false,
+  "transition_to_next_used": false,
   "callback_to_previous_used": false,
   "contrast_or_commonality_used": false,
   "risks": []
