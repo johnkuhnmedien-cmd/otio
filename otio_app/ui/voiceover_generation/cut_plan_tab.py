@@ -128,6 +128,7 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_ser
     AUTO_RESOLVE_STATUS_ACCEPTED,
     AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED,
     AUTO_RESOLVE_STATUS_NO_MATCH,
+    auto_resolve_all_cut_plan_supplement_requests,
     auto_resolve_cut_plan_supplement_request,
 )
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
@@ -861,6 +862,72 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                             st.rerun()
                         except ValueError as exc:
                             st.error(str(exc))
+
+    _render_bulk_auto_resolve_action(
+        project,
+        requests_document,
+        query_llm_provider=query_llm_provider,
+        query_llm_model=query_llm_model,
+    )
+
+
+def _render_bulk_auto_resolve_action(
+    project: Project,
+    requests_document,
+    *,
+    query_llm_provider: str,
+    query_llm_model: str,
+) -> None:
+    """Phase 11.5: Batch-Variante von 'Automatisch lösen' — läuft
+    sequenziell über ALLE noch nicht versorgten Supplement Requests (Suche
+    + Download + Gemini-Prüfung + ggf. generischer Ordner-Fallback pro
+    Request), mit Fortschrittsanzeige. Läuft — wie alle anderen 'Alle X'-
+    Sammel-Aktionen dieser Pipeline — blockierend ohne Abbrechen-Button."""
+    open_requests = [entry for entry in requests_document.requests if not entry.accepted_asset_id]
+
+    st.subheader("Alle offenen Supplement Requests")
+    st.caption(
+        f"{len(open_requests)} von {len(requests_document.requests)} Request(s) noch ohne übernommenes Asset. "
+        "Läuft sequenziell — ein Request nach dem anderen, ohne Abbrechen-Möglichkeit."
+    )
+    pexels_ready = bool(get_api_key("PEXELS_API_KEY"))
+    if st.button(
+        "🤖 Alle fehlenden Supplement-Assets automatisch suchen",
+        key=f"cut_plan_supplement_auto_resolve_all_{project.id}",
+        disabled=not pexels_ready or not open_requests,
+    ):
+        request_labels = {
+            entry.request_id: f"{entry.folder_name or '—'} · {entry.cut_item_id}"
+            for entry in requests_document.requests
+        }
+        progress_placeholder = st.empty()
+
+        def _progress(request_id: str, index: int, total: int) -> None:
+            label = request_labels.get(request_id, request_id)
+            progress_placeholder.info(f"Request {index}/{total}: „{label}“ läuft…")
+
+        with st.spinner("Alle offenen Supplement Requests werden bearbeitet…"):
+            results = auto_resolve_all_cut_plan_supplement_requests(
+                project,
+                query_llm_provider=query_llm_provider,
+                query_llm_model=query_llm_model,
+                progress_callback=_progress,
+            )
+        progress_placeholder.empty()
+
+        accepted_count = sum(1 for result in results if result.status == AUTO_RESOLVE_STATUS_ACCEPTED)
+        generic_count = sum(1 for result in results if result.status == AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED)
+        no_match_count = sum(1 for result in results if result.status == AUTO_RESOLVE_STATUS_NO_MATCH)
+        st.success(
+            f"{len(results)} Request(s) bearbeitet: {accepted_count} automatisch akzeptiert, "
+            f"{generic_count} generisches Ordner-Asset verwendet, {no_match_count} ohne Treffer "
+            "(manuelle Prüfung nötig)."
+        )
+        for result in results:
+            if result.status == AUTO_RESOLVE_STATUS_NO_MATCH:
+                label = request_labels.get(result.request_id, result.request_id)
+                st.warning(f"„{label}“: kein passendes Asset gefunden — bitte manuell prüfen.")
+        st.rerun()
 
 
 def _render_confirmed_cut_plan(project: Project, draft: CutPlanDocument) -> None:

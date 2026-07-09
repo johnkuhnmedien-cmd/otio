@@ -1050,6 +1050,81 @@ def test_ui_generic_fallback_button_calls_service_and_shows_result(
     assert any("asset_establishing" in msg for msg in successes)
 
 
+def test_ui_shows_bulk_auto_resolve_button_and_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 11.5: Batch-Button 'Alle fehlenden Supplement-Assets
+    automatisch suchen' ruft auto_resolve_all_cut_plan_supplement_requests
+    auf und zeigt eine zusammenfassende Erfolgsmeldung."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+
+    bulk_key = f"cut_plan_supplement_auto_resolve_all_{project.id}"
+
+    def _fake_button(label, *args, **kwargs):
+        return kwargs.get("key") == bulk_key
+
+    from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_service import (
+        AUTO_RESOLVE_STATUS_ACCEPTED,
+        AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED,
+        AUTO_RESOLVE_STATUS_NO_MATCH,
+        CutPlanSupplementAutoResolveResult,
+    )
+
+    fake_results = [
+        CutPlanSupplementAutoResolveResult(status=AUTO_RESOLVE_STATUS_ACCEPTED, request_id="cutreq_1"),
+        CutPlanSupplementAutoResolveResult(status=AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED, request_id="cutreq_2"),
+        CutPlanSupplementAutoResolveResult(status=AUTO_RESOLVE_STATUS_NO_MATCH, request_id="cutreq_3"),
+    ]
+
+    successes: list[str] = []
+    with patch(
+        "otio_app.ui.voiceover_generation.cut_plan_tab.auto_resolve_all_cut_plan_supplement_requests",
+        return_value=fake_results,
+    ) as mock_batch:
+        _patch_project_selector(project, monkeypatch)
+        monkeypatch.setattr("streamlit.button", _fake_button)
+        monkeypatch.setattr("streamlit.rerun", lambda: None)
+        monkeypatch.setattr("streamlit.success", lambda msg: successes.append(msg))
+
+        render_cut_plan_page()
+
+    mock_batch.assert_called_once()
+    assert any("3 Request(s) bearbeitet" in msg for msg in successes)
+    assert any("1 automatisch akzeptiert" in msg for msg in successes)
+    assert any("1 generisches Ordner-Asset verwendet" in msg for msg in successes)
+    assert any("1 ohne Treffer" in msg for msg in successes)
+
+
+def test_ui_bulk_auto_resolve_button_disabled_when_no_open_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    document = document.model_copy(
+        update={"requests": [r.model_copy(update={"accepted_asset_id": "asset_x"}) for r in document.requests]}
+    )
+    save_cut_plan_supplement_requests(project, document)
+
+    captured_disabled: list[bool] = []
+
+    def _capture_button(label, *args, **kwargs):
+        if kwargs.get("key", "").startswith("cut_plan_supplement_auto_resolve_all_"):
+            captured_disabled.append(kwargs.get("disabled", False))
+        return False
+
+    _patch_project_selector(project, monkeypatch)
+    monkeypatch.setattr("streamlit.button", _capture_button)
+    monkeypatch.setattr("streamlit.rerun", lambda: None)
+
+    render_cut_plan_page()
+
+    assert captured_disabled == [True]
+
+
 def test_ui_shows_revalidate_hint_after_accept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _project_with_supplement_required_draft(tmp_path)
     draft = load_cut_plan_draft(project)

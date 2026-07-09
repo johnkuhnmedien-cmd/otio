@@ -17,7 +17,9 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_ser
     AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED,
     AUTO_RESOLVE_STATUS_NO_MATCH,
     DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL,
+    CutPlanSupplementAutoResolveResult,
     _describe_and_validate_downloaded_asset,
+    auto_resolve_all_cut_plan_supplement_requests,
     auto_resolve_cut_plan_supplement_request,
 )
 from otio_app.services.voiceover_generation.cut_plan_builder import save_cut_plan_draft
@@ -83,6 +85,19 @@ def _setup_request(tmp_path: Path) -> tuple[Project, str]:
     document = build_supplement_requests_from_cut_plan(project, cut_plan)
     save_cut_plan_supplement_requests(project, document)
     return project, document.requests[0].request_id
+
+
+def _setup_two_requests(tmp_path: Path) -> tuple[Project, list[str]]:
+    project = _make_project(tmp_path)
+    items = [
+        _minimal_item(cut_item_id="cut_001"),
+        _minimal_item(cut_item_id="cut_002", timeline_start_sec=6.0, timeline_end_sec=11.0),
+    ]
+    cut_plan = CutPlanDocument(project_id=project.id, timeline_fps=25, items=items)
+    save_cut_plan_draft(project, cut_plan)
+    document = build_supplement_requests_from_cut_plan(project, cut_plan)
+    save_cut_plan_supplement_requests(project, document)
+    return project, [request.request_id for request in document.requests]
 
 
 def _fake_candidate(candidate_id: str, request_id: str) -> CutPlanSupplementCandidate:
@@ -382,6 +397,86 @@ def test_auto_resolve_uses_default_validation_model_when_not_overridden(tmp_path
 
     _, kwargs = mock_describe_validate.call_args
     assert kwargs["validation_model"] == DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL == "gemini-3-flash-preview"
+
+
+# --- auto_resolve_all_cut_plan_supplement_requests (Phase 11.5, Batch) ---
+
+
+def test_auto_resolve_all_processes_each_open_request_with_progress_callback(tmp_path: Path) -> None:
+    project, request_ids = _setup_two_requests(tmp_path)
+    progress_calls: list[tuple[str, int, int]] = []
+
+    def _fake_resolve(project_arg, request_id, **kwargs):
+        return CutPlanSupplementAutoResolveResult(status=AUTO_RESOLVE_STATUS_ACCEPTED, request_id=request_id)
+
+    with patch(f"{_MODULE}.auto_resolve_cut_plan_supplement_request", side_effect=_fake_resolve) as mock_resolve:
+        results = auto_resolve_all_cut_plan_supplement_requests(
+            project,
+            query_llm_provider="gemini",
+            query_llm_model="gemini-3.1-flash-lite",
+            progress_callback=lambda label, index, total: progress_calls.append((label, index, total)),
+        )
+
+    assert len(results) == 2
+    assert {result.request_id for result in results} == set(request_ids)
+    assert mock_resolve.call_count == 2
+    assert progress_calls == [
+        (request_ids[0], 1, 2),
+        (request_ids[1], 2, 2),
+    ]
+    # query_llm_provider/model werden an jeden Einzel-Aufruf weitergereicht.
+    for call in mock_resolve.call_args_list:
+        assert call.kwargs["query_llm_provider"] == "gemini"
+        assert call.kwargs["query_llm_model"] == "gemini-3.1-flash-lite"
+
+
+def test_auto_resolve_all_skips_requests_that_already_have_an_asset(tmp_path: Path) -> None:
+    project, request_ids = _setup_two_requests(tmp_path)
+    from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
+        update_cut_plan_supplement_request,
+    )
+
+    update_cut_plan_supplement_request(project, request_ids[0], accepted_asset_id="asset_already_there")
+
+    with patch(
+        f"{_MODULE}.auto_resolve_cut_plan_supplement_request",
+        return_value=CutPlanSupplementAutoResolveResult(status=AUTO_RESOLVE_STATUS_NO_MATCH, request_id="x"),
+    ) as mock_resolve:
+        results = auto_resolve_all_cut_plan_supplement_requests(
+            project, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    assert len(results) == 1
+    mock_resolve.assert_called_once()
+    called_request_id = mock_resolve.call_args[0][1]
+    assert called_request_id == request_ids[1]
+
+
+def test_auto_resolve_all_returns_empty_list_without_requests_document(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    results = auto_resolve_all_cut_plan_supplement_requests(
+        project, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+    )
+    assert results == []
+
+
+def test_auto_resolve_all_one_request_failing_does_not_stop_the_batch(tmp_path: Path) -> None:
+    """auto_resolve_cut_plan_supplement_request wirft laut eigenem Vertrag
+    nie eine Exception — aber falls doch (Programmfehler), soll der Batch
+    trotzdem robust bleiben und den zweiten Request weiterhin versuchen.
+    Hier simuliert über unterschiedliche Rückgabe je Request_id."""
+    project, request_ids = _setup_two_requests(tmp_path)
+
+    def _fake_resolve(project_arg, request_id, **kwargs):
+        status = AUTO_RESOLVE_STATUS_NO_MATCH if request_id == request_ids[0] else AUTO_RESOLVE_STATUS_ACCEPTED
+        return CutPlanSupplementAutoResolveResult(status=status, request_id=request_id)
+
+    with patch(f"{_MODULE}.auto_resolve_cut_plan_supplement_request", side_effect=_fake_resolve):
+        results = auto_resolve_all_cut_plan_supplement_requests(
+            project, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    assert [r.status for r in results] == [AUTO_RESOLVE_STATUS_NO_MATCH, AUTO_RESOLVE_STATUS_ACCEPTED]
 
 
 # --- _describe_and_validate_downloaded_asset: kombinierter Gemini-Aufruf ---

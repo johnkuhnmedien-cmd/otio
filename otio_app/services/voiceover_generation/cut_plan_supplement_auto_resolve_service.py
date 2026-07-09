@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from otio_app.defaults import CUT_PLAN_SUPPLEMENT_CANDIDATES_STATUS_READY, SUPPLEMENT_SOURCE_PEXELS
 from otio_app.models import Project
@@ -77,7 +78,10 @@ __all__ = [
     "DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL",
     "CutPlanSupplementAutoResolveResult",
     "auto_resolve_cut_plan_supplement_request",
+    "auto_resolve_all_cut_plan_supplement_requests",
 ]
+
+AutoResolveProgressCallback = Callable[[str, int, int], None]
 
 AUTO_RESOLVE_STATUS_ACCEPTED = "ACCEPTED"
 AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED = "GENERIC_FALLBACK_USED"
@@ -326,3 +330,53 @@ def auto_resolve_cut_plan_supplement_request(
     # Phase 11.4: kein Stock-Kandidat hat bestanden -> generischer Ordner-
     # Fallback, BEVOR endgültig NO_MATCH zurückgegeben wird.
     return _fallback_or_no_match(attempts)
+
+
+def auto_resolve_all_cut_plan_supplement_requests(
+    project: Project,
+    *,
+    query_llm_provider: str,
+    query_llm_model: str,
+    validation_model: str = DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL,
+    progress_callback: AutoResolveProgressCallback | None = None,
+) -> list[CutPlanSupplementAutoResolveResult]:
+    """Phase 11.5: läuft SEQUENZIELL (ein Request nach dem anderen, bessere
+    Logs/Nachvollziehbarkeit — analog zu 'Alle Folder Voice-overs
+    generieren' in der Voice-over-Pipeline) über alle NOCH NICHT versorgten
+    Supplement Requests und wendet auto_resolve_cut_plan_supplement_request
+    (siehe dort: Suche + Download + kombinierte Gemini-Prüfung + ggf.
+    generischer Ordner-Fallback) auf jeden einzeln an.
+
+    'Noch nicht versorgt' = request.accepted_asset_id ist leer — das gilt
+    sowohl für eine Stock-Akzeptanz als auch für einen bereits genutzten
+    generischen Fallback (beide setzen dieses Feld, siehe
+    accept_cut_plan_supplement_candidate / apply_generic_fallback_for_cut_
+    plan_request). Bereits versorgte Requests werden NICHT erneut
+    versucht — ein erneuter Versuch ist weiterhin einzeln möglich (Klick
+    auf 'Akzeptierten Candidate ersetzen' bzw. den Einzel-Button).
+
+    Läuft — wie alle anderen 'Alle X'-Sammel-Aktionen dieser Pipeline —
+    blockierend ohne Abbrechen-Möglichkeit. Wirft KEINE Exception nach
+    außen für einen einzelnen Request (siehe auto_resolve_cut_plan_
+    supplement_request) — ein Fehler bei einem Request stoppt den Batch
+    nicht."""
+    requests_document = load_cut_plan_supplement_requests(project)
+    if requests_document is None:
+        return []
+
+    open_requests = [entry for entry in requests_document.requests if not entry.accepted_asset_id]
+    results: list[CutPlanSupplementAutoResolveResult] = []
+    total = len(open_requests)
+    for index, request in enumerate(open_requests, start=1):
+        if progress_callback is not None:
+            progress_callback(request.request_id, index, total)
+        results.append(
+            auto_resolve_cut_plan_supplement_request(
+                project,
+                request.request_id,
+                query_llm_provider=query_llm_provider,
+                query_llm_model=query_llm_model,
+                validation_model=validation_model,
+            )
+        )
+    return results
