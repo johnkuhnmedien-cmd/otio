@@ -153,11 +153,26 @@ def ensure_location_in_query(query: str, location_name: str) -> str:
     return f"{location} {cleaned}".strip()
 
 
+def llm_generated_query_variants(request: SupplementRequest) -> list[str]:
+    """Phase 11.1: vom Aufrufer (z. B. LLM-Query-Generierung im Cut-Plan-
+    Workflow) explizit vorab gesetzte Queries, ortsergänzt. Leer, wenn
+    request.llm_generated_queries nicht gesetzt ist (Standardfall für alle
+    bestehenden Aufrufer, u. a. die gesamte Produktions-Pipeline)."""
+    location = base_location_for_request(request)
+    return [
+        ensure_location_in_query(str(query), location)
+        for query in request.llm_generated_queries
+        if str(query).strip()
+    ]
+
+
 def build_pexels_query_variants(request: SupplementRequest) -> list[str]:
     location = base_location_for_request(request)
     primary = build_pexels_primary_query(request)
     preferred = ensure_location_in_query(preferred_search_query(request), location)
+    llm_queries = llm_generated_query_variants(request)
     variants = [
+        *llm_queries,
         primary,
         f"{location} narrow slot canyon",
         f"{location} narrow light",
@@ -186,7 +201,9 @@ def build_pexels_query_variants(request: SupplementRequest) -> list[str]:
 def build_pexels_photo_query_variants(request: SupplementRequest) -> list[str]:
     location = base_location_for_request(request)
     primary = build_pexels_primary_query(request)
+    llm_queries = llm_generated_query_variants(request)
     variants = [
+        *llm_queries,
         primary,
         f"{location} sandstone formations",
         f"{location} narrow light",

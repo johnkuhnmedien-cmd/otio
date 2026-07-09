@@ -45,6 +45,8 @@ from otio_app.defaults import (
     VO_ERROR_TYPES_ALL,
     VO_ERROR_TYPES_DETERMINISTIC,
     VO_ERROR_TYPES_LLM_REVIEW,
+    VOICEOVER_GEN_CUT_PLAN_SUPPLEMENT_QUERY_DEFAULT_MODEL,
+    VOICEOVER_GEN_CUT_PLAN_SUPPLEMENT_QUERY_DEFAULT_PROVIDER,
     VOICEOVER_GEN_DEFAULT_MODEL,
     VOICEOVER_GEN_DEFAULT_PROVIDER,
     VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT,
@@ -201,12 +203,22 @@ class LlmRoleSettings(BaseModel):
     model: str = VOICEOVER_GEN_DEFAULT_MODEL
 
 
+def _default_cut_plan_supplement_query_settings() -> LlmRoleSettings:
+    return LlmRoleSettings(
+        provider=VOICEOVER_GEN_CUT_PLAN_SUPPLEMENT_QUERY_DEFAULT_PROVIDER,
+        model=VOICEOVER_GEN_CUT_PLAN_SUPPLEMENT_QUERY_DEFAULT_MODEL,
+    )
+
+
 class VoiceoverGenerationModelSettings(BaseModel):
     style_profile: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
     dramaturgy: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
     voiceover_author: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
     voiceover_review: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
     intro: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
+    cut_plan_supplement_query: LlmRoleSettings = Field(
+        default_factory=_default_cut_plan_supplement_query_settings
+    )
 
 
 class LlmRunManifest(BaseModel):

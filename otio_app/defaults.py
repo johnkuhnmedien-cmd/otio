@@ -118,12 +118,19 @@ VOICEOVER_GEN_ROLE_DRAMATURGY = "dramaturgy"
 VOICEOVER_GEN_ROLE_VOICEOVER_AUTHOR = "voiceover_author"
 VOICEOVER_GEN_ROLE_VOICEOVER_REVIEW = "voiceover_review"
 VOICEOVER_GEN_ROLE_INTRO = "intro"
+# Phase 11.1: separate Rolle für die Cut-Plan-Supplement-Query-Generierung
+# (Pexels-Suchqueries) — bewusst NICHT dieselbe Rolle wie voiceover_author/
+# -review, da hier standardmäßig ein anderes Modell (Gemini, schnell/günstig)
+# sinnvoll ist und die Nutzung ausschließlich beim Klick auf „Supplement-
+# Kandidaten suchen“ im Cut-Plan-Tab erfolgt.
+VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY = "cut_plan_supplement_query"
 VOICEOVER_GEN_ROLES = (
     VOICEOVER_GEN_ROLE_STYLE_PROFILE,
     VOICEOVER_GEN_ROLE_DRAMATURGY,
     VOICEOVER_GEN_ROLE_VOICEOVER_AUTHOR,
     VOICEOVER_GEN_ROLE_VOICEOVER_REVIEW,
     VOICEOVER_GEN_ROLE_INTRO,
+    VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY,
 )
 VOICEOVER_GEN_ROLE_LABELS = {
     VOICEOVER_GEN_ROLE_STYLE_PROFILE: "Style Profile",
@@ -131,9 +138,15 @@ VOICEOVER_GEN_ROLE_LABELS = {
     VOICEOVER_GEN_ROLE_VOICEOVER_AUTHOR: "Voice-over Autor",
     VOICEOVER_GEN_ROLE_VOICEOVER_REVIEW: "Voice-over Review",
     VOICEOVER_GEN_ROLE_INTRO: "Intro",
+    VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY: "Cut Plan Suchqueries",
 }
 VOICEOVER_GEN_DEFAULT_PROVIDER = "anthropic"
 VOICEOVER_GEN_DEFAULT_MODEL = "claude-sonnet-5"
+# Phase 11.1: Standard für die neue Rolle — bewusst Gemini 3.1 Flash Lite
+# (schnell, günstig) statt des allgemeinen Anthropic-Standards oben, da diese
+# Rolle nur kurze Suchqueries generiert, keine langen redaktionellen Texte.
+VOICEOVER_GEN_CUT_PLAN_SUPPLEMENT_QUERY_DEFAULT_PROVIDER = "gemini"
+VOICEOVER_GEN_CUT_PLAN_SUPPLEMENT_QUERY_DEFAULT_MODEL = "gemini-3.1-flash-lite"
 
 # --- Vereinfachte Modellauswahl: EIN Dropdown je Rolle (kein Freitext, keine
 # separate Provider-Spalte). Die IDs folgen exakt der Konvention von
@@ -819,6 +832,12 @@ CUT_PLAN_SUPPLEMENT_CANDIDATES_STATUS_FAILED = "FAILED"
 # Phase 8.6: CutPlanSupplementAsset.status
 CUT_PLAN_SUPPLEMENT_ASSET_STATUS_ACQUIRED = "ACQUIRED"
 CUT_PLAN_SUPPLEMENT_ASSET_STATUS_FAILED = "FAILED"
+
+# Phase 11.2: Cut-Plan-Supplement-Suche schlägt standardmäßig 5 Kandidaten
+# statt der allgemeinen Pexels-Adapter-Obergrenze (3, siehe
+# MAX_CANDIDATES_PER_REQUEST in supplement_sources/pexels.py) vor — nur für
+# diese Pipeline, siehe SupplementRequest.max_candidates.
+CUT_PLAN_SUPPLEMENT_MAX_CANDIDATES = 5
 
 # CutPlanItem.duration_strategy
 CUT_PLAN_DURATION_STRATEGY_SINGLE_SHOT = "SINGLE_SHOT"

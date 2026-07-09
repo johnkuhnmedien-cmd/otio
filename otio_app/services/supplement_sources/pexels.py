@@ -78,6 +78,11 @@ class PexelsAdapter(SupplementSourceAdapter):
         api_key: str,
     ) -> list[SupplementCandidate]:
         mode = (request.required_asset_type or "video_preferred").strip()
+        # Phase 11.2: request.max_candidates erlaubt Aufrufern (z. B. dem Cut-
+        # Plan-Workflow), die Standardobergrenze MAX_CANDIDATES_PER_REQUEST
+        # pro Request zu überschreiben, ohne das Verhalten anderer Aufrufer
+        # (0 = unverändert) zu beeinflussen.
+        max_count = request.max_candidates if request.max_candidates > 0 else MAX_CANDIDATES_PER_REQUEST
         self.last_debug_report = self._empty_debug(request, mode)
         candidates: list[SupplementCandidate] = []
         if mode in {"video", "video_preferred", "any"}:
@@ -88,10 +93,10 @@ class PexelsAdapter(SupplementSourceAdapter):
             ]
             if mode == "video":
                 self._finalize_debug(candidates)
-                return self._cap_candidates(candidates)
+                return self._cap_candidates(candidates, max_count=max_count)
             if mode == "video_preferred" and productive_videos:
                 self._finalize_debug(candidates)
-                return self._cap_candidates(candidates)
+                return self._cap_candidates(candidates, max_count=max_count)
 
         if mode in {"image", "image_preferred", "video_preferred", "any"}:
             candidates.extend(self._search_photos(request, api_key))
@@ -100,7 +105,7 @@ class PexelsAdapter(SupplementSourceAdapter):
             candidates.extend(self._search_videos(request, api_key))
 
         self._finalize_debug(candidates)
-        return self._cap_candidates(candidates)
+        return self._cap_candidates(candidates, max_count=max_count)
 
     def _cap_candidates(
         self,

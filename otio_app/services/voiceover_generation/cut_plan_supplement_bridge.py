@@ -17,11 +17,19 @@ noch die Mehrfach-Beschaffung, weder die automatische Inventory-Erweiterung
 noch das automatische Neu-Planen eines Ordners) und schreibt NIEMALS in
 `_otio/supplement/supplement_requests.json` oder reguläre Folder-Inventories.
 
-Kein LLM-Aufruf. Suchqueries werden deterministisch aus vorhandenen Feldern
-gebaut. Externe Provider-Suche/-Downloads laufen ausschließlich bei
-explizitem Aufruf von `search_candidates_for_cut_plan_request` bzw.
+Externe Provider-Suche/-Downloads laufen ausschließlich bei explizitem
+Aufruf von `search_candidates_for_cut_plan_request` bzw.
 `accept_cut_plan_supplement_candidate` — niemals automatisch beim Draft-Bau,
-bei der Asset-Auswahl oder bei der Validierung."""
+bei der Asset-Auswahl oder bei der Validierung.
+
+Phase 11.1: `search_candidates_for_cut_plan_request` kann optional (per
+query_llm_provider/query_llm_model) VOR der eigentlichen Provider-Suche
+einen einzigen LLM-Aufruf auslösen, der bis zu drei englische, ortsbasierte
+Pexels-Suchqueries generiert (siehe cut_plan_supplement_query_service.py).
+Schlägt dieser Aufruf fehl oder liefert kein brauchbares Ergebnis, fällt die
+Suche automatisch auf die bestehende deterministische Query-Logik
+(build_pexels_query_variants ohne llm_generated_queries) zurück — es wird
+nie eine Exception nach außen geworfen und nie eine Suche verweigert."""
 
 from __future__ import annotations
 
@@ -39,6 +47,7 @@ from otio_app.defaults import (
     CUT_PLAN_SUPPLEMENT_CANDIDATES_STATUS_FAILED,
     CUT_PLAN_SUPPLEMENT_CANDIDATES_STATUS_NO_RESULTS,
     CUT_PLAN_SUPPLEMENT_CANDIDATES_STATUS_READY,
+    CUT_PLAN_SUPPLEMENT_MAX_CANDIDATES,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_CANDIDATES_FOUND,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_FAILED,
@@ -68,8 +77,11 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_models import (
     CutPlanSupplementRequest,
     CutPlanSupplementRequestsDocument,
 )
+from otio_app.services.voiceover_generation.cut_plan_supplement_query_service import (
+    generate_cut_plan_supplement_queries,
+)
 from otio_app.services.voiceover_generation.cut_plan_visual_coverage import apply_visual_coverage_extensions
-from otio_app.services.voiceover_generation.llm_trace_service import content_hash_of_model
+from otio_app.services.voiceover_generation.llm_trace_service import STATUS_PASS, content_hash_of_model
 
 __all__ = [
     "build_supplement_requests_from_cut_plan",
@@ -285,6 +297,9 @@ def search_candidates_for_cut_plan_request(
     project: Project,
     request_id: str,
     provider_settings: dict[str, Any] | None = None,
+    *,
+    query_llm_provider: str = "",
+    query_llm_model: str = "",
 ) -> CutPlanSupplementCandidatesDocument:
     """Sucht Kandidaten für GENAU EINEN Request — läuft ausschließlich bei
     explizitem Aufruf (UI-Button „Supplement-Kandidaten suchen“), NIEMALS
@@ -293,7 +308,16 @@ def search_candidates_for_cut_plan_request(
     Nutzt ausschließlich `SupplementSourceAdapter.search` (technischer
     Adapter) — NICHT die höherstufige Produktions-Suchorchestrierung, die
     _otio/supplement/supplement_requests.json mutiert. Speichert das
-    Ergebnis in supplement_candidates.json."""
+    Ergebnis in supplement_candidates.json.
+
+    Phase 11.1: query_llm_provider/query_llm_model sind bewusst OPTIONAL
+    (Standard "" = kein LLM-Aufruf, exakt das bisherige deterministische
+    Verhalten) — nur wenn beide gesetzt sind (siehe UI-Verdrahtung in
+    cut_plan_tab.py), wird vor der Provider-Suche ein LLM-Aufruf zur
+    Query-Generierung ausgelöst. Phase 11.2: required_asset_type
+    default="any" (statt bisher "video_preferred") und max_candidates=5
+    (statt Adapter-Standard 3) sind CUT-PLAN-spezifische Standardwerte —
+    bleiben über provider_settings weiterhin überschreibbar."""
     provider_settings = dict(provider_settings or {})
     provider = str(provider_settings.get("provider") or SUPPLEMENT_SOURCE_PEXELS)
 
@@ -304,6 +328,28 @@ def search_candidates_for_cut_plan_request(
     if request is None:
         raise ValueError(f"Supplement Request '{request_id}' nicht gefunden.")
 
+    llm_queries: list[str] = []
+    llm_query_status = ""
+    llm_query_run_id = ""
+    llm_query_error = ""
+    if query_llm_provider and query_llm_model:
+        query_result = generate_cut_plan_supplement_queries(
+            project, request, provider=query_llm_provider, model=query_llm_model
+        )
+        llm_query_status = query_result.status
+        llm_query_run_id = query_result.run_id
+        llm_query_error = query_result.error
+        if query_result.status == STATUS_PASS:
+            llm_queries = query_result.queries
+    _update_request(
+        project,
+        request_id,
+        llm_queries=llm_queries,
+        llm_query_status=llm_query_status,
+        llm_query_run_id=llm_query_run_id,
+        llm_query_error=llm_query_error,
+    )
+
     transient_request = SupplementRequest(
         supplement_request_id=request.request_id,
         section_id=request.cut_item_id,
@@ -312,9 +358,11 @@ def search_candidates_for_cut_plan_request(
         beat_id=request.source_hook_beat_id or request.source_sentence_id or request.cut_item_id,
         passage_text=request.text,
         visual_requirement=request.visual_intent or request.reason,
-        required_asset_type=str(provider_settings.get("required_asset_type", "video_preferred")),
+        required_asset_type=str(provider_settings.get("required_asset_type", "any")),
         duration_needed_sec=request.needed_duration_sec,
         reason=request.reason,
+        llm_generated_queries=llm_queries,
+        max_candidates=int(provider_settings.get("max_candidates", CUT_PLAN_SUPPLEMENT_MAX_CANDIDATES)),
     )
 
     try:

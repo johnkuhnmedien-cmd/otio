@@ -43,8 +43,16 @@ def test_default_model_settings_has_all_roles() -> None:
     settings = default_model_settings()
     for role in VOICEOVER_GEN_ROLES:
         role_settings = getattr(settings, role)
-        assert role_settings.provider == "anthropic"
-        assert role_settings.model == "claude-sonnet-5"
+        # Phase 11.1: cut_plan_supplement_query hat bewusst einen ANDEREN
+        # Standard (Gemini, schnell/günstig für kurze Suchqueries statt
+        # redaktioneller Texte) — siehe VOICEOVER_GEN_CUT_PLAN_SUPPLEMENT_QUERY_
+        # DEFAULT_PROVIDER/_MODEL in defaults.py.
+        if role == "cut_plan_supplement_query":
+            assert role_settings.provider == "gemini"
+            assert role_settings.model == "gemini-3.1-flash-lite"
+        else:
+            assert role_settings.provider == "anthropic"
+            assert role_settings.model == "claude-sonnet-5"
 
 
 def test_load_model_settings_returns_default_when_missing(tmp_path: Path) -> None:

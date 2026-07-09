@@ -92,6 +92,10 @@ from otio_app.project_layout import (
 )
 from otio_app.services.api_keys import get_api_key
 from otio_app.services.supplement_search import build_keyword_query
+from otio_app.services.voiceover_generation.model_settings_service import (
+    load_model_settings,
+    save_model_settings,
+)
 from otio_app.services.voiceover_generation.cut_plan_builder import (
     apply_asset_selection_to_draft,
     build_cut_plan_draft,
@@ -210,7 +214,10 @@ from otio_app.services.voiceover_generation.production_edit_plan_validation impo
     validate_production_edit_plan_staging,
 )
 from otio_app.ui.project_context import render_project_selector
-from otio_app.ui.voiceover_generation._shared import require_without_voiceover_mode
+from otio_app.ui.voiceover_generation._shared import (
+    render_llm_model_selectbox,
+    require_without_voiceover_mode,
+)
 
 import streamlit as st
 
@@ -548,16 +555,41 @@ def _render_validation_report(project: Project, draft: CutPlanDocument) -> None:
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
 
+def _render_supplement_query_model_settings(project: Project) -> tuple[str, str]:
+    """Phase 11.1: eigene, kleine Modellwahl NUR für die Suchquery-
+    Generierung (Standard: Gemini 3.1 Flash Lite) — bewusst getrennt von den
+    Autor-/Review-Modellen der Folder-Voice-overs-Seite, da diese Rolle nur
+    kurze Suchqueries statt redaktioneller Texte erzeugt."""
+    settings = load_model_settings(project)
+    with st.expander("⚙️ Modell (Suchqueries)", expanded=False):
+        query_settings = render_llm_model_selectbox(
+            label="Modell (LLM-Suchqueries)",
+            role_settings=settings.cut_plan_supplement_query,
+            key=f"cut_plan_supplement_query_model_{project.id}",
+        )
+        if st.button("Modell speichern", key=f"cut_plan_supplement_query_model_save_{project.id}"):
+            updated = settings.model_copy(update={"cut_plan_supplement_query": query_settings})
+            save_model_settings(project, updated)
+            st.success("Modell-Einstellung gespeichert.")
+    return query_settings.provider, query_settings.model
+
+
 def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> None:
     """Phase 8.6: isolierte Supplement Bridge. Externe Provider-Suche und
     Downloads laufen ausschließlich bei explizitem Klick auf „Kandidaten
-    suchen“ bzw. „Akzeptieren“ — niemals automatisch beim Laden dieser Seite."""
+    suchen“ bzw. „Akzeptieren“ — niemals automatisch beim Laden dieser Seite.
+
+    Phase 11.1/11.2: Vor der Provider-Suche wird (sofern ein Modell gewählt
+    ist) ein LLM-Aufruf ausgelöst, der bis zu drei englische, ortsbasierte
+    Suchqueries generiert; die Suche selbst deckt jetzt Video UND Foto ab
+    und schlägt bis zu 5 statt 3 Kandidaten vor."""
     st.subheader("Supplement Requests")
     st.caption(
         "Isolierte Supplement Requests aus dem Cut Plan — getrennt von der "
         "produktionsseitigen Supplement-Pipeline (`_otio/supplement/`). Suche und "
         "Download laufen ausschließlich bei explizitem Klick, nie automatisch."
     )
+    query_llm_provider, query_llm_model = _render_supplement_query_model_settings(project)
 
     requests_document = load_cut_plan_supplement_requests(project)
     current_hash = content_hash_of_model(draft)
@@ -624,14 +656,31 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                     f"(`{request.accepted_asset_path}`)."
                 )
 
-            query_preview = build_keyword_query(
-                folder_name=request.folder_name,
-                visual_requirement=request.visual_intent or request.reason,
-                passage_text=request.text,
-            )
-            st.caption(f"Provider: {SUPPLEMENT_SOURCE_PEXELS} · Query-Vorschau: `{query_preview}`")
+            st.caption(f"Provider: {SUPPLEMENT_SOURCE_PEXELS} (Video & Foto)")
+            if request.llm_queries:
+                st.caption(
+                    "Zuletzt verwendete LLM-Suchqueries: "
+                    + " · ".join(f"`{query}`" for query in request.llm_queries)
+                )
+            elif request.llm_query_status and request.llm_query_status != "PASS":
+                st.caption(
+                    f"LLM-Suchqueries zuletzt fehlgeschlagen ({request.llm_query_status}: "
+                    f"{request.llm_query_error or 'unbekannter Fehler'}) — Suche nutzt "
+                    "stattdessen die deterministische Ersatz-Query."
+                )
+            else:
+                fallback_query_preview = build_keyword_query(
+                    folder_name=request.folder_name,
+                    visual_requirement=request.visual_intent or request.reason,
+                    passage_text=request.text,
+                )
+                st.caption(
+                    "Noch keine LLM-Suchqueries generiert — nächste Suche erzeugt bis zu 3 "
+                    f"englische Queries per LLM (Ersatz ohne LLM: `{fallback_query_preview}`)."
+                )
             st.caption(
-                "⚠️ Die Suche kann API-Kontingent beim Provider verbrauchen. Wird nur bei Klick ausgelöst."
+                "⚠️ Die Suche kann API-Kontingent beim Provider (und ggf. beim LLM) "
+                "verbrauchen. Wird nur bei Klick ausgelöst."
             )
 
             if st.button(
@@ -639,9 +688,13 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                 key=f"cut_plan_supplement_search_{project.id}_{request.request_id}",
                 disabled=not pexels_ready,
             ):
-                with st.spinner("Kandidaten werden gesucht…"):
+                with st.spinner("Suchqueries werden erzeugt und Kandidaten gesucht…"):
                     candidates_document = search_candidates_for_cut_plan_request(
-                        project, request.request_id, {"provider": SUPPLEMENT_SOURCE_PEXELS}
+                        project,
+                        request.request_id,
+                        {"provider": SUPPLEMENT_SOURCE_PEXELS},
+                        query_llm_provider=query_llm_provider,
+                        query_llm_model=query_llm_model,
                     )
                 if candidates_document.status == "FAILED":
                     st.error(f"Suche fehlgeschlagen: {candidates_document.error_message}")

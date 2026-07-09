@@ -308,6 +308,147 @@ def test_search_with_mock_provider_saves_candidates(tmp_path: Path) -> None:
     mock_adapter.search.assert_called_once()
 
 
+# --- Phase 11.1/11.2: LLM-Suchqueries + Video/Foto + 5 Kandidaten ---
+
+
+def test_search_uses_any_asset_type_and_five_max_candidates_by_default(tmp_path: Path) -> None:
+    """Phase 11.2: Standardwerte fuer den Cut-Plan-Workflow (Video+Foto,
+    5 statt 3 Kandidaten) — unabhaengig davon, ob eine LLM-Query erzeugt
+    wurde."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    mock_adapter = MagicMock()
+    mock_adapter.search.return_value = [_fake_candidate(request_id=request_id)]
+
+    with patch(f"{_BRIDGE_MODULE}.get_supplement_adapter", return_value=mock_adapter):
+        search_candidates_for_cut_plan_request(project, request_id, {"provider": "pexels"})
+
+    sent_request = mock_adapter.search.call_args[0][0]
+    assert sent_request.required_asset_type == "any"
+    assert sent_request.max_candidates == 5
+
+
+def test_search_skips_llm_query_generation_without_provider_and_model(tmp_path: Path) -> None:
+    """Ohne query_llm_provider/query_llm_model (Standard) wird KEIN LLM-
+    Aufruf ausgeloest — exaktes altes Verhalten fuer alle bestehenden
+    Aufrufer (u. a. alle anderen Tests in dieser Datei)."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    mock_adapter = MagicMock()
+    mock_adapter.search.return_value = [_fake_candidate(request_id=request_id)]
+
+    with (
+        patch(f"{_BRIDGE_MODULE}.get_supplement_adapter", return_value=mock_adapter),
+        patch(f"{_BRIDGE_MODULE}.generate_cut_plan_supplement_queries") as mock_llm_query,
+    ):
+        search_candidates_for_cut_plan_request(project, request_id, {"provider": "pexels"})
+
+    mock_llm_query.assert_not_called()
+    sent_request = mock_adapter.search.call_args[0][0]
+    assert sent_request.llm_generated_queries == []
+
+
+def test_search_calls_llm_query_generation_and_passes_queries_to_adapter(tmp_path: Path) -> None:
+    """Phase 11.1: mit query_llm_provider/query_llm_model wird vor der
+    Provider-Suche ein LLM-Aufruf ausgeloest, dessen Queries in
+    SupplementRequest.llm_generated_queries landen UND auf dem
+    CutPlanSupplementRequest fuer die UI-Anzeige persistiert werden."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    mock_adapter = MagicMock()
+    mock_adapter.search.return_value = [_fake_candidate(request_id=request_id)]
+
+    from otio_app.services.voiceover_generation.cut_plan_supplement_query_service import (
+        CutPlanSupplementQueryResult,
+    )
+
+    fake_result = CutPlanSupplementQueryResult(
+        status="PASS",
+        queries=["Grand Canyon rock formation", "Grand Canyon carved road", "Grand Canyon historic trail"],
+        run_id="run_fake_123",
+        provider="gemini",
+        model="gemini-3.1-flash-lite",
+    )
+
+    with (
+        patch(f"{_BRIDGE_MODULE}.get_supplement_adapter", return_value=mock_adapter),
+        patch(f"{_BRIDGE_MODULE}.generate_cut_plan_supplement_queries", return_value=fake_result) as mock_llm_query,
+    ):
+        search_candidates_for_cut_plan_request(
+            project,
+            request_id,
+            {"provider": "pexels"},
+            query_llm_provider="gemini",
+            query_llm_model="gemini-3.1-flash-lite",
+        )
+
+    mock_llm_query.assert_called_once()
+    sent_request = mock_adapter.search.call_args[0][0]
+    assert sent_request.llm_generated_queries == fake_result.queries
+
+    reloaded = load_cut_plan_supplement_requests(project)
+    persisted = next(r for r in reloaded.requests if r.request_id == request_id)
+    assert persisted.llm_queries == fake_result.queries
+    assert persisted.llm_query_status == "PASS"
+    assert persisted.llm_query_run_id == "run_fake_123"
+
+
+def test_search_falls_back_to_deterministic_query_when_llm_query_fails(tmp_path: Path) -> None:
+    """Schlaegt die LLM-Query-Generierung fehl, wird trotzdem gesucht — nur
+    ohne llm_generated_queries (deterministischer Fallback in
+    build_pexels_query_variants greift automatisch)."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    mock_adapter = MagicMock()
+    mock_adapter.search.return_value = [_fake_candidate(request_id=request_id)]
+
+    from otio_app.services.voiceover_generation.cut_plan_supplement_query_service import (
+        CutPlanSupplementQueryResult,
+    )
+
+    fake_result = CutPlanSupplementQueryResult(
+        status="FAIL", queries=[], run_id="run_fail_456", error="network down"
+    )
+
+    with (
+        patch(f"{_BRIDGE_MODULE}.get_supplement_adapter", return_value=mock_adapter),
+        patch(f"{_BRIDGE_MODULE}.generate_cut_plan_supplement_queries", return_value=fake_result),
+    ):
+        result = search_candidates_for_cut_plan_request(
+            project,
+            request_id,
+            {"provider": "pexels"},
+            query_llm_provider="gemini",
+            query_llm_model="gemini-3.1-flash-lite",
+        )
+
+    assert result.status == "READY"
+    sent_request = mock_adapter.search.call_args[0][0]
+    assert sent_request.llm_generated_queries == []
+
+    reloaded = load_cut_plan_supplement_requests(project)
+    persisted = next(r for r in reloaded.requests if r.request_id == request_id)
+    assert persisted.llm_query_status == "FAIL"
+    assert persisted.llm_query_error == "network down"
+    assert persisted.llm_queries == []
+
+
 def test_candidates_are_saved_to_candidates_file(tmp_path: Path) -> None:
     project = _project_with_supplement_required_draft(tmp_path)
     draft = load_cut_plan_draft(project)
@@ -667,6 +808,77 @@ def test_ui_shows_candidate_list_when_present(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setattr("streamlit.rerun", lambda: None)
 
     render_cut_plan_page()  # darf nicht werfen; Kandidatenliste wird gerendert
+
+
+def test_ui_shows_query_model_selector_and_fallback_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 11.1: Modellwahl fuer die Suchquery-Generierung ist vorhanden;
+    solange nie gesucht wurde, wird ein Hinweis auf die deterministische
+    Ersatz-Query gezeigt statt einer irrefuehrenden 'Query-Vorschau', die de
+    facto nie zum Einsatz kommt."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+
+    _patch_project_selector(project, monkeypatch)
+    monkeypatch.setattr("streamlit.button", lambda *a, **k: False)
+    monkeypatch.setattr("streamlit.rerun", lambda: None)
+    captions: list[str] = []
+    monkeypatch.setattr("streamlit.caption", lambda msg, **k: captions.append(msg))
+
+    render_cut_plan_page()  # darf nicht werfen
+
+    assert any("Modell (LLM-Suchqueries)" in c or "Noch keine LLM-Suchqueries" in c for c in captions)
+
+
+def test_search_click_passes_saved_query_llm_settings_to_bridge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Die UI muss provider/model aus den gespeicherten Modell-Einstellungen
+    (Rolle cut_plan_supplement_query) an search_candidates_for_cut_plan_
+    request weiterreichen, damit Phase 11.1 tatsaechlich greift."""
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        load_model_settings,
+        save_model_settings,
+    )
+
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    settings = load_model_settings(project)
+    updated = settings.model_copy(
+        update={
+            "cut_plan_supplement_query": settings.cut_plan_supplement_query.model_copy(
+                update={"provider": "gemini", "model": "gemini-3.1-pro-preview"}
+            )
+        }
+    )
+    save_model_settings(project, updated)
+
+    search_key = f"cut_plan_supplement_search_{project.id}_{request_id}"
+
+    def _fake_button(label, *args, **kwargs):
+        return kwargs.get("key") == search_key
+
+    with patch(
+        "otio_app.ui.voiceover_generation.cut_plan_tab.search_candidates_for_cut_plan_request"
+    ) as mock_search:
+        mock_search.return_value = MagicMock(status="READY", candidates=[], error_message="")
+        _patch_project_selector(project, monkeypatch)
+        monkeypatch.setattr("streamlit.button", _fake_button)
+        monkeypatch.setattr("streamlit.rerun", lambda: None)
+
+        render_cut_plan_page()
+
+    mock_search.assert_called_once()
+    _, kwargs = mock_search.call_args
+    assert kwargs["query_llm_provider"] == "gemini"
+    assert kwargs["query_llm_model"] == "gemini-3.1-pro-preview"
 
 
 def test_ui_shows_revalidate_hint_after_accept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

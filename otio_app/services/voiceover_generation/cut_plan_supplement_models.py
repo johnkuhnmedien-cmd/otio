@@ -55,6 +55,14 @@ class CutPlanSupplementRequest(BaseModel):
     accepted_asset_path: str = ""
     warnings: list[str] = Field(default_factory=list)
     blockers: list[str] = Field(default_factory=list)
+    # Phase 11.1: Traceability der zuletzt per LLM erzeugten Pexels-
+    # Suchqueries für diesen Request — wird bei jedem Klick auf „Supplement-
+    # Kandidaten suchen“ neu gesetzt. llm_query_status ist "" solange nie
+    # gesucht wurde, sonst PASS|FAIL|PARSE_FAILED (siehe llm_trace_service).
+    llm_queries: list[str] = Field(default_factory=list)
+    llm_query_status: str = ""
+    llm_query_run_id: str = ""
+    llm_query_error: str = ""
 
 
 class CutPlanSupplementRequestsDocument(BaseModel):

@@ -64,7 +64,11 @@ from otio_app.services.supplement_requests import (
     upsert_requests,
 )
 from otio_app.services.supplement_search import build_keyword_query
-from otio_app.services.supplement_search import build_pexels_primary_query, build_pexels_query_variants
+from otio_app.services.supplement_search import (
+    build_pexels_photo_query_variants,
+    build_pexels_primary_query,
+    build_pexels_query_variants,
+)
 from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
 from otio_app.services.supplement_sources.google_search import GoogleSearchAdapter
 from otio_app.services.supplement_sources.pexels import PexelsAdapter
@@ -398,6 +402,57 @@ def test_pexels_query_variants_start_short_with_location() -> None:
     assert build_pexels_primary_query(request) == "Antelope Canyon person narrow slot canyon"
 
 
+def test_pexels_query_variants_prioritize_llm_generated_queries() -> None:
+    """Phase 11.1: llm_generated_queries werden VOR allen deterministischen
+    Fallback-Varianten ausprobiert, wenn gesetzt."""
+    request = SupplementRequest(
+        supplement_request_id="supp_req_llm_query",
+        section_id="section_havasu",
+        folder_name="Havasu Falls",
+        location_name="Havasu Falls",
+        beat_id="beat",
+        passage_text="Noch vor kurzem stand ich am fallenden Wasser der Havasu Falls.",
+        visual_requirement="Wasserfall, Frau spuert die Kuehle",
+        llm_generated_queries=[
+            "Havasu Falls waterfall woman",
+            "Havasu Falls blue water waterfall",
+            "Havasu Falls Arizona waterfall",
+        ],
+    )
+    variants = build_pexels_query_variants(request)
+    assert variants[:3] == [
+        "Havasu Falls waterfall woman",
+        "Havasu Falls blue water waterfall",
+        "Havasu Falls Arizona waterfall",
+    ]
+    # Die bestehenden deterministischen Fallback-Varianten bleiben trotzdem
+    # (als weitere, niedriger priorisierte Varianten) erhalten.
+    assert len(variants) > 3
+
+    photo_variants = build_pexels_photo_query_variants(request)
+    assert photo_variants[:3] == [
+        "Havasu Falls waterfall woman",
+        "Havasu Falls blue water waterfall",
+        "Havasu Falls Arizona waterfall",
+    ]
+
+
+def test_pexels_query_variants_unaffected_without_llm_generated_queries() -> None:
+    """Gegenprobe: ohne llm_generated_queries (Standardfall, u. a. die ganze
+    bestehende Produktions-Pipeline) bleibt variants[0] unveraendert primary."""
+    request = SupplementRequest(
+        supplement_request_id="supp_req_no_llm_query",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        location_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Wegen der charakteristischen Felsspalten steht eine Person im Canyon.",
+        visual_requirement="Ein Mensch in engen Felsspalten",
+    )
+    variants = build_pexels_query_variants(request)
+    assert variants[0] == "Antelope Canyon person narrow slot canyon"
+
+
 def test_pexels_ui_default_query_uses_short_location_query() -> None:
     from otio_app.ui.supplement_assets import _default_query_for_provider
 
@@ -455,6 +510,53 @@ def test_pexels_search_caps_candidates_at_three(monkeypatch: pytest.MonkeyPatch)
     )
     candidates = PexelsAdapter().search(request)
     assert len(candidates) == 3
+
+
+def test_pexels_search_honors_max_candidates_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 11.2: request.max_candidates > 0 ueberschreibt die Standard-
+    obergrenze (3) nur fuer DIESEN Request — z. B. 5 fuer den Cut-Plan-
+    Workflow, ohne MAX_CANDIDATES_PER_REQUEST selbst (und damit die
+    Produktions-Pipeline) zu aendern."""
+    monkeypatch.setenv("PEXELS_API_KEY", "test-key")
+
+    def make_video(video_id: int) -> bytes:
+        return (
+            b'{"id":%d,"url":"https://www.pexels.com/video/%d","image":"https://images.pexels.com/p.jpg",'
+            b'"width":1920,"height":1080,"duration":10,'
+            b'"user":{"name":"Creator","url":"https://www.pexels.com/@creator"},'
+            b'"video_files":[{"id":1,"quality":"hd","file_type":"video/mp4","width":1920,"height":1080,'
+            b'"fps":30,"link":"https://videos.pexels.com/%d.mp4"}]}' % (video_id, video_id, video_id)
+        )
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            videos = b",".join(make_video(i) for i in range(8))
+            return b'{"videos":[' + videos + b"]}"
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: FakeResponse())
+    request = SupplementRequest(
+        supplement_request_id="supp_req_cap_override",
+        section_id="section_antelope_canyon",
+        folder_name="Antelope Canyon",
+        location_name="Antelope Canyon",
+        beat_id="beat",
+        passage_text="Test",
+        visual_requirement="Antelope Canyon",
+        selected_source=SUPPLEMENT_SOURCE_PEXELS,
+        required_asset_type="video",
+        max_candidates=5,
+    )
+    candidates = PexelsAdapter().search(request)
+    assert len(candidates) == 5
 
 
 def test_pexels_rejects_portrait_video(monkeypatch: pytest.MonkeyPatch) -> None:

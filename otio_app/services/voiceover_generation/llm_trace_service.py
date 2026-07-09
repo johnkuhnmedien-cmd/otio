@@ -29,6 +29,7 @@ STAGE_FOLDER_VOICEOVER = "folder_voiceover"
 STAGE_VOICEOVER_REVIEW = "voiceover_review"
 STAGE_VOICEOVER_CORRECTION = "voiceover_correction"
 STAGE_INTRO_HOOK = "intro_hook"
+STAGE_CUT_PLAN_SUPPLEMENT_QUERY = "cut_plan_supplement_query"
 
 STATUS_PASS = "PASS"
 STATUS_FAIL = "FAIL"

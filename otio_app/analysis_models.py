@@ -344,6 +344,20 @@ class SupplementRequest(BaseModel):
     search_queries_attempted: List[str] = Field(default_factory=list)
     best_query: str = ""
     query_used: str = ""
+    # Phase 11.1 (Cut Plan): vom Aufrufer explizit vorab generierte Queries
+    # (z. B. per LLM), die VOR allen deterministischen Fallback-Varianten
+    # ausprobiert werden — siehe build_pexels_query_variants/-photo_variants
+    # in supplement_search.py. Bewusst ein EIGENES, neues Feld statt die
+    # bestehende search_queries-Nutzung zu ändern: Standardwert ist eine
+    # leere Liste, sodass sich für JEDEN bestehenden Aufrufer (Produktions-
+    # Pipeline eingeschlossen), der dieses Feld nicht setzt, absolut nichts
+    # am Suchverhalten ändert.
+    llm_generated_queries: List[str] = Field(default_factory=list)
+    # Phase 11.2 (Cut Plan): überschreibt die Standard-Kandidatenobergrenze
+    # (siehe MAX_CANDIDATES_PER_REQUEST in supplement_sources/pexels.py) nur
+    # für DIESEN Request. 0 = Adapter-Standard verwenden (unverändertes
+    # Verhalten für alle bestehenden Aufrufer, die dieses Feld nicht setzen).
+    max_candidates: int = 0
     allow_broader_search: bool = False
     photo_aspect_policy: str = "prefer_16_9"
     video_aspect_ratio_tolerance: float = 0.03
