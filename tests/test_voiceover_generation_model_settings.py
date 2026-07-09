@@ -4,13 +4,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from otio_app.defaults import VOICEOVER_GEN_MODEL_CHOICES, VOICEOVER_GEN_MODEL_LABELS
 from otio_app.models import Project, ProjectMode
 from otio_app.project_layout import get_model_settings_path, get_voiceover_generation_dir
 from otio_app.services.voiceover_generation.model_settings_service import (
+    combined_model_id,
     default_model_settings,
+    format_voiceover_gen_model_label,
     load_model_settings,
     resolve_llm_model_id,
     save_model_settings,
+    split_llm_model_id,
 )
 from otio_app.services.voiceover_generation.models import (
     LlmRoleSettings,
@@ -83,3 +89,40 @@ def test_resolve_llm_model_id_for_anthropic() -> None:
 
 def test_resolve_llm_model_id_for_gemini_has_no_prefix() -> None:
     assert resolve_llm_model_id("gemini", "gemini-3.1-flash-lite") == "gemini-3.1-flash-lite"
+
+
+def test_split_llm_model_id_for_openai() -> None:
+    assert split_llm_model_id("openai:gpt-5.5") == ("openai", "gpt-5.5")
+
+
+def test_split_llm_model_id_for_anthropic() -> None:
+    assert split_llm_model_id("anthropic:claude-sonnet-5") == ("anthropic", "claude-sonnet-5")
+
+
+def test_split_llm_model_id_for_gemini_has_no_prefix() -> None:
+    assert split_llm_model_id("gemini-3.1-pro-preview") == ("gemini", "gemini-3.1-pro-preview")
+
+
+@pytest.mark.parametrize("model_id", VOICEOVER_GEN_MODEL_CHOICES)
+def test_split_and_resolve_llm_model_id_roundtrip(model_id: str) -> None:
+    provider, model = split_llm_model_id(model_id)
+    assert resolve_llm_model_id(provider, model) == model_id
+
+
+def test_combined_model_id_matches_one_of_the_curated_choices() -> None:
+    role_settings = LlmRoleSettings(provider="anthropic", model="claude-sonnet-5")
+    assert combined_model_id(role_settings) in VOICEOVER_GEN_MODEL_CHOICES
+
+
+def test_every_curated_model_choice_has_a_label() -> None:
+    for model_id in VOICEOVER_GEN_MODEL_CHOICES:
+        assert VOICEOVER_GEN_MODEL_LABELS[model_id]
+
+
+def test_format_voiceover_gen_model_label_falls_back_to_raw_id_for_unknown_model() -> None:
+    assert format_voiceover_gen_model_label("some-unknown-model") == "some-unknown-model"
+
+
+def test_format_voiceover_gen_model_label_returns_known_label() -> None:
+    label = format_voiceover_gen_model_label("anthropic:claude-sonnet-5")
+    assert label == VOICEOVER_GEN_MODEL_LABELS["anthropic:claude-sonnet-5"]

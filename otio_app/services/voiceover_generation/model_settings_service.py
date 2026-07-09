@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import json
 
-from otio_app.defaults import VOICEOVER_GEN_MODEL_PRESETS, VOICEOVER_GEN_PROVIDERS
+from otio_app.defaults import (
+    VOICEOVER_GEN_MODEL_CHOICES,
+    VOICEOVER_GEN_MODEL_LABELS,
+    VOICEOVER_GEN_MODEL_PRESETS,
+    VOICEOVER_GEN_PROVIDERS,
+)
 from otio_app.models import Project
 from otio_app.project_layout import get_model_settings_path
 from otio_app.services.voiceover_generation.models import (
@@ -20,11 +25,15 @@ from otio_app.services.voiceover_generation.models import (
 __all__ = [
     "VOICEOVER_GEN_PROVIDERS",
     "VOICEOVER_GEN_MODEL_PRESETS",
+    "VOICEOVER_GEN_MODEL_CHOICES",
+    "VOICEOVER_GEN_MODEL_LABELS",
     "default_model_settings",
     "load_model_settings",
     "save_model_settings",
     "resolve_llm_model_id",
+    "split_llm_model_id",
     "combined_model_id",
+    "format_voiceover_gen_model_label",
 ]
 
 
@@ -67,5 +76,21 @@ def resolve_llm_model_id(provider: str, model: str) -> str:
     return normalized_model
 
 
+def split_llm_model_id(resolved_model_id: str) -> tuple[str, str]:
+    """Kehrt resolve_llm_model_id() um: zerlegt eine kombinierte, im UI als EIN
+    Dropdown-Wert gewählte Modell-ID (z. B. "openai:gpt-5.5") wieder in die
+    getrennt gespeicherten Felder (provider, model) von LlmRoleSettings."""
+    value = (resolved_model_id or "").strip()
+    if value.startswith("openai:"):
+        return "openai", value[len("openai:") :]
+    if value.startswith("anthropic:"):
+        return "anthropic", value[len("anthropic:") :]
+    return "gemini", value
+
+
 def combined_model_id(role_settings: LlmRoleSettings) -> str:
     return resolve_llm_model_id(role_settings.provider, role_settings.model)
+
+
+def format_voiceover_gen_model_label(model_id: str) -> str:
+    return VOICEOVER_GEN_MODEL_LABELS.get(model_id, model_id)

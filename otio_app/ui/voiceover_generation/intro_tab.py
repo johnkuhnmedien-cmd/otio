@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from otio_app.defaults import VOICEOVER_GEN_PROVIDERS
 from otio_app.models import Project
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.intro_hook_service import (
@@ -27,11 +26,14 @@ from otio_app.services.voiceover_generation.model_settings_service import (
     load_model_settings,
     save_model_settings,
 )
-from otio_app.services.voiceover_generation.models import IntroHookCandidate, LlmRoleSettings
+from otio_app.services.voiceover_generation.models import IntroHookCandidate
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
 from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
 from otio_app.ui.project_context import render_project_selector
-from otio_app.ui.voiceover_generation._shared import require_without_voiceover_mode
+from otio_app.ui.voiceover_generation._shared import (
+    render_llm_model_selectbox,
+    require_without_voiceover_mode,
+)
 
 import streamlit as st
 
@@ -174,26 +176,16 @@ def _render_settings_editor(project: Project) -> None:
 def _render_model_settings(project: Project) -> tuple[str, str]:
     settings = load_model_settings(project)
     with st.expander("⚙️ Modell für Intro", expanded=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            default_index = (
-                VOICEOVER_GEN_PROVIDERS.index(settings.intro.provider)
-                if settings.intro.provider in VOICEOVER_GEN_PROVIDERS
-                else 0
-            )
-            provider = st.selectbox(
-                "Provider", options=VOICEOVER_GEN_PROVIDERS, index=default_index,
-                key=f"vo_intro_model_provider_{project.id}",
-            )
-        with col2:
-            model = st.text_input(
-                "Modell", value=settings.intro.model, key=f"vo_intro_model_name_{project.id}"
-            )
+        role_settings = render_llm_model_selectbox(
+            label="Modell",
+            role_settings=settings.intro,
+            key=f"vo_intro_model_{project.id}",
+        )
         if st.button("Speichern", key=f"vo_intro_model_save_{project.id}"):
-            updated = settings.model_copy(update={"intro": LlmRoleSettings(provider=provider, model=model)})
+            updated = settings.model_copy(update={"intro": role_settings})
             save_model_settings(project, updated)
             st.success("Modell-Einstellung für Intro gespeichert.")
-    return provider, model
+    return role_settings.provider, role_settings.model
 
 
 def _render_visual_beats_table(candidate: IntroHookCandidate) -> None:

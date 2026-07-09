@@ -6,7 +6,6 @@ from otio_app.defaults import (
     DRAMATURGY_ROLES,
     ENERGY_CHOICES,
     FACTUALITY_MODE_CHOICES,
-    VOICEOVER_GEN_PROVIDERS,
     VOICEOVER_STATUS_PASS,
 )
 from otio_app.models import Project
@@ -27,7 +26,6 @@ from otio_app.services.voiceover_generation.models import (
     FolderVoiceoverDraft,
     FolderVoiceoverSettingsDocument,
     FolderVoiceoverValidationReportsDocument,
-    LlmRoleSettings,
 )
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
 from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
@@ -46,7 +44,10 @@ from otio_app.services.voiceover_generation.voiceover_review_service import (
     unconfirm_folder_voiceover,
 )
 from otio_app.ui.project_context import render_project_selector
-from otio_app.ui.voiceover_generation._shared import require_without_voiceover_mode
+from otio_app.ui.voiceover_generation._shared import (
+    render_llm_model_selectbox,
+    require_without_voiceover_mode,
+)
 
 import streamlit as st
 
@@ -107,50 +108,33 @@ def _render_model_settings(project: Project) -> tuple[str, str, str, str]:
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("**Voice-over Autor**")
-            author_index = (
-                VOICEOVER_GEN_PROVIDERS.index(settings.voiceover_author.provider)
-                if settings.voiceover_author.provider in VOICEOVER_GEN_PROVIDERS
-                else 0
-            )
-            author_provider = st.selectbox(
-                "Provider (Autor)",
-                options=VOICEOVER_GEN_PROVIDERS,
-                index=author_index,
-                key=f"vo_fvo_author_provider_{project.id}",
-            )
-            author_model = st.text_input(
-                "Modell (Autor)",
-                value=settings.voiceover_author.model,
+            author_settings = render_llm_model_selectbox(
+                label="Modell (Autor)",
+                role_settings=settings.voiceover_author,
                 key=f"vo_fvo_author_model_{project.id}",
             )
         with col2:
             st.markdown("**Voice-over Review**")
-            review_index = (
-                VOICEOVER_GEN_PROVIDERS.index(settings.voiceover_review.provider)
-                if settings.voiceover_review.provider in VOICEOVER_GEN_PROVIDERS
-                else 0
-            )
-            review_provider = st.selectbox(
-                "Provider (Review)",
-                options=VOICEOVER_GEN_PROVIDERS,
-                index=review_index,
-                key=f"vo_fvo_review_provider_{project.id}",
-            )
-            review_model = st.text_input(
-                "Modell (Review)",
-                value=settings.voiceover_review.model,
+            review_settings = render_llm_model_selectbox(
+                label="Modell (Review)",
+                role_settings=settings.voiceover_review,
                 key=f"vo_fvo_review_model_{project.id}",
             )
         if st.button("Modelle speichern", key=f"vo_fvo_models_save_{project.id}"):
             updated = settings.model_copy(
                 update={
-                    "voiceover_author": LlmRoleSettings(provider=author_provider, model=author_model),
-                    "voiceover_review": LlmRoleSettings(provider=review_provider, model=review_model),
+                    "voiceover_author": author_settings,
+                    "voiceover_review": review_settings,
                 }
             )
             save_model_settings(project, updated)
             st.success("Modell-Einstellungen gespeichert.")
-    return author_provider, author_model, review_provider, review_model
+    return (
+        author_settings.provider,
+        author_settings.model,
+        review_settings.provider,
+        review_settings.model,
+    )
 
 
 def _render_folder_draft(

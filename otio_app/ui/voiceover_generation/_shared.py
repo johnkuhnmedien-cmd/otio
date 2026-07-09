@@ -1,4 +1,4 @@
-"""Gemeinsame Platzhalter-Darstellung für die Phase-1-Seiten dieser Pipeline."""
+"""Gemeinsame UI-Bausteine für die Pipeline "Projekt ohne Voice-Over"."""
 
 from __future__ import annotations
 
@@ -6,7 +6,14 @@ from pathlib import Path
 
 import streamlit as st
 
+from otio_app.defaults import VOICEOVER_GEN_MODEL_CHOICES
 from otio_app.models import Project, ProjectMode
+from otio_app.services.voiceover_generation.model_settings_service import (
+    combined_model_id,
+    format_voiceover_gen_model_label,
+    split_llm_model_id,
+)
+from otio_app.services.voiceover_generation.models import LlmRoleSettings
 from otio_app.ui.project_context import render_project_selector
 
 
@@ -49,6 +56,37 @@ def render_placeholder_page(
 def get_active_voiceover_gen_project() -> Project | None:
     """Hilfsfunktion für spätere Phasen — identisch zur bestehenden Projekt-Auswahl."""
     return render_project_selector("Projekt")
+
+
+def render_llm_model_selectbox(
+    *,
+    label: str,
+    role_settings: LlmRoleSettings,
+    key: str,
+) -> LlmRoleSettings:
+    """Ein einziges Dropdown aus VOICEOVER_GEN_MODEL_CHOICES statt Provider-
+    Selectbox + Modell-Freitext.
+
+    Verhindert Tippfehler und ungültige Provider/Modell-Kombinationen, weil
+    nur konkrete, bekannt funktionierende Modelle wählbar sind. Liefert die
+    Auswahl direkt als LlmRoleSettings(provider, model) zurück — das
+    Speicherformat bleibt dadurch unverändert (Rückwärtskompatibilität mit
+    bereits gespeicherten model_settings.json)."""
+    current_id = combined_model_id(role_settings)
+    options = list(VOICEOVER_GEN_MODEL_CHOICES)
+    if current_id not in options:
+        # Bewahrt einen bereits gespeicherten, nicht (mehr) kuratierten Wert,
+        # anstatt ihn beim Öffnen der Seite stillschweigend zu überschreiben.
+        options = [current_id] + options
+    selected = st.selectbox(
+        label,
+        options=options,
+        index=options.index(current_id),
+        format_func=format_voiceover_gen_model_label,
+        key=key,
+    )
+    provider, model = split_llm_model_id(selected)
+    return LlmRoleSettings(provider=provider, model=model)
 
 
 def require_without_voiceover_mode(project: Project) -> bool:

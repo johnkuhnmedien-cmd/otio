@@ -135,6 +135,34 @@ VOICEOVER_GEN_ROLE_LABELS = {
 VOICEOVER_GEN_DEFAULT_PROVIDER = "anthropic"
 VOICEOVER_GEN_DEFAULT_MODEL = "claude-sonnet-5"
 
+# --- Vereinfachte Modellauswahl: EIN Dropdown je Rolle (kein Freitext, keine
+# separate Provider-Spalte). Die IDs folgen exakt der Konvention von
+# resolve_llm_model_id()/split_llm_model_id() ("openai:"/"anthropic:"-Präfix,
+# Gemini ohne Präfix) und werden aus VOICEOVER_GEN_MODEL_PRESETS abgeleitet. ---
+VOICEOVER_GEN_MODEL_CHOICES: tuple[str, ...] = (
+    "gemini-3.1-pro-preview",
+    "gemini-3.1-flash-lite",
+    "openai:gpt-5.5",
+    "openai:gpt-5.4-mini",
+    "anthropic:claude-opus-4-8",
+    "anthropic:claude-sonnet-5",
+    "anthropic:claude-haiku-4-5",
+)
+VOICEOVER_GEN_MODEL_LABELS: dict[str, str] = {
+    "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview — beste Qualität (Preview, teurer)",
+    "gemini-3.1-flash-lite": "Gemini 3.1 Flash Lite — günstig, Preview",
+    "openai:gpt-5.5": "ChatGPT GPT-5.5 — Flagship, beste Qualität",
+    "openai:gpt-5.4-mini": "ChatGPT GPT-5.4 mini — günstig, schnell",
+    "anthropic:claude-opus-4-8": "Claude Opus 4.8 — Flagship, beste Qualität",
+    "anthropic:claude-sonnet-5": "Claude Sonnet 5 — ausgewogen (Standard)",
+    "anthropic:claude-haiku-4-5": "Claude Haiku 4.5 — sehr schnell, günstig",
+}
+
+# --- Style Profile Bibliothek: projektübergreifend unter data/ gespeichert
+# (siehe otio_app.config.ensure_data_dir), NICHT unter dem Arbeitsordner eines
+# einzelnen Projekts. ---
+STYLE_PROFILE_LIBRARY_FILENAME = "style_profile_library.json"
+
 # --- Project Brief: feste Auswahllisten ---
 BRIEF_LANGUAGE_CHOICES = ("DE", "EN", "FR", "ES", "PT", "IT")
 BRIEF_TONE_TAG_CHOICES = (

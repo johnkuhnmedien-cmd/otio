@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import streamlit as st
 
-from otio_app.defaults import VOICEOVER_GEN_PROVIDERS
 from otio_app.models import Project
 from otio_app.project_layout import (
     get_dramaturgy_plan_confirmed_path,
@@ -25,11 +24,14 @@ from otio_app.services.voiceover_generation.model_settings_service import (
     load_model_settings,
     save_model_settings,
 )
-from otio_app.services.voiceover_generation.models import DRAMATURGY_ROLES, LlmRoleSettings
+from otio_app.services.voiceover_generation.models import DRAMATURGY_ROLES
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
 from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
 from otio_app.ui.project_context import render_project_selector
-from otio_app.ui.voiceover_generation._shared import require_without_voiceover_mode
+from otio_app.ui.voiceover_generation._shared import (
+    render_llm_model_selectbox,
+    require_without_voiceover_mode,
+)
 
 
 def _inventory_counts(project: Project) -> tuple[int, int]:
@@ -89,34 +91,17 @@ def _render_prerequisites(project: Project) -> bool:
 
 def _render_model_settings(project: Project) -> tuple[str, str]:
     settings = load_model_settings(project)
-    role_settings = settings.dramaturgy
     with st.expander("⚙️ Modell für Dramaturgie", expanded=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            default_index = (
-                VOICEOVER_GEN_PROVIDERS.index(role_settings.provider)
-                if role_settings.provider in VOICEOVER_GEN_PROVIDERS
-                else 0
-            )
-            provider = st.selectbox(
-                "Provider",
-                options=VOICEOVER_GEN_PROVIDERS,
-                index=default_index,
-                key=f"vo_dramaturgy_provider_{project.id}",
-            )
-        with col2:
-            model = st.text_input(
-                "Modell",
-                value=role_settings.model,
-                key=f"vo_dramaturgy_model_{project.id}",
-            )
+        role_settings = render_llm_model_selectbox(
+            label="Modell",
+            role_settings=settings.dramaturgy,
+            key=f"vo_dramaturgy_model_{project.id}",
+        )
         if st.button("Speichern", key=f"vo_dramaturgy_model_save_{project.id}"):
-            updated = settings.model_copy(
-                update={"dramaturgy": LlmRoleSettings(provider=provider, model=model)}
-            )
+            updated = settings.model_copy(update={"dramaturgy": role_settings})
             save_model_settings(project, updated)
             st.success("Modell-Einstellung für Dramaturgie gespeichert.")
-    return provider, model
+    return role_settings.provider, role_settings.model
 
 
 def _plan_to_rows(plan) -> list[dict]:
