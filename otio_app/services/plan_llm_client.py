@@ -25,6 +25,23 @@ class PlanLlmNotConfiguredError(RuntimeError):
     """API-Schlüssel für das gewählte Planungsmodell fehlt."""
 
 
+class PlanLlmTruncatedResponseError(RuntimeError):
+    """Die Modellantwort wurde abgeschnitten (max_tokens erreicht) oder enthielt
+    keinen verwertbaren Text (z. B. nur interne 'Thinking'-Tokens ohne finale
+    Antwort). Wird bewusst als Fehler behandelt statt — wie zuvor — stillschweigend
+    als leeres JSON-Objekt "{}" durchgereicht zu werden: eine leere, aber
+    "erfolgreich" geparste Antwort sah für den Aufrufer wie ein normales, nur
+    inhaltlich dürftiges Ergebnis aus (z. B. ein Dramaturgie-Plan ohne jeden
+    Ordner), obwohl in Wahrheit gar keine brauchbare Antwort vorlag."""
+
+
+# Höher als der ursprüngliche Default (8192) — bei umfangreichen Prompts (z. B.
+# Dramaturgie-Planung über viele Ordner) reichte das nicht aus und die Antwort
+# wurde exakt bei max_tokens abgeschnitten (stop_reason="max_tokens"), was durch
+# den alten "leeres Ergebnis statt Fehler"-Fallback unbemerkt blieb.
+DEFAULT_MAX_OUTPUT_TOKENS = 16384
+
+
 @dataclass
 class PlanLlmResponse:
     provider: str
@@ -179,6 +196,7 @@ def _generate_gemini_text_with_usage(*, prompt: str, model: str) -> tuple[str, d
     response = client.models.generate_content(
         model=model,
         contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
+        config=types.GenerateContentConfig(max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS),
     )
     usage_meta = getattr(response, "usage_metadata", None)
     token_usage = _token_usage_dict(
@@ -186,7 +204,21 @@ def _generate_gemini_text_with_usage(*, prompt: str, model: str) -> tuple[str, d
         output_tokens=getattr(usage_meta, "candidates_token_count", None),
         total_tokens=getattr(usage_meta, "total_token_count", None),
     )
-    return response.text or "{}", token_usage
+    candidates = getattr(response, "candidates", None) or []
+    finish_reason = str(getattr(candidates[0], "finish_reason", "")) if candidates else ""
+    if "MAX_TOKENS" in finish_reason:
+        raise PlanLlmTruncatedResponseError(
+            f"Die Gemini-Antwort wurde bei max_output_tokens={DEFAULT_MAX_OUTPUT_TOKENS} "
+            "abgeschnitten (finish_reason=MAX_TOKENS). Der Prompt ist wahrscheinlich zu "
+            "umfangreich (z. B. sehr viele Ordner) für eine vollständige Antwort in diesem "
+            "Limit. Bitte weniger Ordner gleichzeitig planen oder den Prompt kürzen."
+        )
+    text = (response.text or "").strip()
+    if not text:
+        raise PlanLlmTruncatedResponseError(
+            "Gemini hat keinen verwertbaren Text zurückgegeben. Bitte erneut versuchen."
+        )
+    return text, token_usage
 
 
 def _generate_openai_text_with_usage(*, prompt: str, model: str) -> tuple[str, dict[str, int]]:
@@ -205,6 +237,7 @@ def _generate_openai_text_with_usage(*, prompt: str, model: str) -> tuple[str, d
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
+            max_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
         )
     except BadRequestError as exc:
         if not _is_temperature_rejected_error(exc):
@@ -215,15 +248,30 @@ def _generate_openai_text_with_usage(*, prompt: str, model: str) -> tuple[str, d
         response = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
+            max_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
         )
-    message = response.choices[0].message.content if response.choices else None
     usage = getattr(response, "usage", None)
     token_usage = _token_usage_dict(
         input_tokens=getattr(usage, "prompt_tokens", None),
         output_tokens=getattr(usage, "completion_tokens", None),
         total_tokens=getattr(usage, "total_tokens", None),
     )
-    return (message or "").strip() or "{}", token_usage
+    choice = response.choices[0] if response.choices else None
+    finish_reason = getattr(choice, "finish_reason", None) if choice is not None else None
+    if finish_reason == "length":
+        raise PlanLlmTruncatedResponseError(
+            f"Die Antwort wurde bei max_tokens={DEFAULT_MAX_OUTPUT_TOKENS} abgeschnitten "
+            "(finish_reason=length). Der Prompt ist wahrscheinlich zu umfangreich (z. B. "
+            "sehr viele Ordner) für eine vollständige Antwort in diesem Limit. Bitte "
+            "weniger Ordner gleichzeitig planen oder den Prompt kürzen."
+        )
+    message = choice.message.content if choice is not None else None
+    text = (message or "").strip()
+    if not text:
+        raise PlanLlmTruncatedResponseError(
+            "Das Modell hat keinen verwertbaren Text zurückgegeben. Bitte erneut versuchen."
+        )
+    return text, token_usage
 
 
 def _generate_anthropic_text_with_usage(*, prompt: str, model: str) -> tuple[str, dict[str, int]]:
@@ -240,7 +288,7 @@ def _generate_anthropic_text_with_usage(*, prompt: str, model: str) -> tuple[str
     try:
         response = client.messages.create(
             model=model,
-            max_tokens=8192,
+            max_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
             temperature=0.2,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -253,13 +301,34 @@ def _generate_anthropic_text_with_usage(*, prompt: str, model: str) -> tuple[str
         # "temperature is deprecated for this model.").
         response = client.messages.create(
             model=model,
-            max_tokens=8192,
+            max_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
             messages=[{"role": "user", "content": prompt}],
         )
-    parts = [block.text for block in response.content if getattr(block, "type", "") == "text"]
     usage = getattr(response, "usage", None)
     token_usage = _token_usage_dict(
         input_tokens=getattr(usage, "input_tokens", None),
         output_tokens=getattr(usage, "output_tokens", None),
     )
-    return "\n".join(parts).strip() or "{}", token_usage
+    # Kernbug (behoben): Bei sehr umfangreichen Prompts (z. B. Dramaturgie über
+    # viele Ordner) wurde die Antwort exakt bei max_tokens abgeschnitten
+    # (stop_reason="max_tokens", output_tokens == max_tokens) — z. B. weil das
+    # Modell seinen gesamten Output-Token-Budget für internes "Thinking" ohne
+    # finalen Text verbraucht hat. Der alte Code gab in diesem Fall
+    # stillschweigend "{}" zurück, was downstream als "erfolgreich, aber leerer
+    # Plan" durchging. Jetzt wird das explizit als Fehler gemeldet.
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        raise PlanLlmTruncatedResponseError(
+            f"Die Antwort wurde nach {token_usage.get('output_tokens', DEFAULT_MAX_OUTPUT_TOKENS)} "
+            f"von max_tokens={DEFAULT_MAX_OUTPUT_TOKENS} Output-Tokens abgeschnitten "
+            "(stop_reason=max_tokens). Der Prompt ist wahrscheinlich zu umfangreich (z. B. "
+            "sehr viele Ordner) für eine vollständige Antwort in diesem Limit. Bitte weniger "
+            "Ordner gleichzeitig planen oder den Prompt kürzen."
+        )
+    parts = [block.text for block in response.content if getattr(block, "type", "") == "text"]
+    text = "\n".join(parts).strip()
+    if not text:
+        raise PlanLlmTruncatedResponseError(
+            "Das Modell hat keinen verwertbaren Text zurückgegeben (z. B. nur interne "
+            "'Thinking'-Tokens ohne finale Antwort). Bitte erneut versuchen."
+        )
+    return text, token_usage

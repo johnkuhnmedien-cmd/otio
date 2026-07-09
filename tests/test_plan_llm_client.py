@@ -8,7 +8,9 @@ import httpx
 import pytest
 
 from otio_app.services.plan_llm_client import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
     PlanLlmNotConfiguredError,
+    PlanLlmTruncatedResponseError,
     format_plan_model_label,
     is_plan_model_configured,
     plan_model_provider,
@@ -196,3 +198,132 @@ def test_generate_plan_text_openai_retries_without_temperature_when_deprecated(
     assert mock_openai.return_value.chat.completions.create.call_count == 2
     retry_call_kwargs = mock_openai.return_value.chat.completions.create.call_args_list[1].kwargs
     assert "temperature" not in retry_call_kwargs
+
+
+def test_generate_plan_text_anthropic_uses_higher_max_tokens_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    block = MagicMock(type="text", text='{"beats":[]}')
+    mock_response = MagicMock(content=[block], stop_reason="end_turn")
+
+    with patch("anthropic.Anthropic") as mock_anthropic:
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+        generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
+
+    call_kwargs = mock_anthropic.return_value.messages.create.call_args.kwargs
+    assert call_kwargs["max_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
+    assert DEFAULT_MAX_OUTPUT_TOKENS > 8192
+
+
+def test_generate_plan_text_openai_uses_higher_max_tokens_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    mock_response = MagicMock()
+    mock_response.choices = [
+        MagicMock(message=MagicMock(content='{"beats":[]}'), finish_reason="stop")
+    ]
+
+    with patch("openai.OpenAI") as mock_openai:
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+        generate_plan_text(prompt="x", model="openai:gpt-5.5")
+
+    call_kwargs = mock_openai.return_value.chat.completions.create.call_args.kwargs
+    assert call_kwargs["max_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
+
+
+def test_generate_plan_text_anthropic_raises_when_truncated_at_max_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reproduziert den gemeldeten Bug: die Dramaturgie-Antwort kam bei einem
+    sehr großen Prompt (viele Ordner) exakt bei max_tokens=8192 abgeschnitten
+    zurück (stop_reason='max_tokens', output_tokens==max_tokens) — vorher gab
+    der Code stillschweigend '{}' zurück, was als 'erfolgreicher, aber leerer
+    Plan' durchging. Jetzt muss das als expliziter Fehler erkannt werden."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    block = MagicMock(type="text", text='{"project_title": "Incomplete')
+    mock_response = MagicMock(
+        content=[block],
+        stop_reason="max_tokens",
+        usage=MagicMock(input_tokens=60389, output_tokens=DEFAULT_MAX_OUTPUT_TOKENS),
+    )
+
+    with patch("anthropic.Anthropic") as mock_anthropic:
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+        with pytest.raises(PlanLlmTruncatedResponseError, match="max_tokens"):
+            generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
+
+
+def test_generate_plan_text_anthropic_raises_when_no_text_block_returned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deckt auch den Fall ab, in dem das Modell seinen gesamten Output-Token-
+    Budget für internes 'Thinking' verbraucht hat und GAR KEINEN finalen
+    Text-Block liefert, selbst wenn stop_reason nicht exakt 'max_tokens' ist."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    thinking_block = MagicMock(type="thinking", text="")
+    mock_response = MagicMock(content=[thinking_block], stop_reason="end_turn")
+
+    with patch("anthropic.Anthropic") as mock_anthropic:
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+        with pytest.raises(PlanLlmTruncatedResponseError):
+            generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
+
+
+def test_generate_plan_text_openai_raises_when_truncated_at_max_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    mock_response = MagicMock()
+    mock_response.choices = [
+        MagicMock(message=MagicMock(content='{"project_title": "Incomplete'), finish_reason="length")
+    ]
+
+    with patch("openai.OpenAI") as mock_openai:
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+        with pytest.raises(PlanLlmTruncatedResponseError, match="length"):
+            generate_plan_text(prompt="x", model="openai:gpt-5.5")
+
+
+def test_generate_plan_text_openai_raises_when_no_message_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock(message=MagicMock(content=None), finish_reason="stop")]
+
+    with patch("openai.OpenAI") as mock_openai:
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+        with pytest.raises(PlanLlmTruncatedResponseError):
+            generate_plan_text(prompt="x", model="openai:gpt-5.5")
+
+
+def test_generate_plan_text_gemini_raises_when_truncated_at_max_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    from google.genai import types
+
+    mock_response = MagicMock(text="")
+    mock_response.candidates = [MagicMock(finish_reason=types.FinishReason.MAX_TOKENS)]
+
+    with patch("google.genai.Client") as mock_client_cls:
+        mock_client_cls.return_value.models.generate_content.return_value = mock_response
+        with pytest.raises(PlanLlmTruncatedResponseError, match="MAX_TOKENS"):
+            generate_plan_text(prompt="x", model="gemini-3.1-pro-preview")
+
+
+def test_generate_plan_text_gemini_raises_when_no_text_returned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    from google.genai import types
+
+    mock_response = MagicMock(text="")
+    mock_response.candidates = [MagicMock(finish_reason=types.FinishReason.STOP)]
+
+    with patch("google.genai.Client") as mock_client_cls:
+        mock_client_cls.return_value.models.generate_content.return_value = mock_response
+        with pytest.raises(PlanLlmTruncatedResponseError):
+            generate_plan_text(prompt="x", model="gemini-3.1-pro-preview")
