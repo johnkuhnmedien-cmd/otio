@@ -17,16 +17,22 @@ niemals in reguläre Folder-Inventories oder `_otio/supplement/`."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from otio_app.defaults import (
     CUT_PLAN_ASSET_SELECTION_GENERIC_FALLBACK_USED,
+    CUT_PLAN_ASSET_SELECTION_MANUAL_USED,
     CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED,
     CUT_PLAN_STATUS_DRAFT,
     CUT_PLAN_STATUS_NEEDS_REVIEW,
 )
 from otio_app.models import Project
-from otio_app.services.generic_outro_selector import GenericAssetCandidate, select_generic_outro_assets
+from otio_app.services.generic_outro_selector import (
+    GenericAssetCandidate,
+    asset_id_for_path,
+    select_generic_outro_assets,
+)
 from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.media_utils import is_image_media, probe_duration_seconds
 from otio_app.services.voiceover_generation.cut_plan_asset_selector import (
@@ -35,8 +41,9 @@ from otio_app.services.voiceover_generation.cut_plan_asset_selector import (
     update_asset_usage_summary,
 )
 from otio_app.services.voiceover_generation.cut_plan_builder import load_cut_plan_draft, save_cut_plan_draft
-from otio_app.services.voiceover_generation.cut_plan_models import CutPlanDocument, VisualSegment
+from otio_app.services.voiceover_generation.cut_plan_models import CutPlanDocument, CutPlanItem, VisualSegment
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
+    capture_pre_accept_item_snapshot_if_missing,
     load_cut_plan_supplement_requests,
     update_cut_plan_supplement_request,
 )
@@ -48,6 +55,9 @@ __all__ = [
     "select_generic_fallback_candidate",
     "apply_generic_fallback_to_cut_plan_item",
     "apply_generic_fallback_for_cut_plan_request",
+    "list_manual_asset_options_for_request",
+    "apply_manual_asset_to_cut_plan_item",
+    "apply_manual_asset_for_cut_plan_request",
 ]
 
 _DURATION_EPSILON = 0.05
@@ -116,24 +126,29 @@ def select_generic_fallback_candidate(
     return None
 
 
-def apply_generic_fallback_to_cut_plan_item(
+def _build_local_asset_segment_and_updated_item(
     project: Project,
     cut_plan: CutPlanDocument,
     request: CutPlanSupplementRequest,
-    candidate: GenericAssetCandidate,
-) -> CutPlanDocument:
-    """Reine Funktion: aktualisiert GENAU das CutPlanItem, das zu
-    request.cut_item_id gehört, mit dem übergebenen generischen Ordner-
-    Asset. Analog zu apply_accepted_supplement_to_cut_plan_item (Phase
-    8.6), aber ohne CutPlanSupplementAsset (kein Download nötig — das
-    Material liegt bereits lokal vor)."""
+    *,
+    asset_id: str,
+    asset_path: str,
+    asset_selection_status: str,
+    asset_selection_reason: str,
+    fallback_reason: str,
+    segment_reason: str,
+) -> CutPlanItem:
+    """Gemeinsamer Kern für generischen Fallback UND manuelle Zuweisung:
+    baut ein VisualSegment aus einem bereits lokal vorhandenen Asset (kein
+    Download) und liefert das aktualisierte CutPlanItem. Der harte Dauer-
+    Check (Video zu kurz -> ValueError) gilt für beide Wege identisch."""
     settings = settings_from_snapshot(project, cut_plan)
 
     target_item = next((item for item in cut_plan.items if item.cut_item_id == request.cut_item_id), None)
     if target_item is None:
         raise ValueError(f"CutPlanItem '{request.cut_item_id}' nicht im Cut Plan gefunden.")
 
-    local_path = Path(candidate.path)
+    local_path = Path(asset_path)
     is_image = is_image_media(local_path)
     if is_image:
         source_in_sec = 0.0
@@ -144,7 +159,7 @@ def apply_generic_fallback_to_cut_plan_item(
         usable_duration_sec = max(0.0, (probe_duration_seconds(local_path) or 0.0) - settings.video_head_trim_sec)
         if target_item.duration_sec > usable_duration_sec + _DURATION_EPSILON:
             raise ValueError(
-                f"Generischer Fallback-Kandidat zu kurz für Item '{target_item.cut_item_id}': benötigt "
+                f"Asset zu kurz für Item '{target_item.cut_item_id}': benötigt "
                 f"{target_item.duration_sec:.2f}s, verfügbar {usable_duration_sec:.2f}s nach "
                 f"video_head_trim_sec ({settings.video_head_trim_sec:.2f}s)."
             )
@@ -156,28 +171,25 @@ def apply_generic_fallback_to_cut_plan_item(
         timeline_in_sec=target_item.timeline_start_sec,
         timeline_out_sec=target_item.timeline_end_sec,
         duration_sec=target_item.duration_sec,
-        asset_id=candidate.asset_id,
-        asset_path=candidate.path,
+        asset_id=asset_id,
+        asset_path=asset_path,
         asset_type=asset_type,
         source_in_sec=source_in_sec,
         source_out_sec=source_out_sec,
         track="V1",
-        reason="generic_fallback_asset",
+        reason=segment_reason,
     )
 
     remaining_blockers = [
         blocker for blocker in target_item.blockers if blocker != CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED
     ]
 
-    updated_item = target_item.model_copy(
+    return target_item.model_copy(
         update={
-            "chosen_asset_id": candidate.asset_id,
-            "asset_selection_status": CUT_PLAN_ASSET_SELECTION_GENERIC_FALLBACK_USED,
-            "asset_selection_reason": (
-                f"Kein Stock-Kandidat hat die automatische Prüfung bestanden — generisches "
-                f"Ordner-Asset '{candidate.asset_id}' verwendet ({candidate.selection_reason})."
-            ),
-            "fallback_reason": "Generic fallback asset used because no supplement candidate passed validation.",
+            "chosen_asset_id": asset_id,
+            "asset_selection_status": asset_selection_status,
+            "asset_selection_reason": asset_selection_reason,
+            "fallback_reason": fallback_reason,
             "supplement_request_id": request.request_id,
             "needs_supplement_asset": False,
             "planned_visual_segments": [segment],
@@ -185,8 +197,13 @@ def apply_generic_fallback_to_cut_plan_item(
         }
     )
 
+
+def _finalize_local_asset_cut_plan_update(
+    project: Project, cut_plan: CutPlanDocument, updated_item: CutPlanItem
+) -> CutPlanDocument:
+    settings = settings_from_snapshot(project, cut_plan)
     updated_items = [
-        updated_item if item.cut_item_id == target_item.cut_item_id else item for item in cut_plan.items
+        updated_item if item.cut_item_id == updated_item.cut_item_id else item for item in cut_plan.items
     ]
     updated_cut_plan = cut_plan.model_copy(update={"items": updated_items})
 
@@ -208,14 +225,48 @@ def apply_generic_fallback_to_cut_plan_item(
     )
 
 
+def apply_generic_fallback_to_cut_plan_item(
+    project: Project,
+    cut_plan: CutPlanDocument,
+    request: CutPlanSupplementRequest,
+    candidate: GenericAssetCandidate,
+) -> CutPlanDocument:
+    """Reine Funktion: aktualisiert GENAU das CutPlanItem, das zu
+    request.cut_item_id gehört, mit dem übergebenen generischen Ordner-
+    Asset. Analog zu apply_accepted_supplement_to_cut_plan_item (Phase
+    8.6), aber ohne CutPlanSupplementAsset (kein Download nötig — das
+    Material liegt bereits lokal vor)."""
+    updated_item = _build_local_asset_segment_and_updated_item(
+        project,
+        cut_plan,
+        request,
+        asset_id=candidate.asset_id,
+        asset_path=candidate.path,
+        asset_selection_status=CUT_PLAN_ASSET_SELECTION_GENERIC_FALLBACK_USED,
+        asset_selection_reason=(
+            f"Kein Stock-Kandidat hat die automatische Prüfung bestanden — generisches "
+            f"Ordner-Asset '{candidate.asset_id}' verwendet ({candidate.selection_reason})."
+        ),
+        fallback_reason="Generic fallback asset used because no supplement candidate passed validation.",
+        segment_reason="generic_fallback_asset",
+    )
+    return _finalize_local_asset_cut_plan_update(project, cut_plan, updated_item)
+
+
 def apply_generic_fallback_for_cut_plan_request(
-    project: Project, request_id: str
+    project: Project, request_id: str, force_replace: bool = False
 ) -> tuple[CutPlanDocument | None, GenericAssetCandidate | None]:
     """I/O-Orchestrator für GENAU EINEN Request: lädt Request/Draft, wählt
     (rein lesend) einen generischen Ordner-Kandidaten und übernimmt ihn bei
     Erfolg in den Cut Plan. Liefert (None, None), wenn kein passendes Asset
     gefunden wurde — wirft KEINE Exception, damit ein Auto-Resolver-Batch
     (spätere Phase) nicht an einem einzigen Request abbricht.
+
+    Phase 11.6: wie bei accept_cut_plan_supplement_candidate wird VOR jeder
+    Übernahme ein Snapshot des Vorzustands gesichert (nur beim ersten Mal)
+    und ein bereits versorgter Request (accepted_asset_id gesetzt) wird
+    ohne force_replace=True mit ValueError abgelehnt, statt still
+    überschrieben zu werden.
 
     Aktualisiert den Request-Status NICHT auf ACCEPTED (das Feld bleibt für
     Stock-Akzeptanzen reserviert) — stattdessen wird ausschließlich
@@ -228,6 +279,8 @@ def apply_generic_fallback_for_cut_plan_request(
     request = next((entry for entry in requests_document.requests if entry.request_id == request_id), None)
     if request is None:
         raise ValueError(f"Supplement Request '{request_id}' nicht gefunden.")
+    if request.accepted_asset_id and not force_replace:
+        raise ValueError("Supplement request already has an accepted asset. Use replace explicitly.")
 
     draft = load_cut_plan_draft(project)
     if draft is None:
@@ -242,6 +295,8 @@ def apply_generic_fallback_for_cut_plan_request(
     if candidate is None:
         return None, None
 
+    capture_pre_accept_item_snapshot_if_missing(project, request_id, target_item)
+
     updated_cut_plan = apply_generic_fallback_to_cut_plan_item(project, draft, request, candidate)
     save_cut_plan_draft(project, updated_cut_plan)
     update_cut_plan_supplement_request(
@@ -251,3 +306,120 @@ def apply_generic_fallback_for_cut_plan_request(
         accepted_asset_path=candidate.path,
     )
     return updated_cut_plan, candidate
+
+
+# --- Manuelle Zuweisung (Phase 11.6) ---
+
+
+@dataclass(frozen=True)
+class ManualAssetOption:
+    """Ein Eintrag für die manuelle Asset-Auswahl in der UI — rein
+    informativ, kein redaktionelles Feld."""
+
+    asset_id: str
+    path: str
+    description: str
+    media_type: str  # "video" | "image" | ""
+    duration_sec: float
+    likely_usable: bool
+
+
+def list_manual_asset_options_for_request(
+    project: Project, request: CutPlanSupplementRequest, *, needed_duration_sec: float
+) -> list[ManualAssetOption]:
+    """Reine Funktion: listet alle Assets aus dem Ordner-Inventory von
+    request.folder_name auf, für die manuelle Auswahl in der UI.
+    likely_usable ist nur ein Hinweis (Bilder immer True, Videos anhand der
+    rohen Dauer ohne video_head_trim_sec) — die tatsächliche, verbindliche
+    Prüfung passiert erst in apply_manual_asset_to_cut_plan_item."""
+    if not request.folder_name:
+        return []
+    inventory = load_folder_inventory(project, request.folder_name)
+    options: list[ManualAssetOption] = []
+    for asset in inventory.assets:
+        if not asset.path:
+            continue
+        full_path = project.project_root_path / asset.path
+        asset_id = asset.asset_id or asset_id_for_path(asset.path)
+        is_image = is_image_media(full_path)
+        duration_sec = 0.0 if is_image else (probe_duration_seconds(full_path) or 0.0)
+        options.append(
+            ManualAssetOption(
+                asset_id=asset_id,
+                path=str(full_path),
+                description=asset.description,
+                media_type="image" if is_image else "video",
+                duration_sec=duration_sec,
+                likely_usable=is_image or duration_sec >= needed_duration_sec,
+            )
+        )
+    return options
+
+
+def apply_manual_asset_to_cut_plan_item(
+    project: Project,
+    cut_plan: CutPlanDocument,
+    request: CutPlanSupplementRequest,
+    *,
+    asset_id: str,
+    asset_path: str,
+) -> CutPlanDocument:
+    """Reine Funktion: weist GENAU dem CutPlanItem von request.cut_item_id
+    ein vom Nutzer bewusst ausgewähltes, bereits vorhandenes Asset zu.
+    Derselbe harte Dauer-Check wie beim generischen Fallback (kein
+    stillschweigend zu kurzes Segment)."""
+    updated_item = _build_local_asset_segment_and_updated_item(
+        project,
+        cut_plan,
+        request,
+        asset_id=asset_id,
+        asset_path=asset_path,
+        asset_selection_status=CUT_PLAN_ASSET_SELECTION_MANUAL_USED,
+        asset_selection_reason=f"Nutzer hat manuell das vorhandene Asset '{asset_id}' zugewiesen.",
+        fallback_reason="Manually assigned asset from folder inventory.",
+        segment_reason="manual_asset",
+    )
+    return _finalize_local_asset_cut_plan_update(project, cut_plan, updated_item)
+
+
+def apply_manual_asset_for_cut_plan_request(
+    project: Project,
+    request_id: str,
+    *,
+    asset_id: str,
+    asset_path: str,
+    force_replace: bool = False,
+) -> CutPlanDocument:
+    """I/O-Orchestrator für die manuelle Zuweisung — lädt Request/Draft,
+    sichert (nur beim ersten Mal) einen Vorzustand-Snapshot, wendet die
+    Zuweisung an und speichert Draft + Request. Lehnt (ohne
+    force_replace=True) ab, wenn der Request bereits ein übernommenes
+    Asset hat — identische Absicherung wie accept_cut_plan_supplement_
+    candidate / apply_generic_fallback_for_cut_plan_request."""
+    requests_document = load_cut_plan_supplement_requests(project)
+    if requests_document is None:
+        raise ValueError("Keine Supplement Requests vorhanden.")
+    request = next((entry for entry in requests_document.requests if entry.request_id == request_id), None)
+    if request is None:
+        raise ValueError(f"Supplement Request '{request_id}' nicht gefunden.")
+    if request.accepted_asset_id and not force_replace:
+        raise ValueError("Supplement request already has an accepted asset. Use replace explicitly.")
+
+    draft = load_cut_plan_draft(project)
+    if draft is None:
+        raise ValueError("Kein Cut Plan Draft vorhanden.")
+
+    target_item = next((item for item in draft.items if item.cut_item_id == request.cut_item_id), None)
+    capture_pre_accept_item_snapshot_if_missing(project, request_id, target_item)
+
+    updated_cut_plan = apply_manual_asset_to_cut_plan_item(
+        project, draft, request, asset_id=asset_id, asset_path=asset_path
+    )
+    save_cut_plan_draft(project, updated_cut_plan)
+    update_cut_plan_supplement_request(
+        project,
+        request_id,
+        accepted_asset_id=asset_id,
+        accepted_asset_path=asset_path,
+    )
+    return updated_cut_plan

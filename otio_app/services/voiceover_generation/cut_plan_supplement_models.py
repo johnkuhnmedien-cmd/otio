@@ -86,6 +86,15 @@ class CutPlanSupplementRequest(BaseModel):
     # Phase — das folgt separat.
     auto_resolve_status: str = ""
     auto_resolve_attempts: list[CutPlanSupplementAutoResolveAttempt] = Field(default_factory=list)
+    # Phase 11.6: vollständiger Snapshot (model_dump) des CutPlanItem VOR der
+    # ERSTEN Übernahme (Stock-Akzeptanz, generischer Fallback ODER manuelle
+    # Zuweisung) für diesen Request — ermöglicht ein exaktes "Übernahme
+    # zurücknehmen" (siehe unaccept_cut_plan_supplement_request), statt den
+    # Vorzustand zu erraten. Wird NUR beim allerersten Übernahme-Versuch
+    # gesetzt (leer davor) und bei der Rücknahme wieder geleert — ein
+    # nachfolgendes "Ersetzen" überschreibt ihn NICHT, damit die Rücknahme
+    # immer zum tatsächlichen Ursprungszustand zurückführt.
+    pre_accept_item_snapshot: dict[str, Any] = Field(default_factory=dict)
 
 
 class CutPlanSupplementRequestsDocument(BaseModel):

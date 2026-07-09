@@ -51,6 +51,7 @@ from otio_app.defaults import (
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_CANDIDATES_FOUND,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_FAILED,
+    CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_OPEN,
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED as _STATUS_SUPPLEMENT_REQUIRED,
     SUPPLEMENT_SOURCE_PEXELS,
 )
@@ -69,7 +70,7 @@ from otio_app.services.voiceover_generation.cut_plan_asset_selector import (
     update_asset_usage_summary,
 )
 from otio_app.services.voiceover_generation.cut_plan_builder import load_cut_plan_draft, save_cut_plan_draft
-from otio_app.services.voiceover_generation.cut_plan_models import CutPlanDocument, VisualSegment
+from otio_app.services.voiceover_generation.cut_plan_models import CutPlanDocument, CutPlanItem, VisualSegment
 from otio_app.services.voiceover_generation.cut_plan_supplement_models import (
     CutPlanSupplementAsset,
     CutPlanSupplementCandidate,
@@ -88,11 +89,13 @@ __all__ = [
     "save_cut_plan_supplement_requests",
     "load_cut_plan_supplement_requests",
     "update_cut_plan_supplement_request",
+    "capture_pre_accept_item_snapshot_if_missing",
     "load_cut_plan_supplement_candidates_for_request",
     "search_candidates_for_cut_plan_request",
     "download_cut_plan_supplement_candidate",
     "accept_cut_plan_supplement_candidate",
     "apply_accepted_supplement_to_cut_plan_item",
+    "unaccept_cut_plan_supplement_request",
 ]
 
 _DURATION_EPSILON = 0.05
@@ -214,6 +217,30 @@ def update_cut_plan_supplement_request(
             new_requests.append(request)
     save_cut_plan_supplement_requests(project, document.model_copy(update={"requests": new_requests}))
     return updated_request
+
+
+def capture_pre_accept_item_snapshot_if_missing(
+    project: Project, request_id: str, current_item: CutPlanItem | None
+) -> None:
+    """Phase 11.6: speichert EINMALIG (nur beim allerersten Übernahme-
+    Versuch für diesen Request — Stock-Akzeptanz, generischer Fallback ODER
+    manuelle Zuweisung, siehe cut_plan_generic_fallback_service.py) einen
+    vollständigen Snapshot des betroffenen CutPlanItems, BEVOR es verändert
+    wird. Ein späteres 'Ersetzen' (force_replace) überschreibt diesen
+    Snapshot NICHT — sonst würde eine Rücknahme (unaccept_cut_plan_
+    supplement_request) nur zum vorherigen ERSETZTEN Zustand statt zum
+    tatsächlichen URSPRUNGSZUSTAND zurückführen."""
+    if current_item is None:
+        return
+    requests_document = load_cut_plan_supplement_requests(project)
+    if requests_document is None:
+        return
+    request = next((entry for entry in requests_document.requests if entry.request_id == request_id), None)
+    if request is None or request.pre_accept_item_snapshot:
+        return
+    update_cut_plan_supplement_request(
+        project, request_id, pre_accept_item_snapshot=current_item.model_dump(mode="json")
+    )
 
 
 # --- Kandidaten-Speicher (§1, ein File für alle Requests) ---
@@ -573,11 +600,14 @@ def accept_cut_plan_supplement_candidate(
     cut_plan/supplement_assets/{request_id}/, aktualisiert das CutPlanItem
     und speichert den Draft sowie den Request-Status neu.
 
-    Vorab-Hardening (Phase 8.7): Ist der Request bereits ACCEPTED und
+    Vorab-Hardening (Phase 8.7, verschärft in Phase 11.6): Hat der Request
+    bereits IRGENDEIN übernommenes Asset (accepted_asset_id gesetzt — Stock-
+    Akzeptanz, generischer Fallback ODER manuelle Zuweisung) und
     force_replace=False, wird NICHT still überschrieben — es wird ein
     ValueError geworfen, bevor irgendetwas heruntergeladen oder mutiert wird.
-    Erst force_replace=True erlaubt das bewusste Ersetzen eines bereits
-    akzeptierten Kandidaten.
+    Erst force_replace=True erlaubt das bewusste Ersetzen. (Vorher wurde
+    nur request.status == ACCEPTED geprüft — das erkannte einen bereits
+    per generischem Fallback versorgten Request nicht als 'bereits belegt'.)
 
     Phase 11.3: `downloaded_asset` ist optional — der Auto-Resolver
     (cut_plan_supplement_auto_resolve_service.py) lädt einen Kandidaten
@@ -596,9 +626,9 @@ def accept_cut_plan_supplement_candidate(
     request = next((entry for entry in requests_document.requests if entry.request_id == request_id), None)
     if request is None:
         raise ValueError(f"Supplement Request '{request_id}' nicht gefunden.")
-    if request.status == CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED and not force_replace:
+    if request.accepted_asset_id and not force_replace:
         raise ValueError(
-            "Supplement request already has an accepted candidate. Use replace explicitly."
+            "Supplement request already has an accepted asset. Use replace explicitly."
         )
 
     candidates_document = load_cut_plan_supplement_candidates_for_request(project, request_id)
@@ -613,6 +643,10 @@ def accept_cut_plan_supplement_candidate(
     draft = load_cut_plan_draft(project)
     if draft is None:
         raise ValueError("Kein Cut Plan Draft vorhanden.")
+
+    capture_pre_accept_item_snapshot_if_missing(
+        project, request_id, next((item for item in draft.items if item.cut_item_id == request.cut_item_id), None)
+    )
 
     if downloaded_asset is not None:
         accepted_asset = downloaded_asset
@@ -637,6 +671,94 @@ def accept_cut_plan_supplement_candidate(
         accepted_candidate_id=candidate_id,
         accepted_asset_id=accepted_asset.asset_id,
         accepted_asset_path=accepted_asset.asset_path,
+    )
+    return updated_cut_plan
+
+
+# --- Rücknahme (Phase 11.6) ---
+
+
+def unaccept_cut_plan_supplement_request(project: Project, request_id: str) -> CutPlanDocument:
+    """Macht die Übernahme für GENAU EINEN Request rückgängig — egal ob sie
+    per Stock-Akzeptanz, generischem Ordner-Fallback (siehe
+    cut_plan_generic_fallback_service.py) oder manueller Zuweisung
+    entstand. Setzt das betroffene CutPlanItem EXAKT auf den Zustand VOR
+    der allerersten Übernahme zurück (siehe pre_accept_item_snapshot,
+    capture_pre_accept_item_snapshot_if_missing) und leert alle Übernahme-
+    Felder des Requests, damit ein erneuter Versuch (Suche, Akzeptieren,
+    generischer Fallback, manuelle Zuweisung) ohne force_replace wieder
+    möglich ist.
+
+    Löscht KEINE bereits heruntergeladenen Dateien unter
+    cut_plan/supplement_assets/ — bewusst nicht destruktiv, siehe
+    Nutzerdiskussion Phase 11.6.
+
+    Wirft ValueError, wenn für diesen Request nichts zum Zurücknehmen
+    vorhanden ist (kein accepted_asset_id) oder kein Snapshot gespeichert
+    wurde (z. B. eine Übernahme aus der Zeit vor Phase 11.6)."""
+    requests_document = load_cut_plan_supplement_requests(project)
+    if requests_document is None:
+        raise ValueError("Keine Supplement Requests vorhanden.")
+    request = next((entry for entry in requests_document.requests if entry.request_id == request_id), None)
+    if request is None:
+        raise ValueError(f"Supplement Request '{request_id}' nicht gefunden.")
+    if not request.accepted_asset_id:
+        raise ValueError("Für diesen Request ist keine Übernahme vorhanden, die zurückgenommen werden könnte.")
+    if not request.pre_accept_item_snapshot:
+        raise ValueError(
+            "Kein gespeicherter Vorzustand vorhanden — Rücknahme nicht möglich "
+            "(betrifft nur Übernahmen von vor Phase 11.6)."
+        )
+
+    draft = load_cut_plan_draft(project)
+    if draft is None:
+        raise ValueError("Kein Cut Plan Draft vorhanden.")
+
+    try:
+        restored_item = CutPlanItem.model_validate(request.pre_accept_item_snapshot)
+    except ValueError as exc:
+        raise ValueError(f"Gespeicherter Vorzustand konnte nicht wiederherstellt werden: {exc}") from exc
+
+    updated_items = [
+        restored_item if item.cut_item_id == request.cut_item_id else item for item in draft.items
+    ]
+    updated_cut_plan = draft.model_copy(update={"items": updated_items})
+
+    settings = settings_from_snapshot(project, updated_cut_plan)
+    # Visual Coverage erneut anwenden — idempotent, dasselbe Muster wie
+    # accept_cut_plan_supplement_candidate/apply_generic_fallback_to_cut_
+    # plan_item — stellt sicher, dass Nachbar-Items konsistent bleiben.
+    updated_cut_plan = apply_visual_coverage_extensions(updated_cut_plan, settings)
+
+    asset_usage_summary = update_asset_usage_summary(updated_cut_plan)
+    warnings, blockers = aggregate_item_level_errors(updated_cut_plan.items)
+    status = CUT_PLAN_STATUS_NEEDS_REVIEW if blockers else CUT_PLAN_STATUS_DRAFT
+    updated_cut_plan = updated_cut_plan.model_copy(
+        update={
+            "asset_usage_summary": asset_usage_summary,
+            "warnings": warnings,
+            "blockers": blockers,
+            "status": status,
+        }
+    )
+    save_cut_plan_draft(project, updated_cut_plan)
+
+    candidates_document = load_cut_plan_supplement_candidates_for_request(project, request_id)
+    reset_status = (
+        CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_CANDIDATES_FOUND
+        if candidates_document is not None and candidates_document.candidates
+        else CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_OPEN
+    )
+    update_cut_plan_supplement_request(
+        project,
+        request_id,
+        status=reset_status,
+        accepted_candidate_id="",
+        accepted_asset_id="",
+        accepted_asset_path="",
+        auto_resolve_status="",
+        auto_resolve_attempts=[],
+        pre_accept_item_snapshot={},
     )
     return updated_cut_plan
 

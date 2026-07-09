@@ -123,6 +123,8 @@ from otio_app.services.voiceover_generation.cut_plan_settings_service import (
 )
 from otio_app.services.voiceover_generation.cut_plan_generic_fallback_service import (
     apply_generic_fallback_for_cut_plan_request,
+    apply_manual_asset_for_cut_plan_request,
+    list_manual_asset_options_for_request,
 )
 from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_service import (
     AUTO_RESOLVE_STATUS_ACCEPTED,
@@ -138,6 +140,7 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     load_cut_plan_supplement_requests,
     save_cut_plan_supplement_requests,
     search_candidates_for_cut_plan_request,
+    unaccept_cut_plan_supplement_request,
 )
 from otio_app.services.voiceover_generation.cut_plan_edit_plan_bridge import (
     build_bridge_audio_plan_from_confirmed_cut_plan,
@@ -665,6 +668,19 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                     f"Akzeptiertes Asset: `{request.accepted_asset_id}` "
                     f"(`{request.accepted_asset_path}`)."
                 )
+                if st.button(
+                    "↩️ Übernahme zurücknehmen",
+                    key=f"cut_plan_supplement_unaccept_{project.id}_{request.request_id}",
+                    help="Setzt dieses Cut-Item auf den Zustand vor der Übernahme zurück. "
+                    "Löscht keine bereits heruntergeladenen Dateien.",
+                ):
+                    try:
+                        with st.spinner("Übernahme wird zurückgenommen…"):
+                            unaccept_cut_plan_supplement_request(project, request.request_id)
+                        st.success("Übernahme zurückgenommen. Bitte Cut Plan erneut validieren.")
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
 
             st.caption(f"Provider: {SUPPLEMENT_SOURCE_PEXELS} (Video & Foto)")
             if request.llm_queries:
@@ -714,7 +730,13 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                     st.success(f"{len(candidates_document.candidates)} Kandidat(en) gefunden.")
                 st.rerun()
 
-            is_already_accepted_for_auto = request.status == CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED
+            # Phase 11.6: deckt jetzt auch generischen Fallback und manuelle
+            # Zuweisung ab (nicht mehr nur request.status == ACCEPTED, das
+            # nur bei Stock-Akzeptanz gesetzt wird) — konsistent mit der
+            # verschärften Absicherung in accept_cut_plan_supplement_
+            # candidate/apply_generic_fallback_for_cut_plan_request/apply_
+            # manual_asset_for_cut_plan_request.
+            is_already_accepted_for_auto = bool(request.accepted_asset_id)
             if st.button(
                 "🤖 Automatisch lösen (Suche + Download + Prüfung + Akzeptieren)",
                 key=f"cut_plan_supplement_auto_resolve_{project.id}_{request.request_id}",
@@ -771,6 +793,51 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                 else:
                     st.warning("Kein passendes generisches Asset im Ordner-Inventory gefunden.")
                 st.rerun()
+
+            manual_options = list_manual_asset_options_for_request(
+                project, request, needed_duration_sec=request.needed_duration_sec
+            )
+            if manual_options:
+                with st.expander("Vorhandenes Asset manuell zuweisen", expanded=False):
+                    option_labels = {
+                        option.asset_id: (
+                            f"{option.asset_id} · {option.media_type or '—'} · "
+                            f"{option.duration_sec:.1f}s"
+                            + ("" if option.likely_usable else " · ⚠️ evtl. zu kurz")
+                        )
+                        for option in manual_options
+                    }
+                    selected_asset_id = st.selectbox(
+                        "Ordner-Asset",
+                        options=list(option_labels.keys()),
+                        format_func=lambda asset_id: option_labels.get(asset_id, asset_id),
+                        key=f"cut_plan_supplement_manual_select_{project.id}_{request.request_id}",
+                    )
+                    if st.button(
+                        "Manuell zuweisen",
+                        key=f"cut_plan_supplement_manual_assign_{project.id}_{request.request_id}",
+                        disabled=is_already_accepted_for_auto,
+                        help="Ordnet dieses Asset direkt zu — ohne Stock-Suche, ohne Gemini-Prüfung "
+                        "(das Material liegt bereits im eigenen Inventory).",
+                    ):
+                        selected_option = next(
+                            option for option in manual_options if option.asset_id == selected_asset_id
+                        )
+                        try:
+                            with st.spinner("Asset wird zugewiesen…"):
+                                apply_manual_asset_for_cut_plan_request(
+                                    project,
+                                    request.request_id,
+                                    asset_id=selected_option.asset_id,
+                                    asset_path=selected_option.path,
+                                )
+                            st.success(
+                                f"Asset `{selected_option.asset_id}` manuell zugewiesen. "
+                                "Bitte Cut Plan erneut validieren."
+                            )
+                            st.rerun()
+                        except ValueError as exc:
+                            st.error(str(exc))
 
             if request.auto_resolve_status:
                 with st.expander("Letzter Auto-Resolve-Versuch", expanded=False):

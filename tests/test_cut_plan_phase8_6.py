@@ -733,7 +733,7 @@ def test_second_accept_without_force_replace_is_blocked(tmp_path: Path) -> None:
 
     _search_and_accept_image(project, request_id, candidate_id="cand_first")
 
-    with pytest.raises(ValueError, match="already has an accepted candidate"):
+    with pytest.raises(ValueError, match="already has an accepted asset"):
         _search_and_accept_image(project, request_id, candidate_id="cand_second")
 
 
@@ -1123,6 +1123,102 @@ def test_ui_bulk_auto_resolve_button_disabled_when_no_open_requests(
     render_cut_plan_page()
 
     assert captured_disabled == [True]
+
+
+def test_ui_shows_unaccept_button_and_calls_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 11.6: 'Übernahme zurücknehmen' erscheint nur, wenn ein Asset
+    bereits übernommen wurde, und ruft unaccept_cut_plan_supplement_request auf."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    document = document.model_copy(
+        update={
+            "requests": [
+                r.model_copy(update={"accepted_asset_id": "asset_x", "accepted_asset_path": "/fake/x.mp4"})
+                for r in document.requests
+            ]
+        }
+    )
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    unaccept_key = f"cut_plan_supplement_unaccept_{project.id}_{request_id}"
+
+    def _fake_button(label, *args, **kwargs):
+        return kwargs.get("key") == unaccept_key
+
+    successes: list[str] = []
+    with patch(
+        "otio_app.ui.voiceover_generation.cut_plan_tab.unaccept_cut_plan_supplement_request"
+    ) as mock_unaccept:
+        _patch_project_selector(project, monkeypatch)
+        monkeypatch.setattr("streamlit.button", _fake_button)
+        monkeypatch.setattr("streamlit.rerun", lambda: None)
+        monkeypatch.setattr("streamlit.success", lambda msg: successes.append(msg))
+
+        render_cut_plan_page()
+
+    mock_unaccept.assert_called_once_with(project, request_id)
+    assert any("zurückgenommen" in msg for msg in successes)
+
+
+def test_ui_manual_asset_assignment_button_calls_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 11.6: manuelle Asset-Zuweisung ruft apply_manual_asset_for_
+    cut_plan_request mit dem in der Selectbox gewählten Asset auf."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    _write_inventory(project, ["establishing.mp4"])
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    assign_key = f"cut_plan_supplement_manual_assign_{project.id}_{request_id}"
+    select_key = f"cut_plan_supplement_manual_select_{project.id}_{request_id}"
+
+    def _fake_button(label, *args, **kwargs):
+        return kwargs.get("key") == assign_key
+
+    def _fake_selectbox(label, *args, **kwargs):
+        options = kwargs.get("options", [])
+        return options[0] if options else None
+
+    successes: list[str] = []
+    with (
+        patch(
+            "otio_app.ui.voiceover_generation.cut_plan_tab.list_manual_asset_options_for_request"
+        ) as mock_list_options,
+        patch(
+            "otio_app.ui.voiceover_generation.cut_plan_tab.apply_manual_asset_for_cut_plan_request"
+        ) as mock_apply,
+    ):
+        from otio_app.services.voiceover_generation.cut_plan_generic_fallback_service import ManualAssetOption
+
+        mock_list_options.return_value = [
+            ManualAssetOption(
+                asset_id="asset_establishing",
+                path="/fake/establishing.mp4",
+                description="Establishing shot",
+                media_type="video",
+                duration_sec=20.0,
+                likely_usable=True,
+            )
+        ]
+        _patch_project_selector(project, monkeypatch)
+        monkeypatch.setattr("streamlit.button", _fake_button)
+        monkeypatch.setattr("streamlit.selectbox", _fake_selectbox)
+        monkeypatch.setattr("streamlit.rerun", lambda: None)
+        monkeypatch.setattr("streamlit.success", lambda msg: successes.append(msg))
+
+        render_cut_plan_page()
+
+    mock_apply.assert_called_once_with(
+        project, request_id, asset_id="asset_establishing", asset_path="/fake/establishing.mp4"
+    )
+    assert any("manuell zugewiesen" in msg for msg in successes)
 
 
 def test_ui_shows_revalidate_hint_after_accept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
