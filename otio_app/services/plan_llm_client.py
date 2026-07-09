@@ -151,6 +151,16 @@ def _require_sdk_module(package_name: str, pip_name: str | None = None):
         ) from exc
 
 
+def _is_temperature_rejected_error(exc: Exception) -> bool:
+    """Erkennt API-Fehler wie "temperature is deprecated for this model." —
+    manche (v. a. neuere Reasoning-)Modelle akzeptieren nur noch den API-
+    Standardwert und lehnen eine explizit gesetzte temperature mit HTTP 400
+    ab. Wird genutzt, um genau in diesem Fall (und nur in diesem Fall) ohne
+    temperature erneut zu versuchen."""
+    message = str(exc).lower()
+    return "temperature" in message
+
+
 def _generate_gemini_text_with_usage(*, prompt: str, model: str) -> tuple[str, dict[str, int]]:
     api_key = get_api_key("GEMINI_API_KEY")
     if not api_key:
@@ -187,14 +197,25 @@ def _generate_openai_text_with_usage(*, prompt: str, model: str) -> tuple[str, d
             "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
         )
     _require_sdk_module("openai")
-    from openai import OpenAI
+    from openai import BadRequestError, OpenAI
 
     client = OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-    )
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+        )
+    except BadRequestError as exc:
+        if not _is_temperature_rejected_error(exc):
+            raise
+        # Neuere/Reasoning-Modelle lehnen eine explizite temperature ab und
+        # verlangen den API-Standardwert — ohne temperature erneut versuchen,
+        # statt die Erzeugung komplett fehlschlagen zu lassen.
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+        )
     message = response.choices[0].message.content if response.choices else None
     usage = getattr(response, "usage", None)
     token_usage = _token_usage_dict(
@@ -213,15 +234,28 @@ def _generate_anthropic_text_with_usage(*, prompt: str, model: str) -> tuple[str
             "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
         )
     _require_sdk_module("anthropic")
-    from anthropic import Anthropic
+    from anthropic import Anthropic, BadRequestError
 
     client = Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=8192,
-        temperature=0.2,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=8192,
+            temperature=0.2,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except BadRequestError as exc:
+        if not _is_temperature_rejected_error(exc):
+            raise
+        # Neuere/Reasoning-Modelle lehnen eine explizite temperature ab und
+        # verlangen den API-Standardwert — ohne temperature erneut versuchen,
+        # statt die Erzeugung komplett fehlschlagen zu lassen (siehe z. B.
+        # "temperature is deprecated for this model.").
+        response = client.messages.create(
+            model=model,
+            max_tokens=8192,
+            messages=[{"role": "user", "content": prompt}],
+        )
     parts = [block.text for block in response.content if getattr(block, "type", "") == "text"]
     usage = getattr(response, "usage", None)
     token_usage = _token_usage_dict(

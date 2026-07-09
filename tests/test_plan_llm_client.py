@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from otio_app.services.plan_llm_client import (
@@ -14,6 +15,16 @@ from otio_app.services.plan_llm_client import (
     resolve_plan_model,
     generate_plan_text,
 )
+
+
+def _bad_request_error(error_cls, message: str):
+    request = httpx.Request("POST", "https://example.invalid/v1/messages")
+    response = httpx.Response(
+        400,
+        request=request,
+        json={"type": "error", "error": {"type": "invalid_request_error", "message": message}},
+    )
+    return error_cls(message, response=response, body=None)
 
 
 def test_plan_model_provider_routes_by_prefix() -> None:
@@ -119,3 +130,69 @@ def test_require_sdk_module_returns_module_when_installed() -> None:
 
     module = _require_sdk_module("json")
     assert module.__name__ == "json"
+
+
+def test_generate_plan_text_anthropic_retries_without_temperature_when_deprecated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reproduziert 'Error code: 400 [...] temperature is deprecated for this
+    model.' — neuere Modelle lehnen eine explizite temperature ab. Statt
+    fehlzuschlagen, muss die Erzeugung automatisch ohne temperature
+    wiederholt werden und erfolgreich zurückkommen."""
+    import anthropic
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    block = MagicMock(type="text", text='{"beats":[]}')
+    success_response = MagicMock(content=[block])
+    error = _bad_request_error(anthropic.BadRequestError, "temperature is deprecated for this model.")
+
+    with patch("anthropic.Anthropic") as mock_anthropic:
+        mock_anthropic.return_value.messages.create.side_effect = [error, success_response]
+        text = generate_plan_text(prompt="Plan this folder", model="anthropic:claude-sonnet-5")
+
+    assert text == '{"beats":[]}'
+    assert mock_anthropic.return_value.messages.create.call_count == 2
+    first_call_kwargs = mock_anthropic.return_value.messages.create.call_args_list[0].kwargs
+    retry_call_kwargs = mock_anthropic.return_value.messages.create.call_args_list[1].kwargs
+    assert first_call_kwargs["temperature"] == 0.2
+    assert "temperature" not in retry_call_kwargs
+
+
+def test_generate_plan_text_anthropic_reraises_unrelated_bad_request_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Andere 400-Fehler (z. B. ein tatsächlich ungültiges Modell) dürfen NICHT
+    stillschweigend als 'temperature'-Problem behandelt werden."""
+    import anthropic
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    error = _bad_request_error(anthropic.BadRequestError, "model: not-a-real-model is not a valid model ID.")
+
+    with patch("anthropic.Anthropic") as mock_anthropic:
+        mock_anthropic.return_value.messages.create.side_effect = error
+        with pytest.raises(anthropic.BadRequestError):
+            generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
+
+    assert mock_anthropic.return_value.messages.create.call_count == 1
+
+
+def test_generate_plan_text_openai_retries_without_temperature_when_deprecated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import openai
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    success_response = MagicMock()
+    success_response.choices = [MagicMock(message=MagicMock(content='{"beats":[]}'))]
+    error = _bad_request_error(openai.BadRequestError, "temperature is deprecated for this model.")
+
+    with patch("openai.OpenAI") as mock_openai:
+        mock_openai.return_value.chat.completions.create.side_effect = [error, success_response]
+        text = generate_plan_text(prompt="Plan this folder", model="openai:gpt-5.5")
+
+    assert text == '{"beats":[]}'
+    assert mock_openai.return_value.chat.completions.create.call_count == 2
+    retry_call_kwargs = mock_openai.return_value.chat.completions.create.call_args_list[1].kwargs
+    assert "temperature" not in retry_call_kwargs
