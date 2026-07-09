@@ -934,7 +934,7 @@ def test_ui_shows_auto_resolve_button_and_result_trace(
         render_cut_plan_page()
 
     mock_auto_resolve.assert_called_once()
-    assert any("Kein Kandidat hat die Prüfung bestanden" in msg for msg in warnings)
+    assert any("Kein Stock-Kandidat hat die Prüfung bestanden" in msg for msg in warnings)
 
     # Zweiter Rendering-Durchlauf ohne Klick: eine bereits PERSISTIERTE Trace
     # (wie sie die echte auto_resolve_cut_plan_supplement_request-Funktion
@@ -959,6 +959,95 @@ def test_ui_shows_auto_resolve_button_and_result_trace(
     monkeypatch.setattr("streamlit.button", lambda *a, **k: False)
     monkeypatch.setattr("streamlit.rerun", lambda: None)
     render_cut_plan_page()  # darf nicht werfen; Trace wird erneut angezeigt
+
+
+def test_ui_shows_generic_fallback_success_message_for_auto_resolve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 11.4: wenn der Auto-Resolver GENERIC_FALLBACK_USED liefert,
+    zeigt die UI eine klar unterscheidbare Erfolgsmeldung statt der
+    ACCEPTED-Meldung."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    auto_resolve_key = f"cut_plan_supplement_auto_resolve_{project.id}_{request_id}"
+
+    def _fake_button(label, *args, **kwargs):
+        return kwargs.get("key") == auto_resolve_key
+
+    from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_service import (
+        AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED,
+        CutPlanSupplementAutoResolveResult,
+    )
+
+    fake_result = CutPlanSupplementAutoResolveResult(
+        status=AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED,
+        request_id=request_id,
+        accepted_asset_id="asset_generic_establishing",
+        attempts=[],
+    )
+
+    successes: list[str] = []
+    with patch(
+        "otio_app.ui.voiceover_generation.cut_plan_tab.auto_resolve_cut_plan_supplement_request",
+        return_value=fake_result,
+    ):
+        _patch_project_selector(project, monkeypatch)
+        monkeypatch.setattr("streamlit.button", _fake_button)
+        monkeypatch.setattr("streamlit.rerun", lambda: None)
+        monkeypatch.setattr("streamlit.success", lambda msg: successes.append(msg))
+
+        render_cut_plan_page()
+
+    assert any("asset_generic_establishing" in msg for msg in successes)
+    assert any("generisches Ordner-Asset" in msg for msg in successes)
+
+
+def test_ui_generic_fallback_button_calls_service_and_shows_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Der eigenständige Button 'Generisches Ordner-Asset verwenden' löst
+    KEINE Stock-Suche aus, sondern ruft direkt apply_generic_fallback_for_
+    cut_plan_request auf."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    generic_key = f"cut_plan_supplement_generic_fallback_{project.id}_{request_id}"
+
+    def _fake_button(label, *args, **kwargs):
+        return kwargs.get("key") == generic_key
+
+    from otio_app.services.generic_outro_selector import GenericAssetCandidate
+
+    fake_candidate = GenericAssetCandidate(
+        path="/fake/establishing.mp4",
+        asset_id="asset_establishing",
+        description="Establishing shot",
+        score=0.8,
+        selection_reason="Neutraler Shot.",
+        warnings=[],
+    )
+
+    successes: list[str] = []
+    with patch(
+        "otio_app.ui.voiceover_generation.cut_plan_tab.apply_generic_fallback_for_cut_plan_request",
+        return_value=(None, fake_candidate),
+    ) as mock_fallback:
+        _patch_project_selector(project, monkeypatch)
+        monkeypatch.setattr("streamlit.button", _fake_button)
+        monkeypatch.setattr("streamlit.rerun", lambda: None)
+        monkeypatch.setattr("streamlit.success", lambda msg: successes.append(msg))
+
+        render_cut_plan_page()
+
+    mock_fallback.assert_called_once_with(project, request_id)
+    assert any("asset_establishing" in msg for msg in successes)
 
 
 def test_ui_shows_revalidate_hint_after_accept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

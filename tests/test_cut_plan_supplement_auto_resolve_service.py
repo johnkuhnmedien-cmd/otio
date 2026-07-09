@@ -11,14 +11,16 @@ from unittest.mock import patch
 import pytest
 
 from otio_app.models import Project, ProjectMode
+from otio_app.services.generic_outro_selector import GenericAssetCandidate
 from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_service import (
     AUTO_RESOLVE_STATUS_ACCEPTED,
-    AUTO_RESOLVE_STATUS_FAILED,
+    AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED,
     AUTO_RESOLVE_STATUS_NO_MATCH,
     DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL,
     _describe_and_validate_downloaded_asset,
     auto_resolve_cut_plan_supplement_request,
 )
+from otio_app.services.voiceover_generation.cut_plan_builder import save_cut_plan_draft
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     build_supplement_requests_from_cut_plan,
     load_cut_plan_supplement_requests,
@@ -77,6 +79,7 @@ def _setup_request(tmp_path: Path) -> tuple[Project, str]:
     project = _make_project(tmp_path)
     item = _minimal_item()
     cut_plan = CutPlanDocument(project_id=project.id, timeline_fps=25, items=[item])
+    save_cut_plan_draft(project, cut_plan)
     document = build_supplement_requests_from_cut_plan(project, cut_plan)
     save_cut_plan_supplement_requests(project, document)
     return project, document.requests[0].request_id
@@ -242,7 +245,11 @@ def test_auto_resolve_handles_download_failure_and_continues(tmp_path: Path) -> 
     mock_accept.assert_called_once()
 
 
-def test_auto_resolve_search_exception_returns_failed_without_raising(tmp_path: Path) -> None:
+def test_auto_resolve_search_exception_tries_generic_fallback_then_no_match(tmp_path: Path) -> None:
+    """Phase 11.4: ein Suchfehler löst jetzt ZUERST den generischen Ordner-
+    Fallback aus (kein weiterer Provider-/LLM-Aufruf nötig) — erst wenn
+    AUCH das nichts findet (hier: leeres Ordner-Inventory), bleibt es bei
+    NO_MATCH. Die ursprüngliche Fehlermeldung bleibt zur Diagnose erhalten."""
     project, request_id = _setup_request(tmp_path)
 
     with patch(f"{_MODULE}.search_candidates_for_cut_plan_request", side_effect=RuntimeError("network down")):
@@ -250,8 +257,111 @@ def test_auto_resolve_search_exception_returns_failed_without_raising(tmp_path: 
             project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
         )
 
-    assert result.status == AUTO_RESOLVE_STATUS_FAILED
+    assert result.status == AUTO_RESOLVE_STATUS_NO_MATCH
     assert "network down" in result.error
+
+
+def test_auto_resolve_search_exception_uses_generic_fallback_when_available(tmp_path: Path) -> None:
+    """Wenn der generische Fallback tatsächlich einen Kandidaten findet,
+    wird er trotz Suchfehler verwendet — Ergebnis GENERIC_FALLBACK_USED."""
+    project, request_id = _setup_request(tmp_path)
+    fake_candidate = GenericAssetCandidate(
+        path="/fake/generic.mp4",
+        asset_id="asset_generic",
+        description="Establishing shot",
+        score=0.8,
+        selection_reason="Neutraler Shot.",
+        warnings=[],
+    )
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", side_effect=RuntimeError("network down")),
+        patch(f"{_MODULE}.apply_generic_fallback_for_cut_plan_request", return_value=(None, fake_candidate)),
+    ):
+        result = auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    assert result.status == AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED
+    assert result.accepted_asset_id == "asset_generic"
+
+
+def test_auto_resolve_no_candidates_found_tries_generic_fallback(tmp_path: Path) -> None:
+    project, request_id = _setup_request(tmp_path)
+    empty_doc = CutPlanSupplementCandidatesDocument(
+        project_id=project.id, request_id=request_id, provider="pexels", candidates=[], status="NO_RESULTS"
+    )
+    fake_candidate = GenericAssetCandidate(
+        path="/fake/generic.mp4",
+        asset_id="asset_generic",
+        description="Establishing shot",
+        score=0.8,
+        selection_reason="Neutraler Shot.",
+        warnings=[],
+    )
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", return_value=empty_doc),
+        patch(f"{_MODULE}.apply_generic_fallback_for_cut_plan_request", return_value=(None, fake_candidate)),
+    ):
+        result = auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    assert result.status == AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED
+    assert result.accepted_asset_id == "asset_generic"
+
+
+def test_auto_resolve_uses_generic_fallback_when_no_stock_candidate_passes(tmp_path: Path) -> None:
+    project, request_id = _setup_request(tmp_path)
+    candidates_doc = _fake_candidates_document(request_id, ["cand_1"])
+    fake_candidate = GenericAssetCandidate(
+        path="/fake/generic.mp4",
+        asset_id="asset_generic",
+        description="Establishing shot",
+        score=0.8,
+        selection_reason="Neutraler Shot.",
+        warnings=[],
+    )
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", return_value=candidates_doc),
+        patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid)),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("FAIL", score=0.1)),
+        patch(f"{_MODULE}.apply_generic_fallback_for_cut_plan_request", return_value=(None, fake_candidate)) as mock_fallback,
+        patch(f"{_MODULE}.accept_cut_plan_supplement_candidate") as mock_accept,
+    ):
+        result = auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    assert result.status == AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED
+    assert result.accepted_asset_id == "asset_generic"
+    assert len(result.attempts) == 1  # der eine Stock-Versuch bleibt in der Trace erhalten
+    mock_accept.assert_not_called()
+    mock_fallback.assert_called_once()
+
+    reloaded = load_cut_plan_supplement_requests(project)
+    persisted = next(r for r in reloaded.requests if r.request_id == request_id)
+    assert persisted.auto_resolve_status == AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED
+
+
+def test_auto_resolve_generic_fallback_exception_is_recorded_and_still_returns_no_match(tmp_path: Path) -> None:
+    project, request_id = _setup_request(tmp_path)
+    candidates_doc = _fake_candidates_document(request_id, ["cand_1"])
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", return_value=candidates_doc),
+        patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid)),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("FAIL", score=0.1)),
+        patch(f"{_MODULE}.apply_generic_fallback_for_cut_plan_request", side_effect=RuntimeError("fallback broke")),
+    ):
+        result = auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    assert result.status == AUTO_RESOLVE_STATUS_NO_MATCH
+    assert any(a.validation_status == "GENERIC_FALLBACK_FAILED" for a in result.attempts)
 
 
 def test_auto_resolve_uses_default_validation_model_when_not_overridden(tmp_path: Path) -> None:

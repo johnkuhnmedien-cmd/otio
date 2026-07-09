@@ -121,8 +121,12 @@ from otio_app.services.voiceover_generation.cut_plan_settings_service import (
     load_cut_plan_settings,
     save_cut_plan_settings,
 )
+from otio_app.services.voiceover_generation.cut_plan_generic_fallback_service import (
+    apply_generic_fallback_for_cut_plan_request,
+)
 from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_service import (
     AUTO_RESOLVE_STATUS_ACCEPTED,
+    AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED,
     AUTO_RESOLVE_STATUS_NO_MATCH,
     auto_resolve_cut_plan_supplement_request,
 )
@@ -734,13 +738,37 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                         f"(nach {len(auto_result.attempts)} geprüftem/n Kandidaten). "
                         "Bitte Cut Plan erneut validieren."
                     )
+                elif auto_result.status == AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED:
+                    st.success(
+                        f"Kein Stock-Kandidat hat bestanden — stattdessen generisches Ordner-Asset "
+                        f"`{auto_result.accepted_asset_id}` verwendet. Bitte Cut Plan erneut validieren."
+                    )
                 elif auto_result.status == AUTO_RESOLVE_STATUS_NO_MATCH:
                     st.warning(
-                        f"Kein Kandidat hat die Prüfung bestanden ({len(auto_result.attempts)} geprüft). "
-                        "Kein Asset wurde automatisch übernommen."
+                        f"Kein Stock-Kandidat hat die Prüfung bestanden ({len(auto_result.attempts)} geprüft) "
+                        "und auch kein passendes generisches Ordner-Asset gefunden. Kein Asset wurde "
+                        "automatisch übernommen."
                     )
                 else:
                     st.error(f"Automatisches Lösen fehlgeschlagen: {auto_result.error}")
+                st.rerun()
+
+            if st.button(
+                "Generisches Ordner-Asset verwenden (ohne Stock-Suche)",
+                key=f"cut_plan_supplement_generic_fallback_{project.id}_{request.request_id}",
+                disabled=is_already_accepted_for_auto,
+                help="Sucht KEINE Stock-Kandidaten — wählt direkt ein neutrales, bereits vorhandenes "
+                "Asset aus demselben Ordner-Inventory.",
+            ):
+                with st.spinner("Generisches Asset wird gesucht…"):
+                    _, generic_candidate = apply_generic_fallback_for_cut_plan_request(project, request.request_id)
+                if generic_candidate is not None:
+                    st.success(
+                        f"Generisches Ordner-Asset `{generic_candidate.asset_id}` verwendet. "
+                        "Bitte Cut Plan erneut validieren."
+                    )
+                else:
+                    st.warning("Kein passendes generisches Asset im Ordner-Inventory gefunden.")
                 st.rerun()
 
             if request.auto_resolve_status:

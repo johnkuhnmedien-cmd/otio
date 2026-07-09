@@ -16,9 +16,11 @@ Materials zu einem einzigen automatischen Ablauf für EINEN Request:
   4. beim ERSTEN Kandidaten mit Status PASS: automatisch akzeptieren (siehe
      accept_cut_plan_supplement_candidate) und dem Cut-Item zuordnen —
      Schleife bricht ab
-  5. kein Kandidat erreicht PASS: Ergebnis NO_MATCH. KEIN automatischer
-     Fallback auf ein generisches Ordner-Asset in dieser Phase — das ist
-     eine spätere, separate Phase (11.4).
+  5. kein Kandidat erreicht PASS: Phase 11.4 — automatischer Fallback auf
+     ein bereits vorhandenes, neutrales Asset aus demselben Ordner-
+     Inventory (siehe cut_plan_generic_fallback_service.py). Erfolgreich ->
+     Ergebnis GENERIC_FALLBACK_USED. Auch das schlägt fehl (z. B. keine
+     Assets im Ordner oder alle zu kurz) -> Ergebnis NO_MATCH.
 
 Ohne konfigurierten GEMINI_API_KEY wird NIE automatisch akzeptiert (kein
 heuristischer Ersatz-Fallback, der versehentlich PASS liefern könnte) —
@@ -49,6 +51,9 @@ from otio_app.services.gemini_client import (
 )
 from otio_app.services.media_utils import is_image_media
 from otio_app.services.supplement_coverage import derive_must_show_keywords
+from otio_app.services.voiceover_generation.cut_plan_generic_fallback_service import (
+    apply_generic_fallback_for_cut_plan_request,
+)
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     accept_cut_plan_supplement_candidate,
     download_cut_plan_supplement_candidate,
@@ -65,6 +70,7 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_models import (
 
 __all__ = [
     "AUTO_RESOLVE_STATUS_ACCEPTED",
+    "AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED",
     "AUTO_RESOLVE_STATUS_NO_MATCH",
     "AUTO_RESOLVE_STATUS_FAILED",
     "VALIDATION_STATUS_PASS",
@@ -74,6 +80,7 @@ __all__ = [
 ]
 
 AUTO_RESOLVE_STATUS_ACCEPTED = "ACCEPTED"
+AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED = "GENERIC_FALLBACK_USED"
 AUTO_RESOLVE_STATUS_NO_MATCH = "NO_MATCH"
 AUTO_RESOLVE_STATUS_FAILED = "FAILED"
 
@@ -91,7 +98,7 @@ DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL = "gemini-3-flash-preview"
 
 @dataclass
 class CutPlanSupplementAutoResolveResult:
-    status: str  # ACCEPTED | NO_MATCH | FAILED
+    status: str  # ACCEPTED | GENERIC_FALLBACK_USED | NO_MATCH | FAILED
     request_id: str
     accepted_candidate_id: str = ""
     accepted_asset_id: str = ""
@@ -187,10 +194,53 @@ def auto_resolve_cut_plan_supplement_request(
 ) -> CutPlanSupplementAutoResolveResult:
     """Führt den vollständigen Auto-Resolve-Ablauf (siehe Modul-Docstring)
     für GENAU EINEN Request aus. Bricht bei einem Kandidaten mit PASS ab und
-    akzeptiert ihn automatisch; sonst NO_MATCH. Wirft KEINE Exception nach
-    außen — jeder Fehlerfall (Suche, Download, Beschreibung+Validierung)
-    wird im Ergebnis abgebildet, damit ein späterer Batch-Lauf über viele
-    Requests niemals an einem einzigen Request abbricht."""
+    akzeptiert ihn automatisch; sonst greift der generische Ordner-Fallback
+    (Phase 11.4) — an JEDEM Ausstiegspunkt, an dem kein Stock-Kandidat zum
+    Einsatz kommt (Suchfehler, keine Suchergebnisse, kein Kandidat bestanden),
+    damit möglichst nie ein Item unversorgt bleibt. Wirft KEINE Exception
+    nach außen — jeder Fehlerfall wird im Ergebnis abgebildet, damit ein
+    späterer Batch-Lauf über viele Requests niemals an einem einzigen
+    Request abbricht."""
+
+    def _fallback_or_no_match(
+        attempts: list[CutPlanSupplementAutoResolveAttempt], *, search_error: str = ""
+    ) -> CutPlanSupplementAutoResolveResult:
+        try:
+            _updated_cut_plan, fallback_candidate = apply_generic_fallback_for_cut_plan_request(
+                project, request_id
+            )
+        except Exception as exc:  # noqa: BLE001 — generischer Fallback darf nicht crashen
+            fallback_candidate = None
+            attempts = [
+                *attempts,
+                CutPlanSupplementAutoResolveAttempt(
+                    candidate_id="generic_fallback",
+                    validation_status="GENERIC_FALLBACK_FAILED",
+                    validation_reason=str(exc),
+                ),
+            ]
+
+        if fallback_candidate is not None:
+            update_cut_plan_supplement_request(
+                project,
+                request_id,
+                auto_resolve_status=AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED,
+                auto_resolve_attempts=attempts,
+            )
+            return CutPlanSupplementAutoResolveResult(
+                status=AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED,
+                request_id=request_id,
+                accepted_asset_id=fallback_candidate.asset_id,
+                attempts=attempts,
+            )
+
+        update_cut_plan_supplement_request(
+            project, request_id, auto_resolve_status=AUTO_RESOLVE_STATUS_NO_MATCH, auto_resolve_attempts=attempts
+        )
+        return CutPlanSupplementAutoResolveResult(
+            status=AUTO_RESOLVE_STATUS_NO_MATCH, request_id=request_id, attempts=attempts, error=search_error
+        )
+
     try:
         candidates_document = search_candidates_for_cut_plan_request(
             project,
@@ -200,25 +250,13 @@ def auto_resolve_cut_plan_supplement_request(
             query_llm_model=query_llm_model,
         )
     except Exception as exc:  # noqa: BLE001 — Suche darf den Auto-Resolver nicht crashen
-        update_cut_plan_supplement_request(
-            project, request_id, auto_resolve_status=AUTO_RESOLVE_STATUS_FAILED, auto_resolve_attempts=[]
-        )
-        return CutPlanSupplementAutoResolveResult(
-            status=AUTO_RESOLVE_STATUS_FAILED, request_id=request_id, error=str(exc)
-        )
+        return _fallback_or_no_match([], search_error=str(exc))
 
     if (
         candidates_document.status != CUT_PLAN_SUPPLEMENT_CANDIDATES_STATUS_READY
         or not candidates_document.candidates
     ):
-        update_cut_plan_supplement_request(
-            project, request_id, auto_resolve_status=AUTO_RESOLVE_STATUS_NO_MATCH, auto_resolve_attempts=[]
-        )
-        return CutPlanSupplementAutoResolveResult(
-            status=AUTO_RESOLVE_STATUS_NO_MATCH,
-            request_id=request_id,
-            error=candidates_document.error_message,
-        )
+        return _fallback_or_no_match([], search_error=candidates_document.error_message)
 
     requests_document = load_cut_plan_supplement_requests(project)
     request = (
@@ -285,9 +323,6 @@ def auto_resolve_cut_plan_supplement_request(
                 attempts=attempts,
             )
 
-    update_cut_plan_supplement_request(
-        project, request_id, auto_resolve_status=AUTO_RESOLVE_STATUS_NO_MATCH, auto_resolve_attempts=attempts
-    )
-    return CutPlanSupplementAutoResolveResult(
-        status=AUTO_RESOLVE_STATUS_NO_MATCH, request_id=request_id, attempts=attempts
-    )
+    # Phase 11.4: kein Stock-Kandidat hat bestanden -> generischer Ordner-
+    # Fallback, BEVOR endgültig NO_MATCH zurückgegeben wird.
+    return _fallback_or_no_match(attempts)
