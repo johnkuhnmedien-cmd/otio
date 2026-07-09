@@ -32,7 +32,11 @@ def _sample_brief() -> ProjectBrief:
         video_title="Wunder der Wüste",
         language="DE",
         tone_tags=["cinematic", "mysterious"],
-        negative_rule_flags={"no_invented_facts": True, "no_repetition": True, "no_clickbait_phrases": False},
+        negative_rule_flags={
+            "no_unverified_historical_claims": True,
+            "no_party_scenes": True,
+            "voice_not_ai_sounding": False,
+        },
         negative_rules_freetext="Keine Klischees über die Wüste.",
         forbidden_phrases=["atemberaubend", "must-see"],
         global_extra_prompt="Schreibe wie ein Naturfilm-Kommentator.",
@@ -64,9 +68,9 @@ def test_prompt_contains_intro_and_segment_references() -> None:
 
 def test_prompt_contains_negative_rules_and_forbidden_phrases() -> None:
     prompt = build_style_profile_prompt(_sample_brief(), _sample_refs())
-    assert "no_invented_facts" in prompt
-    assert "no_repetition" in prompt
-    assert "no_clickbait_phrases" not in prompt  # deaktiviert, nicht in "active" Liste
+    assert "no_unverified_historical_claims" in prompt
+    assert "no_party_scenes" in prompt
+    assert "voice_not_ai_sounding" not in prompt  # deaktiviert, nicht in "active" Liste
     assert "atemberaubend" in prompt
     assert "must-see" in prompt
     assert "Keine Klischees über die Wüste." in prompt
@@ -77,9 +81,9 @@ def test_prompt_active_negative_rules_include_llm_instruction_text() -> None:
     UND LLM missverständlich — die ausführliche Formulierung muss mit
     ausgegeben werden, nicht nur der kompakte Key."""
     prompt = build_style_profile_prompt(_sample_brief(), _sample_refs())
-    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["no_invented_facts"] in prompt
-    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["no_repetition"] in prompt
-    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["no_clickbait_phrases"] not in prompt
+    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["no_unverified_historical_claims"] in prompt
+    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["no_party_scenes"] in prompt
+    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["voice_not_ai_sounding"] not in prompt
 
 
 def _sample_brief_with_new_rules() -> ProjectBrief:

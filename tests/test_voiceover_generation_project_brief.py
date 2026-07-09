@@ -68,13 +68,22 @@ def test_new_standard_negative_rules_exist_and_are_active_by_default(tmp_path: P
         assert brief.negative_rule_flags[flag] is True
 
 
-def test_existing_negative_rules_not_duplicated() -> None:
-    """"Keine Wiederholungen" und "Nicht nur Assetbeschreibungen" waren
-    bereits vorhanden (no_repetition/not_just_asset_descriptions) und
-    dürfen durch die neuen Standardregeln nicht dupliziert werden."""
+def test_negative_rule_flags_have_no_duplicates() -> None:
     assert len(BRIEF_NEGATIVE_RULE_FLAGS) == len(set(BRIEF_NEGATIVE_RULE_FLAGS))
-    assert "no_repetition" in BRIEF_NEGATIVE_RULE_FLAGS
-    assert "not_just_asset_descriptions" in BRIEF_NEGATIVE_RULE_FLAGS
+
+
+def test_unused_standard_negative_rules_removed_from_ui() -> None:
+    """Nutzerfeedback (Juli 2026): die ursprünglichen Standardregeln, die im
+    laufenden Projekt nie aktiviert wurden ("nicht gecheckte Boxen"), wurden
+    auf ausdrücklichen Wunsch komplett aus der UI/Konfiguration entfernt —
+    nur die tatsächlich genutzten 5 Regeln bleiben übrig."""
+    assert set(BRIEF_NEGATIVE_RULE_FLAGS) == {
+        "no_unverified_historical_claims",
+        "biblical_chronology_required",
+        "no_party_scenes",
+        "voice_not_ai_sounding",
+        "no_cliches",
+    }
 
 
 def test_every_negative_rule_flag_has_a_label_and_instruction() -> None:

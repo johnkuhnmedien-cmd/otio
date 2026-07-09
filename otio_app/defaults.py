@@ -149,49 +149,28 @@ BRIEF_TONE_TAG_CHOICES = (
     "poetic but factual",
     "high-end YouTube documentary",
 )
-BRIEF_NEGATIVE_RULE_NO_INVENTED_FACTS = "no_invented_facts"
-BRIEF_NEGATIVE_RULE_NO_EXAGGERATED_SUPERLATIVES = "no_exaggerated_superlatives"
-BRIEF_NEGATIVE_RULE_NO_CLICKBAIT_PHRASES = "no_clickbait_phrases"
-BRIEF_NEGATIVE_RULE_NO_REPETITION = "no_repetition"
-BRIEF_NEGATIVE_RULE_NO_DIRECT_VIEWER_ADDRESS = "no_direct_viewer_address"
-BRIEF_NEGATIVE_RULE_NO_IN_THIS_VIDEO_PHRASING = "no_in_this_video_phrasing"
 BRIEF_NEGATIVE_RULE_NO_UNVERIFIED_HISTORICAL_CLAIMS = "no_unverified_historical_claims"
-BRIEF_NEGATIVE_RULE_NOT_JUST_ASSET_DESCRIPTIONS = "not_just_asset_descriptions"
-BRIEF_NEGATIVE_RULE_DOCUMENTARY_PROSE_REQUIRED = "documentary_prose_required"
 # Nutzerfeedback (Juli 2026): die bisherigen Negativregeln waren für den
 # konkreten Anwendungsfall unvollständig/missverständlich — vier neue,
-# vom Nutzer explizit gewünschte Standardregeln ergänzt. "no_repetition" und
-# "not_just_asset_descriptions" deckten "Keine Wiederholungen" bzw. "Nicht
-# nur Assetbeschreibungen" bereits ab und wurden NICHT dupliziert.
+# vom Nutzer explizit gewünschte Standardregeln ergänzt. Die übrigen,
+# ungenutzten Standardregeln (no_invented_facts, no_exaggerated_superlatives,
+# no_clickbait_phrases, no_repetition, no_direct_viewer_address,
+# no_in_this_video_phrasing, not_just_asset_descriptions,
+# documentary_prose_required) wurden auf ausdrücklichen Wunsch aus der UI
+# entfernt, da sie im laufenden Projekt nie aktiviert waren.
 BRIEF_NEGATIVE_RULE_BIBLICAL_CHRONOLOGY_REQUIRED = "biblical_chronology_required"
 BRIEF_NEGATIVE_RULE_NO_PARTY_SCENES = "no_party_scenes"
 BRIEF_NEGATIVE_RULE_VOICE_NOT_AI_SOUNDING = "voice_not_ai_sounding"
 BRIEF_NEGATIVE_RULE_NO_CLICHES = "no_cliches"
 BRIEF_NEGATIVE_RULE_FLAGS = (
-    BRIEF_NEGATIVE_RULE_NO_INVENTED_FACTS,
-    BRIEF_NEGATIVE_RULE_NO_EXAGGERATED_SUPERLATIVES,
-    BRIEF_NEGATIVE_RULE_NO_CLICKBAIT_PHRASES,
-    BRIEF_NEGATIVE_RULE_NO_REPETITION,
-    BRIEF_NEGATIVE_RULE_NO_DIRECT_VIEWER_ADDRESS,
-    BRIEF_NEGATIVE_RULE_NO_IN_THIS_VIDEO_PHRASING,
     BRIEF_NEGATIVE_RULE_NO_UNVERIFIED_HISTORICAL_CLAIMS,
-    BRIEF_NEGATIVE_RULE_NOT_JUST_ASSET_DESCRIPTIONS,
-    BRIEF_NEGATIVE_RULE_DOCUMENTARY_PROSE_REQUIRED,
     BRIEF_NEGATIVE_RULE_BIBLICAL_CHRONOLOGY_REQUIRED,
     BRIEF_NEGATIVE_RULE_NO_PARTY_SCENES,
     BRIEF_NEGATIVE_RULE_VOICE_NOT_AI_SOUNDING,
     BRIEF_NEGATIVE_RULE_NO_CLICHES,
 )
 BRIEF_NEGATIVE_RULE_LABELS = {
-    BRIEF_NEGATIVE_RULE_NO_INVENTED_FACTS: "Keine erfundenen Fakten",
-    BRIEF_NEGATIVE_RULE_NO_EXAGGERATED_SUPERLATIVES: "Keine übertriebenen Superlative",
-    BRIEF_NEGATIVE_RULE_NO_CLICKBAIT_PHRASES: "Keine Clickbait-Floskeln",
-    BRIEF_NEGATIVE_RULE_NO_REPETITION: "Keine Wiederholungen",
-    BRIEF_NEGATIVE_RULE_NO_DIRECT_VIEWER_ADDRESS: "Keine direkte Zuschaueransprache",
-    BRIEF_NEGATIVE_RULE_NO_IN_THIS_VIDEO_PHRASING: 'Keine Formulierungen wie "in diesem Video"',
     BRIEF_NEGATIVE_RULE_NO_UNVERIFIED_HISTORICAL_CLAIMS: "Keine unbelegten historischen Behauptungen",
-    BRIEF_NEGATIVE_RULE_NOT_JUST_ASSET_DESCRIPTIONS: "Nicht nur Assetbeschreibungen",
-    BRIEF_NEGATIVE_RULE_DOCUMENTARY_PROSE_REQUIRED: "Text muss wie echte Doku-Prosa klingen",
     BRIEF_NEGATIVE_RULE_BIBLICAL_CHRONOLOGY_REQUIRED: (
         "Zeitangaben müssen mit der biblischen Zeitrechnung übereinstimmen"
     ),
@@ -204,37 +183,8 @@ BRIEF_NEGATIVE_RULE_LABELS = {
 # Prompt selbsterklärend, statt dass das LLM (oder der Nutzer beim Lesen
 # eines Prompt-Exports) allein aus dem Key auf die Bedeutung schließen muss.
 BRIEF_NEGATIVE_RULE_INSTRUCTIONS: dict[str, str] = {
-    BRIEF_NEGATIVE_RULE_NO_INVENTED_FACTS: (
-        "Do not invent facts, numbers, or details that are not supported by the source "
-        "material, assets, or general knowledge."
-    ),
-    BRIEF_NEGATIVE_RULE_NO_EXAGGERATED_SUPERLATIVES: (
-        'Avoid exaggerated superlatives (e.g. "the most beautiful place on Earth") unless '
-        "clearly and safely supportable."
-    ),
-    BRIEF_NEGATIVE_RULE_NO_CLICKBAIT_PHRASES: (
-        "Avoid clickbait-style phrasing and sensationalist hooks (e.g. \"you won't believe\")."
-    ),
-    BRIEF_NEGATIVE_RULE_NO_REPETITION: (
-        "Do not repeat the same words, phrases, or sentence structures too often."
-    ),
-    BRIEF_NEGATIVE_RULE_NO_DIRECT_VIEWER_ADDRESS: (
-        'Do not address the viewer directly (e.g. "you will see", "imagine yourself").'
-    ),
-    BRIEF_NEGATIVE_RULE_NO_IN_THIS_VIDEO_PHRASING: (
-        'Never use meta-phrasing that refers to the video itself (e.g. "in this video", '
-        '"in this episode").'
-    ),
     BRIEF_NEGATIVE_RULE_NO_UNVERIFIED_HISTORICAL_CLAIMS: (
         "Do not state historical claims that are not verifiable or widely accepted as fact."
-    ),
-    BRIEF_NEGATIVE_RULE_NOT_JUST_ASSET_DESCRIPTIONS: (
-        "Do not merely describe what is visible in the assets — write narrative documentary "
-        "prose instead."
-    ),
-    BRIEF_NEGATIVE_RULE_DOCUMENTARY_PROSE_REQUIRED: (
-        "The text must read like professional documentary narration, not a script outline or "
-        "a bullet-point list."
     ),
     BRIEF_NEGATIVE_RULE_BIBLICAL_CHRONOLOGY_REQUIRED: (
         "Any time references, ages, or historical/geological dates must be consistent with "
