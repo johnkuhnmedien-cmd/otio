@@ -36,10 +36,7 @@ from otio_app.services.gemini_client import _extract_json
 from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.media_utils import is_image_media, is_video_media, probe_duration_seconds
-from otio_app.services.plan_llm_client import (
-    PlanLlmNotConfiguredError,
-    generate_plan_text_with_metadata,
-)
+from otio_app.services.plan_llm_client import generate_plan_text_with_metadata
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
     build_default_folder_voiceover_settings,
@@ -514,7 +511,9 @@ def generate_folder_voiceover(
 
     try:
         llm_response = generate_plan_text_with_metadata(prompt=prompt, model=model_id)
-    except PlanLlmNotConfiguredError as exc:
+    except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
+        # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu
+        # lassen (nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall).
         write_llm_raw_response(run_dir, raw_text=f"ERROR: {exc}", provider=provider, model=model)
         write_llm_parsed_response(run_dir, {"parse_error": str(exc)})
         write_llm_manifest(

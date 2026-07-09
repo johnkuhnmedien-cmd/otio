@@ -14,10 +14,7 @@ from dataclasses import dataclass
 from otio_app.models import Project
 from otio_app.project_layout import get_voiceover_style_profile_path
 from otio_app.services.gemini_client import _extract_json
-from otio_app.services.plan_llm_client import (
-    PlanLlmNotConfiguredError,
-    generate_plan_text_with_metadata,
-)
+from otio_app.services.plan_llm_client import generate_plan_text_with_metadata
 from otio_app.services.voiceover_generation.llm_trace_service import (
     STAGE_STYLE_PROFILE,
     STATUS_FAIL,
@@ -105,7 +102,9 @@ def build_style_profile(
 
     try:
         llm_response = generate_plan_text_with_metadata(prompt=prompt, model=model_id)
-    except PlanLlmNotConfiguredError as exc:
+    except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
+        # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu
+        # lassen (nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall).
         write_llm_raw_response(run_dir, raw_text=f"ERROR: {exc}", provider=provider, model=model)
         write_llm_parsed_response(run_dir, {"parse_error": str(exc)})
         write_llm_manifest(

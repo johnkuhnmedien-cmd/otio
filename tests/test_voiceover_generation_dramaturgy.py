@@ -209,6 +209,20 @@ def test_build_dramaturgy_plan_missing_api_key_returns_fail(tmp_path: Path) -> N
     assert load_dramaturgy_draft(project) is None
 
 
+def test_build_dramaturgy_plan_generic_llm_exception_returns_fail_status(tmp_path: Path) -> None:
+    """Jeder unerwartete LLM-/SDK-/Netzwerkfehler soll als kontrollierter FAIL
+    zurückkommen statt die Streamlit-Seite crashen zu lassen."""
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        side_effect=RuntimeError("Unerwarteter SDK-Fehler."),
+    ):
+        result = build_dramaturgy_plan(project, provider="anthropic", model="claude-sonnet-5")
+
+    assert result.status == STATUS_FAIL
+    assert result.plan is None
+
+
 def test_confirm_dramaturgy_plan_writes_confirmed_file(tmp_path: Path) -> None:
     project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
     draft = DramaturgyPlan(

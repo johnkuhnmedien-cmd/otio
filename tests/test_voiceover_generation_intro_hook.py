@@ -211,6 +211,19 @@ def test_missing_api_key_returns_fail(tmp_path: Path) -> None:
     assert result.document is None
 
 
+def test_generic_llm_exception_returns_fail_status(tmp_path: Path) -> None:
+    """Jeder unerwartete LLM-/SDK-/Netzwerkfehler soll als kontrollierter FAIL
+    zurückkommen statt die Streamlit-Seite crashen zu lassen."""
+    project = _make_project_with_confirmed_folder_voiceovers(tmp_path)
+    with patch(
+        f"{_INTRO_MODULE}.generate_plan_text_with_metadata",
+        side_effect=RuntimeError("Unerwarteter SDK-Fehler."),
+    ):
+        result = build_intro_hook_candidates(project, provider="anthropic", model="claude-sonnet-5")
+    assert result.status == STATUS_FAIL
+    assert result.document is None
+
+
 def test_build_raises_when_folders_not_all_confirmed(tmp_path: Path) -> None:
     project_root = tmp_path / "USA"
     project_root.mkdir()

@@ -28,7 +28,6 @@ from otio_app.defaults import (
 from otio_app.models import Project
 from otio_app.project_layout import get_folder_voiceover_validation_report_path
 from otio_app.services.plan_llm_client import (
-    PlanLlmNotConfiguredError,
     generate_plan_text_with_metadata,
 )
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
@@ -250,7 +249,9 @@ def review_folder_voiceover(
 
     try:
         llm_response = generate_plan_text_with_metadata(prompt=prompt, model=model_id)
-    except PlanLlmNotConfiguredError as exc:
+    except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
+        # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu
+        # lassen (nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall).
         write_llm_raw_response(run_dir, raw_text=f"ERROR: {exc}", provider=provider, model=model)
         write_llm_parsed_response(run_dir, {"parse_error": str(exc)})
         write_llm_manifest(
@@ -440,7 +441,9 @@ def run_folder_voiceover_review_loop(
 
         try:
             llm_response = generate_plan_text_with_metadata(prompt=correction_prompt, model=model_id)
-        except PlanLlmNotConfiguredError as exc:
+        except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
+            # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu
+            # lassen (nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall).
             write_llm_raw_response(
                 correction_run_dir, raw_text=f"ERROR: {exc}", provider=provider, model=model
             )

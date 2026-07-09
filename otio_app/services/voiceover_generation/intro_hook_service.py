@@ -31,7 +31,6 @@ from otio_app.models import Project
 from otio_app.project_layout import get_intro_hook_candidates_path, get_intro_hook_confirmed_path
 from otio_app.services.gemini_client import _extract_json
 from otio_app.services.plan_llm_client import (
-    PlanLlmNotConfiguredError,
     generate_plan_text_with_metadata,
 )
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
@@ -454,7 +453,9 @@ def build_intro_hook_candidates(
 
     try:
         llm_response = generate_plan_text_with_metadata(prompt=prompt, model=model_id)
-    except PlanLlmNotConfiguredError as exc:
+    except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
+        # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu
+        # lassen (nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall).
         write_llm_raw_response(run_dir, raw_text=f"ERROR: {exc}", provider=provider, model=model)
         write_llm_parsed_response(run_dir, {"parse_error": str(exc)})
         write_llm_manifest(

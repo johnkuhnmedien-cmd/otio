@@ -210,6 +210,31 @@ def test_build_style_profile_missing_api_key_returns_fail_status(tmp_path: Path)
     assert "ANTHROPIC_API_KEY" in result.error
 
 
+def test_build_style_profile_generic_llm_exception_returns_fail_status_instead_of_crashing(
+    tmp_path: Path,
+) -> None:
+    """Jeder unerwartete Fehler aus dem LLM-/SDK-Aufruf (Netzwerk, Rate-Limit,
+    SDK-Ausnahmen etc.) muss als kontrollierter FAIL-Status zurückkommen —
+    nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall. Sonst crasht
+    die Streamlit-Seite mit einer rohen Ausnahme."""
+    project = _make_project(tmp_path)
+    with patch(
+        "otio_app.services.voiceover_generation.style_profile_service.generate_plan_text_with_metadata",
+        side_effect=ConnectionError("Verbindung zum LLM-Provider fehlgeschlagen."),
+    ):
+        result = build_style_profile(
+            project,
+            project_brief=_brief(),
+            style_references=_refs(),
+            provider="anthropic",
+            model="claude-sonnet-5",
+        )
+
+    assert result.status == STATUS_FAIL
+    assert result.profile is None
+    assert "Verbindung zum LLM-Provider fehlgeschlagen" in result.error
+
+
 def test_build_style_profile_creates_llm_run_artifacts(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     fake_response = PlanLlmResponse(

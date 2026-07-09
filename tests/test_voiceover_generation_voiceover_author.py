@@ -284,6 +284,21 @@ def test_generate_missing_api_key_returns_fail(tmp_path: Path) -> None:
     assert result.draft is None
 
 
+def test_generate_generic_llm_exception_returns_fail_status(tmp_path: Path) -> None:
+    """Jeder unerwartete LLM-/SDK-/Netzwerkfehler soll als kontrollierter FAIL
+    zurückkommen statt die Streamlit-Seite crashen zu lassen."""
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        side_effect=TimeoutError("LLM-Anfrage hat das Zeitlimit überschritten."),
+    ):
+        result = generate_folder_voiceover(
+            project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5"
+        )
+    assert result.status == STATUS_FAIL
+    assert result.draft is None
+
+
 def test_generate_invalid_json_does_not_overwrite_existing_draft(tmp_path: Path) -> None:
     project = _make_project(tmp_path, ["Grand Canyon"])
     with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):

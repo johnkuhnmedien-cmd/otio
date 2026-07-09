@@ -155,6 +155,26 @@ def test_review_loop_stops_after_three_attempts(tmp_path: Path) -> None:
     assert report.status == "NEEDS_USER_REVIEW"
 
 
+def test_review_loop_generic_llm_exception_is_a_warning_not_a_crash(tmp_path: Path) -> None:
+    """Ein unerwarteter LLM-/SDK-/Netzwerkfehler beim Review-Call darf die
+    Streamlit-Seite nicht crashen. Er wird als nicht-blockierende Warnung
+    (LLM_REVIEW_UNAVAILABLE) behandelt — deterministische Checks laufen
+    unabhängig davon weiter."""
+    project = _make_project(tmp_path)
+    _generate_draft(project)
+
+    with patch(
+        f"{_REVIEW_MODULE}.generate_plan_text_with_metadata",
+        side_effect=RuntimeError("Unerwarteter SDK-Fehler."),
+    ):
+        report = run_folder_voiceover_review_loop(
+            project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5"
+        )
+
+    assert report.status == "PASS"
+    assert any(warning.type == "LLM_REVIEW_UNAVAILABLE" for warning in report.warnings)
+
+
 def test_review_loop_sets_needs_user_review_after_three_failures(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     _generate_draft(project)
