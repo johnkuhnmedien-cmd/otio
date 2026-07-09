@@ -99,24 +99,65 @@ def is_any_plan_llm_configured() -> bool:
     return any(is_api_key_set(env_key) for env_key in _PROVIDER_ENV_KEYS.values())
 
 
-def generate_plan_text(*, prompt: str, model: Optional[str] = None) -> str:
+def generate_plan_text(
+    *,
+    prompt: str,
+    model: Optional[str] = None,
+    max_output_tokens: int | None = None,
+    disable_thinking: bool = False,
+) -> str:
     """Sendet den Schnittplan-Prompt an das gewählte Text-LLM."""
-    return generate_plan_text_with_metadata(prompt=prompt, model=model).raw_text
+    return generate_plan_text_with_metadata(
+        prompt=prompt,
+        model=model,
+        max_output_tokens=max_output_tokens,
+        disable_thinking=disable_thinking,
+    ).raw_text
 
 
-def generate_plan_text_with_metadata(*, prompt: str, model: Optional[str] = None) -> PlanLlmResponse:
-    """Wie generate_plan_text, inkl. Latenz und Token-Nutzung für Diagnose-Runs."""
+def generate_plan_text_with_metadata(
+    *,
+    prompt: str,
+    model: Optional[str] = None,
+    max_output_tokens: int | None = None,
+    disable_thinking: bool = False,
+) -> PlanLlmResponse:
+    """Wie generate_plan_text, inkl. Latenz und Token-Nutzung für Diagnose-Runs.
+
+    max_output_tokens überschreibt DEFAULT_MAX_OUTPUT_TOKENS für diesen Call
+    (z. B. für sehr umfangreiche Prompts wie eine Dramaturgie-Planung über
+    viele Ordner). disable_thinking schaltet, sofern vom Provider unterstützt
+    (Anthropic, Gemini), das interne "Thinking" des Modells für diesen Call
+    aus — damit steht das gesamte max_output_tokens-Budget der sichtbaren
+    Antwort zur Verfügung, statt (teilweise) für internes Reasoning verbraucht
+    zu werden. Für OpenAI-Modelle über die Chat-Completions-API hat
+    disable_thinking aktuell keine Wirkung (kein äquivalenter Parameter)."""
     resolved = resolve_plan_model(model)
     provider = plan_model_provider(resolved)
     api_model = _provider_api_model(resolved)
     started = time.perf_counter()
 
     if provider == PROVIDER_GEMINI:
-        raw_text, token_usage = _generate_gemini_text_with_usage(prompt=prompt, model=api_model)
+        raw_text, token_usage = _generate_gemini_text_with_usage(
+            prompt=prompt,
+            model=api_model,
+            max_output_tokens=max_output_tokens,
+            disable_thinking=disable_thinking,
+        )
     elif provider == PROVIDER_OPENAI:
-        raw_text, token_usage = _generate_openai_text_with_usage(prompt=prompt, model=api_model)
+        raw_text, token_usage = _generate_openai_text_with_usage(
+            prompt=prompt,
+            model=api_model,
+            max_output_tokens=max_output_tokens,
+            disable_thinking=disable_thinking,
+        )
     elif provider == PROVIDER_ANTHROPIC:
-        raw_text, token_usage = _generate_anthropic_text_with_usage(prompt=prompt, model=api_model)
+        raw_text, token_usage = _generate_anthropic_text_with_usage(
+            prompt=prompt,
+            model=api_model,
+            max_output_tokens=max_output_tokens,
+            disable_thinking=disable_thinking,
+        )
     else:
         raise PlanLlmNotConfiguredError(f"Unbekannter Planungs-Provider für Modell `{resolved}`.")
 
@@ -178,7 +219,13 @@ def _is_temperature_rejected_error(exc: Exception) -> bool:
     return "temperature" in message
 
 
-def _generate_gemini_text_with_usage(*, prompt: str, model: str) -> tuple[str, dict[str, int]]:
+def _generate_gemini_text_with_usage(
+    *,
+    prompt: str,
+    model: str,
+    max_output_tokens: int | None = None,
+    disable_thinking: bool = False,
+) -> tuple[str, dict[str, int]]:
     api_key = get_api_key("GEMINI_API_KEY")
     if not api_key:
         raise PlanLlmNotConfiguredError(
@@ -192,11 +239,19 @@ def _generate_gemini_text_with_usage(*, prompt: str, model: str) -> tuple[str, d
     if model not in GEMINI_MODEL_CHOICES:
         model = get_gemini_model_from_env()
 
+    effective_max_tokens = max_output_tokens or DEFAULT_MAX_OUTPUT_TOKENS
+    config_kwargs: dict = {"max_output_tokens": effective_max_tokens}
+    if disable_thinking:
+        # thinking_budget=0 schaltet das interne "Thinking" ab — das gesamte
+        # max_output_tokens-Budget steht dann der sichtbaren Antwort zur
+        # Verfügung (siehe generate_plan_text_with_metadata()-Docstring).
+        config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
         model=model,
         contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
-        config=types.GenerateContentConfig(max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS),
+        config=types.GenerateContentConfig(**config_kwargs),
     )
     usage_meta = getattr(response, "usage_metadata", None)
     token_usage = _token_usage_dict(
@@ -208,7 +263,7 @@ def _generate_gemini_text_with_usage(*, prompt: str, model: str) -> tuple[str, d
     finish_reason = str(getattr(candidates[0], "finish_reason", "")) if candidates else ""
     if "MAX_TOKENS" in finish_reason:
         raise PlanLlmTruncatedResponseError(
-            f"Die Gemini-Antwort wurde bei max_output_tokens={DEFAULT_MAX_OUTPUT_TOKENS} "
+            f"Die Gemini-Antwort wurde bei max_output_tokens={effective_max_tokens} "
             "abgeschnitten (finish_reason=MAX_TOKENS). Der Prompt ist wahrscheinlich zu "
             "umfangreich (z. B. sehr viele Ordner) für eine vollständige Antwort in diesem "
             "Limit. Bitte weniger Ordner gleichzeitig planen oder den Prompt kürzen."
@@ -221,7 +276,17 @@ def _generate_gemini_text_with_usage(*, prompt: str, model: str) -> tuple[str, d
     return text, token_usage
 
 
-def _generate_openai_text_with_usage(*, prompt: str, model: str) -> tuple[str, dict[str, int]]:
+def _generate_openai_text_with_usage(
+    *,
+    prompt: str,
+    model: str,
+    max_output_tokens: int | None = None,
+    disable_thinking: bool = False,
+) -> tuple[str, dict[str, int]]:
+    # disable_thinking hat für Standard-Chat-Completions-Modelle (GPT-5.x über
+    # diese API) aktuell keine Wirkung — es gibt hier keinen äquivalenten
+    # Parameter wie thinking/thinking_config bei Anthropic/Gemini.
+    del disable_thinking
     api_key = get_api_key("OPENAI_API_KEY")
     if not api_key:
         raise PlanLlmNotConfiguredError(
@@ -231,13 +296,14 @@ def _generate_openai_text_with_usage(*, prompt: str, model: str) -> tuple[str, d
     _require_sdk_module("openai")
     from openai import BadRequestError, OpenAI
 
+    effective_max_tokens = max_output_tokens or DEFAULT_MAX_OUTPUT_TOKENS
     client = OpenAI(api_key=api_key)
     try:
         response = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
-            max_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+            max_tokens=effective_max_tokens,
         )
     except BadRequestError as exc:
         if not _is_temperature_rejected_error(exc):
@@ -248,7 +314,7 @@ def _generate_openai_text_with_usage(*, prompt: str, model: str) -> tuple[str, d
         response = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+            max_tokens=effective_max_tokens,
         )
     usage = getattr(response, "usage", None)
     token_usage = _token_usage_dict(
@@ -260,7 +326,7 @@ def _generate_openai_text_with_usage(*, prompt: str, model: str) -> tuple[str, d
     finish_reason = getattr(choice, "finish_reason", None) if choice is not None else None
     if finish_reason == "length":
         raise PlanLlmTruncatedResponseError(
-            f"Die Antwort wurde bei max_tokens={DEFAULT_MAX_OUTPUT_TOKENS} abgeschnitten "
+            f"Die Antwort wurde bei max_tokens={effective_max_tokens} abgeschnitten "
             "(finish_reason=length). Der Prompt ist wahrscheinlich zu umfangreich (z. B. "
             "sehr viele Ordner) für eine vollständige Antwort in diesem Limit. Bitte "
             "weniger Ordner gleichzeitig planen oder den Prompt kürzen."
@@ -274,7 +340,13 @@ def _generate_openai_text_with_usage(*, prompt: str, model: str) -> tuple[str, d
     return text, token_usage
 
 
-def _generate_anthropic_text_with_usage(*, prompt: str, model: str) -> tuple[str, dict[str, int]]:
+def _generate_anthropic_text_with_usage(
+    *,
+    prompt: str,
+    model: str,
+    max_output_tokens: int | None = None,
+    disable_thinking: bool = False,
+) -> tuple[str, dict[str, int]]:
     api_key = get_api_key("ANTHROPIC_API_KEY")
     if not api_key:
         raise PlanLlmNotConfiguredError(
@@ -284,14 +356,21 @@ def _generate_anthropic_text_with_usage(*, prompt: str, model: str) -> tuple[str
     _require_sdk_module("anthropic")
     from anthropic import Anthropic, BadRequestError
 
+    effective_max_tokens = max_output_tokens or DEFAULT_MAX_OUTPUT_TOKENS
+    create_kwargs: dict = {
+        "model": model,
+        "max_tokens": effective_max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if disable_thinking:
+        # thinking={"type": "disabled"} schaltet das interne "Thinking" ab —
+        # das gesamte max_tokens-Budget steht dann der sichtbaren Antwort zur
+        # Verfügung (siehe generate_plan_text_with_metadata()-Docstring).
+        create_kwargs["thinking"] = {"type": "disabled"}
+
     client = Anthropic(api_key=api_key)
     try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
-            temperature=0.2,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        response = client.messages.create(temperature=0.2, **create_kwargs)
     except BadRequestError as exc:
         if not _is_temperature_rejected_error(exc):
             raise
@@ -299,11 +378,7 @@ def _generate_anthropic_text_with_usage(*, prompt: str, model: str) -> tuple[str
         # verlangen den API-Standardwert — ohne temperature erneut versuchen,
         # statt die Erzeugung komplett fehlschlagen zu lassen (siehe z. B.
         # "temperature is deprecated for this model.").
-        response = client.messages.create(
-            model=model,
-            max_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        response = client.messages.create(**create_kwargs)
     usage = getattr(response, "usage", None)
     token_usage = _token_usage_dict(
         input_tokens=getattr(usage, "input_tokens", None),
@@ -318,8 +393,8 @@ def _generate_anthropic_text_with_usage(*, prompt: str, model: str) -> tuple[str
     # Plan" durchging. Jetzt wird das explizit als Fehler gemeldet.
     if getattr(response, "stop_reason", None) == "max_tokens":
         raise PlanLlmTruncatedResponseError(
-            f"Die Antwort wurde nach {token_usage.get('output_tokens', DEFAULT_MAX_OUTPUT_TOKENS)} "
-            f"von max_tokens={DEFAULT_MAX_OUTPUT_TOKENS} Output-Tokens abgeschnitten "
+            f"Die Antwort wurde nach {token_usage.get('output_tokens', effective_max_tokens)} "
+            f"von max_tokens={effective_max_tokens} Output-Tokens abgeschnitten "
             "(stop_reason=max_tokens). Der Prompt ist wahrscheinlich zu umfangreich (z. B. "
             "sehr viele Ordner) für eine vollständige Antwort in diesem Limit. Bitte weniger "
             "Ordner gleichzeitig planen oder den Prompt kürzen."

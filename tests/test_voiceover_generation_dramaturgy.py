@@ -128,6 +128,51 @@ def test_build_dramaturgy_plan_writes_draft(tmp_path: Path) -> None:
     path = get_dramaturgy_plan_draft_path(project.work_dir_path)
     assert path.is_file()
 
+
+def test_build_dramaturgy_plan_passes_max_output_tokens_through(tmp_path: Path) -> None:
+    """Nutzerfeedback: 'Option A' — max_tokens für die Dramaturgie-Planung
+    gezielt erhöhen können (z. B. bei sehr vielen Ordnern)."""
+    project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()
+    ) as mock_generate:
+        result = build_dramaturgy_plan(
+            project, provider="anthropic", model="claude-sonnet-5", max_output_tokens=70000
+        )
+
+    assert result.status == STATUS_PASS
+    assert mock_generate.call_args.kwargs["max_output_tokens"] == 70000
+    assert mock_generate.call_args.kwargs["disable_thinking"] is False
+
+
+def test_build_dramaturgy_plan_passes_disable_thinking_through(tmp_path: Path) -> None:
+    """Nutzerfeedback: 'Option B' — internes Thinking für die Dramaturgie-
+    Planung gezielt abschalten können."""
+    project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()
+    ) as mock_generate:
+        result = build_dramaturgy_plan(
+            project, provider="anthropic", model="claude-sonnet-5", disable_thinking=True
+        )
+
+    assert result.status == STATUS_PASS
+    assert mock_generate.call_args.kwargs["disable_thinking"] is True
+    assert mock_generate.call_args.kwargs["max_output_tokens"] is None
+
+
+def test_build_dramaturgy_plan_default_kwargs_unchanged(tmp_path: Path) -> None:
+    """Rückwärtskompatibilität: ohne die neuen Parameter verhält sich der Call
+    exakt wie vorher (max_output_tokens=None, disable_thinking=False)."""
+    project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()
+    ) as mock_generate:
+        build_dramaturgy_plan(project, provider="anthropic", model="claude-sonnet-5")
+
+    assert mock_generate.call_args.kwargs["max_output_tokens"] is None
+    assert mock_generate.call_args.kwargs["disable_thinking"] is False
+
     loaded = load_dramaturgy_draft(project)
     assert loaded is not None
     assert loaded.project_title == "Wunder der Wüste"

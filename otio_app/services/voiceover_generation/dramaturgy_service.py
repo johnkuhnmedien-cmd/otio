@@ -234,11 +234,18 @@ def build_dramaturgy_plan(
     *,
     provider: str,
     model: str,
+    max_output_tokens: int | None = None,
+    disable_thinking: bool = False,
 ) -> DramaturgyBuildResult:
     """Plant die Dramaturgie über alle ausgewählten Ordner via LLM.
 
     Überschreibt einen bestehenden Draft NUR bei Erfolg — bei API-Fehlern oder
-    ungültigem JSON bleibt ein vorhandener Draft unverändert (siehe §6/§9)."""
+    ungültigem JSON bleibt ein vorhandener Draft unverändert (siehe §6/§9).
+
+    max_output_tokens/disable_thinking erlauben es, für sehr umfangreiche
+    Projekte (viele Ordner) das Output-Token-Limit gezielt zu erhöhen bzw. das
+    interne "Thinking" des Modells abzuschalten, falls die Antwort sonst bei
+    max_tokens abgeschnitten wird (siehe plan_llm_client.PlanLlmTruncatedResponseError)."""
     project_brief = load_project_brief(project)
     style_profile = load_style_profile(project)
     folder_summaries = build_and_save_folder_inventory_summaries(project)
@@ -255,7 +262,12 @@ def build_dramaturgy_plan(
     model_id = resolve_llm_model_id(provider, model)
 
     try:
-        llm_response = generate_plan_text_with_metadata(prompt=prompt, model=model_id)
+        llm_response = generate_plan_text_with_metadata(
+            prompt=prompt,
+            model=model_id,
+            max_output_tokens=max_output_tokens,
+            disable_thinking=disable_thinking,
+        )
     except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
         # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu
         # lassen (nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall).

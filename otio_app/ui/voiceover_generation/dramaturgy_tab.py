@@ -34,6 +34,12 @@ from otio_app.ui.voiceover_generation._shared import (
     style_profile_metric_value,
 )
 
+# Höher als plan_llm_client.DEFAULT_MAX_OUTPUT_TOKENS — Dramaturgie-Prompts
+# können bei vielen Ordnern sehr groß werden (Nutzerfeedback: bei 37 Ordnern
+# wurde die Antwort selbst bei 16.384 Output-Tokens noch abgeschnitten). Nur
+# für den "Dramaturgie planen"-Button, nicht global für alle Rollen.
+_DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS = 70000
+
 
 def _inventory_counts(project: Project) -> tuple[int, int]:
     """(Anzahl Ordner, Anzahl Ordner mit Inventory).
@@ -205,9 +211,33 @@ def render_dramaturgy_page() -> None:
 
     st.subheader("Dramaturgie planen")
     plan_label = "Dramaturgie neu planen" if draft is not None else "Dramaturgie planen"
-    plan_clicked = st.button(plan_label, disabled=not can_plan, key=f"vo_dramaturgy_plan_{project.id}")
+    col_plan, col_no_thinking = st.columns(2)
+    with col_plan:
+        plan_clicked = st.button(
+            plan_label, disabled=not can_plan, key=f"vo_dramaturgy_plan_{project.id}"
+        )
+        st.caption(
+            f"max_tokens={_DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS:,} — erhöhtes Limit für sehr "
+            "umfangreiche Prompts (viele Ordner)."
+        )
+    with col_no_thinking:
+        no_thinking_clicked = st.button(
+            "Dramaturgie ohne Thinking",
+            disabled=not can_plan,
+            key=f"vo_dramaturgy_plan_no_thinking_{project.id}",
+        )
+        st.caption(
+            "Deaktiviert das interne 'Thinking' des Modells — das gesamte "
+            "Token-Budget steht dann der sichtbaren Antwort zur Verfügung."
+        )
 
+    build_kwargs: dict | None = None
     if plan_clicked:
+        build_kwargs = {"max_output_tokens": _DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS}
+    elif no_thinking_clicked:
+        build_kwargs = {"disable_thinking": True}
+
+    if build_kwargs is not None:
         if confirmed is not None:
             st.info(
                 "Es gibt bereits eine bestätigte Dramaturgie. Neuplanung erzeugt "
@@ -215,7 +245,7 @@ def render_dramaturgy_page() -> None:
                 "bis du ihn explizit ersetzt."
             )
         with st.spinner("Dramaturgie wird geplant…"):
-            result = build_dramaturgy_plan(project, provider=provider, model=model)
+            result = build_dramaturgy_plan(project, provider=provider, model=model, **build_kwargs)
         st.session_state[f"vo_dramaturgy_last_result_{project.id}"] = {
             "status": result.status,
             "error": result.error,

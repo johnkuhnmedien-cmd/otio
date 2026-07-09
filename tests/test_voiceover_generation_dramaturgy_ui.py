@@ -49,6 +49,37 @@ def test_dramaturgy_page_renders_without_exception(without_voiceover_project: Pr
     render_dramaturgy_page()  # darf nicht werfen, auch ohne Brief/Profile/Inventory
 
 
+def test_dramaturgy_page_has_both_plan_buttons(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nutzerfeedback: neuer Button 'Dramaturgie ohne Thinking' zusätzlich zum
+    bestehenden Plan-Button (der jetzt ein erhöhtes max_tokens-Limit nutzt)."""
+    project_id = "dram-two-buttons"
+    project_root = tmp_path / "USA"
+    (project_root / "Grand Canyon").mkdir(parents=True)
+
+    monkeypatch.setenv("REPRO_ROOT", str(tmp_path))
+    monkeypatch.setenv("REPRO_PROJECT_ID", project_id)
+    monkeypatch.setenv(
+        "REPRO_RENDER_FUNCTION",
+        "otio_app.ui.voiceover_generation.dramaturgy_tab:render_dramaturgy_page",
+    )
+    monkeypatch.setenv("REPRO_SETUP", "none")
+    monkeypatch.delenv("REPRO_STYLE_PROFILE_LIBRARY_NAME", raising=False)
+
+    at = AppTest.from_file(str(_APPTEST_SCRIPT_PATH))
+    at.run()
+    assert not at.exception, at.exception
+
+    button_labels = {button.label for button in at.button}
+    assert "Dramaturgie planen" in button_labels
+    assert "Dramaturgie ohne Thinking" in button_labels
+
+    captions = " ".join(caption.value for caption in at.caption)
+    assert "70" in captions and "000" in captions  # max_tokens=70.000-Hinweis
+    assert "Thinking" in captions
+
+
 def test_dramaturgy_page_writes_no_edit_plan_documents(
     without_voiceover_project: Project,
 ) -> None:

@@ -327,3 +327,136 @@ def test_generate_plan_text_gemini_raises_when_no_text_returned(
         mock_client_cls.return_value.models.generate_content.return_value = mock_response
         with pytest.raises(PlanLlmTruncatedResponseError):
             generate_plan_text(prompt="x", model="gemini-3.1-pro-preview")
+
+
+# --- Nutzerfeedback: Option A (max_output_tokens pro Call erhöhbar) und
+# Option B (disable_thinking pro Call) für sehr umfangreiche Dramaturgie-
+# Prompts (z. B. 37 Ordner) ---
+
+
+def test_generate_plan_text_anthropic_accepts_custom_max_output_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    block = MagicMock(type="text", text='{"beats":[]}')
+    mock_response = MagicMock(content=[block], stop_reason="end_turn")
+
+    with patch("anthropic.Anthropic") as mock_anthropic:
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+        generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5", max_output_tokens=70000)
+
+    call_kwargs = mock_anthropic.return_value.messages.create.call_args.kwargs
+    assert call_kwargs["max_tokens"] == 70000
+
+
+def test_generate_plan_text_anthropic_without_override_still_uses_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    block = MagicMock(type="text", text='{"beats":[]}')
+    mock_response = MagicMock(content=[block], stop_reason="end_turn")
+
+    with patch("anthropic.Anthropic") as mock_anthropic:
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+        generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
+
+    call_kwargs = mock_anthropic.return_value.messages.create.call_args.kwargs
+    assert call_kwargs["max_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
+
+
+def test_generate_plan_text_anthropic_disable_thinking_sets_thinking_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    block = MagicMock(type="text", text='{"beats":[]}')
+    mock_response = MagicMock(content=[block], stop_reason="end_turn")
+
+    with patch("anthropic.Anthropic") as mock_anthropic:
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+        generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5", disable_thinking=True)
+
+    call_kwargs = mock_anthropic.return_value.messages.create.call_args.kwargs
+    assert call_kwargs["thinking"] == {"type": "disabled"}
+
+
+def test_generate_plan_text_anthropic_thinking_not_set_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    block = MagicMock(type="text", text='{"beats":[]}')
+    mock_response = MagicMock(content=[block], stop_reason="end_turn")
+
+    with patch("anthropic.Anthropic") as mock_anthropic:
+        mock_anthropic.return_value.messages.create.return_value = mock_response
+        generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
+
+    call_kwargs = mock_anthropic.return_value.messages.create.call_args.kwargs
+    assert "thinking" not in call_kwargs
+
+
+def test_generate_plan_text_anthropic_disable_thinking_survives_temperature_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """disable_thinking und max_output_tokens müssen auch im Retry-Call (ohne
+    temperature) erhalten bleiben."""
+    import anthropic
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    block = MagicMock(type="text", text='{"beats":[]}')
+    success_response = MagicMock(content=[block], stop_reason="end_turn")
+    error = _bad_request_error(anthropic.BadRequestError, "temperature is deprecated for this model.")
+
+    with patch("anthropic.Anthropic") as mock_anthropic:
+        mock_anthropic.return_value.messages.create.side_effect = [error, success_response]
+        generate_plan_text(
+            prompt="x",
+            model="anthropic:claude-sonnet-5",
+            max_output_tokens=70000,
+            disable_thinking=True,
+        )
+
+    retry_call_kwargs = mock_anthropic.return_value.messages.create.call_args_list[1].kwargs
+    assert retry_call_kwargs["max_tokens"] == 70000
+    assert retry_call_kwargs["thinking"] == {"type": "disabled"}
+    assert "temperature" not in retry_call_kwargs
+
+
+def test_generate_plan_text_gemini_accepts_custom_max_output_tokens_and_disable_thinking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    from google.genai import types
+
+    mock_response = MagicMock(text='{"beats":[]}')
+    mock_response.candidates = [MagicMock(finish_reason=types.FinishReason.STOP)]
+
+    with patch("google.genai.Client") as mock_client_cls:
+        mock_client_cls.return_value.models.generate_content.return_value = mock_response
+        generate_plan_text(
+            prompt="x",
+            model="gemini-3.1-pro-preview",
+            max_output_tokens=70000,
+            disable_thinking=True,
+        )
+
+    call_kwargs = mock_client_cls.return_value.models.generate_content.call_args.kwargs
+    config = call_kwargs["config"]
+    assert config.max_output_tokens == 70000
+    assert config.thinking_config.thinking_budget == 0
+
+
+def test_generate_plan_text_openai_accepts_custom_max_output_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    mock_response = MagicMock()
+    mock_response.choices = [
+        MagicMock(message=MagicMock(content='{"beats":[]}'), finish_reason="stop")
+    ]
+
+    with patch("openai.OpenAI") as mock_openai:
+        mock_openai.return_value.chat.completions.create.return_value = mock_response
+        generate_plan_text(prompt="x", model="openai:gpt-5.5", max_output_tokens=70000)
+
+    call_kwargs = mock_openai.return_value.chat.completions.create.call_args.kwargs
+    assert call_kwargs["max_tokens"] == 70000
