@@ -132,6 +132,25 @@ def _token_usage_dict(
     return usage
 
 
+def _require_sdk_module(package_name: str, pip_name: str | None = None):
+    """Importiert ein LLM-SDK-Paket mit einer klaren, handlungsleitenden
+    Fehlermeldung statt eines kryptischen "No module named ..." — z. B. wenn
+    requirements.txt zwar das Paket listet, es aber im lokalen Python-
+    Environment (noch) nicht installiert wurde (`pip install -r
+    requirements.txt` nicht/erneut ausgeführt)."""
+    import importlib
+
+    try:
+        return importlib.import_module(package_name)
+    except ModuleNotFoundError as exc:
+        raise PlanLlmNotConfiguredError(
+            f"Das Python-Paket „{pip_name or package_name}“ ist in diesem "
+            "Python-Environment nicht installiert. Bitte im Terminal (im "
+            "aktivierten venv) ausführen: "
+            f"pip install -r requirements.txt   (oder: pip install {pip_name or package_name})"
+        ) from exc
+
+
 def _generate_gemini_text_with_usage(*, prompt: str, model: str) -> tuple[str, dict[str, int]]:
     api_key = get_api_key("GEMINI_API_KEY")
     if not api_key:
@@ -139,6 +158,7 @@ def _generate_gemini_text_with_usage(*, prompt: str, model: str) -> tuple[str, d
             "GEMINI_API_KEY ist nicht gesetzt. "
             "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
         )
+    _require_sdk_module("google.genai", pip_name="google-genai")
     from google import genai
     from google.genai import types
 
@@ -166,6 +186,7 @@ def _generate_openai_text_with_usage(*, prompt: str, model: str) -> tuple[str, d
             "OPENAI_API_KEY ist nicht gesetzt. "
             "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
         )
+    _require_sdk_module("openai")
     from openai import OpenAI
 
     client = OpenAI(api_key=api_key)
@@ -191,6 +212,7 @@ def _generate_anthropic_text_with_usage(*, prompt: str, model: str) -> tuple[str
             "ANTHROPIC_API_KEY ist nicht gesetzt. "
             "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
         )
+    _require_sdk_module("anthropic")
     from anthropic import Anthropic
 
     client = Anthropic(api_key=api_key)

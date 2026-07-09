@@ -32,6 +32,45 @@ def test_page_renders_without_exception(tmp_path: Path, monkeypatch: pytest.Monk
     _run_repro(tmp_path, monkeypatch)
 
 
+def test_only_one_build_button_when_no_profile_exists_yet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nutzerfeedback: 'Was ist der Unterschied zwischen den beiden Buttons?'
+    — beide taten exakt dasselbe. Jetzt gibt es nur EINEN Button, dessen
+    Beschriftung sich je nach Zustand ändert."""
+    at = _run_repro(tmp_path, monkeypatch)
+    button_labels = [button.label for button in at.button]
+    assert button_labels.count("Style Profile erstellen") == 1
+    assert "Style Profile neu erstellen" not in button_labels
+
+
+def test_button_label_switches_to_neu_erstellen_once_profile_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.models import Project, ProjectMode
+    from otio_app.services.voiceover_generation.models import VoiceoverStyleProfile
+    from otio_app.services.voiceover_generation.style_profile_service import save_style_profile
+
+    project = Project(
+        id=PROJECT_ID,
+        name="Repro",
+        project_root=str(tmp_path / "USA"),
+        work_dir=str(tmp_path / "USA" / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    save_style_profile(project, VoiceoverStyleProfile(project_id=project.id, overall_tone="calm"))
+
+    at = _run_repro(tmp_path, monkeypatch)
+    button_labels = [button.label for button in at.button]
+    assert button_labels.count("Style Profile neu erstellen") == 1
+    assert "Style Profile erstellen" not in button_labels
+
+    captions = " ".join(caption.value for caption in at.caption)
+    assert "Ersetzt das aktuell gespeicherte Style Profile" in captions
+
+
 def test_model_settings_has_one_selectbox_per_role_no_free_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

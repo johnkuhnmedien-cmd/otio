@@ -81,3 +81,41 @@ def test_generate_plan_text_raises_when_openai_key_missing(
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(PlanLlmNotConfiguredError, match="OPENAI_API_KEY"):
         generate_plan_text(prompt="x", model="openai:gpt-5.4-mini")
+
+
+def test_generate_plan_text_gives_actionable_message_when_anthropic_sdk_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reproduziert "No module named 'anthropic'" (Paket in requirements.txt
+    gelistet, aber im lokalen venv nicht installiert) — statt des kryptischen
+    Python-ImportError muss eine klare, handlungsleitende Fehlermeldung mit
+    Installationsbefehl kommen."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    with patch(
+        "otio_app.services.plan_llm_client._require_sdk_module",
+        side_effect=PlanLlmNotConfiguredError(
+            "Das Python-Paket „anthropic“ ist in diesem Python-Environment "
+            "nicht installiert. Bitte im Terminal (im aktivierten venv) "
+            "ausführen: pip install -r requirements.txt"
+        ),
+    ):
+        with pytest.raises(PlanLlmNotConfiguredError, match="pip install"):
+            generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
+
+
+def test_require_sdk_module_raises_actionable_error_for_missing_package() -> None:
+    from otio_app.services.plan_llm_client import _require_sdk_module
+
+    with pytest.raises(PlanLlmNotConfiguredError) as exc_info:
+        _require_sdk_module("this_package_does_not_exist_12345", pip_name="some-pip-name")
+
+    message = str(exc_info.value)
+    assert "some-pip-name" in message
+    assert "pip install" in message
+
+
+def test_require_sdk_module_returns_module_when_installed() -> None:
+    from otio_app.services.plan_llm_client import _require_sdk_module
+
+    module = _require_sdk_module("json")
+    assert module.__name__ == "json"

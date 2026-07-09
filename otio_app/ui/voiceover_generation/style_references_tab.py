@@ -260,17 +260,23 @@ def render_style_references_page() -> None:
             with st.expander(f"Vorschau: {uploaded_file.name}"):
                 st.text(truncated_text[:2000])
 
-    col_save, col_build, col_rebuild = st.columns(3)
+    # Nur EIN Erzeugen-Button, je nach Zustand unterschiedlich benannt — vorher
+    # gab es zwei Buttons ("erstellen"/"neu erstellen") mit identischer
+    # Funktion, was Verwirrung stiftete ("Was ist der Unterschied zwischen den
+    # beiden Buttons?"). Beide haben immer schon dasselbe getan: ein neues
+    # Style Profile per LLM erzeugen und das bestehende (falls vorhanden)
+    # ersetzen.
+    existing_profile_before_click = load_style_profile(project)
+    build_label = (
+        "Style Profile neu erstellen" if existing_profile_before_click is not None else "Style Profile erstellen"
+    )
+    col_save, col_build = st.columns(2)
     with col_save:
         save_clicked = st.button("Referenzen speichern", key=f"vo_style_refs_save_{project.id}")
     with col_build:
-        build_clicked = st.button(
-            "Style Profile erstellen", key=f"vo_style_profile_build_{project.id}"
-        )
-    with col_rebuild:
-        rebuild_clicked = st.button(
-            "Style Profile neu erstellen", key=f"vo_style_profile_rebuild_{project.id}"
-        )
+        build_clicked = st.button(build_label, key=f"vo_style_profile_build_{project.id}")
+        if existing_profile_before_click is not None:
+            st.caption("Ersetzt das aktuell gespeicherte Style Profile dieses Projekts.")
 
     current_refs = VoiceoverStyleReferences(
         project_id=project.id,
@@ -287,7 +293,7 @@ def render_style_references_page() -> None:
         with st.expander("JSON-Vorschau"):
             st.json(saved.model_dump(mode="json"))
 
-    if build_clicked or rebuild_clicked:
+    if build_clicked:
         # Aktuelle Formularwerte zuerst speichern, damit das Style Profile immer
         # aus dem tatsächlich gerade angezeigten Stand erzeugt wird.
         saved_refs = save_style_references(project, current_refs)
