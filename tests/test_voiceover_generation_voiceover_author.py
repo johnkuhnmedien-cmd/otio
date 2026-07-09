@@ -460,6 +460,95 @@ def test_draft_is_stale_after_settings_change(tmp_path: Path) -> None:
     assert is_draft_stale(project, "Grand Canyon", result.draft) is True
 
 
+def test_build_inventory_asset_context_duration_cache_avoids_reprobing_same_path(
+    tmp_path: Path,
+) -> None:
+    """Performance-Fix (Juli 2026): mit einem gemeinsamen duration_cache wird
+    probe_duration_seconds für denselben Video-Pfad nur EINMAL aufgerufen,
+    auch wenn build_inventory_asset_context mehrfach für denselben Ordner
+    aufgerufen wird (z. B. einmal pro Rendering-Durchlauf einer Seite)."""
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    duration_cache: dict[str, float | None] = {}
+    with patch(f"{_SERVICE_MODULE}.probe_duration_seconds", return_value=5.0) as probe_mock:
+        build_inventory_asset_context(project, "Grand Canyon", duration_cache=duration_cache)
+        build_inventory_asset_context(project, "Grand Canyon", duration_cache=duration_cache)
+
+    # Zwei Assets (clip1.mp4, clip2.mp4) -> genau zwei Aufrufe insgesamt,
+    # nicht vier (zwei pro Aufruf von build_inventory_asset_context).
+    assert probe_mock.call_count == 2
+    assert set(duration_cache) == {
+        "Grand Canyon/clip1.mp4",
+        "Grand Canyon/clip2.mp4",
+    }
+
+
+def test_build_inventory_asset_context_without_duration_cache_reprobes_every_call(
+    tmp_path: Path,
+) -> None:
+    """Gegenprobe: ohne duration_cache (Standardverhalten, unverändert für
+    bestehende Aufrufer) wird bei jedem Aufruf neu vermessen."""
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(f"{_SERVICE_MODULE}.probe_duration_seconds", return_value=5.0) as probe_mock:
+        build_inventory_asset_context(project, "Grand Canyon")
+        build_inventory_asset_context(project, "Grand Canyon")
+
+    assert probe_mock.call_count == 4
+
+
+def test_is_draft_stale_accepts_preloaded_documents_and_skips_reloading(tmp_path: Path) -> None:
+    """Performance-Fix (Juli 2026): wenn project_brief/style_profile/plan/
+    settings_doc bereits vorliegen (z. B. einmal pro Seiten-Rendering
+    geladen), ruft is_draft_stale die jeweiligen load_*-Funktionen NICHT
+    erneut auf."""
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
+    from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
+        load_folder_voiceover_settings,
+    )
+    from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
+    from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
+
+    preloaded_brief = load_project_brief(project)
+    preloaded_style_profile = load_style_profile(project)
+    preloaded_plan = load_confirmed_dramaturgy(project)
+    preloaded_settings_doc = load_folder_voiceover_settings(project)
+
+    with (
+        patch(f"{_SERVICE_MODULE}.load_project_brief") as brief_mock,
+        patch(f"{_SERVICE_MODULE}.load_style_profile") as style_mock,
+        patch(f"{_SERVICE_MODULE}.load_confirmed_dramaturgy") as plan_mock,
+        patch(f"{_SERVICE_MODULE}.load_folder_voiceover_settings") as settings_mock,
+    ):
+        stale = is_draft_stale(
+            project,
+            "Grand Canyon",
+            result.draft,
+            project_brief=preloaded_brief,
+            style_profile=preloaded_style_profile,
+            plan=preloaded_plan,
+            settings_doc=preloaded_settings_doc,
+        )
+
+    assert stale is False
+    brief_mock.assert_not_called()
+    style_mock.assert_not_called()
+    plan_mock.assert_not_called()
+    settings_mock.assert_not_called()
+
+
+def test_is_draft_stale_without_preloaded_documents_still_loads_them(tmp_path: Path) -> None:
+    """Gegenprobe: ohne Angabe (Standardverhalten, unverändert für
+    bestehende Aufrufer) lädt is_draft_stale weiterhin selbst von der Platte."""
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    assert is_draft_stale(project, "Grand Canyon", result.draft) is False
+
+
 def test_upsert_preserves_other_folders(tmp_path: Path) -> None:
     project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
     with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):

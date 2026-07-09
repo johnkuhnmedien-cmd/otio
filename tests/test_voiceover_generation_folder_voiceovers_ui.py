@@ -123,6 +123,86 @@ def test_page_renders_with_confirmed_dramaturgy_and_draft(
     assert not get_exports_dir(project.work_dir_path).exists()
 
 
+def test_page_render_with_multiple_folders_does_not_reload_shared_documents_per_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Performance-Fix (Juli 2026, Nutzerfeedback zu langen Ladezeiten bei
+    vielen Ordnern): Project Brief / Style Profile / Dramaturgie / Settings
+    werden EINMAL pro Seiten-Rendering geladen und an jeden Ordner
+    weitergereicht statt einmal PRO ORDNER erneut von der Platte gelesen zu
+    werden (via is_draft_stale -> compute_current_hashes)."""
+    project_root = tmp_path / "USA"
+    for folder in ("Grand Canyon", "Yellowstone"):
+        (project_root / folder).mkdir(parents=True)
+    project = Project(
+        id="fvo-perf-project",
+        name="Perf Test",
+        project_root=str(project_root),
+        work_dir=str(project_root / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=["Grand Canyon", "Yellowstone"],
+        selected_asset_subdirs=["Grand Canyon", "Yellowstone"],
+    )
+    for folder in ("Grand Canyon", "Yellowstone"):
+        inv_path = get_folder_inventory_path(project.work_dir_path, folder)
+        inv_path.parent.mkdir(parents=True, exist_ok=True)
+        analysis = AssetFolderAnalysis(
+            folder=folder,
+            assets=[AssetMediaAnalysis(path=f"{folder}/clip1.mp4", description="Weite Aufnahme.")],
+        )
+        inv_path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
+
+    plan = DramaturgyPlan(
+        project_id=project.id,
+        recommended_folder_order=[
+            DramaturgyFolderEntry(folder_name="Grand Canyon", order_index=1, enabled=True),
+            DramaturgyFolderEntry(folder_name="Yellowstone", order_index=2, enabled=True),
+        ],
+    )
+    save_confirmed_dramaturgy(project, plan)
+    save_folder_voiceover_settings(project, build_default_folder_voiceover_settings(project))
+
+    fake_response = PlanLlmResponse(
+        provider="anthropic",
+        model="claude-sonnet-5",
+        raw_text='{"voiceover_text_full": "Text.", "sentence_items": []}',
+    )
+    with patch(f"{_AUTHOR_MODULE}.generate_plan_text_with_metadata", return_value=fake_response):
+        generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+        generate_folder_voiceover(project, "Yellowstone", provider="anthropic", model="claude-sonnet-5")
+
+    _patch_project_selector(project, monkeypatch)
+
+    from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
+    from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
+        load_folder_voiceover_settings,
+    )
+    from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
+    from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
+
+    with (
+        patch(f"{_AUTHOR_MODULE}.load_project_brief", wraps=load_project_brief) as brief_mock,
+        patch(f"{_AUTHOR_MODULE}.load_style_profile", wraps=load_style_profile) as style_mock,
+        patch(f"{_AUTHOR_MODULE}.load_confirmed_dramaturgy", wraps=load_confirmed_dramaturgy) as plan_mock,
+        patch(
+            f"{_AUTHOR_MODULE}.load_folder_voiceover_settings", wraps=load_folder_voiceover_settings
+        ) as settings_mock,
+    ):
+        render_folder_voiceovers_page()  # darf nicht werfen
+
+    # Diese vier Loader werden NUR von compute_current_hashes (via
+    # is_draft_stale) aufgerufen, wenn KEIN vorab geladenes Dokument
+    # übergeben wird. Die Seite selbst lädt sie über ihre EIGENEN,
+    # ungepatchten Importe (siehe render_folder_voiceovers_page) — deren
+    # Aufrufe tauchen hier absichtlich NICHT auf. Vor dem Fix hätte
+    # is_draft_stale diese vier Funktionen für JEDEN der zwei Ordner erneut
+    # aufgerufen (also 2x jede statt 0x).
+    assert brief_mock.call_count == 0
+    assert style_mock.call_count == 0
+    assert plan_mock.call_count == 0
+    assert settings_mock.call_count == 0
+
+
 def _run_repro(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, project_id: str) -> AppTest:
     monkeypatch.setenv("REPRO_ROOT", str(tmp_path))
     monkeypatch.setenv("REPRO_PROJECT_ID", project_id)

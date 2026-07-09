@@ -91,6 +91,12 @@ __all__ = [
 
 ProgressCallback = Callable[[str, int, int], None]
 
+# Sentinel für optionale preloaded-Parameter (compute_current_hashes /
+# is_draft_stale): style_profile/plan/settings_doc können LEGITIM None sein
+# (z. B. noch kein Style Profile oder keine bestätigte Dramaturgie) — daher
+# darf "nicht übergeben" nicht mit dem Wert None verwechselt werden.
+_UNSET: Any = object()
+
 
 def _is_video(path: str, media_type: str) -> bool:
     if media_type == "video":
@@ -108,9 +114,35 @@ def _is_image(path: str, media_type: str) -> bool:
     return bool(path) and is_image_media(Path(path))
 
 
-def build_inventory_asset_context(project: Project, folder_name: str) -> list[dict[str, Any]]:
+def _cached_probe_duration(
+    path: str, duration_cache: dict[str, float | None] | None
+) -> float | None:
+    """Ein-Aufruf-pro-Pfad-Cache für probe_duration_seconds, analog zum
+    Muster in cut_plan_validator.py / cut_plan_edit_plan_bridge.py: rein
+    In-Memory, lebt nur für die Dauer eines einzelnen Aufrufs/Renderings
+    (z. B. eines Streamlit-Rerenders), keine Persistenz über Reruns hinweg —
+    verhindert dutzende/hunderte redundante ffprobe-Subprozessaufrufe, wenn
+    dieselbe Datei mehrfach im selben Durchlauf geprüft wird (z. B. einmal
+    pro aktivem Ordner in der Folder-Voice-overs-Seite)."""
+    if duration_cache is None:
+        return probe_duration_seconds(Path(path))
+    if path not in duration_cache:
+        duration_cache[path] = probe_duration_seconds(Path(path))
+    return duration_cache[path]
+
+
+def build_inventory_asset_context(
+    project: Project,
+    folder_name: str,
+    *,
+    duration_cache: dict[str, float | None] | None = None,
+) -> list[dict[str, Any]]:
     """Kompakte Asset-Liste für Prompt + Validierung: asset_id, media_type,
-    duration_sec, description — asset_id ist die einzige verlässliche Referenz."""
+    duration_sec, description — asset_id ist die einzige verlässliche Referenz.
+
+    duration_cache ist optional: ohne Angabe wird probe_duration_seconds wie
+    bisher direkt aufgerufen (kein Verhaltensunterschied für bestehende
+    Aufrufer)."""
     inventory = load_folder_inventory(project, folder_name)
     assets: list[dict[str, Any]] = []
     for asset in inventory.assets:
@@ -122,7 +154,7 @@ def build_inventory_asset_context(project: Project, folder_name: str) -> list[di
         media_type = "video" if is_video else ("image" if is_image else "")
         duration_sec = 0.0
         if is_video:
-            probed = probe_duration_seconds(Path(asset.path))
+            probed = _cached_probe_duration(asset.path, duration_cache)
             duration_sec = probed if probed and probed > 0 else 0.0
         assets.append(
             {
@@ -416,18 +448,41 @@ def save_folder_voiceovers_confirmed(
     return normalized
 
 
-def compute_current_hashes(project: Project, folder_name: str) -> dict[str, str]:
-    """Aktuelle Hashes der fünf Staleness-Quellen (Phase 4 §13)."""
-    project_brief = load_project_brief(project)
-    style_profile = load_style_profile(project)
-    plan = load_confirmed_dramaturgy(project)
-    settings_doc = load_folder_voiceover_settings(project)
+def compute_current_hashes(
+    project: Project,
+    folder_name: str,
+    *,
+    project_brief: Any = _UNSET,
+    style_profile: Any = _UNSET,
+    plan: DramaturgyPlan | None | Any = _UNSET,
+    settings_doc: Any = _UNSET,
+    duration_cache: dict[str, float | None] | None = None,
+) -> dict[str, str]:
+    """Aktuelle Hashes der fünf Staleness-Quellen (Phase 4 §13).
+
+    project_brief/style_profile/plan/settings_doc können optional
+    vorab geladen und durchgereicht werden (z. B. einmal pro Seiten-Rendering
+    statt einmal pro Ordner) — ohne Angabe (Standardwert _UNSET) wird wie
+    bisher jeweils frisch von der Platte geladen, kein Verhaltensunterschied
+    für bestehende Aufrufer. Explizit übergebenes None bleibt None (z. B.
+    'kein Style Profile vorhanden') statt automatisch neu geladen zu werden.
+    duration_cache siehe build_inventory_asset_context."""
+    if project_brief is _UNSET:
+        project_brief = load_project_brief(project)
+    if style_profile is _UNSET:
+        style_profile = load_style_profile(project)
+    if plan is _UNSET:
+        plan = load_confirmed_dramaturgy(project)
+    if settings_doc is _UNSET:
+        settings_doc = load_folder_voiceover_settings(project)
     setting = (
         next((s for s in settings_doc.settings if s.folder_name == folder_name), None)
         if settings_doc is not None
         else None
     )
-    inventory_assets = build_inventory_asset_context(project, folder_name)
+    inventory_assets = build_inventory_asset_context(
+        project, folder_name, duration_cache=duration_cache
+    )
 
     return {
         "project_brief_hash": content_hash_of_model(project_brief),
@@ -438,10 +493,33 @@ def compute_current_hashes(project: Project, folder_name: str) -> dict[str, str]
     }
 
 
-def is_draft_stale(project: Project, folder_name: str, draft: FolderVoiceoverDraft) -> bool:
+def is_draft_stale(
+    project: Project,
+    folder_name: str,
+    draft: FolderVoiceoverDraft,
+    *,
+    project_brief: Any = _UNSET,
+    style_profile: Any = _UNSET,
+    plan: DramaturgyPlan | None | Any = _UNSET,
+    settings_doc: Any = _UNSET,
+    duration_cache: dict[str, float | None] | None = None,
+) -> bool:
     """True, wenn sich mindestens eine der fünf Quellen seit der Erzeugung
-    geändert hat. Löscht/überschreibt nichts — nur eine UI-Warnung (§13)."""
-    current = compute_current_hashes(project, folder_name)
+    geändert hat. Löscht/überschreibt nichts — nur eine UI-Warnung (§13).
+
+    Optionale Parameter siehe compute_current_hashes — erlauben es Aufrufern
+    (z. B. der Drafts-Liste mit vielen Ordnern), teure Operationen (Datei-
+    Ladevorgänge, ffprobe-Aufrufe) über mehrere is_draft_stale-Aufrufe hinweg
+    innerhalb EINES Renderings zu teilen statt sie pro Ordner zu wiederholen."""
+    current = compute_current_hashes(
+        project,
+        folder_name,
+        project_brief=project_brief,
+        style_profile=style_profile,
+        plan=plan,
+        settings_doc=settings_doc,
+        duration_cache=duration_cache,
+    )
     checks = (
         ("project_brief_hash", draft.project_brief_hash),
         ("style_profile_hash", draft.style_profile_hash),

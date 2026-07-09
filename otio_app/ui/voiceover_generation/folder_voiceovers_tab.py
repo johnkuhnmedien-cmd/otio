@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from otio_app.defaults import (
     DRAMATURGY_ROLES,
     ENERGY_CHOICES,
@@ -23,9 +25,12 @@ from otio_app.services.voiceover_generation.model_settings_service import (
     save_model_settings,
 )
 from otio_app.services.voiceover_generation.models import (
+    DramaturgyPlan,
     FolderVoiceoverDraft,
     FolderVoiceoverSettingsDocument,
     FolderVoiceoverValidationReportsDocument,
+    ProjectBrief,
+    VoiceoverStyleProfile,
 )
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
 from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
@@ -54,6 +59,23 @@ from otio_app.ui.voiceover_generation._shared import (
 )
 
 import streamlit as st
+
+
+@dataclass
+class _StaleCheckContext:
+    """Bündelt alles, was is_draft_stale sonst PRO ORDNER neu von der Platte
+    laden bzw. per ffprobe neu vermessen würde. Wird EINMAL pro Seiten-
+    Rendering in render_folder_voiceovers_page() erzeugt und an jeden
+    Drafts-Eintrag weitergereicht (Nutzerfeedback: lange Ladezeiten bei
+    vielen Ordnern, Juli 2026). duration_cache lebt nur für dieses eine
+    Rendering — kein Caching über Streamlit-Reruns hinweg, damit geänderte
+    Mediendateien immer korrekt neu erkannt werden."""
+
+    project_brief: ProjectBrief
+    style_profile: VoiceoverStyleProfile | None
+    confirmed_plan: DramaturgyPlan
+    settings_doc: FolderVoiceoverSettingsDocument
+    duration_cache: dict[str, float | None] = field(default_factory=dict)
 
 
 def _render_settings_table(project: Project, settings_doc: FolderVoiceoverSettingsDocument) -> list[dict]:
@@ -170,8 +192,18 @@ def _render_folder_draft(
     review_model: str,
     reports_document: FolderVoiceoverValidationReportsDocument,
     is_confirmed: bool,
+    stale_check_context: "_StaleCheckContext",
 ) -> None:
-    if is_draft_stale(project, folder_name, draft):
+    if is_draft_stale(
+        project,
+        folder_name,
+        draft,
+        project_brief=stale_check_context.project_brief,
+        style_profile=stale_check_context.style_profile,
+        plan=stale_check_context.confirmed_plan,
+        settings_doc=stale_check_context.settings_doc,
+        duration_cache=stale_check_context.duration_cache,
+    ):
         st.warning(
             "Dieser Voice-over-Entwurf basiert möglicherweise auf veralteten Einstellungen."
         )
@@ -419,6 +451,19 @@ def render_folder_voiceovers_page() -> None:
     confirmed_names = {item.folder_name for item in confirmed_document.items}
     reports_document = load_validation_reports(project)
 
+    # Einmal pro Rendering: brief/style_profile/confirmed_plan/settings_doc
+    # sind oben bereits geladen — hier gebündelt für is_draft_stale, damit sie
+    # nicht erneut pro Ordner von der Platte gelesen werden. duration_cache
+    # sorgt zusätzlich dafür, dass dieselbe Videodatei innerhalb dieses einen
+    # Renderings nur einmal per ffprobe vermessen wird (statt einmal pro
+    # Ordner, in dem sie vorkommt).
+    stale_check_context = _StaleCheckContext(
+        project_brief=brief,
+        style_profile=style_profile,
+        confirmed_plan=confirmed_plan,
+        settings_doc=settings_doc,
+    )
+
     for entry in active_entries:
         draft = next(
             (item for item in draft_document.items if item.folder_name == entry.folder_name), None
@@ -438,6 +483,7 @@ def render_folder_voiceovers_page() -> None:
                 review_model=review_model,
                 reports_document=reports_document,
                 is_confirmed=entry.folder_name in confirmed_names,
+                stale_check_context=stale_check_context,
             )
 
     _render_bulk_draft_actions(
