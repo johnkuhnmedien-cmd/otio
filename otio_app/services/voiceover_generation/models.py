@@ -91,6 +91,8 @@ __all__ = [
     "ProjectBrief",
     "VoiceoverStyleReferences",
     "VoiceoverStyleProfile",
+    "StyleProfileLibraryEntry",
+    "StyleProfileLibrary",
     "LlmRoleSettings",
     "VoiceoverGenerationModelSettings",
     "LlmRunManifest",
@@ -169,6 +171,25 @@ class VoiceoverStyleProfile(BaseModel):
     source_reference_hash: str = ""
     project_brief_hash: str = ""
     llm_run_id: str = ""
+
+
+class StyleProfileLibraryEntry(BaseModel):
+    """Ein benannter, projektübergreifend wiederverwendbarer Style-Profile-Snapshot."""
+
+    name: str
+    profile: VoiceoverStyleProfile
+    saved_at: datetime = Field(default_factory=_utcnow)
+
+
+class StyleProfileLibrary(BaseModel):
+    """Projektübergreifende Bibliothek gespeicherter Style Profiles.
+
+    Wird NICHT unter dem Arbeitsordner eines Projekts gespeichert, sondern
+    global (siehe style_profile_library_service.py), damit ein einmal
+    erstelltes Style Profile in jedem weiteren Projekt wiederverwendet werden
+    kann."""
+
+    entries: list[StyleProfileLibraryEntry] = Field(default_factory=list)
 
 
 class LlmRoleSettings(BaseModel):

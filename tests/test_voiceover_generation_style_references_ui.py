@@ -1,0 +1,144 @@
+"""UI-Tests für den Style-References-Tab — Nutzerfeedback Juli 2026:
+
+1. "Modell Einstellungen bitte vereinfachen. Nur die Modelle listen (kein
+   Freitext), nicht eine gesonderte Spalte für Provider."
+2. "Wie speichere ich eine Style Reference ab? [...] Ich will gespeicherte
+   Style Profiles für alle Projekte die ich erstelle aufrufbar machen."
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from streamlit.testing.v1 import AppTest
+
+from otio_app.defaults import VOICEOVER_GEN_MODEL_LABELS, VOICEOVER_GEN_ROLE_LABELS
+
+PROJECT_ID = "repro-project"
+SCRIPT_PATH = Path(__file__).parent / "_apptest_scripts" / "style_references_repro.py"
+
+
+def _run_repro(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
+    monkeypatch.setenv("REPRO_ROOT", str(tmp_path))
+    monkeypatch.setenv("REPRO_PROJECT_ID", PROJECT_ID)
+    at = AppTest.from_file(str(SCRIPT_PATH))
+    at.run()
+    assert not at.exception, at.exception
+    return at
+
+
+def test_page_renders_without_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _run_repro(tmp_path, monkeypatch)
+
+
+def test_model_settings_has_one_selectbox_per_role_no_free_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = _run_repro(tmp_path, monkeypatch)
+    selectbox_labels = {selectbox.label for selectbox in at.selectbox}
+    for label in VOICEOVER_GEN_ROLE_LABELS.values():
+        assert label in selectbox_labels
+
+    # Keine separate "Provider"-Spalte mehr, kein Modell-Freitext mehr.
+    assert not any("provider" in label.lower() for label in selectbox_labels)
+    text_input_labels = {text_input.label for text_input in at.text_input}
+    assert not any("modell" in label.lower() for label in text_input_labels)
+
+
+def test_model_selectbox_options_are_curated_model_choices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = _run_repro(tmp_path, monkeypatch)
+    style_profile_selectbox = next(
+        selectbox
+        for selectbox in at.selectbox
+        if selectbox.label == VOICEOVER_GEN_ROLE_LABELS["style_profile"]
+    )
+    # AppTest liefert die formatierten Anzeige-Labels (format_func), nicht die
+    # rohen Modell-IDs — daher gegen die Label-Werte prüfen.
+    assert set(style_profile_selectbox.options) == set(VOICEOVER_GEN_MODEL_LABELS.values())
+    # Default aus VoiceoverGenerationModelSettings ist anthropic/claude-sonnet-5
+    # (value liefert im Gegensatz zu options die rohe, ungeformatete Modell-ID).
+    assert style_profile_selectbox.value == "anthropic:claude-sonnet-5"
+
+
+def test_style_profile_library_section_is_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = _run_repro(tmp_path, monkeypatch)
+    subheaders = {subheader.value for subheader in at.subheader}
+    assert "Style Profile Bibliothek (projektübergreifend)" in subheaders
+
+
+def test_library_save_button_disabled_hint_when_no_profile_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = _run_repro(tmp_path, monkeypatch)
+    captions = " ".join(caption.value for caption in at.caption)
+    assert "existiert noch kein Style Profile" in captions
+    assert "Bibliothek ist noch leer" in captions
+
+
+def test_save_profile_to_library_then_load_into_another_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.models import Project, ProjectMode
+    from otio_app.services.voiceover_generation.style_profile_library_service import (
+        get_profile_from_library,
+    )
+    from otio_app.services.voiceover_generation.style_profile_service import (
+        load_style_profile,
+        save_style_profile,
+    )
+    from otio_app.services.voiceover_generation.models import VoiceoverStyleProfile
+
+    def _project() -> Project:
+        return Project(
+            id=PROJECT_ID,
+            name="Repro",
+            project_root=str(tmp_path / "USA"),
+            work_dir=str(tmp_path / "USA" / "_otio"),
+            project_mode=ProjectMode.WITHOUT_VOICEOVER,
+            asset_subdir_names=["Grand Canyon"],
+            selected_asset_subdirs=["Grand Canyon"],
+        )
+
+    project = _project()
+    save_style_profile(
+        project,
+        VoiceoverStyleProfile(project_id=project.id, overall_tone="calm, cinematic"),
+    )
+
+    at = _run_repro(tmp_path, monkeypatch)
+    name_input = next(
+        text_input
+        for text_input in at.text_input
+        if text_input.label == "Name in der Bibliothek"
+    )
+    at = name_input.set_value("Ruhige Dokumentation").run()
+    save_button = next(b for b in at.button if b.label == "In Bibliothek speichern")
+    at = save_button.click().run()
+    assert not at.exception, at.exception
+
+    # Isolierte Bibliothek unter root/global_data (siehe Repro-Skript) enthält
+    # den neuen Eintrag — nicht nur session_state.
+    import otio_app.services.voiceover_generation.style_profile_library_service as lib_service
+
+    lib_service.ensure_data_dir = lambda: tmp_path / "global_data"
+    loaded_profile = get_profile_from_library("Ruhige Dokumentation")
+    assert loaded_profile is not None
+    assert loaded_profile.overall_tone == "calm, cinematic"
+
+    # In ein zweites, unabhängiges Projekt übernehmen.
+    other_project = Project(
+        id="other-project",
+        name="Anderes Projekt",
+        project_root=str(tmp_path / "Other"),
+        work_dir=str(tmp_path / "Other" / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=["Yellowstone"],
+        selected_asset_subdirs=["Yellowstone"],
+    )
+    save_style_profile(other_project, loaded_profile)
+    assert load_style_profile(other_project).overall_tone == "calm, cinematic"

@@ -12,6 +12,7 @@ build/
 data/*.db
 data/cache/
 data/user_secrets.env
+data/style_profile_library.json
 logs/
 *.log
 
