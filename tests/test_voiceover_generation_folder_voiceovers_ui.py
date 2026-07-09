@@ -188,6 +188,43 @@ def test_bulk_confirm_all_button_click_confirms_all_folders_with_drafts(
     assert "Grand Canyon" in {item.folder_name for item in confirmed.items}
 
 
+def test_bulk_save_all_after_confirm_all_does_not_undo_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression (Nutzerfeedback Juli 2026): 'Wenn ich alle auf einmal
+    bestätigen will kommt der Status Needs validation.' Reproduziert die
+    exakte Reihenfolge: erst 'Alle bestätigen', DANACH 'Alle Texte
+    speichern' (z. B. aus Gewohnheit) — der Text hat sich dabei nicht
+    geändert, die Bestätigung darf NICHT zurückgesetzt werden."""
+    project_id = "fvo-save-after-confirm-project"
+    at = _run_repro(tmp_path, monkeypatch, project_id)
+
+    confirm_all_button = next(b for b in at.button if b.label == "Alle bestätigen")
+    at = confirm_all_button.click().run()
+    assert not at.exception, at.exception
+
+    save_all_button = next(b for b in at.button if b.label == "Alle Texte speichern")
+    at = save_all_button.click().run()
+    assert not at.exception, at.exception
+
+    project = Project(
+        id=project_id,
+        name="Repro",
+        project_root=str(tmp_path / "USA"),
+        work_dir=str(tmp_path / "USA" / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    from otio_app.services.voiceover_generation.voiceover_author_service import (
+        load_folder_voiceovers_draft,
+    )
+
+    draft_doc = load_folder_voiceovers_draft(project)
+    draft = next(item for item in draft_doc.items if item.folder_name == "Grand Canyon")
+    assert draft.status == "CONFIRMED"
+
+
 def test_bulk_unconfirm_all_button_click_unconfirms_all_folders(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

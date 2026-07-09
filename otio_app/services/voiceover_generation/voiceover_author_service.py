@@ -665,10 +665,19 @@ def update_folder_voiceover_text(
     project: Project, folder_name: str, new_text: str
 ) -> FolderVoiceoverDraft:
     """Manuelle Textbearbeitung: aktualisiert word_count und setzt den Status
-    auf NEEDS_VALIDATION (Phase 4 §11) — löst KEINE Neuvalidierung selbst aus."""
+    auf NEEDS_VALIDATION (Phase 4 §11) — löst KEINE Neuvalidierung selbst aus.
+
+    Ist new_text IDENTISCH zum bereits gespeicherten Text, wird NICHTS
+    verändert (Status/confirmed_at bleiben unangetastet) — sonst würde ein
+    erneutes 'Speichern' unveränderten Texts eine bereits erteilte
+    Bestätigung stillschweigend zurücksetzen. Besonders relevant bei
+    'Alle Texte speichern', das für jeden Ordner speichert, unabhängig davon,
+    ob dort überhaupt etwas bearbeitet wurde (Nutzerfeedback Juli 2026)."""
     draft = get_folder_voiceover_draft(project, folder_name)
     if draft is None:
         raise ValueError(f"Kein Voice-over-Entwurf für '{folder_name}' vorhanden.")
+    if new_text == draft.voiceover_text_full:
+        return draft
     updated = draft.model_copy(
         update={
             "voiceover_text_full": new_text,

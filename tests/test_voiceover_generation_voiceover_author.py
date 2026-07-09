@@ -34,6 +34,7 @@ from otio_app.services.voiceover_generation.voiceover_author_service import (
     build_inventory_asset_context,
     generate_all_folder_voiceovers,
     generate_folder_voiceover,
+    get_folder_voiceover_draft,
     is_draft_stale,
     load_folder_voiceovers_draft,
     update_folder_voiceover_text,
@@ -393,6 +394,53 @@ def test_update_folder_voiceover_text_sets_needs_validation(tmp_path: Path) -> N
     assert updated.status == "NEEDS_VALIDATION"
     assert updated.word_count == 5
     assert updated.voiceover_text_full == "Ein komplett neuer manueller Text."
+
+
+def test_update_folder_voiceover_text_with_unchanged_text_does_not_reset_confirmed_status(
+    tmp_path: Path,
+) -> None:
+    """Nutzerfeedback: 'Wenn ich alle auf einmal bestätigen will kommt der
+    Status Needs validation' — Ursache war, dass ein erneutes Speichern
+    UNVERÄNDERTEN Texts (z. B. via 'Alle Texte speichern') eine bereits
+    erteilte Bestätigung stillschweigend zurücksetzte. Identischer Text darf
+    den Status NICHT verändern."""
+    from otio_app.services.voiceover_generation.voiceover_review_service import (
+        confirm_folder_voiceover,
+    )
+
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
+        generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+    confirmed = confirm_folder_voiceover(project, "Grand Canyon")
+    assert confirmed.status == "CONFIRMED"
+
+    unchanged = update_folder_voiceover_text(
+        project, "Grand Canyon", confirmed.voiceover_text_full
+    )
+    assert unchanged.status == "CONFIRMED"
+    assert unchanged.confirmed_at == confirmed.confirmed_at
+
+    reloaded = get_folder_voiceover_draft(project, "Grand Canyon")
+    assert reloaded.status == "CONFIRMED"
+
+
+def test_update_folder_voiceover_text_with_actually_changed_text_still_resets_status(
+    tmp_path: Path,
+) -> None:
+    """Gegenprobe: eine ECHTE Textänderung setzt weiterhin auf
+    NEEDS_VALIDATION zurück — auch wenn der Ordner vorher bestätigt war."""
+    from otio_app.services.voiceover_generation.voiceover_review_service import (
+        confirm_folder_voiceover,
+    )
+
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
+        generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+    confirm_folder_voiceover(project, "Grand Canyon")
+
+    changed = update_folder_voiceover_text(project, "Grand Canyon", "Ein wirklich anderer Text.")
+    assert changed.status == "NEEDS_VALIDATION"
+    assert changed.voiceover_text_full == "Ein wirklich anderer Text."
 
 
 def test_draft_is_stale_after_settings_change(tmp_path: Path) -> None:

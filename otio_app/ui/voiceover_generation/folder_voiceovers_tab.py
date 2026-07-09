@@ -210,9 +210,12 @@ def _render_folder_draft(
     col_save, col_regen, col_validate, col_confirm, col_unconfirm = st.columns(5)
     with col_save:
         if st.button("Text speichern", key=f"vo_fvo_save_text_{folder_name}_{project.id}"):
-            update_folder_voiceover_text(project, folder_name, text_value)
-            st.success("Text gespeichert (Status: NEEDS_VALIDATION).")
-            st.rerun()
+            if text_value == draft.voiceover_text_full:
+                st.info("Keine Änderung — Status bleibt unangetastet.")
+            else:
+                update_folder_voiceover_text(project, folder_name, text_value)
+                st.success("Text geändert und gespeichert (Status: NEEDS_VALIDATION).")
+                st.rerun()
     with col_regen:
         if st.button("Erneut generieren", key=f"vo_fvo_regen_{folder_name}_{project.id}"):
             with st.spinner("Wird neu erzeugt…"):
@@ -486,7 +489,8 @@ def _render_bulk_draft_actions(
             key=f"vo_fvo_save_all_{project.id}",
             disabled=not has_any_draft,
         ):
-            saved_count = 0
+            checked_count = 0
+            changed_count = 0
             for entry in active_entries:
                 draft = next(
                     (item for item in draft_document.items if item.folder_name == entry.folder_name),
@@ -494,11 +498,22 @@ def _render_bulk_draft_actions(
                 )
                 if draft is None:
                     continue
+                checked_count += 1
                 text_key = f"vo_fvo_text_{entry.folder_name}_{project.id}"
                 text_value = st.session_state.get(text_key, draft.voiceover_text_full)
+                if text_value != draft.voiceover_text_full:
+                    changed_count += 1
+                # Unveränderten Text erneut zu speichern ist ein No-Op (siehe
+                # update_folder_voiceover_text) — setzt Status NICHT zurück,
+                # z. B. nicht von CONFIRMED auf NEEDS_VALIDATION.
                 update_folder_voiceover_text(project, entry.folder_name, text_value)
-                saved_count += 1
-            st.success(f"{saved_count} Ordner-Texte gespeichert (Status: NEEDS_VALIDATION).")
+            if changed_count:
+                st.success(
+                    f"{changed_count}/{checked_count} Ordner-Texte geändert und gespeichert "
+                    "(Status: NEEDS_VALIDATION). Unveränderte Ordner bleiben unangetastet."
+                )
+            else:
+                st.info(f"Keine Änderungen an {checked_count} geprüften Ordner-Texten gefunden.")
             st.rerun()
 
     with col_regen_all:
