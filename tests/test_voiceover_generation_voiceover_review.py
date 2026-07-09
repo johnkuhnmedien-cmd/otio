@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis
 from otio_app.models import Project, ProjectMode
 from otio_app.project_layout import (
@@ -34,11 +36,14 @@ from otio_app.services.voiceover_generation.voiceover_author_service import (
 )
 from otio_app.services.voiceover_generation.voiceover_review_service import (
     apply_corrected_voiceover,
+    confirm_all_folder_voiceovers,
     confirm_folder_voiceover,
     load_validation_reports,
     run_deterministic_checks,
     run_folder_voiceover_review_loop,
+    unconfirm_all_folder_voiceovers,
     unconfirm_folder_voiceover,
+    validate_all_folder_voiceovers,
 )
 
 _AUTHOR_MODULE = "otio_app.services.voiceover_generation.voiceover_author_service"
@@ -120,6 +125,48 @@ def _review_response(errors: list[dict]) -> PlanLlmResponse:
     return PlanLlmResponse(
         provider="anthropic", model="claude-sonnet-5", raw_text=json.dumps({"errors": errors})
     )
+
+
+def _make_project_with_folders(tmp_path: Path, folders: list[str]) -> Project:
+    """Mehrere aktivierte Ordner — Grundlage für die 'Alle X'-Sammel-Tests."""
+    project_root = tmp_path / "USA"
+    project_root.mkdir()
+    for folder in folders:
+        (project_root / folder).mkdir()
+    project = Project(
+        id="review-project-bulk",
+        name="Review Bulk Test",
+        project_root=str(project_root),
+        work_dir=str(project_root / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=folders,
+        selected_asset_subdirs=folders,
+    )
+    for folder in folders:
+        inv_path = get_folder_inventory_path(project.work_dir_path, folder)
+        inv_path.parent.mkdir(parents=True, exist_ok=True)
+        analysis = AssetFolderAnalysis(
+            folder=folder,
+            assets=[
+                AssetMediaAnalysis(path=f"{folder}/clip1.mp4", description=f"Weite Aufnahme von {folder}."),
+                AssetMediaAnalysis(path=f"{folder}/clip2.mp4", description=f"Nahaufnahme in {folder}."),
+            ],
+        )
+        inv_path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
+
+    plan = DramaturgyPlan(
+        project_id=project.id,
+        recommended_folder_order=[
+            DramaturgyFolderEntry(
+                folder_name=folder, order_index=index, enabled=True,
+                recommended_word_count=10, recommended_min_words=5, recommended_max_words=15,
+            )
+            for index, folder in enumerate(folders, start=1)
+        ],
+    )
+    save_confirmed_dramaturgy(project, plan)
+    save_folder_voiceover_settings(project, build_default_folder_voiceover_settings(project))
+    return project
 
 
 def test_deterministic_check_flags_missing_transition_to_next(tmp_path: Path) -> None:
@@ -427,3 +474,130 @@ def test_validation_report_saved_to_disk(tmp_path: Path) -> None:
     assert path.is_file()
     reports = load_validation_reports(project)
     assert "Grand Canyon" in reports.reports
+
+
+# --- Nutzerfeedback: 'Alle X'-Sammel-Aktionen unterhalb der Drafts-Liste
+# (validate_all_folder_voiceovers, confirm_all_folder_voiceovers,
+# unconfirm_all_folder_voiceovers) ---
+
+
+def test_validate_all_folder_voiceovers_processes_only_folders_with_drafts(
+    tmp_path: Path,
+) -> None:
+    folders = ["Grand Canyon", "Yellowstone", "Zion"]
+    project = _make_project_with_folders(tmp_path, folders)
+    # Nur zwei von drei Ordnern haben einen Entwurf.
+    _generate_draft(project, "Grand Canyon")
+    _generate_draft(project, "Yellowstone")
+
+    with patch(f"{_REVIEW_MODULE}.generate_plan_text_with_metadata", return_value=_review_response([])):
+        reports = validate_all_folder_voiceovers(
+            project, provider="anthropic", model="claude-sonnet-5"
+        )
+
+    assert {report.folder_name for report in reports} == {"Grand Canyon", "Yellowstone"}
+    assert all(report.status == "PASS" for report in reports)
+
+
+def test_validate_all_folder_voiceovers_reports_progress(tmp_path: Path) -> None:
+    folders = ["Grand Canyon", "Yellowstone"]
+    project = _make_project_with_folders(tmp_path, folders)
+    for folder in folders:
+        _generate_draft(project, folder)
+
+    progress_calls = []
+    with patch(f"{_REVIEW_MODULE}.generate_plan_text_with_metadata", return_value=_review_response([])):
+        validate_all_folder_voiceovers(
+            project,
+            provider="anthropic",
+            model="claude-sonnet-5",
+            progress_callback=lambda folder, index, total: progress_calls.append((folder, index, total)),
+        )
+
+    assert progress_calls == [("Grand Canyon", 1, 2), ("Yellowstone", 2, 2)]
+
+
+def test_validate_all_folder_voiceovers_raises_without_confirmed_dramaturgy(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "USA"
+    project_root.mkdir()
+    project = Project(
+        id="no-dramaturgy",
+        name="No Dramaturgy",
+        project_root=str(project_root),
+        work_dir=str(project_root / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=[],
+        selected_asset_subdirs=[],
+    )
+    with pytest.raises(ValueError):
+        validate_all_folder_voiceovers(project, provider="anthropic", model="claude-sonnet-5")
+
+
+def test_confirm_all_folder_voiceovers_confirms_without_requiring_pass_status(
+    tmp_path: Path,
+) -> None:
+    """Nutzerfeedback: 'ich will auch ohne vorherige Validierung alle
+    bestätigen können' — identisches Verhalten wie die einzelne
+    'Bestätigen'-Schaltfläche pro Ordner (keine PASS-Pflicht)."""
+    folders = ["Grand Canyon", "Yellowstone"]
+    project = _make_project_with_folders(tmp_path, folders)
+    for folder in folders:
+        _generate_draft(project, folder)
+    # Explizit KEINE Validierung durchgeführt.
+
+    results = confirm_all_folder_voiceovers(project)
+
+    assert {draft.folder_name for draft in results} == set(folders)
+    confirmed = load_folder_voiceovers_confirmed(project)
+    assert {item.folder_name for item in confirmed.items} == set(folders)
+
+
+def test_confirm_all_folder_voiceovers_skips_folders_without_draft(tmp_path: Path) -> None:
+    folders = ["Grand Canyon", "Yellowstone"]
+    project = _make_project_with_folders(tmp_path, folders)
+    _generate_draft(project, "Grand Canyon")  # Yellowstone bleibt ohne Entwurf.
+
+    results = confirm_all_folder_voiceovers(project)
+
+    assert [draft.folder_name for draft in results] == ["Grand Canyon"]
+
+
+def test_confirm_all_folder_voiceovers_reports_progress(tmp_path: Path) -> None:
+    folders = ["Grand Canyon", "Yellowstone"]
+    project = _make_project_with_folders(tmp_path, folders)
+    for folder in folders:
+        _generate_draft(project, folder)
+
+    progress_calls = []
+    confirm_all_folder_voiceovers(
+        project,
+        progress_callback=lambda folder, index, total: progress_calls.append((folder, index, total)),
+    )
+    assert progress_calls == [("Grand Canyon", 1, 2), ("Yellowstone", 2, 2)]
+
+
+def test_unconfirm_all_folder_voiceovers_reverts_only_confirmed_folders(
+    tmp_path: Path,
+) -> None:
+    folders = ["Grand Canyon", "Yellowstone", "Zion"]
+    project = _make_project_with_folders(tmp_path, folders)
+    for folder in folders:
+        _generate_draft(project, folder)
+    confirm_folder_voiceover(project, "Grand Canyon")
+    confirm_folder_voiceover(project, "Yellowstone")
+    # Zion bleibt unbestätigt.
+
+    results = unconfirm_all_folder_voiceovers(project)
+
+    assert {draft.folder_name for draft in results} == {"Grand Canyon", "Yellowstone"}
+    confirmed = load_folder_voiceovers_confirmed(project)
+    assert confirmed.items == []
+
+
+def test_unconfirm_all_folder_voiceovers_noop_when_nothing_confirmed(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    _generate_draft(project)
+    results = unconfirm_all_folder_voiceovers(project)
+    assert results == []

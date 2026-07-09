@@ -47,6 +47,7 @@ from otio_app.services.voiceover_generation.llm_trace_service import (
     write_llm_prompt,
     write_llm_raw_response,
 )
+from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.model_settings_service import resolve_llm_model_id
 from otio_app.services.voiceover_generation.models import (
     FolderVoiceoverDraft,
@@ -64,12 +65,14 @@ from otio_app.services.voiceover_generation.prompts import (
 )
 from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
 from otio_app.services.voiceover_generation.voiceover_author_service import (
+    ProgressCallback,
     _count_words,
     _parse_sentence_items,
     _sanitize_sentence_items,
     build_inventory_asset_context,
     get_folder_voiceover_draft,
     load_folder_voiceovers_confirmed,
+    load_folder_voiceovers_draft,
     parse_folder_voiceover_response,
     save_folder_voiceovers_confirmed,
     upsert_folder_voiceover_draft_item,
@@ -82,8 +85,11 @@ __all__ = [
     "build_correction_prompt",
     "apply_corrected_voiceover",
     "run_folder_voiceover_review_loop",
+    "validate_all_folder_voiceovers",
     "confirm_folder_voiceover",
+    "confirm_all_folder_voiceovers",
     "unconfirm_folder_voiceover",
+    "unconfirm_all_folder_voiceovers",
     "load_validation_reports",
     "save_validation_report",
 ]
@@ -600,3 +606,71 @@ def unconfirm_folder_voiceover(project: Project, folder_name: str) -> FolderVoic
     )
     upsert_folder_voiceover_draft_item(project, reverted)
     return reverted
+
+
+def _active_folder_names_with_draft(project: Project) -> list[str]:
+    """Aktive Ordner (laut Dramaturgie-Reihenfolge) MIT vorhandenem Entwurf —
+    Grundlage für alle 'Alle X'-Sammel-Aktionen unterhalb der Drafts-Liste."""
+    plan = load_confirmed_dramaturgy(project)
+    if plan is None:
+        raise ValueError("Keine bestätigte Dramaturgie vorhanden.")
+    draft_folder_names = {item.folder_name for item in load_folder_voiceovers_draft(project).items}
+    return [
+        entry.folder_name
+        for entry in sorted(plan.recommended_folder_order, key=lambda entry: entry.order_index)
+        if entry.enabled and entry.folder_name in draft_folder_names
+    ]
+
+
+def validate_all_folder_voiceovers(
+    project: Project,
+    *,
+    provider: str,
+    model: str,
+    progress_callback: ProgressCallback | None = None,
+) -> list[FolderVoiceoverValidationReport]:
+    """Validiert (Review-/Correction-Loop) alle aktiven Ordner MIT
+    vorhandenem Entwurf SEQUENZIELL — Ordner ohne Entwurf werden
+    stillschweigend übersprungen (analog zu generate_all_folder_voiceovers).
+    Setzt NIE automatisch CONFIRMED (wie die Einzel-Validierung)."""
+    folder_names = _active_folder_names_with_draft(project)
+    results: list[FolderVoiceoverValidationReport] = []
+    total = len(folder_names)
+    for index, folder_name in enumerate(folder_names, start=1):
+        if progress_callback is not None:
+            progress_callback(folder_name, index, total)
+        results.append(
+            run_folder_voiceover_review_loop(project, folder_name, provider=provider, model=model)
+        )
+    return results
+
+
+def confirm_all_folder_voiceovers(
+    project: Project, *, progress_callback: ProgressCallback | None = None
+) -> list[FolderVoiceoverDraft]:
+    """Bestätigt alle aktiven Ordner MIT vorhandenem Entwurf — bewusst OHNE
+    Prüfung, ob die Validierung bestanden wurde (identisches Verhalten wie
+    die einzelne 'Bestätigen'-Schaltfläche pro Ordner, siehe
+    confirm_folder_voiceover)."""
+    folder_names = _active_folder_names_with_draft(project)
+    results: list[FolderVoiceoverDraft] = []
+    total = len(folder_names)
+    for index, folder_name in enumerate(folder_names, start=1):
+        if progress_callback is not None:
+            progress_callback(folder_name, index, total)
+        results.append(confirm_folder_voiceover(project, folder_name))
+    return results
+
+
+def unconfirm_all_folder_voiceovers(
+    project: Project, *, progress_callback: ProgressCallback | None = None
+) -> list[FolderVoiceoverDraft]:
+    """Nimmt die Bestätigung für alle AKTUELL bestätigten Ordner zurück."""
+    folder_names = [item.folder_name for item in load_folder_voiceovers_confirmed(project).items]
+    results: list[FolderVoiceoverDraft] = []
+    total = len(folder_names)
+    for index, folder_name in enumerate(folder_names, start=1):
+        if progress_callback is not None:
+            progress_callback(folder_name, index, total)
+        results.append(unconfirm_folder_voiceover(project, folder_name))
+    return results

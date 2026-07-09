@@ -38,10 +38,13 @@ from otio_app.services.voiceover_generation.voiceover_author_service import (
     update_folder_voiceover_text,
 )
 from otio_app.services.voiceover_generation.voiceover_review_service import (
+    confirm_all_folder_voiceovers,
     confirm_folder_voiceover,
     load_validation_reports,
     run_folder_voiceover_review_loop,
+    unconfirm_all_folder_voiceovers,
     unconfirm_folder_voiceover,
+    validate_all_folder_voiceovers,
 )
 from otio_app.ui.project_context import render_project_selector
 from otio_app.ui.voiceover_generation._shared import (
@@ -433,3 +436,140 @@ def render_folder_voiceovers_page() -> None:
                 reports_document=reports_document,
                 is_confirmed=entry.folder_name in confirmed_names,
             )
+
+    _render_bulk_draft_actions(
+        project,
+        active_entries,
+        draft_document=draft_document,
+        confirmed_names=confirmed_names,
+        author_provider=author_provider,
+        author_model=author_model,
+        review_provider=review_provider,
+        review_model=review_model,
+    )
+
+
+def _render_bulk_draft_actions(
+    project: Project,
+    active_entries: list,
+    *,
+    draft_document,
+    confirmed_names: set[str],
+    author_provider: str,
+    author_model: str,
+    review_provider: str,
+    review_model: str,
+) -> None:
+    """Sammel-Aktionen für ALLE Ordner gleichzeitig, unterhalb der Drafts-
+    Liste (Nutzerfeedback: 'Ich will unterhalb der Drafts alle gleichzeitig
+    speichern, bestätigen, validieren etc. können'). Läuft — wie schon bei
+    'Alle aktiven Folder Voice-overs generieren' oben — sequenziell und
+    blockierend (kein Abbrechen-Button; das würde einen Hintergrund-Job
+    erfordern, siehe Diagnose-Gespräch)."""
+    has_any_draft = any(
+        next((item for item in draft_document.items if item.folder_name == entry.folder_name), None)
+        is not None
+        for entry in active_entries
+    )
+
+    st.subheader("Alle Ordner gleichzeitig")
+    st.caption(
+        "Wirkt auf alle aktiven Ordner mit vorhandenem Entwurf (bzw. bestätigte Ordner bei "
+        "„Bestätigung zurücknehmen“) — läuft sequenziell, ein Ordner nach dem anderen, ohne "
+        "Abbrechen-Möglichkeit."
+    )
+    col_save_all, col_regen_all, col_validate_all, col_confirm_all, col_unconfirm_all = st.columns(5)
+
+    with col_save_all:
+        if st.button(
+            "Alle Texte speichern",
+            key=f"vo_fvo_save_all_{project.id}",
+            disabled=not has_any_draft,
+        ):
+            saved_count = 0
+            for entry in active_entries:
+                draft = next(
+                    (item for item in draft_document.items if item.folder_name == entry.folder_name),
+                    None,
+                )
+                if draft is None:
+                    continue
+                text_key = f"vo_fvo_text_{entry.folder_name}_{project.id}"
+                text_value = st.session_state.get(text_key, draft.voiceover_text_full)
+                update_folder_voiceover_text(project, entry.folder_name, text_value)
+                saved_count += 1
+            st.success(f"{saved_count} Ordner-Texte gespeichert (Status: NEEDS_VALIDATION).")
+            st.rerun()
+
+    with col_regen_all:
+        if st.button("Alle neu generieren", key=f"vo_fvo_regen_all_{project.id}"):
+            progress_placeholder = st.empty()
+
+            def _progress_regen(folder_name: str, index: int, total: int) -> None:
+                progress_placeholder.info(f"Ordner {index}/{total}: „{folder_name}“ läuft…")
+
+            with st.spinner("Voice-overs werden neu erzeugt…"):
+                results = generate_all_folder_voiceovers(
+                    project,
+                    provider=author_provider,
+                    model=author_model,
+                    progress_callback=_progress_regen,
+                )
+            progress_placeholder.empty()
+            pass_count = sum(1 for result in results if result.status == STATUS_PASS)
+            st.success(f"{pass_count}/{len(results)} Ordner erfolgreich neu erzeugt.")
+            for result in results:
+                if result.status != STATUS_PASS:
+                    st.error(f"Fehlgeschlagen: {result.error}")
+            st.rerun()
+
+    with col_validate_all:
+        if st.button(
+            "Alle validieren",
+            key=f"vo_fvo_validate_all_{project.id}",
+            disabled=not has_any_draft,
+        ):
+            progress_placeholder = st.empty()
+
+            def _progress_validate(folder_name: str, index: int, total: int) -> None:
+                progress_placeholder.info(f"Ordner {index}/{total}: „{folder_name}“ wird validiert…")
+
+            with st.spinner("Validierung läuft (Review-/Correction-Loop pro Ordner)…"):
+                reports = validate_all_folder_voiceovers(
+                    project,
+                    provider=review_provider,
+                    model=review_model,
+                    progress_callback=_progress_validate,
+                )
+            progress_placeholder.empty()
+            pass_count = sum(1 for report in reports if report.status == VOICEOVER_STATUS_PASS)
+            st.success(f"{pass_count}/{len(reports)} Ordner validiert (PASS).")
+            for report in reports:
+                if report.status != VOICEOVER_STATUS_PASS:
+                    st.warning(
+                        f"„{report.folder_name}“: {report.status} nach "
+                        f"{report.attempt_count} Versuch(en)."
+                    )
+            st.rerun()
+
+    with col_confirm_all:
+        if st.button(
+            "Alle bestätigen",
+            key=f"vo_fvo_confirm_all_{project.id}",
+            disabled=not has_any_draft,
+        ):
+            with st.spinner("Ordner werden bestätigt…"):
+                results = confirm_all_folder_voiceovers(project)
+            st.success(f"{len(results)} Ordner bestätigt (ohne vorherige Validierungspflicht).")
+            st.rerun()
+
+    with col_unconfirm_all:
+        if st.button(
+            "Alle Bestätigungen zurücknehmen",
+            key=f"vo_fvo_unconfirm_all_{project.id}",
+            disabled=not confirmed_names,
+        ):
+            with st.spinner("Bestätigungen werden zurückgenommen…"):
+                results = unconfirm_all_folder_voiceovers(project)
+            st.info(f"{len(results)} Bestätigung(en) zurückgenommen.")
+            st.rerun()
