@@ -163,6 +163,94 @@ def validate_supplement_asset_match(
     return {"status": status, "score": max(0.0, min(1.0, score)), "reason": reason}
 
 
+def describe_and_validate_supplement_asset(
+    *,
+    media_name: str,
+    folder_name: str,
+    frame_paths: list[Path],
+    passage_text: str,
+    visual_requirement: str,
+    location_name: str = "",
+    must_show: Optional[list[str]] = None,
+    avoid_showing: Optional[list[str]] = None,
+    language: str = "de",
+    model: Optional[str] = None,
+) -> dict[str, Any]:
+    """Kombinierter Gemini-Aufruf (EIN Request statt zwei): beschreibt die
+    übergebenen Frames UND beurteilt im selben Aufruf, ob das gezeigte
+    Material zum Satz/zur visuellen Anforderung passt.
+
+    Ergänzt describe_media_from_frames()/validate_supplement_asset_match()
+    rein additiv — beide bestehenden Zwei-Schritt-Funktionen bleiben für
+    ihre bisherigen Aufrufer (Produktions-Pipeline) unverändert. Gedacht für
+    den Cut-Plan-Auto-Resolver (Phase 11.3), der pro geprüftem Kandidaten
+    Latenz/Kosten sparen will UND die Bildinformation nicht über den Umweg
+    einer separaten Text-Beschreibung an die Validierung weiterreichen muss
+    (die Bilder bleiben im selben Kontextfenster wie die Beurteilung).
+
+    Liefert IMMER ein dict mit description/status/score/reason — auch bei
+    fehlenden Frames oder nicht auswertbarer Antwort (FAIL/NEEDS_USER_REVIEW
+    statt Exception)."""
+    if not frame_paths:
+        return {"description": "", "status": "FAIL", "score": 0.0, "reason": "Keine Frames verfügbar."}
+
+    client = _get_client()
+    from google.genai import types
+
+    must_show_line = ", ".join(must_show or []) or "keine besonderen Vorgaben"
+    avoid_line = ", ".join(avoid_showing or []) or "keine"
+    prompt_text = (
+        f"Du analysierst die Mediendatei '{media_name}' aus dem Ordner "
+        f"'{folder_name}' als Kandidat für einen Voice-over-Satz.\n"
+        f"Ort/Ordner: {location_name or folder_name or 'unbekannt'}\n"
+        f"Voice-over-Satz: {passage_text.strip()}\n"
+        f"Visuelle Anforderung: {visual_requirement.strip() or passage_text.strip()}\n"
+        f"Muss zeigen: {must_show_line}\n"
+        f"Darf nicht zeigen: {avoid_line}\n\n"
+        "Beschreibe zunächst kurz und sachlich (max. 4 Sätze, Sprache: "
+        f"{language}), was auf den Bildern zu sehen ist (Ort, Motiv, Stimmung, "
+        "Kameraperspektive). Beurteile danach, ob dieses Material inhaltlich "
+        "zum Satz UND zur visuellen Anforderung passt.\n\n"
+        "Antworte NUR als JSON in exakt diesem Format:\n"
+        '{"description":"...","status":"PASS|WEAK_PASS|NEEDS_USER_REVIEW|FAIL",'
+        '"score":0.0,"reason":"..."}\n'
+        "PASS = passt eindeutig. WEAK_PASS = passt teilweise/generisch. "
+        "NEEDS_USER_REVIEW = unklar, manuelle Prüfung nötig. FAIL = passt "
+        "nicht oder zeigt verbotene Inhalte."
+    )
+    parts: list[types.Part] = [types.Part.from_text(text=prompt_text)]
+    for frame_path in frame_paths:
+        parts.append(types.Part.from_bytes(data=frame_path.read_bytes(), mime_type="image/jpeg"))
+
+    response = client.models.generate_content(
+        model=resolve_gemini_model(model),
+        contents=[types.Content(role="user", parts=parts)],
+    )
+    text = response.text or "{}"
+    try:
+        payload = _extract_json(text)
+    except json.JSONDecodeError:
+        payload = {
+            "description": "",
+            "status": "NEEDS_USER_REVIEW",
+            "score": 0.5,
+            "reason": "Antwort nicht auswertbar.",
+        }
+    status = str(payload.get("status", "NEEDS_USER_REVIEW")).upper()
+    if status not in SUPPLEMENT_VALIDATION_STATUSES:
+        status = "NEEDS_USER_REVIEW"
+    try:
+        score = float(payload.get("score", 0.5))
+    except (TypeError, ValueError):
+        score = 0.5
+    return {
+        "description": str(payload.get("description", "")).strip(),
+        "status": status,
+        "score": max(0.0, min(1.0, score)),
+        "reason": str(payload.get("reason", "")).strip(),
+    }
+
+
 def describe_folder_from_frames(
     folder_name: str,
     frame_paths: list[Path],

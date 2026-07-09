@@ -1,4 +1,7 @@
-"""Phase 11.3: Auto-Resolver für EINEN Cut-Plan-Supplement-Request."""
+"""Phase 11.3: Auto-Resolver für EINEN Cut-Plan-Supplement-Request.
+
+Nutzt einen KOMBINIERTEN Gemini-Aufruf (describe_and_validate_supplement_
+asset) statt zwei getrennter Aufrufe (Beschreiben + Validieren)."""
 
 from __future__ import annotations
 
@@ -12,8 +15,8 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_ser
     AUTO_RESOLVE_STATUS_ACCEPTED,
     AUTO_RESOLVE_STATUS_FAILED,
     AUTO_RESOLVE_STATUS_NO_MATCH,
-    _describe_downloaded_asset,
-    _validate_description,
+    DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL,
+    _describe_and_validate_downloaded_asset,
     auto_resolve_cut_plan_supplement_request,
 )
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
@@ -112,6 +115,10 @@ def _fake_asset(candidate_id: str, request_id: str) -> CutPlanSupplementAsset:
     )
 
 
+def _analysis(status: str, *, score: float = 0.9, reason: str = "Passt.", description: str = "Beschreibung") -> dict:
+    return {"description": description, "status": status, "score": score, "reason": reason}
+
+
 # --- auto_resolve_cut_plan_supplement_request: Ablaufsteuerung ---
 
 
@@ -122,8 +129,7 @@ def test_auto_resolve_accepts_first_candidate_with_pass(tmp_path: Path) -> None:
     with (
         patch(f"{_MODULE}.search_candidates_for_cut_plan_request", return_value=candidates_doc),
         patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid)),
-        patch(f"{_MODULE}._describe_downloaded_asset", return_value="Ein Wasserfall mit einer Person."),
-        patch(f"{_MODULE}._validate_description", return_value={"status": "PASS", "score": 0.9, "reason": "Passt."}),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("PASS")),
         patch(f"{_MODULE}.accept_cut_plan_supplement_candidate") as mock_accept,
     ):
         result = auto_resolve_cut_plan_supplement_request(
@@ -148,16 +154,12 @@ def test_auto_resolve_tries_next_candidate_when_first_fails_validation(tmp_path:
     project, request_id = _setup_request(tmp_path)
     candidates_doc = _fake_candidates_document(request_id, ["cand_1", "cand_2"])
 
-    validation_results = [
-        {"status": "FAIL", "score": 0.1, "reason": "Passt nicht."},
-        {"status": "PASS", "score": 0.9, "reason": "Passt."},
-    ]
+    analysis_results = [_analysis("FAIL", score=0.1, reason="Passt nicht."), _analysis("PASS")]
 
     with (
         patch(f"{_MODULE}.search_candidates_for_cut_plan_request", return_value=candidates_doc),
         patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid)),
-        patch(f"{_MODULE}._describe_downloaded_asset", return_value="Beschreibung"),
-        patch(f"{_MODULE}._validate_description", side_effect=validation_results),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", side_effect=analysis_results),
         patch(f"{_MODULE}.accept_cut_plan_supplement_candidate") as mock_accept,
     ):
         result = auto_resolve_cut_plan_supplement_request(
@@ -179,8 +181,7 @@ def test_auto_resolve_returns_no_match_when_no_candidate_passes(tmp_path: Path) 
     with (
         patch(f"{_MODULE}.search_candidates_for_cut_plan_request", return_value=candidates_doc),
         patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid)),
-        patch(f"{_MODULE}._describe_downloaded_asset", return_value="Beschreibung"),
-        patch(f"{_MODULE}._validate_description", return_value={"status": "WEAK_PASS", "score": 0.6, "reason": "Nur teilweise."}),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("WEAK_PASS", score=0.6, reason="Nur teilweise.")),
         patch(f"{_MODULE}.accept_cut_plan_supplement_candidate") as mock_accept,
     ):
         result = auto_resolve_cut_plan_supplement_request(
@@ -227,8 +228,7 @@ def test_auto_resolve_handles_download_failure_and_continues(tmp_path: Path) -> 
     with (
         patch(f"{_MODULE}.search_candidates_for_cut_plan_request", return_value=candidates_doc),
         patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=_download_side_effect),
-        patch(f"{_MODULE}._describe_downloaded_asset", return_value="Beschreibung"),
-        patch(f"{_MODULE}._validate_description", return_value={"status": "PASS", "score": 0.9, "reason": "Passt."}),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("PASS")),
         patch(f"{_MODULE}.accept_cut_plan_supplement_candidate") as mock_accept,
     ):
         result = auto_resolve_cut_plan_supplement_request(
@@ -254,7 +254,27 @@ def test_auto_resolve_search_exception_returns_failed_without_raising(tmp_path: 
     assert "network down" in result.error
 
 
-# --- _validate_description / _describe_downloaded_asset: Bausteine ---
+def test_auto_resolve_uses_default_validation_model_when_not_overridden(tmp_path: Path) -> None:
+    """Nutzerwunsch: Gemini 3 Flash Preview als fester Standard für die
+    automatische Bild-/Video-Prüfung."""
+    project, request_id = _setup_request(tmp_path)
+    candidates_doc = _fake_candidates_document(request_id, ["cand_1"])
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", return_value=candidates_doc),
+        patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid)),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("PASS")) as mock_describe_validate,
+        patch(f"{_MODULE}.accept_cut_plan_supplement_candidate"),
+    ):
+        auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    _, kwargs = mock_describe_validate.call_args
+    assert kwargs["validation_model"] == DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL == "gemini-3-flash-preview"
+
+
+# --- _describe_and_validate_downloaded_asset: kombinierter Gemini-Aufruf ---
 
 
 def _fake_request() -> CutPlanSupplementRequest:
@@ -268,90 +288,93 @@ def _fake_request() -> CutPlanSupplementRequest:
     )
 
 
-def test_validate_description_empty_description_is_fail() -> None:
-    result = _validate_description(description="", request=_fake_request(), gemini_model="gemini-3.1-flash-lite")
-    assert result["status"] == "FAIL"
-
-
-def test_validate_description_uses_gemini_when_configured() -> None:
-    with (
-        patch(f"{_MODULE}.is_gemini_configured", return_value=True),
-        patch(
-            f"{_MODULE}.validate_supplement_asset_match",
-            return_value={"status": "PASS", "score": 0.95, "reason": "Gemini sagt: passt."},
-        ) as mock_validate,
-    ):
-        result = _validate_description(
-            description="Ein Wasserfall.", request=_fake_request(), gemini_model="gemini-3.1-flash-lite"
-        )
-    assert result["status"] == "PASS"
-    mock_validate.assert_called_once()
-
-
-def test_validate_description_falls_back_to_heuristic_without_gemini() -> None:
-    """Ohne konfiguriertes Gemini wird NIE automatisch PASS zurückgegeben —
-    nur die heuristische Fallback-Bewertung (max. WEAK_PASS) — damit ohne
-    GEMINI_API_KEY nie automatisch akzeptiert wird (safe by default)."""
-    with patch(f"{_MODULE}.is_gemini_configured", return_value=False):
-        result = _validate_description(
-            description="Ein Wasserfall, eine Person spuert die Kuehle des Wassers.",
-            request=_fake_request(),
-            gemini_model="gemini-3.1-flash-lite",
-        )
-    assert result["status"] != "PASS"
-    assert result["status"] in {"WEAK_PASS", "NEEDS_USER_REVIEW", "FAIL"}
-
-
-def test_describe_downloaded_asset_returns_empty_when_file_missing(tmp_path: Path) -> None:
+def test_describe_and_validate_returns_fail_without_gemini_and_skips_frame_extraction(tmp_path: Path) -> None:
+    """Ohne GEMINI_API_KEY: sofort FAIL, OHNE ffmpeg/Frame-Extraktion
+    auszulösen (spart unnötige Arbeit, wenn ohnehin nicht geprüft werden
+    kann) — und es gibt KEINEN heuristischen Ersatz, der versehentlich
+    automatisch PASS liefern könnte (safe by default)."""
     project = _make_project(tmp_path)
-    description = _describe_downloaded_asset(
-        project,
-        request_id="cutreq_x",
-        candidate_id="cand_1",
-        folder_name=FOLDER_A,
-        asset_path=str(tmp_path / "does_not_exist.mp4"),
-        gemini_model="gemini-3.1-flash-lite",
-    )
-    assert description == ""
-
-
-def test_describe_downloaded_asset_returns_empty_without_gemini(tmp_path: Path) -> None:
-    project = _make_project(tmp_path)
-    asset_path = tmp_path / "fake.jpg"
-    asset_path.write_bytes(b"FAKE_IMAGE_BYTES")
+    asset_path = tmp_path / "fake.mp4"
+    asset_path.write_bytes(b"FAKE_VIDEO_BYTES")
 
     with (
-        patch(f"{_MODULE}.extract_frames", return_value=[asset_path]),
         patch(f"{_MODULE}.is_gemini_configured", return_value=False),
+        patch(f"{_MODULE}.extract_frames") as mock_extract,
     ):
-        description = _describe_downloaded_asset(
+        analysis = _describe_and_validate_downloaded_asset(
             project,
-            request_id="cutreq_x",
+            request=_fake_request(),
             candidate_id="cand_1",
-            folder_name=FOLDER_A,
             asset_path=str(asset_path),
-            gemini_model="gemini-3.1-flash-lite",
+            validation_model="gemini-3-flash-preview",
         )
-    assert description == ""
+
+    assert analysis["status"] == "FAIL"
+    assert analysis["description"] == ""
+    mock_extract.assert_not_called()
 
 
-def test_describe_downloaded_asset_calls_gemini_when_configured(tmp_path: Path) -> None:
+def test_describe_and_validate_returns_fail_when_file_missing(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    with patch(f"{_MODULE}.is_gemini_configured", return_value=True):
+        analysis = _describe_and_validate_downloaded_asset(
+            project,
+            request=_fake_request(),
+            candidate_id="cand_1",
+            asset_path=str(tmp_path / "does_not_exist.mp4"),
+            validation_model="gemini-3-flash-preview",
+        )
+    assert analysis["status"] == "FAIL"
+
+
+def test_describe_and_validate_calls_combined_gemini_function_once(tmp_path: Path) -> None:
+    """Kernanforderung: EIN kombinierter Gemini-Aufruf statt zwei getrennter
+    (Beschreiben + Validieren)."""
     project = _make_project(tmp_path)
     asset_path = tmp_path / "fake.jpg"
     asset_path.write_bytes(b"FAKE_IMAGE_BYTES")
 
     with (
-        patch(f"{_MODULE}.extract_frames", return_value=[asset_path]),
         patch(f"{_MODULE}.is_gemini_configured", return_value=True),
-        patch(f"{_MODULE}.describe_media_from_frames", return_value="Ein Wasserfall.") as mock_describe,
+        patch(f"{_MODULE}.extract_frames", return_value=[asset_path]),
+        patch(
+            f"{_MODULE}.describe_and_validate_supplement_asset",
+            return_value=_analysis("PASS", description="Ein Wasserfall."),
+        ) as mock_combined,
     ):
-        description = _describe_downloaded_asset(
+        analysis = _describe_and_validate_downloaded_asset(
             project,
-            request_id="cutreq_x",
+            request=_fake_request(),
             candidate_id="cand_1",
-            folder_name=FOLDER_A,
             asset_path=str(asset_path),
-            gemini_model="gemini-3.1-flash-lite",
+            validation_model="gemini-3-flash-preview",
         )
-    assert description == "Ein Wasserfall."
-    mock_describe.assert_called_once()
+
+    assert analysis["status"] == "PASS"
+    assert analysis["description"] == "Ein Wasserfall."
+    mock_combined.assert_called_once()
+    _, kwargs = mock_combined.call_args
+    assert kwargs["model"] == "gemini-3-flash-preview"
+    assert kwargs["frame_paths"] == [asset_path]
+
+
+def test_describe_and_validate_handles_gemini_exception_gracefully(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    asset_path = tmp_path / "fake.jpg"
+    asset_path.write_bytes(b"FAKE_IMAGE_BYTES")
+
+    with (
+        patch(f"{_MODULE}.is_gemini_configured", return_value=True),
+        patch(f"{_MODULE}.extract_frames", return_value=[asset_path]),
+        patch(f"{_MODULE}.describe_and_validate_supplement_asset", side_effect=RuntimeError("network down")),
+    ):
+        analysis = _describe_and_validate_downloaded_asset(
+            project,
+            request=_fake_request(),
+            candidate_id="cand_1",
+            asset_path=str(asset_path),
+            validation_model="gemini-3-flash-preview",
+        )
+
+    assert analysis["status"] == "FAIL"
+    assert "network down" in analysis["reason"]
