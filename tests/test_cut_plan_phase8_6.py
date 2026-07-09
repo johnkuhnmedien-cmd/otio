@@ -881,6 +881,86 @@ def test_search_click_passes_saved_query_llm_settings_to_bridge(
     assert kwargs["query_llm_model"] == "gemini-3.1-pro-preview"
 
 
+def test_ui_shows_auto_resolve_button_and_result_trace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 11.3: der neue Einzel-Request-Auto-Resolver ist per Button
+    erreichbar und persistiert eine Ergebnis-Trace, die auch bei einem
+    spaeteren Rendering (ohne erneuten Klick) angezeigt wird."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    auto_resolve_key = f"cut_plan_supplement_auto_resolve_{project.id}_{request_id}"
+
+    def _fake_button(label, *args, **kwargs):
+        return kwargs.get("key") == auto_resolve_key
+
+    from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_service import (
+        AUTO_RESOLVE_STATUS_NO_MATCH,
+        CutPlanSupplementAutoResolveResult,
+    )
+    from otio_app.services.voiceover_generation.cut_plan_supplement_models import (
+        CutPlanSupplementAutoResolveAttempt,
+    )
+
+    fake_result = CutPlanSupplementAutoResolveResult(
+        status=AUTO_RESOLVE_STATUS_NO_MATCH,
+        request_id=request_id,
+        attempts=[
+            CutPlanSupplementAutoResolveAttempt(
+                candidate_id="cand_1",
+                provider="pexels",
+                asset_type="video",
+                validation_status="FAIL",
+                validation_score=0.1,
+                validation_reason="Passt nicht.",
+            )
+        ],
+    )
+
+    warnings: list[str] = []
+    with patch(
+        "otio_app.ui.voiceover_generation.cut_plan_tab.auto_resolve_cut_plan_supplement_request",
+        return_value=fake_result,
+    ) as mock_auto_resolve:
+        _patch_project_selector(project, monkeypatch)
+        monkeypatch.setattr("streamlit.button", _fake_button)
+        monkeypatch.setattr("streamlit.rerun", lambda: None)
+        monkeypatch.setattr("streamlit.warning", lambda msg: warnings.append(msg))
+
+        render_cut_plan_page()
+
+    mock_auto_resolve.assert_called_once()
+    assert any("Kein Kandidat hat die Prüfung bestanden" in msg for msg in warnings)
+
+    # Zweiter Rendering-Durchlauf ohne Klick: eine bereits PERSISTIERTE Trace
+    # (wie sie die echte auto_resolve_cut_plan_supplement_request-Funktion
+    # schreiben würde — hier direkt gesetzt, da der Aufruf oben gemockt war)
+    # muss weiterhin angezeigt werden.
+    from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
+        update_cut_plan_supplement_request,
+    )
+
+    update_cut_plan_supplement_request(
+        project,
+        request_id,
+        auto_resolve_status=fake_result.status,
+        auto_resolve_attempts=fake_result.attempts,
+    )
+    reloaded = load_cut_plan_supplement_requests(project)
+    persisted = next(r for r in reloaded.requests if r.request_id == request_id)
+    assert persisted.auto_resolve_status == AUTO_RESOLVE_STATUS_NO_MATCH
+    assert persisted.auto_resolve_attempts[0].candidate_id == "cand_1"
+
+    _patch_project_selector(project, monkeypatch)
+    monkeypatch.setattr("streamlit.button", lambda *a, **k: False)
+    monkeypatch.setattr("streamlit.rerun", lambda: None)
+    render_cut_plan_page()  # darf nicht werfen; Trace wird erneut angezeigt
+
+
 def test_ui_shows_revalidate_hint_after_accept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _project_with_supplement_required_draft(tmp_path)
     draft = load_cut_plan_draft(project)

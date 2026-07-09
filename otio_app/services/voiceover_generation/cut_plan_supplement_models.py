@@ -28,11 +28,26 @@ __all__ = [
     "CutPlanSupplementCandidate",
     "CutPlanSupplementCandidatesDocument",
     "CutPlanSupplementAsset",
+    "CutPlanSupplementAutoResolveAttempt",
 ]
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class CutPlanSupplementAutoResolveAttempt(BaseModel):
+    """Phase 11.3: EIN geprüfter Kandidat innerhalb eines Auto-Resolve-Laufs
+    (siehe cut_plan_supplement_auto_resolve_service.py) — rein informativ für
+    Traceability/UI, kein redaktionelles Feld."""
+
+    candidate_id: str
+    provider: str = ""
+    asset_type: str = ""
+    validation_status: str = ""  # PASS|WEAK_PASS|NEEDS_USER_REVIEW|FAIL|DOWNLOAD_FAILED
+    validation_score: float = 0.0
+    validation_reason: str = ""
+    description: str = ""
 
 
 class CutPlanSupplementRequest(BaseModel):
@@ -63,6 +78,14 @@ class CutPlanSupplementRequest(BaseModel):
     llm_query_status: str = ""
     llm_query_run_id: str = ""
     llm_query_error: str = ""
+    # Phase 11.3: Trace des letzten Auto-Resolve-Laufs (siehe
+    # cut_plan_supplement_auto_resolve_service.py) — ACCEPTED, wenn ein
+    # Kandidat die Gemini-Prüfung bestanden hat und automatisch akzeptiert
+    # wurde, sonst NO_MATCH (kein Kandidat hat bestanden) oder "" (noch nie
+    # ausgeführt). Kein automatischer generischer Ordner-Fallback in dieser
+    # Phase — das folgt separat.
+    auto_resolve_status: str = ""
+    auto_resolve_attempts: list[CutPlanSupplementAutoResolveAttempt] = Field(default_factory=list)
 
 
 class CutPlanSupplementRequestsDocument(BaseModel):

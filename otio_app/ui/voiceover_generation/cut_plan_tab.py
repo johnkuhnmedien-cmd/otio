@@ -121,6 +121,11 @@ from otio_app.services.voiceover_generation.cut_plan_settings_service import (
     load_cut_plan_settings,
     save_cut_plan_settings,
 )
+from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_service import (
+    AUTO_RESOLVE_STATUS_ACCEPTED,
+    AUTO_RESOLVE_STATUS_NO_MATCH,
+    auto_resolve_cut_plan_supplement_request,
+)
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     accept_cut_plan_supplement_candidate,
     build_supplement_requests_from_cut_plan,
@@ -703,6 +708,60 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                 else:
                     st.success(f"{len(candidates_document.candidates)} Kandidat(en) gefunden.")
                 st.rerun()
+
+            is_already_accepted_for_auto = request.status == CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED
+            if st.button(
+                "🤖 Automatisch lösen (Suche + Download + Prüfung + Akzeptieren)",
+                key=f"cut_plan_supplement_auto_resolve_{project.id}_{request.request_id}",
+                disabled=not pexels_ready or is_already_accepted_for_auto,
+                help=(
+                    "Bestätigten Kandidaten überspringen"
+                    if is_already_accepted_for_auto
+                    else "Sucht, lädt herunter und prüft Kandidaten der Reihe nach per Gemini — "
+                    "übernimmt automatisch NUR bei bestandener Prüfung (Status PASS)."
+                ),
+            ):
+                with st.spinner("Suche, Download und Gemini-Prüfung laufen…"):
+                    auto_result = auto_resolve_cut_plan_supplement_request(
+                        project,
+                        request.request_id,
+                        query_llm_provider=query_llm_provider,
+                        query_llm_model=query_llm_model,
+                    )
+                if auto_result.status == AUTO_RESOLVE_STATUS_ACCEPTED:
+                    st.success(
+                        f"Automatisch akzeptiert: Kandidat `{auto_result.accepted_candidate_id}` "
+                        f"(nach {len(auto_result.attempts)} geprüftem/n Kandidaten). "
+                        "Bitte Cut Plan erneut validieren."
+                    )
+                elif auto_result.status == AUTO_RESOLVE_STATUS_NO_MATCH:
+                    st.warning(
+                        f"Kein Kandidat hat die Prüfung bestanden ({len(auto_result.attempts)} geprüft). "
+                        "Kein Asset wurde automatisch übernommen."
+                    )
+                else:
+                    st.error(f"Automatisches Lösen fehlgeschlagen: {auto_result.error}")
+                st.rerun()
+
+            if request.auto_resolve_status:
+                with st.expander("Letzter Auto-Resolve-Versuch", expanded=False):
+                    st.caption(f"Ergebnis: **{request.auto_resolve_status}**")
+                    if request.auto_resolve_attempts:
+                        st.dataframe(
+                            [
+                                {
+                                    "candidate_id": attempt.candidate_id,
+                                    "provider": attempt.provider,
+                                    "asset_type": attempt.asset_type,
+                                    "validation_status": attempt.validation_status,
+                                    "validation_score": attempt.validation_score,
+                                    "validation_reason": attempt.validation_reason,
+                                }
+                                for attempt in request.auto_resolve_attempts
+                            ],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
 
             candidates_document = load_cut_plan_supplement_candidates_for_request(project, request.request_id)
             if candidates_document is None:

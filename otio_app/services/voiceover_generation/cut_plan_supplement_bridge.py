@@ -87,8 +87,10 @@ __all__ = [
     "build_supplement_requests_from_cut_plan",
     "save_cut_plan_supplement_requests",
     "load_cut_plan_supplement_requests",
+    "update_cut_plan_supplement_request",
     "load_cut_plan_supplement_candidates_for_request",
     "search_candidates_for_cut_plan_request",
+    "download_cut_plan_supplement_candidate",
     "accept_cut_plan_supplement_candidate",
     "apply_accepted_supplement_to_cut_plan_item",
 ]
@@ -192,9 +194,13 @@ def load_cut_plan_supplement_requests(project: Project) -> CutPlanSupplementRequ
         return None
 
 
-def _update_request(
+def update_cut_plan_supplement_request(
     project: Project, request_id: str, **updates: Any
 ) -> CutPlanSupplementRequest | None:
+    """Öffentlicher Update-Helper (auch für andere Module dieser Pipeline,
+    z. B. cut_plan_supplement_auto_resolve_service.py) — lädt/ändert/
+    speichert GENAU EINEN Request per request_id, alle anderen Requests im
+    Dokument bleiben unverändert."""
     document = load_cut_plan_supplement_requests(project)
     if document is None:
         return None
@@ -341,7 +347,7 @@ def search_candidates_for_cut_plan_request(
         llm_query_error = query_result.error
         if query_result.status == STATUS_PASS:
             llm_queries = query_result.queries
-    _update_request(
+    update_cut_plan_supplement_request(
         project,
         request_id,
         llm_queries=llm_queries,
@@ -378,7 +384,7 @@ def search_candidates_for_cut_plan_request(
             error_message=_sanitize_error_message(str(exc)),
         )
         _save_candidates_document(project, document)
-        _update_request(project, request_id, status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_FAILED)
+        update_cut_plan_supplement_request(project, request_id, status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_FAILED)
         return document
 
     candidates = [_to_cut_plan_candidate(request_id, provider, raw) for raw in raw_candidates]
@@ -402,7 +408,7 @@ def search_candidates_for_cut_plan_request(
     # Hardening gegen mehrfaches Akzeptieren aushebeln (die den aktuellen
     # request.status prüft).
     if candidates and request.status != CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED:
-        _update_request(project, request_id, status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_CANDIDATES_FOUND)
+        update_cut_plan_supplement_request(project, request_id, status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_CANDIDATES_FOUND)
     return document
 
 
@@ -500,8 +506,66 @@ def apply_accepted_supplement_to_cut_plan_item(
     )
 
 
+def download_cut_plan_supplement_candidate(
+    project: Project, request_id: str, candidate: CutPlanSupplementCandidate
+) -> CutPlanSupplementAsset:
+    """Lädt GENAU EINEN Kandidaten über den technischen Provider-Adapter
+    herunter, OHNE ihn in den Cut Plan zu übernehmen (siehe
+    `apply_accepted_supplement_to_cut_plan_item` für den Commit-Schritt).
+
+    Extrahiert aus `accept_cut_plan_supplement_candidate` (Phase 8.6/8.7),
+    damit Phase 11.3 (Auto-Resolver: erst herunterladen + per Gemini prüfen,
+    DANACH ggf. akzeptieren) einen Kandidaten nicht zweimal herunterladen
+    muss — einmal zum Prüfen, einmal beim tatsächlichen Akzeptieren."""
+    raw_candidate_data = dict(candidate.provider_candidate_snapshot)
+    raw_candidate_data.setdefault("supplement_request_id", request_id)
+    try:
+        production_candidate = SupplementCandidate.model_validate(raw_candidate_data)
+    except ValueError as exc:
+        raise ValueError(f"Kandidat '{candidate.candidate_id}' konnte nicht rekonstruiert werden: {exc}") from exc
+
+    adapter = get_supplement_adapter(candidate.provider)
+    destination_folder = get_cut_plan_supplement_asset_request_dir(project.work_dir_path, request_id)
+    acquired = adapter.acquire(production_candidate, destination_folder)
+
+    synthetic_asset_id = (
+        f"cut_supplement_{_safe_path_component(request_id)}_{_safe_path_component(candidate.candidate_id)}"
+    )
+    accepted_asset = CutPlanSupplementAsset(
+        asset_id=synthetic_asset_id,
+        request_id=request_id,
+        candidate_id=candidate.candidate_id,
+        provider=candidate.provider,
+        asset_path=str(acquired.local_path),
+        asset_type=candidate.asset_type,
+        duration_sec=(
+            candidate.duration_sec
+            if candidate.asset_type == "video"
+            else (probe_duration_seconds(acquired.local_path) or candidate.duration_sec)
+        ),
+        width=candidate.width,
+        height=candidate.height,
+        license=candidate.license,
+        source_url=candidate.source_url,
+        status=CUT_PLAN_SUPPLEMENT_ASSET_STATUS_ACQUIRED,
+    )
+    # Für Video die tatsächlich per ffprobe gemessene Dauer verwenden, falls
+    # verfügbar — die Provider-Metadaten (candidate.duration_sec) können von
+    # der realen Datei abweichen (z. B. gekürzte Segmente bei manchen Quellen).
+    if candidate.asset_type == "video":
+        probed_duration = probe_duration_seconds(acquired.local_path)
+        if probed_duration is not None:
+            accepted_asset = accepted_asset.model_copy(update={"duration_sec": probed_duration})
+    return accepted_asset
+
+
 def accept_cut_plan_supplement_candidate(
-    project: Project, request_id: str, candidate_id: str, force_replace: bool = False
+    project: Project,
+    request_id: str,
+    candidate_id: str,
+    force_replace: bool = False,
+    *,
+    downloaded_asset: CutPlanSupplementAsset | None = None,
 ) -> CutPlanDocument:
     """I/O-Orchestrator: lädt Request/Kandidat/Draft, lädt den Kandidaten
     über den technischen Provider-Adapter herunter (NUR bei diesem expliziten
@@ -514,6 +578,13 @@ def accept_cut_plan_supplement_candidate(
     ValueError geworfen, bevor irgendetwas heruntergeladen oder mutiert wird.
     Erst force_replace=True erlaubt das bewusste Ersetzen eines bereits
     akzeptierten Kandidaten.
+
+    Phase 11.3: `downloaded_asset` ist optional — der Auto-Resolver
+    (cut_plan_supplement_auto_resolve_service.py) lädt einen Kandidaten
+    bereits VOR dem Akzeptieren herunter (um ihn per Gemini zu prüfen) und
+    übergibt das Ergebnis hier, damit nicht zweimal heruntergeladen wird.
+    Ohne Angabe (Standardfall, u. a. der bestehende UI-Button) wird wie
+    bisher direkt selbst heruntergeladen.
 
     Nutzt ausschließlich `SupplementSourceAdapter.acquire` (technischer
     Adapter) — NICHT die höherstufige Produktions-Beschaffungsorchestrierung.
@@ -543,63 +614,30 @@ def accept_cut_plan_supplement_candidate(
     if draft is None:
         raise ValueError("Kein Cut Plan Draft vorhanden.")
 
-    raw_candidate_data = dict(candidate.provider_candidate_snapshot)
-    raw_candidate_data.setdefault("supplement_request_id", request_id)
-    try:
-        production_candidate = SupplementCandidate.model_validate(raw_candidate_data)
-    except ValueError as exc:
-        raise ValueError(f"Kandidat '{candidate_id}' konnte nicht rekonstruiert werden: {exc}") from exc
-
-    adapter = get_supplement_adapter(candidate.provider)
-    destination_folder = get_cut_plan_supplement_asset_request_dir(project.work_dir_path, request_id)
-    try:
-        acquired = adapter.acquire(production_candidate, destination_folder)
-    except Exception as exc:
-        _update_request(project, request_id, status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_FAILED)
-        raise ValueError(f"Supplement-Download fehlgeschlagen: {_sanitize_error_message(str(exc))}") from exc
-
-    synthetic_asset_id = (
-        f"cut_supplement_{_safe_path_component(request_id)}_{_safe_path_component(candidate_id)}"
-    )
-    accepted_asset = CutPlanSupplementAsset(
-        asset_id=synthetic_asset_id,
-        request_id=request_id,
-        candidate_id=candidate_id,
-        provider=candidate.provider,
-        asset_path=str(acquired.local_path),
-        asset_type=candidate.asset_type,
-        duration_sec=(
-            candidate.duration_sec
-            if candidate.asset_type == "video"
-            else (probe_duration_seconds(acquired.local_path) or candidate.duration_sec)
-        ),
-        width=candidate.width,
-        height=candidate.height,
-        license=candidate.license,
-        source_url=candidate.source_url,
-        status=CUT_PLAN_SUPPLEMENT_ASSET_STATUS_ACQUIRED,
-    )
-    # Für Video die tatsächlich per ffprobe gemessene Dauer verwenden, falls
-    # verfügbar — die Provider-Metadaten (candidate.duration_sec) können von
-    # der realen Datei abweichen (z. B. gekürzte Segmente bei manchen Quellen).
-    if candidate.asset_type == "video":
-        probed_duration = probe_duration_seconds(acquired.local_path)
-        if probed_duration is not None:
-            accepted_asset = accepted_asset.model_copy(update={"duration_sec": probed_duration})
+    if downloaded_asset is not None:
+        accepted_asset = downloaded_asset
+    else:
+        try:
+            accepted_asset = download_cut_plan_supplement_candidate(project, request_id, candidate)
+        except Exception as exc:
+            update_cut_plan_supplement_request(project, request_id, status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_FAILED)
+            raise ValueError(f"Supplement-Download fehlgeschlagen: {_sanitize_error_message(str(exc))}") from exc
 
     try:
         updated_cut_plan = apply_accepted_supplement_to_cut_plan_item(project, draft, request, accepted_asset)
     except ValueError:
-        _update_request(project, request_id, status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_FAILED)
+        update_cut_plan_supplement_request(project, request_id, status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_FAILED)
         raise
 
     save_cut_plan_draft(project, updated_cut_plan)
-    _update_request(
+    update_cut_plan_supplement_request(
         project,
         request_id,
         status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
         accepted_candidate_id=candidate_id,
-        accepted_asset_id=synthetic_asset_id,
+        accepted_asset_id=accepted_asset.asset_id,
         accepted_asset_path=accepted_asset.asset_path,
     )
     return updated_cut_plan
+
+
