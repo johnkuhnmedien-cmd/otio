@@ -7,6 +7,7 @@ import streamlit as st
 from otio_app.project_layout import get_project_brief_path
 from otio_app.services.voiceover_generation.models import (
     BRIEF_LANGUAGE_CHOICES,
+    BRIEF_NEGATIVE_RULE_INSTRUCTIONS,
     BRIEF_NEGATIVE_RULE_LABELS,
     BRIEF_TONE_TAG_CHOICES,
     ProjectBrief,
@@ -68,24 +69,47 @@ def render_project_brief_page() -> None:
     )
 
     st.subheader("Globale Negativregeln")
+    st.caption(
+        "Diese Regeln gelten für das GESAMTE Projekt und werden bei JEDEM LLM-Schritt "
+        "mitgeschickt (Style Profile, Dramaturgie, Voice-over-Text je Ordner, Intro-Hook). "
+        "Es gibt drei unabhängige Mechanismen, die sich ergänzen:\n\n"
+        "1. **Standard-Regeln (Checkboxen unten)** — vordefinierte, einzeln an-/abschaltbare "
+        "Regeln. Beim Draufhalten der Maus siehst du die genaue Formulierung, die ans LLM "
+        "geschickt wird.\n"
+        "2. **Freitext** — eigene, zusätzliche Regeln in normaler Sprache, die keiner "
+        "Checkbox entsprechen.\n"
+        "3. **Verbotene Wörter/Phrasen** — eine feste Liste konkreter Wörter/Ausdrücke, die "
+        "nie vorkommen dürfen."
+    )
     negative_rule_flags: dict[str, bool] = {}
     for flag, label in BRIEF_NEGATIVE_RULE_LABELS.items():
-        negative_rule_flags[flag] = st.checkbox(label, key=_flag_key(project.id, flag))
+        negative_rule_flags[flag] = st.checkbox(
+            label,
+            key=_flag_key(project.id, flag),
+            help=BRIEF_NEGATIVE_RULE_INSTRUCTIONS.get(flag, ""),
+        )
 
     forbidden_phrases_text = st.text_area(
         "Verbotene Wörter / Phrasen (eine pro Zeile)",
         key=_key(project.id, "forbidden_phrases"),
         height=120,
+        help="Konkrete Wörter oder Ausdrücke, die im generierten Text niemals vorkommen "
+        "dürfen — unabhängig von den Standard-Regeln oben. Ein Wort/Ausdruck pro Zeile.",
     )
     negative_rules_freetext = st.text_area(
         "Globale Negativregeln — Freitext",
         key=_key(project.id, "negative_rules_freetext"),
         height=100,
+        help="Zusätzliche, eigene Regeln in normaler Sprache — für alles, was durch die "
+        "Standard-Regeln oben noch nicht abgedeckt ist (z. B. projektspezifische "
+        "inhaltliche Einschränkungen).",
     )
     global_extra_prompt = st.text_area(
         "Globaler Zusatzprompt",
         key=_key(project.id, "global_extra_prompt"),
         height=100,
+        help="Freie Zusatzanweisung an das LLM, die KEINE Verbotsregel ist (z. B. "
+        "Erzählperspektive, Schwerpunktsetzung, redaktioneller Stil).",
     )
 
     col_save, col_reload, col_reset = st.columns(3)

@@ -8,6 +8,7 @@ Phase 4: build_folder_voiceover_prompt(), build_voiceover_review_prompt(),
 
 from __future__ import annotations
 
+from otio_app.defaults import BRIEF_NEGATIVE_RULE_INSTRUCTIONS
 from otio_app.services.voiceover_generation.models import (
     DramaturgyFolderEntry,
     DramaturgyPlan,
@@ -33,6 +34,22 @@ def _numbered_block(label: str, texts: list[str]) -> str:
     return "\n\n".join(f"[{label} {index + 1}]\n{text}" for index, text in enumerate(texts))
 
 
+def _active_negative_rules_block(project_brief: ProjectBrief) -> str:
+    """Rendert die aktiven Negativregel-Flags als selbsterklärenden Block —
+    jede Zeile beginnt mit dem kompakten Regel-Key (Rückwärtskompatibilität
+    für Code/Tests, die gezielt nach dem Key suchen), gefolgt von der
+    ausführlichen, an das LLM gerichteten Formulierung. Macht die Regeln für
+    Mensch UND LLM nachvollziehbar, statt nur kryptische Keys aneinanderzureihen."""
+    active_flags = [flag for flag, enabled in project_brief.negative_rule_flags.items() if enabled]
+    if not active_flags:
+        return "(keine Angabe)"
+    lines = []
+    for flag in active_flags:
+        instruction = BRIEF_NEGATIVE_RULE_INSTRUCTIONS.get(flag)
+        lines.append(f"- {flag}: {instruction}" if instruction else f"- {flag}")
+    return "\n".join(lines)
+
+
 def build_style_profile_prompt(
     project_brief: ProjectBrief,
     style_references: VoiceoverStyleReferences,
@@ -51,9 +68,7 @@ def build_style_profile_prompt(
     upload_block = _numbered_block("Hochgeladene Referenz", upload_texts)
 
     tone_tags = ", ".join(project_brief.tone_tags) or "(keine Angabe)"
-    active_negative_rules = ", ".join(
-        flag for flag, enabled in project_brief.negative_rule_flags.items() if enabled
-    ) or "(keine Angabe)"
+    active_negative_rules = _active_negative_rules_block(project_brief)
     forbidden_phrases = (
         "\n".join(f"- {phrase}" for phrase in project_brief.forbidden_phrases) or "(keine)"
     )
@@ -68,11 +83,16 @@ characteristics only.
 - Video title: {project_brief.video_title or "(untitled)"}
 - Target language: {project_brief.language}
 - Desired tone tags: {tone_tags}
-- Active negative rules: {active_negative_rules}
-- Global negative rules (free text): {project_brief.negative_rules_freetext or "(none)"}
-- Forbidden phrases:
-{forbidden_phrases}
 - Additional editor instructions: {project_brief.global_extra_prompt or "(none)"}
+
+## Active negative rules (MUST be respected)
+{active_negative_rules}
+
+## Global negative rules (free text)
+{project_brief.negative_rules_freetext or "(none)"}
+
+## Forbidden phrases
+{forbidden_phrases}
 
 ## Intro reference scripts (style analysis only — do not copy)
 {intro_block}
@@ -161,9 +181,7 @@ def build_dramaturgy_prompt(
     del model_settings
 
     tone_tags = ", ".join(project_brief.tone_tags) or "(keine Angabe)"
-    active_negative_rules = ", ".join(
-        flag for flag, enabled in project_brief.negative_rule_flags.items() if enabled
-    ) or "(keine Angabe)"
+    active_negative_rules = _active_negative_rules_block(project_brief)
 
     style_block = "(kein Style Profile vorhanden — neutraler Standardstil)"
     if style_profile is not None:
@@ -189,8 +207,10 @@ ROLE each location plays in the overall video.
 - Project title: {project_brief.video_title or "(untitled)"}
 - Target language: {project_brief.language}
 - Desired tone tags: {tone_tags}
-- Active negative rules: {active_negative_rules}
 - Additional editor instructions: {project_brief.global_extra_prompt or "(none)"}
+
+## Active negative rules (MUST be respected)
+{active_negative_rules}
 
 ## Style Profile (already extracted — do not re-derive, just respect it)
 {style_block}
@@ -312,9 +332,7 @@ def build_folder_voiceover_prompt(
     Fordert echte Doku-Prosa (kein Assetlisten-Stil) UND eine vollständige,
     strukturierte Satz-/Beat-zu-Asset-Zuordnung im selben JSON-Response."""
     tone_tags = ", ".join(project_brief.tone_tags) or "(keine Angabe)"
-    active_negative_rules = ", ".join(
-        flag for flag, enabled in project_brief.negative_rule_flags.items() if enabled
-    ) or "(keine Angabe)"
+    active_negative_rules = _active_negative_rules_block(project_brief)
     forbidden_phrases = _combined_forbidden_phrases(project_brief, style_profile, setting)
     forbidden_block = "\n".join(f"- {phrase}" for phrase in forbidden_phrases) or "(keine)"
     must_include_block = ", ".join(setting.must_include) or "(keine Angabe)"
@@ -333,9 +351,14 @@ the stone glow from within."
 - Project title: {project_brief.video_title or "(untitled)"}
 - Target language: {project_brief.language}
 - Desired tone tags: {tone_tags}
-- Active global negative rules: {active_negative_rules}
-- Global negative rules (free text): {project_brief.negative_rules_freetext or "(none)"}
-- Forbidden phrases (global + style + folder must_avoid):
+
+## Active global negative rules (MUST be respected)
+{active_negative_rules}
+
+## Global negative rules (free text)
+{project_brief.negative_rules_freetext or "(none)"}
+
+## Forbidden phrases (global + style + folder must_avoid)
 {forbidden_block}
 
 ## Style Profile (respect it — do not copy any reference text)
@@ -617,9 +640,7 @@ def build_intro_hook_prompt(
     entries_by_folder = {entry.folder_name: entry for entry in dramaturgy_plan.recommended_folder_order}
 
     tone_tags = ", ".join(project_brief.tone_tags) or "(keine Angabe)"
-    active_negative_rules = ", ".join(
-        flag for flag, enabled in project_brief.negative_rule_flags.items() if enabled
-    ) or "(keine Angabe)"
+    active_negative_rules = _active_negative_rules_block(project_brief)
     forbidden_phrases = list(project_brief.forbidden_phrases)
     if style_profile is not None:
         forbidden_phrases.extend(style_profile.forbidden_phrases)
@@ -651,11 +672,14 @@ sentence_items or inventory summaries below.
 - Target language: {settings.language or project_brief.language}
 - Desired tone tags: {tone_tags}
 - Hook tone (from settings): {settings.tone}
-- Active global negative rules: {active_negative_rules}
-- Forbidden phrases (global + style + hook settings):
-{forbidden_block}
 - Core narrative arc: {dramaturgy_plan.narrative_arc or "-"}
 - Core promise: {dramaturgy_plan.core_promise or "-"}
+
+## Active global negative rules (MUST be respected)
+{active_negative_rules}
+
+## Forbidden phrases (global + style + hook settings)
+{forbidden_block}
 
 ## Style Profile (respect it — do not copy any reference text)
 {_style_summary_block(style_profile)}

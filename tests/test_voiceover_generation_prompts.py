@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from otio_app.defaults import BRIEF_NEGATIVE_RULE_INSTRUCTIONS
 from otio_app.services.voiceover_generation.models import (
     DramaturgyFolderEntry,
     DramaturgyPlan,
@@ -69,6 +70,36 @@ def test_prompt_contains_negative_rules_and_forbidden_phrases() -> None:
     assert "atemberaubend" in prompt
     assert "must-see" in prompt
     assert "Keine Klischees über die Wüste." in prompt
+
+
+def test_prompt_active_negative_rules_include_llm_instruction_text() -> None:
+    """Nutzerfeedback (Juli 2026): Regel-Keys allein im Prompt sind für Mensch
+    UND LLM missverständlich — die ausführliche Formulierung muss mit
+    ausgegeben werden, nicht nur der kompakte Key."""
+    prompt = build_style_profile_prompt(_sample_brief(), _sample_refs())
+    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["no_invented_facts"] in prompt
+    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["no_repetition"] in prompt
+    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["no_clickbait_phrases"] not in prompt
+
+
+def _sample_brief_with_new_rules() -> ProjectBrief:
+    return _sample_brief().model_copy(
+        update={
+            "negative_rule_flags": {
+                "biblical_chronology_required": True,
+                "no_party_scenes": True,
+                "voice_not_ai_sounding": True,
+                "no_cliches": True,
+            }
+        }
+    )
+
+
+def test_prompt_contains_new_standard_negative_rules() -> None:
+    prompt = build_style_profile_prompt(_sample_brief_with_new_rules(), _sample_refs())
+    for flag in ("biblical_chronology_required", "no_party_scenes", "voice_not_ai_sounding", "no_cliches"):
+        assert flag in prompt
+        assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS[flag] in prompt
 
 
 def test_prompt_requests_json_only_output() -> None:
@@ -190,6 +221,16 @@ def test_dramaturgy_prompt_handles_missing_style_profile() -> None:
     assert "kein Style Profile vorhanden" in prompt
 
 
+def test_dramaturgy_prompt_contains_active_negative_rule_instructions() -> None:
+    prompt = build_dramaturgy_prompt(
+        project_brief=_sample_brief_with_new_rules(),
+        style_profile=_sample_style_profile(),
+        folder_summaries=_sample_folder_summaries(),
+    )
+    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["biblical_chronology_required"] in prompt
+    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["voice_not_ai_sounding"] in prompt
+
+
 # --- build_folder_voiceover_prompt / build_voiceover_review_prompt /
 #     build_voiceover_correction_prompt (Phase 4) ---
 
@@ -286,6 +327,20 @@ def test_folder_voiceover_prompt_contains_target_word_count() -> None:
         inventory_assets=_sample_inventory_assets(),
     )
     assert "140" in prompt
+
+
+def test_folder_voiceover_prompt_contains_active_negative_rule_instructions() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief_with_new_rules(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["no_party_scenes"] in prompt
+    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["no_cliches"] in prompt
 
 
 def test_folder_voiceover_prompt_forbids_inventing_asset_ids() -> None:
@@ -477,3 +532,15 @@ def test_intro_hook_prompt_forbids_inventing_asset_ids() -> None:
         settings=_sample_intro_settings(),
     )
     assert "Do not invent asset IDs" in prompt
+
+
+def test_intro_hook_prompt_contains_active_negative_rule_instructions() -> None:
+    prompt = build_intro_hook_prompt(
+        project_brief=_sample_brief_with_new_rules(),
+        style_profile=None,
+        dramaturgy_plan=_sample_dramaturgy_plan(),
+        confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
+        settings=_sample_intro_settings(),
+    )
+    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["biblical_chronology_required"] in prompt
+    assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["no_party_scenes"] in prompt

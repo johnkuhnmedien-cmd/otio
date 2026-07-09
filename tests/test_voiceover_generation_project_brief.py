@@ -4,6 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from otio_app.defaults import (
+    BRIEF_NEGATIVE_RULE_BIBLICAL_CHRONOLOGY_REQUIRED,
+    BRIEF_NEGATIVE_RULE_FLAGS,
+    BRIEF_NEGATIVE_RULE_INSTRUCTIONS,
+    BRIEF_NEGATIVE_RULE_LABELS,
+    BRIEF_NEGATIVE_RULE_NO_CLICHES,
+    BRIEF_NEGATIVE_RULE_NO_PARTY_SCENES,
+    BRIEF_NEGATIVE_RULE_VOICE_NOT_AI_SOUNDING,
+)
 from otio_app.models import Project, ProjectMode
 from otio_app.project_layout import get_project_brief_path, get_voiceover_generation_dir
 from otio_app.services.voiceover_generation.project_brief_service import (
@@ -41,6 +50,39 @@ def test_default_project_brief_enables_all_negative_rules(tmp_path: Path) -> Non
     brief = default_project_brief(project)
     assert brief.negative_rule_flags
     assert all(brief.negative_rule_flags.values())
+
+
+# --- Nutzerfeedback (Juli 2026): neue Standard-Negativregeln ---
+
+
+def test_new_standard_negative_rules_exist_and_are_active_by_default(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    brief = default_project_brief(project)
+    for flag in (
+        BRIEF_NEGATIVE_RULE_BIBLICAL_CHRONOLOGY_REQUIRED,
+        BRIEF_NEGATIVE_RULE_NO_PARTY_SCENES,
+        BRIEF_NEGATIVE_RULE_VOICE_NOT_AI_SOUNDING,
+        BRIEF_NEGATIVE_RULE_NO_CLICHES,
+    ):
+        assert flag in brief.negative_rule_flags
+        assert brief.negative_rule_flags[flag] is True
+
+
+def test_existing_negative_rules_not_duplicated() -> None:
+    """"Keine Wiederholungen" und "Nicht nur Assetbeschreibungen" waren
+    bereits vorhanden (no_repetition/not_just_asset_descriptions) und
+    dürfen durch die neuen Standardregeln nicht dupliziert werden."""
+    assert len(BRIEF_NEGATIVE_RULE_FLAGS) == len(set(BRIEF_NEGATIVE_RULE_FLAGS))
+    assert "no_repetition" in BRIEF_NEGATIVE_RULE_FLAGS
+    assert "not_just_asset_descriptions" in BRIEF_NEGATIVE_RULE_FLAGS
+
+
+def test_every_negative_rule_flag_has_a_label_and_instruction() -> None:
+    for flag in BRIEF_NEGATIVE_RULE_FLAGS:
+        assert flag in BRIEF_NEGATIVE_RULE_LABELS
+        assert BRIEF_NEGATIVE_RULE_LABELS[flag].strip()
+        assert flag in BRIEF_NEGATIVE_RULE_INSTRUCTIONS
+        assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS[flag].strip()
 
 
 def test_save_and_load_project_brief_roundtrip(tmp_path: Path) -> None:

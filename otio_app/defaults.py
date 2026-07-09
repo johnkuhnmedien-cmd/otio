@@ -158,6 +158,15 @@ BRIEF_NEGATIVE_RULE_NO_IN_THIS_VIDEO_PHRASING = "no_in_this_video_phrasing"
 BRIEF_NEGATIVE_RULE_NO_UNVERIFIED_HISTORICAL_CLAIMS = "no_unverified_historical_claims"
 BRIEF_NEGATIVE_RULE_NOT_JUST_ASSET_DESCRIPTIONS = "not_just_asset_descriptions"
 BRIEF_NEGATIVE_RULE_DOCUMENTARY_PROSE_REQUIRED = "documentary_prose_required"
+# Nutzerfeedback (Juli 2026): die bisherigen Negativregeln waren für den
+# konkreten Anwendungsfall unvollständig/missverständlich — vier neue,
+# vom Nutzer explizit gewünschte Standardregeln ergänzt. "no_repetition" und
+# "not_just_asset_descriptions" deckten "Keine Wiederholungen" bzw. "Nicht
+# nur Assetbeschreibungen" bereits ab und wurden NICHT dupliziert.
+BRIEF_NEGATIVE_RULE_BIBLICAL_CHRONOLOGY_REQUIRED = "biblical_chronology_required"
+BRIEF_NEGATIVE_RULE_NO_PARTY_SCENES = "no_party_scenes"
+BRIEF_NEGATIVE_RULE_VOICE_NOT_AI_SOUNDING = "voice_not_ai_sounding"
+BRIEF_NEGATIVE_RULE_NO_CLICHES = "no_cliches"
 BRIEF_NEGATIVE_RULE_FLAGS = (
     BRIEF_NEGATIVE_RULE_NO_INVENTED_FACTS,
     BRIEF_NEGATIVE_RULE_NO_EXAGGERATED_SUPERLATIVES,
@@ -168,6 +177,10 @@ BRIEF_NEGATIVE_RULE_FLAGS = (
     BRIEF_NEGATIVE_RULE_NO_UNVERIFIED_HISTORICAL_CLAIMS,
     BRIEF_NEGATIVE_RULE_NOT_JUST_ASSET_DESCRIPTIONS,
     BRIEF_NEGATIVE_RULE_DOCUMENTARY_PROSE_REQUIRED,
+    BRIEF_NEGATIVE_RULE_BIBLICAL_CHRONOLOGY_REQUIRED,
+    BRIEF_NEGATIVE_RULE_NO_PARTY_SCENES,
+    BRIEF_NEGATIVE_RULE_VOICE_NOT_AI_SOUNDING,
+    BRIEF_NEGATIVE_RULE_NO_CLICHES,
 )
 BRIEF_NEGATIVE_RULE_LABELS = {
     BRIEF_NEGATIVE_RULE_NO_INVENTED_FACTS: "Keine erfundenen Fakten",
@@ -179,6 +192,67 @@ BRIEF_NEGATIVE_RULE_LABELS = {
     BRIEF_NEGATIVE_RULE_NO_UNVERIFIED_HISTORICAL_CLAIMS: "Keine unbelegten historischen Behauptungen",
     BRIEF_NEGATIVE_RULE_NOT_JUST_ASSET_DESCRIPTIONS: "Nicht nur Assetbeschreibungen",
     BRIEF_NEGATIVE_RULE_DOCUMENTARY_PROSE_REQUIRED: "Text muss wie echte Doku-Prosa klingen",
+    BRIEF_NEGATIVE_RULE_BIBLICAL_CHRONOLOGY_REQUIRED: (
+        "Zeitangaben müssen mit der biblischen Zeitrechnung übereinstimmen"
+    ),
+    BRIEF_NEGATIVE_RULE_NO_PARTY_SCENES: "Keine Partyszenen",
+    BRIEF_NEGATIVE_RULE_VOICE_NOT_AI_SOUNDING: "Voice-over darf nicht nach KI klingen",
+    BRIEF_NEGATIVE_RULE_NO_CLICHES: "Keine Floskeln / abgenutzte Redewendungen",
+}
+# Ausführliche, an das LLM gerichtete Formulierung je Regel (Englisch, da die
+# Prompts selbst auf Englisch sind) — macht die kompakten Regel-Keys im
+# Prompt selbsterklärend, statt dass das LLM (oder der Nutzer beim Lesen
+# eines Prompt-Exports) allein aus dem Key auf die Bedeutung schließen muss.
+BRIEF_NEGATIVE_RULE_INSTRUCTIONS: dict[str, str] = {
+    BRIEF_NEGATIVE_RULE_NO_INVENTED_FACTS: (
+        "Do not invent facts, numbers, or details that are not supported by the source "
+        "material, assets, or general knowledge."
+    ),
+    BRIEF_NEGATIVE_RULE_NO_EXAGGERATED_SUPERLATIVES: (
+        'Avoid exaggerated superlatives (e.g. "the most beautiful place on Earth") unless '
+        "clearly and safely supportable."
+    ),
+    BRIEF_NEGATIVE_RULE_NO_CLICKBAIT_PHRASES: (
+        "Avoid clickbait-style phrasing and sensationalist hooks (e.g. \"you won't believe\")."
+    ),
+    BRIEF_NEGATIVE_RULE_NO_REPETITION: (
+        "Do not repeat the same words, phrases, or sentence structures too often."
+    ),
+    BRIEF_NEGATIVE_RULE_NO_DIRECT_VIEWER_ADDRESS: (
+        'Do not address the viewer directly (e.g. "you will see", "imagine yourself").'
+    ),
+    BRIEF_NEGATIVE_RULE_NO_IN_THIS_VIDEO_PHRASING: (
+        'Never use meta-phrasing that refers to the video itself (e.g. "in this video", '
+        '"in this episode").'
+    ),
+    BRIEF_NEGATIVE_RULE_NO_UNVERIFIED_HISTORICAL_CLAIMS: (
+        "Do not state historical claims that are not verifiable or widely accepted as fact."
+    ),
+    BRIEF_NEGATIVE_RULE_NOT_JUST_ASSET_DESCRIPTIONS: (
+        "Do not merely describe what is visible in the assets — write narrative documentary "
+        "prose instead."
+    ),
+    BRIEF_NEGATIVE_RULE_DOCUMENTARY_PROSE_REQUIRED: (
+        "The text must read like professional documentary narration, not a script outline or "
+        "a bullet-point list."
+    ),
+    BRIEF_NEGATIVE_RULE_BIBLICAL_CHRONOLOGY_REQUIRED: (
+        "Any time references, ages, or historical/geological dates must be consistent with "
+        "biblical chronology. Do not use secular/mainstream scientific dating (e.g. millions "
+        "or billions of years) that contradicts it."
+    ),
+    BRIEF_NEGATIVE_RULE_NO_PARTY_SCENES: (
+        "Do not describe or reference party scenes, nightlife, clubbing, or a celebratory "
+        "party atmosphere."
+    ),
+    BRIEF_NEGATIVE_RULE_VOICE_NOT_AI_SOUNDING: (
+        "The narration must read like natural, human documentary narration — avoid robotic, "
+        "generic, or obviously AI-generated phrasing patterns."
+    ),
+    BRIEF_NEGATIVE_RULE_NO_CLICHES: (
+        'Avoid clichés, stock phrases, and overused documentary filler expressions (e.g. "a '
+        'place like no other", "steeped in history", "a hidden gem").'
+    ),
 }
 DEFAULT_NEGATIVE_RULE_FLAGS: dict[str, bool] = {flag: True for flag in BRIEF_NEGATIVE_RULE_FLAGS}
 
