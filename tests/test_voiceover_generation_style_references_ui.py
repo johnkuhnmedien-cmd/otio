@@ -169,6 +169,10 @@ def test_save_profile_to_library_then_load_into_another_project(
     assert loaded_profile is not None
     assert loaded_profile.overall_tone == "calm, cinematic"
 
+    # Die Original-Projekt-Kopie ist jetzt ebenfalls mit dem Bibliotheksnamen
+    # verknüpft (Nutzerfeedback: Name statt Häkchen in den Voraussetzungen).
+    assert load_style_profile(project).library_name == "Ruhige Dokumentation"
+
     # In ein zweites, unabhängiges Projekt übernehmen.
     other_project = Project(
         id="other-project",
@@ -181,3 +185,51 @@ def test_save_profile_to_library_then_load_into_another_project(
     )
     save_style_profile(other_project, loaded_profile)
     assert load_style_profile(other_project).overall_tone == "calm, cinematic"
+    assert load_style_profile(other_project).library_name == "Ruhige Dokumentation"
+
+
+def test_loading_from_library_via_ui_tags_project_profile_with_library_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nutzerfeedback: 'Können wir das geladene Profil anzeigen, also den
+    Namen anstatt einem Haken?' — das Laden aus der Bibliothek über den
+    Button muss den Namen auf der Projekt-Kopie hinterlegen."""
+    from otio_app.models import Project, ProjectMode
+    from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
+
+    monkeypatch.setenv("REPRO_ROOT", str(tmp_path))
+    monkeypatch.setenv("REPRO_PROJECT_ID", PROJECT_ID)
+
+    import otio_app.services.voiceover_generation.style_profile_library_service as lib_service
+    from otio_app.services.voiceover_generation.models import VoiceoverStyleProfile
+
+    lib_service.ensure_data_dir = lambda: tmp_path / "global_data"
+    lib_service.save_profile_to_library(
+        "Ruhige Dokumentation",
+        VoiceoverStyleProfile(project_id="original-project", overall_tone="calm"),
+    )
+
+    at = AppTest.from_file(str(SCRIPT_PATH))
+    at.run()
+    assert not at.exception, at.exception
+
+    select_library_entry = next(
+        selectbox for selectbox in at.selectbox if selectbox.label == "Gespeichertes Style Profile"
+    )
+    at = select_library_entry.set_value("Ruhige Dokumentation").run()
+    load_button = next(b for b in at.button if b.label == "In dieses Projekt laden")
+    at = load_button.click().run()
+    assert not at.exception, at.exception
+
+    project = Project(
+        id=PROJECT_ID,
+        name="Repro",
+        project_root=str(tmp_path / "USA"),
+        work_dir=str(tmp_path / "USA" / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    loaded = load_style_profile(project)
+    assert loaded is not None
+    assert loaded.library_name == "Ruhige Dokumentation"

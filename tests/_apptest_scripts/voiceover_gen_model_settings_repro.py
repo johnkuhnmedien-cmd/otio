@@ -26,7 +26,12 @@ from otio_app.services.voiceover_generation.folder_voiceover_settings_service im
     build_default_folder_voiceover_settings,
     save_folder_voiceover_settings,
 )
-from otio_app.services.voiceover_generation.models import DramaturgyFolderEntry, DramaturgyPlan
+from otio_app.services.voiceover_generation.models import (
+    DramaturgyFolderEntry,
+    DramaturgyPlan,
+    VoiceoverStyleProfile,
+)
+from otio_app.services.voiceover_generation.style_profile_service import save_style_profile
 from otio_app.services.voiceover_generation.voiceover_author_service import generate_folder_voiceover
 from otio_app.services.voiceover_generation.voiceover_review_service import confirm_folder_voiceover
 from otio_app.ui import project_context
@@ -72,6 +77,13 @@ if os.environ.get("REPRO_SETUP") == "dramaturgy_and_voiceovers_confirmed":
     ):
         generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
     confirm_folder_voiceover(project, "Grand Canyon")
+
+style_profile_library_name = os.environ.get("REPRO_STYLE_PROFILE_LIBRARY_NAME")
+if style_profile_library_name:
+    save_style_profile(
+        project,
+        VoiceoverStyleProfile(project_id=project.id, library_name=style_profile_library_name),
+    )
 
 project_context.list_projects = lambda: [project]
 project_context.get_project_by_id = lambda project_id: project if project_id == project.id else None

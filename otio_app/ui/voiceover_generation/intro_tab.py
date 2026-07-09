@@ -33,6 +33,7 @@ from otio_app.ui.project_context import render_project_selector
 from otio_app.ui.voiceover_generation._shared import (
     render_llm_model_selectbox,
     require_without_voiceover_mode,
+    style_profile_metric_value,
 )
 
 import streamlit as st
@@ -50,7 +51,7 @@ def _render_prerequisites(project: Project) -> bool:
     with col1:
         st.metric("Project Brief", "✓" if (brief.video_title or brief.tone_tags) else "—")
     with col2:
-        st.metric("Style Profile", "✓" if style_profile is not None else "—")
+        st.metric("Style Profile", style_profile_metric_value(style_profile))
     with col3:
         st.metric("Dramaturgie bestätigt", "✓" if confirmed_plan is not None else "—")
     with col4:

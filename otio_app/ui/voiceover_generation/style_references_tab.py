@@ -109,6 +109,8 @@ def _render_style_profile_status(project: Project) -> None:
         return
 
     st.success("Status: **READY**")
+    if profile.library_name:
+        st.caption(f"Aus Bibliothek: **{profile.library_name}**")
     st.caption(f"Erzeugt: {profile.generated_at.isoformat()}")
     if profile.llm_run_id:
         st.caption(f"LLM-Run: `{get_llm_run_dir(project.work_dir_path, profile.llm_run_id)}`")
@@ -148,17 +150,22 @@ def _render_style_profile_library(project: Project) -> None:
         else:
             library_name = st.text_input(
                 "Name in der Bibliothek",
+                value=current_profile.library_name,
                 key=f"vo_style_lib_save_name_{project.id}",
                 help="Frei wählbarer Name, unter dem dieses Style Profile wiedergefunden wird.",
             )
             if st.button("In Bibliothek speichern", key=f"vo_style_lib_save_{project.id}"):
-                if not library_name.strip():
+                cleaned_name = library_name.strip()
+                if not cleaned_name:
                     st.warning("Bitte einen Namen angeben.")
                 else:
-                    save_profile_to_library(library_name.strip(), current_profile)
-                    st.success(
-                        f"Style Profile als „{library_name.strip()}“ in der Bibliothek gespeichert."
-                    )
+                    named_profile = current_profile.model_copy(update={"library_name": cleaned_name})
+                    save_profile_to_library(cleaned_name, named_profile)
+                    # Projekt-eigene Kopie ebenfalls mit dem Namen verknüpfen, damit
+                    # er z. B. bei den Voraussetzungen in Dramaturgie/Intro/Folder
+                    # Voice-overs statt eines Häkchens angezeigt wird.
+                    save_style_profile(project, named_profile)
+                    st.success(f"Style Profile als „{cleaned_name}“ in der Bibliothek gespeichert.")
                     st.rerun()
 
     with col_apply:
@@ -177,7 +184,10 @@ def _render_style_profile_library(project: Project) -> None:
                 if st.button("In dieses Projekt laden", key=f"vo_style_lib_load_{project.id}"):
                     entry_profile = get_profile_from_library(selected_name)
                     if entry_profile is not None:
-                        save_style_profile(project, entry_profile)
+                        named_profile = entry_profile.model_copy(
+                            update={"library_name": selected_name}
+                        )
+                        save_style_profile(project, named_profile)
                         st.success(f"„{selected_name}“ wurde in dieses Projekt übernommen.")
                         st.rerun()
             with col_delete_btn:

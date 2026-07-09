@@ -171,6 +171,10 @@ class VoiceoverStyleProfile(BaseModel):
     source_reference_hash: str = ""
     project_brief_hash: str = ""
     llm_run_id: str = ""
+    # Name des Bibliothekseintrags (siehe StyleProfileLibrary), aus dem dieses
+    # Profil zuletzt geladen wurde — leer, wenn es direkt für dieses Projekt
+    # per LLM erzeugt und nie mit einem Bibliothekseintrag verknüpft wurde.
+    library_name: str = ""
 
 
 class StyleProfileLibraryEntry(BaseModel):

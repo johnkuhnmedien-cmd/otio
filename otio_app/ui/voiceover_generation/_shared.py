@@ -13,7 +13,7 @@ from otio_app.services.voiceover_generation.model_settings_service import (
     format_voiceover_gen_model_label,
     split_llm_model_id,
 )
-from otio_app.services.voiceover_generation.models import LlmRoleSettings
+from otio_app.services.voiceover_generation.models import LlmRoleSettings, VoiceoverStyleProfile
 from otio_app.ui.project_context import render_project_selector
 
 
@@ -87,6 +87,20 @@ def render_llm_model_selectbox(
     )
     provider, model = split_llm_model_id(selected)
     return LlmRoleSettings(provider=provider, model=model)
+
+
+def style_profile_metric_value(profile: VoiceoverStyleProfile | None) -> str:
+    """Wert für die 'Style Profile'-Kennzahl in den Voraussetzungen-Zeilen.
+
+    Zeigt den Namen des Bibliothekseintrags an, aus dem das aktuelle Style
+    Profile geladen wurde (statt eines nicht-identifizierenden Häkchens) —
+    Nutzerfeedback: 'Können wir das geladene Profil anzeigen, also den Namen
+    anstatt einem Haken?'. Für direkt im Projekt erzeugte, nie mit einem
+    Bibliothekseintrag verknüpfte Profile bleibt es beim Häkchen, da es dort
+    keinen Namen gibt."""
+    if profile is None:
+        return "—"
+    return profile.library_name or "✓"
 
 
 def require_without_voiceover_mode(project: Project) -> bool:
