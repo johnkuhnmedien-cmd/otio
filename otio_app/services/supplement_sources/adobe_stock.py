@@ -96,6 +96,26 @@ ADOBE_STOCK_REQUEST_USER_AGENT = (
 )
 
 
+def _adobe_media_type_filter(required_asset_type: str) -> str:
+    """Phase 12.7: bewusst NUR die EXAKTEN Werte "video"/"image" schränken
+    die Adobe-Suche auf einen Medientyp ein — jeder andere Wert (u. a. die
+    Produktions-Pipeline-Standardvorgabe "video_preferred", der Cut-Plan-
+    Standard "any" für die manuelle Suche, sowie jeder unbekannte/leere
+    Wert) ergibt "any" und behält das bisherige Verhalten (Video UND Foto
+    gemeinsam) unverändert bei. Das schützt insbesondere die produktions-
+    seitige Supplement-Pipeline (supplement_pipeline.py), die
+    required_asset_type="video_preferred" nutzt, aber von Adobe bislang
+    IMMER beide Medientypen gemischt zurückbekommt — nur der neue Cut-Plan-
+    Auto-Resolver (siehe cut_plan_supplement_auto_resolve_service.py)
+    übergibt hier je Suchstufe explizit "video" oder "image"."""
+    normalized = (required_asset_type or "").strip().lower()
+    if normalized == "video":
+        return "video"
+    if normalized == "image":
+        return "photo"
+    return "any"
+
+
 class AdobeStockAdapter(SupplementSourceAdapter):
     provider = SUPPLEMENT_SOURCE_ADOBE
     last_debug_report: dict = {}
@@ -168,19 +188,27 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         fallback = preferred_search_query(request).strip()
         return [fallback] if fallback else [location]
 
-    def _build_params(self, query: str) -> dict:
-        return {
+    def _build_params(self, query: str, media_type_filter: str) -> dict:
+        params = {
             "locale": "en_US",
             "search_parameters[words]": query,
             "search_parameters[limit]": ADOBE_STOCK_SEARCH_LIMIT,
             "search_parameters[order]": "relevance",
             "search_parameters[filters][orientation]": "horizontal",
-            "search_parameters[filters][content_type:video]": 1,
-            "search_parameters[filters][content_type:photo]": 1,
             # Nutzervorgabe: generative-AI-Assets ausschließen.
             "search_parameters[filters][gentech]": "false",
             "result_columns[]": list(_ADOBE_RESULT_COLUMNS),
         }
+        # Phase 12.7: media_type_filter=="any" (Standard für alle bisherigen
+        # Aufrufer) fragt wie bisher BEIDE Medientypen gleichzeitig an —
+        # "video"/"image" (nur vom Cut-Plan-Auto-Resolver verwendet)
+        # schränkt die Adobe-Suche selbst schon auf einen Typ ein, statt nur
+        # nachträglich zu filtern (spart API-seitig irrelevante Treffer).
+        if media_type_filter != "photo":
+            params["search_parameters[filters][content_type:video]"] = 1
+        if media_type_filter != "video":
+            params["search_parameters[filters][content_type:photo]"] = 1
+        return params
 
     def _request_json(self, params: dict, api_key: str) -> tuple[int, dict]:
         url = f"{ADOBE_STOCK_SEARCH_ENDPOINT}?{urllib.parse.urlencode(params, doseq=True)}"
@@ -215,12 +243,17 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             "request_id": request.supplement_request_id,
             "provider": "adobe_stock",
             "endpoint": ADOBE_STOCK_SEARCH_ENDPOINT,
+            # Phase 12.7: "any" (Standard) fragt Video+Foto gemeinsam an wie
+            # bisher — "video"/"image" (nur Cut-Plan-Auto-Resolver) schränkt
+            # die Adobe-Anfrage selbst auf einen Medientyp ein.
+            "media_type_filter": _adobe_media_type_filter(request.required_asset_type),
             "queries_attempted": [],
             "http_status_by_query": {},
             "raw_result_count": 0,
             "mapped_candidate_count": 0,
             "gentech_rejected_count": 0,
             "skipped_unsupported_media_type_count": 0,
+            "skipped_wrong_media_type_count": 0,
             "final_candidate_count": 0,
             "rejected_reasons": [],
             "errors": [],
@@ -231,12 +264,13 @@ class AdobeStockAdapter(SupplementSourceAdapter):
 
     def _search_api(self, request: SupplementRequest, api_key: str) -> list[SupplementCandidate]:
         self.last_debug_report = self._empty_debug(request)
+        media_type_filter = self.last_debug_report["media_type_filter"]
         location = base_location_for_request(request)
         candidates: list[SupplementCandidate] = []
 
         for query in self._query_variants(request):
             self.last_debug_report["queries_attempted"].append(query)
-            params = self._build_params(query)
+            params = self._build_params(query, media_type_filter)
             result = self._request_json_safe(params, api_key, query=query)
             if result is None:
                 continue
@@ -246,7 +280,11 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             self.last_debug_report["raw_result_count"] += len(files)
             for file_entry in files:
                 candidate = self._candidate_from_file(
-                    request=request, file_entry=file_entry, query_used=query, location_name=location
+                    request=request,
+                    file_entry=file_entry,
+                    query_used=query,
+                    location_name=location,
+                    media_type_filter=media_type_filter,
                 )
                 if candidate is None:
                     continue
@@ -308,6 +346,7 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         file_entry: dict,
         query_used: str,
         location_name: str,
+        media_type_filter: str = "any",
     ) -> SupplementCandidate | None:
         is_gentech = bool(file_entry.get("is_gentech", False))
         if is_gentech:
@@ -331,6 +370,19 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             # Illustration/Vektor/3D/Template/Premium/Audio — für die
             # Supplement-Suche (Video/Foto) nicht relevant.
             self.last_debug_report["skipped_unsupported_media_type_count"] += 1
+            return None
+
+        # Phase 12.7: defensives Sicherheitsnetz zusätzlich zum Suchfilter in
+        # _build_params — falls Adobe trotz content_type-Filter (oder bei
+        # einem unveränderten Aufrufer mit media_type_filter="any", der
+        # ohnehin nie hier ausschlägt) den "falschen" Medientyp zurückgibt,
+        # wird der Treffer verworfen statt in eine falsche Suchstufe
+        # (z. B. den "nur Video"-Schritt des Cut-Plan-Auto-Resolvers) zu
+        # rutschen.
+        if (media_type_filter == "video" and media_type != "video") or (
+            media_type_filter == "photo" and media_type != "image"
+        ):
+            self.last_debug_report["skipped_wrong_media_type_count"] += 1
             return None
 
         comps = file_entry.get("comps") or {}

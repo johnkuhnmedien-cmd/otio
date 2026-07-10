@@ -305,6 +305,82 @@ def test_search_sends_gentech_false_filter_and_headers(monkeypatch: pytest.Monke
     assert headers["authorization"] == "Bearer test-token"
 
 
+def test_search_with_default_required_asset_type_requests_both_content_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 12.7: der Standardwert (required_asset_type nicht explizit
+    "video"/"image", z. B. die Produktions-Pipeline-Vorgabe "video_preferred"
+    oder der Cut-Plan-Standard "any" für die manuelle Suche) fragt WIE
+    BISHER Video UND Foto gemeinsam an — schützt die produktionsseitige
+    Supplement-Pipeline vor einer versehentlichen Verhaltensänderung."""
+    monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
+    captured_urls: list[str] = []
+
+    def fake_urlopen(request, timeout=20):
+        captured_urls.append(request.full_url)
+        return FakeResponse(_files_payload([_video_file(), _photo_file()]))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    adapter = AdobeStockAdapter()
+    candidates = adapter.search(_request(required_asset_type="video_preferred"))
+
+    assert "filters%5D%5Bcontent_type%3Avideo%5D=1" in captured_urls[0]
+    assert "filters%5D%5Bcontent_type%3Aphoto%5D=1" in captured_urls[0]
+    assert {c.media_type for c in candidates} == {"video", "image"}
+    assert adapter.last_debug_report["media_type_filter"] == "any"
+
+
+def test_search_with_required_asset_type_video_requests_only_video(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 12.7: der Cut-Plan-Auto-Resolver fragt in seiner Video-Suchstufe
+    required_asset_type="video" an — Adobe soll dann NUR nach Video filtern
+    (spart irrelevante Foto-Treffer) und ein trotzdem zurückgegebenes Foto
+    wird zusätzlich code-seitig als Sicherheitsnetz verworfen."""
+    monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
+    captured_urls: list[str] = []
+
+    def fake_urlopen(request, timeout=20):
+        captured_urls.append(request.full_url)
+        # Simuliert, dass Adobe TROTZ Filter noch ein Foto mitliefert —
+        # das defensive Sicherheitsnetz in _candidate_from_file muss es
+        # trotzdem verwerfen.
+        return FakeResponse(_files_payload([_video_file(), _photo_file()]))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    adapter = AdobeStockAdapter()
+    candidates = adapter.search(_request(required_asset_type="video"))
+
+    assert "filters%5D%5Bcontent_type%3Avideo%5D=1" in captured_urls[0]
+    assert "filters%5D%5Bcontent_type%3Aphoto%5D=1" not in captured_urls[0]
+    assert {c.media_type for c in candidates} == {"video"}
+    assert adapter.last_debug_report["media_type_filter"] == "video"
+    assert adapter.last_debug_report["skipped_wrong_media_type_count"] == 1
+
+
+def test_search_with_required_asset_type_image_requests_only_photo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spiegelbildlich zur Video-Suchstufe: required_asset_type="image"
+    filtert Adobe auf reine Foto-Suche."""
+    monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
+    captured_urls: list[str] = []
+
+    def fake_urlopen(request, timeout=20):
+        captured_urls.append(request.full_url)
+        return FakeResponse(_files_payload([_video_file(), _photo_file()]))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    adapter = AdobeStockAdapter()
+    candidates = adapter.search(_request(required_asset_type="image"))
+
+    assert "filters%5D%5Bcontent_type%3Aphoto%5D=1" in captured_urls[0]
+    assert "filters%5D%5Bcontent_type%3Avideo%5D=1" not in captured_urls[0]
+    assert {c.media_type for c in candidates} == {"image"}
+    assert adapter.last_debug_report["media_type_filter"] == "photo"
+    assert adapter.last_debug_report["skipped_wrong_media_type_count"] == 1
+
+
 def test_search_respects_max_candidates_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
     files = [_video_file(id=idx, title=f"video {idx}") for idx in range(5)]

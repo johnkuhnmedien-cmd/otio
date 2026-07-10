@@ -8,9 +8,15 @@ Materials zu einem einzigen automatischen Ablauf für EINEN Request:
   1. Provider der Reihe nach durchsuchen (Phase 12.5:
      CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER = Adobe Stock, dann Pexels —
      Nutzervorgabe: Adobe zuerst, weil unlimited Plan + sofortige
-     Lizenzierung, Pexels als kostenlose Ausweichquelle). Für JEDEN Provider:
-     LLM-Suchqueries erzeugen + Kandidaten suchen (bis zu 5, Video+Foto).
-  2. Kandidaten dieses Providers der Reihe nach (Suchreihenfolge)
+     Lizenzierung, Pexels als kostenlose Ausweichquelle). Phase 12.7,
+     Nutzervorgabe: pro Provider wird NICHT mehr Video+Foto gemeinsam in
+     EINER Suche abgefragt, sondern in ZWEI GETRENNTEN Suchstufen — zuerst
+     bis zu _AUTO_RESOLVE_MAX_CANDIDATES_PER_STAGE (2) VIDEOS, erst wenn
+     KEINES davon PASS erreicht, bis zu 2 FOTOS desselben Providers. Ergibt
+     die Stufenreihenfolge Adobe-Video -> Adobe-Foto -> Pexels-Video ->
+     Pexels-Foto. Grund: Videos sind redaktionell bevorzugt, und die
+     Adobe-Lizenzierung soll nicht mehr Kandidaten kosten als nötig.
+  2. Kandidaten dieser Suchstufe (Provider + Medientyp) der Reihe nach
      herunterladen — bei Adobe bedeutet das bereits sofortige Lizenzierung
      (siehe AdobeStockAdapter.acquire(), Phase 12.3). Phase 12.6: ein
      Video-Kandidat, der laut Provider-Metadaten (candidate.duration_sec)
@@ -23,10 +29,11 @@ Materials zu einem einzigen automatischen Ablauf für EINEN Request:
      gemini_client.py). Bewusst NICHT zwei getrennte Aufrufe (beschreiben,
      dann validieren) — spart Latenz/Kosten und die Bildinformation geht
      nicht über den Umweg einer separaten Text-Beschreibung verloren.
-  4. beim ERSTEN Kandidaten (über ALLE Provider in der festgelegten
+  4. beim ERSTEN Kandidaten (über ALLE Suchstufen in der festgelegten
      Reihenfolge) mit Status PASS: automatisch akzeptieren (siehe
      accept_cut_plan_supplement_candidate) und dem Cut-Item zuordnen —
-     Schleife bricht sofort ab, weitere Provider werden nicht mehr versucht.
+     Schleife bricht sofort ab, weitere Suchstufen werden nicht mehr
+     versucht.
      Phase 12.6: schlägt diese Übernahme trotzdem fehl (z. B. weicht die
      per ffprobe gemessene REALE Dauer von den Provider-Metadaten ab und
      das Asset ist doch zu kurz), wird das als ACCEPT_FAILED protokolliert
@@ -138,6 +145,14 @@ _AUTO_RESOLVE_DURATION_EPSILON = 0.05
 # analog zu "DOWNLOAD_FAILED" (bereits bestehend).
 VALIDATION_STATUS_TOO_SHORT = "TOO_SHORT"
 VALIDATION_STATUS_ACCEPT_FAILED = "ACCEPT_FAILED"
+
+# Phase 12.7, Nutzervorgabe: pro Suchstufe (Provider + Medientyp) werden
+# höchstens 2 Kandidaten herunterladen/lizenziert und geprüft — schützt
+# insbesondere Adobe-Lizenzkontingent vor unnötig vielen Versuchen, bevor
+# auf den nächsten Medientyp/Provider gewechselt wird. "video" wird IMMER
+# vor "image" versucht (redaktionelle Präferenz: Video vor Foto).
+_AUTO_RESOLVE_MAX_CANDIDATES_PER_STAGE = 2
+_AUTO_RESOLVE_ASSET_TYPE_SEARCH_ORDER = ("video", "image")
 
 
 def _candidate_is_too_short(
@@ -335,17 +350,33 @@ def auto_resolve_cut_plan_supplement_request(
     attempts: list[CutPlanSupplementAutoResolveAttempt] = []
     search_errors: list[str] = []
 
-    for provider in CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER:
+    # Phase 12.7: jede Kombination aus Provider (Phase 12.5-Reihenfolge) und
+    # Medientyp (Video vor Foto, Nutzervorgabe) ist eine eigene Suchstufe —
+    # ergibt z. B. [(adobe_stock, video), (adobe_stock, image),
+    # (pexels, video), (pexels, image)]. Jede Stufe fragt höchstens
+    # _AUTO_RESOLVE_MAX_CANDIDATES_PER_STAGE (2) Kandidaten an.
+    stages = [
+        (provider, asset_type)
+        for provider in CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER
+        for asset_type in _AUTO_RESOLVE_ASSET_TYPE_SEARCH_ORDER
+    ]
+
+    for provider, asset_type in stages:
+        stage_label = f"{provider}/{asset_type}"
         try:
             candidates_document = search_candidates_for_cut_plan_request(
                 project,
                 request_id,
-                {"provider": provider},
+                {
+                    "provider": provider,
+                    "required_asset_type": asset_type,
+                    "max_candidates": _AUTO_RESOLVE_MAX_CANDIDATES_PER_STAGE,
+                },
                 query_llm_provider=query_llm_provider,
                 query_llm_model=query_llm_model,
             )
         except Exception as exc:  # noqa: BLE001 — Suche darf den Auto-Resolver nicht crashen
-            search_errors.append(f"{provider}: {exc}")
+            search_errors.append(f"{stage_label}: {exc}")
             continue
 
         if (
@@ -353,10 +384,10 @@ def auto_resolve_cut_plan_supplement_request(
             or not candidates_document.candidates
         ):
             if candidates_document.error_message:
-                search_errors.append(f"{provider}: {candidates_document.error_message}")
+                search_errors.append(f"{stage_label}: {candidates_document.error_message}")
             continue
 
-        for candidate in candidates_document.candidates:
+        for candidate in candidates_document.candidates[:_AUTO_RESOLVE_MAX_CANDIDATES_PER_STAGE]:
             # Phase 12.6: offensichtlich zu kurze Video-Kandidaten (anhand der
             # vom Provider gemeldeten Dauer) werden NICHT heruntergeladen/
             # lizenziert — verhindert unnötige Adobe-Lizenzkäufe für Videos,
@@ -452,11 +483,13 @@ def auto_resolve_cut_plan_supplement_request(
                     accepted_asset_id=downloaded_asset.asset_id,
                     attempts=attempts,
                 )
-        # Kein Kandidat dieses Providers hat bestanden -> nächsten Provider
-        # in der Reihenfolge versuchen (Phase 12.5), bevor auf den
-        # generischen Ordner-Fallback zurückgegriffen wird.
+        # Kein Kandidat dieser Suchstufe (Provider + Medientyp) hat bestanden
+        # -> nächste Stufe in der Reihenfolge versuchen (Phase 12.7: erst
+        # der andere Medientyp desselben Providers, dann der nächste
+        # Provider), bevor auf den generischen Ordner-Fallback
+        # zurückgegriffen wird.
 
-    # Phase 11.4: kein Stock-Kandidat bei KEINEM Provider hat bestanden ->
+    # Phase 11.4: kein Stock-Kandidat bei KEINER Suchstufe hat bestanden ->
     # generischer Ordner-Fallback, BEVOR endgültig NO_MATCH zurückgegeben wird.
     return _fallback_or_no_match(attempts, search_error="; ".join(search_errors))
 

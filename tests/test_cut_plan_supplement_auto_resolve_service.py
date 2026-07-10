@@ -132,17 +132,22 @@ def _empty_candidates_document(request_id: str, *, provider: str) -> CutPlanSupp
 
 
 def _search_only_finds_candidates_for(
-    candidates_doc: CutPlanSupplementCandidatesDocument, *, only_provider: str
+    candidates_doc: CutPlanSupplementCandidatesDocument, *, only_provider: str, only_asset_type: str = "video"
 ):
-    """Phase 12.5: baut einen provider-bewussten side_effect für
-    search_candidates_for_cut_plan_request — nur only_provider liefert
-    candidates_doc, jeder andere Provider (in der Such-Reihenfolge) liefert
-    NO_RESULTS. Bildet realistisch ab, dass i. d. R. nicht JEDER Provider
-    exakt dieselben Kandidaten findet."""
+    """Phase 12.5/12.7: baut einen provider- UND medientyp-bewussten
+    side_effect für search_candidates_for_cut_plan_request — nur die
+    EXAKTE Suchstufe (only_provider, only_asset_type) liefert candidates_doc,
+    jede andere Suchstufe (anderer Provider ODER anderer Medientyp
+    desselben Providers, siehe die Video-vor-Foto-Suchstufen in
+    cut_plan_supplement_auto_resolve_service.py) liefert NO_RESULTS. Bildet
+    realistisch ab, dass eine separate Video-/Foto-Suche i. d. R.
+    UNTERSCHIEDLICHE Treffer liefert — Standard only_asset_type="video", da
+    das der häufigste Fall ("Video wird direkt gefunden") ist."""
 
     def _side_effect(project_arg, request_id, provider_settings, **kwargs):
         provider = provider_settings["provider"]
-        if provider == only_provider:
+        asset_type = provider_settings.get("required_asset_type", "")
+        if provider == only_provider and asset_type == only_asset_type:
             return candidates_doc
         return _empty_candidates_document(request_id, provider=provider)
 
@@ -497,13 +502,15 @@ def test_auto_resolve_generic_fallback_exception_is_recorded_and_still_returns_n
 
 def test_auto_resolve_tries_adobe_before_pexels(tmp_path: Path) -> None:
     """Phase 12.5, Nutzervorgabe: Adobe Stock wird immer ZUERST versucht,
-    Pexels erst danach."""
+    Pexels erst danach. Phase 12.7: pro Provider wird zusätzlich zuerst
+    Video, dann Foto versucht — ergibt die vollständige Suchstufen-
+    Reihenfolge Adobe-Video -> Adobe-Foto -> Pexels-Video -> Pexels-Foto."""
     project, request_id = _setup_request(tmp_path)
     empty_doc = _empty_candidates_document(request_id, provider="unused")
-    providers_tried: list[str] = []
+    stages_tried: list[tuple[str, str]] = []
 
     def _search_side_effect(project_arg, rid, provider_settings, **kwargs):
-        providers_tried.append(provider_settings["provider"])
+        stages_tried.append((provider_settings["provider"], provider_settings.get("required_asset_type", "")))
         return empty_doc
 
     fake_candidate = GenericAssetCandidate(
@@ -523,7 +530,12 @@ def test_auto_resolve_tries_adobe_before_pexels(tmp_path: Path) -> None:
             project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
         )
 
-    assert providers_tried == ["adobe_stock", "pexels"]
+    assert stages_tried == [
+        ("adobe_stock", "video"),
+        ("adobe_stock", "image"),
+        ("pexels", "video"),
+        ("pexels", "image"),
+    ]
 
 
 def test_auto_resolve_skips_pexels_when_adobe_candidate_already_passes(tmp_path: Path) -> None:
@@ -553,6 +565,66 @@ def test_auto_resolve_skips_pexels_when_adobe_candidate_already_passes(tmp_path:
     mock_accept.assert_called_once()
 
 
+def test_auto_resolve_tries_photo_only_after_video_fails_for_same_provider(tmp_path: Path) -> None:
+    """Phase 12.7, Nutzervorgabe: pro Provider wird ZUERST Video versucht —
+    erst wenn KEIN Video-Kandidat PASS erreicht, wird auf Foto DESSELBEN
+    Providers gewechselt, BEVOR der nächste Provider (Pexels) versucht
+    wird."""
+    project, request_id = _setup_request(tmp_path)
+    video_doc = CutPlanSupplementCandidatesDocument(
+        project_id=project.id,
+        request_id=request_id,
+        provider="adobe_stock",
+        candidates=[_fake_candidate("cand_video", request_id, provider="adobe_stock")],
+        status="READY",
+    )
+    photo_candidate = _fake_candidate("cand_photo", request_id, provider="adobe_stock").model_copy(
+        update={"asset_type": "image", "duration_sec": 0.0}
+    )
+    photo_doc = CutPlanSupplementCandidatesDocument(
+        project_id=project.id,
+        request_id=request_id,
+        provider="adobe_stock",
+        candidates=[photo_candidate],
+        status="READY",
+    )
+    empty_doc = _empty_candidates_document(request_id, provider="pexels")
+    stages_tried: list[tuple[str, str]] = []
+
+    def _search_side_effect(project_arg, rid, provider_settings, **kwargs):
+        provider = provider_settings["provider"]
+        asset_type = provider_settings.get("required_asset_type", "")
+        stages_tried.append((provider, asset_type))
+        if provider == "adobe_stock" and asset_type == "video":
+            return video_doc
+        if provider == "adobe_stock" and asset_type == "image":
+            return photo_doc
+        return empty_doc
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", side_effect=_search_side_effect),
+        patch(
+            f"{_MODULE}.download_cut_plan_supplement_candidate",
+            side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid),
+        ),
+        patch(
+            f"{_MODULE}._describe_and_validate_downloaded_asset",
+            side_effect=[_analysis("FAIL", score=0.1), _analysis("PASS")],
+        ),
+        patch(f"{_MODULE}.accept_cut_plan_supplement_candidate") as mock_accept,
+    ):
+        result = auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    assert result.status == AUTO_RESOLVE_STATUS_ACCEPTED
+    assert result.accepted_candidate_id == "cand_photo"
+    # Pexels wurde nicht mehr benötigt — der Foto-Kandidat DESSELBEN
+    # Providers hat bereits vor dem nächsten Provider bestanden.
+    assert stages_tried == [("adobe_stock", "video"), ("adobe_stock", "image")]
+    mock_accept.assert_called_once()
+
+
 def test_auto_resolve_falls_through_to_pexels_when_adobe_search_raises(tmp_path: Path) -> None:
     """Ein Fehler bei Adobe (z. B. fehlender Access-Token/Netzwerkfehler)
     darf Pexels nicht blockieren — der Auto-Resolver versucht Pexels trotzdem."""
@@ -577,6 +649,40 @@ def test_auto_resolve_falls_through_to_pexels_when_adobe_search_raises(tmp_path:
     assert result.status == AUTO_RESOLVE_STATUS_ACCEPTED
     assert result.attempts[0].provider == "pexels"
     mock_accept.assert_called_once()
+
+
+def test_auto_resolve_requests_at_most_two_candidates_per_stage(tmp_path: Path) -> None:
+    """Phase 12.7, Nutzervorgabe: pro Suchstufe (Provider + Medientyp) werden
+    höchstens 2 Kandidaten angefragt — schützt Adobe-Lizenzkontingent vor
+    unnötig vielen Versuchen."""
+    project, request_id = _setup_request(tmp_path)
+    empty_doc = _empty_candidates_document(request_id, provider="unused")
+    captured_settings: list[dict] = []
+
+    def _search_side_effect(project_arg, rid, provider_settings, **kwargs):
+        captured_settings.append(dict(provider_settings))
+        return empty_doc
+
+    fake_candidate = GenericAssetCandidate(
+        path="/fake/generic.mp4",
+        asset_id="asset_generic",
+        description="Establishing shot",
+        score=0.8,
+        selection_reason="Neutraler Shot.",
+        warnings=[],
+    )
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", side_effect=_search_side_effect),
+        patch(f"{_MODULE}.apply_generic_fallback_for_cut_plan_request", return_value=(None, fake_candidate)),
+    ):
+        auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    assert len(captured_settings) == 4  # 2 Provider x 2 Medientypen
+    for settings in captured_settings:
+        assert settings["max_candidates"] == 2
 
 
 def test_auto_resolve_uses_default_validation_model_when_not_overridden(tmp_path: Path) -> None:
