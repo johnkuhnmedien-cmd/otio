@@ -58,11 +58,25 @@ API_PROVIDERS: tuple[ApiProvider, ...] = (
     ),
     ApiProvider(
         env_key="ADOBE_STOCK_API_KEY",
-        label="Adobe Stock",
-        description="Geplant für lizenzierte Stock-Assets als Fallback.",
+        label="Adobe Stock — API Key",
+        description=(
+            "Für die Supplement-Suche im Cut Plan (Adobe wird vor Pexels durchsucht). "
+            "Generative-AI-Assets werden dabei standardmäßig ausgeschlossen."
+        ),
         placeholder="…",
-        docs_url="https://developer.adobe.com/stock/",
-        implemented=False,
+        docs_url="https://developer.adobe.com/stock/docs/getting-started/",
+        implemented=True,
+    ),
+    ApiProvider(
+        env_key="ADOBE_STOCK_ACCESS_TOKEN",
+        label="Adobe Stock — Access Token",
+        description=(
+            "Optional, nur für automatische Lizenzierung/Download nötig (folgt in einer "
+            "späteren Phase). Ohne Token funktioniert die reine Suche bereits."
+        ),
+        placeholder="Bearer-Token …",
+        docs_url="https://developer.adobe.com/stock/docs/getting-started/03-api-authentication/",
+        implemented=True,
     ),
     ApiProvider(
         env_key="UNSPLASH_ACCESS_KEY",

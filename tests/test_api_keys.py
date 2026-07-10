@@ -43,3 +43,34 @@ def test_is_api_key_set_false_when_empty(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.delenv("PEXELS_API_KEY", raising=False)
     set_runtime_api_key("PEXELS_API_KEY", None)
     assert is_api_key_set("PEXELS_API_KEY") is False
+
+
+def test_adobe_stock_providers_are_marked_implemented() -> None:
+    """Phase 12.1: Adobe Stock ist ab jetzt produktiv (Suche), nicht mehr
+    "Demnächst" — sowohl der API-Key als auch der optionale Access-Token für
+    eine spätere automatische Lizenzierung/Download."""
+    from otio_app.api_providers import get_provider
+
+    api_key_provider = get_provider("ADOBE_STOCK_API_KEY")
+    assert api_key_provider is not None
+    assert api_key_provider.implemented is True
+
+    access_token_provider = get_provider("ADOBE_STOCK_ACCESS_TOKEN")
+    assert access_token_provider is not None
+    assert access_token_provider.implemented is True
+
+
+def test_adobe_stock_product_name_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    from otio_app.defaults import ADOBE_STOCK_DEFAULT_PRODUCT_NAME
+    from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
+
+    monkeypatch.delenv("ADOBE_STOCK_PRODUCT_NAME", raising=False)
+    set_runtime_api_key("ADOBE_STOCK_PRODUCT_NAME", None)
+    assert AdobeStockAdapter()._product_name() == ADOBE_STOCK_DEFAULT_PRODUCT_NAME
+
+
+def test_adobe_stock_product_name_can_be_overridden(monkeypatch: pytest.MonkeyPatch) -> None:
+    from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
+
+    monkeypatch.setenv("ADOBE_STOCK_PRODUCT_NAME", "MyApp/2.0")
+    assert AdobeStockAdapter()._product_name() == "MyApp/2.0"

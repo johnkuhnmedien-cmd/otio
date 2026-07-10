@@ -21,6 +21,7 @@ from otio_app.analysis_models import (
     VoiceSegment,
 )
 from otio_app.defaults import (
+    CANDIDATE_STATUS_FOUND,
     CANDIDATE_STATUS_MOCK_ONLY,
     PROVIDER_STATUS_CONFIG_MISSING,
     RIGHTS_STATUS_APPROVED,
@@ -69,7 +70,6 @@ from otio_app.services.supplement_search import (
     build_pexels_primary_query,
     build_pexels_query_variants,
 )
-from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
 from otio_app.services.supplement_sources.google_search import GoogleSearchAdapter
 from otio_app.services.supplement_sources.pexels import PexelsAdapter
 
@@ -182,6 +182,14 @@ def test_pexels_candidate_saved_with_sidecar(tmp_path: Path) -> None:
 
 
 def test_adobe_not_licensed_without_approval(tmp_path: Path) -> None:
+    # Seit Phase 12.2a ruft AdobeStockAdapter.search() die echte Adobe-API
+    # auf (kein Mock mehr) — ein frisch gefundener Kandidat hat
+    # download_enabled=True (echter, technisch verwendbarer Treffer) und
+    # is_mock=False. Dieser Test prüft die produktionsseitige Guard-Logik in
+    # acquire_supplement_candidate, deshalb wird der Kandidat direkt
+    # konstruiert statt über search(); er bildet exakt den Zustand ab, den
+    # eine echte Suche liefert, bevor der Nutzer «Adobe Asset lizenzieren und
+    # herunterladen» geklickt hat (status != ADOBE_LICENSE_APPROVED).
     project = _project(tmp_path)
     request = SupplementRequest(
         supplement_request_id="supp_req_adobe",
@@ -190,8 +198,15 @@ def test_adobe_not_licensed_without_approval(tmp_path: Path) -> None:
         beat_id="beat_002",
         passage_text="Test",
     )
-    candidate = AdobeStockAdapter().search(request)[0]
-    with pytest.raises(PermissionError, match="Mock"):
+    candidate = SupplementCandidate(
+        candidate_id="cand_adobe_not_licensed",
+        supplement_request_id=request.supplement_request_id,
+        provider=SUPPLEMENT_SOURCE_ADOBE,
+        is_mock=False,
+        download_enabled=True,
+        status=CANDIDATE_STATUS_FOUND,
+    )
+    with pytest.raises(PermissionError, match="lizenzieren"):
         acquire_supplement_candidate(project, candidate, request)
 
 

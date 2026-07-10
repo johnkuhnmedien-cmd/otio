@@ -1081,6 +1081,24 @@ RIGHTS_STATUS_NEEDS_LICENSE_REVIEW = "NEEDS_LICENSE_REVIEW"
 RIGHTS_STATUS_GENERATED_APPROVED = "GENERATED_APPROVED"
 RIGHTS_STATUS_NEEDS_REVIEW = "NEEDS_REVIEW"
 
+# --- Cut-Plan-Supplement Phase 12.1/12.2a: Adobe Stock Suche ---
+# X-Product-Header — per ADOBE_STOCK_PRODUCT_NAME (Umgebungsvariable/
+# user_secrets.env, siehe otio_app.services.api_keys.get_api_key) optional
+# überschreibbar; bewusst KEIN eigenes UI-Feld dafür (kein Secret, ein
+# sinnvoller Default reicht für praktisch alle Nutzer).
+ADOBE_STOCK_DEFAULT_PRODUCT_NAME = "OTIO-App/1.0"
+ADOBE_STOCK_SEARCH_ENDPOINT = "https://stock.adobe.io/Rest/Media/1/Search/Files"
+# Adobe media_type_id-Codes (siehe Search-API-Referenz) — nur die für die
+# Supplement-Suche relevanten Typen (Foto/Video), alles andere (Illustration,
+# Vektor, 3D, Templates, Premium, Audio) wird beim Mapping übersprungen.
+ADOBE_STOCK_MEDIA_TYPE_ID_PHOTO = 1
+ADOBE_STOCK_MEDIA_TYPE_ID_VIDEO = 4
+# Nutzervorgabe (Juli 2026): generative-AI-Stockassets werden bei Adobe
+# Stock IMMER ausgeschlossen — sowohl über den Suchfilter
+# (search_parameters[filters][gentech]=false) als auch als zusätzlicher
+# Code-seitiger Sicherheitsnetz-Check auf is_gentech in der Response.
+ADOBE_STOCK_REJECTED_REASON_GENTECH = "ADOBE_GENTECH_REJECTED"
+
 
 def resolve_voice_backend(backend: str | None) -> str:
     if backend and backend.strip() in VOICE_BACKEND_CHOICES:

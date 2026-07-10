@@ -419,6 +419,16 @@ class SupplementCandidate(BaseModel):
     supplement_validation_status: str = ""
     supplement_validation_score: float = 0.0
     approved_for_cut_plan: bool = False
+    # Phase 12.2a: Adobe-Stock-spezifische Snapshot-Daten aus der Search-API
+    # (Rest/Media/1/Search/Files) — analog zu den bestehenden pexels_*-
+    # Feldern. adobe_comps enthält die rohe "comps"-Struktur (Standard/
+    # Video_HD/Video_4K mit url/width/height je Lizenzvariante), damit eine
+    # spätere automatische Lizenzierung/Download (siehe Phase 12.4) weiß,
+    # welche Varianten überhaupt verfügbar sind, ohne die Suche zu wiederholen.
+    adobe_media_type_id: int = 0
+    adobe_is_gentech: bool = False
+    adobe_comps: dict = Field(default_factory=dict)
+    adobe_content_type: str = ""
 
 
 class SupplementAssetSidecar(BaseModel):
