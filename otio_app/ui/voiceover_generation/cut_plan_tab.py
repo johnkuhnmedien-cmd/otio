@@ -118,6 +118,7 @@ from otio_app.services.voiceover_generation.cut_plan_confirm_service import (
 from otio_app.services.voiceover_generation.cut_plan_models import (
     CutPlanDocument,
     CutPlanSettings,
+    CutPlanValidationError,
     CutPlanValidationReport,
 )
 from otio_app.services.voiceover_generation.cut_plan_settings_service import (
@@ -184,6 +185,7 @@ from otio_app.services.voiceover_generation.cut_plan_edit_plan_trace import (
 from otio_app.services.voiceover_generation.cut_plan_trace_service import load_cut_plan_trace
 from otio_app.services.voiceover_generation.cut_plan_validator import (
     content_hash_of_cut_plan_content,
+    group_cut_plan_errors_by_type,
     load_cut_plan_validation_report,
 )
 from otio_app.services.voiceover_generation.final_plan_service import (
@@ -390,6 +392,23 @@ def _render_future_artifact_paths(project: Project) -> None:
     )
 
 
+def _render_grouped_cut_plan_errors(
+    blockers: list[CutPlanValidationError], warnings: list[CutPlanValidationError]
+) -> None:
+    """Phase D (Nutzervorgabe): kompakte, nach Fehlertyp + Root-Cause-
+    Kategorie gruppierte Übersicht statt einer langen Liste von
+    Einzelmeldungen (siehe group_cut_plan_errors_by_type) — bei vielen
+    offenen Cut-Plan-Items können sonst hunderte bis tausende
+    Einzelzeilen entstehen (siehe Cut-Plan-Diagnose, Juli 2026), die die
+    eigentlichen wenigen Ursachen unkenntlich machen."""
+    if blockers:
+        st.markdown(f"**Blocker nach Typ** ({len(blockers)} insgesamt)")
+        st.dataframe(group_cut_plan_errors_by_type(blockers), use_container_width=True, hide_index=True)
+    if warnings:
+        st.markdown(f"**Warnungen nach Typ** ({len(warnings)} insgesamt)")
+        st.dataframe(group_cut_plan_errors_by_type(warnings), use_container_width=True, hide_index=True)
+
+
 def _render_visual_segments(item) -> None:
     if not item.planned_visual_segments:
         st.caption("Keine VisualSegments geplant.")
@@ -518,12 +537,18 @@ def _render_cut_plan_draft(project: Project, draft: CutPlanDocument) -> None:
 
     if draft.blockers or draft.warnings:
         with st.expander("Warnungen / Blocker", expanded=bool(draft.blockers)):
-            for error in draft.blockers:
-                location = f" ({error.scope}: {error.folder_name})" if error.folder_name else f" ({error.scope})"
-                st.error(f"[{error.type}]{location}: {error.message}")
-            for error in draft.warnings:
-                location = f" ({error.scope}: {error.folder_name})" if error.folder_name else f" ({error.scope})"
-                st.warning(f"[{error.type}]{location}: {error.message}")
+            _render_grouped_cut_plan_errors(draft.blockers, draft.warnings)
+            if st.checkbox(
+                "Alle Einzelmeldungen anzeigen",
+                value=False,
+                key=f"cut_plan_draft_error_details_{project.id}",
+            ):
+                for error in draft.blockers:
+                    location = f" ({error.scope}: {error.folder_name})" if error.folder_name else f" ({error.scope})"
+                    st.error(f"[{error.type}]{location}: {error.message}")
+                for error in draft.warnings:
+                    location = f" ({error.scope}: {error.folder_name})" if error.folder_name else f" ({error.scope})"
+                    st.warning(f"[{error.type}]{location}: {error.message}")
 
     st.divider()
     _render_validation_report(project, draft)
@@ -564,21 +589,24 @@ def _render_validation_report(project: Project, draft: CutPlanDocument) -> None:
         st.success("Keine Warnungen oder Blocker.")
         return
 
-    rows = [
-        {
-            "type": error.type,
-            "severity": error.severity,
-            "scope": error.scope,
-            "cut_item_id": error.cut_item_id or "—",
-            "folder_name": error.folder_name or "—",
-            "message": error.message,
-            "fix_hint": error.fix_hint or "—",
-            "must_be_fixed_by": error.must_be_fixed_by,
-            "is_retryable_by_llm": error.is_retryable_by_llm,
-        }
-        for error in report.errors
-    ]
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    _render_grouped_cut_plan_errors(report.blockers, report.warnings)
+
+    with st.expander("Alle Einzelmeldungen (Tabelle)", expanded=False):
+        rows = [
+            {
+                "type": error.type,
+                "severity": error.severity,
+                "scope": error.scope,
+                "cut_item_id": error.cut_item_id or "—",
+                "folder_name": error.folder_name or "—",
+                "message": error.message,
+                "fix_hint": error.fix_hint or "—",
+                "must_be_fixed_by": error.must_be_fixed_by,
+                "is_retryable_by_llm": error.is_retryable_by_llm,
+            }
+            for error in report.errors
+        ]
+        st.dataframe(rows, use_container_width=True, hide_index=True)
 
 
 def _supplement_provider_readiness() -> tuple[bool, bool]:

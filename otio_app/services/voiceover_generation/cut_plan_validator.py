@@ -19,6 +19,8 @@ from otio_app.defaults import (
     CUT_PLAN_ERROR_ASSET_TOO_SHORT,
     CUT_PLAN_ERROR_AUDIO_GAP_UNEXPECTED,
     CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER,
+    CUT_PLAN_ERROR_CATEGORY_LABELS,
+    CUT_PLAN_ERROR_CATEGORY_OTHER,
     CUT_PLAN_ERROR_FRAME_ROUNDING_ERROR,
     CUT_PLAN_ERROR_INVALID_ASSET_ID,
     CUT_PLAN_ERROR_INVALID_AUDIO_PATH,
@@ -79,6 +81,7 @@ __all__ = [
     "validate_timeline_continuity",
     "validate_no_black_gap_during_voiceover",
     "validate_frame_rounding",
+    "group_cut_plan_errors_by_type",
 ]
 
 _DURATION_EPSILON = 0.01
@@ -200,6 +203,38 @@ def _reason_has_marker(reason: str, marker: str) -> bool:
     Pause abdeckt (siehe cut_plan_visual_coverage._combine_reason,
     Phase 8.5)."""
     return marker in reason.split("+")
+
+
+def group_cut_plan_errors_by_type(errors: list[CutPlanValidationError]) -> list[dict[str, object]]:
+    """Phase D (Nutzervorgabe): fasst eine — potenziell sehr lange, siehe
+    Cut-Plan-Diagnose mit hunderten bis tausenden Einzelmeldungen bei vielen
+    offenen Items — Fehlerliste nach `type` zusammen: Anzahl, grobe
+    Root-Cause-Kategorie (CUT_PLAN_ERROR_CATEGORY_LABELS) und eine
+    Beispielmeldung, absteigend nach Häufigkeit sortiert. Reine,
+    UI-unabhängige Funktion — die UI (cut_plan_tab.py) rendert das Ergebnis
+    nur noch als kompakte Tabelle statt jede Einzelmeldung als eigene Zeile
+    (st.error/st.warning) anzuzeigen. Erwartet EINE Liste einer einzigen
+    Severity (Aufrufer übergibt blockers/warnings getrennt) — severity ist
+    deshalb bewusst keine eigene Spalte im Ergebnis."""
+    counts: dict[str, int] = {}
+    first_seen_order: list[str] = []
+    example_message_by_type: dict[str, str] = {}
+    for error in errors:
+        if error.type not in counts:
+            first_seen_order.append(error.type)
+            example_message_by_type[error.type] = error.message
+        counts[error.type] = counts.get(error.type, 0) + 1
+
+    ordered_types = sorted(first_seen_order, key=lambda error_type: (-counts[error_type], error_type))
+    return [
+        {
+            "type": error_type,
+            "category": CUT_PLAN_ERROR_CATEGORY_LABELS.get(error_type, CUT_PLAN_ERROR_CATEGORY_OTHER),
+            "count": counts[error_type],
+            "example_message": example_message_by_type[error_type],
+        }
+        for error_type in ordered_types
+    ]
 
 
 def content_hash_of_cut_plan_content(cut_plan: CutPlanDocument) -> str:

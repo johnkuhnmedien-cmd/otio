@@ -68,6 +68,7 @@ from otio_app.services.voiceover_generation.cut_plan_models import (
 from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
 from otio_app.services.voiceover_generation.cut_plan_validator import (
     classify_cut_plan_status,
+    group_cut_plan_errors_by_type,
     validate_asset_usage,
     validate_audio_items,
     validate_cut_items,
@@ -829,3 +830,89 @@ def test_ui_disables_asset_selection_button_when_settings_stale(
     render_cut_plan_page()
 
     assert captured_disabled == [True]
+
+
+# --- Phase D: Fehler nach Typ + Root-Cause-Kategorie gruppieren ---
+
+
+def test_group_cut_plan_errors_by_type_counts_and_sorts_by_frequency() -> None:
+    errors = [
+        CutPlanValidationError(type=CUT_PLAN_ERROR_TIMELINE_OVERLAP, scope="timeline", message="a überlappt mit b"),
+        CutPlanValidationError(type=CUT_PLAN_ERROR_TIMELINE_OVERLAP, scope="timeline", message="c überlappt mit d"),
+        CutPlanValidationError(type=CUT_PLAN_ERROR_TIMELINE_OVERLAP, scope="timeline", message="e überlappt mit f"),
+        CutPlanValidationError(type=CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER, scope="audio", message="Loch bei x"),
+    ]
+    grouped = group_cut_plan_errors_by_type(errors)
+    assert grouped[0]["type"] == CUT_PLAN_ERROR_TIMELINE_OVERLAP
+    assert grouped[0]["count"] == 3
+    assert grouped[1]["type"] == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER
+    assert grouped[1]["count"] == 1
+
+
+def test_group_cut_plan_errors_by_type_includes_category_and_example_message() -> None:
+    errors = [
+        CutPlanValidationError(
+            type=CUT_PLAN_ERROR_ASSET_REUSE_DISTANCE_TOO_SHORT, scope="sentence", message="Asset zu früh wiederverwendet",
+        ),
+    ]
+    grouped = group_cut_plan_errors_by_type(errors)
+    assert grouped[0]["category"] == "Asset-Beschaffung"
+    assert grouped[0]["example_message"] == "Asset zu früh wiederverwendet"
+
+
+def test_group_cut_plan_errors_by_type_maps_timeline_and_coverage_categories() -> None:
+    errors = [
+        CutPlanValidationError(type=CUT_PLAN_ERROR_TIMELINE_OVERLAP, scope="timeline", message="x"),
+        CutPlanValidationError(type=CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER, scope="audio", message="y"),
+        CutPlanValidationError(type=CUT_PLAN_ERROR_MISSING_AUDIO, scope="audio", message="z"),
+    ]
+    grouped = {row["type"]: row["category"] for row in group_cut_plan_errors_by_type(errors)}
+    assert grouped[CUT_PLAN_ERROR_TIMELINE_OVERLAP] == "Timeline/Struktur"
+    assert grouped[CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER] == "Visuelle Abdeckung"
+    assert grouped[CUT_PLAN_ERROR_MISSING_AUDIO] == "Audio/Alignment"
+
+
+def test_group_cut_plan_errors_by_type_falls_back_to_other_category_for_unknown_type() -> None:
+    errors = [CutPlanValidationError(type="SOME_FUTURE_ERROR_TYPE", scope="project", message="x")]
+    grouped = group_cut_plan_errors_by_type(errors)
+    assert grouped[0]["category"] == "Sonstiges"
+
+
+def test_group_cut_plan_errors_by_type_handles_empty_list() -> None:
+    assert group_cut_plan_errors_by_type([]) == []
+
+
+def test_group_cut_plan_errors_by_type_ties_broken_by_type_name() -> None:
+    """Bei gleicher Häufigkeit wird alphabetisch nach Typ sortiert — ein
+    deterministisches Ergebnis unabhängig von der ursprünglichen Reihenfolge."""
+    errors = [
+        CutPlanValidationError(type=CUT_PLAN_ERROR_TIMELINE_OVERLAP, scope="timeline", message="x"),
+        CutPlanValidationError(type=CUT_PLAN_ERROR_ASSET_TOO_SHORT, scope="sentence", message="y"),
+    ]
+    grouped = group_cut_plan_errors_by_type(errors)
+    assert [row["type"] for row in grouped] == [CUT_PLAN_ERROR_ASSET_TOO_SHORT, CUT_PLAN_ERROR_TIMELINE_OVERLAP]
+
+
+def test_ui_renders_grouped_errors_when_draft_has_many_duplicate_type_blockers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Smoke-Test: Ein Draft mit vielen Einzelmeldungen DESSELBEN Typs
+    (simuliert die reale Cut-Plan-Diagnose mit hunderten/tausenden
+    Meldungen) darf render_cut_plan_page() nicht zum Absturz bringen — egal
+    ob die Detail-Checkbox aus- oder eingeschaltet ist."""
+    project = _happy_path_plan_and_project(tmp_path)
+    draft = load_cut_plan_draft(project)
+    many_blockers = [
+        CutPlanValidationError(
+            type=CUT_PLAN_ERROR_TIMELINE_OVERLAP, scope="timeline", cut_item_id=f"cut_{i:03d}",
+            message=f"Segment {i} überlappt mit Segment {i + 1}.",
+        )
+        for i in range(50)
+    ]
+    updated_draft = draft.model_copy(update={"blockers": many_blockers, "warnings": []})
+    save_cut_plan_draft(project, updated_draft)
+    _patch_project_selector(project, monkeypatch)
+
+    for checkbox_value in (False, True):
+        monkeypatch.setattr("streamlit.checkbox", lambda *a, **k: checkbox_value)
+        render_cut_plan_page()  # darf nicht werfen
