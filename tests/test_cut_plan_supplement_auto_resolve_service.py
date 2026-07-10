@@ -13,12 +13,17 @@ import pytest
 from otio_app.models import Project, ProjectMode
 from otio_app.services.generic_outro_selector import GenericAssetCandidate
 from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_service import (
+    AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
+    AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED,
+    AUTO_RESOLVE_PROGRESS_REQUEST_STARTED,
+    AUTO_RESOLVE_PROGRESS_STAGE_STARTED,
     AUTO_RESOLVE_STATUS_ACCEPTED,
     AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED,
     AUTO_RESOLVE_STATUS_NO_MATCH,
     DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL,
     VALIDATION_STATUS_ACCEPT_FAILED,
     VALIDATION_STATUS_TOO_SHORT,
+    AutoResolveProgressEvent,
     CutPlanSupplementAutoResolveResult,
     _describe_and_validate_downloaded_asset,
     auto_resolve_all_cut_plan_supplement_requests,
@@ -102,14 +107,23 @@ def _setup_two_requests(tmp_path: Path) -> tuple[Project, list[str]]:
     return project, [request.request_id for request in document.requests]
 
 
-def _fake_candidate(candidate_id: str, request_id: str, *, provider: str = "pexels") -> CutPlanSupplementCandidate:
+def _fake_candidate(
+    candidate_id: str,
+    request_id: str,
+    *,
+    provider: str = "pexels",
+    asset_type: str = "video",
+    duration_sec: float = 10.0,
+    query_used: str = "Havasu Falls waterfall",
+) -> CutPlanSupplementCandidate:
     return CutPlanSupplementCandidate(
         candidate_id=candidate_id,
         request_id=request_id,
         provider=provider,
         title=f"Fake {candidate_id}",
-        asset_type="video",
-        duration_sec=10.0,
+        asset_type=asset_type,
+        duration_sec=duration_sec,
+        provider_candidate_snapshot={"query_used": query_used},
     )
 
 
@@ -199,6 +213,56 @@ def test_auto_resolve_accepts_first_candidate_with_pass(tmp_path: Path) -> None:
     persisted = next(r for r in reloaded.requests if r.request_id == request_id)
     assert persisted.auto_resolve_status == AUTO_RESOLVE_STATUS_ACCEPTED
     assert len(persisted.auto_resolve_attempts) == 1
+
+
+def test_auto_resolve_emits_detail_progress_events(tmp_path: Path) -> None:
+    """Phase 12.8: Live-Trace-Callback meldet Suchstufen, Kandidaten und Ergebnis."""
+    project, request_id = _setup_request(tmp_path)
+    candidates_doc = CutPlanSupplementCandidatesDocument(
+        project_id="auto-resolve-project",
+        request_id=request_id,
+        provider="adobe_stock",
+        candidates=[_fake_candidate("cand_1", request_id, provider="adobe_stock")],
+        status="READY",
+    )
+    progress_events: list[AutoResolveProgressEvent] = []
+
+    with (
+        patch(
+            f"{_MODULE}.search_candidates_for_cut_plan_request",
+            side_effect=_search_only_finds_candidates_for(candidates_doc, only_provider="adobe_stock"),
+        ),
+        patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid)),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("PASS")),
+        patch(f"{_MODULE}.accept_cut_plan_supplement_candidate"),
+    ):
+        result = auto_resolve_cut_plan_supplement_request(
+            project,
+            request_id,
+            query_llm_provider="gemini",
+            query_llm_model="gemini-3.1-flash-lite",
+            progress_callback=lambda event: progress_events.append(event),
+        )
+
+    assert result.status == AUTO_RESOLVE_STATUS_ACCEPTED
+    event_types = [event.event_type for event in progress_events]
+    assert AUTO_RESOLVE_PROGRESS_STAGE_STARTED in event_types
+    assert AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT in event_types
+    assert AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED in event_types
+
+    stage_started = next(event for event in progress_events if event.event_type == AUTO_RESOLVE_PROGRESS_STAGE_STARTED)
+    assert stage_started.provider == "adobe_stock"
+    assert stage_started.asset_type == "video"
+    assert "Havasu Falls waterfall" in stage_started.query
+
+    candidate_result = next(
+        event for event in progress_events if event.event_type == AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT
+    )
+    assert candidate_result.candidate_id == "cand_1"
+    assert candidate_result.validation_status == "PASS"
+
+    finished = next(event for event in progress_events if event.event_type == AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED)
+    assert finished.result_status == AUTO_RESOLVE_STATUS_ACCEPTED
 
 
 def test_auto_resolve_tries_next_candidate_when_first_fails_validation(tmp_path: Path) -> None:
@@ -710,7 +774,7 @@ def test_auto_resolve_uses_default_validation_model_when_not_overridden(tmp_path
 
 def test_auto_resolve_all_processes_each_open_request_with_progress_callback(tmp_path: Path) -> None:
     project, request_ids = _setup_two_requests(tmp_path)
-    progress_calls: list[tuple[str, int, int]] = []
+    progress_calls: list[AutoResolveProgressEvent] = []
 
     def _fake_resolve(project_arg, request_id, **kwargs):
         return CutPlanSupplementAutoResolveResult(status=AUTO_RESOLVE_STATUS_ACCEPTED, request_id=request_id)
@@ -720,13 +784,14 @@ def test_auto_resolve_all_processes_each_open_request_with_progress_callback(tmp
             project,
             query_llm_provider="gemini",
             query_llm_model="gemini-3.1-flash-lite",
-            progress_callback=lambda label, index, total: progress_calls.append((label, index, total)),
+            progress_callback=lambda event: progress_calls.append(event),
         )
 
     assert len(results) == 2
     assert {result.request_id for result in results} == set(request_ids)
     assert mock_resolve.call_count == 2
-    assert progress_calls == [
+    started_events = [event for event in progress_calls if event.event_type == AUTO_RESOLVE_PROGRESS_REQUEST_STARTED]
+    assert [(event.request_id, event.request_index, event.request_total) for event in started_events] == [
         (request_ids[0], 1, 2),
         (request_ids[1], 2, 2),
     ]
@@ -734,6 +799,7 @@ def test_auto_resolve_all_processes_each_open_request_with_progress_callback(tmp
     for call in mock_resolve.call_args_list:
         assert call.kwargs["query_llm_provider"] == "gemini"
         assert call.kwargs["query_llm_model"] == "gemini-3.1-flash-lite"
+        assert call.kwargs["progress_callback"] is not None
 
 
 def test_auto_resolve_all_skips_requests_that_already_have_an_asset(tmp_path: Path) -> None:

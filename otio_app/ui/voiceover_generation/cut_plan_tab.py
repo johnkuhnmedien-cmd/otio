@@ -73,6 +73,7 @@ from otio_app.defaults import (
     PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_WARNING,
     PROVIDER_STATUS_READY,
     SUPPLEMENT_SOURCE_ADOBE,
+    SUPPLEMENT_SOURCE_LABELS,
     SUPPLEMENT_SOURCE_PEXELS,
 )
 from otio_app.models import Project
@@ -129,9 +130,17 @@ from otio_app.services.voiceover_generation.cut_plan_generic_fallback_service im
     list_manual_asset_options_for_request,
 )
 from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_service import (
+    AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
+    AUTO_RESOLVE_PROGRESS_GENERIC_FALLBACK_STARTED,
+    AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED,
+    AUTO_RESOLVE_PROGRESS_REQUEST_STARTED,
+    AUTO_RESOLVE_PROGRESS_STAGE_FAILED,
+    AUTO_RESOLVE_PROGRESS_STAGE_NO_RESULTS,
+    AUTO_RESOLVE_PROGRESS_STAGE_STARTED,
     AUTO_RESOLVE_STATUS_ACCEPTED,
     AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED,
     AUTO_RESOLVE_STATUS_NO_MATCH,
+    AutoResolveProgressEvent,
     auto_resolve_all_cut_plan_supplement_requests,
     auto_resolve_cut_plan_supplement_request,
 )
@@ -809,13 +818,30 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                     "NUR bei bestandener Prüfung (Status PASS)."
                 ),
             ):
-                with st.spinner("Suche, Download und Gemini-Prüfung laufen…"):
-                    auto_result = auto_resolve_cut_plan_supplement_request(
-                        project,
-                        request.request_id,
-                        query_llm_provider=query_llm_provider,
-                        query_llm_model=query_llm_model,
-                    )
+                request_labels = {
+                    entry.request_id: f"{entry.folder_name or '—'} · {entry.cut_item_id}"
+                    for entry in requests_document.requests
+                }
+                _emit_started = AutoResolveProgressEvent(
+                    event_type=AUTO_RESOLVE_PROGRESS_REQUEST_STARTED,
+                    request_id=request.request_id,
+                    request_index=1,
+                    request_total=1,
+                )
+                progress_handler, progress_bar, log_placeholder = _make_auto_resolve_progress_handler(
+                    request_labels=request_labels,
+                    is_batch=False,
+                )
+                progress_handler(_emit_started)
+                auto_result = auto_resolve_cut_plan_supplement_request(
+                    project,
+                    request.request_id,
+                    query_llm_provider=query_llm_provider,
+                    query_llm_model=query_llm_model,
+                    progress_callback=progress_handler,
+                )
+                progress_bar.empty()
+                log_placeholder.empty()
                 if auto_result.status == AUTO_RESOLVE_STATUS_ACCEPTED:
                     st.success(
                         f"Automatisch akzeptiert: Kandidat `{auto_result.accepted_candidate_id}` "
@@ -999,6 +1025,108 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
     )
 
 
+def _format_auto_resolve_asset_type(asset_type: str) -> str:
+    return {"video": "Video", "image": "Foto"}.get(asset_type, asset_type or "—")
+
+
+def _format_auto_resolve_provider(provider: str) -> str:
+    return SUPPLEMENT_SOURCE_LABELS.get(provider, provider or "—")
+
+
+def _format_auto_resolve_progress_line(
+    event: AutoResolveProgressEvent, *, request_labels: dict[str, str] | None = None
+) -> str:
+    """Phase 12.8: eine Zeile für das Live-Trace-Log während Auto-Resolve."""
+    if event.event_type == AUTO_RESOLVE_PROGRESS_REQUEST_STARTED:
+        label = (request_labels or {}).get(event.request_id, event.request_id)
+        if event.request_total:
+            return f"▶ Request {event.request_index}/{event.request_total}: „{label}“"
+        return f"▶ Request „{label}“"
+    if event.event_type == AUTO_RESOLVE_PROGRESS_STAGE_STARTED:
+        provider = _format_auto_resolve_provider(event.provider)
+        media = _format_auto_resolve_asset_type(event.asset_type)
+        stage = f"Stufe {event.stage_index}/{event.stage_total}" if event.stage_total else "Stufe"
+        return f"  🔍 {stage}: {provider} · {media} · Query `{event.query}` — {event.message}"
+    if event.event_type == AUTO_RESOLVE_PROGRESS_STAGE_FAILED:
+        provider = _format_auto_resolve_provider(event.provider)
+        media = _format_auto_resolve_asset_type(event.asset_type)
+        return f"  ⚠️ {provider} · {media}: Suche fehlgeschlagen — {event.message}"
+    if event.event_type == AUTO_RESOLVE_PROGRESS_STAGE_NO_RESULTS:
+        provider = _format_auto_resolve_provider(event.provider)
+        media = _format_auto_resolve_asset_type(event.asset_type)
+        detail = f" — {event.message}" if event.message else ""
+        return f"  ⏭️ {provider} · {media} · Query `{event.query}`: keine Treffer{detail}"
+    if event.event_type == AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT:
+        provider = _format_auto_resolve_provider(event.provider)
+        media = _format_auto_resolve_asset_type(event.asset_type)
+        title = event.candidate_title or event.candidate_id
+        duration = (
+            f"{event.duration_sec:.2f}s"
+            if event.asset_type == "video" and event.duration_sec > 0
+            else ("gestreckt" if event.asset_type == "image" else "—")
+        )
+        reason = f" — {event.validation_reason}" if event.validation_reason else ""
+        return (
+            f"  · {provider}/{media} `{title}` ({duration}) → "
+            f"**{event.validation_status}**{reason}"
+        )
+    if event.event_type == AUTO_RESOLVE_PROGRESS_GENERIC_FALLBACK_STARTED:
+        return "  📁 Generischer Ordner-Fallback wird versucht…"
+    if event.event_type == AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED:
+        return f"✅ Ergebnis: **{event.result_status}** — {event.message}"
+    return ""
+
+
+def _make_auto_resolve_progress_handler(
+    *,
+    request_labels: dict[str, str] | None = None,
+    is_batch: bool = False,
+):
+    """Erzeugt einen progress_callback mit st.progress + Live-Log."""
+    progress_bar = st.progress(0.0, text="Auto-Resolve startet…")
+    log_placeholder = st.empty()
+    lines: list[str] = []
+    max_lines = 40
+    current_request_index = 0
+    current_request_total = 0
+
+    def _render_log() -> None:
+        visible = lines[-max_lines:]
+        log_placeholder.markdown("\n\n".join(visible) if visible else "_Warte auf Fortschritt…_")
+
+    def _handle(event: AutoResolveProgressEvent) -> None:
+        nonlocal current_request_index, current_request_total
+        line = _format_auto_resolve_progress_line(event, request_labels=request_labels)
+        if line:
+            lines.append(line)
+            _render_log()
+
+        if event.event_type == AUTO_RESOLVE_PROGRESS_REQUEST_STARTED:
+            current_request_index = event.request_index
+            current_request_total = event.request_total
+            if is_batch and event.request_total:
+                done = max(0, event.request_index - 1)
+                progress_bar.progress(
+                    done / event.request_total,
+                    text=f"Request {event.request_index}/{event.request_total}",
+                )
+        elif event.event_type == AUTO_RESOLVE_PROGRESS_STAGE_STARTED and not is_batch and event.stage_total:
+            progress_bar.progress(
+                (event.stage_index - 1) / event.stage_total,
+                text=f"Suchstufe {event.stage_index}/{event.stage_total}",
+            )
+        elif event.event_type == AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED:
+            if is_batch and current_request_total:
+                progress_bar.progress(
+                    current_request_index / current_request_total,
+                    text=f"Request {current_request_index}/{current_request_total} abgeschlossen",
+                )
+            else:
+                progress_bar.progress(1.0, text="Abgeschlossen")
+
+    return _handle, progress_bar, log_placeholder
+
+
 def _render_bulk_auto_resolve_action(
     project: Project,
     requests_document,
@@ -1030,20 +1158,19 @@ def _render_bulk_auto_resolve_action(
             entry.request_id: f"{entry.folder_name or '—'} · {entry.cut_item_id}"
             for entry in requests_document.requests
         }
-        progress_placeholder = st.empty()
+        progress_handler, progress_bar, log_placeholder = _make_auto_resolve_progress_handler(
+            request_labels=request_labels,
+            is_batch=True,
+        )
 
-        def _progress(request_id: str, index: int, total: int) -> None:
-            label = request_labels.get(request_id, request_id)
-            progress_placeholder.info(f"Request {index}/{total}: „{label}“ läuft…")
-
-        with st.spinner("Alle offenen Supplement Requests werden bearbeitet…"):
-            results = auto_resolve_all_cut_plan_supplement_requests(
-                project,
-                query_llm_provider=query_llm_provider,
-                query_llm_model=query_llm_model,
-                progress_callback=_progress,
-            )
-        progress_placeholder.empty()
+        results = auto_resolve_all_cut_plan_supplement_requests(
+            project,
+            query_llm_provider=query_llm_provider,
+            query_llm_model=query_llm_model,
+            progress_callback=progress_handler,
+        )
+        progress_bar.empty()
+        log_placeholder.empty()
 
         accepted_count = sum(1 for result in results if result.status == AUTO_RESOLVE_STATUS_ACCEPTED)
         generic_count = sum(1 for result in results if result.status == AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED)

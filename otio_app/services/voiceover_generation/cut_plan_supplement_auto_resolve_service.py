@@ -66,7 +66,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 from otio_app.defaults import (
     CUT_PLAN_SUPPLEMENT_CANDIDATES_STATUS_READY,
@@ -99,6 +99,7 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_models import (
     CutPlanSupplementAsset,
     CutPlanSupplementAutoResolveAttempt,
     CutPlanSupplementCandidate,
+    CutPlanSupplementCandidatesDocument,
     CutPlanSupplementRequest,
 )
 
@@ -111,12 +112,62 @@ __all__ = [
     "VALIDATION_STATUS_TOO_SHORT",
     "VALIDATION_STATUS_ACCEPT_FAILED",
     "DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL",
+    "AUTO_RESOLVE_PROGRESS_REQUEST_STARTED",
+    "AUTO_RESOLVE_PROGRESS_STAGE_STARTED",
+    "AUTO_RESOLVE_PROGRESS_STAGE_FAILED",
+    "AUTO_RESOLVE_PROGRESS_STAGE_NO_RESULTS",
+    "AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT",
+    "AUTO_RESOLVE_PROGRESS_GENERIC_FALLBACK_STARTED",
+    "AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED",
+    "AutoResolveProgressEvent",
     "CutPlanSupplementAutoResolveResult",
     "auto_resolve_cut_plan_supplement_request",
     "auto_resolve_all_cut_plan_supplement_requests",
 ]
 
-AutoResolveProgressCallback = Callable[[str, int, int], None]
+AUTO_RESOLVE_PROGRESS_REQUEST_STARTED = "request_started"
+AUTO_RESOLVE_PROGRESS_STAGE_STARTED = "stage_started"
+AUTO_RESOLVE_PROGRESS_STAGE_FAILED = "stage_failed"
+AUTO_RESOLVE_PROGRESS_STAGE_NO_RESULTS = "stage_no_results"
+AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT = "candidate_result"
+AUTO_RESOLVE_PROGRESS_GENERIC_FALLBACK_STARTED = "generic_fallback_started"
+AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED = "request_finished"
+
+AutoResolveProgressEventType = Literal[
+    "request_started",
+    "stage_started",
+    "stage_failed",
+    "stage_no_results",
+    "candidate_result",
+    "generic_fallback_started",
+    "request_finished",
+]
+
+
+@dataclass(frozen=True)
+class AutoResolveProgressEvent:
+    """Phase 12.8: einzelnes Fortschritts-/Trace-Event für Live-UI während
+    Auto-Resolve (Einzel- oder Batch-Button im Cut-Plan-Tab)."""
+
+    event_type: AutoResolveProgressEventType
+    request_id: str = ""
+    request_index: int = 0
+    request_total: int = 0
+    stage_index: int = 0
+    stage_total: int = 0
+    provider: str = ""
+    asset_type: str = ""
+    query: str = ""
+    candidate_id: str = ""
+    candidate_title: str = ""
+    duration_sec: float = 0.0
+    validation_status: str = ""
+    validation_reason: str = ""
+    result_status: str = ""
+    message: str = ""
+
+
+AutoResolveProgressCallback = Callable[[AutoResolveProgressEvent], None]
 
 AUTO_RESOLVE_STATUS_ACCEPTED = "ACCEPTED"
 AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED = "GENERIC_FALLBACK_USED"
@@ -153,6 +204,41 @@ VALIDATION_STATUS_ACCEPT_FAILED = "ACCEPT_FAILED"
 # vor "image" versucht (redaktionelle Präferenz: Video vor Foto).
 _AUTO_RESOLVE_MAX_CANDIDATES_PER_STAGE = 2
 _AUTO_RESOLVE_ASSET_TYPE_SEARCH_ORDER = ("video", "image")
+
+
+def _emit_progress(
+    progress_callback: AutoResolveProgressCallback | None, event: AutoResolveProgressEvent
+) -> None:
+    if progress_callback is not None:
+        progress_callback(event)
+
+
+def _queries_for_stage(
+    project: Project,
+    request_id: str,
+    candidates_document: CutPlanSupplementCandidatesDocument | None,
+) -> str:
+    """Liefert eine lesbare Query-Zusammenfassung für die Live-UI — bevorzugt
+    query_used aus den Suchtreffern, sonst llm_queries/supplement_search_hint
+    des Requests (nach search_candidates_for_cut_plan_request persistiert)."""
+    queries: list[str] = []
+    if candidates_document is not None:
+        for candidate in candidates_document.candidates:
+            query_used = str(candidate.provider_candidate_snapshot.get("query_used", "")).strip()
+            if query_used and query_used not in queries:
+                queries.append(query_used)
+    if not queries:
+        requests_document = load_cut_plan_supplement_requests(project)
+        if requests_document is not None:
+            request = next(
+                (entry for entry in requests_document.requests if entry.request_id == request_id), None
+            )
+            if request is not None:
+                if request.llm_queries:
+                    queries = [query.strip() for query in request.llm_queries if query.strip()]
+                elif request.supplement_search_hint.strip():
+                    queries = [request.supplement_search_hint.strip()]
+    return " · ".join(queries) if queries else "—"
 
 
 def _candidate_is_too_short(
@@ -276,6 +362,7 @@ def auto_resolve_cut_plan_supplement_request(
     query_llm_provider: str,
     query_llm_model: str,
     validation_model: str = DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL,
+    progress_callback: AutoResolveProgressCallback | None = None,
 ) -> CutPlanSupplementAutoResolveResult:
     """Führt den vollständigen Auto-Resolve-Ablauf (siehe Modul-Docstring)
     für GENAU EINEN Request aus — über ALLE Provider in
@@ -293,6 +380,13 @@ def auto_resolve_cut_plan_supplement_request(
     def _fallback_or_no_match(
         attempts: list[CutPlanSupplementAutoResolveAttempt], *, search_error: str = ""
     ) -> CutPlanSupplementAutoResolveResult:
+        _emit_progress(
+            progress_callback,
+            AutoResolveProgressEvent(
+                event_type=AUTO_RESOLVE_PROGRESS_GENERIC_FALLBACK_STARTED,
+                request_id=request_id,
+            ),
+        )
         try:
             _updated_cut_plan, fallback_candidate = apply_generic_fallback_for_cut_plan_request(
                 project, request_id
@@ -315,19 +409,39 @@ def auto_resolve_cut_plan_supplement_request(
                 auto_resolve_status=AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED,
                 auto_resolve_attempts=attempts,
             )
-            return CutPlanSupplementAutoResolveResult(
+            result = CutPlanSupplementAutoResolveResult(
                 status=AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED,
                 request_id=request_id,
                 accepted_asset_id=fallback_candidate.asset_id,
                 attempts=attempts,
             )
+            _emit_progress(
+                progress_callback,
+                AutoResolveProgressEvent(
+                    event_type=AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED,
+                    request_id=request_id,
+                    result_status=result.status,
+                    message=f"Generisches Ordner-Asset `{fallback_candidate.asset_id}` verwendet.",
+                ),
+            )
+            return result
 
         update_cut_plan_supplement_request(
             project, request_id, auto_resolve_status=AUTO_RESOLVE_STATUS_NO_MATCH, auto_resolve_attempts=attempts
         )
-        return CutPlanSupplementAutoResolveResult(
+        result = CutPlanSupplementAutoResolveResult(
             status=AUTO_RESOLVE_STATUS_NO_MATCH, request_id=request_id, attempts=attempts, error=search_error
         )
+        _emit_progress(
+            progress_callback,
+            AutoResolveProgressEvent(
+                event_type=AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED,
+                request_id=request_id,
+                result_status=result.status,
+                message="Kein passendes Stock-Asset und kein generischer Fallback gefunden.",
+            ),
+        )
+        return result
 
     requests_document = load_cut_plan_supplement_requests(project)
     request = (
@@ -360,8 +474,9 @@ def auto_resolve_cut_plan_supplement_request(
         for provider in CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER
         for asset_type in _AUTO_RESOLVE_ASSET_TYPE_SEARCH_ORDER
     ]
+    stage_total = len(stages)
 
-    for provider, asset_type in stages:
+    for stage_index, (provider, asset_type) in enumerate(stages, start=1):
         stage_label = f"{provider}/{asset_type}"
         try:
             candidates_document = search_candidates_for_cut_plan_request(
@@ -377,7 +492,21 @@ def auto_resolve_cut_plan_supplement_request(
             )
         except Exception as exc:  # noqa: BLE001 — Suche darf den Auto-Resolver nicht crashen
             search_errors.append(f"{stage_label}: {exc}")
+            _emit_progress(
+                progress_callback,
+                AutoResolveProgressEvent(
+                    event_type=AUTO_RESOLVE_PROGRESS_STAGE_FAILED,
+                    request_id=request_id,
+                    stage_index=stage_index,
+                    stage_total=stage_total,
+                    provider=provider,
+                    asset_type=asset_type,
+                    message=str(exc),
+                ),
+            )
             continue
+
+        query_label = _queries_for_stage(project, request_id, candidates_document)
 
         if (
             candidates_document.status != CUT_PLAN_SUPPLEMENT_CANDIDATES_STATUS_READY
@@ -385,7 +514,34 @@ def auto_resolve_cut_plan_supplement_request(
         ):
             if candidates_document.error_message:
                 search_errors.append(f"{stage_label}: {candidates_document.error_message}")
+            _emit_progress(
+                progress_callback,
+                AutoResolveProgressEvent(
+                    event_type=AUTO_RESOLVE_PROGRESS_STAGE_NO_RESULTS,
+                    request_id=request_id,
+                    stage_index=stage_index,
+                    stage_total=stage_total,
+                    provider=provider,
+                    asset_type=asset_type,
+                    query=query_label,
+                    message=candidates_document.error_message,
+                ),
+            )
             continue
+
+        _emit_progress(
+            progress_callback,
+            AutoResolveProgressEvent(
+                event_type=AUTO_RESOLVE_PROGRESS_STAGE_STARTED,
+                request_id=request_id,
+                stage_index=stage_index,
+                stage_total=stage_total,
+                provider=provider,
+                asset_type=asset_type,
+                query=query_label,
+                message=f"{len(candidates_document.candidates)} Kandidat(en) gefunden.",
+            ),
+        )
 
         for candidate in candidates_document.candidates[:_AUTO_RESOLVE_MAX_CANDIDATES_PER_STAGE]:
             # Phase 12.6: offensichtlich zu kurze Video-Kandidaten (anhand der
@@ -397,18 +553,36 @@ def auto_resolve_cut_plan_supplement_request(
                 candidate, needed_duration_sec=request.needed_duration_sec, cut_plan_settings=cut_plan_settings
             )
             if too_short:
+                too_short_reason = (
+                    f"Kandidat laut Provider-Metadaten zu kurz: benötigt "
+                    f"{request.needed_duration_sec:.2f}s, verfügbar {usable_duration_sec:.2f}s nach "
+                    "video_head_trim_sec — kein Download/keine Lizenzierung ausgelöst."
+                )
                 attempts.append(
                     CutPlanSupplementAutoResolveAttempt(
                         candidate_id=candidate.candidate_id,
                         provider=candidate.provider,
                         asset_type=candidate.asset_type,
                         validation_status=VALIDATION_STATUS_TOO_SHORT,
-                        validation_reason=(
-                            f"Kandidat laut Provider-Metadaten zu kurz: benötigt "
-                            f"{request.needed_duration_sec:.2f}s, verfügbar {usable_duration_sec:.2f}s nach "
-                            "video_head_trim_sec — kein Download/keine Lizenzierung ausgelöst."
-                        ),
+                        validation_reason=too_short_reason,
                     )
+                )
+                _emit_progress(
+                    progress_callback,
+                    AutoResolveProgressEvent(
+                        event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
+                        request_id=request_id,
+                        stage_index=stage_index,
+                        stage_total=stage_total,
+                        provider=candidate.provider,
+                        asset_type=candidate.asset_type,
+                        query=query_label,
+                        candidate_id=candidate.candidate_id,
+                        candidate_title=candidate.title,
+                        duration_sec=candidate.duration_sec,
+                        validation_status=VALIDATION_STATUS_TOO_SHORT,
+                        validation_reason=too_short_reason,
+                    ),
                 )
                 continue
 
@@ -426,6 +600,23 @@ def auto_resolve_cut_plan_supplement_request(
                         validation_reason=str(exc),
                     )
                 )
+                _emit_progress(
+                    progress_callback,
+                    AutoResolveProgressEvent(
+                        event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
+                        request_id=request_id,
+                        stage_index=stage_index,
+                        stage_total=stage_total,
+                        provider=candidate.provider,
+                        asset_type=candidate.asset_type,
+                        query=query_label,
+                        candidate_id=candidate.candidate_id,
+                        candidate_title=candidate.title,
+                        duration_sec=candidate.duration_sec,
+                        validation_status="DOWNLOAD_FAILED",
+                        validation_reason=str(exc),
+                    ),
+                )
                 continue
 
             analysis = _describe_and_validate_downloaded_asset(
@@ -435,17 +626,16 @@ def auto_resolve_cut_plan_supplement_request(
                 asset_path=downloaded_asset.asset_path,
                 validation_model=validation_model,
             )
-            attempts.append(
-                CutPlanSupplementAutoResolveAttempt(
-                    candidate_id=candidate.candidate_id,
-                    provider=candidate.provider,
-                    asset_type=candidate.asset_type,
-                    validation_status=str(analysis.get("status", "")),
-                    validation_score=float(analysis.get("score", 0.0)),
-                    validation_reason=str(analysis.get("reason", "")),
-                    description=str(analysis.get("description", "")),
-                )
+            attempt = CutPlanSupplementAutoResolveAttempt(
+                candidate_id=candidate.candidate_id,
+                provider=candidate.provider,
+                asset_type=candidate.asset_type,
+                validation_status=str(analysis.get("status", "")),
+                validation_score=float(analysis.get("score", 0.0)),
+                validation_reason=str(analysis.get("reason", "")),
+                description=str(analysis.get("description", "")),
             )
+            attempts.append(attempt)
 
             if str(analysis.get("status")) == VALIDATION_STATUS_PASS:
                 # Phase 12.6: die tatsächliche, per ffprobe gemessene Dauer
@@ -460,14 +650,32 @@ def auto_resolve_cut_plan_supplement_request(
                         project, request_id, candidate.candidate_id, downloaded_asset=downloaded_asset
                     )
                 except ValueError as exc:
+                    accept_failed_reason = (
+                        "Gemini-Prüfung bestanden, aber Übernahme fehlgeschlagen "
+                        f"(tatsächliche Dauer abweichend?): {exc}"
+                    )
                     attempts[-1] = attempts[-1].model_copy(
                         update={
                             "validation_status": VALIDATION_STATUS_ACCEPT_FAILED,
-                            "validation_reason": (
-                                "Gemini-Prüfung bestanden, aber Übernahme fehlgeschlagen "
-                                f"(tatsächliche Dauer abweichend?): {exc}"
-                            ),
+                            "validation_reason": accept_failed_reason,
                         }
+                    )
+                    _emit_progress(
+                        progress_callback,
+                        AutoResolveProgressEvent(
+                            event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
+                            request_id=request_id,
+                            stage_index=stage_index,
+                            stage_total=stage_total,
+                            provider=candidate.provider,
+                            asset_type=candidate.asset_type,
+                            query=query_label,
+                            candidate_id=candidate.candidate_id,
+                            candidate_title=candidate.title,
+                            duration_sec=downloaded_asset.duration_sec or candidate.duration_sec,
+                            validation_status=VALIDATION_STATUS_ACCEPT_FAILED,
+                            validation_reason=accept_failed_reason,
+                        ),
                     )
                     continue
                 update_cut_plan_supplement_request(
@@ -476,13 +684,58 @@ def auto_resolve_cut_plan_supplement_request(
                     auto_resolve_status=AUTO_RESOLVE_STATUS_ACCEPTED,
                     auto_resolve_attempts=attempts,
                 )
-                return CutPlanSupplementAutoResolveResult(
+                _emit_progress(
+                    progress_callback,
+                    AutoResolveProgressEvent(
+                        event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
+                        request_id=request_id,
+                        stage_index=stage_index,
+                        stage_total=stage_total,
+                        provider=candidate.provider,
+                        asset_type=candidate.asset_type,
+                        query=query_label,
+                        candidate_id=candidate.candidate_id,
+                        candidate_title=candidate.title,
+                        duration_sec=downloaded_asset.duration_sec or candidate.duration_sec,
+                        validation_status=VALIDATION_STATUS_PASS,
+                        validation_reason=attempt.validation_reason,
+                    ),
+                )
+                result = CutPlanSupplementAutoResolveResult(
                     status=AUTO_RESOLVE_STATUS_ACCEPTED,
                     request_id=request_id,
                     accepted_candidate_id=candidate.candidate_id,
                     accepted_asset_id=downloaded_asset.asset_id,
                     attempts=attempts,
                 )
+                _emit_progress(
+                    progress_callback,
+                    AutoResolveProgressEvent(
+                        event_type=AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED,
+                        request_id=request_id,
+                        result_status=result.status,
+                        message=f"Kandidat `{candidate.candidate_id}` automatisch akzeptiert.",
+                    ),
+                )
+                return result
+
+            _emit_progress(
+                progress_callback,
+                AutoResolveProgressEvent(
+                    event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
+                    request_id=request_id,
+                    stage_index=stage_index,
+                    stage_total=stage_total,
+                    provider=candidate.provider,
+                    asset_type=candidate.asset_type,
+                    query=query_label,
+                    candidate_id=candidate.candidate_id,
+                    candidate_title=candidate.title,
+                    duration_sec=downloaded_asset.duration_sec or candidate.duration_sec,
+                    validation_status=attempt.validation_status,
+                    validation_reason=attempt.validation_reason,
+                ),
+            )
         # Kein Kandidat dieser Suchstufe (Provider + Medientyp) hat bestanden
         # -> nächste Stufe in der Reihenfolge versuchen (Phase 12.7: erst
         # der andere Medientyp desselben Providers, dann der nächste
@@ -531,7 +784,14 @@ def auto_resolve_all_cut_plan_supplement_requests(
     total = len(open_requests)
     for index, request in enumerate(open_requests, start=1):
         if progress_callback is not None:
-            progress_callback(request.request_id, index, total)
+            progress_callback(
+                AutoResolveProgressEvent(
+                    event_type=AUTO_RESOLVE_PROGRESS_REQUEST_STARTED,
+                    request_id=request.request_id,
+                    request_index=index,
+                    request_total=total,
+                )
+            )
         results.append(
             auto_resolve_cut_plan_supplement_request(
                 project,
@@ -539,6 +799,7 @@ def auto_resolve_all_cut_plan_supplement_requests(
                 query_llm_provider=query_llm_provider,
                 query_llm_model=query_llm_model,
                 validation_model=validation_model,
+                progress_callback=progress_callback,
             )
         )
     return results
