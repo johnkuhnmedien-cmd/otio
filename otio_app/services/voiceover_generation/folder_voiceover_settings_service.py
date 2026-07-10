@@ -33,6 +33,7 @@ __all__ = [
     "save_folder_voiceover_settings",
     "update_folder_voiceover_settings",
     "apply_standard_word_target_to_enabled_settings",
+    "apply_standard_word_target_to_folder",
     "enabled_settings",
 ]
 
@@ -209,6 +210,43 @@ def apply_standard_word_target_to_enabled_settings(project: Project) -> FolderVo
                 }
             )
             if setting.enabled
+            else setting
+        )
+        for setting in existing.settings
+    ]
+    new_document = existing.model_copy(update={"settings": updated_settings})
+    return save_folder_voiceover_settings(project, new_document)
+
+
+def apply_standard_word_target_to_folder(
+    project: Project, folder_name: str
+) -> FolderVoiceoverSettingsDocument:
+    """Wie apply_standard_word_target_to_enabled_settings, aber gezielt NUR
+    für GENAU EINEN Ordner (unabhängig von dessen enabled-Status) —
+    Baustein für die kombinierte 'Asset-bewusst neu generieren'-Aktion
+    (Phase 6, siehe voiceover_author_service.
+    regenerate_folder_voiceover_with_standard_word_target), damit bereits
+    vor Phase 1 generierte Projekte einzelne Ordner gezielt auf den neuen
+    Wortanzahl-Standard heben können, ohne alle anderen Ordner anzufassen.
+
+    Wirft ValueError, wenn noch keine Settings existieren oder folder_name
+    darin nicht vorkommt."""
+    existing = load_folder_voiceover_settings(project)
+    if existing is None:
+        raise ValueError("Keine Folder Voice-over Settings vorhanden — bitte zuerst erstellen.")
+    if not any(setting.folder_name == folder_name for setting in existing.settings):
+        raise ValueError(f"Ordner '{folder_name}' ist nicht in den Folder Voice-over Settings vorhanden.")
+
+    updated_settings = [
+        (
+            setting.model_copy(
+                update={
+                    "target_words": VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
+                    "min_words": VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
+                    "max_words": VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
+                }
+            )
+            if setting.folder_name == folder_name
             else setting
         )
         for setting in existing.settings

@@ -49,6 +49,8 @@ from otio_app.services.voiceover_generation.voiceover_author_service import (
     is_draft_stale,
     load_folder_voiceovers_confirmed,
     load_folder_voiceovers_draft,
+    regenerate_all_folder_voiceovers_with_standard_word_target,
+    regenerate_folder_voiceover_with_standard_word_target,
     update_folder_voiceover_text,
 )
 from otio_app.services.voiceover_generation.voiceover_review_service import (
@@ -358,6 +360,28 @@ def _render_folder_draft(
             if st.button("Bestätigung zurücknehmen", key=f"vo_fvo_unconfirm_{folder_name}_{project.id}"):
                 unconfirm_folder_voiceover(project, folder_name)
                 st.info("Bestätigung zurückgenommen.")
+                st.rerun()
+
+    if render_new_feature_button(
+        "🟢 Asset-bewusst neu generieren (135 Wörter)",
+        key=f"vo_fvo_regen_asset_aware_{folder_name}_{project.id}",
+        help="NEU: hebt NUR diesen Ordner zuerst auf die neue Standard-Zielwortanzahl "
+        "(135, min 120, max 150) und generiert danach in einem Schritt neu — nutzt "
+        "automatisch den bereits asset-bewussten Prompt (kein neuer Prompt, nur ein "
+        "Komfort-Klick für bereits vor dieser Änderung generierte Ordner).",
+    ):
+        with st.spinner("Zielwortanzahl wird angehoben und neu erzeugt…"):
+            try:
+                result = regenerate_folder_voiceover_with_standard_word_target(
+                    project, folder_name, provider=author_provider, model=author_model
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                if result.status == STATUS_PASS:
+                    st.success("Zielwortanzahl angehoben und neu erzeugt.")
+                else:
+                    st.error(f"Fehlgeschlagen ({result.status}): {result.error}")
                 st.rerun()
 
     st.markdown("**Review**")
@@ -729,3 +753,38 @@ def _render_bulk_draft_actions(
                 results = unconfirm_all_folder_voiceovers(project)
             st.info(f"{len(results)} Bestätigung(en) zurückgenommen.")
             st.rerun()
+
+    if render_new_feature_button(
+        "🟢 Alle asset-bewusst neu generieren (135 Wörter)",
+        key=f"vo_fvo_regen_all_asset_aware_{project.id}",
+        help="NEU: hebt ALLE aktivierten Ordner zuerst auf die neue Standard-"
+        "Zielwortanzahl (135, min 120, max 150) und generiert danach sequenziell "
+        "neu — Komfort-Aktion für bereits vor dieser Änderung generierte Projekte.",
+    ):
+        progress_placeholder = st.empty()
+
+        def _progress_regen_asset_aware(folder_name: str, index: int, total: int) -> None:
+            progress_placeholder.info(f"Ordner {index}/{total}: „{folder_name}“ läuft…")
+
+        with st.spinner("Zielwortanzahl wird für alle aktiven Ordner angehoben und neu erzeugt…"):
+            try:
+                results = regenerate_all_folder_voiceovers_with_standard_word_target(
+                    project,
+                    provider=author_provider,
+                    model=author_model,
+                    progress_callback=_progress_regen_asset_aware,
+                )
+            except ValueError as exc:
+                progress_placeholder.empty()
+                st.error(str(exc))
+            else:
+                progress_placeholder.empty()
+                pass_count = sum(1 for result in results if result.status == STATUS_PASS)
+                st.success(
+                    f"Zielwortanzahl angehoben — {pass_count}/{len(results)} Ordner erfolgreich "
+                    "neu erzeugt."
+                )
+                for result in results:
+                    if result.status != STATUS_PASS:
+                        st.error(f"Fehlgeschlagen: {result.error}")
+                st.rerun()

@@ -585,3 +585,82 @@ def test_asset_readiness_flags_sentence_with_invalid_asset_id(
 
     warning_messages = [w.value for w in at.warning]
     assert any("NEEDS_REVIEW" in message for message in warning_messages)
+
+
+# --- Phase 6 (Asset-bewusste Cut-Plan-Vorbereitung): grüner Regenerier-Button ---
+
+
+def test_asset_aware_regen_buttons_are_present_with_green_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = _run_repro(tmp_path, monkeypatch, "fvo-asset-aware-present-project")
+    button_labels = {button.label for button in at.button}
+    assert "🟢 Asset-bewusst neu generieren (135 Wörter)" in button_labels
+    assert "🟢 Alle asset-bewusst neu generieren (135 Wörter)" in button_labels
+
+
+def test_asset_aware_regen_button_click_updates_settings_and_regenerates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id = "fvo-asset-aware-click-project"
+    _run_repro(tmp_path, monkeypatch, project_id)
+
+    project = Project(
+        id=project_id,
+        name="Repro",
+        project_root=str(tmp_path / "USA"),
+        work_dir=str(tmp_path / "USA" / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    before = load_folder_voiceover_settings(project)
+    grand_canyon_before = next(s for s in before.settings if s.folder_name == "Grand Canyon")
+    assert grand_canyon_before.target_words != VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+
+    monkeypatch.setenv("REPRO_SETUP", "none")
+    at = AppTest.from_file(str(_APPTEST_SCRIPT_PATH))
+    at.run()
+    assert not at.exception, at.exception
+
+    regen_button = next(
+        b for b in at.button if b.label == "🟢 Asset-bewusst neu generieren (135 Wörter)"
+    )
+    at = regen_button.click().run()
+    assert not at.exception, at.exception
+
+    after = load_folder_voiceover_settings(project)
+    grand_canyon_after = next(s for s in after.settings if s.folder_name == "Grand Canyon")
+    assert grand_canyon_after.target_words == VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+
+
+def test_bulk_asset_aware_regen_button_click_updates_all_enabled_folders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id = "fvo-asset-aware-bulk-project"
+    _run_repro(tmp_path, monkeypatch, project_id)
+
+    project = Project(
+        id=project_id,
+        name="Repro",
+        project_root=str(tmp_path / "USA"),
+        work_dir=str(tmp_path / "USA" / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+
+    monkeypatch.setenv("REPRO_SETUP", "none")
+    at = AppTest.from_file(str(_APPTEST_SCRIPT_PATH))
+    at.run()
+    assert not at.exception, at.exception
+
+    bulk_button = next(
+        b for b in at.button if b.label == "🟢 Alle asset-bewusst neu generieren (135 Wörter)"
+    )
+    at = bulk_button.click().run()
+    assert not at.exception, at.exception
+
+    after = load_folder_voiceover_settings(project)
+    grand_canyon_after = next(s for s in after.settings if s.folder_name == "Grand Canyon")
+    assert grand_canyon_after.target_words == VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS

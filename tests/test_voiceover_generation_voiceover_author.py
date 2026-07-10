@@ -14,13 +14,22 @@ from otio_app.defaults import (
     VO_ERROR_MISSING_ASSET_MAPPING,
     VO_ERROR_MISSING_SUPPLEMENT_REASON,
     VO_ERROR_WEAK_ASSET_MATCH,
+    VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
 )
 from otio_app.models import Project, ProjectMode
-from otio_app.project_layout import get_folder_inventory_path, get_folder_voiceovers_draft_path, get_llm_runs_dir
+from otio_app.project_layout import (
+    get_folder_inventory_path,
+    get_folder_voiceover_settings_path,
+    get_folder_voiceovers_draft_path,
+    get_llm_runs_dir,
+)
 from otio_app.services.plan_llm_client import PlanLlmNotConfiguredError, PlanLlmResponse
 from otio_app.services.voiceover_generation.dramaturgy_service import save_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
     build_default_folder_voiceover_settings,
+    load_folder_voiceover_settings,
     save_folder_voiceover_settings,
 )
 from otio_app.services.voiceover_generation.llm_trace_service import STATUS_FAIL, STATUS_PARSE_FAILED, STATUS_PASS
@@ -37,6 +46,8 @@ from otio_app.services.voiceover_generation.voiceover_author_service import (
     get_folder_voiceover_draft,
     is_draft_stale,
     load_folder_voiceovers_draft,
+    regenerate_all_folder_voiceovers_with_standard_word_target,
+    regenerate_folder_voiceover_with_standard_word_target,
     update_folder_voiceover_text,
     validate_asset_ids_against_inventory,
 )
@@ -468,6 +479,71 @@ def test_generated_draft_handles_malformed_visual_asset_plan_gracefully(tmp_path
 
     assert result.status == STATUS_PASS
     assert result.draft.sentence_items[0].visual_asset_plan.preferred_cut_count == 1
+
+
+# --- Phase 6 (Asset-bewusste Cut-Plan-Vorbereitung): kombinierte Regenerier-Aktion ---
+
+
+def test_regenerate_folder_voiceover_with_standard_word_target_updates_settings_and_regenerates(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
+        result = regenerate_folder_voiceover_with_standard_word_target(
+            project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5"
+        )
+
+    assert result.status == STATUS_PASS
+
+    settings_doc = load_folder_voiceover_settings(project)
+    setting = next(s for s in settings_doc.settings if s.folder_name == "Grand Canyon")
+    assert setting.target_words == VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+    assert setting.min_words == VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS
+    assert setting.max_words == VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS
+
+
+def test_regenerate_folder_voiceover_with_standard_word_target_raises_without_settings(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    # Settings absichtlich löschen, um den Fehlerfall zu erzwingen.
+    get_folder_voiceover_settings_path(project.work_dir_path).unlink()
+    with pytest.raises(ValueError):
+        regenerate_folder_voiceover_with_standard_word_target(
+            project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5"
+        )
+
+
+def test_regenerate_all_folder_voiceovers_with_standard_word_target_updates_all_enabled(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
+        results = regenerate_all_folder_voiceovers_with_standard_word_target(
+            project, provider="anthropic", model="claude-sonnet-5"
+        )
+
+    assert len(results) == 2
+    assert all(result.status == STATUS_PASS for result in results)
+
+    settings_doc = load_folder_voiceover_settings(project)
+    for setting in settings_doc.settings:
+        assert setting.target_words == VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+
+
+def test_regenerate_all_with_standard_word_target_reports_progress(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
+    progress_calls: list[tuple[str, int, int]] = []
+
+    def _progress(folder_name: str, index: int, total: int) -> None:
+        progress_calls.append((folder_name, index, total))
+
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
+        regenerate_all_folder_voiceovers_with_standard_word_target(
+            project, provider="anthropic", model="claude-sonnet-5", progress_callback=_progress
+        )
+
+    assert progress_calls == [("Grand Canyon", 1, 2), ("Yellowstone", 2, 2)]
 
 
 def test_generate_missing_api_key_returns_fail(tmp_path: Path) -> None:

@@ -43,6 +43,8 @@ from otio_app.services.media_utils import is_image_media, is_video_media, probe_
 from otio_app.services.plan_llm_client import generate_plan_text_with_metadata
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
+    apply_standard_word_target_to_enabled_settings,
+    apply_standard_word_target_to_folder,
     build_default_folder_voiceover_settings,
     load_folder_voiceover_settings,
 )
@@ -88,6 +90,8 @@ __all__ = [
     "validate_asset_ids_against_inventory",
     "generate_folder_voiceover",
     "generate_all_folder_voiceovers",
+    "regenerate_folder_voiceover_with_standard_word_target",
+    "regenerate_all_folder_voiceovers_with_standard_word_target",
     "update_folder_voiceover_text",
     "compute_current_hashes",
     "is_draft_stale",
@@ -784,6 +788,46 @@ def generate_all_folder_voiceovers(
             )
         results.append(result)
     return results
+
+
+def regenerate_folder_voiceover_with_standard_word_target(
+    project: Project, folder_name: str, *, provider: str, model: str
+) -> FolderVoiceoverBuildResult:
+    """Phase 6 (Asset-bewusste Cut-Plan-Vorbereitung): Komfort-Aktion für
+    bereits VOR Phase 1 generierte Ordner — kombiniert zwei bereits
+    einzeln getestete, bestehende Schritte in EINEM Klick:
+      1) hebt target_words/min_words/max_words NUR für diesen Ordner auf
+         den neuen Standard (apply_standard_word_target_to_folder);
+      2) generiert das Voice-over für diesen Ordner NEU
+         (generate_folder_voiceover) — nutzt dabei automatisch den bereits
+         asset-bewussten Prompt (Phase 3/4), OHNE eigene neue Prompt-Logik.
+
+    Wirft ValueError, wenn Schritt 1 fehlschlägt (z. B. keine Settings
+    vorhanden) — in diesem Fall wird NICHT generiert und der bestehende
+    Draft bleibt unangetastet."""
+    apply_standard_word_target_to_folder(project, folder_name)
+    return generate_folder_voiceover(project, folder_name, provider=provider, model=model)
+
+
+def regenerate_all_folder_voiceovers_with_standard_word_target(
+    project: Project,
+    *,
+    provider: str,
+    model: str,
+    progress_callback: ProgressCallback | None = None,
+) -> list[FolderVoiceoverBuildResult]:
+    """Bulk-Variante von regenerate_folder_voiceover_with_standard_word_target
+    für ALLE aktivierten Ordner — hebt zuerst alle aktivierten Ordner auf den
+    neuen Wortanzahl-Standard (apply_standard_word_target_to_enabled_settings)
+    und generiert danach SEQUENZIELL neu (generate_all_folder_voiceovers),
+    analog zu 'Alle aktiven Folder Voice-overs generieren'.
+
+    Wirft ValueError, wenn Schritt 1 fehlschlägt — in diesem Fall wird NICHTS
+    neu generiert."""
+    apply_standard_word_target_to_enabled_settings(project)
+    return generate_all_folder_voiceovers(
+        project, provider=provider, model=model, progress_callback=progress_callback
+    )
 
 
 def update_folder_voiceover_text(

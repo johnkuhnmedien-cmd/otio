@@ -17,6 +17,7 @@ from otio_app.project_layout import get_folder_inventory_path, get_folder_voiceo
 from otio_app.services.voiceover_generation.dramaturgy_service import save_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
     apply_standard_word_target_to_enabled_settings,
+    apply_standard_word_target_to_folder,
     build_default_folder_voiceover_settings,
     enabled_settings,
     load_folder_voiceover_settings,
@@ -400,3 +401,44 @@ def test_apply_standard_word_target_persists_to_disk(tmp_path: Path) -> None:
     assert reloaded is not None
     grand_canyon = next(s for s in reloaded.settings if s.folder_name == "Grand Canyon")
     assert grand_canyon.target_words == VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+
+
+# --- Phase 6 (Asset-bewusste Cut-Plan-Vorbereitung): Single-Folder-Variante ---
+
+
+def test_apply_standard_word_target_to_folder_only_touches_that_folder(tmp_path: Path) -> None:
+    project = _make_project_with_confirmed_dramaturgy(tmp_path)
+    document = build_default_folder_voiceover_settings(project)
+    document = document.model_copy(
+        update={
+            "settings": [
+                setting.model_copy(update={"target_words": 999, "min_words": 900, "max_words": 1000})
+                for setting in document.settings
+            ]
+        }
+    )
+    save_folder_voiceover_settings(project, document)
+
+    updated = apply_standard_word_target_to_folder(project, "Grand Canyon")
+    by_folder = {setting.folder_name: setting for setting in updated.settings}
+
+    assert by_folder["Grand Canyon"].target_words == VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+    assert by_folder["Grand Canyon"].min_words == VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS
+    assert by_folder["Grand Canyon"].max_words == VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS
+    # Yellowstone bleibt unangetastet, obwohl es ebenfalls in den Settings ist.
+    assert by_folder["Yellowstone"].target_words == 999
+
+
+def test_apply_standard_word_target_to_folder_raises_without_settings(tmp_path: Path) -> None:
+    project = _make_project_with_confirmed_dramaturgy(tmp_path)
+    with pytest.raises(ValueError):
+        apply_standard_word_target_to_folder(project, "Grand Canyon")
+
+
+def test_apply_standard_word_target_to_folder_raises_for_unknown_folder(tmp_path: Path) -> None:
+    project = _make_project_with_confirmed_dramaturgy(tmp_path)
+    document = build_default_folder_voiceover_settings(project)
+    save_folder_voiceover_settings(project, document)
+
+    with pytest.raises(ValueError):
+        apply_standard_word_target_to_folder(project, "Nonexistent Folder")
