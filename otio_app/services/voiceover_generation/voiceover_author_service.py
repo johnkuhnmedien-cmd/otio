@@ -68,6 +68,7 @@ from otio_app.services.voiceover_generation.models import (
     LlmRunManifest,
     SentenceItem,
     ValidationError,
+    VisualAssetPlanHint,
     as_str_list,
 )
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
@@ -198,6 +199,28 @@ def _count_words(text: str) -> int:
     return len([word for word in text.split() if word.strip()])
 
 
+def _parse_visual_asset_plan(raw: Any) -> VisualAssetPlanHint:
+    """Defensiv — ein fehlendes/unbrauchbares visual_asset_plan darf NIE
+    das Parsen des ganzen sentence_item scheitern lassen (siehe
+    VisualAssetPlanHint-Docstring: neutrale Defaults sind immer gültig)."""
+    if not isinstance(raw, dict):
+        return VisualAssetPlanHint()
+    try:
+        preferred_cut_count = int(raw.get("preferred_cut_count", 1))
+    except (TypeError, ValueError):
+        preferred_cut_count = 1
+    reuse_risk = str(raw.get("reuse_risk") or "").strip().lower()
+    if reuse_risk not in ("", "low", "medium", "high"):
+        reuse_risk = ""
+    return VisualAssetPlanHint(
+        preferred_cut_count=max(1, preferred_cut_count),
+        reuse_risk=reuse_risk,
+        needs_visual_variety=bool(raw.get("needs_visual_variety", False)),
+        asset_strategy_reason=str(raw.get("asset_strategy_reason", "")),
+        supplement_search_hint=str(raw.get("supplement_search_hint", "")),
+    )
+
+
 def _parse_sentence_items(raw_items: Any) -> list[SentenceItem]:
     items: list[SentenceItem] = []
     if not isinstance(raw_items, list):
@@ -221,6 +244,7 @@ def _parse_sentence_items(raw_items: Any) -> list[SentenceItem]:
                 visual_intent=str(raw.get("visual_intent", "")),
                 primary_asset_id=str(raw.get("primary_asset_id") or "").strip(),
                 backup_asset_ids=as_str_list(raw.get("backup_asset_ids")),
+                second_backup_asset_ids=as_str_list(raw.get("second_backup_asset_ids")),
                 asset_match_reason=str(raw.get("asset_match_reason", "")),
                 asset_confidence=confidence,
                 estimated_duration_sec=duration,
@@ -232,6 +256,7 @@ def _parse_sentence_items(raw_items: Any) -> list[SentenceItem]:
                     raw.get("source_inventory_asset_ids_considered")
                 ),
                 pause_after=_valid_pause_after(raw.get("pause_after")),
+                visual_asset_plan=_parse_visual_asset_plan(raw.get("visual_asset_plan")),
             )
         )
     return items
@@ -256,6 +281,9 @@ def _sanitize_sentence_items(
     for item in items:
         primary = item.primary_asset_id if item.primary_asset_id in valid_asset_ids else ""
         backups = [asset_id for asset_id in item.backup_asset_ids if asset_id in valid_asset_ids]
+        second_backups = [
+            asset_id for asset_id in item.second_backup_asset_ids if asset_id in valid_asset_ids
+        ]
         considered = [
             asset_id
             for asset_id in item.source_inventory_asset_ids_considered
@@ -266,6 +294,7 @@ def _sanitize_sentence_items(
                 update={
                     "primary_asset_id": primary,
                     "backup_asset_ids": backups,
+                    "second_backup_asset_ids": second_backups,
                     "source_inventory_asset_ids_considered": considered,
                 }
             )
@@ -303,6 +332,21 @@ def validate_asset_ids_against_inventory(
                         folder_name=folder_name,
                         sentence_id=item.sentence_id,
                         message=f"backup_asset_id '{backup_id}' existiert nicht im Inventory.",
+                        fix_hint="Nur asset_id-Werte aus dem bereitgestellten Inventory verwenden.",
+                    )
+                )
+        for second_backup_id in item.second_backup_asset_ids:
+            if second_backup_id not in valid_ids:
+                errors.append(
+                    ValidationError(
+                        type=VO_ERROR_INVALID_ASSET_ID,
+                        severity="BLOCKER",
+                        folder_name=folder_name,
+                        sentence_id=item.sentence_id,
+                        message=(
+                            f"second_backup_asset_id '{second_backup_id}' existiert nicht im "
+                            "Inventory."
+                        ),
                         fix_hint="Nur asset_id-Werte aus dem bereitgestellten Inventory verwenden.",
                     )
                 )

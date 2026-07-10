@@ -570,6 +570,90 @@ def test_folder_voiceover_prompt_instructs_concrete_visual_intent() -> None:
     assert "not a generic restatement of the sentence text" in prompt
 
 
+def test_folder_voiceover_prompt_json_schema_includes_second_backup_asset_ids() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert '"second_backup_asset_ids": []' in prompt
+
+
+def test_folder_voiceover_prompt_json_schema_includes_visual_asset_plan() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert '"visual_asset_plan"' in prompt
+    assert '"preferred_cut_count": 1' in prompt
+    assert '"reuse_risk": ""' in prompt
+    assert '"needs_visual_variety": false' in prompt
+    assert '"supplement_search_hint": ""' in prompt
+
+
+def test_folder_voiceover_prompt_instructs_second_backup_must_genuinely_fit() -> None:
+    """Nutzergrundsatz: second_backup_asset_ids muss unbedingt auch passend
+    sein, sonst weichen wir einfach auf Supplement-Assets aus — ein
+    beliebiges Füllasset dort ist ausdrücklich verboten."""
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "NEVER add an asset there just to fill the list" in prompt
+    assert "a weak filler asset is worse than an honest gap" in prompt
+
+
+def test_folder_voiceover_prompt_instructs_supplement_search_hint_semantics() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "supplement_search_hint" in prompt
+    assert "location-prefixed search phrase" in prompt
+
+
+def test_voiceover_correction_prompt_json_schema_includes_new_phase4_fields() -> None:
+    prompt = build_voiceover_correction_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        setting=_sample_setting(),
+        draft=_sample_draft(),
+        errors=[],
+    )
+    assert '"second_backup_asset_ids": []' in prompt
+    assert '"visual_asset_plan"' in prompt
+
+
+def test_voiceover_correction_prompt_forbids_filler_second_backup() -> None:
+    prompt = build_voiceover_correction_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        setting=_sample_setting(),
+        draft=_sample_draft(),
+        errors=[],
+    )
+    assert "never as filler" in prompt
+
+
 def test_voiceover_correction_prompt_reminds_of_visual_editing_awareness() -> None:
     """Auch bei einer Korrektur (die nur konkrete Fehler beheben soll) darf
     die asset-bewusste Schnittlogik nicht verloren gehen."""

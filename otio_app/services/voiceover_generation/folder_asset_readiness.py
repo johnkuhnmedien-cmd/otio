@@ -116,8 +116,10 @@ def build_folder_asset_readiness_report(
             report.with_backup_count += 1
 
         referenced_asset_ids = (
-            [sentence.primary_asset_id] if sentence.primary_asset_id else []
-        ) + list(sentence.backup_asset_ids)
+            ([sentence.primary_asset_id] if sentence.primary_asset_id else [])
+            + list(sentence.backup_asset_ids)
+            + list(sentence.second_backup_asset_ids)
+        )
         for asset_id in referenced_asset_ids:
             if asset_id and asset_id not in known_asset_ids:
                 report.invalid_asset_id_count += 1

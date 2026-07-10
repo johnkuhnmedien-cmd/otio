@@ -302,9 +302,12 @@ def _render_folder_draft(
                 "visual_intent": item.visual_intent,
                 "primary_asset_id": item.primary_asset_id,
                 "backup_asset_ids": ", ".join(item.backup_asset_ids),
+                "second_backup_asset_ids": ", ".join(item.second_backup_asset_ids),
                 "asset_confidence": item.asset_confidence,
                 "needs_supplement_asset": item.needs_supplement_asset,
                 "supplement_reason": item.supplement_reason,
+                "reuse_risk": item.visual_asset_plan.reuse_risk,
+                "supplement_search_hint": item.visual_asset_plan.supplement_search_hint,
             }
             for item in draft.sentence_items
         ]

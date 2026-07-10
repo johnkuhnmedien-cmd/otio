@@ -285,6 +285,47 @@ def test_report_is_pure_read_only(tmp_path: Path) -> None:
     assert files_before == files_after
 
 
+# --- Phase 4 (second_backup_asset_ids counts toward alternatives) ---
+
+
+def test_second_backup_asset_id_counts_toward_long_sentence_alternatives(tmp_path: Path) -> None:
+    """Nutzergrundsatz: second_backup_asset_ids sind echte, passende
+    Alternativen — sie müssen also mitzählen, wenn geprüft wird, ob genug
+    Assets für einen späteren Split vorhanden sind."""
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a", "asset_b"])
+    long_text = " ".join(["Wort"] * 21)
+    draft = _draft(
+        "Grand Canyon",
+        [
+            SentenceItem(
+                sentence_id="s1",
+                text=long_text,
+                primary_asset_id="asset_a",
+                second_backup_asset_ids=["asset_b"],
+            )
+        ],
+    )
+    report = build_folder_asset_readiness_report(project, draft, shot_max_sec=8.0)
+    assert report.long_sentence_low_alternative_count == 0
+
+
+def test_invalid_second_backup_asset_id_is_flagged(tmp_path: Path) -> None:
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a"])
+    draft = _draft(
+        "Grand Canyon",
+        [
+            SentenceItem(
+                sentence_id="s1",
+                text="Text.",
+                primary_asset_id="asset_a",
+                second_backup_asset_ids=["asset_missing"],
+            )
+        ],
+    )
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.invalid_asset_id_count == 1
+
+
 def test_empty_draft_has_no_issues(tmp_path: Path) -> None:
     project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a"])
     draft = _draft("Grand Canyon", [])

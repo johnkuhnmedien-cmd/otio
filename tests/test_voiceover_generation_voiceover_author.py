@@ -341,6 +341,135 @@ def test_validate_asset_ids_detects_weak_asset_match(tmp_path: Path) -> None:
     assert any(error.type == VO_ERROR_WEAK_ASSET_MATCH for error in errors)
 
 
+# --- Phase 4 (Asset-bewusste Cut-Plan-Vorbereitung): second_backup_asset_ids / visual_asset_plan ---
+
+
+def test_generated_draft_parses_second_backup_asset_ids(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    response = json.loads(VALID_AUTHOR_RESPONSE)
+    response["sentence_items"][0]["second_backup_asset_ids"] = ["asset_clip2"]
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(json.dumps(response)),
+    ):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    assert result.status == STATUS_PASS
+    assert result.draft.sentence_items[0].second_backup_asset_ids == ["asset_clip2"]
+
+
+def test_generated_draft_defaults_second_backup_asset_ids_to_empty_when_absent(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    assert result.draft.sentence_items[0].second_backup_asset_ids == []
+
+
+def test_generated_draft_sanitizes_hallucinated_second_backup_asset_id(tmp_path: Path) -> None:
+    """Analog zur bestehenden Sanitisierung von primary_asset_id/
+    backup_asset_ids — eine halluzinierte second_backup_asset_id darf nicht
+    unbemerkt im Draft landen."""
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    response = json.loads(VALID_AUTHOR_RESPONSE)
+    response["sentence_items"][0]["second_backup_asset_ids"] = ["asset_made_up_id", "asset_clip2"]
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(json.dumps(response)),
+    ):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    assert result.draft.sentence_items[0].second_backup_asset_ids == ["asset_clip2"]
+
+
+def test_validate_asset_ids_detects_invalid_second_backup_asset_id(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name="Grand Canyon",
+        voiceover_text_full="Text",
+        word_count=1,
+        sentence_items=[
+            SentenceItem(
+                sentence_id="sentence_001",
+                text="Text",
+                primary_asset_id="asset_clip1",
+                second_backup_asset_ids=["asset_does_not_exist"],
+            )
+        ],
+    )
+    errors = validate_asset_ids_against_inventory(project, "Grand Canyon", draft)
+    assert any(error.type == VO_ERROR_INVALID_ASSET_ID for error in errors)
+
+
+def test_generated_draft_parses_visual_asset_plan(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    response = json.loads(VALID_AUTHOR_RESPONSE)
+    response["sentence_items"][0]["visual_asset_plan"] = {
+        "preferred_cut_count": 2,
+        "reuse_risk": "high",
+        "needs_visual_variety": True,
+        "asset_strategy_reason": "Nur ein passendes Asset für diesen langen Satz.",
+        "supplement_search_hint": "Grand Canyon rim wide shot",
+    }
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(json.dumps(response)),
+    ):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    plan = result.draft.sentence_items[0].visual_asset_plan
+    assert plan.preferred_cut_count == 2
+    assert plan.reuse_risk == "high"
+    assert plan.needs_visual_variety is True
+    assert plan.asset_strategy_reason == "Nur ein passendes Asset für diesen langen Satz."
+    assert plan.supplement_search_hint == "Grand Canyon rim wide shot"
+
+
+def test_generated_draft_defaults_visual_asset_plan_when_absent(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    plan = result.draft.sentence_items[0].visual_asset_plan
+    assert plan.preferred_cut_count == 1
+    assert plan.reuse_risk == ""
+    assert plan.needs_visual_variety is False
+    assert plan.asset_strategy_reason == ""
+    assert plan.supplement_search_hint == ""
+
+
+def test_generated_draft_rejects_invalid_reuse_risk_value(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    response = json.loads(VALID_AUTHOR_RESPONSE)
+    response["sentence_items"][0]["visual_asset_plan"] = {"reuse_risk": "extremely_high_not_a_real_value"}
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(json.dumps(response)),
+    ):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    assert result.draft.sentence_items[0].visual_asset_plan.reuse_risk == ""
+
+
+def test_generated_draft_handles_malformed_visual_asset_plan_gracefully(tmp_path: Path) -> None:
+    """Ein visual_asset_plan, das kein dict ist (z. B. versehentlich ein
+    String), darf das Parsen des ganzen sentence_item nicht scheitern lassen."""
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    response = json.loads(VALID_AUTHOR_RESPONSE)
+    response["sentence_items"][0]["visual_asset_plan"] = "not a dict"
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(json.dumps(response)),
+    ):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    assert result.status == STATUS_PASS
+    assert result.draft.sentence_items[0].visual_asset_plan.preferred_cut_count == 1
+
+
 def test_generate_missing_api_key_returns_fail(tmp_path: Path) -> None:
     project = _make_project(tmp_path, ["Grand Canyon"])
     with patch(

@@ -107,6 +107,7 @@ __all__ = [
     "DramaturgyPlan",
     "FolderVoiceoverSetting",
     "FolderVoiceoverSettingsDocument",
+    "VisualAssetPlanHint",
     "SentenceItem",
     "FolderVoiceoverDraft",
     "FolderVoiceoversDocument",
@@ -350,6 +351,35 @@ class FolderVoiceoverSettingsDocument(BaseModel):
     settings: list[FolderVoiceoverSetting] = Field(default_factory=list)
 
 
+class VisualAssetPlanHint(BaseModel):
+    """Phase 4 (Asset-bewusste Cut-Plan-Vorbereitung): additive, rein
+    informative Zusatz-Planungsfelder für EINEN Satz/Beat — KEIN Ersatz für
+    primary_asset_id/backup_asset_ids/needs_supplement_asset, sondern
+    zusätzlicher Kontext für Asset-Readiness-Diagnose und (später) den Cut
+    Plan. Fehlt dieses Objekt oder einzelne Felder (z. B. bei älteren, vor
+    Phase 4 erzeugten Drafts), gelten die neutralen Defaults unten — kein
+    bestehender Draft wird dadurch ungültig."""
+
+    # Wie viele visuell unterschiedliche Shots dieser Satz/Beat idealerweise
+    # ergeben sollte (1 = ein einzelner Shot, >1 = LLM hält einen Split für
+    # sinnvoll/nötig, z. B. bei einem langen Satz).
+    preferred_cut_count: int = 1
+    # ""|low|medium|high — wie riskant eine Wiederverwendung von
+    # primary_asset_id in einem benachbarten Satz/Beat wäre (z. B. weil kaum
+    # lokale Alternativen für dieses Motiv existieren).
+    reuse_risk: str = ""
+    # True, wenn dieser Satz/Beat mehrere visuell unterschiedliche Assets
+    # bräuchte, um nicht eintönig zu wirken (unabhängig von preferred_cut_count).
+    needs_visual_variety: bool = False
+    # Kurze Begründung, WARUM diese Asset-Zuordnung (primary/backup/second_backup)
+    # so gewählt wurde — informativ, kein Blocker-Feld.
+    asset_strategy_reason: str = ""
+    # Konkreter, ortsbezogener Suchvorschlag für eine spätere Supplement-Suche
+    # (z. B. Adobe/Pexels) — nur sinnvoll befüllt, wenn needs_supplement_asset
+    # auf dem übergeordneten SentenceItem True ist.
+    supplement_search_hint: str = ""
+
+
 class SentenceItem(BaseModel):
     """Ein Satz/Beat der Voice-over-Prosa mit strukturierter Asset-Zuordnung.
 
@@ -363,6 +393,11 @@ class SentenceItem(BaseModel):
     visual_intent: str = ""
     primary_asset_id: str = ""
     backup_asset_ids: list[str] = Field(default_factory=list)
+    # Phase 4: WEITERE, genuinely passende lokale Ausweichassets — breiter/
+    # atmosphärischer als backup_asset_ids erlaubt, aber NICHT beliebiges
+    # Füllmaterial. Passt kein lokales Asset mehr wirklich, gehört das nicht
+    # hierher, sondern needs_supplement_asset=true (siehe Prompt-Regeln).
+    second_backup_asset_ids: list[str] = Field(default_factory=list)
     asset_match_reason: str = ""
     asset_confidence: float = 0.0
     estimated_duration_sec: float = 0.0
@@ -376,6 +411,8 @@ class SentenceItem(BaseModel):
     # Wird nur für das eleven_v3-Modell tatsächlich als Pause-Tag beim TTS
     # eingefügt (siehe tts_text_builder.build_tts_ready_text).
     pause_after: str = ""
+    # Phase 4: additive Zusatz-Planungsfelder, siehe VisualAssetPlanHint.
+    visual_asset_plan: VisualAssetPlanHint = Field(default_factory=VisualAssetPlanHint)
 
 
 class FolderVoiceoverDraft(BaseModel):

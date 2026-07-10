@@ -423,6 +423,21 @@ several SHORTER sentences/beats — each cleanly covered by one asset — over o
 sentence that outruns the available visual material.
 - visual_intent must state a concrete visual purpose (what should be visible, the \
 mood/movement/shot type it implies) — not a generic restatement of the sentence text.
+- If, beyond primary_asset_id and backup_asset_ids, there is a FURTHER local asset \
+that still genuinely fits this sentence/beat (even if broader/more atmospheric), add \
+it to second_backup_asset_ids. This must still be a real, plausible visual match for \
+this specific sentence/beat — NEVER add an asset there just to fill the list. If \
+nothing else genuinely fits, leave second_backup_asset_ids empty and rely on \
+needs_supplement_asset instead — a weak filler asset is worse than an honest gap.
+- Optionally fill visual_asset_plan to make your own editing reasoning explicit: \
+preferred_cut_count (how many distinct shots this sentence/beat should ideally become, \
+1 if it's a single shot), reuse_risk ("low"/"medium"/"high" — how risky reusing \
+primary_asset_id nearby would be, given how few local alternatives exist for this \
+subject), needs_visual_variety (true if this sentence/beat would look monotonous \
+without switching visuals), asset_strategy_reason (why you assigned assets this way), \
+and — ONLY if needs_supplement_asset is true — supplement_search_hint: a concrete, \
+location-prefixed search phrase for finding this missing visual externally (e.g. \
+"Havasu Falls waterfall woman", not just "waterfall").
 
 ## Task
 Write ONE flowing documentary voice-over text for this location (target_words above), \
@@ -434,6 +449,8 @@ Rules for sentence_items:
 - primary_asset_id MUST be one of the EXACT asset_id values listed above, or empty.
 - Never invent asset IDs that are not in the list above.
 - backup_asset_ids MUST also only contain asset_id values from the list above.
+- second_backup_asset_ids MUST also only contain asset_id values from the list above \
+(or stay empty — see "Visual editing awareness" above for when to use it).
 - If no asset fits a sentence, set primary_asset_id to "", needs_supplement_asset=true, \
 and give a concrete supplement_reason (what visual is missing).
 - Do not assign the same primary_asset_id to two consecutive sentence_items unless \
@@ -460,6 +477,7 @@ this shape:
       "visual_intent": "...",
       "primary_asset_id": "...",
       "backup_asset_ids": [],
+      "second_backup_asset_ids": [],
       "asset_match_reason": "...",
       "asset_confidence": 0.0,
       "estimated_duration_sec": 0.0,
@@ -468,7 +486,14 @@ this shape:
       "needs_supplement_asset": false,
       "supplement_reason": "",
       "source_inventory_asset_ids_considered": [],
-      "pause_after": ""
+      "pause_after": "",
+      "visual_asset_plan": {{
+        "preferred_cut_count": 1,
+        "reuse_risk": "",
+        "needs_visual_variety": false,
+        "asset_strategy_reason": "...",
+        "supplement_search_hint": ""
+      }}
     }}
   ],
   "transition_from_previous_used": false,
@@ -618,7 +643,9 @@ assign the same primary_asset_id to two consecutive sentence_items unless there 
 genuinely no other usable local asset, keep needs_supplement_asset=true (with a \
 concrete supplement_reason) for beats that need a visual not covered here rather \
 than omitting the detail, and only keep a long sentence/beat if it still has enough \
-distinct, usable local coverage for a later split.
+distinct, usable local coverage for a later split. Only add an asset to \
+second_backup_asset_ids if it still genuinely fits that specific sentence/beat — \
+never as filler.
 
 Respond with JSON ONLY, no markdown code fences, no commentary, using the EXACT \
 same shape as before:
@@ -633,6 +660,7 @@ same shape as before:
       "visual_intent": "...",
       "primary_asset_id": "...",
       "backup_asset_ids": [],
+      "second_backup_asset_ids": [],
       "asset_match_reason": "...",
       "asset_confidence": 0.0,
       "estimated_duration_sec": 0.0,
@@ -641,7 +669,14 @@ same shape as before:
       "needs_supplement_asset": false,
       "supplement_reason": "",
       "source_inventory_asset_ids_considered": [],
-      "pause_after": ""
+      "pause_after": "",
+      "visual_asset_plan": {{
+        "preferred_cut_count": 1,
+        "reuse_risk": "",
+        "needs_visual_variety": false,
+        "asset_strategy_reason": "...",
+        "supplement_search_hint": ""
+      }}
     }}
   ],
   "transition_from_previous_used": false,
