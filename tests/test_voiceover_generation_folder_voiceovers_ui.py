@@ -442,3 +442,146 @@ def test_apply_word_target_button_click_does_not_change_existing_voiceover_text(
     text_after = next(item for item in draft_after.items if item.folder_name == "Grand Canyon")
     assert text_after.voiceover_text_full == text_before.voiceover_text_full
     assert text_after.status == text_before.status
+
+
+# --- Phase 2 (Asset-bewusste Cut-Plan-Vorbereitung): Asset-Readiness-Button ---
+
+
+def test_asset_readiness_button_is_present_with_green_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = _run_repro(tmp_path, monkeypatch, "fvo-readiness-present-project")
+    button_labels = {button.label for button in at.button}
+    assert "🟢 Asset-Readiness prüfen" in button_labels
+
+
+def test_asset_readiness_button_click_shows_report_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Der Repro-Fake-Text ('Text.', sentence_items=[]) hat keine Sätze —
+    das Ergebnis muss trotzdem klar als PASS mit 0 Sätzen angezeigt werden,
+    ohne Exception."""
+    at = _run_repro(tmp_path, monkeypatch, "fvo-readiness-click-project")
+
+    readiness_button = next(b for b in at.button if b.label == "🟢 Asset-Readiness prüfen")
+    at = readiness_button.click().run()
+    assert not at.exception, at.exception
+
+    metric_values = {metric.label: metric.value for metric in at.metric}
+    assert metric_values.get("Sätze") == "0"
+
+    success_or_warning = [s.value for s in at.success] + [w.value for w in at.warning]
+    assert any("Asset-Readiness" in message for message in success_or_warning)
+
+
+def test_asset_readiness_click_does_not_write_any_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nutzervorgabe (Diagnose-Phase): rein lesend, keine Persistenz.
+
+    Nutzt (wie die Zielwortanzahl-Tests) einen zweiten, separaten AppTest-
+    Lauf mit REPRO_SETUP=none: sonst würde das Setup-Skript bei JEDEM
+    internen Rerun (ausgelöst durch das st.rerun() im Button) erneut den
+    Fake-LLM-Aufruf für generate_folder_voiceover ausführen und dabei
+    llm_runs/-Artefakte schreiben — das wäre ein reiner Test-Repro-Effekt,
+    nicht ein Schreibvorgang der eigentlichen Readiness-Diagnose."""
+    project_id = "fvo-readiness-no-write-project"
+    _run_repro(tmp_path, monkeypatch, project_id)
+
+    monkeypatch.setenv("REPRO_SETUP", "none")
+    at = AppTest.from_file(str(_APPTEST_SCRIPT_PATH))
+    at.run()
+    assert not at.exception, at.exception
+
+    project_root = tmp_path / "USA"
+    work_dir = project_root / "_otio"
+    files_before = sorted(p for p in work_dir.rglob("*") if p.is_file())
+
+    readiness_button = next(b for b in at.button if b.label == "🟢 Asset-Readiness prüfen")
+    at = readiness_button.click().run()
+    assert not at.exception, at.exception
+
+    files_after = sorted(p for p in work_dir.rglob("*") if p.is_file())
+    assert files_before == files_after
+
+
+def test_asset_readiness_flags_sentence_with_invalid_asset_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end über die echte Seite: ein Satz mit einer Asset-ID, die
+    nicht im Inventory existiert, muss als Auffälligkeit erscheinen."""
+    project_id = "fvo-readiness-invalid-asset-project"
+    monkeypatch.setenv("REPRO_ROOT", str(tmp_path))
+    monkeypatch.setenv("REPRO_PROJECT_ID", project_id)
+    monkeypatch.setenv(
+        "REPRO_RENDER_FUNCTION",
+        "otio_app.ui.voiceover_generation.folder_voiceovers_tab:render_folder_voiceovers_page",
+    )
+    monkeypatch.setenv("REPRO_SETUP", "none")
+    monkeypatch.delenv("REPRO_STYLE_PROFILE_LIBRARY_NAME", raising=False)
+
+    project_root = tmp_path / "USA"
+    (project_root / "Grand Canyon").mkdir(parents=True)
+    project = Project(
+        id=project_id,
+        name="Repro",
+        project_root=str(project_root),
+        work_dir=str(project_root / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    inv_path = get_folder_inventory_path(project.work_dir_path, "Grand Canyon")
+    inv_path.parent.mkdir(parents=True, exist_ok=True)
+    analysis = AssetFolderAnalysis(
+        folder="Grand Canyon",
+        assets=[AssetMediaAnalysis(path="Grand Canyon/clip1.mp4", asset_id="asset_clip1")],
+    )
+    inv_path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
+
+    plan = DramaturgyPlan(
+        project_id=project.id,
+        recommended_folder_order=[
+            DramaturgyFolderEntry(folder_name="Grand Canyon", order_index=1, enabled=True)
+        ],
+    )
+    save_confirmed_dramaturgy(project, plan)
+    save_folder_voiceover_settings(project, build_default_folder_voiceover_settings(project))
+
+    from otio_app.services.voiceover_generation.models import FolderVoiceoverDraft, SentenceItem
+    from otio_app.services.voiceover_generation.voiceover_author_service import (
+        load_folder_voiceovers_draft,
+        save_folder_voiceovers_draft,
+    )
+
+    draft_doc = load_folder_voiceovers_draft(project)
+    new_draft_item = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name="Grand Canyon",
+        order_index=1,
+        voiceover_text_full="Ein Satz ohne echtes Asset.",
+        word_count=5,
+        sentence_items=[
+            SentenceItem(
+                sentence_id="sentence_001",
+                text="Ein Satz ohne echtes Asset.",
+                primary_asset_id="asset_does_not_exist",
+            )
+        ],
+    )
+    save_folder_voiceovers_draft(
+        project, draft_doc.model_copy(update={"items": [*draft_doc.items, new_draft_item]})
+    )
+
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(str(_APPTEST_SCRIPT_PATH))
+    at.run()
+    assert not at.exception, at.exception
+
+    readiness_button = next(b for b in at.button if b.label == "🟢 Asset-Readiness prüfen")
+    at = readiness_button.click().run()
+    assert not at.exception, at.exception
+
+    warning_messages = [w.value for w in at.warning]
+    assert any("NEEDS_REVIEW" in message for message in warning_messages)

@@ -16,6 +16,11 @@ from otio_app.defaults import (
 from otio_app.models import Project
 from otio_app.services.inventory_loader import folder_has_usable_inventory_data
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
+from otio_app.services.voiceover_generation.folder_asset_readiness import (
+    READINESS_STATUS_PASS as ASSET_READINESS_STATUS_PASS,
+    FolderAssetReadinessReport,
+    build_folder_asset_readiness_report,
+)
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
     apply_standard_word_target_to_enabled_settings,
     build_default_folder_voiceover_settings,
@@ -186,6 +191,69 @@ def _render_model_settings(project: Project) -> tuple[str, str, str, str]:
     )
 
 
+def _asset_readiness_session_key(project: Project, folder_name: str) -> str:
+    return f"vo_fvo_asset_readiness_{folder_name}_{project.id}"
+
+
+def _render_asset_readiness_report(report: FolderAssetReadinessReport) -> None:
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        st.metric("Sätze", report.sentence_count)
+    with col2:
+        st.metric("Mit Primary", report.with_primary_count)
+    with col3:
+        st.metric("Mit Backup", report.with_backup_count)
+    with col4:
+        st.metric("Direkte Wiederholungen", report.direct_repeat_count)
+    with col5:
+        st.metric("Supplement empfohlen", report.supplement_recommended_count)
+
+    if report.status == ASSET_READINESS_STATUS_PASS:
+        st.success("Asset-Readiness: PASS — keine Auffälligkeiten gefunden.")
+    else:
+        st.warning(
+            f"Asset-Readiness: NEEDS_REVIEW — {len(report.issues)} Auffälligkeit(en) gefunden "
+            f"(davon {report.invalid_asset_id_count} ungültige Asset-ID(s), "
+            f"{report.long_sentence_low_alternative_count} lange(r) Satz/Sätze mit zu wenig "
+            "Alternativen)."
+        )
+
+    if report.issues:
+        rows = [
+            {
+                "sentence_id": issue.sentence_id,
+                "issue_type": issue.issue_type,
+                "message": issue.message,
+            }
+            for issue in report.issues
+        ]
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
+def _render_asset_readiness_section(
+    project: Project, folder_name: str, draft: FolderVoiceoverDraft
+) -> None:
+    """Phase 2 (Asset-bewusste Cut-Plan-Vorbereitung): rein lesende
+    Diagnose, NUR bei explizitem Klick berechnet — läuft nie automatisch
+    beim Seiten-Rendering, ruft kein LLM auf und schreibt nichts. Ergebnis
+    bleibt bis zum nächsten Klick/Reload nur im Session-State erhalten
+    (keine Persistenz auf Platte), analog zu anderen 'letztes Ergebnis'-
+    Anzeigen dieser Pipeline (z. B. Dramaturgie-/Style-Profile-Läufe)."""
+    session_key = _asset_readiness_session_key(project, folder_name)
+    if render_new_feature_button(
+        "🟢 Asset-Readiness prüfen",
+        key=f"vo_fvo_asset_readiness_btn_{folder_name}_{project.id}",
+        help="NEU: prüft rein lesend (kein LLM-Aufruf, keine Änderung), ob jeder Satz ein "
+        "gültiges lokales Primary-/Backup-Asset hat, ob dasselbe Asset direkt wiederholt "
+        "wird und ob lange Sätze genug Asset-Alternativen für einen späteren Split haben.",
+    ):
+        st.session_state[session_key] = build_folder_asset_readiness_report(project, draft)
+
+    cached_report = st.session_state.get(session_key)
+    if isinstance(cached_report, FolderAssetReadinessReport) and cached_report.folder_name == folder_name:
+        _render_asset_readiness_report(cached_report)
+
+
 def _render_folder_draft(
     project: Project,
     folder_name: str,
@@ -243,6 +311,8 @@ def _render_folder_draft(
         st.dataframe(rows, use_container_width=True, hide_index=True)
     else:
         st.caption("Keine sentence_items vorhanden.")
+
+    _render_asset_readiness_section(project, folder_name, draft)
 
     col_save, col_regen, col_validate, col_confirm, col_unconfirm = st.columns(5)
     with col_save:

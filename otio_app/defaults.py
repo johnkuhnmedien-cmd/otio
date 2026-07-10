@@ -265,6 +265,16 @@ VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS = 135
 VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS = 120
 VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS = 150
 
+# --- Asset-bewusste Cut-Plan-Vorbereitung, Phase 2: reine Diagnose-Heuristik
+# für die Folder-Voice-over-Asset-Readiness (siehe
+# folder_asset_readiness.py). Bewusst ENTKOPPELT von den echten
+# CUT_PLAN_DEFAULT_SHOT_*_SEC-Werten — Cut-Plan-Settings sind pro Projekt
+# änderbar und gehören zu einer anderen Domäne; diese Heuristik ist nur ein
+# früher, ungefährer Hinweis (VOR jeder Audio-Synthese, also ohne echte
+# Alignment-Dauer), kein verbindlicher technischer Wert.
+FOLDER_ASSET_READINESS_SHOT_MAX_SEC_HEURISTIC = 8.0
+FOLDER_ASSET_READINESS_WORDS_PER_SECOND_HEURISTIC = 2.5
+
 FOLDER_INVENTORY_SUMMARIES_FILENAME = "folder_inventory_summaries.json"
 
 DRAMATURGY_ROLE_OPENER = "opener"
