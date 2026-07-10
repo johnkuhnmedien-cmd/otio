@@ -8,7 +8,13 @@ Phase 4: build_folder_voiceover_prompt(), build_voiceover_review_prompt(),
 
 from __future__ import annotations
 
-from otio_app.defaults import BRIEF_NEGATIVE_RULE_INSTRUCTIONS, PAUSE_AFTER_CHOICES
+from otio_app.defaults import (
+    BRIEF_NEGATIVE_RULE_INSTRUCTIONS,
+    PAUSE_AFTER_CHOICES,
+    SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION,
+    SEGMENT_ASSET_PLANNING_MODE_PER_SEGMENT,
+    SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE,
+)
 from otio_app.services.voiceover_generation.models import (
     DramaturgyFolderEntry,
     DramaturgyPlan,
@@ -32,6 +38,58 @@ def _numbered_block(label: str, texts: list[str]) -> str:
     if not texts:
         return "(keine)"
     return "\n\n".join(f"[{label} {index + 1}]\n{text}" for index, text in enumerate(texts))
+
+
+_SEGMENT_ASSET_PLANNING_BLOCKS: dict[str, str] = {
+    SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE: """\
+## Shot planning for this location: ONE asset per sentence
+For this location, plan visuals per SENTENCE, not per shot. Assign exactly one \
+primary_asset_id (plus optional backup_asset_ids/second_backup_asset_ids) per \
+sentence/beat, and leave visual_asset_plan.preferred_cut_count at 1 and \
+planned_segments empty — even for longer sentences. Do not propose your own \
+multi-shot breakdown; if a sentence turns out too long for a single shot, the \
+editing system will handle the technical split automatically using your \
+primary/backup/second_backup choices.""",
+    SEGMENT_ASSET_PLANNING_MODE_PER_SEGMENT: """\
+## Shot planning for this location: split into multiple shots where it helps
+For this location, actively look for sentences/beats that describe more than \
+one distinct visual idea, or that will run long when spoken. For those, set \
+visual_asset_plan.preferred_cut_count to the number of shots it should \
+become, and fill planned_segments with one entry per shot (segment_order \
+starting at 1), each with its own genuinely fitting asset — prefer a \
+DIFFERENT asset per shot wherever the location's material allows it. Use \
+this multi-shot planning generously: more variety across the section is \
+preferred over holding a single shot for the entire sentence, as long as \
+each individual shot's asset still genuinely matches that portion of the \
+sentence.""",
+    SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION: """\
+## Shot planning for this location: your judgment — varied, but never restless
+For this location, decide sentence by sentence whether it plays best as ONE \
+calm, steady shot or as a multi-shot split (preferred_cut_count > 1 with \
+planned_segments). Balance two goals:
+- Variety across the section: don't hold the exact same single-shot pacing \
+for every sentence in a row — some visual rhythm change over the section \
+reads better than a flat, uniform rhythm.
+- Calm, not restless: within a single sentence, do NOT cut between shots \
+just to add movement. Reserve a multi-shot split for a sentence that \
+genuinely describes multiple distinct visual beats, or that clearly runs \
+long when spoken — a short, simple, atmospheric sentence should almost \
+always stay one calm shot, even if you have several genuinely fitting \
+assets available for it.
+When in doubt, prefer the calmer option (single shot).""",
+}
+
+
+def _segment_asset_planning_block(mode: str) -> str:
+    """Phase 7.1 (Asset-bewusste Cut-Plan-Vorbereitung): liefert den zum
+    gewählten Segment-Planungsmodus (FolderVoiceoverSetting.
+    segment_asset_planning_mode) passenden Prompt-Baustein. Ein unbekannter/
+    leerer Wert fällt sicher auf PER_SENTENCE zurück (heutiges Verhalten) —
+    schützt davor, dass ein ungültiger Wert versehentlich aktives
+    Multi-Shot-Planen auslöst."""
+    return _SEGMENT_ASSET_PLANNING_BLOCKS.get(
+        mode, _SEGMENT_ASSET_PLANNING_BLOCKS[SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE]
+    )
 
 
 def _active_negative_rules_block(project_brief: ProjectBrief) -> str:
@@ -438,14 +496,8 @@ without switching visuals), asset_strategy_reason (why you assigned assets this 
 and — ONLY if needs_supplement_asset is true — supplement_search_hint: a concrete, \
 location-prefixed search phrase for finding this missing visual externally (e.g. \
 "Havasu Falls waterfall woman", not just "waterfall").
-- If preferred_cut_count is greater than 1, also fill planned_segments: ONE entry per \
-shot (segment_order starting at 1, in the order they play), each with its own \
-primary_asset_id (and optionally backup_asset_ids) — the exact same rule as above \
-applies PER SHOT: only assign an asset that genuinely fits that portion of the \
-sentence, prefer a DIFFERENT asset per shot, and if a given shot genuinely has no good \
-local asset of its own, simply leave that shot's primary_asset_id empty rather than \
-forcing a mismatch (the edit will fall back to your other assets for that gap). Leave \
-planned_segments empty entirely when preferred_cut_count is 1.
+
+{_segment_asset_planning_block(setting.segment_asset_planning_mode)}
 
 ## Task
 Write ONE flowing documentary voice-over text for this location (target_words above), \
@@ -656,9 +708,13 @@ concrete supplement_reason) for beats that need a visual not covered here rather
 than omitting the detail, and only keep a long sentence/beat if it still has enough \
 distinct, usable local coverage for a later split. Only add an asset to \
 second_backup_asset_ids if it still genuinely fits that specific sentence/beat — \
-never as filler. If a sentence/beat has planned_segments (per-shot asset planning), \
-keep it consistent with any rewritten text — remove/adjust segments that no longer \
-apply, but never invent a segment's asset just to fill it.
+never as filler.
+
+{_segment_asset_planning_block(setting.segment_asset_planning_mode)}
+
+If a sentence/beat has planned_segments (per-shot asset planning), keep it \
+consistent with any rewritten text — remove/adjust segments that no longer apply, \
+but never invent a segment's asset just to fill it.
 
 Respond with JSON ONLY, no markdown code fences, no commentary, using the EXACT \
 same shape as before:

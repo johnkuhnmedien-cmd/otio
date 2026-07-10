@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import json
 
+from otio_app.defaults import SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE
 from otio_app.services.voiceover_generation.models import (
+    FolderVoiceoverSetting,
     SentenceItem,
     SentenceSegmentAssetPlan,
     VisualAssetPlanHint,
@@ -26,6 +28,20 @@ def test_sentence_item_new_fields_default_to_empty() -> None:
     assert item.second_backup_asset_ids == []
     assert item.visual_asset_plan == VisualAssetPlanHint()
     assert item.planned_segments == []
+
+
+def test_folder_voiceover_setting_defaults_to_per_sentence_segment_planning_mode() -> None:
+    """Phase 7.1: der Default darf das bestehende Verhalten NICHT ändern —
+    bestehende Projekte/Settings ohne dieses Feld erhalten automatisch
+    PER_SENTENCE (heutiges Verhalten)."""
+    setting = FolderVoiceoverSetting(folder_name="Grand Canyon")
+    assert setting.segment_asset_planning_mode == SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE
+
+
+def test_folder_voiceover_setting_parses_legacy_json_without_segment_planning_mode() -> None:
+    legacy_payload = {"folder_name": "Grand Canyon"}
+    setting = FolderVoiceoverSetting.model_validate(legacy_payload)
+    assert setting.segment_asset_planning_mode == SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE
 
 
 def test_sentence_segment_asset_plan_defaults() -> None:

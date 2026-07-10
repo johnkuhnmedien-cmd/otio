@@ -41,6 +41,7 @@ from otio_app.defaults import (
     ITEM_READINESS_MISSING_AUDIO,
     MAX_VOICEOVER_REVIEW_ATTEMPTS,
     PLAN_STATUS_TEXT_READY,
+    SEGMENT_ASSET_PLANNING_MODE_DEFAULT,
     TTS_RUN_STATUS_FAIL,
     VO_ERROR_TYPES_ALL,
     VO_ERROR_TYPES_DETERMINISTIC,
@@ -342,6 +343,11 @@ class FolderVoiceoverSetting(BaseModel):
     must_avoid: list[str] = Field(default_factory=list)
     factuality_mode: str = FACTUALITY_MODE_NORMAL_SAFE_GENERAL_KNOWLEDGE
     energy: str = ENERGY_MEDIUM
+    # Phase 7.1: steuert, wie das Autor-LLM mit Shot-Aufteilung innerhalb
+    # eines Satzes umgeht — siehe SEGMENT_ASSET_PLANNING_MODE_* in defaults.py
+    # und prompts._segment_asset_planning_block. Default bewusst so gewählt,
+    # dass sich für bestehende Projekte NICHTS automatisch ändert.
+    segment_asset_planning_mode: str = SEGMENT_ASSET_PLANNING_MODE_DEFAULT
     status: str = VOICEOVER_SETTING_STATUS_PENDING
 
 

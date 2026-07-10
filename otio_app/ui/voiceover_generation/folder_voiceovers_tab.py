@@ -8,6 +8,8 @@ from otio_app.defaults import (
     DRAMATURGY_ROLES,
     ENERGY_CHOICES,
     FACTUALITY_MODE_CHOICES,
+    SEGMENT_ASSET_PLANNING_MODE_CHOICES,
+    SEGMENT_ASSET_PLANNING_MODE_LABELS,
     VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
     VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
     VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
@@ -107,6 +109,7 @@ def _render_settings_table(project: Project, settings_doc: FolderVoiceoverSettin
             "use_commonality_with_previous": setting.use_commonality_with_previous,
             "factuality_mode": setting.factuality_mode,
             "energy": setting.energy,
+            "segment_asset_planning_mode": setting.segment_asset_planning_mode,
             "must_include": ", ".join(setting.must_include),
             "must_avoid": ", ".join(setting.must_avoid),
             "folder_extra_prompt": setting.folder_extra_prompt,
@@ -151,6 +154,18 @@ def _render_settings_table(project: Project, settings_doc: FolderVoiceoverSettin
                 "Faktentreue", options=list(FACTUALITY_MODE_CHOICES)
             ),
             "energy": st.column_config.SelectboxColumn("Energie", options=list(ENERGY_CHOICES)),
+            "segment_asset_planning_mode": st.column_config.SelectboxColumn(
+                "Shot-Planung",
+                options=list(SEGMENT_ASSET_PLANNING_MODE_CHOICES),
+                format_func=lambda mode: SEGMENT_ASSET_PLANNING_MODE_LABELS.get(mode, mode),
+                help=(
+                    "Steuert, wie das Autor-LLM mit der Aufteilung eines Satzes in mehrere "
+                    "Shots umgeht: 'Wie bisher' plant nur ein Asset pro Satz; 'Aktiv pro "
+                    "Segment aufteilen' plant bewusst mehrere Shots mit unterschiedlichen "
+                    "Assets; 'LLM entscheidet' wägt pro Satz ab (abwechslungsreich, aber "
+                    "nicht unruhig)."
+                ),
+            ),
             "must_include": st.column_config.TextColumn("Muss enthalten (Komma-getrennt)"),
             "must_avoid": st.column_config.TextColumn("Muss vermeiden (Komma-getrennt)"),
             "folder_extra_prompt": st.column_config.TextColumn("Zusatzprompt"),

@@ -645,6 +645,8 @@ def test_folder_voiceover_prompt_json_schema_includes_planned_segments() -> None
 
 
 def test_folder_voiceover_prompt_instructs_planned_segments_semantics() -> None:
+    """Default-Modus (PER_SENTENCE, Phase 7.1) — siehe eigene Mode-Tests
+    weiter unten für die anderen beiden Modi."""
     prompt = build_folder_voiceover_prompt(
         project_brief=_sample_brief(),
         style_profile=None,
@@ -654,9 +656,8 @@ def test_folder_voiceover_prompt_instructs_planned_segments_semantics() -> None:
         next_folder_name="Yellowstone",
         inventory_assets=_sample_inventory_assets(),
     )
-    assert "If preferred_cut_count is greater than 1, also fill planned_segments" in prompt
-    assert "prefer a DIFFERENT asset per shot" in prompt
-    assert "Leave planned_segments empty entirely when preferred_cut_count is 1" in prompt
+    assert "leave visual_asset_plan.preferred_cut_count at 1 and" in prompt
+    assert "planned_segments empty" in prompt
 
 
 def test_folder_voiceover_prompt_rules_require_valid_planned_segment_asset_ids() -> None:
@@ -671,6 +672,110 @@ def test_folder_voiceover_prompt_rules_require_valid_planned_segment_asset_ids()
     )
     assert "planned_segments (if used) MUST also only reference asset_id values" in prompt
     assert "segment_order MUST start at 1 and be unique" in prompt
+
+
+# --- Phase 7.1 (Asset-bewusste Cut-Plan-Vorbereitung): Segment-Planungsmodus ---
+
+
+def test_folder_voiceover_prompt_default_mode_is_per_sentence() -> None:
+    """Default (kein explizit gesetzter Modus) muss dem heutigen Verhalten
+    entsprechen — bestehende Projekte ändern sich dadurch nicht."""
+    from otio_app.defaults import SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE
+
+    setting = _sample_setting()
+    assert setting.segment_asset_planning_mode == SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE
+
+
+def test_folder_voiceover_prompt_per_sentence_mode_forbids_planned_segments() -> None:
+    from otio_app.defaults import SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE
+
+    setting = _sample_setting().model_copy(
+        update={"segment_asset_planning_mode": SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE}
+    )
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=setting,
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "ONE asset per sentence" in prompt
+    assert "Do not propose your own multi-shot breakdown" in prompt
+
+
+def test_folder_voiceover_prompt_per_segment_mode_encourages_splitting() -> None:
+    from otio_app.defaults import SEGMENT_ASSET_PLANNING_MODE_PER_SEGMENT
+
+    setting = _sample_setting().model_copy(
+        update={"segment_asset_planning_mode": SEGMENT_ASSET_PLANNING_MODE_PER_SEGMENT}
+    )
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=setting,
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "split into multiple shots where it helps" in prompt
+    assert "Use this multi-shot planning generously" in prompt
+    # Die PER_SENTENCE-spezifische Verbots-Formulierung darf NICHT auftauchen.
+    assert "Do not propose your own multi-shot breakdown" not in prompt
+
+
+def test_folder_voiceover_prompt_llm_discretion_mode_balances_variety_and_calm() -> None:
+    from otio_app.defaults import SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION
+
+    setting = _sample_setting().model_copy(
+        update={"segment_asset_planning_mode": SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION}
+    )
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=setting,
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "varied, but never restless" in prompt
+    assert "do NOT cut between shots just to add movement" in prompt
+    assert "prefer the calmer option (single shot)" in prompt
+
+
+def test_folder_voiceover_prompt_unknown_mode_falls_back_to_per_sentence() -> None:
+    """Schutz vor einem ungültigen/veralteten Wert — darf niemals
+    versehentlich aktives Multi-Shot-Planen auslösen."""
+    setting = _sample_setting().model_copy(update={"segment_asset_planning_mode": "not_a_real_mode"})
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=setting,
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "ONE asset per sentence" in prompt
+
+
+def test_voiceover_correction_prompt_respects_segment_asset_planning_mode() -> None:
+    from otio_app.defaults import SEGMENT_ASSET_PLANNING_MODE_PER_SEGMENT
+
+    setting = _sample_setting().model_copy(
+        update={"segment_asset_planning_mode": SEGMENT_ASSET_PLANNING_MODE_PER_SEGMENT}
+    )
+    prompt = build_voiceover_correction_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        setting=setting,
+        draft=_sample_draft(),
+        errors=[],
+    )
+    assert "split into multiple shots where it helps" in prompt
 
 
 def test_voiceover_correction_prompt_json_schema_includes_planned_segments() -> None:

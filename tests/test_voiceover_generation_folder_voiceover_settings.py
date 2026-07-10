@@ -442,3 +442,32 @@ def test_apply_standard_word_target_to_folder_raises_for_unknown_folder(tmp_path
 
     with pytest.raises(ValueError):
         apply_standard_word_target_to_folder(project, "Nonexistent Folder")
+
+
+# --- Phase 7.1 (Asset-bewusste Cut-Plan-Vorbereitung): Segment-Planungsmodus ---
+
+
+def test_update_folder_voiceover_settings_persists_segment_asset_planning_mode(
+    tmp_path: Path,
+) -> None:
+    from otio_app.defaults import SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION
+
+    project = _make_project_with_confirmed_dramaturgy(tmp_path)
+    document = build_default_folder_voiceover_settings(project)
+    save_folder_voiceover_settings(project, document)
+
+    edited_rows = [
+        {
+            "folder_name": "Grand Canyon",
+            "segment_asset_planning_mode": SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION,
+            "enabled": True,
+        },
+        {"folder_name": "Yellowstone", "enabled": False},
+    ]
+    updated = update_folder_voiceover_settings(project, edited_rows)
+    by_folder = {setting.folder_name: setting for setting in updated.settings}
+    assert by_folder["Grand Canyon"].segment_asset_planning_mode == SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION
+    # Andere Ordner bleiben beim Default.
+    from otio_app.defaults import SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE
+
+    assert by_folder["Yellowstone"].segment_asset_planning_mode == SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE

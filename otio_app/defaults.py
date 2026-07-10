@@ -330,6 +330,27 @@ ENERGY_LABELS = {
     ENERGY_HIGH: "Energiegeladen",
 }
 
+# --- Asset-bewusste Cut-Plan-Vorbereitung, Phase 7.1: Segment-Planungsmodus
+# (Nutzerwunsch, Juli 2026) — steuert, WIE das Autor-LLM mit Shot-Aufteilung
+# innerhalb eines Satzes umgeht (siehe prompts.py:
+# _segment_asset_planning_block). Default ist bewusst PER_SENTENCE (heutiges
+# Verhalten) — bestehende folder_voiceover_settings.json ohne dieses Feld
+# ändern dadurch NICHT ihr Verhalten.
+SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE = "per_sentence"
+SEGMENT_ASSET_PLANNING_MODE_PER_SEGMENT = "per_segment"
+SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION = "llm_discretion"
+SEGMENT_ASSET_PLANNING_MODE_CHOICES = (
+    SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE,
+    SEGMENT_ASSET_PLANNING_MODE_PER_SEGMENT,
+    SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION,
+)
+SEGMENT_ASSET_PLANNING_MODE_LABELS = {
+    SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE: "Wie bisher: 1 Asset pro Satz",
+    SEGMENT_ASSET_PLANNING_MODE_PER_SEGMENT: "Aktiv pro Segment aufteilen",
+    SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION: "LLM entscheidet (abwechslungsreich, aber ruhig)",
+}
+SEGMENT_ASSET_PLANNING_MODE_DEFAULT = SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE
+
 VOICEOVER_STATUS_DRAFT = "DRAFT"
 VOICEOVER_STATUS_NEEDS_VALIDATION = "NEEDS_VALIDATION"
 VOICEOVER_STATUS_PASS = "PASS"

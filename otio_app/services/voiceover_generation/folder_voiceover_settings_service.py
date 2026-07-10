@@ -156,6 +156,7 @@ def update_folder_voiceover_settings(
             "folder_extra_prompt",
             "factuality_mode",
             "energy",
+            "segment_asset_planning_mode",
             "status",
         ):
             if key in row:
