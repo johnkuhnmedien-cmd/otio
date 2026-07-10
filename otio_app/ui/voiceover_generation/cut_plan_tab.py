@@ -33,6 +33,7 @@ from otio_app.defaults import (
     CUT_PLAN_ASSET_SELECTION_PRIMARY_USED,
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED,
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_USED,
+    CUT_PLAN_AUTO_RESOLVE_PROVIDER_LOCAL_REUSE,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
     CUT_PLAN_VALIDATION_STATUS_BLOCKED,
     CUT_PLAN_VALIDATION_STATUS_PASS,
@@ -1102,6 +1103,8 @@ def _format_auto_resolve_asset_type(asset_type: str) -> str:
 
 
 def _format_auto_resolve_provider(provider: str) -> str:
+    if provider == CUT_PLAN_AUTO_RESOLVE_PROVIDER_LOCAL_REUSE:
+        return "Lokale Wiederverwendung"
     return SUPPLEMENT_SOURCE_LABELS.get(provider, provider or "—")
 
 

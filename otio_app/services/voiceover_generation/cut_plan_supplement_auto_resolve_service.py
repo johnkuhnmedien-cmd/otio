@@ -5,6 +5,15 @@ Bridge (LLM-Suchqueries, Provider-Suche über Video+Foto, Download) mit einer
 kombinierten Gemini-Beschreibung+-Validierung des heruntergeladenen
 Materials zu einem einzigen automatischen Ablauf für EINEN Request:
 
+  0. Phase E (Nutzervorgabe, Juli 2026): BEVOR überhaupt extern gesucht
+     wird, prüft der Auto-Resolver, ob bereits ein für DENSELBEN Ordner
+     heruntergeladenes Supplement-Asset aus einem FRÜHEREN Request
+     wiederverwendet werden kann (siehe find_reusable_local_supplement_
+     candidate, supplement_manifest.json) — spart externe Suche/Lizenz-
+     kosten. Läuft durch DIESELBE Download-/Gemini-Prüfungs-/Akzeptanz-
+     Pipeline wie jeder andere Kandidat (kein automatisches PASS ohne
+     echte KI-Prüfung für DIESE Szene) — schlägt die Prüfung fehl, geht es
+     normal mit Schritt 1 weiter.
   1. Provider der Reihe nach durchsuchen (Phase 12.5:
      CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER = Adobe Stock, dann Pexels —
      Nutzervorgabe: Adobe zuerst, weil unlimited Plan + sofortige
@@ -69,6 +78,13 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from otio_app.defaults import (
+    AUDIO_SCOPE_FOLDER,
+    CUT_PLAN_ASSET_SELECTION_BLOCKED,
+    CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED,
+    CUT_PLAN_AUTO_RESOLVE_PROVIDER_LOCAL_REUSE,
+    CUT_PLAN_DEFAULT_MAX_ASSET_USAGE,
+    CUT_PLAN_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS,
+    CUT_PLAN_DEFAULT_VIDEO_HEAD_TRIM_SEC,
     CUT_PLAN_SUPPLEMENT_CANDIDATES_STATUS_READY,
     CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER,
 )
@@ -83,6 +99,7 @@ from otio_app.services.gemini_client import (
 from otio_app.services.media_utils import is_image_media
 from otio_app.services.supplement_coverage import derive_must_show_keywords
 from otio_app.services.voiceover_generation.cut_plan_asset_selector import settings_from_snapshot
+from otio_app.services.voiceover_generation.cut_plan_models import CutPlanDocument
 from otio_app.services.voiceover_generation.cut_plan_builder import load_cut_plan_draft
 from otio_app.services.voiceover_generation.cut_plan_generic_fallback_service import (
     apply_generic_fallback_for_cut_plan_request,
@@ -91,8 +108,10 @@ from otio_app.services.voiceover_generation.cut_plan_models import CutPlanSettin
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     accept_cut_plan_supplement_candidate,
     download_cut_plan_supplement_candidate,
+    load_cut_plan_supplement_manifest,
     load_cut_plan_supplement_requests,
     search_candidates_for_cut_plan_request,
+    stable_supplement_asset_id,
     update_cut_plan_supplement_request,
 )
 from otio_app.services.voiceover_generation.cut_plan_supplement_query_service import (
@@ -104,6 +123,7 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_models import (
     CutPlanSupplementAutoResolveAttempt,
     CutPlanSupplementCandidate,
     CutPlanSupplementCandidatesDocument,
+    CutPlanSupplementManifestEntry,
     CutPlanSupplementRequest,
 )
 
@@ -129,6 +149,7 @@ __all__ = [
     "CutPlanSupplementAutoResolveResult",
     "auto_resolve_cut_plan_supplement_request",
     "auto_resolve_all_cut_plan_supplement_requests",
+    "find_reusable_local_supplement_candidate",
 ]
 
 AUTO_RESOLVE_PROGRESS_QUERY_GENERATION_STARTED = "query_generation_started"
@@ -331,6 +352,148 @@ def _candidate_is_too_short(
     return is_too_short, usable_duration_sec
 
 
+def find_reusable_local_supplement_candidate(
+    project: Project,
+    request: CutPlanSupplementRequest,
+    *,
+    cut_plan_settings: CutPlanSettings | None,
+    cut_plan_draft: CutPlanDocument | None,
+) -> CutPlanSupplementManifestEntry | None:
+    """Phase E (Nutzervorgabe, Juli 2026): bevor eine neue externe Suche
+    (Adobe/Pexels) ausgelöst wird, prüft der Auto-Resolver, ob bereits ein
+    für DIESEN Ordner heruntergeladenes Supplement-Asset aus einem
+    FRÜHEREN Request wiederverwendet werden kann — spart Kosten/
+    Lizenzkontingent und verhindert, dass ein bereits vorhandenes,
+    passendes Asset ignoriert wird, nur weil es ursprünglich für ein
+    ANDERES Cut-Item beschafft wurde. Nur für Folder-Requests (source_
+    scope == folder) — beim Intro gibt es keine sinnvolle Ordner-Zuordnung.
+
+    Konservative Sicherheitsprüfungen (zusätzlich zur regulären, später
+    laufenden vollständigen Cut-Plan-Validierung — hier soll aber schon
+    VOR dem teuren Gemini-Aufruf ein offensichtlich ungeeigneter Kandidat
+    ausgeschlossen werden):
+    - Datei muss noch auf der Platte existieren.
+    - Video muss nach video_head_trim_sec lang genug für die benötigte
+      Dauer sein (Bilder gelten als beliebig haltbar, §3).
+    - max_asset_usage darf laut aktuellem Draft (asset_usage_summary)
+      nicht bereits erreicht sein.
+    - Innerhalb von min_asset_reuse_distance_shots (gezählt in Cut-Plan-
+      Items DESSELBEN Ordners, in Timeline-Reihenfolge) darf dasselbe
+      Asset nicht bereits verwendet worden sein.
+
+    'Video vor Foto' (Nutzervorgabe) gilt auch hier — liefert bevorzugt
+    ein Video-Manifest-Asset, falls eines die obigen Prüfungen besteht,
+    sonst ein Foto-Manifest-Asset. Liefert None, wenn kein Manifest-
+    Eintrag geeignet ist — der Aufrufer fährt dann normal mit der
+    externen Suche fort."""
+    if request.source_scope != AUDIO_SCOPE_FOLDER or not request.folder_name:
+        return None
+    manifest = load_cut_plan_supplement_manifest(project)
+    if not manifest.entries:
+        return None
+
+    max_asset_usage = cut_plan_settings.max_asset_usage if cut_plan_settings else CUT_PLAN_DEFAULT_MAX_ASSET_USAGE
+    min_reuse_distance = (
+        cut_plan_settings.min_asset_reuse_distance_shots
+        if cut_plan_settings
+        else CUT_PLAN_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS
+    )
+    video_head_trim_sec = (
+        cut_plan_settings.video_head_trim_sec if cut_plan_settings else CUT_PLAN_DEFAULT_VIDEO_HEAD_TRIM_SEC
+    )
+
+    folder_items = (
+        [item for item in cut_plan_draft.items if item.folder_name == request.folder_name]
+        if cut_plan_draft is not None
+        else []
+    )
+    target_index = next(
+        (index for index, item in enumerate(folder_items) if item.cut_item_id == request.cut_item_id), None
+    )
+    asset_usage_summary = cut_plan_draft.asset_usage_summary if cut_plan_draft is not None else {}
+
+    def _violates_reuse_distance(stable_asset_id: str) -> bool:
+        if target_index is None:
+            return False
+        min_required = max(1, min_reuse_distance)
+        for index, item in enumerate(folder_items):
+            if item.chosen_asset_id != stable_asset_id:
+                continue
+            if index == target_index:
+                continue
+            if abs(index - target_index) <= min_required:
+                return True
+        return False
+
+    candidates_by_type: dict[str, list[CutPlanSupplementManifestEntry]] = {"video": [], "image": []}
+    for entry in manifest.entries:
+        if entry.folder_name != request.folder_name:
+            continue
+        if not Path(entry.asset_path).is_file():
+            continue
+        if entry.asset_type == "video":
+            usable_duration_sec = max(0.0, entry.duration_sec - video_head_trim_sec)
+            if request.needed_duration_sec > usable_duration_sec + _AUTO_RESOLVE_DURATION_EPSILON:
+                continue
+        stable_id = stable_supplement_asset_id(entry.provider, entry.provider_asset_id, "", "")
+        if asset_usage_summary.get(stable_id, 0) >= max_asset_usage:
+            continue
+        if _violates_reuse_distance(stable_id):
+            continue
+        candidates_by_type.setdefault(entry.asset_type, []).append(entry)
+
+    for asset_type in _AUTO_RESOLVE_ASSET_TYPE_SEARCH_ORDER:
+        if candidates_by_type.get(asset_type):
+            return candidates_by_type[asset_type][0]
+    return None
+
+
+def _candidate_from_manifest_entry(
+    entry: CutPlanSupplementManifestEntry, request: CutPlanSupplementRequest
+) -> CutPlanSupplementCandidate:
+    """Baut einen Kandidaten aus einem bereits heruntergeladenen Manifest-
+    Eintrag (Phase E) — fließt durch DIESELBE Download-/Gemini-Prüfungs-/
+    Akzeptanz-Pipeline wie jeder frisch gesuchte Kandidat.
+    provider_candidate_snapshot enthält bewusst dieselbe provider_
+    asset_id, damit download_cut_plan_supplement_candidate automatisch die
+    Kopie aus dem Manifest verwendet, statt erneut zu suchen/lizenzieren/
+    herunterzuladen (siehe find_reusable_supplement_manifest_entry in
+    cut_plan_supplement_bridge.py)."""
+    snapshot = {
+        "candidate_id": f"reuse_{entry.provider}_{entry.provider_asset_id or entry.asset_id}",
+        "supplement_request_id": request.request_id,
+        "provider": entry.provider,
+        "provider_asset_id": entry.provider_asset_id,
+        "media_type": entry.asset_type,
+        "width": entry.width,
+        "height": entry.height,
+        "duration_sec": entry.duration_sec,
+        "download_url": "",
+        "download_enabled": True,
+        "is_mock": False,
+        "requires_user_approval": False,
+        "license": entry.license,
+        "source_page_url": entry.source_url,
+        "folder_name": entry.folder_name,
+        "match_score": 1.0,
+    }
+    return CutPlanSupplementCandidate(
+        candidate_id=str(snapshot["candidate_id"]),
+        request_id=request.request_id,
+        provider=entry.provider,
+        title=f"Wiederverwendetes Supplement-Asset ({entry.provider})",
+        description="Bereits heruntergeladenes Stock-Asset, wiederverwendet ohne erneute Lizenzierung.",
+        asset_type=entry.asset_type,
+        width=entry.width,
+        height=entry.height,
+        duration_sec=entry.duration_sec,
+        license=entry.license,
+        source_url=entry.source_url,
+        score=1.0,
+        provider_candidate_snapshot=snapshot,
+    )
+
+
 @dataclass
 class CutPlanSupplementAutoResolveResult:
     status: str  # ACCEPTED | GENERIC_FALLBACK_USED | NO_MATCH | FAILED
@@ -516,6 +679,217 @@ def auto_resolve_cut_plan_supplement_request(
     if request is None:
         raise ValueError(f"Supplement Request '{request_id}' nicht gefunden.")
 
+    attempts: list[CutPlanSupplementAutoResolveAttempt] = []
+
+    def _try_candidate(
+        candidate: CutPlanSupplementCandidate,
+        *,
+        stage_index: int,
+        stage_total: int,
+        query_label: str,
+        cut_plan_settings: CutPlanSettings | None,
+        validation_model: str,
+    ) -> CutPlanSupplementAutoResolveResult | None:
+        """Lädt/prüft/akzeptiert GENAU EINEN Kandidaten (ein regulärer
+        Stock-Suchtreffer ODER ein aus einem Manifest-Eintrag
+        rekonstruierter Wiederverwendungs-Kandidat, siehe
+        find_reusable_local_supplement_candidate/_candidate_from_manifest_
+        entry) — extrahiert aus der ursprünglichen Inline-Schleife, damit
+        Phase E (lokale Wiederverwendung VOR externer Suche) dieselbe
+        Download-/Gemini-Prüfungs-/Akzeptanz-Logik nutzen kann, ohne sie
+        zu duplizieren. Mutiert `attempts` (append/replace) genau wie die
+        ursprüngliche Schleife. Gibt ein Ergebnis zurück, sobald DIESER
+        Kandidat akzeptiert wurde — sonst None (Aufrufer versucht den
+        nächsten Kandidaten/die nächste Stufe)."""
+        too_short, usable_duration_sec = _candidate_is_too_short(
+            candidate, needed_duration_sec=request.needed_duration_sec, cut_plan_settings=cut_plan_settings
+        )
+        if too_short:
+            too_short_reason = (
+                f"Kandidat laut Provider-Metadaten zu kurz: benötigt "
+                f"{request.needed_duration_sec:.2f}s, verfügbar {usable_duration_sec:.2f}s nach "
+                "video_head_trim_sec — kein Download/keine Lizenzierung ausgelöst."
+            )
+            attempts.append(
+                CutPlanSupplementAutoResolveAttempt(
+                    candidate_id=candidate.candidate_id,
+                    provider=candidate.provider,
+                    asset_type=candidate.asset_type,
+                    validation_status=VALIDATION_STATUS_TOO_SHORT,
+                    validation_reason=too_short_reason,
+                )
+            )
+            _emit_progress(
+                progress_callback,
+                AutoResolveProgressEvent(
+                    event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
+                    request_id=request_id,
+                    stage_index=stage_index,
+                    stage_total=stage_total,
+                    provider=candidate.provider,
+                    asset_type=candidate.asset_type,
+                    query=query_label,
+                    candidate_id=candidate.candidate_id,
+                    candidate_title=candidate.title,
+                    duration_sec=candidate.duration_sec,
+                    validation_status=VALIDATION_STATUS_TOO_SHORT,
+                    validation_reason=too_short_reason,
+                ),
+            )
+            return None
+
+        try:
+            downloaded_asset: CutPlanSupplementAsset = download_cut_plan_supplement_candidate(
+                project, request_id, candidate
+            )
+        except Exception as exc:  # noqa: BLE001 — ein fehlgeschlagener Download darf nicht abbrechen
+            attempts.append(
+                CutPlanSupplementAutoResolveAttempt(
+                    candidate_id=candidate.candidate_id,
+                    provider=candidate.provider,
+                    asset_type=candidate.asset_type,
+                    validation_status="DOWNLOAD_FAILED",
+                    validation_reason=str(exc),
+                )
+            )
+            _emit_progress(
+                progress_callback,
+                AutoResolveProgressEvent(
+                    event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
+                    request_id=request_id,
+                    stage_index=stage_index,
+                    stage_total=stage_total,
+                    provider=candidate.provider,
+                    asset_type=candidate.asset_type,
+                    query=query_label,
+                    candidate_id=candidate.candidate_id,
+                    candidate_title=candidate.title,
+                    duration_sec=candidate.duration_sec,
+                    validation_status="DOWNLOAD_FAILED",
+                    validation_reason=str(exc),
+                ),
+            )
+            return None
+
+        analysis = _describe_and_validate_downloaded_asset(
+            project,
+            request=request,
+            candidate_id=candidate.candidate_id,
+            asset_path=downloaded_asset.asset_path,
+            validation_model=validation_model,
+        )
+        attempt = CutPlanSupplementAutoResolveAttempt(
+            candidate_id=candidate.candidate_id,
+            provider=candidate.provider,
+            asset_type=candidate.asset_type,
+            validation_status=str(analysis.get("status", "")),
+            validation_score=float(analysis.get("score", 0.0)),
+            validation_reason=str(analysis.get("reason", "")),
+            description=str(analysis.get("description", "")),
+        )
+        attempts.append(attempt)
+
+        if str(analysis.get("status")) == VALIDATION_STATUS_PASS:
+            # Phase 12.6: die tatsächliche, per ffprobe gemessene Dauer
+            # (downloaded_asset.duration_sec) kann von den Provider-
+            # Metadaten abweichen — apply_accepted_supplement_to_cut_
+            # plan_item wirft in diesem Fall ValueError. Vorher hätte das
+            # den gesamten Batch abgebrochen (unbehandelte Exception);
+            # jetzt wird der Kandidat als ACCEPT_FAILED protokolliert und
+            # mit dem NÄCHSTEN Kandidaten weitergemacht.
+            try:
+                accept_cut_plan_supplement_candidate(
+                    project, request_id, candidate.candidate_id, downloaded_asset=downloaded_asset
+                )
+            except ValueError as exc:
+                accept_failed_reason = (
+                    "Gemini-Prüfung bestanden, aber Übernahme fehlgeschlagen "
+                    f"(tatsächliche Dauer abweichend?): {exc}"
+                )
+                attempts[-1] = attempts[-1].model_copy(
+                    update={
+                        "validation_status": VALIDATION_STATUS_ACCEPT_FAILED,
+                        "validation_reason": accept_failed_reason,
+                    }
+                )
+                _emit_progress(
+                    progress_callback,
+                    AutoResolveProgressEvent(
+                        event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
+                        request_id=request_id,
+                        stage_index=stage_index,
+                        stage_total=stage_total,
+                        provider=candidate.provider,
+                        asset_type=candidate.asset_type,
+                        query=query_label,
+                        candidate_id=candidate.candidate_id,
+                        candidate_title=candidate.title,
+                        duration_sec=downloaded_asset.duration_sec or candidate.duration_sec,
+                        validation_status=VALIDATION_STATUS_ACCEPT_FAILED,
+                        validation_reason=accept_failed_reason,
+                    ),
+                )
+                return None
+            update_cut_plan_supplement_request(
+                project,
+                request_id,
+                auto_resolve_status=AUTO_RESOLVE_STATUS_ACCEPTED,
+                auto_resolve_attempts=attempts,
+            )
+            _emit_progress(
+                progress_callback,
+                AutoResolveProgressEvent(
+                    event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
+                    request_id=request_id,
+                    stage_index=stage_index,
+                    stage_total=stage_total,
+                    provider=candidate.provider,
+                    asset_type=candidate.asset_type,
+                    query=query_label,
+                    candidate_id=candidate.candidate_id,
+                    candidate_title=candidate.title,
+                    duration_sec=downloaded_asset.duration_sec or candidate.duration_sec,
+                    validation_status=VALIDATION_STATUS_PASS,
+                    validation_reason=attempt.validation_reason,
+                ),
+            )
+            result = CutPlanSupplementAutoResolveResult(
+                status=AUTO_RESOLVE_STATUS_ACCEPTED,
+                request_id=request_id,
+                accepted_candidate_id=candidate.candidate_id,
+                accepted_asset_id=downloaded_asset.asset_id,
+                attempts=attempts,
+            )
+            _emit_progress(
+                progress_callback,
+                AutoResolveProgressEvent(
+                    event_type=AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED,
+                    request_id=request_id,
+                    result_status=result.status,
+                    message=f"Kandidat `{candidate.candidate_id}` automatisch akzeptiert.",
+                ),
+            )
+            return result
+
+        _emit_progress(
+            progress_callback,
+            AutoResolveProgressEvent(
+                event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
+                request_id=request_id,
+                stage_index=stage_index,
+                stage_total=stage_total,
+                provider=candidate.provider,
+                asset_type=candidate.asset_type,
+                query=query_label,
+                candidate_id=candidate.candidate_id,
+                candidate_title=candidate.title,
+                duration_sec=downloaded_asset.duration_sec or candidate.duration_sec,
+                validation_status=attempt.validation_status,
+                validation_reason=attempt.validation_reason,
+            ),
+        )
+        return None
+
     # Phase 12.6: Cut-Plan-Settings (insb. video_head_trim_sec) VORAB laden,
     # um Video-Kandidaten schon vor Download/Lizenzierung als offensichtlich
     # zu kurz erkennen zu können — kein Draft vorhanden (sollte praktisch
@@ -525,8 +899,57 @@ def auto_resolve_cut_plan_supplement_request(
     cut_plan_draft = load_cut_plan_draft(project)
     cut_plan_settings = settings_from_snapshot(project, cut_plan_draft) if cut_plan_draft is not None else None
 
-    attempts: list[CutPlanSupplementAutoResolveAttempt] = []
     search_errors: list[str] = []
+
+    # Phase 12.7: jede Kombination aus Provider (Phase 12.5-Reihenfolge) und
+    # Medientyp (Video vor Foto, Nutzervorgabe) ist eine eigene Suchstufe —
+    # ergibt z. B. [(adobe_stock, video), (adobe_stock, image),
+    # (pexels, video), (pexels, image)]. Jede Stufe fragt höchstens
+    # _AUTO_RESOLVE_MAX_CANDIDATES_PER_STAGE (2) Kandidaten an. Vorab
+    # berechnet (statt erst nach der LLM-Query-Generierung), damit Phase E
+    # (lokale Wiederverwendung, siehe unten) bereits stage_total für ihre
+    # Progress-Events kennt.
+    stages = [
+        (provider, asset_type)
+        for provider in CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER
+        for asset_type in _AUTO_RESOLVE_ASSET_TYPE_SEARCH_ORDER
+    ]
+    stage_total = len(stages)
+
+    # Phase E (Nutzervorgabe, Juli 2026): BEVOR überhaupt extern gesucht
+    # wird (und damit auch VOR der LLM-Query-Generierung, die dafür
+    # unnötig wäre) — prüfen, ob ein bereits heruntergeladenes Supplement-
+    # Asset aus einem früheren Request für DIESEN Ordner wiederverwendet
+    # werden kann. Läuft durch dieselbe Download-/Gemini-Prüfungs-/
+    # Akzeptanz-Pipeline wie jeder andere Kandidat.
+    reusable_entry = find_reusable_local_supplement_candidate(
+        project, request, cut_plan_settings=cut_plan_settings, cut_plan_draft=cut_plan_draft
+    )
+    if reusable_entry is not None:
+        reuse_candidate = _candidate_from_manifest_entry(reusable_entry, request)
+        _emit_progress(
+            progress_callback,
+            AutoResolveProgressEvent(
+                event_type=AUTO_RESOLVE_PROGRESS_STAGE_STARTED,
+                request_id=request_id,
+                stage_index=0,
+                stage_total=stage_total,
+                provider=CUT_PLAN_AUTO_RESOLVE_PROVIDER_LOCAL_REUSE,
+                asset_type=reuse_candidate.asset_type,
+                query="—",
+                message="Bereits heruntergeladenes Supplement-Asset gefunden — wird vor neuer Suche geprüft.",
+            ),
+        )
+        reuse_result = _try_candidate(
+            reuse_candidate,
+            stage_index=0,
+            stage_total=stage_total,
+            query_label="lokale Wiederverwendung",
+            cut_plan_settings=cut_plan_settings,
+            validation_model=validation_model,
+        )
+        if reuse_result is not None:
+            return reuse_result
 
     _prepare_llm_queries_for_auto_resolve(
         project,
@@ -537,18 +960,6 @@ def auto_resolve_cut_plan_supplement_request(
         progress_callback=progress_callback,
     )
     skip_llm_query_generation = bool(query_llm_provider and query_llm_model)
-
-    # Phase 12.7: jede Kombination aus Provider (Phase 12.5-Reihenfolge) und
-    # Medientyp (Video vor Foto, Nutzervorgabe) ist eine eigene Suchstufe —
-    # ergibt z. B. [(adobe_stock, video), (adobe_stock, image),
-    # (pexels, video), (pexels, image)]. Jede Stufe fragt höchstens
-    # _AUTO_RESOLVE_MAX_CANDIDATES_PER_STAGE (2) Kandidaten an.
-    stages = [
-        (provider, asset_type)
-        for provider in CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER
-        for asset_type in _AUTO_RESOLVE_ASSET_TYPE_SEARCH_ORDER
-    ]
-    stage_total = len(stages)
 
     for stage_index, (provider, asset_type) in enumerate(stages, start=1):
         stage_label = f"{provider}/{asset_type}"
@@ -619,198 +1030,16 @@ def auto_resolve_cut_plan_supplement_request(
         )
 
         for candidate in candidates_document.candidates[:_AUTO_RESOLVE_MAX_CANDIDATES_PER_STAGE]:
-            # Phase 12.6: offensichtlich zu kurze Video-Kandidaten (anhand der
-            # vom Provider gemeldeten Dauer) werden NICHT heruntergeladen/
-            # lizenziert — verhindert unnötige Adobe-Lizenzkäufe für Videos,
-            # die das Item ohnehin nie füllen könnten (siehe
-            # _candidate_is_too_short).
-            too_short, usable_duration_sec = _candidate_is_too_short(
-                candidate, needed_duration_sec=request.needed_duration_sec, cut_plan_settings=cut_plan_settings
-            )
-            if too_short:
-                too_short_reason = (
-                    f"Kandidat laut Provider-Metadaten zu kurz: benötigt "
-                    f"{request.needed_duration_sec:.2f}s, verfügbar {usable_duration_sec:.2f}s nach "
-                    "video_head_trim_sec — kein Download/keine Lizenzierung ausgelöst."
-                )
-                attempts.append(
-                    CutPlanSupplementAutoResolveAttempt(
-                        candidate_id=candidate.candidate_id,
-                        provider=candidate.provider,
-                        asset_type=candidate.asset_type,
-                        validation_status=VALIDATION_STATUS_TOO_SHORT,
-                        validation_reason=too_short_reason,
-                    )
-                )
-                _emit_progress(
-                    progress_callback,
-                    AutoResolveProgressEvent(
-                        event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
-                        request_id=request_id,
-                        stage_index=stage_index,
-                        stage_total=stage_total,
-                        provider=candidate.provider,
-                        asset_type=candidate.asset_type,
-                        query=query_label,
-                        candidate_id=candidate.candidate_id,
-                        candidate_title=candidate.title,
-                        duration_sec=candidate.duration_sec,
-                        validation_status=VALIDATION_STATUS_TOO_SHORT,
-                        validation_reason=too_short_reason,
-                    ),
-                )
-                continue
-
-            try:
-                downloaded_asset: CutPlanSupplementAsset = download_cut_plan_supplement_candidate(
-                    project, request_id, candidate
-                )
-            except Exception as exc:  # noqa: BLE001 — ein fehlgeschlagener Download darf nicht abbrechen
-                attempts.append(
-                    CutPlanSupplementAutoResolveAttempt(
-                        candidate_id=candidate.candidate_id,
-                        provider=candidate.provider,
-                        asset_type=candidate.asset_type,
-                        validation_status="DOWNLOAD_FAILED",
-                        validation_reason=str(exc),
-                    )
-                )
-                _emit_progress(
-                    progress_callback,
-                    AutoResolveProgressEvent(
-                        event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
-                        request_id=request_id,
-                        stage_index=stage_index,
-                        stage_total=stage_total,
-                        provider=candidate.provider,
-                        asset_type=candidate.asset_type,
-                        query=query_label,
-                        candidate_id=candidate.candidate_id,
-                        candidate_title=candidate.title,
-                        duration_sec=candidate.duration_sec,
-                        validation_status="DOWNLOAD_FAILED",
-                        validation_reason=str(exc),
-                    ),
-                )
-                continue
-
-            analysis = _describe_and_validate_downloaded_asset(
-                project,
-                request=request,
-                candidate_id=candidate.candidate_id,
-                asset_path=downloaded_asset.asset_path,
+            result = _try_candidate(
+                candidate,
+                stage_index=stage_index,
+                stage_total=stage_total,
+                query_label=query_label,
+                cut_plan_settings=cut_plan_settings,
                 validation_model=validation_model,
             )
-            attempt = CutPlanSupplementAutoResolveAttempt(
-                candidate_id=candidate.candidate_id,
-                provider=candidate.provider,
-                asset_type=candidate.asset_type,
-                validation_status=str(analysis.get("status", "")),
-                validation_score=float(analysis.get("score", 0.0)),
-                validation_reason=str(analysis.get("reason", "")),
-                description=str(analysis.get("description", "")),
-            )
-            attempts.append(attempt)
-
-            if str(analysis.get("status")) == VALIDATION_STATUS_PASS:
-                # Phase 12.6: die tatsächliche, per ffprobe gemessene Dauer
-                # (downloaded_asset.duration_sec) kann von den Provider-
-                # Metadaten abweichen — apply_accepted_supplement_to_cut_
-                # plan_item wirft in diesem Fall ValueError. Vorher hätte das
-                # den gesamten Batch abgebrochen (unbehandelte Exception);
-                # jetzt wird der Kandidat als ACCEPT_FAILED protokolliert und
-                # mit dem NÄCHSTEN Kandidaten weitergemacht.
-                try:
-                    accept_cut_plan_supplement_candidate(
-                        project, request_id, candidate.candidate_id, downloaded_asset=downloaded_asset
-                    )
-                except ValueError as exc:
-                    accept_failed_reason = (
-                        "Gemini-Prüfung bestanden, aber Übernahme fehlgeschlagen "
-                        f"(tatsächliche Dauer abweichend?): {exc}"
-                    )
-                    attempts[-1] = attempts[-1].model_copy(
-                        update={
-                            "validation_status": VALIDATION_STATUS_ACCEPT_FAILED,
-                            "validation_reason": accept_failed_reason,
-                        }
-                    )
-                    _emit_progress(
-                        progress_callback,
-                        AutoResolveProgressEvent(
-                            event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
-                            request_id=request_id,
-                            stage_index=stage_index,
-                            stage_total=stage_total,
-                            provider=candidate.provider,
-                            asset_type=candidate.asset_type,
-                            query=query_label,
-                            candidate_id=candidate.candidate_id,
-                            candidate_title=candidate.title,
-                            duration_sec=downloaded_asset.duration_sec or candidate.duration_sec,
-                            validation_status=VALIDATION_STATUS_ACCEPT_FAILED,
-                            validation_reason=accept_failed_reason,
-                        ),
-                    )
-                    continue
-                update_cut_plan_supplement_request(
-                    project,
-                    request_id,
-                    auto_resolve_status=AUTO_RESOLVE_STATUS_ACCEPTED,
-                    auto_resolve_attempts=attempts,
-                )
-                _emit_progress(
-                    progress_callback,
-                    AutoResolveProgressEvent(
-                        event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
-                        request_id=request_id,
-                        stage_index=stage_index,
-                        stage_total=stage_total,
-                        provider=candidate.provider,
-                        asset_type=candidate.asset_type,
-                        query=query_label,
-                        candidate_id=candidate.candidate_id,
-                        candidate_title=candidate.title,
-                        duration_sec=downloaded_asset.duration_sec or candidate.duration_sec,
-                        validation_status=VALIDATION_STATUS_PASS,
-                        validation_reason=attempt.validation_reason,
-                    ),
-                )
-                result = CutPlanSupplementAutoResolveResult(
-                    status=AUTO_RESOLVE_STATUS_ACCEPTED,
-                    request_id=request_id,
-                    accepted_candidate_id=candidate.candidate_id,
-                    accepted_asset_id=downloaded_asset.asset_id,
-                    attempts=attempts,
-                )
-                _emit_progress(
-                    progress_callback,
-                    AutoResolveProgressEvent(
-                        event_type=AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED,
-                        request_id=request_id,
-                        result_status=result.status,
-                        message=f"Kandidat `{candidate.candidate_id}` automatisch akzeptiert.",
-                    ),
-                )
+            if result is not None:
                 return result
-
-            _emit_progress(
-                progress_callback,
-                AutoResolveProgressEvent(
-                    event_type=AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
-                    request_id=request_id,
-                    stage_index=stage_index,
-                    stage_total=stage_total,
-                    provider=candidate.provider,
-                    asset_type=candidate.asset_type,
-                    query=query_label,
-                    candidate_id=candidate.candidate_id,
-                    candidate_title=candidate.title,
-                    duration_sec=downloaded_asset.duration_sec or candidate.duration_sec,
-                    validation_status=attempt.validation_status,
-                    validation_reason=attempt.validation_reason,
-                ),
-            )
         # Kein Kandidat dieser Suchstufe (Provider + Medientyp) hat bestanden
         # -> nächste Stufe in der Reihenfolge versuchen (Phase 12.7: erst
         # der andere Medientyp desselben Providers, dann der nächste

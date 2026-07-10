@@ -48,13 +48,20 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     accept_cut_plan_supplement_candidate,
     apply_accepted_supplement_to_cut_plan_item,
     build_supplement_requests_from_cut_plan,
+    download_cut_plan_supplement_candidate,
+    find_reusable_supplement_manifest_entry,
     load_cut_plan_supplement_candidates_for_request,
+    load_cut_plan_supplement_manifest,
     load_cut_plan_supplement_requests,
+    record_supplement_manifest_entry,
+    save_cut_plan_supplement_manifest,
     save_cut_plan_supplement_requests,
     search_candidates_for_cut_plan_request,
+    stable_supplement_asset_id,
 )
 from otio_app.services.voiceover_generation.cut_plan_supplement_models import (
     CutPlanSupplementAsset,
+    CutPlanSupplementManifestEntry,
     CutPlanSupplementRequest,
 )
 from otio_app.services.voiceover_generation.final_plan_service import (
@@ -147,12 +154,13 @@ def _project_with_supplement_required_draft(tmp_path: Path) -> Project:
 
 def _fake_candidate(
     *, candidate_id: str = "cand_fake01", media_type: str = "video", duration_sec: float = 10.0,
-    request_id: str = "cutreq_x",
+    request_id: str = "cutreq_x", provider_asset_id: str = "", folder_name: str = "",
 ) -> SupplementCandidate:
     return SupplementCandidate(
         candidate_id=candidate_id,
         supplement_request_id=request_id,
         provider="pexels",
+        provider_asset_id=provider_asset_id,
         title="Fake Canyon",
         media_type=media_type,
         width=1920,
@@ -163,6 +171,7 @@ def _fake_candidate(
         is_mock=False,
         requires_user_approval=False,
         match_score=0.9,
+        folder_name=folder_name,
     )
 
 
@@ -738,6 +747,236 @@ def test_provider_error_produces_failed_without_leaking_api_key(tmp_path: Path, 
     assert result.status == "FAILED"
     assert "SECRET_TOKEN_VALUE" not in result.error_message
     assert "[REDACTED]" in result.error_message
+
+
+# --- Phase E: Supplement-Manifest (Dedup + Wiederverwendung) ---
+
+
+def _project_with_request(tmp_path: Path, *, folder_name: str = FOLDER_A) -> tuple[Project, str]:
+    """Baut ein Projekt mit genau einem offenen Supplement Request und gibt
+    (project, request_id) zurück — Helper für die Phase-E-Manifest-Tests."""
+    project = _make_project(tmp_path)
+    _write_inventory(project, [])
+    audio_path = _write_audio(project)
+    folder = ConfirmedFolderPlanItem(
+        folder_name=folder_name,
+        order_index=1,
+        audio_path=str(audio_path),
+        audio_duration_sec=5.0,
+        sentence_items=[
+            SentenceItem(
+                sentence_id="sentence_001", text="Ein Satz.", visual_intent="x",
+                needs_supplement_asset=True, supplement_reason="No local asset.",
+            )
+        ],
+        alignment_items=[
+            AlignmentItem(sentence_id="sentence_001", audio_start_sec=0.0, audio_end_sec=5.0, duration_sec=5.0)
+        ],
+    )
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id, intro=ConfirmedIntroPlanItem(), folders=[folder]
+    )
+    save_confirmed_voiceover_project_plan(project, plan)
+    save_cut_plan_settings(project, CutPlanSettings(project_id=project.id))
+    draft = build_cut_plan_draft(project)
+    save_cut_plan_draft(project, draft)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    return project, document.requests[0].request_id
+
+
+def test_stable_supplement_asset_id_uses_provider_asset_id_when_available() -> None:
+    asset_id = stable_supplement_asset_id("adobe_stock", "1974039129", "cutreq_x", "cand_1")
+    assert asset_id == "supplement_adobe_stock_1974039129"
+
+
+def test_stable_supplement_asset_id_falls_back_to_request_based_id_when_no_provider_asset_id() -> None:
+    asset_id = stable_supplement_asset_id("pexels", "", "cutreq_x", "cand_1")
+    assert asset_id == "cut_supplement_cutreq_x_cand_1"
+
+
+def test_manifest_roundtrip_load_and_save(tmp_path: Path) -> None:
+    project, _request_id = _project_with_request(tmp_path)
+    entry = CutPlanSupplementManifestEntry(
+        asset_id="supplement_pexels_123", provider="pexels", provider_asset_id="123",
+        asset_path="/fake/path.jpg", asset_type="image", folder_name=FOLDER_A,
+    )
+    save_cut_plan_supplement_manifest(project, load_cut_plan_supplement_manifest(project).model_copy(update={"entries": [entry]}))
+    reloaded = load_cut_plan_supplement_manifest(project)
+    assert len(reloaded.entries) == 1
+    assert reloaded.entries[0].provider_asset_id == "123"
+
+
+def test_manifest_load_returns_empty_document_when_no_file_exists(tmp_path: Path) -> None:
+    project, _request_id = _project_with_request(tmp_path)
+    manifest = load_cut_plan_supplement_manifest(project)
+    assert manifest.entries == []
+    assert manifest.project_id == project.id
+
+
+def test_record_supplement_manifest_entry_appends_new_entry(tmp_path: Path) -> None:
+    project, _request_id = _project_with_request(tmp_path)
+    entry = CutPlanSupplementManifestEntry(
+        asset_id="supplement_pexels_123", provider="pexels", provider_asset_id="123",
+        asset_path="/fake/path.jpg", asset_type="image",
+    )
+    record_supplement_manifest_entry(project, entry)
+    manifest = load_cut_plan_supplement_manifest(project)
+    assert len(manifest.entries) == 1
+    assert manifest.entries[0].provider_asset_id == "123"
+
+
+def test_record_supplement_manifest_entry_dedups_same_provider_asset_id(tmp_path: Path) -> None:
+    project, _request_id = _project_with_request(tmp_path)
+    first = CutPlanSupplementManifestEntry(
+        asset_id="supplement_pexels_123", provider="pexels", provider_asset_id="123",
+        asset_path="/fake/old.jpg", asset_type="image",
+    )
+    second = CutPlanSupplementManifestEntry(
+        asset_id="supplement_pexels_123", provider="pexels", provider_asset_id="123",
+        asset_path="/fake/new.jpg", asset_type="image",
+    )
+    record_supplement_manifest_entry(project, first)
+    record_supplement_manifest_entry(project, second)
+    manifest = load_cut_plan_supplement_manifest(project)
+    assert len(manifest.entries) == 1
+    assert manifest.entries[0].asset_path == "/fake/new.jpg"
+
+
+def test_record_supplement_manifest_entry_keeps_entries_without_provider_asset_id_separate(
+    tmp_path: Path
+) -> None:
+    project, _request_id = _project_with_request(tmp_path)
+    first = CutPlanSupplementManifestEntry(
+        asset_id="cut_supplement_a_b", provider="pexels", provider_asset_id="",
+        asset_path="/fake/a.jpg", asset_type="image",
+    )
+    second = CutPlanSupplementManifestEntry(
+        asset_id="cut_supplement_c_d", provider="pexels", provider_asset_id="",
+        asset_path="/fake/b.jpg", asset_type="image",
+    )
+    record_supplement_manifest_entry(project, first)
+    record_supplement_manifest_entry(project, second)
+    manifest = load_cut_plan_supplement_manifest(project)
+    assert len(manifest.entries) == 2
+
+
+def test_find_reusable_supplement_manifest_entry_matches_provider_and_id(tmp_path: Path) -> None:
+    project, _request_id = _project_with_request(tmp_path)
+    entry = CutPlanSupplementManifestEntry(
+        asset_id="supplement_adobe_stock_555", provider="adobe_stock", provider_asset_id="555",
+        asset_path="/fake/x.mp4", asset_type="video",
+    )
+    record_supplement_manifest_entry(project, entry)
+
+    found = find_reusable_supplement_manifest_entry(project, "adobe_stock", "555")
+    assert found is not None
+    assert found.asset_path == "/fake/x.mp4"
+
+    assert find_reusable_supplement_manifest_entry(project, "pexels", "555") is None  # anderer Provider
+    assert find_reusable_supplement_manifest_entry(project, "adobe_stock", "999") is None  # andere ID
+
+
+def test_find_reusable_supplement_manifest_entry_returns_none_for_empty_provider_asset_id(
+    tmp_path: Path
+) -> None:
+    project, _request_id = _project_with_request(tmp_path)
+    assert find_reusable_supplement_manifest_entry(project, "adobe_stock", "") is None
+
+
+def _fake_acquire_video(candidate, destination_folder):
+    destination_folder.mkdir(parents=True, exist_ok=True)
+    target = destination_folder / f"{candidate.candidate_id}.mp4"
+    target.write_bytes(b"FAKE_VIDEO_BYTES")
+    sidecar = SupplementAssetSidecar(
+        asset_id="asset_x", supplement_request_id=candidate.supplement_request_id, provider="pexels",
+    )
+    return SupplementAsset(local_path=target, sidecar=sidecar)
+
+
+def test_download_records_manifest_entry_when_provider_asset_id_present(tmp_path: Path) -> None:
+    project, request_id = _project_with_request(tmp_path)
+    fake_candidate = _fake_candidate(
+        candidate_id="cand_1", request_id=request_id, provider_asset_id="777", folder_name=FOLDER_A,
+    )
+    cut_plan_candidate = _to_cut_plan_candidate_for_test(request_id, "pexels", fake_candidate)
+
+    mock_adapter = MagicMock()
+    mock_adapter.acquire.side_effect = _fake_acquire_video
+    with patch(f"{_BRIDGE_MODULE}.get_supplement_adapter", return_value=mock_adapter):
+        download_cut_plan_supplement_candidate(project, request_id, cut_plan_candidate)
+
+    manifest = load_cut_plan_supplement_manifest(project)
+    assert len(manifest.entries) == 1
+    assert manifest.entries[0].provider_asset_id == "777"
+    assert mock_adapter.acquire.call_count == 1
+
+
+def test_download_reuses_manifest_entry_instead_of_downloading_again(tmp_path: Path) -> None:
+    project, request_id_1 = _project_with_request(tmp_path, folder_name=FOLDER_A)
+    # Zweiter, unabhängiger Request (z. B. ein anderer Satz) — bekommt
+    # dasselbe externe Provider-Asset zugewiesen.
+    request_id_2 = "cutreq_other"
+    from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import update_cut_plan_supplement_request
+    requests_document = load_cut_plan_supplement_requests(project)
+    requests_document.requests.append(
+        CutPlanSupplementRequest(request_id=request_id_2, cut_item_id="cut_other", folder_name=FOLDER_A)
+    )
+    save_cut_plan_supplement_requests(project, requests_document)
+
+    fake_candidate = _fake_candidate(
+        candidate_id="cand_1", request_id=request_id_1, provider_asset_id="777", folder_name=FOLDER_A,
+    )
+    cut_plan_candidate_1 = _to_cut_plan_candidate_for_test(request_id_1, "pexels", fake_candidate)
+    cut_plan_candidate_2 = _to_cut_plan_candidate_for_test(request_id_2, "pexels", fake_candidate)
+
+    mock_adapter = MagicMock()
+    mock_adapter.acquire.side_effect = _fake_acquire_video
+    with patch(f"{_BRIDGE_MODULE}.get_supplement_adapter", return_value=mock_adapter):
+        first_asset = download_cut_plan_supplement_candidate(project, request_id_1, cut_plan_candidate_1)
+        second_asset = download_cut_plan_supplement_candidate(project, request_id_2, cut_plan_candidate_2)
+
+    # Der Adapter darf für dasselbe Provider-Asset nur EINMAL tatsächlich
+    # aufgerufen worden sein — der zweite Download wird aus dem Manifest
+    # kopiert statt erneut lizenziert/heruntergeladen.
+    assert mock_adapter.acquire.call_count == 1
+    assert first_asset.asset_id == second_asset.asset_id == "supplement_pexels_777"
+    assert Path(second_asset.asset_path).is_file()
+    assert Path(second_asset.asset_path) != Path(first_asset.asset_path)
+
+
+def test_download_without_provider_asset_id_uses_legacy_asset_id_format(tmp_path: Path) -> None:
+    project, request_id = _project_with_request(tmp_path)
+    fake_candidate = _fake_candidate(candidate_id="cand_1", request_id=request_id, provider_asset_id="")
+    cut_plan_candidate = _to_cut_plan_candidate_for_test(request_id, "pexels", fake_candidate)
+
+    mock_adapter = MagicMock()
+    mock_adapter.acquire.side_effect = _fake_acquire_video
+    with patch(f"{_BRIDGE_MODULE}.get_supplement_adapter", return_value=mock_adapter):
+        asset = download_cut_plan_supplement_candidate(project, request_id, cut_plan_candidate)
+
+    assert asset.asset_id == f"cut_supplement_{request_id}_cand_1"
+    # Kein provider_asset_id -> kein Manifest-Eintrag (kein sinnvoller Dedup-Schlüssel).
+    assert load_cut_plan_supplement_manifest(project).entries == []
+
+
+def _to_cut_plan_candidate_for_test(request_id: str, provider: str, raw: SupplementCandidate):
+    from otio_app.services.voiceover_generation.cut_plan_supplement_models import CutPlanSupplementCandidate
+
+    return CutPlanSupplementCandidate(
+        candidate_id=raw.candidate_id,
+        request_id=request_id,
+        provider=provider,
+        title=raw.title,
+        asset_type=raw.media_type,
+        width=raw.width,
+        height=raw.height,
+        duration_sec=raw.duration_sec,
+        license=raw.license,
+        source_url=raw.source_page_url,
+        score=raw.match_score,
+        provider_candidate_snapshot=raw.model_dump(mode="json"),
+    )
 
 
 # --- 10-14: Kandidat akzeptieren ---

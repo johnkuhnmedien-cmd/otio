@@ -42,6 +42,7 @@ verlässlich wie eine nachträglich generierte Query."""
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +68,7 @@ from otio_app.models import Project
 from otio_app.project_layout import (
     get_cut_plan_supplement_asset_request_dir,
     get_cut_plan_supplement_candidates_path,
+    get_cut_plan_supplement_manifest_path,
     get_cut_plan_supplement_requests_path,
 )
 from otio_app.services.api_keys import get_api_key
@@ -83,6 +85,8 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_models import (
     CutPlanSupplementAsset,
     CutPlanSupplementCandidate,
     CutPlanSupplementCandidatesDocument,
+    CutPlanSupplementManifestDocument,
+    CutPlanSupplementManifestEntry,
     CutPlanSupplementRequest,
     CutPlanSupplementRequestsDocument,
 )
@@ -104,6 +108,11 @@ __all__ = [
     "accept_cut_plan_supplement_candidate",
     "apply_accepted_supplement_to_cut_plan_item",
     "unaccept_cut_plan_supplement_request",
+    "stable_supplement_asset_id",
+    "load_cut_plan_supplement_manifest",
+    "save_cut_plan_supplement_manifest",
+    "find_reusable_supplement_manifest_entry",
+    "record_supplement_manifest_entry",
 ]
 
 _DURATION_EPSILON = 0.05
@@ -474,6 +483,107 @@ def search_candidates_for_cut_plan_request(
     return document
 
 
+# --- Phase E: Supplement-Manifest (bereits heruntergeladene Provider-Assets) ---
+
+
+def stable_supplement_asset_id(provider: str, provider_asset_id: str, request_id: str, candidate_id: str) -> str:
+    """Phase E (Nutzervorgabe): liefert eine STABILE, providerbasierte
+    Asset-Identität, wenn provider_asset_id bekannt ist (Adobe Stock/
+    Pexels) — dieselbe externe Stock-Datei erhält dann bei JEDER
+    Verwendung (egal für welchen Request) dieselbe asset_id, wodurch die
+    bestehende generische Reuse-Distance-/Max-Usage-Validierung
+    (cut_plan_validator.validate_asset_usage) automatisch greift, ohne
+    Sonderfall-Code. Ohne provider_asset_id (z. B. ein zukünftiger
+    Provider ohne stabile ID) bleibt die bisherige, pro Request eindeutige
+    ID erhalten — unverändertes Verhalten für diesen Fall."""
+    if provider_asset_id:
+        return f"supplement_{provider}_{_safe_path_component(provider_asset_id)}"
+    return f"cut_supplement_{_safe_path_component(request_id)}_{_safe_path_component(candidate_id)}"
+
+
+def load_cut_plan_supplement_manifest(project: Project) -> CutPlanSupplementManifestDocument:
+    path = get_cut_plan_supplement_manifest_path(project.work_dir_path)
+    if not path.is_file():
+        return CutPlanSupplementManifestDocument(project_id=project.id)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return CutPlanSupplementManifestDocument.model_validate(payload)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return CutPlanSupplementManifestDocument(project_id=project.id)
+
+
+def save_cut_plan_supplement_manifest(
+    project: Project, document: CutPlanSupplementManifestDocument
+) -> Path:
+    normalized = document.model_copy(update={"project_id": project.id})
+    path = get_cut_plan_supplement_manifest_path(project.work_dir_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
+    return path
+
+
+def find_reusable_supplement_manifest_entry(
+    project: Project, provider: str, provider_asset_id: str
+) -> CutPlanSupplementManifestEntry | None:
+    """Phase E (Nutzervorgabe): sucht ein bereits heruntergeladenes Asset
+    DESSELBEN Providers mit DERSELBEN provider_asset_id — verhindert
+    erneutes Lizenzieren/Herunterladen desselben externen Assets (insb.
+    relevant für Adobe Stock, siehe Nutzeranfrage Juli 2026: 'verhindern,
+    dass wir Supplement-Assets, die bereits gedownloadet wurden, nicht
+    wieder downloaden'). Liefert None, wenn provider_asset_id leer ist
+    oder kein Treffer existiert."""
+    if not provider_asset_id:
+        return None
+    manifest = load_cut_plan_supplement_manifest(project)
+    for entry in manifest.entries:
+        if entry.provider == provider and entry.provider_asset_id == provider_asset_id:
+            return entry
+    return None
+
+
+def record_supplement_manifest_entry(
+    project: Project, entry: CutPlanSupplementManifestEntry
+) -> CutPlanSupplementManifestDocument:
+    """Fügt einen neuen Manifest-Eintrag hinzu bzw. ersetzt einen
+    bestehenden mit derselben (provider, provider_asset_id) — dedupliziert
+    automatisch, statt Duplikate anzusammeln. Einträge ohne
+    provider_asset_id (z. B. ein zukünftiger Provider ohne stabile ID)
+    werden immer angehängt, nie ersetzt (es gibt keinen sinnvollen
+    Dedup-Schlüssel dafür)."""
+    manifest = load_cut_plan_supplement_manifest(project)
+    remaining = [
+        existing
+        for existing in manifest.entries
+        if not (
+            entry.provider_asset_id
+            and existing.provider == entry.provider
+            and existing.provider_asset_id == entry.provider_asset_id
+        )
+    ]
+    updated = manifest.model_copy(update={"entries": remaining + [entry]})
+    save_cut_plan_supplement_manifest(project, updated)
+    return updated
+
+
+def _copy_manifest_entry_into_request_dir(
+    entry: CutPlanSupplementManifestEntry, destination_folder: Path, candidate: CutPlanSupplementCandidate
+) -> Path:
+    """Kopiert ein bereits heruntergeladenes Provider-Asset in den
+    Ziel-Ordner DIESES Requests, statt es erneut zu lizenzieren/
+    herunterzuladen (Phase E). Eine echte Kopie (nicht nur ein Verweis auf
+    den Original-Pfad) — der ursprüngliche Request könnte später
+    zurückgenommen/ersetzt werden (siehe unaccept_cut_plan_supplement_
+    request, 'bewusst nicht destruktiv'), ohne dass diese Wiederverwendung
+    dadurch ihre Datei verliert."""
+    source_path = Path(entry.asset_path)
+    destination_folder.mkdir(parents=True, exist_ok=True)
+    suffix = source_path.suffix or (".jpg" if candidate.asset_type == "image" else ".mp4")
+    safe_id = _safe_path_component(entry.provider_asset_id or entry.asset_id)
+    target_path = destination_folder / f"reused_{_safe_path_component(candidate.provider)}_{safe_id}{suffix}"
+    shutil.copy2(source_path, target_path)
+    return target_path
+
+
 # --- Kandidat akzeptieren (§6, §7) ---
 
 
@@ -578,7 +688,16 @@ def download_cut_plan_supplement_candidate(
     Extrahiert aus `accept_cut_plan_supplement_candidate` (Phase 8.6/8.7),
     damit Phase 11.3 (Auto-Resolver: erst herunterladen + per Gemini prüfen,
     DANACH ggf. akzeptieren) einen Kandidaten nicht zweimal herunterladen
-    muss — einmal zum Prüfen, einmal beim tatsächlichen Akzeptieren."""
+    muss — einmal zum Prüfen, einmal beim tatsächlichen Akzeptieren.
+
+    Phase E (Nutzervorgabe, Juli 2026): bevor der Provider-Adapter
+    tatsächlich lizenziert/herunterlädt, wird geprüft, ob DASSELBE
+    Provider-Asset (provider + provider_asset_id) bereits für einen
+    FRÜHEREN Request heruntergeladen wurde (siehe
+    find_reusable_supplement_manifest_entry). Falls ja, wird die
+    vorhandene Datei in den Ziel-Ordner dieses Requests kopiert, statt
+    erneut zu lizenzieren/herunterzuladen — verhindert doppelte
+    Adobe-Lizenzierung/-Downloads für dasselbe Asset."""
     raw_candidate_data = dict(candidate.provider_candidate_snapshot)
     raw_candidate_data.setdefault("supplement_request_id", request_id)
     try:
@@ -586,24 +705,53 @@ def download_cut_plan_supplement_candidate(
     except ValueError as exc:
         raise ValueError(f"Kandidat '{candidate.candidate_id}' konnte nicht rekonstruiert werden: {exc}") from exc
 
-    adapter = get_supplement_adapter(candidate.provider)
     destination_folder = get_cut_plan_supplement_asset_request_dir(project.work_dir_path, request_id)
-    acquired = adapter.acquire(production_candidate, destination_folder)
 
-    synthetic_asset_id = (
-        f"cut_supplement_{_safe_path_component(request_id)}_{_safe_path_component(candidate.candidate_id)}"
+    reusable_entry = find_reusable_supplement_manifest_entry(
+        project, candidate.provider, production_candidate.provider_asset_id
+    )
+    if reusable_entry is not None and Path(reusable_entry.asset_path).is_file():
+        local_path = _copy_manifest_entry_into_request_dir(reusable_entry, destination_folder, candidate)
+    else:
+        adapter = get_supplement_adapter(candidate.provider)
+        acquired = adapter.acquire(production_candidate, destination_folder)
+        local_path = Path(acquired.local_path)
+        if production_candidate.provider_asset_id:
+            record_supplement_manifest_entry(
+                project,
+                CutPlanSupplementManifestEntry(
+                    asset_id=stable_supplement_asset_id(
+                        candidate.provider, production_candidate.provider_asset_id, request_id, candidate.candidate_id
+                    ),
+                    provider=candidate.provider,
+                    provider_asset_id=production_candidate.provider_asset_id,
+                    asset_path=str(local_path),
+                    asset_type=candidate.asset_type,
+                    duration_sec=candidate.duration_sec,
+                    width=candidate.width,
+                    height=candidate.height,
+                    license=candidate.license,
+                    source_url=candidate.source_url,
+                    folder_name=production_candidate.folder_name,
+                    first_request_id=request_id,
+                    first_candidate_id=candidate.candidate_id,
+                ),
+            )
+
+    synthetic_asset_id = stable_supplement_asset_id(
+        candidate.provider, production_candidate.provider_asset_id, request_id, candidate.candidate_id
     )
     accepted_asset = CutPlanSupplementAsset(
         asset_id=synthetic_asset_id,
         request_id=request_id,
         candidate_id=candidate.candidate_id,
         provider=candidate.provider,
-        asset_path=str(acquired.local_path),
+        asset_path=str(local_path),
         asset_type=candidate.asset_type,
         duration_sec=(
             candidate.duration_sec
             if candidate.asset_type == "video"
-            else (probe_duration_seconds(acquired.local_path) or candidate.duration_sec)
+            else (probe_duration_seconds(local_path) or candidate.duration_sec)
         ),
         width=candidate.width,
         height=candidate.height,
@@ -615,7 +763,7 @@ def download_cut_plan_supplement_candidate(
     # verfügbar — die Provider-Metadaten (candidate.duration_sec) können von
     # der realen Datei abweichen (z. B. gekürzte Segmente bei manchen Quellen).
     if candidate.asset_type == "video":
-        probed_duration = probe_duration_seconds(acquired.local_path)
+        probed_duration = probe_duration_seconds(local_path)
         if probed_duration is not None:
             accepted_asset = accepted_asset.model_copy(update={"duration_sec": probed_duration})
     return accepted_asset

@@ -1160,6 +1160,15 @@ ADOBE_STOCK_MIN_DOWNLOAD_BYTES = 100 * 1024
 # der generische Ordner-Fallback (siehe cut_plan_generic_fallback_service.py).
 CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER = (SUPPLEMENT_SOURCE_ADOBE, SUPPLEMENT_SOURCE_PEXELS)
 
+# Phase E (Nutzervorgabe, Juli 2026): Pseudo-"Provider"-Label für einen
+# Auto-Resolve-Kandidaten, der aus einem bereits heruntergeladenen Cut-Plan-
+# Supplement-Asset rekonstruiert wurde (siehe supplement_manifest.json,
+# find_reusable_local_supplement_candidate in
+# cut_plan_supplement_auto_resolve_service.py) — läuft als eigene Stufe VOR
+# der externen Adobe-/Pexels-Suche, damit ein bereits lizenziertes Asset
+# nicht unnötig ein zweites Mal beschafft wird.
+CUT_PLAN_AUTO_RESOLVE_PROVIDER_LOCAL_REUSE = "local_reuse"
+
 
 def resolve_voice_backend(backend: str | None) -> str:
     if backend and backend.strip() in VOICE_BACKEND_CHOICES:

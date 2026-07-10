@@ -29,6 +29,8 @@ __all__ = [
     "CutPlanSupplementCandidatesDocument",
     "CutPlanSupplementAsset",
     "CutPlanSupplementAutoResolveAttempt",
+    "CutPlanSupplementManifestEntry",
+    "CutPlanSupplementManifestDocument",
 ]
 
 
@@ -151,9 +153,20 @@ class CutPlanSupplementCandidatesDocument(BaseModel):
 
 
 class CutPlanSupplementAsset(BaseModel):
-    """Ein tatsächlich heruntergeladenes/lokal übernommenes Supplement-Asset."""
+    """Ein tatsächlich heruntergeladenes/lokal übernommenes Supplement-Asset.
 
-    asset_id: str  # cut_supplement_{safe_request_id}_{safe_candidate_id}
+    asset_id ist entweder providerbasiert-stabil (supplement_{provider}_
+    {provider_asset_id}, siehe stable_supplement_asset_id in
+    cut_plan_supplement_bridge.py) — wenn der Provider eine stabile ID
+    liefert (Adobe/Pexels) — oder pro-Request-eindeutig (cut_supplement_
+    {safe_request_id}_{safe_candidate_id}) als Fallback, wenn keine
+    provider_asset_id bekannt ist (z. B. zukünftige Provider ohne stabile
+    ID). Die stabile Variante ermöglicht Phase E (Nutzervorgabe): dieselbe
+    externe Stock-Datei wird bei jeder Wiederverwendung als DASSELBE Asset
+    erkannt, wodurch die bestehende generische Reuse-Distance-/Max-Usage-
+    Validierung automatisch greift, ohne Sonderfall-Code."""
+
+    asset_id: str
     request_id: str
     candidate_id: str
     provider: str
@@ -166,3 +179,46 @@ class CutPlanSupplementAsset(BaseModel):
     source_url: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
     status: str = CUT_PLAN_SUPPLEMENT_ASSET_STATUS_ACQUIRED  # ACQUIRED|FAILED
+
+
+class CutPlanSupplementManifestEntry(BaseModel):
+    """Phase E (Nutzervorgabe, Juli 2026): EIN bereits erfolgreich
+    heruntergeladenes Provider-Asset (Adobe Stock/Pexels) — unabhängig
+    davon, für welchen Request es URSPRÜNGLICH beschafft wurde. Ermöglicht
+    zwei Dinge:
+
+    1. Dedup: dasselbe (provider, provider_asset_id) wird nie ein zweites
+       Mal lizenziert/heruntergeladen (siehe stable_supplement_asset_id /
+       find_reusable_supplement_manifest_entry in
+       cut_plan_supplement_bridge.py).
+    2. Wiederverwendung: ein bereits vorhandenes, zum selben Ordner
+       passendes Asset kann für ein ANDERES Cut-Item übernommen werden,
+       bevor eine neue externe Suche ausgelöst wird (siehe
+       find_reusable_local_supplement_candidate in
+       cut_plan_supplement_auto_resolve_service.py)."""
+
+    asset_id: str
+    provider: str
+    provider_asset_id: str = ""
+    asset_path: str
+    asset_type: str = "video"  # video|image
+    duration_sec: float = 0.0
+    width: int = 0
+    height: int = 0
+    license: str = ""
+    source_url: str = ""
+    folder_name: str = ""
+    first_request_id: str = ""
+    first_candidate_id: str = ""
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class CutPlanSupplementManifestDocument(BaseModel):
+    """Persistiertes Gesamt-Manifest aller bisher heruntergeladenen
+    Cut-Plan-Supplement-Assets (`supplement_manifest.json`) — EIN Dokument
+    für das gesamte Projekt, nicht pro Request (anders als candidates_
+    store, der pro-Request-Dokumente sammelt)."""
+
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    entries: list[CutPlanSupplementManifestEntry] = Field(default_factory=list)
