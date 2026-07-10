@@ -23,6 +23,8 @@ __all__ = [
     "apply_visual_coverage_extensions",
     "extend_first_visual_to_timeline_zero",
     "extend_section_end_visuals_over_pauses",
+    "close_small_visual_gaps",
+    "resolve_timeline_overlaps",
     "find_first_visual_segment",
     "find_last_visual_segment_before_time",
 ]
@@ -32,6 +34,16 @@ _TOLERANCE = 0.05  # gleiche Toleranz wie cut_plan_validator._TIME_TOLERANCE
 
 REASON_INITIAL_PREROLL_EXTENSION = "initial_preroll_extension"
 REASON_SECTION_PAUSE_HOLD = "section_pause_hold"
+
+# Phase C (Nutzervorgabe): close_small_visual_gaps schließt NUR kleine,
+# durch natürliche Sprechpausen zwischen Sätzen entstandene Lücken
+# innerhalb durchgehend aktiven Voice-overs — bewusst weit unterhalb
+# typischer BLACK_GAP-Fälle aus fehlenden Supplement-Assets (die reichen
+# über mehrere Sekunden bis Minuten, siehe Cut-Plan-Diagnose), damit ein
+# echtes Beschaffungsproblem NICHT stillschweigend durch ein eingefrorenes
+# Standbild überdeckt wird, sondern weiterhin als BLACK_GAP_DURING_VOICEOVER
+# sichtbar bleibt.
+_MAX_AUTO_FILLED_GAP_SEC = 1.0
 
 
 def _combine_reason(original_reason: str, extension_marker: str) -> str:
@@ -197,9 +209,134 @@ def extend_section_end_visuals_over_pauses(
     return updated_cut_plan
 
 
+def _all_segments_sorted(cut_plan: CutPlanDocument) -> list[tuple[VisualSegment, CutPlanItem]]:
+    return sorted(
+        ((segment, item) for item in cut_plan.items for segment in item.planned_visual_segments),
+        key=lambda pair: pair[0].timeline_in_sec,
+    )
+
+
+def _apply_segment_replacements(
+    cut_plan: CutPlanDocument, replacements: dict[tuple[str, str], VisualSegment]
+) -> CutPlanDocument:
+    if not replacements:
+        return cut_plan
+    updated_items: list[CutPlanItem] = []
+    for item in cut_plan.items:
+        if not item.planned_visual_segments:
+            updated_items.append(item)
+            continue
+        updated_segments = [
+            replacements.get((item.cut_item_id, segment.segment_id), segment)
+            for segment in item.planned_visual_segments
+        ]
+        updated_items.append(item.model_copy(update={"planned_visual_segments": updated_segments}))
+    return cut_plan.model_copy(update={"items": updated_items})
+
+
+def close_small_visual_gaps(cut_plan: CutPlanDocument) -> CutPlanDocument:
+    """Phase C (Nutzervorgabe): schließt KLEINE Lücken (<= _MAX_AUTO_FILLED_
+    GAP_SEC) zwischen zwei zeitlich aufeinanderfolgenden VisualSegments —
+    typischerweise natürliche Sprechpausen zwischen zwei Sätzen INNERHALB
+    durchgehend aktiven Voice-overs, bei denen die Alignment-Zeiten des
+    vorherigen Satzes knapp vor dem Start des nächsten enden. Verlängert
+    IMMER das VORHERGEHENDE Segment (letztes Bild/Video hält kurz), NIE das
+    nächste — vermeidet Kaskaden-Effekte, analog zu
+    extend_section_end_visuals_over_pauses. Größere Lücken (fehlendes
+    Supplement-Asset, blockiertes Item) werden bewusst NICHT angefasst und
+    bleiben für validate_no_black_gap_during_voiceover sichtbar."""
+    all_segments = _all_segments_sorted(cut_plan)
+    replacements: dict[tuple[str, str], VisualSegment] = {}
+
+    for index in range(len(all_segments) - 1):
+        current_segment, current_item = all_segments[index]
+        next_segment, _next_item = all_segments[index + 1]
+        current_key = (current_item.cut_item_id, current_segment.segment_id)
+        current_effective = replacements.get(current_key, current_segment)
+
+        gap = next_segment.timeline_in_sec - current_effective.timeline_out_sec
+        if gap <= _EPSILON or gap > _MAX_AUTO_FILLED_GAP_SEC:
+            continue
+
+        new_duration = current_effective.duration_sec + gap
+        if current_effective.asset_type == "image":
+            new_source_out_sec = current_effective.source_in_sec + new_duration
+        else:
+            new_source_out_sec = current_effective.source_out_sec + gap
+            if not _video_can_extend_to(current_effective.asset_path, new_source_out_sec):
+                continue  # Video zu kurz -> Lücke bleibt sichtbar, kein stilles Schwarzbild
+
+        replacements[current_key] = current_effective.model_copy(
+            update={
+                "timeline_out_sec": next_segment.timeline_in_sec,
+                "duration_sec": new_duration,
+                "source_out_sec": new_source_out_sec,
+            }
+        )
+
+    return _apply_segment_replacements(cut_plan, replacements)
+
+
+def resolve_timeline_overlaps(cut_plan: CutPlanDocument) -> CutPlanDocument:
+    """Phase C (Nutzervorgabe): schneidet ein überlappendes VisualSegment-
+    Paar so zurecht, dass sie sich nicht mehr überlappen. Verkürzt IMMER das
+    FRÜHERE Segment (timeline_out_sec wird auf den Start des nächsten
+    zurückgesetzt) — nie das spätere, das würde dessen eigene Startzeit
+    verschieben und einen Kaskaden-Effekt auf alle nachfolgenden Segmente
+    auslösen. Betrifft NUR die VISUELLE Platzierung auf V1, NICHT
+    CutPlanItem.timeline_start_sec/timeline_end_sec (die Audio-Zeit bleibt
+    exakt so, wie sie die Sprachausrichtung vorgibt) — ein paar Frames
+    Versatz zwischen Schnitt und Wortgrenze sind unauffällig, ein doppelt
+    belegter V1-Zeitraum ist es nicht.
+
+    Überlappungen dieser Größenordnung entstehen typischerweise durch
+    kleine Ungenauigkeiten der Sprachausrichtung (Whisper) an
+    Satzgrenzen — keine Cut-Plan-Logikfehler."""
+    all_segments = _all_segments_sorted(cut_plan)
+    replacements: dict[tuple[str, str], VisualSegment] = {}
+
+    for index in range(len(all_segments) - 1):
+        current_segment, current_item = all_segments[index]
+        next_segment, _next_item = all_segments[index + 1]
+        current_key = (current_item.cut_item_id, current_segment.segment_id)
+        current_effective = replacements.get(current_key, current_segment)
+
+        if next_segment.timeline_in_sec >= current_effective.timeline_out_sec - _EPSILON:
+            continue  # kein Overlap
+
+        new_timeline_out_sec = next_segment.timeline_in_sec
+        shrink_amount = current_effective.timeline_out_sec - new_timeline_out_sec
+        new_duration = current_effective.duration_sec - shrink_amount
+        if new_duration <= _EPSILON:
+            continue  # Kürzen würde das Segment auf (nahezu) 0 reduzieren -> nicht antasten
+
+        if current_effective.asset_type == "image":
+            new_source_out_sec = current_effective.source_in_sec + new_duration
+        else:
+            new_source_out_sec = current_effective.source_out_sec - shrink_amount
+
+        replacements[current_key] = current_effective.model_copy(
+            update={
+                "timeline_out_sec": new_timeline_out_sec,
+                "duration_sec": new_duration,
+                "source_out_sec": new_source_out_sec,
+            }
+        )
+
+    return _apply_segment_replacements(cut_plan, replacements)
+
+
 def apply_visual_coverage_extensions(cut_plan: CutPlanDocument, settings: CutPlanSettings) -> CutPlanDocument:
-    """Orchestriert beide Coverage-Erweiterungen. Läuft nach der Asset-
-    Auswahl, bevor validiert wird (siehe apply_asset_selection_to_cut_plan)."""
+    """Orchestriert alle Coverage-Erweiterungen/-Normalisierungen. Läuft
+    nach der Asset-Auswahl, bevor validiert wird (siehe
+    apply_asset_selection_to_cut_plan). Reihenfolge: zuerst die beiden
+    festen Coverage-Fälle (initialer Vorlauf, Sektions-Pausen), danach
+    Phase C — kleine Lücken schließen, zuletzt verbleibende Überlappungen
+    normalisieren (das Schließen einer kleinen Lücke kann denselben
+    Zeitpunkt berühren, an dem sonst eine Überlappung entstehen könnte;
+    resolve_timeline_overlaps läuft deshalb bewusst zuletzt)."""
     updated = extend_first_visual_to_timeline_zero(cut_plan)
     updated = extend_section_end_visuals_over_pauses(updated, settings)
+    updated = close_small_visual_gaps(updated)
+    updated = resolve_timeline_overlaps(updated)
     return updated

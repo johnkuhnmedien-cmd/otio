@@ -78,6 +78,7 @@ __all__ = [
     "choose_asset_for_cut_item",
     "build_visual_segments_for_item",
     "determine_duration_strategy",
+    "merge_mini_shots_with_next_item",
     "update_asset_usage_summary",
     "settings_from_snapshot",
 ]
@@ -744,6 +745,106 @@ def _merge_with_previous(item: CutPlanItem, previous_item: CutPlanItem) -> CutPl
     )
 
 
+def _can_merge_with_next(
+    item: CutPlanItem, next_item: CutPlanItem | None, settings: CutPlanSettings
+) -> bool:
+    """Spiegelbild von `_can_merge_with_previous` — geprüft für ein Item,
+    dessen EIGENES VisualSegment nach der normalen Auswahl kürzer als 1.0s
+    ist (harter SHOT_TOO_SHORT-Blocker, §12) UND das NICHT rückwärts mit dem
+    vorherigen Item verschmolzen werden konnte (z. B. erstes Item eines
+    Ordners, anderes Asset, geblockter Vorgänger). Phase C (Nutzervorgabe):
+    solche Mini-Shots sollen nicht als Blocker stehen bleiben, wenn eine
+    Verschmelzung mit dem NÄCHSTEN Item möglich ist — bewusst OHNE
+    same_asset-Anforderung (anders als beim Rückwärts-Merge), weil der
+    Mini-Shot ohnehin kein eigenes brauchbares Asset beisteuert."""
+    if next_item is None:
+        return False
+    if next_item.source_scope != item.source_scope:
+        return False  # nicht über Intro->Folder-Grenze mergen
+    if item.source_scope == AUDIO_SCOPE_FOLDER and next_item.folder_name != item.folder_name:
+        return False  # nicht über Folder-Grenzen mergen
+    if next_item.asset_selection_status in (
+        CUT_PLAN_ASSET_SELECTION_BLOCKED,
+        CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED,
+    ):
+        return False
+    if not next_item.planned_visual_segments:
+        return False
+    next_segment = next_item.planned_visual_segments[0]
+    merged_duration = item.duration_sec + (next_segment.timeline_out_sec - next_segment.timeline_in_sec)
+    if merged_duration > settings.shot_max_sec + _DURATION_EPSILON:
+        return False
+    return True
+
+
+def _merge_with_next(item: CutPlanItem, next_item: CutPlanItem) -> CutPlanItem:
+    """Analog zu `_merge_with_previous` (siehe dort), nur in die andere
+    Richtung: der Mini-Shot übernimmt das Asset des NÄCHSTEN Items, damit
+    er visuell nahtlos in dessen Aufnahme übergeht, statt als eigenständiger
+    Blocker (< 1.0s) stehen zu bleiben. Wie beim Rückwärts-Merge zählt dies
+    NICHT als zusätzliche redaktionelle Wiederverwendung (reason=
+    'merged_short_sentence' ist sowohl bei validate_visual_segments als auch
+    bei validate_asset_usage als Fortsetzungs-Marker hinterlegt, siehe
+    cut_plan_validator._CONTINUATION_REASONS)."""
+    chosen_asset_id = next_item.chosen_asset_id or next_item.primary_asset_id
+    next_segment = next_item.planned_visual_segments[0]
+    merged_segment = VisualSegment(
+        segment_id=f"{item.cut_item_id}_seg_01",
+        timeline_in_sec=item.timeline_start_sec,
+        timeline_out_sec=item.timeline_end_sec,
+        duration_sec=item.duration_sec,
+        asset_id=chosen_asset_id,
+        asset_path=next_segment.asset_path,
+        asset_type=next_segment.asset_type,
+        source_in_sec=next_segment.source_in_sec,
+        source_out_sec=next_segment.source_in_sec + item.duration_sec,
+        track="V1",
+        transform=dict(next_segment.transform),
+        background_style=next_segment.background_style,
+        reason="merged_short_sentence",
+    )
+    remaining_warnings = [w for w in item.warnings if w != CUT_PLAN_ERROR_SHOT_TOO_SHORT]
+    remaining_blockers = [b for b in item.blockers if b != CUT_PLAN_ERROR_SHOT_TOO_SHORT]
+    return item.model_copy(
+        update={
+            "duration_strategy": CUT_PLAN_DURATION_STRATEGY_MERGED,
+            "planned_visual_segments": [merged_segment],
+            "chosen_asset_id": chosen_asset_id,
+            "asset_selection_status": next_item.asset_selection_status,
+            "asset_selection_reason": f"Mit nachfolgendem CutPlanItem gemerged (Asset '{chosen_asset_id}').",
+            "fallback_reason": "",
+            "warnings": remaining_warnings + [CUT_PLAN_ERROR_SHOT_TOO_SHORT],
+            "blockers": remaining_blockers,
+        }
+    )
+
+
+def merge_mini_shots_with_next_item(
+    items: list[CutPlanItem], settings: CutPlanSettings
+) -> list[CutPlanItem]:
+    """Phase C (Nutzervorgabe): schließt die Lücke, die der Rückwärts-Merge
+    in der Hauptschleife (siehe apply_asset_selection_to_cut_plan) nicht
+    abdeckt — läuft NACH dieser Schleife, weil dafür das bereits gewählte
+    VisualSegment des NÄCHSTEN Items bekannt sein muss. Betrifft
+    ausschließlich SINGLE_SHOT-Items mit exakt einem VisualSegment, dessen
+    Dauer den harten SHOT_TOO_SHORT-Blocker (< 1.0s) auslösen würde — die
+    weichere Warn-Schwelle (>= 1.0s, aber < shot_min_sec) bleibt bewusst
+    unverändert (redaktionell akzeptierte Flexibilität, §12)."""
+    updated = list(items)
+    for index, item in enumerate(updated):
+        if item.duration_strategy != CUT_PLAN_DURATION_STRATEGY_SINGLE_SHOT:
+            continue
+        if len(item.planned_visual_segments) != 1:
+            continue
+        if item.planned_visual_segments[0].duration_sec >= 1.0 - _DURATION_EPSILON:
+            continue
+        next_item = updated[index + 1] if index + 1 < len(updated) else None
+        if not _can_merge_with_next(item, next_item, settings):
+            continue
+        updated[index] = _merge_with_next(item, next_item)  # type: ignore[arg-type]
+    return updated
+
+
 def update_asset_usage_summary(cut_plan: CutPlanDocument) -> dict[str, int]:
     """Zählt tatsächlich platzierte VisualSegments pro asset_id — Split-/
     Merge-Fortsetzungen sind hier bewusst NICHT dedupliziert (das Segment ist
@@ -837,6 +938,12 @@ def apply_asset_selection_to_cut_plan(project: Project, cut_plan: CutPlanDocumen
             updated_item = choose_asset_for_cut_item(project, item, lookup, usage_tracker, settings)
         updated_items.append(updated_item)
         previous_item = updated_item
+
+    # Phase C (Nutzervorgabe): Mini-Shots (< 1.0s), die der Rückwärts-Merge
+    # oben nicht abdecken konnte, werden hier — mit Kenntnis der bereits
+    # gewählten NÄCHSTEN Items — nachträglich vorwärts verschmolzen, statt
+    # als dauerhafter SHOT_TOO_SHORT-Blocker stehen zu bleiben.
+    updated_items = merge_mini_shots_with_next_item(updated_items, settings)
 
     # Visual Coverage Fix (Phase 8.5): läuft NACH der Asset-Auswahl, BEVOR
     # validiert wird — erweitert bereits gewählte VisualSegments über den

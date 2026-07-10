@@ -46,6 +46,7 @@ from otio_app.services.voiceover_generation.cut_plan_asset_selector import (
     choose_asset_for_cut_item,
     determine_duration_strategy,
     load_asset_lookup_for_cut_plan,
+    merge_mini_shots_with_next_item,
     resolve_asset_candidate,
 )
 from otio_app.services.voiceover_generation.cut_plan_builder import (
@@ -54,7 +55,7 @@ from otio_app.services.voiceover_generation.cut_plan_builder import (
     load_cut_plan_draft,
     save_cut_plan_draft,
 )
-from otio_app.services.voiceover_generation.cut_plan_models import CutPlanSettings
+from otio_app.services.voiceover_generation.cut_plan_models import CutPlanSettings, VisualSegment
 from otio_app.services.voiceover_generation.final_plan_service import (
     save_confirmed_voiceover_project_plan,
 )
@@ -1310,6 +1311,168 @@ def test_choose_asset_for_cut_item_converts_max_usage_exceeded_to_supplement_req
     # (sonst würde apply_accepted_supplement_to_cut_plan_item ihn nie los).
     assert "MAX_ASSET_USAGE_EXCEEDED" in result.warnings
     assert "MAX_ASSET_USAGE_EXCEEDED" not in result.blockers
+
+
+# --- Phase C: Mini-Shot Forward-Merge (< 1.0s, kein Rückwärts-Merge möglich) ---
+
+
+def _tiny_single_shot_item(**overrides) -> CutPlanItem:
+    from otio_app.services.voiceover_generation.cut_plan_models import CutPlanItem as _CutPlanItem
+
+    segment = VisualSegment(
+        segment_id="cut_a_seg_01", timeline_in_sec=10.0, timeline_out_sec=10.5, duration_sec=0.5,
+        asset_id="asset_a", asset_path="/fake/a.jpg", asset_type="image", source_in_sec=0.0,
+        source_out_sec=0.5, track="V1", reason="primary_asset",
+    )
+    defaults = dict(
+        cut_item_id="cut_a", source_scope="folder", folder_name=FOLDER_A, text="Kurz.",
+        timeline_start_sec=10.0, timeline_end_sec=10.5, duration_sec=0.5,
+        duration_strategy=CUT_PLAN_DURATION_STRATEGY_SINGLE_SHOT,
+        planned_visual_segments=[segment], chosen_asset_id="asset_a",
+        asset_selection_status=CUT_PLAN_ASSET_SELECTION_PRIMARY_USED,
+        blockers=[CUT_PLAN_ERROR_SHOT_TOO_SHORT],
+    )
+    defaults.update(overrides)
+    return _CutPlanItem(**defaults)
+
+
+def _next_single_shot_item(**overrides) -> CutPlanItem:
+    from otio_app.services.voiceover_generation.cut_plan_models import CutPlanItem as _CutPlanItem
+
+    segment = VisualSegment(
+        segment_id="cut_b_seg_01", timeline_in_sec=10.5, timeline_out_sec=15.5, duration_sec=5.0,
+        asset_id="asset_b", asset_path="/fake/b.jpg", asset_type="image", source_in_sec=0.0,
+        source_out_sec=5.0, track="V1", reason="primary_asset",
+    )
+    defaults = dict(
+        cut_item_id="cut_b", source_scope="folder", folder_name=FOLDER_A, text="Ein längerer Satz.",
+        timeline_start_sec=10.5, timeline_end_sec=15.5, duration_sec=5.0,
+        duration_strategy=CUT_PLAN_DURATION_STRATEGY_SINGLE_SHOT,
+        planned_visual_segments=[segment], chosen_asset_id="asset_b",
+        asset_selection_status=CUT_PLAN_ASSET_SELECTION_PRIMARY_USED,
+    )
+    defaults.update(overrides)
+    return _CutPlanItem(**defaults)
+
+
+def test_merge_mini_shots_with_next_item_merges_hard_blocker() -> None:
+    settings = CutPlanSettings(project_id="p1")
+    tiny = _tiny_single_shot_item()
+    next_item = _next_single_shot_item()
+
+    updated = merge_mini_shots_with_next_item([tiny, next_item], settings)
+
+    merged = updated[0]
+    assert merged.duration_strategy == CUT_PLAN_DURATION_STRATEGY_MERGED
+    assert merged.chosen_asset_id == "asset_b"
+    assert len(merged.planned_visual_segments) == 1
+    assert merged.planned_visual_segments[0].asset_id == "asset_b"
+    assert merged.planned_visual_segments[0].reason == "merged_short_sentence"
+    # Der Blocker ist aufgelöst, bleibt aber informativ als Warnung sichtbar
+    # (gleiche Konvention wie beim bestehenden Rückwärts-Merge).
+    assert CUT_PLAN_ERROR_SHOT_TOO_SHORT not in merged.blockers
+    assert CUT_PLAN_ERROR_SHOT_TOO_SHORT in merged.warnings
+    # Das nächste Item selbst bleibt unangetastet.
+    assert updated[1] == next_item
+
+
+def test_merge_mini_shots_with_next_item_skips_when_next_is_blocked() -> None:
+    settings = CutPlanSettings(project_id="p1")
+    tiny = _tiny_single_shot_item()
+    next_item = _next_single_shot_item(
+        asset_selection_status=CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED, planned_visual_segments=[]
+    )
+
+    updated = merge_mini_shots_with_next_item([tiny, next_item], settings)
+
+    assert updated[0] == tiny  # unverändert, Blocker bleibt sichtbar
+    assert CUT_PLAN_ERROR_SHOT_TOO_SHORT in updated[0].blockers
+
+
+def test_merge_mini_shots_with_next_item_skips_across_folder_boundary() -> None:
+    settings = CutPlanSettings(project_id="p1")
+    tiny = _tiny_single_shot_item()
+    next_item = _next_single_shot_item(folder_name="Different Folder")
+
+    updated = merge_mini_shots_with_next_item([tiny, next_item], settings)
+
+    assert updated[0] == tiny
+
+
+def test_merge_mini_shots_with_next_item_skips_when_no_next_item() -> None:
+    settings = CutPlanSettings(project_id="p1")
+    tiny = _tiny_single_shot_item()
+
+    updated = merge_mini_shots_with_next_item([tiny], settings)
+
+    assert updated[0] == tiny
+
+
+def test_merge_mini_shots_with_next_item_skips_when_combined_duration_exceeds_shot_max(
+) -> None:
+    settings = CutPlanSettings(project_id="p1", shot_max_sec=4.0)
+    tiny = _tiny_single_shot_item()
+    next_item = _next_single_shot_item()  # next allein ist bereits 5.0s > shot_max_sec
+
+    updated = merge_mini_shots_with_next_item([tiny, next_item], settings)
+
+    assert updated[0] == tiny
+
+
+def test_merge_mini_shots_with_next_item_ignores_soft_warning_case() -> None:
+    """Nur der HARTE Blocker (< 1.0s) löst den Forward-Merge aus — die
+    weichere Warn-Schwelle (>= 1.0s, < shot_min_sec) bleibt unverändert
+    (redaktionell akzeptierte Flexibilität, §12)."""
+    settings = CutPlanSettings(project_id="p1")
+    soft_segment = VisualSegment(
+        segment_id="cut_a_seg_01", timeline_in_sec=10.0, timeline_out_sec=11.5, duration_sec=1.5,
+        asset_id="asset_a", asset_path="/fake/a.jpg", asset_type="image", source_in_sec=0.0,
+        source_out_sec=1.5, track="V1", reason="primary_asset",
+    )
+    tiny = _tiny_single_shot_item(
+        timeline_end_sec=11.5, duration_sec=1.5, planned_visual_segments=[soft_segment], blockers=[],
+        warnings=[CUT_PLAN_ERROR_SHOT_TOO_SHORT],
+    )
+    next_item = _next_single_shot_item(timeline_start_sec=11.5, timeline_end_sec=16.5)
+
+    updated = merge_mini_shots_with_next_item([tiny, next_item], settings)
+
+    assert updated[0] == tiny
+
+
+def test_apply_asset_selection_forward_merges_first_sentence_of_folder(tmp_path: Path) -> None:
+    """Integrationstest: das ERSTE Item eines Folders kann nicht rückwärts
+    gemerged werden (kein vorheriges Item im selben Folder) — Phase C
+    erledigt das stattdessen vorwärts, sodass am Ende kein SHOT_TOO_SHORT-
+    Blocker mehr übrig bleibt."""
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("photo_a.jpg", "a"), ("photo_b.jpg", "b")])
+    folder = ConfirmedFolderPlanItem(
+        folder_name=FOLDER_A,
+        order_index=1,
+        audio_path="/fake/folder.mp3",
+        audio_duration_sec=30.0,
+        sentence_items=[
+            SentenceItem(sentence_id="sentence_001", text="Kurz.", primary_asset_id="asset_photo_a"),
+            SentenceItem(sentence_id="sentence_002", text="Ein längerer Satz danach.", primary_asset_id="asset_photo_b"),
+        ],
+        alignment_items=[
+            AlignmentItem(sentence_id="sentence_001", audio_start_sec=0.0, audio_end_sec=0.5, duration_sec=0.5),
+            AlignmentItem(sentence_id="sentence_002", audio_start_sec=0.5, audio_end_sec=5.5, duration_sec=5.0),
+        ],
+    )
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=ConfirmedIntroPlanItem(), folders=[folder])
+    _build_and_save_draft(project, plan)
+    updated = apply_asset_selection_to_draft(project)
+
+    first_item = next(item for item in updated.items if "sentence_001" in item.cut_item_id)
+    assert first_item.duration_strategy == CUT_PLAN_DURATION_STRATEGY_MERGED
+    assert CUT_PLAN_ERROR_SHOT_TOO_SHORT not in first_item.blockers
+    assert first_item.chosen_asset_id == "asset_photo_b"
+    # "merged_short_sentence" bleibt als Marker erhalten, auch wenn zusätzlich
+    # initial_preroll_extension (Phase 8.5, erstes Segment der Timeline)
+    # via '+' angehängt wurde (siehe cut_plan_visual_coverage._combine_reason).
+    assert "merged_short_sentence" in first_item.planned_visual_segments[0].reason.split("+")
 
 
 def test_build_visual_segments_for_item_single_candidate(tmp_path: Path) -> None:

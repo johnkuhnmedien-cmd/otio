@@ -51,10 +51,12 @@ from otio_app.services.voiceover_generation.cut_plan_validator import (
 )
 from otio_app.services.voiceover_generation.cut_plan_visual_coverage import (
     apply_visual_coverage_extensions,
+    close_small_visual_gaps,
     extend_first_visual_to_timeline_zero,
     extend_section_end_visuals_over_pauses,
     find_first_visual_segment,
     find_last_visual_segment_before_time,
+    resolve_timeline_overlaps,
 )
 from otio_app.services.voiceover_generation.final_plan_service import (
     save_confirmed_voiceover_project_plan,
@@ -631,6 +633,168 @@ def test_ui_renders_without_exception_showing_validation_report(
     _patch_project_selector(project, monkeypatch)
 
     render_cut_plan_page()  # darf nicht werfen
+
+
+# --- Phase C: kleine Lücken schließen + Timeline-Overlaps normalisieren ---
+
+
+def test_close_small_visual_gaps_extends_previous_segment_for_image() -> None:
+    segment_1 = _minimal_segment(segment_id="seg_1", asset_type="image", timeline_in_sec=0.0, timeline_out_sec=5.0,
+                                  duration_sec=5.0, source_in_sec=0.0, source_out_sec=5.0)
+    segment_2 = _minimal_segment(segment_id="seg_2", timeline_in_sec=5.4, timeline_out_sec=10.4, duration_sec=5.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1], timeline_end_sec=5.0)
+    item_2 = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[segment_2], timeline_start_sec=5.4,
+                            timeline_end_sec=10.4)
+    cut_plan = CutPlanDocument(project_id="p1", items=[item_1, item_2])
+
+    updated = close_small_visual_gaps(cut_plan)
+    updated_segment_1 = updated.items[0].planned_visual_segments[0]
+    assert updated_segment_1.timeline_out_sec == pytest.approx(5.4)
+    assert updated_segment_1.duration_sec == pytest.approx(5.4)
+    assert updated_segment_1.source_out_sec == pytest.approx(5.4)
+    # Das nächste Segment bleibt unverändert.
+    assert updated.items[1].planned_visual_segments[0] == segment_2
+
+
+def test_close_small_visual_gaps_extends_source_out_for_video() -> None:
+    segment_1 = _minimal_segment(segment_id="seg_1", asset_type="video", asset_path="/fake/video.mp4",
+                                  timeline_in_sec=0.0, timeline_out_sec=5.0, duration_sec=5.0,
+                                  source_in_sec=1.0, source_out_sec=6.0)
+    segment_2 = _minimal_segment(segment_id="seg_2", timeline_in_sec=5.4, timeline_out_sec=10.4, duration_sec=5.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1], timeline_end_sec=5.0)
+    item_2 = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[segment_2], timeline_start_sec=5.4,
+                            timeline_end_sec=10.4)
+    cut_plan = CutPlanDocument(project_id="p1", items=[item_1, item_2])
+
+    with patch(f"{_VISUAL_COVERAGE_MODULE}._video_can_extend_to", return_value=True):
+        updated = close_small_visual_gaps(cut_plan)
+    updated_segment_1 = updated.items[0].planned_visual_segments[0]
+    assert updated_segment_1.timeline_out_sec == pytest.approx(5.4)
+    assert updated_segment_1.source_out_sec == pytest.approx(6.4)
+
+
+def test_close_small_visual_gaps_skipped_when_video_too_short() -> None:
+    segment_1 = _minimal_segment(segment_id="seg_1", asset_type="video", asset_path="/fake/video.mp4",
+                                  timeline_in_sec=0.0, timeline_out_sec=5.0, duration_sec=5.0,
+                                  source_in_sec=1.0, source_out_sec=6.0)
+    segment_2 = _minimal_segment(segment_id="seg_2", timeline_in_sec=5.4, timeline_out_sec=10.4, duration_sec=5.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1], timeline_end_sec=5.0)
+    item_2 = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[segment_2], timeline_start_sec=5.4,
+                            timeline_end_sec=10.4)
+    cut_plan = CutPlanDocument(project_id="p1", items=[item_1, item_2])
+
+    with patch(f"{_VISUAL_COVERAGE_MODULE}._video_can_extend_to", return_value=False):
+        updated = close_small_visual_gaps(cut_plan)
+    assert updated.items[0].planned_visual_segments[0] == segment_1  # unverändert, Lücke bleibt sichtbar
+
+
+def test_close_small_visual_gaps_ignores_gaps_above_threshold() -> None:
+    """Eine große Lücke (fehlendes Supplement-Asset) darf NICHT stillschweigend
+    mit einem eingefrorenen Standbild überbrückt werden."""
+    segment_1 = _minimal_segment(segment_id="seg_1", asset_type="image", timeline_in_sec=0.0, timeline_out_sec=5.0,
+                                  duration_sec=5.0, source_in_sec=0.0, source_out_sec=5.0)
+    segment_2 = _minimal_segment(segment_id="seg_2", timeline_in_sec=45.0, timeline_out_sec=50.0, duration_sec=5.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1], timeline_end_sec=5.0)
+    item_2 = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[segment_2], timeline_start_sec=45.0,
+                            timeline_end_sec=50.0)
+    cut_plan = CutPlanDocument(project_id="p1", items=[item_1, item_2])
+
+    updated = close_small_visual_gaps(cut_plan)
+    assert updated.items[0].planned_visual_segments[0] == segment_1  # unverändert
+
+
+def test_close_small_visual_gaps_ignores_when_no_gap() -> None:
+    segment_1 = _minimal_segment(segment_id="seg_1", timeline_in_sec=0.0, timeline_out_sec=5.0, duration_sec=5.0)
+    segment_2 = _minimal_segment(segment_id="seg_2", timeline_in_sec=5.0, timeline_out_sec=10.0, duration_sec=5.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1], timeline_end_sec=5.0)
+    item_2 = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[segment_2], timeline_start_sec=5.0,
+                            timeline_end_sec=10.0)
+    cut_plan = CutPlanDocument(project_id="p1", items=[item_1, item_2])
+
+    updated = close_small_visual_gaps(cut_plan)
+    assert updated.items[0].planned_visual_segments[0] == segment_1
+    assert updated.items[1].planned_visual_segments[0] == segment_2
+
+
+def test_resolve_timeline_overlaps_shrinks_earlier_segment() -> None:
+    segment_1 = _minimal_segment(segment_id="seg_1", asset_type="image", timeline_in_sec=0.0, timeline_out_sec=5.2,
+                                  duration_sec=5.2, source_in_sec=0.0, source_out_sec=5.2)
+    segment_2 = _minimal_segment(segment_id="seg_2", timeline_in_sec=5.0, timeline_out_sec=10.0, duration_sec=5.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1], timeline_end_sec=5.2,
+                            duration_sec=5.2)
+    item_2 = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[segment_2], timeline_start_sec=5.0,
+                            timeline_end_sec=10.0)
+    cut_plan = CutPlanDocument(project_id="p1", items=[item_1, item_2])
+
+    updated = resolve_timeline_overlaps(cut_plan)
+    updated_segment_1 = updated.items[0].planned_visual_segments[0]
+    assert updated_segment_1.timeline_out_sec == pytest.approx(5.0)
+    assert updated_segment_1.duration_sec == pytest.approx(5.0)
+    assert updated_segment_1.source_out_sec == pytest.approx(5.0)
+    # Das spätere Segment bleibt unangetastet — keine Kaskade.
+    assert updated.items[1].planned_visual_segments[0] == segment_2
+
+
+def test_resolve_timeline_overlaps_shrinks_source_out_for_video() -> None:
+    segment_1 = _minimal_segment(segment_id="seg_1", asset_type="video", asset_path="/fake/video.mp4",
+                                  timeline_in_sec=0.0, timeline_out_sec=5.2, duration_sec=5.2,
+                                  source_in_sec=1.0, source_out_sec=6.2)
+    segment_2 = _minimal_segment(segment_id="seg_2", timeline_in_sec=5.0, timeline_out_sec=10.0, duration_sec=5.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1], timeline_end_sec=5.2,
+                            duration_sec=5.2)
+    item_2 = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[segment_2], timeline_start_sec=5.0,
+                            timeline_end_sec=10.0)
+    cut_plan = CutPlanDocument(project_id="p1", items=[item_1, item_2])
+
+    updated = resolve_timeline_overlaps(cut_plan)
+    updated_segment_1 = updated.items[0].planned_visual_segments[0]
+    assert updated_segment_1.source_out_sec == pytest.approx(6.0)
+
+
+def test_resolve_timeline_overlaps_ignores_when_no_overlap() -> None:
+    segment_1 = _minimal_segment(segment_id="seg_1", timeline_in_sec=0.0, timeline_out_sec=5.0, duration_sec=5.0)
+    segment_2 = _minimal_segment(segment_id="seg_2", timeline_in_sec=5.0, timeline_out_sec=10.0, duration_sec=5.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1], timeline_end_sec=5.0)
+    item_2 = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[segment_2], timeline_start_sec=5.0,
+                            timeline_end_sec=10.0)
+    cut_plan = CutPlanDocument(project_id="p1", items=[item_1, item_2])
+
+    updated = resolve_timeline_overlaps(cut_plan)
+    assert updated.items[0].planned_visual_segments[0] == segment_1
+    assert updated.items[1].planned_visual_segments[0] == segment_2
+
+
+def test_resolve_timeline_overlaps_skips_when_shrink_would_reach_zero() -> None:
+    """Ein extremer Overlap, der das frühere Segment auf (nahezu) 0
+    reduzieren würde, wird NICHT angefasst — bleibt als TIMELINE_OVERLAP
+    sichtbar statt ein ungültiges (Null-Dauer-)Segment zu erzeugen."""
+    segment_1 = _minimal_segment(segment_id="seg_1", timeline_in_sec=0.0, timeline_out_sec=5.0, duration_sec=5.0)
+    segment_2 = _minimal_segment(segment_id="seg_2", timeline_in_sec=0.0, timeline_out_sec=5.0, duration_sec=5.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1], timeline_end_sec=5.0)
+    item_2 = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[segment_2], timeline_start_sec=0.0,
+                            timeline_end_sec=5.0)
+    cut_plan = CutPlanDocument(project_id="p1", items=[item_1, item_2])
+
+    updated = resolve_timeline_overlaps(cut_plan)
+    assert updated.items[0].planned_visual_segments[0] == segment_1
+
+
+def test_apply_visual_coverage_extensions_runs_gap_close_and_overlap_resolution() -> None:
+    """Integrationstest: apply_visual_coverage_extensions wendet auch die
+    beiden neuen Phase-C-Schritte an, nicht nur die beiden bestehenden."""
+    settings = CutPlanSettings(project_id="p1")
+    segment_1 = _minimal_segment(segment_id="seg_1", asset_type="image", timeline_in_sec=0.0, timeline_out_sec=5.2,
+                                  duration_sec=5.2, source_in_sec=0.0, source_out_sec=5.2)
+    segment_2 = _minimal_segment(segment_id="seg_2", timeline_in_sec=5.0, timeline_out_sec=10.0, duration_sec=5.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1], timeline_end_sec=5.2,
+                            duration_sec=5.2)
+    item_2 = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[segment_2], timeline_start_sec=5.0,
+                            timeline_end_sec=10.0)
+    cut_plan = CutPlanDocument(project_id="p1", items=[item_1, item_2])
+
+    updated = apply_visual_coverage_extensions(cut_plan, settings)
+    updated_segment_1 = updated.items[0].planned_visual_segments[0]
+    assert updated_segment_1.timeline_out_sec == pytest.approx(5.0)  # Overlap wurde aufgelöst
 
 
 def test_settings_from_snapshot_used_for_coverage(tmp_path: Path) -> None:
