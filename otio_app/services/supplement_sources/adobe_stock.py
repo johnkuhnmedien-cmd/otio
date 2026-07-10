@@ -179,13 +179,20 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         }
 
     @staticmethod
-    def _prepare_download_url(url: str, access_token: str) -> str:
+    def _prepare_download_url(url: str, access_token: str, *, size: int | None = None) -> str:
         """Hängt ?token=… an die von Content/License gelieferte Download-URL
-        an, falls noch nicht vorhanden — Adobe Stock Libraries/Download."""
+        an, falls noch nicht vorhanden — Adobe Stock Libraries/Download.
+
+        Für Videos wird zusätzlich die gewünschte Rendition explizit gesetzt
+        (2160 für Video_4K, 1080 für Video_HD). Ohne size kann Adobe je nach
+        Antwort/Entitlement eine Comp-/Preview-Datei liefern, die zwar
+        downloadbar ist, aber weiterhin ein Wasserzeichen trägt."""
         parsed = urllib.parse.urlparse(url)
         query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
         if not (query.get("token") and query["token"][0]):
             query["token"] = [access_token]
+        if size is not None:
+            query["size"] = [str(size)]
         new_query = urllib.parse.urlencode(query, doseq=True)
         return urllib.parse.urlunparse(parsed._replace(query=new_query))
 
@@ -327,11 +334,10 @@ class AdobeStockAdapter(SupplementSourceAdapter):
     def _select_preview(self, *, media_type: str, comps: dict, file_entry: dict) -> tuple[str, int, int]:
         """Gibt (preview_url, width, height) zurück.
 
-        Video: `comps.Video_4K`/`comps.Video_HD` sind laut Adobe-API-Referenz
-        bereits die tatsächlichen Maße der jeweiligen LIZENZIERBAREN Variante
-        (kein Wasserzeichen-Downscale) — deshalb werden Breite/Höhe direkt aus
-        dem gewählten comps-Eintrag übernommen (mit den Files-API-Basismaßen
-        als Fallback, falls comps unvollständig ist).
+        Video: `comps.Video_4K`/`comps.Video_HD` liefern hilfreiche Maße für
+        die spätere Lizenzvariante, die URL selbst ist aber nur Preview/Comp
+        und darf niemals als finaler Download verwendet werden. Der echte
+        Download kommt ausschließlich aus Content/License.purchase_details.url.
 
         Foto: `comps.Standard` ist dagegen NUR eine kleine Wasserzeichen-
         Vorschau (z. B. 1000x600) — für Breite/Höhe wird deshalb IMMER das
@@ -517,11 +523,32 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         contents = payload.get("contents") or {}
         entry = contents.get(str(content_id)) or (next(iter(contents.values()), {}) if contents else {})
         purchase_details = entry.get("purchase_details") or {}
-        if not str(purchase_details.get("url") or ""):
-            state = purchase_details.get("state", "unbekannt")
+        state = str(purchase_details.get("state") or "unbekannt")
+        response_license = str(purchase_details.get("license") or "")
+        response_url = str(purchase_details.get("url") or "")
+        response_size = str(entry.get("size") or "")
+        if state not in {"just_purchased", "purchased"}:
+            raise RuntimeError(
+                "Adobe-Lizenzierung nicht bestätigt: "
+                f"Content-ID {content_id}, angefragt license={license_type}, "
+                f"state={state}, response_license={response_license or '—'}, size={response_size or '—'}."
+            )
+        if response_license != license_type:
+            raise RuntimeError(
+                "Adobe-Lizenzierung lieferte unerwarteten Lizenztyp: "
+                f"Content-ID {content_id}, angefragt license={license_type}, "
+                f"response_license={response_license or '—'}, state={state}, size={response_size or '—'}."
+            )
+        if not response_url:
             raise RuntimeError(
                 f"Adobe-Lizenzierung lieferte keine Download-URL für Content-ID {content_id} "
-                f"(license={license_type}, state={state})."
+                f"(license={license_type}, state={state}, size={response_size or '—'})."
+            )
+        if "/Rest/Libraries/Download/" not in response_url:
+            raise RuntimeError(
+                "Adobe-Lizenzierung lieferte keine Libraries/Download-URL: "
+                f"Content-ID {content_id}, license={license_type}, state={state}, "
+                f"url={response_url[:180]}."
             )
         return purchase_details
 
@@ -532,6 +559,7 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         *,
         api_key: str,
         access_token: str,
+        size: int | None,
         max_bytes: int | None,
     ) -> None:
         """Lädt url chunked auf local_path herunter. Bricht ab (löscht die
@@ -540,7 +568,7 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         max_bytes überschreitet — max_bytes=None bedeutet keine Grenze
         (Fotos, oder ein Video, für das ohnehin bereits die kleinste
         Lizenzvariante läuft)."""
-        download_url = self._prepare_download_url(url, access_token)
+        download_url = self._prepare_download_url(url, access_token, size=size)
         req = urllib.request.Request(download_url, headers=self._download_headers(api_key))
         try:
             with urllib.request.urlopen(req, timeout=180) as response:
@@ -633,14 +661,20 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             if has_4k:
                 primary_license = ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K
                 fallback_license = ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD if has_hd else ""
+                primary_size = 2160
+                fallback_size = 1080 if has_hd else None
                 size_limit = ADOBE_STOCK_VIDEO_4K_MAX_BYTES
             else:
                 primary_license = ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD
                 fallback_license = ""
+                primary_size = 1080
+                fallback_size = None
                 size_limit = None
         else:
             primary_license = ADOBE_STOCK_LICENSE_TYPE_STANDARD
             fallback_license = ""
+            primary_size = None
+            fallback_size = None
             size_limit = None
 
         purchase_details = self._license_asset(
@@ -656,6 +690,7 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                 local_path,
                 api_key=api_key,
                 access_token=access_token,
+                size=primary_size,
                 max_bytes=size_limit,
             )
         except AdobeAssetTooLargeError:
@@ -676,6 +711,7 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                 local_path,
                 api_key=api_key,
                 access_token=access_token,
+                size=fallback_size,
                 max_bytes=None,
             )
 

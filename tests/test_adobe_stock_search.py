@@ -548,19 +548,27 @@ def _license_response_body(
     width: int = 1920,
     height: int = 1080,
     state: str = "just_purchased",
+    license: str = "Standard",
     no_url: bool = False,
 ) -> bytes:
-    purchase_details = {"state": state, "content_type": content_type, "width": width, "height": height}
+    purchase_details = {
+        "state": state,
+        "license": license,
+        "content_type": content_type,
+        "width": width,
+        "height": height,
+    }
     if not no_url:
         purchase_details["url"] = download_url
     return json.dumps({"contents": {str(content_id): {"content_id": str(content_id), "purchase_details": purchase_details}}}).encode()
 
 
 def _normalize_download_lookup_url(url: str) -> str:
-    """Entfernt ?token=… für Test-Lookups — acquire() hängt den Token an."""
+    """Entfernt ?token/size für Test-Lookups — acquire() hängt beides an."""
     parsed = urllib.parse.urlparse(url)
     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
     query.pop("token", None)
+    query.pop("size", None)
     new_query = urllib.parse.urlencode(query, doseq=True)
     return urllib.parse.urlunparse(parsed._replace(query=new_query))
 
@@ -639,7 +647,7 @@ def test_acquire_video_prefers_4k_when_under_size_limit(tmp_path: Path, monkeypa
     body = b"y" * 200_000
     fake_urlopen = _dispatching_urlopen(
         license_bodies={
-            "Video_4K": _license_response_body("555", download_url=url_4k, content_type="video/mp4"),
+            "Video_4K": _license_response_body("555", download_url=url_4k, content_type="video/mp4", license="Video_4K"),
         },
         download_bodies={url_4k: _FakeStreamResponse(body, content_length=str(len(body)))},
     )
@@ -662,8 +670,8 @@ def test_acquire_video_falls_back_to_hd_when_4k_content_length_exceeds_limit(
     body_hd = b"z" * 200_000
     fake_urlopen = _dispatching_urlopen(
         license_bodies={
-            "Video_4K": _license_response_body("555", download_url=url_4k, content_type="video/mp4"),
-            "Video_HD": _license_response_body("555", download_url=url_hd, content_type="video/mp4"),
+            "Video_4K": _license_response_body("555", download_url=url_4k, content_type="video/mp4", license="Video_4K"),
+            "Video_HD": _license_response_body("555", download_url=url_hd, content_type="video/mp4", license="Video_HD"),
         },
         download_bodies={
             url_4k: _FakeStreamResponse(b"unused-because-too-large", content_length=too_large),
@@ -694,8 +702,8 @@ def test_acquire_video_falls_back_to_hd_when_4k_exceeds_limit_during_streaming(
     oversized_body = b"a" * (ADOBE_STOCK_VIDEO_4K_MAX_BYTES + 1024)
     fake_urlopen = _dispatching_urlopen(
         license_bodies={
-            "Video_4K": _license_response_body("555", download_url=url_4k, content_type="video/mp4"),
-            "Video_HD": _license_response_body("555", download_url=url_hd, content_type="video/mp4"),
+            "Video_4K": _license_response_body("555", download_url=url_4k, content_type="video/mp4", license="Video_4K"),
+            "Video_HD": _license_response_body("555", download_url=url_hd, content_type="video/mp4", license="Video_HD"),
         },
         download_bodies={
             url_4k: _FakeStreamResponse(oversized_body),  # kein Content-Length-Header
@@ -717,7 +725,7 @@ def test_acquire_video_hd_only_has_no_size_limit(tmp_path: Path, monkeypatch: py
     huge_body_size = str(700 * 1024 * 1024)
     body = b"z" * 200_000
     fake_urlopen = _dispatching_urlopen(
-        license_bodies={"Video_HD": _license_response_body("555", download_url=url_hd, content_type="video/mp4")},
+        license_bodies={"Video_HD": _license_response_body("555", download_url=url_hd, content_type="video/mp4", license="Video_HD")},
         download_bodies={url_hd: _FakeStreamResponse(body, content_length=huge_body_size)},
     )
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
@@ -741,7 +749,7 @@ def test_acquire_video_without_fallback_and_over_limit_raises(
     url_4k = "https://stock.adobe.com/Rest/Libraries/Download/555/4"
     too_large = str(700 * 1024 * 1024)
     fake_urlopen = _dispatching_urlopen(
-        license_bodies={"Video_4K": _license_response_body("555", download_url=url_4k, content_type="video/mp4")},
+        license_bodies={"Video_4K": _license_response_body("555", download_url=url_4k, content_type="video/mp4", license="Video_4K")},
         download_bodies={url_4k: _FakeStreamResponse(b"unused", content_length=too_large)},
     )
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
@@ -757,12 +765,69 @@ def test_acquire_raises_when_license_response_has_no_download_url(
     monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
     monkeypatch.setenv("ADOBE_STOCK_ACCESS_TOKEN", "test-token")
     fake_urlopen = _dispatching_urlopen(
-        license_bodies={"Standard": _license_response_body("666", no_url=True, state="not_possible")},
+        license_bodies={"Standard": _license_response_body("666", no_url=True)},
         download_bodies={},
     )
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     with pytest.raises(RuntimeError, match="keine Download-URL"):
         AdobeStockAdapter().acquire(_photo_candidate(), tmp_path / "req" / "assets")
+
+
+def test_acquire_rejects_unconfirmed_license_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
+    monkeypatch.setenv("ADOBE_STOCK_ACCESS_TOKEN", "test-token")
+    preview_url = "https://stock.adobe.io/std/666"
+    fake_urlopen = _dispatching_urlopen(
+        license_bodies={
+            "Standard": _license_response_body(
+                "666", download_url=preview_url, content_type="image/jpeg", state="not_purchased"
+            )
+        },
+        download_bodies={},
+    )
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError, match="nicht bestätigt"):
+        AdobeStockAdapter().acquire(_photo_candidate(), tmp_path / "req" / "assets")
+
+
+def test_acquire_rejects_unexpected_license_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
+    monkeypatch.setenv("ADOBE_STOCK_ACCESS_TOKEN", "test-token")
+    download_url = "https://stock.adobe.com/Rest/Libraries/Download/555/4"
+    fake_urlopen = _dispatching_urlopen(
+        license_bodies={
+            "Video_4K": _license_response_body(
+                "555", download_url=download_url, content_type="video/mp4", license="Video_HD"
+            )
+        },
+        download_bodies={},
+    )
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError, match="unerwarteten Lizenztyp"):
+        AdobeStockAdapter().acquire(_video_candidate(), tmp_path / "req" / "assets")
+
+
+def test_acquire_rejects_preview_url_from_license_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
+    monkeypatch.setenv("ADOBE_STOCK_ACCESS_TOKEN", "test-token")
+    preview_url = "https://stock.adobe.io/4k/555"
+    fake_urlopen = _dispatching_urlopen(
+        license_bodies={
+            "Video_4K": _license_response_body(
+                "555", download_url=preview_url, content_type="video/mp4", license="Video_4K"
+            )
+        },
+        download_bodies={},
+    )
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError, match="keine Libraries/Download-URL"):
+        AdobeStockAdapter().acquire(_video_candidate(), tmp_path / "req" / "assets")
 
 
 def test_acquire_raises_runtime_error_on_license_http_error(
@@ -803,7 +868,7 @@ def test_acquire_video_raises_when_ffprobe_cannot_read_downloaded_file(
     url_4k = "https://stock.adobe.com/Rest/Libraries/Download/555/4"
     body = b"y" * 200_000
     fake_urlopen = _dispatching_urlopen(
-        license_bodies={"Video_4K": _license_response_body("555", download_url=url_4k, content_type="video/mp4")},
+        license_bodies={"Video_4K": _license_response_body("555", download_url=url_4k, content_type="video/mp4", license="Video_4K")},
         download_bodies={url_4k: _FakeStreamResponse(body, content_length=str(len(body)))},
     )
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
@@ -866,9 +931,69 @@ def test_acquire_download_uses_token_query_param_and_download_headers(
 
     params = urllib.parse.parse_qs(urllib.parse.urlparse(captured["download_url"]).query)
     assert params["token"] == ["test-token"]
+    assert "size" not in params
     assert "authorization" not in captured["headers"]
     assert "accept" not in captured["headers"]
     assert captured["headers"]["x-api-key"] == "test-key"
+
+
+def test_acquire_video_download_uses_4k_size_param(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
+    monkeypatch.setenv("ADOBE_STOCK_ACCESS_TOKEN", "test-token")
+    download_url = "https://stock.adobe.com/Rest/Libraries/Download/555/4"
+    body = b"v" * 200_000
+    captured: dict = {}
+
+    def fake_urlopen(request, timeout=20):
+        url = request.full_url
+        if url.startswith(ADOBE_STOCK_LICENSE_ENDPOINT):
+            return _FakeStreamResponse(
+                _license_response_body(
+                    "555", download_url=download_url, content_type="video/mp4", license="Video_4K"
+                )
+            )
+        captured["download_url"] = url
+        return _FakeStreamResponse(body, content_length=str(len(body)))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with patch(f"{_MODULE}.probe_duration_seconds", return_value=8.0):
+        AdobeStockAdapter().acquire(_video_candidate(), tmp_path / "req" / "assets")
+
+    params = urllib.parse.parse_qs(urllib.parse.urlparse(captured["download_url"]).query)
+    assert params["token"] == ["test-token"]
+    assert params["size"] == ["2160"]
+
+
+def test_acquire_video_download_uses_hd_size_param(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
+    monkeypatch.setenv("ADOBE_STOCK_ACCESS_TOKEN", "test-token")
+    download_url = "https://stock.adobe.com/Rest/Libraries/Download/555/3"
+    body = b"h" * 200_000
+    captured: dict = {}
+
+    def fake_urlopen(request, timeout=20):
+        url = request.full_url
+        if url.startswith(ADOBE_STOCK_LICENSE_ENDPOINT):
+            return _FakeStreamResponse(
+                _license_response_body(
+                    "555", download_url=download_url, content_type="video/mp4", license="Video_HD"
+                )
+            )
+        captured["download_url"] = url
+        return _FakeStreamResponse(body, content_length=str(len(body)))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    candidate = _video_candidate(adobe_comps={"Video_HD": {"url": download_url, "width": 1920, "height": 1080}})
+    with patch(f"{_MODULE}.probe_duration_seconds", return_value=8.0):
+        AdobeStockAdapter().acquire(candidate, tmp_path / "req" / "assets")
+
+    params = urllib.parse.parse_qs(urllib.parse.urlparse(captured["download_url"]).query)
+    assert params["token"] == ["test-token"]
+    assert params["size"] == ["1080"]
 
 
 def test_acquire_download_http_error_includes_response_body(
