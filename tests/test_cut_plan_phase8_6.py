@@ -254,6 +254,33 @@ def test_request_contains_visual_intent_text_and_duration(tmp_path: Path) -> Non
     assert request.reason == "No local asset available."
 
 
+def test_requests_are_built_for_items_blocked_by_reuse_policy(tmp_path: Path) -> None:
+    """Phase A (Nutzervorgabe): ein Item, das NICHT ursprünglich
+    needs_supplement_asset=true war, sondern erst durch die
+    Asset-Auswahl (Reuse-/Usage-Regel-Verletzung, siehe
+    cut_plan_asset_selector._supplement_required_copy) supplementierbar
+    wurde, muss trotzdem einen Supplement Request bekommen — mit dem
+    konkreten Reuse-Grund als request.reason, nicht dem generischen
+    Standardtext."""
+    project = _make_project(tmp_path)
+    item = _minimal_item(
+        asset_selection_reason="Alle Kandidaten verletzen Usage-Regeln (ASSET_REUSE_DISTANCE_TOO_SHORT).",
+        supplement_reason=(
+            "Passende lokale Assets sind vorhanden, verletzen aber die Wiederverwendungs-Regeln "
+            "(ASSET_REUSE_DISTANCE_TOO_SHORT). Es wird ein zusätzliches, DISTINKTES Ersatz-Asset für "
+            "diese Szene benötigt (kein bereits verwendetes Motiv erneut)."
+        ),
+        warnings=["ASSET_REUSE_DISTANCE_TOO_SHORT"],
+    )
+    cut_plan = _minimal_cut_plan(project, items=[item])
+
+    document = build_supplement_requests_from_cut_plan(project, cut_plan)
+    assert len(document.requests) == 1
+    request = document.requests[0]
+    assert "DISTINKTES" in request.reason
+    assert "ASSET_REUSE_DISTANCE_TOO_SHORT" in request.reason
+
+
 def test_supplement_requests_file_is_written(tmp_path: Path) -> None:
     project = _project_with_supplement_required_draft(tmp_path)
     draft = load_cut_plan_draft(project)

@@ -514,22 +514,45 @@ def _blocked_copy(item: CutPlanItem, reason: str) -> CutPlanItem:
     )
 
 
-def _supplement_required_copy(item: CutPlanItem, *, reason: str, extra_warnings: list[str]) -> CutPlanItem:
+def _supplement_required_copy(
+    item: CutPlanItem,
+    *,
+    reason: str,
+    extra_warnings: list[str],
+    supplement_reason: str | None = None,
+) -> CutPlanItem:
+    """Baut die SUPPLEMENT_REQUIRED-Variante eines Items.
+
+    Setzt IMMER needs_supplement_asset=True — das hält den nachgelagerten
+    Validator konsistent: validate_cut_items prüft `chosen_asset_id` UND
+    `needs_supplement_asset` unabhängig vom asset_selection_status, würde
+    also ohne dieses Feld fälschlich zusätzlich MISSING_ASSET_MAPPING neben
+    dem hier bereits gesetzten SUPPLEMENT_REQUIRED-Blocker melden (Phase A,
+    Nutzervorgabe: Reuse-/Usage-Blocker sollen supplementierbar werden statt
+    dauerhaft BLOCKED zu bleiben).
+
+    supplement_reason (optional) überschreibt item.supplement_reason explizit
+    — genutzt vom Reuse-/Usage-Verletzungsfall, damit die spätere Supplement-
+    Suche (build_supplement_requests_from_cut_plan) einen konkreten, vom
+    generischen asset_selection_reason unabhängigen Grund erhält (z. B.
+    'Verletzt Reuse-Regel, benötigt ein DISTINKTES Ersatz-Asset')."""
     warnings = list(item.warnings) + extra_warnings
     blockers = list(item.blockers)
     if CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED not in blockers:
         blockers.append(CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED)
-    return item.model_copy(
-        update={
-            "asset_selection_status": CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED,
-            "chosen_asset_id": "",
-            "asset_selection_reason": reason,
-            "fallback_reason": "",
-            "planned_visual_segments": [],
-            "warnings": warnings,
-            "blockers": blockers,
-        }
-    )
+    update: dict[str, Any] = {
+        "asset_selection_status": CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED,
+        "chosen_asset_id": "",
+        "asset_selection_reason": reason,
+        "fallback_reason": "",
+        "needs_supplement_asset": True,
+        "planned_visual_segments": [],
+        "warnings": warnings,
+        "blockers": blockers,
+    }
+    if supplement_reason is not None:
+        update["supplement_reason"] = supplement_reason
+    return item.model_copy(update=update)
 
 
 def choose_asset_for_cut_item(
@@ -591,20 +614,28 @@ def choose_asset_for_cut_item(
             CUT_PLAN_ERROR_MAX_ASSET_USAGE_EXCEEDED,
             CUT_PLAN_ERROR_ASSET_REUSE_DISTANCE_TOO_SHORT,
         ):
-            blockers = list(item.blockers) + [last_failure_type]
-            blocked = item.model_copy(
-                update={
-                    "asset_selection_status": CUT_PLAN_ASSET_SELECTION_BLOCKED,
-                    "chosen_asset_id": "",
-                    "asset_selection_reason": f"Alle Kandidaten verletzen Usage-Regeln ({last_failure_type}).",
-                    "fallback_reason": "",
-                    "planned_visual_segments": [],
-                    "duration_strategy": duration_strategy,
-                    "warnings": warnings,
-                    "blockers": blockers,
-                }
+            # Phase A (Nutzervorgabe): früher landete dieser Fall dauerhaft
+            # als BLOCKED — ein an sich passendes lokales Asset durfte wegen
+            # der Reuse-/Usage-Regeln nicht verwendet werden, und es gab
+            # keinen automatischen Ausweg außer manuellem Eingreifen. Jetzt
+            # wird stattdessen ein Supplement Request ausgelöst: die
+            # Auto-Resolve-Pipeline (Adobe/Pexels) sucht ein zusätzliches,
+            # DISTINKTES Ersatz-Asset für genau dieses Item, statt eines der
+            # bereits zu oft/zu früh verwendeten lokalen Assets zu erzwingen.
+            updated = _supplement_required_copy(
+                item,
+                reason=f"Alle Kandidaten verletzen Usage-Regeln ({last_failure_type}).",
+                # extra_warnings bewusst leer — last_failure_type steckt bereits in
+                # selection_warnings/warnings (siehe unten, gleiche Konvention wie die
+                # beiden anderen _supplement_required_copy-Aufrufe in dieser Funktion).
+                extra_warnings=[],
+                supplement_reason=(
+                    "Passende lokale Assets sind vorhanden, verletzen aber die Wiederverwendungs-Regeln "
+                    f"({last_failure_type}). Es wird ein zusätzliches, DISTINKTES Ersatz-Asset für diese "
+                    "Szene benötigt (kein bereits verwendetes Motiv erneut)."
+                ),
             )
-            return blocked
+            return updated.model_copy(update={"duration_strategy": duration_strategy, "warnings": warnings})
         updated = _supplement_required_copy(
             item,
             reason="Kein primary/backup Asset ist nutzbar (siehe Warnings).",

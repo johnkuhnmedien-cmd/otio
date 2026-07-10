@@ -418,7 +418,16 @@ def test_max_asset_usage_applied_globally_intro_counts(tmp_path: Path) -> None:
     # Erster Folder-Versuch: direkt nach Intro -> Consecutive-Reuse-Verletzung.
     # Zweiter Versuch (weiter entfernt) sollte scheitern, sobald max_asset_usage (2) erreicht ist.
     assert updated.asset_usage_summary.get("asset_photo_a", 0) <= 2
-    assert any(item.asset_selection_status == CUT_PLAN_ASSET_SELECTION_BLOCKED for item in folder_items)
+    # Phase A (Nutzervorgabe): ein Item, dessen einzige Kandidaten die
+    # Usage-Regeln verletzen, bleibt NICHT mehr dauerhaft BLOCKED, sondern
+    # wird supplementierbar — die Auto-Resolve-Pipeline kann dafür ein
+    # zusätzliches, distinktes Asset beschaffen.
+    assert not any(item.asset_selection_status == CUT_PLAN_ASSET_SELECTION_BLOCKED for item in folder_items)
+    blocked_now_supplement_item = next(
+        item for item in folder_items if item.asset_selection_status == CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED
+    )
+    assert blocked_now_supplement_item.needs_supplement_asset is True
+    assert blocked_now_supplement_item.supplement_reason != ""
 
 
 def test_min_asset_reuse_distance_shots_is_applied(tmp_path: Path) -> None:
@@ -1263,6 +1272,44 @@ def test_choose_asset_for_cut_item_skips_selection_when_item_already_blocked(tmp
     assert result.asset_selection_status == CUT_PLAN_ASSET_SELECTION_BLOCKED
     assert result.chosen_asset_id == ""
     assert result.planned_visual_segments == []
+
+
+def test_choose_asset_for_cut_item_converts_max_usage_exceeded_to_supplement_required(tmp_path: Path) -> None:
+    """Phase A (Nutzervorgabe): das einzige nutzbare Asset hat max_asset_usage
+    bereits erreicht -> früher BLOCKED, jetzt SUPPLEMENT_REQUIRED mit einem
+    konkreten, auf 'DISTINKTES Ersatz-Asset' hinweisenden supplement_reason."""
+    project = _make_project(tmp_path)
+    settings = _settings(project, max_asset_usage=1, min_asset_reuse_distance_shots=0)
+    lookup = CutPlanAssetLookup()
+    from otio_app.services.voiceover_generation.cut_plan_asset_selector import CutPlanAssetCandidate
+
+    lookup.add(
+        CutPlanAssetCandidate(
+            asset_id="asset_x", asset_path="/x.jpg", folder_name=FOLDER_A, asset_type="image", is_image=True,
+            exists=True, usable_duration_sec=float("inf"),
+        )
+    )
+    tracker = UsageTracker()
+    tracker.register("asset_x", count_as_usage=True)  # bereits einmal verwendet, max_asset_usage=1 erreicht
+
+    from otio_app.services.voiceover_generation.cut_plan_models import CutPlanItem
+
+    item = CutPlanItem(
+        cut_item_id="a", duration_sec=5.0, timeline_start_sec=10.0, timeline_end_sec=15.0,
+        primary_asset_id="asset_x",
+    )
+    result = choose_asset_for_cut_item(project, item, lookup, tracker, settings)
+
+    assert result.asset_selection_status == CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED
+    assert result.chosen_asset_id == ""
+    assert result.needs_supplement_asset is True
+    assert "DISTINKTES" in result.supplement_reason
+    assert "MAX_ASSET_USAGE_EXCEEDED" in result.supplement_reason
+    assert CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED in result.blockers
+    # Der Usage-Fehler selbst bleibt nur eine Warnung, kein dauerhafter Blocker
+    # (sonst würde apply_accepted_supplement_to_cut_plan_item ihn nie los).
+    assert "MAX_ASSET_USAGE_EXCEEDED" in result.warnings
+    assert "MAX_ASSET_USAGE_EXCEEDED" not in result.blockers
 
 
 def test_build_visual_segments_for_item_single_candidate(tmp_path: Path) -> None:
