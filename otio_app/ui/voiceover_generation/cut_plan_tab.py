@@ -71,6 +71,8 @@ from otio_app.defaults import (
     PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_BLOCKED,
     PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_PASS,
     PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_WARNING,
+    PROVIDER_STATUS_READY,
+    SUPPLEMENT_SOURCE_ADOBE,
     SUPPLEMENT_SOURCE_PEXELS,
 )
 from otio_app.models import Project
@@ -90,8 +92,8 @@ from otio_app.project_layout import (
     get_production_edit_plan_validation_report_path,
     get_production_edit_plan_voice_folder_mapping_patch_path,
 )
-from otio_app.services.api_keys import get_api_key
 from otio_app.services.supplement_search import build_keyword_query
+from otio_app.services.supplement_sources import get_provider_readiness
 from otio_app.services.voiceover_generation.model_settings_service import (
     load_model_settings,
     save_model_settings,
@@ -568,6 +570,40 @@ def _render_validation_report(project: Project, draft: CutPlanDocument) -> None:
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
 
+def _supplement_provider_readiness() -> tuple[bool, bool]:
+    """Phase 12.4a: reine Statusermittlung (kein Netzwerkaufruf, nur lokale
+    Key-Prüfung) — ohne UI-Ausgabe, für Wiederverwendung an mehreren Stellen
+    der Seite (Einzel- und Sammel-Aktionen). Gibt (adobe_search_ready,
+    pexels_search_ready) zurück."""
+    adobe_ready = get_provider_readiness(SUPPLEMENT_SOURCE_ADOBE).status == PROVIDER_STATUS_READY
+    pexels_ready = get_provider_readiness(SUPPLEMENT_SOURCE_PEXELS).status == PROVIDER_STATUS_READY
+    return adobe_ready, pexels_ready
+
+
+def _render_provider_readiness_status() -> tuple[bool, bool]:
+    """Phase 12.4a: zeigt Adobe-/Pexels-Bereitschaft für die Supplement-
+    Suche an. readiness() prüft nur lokal vorhandene API-Keys/Access-Token
+    (kein Netzwerkaufruf) und ist daher jederzeit ohne eigenen Button sicher
+    aufrufbar. Adobe unterscheidet zusätzlich zwischen 'Suche möglich' (nur
+    ADOBE_STOCK_API_KEY nötig) und 'Lizenzierung/Download möglich' (zusätzlich
+    ADOBE_STOCK_ACCESS_TOKEN nötig, siehe Phase 12.1/12.3)."""
+    adobe_readiness = get_provider_readiness(SUPPLEMENT_SOURCE_ADOBE)
+    pexels_readiness = get_provider_readiness(SUPPLEMENT_SOURCE_PEXELS)
+    adobe_search_ready = adobe_readiness.status == PROVIDER_STATUS_READY
+    pexels_search_ready = pexels_readiness.status == PROVIDER_STATUS_READY
+
+    adobe_icon = "✅" if adobe_readiness.acquire_enabled else ("🟡" if adobe_search_ready else "⚪")
+    pexels_icon = "✅" if pexels_search_ready else "⚪"
+    st.caption(f"{adobe_icon} **Adobe Stock** — {adobe_readiness.message}")
+    st.caption(f"{pexels_icon} **Pexels** — {pexels_readiness.message}")
+    if not adobe_search_ready and not pexels_search_ready:
+        st.warning(
+            "Weder Adobe Stock noch Pexels ist konfiguriert — die Kandidatensuche liefert keine "
+            "Treffer (nur der generische Ordner-Fallback bleibt möglich)."
+        )
+    return adobe_search_ready, pexels_search_ready
+
+
 def _render_supplement_query_model_settings(project: Project) -> tuple[str, str]:
     """Phase 11.1: eigene, kleine Modellwahl NUR für die Suchquery-
     Generierung (Standard: Gemini 3.1 Flash Lite) — bewusst getrennt von den
@@ -652,9 +688,9 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
     ]
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
-    pexels_ready = bool(get_api_key("PEXELS_API_KEY"))
-    if not pexels_ready:
-        st.warning("PEXELS_API_KEY fehlt — die Kandidatensuche liefert ohne Key keine Treffer.")
+    adobe_search_ready, pexels_search_ready = _render_provider_readiness_status()
+    any_search_ready = adobe_search_ready or pexels_search_ready
+    provider_labels = {SUPPLEMENT_SOURCE_ADOBE: "Adobe Stock", SUPPLEMENT_SOURCE_PEXELS: "Pexels"}
 
     for request in requests_document.requests:
         with st.expander(f"{request.request_id} — {request.status}", expanded=False):
@@ -687,7 +723,26 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                     except ValueError as exc:
                         st.error(str(exc))
 
-            st.caption(f"Provider: {SUPPLEMENT_SOURCE_PEXELS} (Video & Foto)")
+            provider_options = [SUPPLEMENT_SOURCE_ADOBE, SUPPLEMENT_SOURCE_PEXELS]
+            default_provider = SUPPLEMENT_SOURCE_ADOBE if adobe_search_ready else SUPPLEMENT_SOURCE_PEXELS
+            selected_provider = st.selectbox(
+                "Provider für diese Suche",
+                options=provider_options,
+                index=provider_options.index(default_provider),
+                format_func=lambda p: provider_labels.get(p, p),
+                key=f"cut_plan_supplement_search_provider_{project.id}_{request.request_id}",
+                help="Nutzervorgabe: Adobe Stock wird bevorzugt (sofortige Lizenzierung, "
+                "unlimited Plan) — Pexels bleibt als kostenlose Ausweichquelle wählbar.",
+            )
+            selected_provider_ready = (
+                adobe_search_ready if selected_provider == SUPPLEMENT_SOURCE_ADOBE else pexels_search_ready
+            )
+            if not selected_provider_ready:
+                st.caption(
+                    f"⚪ {provider_labels.get(selected_provider, selected_provider)} ist nicht konfiguriert "
+                    "— Suche liefert keine Treffer."
+                )
+            st.caption(f"Provider: {provider_labels.get(selected_provider, selected_provider)} (Video & Foto)")
             if request.llm_queries:
                 st.caption(
                     "Zuletzt verwendete LLM-Suchqueries: "
@@ -717,13 +772,13 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
             if st.button(
                 "Supplement-Kandidaten suchen",
                 key=f"cut_plan_supplement_search_{project.id}_{request.request_id}",
-                disabled=not pexels_ready,
+                disabled=not selected_provider_ready,
             ):
                 with st.spinner("Suchqueries werden erzeugt und Kandidaten gesucht…"):
                     candidates_document = search_candidates_for_cut_plan_request(
                         project,
                         request.request_id,
-                        {"provider": SUPPLEMENT_SOURCE_PEXELS},
+                        {"provider": selected_provider},
                         query_llm_provider=query_llm_provider,
                         query_llm_model=query_llm_model,
                     )
@@ -745,12 +800,13 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
             if st.button(
                 "🤖 Automatisch lösen (Suche + Download + Prüfung + Akzeptieren)",
                 key=f"cut_plan_supplement_auto_resolve_{project.id}_{request.request_id}",
-                disabled=not pexels_ready or is_already_accepted_for_auto,
+                disabled=not any_search_ready or is_already_accepted_for_auto,
                 help=(
                     "Bestätigten Kandidaten überspringen"
                     if is_already_accepted_for_auto
-                    else "Sucht, lädt herunter und prüft Kandidaten der Reihe nach per Gemini — "
-                    "übernimmt automatisch NUR bei bestandener Prüfung (Status PASS)."
+                    else "Versucht zuerst Adobe Stock (sofortige Lizenzierung), dann Pexels — lädt "
+                    "herunter und prüft Kandidaten der Reihe nach per Gemini — übernimmt automatisch "
+                    "NUR bei bestandener Prüfung (Status PASS)."
                 ),
             ):
                 with st.spinner("Suche, Download und Gemini-Prüfung laufen…"):
@@ -962,11 +1018,13 @@ def _render_bulk_auto_resolve_action(
         f"{len(open_requests)} von {len(requests_document.requests)} Request(s) noch ohne übernommenes Asset. "
         "Läuft sequenziell — ein Request nach dem anderen, ohne Abbrechen-Möglichkeit."
     )
-    pexels_ready = bool(get_api_key("PEXELS_API_KEY"))
+    adobe_ready, pexels_ready = _supplement_provider_readiness()
+    any_ready = adobe_ready or pexels_ready
     if st.button(
         "🤖 Alle fehlenden Supplement-Assets automatisch suchen",
         key=f"cut_plan_supplement_auto_resolve_all_{project.id}",
-        disabled=not pexels_ready or not open_requests,
+        disabled=not any_ready or not open_requests,
+        help="Versucht pro Request zuerst Adobe Stock (sofortige Lizenzierung), dann Pexels.",
     ):
         request_labels = {
             entry.request_id: f"{entry.folder_name or '—'} · {entry.cut_item_id}"

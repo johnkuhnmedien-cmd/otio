@@ -971,6 +971,79 @@ def test_ui_shows_supplement_requests_section(tmp_path: Path, monkeypatch: pytes
     render_cut_plan_page()  # darf nicht werfen; Supplement-Requests-Bereich wird gerendert
 
 
+def test_ui_shows_adobe_and_pexels_readiness_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 12.4a: Adobe-/Pexels-Bereitschaft wird sichtbar angezeigt statt
+    nur eines pauschalen PEXELS_API_KEY-Checks."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
+    monkeypatch.delenv("ADOBE_STOCK_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+    _patch_project_selector(project, monkeypatch)
+    monkeypatch.setattr("streamlit.button", lambda *a, **k: False)
+    monkeypatch.setattr("streamlit.rerun", lambda: None)
+    captions: list[str] = []
+    monkeypatch.setattr("streamlit.caption", lambda msg, **k: captions.append(msg))
+
+    render_cut_plan_page()
+
+    assert any("Adobe Stock" in c and "ADOBE_STOCK_ACCESS_TOKEN" in c for c in captions)
+    assert any("Pexels" in c for c in captions)
+
+
+def test_ui_shows_warning_when_no_supplement_provider_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    monkeypatch.delenv("ADOBE_STOCK_API_KEY", raising=False)
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+    _patch_project_selector(project, monkeypatch)
+    monkeypatch.setattr("streamlit.button", lambda *a, **k: False)
+    monkeypatch.setattr("streamlit.rerun", lambda: None)
+    warnings: list[str] = []
+    monkeypatch.setattr("streamlit.warning", lambda msg, **k: warnings.append(msg))
+
+    render_cut_plan_page()
+
+    assert any("Weder Adobe Stock noch Pexels" in w for w in warnings)
+
+
+def test_ui_provider_selector_defaults_to_adobe_when_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nutzervorgabe: Adobe Stock ist die bevorzugte Voreinstellung für die
+    manuelle Kandidatensuche, solange es konfiguriert ist."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
+    monkeypatch.setenv("PEXELS_API_KEY", "test-key")
+    _patch_project_selector(project, monkeypatch)
+    monkeypatch.setattr("streamlit.button", lambda *a, **k: False)
+    monkeypatch.setattr("streamlit.rerun", lambda: None)
+    selectbox_calls: list[dict] = []
+
+    def _fake_selectbox(label, *args, **kwargs):
+        selectbox_calls.append(kwargs)
+        options = kwargs.get("options", [])
+        index = kwargs.get("index", 0)
+        return options[index] if options else None
+
+    monkeypatch.setattr("streamlit.selectbox", _fake_selectbox)
+
+    render_cut_plan_page()
+
+    matching = [c for c in selectbox_calls if c.get("options") == ["adobe_stock", "pexels"]]
+    assert matching, f"Provider-Selectbox nicht gefunden unter: {selectbox_calls}"
+    assert matching[0]["index"] == 0  # adobe_stock zuerst, da bereit
+
+
 def test_ui_shows_candidate_list_when_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _project_with_supplement_required_draft(tmp_path)
     draft = load_cut_plan_draft(project)

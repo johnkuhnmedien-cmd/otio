@@ -100,25 +100,51 @@ def _setup_two_requests(tmp_path: Path) -> tuple[Project, list[str]]:
     return project, [request.request_id for request in document.requests]
 
 
-def _fake_candidate(candidate_id: str, request_id: str) -> CutPlanSupplementCandidate:
+def _fake_candidate(candidate_id: str, request_id: str, *, provider: str = "pexels") -> CutPlanSupplementCandidate:
     return CutPlanSupplementCandidate(
         candidate_id=candidate_id,
         request_id=request_id,
-        provider="pexels",
+        provider=provider,
         title=f"Fake {candidate_id}",
         asset_type="video",
         duration_sec=10.0,
     )
 
 
-def _fake_candidates_document(request_id: str, candidate_ids: list[str]) -> CutPlanSupplementCandidatesDocument:
+def _fake_candidates_document(
+    request_id: str, candidate_ids: list[str], *, provider: str = "pexels"
+) -> CutPlanSupplementCandidatesDocument:
     return CutPlanSupplementCandidatesDocument(
         project_id="auto-resolve-project",
         request_id=request_id,
-        provider="pexels",
-        candidates=[_fake_candidate(cid, request_id) for cid in candidate_ids],
+        provider=provider,
+        candidates=[_fake_candidate(cid, request_id, provider=provider) for cid in candidate_ids],
         status="READY",
     )
+
+
+def _empty_candidates_document(request_id: str, *, provider: str) -> CutPlanSupplementCandidatesDocument:
+    return CutPlanSupplementCandidatesDocument(
+        project_id="auto-resolve-project", request_id=request_id, provider=provider, candidates=[], status="NO_RESULTS"
+    )
+
+
+def _search_only_finds_candidates_for(
+    candidates_doc: CutPlanSupplementCandidatesDocument, *, only_provider: str
+):
+    """Phase 12.5: baut einen provider-bewussten side_effect für
+    search_candidates_for_cut_plan_request — nur only_provider liefert
+    candidates_doc, jeder andere Provider (in der Such-Reihenfolge) liefert
+    NO_RESULTS. Bildet realistisch ab, dass i. d. R. nicht JEDER Provider
+    exakt dieselben Kandidaten findet."""
+
+    def _side_effect(project_arg, request_id, provider_settings, **kwargs):
+        provider = provider_settings["provider"]
+        if provider == only_provider:
+            return candidates_doc
+        return _empty_candidates_document(request_id, provider=provider)
+
+    return _side_effect
 
 
 def _fake_asset(candidate_id: str, request_id: str) -> CutPlanSupplementAsset:
@@ -194,10 +220,15 @@ def test_auto_resolve_tries_next_candidate_when_first_fails_validation(tmp_path:
 
 def test_auto_resolve_returns_no_match_when_no_candidate_passes(tmp_path: Path) -> None:
     project, request_id = _setup_request(tmp_path)
-    candidates_doc = _fake_candidates_document(request_id, ["cand_1", "cand_2"])
+    # Phase 12.5: Adobe wird zuerst versucht — dieser Test simuliert, dass
+    # NUR Adobe Kandidaten findet (beide WEAK_PASS); Pexels liefert nichts.
+    candidates_doc = _fake_candidates_document(request_id, ["cand_1", "cand_2"], provider="adobe_stock")
 
     with (
-        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", return_value=candidates_doc),
+        patch(
+            f"{_MODULE}.search_candidates_for_cut_plan_request",
+            side_effect=_search_only_finds_candidates_for(candidates_doc, only_provider="adobe_stock"),
+        ),
         patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid)),
         patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("WEAK_PASS", score=0.6, reason="Nur teilweise.")),
         patch(f"{_MODULE}.accept_cut_plan_supplement_candidate") as mock_accept,
@@ -329,7 +360,9 @@ def test_auto_resolve_no_candidates_found_tries_generic_fallback(tmp_path: Path)
 
 def test_auto_resolve_uses_generic_fallback_when_no_stock_candidate_passes(tmp_path: Path) -> None:
     project, request_id = _setup_request(tmp_path)
-    candidates_doc = _fake_candidates_document(request_id, ["cand_1"])
+    # Phase 12.5: nur Adobe findet einen (nicht bestehenden) Kandidaten,
+    # Pexels findet nichts -> danach greift der generische Fallback.
+    candidates_doc = _fake_candidates_document(request_id, ["cand_1"], provider="adobe_stock")
     fake_candidate = GenericAssetCandidate(
         path="/fake/generic.mp4",
         asset_id="asset_generic",
@@ -340,7 +373,10 @@ def test_auto_resolve_uses_generic_fallback_when_no_stock_candidate_passes(tmp_p
     )
 
     with (
-        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", return_value=candidates_doc),
+        patch(
+            f"{_MODULE}.search_candidates_for_cut_plan_request",
+            side_effect=_search_only_finds_candidates_for(candidates_doc, only_provider="adobe_stock"),
+        ),
         patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid)),
         patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("FAIL", score=0.1)),
         patch(f"{_MODULE}.apply_generic_fallback_for_cut_plan_request", return_value=(None, fake_candidate)) as mock_fallback,
@@ -377,6 +413,90 @@ def test_auto_resolve_generic_fallback_exception_is_recorded_and_still_returns_n
 
     assert result.status == AUTO_RESOLVE_STATUS_NO_MATCH
     assert any(a.validation_status == "GENERIC_FALLBACK_FAILED" for a in result.attempts)
+
+
+def test_auto_resolve_tries_adobe_before_pexels(tmp_path: Path) -> None:
+    """Phase 12.5, Nutzervorgabe: Adobe Stock wird immer ZUERST versucht,
+    Pexels erst danach."""
+    project, request_id = _setup_request(tmp_path)
+    empty_doc = _empty_candidates_document(request_id, provider="unused")
+    providers_tried: list[str] = []
+
+    def _search_side_effect(project_arg, rid, provider_settings, **kwargs):
+        providers_tried.append(provider_settings["provider"])
+        return empty_doc
+
+    fake_candidate = GenericAssetCandidate(
+        path="/fake/generic.mp4",
+        asset_id="asset_generic",
+        description="Establishing shot",
+        score=0.8,
+        selection_reason="Neutraler Shot.",
+        warnings=[],
+    )
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", side_effect=_search_side_effect),
+        patch(f"{_MODULE}.apply_generic_fallback_for_cut_plan_request", return_value=(None, fake_candidate)),
+    ):
+        auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    assert providers_tried == ["adobe_stock", "pexels"]
+
+
+def test_auto_resolve_skips_pexels_when_adobe_candidate_already_passes(tmp_path: Path) -> None:
+    """Wenn Adobe bereits einen bestehenden Kandidaten liefert, wird Pexels
+    gar nicht erst durchsucht — kein unnötiger zweiter Provider-Aufruf."""
+    project, request_id = _setup_request(tmp_path)
+    adobe_doc = _fake_candidates_document(request_id, ["cand_1"], provider="adobe_stock")
+    providers_tried: list[str] = []
+
+    def _search_side_effect(project_arg, rid, provider_settings, **kwargs):
+        providers_tried.append(provider_settings["provider"])
+        return adobe_doc
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", side_effect=_search_side_effect),
+        patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid)),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("PASS")),
+        patch(f"{_MODULE}.accept_cut_plan_supplement_candidate") as mock_accept,
+    ):
+        result = auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    assert result.status == AUTO_RESOLVE_STATUS_ACCEPTED
+    assert result.attempts[0].provider == "adobe_stock"
+    assert providers_tried == ["adobe_stock"]
+    mock_accept.assert_called_once()
+
+
+def test_auto_resolve_falls_through_to_pexels_when_adobe_search_raises(tmp_path: Path) -> None:
+    """Ein Fehler bei Adobe (z. B. fehlender Access-Token/Netzwerkfehler)
+    darf Pexels nicht blockieren — der Auto-Resolver versucht Pexels trotzdem."""
+    project, request_id = _setup_request(tmp_path)
+    pexels_doc = _fake_candidates_document(request_id, ["cand_1"], provider="pexels")
+
+    def _search_side_effect(project_arg, rid, provider_settings, **kwargs):
+        if provider_settings["provider"] == "adobe_stock":
+            raise RuntimeError("ADOBE_STOCK_ACCESS_TOKEN fehlt")
+        return pexels_doc
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", side_effect=_search_side_effect),
+        patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid)),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("PASS")),
+        patch(f"{_MODULE}.accept_cut_plan_supplement_candidate") as mock_accept,
+    ):
+        result = auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    assert result.status == AUTO_RESOLVE_STATUS_ACCEPTED
+    assert result.attempts[0].provider == "pexels"
+    mock_accept.assert_called_once()
 
 
 def test_auto_resolve_uses_default_validation_model_when_not_overridden(tmp_path: Path) -> None:

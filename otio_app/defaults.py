@@ -1116,6 +1116,12 @@ ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K = "Video_4K"
 ADOBE_STOCK_VIDEO_4K_MAX_BYTES = 600 * 1024 * 1024
 ADOBE_STOCK_MIN_DOWNLOAD_BYTES = 100 * 1024
 
+# Phase 12.5: Reihenfolge, in der der Cut-Plan-Auto-Resolver Stock-Provider
+# durchsucht — Nutzervorgabe: erst Adobe Stock (sofortige Lizenzierung,
+# unlimited Plan), dann Pexels als kostenlose Ausweichquelle, danach greift
+# der generische Ordner-Fallback (siehe cut_plan_generic_fallback_service.py).
+CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER = (SUPPLEMENT_SOURCE_ADOBE, SUPPLEMENT_SOURCE_PEXELS)
+
 
 def resolve_voice_backend(backend: str | None) -> str:
     if backend and backend.strip() in VOICE_BACKEND_CHOICES:

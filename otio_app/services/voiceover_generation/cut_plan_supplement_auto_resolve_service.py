@@ -1,26 +1,36 @@
 """Phase 11.3: Auto-Resolver für GENAU EINEN Cut-Plan-Supplement-Request.
 
 Kombiniert die bestehenden Bausteine der isolierten Cut-Plan-Supplement-
-Bridge (LLM-Suchqueries, Pexels-Suche über Video+Foto, Download) mit einer
+Bridge (LLM-Suchqueries, Provider-Suche über Video+Foto, Download) mit einer
 kombinierten Gemini-Beschreibung+-Validierung des heruntergeladenen
 Materials zu einem einzigen automatischen Ablauf für EINEN Request:
 
-  1. LLM-Suchqueries erzeugen + Pexels-Kandidaten suchen (bis zu 5, Video+Foto)
-  2. Kandidaten der Reihe nach (Suchreihenfolge) herunterladen
+  1. Provider der Reihe nach durchsuchen (Phase 12.5:
+     CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER = Adobe Stock, dann Pexels —
+     Nutzervorgabe: Adobe zuerst, weil unlimited Plan + sofortige
+     Lizenzierung, Pexels als kostenlose Ausweichquelle). Für JEDEN Provider:
+     LLM-Suchqueries erzeugen + Kandidaten suchen (bis zu 5, Video+Foto).
+  2. Kandidaten dieses Providers der Reihe nach (Suchreihenfolge)
+     herunterladen — bei Adobe bedeutet das bereits sofortige Lizenzierung
+     (siehe AdobeStockAdapter.acquire(), Phase 12.3).
   3. EIN kombinierter Gemini-Aufruf pro Kandidat: Frames + Satz/Visual
      Intent/Reason gemeinsam im selben Request — Gemini beschreibt UND
      beurteilt in einem Zug (siehe describe_and_validate_supplement_asset in
      gemini_client.py). Bewusst NICHT zwei getrennte Aufrufe (beschreiben,
      dann validieren) — spart Latenz/Kosten und die Bildinformation geht
      nicht über den Umweg einer separaten Text-Beschreibung verloren.
-  4. beim ERSTEN Kandidaten mit Status PASS: automatisch akzeptieren (siehe
+  4. beim ERSTEN Kandidaten (über ALLE Provider in der festgelegten
+     Reihenfolge) mit Status PASS: automatisch akzeptieren (siehe
      accept_cut_plan_supplement_candidate) und dem Cut-Item zuordnen —
-     Schleife bricht ab
-  5. kein Kandidat erreicht PASS: Phase 11.4 — automatischer Fallback auf
-     ein bereits vorhandenes, neutrales Asset aus demselben Ordner-
-     Inventory (siehe cut_plan_generic_fallback_service.py). Erfolgreich ->
-     Ergebnis GENERIC_FALLBACK_USED. Auch das schlägt fehl (z. B. keine
-     Assets im Ordner oder alle zu kurz) -> Ergebnis NO_MATCH.
+     Schleife bricht sofort ab, weitere Provider werden nicht mehr versucht.
+  5. Kein Kandidat bei KEINEM Provider erreicht PASS (oder ein Provider
+     liefert keine/fehlerhafte Suchergebnisse — wird protokolliert, bricht
+     aber nicht ab, sondern der nächste Provider wird versucht): Phase
+     11.4 — automatischer Fallback auf ein bereits vorhandenes, neutrales
+     Asset aus demselben Ordner-Inventory (siehe
+     cut_plan_generic_fallback_service.py). Erfolgreich -> Ergebnis
+     GENERIC_FALLBACK_USED. Auch das schlägt fehl (z. B. keine Assets im
+     Ordner oder alle zu kurz) -> Ergebnis NO_MATCH.
 
 Ohne konfigurierten GEMINI_API_KEY wird NIE automatisch akzeptiert (kein
 heuristischer Ersatz-Fallback, der versehentlich PASS liefern könnte) —
@@ -41,7 +51,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from otio_app.defaults import CUT_PLAN_SUPPLEMENT_CANDIDATES_STATUS_READY, SUPPLEMENT_SOURCE_PEXELS
+from otio_app.defaults import (
+    CUT_PLAN_SUPPLEMENT_CANDIDATES_STATUS_READY,
+    CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER,
+)
 from otio_app.models import Project
 from otio_app.project_layout import get_cut_plan_supplement_asset_request_dir
 from otio_app.services.frame_extract import extract_frames
@@ -58,7 +71,6 @@ from otio_app.services.voiceover_generation.cut_plan_generic_fallback_service im
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     accept_cut_plan_supplement_candidate,
     download_cut_plan_supplement_candidate,
-    load_cut_plan_supplement_candidates_for_request,
     load_cut_plan_supplement_requests,
     search_candidates_for_cut_plan_request,
     update_cut_plan_supplement_request,
@@ -197,8 +209,11 @@ def auto_resolve_cut_plan_supplement_request(
     validation_model: str = DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL,
 ) -> CutPlanSupplementAutoResolveResult:
     """Führt den vollständigen Auto-Resolve-Ablauf (siehe Modul-Docstring)
-    für GENAU EINEN Request aus. Bricht bei einem Kandidaten mit PASS ab und
-    akzeptiert ihn automatisch; sonst greift der generische Ordner-Fallback
+    für GENAU EINEN Request aus — über ALLE Provider in
+    CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER (Phase 12.5: Adobe Stock, dann
+    Pexels). Bricht beim ERSTEN Kandidaten (egal von welchem Provider) mit
+    PASS ab und akzeptiert ihn automatisch; erst wenn KEIN Provider einen
+    bestehenden Kandidaten liefert, greift der generische Ordner-Fallback
     (Phase 11.4) — an JEDEM Ausstiegspunkt, an dem kein Stock-Kandidat zum
     Einsatz kommt (Suchfehler, keine Suchergebnisse, kein Kandidat bestanden),
     damit möglichst nie ein Item unversorgt bleibt. Wirft KEINE Exception
@@ -245,23 +260,6 @@ def auto_resolve_cut_plan_supplement_request(
             status=AUTO_RESOLVE_STATUS_NO_MATCH, request_id=request_id, attempts=attempts, error=search_error
         )
 
-    try:
-        candidates_document = search_candidates_for_cut_plan_request(
-            project,
-            request_id,
-            {"provider": SUPPLEMENT_SOURCE_PEXELS},
-            query_llm_provider=query_llm_provider,
-            query_llm_model=query_llm_model,
-        )
-    except Exception as exc:  # noqa: BLE001 — Suche darf den Auto-Resolver nicht crashen
-        return _fallback_or_no_match([], search_error=str(exc))
-
-    if (
-        candidates_document.status != CUT_PLAN_SUPPLEMENT_CANDIDATES_STATUS_READY
-        or not candidates_document.candidates
-    ):
-        return _fallback_or_no_match([], search_error=candidates_document.error_message)
-
     requests_document = load_cut_plan_supplement_requests(project)
     request = (
         next((entry for entry in requests_document.requests if entry.request_id == request_id), None)
@@ -272,64 +270,89 @@ def auto_resolve_cut_plan_supplement_request(
         raise ValueError(f"Supplement Request '{request_id}' nicht gefunden.")
 
     attempts: list[CutPlanSupplementAutoResolveAttempt] = []
+    search_errors: list[str] = []
 
-    for candidate in candidates_document.candidates:
+    for provider in CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER:
         try:
-            downloaded_asset: CutPlanSupplementAsset = download_cut_plan_supplement_candidate(
-                project, request_id, candidate
+            candidates_document = search_candidates_for_cut_plan_request(
+                project,
+                request_id,
+                {"provider": provider},
+                query_llm_provider=query_llm_provider,
+                query_llm_model=query_llm_model,
             )
-        except Exception as exc:  # noqa: BLE001 — ein fehlgeschlagener Download darf nicht abbrechen
+        except Exception as exc:  # noqa: BLE001 — Suche darf den Auto-Resolver nicht crashen
+            search_errors.append(f"{provider}: {exc}")
+            continue
+
+        if (
+            candidates_document.status != CUT_PLAN_SUPPLEMENT_CANDIDATES_STATUS_READY
+            or not candidates_document.candidates
+        ):
+            if candidates_document.error_message:
+                search_errors.append(f"{provider}: {candidates_document.error_message}")
+            continue
+
+        for candidate in candidates_document.candidates:
+            try:
+                downloaded_asset: CutPlanSupplementAsset = download_cut_plan_supplement_candidate(
+                    project, request_id, candidate
+                )
+            except Exception as exc:  # noqa: BLE001 — ein fehlgeschlagener Download darf nicht abbrechen
+                attempts.append(
+                    CutPlanSupplementAutoResolveAttempt(
+                        candidate_id=candidate.candidate_id,
+                        provider=candidate.provider,
+                        asset_type=candidate.asset_type,
+                        validation_status="DOWNLOAD_FAILED",
+                        validation_reason=str(exc),
+                    )
+                )
+                continue
+
+            analysis = _describe_and_validate_downloaded_asset(
+                project,
+                request=request,
+                candidate_id=candidate.candidate_id,
+                asset_path=downloaded_asset.asset_path,
+                validation_model=validation_model,
+            )
             attempts.append(
                 CutPlanSupplementAutoResolveAttempt(
                     candidate_id=candidate.candidate_id,
                     provider=candidate.provider,
                     asset_type=candidate.asset_type,
-                    validation_status="DOWNLOAD_FAILED",
-                    validation_reason=str(exc),
+                    validation_status=str(analysis.get("status", "")),
+                    validation_score=float(analysis.get("score", 0.0)),
+                    validation_reason=str(analysis.get("reason", "")),
+                    description=str(analysis.get("description", "")),
                 )
             )
-            continue
 
-        analysis = _describe_and_validate_downloaded_asset(
-            project,
-            request=request,
-            candidate_id=candidate.candidate_id,
-            asset_path=downloaded_asset.asset_path,
-            validation_model=validation_model,
-        )
-        attempts.append(
-            CutPlanSupplementAutoResolveAttempt(
-                candidate_id=candidate.candidate_id,
-                provider=candidate.provider,
-                asset_type=candidate.asset_type,
-                validation_status=str(analysis.get("status", "")),
-                validation_score=float(analysis.get("score", 0.0)),
-                validation_reason=str(analysis.get("reason", "")),
-                description=str(analysis.get("description", "")),
-            )
-        )
+            if str(analysis.get("status")) == VALIDATION_STATUS_PASS:
+                accept_cut_plan_supplement_candidate(
+                    project, request_id, candidate.candidate_id, downloaded_asset=downloaded_asset
+                )
+                update_cut_plan_supplement_request(
+                    project,
+                    request_id,
+                    auto_resolve_status=AUTO_RESOLVE_STATUS_ACCEPTED,
+                    auto_resolve_attempts=attempts,
+                )
+                return CutPlanSupplementAutoResolveResult(
+                    status=AUTO_RESOLVE_STATUS_ACCEPTED,
+                    request_id=request_id,
+                    accepted_candidate_id=candidate.candidate_id,
+                    accepted_asset_id=downloaded_asset.asset_id,
+                    attempts=attempts,
+                )
+        # Kein Kandidat dieses Providers hat bestanden -> nächsten Provider
+        # in der Reihenfolge versuchen (Phase 12.5), bevor auf den
+        # generischen Ordner-Fallback zurückgegriffen wird.
 
-        if str(analysis.get("status")) == VALIDATION_STATUS_PASS:
-            accept_cut_plan_supplement_candidate(
-                project, request_id, candidate.candidate_id, downloaded_asset=downloaded_asset
-            )
-            update_cut_plan_supplement_request(
-                project,
-                request_id,
-                auto_resolve_status=AUTO_RESOLVE_STATUS_ACCEPTED,
-                auto_resolve_attempts=attempts,
-            )
-            return CutPlanSupplementAutoResolveResult(
-                status=AUTO_RESOLVE_STATUS_ACCEPTED,
-                request_id=request_id,
-                accepted_candidate_id=candidate.candidate_id,
-                accepted_asset_id=downloaded_asset.asset_id,
-                attempts=attempts,
-            )
-
-    # Phase 11.4: kein Stock-Kandidat hat bestanden -> generischer Ordner-
-    # Fallback, BEVOR endgültig NO_MATCH zurückgegeben wird.
-    return _fallback_or_no_match(attempts)
+    # Phase 11.4: kein Stock-Kandidat bei KEINEM Provider hat bestanden ->
+    # generischer Ordner-Fallback, BEVOR endgültig NO_MATCH zurückgegeben wird.
+    return _fallback_or_no_match(attempts, search_error="; ".join(search_errors))
 
 
 def auto_resolve_all_cut_plan_supplement_requests(
