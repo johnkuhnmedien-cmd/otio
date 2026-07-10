@@ -69,6 +69,7 @@ from otio_app.services.voiceover_generation.models import (
     FolderVoiceoversDocument,
     LlmRunManifest,
     SentenceItem,
+    SentenceSegmentAssetPlan,
     ValidationError,
     VisualAssetPlanHint,
     as_str_list,
@@ -225,6 +226,31 @@ def _parse_visual_asset_plan(raw: Any) -> VisualAssetPlanHint:
     )
 
 
+def _parse_planned_segments(raw: Any) -> list[SentenceSegmentAssetPlan]:
+    """Defensiv — ein fehlendes/unbrauchbares planned_segments (z. B. kein
+    List-Typ, oder Einträge ohne dict-Form) darf NIE das Parsen des ganzen
+    sentence_item scheitern lassen; unbrauchbare Einträge werden einfach
+    übersprungen statt den ganzen Satz ungültig zu machen."""
+    if not isinstance(raw, list):
+        return []
+    segments: list[SentenceSegmentAssetPlan] = []
+    for index, entry in enumerate(raw, start=1):
+        if not isinstance(entry, dict):
+            continue
+        try:
+            segment_order = int(entry.get("segment_order", index))
+        except (TypeError, ValueError):
+            segment_order = index
+        segments.append(
+            SentenceSegmentAssetPlan(
+                segment_order=max(1, segment_order),
+                primary_asset_id=str(entry.get("primary_asset_id") or "").strip(),
+                backup_asset_ids=as_str_list(entry.get("backup_asset_ids")),
+            )
+        )
+    return segments
+
+
 def _parse_sentence_items(raw_items: Any) -> list[SentenceItem]:
     items: list[SentenceItem] = []
     if not isinstance(raw_items, list):
@@ -261,6 +287,7 @@ def _parse_sentence_items(raw_items: Any) -> list[SentenceItem]:
                 ),
                 pause_after=_valid_pause_after(raw.get("pause_after")),
                 visual_asset_plan=_parse_visual_asset_plan(raw.get("visual_asset_plan")),
+                planned_segments=_parse_planned_segments(raw.get("planned_segments")),
             )
         )
     return items
@@ -293,6 +320,19 @@ def _sanitize_sentence_items(
             for asset_id in item.source_inventory_asset_ids_considered
             if asset_id in valid_asset_ids
         ]
+        sanitized_segments = [
+            segment.model_copy(
+                update={
+                    "primary_asset_id": (
+                        segment.primary_asset_id if segment.primary_asset_id in valid_asset_ids else ""
+                    ),
+                    "backup_asset_ids": [
+                        asset_id for asset_id in segment.backup_asset_ids if asset_id in valid_asset_ids
+                    ],
+                }
+            )
+            for segment in item.planned_segments
+        ]
         sanitized.append(
             item.model_copy(
                 update={
@@ -300,6 +340,7 @@ def _sanitize_sentence_items(
                     "backup_asset_ids": backups,
                     "second_backup_asset_ids": second_backups,
                     "source_inventory_asset_ids_considered": considered,
+                    "planned_segments": sanitized_segments,
                 }
             )
         )
@@ -354,6 +395,37 @@ def validate_asset_ids_against_inventory(
                         fix_hint="Nur asset_id-Werte aus dem bereitgestellten Inventory verwenden.",
                     )
                 )
+        for segment in item.planned_segments:
+            if segment.primary_asset_id and segment.primary_asset_id not in valid_ids:
+                errors.append(
+                    ValidationError(
+                        type=VO_ERROR_INVALID_ASSET_ID,
+                        severity="BLOCKER",
+                        folder_name=folder_name,
+                        sentence_id=item.sentence_id,
+                        message=(
+                            f"planned_segments[segment_order={segment.segment_order}]."
+                            f"primary_asset_id '{segment.primary_asset_id}' existiert nicht im "
+                            "Inventory."
+                        ),
+                        fix_hint="Nur asset_id-Werte aus dem bereitgestellten Inventory verwenden.",
+                    )
+                )
+            for segment_backup_id in segment.backup_asset_ids:
+                if segment_backup_id not in valid_ids:
+                    errors.append(
+                        ValidationError(
+                            type=VO_ERROR_INVALID_ASSET_ID,
+                            severity="BLOCKER",
+                            folder_name=folder_name,
+                            sentence_id=item.sentence_id,
+                            message=(
+                                f"planned_segments[segment_order={segment.segment_order}]."
+                                f"backup_asset_ids enthält unbekannte ID '{segment_backup_id}'."
+                            ),
+                            fix_hint="Nur asset_id-Werte aus dem bereitgestellten Inventory verwenden.",
+                        )
+                    )
         for considered_id in item.source_inventory_asset_ids_considered:
             if considered_id not in valid_ids:
                 errors.append(

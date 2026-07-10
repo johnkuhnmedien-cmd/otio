@@ -649,6 +649,218 @@ def test_20_seconds_produces_approximately_three_667_second_segments(tmp_path: P
         assert segment.duration_sec == pytest.approx(20.0 / 3, abs=0.05)
 
 
+# --- Phase 7 (Cut-Plan-Split-Fix): Kandidaten gegen Segmentdauer statt Satzdauer ---
+
+
+def test_split_candidates_are_checked_against_own_segment_duration_not_full_sentence(
+    tmp_path: Path,
+) -> None:
+    """Reproduziert exakt das vom Nutzer beschriebene Szenario: ein 12s-Satz
+    wird in 6s+6s gesplittet. Zwei Videos (nach video_head_trim_sec=1.0
+    jeweils 7.0s/6.5s nutzbar) sind BEIDE zu kurz für die vollen 12s, aber
+    jedes für sich reicht locker für die Hälfte (6s). Vor dem Phase-7-Fix
+    wurden beide Kandidaten fälschlich gegen die volle Satzdauer geprüft und
+    dadurch zu Unrecht abgelehnt (-> SUPPLEMENT_REQUIRED trotz nutzbarem
+    lokalem Material)."""
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("clip_a.mp4", "a"), ("clip_b.mp4", "b")])
+    save_cut_plan_settings(project, _settings(project, initial_audio_offset_sec=0.0))
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id,
+        intro=ConfirmedIntroPlanItem(),
+        folders=[
+            _folder_with_sentence(
+                primary_asset_id="asset_clip_a", backup_asset_ids=["asset_clip_b"], duration_sec=12.0
+            )
+        ],
+    )
+    _build_and_save_draft(project, plan)
+
+    def _fake_duration(path: Path) -> float:
+        return 8.0 if "clip_a" in str(path) else 7.5
+
+    with patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", side_effect=_fake_duration):
+        updated = apply_asset_selection_to_draft(project)
+
+    item = updated.items[0]
+    assert item.duration_strategy == CUT_PLAN_DURATION_STRATEGY_SPLIT
+    assert item.asset_selection_status != CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED
+    assert CUT_PLAN_ERROR_ASSET_TOO_SHORT not in item.warnings
+    segments = item.planned_visual_segments
+    assert len(segments) == 2
+    assert segments[0].duration_sec == pytest.approx(6.0, abs=0.05)
+    assert segments[1].duration_sec == pytest.approx(6.0, abs=0.05)
+    # Beide Videos werden tatsächlich genutzt (nicht dasselbe zweimal in Folge).
+    assert {segment.asset_id for segment in segments} == {"asset_clip_a", "asset_clip_b"}
+    assert segments[0].asset_id != segments[1].asset_id
+
+
+def test_second_backup_asset_id_counts_as_split_candidate(tmp_path: Path) -> None:
+    """Phase 7: second_backup_asset_ids (Phase 4) wurden bisher in der
+    Cut-Plan-Asset-Auswahl komplett ignoriert — jetzt zählen sie als echte
+    Alternative im Fallback-Pool."""
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("clip_a.mp4", "a"), ("clip_c.mp4", "c")])
+    save_cut_plan_settings(project, _settings(project, initial_audio_offset_sec=0.0))
+    folder = ConfirmedFolderPlanItem(
+        folder_name=FOLDER_A,
+        order_index=1,
+        audio_path="/fake/folder.mp3",
+        audio_duration_sec=20.0,
+        sentence_items=[
+            SentenceItem(
+                sentence_id="sentence_001",
+                text="Ein Testsatz.",
+                primary_asset_id="asset_clip_a",
+                second_backup_asset_ids=["asset_clip_c"],
+            )
+        ],
+        alignment_items=[
+            AlignmentItem(sentence_id="sentence_001", audio_start_sec=0.0, audio_end_sec=12.0, duration_sec=12.0)
+        ],
+    )
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=ConfirmedIntroPlanItem(), folders=[folder])
+    _build_and_save_draft(project, plan)
+
+    def _fake_duration(path: Path) -> float:
+        return 8.0 if "clip_a" in str(path) else 7.5
+
+    with patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", side_effect=_fake_duration):
+        updated = apply_asset_selection_to_draft(project)
+
+    item = updated.items[0]
+    segments = item.planned_visual_segments
+    assert len(segments) == 2
+    assert {segment.asset_id for segment in segments} == {"asset_clip_a", "asset_clip_c"}
+
+
+def test_planned_segments_are_preferred_over_general_pool_per_segment(tmp_path: Path) -> None:
+    """Phase 7: sind vom Autor pro Shot geplante Assets vorhanden
+    (SentenceItem.planned_segments), werden diese pro Segment bevorzugt vor
+    dem allgemeinen Fallback-Pool verwendet."""
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+    from otio_app.services.voiceover_generation.models import SentenceSegmentAssetPlan
+
+    project = _make_project(tmp_path)
+    _write_inventory(
+        project, FOLDER_A, [("clip_a.mp4", "a"), ("clip_b.mp4", "b"), ("clip_c.mp4", "c")]
+    )
+    save_cut_plan_settings(project, _settings(project, initial_audio_offset_sec=0.0))
+    folder = ConfirmedFolderPlanItem(
+        folder_name=FOLDER_A,
+        order_index=1,
+        audio_path="/fake/folder.mp3",
+        audio_duration_sec=20.0,
+        sentence_items=[
+            SentenceItem(
+                sentence_id="sentence_001",
+                text="Ein Testsatz.",
+                primary_asset_id="asset_clip_a",
+                backup_asset_ids=["asset_clip_b"],
+                planned_segments=[
+                    SentenceSegmentAssetPlan(segment_order=1, primary_asset_id="asset_clip_c"),
+                    SentenceSegmentAssetPlan(segment_order=2, primary_asset_id="asset_clip_b"),
+                ],
+            )
+        ],
+        alignment_items=[
+            AlignmentItem(sentence_id="sentence_001", audio_start_sec=0.0, audio_end_sec=12.0, duration_sec=12.0)
+        ],
+    )
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=ConfirmedIntroPlanItem(), folders=[folder])
+    _build_and_save_draft(project, plan)
+
+    with patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", return_value=8.0):
+        updated = apply_asset_selection_to_draft(project)
+
+    segments = updated.items[0].planned_visual_segments
+    assert len(segments) == 2
+    # planned_segments sagt: Segment 1 -> clip_c, Segment 2 -> clip_b (NICHT
+    # der allgemeine Pool, der mit primary=clip_a beginnen würde).
+    assert segments[0].asset_id == "asset_clip_c"
+    assert segments[1].asset_id == "asset_clip_b"
+
+
+def test_planned_segments_fall_back_to_general_pool_when_own_asset_unusable(
+    tmp_path: Path,
+) -> None:
+    """Ist das für ein Segment geplante Asset nicht nutzbar (hier: fehlt im
+    Inventory), fällt die Auswahl für GENAU dieses Segment auf den
+    allgemeinen Fallback-Pool zurück, statt das ganze Item scheitern zu
+    lassen."""
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+    from otio_app.services.voiceover_generation.models import SentenceSegmentAssetPlan
+
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("clip_a.mp4", "a"), ("clip_b.mp4", "b")])
+    save_cut_plan_settings(project, _settings(project, initial_audio_offset_sec=0.0))
+    folder = ConfirmedFolderPlanItem(
+        folder_name=FOLDER_A,
+        order_index=1,
+        audio_path="/fake/folder.mp3",
+        audio_duration_sec=20.0,
+        sentence_items=[
+            SentenceItem(
+                sentence_id="sentence_001",
+                text="Ein Testsatz.",
+                primary_asset_id="asset_clip_a",
+                backup_asset_ids=["asset_clip_b"],
+                planned_segments=[
+                    SentenceSegmentAssetPlan(segment_order=1, primary_asset_id="asset_not_in_inventory"),
+                    SentenceSegmentAssetPlan(segment_order=2, primary_asset_id="asset_clip_b"),
+                ],
+            )
+        ],
+        alignment_items=[
+            AlignmentItem(sentence_id="sentence_001", audio_start_sec=0.0, audio_end_sec=12.0, duration_sec=12.0)
+        ],
+    )
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=ConfirmedIntroPlanItem(), folders=[folder])
+    _build_and_save_draft(project, plan)
+
+    with patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", return_value=8.0):
+        updated = apply_asset_selection_to_draft(project)
+
+    segments = updated.items[0].planned_visual_segments
+    assert len(segments) == 2
+    # Segment 1 fällt auf den allgemeinen Pool zurück (primary=clip_a), Segment 2 nutzt sein geplantes Asset.
+    assert segments[0].asset_id == "asset_clip_a"
+    assert segments[1].asset_id == "asset_clip_b"
+
+
+def test_old_draft_without_planned_segments_behaves_as_general_pool_only(tmp_path: Path) -> None:
+    """Rückwärtskompatibilität: ein VOR Phase 7 erzeugtes SentenceItem hat
+    planned_segments=[] — das Verhalten muss identisch zum allgemeinen
+    Fallback-Pool sein (Primary zuerst, dann Backup)."""
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("clip_a.mp4", "a"), ("clip_b.mp4", "b")])
+    save_cut_plan_settings(project, _settings(project, initial_audio_offset_sec=0.0))
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id,
+        intro=ConfirmedIntroPlanItem(),
+        folders=[
+            _folder_with_sentence(
+                primary_asset_id="asset_clip_a", backup_asset_ids=["asset_clip_b"], duration_sec=12.0
+            )
+        ],
+    )
+    _build_and_save_draft(project, plan)
+
+    with patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", return_value=8.0):
+        updated = apply_asset_selection_to_draft(project)
+
+    segments = updated.items[0].planned_visual_segments
+    assert len(segments) == 2
+    assert segments[0].asset_id == "asset_clip_a"
+    assert segments[1].asset_id == "asset_clip_b"
+
+
 # --- 21-23: source_in/out ---
 
 
@@ -1096,3 +1308,97 @@ def test_apply_asset_selection_to_draft_raises_without_existing_draft(tmp_path: 
     project = _make_project(tmp_path)
     with pytest.raises(ValueError):
         apply_asset_selection_to_draft(project)
+
+
+# --- Phase 7: gezielte Unit-Tests für die neuen privaten Helper ---
+
+
+def test_cut_plan_planned_segment_asset_plan_defaults() -> None:
+    from otio_app.services.voiceover_generation.cut_plan_models import CutPlanPlannedSegmentAssetPlan
+
+    segment = CutPlanPlannedSegmentAssetPlan()
+    assert segment.segment_order == 1
+    assert segment.primary_asset_id == ""
+    assert segment.backup_asset_ids == []
+
+
+def test_cut_plan_item_new_fields_default_to_empty() -> None:
+    from otio_app.services.voiceover_generation.cut_plan_models import CutPlanItem
+
+    item = CutPlanItem(cut_item_id="a")
+    assert item.second_backup_asset_ids == []
+    assert item.planned_segments == []
+
+
+def test_dedupe_preserve_order_removes_duplicates_keeps_first_occurrence() -> None:
+    from otio_app.services.voiceover_generation.cut_plan_asset_selector import _dedupe_preserve_order
+
+    assert _dedupe_preserve_order(["a", "b", "a", "", "c", "b"]) == ["a", "b", "c"]
+
+
+def test_general_asset_pool_orders_primary_backup_second_backup(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.cut_plan_asset_selector import _general_asset_pool
+    from otio_app.services.voiceover_generation.cut_plan_models import CutPlanItem
+
+    item = CutPlanItem(
+        cut_item_id="a",
+        primary_asset_id="asset_a",
+        backup_asset_ids=["asset_b", "asset_c"],
+        second_backup_asset_ids=["asset_d"],
+    )
+    assert _general_asset_pool(item) == ["asset_a", "asset_b", "asset_c", "asset_d"]
+
+
+def test_general_asset_pool_dedupes_repeated_ids_across_fields() -> None:
+    from otio_app.services.voiceover_generation.cut_plan_asset_selector import _general_asset_pool
+    from otio_app.services.voiceover_generation.cut_plan_models import CutPlanItem
+
+    item = CutPlanItem(
+        cut_item_id="a",
+        primary_asset_id="asset_a",
+        backup_asset_ids=["asset_a", "asset_b"],
+        second_backup_asset_ids=["asset_b"],
+    )
+    assert _general_asset_pool(item) == ["asset_a", "asset_b"]
+
+
+def test_candidate_order_for_segment_without_planned_segments_uses_general_pool(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.cut_plan_asset_selector import (
+        _candidate_order_for_segment,
+        _general_asset_pool,
+    )
+    from otio_app.services.voiceover_generation.cut_plan_models import CutPlanItem
+
+    item = CutPlanItem(cut_item_id="a", primary_asset_id="asset_a", backup_asset_ids=["asset_b"])
+    pool = _general_asset_pool(item)
+    assert _candidate_order_for_segment(item, 0, pool) == ["asset_a", "asset_b"]
+    assert _candidate_order_for_segment(item, 1, pool) == ["asset_a", "asset_b"]
+
+
+def test_candidate_order_for_segment_prefers_matching_planned_segment(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.cut_plan_asset_selector import (
+        _candidate_order_for_segment,
+        _general_asset_pool,
+    )
+    from otio_app.services.voiceover_generation.cut_plan_models import (
+        CutPlanItem,
+        CutPlanPlannedSegmentAssetPlan,
+    )
+
+    item = CutPlanItem(
+        cut_item_id="a",
+        primary_asset_id="asset_a",
+        backup_asset_ids=["asset_b"],
+        planned_segments=[
+            CutPlanPlannedSegmentAssetPlan(
+                segment_order=2, primary_asset_id="asset_c", backup_asset_ids=["asset_d"]
+            )
+        ],
+    )
+    pool = _general_asset_pool(item)
+    # Segment-Index 0 (segment_order=1) hat KEINEN passenden planned_segments-
+    # Eintrag -> allgemeiner Pool.
+    assert _candidate_order_for_segment(item, 0, pool) == ["asset_a", "asset_b"]
+    # Segment-Index 1 (segment_order=2) hat einen passenden Eintrag -> dessen
+    # Assets zuerst, danach der allgemeine Pool als Fallback.
+    assert _candidate_order_for_segment(item, 1, pool) == ["asset_c", "asset_d", "asset_a", "asset_b"]

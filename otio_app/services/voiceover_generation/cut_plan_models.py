@@ -48,6 +48,7 @@ __all__ = [
     "CutPlanSettings",
     "CutPlanSourceRef",
     "VisualSegment",
+    "CutPlanPlannedSegmentAssetPlan",
     "CutPlanItem",
     "CutPlanAudioItem",
     "CutPlanValidationError",
@@ -113,6 +114,24 @@ class VisualSegment(BaseModel):
     reason: str = ""  # primary_asset|backup_asset|split_long_sentence|merged_short_sentence|supplement
 
 
+class CutPlanPlannedSegmentAssetPlan(BaseModel):
+    """Phase 7 (Cut-Plan-Split-Fix): unabhängig deklarierte Kopie der vom
+    Voice-over-Autor pro Satz/Beat geplanten Shot-Aufteilung (siehe
+    otio_app.services.voiceover_generation.models.SentenceSegmentAssetPlan)
+    — bewusst NICHT dasselbe Modell direkt wiederverwendet (siehe
+    Moduldocstring: keine Modell-Vermischung mit der Voice-over-Pipeline),
+    nur die für die Asset-Auswahl relevanten Felder.
+
+    Leer (Default) für alle Ein-Shot-Items und für alle vor Phase 7
+    erzeugten Sentence-/Intro-Items; die Asset-Auswahl fällt dann auf den
+    allgemeinen Fallback-Pool zurück (primary_asset_id + backup_asset_ids +
+    second_backup_asset_ids)."""
+
+    segment_order: int = 1
+    primary_asset_id: str = ""
+    backup_asset_ids: list[str] = Field(default_factory=list)
+
+
 class CutPlanItem(BaseModel):
     """Eine redaktionelle Schnitt-Einheit — kann durch Merge mehrere
     Sentence-/Beat-Items abdecken (source_refs) oder durch Split mehrere
@@ -133,6 +152,13 @@ class CutPlanItem(BaseModel):
     planned_visual_segments: list[VisualSegment] = Field(default_factory=list)
     primary_asset_id: str = ""
     backup_asset_ids: list[str] = Field(default_factory=list)
+    # Phase 7: WEITERE genuinely passende lokale Ausweichassets (siehe
+    # SentenceItem.second_backup_asset_ids) — zählen als echte Alternativen
+    # im Fallback-Pool der Asset-Auswahl (cut_plan_asset_selector.py).
+    second_backup_asset_ids: list[str] = Field(default_factory=list)
+    # Phase 7: vom Autor pro Shot geplante Asset-Zuordnung, siehe
+    # CutPlanPlannedSegmentAssetPlan-Docstring.
+    planned_segments: list[CutPlanPlannedSegmentAssetPlan] = Field(default_factory=list)
     chosen_asset_id: str = ""
     # PRIMARY_USED|BACKUP_USED|SUPPLEMENT_REQUIRED|BLOCKED|UNRESOLVED
     asset_selection_status: str = CUT_PLAN_ASSET_SELECTION_UNRESOLVED

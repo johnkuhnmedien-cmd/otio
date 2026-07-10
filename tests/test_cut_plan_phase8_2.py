@@ -302,6 +302,64 @@ def test_item_skeletons_copy_editorial_fields_unchanged(tmp_path: Path) -> None:
     assert folder_item.folder_name == FOLDER_A
 
 
+def test_item_skeletons_copy_second_backup_and_planned_segments(tmp_path: Path) -> None:
+    """Phase 7 (Cut-Plan-Split-Fix): second_backup_asset_ids und
+    planned_segments (Phase 4/7 auf SentenceItem) müssen 1:1 in das
+    CutPlanItem übernommen werden."""
+    from otio_app.services.voiceover_generation.models import SentenceSegmentAssetPlan
+
+    project = _make_project(tmp_path)
+    folder = ConfirmedFolderPlanItem(
+        folder_name=FOLDER_A,
+        order_index=1,
+        audio_path="/fake/folder.mp3",
+        audio_duration_sec=40.0,
+        alignment_path="/fake/folder_align.json",
+        sentence_items=[
+            SentenceItem(
+                sentence_id="sentence_001",
+                text="Ein Testsatz.",
+                primary_asset_id="asset_b",
+                backup_asset_ids=["asset_c"],
+                second_backup_asset_ids=["asset_d"],
+                planned_segments=[
+                    SentenceSegmentAssetPlan(
+                        segment_order=1, primary_asset_id="asset_e", backup_asset_ids=["asset_f"]
+                    ),
+                ],
+            )
+        ],
+        alignment_items=[
+            AlignmentItem(sentence_id="sentence_001", audio_start_sec=0.0, audio_end_sec=5.0, duration_sec=5.0)
+        ],
+    )
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=_intro(), folders=[folder])
+    settings = _settings(project)
+    audio_items = build_cut_plan_audio_items(project, plan, settings)
+    items = build_cut_plan_item_skeletons(project, plan, audio_items, settings)
+
+    folder_item = next(item for item in items if item.source_scope == "folder")
+    assert folder_item.second_backup_asset_ids == ["asset_d"]
+    assert len(folder_item.planned_segments) == 1
+    assert folder_item.planned_segments[0].segment_order == 1
+    assert folder_item.planned_segments[0].primary_asset_id == "asset_e"
+    assert folder_item.planned_segments[0].backup_asset_ids == ["asset_f"]
+
+
+def test_item_skeletons_default_second_backup_and_planned_segments_to_empty(tmp_path: Path) -> None:
+    """Rückwärtskompatibilität: ein SentenceItem ohne die Phase-4/7-Felder
+    (Standardfall für alle vorher erzeugten Drafts) ergibt leere Listen."""
+    project = _make_project(tmp_path)
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=_intro(), folders=[_folder()])
+    settings = _settings(project)
+    audio_items = build_cut_plan_audio_items(project, plan, settings)
+    items = build_cut_plan_item_skeletons(project, plan, audio_items, settings)
+
+    folder_item = next(item for item in items if item.source_scope == "folder")
+    assert folder_item.second_backup_asset_ids == []
+    assert folder_item.planned_segments == []
+
+
 def test_item_skeletons_populate_source_refs(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=_intro(), folders=[_folder()])

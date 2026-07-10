@@ -631,6 +631,59 @@ def test_folder_voiceover_prompt_instructs_supplement_search_hint_semantics() ->
     assert "location-prefixed search phrase" in prompt
 
 
+def test_folder_voiceover_prompt_json_schema_includes_planned_segments() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert '"planned_segments": []' in prompt
+
+
+def test_folder_voiceover_prompt_instructs_planned_segments_semantics() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "If preferred_cut_count is greater than 1, also fill planned_segments" in prompt
+    assert "prefer a DIFFERENT asset per shot" in prompt
+    assert "Leave planned_segments empty entirely when preferred_cut_count is 1" in prompt
+
+
+def test_folder_voiceover_prompt_rules_require_valid_planned_segment_asset_ids() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "planned_segments (if used) MUST also only reference asset_id values" in prompt
+    assert "segment_order MUST start at 1 and be unique" in prompt
+
+
+def test_voiceover_correction_prompt_json_schema_includes_planned_segments() -> None:
+    prompt = build_voiceover_correction_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        setting=_sample_setting(),
+        draft=_sample_draft(),
+        errors=[],
+    )
+    assert '"planned_segments": []' in prompt
+
+
 def test_voiceover_correction_prompt_json_schema_includes_new_phase4_fields() -> None:
     prompt = build_voiceover_correction_prompt(
         project_brief=_sample_brief(),

@@ -2,10 +2,21 @@
 
 Liest AUSSCHLIESSLICH bereits bestätigte Felder aus
 `confirmed_voiceover_project_plan.json` (primary_asset_id, backup_asset_ids,
-needs_supplement_asset, supplement_reason) sowie die Folder-Inventories
-(lesend). Erfindet KEINE neuen Asset-IDs, verändert KEINE Inventory-Dateien,
-löst KEINE Supplement-Suche/-Beschaffung aus (das kommt erst in einer
-späteren Sub-Phase) und transcodiert/rendert nichts."""
+second_backup_asset_ids, planned_segments, needs_supplement_asset,
+supplement_reason) sowie die Folder-Inventories (lesend). Erfindet KEINE
+neuen Asset-IDs, verändert KEINE Inventory-Dateien, löst KEINE
+Supplement-Suche/-Beschaffung aus (das kommt erst in einer späteren
+Sub-Phase) und transcodiert/rendert nichts.
+
+Phase 7 (Cut-Plan-Split-Fix): Kandidaten für ein gesplittetes Item werden
+gegen die Dauer IHRES EIGENEN Segments geprüft (nicht mehr gegen die volle
+Satzdauer, siehe _select_candidates_for_item) und second_backup_asset_ids
+zählen als echte Alternativen im Fallback-Pool (siehe
+_general_asset_pool). Sind vom Autor pro Shot geplante Assets vorhanden
+(item.planned_segments), werden diese pro Segment bevorzugt (siehe
+_candidate_order_for_segment) — bei allen vor Phase 7 erzeugten Items
+(planned_segments leer) bleibt die Kandidaten-Reihenfolge identisch zum
+bisherigen Verhalten, nur die Dauer-Prüfung ist korrigiert."""
 
 from __future__ import annotations
 
@@ -350,23 +361,80 @@ def _usage_violation(
     return None
 
 
+def _dedupe_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
+
+
+def _general_asset_pool(item: CutPlanItem) -> list[str]:
+    """Flacher Fallback-Pool aller vom Autor vorgeschlagenen Kandidaten in
+    Präferenz-Reihenfolge (Primary -> Backup -> Second Backup).
+
+    Phase 7 (Cut-Plan-Split-Fix): second_backup_asset_ids zählen jetzt
+    ebenfalls als echte Alternativen — vorher wurden sie hier komplett
+    ignoriert, obwohl der Autor sie bewusst als genuinely passend markiert
+    hat (siehe SentenceItem.second_backup_asset_ids, Phase 4)."""
+    ordered = ([item.primary_asset_id] if item.primary_asset_id else [])
+    ordered += list(item.backup_asset_ids)
+    ordered += list(item.second_backup_asset_ids)
+    return _dedupe_preserve_order(ordered)
+
+
+def _candidate_order_for_segment(
+    item: CutPlanItem, segment_index: int, general_pool: list[str]
+) -> list[str]:
+    """Kandidaten-Präferenzreihenfolge für GENAU EIN Segment (0-basierter
+    Index innerhalb eines möglichen Splits).
+
+    Phase 7: nutzt zuerst die vom Autor PRO SHOT geplanten Assets
+    (item.planned_segments — leer bei allen vor Phase 7 erzeugten Items),
+    danach den allgemeinen Fallback-Pool (dedupliziert, gleiche
+    Präferenz-Reihenfolge wie zuvor). Für Ein-Shot-Items (segment_index=0,
+    kein passender planned_segments-Eintrag) ist das Ergebnis identisch zum
+    bisherigen Verhalten."""
+    planned = next(
+        (segment for segment in item.planned_segments if segment.segment_order == segment_index + 1),
+        None,
+    )
+    ordered: list[str] = []
+    if planned is not None:
+        if planned.primary_asset_id:
+            ordered.append(planned.primary_asset_id)
+        ordered.extend(planned.backup_asset_ids)
+    ordered.extend(general_pool)
+    return _dedupe_preserve_order(ordered)
+
+
 def _select_candidates_for_item(
     item: CutPlanItem,
     lookup: CutPlanAssetLookup,
     usage_tracker: UsageTracker,
     settings: CutPlanSettings,
     *,
-    num_segments: int,
+    segment_durations: list[float],
     preferred_folder_name: str,
 ) -> tuple[list[CutPlanAssetCandidate], list[str], str | None, bool, bool]:
-    """Wählt bis zu num_segments Kandidaten aus primary_asset_id + backup_asset_ids
-    (in Reihenfolge). Gibt (chosen_assets, warnings, last_failure_type,
-    tried_any, primary_was_first_choice) zurück. Registriert erfolgreiche
-    Kandidaten sofort im usage_tracker."""
-    ordered_ids: list[str] = []
-    if item.primary_asset_id:
-        ordered_ids.append(item.primary_asset_id)
-    ordered_ids.extend(asset_id for asset_id in item.backup_asset_ids if asset_id)
+    """Wählt EINEN Kandidaten je Eintrag in segment_durations.
+
+    Phase 7 (Cut-Plan-Split-Fix): jeder Kandidat wird gegen die Dauer
+    SEINES EIGENEN Segments geprüft, nicht mehr gegen die volle Satzdauer —
+    vorher wurde z. B. für einen 12s-Satz, der in 6s+6s gesplittet wird,
+    jeder Kandidat fälschlich gegen die vollen 12s geprüft, wodurch zwei an
+    sich passende 6-7s-Videos zu Unrecht abgelehnt wurden.
+
+    Gibt (chosen_assets, warnings, last_failure_type, tried_any,
+    primary_was_first_choice) zurück. Registriert erfolgreiche Kandidaten
+    sofort im usage_tracker — die bestehenden Regeln (kein unmittelbares
+    Wiederverwenden, max_asset_usage, min_asset_reuse_distance_shots)
+    gelten dabei unverändert auch zwischen benachbarten Segmenten
+    desselben Items."""
+    general_pool = _general_asset_pool(item)
+    num_segments = len(segment_durations)
 
     chosen_assets: list[CutPlanAssetCandidate] = []
     warnings: list[str] = []
@@ -374,34 +442,44 @@ def _select_candidates_for_item(
     tried_any = False
     primary_was_first_choice = False
 
-    for asset_id in ordered_ids:
-        if len(chosen_assets) >= num_segments:
+    for segment_index in range(num_segments):
+        candidate_ids = _candidate_order_for_segment(item, segment_index, general_pool)
+        segment_duration = segment_durations[segment_index]
+        filled = False
+
+        for asset_id in candidate_ids:
+            tried_any = True
+            candidate = resolve_asset_candidate(asset_id, lookup, preferred_folder_name=preferred_folder_name)
+            if candidate is None:
+                warnings.append(CUT_PLAN_ERROR_INVALID_ASSET_ID)
+                last_failure_type = CUT_PLAN_ERROR_INVALID_ASSET_ID
+                continue
+            if lookup.is_ambiguous(asset_id):
+                warnings.append(CUT_PLAN_ERROR_AMBIGUOUS_ASSET_ID)
+
+            failure = _candidate_usability_error(candidate, segment_duration)
+            if failure is not None:
+                warnings.append(failure)
+                last_failure_type = failure
+                continue
+
+            usage_failure = _usage_violation(asset_id, usage_tracker, settings, is_continuation=False)
+            if usage_failure is not None:
+                warnings.append(usage_failure)
+                last_failure_type = usage_failure
+                continue
+
+            if segment_index == 0 and asset_id == item.primary_asset_id:
+                primary_was_first_choice = True
+            chosen_assets.append(candidate)
+            usage_tracker.register(asset_id, count_as_usage=True)
+            filled = True
             break
-        tried_any = True
-        candidate = resolve_asset_candidate(asset_id, lookup, preferred_folder_name=preferred_folder_name)
-        if candidate is None:
-            warnings.append(CUT_PLAN_ERROR_INVALID_ASSET_ID)
-            last_failure_type = CUT_PLAN_ERROR_INVALID_ASSET_ID
-            continue
-        if lookup.is_ambiguous(asset_id):
-            warnings.append(CUT_PLAN_ERROR_AMBIGUOUS_ASSET_ID)
 
-        failure = _candidate_usability_error(candidate, item.duration_sec)
-        if failure is not None:
-            warnings.append(failure)
-            last_failure_type = failure
-            continue
-
-        usage_failure = _usage_violation(asset_id, usage_tracker, settings, is_continuation=False)
-        if usage_failure is not None:
-            warnings.append(usage_failure)
-            last_failure_type = usage_failure
-            continue
-
-        if not chosen_assets and asset_id == item.primary_asset_id:
-            primary_was_first_choice = True
-        chosen_assets.append(candidate)
-        usage_tracker.register(asset_id, count_as_usage=True)
+        if not filled:
+            # Kein Kandidat für dieses Segment nutzbar -> restliche Segmente
+            # unten per Continuation auffüllen (unverändertes Verhalten).
+            break
 
     # Fehlende Segmente mit dem letzten erfolgreichen Kandidaten als
     # Split-Fortsetzung auffüllen (§6 Fall C) — zählt nicht als zusätzliche
@@ -483,16 +561,21 @@ def choose_asset_for_cut_item(
         )
         return updated.model_copy(update={"duration_strategy": duration_strategy})
 
-    num_segments = (
-        len(_compute_split_segment_durations(item.duration_sec, settings.shot_min_sec, settings.shot_max_sec))
+    segment_durations = (
+        _compute_split_segment_durations(item.duration_sec, settings.shot_min_sec, settings.shot_max_sec)
         if duration_strategy == CUT_PLAN_DURATION_STRATEGY_SPLIT
-        else 1
+        else [item.duration_sec]
     )
     preferred_folder_name = _preferred_folder_for_item(item)
 
     chosen_assets, selection_warnings, last_failure_type, tried_any, primary_was_first_choice = (
         _select_candidates_for_item(
-            item, lookup, usage_tracker, settings, num_segments=num_segments, preferred_folder_name=preferred_folder_name
+            item,
+            lookup,
+            usage_tracker,
+            settings,
+            segment_durations=segment_durations,
+            preferred_folder_name=preferred_folder_name,
         )
     )
 

@@ -108,6 +108,7 @@ __all__ = [
     "FolderVoiceoverSetting",
     "FolderVoiceoverSettingsDocument",
     "VisualAssetPlanHint",
+    "SentenceSegmentAssetPlan",
     "SentenceItem",
     "FolderVoiceoverDraft",
     "FolderVoiceoversDocument",
@@ -380,6 +381,21 @@ class VisualAssetPlanHint(BaseModel):
     supplement_search_hint: str = ""
 
 
+class SentenceSegmentAssetPlan(BaseModel):
+    """Phase 7 (Cut-Plan-Split-Fix): EIN vom Autor-LLM geplanter visueller
+    Teilabschnitt ('Shot') innerhalb eines SentenceItems, das mehrere Shots
+    braucht (siehe VisualAssetPlanHint.preferred_cut_count > 1). Additiv —
+    ersetzt NICHT primary_asset_id/backup_asset_ids/second_backup_asset_ids
+    auf dem SentenceItem selbst, die weiterhin als allgemeiner Fallback-Pool
+    dienen (insbesondere für alle vor Phase 7 erzeugten Drafts, bei denen
+    planned_segments immer leer ist — siehe cut_plan_asset_selector.py für
+    die konkrete Fallback-Logik)."""
+
+    segment_order: int = 1  # 1-basiert, Reihenfolge innerhalb des Satzes/Beats
+    primary_asset_id: str = ""
+    backup_asset_ids: list[str] = Field(default_factory=list)
+
+
 class SentenceItem(BaseModel):
     """Ein Satz/Beat der Voice-over-Prosa mit strukturierter Asset-Zuordnung.
 
@@ -413,6 +429,11 @@ class SentenceItem(BaseModel):
     pause_after: str = ""
     # Phase 4: additive Zusatz-Planungsfelder, siehe VisualAssetPlanHint.
     visual_asset_plan: VisualAssetPlanHint = Field(default_factory=VisualAssetPlanHint)
+    # Phase 7: nur relevant, wenn visual_asset_plan.preferred_cut_count > 1 —
+    # pro-Shot-Asset-Planung, siehe SentenceSegmentAssetPlan. Leer (Default)
+    # für alle Ein-Shot-Sätze und für alle vor Phase 7 erzeugten Drafts; der
+    # Cut Plan fällt dann auf den allgemeinen Fallback-Pool zurück.
+    planned_segments: list[SentenceSegmentAssetPlan] = Field(default_factory=list)
 
 
 class FolderVoiceoverDraft(BaseModel):

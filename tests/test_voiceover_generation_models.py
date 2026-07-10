@@ -5,7 +5,11 @@ from __future__ import annotations
 
 import json
 
-from otio_app.services.voiceover_generation.models import SentenceItem, VisualAssetPlanHint
+from otio_app.services.voiceover_generation.models import (
+    SentenceItem,
+    SentenceSegmentAssetPlan,
+    VisualAssetPlanHint,
+)
 
 
 def test_visual_asset_plan_hint_defaults_are_neutral() -> None:
@@ -21,6 +25,14 @@ def test_sentence_item_new_fields_default_to_empty() -> None:
     item = SentenceItem(sentence_id="s1")
     assert item.second_backup_asset_ids == []
     assert item.visual_asset_plan == VisualAssetPlanHint()
+    assert item.planned_segments == []
+
+
+def test_sentence_segment_asset_plan_defaults() -> None:
+    segment = SentenceSegmentAssetPlan()
+    assert segment.segment_order == 1
+    assert segment.primary_asset_id == ""
+    assert segment.backup_asset_ids == []
 
 
 def test_sentence_item_parses_legacy_json_without_phase4_fields() -> None:
@@ -37,10 +49,30 @@ def test_sentence_item_parses_legacy_json_without_phase4_fields() -> None:
     item = SentenceItem.model_validate(legacy_payload)
     assert item.second_backup_asset_ids == []
     assert item.visual_asset_plan.preferred_cut_count == 1
+    assert item.planned_segments == []
 
     # Roundtrip: serialisieren + wieder laden bleibt stabil.
     round_tripped = SentenceItem.model_validate(json.loads(item.model_dump_json()))
     assert round_tripped == item
+
+
+def test_sentence_item_accepts_planned_segments_payload() -> None:
+    payload = {
+        "sentence_id": "sentence_001",
+        "text": "Ein langer Satz, der in zwei Shots geteilt wird.",
+        "primary_asset_id": "asset_a",
+        "visual_asset_plan": {"preferred_cut_count": 2},
+        "planned_segments": [
+            {"segment_order": 1, "primary_asset_id": "asset_a", "backup_asset_ids": ["asset_b"]},
+            {"segment_order": 2, "primary_asset_id": "asset_c", "backup_asset_ids": []},
+        ],
+    }
+    item = SentenceItem.model_validate(payload)
+    assert len(item.planned_segments) == 2
+    assert item.planned_segments[0].segment_order == 1
+    assert item.planned_segments[0].primary_asset_id == "asset_a"
+    assert item.planned_segments[0].backup_asset_ids == ["asset_b"]
+    assert item.planned_segments[1].primary_asset_id == "asset_c"
 
 
 def test_sentence_item_accepts_full_phase4_payload() -> None:

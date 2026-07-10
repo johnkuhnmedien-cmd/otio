@@ -438,6 +438,14 @@ without switching visuals), asset_strategy_reason (why you assigned assets this 
 and — ONLY if needs_supplement_asset is true — supplement_search_hint: a concrete, \
 location-prefixed search phrase for finding this missing visual externally (e.g. \
 "Havasu Falls waterfall woman", not just "waterfall").
+- If preferred_cut_count is greater than 1, also fill planned_segments: ONE entry per \
+shot (segment_order starting at 1, in the order they play), each with its own \
+primary_asset_id (and optionally backup_asset_ids) — the exact same rule as above \
+applies PER SHOT: only assign an asset that genuinely fits that portion of the \
+sentence, prefer a DIFFERENT asset per shot, and if a given shot genuinely has no good \
+local asset of its own, simply leave that shot's primary_asset_id empty rather than \
+forcing a mismatch (the edit will fall back to your other assets for that gap). Leave \
+planned_segments empty entirely when preferred_cut_count is 1.
 
 ## Task
 Write ONE flowing documentary voice-over text for this location (target_words above), \
@@ -451,6 +459,8 @@ Rules for sentence_items:
 - backup_asset_ids MUST also only contain asset_id values from the list above.
 - second_backup_asset_ids MUST also only contain asset_id values from the list above \
 (or stay empty — see "Visual editing awareness" above for when to use it).
+- planned_segments (if used) MUST also only reference asset_id values from the list \
+above, and segment_order MUST start at 1 and be unique within that sentence/beat.
 - If no asset fits a sentence, set primary_asset_id to "", needs_supplement_asset=true, \
 and give a concrete supplement_reason (what visual is missing).
 - Do not assign the same primary_asset_id to two consecutive sentence_items unless \
@@ -493,7 +503,8 @@ this shape:
         "needs_visual_variety": false,
         "asset_strategy_reason": "...",
         "supplement_search_hint": ""
-      }}
+      }},
+      "planned_segments": []
     }}
   ],
   "transition_from_previous_used": false,
@@ -645,7 +656,9 @@ concrete supplement_reason) for beats that need a visual not covered here rather
 than omitting the detail, and only keep a long sentence/beat if it still has enough \
 distinct, usable local coverage for a later split. Only add an asset to \
 second_backup_asset_ids if it still genuinely fits that specific sentence/beat — \
-never as filler.
+never as filler. If a sentence/beat has planned_segments (per-shot asset planning), \
+keep it consistent with any rewritten text — remove/adjust segments that no longer \
+apply, but never invent a segment's asset just to fill it.
 
 Respond with JSON ONLY, no markdown code fences, no commentary, using the EXACT \
 same shape as before:
@@ -676,7 +689,8 @@ same shape as before:
         "needs_visual_variety": false,
         "asset_strategy_reason": "...",
         "supplement_search_hint": ""
-      }}
+      }},
+      "planned_segments": []
     }}
   ],
   "transition_from_previous_used": false,

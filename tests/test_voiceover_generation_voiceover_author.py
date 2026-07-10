@@ -38,6 +38,7 @@ from otio_app.services.voiceover_generation.models import (
     DramaturgyPlan,
     FolderVoiceoverDraft,
     SentenceItem,
+    SentenceSegmentAssetPlan,
 )
 from otio_app.services.voiceover_generation.voiceover_author_service import (
     build_inventory_asset_context,
@@ -479,6 +480,129 @@ def test_generated_draft_handles_malformed_visual_asset_plan_gracefully(tmp_path
 
     assert result.status == STATUS_PASS
     assert result.draft.sentence_items[0].visual_asset_plan.preferred_cut_count == 1
+
+
+# --- Phase 7 (Asset-bewusste Cut-Plan-Vorbereitung): planned_segments ---
+
+
+def test_generated_draft_parses_planned_segments(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    response = json.loads(VALID_AUTHOR_RESPONSE)
+    response["sentence_items"][0]["planned_segments"] = [
+        {"segment_order": 1, "primary_asset_id": "asset_clip1", "backup_asset_ids": ["asset_clip2"]},
+        {"segment_order": 2, "primary_asset_id": "asset_clip2", "backup_asset_ids": []},
+    ]
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(json.dumps(response)),
+    ):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    segments = result.draft.sentence_items[0].planned_segments
+    assert len(segments) == 2
+    assert segments[0].segment_order == 1
+    assert segments[0].primary_asset_id == "asset_clip1"
+    assert segments[0].backup_asset_ids == ["asset_clip2"]
+    assert segments[1].segment_order == 2
+    assert segments[1].primary_asset_id == "asset_clip2"
+
+
+def test_generated_draft_defaults_planned_segments_to_empty_when_absent(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    assert result.draft.sentence_items[0].planned_segments == []
+
+
+def test_generated_draft_sanitizes_hallucinated_planned_segment_asset_id(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    response = json.loads(VALID_AUTHOR_RESPONSE)
+    response["sentence_items"][0]["planned_segments"] = [
+        {
+            "segment_order": 1,
+            "primary_asset_id": "asset_made_up_id",
+            "backup_asset_ids": ["asset_clip2", "asset_also_made_up"],
+        }
+    ]
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(json.dumps(response)),
+    ):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    segment = result.draft.sentence_items[0].planned_segments[0]
+    assert segment.primary_asset_id == ""
+    assert segment.backup_asset_ids == ["asset_clip2"]
+
+
+def test_generated_draft_ignores_malformed_planned_segments_entries(tmp_path: Path) -> None:
+    """Ein planned_segments-Eintrag, der kein dict ist, darf das Parsen des
+    restlichen sentence_item nicht scheitern lassen."""
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    response = json.loads(VALID_AUTHOR_RESPONSE)
+    response["sentence_items"][0]["planned_segments"] = [
+        "not a dict",
+        {"segment_order": 2, "primary_asset_id": "asset_clip2"},
+    ]
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(json.dumps(response)),
+    ):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    assert result.status == STATUS_PASS
+    segments = result.draft.sentence_items[0].planned_segments
+    assert len(segments) == 1
+    assert segments[0].segment_order == 2
+
+
+def test_validate_asset_ids_detects_invalid_planned_segment_asset_id(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name="Grand Canyon",
+        voiceover_text_full="Text",
+        word_count=1,
+        sentence_items=[
+            SentenceItem(
+                sentence_id="sentence_001",
+                text="Text",
+                primary_asset_id="asset_clip1",
+                planned_segments=[
+                    SentenceSegmentAssetPlan(segment_order=1, primary_asset_id="asset_does_not_exist")
+                ],
+            )
+        ],
+    )
+    errors = validate_asset_ids_against_inventory(project, "Grand Canyon", draft)
+    assert any(error.type == VO_ERROR_INVALID_ASSET_ID for error in errors)
+
+
+def test_validate_asset_ids_detects_invalid_planned_segment_backup_asset_id(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name="Grand Canyon",
+        voiceover_text_full="Text",
+        word_count=1,
+        sentence_items=[
+            SentenceItem(
+                sentence_id="sentence_001",
+                text="Text",
+                primary_asset_id="asset_clip1",
+                planned_segments=[
+                    SentenceSegmentAssetPlan(
+                        segment_order=1,
+                        primary_asset_id="asset_clip1",
+                        backup_asset_ids=["asset_does_not_exist"],
+                    )
+                ],
+            )
+        ],
+    )
+    errors = validate_asset_ids_against_inventory(project, "Grand Canyon", draft)
+    assert any(error.type == VO_ERROR_INVALID_ASSET_ID for error in errors)
 
 
 # --- Phase 6 (Asset-bewusste Cut-Plan-Vorbereitung): kombinierte Regenerier-Aktion ---

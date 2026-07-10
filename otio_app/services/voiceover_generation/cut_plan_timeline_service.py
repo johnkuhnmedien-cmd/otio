@@ -24,6 +24,7 @@ from otio_app.models import Project
 from otio_app.services.voiceover_generation.cut_plan_models import (
     CutPlanAudioItem,
     CutPlanItem,
+    CutPlanPlannedSegmentAssetPlan,
     CutPlanSettings,
     CutPlanSourceRef,
     CutPlanValidationError,
@@ -247,6 +248,15 @@ def _folder_item_skeleton(
         planned_visual_segments=[],
         primary_asset_id=sentence_item.primary_asset_id,
         backup_asset_ids=list(sentence_item.backup_asset_ids),
+        second_backup_asset_ids=list(sentence_item.second_backup_asset_ids),
+        planned_segments=[
+            CutPlanPlannedSegmentAssetPlan(
+                segment_order=segment.segment_order,
+                primary_asset_id=segment.primary_asset_id,
+                backup_asset_ids=list(segment.backup_asset_ids),
+            )
+            for segment in sentence_item.planned_segments
+        ],
         chosen_asset_id="",
         asset_selection_status=CUT_PLAN_ASSET_SELECTION_UNRESOLVED,
         asset_selection_reason="",
