@@ -264,6 +264,7 @@ def _folder_item_skeleton(
         needs_supplement_asset=sentence_item.needs_supplement_asset,
         supplement_reason=sentence_item.supplement_reason,
         supplement_request_id="",
+        supplement_search_hint=sentence_item.visual_asset_plan.supplement_search_hint,
         warnings=[],
         blockers=blockers,
     )

@@ -139,6 +139,80 @@ def test_generate_queries_llm_exception_returns_fail_status_not_crash(tmp_path: 
     assert "network down" in result.error
 
 
+# --- Phase 9 (Asset-bewusste Cut-Plan-Vorbereitung): supplement_search_hint ---
+
+
+def test_prompt_includes_supplement_search_hint_when_present() -> None:
+    prompt = build_cut_plan_supplement_query_prompt(
+        folder_name="Havasu Falls",
+        text="Noch vor kurzem stand ich am fallenden Wasser der Havasu Falls.",
+        visual_intent="Wasserfall",
+        reason="Fehlt Material",
+        supplement_search_hint="Havasu Falls waterfall woman mist",
+    )
+    assert "Havasu Falls waterfall woman mist" in prompt
+    assert "Bereits beim Skriptschreiben vorbereiteter Suchvorschlag" in prompt
+    assert "verwerfe ihn nicht ohne guten Grund" in prompt
+
+
+def test_prompt_omits_hint_block_when_hint_is_empty() -> None:
+    prompt = build_cut_plan_supplement_query_prompt(
+        folder_name="Havasu Falls",
+        text="Text",
+        visual_intent="Wasserfall",
+        reason="Fehlt Material",
+        supplement_search_hint="",
+    )
+    assert "Bereits beim Skriptschreiben vorbereiteter Suchvorschlag" not in prompt
+
+
+def test_prompt_default_hint_parameter_is_empty_backward_compatible() -> None:
+    """Rückwärtskompatibilität: Aufrufer ohne das neue Keyword-Argument
+    (z. B. älterer Testcode) erhalten exakt dieselbe Prompt-Struktur wie vor
+    Phase 9."""
+    prompt_without_kw = build_cut_plan_supplement_query_prompt(
+        folder_name="Havasu Falls", text="Text", visual_intent="Wasserfall", reason="Fehlt Material"
+    )
+    prompt_with_empty_hint = build_cut_plan_supplement_query_prompt(
+        folder_name="Havasu Falls",
+        text="Text",
+        visual_intent="Wasserfall",
+        reason="Fehlt Material",
+        supplement_search_hint="",
+    )
+    assert prompt_without_kw == prompt_with_empty_hint
+
+
+def test_generate_queries_passes_supplement_search_hint_into_prompt(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    request = _make_request().model_copy(
+        update={"supplement_search_hint": "Havasu Falls waterfall woman mist"}
+    )
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response(VALID_QUERY_RESPONSE)):
+        result = generate_cut_plan_supplement_queries(
+            project, request, provider="gemini", model="gemini-3.1-flash-lite"
+        )
+
+    assert result.status == "PASS"
+    run_dir = get_llm_runs_dir(project.work_dir_path) / result.run_id
+    prompt_text = (run_dir / "prompt.txt").read_text(encoding="utf-8")
+    assert "Havasu Falls waterfall woman mist" in prompt_text
+
+
+def test_generate_queries_without_hint_omits_hint_block_from_prompt(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    request = _make_request()
+    assert request.supplement_search_hint == ""
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response(VALID_QUERY_RESPONSE)):
+        result = generate_cut_plan_supplement_queries(
+            project, request, provider="gemini", model="gemini-3.1-flash-lite"
+        )
+
+    run_dir = get_llm_runs_dir(project.work_dir_path) / result.run_id
+    prompt_text = (run_dir / "prompt.txt").read_text(encoding="utf-8")
+    assert "Bereits beim Skriptschreiben vorbereiteter Suchvorschlag" not in prompt_text
+
+
 @pytest.mark.parametrize(
     "raw_text",
     [

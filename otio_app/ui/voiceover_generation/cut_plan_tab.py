@@ -663,6 +663,11 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
             st.write(f"**Visual Intent:** {request.visual_intent or '—'}")
             st.write(f"**Needed duration:** {request.needed_duration_sec:.2f}s")
             st.write(f"**Reason:** {request.reason}")
+            if request.supplement_search_hint:
+                st.caption(
+                    "🟢 Bereits beim Skriptschreiben vorbereiteter Suchvorschlag "
+                    f"(wird als bevorzugte Query verwendet): `{request.supplement_search_hint}`"
+                )
             if request.accepted_asset_id:
                 st.success(
                     f"Akzeptiertes Asset: `{request.accepted_asset_id}` "

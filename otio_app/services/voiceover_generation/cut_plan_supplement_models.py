@@ -63,6 +63,12 @@ class CutPlanSupplementRequest(BaseModel):
     visual_intent: str = ""
     needed_duration_sec: float = 0.0
     reason: str = ""
+    # Phase 9: bereits beim Skriptschreiben vorbereiteter, ortsbezogener
+    # Suchvorschlag (siehe CutPlanItem.supplement_search_hint) — wird als
+    # bevorzugte Query in die Supplement-Suche eingespeist (siehe
+    # cut_plan_supplement_bridge.search_candidates_for_cut_plan_request).
+    # Leer für Intro-Requests und alle vor Phase 4/9 erzeugten Sentence-Items.
+    supplement_search_hint: str = ""
     status: str = CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_OPEN  # OPEN|CANDIDATES_FOUND|ACCEPTED|REJECTED|FAILED
     created_at: datetime = Field(default_factory=_utcnow)
     accepted_candidate_id: str = ""

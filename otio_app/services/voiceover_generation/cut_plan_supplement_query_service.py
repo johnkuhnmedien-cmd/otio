@@ -19,7 +19,15 @@ Antwort) wird ein FAIL/PARSE_FAILED-Ergebnis mit leerer queries-Liste
 zurückgegeben statt eine Exception zu werfen — der Aufrufer (siehe
 cut_plan_supplement_bridge.search_candidates_for_cut_plan_request) fällt in
 diesem Fall auf die bestehende deterministische Query-Logik zurück
-(build_pexels_query_variants ohne llm_generated_queries)."""
+(build_pexels_query_variants ohne llm_generated_queries).
+
+Phase 9: ist auf dem Request bereits ein supplement_search_hint gesetzt
+(vom Autor-LLM beim Skriptschreiben vorbereitet, siehe SentenceItem.
+visual_asset_plan.supplement_search_hint), wird er dem Prompt als
+bevorzugter Ausgangspunkt mitgegeben — unabhängig davon greift
+cut_plan_supplement_bridge.search_candidates_for_cut_plan_request den
+Hinweis ZUSÄTZLICH direkt als eigene Suchquery auf, auch wenn dieser
+LLM-Aufruf hier fehlschlägt oder gar nicht ausgeführt wird."""
 
 from __future__ import annotations
 
@@ -71,8 +79,23 @@ def build_cut_plan_supplement_query_prompt(
     text: str,
     visual_intent: str,
     reason: str,
+    supplement_search_hint: str = "",
 ) -> str:
     location = (folder_name or "").strip() or "(unbekannter Ort)"
+    hint = supplement_search_hint.strip()
+    # Phase 9: ein bereits beim Skriptschreiben vorbereiteter Suchvorschlag
+    # (SentenceItem.visual_asset_plan.supplement_search_hint) entstand mit
+    # vollem redaktionellem Kontext des Satzes — er wird deshalb als
+    # bevorzugter Ausgangspunkt genannt, nicht einfach verworfen.
+    hint_block = (
+        f"Bereits beim Skriptschreiben vorbereiteter Suchvorschlag: \"{hint}\"\n"
+        "Nutze diesen Vorschlag als AUSGANGSPUNKT für deine erste Suchquery "
+        "(du darfst ihn leicht anpassen/vervollständigen, z. B. den Ort "
+        "ergänzen, aber verwerfe ihn nicht ohne guten Grund) und erstelle 2 "
+        "weitere, unterschiedliche Varianten dazu.\n\n"
+        if hint
+        else ""
+    )
     return (
         "Du erstellst Suchqueries für eine Stock-Footage-/Stock-Foto-Suche bei "
         "Pexels, auf ENGLISCH.\n\n"
@@ -80,6 +103,7 @@ def build_cut_plan_supplement_query_prompt(
         f"Voice-over-Satz (Deutsch): {text.strip() or '(kein Text)'}\n"
         f"Visuelle Anforderung: {visual_intent.strip() or '(keine Angabe)'}\n"
         f"Grund für fehlendes Material: {reason.strip() or '(keine Angabe)'}\n\n"
+        f"{hint_block}"
         "Erstelle genau 3 unterschiedliche, kurze, stichwortartige Suchqueries "
         "auf ENGLISCH für Pexels. Jede Suchquery MUSS mit dem Ort "
         f'("{location}") beginnen, gefolgt von 2-4 visuellen Schlagwörtern '
@@ -131,6 +155,7 @@ def generate_cut_plan_supplement_queries(
         text=request.text,
         visual_intent=request.visual_intent,
         reason=request.reason,
+        supplement_search_hint=request.supplement_search_hint,
     )
     prompt_hash = content_hash(prompt)
     model_id = resolve_llm_model_id(provider, model)

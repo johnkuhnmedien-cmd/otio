@@ -449,6 +449,186 @@ def test_search_falls_back_to_deterministic_query_when_llm_query_fails(tmp_path:
     assert persisted.llm_queries == []
 
 
+# --- Phase 9 (Asset-bewusste Cut-Plan-Vorbereitung): supplement_search_hint ---
+
+
+def _project_with_supplement_required_draft_and_hint(
+    tmp_path: Path, *, supplement_search_hint: str
+) -> Project:
+    """Wie _project_with_supplement_required_draft, aber mit einem bereits
+    beim Skriptschreiben vorbereiteten Suchvorschlag (visual_asset_plan.
+    supplement_search_hint) auf dem einzigen Sentence-Item."""
+    from otio_app.services.voiceover_generation.models import VisualAssetPlanHint
+
+    project = _make_project(tmp_path)
+    _write_inventory(project, [])
+    audio_path = _write_audio(project)
+
+    folder = ConfirmedFolderPlanItem(
+        folder_name=FOLDER_A,
+        order_index=1,
+        audio_path=str(audio_path),
+        audio_duration_sec=5.0,
+        sentence_items=[
+            SentenceItem(
+                sentence_id="sentence_001",
+                text="Ein Canyon im Abendlicht.",
+                visual_intent="wide canyon shot at sunset",
+                needs_supplement_asset=True,
+                supplement_reason="No local asset available.",
+                visual_asset_plan=VisualAssetPlanHint(supplement_search_hint=supplement_search_hint),
+            )
+        ],
+        alignment_items=[
+            AlignmentItem(sentence_id="sentence_001", audio_start_sec=0.0, audio_end_sec=5.0, duration_sec=5.0)
+        ],
+    )
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id, project_title="Test", status="AUDIO_READY",
+        intro=ConfirmedIntroPlanItem(), folders=[folder],
+    )
+    save_confirmed_voiceover_project_plan(project, plan)
+    save_cut_plan_settings(project, CutPlanSettings(project_id=project.id))
+    draft = build_cut_plan_draft(project)
+    save_cut_plan_draft(project, draft)
+    return project
+
+
+def test_build_supplement_requests_copies_supplement_search_hint(tmp_path: Path) -> None:
+    project = _project_with_supplement_required_draft_and_hint(
+        tmp_path, supplement_search_hint="Grand Canyon rim wide shot"
+    )
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    assert document.requests[0].supplement_search_hint == "Grand Canyon rim wide shot"
+
+
+def test_build_supplement_requests_defaults_hint_to_empty_when_absent(tmp_path: Path) -> None:
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    assert document.requests[0].supplement_search_hint == ""
+
+
+def test_search_uses_supplement_search_hint_as_sole_query_without_llm_generation(
+    tmp_path: Path,
+) -> None:
+    """Ohne query_llm_provider/query_llm_model wird trotzdem der bereits
+    vorbereitete Suchvorschlag als Query verwendet — unabhängig vom
+    separaten Query-Generierungs-LLM-Aufruf."""
+    project = _project_with_supplement_required_draft_and_hint(
+        tmp_path, supplement_search_hint="Grand Canyon rim wide shot"
+    )
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    mock_adapter = MagicMock()
+    mock_adapter.search.return_value = [_fake_candidate(request_id=request_id)]
+
+    with (
+        patch(f"{_BRIDGE_MODULE}.get_supplement_adapter", return_value=mock_adapter),
+        patch(f"{_BRIDGE_MODULE}.generate_cut_plan_supplement_queries") as mock_llm_query,
+    ):
+        search_candidates_for_cut_plan_request(project, request_id, {"provider": "pexels"})
+
+    mock_llm_query.assert_not_called()
+    sent_request = mock_adapter.search.call_args[0][0]
+    assert sent_request.llm_generated_queries == ["Grand Canyon rim wide shot"]
+
+
+def test_search_prepends_supplement_search_hint_before_llm_generated_queries(
+    tmp_path: Path,
+) -> None:
+    """Der vorbereitete Suchvorschlag hat Priorität VOR den nachträglich
+    per LLM generierten Queries — beide werden kombiniert, nicht ersetzt."""
+    project = _project_with_supplement_required_draft_and_hint(
+        tmp_path, supplement_search_hint="Grand Canyon rim wide shot"
+    )
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    mock_adapter = MagicMock()
+    mock_adapter.search.return_value = [_fake_candidate(request_id=request_id)]
+
+    from otio_app.services.voiceover_generation.cut_plan_supplement_query_service import (
+        CutPlanSupplementQueryResult,
+    )
+
+    fake_result = CutPlanSupplementQueryResult(
+        status="PASS",
+        queries=["Grand Canyon rock formation", "Grand Canyon carved road"],
+        run_id="run_fake_789",
+        provider="gemini",
+        model="gemini-3.1-flash-lite",
+    )
+
+    with (
+        patch(f"{_BRIDGE_MODULE}.get_supplement_adapter", return_value=mock_adapter),
+        patch(f"{_BRIDGE_MODULE}.generate_cut_plan_supplement_queries", return_value=fake_result),
+    ):
+        search_candidates_for_cut_plan_request(
+            project,
+            request_id,
+            {"provider": "pexels"},
+            query_llm_provider="gemini",
+            query_llm_model="gemini-3.1-flash-lite",
+        )
+
+    sent_request = mock_adapter.search.call_args[0][0]
+    assert sent_request.llm_generated_queries == [
+        "Grand Canyon rim wide shot",
+        "Grand Canyon rock formation",
+        "Grand Canyon carved road",
+    ]
+
+    # Das reine LLM-Query-Trace-Feld bleibt unverändert nur das Ergebnis des
+    # separaten Query-Generierungs-Aufrufs (ohne den Hint).
+    reloaded = load_cut_plan_supplement_requests(project)
+    persisted = next(r for r in reloaded.requests if r.request_id == request_id)
+    assert persisted.llm_queries == fake_result.queries
+
+
+def test_search_uses_hint_alone_when_llm_query_generation_fails(tmp_path: Path) -> None:
+    """Schlägt die separate Query-Generierung fehl, bleibt der vorbereitete
+    Suchvorschlag trotzdem als Query erhalten (robuster als der reine
+    deterministische Fallback allein)."""
+    project = _project_with_supplement_required_draft_and_hint(
+        tmp_path, supplement_search_hint="Grand Canyon rim wide shot"
+    )
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    mock_adapter = MagicMock()
+    mock_adapter.search.return_value = [_fake_candidate(request_id=request_id)]
+
+    from otio_app.services.voiceover_generation.cut_plan_supplement_query_service import (
+        CutPlanSupplementQueryResult,
+    )
+
+    fake_result = CutPlanSupplementQueryResult(status="FAIL", queries=[], error="network down")
+
+    with (
+        patch(f"{_BRIDGE_MODULE}.get_supplement_adapter", return_value=mock_adapter),
+        patch(f"{_BRIDGE_MODULE}.generate_cut_plan_supplement_queries", return_value=fake_result),
+    ):
+        search_candidates_for_cut_plan_request(
+            project,
+            request_id,
+            {"provider": "pexels"},
+            query_llm_provider="gemini",
+            query_llm_model="gemini-3.1-flash-lite",
+        )
+
+    sent_request = mock_adapter.search.call_args[0][0]
+    assert sent_request.llm_generated_queries == ["Grand Canyon rim wide shot"]
+
+
 def test_candidates_are_saved_to_candidates_file(tmp_path: Path) -> None:
     project = _project_with_supplement_required_draft(tmp_path)
     draft = load_cut_plan_draft(project)
@@ -831,6 +1011,49 @@ def test_ui_shows_query_model_selector_and_fallback_hint(
     render_cut_plan_page()  # darf nicht werfen
 
     assert any("Modell (LLM-Suchqueries)" in c or "Noch keine LLM-Suchqueries" in c for c in captions)
+
+
+def test_ui_shows_supplement_search_hint_caption_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 9: der bereits vorbereitete Suchvorschlag muss für den Nutzer
+    sichtbar sein, bevor überhaupt gesucht wird."""
+    project = _project_with_supplement_required_draft_and_hint(
+        tmp_path, supplement_search_hint="Grand Canyon rim wide shot"
+    )
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+
+    _patch_project_selector(project, monkeypatch)
+    monkeypatch.setattr("streamlit.button", lambda *a, **k: False)
+    monkeypatch.setattr("streamlit.rerun", lambda: None)
+    captions: list[str] = []
+    monkeypatch.setattr("streamlit.caption", lambda msg, **k: captions.append(msg))
+
+    render_cut_plan_page()  # darf nicht werfen
+
+    assert any("Grand Canyon rim wide shot" in c for c in captions)
+    assert any("Bereits beim Skriptschreiben vorbereiteter Suchvorschlag" in c for c in captions)
+
+
+def test_ui_omits_supplement_search_hint_caption_when_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+
+    _patch_project_selector(project, monkeypatch)
+    monkeypatch.setattr("streamlit.button", lambda *a, **k: False)
+    monkeypatch.setattr("streamlit.rerun", lambda: None)
+    captions: list[str] = []
+    monkeypatch.setattr("streamlit.caption", lambda msg, **k: captions.append(msg))
+
+    render_cut_plan_page()  # darf nicht werfen
+
+    assert not any("Bereits beim Skriptschreiben vorbereiteter Suchvorschlag" in c for c in captions)
 
 
 def test_search_click_passes_saved_query_llm_settings_to_bridge(

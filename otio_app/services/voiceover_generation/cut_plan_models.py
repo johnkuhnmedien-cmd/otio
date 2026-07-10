@@ -167,6 +167,14 @@ class CutPlanItem(BaseModel):
     needs_supplement_asset: bool = False
     supplement_reason: str = ""
     supplement_request_id: str = ""
+    # Phase 9 (Asset-bewusste Cut-Plan-Vorbereitung): bereits beim
+    # Skriptschreiben vom Autor-LLM vorbereiteter, ortsbezogener
+    # Suchvorschlag (siehe SentenceItem.visual_asset_plan.
+    # supplement_search_hint) — wird der späteren Supplement-Suche als
+    # bevorzugte Query mitgegeben. Leer für Intro-Items (IntroHookVisualBeat
+    # hat kein visual_asset_plan) und für alle vor Phase 4/9 erzeugten
+    # Sentence-Items.
+    supplement_search_hint: str = ""
     warnings: list[str] = Field(default_factory=list)
     blockers: list[str] = Field(default_factory=list)
 

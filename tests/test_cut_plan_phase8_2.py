@@ -360,6 +360,58 @@ def test_item_skeletons_default_second_backup_and_planned_segments_to_empty(tmp_
     assert folder_item.planned_segments == []
 
 
+def test_item_skeletons_copy_supplement_search_hint_from_visual_asset_plan(tmp_path: Path) -> None:
+    """Phase 9 (Asset-bewusste Cut-Plan-Vorbereitung): der bereits beim
+    Skriptschreiben vorbereitete Suchvorschlag (SentenceItem.
+    visual_asset_plan.supplement_search_hint) muss ins CutPlanItem
+    übernommen werden."""
+    from otio_app.services.voiceover_generation.models import VisualAssetPlanHint
+
+    project = _make_project(tmp_path)
+    folder = ConfirmedFolderPlanItem(
+        folder_name=FOLDER_A,
+        order_index=1,
+        audio_path="/fake/folder.mp3",
+        audio_duration_sec=40.0,
+        alignment_path="/fake/folder_align.json",
+        sentence_items=[
+            SentenceItem(
+                sentence_id="sentence_001",
+                text="Ein Testsatz.",
+                needs_supplement_asset=True,
+                supplement_reason="Kein lokales Asset zeigt das Motiv.",
+                visual_asset_plan=VisualAssetPlanHint(
+                    supplement_search_hint="Havasu Falls waterfall woman mist"
+                ),
+            )
+        ],
+        alignment_items=[
+            AlignmentItem(sentence_id="sentence_001", audio_start_sec=0.0, audio_end_sec=5.0, duration_sec=5.0)
+        ],
+    )
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=_intro(), folders=[folder])
+    settings = _settings(project)
+    audio_items = build_cut_plan_audio_items(project, plan, settings)
+    items = build_cut_plan_item_skeletons(project, plan, audio_items, settings)
+
+    folder_item = next(item for item in items if item.source_scope == "folder")
+    assert folder_item.supplement_search_hint == "Havasu Falls waterfall woman mist"
+
+
+def test_item_skeletons_default_supplement_search_hint_to_empty_for_intro(tmp_path: Path) -> None:
+    """IntroHookVisualBeat hat kein visual_asset_plan (Scope-Entscheidung
+    Phase 4/7/9) — Intro-Items bleiben deshalb bewusst bei einem leeren
+    supplement_search_hint."""
+    project = _make_project(tmp_path)
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=_intro(), folders=[_folder()])
+    settings = _settings(project)
+    audio_items = build_cut_plan_audio_items(project, plan, settings)
+    items = build_cut_plan_item_skeletons(project, plan, audio_items, settings)
+
+    intro_item = next(item for item in items if item.source_scope == "intro")
+    assert intro_item.supplement_search_hint == ""
+
+
 def test_item_skeletons_populate_source_refs(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=_intro(), folders=[_folder()])

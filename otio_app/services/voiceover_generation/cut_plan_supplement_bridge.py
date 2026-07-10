@@ -29,7 +29,15 @@ Pexels-Suchqueries generiert (siehe cut_plan_supplement_query_service.py).
 Schlägt dieser Aufruf fehl oder liefert kein brauchbares Ergebnis, fällt die
 Suche automatisch auf die bestehende deterministische Query-Logik
 (build_pexels_query_variants ohne llm_generated_queries) zurück — es wird
-nie eine Exception nach außen geworfen und nie eine Suche verweigert."""
+nie eine Exception nach außen geworfen und nie eine Suche verweigert.
+
+Phase 9: ist auf dem Request bereits ein supplement_search_hint gesetzt
+(vom Autor-LLM beim Skriptschreiben vorbereitet — siehe SentenceItem.
+visual_asset_plan.supplement_search_hint, durchgereicht über CutPlanItem),
+wird er IMMER als bevorzugte erste Suchquery verwendet — unabhängig davon,
+ob/wie query_llm_provider/query_llm_model oben laufen. Er wurde mit vollem
+redaktionellem Kontext des Satzes geschrieben und ist damit mindestens so
+verlässlich wie eine nachträglich generierte Query."""
 
 from __future__ import annotations
 
@@ -166,6 +174,7 @@ def build_supplement_requests_from_cut_plan(
                 visual_intent=item.visual_intent,
                 needed_duration_sec=item.duration_sec,
                 reason=reason,
+                supplement_search_hint=item.supplement_search_hint,
             )
         )
 
@@ -367,7 +376,10 @@ def search_candidates_for_cut_plan_request(
     llm_query_error = ""
     if query_llm_provider and query_llm_model:
         query_result = generate_cut_plan_supplement_queries(
-            project, request, provider=query_llm_provider, model=query_llm_model
+            project,
+            request,
+            provider=query_llm_provider,
+            model=query_llm_model,
         )
         llm_query_status = query_result.status
         llm_query_run_id = query_result.run_id
@@ -383,6 +395,18 @@ def search_candidates_for_cut_plan_request(
         llm_query_error=llm_query_error,
     )
 
+    # Phase 9: der bereits beim Skriptschreiben vorbereitete Suchvorschlag
+    # (SentenceItem.visual_asset_plan.supplement_search_hint, durchgereicht
+    # über CutPlanItem/CutPlanSupplementRequest) wird IMMER als bevorzugte
+    # erste Query verwendet — unabhängig davon, ob/wie der separate
+    # Query-Generierungs-LLM-Aufruf oben gelaufen ist (der Hinweis wurde mit
+    # vollem redaktionellem Kontext des Satzes geschrieben, ist also
+    # mindestens so verlässlich wie eine nachträglich generierte Query).
+    # llm_queries selbst (Trace-Feld oben) bleibt unverändert nur das
+    # Ergebnis des Query-Generierungs-LLM-Aufrufs.
+    hint = request.supplement_search_hint.strip()
+    queries_for_search = ([hint] if hint else []) + llm_queries
+
     transient_request = SupplementRequest(
         supplement_request_id=request.request_id,
         section_id=request.cut_item_id,
@@ -394,7 +418,7 @@ def search_candidates_for_cut_plan_request(
         required_asset_type=str(provider_settings.get("required_asset_type", "any")),
         duration_needed_sec=request.needed_duration_sec,
         reason=request.reason,
-        llm_generated_queries=llm_queries,
+        llm_generated_queries=queries_for_search,
         max_candidates=int(provider_settings.get("max_candidates", CUT_PLAN_SUPPLEMENT_MAX_CANDIDATES)),
     )
 
