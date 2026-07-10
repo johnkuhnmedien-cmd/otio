@@ -302,6 +302,113 @@ def test_supplement_requests_file_is_written(tmp_path: Path) -> None:
     assert len(reloaded.requests) == 1
 
 
+# --- Phase F: Requests aus Validierungs-Blockern (nicht nur Asset-Auswahl) ---
+
+
+def test_requests_are_built_for_missing_asset_mapping_found_only_at_validation_time(tmp_path: Path) -> None:
+    """Ein Item, dessen Asset-Auswahl NICHT SUPPLEMENT_REQUIRED gesetzt hat
+    (needs_supplement_asset=False, status != SUPPLEMENT_REQUIRED), aber
+    dessen chosen_asset_id leer ist und das per vollständiger Validierung
+    (attach_validation_to_cut_plan) mit MISSING_ASSET_MAPPING geflaggt
+    wurde, muss trotzdem einen Supplement Request bekommen."""
+    project = _make_project(tmp_path)
+    item = _minimal_item(
+        chosen_asset_id="", asset_selection_status="UNRESOLVED", needs_supplement_asset=False,
+        supplement_reason="", asset_selection_reason="", blockers=["MISSING_ASSET_MAPPING"],
+    )
+    cut_plan = _minimal_cut_plan(project, items=[item])
+
+    document = build_supplement_requests_from_cut_plan(project, cut_plan)
+    assert len(document.requests) == 1
+    assert "MISSING_ASSET_MAPPING" in document.requests[0].reason
+
+
+def test_requests_are_not_built_for_missing_asset_mapping_when_timing_blocked(tmp_path: Path) -> None:
+    """Ein Item mit einem ECHTEN Timing-Problem (fehlendes Alignment) darf
+    NICHT als Supplement-Bedarf missverstanden werden — timeline_start_sec/
+    duration_sec sind in diesem Fall typischerweise 0.0, ein Supplement
+    Request wäre sinnlos."""
+    project = _make_project(tmp_path)
+    item = _minimal_item(
+        chosen_asset_id="", asset_selection_status="BLOCKED", needs_supplement_asset=False,
+        supplement_reason="", asset_selection_reason="", duration_sec=0.0, timeline_start_sec=0.0,
+        timeline_end_sec=0.0, blockers=["MISSING_ASSET_MAPPING", "MISSING_ALIGNMENT"],
+    )
+    cut_plan = _minimal_cut_plan(project, items=[item])
+
+    document = build_supplement_requests_from_cut_plan(project, cut_plan)
+    assert len(document.requests) == 0
+
+
+def test_requests_are_built_for_reuse_distance_blocker_found_only_at_validation_time(tmp_path: Path) -> None:
+    """Ein Item mit BEREITS gewähltem Asset (PRIMARY_USED), das erst bei
+    der vollständigen Validierung (über ALLE platzierten VisualSegments,
+    siehe validate_asset_usage) als zu früh wiederverwendet erkannt wird —
+    choose_asset_for_cut_item selbst hatte das nicht gesehen (sequenzielle,
+    nur rückwärts schauende Prüfung) — muss trotzdem supplementiert werden
+    können, auch wenn ein Asset bereits zugewiesen ist."""
+    project = _make_project(tmp_path)
+    item = _minimal_item(
+        chosen_asset_id="asset_already_chosen", asset_selection_status="PRIMARY_USED",
+        needs_supplement_asset=False, supplement_reason="", asset_selection_reason="",
+        blockers=["ASSET_REUSE_DISTANCE_TOO_SHORT"],
+    )
+    cut_plan = _minimal_cut_plan(project, items=[item])
+
+    document = build_supplement_requests_from_cut_plan(project, cut_plan)
+    assert len(document.requests) == 1
+    assert "ASSET_REUSE_DISTANCE_TOO_SHORT" in document.requests[0].reason
+
+
+def test_requests_are_not_built_for_already_serviced_items(tmp_path: Path) -> None:
+    """Ein Item, das bereits über ein Supplement/generischen Fallback/
+    manuelle Zuweisung versorgt ist, wird NICHT stillschweigend erneut
+    supplementiert, nur weil die Validierung zusätzlich einen asset-
+    bezogenen Blocker meldet — 'Ersetzen' bleibt eine bewusste
+    Nutzeraktion (force_replace)."""
+    project = _make_project(tmp_path)
+    for status in ("SUPPLEMENT_USED", "GENERIC_FALLBACK_USED", "MANUAL_ASSET_USED"):
+        item = _minimal_item(
+            cut_item_id=f"cut_{status}", chosen_asset_id="asset_x", asset_selection_status=status,
+            needs_supplement_asset=False, supplement_reason="", asset_selection_reason="",
+            blockers=["ASSET_REUSE_DISTANCE_TOO_SHORT"],
+        )
+        cut_plan = _minimal_cut_plan(project, items=[item])
+        document = build_supplement_requests_from_cut_plan(project, cut_plan)
+        assert len(document.requests) == 0, f"unexpected request for status={status}"
+
+
+def test_requests_are_not_built_when_duration_is_zero_even_without_timing_blocker(tmp_path: Path) -> None:
+    """Defensive Absicherung: auch ohne einen expliziten Timing-Blocker
+    darf ein Item mit duration_sec<=0 keinen Supplement Request auslösen
+    (es gäbe nichts Sinnvolles zu beschaffen)."""
+    project = _make_project(tmp_path)
+    item = _minimal_item(
+        chosen_asset_id="", asset_selection_status="UNRESOLVED", needs_supplement_asset=False,
+        supplement_reason="", asset_selection_reason="", duration_sec=0.0,
+        blockers=["MISSING_ASSET_MAPPING"],
+    )
+    cut_plan = _minimal_cut_plan(project, items=[item])
+
+    document = build_supplement_requests_from_cut_plan(project, cut_plan)
+    assert len(document.requests) == 0
+
+
+def test_requests_are_not_built_for_items_without_any_asset_related_blocker(tmp_path: Path) -> None:
+    """Ein völlig unauffälliges, korrekt versorgtes Item darf keinen
+    Supplement Request erzeugen — Regressionsschutz gegen zu aggressive
+    Phase-F-Erkennung."""
+    project = _make_project(tmp_path)
+    item = _minimal_item(
+        chosen_asset_id="asset_x", asset_selection_status="PRIMARY_USED",
+        needs_supplement_asset=False, supplement_reason="", asset_selection_reason="", blockers=[],
+    )
+    cut_plan = _minimal_cut_plan(project, items=[item])
+
+    document = build_supplement_requests_from_cut_plan(project, cut_plan)
+    assert len(document.requests) == 0
+
+
 # --- 5-6: Isolation / kein automatischer Search-Trigger ---
 
 

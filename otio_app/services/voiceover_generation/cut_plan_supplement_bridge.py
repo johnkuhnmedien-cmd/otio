@@ -48,7 +48,20 @@ from typing import Any
 
 from otio_app.analysis_models import SupplementCandidate, SupplementRequest
 from otio_app.defaults import (
+    CUT_PLAN_ASSET_SELECTION_GENERIC_FALLBACK_USED,
+    CUT_PLAN_ASSET_SELECTION_MANUAL_USED,
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_USED,
+    CUT_PLAN_ERROR_ASSET_FILE_MISSING,
+    CUT_PLAN_ERROR_ASSET_REUSE_DISTANCE_TOO_SHORT,
+    CUT_PLAN_ERROR_ASSET_TOO_SHORT,
+    CUT_PLAN_ERROR_INVALID_ASSET_ID,
+    CUT_PLAN_ERROR_INVALID_AUDIO_PATH,
+    CUT_PLAN_ERROR_MAX_ASSET_USAGE_EXCEEDED,
+    CUT_PLAN_ERROR_MISSING_ALIGNMENT,
+    CUT_PLAN_ERROR_MISSING_ASSET_MAPPING,
+    CUT_PLAN_ERROR_MISSING_AUDIO,
+    CUT_PLAN_ERROR_SOURCE_PLAN_NOT_READY,
+    CUT_PLAN_ERROR_SOURCE_RANGE_INVALID,
     CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED,
     CUT_PLAN_STATUS_DRAFT,
     CUT_PLAN_STATUS_NEEDS_REVIEW,
@@ -138,6 +151,57 @@ def _sanitize_error_message(message: str, *, env_keys: tuple[str, ...] = ("PEXEL
 
 # --- Requests (§4) ---
 
+# Phase F (Nutzervorgabe, Juli 2026): Blocker-Typen, die eine fehlende/
+# unbrauchbare TIMELINE-Platzierung bedeuten (Audio/Alignment) — für diese
+# Items macht ein Supplement Request KEINEN Sinn, weil timeline_start_sec/
+# timeline_end_sec/duration_sec typischerweise 0.0 sind (siehe
+# cut_plan_timeline_service._folder_item_skeleton) und der eigentliche Fix
+# eine erneute Vertonung/Ausrichtung ist, kein visuelles Asset.
+_TIMING_BLOCKER_TYPES = frozenset(
+    {
+        CUT_PLAN_ERROR_MISSING_ALIGNMENT,
+        CUT_PLAN_ERROR_MISSING_AUDIO,
+        CUT_PLAN_ERROR_INVALID_AUDIO_PATH,
+        CUT_PLAN_ERROR_SOURCE_RANGE_INVALID,
+        CUT_PLAN_ERROR_SOURCE_PLAN_NOT_READY,
+    }
+)
+
+# Phase F: Blocker-Typen, die ERST bei der vollständigen Cut-Plan-
+# Validierung (validate_cut_items/validate_asset_usage, siehe
+# cut_plan_validator.py) auffallen können, OHNE dass die Asset-Auswahl
+# (choose_asset_for_cut_item) das Item selbst als SUPPLEMENT_REQUIRED
+# markiert hätte — z. B. eine Reuse-Distance-Verletzung, die erst nach
+# Berücksichtigung ALLER platzierten VisualSegments über den gesamten
+# Cut Plan sichtbar wird (choose_asset_for_cut_item prüft nur sequenziell
+# gegen bereits verarbeitete Items). Ohne diese Erweiterung blieben solche
+# Items als reiner Blocker stehen, ohne dass der Auto-Resolver je die
+# Chance bekäme, ein Ersatz-Asset zu beschaffen.
+_ASSET_RELATED_SUPPLEMENTABLE_ERROR_TYPES = frozenset(
+    {
+        CUT_PLAN_ERROR_MISSING_ASSET_MAPPING,
+        CUT_PLAN_ERROR_ASSET_REUSE_DISTANCE_TOO_SHORT,
+        CUT_PLAN_ERROR_MAX_ASSET_USAGE_EXCEEDED,
+        CUT_PLAN_ERROR_ASSET_TOO_SHORT,
+        CUT_PLAN_ERROR_INVALID_ASSET_ID,
+        CUT_PLAN_ERROR_ASSET_FILE_MISSING,
+    }
+)
+
+# Phase F: ein Item, das bereits über einen dieser Wege versorgt wurde,
+# soll NICHT stillschweigend durch einen Rebuild erneut supplementiert
+# werden — ein 'Ersetzen' bleibt eine bewusste Nutzeraktion (force_replace,
+# siehe accept_cut_plan_supplement_candidate/apply_generic_fallback_for_
+# cut_plan_request), kein automatischer Nebeneffekt von build_supplement_
+# requests_from_cut_plan.
+_ALREADY_SERVICED_ASSET_SELECTION_STATUSES = frozenset(
+    {
+        CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_USED,
+        CUT_PLAN_ASSET_SELECTION_GENERIC_FALLBACK_USED,
+        CUT_PLAN_ASSET_SELECTION_MANUAL_USED,
+    }
+)
+
 
 def build_supplement_requests_from_cut_plan(
     project: Project, cut_plan: CutPlanDocument
@@ -145,15 +209,43 @@ def build_supplement_requests_from_cut_plan(
     """Reine Funktion — erzeugt EINEN CutPlanSupplementRequest je CutPlanItem
     mit asset_selection_status=SUPPLEMENT_REQUIRED, needs_supplement_asset=true
     oder dem Blocker SUPPLEMENT_REQUIRED. Dedupliziert nach cut_item_id.
-    Speichert nichts (siehe save_cut_plan_supplement_requests)."""
+    Speichert nichts (siehe save_cut_plan_supplement_requests).
+
+    Phase F (Nutzervorgabe): erfasst zusätzlich Items, die erst bei der
+    VOLLSTÄNDIGEN Cut-Plan-Validierung (siehe cut_plan_validator.py,
+    attach_validation_to_cut_plan überschreibt item.blockers mit dem
+    vollständigen Validierungsergebnis) mit einem asset-bezogenen Blocker
+    aufgefallen sind (MISSING_ASSET_MAPPING, ASSET_REUSE_DISTANCE_TOO_SHORT,
+    MAX_ASSET_USAGE_EXCEEDED, ASSET_TOO_SHORT, INVALID_ASSET_ID,
+    ASSET_FILE_MISSING) — OHNE dass asset_selection_status/needs_
+    supplement_asset das je erkannt hätten (z. B. weil die Verletzung erst
+    nach Betrachtung ALLER platzierten VisualSegments sichtbar wird).
+    Ausgenommen: Items mit einem Timing-Blocker (fehlende Alignment/Audio,
+    siehe _TIMING_BLOCKER_TYPES — timeline_start_sec/duration_sec sind dort
+    typischerweise 0.0, ein Supplement Request wäre sinnlos) und Items,
+    die bereits über Supplement/generischen Fallback/manuelle Zuweisung
+    versorgt sind (_ALREADY_SERVICED_ASSET_SELECTION_STATUSES — ein
+    'Ersetzen' bleibt eine bewusste Nutzeraktion)."""
     requests: list[CutPlanSupplementRequest] = []
     seen_cut_item_ids: set[str] = set()
 
     for item in cut_plan.items:
+        asset_related_blockers = [
+            blocker_type for blocker_type in item.blockers if blocker_type in _ASSET_RELATED_SUPPLEMENTABLE_ERROR_TYPES
+        ]
+        timing_blocked = any(blocker_type in _TIMING_BLOCKER_TYPES for blocker_type in item.blockers)
+        already_serviced = item.asset_selection_status in _ALREADY_SERVICED_ASSET_SELECTION_STATUSES
+
         needs_supplement = (
             item.asset_selection_status == _STATUS_SUPPLEMENT_REQUIRED
             or item.needs_supplement_asset
             or CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED in item.blockers
+            or (
+                bool(asset_related_blockers)
+                and not timing_blocked
+                and not already_serviced
+                and item.duration_sec > 0
+            )
         )
         if not needs_supplement or item.cut_item_id in seen_cut_item_ids:
             continue
@@ -165,9 +257,16 @@ def build_supplement_requests_from_cut_plan(
             source_sentence_id = source_sentence_id or source_ref.source_sentence_id
             source_hook_beat_id = source_hook_beat_id or source_ref.source_hook_beat_id
 
+        validation_reason = (
+            f"Cut-Plan-Validierung meldet: {', '.join(sorted(set(asset_related_blockers)))}. "
+            "Es wird ein Ersatz-Asset benötigt."
+            if asset_related_blockers
+            else ""
+        )
         reason = (
             item.supplement_reason.strip()
             or item.asset_selection_reason.strip()
+            or validation_reason
             or "No usable existing asset found for this cut item."
         )
 
