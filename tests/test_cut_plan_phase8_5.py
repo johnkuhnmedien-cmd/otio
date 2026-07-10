@@ -436,6 +436,21 @@ def test_initial_preroll_extension_is_legitimate_coverage(tmp_path: Path) -> Non
     assert not any(error.type == "SHOT_TOO_LONG" and error.severity == "BLOCKER" for error in blockers)
 
 
+def test_small_gap_hold_is_legitimate_coverage_not_a_hard_blocker(tmp_path: Path) -> None:
+    """Phase H (Bugfix aus Phase C): close_small_visual_gaps kann ein
+    Segment über shot_max_sec hinaus verlängern (kleine Sprechpause
+    geschlossen) — das darf NICHT als harter SHOT_TOO_LONG-Blocker
+    gemeldet werden, sondern nur als Warnung (analog zu section_pause_hold/
+    initial_preroll_extension)."""
+    project = _make_project(tmp_path)
+    segment = _minimal_segment(duration_sec=5.5, timeline_out_sec=5.5, reason="primary_asset+small_gap_hold")
+    item = _minimal_item(planned_visual_segments=[segment], timeline_end_sec=5.5, duration_sec=5.5)
+    cut_plan = _minimal_cut_plan(project, items=[item], settings_snapshot={"shot_min_sec": 3.0, "shot_max_sec": 5.0})
+    warnings, blockers = validate_visual_segments(project, cut_plan)
+    assert not any(error.type == "SHOT_TOO_LONG" and error.severity == "BLOCKER" for error in blockers)
+    assert any(error.type == "SHOT_TOO_LONG" for error in warnings)
+
+
 def test_merged_short_sentence_remains_valid(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     segment = _minimal_segment(duration_sec=1.0, timeline_out_sec=2.0, reason="merged_short_sentence")
@@ -652,6 +667,10 @@ def test_close_small_visual_gaps_extends_previous_segment_for_image() -> None:
     assert updated_segment_1.timeline_out_sec == pytest.approx(5.4)
     assert updated_segment_1.duration_sec == pytest.approx(5.4)
     assert updated_segment_1.source_out_sec == pytest.approx(5.4)
+    # Phase H (Bugfix): der Marker muss gesetzt werden, damit validate_
+    # visual_segments ein dadurch über shot_max_sec verlängertes Segment
+    # nicht faelschlich als harten SHOT_TOO_LONG-Blocker meldet.
+    assert "small_gap_hold" in updated_segment_1.reason.split("+")
     # Das nächste Segment bleibt unverändert.
     assert updated.items[1].planned_visual_segments[0] == segment_2
 
@@ -777,6 +796,30 @@ def test_resolve_timeline_overlaps_skips_when_shrink_would_reach_zero() -> None:
 
     updated = resolve_timeline_overlaps(cut_plan)
     assert updated.items[0].planned_visual_segments[0] == segment_1
+
+
+def test_close_small_visual_gaps_extension_does_not_trigger_hard_shot_too_long(tmp_path: Path) -> None:
+    """End-to-End-Regressionstest fuer den Phase-H-Bugfix: ein Segment, das
+    knapp unter shot_max_sec liegt, wird durch close_small_visual_gaps über
+    die Grenze hinweg verlängert — die anschließende Validierung darf
+    daraus KEINEN harten Blocker machen."""
+    project = _make_project(tmp_path)
+    settings = CutPlanSettings(project_id=project.id, shot_max_sec=5.0, shot_min_sec=3.0)
+    segment_1 = _minimal_segment(segment_id="seg_1", asset_type="image", timeline_in_sec=0.0, timeline_out_sec=4.9,
+                                  duration_sec=4.9, source_in_sec=0.0, source_out_sec=4.9)
+    segment_2 = _minimal_segment(segment_id="seg_2", timeline_in_sec=5.2, timeline_out_sec=10.2, duration_sec=5.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1], timeline_end_sec=4.9,
+                            duration_sec=4.9)
+    item_2 = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[segment_2], timeline_start_sec=5.2,
+                            timeline_end_sec=10.2, duration_sec=5.0)
+    cut_plan = _minimal_cut_plan(project, items=[item_1, item_2], settings_snapshot={"shot_max_sec": 5.0, "shot_min_sec": 3.0})
+
+    updated = apply_visual_coverage_extensions(cut_plan, settings)
+    updated_segment_1 = updated.items[0].planned_visual_segments[0]
+    assert updated_segment_1.duration_sec > 5.0  # Grenze tatsächlich überschritten
+
+    warnings, blockers = validate_visual_segments(project, updated)
+    assert not any(error.type == "SHOT_TOO_LONG" and error.severity == "BLOCKER" for error in blockers)
 
 
 def test_apply_visual_coverage_extensions_runs_gap_close_and_overlap_resolution() -> None:

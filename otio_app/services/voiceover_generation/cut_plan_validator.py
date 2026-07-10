@@ -582,6 +582,13 @@ def validate_visual_segments(
                         "split_long_sentence_continuation",
                         "initial_preroll_extension",
                         "section_pause_hold",
+                        # Phase H (Bugfix aus Phase C): close_small_visual_gaps
+                        # (cut_plan_visual_coverage.py) kann ein Segment um bis
+                        # zu 1.0s verlängern, um eine kleine Sprechpause-Lücke
+                        # zu schließen — ein knapp unter shot_max_sec liegendes
+                        # Segment kann dadurch die Grenze knapp überschreiten.
+                        # Legitime Coverage-Erweiterung, kein Struktur-Fehler.
+                        "small_gap_hold",
                     )
                 ):
                     warnings.append(_make_error(CUT_PLAN_ERROR_SHOT_TOO_LONG, scope=scope, cut_item_id=cid,

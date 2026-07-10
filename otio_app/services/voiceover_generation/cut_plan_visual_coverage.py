@@ -34,6 +34,14 @@ _TOLERANCE = 0.05  # gleiche Toleranz wie cut_plan_validator._TIME_TOLERANCE
 
 REASON_INITIAL_PREROLL_EXTENSION = "initial_preroll_extension"
 REASON_SECTION_PAUSE_HOLD = "section_pause_hold"
+# Phase H (Bugfix aus Phase C, Nutzervorgabe Juli 2026): close_small_visual_
+# gaps verlängert ein Segment über eine kleine Sprechpause hinweg — ohne
+# diesen Marker würde cut_plan_validator.validate_visual_segments ein knapp
+# unter shot_max_sec liegendes Segment, das durch diese Verlängerung
+# knapp darüber rutscht, fälschlich als harten SHOT_TOO_LONG-Blocker
+# melden (legitime Coverage-Erweiterung, kein Struktur-Fehler — analog zu
+# REASON_INITIAL_PREROLL_EXTENSION/REASON_SECTION_PAUSE_HOLD).
+REASON_SMALL_GAP_HOLD = "small_gap_hold"
 
 # Phase C (Nutzervorgabe): close_small_visual_gaps schließt NUR kleine,
 # durch natürliche Sprechpausen zwischen Sätzen entstandene Lücken
@@ -271,6 +279,7 @@ def close_small_visual_gaps(cut_plan: CutPlanDocument) -> CutPlanDocument:
                 "timeline_out_sec": next_segment.timeline_in_sec,
                 "duration_sec": new_duration,
                 "source_out_sec": new_source_out_sec,
+                "reason": _combine_reason(current_effective.reason, REASON_SMALL_GAP_HOLD),
             }
         )
 
