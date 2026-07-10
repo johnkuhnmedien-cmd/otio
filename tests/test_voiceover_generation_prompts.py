@@ -481,6 +481,117 @@ def test_voiceover_correction_prompt_contains_original_text_and_errors() -> None
     assert "Klingt wie eine Assetbeschreibung." in prompt
 
 
+# --- Phase 3 (Asset-bewusste Cut-Plan-Vorbereitung): Visual editing awareness ---
+
+
+def test_folder_voiceover_prompt_contains_visual_editing_awareness_section() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "Visual editing awareness" in prompt
+
+
+def test_folder_voiceover_prompt_forbids_consecutive_same_primary_asset() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "SAME asset as primary_asset_id to two sentences" in prompt
+    assert "Do not assign the same primary_asset_id to two consecutive sentence_items" in prompt
+
+
+def test_folder_voiceover_prompt_instructs_not_to_omit_details_without_asset() -> None:
+    """Nutzergrundsatz: das Skript soll weiterhin auf vorhandenen Assets
+    aufbauen, darf aber wichtige erzählerische Details nicht nur deshalb
+    auslassen, weil kein lokales Asset existiert — dann Supplement statt
+    Detailverlust."""
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "Do NOT omit an important narrative detail just because no local asset shows it" in prompt
+
+
+def test_folder_voiceover_prompt_instructs_backup_asset_diversity() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "backup_asset_ids" in prompt
+    assert "further plausible, DIFFERENT assets" in prompt
+
+
+def test_folder_voiceover_prompt_instructs_visual_coverage_for_long_sentences() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "needs enough distinct, usable local coverage for that split" in prompt
+    assert "prefer several SHORTER sentences/beats" in prompt
+
+
+def test_folder_voiceover_prompt_instructs_concrete_visual_intent() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "visual_intent must state a concrete visual purpose" in prompt
+    assert "not a generic restatement of the sentence text" in prompt
+
+
+def test_voiceover_correction_prompt_reminds_of_visual_editing_awareness() -> None:
+    """Auch bei einer Korrektur (die nur konkrete Fehler beheben soll) darf
+    die asset-bewusste Schnittlogik nicht verloren gehen."""
+    errors = [
+        ValidationError(
+            type="TOO_ASSET_DESCRIPTIVE",
+            severity="BLOCKER",
+            sentence_id="sentence_001",
+            message="Klingt wie eine Assetbeschreibung.",
+        )
+    ]
+    prompt = build_voiceover_correction_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        setting=_sample_setting(),
+        draft=_sample_draft(),
+        errors=errors,
+    )
+    assert "don't assign the same primary_asset_id to two consecutive sentence_items" in prompt
+    assert "needs_supplement_asset=true" in prompt
+
+
 # --- build_intro_hook_prompt (Phase 5) ---
 
 

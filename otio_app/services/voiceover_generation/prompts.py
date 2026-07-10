@@ -397,6 +397,33 @@ stay purely atmospheric/sensory)
 ## Inventory for this location (asset_id values are EXACT — never invent new ones)
 {_inventory_asset_block(inventory_assets)}
 
+## Visual editing awareness (read this before writing)
+This voice-over will later be CUT together with the local video/photo assets listed \
+above, one shot per sentence/beat (long sentences get split into multiple shots). \
+Write with that edit in mind:
+- Develop sentences FROM the available local assets where it makes sense — use them \
+as visual grounding, not as a checklist to describe one by one.
+- Do NOT omit an important narrative detail just because no local asset shows it. If \
+a detail matters to the story but nothing here covers it, still write it — mark that \
+sentence/beat needs_supplement_asset=true with a concrete supplement_reason instead \
+of forcing a weak or wrong local asset onto it.
+- Avoid assigning the SAME asset as primary_asset_id to two sentences/beats in a row. \
+If the same subject naturally continues across sentences, vary which asset carries \
+it (e.g. swap primary/backup, or use a different asset) instead of repeating the \
+identical shot back-to-back — that reads as a frozen/stuck image on screen.
+- Where more than one asset genuinely fits a sentence/beat, put the best match in \
+primary_asset_id and add one or two further plausible, DIFFERENT assets to \
+backup_asset_ids — this gives the later edit real alternatives instead of a single \
+point of failure (especially important if that same subject also needs to avoid the \
+back-to-back repetition rule above).
+- A sentence/beat long enough to need splitting into multiple shots later needs \
+enough distinct, usable local coverage for that split (a primary AND at least one \
+different, usable backup). If this location's material can't support that, prefer \
+several SHORTER sentences/beats — each cleanly covered by one asset — over one long \
+sentence that outruns the available visual material.
+- visual_intent must state a concrete visual purpose (what should be visible, the \
+mood/movement/shot type it implies) — not a generic restatement of the sentence text.
+
 ## Task
 Write ONE flowing documentary voice-over text for this location (target_words above), \
 then break it into sentence_items — one entry per sentence or narrative beat — each \
@@ -409,6 +436,9 @@ Rules for sentence_items:
 - backup_asset_ids MUST also only contain asset_id values from the list above.
 - If no asset fits a sentence, set primary_asset_id to "", needs_supplement_asset=true, \
 and give a concrete supplement_reason (what visual is missing).
+- Do not assign the same primary_asset_id to two consecutive sentence_items unless \
+there is genuinely no other usable local asset for the second one — see "Visual \
+editing awareness" above.
 - asset_confidence: 0.0-1.0, honestly reflecting how well the asset matches the sentence.
 - Not every asset in the inventory needs to be used.
 - Optionally set pause_after on a sentence_item to mark a deliberate narrative \
@@ -582,6 +612,13 @@ target_words: {setting.target_words} (min {setting.min_words}, max {setting.max_
 Produce a corrected, complete replacement. The sentence/beat structure with asset \
 assignment must be fully present again (not partial). Do not merely describe the \
 assets — write polished documentary narration.
+
+Keep respecting the visual editing awareness from the original assignment: don't \
+assign the same primary_asset_id to two consecutive sentence_items unless there is \
+genuinely no other usable local asset, keep needs_supplement_asset=true (with a \
+concrete supplement_reason) for beats that need a visual not covered here rather \
+than omitting the detail, and only keep a long sentence/beat if it still has enough \
+distinct, usable local coverage for a later split.
 
 Respond with JSON ONLY, no markdown code fences, no commentary, using the EXACT \
 same shape as before:
