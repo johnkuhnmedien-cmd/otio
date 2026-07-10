@@ -1,0 +1,28 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Laufzeit / lokal
+.env
+data/*.db
+data/cache/
+data/user_secrets.env
+data/style_profile_library.json
+logs/
+*.log
+
+# Pipeline-Artefakte (spätere Meilensteine)
+frames/
+proxies/
+exports/
+*.otio
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
