@@ -12,7 +12,11 @@ Materials zu einem einzigen automatischen Ablauf für EINEN Request:
      LLM-Suchqueries erzeugen + Kandidaten suchen (bis zu 5, Video+Foto).
   2. Kandidaten dieses Providers der Reihe nach (Suchreihenfolge)
      herunterladen — bei Adobe bedeutet das bereits sofortige Lizenzierung
-     (siehe AdobeStockAdapter.acquire(), Phase 12.3).
+     (siehe AdobeStockAdapter.acquire(), Phase 12.3). Phase 12.6: ein
+     Video-Kandidat, der laut Provider-Metadaten (candidate.duration_sec)
+     offensichtlich zu kurz für das Item ist, wird VORHER als TOO_SHORT
+     protokolliert und NICHT herunterladen/lizenziert — schützt insbesondere
+     Adobe-Lizenzkontingent vor offensichtlich untauglichen Treffern.
   3. EIN kombinierter Gemini-Aufruf pro Kandidat: Frames + Satz/Visual
      Intent/Reason gemeinsam im selben Request — Gemini beschreibt UND
      beurteilt in einem Zug (siehe describe_and_validate_supplement_asset in
@@ -23,6 +27,12 @@ Materials zu einem einzigen automatischen Ablauf für EINEN Request:
      Reihenfolge) mit Status PASS: automatisch akzeptieren (siehe
      accept_cut_plan_supplement_candidate) und dem Cut-Item zuordnen —
      Schleife bricht sofort ab, weitere Provider werden nicht mehr versucht.
+     Phase 12.6: schlägt diese Übernahme trotzdem fehl (z. B. weicht die
+     per ffprobe gemessene REALE Dauer von den Provider-Metadaten ab und
+     das Asset ist doch zu kurz), wird das als ACCEPT_FAILED protokolliert
+     und mit dem NÄCHSTEN Kandidaten weitergemacht — bricht NICHT den
+     gesamten Auto-Resolve-Lauf (vorher: unbehandelter ValueError, der den
+     kompletten Batch abgebrochen hat).
   5. Kein Kandidat bei KEINEM Provider erreicht PASS (oder ein Provider
      liefert keine/fehlerhafte Suchergebnisse — wird protokolliert, bricht
      aber nicht ab, sondern der nächste Provider wird versucht): Phase
@@ -65,9 +75,12 @@ from otio_app.services.gemini_client import (
 )
 from otio_app.services.media_utils import is_image_media
 from otio_app.services.supplement_coverage import derive_must_show_keywords
+from otio_app.services.voiceover_generation.cut_plan_asset_selector import settings_from_snapshot
+from otio_app.services.voiceover_generation.cut_plan_builder import load_cut_plan_draft
 from otio_app.services.voiceover_generation.cut_plan_generic_fallback_service import (
     apply_generic_fallback_for_cut_plan_request,
 )
+from otio_app.services.voiceover_generation.cut_plan_models import CutPlanSettings
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     accept_cut_plan_supplement_candidate,
     download_cut_plan_supplement_candidate,
@@ -78,6 +91,7 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
 from otio_app.services.voiceover_generation.cut_plan_supplement_models import (
     CutPlanSupplementAsset,
     CutPlanSupplementAutoResolveAttempt,
+    CutPlanSupplementCandidate,
     CutPlanSupplementRequest,
 )
 
@@ -87,6 +101,8 @@ __all__ = [
     "AUTO_RESOLVE_STATUS_NO_MATCH",
     "AUTO_RESOLVE_STATUS_FAILED",
     "VALIDATION_STATUS_PASS",
+    "VALIDATION_STATUS_TOO_SHORT",
+    "VALIDATION_STATUS_ACCEPT_FAILED",
     "DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL",
     "CutPlanSupplementAutoResolveResult",
     "auto_resolve_cut_plan_supplement_request",
@@ -110,6 +126,44 @@ VALIDATION_STATUS_PASS = "PASS"
 # Gemini 3 Flash Preview verwenden statt des allgemeinen App-Standards
 # (get_default_gemini_model(), der z. B. auch 3.1 Flash Lite sein kann).
 DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL = "gemini-3-flash-preview"
+
+# Ein per Provider-Suche gemeldeter Kandidat gilt als zu kurz, wenn nach
+# Abzug von video_head_trim_sec weniger Material übrig bleibt, als das
+# Cut-Plan-Item braucht (dieselbe Toleranz wie apply_accepted_supplement_to_
+# cut_plan_item in cut_plan_supplement_bridge.py, §7).
+_AUTO_RESOLVE_DURATION_EPSILON = 0.05
+
+# Status-Werte für auto_resolve_attempts, die NICHT von Gemini stammen,
+# sondern rein technische Vorab-/Nachab-Prüfungen dieses Moduls sind —
+# analog zu "DOWNLOAD_FAILED" (bereits bestehend).
+VALIDATION_STATUS_TOO_SHORT = "TOO_SHORT"
+VALIDATION_STATUS_ACCEPT_FAILED = "ACCEPT_FAILED"
+
+
+def _candidate_is_too_short(
+    candidate: CutPlanSupplementCandidate,
+    *,
+    needed_duration_sec: float,
+    cut_plan_settings: CutPlanSettings | None,
+) -> tuple[bool, float]:
+    """Phase 12.6: prüft NUR anhand der vom Provider gemeldeten Metadaten
+    (candidate.duration_sec), OHNE Download/Lizenzierung auszulösen, ob ein
+    Video-Kandidat das benötigte Item niemals füllen kann. Adobe-Video-
+    Lizenzierung kostet echtes Kontingent — ein derart offensichtlich zu
+    kurzer Kandidat soll diese Kosten gar nicht erst verursachen.
+
+    Bewusst konservativ: Bilder werden nie als zu kurz behandelt (§3, siehe
+    apply_accepted_supplement_to_cut_plan_item), und ein Video ohne bekannte
+    Dauer (candidate.duration_sec <= 0, z. B. bei unvollständigen Provider-
+    Metadaten) wird NICHT vorab verworfen — die tatsächliche, per ffprobe
+    gemessene Dauer entscheidet dann nach dem Download (siehe
+    download_cut_plan_supplement_candidate/apply_accepted_supplement_to_
+    cut_plan_item)."""
+    if candidate.asset_type != "video" or candidate.duration_sec <= 0 or cut_plan_settings is None:
+        return False, 0.0
+    usable_duration_sec = max(0.0, candidate.duration_sec - cut_plan_settings.video_head_trim_sec)
+    is_too_short = needed_duration_sec > usable_duration_sec + _AUTO_RESOLVE_DURATION_EPSILON
+    return is_too_short, usable_duration_sec
 
 
 @dataclass
@@ -269,6 +323,15 @@ def auto_resolve_cut_plan_supplement_request(
     if request is None:
         raise ValueError(f"Supplement Request '{request_id}' nicht gefunden.")
 
+    # Phase 12.6: Cut-Plan-Settings (insb. video_head_trim_sec) VORAB laden,
+    # um Video-Kandidaten schon vor Download/Lizenzierung als offensichtlich
+    # zu kurz erkennen zu können — kein Draft vorhanden (sollte praktisch
+    # nicht vorkommen, da Requests nur aus einem Draft erzeugt werden) heißt
+    # lediglich: keine Vorab-Prüfung, die tatsächliche Dauer entscheidet dann
+    # wie bisher erst beim Übernehmen.
+    cut_plan_draft = load_cut_plan_draft(project)
+    cut_plan_settings = settings_from_snapshot(project, cut_plan_draft) if cut_plan_draft is not None else None
+
     attempts: list[CutPlanSupplementAutoResolveAttempt] = []
     search_errors: list[str] = []
 
@@ -294,6 +357,30 @@ def auto_resolve_cut_plan_supplement_request(
             continue
 
         for candidate in candidates_document.candidates:
+            # Phase 12.6: offensichtlich zu kurze Video-Kandidaten (anhand der
+            # vom Provider gemeldeten Dauer) werden NICHT heruntergeladen/
+            # lizenziert — verhindert unnötige Adobe-Lizenzkäufe für Videos,
+            # die das Item ohnehin nie füllen könnten (siehe
+            # _candidate_is_too_short).
+            too_short, usable_duration_sec = _candidate_is_too_short(
+                candidate, needed_duration_sec=request.needed_duration_sec, cut_plan_settings=cut_plan_settings
+            )
+            if too_short:
+                attempts.append(
+                    CutPlanSupplementAutoResolveAttempt(
+                        candidate_id=candidate.candidate_id,
+                        provider=candidate.provider,
+                        asset_type=candidate.asset_type,
+                        validation_status=VALIDATION_STATUS_TOO_SHORT,
+                        validation_reason=(
+                            f"Kandidat laut Provider-Metadaten zu kurz: benötigt "
+                            f"{request.needed_duration_sec:.2f}s, verfügbar {usable_duration_sec:.2f}s nach "
+                            "video_head_trim_sec — kein Download/keine Lizenzierung ausgelöst."
+                        ),
+                    )
+                )
+                continue
+
             try:
                 downloaded_asset: CutPlanSupplementAsset = download_cut_plan_supplement_candidate(
                     project, request_id, candidate
@@ -330,9 +417,28 @@ def auto_resolve_cut_plan_supplement_request(
             )
 
             if str(analysis.get("status")) == VALIDATION_STATUS_PASS:
-                accept_cut_plan_supplement_candidate(
-                    project, request_id, candidate.candidate_id, downloaded_asset=downloaded_asset
-                )
+                # Phase 12.6: die tatsächliche, per ffprobe gemessene Dauer
+                # (downloaded_asset.duration_sec) kann von den Provider-
+                # Metadaten abweichen — apply_accepted_supplement_to_cut_
+                # plan_item wirft in diesem Fall ValueError. Vorher hätte das
+                # den gesamten Batch abgebrochen (unbehandelte Exception);
+                # jetzt wird der Kandidat als ACCEPT_FAILED protokolliert und
+                # mit dem NÄCHSTEN Kandidaten weitergemacht.
+                try:
+                    accept_cut_plan_supplement_candidate(
+                        project, request_id, candidate.candidate_id, downloaded_asset=downloaded_asset
+                    )
+                except ValueError as exc:
+                    attempts[-1] = attempts[-1].model_copy(
+                        update={
+                            "validation_status": VALIDATION_STATUS_ACCEPT_FAILED,
+                            "validation_reason": (
+                                "Gemini-Prüfung bestanden, aber Übernahme fehlgeschlagen "
+                                f"(tatsächliche Dauer abweichend?): {exc}"
+                            ),
+                        }
+                    )
+                    continue
                 update_cut_plan_supplement_request(
                     project,
                     request_id,

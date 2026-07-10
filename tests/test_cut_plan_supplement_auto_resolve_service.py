@@ -17,6 +17,8 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_ser
     AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED,
     AUTO_RESOLVE_STATUS_NO_MATCH,
     DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL,
+    VALIDATION_STATUS_ACCEPT_FAILED,
+    VALIDATION_STATUS_TOO_SHORT,
     CutPlanSupplementAutoResolveResult,
     _describe_and_validate_downloaded_asset,
     auto_resolve_all_cut_plan_supplement_requests,
@@ -289,6 +291,84 @@ def test_auto_resolve_handles_download_failure_and_continues(tmp_path: Path) -> 
     assert result.attempts[0].validation_status == "DOWNLOAD_FAILED"
     assert result.attempts[1].validation_status == "PASS"
     mock_accept.assert_called_once()
+
+
+def test_auto_resolve_skips_too_short_video_candidate_without_download(tmp_path: Path) -> None:
+    """Phase 12.6: ein Video-Kandidat, der laut Provider-Metadaten
+    (duration_sec) offensichtlich zu kurz für das Item ist (hier: Item
+    braucht 5.0s, Kandidat hat nur 2.0s, davon geht video_head_trim_sec
+    (Standard 1.0s) ab -> 1.0s verfügbar), wird NICHT heruntergeladen/
+    lizenziert — schützt insbesondere Adobe-Lizenzkontingent."""
+    project, request_id = _setup_request(tmp_path)
+    too_short_candidate = _fake_candidate("cand_1", request_id).model_copy(update={"duration_sec": 2.0})
+    fine_candidate = _fake_candidate("cand_2", request_id).model_copy(update={"duration_sec": 10.0})
+    candidates_doc = CutPlanSupplementCandidatesDocument(
+        project_id=project.id,
+        request_id=request_id,
+        provider="pexels",
+        candidates=[too_short_candidate, fine_candidate],
+        status="READY",
+    )
+
+    def _download_side_effect(project_arg, rid, candidate):
+        assert candidate.candidate_id != "cand_1", "zu kurzer Kandidat darf nicht heruntergeladen werden"
+        return _fake_asset(candidate.candidate_id, rid)
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", return_value=candidates_doc),
+        patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=_download_side_effect) as mock_download,
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("PASS")),
+        patch(f"{_MODULE}.accept_cut_plan_supplement_candidate") as mock_accept,
+    ):
+        result = auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    assert result.status == AUTO_RESOLVE_STATUS_ACCEPTED
+    assert result.accepted_candidate_id == "cand_2"
+    assert len(result.attempts) == 2
+    assert result.attempts[0].validation_status == VALIDATION_STATUS_TOO_SHORT
+    assert result.attempts[1].validation_status == "PASS"
+    assert mock_download.call_count == 1
+    mock_accept.assert_called_once()
+
+
+def test_auto_resolve_accept_failure_does_not_crash_batch_and_tries_next_candidate(tmp_path: Path) -> None:
+    """Phase 12.6: schlägt die finale Übernahme trotz Gemini-PASS fehl (z. B.
+    weil die per ffprobe gemessene REALE Dauer doch zu kurz ist —
+    apply_accepted_supplement_to_cut_plan_item wirft ValueError), darf das
+    NICHT den gesamten Auto-Resolve-Lauf crashen. Stattdessen wird der
+    Kandidat als ACCEPT_FAILED protokolliert und der nächste Kandidat
+    versucht."""
+    project, request_id = _setup_request(tmp_path)
+    candidates_doc = _fake_candidates_document(request_id, ["cand_1", "cand_2"])
+
+    def _accept_side_effect(project_arg, rid, candidate_id, downloaded_asset=None):
+        if candidate_id == "cand_1":
+            raise ValueError("Supplement-Kandidat zu kurz für Item 'cut_001': benötigt 5.00s, verfügbar 3.65s.")
+        return None
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", return_value=candidates_doc),
+        patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid)),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("PASS")),
+        patch(f"{_MODULE}.accept_cut_plan_supplement_candidate", side_effect=_accept_side_effect) as mock_accept,
+    ):
+        result = auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    assert result.status == AUTO_RESOLVE_STATUS_ACCEPTED
+    assert result.accepted_candidate_id == "cand_2"
+    assert len(result.attempts) == 2
+    assert result.attempts[0].validation_status == VALIDATION_STATUS_ACCEPT_FAILED
+    assert "zu kurz" in result.attempts[0].validation_reason
+    assert result.attempts[1].validation_status == "PASS"
+    assert mock_accept.call_count == 2
+
+    reloaded = load_cut_plan_supplement_requests(project)
+    persisted = next(r for r in reloaded.requests if r.request_id == request_id)
+    assert persisted.auto_resolve_status == AUTO_RESOLVE_STATUS_ACCEPTED
 
 
 def test_auto_resolve_search_exception_tries_generic_fallback_then_no_match(tmp_path: Path) -> None:
