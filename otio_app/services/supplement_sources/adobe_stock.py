@@ -1,13 +1,19 @@
-"""Adobe Stock — Suche (Phase 12.1/12.2a); Lizenzierung/Download folgen erst
-in einer späteren Phase (12.4). Bis dahin liefert `acquire()` weiterhin einen
-klaren Fehler statt eine Wasserzeichen-Vorschau fälschlich als finales Asset
-herunterzuladen.
+"""Adobe Stock — Suche (Phase 12.1/12.2a) + Lizenzierung/Download (Phase
+12.3).
 
 Nutzerentscheidung (Juli 2026): generative-AI-Assets werden bei Adobe Stock
 IMMER ausgeschlossen — sowohl über den Suchfilter
 (`search_parameters[filters][gentech]=false`) als auch als zusätzliches
 Code-seitiges Sicherheitsnetz (`is_gentech`-Prüfung pro Treffer), falls Adobe
-trotz Filter einen generativen Treffer zurückgeben sollte."""
+trotz Filter einen generativen Treffer zurückgeben sollte.
+
+Nutzerentscheidung (Juli 2026, Phase 12.3): `acquire()` lizenziert und lädt
+SOFORT herunter — es wird NICHT zuerst eine Wasserzeichen-Vorschau geprüft
+und erst danach lizenziert. Grund: unlimited Adobe-Stock-Plan des Nutzers,
+eine versehentlich falsch lizenzierte Datei verursacht keine zusätzlichen
+Kosten. Die Gemini-Qualitätsprüfung läuft danach auf dem bereits lizenziert
+heruntergeladenen Original (siehe cut_plan_supplement_auto_resolve_service.py
+— unverändert, da bereits provider-unabhängig)."""
 
 from __future__ import annotations
 
@@ -16,22 +22,32 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
-from otio_app.analysis_models import SupplementCandidate, SupplementRequest
+from otio_app.analysis_models import SupplementAssetSidecar, SupplementCandidate, SupplementRequest
 from otio_app.defaults import (
     ADOBE_STOCK_DEFAULT_PRODUCT_NAME,
+    ADOBE_STOCK_LICENSE_ENDPOINT,
+    ADOBE_STOCK_LICENSE_TYPE_STANDARD,
+    ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K,
+    ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD,
     ADOBE_STOCK_MEDIA_TYPE_ID_PHOTO,
     ADOBE_STOCK_MEDIA_TYPE_ID_VIDEO,
+    ADOBE_STOCK_MIN_DOWNLOAD_BYTES,
     ADOBE_STOCK_REJECTED_REASON_GENTECH,
     ADOBE_STOCK_SEARCH_ENDPOINT,
+    ADOBE_STOCK_VIDEO_4K_MAX_BYTES,
     CANDIDATE_STATUS_FOUND,
+    CANDIDATE_STATUS_REJECTED_ASPECT_RATIO,
     PROVIDER_STATUS_CONFIG_MISSING,
     PROVIDER_STATUS_READY,
+    RIGHTS_STATUS_APPROVED,
     RIGHTS_STATUS_NEEDS_LICENSE_REVIEW,
     SUPPLEMENT_SOURCE_ADOBE,
 )
 from otio_app.services.api_keys import get_api_key
+from otio_app.services.media_utils import probe_duration_seconds
 from otio_app.services.supplement_search import (
     base_location_for_request,
     llm_generated_query_variants,
@@ -39,6 +55,13 @@ from otio_app.services.supplement_search import (
     preferred_search_query,
 )
 from otio_app.services.supplement_sources.base import ProviderReadiness, SupplementAsset, SupplementSourceAdapter
+
+
+class AdobeAssetTooLargeError(Exception):
+    """Intern: signalisiert, dass ein Video-Download die Größengrenze für
+    die aktuell lizenzierte Qualität (Content-Length-Header ODER während
+    des Streamings gemessen) überschritten hat — löst in acquire() den
+    Wechsel auf die nächstkleinere Lizenzvariante (Video_HD) aus."""
 
 # Pro Szene/Request soll die UI höchstens diese Anzahl an Kandidaten zur
 # Auswahl anbieten, falls request.max_candidates nicht explizit gesetzt ist
@@ -78,23 +101,32 @@ class AdobeStockAdapter(SupplementSourceAdapter):
     last_debug_report: dict = {}
 
     def readiness(self) -> ProviderReadiness:
-        if get_api_key("ADOBE_STOCK_API_KEY"):
+        if not get_api_key("ADOBE_STOCK_API_KEY"):
+            return ProviderReadiness(
+                provider=self.provider,
+                status=PROVIDER_STATUS_CONFIG_MISSING,
+                message="ADOBE_STOCK_API_KEY fehlt.",
+                search_enabled=True,
+                acquire_enabled=False,
+            )
+        if not get_api_key("ADOBE_STOCK_ACCESS_TOKEN"):
             return ProviderReadiness(
                 provider=self.provider,
                 status=PROVIDER_STATUS_READY,
                 message=(
-                    "Adobe Stock API-Key vorhanden — Suche ist aktiv. Automatische "
-                    "Lizenzierung/Download folgen erst in einer späteren Phase."
+                    "Adobe Stock API-Key vorhanden — Suche ist aktiv. "
+                    "ADOBE_STOCK_ACCESS_TOKEN fehlt, Lizenzierung/Download ist daher "
+                    "noch nicht möglich."
                 ),
                 search_enabled=True,
                 acquire_enabled=False,
             )
         return ProviderReadiness(
             provider=self.provider,
-            status=PROVIDER_STATUS_CONFIG_MISSING,
-            message="ADOBE_STOCK_API_KEY fehlt.",
+            status=PROVIDER_STATUS_READY,
+            message="Adobe Stock vollständig konfiguriert (Suche + Lizenzierung/Download).",
             search_enabled=True,
-            acquire_enabled=False,
+            acquire_enabled=True,
         )
 
     def _product_name(self) -> str:
@@ -220,34 +252,54 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                     continue
                 candidates.append(candidate)
                 self.last_debug_report["mapped_candidate_count"] += 1
-            if candidates:
+            # Erst abbrechen, wenn mindestens ein tatsächlich verwendbarer
+            # Kandidat gefunden wurde — ein Video mit falschem Seitenverhältnis
+            # (download_enabled=False, Phase 12.2b) allein reicht nicht, sonst
+            # würden bessere Treffer aus einer späteren Query nie versucht.
+            if any(candidate.download_enabled for candidate in candidates):
                 break
 
         self._finalize_debug(candidates)
         max_count = request.max_candidates if request.max_candidates > 0 else MAX_CANDIDATES_PER_REQUEST
         return candidates[:max_count]
 
-    def _select_preview_url(self, *, media_type: str, comps: dict, file_entry: dict) -> tuple[str, bool, bool]:
-        """Gibt (preview_url, has_hd, has_4k) zurück. Bevorzugt bei Videos
-        Video_4K, dann Video_HD, dann video_preview_url; bei Fotos
-        comps.Standard, dann thumbnail_1000_url. Alle URLs sind zu diesem
-        Zeitpunkt Wasserzeichen-Vorschauen — keine lizenzierten Originale
-        (siehe Moduldocstring/Phase 12.3/12.4)."""
+    def _select_preview(self, *, media_type: str, comps: dict, file_entry: dict) -> tuple[str, int, int]:
+        """Gibt (preview_url, width, height) zurück.
+
+        Video: `comps.Video_4K`/`comps.Video_HD` sind laut Adobe-API-Referenz
+        bereits die tatsächlichen Maße der jeweiligen LIZENZIERBAREN Variante
+        (kein Wasserzeichen-Downscale) — deshalb werden Breite/Höhe direkt aus
+        dem gewählten comps-Eintrag übernommen (mit den Files-API-Basismaßen
+        als Fallback, falls comps unvollständig ist).
+
+        Foto: `comps.Standard` ist dagegen NUR eine kleine Wasserzeichen-
+        Vorschau (z. B. 1000x600) — für Breite/Höhe wird deshalb IMMER das
+        native Basismaß aus der Files-API (file_entry.width/height, die
+        tatsächliche Auflösung des lizenzierbaren Originals) verwendet; die
+        comps-URL wird nur als Vorschaubild-Link genutzt."""
+        base_width = int(file_entry.get("width") or 0)
+        base_height = int(file_entry.get("height") or 0)
         if media_type == "video":
-            video_hd = comps.get("Video_HD") or {}
             video_4k = comps.get("Video_4K") or {}
-            has_hd = bool(video_hd.get("url"))
-            has_4k = bool(video_4k.get("url"))
-            preview = (
-                video_4k.get("url")
-                or video_hd.get("url")
-                or str(file_entry.get("video_preview_url") or "")
-            )
-            return str(preview or ""), has_hd, has_4k
+            video_hd = comps.get("Video_HD") or {}
+            for entry in (video_4k, video_hd):
+                if entry.get("url"):
+                    return (
+                        str(entry.get("url")),
+                        int(entry.get("width") or base_width),
+                        int(entry.get("height") or base_height),
+                    )
+            return str(file_entry.get("video_preview_url") or ""), base_width, base_height
 
         standard = comps.get("Standard") or {}
-        preview = standard.get("url") or str(file_entry.get("thumbnail_1000_url") or "")
-        return str(preview or ""), False, False
+        preview_url = str(standard.get("url") or file_entry.get("thumbnail_1000_url") or "")
+        return preview_url, base_width, base_height
+
+    @staticmethod
+    def _is_16_9(width: int, height: int, tolerance: float) -> bool:
+        if not width or not height:
+            return False
+        return abs((width / height) - (16 / 9)) <= tolerance
 
     def _candidate_from_file(
         self,
@@ -281,10 +333,8 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             self.last_debug_report["skipped_unsupported_media_type_count"] += 1
             return None
 
-        width = int(file_entry.get("width") or 0)
-        height = int(file_entry.get("height") or 0)
         comps = file_entry.get("comps") or {}
-        preview_url, has_hd, has_4k = self._select_preview_url(
+        preview_url, width, height = self._select_preview(
             media_type=media_type, comps=comps, file_entry=file_entry
         )
         title = str(file_entry.get("title") or f"Adobe Stock {file_entry.get('id', '')}")
@@ -297,6 +347,22 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             location_name,
             broadened=request.allow_broader_search and location_name.casefold() not in query_used.casefold(),
         )
+
+        # Phase 12.2b, Nutzerentscheidung Juli 2026: Video MUSS 16:9 sein
+        # (harte Ablehnung, analog zu Pexels) — Fotos MÜSSEN es NICHT sein,
+        # is_16_9 wird für Fotos nur informativ mitgeführt, nie erzwungen.
+        is_16_9 = self._is_16_9(width, height, request.video_aspect_ratio_tolerance)
+        if media_type == "video" and not is_16_9:
+            status = CANDIDATE_STATUS_REJECTED_ASPECT_RATIO
+            download_enabled = False
+        else:
+            status = CANDIDATE_STATUS_FOUND
+            # download_enabled bezieht sich hier bewusst nur auf "ist der
+            # Kandidat selbst technisch verwendbar" (echter Treffer, kein
+            # generative-AI-/Aspect-Ratio-Ausschluss) — die eigentliche
+            # Lizenzierung/Download-Fähigkeit prüft acquire() unten separat
+            # und erneut (z. B. fehlender Access-Token).
+            download_enabled = True
 
         return SupplementCandidate(
             candidate_id=f"cand_{uuid.uuid4().hex[:8]}",
@@ -312,26 +378,17 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             rights_status=RIGHTS_STATUS_NEEDS_LICENSE_REVIEW,
             source_page_url=str(file_entry.get("details_url") or ""),
             media_type=media_type,
-            width=(3840 if has_4k else (1920 if has_hd else width)) if media_type == "video" else width,
-            height=(2160 if has_4k else (1080 if has_hd else height)) if media_type == "video" else height,
+            width=width,
+            height=height,
             duration_sec=duration_sec,
             requires_purchase=True,
             requires_user_approval=True,
             match_score=0.75 if location_match != "missing" else 0.35,
             match_reason="Adobe Stock API Treffer",
-            status=CANDIDATE_STATUS_FOUND,
+            status=status,
             provider_status=PROVIDER_STATUS_READY,
             is_mock=False,
-            # download_enabled bezieht sich hier bewusst nur auf "ist der
-            # Kandidat selbst technisch verwendbar" (echter Treffer, keine
-            # generative-AI-Ablehnung) — NICHT auf "automatische Lizenzierung
-            # ist bereits produktiv". Letzteres prüft acquire() unten
-            # weiterhin explizit und liefert bis Phase 12.4 einen klaren,
-            # phasengerechten Fehler. Würde man hier False setzen, würde die
-            # Produktions-Guard-Logik (acquire_supplement_candidate) fälschlich
-            # "Mock-/Demo-Kandidat" melden, obwohl es ein echter Adobe-Treffer
-            # ist, der lediglich noch nicht automatisch lizenzierbar ist.
-            download_enabled=True,
+            download_enabled=download_enabled,
             query_used=query_used,
             folder_name=request.folder_name,
             location_name=location_name,
@@ -340,8 +397,8 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             location_match=location_match,
             aspect_ratio=round(width / height, 6) if width and height else 0.0,
             aspect_ratio_policy="video_16_9" if media_type == "video" else request.photo_aspect_policy,
-            is_16_9=False,
-            approved_for_cut_plan=False,
+            is_16_9=is_16_9,
+            approved_for_cut_plan=download_enabled and location_match != "missing",
             supplement_validation_status="NEEDS_USER_REVIEW",
             supplement_validation_score=0.7 if location_match != "missing" else 0.35,
             adobe_media_type_id=media_type_id,
@@ -350,12 +407,229 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             adobe_content_type=str(file_entry.get("content_type") or ""),
         )
 
+    def _license_asset(
+        self, content_id: str, license_type: str, api_key: str, access_token: str
+    ) -> dict:
+        """Ruft Content/License auf und liefert das purchase_details-Objekt
+        der Antwort (enthält u. a. url/content_type/width/height). Löst bei
+        HTTP- oder Netzwerkfehlern sowie bei fehlender Download-URL in der
+        Antwort ein RuntimeError aus — acquire() darf hier nie stillschweigend
+        weitermachen."""
+        params = {"content_id": content_id, "license": license_type, "locale": "en_US"}
+        url = f"{ADOBE_STOCK_LICENSE_ENDPOINT}?{urllib.parse.urlencode(params)}"
+        req = urllib.request.Request(
+            url, headers=self._headers(api_key), method="GET"
+        )
+        # Authorization-Header ist für die Licensing-API zwingend — self._headers
+        # setzt ihn nur, wenn ADOBE_STOCK_ACCESS_TOKEN im Umfeld gesetzt ist;
+        # acquire() prüft das vorab explizit und ruft diese Methode sonst nicht auf.
+        req.add_header("Authorization", f"Bearer {access_token}")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            try:
+                body = exc.read().decode("utf-8", errors="replace")[:500]
+            except Exception:
+                body = ""
+            raise RuntimeError(
+                f"Adobe-Lizenzierung fehlgeschlagen (HTTP {exc.code}, license={license_type}): "
+                f"{body or exc.reason}"
+            ) from exc
+        except (urllib.error.URLError, json.JSONDecodeError, OSError) as exc:
+            raise RuntimeError(f"Adobe-Lizenzierung fehlgeschlagen (license={license_type}): {exc}") from exc
+
+        contents = payload.get("contents") or {}
+        entry = contents.get(str(content_id)) or (next(iter(contents.values()), {}) if contents else {})
+        purchase_details = entry.get("purchase_details") or {}
+        if not str(purchase_details.get("url") or ""):
+            state = purchase_details.get("state", "unbekannt")
+            raise RuntimeError(
+                f"Adobe-Lizenzierung lieferte keine Download-URL für Content-ID {content_id} "
+                f"(license={license_type}, state={state})."
+            )
+        return purchase_details
+
+    def _stream_download_to_file(
+        self,
+        url: str,
+        local_path: Path,
+        *,
+        api_key: str,
+        access_token: str,
+        max_bytes: int | None,
+    ) -> None:
+        """Lädt url chunked auf local_path herunter. Bricht ab (löscht die
+        Teildatei) und wirft AdobeAssetTooLargeError, sobald entweder der
+        Content-Length-Header ODER die Summe der bereits gestreamten Bytes
+        max_bytes überschreitet — max_bytes=None bedeutet keine Grenze
+        (Fotos, oder ein Video, für das ohnehin bereits die kleinste
+        Lizenzvariante läuft)."""
+        req = urllib.request.Request(url, headers=self._headers(api_key))
+        req.add_header("Authorization", f"Bearer {access_token}")
+        try:
+            with urllib.request.urlopen(req, timeout=180) as response:
+                status = int(getattr(response, "status", 200) or 200)
+                if status != 200:
+                    raise RuntimeError(f"Adobe-Download HTTP-Status {status}.")
+                content_length = response.headers.get("Content-Length")
+                if max_bytes is not None and content_length:
+                    try:
+                        if int(content_length) > max_bytes:
+                            raise AdobeAssetTooLargeError()
+                    except ValueError:
+                        pass
+                total = 0
+                with open(local_path, "wb") as handle:
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if max_bytes is not None and total > max_bytes:
+                            raise AdobeAssetTooLargeError()
+                        handle.write(chunk)
+        except AdobeAssetTooLargeError:
+            local_path.unlink(missing_ok=True)
+            raise
+        except (urllib.error.URLError, OSError) as exc:
+            local_path.unlink(missing_ok=True)
+            raise RuntimeError(f"Adobe-Download fehlgeschlagen: {exc}") from exc
+
+    def _extension_for(self, purchase_details: dict, candidate: SupplementCandidate) -> str:
+        content_type = str(purchase_details.get("content_type") or "").lower()
+        mapping = {
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/png": ".png",
+            "video/mp4": ".mp4",
+            "video/quicktime": ".mov",
+        }
+        if content_type in mapping:
+            return mapping[content_type]
+        return ".jpg" if candidate.media_type == "image" else ".mp4"
+
     def acquire(
         self,
         candidate: SupplementCandidate,
         destination_folder: Path,
     ) -> SupplementAsset:
-        raise PermissionError(
-            "Adobe Stock: automatische Lizenzierung/Download sind noch nicht produktiv "
-            "angebunden (folgt in einer späteren Phase)."
+        api_key = get_api_key("ADOBE_STOCK_API_KEY")
+        if not api_key:
+            raise PermissionError("ADOBE_STOCK_API_KEY fehlt — Adobe-Stock-Download ist deaktiviert.")
+        access_token = get_api_key("ADOBE_STOCK_ACCESS_TOKEN")
+        if not access_token:
+            raise PermissionError(
+                "ADOBE_STOCK_ACCESS_TOKEN fehlt — für Lizenzierung/Download ist ein Adobe-IMS-"
+                "Access-Token erforderlich (die reine Suche funktioniert auch ohne)."
+            )
+        if candidate.is_mock or not candidate.download_enabled:
+            raise PermissionError("Mock-/Demo-Kandidaten dürfen nicht heruntergeladen werden.")
+        if not candidate.provider_asset_id:
+            raise ValueError("Adobe-Kandidat hat keine provider_asset_id.")
+
+        destination_folder.mkdir(parents=True, exist_ok=True)
+        folder_slug = destination_folder.parent.parent.name.replace(" ", "_")
+        filename_base = (
+            f"{folder_slug}_{candidate.supplement_request_id}_adobe_{candidate.provider_asset_id}"
         )
+
+        if candidate.media_type == "video":
+            # Nutzervorgabe (4K/HD-Regel): 4K bevorzugen, wenn verfügbar —
+            # sonst gleich HD. Die 600-MB-Grenze gilt nur, solange 4K
+            # versucht wird; ist HD bereits die einzige Option, gibt es
+            # keine kleinere Lizenzvariante mehr, auf die man ausweichen
+            # könnte, also keine Größengrenze mehr durchsetzen. Fallback wird
+            # NUR angeboten, wenn Video_HD auch tatsächlich in den zur
+            # Such-Zeit gespeicherten comps vorhanden war (nicht bloß aus
+            # has_4k abgeleitet) — defensiv, falls Adobe für ein Asset
+            # ausnahmsweise nur 4K ohne HD liefern sollte.
+            has_4k = ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K in candidate.adobe_comps
+            has_hd = ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD in candidate.adobe_comps
+            if has_4k:
+                primary_license = ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K
+                fallback_license = ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD if has_hd else ""
+                size_limit = ADOBE_STOCK_VIDEO_4K_MAX_BYTES
+            else:
+                primary_license = ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD
+                fallback_license = ""
+                size_limit = None
+        else:
+            primary_license = ADOBE_STOCK_LICENSE_TYPE_STANDARD
+            fallback_license = ""
+            size_limit = None
+
+        purchase_details = self._license_asset(
+            candidate.provider_asset_id, primary_license, api_key, access_token
+        )
+        used_license = primary_license
+        extension = self._extension_for(purchase_details, candidate)
+        local_path = destination_folder / f"{filename_base}{extension}"
+
+        try:
+            self._stream_download_to_file(
+                str(purchase_details.get("url") or ""),
+                local_path,
+                api_key=api_key,
+                access_token=access_token,
+                max_bytes=size_limit,
+            )
+        except AdobeAssetTooLargeError:
+            if not fallback_license:
+                raise RuntimeError(
+                    f"Adobe-Video (Content-ID {candidate.provider_asset_id}, {primary_license}) "
+                    "überschreitet die 600-MB-Grenze und es ist keine kleinere Lizenzvariante "
+                    "verfügbar."
+                ) from None
+            purchase_details = self._license_asset(
+                candidate.provider_asset_id, fallback_license, api_key, access_token
+            )
+            used_license = fallback_license
+            extension = self._extension_for(purchase_details, candidate)
+            local_path = destination_folder / f"{filename_base}{extension}"
+            self._stream_download_to_file(
+                str(purchase_details.get("url") or ""),
+                local_path,
+                api_key=api_key,
+                access_token=access_token,
+                max_bytes=None,
+            )
+
+        if not local_path.is_file() or local_path.stat().st_size < ADOBE_STOCK_MIN_DOWNLOAD_BYTES:
+            local_path.unlink(missing_ok=True)
+            raise RuntimeError("Adobe-Download zu klein — vermutlich kein gültiges Asset.")
+
+        if candidate.media_type == "video":
+            duration = probe_duration_seconds(local_path)
+            if duration is None:
+                local_path.unlink(missing_ok=True)
+                raise RuntimeError("ffprobe konnte Adobe-Download nicht lesen.")
+
+        sidecar = SupplementAssetSidecar(
+            asset_id=f"asset_adobe_{candidate.provider_asset_id}",
+            supplement_request_id=candidate.supplement_request_id,
+            provider=self.provider,
+            provider_asset_id=candidate.provider_asset_id,
+            source_url=candidate.source_page_url,
+            download_url=str(purchase_details.get("url") or ""),
+            query_used=candidate.query_used,
+            location_name=candidate.location_name,
+            location_match=candidate.location_match,
+            license=used_license,
+            creator=candidate.creator,
+            acquisition_method="adobe_stock_license_api",
+            media_type=candidate.media_type,
+            aspect_ratio=candidate.aspect_ratio,
+            aspect_ratio_policy=candidate.aspect_ratio_policy,
+            is_16_9=candidate.is_16_9,
+            supplement_validation_status=candidate.supplement_validation_status,
+            supplement_validation_score=candidate.supplement_validation_score,
+            approved_for_cut_plan=candidate.approved_for_cut_plan,
+            downloaded_at=datetime.now(timezone.utc),
+            original_filename=local_path.name,
+            local_path=str(local_path),
+            rights_status=RIGHTS_STATUS_APPROVED,
+            requires_attribution=False,
+            approval_status="APPROVED",
+        )
+        return SupplementAsset(local_path=local_path, sidecar=sidecar)

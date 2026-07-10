@@ -71,8 +71,8 @@ API_PROVIDERS: tuple[ApiProvider, ...] = (
         env_key="ADOBE_STOCK_ACCESS_TOKEN",
         label="Adobe Stock — Access Token",
         description=(
-            "Optional, nur für automatische Lizenzierung/Download nötig (folgt in einer "
-            "späteren Phase). Ohne Token funktioniert die reine Suche bereits."
+            "Nur für automatische Lizenzierung/Download nötig (sofortige Lizenzierung + "
+            "4K/HD-Download im Cut Plan). Ohne Token funktioniert die reine Suche trotzdem."
         ),
         placeholder="Bearer-Token …",
         docs_url="https://developer.adobe.com/stock/docs/getting-started/03-api-authentication/",

@@ -1099,6 +1099,23 @@ ADOBE_STOCK_MEDIA_TYPE_ID_VIDEO = 4
 # Code-seitiger Sicherheitsnetz-Check auf is_gentech in der Response.
 ADOBE_STOCK_REJECTED_REASON_GENTECH = "ADOBE_GENTECH_REJECTED"
 
+# --- Phase 12.3: Adobe Stock Lizenzierung + Download ("sofort lizenzieren,
+# dann erst per Gemini prüfen" — Nutzerentscheidung Juli 2026: unlimited
+# Adobe-Stock-Plan, ein versehentlich falsch lizenziertes Asset kostet
+# nichts extra) ---
+ADOBE_STOCK_LICENSE_ENDPOINT = "https://stock.adobe.io/Rest/Libraries/1/Content/License"
+# Gültige license-Parameterwerte für Content/License — Fotos/3D/Templates
+# nutzen "Standard", Videos ausschließlich "Video_HD" oder "Video_4K"
+# (siehe Adobe-Stock-Lizenzierungs-Referenz).
+ADOBE_STOCK_LICENSE_TYPE_STANDARD = "Standard"
+ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD = "Video_HD"
+ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K = "Video_4K"
+# Nutzervorgabe: 4K nur, wenn die Datei <= 600 MB ist — sonst HD. Ist die
+# Größe vorab unbekannt, wird 4K versucht und während des Downloads auf HD
+# gewechselt, falls die Grenze überschritten wird.
+ADOBE_STOCK_VIDEO_4K_MAX_BYTES = 600 * 1024 * 1024
+ADOBE_STOCK_MIN_DOWNLOAD_BYTES = 100 * 1024
+
 
 def resolve_voice_backend(backend: str | None) -> str:
     if backend and backend.strip() in VOICE_BACKEND_CHOICES:
