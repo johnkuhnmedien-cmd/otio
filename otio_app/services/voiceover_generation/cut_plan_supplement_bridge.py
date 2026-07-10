@@ -342,6 +342,7 @@ def search_candidates_for_cut_plan_request(
     *,
     query_llm_provider: str = "",
     query_llm_model: str = "",
+    skip_llm_query_generation: bool = False,
 ) -> CutPlanSupplementCandidatesDocument:
     """Sucht Kandidaten für GENAU EINEN Request — läuft ausschließlich bei
     explizitem Aufruf (UI-Button „Supplement-Kandidaten suchen“), NIEMALS
@@ -356,7 +357,12 @@ def search_candidates_for_cut_plan_request(
     (Standard "" = kein LLM-Aufruf, exakt das bisherige deterministische
     Verhalten) — nur wenn beide gesetzt sind (siehe UI-Verdrahtung in
     cut_plan_tab.py), wird vor der Provider-Suche ein LLM-Aufruf zur
-    Query-Generierung ausgelöst. Phase 11.2: required_asset_type
+    Query-Generierung ausgelöst. Phase 12.9: skip_llm_query_generation=True
+    überspringt diesen Aufruf und nutzt die bereits auf dem Request
+    persistierten llm_queries — der Auto-Resolver erzeugt Queries EINMAL
+    pro Lauf und ruft search_candidates_for_cut_plan_request mehrfach für
+    die einzelnen Suchstufen auf, ohne bis zu 4 redundante LLM-Calls.
+    Phase 11.2: required_asset_type
     default="any" (statt bisher "video_preferred") und max_candidates=5
     (statt Adapter-Standard 3) sind CUT-PLAN-spezifische Standardwerte —
     bleiben über provider_settings weiterhin überschreibbar."""
@@ -374,7 +380,12 @@ def search_candidates_for_cut_plan_request(
     llm_query_status = ""
     llm_query_run_id = ""
     llm_query_error = ""
-    if query_llm_provider and query_llm_model:
+    if skip_llm_query_generation:
+        llm_queries = list(request.llm_queries)
+        llm_query_status = request.llm_query_status
+        llm_query_run_id = request.llm_query_run_id
+        llm_query_error = request.llm_query_error
+    elif query_llm_provider and query_llm_model:
         query_result = generate_cut_plan_supplement_queries(
             project,
             request,
@@ -386,14 +397,14 @@ def search_candidates_for_cut_plan_request(
         llm_query_error = query_result.error
         if query_result.status == STATUS_PASS:
             llm_queries = query_result.queries
-    update_cut_plan_supplement_request(
-        project,
-        request_id,
-        llm_queries=llm_queries,
-        llm_query_status=llm_query_status,
-        llm_query_run_id=llm_query_run_id,
-        llm_query_error=llm_query_error,
-    )
+        update_cut_plan_supplement_request(
+            project,
+            request_id,
+            llm_queries=llm_queries,
+            llm_query_status=llm_query_status,
+            llm_query_run_id=llm_query_run_id,
+            llm_query_error=llm_query_error,
+        )
 
     # Phase 9: der bereits beim Skriptschreiben vorbereitete Suchvorschlag
     # (SentenceItem.visual_asset_plan.supplement_search_hint, durchgereicht

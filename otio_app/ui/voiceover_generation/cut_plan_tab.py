@@ -132,6 +132,8 @@ from otio_app.services.voiceover_generation.cut_plan_generic_fallback_service im
 from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_service import (
     AUTO_RESOLVE_PROGRESS_CANDIDATE_RESULT,
     AUTO_RESOLVE_PROGRESS_GENERIC_FALLBACK_STARTED,
+    AUTO_RESOLVE_PROGRESS_QUERY_GENERATION_FINISHED,
+    AUTO_RESOLVE_PROGRESS_QUERY_GENERATION_STARTED,
     AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED,
     AUTO_RESOLVE_PROGRESS_REQUEST_STARTED,
     AUTO_RESOLVE_PROGRESS_STAGE_FAILED,
@@ -697,6 +699,8 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
     ]
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
+    _render_persisted_auto_resolve_trace(project)
+
     adobe_search_ready, pexels_search_ready = _render_provider_readiness_status()
     any_search_ready = adobe_search_ready or pexels_search_ready
     provider_labels = {SUPPLEMENT_SOURCE_ADOBE: "Adobe Stock", SUPPLEMENT_SOURCE_PEXELS: "Pexels"}
@@ -828,7 +832,7 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                     request_index=1,
                     request_total=1,
                 )
-                progress_handler, progress_bar, log_placeholder = _make_auto_resolve_progress_handler(
+                progress_handler, progress_bar, log_placeholder, get_trace_lines = _make_auto_resolve_progress_handler(
                     request_labels=request_labels,
                     is_batch=False,
                 )
@@ -839,6 +843,14 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                     query_llm_provider=query_llm_provider,
                     query_llm_model=query_llm_model,
                     progress_callback=progress_handler,
+                )
+                _persist_auto_resolve_trace(
+                    project,
+                    get_trace_lines(),
+                    summary=(
+                        f"Einzel-Request „{request_labels.get(request.request_id, request.request_id)}“: "
+                        f"{auto_result.status}"
+                    ),
                 )
                 progress_bar.empty()
                 log_placeholder.empty()
@@ -1025,6 +1037,38 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
     )
 
 
+def _auto_resolve_trace_session_key(project: Project) -> str:
+    return f"cut_plan_auto_resolve_trace_{project.id}"
+
+
+def _persist_auto_resolve_trace(project: Project, lines: list[str], *, summary: str = "") -> None:
+    """Phase 12.9: hält den Live-Trace nach st.rerun() in session_state."""
+    st.session_state[_auto_resolve_trace_session_key(project)] = {
+        "lines": lines,
+        "summary": summary,
+    }
+
+
+def _render_persisted_auto_resolve_trace(project: Project) -> None:
+    payload = st.session_state.get(_auto_resolve_trace_session_key(project))
+    if not payload:
+        return
+    with st.expander("Letzter Auto-Resolve-Live-Trace", expanded=True):
+        if payload.get("summary"):
+            st.caption(payload["summary"])
+        trace_lines = payload.get("lines", [])
+        if trace_lines:
+            st.markdown("\n\n".join(trace_lines))
+        else:
+            st.caption("Kein Trace-Inhalt vorhanden.")
+        if st.button(
+            "Trace schließen",
+            key=f"cut_plan_auto_resolve_trace_dismiss_{project.id}",
+        ):
+            del st.session_state[_auto_resolve_trace_session_key(project)]
+            st.rerun()
+
+
 def _format_auto_resolve_asset_type(asset_type: str) -> str:
     return {"video": "Video", "image": "Foto"}.get(asset_type, asset_type or "—")
 
@@ -1036,7 +1080,13 @@ def _format_auto_resolve_provider(provider: str) -> str:
 def _format_auto_resolve_progress_line(
     event: AutoResolveProgressEvent, *, request_labels: dict[str, str] | None = None
 ) -> str:
-    """Phase 12.8: eine Zeile für das Live-Trace-Log während Auto-Resolve."""
+    """Phase 12.8/12.9: eine Zeile für das Live-Trace-Log während Auto-Resolve."""
+    if event.event_type == AUTO_RESOLVE_PROGRESS_QUERY_GENERATION_STARTED:
+        return "  🧠 LLM-Suchqueries werden erzeugt…"
+    if event.event_type == AUTO_RESOLVE_PROGRESS_QUERY_GENERATION_FINISHED:
+        status = f" ({event.validation_status})" if event.validation_status else ""
+        err = f" — {event.message}" if event.message else ""
+        return f"  🧠 Queries{status}: `{event.query}`{err}"
     if event.event_type == AUTO_RESOLVE_PROGRESS_REQUEST_STARTED:
         label = (request_labels or {}).get(event.request_id, event.request_id)
         if event.request_total:
@@ -1124,7 +1174,7 @@ def _make_auto_resolve_progress_handler(
             else:
                 progress_bar.progress(1.0, text="Abgeschlossen")
 
-    return _handle, progress_bar, log_placeholder
+    return _handle, progress_bar, log_placeholder, lambda: list(lines)
 
 
 def _render_bulk_auto_resolve_action(
@@ -1158,7 +1208,7 @@ def _render_bulk_auto_resolve_action(
             entry.request_id: f"{entry.folder_name or '—'} · {entry.cut_item_id}"
             for entry in requests_document.requests
         }
-        progress_handler, progress_bar, log_placeholder = _make_auto_resolve_progress_handler(
+        progress_handler, progress_bar, log_placeholder, get_trace_lines = _make_auto_resolve_progress_handler(
             request_labels=request_labels,
             is_batch=True,
         )
@@ -1169,12 +1219,20 @@ def _render_bulk_auto_resolve_action(
             query_llm_model=query_llm_model,
             progress_callback=progress_handler,
         )
-        progress_bar.empty()
-        log_placeholder.empty()
-
         accepted_count = sum(1 for result in results if result.status == AUTO_RESOLVE_STATUS_ACCEPTED)
         generic_count = sum(1 for result in results if result.status == AUTO_RESOLVE_STATUS_GENERIC_FALLBACK_USED)
         no_match_count = sum(1 for result in results if result.status == AUTO_RESOLVE_STATUS_NO_MATCH)
+        _persist_auto_resolve_trace(
+            project,
+            get_trace_lines(),
+            summary=(
+                f"{len(results)} Request(s): {accepted_count} akzeptiert, "
+                f"{generic_count} generischer Fallback, {no_match_count} ohne Treffer"
+            ),
+        )
+        progress_bar.empty()
+        log_placeholder.empty()
+
         st.success(
             f"{len(results)} Request(s) bearbeitet: {accepted_count} automatisch akzeptiert, "
             f"{generic_count} generisches Ordner-Asset verwendet, {no_match_count} ohne Treffer "

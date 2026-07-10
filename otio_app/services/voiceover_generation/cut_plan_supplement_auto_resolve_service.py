@@ -95,6 +95,10 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     search_candidates_for_cut_plan_request,
     update_cut_plan_supplement_request,
 )
+from otio_app.services.voiceover_generation.cut_plan_supplement_query_service import (
+    generate_cut_plan_supplement_queries,
+)
+from otio_app.services.voiceover_generation.llm_trace_service import STATUS_PASS
 from otio_app.services.voiceover_generation.cut_plan_supplement_models import (
     CutPlanSupplementAsset,
     CutPlanSupplementAutoResolveAttempt,
@@ -112,6 +116,8 @@ __all__ = [
     "VALIDATION_STATUS_TOO_SHORT",
     "VALIDATION_STATUS_ACCEPT_FAILED",
     "DEFAULT_AUTO_RESOLVE_VALIDATION_MODEL",
+    "AUTO_RESOLVE_PROGRESS_QUERY_GENERATION_STARTED",
+    "AUTO_RESOLVE_PROGRESS_QUERY_GENERATION_FINISHED",
     "AUTO_RESOLVE_PROGRESS_REQUEST_STARTED",
     "AUTO_RESOLVE_PROGRESS_STAGE_STARTED",
     "AUTO_RESOLVE_PROGRESS_STAGE_FAILED",
@@ -125,6 +131,8 @@ __all__ = [
     "auto_resolve_all_cut_plan_supplement_requests",
 ]
 
+AUTO_RESOLVE_PROGRESS_QUERY_GENERATION_STARTED = "query_generation_started"
+AUTO_RESOLVE_PROGRESS_QUERY_GENERATION_FINISHED = "query_generation_finished"
 AUTO_RESOLVE_PROGRESS_REQUEST_STARTED = "request_started"
 AUTO_RESOLVE_PROGRESS_STAGE_STARTED = "stage_started"
 AUTO_RESOLVE_PROGRESS_STAGE_FAILED = "stage_failed"
@@ -134,6 +142,8 @@ AUTO_RESOLVE_PROGRESS_GENERIC_FALLBACK_STARTED = "generic_fallback_started"
 AUTO_RESOLVE_PROGRESS_REQUEST_FINISHED = "request_finished"
 
 AutoResolveProgressEventType = Literal[
+    "query_generation_started",
+    "query_generation_finished",
     "request_started",
     "stage_started",
     "stage_failed",
@@ -239,6 +249,60 @@ def _queries_for_stage(
                 elif request.supplement_search_hint.strip():
                     queries = [request.supplement_search_hint.strip()]
     return " · ".join(queries) if queries else "—"
+
+
+def _prepare_llm_queries_for_auto_resolve(
+    project: Project,
+    request: CutPlanSupplementRequest,
+    *,
+    request_id: str,
+    query_llm_provider: str,
+    query_llm_model: str,
+    progress_callback: AutoResolveProgressCallback | None,
+) -> None:
+    """Phase 12.9: erzeugt LLM-Suchqueries GENAU EINMAL pro Auto-Resolve-Lauf
+    und persistiert sie auf dem Request — alle folgenden Suchstufen nutzen
+    skip_llm_query_generation=True und vermeiden so bis zu 3 redundante
+    LLM-Aufrufe pro Request (vorher: ein Aufruf pro Suchstufe)."""
+    if not (query_llm_provider and query_llm_model):
+        return
+
+    _emit_progress(
+        progress_callback,
+        AutoResolveProgressEvent(
+            event_type=AUTO_RESOLVE_PROGRESS_QUERY_GENERATION_STARTED,
+            request_id=request_id,
+        ),
+    )
+    query_result = generate_cut_plan_supplement_queries(
+        project,
+        request,
+        provider=query_llm_provider,
+        model=query_llm_model,
+    )
+    llm_queries = query_result.queries if query_result.status == STATUS_PASS else []
+    update_cut_plan_supplement_request(
+        project,
+        request_id,
+        llm_queries=llm_queries,
+        llm_query_status=query_result.status,
+        llm_query_run_id=query_result.run_id,
+        llm_query_error=query_result.error,
+    )
+    query_label = " · ".join(llm_queries) if llm_queries else "—"
+    if request.supplement_search_hint.strip() and request.supplement_search_hint.strip() not in llm_queries:
+        hint = request.supplement_search_hint.strip()
+        query_label = f"{hint} · {query_label}" if llm_queries else hint
+    _emit_progress(
+        progress_callback,
+        AutoResolveProgressEvent(
+            event_type=AUTO_RESOLVE_PROGRESS_QUERY_GENERATION_FINISHED,
+            request_id=request_id,
+            query=query_label,
+            validation_status=query_result.status,
+            message=query_result.error,
+        ),
+    )
 
 
 def _candidate_is_too_short(
@@ -464,6 +528,16 @@ def auto_resolve_cut_plan_supplement_request(
     attempts: list[CutPlanSupplementAutoResolveAttempt] = []
     search_errors: list[str] = []
 
+    _prepare_llm_queries_for_auto_resolve(
+        project,
+        request,
+        request_id=request_id,
+        query_llm_provider=query_llm_provider,
+        query_llm_model=query_llm_model,
+        progress_callback=progress_callback,
+    )
+    skip_llm_query_generation = bool(query_llm_provider and query_llm_model)
+
     # Phase 12.7: jede Kombination aus Provider (Phase 12.5-Reihenfolge) und
     # Medientyp (Video vor Foto, Nutzervorgabe) ist eine eigene Suchstufe —
     # ergibt z. B. [(adobe_stock, video), (adobe_stock, image),
@@ -489,6 +563,7 @@ def auto_resolve_cut_plan_supplement_request(
                 },
                 query_llm_provider=query_llm_provider,
                 query_llm_model=query_llm_model,
+                skip_llm_query_generation=skip_llm_query_generation,
             )
         except Exception as exc:  # noqa: BLE001 — Suche darf den Auto-Resolver nicht crashen
             search_errors.append(f"{stage_label}: {exc}")

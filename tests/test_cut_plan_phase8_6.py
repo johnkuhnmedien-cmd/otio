@@ -405,6 +405,48 @@ def test_search_calls_llm_query_generation_and_passes_queries_to_adapter(tmp_pat
     assert persisted.llm_query_run_id == "run_fake_123"
 
 
+def test_search_reuses_persisted_llm_queries_when_skip_flag_set(tmp_path: Path) -> None:
+    """Phase 12.9: skip_llm_query_generation nutzt bereits persistierte
+    llm_queries statt einen erneuten LLM-Aufruf auszulösen."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+
+    from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
+        update_cut_plan_supplement_request,
+    )
+
+    update_cut_plan_supplement_request(
+        project,
+        request_id,
+        llm_queries=["Grand Canyon rock formation"],
+        llm_query_status="PASS",
+        llm_query_run_id="run_existing",
+    )
+
+    mock_adapter = MagicMock()
+    mock_adapter.search.return_value = [_fake_candidate(request_id=request_id)]
+
+    with (
+        patch(f"{_BRIDGE_MODULE}.get_supplement_adapter", return_value=mock_adapter),
+        patch(f"{_BRIDGE_MODULE}.generate_cut_plan_supplement_queries") as mock_llm_query,
+    ):
+        search_candidates_for_cut_plan_request(
+            project,
+            request_id,
+            {"provider": "pexels"},
+            query_llm_provider="gemini",
+            query_llm_model="gemini-3.1-flash-lite",
+            skip_llm_query_generation=True,
+        )
+
+    mock_llm_query.assert_not_called()
+    sent_request = mock_adapter.search.call_args[0][0]
+    assert sent_request.llm_generated_queries == ["Grand Canyon rock formation"]
+
+
 def test_search_falls_back_to_deterministic_query_when_llm_query_fails(tmp_path: Path) -> None:
     """Schlaegt die LLM-Query-Generierung fehl, wird trotzdem gesucht — nur
     ohne llm_generated_queries (deterministischer Fallback in

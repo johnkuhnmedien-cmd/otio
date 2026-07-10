@@ -629,6 +629,55 @@ def test_auto_resolve_skips_pexels_when_adobe_candidate_already_passes(tmp_path:
     mock_accept.assert_called_once()
 
 
+def test_auto_resolve_generates_llm_queries_once_per_request(tmp_path: Path) -> None:
+    """Phase 12.9: LLM-Query-Generierung läuft einmal pro Auto-Resolve-Lauf,
+    nicht pro Suchstufe — search_candidates wird mit skip_llm_query_generation
+    aufgerufen."""
+    project, request_id = _setup_request(tmp_path)
+    candidates_doc = _fake_candidates_document(request_id, ["cand_1"], provider="adobe_stock")
+    search_calls: list[dict] = []
+
+    from otio_app.services.voiceover_generation.cut_plan_supplement_query_service import (
+        CutPlanSupplementQueryResult,
+    )
+
+    fake_query_result = CutPlanSupplementQueryResult(
+        status="PASS",
+        queries=["Havasu Falls waterfall"],
+        run_id="run_once",
+        provider="gemini",
+        model="gemini-3.1-flash-lite",
+    )
+
+    def _search_side_effect(project_arg, rid, provider_settings, **kwargs):
+        search_calls.append(dict(kwargs))
+        return candidates_doc
+
+    with (
+        patch(
+            f"{_MODULE}.search_candidates_for_cut_plan_request",
+            side_effect=_search_side_effect,
+        ),
+        patch(
+            f"{_MODULE}.generate_cut_plan_supplement_queries",
+            return_value=fake_query_result,
+        ) as mock_generate_queries,
+        patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid)),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("PASS")),
+        patch(f"{_MODULE}.accept_cut_plan_supplement_candidate"),
+    ):
+        auto_resolve_cut_plan_supplement_request(
+            project,
+            request_id,
+            query_llm_provider="gemini",
+            query_llm_model="gemini-3.1-flash-lite",
+        )
+
+    mock_generate_queries.assert_called_once()
+    assert search_calls
+    assert all(call.get("skip_llm_query_generation") is True for call in search_calls)
+
+
 def test_auto_resolve_tries_photo_only_after_video_fails_for_same_provider(tmp_path: Path) -> None:
     """Phase 12.7, Nutzervorgabe: pro Provider wird ZUERST Video versucht —
     erst wenn KEIN Video-Kandidat PASS erreicht, wird auf Foto DESSELBEN
