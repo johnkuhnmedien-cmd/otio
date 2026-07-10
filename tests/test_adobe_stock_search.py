@@ -22,6 +22,7 @@ Deckt ab:
 from __future__ import annotations
 
 import json
+import io
 import urllib.error
 import urllib.parse
 from pathlib import Path
@@ -555,6 +556,15 @@ def _license_response_body(
     return json.dumps({"contents": {str(content_id): {"content_id": str(content_id), "purchase_details": purchase_details}}}).encode()
 
 
+def _normalize_download_lookup_url(url: str) -> str:
+    """Entfernt ?token=… für Test-Lookups — acquire() hängt den Token an."""
+    parsed = urllib.parse.urlparse(url)
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    query.pop("token", None)
+    new_query = urllib.parse.urlencode(query, doseq=True)
+    return urllib.parse.urlunparse(parsed._replace(query=new_query))
+
+
 def _dispatching_urlopen(license_bodies: dict, download_bodies: dict):
     """license_bodies: {license_type: bytes}; download_bodies: {url: _FakeStreamResponse}."""
 
@@ -565,7 +575,8 @@ def _dispatching_urlopen(license_bodies: dict, download_bodies: dict):
             license_type = params["license"][0]
             body = license_bodies[license_type]
             return _FakeStreamResponse(body)
-        return download_bodies[url]
+        lookup_url = _normalize_download_lookup_url(url)
+        return download_bodies[lookup_url]
 
     return fake_urlopen
 
@@ -828,6 +839,59 @@ def test_acquire_sends_content_id_and_license_params_to_license_endpoint(
     assert params["license"] == ["Standard"]
     assert captured["headers"]["authorization"] == "Bearer test-token"
     assert captured["headers"]["x-api-key"] == "test-key"
+
+
+def test_acquire_download_uses_token_query_param_and_download_headers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 12.10: Libraries/Download nutzt ?token=… statt JSON/Auth-Header."""
+    monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
+    monkeypatch.setenv("ADOBE_STOCK_ACCESS_TOKEN", "test-token")
+    download_url = "https://stock.adobe.com/Rest/Libraries/Download/666/1"
+    body = b"x" * 200_000
+    captured: dict = {}
+
+    def fake_urlopen(request, timeout=20):
+        url = request.full_url
+        if url.startswith(ADOBE_STOCK_LICENSE_ENDPOINT):
+            return _FakeStreamResponse(
+                _license_response_body("666", download_url=download_url, content_type="image/jpeg")
+            )
+        captured["download_url"] = url
+        captured["headers"] = {k.lower(): v for k, v in request.header_items()}
+        return _FakeStreamResponse(body, content_length=str(len(body)))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    AdobeStockAdapter().acquire(_photo_candidate(), tmp_path / "req" / "assets")
+
+    params = urllib.parse.parse_qs(urllib.parse.urlparse(captured["download_url"]).query)
+    assert params["token"] == ["test-token"]
+    assert "authorization" not in captured["headers"]
+    assert "accept" not in captured["headers"]
+    assert captured["headers"]["x-api-key"] == "test-key"
+
+
+def test_acquire_download_http_error_includes_response_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
+    monkeypatch.setenv("ADOBE_STOCK_ACCESS_TOKEN", "test-token")
+    download_url = "https://stock.adobe.com/Rest/Libraries/Download/666/1"
+    error_body = b'{"error":"bad download","code":"20"}'
+
+    def fake_urlopen(request, timeout=20):
+        url = request.full_url
+        if url.startswith(ADOBE_STOCK_LICENSE_ENDPOINT):
+            return _FakeStreamResponse(
+                _license_response_body("666", download_url=download_url, content_type="image/jpeg")
+            )
+        raise urllib.error.HTTPError(
+            request.full_url, 400, "Bad Request", {}, io.BytesIO(error_body)
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError, match='Adobe-Download fehlgeschlagen \\(HTTP 400\\): .*"code":"20"'):
+        AdobeStockAdapter().acquire(_photo_candidate(), tmp_path / "req" / "assets")
 
 
 def test_acquire_does_not_raise_too_large_error_type_unused(monkeypatch: pytest.MonkeyPatch) -> None:

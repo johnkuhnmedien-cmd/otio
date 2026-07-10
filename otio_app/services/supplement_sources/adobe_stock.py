@@ -166,6 +166,29 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             headers["Authorization"] = f"Bearer {access_token}"
         return headers
 
+    def _download_headers(self, api_key: str) -> dict:
+        """Header für Libraries/Download — bewusst OHNE Accept: application/json
+        und OHNE Authorization: Bearer. Laut Adobe Stock Licensing API wird der
+        Access-Token für Downloads als URL-Parameter ?token=… erwartet; die
+        JSON-Such-/Lizenz-Header (_headers) können auf dem Binär-Download zu
+        HTTP 400 führen, obwohl Content/License bereits erfolgreich war."""
+        return {
+            "x-api-key": api_key,
+            "x-product": self._product_name(),
+            "User-Agent": ADOBE_STOCK_REQUEST_USER_AGENT,
+        }
+
+    @staticmethod
+    def _prepare_download_url(url: str, access_token: str) -> str:
+        """Hängt ?token=… an die von Content/License gelieferte Download-URL
+        an, falls noch nicht vorhanden — Adobe Stock Libraries/Download."""
+        parsed = urllib.parse.urlparse(url)
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        if not (query.get("token") and query["token"][0]):
+            query["token"] = [access_token]
+        new_query = urllib.parse.urlencode(query, doseq=True)
+        return urllib.parse.urlunparse(parsed._replace(query=new_query))
+
     def search(self, request: SupplementRequest) -> list[SupplementCandidate]:
         api_key = get_api_key("ADOBE_STOCK_API_KEY")
         if not api_key:
@@ -517,8 +540,8 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         max_bytes überschreitet — max_bytes=None bedeutet keine Grenze
         (Fotos, oder ein Video, für das ohnehin bereits die kleinste
         Lizenzvariante läuft)."""
-        req = urllib.request.Request(url, headers=self._headers(api_key))
-        req.add_header("Authorization", f"Bearer {access_token}")
+        download_url = self._prepare_download_url(url, access_token)
+        req = urllib.request.Request(download_url, headers=self._download_headers(api_key))
         try:
             with urllib.request.urlopen(req, timeout=180) as response:
                 status = int(getattr(response, "status", 200) or 200)
@@ -544,6 +567,15 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         except AdobeAssetTooLargeError:
             local_path.unlink(missing_ok=True)
             raise
+        except urllib.error.HTTPError as exc:
+            try:
+                body = exc.read().decode("utf-8", errors="replace")[:500]
+            except Exception:
+                body = ""
+            local_path.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Adobe-Download fehlgeschlagen (HTTP {exc.code}): {body or exc.reason}"
+            ) from exc
         except (urllib.error.URLError, OSError) as exc:
             local_path.unlink(missing_ok=True)
             raise RuntimeError(f"Adobe-Download fehlgeschlagen: {exc}") from exc
