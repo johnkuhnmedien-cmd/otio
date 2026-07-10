@@ -470,6 +470,87 @@ def test_no_black_gap_when_fully_covered(tmp_path: Path) -> None:
     assert blockers == []
 
 
+# --- Phase G: exakte Lücken-Ermittlung + Item-Zuordnung ---
+
+
+def test_black_gap_is_attributed_to_the_responsible_item_only(tmp_path: Path) -> None:
+    """Phase G (Nutzervorgabe): ein einzelnes fehlendes VisualSegment
+    INNERHALB eines langen Voice-over-Abschnitts darf nicht mehr den
+    GESAMTEN Abschnitt als Loch melden — nur der tatsächlich betroffene
+    Cut-Plan-Item bekommt den Blocker, MIT cut_item_id."""
+    project = _make_project(tmp_path)
+    audio_item = _minimal_audio_item(timeline_start_sec=0.0, timeline_end_sec=15.0)
+    segment_1 = _minimal_segment(segment_id="seg_1", timeline_in_sec=0.0, timeline_out_sec=5.0)
+    segment_3 = _minimal_segment(segment_id="seg_3", timeline_in_sec=10.0, timeline_out_sec=15.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1],
+                            timeline_start_sec=0.0, timeline_end_sec=5.0, duration_sec=5.0)
+    item_2_missing = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[],
+                                    timeline_start_sec=5.0, timeline_end_sec=10.0, duration_sec=5.0,
+                                    chosen_asset_id="", asset_selection_status="SUPPLEMENT_REQUIRED")
+    item_3 = _minimal_item(cut_item_id="cut_3", planned_visual_segments=[segment_3],
+                            timeline_start_sec=10.0, timeline_end_sec=15.0, duration_sec=5.0)
+    cut_plan = _minimal_cut_plan(project, audio_items=[audio_item], items=[item_1, item_2_missing, item_3])
+
+    warnings, blockers = validate_no_black_gap_during_voiceover(project, cut_plan)
+    gap_blockers = [error for error in blockers if error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER]
+    assert len(gap_blockers) == 1
+    assert gap_blockers[0].cut_item_id == "cut_2"
+    assert "cut_2" in gap_blockers[0].message
+
+
+def test_black_gap_without_responsible_item_has_no_cut_item_id(tmp_path: Path) -> None:
+    """Eine Lücke, die KEINEM Cut-Plan-Item zeitlich zuordenbar ist (z. B.
+    weil gar kein Item für diesen Zeitraum existiert), bleibt weiterhin ein
+    document-/timeline-weiter Blocker ohne cut_item_id — kein falsch-
+    positiver Supplement-Trigger für ein unbeteiligtes Item."""
+    project = _make_project(tmp_path)
+    audio_item = _minimal_audio_item(timeline_start_sec=0.0, timeline_end_sec=10.0)
+    cut_plan = _minimal_cut_plan(project, audio_items=[audio_item], items=[])
+
+    warnings, blockers = validate_no_black_gap_during_voiceover(project, cut_plan)
+    gap_blockers = [error for error in blockers if error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER]
+    assert len(gap_blockers) == 1
+    assert gap_blockers[0].cut_item_id == ""
+
+
+def test_black_gap_attributes_multiple_items_when_gap_spans_several(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    audio_item = _minimal_audio_item(timeline_start_sec=0.0, timeline_end_sec=10.0)
+    item_a = _minimal_item(cut_item_id="cut_a", planned_visual_segments=[],
+                            timeline_start_sec=0.0, timeline_end_sec=5.0, duration_sec=5.0)
+    item_b = _minimal_item(cut_item_id="cut_b", planned_visual_segments=[],
+                            timeline_start_sec=5.0, timeline_end_sec=10.0, duration_sec=5.0)
+    cut_plan = _minimal_cut_plan(project, audio_items=[audio_item], items=[item_a, item_b])
+
+    warnings, blockers = validate_no_black_gap_during_voiceover(project, cut_plan)
+    gap_blockers = [error for error in blockers if error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER]
+    assert {error.cut_item_id for error in gap_blockers} == {"cut_a", "cut_b"}
+
+
+def test_black_gap_blocker_has_fix_hint_and_is_retryable_when_attributed(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    audio_item = _minimal_audio_item(timeline_start_sec=0.0, timeline_end_sec=5.0)
+    item = _minimal_item(planned_visual_segments=[], timeline_start_sec=0.0, timeline_end_sec=5.0, duration_sec=5.0)
+    cut_plan = _minimal_cut_plan(project, audio_items=[audio_item], items=[item])
+
+    warnings, blockers = validate_no_black_gap_during_voiceover(project, cut_plan)
+    gap_blockers = [error for error in blockers if error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER]
+    assert len(gap_blockers) == 1
+    assert gap_blockers[0].fix_hint != ""
+    assert gap_blockers[0].is_retryable_by_llm is True
+
+
+def test_black_gap_status_classification_is_needs_review(tmp_path: Path) -> None:
+    """Seit der Item-Zuordnung ist BLACK_GAP_DURING_VOICEOVER genauso
+    'lösbar' wie MISSING_ASSET_MAPPING -> NEEDS_REVIEW statt hart BLOCKED."""
+    project = _make_project(tmp_path)
+    report = CutPlanValidationReport(
+        project_id=project.id,
+        blockers=[CutPlanValidationError(type=CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER, severity="BLOCKER")],
+    )
+    assert classify_cut_plan_status(report) == CUT_PLAN_STATUS_NEEDS_REVIEW
+
+
 # --- 21-23: Shot Duration ---
 
 

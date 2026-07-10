@@ -394,6 +394,22 @@ def test_requests_are_not_built_when_duration_is_zero_even_without_timing_blocke
     assert len(document.requests) == 0
 
 
+def test_requests_are_built_for_items_with_black_gap_blocker_from_validation(tmp_path: Path) -> None:
+    """Phase G: seit validate_no_black_gap_during_voiceover das
+    verantwortliche Item ermittelt, muss build_supplement_requests_from_
+    cut_plan (Phase F) dafür einen Supplement Request erzeugen."""
+    project = _make_project(tmp_path)
+    item = _minimal_item(
+        chosen_asset_id="", asset_selection_status="UNRESOLVED", needs_supplement_asset=False,
+        supplement_reason="", asset_selection_reason="", blockers=["BLACK_GAP_DURING_VOICEOVER"],
+    )
+    cut_plan = _minimal_cut_plan(project, items=[item])
+
+    document = build_supplement_requests_from_cut_plan(project, cut_plan)
+    assert len(document.requests) == 1
+    assert "BLACK_GAP_DURING_VOICEOVER" in document.requests[0].reason
+
+
 def test_requests_are_not_built_for_items_without_any_asset_related_blocker(tmp_path: Path) -> None:
     """Ein völlig unauffälliges, korrekt versorgtes Item darf keinen
     Supplement Request erzeugen — Regressionsschutz gegen zu aggressive

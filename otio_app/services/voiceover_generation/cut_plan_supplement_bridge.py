@@ -54,6 +54,7 @@ from otio_app.defaults import (
     CUT_PLAN_ERROR_ASSET_FILE_MISSING,
     CUT_PLAN_ERROR_ASSET_REUSE_DISTANCE_TOO_SHORT,
     CUT_PLAN_ERROR_ASSET_TOO_SHORT,
+    CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER,
     CUT_PLAN_ERROR_INVALID_ASSET_ID,
     CUT_PLAN_ERROR_INVALID_AUDIO_PATH,
     CUT_PLAN_ERROR_MAX_ASSET_USAGE_EXCEEDED,
@@ -185,6 +186,12 @@ _ASSET_RELATED_SUPPLEMENTABLE_ERROR_TYPES = frozenset(
         CUT_PLAN_ERROR_ASSET_TOO_SHORT,
         CUT_PLAN_ERROR_INVALID_ASSET_ID,
         CUT_PLAN_ERROR_ASSET_FILE_MISSING,
+        # Phase G (Nutzervorgabe): seit validate_no_black_gap_during_
+        # voiceover das verantwortliche Cut-Plan-Item ermittelt (siehe
+        # cut_plan_validator._items_overlapping_gap), lässt sich ein
+        # Black-Gap-Blocker genauso wie MISSING_ASSET_MAPPING durch einen
+        # Supplement Request beheben.
+        CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER,
     }
 )
 

@@ -112,6 +112,12 @@ _NEEDS_REVIEW_BLOCKER_TYPES = frozenset(
         CUT_PLAN_ERROR_MAX_ASSET_USAGE_EXCEEDED,
         CUT_PLAN_ERROR_ASSET_REUSE_DISTANCE_TOO_SHORT,
         CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED,
+        # Phase G (Nutzervorgabe): seit der Item-Zuordnung in
+        # validate_no_black_gap_during_voiceover ist ein Black-Gap-Blocker
+        # i. d. R. genauso lösbar wie MISSING_ASSET_MAPPING (Supplement-
+        # Beschaffung für das verantwortliche Item) — zählt daher ebenfalls
+        # als NEEDS_REVIEW statt als hart BLOCKED.
+        CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER,
     }
 )
 
@@ -729,18 +735,72 @@ def _merge_intervals(intervals: list[tuple[float, float]]) -> list[tuple[float, 
     return merged
 
 
-def _is_span_covered(merged_intervals: list[tuple[float, float]], span_start: float, span_end: float) -> bool:
+def _uncovered_subintervals(
+    merged_intervals: list[tuple[float, float]], span_start: float, span_end: float
+) -> list[tuple[float, float]]:
+    """Phase G (Nutzervorgabe, Juli 2026): liefert die TATSÄCHLICH
+    unbedeckten Teilbereiche innerhalb [span_start, span_end] — leer, wenn
+    vollständig abgedeckt. Ersetzt das frühere reine Ja/Nein von
+    _is_span_covered, damit ein einzelnes fehlendes VisualSegment
+    INNERHALB eines langen Voice-over-Abschnitts nicht mehr den GESAMTEN
+    Abschnitt als 'Loch' meldet, sondern nur den tatsächlich betroffenen
+    Teilbereich — Voraussetzung dafür, den/die verantwortlichen Cut-Plan-
+    Item(s) zu identifizieren (siehe _items_overlapping_gap)."""
     if span_end <= span_start + _DURATION_EPSILON:
-        return True
-    return any(
-        start <= span_start + _DURATION_EPSILON and end >= span_end - _DURATION_EPSILON
-        for start, end in merged_intervals
-    )
+        return []
+    cursor = span_start
+    gaps: list[tuple[float, float]] = []
+    for start, end in merged_intervals:
+        if end <= cursor + _DURATION_EPSILON:
+            continue
+        if start >= span_end - _DURATION_EPSILON:
+            break
+        effective_start = max(start, cursor)
+        if effective_start > cursor + _DURATION_EPSILON:
+            gaps.append((cursor, effective_start))
+        cursor = max(cursor, end)
+        if cursor >= span_end - _DURATION_EPSILON:
+            break
+    if cursor < span_end - _DURATION_EPSILON:
+        gaps.append((cursor, span_end))
+    return gaps
+
+
+def _items_overlapping_gap(
+    cut_plan: CutPlanDocument, gap_start: float, gap_end: float, *, folder_name: str | None
+) -> list[CutPlanItem]:
+    """Phase G: findet die Cut-Plan-Item(s), deren Audio-Zeitraum
+    (timeline_start_sec/timeline_end_sec) den gegebenen visuellen
+    Lücken-Teilbereich überlappt — meist genau EIN Item ohne
+    planned_visual_segments (SUPPLEMENT_REQUIRED/BLOCKED), gelegentlich
+    mehrere bei einer über eine Item-Grenze hinausreichenden Lücke.
+    folder_name=None (für die intro-Vorlauf-/Sektions-Pausen-Fälle, die
+    keinem einzelnen Ordner zugeordnet sind) durchsucht ALLE Items."""
+    matches: list[CutPlanItem] = []
+    for item in cut_plan.items:
+        if folder_name is not None and item.folder_name != folder_name:
+            continue
+        if item.timeline_end_sec <= gap_start + _DURATION_EPSILON:
+            continue
+        if item.timeline_start_sec >= gap_end - _DURATION_EPSILON:
+            continue
+        matches.append(item)
+    return matches
 
 
 def validate_no_black_gap_during_voiceover(
     project: Project, cut_plan: CutPlanDocument
 ) -> tuple[list[CutPlanValidationError], list[CutPlanValidationError]]:
+    """Phase G (Nutzervorgabe): meldet visuelle Lücken während aktivem
+    Voice-over nicht mehr nur als EINEN groben Blocker pro Audio-Abschnitt
+    (der bei einem einzigen fehlenden Segment fälschlich den GESAMTEN
+    Abschnitt als betroffen auswies), sondern pro tatsächlich unbedecktem
+    Teilbereich — UND, wenn ein verantwortliches Cut-Plan-Item gefunden
+    wird, MIT dessen cut_item_id. Das ist die Voraussetzung dafür, dass
+    build_supplement_requests_from_cut_plan (Phase F) für ein solches Item
+    automatisch einen Supplement Request erzeugt — vorher hatte
+    BLACK_GAP_DURING_VOICEOVER NIE eine cut_item_id und konnte deshalb nie
+    einem Item zugeordnet werden."""
     warnings: list[CutPlanValidationError] = []
     blockers: list[CutPlanValidationError] = []
 
@@ -752,32 +812,61 @@ def validate_no_black_gap_during_voiceover(
     coverage = _merge_intervals(all_segments)
     audio_items = sorted(cut_plan.audio_items, key=lambda item: item.timeline_start_sec)
 
+    def _emit_gap_blockers(
+        gap_start: float, gap_end: float, *, scope: str, folder_name: str, base_message: str
+    ) -> None:
+        for sub_start, sub_end in _uncovered_subintervals(coverage, gap_start, gap_end):
+            responsible_items = _items_overlapping_gap(
+                cut_plan, sub_start, sub_end, folder_name=folder_name or None
+            )
+            if responsible_items:
+                for item in responsible_items:
+                    item_scope = "sentence" if item.source_scope == AUDIO_SCOPE_FOLDER else "intro"
+                    blockers.append(
+                        _make_error(
+                            CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER,
+                            scope=item_scope,
+                            cut_item_id=item.cut_item_id,
+                            folder_name=item.folder_name,
+                            message=f"{item.cut_item_id}: visuelles Loch ({sub_start:.2f}s–{sub_end:.2f}s) — "
+                            "kein VisualSegment platziert.",
+                            fix_hint="Supplement-Asset beschaffen oder Asset-Auswahl erneut anwenden.",
+                            is_retryable_override=True,
+                        )
+                    )
+            else:
+                blockers.append(
+                    _make_error(
+                        CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER,
+                        scope=scope,
+                        folder_name=folder_name,
+                        message=f"{base_message} Lücke {sub_start:.2f}s–{sub_end:.2f}s ohne zugehöriges "
+                        "Cut-Plan-Item.",
+                    )
+                )
+
     if audio_items:
         first_audio = audio_items[0]
-        if not _is_span_covered(coverage, 0.0, first_audio.timeline_start_sec):
-            blockers.append(
-                _make_error(CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER, scope="timeline",
-                            message=f"V1 deckt den Videoanfang (0.0s bis {first_audio.timeline_start_sec:.2f}s) "
-                            "nicht durchgehend ab.")
-            )
+        _emit_gap_blockers(
+            0.0, first_audio.timeline_start_sec, scope="timeline", folder_name="",
+            base_message="V1 deckt den Videoanfang nicht durchgehend ab.",
+        )
 
     for audio_item in audio_items:
         label = audio_item.folder_name or "intro"
-        if not _is_span_covered(coverage, audio_item.timeline_start_sec, audio_item.timeline_end_sec):
-            blockers.append(
-                _make_error(CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER, scope="audio", folder_name=audio_item.folder_name,
-                            message=f"Visuelles Loch während aktivem Voice-over '{label}' "
-                            f"({audio_item.timeline_start_sec:.2f}s–{audio_item.timeline_end_sec:.2f}s).")
-            )
+        _emit_gap_blockers(
+            audio_item.timeline_start_sec, audio_item.timeline_end_sec, scope="audio",
+            folder_name=audio_item.folder_name,
+            base_message=f"Visuelles Loch während aktivem Voice-over '{label}'.",
+        )
 
     for i in range(len(audio_items) - 1):
         gap_start = audio_items[i].timeline_end_sec
         gap_end = audio_items[i + 1].timeline_start_sec
-        if gap_end > gap_start + _DURATION_EPSILON and not _is_span_covered(coverage, gap_start, gap_end):
-            blockers.append(
-                _make_error(CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER, scope="timeline",
-                            message=f"Pause zwischen Sektionen ({gap_start:.2f}s–{gap_end:.2f}s) ist visuell "
-                            "nicht abgedeckt.")
+        if gap_end > gap_start + _DURATION_EPSILON:
+            _emit_gap_blockers(
+                gap_start, gap_end, scope="timeline", folder_name="",
+                base_message="Pause zwischen Sektionen ist visuell nicht abgedeckt.",
             )
 
     return warnings, blockers
