@@ -253,6 +253,18 @@ VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT = 10
 VOICEOVER_GEN_MIN_FOLDER_WORDS = 50
 VOICEOVER_GEN_MAX_FOLDER_WORDS = 180
 
+# --- Asset-bewusste Cut-Plan-Vorbereitung, Phase 1 (Juli 2026 Nutzerwunsch):
+# neuer Standard-Zielwortanzahl-Bereich für Folder Voice-overs. Kürzere
+# Segmente lassen dem späteren Cut Plan mehr Spielraum bei Asset-Auswahl/
+# Split, ohne die Emotion/Atmosphäre des Textes zu verlieren. Gilt NUR für
+# NEU erzeugte FolderVoiceoverSetting-Werte (Modell-Default, Fallback bei
+# fehlender Dramaturgie-Empfehlung) sowie für den expliziten Button
+# "Zielwortanzahl 135 auf alle aktiven Folder anwenden" — überschreibt
+# NIEMALS automatisch bereits gespeicherte folder_voiceover_settings.json.
+VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS = 135
+VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS = 120
+VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS = 150
+
 FOLDER_INVENTORY_SUMMARIES_FILENAME = "folder_inventory_summaries.json"
 
 DRAMATURGY_ROLE_OPENER = "opener"

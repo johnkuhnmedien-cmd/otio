@@ -20,6 +20,9 @@ from otio_app.defaults import (
     VO_ERROR_MISSING_ASSET_MAPPING,
     VO_ERROR_MISSING_SUPPLEMENT_REASON,
     VO_ERROR_WEAK_ASSET_MATCH,
+    VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
     VOICEOVER_STATUS_CONFIRMED,
     VOICEOVER_STATUS_DRAFT,
     VOICEOVER_STATUS_NEEDS_USER_REVIEW,
@@ -572,9 +575,9 @@ def generate_folder_voiceover(
             order_index=entry.order_index,
             enabled=entry.enabled,
             dramaturgy_role=entry.dramaturgy_role,
-            target_words=entry.recommended_word_count or 90,
-            min_words=entry.recommended_min_words or 80,
-            max_words=entry.recommended_max_words or 100,
+            target_words=entry.recommended_word_count or VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
+            min_words=entry.recommended_min_words or VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
+            max_words=entry.recommended_max_words or VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
         )
 
     project_brief = load_project_brief(project)

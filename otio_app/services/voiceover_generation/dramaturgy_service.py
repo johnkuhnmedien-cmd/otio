@@ -10,7 +10,14 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from otio_app.defaults import DRAMATURGY_ROLES, DRAMATURGY_STATUS_CONFIRMED, DRAMATURGY_STATUS_DRAFT
+from otio_app.defaults import (
+    DRAMATURGY_ROLES,
+    DRAMATURGY_STATUS_CONFIRMED,
+    DRAMATURGY_STATUS_DRAFT,
+    VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
+)
 from otio_app.models import Project
 from otio_app.project_layout import (
     get_dramaturgy_plan_confirmed_path,
@@ -219,9 +226,15 @@ def _folder_entry_from_payload(entry: dict, *, default_order: int) -> Dramaturgy
         visual_strength_score=_float_field(entry, "visual_strength_score"),
         asset_diversity_score=_float_field(entry, "asset_diversity_score"),
         hook_potential_score=_float_field(entry, "hook_potential_score"),
-        recommended_word_count=_int_field(entry, "recommended_word_count", 90),
-        recommended_min_words=_int_field(entry, "recommended_min_words", 80),
-        recommended_max_words=_int_field(entry, "recommended_max_words", 100),
+        recommended_word_count=_int_field(
+            entry, "recommended_word_count", VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+        ),
+        recommended_min_words=_int_field(
+            entry, "recommended_min_words", VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS
+        ),
+        recommended_max_words=_int_field(
+            entry, "recommended_max_words", VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS
+        ),
         transition_goal_to_next=str(entry.get("transition_goal_to_next", "")),
         transition_from_previous_hint=str(entry.get("transition_from_previous_hint", "")),
         contrast_or_commonality_hint=str(entry.get("contrast_or_commonality_hint", "")),

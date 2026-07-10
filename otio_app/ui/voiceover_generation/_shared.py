@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import streamlit as st
@@ -101,6 +102,63 @@ def style_profile_metric_value(profile: VoiceoverStyleProfile | None) -> str:
     if profile is None:
         return "—"
     return profile.library_name or "✓"
+
+
+_GREEN_BUTTON_BACKGROUND = "#1e8e3e"
+_GREEN_BUTTON_HOVER_BACKGROUND = "#17703a"
+
+
+def render_new_feature_button(
+    label: str,
+    *,
+    key: str,
+    help: str | None = None,
+    disabled: bool = False,
+    use_container_width: bool = False,
+) -> bool:
+    """Rendert einen `st.button` in Grün — ausschließlich für NEU
+    hinzugefügte Funktionen dieser Pipeline (Nutzerwunsch, Juli 2026: 'Ich
+    will alle neu hinzugefügten Buttons in grün haben, damit ich die
+    Neuerungen sofort sehe'). Bestehende Buttons bleiben unverändert grau/
+    orange (Streamlit-Standard) — nur Buttons, die explizit über diesen
+    Helper gerendert werden, sind grün.
+
+    Nutzt die von Streamlit dokumentierte Kopplung `key` -> CSS-Klasse
+    `st-key-<sanitized key>` (siehe st.button-Dokumentation: 'if key is
+    provided, it will be used as a CSS class name prefixed with st-key-'),
+    um AUSSCHLIESSLICH diesen einen Button einzufärben, nicht andere
+    Widgets mit anderen keys."""
+    css_class_suffix = re.sub(r"[^a-zA-Z0-9_-]", "-", key.strip())
+    st.markdown(
+        f"""
+        <style>
+        .st-key-{css_class_suffix} button {{
+            background-color: {_GREEN_BUTTON_BACKGROUND};
+            border-color: {_GREEN_BUTTON_BACKGROUND};
+            color: white;
+        }}
+        .st-key-{css_class_suffix} button:hover,
+        .st-key-{css_class_suffix} button:focus:not(:active) {{
+            background-color: {_GREEN_BUTTON_HOVER_BACKGROUND};
+            border-color: {_GREEN_BUTTON_HOVER_BACKGROUND};
+            color: white;
+        }}
+        .st-key-{css_class_suffix} button:disabled {{
+            background-color: #a8d5b5;
+            border-color: #a8d5b5;
+            color: #f0f0f0;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    return st.button(
+        label,
+        key=key,
+        help=help,
+        disabled=disabled,
+        use_container_width=use_container_width,
+    )
 
 
 def require_without_voiceover_mode(project: Project) -> bool:

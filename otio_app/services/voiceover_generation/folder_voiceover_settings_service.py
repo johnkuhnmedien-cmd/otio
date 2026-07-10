@@ -10,6 +10,11 @@ from __future__ import annotations
 
 import json
 
+from otio_app.defaults import (
+    VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
+)
 from otio_app.models import Project
 from otio_app.project_layout import get_folder_voiceover_settings_path
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
@@ -27,6 +32,7 @@ __all__ = [
     "load_folder_voiceover_settings",
     "save_folder_voiceover_settings",
     "update_folder_voiceover_settings",
+    "apply_standard_word_target_to_enabled_settings",
     "enabled_settings",
 ]
 
@@ -170,6 +176,44 @@ def update_folder_voiceover_settings(
         updated.append(current.model_copy(update=updates))
 
     new_document = existing.model_copy(update={"settings": updated})
+    return save_folder_voiceover_settings(project, new_document)
+
+
+def apply_standard_word_target_to_enabled_settings(project: Project) -> FolderVoiceoverSettingsDocument:
+    """Setzt target_words/min_words/max_words für ALLE aktivierten
+    (enabled=True) Folder-Settings explizit auf den neuen Standard
+    (VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS/_MIN_WORDS/_MAX_WORDS) —
+    ausschließlich bei explizitem Klick auf den Button „Zielwortanzahl 135
+    auf alle aktiven Folder anwenden“ (Nutzerwunsch, Juli 2026). Bestehende
+    Settings werden NIE automatisch/heimlich überschrieben — nur dieser
+    eine, bewusste Aufruf ändert etwas.
+
+    Ändert AUSSCHLIESSLICH diese drei Wortanzahl-Felder; alle anderen
+    Settings (Übergänge, must_include/-avoid, folder_extra_prompt, etc.)
+    bleiben unverändert. Ändert NICHT bereits generierte Voice-over-Texte
+    selbst — dafür ist weiterhin ein expliziter „Erneut generieren“-Klick
+    nötig. Deaktivierte (enabled=False) Folder bleiben unverändert.
+
+    Wirft ValueError, wenn noch keine Settings existieren."""
+    existing = load_folder_voiceover_settings(project)
+    if existing is None:
+        raise ValueError("Keine Folder Voice-over Settings vorhanden — bitte zuerst erstellen.")
+
+    updated_settings = [
+        (
+            setting.model_copy(
+                update={
+                    "target_words": VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
+                    "min_words": VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
+                    "max_words": VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
+                }
+            )
+            if setting.enabled
+            else setting
+        )
+        for setting in existing.settings
+    ]
+    new_document = existing.model_copy(update={"settings": updated_settings})
     return save_folder_voiceover_settings(project, new_document)
 
 

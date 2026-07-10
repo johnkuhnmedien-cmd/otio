@@ -9,18 +9,25 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis
+from otio_app.defaults import (
+    VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
+)
 from otio_app.models import Project, ProjectMode
 from otio_app.project_layout import get_edit_plan_dir, get_exports_dir, get_folder_inventory_path
 from otio_app.services.plan_llm_client import PlanLlmResponse
 from otio_app.services.voiceover_generation.dramaturgy_service import save_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
     build_default_folder_voiceover_settings,
+    load_folder_voiceover_settings,
     save_folder_voiceover_settings,
 )
 from otio_app.services.voiceover_generation.models import DramaturgyFolderEntry, DramaturgyPlan
 from otio_app.services.voiceover_generation.voiceover_author_service import (
     generate_folder_voiceover,
     load_folder_voiceovers_confirmed,
+    load_folder_voiceovers_draft,
 )
 from otio_app.ui.voiceover_generation.folder_voiceovers_tab import render_folder_voiceovers_page
 
@@ -336,3 +343,102 @@ def test_bulk_unconfirm_all_button_click_unconfirms_all_folders(
     )
     confirmed = load_folder_voiceovers_confirmed(project)
     assert confirmed.items == []
+
+
+# --- Phase 1 (Juli 2026): grüner Button "Zielwortanzahl 135 anwenden" ---
+
+
+def test_apply_word_target_button_is_present_with_green_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nutzerwunsch: 'Ich will alle neu hinzugefügten Buttons in grün haben,
+    damit ich die Neuerungen sofort sehe.' Der Button selbst trägt das
+    Erkennungsmerkmal (🟢) direkt im Label."""
+    at = _run_repro(tmp_path, monkeypatch, "fvo-word-target-ui-project")
+    button_labels = {button.label for button in at.button}
+    assert "🟢 Zielwortanzahl 135 auf alle aktiven Folder anwenden" in button_labels
+
+
+def test_apply_word_target_button_click_overrides_enabled_folder_words(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Klick setzt target_words/min_words/max_words auf den neuen Standard —
+    unabhängig vom vorherigen (heuristik-basierten) Wert.
+
+    Nutzt (wie test_bulk_unconfirm_all_button_click_unconfirms_all_folders)
+    einen zweiten, separaten AppTest-Lauf mit REPRO_SETUP=none: das
+    Setup-Skript baut/speichert sonst bei JEDEM internen Rerun (ausgelöst
+    durch das st.rerun() im Button selbst) die Settings unconditionally neu
+    aus der Dramaturgie-Heuristik auf — das würde unseren Klick-Effekt in
+    genau diesem Testszenario sofort wieder überschreiben, obwohl die echte
+    Anwendung außerhalb dieses Test-Repro-Skripts das nicht tut."""
+    project_id = "fvo-word-target-click-project"
+    _run_repro(tmp_path, monkeypatch, project_id)
+
+    project = Project(
+        id=project_id,
+        name="Repro",
+        project_root=str(tmp_path / "USA"),
+        work_dir=str(tmp_path / "USA" / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    before = load_folder_voiceover_settings(project)
+    grand_canyon_before = next(s for s in before.settings if s.folder_name == "Grand Canyon")
+    # Sanity check: das Setup nutzt die Phase-3-Heuristik (recommended_word_count=0
+    # in der Dramaturgie), der Ausgangswert ist also NICHT bereits der neue Standard.
+    assert grand_canyon_before.target_words != VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+
+    monkeypatch.setenv("REPRO_SETUP", "none")
+    at = AppTest.from_file(str(_APPTEST_SCRIPT_PATH))
+    at.run()
+    assert not at.exception, at.exception
+
+    apply_button = next(
+        b for b in at.button if b.label == "🟢 Zielwortanzahl 135 auf alle aktiven Folder anwenden"
+    )
+    at = apply_button.click().run()
+    assert not at.exception, at.exception
+
+    after = load_folder_voiceover_settings(project)
+    grand_canyon_after = next(s for s in after.settings if s.folder_name == "Grand Canyon")
+    assert grand_canyon_after.target_words == VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+    assert grand_canyon_after.min_words == VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS
+    assert grand_canyon_after.max_words == VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS
+
+
+def test_apply_word_target_button_click_does_not_change_existing_voiceover_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nutzervorgabe: 'Der Button ändert nur Settings, nicht sofort Texte.'"""
+    project_id = "fvo-word-target-text-project"
+    _run_repro(tmp_path, monkeypatch, project_id)
+
+    project = Project(
+        id=project_id,
+        name="Repro",
+        project_root=str(tmp_path / "USA"),
+        work_dir=str(tmp_path / "USA" / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    draft_before = load_folder_voiceovers_draft(project)
+    text_before = next(item for item in draft_before.items if item.folder_name == "Grand Canyon")
+
+    monkeypatch.setenv("REPRO_SETUP", "none")
+    at = AppTest.from_file(str(_APPTEST_SCRIPT_PATH))
+    at.run()
+    assert not at.exception, at.exception
+
+    apply_button = next(
+        b for b in at.button if b.label == "🟢 Zielwortanzahl 135 auf alle aktiven Folder anwenden"
+    )
+    at = apply_button.click().run()
+    assert not at.exception, at.exception
+
+    draft_after = load_folder_voiceovers_draft(project)
+    text_after = next(item for item in draft_after.items if item.folder_name == "Grand Canyon")
+    assert text_after.voiceover_text_full == text_before.voiceover_text_full
+    assert text_after.status == text_before.status

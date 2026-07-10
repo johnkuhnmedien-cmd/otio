@@ -47,6 +47,9 @@ from otio_app.defaults import (
     VO_ERROR_TYPES_LLM_REVIEW,
     VOICEOVER_GEN_CUT_PLAN_SUPPLEMENT_QUERY_DEFAULT_MODEL,
     VOICEOVER_GEN_CUT_PLAN_SUPPLEMENT_QUERY_DEFAULT_PROVIDER,
+    VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
     VOICEOVER_GEN_DEFAULT_MODEL,
     VOICEOVER_GEN_DEFAULT_PROVIDER,
     VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT,
@@ -323,9 +326,9 @@ class FolderVoiceoverSetting(BaseModel):
     order_index: int = 0
     enabled: bool = True
     dramaturgy_role: str = "setup"
-    target_words: int = 90
-    min_words: int = 80
-    max_words: int = 100
+    target_words: int = VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+    min_words: int = VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS
+    max_words: int = VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS
     word_tolerance_percent: int = VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT
     transition_from_previous: bool = False
     transition_to_next: bool = False

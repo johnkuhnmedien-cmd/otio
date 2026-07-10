@@ -8,12 +8,16 @@ from otio_app.defaults import (
     DRAMATURGY_ROLES,
     ENERGY_CHOICES,
     FACTUALITY_MODE_CHOICES,
+    VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
     VOICEOVER_STATUS_PASS,
 )
 from otio_app.models import Project
 from otio_app.services.inventory_loader import folder_has_usable_inventory_data
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
+    apply_standard_word_target_to_enabled_settings,
     build_default_folder_voiceover_settings,
     load_folder_voiceover_settings,
     save_folder_voiceover_settings,
@@ -54,6 +58,7 @@ from otio_app.services.voiceover_generation.voiceover_review_service import (
 from otio_app.ui.project_context import render_project_selector
 from otio_app.ui.voiceover_generation._shared import (
     render_llm_model_selectbox,
+    render_new_feature_button,
     require_without_voiceover_mode,
     style_profile_metric_value,
 )
@@ -379,7 +384,7 @@ def render_folder_voiceovers_page() -> None:
 
     edited_rows = _render_settings_table(project, settings_doc)
 
-    col_save, col_regen = st.columns(2)
+    col_save, col_regen, col_word_target = st.columns(3)
     with col_save:
         if st.button("Settings speichern", key=f"vo_fvo_settings_save_{project.id}"):
             update_folder_voiceover_settings(project, edited_rows)
@@ -392,6 +397,23 @@ def render_folder_voiceovers_page() -> None:
             new_settings = build_default_folder_voiceover_settings(project)
             save_folder_voiceover_settings(project, new_settings)
             st.success("Settings neu aus Dramaturgie erzeugt.")
+            st.rerun()
+    with col_word_target:
+        if render_new_feature_button(
+            "🟢 Zielwortanzahl 135 auf alle aktiven Folder anwenden",
+            key=f"vo_fvo_apply_word_target_{project.id}",
+            help=f"NEU: setzt target_words/min_words/max_words für alle aktivierten Ordner explizit auf "
+            f"{VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS} (min {VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS}, "
+            f"max {VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS}) — kürzer und flexibler für den späteren Cut "
+            "Plan. Ändert NUR die Settings, nicht sofort die bereits erzeugten Texte. Deaktivierte Ordner "
+            "und alle anderen Settings-Felder bleiben unverändert.",
+        ):
+            apply_standard_word_target_to_enabled_settings(project)
+            st.success(
+                f"Zielwortanzahl {VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS} "
+                f"(min {VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS}, max {VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS}) "
+                "auf alle aktiven Ordner angewendet. Texte wurden nicht verändert."
+            )
             st.rerun()
 
     author_provider, author_model, review_provider, review_model = _render_model_settings(project)

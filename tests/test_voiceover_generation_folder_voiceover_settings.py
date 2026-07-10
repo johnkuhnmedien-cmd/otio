@@ -4,18 +4,30 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis
+from otio_app.defaults import (
+    VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
+    VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
+)
 from otio_app.models import Project, ProjectMode
 from otio_app.project_layout import get_folder_inventory_path, get_folder_voiceover_settings_path
 from otio_app.services.voiceover_generation.dramaturgy_service import save_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
+    apply_standard_word_target_to_enabled_settings,
     build_default_folder_voiceover_settings,
     enabled_settings,
     load_folder_voiceover_settings,
     save_folder_voiceover_settings,
     update_folder_voiceover_settings,
 )
-from otio_app.services.voiceover_generation.models import DramaturgyFolderEntry, DramaturgyPlan
+from otio_app.services.voiceover_generation.models import (
+    DramaturgyFolderEntry,
+    DramaturgyPlan,
+    FolderVoiceoverSetting,
+)
 
 
 def _make_project_with_confirmed_dramaturgy(tmp_path: Path) -> Project:
@@ -304,3 +316,87 @@ def test_update_folder_voiceover_settings_persists_transition_to_next(
     updated = update_folder_voiceover_settings(project, edited_rows)
     by_folder = {setting.folder_name: setting for setting in updated.settings}
     assert by_folder["Grand Canyon"].transition_to_next is True
+
+
+# --- Phase 1 (Juli 2026): neue Standard-Zielwortanzahl 135/120/150 ---
+
+
+def test_folder_voiceover_setting_model_default_is_135_words() -> None:
+    """Der reine Pydantic-Modell-Default (ohne jede weitere Angabe) muss dem
+    neuen Standard entsprechen — Nutzerwunsch, die Zielwortanzahl auf 135 zu
+    senken, um dem Cut Plan mehr Spielraum zu geben."""
+    setting = FolderVoiceoverSetting(folder_name="Grand Canyon")
+    assert setting.target_words == 135 == VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+    assert setting.min_words == 120 == VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS
+    assert setting.max_words == 150 == VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS
+
+
+def test_apply_standard_word_target_raises_without_existing_settings(tmp_path: Path) -> None:
+    project = _make_project_with_confirmed_dramaturgy(tmp_path)
+    with pytest.raises(ValueError):
+        apply_standard_word_target_to_enabled_settings(project)
+
+
+def test_apply_standard_word_target_only_touches_enabled_folders(tmp_path: Path) -> None:
+    """Nutzerwunsch: der Button darf nur aktivierte Ordner ändern —
+    deaktivierte Ordner (hier Yellowstone) bleiben unangetastet."""
+    project = _make_project_with_confirmed_dramaturgy(tmp_path)
+    document = build_default_folder_voiceover_settings(project)
+    # Vorab abweichende Werte setzen, damit ein Nicht-Verändern klar erkennbar ist.
+    document = document.model_copy(
+        update={
+            "settings": [
+                setting.model_copy(update={"target_words": 999, "min_words": 900, "max_words": 1000})
+                for setting in document.settings
+            ]
+        }
+    )
+    save_folder_voiceover_settings(project, document)
+
+    updated = apply_standard_word_target_to_enabled_settings(project)
+    by_folder = {setting.folder_name: setting for setting in updated.settings}
+
+    assert by_folder["Grand Canyon"].target_words == VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+    assert by_folder["Grand Canyon"].min_words == VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS
+    assert by_folder["Grand Canyon"].max_words == VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS
+
+    # Yellowstone ist deaktiviert -> bleibt bei den absichtlich abweichenden Werten.
+    assert by_folder["Yellowstone"].target_words == 999
+    assert by_folder["Yellowstone"].min_words == 900
+    assert by_folder["Yellowstone"].max_words == 1000
+
+
+def test_apply_standard_word_target_does_not_touch_other_fields(tmp_path: Path) -> None:
+    """Nur target_words/min_words/max_words dürfen sich ändern — alle
+    anderen Settings-Felder (z. B. energy, must_include) bleiben exakt
+    erhalten."""
+    project = _make_project_with_confirmed_dramaturgy(tmp_path)
+    document = build_default_folder_voiceover_settings(project)
+    document = document.model_copy(
+        update={
+            "settings": [
+                setting.model_copy(update={"energy": "high", "must_include": ["sunset"]})
+                if setting.folder_name == "Grand Canyon"
+                else setting
+                for setting in document.settings
+            ]
+        }
+    )
+    save_folder_voiceover_settings(project, document)
+
+    updated = apply_standard_word_target_to_enabled_settings(project)
+    by_folder = {setting.folder_name: setting for setting in updated.settings}
+    assert by_folder["Grand Canyon"].energy == "high"
+    assert by_folder["Grand Canyon"].must_include == ["sunset"]
+
+
+def test_apply_standard_word_target_persists_to_disk(tmp_path: Path) -> None:
+    project = _make_project_with_confirmed_dramaturgy(tmp_path)
+    document = build_default_folder_voiceover_settings(project)
+    save_folder_voiceover_settings(project, document)
+
+    apply_standard_word_target_to_enabled_settings(project)
+    reloaded = load_folder_voiceover_settings(project)
+    assert reloaded is not None
+    grand_canyon = next(s for s in reloaded.settings if s.folder_name == "Grand Canyon")
+    assert grand_canyon.target_words == VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
