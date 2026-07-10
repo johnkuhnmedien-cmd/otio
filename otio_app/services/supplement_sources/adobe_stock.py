@@ -27,8 +27,10 @@ from pathlib import Path
 
 from otio_app.analysis_models import SupplementAssetSidecar, SupplementCandidate, SupplementRequest
 from otio_app.defaults import (
+    ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
     ADOBE_STOCK_DEFAULT_PRODUCT_NAME,
     ADOBE_STOCK_LICENSE_ENDPOINT,
+    ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT,
     ADOBE_STOCK_LICENSE_TYPE_STANDARD,
     ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K,
     ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD,
@@ -116,9 +118,26 @@ def _adobe_media_type_filter(required_asset_type: str) -> str:
     return "any"
 
 
+def _compact_json(value: object, *, max_len: int = 700) -> str:
+    """Serialisiert Diagnoseobjekte lesbar und begrenzt die Länge für Trace/UI."""
+    try:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        text = str(value)
+    if len(text) <= max_len:
+        return text
+    return f"{text[: max_len - 3]}..."
+
+
+def _license_content_entry(payload: dict, content_id: str) -> dict:
+    contents = payload.get("contents") or {}
+    return contents.get(str(content_id)) or (next(iter(contents.values()), {}) if contents else {})
+
+
 class AdobeStockAdapter(SupplementSourceAdapter):
     provider = SUPPLEMENT_SOURCE_ADOBE
     last_debug_report: dict = {}
+    last_license_diagnostic: dict = {}
 
     def readiness(self) -> ProviderReadiness:
         if not get_api_key("ADOBE_STOCK_API_KEY"):
@@ -488,6 +507,137 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             adobe_content_type=str(file_entry.get("content_type") or ""),
         )
 
+    def _request_licensing_json(
+        self,
+        endpoint: str,
+        params: dict,
+        api_key: str,
+        access_token: str,
+        *,
+        timeout: int = 20,
+    ) -> dict:
+        url = f"{endpoint}?{urllib.parse.urlencode(params)}"
+        req = urllib.request.Request(url, headers=self._headers(api_key), method="GET")
+        req.add_header("Authorization", f"Bearer {access_token}")
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def _request_licensing_json_safe(
+        self,
+        endpoint: str,
+        params: dict,
+        api_key: str,
+        access_token: str,
+    ) -> dict:
+        """Diagnose-Aufrufe dürfen Content/License nicht abbrechen."""
+        try:
+            return self._request_licensing_json(endpoint, params, api_key, access_token)
+        except urllib.error.HTTPError as exc:
+            try:
+                body = exc.read().decode("utf-8", errors="replace")[:500]
+            except Exception:
+                body = ""
+            return {
+                "_error": f"HTTP {exc.code}",
+                "_message": body or exc.reason or str(exc),
+            }
+        except (urllib.error.URLError, json.JSONDecodeError, OSError) as exc:
+            return {"_error": type(exc).__name__, "_message": str(exc)}
+
+    @staticmethod
+    def _summarize_member_profile(payload: dict) -> dict:
+        entitlement = payload.get("available_entitlement") or {}
+        purchase_options = payload.get("purchase_options") or {}
+        member = payload.get("member") or {}
+        return {
+            "available_entitlement": {
+                "quota": entitlement.get("quota"),
+                "license_type_id": entitlement.get("license_type_id"),
+                "has_credit_model": entitlement.get("has_credit_model"),
+                "has_agency_model": entitlement.get("has_agency_model"),
+                "is_cce": entitlement.get("is_cce"),
+                "full_entitlement_quota": entitlement.get("full_entitlement_quota"),
+            },
+            "purchase_options": {
+                "state": purchase_options.get("state"),
+                "requires_checkout": purchase_options.get("requires_checkout"),
+                "message": purchase_options.get("message"),
+                "url": purchase_options.get("url"),
+            },
+            "member": member,
+            "possible_licenses": payload.get("possible_licenses"),
+            "license_references": payload.get("license_references"),
+            "_error": payload.get("_error"),
+            "_message": payload.get("_message"),
+        }
+
+    @staticmethod
+    def _summarize_content_info(payload: dict, content_id: str) -> dict:
+        entry = _license_content_entry(payload, content_id)
+        purchase_details = entry.get("purchase_details") or {}
+        return {
+            "content_id": entry.get("content_id", content_id),
+            "size": entry.get("size"),
+            "purchase_details": {
+                "state": purchase_details.get("state"),
+                "license": purchase_details.get("license"),
+                "date": purchase_details.get("date"),
+                "member_id": purchase_details.get("member_id"),
+                "stock_id": purchase_details.get("stock_id"),
+            },
+            "member": payload.get("member"),
+            "_error": payload.get("_error"),
+            "_message": payload.get("_message"),
+        }
+
+    @staticmethod
+    def _summarize_license_response(payload: dict, content_id: str) -> dict:
+        entry = _license_content_entry(payload, content_id)
+        purchase_details = entry.get("purchase_details") or {}
+        entitlement = payload.get("available_entitlement") or {}
+        purchase_options = payload.get("purchase_options") or {}
+        return {
+            "content_id": entry.get("content_id", content_id),
+            "size": entry.get("size"),
+            "purchase_details": {
+                "state": purchase_details.get("state"),
+                "license": purchase_details.get("license"),
+                "date": purchase_details.get("date"),
+                "url": purchase_details.get("url"),
+                "content_type": purchase_details.get("content_type"),
+                "width": purchase_details.get("width"),
+                "height": purchase_details.get("height"),
+            },
+            "available_entitlement": {
+                "quota": entitlement.get("quota"),
+                "license_type_id": entitlement.get("license_type_id"),
+                "has_credit_model": entitlement.get("has_credit_model"),
+                "has_agency_model": entitlement.get("has_agency_model"),
+                "is_cce": entitlement.get("is_cce"),
+                "full_entitlement_quota": entitlement.get("full_entitlement_quota"),
+            },
+            "purchase_options": {
+                "state": purchase_options.get("state"),
+                "requires_checkout": purchase_options.get("requires_checkout"),
+                "message": purchase_options.get("message"),
+                "url": purchase_options.get("url"),
+            },
+            "possible_licenses": payload.get("possible_licenses"),
+        }
+
+    def _format_license_diagnostic(self, diagnostic: dict) -> str:
+        parts: list[str] = []
+        member_profile = diagnostic.get("member_profile") or {}
+        content_info = diagnostic.get("content_info") or {}
+        license_response = diagnostic.get("license_response") or {}
+        if member_profile:
+            parts.append(f"Member/Profile={_compact_json(member_profile)}")
+        if content_info:
+            parts.append(f"Content/Info={_compact_json(content_info)}")
+        if license_response:
+            parts.append(f"Content/License={_compact_json(license_response)}")
+        return " | ".join(parts)
+
     def _license_asset(
         self, content_id: str, license_type: str, api_key: str, access_token: str
     ) -> dict:
@@ -495,33 +645,67 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         der Antwort (enthält u. a. url/content_type/width/height). Löst bei
         HTTP- oder Netzwerkfehlern sowie bei fehlender Download-URL in der
         Antwort ein RuntimeError aus — acquire() darf hier nie stillschweigend
-        weitermachen."""
-        params = {"content_id": content_id, "license": license_type, "locale": "en_US"}
-        url = f"{ADOBE_STOCK_LICENSE_ENDPOINT}?{urllib.parse.urlencode(params)}"
-        req = urllib.request.Request(
-            url, headers=self._headers(api_key), method="GET"
+        weitermachen.
+
+        Phase 12.12: Vor Content/License werden Member/Profile und Content/Info
+        abgefragt; bei Fehlern landen die kompakten Antworten in
+        last_license_diagnostic und in der RuntimeError-Meldung (sichtbar im
+        Auto-Resolve-Live-Trace als validation_reason)."""
+        self.last_license_diagnostic = {
+            "content_id": content_id,
+            "requested_license": license_type,
+            "member_profile": {},
+            "content_info": {},
+            "license_response": {},
+        }
+        diag_params = {"content_id": content_id, "license": license_type, "locale": "en_US"}
+        member_payload = self._request_licensing_json_safe(
+            ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT,
+            diag_params,
+            api_key,
+            access_token,
         )
-        # Authorization-Header ist für die Licensing-API zwingend — self._headers
-        # setzt ihn nur, wenn ADOBE_STOCK_ACCESS_TOKEN im Umfeld gesetzt ist;
-        # acquire() prüft das vorab explizit und ruft diese Methode sonst nicht auf.
-        req.add_header("Authorization", f"Bearer {access_token}")
+        self.last_license_diagnostic["member_profile"] = self._summarize_member_profile(member_payload)
+        content_info_payload = self._request_licensing_json_safe(
+            ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
+            diag_params,
+            api_key,
+            access_token,
+        )
+        self.last_license_diagnostic["content_info"] = self._summarize_content_info(
+            content_info_payload, content_id
+        )
+
+        params = {"content_id": content_id, "license": license_type, "locale": "en_US"}
         try:
-            with urllib.request.urlopen(req, timeout=30) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            payload = self._request_licensing_json(
+                ADOBE_STOCK_LICENSE_ENDPOINT, params, api_key, access_token, timeout=30
+            )
         except urllib.error.HTTPError as exc:
             try:
                 body = exc.read().decode("utf-8", errors="replace")[:500]
             except Exception:
                 body = ""
+            diagnostic_suffix = self._format_license_diagnostic(self.last_license_diagnostic)
+            detail = f"{body or exc.reason}"
+            if diagnostic_suffix:
+                detail = f"{detail} | Diagnose: {diagnostic_suffix}"
             raise RuntimeError(
-                f"Adobe-Lizenzierung fehlgeschlagen (HTTP {exc.code}, license={license_type}): "
-                f"{body or exc.reason}"
+                f"Adobe-Lizenzierung fehlgeschlagen (HTTP {exc.code}, license={license_type}): {detail}"
             ) from exc
         except (urllib.error.URLError, json.JSONDecodeError, OSError) as exc:
-            raise RuntimeError(f"Adobe-Lizenzierung fehlgeschlagen (license={license_type}): {exc}") from exc
+            diagnostic_suffix = self._format_license_diagnostic(self.last_license_diagnostic)
+            detail = str(exc)
+            if diagnostic_suffix:
+                detail = f"{detail} | Diagnose: {diagnostic_suffix}"
+            raise RuntimeError(f"Adobe-Lizenzierung fehlgeschlagen (license={license_type}): {detail}") from exc
 
-        contents = payload.get("contents") or {}
-        entry = contents.get(str(content_id)) or (next(iter(contents.values()), {}) if contents else {})
+        self.last_license_diagnostic["license_response"] = self._summarize_license_response(
+            payload, content_id
+        )
+        diagnostic_suffix = self._format_license_diagnostic(self.last_license_diagnostic)
+
+        entry = _license_content_entry(payload, content_id)
         purchase_details = entry.get("purchase_details") or {}
         state = str(purchase_details.get("state") or "unbekannt")
         response_license = str(purchase_details.get("license") or "")
@@ -531,24 +715,27 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             raise RuntimeError(
                 "Adobe-Lizenzierung nicht bestätigt: "
                 f"Content-ID {content_id}, angefragt license={license_type}, "
-                f"state={state}, response_license={response_license or '—'}, size={response_size or '—'}."
+                f"state={state}, response_license={response_license or '—'}, size={response_size or '—'}. "
+                f"Diagnose: {diagnostic_suffix}"
             )
         if response_license != license_type:
             raise RuntimeError(
                 "Adobe-Lizenzierung lieferte unerwarteten Lizenztyp: "
                 f"Content-ID {content_id}, angefragt license={license_type}, "
-                f"response_license={response_license or '—'}, state={state}, size={response_size or '—'}."
+                f"response_license={response_license or '—'}, state={state}, size={response_size or '—'}. "
+                f"Diagnose: {diagnostic_suffix}"
             )
         if not response_url:
             raise RuntimeError(
                 f"Adobe-Lizenzierung lieferte keine Download-URL für Content-ID {content_id} "
-                f"(license={license_type}, state={state}, size={response_size or '—'})."
+                f"(license={license_type}, state={state}, size={response_size or '—'}). "
+                f"Diagnose: {diagnostic_suffix}"
             )
         if "/Rest/Libraries/Download/" not in response_url:
             raise RuntimeError(
                 "Adobe-Lizenzierung lieferte keine Libraries/Download-URL: "
                 f"Content-ID {content_id}, license={license_type}, state={state}, "
-                f"url={response_url[:180]}."
+                f"url={response_url[:180]}. Diagnose: {diagnostic_suffix}"
             )
         return purchase_details
 

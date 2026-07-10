@@ -1104,6 +1104,11 @@ ADOBE_STOCK_REJECTED_REASON_GENTECH = "ADOBE_GENTECH_REJECTED"
 # Adobe-Stock-Plan, ein versehentlich falsch lizenziertes Asset kostet
 # nichts extra) ---
 ADOBE_STOCK_LICENSE_ENDPOINT = "https://stock.adobe.io/Rest/Libraries/1/Content/License"
+# Phase 12.12: Diagnose-Endpunkte vor Content/License — zeigen Quota,
+# purchase_options, possible_licenses und den aktuellen Lizenzstatus eines
+# Assets (hilfreich bei CC-Pro-/Unlimited-Plänen und manueller API-Freigabe).
+ADOBE_STOCK_CONTENT_INFO_ENDPOINT = "https://stock.adobe.io/Rest/Libraries/1/Content/Info"
+ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT = "https://stock.adobe.io/Rest/Libraries/1/Member/Profile"
 # Gültige license-Parameterwerte für Content/License — Fotos/3D/Templates
 # nutzen "Standard", Videos ausschließlich "Video_HD" oder "Video_4K"
 # (siehe Adobe-Stock-Lizenzierungs-Referenz).

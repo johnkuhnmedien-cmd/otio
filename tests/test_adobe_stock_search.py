@@ -32,7 +32,9 @@ import pytest
 
 from otio_app.analysis_models import SupplementCandidate, SupplementRequest
 from otio_app.defaults import (
+    ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
     ADOBE_STOCK_LICENSE_ENDPOINT,
+    ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT,
     PROVIDER_STATUS_CONFIG_MISSING,
     PROVIDER_STATUS_READY,
 )
@@ -550,6 +552,7 @@ def _license_response_body(
     state: str = "just_purchased",
     license: str = "Standard",
     no_url: bool = False,
+    size: str = "Original",
 ) -> bytes:
     purchase_details = {
         "state": state,
@@ -560,7 +563,70 @@ def _license_response_body(
     }
     if not no_url:
         purchase_details["url"] = download_url
-    return json.dumps({"contents": {str(content_id): {"content_id": str(content_id), "purchase_details": purchase_details}}}).encode()
+    return json.dumps(
+        {
+            "contents": {
+                str(content_id): {
+                    "content_id": str(content_id),
+                    "size": size,
+                    "purchase_details": purchase_details,
+                }
+            }
+        }
+    ).encode()
+
+
+def _member_profile_response_body(
+    *,
+    purchase_state: str = "possible",
+    quota: int = 999,
+    message: str = "Unlimited plan",
+    possible_licenses: list | None = None,
+    is_cce: bool = True,
+) -> bytes:
+    payload: dict = {
+        "available_entitlement": {
+            "quota": quota,
+            "license_type_id": 42,
+            "has_credit_model": False,
+            "has_agency_model": False,
+            "is_cce": is_cce,
+            "full_entitlement_quota": {"image_quota": quota},
+        },
+        "purchase_options": {
+            "state": purchase_state,
+            "requires_checkout": False,
+            "message": message,
+        },
+        "member": {"stock_id": 1272100},
+    }
+    if possible_licenses is not None:
+        payload["possible_licenses"] = possible_licenses
+    return json.dumps(payload).encode()
+
+
+def _content_info_response_body(
+    content_id: str,
+    *,
+    state: str = "not_purchased",
+    license: str = "",
+    size: str = "Comp",
+) -> bytes:
+    purchase_details: dict = {"state": state}
+    if license:
+        purchase_details["license"] = license
+    return json.dumps(
+        {
+            "contents": {
+                str(content_id): {
+                    "content_id": int(content_id) if str(content_id).isdigit() else content_id,
+                    "size": size,
+                    "purchase_details": purchase_details,
+                }
+            },
+            "member": {"member_id": 23456},
+        }
+    ).encode()
 
 
 def _normalize_download_lookup_url(url: str) -> str:
@@ -573,11 +639,48 @@ def _normalize_download_lookup_url(url: str) -> str:
     return urllib.parse.urlunparse(parsed._replace(query=new_query))
 
 
-def _dispatching_urlopen(license_bodies: dict, download_bodies: dict):
+def _with_diagnostic_routing(
+    base_fake_urlopen,
+    *,
+    member_profile_body: bytes | None = None,
+    content_info_bodies: dict[str, bytes] | None = None,
+):
+    """Leitet Member/Profile und Content/Info ab, bevor der Test-Handler greift."""
+
+    def fake_urlopen(request, timeout=20):
+        url = request.full_url
+        if url.startswith(ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT):
+            return _FakeStreamResponse(member_profile_body or _member_profile_response_body())
+        if url.startswith(ADOBE_STOCK_CONTENT_INFO_ENDPOINT):
+            params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            content_id = params.get("content_id", [""])[0]
+            bodies = content_info_bodies or {}
+            body = bodies.get(content_id) or _content_info_response_body(content_id)
+            return _FakeStreamResponse(body)
+        return base_fake_urlopen(request, timeout=timeout)
+
+    return fake_urlopen
+
+
+def _dispatching_urlopen(
+    license_bodies: dict,
+    download_bodies: dict,
+    *,
+    member_profile_body: bytes | None = None,
+    content_info_bodies: dict[str, bytes] | None = None,
+):
     """license_bodies: {license_type: bytes}; download_bodies: {url: _FakeStreamResponse}."""
 
     def fake_urlopen(request, timeout=20):
         url = request.full_url
+        if url.startswith(ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT):
+            return _FakeStreamResponse(member_profile_body or _member_profile_response_body())
+        if url.startswith(ADOBE_STOCK_CONTENT_INFO_ENDPOINT):
+            params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            content_id = params.get("content_id", [""])[0]
+            bodies = content_info_bodies or {}
+            body = bodies.get(content_id) or _content_info_response_body(content_id)
+            return _FakeStreamResponse(body)
         if url.startswith(ADOBE_STOCK_LICENSE_ENDPOINT):
             params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
             license_type = params["license"][0]
@@ -896,7 +999,7 @@ def test_acquire_sends_content_id_and_license_params_to_license_endpoint(
             )
         return _FakeStreamResponse(body, content_length=str(len(body)))
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", _with_diagnostic_routing(fake_urlopen))
     AdobeStockAdapter().acquire(_photo_candidate(), tmp_path / "req" / "assets")
 
     params = urllib.parse.parse_qs(urllib.parse.urlparse(captured["license_url"]).query)
@@ -926,7 +1029,7 @@ def test_acquire_download_uses_token_query_param_and_download_headers(
         captured["headers"] = {k.lower(): v for k, v in request.header_items()}
         return _FakeStreamResponse(body, content_length=str(len(body)))
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", _with_diagnostic_routing(fake_urlopen))
     AdobeStockAdapter().acquire(_photo_candidate(), tmp_path / "req" / "assets")
 
     params = urllib.parse.parse_qs(urllib.parse.urlparse(captured["download_url"]).query)
@@ -957,7 +1060,7 @@ def test_acquire_video_download_uses_4k_size_param(
         captured["download_url"] = url
         return _FakeStreamResponse(body, content_length=str(len(body)))
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", _with_diagnostic_routing(fake_urlopen))
     with patch(f"{_MODULE}.probe_duration_seconds", return_value=8.0):
         AdobeStockAdapter().acquire(_video_candidate(), tmp_path / "req" / "assets")
 
@@ -986,7 +1089,7 @@ def test_acquire_video_download_uses_hd_size_param(
         captured["download_url"] = url
         return _FakeStreamResponse(body, content_length=str(len(body)))
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", _with_diagnostic_routing(fake_urlopen))
     candidate = _video_candidate(adobe_comps={"Video_HD": {"url": download_url, "width": 1920, "height": 1080}})
     with patch(f"{_MODULE}.probe_duration_seconds", return_value=8.0):
         AdobeStockAdapter().acquire(candidate, tmp_path / "req" / "assets")
@@ -1014,7 +1117,7 @@ def test_acquire_download_http_error_includes_response_body(
             request.full_url, 400, "Bad Request", {}, io.BytesIO(error_body)
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", _with_diagnostic_routing(fake_urlopen))
     with pytest.raises(RuntimeError, match='Adobe-Download fehlgeschlagen \\(HTTP 400\\): .*"code":"20"'):
         AdobeStockAdapter().acquire(_photo_candidate(), tmp_path / "req" / "assets")
 
@@ -1024,3 +1127,74 @@ def test_acquire_does_not_raise_too_large_error_type_unused(monkeypatch: pytest.
     # ist (u. a. für zukünftige Wiederverwendung) — verhindert stille
     # Signatur-Regressionen.
     assert isinstance(AdobeAssetTooLargeError(), Exception)
+
+
+def test_acquire_license_failure_includes_member_profile_and_content_info_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 12.12: bei abgelehnter Lizenzierung erscheinen Diagnose-Details im Fehler."""
+    monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
+    monkeypatch.setenv("ADOBE_STOCK_ACCESS_TOKEN", "test-token")
+    member_body = _member_profile_response_body(
+        purchase_state="cancelled",
+        quota=0,
+        message="No entitlement for this license type",
+        possible_licenses=[
+            {"license": "4K", "license_label": "4K Video", "price_with_unit": "Included in CC Pro Plan"}
+        ],
+    )
+    content_info_body = _content_info_response_body("555", state="not_purchased", size="Comp")
+    fake_urlopen = _dispatching_urlopen(
+        license_bodies={
+            "Video_4K": _license_response_body(
+                "555",
+                download_url="https://stock.adobe.com/Rest/Libraries/Download/555/4",
+                content_type="video/mp4",
+                license="4K",
+                state="cancelled",
+                size="Comp",
+            )
+        },
+        download_bodies={},
+        member_profile_body=member_body,
+        content_info_bodies={"555": content_info_body},
+    )
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    adapter = AdobeStockAdapter()
+    with pytest.raises(RuntimeError, match="Diagnose: .*Member/Profile=.*purchase_options.*cancelled") as exc_info:
+        adapter.acquire(_video_candidate(), tmp_path / "req" / "assets")
+
+    assert "Content/Info=" in str(exc_info.value)
+    assert "possible_licenses" in str(exc_info.value)
+    assert adapter.last_license_diagnostic["member_profile"]["purchase_options"]["state"] == "cancelled"
+    assert adapter.last_license_diagnostic["content_info"]["size"] == "Comp"
+
+
+def test_acquire_calls_member_profile_and_content_info_before_license(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
+    monkeypatch.setenv("ADOBE_STOCK_ACCESS_TOKEN", "test-token")
+    download_url = "https://stock.adobe.com/Rest/Libraries/Download/666/1"
+    body = b"x" * 200_000
+    call_order: list[str] = []
+
+    def fake_urlopen(request, timeout=20):
+        url = request.full_url
+        if url.startswith(ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT):
+            call_order.append("member_profile")
+            return _FakeStreamResponse(_member_profile_response_body())
+        if url.startswith(ADOBE_STOCK_CONTENT_INFO_ENDPOINT):
+            call_order.append("content_info")
+            return _FakeStreamResponse(_content_info_response_body("666"))
+        if url.startswith(ADOBE_STOCK_LICENSE_ENDPOINT):
+            call_order.append("content_license")
+            return _FakeStreamResponse(
+                _license_response_body("666", download_url=download_url, content_type="image/jpeg")
+            )
+        return _FakeStreamResponse(body, content_length=str(len(body)))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    AdobeStockAdapter().acquire(_photo_candidate(), tmp_path / "req" / "assets")
+    assert call_order == ["member_profile", "content_info", "content_license"]
