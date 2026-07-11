@@ -208,6 +208,38 @@ def _render_model_settings(project: Project) -> tuple[str, str, str, str]:
     )
 
 
+def _render_closing_visual_plan_section(draft: FolderVoiceoverDraft) -> None:
+    """Nutzervorgabe (Juli 2026, "kein closing asset nach dem letzten
+    Satz, der die Pause ausfüllt"): zeigt den geplanten Abschluss-Shot
+    (siehe ClosingVisualPlan) an — rein informativ, keine eigene
+    Bearbeitung hier (Text/Assets werden über 'Erneut generieren'/den
+    späteren Correction-Loop angepasst, nicht manuell in diesem Panel)."""
+    st.markdown("**Closing Shot** (visueller Abschluss nach dem letzten Satz, kein eigener Text)")
+    plan = draft.closing_visual_plan
+    if not plan.primary_asset_id and not plan.needs_supplement_asset:
+        st.warning(
+            "Kein Closing Shot geplant — die Pause nach dem letzten Satz bleibt visuell "
+            "ungedeckt, falls das letzte Satz-Asset nicht lang genug gehalten werden kann. "
+            "Bitte erneut generieren."
+        )
+        return
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"**Visual Intent:** {plan.visual_intent or '—'}")
+        st.write(f"**Primary Asset:** {plan.primary_asset_id or '—'}")
+        st.write(f"**Backup Assets:** {', '.join(plan.backup_asset_ids) or '—'}")
+        st.write(f"**Second Backup Assets:** {', '.join(plan.second_backup_asset_ids) or '—'}")
+    with col2:
+        if plan.needs_supplement_asset:
+            st.warning(f"Supplement empfohlen: {plan.supplement_reason or '(kein Grund angegeben)'}")
+            if plan.supplement_search_hint:
+                st.caption(f"Suchvorschlag: `{plan.supplement_search_hint}`")
+        else:
+            st.success("Lokales Asset zugeordnet — kein Supplement nötig.")
+        if plan.asset_strategy_reason:
+            st.caption(plan.asset_strategy_reason)
+
+
 def _asset_readiness_session_key(project: Project, folder_name: str) -> str:
     return f"vo_fvo_asset_readiness_{folder_name}_{project.id}"
 
@@ -331,6 +363,8 @@ def _render_folder_draft(
         st.dataframe(rows, use_container_width=True, hide_index=True)
     else:
         st.caption("Keine sentence_items vorhanden.")
+
+    _render_closing_visual_plan_section(draft)
 
     _render_asset_readiness_section(project, folder_name, draft)
 

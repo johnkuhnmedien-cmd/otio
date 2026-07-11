@@ -130,6 +130,94 @@ def test_page_renders_with_confirmed_dramaturgy_and_draft(
     assert not get_exports_dir(project.work_dir_path).exists()
 
 
+# --- Closing Shot Panel (Nutzervorgabe Juli 2026, "kein closing asset nach
+# dem letzten Satz, der die Pause ausfüllt") ---
+
+
+def test_closing_shot_panel_warns_when_no_closing_shot_planned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _make_project(tmp_path, mode=ProjectMode.WITHOUT_VOICEOVER)
+    inv_path = get_folder_inventory_path(project.work_dir_path, "Grand Canyon")
+    inv_path.parent.mkdir(parents=True, exist_ok=True)
+    analysis = AssetFolderAnalysis(
+        folder="Grand Canyon",
+        assets=[AssetMediaAnalysis(path="Grand Canyon/clip1.mp4", description="Weite Aufnahme.")],
+    )
+    inv_path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
+
+    plan = DramaturgyPlan(
+        project_id=project.id,
+        recommended_folder_order=[
+            DramaturgyFolderEntry(folder_name="Grand Canyon", order_index=1, enabled=True)
+        ],
+    )
+    save_confirmed_dramaturgy(project, plan)
+    save_folder_voiceover_settings(project, build_default_folder_voiceover_settings(project))
+
+    fake_response = PlanLlmResponse(
+        provider="anthropic",
+        model="claude-sonnet-5",
+        raw_text='{"voiceover_text_full": "Text.", "sentence_items": []}',
+    )
+    with patch(f"{_AUTHOR_MODULE}.generate_plan_text_with_metadata", return_value=fake_response):
+        generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    _patch_project_selector(project, monkeypatch)
+    warnings: list[str] = []
+    monkeypatch.setattr("streamlit.warning", lambda msg, **k: warnings.append(msg))
+
+    render_folder_voiceovers_page()
+
+    assert any("Kein Closing Shot geplant" in msg for msg in warnings)
+
+
+def test_closing_shot_panel_shows_planned_shot_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _make_project(tmp_path, mode=ProjectMode.WITHOUT_VOICEOVER)
+    inv_path = get_folder_inventory_path(project.work_dir_path, "Grand Canyon")
+    inv_path.parent.mkdir(parents=True, exist_ok=True)
+    analysis = AssetFolderAnalysis(
+        folder="Grand Canyon",
+        assets=[
+            AssetMediaAnalysis(path="Grand Canyon/clip1.mp4", description="Weite Aufnahme."),
+            AssetMediaAnalysis(path="Grand Canyon/clip2.mp4", description="Luftaufnahme."),
+        ],
+    )
+    inv_path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
+
+    plan = DramaturgyPlan(
+        project_id=project.id,
+        recommended_folder_order=[
+            DramaturgyFolderEntry(folder_name="Grand Canyon", order_index=1, enabled=True)
+        ],
+    )
+    save_confirmed_dramaturgy(project, plan)
+    save_folder_voiceover_settings(project, build_default_folder_voiceover_settings(project))
+
+    fake_response = PlanLlmResponse(
+        provider="anthropic",
+        model="claude-sonnet-5",
+        raw_text=(
+            '{"voiceover_text_full": "Text.", "sentence_items": [], '
+            '"closing_visual_plan": {"visual_intent": "aerial establishing", '
+            '"primary_asset_id": "asset_clip2", "backup_asset_ids": [], '
+            '"needs_supplement_asset": false, "asset_strategy_reason": "Ruhiger Abschluss."}}'
+        ),
+    )
+    with patch(f"{_AUTHOR_MODULE}.generate_plan_text_with_metadata", return_value=fake_response):
+        generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    _patch_project_selector(project, monkeypatch)
+    successes: list[str] = []
+    monkeypatch.setattr("streamlit.success", lambda msg, **k: successes.append(msg))
+
+    render_folder_voiceovers_page()  # darf nicht werfen
+
+    assert any("kein Supplement nötig" in msg for msg in successes)
+
+
 def test_page_render_with_multiple_folders_does_not_reload_shared_documents_per_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
