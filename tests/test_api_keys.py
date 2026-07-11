@@ -66,7 +66,16 @@ def test_xai_provider_is_marked_implemented() -> None:
     provider = get_provider("XAI_API_KEY")
     assert provider is not None
     assert provider.implemented is True
-    assert "Grok" in provider.label
+    assert "Grok" in provider.label or "xAI" in provider.label
+
+
+def test_openrouter_provider_is_marked_implemented() -> None:
+    from otio_app.api_providers import get_provider
+
+    provider = get_provider("OPENROUTER_API_KEY")
+    assert provider is not None
+    assert provider.implemented is True
+    assert "OpenRouter" in provider.label
 
 
 def test_adobe_stock_product_name_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:

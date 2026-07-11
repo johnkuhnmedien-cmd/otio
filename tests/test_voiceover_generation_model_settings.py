@@ -99,6 +99,10 @@ def test_resolve_llm_model_id_for_xai() -> None:
     assert resolve_llm_model_id("xai", "grok-4.5") == "xai:grok-4.5"
 
 
+def test_resolve_llm_model_id_for_openrouter() -> None:
+    assert resolve_llm_model_id("openrouter", "x-ai/grok-4.5") == "openrouter:x-ai/grok-4.5"
+
+
 def test_resolve_llm_model_id_for_gemini_has_no_prefix() -> None:
     assert resolve_llm_model_id("gemini", "gemini-3.1-flash-lite") == "gemini-3.1-flash-lite"
 
@@ -113,6 +117,10 @@ def test_split_llm_model_id_for_anthropic() -> None:
 
 def test_split_llm_model_id_for_xai() -> None:
     assert split_llm_model_id("xai:grok-4.5") == ("xai", "grok-4.5")
+
+
+def test_split_llm_model_id_for_openrouter() -> None:
+    assert split_llm_model_id("openrouter:x-ai/grok-4.5") == ("openrouter", "x-ai/grok-4.5")
 
 
 def test_split_llm_model_id_for_gemini_has_no_prefix() -> None:
@@ -134,6 +142,15 @@ def test_grok_45_is_available_in_voiceover_model_choices() -> None:
     assert "xai:grok-4.5" in VOICEOVER_GEN_MODEL_CHOICES
     assert "Grok 4.5" in VOICEOVER_GEN_MODEL_LABELS["xai:grok-4.5"]
     assert combined_model_id(LlmRoleSettings(provider="xai", model="grok-4.5")) == "xai:grok-4.5"
+
+
+def test_openrouter_grok_45_is_available_in_voiceover_model_choices() -> None:
+    assert "openrouter:x-ai/grok-4.5" in VOICEOVER_GEN_MODEL_CHOICES
+    assert "OpenRouter" in VOICEOVER_GEN_MODEL_LABELS["openrouter:x-ai/grok-4.5"]
+    assert (
+        combined_model_id(LlmRoleSettings(provider="openrouter", model="x-ai/grok-4.5"))
+        == "openrouter:x-ai/grok-4.5"
+    )
 
 
 def test_every_curated_model_choice_has_a_label() -> None:
