@@ -1,4 +1,4 @@
-"""Text-LLM-Aufrufe für Schnittplan-Vorschläge (Gemini, OpenAI, Anthropic)."""
+"""Text-LLM-Aufrufe für Schnittplan-Vorschläge (Gemini, OpenAI, Anthropic, xAI/Grok)."""
 
 from __future__ import annotations
 
@@ -13,11 +13,16 @@ from otio_app.services.api_keys import get_api_key, is_api_key_set
 PROVIDER_GEMINI = "gemini"
 PROVIDER_OPENAI = "openai"
 PROVIDER_ANTHROPIC = "anthropic"
+PROVIDER_XAI = "xai"
+
+# OpenAI-kompatible Chat-Completions-API von xAI (Grok).
+XAI_API_BASE_URL = "https://api.x.ai/v1"
 
 _PROVIDER_ENV_KEYS = {
     PROVIDER_GEMINI: "GEMINI_API_KEY",
     PROVIDER_OPENAI: "OPENAI_API_KEY",
     PROVIDER_ANTHROPIC: "ANTHROPIC_API_KEY",
+    PROVIDER_XAI: "XAI_API_KEY",
 }
 
 
@@ -58,6 +63,8 @@ def plan_model_provider(model_id: str | None) -> str:
         return PROVIDER_OPENAI
     if value.startswith("anthropic:"):
         return PROVIDER_ANTHROPIC
+    if value.startswith("xai:"):
+        return PROVIDER_XAI
     return PROVIDER_GEMINI
 
 
@@ -73,7 +80,11 @@ def resolve_plan_model(model: Optional[str] = None) -> str:
         value = model.strip()
         if value in EDIT_PLAN_MODEL_CHOICES:
             return value
-        if value.startswith("openai:") or value.startswith("anthropic:"):
+        if (
+            value.startswith("openai:")
+            or value.startswith("anthropic:")
+            or value.startswith("xai:")
+        ):
             return value
         if value in GEMINI_MODEL_CHOICES:
             return value
@@ -153,6 +164,13 @@ def generate_plan_text_with_metadata(
         )
     elif provider == PROVIDER_ANTHROPIC:
         raw_text, token_usage = _generate_anthropic_text_with_usage(
+            prompt=prompt,
+            model=api_model,
+            max_output_tokens=max_output_tokens,
+            disable_thinking=disable_thinking,
+        )
+    elif provider == PROVIDER_XAI:
+        raw_text, token_usage = _generate_xai_text_with_usage(
             prompt=prompt,
             model=api_model,
             max_output_tokens=max_output_tokens,
@@ -311,6 +329,69 @@ def _generate_openai_text_with_usage(
         # Neuere/Reasoning-Modelle lehnen eine explizite temperature ab und
         # verlangen den API-Standardwert — ohne temperature erneut versuchen,
         # statt die Erzeugung komplett fehlschlagen zu lassen.
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=effective_max_tokens,
+        )
+    usage = getattr(response, "usage", None)
+    token_usage = _token_usage_dict(
+        input_tokens=getattr(usage, "prompt_tokens", None),
+        output_tokens=getattr(usage, "completion_tokens", None),
+        total_tokens=getattr(usage, "total_tokens", None),
+    )
+    choice = response.choices[0] if response.choices else None
+    finish_reason = getattr(choice, "finish_reason", None) if choice is not None else None
+    if finish_reason == "length":
+        raise PlanLlmTruncatedResponseError(
+            f"Die Antwort wurde bei max_tokens={effective_max_tokens} abgeschnitten "
+            "(finish_reason=length). Der Prompt ist wahrscheinlich zu umfangreich (z. B. "
+            "sehr viele Ordner) für eine vollständige Antwort in diesem Limit. Bitte "
+            "weniger Ordner gleichzeitig planen oder den Prompt kürzen."
+        )
+    message = choice.message.content if choice is not None else None
+    text = (message or "").strip()
+    if not text:
+        raise PlanLlmTruncatedResponseError(
+            "Das Modell hat keinen verwertbaren Text zurückgegeben. Bitte erneut versuchen."
+        )
+    return text, token_usage
+
+
+def _generate_xai_text_with_usage(
+    *,
+    prompt: str,
+    model: str,
+    max_output_tokens: int | None = None,
+    disable_thinking: bool = False,
+) -> tuple[str, dict[str, int]]:
+    """xAI/Grok über die OpenAI-kompatible Chat-Completions-API.
+
+    disable_thinking hat hier aktuell keine Wirkung (kein äquivalenter
+    Chat-Completions-Parameter wie bei Anthropic/Gemini).
+    """
+    del disable_thinking
+    api_key = get_api_key("XAI_API_KEY")
+    if not api_key:
+        raise PlanLlmNotConfiguredError(
+            "XAI_API_KEY ist nicht gesetzt. "
+            "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
+        )
+    _require_sdk_module("openai")
+    from openai import BadRequestError, OpenAI
+
+    effective_max_tokens = max_output_tokens or DEFAULT_MAX_OUTPUT_TOKENS
+    client = OpenAI(api_key=api_key, base_url=XAI_API_BASE_URL)
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=effective_max_tokens,
+        )
+    except BadRequestError as exc:
+        if not _is_temperature_rejected_error(exc):
+            raise
         response = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],

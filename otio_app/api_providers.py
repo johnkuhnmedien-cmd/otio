@@ -41,6 +41,14 @@ API_PROVIDERS: tuple[ApiProvider, ...] = (
         implemented=True,
     ),
     ApiProvider(
+        env_key="XAI_API_KEY",
+        label="xAI (Grok)",
+        description="Folder-Voiceover-Skripte und Planungs-LLMs mit Grok 4.5 (OpenAI-kompatible API).",
+        placeholder="xai-…",
+        docs_url="https://console.x.ai/",
+        implemented=True,
+    ),
+    ApiProvider(
         env_key="ELEVENLABS_API_KEY",
         label="ElevenLabs",
         description="Text-to-Speech für die Voice-over-Generierungs-Pipeline (Projekt ohne Voice-Over).",

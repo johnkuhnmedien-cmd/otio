@@ -60,6 +60,15 @@ def test_adobe_stock_providers_are_marked_implemented() -> None:
     assert access_token_provider.implemented is True
 
 
+def test_xai_provider_is_marked_implemented() -> None:
+    from otio_app.api_providers import get_provider
+
+    provider = get_provider("XAI_API_KEY")
+    assert provider is not None
+    assert provider.implemented is True
+    assert "Grok" in provider.label
+
+
 def test_adobe_stock_product_name_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
     from otio_app.defaults import ADOBE_STOCK_DEFAULT_PRODUCT_NAME
     from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
