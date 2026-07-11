@@ -256,6 +256,45 @@ def _asset_readiness_all_session_key(project: Project) -> str:
     return f"vo_fvo_asset_readiness_all_{project.id}"
 
 
+def _folder_voiceover_text_widget_key(project: Project, folder_name: str) -> str:
+    return f"vo_fvo_text_{folder_name}_{project.id}"
+
+
+def _folder_voiceover_text_sync_key(project: Project, folder_name: str) -> str:
+    return f"vo_fvo_text_sync_{folder_name}_{project.id}"
+
+
+def folder_voiceover_text_draft_token(draft: FolderVoiceoverDraft) -> str:
+    """Identifiziert den persistierten Text-Stand eines Drafts.
+
+    Wird genutzt, um das Streamlit-Textfeld nach Regenerieren / Review-
+    Correction / Asset-Allokations-Correction auf den neuen Draft zu
+    synchronisieren — ohne ungespeicherte Tipparbeit zu verwerfen, solange
+    sich der Draft auf der Platte nicht geändert hat."""
+    correction_part = "|".join(draft.correction_run_ids)
+    updated_at = draft.updated_at.isoformat() if draft.updated_at is not None else ""
+    return f"{draft.author_run_id}|{correction_part}|{updated_at}|{draft.word_count}|{len(draft.voiceover_text_full)}"
+
+
+def _sync_folder_voiceover_text_widget(
+    project: Project, folder_name: str, draft: FolderVoiceoverDraft
+) -> str:
+    """Stellt sicher, dass ``st.session_state[text_key]`` zum aktuellen Draft
+    passt, BEVOR das ``st.text_area`` gerendert wird.
+
+    Bug (Juli 2026): das Textfeld wurde nur beim ersten Besuch befüllt
+    (``if key not in session_state``). Nach „Erneut generieren“ / Bulk-
+    Asset-Allokation blieb alter Session-Text stehen, während Wortanzahl,
+    Satz-Tabelle und Closing Shot den neuen Draft zeigten."""
+    text_key = _folder_voiceover_text_widget_key(project, folder_name)
+    sync_key = _folder_voiceover_text_sync_key(project, folder_name)
+    token = folder_voiceover_text_draft_token(draft)
+    if st.session_state.get(sync_key) != token:
+        st.session_state[text_key] = draft.voiceover_text_full
+        st.session_state[sync_key] = token
+    return text_key
+
+
 def _render_bulk_asset_readiness_summary(reports: list[FolderAssetReadinessReport]) -> None:
     """Kompakte Übersicht nach „Alle Asset-Readiness prüfen“."""
     pass_count = sum(1 for report in reports if report.status == ASSET_READINESS_STATUS_PASS)
@@ -421,9 +460,7 @@ def _render_folder_draft(
             "Dieser Voice-over-Entwurf basiert möglicherweise auf veralteten Einstellungen."
         )
 
-    text_key = f"vo_fvo_text_{folder_name}_{project.id}"
-    if text_key not in st.session_state:
-        st.session_state[text_key] = draft.voiceover_text_full
+    text_key = _sync_folder_voiceover_text_widget(project, folder_name, draft)
     text_value = st.text_area("Voice-over-Text", key=text_key, height=200)
 
     col1, col2, col3 = st.columns(3)
@@ -806,8 +843,15 @@ def _render_bulk_draft_actions(
                 if draft is None:
                     continue
                 checked_count += 1
-                text_key = f"vo_fvo_text_{entry.folder_name}_{project.id}"
-                text_value = st.session_state.get(text_key, draft.voiceover_text_full)
+                text_key = _folder_voiceover_text_widget_key(project, entry.folder_name)
+                sync_key = _folder_voiceover_text_sync_key(project, entry.folder_name)
+                # Verhindert, dass ein veralteter Session-Text (vor Sync des
+                # Textfelds) einen frisch regenerierten/korrigierten Draft
+                # überschreibt — siehe _sync_folder_voiceover_text_widget.
+                if st.session_state.get(sync_key) != folder_voiceover_text_draft_token(draft):
+                    text_value = draft.voiceover_text_full
+                else:
+                    text_value = st.session_state.get(text_key, draft.voiceover_text_full)
                 if text_value != draft.voiceover_text_full:
                     changed_count += 1
                 # Unveränderten Text erneut zu speichern ist ein No-Op (siehe

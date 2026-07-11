@@ -823,3 +823,118 @@ def test_bulk_asset_aware_regen_button_click_updates_all_enabled_folders(
     after = load_folder_voiceover_settings(project)
     grand_canyon_after = next(s for s in after.settings if s.folder_name == "Grand Canyon")
     assert grand_canyon_after.target_words == VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+
+
+def test_folder_voiceover_text_draft_token_changes_when_author_run_changes() -> None:
+    from datetime import datetime, timezone
+
+    from otio_app.services.voiceover_generation.models import FolderVoiceoverDraft
+    from otio_app.ui.voiceover_generation.folder_voiceovers_tab import (
+        folder_voiceover_text_draft_token,
+    )
+
+    draft_a = FolderVoiceoverDraft(
+        project_id="p",
+        folder_name="Grand Canyon",
+        voiceover_text_full="Alter Text mit vielen Woertern hier.",
+        word_count=6,
+        author_run_id="run-old",
+        updated_at=datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc),
+    )
+    draft_b = draft_a.model_copy(
+        update={
+            "voiceover_text_full": "Neuer kurzer Text.",
+            "word_count": 3,
+            "author_run_id": "run-new",
+            "updated_at": datetime(2026, 7, 11, 13, 0, tzinfo=timezone.utc),
+        }
+    )
+    assert folder_voiceover_text_draft_token(draft_a) != folder_voiceover_text_draft_token(draft_b)
+
+
+def test_sync_folder_voiceover_text_widget_resets_stale_session_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reproduziert den Anzeige-Mismatch: Session hält alten Text, Draft ist neu —
+    nach Sync muss das Textfeld den Draft zeigen."""
+    from datetime import datetime, timezone
+
+    import streamlit as st
+
+    from otio_app.services.voiceover_generation.models import FolderVoiceoverDraft
+    from otio_app.ui.voiceover_generation.folder_voiceovers_tab import (
+        _folder_voiceover_text_sync_key,
+        _folder_voiceover_text_widget_key,
+        _sync_folder_voiceover_text_widget,
+        folder_voiceover_text_draft_token,
+    )
+
+    project = _make_project(tmp_path, mode=ProjectMode.WITHOUT_VOICEOVER)
+    folder = "Grand Canyon"
+    old_draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name=folder,
+        voiceover_text_full="ALTER langer Text.",
+        word_count=3,
+        author_run_id="run-old",
+        updated_at=datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc),
+    )
+    new_draft = old_draft.model_copy(
+        update={
+            "voiceover_text_full": "NEUER kurzer Text.",
+            "word_count": 3,
+            "author_run_id": "run-new",
+            "updated_at": datetime(2026, 7, 11, 13, 0, tzinfo=timezone.utc),
+        }
+    )
+
+    text_key = _folder_voiceover_text_widget_key(project, folder)
+    sync_key = _folder_voiceover_text_sync_key(project, folder)
+    fake_state = {
+        text_key: old_draft.voiceover_text_full,
+        sync_key: folder_voiceover_text_draft_token(old_draft),
+    }
+    monkeypatch.setattr(st, "session_state", fake_state)
+
+    _sync_folder_voiceover_text_widget(project, folder, new_draft)
+
+    assert fake_state[text_key] == "NEUER kurzer Text."
+    assert fake_state[sync_key] == folder_voiceover_text_draft_token(new_draft)
+
+
+def test_sync_folder_voiceover_text_widget_keeps_unsaved_edits_for_same_draft(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime, timezone
+
+    import streamlit as st
+
+    from otio_app.services.voiceover_generation.models import FolderVoiceoverDraft
+    from otio_app.ui.voiceover_generation.folder_voiceovers_tab import (
+        _folder_voiceover_text_sync_key,
+        _folder_voiceover_text_widget_key,
+        _sync_folder_voiceover_text_widget,
+        folder_voiceover_text_draft_token,
+    )
+
+    project = _make_project(tmp_path, mode=ProjectMode.WITHOUT_VOICEOVER)
+    folder = "Grand Canyon"
+    draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name=folder,
+        voiceover_text_full="Gespeicherter Text.",
+        word_count=2,
+        author_run_id="run-1",
+        updated_at=datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc),
+    )
+    text_key = _folder_voiceover_text_widget_key(project, folder)
+    sync_key = _folder_voiceover_text_sync_key(project, folder)
+    fake_state = {
+        text_key: "Ungespeicherte Tipparbeit.",
+        sync_key: folder_voiceover_text_draft_token(draft),
+    }
+    monkeypatch.setattr(st, "session_state", fake_state)
+
+    _sync_folder_voiceover_text_widget(project, folder, draft)
+
+    assert fake_state[text_key] == "Ungespeicherte Tipparbeit."
