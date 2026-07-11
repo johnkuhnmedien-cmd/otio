@@ -264,6 +264,14 @@ def _folder_voiceover_text_sync_key(project: Project, folder_name: str) -> str:
     return f"vo_fvo_text_sync_{folder_name}_{project.id}"
 
 
+def _folder_draft_open_key(project: Project, folder_name: str) -> str:
+    """Session-Flag: schwere Draft-UI (Textfeld, Tabelle, Buttons) nur laden,
+    wenn der Nutzer den Ordner explizit geöffnet hat — sonst würde Streamlit
+    bei JEDEM Seiten-Rerun alle Expander-Bodies inkl. is_draft_stale/
+    Inventory/ffprobe ausführen (auch zugeklappt)."""
+    return f"vo_fvo_draft_open_{folder_name}_{project.id}"
+
+
 def folder_voiceover_text_draft_token(draft: FolderVoiceoverDraft) -> str:
     """Identifiziert den persistierten Text-Stand eines Drafts.
 
@@ -744,6 +752,10 @@ def render_folder_voiceovers_page() -> None:
             st.rerun()
 
     st.subheader("Drafts")
+    st.caption(
+        "Ordner-Details werden erst nach „Öffnen“ geladen — sonst baut Streamlit bei jedem "
+        "Klick alle Drafts neu (auch zugeklappte Expander). „Schließen“ entlädt die schwere UI wieder."
+    )
     draft_document = load_folder_voiceovers_draft(project)
     confirmed_document = load_folder_voiceovers_confirmed(project)
     confirmed_names = {item.folder_name for item in confirmed_document.items}
@@ -771,6 +783,38 @@ def render_folder_voiceovers_page() -> None:
             if draft is None:
                 st.info("Noch kein Voice-over-Entwurf für diesen Ordner.")
                 continue
+
+            open_key = _folder_draft_open_key(project, entry.folder_name)
+            if not st.session_state.get(open_key):
+                meta_cols = st.columns([1, 1, 3])
+                with meta_cols[0]:
+                    if render_new_feature_button(
+                        "🟢 Öffnen",
+                        key=f"vo_fvo_open_draft_{entry.folder_name}_{project.id}",
+                        help="NEU: lädt Textfeld, Satz-Tabelle und Aktionen erst jetzt — "
+                        "hält die Seite bei vielen Ordnern schnell.",
+                    ):
+                        st.session_state[open_key] = True
+                        st.rerun()
+                with meta_cols[1]:
+                    st.metric("Wörter", draft.word_count)
+                with meta_cols[2]:
+                    st.caption(
+                        f"{len(draft.sentence_items)} Sätze · Status `{draft.status}` · "
+                        "Details noch nicht geladen."
+                    )
+                continue
+
+            close_cols = st.columns([1, 4])
+            with close_cols[0]:
+                if st.button(
+                    "Schließen",
+                    key=f"vo_fvo_close_draft_{entry.folder_name}_{project.id}",
+                    help="Entlädt die Draft-Details wieder, damit die Seite leicht bleibt.",
+                ):
+                    st.session_state[open_key] = False
+                    st.rerun()
+
             _render_folder_draft(
                 project,
                 entry.folder_name,
