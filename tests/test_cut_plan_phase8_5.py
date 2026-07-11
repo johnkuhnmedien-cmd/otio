@@ -722,6 +722,48 @@ def test_close_small_visual_gaps_ignores_gaps_above_threshold() -> None:
     assert updated.items[0].planned_visual_segments[0] == segment_1  # unverändert
 
 
+def test_close_small_visual_gaps_respects_custom_threshold_closes_larger_gap() -> None:
+    """Nutzervorgabe (Juli 2026): black_gap_auto_hold_max_sec ist jetzt pro
+    Projekt einstellbar — eine 2.0s-Lücke, die mit dem Default (1.0s) NICHT
+    geschlossen würde, wird bei einem höheren max_auto_filled_gap_sec
+    trotzdem automatisch überbrückt."""
+    segment_1 = _minimal_segment(segment_id="seg_1", asset_type="image", timeline_in_sec=0.0, timeline_out_sec=5.0,
+                                  duration_sec=5.0, source_in_sec=0.0, source_out_sec=5.0)
+    segment_2 = _minimal_segment(segment_id="seg_2", timeline_in_sec=7.0, timeline_out_sec=12.0, duration_sec=5.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1], timeline_end_sec=5.0)
+    item_2 = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[segment_2], timeline_start_sec=7.0,
+                            timeline_end_sec=12.0)
+    cut_plan = CutPlanDocument(project_id="p1", items=[item_1, item_2])
+
+    # Mit Default-Threshold (1.0s) bleibt die 2.0s-Lücke unangetastet.
+    unchanged = close_small_visual_gaps(cut_plan)
+    assert unchanged.items[0].planned_visual_segments[0] == segment_1
+
+    # Mit explizit höherem Threshold (2.5s) wird sie geschlossen.
+    updated = close_small_visual_gaps(cut_plan, max_auto_filled_gap_sec=2.5)
+    updated_segment_1 = updated.items[0].planned_visual_segments[0]
+    assert updated_segment_1.timeline_out_sec == pytest.approx(7.0)
+    assert "small_gap_hold" in updated_segment_1.reason.split("+")
+
+
+def test_apply_visual_coverage_extensions_uses_settings_black_gap_threshold() -> None:
+    """apply_visual_coverage_extensions muss settings.black_gap_auto_hold_
+    max_sec an close_small_visual_gaps weiterreichen, statt den Default zu
+    verwenden."""
+    segment_1 = _minimal_segment(segment_id="seg_1", asset_type="image", timeline_in_sec=0.0, timeline_out_sec=5.0,
+                                  duration_sec=5.0, source_in_sec=0.0, source_out_sec=5.0)
+    segment_2 = _minimal_segment(segment_id="seg_2", timeline_in_sec=7.0, timeline_out_sec=12.0, duration_sec=5.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1], timeline_end_sec=5.0)
+    item_2 = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[segment_2], timeline_start_sec=7.0,
+                            timeline_end_sec=12.0)
+    cut_plan = CutPlanDocument(project_id="p1", items=[item_1, item_2])
+    settings = CutPlanSettings(project_id="p1", black_gap_auto_hold_max_sec=2.5)
+
+    updated = apply_visual_coverage_extensions(cut_plan, settings)
+    updated_segment_1 = updated.items[0].planned_visual_segments[0]
+    assert updated_segment_1.timeline_out_sec == pytest.approx(7.0)
+
+
 def test_close_small_visual_gaps_ignores_when_no_gap() -> None:
     segment_1 = _minimal_segment(segment_id="seg_1", timeline_in_sec=0.0, timeline_out_sec=5.0, duration_sec=5.0)
     segment_2 = _minimal_segment(segment_id="seg_2", timeline_in_sec=5.0, timeline_out_sec=10.0, duration_sec=5.0)

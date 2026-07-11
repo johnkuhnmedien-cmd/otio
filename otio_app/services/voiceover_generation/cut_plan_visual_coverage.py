@@ -51,6 +51,11 @@ REASON_SMALL_GAP_HOLD = "small_gap_hold"
 # echtes Beschaffungsproblem NICHT stillschweigend durch ein eingefrorenes
 # Standbild überdeckt wird, sondern weiterhin als BLACK_GAP_DURING_VOICEOVER
 # sichtbar bleibt.
+#
+# Nutzervorgabe (Juli 2026): der Schwellenwert ist jetzt projektspezifisch
+# über CutPlanSettings.black_gap_auto_hold_max_sec einstellbar (siehe
+# close_small_visual_gaps) — diese Konstante bleibt nur als Fallback für
+# Aufrufer ohne Settings (siehe Default-Parameter unten).
 _MAX_AUTO_FILLED_GAP_SEC = 1.0
 
 
@@ -242,9 +247,11 @@ def _apply_segment_replacements(
     return cut_plan.model_copy(update={"items": updated_items})
 
 
-def close_small_visual_gaps(cut_plan: CutPlanDocument) -> CutPlanDocument:
-    """Phase C (Nutzervorgabe): schließt KLEINE Lücken (<= _MAX_AUTO_FILLED_
-    GAP_SEC) zwischen zwei zeitlich aufeinanderfolgenden VisualSegments —
+def close_small_visual_gaps(
+    cut_plan: CutPlanDocument, max_auto_filled_gap_sec: float = _MAX_AUTO_FILLED_GAP_SEC
+) -> CutPlanDocument:
+    """Phase C (Nutzervorgabe): schließt KLEINE Lücken (<= max_auto_filled_
+    gap_sec) zwischen zwei zeitlich aufeinanderfolgenden VisualSegments —
     typischerweise natürliche Sprechpausen zwischen zwei Sätzen INNERHALB
     durchgehend aktiven Voice-overs, bei denen die Alignment-Zeiten des
     vorherigen Satzes knapp vor dem Start des nächsten enden. Verlängert
@@ -252,7 +259,13 @@ def close_small_visual_gaps(cut_plan: CutPlanDocument) -> CutPlanDocument:
     nächste — vermeidet Kaskaden-Effekte, analog zu
     extend_section_end_visuals_over_pauses. Größere Lücken (fehlendes
     Supplement-Asset, blockiertes Item) werden bewusst NICHT angefasst und
-    bleiben für validate_no_black_gap_during_voiceover sichtbar."""
+    bleiben für validate_no_black_gap_during_voiceover sichtbar.
+
+    Nutzervorgabe (Juli 2026): max_auto_filled_gap_sec ist standardmäßig
+    weiterhin 1.0s (_MAX_AUTO_FILLED_GAP_SEC), aber apply_visual_coverage_
+    extensions übergibt hier settings.black_gap_auto_hold_max_sec — pro
+    Projekt einstellbar, damit sich mehr BLACK_GAP_DURING_VOICEOVER-Fälle
+    bereits hier lösen, statt einen Supplement Request auszulösen."""
     all_segments = _all_segments_sorted(cut_plan)
     replacements: dict[tuple[str, str], VisualSegment] = {}
 
@@ -263,7 +276,7 @@ def close_small_visual_gaps(cut_plan: CutPlanDocument) -> CutPlanDocument:
         current_effective = replacements.get(current_key, current_segment)
 
         gap = next_segment.timeline_in_sec - current_effective.timeline_out_sec
-        if gap <= _EPSILON or gap > _MAX_AUTO_FILLED_GAP_SEC:
+        if gap <= _EPSILON or gap > max_auto_filled_gap_sec:
             continue
 
         new_duration = current_effective.duration_sec + gap
@@ -346,6 +359,6 @@ def apply_visual_coverage_extensions(cut_plan: CutPlanDocument, settings: CutPla
     resolve_timeline_overlaps läuft deshalb bewusst zuletzt)."""
     updated = extend_first_visual_to_timeline_zero(cut_plan)
     updated = extend_section_end_visuals_over_pauses(updated, settings)
-    updated = close_small_visual_gaps(updated)
+    updated = close_small_visual_gaps(updated, settings.black_gap_auto_hold_max_sec)
     updated = resolve_timeline_overlaps(updated)
     return updated

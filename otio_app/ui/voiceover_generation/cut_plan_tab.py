@@ -334,6 +334,17 @@ def _render_settings_editor(project: Project) -> CutPlanSettings:
             min_value=0, max_value=50, value=settings.min_asset_reuse_distance_shots, step=1,
             key=f"cut_plan_min_reuse_distance_{project.id}",
         )
+        black_gap_auto_hold_max_sec = st.number_input(
+            "Black-Gap Auto-Hold max. (s)",
+            min_value=0.0, max_value=5.0, value=settings.black_gap_auto_hold_max_sec, step=0.1,
+            key=f"cut_plan_black_gap_auto_hold_{project.id}",
+            help="Lücken bis zu dieser Länge zwischen zwei VisualSegments werden "
+            "automatisch durch Halten des VORHERIGEN Bildes/Videos geschlossen "
+            "(keine Supplement-Suche nötig). Größere Lücken bleiben als "
+            "BLACK_GAP_DURING_VOICEOVER sichtbar. Höhere Werte schließen mehr "
+            "natürliche Sprechpausen automatisch, können aber Standbilder länger "
+            "halten.",
+        )
     with col3:
         timeline_fps = st.number_input(
             "Timeline FPS", min_value=1, max_value=120, value=settings.timeline_fps, step=1,
@@ -358,6 +369,7 @@ def _render_settings_editor(project: Project) -> CutPlanSettings:
             "shot_max_sec": float(shot_max_sec),
             "max_asset_usage": int(max_asset_usage),
             "min_asset_reuse_distance_shots": int(min_asset_reuse_distance_shots),
+            "black_gap_auto_hold_max_sec": float(black_gap_auto_hold_max_sec),
             "timeline_fps": int(timeline_fps),
             "timeline_width": int(timeline_width),
             "timeline_height": int(timeline_height),

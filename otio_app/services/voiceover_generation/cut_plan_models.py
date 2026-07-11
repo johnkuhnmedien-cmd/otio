@@ -27,6 +27,7 @@ from otio_app.defaults import (
     AUDIO_SCOPE_FOLDER,
     AUDIO_SCOPE_INTRO,
     CUT_PLAN_ASSET_SELECTION_UNRESOLVED,
+    CUT_PLAN_DEFAULT_BLACK_GAP_AUTO_HOLD_MAX_SEC,
     CUT_PLAN_DEFAULT_INITIAL_AUDIO_OFFSET_SEC,
     CUT_PLAN_DEFAULT_MAX_ASSET_USAGE,
     CUT_PLAN_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS,
@@ -77,6 +78,14 @@ class CutPlanSettings(BaseModel):
     shot_max_sec: float = CUT_PLAN_DEFAULT_SHOT_MAX_SEC
     max_asset_usage: int = CUT_PLAN_DEFAULT_MAX_ASSET_USAGE
     min_asset_reuse_distance_shots: int = CUT_PLAN_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS
+    # Nutzervorgabe (Juli 2026): maximale Lückengröße, die close_small_
+    # visual_gaps automatisch durch Halten des VORHERIGEN Bildes/Videos
+    # schließt (vorher fest 1.0s) — höhere Werte schließen mehr natürliche
+    # Sprechpausen bereits vor jeder Supplement-Suche, ohne dass dafür ein
+    # neues Asset benötigt wird. Gilt NICHT für echte Beschaffungslücken
+    # (fehlendes/blockiertes Item) — die bleiben unabhängig von diesem Wert
+    # als BLACK_GAP_DURING_VOICEOVER sichtbar.
+    black_gap_auto_hold_max_sec: float = CUT_PLAN_DEFAULT_BLACK_GAP_AUTO_HOLD_MAX_SEC
     timeline_fps: int = CUT_PLAN_DEFAULT_TIMELINE_FPS
     timeline_width: int = CUT_PLAN_DEFAULT_TIMELINE_WIDTH
     timeline_height: int = CUT_PLAN_DEFAULT_TIMELINE_HEIGHT

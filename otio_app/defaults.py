@@ -817,6 +817,14 @@ CUT_PLAN_DEFAULT_SECTION_VISUAL_PREROLL_SEC = 0.0
 CUT_PLAN_DEFAULT_VIDEO_HEAD_TRIM_SEC = 1.0  # gilt nur für Video, nie für Bild/Audio
 CUT_PLAN_DEFAULT_SHOT_MIN_SEC = 3.0
 CUT_PLAN_DEFAULT_SHOT_MAX_SEC = 8.0
+
+# Nutzervorgabe (Juli 2026): vorher als Konstante _MAX_AUTO_FILLED_GAP_SEC in
+# cut_plan_visual_coverage.py fest auf 1.0s codiert — jetzt pro Projekt
+# einstellbar (siehe CutPlanSettings.black_gap_auto_hold_max_sec), damit
+# mehr BLACK_GAP_DURING_VOICEOVER-Fälle bereits vor der Supplement-Suche
+# durch einfaches Halten des vorherigen Bildes/Videos geschlossen werden
+# können, ohne den Cut-Plan-Code selbst zu ändern.
+CUT_PLAN_DEFAULT_BLACK_GAP_AUTO_HOLD_MAX_SEC = 1.0
 CUT_PLAN_DEFAULT_MAX_ASSET_USAGE = 2
 CUT_PLAN_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS = 0
 CUT_PLAN_DEFAULT_TIMELINE_FPS = 25
