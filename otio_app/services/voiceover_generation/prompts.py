@@ -497,7 +497,58 @@ and — ONLY if needs_supplement_asset is true — supplement_search_hint: a con
 location-prefixed search phrase for finding this missing visual externally (e.g. \
 "Havasu Falls waterfall woman", not just "waterfall").
 
+## Asset allocation across this whole location (read this carefully)
+Treat the local assets listed above as a SCARCE shared resource for the ENTIRE \
+location, not something to decide sentence by sentence. Before finalizing your \
+assignments, think about ALL sentences/beats (and the closing shot below) together:
+- Keep each asset_id's TOTAL number of occurrences in your entire response at or \
+below 3. Count EVERY occurrence anywhere — primary_asset_id, backup_asset_ids, \
+second_backup_asset_ids, planned_segments, AND closing_visual_plan all count toward \
+this same total. A backup slot is not a safe dumping ground: only put an asset in \
+backup_asset_ids/second_backup_asset_ids if you would genuinely be fine with it \
+actually appearing on screen there.
+- Keep at least 4 shot positions between two occurrences of the same asset_id \
+(counting sentence/beat order, including planned_segments as their own positions, \
+with the closing shot as the last position). Do not place the same asset again \
+within that distance.
+- Resolve competition for the same asset by scarcity, not by which sentence you \
+happen to be writing first: if one sentence/beat has only ONE genuinely fitting \
+local asset while another sentence/beat could use several different plausible \
+assets, the sentence with only one option KEEPS that asset. The sentence/beat with \
+multiple options must use a different one of its alternatives instead — and if its \
+remaining alternatives are only weakly fitting, set needs_supplement_asset=true for \
+that MORE FLEXIBLE sentence/beat rather than taking the scarce asset away from the \
+one that has no alternative.
+- Never resolve scarcity by silently violating the total-occurrence or shot-distance \
+rules above, and never resolve it by forcing a weak/wrong asset onto a sentence — in \
+both cases, prefer needs_supplement_asset=true with a concrete supplement_reason.
+
 {_segment_asset_planning_block(setting.segment_asset_planning_mode)}
+
+## Closing shot for this location (required)
+After the LAST sentence/beat, this location needs exactly one additional, purely \
+visual closing shot — no spoken text, no TTS, no sentence_id — that will visually \
+hold the screen while the voice-over of the NEXT location has not started yet \
+(covering the trailing silence after the last sentence AND the pause before the \
+next location). Plan this as closing_visual_plan:
+- primary_asset_id/backup_asset_ids/second_backup_asset_ids follow the exact same \
+rules as for a sentence/beat above (EXACT asset_id values only, or empty) and count \
+toward the same total-occurrence/shot-distance budget above, as the LAST position.
+- The closing shot's primary_asset_id (and ideally its backups too) MUST NOT be the \
+SAME asset_id as the primary_asset_id of the LAST sentence/beat, NOR the SAME \
+asset_id as the primary_asset_id of the SECOND-TO-LAST sentence/beat — it must \
+visually read as a distinct beat, not a continuation of the same shot.
+- Prefer a VIDEO over a photo for the closing shot wherever a genuinely fitting \
+video exists — a closing shot benefits from a few extra seconds of real motion \
+rather than a static hold.
+- Prefer a calm aerial/drone shot, a wide establishing shot, or another calm, \
+scenic/atmospheric shot for the closing — avoid a tight detail shot or anything with \
+busy/hectic motion, which reads poorly when held slightly longer than a normal shot.
+- If nothing in the local inventory genuinely fits as a distinct, calm closing shot \
+(respecting the last-two-sentences exclusion above), set needs_supplement_asset=true \
+with a concrete supplement_reason and a location-prefixed supplement_search_hint \
+(e.g. "Antelope Canyon aerial wide shot") — do not force a weak or repeated asset \
+just to fill this field.
 
 ## Task
 Write ONE flowing documentary voice-over text for this location (target_words above), \
@@ -518,6 +569,10 @@ and give a concrete supplement_reason (what visual is missing).
 - Do not assign the same primary_asset_id to two consecutive sentence_items unless \
 there is genuinely no other usable local asset for the second one — see "Visual \
 editing awareness" above.
+- Respect the folder-wide asset allocation rules above: at or below 3 total \
+occurrences per asset_id across the ENTIRE response, at least 4 shot positions \
+between repeated occurrences, and scarce assets reserved for the sentence/beat that \
+has no real alternative.
 - asset_confidence: 0.0-1.0, honestly reflecting how well the asset matches the sentence.
 - Not every asset in the inventory needs to be used.
 - Optionally set pause_after on a sentence_item to mark a deliberate narrative \
@@ -525,6 +580,14 @@ pause AFTER that sentence — one of {list(PAUSE_AFTER_CHOICES)} ("" = no pause,
 "short"/"medium"/"long" = increasingly longer pause). Use pauses sparingly, only \
 at genuine dramatic beats (e.g. after a striking statement, before a topic shift) \
 — not after every sentence. Never set pause_after on the LAST sentence_item.
+
+Rules for closing_visual_plan (see "Closing shot for this location" above):
+- primary_asset_id/backup_asset_ids/second_backup_asset_ids MUST also only reference \
+EXACT asset_id values from the inventory above, or stay empty.
+- primary_asset_id MUST NOT equal the primary_asset_id of the last or second-to-last \
+sentence_items.
+- If no genuinely fitting, distinct, calm local asset exists, set primary_asset_id \
+to "", needs_supplement_asset=true, and give a concrete supplement_reason.
 
 Respond with JSON ONLY, no markdown code fences, no commentary, matching exactly \
 this shape:

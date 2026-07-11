@@ -677,6 +677,105 @@ def test_folder_voiceover_prompt_rules_require_valid_planned_segment_asset_ids()
 # --- Phase 7.1 (Asset-bewusste Cut-Plan-Vorbereitung): Segment-Planungsmodus ---
 
 
+# --- Closing shot + global asset allocation (Nutzervorgabe Juli 2026) ---
+
+
+def test_folder_voiceover_prompt_json_schema_includes_closing_visual_plan() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert '"closing_visual_plan"' in prompt
+    assert '"needs_supplement_asset": false' in prompt
+    assert '"supplement_search_hint"' in prompt
+
+
+def test_folder_voiceover_prompt_requires_closing_shot() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "Closing shot for this location (required)" in prompt
+
+
+def test_folder_voiceover_prompt_forbids_closing_shot_reusing_last_two_sentences() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "SECOND-TO-LAST sentence/beat" in prompt
+    assert "MUST NOT be the" in prompt
+
+
+def test_folder_voiceover_prompt_prefers_video_and_aerial_for_closing_shot() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "Prefer a VIDEO over a photo" in prompt
+    assert "aerial/drone shot" in prompt
+
+
+def test_folder_voiceover_prompt_instructs_max_three_total_occurrences() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "at or below 3" in prompt
+
+
+def test_folder_voiceover_prompt_instructs_minimum_shot_distance() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "at least 4 shot positions" in prompt
+
+
+def test_folder_voiceover_prompt_instructs_scarce_asset_priority() -> None:
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=_sample_setting(),
+        previous_folder_name=None,
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "KEEPS that asset" in prompt
+    assert "MORE FLEXIBLE sentence/beat" in prompt
+
+
 def test_folder_voiceover_prompt_default_mode_is_per_sentence() -> None:
     """Default (kein explizit gesetzter Modus) muss dem heutigen Verhalten
     entsprechen — bestehende Projekte ändern sich dadurch nicht."""
