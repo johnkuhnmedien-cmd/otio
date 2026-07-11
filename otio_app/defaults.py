@@ -275,6 +275,15 @@ VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS = 150
 FOLDER_ASSET_READINESS_SHOT_MAX_SEC_HEURISTIC = 8.0
 FOLDER_ASSET_READINESS_WORDS_PER_SECOND_HEURISTIC = 2.5
 
+# Nutzervorgabe (Juli 2026): globale Asset-Allokationsregeln PRO ORDNER
+# (Intro zählt NICHT mit, siehe folder_asset_readiness.py) — zählt jedes
+# Vorkommen eines Assets über primary/backup/second_backup/planned_segments
+# UND den Closing Shot (siehe ClosingVisualPlan in models.py). Dieselben
+# Zahlen werden im Autor-Prompt kommuniziert (siehe prompts.py, "Asset
+# allocation across this whole location").
+FOLDER_ASSET_READINESS_MAX_TOTAL_OCCURRENCES_PER_ASSET = 3
+FOLDER_ASSET_READINESS_MIN_REUSE_DISTANCE_SHOTS = 4
+
 FOLDER_INVENTORY_SUMMARIES_FILENAME = "folder_inventory_summaries.json"
 
 DRAMATURGY_ROLE_OPENER = "opener"

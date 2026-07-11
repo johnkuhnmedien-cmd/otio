@@ -9,16 +9,26 @@ from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis
 from otio_app.models import Project, ProjectMode
 from otio_app.project_layout import get_folder_inventory_path
 from otio_app.services.voiceover_generation.folder_asset_readiness import (
+    CLOSING_SHOT_ISSUE_SENTENCE_ID,
+    ISSUE_TYPE_ASSET_OVER_FOLDER_LIMIT,
+    ISSUE_TYPE_ASSET_REUSE_DISTANCE_TOO_SHORT,
+    ISSUE_TYPE_CLOSING_SHOT_MISSING,
+    ISSUE_TYPE_CLOSING_SHOT_REUSES_RECENT_SENTENCE,
     ISSUE_TYPE_DIRECT_REPEAT,
     ISSUE_TYPE_INVALID_ASSET_ID,
     ISSUE_TYPE_LONG_SENTENCE_LOW_ALTERNATIVES,
+    ISSUE_TYPE_SCARCE_ASSET_ASSIGNED_TO_FLEXIBLE_SENTENCE,
     ISSUE_TYPE_SUPPLEMENT_RECOMMENDED,
     READINESS_STATUS_NEEDS_REVIEW,
     READINESS_STATUS_PASS,
     build_folder_asset_readiness_report,
     estimate_sentence_duration_sec,
 )
-from otio_app.services.voiceover_generation.models import FolderVoiceoverDraft, SentenceItem
+from otio_app.services.voiceover_generation.models import (
+    ClosingVisualPlan,
+    FolderVoiceoverDraft,
+    SentenceItem,
+)
 
 
 def _make_project_with_inventory(tmp_path: Path, folder_name: str, asset_ids: list[str]) -> Project:
@@ -46,9 +56,17 @@ def _make_project_with_inventory(tmp_path: Path, folder_name: str, asset_ids: li
     return project
 
 
-def _draft(folder_name: str, sentence_items: list[SentenceItem]) -> FolderVoiceoverDraft:
+def _draft(
+    folder_name: str,
+    sentence_items: list[SentenceItem],
+    *,
+    closing_visual_plan: ClosingVisualPlan | None = None,
+) -> FolderVoiceoverDraft:
     return FolderVoiceoverDraft(
-        project_id="readiness-project", folder_name=folder_name, sentence_items=sentence_items
+        project_id="readiness-project",
+        folder_name=folder_name,
+        sentence_items=sentence_items,
+        closing_visual_plan=closing_visual_plan or ClosingVisualPlan(),
     )
 
 
@@ -69,13 +87,14 @@ def test_estimate_sentence_duration_sec_uses_words_per_second_heuristic() -> Non
 
 
 def test_report_status_pass_when_no_issues(tmp_path: Path) -> None:
-    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a", "asset_b"])
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a", "asset_b", "asset_c"])
     draft = _draft(
         "Grand Canyon",
         [
             SentenceItem(sentence_id="s1", text="Ein kurzer Satz.", primary_asset_id="asset_a"),
             SentenceItem(sentence_id="s2", text="Noch ein Satz hier.", primary_asset_id="asset_b"),
         ],
+        closing_visual_plan=ClosingVisualPlan(primary_asset_id="asset_c"),
     )
     report = build_folder_asset_readiness_report(project, draft)
     assert report.status == READINESS_STATUS_PASS
@@ -332,3 +351,243 @@ def test_empty_draft_has_no_issues(tmp_path: Path) -> None:
     report = build_folder_asset_readiness_report(project, draft)
     assert report.sentence_count == 0
     assert report.status == READINESS_STATUS_PASS
+
+
+# --- Closing Shot (Nutzervorgabe Juli 2026, "kein closing asset nach dem
+# letzten Satz, der die Pause ausfüllt") ---
+
+
+def test_report_flags_closing_shot_missing_when_no_content_or_supplement(tmp_path: Path) -> None:
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a"])
+    draft = _draft(
+        "Grand Canyon",
+        [SentenceItem(sentence_id="s1", text="Ein Satz.", primary_asset_id="asset_a")],
+    )
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.closing_shot_missing_count == 1
+    assert any(issue.issue_type == ISSUE_TYPE_CLOSING_SHOT_MISSING for issue in report.issues)
+
+
+def test_report_does_not_flag_closing_shot_missing_when_supplement_requested(tmp_path: Path) -> None:
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a"])
+    draft = _draft(
+        "Grand Canyon",
+        [SentenceItem(sentence_id="s1", text="Ein Satz.", primary_asset_id="asset_a")],
+        closing_visual_plan=ClosingVisualPlan(
+            needs_supplement_asset=True, supplement_reason="Kein passendes Abschlussmotiv lokal."
+        ),
+    )
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.closing_shot_missing_count == 0
+
+
+def test_report_flags_closing_shot_reusing_last_sentence_asset(tmp_path: Path) -> None:
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a", "asset_b"])
+    draft = _draft(
+        "Grand Canyon",
+        [
+            SentenceItem(sentence_id="s1", text="Erster Satz.", primary_asset_id="asset_a"),
+            SentenceItem(sentence_id="s2", text="Letzter Satz.", primary_asset_id="asset_b"),
+        ],
+        closing_visual_plan=ClosingVisualPlan(primary_asset_id="asset_b"),
+    )
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.closing_shot_reuse_conflict_count == 1
+    issue = next(i for i in report.issues if i.issue_type == ISSUE_TYPE_CLOSING_SHOT_REUSES_RECENT_SENTENCE)
+    assert issue.sentence_id == CLOSING_SHOT_ISSUE_SENTENCE_ID
+
+
+def test_report_flags_closing_shot_reusing_second_to_last_sentence_asset(tmp_path: Path) -> None:
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a", "asset_b"])
+    draft = _draft(
+        "Grand Canyon",
+        [
+            SentenceItem(sentence_id="s1", text="Erster Satz.", primary_asset_id="asset_a"),
+            SentenceItem(sentence_id="s2", text="Letzter Satz.", primary_asset_id="asset_b"),
+        ],
+        closing_visual_plan=ClosingVisualPlan(primary_asset_id="asset_a"),
+    )
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.closing_shot_reuse_conflict_count == 1
+
+
+def test_report_does_not_flag_closing_shot_with_distinct_asset(tmp_path: Path) -> None:
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a", "asset_b", "asset_c"])
+    draft = _draft(
+        "Grand Canyon",
+        [
+            SentenceItem(sentence_id="s1", text="Erster Satz.", primary_asset_id="asset_a"),
+            SentenceItem(sentence_id="s2", text="Letzter Satz.", primary_asset_id="asset_b"),
+        ],
+        closing_visual_plan=ClosingVisualPlan(primary_asset_id="asset_c"),
+    )
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.closing_shot_reuse_conflict_count == 0
+
+
+def test_report_does_not_require_closing_shot_for_empty_draft(tmp_path: Path) -> None:
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a"])
+    draft = _draft("Grand Canyon", [])
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.closing_shot_missing_count == 0
+
+
+# --- Folder-wide asset allocation: max occurrences + min shot distance ---
+
+
+def test_report_flags_asset_used_more_than_max_occurrences(tmp_path: Path) -> None:
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a", "asset_b"])
+    draft = _draft(
+        "Grand Canyon",
+        [
+            SentenceItem(sentence_id="s1", text="Satz eins.", primary_asset_id="asset_a"),
+            SentenceItem(sentence_id="s2", text="Satz zwei.", primary_asset_id="asset_b"),
+            SentenceItem(sentence_id="s3", text="Satz drei.", primary_asset_id="asset_a"),
+            SentenceItem(sentence_id="s4", text="Satz vier.", primary_asset_id="asset_b"),
+            SentenceItem(sentence_id="s5", text="Satz fünf.", primary_asset_id="asset_a"),
+            SentenceItem(sentence_id="s6", text="Satz sechs.", primary_asset_id="asset_b"),
+            SentenceItem(sentence_id="s7", text="Satz sieben.", primary_asset_id="asset_a"),
+        ],
+        closing_visual_plan=ClosingVisualPlan(primary_asset_id="asset_b"),
+    )
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.asset_over_folder_limit_count == 2  # asset_a (4x) und asset_b (4x)
+    assert any(issue.issue_type == ISSUE_TYPE_ASSET_OVER_FOLDER_LIMIT for issue in report.issues)
+
+
+def test_report_does_not_flag_asset_at_exactly_max_occurrences(tmp_path: Path) -> None:
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a"])
+    draft = _draft(
+        "Grand Canyon",
+        [
+            SentenceItem(sentence_id="s1", text="Satz eins.", primary_asset_id="asset_a"),
+            SentenceItem(sentence_id="s2", text="Satz zwei.", second_backup_asset_ids=["asset_a"]),
+            SentenceItem(sentence_id="s3", text="Satz drei.", backup_asset_ids=["asset_a"]),
+        ],
+    )
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.asset_over_folder_limit_count == 0
+
+
+def test_report_flags_asset_reuse_below_minimum_shot_distance(tmp_path: Path) -> None:
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a", "asset_b"])
+    draft = _draft(
+        "Grand Canyon",
+        [
+            SentenceItem(sentence_id="s1", text="Satz eins.", primary_asset_id="asset_a"),
+            SentenceItem(sentence_id="s2", text="Satz zwei.", primary_asset_id="asset_b"),
+            SentenceItem(sentence_id="s3", text="Satz drei.", primary_asset_id="asset_a"),
+        ],
+    )
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.asset_reuse_distance_violation_count == 1
+    issue = next(i for i in report.issues if i.issue_type == ISSUE_TYPE_ASSET_REUSE_DISTANCE_TOO_SHORT)
+    assert issue.sentence_id == "s3"
+
+
+def test_report_does_not_flag_asset_reuse_at_minimum_shot_distance(tmp_path: Path) -> None:
+    project = _make_project_with_inventory(
+        tmp_path, "Grand Canyon", ["asset_a", "asset_b", "asset_c", "asset_d"]
+    )
+    draft = _draft(
+        "Grand Canyon",
+        [
+            SentenceItem(sentence_id="s1", text="Satz eins.", primary_asset_id="asset_a"),
+            SentenceItem(sentence_id="s2", text="Satz zwei.", primary_asset_id="asset_b"),
+            SentenceItem(sentence_id="s3", text="Satz drei.", primary_asset_id="asset_c"),
+            SentenceItem(sentence_id="s4", text="Satz vier.", primary_asset_id="asset_d"),
+            SentenceItem(sentence_id="s5", text="Satz fünf.", primary_asset_id="asset_a"),
+        ],
+    )
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.asset_reuse_distance_violation_count == 0
+
+
+def test_report_counts_closing_shot_as_final_shot_position_for_distance(tmp_path: Path) -> None:
+    """Ein Asset, das im ersten Satz UND im Closing Shot verwendet wird, muss
+    denselben Mindestabstand einhalten wie zwei sentence_items."""
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a", "asset_b"])
+    draft = _draft(
+        "Grand Canyon",
+        [
+            SentenceItem(sentence_id="s1", text="Satz eins.", primary_asset_id="asset_a"),
+            SentenceItem(sentence_id="s2", text="Satz zwei.", primary_asset_id="asset_b"),
+        ],
+        closing_visual_plan=ClosingVisualPlan(primary_asset_id="asset_a"),
+    )
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.asset_reuse_distance_violation_count == 1
+    issue = next(i for i in report.issues if i.issue_type == ISSUE_TYPE_ASSET_REUSE_DISTANCE_TOO_SHORT)
+    assert issue.sentence_id == CLOSING_SHOT_ISSUE_SENTENCE_ID
+
+
+# --- Scarce asset allocation ---
+
+
+def test_report_flags_flexible_sentence_taking_scarce_asset(tmp_path: Path) -> None:
+    """Satz s1 hat NUR asset_a als Option, Satz s2 hätte auch asset_b/asset_c
+    nutzen können — s2 soll das knappe Asset abgeben, nicht s1."""
+    project = _make_project_with_inventory(
+        tmp_path, "Grand Canyon", ["asset_a", "asset_b", "asset_c"]
+    )
+    draft = _draft(
+        "Grand Canyon",
+        [
+            SentenceItem(
+                sentence_id="s1",
+                text="Satz eins.",
+                primary_asset_id="asset_a",
+                source_inventory_asset_ids_considered=["asset_a"],
+            ),
+            SentenceItem(
+                sentence_id="s2",
+                text="Satz zwei.",
+                primary_asset_id="asset_a",
+                source_inventory_asset_ids_considered=["asset_a", "asset_b", "asset_c"],
+            ),
+        ],
+    )
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.scarce_asset_conflict_count == 1
+    issue = next(
+        i for i in report.issues if i.issue_type == ISSUE_TYPE_SCARCE_ASSET_ASSIGNED_TO_FLEXIBLE_SENTENCE
+    )
+    assert issue.sentence_id == "s2"
+
+
+def test_report_does_not_flag_scarce_asset_when_both_sentences_equally_constrained(
+    tmp_path: Path,
+) -> None:
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a"])
+    draft = _draft(
+        "Grand Canyon",
+        [
+            SentenceItem(
+                sentence_id="s1",
+                text="Satz eins.",
+                primary_asset_id="asset_a",
+                source_inventory_asset_ids_considered=["asset_a"],
+            ),
+            SentenceItem(
+                sentence_id="s2",
+                text="Satz zwei.",
+                primary_asset_id="asset_a",
+                source_inventory_asset_ids_considered=["asset_a"],
+            ),
+        ],
+    )
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.scarce_asset_conflict_count == 0
+
+
+def test_report_does_not_flag_scarce_asset_when_only_one_sentence_uses_it(tmp_path: Path) -> None:
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a", "asset_b"])
+    draft = _draft(
+        "Grand Canyon",
+        [
+            SentenceItem(sentence_id="s1", text="Satz eins.", primary_asset_id="asset_a"),
+            SentenceItem(sentence_id="s2", text="Satz zwei.", primary_asset_id="asset_b"),
+        ],
+    )
+    report = build_folder_asset_readiness_report(project, draft)
+    assert report.scarce_asset_conflict_count == 0

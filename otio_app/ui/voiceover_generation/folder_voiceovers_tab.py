@@ -257,6 +257,18 @@ def _render_asset_readiness_report(report: FolderAssetReadinessReport) -> None:
     with col5:
         st.metric("Supplement empfohlen", report.supplement_recommended_count)
 
+    # Nutzervorgabe (Juli 2026): Closing-Shot- und folder-weite Asset-
+    # Allokations-Zähler — siehe ClosingVisualPlan/FolderAssetReadinessReport.
+    col6, col7, col8, col9 = st.columns(4)
+    with col6:
+        st.metric("Closing Shot fehlt", report.closing_shot_missing_count)
+    with col7:
+        st.metric("Closing wiederholt Satz", report.closing_shot_reuse_conflict_count)
+    with col8:
+        st.metric("Asset über Nutzungslimit", report.asset_over_folder_limit_count)
+    with col9:
+        st.metric("Abstand zu kurz", report.asset_reuse_distance_violation_count)
+
     if report.status == ASSET_READINESS_STATUS_PASS:
         st.success("Asset-Readiness: PASS — keine Auffälligkeiten gefunden.")
     else:
@@ -264,7 +276,8 @@ def _render_asset_readiness_report(report: FolderAssetReadinessReport) -> None:
             f"Asset-Readiness: NEEDS_REVIEW — {len(report.issues)} Auffälligkeit(en) gefunden "
             f"(davon {report.invalid_asset_id_count} ungültige Asset-ID(s), "
             f"{report.long_sentence_low_alternative_count} lange(r) Satz/Sätze mit zu wenig "
-            "Alternativen)."
+            f"Alternativen, {report.scarce_asset_conflict_count} knappe(s) Asset(s) an "
+            "flexiblere(n) Satz/Sätze vergeben)."
         )
 
     if report.issues:
