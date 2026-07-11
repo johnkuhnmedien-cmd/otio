@@ -137,9 +137,21 @@ class UsageTracker:
     visual_segment_index: int = 0
 
     def register(self, asset_id: str, *, count_as_usage: bool = True) -> None:
+        """Bugfix (Nutzervorgabe Juli 2026, "Fortsetzung zählt nicht als
+        Reuse — auch nicht global"): `count_as_usage=False` markiert eine
+        Fortsetzung (Split-Continuation/Merge) DESSELBEN durchlaufenden
+        Videos, kein eigenständiges erneutes Zeigen — vorher wurde
+        `last_visual_segment_index_by_asset_id` trotzdem IMMER auf die neue
+        Position vorgerückt. Das ließ die Reuse-Distanz für JEDE SPÄTERE,
+        tatsächlich eigenständige Wiederverwendung fälschlich kürzer
+        erscheinen (die "zuletzt gesehen"-Position rutschte durch die
+        Fortsetzung näher an die neue Anfrage heran), statt die
+        Fortsetzung wie gewünscht komplett unsichtbar für die Reuse-Distanz
+        zu halten. Jetzt bleibt bei einer Fortsetzung der ursprüngliche
+        Index (der ECHTEN ersten Nutzung) unverändert stehen."""
         if count_as_usage:
             self.count_by_asset_id[asset_id] = self.count_by_asset_id.get(asset_id, 0) + 1
-        self.last_visual_segment_index_by_asset_id[asset_id] = self.visual_segment_index
+            self.last_visual_segment_index_by_asset_id[asset_id] = self.visual_segment_index
         self.visual_segment_index += 1
 
     def distance_since_last_use(self, asset_id: str) -> int | None:
@@ -558,7 +570,26 @@ def _select_candidates_for_item(
     sofort im usage_tracker — die bestehenden Regeln (kein unmittelbares
     Wiederverwenden, max_asset_usage, min_asset_reuse_distance_shots)
     gelten dabei unverändert auch zwischen benachbarten Segmenten
-    desselben Items."""
+    desselben Items — MIT EINER AUSNAHME (Nutzervorgabe Juli 2026,
+    "Fortsetzung ist keine Wiederverwendung"): bevor der allgemeine
+    Kandidaten-Pool für ein Segment geprüft wird, wird zuerst versucht, das
+    Asset des UNMITTELBAR VORHERIGEN Segments DESSELBEN Items einfach
+    weiterlaufen zu lassen — das ist kein Schnitt zu einem "neuen" Bild,
+    sondern derselbe durchlaufende Clip, und wird deshalb NICHT gegen die
+    Reuse-/Usage-Regeln geprüft, sondern nur gegen die KUMULIERTE
+    benötigte Dauer (bisher verbrauchte Sekunden dieses Assets + dieses
+    Segment). Schlägt das fehl (Video insgesamt zu kurz für die
+    Fortsetzung), wird das NICHT als Warnung/Fehler vermerkt — es ist nur
+    eine interne Vorprüfung, der reguläre Kandidaten-Pool läuft danach
+    unverändert weiter (inkl. dessen eigener Reuse-Prüfung, falls
+    dasselbe Asset dort erneut auftaucht). Kann für EIN Segment gar kein
+    Kandidat (weder Fortsetzung noch Pool) gefunden werden, bricht die
+    Auswahl für die VERBLEIBENDEN Segmente ab (unverändert) — es gibt
+    KEIN blindes Auffüllen mehr mit einem ungeprüften Fortsetzungs-
+    Kandidaten (siehe choose_asset_for_cut_item: `len(chosen_assets) <
+    num_segments` löst dann eine Supplement-Eskalation für das GESAMTE
+    Item aus, statt stillschweigend möglicherweise zu kurzes Material zu
+    verwenden)."""
     general_pool = _general_asset_pool(item)
     num_segments = len(segment_durations)
 
@@ -567,53 +598,60 @@ def _select_candidates_for_item(
     last_failure_type: str | None = None
     tried_any = False
     primary_was_first_choice = False
+    cumulative_duration_by_asset_id: dict[str, float] = {}
 
     for segment_index in range(num_segments):
-        candidate_ids = _candidate_order_for_segment(item, segment_index, general_pool)
         segment_duration = segment_durations[segment_index]
         filled = False
 
-        for asset_id in candidate_ids:
-            tried_any = True
-            candidate = resolve_asset_candidate(asset_id, lookup, preferred_folder_name=preferred_folder_name)
-            if candidate is None:
-                warnings.append(CUT_PLAN_ERROR_INVALID_ASSET_ID)
-                last_failure_type = CUT_PLAN_ERROR_INVALID_ASSET_ID
-                continue
-            if lookup.is_ambiguous(asset_id):
-                warnings.append(CUT_PLAN_ERROR_AMBIGUOUS_ASSET_ID)
-
-            failure = _candidate_usability_error(candidate, segment_duration)
-            if failure is not None:
-                warnings.append(failure)
-                last_failure_type = failure
-                continue
-
-            usage_failure = _usage_violation(asset_id, usage_tracker, settings, is_continuation=False)
-            if usage_failure is not None:
-                warnings.append(usage_failure)
-                last_failure_type = usage_failure
-                continue
-
-            if segment_index == 0 and asset_id == item.primary_asset_id:
-                primary_was_first_choice = True
-            chosen_assets.append(candidate)
-            usage_tracker.register(asset_id, count_as_usage=True)
-            filled = True
-            break
+        if chosen_assets:
+            previous_candidate = chosen_assets[-1]
+            cumulative_needed = (
+                cumulative_duration_by_asset_id.get(previous_candidate.asset_id, 0.0) + segment_duration
+            )
+            if _candidate_usability_error(previous_candidate, cumulative_needed) is None:
+                chosen_assets.append(previous_candidate)
+                cumulative_duration_by_asset_id[previous_candidate.asset_id] = cumulative_needed
+                usage_tracker.register(previous_candidate.asset_id, count_as_usage=False)
+                filled = True
 
         if not filled:
-            # Kein Kandidat für dieses Segment nutzbar -> restliche Segmente
-            # unten per Continuation auffüllen (unverändertes Verhalten).
-            break
+            candidate_ids = _candidate_order_for_segment(item, segment_index, general_pool)
 
-    # Fehlende Segmente mit dem letzten erfolgreichen Kandidaten als
-    # Split-Fortsetzung auffüllen (§6 Fall C) — zählt nicht als zusätzliche
-    # redaktionelle Wiederverwendung.
-    while chosen_assets and len(chosen_assets) < num_segments:
-        continuation = chosen_assets[-1]
-        chosen_assets.append(continuation)
-        usage_tracker.register(continuation.asset_id, count_as_usage=False)
+            for asset_id in candidate_ids:
+                tried_any = True
+                candidate = resolve_asset_candidate(asset_id, lookup, preferred_folder_name=preferred_folder_name)
+                if candidate is None:
+                    warnings.append(CUT_PLAN_ERROR_INVALID_ASSET_ID)
+                    last_failure_type = CUT_PLAN_ERROR_INVALID_ASSET_ID
+                    continue
+                if lookup.is_ambiguous(asset_id):
+                    warnings.append(CUT_PLAN_ERROR_AMBIGUOUS_ASSET_ID)
+
+                failure = _candidate_usability_error(candidate, segment_duration)
+                if failure is not None:
+                    warnings.append(failure)
+                    last_failure_type = failure
+                    continue
+
+                usage_failure = _usage_violation(asset_id, usage_tracker, settings, is_continuation=False)
+                if usage_failure is not None:
+                    warnings.append(usage_failure)
+                    last_failure_type = usage_failure
+                    continue
+
+                if segment_index == 0 and asset_id == item.primary_asset_id:
+                    primary_was_first_choice = True
+                chosen_assets.append(candidate)
+                cumulative_duration_by_asset_id[candidate.asset_id] = segment_duration
+                usage_tracker.register(asset_id, count_as_usage=True)
+                filled = True
+                break
+
+        if not filled:
+            # Kein Kandidat (weder Fortsetzung noch Pool) für dieses Segment
+            # nutzbar -> Auswahl bricht hier ab (siehe Docstring oben).
+            break
 
     return chosen_assets, warnings, last_failure_type, tried_any, primary_was_first_choice
 
@@ -749,7 +787,15 @@ def choose_asset_for_cut_item(
 
     warnings = list(item.warnings) + selection_warnings
 
-    if not chosen_assets:
+    # Nutzervorgabe (Juli 2026): NICHT mehr nur `not chosen_assets` (gar
+    # nichts gefunden) — seit _select_candidates_for_item kein blindes
+    # Auffüllen mehr betreibt (siehe dort), kann `chosen_assets` auch
+    # PARTIELL gefüllt sein (z. B. Segment 1 erfolgreich, Segment 2 weder
+    # als Fortsetzung noch aus dem Pool nutzbar). Auch dieser Fall muss das
+    # GESAMTE Item supplementieren, statt mit zu wenigen Segmenten
+    # weiterzumachen (build_visual_segments_for_item bräuchte sonst mehr
+    # chosen_assets-Einträge, als tatsächlich vorhanden sind).
+    if len(chosen_assets) < len(segment_durations):
         if not tried_any:
             updated = _supplement_required_copy(
                 item, reason="Weder primary_asset_id noch backup_asset_ids vorhanden.", extra_warnings=[]

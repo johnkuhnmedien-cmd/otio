@@ -23,6 +23,7 @@ from otio_app.defaults import (
     CUT_PLAN_DURATION_STRATEGY_SPLIT,
     CUT_PLAN_ERROR_AMBIGUOUS_ASSET_ID,
     CUT_PLAN_ERROR_ASSET_FILE_MISSING,
+    CUT_PLAN_ERROR_ASSET_REUSE_DISTANCE_TOO_SHORT,
     CUT_PLAN_ERROR_ASSET_TOO_SHORT,
     CUT_PLAN_ERROR_INVALID_ASSET_ID,
     CUT_PLAN_ERROR_SHOT_TOO_SHORT,
@@ -547,6 +548,66 @@ def test_split_continuation_of_video_advances_source_range_instead_of_repeating(
     assert second.source_in_sec == pytest.approx(first.source_out_sec)
     assert second.source_out_sec == pytest.approx(first.source_out_sec + second.duration_sec)
     assert second.reason == "split_long_sentence_continuation"
+
+
+def test_split_continuation_ignores_high_min_reuse_distance_setting(tmp_path: Path) -> None:
+    """Nutzervorgabe (Juli 2026): eine Fortsetzung DESSELBEN Videos über
+    zwei Split-Segmente eines EINZIGEN Satzes ist keine Wiederverwendung —
+    selbst ein sehr hoher min_asset_reuse_distance_shots-Wert darf das
+    nicht verhindern (nur eine echte, andernorts platzierte Wiederver-
+    wendung soll davon betroffen sein)."""
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("clip_only.mp4", "einzig")])
+    save_cut_plan_settings(
+        project,
+        _settings(
+            project, initial_audio_offset_sec=0.0, shot_min_sec=3.0, shot_max_sec=8.0,
+            min_asset_reuse_distance_shots=10,
+        ),
+    )
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id, intro=ConfirmedIntroPlanItem(),
+        folders=[_folder_with_sentence(primary_asset_id="asset_clip_only", duration_sec=14.0)],
+    )
+    _build_and_save_draft(project, plan)
+
+    with patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", return_value=30.0):
+        updated = apply_asset_selection_to_draft(project)
+
+    item = updated.items[0]
+    assert item.duration_strategy == CUT_PLAN_DURATION_STRATEGY_SPLIT
+    assert item.asset_selection_status != CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED
+    assert len(item.planned_visual_segments) == 2
+    assert all(segment.asset_id == "asset_clip_only" for segment in item.planned_visual_segments)
+    assert item.planned_visual_segments[1].reason == "split_long_sentence_continuation"
+    assert CUT_PLAN_ERROR_ASSET_REUSE_DISTANCE_TOO_SHORT not in item.warnings
+
+
+def test_split_escalates_to_supplement_when_continuation_and_backups_both_fail(tmp_path: Path) -> None:
+    """Nutzervorgabe (Juli 2026, Phase 3/4): reicht die Fortsetzung
+    NICHT (Video insgesamt zu kurz) UND kein Backup kann das Segment
+    füllen, wird das GESAMTE Item supplementiert — kein Verwenden von zu
+    kurzem Material, kein stilles Auffüllen mehr."""
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("clip_short.mp4", "einzig")])
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id, intro=ConfirmedIntroPlanItem(),
+        folders=[_folder_with_sentence(primary_asset_id="asset_clip_short", duration_sec=14.0)],
+    )
+    _build_and_save_draft(project, plan)
+
+    # 8.5s real (7.5s nutzbar nach 1.0s head trim) -> reicht für Segment 1
+    # (7.0s), NICHT für die kumulierte Fortsetzung von Segment 2 (14.0s
+    # gesamt) UND es gibt kein Backup.
+    with patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", return_value=8.5):
+        updated = apply_asset_selection_to_draft(project)
+
+    item = updated.items[0]
+    assert item.asset_selection_status == CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED
+    assert item.needs_supplement_asset is True
+    assert item.planned_visual_segments == []
 
 
 def test_split_continuation_of_video_too_short_is_caught_by_validator(tmp_path: Path) -> None:
@@ -1581,6 +1642,21 @@ def test_usage_tracker_continuation_does_not_increase_count() -> None:
     tracker.register("asset_a", count_as_usage=True)
     tracker.register("asset_a", count_as_usage=False)
     assert tracker.count_by_asset_id["asset_a"] == 1
+
+
+def test_usage_tracker_continuation_does_not_move_last_used_index() -> None:
+    """Bugfix (Nutzervorgabe Juli 2026): eine Fortsetzung (count_as_usage=
+    False) darf die 'zuletzt gesehen'-Position NICHT vorrücken — sonst
+    würde eine SPÄTERE, echte Wiederverwendung fälschlich als näher/
+    kürzer erscheinen, als sie tatsächlich ist."""
+    tracker = UsageTracker()
+    tracker.register("asset_a", count_as_usage=True)  # echte erste Nutzung bei Index 0
+    tracker.register("asset_b")  # Index 1
+    tracker.register("asset_a", count_as_usage=False)  # Fortsetzung bei Index 2 -> KEIN Vorrücken
+    tracker.register("asset_c")  # Index 3
+    # Ohne den Fix wäre die Distanz 4 - 2 = 2; mit dem Fix bleibt sie an der
+    # ECHTEN ersten Nutzung (Index 0) verankert: 4 - 0 = 4.
+    assert tracker.distance_since_last_use("asset_a") == 4
 
 
 def test_load_asset_lookup_does_not_modify_inventory_files(tmp_path: Path) -> None:
