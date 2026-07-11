@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from otio_app.defaults import (
@@ -51,6 +52,7 @@ __all__ = [
     "FolderAssetReadinessReport",
     "estimate_sentence_duration_sec",
     "build_folder_asset_readiness_report",
+    "build_all_folder_asset_readiness_reports",
 ]
 
 READINESS_STATUS_PASS = "PASS"
@@ -438,3 +440,38 @@ def build_folder_asset_readiness_report(
 
     report.status = READINESS_STATUS_PASS if not report.issues else READINESS_STATUS_NEEDS_REVIEW
     return report
+
+
+def build_all_folder_asset_readiness_reports(
+    project: Project,
+    *,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+) -> list[FolderAssetReadinessReport]:
+    """Bulk-Diagnose für alle aktiven Ordner MIT vorhandenem Entwurf —
+    rein lesend, kein LLM, keine Persistenz. Reihenfolge folgt der
+    bestätigten Dramaturgie. Wirft ValueError ohne bestätigte Dramaturgie."""
+    # Lazy imports: vermeidet Zyklen
+    # prompts -> folder_asset_readiness -> dramaturgy_service -> prompts.
+    from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
+    from otio_app.services.voiceover_generation.voiceover_author_service import (
+        load_folder_voiceovers_draft,
+    )
+
+    plan = load_confirmed_dramaturgy(project)
+    if plan is None:
+        raise ValueError("Keine bestätigte Dramaturgie vorhanden.")
+    draft_by_folder = {
+        item.folder_name: item for item in load_folder_voiceovers_draft(project).items
+    }
+    folder_names = [
+        entry.folder_name
+        for entry in sorted(plan.recommended_folder_order, key=lambda entry: entry.order_index)
+        if entry.enabled and entry.folder_name in draft_by_folder
+    ]
+    reports: list[FolderAssetReadinessReport] = []
+    total = len(folder_names)
+    for index, folder_name in enumerate(folder_names, start=1):
+        if progress_callback is not None:
+            progress_callback(folder_name, index, total)
+        reports.append(build_folder_asset_readiness_report(project, draft_by_folder[folder_name]))
+    return reports

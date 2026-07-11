@@ -591,3 +591,96 @@ def test_report_does_not_flag_scarce_asset_when_only_one_sentence_uses_it(tmp_pa
     )
     report = build_folder_asset_readiness_report(project, draft)
     assert report.scarce_asset_conflict_count == 0
+
+
+# --- Bulk Asset-Readiness für alle Ordner ---
+
+
+def test_build_all_folder_asset_readiness_reports_covers_active_drafts(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.dramaturgy_service import save_confirmed_dramaturgy
+    from otio_app.services.voiceover_generation.folder_asset_readiness import (
+        build_all_folder_asset_readiness_reports,
+    )
+    from otio_app.services.voiceover_generation.models import DramaturgyFolderEntry, DramaturgyPlan
+    from otio_app.services.voiceover_generation.voiceover_author_service import (
+        upsert_folder_voiceover_draft_item,
+    )
+
+    project_root = tmp_path / "USA"
+    for folder in ("Grand Canyon", "Yellowstone"):
+        (project_root / folder).mkdir(parents=True)
+    project = Project(
+        id="readiness-bulk-project",
+        name="Readiness Bulk",
+        project_root=str(project_root),
+        work_dir=str(project_root / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=["Grand Canyon", "Yellowstone"],
+        selected_asset_subdirs=["Grand Canyon", "Yellowstone"],
+    )
+    for folder, assets in (
+        ("Grand Canyon", ["asset_a", "asset_b", "asset_c"]),
+        ("Yellowstone", ["asset_a", "asset_b"]),
+    ):
+        path = get_folder_inventory_path(project.work_dir_path, folder)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        analysis = AssetFolderAnalysis(
+            folder=folder,
+            assets=[
+                AssetMediaAnalysis(path=f"{folder}/{asset_id}.mp4", asset_id=asset_id, description=asset_id)
+                for asset_id in assets
+            ],
+        )
+        path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
+
+    save_confirmed_dramaturgy(
+        project,
+        DramaturgyPlan(
+            project_id=project.id,
+            recommended_folder_order=[
+                DramaturgyFolderEntry(folder_name="Grand Canyon", order_index=1, enabled=True),
+                DramaturgyFolderEntry(folder_name="Yellowstone", order_index=2, enabled=True),
+            ],
+        ),
+    )
+    upsert_folder_voiceover_draft_item(
+        project,
+        FolderVoiceoverDraft(
+            project_id=project.id,
+            folder_name="Grand Canyon",
+            sentence_items=[
+                SentenceItem(sentence_id="s1", text="Ein Satz.", primary_asset_id="asset_a"),
+            ],
+            closing_visual_plan=ClosingVisualPlan(primary_asset_id="asset_c"),
+        ),
+    )
+    upsert_folder_voiceover_draft_item(
+        project,
+        FolderVoiceoverDraft(
+            project_id=project.id,
+            folder_name="Yellowstone",
+            sentence_items=[
+                SentenceItem(sentence_id="s1", text="Ein Satz.", primary_asset_id="asset_a"),
+            ],
+            # kein Closing Shot → NEEDS_REVIEW
+        ),
+    )
+
+    reports = build_all_folder_asset_readiness_reports(project)
+    assert [report.folder_name for report in reports] == ["Grand Canyon", "Yellowstone"]
+    assert reports[0].status == READINESS_STATUS_PASS
+    assert reports[1].status == READINESS_STATUS_NEEDS_REVIEW
+    assert reports[1].closing_shot_missing_count == 1
+
+
+def test_build_all_folder_asset_readiness_reports_raises_without_dramaturgy(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.folder_asset_readiness import (
+        build_all_folder_asset_readiness_reports,
+    )
+
+    project = _make_project_with_inventory(tmp_path, "Grand Canyon", ["asset_a"])
+    try:
+        build_all_folder_asset_readiness_reports(project)
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "Dramaturgie" in str(exc)

@@ -22,11 +22,13 @@ from otio_app.services.voiceover_generation.dramaturgy_service import load_confi
 from otio_app.services.voiceover_generation.folder_asset_allocation_correction_service import (
     ASSET_ALLOCATION_CORRECTION_STATUS_NEEDS_USER_REVIEW,
     ASSET_ALLOCATION_CORRECTION_STATUS_PASS,
+    run_all_asset_allocation_corrections,
     run_asset_allocation_correction,
 )
 from otio_app.services.voiceover_generation.folder_asset_readiness import (
     READINESS_STATUS_PASS as ASSET_READINESS_STATUS_PASS,
     FolderAssetReadinessReport,
+    build_all_folder_asset_readiness_reports,
     build_folder_asset_readiness_report,
 )
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
@@ -248,6 +250,37 @@ def _render_closing_visual_plan_section(draft: FolderVoiceoverDraft) -> None:
 
 def _asset_readiness_session_key(project: Project, folder_name: str) -> str:
     return f"vo_fvo_asset_readiness_{folder_name}_{project.id}"
+
+
+def _asset_readiness_all_session_key(project: Project) -> str:
+    return f"vo_fvo_asset_readiness_all_{project.id}"
+
+
+def _render_bulk_asset_readiness_summary(reports: list[FolderAssetReadinessReport]) -> None:
+    """Kompakte Übersicht nach „Alle Asset-Readiness prüfen“."""
+    pass_count = sum(1 for report in reports if report.status == ASSET_READINESS_STATUS_PASS)
+    needs_review_count = len(reports) - pass_count
+    if needs_review_count == 0:
+        st.success(f"Asset-Readiness alle Ordner: PASS ({pass_count}/{len(reports)}).")
+    else:
+        st.warning(
+            f"Asset-Readiness alle Ordner: {needs_review_count}/{len(reports)} mit "
+            "NEEDS_REVIEW — Details unten und in den einzelnen Ordner-Expandern."
+        )
+    rows = [
+        {
+            "folder": report.folder_name,
+            "status": report.status,
+            "issues": len(report.issues),
+            "closing_shot_fehlt": report.closing_shot_missing_count,
+            "reuse_konflikt": report.closing_shot_reuse_conflict_count,
+            "über_limit": report.asset_over_folder_limit_count,
+            "abstand_kurz": report.asset_reuse_distance_violation_count,
+            "knappe_assets": report.scarce_asset_conflict_count,
+        }
+        for report in reports
+    ]
+    st.dataframe(rows, use_container_width=True, hide_index=True)
 
 
 def _render_asset_readiness_report(report: FolderAssetReadinessReport) -> None:
@@ -897,3 +930,104 @@ def _render_bulk_draft_actions(
                     if result.status != STATUS_PASS:
                         st.error(f"Fehlgeschlagen: {result.error}")
                 st.rerun()
+
+    col_readiness_all, col_allocation_all = st.columns(2)
+    with col_readiness_all:
+        if render_new_feature_button(
+            "🟢 Alle Asset-Readiness prüfen",
+            key=f"vo_fvo_asset_readiness_all_btn_{project.id}",
+            help="NEU: prüft rein lesend (kein LLM, keine Änderung) ALLE aktiven Ordner mit "
+            "Entwurf — speichert die Diagnose auch in den einzelnen Ordner-Expandern.",
+            disabled=not has_any_draft,
+        ):
+            progress_placeholder = st.empty()
+
+            def _progress_readiness(folder_name: str, index: int, total: int) -> None:
+                progress_placeholder.info(
+                    f"Ordner {index}/{total}: „{folder_name}“ Asset-Readiness…"
+                )
+
+            with st.spinner("Asset-Readiness für alle Ordner…"):
+                try:
+                    reports = build_all_folder_asset_readiness_reports(
+                        project, progress_callback=_progress_readiness
+                    )
+                except ValueError as exc:
+                    progress_placeholder.empty()
+                    st.error(str(exc))
+                else:
+                    progress_placeholder.empty()
+                    for report in reports:
+                        st.session_state[_asset_readiness_session_key(project, report.folder_name)] = (
+                            report
+                        )
+                    st.session_state[_asset_readiness_all_session_key(project)] = reports
+                    st.rerun()
+
+    with col_allocation_all:
+        if render_new_feature_button(
+            "🤖 Alle Asset-Allokation per LLM reparieren",
+            key=f"vo_fvo_asset_allocation_all_btn_{project.id}",
+            help="NEU: läuft sequenziell über alle aktiven Ordner mit Entwurf — Ordner ohne "
+            "Auffälligkeiten werden ohne LLM übersprungen (PASS). "
+            f"Pro Ordner bis zu {MAX_ASSET_ALLOCATION_CORRECTION_ATTEMPTS} Versuche.",
+            disabled=not has_any_draft,
+        ):
+            progress_placeholder = st.empty()
+
+            def _progress_allocation(folder_name: str, index: int, total: int) -> None:
+                progress_placeholder.info(
+                    f"Ordner {index}/{total}: „{folder_name}“ Asset-Allokation…"
+                )
+
+            with st.spinner("Asset-Allokation für alle Ordner wird repariert…"):
+                try:
+                    results = run_all_asset_allocation_corrections(
+                        project,
+                        provider=author_provider,
+                        model=author_model,
+                        progress_callback=_progress_allocation,
+                    )
+                except ValueError as exc:
+                    progress_placeholder.empty()
+                    st.error(str(exc))
+                else:
+                    progress_placeholder.empty()
+                    refreshed_reports: list[FolderAssetReadinessReport] = []
+                    for result in results:
+                        report = build_folder_asset_readiness_report(project, result.draft)
+                        refreshed_reports.append(report)
+                        st.session_state[
+                            _asset_readiness_session_key(project, result.draft.folder_name)
+                        ] = report
+                    st.session_state[_asset_readiness_all_session_key(project)] = refreshed_reports
+
+                    pass_count = sum(
+                        1 for result in results if result.status == ASSET_ALLOCATION_CORRECTION_STATUS_PASS
+                    )
+                    review_count = sum(
+                        1
+                        for result in results
+                        if result.status == ASSET_ALLOCATION_CORRECTION_STATUS_NEEDS_USER_REVIEW
+                    )
+                    fail_count = len(results) - pass_count - review_count
+                    st.success(
+                        f"Asset-Allokation alle Ordner: {pass_count} PASS, "
+                        f"{review_count} NEEDS_USER_REVIEW, {fail_count} FAILED "
+                        f"(von {len(results)})."
+                    )
+                    for result in results:
+                        if result.status == ASSET_ALLOCATION_CORRECTION_STATUS_NEEDS_USER_REVIEW:
+                            st.warning(
+                                f"„{result.draft.folder_name}“: nach {result.attempt_count} "
+                                f"Versuch(en) bleiben {len(result.remaining_issues)} "
+                                "Auffälligkeit(en)."
+                            )
+                        elif result.status != ASSET_ALLOCATION_CORRECTION_STATUS_PASS:
+                            st.error(f"„{result.draft.folder_name}“: {result.error}")
+                    st.rerun()
+
+    bulk_reports = st.session_state.get(_asset_readiness_all_session_key(project))
+    if isinstance(bulk_reports, list) and bulk_reports:
+        if all(isinstance(report, FolderAssetReadinessReport) for report in bulk_reports):
+            _render_bulk_asset_readiness_summary(bulk_reports)

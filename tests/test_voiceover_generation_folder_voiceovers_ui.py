@@ -394,6 +394,8 @@ def test_bulk_action_buttons_are_present_below_drafts(
     assert "Alle validieren" in button_labels
     assert "Alle bestätigen" in button_labels
     assert "Alle Bestätigungen zurücknehmen" in button_labels
+    assert "🟢 Alle Asset-Readiness prüfen" in button_labels
+    assert "🤖 Alle Asset-Allokation per LLM reparieren" in button_labels
 
     subheaders = {subheader.value for subheader in at.subheader}
     assert "Alle Ordner gleichzeitig" in subheaders
