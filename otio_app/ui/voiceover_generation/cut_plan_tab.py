@@ -167,8 +167,12 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     search_candidates_for_cut_plan_request,
     unaccept_cut_plan_supplement_request,
 )
+from otio_app.services.voiceover_generation.cut_plan_residual_gap_apply import (
+    reapply_accepted_residual_gap_assets,
+)
 from otio_app.services.voiceover_generation.cut_plan_residual_gap_requests import (
     build_residual_gap_requests_from_cut_plan,
+    count_unapplied_accepted_residual_gap_requests,
     load_residual_gap_requests,
     merge_prior_residual_gap_request_state,
     save_residual_gap_requests,
@@ -1462,6 +1466,29 @@ def _render_residual_gap_requests(project: Project, draft: CutPlanDocument) -> N
     if not requests_document.requests:
         st.info("Keine Residual Gap Requests — keine Rest-Lücken bei bereits versorgten Items gefunden.")
         return
+
+    unapplied_count = count_unapplied_accepted_residual_gap_requests(draft, requests_document)
+    if unapplied_count:
+        st.warning(
+            f"{unapplied_count} Request(s) haben bereits ein akzeptiertes Asset, das im aktuellen Cut Plan "
+            "Draft aber noch nicht übernommen ist."
+        )
+        if st.button(
+            "✅ Akzeptierte Residual-Gap-Assets auf Cut Plan anwenden (ohne erneute Suche)",
+            key=f"cut_plan_residual_gap_reapply_{project.id}",
+            help="Übernimmt alle bereits akzeptierten Residual-Gap-Dateien erneut in den Draft — "
+            "spart externe Suchen/Lizenzierungen in Testläufen.",
+        ):
+            with st.spinner("Akzeptierte Residual-Gap-Assets werden übernommen…"):
+                try:
+                    _, applied, skipped = reapply_accepted_residual_gap_assets(project)
+                    st.success(f"{len(applied)} Item(s) übernommen.")
+                    if skipped:
+                        st.warning(f"{len(skipped)} Item(s) übersprungen (Datei fehlt oder Asset zu kurz).")
+                    st.info("Bitte Cut Plan erneut validieren.")
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
 
     repair_mode_labels = {
         CUT_PLAN_RESIDUAL_GAP_REPAIR_MODE_PATCH_GAP_ONLY: "Patch (Pause/Überhang)",
