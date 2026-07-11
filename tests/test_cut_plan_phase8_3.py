@@ -516,6 +516,81 @@ def test_split_continuation_may_reuse_same_asset_id(tmp_path: Path) -> None:
     assert item.asset_selection_status != CUT_PLAN_ASSET_SELECTION_BLOCKED
 
 
+def test_split_continuation_of_video_advances_source_range_instead_of_repeating(tmp_path: Path) -> None:
+    """Bugfix (Nutzervorgabe Juli 2026): eine Split-Fortsetzung DESSELBEN
+    Videos darf nicht dieselbe Stelle im Video noch einmal zeigen — Segment 2
+    muss dort weiterlaufen, wo Segment 1 aufgehört hat."""
+    from otio_app.services.voiceover_generation.cut_plan_asset_selector import (
+        CutPlanAssetCandidate,
+        build_visual_segments_for_item,
+    )
+    from otio_app.services.voiceover_generation.cut_plan_models import CutPlanItem
+
+    settings = CutPlanSettings(project_id="p1", shot_min_sec=3.0, shot_max_sec=8.0, video_head_trim_sec=1.0)
+    item = CutPlanItem(
+        cut_item_id="cut_1", source_scope="folder", folder_name=FOLDER_A,
+        timeline_start_sec=100.0, timeline_end_sec=114.0, duration_sec=14.0,
+        primary_asset_id="asset_only_video",
+    )
+    candidate = CutPlanAssetCandidate(
+        asset_id="asset_only_video", asset_path="/fake/only.mp4", folder_name=FOLDER_A, asset_type="video",
+        duration_sec=30.0, is_video=True, exists=True, usable_duration_sec=29.0,
+    )
+    # Nur EIN nutzbares Video für BEIDE Split-Segmente (Fortsetzungsfall).
+    segments = build_visual_segments_for_item(None, item, [candidate, candidate], settings)
+
+    assert len(segments) == 2
+    first, second = segments
+    assert first.source_in_sec == pytest.approx(1.0)
+    assert first.source_out_sec == pytest.approx(8.0)
+    # Segment 2 läuft ab 8.0s weiter statt wieder bei 1.0s zu starten.
+    assert second.source_in_sec == pytest.approx(first.source_out_sec)
+    assert second.source_out_sec == pytest.approx(first.source_out_sec + second.duration_sec)
+    assert second.reason == "split_long_sentence_continuation"
+
+
+def test_split_continuation_of_video_too_short_is_caught_by_validator(tmp_path: Path) -> None:
+    """Mit dem korrekt kumulierten source_out_sec erkennt die bestehende
+    Validierung (ASSET_TOO_SHORT), wenn das fortgesetzte Video für BEIDE
+    Segmente zusammen nicht reicht — vorher wurde das durch den Reset auf
+    video_head_trim_sec je Segment maskiert."""
+    from otio_app.services.voiceover_generation.cut_plan_asset_selector import (
+        CutPlanAssetCandidate,
+        build_visual_segments_for_item,
+    )
+    from otio_app.services.voiceover_generation.cut_plan_models import CutPlanDocument, CutPlanItem
+    from otio_app.services.voiceover_generation.cut_plan_validator import validate_visual_segments
+
+    project = _make_project(tmp_path)
+    settings = CutPlanSettings(project_id=project.id, shot_min_sec=3.0, shot_max_sec=8.0, video_head_trim_sec=1.0)
+    item = CutPlanItem(
+        cut_item_id="cut_1", source_refs=[], source_scope="folder", folder_name=FOLDER_A,
+        text="Text", timeline_start_sec=100.0, timeline_end_sec=114.0, duration_sec=14.0,
+        audio_start_sec=100.0, audio_end_sec=114.0,
+        primary_asset_id="asset_short_video", chosen_asset_id="asset_short_video",
+        asset_selection_status=CUT_PLAN_ASSET_SELECTION_PRIMARY_USED,
+    )
+    # Nur 8.5s real -> reicht für Segment 1 (1.0-8.0), aber NICHT für die
+    # kumulierte Fortsetzung von Segment 2 (8.0-15.0).
+    (project.project_root_path / FOLDER_A).mkdir(parents=True, exist_ok=True)
+    video_path = project.project_root_path / FOLDER_A / "short.mp4"
+    video_path.write_bytes(b"FAKE")
+    candidate = CutPlanAssetCandidate(
+        asset_id="asset_short_video", asset_path=str(video_path), folder_name=FOLDER_A, asset_type="video",
+        duration_sec=8.5, is_video=True, exists=True, usable_duration_sec=7.5,
+    )
+    segments = build_visual_segments_for_item(None, item, [candidate, candidate], settings)
+    item = item.model_copy(update={"planned_visual_segments": segments, "duration_strategy": CUT_PLAN_DURATION_STRATEGY_SPLIT})
+    cut_plan = CutPlanDocument(project_id=project.id, items=[item])
+
+    with patch(
+        "otio_app.services.voiceover_generation.cut_plan_validator.probe_duration_seconds", return_value=8.5
+    ):
+        warnings, blockers = validate_visual_segments(project, cut_plan)
+
+    assert any(error.type == CUT_PLAN_ERROR_ASSET_TOO_SHORT for error in blockers)
+
+
 # --- 14-16: Merge / kurze Sätze ---
 
 
@@ -547,6 +622,49 @@ def test_short_duration_merges_with_previous_item(tmp_path: Path) -> None:
     assert len(second_item.planned_visual_segments) == 1
     assert second_item.planned_visual_segments[0].reason == "merged_short_sentence"
     assert CUT_PLAN_ERROR_SHOT_TOO_SHORT not in second_item.blockers
+
+
+def test_short_duration_merge_with_previous_video_continues_source_range(tmp_path: Path) -> None:
+    """Bugfix (Nutzervorgabe Juli 2026): der rückwärts-gemergte Mini-Shot
+    muss bei einem Video dort weiterlaufen, wo das vorherige Segment
+    aufgehört hat (source_out_sec), NICHT wieder an dessen Anfang."""
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("clip_a.mp4", "a")])
+    # initial_audio_offset_sec=0.0: kein Phase-8.5-Preroll, der das erste
+    # VisualSegment NACH dem Merge nochmal verlängert und damit die hier
+    # geprüfte source_out_sec/source_in_sec-Kontinuität verzerren würde
+    # (gleiche Konvention wie test_14_seconds_produces_..._segments).
+    save_cut_plan_settings(project, _settings(project, initial_audio_offset_sec=0.0))
+    folder = ConfirmedFolderPlanItem(
+        folder_name=FOLDER_A,
+        order_index=1,
+        audio_path="/fake/folder.mp3",
+        audio_duration_sec=30.0,
+        sentence_items=[
+            SentenceItem(sentence_id="sentence_001", text="Satz eins.", primary_asset_id="asset_clip_a"),
+            SentenceItem(sentence_id="sentence_002", text="Kurz.", primary_asset_id="asset_clip_a"),
+        ],
+        alignment_items=[
+            AlignmentItem(sentence_id="sentence_001", audio_start_sec=0.0, audio_end_sec=5.0, duration_sec=5.0),
+            AlignmentItem(sentence_id="sentence_002", audio_start_sec=5.0, audio_end_sec=6.5, duration_sec=1.5),
+        ],
+    )
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=ConfirmedIntroPlanItem(), folders=[folder])
+    _build_and_save_draft(project, plan)
+
+    with patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", return_value=30.0):
+        updated = apply_asset_selection_to_draft(project)
+
+    first_item = next(item for item in updated.items if "sentence_001" in item.cut_item_id)
+    second_item = next(item for item in updated.items if "sentence_002" in item.cut_item_id)
+    first_segment = first_item.planned_visual_segments[0]
+    merged_segment = second_item.planned_visual_segments[0]
+    assert second_item.duration_strategy == CUT_PLAN_DURATION_STRATEGY_MERGED
+    assert merged_segment.asset_type == "video"
+    assert merged_segment.source_in_sec == pytest.approx(first_segment.source_out_sec)
+    assert merged_segment.source_out_sec == pytest.approx(first_segment.source_out_sec + second_item.duration_sec)
 
 
 def test_short_duration_without_merge_produces_shot_too_short_warning(tmp_path: Path) -> None:
@@ -1417,6 +1535,52 @@ def test_merge_mini_shots_with_next_item_skips_when_combined_duration_exceeds_sh
     updated = merge_mini_shots_with_next_item([tiny, next_item], settings)
 
     assert updated[0] == tiny
+
+
+def test_merge_mini_shots_with_next_item_video_ends_where_next_segment_starts() -> None:
+    """Bugfix (Nutzervorgabe Juli 2026): bei einem Video darf der
+    vorwärts-gemergte Mini-Shot NICHT dieselbe Stelle zeigen wie das
+    nächste Segment, sondern muss GENAU DA enden, wo dieses beginnt."""
+    settings = CutPlanSettings(project_id="p1")
+    next_segment = VisualSegment(
+        segment_id="cut_b_seg_01", timeline_in_sec=10.5, timeline_out_sec=15.5, duration_sec=5.0,
+        asset_id="asset_video_b", asset_path="/fake/b.mp4", asset_type="video", source_in_sec=4.0,
+        source_out_sec=9.0, track="V1", reason="primary_asset",
+    )
+    tiny = _tiny_single_shot_item()
+    next_item = _next_single_shot_item(
+        chosen_asset_id="asset_video_b", planned_visual_segments=[next_segment],
+    )
+
+    updated = merge_mini_shots_with_next_item([tiny, next_item], settings)
+
+    merged_segment = updated[0].planned_visual_segments[0]
+    assert merged_segment.asset_type == "video"
+    assert merged_segment.source_out_sec == pytest.approx(next_segment.source_in_sec)
+    assert merged_segment.source_in_sec == pytest.approx(next_segment.source_in_sec - tiny.duration_sec)
+    assert merged_segment.source_in_sec >= 0.0
+
+
+def test_merge_mini_shots_with_next_item_video_clamps_source_in_when_no_headroom() -> None:
+    """Wenn vor dem Start des nächsten Segments nicht genug Kopfzeit im
+    Video übrig ist, wird auf 0.0 geklemmt statt einen ungültigen
+    (negativen) source_in_sec zu erzeugen."""
+    settings = CutPlanSettings(project_id="p1")
+    next_segment = VisualSegment(
+        segment_id="cut_b_seg_01", timeline_in_sec=10.5, timeline_out_sec=15.5, duration_sec=5.0,
+        asset_id="asset_video_b", asset_path="/fake/b.mp4", asset_type="video", source_in_sec=0.2,
+        source_out_sec=5.2, track="V1", reason="primary_asset",
+    )
+    tiny = _tiny_single_shot_item()  # duration_sec=0.5 > next_segment.source_in_sec (0.2)
+    next_item = _next_single_shot_item(
+        chosen_asset_id="asset_video_b", planned_visual_segments=[next_segment],
+    )
+
+    updated = merge_mini_shots_with_next_item([tiny, next_item], settings)
+
+    merged_segment = updated[0].planned_visual_segments[0]
+    assert merged_segment.source_in_sec == 0.0
+    assert merged_segment.source_out_sec == pytest.approx(tiny.duration_sec)
 
 
 def test_merge_mini_shots_with_next_item_ignores_soft_warning_case() -> None:

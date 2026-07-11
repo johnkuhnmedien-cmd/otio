@@ -356,7 +356,26 @@ def build_visual_segments_for_item(
     """Baut ein VisualSegment pro Eintrag in chosen_assets. Bei einem
     Kandidaten -> ein Segment über die volle Item-Dauer (Fall A/B). Bei
     mehreren Kandidaten -> Split-Segmente mit möglichst gleichmäßiger Dauer
-    (Fall C, §6)."""
+    (Fall C, §6).
+
+    Bugfix (Nutzervorgabe Juli 2026, "Video soll weiterlaufen statt sich zu
+    wiederholen"): wenn ein Split-Segment dasselbe Video wie ein FRÜHERES
+    Segment DESSELBEN Items fortsetzt (`_select_candidates_for_item` konnte
+    keinen eigenständigen Ersatz-Kandidaten finden und hat stattdessen den
+    letzten erfolgreichen Kandidaten als Fortsetzung aufgefüllt), muss die
+    Quelle dort weiterlaufen, wo das vorherige Segment aufgehört hat
+    (`source_in_sec = vorheriges source_out_sec` desselben Assets) — vorher
+    wurde `source_in_sec` für JEDES Segment neu auf `video_head_trim_sec`
+    zurückgesetzt, wodurch eine Fortsetzung exakt dieselbe Stelle im Video
+    noch einmal gezeigt hätte, statt tatsächlich weiterzulaufen. Reicht das
+    Video für die kumulierte Fortsetzung nicht mehr aus, erkennt die
+    bestehende Validierung (`source_out_sec > echte Videodauer`) das jetzt
+    korrekt als ASSET_TOO_SHORT (vorher durch den Reset maskiert) — die
+    bestehende Supplement-Pipeline greift dafür bereits (siehe
+    cut_plan_supplement_bridge._ASSET_RELATED_SUPPLEMENTABLE_ERROR_TYPES).
+    Bilder sind von diesem Fix inhaltlich nicht betroffen (kein Zeitverlauf,
+    `source_in_sec` bleibt 0.0), werden aber aus Konsistenzgründen ebenfalls
+    in derselben Struktur verfolgt."""
     total_duration = item.duration_sec
     if len(chosen_assets) <= 1:
         durations = [total_duration]
@@ -365,19 +384,26 @@ def build_visual_segments_for_item(
 
     segments: list[VisualSegment] = []
     cursor = item.timeline_start_sec
+    last_source_out_by_asset_id: dict[str, float] = {}
     for index, duration in enumerate(durations):
         candidate = chosen_assets[min(index, len(chosen_assets) - 1)]
         segment_start = cursor
         segment_end = cursor + duration
 
+        is_continuation_segment = candidate.asset_id in last_source_out_by_asset_id
+
         if candidate.is_video:
-            source_in_sec = settings.video_head_trim_sec
+            source_in_sec = (
+                last_source_out_by_asset_id[candidate.asset_id]
+                if is_continuation_segment
+                else settings.video_head_trim_sec
+            )
             source_out_sec = source_in_sec + duration
         else:
             source_in_sec = 0.0
             source_out_sec = duration
+        last_source_out_by_asset_id[candidate.asset_id] = source_out_sec
 
-        is_continuation_segment = index > 0 and candidate.asset_id == chosen_assets[0].asset_id
         if len(chosen_assets) <= 1:
             reason = "primary_asset" if candidate.asset_id == item.primary_asset_id else "backup_asset"
         elif is_continuation_segment:
@@ -790,9 +816,21 @@ def _merge_with_previous(item: CutPlanItem, previous_item: CutPlanItem) -> CutPl
     """Modelliert den Merge als eigenen Segment-Eintrag für das aktuelle
     Item (reason='merged_short_sentence'), der denselben chosen_asset_id wie
     das vorherige Item weiterführt — keine erneute Usage-Zählung, da dies
-    dieselbe redaktionelle Asset-Entscheidung fortsetzt (§6 Fall A)."""
+    dieselbe redaktionelle Asset-Entscheidung fortsetzt (§6 Fall A).
+
+    Bugfix (Nutzervorgabe Juli 2026, siehe build_visual_segments_for_item):
+    bei einem Video muss die Quelle dort weiterlaufen, wo das vorherige
+    Segment aufgehört hat (`previous_segment.source_out_sec`), NICHT wieder
+    an dessen Anfang (`previous_segment.source_in_sec`) — sonst würde das
+    gemergte Segment exakt dieselbe Stelle im Video noch einmal zeigen.
+    Bilder bleiben unverändert bei `source_in_sec = 0.0` (kein Zeitverlauf,
+    außerdem von validate_visual_segments hart gefordert)."""
     chosen_asset_id = previous_item.chosen_asset_id or previous_item.primary_asset_id
     previous_segment = previous_item.planned_visual_segments[-1]
+    if previous_segment.asset_type == "video":
+        source_in_sec = previous_segment.source_out_sec
+    else:
+        source_in_sec = 0.0
     merged_segment = VisualSegment(
         segment_id=f"{item.cut_item_id}_seg_01",
         timeline_in_sec=item.timeline_start_sec,
@@ -801,8 +839,8 @@ def _merge_with_previous(item: CutPlanItem, previous_item: CutPlanItem) -> CutPl
         asset_id=chosen_asset_id,
         asset_path=previous_segment.asset_path,
         asset_type=previous_segment.asset_type,
-        source_in_sec=previous_segment.source_in_sec,
-        source_out_sec=previous_segment.source_in_sec + item.duration_sec,
+        source_in_sec=source_in_sec,
+        source_out_sec=source_in_sec + item.duration_sec,
         track="V1",
         transform=dict(previous_segment.transform),
         background_style=previous_segment.background_style,
@@ -861,9 +899,25 @@ def _merge_with_next(item: CutPlanItem, next_item: CutPlanItem) -> CutPlanItem:
     NICHT als zusätzliche redaktionelle Wiederverwendung (reason=
     'merged_short_sentence' ist sowohl bei validate_visual_segments als auch
     bei validate_asset_usage als Fortsetzungs-Marker hinterlegt, siehe
-    cut_plan_validator._CONTINUATION_REASONS)."""
+    cut_plan_validator._CONTINUATION_REASONS).
+
+    Bugfix (Nutzervorgabe Juli 2026, siehe build_visual_segments_for_item/
+    _merge_with_previous): der Mini-Shot liegt auf der Timeline VOR
+    `next_item` — bei einem Video muss seine Quelle deshalb GENAU DA enden,
+    wo `next_segment` beginnt (`next_segment.source_in_sec`), damit der
+    Übergang lückenlos weiterläuft, statt dieselbe Stelle zu wiederholen.
+    Reicht die Kopfzeit des Videos davor nicht aus (negativer source_in_sec
+    wäre ungültig), wird auf 0.0 geklemmt — führt im Extremfall zu einem
+    kleinen Sprung statt einer Wiederholung, was für einen Mini-Shot
+    (< 1.0s) vernachlässigbar ist. Bilder bleiben bei `source_in_sec = 0.0`
+    (kein Zeitverlauf, außerdem von validate_visual_segments hart
+    gefordert)."""
     chosen_asset_id = next_item.chosen_asset_id or next_item.primary_asset_id
     next_segment = next_item.planned_visual_segments[0]
+    if next_segment.asset_type == "video":
+        source_in_sec = max(0.0, next_segment.source_in_sec - item.duration_sec)
+    else:
+        source_in_sec = 0.0
     merged_segment = VisualSegment(
         segment_id=f"{item.cut_item_id}_seg_01",
         timeline_in_sec=item.timeline_start_sec,
@@ -872,8 +926,8 @@ def _merge_with_next(item: CutPlanItem, next_item: CutPlanItem) -> CutPlanItem:
         asset_id=chosen_asset_id,
         asset_path=next_segment.asset_path,
         asset_type=next_segment.asset_type,
-        source_in_sec=next_segment.source_in_sec,
-        source_out_sec=next_segment.source_in_sec + item.duration_sec,
+        source_in_sec=source_in_sec,
+        source_out_sec=source_in_sec + item.duration_sec,
         track="V1",
         transform=dict(next_segment.transform),
         background_style=next_segment.background_style,
