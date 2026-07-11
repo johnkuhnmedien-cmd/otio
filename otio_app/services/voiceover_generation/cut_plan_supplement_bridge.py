@@ -129,6 +129,7 @@ __all__ = [
     "find_reusable_supplement_manifest_entry",
     "record_supplement_manifest_entry",
     "record_supplement_manifest_validation",
+    "to_cut_plan_candidate",
 ]
 
 _DURATION_EPSILON = 0.05
@@ -420,9 +421,15 @@ def _save_candidates_document(
 # --- Kandidatensuche (§5) — NUR bei explizitem Aufruf, nie automatisch ---
 
 
-def _to_cut_plan_candidate(
+def to_cut_plan_candidate(
     request_id: str, provider: str, raw: SupplementCandidate
 ) -> CutPlanSupplementCandidate:
+    """Öffentlich (Phase 6, Validation Repair): baut einen technisch
+    reinen CutPlanSupplementCandidate aus einem Adapter-Suchtreffer —
+    reine Funktion ohne Kopplung an CutPlanSupplementRequest (nur
+    request_id als String), wiederverwendbar für Pipelines, die NICHT
+    über supplement_requests.from_cut_plan.json laufen (siehe
+    cut_plan_validation_repair_resolve_service.py)."""
     risks: list[str] = []
     if raw.is_mock:
         risks.append("MOCK_CANDIDATE")
@@ -566,7 +573,7 @@ def search_candidates_for_cut_plan_request(
         update_cut_plan_supplement_request(project, request_id, status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_FAILED)
         return document
 
-    candidates = [_to_cut_plan_candidate(request_id, provider, raw) for raw in raw_candidates]
+    candidates = [to_cut_plan_candidate(request_id, provider, raw) for raw in raw_candidates]
     status = (
         CUT_PLAN_SUPPLEMENT_CANDIDATES_STATUS_READY
         if candidates

@@ -565,6 +565,24 @@ CUT_PLAN_VALIDATION_REPAIR_STATUS_PENDING = "PENDING"
 CUT_PLAN_VALIDATION_REPAIR_STATUS_ACCEPTED = "ACCEPTED"
 CUT_PLAN_VALIDATION_REPAIR_STATUS_FAILED = "FAILED"
 CUT_PLAN_VALIDATION_REPAIR_STATUS_NO_MATCH = "NO_MATCH"
+# Nutzervorgabe (Juli 2026): eine BLACK_GAP-Lücke, deren Nachbar-Segmente
+# zusammen nicht genug 'Kürzungs-Spielraum' haben, um das Reparatur-
+# Fenster sicher auf mindestens shot_min_sec zu erweitern (siehe
+# compute_black_gap_repair_plan) — bewusst ANDERER Status als NO_MATCH
+# (kein Kandidat gefunden), da hier das Problem strukturell ist, nicht
+# an fehlenden Kandidaten liegt. UI-Hinweis: normaler Supplement-Request
+# für das gesamte Item nötig.
+CUT_PLAN_VALIDATION_REPAIR_STATUS_UNSAFE_TO_REPAIR = "UNSAFE_TO_REPAIR"
+
+# Phase 6 (Nutzervorgabe, Juli 2026): für BLACK_GAP-Reparaturen werden
+# erfahrungsgemäß bessere/passendere Ergebnisse mit Fotos statt Videos
+# erzielt (kein Risiko einer zu kurzen Videoquelle, beliebig haltbar) —
+# deshalb Foto VOR Video, umgekehrt zur sonst üblichen redaktionellen
+# Video-Präferenz. Für ASSET_REUSE_DISTANCE (ein komplettes Ersatz-Asset
+# für ein ganzes Segment) bleibt die bestehende Video-vor-Foto-Präferenz
+# bestehen.
+CUT_PLAN_VALIDATION_REPAIR_ASSET_TYPE_ORDER_BLACK_GAP = ("image", "video")
+CUT_PLAN_VALIDATION_REPAIR_ASSET_TYPE_ORDER_ASSET_REUSE_DISTANCE = ("video", "image")
 
 # Phase 9.1: isolierte EditPlan-Bridge — ausschließlich unter
 # _otio/voiceover_generation/cut_plan/edit_plan_bridge/, NIEMALS unter
