@@ -871,7 +871,11 @@ def auto_resolve_cut_plan_supplement_request(
             # mit dem NÄCHSTEN Kandidaten weitergemacht.
             try:
                 accept_cut_plan_supplement_candidate(
-                    project, request_id, candidate.candidate_id, downloaded_asset=downloaded_asset
+                    project,
+                    request_id,
+                    candidate.candidate_id,
+                    downloaded_asset=downloaded_asset,
+                    candidate=candidate,
                 )
             except ValueError as exc:
                 accept_failed_reason = (

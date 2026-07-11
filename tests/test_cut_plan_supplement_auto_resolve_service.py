@@ -422,7 +422,7 @@ def test_auto_resolve_accept_failure_does_not_crash_batch_and_tries_next_candida
     project, request_id = _setup_request(tmp_path)
     candidates_doc = _fake_candidates_document(request_id, ["cand_1", "cand_2"])
 
-    def _accept_side_effect(project_arg, rid, candidate_id, downloaded_asset=None):
+    def _accept_side_effect(project_arg, rid, candidate_id, downloaded_asset=None, **kwargs):
         if candidate_id == "cand_1":
             raise ValueError("Supplement-Kandidat zu kurz für Item 'cut_001': benötigt 5.00s, verfügbar 3.65s.")
         return None

@@ -940,6 +940,7 @@ def accept_cut_plan_supplement_candidate(
     force_replace: bool = False,
     *,
     downloaded_asset: CutPlanSupplementAsset | None = None,
+    candidate: CutPlanSupplementCandidate | None = None,
 ) -> CutPlanDocument:
     """I/O-Orchestrator: lädt Request/Kandidat/Draft, lädt den Kandidaten
     über den technischen Provider-Adapter herunter (NUR bei diesem expliziten
@@ -963,6 +964,12 @@ def accept_cut_plan_supplement_candidate(
     Ohne Angabe (Standardfall, u. a. der bestehende UI-Button) wird wie
     bisher direkt selbst heruntergeladen.
 
+    Phase E/J/K: `candidate` ist optional — für lokal aus dem Manifest
+    rekonstruierte Wiederverwendungs-Kandidaten (`reuse_{provider}_…`),
+    die nie in cut_plan/supplement_candidates/ persistiert wurden. Wenn
+    gesetzt, wird die Kandidaten-Datei nicht benötigt (nur candidate_id
+    muss übereinstimmen).
+
     Nutzt ausschließlich `SupplementSourceAdapter.acquire` (technischer
     Adapter) — NICHT die höherstufige Produktions-Beschaffungsorchestrierung.
     Schreibt niemals unter _otio/supplement/, keine regulären Inventory-
@@ -978,14 +985,21 @@ def accept_cut_plan_supplement_candidate(
             "Supplement request already has an accepted asset. Use replace explicitly."
         )
 
-    candidates_document = load_cut_plan_supplement_candidates_for_request(project, request_id)
-    if candidates_document is None:
-        raise ValueError(f"Keine Kandidaten für Request '{request_id}' vorhanden — bitte zuerst suchen.")
-    candidate = next(
-        (entry for entry in candidates_document.candidates if entry.candidate_id == candidate_id), None
-    )
-    if candidate is None:
-        raise ValueError(f"Kandidat '{candidate_id}' nicht gefunden.")
+    resolved_candidate = candidate
+    if resolved_candidate is not None and resolved_candidate.candidate_id != candidate_id:
+        raise ValueError(
+            f"Übergebener Kandidat '{resolved_candidate.candidate_id}' stimmt nicht mit "
+            f"candidate_id '{candidate_id}' überein."
+        )
+    if resolved_candidate is None:
+        candidates_document = load_cut_plan_supplement_candidates_for_request(project, request_id)
+        if candidates_document is None:
+            raise ValueError(f"Keine Kandidaten für Request '{request_id}' vorhanden — bitte zuerst suchen.")
+        resolved_candidate = next(
+            (entry for entry in candidates_document.candidates if entry.candidate_id == candidate_id), None
+        )
+        if resolved_candidate is None:
+            raise ValueError(f"Kandidat '{candidate_id}' nicht gefunden.")
 
     draft = load_cut_plan_draft(project)
     if draft is None:
@@ -999,7 +1013,7 @@ def accept_cut_plan_supplement_candidate(
         accepted_asset = downloaded_asset
     else:
         try:
-            accepted_asset = download_cut_plan_supplement_candidate(project, request_id, candidate)
+            accepted_asset = download_cut_plan_supplement_candidate(project, request_id, resolved_candidate)
         except Exception as exc:
             update_cut_plan_supplement_request(project, request_id, status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_FAILED)
             raise ValueError(f"Supplement-Download fehlgeschlagen: {_sanitize_error_message(str(exc))}") from exc

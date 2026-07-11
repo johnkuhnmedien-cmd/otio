@@ -1247,6 +1247,78 @@ def test_accept_downloads_asset_under_cut_plan_supplement_assets_dir(tmp_path: P
     assert str(downloaded_path) == item.planned_visual_segments[0].asset_path
 
 
+def test_accept_allows_manifest_reuse_candidate_without_candidates_document(tmp_path: Path) -> None:
+    """Phase E/J/K: lokal rekonstruierte reuse_*-Kandidaten existieren nur im
+    Auto-Resolver — accept darf sie ohne persistierte Kandidaten-Datei
+    übernehmen, wenn candidate + downloaded_asset übergeben werden."""
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    save_cut_plan_supplement_requests(project, document)
+    request_id = document.requests[0].request_id
+    request = document.requests[0]
+
+    reuse_candidate = _to_cut_plan_candidate_for_test(
+        request_id,
+        "pexels",
+        SupplementCandidate(
+            candidate_id="reuse_pexels_19150364",
+            supplement_request_id=request_id,
+            provider="pexels",
+            provider_asset_id="19150364",
+            media_type="video",
+            width=1920,
+            height=1080,
+            duration_sec=12.91,
+            download_url="",
+            download_enabled=True,
+            is_mock=False,
+            requires_user_approval=False,
+            license="pexels",
+            source_page_url="https://pexels.com/video/19150364",
+            folder_name=request.folder_name,
+            match_score=1.0,
+            title="Reuse",
+        ),
+    )
+    downloaded_asset = CutPlanSupplementAsset(
+        asset_id="supplement_pexels_19150364",
+        request_id=request_id,
+        candidate_id=reuse_candidate.candidate_id,
+        provider="pexels",
+        asset_path=str(
+            project.work_dir_path
+            / "voiceover_generation"
+            / "cut_plan"
+            / "supplement_assets"
+            / request_id
+            / "reuse.mp4"
+        ),
+        asset_type="video",
+        duration_sec=12.91,
+        width=1920,
+        height=1080,
+        license="pexels",
+        source_url="https://pexels.com/video/19150364",
+        status="ACQUIRED",
+    )
+    Path(downloaded_asset.asset_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(downloaded_asset.asset_path).write_bytes(b"FAKE_VIDEO")
+
+    updated = accept_cut_plan_supplement_candidate(
+        project,
+        request_id,
+        reuse_candidate.candidate_id,
+        downloaded_asset=downloaded_asset,
+        candidate=reuse_candidate,
+    )
+
+    assert load_cut_plan_supplement_candidates_for_request(project, request_id) is None
+    item = next(i for i in updated.items if i.cut_item_id == request.cut_item_id)
+    assert item.asset_selection_status == CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_USED
+    assert item.chosen_asset_id == downloaded_asset.asset_id
+
+
 def test_accepted_supplement_creates_synthetic_asset_id() -> None:
     request = _supplement_request(request_id="cutreq_cut_001", cut_item_id="cut_001")
     asset = _accepted_asset(asset_id="cut_supplement_cutreq_cut_001_cand_1")
