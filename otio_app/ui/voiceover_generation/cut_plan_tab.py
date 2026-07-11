@@ -189,6 +189,13 @@ from otio_app.services.voiceover_generation.cut_plan_validation_repair import (
     load_cut_plan_validation_repair_requests,
     save_cut_plan_validation_repair_requests,
 )
+from otio_app.services.voiceover_generation.cut_plan_visual_gap_analysis import (
+    GAP_KIND_FULL_ITEM_MISSING,
+    GAP_KIND_MINI_REPAIRABLE_GAP,
+    GAP_KIND_RESIDUAL_ITEM_GAP,
+    GAP_KIND_UNATTRIBUTED_GAP,
+    analyze_visual_gaps,
+)
 from otio_app.services.voiceover_generation.cut_plan_validation_repair_resolve_service import (
     auto_resolve_all_validation_repair_requests,
     auto_resolve_validation_repair_request,
@@ -1619,20 +1626,33 @@ def _render_validation_repair(project: Project, draft: CutPlanDocument) -> None:
 
     if not requests_document.requests:
         st.info("Keine Validation Repair Requests — keine reparierbaren Rest-Blocker im aktuellen Draft gefunden.")
-        stale_black_gaps = count_black_gap_items_without_gap_bounds(draft)
         total_black_gaps = count_black_gap_blockers_on_draft(draft)
-        if stale_black_gaps or total_black_gaps:
+        if total_black_gaps:
+            settings = CutPlanSettings(project_id=project.id, **draft.settings_snapshot)
+            gaps = analyze_visual_gaps(draft, settings)
+            unattributed = sum(1 for gap in gaps if gap.gap_kind == GAP_KIND_UNATTRIBUTED_GAP)
+            full_item_missing = sum(1 for gap in gaps if gap.gap_kind == GAP_KIND_FULL_ITEM_MISSING)
+            residual = sum(1 for gap in gaps if gap.gap_kind == GAP_KIND_RESIDUAL_ITEM_GAP)
+            mini_repairable = sum(1 for gap in gaps if gap.gap_kind == GAP_KIND_MINI_REPAIRABLE_GAP)
             st.warning(
-                f"Trotzdem {total_black_gaps} BLACK_GAP-Blocker im Draft sichtbar"
-                + (
-                    f" — davon {stale_black_gaps} ohne genaue Gap-Zeit (veraltet nach Supplement-"
-                    "Übernahme oder ohne erneute Validierung)."
-                    if stale_black_gaps
-                    else "."
-                )
-                + " Bitte nach Supplement-Übernahme zuerst „Cut Plan validieren“, dann diese Requests "
+                f"Trotzdem {total_black_gaps} BLACK_GAP-Blocker im Draft sichtbar. Direkt aus dem Draft "
+                f"berechnete Aufschlüsselung: {unattributed} ohne Satz-Zuordnung (manuelle Prüfung nötig), "
+                f"{full_item_missing} Item(s) ohne jedes Asset (→ Supplement Requests), "
+                f"{residual} Rest-Lücke(n) bei bereits versorgten Items (→ Residual Gap Requests), "
+                f"{mini_repairable} klein genug für Validation Repair (nach erneutem Erzeugen sichtbar). "
+                "Bitte nach jeder Übernahme/Reparatur zuerst „Cut Plan validieren“, dann diese Requests "
                 "neu erzeugen."
             )
+            if residual:
+                st.caption(
+                    f"➡️ Empfehlung: {residual} Rest-Lücke(n) gehören zu „Residual Gap Repair“ oben — "
+                    "dort „Residual Gap Requests erzeugen“ klicken."
+                )
+            if full_item_missing:
+                st.caption(
+                    f"➡️ Empfehlung: {full_item_missing} Item(s) ohne Asset gehören zu „Supplement Requests“ "
+                    "weiter oben."
+                )
         return
 
     type_labels = {

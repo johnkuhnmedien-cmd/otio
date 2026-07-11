@@ -9,12 +9,15 @@ from unittest.mock import patch
 
 import pytest
 
+from otio_app.defaults import CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER
 from otio_app.models import Project, ProjectMode
 from otio_app.services.voiceover_generation.cut_plan_builder import save_cut_plan_draft
 from otio_app.services.voiceover_generation.cut_plan_models import (
+    CutPlanAudioItem,
     CutPlanDocument,
     CutPlanItem,
     CutPlanSourceRef,
+    CutPlanValidationError,
     VisualSegment,
 )
 from otio_app.services.voiceover_generation.cut_plan_validation_repair import (
@@ -143,6 +146,112 @@ def test_build_button_creates_requests_document(tmp_path: Path, monkeypatch: pyt
     assert reloaded is not None
     assert len(reloaded.requests) == 1
     assert reloaded.requests[0].cut_item_id == "cut_gap"
+
+
+def test_ui_breaks_down_black_gaps_by_gap_kind_for_full_item_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Kein Validation Repair Request (Blocker ohne verwertbare Gap-Zeit),
+    aber die neue Direkt-aus-Draft-Diagnose erkennt trotzdem ein Item ganz
+    ohne Asset und empfiehlt Supplement Requests."""
+    project = _make_project(tmp_path)
+    missing_item = _item(cut_item_id="cut_missing", timeline_start_sec=0.0, timeline_end_sec=5.0, duration_sec=5.0)
+    cut_plan = CutPlanDocument(
+        project_id=project.id,
+        items=[missing_item],
+        audio_items=[
+            CutPlanAudioItem(scope="folder", folder_name=FOLDER_A, timeline_start_sec=0.0, timeline_end_sec=5.0, duration_sec=5.0)
+        ],
+        blockers=[
+            CutPlanValidationError(
+                type=CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER, severity="BLOCKER", scope="sentence",
+                cut_item_id="cut_missing", folder_name=FOLDER_A,
+                # Stale Blocker ohne verwertbare Gap-Zeit -> kein Validation Repair Request.
+                gap_start_sec=0.0, gap_end_sec=0.0,
+            )
+        ],
+    )
+    save_cut_plan_draft(project, cut_plan)
+    from otio_app.services.voiceover_generation.cut_plan_validation_repair_models import (
+        CutPlanValidationRepairRequestsDocument,
+    )
+
+    save_cut_plan_validation_repair_requests(
+        project, CutPlanValidationRepairRequestsDocument(project_id=project.id, requests=[])
+    )
+
+    _patch_project_selector(project, monkeypatch)
+    monkeypatch.setattr("streamlit.button", lambda *a, **k: False)
+    monkeypatch.setattr("streamlit.rerun", lambda: None)
+    warnings: list[str] = []
+    captions: list[str] = []
+    monkeypatch.setattr("streamlit.warning", lambda msg, **k: warnings.append(msg))
+    monkeypatch.setattr("streamlit.caption", lambda msg, **k: captions.append(msg))
+
+    render_cut_plan_page()
+
+    assert any("1 Item(s) ohne jedes Asset" in msg for msg in warnings)
+    assert any("Supplement Requests" in msg for msg in captions)
+
+
+def test_ui_breaks_down_black_gaps_by_gap_kind_for_residual_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Kein Validation Repair Request, aber die Diagnose erkennt eine
+    Rest-Lücke bei einem bereits versorgten Item und empfiehlt Residual
+    Gap Requests."""
+    project = _make_project(tmp_path)
+    item = _item(
+        cut_item_id="cut_1", timeline_start_sec=0.0, timeline_end_sec=5.0, duration_sec=5.0,
+        asset_selection_status="SUPPLEMENT_USED", chosen_asset_id="supplement_pexels_1",
+        planned_visual_segments=[
+            VisualSegment(
+                segment_id="seg_1", timeline_in_sec=0.0, timeline_out_sec=5.0, duration_sec=5.0,
+                asset_id="supplement_pexels_1", asset_path="/fake/a.jpg", asset_type="image",
+                source_in_sec=0.0, source_out_sec=5.0, track="V1",
+            )
+        ],
+    )
+    next_item = _item(cut_item_id="cut_2", timeline_start_sec=20.0, timeline_end_sec=25.0, duration_sec=5.0)
+    cut_plan = CutPlanDocument(
+        project_id=project.id,
+        items=[item, next_item],
+        audio_items=[
+            CutPlanAudioItem(scope="folder", folder_name=FOLDER_A, timeline_start_sec=0.0, timeline_end_sec=5.0, duration_sec=5.0),
+            CutPlanAudioItem(scope="folder", folder_name=FOLDER_A, timeline_start_sec=20.0, timeline_end_sec=25.0, duration_sec=5.0),
+        ],
+        settings_snapshot={
+            "extend_visual_window_to_next_sentence": True, "max_sentence_pause_extension_sec": 15.0,
+            "shot_max_sec": 10.0,
+        },
+        blockers=[
+            CutPlanValidationError(
+                type=CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER, severity="BLOCKER", scope="sentence",
+                cut_item_id="cut_1", folder_name=FOLDER_A, gap_start_sec=0.0, gap_end_sec=0.0,
+            )
+        ],
+    )
+    save_cut_plan_draft(project, cut_plan)
+    from otio_app.services.voiceover_generation.cut_plan_validation_repair_models import (
+        CutPlanValidationRepairRequestsDocument,
+    )
+
+    save_cut_plan_validation_repair_requests(
+        project, CutPlanValidationRepairRequestsDocument(project_id=project.id, requests=[])
+    )
+
+    _patch_project_selector(project, monkeypatch)
+    monkeypatch.setattr("streamlit.button", lambda *a, **k: False)
+    monkeypatch.setattr("streamlit.rerun", lambda: None)
+    warnings: list[str] = []
+    captions: list[str] = []
+    monkeypatch.setattr("streamlit.warning", lambda msg, **k: warnings.append(msg))
+    monkeypatch.setattr("streamlit.caption", lambda msg, **k: captions.append(msg))
+
+    render_cut_plan_page()
+
+    assert any("1 Rest-Lücke(n)" in msg for msg in warnings)
+    assert any("Residual Gap Repair" in msg for msg in captions)
 
 
 def test_ui_shows_requests_table_and_expander(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
