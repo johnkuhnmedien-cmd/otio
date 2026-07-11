@@ -101,6 +101,7 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_models import (
     CutPlanSupplementCandidatesDocument,
     CutPlanSupplementManifestDocument,
     CutPlanSupplementManifestEntry,
+    CutPlanSupplementManifestValidation,
     CutPlanSupplementRequest,
     CutPlanSupplementRequestsDocument,
 )
@@ -127,6 +128,7 @@ __all__ = [
     "save_cut_plan_supplement_manifest",
     "find_reusable_supplement_manifest_entry",
     "record_supplement_manifest_entry",
+    "record_supplement_manifest_validation",
 ]
 
 _DURATION_EPSILON = 0.05
@@ -669,6 +671,62 @@ def record_supplement_manifest_entry(
     updated = manifest.model_copy(update={"entries": remaining + [entry]})
     save_cut_plan_supplement_manifest(project, updated)
     return updated
+
+
+def record_supplement_manifest_validation(
+    project: Project,
+    *,
+    provider: str,
+    provider_asset_id: str,
+    request_id: str,
+    validation_status: str,
+    validation_score: float = 0.0,
+    validation_reason: str = "",
+    description: str = "",
+    accepted: bool = False,
+) -> None:
+    """Phase I (Nutzervorgabe, Juli 2026): speichert das Gemini-
+    Bewertungsergebnis für EINEN Request auf dem passenden Manifest-
+    Eintrag (identifiziert über provider + provider_asset_id) — ohne
+    dieses Feld konnte das Manifest bisher nur sagen 'diese Datei wurde
+    heruntergeladen', aber nicht 'diese Datei war für Request X gut/
+    schlecht'. Ermöglicht Phase J (bevorzugte Auswahl PASS > WEAK_PASS >
+    unvalidiert > FAIL bei mehreren Kandidaten) und Phase K (kein erneuter
+    Gemini-Aufruf für ein bereits für DENSELBEN Request als FAIL erkanntes
+    Asset).
+
+    Ersetzt einen bereits vorhandenen Validierungseintrag für denselben
+    request_id (ein Asset kann für denselben Request mehrfach neu
+    bewertet werden, z. B. beim zweiten Versuch nach einem gescheiterten
+    accept), fügt sonst einen neuen hinzu. No-op, wenn provider_asset_id
+    leer ist (kein Manifest-Eintrag eindeutig identifizierbar, z. B. beim
+    generischen Ordner-Fallback) oder kein passender Manifest-Eintrag
+    existiert (sollte praktisch nicht vorkommen, da download_cut_plan_
+    supplement_candidate jeden Download mit provider_asset_id vorher
+    dort einträgt)."""
+    if not provider_asset_id:
+        return
+    manifest = load_cut_plan_supplement_manifest(project)
+    updated_entries: list[CutPlanSupplementManifestEntry] = []
+    changed = False
+    for entry in manifest.entries:
+        if entry.provider != provider or entry.provider_asset_id != provider_asset_id:
+            updated_entries.append(entry)
+            continue
+        remaining_validations = [v for v in entry.validations if v.request_id != request_id]
+        new_validation = CutPlanSupplementManifestValidation(
+            request_id=request_id,
+            validation_status=validation_status,
+            validation_score=validation_score,
+            validation_reason=validation_reason,
+            description=description,
+            accepted=accepted,
+        )
+        updated_entries.append(entry.model_copy(update={"validations": remaining_validations + [new_validation]}))
+        changed = True
+    if not changed:
+        return
+    save_cut_plan_supplement_manifest(project, manifest.model_copy(update={"entries": updated_entries}))
 
 
 def _copy_manifest_entry_into_request_dir(

@@ -1163,7 +1163,7 @@ CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER = (SUPPLEMENT_SOURCE_ADOBE, SUPPLEMENT
 # Phase E (Nutzervorgabe, Juli 2026): Pseudo-"Provider"-Label für einen
 # Auto-Resolve-Kandidaten, der aus einem bereits heruntergeladenen Cut-Plan-
 # Supplement-Asset rekonstruiert wurde (siehe supplement_manifest.json,
-# find_reusable_local_supplement_candidate in
+# find_reusable_local_supplement_candidates in
 # cut_plan_supplement_auto_resolve_service.py) — läuft als eigene Stufe VOR
 # der externen Adobe-/Pexels-Suche, damit ein bereits lizenziertes Asset
 # nicht unnötig ein zweites Mal beschafft wird.

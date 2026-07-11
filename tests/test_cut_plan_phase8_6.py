@@ -54,6 +54,7 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     load_cut_plan_supplement_manifest,
     load_cut_plan_supplement_requests,
     record_supplement_manifest_entry,
+    record_supplement_manifest_validation,
     save_cut_plan_supplement_manifest,
     save_cut_plan_supplement_requests,
     search_candidates_for_cut_plan_request,
@@ -1005,6 +1006,105 @@ def test_find_reusable_supplement_manifest_entry_returns_none_for_empty_provider
 ) -> None:
     project, _request_id = _project_with_request(tmp_path)
     assert find_reusable_supplement_manifest_entry(project, "adobe_stock", "") is None
+
+
+# --- Phase I: Validierungs-Metadaten im Manifest ---
+
+
+def test_record_supplement_manifest_validation_appends_validation(tmp_path: Path) -> None:
+    project, request_id = _project_with_request(tmp_path)
+    record_supplement_manifest_entry(
+        project,
+        CutPlanSupplementManifestEntry(
+            asset_id="supplement_pexels_777", provider="pexels", provider_asset_id="777",
+            asset_path="/fake/x.mp4", asset_type="video", folder_name=FOLDER_A,
+        ),
+    )
+
+    record_supplement_manifest_validation(
+        project, provider="pexels", provider_asset_id="777", request_id=request_id,
+        validation_status="PASS", validation_score=0.9, validation_reason="Passt gut.",
+        description="Drone shot.", accepted=True,
+    )
+
+    manifest = load_cut_plan_supplement_manifest(project)
+    entry = next(e for e in manifest.entries if e.provider_asset_id == "777")
+    assert len(entry.validations) == 1
+    validation = entry.validations[0]
+    assert validation.request_id == request_id
+    assert validation.validation_status == "PASS"
+    assert validation.validation_score == pytest.approx(0.9)
+    assert validation.validation_reason == "Passt gut."
+    assert validation.description == "Drone shot."
+    assert validation.accepted is True
+
+
+def test_record_supplement_manifest_validation_replaces_existing_entry_for_same_request(tmp_path: Path) -> None:
+    """Ein zweiter Validierungsversuch fuer DENSELBEN Request ersetzt den
+    vorherigen, statt Duplikate anzusammeln."""
+    project, request_id = _project_with_request(tmp_path)
+    record_supplement_manifest_entry(
+        project,
+        CutPlanSupplementManifestEntry(
+            asset_id="supplement_pexels_777", provider="pexels", provider_asset_id="777",
+            asset_path="/fake/x.mp4", asset_type="video", folder_name=FOLDER_A,
+        ),
+    )
+    record_supplement_manifest_validation(
+        project, provider="pexels", provider_asset_id="777", request_id=request_id,
+        validation_status="FAIL",
+    )
+    record_supplement_manifest_validation(
+        project, provider="pexels", provider_asset_id="777", request_id=request_id,
+        validation_status="PASS",
+    )
+
+    manifest = load_cut_plan_supplement_manifest(project)
+    entry = next(e for e in manifest.entries if e.provider_asset_id == "777")
+    assert len(entry.validations) == 1
+    assert entry.validations[0].validation_status == "PASS"
+
+
+def test_record_supplement_manifest_validation_keeps_separate_entries_per_request(tmp_path: Path) -> None:
+    project, request_id = _project_with_request(tmp_path)
+    record_supplement_manifest_entry(
+        project,
+        CutPlanSupplementManifestEntry(
+            asset_id="supplement_pexels_777", provider="pexels", provider_asset_id="777",
+            asset_path="/fake/x.mp4", asset_type="video", folder_name=FOLDER_A,
+        ),
+    )
+    record_supplement_manifest_validation(
+        project, provider="pexels", provider_asset_id="777", request_id="cutreq_a", validation_status="PASS",
+    )
+    record_supplement_manifest_validation(
+        project, provider="pexels", provider_asset_id="777", request_id="cutreq_b", validation_status="FAIL",
+    )
+
+    manifest = load_cut_plan_supplement_manifest(project)
+    entry = next(e for e in manifest.entries if e.provider_asset_id == "777")
+    assert len(entry.validations) == 2
+    statuses = {v.request_id: v.validation_status for v in entry.validations}
+    assert statuses == {"cutreq_a": "PASS", "cutreq_b": "FAIL"}
+
+
+def test_record_supplement_manifest_validation_is_noop_without_provider_asset_id(tmp_path: Path) -> None:
+    project, request_id = _project_with_request(tmp_path)
+    record_supplement_manifest_validation(
+        project, provider="pexels", provider_asset_id="", request_id=request_id, validation_status="PASS",
+    )
+    manifest = load_cut_plan_supplement_manifest(project)
+    assert manifest.entries == []
+
+
+def test_record_supplement_manifest_validation_is_noop_when_no_matching_entry(tmp_path: Path) -> None:
+    project, request_id = _project_with_request(tmp_path)
+    record_supplement_manifest_validation(
+        project, provider="pexels", provider_asset_id="does-not-exist", request_id=request_id,
+        validation_status="PASS",
+    )
+    manifest = load_cut_plan_supplement_manifest(project)
+    assert manifest.entries == []
 
 
 def _fake_acquire_video(candidate, destination_folder):

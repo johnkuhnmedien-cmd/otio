@@ -28,7 +28,7 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_ser
     _describe_and_validate_downloaded_asset,
     auto_resolve_all_cut_plan_supplement_requests,
     auto_resolve_cut_plan_supplement_request,
-    find_reusable_local_supplement_candidate,
+    find_reusable_local_supplement_candidates,
 )
 from otio_app.services.voiceover_generation.cut_plan_builder import save_cut_plan_draft
 from otio_app.services.voiceover_generation.cut_plan_models import (
@@ -39,8 +39,10 @@ from otio_app.services.voiceover_generation.cut_plan_models import (
 )
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     build_supplement_requests_from_cut_plan,
+    load_cut_plan_supplement_manifest,
     load_cut_plan_supplement_requests,
     record_supplement_manifest_entry,
+    record_supplement_manifest_validation,
     save_cut_plan_supplement_requests,
 )
 from otio_app.services.voiceover_generation.cut_plan_supplement_models import (
@@ -1031,7 +1033,7 @@ def _manifest_entry(**overrides) -> CutPlanSupplementManifestEntry:
     return CutPlanSupplementManifestEntry(**defaults)
 
 
-def test_find_reusable_local_supplement_candidate_returns_none_for_intro_scope(tmp_path: Path) -> None:
+def test_find_reusable_local_supplement_candidates_returns_empty_for_intro_scope(tmp_path: Path) -> None:
     project, request_id = _setup_request(tmp_path)
     requests_document = load_cut_plan_supplement_requests(project)
     request = next(r for r in requests_document.requests if r.request_id == request_id)
@@ -1041,36 +1043,36 @@ def test_find_reusable_local_supplement_candidate_returns_none_for_intro_scope(t
     video_path.write_bytes(b"FAKE_VIDEO")
     record_supplement_manifest_entry(project, _manifest_entry(asset_path=str(video_path)))
 
-    result = find_reusable_local_supplement_candidate(
+    result = find_reusable_local_supplement_candidates(
         project, intro_request, cut_plan_settings=None, cut_plan_draft=None
     )
-    assert result is None
+    assert result == []
 
 
-def test_find_reusable_local_supplement_candidate_returns_none_when_manifest_empty(tmp_path: Path) -> None:
+def test_find_reusable_local_supplement_candidates_returns_empty_when_manifest_empty(tmp_path: Path) -> None:
     project, request_id = _setup_request(tmp_path)
     requests_document = load_cut_plan_supplement_requests(project)
     request = next(r for r in requests_document.requests if r.request_id == request_id)
 
-    result = find_reusable_local_supplement_candidate(
+    result = find_reusable_local_supplement_candidates(
         project, request, cut_plan_settings=None, cut_plan_draft=None
     )
-    assert result is None
+    assert result == []
 
 
-def test_find_reusable_local_supplement_candidate_returns_none_when_file_missing(tmp_path: Path) -> None:
+def test_find_reusable_local_supplement_candidates_returns_empty_when_file_missing(tmp_path: Path) -> None:
     project, request_id = _setup_request(tmp_path)
     requests_document = load_cut_plan_supplement_requests(project)
     request = next(r for r in requests_document.requests if r.request_id == request_id)
     record_supplement_manifest_entry(project, _manifest_entry(asset_path=str(tmp_path / "missing.mp4")))
 
-    result = find_reusable_local_supplement_candidate(
+    result = find_reusable_local_supplement_candidates(
         project, request, cut_plan_settings=None, cut_plan_draft=None
     )
-    assert result is None
+    assert result == []
 
 
-def test_find_reusable_local_supplement_candidate_returns_none_for_different_folder(tmp_path: Path) -> None:
+def test_find_reusable_local_supplement_candidates_returns_empty_for_different_folder(tmp_path: Path) -> None:
     project, request_id = _setup_request(tmp_path)
     requests_document = load_cut_plan_supplement_requests(project)
     request = next(r for r in requests_document.requests if r.request_id == request_id)
@@ -1081,13 +1083,13 @@ def test_find_reusable_local_supplement_candidate_returns_none_for_different_fol
         project, _manifest_entry(asset_path=str(video_path), folder_name="Different Folder")
     )
 
-    result = find_reusable_local_supplement_candidate(
+    result = find_reusable_local_supplement_candidates(
         project, request, cut_plan_settings=None, cut_plan_draft=None
     )
-    assert result is None
+    assert result == []
 
 
-def test_find_reusable_local_supplement_candidate_returns_none_when_video_too_short(tmp_path: Path) -> None:
+def test_find_reusable_local_supplement_candidates_returns_empty_when_video_too_short(tmp_path: Path) -> None:
     project, request_id = _setup_request(tmp_path)
     requests_document = load_cut_plan_supplement_requests(project)
     request = next(r for r in requests_document.requests if r.request_id == request_id)
@@ -1098,13 +1100,13 @@ def test_find_reusable_local_supplement_candidate_returns_none_when_video_too_sh
     # request needs 5.0s (siehe _minimal_item), Video liefert nach Head-Trim nur 3.0s.
     record_supplement_manifest_entry(project, _manifest_entry(asset_path=str(video_path), duration_sec=4.0))
 
-    result = find_reusable_local_supplement_candidate(
+    result = find_reusable_local_supplement_candidates(
         project, request, cut_plan_settings=settings, cut_plan_draft=None
     )
-    assert result is None
+    assert result == []
 
 
-def test_find_reusable_local_supplement_candidate_returns_matching_video(tmp_path: Path) -> None:
+def test_find_reusable_local_supplement_candidates_returns_matching_video(tmp_path: Path) -> None:
     project, request_id = _setup_request(tmp_path)
     requests_document = load_cut_plan_supplement_requests(project)
     request = next(r for r in requests_document.requests if r.request_id == request_id)
@@ -1114,14 +1116,16 @@ def test_find_reusable_local_supplement_candidate_returns_matching_video(tmp_pat
     video_path.write_bytes(b"FAKE_VIDEO")
     record_supplement_manifest_entry(project, _manifest_entry(asset_path=str(video_path), duration_sec=10.0))
 
-    result = find_reusable_local_supplement_candidate(
+    result = find_reusable_local_supplement_candidates(
         project, request, cut_plan_settings=settings, cut_plan_draft=None
     )
-    assert result is not None
-    assert result.provider_asset_id == "555"
+    assert len(result) == 1
+    assert result[0].provider_asset_id == "555"
 
 
-def test_find_reusable_local_supplement_candidate_prefers_video_over_image(tmp_path: Path) -> None:
+def test_find_reusable_local_supplement_candidates_prefers_video_over_image_within_same_tier(
+    tmp_path: Path
+) -> None:
     project, request_id = _setup_request(tmp_path)
     requests_document = load_cut_plan_supplement_requests(project)
     request = next(r for r in requests_document.requests if r.request_id == request_id)
@@ -1140,14 +1144,14 @@ def test_find_reusable_local_supplement_candidate_prefers_video_over_image(tmp_p
     )
     record_supplement_manifest_entry(project, _manifest_entry(asset_path=str(video_path), duration_sec=10.0))
 
-    result = find_reusable_local_supplement_candidate(
+    result = find_reusable_local_supplement_candidates(
         project, request, cut_plan_settings=settings, cut_plan_draft=None
     )
-    assert result is not None
-    assert result.asset_type == "video"
+    assert len(result) == 2
+    assert result[0].asset_type == "video"  # gleiche Prioritaet (beide unvalidiert) -> Video zuerst
 
 
-def test_find_reusable_local_supplement_candidate_returns_none_when_max_usage_reached(tmp_path: Path) -> None:
+def test_find_reusable_local_supplement_candidates_returns_empty_when_max_usage_reached(tmp_path: Path) -> None:
     project, request_id = _setup_request(tmp_path)
     requests_document = load_cut_plan_supplement_requests(project)
     request = next(r for r in requests_document.requests if r.request_id == request_id)
@@ -1161,13 +1165,13 @@ def test_find_reusable_local_supplement_candidate_returns_none_when_max_usage_re
         project_id=project.id, items=[_minimal_item()], asset_usage_summary={"supplement_adobe_stock_555": 1}
     )
 
-    result = find_reusable_local_supplement_candidate(
+    result = find_reusable_local_supplement_candidates(
         project, request, cut_plan_settings=settings, cut_plan_draft=draft
     )
-    assert result is None
+    assert result == []
 
 
-def test_find_reusable_local_supplement_candidate_returns_none_when_reuse_distance_violated(
+def test_find_reusable_local_supplement_candidates_returns_empty_when_reuse_distance_violated(
     tmp_path: Path
 ) -> None:
     project, request_id = _setup_request(tmp_path)
@@ -1188,10 +1192,206 @@ def test_find_reusable_local_supplement_candidate_returns_none_when_reuse_distan
     )
     draft = CutPlanDocument(project_id=project.id, items=[neighbor_item, target_item])
 
-    result = find_reusable_local_supplement_candidate(
+    result = find_reusable_local_supplement_candidates(
         project, request, cut_plan_settings=settings, cut_plan_draft=draft
     )
-    assert result is None
+    assert result == []
+
+
+# --- Phase I/J/K: Validation-Metadaten im Manifest + Prioritaet + kein erneutes Versuchen ---
+
+
+def test_find_reusable_local_supplement_candidates_prefers_pass_for_same_request(tmp_path: Path) -> None:
+    """Kernanforderung Phase J: bei mehreren Optionen wird PASS immer
+    bevorzugt behandelt."""
+    project, request_id = _setup_request(tmp_path)
+    requests_document = load_cut_plan_supplement_requests(project)
+    request = next(r for r in requests_document.requests if r.request_id == request_id)
+    settings = CutPlanSettings(project_id=project.id, video_head_trim_sec=1.0)
+
+    photo_pass_path = tmp_path / "photo_pass.jpg"
+    photo_pass_path.write_bytes(b"FAKE_IMAGE")
+    video_unvalidated_path = tmp_path / "video_unvalidated.mp4"
+    video_unvalidated_path.write_bytes(b"FAKE_VIDEO")
+
+    record_supplement_manifest_entry(
+        project,
+        _manifest_entry(
+            asset_id="supplement_pexels_111", provider="pexels", provider_asset_id="111",
+            asset_path=str(photo_pass_path), asset_type="image", duration_sec=0.0,
+        ),
+    )
+    record_supplement_manifest_validation(
+        project, provider="pexels", provider_asset_id="111", request_id=request_id,
+        validation_status="PASS", validation_score=0.9,
+    )
+    # Video ist normalerweise bevorzugt (Video vor Foto) -- aber OHNE
+    # Bewertung, waehrend das Foto fuer GENAU diesen Request bereits PASS
+    # bekommen hat. PASS muss trotzdem gewinnen.
+    record_supplement_manifest_entry(
+        project, _manifest_entry(asset_path=str(video_unvalidated_path), duration_sec=10.0)
+    )
+
+    result = find_reusable_local_supplement_candidates(
+        project, request, cut_plan_settings=settings, cut_plan_draft=None
+    )
+    assert len(result) == 2
+    assert result[0].provider_asset_id == "111"
+    assert result[0].asset_type == "image"
+
+
+def test_find_reusable_local_supplement_candidates_excludes_fail_for_same_request(tmp_path: Path) -> None:
+    """Phase K: ein fuer GENAU diesen Request bereits als FAIL erkanntes
+    Asset wird nicht erneut versucht."""
+    project, request_id = _setup_request(tmp_path)
+    requests_document = load_cut_plan_supplement_requests(project)
+    request = next(r for r in requests_document.requests if r.request_id == request_id)
+    settings = CutPlanSettings(project_id=project.id, video_head_trim_sec=1.0)
+
+    video_path = tmp_path / "video.mp4"
+    video_path.write_bytes(b"FAKE_VIDEO")
+    record_supplement_manifest_entry(project, _manifest_entry(asset_path=str(video_path), duration_sec=10.0))
+    record_supplement_manifest_validation(
+        project, provider="adobe_stock", provider_asset_id="555", request_id=request_id,
+        validation_status="FAIL", validation_reason="Passt nicht.",
+    )
+
+    result = find_reusable_local_supplement_candidates(
+        project, request, cut_plan_settings=settings, cut_plan_draft=None
+    )
+    assert result == []
+
+
+def test_find_reusable_local_supplement_candidates_includes_fail_for_other_request(tmp_path: Path) -> None:
+    """Ein FAIL fuer einen ANDEREN Request (anderer Text/Satz) schliesst
+    das Asset NICHT generell aus -- es koennte fuer diesen Request trotzdem
+    passen."""
+    project, request_id = _setup_request(tmp_path)
+    requests_document = load_cut_plan_supplement_requests(project)
+    request = next(r for r in requests_document.requests if r.request_id == request_id)
+    settings = CutPlanSettings(project_id=project.id, video_head_trim_sec=1.0)
+
+    video_path = tmp_path / "video.mp4"
+    video_path.write_bytes(b"FAKE_VIDEO")
+    record_supplement_manifest_entry(project, _manifest_entry(asset_path=str(video_path), duration_sec=10.0))
+    record_supplement_manifest_validation(
+        project, provider="adobe_stock", provider_asset_id="555", request_id="cutreq_other_sentence",
+        validation_status="FAIL", validation_reason="Passt nicht zu Satz X.",
+    )
+
+    result = find_reusable_local_supplement_candidates(
+        project, request, cut_plan_settings=settings, cut_plan_draft=None
+    )
+    assert len(result) == 1
+    assert result[0].provider_asset_id == "555"
+
+
+def test_find_reusable_local_supplement_candidates_ranks_pass_other_request_above_unvalidated(
+    tmp_path: Path
+) -> None:
+    project, request_id = _setup_request(tmp_path)
+    requests_document = load_cut_plan_supplement_requests(project)
+    request = next(r for r in requests_document.requests if r.request_id == request_id)
+    settings = CutPlanSettings(project_id=project.id, video_head_trim_sec=1.0)
+
+    photo_path = tmp_path / "photo.jpg"
+    photo_path.write_bytes(b"FAKE_IMAGE")
+    video_path = tmp_path / "video.mp4"
+    video_path.write_bytes(b"FAKE_VIDEO")
+
+    # Foto: PASS fuer einen ANDEREN Request im selben Ordner.
+    record_supplement_manifest_entry(
+        project,
+        _manifest_entry(
+            asset_id="supplement_pexels_111", provider="pexels", provider_asset_id="111",
+            asset_path=str(photo_path), asset_type="image", duration_sec=0.0,
+        ),
+    )
+    record_supplement_manifest_validation(
+        project, provider="pexels", provider_asset_id="111", request_id="cutreq_other_sentence",
+        validation_status="PASS",
+    )
+    # Video: komplett unvalidiert, aber normalerweise bevorzugt (Video vor Foto).
+    record_supplement_manifest_entry(project, _manifest_entry(asset_path=str(video_path), duration_sec=10.0))
+
+    result = find_reusable_local_supplement_candidates(
+        project, request, cut_plan_settings=settings, cut_plan_draft=None
+    )
+    assert len(result) == 2
+    assert result[0].asset_type == "image"  # PASS (anderer Request) schlaegt unvalidiertes Video
+    assert result[1].asset_type == "video"
+
+
+def test_manifest_validation_is_recorded_after_auto_resolve_attempt(tmp_path: Path) -> None:
+    """Phase I: nach einer Gemini-Pruefung wird das Ergebnis auf dem
+    Manifest-Eintrag gespeichert (verfuegbar fuer kuenftige Requests)."""
+    project, request_id = _setup_request(tmp_path)
+    candidates_doc = _fake_candidates_document(request_id, ["cand_1"], provider="pexels")
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", return_value=candidates_doc),
+        patch(
+            f"{_MODULE}.download_cut_plan_supplement_candidate",
+            side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid),
+        ),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("FAIL", reason="Nein.")),
+        patch(f"{_MODULE}.accept_cut_plan_supplement_candidate"),
+    ):
+        auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    # _fake_candidate() liefert provider_asset_id="" per Default -> kein
+    # provider_asset_id bekannt, also KEIN Manifest-Eintrag erwartet
+    # (siehe test_manifest_validation_is_recorded_with_provider_asset_id
+    # fuer den Fall MIT provider_asset_id).
+    manifest = load_cut_plan_supplement_manifest(project)
+    assert manifest.entries == []
+
+
+def test_manifest_validation_is_recorded_with_provider_asset_id(tmp_path: Path) -> None:
+    project, request_id = _setup_request(tmp_path)
+    fake_candidate = _fake_candidate(
+        "cand_1", request_id, provider="pexels", asset_type="video", duration_sec=10.0,
+    )
+    fake_candidate = fake_candidate.model_copy(
+        update={
+            "provider_candidate_snapshot": {
+                **fake_candidate.provider_candidate_snapshot, "provider_asset_id": "999",
+            }
+        }
+    )
+    candidates_doc = CutPlanSupplementCandidatesDocument(
+        project_id="auto-resolve-project", request_id=request_id, provider="pexels",
+        candidates=[fake_candidate], status="READY",
+    )
+
+    def _fake_download(project_arg, rid, candidate):
+        asset = _fake_asset(candidate.candidate_id, rid)
+        record_supplement_manifest_entry(
+            project_arg,
+            CutPlanSupplementManifestEntry(
+                asset_id="supplement_pexels_999", provider="pexels", provider_asset_id="999",
+                asset_path=asset.asset_path, asset_type="video", duration_sec=10.0, folder_name=FOLDER_A,
+            ),
+        )
+        return asset
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request", return_value=candidates_doc),
+        patch(f"{_MODULE}.download_cut_plan_supplement_candidate", side_effect=_fake_download),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", return_value=_analysis("PASS", reason="Passt.")),
+        patch(f"{_MODULE}.accept_cut_plan_supplement_candidate"),
+    ):
+        auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    manifest = load_cut_plan_supplement_manifest(project)
+    entry = next(e for e in manifest.entries if e.provider_asset_id == "999")
+    validation = next(v for v in entry.validations if v.request_id == request_id)
+    assert validation.validation_status == "PASS"
+    assert validation.accepted is True
 
 
 def test_auto_resolve_accepts_reused_local_supplement_without_external_search(tmp_path: Path) -> None:
@@ -1222,6 +1422,46 @@ def test_auto_resolve_accepts_reused_local_supplement_without_external_search(tm
     mock_accept.assert_called_once()
     assert len(result.attempts) == 1
     assert result.attempts[0].provider == "adobe_stock"
+
+
+def test_auto_resolve_tries_second_local_candidate_before_external_search(tmp_path: Path) -> None:
+    """Phase J/K: gibt es mehrere lokal wiederverwendbare Kandidaten und
+    scheitert der erste an der Gemini-Pruefung, wird der ZWEITE lokale
+    Kandidat versucht, BEVOR ueberhaupt extern gesucht wird."""
+    project, request_id = _setup_request(tmp_path)
+    video_path = tmp_path / "video.mp4"
+    video_path.write_bytes(b"FAKE_VIDEO")
+    photo_path = tmp_path / "photo.jpg"
+    photo_path.write_bytes(b"FAKE_IMAGE")
+    record_supplement_manifest_entry(project, _manifest_entry(asset_path=str(video_path), duration_sec=10.0))
+    record_supplement_manifest_entry(
+        project,
+        _manifest_entry(
+            asset_id="supplement_pexels_111", provider="pexels", provider_asset_id="111",
+            asset_path=str(photo_path), asset_type="image", duration_sec=0.0,
+        ),
+    )
+
+    analysis_results = iter([_analysis("FAIL", reason="Video passt nicht."), _analysis("PASS")])
+
+    with (
+        patch(f"{_MODULE}.search_candidates_for_cut_plan_request") as mock_search,
+        patch(
+            f"{_MODULE}.download_cut_plan_supplement_candidate",
+            side_effect=lambda p, rid, c: _fake_asset(c.candidate_id, rid),
+        ),
+        patch(f"{_MODULE}._describe_and_validate_downloaded_asset", side_effect=lambda *a, **k: next(analysis_results)),
+        patch(f"{_MODULE}.accept_cut_plan_supplement_candidate"),
+    ):
+        result = auto_resolve_cut_plan_supplement_request(
+            project, request_id, query_llm_provider="gemini", query_llm_model="gemini-3.1-flash-lite"
+        )
+
+    assert result.status == AUTO_RESOLVE_STATUS_ACCEPTED
+    mock_search.assert_not_called()
+    assert len(result.attempts) == 2
+    assert result.attempts[0].validation_status == "FAIL"
+    assert result.attempts[1].validation_status == "PASS"
 
 
 def test_auto_resolve_falls_back_to_external_search_when_reuse_fails_validation(tmp_path: Path) -> None:

@@ -29,6 +29,7 @@ __all__ = [
     "CutPlanSupplementCandidatesDocument",
     "CutPlanSupplementAsset",
     "CutPlanSupplementAutoResolveAttempt",
+    "CutPlanSupplementManifestValidation",
     "CutPlanSupplementManifestEntry",
     "CutPlanSupplementManifestDocument",
 ]
@@ -181,21 +182,46 @@ class CutPlanSupplementAsset(BaseModel):
     status: str = CUT_PLAN_SUPPLEMENT_ASSET_STATUS_ACQUIRED  # ACQUIRED|FAILED
 
 
+class CutPlanSupplementManifestValidation(BaseModel):
+    """Phase I (Nutzervorgabe, Juli 2026): EIN Gemini-Bewertungsergebnis
+    eines Manifest-Assets FÜR EINEN BESTIMMTEN Request. Dasselbe externe
+    Asset kann für unterschiedliche Sätze/Cut-Items unterschiedlich gut
+    passen (anderer Text, anderer visual_intent) — deshalb pro Request
+    ein eigener Eintrag statt eines einzigen globalen Status. Ermöglicht
+    Phase J: bei mehreren wiederverwendbaren Manifest-Kandidaten wird PASS
+    immer vor WEAK_PASS, unvalidiert und FAIL bevorzugt (siehe
+    cut_plan_supplement_auto_resolve_service._manifest_entry_tier), UND
+    ein für DENSELBEN Request bereits als FAIL erkanntes Asset wird nicht
+    ein zweites Mal (mit identischem Ergebnis) per Gemini geprüft."""
+
+    request_id: str
+    validation_status: str = ""  # PASS|WEAK_PASS|NEEDS_USER_REVIEW|FAIL
+    validation_score: float = 0.0
+    validation_reason: str = ""
+    description: str = ""
+    accepted: bool = False
+    validated_at: datetime = Field(default_factory=_utcnow)
+
+
 class CutPlanSupplementManifestEntry(BaseModel):
     """Phase E (Nutzervorgabe, Juli 2026): EIN bereits erfolgreich
     heruntergeladenes Provider-Asset (Adobe Stock/Pexels) — unabhängig
     davon, für welchen Request es URSPRÜNGLICH beschafft wurde. Ermöglicht
-    zwei Dinge:
+    drei Dinge:
 
     1. Dedup: dasselbe (provider, provider_asset_id) wird nie ein zweites
        Mal lizenziert/heruntergeladen (siehe stable_supplement_asset_id /
        find_reusable_supplement_manifest_entry in
        cut_plan_supplement_bridge.py).
     2. Wiederverwendung: ein bereits vorhandenes, zum selben Ordner
-       passendes Asset kann für ein ANDERES Cut-Item übernommen werden,
-       bevor eine neue externe Suche ausgelöst wird (siehe
-       find_reusable_local_supplement_candidate in
-       cut_plan_supplement_auto_resolve_service.py)."""
+       passendes Asset kann für ANDERE Cut-Items übernommen werden, bevor
+       eine neue externe Suche ausgelöst wird (siehe
+       find_reusable_local_supplement_candidates in
+       cut_plan_supplement_auto_resolve_service.py).
+    3. Phase I: `validations` speichert das Gemini-Ergebnis je Request,
+       damit bei mehreren Kandidaten PASS bevorzugt werden kann (Phase J)
+       und ein für einen Request bereits gescheitertes Asset nicht erneut
+       (mit demselben zu erwartenden Ergebnis) geprüft wird."""
 
     asset_id: str
     provider: str
@@ -211,6 +237,7 @@ class CutPlanSupplementManifestEntry(BaseModel):
     first_request_id: str = ""
     first_candidate_id: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
+    validations: list[CutPlanSupplementManifestValidation] = Field(default_factory=list)
 
 
 class CutPlanSupplementManifestDocument(BaseModel):

@@ -110,6 +110,7 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     download_cut_plan_supplement_candidate,
     load_cut_plan_supplement_manifest,
     load_cut_plan_supplement_requests,
+    record_supplement_manifest_validation,
     search_candidates_for_cut_plan_request,
     stable_supplement_asset_id,
     update_cut_plan_supplement_request,
@@ -149,7 +150,7 @@ __all__ = [
     "CutPlanSupplementAutoResolveResult",
     "auto_resolve_cut_plan_supplement_request",
     "auto_resolve_all_cut_plan_supplement_requests",
-    "find_reusable_local_supplement_candidate",
+    "find_reusable_local_supplement_candidates",
 ]
 
 AUTO_RESOLVE_PROGRESS_QUERY_GENERATION_STARTED = "query_generation_started"
@@ -352,14 +353,56 @@ def _candidate_is_too_short(
     return is_too_short, usable_duration_sec
 
 
-def find_reusable_local_supplement_candidate(
+# Phase J (Nutzervorgabe, Juli 2026): Priorität, mit der wiederverwendbare
+# Manifest-Kandidaten für EINEN Request versucht werden — niedrigere Zahl
+# zuerst. 'Für diesen Request bereits akzeptiert/PASS' schlägt IMMER
+# 'für einen anderen Request im selben Ordner PASS', weil es exakt für
+# denselben Text/visual_intent bereits geprüft wurde.
+_TIER_ACCEPTED_OR_PASS_SAME_REQUEST = 0
+_TIER_WEAK_PASS_SAME_REQUEST = 1
+_TIER_PASS_OTHER_REQUEST = 2
+_TIER_WEAK_PASS_OTHER_REQUEST = 3
+_TIER_UNVALIDATED = 4
+_TIER_ONLY_FAIL_OTHER_REQUEST = 5
+
+# Phase J: mehr als bei der externen Suche versucht werden darf, weil eine
+# lokale Wiederverwendung kein zusätzliches Lizenzkontingent kostet — nur
+# der Gemini-Aufruf ist hier der limitierende Faktor.
+_AUTO_RESOLVE_MAX_LOCAL_REUSE_CANDIDATES = 5
+
+
+def _manifest_entry_tier(entry: CutPlanSupplementManifestEntry, request_id: str) -> int | None:
+    """Phase J: liefert die Versuchspriorität (siehe _TIER_*-Konstanten)
+    für EINEN Manifest-Eintrag bezogen auf EINEN Request — oder None, wenn
+    der Eintrag für GENAU DIESEN Request bereits als FAIL/NEEDS_USER_
+    REVIEW erkannt wurde (Phase K: kein erneuter, mit demselben Ergebnis
+    zu erwartender Gemini-Aufruf für dieselbe Text-/Bild-Kombination)."""
+    own_validations = [v for v in entry.validations if v.request_id == request_id]
+    if own_validations:
+        if any(v.accepted or v.validation_status == VALIDATION_STATUS_PASS for v in own_validations):
+            return _TIER_ACCEPTED_OR_PASS_SAME_REQUEST
+        if any(v.validation_status == "WEAK_PASS" for v in own_validations):
+            return _TIER_WEAK_PASS_SAME_REQUEST
+        return None  # nur FAIL/NEEDS_USER_REVIEW für GENAU diesen Request -> nicht erneut versuchen
+
+    other_validations = entry.validations  # bereits geprüft: kein Eintrag mit request_id == diesem Request
+    if any(v.validation_status == VALIDATION_STATUS_PASS for v in other_validations):
+        return _TIER_PASS_OTHER_REQUEST
+    if any(v.validation_status == "WEAK_PASS" for v in other_validations):
+        return _TIER_WEAK_PASS_OTHER_REQUEST
+    if not other_validations:
+        return _TIER_UNVALIDATED
+    return _TIER_ONLY_FAIL_OTHER_REQUEST
+
+
+def find_reusable_local_supplement_candidates(
     project: Project,
     request: CutPlanSupplementRequest,
     *,
     cut_plan_settings: CutPlanSettings | None,
     cut_plan_draft: CutPlanDocument | None,
-) -> CutPlanSupplementManifestEntry | None:
-    """Phase E (Nutzervorgabe, Juli 2026): bevor eine neue externe Suche
+) -> list[CutPlanSupplementManifestEntry]:
+    """Phase E/J (Nutzervorgabe, Juli 2026): bevor eine neue externe Suche
     (Adobe/Pexels) ausgelöst wird, prüft der Auto-Resolver, ob bereits ein
     für DIESEN Ordner heruntergeladenes Supplement-Asset aus einem
     FRÜHEREN Request wiederverwendet werden kann — spart Kosten/
@@ -380,17 +423,22 @@ def find_reusable_local_supplement_candidate(
     - Innerhalb von min_asset_reuse_distance_shots (gezählt in Cut-Plan-
       Items DESSELBEN Ordners, in Timeline-Reihenfolge) darf dasselbe
       Asset nicht bereits verwendet worden sein.
+    - Ein für GENAU DIESEN Request bereits als FAIL erkanntes Asset wird
+      ausgeschlossen (Phase K).
 
-    'Video vor Foto' (Nutzervorgabe) gilt auch hier — liefert bevorzugt
-    ein Video-Manifest-Asset, falls eines die obigen Prüfungen besteht,
-    sonst ein Foto-Manifest-Asset. Liefert None, wenn kein Manifest-
-    Eintrag geeignet ist — der Aufrufer fährt dann normal mit der
+    Phase J: liefert bis zu _AUTO_RESOLVE_MAX_LOCAL_REUSE_CANDIDATES
+    Einträge, sortiert nach Versuchspriorität (_manifest_entry_tier) —
+    'PASS für diesen Request' zuerst, dann 'WEAK_PASS für diesen Request',
+    dann 'PASS für einen anderen Request im selben Ordner' usw.; 'Video
+    vor Foto' (Nutzervorgabe) bleibt als SEKUNDÄRES Sortierkriterium
+    innerhalb derselben Priorität erhalten. Leere Liste, wenn kein
+    Manifest-Eintrag geeignet ist — der Aufrufer fährt dann normal mit der
     externen Suche fort."""
     if request.source_scope != AUDIO_SCOPE_FOLDER or not request.folder_name:
-        return None
+        return []
     manifest = load_cut_plan_supplement_manifest(project)
     if not manifest.entries:
-        return None
+        return []
 
     max_asset_usage = cut_plan_settings.max_asset_usage if cut_plan_settings else CUT_PLAN_DEFAULT_MAX_ASSET_USAGE
     min_reuse_distance = (
@@ -425,7 +473,7 @@ def find_reusable_local_supplement_candidate(
                 return True
         return False
 
-    candidates_by_type: dict[str, list[CutPlanSupplementManifestEntry]] = {"video": [], "image": []}
+    ranked: list[tuple[int, int, CutPlanSupplementManifestEntry]] = []
     for entry in manifest.entries:
         if entry.folder_name != request.folder_name:
             continue
@@ -440,12 +488,16 @@ def find_reusable_local_supplement_candidate(
             continue
         if _violates_reuse_distance(stable_id):
             continue
-        candidates_by_type.setdefault(entry.asset_type, []).append(entry)
+        tier = _manifest_entry_tier(entry, request.request_id)
+        if tier is None:
+            continue
+        type_rank = _AUTO_RESOLVE_ASSET_TYPE_SEARCH_ORDER.index(entry.asset_type) if (
+            entry.asset_type in _AUTO_RESOLVE_ASSET_TYPE_SEARCH_ORDER
+        ) else len(_AUTO_RESOLVE_ASSET_TYPE_SEARCH_ORDER)
+        ranked.append((tier, type_rank, entry))
 
-    for asset_type in _AUTO_RESOLVE_ASSET_TYPE_SEARCH_ORDER:
-        if candidates_by_type.get(asset_type):
-            return candidates_by_type[asset_type][0]
-    return None
+    ranked.sort(key=lambda triple: (triple[0], triple[1]))
+    return [entry for _tier, _type_rank, entry in ranked[:_AUTO_RESOLVE_MAX_LOCAL_REUSE_CANDIDATES]]
 
 
 def _candidate_from_manifest_entry(
@@ -693,7 +745,7 @@ def auto_resolve_cut_plan_supplement_request(
         """Lädt/prüft/akzeptiert GENAU EINEN Kandidaten (ein regulärer
         Stock-Suchtreffer ODER ein aus einem Manifest-Eintrag
         rekonstruierter Wiederverwendungs-Kandidat, siehe
-        find_reusable_local_supplement_candidate/_candidate_from_manifest_
+        find_reusable_local_supplement_candidates/_candidate_from_manifest_
         entry) — extrahiert aus der ursprünglichen Inline-Schleife, damit
         Phase E (lokale Wiederverwendung VOR externer Suche) dieselbe
         Download-/Gemini-Prüfungs-/Akzeptanz-Logik nutzen kann, ohne sie
@@ -789,6 +841,26 @@ def auto_resolve_cut_plan_supplement_request(
         )
         attempts.append(attempt)
 
+        # Phase I (Nutzervorgabe): das Gemini-Ergebnis für DIESEN Request auf
+        # dem Manifest-Eintrag speichern (falls provider_asset_id bekannt) —
+        # ermöglicht Phase J/K, bei einer künftigen Anfrage PASS/WEAK_PASS
+        # bevorzugt wiederzuverwenden bzw. ein für denselben Request bereits
+        # als FAIL erkanntes Asset nicht erneut per Gemini zu prüfen.
+        candidate_provider_asset_id = str(
+            candidate.provider_candidate_snapshot.get("provider_asset_id", "")
+        )
+        record_supplement_manifest_validation(
+            project,
+            provider=candidate.provider,
+            provider_asset_id=candidate_provider_asset_id,
+            request_id=request_id,
+            validation_status=attempt.validation_status,
+            validation_score=attempt.validation_score,
+            validation_reason=attempt.validation_reason,
+            description=attempt.description,
+            accepted=False,
+        )
+
         if str(analysis.get("status")) == VALIDATION_STATUS_PASS:
             # Phase 12.6: die tatsächliche, per ffprobe gemessene Dauer
             # (downloaded_asset.duration_sec) kann von den Provider-
@@ -830,6 +902,17 @@ def auto_resolve_cut_plan_supplement_request(
                     ),
                 )
                 return None
+            record_supplement_manifest_validation(
+                project,
+                provider=candidate.provider,
+                provider_asset_id=candidate_provider_asset_id,
+                request_id=request_id,
+                validation_status=attempt.validation_status,
+                validation_score=attempt.validation_score,
+                validation_reason=attempt.validation_reason,
+                description=attempt.description,
+                accepted=True,
+            )
             update_cut_plan_supplement_request(
                 project,
                 request_id,
@@ -922,11 +1005,10 @@ def auto_resolve_cut_plan_supplement_request(
     # Asset aus einem früheren Request für DIESEN Ordner wiederverwendet
     # werden kann. Läuft durch dieselbe Download-/Gemini-Prüfungs-/
     # Akzeptanz-Pipeline wie jeder andere Kandidat.
-    reusable_entry = find_reusable_local_supplement_candidate(
+    reusable_entries = find_reusable_local_supplement_candidates(
         project, request, cut_plan_settings=cut_plan_settings, cut_plan_draft=cut_plan_draft
     )
-    if reusable_entry is not None:
-        reuse_candidate = _candidate_from_manifest_entry(reusable_entry, request)
+    if reusable_entries:
         _emit_progress(
             progress_callback,
             AutoResolveProgressEvent(
@@ -935,21 +1017,30 @@ def auto_resolve_cut_plan_supplement_request(
                 stage_index=0,
                 stage_total=stage_total,
                 provider=CUT_PLAN_AUTO_RESOLVE_PROVIDER_LOCAL_REUSE,
-                asset_type=reuse_candidate.asset_type,
+                asset_type=reusable_entries[0].asset_type,
                 query="—",
-                message="Bereits heruntergeladenes Supplement-Asset gefunden — wird vor neuer Suche geprüft.",
+                message=(
+                    f"{len(reusable_entries)} bereits heruntergeladene(s) Supplement-Asset(s) im Ordner "
+                    "gefunden — werden vor neuer Suche geprüft (PASS/WEAK_PASS bevorzugt)."
+                ),
             ),
         )
-        reuse_result = _try_candidate(
-            reuse_candidate,
-            stage_index=0,
-            stage_total=stage_total,
-            query_label="lokale Wiederverwendung",
-            cut_plan_settings=cut_plan_settings,
-            validation_model=validation_model,
-        )
-        if reuse_result is not None:
-            return reuse_result
+        # Phase J/K: ALLE lokal wiederverwendbaren Kandidaten der Reihe nach
+        # versuchen (bereits nach Priorität sortiert — PASS für diesen
+        # Request zuerst) — erst wenn KEINER von ihnen die Gemini-Prüfung
+        # besteht, wird überhaupt extern gesucht.
+        for reusable_entry in reusable_entries:
+            reuse_candidate = _candidate_from_manifest_entry(reusable_entry, request)
+            reuse_result = _try_candidate(
+                reuse_candidate,
+                stage_index=0,
+                stage_total=stage_total,
+                query_label="lokale Wiederverwendung",
+                cut_plan_settings=cut_plan_settings,
+                validation_model=validation_model,
+            )
+            if reuse_result is not None:
+                return reuse_result
 
     _prepare_llm_queries_for_auto_resolve(
         project,
