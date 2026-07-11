@@ -27,6 +27,8 @@ __all__ = [
     "resolve_timeline_overlaps",
     "find_first_visual_segment",
     "find_last_visual_segment_before_time",
+    "all_segments_sorted",
+    "apply_segment_replacements",
 ]
 
 _EPSILON = 0.01
@@ -222,14 +224,18 @@ def extend_section_end_visuals_over_pauses(
     return updated_cut_plan
 
 
-def _all_segments_sorted(cut_plan: CutPlanDocument) -> list[tuple[VisualSegment, CutPlanItem]]:
+def all_segments_sorted(cut_plan: CutPlanDocument) -> list[tuple[VisualSegment, CutPlanItem]]:
+    """Alle VisualSegments über den gesamten Cut Plan, sortiert nach
+    timeline_in_sec — öffentlich (Validation Repair, cut_plan_validation_
+    repair_apply.py, braucht dieselbe Nachbar-Ermittlung wie close_small_
+    visual_gaps/resolve_timeline_overlaps)."""
     return sorted(
         ((segment, item) for item in cut_plan.items for segment in item.planned_visual_segments),
         key=lambda pair: pair[0].timeline_in_sec,
     )
 
 
-def _apply_segment_replacements(
+def apply_segment_replacements(
     cut_plan: CutPlanDocument, replacements: dict[tuple[str, str], VisualSegment]
 ) -> CutPlanDocument:
     if not replacements:
@@ -266,7 +272,7 @@ def close_small_visual_gaps(
     extensions übergibt hier settings.black_gap_auto_hold_max_sec — pro
     Projekt einstellbar, damit sich mehr BLACK_GAP_DURING_VOICEOVER-Fälle
     bereits hier lösen, statt einen Supplement Request auszulösen."""
-    all_segments = _all_segments_sorted(cut_plan)
+    all_segments = all_segments_sorted(cut_plan)
     replacements: dict[tuple[str, str], VisualSegment] = {}
 
     for index in range(len(all_segments) - 1):
@@ -296,7 +302,7 @@ def close_small_visual_gaps(
             }
         )
 
-    return _apply_segment_replacements(cut_plan, replacements)
+    return apply_segment_replacements(cut_plan, replacements)
 
 
 def resolve_timeline_overlaps(cut_plan: CutPlanDocument) -> CutPlanDocument:
@@ -314,7 +320,7 @@ def resolve_timeline_overlaps(cut_plan: CutPlanDocument) -> CutPlanDocument:
     Überlappungen dieser Größenordnung entstehen typischerweise durch
     kleine Ungenauigkeiten der Sprachausrichtung (Whisper) an
     Satzgrenzen — keine Cut-Plan-Logikfehler."""
-    all_segments = _all_segments_sorted(cut_plan)
+    all_segments = all_segments_sorted(cut_plan)
     replacements: dict[tuple[str, str], VisualSegment] = {}
 
     for index in range(len(all_segments) - 1):
@@ -345,7 +351,7 @@ def resolve_timeline_overlaps(cut_plan: CutPlanDocument) -> CutPlanDocument:
             }
         )
 
-    return _apply_segment_replacements(cut_plan, replacements)
+    return apply_segment_replacements(cut_plan, replacements)
 
 
 def apply_visual_coverage_extensions(cut_plan: CutPlanDocument, settings: CutPlanSettings) -> CutPlanDocument:
