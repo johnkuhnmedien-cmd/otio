@@ -524,6 +524,43 @@ def test_black_gap_blocker_carries_exact_gap_bounds(tmp_path: Path) -> None:
     assert gap_blockers[0].gap_end_sec == pytest.approx(10.0)
 
 
+def test_black_gap_message_includes_supplement_required_root_cause(tmp_path: Path) -> None:
+    """Nutzervorgabe (Juli 2026, "wieso wird keine klare Ursache genannt?"):
+    die Blocker-Meldung soll erklären, WARUM das Item kein VisualSegment
+    hat — hier: weil es explizit als SUPPLEMENT_REQUIRED markiert ist, mit
+    dem konkreten supplement_reason."""
+    project = _make_project(tmp_path)
+    audio_item = _minimal_audio_item(timeline_start_sec=0.0, timeline_end_sec=5.0)
+    item = _minimal_item(
+        planned_visual_segments=[], timeline_start_sec=0.0, timeline_end_sec=5.0, duration_sec=5.0,
+        chosen_asset_id="", asset_selection_status="SUPPLEMENT_REQUIRED",
+        supplement_reason="Alle Kandidaten verletzen die Reuse-Regel.",
+    )
+    cut_plan = _minimal_cut_plan(project, audio_items=[audio_item], items=[item])
+
+    warnings, blockers = validate_no_black_gap_during_voiceover(project, cut_plan)
+    gap_blockers = [error for error in blockers if error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER]
+    assert len(gap_blockers) == 1
+    assert "Supplement erforderlich" in gap_blockers[0].message
+    assert "Reuse-Regel" in gap_blockers[0].message
+
+
+def test_black_gap_message_includes_blocked_root_cause(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    audio_item = _minimal_audio_item(timeline_start_sec=0.0, timeline_end_sec=5.0)
+    item = _minimal_item(
+        planned_visual_segments=[], timeline_start_sec=0.0, timeline_end_sec=5.0, duration_sec=5.0,
+        chosen_asset_id="", asset_selection_status="BLOCKED",
+        asset_selection_reason="Zeit-Mapping aus Phase 8.2 ist blockiert (siehe Item-Blocker).",
+    )
+    cut_plan = _minimal_cut_plan(project, audio_items=[audio_item], items=[item])
+
+    warnings, blockers = validate_no_black_gap_during_voiceover(project, cut_plan)
+    gap_blockers = [error for error in blockers if error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER]
+    assert len(gap_blockers) == 1
+    assert "Asset-Auswahl blockiert" in gap_blockers[0].message
+
+
 def test_black_gap_without_responsible_item_has_no_cut_item_id(tmp_path: Path) -> None:
     """Eine Lücke, die KEINEM Cut-Plan-Item zeitlich zuordenbar ist (z. B.
     weil gar kein Item für diesen Zeitraum existiert), bleibt weiterhin ein

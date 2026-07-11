@@ -187,6 +187,70 @@ def test_build_creates_asset_reuse_distance_repair_request(tmp_path: Path) -> No
     assert request.gap_end_sec == 0.0
 
 
+def test_build_skips_black_gap_without_valid_gap_bounds(tmp_path: Path) -> None:
+    """Bugfix (Nutzervorgabe Juli 2026, "gap 0.00s-0.00s"): ein BLACK_GAP-
+    Blocker OHNE eine einzige verwertbare Gap-Zeit (z. B. weil er aus
+    einem VERALTETEN Validierungslauf/aggregate_item_level_errors stammt,
+    das nur type=BLACK_GAP_DURING_VOICEOVER ohne gap_start_sec/gap_end_sec
+    trägt) darf KEINEN Request mit gap 0.00s-0.00s erzeugen — sonst würde
+    eine leere/falsche Reparatur vorgetäuscht."""
+    project = _make_project(tmp_path)
+    item = _minimal_item(cut_item_id="cut_001")
+    stale_black_gap = _black_gap_error("cut_001", 0.0, 0.0)  # gap_end_sec == gap_start_sec -> kein echter Gap
+    cut_plan = CutPlanDocument(project_id=project.id, items=[item], blockers=[stale_black_gap])
+
+    document = build_validation_repair_requests_from_cut_plan(project, cut_plan)
+    assert document.requests == []
+
+
+def test_build_creates_black_gap_request_if_any_error_in_group_has_valid_bounds(tmp_path: Path) -> None:
+    """Ist innerhalb derselben Gruppe (mehrere BLACK_GAP-Blocker für
+    dasselbe Item) mindestens EIN Fehler mit echten Gap-Zeiten vorhanden,
+    wird trotzdem ein Request gebaut (nur der stale Eintrag ohne Zeiten
+    wird bei der min/max-Berechnung ignoriert)."""
+    project = _make_project(tmp_path)
+    item = _minimal_item(cut_item_id="cut_001")
+    stale = _black_gap_error("cut_001", 0.0, 0.0)
+    real = _black_gap_error("cut_001", 5.0, 5.6)
+    cut_plan = CutPlanDocument(project_id=project.id, items=[item], blockers=[stale, real])
+
+    document = build_validation_repair_requests_from_cut_plan(project, cut_plan)
+    assert len(document.requests) == 1
+    assert document.requests[0].gap_start_sec == pytest.approx(5.0)
+    assert document.requests[0].gap_end_sec == pytest.approx(5.6)
+
+
+# --- count_black_gap_items_without_gap_bounds ---
+
+
+def test_count_black_gap_items_without_gap_bounds_counts_stale_only(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.cut_plan_validation_repair import (
+        count_black_gap_items_without_gap_bounds,
+    )
+
+    project = _make_project(tmp_path)
+    item_stale = _minimal_item(cut_item_id="cut_001")
+    item_real = _minimal_item(cut_item_id="cut_002")
+    stale = _black_gap_error("cut_001", 0.0, 0.0)
+    real = _black_gap_error("cut_002", 5.0, 5.6)
+    cut_plan = CutPlanDocument(project_id=project.id, items=[item_stale, item_real], blockers=[stale, real])
+
+    assert count_black_gap_items_without_gap_bounds(cut_plan) == 1
+
+
+def test_count_black_gap_items_without_gap_bounds_is_zero_when_none_stale(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.cut_plan_validation_repair import (
+        count_black_gap_items_without_gap_bounds,
+    )
+
+    project = _make_project(tmp_path)
+    item = _minimal_item(cut_item_id="cut_001")
+    real = _black_gap_error("cut_001", 5.0, 5.6)
+    cut_plan = CutPlanDocument(project_id=project.id, items=[item], blockers=[real])
+
+    assert count_black_gap_items_without_gap_bounds(cut_plan) == 0
+
+
 def test_build_skips_blocker_for_item_no_longer_in_draft(tmp_path: Path) -> None:
     """Ein Blocker, dessen Item nicht (mehr) im aktuellen Draft existiert
     (veraltete Requests-Datei vs. neuer Draft), wird ignoriert statt einen

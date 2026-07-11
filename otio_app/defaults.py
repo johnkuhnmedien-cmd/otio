@@ -1018,6 +1018,34 @@ CUT_PLAN_ERROR_TYPES = (
     CUT_PLAN_ERROR_AMBIGUOUS_ASSET_ID,
 )
 
+# Bugfix (Nutzervorgabe Juli 2026, "wieso tauchen Black Gaps trotz neuem
+# Ansatz wieder auf?"): die EINZIGEN Blocker-Typen, die VOR der Asset-
+# Auswahl (Phase 8.2, cut_plan_timeline_service.py) auf einem CutPlanItem
+# gesetzt werden können — also ein echtes, durch Asset-Auswahl NICHT
+# lösbares Timing-/Struktur-Problem darstellen (keine verlässliche
+# Timeline-Zeit vorhanden). Vorher nur lokal in cut_plan_supplement_bridge.
+# py als `_TIMING_BLOCKER_TYPES` definiert und ausschließlich für die
+# Supplement-Request-Erzeugung genutzt — jetzt hier zentral, damit
+# cut_plan_asset_selector.choose_asset_for_cut_item dieselbe Unterscheidung
+# treffen kann: ALLE ANDEREN Blocker-Typen (z. B. BLACK_GAP_DURING_
+# VOICEOVER, ASSET_TOO_SHORT, SHOT_TOO_LONG) können bereits aus einem
+# VORHERIGEN vollständigen Validierungslauf auf dem Item kleben (siehe
+# attach_validation_to_cut_plan) und dürfen eine ERNEUTE Asset-Auswahl
+# NICHT als „Zeit-Mapping blockiert“ verhindern — sonst bleibt ein Item,
+# das einmal einen dieser Blocker bekommen hat, bei jedem weiteren
+# „Asset-Auswahl anwenden“ dauerhaft ohne VisualSegment, selbst wenn eine
+# geänderte Einstellung (z. B. das Visual-Window-Feature) die eigentliche
+# Ursache inzwischen beheben könnte.
+CUT_PLAN_TIMING_BLOCKER_TYPES = frozenset(
+    {
+        CUT_PLAN_ERROR_MISSING_ALIGNMENT,
+        CUT_PLAN_ERROR_MISSING_AUDIO,
+        CUT_PLAN_ERROR_INVALID_AUDIO_PATH,
+        CUT_PLAN_ERROR_SOURCE_RANGE_INVALID,
+        CUT_PLAN_ERROR_SOURCE_PLAN_NOT_READY,
+    }
+)
+
 # Phase D (Nutzervorgabe): Cut-Plan-Drafts mit vielen offenen Items können
 # hunderte bis tausende Einzelmeldungen erzeugen (siehe Cut-Plan-Diagnose,
 # Juli 2026) — die UI gruppiert deshalb nach Fehlertyp UND einer groben

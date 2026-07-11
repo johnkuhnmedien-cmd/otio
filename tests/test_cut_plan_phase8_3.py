@@ -949,6 +949,97 @@ def test_visual_window_does_not_extend_across_folder_boundary(tmp_path: Path) ->
     assert first_item.planned_visual_segments[-1].timeline_out_sec == pytest.approx(first_item.timeline_end_sec)
 
 
+def test_visual_window_extends_even_when_next_item_has_stale_non_timing_blocker(tmp_path: Path) -> None:
+    """Bugfix (Nutzervorgabe Juli 2026): next_item.blockers kann bereits
+    einen stale Validierungs-Blocker (z. B. BLACK_GAP_DURING_VOICEOVER)
+    aus einem VORHERIGEN Lauf tragen — das darf compute_visual_window_end_
+    sec nicht dazu bringen, die Fenster-Erweiterung fälschlich zu
+    verweigern (nur ein ECHTER Timing-Blocker wie MISSING_ALIGNMENT darf
+    das)."""
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("clip_a.mp4", "a"), ("clip_b.mp4", "b")])
+    save_cut_plan_settings(
+        project,
+        _settings(
+            project, initial_audio_offset_sec=0.0, shot_min_sec=3.0, shot_max_sec=10.0,
+            extend_visual_window_to_next_sentence=True, max_sentence_pause_extension_sec=3.0,
+        ),
+    )
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id, intro=ConfirmedIntroPlanItem(),
+        folders=[_two_sentence_folder(duration_sec_1=5.0, duration_sec_2=5.0, pause_sec=2.0)],
+    )
+    _build_and_save_draft(project, plan)
+
+    # Simuliert einen stale BLACK_GAP_DURING_VOICEOVER-Blocker auf dem
+    # ZWEITEN Item, wie er von einem VORHERIGEN attach_validation_to_cut_
+    # plan-Aufruf zurückbleiben könnte.
+    draft = load_cut_plan_draft(project)
+    stale_items = [
+        item.model_copy(update={"blockers": ["BLACK_GAP_DURING_VOICEOVER"]})
+        if "sentence_002" in item.cut_item_id
+        else item
+        for item in draft.items
+    ]
+    save_cut_plan_draft(project, draft.model_copy(update={"items": stale_items}))
+
+    with patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", return_value=30.0):
+        updated = apply_asset_selection_to_draft(project)
+
+    first_item = next(item for item in updated.items if "sentence_001" in item.cut_item_id)
+    second_item = next(item for item in updated.items if "sentence_002" in item.cut_item_id)
+    # Das Fenster wurde trotz des stale Blockers auf dem NÄCHSTEN Item bis
+    # zu dessen Satzstart (7.0s) erweitert.
+    assert first_item.planned_visual_segments[-1].timeline_out_sec == pytest.approx(7.0)
+    # Und das zweite Item selbst wurde NICHT fälschlich blockiert.
+    assert second_item.asset_selection_status != CUT_PLAN_ASSET_SELECTION_BLOCKED
+    assert len(second_item.planned_visual_segments) == 1
+
+
+def test_reapplying_asset_selection_after_stale_black_gap_blocker_recovers_segment(tmp_path: Path) -> None:
+    """Reproduziert exakt den vom Nutzer gemeldeten Fall: ein Item bekommt
+    (z. B. durch einen früheren Validierungslauf) einen BLACK_GAP_DURING_
+    VOICEOVER-Blocker angehängt. Ein erneutes 'Asset-Auswahl anwenden' auf
+    demselben Draft darf das Item NICHT dauerhaft ohne VisualSegment lassen
+    — vor dem Bugfix landete es fälschlich als BLOCKED ('Zeit-Mapping
+    blockiert'), obwohl ein nutzbares Asset vorhanden war."""
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("photo_a.jpg", "a")])
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id, intro=ConfirmedIntroPlanItem(),
+        folders=[_folder_with_sentence(primary_asset_id="asset_photo_a", duration_sec=5.0)],
+    )
+    _build_and_save_draft(project, plan)
+
+    first_pass = apply_asset_selection_to_draft(project)
+    assert first_pass.items[0].asset_selection_status == CUT_PLAN_ASSET_SELECTION_PRIMARY_USED
+    assert len(first_pass.items[0].planned_visual_segments) == 1
+
+    # Simuliert: attach_validation_to_cut_plan hat nach einem Validierungs-
+    # lauf einen BLACK_GAP_DURING_VOICEOVER-Blocker auf das Item geschrieben
+    # (z. B. weil zu diesem Zeitpunkt eine andere Ursache vorlag) — dieser
+    # Zustand wird gespeichert, genau wie es die echte Pipeline tut.
+    stale_draft = first_pass.model_copy(
+        update={
+            "items": [
+                item.model_copy(update={"blockers": ["BLACK_GAP_DURING_VOICEOVER"]})
+                for item in first_pass.items
+            ]
+        }
+    )
+    save_cut_plan_draft(project, stale_draft)
+
+    second_pass = apply_asset_selection_to_draft(project)
+
+    item = second_pass.items[0]
+    assert item.asset_selection_status == CUT_PLAN_ASSET_SELECTION_PRIMARY_USED
+    assert item.asset_selection_status != CUT_PLAN_ASSET_SELECTION_BLOCKED
+    assert len(item.planned_visual_segments) == 1
+    assert "BLACK_GAP_DURING_VOICEOVER" not in item.blockers
+
+
 def test_short_duration_without_merge_produces_shot_too_short_warning(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     _write_inventory(project, FOLDER_A, [("photo_a.jpg", "a")])
@@ -1687,6 +1778,62 @@ def test_choose_asset_for_cut_item_skips_selection_when_item_already_blocked(tmp
     result = choose_asset_for_cut_item(project, blocked_item, lookup, tracker, settings)
     assert result.asset_selection_status == CUT_PLAN_ASSET_SELECTION_BLOCKED
     assert result.chosen_asset_id == ""
+    assert result.planned_visual_segments == []
+
+
+def test_choose_asset_for_cut_item_ignores_stale_non_timing_blockers(tmp_path: Path) -> None:
+    """Bugfix (Nutzervorgabe Juli 2026, "wieso tauchen Black Gaps trotz neuem
+    Ansatz wieder auf?"): item.blockers kann bereits BLACK_GAP_DURING_
+    VOICEOVER/ASSET_TOO_SHORT aus einem VORHERIGEN Validierungslauf tragen
+    (siehe attach_validation_to_cut_plan) — das darf eine erneute
+    Asset-Auswahl NICHT als "Zeit-Mapping blockiert" verhindern, sonst
+    bliebe das Item bei jedem weiteren Lauf dauerhaft ohne VisualSegment."""
+    from otio_app.services.voiceover_generation.cut_plan_asset_selector import CutPlanAssetCandidate
+
+    project = _make_project(tmp_path)
+    settings = _settings(project)
+    lookup = CutPlanAssetLookup()
+    lookup.add(
+        CutPlanAssetCandidate(
+            asset_id="asset_x", asset_path="/x.jpg", folder_name=FOLDER_A, asset_type="image", is_image=True,
+            exists=True, usable_duration_sec=float("inf"),
+        )
+    )
+    tracker = UsageTracker()
+    from otio_app.services.voiceover_generation.cut_plan_models import CutPlanItem
+
+    stale_item = CutPlanItem(
+        cut_item_id="a", duration_sec=5.0, timeline_start_sec=10.0, timeline_end_sec=15.0,
+        primary_asset_id="asset_x",
+        blockers=["BLACK_GAP_DURING_VOICEOVER"],
+        warnings=["ASSET_TOO_SHORT"],
+    )
+    result = choose_asset_for_cut_item(project, stale_item, lookup, tracker, settings)
+
+    assert result.asset_selection_status == CUT_PLAN_ASSET_SELECTION_PRIMARY_USED
+    assert result.chosen_asset_id == "asset_x"
+    assert len(result.planned_visual_segments) == 1
+    # Die stale Meldungen wurden verworfen, nicht einfach mitgeschleppt.
+    assert "BLACK_GAP_DURING_VOICEOVER" not in result.blockers
+    assert "ASSET_TOO_SHORT" not in result.warnings
+
+
+def test_choose_asset_for_cut_item_still_blocks_on_real_timing_blocker(tmp_path: Path) -> None:
+    """Ein ECHTER Timing-Blocker (MISSING_ALIGNMENT) muss weiterhin
+    blockieren — auch wenn er zusammen mit einem stale Blocker auftritt."""
+    project = _make_project(tmp_path)
+    settings = _settings(project)
+    lookup = CutPlanAssetLookup()
+    tracker = UsageTracker()
+    from otio_app.services.voiceover_generation.cut_plan_models import CutPlanItem
+
+    item = CutPlanItem(
+        cut_item_id="a", duration_sec=5.0,
+        blockers=["MISSING_ALIGNMENT", "BLACK_GAP_DURING_VOICEOVER"],
+    )
+    result = choose_asset_for_cut_item(project, item, lookup, tracker, settings)
+
+    assert result.asset_selection_status == CUT_PLAN_ASSET_SELECTION_BLOCKED
     assert result.planned_visual_segments == []
 
 

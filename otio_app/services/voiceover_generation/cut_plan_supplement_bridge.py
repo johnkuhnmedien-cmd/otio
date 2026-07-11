@@ -75,6 +75,7 @@ from otio_app.defaults import (
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_CANDIDATES_FOUND,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_FAILED,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_OPEN,
+    CUT_PLAN_TIMING_BLOCKER_TYPES,
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED as _STATUS_SUPPLEMENT_REQUIRED,
     SUPPLEMENT_SOURCE_PEXELS,
 )
@@ -160,16 +161,11 @@ def _sanitize_error_message(message: str, *, env_keys: tuple[str, ...] = ("PEXEL
 # Items macht ein Supplement Request KEINEN Sinn, weil timeline_start_sec/
 # timeline_end_sec/duration_sec typischerweise 0.0 sind (siehe
 # cut_plan_timeline_service._folder_item_skeleton) und der eigentliche Fix
-# eine erneute Vertonung/Ausrichtung ist, kein visuelles Asset.
-_TIMING_BLOCKER_TYPES = frozenset(
-    {
-        CUT_PLAN_ERROR_MISSING_ALIGNMENT,
-        CUT_PLAN_ERROR_MISSING_AUDIO,
-        CUT_PLAN_ERROR_INVALID_AUDIO_PATH,
-        CUT_PLAN_ERROR_SOURCE_RANGE_INVALID,
-        CUT_PLAN_ERROR_SOURCE_PLAN_NOT_READY,
-    }
-)
+# eine erneute Vertonung/Ausrichtung ist, kein visuelles Asset. Zentral in
+# defaults.py definiert (siehe dort) — cut_plan_asset_selector.py nutzt
+# denselben Satz, um zu entscheiden, ob ein Item eine erneute Asset-
+# Auswahl verhindern darf.
+_TIMING_BLOCKER_TYPES = CUT_PLAN_TIMING_BLOCKER_TYPES
 
 # Phase F: Blocker-Typen, die ERST bei der vollständigen Cut-Plan-
 # Validierung (validate_cut_items/validate_asset_usage, siehe

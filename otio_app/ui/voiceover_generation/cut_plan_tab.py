@@ -164,6 +164,7 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
 )
 from otio_app.services.voiceover_generation.cut_plan_validation_repair import (
     build_validation_repair_requests_from_cut_plan,
+    count_black_gap_items_without_gap_bounds,
     load_cut_plan_validation_repair_requests,
     save_cut_plan_validation_repair_requests,
 )
@@ -1390,6 +1391,20 @@ def _render_validation_repair(project: Project, draft: CutPlanDocument) -> None:
     requests_document = load_cut_plan_validation_repair_requests(project)
     current_hash = content_hash_of_model(draft)
 
+    def _warn_about_skipped_stale_black_gaps() -> None:
+        """Bugfix (Nutzervorgabe Juli 2026, "gap 0.00s-0.00s"): weist
+        explizit darauf hin, wenn für manche BLACK_GAP-Blocker bewusst KEIN
+        Request gebaut wurde, weil keine verwertbare Gap-Zeit vorlag —
+        sonst sähe es so aus, als seien diese Black Gaps einfach
+        verschwunden, statt dass eine Neu-Validierung nötig ist."""
+        skipped = count_black_gap_items_without_gap_bounds(draft)
+        if skipped:
+            st.warning(
+                f"{skipped} Item(s) mit einer schwarzen Lücke ohne genaue Zeitangabe übersprungen "
+                "(vermutlich ein veralteter Blocker aus einem früheren Validierungslauf). Bitte "
+                "„Cut Plan validieren“ erneut ausführen und diese Requests danach neu erzeugen."
+            )
+
     if requests_document is None:
         if st.button(
             "Validation Repair Requests aus Cut Plan erzeugen",
@@ -1398,6 +1413,7 @@ def _render_validation_repair(project: Project, draft: CutPlanDocument) -> None:
             new_document = build_validation_repair_requests_from_cut_plan(project, draft)
             save_cut_plan_validation_repair_requests(project, new_document)
             st.success(f"{len(new_document.requests)} Validation Repair Request(s) erzeugt.")
+            _warn_about_skipped_stale_black_gaps()
             st.rerun()
         return
 
@@ -1413,6 +1429,7 @@ def _render_validation_repair(project: Project, draft: CutPlanDocument) -> None:
         new_document = build_validation_repair_requests_from_cut_plan(project, draft)
         save_cut_plan_validation_repair_requests(project, new_document)
         st.success(f"{len(new_document.requests)} Validation Repair Request(s) erzeugt.")
+        _warn_about_skipped_stale_black_gaps()
         st.rerun()
 
     if not requests_document.requests:

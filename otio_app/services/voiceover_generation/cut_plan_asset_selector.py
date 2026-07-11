@@ -45,6 +45,7 @@ from otio_app.defaults import (
     CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED,
     CUT_PLAN_STATUS_DRAFT,
     CUT_PLAN_STATUS_NEEDS_REVIEW,
+    CUT_PLAN_TIMING_BLOCKER_TYPES,
     READINESS_SEVERITY_BLOCKER,
     READINESS_SEVERITY_WARNING,
 )
@@ -277,8 +278,15 @@ def compute_visual_window_end_sec(
     - es kein nächstes Item gibt,
     - `next_item` in einer anderen Gruppe liegt (Intro<->Folder- oder
       Folder<->Folder-Grenze, siehe `_same_visual_group`),
-    - `next_item` blockiert ist (z. B. MISSING_ALIGNMENT) und seine
-      `timeline_start_sec` deshalb nicht verlässlich ist,
+    - `next_item` einen ECHTEN Timing-Blocker trägt (z. B. MISSING_
+      ALIGNMENT, siehe CUT_PLAN_TIMING_BLOCKER_TYPES) und seine
+      `timeline_start_sec` deshalb nicht verlässlich ist — bewusst NUR
+      diese Teilmenge (Bugfix Juli 2026, siehe choose_asset_for_cut_item):
+      `next_item.blockers` kann bereits aus einem VORHERIGEN vollständigen
+      Validierungslauf stammen (z. B. BLACK_GAP_DURING_VOICEOVER,
+      ASSET_TOO_SHORT) — solche Blocker sagen NICHTS über die Verlässlich-
+      keit von `timeline_start_sec` aus und dürfen die Fenster-Erweiterung
+      nicht verhindern,
     - zwischen beiden Items keine positive Pause besteht (Overlap oder
       exakt anschließend — nichts zu füllen).
 
@@ -295,7 +303,7 @@ def compute_visual_window_end_sec(
         return default_end
     if not _same_visual_group(item, next_item):
         return default_end
-    if next_item.blockers:
+    if any(b in CUT_PLAN_TIMING_BLOCKER_TYPES for b in next_item.blockers):
         return default_end
 
     pause_duration = next_item.timeline_start_sec - item.timeline_end_sec
@@ -743,7 +751,30 @@ def choose_asset_for_cut_item(
     erweiterten) Ende, statt exakt am eigenen Satzende zu enden. Ohne
     Override (Default None, z. B. für alle bestehenden Aufrufer/Tests)
     entspricht `visual_window_end_sec` `item.timeline_end_sec` — IDENTISCHES
-    Verhalten zu vorher."""
+    Verhalten zu vorher.
+
+    Bugfix (Nutzervorgabe Juli 2026, "wieso tauchen Black Gaps trotz neuem
+    Ansatz wieder auf?"): `item.warnings`/`item.blockers` können bereits
+    aus einem VORHERIGEN vollständigen Validierungslauf stammen (siehe
+    attach_validation_to_cut_plan, das diese Felder mit den zuletzt
+    gefundenen Fehlertypen überschreibt und den Draft speichert). Würde
+    diese Funktion sie unverändert übernehmen, würde z. B. ein einmal
+    gesetzter BLACK_GAP_DURING_VOICEOVER- oder ASSET_TOO_SHORT-Blocker bei
+    JEDEM weiteren „Asset-Auswahl anwenden“ fälschlich als „Zeit-Mapping
+    blockiert“ interpretiert (siehe `if item.blockers:` unten) — das Item
+    bliebe dann DAUERHAFT ohne VisualSegment, selbst wenn die eigentliche
+    Ursache (z. B. durch das neue Visual-Window-Feature) inzwischen
+    behebbar wäre. Nur die ECHTEN, vor der Asset-Auswahl gesetzten Timing-
+    Blocker (CUT_PLAN_TIMING_BLOCKER_TYPES, z. B. MISSING_ALIGNMENT) sind
+    ein legitimer Grund, die Auswahl zu überspringen — alle anderen
+    Warnungen/Blocker werden hier verworfen, weil diese Funktion sie
+    ohnehin unten frisch neu berechnet."""
+    item = item.model_copy(
+        update={
+            "blockers": [b for b in item.blockers if b in CUT_PLAN_TIMING_BLOCKER_TYPES],
+            "warnings": [],
+        }
+    )
     window_end_sec = item.timeline_end_sec if visual_window_end_sec is None else visual_window_end_sec
     # max(...) ist eine reine Absicherung gegen einen inkonsistenten/zu
     # kleinen Override von außen — compute_visual_window_end_sec selbst
@@ -1163,8 +1194,16 @@ def apply_asset_selection_to_cut_plan(project: Project, cut_plan: CutPlanDocumen
 
     for item in cut_plan.items:
         duration_strategy = determine_duration_strategy(item, settings)
+        # Bugfix (Nutzervorgabe Juli 2026, siehe choose_asset_for_cut_item):
+        # item.blockers kann bereits aus einem VORHERIGEN vollständigen
+        # Validierungslauf stammen — nur ein ECHTER Timing-Blocker
+        # (CUT_PLAN_TIMING_BLOCKER_TYPES) darf die Merge-Eligibility-Prüfung
+        # hier beeinflussen, sonst würde ein Item mit einem stale
+        # BLACK_GAP_DURING_VOICEOVER-Blocker fälschlich vom eigentlich
+        # möglichen Rückwärts-Merge ausgeschlossen.
+        has_timing_blocker = any(b in CUT_PLAN_TIMING_BLOCKER_TYPES for b in item.blockers)
         merge_eligible = (
-            not item.blockers
+            not has_timing_blocker
             and not item.needs_supplement_asset
             and duration_strategy == CUT_PLAN_DURATION_STRATEGY_SINGLE_SHOT
             and item.duration_sec < settings.shot_min_sec
