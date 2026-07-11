@@ -767,6 +767,11 @@ class ConfirmedFolderPlanItem(BaseModel):
     min_words: int = 0
     max_words: int = 0
     sentence_items: list[SentenceItem] = Field(default_factory=list)
+    # Nutzervorgabe (Juli 2026): visueller Abschluss-Shot NACH dem letzten
+    # Satz — siehe ClosingVisualPlan-Docstring. Additiv, aus dem
+    # FolderVoiceoverDraft dieses Ordners übernommen (siehe
+    # final_plan_service._build_folder_plan_item).
+    closing_visual_plan: ClosingVisualPlan = Field(default_factory=ClosingVisualPlan)
     audio_path: str = ""
     audio_duration_sec: float = 0.0
     alignment_path: str = ""

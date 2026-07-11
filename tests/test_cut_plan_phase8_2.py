@@ -40,6 +40,7 @@ from otio_app.services.voiceover_generation.final_plan_service import (
 )
 from otio_app.services.voiceover_generation.models import (
     AlignmentItem,
+    ClosingVisualPlan,
     ConfirmedFolderPlanItem,
     ConfirmedIntroPlanItem,
     ConfirmedVoiceoverProjectPlan,
@@ -101,6 +102,7 @@ def _folder(
     audio_path: str = "/fake/folder.mp3",
     audio_duration_sec: float = 40.0,
     with_alignment: bool = True,
+    closing_visual_plan: ClosingVisualPlan | None = None,
 ) -> ConfirmedFolderPlanItem:
     return ConfirmedFolderPlanItem(
         folder_name=folder_name,
@@ -124,6 +126,7 @@ def _folder(
             if with_alignment
             else []
         ),
+        closing_visual_plan=closing_visual_plan or ClosingVisualPlan(),
     )
 
 
@@ -410,6 +413,137 @@ def test_item_skeletons_default_supplement_search_hint_to_empty_for_intro(tmp_pa
 
     intro_item = next(item for item in items if item.source_scope == "intro")
     assert intro_item.supplement_search_hint == ""
+
+
+# --- Closing Shot (Nutzervorgabe Juli 2026, "kein closing asset nach dem
+# letzten Satz, der die Pause ausfüllt") ---
+
+
+def test_no_closing_item_when_no_closing_visual_plan(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=_intro(), folders=[_folder()])
+    settings = _settings(project)
+    audio_items = build_cut_plan_audio_items(project, plan, settings)
+    items = build_cut_plan_item_skeletons(project, plan, audio_items, settings)
+
+    assert not any(item.is_closing_shot for item in items)
+
+
+def test_closing_item_created_when_closing_visual_plan_has_primary_asset(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    folder = _folder(
+        audio_duration_sec=40.0,
+        closing_visual_plan=ClosingVisualPlan(
+            visual_intent="aerial establishing", primary_asset_id="asset_closing"
+        ),
+    )
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=_intro(), folders=[folder])
+    settings = _settings(project, initial_audio_offset_sec=1.0, pause_between_sections_sec=0.25)
+    audio_items = build_cut_plan_audio_items(project, plan, settings)
+    items = build_cut_plan_item_skeletons(project, plan, audio_items, settings)
+
+    closing_items = [item for item in items if item.is_closing_shot]
+    assert len(closing_items) == 1
+    closing_item = closing_items[0]
+    assert closing_item.cut_item_id == "cut_001_closing"
+    assert closing_item.folder_name == FOLDER_A
+    assert closing_item.text == ""
+    assert closing_item.visual_intent == "aerial establishing"
+    assert closing_item.primary_asset_id == "asset_closing"
+    assert closing_item.source_scope == "folder"
+
+    folder_audio = next(a for a in audio_items if a.folder_name == FOLDER_A)
+    sentence_item = next(item for item in items if item.cut_item_id == "cut_001_sentence_001")
+
+    # Natürlicher Audio-Tail: Satz endet bei 7.0s (relativ), Audio dauert 40.0s
+    # -> reichlich Platz, kein Floor nötig.
+    assert closing_item.timeline_start_sec == pytest.approx(sentence_item.timeline_end_sec)
+    assert closing_item.timeline_end_sec == pytest.approx(folder_audio.timeline_end_sec)
+    assert closing_item.duration_sec == pytest.approx(closing_item.timeline_end_sec - closing_item.timeline_start_sec)
+
+
+def test_closing_item_appears_directly_after_last_sentence_of_its_folder(tmp_path: Path) -> None:
+    """Wichtig für compute_visual_window_end_sec (Asset-Auswahl, Phase 2):
+    der Closing Shot muss im items-Array UNMITTELBAR nach dem letzten Satz
+    SEINES Ordners stehen, damit next_item bei der Fenster-Berechnung des
+    letzten Satzes korrekt der Closing Shot ist (nicht das nächste Folder-
+    Item)."""
+    project = _make_project(tmp_path, folders=[FOLDER_A, FOLDER_B])
+    folder_a = _folder(
+        FOLDER_A, order_index=1, audio_duration_sec=40.0,
+        closing_visual_plan=ClosingVisualPlan(primary_asset_id="asset_closing_a"),
+    )
+    folder_b = _folder(FOLDER_B, order_index=2, audio_duration_sec=20.0)
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, folders=[folder_a, folder_b])
+    settings = _settings(project)
+    audio_items = build_cut_plan_audio_items(project, plan, settings)
+    items = build_cut_plan_item_skeletons(project, plan, audio_items, settings)
+
+    ids = [item.cut_item_id for item in items]
+    closing_index = ids.index("cut_001_closing")
+    last_sentence_index = ids.index("cut_001_sentence_001")
+    assert closing_index == last_sentence_index + 1
+
+
+def test_closing_item_floors_duration_when_natural_tail_is_near_zero(tmp_path: Path) -> None:
+    """Wenn der letzte Satz praktisch bis ans Audio-Ende reicht (minimaler
+    'Audio-Tail'), muss der Closing Shot trotzdem eine sinnvolle
+    Mindestdauer bekommen — sonst wäre er selbst ein neuer Mini-Blocker."""
+    project = _make_project(tmp_path)
+    folder = _folder(
+        audio_duration_sec=7.05,  # Satz endet bei 7.0s -> nur 0.05s natürlicher Tail
+        closing_visual_plan=ClosingVisualPlan(primary_asset_id="asset_closing"),
+    )
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, folders=[folder])
+    settings = _settings(project)
+    audio_items = build_cut_plan_audio_items(project, plan, settings)
+    items = build_cut_plan_item_skeletons(project, plan, audio_items, settings)
+
+    closing_item = next(item for item in items if item.is_closing_shot)
+    folder_audio = audio_items[0]
+    assert closing_item.timeline_end_sec == pytest.approx(folder_audio.timeline_end_sec)
+    assert closing_item.duration_sec == pytest.approx(1.0)
+    assert closing_item.duration_sec >= 1.0 - 1e-6
+
+
+def test_no_closing_item_when_only_supplement_requested(tmp_path: Path) -> None:
+    """needs_supplement_asset=true (ohne primary_asset_id) reicht ebenfalls
+    aus, um einen Closing-Shot-Request zu erzeugen — er soll später über
+    die Supplement-Pipeline gefüllt werden, nicht stillschweigend fehlen."""
+    project = _make_project(tmp_path)
+    folder = _folder(
+        audio_duration_sec=40.0,
+        closing_visual_plan=ClosingVisualPlan(
+            needs_supplement_asset=True, supplement_reason="Kein passendes Motiv.",
+            supplement_search_hint="Grand Canyon aerial dusk",
+        ),
+    )
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, folders=[folder])
+    settings = _settings(project)
+    audio_items = build_cut_plan_audio_items(project, plan, settings)
+    items = build_cut_plan_item_skeletons(project, plan, audio_items, settings)
+
+    closing_item = next(item for item in items if item.is_closing_shot)
+    assert closing_item.primary_asset_id == ""
+    assert closing_item.needs_supplement_asset is True
+    assert closing_item.supplement_reason == "Kein passendes Motiv."
+    assert closing_item.supplement_search_hint == "Grand Canyon aerial dusk"
+
+
+def test_no_closing_item_when_no_audio_placed(tmp_path: Path) -> None:
+    """Fehlt das Audio komplett, wird kein Closing-Item erzeugt — der
+    fehlende Audio-Blocker wird bereits an anderer Stelle gemeldet."""
+    project = _make_project(tmp_path)
+    folder = _folder(
+        audio_path="",  # kein Audio -> kein CutPlanAudioItem
+        closing_visual_plan=ClosingVisualPlan(primary_asset_id="asset_closing"),
+    )
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, folders=[folder])
+    settings = _settings(project)
+    audio_items = build_cut_plan_audio_items(project, plan, settings)
+    items = build_cut_plan_item_skeletons(project, plan, audio_items, settings)
+
+    assert not any(item.is_closing_shot for item in items)
 
 
 def test_item_skeletons_populate_source_refs(tmp_path: Path) -> None:

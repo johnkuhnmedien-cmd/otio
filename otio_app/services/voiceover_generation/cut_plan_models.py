@@ -192,6 +192,13 @@ class CutPlanItem(BaseModel):
     # hat kein visual_asset_plan) und für alle vor Phase 4/9 erzeugten
     # Sentence-Items.
     supplement_search_hint: str = ""
+    # Nutzervorgabe (Juli 2026): True für den zusätzlichen, rein visuellen
+    # Abschluss-Shot NACH dem letzten Satz eines Ordners (siehe
+    # ClosingVisualPlan in voiceover_generation/models.py und
+    # cut_plan_timeline_service._closing_item_skeleton) — kein eigener
+    # gesprochener Satz. Reine Markierung, kein eigenes Verhalten in der
+    # Validierung (dieselben Regeln wie für ein normales Folder-Item).
+    is_closing_shot: bool = False
     warnings: list[str] = Field(default_factory=list)
     blockers: list[str] = Field(default_factory=list)
 

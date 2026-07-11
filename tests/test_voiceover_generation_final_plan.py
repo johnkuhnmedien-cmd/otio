@@ -226,6 +226,40 @@ def test_plan_contains_intro_hook_text(tmp_path: Path) -> None:
     assert "Ein Ort voller Geheimnisse" in plan.intro.hook_text
 
 
+def test_plan_folder_carries_closing_visual_plan_from_draft(tmp_path: Path) -> None:
+    """Nutzervorgabe (Juli 2026): ClosingVisualPlan muss vom bestätigten
+    Folder-Voice-over-Draft in den ConfirmedFolderPlanItem übernommen
+    werden — Grundlage für das Cut-Plan-Wiring."""
+    project = _make_base_project(tmp_path)
+    author_response = json.dumps(
+        {
+            "voiceover_text_full": "Zwischen den Felswaenden scheint das Licht von innen zu leuchten heute.",
+            "sentence_items": [
+                {
+                    "sentence_id": "sentence_001",
+                    "text": "Zwischen den Felswaenden scheint das Licht von innen zu leuchten heute.",
+                    "primary_asset_id": "asset_clip1",
+                }
+            ],
+            "closing_visual_plan": {
+                "visual_intent": "aerial establishing",
+                "primary_asset_id": "asset_clip1",
+                "asset_strategy_reason": "Ruhiger Abschluss.",
+            },
+        }
+    )
+    fake_response = PlanLlmResponse(provider="anthropic", model="claude-sonnet-5", raw_text=author_response)
+    with patch(f"{_AUTHOR_MODULE}.generate_plan_text_with_metadata", return_value=fake_response):
+        generate_folder_voiceover(project, FOLDER_NAME, provider="anthropic", model="claude-sonnet-5")
+    confirm_folder_voiceover(project, FOLDER_NAME)
+    _confirm_intro(project)
+    _synthesize_everything(project)
+
+    plan = build_confirmed_voiceover_project_plan(project)
+    assert plan.folders[0].closing_visual_plan.primary_asset_id == "asset_clip1"
+    assert plan.folders[0].closing_visual_plan.visual_intent == "aerial establishing"
+
+
 def test_plan_folders_in_confirmed_order(tmp_path: Path) -> None:
     project = _make_fully_ready_project(tmp_path)
     plan = build_confirmed_voiceover_project_plan(project)

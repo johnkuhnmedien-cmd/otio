@@ -646,7 +646,10 @@ def _render_cut_plan_draft(project: Project, draft: CutPlanDocument) -> None:
                     "cut_item_id": item.cut_item_id,
                     "scope": item.source_scope,
                     "folder_name": item.folder_name,
-                    "text": item.text,
+                    # Nutzervorgabe (Juli 2026): der Closing Shot hat bewusst
+                    # keinen gesprochenen Text (siehe ClosingVisualPlan) —
+                    # ohne diesen Marker wirkt die Zeile wie ein Datenfehler.
+                    "text": item.text or ("🎬 (Closing Shot — kein Text)" if item.is_closing_shot else ""),
                     "timeline_start_sec": item.timeline_start_sec,
                     "timeline_end_sec": item.timeline_end_sec,
                     "primary_asset_id": item.primary_asset_id,

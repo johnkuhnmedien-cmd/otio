@@ -886,6 +886,16 @@ CUT_PLAN_DEFAULT_VIDEO_HEAD_TRIM_SEC = 1.0  # gilt nur für Video, nie für Bild
 CUT_PLAN_DEFAULT_SHOT_MIN_SEC = 3.0
 CUT_PLAN_DEFAULT_SHOT_MAX_SEC = 8.0
 
+# Nutzervorgabe (Juli 2026): Mindestdauer für den zusätzlichen Closing-Shot-
+# CutPlanItem (siehe cut_plan_timeline_service._closing_item_skeleton) —
+# deckt den Fall ab, dass der letzte Satz bereits bis exakt ans Audio-Ende
+# reicht (kein natürlicher "Audio-Tail"). Bewusst < CUT_PLAN_DEFAULT_SHOT_
+# MIN_SEC, damit ein knapper Audio-Tail höchstens die weiche SHOT_TOO_SHORT-
+# Warnung (>= 1.0s), NIE den harten Blocker (< 1.0s) auslöst — der
+# anschließende Visual-Coverage-Fix (extend_section_end_visuals_over_pauses)
+# streckt diesen Shot im Regelfall ohnehin über die Sektionspause hinweg.
+CUT_PLAN_DEFAULT_CLOSING_SHOT_MIN_DURATION_SEC = 1.0
+
 # Nutzervorgabe (Juli 2026): vorher als Konstante _MAX_AUTO_FILLED_GAP_SEC in
 # cut_plan_visual_coverage.py fest auf 1.0s codiert — jetzt pro Projekt
 # einstellbar (siehe CutPlanSettings.black_gap_auto_hold_max_sec), damit

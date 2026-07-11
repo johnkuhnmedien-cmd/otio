@@ -14,6 +14,7 @@ from otio_app.defaults import (
     AUDIO_SCOPE_FOLDER,
     AUDIO_SCOPE_INTRO,
     CUT_PLAN_ASSET_SELECTION_UNRESOLVED,
+    CUT_PLAN_DEFAULT_CLOSING_SHOT_MIN_DURATION_SEC,
     CUT_PLAN_DURATION_STRATEGY_SINGLE_SHOT,
     CUT_PLAN_ERROR_MISSING_ALIGNMENT,
     CUT_PLAN_ERROR_MISSING_AUDIO,
@@ -270,6 +271,91 @@ def _folder_item_skeleton(
     )
 
 
+def _closing_item_skeleton(
+    folder: ConfirmedFolderPlanItem,
+    folder_audio_item: CutPlanAudioItem | None,
+    folder_sentence_items: list[CutPlanItem],
+) -> CutPlanItem | None:
+    """Nutzervorgabe (Juli 2026, "wir haben gar kein closing asset nach dem
+    letzten Satz, der die Pause ausfüllt"): EIN zusätzliches, rein
+    visuelles CutPlanItem NACH dem letzten Satz eines Ordners (siehe
+    ClosingVisualPlan in voiceover_generation/models.py) — kein eigener
+    gesprochener Satz (text=""), aber dieselbe Asset-Auswahl-/Validierungs-
+    Pipeline wie jedes andere Folder-Item.
+
+    Gibt None zurück, wenn:
+    - kein ClosingVisualPlan geplant wurde (weder Asset noch Supplement-
+      Anfrage — additiv, ältere Drafts vor dieser Phase bleiben unverändert),
+    - kein CutPlanAudioItem für diesen Ordner platziert werden konnte
+      (fehlendes Audio wird bereits an anderer Stelle als eigener Blocker
+      gemeldet, siehe build_cut_plan_timeline_skeleton).
+
+    Deckt visuell ZWEI Lücken ab, die vorher unabhängig als
+    BLACK_GAP_DURING_VOICEOVER auffielen: den kurzen 'Audio-Tail' zwischen
+    Satzende und tatsächlichem Audio-Ende, UND (über die anschließende
+    Visual-Coverage-Erweiterung, siehe cut_plan_visual_coverage.
+    extend_section_end_visuals_over_pauses, die dieses Item automatisch als
+    'letztes VisualSegment vor Audio-Ende' erkennt) die Sektionspause bis
+    zur nächsten Sektion — OHNE dass dafür das zuletzt gesprochene Satz-
+    Asset lang genug sein müsste."""
+    closing_plan = folder.closing_visual_plan
+    if not closing_plan.primary_asset_id and not closing_plan.needs_supplement_asset:
+        return None
+    if folder_audio_item is None:
+        return None
+
+    last_valid_item = next(
+        (item for item in reversed(folder_sentence_items) if not item.blockers), None
+    )
+    raw_start_sec = (
+        last_valid_item.timeline_end_sec if last_valid_item is not None else folder_audio_item.timeline_start_sec
+    )
+    raw_end_sec = folder_audio_item.timeline_end_sec
+
+    if raw_end_sec - raw_start_sec < CUT_PLAN_DEFAULT_CLOSING_SHOT_MIN_DURATION_SEC:
+        timeline_start_sec = raw_end_sec - CUT_PLAN_DEFAULT_CLOSING_SHOT_MIN_DURATION_SEC
+    else:
+        timeline_start_sec = raw_start_sec
+    timeline_end_sec = raw_end_sec
+    duration_sec = timeline_end_sec - timeline_start_sec
+
+    return CutPlanItem(
+        cut_item_id=f"cut_{folder.order_index:03d}_closing",
+        source_refs=[
+            CutPlanSourceRef(
+                source_scope=AUDIO_SCOPE_FOLDER,
+                folder_name=folder.folder_name,
+                text="",
+            )
+        ],
+        source_scope=AUDIO_SCOPE_FOLDER,
+        folder_name=folder.folder_name,
+        text="",
+        visual_intent=closing_plan.visual_intent,
+        audio_start_sec=timeline_start_sec - folder_audio_item.timeline_start_sec,
+        audio_end_sec=timeline_end_sec - folder_audio_item.timeline_start_sec,
+        timeline_start_sec=timeline_start_sec,
+        timeline_end_sec=timeline_end_sec,
+        duration_sec=duration_sec,
+        duration_strategy=CUT_PLAN_DURATION_STRATEGY_SINGLE_SHOT,
+        planned_visual_segments=[],
+        primary_asset_id=closing_plan.primary_asset_id,
+        backup_asset_ids=list(closing_plan.backup_asset_ids),
+        second_backup_asset_ids=list(closing_plan.second_backup_asset_ids),
+        chosen_asset_id="",
+        asset_selection_status=CUT_PLAN_ASSET_SELECTION_UNRESOLVED,
+        asset_selection_reason="",
+        fallback_reason="",
+        needs_supplement_asset=closing_plan.needs_supplement_asset,
+        supplement_reason=closing_plan.supplement_reason,
+        supplement_request_id="",
+        supplement_search_hint=closing_plan.supplement_search_hint,
+        is_closing_shot=True,
+        warnings=[],
+        blockers=[],
+    )
+
+
 def build_cut_plan_item_skeletons(
     project: Project,
     source_plan: ConfirmedVoiceoverProjectPlan,
@@ -295,13 +381,19 @@ def build_cut_plan_item_skeletons(
 
     for folder in sorted(source_plan.folders, key=lambda item: item.order_index):
         folder_audio_item = _find_audio_item(audio_items, scope=AUDIO_SCOPE_FOLDER, folder_name=folder.folder_name)
+        folder_items: list[CutPlanItem] = []
         for sentence_item in folder.sentence_items:
             alignment_item = (
                 find_alignment_for_folder_sentence(folder, sentence_item)
                 if folder_audio_item is not None
                 else None
             )
-            items.append(_folder_item_skeleton(folder, sentence_item, folder_audio_item, alignment_item))
+            folder_items.append(_folder_item_skeleton(folder, sentence_item, folder_audio_item, alignment_item))
+        items.extend(folder_items)
+
+        closing_item = _closing_item_skeleton(folder, folder_audio_item, folder_items)
+        if closing_item is not None:
+            items.append(closing_item)
 
     return items
 

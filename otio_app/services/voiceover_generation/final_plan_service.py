@@ -249,6 +249,7 @@ def _build_folder_plan_item(
         min_words=draft.min_words,
         max_words=draft.max_words,
         sentence_items=list(draft.sentence_items),
+        closing_visual_plan=draft.closing_visual_plan,
         audio_path=audio_path,
         audio_duration_sec=audio_duration_sec,
         alignment_path=alignment_path,

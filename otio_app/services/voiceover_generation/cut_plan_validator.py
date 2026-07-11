@@ -415,7 +415,10 @@ def validate_cut_items(
         if not item.source_refs:
             blockers.append(_make_error(CUT_PLAN_ERROR_SOURCE_RANGE_INVALID, scope=scope, cut_item_id=cid,
                                          folder_name=folder, message="source_refs ist leer."))
-        if not item.text.strip():
+        if not item.text.strip() and not item.is_closing_shot:
+            # Nutzervorgabe (Juli 2026): der Closing Shot (siehe ClosingVisualPlan)
+            # ist bewusst rein visuell — kein gesprochener Satz, text="" ist hier
+            # gültig und kein Struktur-Fehler.
             blockers.append(_make_error(CUT_PLAN_ERROR_SOURCE_RANGE_INVALID, scope=scope, cut_item_id=cid,
                                          folder_name=folder, message="text ist leer."))
         if item.timeline_start_sec < 0:

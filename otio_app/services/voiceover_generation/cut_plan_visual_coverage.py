@@ -97,7 +97,13 @@ def find_last_visual_segment_before_time(
     ]
     if not candidates:
         return None
-    return max(candidates, key=lambda pair: pair[1].timeline_out_sec)
+    # Nutzervorgabe (Juli 2026): bei einem exakten timeline_out_sec-
+    # Gleichstand (z. B. weil ein neu eingefügter Closing-Shot-Slot vor der
+    # Überlappungsauflösung testweise bis zum selben Audio-Ende reicht wie
+    # das vorherige Segment) gewinnt das Segment mit dem SPÄTEREN
+    # timeline_in_sec — chronologisch tatsächlich das letzte/aktuellste
+    # Segment vor diesem Zeitpunkt, nicht zufällig das erste in Listenreihenfolge.
+    return max(candidates, key=lambda pair: (pair[1].timeline_out_sec, pair[1].timeline_in_sec))
 
 
 def _video_can_extend_to(asset_path: str, new_source_out_sec: float) -> bool:
