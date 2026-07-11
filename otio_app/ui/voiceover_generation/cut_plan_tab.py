@@ -35,6 +35,11 @@ from otio_app.defaults import (
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_USED,
     CUT_PLAN_AUTO_RESOLVE_PROVIDER_LOCAL_REUSE,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
+    CUT_PLAN_VALIDATION_REPAIR_STATUS_ACCEPTED,
+    CUT_PLAN_VALIDATION_REPAIR_STATUS_NO_MATCH,
+    CUT_PLAN_VALIDATION_REPAIR_STATUS_UNSAFE_TO_REPAIR,
+    CUT_PLAN_VALIDATION_REPAIR_TYPE_ASSET_REUSE_DISTANCE,
+    CUT_PLAN_VALIDATION_REPAIR_TYPE_BLACK_GAP,
     CUT_PLAN_VALIDATION_STATUS_BLOCKED,
     CUT_PLAN_VALIDATION_STATUS_PASS,
     CUT_PLAN_VALIDATION_STATUS_WARNING,
@@ -156,6 +161,15 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     save_cut_plan_supplement_requests,
     search_candidates_for_cut_plan_request,
     unaccept_cut_plan_supplement_request,
+)
+from otio_app.services.voiceover_generation.cut_plan_validation_repair import (
+    build_validation_repair_requests_from_cut_plan,
+    load_cut_plan_validation_repair_requests,
+    save_cut_plan_validation_repair_requests,
+)
+from otio_app.services.voiceover_generation.cut_plan_validation_repair_resolve_service import (
+    auto_resolve_all_validation_repair_requests,
+    auto_resolve_validation_repair_request,
 )
 from otio_app.services.voiceover_generation.cut_plan_edit_plan_bridge import (
     build_bridge_audio_plan_from_confirmed_cut_plan,
@@ -1286,6 +1300,168 @@ def _render_bulk_auto_resolve_action(
                 label = request_labels.get(result.request_id, result.request_id)
                 st.warning(f"„{label}“: kein passendes Asset gefunden — bitte manuell prüfen.")
         st.rerun()
+
+
+def _render_validation_repair(project: Project, draft: CutPlanDocument) -> None:
+    """Validation Repair (Nutzervorgabe, Juli 2026): eigenständiger, dem
+    regulären Supplement-Bereich NACHGESCHALTETER Reparatur-Schritt für
+    Rest-Blocker, die erst NACH der vollständigen Cut-Plan-Validierung
+    sichtbar werden (BLACK_GAP_DURING_VOICEOVER, ASSET_REUSE_DISTANCE_
+    TOO_SHORT). Bewusst GETRENNT von den Supplement Requests oben —
+    andere Semantik: für BLACK_GAP wird KEIN Ersatz für das GANZE Item
+    gesucht, sondern ein passend großes Reparatur-Fenster berechnet
+    (inkl. kontrollierter Kürzung der angrenzenden Segmente, damit das
+    neue Segment nicht unter die Mindest-Shot-Länge fällt — siehe
+    cut_plan_validation_repair_apply.py). ASSET_REUSE_DISTANCE bleibt ein
+    voller Segment-Ersatz, da hier tatsächlich ein anderes Asset für das
+    gesamte Segment benötigt wird."""
+    st.subheader("Validation Repair")
+    st.caption(
+        "Eigenständiger Reparatur-Schritt für Rest-Blocker, die erst nach der vollständigen Cut-Plan-"
+        "Validierung sichtbar werden (schwarze Lücken, zu früh wiederverwendete Assets). Für schwarze "
+        "Lücken wird — anders als bei den Supplement Requests oben — kein Ersatz für das ganze Item "
+        "gesucht, sondern ein passend großes Reparatur-Fenster berechnet (inkl. Kürzung der angrenzenden "
+        "Segmente, falls nötig). Suche und Download laufen ausschließlich bei explizitem Klick."
+    )
+
+    requests_document = load_cut_plan_validation_repair_requests(project)
+    current_hash = content_hash_of_model(draft)
+
+    if requests_document is None:
+        if st.button(
+            "Validation Repair Requests aus Cut Plan erzeugen",
+            key=f"cut_plan_validation_repair_build_{project.id}",
+        ):
+            new_document = build_validation_repair_requests_from_cut_plan(project, draft)
+            save_cut_plan_validation_repair_requests(project, new_document)
+            st.success(f"{len(new_document.requests)} Validation Repair Request(s) erzeugt.")
+            st.rerun()
+        return
+
+    if requests_document.source_cut_plan_hash != current_hash:
+        st.warning(
+            "Die Validation Repair Requests wurden aus einer älteren Version des Cut Plans erzeugt "
+            "(z. B. vor einer erneuten Validierung). Bitte bei Bedarf neu erzeugen."
+        )
+    if st.button(
+        "Validation Repair Requests neu erzeugen",
+        key=f"cut_plan_validation_repair_rebuild_{project.id}",
+    ):
+        new_document = build_validation_repair_requests_from_cut_plan(project, draft)
+        save_cut_plan_validation_repair_requests(project, new_document)
+        st.success(f"{len(new_document.requests)} Validation Repair Request(s) erzeugt.")
+        st.rerun()
+
+    if not requests_document.requests:
+        st.info("Keine Validation Repair Requests — keine reparierbaren Rest-Blocker im aktuellen Draft gefunden.")
+        return
+
+    type_labels = {
+        CUT_PLAN_VALIDATION_REPAIR_TYPE_BLACK_GAP: "Schwarze Lücke",
+        CUT_PLAN_VALIDATION_REPAIR_TYPE_ASSET_REUSE_DISTANCE: "Asset zu früh wiederverwendet",
+    }
+    rows = [
+        {
+            "repair_id": request.repair_id,
+            "type": type_labels.get(request.repair_type, request.repair_type),
+            "cut_item_id": request.cut_item_id,
+            "folder_name": request.folder_name or "—",
+            "gap": (
+                f"{request.gap_start_sec:.2f}s–{request.gap_end_sec:.2f}s"
+                if request.repair_type == CUT_PLAN_VALIDATION_REPAIR_TYPE_BLACK_GAP
+                else "—"
+            ),
+            "needed_duration_sec": request.needed_duration_sec,
+            "status": request.status,
+        }
+        for request in requests_document.requests
+    ]
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    _render_provider_readiness_status()
+
+    open_requests = [
+        request for request in requests_document.requests
+        if request.status != CUT_PLAN_VALIDATION_REPAIR_STATUS_ACCEPTED
+    ]
+    if st.button(
+        "🤖 Alle offenen Validation Repair Requests automatisch reparieren",
+        key=f"cut_plan_validation_repair_auto_resolve_all_{project.id}",
+        disabled=not open_requests,
+        help="Prüft pro Request zuerst bereits heruntergeladene Supplement-Assets im selben Ordner (für "
+        "schwarze Lücken wird Foto vor Video bevorzugt), dann Adobe Stock/Pexels.",
+    ):
+        with st.spinner("Validation Repair Requests werden bearbeitet…"):
+            results = auto_resolve_all_validation_repair_requests(project)
+        accepted_count = sum(1 for result in results if result.status == CUT_PLAN_VALIDATION_REPAIR_STATUS_ACCEPTED)
+        no_match_count = sum(1 for result in results if result.status == CUT_PLAN_VALIDATION_REPAIR_STATUS_NO_MATCH)
+        unsafe_count = sum(
+            1 for result in results if result.status == CUT_PLAN_VALIDATION_REPAIR_STATUS_UNSAFE_TO_REPAIR
+        )
+        st.success(
+            f"{len(results)} Request(s) bearbeitet: {accepted_count} automatisch repariert, "
+            f"{no_match_count} ohne Treffer, {unsafe_count} nicht sicher reparierbar (siehe Hinweis je Request)."
+        )
+        st.info("Bitte Cut Plan erneut validieren, um das Ergebnis zu sehen.")
+        st.rerun()
+
+    for request in requests_document.requests:
+        with st.expander(f"{request.repair_id} — {request.status}", expanded=False):
+            st.write(f"**Typ:** {type_labels.get(request.repair_type, request.repair_type)}")
+            st.write(f"**Cut Item:** {request.cut_item_id} ({request.folder_name or '—'})")
+            if request.text:
+                st.write(f"**Text:** {request.text}")
+            if request.repair_type == CUT_PLAN_VALIDATION_REPAIR_TYPE_BLACK_GAP:
+                st.write(f"**Lücke:** {request.gap_start_sec:.2f}s – {request.gap_end_sec:.2f}s")
+            st.write(f"**Reason:** {request.reason}")
+
+            if request.status == CUT_PLAN_VALIDATION_REPAIR_STATUS_UNSAFE_TO_REPAIR:
+                st.warning(
+                    "Die angrenzenden Segmente haben nicht genug Spielraum, um diese Lücke sicher zu "
+                    "reparieren, ohne selbst unter die Mindest-Shot-Länge zu fallen. Bitte stattdessen "
+                    "einen normalen Supplement Request für dieses Item nutzen (siehe Bereich oben)."
+                )
+            if request.accepted_asset_id:
+                st.success(
+                    f"Reparatur übernommen: `{request.accepted_asset_id}` (`{request.accepted_asset_path}`)."
+                )
+
+            if st.button(
+                "🤖 Reparieren",
+                key=f"cut_plan_validation_repair_resolve_{project.id}_{request.repair_id}",
+                disabled=request.status == CUT_PLAN_VALIDATION_REPAIR_STATUS_ACCEPTED,
+            ):
+                try:
+                    with st.spinner("Reparatur wird versucht…"):
+                        result = auto_resolve_validation_repair_request(project, request.repair_id)
+                    if result.status == CUT_PLAN_VALIDATION_REPAIR_STATUS_ACCEPTED:
+                        st.success(
+                            f"Reparatur erfolgreich — Asset `{result.accepted_asset_id}` übernommen. "
+                            "Bitte Cut Plan erneut validieren."
+                        )
+                    elif result.status == CUT_PLAN_VALIDATION_REPAIR_STATUS_UNSAFE_TO_REPAIR:
+                        st.warning(
+                            "Nicht sicher reparierbar — angrenzende Segmente haben nicht genug Spielraum."
+                        )
+                    else:
+                        st.warning("Kein passendes Asset gefunden — bitte manuell prüfen.")
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+
+            if request.auto_resolve_attempts:
+                attempt_rows = [
+                    {
+                        "candidate_id": attempt.candidate_id,
+                        "provider": attempt.provider,
+                        "asset_type": attempt.asset_type,
+                        "validation_status": attempt.validation_status,
+                        "validation_score": attempt.validation_score,
+                        "validation_reason": attempt.validation_reason,
+                    }
+                    for attempt in request.auto_resolve_attempts
+                ]
+                st.dataframe(attempt_rows, use_container_width=True, hide_index=True)
 
 
 def _render_confirmed_cut_plan(project: Project, draft: CutPlanDocument) -> None:
@@ -2728,6 +2904,8 @@ def render_cut_plan_page() -> None:
     if existing_draft is not None:
         st.divider()
         _render_supplement_requests(project, existing_draft)
+        st.divider()
+        _render_validation_repair(project, existing_draft)
         st.divider()
         _render_cut_plan_draft(project, existing_draft)
         st.divider()
