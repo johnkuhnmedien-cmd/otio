@@ -667,6 +667,227 @@ def test_short_duration_merge_with_previous_video_continues_source_range(tmp_pat
     assert merged_segment.source_out_sec == pytest.approx(first_segment.source_out_sec + second_item.duration_sec)
 
 
+# --- Phase 2 (Nutzervorgabe Juli 2026): Visual Window bis zum nächsten Satz,
+# verdrahtet in choose_asset_for_cut_item/apply_asset_selection_to_cut_plan ---
+
+
+def _two_sentence_folder(
+    *,
+    duration_sec_1: float = 12.0,
+    duration_sec_2: float = 5.0,
+    pause_sec: float = 2.0,
+    primary_asset_id_1: str = "asset_clip_a",
+    primary_asset_id_2: str = "asset_clip_b",
+    backup_asset_ids_1: list[str] | None = None,
+) -> ConfirmedFolderPlanItem:
+    audio_end_1 = duration_sec_1
+    audio_start_2 = audio_end_1 + pause_sec
+    return ConfirmedFolderPlanItem(
+        folder_name=FOLDER_A,
+        order_index=1,
+        audio_path="/fake/folder.mp3",
+        # Bewusst OHNE zusätzliches Padding über audio_start_2+duration_sec_2
+        # hinaus (anders als _folder_with_sentence) — ein künstlicher
+        # "Nachlauf" innerhalb des Folder-Audios würde die BESTEHENDE
+        # section_pause_hold-Erweiterung (Phase 8.5) mit ins Spiel bringen
+        # und die hier geprüfte reine Fenster-Berechnung verschleiern.
+        audio_duration_sec=audio_start_2 + duration_sec_2,
+        sentence_items=[
+            SentenceItem(
+                sentence_id="sentence_001", text="Satz eins.", primary_asset_id=primary_asset_id_1,
+                backup_asset_ids=backup_asset_ids_1 or [],
+            ),
+            SentenceItem(sentence_id="sentence_002", text="Satz zwei.", primary_asset_id=primary_asset_id_2),
+        ],
+        alignment_items=[
+            AlignmentItem(
+                sentence_id="sentence_001", audio_start_sec=0.0, audio_end_sec=audio_end_1,
+                duration_sec=duration_sec_1,
+            ),
+            AlignmentItem(
+                sentence_id="sentence_002", audio_start_sec=audio_start_2,
+                audio_end_sec=audio_start_2 + duration_sec_2, duration_sec=duration_sec_2,
+            ),
+        ],
+    )
+
+
+def test_visual_window_disabled_by_default_keeps_existing_split_behavior(tmp_path: Path) -> None:
+    """Ohne aktivierte Einstellung bleibt das Verhalten exakt wie vorher —
+    das Fenster endet am eigenen Satzende, die Pause wird NICHT einbezogen."""
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("clip_a.mp4", "a"), ("clip_b.mp4", "b")])
+    save_cut_plan_settings(
+        project, _settings(project, initial_audio_offset_sec=0.0, shot_min_sec=3.0, shot_max_sec=10.0)
+    )
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id, intro=ConfirmedIntroPlanItem(),
+        folders=[_two_sentence_folder(duration_sec_1=12.0, duration_sec_2=5.0, pause_sec=2.0)],
+    )
+    _build_and_save_draft(project, plan)
+
+    with patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", return_value=30.0):
+        updated = apply_asset_selection_to_draft(project)
+
+    first_item = next(item for item in updated.items if "sentence_001" in item.cut_item_id)
+    assert first_item.duration_strategy == CUT_PLAN_DURATION_STRATEGY_SPLIT
+    last_segment = first_item.planned_visual_segments[-1]
+    # OHNE Fenster-Erweiterung endet das letzte Segment exakt am Satzende
+    # (12.0s), NICHT bei 14.0s (Satzende + Pause).
+    assert last_segment.timeline_out_sec == pytest.approx(first_item.timeline_end_sec)
+
+
+def test_visual_window_extends_split_segments_into_pause_before_next_sentence(tmp_path: Path) -> None:
+    """Exakt das vom Nutzer beschriebene Szenario: 12s-Satz, nächster Satz
+    startet bei 14s (2s Pause), shot_max=10 -> 2 Segmente à 7s, das zweite
+    reicht bis zum Start des nächsten Satzes (14.0s), nicht nur bis 12.0s."""
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("clip_a.mp4", "a"), ("clip_b.mp4", "b")])
+    save_cut_plan_settings(
+        project,
+        _settings(
+            project, initial_audio_offset_sec=0.0, shot_min_sec=3.0, shot_max_sec=10.0,
+            extend_visual_window_to_next_sentence=True, max_sentence_pause_extension_sec=3.0,
+        ),
+    )
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id, intro=ConfirmedIntroPlanItem(),
+        folders=[_two_sentence_folder(duration_sec_1=12.0, duration_sec_2=5.0, pause_sec=2.0)],
+    )
+    _build_and_save_draft(project, plan)
+
+    with patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", return_value=30.0):
+        updated = apply_asset_selection_to_draft(project)
+
+    first_item = next(item for item in updated.items if "sentence_001" in item.cut_item_id)
+    second_item = next(item for item in updated.items if "sentence_002" in item.cut_item_id)
+    assert first_item.duration_strategy == CUT_PLAN_DURATION_STRATEGY_SPLIT
+    segments = first_item.planned_visual_segments
+    assert len(segments) == 2
+    assert segments[0].duration_sec == pytest.approx(7.0, abs=0.05)
+    assert segments[1].duration_sec == pytest.approx(7.0, abs=0.05)
+    # Letztes Segment reicht bis zum Start von Satz 2 (14.0s) — NICHT nur
+    # bis zum eigenen Satzende (12.0s).
+    assert segments[-1].timeline_out_sec == pytest.approx(14.0)
+    assert segments[-1].timeline_out_sec == pytest.approx(second_item.timeline_start_sec)
+    # Die Fortsetzung läuft dank des Bugfixes im selben Video weiter statt
+    # dieselbe Stelle zu wiederholen.
+    assert segments[1].source_in_sec == pytest.approx(segments[0].source_out_sec)
+
+
+def test_visual_window_caps_pause_extension_at_setting(tmp_path: Path) -> None:
+    """Eine 8s-Pause wird nur bis max_sentence_pause_extension_sec (hier
+    3.0s) ins Fenster hineingezogen, nicht komplett überbrückt."""
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("clip_a.mp4", "a")])
+    save_cut_plan_settings(
+        project,
+        _settings(
+            project, initial_audio_offset_sec=0.0, shot_min_sec=3.0, shot_max_sec=10.0,
+            extend_visual_window_to_next_sentence=True, max_sentence_pause_extension_sec=3.0,
+        ),
+    )
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id, intro=ConfirmedIntroPlanItem(),
+        folders=[_two_sentence_folder(duration_sec_1=5.0, duration_sec_2=5.0, pause_sec=8.0)],
+    )
+    _build_and_save_draft(project, plan)
+
+    with patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", return_value=30.0):
+        updated = apply_asset_selection_to_draft(project)
+
+    first_item = next(item for item in updated.items if "sentence_001" in item.cut_item_id)
+    assert len(first_item.planned_visual_segments) == 1
+    # 5.0s (Satz) + max. 3.0s (gecappte Pause) = 8.0s, NICHT 13.0s.
+    assert first_item.planned_visual_segments[0].timeline_out_sec == pytest.approx(8.0)
+
+
+def test_visual_window_resolves_shot_too_short_without_merge(tmp_path: Path) -> None:
+    """Ein kurzer Satz (unter shot_min_sec), gefolgt von einer Pause, die
+    das Fenster über shot_min_sec hinaus verlängert, braucht keinen
+    Rückwärts-/Vorwärts-Merge mehr, um dem SHOT_TOO_SHORT-Blocker zu
+    entgehen — das Fenster allein deckt bereits genug Zeit ab."""
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("photo_a.jpg", "a"), ("photo_b.jpg", "b")])
+    save_cut_plan_settings(
+        project,
+        _settings(
+            project, initial_audio_offset_sec=0.0, shot_min_sec=3.0, shot_max_sec=10.0,
+            extend_visual_window_to_next_sentence=True, max_sentence_pause_extension_sec=3.0,
+        ),
+    )
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id, intro=ConfirmedIntroPlanItem(),
+        folders=[_two_sentence_folder(
+            duration_sec_1=0.8, duration_sec_2=5.0, pause_sec=3.0,
+            primary_asset_id_1="asset_photo_a", primary_asset_id_2="asset_photo_b",
+        )],
+    )
+    _build_and_save_draft(project, plan)
+    updated = apply_asset_selection_to_draft(project)
+
+    first_item = next(item for item in updated.items if "sentence_001" in item.cut_item_id)
+    assert first_item.duration_strategy == CUT_PLAN_DURATION_STRATEGY_SINGLE_SHOT
+    assert CUT_PLAN_ERROR_SHOT_TOO_SHORT not in first_item.blockers
+    assert CUT_PLAN_ERROR_SHOT_TOO_SHORT not in first_item.warnings
+    # 0.8s (Satz) + 3.0s (Pause) = 3.8s >= shot_min_sec (3.0s).
+    assert first_item.planned_visual_segments[0].duration_sec == pytest.approx(3.8)
+
+
+def test_visual_window_does_not_extend_across_folder_boundary(tmp_path: Path) -> None:
+    """compute_visual_window_end_sec selbst darf über eine Folder-Grenze
+    hinweg NICHT verlängern (siehe test_cut_plan_visual_window.py) — hier
+    wird das zusätzlich über die volle choose_asset_for_cut_item-Verdrahtung
+    bestätigt. audio_duration_sec liegt bewusst EXAKT auf dem Satzende
+    (kein künstlicher Nachlauf), damit die hier geprüfte reine Fenster-
+    Erweiterung nicht mit der bestehenden, unabhängigen section_pause_hold-
+    Erweiterung (Phase 8.5, schließt die Sektions-Pause selbst) verwechselt
+    wird."""
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
+    project = _make_project(tmp_path, folders=[FOLDER_A, FOLDER_B])
+    _write_inventory(project, FOLDER_A, [("clip_a.mp4", "a")])
+    _write_inventory(project, FOLDER_B, [("clip_b.mp4", "b")])
+    save_cut_plan_settings(
+        project,
+        _settings(
+            project, initial_audio_offset_sec=0.0, pause_between_sections_sec=0.0,
+            shot_min_sec=3.0, shot_max_sec=10.0,
+            extend_visual_window_to_next_sentence=True, max_sentence_pause_extension_sec=3.0,
+        ),
+    )
+    folder_a = ConfirmedFolderPlanItem(
+        folder_name=FOLDER_A, order_index=1, audio_path="/fake/a.mp3", audio_duration_sec=5.0,
+        sentence_items=[SentenceItem(sentence_id="s1", text="t1", primary_asset_id="asset_clip_a")],
+        alignment_items=[AlignmentItem(sentence_id="s1", audio_start_sec=0.0, audio_end_sec=5.0, duration_sec=5.0)],
+    )
+    folder_b = ConfirmedFolderPlanItem(
+        folder_name=FOLDER_B, order_index=2, audio_path="/fake/b.mp3", audio_duration_sec=5.0,
+        sentence_items=[SentenceItem(sentence_id="s2", text="t2", primary_asset_id="asset_clip_b")],
+        alignment_items=[AlignmentItem(sentence_id="s2", audio_start_sec=0.0, audio_end_sec=5.0, duration_sec=5.0)],
+    )
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id, intro=ConfirmedIntroPlanItem(), folders=[folder_a, folder_b],
+    )
+    _build_and_save_draft(project, plan)
+
+    with patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", return_value=30.0):
+        updated = apply_asset_selection_to_draft(project)
+
+    first_item = next(item for item in updated.items if item.folder_name == FOLDER_A)
+    # Kein Übergreifen auf den nächsten Ordner — Fenster bleibt am eigenen
+    # Satzende (5.0s).
+    assert first_item.planned_visual_segments[-1].timeline_out_sec == pytest.approx(first_item.timeline_end_sec)
+
+
 def test_short_duration_without_merge_produces_shot_too_short_warning(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     _write_inventory(project, FOLDER_A, [("photo_a.jpg", "a")])

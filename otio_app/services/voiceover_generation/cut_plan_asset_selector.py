@@ -305,12 +305,22 @@ def compute_visual_window_duration_sec(
     return max(0.0, window_end - item.timeline_start_sec)
 
 
-def determine_duration_strategy(item: CutPlanItem, settings: CutPlanSettings) -> str:
+def determine_duration_strategy(
+    item: CutPlanItem, settings: CutPlanSettings, *, duration_override: float | None = None
+) -> str:
     """Reine Dauer-Klassifikation (Fall A/B/C) ohne Kenntnis des vorherigen
     Items — die MERGE-Entscheidung (Fall A) erfordert Kontext über das
     vorherige Item und wird deshalb vom Orchestrator
-    (apply_asset_selection_to_cut_plan) getroffen, nicht hier."""
-    duration = item.duration_sec
+    (apply_asset_selection_to_cut_plan) getroffen, nicht hier.
+
+    Phase 2 (Nutzervorgabe Juli 2026, "Visual Window bis zum nächsten
+    Satz"): `duration_override` erlaubt es `choose_asset_for_cut_item`, die
+    Split-Entscheidung gegen das erweiterte visuelle Fenster
+    (`compute_visual_window_duration_sec`) statt gegen `item.duration_sec`
+    zu treffen. Ohne Override (Default None, z. B. für die Merge-
+    Eligibility-Prüfung in `apply_asset_selection_to_cut_plan`, die
+    weiterhin an der REINEN Satzdauer hängt) ist das Verhalten unverändert."""
+    duration = item.duration_sec if duration_override is None else duration_override
     if duration > settings.shot_max_sec + _DURATION_EPSILON:
         return CUT_PLAN_DURATION_STRATEGY_SPLIT
     return CUT_PLAN_DURATION_STRATEGY_SINGLE_SHOT
@@ -351,12 +361,25 @@ def _build_transform_hint(candidate: CutPlanAssetCandidate, settings: CutPlanSet
 
 
 def build_visual_segments_for_item(
-    project: Project, item: CutPlanItem, chosen_assets: list[CutPlanAssetCandidate], settings: CutPlanSettings
+    project: Project,
+    item: CutPlanItem,
+    chosen_assets: list[CutPlanAssetCandidate],
+    settings: CutPlanSettings,
+    *,
+    total_duration_override: float | None = None,
 ) -> list[VisualSegment]:
     """Baut ein VisualSegment pro Eintrag in chosen_assets. Bei einem
     Kandidaten -> ein Segment über die volle Item-Dauer (Fall A/B). Bei
     mehreren Kandidaten -> Split-Segmente mit möglichst gleichmäßiger Dauer
     (Fall C, §6).
+
+    Phase 2 (Nutzervorgabe Juli 2026, "Visual Window bis zum nächsten
+    Satz"): `total_duration_override` lässt die Segmente bis zum Ende des
+    erweiterten visuellen Fensters laufen (statt nur bis `item.duration_sec`)
+    — die letzte Segmentgrenze verschiebt sich dadurch entsprechend über
+    `item.timeline_end_sec` hinaus in die Sprechpause vor dem nächsten Satz
+    (nie weiter, siehe compute_visual_window_end_sec). Ohne Override
+    (Default None) unverändert wie zuvor.
 
     Bugfix (Nutzervorgabe Juli 2026, "Video soll weiterlaufen statt sich zu
     wiederholen"): wenn ein Split-Segment dasselbe Video wie ein FRÜHERES
@@ -376,7 +399,7 @@ def build_visual_segments_for_item(
     Bilder sind von diesem Fix inhaltlich nicht betroffen (kein Zeitverlauf,
     `source_in_sec` bleibt 0.0), werden aber aus Konsistenzgründen ebenfalls
     in derselben Struktur verfolgt."""
-    total_duration = item.duration_sec
+    total_duration = item.duration_sec if total_duration_override is None else total_duration_override
     if len(chosen_assets) <= 1:
         durations = [total_duration]
     else:
@@ -664,12 +687,31 @@ def choose_asset_for_cut_item(
     lookup: CutPlanAssetLookup,
     usage_tracker: UsageTracker,
     settings: CutPlanSettings,
+    *,
+    visual_window_end_sec: float | None = None,
 ) -> CutPlanItem:
     """Wählt ein Asset (primary -> backups -> Supplement) für EIN CutPlanItem
     und baut die planned_visual_segments. Ruft keine Supplement-Suche auf —
     bei needs_supplement_asset oder fehlendem nutzbarem Asset bleibt
-    asset_selection_status = SUPPLEMENT_REQUIRED, chosen_asset_id leer."""
-    duration_strategy = determine_duration_strategy(item, settings)
+    asset_selection_status = SUPPLEMENT_REQUIRED, chosen_asset_id leer.
+
+    Phase 2 (Nutzervorgabe Juli 2026, "Visual Window bis zum nächsten
+    Satz"): `visual_window_end_sec` (vom Orchestrator vorab über
+    `compute_visual_window_end_sec` berechnet, siehe
+    apply_asset_selection_to_cut_plan) ersetzt `item.timeline_end_sec` als
+    Ende des Zeitraums, für den hier geplant wird — Split-Entscheidung,
+    Segmentdauern UND die gebauten VisualSegments selbst laufen dann bis zu
+    diesem (ggf. in die Sprechpause vor dem nächsten Satz hinein
+    erweiterten) Ende, statt exakt am eigenen Satzende zu enden. Ohne
+    Override (Default None, z. B. für alle bestehenden Aufrufer/Tests)
+    entspricht `visual_window_end_sec` `item.timeline_end_sec` — IDENTISCHES
+    Verhalten zu vorher."""
+    window_end_sec = item.timeline_end_sec if visual_window_end_sec is None else visual_window_end_sec
+    # max(...) ist eine reine Absicherung gegen einen inkonsistenten/zu
+    # kleinen Override von außen — compute_visual_window_end_sec selbst
+    # kann das Fenster nie unter item.duration_sec verkleinern.
+    window_duration_sec = max(item.duration_sec, window_end_sec - item.timeline_start_sec)
+    duration_strategy = determine_duration_strategy(item, settings, duration_override=window_duration_sec)
 
     # Ein bereits in Phase 8.2 gesetzter Blocker (z. B. MISSING_ALIGNMENT)
     # bedeutet: keine verlässliche Timeline-Zeit vorhanden -> keine
@@ -688,9 +730,9 @@ def choose_asset_for_cut_item(
         return updated.model_copy(update={"duration_strategy": duration_strategy})
 
     segment_durations = (
-        _compute_split_segment_durations(item.duration_sec, settings.shot_min_sec, settings.shot_max_sec)
+        _compute_split_segment_durations(window_duration_sec, settings.shot_min_sec, settings.shot_max_sec)
         if duration_strategy == CUT_PLAN_DURATION_STRATEGY_SPLIT
-        else [item.duration_sec]
+        else [window_duration_sec]
     )
     preferred_folder_name = _preferred_folder_for_item(item)
 
@@ -746,7 +788,9 @@ def choose_asset_for_cut_item(
         )
         return updated.model_copy(update={"duration_strategy": duration_strategy, "warnings": warnings})
 
-    segments = build_visual_segments_for_item(project, item, chosen_assets, settings)
+    segments = build_visual_segments_for_item(
+        project, item, chosen_assets, settings, total_duration_override=window_duration_sec
+    )
     chosen_primary = chosen_assets[0]
 
     if primary_was_first_choice:
@@ -762,8 +806,15 @@ def choose_asset_for_cut_item(
             else "Kein primary_asset_id vorhanden."
         )
 
-    if duration_strategy == CUT_PLAN_DURATION_STRATEGY_SINGLE_SHOT and item.duration_sec < settings.shot_min_sec:
-        if item.duration_sec < 1.0:
+    # Phase 2 (Nutzervorgabe Juli 2026): die SHOT_TOO_SHORT-Prüfung bewertet
+    # die tatsächlich GEZEIGTE Segmentdauer (window_duration_sec) statt der
+    # reinen Satzdauer — ein kurzer Satz, dessen Fenster bis zum nächsten
+    # Satz erweitert wurde, erzeugt keinen zu kurzen Shot mehr, auch wenn
+    # item.duration_sec selbst klein bleibt. Ohne aktivierte Fenster-
+    # Erweiterung ist window_duration_sec == item.duration_sec (siehe oben),
+    # also unverändertes Verhalten.
+    if duration_strategy == CUT_PLAN_DURATION_STRATEGY_SINGLE_SHOT and window_duration_sec < settings.shot_min_sec:
+        if window_duration_sec < 1.0:
             item_blockers = list(item.blockers) + [CUT_PLAN_ERROR_SHOT_TOO_SHORT]
         else:
             item_blockers = list(item.blockers)
@@ -1050,6 +1101,17 @@ def apply_asset_selection_to_cut_plan(project: Project, cut_plan: CutPlanDocumen
     lookup = load_asset_lookup_for_cut_plan(project, source_plan, cut_plan)
     usage_tracker = UsageTracker()
 
+    # Phase 2 (Nutzervorgabe Juli 2026, "Visual Window bis zum nächsten
+    # Satz"): das Fenster-Ende pro Item hängt NUR von Timeline-Zeiten/
+    # Blockern ab, die sich während der folgenden Auswahl-Schleife nicht
+    # mehr ändern (siehe compute_visual_window_end_sec) — deshalb einmalig
+    # VOR der Schleife berechnet, anhand der ursprünglichen Item-Reihenfolge
+    # (unabhängig von späteren Merge-Entscheidungen).
+    visual_window_end_by_id: dict[str, float] = {}
+    for index, item in enumerate(cut_plan.items):
+        next_item = cut_plan.items[index + 1] if index + 1 < len(cut_plan.items) else None
+        visual_window_end_by_id[item.cut_item_id] = compute_visual_window_end_sec(item, next_item, settings)
+
     updated_items: list[CutPlanItem] = []
     previous_item: CutPlanItem | None = None
 
@@ -1065,7 +1127,10 @@ def apply_asset_selection_to_cut_plan(project: Project, cut_plan: CutPlanDocumen
         if merge_eligible:
             updated_item = _merge_with_previous(item, previous_item)  # type: ignore[arg-type]
         else:
-            updated_item = choose_asset_for_cut_item(project, item, lookup, usage_tracker, settings)
+            updated_item = choose_asset_for_cut_item(
+                project, item, lookup, usage_tracker, settings,
+                visual_window_end_sec=visual_window_end_by_id.get(item.cut_item_id),
+            )
         updated_items.append(updated_item)
         previous_item = updated_item
 
