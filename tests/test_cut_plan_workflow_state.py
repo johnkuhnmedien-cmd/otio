@@ -278,6 +278,37 @@ def test_workflow_recommends_searching_supplement_assets_when_requests_open(tmp_
 # --- final check ---
 
 
+# --- next_action_key (Commit 6: maschinenlesbarer Dispatch-Key) ---
+
+
+def test_workflow_next_action_key_matches_draft(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.cut_plan_workflow_state import CUT_PLAN_WORKFLOW_ACTION_BUILD_DRAFT
+
+    project = _make_project(tmp_path)
+    state = compute_cut_plan_workflow_state(project)
+    assert state.next_step_id == ""  # kein Source Plan -> gar kein next_step
+
+
+def test_workflow_next_action_key_matches_validate(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.cut_plan_workflow_state import CUT_PLAN_WORKFLOW_ACTION_VALIDATE
+
+    project = _happy_path_plan_and_project(tmp_path)
+    state = compute_cut_plan_workflow_state(project)
+    assert state.next_step_id == "validate"
+    assert state.next_action_key == CUT_PLAN_WORKFLOW_ACTION_VALIDATE
+
+
+def test_workflow_next_action_key_matches_build_supplement_requests(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.cut_plan_workflow_state import (
+        CUT_PLAN_WORKFLOW_ACTION_BUILD_SUPPLEMENT_REQUESTS,
+    )
+
+    project = _happy_path_plan_and_project(tmp_path, with_supplement_need=True)
+    validate_cut_plan_draft(project)
+    state = compute_cut_plan_workflow_state(project)
+    assert state.next_action_key == CUT_PLAN_WORKFLOW_ACTION_BUILD_SUPPLEMENT_REQUESTS
+
+
 def test_workflow_all_done_when_no_blockers(tmp_path: Path) -> None:
     project = _happy_path_plan_and_project(tmp_path)
     validate_cut_plan_draft(project)

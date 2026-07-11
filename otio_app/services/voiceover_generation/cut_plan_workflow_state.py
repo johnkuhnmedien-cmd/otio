@@ -71,10 +71,33 @@ __all__ = [
     "CUT_PLAN_WORKFLOW_STATUS_BLOCKED",
     "CUT_PLAN_WORKFLOW_STATUS_NOT_NEEDED",
     "CUT_PLAN_WORKFLOW_ACTIONABLE_STATUSES",
+    "CUT_PLAN_WORKFLOW_ACTION_BUILD_DRAFT",
+    "CUT_PLAN_WORKFLOW_ACTION_APPLY_ASSET_SELECTION",
+    "CUT_PLAN_WORKFLOW_ACTION_VALIDATE",
+    "CUT_PLAN_WORKFLOW_ACTION_BUILD_SUPPLEMENT_REQUESTS",
+    "CUT_PLAN_WORKFLOW_ACTION_REAPPLY_SUPPLEMENT_ASSETS",
+    "CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_SUPPLEMENTS",
+    "CUT_PLAN_WORKFLOW_ACTION_BUILD_RESIDUAL_GAP_REQUESTS",
+    "CUT_PLAN_WORKFLOW_ACTION_REAPPLY_RESIDUAL_GAP_ASSETS",
+    "CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_RESIDUAL_GAPS",
+    "CUT_PLAN_WORKFLOW_ACTION_BUILD_VALIDATION_REPAIR_REQUESTS",
+    "CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_VALIDATION_REPAIR",
     "CutPlanWorkflowStep",
     "CutPlanWorkflowState",
     "compute_cut_plan_workflow_state",
 ]
+
+CUT_PLAN_WORKFLOW_ACTION_BUILD_DRAFT = "build_draft"
+CUT_PLAN_WORKFLOW_ACTION_APPLY_ASSET_SELECTION = "apply_asset_selection"
+CUT_PLAN_WORKFLOW_ACTION_VALIDATE = "validate_cut_plan"
+CUT_PLAN_WORKFLOW_ACTION_BUILD_SUPPLEMENT_REQUESTS = "build_supplement_requests"
+CUT_PLAN_WORKFLOW_ACTION_REAPPLY_SUPPLEMENT_ASSETS = "reapply_supplement_assets"
+CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_SUPPLEMENTS = "auto_resolve_supplements"
+CUT_PLAN_WORKFLOW_ACTION_BUILD_RESIDUAL_GAP_REQUESTS = "build_residual_gap_requests"
+CUT_PLAN_WORKFLOW_ACTION_REAPPLY_RESIDUAL_GAP_ASSETS = "reapply_residual_gap_assets"
+CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_RESIDUAL_GAPS = "auto_resolve_residual_gaps"
+CUT_PLAN_WORKFLOW_ACTION_BUILD_VALIDATION_REPAIR_REQUESTS = "build_validation_repair_requests"
+CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_VALIDATION_REPAIR = "auto_resolve_validation_repair"
 
 CUT_PLAN_WORKFLOW_STATUS_NOT_STARTED = "NOT_STARTED"
 CUT_PLAN_WORKFLOW_STATUS_READY = "READY"
@@ -96,13 +119,20 @@ CUT_PLAN_WORKFLOW_ACTIONABLE_STATUSES = frozenset(
 
 
 class CutPlanWorkflowStep(BaseModel):
-    """EIN Schritt der Cut-Plan-Pipeline für die Dashboard-Anzeige."""
+    """EIN Schritt der Cut-Plan-Pipeline für die Dashboard-Anzeige.
+
+    `next_action_key` ist ein maschinenlesbarer Bezeichner (siehe
+    CUT_PLAN_WORKFLOW_ACTION_KEYS_* Konstanten), den die UI zum
+    Dispatchen der tatsächlichen Aktion nutzt — bewusst GETRENNT von
+    `next_action_label` (menschenlesbarer Button-Text), damit ein
+    späteres Umformulieren des Labels niemals die Verdrahtung bricht."""
 
     step_id: str
     label: str
     status: str = CUT_PLAN_WORKFLOW_STATUS_NOT_STARTED
     summary: str = ""
     next_action_label: str = ""
+    next_action_key: str = ""
     reason: str = ""
 
 
@@ -116,6 +146,7 @@ class CutPlanWorkflowState(BaseModel):
     steps: list[CutPlanWorkflowStep] = Field(default_factory=list)
     next_step_id: str = ""
     next_action_label: str = ""
+    next_action_key: str = ""
     next_reason: str = ""
     all_done: bool = False
     has_unresolvable_blockers: bool = False
@@ -137,6 +168,7 @@ def _step_draft(project: Project, draft: CutPlanDocument | None, has_source_plan
             status=CUT_PLAN_WORKFLOW_STATUS_NOT_STARTED,
             summary="Noch kein Draft erzeugt.",
             next_action_label="Cut Plan Draft erzeugen",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_BUILD_DRAFT,
             reason="Es existiert noch kein Cut Plan Draft für den bestätigten Voice-over-Projektplan.",
         )
     if is_cut_plan_draft_stale(project, draft) or is_cut_plan_settings_stale(project, draft):
@@ -146,6 +178,7 @@ def _step_draft(project: Project, draft: CutPlanDocument | None, has_source_plan
             status=CUT_PLAN_WORKFLOW_STATUS_STALE,
             summary="Voice-over-Projektplan oder Cut-Plan-Settings haben sich seit Draft-Erzeugung geändert.",
             next_action_label="Cut Plan Draft neu erzeugen",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_BUILD_DRAFT,
             reason="Der Draft basiert auf einem veralteten Projektplan oder veralteten Settings.",
         )
     return CutPlanWorkflowStep(
@@ -173,6 +206,7 @@ def _step_asset_selection(draft: CutPlanDocument | None) -> CutPlanWorkflowStep:
             status=CUT_PLAN_WORKFLOW_STATUS_READY,
             summary=f"{unresolved} von {total_items} Item(s) noch UNRESOLVED.",
             next_action_label="Asset-Auswahl anwenden",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_APPLY_ASSET_SELECTION,
             reason=f"{unresolved} Item(s) haben noch keine Asset-Auswahl durchlaufen.",
         )
     return CutPlanWorkflowStep(
@@ -194,6 +228,7 @@ def _step_validate(project: Project, draft: CutPlanDocument | None) -> CutPlanWo
             status=CUT_PLAN_WORKFLOW_STATUS_READY,
             summary="Noch nie validiert.",
             next_action_label="Cut Plan validieren",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_VALIDATE,
             reason="Für den aktuellen Draft liegt noch kein Validation Report vor.",
         )
     current_hash = content_hash_of_cut_plan_content(draft)
@@ -204,6 +239,7 @@ def _step_validate(project: Project, draft: CutPlanDocument | None) -> CutPlanWo
             status=CUT_PLAN_WORKFLOW_STATUS_STALE,
             summary="Draft hat sich seit der letzten Validierung geändert.",
             next_action_label="Cut Plan erneut validieren",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_VALIDATE,
             reason="Der Draft wurde seit der letzten Validierung verändert (Asset-Auswahl, Supplement, Repair, …).",
         )
     return CutPlanWorkflowStep(
@@ -236,6 +272,7 @@ def _step_supplement_requests(project: Project, draft: CutPlanDocument | None) -
             status=CUT_PLAN_WORKFLOW_STATUS_READY,
             summary=f"{needed_count} Item(s) benötigen ein Supplement-Asset.",
             next_action_label="Supplement Requests erzeugen",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_BUILD_SUPPLEMENT_REQUESTS,
             reason=f"{needed_count} Item(s) benötigen ein Supplement-Asset, aber es gibt noch keine Requests.",
         )
     if existing.source_cut_plan_hash != content_hash_of_model(draft):
@@ -245,6 +282,7 @@ def _step_supplement_requests(project: Project, draft: CutPlanDocument | None) -
             status=CUT_PLAN_WORKFLOW_STATUS_STALE,
             summary="Requests stammen aus einer älteren Draft-Version.",
             next_action_label="Supplement Requests neu erzeugen",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_BUILD_SUPPLEMENT_REQUESTS,
             reason="Der Draft hat sich seit dem letzten Erzeugen der Supplement Requests geändert.",
         )
     return CutPlanWorkflowStep(
@@ -269,6 +307,7 @@ def _step_supplement_resolve(project: Project, draft: CutPlanDocument | None) ->
             status=CUT_PLAN_WORKFLOW_STATUS_READY,
             summary=f"{unapplied} akzeptierte Asset(s) noch nicht im Draft übernommen.",
             next_action_label="Akzeptierte Supplement-Assets anwenden",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_REAPPLY_SUPPLEMENT_ASSETS,
             reason=f"{unapplied} Request(s) haben bereits ein akzeptiertes Asset, das im Draft noch fehlt.",
         )
     open_count = sum(
@@ -281,6 +320,7 @@ def _step_supplement_resolve(project: Project, draft: CutPlanDocument | None) ->
             status=CUT_PLAN_WORKFLOW_STATUS_READY,
             summary=f"{open_count} von {len(existing.requests)} Request(s) noch ohne Asset.",
             next_action_label="Alle fehlenden Supplement-Assets automatisch suchen",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_SUPPLEMENTS,
             reason=f"{open_count} Request(s) haben noch kein Asset gefunden/akzeptiert.",
         )
     return CutPlanWorkflowStep(
@@ -314,6 +354,7 @@ def _step_residual_gap_requests(project: Project, draft: CutPlanDocument | None)
             status=CUT_PLAN_WORKFLOW_STATUS_READY,
             summary=f"{residual_count} Rest-Lücke(n) bei bereits versorgten Items gefunden.",
             next_action_label="Residual Gap Requests erzeugen",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_BUILD_RESIDUAL_GAP_REQUESTS,
             reason=(
                 f"{residual_count} Item(s) haben bereits ein Asset, aber die visuelle Abdeckung reicht "
                 "nicht bis zum erwarteten Fenster-Ende und die Lücke ist zu groß für eine Mini-Reparatur."
@@ -326,6 +367,7 @@ def _step_residual_gap_requests(project: Project, draft: CutPlanDocument | None)
             status=CUT_PLAN_WORKFLOW_STATUS_STALE,
             summary="Requests stammen aus einer älteren Draft-Version.",
             next_action_label="Residual Gap Requests neu erzeugen",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_BUILD_RESIDUAL_GAP_REQUESTS,
             reason="Der Draft hat sich seit dem letzten Erzeugen der Residual Gap Requests geändert.",
         )
     return CutPlanWorkflowStep(
@@ -350,6 +392,7 @@ def _step_residual_gap_resolve(project: Project, draft: CutPlanDocument | None) 
             status=CUT_PLAN_WORKFLOW_STATUS_READY,
             summary=f"{unapplied} akzeptierte Asset(s) noch nicht im Draft übernommen.",
             next_action_label="Akzeptierte Residual-Gap-Assets anwenden",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_REAPPLY_RESIDUAL_GAP_ASSETS,
             reason=f"{unapplied} Request(s) haben bereits ein akzeptiertes Asset, das im Draft noch fehlt.",
         )
     open_count = sum(1 for request in existing.requests if not request.accepted_asset_id)
@@ -360,6 +403,7 @@ def _step_residual_gap_resolve(project: Project, draft: CutPlanDocument | None) 
             status=CUT_PLAN_WORKFLOW_STATUS_READY,
             summary=f"{open_count} von {len(existing.requests)} Request(s) noch ohne Asset.",
             next_action_label="Alle offenen Residual Gap Requests automatisch suchen",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_RESIDUAL_GAPS,
             reason=f"{open_count} Request(s) haben noch kein Asset gefunden/akzeptiert.",
         )
     return CutPlanWorkflowStep(
@@ -392,6 +436,7 @@ def _step_validation_repair_requests(project: Project, draft: CutPlanDocument | 
             status=CUT_PLAN_WORKFLOW_STATUS_READY,
             summary=f"{len(repairable)} reparierbare Rest-Blocker gefunden.",
             next_action_label="Validation Repair Requests erzeugen",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_BUILD_VALIDATION_REPAIR_REQUESTS,
             reason=f"{len(repairable)} reparierbare Rest-Blocker gefunden, aber noch keine Requests erzeugt.",
         )
     if existing.source_cut_plan_hash != content_hash_of_model(draft):
@@ -401,6 +446,7 @@ def _step_validation_repair_requests(project: Project, draft: CutPlanDocument | 
             status=CUT_PLAN_WORKFLOW_STATUS_STALE,
             summary="Requests stammen aus einer älteren Draft-Version.",
             next_action_label="Validation Repair Requests neu erzeugen",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_BUILD_VALIDATION_REPAIR_REQUESTS,
             reason="Der Draft hat sich seit dem letzten Erzeugen der Validation Repair Requests geändert.",
         )
     return CutPlanWorkflowStep(
@@ -428,6 +474,7 @@ def _step_validation_repair_apply(project: Project, draft: CutPlanDocument | Non
             status=CUT_PLAN_WORKFLOW_STATUS_READY,
             summary=f"{open_count} von {len(existing.requests)} Request(s) noch offen.",
             next_action_label="Alle offenen Validation Repair Requests automatisch reparieren",
+            next_action_key=CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_VALIDATION_REPAIR,
             reason=f"{open_count} Validation Repair Request(s) sind noch nicht bearbeitet.",
         )
     return CutPlanWorkflowStep(
@@ -498,11 +545,13 @@ def compute_cut_plan_workflow_state(project: Project) -> CutPlanWorkflowState:
 
     next_step_id = ""
     next_action_label = ""
+    next_action_key = ""
     next_reason = ""
     for step in steps:
         if step.status in CUT_PLAN_WORKFLOW_ACTIONABLE_STATUSES and step.next_action_label:
             next_step_id = step.step_id
             next_action_label = step.next_action_label
+            next_action_key = step.next_action_key
             next_reason = step.reason
             break
 
@@ -513,6 +562,7 @@ def compute_cut_plan_workflow_state(project: Project) -> CutPlanWorkflowState:
         steps=steps,
         next_step_id=next_step_id,
         next_action_label=next_action_label,
+        next_action_key=next_action_key,
         next_reason=next_reason,
         all_done=all_done,
         has_unresolvable_blockers=has_unresolvable_blockers,

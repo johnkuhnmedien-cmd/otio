@@ -194,6 +194,17 @@ from otio_app.services.voiceover_generation.cut_plan_validation_repair_resolve_s
     auto_resolve_validation_repair_request,
 )
 from otio_app.services.voiceover_generation.cut_plan_workflow_state import (
+    CUT_PLAN_WORKFLOW_ACTION_APPLY_ASSET_SELECTION,
+    CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_RESIDUAL_GAPS,
+    CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_SUPPLEMENTS,
+    CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_VALIDATION_REPAIR,
+    CUT_PLAN_WORKFLOW_ACTION_BUILD_DRAFT,
+    CUT_PLAN_WORKFLOW_ACTION_BUILD_RESIDUAL_GAP_REQUESTS,
+    CUT_PLAN_WORKFLOW_ACTION_BUILD_SUPPLEMENT_REQUESTS,
+    CUT_PLAN_WORKFLOW_ACTION_BUILD_VALIDATION_REPAIR_REQUESTS,
+    CUT_PLAN_WORKFLOW_ACTION_REAPPLY_RESIDUAL_GAP_ASSETS,
+    CUT_PLAN_WORKFLOW_ACTION_REAPPLY_SUPPLEMENT_ASSETS,
+    CUT_PLAN_WORKFLOW_ACTION_VALIDATE,
     CUT_PLAN_WORKFLOW_STATUS_BLOCKED,
     CUT_PLAN_WORKFLOW_STATUS_DONE,
     CUT_PLAN_WORKFLOW_STATUS_NOT_NEEDED,
@@ -3052,23 +3063,95 @@ _WORKFLOW_STATUS_ICONS: dict[str, str] = {
     CUT_PLAN_WORKFLOW_STATUS_BLOCKED: "🔴",
 }
 
-# Nutzervorgabe (Juli 2026, "die Buttons sind all over the place"): nur für
-# diese drei Schritte löst der primäre Dashboard-Button direkt die Aktion
-# aus — sie sind vollständig selbstständig (keine zusätzlichen Provider-/
-# LLM-Auswahlfelder nötig, die weiter unten im Tab gesammelt werden). Für
-# alle anderen Schritte (Supplement, Validation Repair) verweist das
-# Dashboard nur auf den passenden Abschnitt weiter unten — die
-# vollständige Verdrahtung ALLER Schritte folgt in einer späteren Phase.
-_WORKFLOW_DIRECT_ACTION_STEP_IDS = frozenset({"draft", "asset_selection", "validate"})
+def _run_cut_plan_workflow_action(project: Project, action_key: str) -> str:
+    """Führt GENAU EINE Workflow-Aktion aus (dispatcht über den
+    maschinenlesbaren `next_action_key`, siehe cut_plan_workflow_state.py)
+    und gibt eine kurze Erfolgsmeldung zurück. Wirft ValueError/RuntimeError
+    unverändert weiter — der Aufrufer zeigt sie als st.error an.
+
+    Bewusst dieselben Funktionen wie die Detail-Buttons weiter unten im
+    Tab — keine Logik-Duplikation, nur ein zentraler Dispatch-Punkt."""
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_BUILD_DRAFT:
+        new_draft = build_cut_plan_draft(project)
+        save_cut_plan_draft(project, new_draft)
+        return "Cut Plan Draft erstellt."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_APPLY_ASSET_SELECTION:
+        apply_asset_selection_to_draft(project)
+        return "Asset-Auswahl angewendet."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_VALIDATE:
+        validate_cut_plan_draft(project)
+        return "Validierung abgeschlossen."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_BUILD_SUPPLEMENT_REQUESTS:
+        draft = load_cut_plan_draft(project)
+        if draft is None:
+            raise ValueError("Kein Cut Plan Draft vorhanden.")
+        prior_document = load_cut_plan_supplement_requests(project)
+        new_document = build_supplement_requests_from_cut_plan(project, draft)
+        new_document = merge_prior_supplement_request_state(new_document, prior_document)
+        save_cut_plan_supplement_requests(project, new_document)
+        return f"{len(new_document.requests)} Supplement Request(s) erzeugt."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_REAPPLY_SUPPLEMENT_ASSETS:
+        _, applied, skipped = reapply_accepted_supplements_to_cut_plan(project)
+        return f"{len(applied)} Item(s) übernommen, {len(skipped)} übersprungen."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_SUPPLEMENTS:
+        model_settings = load_model_settings(project)
+        results = auto_resolve_all_cut_plan_supplement_requests(
+            project,
+            query_llm_provider=model_settings.cut_plan_supplement_query.provider,
+            query_llm_model=model_settings.cut_plan_supplement_query.model,
+        )
+        accepted = sum(1 for result in results if result.status == AUTO_RESOLVE_STATUS_ACCEPTED)
+        return f"{len(results)} Request(s) bearbeitet, {accepted} automatisch akzeptiert."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_BUILD_RESIDUAL_GAP_REQUESTS:
+        draft = load_cut_plan_draft(project)
+        if draft is None:
+            raise ValueError("Kein Cut Plan Draft vorhanden.")
+        prior_document = load_residual_gap_requests(project)
+        new_document = build_residual_gap_requests_from_cut_plan(project, draft)
+        new_document = merge_prior_residual_gap_request_state(new_document, prior_document)
+        save_residual_gap_requests(project, new_document)
+        return f"{len(new_document.requests)} Residual Gap Request(s) erzeugt."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_REAPPLY_RESIDUAL_GAP_ASSETS:
+        _, applied, skipped = reapply_accepted_residual_gap_assets(project)
+        return f"{len(applied)} Item(s) übernommen, {len(skipped)} übersprungen."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_RESIDUAL_GAPS:
+        results = auto_resolve_all_residual_gap_requests(project)
+        accepted = sum(1 for result in results if result.status == RESIDUAL_GAP_AUTO_RESOLVE_STATUS_ACCEPTED)
+        return f"{len(results)} Request(s) bearbeitet, {accepted} automatisch akzeptiert."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_BUILD_VALIDATION_REPAIR_REQUESTS:
+        draft = load_cut_plan_draft(project)
+        if draft is None:
+            raise ValueError("Kein Cut Plan Draft vorhanden.")
+        new_document = build_validation_repair_requests_from_cut_plan(project, draft)
+        save_cut_plan_validation_repair_requests(project, new_document)
+        return f"{len(new_document.requests)} Validation Repair Request(s) erzeugt."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_VALIDATION_REPAIR:
+        results = auto_resolve_all_validation_repair_requests(project)
+        accepted = sum(1 for result in results if result.status == CUT_PLAN_VALIDATION_REPAIR_STATUS_ACCEPTED)
+        return f"{len(results)} Request(s) bearbeitet, {accepted} automatisch repariert."
+
+    raise ValueError(f"Unbekannte Workflow-Aktion: '{action_key}'.")
 
 
 def _render_cut_plan_workflow_dashboard(project: Project) -> None:
     """Nutzervorgabe (Juli 2026): konsolidierte Checklist + EIN empfohlener
     nächster Schritt oben im Cut-Plan-Tab, damit der Nutzer nicht mehr
     selbst herausfinden muss, welcher der vielen Detail-Buttons weiter
-    unten als nächstes relevant ist. Reine Anzeige + (für die drei
-    selbstständigen Basis-Schritte) ein direkt funktionsfähiger Button —
-    alle anderen Buttons bleiben unverändert weiter unten im Tab."""
+    unten als nächstes relevant ist. Der primäre Button ruft für JEDEN
+    Schritt dieselbe Funktion auf wie der jeweilige Detail-Bereich weiter
+    unten (siehe _run_cut_plan_workflow_action) — keine Logik-Duplikation,
+    die Detail-Bereiche bleiben für Feineinstellungen (Provider-Auswahl,
+    einzelne Requests) vollständig erhalten."""
     st.subheader("📋 Cut-Plan Workflow")
     state = compute_cut_plan_workflow_state(project)
 
@@ -3092,7 +3175,7 @@ def _render_cut_plan_workflow_dashboard(project: Project) -> None:
         return
 
     st.info(f"➡️ **Nächster empfohlener Schritt:** {state.next_action_label}\n\n{state.next_reason}")
-    if state.next_step_id not in _WORKFLOW_DIRECT_ACTION_STEP_IDS:
+    if not state.next_action_key:
         st.caption("Diesen Schritt weiter unten im entsprechenden Abschnitt ausführen.")
         return
 
@@ -3102,19 +3185,9 @@ def _render_cut_plan_workflow_dashboard(project: Project) -> None:
         type="primary",
     ):
         try:
-            if state.next_step_id == "draft":
-                with st.spinner("Cut Plan Draft wird erstellt…"):
-                    new_draft = build_cut_plan_draft(project)
-                    save_cut_plan_draft(project, new_draft)
-                st.success("Cut Plan Draft erstellt.")
-            elif state.next_step_id == "asset_selection":
-                with st.spinner("Asset-Auswahl wird angewendet…"):
-                    apply_asset_selection_to_draft(project)
-                st.success("Asset-Auswahl angewendet.")
-            elif state.next_step_id == "validate":
-                with st.spinner("Cut Plan wird validiert…"):
-                    validate_cut_plan_draft(project)
-                st.success("Validierung abgeschlossen.")
+            with st.spinner(f"{state.next_action_label}…"):
+                message = _run_cut_plan_workflow_action(project, state.next_action_key)
+            st.success(message)
             st.rerun()
         except ValueError as exc:
             st.error(str(exc))
