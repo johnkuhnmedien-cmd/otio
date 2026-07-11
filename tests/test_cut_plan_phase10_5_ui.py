@@ -1,0 +1,344 @@
+"""Phase 10.5: UI für Production EditPlan Promote Readiness / Dry Run.
+
+Nutzt dasselbe isolierte AppTest-Repro-Skript wie Phase 10.4
+(tests/_apptest_scripts/production_edit_plan_staging_repro.py), da der neue
+Promote-Readiness-Unterbereich Teil derselben
+`_render_production_edit_plan_staging`-Funktion ist.
+
+Kein Schreiben nach `_otio/edit_plan/`, kein tatsächlicher Promote, kein
+Lock, kein OTIO-Export, kein Render, keine
+save_edit_plan()/build_edit_plan()-Aufrufe, keine Produktions-Dateien werden
+überschrieben, keine Änderung an voice_folder_mapping.json."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from streamlit.testing.v1 import AppTest
+
+from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis
+from otio_app.models import Project, ProjectMode
+from otio_app.project_layout import get_folder_edit_plan_path, get_folder_inventory_path, get_voice_folder_mapping_path
+from otio_app.services.voiceover_generation.cut_plan_builder import (
+    apply_asset_selection_to_draft,
+    build_cut_plan_draft,
+    save_cut_plan_draft,
+    validate_cut_plan_draft,
+)
+from otio_app.services.voiceover_generation.cut_plan_confirm_service import confirm_cut_plan, load_confirmed_cut_plan
+from otio_app.services.voiceover_generation.cut_plan_edit_plan_bridge import (
+    build_bridge_audio_plan_from_confirmed_cut_plan,
+    build_edit_plan_draft_from_confirmed_cut_plan,
+    save_bridge_audio_plan,
+    save_edit_plan_bridge_draft,
+    validate_edit_plan_bridge,
+)
+from otio_app.services.voiceover_generation.cut_plan_edit_plan_confirm_service import confirm_edit_plan_bridge
+from otio_app.services.voiceover_generation.cut_plan_edit_plan_trace import (
+    build_edit_plan_bridge_trace,
+    save_edit_plan_bridge_trace,
+)
+from otio_app.services.voiceover_generation.cut_plan_models import CutPlanSettings
+from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+from otio_app.services.voiceover_generation.final_plan_service import save_confirmed_voiceover_project_plan
+from otio_app.services.voiceover_generation.models import (
+    AlignmentItem,
+    ConfirmedFolderPlanItem,
+    ConfirmedIntroPlanItem,
+    ConfirmedVoiceoverProjectPlan,
+    IntroHookVisualBeat,
+    SentenceItem,
+)
+from otio_app.services.voiceover_generation.production_edit_plan_staging_service import (
+    build_and_save_production_edit_plan_staging,
+)
+from otio_app.services.voiceover_generation.production_edit_plan_validation import (
+    validate_production_edit_plan_staging,
+)
+
+FOLDER_A = "Grand Canyon"
+PROJECT_ID = "repro-project"
+SCRIPT_PATH = Path(__file__).parent / "_apptest_scripts" / "production_edit_plan_staging_repro.py"
+
+
+def _make_project(tmp_path: Path) -> Project:
+    project_root = tmp_path / "USA"
+    (project_root / FOLDER_A).mkdir(parents=True, exist_ok=True)
+    return Project(
+        id=PROJECT_ID,
+        name="Repro",
+        project_root=str(project_root),
+        work_dir=str(project_root / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=[FOLDER_A],
+        selected_asset_subdirs=[FOLDER_A],
+    )
+
+
+def _write_inventory(project: Project, filenames: list[str]) -> None:
+    entries = []
+    for filename in filenames:
+        (project.project_root_path / FOLDER_A / filename).write_bytes(b"FAKE_MEDIA_BYTES")
+        entries.append(AssetMediaAnalysis(path=f"{FOLDER_A}/{filename}", description=filename))
+    inv_path = get_folder_inventory_path(project.work_dir_path, FOLDER_A)
+    inv_path.parent.mkdir(parents=True, exist_ok=True)
+    inv_path.write_text(
+        AssetFolderAnalysis(folder=FOLDER_A, assets=entries).model_dump_json(indent=2), encoding="utf-8"
+    )
+
+
+def _write_audio(project: Project, name: str) -> Path:
+    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    path = audio_dir / name
+    path.write_bytes(b"FAKE_AUDIO_BYTES")
+    return path
+
+
+def _build_confirmed_bridge_project(tmp_path: Path) -> Project:
+    project = _make_project(tmp_path)
+    _write_inventory(project, ["photo_a.jpg", "photo_b.jpg"])
+    intro_audio = _write_audio(project, "intro.mp3")
+    folder_audio = _write_audio(project, "folder.mp3")
+
+    intro = ConfirmedIntroPlanItem(
+        hook_text="Ein Ort voller Geheimnisse.", audio_path=str(intro_audio), audio_duration_sec=5.0,
+        visual_beats=[IntroHookVisualBeat(hook_beat_id="hook_beat_001", text="x", primary_asset_id="asset_photo_a")],
+        alignment_items=[
+            AlignmentItem(sentence_id="hook_beat_001", audio_start_sec=0.0, audio_end_sec=5.0, duration_sec=5.0)
+        ],
+    )
+    folder = ConfirmedFolderPlanItem(
+        folder_name=FOLDER_A, order_index=1, audio_path=str(folder_audio), audio_duration_sec=5.0,
+        sentence_items=[SentenceItem(sentence_id="sentence_001", text="Ein Satz.", primary_asset_id="asset_photo_b")],
+        alignment_items=[
+            AlignmentItem(sentence_id="sentence_001", audio_start_sec=0.0, audio_end_sec=5.0, duration_sec=5.0)
+        ],
+    )
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id, project_title="Test", status="AUDIO_READY", intro=intro, folders=[folder]
+    )
+    save_confirmed_voiceover_project_plan(project, plan)
+    save_cut_plan_settings(project, CutPlanSettings(project_id=project.id))
+    draft = build_cut_plan_draft(project)
+    save_cut_plan_draft(project, draft)
+    apply_asset_selection_to_draft(project)
+    validate_cut_plan_draft(project)
+    confirm_cut_plan(project)
+
+    edit_plan = build_edit_plan_draft_from_confirmed_cut_plan(project)
+    edit_plan = save_edit_plan_bridge_draft(project, edit_plan)
+    audio_plan = build_bridge_audio_plan_from_confirmed_cut_plan(project)
+    save_bridge_audio_plan(project, audio_plan)
+    confirmed_cut_plan = load_confirmed_cut_plan(project)
+    trace = build_edit_plan_bridge_trace(project, confirmed_cut_plan, edit_plan)
+    save_edit_plan_bridge_trace(project, trace)
+    validate_edit_plan_bridge(project, edit_plan)
+    confirm_edit_plan_bridge(project)
+    return project
+
+
+def _happy_project(tmp_path: Path) -> Project:
+    project = _build_confirmed_bridge_project(tmp_path)
+    build_and_save_production_edit_plan_staging(project)
+    validate_production_edit_plan_staging(project)
+    return project
+
+
+def _run_repro(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
+    monkeypatch.setenv("REPRO_ROOT", str(tmp_path))
+    monkeypatch.setenv("REPRO_PROJECT_ID", PROJECT_ID)
+    monkeypatch.setenv("REPRO_FOLDER", FOLDER_A)
+    at = AppTest.from_file(str(SCRIPT_PATH))
+    at.run()
+    assert not at.exception, at.exception
+    return at
+
+
+def _all_text(at: AppTest, *element_types: str) -> list[str]:
+    texts: list[str] = []
+    for element_type in element_types:
+        for element in getattr(at, element_type):
+            texts.append(element.value)
+    return texts
+
+
+# --- 29-32: Grundstruktur ---
+
+
+def test_ui_shows_promote_readiness_section(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _happy_project(tmp_path)
+    at = _run_repro(tmp_path, monkeypatch)
+    assert any("Promote Readiness / Dry Run" in text for text in _all_text(at, "subheader"))
+
+
+def test_ui_shows_dry_run_no_write_hint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _happy_project(tmp_path)
+    at = _run_repro(tmp_path, monkeypatch)
+    combined = " ".join(_all_text(at, "caption"))
+    assert "schreibt nichts nach" in combined
+    assert "_otio/edit_plan/" in combined
+
+
+def test_ui_has_no_real_promote_button(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _happy_project(tmp_path)
+    at = _run_repro(tmp_path, monkeypatch)
+    labels = [button.label for button in at.button]
+    # Nur "Promote Dry Run ausführen" darf "promote" enthalten — kein echter
+    # "Promote"-Button ohne "Dry Run" im Label.
+    promote_labels = [label for label in labels if "promote" in label.lower()]
+    assert promote_labels
+    assert all("dry run" in label.lower() for label in promote_labels)
+
+
+def test_ui_has_no_real_otio_export_button_in_promote_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 10.8 fügt einen rein lesenden, vollständig isolierten „OTIO
+    Export Readiness prüfen“-Button hinzu (kein Export, kein Aufruf der
+    Produktions-Export-Pipeline) — hier wird geprüft, dass kein Button mit
+    tatsächlicher Export-Semantik existiert."""
+    _happy_project(tmp_path)
+    at = _run_repro(tmp_path, monkeypatch)
+    labels = [button.label for button in at.button]
+    assert not any("otio" in label.lower() and "export" in label.lower() and "readiness" not in label.lower() for label in labels)
+    assert not any("exportieren" in label.lower() for label in labels)
+
+
+# --- 33-35: Status-Anzeigen ---
+
+
+def test_ui_shows_ready_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _happy_project(tmp_path)
+    at = _run_repro(tmp_path, monkeypatch)
+    dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)
+    assert dry_run_button.disabled is False
+    at = dry_run_button.click().run()
+    assert not at.exception, at.exception
+    combined = " ".join(_all_text(at, "success"))
+    assert "READY" in combined or "bereit" in combined
+
+
+def test_ui_shows_needs_review_on_would_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = _happy_project(tmp_path)
+    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_path.write_text('{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}', encoding="utf-8")
+
+    at = _run_repro(tmp_path, monkeypatch)
+    dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)
+    at = dry_run_button.click().run()
+    assert not at.exception, at.exception
+    combined = " ".join(_all_text(at, "warning"))
+    assert "existiert bereits ein Produktionsplan" in combined
+
+
+def test_ui_shows_blocked_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = _build_confirmed_bridge_project(tmp_path)
+    build_and_save_production_edit_plan_staging(project)
+    # Kein Validation Report gebaut -> globaler Blocker.
+    # Kein Validation Report -> globaler Blocker.
+    at = _run_repro(tmp_path, monkeypatch)
+    dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)
+    assert dry_run_button.disabled is True
+
+
+def test_ui_shows_blocked_status_after_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = _happy_project(tmp_path)
+    from otio_app.services.voiceover_generation.production_edit_plan_models import ProductionEditPlanValidationError
+    from otio_app.services.voiceover_generation.production_edit_plan_validation import (
+        save_production_edit_plan_validation_report,
+    )
+
+    report = validate_production_edit_plan_staging(project)
+    blocked = report.model_copy(update={"status": "BLOCKED", "blockers": [ProductionEditPlanValidationError(type="X")]})
+    save_production_edit_plan_validation_report(project, blocked)
+
+    at = _run_repro(tmp_path, monkeypatch)
+    dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)
+    at = dry_run_button.click().run()
+    assert not at.exception, at.exception
+    combined = " ".join(_all_text(at, "error"))
+    assert "blockiert" in combined or "BLOCKED" in combined
+
+
+# --- 36-42: keine Seiteneffekte ---
+
+
+def test_no_files_written_under_edit_plan_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from otio_app.project_layout import get_edit_plan_dir
+
+    project = _happy_project(tmp_path)
+    at = _run_repro(tmp_path, monkeypatch)
+    dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)
+    dry_run_button.click().run()
+    assert not get_edit_plan_dir(project.work_dir_path).exists()
+
+
+def test_no_files_written_under_exports_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from otio_app.project_layout import get_exports_dir
+
+    project = _happy_project(tmp_path)
+    at = _run_repro(tmp_path, monkeypatch)
+    dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)
+    dry_run_button.click().run()
+    assert not get_exports_dir(project.work_dir_path).exists()
+
+
+def test_no_files_written_under_supplement_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from otio_app.project_layout import get_supplement_dir
+
+    project = _happy_project(tmp_path)
+    at = _run_repro(tmp_path, monkeypatch)
+    dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)
+    dry_run_button.click().run()
+    assert not get_supplement_dir(project.work_dir_path).exists()
+
+
+def test_existing_production_edit_plan_remains_byte_identical(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = _happy_project(tmp_path)
+    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_content = '{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}'
+    existing_path.write_text(existing_content, encoding="utf-8")
+
+    at = _run_repro(tmp_path, monkeypatch)
+    dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)
+    dry_run_button.click().run()
+
+    assert existing_path.read_text(encoding="utf-8") == existing_content
+
+
+def test_no_original_media_modified(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = _happy_project(tmp_path)
+    photo_path = project.project_root_path / FOLDER_A / "photo_a.jpg"
+    original = photo_path.read_bytes()
+    at = _run_repro(tmp_path, monkeypatch)
+    dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)
+    dry_run_button.click().run()
+    assert photo_path.read_bytes() == original
+
+
+def test_no_audio_files_overwritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = _happy_project(tmp_path)
+    audio_path = project.work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
+    original = audio_path.read_bytes()
+    at = _run_repro(tmp_path, monkeypatch)
+    dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)
+    dry_run_button.click().run()
+    assert audio_path.read_bytes() == original
+
+
+def test_no_voice_folder_mapping_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = _happy_project(tmp_path)
+    mapping_path = get_voice_folder_mapping_path(project.project_root_path)
+    mapping_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_content = '{"mappings": []}'
+    mapping_path.write_text(existing_content, encoding="utf-8")
+
+    at = _run_repro(tmp_path, monkeypatch)
+    dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)
+    dry_run_button.click().run()
+
+    assert mapping_path.read_text(encoding="utf-8") == existing_content
