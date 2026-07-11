@@ -41,6 +41,22 @@ API_PROVIDERS: tuple[ApiProvider, ...] = (
         implemented=True,
     ),
     ApiProvider(
+        env_key="XAI_API_KEY",
+        label="xAI (Grok, direkt)",
+        description="Direkte xAI-API für Grok 4.5 (ohne OpenRouter).",
+        placeholder="xai-…",
+        docs_url="https://console.x.ai/",
+        implemented=True,
+    ),
+    ApiProvider(
+        env_key="OPENROUTER_API_KEY",
+        label="OpenRouter",
+        description="Grok 4.5 und andere Modelle über OpenRouter (OpenAI-kompatible API).",
+        placeholder="sk-or-…",
+        docs_url="https://openrouter.ai/keys",
+        implemented=True,
+    ),
+    ApiProvider(
         env_key="ELEVENLABS_API_KEY",
         label="ElevenLabs",
         description="Text-to-Speech für die Voice-over-Generierungs-Pipeline (Projekt ohne Voice-Over).",
