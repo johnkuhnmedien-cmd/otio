@@ -63,6 +63,7 @@ from otio_app.services.voiceover_generation.llm_trace_service import (
 )
 from otio_app.services.voiceover_generation.model_settings_service import resolve_llm_model_id
 from otio_app.services.voiceover_generation.models import (
+    ClosingVisualPlan,
     DramaturgyPlan,
     FolderVoiceoverDraft,
     FolderVoiceoverSetting,
@@ -223,6 +224,48 @@ def _parse_visual_asset_plan(raw: Any) -> VisualAssetPlanHint:
         needs_visual_variety=bool(raw.get("needs_visual_variety", False)),
         asset_strategy_reason=str(raw.get("asset_strategy_reason", "")),
         supplement_search_hint=str(raw.get("supplement_search_hint", "")),
+    )
+
+
+def _parse_closing_visual_plan(raw: Any) -> ClosingVisualPlan:
+    """Defensiv — analog zu `_parse_visual_asset_plan`: ein fehlendes/
+    unbrauchbares closing_visual_plan darf NIE das Parsen der gesamten
+    Antwort scheitern lassen; neutrale Defaults (leerer Shot, kein
+    Supplement) sind immer gültig für ältere Prompts/Drafts vor dieser
+    Phase."""
+    if not isinstance(raw, dict):
+        return ClosingVisualPlan()
+    return ClosingVisualPlan(
+        visual_intent=str(raw.get("visual_intent", "")),
+        primary_asset_id=str(raw.get("primary_asset_id") or "").strip(),
+        backup_asset_ids=as_str_list(raw.get("backup_asset_ids")),
+        second_backup_asset_ids=as_str_list(raw.get("second_backup_asset_ids")),
+        needs_supplement_asset=bool(raw.get("needs_supplement_asset", False)),
+        supplement_reason=str(raw.get("supplement_reason", "")),
+        supplement_search_hint=str(raw.get("supplement_search_hint", "")),
+        asset_strategy_reason=str(raw.get("asset_strategy_reason", "")),
+    )
+
+
+def _sanitize_closing_visual_plan(
+    plan: ClosingVisualPlan, valid_asset_ids: set[str]
+) -> ClosingVisualPlan:
+    """Entfernt ausschließlich halluzinierte (nicht im Inventory
+    vorhandene) Asset-IDs — analog zu `_sanitize_sentence_items`. Setzt
+    NICHT automatisch needs_supplement_asset, damit ein echter Review-/
+    Correction-Loop eine entstehende Lücke sichtbar korrigieren kann."""
+    return plan.model_copy(
+        update={
+            "primary_asset_id": (
+                plan.primary_asset_id if plan.primary_asset_id in valid_asset_ids else ""
+            ),
+            "backup_asset_ids": [
+                asset_id for asset_id in plan.backup_asset_ids if asset_id in valid_asset_ids
+            ],
+            "second_backup_asset_ids": [
+                asset_id for asset_id in plan.second_backup_asset_ids if asset_id in valid_asset_ids
+            ],
+        }
     )
 
 
@@ -492,6 +535,69 @@ def validate_asset_ids_against_inventory(
                 )
             )
 
+    errors.extend(_validate_closing_visual_plan_asset_ids(folder_name, draft.closing_visual_plan, valid_ids))
+    return errors
+
+
+_CLOSING_VISUAL_PLAN_SENTENCE_ID = "closing"
+
+
+def _validate_closing_visual_plan_asset_ids(
+    folder_name: str, plan: ClosingVisualPlan, valid_ids: set[str]
+) -> list[ValidationError]:
+    """Dieselbe deterministische Asset-Prüfung wie für sentence_items,
+    angewendet auf den Closing-Shot (siehe ClosingVisualPlan) — nutzt
+    `sentence_id="closing"` als Marker, da kein echter Satz existiert."""
+    errors: list[ValidationError] = []
+    if plan.primary_asset_id and plan.primary_asset_id not in valid_ids:
+        errors.append(
+            ValidationError(
+                type=VO_ERROR_INVALID_ASSET_ID,
+                severity="BLOCKER",
+                folder_name=folder_name,
+                sentence_id=_CLOSING_VISUAL_PLAN_SENTENCE_ID,
+                message=f"closing_visual_plan.primary_asset_id '{plan.primary_asset_id}' existiert nicht im Inventory.",
+                fix_hint="Nur asset_id-Werte aus dem bereitgestellten Inventory verwenden.",
+            )
+        )
+    for backup_id in plan.backup_asset_ids:
+        if backup_id not in valid_ids:
+            errors.append(
+                ValidationError(
+                    type=VO_ERROR_INVALID_ASSET_ID,
+                    severity="BLOCKER",
+                    folder_name=folder_name,
+                    sentence_id=_CLOSING_VISUAL_PLAN_SENTENCE_ID,
+                    message=f"closing_visual_plan.backup_asset_id '{backup_id}' existiert nicht im Inventory.",
+                    fix_hint="Nur asset_id-Werte aus dem bereitgestellten Inventory verwenden.",
+                )
+            )
+    for second_backup_id in plan.second_backup_asset_ids:
+        if second_backup_id not in valid_ids:
+            errors.append(
+                ValidationError(
+                    type=VO_ERROR_INVALID_ASSET_ID,
+                    severity="BLOCKER",
+                    folder_name=folder_name,
+                    sentence_id=_CLOSING_VISUAL_PLAN_SENTENCE_ID,
+                    message=(
+                        "closing_visual_plan.second_backup_asset_id "
+                        f"'{second_backup_id}' existiert nicht im Inventory."
+                    ),
+                    fix_hint="Nur asset_id-Werte aus dem bereitgestellten Inventory verwenden.",
+                )
+            )
+    if plan.needs_supplement_asset and not plan.supplement_reason.strip():
+        errors.append(
+            ValidationError(
+                type=VO_ERROR_MISSING_SUPPLEMENT_REASON,
+                severity="BLOCKER",
+                folder_name=folder_name,
+                sentence_id=_CLOSING_VISUAL_PLAN_SENTENCE_ID,
+                message="closing_visual_plan.needs_supplement_asset ist gesetzt, aber supplement_reason fehlt.",
+                fix_hint="Kurze Begründung ergänzen, welches Abschlussmotiv fehlt.",
+            )
+        )
     return errors
 
 
@@ -778,6 +884,9 @@ def generate_folder_voiceover(
     sentence_items = _sanitize_sentence_items(
         _parse_sentence_items(payload.get("sentence_items", [])), valid_asset_ids
     )
+    closing_visual_plan = _sanitize_closing_visual_plan(
+        _parse_closing_visual_plan(payload.get("closing_visual_plan")), valid_asset_ids
+    )
     voiceover_text_full = str(payload.get("voiceover_text_full", ""))
 
     draft = FolderVoiceoverDraft(
@@ -791,6 +900,7 @@ def generate_folder_voiceover(
         voiceover_text_full=voiceover_text_full,
         word_count=_count_words(voiceover_text_full),
         sentence_items=sentence_items,
+        closing_visual_plan=closing_visual_plan,
         transition_from_previous_used=bool(payload.get("transition_from_previous_used", False)),
         transition_to_next_used=bool(payload.get("transition_to_next_used", False)),
         callback_to_previous_used=bool(payload.get("callback_to_previous_used", False)),

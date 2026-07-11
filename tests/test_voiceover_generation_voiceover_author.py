@@ -34,6 +34,7 @@ from otio_app.services.voiceover_generation.folder_voiceover_settings_service im
 )
 from otio_app.services.voiceover_generation.llm_trace_service import STATUS_FAIL, STATUS_PARSE_FAILED, STATUS_PASS
 from otio_app.services.voiceover_generation.models import (
+    ClosingVisualPlan,
     DramaturgyFolderEntry,
     DramaturgyPlan,
     FolderVoiceoverDraft,
@@ -603,6 +604,119 @@ def test_validate_asset_ids_detects_invalid_planned_segment_backup_asset_id(tmp_
     )
     errors = validate_asset_ids_against_inventory(project, "Grand Canyon", draft)
     assert any(error.type == VO_ERROR_INVALID_ASSET_ID for error in errors)
+
+
+# --- Closing Visual Plan (Nutzervorgabe Juli 2026: "kein closing asset nach
+# dem letzten Satz, der die Pause ausfüllt") ---
+
+
+def test_generated_draft_parses_closing_visual_plan(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    response = json.loads(VALID_AUTHOR_RESPONSE)
+    response["closing_visual_plan"] = {
+        "visual_intent": "aerial establishing shot to close the section",
+        "primary_asset_id": "asset_clip2",
+        "backup_asset_ids": ["asset_clip1"],
+        "second_backup_asset_ids": [],
+        "needs_supplement_asset": False,
+        "supplement_reason": "",
+        "supplement_search_hint": "",
+        "asset_strategy_reason": "Ruhiger Abschluss, unterschiedlich vom letzten Satz.",
+    }
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(json.dumps(response)),
+    ):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    plan = result.draft.closing_visual_plan
+    assert plan.visual_intent == "aerial establishing shot to close the section"
+    assert plan.primary_asset_id == "asset_clip2"
+    assert plan.backup_asset_ids == ["asset_clip1"]
+    assert plan.needs_supplement_asset is False
+    assert plan.asset_strategy_reason == "Ruhiger Abschluss, unterschiedlich vom letzten Satz."
+
+
+def test_generated_draft_defaults_closing_visual_plan_when_absent(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    plan = result.draft.closing_visual_plan
+    assert plan.visual_intent == ""
+    assert plan.primary_asset_id == ""
+    assert plan.backup_asset_ids == []
+    assert plan.needs_supplement_asset is False
+
+
+def test_generated_draft_handles_malformed_closing_visual_plan_gracefully(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    response = json.loads(VALID_AUTHOR_RESPONSE)
+    response["closing_visual_plan"] = "not a dict"
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(json.dumps(response)),
+    ):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    assert result.status == STATUS_PASS
+    assert result.draft.closing_visual_plan.primary_asset_id == ""
+
+
+def test_generated_draft_sanitizes_hallucinated_closing_visual_plan_asset_id(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    response = json.loads(VALID_AUTHOR_RESPONSE)
+    response["closing_visual_plan"] = {
+        "primary_asset_id": "asset_made_up_id",
+        "backup_asset_ids": ["asset_clip2", "asset_also_made_up"],
+        "second_backup_asset_ids": ["asset_made_up_second"],
+    }
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(json.dumps(response)),
+    ):
+        result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    plan = result.draft.closing_visual_plan
+    assert plan.primary_asset_id == ""
+    assert plan.backup_asset_ids == ["asset_clip2"]
+    assert plan.second_backup_asset_ids == []
+
+
+def test_validate_asset_ids_detects_invalid_closing_visual_plan_asset_id(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name="Grand Canyon",
+        voiceover_text_full="Text",
+        word_count=1,
+        sentence_items=[
+            SentenceItem(sentence_id="sentence_001", text="Text", primary_asset_id="asset_clip1"),
+        ],
+        closing_visual_plan=ClosingVisualPlan(primary_asset_id="asset_does_not_exist"),
+    )
+    errors = validate_asset_ids_against_inventory(project, "Grand Canyon", draft)
+    assert any(
+        error.type == VO_ERROR_INVALID_ASSET_ID and error.sentence_id == "closing" for error in errors
+    )
+
+
+def test_validate_asset_ids_detects_missing_closing_visual_plan_supplement_reason(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon"])
+    draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name="Grand Canyon",
+        voiceover_text_full="Text",
+        word_count=1,
+        sentence_items=[
+            SentenceItem(sentence_id="sentence_001", text="Text", primary_asset_id="asset_clip1"),
+        ],
+        closing_visual_plan=ClosingVisualPlan(needs_supplement_asset=True, supplement_reason=""),
+    )
+    errors = validate_asset_ids_against_inventory(project, "Grand Canyon", draft)
+    assert any(
+        error.type == VO_ERROR_MISSING_SUPPLEMENT_REASON and error.sentence_id == "closing" for error in errors
+    )
 
 
 # --- Phase 6 (Asset-bewusste Cut-Plan-Vorbereitung): kombinierte Regenerier-Aktion ---

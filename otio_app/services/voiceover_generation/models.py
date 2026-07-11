@@ -111,6 +111,7 @@ __all__ = [
     "VisualAssetPlanHint",
     "SentenceSegmentAssetPlan",
     "SentenceItem",
+    "ClosingVisualPlan",
     "FolderVoiceoverDraft",
     "FolderVoiceoversDocument",
     "ValidationError",
@@ -402,6 +403,33 @@ class SentenceSegmentAssetPlan(BaseModel):
     backup_asset_ids: list[str] = Field(default_factory=list)
 
 
+class ClosingVisualPlan(BaseModel):
+    """Nutzervorgabe (Juli 2026, "wir haben gar kein closing asset nach dem
+    letzten Satz, der die Pause ausfüllt"): eigenständiger visueller
+    Abschluss-Shot NACH dem letzten Satz/Beat eines Ordners — KEIN eigener
+    gesprochener Satz, kein TTS, kein Alignment. Deckt visuell den kurzen
+    Audio-Tail nach dem letzten Satz UND die anschließende Sektionspause bis
+    zum Start der nächsten Sektion ab, statt das letzte Satz-VisualSegment
+    nur indirekt zu strecken (siehe cut_plan_visual_coverage.
+    extend_section_end_visuals_over_pauses, das scheitert, wenn das letzte
+    Video dafür nicht lang genug ist).
+
+    Dieselben Asset-Zuordnungsfelder wie SentenceItem, damit bestehende
+    Validierungs-/Sanitisierungs-/Cut-Plan-Logik wiederverwendet werden
+    kann — bewusst KEIN eigener sentence_id/text/pause_after, da kein
+    Satz. Fehlt dieses Feld (ältere Drafts vor dieser Phase), gelten die
+    neutralen Defaults unten — kein bestehender Draft wird ungültig."""
+
+    visual_intent: str = ""
+    primary_asset_id: str = ""
+    backup_asset_ids: list[str] = Field(default_factory=list)
+    second_backup_asset_ids: list[str] = Field(default_factory=list)
+    needs_supplement_asset: bool = False
+    supplement_reason: str = ""
+    supplement_search_hint: str = ""
+    asset_strategy_reason: str = ""
+
+
 class SentenceItem(BaseModel):
     """Ein Satz/Beat der Voice-over-Prosa mit strukturierter Asset-Zuordnung.
 
@@ -453,6 +481,9 @@ class FolderVoiceoverDraft(BaseModel):
     voiceover_text_full: str = ""
     word_count: int = 0
     sentence_items: list[SentenceItem] = Field(default_factory=list)
+    # Nutzervorgabe (Juli 2026): visueller Abschluss-Shot NACH dem letzten
+    # Satz — siehe ClosingVisualPlan-Docstring. Kein eigener Satz, additiv.
+    closing_visual_plan: ClosingVisualPlan = Field(default_factory=ClosingVisualPlan)
     transition_from_previous_used: bool = False
     transition_to_next_used: bool = False
     callback_to_previous_used: bool = False

@@ -559,6 +559,16 @@ this shape:
       "planned_segments": []
     }}
   ],
+  "closing_visual_plan": {{
+    "visual_intent": "...",
+    "primary_asset_id": "...",
+    "backup_asset_ids": [],
+    "second_backup_asset_ids": [],
+    "needs_supplement_asset": false,
+    "supplement_reason": "",
+    "supplement_search_hint": "",
+    "asset_strategy_reason": "..."
+  }},
   "transition_from_previous_used": false,
   "transition_to_next_used": false,
   "callback_to_previous_used": false,
