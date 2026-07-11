@@ -558,6 +558,22 @@ CUT_PLAN_SUPPLEMENT_MANIFEST_FILENAME = "supplement_manifest.json"
 # cut_plan_validation_repair.py).
 CUT_PLAN_VALIDATION_REPAIR_REQUESTS_FILENAME = "validation_repair_requests.json"
 
+# Residual Gap Requests (Nutzervorgabe, Juli 2026: "Item hat Asset, aber
+# Abdeckung ist unvollständig"): dritter, eigenständiger Reparaturpfad
+# zwischen Supplement (Item hat noch KEIN Asset) und Validation Repair
+# (kleine Lücke, per Nachbar-Kürzung reparierbar). Bewusst eigene Datei —
+# siehe cut_plan_residual_gap_requests.py.
+CUT_PLAN_RESIDUAL_GAP_REQUESTS_FILENAME = "residual_gap_requests.json"
+
+CUT_PLAN_RESIDUAL_GAP_REPAIR_MODE_PATCH_GAP_ONLY = "PATCH_GAP_ONLY"
+CUT_PLAN_RESIDUAL_GAP_REPAIR_MODE_REPLACE_ITEM_VISUAL = "REPLACE_ITEM_VISUAL"
+
+CUT_PLAN_RESIDUAL_GAP_STATUS_OPEN = "OPEN"
+CUT_PLAN_RESIDUAL_GAP_STATUS_CANDIDATES_FOUND = "CANDIDATES_FOUND"
+CUT_PLAN_RESIDUAL_GAP_STATUS_ACCEPTED = "ACCEPTED"
+CUT_PLAN_RESIDUAL_GAP_STATUS_NO_MATCH = "NO_MATCH"
+CUT_PLAN_RESIDUAL_GAP_STATUS_FAILED = "FAILED"
+
 CUT_PLAN_VALIDATION_REPAIR_TYPE_BLACK_GAP = "BLACK_GAP"
 CUT_PLAN_VALIDATION_REPAIR_TYPE_ASSET_REUSE_DISTANCE = "ASSET_REUSE_DISTANCE"
 
@@ -861,6 +877,23 @@ CUT_PLAN_DEFAULT_SHOT_MAX_SEC = 8.0
 # durch einfaches Halten des vorherigen Bildes/Videos geschlossen werden
 # können, ohne den Cut-Plan-Code selbst zu ändern.
 CUT_PLAN_DEFAULT_BLACK_GAP_AUTO_HOLD_MAX_SEC = 1.0
+
+# Nutzervorgabe (Juli 2026): Assets sollen generell bis zum Start des
+# NÄCHSTEN Satzes weiterlaufen, statt exakt am eigenen Satzende zu enden —
+# eliminiert einen großen Teil der BLACK_GAP_DURING_VOICEOVER-Fälle bereits
+# beim Bau der VisualSegments (siehe cut_plan_asset_selector.
+# compute_visual_window_end_sec), statt sie nachträglich per Repair-Pipeline
+# zu schließen. Deaktiviert per Default (bewusst additiv/opt-in, siehe
+# Phase-1-Kommentar in cut_plan_asset_selector.py) — Phase 2 verdrahtet
+# dies erst in choose_asset_for_cut_item/die Split-Logik.
+CUT_PLAN_DEFAULT_EXTEND_VISUAL_WINDOW_TO_NEXT_SENTENCE = False
+# Obergrenze, wie viel von einer Satzpause in das visuelle Fenster des
+# VORHERIGEN Satzes hineingezogen werden darf — verhindert, dass eine sehr
+# lange, redaktionell bedeutsame Pause (z. B. Kapitelwechsel) blind
+# mitgestreckt wird; solche Fälle bleiben weiterhin als
+# BLACK_GAP_DURING_VOICEOVER sichtbar bzw. laufen durch die bestehende
+# Validation-Repair-Pipeline.
+CUT_PLAN_DEFAULT_MAX_SENTENCE_PAUSE_EXTENSION_SEC = 3.0
 CUT_PLAN_DEFAULT_MAX_ASSET_USAGE = 2
 CUT_PLAN_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS = 0
 CUT_PLAN_DEFAULT_TIMELINE_FPS = 25
@@ -999,6 +1032,60 @@ CUT_PLAN_ERROR_TYPES = (
     CUT_PLAN_ERROR_AUDIO_GAP_UNEXPECTED,
     CUT_PLAN_ERROR_FRAME_ROUNDING_ERROR,
     CUT_PLAN_ERROR_AMBIGUOUS_ASSET_ID,
+)
+
+# Bugfix (Nutzervorgabe Juli 2026, "wieso tauchen Black Gaps trotz neuem
+# Ansatz wieder auf?"): die EINZIGEN Blocker-Typen, die VOR der Asset-
+# Auswahl (Phase 8.2, cut_plan_timeline_service.py) auf einem CutPlanItem
+# gesetzt werden können — also ein echtes, durch Asset-Auswahl NICHT
+# lösbares Timing-/Struktur-Problem darstellen (keine verlässliche
+# Timeline-Zeit vorhanden). Vorher nur lokal in cut_plan_supplement_bridge.
+# py als `_TIMING_BLOCKER_TYPES` definiert und ausschließlich für die
+# Supplement-Request-Erzeugung genutzt — jetzt hier zentral, damit
+# cut_plan_asset_selector.choose_asset_for_cut_item dieselbe Unterscheidung
+# treffen kann: ALLE ANDEREN Blocker-Typen (z. B. BLACK_GAP_DURING_
+# VOICEOVER, ASSET_TOO_SHORT, SHOT_TOO_LONG) können bereits aus einem
+# VORHERIGEN vollständigen Validierungslauf auf dem Item kleben (siehe
+# attach_validation_to_cut_plan) und dürfen eine ERNEUTE Asset-Auswahl
+# NICHT als „Zeit-Mapping blockiert“ verhindern — sonst bleibt ein Item,
+# das einmal einen dieser Blocker bekommen hat, bei jedem weiteren
+# „Asset-Auswahl anwenden“ dauerhaft ohne VisualSegment, selbst wenn eine
+# geänderte Einstellung (z. B. das Visual-Window-Feature) die eigentliche
+# Ursache inzwischen beheben könnte.
+CUT_PLAN_TIMING_BLOCKER_TYPES = frozenset(
+    {
+        CUT_PLAN_ERROR_MISSING_ALIGNMENT,
+        CUT_PLAN_ERROR_MISSING_AUDIO,
+        CUT_PLAN_ERROR_INVALID_AUDIO_PATH,
+        CUT_PLAN_ERROR_SOURCE_RANGE_INVALID,
+        CUT_PLAN_ERROR_SOURCE_PLAN_NOT_READY,
+    }
+)
+
+# Blocker-Typen, die typischerweise erst bei einem vollständigen
+# Validierungslauf (attach_validation_to_cut_plan) auf item.blockers/
+# cut_plan.blockers landen und nach einer inhaltlichen Korrektur
+# (Supplement-Übernahme, erneute Asset-Auswahl) als VERALTET gelten —
+# im Gegensatz zu CUT_PLAN_TIMING_BLOCKER_TYPES, die echte Struktur-/
+# Alignment-Probleme beschreiben und bestehen bleiben dürfen.
+CUT_PLAN_STALE_VALIDATION_BLOCKER_TYPES = frozenset(
+    {
+        CUT_PLAN_ERROR_INVALID_ASSET_ID,
+        CUT_PLAN_ERROR_MISSING_ASSET_MAPPING,
+        CUT_PLAN_ERROR_ASSET_FILE_MISSING,
+        CUT_PLAN_ERROR_ASSET_TOO_SHORT,
+        CUT_PLAN_ERROR_SHOT_TOO_SHORT,
+        CUT_PLAN_ERROR_SHOT_TOO_LONG,
+        CUT_PLAN_ERROR_MAX_ASSET_USAGE_EXCEEDED,
+        CUT_PLAN_ERROR_ASSET_REUSE_DISTANCE_TOO_SHORT,
+        CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED,
+        CUT_PLAN_ERROR_SUPPLEMENT_REASON_MISSING,
+        CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER,
+        CUT_PLAN_ERROR_TIMELINE_OVERLAP,
+        CUT_PLAN_ERROR_AUDIO_GAP_UNEXPECTED,
+        CUT_PLAN_ERROR_FRAME_ROUNDING_ERROR,
+        CUT_PLAN_ERROR_AMBIGUOUS_ASSET_ID,
+    }
 )
 
 # Phase D (Nutzervorgabe): Cut-Plan-Drafts mit vielen offenen Items können

@@ -28,8 +28,10 @@ from otio_app.defaults import (
     AUDIO_SCOPE_INTRO,
     CUT_PLAN_ASSET_SELECTION_UNRESOLVED,
     CUT_PLAN_DEFAULT_BLACK_GAP_AUTO_HOLD_MAX_SEC,
+    CUT_PLAN_DEFAULT_EXTEND_VISUAL_WINDOW_TO_NEXT_SENTENCE,
     CUT_PLAN_DEFAULT_INITIAL_AUDIO_OFFSET_SEC,
     CUT_PLAN_DEFAULT_MAX_ASSET_USAGE,
+    CUT_PLAN_DEFAULT_MAX_SENTENCE_PAUSE_EXTENSION_SEC,
     CUT_PLAN_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS,
     CUT_PLAN_DEFAULT_PAUSE_BETWEEN_SECTIONS_SEC,
     CUT_PLAN_DEFAULT_SECTION_VISUAL_PREROLL_SEC,
@@ -86,6 +88,12 @@ class CutPlanSettings(BaseModel):
     # (fehlendes/blockiertes Item) — die bleiben unabhängig von diesem Wert
     # als BLACK_GAP_DURING_VOICEOVER sichtbar.
     black_gap_auto_hold_max_sec: float = CUT_PLAN_DEFAULT_BLACK_GAP_AUTO_HOLD_MAX_SEC
+    # Nutzervorgabe (Juli 2026, "Sätze bis zum nächsten Satz weiterlaufen
+    # lassen"): siehe cut_plan_asset_selector.compute_visual_window_end_sec
+    # für die genaue Berechnung. Phase 1: nur Modell + reine Berechnung,
+    # noch NICHT in choose_asset_for_cut_item verdrahtet (folgt in Phase 2).
+    extend_visual_window_to_next_sentence: bool = CUT_PLAN_DEFAULT_EXTEND_VISUAL_WINDOW_TO_NEXT_SENTENCE
+    max_sentence_pause_extension_sec: float = CUT_PLAN_DEFAULT_MAX_SENTENCE_PAUSE_EXTENSION_SEC
     timeline_fps: int = CUT_PLAN_DEFAULT_TIMELINE_FPS
     timeline_width: int = CUT_PLAN_DEFAULT_TIMELINE_WIDTH
     timeline_height: int = CUT_PLAN_DEFAULT_TIMELINE_HEIGHT

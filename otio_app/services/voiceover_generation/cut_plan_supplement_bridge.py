@@ -75,6 +75,8 @@ from otio_app.defaults import (
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_CANDIDATES_FOUND,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_FAILED,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_OPEN,
+    CUT_PLAN_STALE_VALIDATION_BLOCKER_TYPES,
+    CUT_PLAN_TIMING_BLOCKER_TYPES,
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED as _STATUS_SUPPLEMENT_REQUIRED,
     SUPPLEMENT_SOURCE_PEXELS,
 )
@@ -90,6 +92,7 @@ from otio_app.services.media_utils import probe_duration_seconds
 from otio_app.services.supplement_sources import get_supplement_adapter
 from otio_app.services.voiceover_generation.cut_plan_asset_selector import (
     aggregate_item_level_errors,
+    compute_visual_window_end_sec,
     settings_from_snapshot,
     update_asset_usage_summary,
 )
@@ -113,6 +116,9 @@ from otio_app.services.voiceover_generation.llm_trace_service import STATUS_PASS
 
 __all__ = [
     "build_supplement_requests_from_cut_plan",
+    "merge_prior_supplement_request_state",
+    "count_unapplied_accepted_supplement_requests",
+    "reapply_accepted_supplements_to_cut_plan",
     "save_cut_plan_supplement_requests",
     "load_cut_plan_supplement_requests",
     "update_cut_plan_supplement_request",
@@ -130,9 +136,30 @@ __all__ = [
     "record_supplement_manifest_entry",
     "record_supplement_manifest_validation",
     "to_cut_plan_candidate",
+    "is_open_cut_plan_supplement_request",
+    "effective_cut_plan_supplement_request_status",
 ]
 
 _DURATION_EPSILON = 0.05
+
+
+def is_open_cut_plan_supplement_request(request: CutPlanSupplementRequest) -> bool:
+    """True, wenn der Request noch kein übernommenes Asset hat.
+
+    Bewusst NICHT ``request.status`` — ältere Fallback-/Merge-Pfade konnten
+    ``accepted_asset_id`` setzen, ohne ``status=ACCEPTED`` zu normalisieren."""
+    return not request.accepted_asset_id
+
+
+def effective_cut_plan_supplement_request_status(request: CutPlanSupplementRequest) -> str:
+    """Einheitlicher Anzeige-/Diagnose-Status für UI und Workflow.
+
+    ``accepted_asset_id`` ist die maßgebliche Wahrheit, ob ein Request
+    bereits versorgt ist — ``request.status`` kann historisch veraltet sein
+    (z. B. ``CANDIDATES_FOUND`` trotz akzeptiertem Asset)."""
+    if request.accepted_asset_id:
+        return CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED
+    return request.status
 
 
 def _safe_path_component(value: str) -> str:
@@ -160,16 +187,11 @@ def _sanitize_error_message(message: str, *, env_keys: tuple[str, ...] = ("PEXEL
 # Items macht ein Supplement Request KEINEN Sinn, weil timeline_start_sec/
 # timeline_end_sec/duration_sec typischerweise 0.0 sind (siehe
 # cut_plan_timeline_service._folder_item_skeleton) und der eigentliche Fix
-# eine erneute Vertonung/Ausrichtung ist, kein visuelles Asset.
-_TIMING_BLOCKER_TYPES = frozenset(
-    {
-        CUT_PLAN_ERROR_MISSING_ALIGNMENT,
-        CUT_PLAN_ERROR_MISSING_AUDIO,
-        CUT_PLAN_ERROR_INVALID_AUDIO_PATH,
-        CUT_PLAN_ERROR_SOURCE_RANGE_INVALID,
-        CUT_PLAN_ERROR_SOURCE_PLAN_NOT_READY,
-    }
-)
+# eine erneute Vertonung/Ausrichtung ist, kein visuelles Asset. Zentral in
+# defaults.py definiert (siehe dort) — cut_plan_asset_selector.py nutzt
+# denselben Satz, um zu entscheiden, ob ein Item eine erneute Asset-
+# Auswahl verhindern darf.
+_TIMING_BLOCKER_TYPES = CUT_PLAN_TIMING_BLOCKER_TYPES
 
 # Phase F: Blocker-Typen, die ERST bei der vollständigen Cut-Plan-
 # Validierung (validate_cut_items/validate_asset_usage, siehe
@@ -301,6 +323,141 @@ def build_supplement_requests_from_cut_plan(
         source_cut_plan_hash=content_hash_of_model(cut_plan),
         requests=requests,
     )
+
+
+def merge_prior_supplement_request_state(
+    new_document: CutPlanSupplementRequestsDocument,
+    prior_document: CutPlanSupplementRequestsDocument | None,
+) -> CutPlanSupplementRequestsDocument:
+    """Nutzervorgabe (Juli 2026): beim Neu-Erzeugen von Supplement Requests
+    nach einem erneuten Draft-/Validierungslauf die bereits akzeptierten
+    Assets pro `cut_item_id` BEIBEHALTEN — verhindert erneute externe
+    Suchen/Lizenzierungen in Test-/Iterierungsläufen, solange dieselbe
+    Datei noch existiert. Nur Requests mit gültigem `accepted_asset_path`
+    werden übernommen; alle anderen Felder (Text, Reason, needed_duration)
+    kommen aus dem frischen `build_supplement_requests_from_cut_plan`."""
+    if prior_document is None:
+        return new_document
+
+    prior_by_cut_item_id = {
+        request.cut_item_id: request
+        for request in prior_document.requests
+        if request.accepted_asset_id and request.accepted_asset_path
+    }
+    if not prior_by_cut_item_id:
+        return new_document
+
+    merged_requests: list[CutPlanSupplementRequest] = []
+    for request in new_document.requests:
+        prior = prior_by_cut_item_id.get(request.cut_item_id)
+        if prior is None or not Path(prior.accepted_asset_path).is_file():
+            merged_requests.append(request)
+            continue
+        merged_requests.append(
+            request.model_copy(
+                update={
+                    "status": CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
+                    "accepted_candidate_id": prior.accepted_candidate_id,
+                    "accepted_asset_id": prior.accepted_asset_id,
+                    "accepted_asset_path": prior.accepted_asset_path,
+                    "llm_queries": prior.llm_queries,
+                    "llm_query_status": prior.llm_query_status,
+                    "llm_query_run_id": prior.llm_query_run_id,
+                    "llm_query_error": prior.llm_query_error,
+                    "auto_resolve_status": prior.auto_resolve_status,
+                    "auto_resolve_attempts": prior.auto_resolve_attempts,
+                }
+            )
+        )
+    return new_document.model_copy(update={"requests": merged_requests})
+
+
+def count_unapplied_accepted_supplement_requests(
+    cut_plan: CutPlanDocument, requests_document: CutPlanSupplementRequestsDocument
+) -> int:
+    """Zählt Requests, die zwar ein akzeptiertes Asset tragen, dessen
+    Übernahme aber im aktuellen Draft noch fehlt (z. B. nach Draft-Neu-
+    erzeugung ohne erneutes Akzeptieren)."""
+    items_by_id = {item.cut_item_id: item for item in cut_plan.items}
+    count = 0
+    for request in requests_document.requests:
+        if not request.accepted_asset_id or not request.accepted_asset_path:
+            continue
+        if not Path(request.accepted_asset_path).is_file():
+            continue
+        item = items_by_id.get(request.cut_item_id)
+        if item is None:
+            continue
+        if (
+            item.asset_selection_status not in _ALREADY_SERVICED_ASSET_SELECTION_STATUSES
+            or not item.planned_visual_segments
+        ):
+            count += 1
+    return count
+
+
+def _supplement_asset_from_request(request: CutPlanSupplementRequest) -> CutPlanSupplementAsset | None:
+    if not request.accepted_asset_id or not request.accepted_asset_path:
+        return None
+    asset_path = Path(request.accepted_asset_path)
+    if not asset_path.is_file():
+        return None
+    asset_type = "video" if asset_path.suffix.lower() in {".mp4", ".mov", ".webm", ".m4v"} else "image"
+    duration_sec = probe_duration_seconds(asset_path) or request.needed_duration_sec
+    return CutPlanSupplementAsset(
+        asset_id=request.accepted_asset_id,
+        request_id=request.request_id,
+        candidate_id=request.accepted_candidate_id or f"reapplied_{request.request_id}",
+        provider="",
+        asset_path=str(asset_path),
+        asset_type=asset_type,
+        duration_sec=duration_sec,
+    )
+
+
+def reapply_accepted_supplements_to_cut_plan(project: Project) -> tuple[CutPlanDocument, list[str], list[str]]:
+    """Übernimmt alle bereits akzeptierten Supplement-Assets aus
+    `supplement_requests.from_cut_plan.json` erneut in den aktuellen Cut-
+    Plan-Draft — OHNE externe Suche/Download. Nützlich nach Draft-Neu-
+    erzeugung oder wenn Requests noch `ACCEPTED` sind, der Draft aber noch
+    keine VisualSegments trägt.
+
+    Gibt `(updated_cut_plan, applied_cut_item_ids, skipped_cut_item_ids)`
+    zurück und speichert den Draft."""
+    requests_document = load_cut_plan_supplement_requests(project)
+    if requests_document is None:
+        raise ValueError("Keine Supplement Requests vorhanden.")
+    draft = load_cut_plan_draft(project)
+    if draft is None:
+        raise ValueError("Kein Cut Plan Draft vorhanden.")
+
+    applied: list[str] = []
+    skipped: list[str] = []
+    updated_cut_plan = draft
+    for request in requests_document.requests:
+        accepted_asset = _supplement_asset_from_request(request)
+        if accepted_asset is None:
+            continue
+        item = next((entry for entry in updated_cut_plan.items if entry.cut_item_id == request.cut_item_id), None)
+        if item is None:
+            skipped.append(request.cut_item_id)
+            continue
+        if (
+            item.asset_selection_status in _ALREADY_SERVICED_ASSET_SELECTION_STATUSES
+            and item.planned_visual_segments
+        ):
+            continue
+        try:
+            updated_cut_plan = apply_accepted_supplement_to_cut_plan_item(
+                project, updated_cut_plan, request, accepted_asset
+            )
+            applied.append(request.cut_item_id)
+        except ValueError:
+            skipped.append(request.cut_item_id)
+
+    if applied:
+        save_cut_plan_draft(project, updated_cut_plan)
+    return updated_cut_plan, applied, skipped
 
 
 def save_cut_plan_supplement_requests(
@@ -589,11 +746,13 @@ def search_candidates_for_cut_plan_request(
     )
     _save_candidates_document(project, document)
 
-    # Ein bereits ACCEPTED-Request darf durch eine erneute Suche nicht still
-    # auf CANDIDATES_FOUND zurückgesetzt werden — das würde die Vorab-
-    # Hardening gegen mehrfaches Akzeptieren aushebeln (die den aktuellen
-    # request.status prüft).
-    if candidates and request.status != CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED:
+    # Ein bereits versorgter oder ACCEPTED-Request darf durch eine erneute
+    # Suche nicht still auf CANDIDATES_FOUND zurückgesetzt werden.
+    if (
+        candidates
+        and not request.accepted_asset_id
+        and request.status != CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED
+    ):
         update_cut_plan_supplement_request(project, request_id, status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_CANDIDATES_FOUND)
     return document
 
@@ -777,6 +936,17 @@ def apply_accepted_supplement_to_cut_plan_item(
     if target_item is None:
         raise ValueError(f"CutPlanItem '{request.cut_item_id}' nicht im Cut Plan gefunden.")
 
+    item_index = next(
+        (index for index, item in enumerate(cut_plan.items) if item.cut_item_id == target_item.cut_item_id), None
+    )
+    next_item = (
+        cut_plan.items[item_index + 1]
+        if item_index is not None and item_index + 1 < len(cut_plan.items)
+        else None
+    )
+    window_end_sec = compute_visual_window_end_sec(target_item, next_item, settings)
+    segment_duration_sec = max(0.0, window_end_sec - target_item.timeline_start_sec)
+
     if accepted_asset.asset_type == "video":
         source_in_sec = settings.video_head_trim_sec
         usable_duration_sec = max(0.0, accepted_asset.duration_sec - settings.video_head_trim_sec)
@@ -786,16 +956,18 @@ def apply_accepted_supplement_to_cut_plan_item(
                 f"{target_item.duration_sec:.2f}s, verfügbar {usable_duration_sec:.2f}s nach "
                 f"video_head_trim_sec ({settings.video_head_trim_sec:.2f}s)."
             )
-        source_out_sec = source_in_sec + target_item.duration_sec
+        segment_duration_sec = min(segment_duration_sec, usable_duration_sec)
+        window_end_sec = target_item.timeline_start_sec + segment_duration_sec
+        source_out_sec = source_in_sec + segment_duration_sec
     else:
         source_in_sec = 0.0
-        source_out_sec = target_item.duration_sec
+        source_out_sec = segment_duration_sec
 
     segment = VisualSegment(
         segment_id=f"{target_item.cut_item_id}_seg_01",
         timeline_in_sec=target_item.timeline_start_sec,
-        timeline_out_sec=target_item.timeline_end_sec,
-        duration_sec=target_item.duration_sec,
+        timeline_out_sec=window_end_sec,
+        duration_sec=segment_duration_sec,
         asset_id=accepted_asset.asset_id,
         asset_path=accepted_asset.asset_path,
         asset_type=accepted_asset.asset_type,
@@ -806,7 +978,14 @@ def apply_accepted_supplement_to_cut_plan_item(
     )
 
     remaining_blockers = [
-        blocker for blocker in target_item.blockers if blocker != CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED
+        blocker
+        for blocker in target_item.blockers
+        if blocker not in CUT_PLAN_STALE_VALIDATION_BLOCKER_TYPES
+    ]
+    remaining_warnings = [
+        warning
+        for warning in target_item.warnings
+        if warning not in CUT_PLAN_STALE_VALIDATION_BLOCKER_TYPES
     ]
 
     updated_item = target_item.model_copy(
@@ -821,6 +1000,7 @@ def apply_accepted_supplement_to_cut_plan_item(
             "needs_supplement_asset": False,
             "planned_visual_segments": [segment],
             "blockers": remaining_blockers,
+            "warnings": remaining_warnings,
         }
     )
 
@@ -837,14 +1017,17 @@ def apply_accepted_supplement_to_cut_plan_item(
 
     asset_usage_summary = update_asset_usage_summary(updated_cut_plan)
     warnings, blockers = aggregate_item_level_errors(updated_cut_plan.items)
-    status = CUT_PLAN_STATUS_NEEDS_REVIEW if blockers else CUT_PLAN_STATUS_DRAFT
 
     return updated_cut_plan.model_copy(
         update={
             "asset_usage_summary": asset_usage_summary,
+            # Veraltete Validierungs-Blocker (ohne gap_start_sec/gap_end_sec)
+            # dürfen nach einer Supplement-Übernahme nicht weiter angezeigt
+            # werden — der Draft braucht danach zwingend eine frische
+            # Validierung, statt stale BLACK_GAP-Meldungen vorzutäuschen.
             "warnings": warnings,
             "blockers": blockers,
-            "status": status,
+            "status": CUT_PLAN_STATUS_NEEDS_REVIEW,
         }
     )
 

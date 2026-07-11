@@ -21,6 +21,8 @@ from otio_app.analysis_models import (
 )
 from otio_app.defaults import (
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_USED,
+    CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER,
+    CUT_PLAN_ERROR_MISSING_ALIGNMENT,
     CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED,
 )
 from otio_app.models import Project, ProjectMode
@@ -48,11 +50,15 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     accept_cut_plan_supplement_candidate,
     apply_accepted_supplement_to_cut_plan_item,
     build_supplement_requests_from_cut_plan,
+    count_unapplied_accepted_supplement_requests,
     download_cut_plan_supplement_candidate,
+    effective_cut_plan_supplement_request_status,
     find_reusable_supplement_manifest_entry,
     load_cut_plan_supplement_candidates_for_request,
     load_cut_plan_supplement_manifest,
     load_cut_plan_supplement_requests,
+    merge_prior_supplement_request_state,
+    reapply_accepted_supplements_to_cut_plan,
     record_supplement_manifest_entry,
     record_supplement_manifest_validation,
     save_cut_plan_supplement_manifest,
@@ -1438,15 +1444,16 @@ def test_supplement_required_blocker_removed_for_resolved_item() -> None:
 def test_other_blockers_remain_after_accept() -> None:
     request = _supplement_request()
     asset = _accepted_asset(asset_type="image")
-    item = _minimal_item(blockers=[CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED, "SHOT_TOO_SHORT"])
+    item = _minimal_item(
+        blockers=[CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED, CUT_PLAN_ERROR_MISSING_ALIGNMENT]
+    )
     cut_plan = CutPlanDocument(project_id="p1", items=[item])
     project = MagicMock()
     project.id = "p1"
 
     updated = apply_accepted_supplement_to_cut_plan_item(project, cut_plan, request, asset)
-    assert "SHOT_TOO_SHORT" in updated.items[0].blockers
+    assert CUT_PLAN_ERROR_MISSING_ALIGNMENT in updated.items[0].blockers
     assert CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED not in updated.items[0].blockers
-    # Dokument-Status muss NEEDS_REVIEW bleiben, solange andere Blocker existieren.
     assert updated.status == "NEEDS_REVIEW"
 
 
@@ -2301,3 +2308,178 @@ def test_with_voiceover_workflow_unaffected() -> None:
     assert hasattr(edit_plan_builder, "build_edit_plan")
     assert hasattr(edit_plan_builder, "save_edit_plan")
     assert hasattr(otio_exporter, "build_otio_timeline")
+
+
+# --- Supplement-Wiederverwendung + stale Validation-Blocker (Juli 2026) ---
+
+
+def test_apply_accept_clears_stale_black_gap_blocker_from_item(tmp_path: Path) -> None:
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    request = document.requests[0]
+    item = next(i for i in draft.items if i.cut_item_id == request.cut_item_id)
+    stale_item = item.model_copy(
+        update={"blockers": [CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED, CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER]}
+    )
+    stale_draft = draft.model_copy(
+        update={
+            "items": [stale_item if i.cut_item_id == item.cut_item_id else i for i in draft.items],
+            "blockers": [],
+        }
+    )
+    asset = CutPlanSupplementAsset(
+        asset_id="supplement_test_image",
+        request_id=request.request_id,
+        candidate_id="cand_1",
+        provider="pexels",
+        asset_path=str(tmp_path / "fake.jpg"),
+        asset_type="image",
+        duration_sec=0.0,
+    )
+    (tmp_path / "fake.jpg").write_bytes(b"img")
+
+    updated = apply_accepted_supplement_to_cut_plan_item(project, stale_draft, request, asset)
+    updated_item = next(i for i in updated.items if i.cut_item_id == request.cut_item_id)
+    assert updated_item.planned_visual_segments
+    assert CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER not in updated_item.blockers
+    assert CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED not in updated_item.blockers
+    assert not any(error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER for error in updated.blockers)
+
+
+def test_merge_prior_supplement_request_state_preserves_acceptance(tmp_path: Path) -> None:
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    fresh = build_supplement_requests_from_cut_plan(project, draft)
+    asset_path = tmp_path / "accepted.jpg"
+    asset_path.write_bytes(b"img")
+    prior = fresh.model_copy(
+        update={
+            "requests": [
+                fresh.requests[0].model_copy(
+                    update={
+                        "status": "ACCEPTED",
+                        "accepted_candidate_id": "cand_old",
+                        "accepted_asset_id": "supplement_pexels_old",
+                        "accepted_asset_path": str(asset_path),
+                        "llm_queries": ["Grand Canyon sunset"],
+                        "llm_query_status": "PASS",
+                    }
+                )
+            ]
+        }
+    )
+    merged = merge_prior_supplement_request_state(fresh, prior)
+    assert merged.requests[0].accepted_asset_id == "supplement_pexels_old"
+    assert merged.requests[0].accepted_asset_path == str(asset_path)
+    assert merged.requests[0].llm_queries == ["Grand Canyon sunset"]
+
+
+def test_merge_prior_supplement_request_state_normalizes_stale_status_to_accepted(tmp_path: Path) -> None:
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    fresh = build_supplement_requests_from_cut_plan(project, draft)
+    asset_path = tmp_path / "accepted.jpg"
+    asset_path.write_bytes(b"img")
+    prior = fresh.model_copy(
+        update={
+            "requests": [
+                fresh.requests[0].model_copy(
+                    update={
+                        "status": "CANDIDATES_FOUND",
+                        "accepted_asset_id": "supplement_pexels_old",
+                        "accepted_asset_path": str(asset_path),
+                    }
+                )
+            ]
+        }
+    )
+    merged = merge_prior_supplement_request_state(fresh, prior)
+    assert merged.requests[0].status == "ACCEPTED"
+
+
+def test_effective_supplement_request_status_uses_accepted_asset_id(tmp_path: Path) -> None:
+    request = _supplement_request(
+        status="CANDIDATES_FOUND",
+        accepted_asset_id="supplement_pexels_1",
+        accepted_asset_path="/fake/asset.mp4",
+    )
+    assert effective_cut_plan_supplement_request_status(request) == "ACCEPTED"
+
+
+def test_reapply_accepted_supplements_to_cut_plan_applies_segments(tmp_path: Path) -> None:
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    asset_path = tmp_path / "accepted.jpg"
+    asset_path.write_bytes(b"img")
+    document = document.model_copy(
+        update={
+            "requests": [
+                document.requests[0].model_copy(
+                    update={
+                        "accepted_asset_id": "supplement_pexels_reapply",
+                        "accepted_asset_path": str(asset_path),
+                        "accepted_candidate_id": "cand_reapply",
+                        "status": "ACCEPTED",
+                    }
+                )
+            ]
+        }
+    )
+    save_cut_plan_supplement_requests(project, document)
+    assert count_unapplied_accepted_supplement_requests(draft, document) == 1
+
+    updated, applied, skipped = reapply_accepted_supplements_to_cut_plan(project)
+    assert applied == [document.requests[0].cut_item_id]
+    assert skipped == []
+    item = next(i for i in updated.items if i.cut_item_id == document.requests[0].cut_item_id)
+    assert item.planned_visual_segments
+    assert item.asset_selection_status == CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_USED
+    assert count_unapplied_accepted_supplement_requests(updated, document) == 0
+
+
+def test_apply_accept_extends_segment_to_visual_window_when_enabled(tmp_path: Path) -> None:
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    item_a, item_b = draft.items[0], draft.items[1] if len(draft.items) > 1 else None
+    if item_b is None:
+        item_b = CutPlanItem(
+            cut_item_id="cut_002_sentence_002",
+            source_scope="folder",
+            folder_name=FOLDER_A,
+            text="Zweiter Satz.",
+            timeline_start_sec=item_a.timeline_end_sec + 2.0,
+            timeline_end_sec=item_a.timeline_end_sec + 7.0,
+            duration_sec=5.0,
+            audio_start_sec=item_a.timeline_end_sec + 2.0,
+            audio_end_sec=item_a.timeline_end_sec + 7.0,
+        )
+        draft = draft.model_copy(update={"items": [item_a, item_b]})
+    draft = draft.model_copy(
+        update={
+            "settings_snapshot": {
+                **draft.settings_snapshot,
+                "extend_visual_window_to_next_sentence": True,
+                "max_sentence_pause_extension_sec": 3.0,
+            }
+        }
+    )
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    request = document.requests[0]
+    asset = CutPlanSupplementAsset(
+        asset_id="supplement_test_image",
+        request_id=request.request_id,
+        candidate_id="cand_1",
+        provider="pexels",
+        asset_path=str(tmp_path / "fake.jpg"),
+        asset_type="image",
+        duration_sec=0.0,
+    )
+    (tmp_path / "fake.jpg").write_bytes(b"img")
+
+    updated = apply_accepted_supplement_to_cut_plan_item(project, draft, request, asset)
+    updated_item = next(i for i in updated.items if i.cut_item_id == request.cut_item_id)
+    segment = updated_item.planned_visual_segments[0]
+    assert segment.timeline_out_sec == pytest.approx(item_b.timeline_start_sec)
+    assert segment.timeline_out_sec > updated_item.timeline_end_sec + 0.5

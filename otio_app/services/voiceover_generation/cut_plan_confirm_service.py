@@ -16,9 +16,6 @@ from otio_app.defaults import (
     CUT_PLAN_ASSET_SELECTION_UNRESOLVED,
     CUT_PLAN_STATUS_CONFIRMED,
     CUT_PLAN_STATUS_VALIDATED,
-    CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_CANDIDATES_FOUND,
-    CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_FAILED,
-    CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_OPEN,
     CUT_PLAN_VALIDATION_STATUS_BLOCKED,
 )
 from otio_app.models import Project
@@ -30,7 +27,10 @@ from otio_app.services.voiceover_generation.cut_plan_builder import (
 )
 from otio_app.services.voiceover_generation.cut_plan_models import CutPlanDocument, CutPlanValidationReport
 from otio_app.services.voiceover_generation.cut_plan_settings_service import load_cut_plan_settings
-from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import load_cut_plan_supplement_requests
+from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
+    is_open_cut_plan_supplement_request,
+    load_cut_plan_supplement_requests,
+)
 from otio_app.services.voiceover_generation.cut_plan_trace_service import build_cut_plan_trace, save_cut_plan_trace
 from otio_app.services.voiceover_generation.cut_plan_validator import (
     content_hash_of_cut_plan_content,
@@ -46,13 +46,6 @@ __all__ = [
     "unconfirm_cut_plan",
     "is_confirmed_cut_plan_stale",
 ]
-
-_UNRESOLVED_SUPPLEMENT_REQUEST_STATUSES = (
-    CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_OPEN,
-    CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_CANDIDATES_FOUND,
-    CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_FAILED,
-)
-
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -120,7 +113,7 @@ def can_confirm_cut_plan(
             {
                 request.request_id
                 for request in requests_document.requests
-                if request.status in _UNRESOLVED_SUPPLEMENT_REQUEST_STATUSES
+                if is_open_cut_plan_supplement_request(request)
                 and request.cut_item_id in current_item_ids
             }
         )

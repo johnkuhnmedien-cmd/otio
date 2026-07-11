@@ -35,6 +35,7 @@ from otio_app.defaults import (
     CUT_PLAN_ERROR_SUPPLEMENT_REASON_MISSING,
     CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED,
     CUT_PLAN_ERROR_TIMELINE_OVERLAP,
+    CUT_PLAN_ASSET_SELECTION_BLOCKED,
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED,
     CUT_PLAN_ASSET_SELECTION_UNRESOLVED,
     CUT_PLAN_DURATION_STRATEGY_SPLIT,
@@ -799,6 +800,29 @@ def _items_overlapping_gap(
     return matches
 
 
+def _black_gap_root_cause(item: CutPlanItem) -> str:
+    """Nutzervorgabe (Juli 2026, "wieso wird keine klare Ursache genannt?"):
+    BLACK_GAP_DURING_VOICEOVER meldet bisher nur DASS ein Zeitraum
+    unbedeckt ist, nicht WARUM — die eigentliche Ursache kann je Item ganz
+    unterschiedlich sein (fehlendes Asset, Supplement offen, blockierte
+    Auswahl, zu kurzes Video, Reuse-Verletzung, oder schlicht: die
+    Asset-Auswahl wurde noch nicht/erneut angewendet). Baut aus dem
+    aktuellen Zustand des verantwortlichen Items eine für Menschen lesbare
+    Ursachen-Zeile, die direkt an die Blocker-Meldung angehängt wird —
+    reine Beschreibung, keine Seiteneffekte, keine neue Klassifikation."""
+    if item.asset_selection_status == CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED:
+        detail = item.supplement_reason.strip() or item.asset_selection_reason.strip() or "kein Grund angegeben"
+        return f"Ursache: Supplement erforderlich ({detail})."
+    if item.asset_selection_status == CUT_PLAN_ASSET_SELECTION_BLOCKED:
+        detail = item.asset_selection_reason.strip() or "kein Grund angegeben"
+        return f"Ursache: Asset-Auswahl blockiert ({detail})."
+    if item.asset_selection_status == CUT_PLAN_ASSET_SELECTION_UNRESOLVED:
+        return "Ursache: Asset-Auswahl wurde für dieses Item noch nicht angewendet."
+    if not item.planned_visual_segments:
+        return "Ursache: kein VisualSegment vorhanden (Asset-Auswahl erneut anwenden)."
+    return "Ursache: vorhandene VisualSegments decken diesen Zeitraum nicht vollständig ab."
+
+
 def validate_no_black_gap_during_voiceover(
     project: Project, cut_plan: CutPlanDocument
 ) -> tuple[list[CutPlanValidationError], list[CutPlanValidationError]]:
@@ -840,7 +864,7 @@ def validate_no_black_gap_during_voiceover(
                             cut_item_id=item.cut_item_id,
                             folder_name=item.folder_name,
                             message=f"{item.cut_item_id}: visuelles Loch ({sub_start:.2f}s–{sub_end:.2f}s) — "
-                            "kein VisualSegment platziert.",
+                            f"kein VisualSegment platziert. {_black_gap_root_cause(item)}",
                             fix_hint="Supplement-Asset beschaffen oder Asset-Auswahl erneut anwenden.",
                             is_retryable_override=True,
                             gap_start_sec=sub_start,

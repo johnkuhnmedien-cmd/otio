@@ -36,6 +36,8 @@ from otio_app.defaults import (
     CUT_PLAN_AUTO_RESOLVE_PROVIDER_LOCAL_REUSE,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
     CUT_PLAN_VALIDATION_REPAIR_STATUS_ACCEPTED,
+    CUT_PLAN_RESIDUAL_GAP_REPAIR_MODE_PATCH_GAP_ONLY,
+    CUT_PLAN_RESIDUAL_GAP_REPAIR_MODE_REPLACE_ITEM_VISUAL,
     CUT_PLAN_VALIDATION_REPAIR_STATUS_NO_MATCH,
     CUT_PLAN_VALIDATION_REPAIR_STATUS_UNSAFE_TO_REPAIR,
     CUT_PLAN_VALIDATION_REPAIR_TYPE_ASSET_REUSE_DISTANCE,
@@ -156,20 +158,69 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_ser
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     accept_cut_plan_supplement_candidate,
     build_supplement_requests_from_cut_plan,
+    count_unapplied_accepted_supplement_requests,
+    effective_cut_plan_supplement_request_status,
+    is_open_cut_plan_supplement_request,
     load_cut_plan_supplement_candidates_for_request,
     load_cut_plan_supplement_requests,
+    merge_prior_supplement_request_state,
+    reapply_accepted_supplements_to_cut_plan,
     save_cut_plan_supplement_requests,
     search_candidates_for_cut_plan_request,
     unaccept_cut_plan_supplement_request,
 )
+from otio_app.services.voiceover_generation.cut_plan_residual_gap_apply import (
+    reapply_accepted_residual_gap_assets,
+)
+from otio_app.services.voiceover_generation.cut_plan_residual_gap_auto_resolve_service import (
+    AUTO_RESOLVE_STATUS_ACCEPTED as RESIDUAL_GAP_AUTO_RESOLVE_STATUS_ACCEPTED,
+    AUTO_RESOLVE_STATUS_NO_MATCH as RESIDUAL_GAP_AUTO_RESOLVE_STATUS_NO_MATCH,
+    auto_resolve_all_residual_gap_requests,
+)
+from otio_app.services.voiceover_generation.cut_plan_residual_gap_requests import (
+    build_residual_gap_requests_from_cut_plan,
+    count_unapplied_accepted_residual_gap_requests,
+    load_residual_gap_requests,
+    merge_prior_residual_gap_request_state,
+    save_residual_gap_requests,
+)
 from otio_app.services.voiceover_generation.cut_plan_validation_repair import (
     build_validation_repair_requests_from_cut_plan,
+    count_black_gap_blockers_on_draft,
+    count_black_gap_items_without_gap_bounds,
     load_cut_plan_validation_repair_requests,
     save_cut_plan_validation_repair_requests,
+)
+from otio_app.services.voiceover_generation.cut_plan_visual_gap_analysis import (
+    GAP_KIND_FULL_ITEM_MISSING,
+    GAP_KIND_MINI_REPAIRABLE_GAP,
+    GAP_KIND_RESIDUAL_ITEM_GAP,
+    GAP_KIND_UNATTRIBUTED_GAP,
+    analyze_visual_gaps,
 )
 from otio_app.services.voiceover_generation.cut_plan_validation_repair_resolve_service import (
     auto_resolve_all_validation_repair_requests,
     auto_resolve_validation_repair_request,
+)
+from otio_app.services.voiceover_generation.cut_plan_workflow_state import (
+    CUT_PLAN_WORKFLOW_ACTION_APPLY_ASSET_SELECTION,
+    CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_RESIDUAL_GAPS,
+    CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_SUPPLEMENTS,
+    CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_VALIDATION_REPAIR,
+    CUT_PLAN_WORKFLOW_ACTION_BUILD_DRAFT,
+    CUT_PLAN_WORKFLOW_ACTION_BUILD_RESIDUAL_GAP_REQUESTS,
+    CUT_PLAN_WORKFLOW_ACTION_BUILD_SUPPLEMENT_REQUESTS,
+    CUT_PLAN_WORKFLOW_ACTION_BUILD_VALIDATION_REPAIR_REQUESTS,
+    CUT_PLAN_WORKFLOW_ACTION_REAPPLY_RESIDUAL_GAP_ASSETS,
+    CUT_PLAN_WORKFLOW_ACTION_REAPPLY_SUPPLEMENT_ASSETS,
+    CUT_PLAN_WORKFLOW_ACTION_VALIDATE,
+    CUT_PLAN_WORKFLOW_STATUS_BLOCKED,
+    CUT_PLAN_WORKFLOW_STATUS_DONE,
+    CUT_PLAN_WORKFLOW_STATUS_NOT_NEEDED,
+    CUT_PLAN_WORKFLOW_STATUS_NOT_STARTED,
+    CUT_PLAN_WORKFLOW_STATUS_READY,
+    CUT_PLAN_WORKFLOW_STATUS_STALE,
+    compute_cut_plan_workflow_state,
 )
 from otio_app.services.voiceover_generation.cut_plan_edit_plan_bridge import (
     build_bridge_audio_plan_from_confirmed_cut_plan,
@@ -263,6 +314,45 @@ from otio_app.ui.voiceover_generation._shared import (
 )
 
 import streamlit as st
+
+# Nutzervorgabe (Juli 2026): ALLE neuen Buttons, die im Rahmen des
+# "Visual Window bis zum nächsten Satz"-Feature-Sets entstehen (Phase 1-8,
+# u. a. der spätere manuelle "Als Fortsetzung desselben Clips erlauben"-
+# Button), sollen sich optisch klar von den bestehenden Buttons abheben.
+# Konvention: jeder neue Button dieses Feature-Sets bekommt einen `key`,
+# der mit diesem Präfix beginnt — die untenstehende CSS-Regel färbt genau
+# diese Buttons grün (über Streamlits `st-key-<key>`-CSS-Klasse, siehe
+# https://docs.streamlit.io -> "Style specific elements via key"). Bewusst
+# NICHT global auf alle Buttons angewendet, damit bestehende `type="primary"`-
+# Buttons (Theme-Farbe) unverändert bleiben.
+NEW_FEATURE_BUTTON_KEY_PREFIX = "cut_plan_vwindow_"
+
+
+def _inject_new_feature_button_css() -> None:
+    """Färbt alle Buttons mit `key.startswith(NEW_FEATURE_BUTTON_KEY_PREFIX)`
+    grün — einmal pro Seitenaufruf aufrufen (idempotent, reines CSS)."""
+    st.markdown(
+        f"""
+        <style>
+        [class*="st-key-{NEW_FEATURE_BUTTON_KEY_PREFIX}"] button {{
+            background-color: #1e7e34 !important;
+            color: #ffffff !important;
+            border-color: #1c7430 !important;
+        }}
+        [class*="st-key-{NEW_FEATURE_BUTTON_KEY_PREFIX}"] button:hover {{
+            background-color: #218838 !important;
+            border-color: #1c7430 !important;
+            color: #ffffff !important;
+        }}
+        [class*="st-key-{NEW_FEATURE_BUTTON_KEY_PREFIX}"] button:disabled {{
+            background-color: #a3c9ad !important;
+            border-color: #a3c9ad !important;
+            color: #f0f0f0 !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _render_source_plan_status(project: Project) -> None:
@@ -359,6 +449,28 @@ def _render_settings_editor(project: Project) -> CutPlanSettings:
             "natürliche Sprechpausen automatisch, können aber Standbilder länger "
             "halten.",
         )
+        extend_visual_window_to_next_sentence = st.checkbox(
+            "Visuelles Fenster bis zum nächsten Satz ausdehnen",
+            value=settings.extend_visual_window_to_next_sentence,
+            key=f"cut_plan_extend_visual_window_{project.id}",
+            help="Phase 1/Vorbereitung: berechnet pro Satz ein erweitertes visuelles "
+            "Fenster bis zum Start des NÄCHSTEN Satzes (statt exakt am eigenen "
+            "Satzende zu enden) — deckt die Sprechpause dazwischen mit ab, "
+            "eliminiert dadurch viele BLACK_GAP_DURING_VOICEOVER-Fälle bereits bei "
+            "der Asset-Auswahl. Wirkt sich aktuell NUR auf die reine Berechnung "
+            "aus; die Split-/Asset-Auswahl-Logik selbst nutzt dieses Fenster erst "
+            "ab der nächsten Ausbaustufe.",
+        )
+        max_sentence_pause_extension_sec = st.number_input(
+            "Max. Satzpausen-Ausdehnung (s)",
+            min_value=0.0, max_value=15.0, value=settings.max_sentence_pause_extension_sec, step=0.5,
+            key=f"cut_plan_max_sentence_pause_extension_{project.id}",
+            disabled=not extend_visual_window_to_next_sentence,
+            help="Obergrenze, wie viel von der Pause vor dem nächsten Satz in das "
+            "visuelle Fenster des aktuellen Satzes hineingezogen wird. Längere "
+            "Pausen (z. B. Kapitelwechsel) werden NICHT komplett überbrückt und "
+            "bleiben als BLACK_GAP_DURING_VOICEOVER sichtbar.",
+        )
     with col3:
         timeline_fps = st.number_input(
             "Timeline FPS", min_value=1, max_value=120, value=settings.timeline_fps, step=1,
@@ -384,6 +496,8 @@ def _render_settings_editor(project: Project) -> CutPlanSettings:
             "max_asset_usage": int(max_asset_usage),
             "min_asset_reuse_distance_shots": int(min_asset_reuse_distance_shots),
             "black_gap_auto_hold_max_sec": float(black_gap_auto_hold_max_sec),
+            "extend_visual_window_to_next_sentence": bool(extend_visual_window_to_next_sentence),
+            "max_sentence_pause_extension_sec": float(max_sentence_pause_extension_sec),
             "timeline_fps": int(timeline_fps),
             "timeline_width": int(timeline_width),
             "timeline_height": int(timeline_height),
@@ -714,7 +828,9 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
             "Supplement Requests aus Cut Plan erzeugen",
             key=f"cut_plan_supplement_build_requests_{project.id}",
         ):
+            prior_document = load_cut_plan_supplement_requests(project)
             new_document = build_supplement_requests_from_cut_plan(project, draft)
+            new_document = merge_prior_supplement_request_state(new_document, prior_document)
             save_cut_plan_supplement_requests(project, new_document)
             st.success(f"{len(new_document.requests)} Supplement Request(s) erzeugt.")
             st.rerun()
@@ -729,10 +845,32 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
         "Supplement Requests neu erzeugen",
         key=f"cut_plan_supplement_rebuild_requests_{project.id}",
     ):
+        prior_document = requests_document
         new_document = build_supplement_requests_from_cut_plan(project, draft)
+        new_document = merge_prior_supplement_request_state(new_document, prior_document)
         save_cut_plan_supplement_requests(project, new_document)
         st.success(f"{len(new_document.requests)} Supplement Request(s) erzeugt.")
         st.rerun()
+
+    unapplied_accepted_count = count_unapplied_accepted_supplement_requests(draft, requests_document)
+    if unapplied_accepted_count:
+        st.warning(
+            f"{unapplied_accepted_count} Request(s) haben bereits ein akzeptiertes Asset, das im aktuellen "
+            "Cut Plan Draft aber noch nicht übernommen ist (z. B. nach Draft-Neu-Erzeugung)."
+        )
+        if st.button(
+            "✅ Akzeptierte Supplement-Assets auf Cut Plan anwenden (ohne erneute Suche)",
+            key=f"cut_plan_supplement_reapply_accepted_{project.id}",
+            help="Übernimmt alle bereits akzeptierten Supplement-Dateien erneut in den Draft — "
+            "spart externe Suchen/Lizenzierungen in Testläufen.",
+        ):
+            with st.spinner("Akzeptierte Supplement-Assets werden übernommen…"):
+                _, applied, skipped = reapply_accepted_supplements_to_cut_plan(project)
+            st.success(f"{len(applied)} Item(s) übernommen.")
+            if skipped:
+                st.warning(f"{len(skipped)} Item(s) übersprungen (Datei fehlt oder Asset zu kurz).")
+            st.info("Bitte Cut Plan erneut validieren.")
+            st.rerun()
 
     if not requests_document.requests:
         st.info("Keine Supplement Requests — kein Item benötigt aktuell ein Supplement-Asset.")
@@ -748,7 +886,7 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
             "visual_intent": request.visual_intent or "—",
             "needed_duration_sec": request.needed_duration_sec,
             "reason": request.reason,
-            "status": request.status,
+            "status": effective_cut_plan_supplement_request_status(request),
         }
         for request in requests_document.requests
     ]
@@ -761,7 +899,10 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
     provider_labels = {SUPPLEMENT_SOURCE_ADOBE: "Adobe Stock", SUPPLEMENT_SOURCE_PEXELS: "Pexels"}
 
     for request in requests_document.requests:
-        with st.expander(f"{request.request_id} — {request.status}", expanded=False):
+        with st.expander(
+            f"{request.request_id} — {effective_cut_plan_supplement_request_status(request)}",
+            expanded=False,
+        ):
             st.write(f"**Cut Item:** {request.cut_item_id} ({request.source_scope}, {request.folder_name or '—'})")
             st.write(f"**Text:** {request.text}")
             st.write(f"**Visual Intent:** {request.visual_intent or '—'}")
@@ -1246,7 +1387,7 @@ def _render_bulk_auto_resolve_action(
     + Download + Gemini-Prüfung + ggf. generischer Ordner-Fallback pro
     Request), mit Fortschrittsanzeige. Läuft — wie alle anderen 'Alle X'-
     Sammel-Aktionen dieser Pipeline — blockierend ohne Abbrechen-Button."""
-    open_requests = [entry for entry in requests_document.requests if not entry.accepted_asset_id]
+    open_requests = [entry for entry in requests_document.requests if is_open_cut_plan_supplement_request(entry)]
 
     st.subheader("Alle offenen Supplement Requests")
     st.caption(
@@ -1302,6 +1443,126 @@ def _render_bulk_auto_resolve_action(
         st.rerun()
 
 
+def _render_residual_gap_requests(project: Project, draft: CutPlanDocument) -> None:
+    """Residual Gap Requests (Nutzervorgabe, Juli 2026): dritter,
+    eigenständiger Reparaturpfad für Items, die bereits ein Asset haben
+    (PRIMARY_USED/BACKUP_USED/SUPPLEMENT_USED/…), deren visuelle Abdeckung
+    aber nicht bis zum erwarteten Fenster-Ende reicht UND deren Lücke zu
+    groß für eine sichere Nachbar-Kürzung (Validation Repair) ist. Bewusst
+    GETRENNT sowohl von Supplement Requests (Item hat noch KEIN Asset) als
+    auch von Validation Repair (kleine, per Nachbar-Kürzung reparierbare
+    Lücke) — siehe cut_plan_visual_gap_analysis.py.
+
+    Zeigt die erkannten Rest-Lücken inkl. berechneter Gap-Zeiten an,
+    erzeugt/aktualisiert die persistierten Requests ohne bereits
+    akzeptierte Assets zu verlieren (siehe
+    merge_prior_residual_gap_request_state) und bietet Suche
+    (Adobe/Pexels + lokale Wiederverwendung) sowie Übernahme
+    (mit/ohne erneute Suche) an."""
+    st.subheader("Residual Gap Repair")
+    st.caption(
+        "Dritter Reparatur-Schritt für Items, die bereits ein Asset haben, dessen visuelle Abdeckung "
+        "aber nicht bis zum erwarteten Fenster-Ende reicht (Visual Window, Video zu kurz, …) — anders als bei "
+        "Supplement (Item hat noch KEIN Asset) oder Validation Repair (kleine, per Nachbar-Kürzung "
+        "reparierbare Lücke). Gap-Zeiten werden direkt aus dem Draft berechnet, nicht aus Fehlermeldungen "
+        "geparst."
+    )
+
+    requests_document = load_residual_gap_requests(project)
+    current_hash = content_hash_of_model(draft)
+
+    if requests_document is None:
+        if st.button("Residual Gap Requests erzeugen", key=f"cut_plan_residual_gap_build_{project.id}"):
+            new_document = build_residual_gap_requests_from_cut_plan(project, draft)
+            save_residual_gap_requests(project, new_document)
+            st.success(f"{len(new_document.requests)} Residual Gap Request(s) erzeugt.")
+            st.rerun()
+        return
+
+    if requests_document.source_cut_plan_hash != current_hash:
+        st.warning(
+            "Die Residual Gap Requests wurden aus einer älteren Version des Cut Plans erzeugt. "
+            "Bitte bei Bedarf neu erzeugen."
+        )
+    if st.button("Residual Gap Requests neu erzeugen", key=f"cut_plan_residual_gap_rebuild_{project.id}"):
+        prior_document = requests_document
+        new_document = build_residual_gap_requests_from_cut_plan(project, draft)
+        new_document = merge_prior_residual_gap_request_state(new_document, prior_document)
+        save_residual_gap_requests(project, new_document)
+        st.success(f"{len(new_document.requests)} Residual Gap Request(s) erzeugt.")
+        st.rerun()
+
+    if not requests_document.requests:
+        st.info("Keine Residual Gap Requests — keine Rest-Lücken bei bereits versorgten Items gefunden.")
+        return
+
+    unapplied_count = count_unapplied_accepted_residual_gap_requests(draft, requests_document)
+    if unapplied_count:
+        st.warning(
+            f"{unapplied_count} Request(s) haben bereits ein akzeptiertes Asset, das im aktuellen Cut Plan "
+            "Draft aber noch nicht übernommen ist."
+        )
+        if st.button(
+            "✅ Akzeptierte Residual-Gap-Assets auf Cut Plan anwenden (ohne erneute Suche)",
+            key=f"cut_plan_residual_gap_reapply_{project.id}",
+            help="Übernimmt alle bereits akzeptierten Residual-Gap-Dateien erneut in den Draft — "
+            "spart externe Suchen/Lizenzierungen in Testläufen.",
+        ):
+            with st.spinner("Akzeptierte Residual-Gap-Assets werden übernommen…"):
+                try:
+                    _, applied, skipped = reapply_accepted_residual_gap_assets(project)
+                    st.success(f"{len(applied)} Item(s) übernommen.")
+                    if skipped:
+                        st.warning(f"{len(skipped)} Item(s) übersprungen (Datei fehlt oder Asset zu kurz).")
+                    st.info("Bitte Cut Plan erneut validieren.")
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+
+    repair_mode_labels = {
+        CUT_PLAN_RESIDUAL_GAP_REPAIR_MODE_PATCH_GAP_ONLY: "Patch (Pause/Überhang)",
+        CUT_PLAN_RESIDUAL_GAP_REPAIR_MODE_REPLACE_ITEM_VISUAL: "Ersatz (Satzmitte)",
+    }
+    rows = [
+        {
+            "request_id": request.request_id,
+            "cut_item_id": request.cut_item_id,
+            "folder_name": request.folder_name or "—",
+            "gap": f"{request.gap_start_sec:.2f}s–{request.gap_end_sec:.2f}s",
+            "needed_duration_sec": request.needed_duration_sec,
+            "existing_asset_status": request.existing_asset_status,
+            "repair_mode": repair_mode_labels.get(request.repair_mode, request.repair_mode),
+            "status": request.status,
+            "warnings": ", ".join(request.warnings) or "—",
+        }
+        for request in requests_document.requests
+    ]
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.caption(
+        "Bereits akzeptierte Assets bleiben beim Neu-Erzeugen erhalten (siehe Warnungen-Spalte, falls "
+        "eine zwischengespeicherte Datei fehlt oder zu kurz geworden ist)."
+    )
+
+    open_requests = [request for request in requests_document.requests if not request.accepted_asset_id]
+    if st.button(
+        "🤖 Alle offenen Residual Gap Requests automatisch suchen",
+        key=f"cut_plan_residual_gap_auto_resolve_all_{project.id}",
+        disabled=not open_requests,
+        help="Prüft pro Request zuerst bereits heruntergeladene Supplement-Assets im selben Ordner, dann "
+        "Adobe Stock/Pexels (Foto vor Video bei reinen Pausen-Patches, Video vor Foto bei Satzmitte-Ersatz).",
+    ):
+        with st.spinner("Residual Gap Requests werden bearbeitet…"):
+            results = auto_resolve_all_residual_gap_requests(project)
+        accepted_count = sum(1 for result in results if result.status == RESIDUAL_GAP_AUTO_RESOLVE_STATUS_ACCEPTED)
+        no_match_count = sum(1 for result in results if result.status == RESIDUAL_GAP_AUTO_RESOLVE_STATUS_NO_MATCH)
+        st.success(
+            f"{len(results)} Request(s) bearbeitet: {accepted_count} automatisch akzeptiert, "
+            f"{no_match_count} ohne Treffer (manuelle Prüfung nötig)."
+        )
+        st.info("Bitte Cut Plan erneut validieren.")
+        st.rerun()
+
+
 def _render_validation_repair(project: Project, draft: CutPlanDocument) -> None:
     """Validation Repair (Nutzervorgabe, Juli 2026): eigenständiger, dem
     regulären Supplement-Bereich NACHGESCHALTETER Reparatur-Schritt für
@@ -1327,6 +1588,20 @@ def _render_validation_repair(project: Project, draft: CutPlanDocument) -> None:
     requests_document = load_cut_plan_validation_repair_requests(project)
     current_hash = content_hash_of_model(draft)
 
+    def _warn_about_skipped_stale_black_gaps() -> None:
+        """Bugfix (Nutzervorgabe Juli 2026, "gap 0.00s-0.00s"): weist
+        explizit darauf hin, wenn für manche BLACK_GAP-Blocker bewusst KEIN
+        Request gebaut wurde, weil keine verwertbare Gap-Zeit vorlag —
+        sonst sähe es so aus, als seien diese Black Gaps einfach
+        verschwunden, statt dass eine Neu-Validierung nötig ist."""
+        skipped = count_black_gap_items_without_gap_bounds(draft)
+        if skipped:
+            st.warning(
+                f"{skipped} Item(s) mit einer schwarzen Lücke ohne genaue Zeitangabe übersprungen "
+                "(vermutlich ein veralteter Blocker aus einem früheren Validierungslauf). Bitte "
+                "„Cut Plan validieren“ erneut ausführen und diese Requests danach neu erzeugen."
+            )
+
     if requests_document is None:
         if st.button(
             "Validation Repair Requests aus Cut Plan erzeugen",
@@ -1335,6 +1610,7 @@ def _render_validation_repair(project: Project, draft: CutPlanDocument) -> None:
             new_document = build_validation_repair_requests_from_cut_plan(project, draft)
             save_cut_plan_validation_repair_requests(project, new_document)
             st.success(f"{len(new_document.requests)} Validation Repair Request(s) erzeugt.")
+            _warn_about_skipped_stale_black_gaps()
             st.rerun()
         return
 
@@ -1350,10 +1626,38 @@ def _render_validation_repair(project: Project, draft: CutPlanDocument) -> None:
         new_document = build_validation_repair_requests_from_cut_plan(project, draft)
         save_cut_plan_validation_repair_requests(project, new_document)
         st.success(f"{len(new_document.requests)} Validation Repair Request(s) erzeugt.")
+        _warn_about_skipped_stale_black_gaps()
         st.rerun()
 
     if not requests_document.requests:
         st.info("Keine Validation Repair Requests — keine reparierbaren Rest-Blocker im aktuellen Draft gefunden.")
+        total_black_gaps = count_black_gap_blockers_on_draft(draft)
+        if total_black_gaps:
+            settings = CutPlanSettings(project_id=project.id, **draft.settings_snapshot)
+            gaps = analyze_visual_gaps(draft, settings)
+            unattributed = sum(1 for gap in gaps if gap.gap_kind == GAP_KIND_UNATTRIBUTED_GAP)
+            full_item_missing = sum(1 for gap in gaps if gap.gap_kind == GAP_KIND_FULL_ITEM_MISSING)
+            residual = sum(1 for gap in gaps if gap.gap_kind == GAP_KIND_RESIDUAL_ITEM_GAP)
+            mini_repairable = sum(1 for gap in gaps if gap.gap_kind == GAP_KIND_MINI_REPAIRABLE_GAP)
+            st.warning(
+                f"Trotzdem {total_black_gaps} BLACK_GAP-Blocker im Draft sichtbar. Direkt aus dem Draft "
+                f"berechnete Aufschlüsselung: {unattributed} ohne Satz-Zuordnung (manuelle Prüfung nötig), "
+                f"{full_item_missing} Item(s) ohne jedes Asset (→ Supplement Requests), "
+                f"{residual} Rest-Lücke(n) bei bereits versorgten Items (→ Residual Gap Requests), "
+                f"{mini_repairable} klein genug für Validation Repair (nach erneutem Erzeugen sichtbar). "
+                "Bitte nach jeder Übernahme/Reparatur zuerst „Cut Plan validieren“, dann diese Requests "
+                "neu erzeugen."
+            )
+            if residual:
+                st.caption(
+                    f"➡️ Empfehlung: {residual} Rest-Lücke(n) gehören zu „Residual Gap Repair“ oben — "
+                    "dort „Residual Gap Requests erzeugen“ klicken."
+                )
+            if full_item_missing:
+                st.caption(
+                    f"➡️ Empfehlung: {full_item_missing} Item(s) ohne Asset gehören zu „Supplement Requests“ "
+                    "weiter oben."
+                )
         return
 
     type_labels = {
@@ -2775,8 +3079,148 @@ def _render_otio_export_readiness(project: Project) -> None:
     )
 
 
+_WORKFLOW_STATUS_ICONS: dict[str, str] = {
+    CUT_PLAN_WORKFLOW_STATUS_DONE: "✅",
+    CUT_PLAN_WORKFLOW_STATUS_READY: "🟡",
+    CUT_PLAN_WORKFLOW_STATUS_STALE: "🟡",
+    CUT_PLAN_WORKFLOW_STATUS_NOT_STARTED: "⚪",
+    CUT_PLAN_WORKFLOW_STATUS_NOT_NEEDED: "⚫",
+    CUT_PLAN_WORKFLOW_STATUS_BLOCKED: "🔴",
+}
+
+def _run_cut_plan_workflow_action(project: Project, action_key: str) -> str:
+    """Führt GENAU EINE Workflow-Aktion aus (dispatcht über den
+    maschinenlesbaren `next_action_key`, siehe cut_plan_workflow_state.py)
+    und gibt eine kurze Erfolgsmeldung zurück. Wirft ValueError/RuntimeError
+    unverändert weiter — der Aufrufer zeigt sie als st.error an.
+
+    Bewusst dieselben Funktionen wie die Detail-Buttons weiter unten im
+    Tab — keine Logik-Duplikation, nur ein zentraler Dispatch-Punkt."""
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_BUILD_DRAFT:
+        new_draft = build_cut_plan_draft(project)
+        save_cut_plan_draft(project, new_draft)
+        return "Cut Plan Draft erstellt."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_APPLY_ASSET_SELECTION:
+        apply_asset_selection_to_draft(project)
+        return "Asset-Auswahl angewendet."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_VALIDATE:
+        validate_cut_plan_draft(project)
+        return "Validierung abgeschlossen."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_BUILD_SUPPLEMENT_REQUESTS:
+        draft = load_cut_plan_draft(project)
+        if draft is None:
+            raise ValueError("Kein Cut Plan Draft vorhanden.")
+        prior_document = load_cut_plan_supplement_requests(project)
+        new_document = build_supplement_requests_from_cut_plan(project, draft)
+        new_document = merge_prior_supplement_request_state(new_document, prior_document)
+        save_cut_plan_supplement_requests(project, new_document)
+        return f"{len(new_document.requests)} Supplement Request(s) erzeugt."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_REAPPLY_SUPPLEMENT_ASSETS:
+        _, applied, skipped = reapply_accepted_supplements_to_cut_plan(project)
+        return f"{len(applied)} Item(s) übernommen, {len(skipped)} übersprungen."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_SUPPLEMENTS:
+        model_settings = load_model_settings(project)
+        results = auto_resolve_all_cut_plan_supplement_requests(
+            project,
+            query_llm_provider=model_settings.cut_plan_supplement_query.provider,
+            query_llm_model=model_settings.cut_plan_supplement_query.model,
+        )
+        accepted = sum(1 for result in results if result.status == AUTO_RESOLVE_STATUS_ACCEPTED)
+        return f"{len(results)} Request(s) bearbeitet, {accepted} automatisch akzeptiert."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_BUILD_RESIDUAL_GAP_REQUESTS:
+        draft = load_cut_plan_draft(project)
+        if draft is None:
+            raise ValueError("Kein Cut Plan Draft vorhanden.")
+        prior_document = load_residual_gap_requests(project)
+        new_document = build_residual_gap_requests_from_cut_plan(project, draft)
+        new_document = merge_prior_residual_gap_request_state(new_document, prior_document)
+        save_residual_gap_requests(project, new_document)
+        return f"{len(new_document.requests)} Residual Gap Request(s) erzeugt."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_REAPPLY_RESIDUAL_GAP_ASSETS:
+        _, applied, skipped = reapply_accepted_residual_gap_assets(project)
+        return f"{len(applied)} Item(s) übernommen, {len(skipped)} übersprungen."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_RESIDUAL_GAPS:
+        results = auto_resolve_all_residual_gap_requests(project)
+        accepted = sum(1 for result in results if result.status == RESIDUAL_GAP_AUTO_RESOLVE_STATUS_ACCEPTED)
+        return f"{len(results)} Request(s) bearbeitet, {accepted} automatisch akzeptiert."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_BUILD_VALIDATION_REPAIR_REQUESTS:
+        draft = load_cut_plan_draft(project)
+        if draft is None:
+            raise ValueError("Kein Cut Plan Draft vorhanden.")
+        new_document = build_validation_repair_requests_from_cut_plan(project, draft)
+        save_cut_plan_validation_repair_requests(project, new_document)
+        return f"{len(new_document.requests)} Validation Repair Request(s) erzeugt."
+
+    if action_key == CUT_PLAN_WORKFLOW_ACTION_AUTO_RESOLVE_VALIDATION_REPAIR:
+        results = auto_resolve_all_validation_repair_requests(project)
+        accepted = sum(1 for result in results if result.status == CUT_PLAN_VALIDATION_REPAIR_STATUS_ACCEPTED)
+        return f"{len(results)} Request(s) bearbeitet, {accepted} automatisch repariert."
+
+    raise ValueError(f"Unbekannte Workflow-Aktion: '{action_key}'.")
+
+
+def _render_cut_plan_workflow_dashboard(project: Project) -> None:
+    """Nutzervorgabe (Juli 2026): konsolidierte Checklist + EIN empfohlener
+    nächster Schritt oben im Cut-Plan-Tab, damit der Nutzer nicht mehr
+    selbst herausfinden muss, welcher der vielen Detail-Buttons weiter
+    unten als nächstes relevant ist. Der primäre Button ruft für JEDEN
+    Schritt dieselbe Funktion auf wie der jeweilige Detail-Bereich weiter
+    unten (siehe _run_cut_plan_workflow_action) — keine Logik-Duplikation,
+    die Detail-Bereiche bleiben für Feineinstellungen (Provider-Auswahl,
+    einzelne Requests) vollständig erhalten."""
+    st.subheader("📋 Cut-Plan Workflow")
+    state = compute_cut_plan_workflow_state(project)
+
+    for step in state.steps:
+        icon = _WORKFLOW_STATUS_ICONS.get(step.status, "⚪")
+        line = f"{icon} **{step.label}**"
+        if step.summary:
+            line += f" — {step.summary}"
+        st.markdown(line)
+
+    if state.all_done:
+        st.success("✅ Cut Plan vollständig durchlaufen — aktuelle Validierung zeigt 0 Blocker.")
+        return
+    if state.has_unresolvable_blockers:
+        st.error(
+            f"🔴 {state.unresolvable_blocker_count} Blocker verbleiben, die durch keinen der obigen "
+            "Automatik-Schritte abgedeckt sind. Bitte die Blocker-Tabelle weiter unten prüfen."
+        )
+        return
+    if not state.next_step_id:
+        return
+
+    st.info(f"➡️ **Nächster empfohlener Schritt:** {state.next_action_label}\n\n{state.next_reason}")
+    if not state.next_action_key:
+        st.caption("Diesen Schritt weiter unten im entsprechenden Abschnitt ausführen.")
+        return
+
+    if st.button(
+        state.next_action_label,
+        key=f"cut_plan_workflow_next_action_{project.id}_{state.next_step_id}",
+        type="primary",
+    ):
+        try:
+            with st.spinner(f"{state.next_action_label}…"):
+                message = _run_cut_plan_workflow_action(project, state.next_action_key)
+            st.success(message)
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+
 def render_cut_plan_page() -> None:
     st.header("⑧ Cut Plan")
+    _inject_new_feature_button_css()
 
     project = render_project_selector("Projekt")
     if project is None:
@@ -2792,6 +3236,9 @@ def render_cut_plan_page() -> None:
         "übersetzt ihn nur in eine technische Struktur, ohne redaktionell "
         "neu zu planen."
     )
+
+    _render_cut_plan_workflow_dashboard(project)
+    st.divider()
 
     _render_source_plan_status(project)
     st.divider()
@@ -2904,6 +3351,8 @@ def render_cut_plan_page() -> None:
     if existing_draft is not None:
         st.divider()
         _render_supplement_requests(project, existing_draft)
+        st.divider()
+        _render_residual_gap_requests(project, existing_draft)
         st.divider()
         _render_validation_repair(project, existing_draft)
         st.divider()

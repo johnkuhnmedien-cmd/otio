@@ -53,6 +53,8 @@ from otio_app.services.voiceover_generation.llm_trace_service import content_has
 __all__ = [
     "REPAIRABLE_VALIDATION_ERROR_TYPES",
     "find_repairable_validation_blockers",
+    "count_black_gap_blockers_on_draft",
+    "count_black_gap_items_without_gap_bounds",
     "build_validation_repair_requests_from_cut_plan",
     "save_cut_plan_validation_repair_requests",
     "load_cut_plan_validation_repair_requests",
@@ -100,6 +102,37 @@ def find_repairable_validation_blockers(cut_plan: CutPlanDocument) -> list[CutPl
     ]
 
 
+def count_black_gap_items_without_gap_bounds(cut_plan: CutPlanDocument) -> int:
+    """Bugfix (Nutzervorgabe Juli 2026, "gap 0.00s-0.00s"): Anzahl der
+    Cut-Plan-Items mit einem BLACK_GAP_DURING_VOICEOVER-Blocker, für den
+    KEINE einzige verwertbare Gap-Zeit (gap_end_sec > gap_start_sec)
+    vorliegt — typischerweise, weil dieser Blocker aus einem VERALTETEN
+    Validierungslauf stammt (z. B. per `aggregate_item_level_errors` aus
+    `item.blockers` neu zusammengesetzt, ohne die präzisen Zeiten aus
+    `validate_no_black_gap_during_voiceover`). Für genau diese Items baut
+    `build_validation_repair_requests_from_cut_plan` bewusst KEINEN Request
+    (siehe dort) — die UI nutzt diese Zählung, um stattdessen auf eine
+    nötige Neu-Validierung hinzuweisen, statt einfach 0 Requests ohne
+    Erklärung anzuzeigen."""
+    black_gap_errors = [
+        error for error in find_repairable_validation_blockers(cut_plan)
+        if error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER
+    ]
+    by_item: dict[str, list[CutPlanValidationError]] = {}
+    for error in black_gap_errors:
+        by_item.setdefault(error.cut_item_id, []).append(error)
+    return sum(
+        1
+        for errors_for_item in by_item.values()
+        if not any(error.gap_end_sec > error.gap_start_sec for error in errors_for_item)
+    )
+
+
+def count_black_gap_blockers_on_draft(cut_plan: CutPlanDocument) -> int:
+    """Anzahl der BLACK_GAP_DURING_VOICEOVER-Blocker auf Dokument-Ebene."""
+    return sum(1 for error in cut_plan.blockers if error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER)
+
+
 def build_validation_repair_requests_from_cut_plan(
     project: Project, cut_plan: CutPlanDocument
 ) -> CutPlanValidationRepairRequestsDocument:
@@ -145,9 +178,20 @@ def build_validation_repair_requests_from_cut_plan(
                 for error in errors_for_key
                 if error.gap_end_sec > error.gap_start_sec
             ]
-            if gap_bounds:
-                gap_start_sec = min(bounds[0] for bounds in gap_bounds)
-                gap_end_sec = max(bounds[1] for bounds in gap_bounds)
+            if not gap_bounds:
+                # Bugfix (Nutzervorgabe Juli 2026, "gap 0.00s-0.00s"): ohne
+                # eine einzige verwertbare Gap-Zeit (z. B. weil die
+                # zugrunde liegenden Blocker aus einem VERALTETEN
+                # Validierungslauf stammen und keine gap_start_sec/
+                # gap_end_sec tragen, siehe cut_plan_asset_selector Bugfix)
+                # gäbe es NICHTS Sinnvolles zu reparieren — ein Request mit
+                # 0.00s-0.00s würde nur eine leere/falsche Reparatur
+                # vortäuschen. Für dieses Item lieber GAR KEINEN Request
+                # bauen, statt einen nutzlosen zu erzeugen; die UI weist in
+                # diesem Fall auf eine nötige Neu-Validierung hin.
+                continue
+            gap_start_sec = min(bounds[0] for bounds in gap_bounds)
+            gap_end_sec = max(bounds[1] for bounds in gap_bounds)
 
         needed_duration_sec = (
             max(0.0, gap_end_sec - gap_start_sec)
