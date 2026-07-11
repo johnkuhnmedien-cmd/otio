@@ -176,6 +176,15 @@ from otio_app.services.voiceover_generation.cut_plan_validation_repair_resolve_s
     auto_resolve_all_validation_repair_requests,
     auto_resolve_validation_repair_request,
 )
+from otio_app.services.voiceover_generation.cut_plan_workflow_state import (
+    CUT_PLAN_WORKFLOW_STATUS_BLOCKED,
+    CUT_PLAN_WORKFLOW_STATUS_DONE,
+    CUT_PLAN_WORKFLOW_STATUS_NOT_NEEDED,
+    CUT_PLAN_WORKFLOW_STATUS_NOT_STARTED,
+    CUT_PLAN_WORKFLOW_STATUS_READY,
+    CUT_PLAN_WORKFLOW_STATUS_STALE,
+    compute_cut_plan_workflow_state,
+)
 from otio_app.services.voiceover_generation.cut_plan_edit_plan_bridge import (
     build_bridge_audio_plan_from_confirmed_cut_plan,
     build_edit_plan_draft_from_confirmed_cut_plan,
@@ -2897,6 +2906,83 @@ def _render_otio_export_readiness(project: Project) -> None:
     )
 
 
+_WORKFLOW_STATUS_ICONS: dict[str, str] = {
+    CUT_PLAN_WORKFLOW_STATUS_DONE: "✅",
+    CUT_PLAN_WORKFLOW_STATUS_READY: "🟡",
+    CUT_PLAN_WORKFLOW_STATUS_STALE: "🟡",
+    CUT_PLAN_WORKFLOW_STATUS_NOT_STARTED: "⚪",
+    CUT_PLAN_WORKFLOW_STATUS_NOT_NEEDED: "⚫",
+    CUT_PLAN_WORKFLOW_STATUS_BLOCKED: "🔴",
+}
+
+# Nutzervorgabe (Juli 2026, "die Buttons sind all over the place"): nur für
+# diese drei Schritte löst der primäre Dashboard-Button direkt die Aktion
+# aus — sie sind vollständig selbstständig (keine zusätzlichen Provider-/
+# LLM-Auswahlfelder nötig, die weiter unten im Tab gesammelt werden). Für
+# alle anderen Schritte (Supplement, Validation Repair) verweist das
+# Dashboard nur auf den passenden Abschnitt weiter unten — die
+# vollständige Verdrahtung ALLER Schritte folgt in einer späteren Phase.
+_WORKFLOW_DIRECT_ACTION_STEP_IDS = frozenset({"draft", "asset_selection", "validate"})
+
+
+def _render_cut_plan_workflow_dashboard(project: Project) -> None:
+    """Nutzervorgabe (Juli 2026): konsolidierte Checklist + EIN empfohlener
+    nächster Schritt oben im Cut-Plan-Tab, damit der Nutzer nicht mehr
+    selbst herausfinden muss, welcher der vielen Detail-Buttons weiter
+    unten als nächstes relevant ist. Reine Anzeige + (für die drei
+    selbstständigen Basis-Schritte) ein direkt funktionsfähiger Button —
+    alle anderen Buttons bleiben unverändert weiter unten im Tab."""
+    st.subheader("📋 Cut-Plan Workflow")
+    state = compute_cut_plan_workflow_state(project)
+
+    for step in state.steps:
+        icon = _WORKFLOW_STATUS_ICONS.get(step.status, "⚪")
+        line = f"{icon} **{step.label}**"
+        if step.summary:
+            line += f" — {step.summary}"
+        st.markdown(line)
+
+    if state.all_done:
+        st.success("✅ Cut Plan vollständig durchlaufen — aktuelle Validierung zeigt 0 Blocker.")
+        return
+    if state.has_unresolvable_blockers:
+        st.error(
+            f"🔴 {state.unresolvable_blocker_count} Blocker verbleiben, die durch keinen der obigen "
+            "Automatik-Schritte abgedeckt sind. Bitte die Blocker-Tabelle weiter unten prüfen."
+        )
+        return
+    if not state.next_step_id:
+        return
+
+    st.info(f"➡️ **Nächster empfohlener Schritt:** {state.next_action_label}\n\n{state.next_reason}")
+    if state.next_step_id not in _WORKFLOW_DIRECT_ACTION_STEP_IDS:
+        st.caption("Diesen Schritt weiter unten im entsprechenden Abschnitt ausführen.")
+        return
+
+    if st.button(
+        state.next_action_label,
+        key=f"cut_plan_workflow_next_action_{project.id}_{state.next_step_id}",
+        type="primary",
+    ):
+        try:
+            if state.next_step_id == "draft":
+                with st.spinner("Cut Plan Draft wird erstellt…"):
+                    new_draft = build_cut_plan_draft(project)
+                    save_cut_plan_draft(project, new_draft)
+                st.success("Cut Plan Draft erstellt.")
+            elif state.next_step_id == "asset_selection":
+                with st.spinner("Asset-Auswahl wird angewendet…"):
+                    apply_asset_selection_to_draft(project)
+                st.success("Asset-Auswahl angewendet.")
+            elif state.next_step_id == "validate":
+                with st.spinner("Cut Plan wird validiert…"):
+                    validate_cut_plan_draft(project)
+                st.success("Validierung abgeschlossen.")
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+
 def render_cut_plan_page() -> None:
     st.header("⑧ Cut Plan")
     _inject_new_feature_button_css()
@@ -2915,6 +3001,9 @@ def render_cut_plan_page() -> None:
         "übersetzt ihn nur in eine technische Struktur, ohne redaktionell "
         "neu zu planen."
     )
+
+    _render_cut_plan_workflow_dashboard(project)
+    st.divider()
 
     _render_source_plan_status(project)
     st.divider()
