@@ -78,6 +78,8 @@ __all__ = [
     "choose_asset_for_cut_item",
     "build_visual_segments_for_item",
     "determine_duration_strategy",
+    "compute_visual_window_end_sec",
+    "compute_visual_window_duration_sec",
     "merge_mini_shots_with_next_item",
     "update_asset_usage_summary",
     "settings_from_snapshot",
@@ -227,6 +229,80 @@ def resolve_asset_candidate(
             if candidate.folder_name == preferred_folder_name:
                 return candidate
     return sorted(candidates, key=lambda candidate: candidate.folder_name)[0]
+
+
+def _same_visual_group(item: CutPlanItem, other_item: CutPlanItem) -> bool:
+    """True, wenn `other_item` visuell an `item` anschließen darf — dieselbe
+    Gruppierung wie beim Mini-Shot-Merge (`_can_merge_with_previous`/
+    `_can_merge_with_next`): niemals über die Intro->Folder-Grenze und
+    niemals über eine Folder-Grenze hinweg. Für das Visual-Window (§Phase 1)
+    bewusst genauso streng, damit ein Satz nie in die Pause VOR einem
+    thematisch neuen Ordner/Intro-Beat hineinwächst."""
+    if other_item.source_scope != item.source_scope:
+        return False
+    if item.source_scope == AUDIO_SCOPE_FOLDER and other_item.folder_name != item.folder_name:
+        return False
+    return True
+
+
+def compute_visual_window_end_sec(
+    item: CutPlanItem, next_item: CutPlanItem | None, settings: CutPlanSettings
+) -> float:
+    """Nutzervorgabe (Juli 2026): Assets sollen generell bis zum Start des
+    NÄCHSTEN Satzes weiterlaufen, statt exakt am eigenen Satzende
+    (`item.timeline_end_sec`) zu enden — das deckt die natürliche
+    Sprechpause zwischen zwei Sätzen visuell ab, statt sie als
+    BLACK_GAP_DURING_VOICEOVER offen zu lassen.
+
+    Reine, seiteneffektfreie Berechnung — ändert NICHTS an `item` oder
+    `next_item`. Phase 1: nur die Berechnung; die Verdrahtung in
+    `choose_asset_for_cut_item`/die Split-Segment-Dauer folgt erst in
+    Phase 2.
+
+    Gibt `item.timeline_end_sec` unverändert zurück (kein Fenster-Ausbau),
+    wenn:
+    - `settings.extend_visual_window_to_next_sentence` deaktiviert ist,
+    - es kein nächstes Item gibt,
+    - `next_item` in einer anderen Gruppe liegt (Intro<->Folder- oder
+      Folder<->Folder-Grenze, siehe `_same_visual_group`),
+    - `next_item` blockiert ist (z. B. MISSING_ALIGNMENT) und seine
+      `timeline_start_sec` deshalb nicht verlässlich ist,
+    - zwischen beiden Items keine positive Pause besteht (Overlap oder
+      exakt anschließend — nichts zu füllen).
+
+    Andernfalls wird die Pause bis maximal
+    `settings.max_sentence_pause_extension_sec` ins Fenster von `item`
+    hineingezogen — eine längere, redaktionell bedeutsame Pause (z. B.
+    Kapitelwechsel) wird NICHT blind komplett überbrückt und bleibt für
+    `validate_no_black_gap_during_voiceover`/die Validation-Repair-Pipeline
+    sichtbar."""
+    default_end = item.timeline_end_sec
+    if not settings.extend_visual_window_to_next_sentence:
+        return default_end
+    if next_item is None:
+        return default_end
+    if not _same_visual_group(item, next_item):
+        return default_end
+    if next_item.blockers:
+        return default_end
+
+    pause_duration = next_item.timeline_start_sec - item.timeline_end_sec
+    if pause_duration <= _DURATION_EPSILON:
+        return default_end
+
+    capped_pause = min(pause_duration, settings.max_sentence_pause_extension_sec)
+    return item.timeline_end_sec + capped_pause
+
+
+def compute_visual_window_duration_sec(
+    item: CutPlanItem, next_item: CutPlanItem | None, settings: CutPlanSettings
+) -> float:
+    """`compute_visual_window_end_sec(...) - item.timeline_start_sec` — die
+    Dauer, gegen die die Split-/Asset-Auswahl in Phase 2 planen soll,
+    statt gegen `item.duration_sec` (das bleibt unverändert der reine
+    Audio-Satz, siehe CutPlanItem-Docstring)."""
+    window_end = compute_visual_window_end_sec(item, next_item, settings)
+    return max(0.0, window_end - item.timeline_start_sec)
 
 
 def determine_duration_strategy(item: CutPlanItem, settings: CutPlanSettings) -> str:

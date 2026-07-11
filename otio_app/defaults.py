@@ -861,6 +861,23 @@ CUT_PLAN_DEFAULT_SHOT_MAX_SEC = 8.0
 # durch einfaches Halten des vorherigen Bildes/Videos geschlossen werden
 # können, ohne den Cut-Plan-Code selbst zu ändern.
 CUT_PLAN_DEFAULT_BLACK_GAP_AUTO_HOLD_MAX_SEC = 1.0
+
+# Nutzervorgabe (Juli 2026): Assets sollen generell bis zum Start des
+# NÄCHSTEN Satzes weiterlaufen, statt exakt am eigenen Satzende zu enden —
+# eliminiert einen großen Teil der BLACK_GAP_DURING_VOICEOVER-Fälle bereits
+# beim Bau der VisualSegments (siehe cut_plan_asset_selector.
+# compute_visual_window_end_sec), statt sie nachträglich per Repair-Pipeline
+# zu schließen. Deaktiviert per Default (bewusst additiv/opt-in, siehe
+# Phase-1-Kommentar in cut_plan_asset_selector.py) — Phase 2 verdrahtet
+# dies erst in choose_asset_for_cut_item/die Split-Logik.
+CUT_PLAN_DEFAULT_EXTEND_VISUAL_WINDOW_TO_NEXT_SENTENCE = False
+# Obergrenze, wie viel von einer Satzpause in das visuelle Fenster des
+# VORHERIGEN Satzes hineingezogen werden darf — verhindert, dass eine sehr
+# lange, redaktionell bedeutsame Pause (z. B. Kapitelwechsel) blind
+# mitgestreckt wird; solche Fälle bleiben weiterhin als
+# BLACK_GAP_DURING_VOICEOVER sichtbar bzw. laufen durch die bestehende
+# Validation-Repair-Pipeline.
+CUT_PLAN_DEFAULT_MAX_SENTENCE_PAUSE_EXTENSION_SEC = 3.0
 CUT_PLAN_DEFAULT_MAX_ASSET_USAGE = 2
 CUT_PLAN_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS = 0
 CUT_PLAN_DEFAULT_TIMELINE_FPS = 25

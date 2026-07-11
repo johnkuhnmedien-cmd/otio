@@ -264,6 +264,45 @@ from otio_app.ui.voiceover_generation._shared import (
 
 import streamlit as st
 
+# Nutzervorgabe (Juli 2026): ALLE neuen Buttons, die im Rahmen des
+# "Visual Window bis zum nächsten Satz"-Feature-Sets entstehen (Phase 1-8,
+# u. a. der spätere manuelle "Als Fortsetzung desselben Clips erlauben"-
+# Button), sollen sich optisch klar von den bestehenden Buttons abheben.
+# Konvention: jeder neue Button dieses Feature-Sets bekommt einen `key`,
+# der mit diesem Präfix beginnt — die untenstehende CSS-Regel färbt genau
+# diese Buttons grün (über Streamlits `st-key-<key>`-CSS-Klasse, siehe
+# https://docs.streamlit.io -> "Style specific elements via key"). Bewusst
+# NICHT global auf alle Buttons angewendet, damit bestehende `type="primary"`-
+# Buttons (Theme-Farbe) unverändert bleiben.
+NEW_FEATURE_BUTTON_KEY_PREFIX = "cut_plan_vwindow_"
+
+
+def _inject_new_feature_button_css() -> None:
+    """Färbt alle Buttons mit `key.startswith(NEW_FEATURE_BUTTON_KEY_PREFIX)`
+    grün — einmal pro Seitenaufruf aufrufen (idempotent, reines CSS)."""
+    st.markdown(
+        f"""
+        <style>
+        [class*="st-key-{NEW_FEATURE_BUTTON_KEY_PREFIX}"] button {{
+            background-color: #1e7e34 !important;
+            color: #ffffff !important;
+            border-color: #1c7430 !important;
+        }}
+        [class*="st-key-{NEW_FEATURE_BUTTON_KEY_PREFIX}"] button:hover {{
+            background-color: #218838 !important;
+            border-color: #1c7430 !important;
+            color: #ffffff !important;
+        }}
+        [class*="st-key-{NEW_FEATURE_BUTTON_KEY_PREFIX}"] button:disabled {{
+            background-color: #a3c9ad !important;
+            border-color: #a3c9ad !important;
+            color: #f0f0f0 !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 def _render_source_plan_status(project: Project) -> None:
     st.subheader("Voraussetzung: bestätigter Voice-over-Projektplan")
@@ -359,6 +398,28 @@ def _render_settings_editor(project: Project) -> CutPlanSettings:
             "natürliche Sprechpausen automatisch, können aber Standbilder länger "
             "halten.",
         )
+        extend_visual_window_to_next_sentence = st.checkbox(
+            "Visuelles Fenster bis zum nächsten Satz ausdehnen",
+            value=settings.extend_visual_window_to_next_sentence,
+            key=f"cut_plan_extend_visual_window_{project.id}",
+            help="Phase 1/Vorbereitung: berechnet pro Satz ein erweitertes visuelles "
+            "Fenster bis zum Start des NÄCHSTEN Satzes (statt exakt am eigenen "
+            "Satzende zu enden) — deckt die Sprechpause dazwischen mit ab, "
+            "eliminiert dadurch viele BLACK_GAP_DURING_VOICEOVER-Fälle bereits bei "
+            "der Asset-Auswahl. Wirkt sich aktuell NUR auf die reine Berechnung "
+            "aus; die Split-/Asset-Auswahl-Logik selbst nutzt dieses Fenster erst "
+            "ab der nächsten Ausbaustufe.",
+        )
+        max_sentence_pause_extension_sec = st.number_input(
+            "Max. Satzpausen-Ausdehnung (s)",
+            min_value=0.0, max_value=15.0, value=settings.max_sentence_pause_extension_sec, step=0.5,
+            key=f"cut_plan_max_sentence_pause_extension_{project.id}",
+            disabled=not extend_visual_window_to_next_sentence,
+            help="Obergrenze, wie viel von der Pause vor dem nächsten Satz in das "
+            "visuelle Fenster des aktuellen Satzes hineingezogen wird. Längere "
+            "Pausen (z. B. Kapitelwechsel) werden NICHT komplett überbrückt und "
+            "bleiben als BLACK_GAP_DURING_VOICEOVER sichtbar.",
+        )
     with col3:
         timeline_fps = st.number_input(
             "Timeline FPS", min_value=1, max_value=120, value=settings.timeline_fps, step=1,
@@ -384,6 +445,8 @@ def _render_settings_editor(project: Project) -> CutPlanSettings:
             "max_asset_usage": int(max_asset_usage),
             "min_asset_reuse_distance_shots": int(min_asset_reuse_distance_shots),
             "black_gap_auto_hold_max_sec": float(black_gap_auto_hold_max_sec),
+            "extend_visual_window_to_next_sentence": bool(extend_visual_window_to_next_sentence),
+            "max_sentence_pause_extension_sec": float(max_sentence_pause_extension_sec),
             "timeline_fps": int(timeline_fps),
             "timeline_width": int(timeline_width),
             "timeline_height": int(timeline_height),
@@ -2777,6 +2840,7 @@ def _render_otio_export_readiness(project: Project) -> None:
 
 def render_cut_plan_page() -> None:
     st.header("⑧ Cut Plan")
+    _inject_new_feature_button_css()
 
     project = render_project_selector("Projekt")
     if project is None:
