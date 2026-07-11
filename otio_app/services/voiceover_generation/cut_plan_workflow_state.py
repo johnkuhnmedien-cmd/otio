@@ -29,7 +29,6 @@ from pydantic import BaseModel, Field
 
 from otio_app.defaults import (
     CUT_PLAN_ASSET_SELECTION_UNRESOLVED,
-    CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
     CUT_PLAN_VALIDATION_REPAIR_STATUS_ACCEPTED,
 )
 from otio_app.models import Project
@@ -50,6 +49,7 @@ from otio_app.services.voiceover_generation.cut_plan_visual_gap_analysis import 
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     build_supplement_requests_from_cut_plan,
     count_unapplied_accepted_supplement_requests,
+    is_open_cut_plan_supplement_request,
     load_cut_plan_supplement_requests,
 )
 from otio_app.services.voiceover_generation.cut_plan_validation_repair import (
@@ -310,9 +310,7 @@ def _step_supplement_resolve(project: Project, draft: CutPlanDocument | None) ->
             next_action_key=CUT_PLAN_WORKFLOW_ACTION_REAPPLY_SUPPLEMENT_ASSETS,
             reason=f"{unapplied} Request(s) haben bereits ein akzeptiertes Asset, das im Draft noch fehlt.",
         )
-    open_count = sum(
-        1 for request in existing.requests if request.status != CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED
-    )
+    open_count = sum(1 for request in existing.requests if is_open_cut_plan_supplement_request(request))
     if open_count > 0:
         return CutPlanWorkflowStep(
             step_id="supplement_resolve",

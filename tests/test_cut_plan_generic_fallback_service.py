@@ -241,6 +241,7 @@ def test_orchestrator_applies_and_persists_fallback(tmp_path: Path) -> None:
     reloaded_requests = load_cut_plan_supplement_requests(project)
     persisted = next(r for r in reloaded_requests.requests if r.request_id == request.request_id)
     assert persisted.accepted_asset_id == candidate.asset_id
+    assert persisted.status == "ACCEPTED"
 
 
 def test_orchestrator_returns_none_none_when_no_candidate_found(tmp_path: Path) -> None:

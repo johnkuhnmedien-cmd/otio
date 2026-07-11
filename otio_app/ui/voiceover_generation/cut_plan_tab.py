@@ -159,6 +159,8 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     accept_cut_plan_supplement_candidate,
     build_supplement_requests_from_cut_plan,
     count_unapplied_accepted_supplement_requests,
+    effective_cut_plan_supplement_request_status,
+    is_open_cut_plan_supplement_request,
     load_cut_plan_supplement_candidates_for_request,
     load_cut_plan_supplement_requests,
     merge_prior_supplement_request_state,
@@ -884,7 +886,7 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
             "visual_intent": request.visual_intent or "—",
             "needed_duration_sec": request.needed_duration_sec,
             "reason": request.reason,
-            "status": request.status,
+            "status": effective_cut_plan_supplement_request_status(request),
         }
         for request in requests_document.requests
     ]
@@ -897,7 +899,10 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
     provider_labels = {SUPPLEMENT_SOURCE_ADOBE: "Adobe Stock", SUPPLEMENT_SOURCE_PEXELS: "Pexels"}
 
     for request in requests_document.requests:
-        with st.expander(f"{request.request_id} — {request.status}", expanded=False):
+        with st.expander(
+            f"{request.request_id} — {effective_cut_plan_supplement_request_status(request)}",
+            expanded=False,
+        ):
             st.write(f"**Cut Item:** {request.cut_item_id} ({request.source_scope}, {request.folder_name or '—'})")
             st.write(f"**Text:** {request.text}")
             st.write(f"**Visual Intent:** {request.visual_intent or '—'}")
@@ -1382,7 +1387,7 @@ def _render_bulk_auto_resolve_action(
     + Download + Gemini-Prüfung + ggf. generischer Ordner-Fallback pro
     Request), mit Fortschrittsanzeige. Läuft — wie alle anderen 'Alle X'-
     Sammel-Aktionen dieser Pipeline — blockierend ohne Abbrechen-Button."""
-    open_requests = [entry for entry in requests_document.requests if not entry.accepted_asset_id]
+    open_requests = [entry for entry in requests_document.requests if is_open_cut_plan_supplement_request(entry)]
 
     st.subheader("Alle offenen Supplement Requests")
     st.caption(

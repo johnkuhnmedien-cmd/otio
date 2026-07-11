@@ -17,12 +17,16 @@ from otio_app.services.voiceover_generation.cut_plan_builder import (
     save_cut_plan_draft,
     validate_cut_plan_draft,
 )
-from otio_app.services.voiceover_generation.cut_plan_models import CutPlanSettings
+from otio_app.services.voiceover_generation.cut_plan_models import CutPlanSettings, VisualSegment
 from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
+    apply_accepted_supplement_to_cut_plan_item,
     build_supplement_requests_from_cut_plan,
+    effective_cut_plan_supplement_request_status,
+    merge_prior_supplement_request_state,
     save_cut_plan_supplement_requests,
 )
+from otio_app.services.voiceover_generation.cut_plan_supplement_models import CutPlanSupplementAsset
 from otio_app.services.voiceover_generation.cut_plan_workflow_state import (
     CUT_PLAN_WORKFLOW_STATUS_BLOCKED,
     CUT_PLAN_WORKFLOW_STATUS_DONE,
@@ -273,6 +277,41 @@ def test_workflow_recommends_searching_supplement_assets_when_requests_open(tmp_
     state = compute_cut_plan_workflow_state(project)
     assert state.next_step_id == "supplement_resolve"
     assert "suchen" in state.next_action_label.lower()
+
+
+def test_workflow_treats_accepted_asset_id_as_fulfilled_even_if_status_stale(tmp_path: Path) -> None:
+    project = _happy_path_plan_and_project(tmp_path, with_supplement_need=True)
+    validate_cut_plan_draft(project)
+    draft = load_cut_plan_draft(project)
+    document = build_supplement_requests_from_cut_plan(project, draft)
+    asset_path = tmp_path / "already_accepted.jpg"
+    asset_path.write_bytes(b"img")
+    stale_accepted = document.requests[0].model_copy(
+        update={
+            "status": "CANDIDATES_FOUND",
+            "accepted_asset_id": "supplement_pexels_stale_status",
+            "accepted_asset_path": str(asset_path),
+            "accepted_candidate_id": "cand_stale",
+        }
+    )
+    save_cut_plan_supplement_requests(project, document.model_copy(update={"requests": [stale_accepted]}))
+    asset = CutPlanSupplementAsset(
+        asset_id="supplement_pexels_stale_status",
+        request_id=stale_accepted.request_id,
+        candidate_id="cand_stale",
+        provider="pexels",
+        asset_path=str(asset_path),
+        asset_type="image",
+        duration_sec=0.0,
+    )
+    updated_draft = apply_accepted_supplement_to_cut_plan_item(project, draft, stale_accepted, asset)
+    save_cut_plan_draft(project, updated_draft)
+
+    state = compute_cut_plan_workflow_state(project)
+    resolve_step = next(step for step in state.steps if step.step_id == "supplement_resolve")
+    assert resolve_step.status == CUT_PLAN_WORKFLOW_STATUS_DONE
+    assert "ohne Asset" not in resolve_step.summary
+    assert state.next_step_id != "supplement_resolve"
 
 
 # --- final check ---

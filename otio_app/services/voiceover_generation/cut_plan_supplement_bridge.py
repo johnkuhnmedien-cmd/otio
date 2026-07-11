@@ -136,9 +136,30 @@ __all__ = [
     "record_supplement_manifest_entry",
     "record_supplement_manifest_validation",
     "to_cut_plan_candidate",
+    "is_open_cut_plan_supplement_request",
+    "effective_cut_plan_supplement_request_status",
 ]
 
 _DURATION_EPSILON = 0.05
+
+
+def is_open_cut_plan_supplement_request(request: CutPlanSupplementRequest) -> bool:
+    """True, wenn der Request noch kein übernommenes Asset hat.
+
+    Bewusst NICHT ``request.status`` — ältere Fallback-/Merge-Pfade konnten
+    ``accepted_asset_id`` setzen, ohne ``status=ACCEPTED`` zu normalisieren."""
+    return not request.accepted_asset_id
+
+
+def effective_cut_plan_supplement_request_status(request: CutPlanSupplementRequest) -> str:
+    """Einheitlicher Anzeige-/Diagnose-Status für UI und Workflow.
+
+    ``accepted_asset_id`` ist die maßgebliche Wahrheit, ob ein Request
+    bereits versorgt ist — ``request.status`` kann historisch veraltet sein
+    (z. B. ``CANDIDATES_FOUND`` trotz akzeptiertem Asset)."""
+    if request.accepted_asset_id:
+        return CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED
+    return request.status
 
 
 def _safe_path_component(value: str) -> str:
@@ -335,7 +356,7 @@ def merge_prior_supplement_request_state(
         merged_requests.append(
             request.model_copy(
                 update={
-                    "status": prior.status,
+                    "status": CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
                     "accepted_candidate_id": prior.accepted_candidate_id,
                     "accepted_asset_id": prior.accepted_asset_id,
                     "accepted_asset_path": prior.accepted_asset_path,
@@ -725,11 +746,13 @@ def search_candidates_for_cut_plan_request(
     )
     _save_candidates_document(project, document)
 
-    # Ein bereits ACCEPTED-Request darf durch eine erneute Suche nicht still
-    # auf CANDIDATES_FOUND zurückgesetzt werden — das würde die Vorab-
-    # Hardening gegen mehrfaches Akzeptieren aushebeln (die den aktuellen
-    # request.status prüft).
-    if candidates and request.status != CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED:
+    # Ein bereits versorgter oder ACCEPTED-Request darf durch eine erneute
+    # Suche nicht still auf CANDIDATES_FOUND zurückgesetzt werden.
+    if (
+        candidates
+        and not request.accepted_asset_id
+        and request.status != CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED
+    ):
         update_cut_plan_supplement_request(project, request_id, status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_CANDIDATES_FOUND)
     return document
 

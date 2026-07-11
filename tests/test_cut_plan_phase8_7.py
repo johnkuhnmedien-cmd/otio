@@ -53,6 +53,11 @@ from otio_app.services.voiceover_generation.cut_plan_models import (
     CutPlanValidationReport,
 )
 from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import save_cut_plan_supplement_requests
+from otio_app.services.voiceover_generation.cut_plan_supplement_models import (
+    CutPlanSupplementRequest,
+    CutPlanSupplementRequestsDocument,
+)
 from otio_app.services.voiceover_generation.cut_plan_trace_service import build_cut_plan_trace
 from otio_app.services.voiceover_generation.final_plan_service import (
     save_confirmed_voiceover_project_plan,
@@ -286,6 +291,43 @@ def test_can_confirm_when_validated_and_pass(tmp_path: Path) -> None:
     from otio_app.services.voiceover_generation.cut_plan_validator import content_hash_of_cut_plan_content
 
     report = _minimal_report(status=CUT_PLAN_VALIDATION_STATUS_PASS, cut_plan_hash=content_hash_of_cut_plan_content(cut_plan))
+    eligible, reasons = can_confirm_cut_plan(project, cut_plan, report)
+    assert eligible is True
+    assert reasons == []
+
+
+def test_can_confirm_when_supplement_request_has_accepted_asset_despite_stale_status(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    item = _minimal_item()
+    cut_plan = _minimal_cut_plan(
+        project, status=CUT_PLAN_STATUS_VALIDATED, items=[item],
+        settings_snapshot=_matching_settings_snapshot(project),
+    )
+    from otio_app.services.voiceover_generation.cut_plan_validator import content_hash_of_cut_plan_content
+
+    asset_path = tmp_path / "accepted.jpg"
+    asset_path.write_bytes(b"img")
+    save_cut_plan_supplement_requests(
+        project,
+        CutPlanSupplementRequestsDocument(
+            project_id=project.id,
+            source_cut_plan_hash=content_hash_of_cut_plan_content(cut_plan),
+            requests=[
+                CutPlanSupplementRequest(
+                    request_id="cutreq_cut_001",
+                    cut_item_id="cut_001",
+                    folder_name=FOLDER_A,
+                    status="CANDIDATES_FOUND",
+                    accepted_asset_id="supplement_pexels_stale",
+                    accepted_asset_path=str(asset_path),
+                )
+            ],
+        ),
+    )
+    report = _minimal_report(
+        status=CUT_PLAN_VALIDATION_STATUS_PASS,
+        cut_plan_hash=content_hash_of_cut_plan_content(cut_plan),
+    )
     eligible, reasons = can_confirm_cut_plan(project, cut_plan, report)
     assert eligible is True
     assert reasons == []

@@ -26,6 +26,7 @@ from otio_app.defaults import (
     CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED,
     CUT_PLAN_STATUS_DRAFT,
     CUT_PLAN_STATUS_NEEDS_REVIEW,
+    CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
 )
 from otio_app.models import Project
 from otio_app.services.generic_outro_selector import (
@@ -268,9 +269,8 @@ def apply_generic_fallback_for_cut_plan_request(
     ohne force_replace=True mit ValueError abgelehnt, statt still
     überschrieben zu werden.
 
-    Aktualisiert den Request-Status NICHT auf ACCEPTED (das Feld bleibt für
-    Stock-Akzeptanzen reserviert) — stattdessen wird ausschließlich
-    auto_resolve_status auf GENERIC_FALLBACK_USED gesetzt, damit in der UI
+    Aktualisiert den Request-Status auf ACCEPTED und setzt
+    ``auto_resolve_status`` auf GENERIC_FALLBACK_USED, damit in der UI
     klar unterscheidbar bleibt, ob ein Stock-Kandidat oder ein vorhandenes
     Ordner-Asset verwendet wurde."""
     requests_document = load_cut_plan_supplement_requests(project)
@@ -302,6 +302,7 @@ def apply_generic_fallback_for_cut_plan_request(
     update_cut_plan_supplement_request(
         project,
         request_id,
+        status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
         accepted_asset_id=candidate.asset_id,
         accepted_asset_path=candidate.path,
     )
@@ -419,6 +420,7 @@ def apply_manual_asset_for_cut_plan_request(
     update_cut_plan_supplement_request(
         project,
         request_id,
+        status=CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
         accepted_asset_id=asset_id,
         accepted_asset_path=asset_path,
     )

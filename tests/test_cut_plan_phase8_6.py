@@ -52,6 +52,7 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     build_supplement_requests_from_cut_plan,
     count_unapplied_accepted_supplement_requests,
     download_cut_plan_supplement_candidate,
+    effective_cut_plan_supplement_request_status,
     find_reusable_supplement_manifest_entry,
     load_cut_plan_supplement_candidates_for_request,
     load_cut_plan_supplement_manifest,
@@ -2372,6 +2373,38 @@ def test_merge_prior_supplement_request_state_preserves_acceptance(tmp_path: Pat
     assert merged.requests[0].accepted_asset_id == "supplement_pexels_old"
     assert merged.requests[0].accepted_asset_path == str(asset_path)
     assert merged.requests[0].llm_queries == ["Grand Canyon sunset"]
+
+
+def test_merge_prior_supplement_request_state_normalizes_stale_status_to_accepted(tmp_path: Path) -> None:
+    project = _project_with_supplement_required_draft(tmp_path)
+    draft = load_cut_plan_draft(project)
+    fresh = build_supplement_requests_from_cut_plan(project, draft)
+    asset_path = tmp_path / "accepted.jpg"
+    asset_path.write_bytes(b"img")
+    prior = fresh.model_copy(
+        update={
+            "requests": [
+                fresh.requests[0].model_copy(
+                    update={
+                        "status": "CANDIDATES_FOUND",
+                        "accepted_asset_id": "supplement_pexels_old",
+                        "accepted_asset_path": str(asset_path),
+                    }
+                )
+            ]
+        }
+    )
+    merged = merge_prior_supplement_request_state(fresh, prior)
+    assert merged.requests[0].status == "ACCEPTED"
+
+
+def test_effective_supplement_request_status_uses_accepted_asset_id(tmp_path: Path) -> None:
+    request = _supplement_request(
+        status="CANDIDATES_FOUND",
+        accepted_asset_id="supplement_pexels_1",
+        accepted_asset_path="/fake/asset.mp4",
+    )
+    assert effective_cut_plan_supplement_request_status(request) == "ACCEPTED"
 
 
 def test_reapply_accepted_supplements_to_cut_plan_applies_segments(tmp_path: Path) -> None:
