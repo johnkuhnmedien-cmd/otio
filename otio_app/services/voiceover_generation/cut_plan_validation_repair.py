@@ -53,6 +53,7 @@ from otio_app.services.voiceover_generation.llm_trace_service import content_has
 __all__ = [
     "REPAIRABLE_VALIDATION_ERROR_TYPES",
     "find_repairable_validation_blockers",
+    "count_black_gap_blockers_on_draft",
     "count_black_gap_items_without_gap_bounds",
     "build_validation_repair_requests_from_cut_plan",
     "save_cut_plan_validation_repair_requests",
@@ -125,6 +126,11 @@ def count_black_gap_items_without_gap_bounds(cut_plan: CutPlanDocument) -> int:
         for errors_for_item in by_item.values()
         if not any(error.gap_end_sec > error.gap_start_sec for error in errors_for_item)
     )
+
+
+def count_black_gap_blockers_on_draft(cut_plan: CutPlanDocument) -> int:
+    """Anzahl der BLACK_GAP_DURING_VOICEOVER-Blocker auf Dokument-Ebene."""
+    return sum(1 for error in cut_plan.blockers if error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER)
 
 
 def build_validation_repair_requests_from_cut_plan(

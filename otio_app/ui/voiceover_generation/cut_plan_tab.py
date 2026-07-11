@@ -156,14 +156,18 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_ser
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     accept_cut_plan_supplement_candidate,
     build_supplement_requests_from_cut_plan,
+    count_unapplied_accepted_supplement_requests,
     load_cut_plan_supplement_candidates_for_request,
     load_cut_plan_supplement_requests,
+    merge_prior_supplement_request_state,
+    reapply_accepted_supplements_to_cut_plan,
     save_cut_plan_supplement_requests,
     search_candidates_for_cut_plan_request,
     unaccept_cut_plan_supplement_request,
 )
 from otio_app.services.voiceover_generation.cut_plan_validation_repair import (
     build_validation_repair_requests_from_cut_plan,
+    count_black_gap_blockers_on_draft,
     count_black_gap_items_without_gap_bounds,
     load_cut_plan_validation_repair_requests,
     save_cut_plan_validation_repair_requests,
@@ -778,7 +782,9 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
             "Supplement Requests aus Cut Plan erzeugen",
             key=f"cut_plan_supplement_build_requests_{project.id}",
         ):
+            prior_document = load_cut_plan_supplement_requests(project)
             new_document = build_supplement_requests_from_cut_plan(project, draft)
+            new_document = merge_prior_supplement_request_state(new_document, prior_document)
             save_cut_plan_supplement_requests(project, new_document)
             st.success(f"{len(new_document.requests)} Supplement Request(s) erzeugt.")
             st.rerun()
@@ -793,10 +799,32 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
         "Supplement Requests neu erzeugen",
         key=f"cut_plan_supplement_rebuild_requests_{project.id}",
     ):
+        prior_document = requests_document
         new_document = build_supplement_requests_from_cut_plan(project, draft)
+        new_document = merge_prior_supplement_request_state(new_document, prior_document)
         save_cut_plan_supplement_requests(project, new_document)
         st.success(f"{len(new_document.requests)} Supplement Request(s) erzeugt.")
         st.rerun()
+
+    unapplied_accepted_count = count_unapplied_accepted_supplement_requests(draft, requests_document)
+    if unapplied_accepted_count:
+        st.warning(
+            f"{unapplied_accepted_count} Request(s) haben bereits ein akzeptiertes Asset, das im aktuellen "
+            "Cut Plan Draft aber noch nicht übernommen ist (z. B. nach Draft-Neu-Erzeugung)."
+        )
+        if st.button(
+            "✅ Akzeptierte Supplement-Assets auf Cut Plan anwenden (ohne erneute Suche)",
+            key=f"cut_plan_supplement_reapply_accepted_{project.id}",
+            help="Übernimmt alle bereits akzeptierten Supplement-Dateien erneut in den Draft — "
+            "spart externe Suchen/Lizenzierungen in Testläufen.",
+        ):
+            with st.spinner("Akzeptierte Supplement-Assets werden übernommen…"):
+                _, applied, skipped = reapply_accepted_supplements_to_cut_plan(project)
+            st.success(f"{len(applied)} Item(s) übernommen.")
+            if skipped:
+                st.warning(f"{len(skipped)} Item(s) übersprungen (Datei fehlt oder Asset zu kurz).")
+            st.info("Bitte Cut Plan erneut validieren.")
+            st.rerun()
 
     if not requests_document.requests:
         st.info("Keine Supplement Requests — kein Item benötigt aktuell ein Supplement-Asset.")
@@ -1434,6 +1462,20 @@ def _render_validation_repair(project: Project, draft: CutPlanDocument) -> None:
 
     if not requests_document.requests:
         st.info("Keine Validation Repair Requests — keine reparierbaren Rest-Blocker im aktuellen Draft gefunden.")
+        stale_black_gaps = count_black_gap_items_without_gap_bounds(draft)
+        total_black_gaps = count_black_gap_blockers_on_draft(draft)
+        if stale_black_gaps or total_black_gaps:
+            st.warning(
+                f"Trotzdem {total_black_gaps} BLACK_GAP-Blocker im Draft sichtbar"
+                + (
+                    f" — davon {stale_black_gaps} ohne genaue Gap-Zeit (veraltet nach Supplement-"
+                    "Übernahme oder ohne erneute Validierung)."
+                    if stale_black_gaps
+                    else "."
+                )
+                + " Bitte nach Supplement-Übernahme zuerst „Cut Plan validieren“, dann diese Requests "
+                "neu erzeugen."
+            )
         return
 
     type_labels = {

@@ -1046,6 +1046,32 @@ CUT_PLAN_TIMING_BLOCKER_TYPES = frozenset(
     }
 )
 
+# Blocker-Typen, die typischerweise erst bei einem vollständigen
+# Validierungslauf (attach_validation_to_cut_plan) auf item.blockers/
+# cut_plan.blockers landen und nach einer inhaltlichen Korrektur
+# (Supplement-Übernahme, erneute Asset-Auswahl) als VERALTET gelten —
+# im Gegensatz zu CUT_PLAN_TIMING_BLOCKER_TYPES, die echte Struktur-/
+# Alignment-Probleme beschreiben und bestehen bleiben dürfen.
+CUT_PLAN_STALE_VALIDATION_BLOCKER_TYPES = frozenset(
+    {
+        CUT_PLAN_ERROR_INVALID_ASSET_ID,
+        CUT_PLAN_ERROR_MISSING_ASSET_MAPPING,
+        CUT_PLAN_ERROR_ASSET_FILE_MISSING,
+        CUT_PLAN_ERROR_ASSET_TOO_SHORT,
+        CUT_PLAN_ERROR_SHOT_TOO_SHORT,
+        CUT_PLAN_ERROR_SHOT_TOO_LONG,
+        CUT_PLAN_ERROR_MAX_ASSET_USAGE_EXCEEDED,
+        CUT_PLAN_ERROR_ASSET_REUSE_DISTANCE_TOO_SHORT,
+        CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED,
+        CUT_PLAN_ERROR_SUPPLEMENT_REASON_MISSING,
+        CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER,
+        CUT_PLAN_ERROR_TIMELINE_OVERLAP,
+        CUT_PLAN_ERROR_AUDIO_GAP_UNEXPECTED,
+        CUT_PLAN_ERROR_FRAME_ROUNDING_ERROR,
+        CUT_PLAN_ERROR_AMBIGUOUS_ASSET_ID,
+    }
+)
+
 # Phase D (Nutzervorgabe): Cut-Plan-Drafts mit vielen offenen Items können
 # hunderte bis tausende Einzelmeldungen erzeugen (siehe Cut-Plan-Diagnose,
 # Juli 2026) — die UI gruppiert deshalb nach Fehlertyp UND einer groben
