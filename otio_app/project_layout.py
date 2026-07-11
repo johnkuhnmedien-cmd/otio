@@ -432,6 +432,17 @@ def get_cut_plan_validation_repair_requests_path(work_dir: Path) -> Path:
     return get_cut_plan_dir(work_dir) / CUT_PLAN_VALIDATION_REPAIR_REQUESTS_FILENAME
 
 
+def get_cut_plan_residual_gap_requests_path(work_dir: Path) -> Path:
+    """Residual Gap Requests (eigenständig, siehe
+    cut_plan_residual_gap_requests.py) — getrennt von sowohl
+    supplement_requests.from_cut_plan.json (Item hat noch KEIN Asset) als
+    auch validation_repair_requests.json (kleine, per Nachbar-Kürzung
+    reparierbare Lücke)."""
+    from otio_app.defaults import CUT_PLAN_RESIDUAL_GAP_REQUESTS_FILENAME
+
+    return get_cut_plan_dir(work_dir) / CUT_PLAN_RESIDUAL_GAP_REQUESTS_FILENAME
+
+
 # --- EditPlan Bridge (Phase 9.1): isolierte Brücke von cut_plan.confirmed.json
 # zu einem EditPlanDocument-kompatiblen Draft — getrennt von _otio/edit_plan/
 # und _otio/exports/. ---

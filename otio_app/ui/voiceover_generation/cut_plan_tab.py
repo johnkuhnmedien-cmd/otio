@@ -36,6 +36,8 @@ from otio_app.defaults import (
     CUT_PLAN_AUTO_RESOLVE_PROVIDER_LOCAL_REUSE,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
     CUT_PLAN_VALIDATION_REPAIR_STATUS_ACCEPTED,
+    CUT_PLAN_RESIDUAL_GAP_REPAIR_MODE_PATCH_GAP_ONLY,
+    CUT_PLAN_RESIDUAL_GAP_REPAIR_MODE_REPLACE_ITEM_VISUAL,
     CUT_PLAN_VALIDATION_REPAIR_STATUS_NO_MATCH,
     CUT_PLAN_VALIDATION_REPAIR_STATUS_UNSAFE_TO_REPAIR,
     CUT_PLAN_VALIDATION_REPAIR_TYPE_ASSET_REUSE_DISTANCE,
@@ -164,6 +166,12 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     save_cut_plan_supplement_requests,
     search_candidates_for_cut_plan_request,
     unaccept_cut_plan_supplement_request,
+)
+from otio_app.services.voiceover_generation.cut_plan_residual_gap_requests import (
+    build_residual_gap_requests_from_cut_plan,
+    load_residual_gap_requests,
+    merge_prior_residual_gap_request_state,
+    save_residual_gap_requests,
 )
 from otio_app.services.voiceover_generation.cut_plan_validation_repair import (
     build_validation_repair_requests_from_cut_plan,
@@ -1401,6 +1409,84 @@ def _render_bulk_auto_resolve_action(
                 label = request_labels.get(result.request_id, result.request_id)
                 st.warning(f"„{label}“: kein passendes Asset gefunden — bitte manuell prüfen.")
         st.rerun()
+
+
+def _render_residual_gap_requests(project: Project, draft: CutPlanDocument) -> None:
+    """Residual Gap Requests (Nutzervorgabe, Juli 2026): dritter,
+    eigenständiger Reparaturpfad für Items, die bereits ein Asset haben
+    (PRIMARY_USED/BACKUP_USED/SUPPLEMENT_USED/…), deren visuelle Abdeckung
+    aber nicht bis zum erwarteten Fenster-Ende reicht UND deren Lücke zu
+    groß für eine sichere Nachbar-Kürzung (Validation Repair) ist. Bewusst
+    GETRENNT sowohl von Supplement Requests (Item hat noch KEIN Asset) als
+    auch von Validation Repair (kleine, per Nachbar-Kürzung reparierbare
+    Lücke) — siehe cut_plan_visual_gap_analysis.py.
+
+    Phase 3 (Builder + Cache-Merge): Suche/Übernahme folgen in einer
+    späteren Phase — dieser Abschnitt zeigt bereits die erkannten
+    Rest-Lücken inkl. berechneter Gap-Zeiten an und erzeugt/aktualisiert
+    die persistierten Requests, ohne bereits akzeptierte Assets zu
+    verlieren (siehe merge_prior_residual_gap_request_state)."""
+    st.subheader("Residual Gap Repair")
+    st.caption(
+        "Dritter Reparatur-Schritt für Items, die bereits ein Asset haben, dessen visuelle Abdeckung "
+        "aber nicht bis zum erwarteten Fenster-Ende reicht (Visual Window, Video zu kurz, …) — anders als bei "
+        "Supplement (Item hat noch KEIN Asset) oder Validation Repair (kleine, per Nachbar-Kürzung "
+        "reparierbare Lücke). Gap-Zeiten werden direkt aus dem Draft berechnet, nicht aus Fehlermeldungen "
+        "geparst."
+    )
+
+    requests_document = load_residual_gap_requests(project)
+    current_hash = content_hash_of_model(draft)
+
+    if requests_document is None:
+        if st.button("Residual Gap Requests erzeugen", key=f"cut_plan_residual_gap_build_{project.id}"):
+            new_document = build_residual_gap_requests_from_cut_plan(project, draft)
+            save_residual_gap_requests(project, new_document)
+            st.success(f"{len(new_document.requests)} Residual Gap Request(s) erzeugt.")
+            st.rerun()
+        return
+
+    if requests_document.source_cut_plan_hash != current_hash:
+        st.warning(
+            "Die Residual Gap Requests wurden aus einer älteren Version des Cut Plans erzeugt. "
+            "Bitte bei Bedarf neu erzeugen."
+        )
+    if st.button("Residual Gap Requests neu erzeugen", key=f"cut_plan_residual_gap_rebuild_{project.id}"):
+        prior_document = requests_document
+        new_document = build_residual_gap_requests_from_cut_plan(project, draft)
+        new_document = merge_prior_residual_gap_request_state(new_document, prior_document)
+        save_residual_gap_requests(project, new_document)
+        st.success(f"{len(new_document.requests)} Residual Gap Request(s) erzeugt.")
+        st.rerun()
+
+    if not requests_document.requests:
+        st.info("Keine Residual Gap Requests — keine Rest-Lücken bei bereits versorgten Items gefunden.")
+        return
+
+    repair_mode_labels = {
+        CUT_PLAN_RESIDUAL_GAP_REPAIR_MODE_PATCH_GAP_ONLY: "Patch (Pause/Überhang)",
+        CUT_PLAN_RESIDUAL_GAP_REPAIR_MODE_REPLACE_ITEM_VISUAL: "Ersatz (Satzmitte)",
+    }
+    rows = [
+        {
+            "request_id": request.request_id,
+            "cut_item_id": request.cut_item_id,
+            "folder_name": request.folder_name or "—",
+            "gap": f"{request.gap_start_sec:.2f}s–{request.gap_end_sec:.2f}s",
+            "needed_duration_sec": request.needed_duration_sec,
+            "existing_asset_status": request.existing_asset_status,
+            "repair_mode": repair_mode_labels.get(request.repair_mode, request.repair_mode),
+            "status": request.status,
+            "warnings": ", ".join(request.warnings) or "—",
+        }
+        for request in requests_document.requests
+    ]
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.caption(
+        "🚧 Suche/Automatische Reparatur für Residual Gap Requests folgen in einer späteren Phase. "
+        "Bereits akzeptierte Assets bleiben beim Neu-Erzeugen erhalten (siehe Warnungen-Spalte, falls "
+        "eine zwischengespeicherte Datei fehlt oder zu kurz geworden ist)."
+    )
 
 
 def _render_validation_repair(project: Project, draft: CutPlanDocument) -> None:
@@ -3116,6 +3202,8 @@ def render_cut_plan_page() -> None:
     if existing_draft is not None:
         st.divider()
         _render_supplement_requests(project, existing_draft)
+        st.divider()
+        _render_residual_gap_requests(project, existing_draft)
         st.divider()
         _render_validation_repair(project, existing_draft)
         st.divider()

@@ -18,14 +18,10 @@ hat. Das bildet die Realität ab (derselbe Button, immer wieder), statt
 künstlich mehrere "Validierung nach X"-Schritte zu simulieren, die sich nur
 durch ihre Position in der Pipeline unterscheiden würden.
 
-Diese erste Phase deckt AUSSCHLIESSLICH die bereits bestehenden
-Pipeline-Schritte ab (Draft, Asset-Auswahl, Validierung, Supplement,
-Validation Repair, Final Check). Die Residual-Gap-Schritte (siehe
-Nutzerdiskussion "Item hat Asset, aber Abdeckung ist unvollständig")
-werden erst ergänzt, wenn die zugehörige Erkennungs-/Request-Pipeline
-existiert — dieses Modul ist bewusst so aufgebaut (Liste von
-Einzel-Berechnungsfunktionen), dass neue Schritte later ergänzt werden
-können, ohne bestehende Schritte umzubauen."""
+Dieses Modul ist bewusst als Liste von Einzel-Berechnungsfunktionen
+aufgebaut, damit neue Pipeline-Schritte (wie die Residual-Gap-Schritte,
+siehe cut_plan_residual_gap_requests.py) ergänzt werden können, ohne
+bestehende Schritte umzubauen."""
 
 from __future__ import annotations
 
@@ -42,7 +38,15 @@ from otio_app.services.voiceover_generation.cut_plan_builder import (
     is_cut_plan_settings_stale,
     load_cut_plan_draft,
 )
-from otio_app.services.voiceover_generation.cut_plan_models import CutPlanDocument
+from otio_app.services.voiceover_generation.cut_plan_models import CutPlanDocument, CutPlanSettings
+from otio_app.services.voiceover_generation.cut_plan_residual_gap_requests import (
+    count_unapplied_accepted_residual_gap_requests,
+    load_residual_gap_requests,
+)
+from otio_app.services.voiceover_generation.cut_plan_visual_gap_analysis import (
+    GAP_KIND_RESIDUAL_ITEM_GAP,
+    analyze_visual_gaps,
+)
 from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
     build_supplement_requests_from_cut_plan,
     count_unapplied_accepted_supplement_requests,
@@ -287,6 +291,85 @@ def _step_supplement_resolve(project: Project, draft: CutPlanDocument | None) ->
     )
 
 
+def _step_residual_gap_requests(project: Project, draft: CutPlanDocument | None) -> CutPlanWorkflowStep:
+    if draft is None:
+        return CutPlanWorkflowStep(
+            step_id="residual_gap_requests", label="Residual Gap Requests", status=CUT_PLAN_WORKFLOW_STATUS_NOT_STARTED
+        )
+    settings = CutPlanSettings(project_id=project.id, **draft.settings_snapshot)
+    fresh_gaps = analyze_visual_gaps(draft, settings)
+    residual_count = sum(1 for gap in fresh_gaps if gap.gap_kind == GAP_KIND_RESIDUAL_ITEM_GAP)
+    if residual_count == 0:
+        return CutPlanWorkflowStep(
+            step_id="residual_gap_requests",
+            label="Residual Gap Requests",
+            status=CUT_PLAN_WORKFLOW_STATUS_NOT_NEEDED,
+            summary="Keine Rest-Lücken bei bereits versorgten Items gefunden.",
+        )
+    existing = load_residual_gap_requests(project)
+    if existing is None:
+        return CutPlanWorkflowStep(
+            step_id="residual_gap_requests",
+            label="Residual Gap Requests",
+            status=CUT_PLAN_WORKFLOW_STATUS_READY,
+            summary=f"{residual_count} Rest-Lücke(n) bei bereits versorgten Items gefunden.",
+            next_action_label="Residual Gap Requests erzeugen",
+            reason=(
+                f"{residual_count} Item(s) haben bereits ein Asset, aber die visuelle Abdeckung reicht "
+                "nicht bis zum erwarteten Fenster-Ende und die Lücke ist zu groß für eine Mini-Reparatur."
+            ),
+        )
+    if existing.source_cut_plan_hash != content_hash_of_model(draft):
+        return CutPlanWorkflowStep(
+            step_id="residual_gap_requests",
+            label="Residual Gap Requests",
+            status=CUT_PLAN_WORKFLOW_STATUS_STALE,
+            summary="Requests stammen aus einer älteren Draft-Version.",
+            next_action_label="Residual Gap Requests neu erzeugen",
+            reason="Der Draft hat sich seit dem letzten Erzeugen der Residual Gap Requests geändert.",
+        )
+    return CutPlanWorkflowStep(
+        step_id="residual_gap_requests",
+        label="Residual Gap Requests",
+        status=CUT_PLAN_WORKFLOW_STATUS_DONE,
+        summary=f"{len(existing.requests)} Request(s) aktuell.",
+    )
+
+
+def _step_residual_gap_resolve(project: Project, draft: CutPlanDocument | None) -> CutPlanWorkflowStep:
+    existing = load_residual_gap_requests(project) if draft is not None else None
+    if existing is None or not existing.requests:
+        return CutPlanWorkflowStep(
+            step_id="residual_gap_resolve", label="Residual Gap Assets", status=CUT_PLAN_WORKFLOW_STATUS_NOT_NEEDED
+        )
+    unapplied = count_unapplied_accepted_residual_gap_requests(draft, existing) if draft is not None else 0
+    if unapplied > 0:
+        return CutPlanWorkflowStep(
+            step_id="residual_gap_resolve",
+            label="Residual Gap Assets",
+            status=CUT_PLAN_WORKFLOW_STATUS_READY,
+            summary=f"{unapplied} akzeptierte Asset(s) noch nicht im Draft übernommen.",
+            next_action_label="Akzeptierte Residual-Gap-Assets anwenden",
+            reason=f"{unapplied} Request(s) haben bereits ein akzeptiertes Asset, das im Draft noch fehlt.",
+        )
+    open_count = sum(1 for request in existing.requests if not request.accepted_asset_id)
+    if open_count > 0:
+        return CutPlanWorkflowStep(
+            step_id="residual_gap_resolve",
+            label="Residual Gap Assets",
+            status=CUT_PLAN_WORKFLOW_STATUS_READY,
+            summary=f"{open_count} von {len(existing.requests)} Request(s) noch ohne Asset.",
+            next_action_label="Alle offenen Residual Gap Requests automatisch suchen",
+            reason=f"{open_count} Request(s) haben noch kein Asset gefunden/akzeptiert.",
+        )
+    return CutPlanWorkflowStep(
+        step_id="residual_gap_resolve",
+        label="Residual Gap Assets",
+        status=CUT_PLAN_WORKFLOW_STATUS_DONE,
+        summary=f"Alle {len(existing.requests)} Request(s) akzeptiert und angewendet.",
+    )
+
+
 def _step_validation_repair_requests(project: Project, draft: CutPlanDocument | None) -> CutPlanWorkflowStep:
     if draft is None:
         return CutPlanWorkflowStep(
@@ -405,6 +488,8 @@ def compute_cut_plan_workflow_state(project: Project) -> CutPlanWorkflowState:
         _step_validate(project, draft),
         _step_supplement_requests(project, draft),
         _step_supplement_resolve(project, draft),
+        _step_residual_gap_requests(project, draft),
+        _step_residual_gap_resolve(project, draft),
         _step_validation_repair_requests(project, draft),
         _step_validation_repair_apply(project, draft),
     ]

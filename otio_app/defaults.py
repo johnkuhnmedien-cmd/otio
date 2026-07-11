@@ -558,6 +558,22 @@ CUT_PLAN_SUPPLEMENT_MANIFEST_FILENAME = "supplement_manifest.json"
 # cut_plan_validation_repair.py).
 CUT_PLAN_VALIDATION_REPAIR_REQUESTS_FILENAME = "validation_repair_requests.json"
 
+# Residual Gap Requests (Nutzervorgabe, Juli 2026: "Item hat Asset, aber
+# Abdeckung ist unvollständig"): dritter, eigenständiger Reparaturpfad
+# zwischen Supplement (Item hat noch KEIN Asset) und Validation Repair
+# (kleine Lücke, per Nachbar-Kürzung reparierbar). Bewusst eigene Datei —
+# siehe cut_plan_residual_gap_requests.py.
+CUT_PLAN_RESIDUAL_GAP_REQUESTS_FILENAME = "residual_gap_requests.json"
+
+CUT_PLAN_RESIDUAL_GAP_REPAIR_MODE_PATCH_GAP_ONLY = "PATCH_GAP_ONLY"
+CUT_PLAN_RESIDUAL_GAP_REPAIR_MODE_REPLACE_ITEM_VISUAL = "REPLACE_ITEM_VISUAL"
+
+CUT_PLAN_RESIDUAL_GAP_STATUS_OPEN = "OPEN"
+CUT_PLAN_RESIDUAL_GAP_STATUS_CANDIDATES_FOUND = "CANDIDATES_FOUND"
+CUT_PLAN_RESIDUAL_GAP_STATUS_ACCEPTED = "ACCEPTED"
+CUT_PLAN_RESIDUAL_GAP_STATUS_NO_MATCH = "NO_MATCH"
+CUT_PLAN_RESIDUAL_GAP_STATUS_FAILED = "FAILED"
+
 CUT_PLAN_VALIDATION_REPAIR_TYPE_BLACK_GAP = "BLACK_GAP"
 CUT_PLAN_VALIDATION_REPAIR_TYPE_ASSET_REUSE_DISTANCE = "ASSET_REUSE_DISTANCE"
 
