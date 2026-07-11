@@ -170,6 +170,11 @@ from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
 from otio_app.services.voiceover_generation.cut_plan_residual_gap_apply import (
     reapply_accepted_residual_gap_assets,
 )
+from otio_app.services.voiceover_generation.cut_plan_residual_gap_auto_resolve_service import (
+    AUTO_RESOLVE_STATUS_ACCEPTED as RESIDUAL_GAP_AUTO_RESOLVE_STATUS_ACCEPTED,
+    AUTO_RESOLVE_STATUS_NO_MATCH as RESIDUAL_GAP_AUTO_RESOLVE_STATUS_NO_MATCH,
+    auto_resolve_all_residual_gap_requests,
+)
 from otio_app.services.voiceover_generation.cut_plan_residual_gap_requests import (
     build_residual_gap_requests_from_cut_plan,
     count_unapplied_accepted_residual_gap_requests,
@@ -1425,11 +1430,12 @@ def _render_residual_gap_requests(project: Project, draft: CutPlanDocument) -> N
     auch von Validation Repair (kleine, per Nachbar-Kürzung reparierbare
     Lücke) — siehe cut_plan_visual_gap_analysis.py.
 
-    Phase 3 (Builder + Cache-Merge): Suche/Übernahme folgen in einer
-    späteren Phase — dieser Abschnitt zeigt bereits die erkannten
-    Rest-Lücken inkl. berechneter Gap-Zeiten an und erzeugt/aktualisiert
-    die persistierten Requests, ohne bereits akzeptierte Assets zu
-    verlieren (siehe merge_prior_residual_gap_request_state)."""
+    Zeigt die erkannten Rest-Lücken inkl. berechneter Gap-Zeiten an,
+    erzeugt/aktualisiert die persistierten Requests ohne bereits
+    akzeptierte Assets zu verlieren (siehe
+    merge_prior_residual_gap_request_state) und bietet Suche
+    (Adobe/Pexels + lokale Wiederverwendung) sowie Übernahme
+    (mit/ohne erneute Suche) an."""
     st.subheader("Residual Gap Repair")
     st.caption(
         "Dritter Reparatur-Schritt für Items, die bereits ein Asset haben, dessen visuelle Abdeckung "
@@ -1510,10 +1516,28 @@ def _render_residual_gap_requests(project: Project, draft: CutPlanDocument) -> N
     ]
     st.dataframe(rows, use_container_width=True, hide_index=True)
     st.caption(
-        "🚧 Suche/Automatische Reparatur für Residual Gap Requests folgen in einer späteren Phase. "
         "Bereits akzeptierte Assets bleiben beim Neu-Erzeugen erhalten (siehe Warnungen-Spalte, falls "
         "eine zwischengespeicherte Datei fehlt oder zu kurz geworden ist)."
     )
+
+    open_requests = [request for request in requests_document.requests if not request.accepted_asset_id]
+    if st.button(
+        "🤖 Alle offenen Residual Gap Requests automatisch suchen",
+        key=f"cut_plan_residual_gap_auto_resolve_all_{project.id}",
+        disabled=not open_requests,
+        help="Prüft pro Request zuerst bereits heruntergeladene Supplement-Assets im selben Ordner, dann "
+        "Adobe Stock/Pexels (Foto vor Video bei reinen Pausen-Patches, Video vor Foto bei Satzmitte-Ersatz).",
+    ):
+        with st.spinner("Residual Gap Requests werden bearbeitet…"):
+            results = auto_resolve_all_residual_gap_requests(project)
+        accepted_count = sum(1 for result in results if result.status == RESIDUAL_GAP_AUTO_RESOLVE_STATUS_ACCEPTED)
+        no_match_count = sum(1 for result in results if result.status == RESIDUAL_GAP_AUTO_RESOLVE_STATUS_NO_MATCH)
+        st.success(
+            f"{len(results)} Request(s) bearbeitet: {accepted_count} automatisch akzeptiert, "
+            f"{no_match_count} ohne Treffer (manuelle Prüfung nötig)."
+        )
+        st.info("Bitte Cut Plan erneut validieren.")
+        st.rerun()
 
 
 def _render_validation_repair(project: Project, draft: CutPlanDocument) -> None:
