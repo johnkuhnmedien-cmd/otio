@@ -218,6 +218,75 @@ def test_closing_shot_panel_shows_planned_shot_details(
     assert any("kein Supplement nötig" in msg for msg in successes)
 
 
+def test_asset_allocation_correction_button_appears_and_fixes_missing_closing_shot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nutzervorgabe (Juli 2026): der Correction-Button erscheint erst NACH
+    einem Klick auf 'Asset-Readiness prüfen', solange die Diagnose
+    NEEDS_REVIEW zeigt — hier fehlt der Closing Shot."""
+    project = _make_project(tmp_path, mode=ProjectMode.WITHOUT_VOICEOVER)
+    inv_path = get_folder_inventory_path(project.work_dir_path, "Grand Canyon")
+    inv_path.parent.mkdir(parents=True, exist_ok=True)
+    analysis = AssetFolderAnalysis(
+        folder="Grand Canyon",
+        assets=[
+            AssetMediaAnalysis(path="Grand Canyon/clip1.mp4", description="Weite Aufnahme."),
+            AssetMediaAnalysis(path="Grand Canyon/clip2.mp4", description="Luftaufnahme."),
+        ],
+    )
+    inv_path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
+
+    plan = DramaturgyPlan(
+        project_id=project.id,
+        recommended_folder_order=[
+            DramaturgyFolderEntry(folder_name="Grand Canyon", order_index=1, enabled=True)
+        ],
+    )
+    save_confirmed_dramaturgy(project, plan)
+    save_folder_voiceover_settings(project, build_default_folder_voiceover_settings(project))
+
+    fake_response = PlanLlmResponse(
+        provider="anthropic",
+        model="claude-sonnet-5",
+        raw_text=(
+            '{"voiceover_text_full": "Text.", "sentence_items": '
+            '[{"sentence_id": "sentence_001", "text": "Ein Satz.", "primary_asset_id": "asset_clip1"}]}'
+        ),
+    )
+    with patch(f"{_AUTHOR_MODULE}.generate_plan_text_with_metadata", return_value=fake_response):
+        generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
+
+    _patch_project_selector(project, monkeypatch)
+    readiness_key = f"vo_fvo_asset_readiness_btn_Grand Canyon_{project.id}"
+    correction_key = f"vo_fvo_asset_allocation_correction_btn_Grand Canyon_{project.id}"
+
+    def _fake_button(label, *args, **kwargs):
+        return kwargs.get("key") in {readiness_key, correction_key}
+
+    monkeypatch.setattr("streamlit.button", _fake_button)
+    monkeypatch.setattr("streamlit.rerun", lambda: None)
+    successes: list[str] = []
+    monkeypatch.setattr("streamlit.success", lambda msg, **k: successes.append(msg))
+
+    correction_response = PlanLlmResponse(
+        provider="anthropic",
+        model="claude-sonnet-5",
+        raw_text=(
+            '{"voiceover_text_full": "Text.", "sentence_items": '
+            '[{"sentence_id": "sentence_001", "text": "Ein Satz.", "primary_asset_id": "asset_clip1"}], '
+            '"closing_visual_plan": {"primary_asset_id": "asset_clip2"}}'
+        ),
+    )
+    with patch(
+        "otio_app.services.voiceover_generation.folder_asset_allocation_correction_service."
+        "generate_plan_text_with_metadata",
+        return_value=correction_response,
+    ):
+        render_folder_voiceovers_page()
+
+    assert any("Asset-Allokation reparieren: PASS" in msg for msg in successes)
+
+
 def test_page_render_with_multiple_folders_does_not_reload_shared_documents_per_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

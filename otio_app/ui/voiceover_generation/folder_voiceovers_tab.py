@@ -8,6 +8,7 @@ from otio_app.defaults import (
     DRAMATURGY_ROLES,
     ENERGY_CHOICES,
     FACTUALITY_MODE_CHOICES,
+    MAX_ASSET_ALLOCATION_CORRECTION_ATTEMPTS,
     SEGMENT_ASSET_PLANNING_MODE_CHOICES,
     SEGMENT_ASSET_PLANNING_MODE_LABELS,
     VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
@@ -18,6 +19,11 @@ from otio_app.defaults import (
 from otio_app.models import Project
 from otio_app.services.inventory_loader import folder_has_usable_inventory_data
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
+from otio_app.services.voiceover_generation.folder_asset_allocation_correction_service import (
+    ASSET_ALLOCATION_CORRECTION_STATUS_NEEDS_USER_REVIEW,
+    ASSET_ALLOCATION_CORRECTION_STATUS_PASS,
+    run_asset_allocation_correction,
+)
 from otio_app.services.voiceover_generation.folder_asset_readiness import (
     READINESS_STATUS_PASS as ASSET_READINESS_STATUS_PASS,
     FolderAssetReadinessReport,
@@ -293,14 +299,24 @@ def _render_asset_readiness_report(report: FolderAssetReadinessReport) -> None:
 
 
 def _render_asset_readiness_section(
-    project: Project, folder_name: str, draft: FolderVoiceoverDraft
+    project: Project,
+    folder_name: str,
+    draft: FolderVoiceoverDraft,
+    *,
+    author_provider: str,
+    author_model: str,
 ) -> None:
     """Phase 2 (Asset-bewusste Cut-Plan-Vorbereitung): rein lesende
     Diagnose, NUR bei explizitem Klick berechnet — läuft nie automatisch
     beim Seiten-Rendering, ruft kein LLM auf und schreibt nichts. Ergebnis
     bleibt bis zum nächsten Klick/Reload nur im Session-State erhalten
     (keine Persistenz auf Platte), analog zu anderen 'letztes Ergebnis'-
-    Anzeigen dieser Pipeline (z. B. Dramaturgie-/Style-Profile-Läufe)."""
+    Anzeigen dieser Pipeline (z. B. Dramaturgie-/Style-Profile-Läufe).
+
+    Nutzervorgabe (Juli 2026): direkt darunter ein optionaler Correction-
+    Button (siehe folder_asset_allocation_correction_service.py) — läuft
+    NUR bei explizitem Klick und NUR, solange die zwischengespeicherte
+    Diagnose NEEDS_REVIEW zeigt."""
     session_key = _asset_readiness_session_key(project, folder_name)
     if render_new_feature_button(
         "🟢 Asset-Readiness prüfen",
@@ -314,6 +330,35 @@ def _render_asset_readiness_section(
     cached_report = st.session_state.get(session_key)
     if isinstance(cached_report, FolderAssetReadinessReport) and cached_report.folder_name == folder_name:
         _render_asset_readiness_report(cached_report)
+
+        if cached_report.status != ASSET_READINESS_STATUS_PASS and render_new_feature_button(
+            "🤖 Asset-Allokation per LLM reparieren",
+            key=f"vo_fvo_asset_allocation_correction_btn_{folder_name}_{project.id}",
+            help="NEU: repariert GEZIELT die Asset-Zuordnung (inkl. Closing Shot) anhand der "
+            "obigen Auffälligkeiten — lässt den redaktionellen Text möglichst unverändert. "
+            f"Läuft bis zu {MAX_ASSET_ALLOCATION_CORRECTION_ATTEMPTS} Versuche.",
+        ):
+            with st.spinner("Asset-Allokation wird per LLM repariert…"):
+                try:
+                    result = run_asset_allocation_correction(
+                        project, folder_name, provider=author_provider, model=author_model
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.session_state[session_key] = build_folder_asset_readiness_report(
+                        project, result.draft
+                    )
+                    if result.status == ASSET_ALLOCATION_CORRECTION_STATUS_PASS:
+                        st.success(f"Asset-Allokation reparieren: PASS nach {result.attempt_count} Versuch(en).")
+                    elif result.status == ASSET_ALLOCATION_CORRECTION_STATUS_NEEDS_USER_REVIEW:
+                        st.warning(
+                            f"Nach {result.attempt_count} Versuch(en) bleiben "
+                            f"{len(result.remaining_issues)} Auffälligkeit(en) — bitte manuell prüfen."
+                        )
+                    else:
+                        st.error(f"Fehlgeschlagen: {result.error}")
+                    st.rerun()
 
 
 def _render_folder_draft(
@@ -379,7 +424,9 @@ def _render_folder_draft(
 
     _render_closing_visual_plan_section(draft)
 
-    _render_asset_readiness_section(project, folder_name, draft)
+    _render_asset_readiness_section(
+        project, folder_name, draft, author_provider=author_provider, author_model=author_model
+    )
 
     col_save, col_regen, col_validate, col_confirm, col_unconfirm = st.columns(5)
     with col_save:

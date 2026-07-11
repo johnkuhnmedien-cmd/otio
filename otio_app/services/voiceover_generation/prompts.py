@@ -15,6 +15,7 @@ from otio_app.defaults import (
     SEGMENT_ASSET_PLANNING_MODE_PER_SEGMENT,
     SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE,
 )
+from otio_app.services.voiceover_generation.folder_asset_readiness import SentenceAssetReadinessIssue
 from otio_app.services.voiceover_generation.models import (
     DramaturgyFolderEntry,
     DramaturgyPlan,
@@ -826,6 +827,144 @@ same shape as before:
   "transition_to_next_used": false,
   "callback_to_previous_used": false,
   "contrast_or_commonality_used": false,
+  "risks": []
+}}
+"""
+
+
+def build_asset_allocation_correction_prompt(
+    *,
+    project_brief: ProjectBrief,
+    style_profile: VoiceoverStyleProfile | None,
+    setting: FolderVoiceoverSetting,
+    draft: FolderVoiceoverDraft,
+    inventory_assets: list[dict],
+    issues: list[SentenceAssetReadinessIssue],
+) -> str:
+    """Nutzervorgabe (Juli 2026): eigenständiger Correction-Prompt für die
+    Asset-READINESS-Diagnose (siehe folder_asset_readiness.py) — bewusst
+    GETRENNT von build_voiceover_correction_prompt (Text-/Stil-Review), da
+    hier NUR die Asset-Zuordnung (inkl. Closing Shot) repariert werden
+    soll, der redaktionelle Text möglichst unverändert bleibt.
+
+    Erwartet dieselbe Response-Shape wie der Autor-Prompt (voiceover_text_full
+    + sentence_items + closing_visual_plan + ...) — der Aufrufer nutzt
+    denselben Parser/Sanitizer wie generate_folder_voiceover."""
+    issues_block = "\n".join(
+        f"- [{issue.issue_type}] (sentence_id={issue.sentence_id or '(folder-level)'}) {issue.message}"
+        for issue in issues
+    ) or "(keine Issues übergeben)"
+
+    sentence_lines = "\n".join(
+        f"- {item.sentence_id}: text=\"{item.text}\" primary_asset_id={item.primary_asset_id!r} "
+        f"backup_asset_ids={item.backup_asset_ids!r} second_backup_asset_ids={item.second_backup_asset_ids!r} "
+        f"source_inventory_asset_ids_considered={item.source_inventory_asset_ids_considered!r} "
+        f"needs_supplement_asset={item.needs_supplement_asset}"
+        for item in draft.sentence_items
+    ) or "(keine sentence_items)"
+
+    closing = draft.closing_visual_plan
+    closing_line = (
+        f"primary_asset_id={closing.primary_asset_id!r} backup_asset_ids={closing.backup_asset_ids!r} "
+        f"second_backup_asset_ids={closing.second_backup_asset_ids!r} "
+        f"needs_supplement_asset={closing.needs_supplement_asset}"
+    )
+
+    return f"""You previously assigned local assets to the sentences and closing shot of \
+ONE location below, but a deterministic allocation check found problems — this is a \
+DEDICATED asset-allocation repair pass, not a general rewrite.
+
+## Target language
+{project_brief.language}
+
+## Style Profile
+{_style_summary_block(style_profile)}
+
+## Inventory for this location (asset_id values are EXACT — never invent new ones)
+{_inventory_asset_block(inventory_assets)}
+
+## Original voice-over text (keep as unchanged as possible)
+{draft.voiceover_text_full}
+
+## Original sentence/beat breakdown (current asset assignment)
+{sentence_lines}
+
+## Original closing shot (current asset assignment)
+{closing_line}
+
+## Asset allocation problems that MUST be fixed
+{issues_block}
+
+## Task
+Fix ONLY the asset allocation — do NOT rewrite the voice-over text or restructure \
+sentences/beats unless an issue explicitly requires it (e.g. a sentence/beat that \
+must now request supplement instead of using a scarce asset). Apply the SAME rules \
+as the original assignment:
+- Keep each asset_id's TOTAL occurrences (primary/backup/second_backup/
+planned_segments/closing_visual_plan combined) at or below 3.
+- Keep at least 4 shot positions between two occurrences of the same asset_id.
+- When two sentences/beats compete for the same asset, the one with fewer genuinely \
+fitting local alternatives keeps it; the one with more alternatives must switch to a \
+different alternative or set needs_supplement_asset=true instead of taking the \
+scarce asset away from the sentence/beat that has no alternative.
+- The closing shot's primary_asset_id must NOT equal the primary_asset_id of the \
+last or second-to-last sentence/beat, and should prefer a video over a photo and a \
+calm aerial/wide/establishing shot over a tight/busy one; if nothing local fits, set \
+closing_visual_plan.needs_supplement_asset=true with a concrete supplement_reason and \
+supplement_search_hint.
+- Never invent asset IDs that are not in the inventory list above.
+- Never force a weak/wrong asset onto a sentence/beat or the closing shot just to \
+avoid needs_supplement_asset — an honest supplement request is always preferable.
+
+{_segment_asset_planning_block(setting.segment_asset_planning_mode)}
+
+Respond with JSON ONLY, no markdown code fences, no commentary, using the EXACT \
+same shape as the original assignment:
+
+{{
+  "voiceover_text_full": "...",
+  "sentence_items": [
+    {{
+      "sentence_id": "sentence_001",
+      "beat_id": "beat_001",
+      "text": "...",
+      "visual_intent": "...",
+      "primary_asset_id": "...",
+      "backup_asset_ids": [],
+      "second_backup_asset_ids": [],
+      "asset_match_reason": "...",
+      "asset_confidence": 0.0,
+      "estimated_duration_sec": 0.0,
+      "must_show": [],
+      "avoid_showing": [],
+      "needs_supplement_asset": false,
+      "supplement_reason": "",
+      "source_inventory_asset_ids_considered": [],
+      "pause_after": "",
+      "visual_asset_plan": {{
+        "preferred_cut_count": 1,
+        "reuse_risk": "",
+        "needs_visual_variety": false,
+        "asset_strategy_reason": "...",
+        "supplement_search_hint": ""
+      }},
+      "planned_segments": []
+    }}
+  ],
+  "closing_visual_plan": {{
+    "visual_intent": "...",
+    "primary_asset_id": "...",
+    "backup_asset_ids": [],
+    "second_backup_asset_ids": [],
+    "needs_supplement_asset": false,
+    "supplement_reason": "",
+    "supplement_search_hint": "",
+    "asset_strategy_reason": "..."
+  }},
+  "transition_from_previous_used": {str(draft.transition_from_previous_used).lower()},
+  "transition_to_next_used": {str(draft.transition_to_next_used).lower()},
+  "callback_to_previous_used": {str(draft.callback_to_previous_used).lower()},
+  "contrast_or_commonality_used": {str(draft.contrast_or_commonality_used).lower()},
   "risks": []
 }}
 """

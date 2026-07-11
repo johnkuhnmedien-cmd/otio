@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from otio_app.defaults import BRIEF_NEGATIVE_RULE_INSTRUCTIONS
+from otio_app.services.voiceover_generation.folder_asset_readiness import (
+    ISSUE_TYPE_CLOSING_SHOT_MISSING,
+    SentenceAssetReadinessIssue,
+)
 from otio_app.services.voiceover_generation.models import (
+    ClosingVisualPlan,
     DramaturgyFolderEntry,
     DramaturgyPlan,
     FolderInventorySummary,
@@ -17,6 +22,7 @@ from otio_app.services.voiceover_generation.models import (
     VoiceoverStyleReferences,
 )
 from otio_app.services.voiceover_generation.prompts import (
+    build_asset_allocation_correction_prompt,
     build_dramaturgy_prompt,
     build_folder_voiceover_prompt,
     build_intro_hook_prompt,
@@ -479,6 +485,81 @@ def test_voiceover_correction_prompt_contains_original_text_and_errors() -> None
     assert "Zwischen den roten Felswänden" in prompt
     assert "TOO_ASSET_DESCRIPTIVE" in prompt
     assert "Klingt wie eine Assetbeschreibung." in prompt
+
+
+# --- build_asset_allocation_correction_prompt (Nutzervorgabe Juli 2026) ---
+
+
+def _sample_draft_with_closing() -> FolderVoiceoverDraft:
+    return FolderVoiceoverDraft(
+        project_id="p1",
+        folder_name="Grand Canyon",
+        voiceover_text_full="Zwischen den roten Felswänden scheint das Licht von innen zu leuchten.",
+        word_count=11,
+        sentence_items=[
+            SentenceItem(sentence_id="sentence_001", text="Zwischen den roten Felswänden...",
+                         primary_asset_id="asset_clip1"),
+        ],
+        closing_visual_plan=ClosingVisualPlan(primary_asset_id="asset_clip1"),
+    )
+
+
+def test_asset_allocation_correction_prompt_contains_original_text_and_issues() -> None:
+    issues = [
+        SentenceAssetReadinessIssue(
+            sentence_id="closing",
+            issue_type=ISSUE_TYPE_CLOSING_SHOT_MISSING,
+            message="Kein Closing Shot geplant.",
+        )
+    ]
+    prompt = build_asset_allocation_correction_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        setting=_sample_setting(),
+        draft=_sample_draft_with_closing(),
+        inventory_assets=_sample_inventory_assets(),
+        issues=issues,
+    )
+    assert "Zwischen den roten Felswänden" in prompt
+    assert ISSUE_TYPE_CLOSING_SHOT_MISSING in prompt
+    assert "Kein Closing Shot geplant." in prompt
+
+
+def test_asset_allocation_correction_prompt_json_schema_includes_closing_visual_plan() -> None:
+    prompt = build_asset_allocation_correction_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        setting=_sample_setting(),
+        draft=_sample_draft_with_closing(),
+        inventory_assets=_sample_inventory_assets(),
+        issues=[],
+    )
+    assert '"closing_visual_plan"' in prompt
+
+
+def test_asset_allocation_correction_prompt_instructs_not_to_rewrite_text() -> None:
+    prompt = build_asset_allocation_correction_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        setting=_sample_setting(),
+        draft=_sample_draft_with_closing(),
+        inventory_assets=_sample_inventory_assets(),
+        issues=[],
+    )
+    assert "do NOT rewrite the voice-over text" in prompt
+
+
+def test_asset_allocation_correction_prompt_repeats_allocation_rules() -> None:
+    prompt = build_asset_allocation_correction_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        setting=_sample_setting(),
+        draft=_sample_draft_with_closing(),
+        inventory_assets=_sample_inventory_assets(),
+        issues=[],
+    )
+    assert "at or below 3" in prompt
+    assert "at least 4 shot positions" in prompt
 
 
 # --- Phase 3 (Asset-bewusste Cut-Plan-Vorbereitung): Visual editing awareness ---

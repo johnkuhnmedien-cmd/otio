@@ -284,6 +284,13 @@ FOLDER_ASSET_READINESS_WORDS_PER_SECOND_HEURISTIC = 2.5
 FOLDER_ASSET_READINESS_MAX_TOTAL_OCCURRENCES_PER_ASSET = 3
 FOLDER_ASSET_READINESS_MIN_REUSE_DISTANCE_SHOTS = 4
 
+# Nutzervorgabe (Juli 2026): maximale Anzahl automatischer Korrektur-
+# Versuche für die Asset-Allokations-Correction (siehe
+# folder_asset_allocation_correction_service.py) — analog zu
+# MAX_VOICEOVER_REVIEW_ATTEMPTS, aber ein eigener, kleinerer Wert, da diese
+# Correction ausschließlich Asset-Zuordnung repariert (kein Text-Review).
+MAX_ASSET_ALLOCATION_CORRECTION_ATTEMPTS = 2
+
 FOLDER_INVENTORY_SUMMARIES_FILENAME = "folder_inventory_summaries.json"
 
 DRAMATURGY_ROLE_OPENER = "opener"
