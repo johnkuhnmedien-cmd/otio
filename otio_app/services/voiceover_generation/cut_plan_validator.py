@@ -159,6 +159,8 @@ def _make_error(
     severity_override: str | None = None,
     must_be_fixed_by_override: str | None = None,
     is_retryable_override: bool | None = None,
+    gap_start_sec: float = 0.0,
+    gap_end_sec: float = 0.0,
 ) -> CutPlanValidationError:
     default_severity, default_fix_by, default_retryable = _DEFAULT_CLASSIFICATION.get(
         error_type, (READINESS_SEVERITY_WARNING, CUT_PLAN_FIX_BY_PYTHON, False)
@@ -173,6 +175,8 @@ def _make_error(
         fix_hint=fix_hint,
         is_retryable_by_llm=default_retryable if is_retryable_override is None else is_retryable_override,
         must_be_fixed_by=must_be_fixed_by_override or default_fix_by,
+        gap_start_sec=gap_start_sec,
+        gap_end_sec=gap_end_sec,
     )
 
 
@@ -839,6 +843,8 @@ def validate_no_black_gap_during_voiceover(
                             "kein VisualSegment platziert.",
                             fix_hint="Supplement-Asset beschaffen oder Asset-Auswahl erneut anwenden.",
                             is_retryable_override=True,
+                            gap_start_sec=sub_start,
+                            gap_end_sec=sub_end,
                         )
                     )
             else:

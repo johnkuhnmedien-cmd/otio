@@ -548,6 +548,24 @@ CUT_PLAN_SUPPLEMENT_ASSETS_SUBDIR = "supplement_assets"
 CUT_PLAN_SUPPLEMENT_RUNS_SUBDIR = "supplement_runs"
 CUT_PLAN_SUPPLEMENT_MANIFEST_FILENAME = "supplement_manifest.json"
 
+# Validation Repair (Nutzervorgabe, Juli 2026): eigenständiger, dem
+# regulären Supplement-Bereich NACHGESCHALTETER Reparatur-Schritt für
+# Rest-Blocker, die erst NACH der vollständigen Validierung sichtbar
+# werden (BLACK_GAP_DURING_VOICEOVER, ASSET_REUSE_DISTANCE_TOO_SHORT) —
+# bewusst eigene Datei/eigenes Dokument, NICHT mit supplement_requests.
+# from_cut_plan.json vermischt, da Reparatur-Requests andere Semantik
+# haben (Zeitfenster-Reparatur statt Item-Ersatz, siehe
+# cut_plan_validation_repair.py).
+CUT_PLAN_VALIDATION_REPAIR_REQUESTS_FILENAME = "validation_repair_requests.json"
+
+CUT_PLAN_VALIDATION_REPAIR_TYPE_BLACK_GAP = "BLACK_GAP"
+CUT_PLAN_VALIDATION_REPAIR_TYPE_ASSET_REUSE_DISTANCE = "ASSET_REUSE_DISTANCE"
+
+CUT_PLAN_VALIDATION_REPAIR_STATUS_PENDING = "PENDING"
+CUT_PLAN_VALIDATION_REPAIR_STATUS_ACCEPTED = "ACCEPTED"
+CUT_PLAN_VALIDATION_REPAIR_STATUS_FAILED = "FAILED"
+CUT_PLAN_VALIDATION_REPAIR_STATUS_NO_MATCH = "NO_MATCH"
+
 # Phase 9.1: isolierte EditPlan-Bridge — ausschließlich unter
 # _otio/voiceover_generation/cut_plan/edit_plan_bridge/, NIEMALS unter
 # _otio/edit_plan/ oder _otio/exports/.

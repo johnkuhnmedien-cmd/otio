@@ -216,6 +216,14 @@ class CutPlanValidationError(BaseModel):
     fix_hint: str = ""
     is_retryable_by_llm: bool = False
     must_be_fixed_by: str = CUT_PLAN_FIX_BY_PYTHON  # python|llm|user
+    # Validation Repair (Nutzervorgabe, Juli 2026): für BLACK_GAP_DURING_
+    # VOICEOVER die exakten Timeline-Grenzen des unbedeckten Teilbereichs
+    # (siehe cut_plan_validator._uncovered_subintervals) — ermöglicht
+    # cut_plan_validation_repair.py, ein Reparatur-Fenster zu berechnen,
+    # ohne die Zeiten unzuverlässig aus `message` parsen zu müssen. 0.0/0.0
+    # (Default) bedeutet: kein Gap-Kontext (alle anderen Fehlertypen).
+    gap_start_sec: float = 0.0
+    gap_end_sec: float = 0.0
 
 
 class CutPlanDocument(BaseModel):

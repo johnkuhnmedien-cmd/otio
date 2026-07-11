@@ -422,6 +422,16 @@ def get_cut_plan_supplement_manifest_path(work_dir: Path) -> Path:
     return get_cut_plan_dir(work_dir) / CUT_PLAN_SUPPLEMENT_MANIFEST_FILENAME
 
 
+def get_cut_plan_validation_repair_requests_path(work_dir: Path) -> Path:
+    """Validation Repair Requests (eigenständig, siehe
+    cut_plan_validation_repair.py) — getrennt von
+    supplement_requests.from_cut_plan.json, da Reparatur-Requests eine
+    andere Semantik haben (Zeitfenster-Reparatur statt Item-Ersatz)."""
+    from otio_app.defaults import CUT_PLAN_VALIDATION_REPAIR_REQUESTS_FILENAME
+
+    return get_cut_plan_dir(work_dir) / CUT_PLAN_VALIDATION_REPAIR_REQUESTS_FILENAME
+
+
 # --- EditPlan Bridge (Phase 9.1): isolierte Brücke von cut_plan.confirmed.json
 # zu einem EditPlanDocument-kompatiblen Draft — getrennt von _otio/edit_plan/
 # und _otio/exports/. ---

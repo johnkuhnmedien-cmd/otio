@@ -498,6 +498,32 @@ def test_black_gap_is_attributed_to_the_responsible_item_only(tmp_path: Path) ->
     assert "cut_2" in gap_blockers[0].message
 
 
+def test_black_gap_blocker_carries_exact_gap_bounds(tmp_path: Path) -> None:
+    """Validation Repair (Nutzervorgabe, Juli 2026): der Blocker muss die
+    exakten Timeline-Grenzen des unbedeckten Teilbereichs tragen (nicht nur
+    in der message-Zeichenkette), damit eine spätere Repair-Pipeline ein
+    Reparatur-Fenster berechnen kann, ohne die Zeiten aus message parsen zu
+    müssen."""
+    project = _make_project(tmp_path)
+    audio_item = _minimal_audio_item(timeline_start_sec=0.0, timeline_end_sec=15.0)
+    segment_1 = _minimal_segment(segment_id="seg_1", timeline_in_sec=0.0, timeline_out_sec=5.0)
+    segment_3 = _minimal_segment(segment_id="seg_3", timeline_in_sec=10.0, timeline_out_sec=15.0)
+    item_1 = _minimal_item(cut_item_id="cut_1", planned_visual_segments=[segment_1],
+                            timeline_start_sec=0.0, timeline_end_sec=5.0, duration_sec=5.0)
+    item_2_missing = _minimal_item(cut_item_id="cut_2", planned_visual_segments=[],
+                                    timeline_start_sec=5.0, timeline_end_sec=10.0, duration_sec=5.0,
+                                    chosen_asset_id="", asset_selection_status="SUPPLEMENT_REQUIRED")
+    item_3 = _minimal_item(cut_item_id="cut_3", planned_visual_segments=[segment_3],
+                            timeline_start_sec=10.0, timeline_end_sec=15.0, duration_sec=5.0)
+    cut_plan = _minimal_cut_plan(project, audio_items=[audio_item], items=[item_1, item_2_missing, item_3])
+
+    warnings, blockers = validate_no_black_gap_during_voiceover(project, cut_plan)
+    gap_blockers = [error for error in blockers if error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER]
+    assert len(gap_blockers) == 1
+    assert gap_blockers[0].gap_start_sec == pytest.approx(5.0)
+    assert gap_blockers[0].gap_end_sec == pytest.approx(10.0)
+
+
 def test_black_gap_without_responsible_item_has_no_cut_item_id(tmp_path: Path) -> None:
     """Eine Lücke, die KEINEM Cut-Plan-Item zeitlich zuordenbar ist (z. B.
     weil gar kein Item für diesen Zeitraum existiert), bleibt weiterhin ein
