@@ -419,8 +419,12 @@ def test_bulk_action_buttons_are_present_below_drafts(
         "🟢 ≥4 Issues → strict inventory + neu generieren + Allokation + Readiness"
         in button_labels
     )
+    assert "Schwelle speichern" in button_labels
     assert "🟢 Öffnen" in button_labels
     assert "🟢 Asset-Readiness prüfen" not in button_labels  # erst nach Öffnen
+
+    number_labels = {inp.label for inp in at.number_input}
+    assert "Issue-Schwelle für Magic-Pipeline" in number_labels
 
     subheaders = {subheader.value for subheader in at.subheader}
     assert "Alle Ordner gleichzeitig" in subheaders

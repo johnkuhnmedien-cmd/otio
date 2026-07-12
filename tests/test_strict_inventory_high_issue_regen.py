@@ -194,3 +194,33 @@ def test_regenerate_high_issue_noop_when_no_folder_meets_threshold(tmp_path: Pat
     assert gen_results == []
     assert alloc_results == []
     assert readiness == []
+
+
+def test_regenerate_respects_custom_min_issues(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    fake_reports = [
+        FolderAssetReadinessReport(
+            folder_name=FOLDER_A,
+            issues=[
+                SentenceAssetReadinessIssue(sentence_id=f"s{i}", issue_type="X", message="m")
+                for i in range(2)
+            ],
+        ),
+        FolderAssetReadinessReport(
+            folder_name=FOLDER_B,
+            issues=[
+                SentenceAssetReadinessIssue(sentence_id=f"s{i}", issue_type="X", message="m")
+                for i in range(5)
+            ],
+        ),
+    ]
+    with patch(f"{_AUTHOR}.generate_folder_voiceover") as gen_mock:
+        folders, *_rest = regenerate_high_issue_folders_with_strict_inventory(
+            project,
+            provider="anthropic",
+            model="claude-sonnet-5",
+            min_issues=5,
+            reports=fake_reports,
+        )
+    assert folders == [FOLDER_B]
+    assert gen_mock.call_count == 1

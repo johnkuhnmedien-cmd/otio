@@ -8,7 +8,6 @@ from otio_app.defaults import (
     DRAMATURGY_ROLES,
     ENERGY_CHOICES,
     FACTUALITY_MODE_CHOICES,
-    FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD,
     MAX_ASSET_ALLOCATION_CORRECTION_ATTEMPTS,
     SEGMENT_ASSET_PLANNING_MODE_CHOICES,
     SEGMENT_ASSET_PLANNING_MODE_LABELS,
@@ -18,6 +17,7 @@ from otio_app.defaults import (
     VOICEOVER_STATUS_PASS,
 )
 from otio_app.models import Project
+from otio_app.project_layout import get_asset_readiness_pipeline_settings_path
 from otio_app.services.inventory_loader import folder_has_usable_inventory_data
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.folder_asset_allocation_correction_service import (
@@ -39,12 +39,17 @@ from otio_app.services.voiceover_generation.folder_voiceover_settings_service im
     save_folder_voiceover_settings,
     update_folder_voiceover_settings,
 )
+from otio_app.services.voiceover_generation.asset_readiness_pipeline_settings_service import (
+    load_asset_readiness_pipeline_settings,
+    save_asset_readiness_pipeline_settings,
+)
 from otio_app.services.voiceover_generation.llm_trace_service import STATUS_PASS
 from otio_app.services.voiceover_generation.model_settings_service import (
     load_model_settings,
     save_model_settings,
 )
 from otio_app.services.voiceover_generation.models import (
+    AssetReadinessPipelineSettings,
     DramaturgyPlan,
     FolderVoiceoverDraft,
     FolderVoiceoverSettingsDocument,
@@ -256,6 +261,10 @@ def _asset_readiness_session_key(project: Project, folder_name: str) -> str:
 
 def _asset_readiness_all_session_key(project: Project) -> str:
     return f"vo_fvo_asset_readiness_all_{project.id}"
+
+
+def _high_issue_threshold_widget_key(project: Project) -> str:
+    return f"vo_fvo_high_issue_threshold_{project.id}"
 
 
 def _folder_voiceover_text_widget_key(project: Project, folder_name: str) -> str:
@@ -1118,16 +1127,61 @@ def _render_bulk_draft_actions(
                     st.rerun()
 
     # Immer sichtbar — braucht keine vorherige Bulk-Readiness-Aktion.
-    # Beim Klick: vorhandene Session-Reports nutzen, sonst einmal lokal
-    # (ohne LLM) Readiness berechnen, dann nur Ordner ≥ Schwelle anfassen.
+    # Schwelle ist pro Projekt speicherbar; der Magic-Button nutzt den
+    # aktuellen Feldwert (auch ohne Speichern).
+    pipeline_settings = load_asset_readiness_pipeline_settings(project)
+    threshold_key = _high_issue_threshold_widget_key(project)
+    if threshold_key not in st.session_state:
+        st.session_state[threshold_key] = int(pipeline_settings.high_issue_regen_threshold)
+
+    col_threshold, col_threshold_save = st.columns([2, 1])
+    with col_threshold:
+        high_issue_threshold = int(
+            st.number_input(
+                "Issue-Schwelle für Magic-Pipeline",
+                min_value=1,
+                max_value=100,
+                step=1,
+                key=threshold_key,
+                help=(
+                    "Ordner mit mindestens so vielen Asset-Readiness-Issues werden von der "
+                    "Pipeline angefasst. Speichern hält den Wert projektweit; ohne Speichern "
+                    "gilt der aktuelle Feldwert nur für diesen Lauf / diese Session."
+                ),
+                disabled=not has_any_draft,
+            )
+        )
+    with col_threshold_save:
+        st.write("")  # vertikale Ausrichtung an number_input-Label
+        if st.button(
+            "Schwelle speichern",
+            key=f"vo_fvo_high_issue_threshold_save_{project.id}",
+            disabled=not has_any_draft,
+            help=(
+                "Speichert die Issue-Schwelle projektweit unter "
+                f"`{get_asset_readiness_pipeline_settings_path(project.work_dir_path)}`."
+            ),
+        ):
+            saved = save_asset_readiness_pipeline_settings(
+                project,
+                AssetReadinessPipelineSettings(
+                    project_id=project.id,
+                    high_issue_regen_threshold=high_issue_threshold,
+                ),
+            )
+            st.session_state[threshold_key] = saved.high_issue_regen_threshold
+            st.success(
+                f"Issue-Schwelle gespeichert: ≥{saved.high_issue_regen_threshold}"
+            )
+
     if render_new_feature_button(
-        f"🟢 ≥{FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD} Issues → "
+        f"🟢 ≥{high_issue_threshold} Issues → "
         "strict inventory + neu generieren + Allokation + Readiness",
         key=f"vo_fvo_strict_inventory_high_issue_regen_{project.id}",
         help=(
             "NEU: immer klickbar. Berechnet bei Bedarf zuerst lokal Asset-Readiness "
             "(kein LLM, nutzt Cache falls vorhanden), filtert Ordner mit mindestens "
-            f"{FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD} Issues, setzt NUR dort "
+            f"{high_issue_threshold} Issues (Wert aus dem Feld oben), setzt NUR dort "
             "Faktentreue auf strict_inventory_only, generiert neu und führt Asset-Allokation "
             "+ frische Readiness aus. Andere Ordner bleiben unverändert — kein erneutes "
             "Allokations-LLM über alle Ordner nötig."
@@ -1169,12 +1223,12 @@ def _render_bulk_draft_actions(
             high_issue_folders = [
                 report.folder_name
                 for report in seed_reports
-                if len(report.issues) >= FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD
+                if len(report.issues) >= high_issue_threshold
             ]
             if not high_issue_folders:
                 progress_placeholder.empty()
                 st.info(
-                    f"Kein Ordner mit ≥{FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD} "
+                    f"Kein Ordner mit ≥{high_issue_threshold} "
                     "Asset-Readiness-Issues — nichts zu tun."
                 )
                 st.session_state[_asset_readiness_all_session_key(project)] = seed_reports
@@ -1188,7 +1242,7 @@ def _render_bulk_draft_actions(
 
                 with st.spinner(
                     f"{len(high_issue_folders)} Ordner mit "
-                    f"≥{FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD} Issues: "
+                    f"≥{high_issue_threshold} Issues: "
                     "Settings → Generieren → Allokation → Readiness…"
                 ):
                     try:
@@ -1201,6 +1255,7 @@ def _render_bulk_draft_actions(
                             project,
                             provider=author_provider,
                             model=author_model,
+                            min_issues=high_issue_threshold,
                             reports=seed_reports,
                             progress_callback=_progress_high_issue,
                         )
@@ -1233,7 +1288,8 @@ def _render_bulk_draft_actions(
                             for report in refreshed_partial
                         )
                         st.success(
-                            f"Strict inventory + Regen + Allokation + Readiness: "
+                            f"Strict inventory + Regen + Allokation + Readiness "
+                            f"(Schwelle ≥{high_issue_threshold}): "
                             f"{len(touched_folders)} Ordner — "
                             f"Generierung {gen_pass}/{len(gen_results)} PASS, "
                             f"Allokation {alloc_pass}/{len(alloc_results)} PASS. "
