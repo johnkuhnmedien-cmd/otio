@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from otio_app.analysis_models import AssetMediaAnalysis
+from otio_app.defaults import SUPPLEMENTAL_FOLDER_NAME
 from otio_app.models import Project
 from otio_app.project_layout import get_inventory_dir, safe_folder_slug
 from otio_app.services.clean_media import resolve_effective_media_path
@@ -280,7 +281,10 @@ def _merge_media_path(
     media_path: Path,
 ) -> None:
     slug = media_stem_slug(media_path)
-    resolved = folder_path / media_path.name if media_path.parent != folder_path else media_path
+    if SUPPLEMENTAL_FOLDER_NAME in media_path.parts:
+        resolved = media_path
+    else:
+        resolved = folder_path / media_path.name if media_path.parent != folder_path else media_path
     existing = by_slug.get(slug)
     if existing is None:
         by_slug[slug] = resolved
@@ -371,7 +375,12 @@ def discover_folder_media_paths(project: Project, folder_name: str) -> list[Path
             cached = load_cached_media(cache_file)
             if cached is None or not cached.path:
                 continue
-            name = Path(cached.path).name
+            cached_path = Path(cached.path)
+            # Supplement-Caches gehören nicht in die Primary-Discovery
+            # (Inventory-Matching vergleicht nur Top-Level-Medien).
+            if SUPPLEMENTAL_FOLDER_NAME in cached_path.parts:
+                continue
+            name = cached_path.name
             if not name or Path(name).suffix.lower() not in MEDIA_EXTENSIONS:
                 continue
             _merge_media_path(by_slug, folder_path, folder_path / name)
