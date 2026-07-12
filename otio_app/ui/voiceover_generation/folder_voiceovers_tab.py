@@ -8,6 +8,7 @@ from otio_app.defaults import (
     DRAMATURGY_ROLES,
     ENERGY_CHOICES,
     FACTUALITY_MODE_CHOICES,
+    FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD,
     MAX_ASSET_ALLOCATION_CORRECTION_ATTEMPTS,
     SEGMENT_ASSET_PLANNING_MODE_CHOICES,
     SEGMENT_ASSET_PLANNING_MODE_LABELS,
@@ -61,6 +62,7 @@ from otio_app.services.voiceover_generation.voiceover_author_service import (
     load_folder_voiceovers_draft,
     regenerate_all_folder_voiceovers_with_standard_word_target,
     regenerate_folder_voiceover_with_standard_word_target,
+    regenerate_high_issue_folders_with_strict_inventory,
     update_folder_voiceover_text,
 )
 from otio_app.services.voiceover_generation.voiceover_review_service import (
@@ -1119,3 +1121,97 @@ def _render_bulk_draft_actions(
     if isinstance(bulk_reports, list) and bulk_reports:
         if all(isinstance(report, FolderAssetReadinessReport) for report in bulk_reports):
             _render_bulk_asset_readiness_summary(bulk_reports)
+            high_issue_folders = [
+                report.folder_name
+                for report in bulk_reports
+                if len(report.issues) >= FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD
+            ]
+            if high_issue_folders and render_new_feature_button(
+                f"🟢 ≥{FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD} Issues → "
+                "strict inventory + neu generieren + Allokation + Readiness",
+                key=f"vo_fvo_strict_inventory_high_issue_regen_{project.id}",
+                help=(
+                    "NEU: erkennt Ordner mit mindestens "
+                    f"{FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD} Asset-Readiness-Issues, "
+                    "setzt NUR dort Faktentreue auf strict_inventory_only, speichert Settings, "
+                    "generiert diese Ordner neu und führt danach erneut Asset-Allokation sowie "
+                    "frische Asset-Readiness-Diagnose aus. Andere Ordner bleiben unverändert."
+                ),
+            ):
+                progress_placeholder = st.empty()
+
+                def _progress_high_issue(folder_name: str, index: int, total: int) -> None:
+                    progress_placeholder.info(
+                        f"Ordner {index}/{total}: „{folder_name}“ "
+                        "(strict inventory → generieren → Allokation → Readiness)…"
+                    )
+
+                with st.spinner(
+                    f"{len(high_issue_folders)} Ordner: "
+                    "Settings → Generieren → Allokation → Readiness…"
+                ):
+                    try:
+                        (
+                            touched_folders,
+                            gen_results,
+                            alloc_results,
+                            refreshed_partial,
+                        ) = regenerate_high_issue_folders_with_strict_inventory(
+                            project,
+                            provider=author_provider,
+                            model=author_model,
+                            reports=bulk_reports,
+                            progress_callback=_progress_high_issue,
+                        )
+                    except ValueError as exc:
+                        progress_placeholder.empty()
+                        st.error(str(exc))
+                    else:
+                        progress_placeholder.empty()
+                        # Bulk-Übersicht aktualisieren: betroffene Ordner ersetzen,
+                        # übrige Reports behalten.
+                        refreshed_by_folder = {
+                            report.folder_name: report for report in refreshed_partial
+                        }
+                        merged_reports = [
+                            refreshed_by_folder.get(report.folder_name, report)
+                            for report in bulk_reports
+                        ]
+                        for report in refreshed_partial:
+                            st.session_state[
+                                _asset_readiness_session_key(project, report.folder_name)
+                            ] = report
+                        st.session_state[_asset_readiness_all_session_key(project)] = merged_reports
+
+                        gen_pass = sum(1 for result in gen_results if result.status == STATUS_PASS)
+                        alloc_pass = sum(
+                            1
+                            for result in alloc_results
+                            if result.status == ASSET_ALLOCATION_CORRECTION_STATUS_PASS
+                        )
+                        issue_counts = ", ".join(
+                            f"„{report.folder_name}“={len(report.issues)}"
+                            for report in refreshed_partial
+                        )
+                        st.success(
+                            f"Strict inventory + Regen + Allokation + Readiness: "
+                            f"{len(touched_folders)} Ordner — "
+                            f"Generierung {gen_pass}/{len(gen_results)} PASS, "
+                            f"Allokation {alloc_pass}/{len(alloc_results)} PASS. "
+                            f"Faktentreue gesetzt auf: {', '.join(touched_folders)}. "
+                            f"Issues danach: {issue_counts or '—'}"
+                        )
+                        for result in gen_results:
+                            if result.status != STATUS_PASS:
+                                st.error(f"Generierung fehlgeschlagen: {result.error}")
+                        for result in alloc_results:
+                            if result.status == ASSET_ALLOCATION_CORRECTION_STATUS_NEEDS_USER_REVIEW:
+                                st.warning(
+                                    f"„{result.draft.folder_name}“: nach Allokation bleiben "
+                                    f"{len(result.remaining_issues)} Auffälligkeit(en)."
+                                )
+                            elif result.status != ASSET_ALLOCATION_CORRECTION_STATUS_PASS:
+                                st.error(
+                                    f"Allokation „{result.draft.folder_name}“: {result.error}"
+                                )
+                        st.rerun()

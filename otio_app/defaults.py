@@ -283,6 +283,9 @@ FOLDER_ASSET_READINESS_WORDS_PER_SECOND_HEURISTIC = 2.5
 # allocation across this whole location").
 FOLDER_ASSET_READINESS_MAX_TOTAL_OCCURRENCES_PER_ASSET = 3
 FOLDER_ASSET_READINESS_MIN_REUSE_DISTANCE_SHOTS = 4
+# Schwelle für die Bulk-Aktion „strict_inventory_only + neu generieren“:
+# Ordner mit mindestens so vielen Asset-Readiness-Issues werden umgestellt.
+FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD = 4
 
 # Nutzervorgabe (Juli 2026): maximale Anzahl automatischer Korrektur-
 # Versuche für die Asset-Allokations-Correction (siehe
