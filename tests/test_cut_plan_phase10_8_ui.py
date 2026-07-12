@@ -257,3 +257,25 @@ def test_ui_shows_export_controls_when_ready(tmp_path: Path, monkeypatch: pytest
     labels = [button.label for button in at.button]
     assert "OTIO exportieren" in labels
     assert any(inp.label == "Dateiname (ohne .otio)" for inp in at.text_input)
+    assert any(m.label == "Folder exportieren" for m in at.multiselect)
+
+
+def test_ui_export_folder_multiselect_defaults_to_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _promoted_and_mapped_project(tmp_path)
+    at = _run_repro(tmp_path, monkeypatch)
+    check_button = next(b for b in at.button if b.label == "OTIO Export Readiness prüfen")
+    at = check_button.click().run()
+    assert not at.exception, at.exception
+    multi = next(m for m in at.multiselect if m.label == "Folder exportieren")
+    assert FOLDER_A in list(multi.value)
+    export_button = next(b for b in at.button if b.label == "OTIO exportieren")
+    assert export_button.disabled is False
+
+    at = multi.set_value([]).run()
+    assert not at.exception, at.exception
+    combined = " ".join(_all_text(at, "warning"))
+    assert "mindestens einen READY-Folder" in combined
+    # Früher Return: Export-Button nicht gerendert, solange nichts gewählt ist.
+    assert "OTIO exportieren" not in [button.label for button in at.button]
