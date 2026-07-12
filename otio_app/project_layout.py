@@ -695,6 +695,23 @@ def get_provider_supplemental_dir(project_root: Path, folder_name: str, provider
     return get_folder_supplemental_dir(project_root, folder_name) / f"_{provider}"
 
 
+def supplemental_clean_subdir(original_path: Path) -> Path | None:
+    """Relative Clean-Unterordner für `_supplemental/_provider/…`, sonst None."""
+    from otio_app.defaults import SUPPLEMENTAL_FOLDER_NAME
+
+    parts = original_path.parts
+    try:
+        idx = parts.index(SUPPLEMENTAL_FOLDER_NAME)
+    except ValueError:
+        return None
+    if idx + 1 >= len(parts):
+        return Path(SUPPLEMENTAL_FOLDER_NAME)
+    provider = parts[idx + 1]
+    if provider.startswith("_"):
+        return Path(SUPPLEMENTAL_FOLDER_NAME) / provider
+    return Path(SUPPLEMENTAL_FOLDER_NAME)
+
+
 def get_exports_dir(work_dir: Path) -> Path:
     """Verzeichnis für OTIO-Exporte unter dem Arbeitsordner."""
     from otio_app.defaults import EXPORTS_SUBDIR
@@ -729,9 +746,17 @@ def clean_output_path_for_media(
     folder_name: str,
     original_path: Path,
 ) -> Path:
-    """Zielpfad für eine transcodierte MP4-Datei."""
+    """Zielpfad für eine transcodierte MP4-Datei.
+
+    Supplement-Assets landen unter `_supplemental/_provider/`, damit gleiche
+    Dateinamen nicht mit Top-Level-Medien kollidieren.
+    """
     stem = safe_folder_slug(original_path.stem) or "media"
-    return get_folder_clean_output_dir(work_dir, folder_name) / f"{stem}.mp4"
+    base = get_folder_clean_output_dir(work_dir, folder_name)
+    sub = supplemental_clean_subdir(original_path)
+    if sub is not None:
+        return base / sub / f"{stem}.mp4"
+    return base / f"{stem}.mp4"
 
 
 def aspect_filled_output_path_for_media(
@@ -744,7 +769,12 @@ def aspect_filled_output_path_for_media(
 ) -> Path:
     """Eigener Dateiname für Zoom/Crop — Resolve verwechselt ihn nicht mit dem Original."""
     stem = safe_folder_slug(original_path.stem) or "media"
-    return get_folder_clean_output_dir(work_dir, folder_name) / f"{stem}_{width}x{height}.mp4"
+    base = get_folder_clean_output_dir(work_dir, folder_name)
+    sub = supplemental_clean_subdir(original_path)
+    name = f"{stem}_{width}x{height}.mp4"
+    if sub is not None:
+        return base / sub / name
+    return base / name
 
 
 def export_processed_output_path_for_media(
@@ -761,7 +791,12 @@ def export_processed_output_path_for_media(
     suffix = f"{width}x{height}"
     if with_title:
         suffix = f"{suffix}_title"
-    return get_folder_clean_output_dir(work_dir, folder_name) / f"{stem}_{suffix}.mp4"
+    name = f"{stem}_{suffix}.mp4"
+    base = get_folder_clean_output_dir(work_dir, folder_name)
+    sub = supplemental_clean_subdir(original_path)
+    if sub is not None:
+        return base / sub / name
+    return base / name
 
 
 def get_otio_export_path(work_dir: Path, project_name: str) -> Path:

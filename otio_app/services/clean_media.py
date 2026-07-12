@@ -17,6 +17,7 @@ from otio_app.project_layout import (
     get_clean_media_output_dir,
     get_folder_clean_manifest_path,
     get_folder_clean_output_dir,
+    get_folder_supplemental_dir,
     safe_folder_slug,
 )
 from otio_app.services.media_utils import (
@@ -131,10 +132,28 @@ def list_clean_files_in_folder(project: Project, folder_name: str) -> list[Path]
     files: list[Path] = []
     for pattern in ("*.mp4", "*.mov", "*.m4v"):
         try:
-            files.extend(clean_dir.glob(pattern))
+            files.extend(clean_dir.rglob(pattern))
         except OSError:
             continue
-    return sorted({path.resolve() for path in files if path_is_readable_file(path)}, key=lambda p: p.name.casefold())
+    return sorted(
+        {path.resolve() for path in files if path_is_readable_file(path)},
+        key=lambda p: str(p).casefold(),
+    )
+
+
+def _list_clean_files_in_dir(directory: Path) -> list[Path]:
+    if not directory.is_dir():
+        return []
+    files: list[Path] = []
+    for pattern in ("*.mp4", "*.mov", "*.m4v"):
+        try:
+            files.extend(directory.glob(pattern))
+        except OSError:
+            continue
+    return sorted(
+        {path.resolve() for path in files if path_is_readable_file(path)},
+        key=lambda p: p.name.casefold(),
+    )
 
 
 def find_clean_file_for_media(
@@ -189,7 +208,9 @@ def find_clean_file_for_media(
 
     asset_number = media_asset_number(media_path)
     stem_key = media_stem_key(media_path)
-    for candidate in list_clean_files_in_folder(project, folder_name):
+    # Nur im erwarteten Clean-Unterordner suchen — verhindert Kollisionen
+    # zwischen Top-Level und `_supplemental/_provider/`.
+    for candidate in _list_clean_files_in_dir(expected.parent):
         if asset_number is not None and media_asset_number(candidate) == asset_number:
             if auto_zoom_fill and not is_image_media(media_path):
                 candidate_probe = probe_media(candidate)
@@ -719,9 +740,45 @@ def folder_manifest_path(project: Project, folder_name: str) -> Path:
     return get_folder_clean_manifest_path(project.work_dir_path, folder_name)
 
 
-def list_folder_media(project: Project, folder_name: str) -> list[Path]:
+def list_folder_media(
+    project: Project,
+    folder_name: str,
+    *,
+    include_supplemental: bool = True,
+) -> list[Path]:
+    """Medien eines Asset-Ordners — optional inkl. `_supplemental/_provider/`."""
     folder_path = project.project_root_path / folder_name
-    return list_media_files(folder_path)
+    media = list(list_media_files(folder_path))
+    if include_supplemental:
+        media.extend(discover_supplemental_media_paths(project, folder_name))
+    deduped: dict[str, Path] = {}
+    for path in media:
+        try:
+            key = str(path.expanduser().resolve())
+        except OSError:
+            key = str(path)
+        deduped[key] = path
+    return sorted(deduped.values(), key=lambda path: str(path).casefold())
+
+
+def discover_supplemental_media_paths(project: Project, folder_name: str) -> list[Path]:
+    """Mediendateien unter `{folder}/_supplemental/_{provider}/`."""
+    supplemental_root = get_folder_supplemental_dir(project.project_root_path, folder_name)
+    if not supplemental_root.is_dir():
+        return []
+    found: list[Path] = []
+    try:
+        children = sorted(supplemental_root.iterdir(), key=lambda path: path.name.casefold())
+    except OSError:
+        return []
+    for child in children:
+        try:
+            if not child.is_dir() or not child.name.startswith("_"):
+                continue
+        except OSError:
+            continue
+        found.extend(list_media_files(child))
+    return found
 
 
 def validate_folder(

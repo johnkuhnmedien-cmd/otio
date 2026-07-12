@@ -140,7 +140,15 @@ def _render_folder_details(project, folder_name: str) -> None:
     )
     for entry in manifest.entries:
         label = _STATUS_LABELS.get(entry.status, entry.status)
-        name = Path(entry.original_path).name
+        original = Path(entry.original_path)
+        name = original.name
+        if "_supplemental" in original.parts:
+            try:
+                idx = original.parts.index("_supplemental")
+                rel = "/".join(original.parts[idx:])
+            except ValueError:
+                rel = name
+            name = rel
         line = f"{label} — `{name}`"
         if entry.probe and entry.probe.video_codec:
             line += f" ({entry.probe.video_codec})"
@@ -226,6 +234,9 @@ def render_clean_media_page() -> None:
         **Erster Schritt vor der Analyse:** Medien werden lokal mit **ffprobe** und **ffmpeg**
         geprüft. Problematische Dateien (z. B. HEVC, ProRes, Decode-Fehler) werden nach
         `_otio/clean/<Ordner>/` als H.264/AAC-MP4 transcodiert — **Originale bleiben unberührt.**
+
+        Enthalten sind auch Supplement-Assets unter `{Ordner}/_supplemental/_…/`
+        (Clean-Ausgabe: `_otio/clean/<Ordner>/_supplemental/_…/`).
 
         Analyse, Inventar und OTIO-Export verwenden danach automatisch die Clean-Pfade.
         """

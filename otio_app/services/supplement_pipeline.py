@@ -541,6 +541,13 @@ def analyze_and_update_inventory_for_folder(
             touched = True
             if str(media_path) in already_analyzed_paths:
                 continue
+            from otio_app.services.clean_media import process_and_persist_media_file
+
+            # Clean Media vor Analyse — Resolve-freundliche Quelle für Frames.
+            try:
+                process_and_persist_media_file(project, folder_name, media_path)
+            except Exception:
+                pass
             asset = analyze_supplement_asset(
                 project,
                 folder_name=folder_name,
@@ -745,14 +752,22 @@ def analyze_supplement_asset(
 ) -> AssetMediaAnalysis:
     if not local_path.is_file() or local_path.stat().st_size <= 0:
         raise ValueError(f"Supplement-Datei fehlt oder ist leer: {local_path}")
+
+    from otio_app.services.clean_media import resolve_effective_media_path
+
+    # Clean Media bevorzugen (Resolve-freundliche Transcodes), Originalpfad bleibt im Inventory.
+    analysis_path = resolve_effective_media_path(project, folder_name, local_path)
+    if not analysis_path.is_file() or analysis_path.stat().st_size <= 0:
+        analysis_path = local_path
+
     frames_dir = (
         project.work_dir_path
         / "frames"
         / folder_name.replace(" ", "_")
         / local_path.stem
     )
-    frame_count = 1 if is_image_media(local_path) else max(1, project.frames_per_shot)
-    frames = extract_frames(local_path, frames_dir, frame_count)
+    frame_count = 1 if is_image_media(analysis_path) else max(1, project.frames_per_shot)
+    frames = extract_frames(analysis_path, frames_dir, frame_count)
     gemini_model = get_default_gemini_model()
     description = ""
     if frames and is_gemini_configured():
