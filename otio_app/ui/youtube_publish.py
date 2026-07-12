@@ -59,11 +59,10 @@ def _copyable_text(
     key: str,
     height: int | None = None,
 ) -> None:
-    """Kopierbares Feld — nicht disabled, damit Cmd/Ctrl+A / Klick+Kopieren funktioniert."""
-    if height is None:
-        st.text_input(label, value=value, key=key)
-    else:
-        st.text_area(label, value=value, height=height, key=key)
+    """Kopierbares Feld mit Streamlit-Copy-Button (st.code)."""
+    del key, height  # Anzeige über st.code — kein Widget-State nötig.
+    st.markdown(f"**{label}**")
+    st.code(value or "", language=None)
 
 
 def _render_copyable_results(
@@ -73,7 +72,7 @@ def _render_copyable_results(
     key_prefix: str,
 ) -> None:
     run = document.llm_run_id or "saved"
-    st.caption("Felder anklicken → alles markieren (Cmd/Ctrl+A) → kopieren.")
+    st.caption("Oben rechts am Code-Block: **Kopieren**-Icon (ein Klick).")
 
     _copyable_text(
         "YouTube-Titel",
@@ -88,7 +87,7 @@ def _render_copyable_results(
         height=280,
     )
     _copyable_text(
-        f"Hashtags ({len(_normalize_hashtags(document.hashtags))}/{YOUTUBE_HASHTAGS_MAX_CHARS}) — ohne #, komma-getrennt",
+        f"Hashtags ({len(_normalize_hashtags(document.hashtags))}/{YOUTUBE_HASHTAGS_MAX_CHARS}) — Format: USA, Natur, …",
         _normalize_hashtags(document.hashtags),
         key=f"{key_prefix}_yt_hash_{project_id}_{run}",
         height=80,
