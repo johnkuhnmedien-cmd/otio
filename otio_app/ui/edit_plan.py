@@ -1813,6 +1813,7 @@ def _cache_export_preview(
         "warnings": preview.warnings,
         "validation_status": preview.validation_status,
         "voiceovers": [vo.model_dump(mode="json") for vo in preview.voiceovers],
+        "cut_plan_relaxed_folders": list(preview.cut_plan_relaxed_folders),
     }
     st.session_state[_export_preview_folders_key(project_id)] = list(folders)
 
@@ -1834,6 +1835,7 @@ def _load_cached_export_preview(project_id: str) -> MergedEditPlanResult | None:
         skipped_folders=list(raw["skipped_folders"]),
         warnings=list(raw["warnings"]),
         validation_status=str(raw.get("validation_status", "OK")),
+        cut_plan_relaxed_folders=list(raw.get("cut_plan_relaxed_folders", [])),
     )
 
 

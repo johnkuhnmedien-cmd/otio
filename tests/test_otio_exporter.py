@@ -947,3 +947,159 @@ def test_merge_skips_blocked_candidate_plan(tmp_path: Path) -> None:
     merged = merge_confirmed_edit_plans(project)
     assert merged.validation_status == "BLOCKED"
     assert "Grand Canyon" in merged.skipped_folders
+
+
+def test_merge_cut_plan_bridge_audio_plan_ignores_production_defaults(tmp_path: Path) -> None:
+    """Cut-Plan-promotete Pläne: duration_source=bridge_audio_plan + Default-
+    EditPlanSettings (shot_max=8, offset=1, outro=5, head_trim=0.5) dürfen den
+    Merge nicht blockieren — dieselbe relaxierte Validierung wie Staging."""
+    from otio_app.defaults import PRODUCTION_EDIT_PLAN_CANDIDATE_STATUS_STAGING_DRAFT
+
+    project = _project(tmp_path)
+    work = project.work_dir_path
+    work.mkdir(parents=True, exist_ok=True)
+    voice = str(tmp_path / "antelope_v003.mp3")
+    Path(voice).write_bytes(b"x")
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    mapping = VoiceFolderMappingDocument(
+        project_id=project.id,
+        confirmed=True,
+        entries=[
+            VoiceFolderMappingEntry(voice_file=voice, folder="Antelope Canyon", confirmed=True)
+        ],
+    )
+    project.voice_folder_mapping_path.parent.mkdir(parents=True, exist_ok=True)
+    project.voice_folder_mapping_path.write_text(mapping.model_dump_json(indent=2), encoding="utf-8")
+
+    duration = 20.0
+    items = [
+        TimelineItem(
+            timeline_item_id="edit_cut_001_sentence_002_seg_01",
+            type="video_shot",
+            section_id="cut_001",
+            folder_name="Antelope Canyon",
+            voice_file="",
+            resolved_media_path=str(clip),
+            timeline_in_sec=0.0,
+            timeline_out_sec=10.0,
+            duration_sec=10.0,
+            final_duration_sec=10.0,
+            source_in_sec=1.0,
+            source_out_sec=11.0,
+            track="V1",
+            asset_type="video",
+            voice_start_sec=0.0,
+            voice_end_sec=10.0,
+        ),
+        TimelineItem(
+            timeline_item_id="edit_cut_001_sentence_003_seg_01",
+            type="video_shot",
+            section_id="cut_001",
+            folder_name="Antelope Canyon",
+            voice_file="",
+            resolved_media_path=str(clip),
+            timeline_in_sec=10.0,
+            timeline_out_sec=20.0,
+            duration_sec=10.0,
+            final_duration_sec=10.0,
+            source_in_sec=1.0,
+            source_out_sec=11.0,
+            track="V1",
+            asset_type="video",
+            voice_start_sec=10.0,
+            voice_end_sec=20.0,
+        ),
+    ]
+    save_edit_plan(
+        project,
+        EditPlanDocument(
+            project_id=project.id,
+            folder_name="Antelope Canyon",
+            confirmed=True,
+            settings=EditPlanSettings(),  # production defaults that would block
+            voiceover=VoiceoverPlan(
+                path=voice,
+                timeline_start_sec=0.0,
+                source_in_sec=0.0,
+                source_out_sec=duration,
+                duration_sec=duration,
+                timeline_end_sec=duration,
+                duration_source="bridge_audio_plan",
+                trim_policy="disabled",
+            ),
+            shots=[],
+            timeline_items=items,
+            candidate_status=PRODUCTION_EDIT_PLAN_CANDIDATE_STATUS_STAGING_DRAFT,
+            allow_black_outro=True,
+        ),
+        "Antelope Canyon",
+    )
+
+    merged = merge_confirmed_edit_plans(project, folder_names=["Antelope Canyon"])
+    assert "Antelope Canyon" in merged.cut_plan_relaxed_folders
+    assert merged.validation_status == "OK", merged.warnings
+    assert merged.ready is True
+    assert not any("duration_source muss ffprobe" in w for w in merged.warnings)
+    assert not any("section_outro_sec" in w for w in merged.warnings)
+    assert not any("Ordner-Titel-Regel" in w for w in merged.warnings)
+    assert not any("audio_offset_sec" in w for w in merged.warnings)
+    assert not any("source_in_sec muss 0.5" in w for w in merged.warnings)
+    assert not any("länger als" in w for w in merged.warnings)
+
+
+def test_merge_production_plan_still_enforces_defaults(tmp_path: Path) -> None:
+    """Klassische With-Voice-over-Pläne behalten die strenge Merge-Validierung."""
+    project = _project(tmp_path)
+    work = project.work_dir_path
+    work.mkdir(parents=True, exist_ok=True)
+    voice = str(tmp_path / "florida_v003.mp3")
+    Path(voice).write_bytes(b"x")
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    mapping = VoiceFolderMappingDocument(
+        project_id=project.id,
+        confirmed=True,
+        entries=[VoiceFolderMappingEntry(voice_file=voice, folder="Florida Keys", confirmed=True)],
+    )
+    project.voice_folder_mapping_path.parent.mkdir(parents=True, exist_ok=True)
+    project.voice_folder_mapping_path.write_text(mapping.model_dump_json(indent=2), encoding="utf-8")
+
+    items = [
+        TimelineItem(
+            timeline_item_id="item_1",
+            type="video_shot",
+            section_id="section_florida_keys",
+            folder_name="Florida Keys",
+            voice_file=voice,
+            resolved_media_path=str(clip),
+            timeline_in_sec=1.0,
+            timeline_out_sec=11.0,
+            duration_sec=10.0,
+            final_duration_sec=10.0,
+            source_in_sec=0.5,
+            source_out_sec=10.5,
+            track="V1",
+            asset_type="video",
+            voice_start_sec=0.0,
+            voice_end_sec=5.0,
+        )
+    ]
+    save_edit_plan(
+        project,
+        EditPlanDocument(
+            project_id=project.id,
+            folder_name="Florida Keys",
+            confirmed=True,
+            settings=EditPlanSettings(),  # shot_max=8 → 10s shot blocks
+            voiceover=_voiceover_plan(voice, duration=5.0),
+            shots=[],
+            timeline_items=items,
+        ),
+        "Florida Keys",
+    )
+
+    merged = merge_confirmed_edit_plans(project, folder_names=["Florida Keys"])
+    assert merged.cut_plan_relaxed_folders == []
+    assert merged.ready is False
+    assert any("Validierung:" in w for w in merged.warnings)

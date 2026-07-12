@@ -47,7 +47,9 @@ from otio_app.services.otio_export_settings import (
     load_otio_export_settings,
     save_otio_export_settings,
 )
+from otio_app.defaults import PRODUCTION_EDIT_PLAN_CANDIDATE_STATUS_STAGING_DRAFT
 from otio_app.services.edit_plan_validator import (
+    TimelineValidationResult,
     ValidationStatus,
     plan_validation_error_to_message,
     validate_opening_titles,
@@ -61,6 +63,10 @@ from otio_app.services.timeline_plan_builder import (
 )
 from otio_app.services.opening_title_renderer import ensure_opening_titles_rendered
 from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
+from otio_app.services.voiceover_generation.production_edit_plan_validation import (
+    is_known_cut_plan_validator_incompatibility,
+    relaxed_validation_settings_for_cut_plan,
+)
 
 
 @dataclass(frozen=True)
@@ -73,10 +79,82 @@ class MergedEditPlanResult:
     skipped_folders: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     validation_status: str = ValidationStatus.OK.value
+    # Folder, die beim Merge mit Cut-Plan-relaxierten Settings geprüft wurden
+    # (duration_source=bridge_audio_plan / Staging-Candidate).
+    cut_plan_relaxed_folders: list[str] = field(default_factory=list)
 
     @property
     def ready(self) -> bool:
         return bool(self.timeline_items) and self.validation_status == ValidationStatus.OK.value
+
+
+def _is_cut_plan_origin_edit_plan(plan: EditPlanDocument) -> bool:
+    """Erkennt Cut-Plan-/Phase-10-promotete Pläne (nicht With-Voice-over-Pipeline)."""
+    if plan.candidate_status == PRODUCTION_EDIT_PLAN_CANDIDATE_STATUS_STAGING_DRAFT:
+        return True
+    voiceover = plan.voiceover
+    if voiceover is not None and voiceover.duration_source == "bridge_audio_plan":
+        return True
+    return False
+
+
+def _filter_cut_plan_validation_messages(messages: list[str]) -> list[str]:
+    return [msg for msg in messages if not is_known_cut_plan_validator_incompatibility(msg)]
+
+
+def _timeline_validation_for_merge(
+    *,
+    plan: EditPlanDocument,
+    section_items: list[TimelineItem],
+    section_voiceover: VoiceoverPlan | None,
+    export_rules: ExportRuleOptions,
+    rules_doc,
+    project: Project,
+) -> tuple[TimelineValidationResult, EditPlanSettings, bool]:
+    """Wählt Produktions- vs. Cut-Plan-relaxierte Validierung für den Merge."""
+    cut_plan = _is_cut_plan_origin_edit_plan(plan)
+    if cut_plan:
+        settings = relaxed_validation_settings_for_cut_plan(section_voiceover)
+        validation = validate_timeline_items(
+            section_items,
+            settings=settings,
+            allow_black_outro=True,
+            fps=float(project.fps),
+            voiceover=section_voiceover,
+            opening_title_required=False,
+            require_rendered_media=False,
+            rules_doc=None,
+            work_dir_path=None,
+            allow_asset_rule_overrides=True,
+        )
+        filtered_errors = _filter_cut_plan_validation_messages(validation.errors)
+        filtered_warnings = _filter_cut_plan_validation_messages(validation.warnings)
+        if filtered_errors != validation.errors or filtered_warnings != validation.warnings:
+            status = validation.status
+            if not filtered_errors and status == ValidationStatus.BLOCKED:
+                status = ValidationStatus.OK
+            elif not filtered_errors and status == ValidationStatus.AWAITING_APPROVAL:
+                # Nur Opening-Title / bekannte Inkompatibilitäten → Export freigeben
+                status = ValidationStatus.OK
+            validation = TimelineValidationResult(
+                status=status,
+                errors=filtered_errors,
+                warnings=filtered_warnings,
+            )
+        return validation, settings, True
+
+    validation = validate_timeline_items(
+        section_items,
+        settings=plan.settings,
+        allow_black_outro=plan.allow_black_outro,
+        fps=float(project.fps),
+        voiceover=section_voiceover,
+        opening_title_required=export_rules.folder_title_enabled,
+        rules_doc=rules_doc,
+        work_dir_path=project.work_dir_path,
+        allow_asset_rule_overrides=True,
+    )
+    return validation, plan.settings, False
 
 
 @dataclass(frozen=True)
@@ -216,6 +294,7 @@ def merge_confirmed_edit_plans(
 
     worst_status = ValidationStatus.OK
     all_validation_errors: list[str] = []
+    cut_plan_relaxed_folders: list[str] = []
 
     for entry in mapping.entries:
         if not entry.confirmed or not entry.folder:
@@ -250,10 +329,6 @@ def merge_confirmed_edit_plans(
             )
             worst_status = ValidationStatus.BLOCKED
 
-        if folder_name not in included:
-            included.append(folder_name)
-            settings = plan.settings
-
         section_items = _plan_section_items(plan, folder_name, entry.voice_file)
         if not section_items:
             warnings.append(
@@ -275,17 +350,26 @@ def merge_confirmed_edit_plans(
         # Wert, mit dem die Timeline-Items nie gebaut wurden — z. B.
         # "section_outro_sec (8.5s) nicht vollständig geplant (4.0s)", obwohl
         # der Schnittplan selbst vollkommen konsistent war.
-        validation = validate_timeline_items(
-            section_items,
-            settings=plan.settings,
-            allow_black_outro=plan.allow_black_outro,
-            fps=float(project.fps),
-            voiceover=section_voiceover,
-            opening_title_required=export_rules.folder_title_enabled,
+        #
+        # Cut-Plan-promotete Pläne (duration_source=bridge_audio_plan) nutzen
+        # dieselben relaxierten Settings wie die Staging-Validierung — sonst
+        # schlagen With-Voice-over-Defaults (shot_max=8, outro=5, offset=1,
+        # head_trim=0.5, ffprobe, Opening Title) trotz PASS-Staging fehl.
+        validation, section_settings, used_cut_plan_relaxed = _timeline_validation_for_merge(
+            plan=plan,
+            section_items=section_items,
+            section_voiceover=section_voiceover,
+            export_rules=export_rules,
             rules_doc=rules_doc,
-            work_dir_path=project.work_dir_path,
-            allow_asset_rule_overrides=True,
+            project=project,
         )
+        if used_cut_plan_relaxed and folder_name not in cut_plan_relaxed_folders:
+            cut_plan_relaxed_folders.append(folder_name)
+
+        if folder_name not in included:
+            included.append(folder_name)
+            settings = section_settings
+
         all_validation_errors.extend(f"{folder_name}: {err}" for err in validation.errors)
         warnings.extend(validation.warnings)
         if validation.status == ValidationStatus.BLOCKED:
@@ -310,9 +394,14 @@ def merge_confirmed_edit_plans(
     warnings.extend(verify_timeline_media_paths(project, merged_items))
 
     if merged_items:
+        global_settings = (
+            relaxed_validation_settings_for_cut_plan(merged_voiceovers[0] if merged_voiceovers else None)
+            if cut_plan_relaxed_folders
+            else settings
+        )
         global_validation = global_validation_blocked(
             merged_items,
-            settings=settings,
+            settings=global_settings,
             rules_doc=rules_doc,
             allow_asset_rule_overrides=True,
         )
@@ -336,6 +425,11 @@ def merge_confirmed_edit_plans(
     if not merged_items and not skipped:
         warnings.append("Keine bestätigten Schnittpläne zum Export gefunden.")
 
+    if cut_plan_relaxed_folders:
+        settings = relaxed_validation_settings_for_cut_plan(
+            merged_voiceovers[0] if merged_voiceovers else None
+        )
+
     return MergedEditPlanResult(
         timeline_items=merged_items,
         shots=shots,
@@ -345,6 +439,7 @@ def merge_confirmed_edit_plans(
         skipped_folders=skipped,
         warnings=warnings,
         validation_status=worst_status.value,
+        cut_plan_relaxed_folders=cut_plan_relaxed_folders,
     )
 
 
@@ -1134,12 +1229,18 @@ def export_otio_timeline(
         skipped_folders=merged.skipped_folders,
         warnings=list(merged.warnings) + _render_notes,
         validation_status=merged.validation_status,
+        cut_plan_relaxed_folders=list(merged.cut_plan_relaxed_folders),
     )
 
     export_rules = export_rule_options(load_edit_plan_rules(project))
+    opening_title_required = (
+        False
+        if merged.cut_plan_relaxed_folders
+        else export_rules.folder_title_enabled
+    )
     post_render_validation = validate_opening_titles(
         merged.timeline_items,
-        opening_title_required=export_rules.folder_title_enabled,
+        opening_title_required=opening_title_required,
         require_rendered_media=True,
     )
     if post_render_validation.errors:

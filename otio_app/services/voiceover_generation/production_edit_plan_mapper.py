@@ -316,11 +316,21 @@ def build_production_edit_plan_document_skeleton(
     shots-Synthese (shots=[]) — folgt erst in Phase 10.2. `confirmed=False`
     und ein eigener candidate_status-Marker stellen sicher, dass ein
     gestagtes Dokument niemals mit einem echten Produktions-Draft verwechselt
-    werden kann."""
+    werden kann.
+
+    Settings werden bewusst als Cut-Plan-relaxierte Werte gestempelt
+    (nicht EditPlanSettings()-Defaults), damit ein späterer OTIO-Merge
+    dieselben Timing-/Shot-Grenzen sieht wie die Staging-Validierung.
+    """
+    from otio_app.services.voiceover_generation.production_edit_plan_validation import (
+        relaxed_validation_settings_for_cut_plan,
+    )
+
     return EditPlanDocument(
         project_id=project.id,
         folder_name=section_identity.folder_name,
         confirmed=False,
+        settings=relaxed_validation_settings_for_cut_plan(voiceover_plan),
         voiceover=voiceover_plan,
         shots=[],
         timeline_items=list(visual_items),
