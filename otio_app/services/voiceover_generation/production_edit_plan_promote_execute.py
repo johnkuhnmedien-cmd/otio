@@ -246,9 +246,27 @@ def _set_promoted_document_confirmed_true(
     """Analog zur Normalisierung der bestehenden Produktions-Save-Funktion
     (project_id/folder_name), zusätzlich confirmed=true — der Promote selbst
     ist der explizite Nutzerakt, der ein bereits PASS-validiertes
-    Staging-Paket bestätigt."""
+    Staging-Paket bestätigt.
+
+    Visual-TimelineItems aus dem Cut-Plan-Staging haben oft leeres
+    voice_file; für den späteren OTIO-Merge wird der VoiceoverPlan-Pfad
+    auf die Items gestempelt."""
+    voice_path = (document.voiceover.path if document.voiceover is not None else "").strip()
+    timeline_items = list(document.timeline_items)
+    if voice_path:
+        timeline_items = [
+            item
+            if item.voice_file.strip()
+            else item.model_copy(update={"voice_file": voice_path})
+            for item in timeline_items
+        ]
     return document.model_copy(
-        update={"project_id": project.id, "folder_name": folder_name, "confirmed": True}
+        update={
+            "project_id": project.id,
+            "folder_name": folder_name,
+            "confirmed": True,
+            "timeline_items": timeline_items,
+        }
     )
 
 

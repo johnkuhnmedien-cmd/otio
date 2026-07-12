@@ -30,6 +30,7 @@ from otio_app.services.otio_exporter import (
     _compute_timeline_sections,
     _media_reference,
     _media_target_url,
+    _plan_section_items,
     build_otio_timeline,
     export_otio_timeline,
     merge_confirmed_edit_plans,
@@ -290,6 +291,97 @@ def test_merge_does_not_false_block_second_section_global_coords(tmp_path: Path)
         "generic_outro startet bei" in warning and "Grand Canyon" in warning
         for warning in merged.warnings
     )
+
+
+def test_plan_section_items_accepts_empty_voice_file_from_cut_plan_staging(tmp_path: Path) -> None:
+    """Cut-Plan-Promote schreibt VisualItems oft ohne voice_file — Merge darf
+    sie nicht verwerfen, sonst: „kein timeline_items im Schnittplan“."""
+    voice = "/audio/arches_v003.mp3"
+    items = [
+        TimelineItem(
+            timeline_item_id="edit_seg_1",
+            type="video_shot",
+            section_id="cut_001",
+            folder_name="Arches National Park",
+            voice_file="",
+            resolved_media_path="/media/clip.mp4",
+            timeline_in_sec=0.0,
+            timeline_out_sec=3.0,
+            duration_sec=3.0,
+            final_duration_sec=3.0,
+            track="V1",
+        )
+    ]
+    plan = EditPlanDocument(
+        project_id="p",
+        folder_name="Arches National Park",
+        confirmed=True,
+        voiceover=VoiceoverPlan(path=voice, duration_sec=3.0, timeline_end_sec=3.0),
+        timeline_items=items,
+        shots=[],
+    )
+    matched = _plan_section_items(plan, "Arches National Park", voice)
+    assert len(matched) == 1
+    assert matched[0].voice_file == voice
+
+
+def test_merge_cut_plan_promoted_plans_with_empty_item_voice_file(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    work = project.work_dir_path
+    work.mkdir(parents=True, exist_ok=True)
+    voice_a = str(tmp_path / "florida_v003.mp3")
+    Path(voice_a).write_bytes(b"x")
+    mapping = VoiceFolderMappingDocument(
+        project_id=project.id,
+        confirmed=True,
+        entries=[VoiceFolderMappingEntry(voice_file=voice_a, folder="Florida Keys", confirmed=True)],
+    )
+    project.voice_folder_mapping_path.parent.mkdir(parents=True, exist_ok=True)
+    project.voice_folder_mapping_path.write_text(mapping.model_dump_json(indent=2), encoding="utf-8")
+
+    items = [
+        TimelineItem(
+            timeline_item_id="edit_seg_1",
+            type="video_shot",
+            section_id="cut_001",
+            folder_name="Florida Keys",
+            voice_file="",
+            resolved_media_path=str(tmp_path / "clip.mp4"),
+            timeline_in_sec=0.0,
+            timeline_out_sec=4.0,
+            duration_sec=4.0,
+            final_duration_sec=4.0,
+            track="V1",
+            asset_type="video",
+        )
+    ]
+    (tmp_path / "clip.mp4").write_bytes(b"x")
+    save_edit_plan(
+        project,
+        EditPlanDocument(
+            project_id=project.id,
+            folder_name="Florida Keys",
+            confirmed=True,
+            settings=EditPlanSettings(audio_offset_sec=0.0, section_outro_sec=0.0),
+            voiceover=VoiceoverPlan(path=voice_a, duration_sec=4.0, timeline_end_sec=4.0),
+            shots=[],
+            timeline_items=items,
+        ),
+        "Florida Keys",
+    )
+
+    with patch("otio_app.services.otio_exporter.validate_timeline_items") as mock_validate:
+        from otio_app.services.edit_plan_validator import TimelineValidationResult, ValidationStatus
+
+        mock_validate.return_value = TimelineValidationResult(
+            status=ValidationStatus.OK, errors=[], warnings=[]
+        )
+        merged = merge_confirmed_edit_plans(project, folder_names=["Florida Keys"])
+
+    assert not any("kein timeline_items" in warning for warning in merged.warnings)
+    assert len(merged.timeline_items) == 1
+    assert merged.timeline_items[0].voice_file == voice_a
+    assert merged.ready is True
 
 
 def test_export_ignores_stale_global_export_settings_override(tmp_path: Path) -> None:
