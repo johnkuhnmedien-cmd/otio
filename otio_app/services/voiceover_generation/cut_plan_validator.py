@@ -851,11 +851,14 @@ def validate_no_black_gap_during_voiceover(
     Diagnose für Manual Replace."""
     from otio_app.services.voiceover_generation.cut_plan_visual_coverage import (
         diagnose_section_pause_hold_failure,
+        find_last_visual_segment_before_time,
         find_section_pause_responsible_item,
     )
 
     warnings: list[CutPlanValidationError] = []
     blockers: list[CutPlanValidationError] = []
+    settings = settings_from_snapshot(project, cut_plan)
+    section_pause_tolerance = max(0.0, float(settings.section_pause_hold_tolerance_sec))
 
     all_segments = [
         (segment.timeline_in_sec, segment.timeline_out_sec)
@@ -876,6 +879,17 @@ def validate_no_black_gap_during_voiceover(
         is_section_pause: bool = False,
     ) -> None:
         for sub_start, sub_end in _uncovered_subintervals(coverage, gap_start, gap_end):
+            if is_section_pause and (sub_end - sub_start) <= section_pause_tolerance + _DURATION_EPSILON:
+                # Nur Restlücken NACH einem Teil-Hold akzeptieren (Segment
+                # ragt bereits über das Audio-Ende der vorherigen Sektion),
+                # nicht eine komplett unbedeckte kurze Pause.
+                held = find_last_visual_segment_before_time(cut_plan, sub_start)
+                if (
+                    held is not None
+                    and preceding_audio is not None
+                    and held[1].timeline_out_sec > preceding_audio.timeline_end_sec + _DURATION_EPSILON
+                ):
+                    continue
             responsible_items = _items_overlapping_gap(
                 cut_plan, sub_start, sub_end, folder_name=folder_name or None
             )

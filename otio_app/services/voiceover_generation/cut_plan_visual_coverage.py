@@ -373,18 +373,35 @@ def extend_section_end_visuals_over_pauses(
         if segment.timeline_out_sec >= next_audio.timeline_start_sec - _EPSILON:
             continue  # bereits abgedeckt
 
-        additional = next_audio.timeline_start_sec - segment.timeline_out_sec
-        new_duration = segment.duration_sec + additional
+        target_out = next_audio.timeline_start_sec
+        additional = target_out - segment.timeline_out_sec
         new_source_out_sec = segment.source_out_sec + additional
 
         if segment.asset_type != "image":
-            if not _video_can_extend_to(segment.asset_path, new_source_out_sec):
-                continue  # Video zu kurz -> Loch bleibt sichtbar, kein stilles Schwarzbild
+            # Teil-Hold: so weit strecken wie das Video hergibt, statt bei
+            # knapper Reserve gar nichts zu verlängern (Restlücke kann dann
+            # unter section_pause_hold_tolerance_sec fallen).
+            path = Path(segment.asset_path) if segment.asset_path else None
+            real_duration = (
+                probe_duration_seconds(path) if path is not None and path.is_file() else None
+            )
+            if real_duration is None:
+                if not _video_can_extend_to(segment.asset_path, new_source_out_sec):
+                    continue
+            elif segment.source_out_sec >= real_duration - _EPSILON:
+                continue  # keine Reserve mehr
+            elif new_source_out_sec > real_duration + _TOLERANCE:
+                usable_additional = max(0.0, real_duration - segment.source_out_sec)
+                if usable_additional <= _EPSILON:
+                    continue
+                additional = usable_additional
+                target_out = segment.timeline_out_sec + additional
+                new_source_out_sec = segment.source_out_sec + additional
 
         updated_segment = segment.model_copy(
             update={
-                "timeline_out_sec": next_audio.timeline_start_sec,
-                "duration_sec": new_duration,
+                "timeline_out_sec": target_out,
+                "duration_sec": segment.duration_sec + additional,
                 "source_out_sec": new_source_out_sec,
                 "reason": _combine_reason(segment.reason, REASON_SECTION_PAUSE_HOLD),
             }

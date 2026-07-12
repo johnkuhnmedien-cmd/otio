@@ -23,7 +23,7 @@ from pathlib import Path
 from otio_app.defaults import (
     CUT_PLAN_ASSET_SELECTION_GENERIC_FALLBACK_USED,
     CUT_PLAN_ASSET_SELECTION_MANUAL_USED,
-    CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED,
+    CUT_PLAN_STALE_VALIDATION_BLOCKER_TYPES,
     CUT_PLAN_STATUS_DRAFT,
     CUT_PLAN_STATUS_NEEDS_REVIEW,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
@@ -183,8 +183,14 @@ def _build_local_asset_segment_and_updated_item(
         reason=segment_reason,
     )
 
+    # Veraltete Validierungs-Blocker/Warnings (BLACK_GAP, ASSET_TOO_SHORT, …)
+    # müssen weg — sonst meldet „Cut Plan validieren“ sie wieder als
+    # „aus Asset-Auswahl übernommen“, obwohl das Asset gerade korrekt gesetzt wurde.
     remaining_blockers = [
-        blocker for blocker in target_item.blockers if blocker != CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED
+        blocker for blocker in target_item.blockers if blocker not in CUT_PLAN_STALE_VALIDATION_BLOCKER_TYPES
+    ]
+    remaining_warnings = [
+        warning for warning in target_item.warnings if warning not in CUT_PLAN_STALE_VALIDATION_BLOCKER_TYPES
     ]
 
     return target_item.model_copy(
@@ -197,6 +203,7 @@ def _build_local_asset_segment_and_updated_item(
             "needs_supplement_asset": False,
             "planned_visual_segments": [segment],
             "blockers": remaining_blockers,
+            "warnings": remaining_warnings,
         }
     )
 

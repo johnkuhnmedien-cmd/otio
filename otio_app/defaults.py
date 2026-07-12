@@ -908,6 +908,11 @@ CUT_PLAN_DEFAULT_CLOSING_SHOT_MIN_DURATION_SEC = 1.0
 # durch einfaches Halten des vorherigen Bildes/Videos geschlossen werden
 # können, ohne den Cut-Plan-Code selbst zu ändern.
 CUT_PLAN_DEFAULT_BLACK_GAP_AUTO_HOLD_MAX_SEC = 1.0
+# Nutzervorgabe (Juli 2026): kleine Restlücke bei Sektionspausen-Hold
+# (z. B. Video hat 4.0s Reserve, Pause braucht 5.0s) gilt bis zu diesem
+# Wert noch als akzeptabel — kein BLACK_GAP_DURING_VOICEOVER. Pro Projekt
+# in CutPlanSettings.section_pause_hold_tolerance_sec einstellbar.
+CUT_PLAN_DEFAULT_SECTION_PAUSE_HOLD_TOLERANCE_SEC = 1.5
 
 # Nutzervorgabe (Juli 2026): Assets sollen generell bis zum Start des
 # NÄCHSTEN Satzes weiterlaufen, statt exakt am eigenen Satzende zu enden —

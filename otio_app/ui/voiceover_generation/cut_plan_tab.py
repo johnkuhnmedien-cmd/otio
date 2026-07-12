@@ -452,6 +452,19 @@ def _render_settings_editor(project: Project) -> CutPlanSettings:
             "natürliche Sprechpausen automatisch, können aber Standbilder länger "
             "halten.",
         )
+        section_pause_hold_tolerance_sec = st.number_input(
+            "Sektionspausen-Hold-Toleranz (s)",
+            min_value=0.0,
+            max_value=5.0,
+            value=settings.section_pause_hold_tolerance_sec,
+            step=0.1,
+            key=f"cut_plan_section_pause_hold_tolerance_{project.id}",
+            help="Restlücke nach dem Hold der Pause zwischen Sektionen (Closing), "
+            "die noch KEINEN BLACK_GAP-Blocker auslöst. Beispiel: Video hat 4.0s "
+            "Reserve, Pause braucht 5.0s → bei Toleranz 1.5s ok. Nach Speichern "
+            "greift der Wert beim nächsten „Cut Plan validieren“ "
+            "(wird in den Draft-Snapshot übernommen).",
+        )
         extend_visual_window_to_next_sentence = st.checkbox(
             "Visuelles Fenster bis zum nächsten Satz ausdehnen",
             value=settings.extend_visual_window_to_next_sentence,
@@ -499,6 +512,7 @@ def _render_settings_editor(project: Project) -> CutPlanSettings:
             "max_asset_usage": int(max_asset_usage),
             "min_asset_reuse_distance_shots": int(min_asset_reuse_distance_shots),
             "black_gap_auto_hold_max_sec": float(black_gap_auto_hold_max_sec),
+            "section_pause_hold_tolerance_sec": float(section_pause_hold_tolerance_sec),
             "extend_visual_window_to_next_sentence": bool(extend_visual_window_to_next_sentence),
             "max_sentence_pause_extension_sec": float(max_sentence_pause_extension_sec),
             "timeline_fps": int(timeline_fps),
@@ -511,6 +525,17 @@ def _render_settings_editor(project: Project) -> CutPlanSettings:
     with col_save:
         if st.button("Cut Plan Settings speichern", key=f"cut_plan_settings_save_{project.id}"):
             save_cut_plan_settings(project, updated)
+            # Toleranz soll ohne Draft-Neuaufbau greifen — nur dieses Feld
+            # in den eingefrorenen Snapshot schreiben (kein Timeline-Rebuild).
+            draft = load_cut_plan_draft(project)
+            if draft is not None:
+                snap = dict(draft.settings_snapshot or {})
+                snap["section_pause_hold_tolerance_sec"] = float(
+                    updated.section_pause_hold_tolerance_sec
+                )
+                save_cut_plan_draft(
+                    project, draft.model_copy(update={"settings_snapshot": snap})
+                )
             st.success("Cut Plan Settings gespeichert.")
             st.rerun()
     with col_reload:
@@ -699,7 +724,9 @@ def _render_cut_plan_draft(project: Project, draft: CutPlanDocument) -> None:
             if any(error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER for error in draft.blockers):
                 st.markdown("---")
                 st.markdown("**Direkt hier reparieren**")
-                _render_black_gap_manual_repair(project, draft, compact=True)
+                _render_black_gap_manual_repair(
+                    project, draft, compact=True, key_prefix="draft_blockers"
+                )
 
     st.divider()
     _render_validation_report(project, draft)
@@ -1482,10 +1509,17 @@ def _dedupe_black_gap_errors(errors: list[CutPlanValidationError]) -> list[CutPl
 
 
 def _render_black_gap_manual_repair(
-    project: Project, draft: CutPlanDocument, *, compact: bool = False
+    project: Project,
+    draft: CutPlanDocument,
+    *,
+    compact: bool = False,
+    key_prefix: str = "main",
 ) -> None:
     """Diagnose + manueller Asset-Tausch für BLACK_GAP_DURING_VOICEOVER —
-    inkl. Sektionspausen (Closing) und Satz-Löcher (zu kurzes Fallback)."""
+    inkl. Sektionspausen (Closing) und Satz-Löcher (zu kurzes Fallback).
+
+    key_prefix muss einzigartig sein, wenn die UI zweimal auf derselben Seite
+    gerendert wird (z. B. unter Warnungen/Blocker und als eigener Abschnitt)."""
     from otio_app.services.voiceover_generation.cut_plan_visual_coverage import (
         diagnose_section_pause_hold_failure,
     )
@@ -1612,10 +1646,11 @@ def _render_black_gap_manual_repair(
                 f"({option.media_type}, {option.duration_sec:.1f}s) — {option.description[:60]}"
                 for option in options
             ]
+            widget_key = f"{key_prefix}_{project.id}_{target_cut_item_id}_{index}"
             selected_label = st.selectbox(
                 "Ersatz-Asset wählen",
                 options=labels,
-                key=f"cut_plan_black_gap_manual_select_{project.id}_{target_cut_item_id}_{index}",
+                key=f"cut_plan_black_gap_manual_select_{widget_key}",
             )
             selected = options[labels.index(selected_label)]
             if not selected.likely_usable:
@@ -1625,7 +1660,7 @@ def _render_black_gap_manual_repair(
                 )
             if st.button(
                 "Asset in Cut Plan übernehmen",
-                key=f"cut_plan_black_gap_manual_apply_{project.id}_{target_cut_item_id}_{index}",
+                key=f"cut_plan_black_gap_manual_apply_{widget_key}",
                 type="primary",
             ):
                 try:
@@ -3564,7 +3599,7 @@ def render_cut_plan_page() -> None:
         st.divider()
         _render_supplement_requests(project, existing_draft)
         st.divider()
-        _render_black_gap_manual_repair(project, existing_draft)
+        _render_black_gap_manual_repair(project, existing_draft, key_prefix="page_main")
         st.divider()
         _render_residual_gap_requests(project, existing_draft)
         st.divider()

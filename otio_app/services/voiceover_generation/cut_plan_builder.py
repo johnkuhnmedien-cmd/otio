@@ -151,16 +151,27 @@ def validate_cut_plan_draft(project: Project) -> tuple[CutPlanDocument, CutPlanV
     Report. Schreibt ausdrücklich NICHT cut_plan.confirmed.json, kein
     cut_plan.trace.json, kein EditPlanDocument, kein OTIO.
 
+    Vor der Validierung werden Visual-Coverage-Extensions erneut angewendet
+    (u. a. Teil-Hold bei knappen Closing-Videos), damit Settings wie
+    section_pause_hold_tolerance_sec und aktuelle Hold-Logik greifen.
+
     Wirft ValueError, wenn noch kein Draft existiert."""
+    from otio_app.services.voiceover_generation.cut_plan_asset_selector import settings_from_snapshot
     from otio_app.services.voiceover_generation.cut_plan_validator import (
         attach_validation_to_cut_plan,
         save_cut_plan_validation_report,
         validate_cut_plan,
     )
+    from otio_app.services.voiceover_generation.cut_plan_visual_coverage import (
+        apply_visual_coverage_extensions,
+    )
 
     draft = load_cut_plan_draft(project)
     if draft is None:
         raise ValueError("Kein Cut Plan Draft vorhanden — bitte zuerst einen Draft erzeugen.")
+
+    settings = settings_from_snapshot(project, draft)
+    draft = apply_visual_coverage_extensions(draft, settings)
 
     report = validate_cut_plan(project, draft)
     updated_draft = attach_validation_to_cut_plan(draft, report)

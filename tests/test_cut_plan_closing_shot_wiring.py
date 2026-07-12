@@ -22,6 +22,7 @@ from otio_app.project_layout import get_folder_inventory_path
 from otio_app.services.voiceover_generation.cut_plan_builder import (
     apply_asset_selection_to_draft,
     build_cut_plan_draft,
+    load_cut_plan_draft,
     save_cut_plan_draft,
     validate_cut_plan_draft,
 )
@@ -213,11 +214,28 @@ def test_closing_shot_does_not_overlap_with_last_sentence_segment(tmp_path: Path
 
 
 def test_without_closing_shot_black_gap_remains_for_section_pause(tmp_path: Path) -> None:
-    """Gegenprobe (Ausgangszustand, den der Nutzer gemeldet hat): OHNE
-    ClosingVisualPlan bleibt die Sektionspause offen, weil das letzte
-    Satz-Item selbst (Video, exakt passende Dauer) nicht über die Pause
-    hinaus verlängert werden kann."""
+    """Gegenprobe: OHNE ClosingVisualPlan bleibt eine Rest-Sektionspause,
+    wenn das letzte Satz-Video nur teilweise halten kann. Mit
+    section_pause_hold_tolerance_sec=0 muss die Restlücke als Blocker
+    sichtbar bleiben (bei Default 1.5s würde genau diese Restlücke
+    toleriert)."""
     project = _build_two_folder_project(tmp_path, with_closing_plan=False)
+    save_cut_plan_settings(
+        project,
+        CutPlanSettings(
+            project_id=project.id,
+            initial_audio_offset_sec=1.0,
+            pause_between_sections_sec=2.5,
+            section_pause_hold_tolerance_sec=0.0,
+        ),
+    )
+    # Settings-Snapshot im Draft aktualisieren (wie nach Speichern der Toleranz).
+    draft = load_cut_plan_draft(project)
+    assert draft is not None
+    snap = dict(draft.settings_snapshot)
+    snap["section_pause_hold_tolerance_sec"] = 0.0
+    save_cut_plan_draft(project, draft.model_copy(update={"settings_snapshot": snap}))
+
     with (
         patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", return_value=8.0),
         patch(f"{_VISUAL_COVERAGE_MODULE}.probe_duration_seconds", return_value=8.0),

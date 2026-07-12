@@ -34,6 +34,7 @@ from otio_app.defaults import (
     CUT_PLAN_DEFAULT_MAX_SENTENCE_PAUSE_EXTENSION_SEC,
     CUT_PLAN_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS,
     CUT_PLAN_DEFAULT_PAUSE_BETWEEN_SECTIONS_SEC,
+    CUT_PLAN_DEFAULT_SECTION_PAUSE_HOLD_TOLERANCE_SEC,
     CUT_PLAN_DEFAULT_SECTION_VISUAL_PREROLL_SEC,
     CUT_PLAN_DEFAULT_SHOT_MAX_SEC,
     CUT_PLAN_DEFAULT_SHOT_MIN_SEC,
@@ -88,6 +89,9 @@ class CutPlanSettings(BaseModel):
     # (fehlendes/blockiertes Item) — die bleiben unabhängig von diesem Wert
     # als BLACK_GAP_DURING_VOICEOVER sichtbar.
     black_gap_auto_hold_max_sec: float = CUT_PLAN_DEFAULT_BLACK_GAP_AUTO_HOLD_MAX_SEC
+    # Nutzervorgabe (Juli 2026): Restlücke nach Sektionspausen-Hold, die
+    # noch KEINEN BLACK_GAP-Blocker auslöst (z. B. 4s Reserve bei 5s Pause).
+    section_pause_hold_tolerance_sec: float = CUT_PLAN_DEFAULT_SECTION_PAUSE_HOLD_TOLERANCE_SEC
     # Nutzervorgabe (Juli 2026, "Sätze bis zum nächsten Satz weiterlaufen
     # lassen"): siehe cut_plan_asset_selector.compute_visual_window_end_sec
     # für die genaue Berechnung. Phase 1: nur Modell + reine Berechnung,
