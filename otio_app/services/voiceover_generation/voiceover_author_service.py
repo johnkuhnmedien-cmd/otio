@@ -45,6 +45,7 @@ from otio_app.services.voiceover_generation.dramaturgy_service import load_confi
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
     apply_standard_word_target_to_enabled_settings,
     apply_standard_word_target_to_folder,
+    apply_strict_inventory_factuality_to_folders,
     build_default_folder_voiceover_settings,
     load_folder_voiceover_settings,
 )
@@ -94,6 +95,7 @@ __all__ = [
     "generate_all_folder_voiceovers",
     "regenerate_folder_voiceover_with_standard_word_target",
     "regenerate_all_folder_voiceovers_with_standard_word_target",
+    "regenerate_high_issue_folders_with_strict_inventory",
     "update_folder_voiceover_text",
     "compute_current_hashes",
     "is_draft_stale",
@@ -1010,6 +1012,106 @@ def regenerate_all_folder_voiceovers_with_standard_word_target(
     return generate_all_folder_voiceovers(
         project, provider=provider, model=model, progress_callback=progress_callback
     )
+
+
+def regenerate_high_issue_folders_with_strict_inventory(
+    project: Project,
+    *,
+    provider: str,
+    model: str,
+    min_issues: int | None = None,
+    reports: list | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[list[str], list[FolderVoiceoverBuildResult], list, list]:
+    """Für Ordner mit vielen Asset-Readiness-Issues (Default ≥ 4):
+      1) factuality_mode → strict_inventory_only (nur diese Ordner, speichern),
+      2) Voice-over NUR für diese Ordner neu generieren,
+      3) Asset-Allokation per LLM für diese Ordner reparieren,
+      4) frische Asset-Readiness-Reports für diese Ordner zurückgeben.
+
+    ``reports`` kann die zuletzt berechnete Bulk-Diagnose sein; fehlt sie,
+    wird ``build_all_folder_asset_readiness_reports`` frisch aufgerufen.
+
+    Rückgabe:
+      (folder_names, generate_results, allocation_results, readiness_reports)
+    """
+    from otio_app.defaults import FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD
+    from otio_app.services.voiceover_generation.folder_asset_allocation_correction_service import (
+        run_asset_allocation_correction,
+    )
+    from otio_app.services.voiceover_generation.folder_asset_readiness import (
+        build_all_folder_asset_readiness_reports,
+        build_folder_asset_readiness_report,
+    )
+
+    threshold = (
+        FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD if min_issues is None else min_issues
+    )
+    readiness_reports = (
+        list(reports) if reports is not None else build_all_folder_asset_readiness_reports(project)
+    )
+    target_folders = [
+        report.folder_name
+        for report in readiness_reports
+        if len(report.issues) >= threshold
+    ]
+    if not target_folders:
+        return [], [], [], []
+
+    apply_strict_inventory_factuality_to_folders(project, target_folders)
+
+    generate_results: list[FolderVoiceoverBuildResult] = []
+    allocation_results: list = []
+    final_reports: list = []
+    total = len(target_folders)
+
+    for index, folder_name in enumerate(target_folders, start=1):
+        if progress_callback is not None:
+            progress_callback(folder_name, index, total)
+        try:
+            gen_result = generate_folder_voiceover(
+                project, folder_name, provider=provider, model=model
+            )
+        except ValueError as exc:
+            gen_result = FolderVoiceoverBuildResult(
+                status=STATUS_FAIL,
+                draft=None,
+                error=str(exc),
+                llm_run_id="",
+                provider=provider,
+                model=model,
+            )
+        generate_results.append(gen_result)
+
+        if gen_result.status != STATUS_PASS or gen_result.draft is None:
+            # Kein Draft zum Reparieren — trotzdem leeren/aktuellen Readiness-Stand
+            # versuchen, falls noch ein alter Draft existiert.
+            existing = get_folder_voiceover_draft(project, folder_name)
+            if existing is not None:
+                final_reports.append(build_folder_asset_readiness_report(project, existing))
+            continue
+
+        try:
+            alloc_result = run_asset_allocation_correction(
+                project, folder_name, provider=provider, model=model
+            )
+        except ValueError as exc:
+            # Sollte nach erfolgreicher Generierung selten sein — Draft bleibt.
+            from otio_app.services.voiceover_generation.folder_asset_allocation_correction_service import (
+                ASSET_ALLOCATION_CORRECTION_STATUS_FAILED,
+                AssetAllocationCorrectionResult,
+            )
+
+            alloc_result = AssetAllocationCorrectionResult(
+                status=ASSET_ALLOCATION_CORRECTION_STATUS_FAILED,
+                draft=gen_result.draft,
+                attempt_count=0,
+                error=str(exc),
+            )
+        allocation_results.append(alloc_result)
+        final_reports.append(build_folder_asset_readiness_report(project, alloc_result.draft))
+
+    return target_folders, generate_results, allocation_results, final_reports
 
 
 def update_folder_voiceover_text(

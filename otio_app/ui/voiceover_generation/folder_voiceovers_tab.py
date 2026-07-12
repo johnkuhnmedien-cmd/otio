@@ -17,16 +17,19 @@ from otio_app.defaults import (
     VOICEOVER_STATUS_PASS,
 )
 from otio_app.models import Project
+from otio_app.project_layout import get_asset_readiness_pipeline_settings_path
 from otio_app.services.inventory_loader import folder_has_usable_inventory_data
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.folder_asset_allocation_correction_service import (
     ASSET_ALLOCATION_CORRECTION_STATUS_NEEDS_USER_REVIEW,
     ASSET_ALLOCATION_CORRECTION_STATUS_PASS,
+    run_all_asset_allocation_corrections,
     run_asset_allocation_correction,
 )
 from otio_app.services.voiceover_generation.folder_asset_readiness import (
     READINESS_STATUS_PASS as ASSET_READINESS_STATUS_PASS,
     FolderAssetReadinessReport,
+    build_all_folder_asset_readiness_reports,
     build_folder_asset_readiness_report,
 )
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
@@ -36,12 +39,17 @@ from otio_app.services.voiceover_generation.folder_voiceover_settings_service im
     save_folder_voiceover_settings,
     update_folder_voiceover_settings,
 )
+from otio_app.services.voiceover_generation.asset_readiness_pipeline_settings_service import (
+    load_asset_readiness_pipeline_settings,
+    save_asset_readiness_pipeline_settings,
+)
 from otio_app.services.voiceover_generation.llm_trace_service import STATUS_PASS
 from otio_app.services.voiceover_generation.model_settings_service import (
     load_model_settings,
     save_model_settings,
 )
 from otio_app.services.voiceover_generation.models import (
+    AssetReadinessPipelineSettings,
     DramaturgyPlan,
     FolderVoiceoverDraft,
     FolderVoiceoverSettingsDocument,
@@ -59,6 +67,7 @@ from otio_app.services.voiceover_generation.voiceover_author_service import (
     load_folder_voiceovers_draft,
     regenerate_all_folder_voiceovers_with_standard_word_target,
     regenerate_folder_voiceover_with_standard_word_target,
+    regenerate_high_issue_folders_with_strict_inventory,
     update_folder_voiceover_text,
 )
 from otio_app.services.voiceover_generation.voiceover_review_service import (
@@ -250,6 +259,88 @@ def _asset_readiness_session_key(project: Project, folder_name: str) -> str:
     return f"vo_fvo_asset_readiness_{folder_name}_{project.id}"
 
 
+def _asset_readiness_all_session_key(project: Project) -> str:
+    return f"vo_fvo_asset_readiness_all_{project.id}"
+
+
+def _high_issue_threshold_widget_key(project: Project) -> str:
+    return f"vo_fvo_high_issue_threshold_{project.id}"
+
+
+def _folder_voiceover_text_widget_key(project: Project, folder_name: str) -> str:
+    return f"vo_fvo_text_{folder_name}_{project.id}"
+
+
+def _folder_voiceover_text_sync_key(project: Project, folder_name: str) -> str:
+    return f"vo_fvo_text_sync_{folder_name}_{project.id}"
+
+
+def _folder_draft_open_key(project: Project, folder_name: str) -> str:
+    """Session-Flag: schwere Draft-UI (Textfeld, Tabelle, Buttons) nur laden,
+    wenn der Nutzer den Ordner explizit geöffnet hat — sonst würde Streamlit
+    bei JEDEM Seiten-Rerun alle Expander-Bodies inkl. is_draft_stale/
+    Inventory/ffprobe ausführen (auch zugeklappt)."""
+    return f"vo_fvo_draft_open_{folder_name}_{project.id}"
+
+
+def folder_voiceover_text_draft_token(draft: FolderVoiceoverDraft) -> str:
+    """Identifiziert den persistierten Text-Stand eines Drafts.
+
+    Wird genutzt, um das Streamlit-Textfeld nach Regenerieren / Review-
+    Correction / Asset-Allokations-Correction auf den neuen Draft zu
+    synchronisieren — ohne ungespeicherte Tipparbeit zu verwerfen, solange
+    sich der Draft auf der Platte nicht geändert hat."""
+    correction_part = "|".join(draft.correction_run_ids)
+    updated_at = draft.updated_at.isoformat() if draft.updated_at is not None else ""
+    return f"{draft.author_run_id}|{correction_part}|{updated_at}|{draft.word_count}|{len(draft.voiceover_text_full)}"
+
+
+def _sync_folder_voiceover_text_widget(
+    project: Project, folder_name: str, draft: FolderVoiceoverDraft
+) -> str:
+    """Stellt sicher, dass ``st.session_state[text_key]`` zum aktuellen Draft
+    passt, BEVOR das ``st.text_area`` gerendert wird.
+
+    Bug (Juli 2026): das Textfeld wurde nur beim ersten Besuch befüllt
+    (``if key not in session_state``). Nach „Erneut generieren“ / Bulk-
+    Asset-Allokation blieb alter Session-Text stehen, während Wortanzahl,
+    Satz-Tabelle und Closing Shot den neuen Draft zeigten."""
+    text_key = _folder_voiceover_text_widget_key(project, folder_name)
+    sync_key = _folder_voiceover_text_sync_key(project, folder_name)
+    token = folder_voiceover_text_draft_token(draft)
+    if st.session_state.get(sync_key) != token:
+        st.session_state[text_key] = draft.voiceover_text_full
+        st.session_state[sync_key] = token
+    return text_key
+
+
+def _render_bulk_asset_readiness_summary(reports: list[FolderAssetReadinessReport]) -> None:
+    """Kompakte Übersicht nach „Alle Asset-Readiness prüfen“."""
+    pass_count = sum(1 for report in reports if report.status == ASSET_READINESS_STATUS_PASS)
+    needs_review_count = len(reports) - pass_count
+    if needs_review_count == 0:
+        st.success(f"Asset-Readiness alle Ordner: PASS ({pass_count}/{len(reports)}).")
+    else:
+        st.warning(
+            f"Asset-Readiness alle Ordner: {needs_review_count}/{len(reports)} mit "
+            "NEEDS_REVIEW — Details unten und in den einzelnen Ordner-Expandern."
+        )
+    rows = [
+        {
+            "folder": report.folder_name,
+            "status": report.status,
+            "issues": len(report.issues),
+            "closing_shot_fehlt": report.closing_shot_missing_count,
+            "reuse_konflikt": report.closing_shot_reuse_conflict_count,
+            "über_limit": report.asset_over_folder_limit_count,
+            "abstand_kurz": report.asset_reuse_distance_violation_count,
+            "knappe_assets": report.scarce_asset_conflict_count,
+        }
+        for report in reports
+    ]
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
 def _render_asset_readiness_report(report: FolderAssetReadinessReport) -> None:
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
@@ -388,9 +479,7 @@ def _render_folder_draft(
             "Dieser Voice-over-Entwurf basiert möglicherweise auf veralteten Einstellungen."
         )
 
-    text_key = f"vo_fvo_text_{folder_name}_{project.id}"
-    if text_key not in st.session_state:
-        st.session_state[text_key] = draft.voiceover_text_full
+    text_key = _sync_folder_voiceover_text_widget(project, folder_name, draft)
     text_value = st.text_area("Voice-over-Text", key=text_key, height=200)
 
     col1, col2, col3 = st.columns(3)
@@ -674,6 +763,10 @@ def render_folder_voiceovers_page() -> None:
             st.rerun()
 
     st.subheader("Drafts")
+    st.caption(
+        "Ordner-Details werden erst nach „Öffnen“ geladen — sonst baut Streamlit bei jedem "
+        "Klick alle Drafts neu (auch zugeklappte Expander). „Schließen“ entlädt die schwere UI wieder."
+    )
     draft_document = load_folder_voiceovers_draft(project)
     confirmed_document = load_folder_voiceovers_confirmed(project)
     confirmed_names = {item.folder_name for item in confirmed_document.items}
@@ -701,6 +794,38 @@ def render_folder_voiceovers_page() -> None:
             if draft is None:
                 st.info("Noch kein Voice-over-Entwurf für diesen Ordner.")
                 continue
+
+            open_key = _folder_draft_open_key(project, entry.folder_name)
+            if not st.session_state.get(open_key):
+                meta_cols = st.columns([1, 1, 3])
+                with meta_cols[0]:
+                    if render_new_feature_button(
+                        "🟢 Öffnen",
+                        key=f"vo_fvo_open_draft_{entry.folder_name}_{project.id}",
+                        help="NEU: lädt Textfeld, Satz-Tabelle und Aktionen erst jetzt — "
+                        "hält die Seite bei vielen Ordnern schnell.",
+                    ):
+                        st.session_state[open_key] = True
+                        st.rerun()
+                with meta_cols[1]:
+                    st.metric("Wörter", draft.word_count)
+                with meta_cols[2]:
+                    st.caption(
+                        f"{len(draft.sentence_items)} Sätze · Status `{draft.status}` · "
+                        "Details noch nicht geladen."
+                    )
+                continue
+
+            close_cols = st.columns([1, 4])
+            with close_cols[0]:
+                if st.button(
+                    "Schließen",
+                    key=f"vo_fvo_close_draft_{entry.folder_name}_{project.id}",
+                    help="Entlädt die Draft-Details wieder, damit die Seite leicht bleibt.",
+                ):
+                    st.session_state[open_key] = False
+                    st.rerun()
+
             _render_folder_draft(
                 project,
                 entry.folder_name,
@@ -773,8 +898,15 @@ def _render_bulk_draft_actions(
                 if draft is None:
                     continue
                 checked_count += 1
-                text_key = f"vo_fvo_text_{entry.folder_name}_{project.id}"
-                text_value = st.session_state.get(text_key, draft.voiceover_text_full)
+                text_key = _folder_voiceover_text_widget_key(project, entry.folder_name)
+                sync_key = _folder_voiceover_text_sync_key(project, entry.folder_name)
+                # Verhindert, dass ein veralteter Session-Text (vor Sync des
+                # Textfelds) einen frisch regenerierten/korrigierten Draft
+                # überschreibt — siehe _sync_folder_voiceover_text_widget.
+                if st.session_state.get(sync_key) != folder_voiceover_text_draft_token(draft):
+                    text_value = draft.voiceover_text_full
+                else:
+                    text_value = st.session_state.get(text_key, draft.voiceover_text_full)
                 if text_value != draft.voiceover_text_full:
                     changed_count += 1
                 # Unveränderten Text erneut zu speichern ist ein No-Op (siehe
@@ -897,3 +1029,290 @@ def _render_bulk_draft_actions(
                     if result.status != STATUS_PASS:
                         st.error(f"Fehlgeschlagen: {result.error}")
                 st.rerun()
+
+    col_readiness_all, col_allocation_all = st.columns(2)
+    with col_readiness_all:
+        if render_new_feature_button(
+            "🟢 Alle Asset-Readiness prüfen",
+            key=f"vo_fvo_asset_readiness_all_btn_{project.id}",
+            help="NEU: prüft rein lesend (kein LLM, keine Änderung) ALLE aktiven Ordner mit "
+            "Entwurf — speichert die Diagnose auch in den einzelnen Ordner-Expandern.",
+            disabled=not has_any_draft,
+        ):
+            progress_placeholder = st.empty()
+
+            def _progress_readiness(folder_name: str, index: int, total: int) -> None:
+                progress_placeholder.info(
+                    f"Ordner {index}/{total}: „{folder_name}“ Asset-Readiness…"
+                )
+
+            with st.spinner("Asset-Readiness für alle Ordner…"):
+                try:
+                    reports = build_all_folder_asset_readiness_reports(
+                        project, progress_callback=_progress_readiness
+                    )
+                except ValueError as exc:
+                    progress_placeholder.empty()
+                    st.error(str(exc))
+                else:
+                    progress_placeholder.empty()
+                    for report in reports:
+                        st.session_state[_asset_readiness_session_key(project, report.folder_name)] = (
+                            report
+                        )
+                    st.session_state[_asset_readiness_all_session_key(project)] = reports
+                    st.rerun()
+
+    with col_allocation_all:
+        if render_new_feature_button(
+            "🤖 Alle Asset-Allokation per LLM reparieren",
+            key=f"vo_fvo_asset_allocation_all_btn_{project.id}",
+            help="NEU: läuft sequenziell über alle aktiven Ordner mit Entwurf — Ordner ohne "
+            "Auffälligkeiten werden ohne LLM übersprungen (PASS). "
+            f"Pro Ordner bis zu {MAX_ASSET_ALLOCATION_CORRECTION_ATTEMPTS} Versuche.",
+            disabled=not has_any_draft,
+        ):
+            progress_placeholder = st.empty()
+
+            def _progress_allocation(folder_name: str, index: int, total: int) -> None:
+                progress_placeholder.info(
+                    f"Ordner {index}/{total}: „{folder_name}“ Asset-Allokation…"
+                )
+
+            with st.spinner("Asset-Allokation für alle Ordner wird repariert…"):
+                try:
+                    results = run_all_asset_allocation_corrections(
+                        project,
+                        provider=author_provider,
+                        model=author_model,
+                        progress_callback=_progress_allocation,
+                    )
+                except ValueError as exc:
+                    progress_placeholder.empty()
+                    st.error(str(exc))
+                else:
+                    progress_placeholder.empty()
+                    refreshed_reports: list[FolderAssetReadinessReport] = []
+                    for result in results:
+                        report = build_folder_asset_readiness_report(project, result.draft)
+                        refreshed_reports.append(report)
+                        st.session_state[
+                            _asset_readiness_session_key(project, result.draft.folder_name)
+                        ] = report
+                    st.session_state[_asset_readiness_all_session_key(project)] = refreshed_reports
+
+                    pass_count = sum(
+                        1 for result in results if result.status == ASSET_ALLOCATION_CORRECTION_STATUS_PASS
+                    )
+                    review_count = sum(
+                        1
+                        for result in results
+                        if result.status == ASSET_ALLOCATION_CORRECTION_STATUS_NEEDS_USER_REVIEW
+                    )
+                    fail_count = len(results) - pass_count - review_count
+                    st.success(
+                        f"Asset-Allokation alle Ordner: {pass_count} PASS, "
+                        f"{review_count} NEEDS_USER_REVIEW, {fail_count} FAILED "
+                        f"(von {len(results)})."
+                    )
+                    for result in results:
+                        if result.status == ASSET_ALLOCATION_CORRECTION_STATUS_NEEDS_USER_REVIEW:
+                            st.warning(
+                                f"„{result.draft.folder_name}“: nach {result.attempt_count} "
+                                f"Versuch(en) bleiben {len(result.remaining_issues)} "
+                                "Auffälligkeit(en)."
+                            )
+                        elif result.status != ASSET_ALLOCATION_CORRECTION_STATUS_PASS:
+                            st.error(f"„{result.draft.folder_name}“: {result.error}")
+                    st.rerun()
+
+    # Immer sichtbar — braucht keine vorherige Bulk-Readiness-Aktion.
+    # Schwelle ist pro Projekt speicherbar; der Magic-Button nutzt den
+    # aktuellen Feldwert (auch ohne Speichern).
+    pipeline_settings = load_asset_readiness_pipeline_settings(project)
+    threshold_key = _high_issue_threshold_widget_key(project)
+    if threshold_key not in st.session_state:
+        st.session_state[threshold_key] = int(pipeline_settings.high_issue_regen_threshold)
+
+    col_threshold, col_threshold_save = st.columns([2, 1])
+    with col_threshold:
+        high_issue_threshold = int(
+            st.number_input(
+                "Issue-Schwelle für Magic-Pipeline",
+                min_value=1,
+                max_value=100,
+                step=1,
+                key=threshold_key,
+                help=(
+                    "Ordner mit mindestens so vielen Asset-Readiness-Issues werden von der "
+                    "Pipeline angefasst. Speichern hält den Wert projektweit; ohne Speichern "
+                    "gilt der aktuelle Feldwert nur für diesen Lauf / diese Session."
+                ),
+                disabled=not has_any_draft,
+            )
+        )
+    with col_threshold_save:
+        st.write("")  # vertikale Ausrichtung an number_input-Label
+        if st.button(
+            "Schwelle speichern",
+            key=f"vo_fvo_high_issue_threshold_save_{project.id}",
+            disabled=not has_any_draft,
+            help=(
+                "Speichert die Issue-Schwelle projektweit unter "
+                f"`{get_asset_readiness_pipeline_settings_path(project.work_dir_path)}`."
+            ),
+        ):
+            saved = save_asset_readiness_pipeline_settings(
+                project,
+                AssetReadinessPipelineSettings(
+                    project_id=project.id,
+                    high_issue_regen_threshold=high_issue_threshold,
+                ),
+            )
+            # Widget-Key nicht mehr setzen — Streamlit verbietet das nach
+            # Instanziierung von number_input; der Feldwert ist bereits korrekt.
+            st.success(
+                f"Issue-Schwelle gespeichert: ≥{saved.high_issue_regen_threshold}"
+            )
+
+    if render_new_feature_button(
+        f"🟢 ≥{high_issue_threshold} Issues → "
+        "strict inventory + neu generieren + Allokation + Readiness",
+        key=f"vo_fvo_strict_inventory_high_issue_regen_{project.id}",
+        help=(
+            "NEU: immer klickbar. Berechnet bei Bedarf zuerst lokal Asset-Readiness "
+            "(kein LLM, nutzt Cache falls vorhanden), filtert Ordner mit mindestens "
+            f"{high_issue_threshold} Issues (Wert aus dem Feld oben), setzt NUR dort "
+            "Faktentreue auf strict_inventory_only, generiert neu und führt Asset-Allokation "
+            "+ frische Readiness aus. Andere Ordner bleiben unverändert — kein erneutes "
+            "Allokations-LLM über alle Ordner nötig."
+        ),
+        disabled=not has_any_draft,
+    ):
+        progress_placeholder = st.empty()
+        cached = st.session_state.get(_asset_readiness_all_session_key(project))
+        seed_reports: list[FolderAssetReadinessReport] | None = None
+        if (
+            isinstance(cached, list)
+            and cached
+            and all(isinstance(report, FolderAssetReadinessReport) for report in cached)
+        ):
+            seed_reports = cached
+        else:
+            def _progress_seed_readiness(folder_name: str, index: int, total: int) -> None:
+                progress_placeholder.info(
+                    f"Readiness {index}/{total}: „{folder_name}“ (lokal, kein LLM)…"
+                )
+
+            with st.spinner("Asset-Readiness lokal berechnen (nur Diagnose, kein LLM)…"):
+                try:
+                    seed_reports = build_all_folder_asset_readiness_reports(
+                        project, progress_callback=_progress_seed_readiness
+                    )
+                except ValueError as exc:
+                    progress_placeholder.empty()
+                    st.error(str(exc))
+                    seed_reports = None
+                else:
+                    for report in seed_reports:
+                        st.session_state[
+                            _asset_readiness_session_key(project, report.folder_name)
+                        ] = report
+                    st.session_state[_asset_readiness_all_session_key(project)] = seed_reports
+
+        if seed_reports is not None:
+            high_issue_folders = [
+                report.folder_name
+                for report in seed_reports
+                if len(report.issues) >= high_issue_threshold
+            ]
+            if not high_issue_folders:
+                progress_placeholder.empty()
+                st.info(
+                    f"Kein Ordner mit ≥{high_issue_threshold} "
+                    "Asset-Readiness-Issues — nichts zu tun."
+                )
+                st.session_state[_asset_readiness_all_session_key(project)] = seed_reports
+            else:
+
+                def _progress_high_issue(folder_name: str, index: int, total: int) -> None:
+                    progress_placeholder.info(
+                        f"Ordner {index}/{total}: „{folder_name}“ "
+                        "(strict inventory → generieren → Allokation → Readiness)…"
+                    )
+
+                with st.spinner(
+                    f"{len(high_issue_folders)} Ordner mit "
+                    f"≥{high_issue_threshold} Issues: "
+                    "Settings → Generieren → Allokation → Readiness…"
+                ):
+                    try:
+                        (
+                            touched_folders,
+                            gen_results,
+                            alloc_results,
+                            refreshed_partial,
+                        ) = regenerate_high_issue_folders_with_strict_inventory(
+                            project,
+                            provider=author_provider,
+                            model=author_model,
+                            min_issues=high_issue_threshold,
+                            reports=seed_reports,
+                            progress_callback=_progress_high_issue,
+                        )
+                    except ValueError as exc:
+                        progress_placeholder.empty()
+                        st.error(str(exc))
+                    else:
+                        progress_placeholder.empty()
+                        refreshed_by_folder = {
+                            report.folder_name: report for report in refreshed_partial
+                        }
+                        merged_reports = [
+                            refreshed_by_folder.get(report.folder_name, report)
+                            for report in seed_reports
+                        ]
+                        for report in refreshed_partial:
+                            st.session_state[
+                                _asset_readiness_session_key(project, report.folder_name)
+                            ] = report
+                        st.session_state[_asset_readiness_all_session_key(project)] = merged_reports
+
+                        gen_pass = sum(1 for result in gen_results if result.status == STATUS_PASS)
+                        alloc_pass = sum(
+                            1
+                            for result in alloc_results
+                            if result.status == ASSET_ALLOCATION_CORRECTION_STATUS_PASS
+                        )
+                        issue_counts = ", ".join(
+                            f"„{report.folder_name}“={len(report.issues)}"
+                            for report in refreshed_partial
+                        )
+                        st.success(
+                            f"Strict inventory + Regen + Allokation + Readiness "
+                            f"(Schwelle ≥{high_issue_threshold}): "
+                            f"{len(touched_folders)} Ordner — "
+                            f"Generierung {gen_pass}/{len(gen_results)} PASS, "
+                            f"Allokation {alloc_pass}/{len(alloc_results)} PASS. "
+                            f"Faktentreue gesetzt auf: {', '.join(touched_folders)}. "
+                            f"Issues danach: {issue_counts or '—'}"
+                        )
+                        for result in gen_results:
+                            if result.status != STATUS_PASS:
+                                st.error(f"Generierung fehlgeschlagen: {result.error}")
+                        for result in alloc_results:
+                            if result.status == ASSET_ALLOCATION_CORRECTION_STATUS_NEEDS_USER_REVIEW:
+                                st.warning(
+                                    f"„{result.draft.folder_name}“: nach Allokation bleiben "
+                                    f"{len(result.remaining_issues)} Auffälligkeit(en)."
+                                )
+                            elif result.status != ASSET_ALLOCATION_CORRECTION_STATUS_PASS:
+                                st.error(
+                                    f"Allokation „{result.draft.folder_name}“: {result.error}"
+                                )
+                        st.rerun()
+
+    bulk_reports = st.session_state.get(_asset_readiness_all_session_key(project))
+    if isinstance(bulk_reports, list) and bulk_reports:
+        if all(isinstance(report, FolderAssetReadinessReport) for report in bulk_reports):
+            _render_bulk_asset_readiness_summary(bulk_reports)

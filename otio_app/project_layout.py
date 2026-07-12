@@ -224,6 +224,12 @@ def get_intro_hook_settings_path(work_dir: Path) -> Path:
     return get_voiceover_generation_dir(work_dir) / INTRO_HOOK_SETTINGS_FILENAME
 
 
+def get_asset_readiness_pipeline_settings_path(work_dir: Path) -> Path:
+    from otio_app.defaults import ASSET_READINESS_PIPELINE_SETTINGS_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / ASSET_READINESS_PIPELINE_SETTINGS_FILENAME
+
+
 def get_elevenlabs_settings_path(work_dir: Path) -> Path:
     """Persistente ElevenLabs-Einstellungen (Voice/Modell/Stimm-Parameter) — niemals den API-Key."""
     from otio_app.defaults import ELEVENLABS_SETTINGS_FILENAME

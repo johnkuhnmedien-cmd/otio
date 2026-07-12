@@ -51,15 +51,34 @@ def _make_project(tmp_path: Path, *, mode: ProjectMode) -> Project:
     )
 
 
-def _patch_project_selector(project: Project, monkeypatch: pytest.MonkeyPatch) -> None:
+def _patch_project_selector(
+    project: Project,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    open_folders: list[str] | None = None,
+) -> dict:
+    """Patcht Projektwahl. open_folders markiert Lazy-Load-Drafts als geöffnet,
+    damit Tests die schwere Draft-UI (Closing Shot, Readiness, …) sehen."""
+    from otio_app.ui.voiceover_generation.folder_voiceovers_tab import _folder_draft_open_key
+
     monkeypatch.setattr("otio_app.ui.project_context.list_projects", lambda: [project])
     monkeypatch.setattr(
         "otio_app.ui.project_context.get_project_by_id",
         lambda project_id: project if project_id == project.id else None,
     )
-    monkeypatch.setattr(
-        "streamlit.session_state", {"active_project_id": project.id}, raising=False
-    )
+    state: dict = {"active_project_id": project.id}
+    for folder_name in open_folders or []:
+        state[_folder_draft_open_key(project, folder_name)] = True
+    monkeypatch.setattr("streamlit.session_state", state, raising=False)
+    return state
+
+
+def _open_draft_in_apptest(at: AppTest) -> AppTest:
+    """Klickt den Lazy-Load-„Öffnen“-Button des ersten Drafts."""
+    open_button = next(b for b in at.button if b.label == "🟢 Öffnen")
+    at = open_button.click().run()
+    assert not at.exception, at.exception
+    return at
 
 
 def test_page_renders_without_exception_when_no_confirmed_dramaturgy(
@@ -163,7 +182,7 @@ def test_closing_shot_panel_warns_when_no_closing_shot_planned(
     with patch(f"{_AUTHOR_MODULE}.generate_plan_text_with_metadata", return_value=fake_response):
         generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
 
-    _patch_project_selector(project, monkeypatch)
+    _patch_project_selector(project, monkeypatch, open_folders=["Grand Canyon"])
     warnings: list[str] = []
     monkeypatch.setattr("streamlit.warning", lambda msg, **k: warnings.append(msg))
 
@@ -209,7 +228,7 @@ def test_closing_shot_panel_shows_planned_shot_details(
     with patch(f"{_AUTHOR_MODULE}.generate_plan_text_with_metadata", return_value=fake_response):
         generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
 
-    _patch_project_selector(project, monkeypatch)
+    _patch_project_selector(project, monkeypatch, open_folders=["Grand Canyon"])
     successes: list[str] = []
     monkeypatch.setattr("streamlit.success", lambda msg, **k: successes.append(msg))
 
@@ -256,7 +275,7 @@ def test_asset_allocation_correction_button_appears_and_fixes_missing_closing_sh
     with patch(f"{_AUTHOR_MODULE}.generate_plan_text_with_metadata", return_value=fake_response):
         generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
 
-    _patch_project_selector(project, monkeypatch)
+    _patch_project_selector(project, monkeypatch, open_folders=["Grand Canyon"])
     readiness_key = f"vo_fvo_asset_readiness_btn_Grand Canyon_{project.id}"
     correction_key = f"vo_fvo_asset_allocation_correction_btn_Grand Canyon_{project.id}"
 
@@ -394,6 +413,18 @@ def test_bulk_action_buttons_are_present_below_drafts(
     assert "Alle validieren" in button_labels
     assert "Alle bestätigen" in button_labels
     assert "Alle Bestätigungen zurücknehmen" in button_labels
+    assert "🟢 Alle Asset-Readiness prüfen" in button_labels
+    assert "🤖 Alle Asset-Allokation per LLM reparieren" in button_labels
+    assert (
+        "🟢 ≥4 Issues → strict inventory + neu generieren + Allokation + Readiness"
+        in button_labels
+    )
+    assert "Schwelle speichern" in button_labels
+    assert "🟢 Öffnen" in button_labels
+    assert "🟢 Asset-Readiness prüfen" not in button_labels  # erst nach Öffnen
+
+    number_labels = {inp.label for inp in at.number_input}
+    assert "Issue-Schwelle für Magic-Pipeline" in number_labels
 
     subheaders = {subheader.value for subheader in at.subheader}
     assert "Alle Ordner gleichzeitig" in subheaders
@@ -608,6 +639,7 @@ def test_asset_readiness_button_is_present_with_green_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     at = _run_repro(tmp_path, monkeypatch, "fvo-readiness-present-project")
+    at = _open_draft_in_apptest(at)
     button_labels = {button.label for button in at.button}
     assert "🟢 Asset-Readiness prüfen" in button_labels
 
@@ -619,6 +651,7 @@ def test_asset_readiness_button_click_shows_report_metrics(
     das Ergebnis muss trotzdem klar als PASS mit 0 Sätzen angezeigt werden,
     ohne Exception."""
     at = _run_repro(tmp_path, monkeypatch, "fvo-readiness-click-project")
+    at = _open_draft_in_apptest(at)
 
     readiness_button = next(b for b in at.button if b.label == "🟢 Asset-Readiness prüfen")
     at = readiness_button.click().run()
@@ -654,6 +687,7 @@ def test_asset_readiness_click_does_not_write_any_files(
     work_dir = project_root / "_otio"
     files_before = sorted(p for p in work_dir.rglob("*") if p.is_file())
 
+    at = _open_draft_in_apptest(at)
     readiness_button = next(b for b in at.button if b.label == "🟢 Asset-Readiness prüfen")
     at = readiness_button.click().run()
     assert not at.exception, at.exception
@@ -736,6 +770,7 @@ def test_asset_readiness_flags_sentence_with_invalid_asset_id(
     at.run()
     assert not at.exception, at.exception
 
+    at = _open_draft_in_apptest(at)
     readiness_button = next(b for b in at.button if b.label == "🟢 Asset-Readiness prüfen")
     at = readiness_button.click().run()
     assert not at.exception, at.exception
@@ -751,6 +786,7 @@ def test_asset_aware_regen_buttons_are_present_with_green_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     at = _run_repro(tmp_path, monkeypatch, "fvo-asset-aware-present-project")
+    at = _open_draft_in_apptest(at)
     button_labels = {button.label for button in at.button}
     assert "🟢 Asset-bewusst neu generieren (135 Wörter)" in button_labels
     assert "🟢 Alle asset-bewusst neu generieren (135 Wörter)" in button_labels
@@ -780,6 +816,7 @@ def test_asset_aware_regen_button_click_updates_settings_and_regenerates(
     at.run()
     assert not at.exception, at.exception
 
+    at = _open_draft_in_apptest(at)
     regen_button = next(
         b for b in at.button if b.label == "🟢 Asset-bewusst neu generieren (135 Wörter)"
     )
@@ -821,3 +858,118 @@ def test_bulk_asset_aware_regen_button_click_updates_all_enabled_folders(
     after = load_folder_voiceover_settings(project)
     grand_canyon_after = next(s for s in after.settings if s.folder_name == "Grand Canyon")
     assert grand_canyon_after.target_words == VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+
+
+def test_folder_voiceover_text_draft_token_changes_when_author_run_changes() -> None:
+    from datetime import datetime, timezone
+
+    from otio_app.services.voiceover_generation.models import FolderVoiceoverDraft
+    from otio_app.ui.voiceover_generation.folder_voiceovers_tab import (
+        folder_voiceover_text_draft_token,
+    )
+
+    draft_a = FolderVoiceoverDraft(
+        project_id="p",
+        folder_name="Grand Canyon",
+        voiceover_text_full="Alter Text mit vielen Woertern hier.",
+        word_count=6,
+        author_run_id="run-old",
+        updated_at=datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc),
+    )
+    draft_b = draft_a.model_copy(
+        update={
+            "voiceover_text_full": "Neuer kurzer Text.",
+            "word_count": 3,
+            "author_run_id": "run-new",
+            "updated_at": datetime(2026, 7, 11, 13, 0, tzinfo=timezone.utc),
+        }
+    )
+    assert folder_voiceover_text_draft_token(draft_a) != folder_voiceover_text_draft_token(draft_b)
+
+
+def test_sync_folder_voiceover_text_widget_resets_stale_session_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reproduziert den Anzeige-Mismatch: Session hält alten Text, Draft ist neu —
+    nach Sync muss das Textfeld den Draft zeigen."""
+    from datetime import datetime, timezone
+
+    import streamlit as st
+
+    from otio_app.services.voiceover_generation.models import FolderVoiceoverDraft
+    from otio_app.ui.voiceover_generation.folder_voiceovers_tab import (
+        _folder_voiceover_text_sync_key,
+        _folder_voiceover_text_widget_key,
+        _sync_folder_voiceover_text_widget,
+        folder_voiceover_text_draft_token,
+    )
+
+    project = _make_project(tmp_path, mode=ProjectMode.WITHOUT_VOICEOVER)
+    folder = "Grand Canyon"
+    old_draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name=folder,
+        voiceover_text_full="ALTER langer Text.",
+        word_count=3,
+        author_run_id="run-old",
+        updated_at=datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc),
+    )
+    new_draft = old_draft.model_copy(
+        update={
+            "voiceover_text_full": "NEUER kurzer Text.",
+            "word_count": 3,
+            "author_run_id": "run-new",
+            "updated_at": datetime(2026, 7, 11, 13, 0, tzinfo=timezone.utc),
+        }
+    )
+
+    text_key = _folder_voiceover_text_widget_key(project, folder)
+    sync_key = _folder_voiceover_text_sync_key(project, folder)
+    fake_state = {
+        text_key: old_draft.voiceover_text_full,
+        sync_key: folder_voiceover_text_draft_token(old_draft),
+    }
+    monkeypatch.setattr(st, "session_state", fake_state)
+
+    _sync_folder_voiceover_text_widget(project, folder, new_draft)
+
+    assert fake_state[text_key] == "NEUER kurzer Text."
+    assert fake_state[sync_key] == folder_voiceover_text_draft_token(new_draft)
+
+
+def test_sync_folder_voiceover_text_widget_keeps_unsaved_edits_for_same_draft(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime, timezone
+
+    import streamlit as st
+
+    from otio_app.services.voiceover_generation.models import FolderVoiceoverDraft
+    from otio_app.ui.voiceover_generation.folder_voiceovers_tab import (
+        _folder_voiceover_text_sync_key,
+        _folder_voiceover_text_widget_key,
+        _sync_folder_voiceover_text_widget,
+        folder_voiceover_text_draft_token,
+    )
+
+    project = _make_project(tmp_path, mode=ProjectMode.WITHOUT_VOICEOVER)
+    folder = "Grand Canyon"
+    draft = FolderVoiceoverDraft(
+        project_id=project.id,
+        folder_name=folder,
+        voiceover_text_full="Gespeicherter Text.",
+        word_count=2,
+        author_run_id="run-1",
+        updated_at=datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc),
+    )
+    text_key = _folder_voiceover_text_widget_key(project, folder)
+    sync_key = _folder_voiceover_text_sync_key(project, folder)
+    fake_state = {
+        text_key: "Ungespeicherte Tipparbeit.",
+        sync_key: folder_voiceover_text_draft_token(draft),
+    }
+    monkeypatch.setattr(st, "session_state", fake_state)
+
+    _sync_folder_voiceover_text_widget(project, folder, draft)
+
+    assert fake_state[text_key] == "Ungespeicherte Tipparbeit."

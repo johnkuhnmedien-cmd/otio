@@ -324,3 +324,88 @@ def test_apply_correction_appends_to_existing_correction_run_ids(tmp_path: Path)
         project, FOLDER_A, draft, raw_text, correction_run_id="run_1"
     )
     assert updated.correction_run_ids == ["run_0", "run_1"]
+
+
+def test_run_all_asset_allocation_corrections_fixes_folders_needing_review(
+    tmp_path: Path,
+) -> None:
+    from otio_app.services.voiceover_generation.folder_asset_allocation_correction_service import (
+        run_all_asset_allocation_corrections,
+    )
+    from otio_app.services.voiceover_generation.models import DramaturgyFolderEntry, DramaturgyPlan
+
+    project = _make_project(tmp_path)
+    # Zweiter Ordner mit Draft ohne Closing Shot
+    folder_b = "Yellowstone"
+    (Path(project.project_root) / folder_b).mkdir(parents=True, exist_ok=True)
+    inv_path = get_folder_inventory_path(project.work_dir_path, folder_b)
+    inv_path.parent.mkdir(parents=True, exist_ok=True)
+    analysis = AssetFolderAnalysis(
+        folder=folder_b,
+        assets=[
+            AssetMediaAnalysis(path=f"{folder_b}/clip1.mp4", description="Weite Aufnahme."),
+            AssetMediaAnalysis(path=f"{folder_b}/clip2.mp4", description="Luftaufnahme."),
+        ],
+    )
+    inv_path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
+    save_confirmed_dramaturgy(
+        project,
+        DramaturgyPlan(
+            project_id=project.id,
+            recommended_folder_order=[
+                DramaturgyFolderEntry(folder_name=FOLDER_A, order_index=1, enabled=True),
+                DramaturgyFolderEntry(folder_name=folder_b, order_index=2, enabled=True),
+            ],
+        ),
+    )
+    save_folder_voiceover_settings(project, build_default_folder_voiceover_settings(project))
+
+    # Folder A: bereits PASS (Closing Shot vorhanden)
+    _seed_draft(
+        project,
+        sentence_items=[
+            SentenceItem(sentence_id="sentence_001", text="Erster Satz.", primary_asset_id="asset_clip1"),
+        ],
+        closing_visual_plan=ClosingVisualPlan(primary_asset_id="asset_clip3"),
+    )
+    # Folder B: NEEDS_REVIEW (kein Closing Shot)
+    upsert_folder_voiceover_draft_item(
+        project,
+        FolderVoiceoverDraft(
+            project_id=project.id,
+            folder_name=folder_b,
+            sentence_items=[
+                SentenceItem(sentence_id="sentence_001", text="Ein Satz.", primary_asset_id="asset_clip1"),
+            ],
+        ),
+    )
+
+    correction_response = PlanLlmResponse(
+        provider="anthropic",
+        model="claude-sonnet-5",
+        raw_text=json.dumps(
+            {
+                "voiceover_text_full": "Ein Satz.",
+                "sentence_items": [
+                    {
+                        "sentence_id": "sentence_001",
+                        "text": "Ein Satz.",
+                        "primary_asset_id": "asset_clip1",
+                    }
+                ],
+                "closing_visual_plan": {"primary_asset_id": "asset_clip2"},
+            }
+        ),
+    )
+    with patch(f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=correction_response):
+        results = run_all_asset_allocation_corrections(
+            project, provider="anthropic", model="claude-sonnet-5"
+        )
+
+    assert len(results) == 2
+    by_folder = {result.draft.folder_name: result for result in results}
+    assert by_folder[FOLDER_A].status == ASSET_ALLOCATION_CORRECTION_STATUS_PASS
+    assert by_folder[FOLDER_A].attempt_count == 0  # kein LLM nötig
+    assert by_folder[folder_b].status == ASSET_ALLOCATION_CORRECTION_STATUS_PASS
+    assert by_folder[folder_b].attempt_count >= 1
+    assert by_folder[folder_b].draft.closing_visual_plan.primary_asset_id == "asset_clip2"

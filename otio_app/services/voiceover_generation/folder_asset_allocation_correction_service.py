@@ -13,12 +13,14 @@ nach der Generierung oder nach dem Text-Review-Loop."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from otio_app.defaults import MAX_ASSET_ALLOCATION_CORRECTION_ATTEMPTS
 from otio_app.models import Project
 from otio_app.services.plan_llm_client import generate_plan_text_with_metadata
+from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.folder_asset_readiness import (
     READINESS_STATUS_PASS,
     FolderAssetReadinessReport,
@@ -57,6 +59,7 @@ from otio_app.services.voiceover_generation.voiceover_author_service import (
     _sanitize_sentence_items,
     build_inventory_asset_context,
     get_folder_voiceover_draft,
+    load_folder_voiceovers_draft,
     parse_folder_voiceover_response,
     upsert_folder_voiceover_draft_item,
 )
@@ -68,6 +71,7 @@ __all__ = [
     "AssetAllocationCorrectionResult",
     "apply_asset_allocation_correction",
     "run_asset_allocation_correction",
+    "run_all_asset_allocation_corrections",
 ]
 
 ASSET_ALLOCATION_CORRECTION_STATUS_PASS = "PASS"
@@ -286,3 +290,36 @@ def run_asset_allocation_correction(
         remaining_issues=report.issues,
         correction_run_ids=correction_run_ids,
     )
+
+
+def run_all_asset_allocation_corrections(
+    project: Project,
+    *,
+    provider: str,
+    model: str,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+) -> list[AssetAllocationCorrectionResult]:
+    """Bulk-Variante von `run_asset_allocation_correction` für alle aktiven
+    Ordner MIT Entwurf — sequenziell. Ordner ohne Auffälligkeiten enden
+    sofort mit PASS (attempt_count=0), ohne LLM-Aufruf. Wirft ValueError
+    ohne bestätigte Dramaturgie."""
+    plan = load_confirmed_dramaturgy(project)
+    if plan is None:
+        raise ValueError("Keine bestätigte Dramaturgie vorhanden.")
+    draft_folder_names = {item.folder_name for item in load_folder_voiceovers_draft(project).items}
+    folder_names = [
+        entry.folder_name
+        for entry in sorted(plan.recommended_folder_order, key=lambda entry: entry.order_index)
+        if entry.enabled and entry.folder_name in draft_folder_names
+    ]
+    results: list[AssetAllocationCorrectionResult] = []
+    total = len(folder_names)
+    for index, folder_name in enumerate(folder_names, start=1):
+        if progress_callback is not None:
+            progress_callback(folder_name, index, total)
+        results.append(
+            run_asset_allocation_correction(
+                project, folder_name, provider=provider, model=model
+            )
+        )
+    return results

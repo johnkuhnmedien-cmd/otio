@@ -32,6 +32,7 @@ from otio_app.defaults import (
     AUDIO_STATUS_MISSING,
     ELEVENLABS_DEFAULT_MODEL_ID,
     ELEVENLABS_DEFAULT_OUTPUT_FORMAT,
+    FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD,
     INTRO_HOOK_DEFAULT_MAX_WORDS,
     INTRO_HOOK_DEFAULT_MIN_WORDS,
     INTRO_HOOK_DEFAULT_TARGET_WORDS,
@@ -108,6 +109,7 @@ __all__ = [
     "DramaturgyPlan",
     "FolderVoiceoverSetting",
     "FolderVoiceoverSettingsDocument",
+    "AssetReadinessPipelineSettings",
     "VisualAssetPlanHint",
     "SentenceSegmentAssetPlan",
     "SentenceItem",
@@ -357,6 +359,15 @@ class FolderVoiceoverSettingsDocument(BaseModel):
     generated_at: datetime = Field(default_factory=_utcnow)
     dramaturgy_hash: str = ""
     settings: list[FolderVoiceoverSetting] = Field(default_factory=list)
+
+
+class AssetReadinessPipelineSettings(BaseModel):
+    """Projektweite Steuerung der Bulk-Pipeline
+    „≥N Issues → strict inventory + Regen + Allokation + Readiness“."""
+
+    project_id: str
+    generated_at: datetime = Field(default_factory=_utcnow)
+    high_issue_regen_threshold: int = FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD
 
 
 class VisualAssetPlanHint(BaseModel):

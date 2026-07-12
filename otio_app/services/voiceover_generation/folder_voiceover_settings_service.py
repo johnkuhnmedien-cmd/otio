@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 
 from otio_app.defaults import (
+    FACTUALITY_MODE_STRICT_INVENTORY_ONLY,
     VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
     VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
     VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
@@ -34,6 +35,7 @@ __all__ = [
     "update_folder_voiceover_settings",
     "apply_standard_word_target_to_enabled_settings",
     "apply_standard_word_target_to_folder",
+    "apply_strict_inventory_factuality_to_folders",
     "enabled_settings",
 ]
 
@@ -248,6 +250,34 @@ def apply_standard_word_target_to_folder(
                 }
             )
             if setting.folder_name == folder_name
+            else setting
+        )
+        for setting in existing.settings
+    ]
+    new_document = existing.model_copy(update={"settings": updated_settings})
+    return save_folder_voiceover_settings(project, new_document)
+
+
+def apply_strict_inventory_factuality_to_folders(
+    project: Project, folder_names: list[str]
+) -> FolderVoiceoverSettingsDocument:
+    """Setzt factuality_mode NUR für die genannten Ordner auf
+    ``strict_inventory_only`` — alle anderen Settings-Felder und alle nicht
+    genannten Ordner bleiben unverändert. Speichert sofort.
+
+    Wirft ValueError, wenn noch keine Settings existieren."""
+    existing = load_folder_voiceover_settings(project)
+    if existing is None:
+        raise ValueError("Keine Folder Voice-over Settings vorhanden — bitte zuerst erstellen.")
+
+    target = {name for name in folder_names if name}
+    if not target:
+        return existing
+
+    updated_settings = [
+        (
+            setting.model_copy(update={"factuality_mode": FACTUALITY_MODE_STRICT_INVENTORY_ONLY})
+            if setting.folder_name in target
             else setting
         )
         for setting in existing.settings
