@@ -17,7 +17,9 @@ from otio_app.services.voiceover_generation.model_settings_service import (
     load_model_settings,
     save_model_settings,
 )
+from otio_app.services.youtube_publish_models import YouTubeMetadataDocument
 from otio_app.services.youtube_publish_service import (
+    _normalize_hashtags,
     build_youtube_publish_context,
     generate_youtube_publish_metadata,
     load_youtube_metadata,
@@ -48,6 +50,81 @@ def _merge_blockers_message(
             "Details prüfen, ggf. neu vorschlagen und bestätigen."
         )
     return "Merge nicht bereit — bitte Validierungsmeldungen prüfen."
+
+
+def _copyable_text(
+    label: str,
+    value: str,
+    *,
+    key: str,
+    height: int | None = None,
+) -> None:
+    """Kopierbares Feld — nicht disabled, damit Cmd/Ctrl+A / Klick+Kopieren funktioniert."""
+    if height is None:
+        st.text_input(label, value=value, key=key)
+    else:
+        st.text_area(label, value=value, height=height, key=key)
+
+
+def _render_copyable_results(
+    document: YouTubeMetadataDocument,
+    *,
+    project_id: str,
+    key_prefix: str,
+) -> None:
+    run = document.llm_run_id or "saved"
+    st.caption("Felder anklicken → alles markieren (Cmd/Ctrl+A) → kopieren.")
+
+    _copyable_text(
+        "YouTube-Titel",
+        document.title,
+        key=f"{key_prefix}_yt_title_{project_id}_{run}",
+    )
+    _copyable_text(
+        f"Beschreibung ({len(document.description)}/{YOUTUBE_DESCRIPTION_MAX_CHARS}, "
+        f"Textkörper ≤{YOUTUBE_DESCRIPTION_BODY_MAX_CHARS})",
+        document.description,
+        key=f"{key_prefix}_yt_desc_{project_id}_{run}",
+        height=280,
+    )
+    _copyable_text(
+        f"Hashtags ({len(_normalize_hashtags(document.hashtags))}/{YOUTUBE_HASHTAGS_MAX_CHARS}) — ohne #, komma-getrennt",
+        _normalize_hashtags(document.hashtags),
+        key=f"{key_prefix}_yt_hash_{project_id}_{run}",
+        height=80,
+    )
+
+    if document.chapters:
+        chapter_text = "\n".join(
+            f"{chapter.display_title} - {chapter.timestamp}" for chapter in document.chapters
+        )
+        _copyable_text(
+            "Kapitel",
+            chapter_text,
+            key=f"{key_prefix}_yt_chapters_{project_id}_{run}",
+            height=min(220, 40 + 22 * len(document.chapters)),
+        )
+
+    if document.quizzes:
+        st.markdown("**YouTube Quiz**")
+        for quiz in document.quizzes:
+            st.caption(
+                f"Quiz {quiz.order_index} · einfügen bei {quiz.insert_timestamp} "
+                f"({quiz.insert_at_sec:.0f}s)"
+                + (f" · {quiz.reason}" if quiz.reason else "")
+            )
+            _copyable_text(
+                "Frage",
+                quiz.question,
+                key=f"{key_prefix}_yt_q_{project_id}_{run}_{quiz.order_index}",
+            )
+            for opt_index, opt in enumerate(quiz.options):
+                suffix = " (richtig)" if opt.is_correct else ""
+                _copyable_text(
+                    f"Antwort{suffix}",
+                    opt.text,
+                    key=f"{key_prefix}_yt_a_{project_id}_{run}_{quiz.order_index}_{opt_index}",
+                )
 
 
 def render_youtube_publish_block(
@@ -142,43 +219,9 @@ def render_youtube_publish_block(
     if document is None:
         return
 
-    st.text_input(
-        "YouTube-Titel",
-        value=document.title,
-        key=f"{key_prefix}_yt_title_{project.id}_{document.llm_run_id}",
-        disabled=True,
+    _render_copyable_results(
+        document,
+        project_id=project.id,
+        key_prefix=key_prefix,
     )
-    st.text_area(
-        f"Beschreibung ({len(document.description)}/{YOUTUBE_DESCRIPTION_MAX_CHARS}, "
-        f"Textkörper ≤{YOUTUBE_DESCRIPTION_BODY_MAX_CHARS})",
-        value=document.description,
-        height=280,
-        key=f"{key_prefix}_yt_desc_{project.id}_{document.llm_run_id}",
-    )
-    st.text_area(
-        f"Hashtags ({len(document.hashtags)}/{YOUTUBE_HASHTAGS_MAX_CHARS})",
-        value=document.hashtags,
-        height=80,
-        key=f"{key_prefix}_yt_hash_{project.id}_{document.llm_run_id}",
-    )
-
-    if document.chapters:
-        st.markdown("**Kapitel**")
-        for chapter in document.chapters:
-            st.caption(f"{chapter.display_title} - {chapter.timestamp}")
-
-    if document.quizzes:
-        st.markdown("**YouTube Quiz**")
-        for quiz in document.quizzes:
-            st.write(
-                f"**Quiz {quiz.order_index}** · einfügen bei **{quiz.insert_timestamp}** "
-                f"({quiz.insert_at_sec:.0f}s)"
-            )
-            st.write(quiz.question)
-            for opt in quiz.options:
-                mark = "✅" if opt.is_correct else "○"
-                st.caption(f"{mark} {opt.label}: {opt.text}")
-            if quiz.reason:
-                st.caption(f"Warum hier: {quiz.reason}")
-
     st.caption(f"Gespeichert: `{youtube_metadata_path(project)}`")

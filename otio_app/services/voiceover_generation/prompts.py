@@ -1195,8 +1195,8 @@ def build_youtube_publish_prompt(
 ## Hard limits
 - `description_body`: engaging YouTube description in {display}, max ~{description_max_chars} characters.
   Do NOT include chapter timestamps in description_body — chapters are appended later by the system.
-- `hashtags`: comma-separated hashtags in {display} where natural (can mix common English tags),
-  max ~{hashtags_max_chars} characters total. No newlines. Include the leading `#` on each tag.
+- `hashtags`: comma-separated keywords WITHOUT leading `#` (e.g. USA, Travel, Nature),
+  max ~{hashtags_max_chars} characters total. No newlines. No `#` symbols.
 - `quizzes`: EXACTLY {quiz_count} quiz items (one per ~10 minutes of video).
   Each quiz has EXACTLY {option_count} answer options (A/B/C), exactly one correct.
   Suggest `insert_at_sec` as a good moment to show the quiz (not during the very first seconds,
@@ -1227,7 +1227,7 @@ def build_youtube_publish_prompt(
 {{
   "title": "optional refined YouTube title in {display}",
   "description_body": "description without chapter list",
-  "hashtags": "#tag1, #tag2, #tag3",
+  "hashtags": "tag1, tag2, tag3",
   "quizzes": [
     {{
       "order_index": 1,

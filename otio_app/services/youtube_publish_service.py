@@ -192,13 +192,15 @@ def _append_chapters_to_description(body: str, chapters: list[YouTubeChapter]) -
 
 
 def _normalize_hashtags(raw: str) -> str:
+    """Komma-getrennt ohne führendes `#` — z. B. `USA, Reisedokumentation, Natur`."""
+    import re
+
     parts: list[str] = []
-    for token in (raw or "").replace("\n", ",").split(","):
-        tag = token.strip()
+    # Kommas und Whitespace als Trenner (LLM liefert oft `#Tag #Tag2`).
+    for token in re.split(r"[\s,]+", (raw or "").strip()):
+        tag = token.strip().lstrip("#").strip()
         if not tag:
             continue
-        if not tag.startswith("#"):
-            tag = f"#{tag.lstrip('#')}"
         if tag not in parts:
             parts.append(tag)
     return _clamp_text(", ".join(parts), YOUTUBE_HASHTAGS_MAX_CHARS)

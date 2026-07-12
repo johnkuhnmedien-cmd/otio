@@ -86,10 +86,11 @@ def test_append_chapters_and_hashtags_limits() -> None:
     assert len(combined) <= 5000
     assert "Antelope Canyon - 00:51" in combined
 
-    tags = _normalize_hashtags("travel, #usa\n#canyon, travel")
-    assert tags == "#travel, #usa, #canyon"
+    tags = _normalize_hashtags("travel, #usa\n#canyon, travel #Natur")
+    assert tags == "travel, usa, canyon, Natur"
     long_tags = _normalize_hashtags(", ".join(f"tag{i}" for i in range(200)))
     assert len(long_tags) <= 500
+    assert "#" not in tags
 
 
 def test_build_context_from_merged_timeline(tmp_path: Path) -> None:
@@ -254,7 +255,9 @@ def test_parse_quizzes_and_generate_with_mock_llm(tmp_path: Path) -> None:
     assert result.document is not None
     assert result.document.title == "Antelope Canyon Guide"
     assert "Antelope Canyon - 00:00" in result.document.description
-    assert "#AntelopeCanyon" in result.document.hashtags
+    assert "AntelopeCanyon" in result.document.hashtags
+    assert "#" not in result.document.hashtags
+    assert ", " in result.document.hashtags
     assert len(result.document.quizzes) == 2
     assert result.document.quizzes[0].insert_timestamp == "05:20"
     assert result.document.quizzes[0].correct_option_label == "B"
@@ -286,7 +289,7 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
         project_id=project.id,
         title="T",
         description="D\n\nIntro - 00:00",
-        hashtags="#a, #b",
+        hashtags="a, b",
         chapters=[
             YouTubeChapter(
                 folder_name="Intro",
