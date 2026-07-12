@@ -3147,16 +3147,43 @@ def _render_voice_folder_mapping_merge(project: Project) -> None:
     folder_resolutions: dict[str, str] = {}
     if needs_review_entries:
         st.markdown("**Konflikte auflösen**")
+        resolution_options = [
+            "Nicht entschieden",
+            "Neuen Voice-over übernehmen (APPLY)",
+            "Bestehenden Eintrag behalten (SKIP)",
+        ]
+        apply_label = resolution_options[1]
+        skip_label = resolution_options[2]
+
+        def _resolution_widget_key(folder_name: str) -> str:
+            return f"voice_folder_mapping_merge_resolution_{project.id}_{folder_name}"
+
+        col_bulk_apply, col_bulk_skip = st.columns(2)
+        with col_bulk_apply:
+            if st.button(
+                f"Alle → APPLY ({len(needs_review_entries)})",
+                key=f"voice_folder_mapping_merge_bulk_apply_{project.id}",
+                help="Für alle Konflikte „Neuen Voice-over übernehmen (APPLY)“ setzen.",
+            ):
+                for entry in needs_review_entries:
+                    st.session_state[_resolution_widget_key(entry.folder_name)] = apply_label
+                st.rerun()
+        with col_bulk_skip:
+            if st.button(
+                f"Alle → SKIP ({len(needs_review_entries)})",
+                key=f"voice_folder_mapping_merge_bulk_skip_{project.id}",
+                help="Für alle Konflikte „Bestehenden Eintrag behalten (SKIP)“ setzen.",
+            ):
+                for entry in needs_review_entries:
+                    st.session_state[_resolution_widget_key(entry.folder_name)] = skip_label
+                st.rerun()
+
         for entry in needs_review_entries:
             st.write(f"**{entry.folder_name}**: {entry.reason}")
             choice = st.radio(
                 f"Auflösung für {entry.folder_name}",
-                options=[
-                    "Nicht entschieden",
-                    "Neuen Voice-over übernehmen (APPLY)",
-                    "Bestehenden Eintrag behalten (SKIP)",
-                ],
-                key=f"voice_folder_mapping_merge_resolution_{project.id}_{entry.folder_name}",
+                options=resolution_options,
+                key=_resolution_widget_key(entry.folder_name),
                 label_visibility="collapsed",
             )
             if choice.startswith("Neuen"):
