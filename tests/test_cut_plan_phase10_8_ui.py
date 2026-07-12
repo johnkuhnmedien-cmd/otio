@@ -196,11 +196,11 @@ def test_ui_shows_otio_readiness_section(tmp_path: Path, monkeypatch: pytest.Mon
     assert any("OTIO Export Readiness" in text for text in _all_text(at, "subheader"))
 
 
-def test_ui_shows_no_export_hint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ui_shows_export_hint_before_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _promoted_and_mapped_project(tmp_path)
     at = _run_repro(tmp_path, monkeypatch)
-    combined = " ".join(_all_text(at, "caption"))
-    assert "exportiert selbst nichts" in combined
+    labels = [button.label for button in at.button]
+    assert "OTIO exportieren" not in labels
 
 
 def test_ui_check_button_shows_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -248,8 +248,12 @@ def test_ui_has_no_lock_button(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert not any("lock" in label.lower() for label in labels)
 
 
-def test_ui_has_no_real_export_button(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ui_shows_export_controls_when_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _promoted_and_mapped_project(tmp_path)
     at = _run_repro(tmp_path, monkeypatch)
+    check_button = next(b for b in at.button if b.label == "OTIO Export Readiness prüfen")
+    at = check_button.click().run()
+    assert not at.exception, at.exception
     labels = [button.label for button in at.button]
-    assert not any("exportieren" in label.lower() for label in labels)
+    assert "OTIO exportieren" in labels
+    assert any(inp.label == "Dateiname (ohne .otio)" for inp in at.text_input)

@@ -53,6 +53,7 @@ from otio_app.defaults import (
     PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_ALREADY_PRESENT,
     PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_NEEDS_REVIEW,
     PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_WOULD_ADD,
+    PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_FOLDER_STATUS_READY,
     PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_BLOCKED,
     PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_NOT_READY,
     PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_READY,
@@ -87,6 +88,7 @@ from otio_app.defaults import (
 )
 from otio_app.models import Project
 from otio_app.project_layout import (
+    default_otio_export_basename,
     get_cut_plan_confirmed_path,
     get_cut_plan_draft_path,
     get_cut_plan_edit_plan_bridge_audio_plan_path,
@@ -101,7 +103,10 @@ from otio_app.project_layout import (
     get_production_edit_plan_promote_manifest_path,
     get_production_edit_plan_validation_report_path,
     get_production_edit_plan_voice_folder_mapping_patch_path,
+    resolve_otio_export_path,
 )
+from otio_app.services.otio_export_settings import load_otio_export_settings
+from otio_app.services.otio_exporter import export_otio_timeline, merge_confirmed_edit_plans
 from otio_app.services.supplement_search import build_keyword_query
 from otio_app.services.supplement_sources import get_provider_readiness
 from otio_app.services.voiceover_generation.model_settings_service import (
@@ -3271,26 +3276,24 @@ def _render_voice_folder_mapping_merge(project: Project) -> None:
 
 
 def _render_otio_export_readiness(project: Project) -> None:
-    """Phase 10.8: OTIO Export Readiness Check — rein lesende, vollständig
-    isolierte Struktur-Diagnose für bereits promotete (Phase 10.6) UND
-    gemappte (Phase 10.7) Folder. Ruft KEINE Funktion der bestehenden
-    Produktions-Export-Pipeline auf — prüft eigenständig dieselben
-    grundlegenden Voraussetzungen (bestätigte Zuordnung, bestätigter
-    EditPlan, nicht-leere Timeline/Shots). Kein Export, keine .otio-Datei,
-    kein ffprobe, kein Render, kein Lock."""
+    """Phase 10.8/10.9: OTIO Export Readiness + tatsächlicher Export.
+
+    Der Readiness-Check bleibt rein strukturell. Ist der Status READY, kann
+    der Nutzer hier direkt exportieren — über dieselbe
+    `merge_confirmed_edit_plans` / `export_otio_timeline`-Pipeline wie im
+    Tab „③ Schnittplan → 📤 OTIO Export“, begrenzt auf die als READY
+    geprüften promoteten Folder."""
     st.subheader("OTIO Export Readiness (promotete Folder)")
     st.caption(
-        "Prüft rein lesend und vollständig isoliert, ob die grundlegenden Voraussetzungen für einen "
-        "späteren OTIO-Export erfüllt sind — exportiert selbst nichts, schreibt keine .otio-Datei und "
-        "ruft die bestehende Export-Pipeline nicht auf."
+        "Prüft zuerst rein lesend, ob die grundlegenden Voraussetzungen für einen OTIO-Export "
+        "erfüllt sind. Bei READY kannst du unten Dateiname wählen und die .otio-Datei schreiben."
     )
 
     if st.button(
         "OTIO Export Readiness prüfen",
         key=f"otio_export_readiness_check_{project.id}",
-        help="Rein strukturelle, vollständig isolierte Prüfung (bestätigte Zuordnung, bestätigter "
-        "EditPlan, nicht-leere Timeline/Shots) für die zuletzt promoteten Folder — kein Export, kein "
-        "ffprobe, kein Schreiben, kein Aufruf der Produktions-Export-Pipeline.",
+        help="Rein strukturelle Prüfung (bestätigte Zuordnung, bestätigter EditPlan, "
+        "nicht-leere Timeline/Shots) für die zuletzt promoteten Folder.",
     ):
         with st.spinner("OTIO Export Readiness wird geprüft…"):
             report = build_otio_export_readiness_report(project)
@@ -3347,10 +3350,82 @@ def _render_otio_export_readiness(project: Project) -> None:
             for warning in report.warnings:
                 st.warning(warning)
 
+    ready_folders = [
+        folder.folder_name
+        for folder in report.folders
+        if folder.status == PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_FOLDER_STATUS_READY
+    ]
+    if report.status != PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_READY or not ready_folders:
+        st.caption(
+            "Export ist erst freigeschaltet, wenn der Readiness-Status READY ist. "
+            "Alternativ weiterhin: Tab „③ Schnittplan → 📤 OTIO Export“."
+        )
+        return
+
+    st.markdown("---")
+    st.markdown("**OTIO exportieren**")
     st.caption(
-        "Für eine verbindliche Aussage und einen tatsächlichen Export bitte den bestehenden Tab "
-        "„③ Schnittplan → 📤 OTIO Export“ verwenden."
+        f"{len(ready_folders)} READY-Folder werden zusammengeführt "
+        f"(gleiche Pipeline wie „③ Schnittplan → 📤 OTIO Export“)."
     )
+
+    default_basename = default_otio_export_basename(
+        folder_names=ready_folders,
+        project_name=project.name,
+    )
+    name_key = f"cut_plan_otio_export_name_{project.id}"
+    if name_key not in st.session_state:
+        st.session_state[name_key] = default_basename
+    export_basename = st.text_input(
+        "Dateiname (ohne .otio)",
+        key=name_key,
+        help="Wird unter `_otio/exports/` als `<Name>.otio` gespeichert.",
+    )
+    export_path = resolve_otio_export_path(project.work_dir_path, basename=export_basename)
+    st.caption(f"Ziel: `{export_path}`")
+
+    if st.button(
+        "OTIO exportieren",
+        key=f"cut_plan_otio_export_run_{project.id}",
+        type="primary",
+        help="Führt merge_confirmed_edit_plans + export_otio_timeline für die READY-Folder aus.",
+    ):
+        progress = st.progress(0.0, text="Export startet…")
+        status = st.empty()
+        try:
+            status.info("Schnittpläne zusammenführen…")
+            progress.progress(0.15, text="Schnittpläne zusammenführen…")
+            merged = merge_confirmed_edit_plans(project, folder_names=ready_folders)
+            if not merged.ready:
+                progress.progress(1.0, text="Export blockiert")
+                st.error(
+                    "Export blockiert — Merge meldet Probleme:\n"
+                    + "\n".join(f"• {warning}" for warning in merged.warnings[:12])
+                )
+                return
+
+            progress.progress(0.45, text="Medien prüfen und OTIO schreiben…")
+            status.info("Medien prüfen und OTIO schreiben…")
+            export_settings = load_otio_export_settings(project)
+            export_result = export_otio_timeline(
+                project,
+                merged,
+                export_settings=export_settings,
+                output_path=export_path,
+            )
+            progress.progress(1.0, text="Export fertig")
+            status.success(f"Timeline exportiert: `{export_result.path}`")
+            for warning in merged.warnings:
+                if warning.startswith("Regel-Hinweis (Export trotzdem möglich):"):
+                    st.warning(warning)
+            for note in export_result.aspect_fill_notes:
+                if "Letterboxing" in note or "fehlgeschlagen" in note or "nicht lesbar" in note:
+                    st.warning(note)
+                else:
+                    st.caption(f"• {note}")
+        except (OSError, ValueError) as exc:
+            progress.progress(1.0, text="Export fehlgeschlagen")
+            status.error(str(exc))
 
 
 _WORKFLOW_STATUS_ICONS: dict[str, str] = {
@@ -3361,6 +3436,7 @@ _WORKFLOW_STATUS_ICONS: dict[str, str] = {
     CUT_PLAN_WORKFLOW_STATUS_NOT_NEEDED: "⚫",
     CUT_PLAN_WORKFLOW_STATUS_BLOCKED: "🔴",
 }
+
 
 def _run_cut_plan_workflow_action(project: Project, action_key: str) -> str:
     """Führt GENAU EINE Workflow-Aktion aus (dispatcht über den
