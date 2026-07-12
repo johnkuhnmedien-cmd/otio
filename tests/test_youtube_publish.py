@@ -81,6 +81,11 @@ def test_append_chapters_and_hashtags_limits() -> None:
     assert "Grand Canyon - 02:23" in description
     assert description.startswith("Ein Roadtrip")
 
+    long_body = "x" * 3500
+    combined = _append_chapters_to_description(long_body, chapters)
+    assert len(combined) <= 5000
+    assert "Antelope Canyon - 00:51" in combined
+
     tags = _normalize_hashtags("travel, #usa\n#canyon, travel")
     assert tags == "#travel, #usa, #canyon"
     long_tags = _normalize_hashtags(", ".join(f"tag{i}" for i in range(200)))
@@ -267,7 +272,7 @@ def test_youtube_publish_prompt_includes_language_and_quiz_count() -> None:
         chapters_block="- Antelope Canyon — 00:00",
         intro_text="Hook",
         folder_scripts_block="Script text",
-        description_max_chars=5000,
+        description_max_chars=3500,
         hashtags_max_chars=500,
     )
     assert "Target language code: DE" in prompt

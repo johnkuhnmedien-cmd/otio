@@ -105,6 +105,8 @@ VOICEOVER_PROJECT_PLAN_CSV_FILENAME = "voiceover_project_plan.csv"
 YOUTUBE_METADATA_FILENAME = "youtube_metadata.json"
 
 # YouTube Publish limits (UI + post-LLM clamp)
+# Body bewusst unter YouTube-Hardcap (5000), damit Kapitel-Timestamps Platz haben.
+YOUTUBE_DESCRIPTION_BODY_MAX_CHARS = 3500
 YOUTUBE_DESCRIPTION_MAX_CHARS = 5000
 YOUTUBE_HASHTAGS_MAX_CHARS = 500
 YOUTUBE_QUIZ_INTERVAL_SEC = 600.0  # ein Quiz pro 10 Minuten

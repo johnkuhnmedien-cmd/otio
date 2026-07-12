@@ -5,6 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from otio_app.defaults import (
+    YOUTUBE_DESCRIPTION_BODY_MAX_CHARS,
     YOUTUBE_DESCRIPTION_MAX_CHARS,
     YOUTUBE_HASHTAGS_MAX_CHARS,
 )
@@ -61,7 +62,7 @@ def render_youtube_publish_block(
     st.markdown("---")
     st.markdown("**📺 YouTube Publish**")
     st.caption(
-        "Titel, Beschreibung (~5000 Zeichen), Kapitel mit Timestamps, Hashtags und "
+        "Titel, Beschreibung (max. ~3500 Zeichen Text + Kapitel-Timestamps), Hashtags und "
         "Quiz (1× pro 10 Min., 3 Antworten). Kapitelzeiten kommen aus dem Timeline-Merge; "
         "Text/Hashtags/Quiz über LLM in der Projektsprache."
     )
@@ -148,7 +149,8 @@ def render_youtube_publish_block(
         disabled=True,
     )
     st.text_area(
-        f"Beschreibung ({len(document.description)}/{YOUTUBE_DESCRIPTION_MAX_CHARS})",
+        f"Beschreibung ({len(document.description)}/{YOUTUBE_DESCRIPTION_MAX_CHARS}, "
+        f"Textkörper ≤{YOUTUBE_DESCRIPTION_BODY_MAX_CHARS})",
         value=document.description,
         height=280,
         key=f"{key_prefix}_yt_desc_{project.id}_{document.llm_run_id}",

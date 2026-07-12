@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from otio_app.defaults import (
+    YOUTUBE_DESCRIPTION_BODY_MAX_CHARS,
     YOUTUBE_DESCRIPTION_MAX_CHARS,
     YOUTUBE_HASHTAGS_MAX_CHARS,
     YOUTUBE_QUIZ_INTERVAL_SEC,
@@ -302,7 +303,7 @@ def _prepare_prompt(project: Project, merged: MergedEditPlanResult) -> _BuildInp
         chapters_block=_chapters_prompt_block(context.chapters),
         intro_text=context.intro_text,
         folder_scripts_block=_folder_scripts_prompt_block(context.folder_scripts),
-        description_max_chars=YOUTUBE_DESCRIPTION_MAX_CHARS,
+        description_max_chars=YOUTUBE_DESCRIPTION_BODY_MAX_CHARS,
         hashtags_max_chars=YOUTUBE_HASHTAGS_MAX_CHARS,
         option_count=YOUTUBE_QUIZ_OPTION_COUNT,
     )
@@ -387,7 +388,7 @@ def generate_youtube_publish_metadata(
     title = str(payload.get("title") or context.title).strip() or context.title
     description_body = _clamp_text(
         str(payload.get("description_body") or ""),
-        YOUTUBE_DESCRIPTION_MAX_CHARS,
+        YOUTUBE_DESCRIPTION_BODY_MAX_CHARS,
     )
     description = _append_chapters_to_description(description_body, context.chapters)
     hashtags = _normalize_hashtags(str(payload.get("hashtags") or ""))
