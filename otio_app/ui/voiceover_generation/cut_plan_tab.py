@@ -3459,6 +3459,7 @@ def _render_otio_export_readiness(project: Project) -> None:
     default_basename = default_otio_export_basename(
         folder_names=export_folder_names,
         project_name=project.name,
+        language=project.language,
     )
     name_key = f"cut_plan_otio_export_name_{project.id}"
     folders_sig_key = f"cut_plan_otio_export_name_folders_{project.id}"
@@ -3470,7 +3471,8 @@ def _render_otio_export_readiness(project: Project) -> None:
     export_basename = st.text_input(
         "Dateiname (ohne .otio)",
         key=name_key,
-        help="Wird unter `_otio/exports/` als `<Name>.otio` gespeichert.",
+        help="Wird unter `_otio/{LANG}/exports/` als `<Name>.otio` gespeichert. "
+        "Standard enthält den Sprachcode (z. B. USA_DE).",
     )
     export_path = resolve_otio_export_path(project.language_work_dir_path, basename=export_basename)
     st.caption(f"Ziel: `{export_path}`")

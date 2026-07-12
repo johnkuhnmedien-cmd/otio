@@ -583,7 +583,7 @@ def test_mapping_patch_action_already_present_when_in_mapping(tmp_path: Path) ->
 
 def test_voice_folder_mapping_file_remains_byte_identical(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
-    mapping_path = get_voice_folder_mapping_path(project.project_root_path)
+    mapping_path = get_voice_folder_mapping_path(project.language_work_dir_path)
     mapping_path.parent.mkdir(parents=True, exist_ok=True)
     existing_content = '{"project_id": "x", "confirmed": false, "entries": []}'
     mapping_path.write_text(existing_content, encoding="utf-8")

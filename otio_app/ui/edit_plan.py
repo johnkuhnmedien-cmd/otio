@@ -1851,6 +1851,8 @@ def _sync_export_filename_widget(
     project_id: str,
     folder_selection: tuple[str, ...],
     project_name: str,
+    *,
+    language: str = "",
 ) -> str:
     """Hält den Dateinamen-Default synchron, wenn sich die Ortsauswahl ändert."""
     name_key = f"otio_export_name_{project_id}"
@@ -1858,6 +1860,7 @@ def _sync_export_filename_widget(
     default_basename = default_otio_export_basename(
         project_name=project_name,
         folder_names=folder_selection,
+        language=language,
     )
     if (
         name_key not in st.session_state
@@ -1902,11 +1905,13 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
         project.id,
         folder_selection,
         project.name,
+        language=project.language,
     )
     export_basename = st.text_input(
         "Dateiname (ohne .otio)",
         key=f"otio_export_name_{project.id}",
-        help="Standard bei genau einem Ort: Ordnername. Bei mehreren Orten: Projektname.",
+        help="Standard bei genau einem Ort: Ordnername. Bei mehreren Orten: Projektname. "
+        "Sprachcode wird angehängt (z. B. USA_DE).",
     )
     export_path = resolve_otio_export_path(project.language_work_dir_path, basename=export_basename)
     st.caption(f"Ziel: `{export_path}`")

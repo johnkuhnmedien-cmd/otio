@@ -113,6 +113,37 @@ def test_migrate_is_idempotent(tmp_path: Path) -> None:
     assert (first / "exports" / "a.otio").is_file()
 
 
+def test_migrate_moves_root_voice_folder_mapping(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    root_mapping = project.project_root_path / "voice_folder_mapping.json"
+    root_mapping.write_text(
+        '{"project_id":"lang-scope","confirmed":false,"entries":[]}',
+        encoding="utf-8",
+    )
+
+    lang_dir = migrate_language_scope(project)
+    scoped = lang_dir / "voice_folder_mapping.json"
+    assert scoped.is_file()
+    assert not root_mapping.exists()
+    assert project.voice_folder_mapping_path == scoped
+
+
+def test_migrate_root_mapping_after_existing_scope(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    ensure_language_scope(project)
+    root_mapping = project.project_root_path / "voice_folder_mapping.json"
+    root_mapping.write_text(
+        '{"project_id":"late","confirmed":true,"entries":[]}',
+        encoding="utf-8",
+    )
+
+    lang_dir = migrate_language_scope(project)
+    scoped = lang_dir / "voice_folder_mapping.json"
+    assert scoped.is_file()
+    assert not root_mapping.exists()
+    assert '"late"' in scoped.read_text(encoding="utf-8")
+
+
 def test_cut_plan_settings_land_in_language_scope(tmp_path: Path) -> None:
     project = _project(tmp_path)
     save_cut_plan_settings(

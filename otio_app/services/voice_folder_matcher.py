@@ -97,7 +97,9 @@ def save_voice_folder_mapping(
         confirmed=confirmed,
         entries=entries,
     )
-    project.voice_folder_mapping_path.write_text(
+    mapping_path = project.voice_folder_mapping_path
+    mapping_path.parent.mkdir(parents=True, exist_ok=True)
+    mapping_path.write_text(
         document.model_dump_json(indent=2),
         encoding="utf-8",
     )
