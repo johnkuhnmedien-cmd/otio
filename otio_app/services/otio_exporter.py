@@ -159,13 +159,32 @@ def verify_timeline_media_paths(
 
 
 def _plan_section_items(plan: EditPlanDocument, folder_name: str, voice_file: str) -> list[TimelineItem]:
-    if plan.timeline_items:
-        return [
-            item
-            for item in plan.timeline_items
-            if item.folder_name == folder_name and item.voice_file == voice_file
-        ]
-    return []
+    """Items dieses Ordners für den Export.
+
+    Klassische Produktionspläne setzen `voice_file` auf jedem TimelineItem.
+    Cut-Plan-Staging/Promote lässt Visual-Items oft mit leerem `voice_file`
+    (Audio steckt im VoiceoverPlan) — der strikte Pfad-Vergleich würde sie
+    sonst fälschlich verwerfen („kein timeline_items“)."""
+    if not plan.timeline_items:
+        return []
+
+    folder_items = [item for item in plan.timeline_items if item.folder_name == folder_name]
+    if not folder_items:
+        return []
+
+    exact = [item for item in folder_items if item.voice_file == voice_file]
+    if exact:
+        return exact
+
+    voiceover_path = (plan.voiceover.path if plan.voiceover is not None else "").strip()
+    items_lack_voice_file = all(not item.voice_file.strip() for item in folder_items)
+    mapping_matches_voiceover = bool(voice_file) and bool(voiceover_path) and voice_file == voiceover_path
+    if not (items_lack_voice_file or mapping_matches_voiceover or not voice_file):
+        return []
+
+    if not voice_file:
+        return folder_items
+    return [item.model_copy(update={"voice_file": voice_file}) for item in folder_items]
 
 
 def merge_confirmed_edit_plans(
