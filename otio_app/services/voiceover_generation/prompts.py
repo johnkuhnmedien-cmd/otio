@@ -35,6 +35,49 @@ def _non_empty(values: list[str]) -> list[str]:
     return [value.strip() for value in values if value and value.strip()]
 
 
+_LANGUAGE_DISPLAY_NAMES: dict[str, str] = {
+    "DE": "German",
+    "EN": "English",
+    "FR": "French",
+    "ES": "Spanish",
+    "PT": "Portuguese",
+    "IT": "Italian",
+    "de": "German",
+    "en": "English",
+    "fr": "French",
+    "es": "Spanish",
+    "pt": "Portuguese",
+    "it": "Italian",
+}
+
+
+def _language_display_name(language: str) -> str:
+    raw = (language or "").strip()
+    if not raw:
+        return "German"
+    return _LANGUAGE_DISPLAY_NAMES.get(raw) or _LANGUAGE_DISPLAY_NAMES.get(raw.lower()) or raw
+
+
+def native_speaker_language_block(language: str) -> str:
+    """Gemeinsame Zielsprachen- + Native-Speaker-Regel für alle Text-Prompts.
+
+    Inventar-Beschreibungen dürfen SHARED und in einer anderen Sprache sein —
+    das LLM darf daraus nur Inhalt entnehmen, keine Formulierungen übernehmen.
+    """
+    code = (language or "").strip() or "DE"
+    display = _language_display_name(code)
+    return f"""## Target language & native-speaker rule (MANDATORY)
+- Target language code: {code}
+- Write ALL narration / reasons / transitions / hook text in {display}, \
+as a NATIVE SPEAKER of {display} would write for a polished documentary.
+- Do NOT translate word-for-word from inventory or asset descriptions.
+- Inventory / asset descriptions are CONTENT SOURCE ONLY (what is visible, \
+places, motifs). They may be written in another language or in dry analysis \
+style — NEVER copy their phrasing, sentence rhythm, or wording into the \
+voice-over. Re-express the meaning freshly in natural {display}.
+- Do NOT mix languages. Do NOT leave untranslated fragments from the inventory."""
+
+
 def _numbered_block(label: str, texts: list[str]) -> str:
     if not texts:
         return "(keine)"
@@ -138,9 +181,10 @@ and extract a reusable STYLE PROFILE for future narration prompts.
 Do not copy phrases or sentences from the reference scripts. Extract style \
 characteristics only.
 
+{native_speaker_language_block(project_brief.language)}
+
 ## Project
 - Video title: {project_brief.video_title or "(untitled)"}
-- Target language: {project_brief.language}
 - Desired tone tags: {tone_tags}
 - Additional editor instructions: {project_brief.global_extra_prompt or "(none)"}
 
@@ -262,9 +306,10 @@ structure) of a travel/nature documentary across multiple locations (folders). \
 This is NOT about describing assets — it is about ORDER, TENSION ARC, and the \
 ROLE each location plays in the overall video.
 
+{native_speaker_language_block(project_brief.language)}
+
 ## Project
 - Project title: {project_brief.video_title or "(untitled)"}
-- Target language: {project_brief.language}
 - Desired tone tags: {tone_tags}
 - Additional editor instructions: {project_brief.global_extra_prompt or "(none)"}
 
@@ -290,6 +335,9 @@ voice-over section, and a transition idea toward the NEXT location.
 Do NOT simply sort alphabetically. Do NOT simply sort by asset count. Consider \
 visual strength, diversity, hook potential, contrasts between locations, and the \
 overall narrative arc.
+
+Write core_promise, narrative_arc, reasons, transition hints, and risks in the \
+target language (native-speaker quality). Folder names stay exactly as given.
 
 Respond with JSON ONLY, no markdown code fences, no commentary, matching exactly \
 this shape:
@@ -406,9 +454,10 @@ WRONG (asset description): "You see a canyon with red rocks."
 RIGHT (documentary prose): "Between the red rock walls, the light seems to make \
 the stone glow from within."
 
+{native_speaker_language_block(project_brief.language)}
+
 ## Project
 - Project title: {project_brief.video_title or "(untitled)"}
-- Target language: {project_brief.language}
 - Desired tone tags: {tone_tags}
 
 ## Active global negative rules (MUST be respected)
@@ -453,7 +502,8 @@ stay purely atmospheric/sensory)
 ## Target length
 - target_words: {setting.target_words} (min {setting.min_words}, max {setting.max_words})
 
-## Inventory for this location (asset_id values are EXACT — never invent new ones)
+## Inventory for this location (CONTENT SOURCE ONLY — asset_id values are EXACT)
+## Do not copy inventory wording; re-express meaning in the target language.
 {_inventory_asset_block(inventory_assets)}
 
 ## Visual editing awareness (read this before writing)
@@ -678,8 +728,7 @@ def build_voiceover_review_prompt(
 section for ONE location. Judge ONLY the criteria listed below — word count and \
 asset-ID validity are already checked separately by code.
 
-## Target language
-{project_brief.language}
+{native_speaker_language_block(project_brief.language)}
 
 ## Style Profile (the text should match this style)
 {_style_summary_block(style_profile)}
@@ -752,8 +801,7 @@ but it has issues that must be fixed. Rewrite it, fixing ONLY the issues listed 
 keep everything else (structure, good sentences, asset assignments) unless the \
 issue directly affects them.
 
-## Target language
-{project_brief.language}
+{native_speaker_language_block(project_brief.language)}
 
 ## Style Profile
 {_style_summary_block(style_profile)}
@@ -874,13 +922,13 @@ def build_asset_allocation_correction_prompt(
 ONE location below, but a deterministic allocation check found problems — this is a \
 DEDICATED asset-allocation repair pass, not a general rewrite.
 
-## Target language
-{project_brief.language}
+{native_speaker_language_block(project_brief.language)}
 
 ## Style Profile
 {_style_summary_block(style_profile)}
 
-## Inventory for this location (asset_id values are EXACT — never invent new ones)
+## Inventory for this location (CONTENT SOURCE ONLY — asset_id values are EXACT)
+## Do not copy inventory wording; re-express meaning in the target language.
 {_inventory_asset_block(inventory_assets)}
 
 ## Original voice-over text (keep as unchanged as possible)
@@ -1038,9 +1086,10 @@ opening hook.
 Do not invent asset IDs. Use only asset IDs present in the provided confirmed \
 sentence_items or inventory summaries below.
 
+{native_speaker_language_block(settings.language or project_brief.language)}
+
 ## Project
 - Project title: {project_brief.video_title or "(untitled)"}
-- Target language: {settings.language or project_brief.language}
 - Desired tone tags: {tone_tags}
 - Hook tone (from settings): {settings.tone}
 - Core narrative arc: {dramaturgy_plan.narrative_arc or "-"}

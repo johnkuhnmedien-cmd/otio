@@ -1157,3 +1157,53 @@ def test_intro_hook_prompt_contains_active_negative_rule_instructions() -> None:
     )
     assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["biblical_chronology_required"] in prompt
     assert BRIEF_NEGATIVE_RULE_INSTRUCTIONS["no_party_scenes"] in prompt
+
+
+def test_native_speaker_block_in_folder_voiceover_and_dramaturgy() -> None:
+    from otio_app.services.voiceover_generation.prompts import native_speaker_language_block
+
+    block = native_speaker_language_block("EN")
+    assert "Target language code: EN" in block
+    assert "English" in block
+    assert "NATIVE SPEAKER" in block
+    assert "CONTENT SOURCE ONLY" in block
+    assert "NEVER copy" in block
+
+    vo = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=_sample_dramaturgy_entry(),
+        setting=FolderVoiceoverSetting(folder_name="Antelope Canyon", target_words=135),
+        previous_folder_name=None,
+        next_folder_name=None,
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "native-speaker rule (MANDATORY)" in vo
+    assert "CONTENT SOURCE ONLY" in vo
+    assert "German" in vo  # sample brief language DE
+
+    dram = build_dramaturgy_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        folder_summaries=[],
+    )
+    assert "native-speaker rule (MANDATORY)" in dram
+
+
+def test_intro_and_review_prompts_include_native_speaker_rule() -> None:
+    intro = build_intro_hook_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_plan=_sample_dramaturgy_plan(),
+        confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
+        settings=_sample_intro_settings(),
+    )
+    assert "native-speaker rule (MANDATORY)" in intro
+
+    review = build_voiceover_review_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        setting=FolderVoiceoverSetting(folder_name="Antelope Canyon", target_words=135),
+        draft=_sample_confirmed_folder_voiceovers()[0],
+    )
+    assert "native-speaker rule (MANDATORY)" in review
