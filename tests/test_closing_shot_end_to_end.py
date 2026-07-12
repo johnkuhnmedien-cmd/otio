@@ -17,6 +17,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis
 from otio_app.defaults import CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER
 from otio_app.models import Project, ProjectMode
@@ -251,7 +253,11 @@ def test_full_pipeline_from_llm_response_to_validated_cut_plan_with_closing_shot
     assert closing_item.asset_selection_status == "PRIMARY_USED"
     assert closing_item.chosen_asset_id == "asset_closing_a"
     assert closing_item.planned_visual_segments
-    assert "section_pause_hold" in closing_item.planned_visual_segments[-1].reason.split("+")
+    folder_b_audio = next(audio for audio in updated.audio_items if audio.folder_name == FOLDER_B)
+    assert closing_item.timeline_end_sec == pytest.approx(folder_b_audio.timeline_start_sec)
+    assert closing_item.planned_visual_segments[-1].timeline_out_sec == pytest.approx(
+        folder_b_audio.timeline_start_sec
+    )
 
     _, report = validate_cut_plan_draft(project)
     # Die SEKTIONSPAUSE zwischen FOLDER_A und FOLDER_B (6.0s-8.5s) muss durch

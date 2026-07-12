@@ -9,10 +9,12 @@ Suche, kein Transcoding. Audio-Zeiten (CutPlanAudioItem) bleiben unverändert
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from otio_app.services.media_utils import probe_duration_seconds
 from otio_app.services.voiceover_generation.cut_plan_models import (
+    CutPlanAudioItem,
     CutPlanDocument,
     CutPlanItem,
     CutPlanSettings,
@@ -27,6 +29,8 @@ __all__ = [
     "resolve_timeline_overlaps",
     "find_first_visual_segment",
     "find_last_visual_segment_before_time",
+    "find_section_pause_responsible_item",
+    "diagnose_section_pause_hold_failure",
     "all_segments_sorted",
     "apply_segment_replacements",
 ]
@@ -104,6 +108,166 @@ def find_last_visual_segment_before_time(
     # timeline_in_sec — chronologisch tatsächlich das letzte/aktuellste
     # Segment vor diesem Zeitpunkt, nicht zufällig das erste in Listenreihenfolge.
     return max(candidates, key=lambda pair: (pair[1].timeline_out_sec, pair[1].timeline_in_sec))
+
+
+def find_section_pause_responsible_item(
+    cut_plan: CutPlanDocument,
+    gap_start_sec: float,
+    *,
+    preceding_audio: CutPlanAudioItem | None = None,
+) -> CutPlanItem | None:
+    """Ordnet eine Sektionspausen-Lücke dem Closing Shot (oder dem letzten
+    Visual) der vorherigen Sektion zu — damit Orphan-BLACK_GAPs eine
+    cut_item_id bekommen und manuell reparierbar werden."""
+    if preceding_audio is not None and preceding_audio.folder_name:
+        section_items = [
+            item for item in cut_plan.items if item.folder_name == preceding_audio.folder_name
+        ]
+    elif preceding_audio is not None:
+        section_items = [item for item in cut_plan.items if not item.folder_name]
+    else:
+        section_items = list(cut_plan.items)
+
+    closing = next((item for item in section_items if item.is_closing_shot), None)
+    if closing is not None:
+        return closing
+
+    found = find_last_visual_segment_before_time(cut_plan, gap_start_sec)
+    if found is not None:
+        item, _segment = found
+        if preceding_audio is None:
+            return item
+        if preceding_audio.folder_name:
+            if item.folder_name == preceding_audio.folder_name:
+                return item
+        elif not item.folder_name:
+            return item
+
+    if not section_items:
+        return None
+    return max(section_items, key=lambda item: item.timeline_end_sec)
+
+
+@dataclass(frozen=True)
+class SectionPauseHoldDiagnosis:
+    """Menschenlesbare Diagnose, warum der Hold über eine Sektionspause
+    fehlgeschlagen ist — für Blocker-Meldung und Manual-Repair-UI."""
+
+    responsible_cut_item_id: str
+    responsible_is_closing_shot: bool
+    hold_candidate_asset_id: str
+    hold_candidate_asset_type: str
+    segment_timeline_out_sec: float
+    gap_start_sec: float
+    gap_end_sec: float
+    needed_extend_sec: float
+    usable_extend_sec: float | None
+    failure_reason: str
+    summary: str
+
+
+def diagnose_section_pause_hold_failure(
+    cut_plan: CutPlanDocument,
+    gap_start_sec: float,
+    gap_end_sec: float,
+    *,
+    responsible_item: CutPlanItem | None = None,
+    preceding_audio: CutPlanAudioItem | None = None,
+) -> SectionPauseHoldDiagnosis:
+    """Ermittelt Asset, nutzbare Restlänge und Hold-Fehlgrund für eine
+    Sektionspausen-Lücke — reine Diagnose, keine Seiteneffekte."""
+    item = responsible_item or find_section_pause_responsible_item(
+        cut_plan, gap_start_sec, preceding_audio=preceding_audio
+    )
+    found = find_last_visual_segment_before_time(cut_plan, gap_start_sec)
+    if item is None and found is not None:
+        item = found[0]
+
+    if item is None:
+        return SectionPauseHoldDiagnosis(
+            responsible_cut_item_id="",
+            responsible_is_closing_shot=False,
+            hold_candidate_asset_id="",
+            hold_candidate_asset_type="",
+            segment_timeline_out_sec=gap_start_sec,
+            gap_start_sec=gap_start_sec,
+            gap_end_sec=gap_end_sec,
+            needed_extend_sec=max(0.0, gap_end_sec - gap_start_sec),
+            usable_extend_sec=None,
+            failure_reason="NO_RESPONSIBLE_ITEM",
+            summary="Keine Cut-Plan-Item-Zuordnung für diese Sektionspause möglich.",
+        )
+
+    if found is None:
+        return SectionPauseHoldDiagnosis(
+            responsible_cut_item_id=item.cut_item_id,
+            responsible_is_closing_shot=bool(item.is_closing_shot),
+            hold_candidate_asset_id=item.chosen_asset_id,
+            hold_candidate_asset_type="",
+            segment_timeline_out_sec=item.timeline_end_sec,
+            gap_start_sec=gap_start_sec,
+            gap_end_sec=gap_end_sec,
+            needed_extend_sec=max(0.0, gap_end_sec - gap_start_sec),
+            usable_extend_sec=None,
+            failure_reason="NO_VISUAL_BEFORE_PAUSE",
+            summary=(
+                f"Item '{item.cut_item_id}' ist zuständig, hat aber kein VisualSegment "
+                f"vor der Pause {gap_start_sec:.2f}s–{gap_end_sec:.2f}s."
+            ),
+        )
+
+    _hold_item, segment = found
+    needed = max(0.0, gap_end_sec - segment.timeline_out_sec)
+    usable: float | None
+    failure_reason: str
+    if segment.asset_type == "image":
+        usable = None
+        failure_reason = "HOLD_NOT_APPLIED"
+        summary = (
+            f"Closing/Hold-Kandidat '{segment.asset_id}' (Bild) könnte die Pause halten, "
+            f"wurde aber nicht bis {gap_end_sec:.2f}s verlängert."
+        )
+    else:
+        path = Path(segment.asset_path) if segment.asset_path else None
+        real_duration = probe_duration_seconds(path) if path is not None and path.is_file() else None
+        if real_duration is None:
+            usable = None
+            failure_reason = "VIDEO_DURATION_UNKNOWN"
+            summary = (
+                f"Asset '{segment.asset_id}' (Video): Dauer unbekannt — Hold bis "
+                f"{gap_end_sec:.2f}s konnte nicht verifiziert werden."
+            )
+        else:
+            usable = max(0.0, real_duration - segment.source_out_sec)
+            if usable + _TOLERANCE < needed:
+                failure_reason = "VIDEO_TOO_SHORT"
+                summary = (
+                    f"Asset '{segment.asset_id}' (Video): nur noch {usable:.2f}s Reserve, "
+                    f"Pause braucht {needed:.2f}s Extra "
+                    f"(Segment endet {segment.timeline_out_sec:.2f}s, Lücke bis {gap_end_sec:.2f}s). "
+                    "Bitte längeres Video oder Bild manuell zuweisen."
+                )
+            else:
+                failure_reason = "HOLD_NOT_APPLIED"
+                summary = (
+                    f"Asset '{segment.asset_id}' hätte {usable:.2f}s Reserve für {needed:.2f}s Pause, "
+                    "Hold wurde aber nicht angewendet — Asset-Auswahl/Coverage erneut ausführen "
+                    "oder manuell ersetzen."
+                )
+
+    return SectionPauseHoldDiagnosis(
+        responsible_cut_item_id=item.cut_item_id,
+        responsible_is_closing_shot=bool(item.is_closing_shot),
+        hold_candidate_asset_id=segment.asset_id,
+        hold_candidate_asset_type=segment.asset_type,
+        segment_timeline_out_sec=segment.timeline_out_sec,
+        gap_start_sec=gap_start_sec,
+        gap_end_sec=gap_end_sec,
+        needed_extend_sec=needed,
+        usable_extend_sec=usable,
+        failure_reason=failure_reason,
+        summary=summary,
+    )
 
 
 def _video_can_extend_to(asset_path: str, new_source_out_sec: float) -> bool:

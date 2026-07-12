@@ -275,6 +275,9 @@ def _closing_item_skeleton(
     folder: ConfirmedFolderPlanItem,
     folder_audio_item: CutPlanAudioItem | None,
     folder_sentence_items: list[CutPlanItem],
+    settings: CutPlanSettings | None = None,
+    *,
+    include_section_pause: bool = True,
 ) -> CutPlanItem | None:
     """Nutzervorgabe (Juli 2026, "wir haben gar kein closing asset nach dem
     letzten Satz, der die Pause ausfüllt"): EIN zusätzliches, rein
@@ -290,14 +293,11 @@ def _closing_item_skeleton(
       (fehlendes Audio wird bereits an anderer Stelle als eigener Blocker
       gemeldet, siehe build_cut_plan_timeline_skeleton).
 
-    Deckt visuell ZWEI Lücken ab, die vorher unabhängig als
-    BLACK_GAP_DURING_VOICEOVER auffielen: den kurzen 'Audio-Tail' zwischen
-    Satzende und tatsächlichem Audio-Ende, UND (über die anschließende
-    Visual-Coverage-Erweiterung, siehe cut_plan_visual_coverage.
-    extend_section_end_visuals_over_pauses, die dieses Item automatisch als
-    'letztes VisualSegment vor Audio-Ende' erkennt) die Sektionspause bis
-    zur nächsten Sektion — OHNE dass dafür das zuletzt gesprochene Satz-
-    Asset lang genug sein müsste."""
+    Timeline (Juli 2026 Fix):
+    - Startet NACH dem letzten Satz (keine Rückwärts-Überlappung mehr).
+    - Endet am Ordner-Audio-Ende PLUS pause_between_sections_sec, damit die
+      Sektionspause im Closing-Item sichtbar und asset-seitig mitgeplant
+      wird (Hold nicht nur unsichtbar in Visual Coverage)."""
     closing_plan = folder.closing_visual_plan
     if not closing_plan.primary_asset_id and not closing_plan.needs_supplement_asset:
         return None
@@ -311,12 +311,16 @@ def _closing_item_skeleton(
         last_valid_item.timeline_end_sec if last_valid_item is not None else folder_audio_item.timeline_start_sec
     )
     raw_end_sec = folder_audio_item.timeline_end_sec
+    pause_sec = 0.0
+    if include_section_pause and settings is not None:
+        pause_sec = max(0.0, settings.pause_between_sections_sec)
 
-    if raw_end_sec - raw_start_sec < CUT_PLAN_DEFAULT_CLOSING_SHOT_MIN_DURATION_SEC:
-        timeline_start_sec = raw_end_sec - CUT_PLAN_DEFAULT_CLOSING_SHOT_MIN_DURATION_SEC
-    else:
-        timeline_start_sec = raw_start_sec
-    timeline_end_sec = raw_end_sec
+    # Nie in den vorherigen Satz zurückdatieren — Closing beginnt am
+    # Satzende (oder Audio-Start, falls kein Satz).
+    timeline_start_sec = raw_start_sec
+    timeline_end_sec = max(raw_end_sec, timeline_start_sec) + pause_sec
+    if timeline_end_sec - timeline_start_sec < CUT_PLAN_DEFAULT_CLOSING_SHOT_MIN_DURATION_SEC:
+        timeline_end_sec = timeline_start_sec + CUT_PLAN_DEFAULT_CLOSING_SHOT_MIN_DURATION_SEC
     duration_sec = timeline_end_sec - timeline_start_sec
 
     return CutPlanItem(
@@ -379,7 +383,8 @@ def build_cut_plan_item_skeletons(
             )
             items.append(_intro_item_skeleton(beat, intro_audio_item, alignment_item))
 
-    for folder in sorted(source_plan.folders, key=lambda item: item.order_index):
+    folders_sorted = sorted(source_plan.folders, key=lambda item: item.order_index)
+    for folder_index, folder in enumerate(folders_sorted):
         folder_audio_item = _find_audio_item(audio_items, scope=AUDIO_SCOPE_FOLDER, folder_name=folder.folder_name)
         folder_items: list[CutPlanItem] = []
         for sentence_item in folder.sentence_items:
@@ -391,7 +396,14 @@ def build_cut_plan_item_skeletons(
             folder_items.append(_folder_item_skeleton(folder, sentence_item, folder_audio_item, alignment_item))
         items.extend(folder_items)
 
-        closing_item = _closing_item_skeleton(folder, folder_audio_item, folder_items)
+        is_last_folder = folder_index == len(folders_sorted) - 1
+        closing_item = _closing_item_skeleton(
+            folder,
+            folder_audio_item,
+            folder_items,
+            settings,
+            include_section_pause=not is_last_folder,
+        )
         if closing_item is not None:
             items.append(closing_item)
 

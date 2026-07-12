@@ -803,7 +803,11 @@ def _items_overlapping_gap(
     return matches
 
 
-def _black_gap_root_cause(item: CutPlanItem) -> str:
+def _black_gap_root_cause(
+    item: CutPlanItem,
+    *,
+    diagnosis_summary: str = "",
+) -> str:
     """Nutzervorgabe (Juli 2026, "wieso wird keine klare Ursache genannt?"):
     BLACK_GAP_DURING_VOICEOVER meldet bisher nur DASS ein Zeitraum
     unbedeckt ist, nicht WARUM — die eigentliche Ursache kann je Item ganz
@@ -813,6 +817,8 @@ def _black_gap_root_cause(item: CutPlanItem) -> str:
     aktuellen Zustand des verantwortlichen Items eine für Menschen lesbare
     Ursachen-Zeile, die direkt an die Blocker-Meldung angehängt wird —
     reine Beschreibung, keine Seiteneffekte, keine neue Klassifikation."""
+    if diagnosis_summary.strip():
+        return f"Ursache: {diagnosis_summary.strip()}"
     if item.asset_selection_status == CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED:
         detail = item.supplement_reason.strip() or item.asset_selection_reason.strip() or "kein Grund angegeben"
         return f"Ursache: Supplement erforderlich ({detail})."
@@ -838,7 +844,16 @@ def validate_no_black_gap_during_voiceover(
     build_supplement_requests_from_cut_plan (Phase F) für ein solches Item
     automatisch einen Supplement Request erzeugt — vorher hatte
     BLACK_GAP_DURING_VOICEOVER NIE eine cut_item_id und konnte deshalb nie
-    einem Item zugeordnet werden."""
+    einem Item zugeordnet werden.
+
+    Sektionspausen ohne Audio-Überlappung werden dem Closing Shot (bzw.
+    letzten Visual) der vorherigen Sektion zugeordnet — inkl. Hold-
+    Diagnose für Manual Replace."""
+    from otio_app.services.voiceover_generation.cut_plan_visual_coverage import (
+        diagnose_section_pause_hold_failure,
+        find_section_pause_responsible_item,
+    )
+
     warnings: list[CutPlanValidationError] = []
     blockers: list[CutPlanValidationError] = []
 
@@ -851,24 +866,55 @@ def validate_no_black_gap_during_voiceover(
     audio_items = sorted(cut_plan.audio_items, key=lambda item: item.timeline_start_sec)
 
     def _emit_gap_blockers(
-        gap_start: float, gap_end: float, *, scope: str, folder_name: str, base_message: str
+        gap_start: float,
+        gap_end: float,
+        *,
+        scope: str,
+        folder_name: str,
+        base_message: str,
+        preceding_audio=None,
+        is_section_pause: bool = False,
     ) -> None:
         for sub_start, sub_end in _uncovered_subintervals(coverage, gap_start, gap_end):
             responsible_items = _items_overlapping_gap(
                 cut_plan, sub_start, sub_end, folder_name=folder_name or None
             )
+            if not responsible_items and is_section_pause:
+                attributed = find_section_pause_responsible_item(
+                    cut_plan, sub_start, preceding_audio=preceding_audio
+                )
+                if attributed is not None:
+                    responsible_items = [attributed]
             if responsible_items:
                 for item in responsible_items:
                     item_scope = "sentence" if item.source_scope == AUDIO_SCOPE_FOLDER else "intro"
+                    diagnosis_summary = ""
+                    if is_section_pause:
+                        diagnosis = diagnose_section_pause_hold_failure(
+                            cut_plan,
+                            sub_start,
+                            sub_end,
+                            responsible_item=item,
+                            preceding_audio=preceding_audio,
+                        )
+                        diagnosis_summary = diagnosis.summary
                     blockers.append(
                         _make_error(
                             CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER,
                             scope=item_scope,
                             cut_item_id=item.cut_item_id,
                             folder_name=item.folder_name,
-                            message=f"{item.cut_item_id}: visuelles Loch ({sub_start:.2f}s–{sub_end:.2f}s) — "
-                            f"kein VisualSegment platziert. {_black_gap_root_cause(item)}",
-                            fix_hint="Supplement-Asset beschaffen oder Asset-Auswahl erneut anwenden.",
+                            message=(
+                                f"{item.cut_item_id}: visuelles Loch ({sub_start:.2f}s–{sub_end:.2f}s) — "
+                                f"{'Sektionspause' if is_section_pause else 'kein VisualSegment platziert'}. "
+                                f"{_black_gap_root_cause(item, diagnosis_summary=diagnosis_summary)}"
+                            ),
+                            fix_hint=(
+                                "Längeres/passendes Asset manuell zuweisen (Closing/Hold) "
+                                "oder Asset-Auswahl erneut anwenden."
+                                if is_section_pause
+                                else "Supplement-Asset beschaffen oder Asset-Auswahl erneut anwenden."
+                            ),
                             is_retryable_override=True,
                             gap_start_sec=sub_start,
                             gap_end_sec=sub_end,
@@ -882,6 +928,8 @@ def validate_no_black_gap_during_voiceover(
                         folder_name=folder_name,
                         message=f"{base_message} Lücke {sub_start:.2f}s–{sub_end:.2f}s ohne zugehöriges "
                         "Cut-Plan-Item.",
+                        gap_start_sec=sub_start,
+                        gap_end_sec=sub_end,
                     )
                 )
 
@@ -907,6 +955,8 @@ def validate_no_black_gap_during_voiceover(
             _emit_gap_blockers(
                 gap_start, gap_end, scope="timeline", folder_name="",
                 base_message="Pause zwischen Sektionen ist visuell nicht abgedeckt.",
+                preceding_audio=audio_items[i],
+                is_section_pause=True,
             )
 
     return warnings, blockers

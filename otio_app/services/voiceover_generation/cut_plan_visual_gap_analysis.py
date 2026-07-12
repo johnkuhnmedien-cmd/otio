@@ -226,6 +226,35 @@ def analyze_visual_gaps(cut_plan: CutPlanDocument, settings: CutPlanSettings) ->
             windows.append((item, item.timeline_start_sec, expected_end))
     windows.sort(key=lambda entry: entry[1])
 
+    audio_items = sorted(cut_plan.audio_items, key=lambda audio: audio.timeline_start_sec)
+
+    def _attribute_orphan_gap(gap_start: float, gap_end: float) -> CutPlanVisualGap:
+        """Sektionspausen ohne Visual-Window-Treffer dem Closing/letzten
+        Visual der vorherigen Audio-Sektion zuordnen. Andere Orphans
+        (z. B. Vorlauf vor dem ersten Audio) bleiben unattributiert."""
+        from otio_app.services.voiceover_generation.cut_plan_visual_coverage import (
+            find_section_pause_responsible_item,
+        )
+
+        preceding = None
+        for index in range(len(audio_items) - 1):
+            pause_start = audio_items[index].timeline_end_sec
+            pause_end = audio_items[index + 1].timeline_start_sec
+            if pause_end <= pause_start + _EPSILON:
+                continue
+            if gap_start >= pause_start - _EPSILON and gap_end <= pause_end + _EPSILON:
+                preceding = audio_items[index]
+                break
+            if gap_start < pause_end - _EPSILON and gap_end > pause_start + _EPSILON:
+                preceding = audio_items[index]
+                break
+        if preceding is None:
+            return _build_gap(None, gap_start, gap_end, cut_plan=cut_plan, settings=settings)
+        responsible = find_section_pause_responsible_item(
+            cut_plan, gap_start, preceding_audio=preceding
+        )
+        return _build_gap(responsible, gap_start, gap_end, cut_plan=cut_plan, settings=settings)
+
     results: list[CutPlanVisualGap] = []
     for gap_start, gap_end in raw_gaps:
         cursor = gap_start
@@ -240,9 +269,7 @@ def analyze_visual_gaps(cut_plan: CutPlanDocument, settings: CutPlanSettings) ->
                 continue
             effective_start = max(clip_start, cursor)
             if effective_start > cursor + _EPSILON:
-                results.append(
-                    _build_gap(None, cursor, effective_start, cut_plan=cut_plan, settings=settings)
-                )
+                results.append(_attribute_orphan_gap(cursor, effective_start))
             sub_end = min(clip_end, gap_end)
             if sub_end > effective_start + _EPSILON:
                 item_window = next((w for w in windows if w[0] is item), None)
@@ -255,6 +282,6 @@ def analyze_visual_gaps(cut_plan: CutPlanDocument, settings: CutPlanSettings) ->
                 )
             cursor = max(cursor, sub_end)
         if cursor < gap_end - _EPSILON:
-            results.append(_build_gap(None, cursor, gap_end, cut_plan=cut_plan, settings=settings))
+            results.append(_attribute_orphan_gap(cursor, gap_end))
 
     return results

@@ -201,7 +201,10 @@ def test_gap_within_pause_extension_disabled_falls_back_to_unattributed() -> Non
     gaps = analyze_visual_gaps(cut_plan, settings)
 
     pause_gap = next(g for g in gaps if g.gap_start_sec == pytest.approx(5.0) and g.gap_end_sec == pytest.approx(8.0))
-    assert pause_gap.gap_kind == GAP_KIND_UNATTRIBUTED_GAP
+    # Ohne Visual-Window wird die Pause jetzt der vorherigen Sektion
+    # (letztes Visual / Closing) zugeordnet — nicht mehr UNATTRIBUTED.
+    assert pause_gap.cut_item_id == "cut_1"
+    assert pause_gap.gap_kind in {GAP_KIND_MINI_REPAIRABLE_GAP, GAP_KIND_RESIDUAL_ITEM_GAP}
 
 
 def test_multiple_gap_kinds_in_single_draft() -> None:

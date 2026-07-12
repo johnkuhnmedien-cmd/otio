@@ -172,17 +172,23 @@ def test_closing_shot_removes_black_gap_for_section_pause(tmp_path: Path) -> Non
     assert closing_item.chosen_asset_id == "asset_photo_closing_a"
     assert closing_item.planned_visual_segments
     segment = closing_item.planned_visual_segments[0]
-    assert "section_pause_hold" in segment.reason.split("+")
 
     folder_b_audio = next(a for a in updated.audio_items if a.folder_name == FOLDER_B)
+    # Closing-Item trägt die Sektionspause in seiner Dauer; Segment deckt
+    # bis zum Start der nächsten Sektion (Hold-Marker optional).
+    assert closing_item.timeline_end_sec == pytest.approx(folder_b_audio.timeline_start_sec)
     assert segment.timeline_out_sec == pytest.approx(folder_b_audio.timeline_start_sec)
+    last_sentence = next(
+        item
+        for item in updated.items
+        if item.folder_name == closing_item.folder_name and not item.is_closing_shot
+    )
+    assert closing_item.timeline_start_sec >= last_sentence.timeline_end_sec - 0.01
 
 
 def test_closing_shot_does_not_overlap_with_last_sentence_segment(tmp_path: Path) -> None:
-    """Da der letzte Satz exakt bis ans Audio-Ende reicht (kein Audio-Tail),
-    muss der Closing Shot etwas Zeit vom letzten Satz-Segment 'entleihen'
-    (Floor-Mindestdauer) — resolve_timeline_overlaps muss das automatisch
-    ohne Überlappung oder neue Lücke auflösen."""
+    """Closing startet am letzten Satzende (keine Rückwärts-Überlappung);
+    VisualSegments dürfen sich auf V1 nicht überlappen."""
     project = _build_two_folder_project(tmp_path, with_closing_plan=True)
     with (
         patch(f"{_ASSET_SELECTOR_MODULE}.probe_duration_seconds", return_value=8.0),
@@ -194,6 +200,13 @@ def test_closing_shot_does_not_overlap_with_last_sentence_segment(tmp_path: Path
     from otio_app.services.voiceover_generation.cut_plan_visual_coverage import all_segments_sorted
 
     draft = load_cut_plan_draft(project)
+    closing = next(item for item in draft.items if item.is_closing_shot)
+    last_sentence = max(
+        (item for item in draft.items if item.folder_name == closing.folder_name and not item.is_closing_shot),
+        key=lambda item: item.timeline_end_sec,
+    )
+    assert closing.timeline_start_sec >= last_sentence.timeline_end_sec - 0.01
+
     all_segments = all_segments_sorted(draft)
     for (segment_a, _), (segment_b, _) in zip(all_segments, all_segments[1:]):
         assert segment_b.timeline_in_sec >= segment_a.timeline_out_sec - 0.01

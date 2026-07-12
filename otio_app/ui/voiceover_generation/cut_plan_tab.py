@@ -34,6 +34,7 @@ from otio_app.defaults import (
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED,
     CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_USED,
     CUT_PLAN_AUTO_RESOLVE_PROVIDER_LOCAL_REUSE,
+    CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER,
     CUT_PLAN_SUPPLEMENT_REQUEST_STATUS_ACCEPTED,
     CUT_PLAN_VALIDATION_REPAIR_STATUS_ACCEPTED,
     CUT_PLAN_RESIDUAL_GAP_REPAIR_MODE_PATCH_GAP_ONLY,
@@ -135,7 +136,9 @@ from otio_app.services.voiceover_generation.cut_plan_settings_service import (
 )
 from otio_app.services.voiceover_generation.cut_plan_generic_fallback_service import (
     apply_generic_fallback_for_cut_plan_request,
+    apply_manual_asset_for_cut_item,
     apply_manual_asset_for_cut_plan_request,
+    list_manual_asset_options_for_cut_item,
     list_manual_asset_options_for_request,
 )
 from otio_app.services.voiceover_generation.cut_plan_supplement_auto_resolve_service import (
@@ -1444,6 +1447,129 @@ def _render_bulk_auto_resolve_action(
                 label = request_labels.get(result.request_id, result.request_id)
                 st.warning(f"„{label}“: kein passendes Asset gefunden — bitte manuell prüfen.")
         st.rerun()
+
+
+def _render_black_gap_manual_repair(project: Project, draft: CutPlanDocument) -> None:
+    """Diagnose + manueller Asset-Tausch für BLACK_GAP_DURING_VOICEOVER —
+    inkl. Sektionspausen, die dem Closing Shot zugeordnet sind."""
+    from otio_app.services.voiceover_generation.cut_plan_visual_coverage import (
+        diagnose_section_pause_hold_failure,
+    )
+
+    black_gaps = [
+        error
+        for error in draft.blockers
+        if error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER
+    ]
+    if not black_gaps:
+        return
+
+    st.subheader("Black-Gap Diagnose & manuell tauschen")
+    st.caption(
+        "NEU: zeigt je Black-Gap den Auslöser (Asset, Reserve vs. benötigte Pause) und "
+        "erlaubt, am betroffenen Cut-Plan-Item (oft Closing Shot) ein Ordner-Asset "
+        "manuell einzusetzen. Danach bitte erneut „Cut Plan validieren“."
+    )
+
+    for index, error in enumerate(black_gaps):
+        gap_label = (
+            f"{error.gap_start_sec:.2f}s–{error.gap_end_sec:.2f}s"
+            if error.gap_end_sec > error.gap_start_sec
+            else "ohne Gap-Zeiten"
+        )
+        title = error.cut_item_id or "(ohne Item-Zuordnung)"
+        with st.expander(
+            f"🔴 {title} — {gap_label} — {error.folder_name or error.scope}",
+            expanded=index == 0,
+        ):
+            st.write(error.message)
+            if error.fix_hint:
+                st.caption(f"Hinweis: {error.fix_hint}")
+
+            diagnosis = None
+            if error.gap_end_sec > error.gap_start_sec:
+                item = next(
+                    (entry for entry in draft.items if entry.cut_item_id == error.cut_item_id),
+                    None,
+                )
+                diagnosis = diagnose_section_pause_hold_failure(
+                    draft,
+                    error.gap_start_sec,
+                    error.gap_end_sec,
+                    responsible_item=item,
+                )
+                st.info(
+                    f"**Diagnose:** {diagnosis.summary}\n\n"
+                    f"- Zuständig: `{diagnosis.responsible_cut_item_id or '—'}`"
+                    f"{' (Closing Shot)' if diagnosis.responsible_is_closing_shot else ''}\n"
+                    f"- Hold-Asset: `{diagnosis.hold_candidate_asset_id or '—'}` "
+                    f"({diagnosis.hold_candidate_asset_type or '—'})\n"
+                    f"- Benötigte Extra-Länge: {diagnosis.needed_extend_sec:.2f}s\n"
+                    f"- Nutzbare Reserve: "
+                    f"{'∞ (Bild)' if diagnosis.usable_extend_sec is None and diagnosis.hold_candidate_asset_type == 'image' else (f'{diagnosis.usable_extend_sec:.2f}s' if diagnosis.usable_extend_sec is not None else '—')}\n"
+                    f"- Fehlgrund: `{diagnosis.failure_reason}`"
+                )
+
+            target_cut_item_id = error.cut_item_id or (
+                diagnosis.responsible_cut_item_id if diagnosis is not None else ""
+            )
+            if not target_cut_item_id:
+                st.warning("Keine Item-Zuordnung — manueller Tausch hier nicht möglich.")
+                continue
+
+            target_item = next(
+                (entry for entry in draft.items if entry.cut_item_id == target_cut_item_id),
+                None,
+            )
+            if target_item is None or not target_item.folder_name:
+                st.warning(f"Item `{target_cut_item_id}` hat keinen Ordner für Inventory-Auswahl.")
+                continue
+
+            needed = float(target_item.duration_sec)
+            if error.gap_end_sec > error.gap_start_sec:
+                needed = max(needed, error.gap_end_sec - error.gap_start_sec)
+            if diagnosis is not None:
+                needed = max(needed, diagnosis.needed_extend_sec)
+
+            options = list_manual_asset_options_for_cut_item(
+                project, draft, target_cut_item_id, needed_duration_sec=needed
+            )
+            if not options:
+                st.warning("Kein Asset im Ordner-Inventory gefunden.")
+                continue
+
+            labels = [
+                f"{'✅' if option.likely_usable else '⚠️'} {option.asset_id} "
+                f"({option.media_type}, {option.duration_sec:.1f}s) — {option.description[:60]}"
+                for option in options
+            ]
+            selected_label = st.selectbox(
+                "Ersatz-Asset wählen",
+                options=labels,
+                key=f"cut_plan_black_gap_manual_select_{project.id}_{target_cut_item_id}_{index}",
+            )
+            selected = options[labels.index(selected_label)]
+            if st.button(
+                "Asset in Cut Plan übernehmen",
+                key=f"cut_plan_black_gap_manual_apply_{project.id}_{target_cut_item_id}_{index}",
+                type="primary",
+            ):
+                try:
+                    apply_manual_asset_for_cut_item(
+                        project,
+                        target_cut_item_id,
+                        asset_id=selected.asset_id,
+                        asset_path=selected.path,
+                        needed_duration_sec=needed,
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.success(
+                        f"`{selected.asset_id}` auf `{target_cut_item_id}` übernommen. "
+                        "Bitte Cut Plan erneut validieren."
+                    )
+                    st.rerun()
 
 
 def _render_residual_gap_requests(project: Project, draft: CutPlanDocument) -> None:
@@ -3354,6 +3480,8 @@ def render_cut_plan_page() -> None:
     if existing_draft is not None:
         st.divider()
         _render_supplement_requests(project, existing_draft)
+        st.divider()
+        _render_black_gap_manual_repair(project, existing_draft)
         st.divider()
         _render_residual_gap_requests(project, existing_draft)
         st.divider()

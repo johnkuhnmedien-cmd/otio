@@ -57,8 +57,10 @@ __all__ = [
     "apply_generic_fallback_to_cut_plan_item",
     "apply_generic_fallback_for_cut_plan_request",
     "list_manual_asset_options_for_request",
+    "list_manual_asset_options_for_cut_item",
     "apply_manual_asset_to_cut_plan_item",
     "apply_manual_asset_for_cut_plan_request",
+    "apply_manual_asset_for_cut_item",
 ]
 
 _DURATION_EPSILON = 0.05
@@ -425,3 +427,69 @@ def apply_manual_asset_for_cut_plan_request(
         accepted_asset_path=asset_path,
     )
     return updated_cut_plan
+
+
+def _transient_request_for_cut_item(
+    cut_plan: CutPlanDocument, cut_item_id: str, *, needed_duration_sec: float | None = None
+) -> tuple[CutPlanItem, CutPlanSupplementRequest]:
+    target_item = next((item for item in cut_plan.items if item.cut_item_id == cut_item_id), None)
+    if target_item is None:
+        raise ValueError(f"CutPlanItem '{cut_item_id}' nicht im Cut Plan gefunden.")
+    duration = (
+        float(needed_duration_sec)
+        if needed_duration_sec is not None
+        else float(target_item.duration_sec)
+    )
+    request = CutPlanSupplementRequest(
+        request_id=f"manual_replace_{cut_item_id}",
+        cut_item_id=cut_item_id,
+        source_scope=target_item.source_scope,
+        folder_name=target_item.folder_name,
+        text=target_item.text,
+        visual_intent=target_item.visual_intent,
+        needed_duration_sec=duration,
+        reason="Manueller Asset-Tausch für Black-Gap-/Closing-Repair.",
+        supplement_search_hint=target_item.supplement_search_hint,
+    )
+    return target_item, request
+
+
+def list_manual_asset_options_for_cut_item(
+    project: Project,
+    cut_plan: CutPlanDocument,
+    cut_item_id: str,
+    *,
+    needed_duration_sec: float | None = None,
+) -> list[ManualAssetOption]:
+    """Manuelle Asset-Auswahl für ein Cut-Plan-Item — ohne bestehenden
+    Supplement Request (z. B. Closing-Shot bei Sektionspausen-Black-Gap)."""
+    _item, request = _transient_request_for_cut_item(
+        cut_plan, cut_item_id, needed_duration_sec=needed_duration_sec
+    )
+    return list_manual_asset_options_for_request(
+        project, request, needed_duration_sec=request.needed_duration_sec
+    )
+
+
+def apply_manual_asset_for_cut_item(
+    project: Project,
+    cut_item_id: str,
+    *,
+    asset_id: str,
+    asset_path: str,
+    needed_duration_sec: float | None = None,
+) -> CutPlanDocument:
+    """Weist einem Cut-Plan-Item direkt ein Ordner-Asset zu, speichert den
+    Draft und wendet Visual-Coverage erneut an — für Black-Gap-Repair an
+    Closing Shots / Sätzen ohne offenen Supplement Request."""
+    draft = load_cut_plan_draft(project)
+    if draft is None:
+        raise ValueError("Kein Cut Plan Draft vorhanden.")
+    _item, request = _transient_request_for_cut_item(
+        draft, cut_item_id, needed_duration_sec=needed_duration_sec
+    )
+    updated = apply_manual_asset_to_cut_plan_item(
+        project, draft, request, asset_id=asset_id, asset_path=asset_path
+    )
+    save_cut_plan_draft(project, updated)
+    return updated
