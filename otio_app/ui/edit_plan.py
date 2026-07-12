@@ -676,9 +676,11 @@ def _render_tab_settings(project) -> None:
 def _export_timing_settings(project) -> OtioExportSettings:
     """Audio-Start und Ausklingen aus dem Vorschlag-Tab (Fallback: gespeicherte JSON)."""
     saved = load_otio_export_settings(project)
-    return OtioExportSettings(
-        audio_offset_sec=_plan_number_setting(project.id, "offset", saved.audio_offset_sec),
-        section_outro_sec=_plan_number_setting(project.id, "outro", saved.section_outro_sec),
+    return saved.model_copy(
+        update={
+            "audio_offset_sec": _plan_number_setting(project.id, "offset", saved.audio_offset_sec),
+            "section_outro_sec": _plan_number_setting(project.id, "outro", saved.section_outro_sec),
+        }
     )
 
 

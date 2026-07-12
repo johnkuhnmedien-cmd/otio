@@ -48,6 +48,11 @@ from otio_app.services.otio_export_settings import (
     load_otio_export_settings,
     save_otio_export_settings,
 )
+from otio_app.services.still_image_export_style import (
+    DEFAULT_STILL_IMAGE_ZOOM,
+    STILL_BACKGROUND_VINTAGE,
+    ensure_styled_still_for_export,
+)
 from otio_app.defaults import PRODUCTION_EDIT_PLAN_CANDIDATE_STATUS_STAGING_DRAFT
 from otio_app.services.edit_plan_validator import (
     TimelineValidationResult,
@@ -862,6 +867,9 @@ def _append_timeline_item_clip(
     export_rules: ExportRuleOptions,
     auto_zoom_fill: bool,
     timing_notes: list[str] | None = None,
+    still_image_style_enabled: bool = True,
+    still_image_zoom: float = DEFAULT_STILL_IMAGE_ZOOM,
+    still_image_background_style: str = STILL_BACKGROUND_VINTAGE,
 ) -> None:
     """Schreibt ein Timeline-Item 1:1 — ohne Daueränderung oder Asset-Auswahl."""
     media_path = _resolve_media_path(item.resolved_media_path)
@@ -885,21 +893,28 @@ def _append_timeline_item_clip(
     duration_sec = max(0.01, float(item.final_duration_sec or item.duration_sec or 0.0))
     media_rate = rate
 
-    # Still-Images (JPEG/PNG/…) haben keine echte Medien-Dauer (ffprobe ≈ 0).
-    # Die Video-Kappung auf available_range würde sie auf ~1 Frame kollabieren
-    # und die gesamte V1-Timeline zusammenschieben (A/V-Drift). Wie im älteren
-    # Pfad _clip_source_range_for_media: geplante Shot-Dauer als Freeze halten.
+    # Still-Images (JPEG/PNG/…): geplante Shot-Dauer als Freeze halten
+    # (ffprobe ≈ 0), optional Vintage-Hintergrund + Zoom unmittelbar vor Export.
     if is_image_media(effective) or is_image_media(original):
+        styled = ensure_styled_still_for_export(
+            project,
+            item.folder_name,
+            effective if is_image_media(effective) else original,
+            enabled=still_image_style_enabled,
+            zoom=still_image_zoom,
+            background_style=still_image_background_style,
+            notes=timing_notes,
+        )
         play_sec = duration_sec
         source_in = 0.0
         if timing_notes is not None:
             timing_notes.append(
-                f"{effective.name}: Still-Image — {play_sec:.2f}s Hold (geplante Shot-Dauer)."
+                f"{Path(styled).name}: Still-Image — {play_sec:.2f}s Hold (geplante Shot-Dauer)."
             )
         video_clip = otio.schema.Clip(
-            name=_clip_name_for_media(effective, index=index),
+            name=_clip_name_for_media(Path(styled), index=index),
             media_reference=_media_reference(
-                str(effective),
+                str(styled),
                 rate,
                 trim_leading_sec=0.0,
             ),
@@ -910,10 +925,15 @@ def _append_timeline_item_clip(
         video_clip.metadata["folder"] = item.folder_name
         video_clip.metadata["motif"] = item.motif
         video_clip.metadata["passage_text"] = item.passage_text
-        video_clip.metadata["resolved_media_path"] = str(effective)
+        video_clip.metadata["resolved_media_path"] = str(styled)
+        video_clip.metadata["original_still_path"] = str(original)
         video_clip.metadata["asset_role"] = item.asset_role
         video_clip.metadata["selection_reason"] = item.selection_reason
         video_clip.metadata["still_image_hold"] = True
+        if Path(styled).resolve() != Path(original).resolve():
+            video_clip.metadata["still_image_styled"] = True
+            video_clip.metadata["still_image_zoom"] = round(float(still_image_zoom), 4)
+            video_clip.metadata["still_image_background_style"] = still_image_background_style
         if item.type == "generic_outro_visual":
             video_clip.metadata["section_outro"] = True
         if item.warnings:
@@ -1100,6 +1120,9 @@ def build_otio_timeline(
     """
     rate = float(project.fps)
     settings = merged.settings
+    still_style_enabled = True
+    still_style_zoom = DEFAULT_STILL_IMAGE_ZOOM
+    still_style_background = STILL_BACKGROUND_VINTAGE
     if export_settings is not None:
         settings = settings.model_copy(
             update={
@@ -1107,6 +1130,14 @@ def build_otio_timeline(
                 "section_outro_sec": export_settings.section_outro_sec,
             }
         )
+        still_style_enabled = export_settings.still_image_style_enabled
+        still_style_zoom = export_settings.still_image_zoom
+        still_style_background = export_settings.still_image_background_style
+    else:
+        loaded_export = load_otio_export_settings(project)
+        still_style_enabled = loaded_export.still_image_style_enabled
+        still_style_zoom = loaded_export.still_image_zoom
+        still_style_background = loaded_export.still_image_background_style
 
     items = merged.timeline_items
     sections = _compute_timeline_sections(items, settings, merged.voiceovers)
@@ -1121,6 +1152,10 @@ def build_otio_timeline(
         timeline.metadata["trim_leading_sec"] = export_rules.trim_leading_sec
     if auto_zoom_fill:
         timeline.metadata["auto_zoom_fill"] = True
+    if still_style_enabled:
+        timeline.metadata["still_image_style_enabled"] = True
+        timeline.metadata["still_image_zoom"] = round(float(still_style_zoom), 4)
+        timeline.metadata["still_image_background_style"] = still_style_background
     timeline.global_start_time = otio.opentime.RationalTime.from_seconds(0, rate)
 
     v1_items = [item for item in items if item.type != "opening_title"]
@@ -1151,6 +1186,9 @@ def build_otio_timeline(
             export_rules=export_rules,
             auto_zoom_fill=auto_zoom_fill,
             timing_notes=timing_notes,
+            still_image_style_enabled=still_style_enabled,
+            still_image_zoom=still_style_zoom,
+            still_image_background_style=still_style_background,
         )
 
     timeline.tracks.append(video_track)
