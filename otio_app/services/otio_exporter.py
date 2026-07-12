@@ -172,6 +172,14 @@ def _timeline_validation_for_merge(
     """Wählt Produktions- vs. Cut-Plan-relaxierte Validierung für den Merge."""
     cut_plan = _is_cut_plan_origin_edit_plan(plan)
     if cut_plan:
+        from otio_app.services.voiceover_generation.cut_plan_settings_service import (
+            load_cut_plan_settings,
+        )
+
+        cut_settings = load_cut_plan_settings(project)
+        # Intro-Pläne (folder Intro) brauchen keinen Titel.
+        folder_is_intro = (plan.folder_name or "").strip().casefold() == "intro"
+        title_required = bool(cut_settings.folder_title_enabled) and not folder_is_intro
         settings = relaxed_validation_settings_for_cut_plan(section_voiceover)
         validation = validate_timeline_items(
             section_items,
@@ -179,7 +187,7 @@ def _timeline_validation_for_merge(
             allow_black_outro=True,
             fps=float(project.fps),
             voiceover=section_voiceover,
-            opening_title_required=False,
+            opening_title_required=title_required,
             require_rendered_media=False,
             rules_doc=None,
             work_dir_path=None,
@@ -187,6 +195,16 @@ def _timeline_validation_for_merge(
         )
         filtered_errors = _filter_cut_plan_validation_messages(validation.errors)
         filtered_warnings = _filter_cut_plan_validation_messages(validation.warnings)
+        if title_required:
+            # Opening-Title-Fehler nicht wegfiltern, wenn Setting aktiv.
+            title_errors = [
+                msg
+                for msg in validation.errors
+                if "opening_title" in msg.casefold() or "ordner-titel" in msg.casefold()
+            ]
+            for msg in title_errors:
+                if msg not in filtered_errors:
+                    filtered_errors.append(msg)
         if filtered_errors != validation.errors or filtered_warnings != validation.warnings:
             status = validation.status
             if not filtered_errors and status == ValidationStatus.BLOCKED:
@@ -1625,11 +1643,13 @@ def export_otio_timeline(
     )
 
     export_rules = export_rule_options(load_edit_plan_rules(project))
-    opening_title_required = (
-        False
-        if merged.cut_plan_relaxed_folders
-        else export_rules.folder_title_enabled
-    )
+    opening_title_required = export_rules.folder_title_enabled
+    if merged.cut_plan_relaxed_folders:
+        from otio_app.services.voiceover_generation.cut_plan_settings_service import (
+            load_cut_plan_settings,
+        )
+
+        opening_title_required = bool(load_cut_plan_settings(project).folder_title_enabled)
     post_render_validation = validate_opening_titles(
         merged.timeline_items,
         opening_title_required=opening_title_required,

@@ -101,11 +101,15 @@ def build_opening_title_item(
     requested_font_family: str = DEFAULT_OPENING_TITLE_FONT,
     duration_sec: float = DEFAULT_OPENING_TITLE_DURATION_SEC,
     font_size_px: float | None = None,
+    text: str | None = None,
 ) -> TimelineItem:
-    """Erzeugt opening_title beim Schnittplan-Vorschlag (Regeln → Plan, noch kein Render)."""
-    text = format_folder_display_name(folder_name)
+    """Erzeugt opening_title beim Schnittplan-Vorschlag (Regeln → Plan, noch kein Render).
+
+    `text` überschreibt den Ordner-Anzeigenamen (für spätere Übersetzungen).
+    """
+    display_text = (text or "").strip() or format_folder_display_name(folder_name)
     style = build_title_style_for_plan(
-        text=text,
+        text=display_text,
         project=project,
         requested_font_family=requested_font_family,
         duration_sec=duration_sec,
@@ -139,7 +143,7 @@ def build_opening_title_item(
         render_required=True,
         selection_reason="Opening Title aus Ordnername",
         confidence=1.0,
-        motif=text,
+        motif=display_text,
         warnings=warnings,
         media_source_type="generated",
         **_mirror_legacy_title_fields(style),

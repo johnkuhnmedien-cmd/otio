@@ -29,6 +29,10 @@ from otio_app.defaults import (
     CUT_PLAN_ASSET_SELECTION_UNRESOLVED,
     CUT_PLAN_DEFAULT_BLACK_GAP_AUTO_HOLD_MAX_SEC,
     CUT_PLAN_DEFAULT_EXTEND_VISUAL_WINDOW_TO_NEXT_SENTENCE,
+    CUT_PLAN_DEFAULT_FOLDER_TITLE_DURATION_SEC,
+    CUT_PLAN_DEFAULT_FOLDER_TITLE_ENABLED,
+    CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT,
+    CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT_SIZE,
     CUT_PLAN_DEFAULT_INITIAL_AUDIO_OFFSET_SEC,
     CUT_PLAN_DEFAULT_MAX_ASSET_USAGE,
     CUT_PLAN_DEFAULT_MAX_SENTENCE_PAUSE_EXTENSION_SEC,
@@ -101,6 +105,13 @@ class CutPlanSettings(BaseModel):
     timeline_fps: int = CUT_PLAN_DEFAULT_TIMELINE_FPS
     timeline_width: int = CUT_PLAN_DEFAULT_TIMELINE_WIDTH
     timeline_height: int = CUT_PLAN_DEFAULT_TIMELINE_HEIGHT
+    # Ordner-Titel (V2 Lower Third) — Intro ausgenommen. Text vorerst Ordnername;
+    # folder_title_custom_text vorbereitet für spätere Übersetzungen.
+    folder_title_enabled: bool = CUT_PLAN_DEFAULT_FOLDER_TITLE_ENABLED
+    folder_title_font: str = CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT
+    folder_title_duration_sec: float = CUT_PLAN_DEFAULT_FOLDER_TITLE_DURATION_SEC
+    folder_title_font_size: float = CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT_SIZE
+    folder_title_custom_text: str = ""
 
 
 class CutPlanSourceRef(BaseModel):
