@@ -59,7 +59,7 @@ def create_llm_run_dir(project: Project, stage: str) -> tuple[str, Path]:
     genutzt — die Verzeichnisstruktur selbst enthält keine Stage-Unterordner,
     das Manifest im Run-Ordner dokumentiert die Stage."""
     run_id = str(uuid.uuid4())
-    run_dir = get_llm_run_dir(project.work_dir_path, run_id)
+    run_dir = get_llm_run_dir(project.language_work_dir_path, run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_id, run_dir
 

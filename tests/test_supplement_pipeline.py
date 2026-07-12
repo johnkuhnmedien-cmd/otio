@@ -754,7 +754,7 @@ def test_pexels_download_failure_writes_error_without_placeholder(
         SUPPLEMENT_SOURCE_PEXELS,
     )
     assert not list(provider_dir.glob("*")) if provider_dir.exists() else True
-    assert get_supplement_errors_path(project.work_dir_path).is_file()
+    assert get_supplement_errors_path(project.language_work_dir_path).is_file()
 
 
 def test_manual_import_creates_sidecar(tmp_path: Path) -> None:

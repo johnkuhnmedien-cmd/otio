@@ -129,7 +129,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -251,7 +251,7 @@ def test_blocked_with_stale_validation_report(tmp_path: Path) -> None:
 
 def test_detects_missing_staged_edit_plan_file(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
-    get_staged_edit_plan_path(project.work_dir_path, "000_intro").unlink()
+    get_staged_edit_plan_path(project.language_work_dir_path, "000_intro").unlink()
     readiness = build_production_edit_plan_promote_readiness(project)
     intro_section = next(s for s in readiness.sections if s.staging_section_id == "000_intro")
     assert intro_section.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_BLOCKED
@@ -380,7 +380,7 @@ def test_folder_without_existing_plan_is_would_create(tmp_path: Path) -> None:
 
 def test_folder_with_existing_plan_is_would_overwrite(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_path.write_text('{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}', encoding="utf-8")
 
@@ -392,7 +392,7 @@ def test_folder_with_existing_plan_is_would_overwrite(tmp_path: Path) -> None:
 
 def test_would_overwrite_leads_to_needs_review_status(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_path.write_text('{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}', encoding="utf-8")
 
@@ -428,7 +428,7 @@ def test_technical_blocker_leads_to_blocked_status(tmp_path: Path) -> None:
 
 def test_existing_production_plan_is_only_read(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_content = '{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}'
     existing_path.write_text(existing_content, encoding="utf-8")
@@ -441,7 +441,7 @@ def test_existing_production_plan_is_only_read(tmp_path: Path) -> None:
 def test_existing_production_plan_hash_is_captured(tmp_path: Path) -> None:
 
     project = _happy_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_content = '{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}'
     existing_path.write_text(existing_content, encoding="utf-8")
@@ -453,7 +453,7 @@ def test_existing_production_plan_hash_is_captured(tmp_path: Path) -> None:
 
 def test_existing_production_plan_metadata_is_captured(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_path.write_text(
         '{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true, '
@@ -471,7 +471,7 @@ def test_existing_production_plan_metadata_is_captured(tmp_path: Path) -> None:
 
 def test_unreadable_existing_production_plan_yields_warning_not_crash(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_path.write_text("NOT VALID JSON {{{", encoding="utf-8")
 
@@ -488,7 +488,7 @@ def test_readiness_file_is_written_under_staging_dir(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
     readiness = build_production_edit_plan_promote_readiness(project)
     save_production_edit_plan_promote_readiness(project, readiness)
-    assert get_production_edit_plan_promote_readiness_path(project.work_dir_path).is_file()
+    assert get_production_edit_plan_promote_readiness_path(project.language_work_dir_path).is_file()
 
 
 def test_dry_run_trace_file_is_written_under_staging_dir(tmp_path: Path) -> None:
@@ -496,12 +496,12 @@ def test_dry_run_trace_file_is_written_under_staging_dir(tmp_path: Path) -> None
     readiness = build_production_edit_plan_promote_readiness(project)
     trace = build_production_edit_plan_promote_dry_run_trace(project, readiness)
     save_production_edit_plan_promote_dry_run_trace(project, trace)
-    assert get_production_edit_plan_promote_dry_run_trace_path(project.work_dir_path).is_file()
+    assert get_production_edit_plan_promote_dry_run_trace_path(project.language_work_dir_path).is_file()
 
 
 def test_dry_run_trace_would_write_and_would_overwrite_are_correct(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_path.write_text('{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}', encoding="utf-8")
 
@@ -565,24 +565,24 @@ def test_no_files_written_under_edit_plan_dir(tmp_path: Path) -> None:
     save_production_edit_plan_promote_readiness(project, readiness)
     trace = build_production_edit_plan_promote_dry_run_trace(project, readiness)
     save_production_edit_plan_promote_dry_run_trace(project, trace)
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_exports_dir(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
     build_production_edit_plan_promote_readiness(project)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_supplement_dir(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
     build_production_edit_plan_promote_readiness(project)
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_existing_production_edit_plan_remains_byte_identical(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_content = '{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}'
     existing_path.write_text(existing_content, encoding="utf-8")
@@ -605,7 +605,7 @@ def test_no_original_media_modified(tmp_path: Path) -> None:
 
 def test_no_audio_files_overwritten(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
-    audio_path = project.work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
+    audio_path = project.language_work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
     original = audio_path.read_bytes()
     build_production_edit_plan_promote_readiness(project)
     assert audio_path.read_bytes() == original

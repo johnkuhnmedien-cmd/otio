@@ -239,7 +239,7 @@ def build_intro_alignment(
 
 def _alignment_path(project: Project, scope: str, folder_name: str) -> Path:
     if scope == AUDIO_SCOPE_INTRO:
-        return get_intro_alignment_path(project.work_dir_path)
+        return get_intro_alignment_path(project.language_work_dir_path)
     order_index = _resolve_order_index(project, folder_name)
     return get_folder_alignment_path(project.work_dir_path, order_index, folder_name)
 

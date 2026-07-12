@@ -76,7 +76,7 @@ def _write_inventory(project: Project, folder_name: str, filenames: list[str]) -
 
 
 def _write_audio_files(project: Project, names: list[str]) -> list[Path]:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     paths = []
     for name in names:

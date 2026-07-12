@@ -85,7 +85,7 @@ def test_dramaturgy_page_writes_no_edit_plan_documents(
 ) -> None:
     render_dramaturgy_page()
     assert not get_edit_plan_dir(without_voiceover_project.work_dir_path).exists()
-    assert not get_exports_dir(without_voiceover_project.work_dir_path).exists()
+    assert not get_exports_dir(without_voiceover_project.language_work_dir_path).exists()
 
 
 def test_dramaturgy_page_guards_with_voiceover_project(
@@ -102,7 +102,7 @@ def test_dramaturgy_page_guards_with_voiceover_project(
     )
 
     render_dramaturgy_page()  # darf nicht werfen und darf nichts schreiben
-    assert not (project.work_dir_path / "voiceover_generation").exists()
+    assert not (project.language_work_dir_path / "voiceover_generation").exists()
 
 
 def test_inventory_metric_counts_folder_with_only_cached_data_no_flat_file(

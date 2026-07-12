@@ -1111,14 +1111,14 @@ def attach_validation_to_cut_plan(cut_plan: CutPlanDocument, report: CutPlanVali
 
 def save_cut_plan_validation_report(project: Project, report: CutPlanValidationReport) -> CutPlanValidationReport:
     normalized = report.model_copy(update={"project_id": project.id})
-    path = get_cut_plan_validation_report_path(project.work_dir_path)
+    path = get_cut_plan_validation_report_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
 
 
 def load_cut_plan_validation_report(project: Project) -> CutPlanValidationReport | None:
-    path = get_cut_plan_validation_report_path(project.work_dir_path)
+    path = get_cut_plan_validation_report_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:

@@ -177,7 +177,7 @@ def test_audio_manifest_is_written(tmp_path: Path) -> None:
     with patch(f"{_TTS_MODULE}.synthesize_speech_with_timestamps", return_value=_fake_tts_result()):
         synthesize_folder_voiceover(project, "Grand Canyon")
 
-    path = get_voiceover_audio_manifest_path(project.work_dir_path)
+    path = get_voiceover_audio_manifest_path(project.language_work_dir_path)
     assert path.is_file()
 
 
@@ -374,8 +374,8 @@ def test_no_edit_plan_documents_created(tmp_path: Path) -> None:
     with patch(f"{_TTS_MODULE}.synthesize_speech_with_timestamps", return_value=_fake_tts_result()):
         synthesize_all_confirmed_voiceovers(project)
 
-    assert not (project.work_dir_path / "edit_plan").exists()
-    assert not (project.work_dir_path / "exports").exists()
+    assert not (project.language_work_dir_path / "edit_plan").exists()
+    assert not (project.language_work_dir_path / "exports").exists()
 
 
 def _set_first_sentence_pause_after(project, folder_name: str, pause_after: str) -> None:

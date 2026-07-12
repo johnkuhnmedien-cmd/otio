@@ -159,14 +159,14 @@ def confirm_edit_plan_bridge(project: Project) -> EditPlanBridgeConfirmManifest:
     report = load_edit_plan_bridge_validation_report(project)
     assert draft is not None and audio_plan is not None and trace is not None and report is not None
 
-    confirmed_draft_path = get_cut_plan_edit_plan_bridge_confirmed_draft_path(project.work_dir_path)
+    confirmed_draft_path = get_cut_plan_edit_plan_bridge_confirmed_draft_path(project.language_work_dir_path)
     confirmed_draft_path.parent.mkdir(parents=True, exist_ok=True)
     confirmed_draft_path.write_text(draft.model_dump_json(indent=2), encoding="utf-8")
 
-    confirmed_audio_plan_path = get_cut_plan_edit_plan_bridge_confirmed_audio_plan_path(project.work_dir_path)
+    confirmed_audio_plan_path = get_cut_plan_edit_plan_bridge_confirmed_audio_plan_path(project.language_work_dir_path)
     confirmed_audio_plan_path.write_text(audio_plan.model_dump_json(indent=2), encoding="utf-8")
 
-    confirmed_trace_path = get_cut_plan_edit_plan_bridge_confirmed_trace_path(project.work_dir_path)
+    confirmed_trace_path = get_cut_plan_edit_plan_bridge_confirmed_trace_path(project.language_work_dir_path)
     confirmed_trace_path.write_text(trace.model_dump_json(indent=2), encoding="utf-8")
 
     manifest = EditPlanBridgeConfirmManifest(
@@ -179,11 +179,11 @@ def confirm_edit_plan_bridge(project: Project) -> EditPlanBridgeConfirmManifest:
         bridge_trace_hash=content_hash_of_model(trace),
         validation_report_hash=content_hash_of_model(report),
         source_files={
-            "edit_plan_draft_path": str(get_cut_plan_edit_plan_bridge_draft_path(project.work_dir_path)),
-            "bridge_audio_plan_path": str(get_cut_plan_edit_plan_bridge_audio_plan_path(project.work_dir_path)),
-            "bridge_trace_path": str(get_cut_plan_edit_plan_bridge_trace_path(project.work_dir_path)),
+            "edit_plan_draft_path": str(get_cut_plan_edit_plan_bridge_draft_path(project.language_work_dir_path)),
+            "bridge_audio_plan_path": str(get_cut_plan_edit_plan_bridge_audio_plan_path(project.language_work_dir_path)),
+            "bridge_trace_path": str(get_cut_plan_edit_plan_bridge_trace_path(project.language_work_dir_path)),
             "validation_report_path": str(
-                get_cut_plan_edit_plan_bridge_validation_report_path(project.work_dir_path)
+                get_cut_plan_edit_plan_bridge_validation_report_path(project.language_work_dir_path)
             ),
         },
         confirmed_files={
@@ -193,14 +193,14 @@ def confirm_edit_plan_bridge(project: Project) -> EditPlanBridgeConfirmManifest:
         },
         warnings=[warning.message for warning in report.warnings],
     )
-    manifest_path = get_cut_plan_edit_plan_bridge_confirm_manifest_path(project.work_dir_path)
+    manifest_path = get_cut_plan_edit_plan_bridge_confirm_manifest_path(project.language_work_dir_path)
     manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
 
     return manifest
 
 
 def load_edit_plan_bridge_confirm_manifest(project: Project) -> EditPlanBridgeConfirmManifest | None:
-    path = get_cut_plan_edit_plan_bridge_confirm_manifest_path(project.work_dir_path)
+    path = get_cut_plan_edit_plan_bridge_confirm_manifest_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -211,7 +211,7 @@ def load_edit_plan_bridge_confirm_manifest(project: Project) -> EditPlanBridgeCo
 
 
 def load_confirmed_edit_plan_bridge(project: Project) -> EditPlanDocument | None:
-    path = get_cut_plan_edit_plan_bridge_confirmed_draft_path(project.work_dir_path)
+    path = get_cut_plan_edit_plan_bridge_confirmed_draft_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -222,7 +222,7 @@ def load_confirmed_edit_plan_bridge(project: Project) -> EditPlanDocument | None
 
 
 def load_confirmed_bridge_audio_plan(project: Project) -> BridgeAudioPlanDocument | None:
-    path = get_cut_plan_edit_plan_bridge_confirmed_audio_plan_path(project.work_dir_path)
+    path = get_cut_plan_edit_plan_bridge_confirmed_audio_plan_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -233,7 +233,7 @@ def load_confirmed_bridge_audio_plan(project: Project) -> BridgeAudioPlanDocumen
 
 
 def load_confirmed_bridge_trace(project: Project) -> EditPlanBridgeTraceDocument | None:
-    path = get_cut_plan_edit_plan_bridge_confirmed_trace_path(project.work_dir_path)
+    path = get_cut_plan_edit_plan_bridge_confirmed_trace_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -249,10 +249,10 @@ def unconfirm_edit_plan_bridge(project: Project) -> None:
     edit_plan_bridge/-Wurzelverzeichnis bleiben unverändert. Minimal &
     testbar: kein Archivieren, nur Löschen."""
     for path in (
-        get_cut_plan_edit_plan_bridge_confirmed_draft_path(project.work_dir_path),
-        get_cut_plan_edit_plan_bridge_confirmed_audio_plan_path(project.work_dir_path),
-        get_cut_plan_edit_plan_bridge_confirmed_trace_path(project.work_dir_path),
-        get_cut_plan_edit_plan_bridge_confirm_manifest_path(project.work_dir_path),
+        get_cut_plan_edit_plan_bridge_confirmed_draft_path(project.language_work_dir_path),
+        get_cut_plan_edit_plan_bridge_confirmed_audio_plan_path(project.language_work_dir_path),
+        get_cut_plan_edit_plan_bridge_confirmed_trace_path(project.language_work_dir_path),
+        get_cut_plan_edit_plan_bridge_confirm_manifest_path(project.language_work_dir_path),
     ):
         if path.is_file():
             path.unlink()

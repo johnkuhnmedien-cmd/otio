@@ -102,7 +102,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -360,7 +360,7 @@ def test_can_confirm_when_validated_and_warning_without_blockers(tmp_path: Path)
 def test_confirm_writes_confirmed_json(tmp_path: Path) -> None:
     project = _build_validated_project(tmp_path)
     confirm_cut_plan(project)
-    path = get_cut_plan_confirmed_path(project.work_dir_path)
+    path = get_cut_plan_confirmed_path(project.language_work_dir_path)
     assert path.is_file()
 
 
@@ -374,7 +374,7 @@ def test_confirmed_plan_status_is_confirmed(tmp_path: Path) -> None:
 def test_confirm_writes_trace_json(tmp_path: Path) -> None:
     project = _build_validated_project(tmp_path)
     confirm_cut_plan(project)
-    path = get_cut_plan_trace_path(project.work_dir_path)
+    path = get_cut_plan_trace_path(project.language_work_dir_path)
     assert path.is_file()
 
 
@@ -643,27 +643,27 @@ def test_ui_shows_trace_table_if_present(tmp_path: Path, monkeypatch: pytest.Mon
 def test_no_edit_plan_document_created(tmp_path: Path) -> None:
     project = _build_validated_project(tmp_path)
     confirm_cut_plan(project)
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
 
 
 def test_no_otio_export_triggered(tmp_path: Path) -> None:
     project = _build_validated_project(tmp_path)
     confirm_cut_plan(project)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_under_supplement_dir(tmp_path: Path) -> None:
     project = _build_validated_project(tmp_path)
     confirm_cut_plan(project)
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_under_edit_plan_or_exports(tmp_path: Path) -> None:
     project = _build_validated_project(tmp_path)
     confirm_cut_plan(project)
     unconfirm_cut_plan(project)
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_regular_inventory_files_modified(tmp_path: Path) -> None:

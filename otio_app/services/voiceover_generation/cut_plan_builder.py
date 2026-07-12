@@ -59,7 +59,7 @@ def build_cut_plan_draft(project: Project) -> CutPlanDocument:
         project_id=project.id,
         project_title=source_plan.project_title,
         language=source_plan.language,
-        source_plan_path=str(get_confirmed_voiceover_project_plan_path(project.work_dir_path)),
+        source_plan_path=str(get_confirmed_voiceover_project_plan_path(project.language_work_dir_path)),
         source_plan_hash=content_hash_of_model(source_plan),
         status=status,
         timeline_fps=settings.timeline_fps,
@@ -79,7 +79,7 @@ def build_cut_plan_draft(project: Project) -> CutPlanDocument:
 
 
 def load_cut_plan_draft(project: Project) -> CutPlanDocument | None:
-    path = get_cut_plan_draft_path(project.work_dir_path)
+    path = get_cut_plan_draft_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -91,7 +91,7 @@ def load_cut_plan_draft(project: Project) -> CutPlanDocument | None:
 
 def save_cut_plan_draft(project: Project, document: CutPlanDocument) -> CutPlanDocument:
     normalized = document.model_copy(update={"project_id": project.id})
-    path = get_cut_plan_draft_path(project.work_dir_path)
+    path = get_cut_plan_draft_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized

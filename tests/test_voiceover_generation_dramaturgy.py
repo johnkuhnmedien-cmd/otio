@@ -125,7 +125,7 @@ def test_build_dramaturgy_plan_writes_draft(tmp_path: Path) -> None:
 
     assert result.status == STATUS_PASS
     assert result.plan is not None
-    path = get_dramaturgy_plan_draft_path(project.work_dir_path)
+    path = get_dramaturgy_plan_draft_path(project.language_work_dir_path)
     assert path.is_file()
 
 
@@ -188,7 +188,7 @@ def test_build_dramaturgy_plan_draft_contains_llm_run_id(tmp_path: Path) -> None
         result = build_dramaturgy_plan(project, provider="anthropic", model="claude-sonnet-5")
 
     assert result.plan.llm_run_id == result.llm_run_id
-    run_dir = get_llm_runs_dir(project.work_dir_path) / result.llm_run_id
+    run_dir = get_llm_runs_dir(project.language_work_dir_path) / result.llm_run_id
     assert (run_dir / "prompt.txt").is_file()
     assert (run_dir / "raw_llm_response.json").is_file()
     assert (run_dir / "parsed_llm_response.json").is_file()
@@ -281,7 +281,7 @@ def test_confirm_dramaturgy_plan_writes_confirmed_file(tmp_path: Path) -> None:
 
     assert confirmed.status == "CONFIRMED"
     assert confirmed.confirmed_at is not None
-    path = get_dramaturgy_plan_confirmed_path(project.work_dir_path)
+    path = get_dramaturgy_plan_confirmed_path(project.language_work_dir_path)
     assert path.is_file()
 
     loaded = load_confirmed_dramaturgy(project)
@@ -424,5 +424,5 @@ def test_dramaturgy_writes_no_edit_plan_documents(tmp_path: Path) -> None:
         result = build_dramaturgy_plan(project, provider="anthropic", model="claude-sonnet-5")
     confirm_dramaturgy_plan(project, result.plan)
 
-    assert not (project.work_dir_path / "edit_plan").exists()
-    assert not (project.work_dir_path / "exports").exists()
+    assert not (project.language_work_dir_path / "edit_plan").exists()
+    assert not (project.language_work_dir_path / "exports").exists()

@@ -126,7 +126,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -570,19 +570,19 @@ def test_new_modules_do_not_write_under_edit_plan_dir(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
     can_build_production_edit_plan_staging(project)
     load_confirmed_bridge_inputs(project)
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
 
 
 def test_new_modules_do_not_write_under_exports_dir(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
     can_build_production_edit_plan_staging(project)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_new_modules_do_not_write_under_supplement_dir(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
     can_build_production_edit_plan_staging(project)
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_no_original_media_modified(tmp_path: Path) -> None:
@@ -600,7 +600,7 @@ def test_no_staging_files_written_to_disk_in_phase10_1(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
     can_build_production_edit_plan_staging(project)
     load_confirmed_bridge_inputs(project)
-    assert not get_production_edit_plan_staging_dir(project.work_dir_path).exists()
+    assert not get_production_edit_plan_staging_dir(project.language_work_dir_path).exists()
 
 
 # --- 31-32: Struktureller Schutz / Regression ---

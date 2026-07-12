@@ -25,7 +25,7 @@ class OtioExportSettings(BaseModel):
 
 
 def otio_export_settings_path(project: Project) -> Path:
-    return project.work_dir_path / "otio_export_settings.json"
+    return project.language_work_dir_path / "otio_export_settings.json"
 
 
 def load_otio_export_settings(project: Project) -> OtioExportSettings:

@@ -105,7 +105,7 @@ def record_supplement_error(
     http_status: int = 0,
     content_type: str = "",
 ) -> None:
-    path = get_supplement_errors_path(project.work_dir_path)
+    path = get_supplement_errors_path(project.language_work_dir_path)
     document = SupplementErrorDocument(project_id=project.id)
     if path.is_file():
         try:
@@ -891,7 +891,7 @@ def extend_folder_inventory(
     delta_path.parent.mkdir(parents=True, exist_ok=True)
     delta_path.write_text(delta.model_dump_json(indent=2), encoding="utf-8")
 
-    manifest_path = get_supplement_manifest_path(project.work_dir_path)
+    manifest_path = get_supplement_manifest_path(project.language_work_dir_path)
     manifest = SupplementManifest(project_id=project.id)
     if manifest_path.is_file():
         try:

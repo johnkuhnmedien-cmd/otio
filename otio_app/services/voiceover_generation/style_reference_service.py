@@ -26,7 +26,7 @@ def default_style_references(project: Project) -> VoiceoverStyleReferences:
 
 
 def load_style_references(project: Project) -> VoiceoverStyleReferences:
-    path = get_voiceover_style_references_path(project.work_dir_path)
+    path = get_voiceover_style_references_path(project.language_work_dir_path)
     if not path.is_file():
         return default_style_references(project)
     try:
@@ -62,12 +62,12 @@ def save_style_references(
     normalized = refs.model_copy(
         update={"project_id": project.id, "generated_at": datetime.now(timezone.utc)}
     )
-    path = get_voiceover_style_references_path(project.work_dir_path)
+    path = get_voiceover_style_references_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
 
     if normalized.uploaded_file_names:
-        uploads_dir = get_style_references_uploads_dir(project.work_dir_path)
+        uploads_dir = get_style_references_uploads_dir(project.language_work_dir_path)
         uploads_dir.mkdir(parents=True, exist_ok=True)
         for index, (name, text) in enumerate(
             zip(normalized.uploaded_file_names, normalized.uploaded_file_texts), start=1

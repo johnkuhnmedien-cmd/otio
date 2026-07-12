@@ -146,6 +146,6 @@ def render_project_brief_page() -> None:
         )
         saved = save_project_brief(project, brief)
         st.success("Project Brief gespeichert.")
-        st.caption(f"Pfad: `{get_project_brief_path(project.work_dir_path)}`")
+        st.caption(f"Pfad: `{get_project_brief_path(project.language_work_dir_path)}`")
         with st.expander("JSON-Vorschau"):
             st.json(saved.model_dump(mode="json"))

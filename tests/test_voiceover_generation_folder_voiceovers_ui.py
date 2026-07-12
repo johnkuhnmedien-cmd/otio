@@ -98,9 +98,9 @@ def test_page_locked_without_confirmed_dramaturgy_writes_nothing(
 
     render_folder_voiceovers_page()
 
-    assert not (project.work_dir_path / "voiceover_generation" / "folder_voiceover_settings.json").exists()
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not (project.language_work_dir_path / "voiceover_generation" / "folder_voiceover_settings.json").exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_page_guards_with_voiceover_project(
@@ -110,7 +110,7 @@ def test_page_guards_with_voiceover_project(
     _patch_project_selector(project, monkeypatch)
 
     render_folder_voiceovers_page()  # darf nicht werfen und darf nichts schreiben
-    assert not (project.work_dir_path / "voiceover_generation").exists()
+    assert not (project.language_work_dir_path / "voiceover_generation").exists()
 
 
 def test_page_renders_with_confirmed_dramaturgy_and_draft(
@@ -145,8 +145,8 @@ def test_page_renders_with_confirmed_dramaturgy_and_draft(
     _patch_project_selector(project, monkeypatch)
     render_folder_voiceovers_page()  # darf nicht werfen
 
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 # --- Closing Shot Panel (Nutzervorgabe Juli 2026, "kein closing asset nach

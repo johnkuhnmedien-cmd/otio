@@ -115,7 +115,11 @@ def render_project_selector(label: str = "Projekt") -> Project | None:
         key="global_project_selector",
     )
     st.session_state[ACTIVE_PROJECT_KEY] = selected_id
-    return get_project_by_id(selected_id)
+    project = get_project_by_id(selected_id)
+    if project is not None:
+        # Einmalige Migration flat `_otio/` → `_otio/{LANG}/` (idempotent).
+        _ = project.language_work_dir_path
+    return project
 
 
 def _step_label(title: str, done: bool, active: bool) -> str:
@@ -174,6 +178,8 @@ def render_output_status(project: Project) -> None:
 def render_file_paths(project: Project) -> None:
     with st.expander("Dateipfade & Details", expanded=False):
         st.write(f"**Projektordner:** `{project.project_root}`")
+        st.write(f"**Arbeitsordner (shared):** `{project.work_dir}`")
+        st.write(f"**Language-Scope (Editorial):** `{project.language_work_dir_path}`")
         st.write(f"**Voice-over:** `{project.voice_over_dir}`")
         st.write(f"**Voice-Analyse:** `{project.voice_analysis_path}`")
         st.write(f"**Inventar:** `{project.inventory_dir}` (pro Ordner eine JSON)")
@@ -181,7 +187,7 @@ def render_file_paths(project: Project) -> None:
         st.write(f"**Clean-Manifeste:** `{project.work_dir_path / 'clean_media'}`")
         st.write(f"**Zuordnung:** `{project.voice_folder_mapping_path}`")
         st.write(f"**Schnittpläne:** `{project.edit_plan_dir}` (pro Ort eine JSON)")
-        st.write(f"**OTIO-Export:** `{project.work_dir_path / 'exports'}`")
+        st.write(f"**OTIO-Export:** `{project.language_work_dir_path / 'exports'}`")
         saved_folders = list_saved_edit_plan_folders(project)
         if saved_folders:
             st.caption("Gespeichert: " + ", ".join(f"`{name}`" for name in saved_folders))

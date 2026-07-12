@@ -224,7 +224,7 @@ def render_edit_plan_rules_manager(project: Project) -> EditPlanRulesDocument:
         "Asset-Regeln ebenfalls beim Vorschlag. "
         "Unter **Gemini-Zusatzhinweise** kannst du freie Anweisungen formulieren — "
         "die werden beim Schnittplan-Vorschlag an Gemini geschickt. "
-        f"Datei: `{project.work_dir_path / 'edit_plan_rules.json'}`"
+        f"Datei: `{project.language_work_dir_path / 'edit_plan_rules.json'}`"
     )
 
     document = _get_rules_document(project)

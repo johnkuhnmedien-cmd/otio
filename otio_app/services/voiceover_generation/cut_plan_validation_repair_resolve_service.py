@@ -295,7 +295,7 @@ def _describe_and_validate_repair_asset(
         return {"description": "", "status": "FAIL", "score": 0.0, "reason": "Heruntergeladene Datei fehlt oder ist leer."}
 
     frames_dir = (
-        get_cut_plan_supplement_asset_request_dir(project.work_dir_path, request.repair_id) / "frames" / candidate_id
+        get_cut_plan_supplement_asset_request_dir(project.language_work_dir_path, request.repair_id) / "frames" / candidate_id
     )
     frame_count = 1 if is_image_media(local_path) else max(1, project.frames_per_shot)
     try:

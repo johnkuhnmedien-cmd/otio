@@ -62,7 +62,7 @@ def _migrate_legacy_edit_plan(project: Project) -> None:
             for shot in document.shots:
                 by_folder.setdefault(shot.folder, []).append(shot)
             for folder_name, shots in by_folder.items():
-                target = get_folder_edit_plan_path(project.work_dir_path, folder_name)
+                target = get_folder_edit_plan_path(project.language_work_dir_path, folder_name)
                 if target.is_file():
                     continue
                 folder_doc = document.model_copy(
@@ -89,7 +89,7 @@ def invalidate_edit_plan_cache(project_id: str, folder_name: str | None = None) 
 def load_edit_plan_folder_meta(project: Project, folder_name: str) -> EditPlanFolderMeta:
     """Nur confirmed + Shot-Anzahl — kein pydantic über alle Shots."""
     _migrate_legacy_edit_plan(project)
-    path = get_folder_edit_plan_path(project.work_dir_path, folder_name)
+    path = get_folder_edit_plan_path(project.language_work_dir_path, folder_name)
     if not path.is_file():
         return EditPlanFolderMeta(folder_name=folder_name, confirmed=False, shot_count=0)
     try:
@@ -120,7 +120,7 @@ def load_edit_plan_folder_meta(project: Project, folder_name: str) -> EditPlanFo
 
 def load_edit_plan_cached(project: Project, folder_name: str) -> EditPlanDocument | None:
     _migrate_legacy_edit_plan(project)
-    path = get_folder_edit_plan_path(project.work_dir_path, folder_name)
+    path = get_folder_edit_plan_path(project.language_work_dir_path, folder_name)
     if not path.is_file():
         return None
     try:

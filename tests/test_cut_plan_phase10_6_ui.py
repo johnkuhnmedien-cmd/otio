@@ -102,7 +102,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -200,7 +200,7 @@ def test_ui_shows_writes_to_edit_plan_warning(tmp_path: Path, monkeypatch: pytes
 
 def test_ui_shows_overwrite_confirmation_for_would_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_path.write_text('{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}', encoding="utf-8")
     build_and_save_production_edit_plan_staging(project)
@@ -268,7 +268,7 @@ def test_no_files_written_under_exports_dir(tmp_path: Path, monkeypatch: pytest.
     at = _run_repro(tmp_path, monkeypatch)
     promote_button = next(b for b in at.button if b.label == "Production EditPlans promoten")
     promote_button.click().run()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_supplement_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -276,7 +276,7 @@ def test_no_files_written_under_supplement_dir(tmp_path: Path, monkeypatch: pyte
     at = _run_repro(tmp_path, monkeypatch)
     promote_button = next(b for b in at.button if b.label == "Production EditPlans promoten")
     promote_button.click().run()
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_no_original_media_modified(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -291,7 +291,7 @@ def test_no_original_media_modified(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_no_audio_files_overwritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _happy_project_with_dry_run(tmp_path)
-    audio_path = project.work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
+    audio_path = project.language_work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
     original = audio_path.read_bytes()
     at = _run_repro(tmp_path, monkeypatch)
     promote_button = next(b for b in at.button if b.label == "Production EditPlans promoten")
@@ -319,5 +319,5 @@ def test_promote_via_ui_writes_edit_plan_file(tmp_path: Path, monkeypatch: pytes
     promote_button = next(b for b in at.button if b.label == "Production EditPlans promoten")
     at = promote_button.click().run()
     assert not at.exception, at.exception
-    assert get_folder_edit_plan_path(project.work_dir_path, FOLDER_A).is_file()
-    assert get_edit_plan_dir(project.work_dir_path).joinpath("Intro.json").is_file()
+    assert get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A).is_file()
+    assert get_edit_plan_dir(project.language_work_dir_path).joinpath("Intro.json").is_file()

@@ -103,7 +103,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -228,7 +228,7 @@ def test_no_otio_file_written_via_ui(tmp_path: Path, monkeypatch: pytest.MonkeyP
     at = _run_repro(tmp_path, monkeypatch)
     check_button = next(b for b in at.button if b.label == "OTIO Export Readiness prüfen")
     check_button.click().run()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_original_media_modified_via_ui(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

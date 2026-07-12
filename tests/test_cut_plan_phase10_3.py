@@ -142,7 +142,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -222,7 +222,7 @@ def test_blocked_with_stale_package(tmp_path: Path) -> None:
 
 def test_blocked_without_mapping_trace(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
-    get_production_edit_plan_mapping_trace_path(project.work_dir_path).unlink()
+    get_production_edit_plan_mapping_trace_path(project.language_work_dir_path).unlink()
     report = validate_production_edit_plan_staging(project)
     assert report.status == PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_BLOCKED
     assert any(b.type == PRODUCTION_EDIT_PLAN_ERROR_PRODUCTION_STAGING_TRACE_MISSING for b in report.blockers)
@@ -230,7 +230,7 @@ def test_blocked_without_mapping_trace(tmp_path: Path) -> None:
 
 def test_blocked_with_missing_staged_edit_plan_file(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
-    get_staged_edit_plan_path(project.work_dir_path, "000_intro").unlink()
+    get_staged_edit_plan_path(project.language_work_dir_path, "000_intro").unlink()
     report = validate_production_edit_plan_staging(project)
     assert report.status == PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_BLOCKED
     assert any(b.type == PRODUCTION_EDIT_PLAN_ERROR_STAGED_EDIT_PLAN_MISSING for b in report.blockers)
@@ -621,7 +621,7 @@ def test_save_and_load_validation_report_roundtrip(tmp_path: Path) -> None:
     loaded = load_production_edit_plan_validation_report(project)
     assert loaded is not None
     assert loaded.status == saved.status
-    assert get_production_edit_plan_validation_report_path(project.work_dir_path).is_file()
+    assert get_production_edit_plan_validation_report_path(project.language_work_dir_path).is_file()
 
 
 def test_load_validation_report_returns_none_when_missing(tmp_path: Path) -> None:
@@ -670,7 +670,7 @@ def test_duration_cache_probes_each_video_path_once(tmp_path: Path, monkeypatch:
 
 def test_package_json_not_modified_by_validation(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
-    package_path = get_production_edit_plan_package_path(project.work_dir_path)
+    package_path = get_production_edit_plan_package_path(project.language_work_dir_path)
     before = package_path.read_text(encoding="utf-8")
     validate_production_edit_plan_staging(project)
     after = package_path.read_text(encoding="utf-8")
@@ -680,24 +680,24 @@ def test_package_json_not_modified_by_validation(tmp_path: Path) -> None:
 def test_no_files_written_under_edit_plan_dir(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
     validate_production_edit_plan_staging(project)
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_exports_dir(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
     validate_production_edit_plan_staging(project)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_supplement_dir(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
     validate_production_edit_plan_staging(project)
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_existing_production_edit_plan_remains_byte_identical(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_content = '{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}'
     existing_path.write_text(existing_content, encoding="utf-8")
@@ -718,7 +718,7 @@ def test_no_original_media_modified(tmp_path: Path) -> None:
 
 def test_no_audio_files_overwritten(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
-    audio_path = project.work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
+    audio_path = project.language_work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
     original = audio_path.read_bytes()
     validate_production_edit_plan_staging(project)
     assert audio_path.read_bytes() == original

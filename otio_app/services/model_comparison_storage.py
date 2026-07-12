@@ -79,13 +79,13 @@ def write_validation_report(run_dir: Path, payload: dict[str, Any]) -> Path:
 
 
 def write_comparison_summary(project: Project, comparison_id: str, summary: ModelComparisonSummary) -> Path:
-    path = get_model_comparison_summary_path(project.work_dir_path, comparison_id)
+    path = get_model_comparison_summary_path(project.language_work_dir_path, comparison_id)
     _write_json(path, summary)
     return path
 
 
 def load_comparison_summary(project: Project, comparison_id: str) -> ModelComparisonSummary | None:
-    path = get_model_comparison_summary_path(project.work_dir_path, comparison_id)
+    path = get_model_comparison_summary_path(project.language_work_dir_path, comparison_id)
     if not path.is_file():
         return None
     try:
@@ -97,7 +97,7 @@ def load_comparison_summary(project: Project, comparison_id: str) -> ModelCompar
 
 def list_comparison_ids_for_folder(project: Project, folder_name: str) -> list[str]:
     """Listet comparison_id-Werte mit Summary für einen Ordner (neueste zuerst)."""
-    root = get_model_comparison_runs_dir(project.work_dir_path)
+    root = get_model_comparison_runs_dir(project.language_work_dir_path)
     if not root.is_dir():
         return []
     matches: list[tuple[float, str]] = []
@@ -131,7 +131,7 @@ def load_run_artifact(run_dir: Path, filename: str) -> dict[str, Any] | None:
 
 
 def comparison_run_dir(project: Project, comparison_id: str, run_id: str) -> Path:
-    return get_model_comparison_run_dir(project.work_dir_path, comparison_id, run_id)
+    return get_model_comparison_run_dir(project.language_work_dir_path, comparison_id, run_id)
 
 
 def ensure_run_dir(project: Project, comparison_id: str, run_id: str) -> Path:
@@ -141,7 +141,7 @@ def ensure_run_dir(project: Project, comparison_id: str, run_id: str) -> Path:
 
 
 def list_runs_in_comparison(project: Project, comparison_id: str) -> list[str]:
-    batch_dir = get_model_comparison_batch_dir(project.work_dir_path, comparison_id)
+    batch_dir = get_model_comparison_batch_dir(project.language_work_dir_path, comparison_id)
     if not batch_dir.is_dir():
         return []
     run_ids: list[str] = []

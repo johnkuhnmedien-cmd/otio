@@ -392,7 +392,7 @@ def test_llm_traceability_writes_folder_voiceover_run(tmp_path: Path) -> None:
     with patch(f"{_AUTHOR_MODULE}.generate_plan_text_with_metadata", return_value=fake_response):
         result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
 
-    run_dir = get_llm_runs_dir(project.work_dir_path) / result.llm_run_id
+    run_dir = get_llm_runs_dir(project.language_work_dir_path) / result.llm_run_id
     manifest = json.loads((run_dir / "llm_request_manifest.json").read_text(encoding="utf-8"))
     assert manifest["stage"] == "folder_voiceover"
 
@@ -407,7 +407,7 @@ def test_llm_traceability_writes_voiceover_review_run(tmp_path: Path) -> None:
         )
 
     assert len(report.review_run_ids) == 1
-    run_dir = get_llm_runs_dir(project.work_dir_path) / report.review_run_ids[0]
+    run_dir = get_llm_runs_dir(project.language_work_dir_path) / report.review_run_ids[0]
     manifest = json.loads((run_dir / "llm_request_manifest.json").read_text(encoding="utf-8"))
     assert manifest["stage"] == "voiceover_review"
 
@@ -435,7 +435,7 @@ def test_llm_traceability_writes_voiceover_correction_run(tmp_path: Path) -> Non
 
     assert report.status == "PASS"
     assert len(report.correction_run_ids) == 1
-    run_dir = get_llm_runs_dir(project.work_dir_path) / report.correction_run_ids[0]
+    run_dir = get_llm_runs_dir(project.language_work_dir_path) / report.correction_run_ids[0]
     manifest = json.loads((run_dir / "llm_request_manifest.json").read_text(encoding="utf-8"))
     assert manifest["stage"] == "voiceover_correction"
 

@@ -110,7 +110,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -348,13 +348,13 @@ def test_folder_staged_edit_plan_is_written(tmp_path: Path) -> None:
 def test_package_json_is_written(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
     build_and_save_production_edit_plan_staging(project)
-    assert get_production_edit_plan_package_path(project.work_dir_path).is_file()
+    assert get_production_edit_plan_package_path(project.language_work_dir_path).is_file()
 
 
 def test_mapping_trace_json_is_written(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
     build_and_save_production_edit_plan_staging(project)
-    assert get_production_edit_plan_mapping_trace_path(project.work_dir_path).is_file()
+    assert get_production_edit_plan_mapping_trace_path(project.language_work_dir_path).is_file()
 
 
 # --- 11-14: Staged EditPlanDocument Eigenschaften ---
@@ -618,24 +618,24 @@ def test_load_production_edit_plan_staging_package_returns_manifest(tmp_path: Pa
 def test_no_files_written_under_edit_plan_dir(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
     build_and_save_production_edit_plan_staging(project)
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_exports_dir(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
     build_and_save_production_edit_plan_staging(project)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_supplement_dir(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
     build_and_save_production_edit_plan_staging(project)
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_existing_production_edit_plan_remains_byte_identical(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_content = '{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}'
     existing_path.write_text(existing_content, encoding="utf-8")
@@ -655,7 +655,7 @@ def test_no_original_media_modified(tmp_path: Path) -> None:
 
 def test_no_audio_files_overwritten(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
-    audio_path = project.work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
+    audio_path = project.language_work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
     original = audio_path.read_bytes()
     build_and_save_production_edit_plan_staging(project)
     assert audio_path.read_bytes() == original

@@ -102,7 +102,7 @@ def _render_style_profile_status(project: Project) -> None:
         )
         run_id = last_result.get("llm_run_id")
         if run_id:
-            st.caption(f"LLM-Run: `{get_llm_run_dir(project.work_dir_path, run_id)}`")
+            st.caption(f"LLM-Run: `{get_llm_run_dir(project.language_work_dir_path, run_id)}`")
 
     if profile is None:
         st.info("Status: **MISSING** — noch kein Style Profile erzeugt.")
@@ -113,7 +113,7 @@ def _render_style_profile_status(project: Project) -> None:
         st.caption(f"Aus Bibliothek: **{profile.library_name}**")
     st.caption(f"Erzeugt: {profile.generated_at.isoformat()}")
     if profile.llm_run_id:
-        st.caption(f"LLM-Run: `{get_llm_run_dir(project.work_dir_path, profile.llm_run_id)}`")
+        st.caption(f"LLM-Run: `{get_llm_run_dir(project.language_work_dir_path, profile.llm_run_id)}`")
     st.write(f"**Zusammenfassung für Prompts:** {profile.style_summary_for_prompts or '—'}")
 
     col_do, col_dont = st.columns(2)
@@ -130,7 +130,7 @@ def _render_style_profile_status(project: Project) -> None:
 
     with st.expander("Vollständiges Style Profile (JSON)"):
         st.json(profile.model_dump(mode="json"))
-    st.caption(f"Pfad: `{get_voiceover_style_profile_path(project.work_dir_path)}`")
+    st.caption(f"Pfad: `{get_voiceover_style_profile_path(project.language_work_dir_path)}`")
 
 
 def _render_style_profile_library(project: Project) -> None:
@@ -299,7 +299,7 @@ def render_style_references_page() -> None:
     if save_clicked:
         saved = save_style_references(project, current_refs)
         st.success("Style References gespeichert.")
-        st.caption(f"Pfad: `{get_voiceover_style_references_path(project.work_dir_path)}`")
+        st.caption(f"Pfad: `{get_voiceover_style_references_path(project.language_work_dir_path)}`")
         with st.expander("JSON-Vorschau"):
             st.json(saved.model_dump(mode="json"))
 

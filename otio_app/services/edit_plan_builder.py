@@ -1197,7 +1197,7 @@ def build_edit_plan(
                 opening_title_font=export_opts.folder_title_font,
                 opening_title_duration_sec=export_opts.folder_title_duration_sec,
                 opening_title_font_size=export_opts.folder_title_font_size,
-                work_dir=project.work_dir_path,
+                work_dir=project.language_work_dir_path,
                 project=project,
                 usage_by_asset_id={},
                 max_asset_usage=max_count,
@@ -1409,7 +1409,7 @@ def migrate_legacy_edit_plan(project: Project) -> list[Path]:
         by_folder.setdefault(shot.folder, []).append(shot)
 
     for folder_name, shots in by_folder.items():
-        target = get_folder_edit_plan_path(project.work_dir_path, folder_name)
+        target = get_folder_edit_plan_path(project.language_work_dir_path, folder_name)
         if target.is_file():
             continue
         folder_doc = document.model_copy(
@@ -1431,7 +1431,7 @@ def migrate_legacy_edit_plan(project: Project) -> list[Path]:
 def list_saved_edit_plan_folders(project: Project) -> list[str]:
     """Ordnernamen mit gespeicherter Schnittplan-JSON (nach Migration)."""
     migrate_legacy_edit_plan(project)
-    edit_plan_dir = get_edit_plan_dir(project.work_dir_path)
+    edit_plan_dir = get_edit_plan_dir(project.language_work_dir_path)
     if not edit_plan_dir.is_dir():
         return []
 
@@ -1464,7 +1464,7 @@ def save_edit_plan(
     document: EditPlanDocument,
     folder_name: str,
 ) -> Path:
-    path = get_folder_edit_plan_path(project.work_dir_path, folder_name)
+    path = get_folder_edit_plan_path(project.language_work_dir_path, folder_name)
     path.parent.mkdir(parents=True, exist_ok=True)
     normalized = document.model_copy(
         update={

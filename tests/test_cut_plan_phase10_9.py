@@ -119,7 +119,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -402,7 +402,7 @@ def test_stage_details_contain_meaningful_counts(tmp_path: Path) -> None:
 
 def test_build_overview_writes_no_new_files(tmp_path: Path) -> None:
     project = _full_happy_chain(tmp_path)
-    staging_dir = project.work_dir_path / "voiceover_generation" / "cut_plan" / "production_edit_plan_staging"
+    staging_dir = project.language_work_dir_path / "voiceover_generation" / "cut_plan" / "production_edit_plan_staging"
     before = sorted(p.relative_to(staging_dir) for p in staging_dir.rglob("*") if p.is_file())
     build_production_edit_plan_pipeline_overview(project)
     after = sorted(p.relative_to(staging_dir) for p in staging_dir.rglob("*") if p.is_file())

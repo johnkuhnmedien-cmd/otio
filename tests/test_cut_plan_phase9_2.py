@@ -91,7 +91,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -381,7 +381,7 @@ def test_trace_contains_source_duration_adjusted(tmp_path: Path) -> None:
 def test_bridge_audio_plan_json_is_written(tmp_path: Path) -> None:
     project = _build_confirmed_project(tmp_path)
     _edit_plan, audio_plan = _build_and_persist_bridge(project)
-    path = get_cut_plan_edit_plan_bridge_audio_plan_path(project.work_dir_path)
+    path = get_cut_plan_edit_plan_bridge_audio_plan_path(project.language_work_dir_path)
     assert path.is_file()
     assert len(audio_plan.items) == 2
 
@@ -556,27 +556,27 @@ def test_bridge_creates_no_production_edit_plan(tmp_path: Path) -> None:
     _build_and_persist_bridge(project)
     from otio_app.project_layout import get_folder_edit_plan_path
 
-    assert not get_folder_edit_plan_path(project.work_dir_path, FOLDER_A).is_file()
+    assert not get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A).is_file()
 
 
 def test_bridge_does_not_trigger_otio_export(tmp_path: Path) -> None:
     project = _build_confirmed_project(tmp_path)
     _build_and_persist_bridge(project)
     validate_edit_plan_bridge(project, load_edit_plan_bridge_draft(project))
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_edit_plan_dir(tmp_path: Path) -> None:
     project = _build_confirmed_project(tmp_path)
     _build_and_persist_bridge(project)
     validate_edit_plan_bridge(project, load_edit_plan_bridge_draft(project))
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_exports_dir(tmp_path: Path) -> None:
     project = _build_confirmed_project(tmp_path)
     _build_and_persist_bridge(project)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_original_media_modified(tmp_path: Path) -> None:

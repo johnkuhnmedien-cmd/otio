@@ -115,7 +115,7 @@ def _write_inventory(project: Project, filenames: list[str] | None = None) -> No
 
 
 def _write_audio(project: Project, name: str = "folder.mp3") -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -440,7 +440,7 @@ def test_no_file_written_under_supplement_dir(tmp_path: Path) -> None:
     draft = load_cut_plan_draft(project)
     document = build_supplement_requests_from_cut_plan(project, draft)
     save_cut_plan_supplement_requests(project, document)
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_search_is_not_triggered_automatically_on_request_build(tmp_path: Path) -> None:
@@ -852,7 +852,7 @@ def test_candidates_are_saved_to_candidates_file(tmp_path: Path) -> None:
 
     from otio_app.project_layout import get_cut_plan_supplement_candidates_path
 
-    path = get_cut_plan_supplement_candidates_path(project.work_dir_path)
+    path = get_cut_plan_supplement_candidates_path(project.language_work_dir_path)
     assert path.is_file()
     reloaded = load_cut_plan_supplement_candidates_for_request(project, request_id)
     assert reloaded is not None
@@ -1233,7 +1233,7 @@ def test_accept_downloads_asset_under_cut_plan_supplement_assets_dir(tmp_path: P
 
     candidate_id = fake_candidate.candidate_id
     downloaded_path = (
-        project.work_dir_path / "voiceover_generation" / "cut_plan" / "supplement_assets" / request_id / "fake.jpg"
+        project.language_work_dir_path / "voiceover_generation" / "cut_plan" / "supplement_assets" / request_id / "fake.jpg"
     )
 
     def _fake_acquire(candidate, destination_folder):
@@ -2179,7 +2179,7 @@ def test_no_edit_plan_document_created(tmp_path: Path) -> None:
     draft = load_cut_plan_draft(project)
     document = build_supplement_requests_from_cut_plan(project, draft)
     save_cut_plan_supplement_requests(project, document)
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
 
 
 def test_no_otio_export_triggered(tmp_path: Path) -> None:
@@ -2187,7 +2187,7 @@ def test_no_otio_export_triggered(tmp_path: Path) -> None:
     draft = load_cut_plan_draft(project)
     document = build_supplement_requests_from_cut_plan(project, draft)
     save_cut_plan_supplement_requests(project, document)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_regular_inventory_files_modified(tmp_path: Path) -> None:
@@ -2244,8 +2244,8 @@ def test_no_files_under_edit_plan_or_exports_dirs(tmp_path: Path) -> None:
     with patch(f"{_BRIDGE_MODULE}.get_supplement_adapter", return_value=mock_adapter):
         search_candidates_for_cut_plan_request(project, request_id, {"provider": "pexels"})
 
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 # --- 30-31: Struktureller Schutz / Regression ---

@@ -147,7 +147,7 @@ def confirm_cut_plan(project: Project) -> CutPlanDocument:
     confirmed = draft.model_copy(  # type: ignore[union-attr]
         update={"status": CUT_PLAN_STATUS_CONFIRMED, "confirmed_at": _utcnow()}
     )
-    path = get_cut_plan_confirmed_path(project.work_dir_path)
+    path = get_cut_plan_confirmed_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(confirmed.model_dump_json(indent=2), encoding="utf-8")
 
@@ -158,7 +158,7 @@ def confirm_cut_plan(project: Project) -> CutPlanDocument:
 
 
 def load_confirmed_cut_plan(project: Project) -> CutPlanDocument | None:
-    path = get_cut_plan_confirmed_path(project.work_dir_path)
+    path = get_cut_plan_confirmed_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -173,7 +173,7 @@ def unconfirm_cut_plan(project: Project) -> None:
     wird. Der Draft (cut_plan.draft.json) bleibt unverändert — sein Status
     kann weiterhin VALIDATED sein. Minimal & testbar (Phase 8.7 §5): kein
     Archivieren, nur Löschen."""
-    path = get_cut_plan_confirmed_path(project.work_dir_path)
+    path = get_cut_plan_confirmed_path(project.language_work_dir_path)
     if path.is_file():
         path.unlink()
 

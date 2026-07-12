@@ -100,7 +100,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -337,7 +337,7 @@ def test_no_files_written_under_exports_dir(tmp_path: Path, monkeypatch: pytest.
     at = _run_repro(tmp_path, monkeypatch)
     merge_button = next(b for b in at.button if b.label == "Voice Folder Mapping aktualisieren")
     merge_button.click().run()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_supplement_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -345,7 +345,7 @@ def test_no_files_written_under_supplement_dir(tmp_path: Path, monkeypatch: pyte
     at = _run_repro(tmp_path, monkeypatch)
     merge_button = next(b for b in at.button if b.label == "Voice Folder Mapping aktualisieren")
     merge_button.click().run()
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_no_original_media_modified(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

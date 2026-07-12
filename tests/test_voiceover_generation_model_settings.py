@@ -84,7 +84,7 @@ def test_save_model_settings_writes_only_under_voiceover_generation_dir(
     save_model_settings(project, default_model_settings())
     path = get_model_settings_path(project.work_dir_path)
     assert path.is_file()
-    assert path.is_relative_to(get_voiceover_generation_dir(project.work_dir_path))
+    assert path.is_relative_to(get_voiceover_generation_dir(project.language_work_dir_path))
 
 
 def test_resolve_llm_model_id_for_openai() -> None:

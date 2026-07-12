@@ -72,9 +72,9 @@ def test_save_and_load_settings_roundtrip(tmp_path: Path) -> None:
     assert loaded.stability == 0.3
     assert loaded.language_code == "de"
 
-    path = get_elevenlabs_settings_path(project.work_dir_path)
+    path = get_elevenlabs_settings_path(project.language_work_dir_path)
     assert path.is_file()
-    assert path.is_relative_to(get_voiceover_generation_dir(project.work_dir_path))
+    assert path.is_relative_to(get_voiceover_generation_dir(project.language_work_dir_path))
 
 
 def test_load_settings_returns_default_when_missing(tmp_path: Path) -> None:
@@ -86,7 +86,7 @@ def test_load_settings_returns_default_when_missing(tmp_path: Path) -> None:
 def test_settings_file_never_contains_api_key(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     save_elevenlabs_settings(project, ElevenLabsSettings(project_id=project.id, voice_id="voice-abc"))
-    path = get_elevenlabs_settings_path(project.work_dir_path)
+    path = get_elevenlabs_settings_path(project.language_work_dir_path)
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert "api_key" not in json.dumps(payload).lower()
     assert "xi-api-key" not in json.dumps(payload).lower()

@@ -236,14 +236,14 @@ def save_cut_plan_validation_repair_requests(
     project: Project, document: CutPlanValidationRepairRequestsDocument
 ) -> Path:
     normalized = document.model_copy(update={"project_id": project.id})
-    path = get_cut_plan_validation_repair_requests_path(project.work_dir_path)
+    path = get_cut_plan_validation_repair_requests_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return path
 
 
 def load_cut_plan_validation_repair_requests(project: Project) -> CutPlanValidationRepairRequestsDocument | None:
-    path = get_cut_plan_validation_repair_requests_path(project.work_dir_path)
+    path = get_cut_plan_validation_repair_requests_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:

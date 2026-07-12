@@ -235,7 +235,7 @@ def auto_resolve_residual_gap_request(
             )
 
     asset_type_order = _asset_type_search_order(request.repair_mode)
-    destination_folder = get_cut_plan_supplement_asset_request_dir(project.work_dir_path, request_id)
+    destination_folder = get_cut_plan_supplement_asset_request_dir(project.language_work_dir_path, request_id)
 
     for provider in CUT_PLAN_SUPPLEMENT_PROVIDER_SEARCH_ORDER:
         for asset_type in asset_type_order:

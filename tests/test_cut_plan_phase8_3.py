@@ -366,7 +366,7 @@ def test_needs_supplement_asset_produces_supplement_required_and_no_provider_cal
     assert item.chosen_asset_id == ""
     assert item.planned_visual_segments == []
     assert CUT_PLAN_ERROR_SUPPLEMENT_REQUIRED in item.blockers
-    assert not list(get_supplement_dir(project.work_dir_path).glob("**/*"))
+    assert not list(get_supplement_dir(project.language_work_dir_path).glob("**/*"))
 
 
 def test_missing_supplement_reason_produces_warning(tmp_path: Path) -> None:
@@ -1605,7 +1605,7 @@ def test_no_files_written_under_supplement_dir(tmp_path: Path) -> None:
     _build_and_save_draft(project, plan)
     apply_asset_selection_to_draft(project)
 
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_no_edit_plan_documents_created(tmp_path: Path) -> None:
@@ -1619,7 +1619,7 @@ def test_no_edit_plan_documents_created(tmp_path: Path) -> None:
     _build_and_save_draft(project, plan)
     apply_asset_selection_to_draft(project)
 
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
 
 
 def test_no_otio_export_triggered(tmp_path: Path) -> None:
@@ -1633,7 +1633,7 @@ def test_no_otio_export_triggered(tmp_path: Path) -> None:
     _build_and_save_draft(project, plan)
     apply_asset_selection_to_draft(project)
 
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_original_media_not_modified(tmp_path: Path) -> None:
@@ -2115,7 +2115,7 @@ def test_apply_asset_selection_to_cut_plan_raises_without_source_plan(tmp_path: 
 
     import os
 
-    confirmed_plan_path = project.work_dir_path / "voiceover_generation" / "confirmed_voiceover_project_plan.json"
+    confirmed_plan_path = project.language_work_dir_path / "voiceover_generation" / "confirmed_voiceover_project_plan.json"
     os.remove(confirmed_plan_path)
 
     with pytest.raises(ValueError):

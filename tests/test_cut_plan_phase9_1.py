@@ -91,7 +91,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -343,7 +343,7 @@ def test_bridge_report_blocked_when_audio_file_missing(tmp_path: Path) -> None:
     save_edit_plan_bridge_draft(project, edit_plan)
 
     # Audiodatei nachträglich löschen -> Bridge muss dies erkennen.
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     for audio_file in audio_dir.glob("*.mp3"):
         audio_file.unlink()
 
@@ -409,7 +409,7 @@ def test_bridge_draft_written_under_edit_plan_bridge_dir(tmp_path: Path) -> None
     edit_plan = build_edit_plan_draft_from_confirmed_cut_plan(project)
     save_edit_plan_bridge_draft(project, edit_plan)
 
-    path = get_cut_plan_edit_plan_bridge_draft_path(project.work_dir_path)
+    path = get_cut_plan_edit_plan_bridge_draft_path(project.language_work_dir_path)
     assert path.is_file()
     assert "edit_plan_bridge" in str(path)
     assert "voiceover_generation/cut_plan" in str(path).replace("\\", "/")
@@ -421,7 +421,7 @@ def test_bridge_does_not_write_under_edit_plan_dir(tmp_path: Path) -> None:
     save_edit_plan_bridge_draft(project, edit_plan)
     validate_edit_plan_bridge(project, edit_plan)
 
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
 
 
 def test_bridge_does_not_write_under_exports_dir(tmp_path: Path) -> None:
@@ -430,7 +430,7 @@ def test_bridge_does_not_write_under_exports_dir(tmp_path: Path) -> None:
     save_edit_plan_bridge_draft(project, edit_plan)
     validate_edit_plan_bridge(project, edit_plan)
 
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 # --- 25-31: Draft-Status / Schutz ---
@@ -448,7 +448,7 @@ def test_bridge_creates_no_production_confirmed_edit_plan(tmp_path: Path) -> Non
     save_edit_plan_bridge_draft(project, edit_plan)
     from otio_app.project_layout import get_folder_edit_plan_path
 
-    assert not get_folder_edit_plan_path(project.work_dir_path, FOLDER_A).is_file()
+    assert not get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A).is_file()
 
 
 def test_bridge_module_does_not_call_build_or_save_edit_plan() -> None:
@@ -627,7 +627,7 @@ def test_with_voiceover_workflow_unaffected() -> None:
 
 def test_edit_plan_bridge_dir_is_isolated_under_cut_plan(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
-    bridge_dir = get_cut_plan_edit_plan_bridge_dir(project.work_dir_path)
+    bridge_dir = get_cut_plan_edit_plan_bridge_dir(project.language_work_dir_path)
     normalized = str(bridge_dir).replace("\\", "/")
     assert normalized.endswith("voiceover_generation/cut_plan/edit_plan_bridge")
 
@@ -639,7 +639,7 @@ def test_is_edit_plan_bridge_stale_true_without_confirmed_cut_plan(tmp_path: Pat
 
     from otio_app.project_layout import get_cut_plan_confirmed_path
 
-    get_cut_plan_confirmed_path(project.work_dir_path).unlink()
+    get_cut_plan_confirmed_path(project.language_work_dir_path).unlink()
     loaded = load_edit_plan_bridge_draft(project)
     assert is_edit_plan_bridge_stale(project, loaded) is True
 

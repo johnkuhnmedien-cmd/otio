@@ -226,14 +226,14 @@ def build_and_save_folder_inventory_summaries(project: Project) -> list[FolderIn
     als Debug-Artefakt (Phase 3 §10)."""
     summaries = build_all_folder_inventory_summaries(project)
     document = FolderInventorySummariesDocument(project_id=project.id, folder_summaries=summaries)
-    path = get_folder_inventory_summaries_path(project.work_dir_path)
+    path = get_folder_inventory_summaries_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(document.model_dump_json(indent=2), encoding="utf-8")
     return summaries
 
 
 def load_folder_inventory_summaries(project: Project) -> FolderInventorySummariesDocument | None:
-    path = get_folder_inventory_summaries_path(project.work_dir_path)
+    path = get_folder_inventory_summaries_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:

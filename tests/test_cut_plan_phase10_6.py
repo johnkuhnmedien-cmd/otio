@@ -122,7 +122,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -265,7 +265,7 @@ def test_can_promote_false_with_section_blocked(tmp_path: Path) -> None:
 
 def test_can_promote_false_with_would_overwrite_without_permission(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_path.write_text('{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}', encoding="utf-8")
 
@@ -290,7 +290,7 @@ def test_can_promote_true_with_would_create_sections(tmp_path: Path) -> None:
 
 def test_can_promote_true_with_would_overwrite_and_explicit_permission(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_path.write_text('{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}', encoding="utf-8")
 
@@ -315,21 +315,21 @@ def test_can_promote_true_with_would_overwrite_and_explicit_permission(tmp_path:
 def test_intro_is_written_to_edit_plan_dir(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
     promote_production_edit_plans(project)
-    intro_path = get_edit_plan_dir(project.work_dir_path) / "Intro.json"
+    intro_path = get_edit_plan_dir(project.language_work_dir_path) / "Intro.json"
     assert intro_path.is_file()
 
 
 def test_would_create_writes_new_edit_plan_file(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
     manifest = promote_production_edit_plans(project)
-    target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     assert target_path.is_file()
     assert manifest.created_count == 2  # Intro + folder
 
 
 def test_would_overwrite_creates_backup_before_write(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_content = '{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}'
     existing_path.write_text(existing_content, encoding="utf-8")
@@ -351,7 +351,7 @@ def test_would_overwrite_creates_backup_before_write(tmp_path: Path) -> None:
 
 def test_would_overwrite_only_replaces_with_permission(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_content = '{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}'
     existing_path.write_text(existing_content, encoding="utf-8")
@@ -371,7 +371,7 @@ def test_would_overwrite_only_replaces_with_permission(tmp_path: Path) -> None:
 
 def test_backup_is_byte_identical_to_old_file(tmp_path: Path) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_content = '{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}'
     existing_path.write_text(existing_content, encoding="utf-8")
@@ -395,7 +395,7 @@ def test_backup_is_byte_identical_to_old_file(tmp_path: Path) -> None:
 def test_promoted_document_confirmed_true(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
     promote_production_edit_plans(project)
-    target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     document = EditPlanDocument.model_validate_json(target_path.read_text(encoding="utf-8"))
     assert document.confirmed is True
 
@@ -403,7 +403,7 @@ def test_promoted_document_confirmed_true(tmp_path: Path) -> None:
 def test_promoted_document_contains_voiceover(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
     promote_production_edit_plans(project)
-    target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     document = EditPlanDocument.model_validate_json(target_path.read_text(encoding="utf-8"))
     assert document.voiceover is not None
 
@@ -411,7 +411,7 @@ def test_promoted_document_contains_voiceover(tmp_path: Path) -> None:
 def test_promoted_document_contains_timeline_items(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
     promote_production_edit_plans(project)
-    target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     document = EditPlanDocument.model_validate_json(target_path.read_text(encoding="utf-8"))
     assert document.timeline_items
 
@@ -419,7 +419,7 @@ def test_promoted_document_contains_timeline_items(tmp_path: Path) -> None:
 def test_promoted_document_contains_shots(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
     promote_production_edit_plans(project)
-    target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     document = EditPlanDocument.model_validate_json(target_path.read_text(encoding="utf-8"))
     assert document.shots
 
@@ -427,7 +427,7 @@ def test_promoted_document_contains_shots(tmp_path: Path) -> None:
 def test_promoted_document_has_no_voiceover_audio_item(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
     promote_production_edit_plans(project)
-    target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     document = EditPlanDocument.model_validate_json(target_path.read_text(encoding="utf-8"))
     assert all(item.type != "voiceover_audio" for item in document.timeline_items)
 
@@ -455,7 +455,7 @@ def test_secret_leak_blocks_promote(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         promote_production_edit_plans(project)
-    assert not get_folder_edit_plan_path(project.work_dir_path, FOLDER_A).is_file()
+    assert not get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A).is_file()
 
 
 # --- 20: Atomic Write ---
@@ -464,7 +464,7 @@ def test_secret_leak_blocks_promote(tmp_path: Path) -> None:
 def test_atomic_write_leaves_no_temp_files_on_success(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
     promote_production_edit_plans(project)
-    edit_plan_dir = get_edit_plan_dir(project.work_dir_path)
+    edit_plan_dir = get_edit_plan_dir(project.language_work_dir_path)
     tmp_files = list(edit_plan_dir.glob("*.tmp"))
     assert tmp_files == []
 
@@ -476,7 +476,7 @@ def test_promote_manifest_is_written(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
     manifest = promote_production_edit_plans(project)
     save_production_edit_plan_promote_manifest(project, manifest)
-    assert get_production_edit_plan_promote_manifest_path(project.work_dir_path).is_file()
+    assert get_production_edit_plan_promote_manifest_path(project.language_work_dir_path).is_file()
 
 
 def test_manifest_contains_source_readiness_hash(tmp_path: Path) -> None:
@@ -531,7 +531,7 @@ def test_mapping_patch_is_written(tmp_path: Path) -> None:
     manifest = promote_production_edit_plans(project)
     patch = build_voice_folder_mapping_patch(project, manifest)
     save_voice_folder_mapping_patch(project, patch)
-    assert get_production_edit_plan_voice_folder_mapping_patch_path(project.work_dir_path).is_file()
+    assert get_production_edit_plan_voice_folder_mapping_patch_path(project.language_work_dir_path).is_file()
 
 
 def test_mapping_patch_contains_non_intro_folder(tmp_path: Path) -> None:
@@ -564,7 +564,7 @@ def test_mapping_patch_action_already_present_when_in_mapping(tmp_path: Path) ->
 
     project = _happy_project_with_dry_run(tmp_path)
     manifest = promote_production_edit_plans(project)
-    target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     promoted_doc = EditPlanDocument.model_validate_json(target_path.read_text(encoding="utf-8"))
     save_voice_folder_mapping(
         project,
@@ -611,13 +611,13 @@ def test_load_voice_folder_mapping_patch_returns_none_when_missing(tmp_path: Pat
 def test_no_files_written_under_exports_dir(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
     promote_production_edit_plans(project)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_supplement_dir(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
     promote_production_edit_plans(project)
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_no_original_media_modified(tmp_path: Path) -> None:
@@ -630,7 +630,7 @@ def test_no_original_media_modified(tmp_path: Path) -> None:
 
 def test_no_audio_files_overwritten(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
-    audio_path = project.work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
+    audio_path = project.language_work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
     original = audio_path.read_bytes()
     promote_production_edit_plans(project)
     assert audio_path.read_bytes() == original
@@ -692,7 +692,7 @@ def test_promote_writes_under_edit_plan_dir_including_intro(tmp_path: Path) -> N
     promote_production_edit_plans()."""
     project = _happy_project_with_dry_run(tmp_path)
     promote_production_edit_plans(project)
-    edit_plan_dir = get_edit_plan_dir(project.work_dir_path)
+    edit_plan_dir = get_edit_plan_dir(project.language_work_dir_path)
     written_files = sorted(p.name for p in edit_plan_dir.glob("*.json"))
     assert written_files == ["Grand_Canyon.json", "Intro.json"]
 

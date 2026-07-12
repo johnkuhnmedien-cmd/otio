@@ -456,14 +456,14 @@ def _build_edit_plan_and_audio_plan(
     confirmed_hash = content_hash_of_model(confirmed)
     notes = [
         _build_note(_SOURCE_PIPELINE_PREFIX, _SOURCE_PIPELINE_VALUE),
-        _build_note(_SOURCE_CUT_PLAN_PATH_PREFIX, str(get_cut_plan_confirmed_path(project.work_dir_path))),
+        _build_note(_SOURCE_CUT_PLAN_PATH_PREFIX, str(get_cut_plan_confirmed_path(project.language_work_dir_path))),
         _build_note(_SOURCE_CUT_PLAN_HASH_PREFIX, confirmed_hash),
         _build_note(
-            _BRIDGE_AUDIO_PLAN_PATH_PREFIX, str(get_cut_plan_edit_plan_bridge_audio_plan_path(project.work_dir_path))
+            _BRIDGE_AUDIO_PLAN_PATH_PREFIX, str(get_cut_plan_edit_plan_bridge_audio_plan_path(project.language_work_dir_path))
         ),
         _build_note(
             _EDIT_PLAN_BRIDGE_TRACE_PATH_PREFIX,
-            str(get_cut_plan_edit_plan_bridge_trace_path(project.work_dir_path)),
+            str(get_cut_plan_edit_plan_bridge_trace_path(project.language_work_dir_path)),
         ),
     ]
 
@@ -532,7 +532,7 @@ def build_bridge_audio_plan_from_confirmed_cut_plan(project: Project) -> BridgeA
 
 
 def load_edit_plan_bridge_draft(project: Project) -> EditPlanDocument | None:
-    path = get_cut_plan_edit_plan_bridge_draft_path(project.work_dir_path)
+    path = get_cut_plan_edit_plan_bridge_draft_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -544,7 +544,7 @@ def load_edit_plan_bridge_draft(project: Project) -> EditPlanDocument | None:
 
 def save_edit_plan_bridge_draft(project: Project, edit_plan: EditPlanDocument) -> EditPlanDocument:
     normalized = edit_plan.model_copy(update={"project_id": project.id})
-    path = get_cut_plan_edit_plan_bridge_draft_path(project.work_dir_path)
+    path = get_cut_plan_edit_plan_bridge_draft_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
@@ -552,14 +552,14 @@ def save_edit_plan_bridge_draft(project: Project, edit_plan: EditPlanDocument) -
 
 def save_bridge_audio_plan(project: Project, audio_plan: BridgeAudioPlanDocument) -> BridgeAudioPlanDocument:
     normalized = audio_plan.model_copy(update={"project_id": project.id})
-    path = get_cut_plan_edit_plan_bridge_audio_plan_path(project.work_dir_path)
+    path = get_cut_plan_edit_plan_bridge_audio_plan_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
 
 
 def load_bridge_audio_plan(project: Project) -> BridgeAudioPlanDocument | None:
-    path = get_cut_plan_edit_plan_bridge_audio_plan_path(project.work_dir_path)
+    path = get_cut_plan_edit_plan_bridge_audio_plan_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -936,14 +936,14 @@ def save_edit_plan_bridge_validation_report(
     project: Project, report: EditPlanBridgeValidationReport
 ) -> EditPlanBridgeValidationReport:
     normalized = report.model_copy(update={"project_id": project.id})
-    path = get_cut_plan_edit_plan_bridge_validation_report_path(project.work_dir_path)
+    path = get_cut_plan_edit_plan_bridge_validation_report_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
 
 
 def load_edit_plan_bridge_validation_report(project: Project) -> EditPlanBridgeValidationReport | None:
-    path = get_cut_plan_edit_plan_bridge_validation_report_path(project.work_dir_path)
+    path = get_cut_plan_edit_plan_bridge_validation_report_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:

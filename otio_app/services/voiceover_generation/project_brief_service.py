@@ -28,7 +28,7 @@ def default_project_brief(project: Project) -> ProjectBrief:
 
 
 def load_project_brief(project: Project) -> ProjectBrief:
-    path = get_project_brief_path(project.work_dir_path)
+    path = get_project_brief_path(project.language_work_dir_path)
     if not path.is_file():
         return default_project_brief(project)
     try:
@@ -42,7 +42,7 @@ def save_project_brief(project: Project, brief: ProjectBrief) -> ProjectBrief:
     normalized = brief.model_copy(
         update={"project_id": project.id, "generated_at": datetime.now(timezone.utc)}
     )
-    path = get_project_brief_path(project.work_dir_path)
+    path = get_project_brief_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized

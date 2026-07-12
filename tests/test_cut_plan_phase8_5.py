@@ -107,7 +107,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio_files(project: Project, names: list[str]) -> list[Path]:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     paths = []
     for name in names:
@@ -544,21 +544,21 @@ def test_no_supplement_files_written(tmp_path: Path) -> None:
     project = _standard_settings_plan_and_project(tmp_path)
     apply_asset_selection_to_draft(project)
     validate_cut_plan_draft(project)
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_no_edit_plan_documents_created(tmp_path: Path) -> None:
     project = _standard_settings_plan_and_project(tmp_path)
     apply_asset_selection_to_draft(project)
     validate_cut_plan_draft(project)
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
 
 
 def test_no_otio_export_triggered(tmp_path: Path) -> None:
     project = _standard_settings_plan_and_project(tmp_path)
     apply_asset_selection_to_draft(project)
     validate_cut_plan_draft(project)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_original_media_modified(tmp_path: Path) -> None:

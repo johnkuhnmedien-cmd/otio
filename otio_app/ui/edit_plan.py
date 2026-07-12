@@ -1908,7 +1908,7 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
         key=f"otio_export_name_{project.id}",
         help="Standard bei genau einem Ort: Ordnername. Bei mehreren Orten: Projektname.",
     )
-    export_path = resolve_otio_export_path(project.work_dir_path, basename=export_basename)
+    export_path = resolve_otio_export_path(project.language_work_dir_path, basename=export_basename)
     st.caption(f"Ziel: `{export_path}`")
     cached_folders = tuple(st.session_state.get(_export_preview_folders_key(project.id), []))
     preview = _load_cached_export_preview(project.id)

@@ -734,7 +734,7 @@ def test_save_and_load_cut_plan_draft_roundtrip(tmp_path: Path) -> None:
     assert loaded is not None
     assert loaded.status == draft.status
     assert len(loaded.items) == len(draft.items)
-    assert get_cut_plan_draft_path(project.work_dir_path).is_file()
+    assert get_cut_plan_draft_path(project.language_work_dir_path).is_file()
 
 
 def test_load_cut_plan_draft_returns_none_when_missing(tmp_path: Path) -> None:
@@ -753,8 +753,8 @@ def test_build_cut_plan_draft_writes_nothing_under_edit_plan_or_exports(tmp_path
     draft = build_cut_plan_draft(project)
     save_cut_plan_draft(project, draft)
 
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_build_cut_plan_draft_does_not_touch_original_media(tmp_path: Path) -> None:
@@ -820,8 +820,8 @@ def test_cut_plan_page_generates_draft_on_button_click(tmp_path: Path, monkeypat
 
     render_cut_plan_page()
 
-    assert get_cut_plan_draft_path(project.work_dir_path).is_file()
-    saved = json.loads(get_cut_plan_draft_path(project.work_dir_path).read_text(encoding="utf-8"))
+    assert get_cut_plan_draft_path(project.language_work_dir_path).is_file()
+    saved = json.loads(get_cut_plan_draft_path(project.language_work_dir_path).read_text(encoding="utf-8"))
     assert len(saved["items"]) == 2
 
 
@@ -853,4 +853,4 @@ def test_cut_plan_page_does_not_generate_draft_without_confirmed_plan(
 
     render_cut_plan_page()  # kein bestätigter Plan -> Button ist disabled -> darf nichts erzeugen
 
-    assert not get_cut_plan_draft_path(project.work_dir_path).exists()
+    assert not get_cut_plan_draft_path(project.language_work_dir_path).exists()

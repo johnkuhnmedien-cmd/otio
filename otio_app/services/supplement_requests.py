@@ -12,7 +12,7 @@ from otio_app.project_layout import get_supplement_requests_path
 
 
 def load_supplement_requests(project: Project) -> SupplementRequestsDocument:
-    path = get_supplement_requests_path(project.work_dir_path)
+    path = get_supplement_requests_path(project.language_work_dir_path)
     if not path.is_file():
         return SupplementRequestsDocument(project_id=project.id)
     try:
@@ -23,7 +23,7 @@ def load_supplement_requests(project: Project) -> SupplementRequestsDocument:
 
 
 def save_supplement_requests(project: Project, document: SupplementRequestsDocument) -> Path:
-    path = get_supplement_requests_path(project.work_dir_path)
+    path = get_supplement_requests_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(document.model_dump_json(indent=2), encoding="utf-8")
     return path

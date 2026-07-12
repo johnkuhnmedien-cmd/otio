@@ -65,7 +65,7 @@ __all__ = [
 
 
 def load_dramaturgy_draft(project: Project) -> DramaturgyPlan | None:
-    path = get_dramaturgy_plan_draft_path(project.work_dir_path)
+    path = get_dramaturgy_plan_draft_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -79,14 +79,14 @@ def save_dramaturgy_draft(project: Project, plan: DramaturgyPlan) -> DramaturgyP
     normalized = plan.model_copy(
         update={"project_id": project.id, "status": DRAMATURGY_STATUS_DRAFT}
     )
-    path = get_dramaturgy_plan_draft_path(project.work_dir_path)
+    path = get_dramaturgy_plan_draft_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
 
 
 def load_confirmed_dramaturgy(project: Project) -> DramaturgyPlan | None:
-    path = get_dramaturgy_plan_confirmed_path(project.work_dir_path)
+    path = get_dramaturgy_plan_confirmed_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -104,7 +104,7 @@ def save_confirmed_dramaturgy(project: Project, plan: DramaturgyPlan) -> Dramatu
             "confirmed_at": plan.confirmed_at or datetime.now(timezone.utc),
         }
     )
-    path = get_dramaturgy_plan_confirmed_path(project.work_dir_path)
+    path = get_dramaturgy_plan_confirmed_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized

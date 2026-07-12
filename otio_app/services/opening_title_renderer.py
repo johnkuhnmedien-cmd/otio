@@ -367,7 +367,7 @@ def ensure_opening_titles_rendered(
             continue
 
         style = extract_title_style(item, project)
-        style = attach_output_paths(style, work_dir=project.work_dir_path, section_id=item.section_id)
+        style = attach_output_paths(style, work_dir=project.language_work_dir_path, section_id=item.section_id)
         manifest_path = Path(style.render_manifest_path)
 
         if not force and render_cache_valid(style, manifest_path):
@@ -435,5 +435,5 @@ def title_render_is_stale(item: TimelineItem, project: Project) -> bool:
     if item.type != "opening_title":
         return False
     style = extract_title_style(item, project)
-    style = attach_output_paths(style, work_dir=project.work_dir_path, section_id=item.section_id)
+    style = attach_output_paths(style, work_dir=project.language_work_dir_path, section_id=item.section_id)
     return not render_cache_valid(style, Path(style.render_manifest_path))

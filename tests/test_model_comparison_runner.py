@@ -177,7 +177,7 @@ def test_model_comparison_batch_writes_all_artifacts(
         assert (run_dir / "effective_rules.json").is_file()
         assert (run_dir / "run_manifest.json").is_file()
 
-    edit_plan_path = get_folder_edit_plan_path(project.work_dir_path, "Grand Canyon")
+    edit_plan_path = get_folder_edit_plan_path(project.language_work_dir_path, "Grand Canyon")
     assert not edit_plan_path.is_file()
 
 
