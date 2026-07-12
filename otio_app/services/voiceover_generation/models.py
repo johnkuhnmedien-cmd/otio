@@ -228,6 +228,7 @@ class VoiceoverGenerationModelSettings(BaseModel):
     cut_plan_supplement_query: LlmRoleSettings = Field(
         default_factory=_default_cut_plan_supplement_query_settings
     )
+    youtube_publish: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
 
 
 class LlmRunManifest(BaseModel):

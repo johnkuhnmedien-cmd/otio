@@ -124,6 +124,7 @@ from otio_app.ui.project_context import (
     render_project_selector,
     render_workflow_progress,
 )
+from otio_app.ui.youtube_publish import render_youtube_publish_block
 
 
 def _plan_state_key(project_id: str, folder_name: str) -> str:
@@ -2055,6 +2056,13 @@ def _render_tab_export(project, mapped_folders: list[str]) -> None:
         "Bei aktivem Auto-Zoom (⓪ Clean Media) entstehen Dateien wie `Asset03_3840x2160.mp4` — "
         "alte Clips im Media Pool vor dem Import löschen, sonst verlinkt Resolve evtl. "
         "noch die 4096×2160-Originaldatei."
+    )
+
+    render_youtube_publish_block(
+        project,
+        folder_selection,
+        page=PAGE_EDIT_PLAN,
+        key_prefix="edit_plan",
     )
 
 

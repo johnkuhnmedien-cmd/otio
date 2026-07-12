@@ -31,6 +31,7 @@ STAGE_VOICEOVER_CORRECTION = "voiceover_correction"
 STAGE_ASSET_ALLOCATION_CORRECTION = "asset_allocation_correction"
 STAGE_INTRO_HOOK = "intro_hook"
 STAGE_CUT_PLAN_SUPPLEMENT_QUERY = "cut_plan_supplement_query"
+STAGE_YOUTUBE_PUBLISH = "youtube_publish"
 
 STATUS_PASS = "PASS"
 STATUS_FAIL = "FAIL"

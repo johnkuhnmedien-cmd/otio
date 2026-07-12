@@ -321,6 +321,8 @@ from otio_app.services.voiceover_generation.production_edit_plan_validation impo
     validate_production_edit_plan_staging,
 )
 from otio_app.ui.project_context import render_project_selector
+from otio_app.ui.navigation import PAGE_CUT_PLAN
+from otio_app.ui.youtube_publish import render_youtube_publish_block
 from otio_app.ui.voiceover_generation._shared import (
     render_llm_model_selectbox,
     require_without_voiceover_mode,
@@ -3503,18 +3505,22 @@ def _render_otio_export_readiness(project: Project) -> None:
             st.rerun()
 
     state = manager.get_state(project.id)
-    if state is None:
-        return
+    if state is not None:
+        if state.status == OtioExportJobStatus.RUNNING:
+            poll_while_running(
+                lambda: _render_otio_export_running_panel(project),
+                lambda: manager.is_running(project.id),
+                refresh_key=f"cut_plan_otio_export_refresh_{project.id}",
+            )
+        else:
+            _render_otio_export_finished_panel(project, state)
 
-    if state.status == OtioExportJobStatus.RUNNING:
-        poll_while_running(
-            lambda: _render_otio_export_running_panel(project),
-            lambda: manager.is_running(project.id),
-            refresh_key=f"cut_plan_otio_export_refresh_{project.id}",
-        )
-        return
-
-    _render_otio_export_finished_panel(project, state)
+    render_youtube_publish_block(
+        project,
+        tuple(export_folder_names),
+        page=PAGE_CUT_PLAN,
+        key_prefix="cut_plan",
+    )
 
 
 def _render_otio_export_running_panel(project: Project) -> None:
