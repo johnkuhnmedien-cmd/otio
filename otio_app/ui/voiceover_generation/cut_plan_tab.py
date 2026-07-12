@@ -2941,7 +2941,7 @@ def _render_production_edit_plan_promote_execute(project: Project) -> None:
     st.subheader("Production EditPlan Promote")
     st.warning("Dieser Schritt schreibt nach `_otio/edit_plan/`.")
     st.caption("Bestehende Produktionspläne werden nur überschrieben, wenn du das explizit bestätigst.")
-    st.caption("Intro wird in dieser Phase nicht promotet.")
+    st.caption("Intro wird als Ordner „Intro“ mitpromotet (Ziel: `_otio/edit_plan/Intro.json`).")
     st.caption("Es wird kein OTIO exportiert.")
 
     readiness = load_production_edit_plan_promote_readiness(project)
@@ -3360,19 +3360,57 @@ def _render_otio_export_readiness(project: Project) -> None:
     st.markdown("---")
     st.markdown("**OTIO exportieren**")
     st.caption(
-        f"{len(ready_folders)} READY-Folder werden zusammengeführt "
-        f"(gleiche Pipeline wie „③ Schnittplan → 📤 OTIO Export“). "
+        "Wähle die READY-Folder für diesen Export (Default: alle). "
+        "Intro erscheint hier, sobald es promotet und in der Zuordnung bestätigt ist. "
         "Export läuft im Hintergrund — Clip-Fortschritt und Abbrechen möglich. "
         "Erneuter Start setzt bei bereits transkodierten Medien fort (Cache)."
     )
 
+    # Intro zuerst, dann restliche READY-Folder in Report-Reihenfolge.
+    ready_options = list(ready_folders)
+    if "Intro" in ready_options:
+        ready_options = ["Intro"] + [name for name in ready_options if name != "Intro"]
+
+    select_key = f"cut_plan_otio_export_folders_{project.id}"
+    options_key = f"{select_key}_options_sig"
+    if select_key not in st.session_state:
+        st.session_state[select_key] = list(ready_options)
+    else:
+        previous = [name for name in st.session_state[select_key] if name in ready_options]
+        prev_options = set(st.session_state.get(options_key, []))
+        newly_ready = [name for name in ready_options if name not in prev_options]
+        # Leere Auswahl bewusst erlauben (Warnung + kein Export), nicht auf alle zurücksetzen.
+        st.session_state[select_key] = previous + [name for name in newly_ready if name not in previous]
+    st.session_state[options_key] = list(ready_options)
+
+    selected_folders = st.multiselect(
+        "Folder exportieren",
+        options=ready_options,
+        key=select_key,
+        help="Default: alle READY-Folder. Abwählen möglich. Mindestens einer muss gewählt bleiben.",
+    )
+
+    export_folder_names = [name for name in ready_options if name in set(selected_folders)]
+    if not export_folder_names:
+        st.warning("Bitte mindestens einen READY-Folder auswählen.")
+        return
+
+    st.caption(
+        f"{len(export_folder_names)} von {len(ready_options)} READY-Folder ausgewählt "
+        f"(gleiche Pipeline wie „③ Schnittplan → 📤 OTIO Export“)."
+    )
+
     default_basename = default_otio_export_basename(
-        folder_names=ready_folders,
+        folder_names=export_folder_names,
         project_name=project.name,
     )
     name_key = f"cut_plan_otio_export_name_{project.id}"
-    if name_key not in st.session_state:
+    folders_sig_key = f"cut_plan_otio_export_name_folders_{project.id}"
+    prev_sig = tuple(st.session_state.get(folders_sig_key, ()))
+    cur_sig = tuple(export_folder_names)
+    if name_key not in st.session_state or prev_sig != cur_sig:
         st.session_state[name_key] = default_basename
+        st.session_state[folders_sig_key] = list(export_folder_names)
     export_basename = st.text_input(
         "Dateiname (ohne .otio)",
         key=name_key,
@@ -3390,12 +3428,12 @@ def _render_otio_export_readiness(project: Project) -> None:
             "OTIO exportieren",
             key=f"cut_plan_otio_export_run_{project.id}",
             type="primary",
-            disabled=job_running,
+            disabled=job_running or not export_folder_names,
             help="Startet merge + export_otio_timeline im Hintergrund mit Clip-Fortschritt.",
         ):
             started = manager.start(
                 project,
-                folder_names=ready_folders,
+                folder_names=export_folder_names,
                 output_basename=export_basename,
             )
             if not started:
