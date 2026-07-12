@@ -1117,28 +1117,68 @@ def _render_bulk_draft_actions(
                             st.error(f"„{result.draft.folder_name}“: {result.error}")
                     st.rerun()
 
-    bulk_reports = st.session_state.get(_asset_readiness_all_session_key(project))
-    if isinstance(bulk_reports, list) and bulk_reports:
-        if all(isinstance(report, FolderAssetReadinessReport) for report in bulk_reports):
-            _render_bulk_asset_readiness_summary(bulk_reports)
+    # Immer sichtbar — braucht keine vorherige Bulk-Readiness-Aktion.
+    # Beim Klick: vorhandene Session-Reports nutzen, sonst einmal lokal
+    # (ohne LLM) Readiness berechnen, dann nur Ordner ≥ Schwelle anfassen.
+    if render_new_feature_button(
+        f"🟢 ≥{FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD} Issues → "
+        "strict inventory + neu generieren + Allokation + Readiness",
+        key=f"vo_fvo_strict_inventory_high_issue_regen_{project.id}",
+        help=(
+            "NEU: immer klickbar. Berechnet bei Bedarf zuerst lokal Asset-Readiness "
+            "(kein LLM, nutzt Cache falls vorhanden), filtert Ordner mit mindestens "
+            f"{FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD} Issues, setzt NUR dort "
+            "Faktentreue auf strict_inventory_only, generiert neu und führt Asset-Allokation "
+            "+ frische Readiness aus. Andere Ordner bleiben unverändert — kein erneutes "
+            "Allokations-LLM über alle Ordner nötig."
+        ),
+        disabled=not has_any_draft,
+    ):
+        progress_placeholder = st.empty()
+        cached = st.session_state.get(_asset_readiness_all_session_key(project))
+        seed_reports: list[FolderAssetReadinessReport] | None = None
+        if (
+            isinstance(cached, list)
+            and cached
+            and all(isinstance(report, FolderAssetReadinessReport) for report in cached)
+        ):
+            seed_reports = cached
+        else:
+            def _progress_seed_readiness(folder_name: str, index: int, total: int) -> None:
+                progress_placeholder.info(
+                    f"Readiness {index}/{total}: „{folder_name}“ (lokal, kein LLM)…"
+                )
+
+            with st.spinner("Asset-Readiness lokal berechnen (nur Diagnose, kein LLM)…"):
+                try:
+                    seed_reports = build_all_folder_asset_readiness_reports(
+                        project, progress_callback=_progress_seed_readiness
+                    )
+                except ValueError as exc:
+                    progress_placeholder.empty()
+                    st.error(str(exc))
+                    seed_reports = None
+                else:
+                    for report in seed_reports:
+                        st.session_state[
+                            _asset_readiness_session_key(project, report.folder_name)
+                        ] = report
+                    st.session_state[_asset_readiness_all_session_key(project)] = seed_reports
+
+        if seed_reports is not None:
             high_issue_folders = [
                 report.folder_name
-                for report in bulk_reports
+                for report in seed_reports
                 if len(report.issues) >= FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD
             ]
-            if high_issue_folders and render_new_feature_button(
-                f"🟢 ≥{FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD} Issues → "
-                "strict inventory + neu generieren + Allokation + Readiness",
-                key=f"vo_fvo_strict_inventory_high_issue_regen_{project.id}",
-                help=(
-                    "NEU: erkennt Ordner mit mindestens "
-                    f"{FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD} Asset-Readiness-Issues, "
-                    "setzt NUR dort Faktentreue auf strict_inventory_only, speichert Settings, "
-                    "generiert diese Ordner neu und führt danach erneut Asset-Allokation sowie "
-                    "frische Asset-Readiness-Diagnose aus. Andere Ordner bleiben unverändert."
-                ),
-            ):
-                progress_placeholder = st.empty()
+            if not high_issue_folders:
+                progress_placeholder.empty()
+                st.info(
+                    f"Kein Ordner mit ≥{FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD} "
+                    "Asset-Readiness-Issues — nichts zu tun."
+                )
+                st.session_state[_asset_readiness_all_session_key(project)] = seed_reports
+            else:
 
                 def _progress_high_issue(folder_name: str, index: int, total: int) -> None:
                     progress_placeholder.info(
@@ -1147,7 +1187,8 @@ def _render_bulk_draft_actions(
                     )
 
                 with st.spinner(
-                    f"{len(high_issue_folders)} Ordner: "
+                    f"{len(high_issue_folders)} Ordner mit "
+                    f"≥{FOLDER_ASSET_READINESS_HIGH_ISSUE_REGEN_THRESHOLD} Issues: "
                     "Settings → Generieren → Allokation → Readiness…"
                 ):
                     try:
@@ -1160,7 +1201,7 @@ def _render_bulk_draft_actions(
                             project,
                             provider=author_provider,
                             model=author_model,
-                            reports=bulk_reports,
+                            reports=seed_reports,
                             progress_callback=_progress_high_issue,
                         )
                     except ValueError as exc:
@@ -1168,14 +1209,12 @@ def _render_bulk_draft_actions(
                         st.error(str(exc))
                     else:
                         progress_placeholder.empty()
-                        # Bulk-Übersicht aktualisieren: betroffene Ordner ersetzen,
-                        # übrige Reports behalten.
                         refreshed_by_folder = {
                             report.folder_name: report for report in refreshed_partial
                         }
                         merged_reports = [
                             refreshed_by_folder.get(report.folder_name, report)
-                            for report in bulk_reports
+                            for report in seed_reports
                         ]
                         for report in refreshed_partial:
                             st.session_state[
@@ -1215,3 +1254,8 @@ def _render_bulk_draft_actions(
                                     f"Allokation „{result.draft.folder_name}“: {result.error}"
                                 )
                         st.rerun()
+
+    bulk_reports = st.session_state.get(_asset_readiness_all_session_key(project))
+    if isinstance(bulk_reports, list) and bulk_reports:
+        if all(isinstance(report, FolderAssetReadinessReport) for report in bulk_reports):
+            _render_bulk_asset_readiness_summary(bulk_reports)

@@ -415,11 +415,12 @@ def test_bulk_action_buttons_are_present_below_drafts(
     assert "Alle Bestätigungen zurücknehmen" in button_labels
     assert "🟢 Alle Asset-Readiness prüfen" in button_labels
     assert "🤖 Alle Asset-Allokation per LLM reparieren" in button_labels
+    assert (
+        "🟢 ≥4 Issues → strict inventory + neu generieren + Allokation + Readiness"
+        in button_labels
+    )
     assert "🟢 Öffnen" in button_labels
     assert "🟢 Asset-Readiness prüfen" not in button_labels  # erst nach Öffnen
-    # High-Issue-Bulk-Aktion erscheint erst nach einer Bulk-Readiness-Diagnose
-    # mit Ordnern ≥ Schwelle — ohne Session-Reports daher nicht sichtbar.
-    assert not any("strict inventory + neu generieren" in label for label in button_labels)
 
     subheaders = {subheader.value for subheader in at.subheader}
     assert "Alle Ordner gleichzeitig" in subheaders
