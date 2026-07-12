@@ -10,6 +10,7 @@ from otio_app.services.asset_analysis_job import (
     get_asset_analysis_job_manager,
 )
 from otio_app.services.clean_media_job import get_clean_media_job_manager
+from otio_app.services.otio_export_job import get_otio_export_job_manager
 from otio_app.services.voice_analysis_job import get_voice_analysis_job_manager
 
 
@@ -29,6 +30,7 @@ def reconcile_all_jobs() -> None:
         clean_manager.reconcile_stuck_job(project.id)
         get_voice_analysis_job_manager().reconcile_stuck_job(project.id)
         get_asset_analysis_job_manager().reconcile_stuck_job(project.id)
+        get_otio_export_job_manager().reconcile_stuck_job(project.id)
 
 
 def any_job_running(project_id: str | None = None) -> bool:
@@ -37,6 +39,7 @@ def any_job_running(project_id: str | None = None) -> bool:
         get_clean_media_job_manager(),
         get_voice_analysis_job_manager(),
         get_asset_analysis_job_manager(),
+        get_otio_export_job_manager(),
     )
     if project_id is None:
         return any(
@@ -89,6 +92,21 @@ def collect_job_activity() -> list[JobActivity]:
                 )
             )
 
+        otio_state = get_otio_export_job_manager().get_state(project_id)
+        if otio_state is not None:
+            detail = otio_state.message or otio_state.phase
+            if otio_state.total > 0:
+                detail = f"{otio_state.current}/{otio_state.total} Clips · {detail}"
+            activities.append(
+                JobActivity(
+                    kind="OTIO-Export",
+                    project_id=project_id,
+                    status=otio_state.status.value,
+                    detail=detail,
+                    thread_alive=get_otio_export_job_manager().thread_alive(project_id),
+                )
+            )
+
     return activities
 
 
@@ -98,6 +116,7 @@ def force_reset_all_jobs() -> int:
     clean_manager = get_clean_media_job_manager()
     voice_manager = get_voice_analysis_job_manager()
     asset_manager = get_asset_analysis_job_manager()
+    otio_manager = get_otio_export_job_manager()
 
     for project in list_projects():
         project_id = project.id
@@ -109,6 +128,9 @@ def force_reset_all_jobs() -> int:
             count += 1
         if asset_manager.is_running(project_id):
             asset_manager.force_reset(project_id)
+            count += 1
+        if otio_manager.is_running(project_id):
+            otio_manager.force_reset(project_id)
             count += 1
     return count
 
