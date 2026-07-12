@@ -288,6 +288,13 @@ def get_voiceover_project_plan_csv_path(work_dir: Path) -> Path:
     return get_voiceover_generation_dir(work_dir) / VOICEOVER_PROJECT_PLAN_CSV_FILENAME
 
 
+def get_youtube_metadata_path(work_dir: Path) -> Path:
+    """YouTube-Titel/Beschreibung/Kapitel/Hashtags/Quiz unter voiceover_generation/."""
+    from otio_app.defaults import YOUTUBE_METADATA_FILENAME
+
+    return get_voiceover_generation_dir(work_dir) / YOUTUBE_METADATA_FILENAME
+
+
 def get_voiceover_generation_audio_dir(work_dir: Path) -> Path:
     """Wurzel aller erzeugten Audiodateien (TTS) dieser Pipeline."""
     from otio_app.defaults import VOICEOVER_GENERATION_AUDIO_SUBDIR

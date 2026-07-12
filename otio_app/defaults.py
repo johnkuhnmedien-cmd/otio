@@ -102,6 +102,13 @@ CONFIRMED_VOICEOVER_PROJECT_PLAN_FILENAME = "confirmed_voiceover_project_plan.js
 VOICEOVER_PROJECT_PLAN_JSON_FILENAME = "voiceover_project_plan.json"
 VOICEOVER_PROJECT_PLAN_MD_FILENAME = "voiceover_project_plan.md"
 VOICEOVER_PROJECT_PLAN_CSV_FILENAME = "voiceover_project_plan.csv"
+YOUTUBE_METADATA_FILENAME = "youtube_metadata.json"
+
+# YouTube Publish limits (UI + post-LLM clamp)
+YOUTUBE_DESCRIPTION_MAX_CHARS = 5000
+YOUTUBE_HASHTAGS_MAX_CHARS = 500
+YOUTUBE_QUIZ_INTERVAL_SEC = 600.0  # ein Quiz pro 10 Minuten
+YOUTUBE_QUIZ_OPTION_COUNT = 3
 
 # --- LLM-Provider/Modell-Presets für die Voice-over-Generierungs-Pipeline ---
 # Eigenständig von EDIT_PLAN_MODEL_CHOICES: hier werden provider und model als
@@ -124,6 +131,7 @@ VOICEOVER_GEN_ROLE_INTRO = "intro"
 # sinnvoll ist und die Nutzung ausschließlich beim Klick auf „Supplement-
 # Kandidaten suchen“ im Cut-Plan-Tab erfolgt.
 VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY = "cut_plan_supplement_query"
+VOICEOVER_GEN_ROLE_YOUTUBE_PUBLISH = "youtube_publish"
 VOICEOVER_GEN_ROLES = (
     VOICEOVER_GEN_ROLE_STYLE_PROFILE,
     VOICEOVER_GEN_ROLE_DRAMATURGY,
@@ -131,6 +139,7 @@ VOICEOVER_GEN_ROLES = (
     VOICEOVER_GEN_ROLE_VOICEOVER_REVIEW,
     VOICEOVER_GEN_ROLE_INTRO,
     VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY,
+    VOICEOVER_GEN_ROLE_YOUTUBE_PUBLISH,
 )
 VOICEOVER_GEN_ROLE_LABELS = {
     VOICEOVER_GEN_ROLE_STYLE_PROFILE: "Style Profile",
@@ -139,6 +148,7 @@ VOICEOVER_GEN_ROLE_LABELS = {
     VOICEOVER_GEN_ROLE_VOICEOVER_REVIEW: "Voice-over Review",
     VOICEOVER_GEN_ROLE_INTRO: "Intro",
     VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY: "Cut Plan Suchqueries",
+    VOICEOVER_GEN_ROLE_YOUTUBE_PUBLISH: "YouTube Publish",
 }
 VOICEOVER_GEN_DEFAULT_PROVIDER = "anthropic"
 VOICEOVER_GEN_DEFAULT_MODEL = "claude-sonnet-5"
