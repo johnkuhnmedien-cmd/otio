@@ -696,6 +696,10 @@ def _render_cut_plan_draft(project: Project, draft: CutPlanDocument) -> None:
                 for error in draft.warnings:
                     location = f" ({error.scope}: {error.folder_name})" if error.folder_name else f" ({error.scope})"
                     st.warning(f"[{error.type}]{location}: {error.message}")
+            if any(error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER for error in draft.blockers):
+                st.markdown("---")
+                st.markdown("**Direkt hier reparieren**")
+                _render_black_gap_manual_repair(project, draft, compact=True)
 
     st.divider()
     _render_validation_report(project, draft)
@@ -1449,54 +1453,95 @@ def _render_bulk_auto_resolve_action(
         st.rerun()
 
 
-def _render_black_gap_manual_repair(project: Project, draft: CutPlanDocument) -> None:
+def _black_gap_repair_feedback_key(project: Project) -> str:
+    return f"cut_plan_black_gap_repair_feedback_{project.id}"
+
+
+def _dedupe_black_gap_errors(errors: list[CutPlanValidationError]) -> list[CutPlanValidationError]:
+    """Pro cut_item_id nur den informativsten Black-Gap behalten
+    (mit Gap-Zeiten bevorzugt gegenüber „aus Asset-Auswahl übernommen“)."""
+    by_key: dict[str, CutPlanValidationError] = {}
+    orphans: list[CutPlanValidationError] = []
+    for error in errors:
+        if error.type != CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER:
+            continue
+        if not error.cut_item_id:
+            orphans.append(error)
+            continue
+        existing = by_key.get(error.cut_item_id)
+        if existing is None:
+            by_key[error.cut_item_id] = error
+            continue
+        existing_has_gap = existing.gap_end_sec > existing.gap_start_sec
+        new_has_gap = error.gap_end_sec > error.gap_start_sec
+        if new_has_gap and not existing_has_gap:
+            by_key[error.cut_item_id] = error
+        elif new_has_gap == existing_has_gap and "aus Asset-Auswahl" in existing.message:
+            by_key[error.cut_item_id] = error
+    return list(by_key.values()) + orphans
+
+
+def _render_black_gap_manual_repair(
+    project: Project, draft: CutPlanDocument, *, compact: bool = False
+) -> None:
     """Diagnose + manueller Asset-Tausch für BLACK_GAP_DURING_VOICEOVER —
-    inkl. Sektionspausen, die dem Closing Shot zugeordnet sind."""
+    inkl. Sektionspausen (Closing) und Satz-Löcher (zu kurzes Fallback)."""
     from otio_app.services.voiceover_generation.cut_plan_visual_coverage import (
         diagnose_section_pause_hold_failure,
     )
 
-    black_gaps = [
-        error
-        for error in draft.blockers
-        if error.type == CUT_PLAN_ERROR_BLACK_GAP_DURING_VOICEOVER
-    ]
+    black_gaps = _dedupe_black_gap_errors(list(draft.blockers))
     if not black_gaps:
         return
 
-    st.subheader("Black-Gap Diagnose & manuell tauschen")
+    feedback_key = _black_gap_repair_feedback_key(project)
+    feedback = st.session_state.pop(feedback_key, None)
+    if isinstance(feedback, dict):
+        level = feedback.get("level", "info")
+        text = str(feedback.get("text", ""))
+        if level == "success":
+            st.success(text)
+        elif level == "error":
+            st.error(text)
+        else:
+            st.info(text)
+
+    if not compact:
+        st.subheader("Black-Gap Diagnose & manuell tauschen")
     st.caption(
-        "NEU: zeigt je Black-Gap den Auslöser (Asset, Reserve vs. benötigte Pause) und "
-        "erlaubt, am betroffenen Cut-Plan-Item (oft Closing Shot) ein Ordner-Asset "
-        "manuell einzusetzen. Danach bitte erneut „Cut Plan validieren“."
+        "Je Black-Gap: Auslöser + Asset aus dem Ordner wählen. "
+        "✅ = Länge reicht voraussichtlich, ⚠️ = vermutlich zu kurz. "
+        "Nach Übernahme erscheint hier eine Erfolgs-/Fehlermeldung — danach „Cut Plan validieren“. "
+        "Hinweis: Die Voice-over-Audiospur endet oft etwas nach dem letzten Wort; "
+        "das Bild muss diese Zeit mit abdecken."
     )
 
     for index, error in enumerate(black_gaps):
         gap_label = (
             f"{error.gap_start_sec:.2f}s–{error.gap_end_sec:.2f}s"
             if error.gap_end_sec > error.gap_start_sec
-            else "ohne Gap-Zeiten"
+            else "Gap-Zeiten nach Validierung unvollständig"
         )
         title = error.cut_item_id or "(ohne Item-Zuordnung)"
         with st.expander(
             f"🔴 {title} — {gap_label} — {error.folder_name or error.scope}",
-            expanded=index == 0,
+            expanded=True,
         ):
             st.write(error.message)
             if error.fix_hint:
                 st.caption(f"Hinweis: {error.fix_hint}")
 
+            target_item = next(
+                (entry for entry in draft.items if entry.cut_item_id == error.cut_item_id),
+                None,
+            )
             diagnosis = None
             if error.gap_end_sec > error.gap_start_sec:
-                item = next(
-                    (entry for entry in draft.items if entry.cut_item_id == error.cut_item_id),
-                    None,
-                )
                 diagnosis = diagnose_section_pause_hold_failure(
                     draft,
                     error.gap_start_sec,
                     error.gap_end_sec,
-                    responsible_item=item,
+                    responsible_item=target_item,
                 )
                 st.info(
                     f"**Diagnose:** {diagnosis.summary}\n\n"
@@ -1509,6 +1554,17 @@ def _render_black_gap_manual_repair(project: Project, draft: CutPlanDocument) ->
                     f"{'∞ (Bild)' if diagnosis.usable_extend_sec is None and diagnosis.hold_candidate_asset_type == 'image' else (f'{diagnosis.usable_extend_sec:.2f}s' if diagnosis.usable_extend_sec is not None else '—')}\n"
                     f"- Fehlgrund: `{diagnosis.failure_reason}`"
                 )
+            elif target_item is not None:
+                seg_dur = sum(segment.duration_sec for segment in target_item.planned_visual_segments)
+                st.info(
+                    f"**Diagnose (Satz-Loch):** Item braucht ca. **{target_item.duration_sec:.2f}s** Bild. "
+                    f"Aktuell gewählt: `{target_item.chosen_asset_id or '—'}` "
+                    f"({target_item.asset_selection_status}), "
+                    f"Segmentdauer summiert {seg_dur:.2f}s. "
+                    f"Warnings: {', '.join(target_item.warnings) or '—'}. "
+                    "Typische Ursache: Generic Fallback / Clip zu kurz für die "
+                    "Voice-over-Zeit dieses Satzes (Audio kann etwas über das letzte Wort hinausreichen)."
+                )
 
             target_cut_item_id = error.cut_item_id or (
                 diagnosis.responsible_cut_item_id if diagnosis is not None else ""
@@ -1517,10 +1573,11 @@ def _render_black_gap_manual_repair(project: Project, draft: CutPlanDocument) ->
                 st.warning("Keine Item-Zuordnung — manueller Tausch hier nicht möglich.")
                 continue
 
-            target_item = next(
-                (entry for entry in draft.items if entry.cut_item_id == target_cut_item_id),
-                None,
-            )
+            if target_item is None:
+                target_item = next(
+                    (entry for entry in draft.items if entry.cut_item_id == target_cut_item_id),
+                    None,
+                )
             if target_item is None or not target_item.folder_name:
                 st.warning(f"Item `{target_cut_item_id}` hat keinen Ordner für Inventory-Auswahl.")
                 continue
@@ -1538,8 +1595,20 @@ def _render_black_gap_manual_repair(project: Project, draft: CutPlanDocument) ->
                 st.warning("Kein Asset im Ordner-Inventory gefunden.")
                 continue
 
+            options = sorted(options, key=lambda option: (not option.likely_usable, -option.duration_sec))
+            usable_count = sum(1 for option in options if option.likely_usable)
+            st.caption(
+                f"Benötigte Länge: **{needed:.2f}s** — "
+                f"{usable_count}/{len(options)} Assets im Ordner sind voraussichtlich lang genug."
+            )
+            if usable_count == 0:
+                st.warning(
+                    "Kein Ordner-Asset ist lang genug. Übernahme eines ⚠️-Assets schlägt mit "
+                    "„Asset zu kurz“ fehl — bitte Stock/Supplement oder längeres Material nutzen."
+                )
+
             labels = [
-                f"{'✅' if option.likely_usable else '⚠️'} {option.asset_id} "
+                f"{'✅' if option.likely_usable else '⚠️ zu kurz'} {option.asset_id} "
                 f"({option.media_type}, {option.duration_sec:.1f}s) — {option.description[:60]}"
                 for option in options
             ]
@@ -1549,6 +1618,11 @@ def _render_black_gap_manual_repair(project: Project, draft: CutPlanDocument) ->
                 key=f"cut_plan_black_gap_manual_select_{project.id}_{target_cut_item_id}_{index}",
             )
             selected = options[labels.index(selected_label)]
+            if not selected.likely_usable:
+                st.warning(
+                    f"`{selected.asset_id}` ist nur {selected.duration_sec:.1f}s lang, "
+                    f"benötigt werden ≥ {needed:.2f}s — Übernahme wird voraussichtlich abgelehnt."
+                )
             if st.button(
                 "Asset in Cut Plan übernehmen",
                 key=f"cut_plan_black_gap_manual_apply_{project.id}_{target_cut_item_id}_{index}",
@@ -1563,13 +1637,22 @@ def _render_black_gap_manual_repair(project: Project, draft: CutPlanDocument) ->
                         needed_duration_sec=needed,
                     )
                 except ValueError as exc:
-                    st.error(str(exc))
+                    st.session_state[feedback_key] = {
+                        "level": "error",
+                        "text": (
+                            f"Übernahme fehlgeschlagen für `{target_cut_item_id}` ← `{selected.asset_id}`: "
+                            f"{exc}"
+                        ),
+                    }
                 else:
-                    st.success(
-                        f"`{selected.asset_id}` auf `{target_cut_item_id}` übernommen. "
-                        "Bitte Cut Plan erneut validieren."
-                    )
-                    st.rerun()
+                    st.session_state[feedback_key] = {
+                        "level": "success",
+                        "text": (
+                            f"Übernommen: `{selected.asset_id}` → `{target_cut_item_id}` "
+                            f"(Ordner „{target_item.folder_name}“). Bitte jetzt „Cut Plan validieren“."
+                        ),
+                    }
+                st.rerun()
 
 
 def _render_residual_gap_requests(project: Project, draft: CutPlanDocument) -> None:
