@@ -1202,3 +1202,259 @@ def test_timeline_item_clip_arches_style_jpeg_not_collapsed_to_one_frame(tmp_pat
 
     assert track[0].source_range.duration.to_seconds() == pytest.approx(18.62, abs=0.02)
     assert track[0].source_range.duration.to_seconds() > 1.0
+
+
+def test_collect_timeline_media_issues_marks_video_as_repairable(tmp_path: Path) -> None:
+    from otio_app.services.otio_exporter import collect_timeline_media_issues
+
+    project = _project(tmp_path)
+    folder = project.project_root_path / "Florida Keys"
+    folder.mkdir(parents=True, exist_ok=True)
+    clip = folder / "clip.mp4"
+    clip.write_bytes(b"x")
+    item = TimelineItem(
+        timeline_item_id="seg_1",
+        type="video_shot",
+        section_id="s",
+        folder_name="Florida Keys",
+        resolved_media_path=str(clip),
+        original_asset_path=str(clip),
+        timeline_in_sec=0.0,
+        timeline_out_sec=2.0,
+        duration_sec=2.0,
+        final_duration_sec=2.0,
+    )
+    with patch(
+        "otio_app.services.otio_exporter.validate_clean_output",
+        return_value=(False, "Clean-Datei nicht Resolve-freundlich (prores)"),
+    ):
+        issues = collect_timeline_media_issues(project, [item], strict=True)
+    assert len(issues) == 1
+    assert issues[0].repairable is True
+    assert "prores" in issues[0].message
+
+
+def test_collect_timeline_media_issues_titles_not_repairable(tmp_path: Path) -> None:
+    from otio_app.services.otio_exporter import collect_timeline_media_issues
+
+    project = _project(tmp_path)
+    item = TimelineItem(
+        timeline_item_id="title_1",
+        type="opening_title",
+        section_id="s",
+        folder_name="Florida Keys",
+        timeline_in_sec=0.0,
+        timeline_out_sec=2.0,
+        duration_sec=2.0,
+        final_duration_sec=2.0,
+    )
+    issues = collect_timeline_media_issues(project, [item], strict=True)
+    assert len(issues) == 1
+    assert issues[0].repairable is False
+
+
+def test_auto_repair_export_media_issues_force_transcodes_unique(tmp_path: Path) -> None:
+    from otio_app.analysis_models import CleanMediaEntry
+    from otio_app.services.clean_media import CLEAN_STATUS_CLEAN
+    from otio_app.services.otio_exporter import (
+        TimelineMediaIssue,
+        auto_repair_export_media_issues,
+    )
+
+    project = _project(tmp_path)
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    clean = tmp_path / "clip_clean.mov"
+    clean.write_bytes(b"clean")
+    issue_a = TimelineMediaIssue(
+        timeline_item_id="a",
+        folder_name="Florida Keys",
+        original_path=clip,
+        resolved_path=clip,
+        message="bad a",
+        repairable=True,
+    )
+    issue_b = TimelineMediaIssue(
+        timeline_item_id="b",
+        folder_name="Florida Keys",
+        original_path=clip,
+        resolved_path=clip,
+        message="bad b",
+        repairable=True,
+    )
+    calls: list[tuple] = []
+
+    def _persist(proj, folder, path, *, force_transcode=False):
+        calls.append((folder, path, force_transcode))
+        return CleanMediaEntry(
+            original_path=str(path),
+            clean_path=str(clean),
+            status=CLEAN_STATUS_CLEAN,
+        )
+
+    events: list = []
+    with patch(
+        "otio_app.services.clean_media.process_and_persist_media_file",
+        side_effect=_persist,
+    ):
+        notes, remaining = auto_repair_export_media_issues(
+            project,
+            [issue_a, issue_b],
+            progress_callback=events.append,
+        )
+    assert len(calls) == 1
+    assert calls[0][2] is True
+    assert remaining == []
+    assert any("Auto-Clean" in note for note in notes)
+    assert any(e.stage == "auto_clean" for e in events)
+
+
+def test_export_otio_timeline_auto_cleans_then_continues(tmp_path: Path) -> None:
+    from otio_app.analysis_models import CleanMediaEntry
+    from otio_app.services.clean_media import CLEAN_STATUS_CLEAN
+    from otio_app.services.edit_plan_validator import TimelineValidationResult, ValidationStatus
+    from otio_app.services.otio_exporter import (
+        MergedEditPlanResult,
+        TimelineMediaIssue,
+        export_otio_timeline,
+    )
+
+    project = _project(tmp_path)
+    project.work_dir_path.mkdir(parents=True, exist_ok=True)
+    clip = tmp_path / "bad.mp4"
+    clip.write_bytes(b"x")
+    clean = tmp_path / "bad_clean.mov"
+    clean.write_bytes(b"clean")
+    item = TimelineItem(
+        timeline_item_id="seg_1",
+        type="video_shot",
+        section_id="s",
+        folder_name="Florida Keys",
+        resolved_media_path=str(clip),
+        original_asset_path=str(clip),
+        timeline_in_sec=0.0,
+        timeline_out_sec=2.0,
+        duration_sec=2.0,
+        final_duration_sec=2.0,
+    )
+    issue = TimelineMediaIssue(
+        timeline_item_id="seg_1",
+        folder_name="Florida Keys",
+        original_path=clip,
+        resolved_path=clip,
+        message="seg_1: `bad.mp4` — Clean-Datei nicht Resolve-freundlich (prores)",
+        repairable=True,
+    )
+    merged = MergedEditPlanResult(
+        timeline_items=[item],
+        shots=[],
+        settings=EditPlanSettings(),
+        validation_status=ValidationStatus.OK.value,
+    )
+    stages: list[str] = []
+
+    with patch(
+        "otio_app.services.otio_exporter.validate_timeline_items",
+        return_value=TimelineValidationResult(
+            status=ValidationStatus.OK, errors=[], warnings=[]
+        ),
+    ), patch(
+        "otio_app.services.otio_exporter.ensure_opening_titles_rendered",
+        return_value=([item], []),
+    ), patch(
+        "otio_app.services.otio_exporter.validate_opening_titles",
+        return_value=TimelineValidationResult(
+            status=ValidationStatus.OK, errors=[], warnings=[]
+        ),
+    ), patch(
+        "otio_app.services.otio_exporter.collect_timeline_media_issues",
+        side_effect=[[issue], []],
+    ), patch(
+        "otio_app.services.clean_media.process_and_persist_media_file",
+        return_value=CleanMediaEntry(
+            original_path=str(clip),
+            clean_path=str(clean),
+            status=CLEAN_STATUS_CLEAN,
+        ),
+    ), patch(
+        "otio_app.services.otio_exporter.build_otio_timeline",
+        return_value=otio.schema.Timeline(name="t"),
+    ), patch(
+        "otio_app.services.otio_exporter.validate_otio_readback",
+        return_value=[],
+    ), patch(
+        "otio_app.services.otio_exporter.otio.adapters.write_to_file",
+    ), patch(
+        "otio_app.services.otio_exporter.otio.adapters.read_from_file",
+        return_value=otio.schema.Timeline(name="t"),
+    ):
+        result = export_otio_timeline(
+            project,
+            merged,
+            progress_callback=lambda e: stages.append(e.stage),
+        )
+    assert "auto_clean" in stages
+    assert any("Auto-Clean" in note for note in result.aspect_fill_notes)
+
+
+def test_export_otio_timeline_fails_when_auto_clean_still_broken(tmp_path: Path) -> None:
+    from otio_app.analysis_models import CleanMediaEntry
+    from otio_app.services.clean_media import CLEAN_STATUS_FAILED
+    from otio_app.services.edit_plan_validator import TimelineValidationResult, ValidationStatus
+    from otio_app.services.otio_exporter import (
+        MergedEditPlanResult,
+        TimelineMediaIssue,
+        export_otio_timeline,
+    )
+
+    project = _project(tmp_path)
+    project.work_dir_path.mkdir(parents=True, exist_ok=True)
+    clip = tmp_path / "bad.mp4"
+    clip.write_bytes(b"x")
+    item = TimelineItem(
+        timeline_item_id="seg_1",
+        type="video_shot",
+        section_id="s",
+        folder_name="Florida Keys",
+        resolved_media_path=str(clip),
+        original_asset_path=str(clip),
+        timeline_in_sec=0.0,
+        timeline_out_sec=2.0,
+        duration_sec=2.0,
+        final_duration_sec=2.0,
+    )
+    issue = TimelineMediaIssue(
+        timeline_item_id="seg_1",
+        folder_name="Florida Keys",
+        original_path=clip,
+        resolved_path=clip,
+        message="seg_1: `bad.mp4` — nicht Resolve-ready",
+        repairable=True,
+    )
+    merged = MergedEditPlanResult(
+        timeline_items=[item],
+        shots=[],
+        settings=EditPlanSettings(),
+        validation_status=ValidationStatus.OK.value,
+    )
+    with patch(
+        "otio_app.services.otio_exporter.ensure_opening_titles_rendered",
+        return_value=([item], []),
+    ), patch(
+        "otio_app.services.otio_exporter.validate_opening_titles",
+        return_value=TimelineValidationResult(
+            status=ValidationStatus.OK, errors=[], warnings=[]
+        ),
+    ), patch(
+        "otio_app.services.otio_exporter.collect_timeline_media_issues",
+        return_value=[issue],
+    ), patch(
+        "otio_app.services.clean_media.process_and_persist_media_file",
+        return_value=CleanMediaEntry(
+            original_path=str(clip),
+            status=CLEAN_STATUS_FAILED,
+            error="ffmpeg failed",
+        ),
+    ):
+        with pytest.raises(ValueError, match="Auto-Clean-Versuch"):
+            export_otio_timeline(project, merged)

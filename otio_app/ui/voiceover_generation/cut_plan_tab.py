@@ -3429,7 +3429,11 @@ def _render_otio_export_readiness(project: Project) -> None:
             key=f"cut_plan_otio_export_run_{project.id}",
             type="primary",
             disabled=job_running or not export_folder_names,
-            help="Startet merge + export_otio_timeline im Hintergrund mit Clip-Fortschritt.",
+            help=(
+                "Startet merge + export_otio_timeline im Hintergrund. "
+                "Nicht Resolve-fähige Videos werden automatisch per Clean Media "
+                "(Force-Transcode) repariert und der Export fortgesetzt."
+            ),
         ):
             started = manager.start(
                 project,
@@ -3502,6 +3506,8 @@ def _render_otio_export_finished_panel(project: Project, state) -> None:
         for note in state.aspect_fill_notes:
             if "Letterboxing" in note or "fehlgeschlagen" in note or "nicht lesbar" in note:
                 st.warning(note)
+            elif "Auto-Clean" in note:
+                st.info(note)
             else:
                 st.caption(f"• {note}")
     elif state.status == OtioExportJobStatus.CANCELLED:
