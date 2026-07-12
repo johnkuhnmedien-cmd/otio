@@ -105,13 +105,14 @@ from otio_app.project_layout import (
     get_production_edit_plan_voice_folder_mapping_patch_path,
     resolve_otio_export_path,
 )
-from otio_app.services.otio_export_settings import load_otio_export_settings
 from otio_app.services.otio_export_debug import (
     build_otio_export_merge_debug_report,
     render_otio_export_merge_debug_lines,
-    save_otio_export_merge_debug_report,
 )
-from otio_app.services.otio_exporter import export_otio_timeline, merge_confirmed_edit_plans
+from otio_app.services.otio_export_job import JobStatus as OtioExportJobStatus
+from otio_app.services.otio_export_job import get_otio_export_job_manager
+from otio_app.services.otio_exporter import MergedEditPlanResult
+from otio_app.ui.polling import poll_while_running
 from otio_app.services.supplement_search import build_keyword_query
 from otio_app.services.supplement_sources import get_provider_readiness
 from otio_app.services.voiceover_generation.model_settings_service import (
@@ -3367,7 +3368,9 @@ def _render_otio_export_readiness(project: Project) -> None:
     st.markdown("**OTIO exportieren**")
     st.caption(
         f"{len(ready_folders)} READY-Folder werden zusammengeführt "
-        f"(gleiche Pipeline wie „③ Schnittplan → 📤 OTIO Export“)."
+        f"(gleiche Pipeline wie „③ Schnittplan → 📤 OTIO Export“). "
+        "Export läuft im Hintergrund — Clip-Fortschritt und Abbrechen möglich. "
+        "Erneuter Start setzt bei bereits transkodierten Medien fort (Cache)."
     )
 
     default_basename = default_otio_export_basename(
@@ -3385,70 +3388,129 @@ def _render_otio_export_readiness(project: Project) -> None:
     export_path = resolve_otio_export_path(project.work_dir_path, basename=export_basename)
     st.caption(f"Ziel: `{export_path}`")
 
-    if st.button(
-        "OTIO exportieren",
-        key=f"cut_plan_otio_export_run_{project.id}",
-        type="primary",
-        help="Führt merge_confirmed_edit_plans + export_otio_timeline für die READY-Folder aus.",
-    ):
-        progress = st.progress(0.0, text="Export startet…")
-        status = st.empty()
-        try:
-            status.info("Schnittpläne zusammenführen…")
-            progress.progress(0.15, text="Schnittpläne zusammenführen…")
-            merged = merge_confirmed_edit_plans(project, folder_names=ready_folders)
-            if not merged.ready:
-                progress.progress(1.0, text="Export blockiert")
-                debug = build_otio_export_merge_debug_report(merged)
-                try:
-                    debug_path = save_otio_export_merge_debug_report(project.work_dir_path, debug)
-                except OSError:
-                    debug_path = None
-                st.error(
-                    "Export blockiert — Merge meldet Probleme "
-                    f"({debug.issue_count} Issues, Status {debug.validation_status})."
-                )
-                if debug.cut_plan_relaxed_folders:
-                    st.info(
-                        "Cut-Plan-Validierungsmodus war aktiv für: "
-                        + ", ".join(debug.cut_plan_relaxed_folders)
-                    )
-                with st.expander("Export-Debug (kategorisiert)", expanded=True):
-                    for note in debug.analysis_notes:
-                        st.caption(f"Analyse: {note}")
-                    for category, items in sorted(debug.issues_by_category.items()):
-                        st.markdown(f"**{category}** ({len(items)})")
-                        for issue in items[:12]:
-                            st.write(f"• `{issue.folder}`: {issue.message}")
-                        if len(items) > 12:
-                            st.caption(f"… +{len(items) - 12} weitere in dieser Kategorie")
-                    if debug_path is not None:
-                        st.caption(f"Debug-Artefakt: `{debug_path}`")
-                    st.code("\n".join(render_otio_export_merge_debug_lines(debug)), language="text")
-                return
+    manager = get_otio_export_job_manager()
+    job_running = manager.is_running(project.id)
 
-            progress.progress(0.45, text="Medien prüfen und OTIO schreiben…")
-            status.info("Medien prüfen und OTIO schreiben…")
-            export_settings = load_otio_export_settings(project)
-            export_result = export_otio_timeline(
+    start_col, _ = st.columns([1, 2])
+    with start_col:
+        if st.button(
+            "OTIO exportieren",
+            key=f"cut_plan_otio_export_run_{project.id}",
+            type="primary",
+            disabled=job_running,
+            help="Startet merge + export_otio_timeline im Hintergrund mit Clip-Fortschritt.",
+        ):
+            started = manager.start(
                 project,
-                merged,
-                export_settings=export_settings,
-                output_path=export_path,
+                folder_names=ready_folders,
+                output_basename=export_basename,
             )
-            progress.progress(1.0, text="Export fertig")
-            status.success(f"Timeline exportiert: `{export_result.path}`")
-            for warning in merged.warnings:
-                if warning.startswith("Regel-Hinweis (Export trotzdem möglich):"):
-                    st.warning(warning)
-            for note in export_result.aspect_fill_notes:
-                if "Letterboxing" in note or "fehlgeschlagen" in note or "nicht lesbar" in note:
-                    st.warning(note)
-                else:
-                    st.caption(f"• {note}")
-        except (OSError, ValueError) as exc:
-            progress.progress(1.0, text="Export fehlgeschlagen")
-            status.error(str(exc))
+            if not started:
+                st.warning("OTIO-Export läuft bereits.")
+            st.rerun()
+
+    state = manager.get_state(project.id)
+    if state is None:
+        return
+
+    if state.status == OtioExportJobStatus.RUNNING:
+        poll_while_running(
+            lambda: _render_otio_export_running_panel(project),
+            lambda: manager.is_running(project.id),
+            refresh_key=f"cut_plan_otio_export_refresh_{project.id}",
+        )
+        return
+
+    _render_otio_export_finished_panel(project, state)
+
+
+def _render_otio_export_running_panel(project: Project) -> None:
+    manager = get_otio_export_job_manager()
+    state = manager.get_state(project.id)
+    if state is None or state.status != OtioExportJobStatus.RUNNING:
+        return
+
+    progress = st.progress(min(1.0, max(0.0, state.fraction)), text=state.message or "Export…")
+    if state.total > 0:
+        st.caption(f"Schritt {state.current}/{state.total}" + (f" · `{state.detail}`" if state.detail else ""))
+    elif state.detail:
+        st.caption(state.detail)
+    if state.folder:
+        st.caption(f"Ordner: **{state.folder}** · Phase: `{state.phase}`")
+    else:
+        st.caption(f"Phase: `{state.phase}`")
+
+    if state.cancel_requested:
+        st.warning("Abbruch angefordert — aktueller Clip wird noch beendet…")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("Stop", key=f"cut_plan_otio_export_stop_{project.id}"):
+            manager.request_cancel(project.id)
+            st.rerun()
+    with col2:
+        if st.button("Aktualisieren", key=f"cut_plan_otio_export_refresh_btn_{project.id}"):
+            st.rerun()
+    with col3:
+        if st.button("Job zurücksetzen", key=f"cut_plan_otio_export_reset_{project.id}"):
+            manager.force_reset(project.id)
+            st.rerun()
+
+    if state.log_lines:
+        with st.expander("Export-Log", expanded=True):
+            st.code("\n".join(state.log_lines[-40:]), language="text")
+    _ = progress
+
+
+def _render_otio_export_finished_panel(project: Project, state) -> None:
+    manager = get_otio_export_job_manager()
+    if state.status == OtioExportJobStatus.COMPLETED:
+        st.success(f"Timeline exportiert: `{state.output_path}`")
+        for warning in state.warnings:
+            st.warning(warning)
+        for note in state.aspect_fill_notes:
+            if "Letterboxing" in note or "fehlgeschlagen" in note or "nicht lesbar" in note:
+                st.warning(note)
+            else:
+                st.caption(f"• {note}")
+    elif state.status == OtioExportJobStatus.CANCELLED:
+        st.warning(
+            (state.error or "Export abgebrochen.")
+            + " Erneuter Start setzt bei bereits transkodierten Medien fort."
+        )
+    elif state.status == OtioExportJobStatus.BLOCKED:
+        st.error(state.error or "Export blockiert.")
+        if state.debug_path:
+            st.caption(f"Debug-Artefakt: `{state.debug_path}`")
+        if state.warnings:
+            from otio_app.analysis_models import EditPlanSettings
+
+            debug = build_otio_export_merge_debug_report(
+                MergedEditPlanResult(
+                    timeline_items=[],
+                    shots=[],
+                    settings=EditPlanSettings(),
+                    warnings=list(state.warnings),
+                    validation_status="BLOCKED",
+                )
+            )
+            with st.expander("Export-Debug (kategorisiert)", expanded=True):
+                for note in debug.analysis_notes:
+                    st.caption(f"Analyse: {note}")
+                for category, items in sorted(debug.issues_by_category.items()):
+                    st.markdown(f"**{category}** ({len(items)})")
+                    for issue in items[:12]:
+                        st.write(f"• `{issue.folder}`: {issue.message}")
+                st.code("\n".join(render_otio_export_merge_debug_lines(debug)), language="text")
+    elif state.status == OtioExportJobStatus.FAILED:
+        st.error(state.error or "Export fehlgeschlagen")
+        if state.log_lines:
+            with st.expander("Export-Log", expanded=False):
+                st.code("\n".join(state.log_lines[-40:]), language="text")
+
+    if st.button("Ergebnis ausblenden", key=f"cut_plan_otio_export_dismiss_{project.id}"):
+        manager.dismiss(project.id)
+        st.rerun()
 
 
 _WORKFLOW_STATUS_ICONS: dict[str, str] = {

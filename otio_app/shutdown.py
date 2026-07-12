@@ -33,11 +33,13 @@ def request_shutdown(*, hard_exit_delay: float = 1.0) -> None:
 def cancel_all_background_jobs() -> None:
     from otio_app.services.asset_analysis_job import get_asset_analysis_job_manager
     from otio_app.services.clean_media_job import get_clean_media_job_manager
+    from otio_app.services.otio_export_job import get_otio_export_job_manager
     from otio_app.services.voice_analysis_job import get_voice_analysis_job_manager
 
     get_clean_media_job_manager().cancel_all_running()
     get_voice_analysis_job_manager().cancel_all_running()
     get_asset_analysis_job_manager().cancel_all_running()
+    get_otio_export_job_manager().cancel_all_running()
 
 
 def _handle_signal(signum: int, frame) -> None:  # noqa: ARG001

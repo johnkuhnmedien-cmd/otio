@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -67,6 +68,58 @@ from otio_app.services.voiceover_generation.production_edit_plan_validation impo
     is_known_cut_plan_validator_incompatibility,
     relaxed_validation_settings_for_cut_plan,
 )
+
+
+@dataclass(frozen=True)
+class OtioExportProgressEvent:
+    """Fortschritt für OTIO-Export (UI / Background-Job)."""
+
+    stage: str
+    message: str
+    fraction: float
+    current: int = 0
+    total: int = 0
+    folder: str = ""
+    detail: str = ""
+
+
+OtioExportProgressCallback = Callable[[OtioExportProgressEvent], None]
+OtioExportCancelCheck = Callable[[], bool]
+
+
+class OtioExportCancelled(Exception):
+    """Export wurde vom Nutzer abgebrochen."""
+
+
+def _emit_export_progress(
+    callback: OtioExportProgressCallback | None,
+    *,
+    stage: str,
+    message: str,
+    fraction: float,
+    current: int = 0,
+    total: int = 0,
+    folder: str = "",
+    detail: str = "",
+) -> None:
+    if callback is None:
+        return
+    callback(
+        OtioExportProgressEvent(
+            stage=stage,
+            message=message,
+            fraction=max(0.0, min(1.0, fraction)),
+            current=current,
+            total=total,
+            folder=folder,
+            detail=detail,
+        )
+    )
+
+
+def _raise_if_export_cancelled(should_cancel: OtioExportCancelCheck | None) -> None:
+    if should_cancel is not None and should_cancel():
+        raise OtioExportCancelled("OTIO-Export abgebrochen.")
 
 
 @dataclass(frozen=True)
@@ -974,6 +1027,8 @@ def build_otio_timeline(
     merged: MergedEditPlanResult,
     *,
     export_settings: OtioExportSettings | None = None,
+    progress_callback: OtioExportProgressCallback | None = None,
+    should_cancel: OtioExportCancelCheck | None = None,
 ) -> otio.schema.Timeline:
     """Erzeugt OTIO nur aus expliziten Timeline-Items — ohne Regeländerungen.
 
@@ -1014,7 +1069,20 @@ def build_otio_timeline(
 
     video_track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
     timing_notes: list[str] = []
+    total_clips = len(v1_items)
     for index, item in enumerate(v1_items, start=1):
+        _raise_if_export_cancelled(should_cancel)
+        media_name = Path(item.resolved_media_path or item.original_asset_path or "").name
+        _emit_export_progress(
+            progress_callback,
+            stage="build_clip",
+            message=f"Clip {index}/{total_clips}: {item.folder_name}",
+            fraction=0.2 + 0.7 * ((index - 1) / max(1, total_clips)),
+            current=index,
+            total=total_clips,
+            folder=item.folder_name,
+            detail=media_name or item.timeline_item_id,
+        )
         _append_timeline_item_clip(
             video_track,
             item,
@@ -1039,9 +1107,18 @@ def build_otio_timeline(
     seen_voices: set[str] = set()
     audio_index = 1
     for section in sections:
+        _raise_if_export_cancelled(should_cancel)
         if section.voice_file in seen_voices:
             continue
         seen_voices.add(section.voice_file)
+        _emit_export_progress(
+            progress_callback,
+            stage="build_audio",
+            message=f"Audio: {section.folder}",
+            fraction=0.9,
+            folder=section.folder,
+            detail=Path(section.voice_file).name,
+        )
         _append_aligned_voice_track(
             timeline,
             section,
@@ -1082,6 +1159,25 @@ def _first_outro_start_sec(items: list[TimelineItem]) -> float | None:
     return min(outros) if outros else None
 
 
+def _embedded_audio_start_sec(clip: otio.schema.Clip, *, default_rate: float = 25.0) -> float:
+    """Eingebetteter Datei-Start (available_range / Probe) — Writer addiert ihn zu source_in."""
+    media_ref = getattr(clip, "media_reference", None)
+    available = getattr(media_ref, "available_range", None) if media_ref is not None else None
+    if available is not None:
+        try:
+            return float(available.start_time.to_seconds())
+        except Exception:
+            pass
+    target_url = getattr(media_ref, "target_url", None) if media_ref is not None else None
+    if target_url:
+        try:
+            timing = probe_media_timing(_resolve_media_path(str(target_url)), default_rate=default_rate)
+            return float(timing.start_sec)
+        except Exception:
+            return 0.0
+    return 0.0
+
+
 def validate_otio_readback(
     timeline: otio.schema.Timeline,
     *,
@@ -1096,6 +1192,12 @@ def validate_otio_readback(
         for track in timeline.tracks
         if track.kind == otio.schema.TrackKind.Audio
     ]
+    default_rate = 25.0
+    if timeline.global_start_time is not None:
+        try:
+            default_rate = float(timeline.global_start_time.rate) or 25.0
+        except Exception:
+            default_rate = 25.0
 
     for section_index, section in enumerate(sections):
         voiceover = section.voiceover
@@ -1110,6 +1212,7 @@ def validate_otio_readback(
         voice_duration = 0.0
         voice_timeline_start = expected_start
         voice_timeline_end = expected_start
+        embedded_start = 0.0
 
         if section_index < len(audio_tracks):
             track = audio_tracks[section_index]
@@ -1124,10 +1227,18 @@ def validate_otio_readback(
                         voice_source_in = child.source_range.start_time.to_seconds()
                         voice_duration = child.source_range.duration.to_seconds()
                         voice_timeline_end = cursor + voice_duration
+                    embedded_start = _embedded_audio_start_sec(child, default_rate=default_rate)
                     cursor += voice_duration
 
-        if abs(voice_source_in) > 0.001:
-            errors.append(f"voiceover_source_in_sec={voice_source_in:.3f}, erwartet 0.0")
+        # Writer: source_range.start = embedded_start + voiceover.source_in_sec
+        # (z. B. MP3 priming / SMPTE 0.025s). Readback prüft den logischen Trim.
+        logical_source_in = voice_source_in - embedded_start
+        expected_logical = float(voiceover.source_in_sec)
+        if abs(logical_source_in - expected_logical) > 0.05:
+            detail = f"voiceover_source_in_sec={logical_source_in:.3f}, erwartet {expected_logical:.3f}"
+            if abs(embedded_start) > 0.0005:
+                detail += f" (embedded_start={embedded_start:.3f}, raw={voice_source_in:.3f})"
+            errors.append(detail)
         if abs(voice_timeline_start - expected_start) > 0.1:
             errors.append(
                 f"voiceover_timeline_start_sec={voice_timeline_start:.2f}, "
@@ -1177,7 +1288,7 @@ def validate_otio_readback(
         reports.append(
             OtioReadbackReport(
                 voiceover_timeline_start_sec=round(voice_timeline_start, 4),
-                voiceover_source_in_sec=round(voice_source_in, 4),
+                voiceover_source_in_sec=round(logical_source_in, 4),
                 voiceover_duration_sec=round(voice_duration, 4),
                 voiceover_timeline_end_sec=round(voice_timeline_end, 4),
                 expected_voiceover_timeline_end_sec=round(expected_end, 4),
@@ -1208,6 +1319,8 @@ def export_otio_timeline(
     *,
     output_path: Path | None = None,
     export_settings: OtioExportSettings | None = None,
+    progress_callback: OtioExportProgressCallback | None = None,
+    should_cancel: OtioExportCancelCheck | None = None,
 ) -> OtioExportResult:
     """Schreibt die zusammengeführte Timeline als .otio-Datei."""
     if not merged.ready:
@@ -1216,9 +1329,16 @@ def export_otio_timeline(
             + "; ".join(merged.warnings[:5])
         )
 
+    _raise_if_export_cancelled(should_cancel)
     settings = export_settings or load_otio_export_settings(project)
     save_otio_export_settings(project, settings)
 
+    _emit_export_progress(
+        progress_callback,
+        stage="titles",
+        message="Opening Titles rendern…",
+        fraction=0.12,
+    )
     rendered_items, _render_notes = ensure_opening_titles_rendered(project, merged.timeline_items)
     merged = MergedEditPlanResult(
         timeline_items=rendered_items,
@@ -1247,6 +1367,13 @@ def export_otio_timeline(
         details = "; ".join(post_render_validation.errors[:5])
         raise ValueError(f"Opening-Title-Validierung nach Render fehlgeschlagen: {details}")
 
+    _raise_if_export_cancelled(should_cancel)
+    _emit_export_progress(
+        progress_callback,
+        stage="media_check",
+        message="Medienpfade prüfen…",
+        fraction=0.18,
+    )
     media_issues = verify_timeline_media_paths(project, merged.timeline_items, strict=True)
     if media_issues:
         preview = "\n".join(f"• {line}" for line in media_issues[:12])
@@ -1256,12 +1383,32 @@ def export_otio_timeline(
             f"{preview}{extra}"
         )
 
-    timeline = build_otio_timeline(project, merged, export_settings=settings)
+    timeline = build_otio_timeline(
+        project,
+        merged,
+        export_settings=settings,
+        progress_callback=progress_callback,
+        should_cancel=should_cancel,
+    )
+    _raise_if_export_cancelled(should_cancel)
     path = output_path or get_otio_export_path(project.work_dir_path, project.name)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _emit_export_progress(
+        progress_callback,
+        stage="write",
+        message="OTIO-Datei schreiben…",
+        fraction=0.93,
+        detail=path.name,
+    )
     otio.adapters.write_to_file(timeline, str(path))
     aspect_notes = list(timeline.metadata.get("aspect_fill_notes", []))
 
+    _emit_export_progress(
+        progress_callback,
+        stage="readback",
+        message="OTIO Readback prüfen…",
+        fraction=0.97,
+    )
     readback_timeline = otio.adapters.read_from_file(str(path))
     sections = _compute_timeline_sections(
         merged.timeline_items,
@@ -1295,11 +1442,25 @@ def export_otio_timeline(
 
     failed = [report for report in readback_reports if not report.ok]
     if failed:
-        details = "; ".join(
-            f"{report.errors[0]}" for report in failed if report.errors
-        )
-        raise ValueError(f"OTIO Readback fehlgeschlagen: {details}")
+        # Deduplizieren — sonst 37× dieselbe Meldung in der UI
+        unique_errors: list[str] = []
+        seen: set[str] = set()
+        for report in failed:
+            for err in report.errors:
+                if err not in seen:
+                    seen.add(err)
+                    unique_errors.append(err)
+        details = "; ".join(unique_errors[:8])
+        extra = f" (+{len(unique_errors) - 8} weitere)" if len(unique_errors) > 8 else ""
+        raise ValueError(f"OTIO Readback fehlgeschlagen: {details}{extra}")
 
+    _emit_export_progress(
+        progress_callback,
+        stage="done",
+        message="Export fertig",
+        fraction=1.0,
+        detail=str(path),
+    )
     return OtioExportResult(
         path=path,
         aspect_fill_notes=aspect_notes,

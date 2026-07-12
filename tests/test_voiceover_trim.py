@@ -382,3 +382,46 @@ def test_all_video_assets_keep_source_in_half_second(tmp_path: Path) -> None:
     for item in video_items:
         assert item.source_in_sec == pytest.approx(0.5)
     assert voiceover.source_in_sec == 0.0
+
+
+def test_otio_readback_accepts_embedded_audio_start() -> None:
+    """MP3/Encoder-Priming (z. B. 0.025s) landet in source_range.start — Readback
+    muss den eingebetteten Start abziehen und logisches source_in=0 akzeptieren."""
+    from otio_app.services.otio_exporter import TimelineSection
+
+    voice = VoiceoverPlan(
+        path="/voice.mp3",
+        timeline_start_sec=0.0,
+        source_in_sec=0.0,
+        source_out_sec=10.0,
+        duration_sec=10.0,
+        timeline_end_sec=10.0,
+        duration_source="bridge_audio_plan",
+        trim_policy="disabled",
+    )
+    section = TimelineSection("/voice.mp3", "Antelope Canyon", 0.0, 12.0, voice)
+    timeline = otio.schema.Timeline(name="t")
+    timeline.global_start_time = otio.opentime.RationalTime.from_seconds(0, 25)
+    track = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
+    media = otio.schema.ExternalReference(
+        target_url="file:///voice.mp3",
+        available_range=otio.opentime.TimeRange(
+            start_time=otio.opentime.RationalTime.from_seconds(0.025, 25),
+            duration=otio.opentime.RationalTime.from_seconds(10.0, 25),
+        ),
+    )
+    clip = otio.schema.Clip(name="voice", media_reference=media)
+    clip.source_range = otio.opentime.TimeRange(
+        start_time=otio.opentime.RationalTime.from_seconds(0.025, 25),
+        duration=otio.opentime.RationalTime.from_seconds(10.0, 25),
+    )
+    track.append(clip)
+    timeline.tracks.append(track)
+    reports = validate_otio_readback(
+        timeline,
+        sections=[section],
+        items=[],
+        audio_offset_sec=0.0,
+    )
+    assert reports[0].ok, reports[0].errors
+    assert reports[0].voiceover_source_in_sec == pytest.approx(0.0, abs=0.01)
