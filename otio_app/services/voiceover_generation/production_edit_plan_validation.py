@@ -432,6 +432,26 @@ def _validate_timeline_items_explicit(
         return duration_cache[path_str]
 
     for item in items:
+        if item.type == "opening_title":
+            # Ordner-Titel: auf V2 erlaubt (Render erst beim Export).
+            # opening_title auf anderer Spur = ungültig (Regressionsschutz).
+            if item.track != "V2":
+                blockers.append(
+                    ProductionEditPlanValidationError(
+                        type=PRODUCTION_EDIT_PLAN_ERROR_TIMELINE_ITEM_TYPE_INVALID,
+                        severity=READINESS_SEVERITY_BLOCKER,
+                        scope="timeline",
+                        staging_section_id=section.staging_section_id,
+                        production_section_id=section.production_section_id,
+                        timeline_item_id=item.timeline_item_id,
+                        message=(
+                            f"{item.timeline_item_id}: opening_title muss auf Track V2 liegen "
+                            f"(ist {item.track!r})."
+                        ),
+                    )
+                )
+            continue
+
         def _blocker(error_type: str, message: str) -> None:
             blockers.append(
                 ProductionEditPlanValidationError(
@@ -483,9 +503,9 @@ def _validate_timeline_items_explicit(
                     f"tatsächliche Video-Dauer ({real_duration:.3f}s).",
                 )
 
-    # Timeline-Overlaps innerhalb derselben Sektion (V1 ist die einzige
-    # Visual-Spur, die Phase 10 erzeugt).
-    sorted_items = sorted(items, key=lambda entry: entry.timeline_in_sec)
+    # Timeline-Overlaps innerhalb derselben Sektion — nur V1-Visuals (kein opening_title).
+    v1_items = [item for item in items if item.type != "opening_title" and item.track != "V2"]
+    sorted_items = sorted(v1_items, key=lambda entry: entry.timeline_in_sec)
     for previous_item, next_item in zip(sorted_items, sorted_items[1:]):
         if next_item.timeline_in_sec + 0.02 < previous_item.timeline_out_sec:
             blockers.append(
@@ -507,6 +527,7 @@ def _validate_timeline_items_explicit(
         settings=settings,
         allow_black_outro=True,
         voiceover=voiceover,
+        # Titel werden beim Staging injiziert; Pflicht-Check erst beim OTIO-Export.
         opening_title_required=False,
         require_rendered_media=False,
         rules_doc=None,

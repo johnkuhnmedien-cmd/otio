@@ -511,6 +511,58 @@ def _render_settings_editor(project: Project) -> CutPlanSettings:
             key=f"cut_plan_height_{project.id}",
         )
 
+    st.markdown("##### Ordner-Titel einblenden")
+    folder_title_enabled = st.checkbox(
+        "Ordner-Titel einblenden (Opening Title / Lower Third)",
+        value=settings.folder_title_enabled,
+        key=f"cut_plan_folder_title_enabled_{project.id}",
+        help=(
+            "Erzeugt am Anfang jeder Ordner-Sektion einen Opening Title auf Spur V2 "
+            "(transparentes ProRes 4444). Intro bekommt keinen Titel. "
+            "Nach dem Speichern: Staging → Promote erneut ausführen, damit die Titel "
+            "in den Produktions-Schnittplänen landen."
+        ),
+    )
+    title_col1, title_col2, title_col3 = st.columns(3)
+    from otio_app.services.font_utils import FOLDER_TITLE_FONT_OPTIONS
+
+    font_options = list(FOLDER_TITLE_FONT_OPTIONS)
+    current_font = settings.folder_title_font
+    if current_font not in font_options:
+        font_options = [current_font, *font_options]
+    with title_col1:
+        folder_title_font = st.selectbox(
+            "Schriftart",
+            options=font_options,
+            index=font_options.index(current_font) if current_font in font_options else 0,
+            key=f"cut_plan_folder_title_font_{project.id}",
+            disabled=not folder_title_enabled,
+        )
+    with title_col2:
+        folder_title_duration_sec = st.number_input(
+            "Dauer (Sekunden)",
+            min_value=0.5,
+            max_value=30.0,
+            value=float(settings.folder_title_duration_sec),
+            step=0.5,
+            key=f"cut_plan_folder_title_duration_{project.id}",
+            disabled=not folder_title_enabled,
+        )
+    with title_col3:
+        folder_title_font_size = st.number_input(
+            "Schriftgröße (px, 0 = auto)",
+            min_value=0.0,
+            max_value=200.0,
+            value=float(settings.folder_title_font_size),
+            step=1.0,
+            key=f"cut_plan_folder_title_font_size_{project.id}",
+            disabled=not folder_title_enabled,
+        )
+    st.caption(
+        "Text = Ordnername (Unterstriche → Leerzeichen). Übersetzbare Titeltexte folgen später. "
+        "Titel werden beim OTIO-Export gerendert (Cache unter `_otio/generated_titles/`)."
+    )
+
     updated = settings.model_copy(
         update={
             "initial_audio_offset_sec": float(initial_audio_offset_sec),
@@ -528,6 +580,10 @@ def _render_settings_editor(project: Project) -> CutPlanSettings:
             "timeline_fps": int(timeline_fps),
             "timeline_width": int(timeline_width),
             "timeline_height": int(timeline_height),
+            "folder_title_enabled": bool(folder_title_enabled),
+            "folder_title_font": str(folder_title_font),
+            "folder_title_duration_sec": float(folder_title_duration_sec),
+            "folder_title_font_size": float(folder_title_font_size),
         }
     )
 

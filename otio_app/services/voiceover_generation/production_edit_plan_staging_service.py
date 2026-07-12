@@ -73,6 +73,53 @@ from otio_app.services.voiceover_generation.production_edit_plan_models import (
 )
 from otio_app.services.voiceover_generation.production_edit_plan_shots import synthesize_edit_plan_shots_for_section
 
+
+def _maybe_prepend_folder_opening_title(
+    project: Project,
+    *,
+    identity: SectionIdentity,
+    voiceover_path: str,
+    timeline_items: list[TimelineItem],
+) -> list[TimelineItem]:
+    """Fügt opening_title (V2) für Folder-Sektionen hinzu — Intro nie.
+
+    Liest CutPlanSettings.folder_title_*. Bereits vorhandene Titel werden
+    nicht verdoppelt (idempotent bei Re-Staging).
+    """
+    if identity.is_intro:
+        return list(timeline_items)
+    if any(item.type == "opening_title" for item in timeline_items):
+        return list(timeline_items)
+
+    from otio_app.services.opening_title_renderer import build_opening_title_item
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import load_cut_plan_settings
+
+    settings = load_cut_plan_settings(project)
+    if not settings.folder_title_enabled:
+        return list(timeline_items)
+
+    font_size = (
+        float(settings.folder_title_font_size)
+        if settings.folder_title_font_size and settings.folder_title_font_size > 0
+        else None
+    )
+    # folder_title_custom_text: vorbereitet für spätere Übersetzungen;
+    # leer = Ordner-Anzeigename (aktuelles Verhalten).
+    custom_text = (settings.folder_title_custom_text or "").strip() or None
+    title = build_opening_title_item(
+        folder_name=identity.folder_name,
+        voice_file=voiceover_path,
+        section_id=identity.production_section_id,
+        work_dir=project.work_dir_path,
+        project=project,
+        requested_font_family=settings.folder_title_font,
+        duration_sec=float(settings.folder_title_duration_sec),
+        font_size_px=font_size,
+        text=custom_text,
+    )
+    return [title, *timeline_items]
+
+
 __all__ = [
     "load_confirmed_bridge_inputs",
     "can_build_production_edit_plan_staging",
@@ -302,7 +349,17 @@ def _build_staging_artifacts(project: Project) -> tuple[ProductionEditPlanPackag
         if localized_items and not shots:
             section_blockers.append(PRODUCTION_EDIT_PLAN_ERROR_SHOT_SYNTHESIS_FAILED)
 
-        document = build_production_edit_plan_document_skeleton(project, identity, localized_items, voiceover_plan)
+        voice_path = voiceover_plan.path if voiceover_plan is not None else ""
+        document_items = _maybe_prepend_folder_opening_title(
+            project,
+            identity=identity,
+            voiceover_path=voice_path,
+            timeline_items=localized_items,
+        )
+
+        document = build_production_edit_plan_document_skeleton(
+            project, identity, document_items, voiceover_plan
+        )
         document = document.model_copy(update={"shots": shots})
 
         section_documents[identity.staging_section_id] = document
@@ -315,7 +372,7 @@ def _build_staging_artifacts(project: Project) -> tuple[ProductionEditPlanPackag
                 is_intro=identity.is_intro,
                 staged_edit_plan_path=str(staged_path),
                 shot_count=len(shots),
-                timeline_item_count=len(localized_items),
+                timeline_item_count=len(document_items),
                 has_voiceover=voiceover_plan is not None,
                 staged_edit_plan_hash=content_hash_of_model(document),
                 warnings=section_warnings,

@@ -935,6 +935,13 @@ CUT_PLAN_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS = 0
 CUT_PLAN_DEFAULT_TIMELINE_FPS = 25
 CUT_PLAN_DEFAULT_TIMELINE_WIDTH = 3840
 CUT_PLAN_DEFAULT_TIMELINE_HEIGHT = 2160
+# Ordner-Titel (Opening Title / Lower Third) für Without-VO / Cut-Plan-Pipeline.
+# Default aus: bestehende Projekte ändern sich nicht unbemerkt; Nutzer aktiviert wie in With-VO.
+CUT_PLAN_DEFAULT_FOLDER_TITLE_ENABLED = False
+CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT = "Phosphate"
+CUT_PLAN_DEFAULT_FOLDER_TITLE_DURATION_SEC = 5.0
+CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT_SIZE = 0.0  # 0 = auto aus Video-Höhe
+
 
 # CutPlanDocument.status
 CUT_PLAN_STATUS_DRAFT = "DRAFT"
