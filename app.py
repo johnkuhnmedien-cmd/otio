@@ -185,6 +185,8 @@ def _save_pending_project() -> None:
         asset_subdir_names=raw["available_assets"],
         selected_asset_subdirs=raw["selected_asset_subdirs"],
     )
+    # Editorial-Scope `_otio/{LANG}/` sofort anlegen.
+    _ = saved.language_work_dir_path
     _show_saved_project(saved)
 
 
