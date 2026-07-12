@@ -60,8 +60,7 @@ def _promoted_folder_names(promote_manifest) -> list[str]:
     return [
         section.folder_name
         for section in promote_manifest.sections
-        if not section.is_intro
-        and section.promote_action
+        if section.promote_action
         in {
             PRODUCTION_EDIT_PLAN_PROMOTE_RESULT_ACTION_CREATED,
             PRODUCTION_EDIT_PLAN_PROMOTE_RESULT_ACTION_OVERWRITTEN,

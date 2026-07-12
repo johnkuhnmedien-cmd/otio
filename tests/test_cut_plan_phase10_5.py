@@ -30,7 +30,6 @@ from otio_app.defaults import (
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_BLOCKED,
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_CREATE,
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_OVERWRITE,
-    PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_SKIP_INTRO,
     PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_BLOCKED,
     PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_NEEDS_REVIEW,
     PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_READY,
@@ -361,12 +360,14 @@ def test_detects_secret_leak(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 # --- 14-19: promote_action Klassifikation + Readiness-Status ---
 
 
-def test_intro_section_is_would_skip_intro(tmp_path: Path) -> None:
+def test_intro_section_is_would_create(tmp_path: Path) -> None:
     project = _happy_project(tmp_path)
     readiness = build_production_edit_plan_promote_readiness(project)
     intro_section = next(s for s in readiness.sections if s.staging_section_id == "000_intro")
-    assert intro_section.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_SKIP_INTRO
+    assert intro_section.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_CREATE
     assert intro_section.is_intro is True
+    assert intro_section.target_edit_plan_path.endswith("Intro.json")
+    assert intro_section.folder_name == "Intro"
 
 
 def test_folder_without_existing_plan_is_would_create(tmp_path: Path) -> None:
@@ -508,7 +509,7 @@ def test_dry_run_trace_would_write_and_would_overwrite_are_correct(tmp_path: Pat
     trace = build_production_edit_plan_promote_dry_run_trace(project, readiness)
 
     intro_entry = next(e for e in trace.entries if e.staging_section_id == "000_intro")
-    assert intro_entry.would_write is False
+    assert intro_entry.would_write is True
     assert intro_entry.would_overwrite is False
 
     folder_entry = next(e for e in trace.entries if e.folder_name == FOLDER_A)

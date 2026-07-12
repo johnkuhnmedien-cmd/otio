@@ -176,6 +176,18 @@ def _backup_existing_voice_folder_mapping(project: Project, merge_run_id: str, r
     return str(backup_json_path), backup_hash
 
 
+def _append_mapping_entry(
+    final_entries: list[VoiceFolderMappingEntry],
+    entry: VoiceFolderMappingEntry,
+) -> None:
+    """Intro muss am Anfang der Mapping-Reihenfolge stehen (Timeline-Start)."""
+    if entry.folder == "Intro":
+        final_entries[:] = [e for e in final_entries if e.folder != "Intro"]
+        final_entries.insert(0, entry)
+    else:
+        final_entries.append(entry)
+
+
 def merge_voice_folder_mapping(
     project: Project,
     *,
@@ -240,13 +252,15 @@ def merge_voice_folder_mapping(
                     )
                 )
                 continue
-            final_entries.append(
+            final_entries = [entry for entry in final_entries if entry.folder != folder]
+            _append_mapping_entry(
+                final_entries,
                 VoiceFolderMappingEntry(
                     voice_file=patch_entry.voiceover_path,
                     folder=folder,
                     match_method="production_promote",
                     confirmed=mark_entries_confirmed,
-                )
+                ),
             )
             added_count += 1
             results.append(
@@ -273,13 +287,14 @@ def merge_voice_folder_mapping(
         elif patch_entry.action == PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_NEEDS_REVIEW:
             if resolution == VOICE_FOLDER_MAPPING_MERGE_RESOLUTION_APPLY:
                 final_entries = [entry for entry in final_entries if entry.folder != folder]
-                final_entries.append(
+                _append_mapping_entry(
+                    final_entries,
                     VoiceFolderMappingEntry(
                         voice_file=patch_entry.voiceover_path,
                         folder=folder,
                         match_method="production_promote",
                         confirmed=mark_entries_confirmed,
-                    )
+                    ),
                 )
                 updated_count += 1
                 results.append(

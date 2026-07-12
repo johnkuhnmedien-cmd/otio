@@ -143,8 +143,7 @@ def _promote_stage(project: Project) -> PipelineStageOverview:
         status=manifest.status,
         is_stale=stale,
         detail=(
-            f"{manifest.created_count} erstellt, {manifest.overwritten_count} überschrieben, "
-            f"{manifest.skipped_intro_count} Intro übersprungen"
+            f"{manifest.created_count} erstellt, {manifest.overwritten_count} überschrieben"
         ),
     )
 

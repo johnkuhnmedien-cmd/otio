@@ -7,9 +7,9 @@ Dies ist die EINZIGE Stelle im gesamten "Projekt ohne Voice-Over"-Workflow,
 die nach `_otio/edit_plan/` schreiben darf — ausschließlich über
 `promote_production_edit_plans()`.
 
-Nur Nicht-Intro-Folder werden geschrieben. Intro bleibt bewusst SKIPPED,
-weil die bestehende Produktionspipeline kein natives Intro-Folder-Konzept
-hat (siehe `skipped_reason` in der Intro-Section des Manifests).
+Intro wird wie ein normaler Ordner „Intro“ nach `_otio/edit_plan/Intro.json`
+promotet und in den Voice-Folder-Mapping-Patch aufgenommen, damit es in
+Merge und OTIO-Export eingeht.
 
 Kein OTIO-Export, kein Render, kein Lock-Konzept, keine LLM-Planung, kein
 Aufruf der Save- oder Build-Funktionen der bestehenden Produktions-EditPlan-
@@ -52,7 +52,6 @@ from otio_app.defaults import (
     PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_BLOCKED,
     PRODUCTION_EDIT_PLAN_PROMOTE_RESULT_ACTION_CREATED,
     PRODUCTION_EDIT_PLAN_PROMOTE_RESULT_ACTION_OVERWRITTEN,
-    PRODUCTION_EDIT_PLAN_PROMOTE_RESULT_ACTION_SKIPPED_INTRO,
     PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_PASS,
 )
 from otio_app.models import Project
@@ -97,8 +96,6 @@ __all__ = [
     "load_voice_folder_mapping_patch",
     "is_production_edit_plan_promote_manifest_stale",
 ]
-
-_INTRO_SKIPPED_REASON = "Intro is synthetic and requires a later export/mapping strategy."
 
 
 def _promote_run_id() -> str:
@@ -296,21 +293,6 @@ def promote_production_edit_plans(
     sections_results: list[ProductionEditPlanPromoteSectionResult] = []
 
     for section in readiness.sections:
-        if section.is_intro:
-            sections_results.append(
-                ProductionEditPlanPromoteSectionResult(
-                    staging_section_id=section.staging_section_id,
-                    production_section_id=section.production_section_id,
-                    folder_name=section.folder_name,
-                    is_intro=True,
-                    source_staged_edit_plan_path=section.staged_edit_plan_path,
-                    promote_action=PRODUCTION_EDIT_PLAN_PROMOTE_RESULT_ACTION_SKIPPED_INTRO,
-                    source_hash=section.staged_edit_plan_hash,
-                    warnings=[_INTRO_SKIPPED_REASON],
-                )
-            )
-            continue
-
         document = load_staged_edit_plan(project, section.staging_section_id)
         target_path = _target_edit_plan_path_for_section(project, section)
         will_overwrite = (
@@ -377,7 +359,7 @@ def promote_production_edit_plans(
                 staging_section_id=section.staging_section_id,
                 production_section_id=section.production_section_id,
                 folder_name=section.folder_name,
-                is_intro=False,
+                is_intro=section.is_intro,
                 source_staged_edit_plan_path=section.staged_edit_plan_path,
                 target_edit_plan_path=str(target_path),
                 promote_action=action,
@@ -389,8 +371,6 @@ def promote_production_edit_plans(
             )
         )
 
-    skipped_intro_count = sum(1 for section in readiness.sections if section.is_intro)
-
     return ProductionEditPlanPromoteManifest(
         project_id=project.id,
         promote_run_id=promote_run_id,
@@ -401,7 +381,7 @@ def promote_production_edit_plans(
         sections=sections_results,
         created_count=created_count,
         overwritten_count=overwritten_count,
-        skipped_intro_count=skipped_intro_count,
+        skipped_intro_count=0,
         blocked_count=0,
         backup_dir=str(backup_dir_path) if backups else "",
     )
@@ -434,7 +414,7 @@ def build_voice_folder_mapping_patch(
     """Reine Funktion — liest ausschließlich bereits vorhandene Daten
     (Promote-Manifest, die soeben promoteten EditPlanDocuments,
     `voice_folder_mapping.json`). Verändert `voice_folder_mapping.json`
-    NICHT. Intro wird NICHT als normaler Folder-Eintrag aufgenommen."""
+    NICHT. Intro (Ordner „Intro“) wird wie andere Folder aufgenommen."""
     existing_mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
     existing_by_folder: dict[str, str] = {}
     if existing_mapping is not None:
@@ -446,8 +426,6 @@ def build_voice_folder_mapping_patch(
     warnings: list[str] = []
 
     for section_result in manifest.sections:
-        if section_result.is_intro:
-            continue
         if section_result.promote_action not in {
             PRODUCTION_EDIT_PLAN_PROMOTE_RESULT_ACTION_CREATED,
             PRODUCTION_EDIT_PLAN_PROMOTE_RESULT_ACTION_OVERWRITTEN,

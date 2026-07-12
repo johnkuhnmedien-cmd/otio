@@ -320,4 +320,4 @@ def test_promote_via_ui_writes_edit_plan_file(tmp_path: Path, monkeypatch: pytes
     at = promote_button.click().run()
     assert not at.exception, at.exception
     assert get_folder_edit_plan_path(project.work_dir_path, FOLDER_A).is_file()
-    assert not get_edit_plan_dir(project.work_dir_path).joinpath("Intro.json").is_file()
+    assert get_edit_plan_dir(project.work_dir_path).joinpath("Intro.json").is_file()

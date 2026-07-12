@@ -68,7 +68,6 @@ from otio_app.defaults import (
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_BLOCKED,
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_CREATE,
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_OVERWRITE,
-    PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_SKIP_INTRO,
     PRODUCTION_EDIT_PLAN_PROMOTE_MANIFEST_STATUS_BLOCKED,
     PRODUCTION_EDIT_PLAN_PROMOTE_MANIFEST_STATUS_NEEDS_REVIEW,
     PRODUCTION_EDIT_PLAN_PROMOTE_MANIFEST_STATUS_PROMOTED,
@@ -2485,13 +2484,11 @@ def _render_staged_edit_plan_preview(project: Project, section: object) -> None:
 def _render_production_plan_readonly_hint(project: Project, section: object) -> None:
     """Phase 10.4 §10: rein lesender Hinweis, ob für diese Sektion bereits ein
     Produktionsplan existiert — kein Blockieren, kein Merge, kein Schreiben."""
-    if section.is_intro:
-        st.caption("Intro ist eine synthetische Staging-Sektion und hat noch keinen Produktions-Zielpfad.")
-        return
     existing_path = get_folder_edit_plan_path(project.work_dir_path, section.folder_name)
     exists = existing_path.is_file()
+    intro_note = " Intro wird als Ordner „Intro“ nach `_otio/edit_plan/` promotet." if section.is_intro else ""
     st.caption(
-        f"Produktionsplan existiert bereits: {'✅ Ja' if exists else '❌ Nein'} (`{existing_path}`)"
+        f"Produktionsplan existiert bereits: {'✅ Ja' if exists else '❌ Nein'} (`{existing_path}`).{intro_note}"
     )
 
 
@@ -2840,9 +2837,7 @@ def _render_production_edit_plan_promote_readiness(
     would_overwrite = sum(
         1 for s in readiness.sections if s.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_OVERWRITE
     )
-    would_skip_intro = sum(
-        1 for s in readiness.sections if s.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_SKIP_INTRO
-    )
+    intro_sections = sum(1 for s in readiness.sections if s.is_intro)
     would_block = sum(
         1 for s in readiness.sections if s.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_BLOCKED
     )
@@ -2861,7 +2856,7 @@ def _render_production_edit_plan_promote_readiness(
     with col3:
         st.metric("WOULD_OVERWRITE", would_overwrite)
     with col4:
-        st.metric("WOULD_SKIP_INTRO", would_skip_intro)
+        st.metric("Intro", intro_sections)
 
     col5, col6, col7 = st.columns(3)
     with col5:
@@ -2965,9 +2960,7 @@ def _render_production_edit_plan_promote_execute(project: Project) -> None:
     would_overwrite_sections = [
         s for s in readiness.sections if s.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_OVERWRITE
     ]
-    would_skip_intro = sum(
-        1 for s in readiness.sections if s.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_SKIP_INTRO
-    )
+    intro_sections = sum(1 for s in readiness.sections if s.is_intro)
     would_block = sum(
         1 for s in readiness.sections if s.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_BLOCKED
     )
@@ -2980,7 +2973,7 @@ def _render_production_edit_plan_promote_execute(project: Project) -> None:
     with col3:
         st.metric("WOULD_OVERWRITE", len(would_overwrite_sections))
     with col4:
-        st.metric("WOULD_SKIP_INTRO", would_skip_intro)
+        st.metric("Intro", intro_sections)
     with col5:
         st.metric("BLOCKED", would_block)
 
@@ -3025,7 +3018,7 @@ def _render_production_edit_plan_promote_execute(project: Project) -> None:
         key=f"production_edit_plan_promote_execute_{project.id}",
         disabled=not eligible,
         type="primary",
-        help="Schreibt alle Nicht-Intro-Sections des validierten Staging-Pakets nach "
+        help="Schreibt alle Sections des validierten Staging-Pakets (inkl. Intro als Ordner „Intro“) nach "
         "_otio/edit_plan/{folder}.json (confirmed=true). Vor jedem Überschreiben wird ein Backup "
         "erzeugt. Kein OTIO-Export, kein Render, kein Lock. voice_folder_mapping.json wird nicht "
         "verändert — stattdessen wird ein Vorbereitungs-Patch geschrieben.",
@@ -3040,8 +3033,8 @@ def _render_production_edit_plan_promote_execute(project: Project) -> None:
                 save_voice_folder_mapping_patch(project, patch)
             st.success(
                 f"Promote abgeschlossen: {manifest.created_count} neu erstellt, "
-                f"{manifest.overwritten_count} überschrieben, {manifest.skipped_intro_count} Intro "
-                f"übersprungen. Backup-Verzeichnis: `{manifest.backup_dir or '—'}`. Manifest: "
+                f"{manifest.overwritten_count} überschrieben. Backup-Verzeichnis: "
+                f"`{manifest.backup_dir or '—'}`. Manifest: "
                 f"`{get_production_edit_plan_promote_manifest_path(project.work_dir_path)}`. "
                 f"Mapping Patch: `{get_production_edit_plan_voice_folder_mapping_patch_path(project.work_dir_path)}`."
             )
@@ -3075,7 +3068,7 @@ def _render_production_edit_plan_promote_execute(project: Project) -> None:
         with mcol4:
             st.metric("Overwritten", manifest.overwritten_count)
         with mcol5:
-            st.metric("Skipped Intro", manifest.skipped_intro_count)
+            st.metric("Sections", len(manifest.sections))
         st.metric("Blocked", manifest.blocked_count)
         st.caption(f"backup_dir: `{manifest.backup_dir or '—'}`")
 

@@ -338,7 +338,7 @@ def test_report_totals_are_correct(tmp_path: Path) -> None:
     report = build_otio_export_readiness_report(project)
     assert report.total_shots > 0
     assert report.total_timeline_items > 0
-    assert report.checked_folders == [FOLDER_A]
+    assert report.checked_folders == ["Intro", FOLDER_A]
 
 
 def test_unreadable_edit_plan_yields_warning_not_crash(tmp_path: Path) -> None:

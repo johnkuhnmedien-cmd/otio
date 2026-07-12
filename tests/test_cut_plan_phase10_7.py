@@ -309,7 +309,8 @@ def test_merge_adds_new_entry_for_would_add_folder(tmp_path: Path) -> None:
     merge_manifest = merge_voice_folder_mapping(project)
     mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
     assert any(entry.folder == FOLDER_A for entry in mapping.entries)
-    assert merge_manifest.added_count == 1
+    assert any(entry.folder == "Intro" for entry in mapping.entries)
+    assert merge_manifest.added_count == 2
 
 
 def test_merge_marks_entries_confirmed_only_when_requested(tmp_path: Path) -> None:
@@ -488,7 +489,7 @@ def test_needs_review_skip_keeps_existing_entry(tmp_path: Path) -> None:
 def test_manifest_counts_are_correct(tmp_path: Path) -> None:
     project, manifest, patch = _promoted_project_with_patch(tmp_path)
     merge_manifest = merge_voice_folder_mapping(project)
-    assert merge_manifest.added_count == 1
+    assert merge_manifest.added_count == 2
     assert merge_manifest.updated_count == 0
     assert merge_manifest.skipped_count == 0
     assert merge_manifest.status == VOICE_FOLDER_MAPPING_MERGE_MANIFEST_STATUS_MERGED
@@ -526,11 +527,13 @@ def test_unrelated_existing_entries_remain_untouched(tmp_path: Path) -> None:
     assert other_entry.confirmed is True
 
 
-def test_intro_never_appears_as_mapping_entry(tmp_path: Path) -> None:
+def test_intro_appears_as_first_mapping_entry(tmp_path: Path) -> None:
     project, manifest, patch = _promoted_project_with_patch(tmp_path)
     merge_voice_folder_mapping(project)
     mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
-    assert not any(entry.folder in ("Intro", "") for entry in mapping.entries)
+    intro_entries = [entry for entry in mapping.entries if entry.folder == "Intro"]
+    assert len(intro_entries) == 1
+    assert mapping.entries[0].folder == "Intro"
 
 
 # --- 20-24: Manifest speichern / laden / stale ---

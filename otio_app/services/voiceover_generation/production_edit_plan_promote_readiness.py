@@ -22,11 +22,11 @@ Promote ist (in einer künftigen Phase) nur zulässig, wenn:
   Shots, voiceover_audio-Leak, Secret-Leak, Mapping-Sanity-Blocker aus dem
   Package selbst)
 
-Jede Nicht-Intro-Section wird zusätzlich rein lesend gegen einen eventuell
-bereits existierenden Produktionsplan unter `_otio/edit_plan/{folder}.json`
-geprüft (WOULD_CREATE/WOULD_OVERWRITE) — Intro bleibt in dieser Phase immer
-WOULD_SKIP_INTRO (synthetische Sektion, kein normaler Produktions-Zielpfad,
-keine Änderung an `voice_folder_mapping.json`)."""
+Jede Section (inkl. Intro als Ordner „Intro“) wird zusätzlich rein lesend
+gegen einen eventuell bereits existierenden Produktionsplan unter
+`_otio/edit_plan/{folder}.json` geprüft (WOULD_CREATE/WOULD_OVERWRITE).
+Intro wird wie ein normaler Folder nach `_otio/edit_plan/Intro.json`
+promotet, damit es in Merge/OTIO-Export eingeht."""
 
 from __future__ import annotations
 
@@ -54,7 +54,6 @@ from otio_app.defaults import (
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_BLOCKED,
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_CREATE,
     PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_OVERWRITE,
-    PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_SKIP_INTRO,
     PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_BLOCKED,
     PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_NEEDS_REVIEW,
     PRODUCTION_EDIT_PLAN_PROMOTE_READINESS_STATUS_READY,
@@ -95,9 +94,6 @@ __all__ = [
     "load_production_edit_plan_promote_dry_run_trace",
     "is_production_edit_plan_promote_readiness_stale",
 ]
-
-_INTRO_SKIP_REASON = "Intro is a synthetic staging section and is not promoted to _otio/edit_plan/ in this phase."
-
 
 def _read_existing_production_plan(
     target_path: Path,
@@ -186,25 +182,6 @@ def _build_section_readiness(
     for leak in _scan_for_leaked_secrets(document):
         section_blockers.append(f"{PRODUCTION_EDIT_PLAN_ERROR_SECRET_LEAK_DETECTED}: {leak}")
 
-    if section.is_intro:
-        return ProductionEditPlanPromoteSectionReadiness(
-            staging_section_id=section.staging_section_id,
-            production_section_id=section.production_section_id,
-            folder_name=section.folder_name,
-            is_intro=True,
-            staged_edit_plan_path=section.staged_edit_plan_path,
-            target_edit_plan_path="",
-            promote_action=(
-                PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_BLOCKED
-                if section_blockers
-                else PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_SKIP_INTRO
-            ),
-            target_exists=False,
-            staged_edit_plan_hash=current_hash,
-            warnings=section_warnings,
-            blockers=section_blockers,
-        )
-
     target_path = get_folder_edit_plan_path(project.work_dir_path, section.folder_name)
     target_exists = target_path.is_file()
     existing_file_hash = ""
@@ -234,7 +211,7 @@ def _build_section_readiness(
         staging_section_id=section.staging_section_id,
         production_section_id=section.production_section_id,
         folder_name=section.folder_name,
-        is_intro=False,
+        is_intro=section.is_intro,
         staged_edit_plan_path=section.staged_edit_plan_path,
         target_edit_plan_path=str(target_path),
         promote_action=promote_action,
@@ -361,8 +338,6 @@ def load_production_edit_plan_promote_readiness(project: Project) -> ProductionE
 
 
 def _reason_for_promote_action(promote_action: str, blockers: list[str]) -> str:
-    if promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_SKIP_INTRO:
-        return _INTRO_SKIP_REASON
     if promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_CREATE:
         return "Zielpfad existiert nicht — ein späterer Promote würde eine neue Produktions-EditPlan-Datei anlegen."
     if promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_ACTION_WOULD_OVERWRITE:
