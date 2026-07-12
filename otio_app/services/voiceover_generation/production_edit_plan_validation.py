@@ -109,6 +109,8 @@ __all__ = [
     "classify_production_edit_plan_validation_status",
     "build_production_validation_error_from_existing_error",
     "normalize_existing_validator_error",
+    "relaxed_validation_settings_for_cut_plan",
+    "is_known_cut_plan_validator_incompatibility",
 ]
 
 _ROUNDTRIP_TOLERANCE_SEC = 0.05
@@ -143,10 +145,15 @@ def _matches_known_incompatible(message: str) -> bool:
     return any(marker in message for marker in _KNOWN_INCOMPATIBLE_MESSAGE_MARKERS)
 
 
-def _relaxed_validation_settings(voiceover: VoiceoverPlan | None) -> EditPlanSettings:
-    """Eigens für Phase 10.3 abgeleitete, permissive Settings-Instanz für die
-    Aufrufe von validate_timeline_items/validate_voiceover_plan — siehe
-    Modul-Docstring für die Begründung je Feld."""
+def relaxed_validation_settings_for_cut_plan(voiceover: VoiceoverPlan | None) -> EditPlanSettings:
+    """Permissive Settings für Cut-Plan-/Phase-10-Pläne.
+
+    EditPlanDocument.settings aus dem Staging ist oft noch ``EditPlanSettings()``
+    (With-Voice-over-Defaults: shot_max=8, audio_offset=1, section_outro=5,
+    head_trim=0.5). Diese passen strukturell nicht zu Cut-Plan-Inhalten
+    (duration_source=bridge_audio_plan, freie Shot-Längen, kein Outro/Titel-
+    Zwang). Dieselbe Ableitung nutzen Staging-Validierung und OTIO-Merge.
+    """
     matched_offset = voiceover.timeline_start_sec if voiceover is not None else 0.0
     return EditPlanSettings(
         shot_min_sec=0.0,
@@ -157,6 +164,17 @@ def _relaxed_validation_settings(voiceover: VoiceoverPlan | None) -> EditPlanSet
         video_head_trim_policy="fixed_trim",
         voiceover_trim_policy="disabled",
     )
+
+
+def _relaxed_validation_settings(voiceover: VoiceoverPlan | None) -> EditPlanSettings:
+    """Alias für interne Staging-Aufrufe — siehe relaxed_validation_settings_for_cut_plan."""
+    return relaxed_validation_settings_for_cut_plan(voiceover)
+
+
+def is_known_cut_plan_validator_incompatibility(message: str) -> bool:
+    """True, wenn die Produktions-Validator-Meldung für Cut-Plan-Pläne erwartet
+    inkompatibel ist (z. B. duration_source muss ffprobe) und gefiltert werden soll."""
+    return _matches_known_incompatible(message)
 
 
 def _timeline_item_id_from_message(message: str) -> str:

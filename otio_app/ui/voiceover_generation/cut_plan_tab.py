@@ -106,6 +106,11 @@ from otio_app.project_layout import (
     resolve_otio_export_path,
 )
 from otio_app.services.otio_export_settings import load_otio_export_settings
+from otio_app.services.otio_export_debug import (
+    build_otio_export_merge_debug_report,
+    render_otio_export_merge_debug_lines,
+    save_otio_export_merge_debug_report,
+)
 from otio_app.services.otio_exporter import export_otio_timeline, merge_confirmed_edit_plans
 from otio_app.services.supplement_search import build_keyword_query
 from otio_app.services.supplement_sources import get_provider_readiness
@@ -2787,10 +2792,6 @@ def _render_production_edit_plan_staging(project: Project) -> None:
     st.divider()
     _render_otio_export_readiness(project)
 
-    st.caption(
-        "Kein OTIO-Export-Button, kein Lock-Button — diese Schritte folgen erst in einer späteren Phase."
-    )
-
 
 def _render_production_edit_plan_promote_readiness(
     project: Project, package: object, report: object
@@ -3398,10 +3399,32 @@ def _render_otio_export_readiness(project: Project) -> None:
             merged = merge_confirmed_edit_plans(project, folder_names=ready_folders)
             if not merged.ready:
                 progress.progress(1.0, text="Export blockiert")
+                debug = build_otio_export_merge_debug_report(merged)
+                try:
+                    debug_path = save_otio_export_merge_debug_report(project.work_dir_path, debug)
+                except OSError:
+                    debug_path = None
                 st.error(
-                    "Export blockiert — Merge meldet Probleme:\n"
-                    + "\n".join(f"• {warning}" for warning in merged.warnings[:12])
+                    "Export blockiert — Merge meldet Probleme "
+                    f"({debug.issue_count} Issues, Status {debug.validation_status})."
                 )
+                if debug.cut_plan_relaxed_folders:
+                    st.info(
+                        "Cut-Plan-Validierungsmodus war aktiv für: "
+                        + ", ".join(debug.cut_plan_relaxed_folders)
+                    )
+                with st.expander("Export-Debug (kategorisiert)", expanded=True):
+                    for note in debug.analysis_notes:
+                        st.caption(f"Analyse: {note}")
+                    for category, items in sorted(debug.issues_by_category.items()):
+                        st.markdown(f"**{category}** ({len(items)})")
+                        for issue in items[:12]:
+                            st.write(f"• `{issue.folder}`: {issue.message}")
+                        if len(items) > 12:
+                            st.caption(f"… +{len(items) - 12} weitere in dieser Kategorie")
+                    if debug_path is not None:
+                        st.caption(f"Debug-Artefakt: `{debug_path}`")
+                    st.code("\n".join(render_otio_export_merge_debug_lines(debug)), language="text")
                 return
 
             progress.progress(0.45, text="Medien prüfen und OTIO schreiben…")

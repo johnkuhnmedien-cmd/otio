@@ -504,6 +504,28 @@ def test_document_skeleton_candidate_status_is_staging_draft(tmp_path: Path) -> 
     assert doc.candidate_status == PRODUCTION_EDIT_PLAN_CANDIDATE_STATUS_STAGING_DRAFT
 
 
+def test_document_skeleton_stamps_cut_plan_relaxed_settings(tmp_path: Path) -> None:
+    """Skeleton darf nicht EditPlanSettings()-Defaults (shot_max=8, offset=1, …)
+    speichern — sonst scheitert der spätere OTIO-Merge trotz Staging-PASS."""
+    from otio_app.analysis_models import VoiceoverPlan
+
+    project = _make_project(tmp_path)
+    identity = SectionIdentity("001_folder_a", "section_folder_a", "Folder A", False, 1)
+    voiceover = VoiceoverPlan(
+        path="/audio/a.mp3",
+        timeline_start_sec=0.0,
+        duration_sec=12.0,
+        timeline_end_sec=12.0,
+        duration_source="bridge_audio_plan",
+        trim_policy="disabled",
+    )
+    doc = build_production_edit_plan_document_skeleton(project, identity, [], voiceover)
+    assert doc.settings.shot_max_sec >= 1_000_000.0
+    assert doc.settings.audio_offset_sec == 0.0
+    assert doc.settings.section_outro_sec == 0.0
+    assert doc.settings.video_head_trim_sec == 0.0
+
+
 # --- 24-26: can_build_production_edit_plan_staging ---
 
 
