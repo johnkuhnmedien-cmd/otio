@@ -445,12 +445,13 @@ def test_readonly_hint_shows_existing_production_plan_for_folder(
     assert existing_path.read_text(encoding="utf-8") == existing_content
 
 
-def test_readonly_hint_shows_intro_synthetic_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_readonly_hint_shows_intro_promote_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
     build_and_save_production_edit_plan_staging(project)
     at = _run_repro(tmp_path, monkeypatch)
     combined = " ".join(_all_text(at, "caption"))
-    assert "Intro ist eine synthetische Staging-Sektion" in combined
+    assert "Intro wird als Ordner „Intro“" in combined
+    assert "Intro.json" in combined
 
 
 def test_ui_reads_existing_production_plan_readonly_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -548,21 +549,20 @@ def test_no_otio_export_referenced() -> None:
     import otio_app.ui.voiceover_generation.cut_plan_tab as cut_plan_tab_module
 
     source = inspect.getsource(cut_plan_tab_module)
-    assert not re.search(r"\botio_exporter\b", source)
-    assert not re.search(r"\bexport_otio_timeline\b", source)
+    # Export-UI im Cut-Plan-Tab darf otio_exporter / export_otio_timeline nutzen.
+    # Die Isolation gilt weiterhin für die Produktions-EditPlan-Builder-Pipeline.
+    assert not re.search(r"\bbuild_edit_plan\b", source)
+    assert not re.search(r"\bsave_edit_plan\b", source)
 
 
 _FORBIDDEN_SYMBOLS = (
     "build_edit_plan",
     "save_edit_plan",
     "edit_plan_builder",
-    "otio_exporter",
-    "export_otio_timeline",
     "mark_edit_plans_stale_for_folder",
     "replan_folder_after_supplement",
     "extend_folder_inventory",
     "_set_draft",
-    "merge_confirmed_edit_plans",
 )
 
 

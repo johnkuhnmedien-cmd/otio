@@ -420,6 +420,7 @@ def test_export_ignores_stale_global_export_settings_override(tmp_path: Path) ->
     # Audio-Gap muss dem im Schnittplan verankerten Offset (1.0s) folgen,
     # NICHT der stale globalen Konfiguration (2.0s).
     assert florida_audio[0].source_range.duration.to_seconds() == 1.0
+    assert timeline.metadata.get("voice_track_count") == 1
 
 
 def test_merge_confirmed_edit_plans_in_mapping_order(tmp_path: Path) -> None:
@@ -486,15 +487,19 @@ def test_audio_offset_and_outro_on_export(tmp_path: Path) -> None:
     )
     assert isinstance(timeline.tracks[0][0], otio.schema.Clip)
 
-    florida_audio = timeline.tracks[1]
-    assert florida_audio[0].source_range.duration.to_seconds() == 1.0
-    assert florida_audio[1].source_range.duration.to_seconds() == 5.0
-    assert florida_audio[1].source_range.start_time.to_seconds() == 0.0
-
-    canyon_audio = timeline.tracks[2]
-    assert canyon_audio[0].source_range.duration.to_seconds() == 12.0
-    assert canyon_audio[1].source_range.duration.to_seconds() == 3.0
-    assert canyon_audio[1].source_range.start_time.to_seconds() == 0.0
+    # Alle Voice-overs auf einer Audiospur A1: Gap → Clip → Gap → Clip
+    assert len([t for t in timeline.tracks if t.kind == otio.schema.TrackKind.Audio]) == 1
+    audio = timeline.tracks[1]
+    assert audio.name == "A1"
+    assert audio[0].source_range.duration.to_seconds() == 1.0  # Florida start gap
+    assert audio[1].source_range.duration.to_seconds() == 5.0  # Florida VO
+    assert audio[1].source_range.start_time.to_seconds() == 0.0
+    # Canyon VO starts at video_start 11 + audio_offset 1 = 12 → gap after Florida clip end (6)
+    assert audio[2].source_range.duration.to_seconds() == 6.0
+    assert audio[3].source_range.duration.to_seconds() == 3.0
+    assert audio[3].source_range.start_time.to_seconds() == 0.0
+    assert timeline.metadata.get("voice_track_count") == 1
+    assert timeline.metadata.get("voice_clip_count") == 2
 
 
 def test_video_section_keeps_planned_durations(tmp_path: Path) -> None:
@@ -825,7 +830,10 @@ def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
 
     timeline = otio.adapters.read_from_file(str(export_result.path))
     assert timeline.name == "USA"
-    assert len(timeline.tracks) == 3
+    assert len(timeline.tracks) == 2  # V1 + eine gemeinsame A1-Audiospur
+    assert timeline.tracks[1].name == "A1"
+    audio_clips = [c for c in timeline.tracks[1] if isinstance(c, otio.schema.Clip)]
+    assert len(audio_clips) == 2
 
 
 def test_merge_warns_on_duplicate_asset_but_allows_export(tmp_path: Path) -> None:

@@ -22,7 +22,6 @@ from otio_app.defaults import (
     PRODUCTION_EDIT_PLAN_MAPPING_PATCH_ACTION_WOULD_ADD,
     PRODUCTION_EDIT_PLAN_PROMOTE_MANIFEST_STATUS_PROMOTED,
     PRODUCTION_EDIT_PLAN_PROMOTE_RESULT_ACTION_CREATED,
-    PRODUCTION_EDIT_PLAN_PROMOTE_RESULT_ACTION_SKIPPED_INTRO,
 )
 from otio_app.models import Project, ProjectMode
 from otio_app.project_layout import (
@@ -313,12 +312,11 @@ def test_can_promote_true_with_would_overwrite_and_explicit_permission(tmp_path:
 # --- 9-13: Schreiben / Backup ---
 
 
-def test_intro_is_not_written_to_edit_plan_dir(tmp_path: Path) -> None:
+def test_intro_is_written_to_edit_plan_dir(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
     promote_production_edit_plans(project)
-    assert not get_edit_plan_dir(project.work_dir_path).exists() or not (
-        get_edit_plan_dir(project.work_dir_path) / "Intro.json"
-    ).is_file()
+    intro_path = get_edit_plan_dir(project.work_dir_path) / "Intro.json"
+    assert intro_path.is_file()
 
 
 def test_would_create_writes_new_edit_plan_file(tmp_path: Path) -> None:
@@ -326,7 +324,7 @@ def test_would_create_writes_new_edit_plan_file(tmp_path: Path) -> None:
     manifest = promote_production_edit_plans(project)
     target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
     assert target_path.is_file()
-    assert manifest.created_count == 1
+    assert manifest.created_count == 2  # Intro + folder
 
 
 def test_would_overwrite_creates_backup_before_write(tmp_path: Path) -> None:
@@ -502,12 +500,12 @@ def test_manifest_contains_source_validation_report_hash(tmp_path: Path) -> None
 def test_manifest_counts_are_correct(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
     manifest = promote_production_edit_plans(project)
-    assert manifest.created_count == 1
+    assert manifest.created_count == 2  # Intro + folder
     assert manifest.overwritten_count == 0
-    assert manifest.skipped_intro_count == 1
+    assert manifest.skipped_intro_count == 0
     assert manifest.status == PRODUCTION_EDIT_PLAN_PROMOTE_MANIFEST_STATUS_PROMOTED
     intro_result = next(s for s in manifest.sections if s.is_intro)
-    assert intro_result.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_RESULT_ACTION_SKIPPED_INTRO
+    assert intro_result.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_RESULT_ACTION_CREATED
     folder_result = next(s for s in manifest.sections if not s.is_intro)
     assert folder_result.promote_action == PRODUCTION_EDIT_PLAN_PROMOTE_RESULT_ACTION_CREATED
 
@@ -543,12 +541,14 @@ def test_mapping_patch_contains_non_intro_folder(tmp_path: Path) -> None:
     assert any(entry.folder_name == FOLDER_A for entry in patch.entries)
 
 
-def test_mapping_patch_excludes_intro_as_normal_folder(tmp_path: Path) -> None:
+def test_mapping_patch_includes_intro_as_folder(tmp_path: Path) -> None:
     project = _happy_project_with_dry_run(tmp_path)
     manifest = promote_production_edit_plans(project)
     patch = build_voice_folder_mapping_patch(project, manifest)
-    assert not any(entry.folder_name in ("Intro", "") for entry in patch.entries)
-    assert len(patch.entries) == 1
+    assert any(entry.folder_name == "Intro" for entry in patch.entries)
+    assert any(entry.folder_name == FOLDER_A for entry in patch.entries)
+    assert len(patch.entries) == 2
+    assert patch.entries[0].folder_name == "Intro"
 
 
 def test_mapping_patch_action_would_add_when_not_in_mapping(tmp_path: Path) -> None:
@@ -686,15 +686,14 @@ def test_with_voiceover_workflow_unaffected() -> None:
     assert hasattr(otio_exporter, "build_otio_timeline")
 
 
-def test_promote_writes_only_under_edit_plan_dir_for_folder(tmp_path: Path) -> None:
-    """Nach Phase 10.6 ist Schreiben nach _otio/edit_plan/ erlaubt — aber
-    ausschließlich für Nicht-Intro-Folder, ausschließlich über
+def test_promote_writes_under_edit_plan_dir_including_intro(tmp_path: Path) -> None:
+    """Nach Phase 10.6 ist Schreiben nach _otio/edit_plan/ erlaubt —
+    inkl. Intro als Ordner „Intro“, ausschließlich über
     promote_production_edit_plans()."""
     project = _happy_project_with_dry_run(tmp_path)
     promote_production_edit_plans(project)
     edit_plan_dir = get_edit_plan_dir(project.work_dir_path)
-    written_files = list(edit_plan_dir.glob("*.json"))
-    assert len(written_files) == 1
-    assert written_files[0].name == "Grand_Canyon.json"
+    written_files = sorted(p.name for p in edit_plan_dir.glob("*.json"))
+    assert written_files == ["Grand_Canyon.json", "Intro.json"]
 
 

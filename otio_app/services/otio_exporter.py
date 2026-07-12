@@ -769,34 +769,34 @@ def _append_video_item(
     return duration.duration.to_seconds()
 
 
-def _append_aligned_voice_track(
-    timeline: otio.schema.Timeline,
+def _append_aligned_voice_clip(
+    track: otio.schema.Track,
     section: TimelineSection,
     rate: float,
     *,
-    track_index: int,
-) -> None:
-    """Eine Audiospur pro Voice-over — volle WAV-Dauer, ohne Head-Trim.
+    cursor_sec: float,
+) -> float:
+    """Hängt Gap (falls nötig) + Voice-Clip an eine Audiospur; liefert neuen Cursor.
 
     Nutzt section.voiceover.timeline_start_sec (beim Bestätigen dieses Ordners
     fest eingebaut), NICHT einen separaten globalen Export-Wert — sonst
     können Video- und Audiospur auseinanderlaufen, sobald sich die globale
     Audio-Start-Einstellung nach dem Bestätigen geändert hat.
+
+    Alle Voice-overs liegen auf derselben Spur (A1): Gap → Clip → Gap → Clip.
     """
-    track = otio.schema.Track(
-        name=f"A{track_index} · {Path(section.voice_file).stem}"[:120],
-        kind=otio.schema.TrackKind.Audio,
-    )
-    gap_sec = max(0.0, section.video_start_sec + section.voiceover.timeline_start_sec)
+    voiceover = section.voiceover
+    target_start = max(0.0, section.video_start_sec + voiceover.timeline_start_sec)
+    gap_sec = target_start - cursor_sec
     if gap_sec > 0.001:
         track.append(
             otio.schema.Gap(
-                name="Voice Start",
+                name="Voice Start" if cursor_sec <= 0.001 else f"Voice Gap · {section.folder}"[:120],
                 source_range=_time_range(gap_sec, rate),
             )
         )
+        cursor_sec += gap_sec
 
-    voiceover = section.voiceover
     resolved = _resolve_media_path(section.voice_file)
     play_sec = max(0.01, voiceover.duration_sec)
 
@@ -822,13 +822,33 @@ def _append_aligned_voice_track(
     voice_clip.metadata["otio_note"] = (
         "Ungeschnittene Originaldatei ab Sekunde 0 — volle ffprobe-Dauer, kein Head-Trim."
     )
-    voice_clip.metadata["voiceover_timeline_start_sec"] = round(
-        section.video_start_sec + voiceover.timeline_start_sec, 4
-    )
+    voice_clip.metadata["voiceover_timeline_start_sec"] = round(target_start, 4)
     voice_clip.metadata["voiceover_timeline_end_sec"] = round(
         section.video_start_sec + voiceover.timeline_end_sec, 4
     )
+    if gap_sec < -0.001:
+        voice_clip.metadata["voiceover_overlap_sec"] = round(-gap_sec, 4)
+        voice_clip.metadata["otio_note"] = (
+            f"Voice-over überlappt vorherigen Clip um {-gap_sec:.2f}s — "
+            "direkt anschließend platziert (eine Audiospur)."
+        )
     track.append(voice_clip)
+    return cursor_sec + play_sec
+
+
+def _append_aligned_voice_track(
+    timeline: otio.schema.Timeline,
+    section: TimelineSection,
+    rate: float,
+    *,
+    track_index: int,
+) -> None:
+    """Kompatibilitäts-Wrapper: eine Section als eigene Audiospur (Tests/Legacy)."""
+    track = otio.schema.Track(
+        name=f"A{track_index} · {Path(section.voice_file).stem}"[:120],
+        kind=otio.schema.TrackKind.Audio,
+    )
+    _append_aligned_voice_clip(track, section, rate, cursor_sec=0.0)
     timeline.tracks.append(track)
 
 
@@ -1143,11 +1163,15 @@ def build_otio_timeline(
     if timing_notes:
         timeline.metadata["media_timing_notes"] = list(timing_notes)
 
+    # Alle Voice-overs auf einer Audiospur (A1): Gap → Clip → Gap → Clip …
+    # statt einer Spur pro Ordner (A1…An), die in Resolve unhandlich ist.
     seen_voices: set[str] = set()
-    audio_index = 1
+    audio_track = otio.schema.Track(name="A1", kind=otio.schema.TrackKind.Audio)
+    audio_cursor = 0.0
+    voice_clip_count = 0
     for section in sections:
         _raise_if_export_cancelled(should_cancel)
-        if section.voice_file in seen_voices:
+        if not section.voice_file or section.voice_file in seen_voices:
             continue
         seen_voices.add(section.voice_file)
         _emit_export_progress(
@@ -1158,13 +1182,18 @@ def build_otio_timeline(
             folder=section.folder,
             detail=Path(section.voice_file).name,
         )
-        _append_aligned_voice_track(
-            timeline,
+        audio_cursor = _append_aligned_voice_clip(
+            audio_track,
             section,
             rate,
-            track_index=audio_index,
+            cursor_sec=audio_cursor,
         )
-        audio_index += 1
+        voice_clip_count += 1
+
+    if voice_clip_count > 0:
+        timeline.tracks.append(audio_track)
+        timeline.metadata["voice_track_count"] = 1
+        timeline.metadata["voice_clip_count"] = voice_clip_count
 
     return timeline
 
@@ -1238,6 +1267,41 @@ def validate_otio_readback(
         except Exception:
             default_rate = 25.0
 
+    def _audio_clips_on_track(track: otio.schema.Track) -> list[tuple[float, otio.schema.Clip]]:
+        clips: list[tuple[float, otio.schema.Clip]] = []
+        cursor = 0.0
+        for child in track:
+            if isinstance(child, otio.schema.Gap):
+                if child.source_range is not None:
+                    cursor += child.source_range.duration.to_seconds()
+            elif isinstance(child, otio.schema.Clip):
+                clips.append((cursor, child))
+                if child.source_range is not None:
+                    cursor += child.source_range.duration.to_seconds()
+        return clips
+
+    # Eine Spur (A1) mit allen Voice-Clips ODER Legacy: eine Spur pro Section.
+    clips_by_section: list[tuple[float, otio.schema.Clip] | None] = [None] * len(sections)
+    all_clips: list[tuple[float, otio.schema.Clip]] = []
+    for track in audio_tracks:
+        all_clips.extend(_audio_clips_on_track(track))
+
+    for section_index, section in enumerate(sections):
+        match = next(
+            (
+                (start, clip)
+                for start, clip in all_clips
+                if clip.metadata.get("voice_file") == section.voice_file
+                or clip.metadata.get("folder") == section.folder
+            ),
+            None,
+        )
+        if match is None and section_index < len(audio_tracks):
+            track_clips = _audio_clips_on_track(audio_tracks[section_index])
+            if track_clips:
+                match = track_clips[0]
+        clips_by_section[section_index] = match
+
     for section_index, section in enumerate(sections):
         voiceover = section.voiceover
         section_items = [item for item in items if item.folder_name == section.folder]
@@ -1253,21 +1317,14 @@ def validate_otio_readback(
         voice_timeline_end = expected_start
         embedded_start = 0.0
 
-        if section_index < len(audio_tracks):
-            track = audio_tracks[section_index]
-            cursor = 0.0
-            for child in track:
-                if isinstance(child, otio.schema.Gap):
-                    if child.source_range is not None:
-                        cursor += child.source_range.duration.to_seconds()
-                elif isinstance(child, otio.schema.Clip):
-                    voice_timeline_start = cursor
-                    if child.source_range is not None:
-                        voice_source_in = child.source_range.start_time.to_seconds()
-                        voice_duration = child.source_range.duration.to_seconds()
-                        voice_timeline_end = cursor + voice_duration
-                    embedded_start = _embedded_audio_start_sec(child, default_rate=default_rate)
-                    cursor += voice_duration
+        match = clips_by_section[section_index]
+        if match is not None:
+            voice_timeline_start, child = match
+            if child.source_range is not None:
+                voice_source_in = child.source_range.start_time.to_seconds()
+                voice_duration = child.source_range.duration.to_seconds()
+                voice_timeline_end = voice_timeline_start + voice_duration
+            embedded_start = _embedded_audio_start_sec(child, default_rate=default_rate)
 
         # Writer: source_range.start = embedded_start + voiceover.source_in_sec
         # (z. B. MP3 priming / SMPTE 0.025s). Readback prüft den logischen Trim.
