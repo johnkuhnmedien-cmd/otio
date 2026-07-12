@@ -1169,7 +1169,8 @@ def _render_bulk_draft_actions(
                     high_issue_regen_threshold=high_issue_threshold,
                 ),
             )
-            st.session_state[threshold_key] = saved.high_issue_regen_threshold
+            # Widget-Key nicht mehr setzen — Streamlit verbietet das nach
+            # Instanziierung von number_input; der Feldwert ist bereits korrekt.
             st.success(
                 f"Issue-Schwelle gespeichert: ≥{saved.high_issue_regen_threshold}"
             )
