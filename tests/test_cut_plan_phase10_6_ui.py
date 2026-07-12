@@ -301,7 +301,7 @@ def test_no_audio_files_overwritten(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_no_voice_folder_mapping_change_via_ui(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _happy_project_with_dry_run(tmp_path)
-    mapping_path = get_voice_folder_mapping_path(project.project_root_path)
+    mapping_path = get_voice_folder_mapping_path(project.language_work_dir_path)
     mapping_path.parent.mkdir(parents=True, exist_ok=True)
     existing_content = '{"mappings": []}'
     mapping_path.write_text(existing_content, encoding="utf-8")

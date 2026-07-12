@@ -87,6 +87,36 @@ def test_default_otio_export_basename_multiple_folders_uses_project_name() -> No
     )
 
 
+def test_default_otio_export_basename_appends_language() -> None:
+    assert (
+        default_otio_export_basename(
+            project_name="USA",
+            folder_names=("Arches National Park",),
+            language="de",
+        )
+        == "Arches_National_Park_DE"
+    )
+    assert (
+        default_otio_export_basename(
+            project_name="USA Trip",
+            folder_names=("Arches National Park", "Grand Canyon"),
+            language="en",
+        )
+        == "USA_Trip_EN"
+    )
+
+
+def test_default_otio_export_basename_does_not_double_append_language() -> None:
+    assert (
+        default_otio_export_basename(
+            project_name="USA_DE",
+            folder_names=("A", "B"),
+            language="de",
+        )
+        == "USA_DE"
+    )
+
+
 def test_resolve_otio_export_path_strips_otio_suffix(temp_project_layout: dict[str, Path]) -> None:
     work_dir = temp_project_layout["work_dir"]
     path = resolve_otio_export_path(work_dir, basename="Arches National Park.otio")

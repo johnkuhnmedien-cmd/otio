@@ -82,8 +82,14 @@ def get_voice_analysis_path(project_root: Path) -> Path:
     return project_root / VOICE_ANALYSIS_FILENAME
 
 
-def get_voice_folder_mapping_path(project_root: Path) -> Path:
-    return project_root / VOICE_FOLDER_MAPPING_FILENAME
+def get_voice_folder_mapping_path(base_dir: Path) -> Path:
+    """Pfad zur Voice↔Folder-Zuordnung.
+
+    `base_dir` ist der Language-Scope (`_otio/{LANG}/`). Legacy-Aufrufe mit
+    `project_root` werden weiterhin akzeptiert, bevorzugter Speicherort ist
+    der Language-Work-Dir.
+    """
+    return base_dir / VOICE_FOLDER_MAPPING_FILENAME
 
 
 def get_edit_plan_path(project_root: Path) -> Path:
@@ -763,12 +769,27 @@ def get_otio_export_path(work_dir: Path, project_name: str) -> Path:
     return resolve_otio_export_path(work_dir, basename=project_name)
 
 
-def default_otio_export_basename(*, project_name: str, folder_names: tuple[str, ...] | list[str]) -> str:
-    """Standard-Dateiname ohne Endung — ein Ort → Ordnername, sonst Projektname."""
+def default_otio_export_basename(
+    *,
+    project_name: str,
+    folder_names: tuple[str, ...] | list[str],
+    language: str | None = None,
+) -> str:
+    """Standard-Dateiname ohne Endung — ein Ort → Ordnername, sonst Projektname.
+
+    Mit `language` wird der Sprachcode angehängt (z. B. `USA_DE`), damit
+    Exporte verschiedener Sprachen sich nicht überschreiben.
+    """
     folders = tuple(folder_names)
     if len(folders) == 1:
-        return safe_folder_slug(folders[0]) or safe_folder_slug(project_name) or "timeline"
-    return safe_folder_slug(project_name) or "timeline"
+        base = safe_folder_slug(folders[0]) or safe_folder_slug(project_name) or "timeline"
+    else:
+        base = safe_folder_slug(project_name) or "timeline"
+    if language and str(language).strip():
+        lang = language_folder_name(str(language))
+        if not base.upper().endswith(f"_{lang}"):
+            return f"{base}_{lang}"
+    return base
 
 
 def resolve_otio_export_path(work_dir: Path, *, basename: str) -> Path:
