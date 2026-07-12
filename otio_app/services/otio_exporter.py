@@ -862,8 +862,47 @@ def _append_timeline_item_clip(
     else:
         effective = resolve_effective_media_path(project, item.folder_name, original)
 
-    duration_sec = item.final_duration_sec or item.duration_sec
+    duration_sec = max(0.01, float(item.final_duration_sec or item.duration_sec or 0.0))
     media_rate = rate
+
+    # Still-Images (JPEG/PNG/…) haben keine echte Medien-Dauer (ffprobe ≈ 0).
+    # Die Video-Kappung auf available_range würde sie auf ~1 Frame kollabieren
+    # und die gesamte V1-Timeline zusammenschieben (A/V-Drift). Wie im älteren
+    # Pfad _clip_source_range_for_media: geplante Shot-Dauer als Freeze halten.
+    if is_image_media(effective) or is_image_media(original):
+        play_sec = duration_sec
+        source_in = 0.0
+        if timing_notes is not None:
+            timing_notes.append(
+                f"{effective.name}: Still-Image — {play_sec:.2f}s Hold (geplante Shot-Dauer)."
+            )
+        video_clip = otio.schema.Clip(
+            name=_clip_name_for_media(effective, index=index),
+            media_reference=_media_reference(
+                str(effective),
+                rate,
+                trim_leading_sec=0.0,
+            ),
+        )
+        video_clip.source_range = _time_range(play_sec, media_rate, start_sec=source_in)
+        video_clip.metadata["timeline_item_id"] = item.timeline_item_id
+        video_clip.metadata["type"] = item.type
+        video_clip.metadata["folder"] = item.folder_name
+        video_clip.metadata["motif"] = item.motif
+        video_clip.metadata["passage_text"] = item.passage_text
+        video_clip.metadata["resolved_media_path"] = str(effective)
+        video_clip.metadata["asset_role"] = item.asset_role
+        video_clip.metadata["selection_reason"] = item.selection_reason
+        video_clip.metadata["still_image_hold"] = True
+        if item.type == "generic_outro_visual":
+            video_clip.metadata["section_outro"] = True
+        if item.warnings:
+            video_clip.metadata["warnings"] = list(item.warnings)
+            if timing_notes is not None:
+                timing_notes.extend(f"{effective.name}: {w}" for w in item.warnings)
+        track.append(video_clip)
+        return
+
     timing = probe_media_timing(effective, default_rate=rate)
     if timing.rate:
         media_rate = timing.rate
