@@ -737,6 +737,44 @@ def test_build_edit_plan_shot_from_timeline_item_derives_voice_window_from_voice
     assert shot.folder == FOLDER_A
 
 
+def test_build_edit_plan_shot_clamps_voice_window_for_section_pause_hold() -> None:
+    """Closing-/Pause-Hold ragt 5s über die Audiodauer — voice_* wird auf
+    die Voice-over-Dauer begrenzt, duration_sec bleibt die volle Bildlänge
+    (Fix gegen SHOT_TIMING_OUTSIDE_VOICEOVER bei pause_between_sections=5s)."""
+    from otio_app.analysis_models import VoiceoverPlan
+
+    # Lokalisiert: Audio 0..67.28, Closing-Visual 67.12..72.28 (+5s Pause)
+    item = _visual_item("v_closing", FOLDER_A, 67.120, 72.280)
+    voiceover_plan = VoiceoverPlan(
+        path="/fake/audio.mp3",
+        timeline_start_sec=0.0,
+        duration_sec=67.280,
+        timeline_end_sec=67.280,
+    )
+    shot = build_edit_plan_shot_from_timeline_item(item, voiceover_plan, None)
+    assert shot.voice_start_sec == pytest.approx(67.120)
+    assert shot.voice_end_sec == pytest.approx(67.280)
+    assert shot.duration_sec == pytest.approx(5.160)
+    assert shot.voice_end_sec <= voiceover_plan.duration_sec + 1e-9
+
+
+def test_build_edit_plan_shot_clamps_when_visual_starts_after_voiceover() -> None:
+    """Reiner Pause-Hold nach Audio-Ende: voice-Fenster kollabiert auf duration."""
+    from otio_app.analysis_models import VoiceoverPlan
+
+    item = _visual_item("v_hold", FOLDER_A, 70.0, 75.0)
+    voiceover_plan = VoiceoverPlan(
+        path="/fake/audio.mp3",
+        timeline_start_sec=0.0,
+        duration_sec=67.280,
+        timeline_end_sec=67.280,
+    )
+    shot = build_edit_plan_shot_from_timeline_item(item, voiceover_plan, None)
+    assert shot.voice_start_sec == pytest.approx(67.280)
+    assert shot.voice_end_sec == pytest.approx(67.280)
+    assert shot.duration_sec == pytest.approx(5.0)
+
+
 def test_synthesize_edit_plan_shots_for_section_never_creates_outro_shot() -> None:
     item = _visual_item("v1", FOLDER_A, 0.0, 5.0)
     shots = synthesize_edit_plan_shots_for_section([item], None, [None])

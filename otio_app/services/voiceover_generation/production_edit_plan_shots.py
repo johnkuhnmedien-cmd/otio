@@ -34,12 +34,14 @@ def build_edit_plan_shot_from_timeline_item(
       Sektion hat dann schlicht keine Voice-over-Zeitbasis; wird vom
       Aufrufer in fields_defaulted/section warnings dokumentiert).
     - voice_start_sec/voice_end_sec: die Zeitspanne des Shots RELATIV zum
-      Start des VoiceoverPlans dieser Sektion — in dieser Pipeline deckt
-      V1 die Voice-over-Audiospur lückenlos ab (Phase 8.5 Visual Coverage),
-      d. h. diese Ableitung entspricht tatsächlich "wann dieser Ausschnitt
-      des Textes gesprochen wird", genau wie es voice_start/end_sec in der
-      Produktion bedeuten — keine Fabrikation.
-    - duration_sec: timeline_out_sec - timeline_in_sec (bereits lokalisiert).
+      Start des VoiceoverPlans dieser Sektion, begrenzt auf den
+      Voice-over-Zeitbereich (0..duration_sec). Visuelle Coverage über die
+      Sektionspause (Closing-/Pause-Hold nach Audio-Ende) verlängert das
+      BILD, zählt aber nicht als gesprochene Zeit — deshalb wird das
+      Voice-Fenster auf die Audiodauer geclampt, während duration_sec die
+      volle visuelle Länge behält.
+    - duration_sec: timeline_out_sec - timeline_in_sec (bereits lokalisiert,
+      inkl. Pause-Hold).
     - asset_path/asset_id/media_type: 1:1 aus dem TimelineItem.
     - motif/passage_text/beat_id/supplement_request_id: 1:1 aus dem
       TimelineItem, falls dort gesetzt (Phase 9.1 füllt passage_text/beat_id/
@@ -47,10 +49,17 @@ def build_edit_plan_shot_from_timeline_item(
       Bridge kein Motiv-Feld befüllt — das ist eine ehrliche Leere, kein
       Default-Fake).
     - section_outro: immer False (Phase 10.2 erzeugt keine Outro-Shots)."""
+    visual_duration_sec = item.timeline_out_sec - item.timeline_in_sec
+
     if voiceover_plan is not None:
-        voice_start_sec = max(0.0, item.timeline_in_sec - voiceover_plan.timeline_start_sec)
-        voice_end_sec = max(voice_start_sec, item.timeline_out_sec - voiceover_plan.timeline_start_sec)
         voice_file = voiceover_plan.path
+        voice_duration = max(0.0, float(voiceover_plan.duration_sec))
+        raw_start = item.timeline_in_sec - voiceover_plan.timeline_start_sec
+        raw_end = item.timeline_out_sec - voiceover_plan.timeline_start_sec
+        # Voice_* beschreibt nur die Überlappung mit gesprochenem Audio —
+        # nicht den visuellen Pause-Hold danach.
+        voice_start_sec = min(max(0.0, raw_start), voice_duration)
+        voice_end_sec = min(max(voice_start_sec, raw_end), voice_duration)
     else:
         # Ohne VoiceoverPlan gibt es keine sinnvolle Voice-Zeitbasis — die
         # lokalisierten Timeline-Zeiten selbst sind der einzige ehrliche
@@ -64,7 +73,7 @@ def build_edit_plan_shot_from_timeline_item(
         folder=item.folder_name,
         voice_start_sec=voice_start_sec,
         voice_end_sec=voice_end_sec,
-        duration_sec=item.timeline_out_sec - item.timeline_in_sec,
+        duration_sec=visual_duration_sec,
         asset_path=item.resolved_media_path or None,
         asset_source=item.media_source_type or "local",
         asset_id=item.asset_id,
