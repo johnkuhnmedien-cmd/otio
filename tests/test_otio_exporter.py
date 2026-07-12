@@ -1103,3 +1103,94 @@ def test_merge_production_plan_still_enforces_defaults(tmp_path: Path) -> None:
     assert merged.cut_plan_relaxed_folders == []
     assert merged.ready is False
     assert any("Validierung:" in w for w in merged.warnings)
+
+
+def test_timeline_item_clip_still_image_keeps_planned_duration(tmp_path: Path) -> None:
+    """Regression: JPEG/PNG haben ffprobe-Dauer ≈ 0 — ohne Image-Sonderfall
+    kappte _append_timeline_item_clip die Shot-Dauer auf ~1 Frame und schob
+    die gesamte V1-Timeline zusammen (A/V-Drift, z. B. Antelope/Arches)."""
+    from otio_app.services.edit_plan_rules import ExportRuleOptions
+    from otio_app.services.otio_exporter import _append_timeline_item_clip
+
+    project = _project(tmp_path)
+    media = project.project_root_path / "Antelope Canyon" / "reused_pexels_33240936.jpeg"
+    media.parent.mkdir(parents=True, exist_ok=True)
+    media.write_bytes(b"fake-jpeg")
+
+    item = TimelineItem(
+        timeline_item_id="edit_cut_001_sentence_002_seg_01",
+        type="image_shot",
+        section_id="cut_001",
+        folder_name="Antelope Canyon",
+        voice_file=str(tmp_path / "voice.mp3"),
+        resolved_media_path=str(media),
+        original_asset_path=str(media),
+        duration_sec=9.5,
+        final_duration_sec=9.5,
+        source_in_sec=0.0,
+        source_out_sec=9.5,
+        transform=TimelineItemTransform(),
+    )
+
+    # Typisches Still-Probe: Dauer 0 — darf die geplante Länge NICHT überschreiben.
+    timing = MediaTiming(start_sec=0.0, duration_sec=0.0, rate=25.0)
+    track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    notes: list[str] = []
+    with patch("otio_app.services.otio_exporter.probe_media_timing", return_value=timing):
+        _append_timeline_item_clip(
+            track,
+            item,
+            project=project,
+            index=2,
+            rate=25.0,
+            export_rules=ExportRuleOptions(),
+            auto_zoom_fill=False,
+            timing_notes=notes,
+        )
+
+    clip = track[0]
+    assert clip.source_range.duration.to_seconds() == pytest.approx(9.5, abs=0.01)
+    assert clip.source_range.start_time.to_seconds() == pytest.approx(0.0, abs=0.001)
+    assert clip.metadata.get("still_image_hold") is True
+    assert any("Still-Image" in note and "9.50s" in note for note in notes)
+    assert not any("gekürzt" in note for note in notes)
+
+
+def test_timeline_item_clip_arches_style_jpeg_not_collapsed_to_one_frame(tmp_path: Path) -> None:
+    """Arches-Fall: ~18.6s Supplement-JPEG darf nicht auf 0.04s fallen."""
+    from otio_app.services.edit_plan_rules import ExportRuleOptions
+    from otio_app.services.otio_exporter import _append_timeline_item_clip
+
+    project = _project(tmp_path)
+    media = project.project_root_path / "Arches National Park" / "reused_pexels_31350303.jpeg"
+    media.parent.mkdir(parents=True, exist_ok=True)
+    media.write_bytes(b"fake-jpeg")
+
+    item = TimelineItem(
+        timeline_item_id="edit_cut_004_sentence_007_seg_01",
+        type="image_shot",
+        section_id="cut_004",
+        folder_name="Arches National Park",
+        resolved_media_path=str(media),
+        original_asset_path=str(media),
+        duration_sec=18.62,
+        final_duration_sec=18.62,
+        source_in_sec=0.0,
+        source_out_sec=18.62,
+        transform=TimelineItemTransform(),
+    )
+    timing = MediaTiming(start_sec=0.0, duration_sec=0.0, rate=25.0)
+    track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    with patch("otio_app.services.otio_exporter.probe_media_timing", return_value=timing):
+        _append_timeline_item_clip(
+            track,
+            item,
+            project=project,
+            index=7,
+            rate=25.0,
+            export_rules=ExportRuleOptions(),
+            auto_zoom_fill=False,
+        )
+
+    assert track[0].source_range.duration.to_seconds() == pytest.approx(18.62, abs=0.02)
+    assert track[0].source_range.duration.to_seconds() > 1.0
