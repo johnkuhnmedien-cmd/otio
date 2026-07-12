@@ -261,37 +261,175 @@ def verify_timeline_media_paths(
     strict: bool = False,
 ) -> list[str]:
     """Prüft Medien der Timeline-Items."""
-    warnings: list[str] = []
+    return [issue.message for issue in collect_timeline_media_issues(project, items, strict=strict)]
+
+
+@dataclass(frozen=True)
+class TimelineMediaIssue:
+    timeline_item_id: str
+    folder_name: str
+    original_path: Path
+    resolved_path: Path
+    message: str
+    repairable: bool
+
+
+def collect_timeline_media_issues(
+    project: Project,
+    items: list[TimelineItem],
+    *,
+    strict: bool = False,
+) -> list[TimelineMediaIssue]:
+    """Strukturierte Medienprobleme — Basis für Auto-Clean vor OTIO-Export."""
+    issues: list[TimelineMediaIssue] = []
     for item in items:
         if item.type == "opening_title":
             media_path = item.rendered_media_path or item.resolved_media_path
             if not media_path:
-                warnings.append(f"{item.timeline_item_id} ({item.folder_name}): kein gerenderter Titel")
+                issues.append(
+                    TimelineMediaIssue(
+                        timeline_item_id=item.timeline_item_id,
+                        folder_name=item.folder_name,
+                        original_path=Path(),
+                        resolved_path=Path(),
+                        message=f"{item.timeline_item_id} ({item.folder_name}): kein gerenderter Titel",
+                        repairable=False,
+                    )
+                )
                 continue
             resolved = Path(media_path).expanduser().resolve()
             if not path_is_readable_file(resolved):
-                warnings.append(
-                    f"{item.timeline_item_id} ({item.folder_name}): Titel offline — `{resolved}`"
+                issues.append(
+                    TimelineMediaIssue(
+                        timeline_item_id=item.timeline_item_id,
+                        folder_name=item.folder_name,
+                        original_path=resolved,
+                        resolved_path=resolved,
+                        message=(
+                            f"{item.timeline_item_id} ({item.folder_name}): Titel offline — `{resolved}`"
+                        ),
+                        repairable=False,
+                    )
                 )
             continue
         if not item.resolved_media_path:
-            warnings.append(f"{item.timeline_item_id} ({item.folder_name}): kein Medium")
+            issues.append(
+                TimelineMediaIssue(
+                    timeline_item_id=item.timeline_item_id,
+                    folder_name=item.folder_name,
+                    original_path=Path(),
+                    resolved_path=Path(),
+                    message=f"{item.timeline_item_id} ({item.folder_name}): kein Medium",
+                    repairable=False,
+                )
+            )
             continue
-        original = _resolve_media_path(item.resolved_media_path)
+        original = _resolve_media_path(item.original_asset_path or item.resolved_media_path)
         resolved = resolve_effective_media_path(project, item.folder_name, original)
         if not path_is_readable_file(resolved):
-            warnings.append(
-                f"{item.timeline_item_id} ({item.folder_name}): offline — `{resolved}`"
+            issues.append(
+                TimelineMediaIssue(
+                    timeline_item_id=item.timeline_item_id,
+                    folder_name=item.folder_name,
+                    original_path=original,
+                    resolved_path=resolved,
+                    message=f"{item.timeline_item_id} ({item.folder_name}): offline — `{resolved}`",
+                    repairable=path_is_readable_file(original) and not is_image_media(original),
+                )
             )
             continue
         if strict and resolved.suffix.lower() in {".mp4", ".mov", ".m4v"}:
             valid, validation_error = validate_clean_output(resolved)
             if not valid:
-                warnings.append(
-                    f"{item.timeline_item_id}: `{resolved.name}` — "
-                    f"{validation_error or 'nicht Resolve-ready'}"
+                source_for_repair = original if path_is_readable_file(original) else resolved
+                issues.append(
+                    TimelineMediaIssue(
+                        timeline_item_id=item.timeline_item_id,
+                        folder_name=item.folder_name,
+                        original_path=source_for_repair,
+                        resolved_path=resolved,
+                        message=(
+                            f"{item.timeline_item_id}: `{resolved.name}` — "
+                            f"{validation_error or 'nicht Resolve-ready'}"
+                        ),
+                        repairable=(
+                            path_is_readable_file(source_for_repair)
+                            and not is_image_media(source_for_repair)
+                        ),
+                    )
                 )
-    return warnings
+    return issues
+
+
+def auto_repair_export_media_issues(
+    project: Project,
+    issues: list[TimelineMediaIssue],
+    *,
+    progress_callback: OtioExportProgressCallback | None = None,
+    should_cancel: OtioExportCancelCheck | None = None,
+) -> tuple[list[str], list[str]]:
+    """Clean Media Force-Transcode für reparierbare Export-Probleme.
+
+    Gibt (notes, remaining_issue_messages) zurück. remaining_issue_messages
+    sind die ursprünglichen Meldungen für nicht reparierbare / fehlgeschlagene
+    Assets — der Aufrufer sollte danach erneut collecten und nur bei Restfailen.
+    """
+    from otio_app.services.clean_media import (
+        CLEAN_STATUS_CLEAN,
+        process_and_persist_media_file,
+    )
+
+    notes: list[str] = []
+    repairable = [issue for issue in issues if issue.repairable]
+    if not repairable:
+        return notes, [issue.message for issue in issues]
+
+    unique: list[TimelineMediaIssue] = []
+    seen: set[tuple[str, str]] = set()
+    for issue in repairable:
+        key = (issue.folder_name, str(issue.original_path))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(issue)
+
+    total = len(unique)
+    failed_keys: set[tuple[str, str]] = set()
+    for index, issue in enumerate(unique, start=1):
+        _raise_if_export_cancelled(should_cancel)
+        _emit_export_progress(
+            progress_callback,
+            stage="auto_clean",
+            message=f"Clean Media {index}/{total}: {issue.original_path.name}",
+            fraction=0.18 + 0.08 * ((index - 1) / max(1, total)),
+            current=index,
+            total=total,
+            folder=issue.folder_name,
+            detail=issue.original_path.name,
+        )
+        entry = process_and_persist_media_file(
+            project,
+            issue.folder_name,
+            issue.original_path,
+            force_transcode=True,
+        )
+        if entry.status == CLEAN_STATUS_CLEAN and entry.clean_path:
+            notes.append(
+                f"{issue.folder_name}/{issue.original_path.name}: Auto-Clean → `{Path(entry.clean_path).name}`"
+            )
+        else:
+            failed_keys.add((issue.folder_name, str(issue.original_path)))
+            notes.append(
+                f"{issue.folder_name}/{issue.original_path.name}: Auto-Clean fehlgeschlagen"
+                + (f" — {entry.error}" if entry.error else "")
+            )
+
+    remaining_messages = [
+        issue.message
+        for issue in issues
+        if (not issue.repairable) or ((issue.folder_name, str(issue.original_path)) in failed_keys)
+    ]
+    return notes, remaining_messages
 
 
 def _plan_section_items(plan: EditPlanDocument, folder_name: str, voice_file: str) -> list[TimelineItem]:
@@ -1508,14 +1646,45 @@ def export_otio_timeline(
         message="Medienpfade prüfen…",
         fraction=0.18,
     )
-    media_issues = verify_timeline_media_paths(project, merged.timeline_items, strict=True)
+    media_issues = collect_timeline_media_issues(project, merged.timeline_items, strict=True)
+    auto_clean_notes: list[str] = []
     if media_issues:
-        preview = "\n".join(f"• {line}" for line in media_issues[:12])
-        extra = f"\n… und {len(media_issues) - 12} weitere" if len(media_issues) > 12 else ""
-        raise ValueError(
-            "Medien nicht exportierbar — Clean Media prüfen oder Schnittplan anpassen:\n"
-            f"{preview}{extra}"
-        )
+        repairable_count = sum(1 for issue in media_issues if issue.repairable)
+        if repairable_count:
+            _emit_export_progress(
+                progress_callback,
+                stage="auto_clean",
+                message=f"Auto-Clean für {repairable_count} problematische Medien…",
+                fraction=0.185,
+            )
+            auto_clean_notes, _ = auto_repair_export_media_issues(
+                project,
+                media_issues,
+                progress_callback=progress_callback,
+                should_cancel=should_cancel,
+            )
+            _emit_export_progress(
+                progress_callback,
+                stage="media_check",
+                message="Medienpfade erneut prüfen…",
+                fraction=0.265,
+            )
+            media_issues = collect_timeline_media_issues(
+                project, merged.timeline_items, strict=True
+            )
+        if media_issues:
+            preview = "\n".join(f"• {issue.message}" for issue in media_issues[:12])
+            extra = f"\n… und {len(media_issues) - 12} weitere" if len(media_issues) > 12 else ""
+            clean_hint = ""
+            if auto_clean_notes:
+                clean_hint = (
+                    "\n\nAuto-Clean-Versuch:\n"
+                    + "\n".join(f"• {note}" for note in auto_clean_notes[:8])
+                )
+            raise ValueError(
+                "Medien nicht exportierbar — Clean Media prüfen oder Schnittplan anpassen:\n"
+                f"{preview}{extra}{clean_hint}"
+            )
 
     timeline = build_otio_timeline(
         project,
@@ -1536,6 +1705,10 @@ def export_otio_timeline(
     )
     otio.adapters.write_to_file(timeline, str(path))
     aspect_notes = list(timeline.metadata.get("aspect_fill_notes", []))
+    if auto_clean_notes:
+        aspect_notes = list(auto_clean_notes) + list(aspect_notes)
+        timeline.metadata["auto_clean_notes"] = list(auto_clean_notes)
+        # Metadata nachträglich nicht erneut schreiben — Notes gehen in OtioExportResult.
 
     _emit_export_progress(
         progress_callback,

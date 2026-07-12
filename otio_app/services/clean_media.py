@@ -664,6 +664,57 @@ def save_clean_media_manifest(manifest_path: Path, manifest: CleanMediaManifest)
     manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
 
 
+def upsert_clean_media_entry(
+    project: Project,
+    folder_name: str,
+    entry: CleanMediaEntry,
+) -> CleanMediaManifest:
+    """Ersetzt oder ergänzt einen Manifest-Eintrag für dasselbe Original."""
+    path = folder_manifest_path(project, folder_name)
+    manifest = load_clean_media_manifest(path)
+    if manifest is None:
+        manifest = CleanMediaManifest(project_id=project.id, folder=folder_name, entries=[])
+
+    try:
+        target = str(Path(entry.original_path).expanduser().resolve())
+    except OSError:
+        target = str(Path(entry.original_path).expanduser())
+
+    remaining: list[CleanMediaEntry] = []
+    for existing in manifest.entries:
+        try:
+            existing_key = str(Path(existing.original_path).expanduser().resolve())
+        except OSError:
+            existing_key = str(Path(existing.original_path).expanduser())
+        if existing_key == target:
+            continue
+        remaining.append(existing)
+    remaining.append(entry)
+    updated = manifest.model_copy(
+        update={"project_id": project.id, "folder": folder_name, "entries": remaining}
+    )
+    save_clean_media_manifest(path, updated)
+    return updated
+
+
+def process_and_persist_media_file(
+    project: Project,
+    folder_name: str,
+    media_path: Path,
+    *,
+    force_transcode: bool = False,
+) -> CleanMediaEntry:
+    """process_media_file + Manifest-Update — für gezielte Export-Reparaturen."""
+    entry = process_media_file(
+        project,
+        folder_name,
+        media_path,
+        force_transcode=force_transcode,
+    )
+    upsert_clean_media_entry(project, folder_name, entry)
+    return entry
+
+
 def folder_manifest_path(project: Project, folder_name: str) -> Path:
     return get_folder_clean_manifest_path(project.work_dir_path, folder_name)
 

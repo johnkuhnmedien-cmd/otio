@@ -100,7 +100,7 @@ def test_export_emits_clip_progress_events(tmp_path: Path) -> None:
         "otio_app.services.otio_exporter.ensure_opening_titles_rendered",
         return_value=(items, []),
     ), patch(
-        "otio_app.services.otio_exporter.verify_timeline_media_paths",
+        "otio_app.services.otio_exporter.collect_timeline_media_issues",
         return_value=[],
     ), patch(
         "otio_app.services.otio_exporter.build_otio_timeline",
@@ -129,6 +129,7 @@ def test_export_emits_clip_progress_events(tmp_path: Path) -> None:
     stages = [e.stage for e in events]
     assert "titles" in stages
     assert "media_check" in stages
+    assert "auto_clean" not in stages
     assert "write" in stages
     assert "done" in stages
 

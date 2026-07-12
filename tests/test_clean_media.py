@@ -22,12 +22,15 @@ from otio_app.services.clean_media import (
     CLEAN_STATUS_OK,
     find_clean_file_for_media,
     folder_clean_media_ready,
+    load_clean_media_manifest,
     media_asset_number,
     needs_transcode,
+    process_and_persist_media_file,
     process_media_file,
     resolve_effective_media_path,
     save_clean_media_manifest,
     transcode_to_clean,
+    upsert_clean_media_entry,
     validate_media_file,
 )
 from otio_app.services.clean_media_settings import CleanMediaSettings, save_clean_media_settings
@@ -799,3 +802,51 @@ def test_process_media_transcodes_prores_even_with_folder_title_rule(
     assert mock_transcode.called
     assert captured.get("video_filter") is None
     assert "_title" not in (captured.get("output_name") or "")
+
+
+def test_upsert_clean_media_entry_replaces_same_original(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    original = project.project_root_path / "Florida Keys" / "clip.mp4"
+    original.parent.mkdir(parents=True, exist_ok=True)
+    original.write_bytes(b"x")
+    first = CleanMediaEntry(original_path=str(original.resolve()), status=CLEAN_STATUS_OK)
+    second = CleanMediaEntry(
+        original_path=str(original.resolve()),
+        clean_path=str((tmp_path / "clean.mov").resolve()),
+        status=CLEAN_STATUS_CLEAN,
+    )
+    upsert_clean_media_entry(project, "Florida Keys", first)
+    upsert_clean_media_entry(project, "Florida Keys", second)
+    from otio_app.services.clean_media import folder_manifest_path
+
+    manifest = load_clean_media_manifest(folder_manifest_path(project, "Florida Keys"))
+    assert manifest is not None
+    assert len(manifest.entries) == 1
+    assert manifest.entries[0].status == CLEAN_STATUS_CLEAN
+
+
+@patch("otio_app.services.clean_media.process_media_file")
+def test_process_and_persist_media_file_writes_manifest(mock_process, tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    original = project.project_root_path / "Florida Keys" / "clip.mp4"
+    original.parent.mkdir(parents=True, exist_ok=True)
+    original.write_bytes(b"x")
+    clean = tmp_path / "out.mov"
+    clean.write_bytes(b"c")
+    mock_process.return_value = CleanMediaEntry(
+        original_path=str(original.resolve()),
+        clean_path=str(clean.resolve()),
+        status=CLEAN_STATUS_CLEAN,
+    )
+    entry = process_and_persist_media_file(
+        project, "Florida Keys", original, force_transcode=True
+    )
+    assert entry.status == CLEAN_STATUS_CLEAN
+    mock_process.assert_called_once()
+    assert mock_process.call_args.kwargs.get("force_transcode") is True
+    from otio_app.services.clean_media import folder_manifest_path
+
+    manifest = load_clean_media_manifest(folder_manifest_path(project, "Florida Keys"))
+    assert manifest is not None
+    assert len(manifest.entries) == 1
+    assert manifest.entries[0].clean_path == str(clean.resolve())
