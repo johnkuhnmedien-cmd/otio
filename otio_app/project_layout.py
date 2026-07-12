@@ -78,8 +78,12 @@ def get_inventory_path(project_root: Path) -> Path:
     return project_root / INVENTORY_FILENAME
 
 
-def get_voice_analysis_path(project_root: Path) -> Path:
-    return project_root / VOICE_ANALYSIS_FILENAME
+def get_voice_analysis_path(base_dir: Path) -> Path:
+    """Pfad zur Voice-Analyse.
+
+    `base_dir` ist der Language-Scope (`_otio/{LANG}/`). Legacy lag im Projektroot.
+    """
+    return base_dir / VOICE_ANALYSIS_FILENAME
 
 
 def get_voice_folder_mapping_path(base_dir: Path) -> Path:

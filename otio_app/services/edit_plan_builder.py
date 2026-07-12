@@ -1288,7 +1288,7 @@ def build_edit_plan(
                 used_rules=used_rules,
             )
             reports = _write_plan_validation_reports(
-                project.work_dir_path,
+                project.language_work_dir_path,
                 used_rules=used_rules,
                 validation_errors=validation.errors if not validation.ok else [],
                 retry_attempts=attempt,
@@ -1339,7 +1339,7 @@ def build_edit_plan(
         "beats_by_folder": last_beats_by_folder,
     }
     reports = _write_plan_validation_reports(
-        project.work_dir_path,
+        project.language_work_dir_path,
         used_rules=used_rules,
         validation_errors=last_validation_errors,
         retry_attempts=max_attempts,

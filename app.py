@@ -10,6 +10,7 @@ import streamlit as st
 from pydantic import ValidationError
 
 from otio_app.defaults import (
+    BRIEF_LANGUAGE_CHOICES,
     DEFAULT_FRAMES_PER_SHOT,
     DEFAULT_VOICE_OVER_SUBDIR,
     PROJECT_MODE_LABELS,
@@ -22,10 +23,16 @@ from otio_app.project_layout import (
     classify_subdirectories,
     classify_subdirectories_no_voiceover,
     default_work_dir,
+    language_folder_name,
     scan_project_structure,
     scan_project_structure_no_voiceover,
 )
-from otio_app.project_repository import create_project, list_projects
+from otio_app.project_repository import (
+    create_project,
+    find_project_by_root_and_language,
+    find_projects_by_root,
+    list_projects,
+)
 from otio_app.ui.navigation import PAGE_ANALYSIS, PAGE_NEW
 from otio_app.ui.routing import run_app_navigation
 
@@ -126,8 +133,10 @@ def _show_saved_project(saved) -> None:
     details = {
         "id": saved.id,
         "project_mode": saved.project_mode.value,
+        "language": saved.language,
         "project_root": saved.project_root,
         "work_dir": saved.work_dir,
+        "language_work_dir": str(saved.language_work_dir_path),
         "alle_asset_ordner": saved.asset_subdir_names,
         "ausgewaehlte_ordner": saved.selected_asset_subdirs,
         "inventory_dir": str(saved.inventory_dir),
@@ -162,11 +171,15 @@ def _finalize_project_save(
         st.session_state.pop(PREVIEW_KEY, None)
         return
 
-    saved = create_project(
-        project_data,
-        asset_subdir_names=available_assets,
-        selected_asset_subdirs=selected_assets,
-    )
+    try:
+        saved = create_project(
+            project_data,
+            asset_subdir_names=available_assets,
+            selected_asset_subdirs=selected_assets,
+        )
+    except ValueError as exc:
+        st.error(str(exc))
+        return
     st.session_state.pop(PREVIEW_KEY, None)
     st.session_state.pop(PENDING_KEY, None)
     _show_saved_project(saved)
@@ -180,13 +193,15 @@ def _save_pending_project() -> None:
     work_path = normalize_path(project_data.work_dir)
     if not work_path.exists():
         create_work_dir(work_path)
-    saved = create_project(
-        project_data,
-        asset_subdir_names=raw["available_assets"],
-        selected_asset_subdirs=raw["selected_asset_subdirs"],
-    )
-    # Editorial-Scope `_otio/{LANG}/` sofort anlegen.
-    _ = saved.language_work_dir_path
+    try:
+        saved = create_project(
+            project_data,
+            asset_subdir_names=raw["available_assets"],
+            selected_asset_subdirs=raw["selected_asset_subdirs"],
+        )
+    except ValueError as exc:
+        st.error(str(exc))
+        return
     _show_saved_project(saved)
 
 
@@ -202,6 +217,10 @@ def render_new_project_page() -> None:
         """
         Gib den **Projektordner** an (z. B. `.../USA`). Danach wählst du aus,
         welche Asset-Unterordner bearbeitet werden sollen.
+
+        **Zweite Sprache am gleichen Pfad:** neues Projekt anlegen, gleichen Ordner
+        wählen, andere Sprache setzen. Assets, Clean Media und Inventory bleiben
+        geteilt — Texte/Cut Plan/Export liegen unter `_otio/DE/` bzw. `_otio/EN/`.
         """
     )
 
@@ -259,7 +278,16 @@ def render_new_project_page() -> None:
         st.subheader("Projektvorgaben")
         col1, col2 = st.columns(2)
         with col1:
-            language = st.text_input("Sprache", value="de")
+            language = st.selectbox(
+                "Sprache *",
+                options=list(BRIEF_LANGUAGE_CHOICES),
+                index=0,
+                help=(
+                    "Ein DB-Projekt = eine Sprache. Gleicher Medienordner mit anderer "
+                    "Sprache = neues Projekt (Assets/Clean/Inventory werden geteilt, "
+                    f"Editorial liegt unter `_otio/{'{LANG}'}/`)."
+                ),
+            )
             fps = st.number_input("FPS", value=25.0, min_value=0.1, step=0.1)
             width = st.number_input("Breite (px)", value=3840, min_value=1, step=1)
             frames_per_shot = st.number_input(
@@ -308,6 +336,30 @@ def render_new_project_page() -> None:
                 for error in exc.errors():
                     st.error(error["msg"])
             else:
+                same_lang = find_project_by_root_and_language(
+                    project_data.project_root,
+                    project_data.language,
+                )
+                if same_lang is not None:
+                    st.error(
+                        f"Am Ordner gibt es bereits ein Projekt in Sprache "
+                        f"**{same_lang.language}** („{same_lang.name}“). "
+                        "Bitte das bestehende öffnen oder eine andere Sprache wählen."
+                    )
+                    st.session_state.pop(PREVIEW_KEY, None)
+                    return
+
+                siblings = find_projects_by_root(project_data.project_root)
+                if siblings:
+                    langs = ", ".join(
+                        sorted({language_folder_name(p.language) for p in siblings})
+                    )
+                    st.info(
+                        f"Am gleichen Pfad existieren bereits Projekte "
+                        f"({langs}). Clean Media & Inventory werden geteilt; "
+                        f"Editorial landet unter `_otio/{language_folder_name(project_data.language)}/`."
+                    )
+
                 if project_data.project_mode == ProjectMode.WITHOUT_VOICEOVER:
                     scan = scan_project_structure_no_voiceover(
                         project_data.project_root_path,

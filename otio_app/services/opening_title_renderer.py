@@ -422,7 +422,7 @@ def ensure_opening_titles_rendered(
 
     if report_warnings or font_warnings or report_errors:
         append_validation_report(
-            project.work_dir_path,
+            project.language_work_dir_path,
             warnings=report_warnings,
             font_warnings=font_warnings,
             errors=report_errors,

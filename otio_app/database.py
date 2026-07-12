@@ -37,37 +37,54 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     rows = conn.execute("PRAGMA table_info(projects)").fetchall()
     if not rows:
         conn.executescript(SCHEMA)
-        return
+    else:
+        column_names = {row[1] for row in rows}
+        if "project_root" not in column_names:
+            conn.execute("DROP TABLE projects")
+            conn.executescript(SCHEMA)
+        else:
+            if "asset_subdir_names" not in column_names:
+                conn.execute(
+                    "ALTER TABLE projects ADD COLUMN asset_subdir_names TEXT NOT NULL DEFAULT '[]'"
+                )
+                column_names.add("asset_subdir_names")
 
-    column_names = {row[1] for row in rows}
-    if "project_root" not in column_names:
-        conn.execute("DROP TABLE projects")
-        conn.executescript(SCHEMA)
-        return
+            if "selected_asset_subdirs" not in column_names:
+                conn.execute(
+                    "ALTER TABLE projects ADD COLUMN selected_asset_subdirs TEXT NOT NULL DEFAULT '[]'"
+                )
+                conn.execute(
+                    """
+                    UPDATE projects
+                    SET selected_asset_subdirs = asset_subdir_names
+                    WHERE selected_asset_subdirs = '[]' AND asset_subdir_names != '[]'
+                    """
+                )
 
-    if "asset_subdir_names" not in column_names:
-        conn.execute(
-            "ALTER TABLE projects ADD COLUMN asset_subdir_names TEXT NOT NULL DEFAULT '[]'"
-        )
-        column_names.add("asset_subdir_names")
+            if "project_mode" not in column_names:
+                # Bestandsprojekte sind ausnahmslos der bisherige Workflow — der neue
+                # Diagnose-/Generierungsworkflow existierte zum Zeitpunkt ihrer Anlage nicht.
+                conn.execute(
+                    "ALTER TABLE projects ADD COLUMN project_mode TEXT NOT NULL DEFAULT 'with_voiceover'"
+                )
 
-    if "selected_asset_subdirs" not in column_names:
-        conn.execute(
-            "ALTER TABLE projects ADD COLUMN selected_asset_subdirs TEXT NOT NULL DEFAULT '[]'"
-        )
+    # Ein DB-Projekt = eine Sprache. Gleicher Root + gleiche Sprache ist verboten;
+    # gleicher Root + andere Sprache (DE/EN) ist erwünscht.
+    # lower(language): "de" und "DE" gelten als dieselbe Sprache.
+    duplicates = conn.execute(
+        """
+        SELECT project_root, lower(language) AS lang, COUNT(*) AS cnt
+        FROM projects
+        GROUP BY project_root, lower(language)
+        HAVING cnt > 1
+        """
+    ).fetchall()
+    if not duplicates:
         conn.execute(
             """
-            UPDATE projects
-            SET selected_asset_subdirs = asset_subdir_names
-            WHERE selected_asset_subdirs = '[]' AND asset_subdir_names != '[]'
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_root_language
+            ON projects(project_root, lower(language))
             """
-        )
-
-    if "project_mode" not in column_names:
-        # Bestandsprojekte sind ausnahmslos der bisherige Workflow — der neue
-        # Diagnose-/Generierungsworkflow existierte zum Zeitpunkt ihrer Anlage nicht.
-        conn.execute(
-            "ALTER TABLE projects ADD COLUMN project_mode TEXT NOT NULL DEFAULT 'with_voiceover'"
         )
 
 
