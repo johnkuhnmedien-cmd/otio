@@ -276,6 +276,62 @@ def test_ui_resolving_conflict_enables_merge_button(tmp_path: Path, monkeypatch:
     assert entry.voice_file != "/old/voice.mp3"
 
 
+def test_ui_bulk_apply_sets_all_conflict_resolutions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = _build_confirmed_bridge_project(tmp_path)
+    save_voice_folder_mapping(
+        project,
+        [VoiceFolderMappingEntry(voice_file="/old/voice.mp3", folder=FOLDER_A, confirmed=True)],
+        confirmed=True,
+    )
+    build_and_save_production_edit_plan_staging(project)
+    validate_production_edit_plan_staging(project)
+    readiness = build_production_edit_plan_promote_readiness(project)
+    save_production_edit_plan_promote_readiness(project, readiness)
+    dry_run_trace = build_production_edit_plan_promote_dry_run_trace(project, readiness)
+    save_production_edit_plan_promote_dry_run_trace(project, dry_run_trace)
+    manifest = promote_production_edit_plans(project)
+    manifest = save_production_edit_plan_promote_manifest(project, manifest)
+    patch = build_voice_folder_mapping_patch(project, manifest)
+    save_voice_folder_mapping_patch(project, patch)
+
+    at = _run_repro(tmp_path, monkeypatch)
+    bulk_apply = next(b for b in at.button if str(b.label).startswith("Alle → APPLY"))
+    at = bulk_apply.click().run()
+    assert not at.exception, at.exception
+    radio_key = f"voice_folder_mapping_merge_resolution_{PROJECT_ID}_{FOLDER_A}"
+    assert at.radio(key=radio_key).value == "Neuen Voice-over übernehmen (APPLY)"
+    merge_button = next(b for b in at.button if b.label == "Voice Folder Mapping aktualisieren")
+    assert merge_button.disabled is False
+
+
+def test_ui_bulk_skip_sets_all_conflict_resolutions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = _build_confirmed_bridge_project(tmp_path)
+    save_voice_folder_mapping(
+        project,
+        [VoiceFolderMappingEntry(voice_file="/old/voice.mp3", folder=FOLDER_A, confirmed=True)],
+        confirmed=True,
+    )
+    build_and_save_production_edit_plan_staging(project)
+    validate_production_edit_plan_staging(project)
+    readiness = build_production_edit_plan_promote_readiness(project)
+    save_production_edit_plan_promote_readiness(project, readiness)
+    dry_run_trace = build_production_edit_plan_promote_dry_run_trace(project, readiness)
+    save_production_edit_plan_promote_dry_run_trace(project, dry_run_trace)
+    manifest = promote_production_edit_plans(project)
+    manifest = save_production_edit_plan_promote_manifest(project, manifest)
+    patch = build_voice_folder_mapping_patch(project, manifest)
+    save_voice_folder_mapping_patch(project, patch)
+
+    at = _run_repro(tmp_path, monkeypatch)
+    bulk_skip = next(b for b in at.button if str(b.label).startswith("Alle → SKIP"))
+    at = bulk_skip.click().run()
+    assert not at.exception, at.exception
+    radio_key = f"voice_folder_mapping_merge_resolution_{PROJECT_ID}_{FOLDER_A}"
+    assert at.radio(key=radio_key).value == "Bestehenden Eintrag behalten (SKIP)"
+    merge_button = next(b for b in at.button if b.label == "Voice Folder Mapping aktualisieren")
+    assert merge_button.disabled is False
+
+
 def test_no_files_written_under_exports_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _promoted_project_with_patch(tmp_path)
     at = _run_repro(tmp_path, monkeypatch)
