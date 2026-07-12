@@ -119,6 +119,16 @@ def _maybe_migrate_root_mapping(project: Project, lang_dir: Path) -> None:
         _safe_move(root_mapping, scoped_mapping)
 
 
+def _maybe_migrate_root_voice_analysis(project: Project, lang_dir: Path) -> None:
+    """Voice-Analyse lag historisch im Projektroot — einmalig in den Language-Scope."""
+    from otio_app.defaults import VOICE_ANALYSIS_FILENAME
+
+    root_analysis = project.project_root_path / VOICE_ANALYSIS_FILENAME
+    scoped_analysis = lang_dir / VOICE_ANALYSIS_FILENAME
+    if root_analysis.is_file() and not scoped_analysis.exists():
+        _safe_move(root_analysis, scoped_analysis)
+
+
 def _rewrite_absolute_paths_in_tree(root: Path, *, old_prefix: str, new_prefix: str) -> int:
     """Ersetzt absolute Pfad-Prefixe in JSON-Dateien unter root."""
     if not root.is_dir() or old_prefix == new_prefix:
@@ -156,12 +166,14 @@ def migrate_language_scope(project: Project) -> Path:
     if lang in marker.get("languages", []):
         lang_dir.mkdir(parents=True, exist_ok=True)
         _maybe_migrate_root_mapping(project, lang_dir)
+        _maybe_migrate_root_voice_analysis(project, lang_dir)
         return lang_dir
 
     flat_present = _has_flat_language_artifacts(work_dir)
     if not flat_present:
         lang_dir.mkdir(parents=True, exist_ok=True)
         _maybe_migrate_root_mapping(project, lang_dir)
+        _maybe_migrate_root_voice_analysis(project, lang_dir)
         _write_marker(work_dir, lang=lang, source_layout="fresh")
         return lang_dir
 
@@ -185,6 +197,7 @@ def migrate_language_scope(project: Project) -> Path:
     _safe_move(voice_src, voice_dest)
 
     _maybe_migrate_root_mapping(project, lang_dir)
+    _maybe_migrate_root_voice_analysis(project, lang_dir)
 
     _rewrite_absolute_paths_in_tree(lang_dir, old_prefix=old_prefix, new_prefix=new_prefix)
 

@@ -268,7 +268,7 @@ def _build_source_artifacts(
         "project_brief_path": str(get_project_brief_path(project.language_work_dir_path)),
         "style_profile_path": str(get_voiceover_style_profile_path(project.language_work_dir_path)),
         "dramaturgy_confirmed_path": str(get_dramaturgy_plan_confirmed_path(project.language_work_dir_path)),
-        "folder_voiceovers_confirmed_path": str(get_folder_voiceovers_confirmed_path(project.work_dir_path)),
+        "folder_voiceovers_confirmed_path": str(get_folder_voiceovers_confirmed_path(project.language_work_dir_path)),
         "intro_hook_confirmed_path": str(get_intro_hook_confirmed_path(project.language_work_dir_path)),
         "audio_manifest_path": str(get_voiceover_audio_manifest_path(project.language_work_dir_path)),
         "created_from_hashes": {

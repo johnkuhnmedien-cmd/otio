@@ -17,6 +17,10 @@ from otio_app.models import (
 from otio_app.project_layout import scan_project_structure
 
 
+def _normalize_language(language: str) -> str:
+    return (language or "de").strip().lower() or "de"
+
+
 def _parse_json_string_list(raw: str | None) -> list[str]:
     if not raw:
         return []
@@ -61,6 +65,54 @@ def _row_to_project(row: sqlite3.Row) -> Project:
     )
 
 
+def find_projects_by_root(
+    project_root: str | Path,
+    db_path: Path | None = None,
+) -> list[Project]:
+    """Alle DB-Projekte mit demselben Projektroot (beliebige Sprachen)."""
+    try:
+        root = str(Path(project_root).expanduser().resolve())
+    except OSError:
+        root = str(Path(str(project_root)).expanduser())
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM projects WHERE project_root = ? ORDER BY created_at DESC",
+            (root,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_project(row) for row in rows]
+
+
+def find_project_by_root_and_language(
+    project_root: str | Path,
+    language: str,
+    db_path: Path | None = None,
+) -> Project | None:
+    """Findet ein Projekt mit gleichem Root und (case-insensitive) gleicher Sprache."""
+    try:
+        root = str(Path(project_root).expanduser().resolve())
+    except OSError:
+        root = str(Path(str(project_root)).expanduser())
+    lang = _normalize_language(language)
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT * FROM projects
+            WHERE project_root = ? AND lower(language) = ?
+            LIMIT 1
+            """,
+            (root, lang),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    return _row_to_project(row)
+
+
 def create_project(
     data: ProjectCreate,
     db_path: Path | None = None,
@@ -68,6 +120,22 @@ def create_project(
     selected_asset_subdirs: list[str] | None = None,
 ) -> Project:
     """Legt ein neues Projekt in der Datenbank an."""
+    # Sprache normalisieren, damit de/DE nicht doppelt angelegt werden.
+    data = data.model_copy(update={"language": _normalize_language(data.language)})
+
+    existing = find_project_by_root_and_language(
+        data.project_root,
+        data.language,
+        db_path=db_path,
+    )
+    if existing is not None:
+        raise ValueError(
+            f"Am Projektordner gibt es bereits ein Projekt in Sprache "
+            f"„{existing.language}“ (Name: {existing.name}). "
+            "Für dieselbe Sprache bitte das bestehende Projekt öffnen — "
+            "für eine andere Sprache ein neues Projekt mit anderer Sprache anlegen."
+        )
+
     if asset_subdir_names is None:
         scan = scan_project_structure(
             data.project_root_path,
@@ -125,6 +193,11 @@ def create_project(
         conn.commit()
     finally:
         conn.close()
+
+    # Language-Scope `_otio/{LANG}/` sofort anlegen (auch wenn _otio schon existiert).
+    from otio_app.services.language_scope import ensure_language_scope
+
+    ensure_language_scope(project)
     return project
 
 

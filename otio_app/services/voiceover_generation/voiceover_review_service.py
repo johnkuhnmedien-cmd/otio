@@ -543,7 +543,7 @@ def run_folder_voiceover_review_loop(
 
 
 def load_validation_reports(project: Project) -> FolderVoiceoverValidationReportsDocument:
-    path = get_folder_voiceover_validation_report_path(project.work_dir_path)
+    path = get_folder_voiceover_validation_report_path(project.language_work_dir_path)
     if not path.is_file():
         return FolderVoiceoverValidationReportsDocument(project_id=project.id)
     try:
@@ -560,7 +560,7 @@ def save_validation_report(
     reports = dict(document.reports)
     reports[report.folder_name] = report
     updated = document.model_copy(update={"project_id": project.id, "reports": reports})
-    path = get_folder_voiceover_validation_report_path(project.work_dir_path)
+    path = get_folder_voiceover_validation_report_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(updated.model_dump_json(indent=2), encoding="utf-8")
     return updated

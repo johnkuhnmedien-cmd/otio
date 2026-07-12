@@ -743,7 +743,7 @@ def _render_plan_validation_panel(
         return
 
     used_rules = draft.used_rules or {}
-    report = load_edit_plan_validation_report(work_dir or project.work_dir_path)
+    report = load_edit_plan_validation_report(work_dir or project.language_work_dir_path)
     if not used_rules and report:
         used_rules = report.get("used_rules") or {}
 
@@ -763,7 +763,7 @@ def _render_plan_validation_panel(
     for line in format_used_rules_summary(used_rules):
         st.caption(f"• {line}")
 
-    retry_summary = latest_retry_attempt_summary(work_dir or project.work_dir_path)
+    retry_summary = latest_retry_attempt_summary(work_dir or project.language_work_dir_path)
     if retry_summary:
         st.caption(f"Letzter Gemini-Lauf: {retry_summary}")
 

@@ -53,7 +53,7 @@ def test_project_create_output_paths(temp_project_layout: dict[str, Path]) -> No
     assert data.inventory_path == project_root / "inventory.json"
     assert data.inventory_dir == work_dir / "inventory"
     assert data.folder_inventory_path("Grand Canyon") == work_dir / "inventory" / "Grand_Canyon.json"
-    assert data.voice_analysis_path == project_root / "voice_over_analysis.json"
+    assert data.voice_analysis_path == work_dir / "DE" / "voice_over_analysis.json"
 
 
 def test_project_create_rejects_empty_name(
@@ -176,5 +176,5 @@ def test_voiceover_generation_dir_property(
         selected_asset_subdirs=["Grand Canyon", "Yellowstone"],
     )
     assert project.voiceover_generation_dir == (
-        temp_project_layout["work_dir"] / "voiceover_generation"
+        temp_project_layout["work_dir"] / "DE" / "voiceover_generation"
     )

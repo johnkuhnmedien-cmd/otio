@@ -193,7 +193,7 @@ class ProjectCreate(BaseModel):
 
     @property
     def voice_analysis_path(self) -> Path:
-        return get_voice_analysis_path(self.project_root_path)
+        return get_voice_analysis_path(self.language_work_dir_path)
 
     @property
     def voice_folder_mapping_path(self) -> Path:
@@ -280,7 +280,7 @@ class Project(BaseModel):
 
     @property
     def voice_analysis_path(self) -> Path:
-        return get_voice_analysis_path(self.project_root_path)
+        return get_voice_analysis_path(self.language_work_dir_path)
 
     @property
     def voice_folder_mapping_path(self) -> Path:
