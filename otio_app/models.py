@@ -30,6 +30,7 @@ from otio_app.project_layout import (
     get_folder_inventory_path,
     get_inventory_dir,
     get_inventory_path,
+    get_language_work_dir,
     get_voice_analysis_path,
     get_voice_folder_mapping_path,
     get_voice_over_dir,
@@ -149,6 +150,11 @@ class ProjectCreate(BaseModel):
         return Path(self.work_dir)
 
     @property
+    def language_work_dir_path(self) -> Path:
+        """Editorial-Scope `_otio/{LANG}/` (noch ohne Migration — erst nach Save)."""
+        return get_language_work_dir(self.work_dir_path, self.language)
+
+    @property
     def work_dir_exists(self) -> bool:
         return self.work_dir_path.exists()
 
@@ -199,10 +205,10 @@ class ProjectCreate(BaseModel):
 
     @property
     def edit_plan_dir(self) -> Path:
-        return get_edit_plan_dir(self.work_dir_path)
+        return get_edit_plan_dir(self.language_work_dir_path)
 
     def folder_edit_plan_path(self, folder_name: str) -> Path:
-        return get_folder_edit_plan_path(self.work_dir_path, folder_name)
+        return get_folder_edit_plan_path(self.language_work_dir_path, folder_name)
 
 
 class Project(BaseModel):
@@ -237,6 +243,13 @@ class Project(BaseModel):
     @property
     def work_dir_path(self) -> Path:
         return Path(self.work_dir)
+
+    @property
+    def language_work_dir_path(self) -> Path:
+        """Editorial-Scope `_otio/{LANG}/` — migriert flat Layout bei Bedarf."""
+        from otio_app.services.language_scope import ensure_language_scope
+
+        return ensure_language_scope(self)
 
     @property
     def voice_over_dir(self) -> Path:
@@ -279,15 +292,15 @@ class Project(BaseModel):
 
     @property
     def edit_plan_dir(self) -> Path:
-        return get_edit_plan_dir(self.work_dir_path)
+        return get_edit_plan_dir(self.language_work_dir_path)
 
     def folder_edit_plan_path(self, folder_name: str) -> Path:
-        return get_folder_edit_plan_path(self.work_dir_path, folder_name)
+        return get_folder_edit_plan_path(self.language_work_dir_path, folder_name)
 
     @property
     def voiceover_generation_dir(self) -> Path:
         """Wurzel der Artefakte für "Projekt ohne Voice-Over" (Dramaturgie/VO-Generierung)."""
-        return get_voiceover_generation_dir(self.work_dir_path)
+        return get_voiceover_generation_dir(self.language_work_dir_path)
 
     @property
     def is_without_voiceover(self) -> bool:

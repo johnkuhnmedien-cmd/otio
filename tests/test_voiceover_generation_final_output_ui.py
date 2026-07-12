@@ -57,9 +57,9 @@ def test_page_locked_without_confirmed_dramaturgy_writes_nothing(
 
     render_final_output_page()
 
-    assert not (project.work_dir_path / "voiceover_generation" / "confirmed_voiceover_project_plan.json").exists()
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not (project.language_work_dir_path / "voiceover_generation" / "confirmed_voiceover_project_plan.json").exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_page_guards_with_voiceover_project_writes_nothing(
@@ -70,9 +70,9 @@ def test_page_guards_with_voiceover_project_writes_nothing(
 
     render_final_output_page()  # darf nicht werfen und darf nichts schreiben
 
-    assert not (project.work_dir_path / "voiceover_generation").exists()
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not (project.language_work_dir_path / "voiceover_generation").exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_page_renders_with_confirmed_dramaturgy_but_no_plan_yet(
@@ -90,8 +90,8 @@ def test_page_renders_with_confirmed_dramaturgy_but_no_plan_yet(
     _patch_project_selector(project, monkeypatch)
     render_final_output_page()  # darf nicht werfen; noch kein finaler Plan vorhanden
 
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_page_renders_existing_plan_without_writing_edit_plan_or_otio(
@@ -111,8 +111,8 @@ def test_page_renders_existing_plan_without_writing_edit_plan_or_otio(
     _patch_project_selector(project, monkeypatch)
     render_final_output_page()  # darf nicht werfen
 
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
     original_media = project.project_root_path / "Grand Canyon"
     assert original_media.exists()
     assert list(original_media.iterdir()) == []

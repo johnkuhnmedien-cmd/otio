@@ -150,7 +150,7 @@ def test_build_style_profile_success_writes_style_profile_json(tmp_path: Path) -
     assert result.profile.style_summary_for_prompts == "Calm, cinematic, third-person narration."
     assert result.profile.llm_run_id == result.llm_run_id
 
-    path = get_voiceover_style_profile_path(project.work_dir_path)
+    path = get_voiceover_style_profile_path(project.language_work_dir_path)
     assert path.is_file()
     persisted = json.loads(path.read_text(encoding="utf-8"))
     assert persisted["llm_run_id"] == result.llm_run_id
@@ -252,7 +252,7 @@ def test_build_style_profile_creates_llm_run_artifacts(tmp_path: Path) -> None:
             model="claude-sonnet-5",
         )
 
-    run_dir = get_llm_runs_dir(project.work_dir_path) / result.llm_run_id
+    run_dir = get_llm_runs_dir(project.language_work_dir_path) / result.llm_run_id
     assert (run_dir / "prompt.txt").is_file()
     assert (run_dir / "raw_llm_response.json").is_file()
     assert (run_dir / "parsed_llm_response.json").is_file()
@@ -288,11 +288,11 @@ def test_build_style_profile_never_leaks_api_key_into_trace_files(
         )
 
     assert result.status == STATUS_PASS
-    run_dir = get_llm_runs_dir(project.work_dir_path) / result.llm_run_id
+    run_dir = get_llm_runs_dir(project.language_work_dir_path) / result.llm_run_id
     for path in run_dir.rglob("*"):
         if path.is_file():
             content = path.read_text(encoding="utf-8")
             assert secret_key not in content, f"API-Key geleakt in {path}"
 
-    style_profile_path = get_voiceover_style_profile_path(project.work_dir_path)
+    style_profile_path = get_voiceover_style_profile_path(project.language_work_dir_path)
     assert secret_key not in style_profile_path.read_text(encoding="utf-8")

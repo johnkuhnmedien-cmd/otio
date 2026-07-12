@@ -795,7 +795,7 @@ def test_export_otio_timeline_writes_custom_output_path(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _setup_mapping_and_plans(project, tmp_path)
     merged = merge_confirmed_edit_plans(project)
-    custom_path = project.work_dir_path / "exports" / "Arches_National_Park.otio"
+    custom_path = project.language_work_dir_path / "exports" / "Arches_National_Park.otio"
 
     with patch(
         "otio_app.services.otio_exporter.verify_timeline_media_paths",
@@ -826,7 +826,7 @@ def test_export_otio_timeline_writes_file(tmp_path: Path) -> None:
             export_settings=OtioExportSettings(audio_offset_sec=1.0, section_outro_sec=5.0),
         )
     assert export_result.path.is_file()
-    assert (project.work_dir_path / "otio_export_settings.json").is_file()
+    assert (project.language_work_dir_path / "otio_export_settings.json").is_file()
 
     timeline = otio.adapters.read_from_file(str(export_result.path))
     assert timeline.name == "USA"

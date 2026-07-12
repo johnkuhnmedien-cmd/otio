@@ -182,7 +182,7 @@ def _build_section_readiness(
     for leak in _scan_for_leaked_secrets(document):
         section_blockers.append(f"{PRODUCTION_EDIT_PLAN_ERROR_SECRET_LEAK_DETECTED}: {leak}")
 
-    target_path = get_folder_edit_plan_path(project.work_dir_path, section.folder_name)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, section.folder_name)
     target_exists = target_path.is_file()
     existing_file_hash = ""
     existing_confirmed: bool | None = None
@@ -320,14 +320,14 @@ def save_production_edit_plan_promote_readiness(
     project: Project, document: ProductionEditPlanPromoteReadinessDocument
 ) -> ProductionEditPlanPromoteReadinessDocument:
     normalized = document.model_copy(update={"project_id": project.id})
-    path = get_production_edit_plan_promote_readiness_path(project.work_dir_path)
+    path = get_production_edit_plan_promote_readiness_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
 
 
 def load_production_edit_plan_promote_readiness(project: Project) -> ProductionEditPlanPromoteReadinessDocument | None:
-    path = get_production_edit_plan_promote_readiness_path(project.work_dir_path)
+    path = get_production_edit_plan_promote_readiness_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -393,7 +393,7 @@ def save_production_edit_plan_promote_dry_run_trace(
     project: Project, trace: ProductionEditPlanPromoteDryRunTraceDocument
 ) -> ProductionEditPlanPromoteDryRunTraceDocument:
     normalized = trace.model_copy(update={"project_id": project.id})
-    path = get_production_edit_plan_promote_dry_run_trace_path(project.work_dir_path)
+    path = get_production_edit_plan_promote_dry_run_trace_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
@@ -402,7 +402,7 @@ def save_production_edit_plan_promote_dry_run_trace(
 def load_production_edit_plan_promote_dry_run_trace(
     project: Project,
 ) -> ProductionEditPlanPromoteDryRunTraceDocument | None:
-    path = get_production_edit_plan_promote_dry_run_trace_path(project.work_dir_path)
+    path = get_production_edit_plan_promote_dry_run_trace_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:

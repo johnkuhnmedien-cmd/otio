@@ -37,7 +37,7 @@ class EditPlanTimingSettings(BaseModel):
 
 
 def edit_plan_timing_settings_path(project: Project) -> Path:
-    return project.work_dir_path / "edit_plan_timing_settings.json"
+    return project.language_work_dir_path / "edit_plan_timing_settings.json"
 
 
 def load_edit_plan_timing_settings(project: Project) -> EditPlanTimingSettings:

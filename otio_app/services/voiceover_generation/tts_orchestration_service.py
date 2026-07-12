@@ -98,7 +98,7 @@ def _write_json(path: Path, payload: Any) -> None:
 
 
 def load_audio_manifest(project: Project) -> VoiceoverAudioManifest:
-    path = get_voiceover_audio_manifest_path(project.work_dir_path)
+    path = get_voiceover_audio_manifest_path(project.language_work_dir_path)
     if not path.is_file():
         return VoiceoverAudioManifest(project_id=project.id)
     try:
@@ -110,7 +110,7 @@ def load_audio_manifest(project: Project) -> VoiceoverAudioManifest:
 
 def save_audio_manifest(project: Project, manifest: VoiceoverAudioManifest) -> VoiceoverAudioManifest:
     normalized = manifest.model_copy(update={"project_id": project.id})
-    path = get_voiceover_audio_manifest_path(project.work_dir_path)
+    path = get_voiceover_audio_manifest_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
@@ -138,7 +138,7 @@ def get_next_audio_version_path(project: Project, scope: str, folder_name: str) 
     settings = load_elevenlabs_settings(project)
     extension, _ = audio_extension_for_output_format(settings.output_format)
     if scope == AUDIO_SCOPE_INTRO:
-        audio_dir = get_intro_audio_dir(project.work_dir_path)
+        audio_dir = get_intro_audio_dir(project.language_work_dir_path)
     else:
         order_index = _resolve_order_index(project, folder_name)
         audio_dir = get_folder_voiceover_audio_dir(project.work_dir_path, order_index, folder_name)
@@ -210,7 +210,7 @@ def _run_tts_and_update_manifest(
 ) -> VoiceoverAudioItem:
     tts_run_id = str(uuid.uuid4())
     if scope == AUDIO_SCOPE_INTRO:
-        run_dir = get_intro_tts_run_dir(project.work_dir_path, tts_run_id)
+        run_dir = get_intro_tts_run_dir(project.language_work_dir_path, tts_run_id)
     else:
         run_dir = get_tts_run_dir(project.work_dir_path, order_index, folder_name, tts_run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -462,7 +462,7 @@ def synthesize_test_voice(project: Project, text: str) -> Path:
     settings = load_elevenlabs_settings(project)
     result = synthesize_speech_with_timestamps(text, settings)
 
-    test_dir = get_audio_test_dir(project.work_dir_path)
+    test_dir = get_audio_test_dir(project.language_work_dir_path)
     test_dir.mkdir(parents=True, exist_ok=True)
     extension, _ = audio_extension_for_output_format(settings.output_format)
     version = 1

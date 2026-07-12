@@ -246,7 +246,7 @@ def render_final_output_page() -> None:
             st.warning(f"[{error.type}]{location}: {error.message}")
 
     with st.expander("Pfade"):
-        st.caption(f"confirmed_voiceover_project_plan.json: `{get_confirmed_voiceover_project_plan_path(project.work_dir_path)}`")
-        st.caption(f"voiceover_project_plan.json: `{get_voiceover_project_plan_json_path(project.work_dir_path)}`")
-        st.caption(f"voiceover_project_plan.md: `{get_voiceover_project_plan_md_path(project.work_dir_path)}`")
-        st.caption(f"voiceover_project_plan.csv: `{get_voiceover_project_plan_csv_path(project.work_dir_path)}`")
+        st.caption(f"confirmed_voiceover_project_plan.json: `{get_confirmed_voiceover_project_plan_path(project.language_work_dir_path)}`")
+        st.caption(f"voiceover_project_plan.json: `{get_voiceover_project_plan_json_path(project.language_work_dir_path)}`")
+        st.caption(f"voiceover_project_plan.md: `{get_voiceover_project_plan_md_path(project.language_work_dir_path)}`")
+        st.caption(f"voiceover_project_plan.csv: `{get_voiceover_project_plan_csv_path(project.language_work_dir_path)}`")

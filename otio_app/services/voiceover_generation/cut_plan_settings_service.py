@@ -24,7 +24,7 @@ def default_cut_plan_settings(project: Project) -> CutPlanSettings:
 
 
 def load_cut_plan_settings(project: Project) -> CutPlanSettings:
-    path = get_cut_plan_settings_path(project.work_dir_path)
+    path = get_cut_plan_settings_path(project.language_work_dir_path)
     if not path.is_file():
         return default_cut_plan_settings(project)
     try:
@@ -36,7 +36,7 @@ def load_cut_plan_settings(project: Project) -> CutPlanSettings:
 
 def save_cut_plan_settings(project: Project, settings: CutPlanSettings) -> CutPlanSettings:
     normalized = settings.model_copy(update={"project_id": project.id})
-    path = get_cut_plan_settings_path(project.work_dir_path)
+    path = get_cut_plan_settings_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized

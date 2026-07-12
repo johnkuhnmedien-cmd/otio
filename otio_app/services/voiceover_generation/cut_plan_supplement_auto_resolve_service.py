@@ -593,7 +593,7 @@ def _describe_and_validate_downloaded_asset(
         }
 
     frames_dir = (
-        get_cut_plan_supplement_asset_request_dir(project.work_dir_path, request.request_id)
+        get_cut_plan_supplement_asset_request_dir(project.language_work_dir_path, request.request_id)
         / "frames"
         / candidate_id
     )

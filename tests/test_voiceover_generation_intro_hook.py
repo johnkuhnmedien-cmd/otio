@@ -164,7 +164,7 @@ def test_build_writes_intro_hook_candidates_json(tmp_path: Path) -> None:
     assert result.status == STATUS_PASS
     assert result.document is not None
     assert len(result.document.candidates) == 5
-    path = get_intro_hook_candidates_path(project.work_dir_path)
+    path = get_intro_hook_candidates_path(project.language_work_dir_path)
     assert path.is_file()
 
 
@@ -174,7 +174,7 @@ def test_candidates_contain_llm_run_id(tmp_path: Path) -> None:
         result = build_intro_hook_candidates(project, provider="anthropic", model="claude-sonnet-5")
 
     assert result.document.llm_run_id == result.llm_run_id
-    run_dir = get_llm_runs_dir(project.work_dir_path) / result.llm_run_id
+    run_dir = get_llm_runs_dir(project.language_work_dir_path) / result.llm_run_id
     assert (run_dir / "prompt.txt").is_file()
     assert (run_dir / "raw_llm_response.json").is_file()
     assert (run_dir / "parsed_llm_response.json").is_file()
@@ -386,7 +386,7 @@ def test_confirm_intro_hook_writes_confirmed_file(tmp_path: Path) -> None:
 
     confirmed = confirm_intro_hook(project, "hook_001")
     assert confirmed.hook_id == "hook_001"
-    path = get_intro_hook_confirmed_path(project.work_dir_path)
+    path = get_intro_hook_confirmed_path(project.language_work_dir_path)
     assert path.is_file()
 
     loaded = load_confirmed_intro_hook(project)
@@ -427,7 +427,7 @@ def test_unconfirm_removes_confirmed_hook(tmp_path: Path) -> None:
     unconfirm_intro_hook(project)
 
     assert load_confirmed_intro_hook(project) is None
-    assert not get_intro_hook_confirmed_path(project.work_dir_path).is_file()
+    assert not get_intro_hook_confirmed_path(project.language_work_dir_path).is_file()
 
 
 def test_no_edit_plan_documents_created(tmp_path: Path) -> None:
@@ -436,8 +436,8 @@ def test_no_edit_plan_documents_created(tmp_path: Path) -> None:
         build_intro_hook_candidates(project, provider="anthropic", model="claude-sonnet-5")
     confirm_intro_hook(project, "hook_001")
 
-    assert not (project.work_dir_path / "edit_plan").exists()
-    assert not (project.work_dir_path / "exports").exists()
+    assert not (project.language_work_dir_path / "edit_plan").exists()
+    assert not (project.language_work_dir_path / "exports").exists()
 
 
 def test_intro_settings_used_for_language_and_word_counts(tmp_path: Path) -> None:
@@ -468,9 +468,9 @@ def test_no_api_key_leak_in_trace_files(tmp_path: Path, monkeypatch: pytest.Monk
         result = build_intro_hook_candidates(project, provider="anthropic", model="claude-sonnet-5")
 
     assert result.status == STATUS_PASS
-    run_dir = get_llm_runs_dir(project.work_dir_path) / result.llm_run_id
+    run_dir = get_llm_runs_dir(project.language_work_dir_path) / result.llm_run_id
     for path in run_dir.rglob("*"):
         if path.is_file():
             assert secret_key not in path.read_text(encoding="utf-8"), f"API-Key geleakt in {path}"
-    candidates_path = get_intro_hook_candidates_path(project.work_dir_path)
+    candidates_path = get_intro_hook_candidates_path(project.language_work_dir_path)
     assert secret_key not in candidates_path.read_text(encoding="utf-8")

@@ -89,7 +89,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -222,7 +222,7 @@ def test_ui_shows_ready_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 def test_ui_shows_needs_review_on_would_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _happy_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_path.write_text('{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}', encoding="utf-8")
 
@@ -273,7 +273,7 @@ def test_no_files_written_under_edit_plan_dir(tmp_path: Path, monkeypatch: pytes
     at = _run_repro(tmp_path, monkeypatch)
     dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)
     dry_run_button.click().run()
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_exports_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -283,7 +283,7 @@ def test_no_files_written_under_exports_dir(tmp_path: Path, monkeypatch: pytest.
     at = _run_repro(tmp_path, monkeypatch)
     dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)
     dry_run_button.click().run()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_supplement_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -293,12 +293,12 @@ def test_no_files_written_under_supplement_dir(tmp_path: Path, monkeypatch: pyte
     at = _run_repro(tmp_path, monkeypatch)
     dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)
     dry_run_button.click().run()
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_existing_production_edit_plan_remains_byte_identical(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _happy_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_content = '{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}'
     existing_path.write_text(existing_content, encoding="utf-8")
@@ -322,7 +322,7 @@ def test_no_original_media_modified(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_no_audio_files_overwritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _happy_project(tmp_path)
-    audio_path = project.work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
+    audio_path = project.language_work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
     original = audio_path.read_bytes()
     at = _run_repro(tmp_path, monkeypatch)
     dry_run_button = next(b for b in at.button if "Promote Dry Run ausführen" in b.label)

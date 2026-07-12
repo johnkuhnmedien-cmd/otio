@@ -48,7 +48,7 @@ __all__ = [
 
 
 def load_style_profile(project: Project) -> VoiceoverStyleProfile | None:
-    path = get_voiceover_style_profile_path(project.work_dir_path)
+    path = get_voiceover_style_profile_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -60,7 +60,7 @@ def load_style_profile(project: Project) -> VoiceoverStyleProfile | None:
 
 def save_style_profile(project: Project, profile: VoiceoverStyleProfile) -> VoiceoverStyleProfile:
     normalized = profile.model_copy(update={"project_id": project.id})
-    path = get_voiceover_style_profile_path(project.work_dir_path)
+    path = get_voiceover_style_profile_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized

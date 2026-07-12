@@ -85,7 +85,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -191,7 +191,7 @@ def test_ui_shows_stage_metrics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 def test_ui_does_not_write_new_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
     build_and_save_production_edit_plan_staging(project)
-    staging_dir = project.work_dir_path / "voiceover_generation" / "cut_plan" / "production_edit_plan_staging"
+    staging_dir = project.language_work_dir_path / "voiceover_generation" / "cut_plan" / "production_edit_plan_staging"
     before = sorted(p.relative_to(staging_dir) for p in staging_dir.rglob("*") if p.is_file())
     _run_repro(tmp_path, monkeypatch)
     after = sorted(p.relative_to(staging_dir) for p in staging_dir.rglob("*") if p.is_file())
@@ -202,14 +202,14 @@ def test_no_files_written_under_exports_dir(tmp_path: Path, monkeypatch: pytest.
     project = _build_confirmed_bridge_project(tmp_path)
     build_and_save_production_edit_plan_staging(project)
     _run_repro(tmp_path, monkeypatch)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_supplement_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
     build_and_save_production_edit_plan_staging(project)
     _run_repro(tmp_path, monkeypatch)
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_build_button_still_works_with_overview_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

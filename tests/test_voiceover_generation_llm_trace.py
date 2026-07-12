@@ -43,13 +43,13 @@ def test_create_llm_run_dir_creates_unique_run_id_folder(tmp_path: Path) -> None
     assert run_dir_1 != run_dir_2
     assert run_dir_1.is_dir()
     assert run_dir_2.is_dir()
-    assert run_dir_1.parent == get_llm_runs_dir(project.work_dir_path)
+    assert run_dir_1.parent == get_llm_runs_dir(project.language_work_dir_path)
 
 
 def test_run_dirs_are_isolated_under_voiceover_generation(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     _, run_dir = create_llm_run_dir(project, STAGE_STYLE_PROFILE)
-    assert run_dir.is_relative_to(get_voiceover_generation_dir(project.work_dir_path))
+    assert run_dir.is_relative_to(get_voiceover_generation_dir(project.language_work_dir_path))
 
 
 def test_write_llm_prompt_saves_exact_text(tmp_path: Path) -> None:

@@ -119,7 +119,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -257,7 +257,7 @@ def test_not_ready_when_entry_not_confirmed_in_mapping(tmp_path: Path) -> None:
     manifest = promote_production_edit_plans(project)
     save_production_edit_plan_promote_manifest(project, manifest)
 
-    target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     promoted_doc = EditPlanDocument.model_validate_json(target_path.read_text(encoding="utf-8"))
     save_voice_folder_mapping(
         project,
@@ -274,7 +274,7 @@ def test_not_ready_when_entry_not_confirmed_in_mapping(tmp_path: Path) -> None:
 
 def test_not_ready_when_edit_plan_missing(tmp_path: Path) -> None:
     project = _promoted_and_mapped_project(tmp_path)
-    get_folder_edit_plan_path(project.work_dir_path, FOLDER_A).unlink()
+    get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A).unlink()
 
     report = build_otio_export_readiness_report(project)
     assert report.status == PRODUCTION_EDIT_PLAN_OTIO_EXPORT_READINESS_STATUS_NOT_READY
@@ -285,7 +285,7 @@ def test_not_ready_when_edit_plan_missing(tmp_path: Path) -> None:
 
 def test_not_ready_when_edit_plan_not_confirmed(tmp_path: Path) -> None:
     project = _promoted_and_mapped_project(tmp_path)
-    target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     document = EditPlanDocument.model_validate_json(target_path.read_text(encoding="utf-8"))
     tampered = document.model_copy(update={"confirmed": False})
     target_path.write_text(tampered.model_dump_json(indent=2), encoding="utf-8")
@@ -298,7 +298,7 @@ def test_not_ready_when_edit_plan_not_confirmed(tmp_path: Path) -> None:
 
 def test_not_ready_when_no_voiceover(tmp_path: Path) -> None:
     project = _promoted_and_mapped_project(tmp_path)
-    target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     document = EditPlanDocument.model_validate_json(target_path.read_text(encoding="utf-8"))
     tampered = document.model_copy(update={"voiceover": None})
     target_path.write_text(tampered.model_dump_json(indent=2), encoding="utf-8")
@@ -311,7 +311,7 @@ def test_not_ready_when_no_voiceover(tmp_path: Path) -> None:
 
 def test_not_ready_when_no_timeline_items_or_shots(tmp_path: Path) -> None:
     project = _promoted_and_mapped_project(tmp_path)
-    target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     document = EditPlanDocument.model_validate_json(target_path.read_text(encoding="utf-8"))
     tampered = document.model_copy(update={"timeline_items": [], "shots": []})
     target_path.write_text(tampered.model_dump_json(indent=2), encoding="utf-8")
@@ -343,7 +343,7 @@ def test_report_totals_are_correct(tmp_path: Path) -> None:
 
 def test_unreadable_edit_plan_yields_warning_not_crash(tmp_path: Path) -> None:
     project = _promoted_and_mapped_project(tmp_path)
-    target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     target_path.write_text("NOT VALID JSON {{{", encoding="utf-8")
 
     report = build_otio_export_readiness_report(project)
@@ -362,7 +362,7 @@ def test_save_and_load_report_roundtrip(tmp_path: Path) -> None:
     loaded = load_otio_export_readiness_report(project)
     assert loaded is not None
     assert loaded.status == saved.status
-    assert get_otio_export_readiness_report_path(project.work_dir_path).is_file()
+    assert get_otio_export_readiness_report_path(project.language_work_dir_path).is_file()
 
 
 def test_load_report_returns_none_when_missing(tmp_path: Path) -> None:
@@ -376,13 +376,13 @@ def test_load_report_returns_none_when_missing(tmp_path: Path) -> None:
 def test_no_otio_file_written(tmp_path: Path) -> None:
     project = _promoted_and_mapped_project(tmp_path)
     build_otio_export_readiness_report(project)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_supplement_dir(tmp_path: Path) -> None:
     project = _promoted_and_mapped_project(tmp_path)
     build_otio_export_readiness_report(project)
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_no_original_media_modified(tmp_path: Path) -> None:
@@ -395,7 +395,7 @@ def test_no_original_media_modified(tmp_path: Path) -> None:
 
 def test_no_audio_files_overwritten(tmp_path: Path) -> None:
     project = _promoted_and_mapped_project(tmp_path)
-    audio_path = project.work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
+    audio_path = project.language_work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
     original = audio_path.read_bytes()
     build_otio_export_readiness_report(project)
     assert audio_path.read_bytes() == original
@@ -410,7 +410,7 @@ def test_voice_folder_mapping_remains_byte_identical(tmp_path: Path) -> None:
 
 def test_existing_production_edit_plan_remains_byte_identical(tmp_path: Path) -> None:
     project = _promoted_and_mapped_project(tmp_path)
-    target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     before = target_path.read_text(encoding="utf-8")
     build_otio_export_readiness_report(project)
     assert target_path.read_text(encoding="utf-8") == before

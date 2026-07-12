@@ -124,7 +124,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -204,7 +204,7 @@ def test_can_merge_false_without_patch(tmp_path: Path) -> None:
 
 def test_can_merge_false_without_promote_manifest(tmp_path: Path) -> None:
     project, manifest, patch = _promoted_project_with_patch(tmp_path)
-    get_production_edit_plan_promote_manifest_path(project.work_dir_path).unlink()
+    get_production_edit_plan_promote_manifest_path(project.language_work_dir_path).unlink()
     eligible, reasons = can_merge_voice_folder_mapping(project)
     assert eligible is False
 
@@ -413,7 +413,7 @@ def test_would_add_with_skip_resolution_does_not_add_entry(tmp_path: Path) -> No
 
 def test_already_present_entries_are_not_modified(tmp_path: Path) -> None:
     project, manifest, patch = _promoted_project_with_patch(tmp_path)
-    target_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    target_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     promoted_doc = EditPlanDocument.model_validate_json(target_path.read_text(encoding="utf-8"))
     save_voice_folder_mapping(
         project,
@@ -546,7 +546,7 @@ def test_save_and_load_merge_manifest_roundtrip(tmp_path: Path) -> None:
     loaded = load_voice_folder_mapping_merge_manifest(project)
     assert loaded is not None
     assert loaded.merge_run_id == saved.merge_run_id
-    assert get_voice_folder_mapping_merge_manifest_path(project.work_dir_path).is_file()
+    assert get_voice_folder_mapping_merge_manifest_path(project.language_work_dir_path).is_file()
 
 
 def test_load_merge_manifest_returns_none_when_missing(tmp_path: Path) -> None:
@@ -593,22 +593,22 @@ def test_atomic_write_leaves_no_temp_files(tmp_path: Path) -> None:
 
 def test_no_files_written_under_edit_plan_dir(tmp_path: Path) -> None:
     project, manifest, patch = _promoted_project_with_patch(tmp_path)
-    before = list(get_edit_plan_dir(project.work_dir_path).glob("*.json"))
+    before = list(get_edit_plan_dir(project.language_work_dir_path).glob("*.json"))
     merge_voice_folder_mapping(project)
-    after = list(get_edit_plan_dir(project.work_dir_path).glob("*.json"))
+    after = list(get_edit_plan_dir(project.language_work_dir_path).glob("*.json"))
     assert before == after
 
 
 def test_no_files_written_under_exports_dir(tmp_path: Path) -> None:
     project, manifest, patch = _promoted_project_with_patch(tmp_path)
     merge_voice_folder_mapping(project)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_supplement_dir(tmp_path: Path) -> None:
     project, manifest, patch = _promoted_project_with_patch(tmp_path)
     merge_voice_folder_mapping(project)
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_no_original_media_modified(tmp_path: Path) -> None:
@@ -621,7 +621,7 @@ def test_no_original_media_modified(tmp_path: Path) -> None:
 
 def test_no_audio_files_overwritten(tmp_path: Path) -> None:
     project, manifest, patch = _promoted_project_with_patch(tmp_path)
-    audio_path = project.work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
+    audio_path = project.language_work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
     original = audio_path.read_bytes()
     merge_voice_folder_mapping(project)
     assert audio_path.read_bytes() == original

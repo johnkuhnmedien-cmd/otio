@@ -174,7 +174,7 @@ def test_generated_draft_contains_author_run_id(tmp_path: Path) -> None:
         result = generate_folder_voiceover(project, "Grand Canyon", provider="anthropic", model="claude-sonnet-5")
 
     assert result.draft.author_run_id == result.llm_run_id
-    run_dir = get_llm_runs_dir(project.work_dir_path) / result.llm_run_id
+    run_dir = get_llm_runs_dir(project.language_work_dir_path) / result.llm_run_id
     assert (run_dir / "prompt.txt").is_file()
     assert (run_dir / "raw_llm_response.json").is_file()
     assert (run_dir / "parsed_llm_response.json").is_file()

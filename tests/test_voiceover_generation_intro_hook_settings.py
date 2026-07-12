@@ -69,9 +69,9 @@ def test_save_and_load_intro_hook_settings_roundtrip(tmp_path: Path) -> None:
     assert loaded.allow_questions is False
     assert loaded.must_include == ["mystery"]
 
-    path = get_intro_hook_settings_path(project.work_dir_path)
+    path = get_intro_hook_settings_path(project.language_work_dir_path)
     assert path.is_file()
-    assert path.is_relative_to(get_voiceover_generation_dir(project.work_dir_path))
+    assert path.is_relative_to(get_voiceover_generation_dir(project.language_work_dir_path))
 
 
 def test_load_intro_hook_settings_returns_default_when_missing(tmp_path: Path) -> None:

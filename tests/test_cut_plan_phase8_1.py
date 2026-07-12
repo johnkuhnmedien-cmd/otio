@@ -151,7 +151,7 @@ def test_cut_plan_settings_load_returns_defaults_when_missing(tmp_path: Path) ->
     project = _make_project(tmp_path, mode=ProjectMode.WITHOUT_VOICEOVER)
     loaded = load_cut_plan_settings(project)
     assert loaded.initial_audio_offset_sec == 1.0
-    assert not get_cut_plan_settings_path(project.work_dir_path).exists()
+    assert not get_cut_plan_settings_path(project.language_work_dir_path).exists()
 
 
 # --- 3. Cut-Plan-Pfadhelfer ---
@@ -178,8 +178,8 @@ def test_cut_plan_supplement_requests_path_differs_from_production_supplement_pa
     from otio_app.project_layout import get_supplement_dir
 
     project = _make_project(tmp_path, mode=ProjectMode.WITHOUT_VOICEOVER)
-    cut_plan_path = get_cut_plan_supplement_requests_path(project.work_dir_path)
-    production_dir = get_supplement_dir(project.work_dir_path)
+    cut_plan_path = get_cut_plan_supplement_requests_path(project.language_work_dir_path)
+    production_dir = get_supplement_dir(project.language_work_dir_path)
     assert production_dir not in cut_plan_path.parents
     assert cut_plan_path != production_dir / "supplement_requests.json"
 
@@ -319,9 +319,9 @@ def test_cut_plan_page_writes_nothing_when_no_confirmed_plan(
 
     render_cut_plan_page()
 
-    assert not get_cut_plan_dir(project.work_dir_path).exists()
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_cut_plan_dir(project.language_work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_cut_plan_page_guards_with_voiceover_project_writes_nothing(
@@ -332,10 +332,10 @@ def test_cut_plan_page_guards_with_voiceover_project_writes_nothing(
 
     render_cut_plan_page()  # darf nicht werfen und darf nichts schreiben
 
-    assert not get_cut_plan_dir(project.work_dir_path).exists()
-    assert not (project.work_dir_path / "voiceover_generation").exists()
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_cut_plan_dir(project.language_work_dir_path).exists()
+    assert not (project.language_work_dir_path / "voiceover_generation").exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_cut_plan_page_shows_hint_when_confirmed_plan_missing(
@@ -383,7 +383,7 @@ def test_cut_plan_page_never_writes_edit_plan_documents(
 
     render_cut_plan_page()
 
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
     assert not list(project.work_dir_path.rglob("*.edit_plan.json"))
 
 
@@ -400,7 +400,7 @@ def test_cut_plan_page_never_triggers_otio_export(tmp_path: Path, monkeypatch: p
     _patch_project_selector(project, monkeypatch)
     render_cut_plan_page()
 
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 # --- 14. Struktureller Guard gegen Produktions-Symbole ---
@@ -462,9 +462,9 @@ def test_cut_plan_modules_write_nothing_under_edit_plan_or_exports(tmp_path: Pat
     settings = default_cut_plan_settings(project)
     save_cut_plan_settings(project, settings)
 
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
-    assert not get_exports_dir(project.work_dir_path).exists()
-    assert get_cut_plan_settings_path(project.work_dir_path).is_file()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
+    assert get_cut_plan_settings_path(project.language_work_dir_path).is_file()
 
 
 # --- 15. Regression: bestehender Workflow bleibt funktionsfähig ---
@@ -485,7 +485,7 @@ def test_cut_plan_settings_json_round_trip_matches_default_dict(tmp_path: Path) 
     settings = default_cut_plan_settings(project)
     save_cut_plan_settings(project, settings)
 
-    payload = json.loads(get_cut_plan_settings_path(project.work_dir_path).read_text(encoding="utf-8"))
+    payload = json.loads(get_cut_plan_settings_path(project.language_work_dir_path).read_text(encoding="utf-8"))
     assert payload["initial_audio_offset_sec"] == 1.0
     assert payload["pause_between_sections_sec"] == 0.25
     assert payload["section_visual_preroll_sec"] == 0.0

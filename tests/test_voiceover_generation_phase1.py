@@ -92,9 +92,8 @@ def test_placeholder_page_writes_no_edit_plan_document(
     render_fn()
 
     assert not get_edit_plan_dir(without_voiceover_project.work_dir_path).exists()
-    assert not get_exports_dir(without_voiceover_project.work_dir_path).exists()
-    assert not get_folder_edit_plan_path(
-        without_voiceover_project.work_dir_path, "Grand Canyon"
+    assert not get_exports_dir(without_voiceover_project.language_work_dir_path).exists()
+    assert not get_folder_edit_plan_path(without_voiceover_project.language_work_dir_path, "Grand Canyon"
     ).exists()
 
 

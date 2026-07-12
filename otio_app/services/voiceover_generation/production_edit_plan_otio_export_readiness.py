@@ -132,7 +132,7 @@ def build_otio_export_readiness_report(project: Project) -> OtioExportReadinessR
     total_timeline_items = 0
 
     for folder_name in promoted_folder_names:
-        edit_plan_path = get_folder_edit_plan_path(project.work_dir_path, folder_name)
+        edit_plan_path = get_folder_edit_plan_path(project.language_work_dir_path, folder_name)
         exists, confirmed, has_voiceover, shot_count, timeline_item_count, read_warnings = _read_edit_plan_metadata(
             edit_plan_path
         )
@@ -213,14 +213,14 @@ def build_otio_export_readiness_report(project: Project) -> OtioExportReadinessR
 
 def save_otio_export_readiness_report(project: Project, report: OtioExportReadinessReport) -> OtioExportReadinessReport:
     normalized = report.model_copy(update={"project_id": project.id})
-    path = get_otio_export_readiness_report_path(project.work_dir_path)
+    path = get_otio_export_readiness_report_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
 
 
 def load_otio_export_readiness_report(project: Project) -> OtioExportReadinessReport | None:
-    path = get_otio_export_readiness_report_path(project.work_dir_path)
+    path = get_otio_export_readiness_report_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:

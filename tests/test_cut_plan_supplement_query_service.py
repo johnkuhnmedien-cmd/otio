@@ -92,7 +92,7 @@ def test_generate_queries_pass_returns_up_to_three_location_prefixed(tmp_path: P
     assert result.run_id
     assert result.error == ""
 
-    run_dir = get_llm_runs_dir(project.work_dir_path) / result.run_id
+    run_dir = get_llm_runs_dir(project.language_work_dir_path) / result.run_id
     assert (run_dir / "prompt.txt").is_file()
     assert (run_dir / "raw_llm_response.json").is_file()
     parsed = json.loads((run_dir / "parsed_llm_response.json").read_text(encoding="utf-8"))
@@ -194,7 +194,7 @@ def test_generate_queries_passes_supplement_search_hint_into_prompt(tmp_path: Pa
         )
 
     assert result.status == "PASS"
-    run_dir = get_llm_runs_dir(project.work_dir_path) / result.run_id
+    run_dir = get_llm_runs_dir(project.language_work_dir_path) / result.run_id
     prompt_text = (run_dir / "prompt.txt").read_text(encoding="utf-8")
     assert "Havasu Falls waterfall woman mist" in prompt_text
 
@@ -208,7 +208,7 @@ def test_generate_queries_without_hint_omits_hint_block_from_prompt(tmp_path: Pa
             project, request, provider="gemini", model="gemini-3.1-flash-lite"
         )
 
-    run_dir = get_llm_runs_dir(project.work_dir_path) / result.run_id
+    run_dir = get_llm_runs_dir(project.language_work_dir_path) / result.run_id
     prompt_text = (run_dir / "prompt.txt").read_text(encoding="utf-8")
     assert "Bereits beim Skriptschreiben vorbereiteter Suchvorschlag" not in prompt_text
 

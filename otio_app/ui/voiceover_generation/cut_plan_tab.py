@@ -617,13 +617,13 @@ def _render_future_artifact_paths(project: Project) -> None:
         "cut_plan_settings.json und cut_plan.draft.json existieren bereits, sobald "
         "gespeichert bzw. erzeugt. Die übrigen Dateien folgen in späteren Sub-Phasen."
     )
-    st.caption(f"Cut Plan Settings: `{get_cut_plan_settings_path(project.work_dir_path)}`")
-    st.caption(f"Cut Plan Draft: `{get_cut_plan_draft_path(project.work_dir_path)}`")
-    st.caption(f"Cut Plan Validation Report: `{get_cut_plan_validation_report_path(project.work_dir_path)}`")
-    st.caption(f"Cut Plan Confirmed: `{get_cut_plan_confirmed_path(project.work_dir_path)}`")
-    st.caption(f"Cut Plan Trace: `{get_cut_plan_trace_path(project.work_dir_path)}`")
+    st.caption(f"Cut Plan Settings: `{get_cut_plan_settings_path(project.language_work_dir_path)}`")
+    st.caption(f"Cut Plan Draft: `{get_cut_plan_draft_path(project.language_work_dir_path)}`")
+    st.caption(f"Cut Plan Validation Report: `{get_cut_plan_validation_report_path(project.language_work_dir_path)}`")
+    st.caption(f"Cut Plan Confirmed: `{get_cut_plan_confirmed_path(project.language_work_dir_path)}`")
+    st.caption(f"Cut Plan Trace: `{get_cut_plan_trace_path(project.language_work_dir_path)}`")
     st.caption(
-        f"Supplement Requests (isoliert): `{get_cut_plan_supplement_requests_path(project.work_dir_path)}`"
+        f"Supplement Requests (isoliert): `{get_cut_plan_supplement_requests_path(project.language_work_dir_path)}`"
     )
 
 
@@ -2264,7 +2264,7 @@ def _render_edit_plan_bridge(project: Project) -> None:
     with col3:
         st.metric("Visual Items", len(visual_items))
 
-    st.caption(f"Bridge Draft Pfad: `{get_cut_plan_edit_plan_bridge_draft_path(project.work_dir_path)}`")
+    st.caption(f"Bridge Draft Pfad: `{get_cut_plan_edit_plan_bridge_draft_path(project.language_work_dir_path)}`")
 
     audio_plan = load_bridge_audio_plan(project)
     trace = load_edit_plan_bridge_trace(project)
@@ -2287,7 +2287,7 @@ def _render_edit_plan_bridge(project: Project) -> None:
         + ("✅ Ja" if boundary_chained_count > 0 else "— Nein (keine Anpassung nötig)")
     )
     if audio_plan is not None:
-        st.caption(f"Bridge Audio Plan Pfad: `{get_cut_plan_edit_plan_bridge_audio_plan_path(project.work_dir_path)}`")
+        st.caption(f"Bridge Audio Plan Pfad: `{get_cut_plan_edit_plan_bridge_audio_plan_path(project.language_work_dir_path)}`")
 
     report = load_edit_plan_bridge_validation_report(project)
     if report is not None:
@@ -2540,7 +2540,7 @@ def _render_staged_edit_plan_preview(project: Project, section: object) -> None:
 def _render_production_plan_readonly_hint(project: Project, section: object) -> None:
     """Phase 10.4 §10: rein lesender Hinweis, ob für diese Sektion bereits ein
     Produktionsplan existiert — kein Blockieren, kein Merge, kein Schreiben."""
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, section.folder_name)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, section.folder_name)
     exists = existing_path.is_file()
     intro_note = " Intro wird als Ordner „Intro“ nach `_otio/edit_plan/` promotet." if section.is_intro else ""
     st.caption(
@@ -2643,7 +2643,7 @@ def _render_production_edit_plan_staging(project: Project) -> None:
                     f"{len(new_package.sections)} gestagte(s) EditPlanDocument(e), "
                     f"{total_timeline_items} TimelineItem(s) gesamt, Package-Status "
                     f"{new_package.status}. Pfad: "
-                    f"`{get_production_edit_plan_package_path(project.work_dir_path)}`"
+                    f"`{get_production_edit_plan_package_path(project.language_work_dir_path)}`"
                 )
                 st.rerun()
             except ValueError as exc:
@@ -2773,7 +2773,7 @@ def _render_production_edit_plan_staging(project: Project) -> None:
         st.caption(f"package_hash: `{report.package_hash}`")
         st.caption(f"source_bridge_manifest_hash: `{report.source_bridge_manifest_hash}`")
         st.caption(
-            f"Validation Report Pfad: `{get_production_edit_plan_validation_report_path(project.work_dir_path)}`"
+            f"Validation Report Pfad: `{get_production_edit_plan_validation_report_path(project.language_work_dir_path)}`"
         )
 
         if report.warnings or report.blockers:
@@ -2831,7 +2831,7 @@ def _render_production_edit_plan_staging(project: Project) -> None:
                 for entry in trace.entries
             ]
             st.dataframe(rows, use_container_width=True, hide_index=True)
-    elif get_production_edit_plan_mapping_trace_path(project.work_dir_path).is_file():
+    elif get_production_edit_plan_mapping_trace_path(project.language_work_dir_path).is_file():
         st.caption("Mapping Trace existiert, enthält aber keine Einträge.")
 
     st.divider()
@@ -3091,8 +3091,8 @@ def _render_production_edit_plan_promote_execute(project: Project) -> None:
                 f"Promote abgeschlossen: {manifest.created_count} neu erstellt, "
                 f"{manifest.overwritten_count} überschrieben. Backup-Verzeichnis: "
                 f"`{manifest.backup_dir or '—'}`. Manifest: "
-                f"`{get_production_edit_plan_promote_manifest_path(project.work_dir_path)}`. "
-                f"Mapping Patch: `{get_production_edit_plan_voice_folder_mapping_patch_path(project.work_dir_path)}`."
+                f"`{get_production_edit_plan_promote_manifest_path(project.language_work_dir_path)}`. "
+                f"Mapping Patch: `{get_production_edit_plan_voice_folder_mapping_patch_path(project.language_work_dir_path)}`."
             )
             st.rerun()
         except ValueError as exc:
@@ -3472,7 +3472,7 @@ def _render_otio_export_readiness(project: Project) -> None:
         key=name_key,
         help="Wird unter `_otio/exports/` als `<Name>.otio` gespeichert.",
     )
-    export_path = resolve_otio_export_path(project.work_dir_path, basename=export_basename)
+    export_path = resolve_otio_export_path(project.language_work_dir_path, basename=export_basename)
     st.caption(f"Ziel: `{export_path}`")
 
     manager = get_otio_export_job_manager()
@@ -3900,5 +3900,5 @@ def render_cut_plan_page() -> None:
     else:
         st.caption(
             f"Beim Klick würde standardmäßig hier gespeichert: "
-            f"`{get_cut_plan_draft_path(project.work_dir_path)}`"
+            f"`{get_cut_plan_draft_path(project.language_work_dir_path)}`"
         )

@@ -36,6 +36,14 @@ def language_folder_name(language: str) -> str:
     return LANGUAGE_FOLDER_NAMES.get(normalized, language.strip().upper())
 
 
+def get_language_work_dir(work_dir: Path, language: str) -> Path:
+    """Sprachspezifischer Editorial-Arbeitsordner: `_otio/{DE|EN}/`.
+
+    SHARED-Artefakte (clean, inventory, frames, …) bleiben unter `work_dir`.
+    """
+    return work_dir / language_folder_name(language)
+
+
 def default_work_dir(project_root: Path) -> Path:
     """Standard-Arbeitsordner innerhalb des Projektroots."""
     return project_root / DEFAULT_WORK_SUBDIR

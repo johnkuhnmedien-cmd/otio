@@ -235,7 +235,9 @@ class OtioExportJobManager:
                     debug_path = ""
                     try:
                         debug_path = str(
-                            save_otio_export_merge_debug_report(current.work_dir_path, debug)
+                            save_otio_export_merge_debug_report(
+                                current.language_work_dir_path, debug
+                            )
                         )
                     except OSError:
                         pass
@@ -255,7 +257,7 @@ class OtioExportJobManager:
                     return
 
                 export_path = resolve_otio_export_path(
-                    current.work_dir_path, basename=output_basename
+                    current.language_work_dir_path, basename=output_basename
                 )
                 export_settings = load_otio_export_settings(current)
                 result = export_otio_timeline(

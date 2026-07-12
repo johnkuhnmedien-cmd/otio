@@ -291,7 +291,7 @@ def validate_intro_hook_candidate(
 
 
 def load_intro_hook_candidates(project: Project) -> IntroHookCandidatesDocument | None:
-    path = get_intro_hook_candidates_path(project.work_dir_path)
+    path = get_intro_hook_candidates_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -305,14 +305,14 @@ def save_intro_hook_candidates(
     project: Project, candidates: IntroHookCandidatesDocument
 ) -> IntroHookCandidatesDocument:
     normalized = candidates.model_copy(update={"project_id": project.id})
-    path = get_intro_hook_candidates_path(project.work_dir_path)
+    path = get_intro_hook_candidates_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
 
 
 def load_confirmed_intro_hook(project: Project) -> ConfirmedIntroHook | None:
-    path = get_intro_hook_confirmed_path(project.work_dir_path)
+    path = get_intro_hook_confirmed_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -324,7 +324,7 @@ def load_confirmed_intro_hook(project: Project) -> ConfirmedIntroHook | None:
 
 def save_confirmed_intro_hook(project: Project, hook: ConfirmedIntroHook) -> ConfirmedIntroHook:
     normalized = hook.model_copy(update={"project_id": project.id})
-    path = get_intro_hook_confirmed_path(project.work_dir_path)
+    path = get_intro_hook_confirmed_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
@@ -363,7 +363,7 @@ def confirm_intro_hook(
 
 def unconfirm_intro_hook(project: Project) -> None:
     """Nimmt die Intro-Hook-Bestätigung zurück (löscht intro_hook.confirmed.json)."""
-    path = get_intro_hook_confirmed_path(project.work_dir_path)
+    path = get_intro_hook_confirmed_path(project.language_work_dir_path)
     path.unlink(missing_ok=True)
 
 

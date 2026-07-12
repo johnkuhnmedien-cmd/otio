@@ -138,15 +138,15 @@ def test_save_project_brief_writes_only_under_voiceover_generation_dir(tmp_path:
     brief = default_project_brief(project)
     save_project_brief(project, brief)
 
-    expected_path = get_project_brief_path(project.work_dir_path)
+    expected_path = get_project_brief_path(project.language_work_dir_path)
     assert expected_path.is_file()
 
-    voiceover_gen_dir = get_voiceover_generation_dir(project.work_dir_path)
+    voiceover_gen_dir = get_voiceover_generation_dir(project.language_work_dir_path)
     assert expected_path.is_relative_to(voiceover_gen_dir)
 
     # Es darf keine edit_plan/-Struktur durch das Speichern entstehen.
-    assert not (project.work_dir_path / "edit_plan").exists()
-    assert not (project.work_dir_path / "exports").exists()
+    assert not (project.language_work_dir_path / "edit_plan").exists()
+    assert not (project.language_work_dir_path / "exports").exists()
 
 
 def test_save_project_brief_updates_project_id_and_timestamp(tmp_path: Path) -> None:

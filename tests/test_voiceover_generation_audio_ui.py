@@ -60,9 +60,9 @@ def test_page_locked_without_confirmed_dramaturgy_writes_nothing(
 
     render_audio_page()
 
-    assert not (project.work_dir_path / "voiceover_generation" / "voiceover_audio_manifest.json").exists()
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not (project.language_work_dir_path / "voiceover_generation" / "voiceover_audio_manifest.json").exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_page_guards_with_voiceover_project(
@@ -72,7 +72,7 @@ def test_page_guards_with_voiceover_project(
     _patch_project_selector(project, monkeypatch)
 
     render_audio_page()  # darf nicht werfen und darf nichts schreiben
-    assert not (project.work_dir_path / "voiceover_generation").exists()
+    assert not (project.language_work_dir_path / "voiceover_generation").exists()
 
 
 def test_page_renders_with_confirmed_dramaturgy_no_api_key(
@@ -91,8 +91,8 @@ def test_page_renders_with_confirmed_dramaturgy_no_api_key(
     _patch_project_selector(project, monkeypatch)
     render_audio_page()  # darf nicht werfen; TTS-Buttons müssen deaktiviert bleiben
 
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_page_renders_with_api_key_but_no_voice_id(

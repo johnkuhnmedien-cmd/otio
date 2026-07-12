@@ -102,7 +102,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -433,7 +433,7 @@ def test_readonly_hint_shows_existing_production_plan_for_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_content = '{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}'
     existing_path.write_text(existing_content, encoding="utf-8")
@@ -456,7 +456,7 @@ def test_readonly_hint_shows_intro_promote_path(tmp_path: Path, monkeypatch: pyt
 
 def test_ui_reads_existing_production_plan_readonly_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_content = '{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}'
     existing_path.write_text(existing_content, encoding="utf-8")
@@ -469,7 +469,7 @@ def test_ui_reads_existing_production_plan_readonly_only(tmp_path: Path, monkeyp
 
 def test_ui_does_not_modify_existing_production_plans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
-    existing_path = get_folder_edit_plan_path(project.work_dir_path, FOLDER_A)
+    existing_path = get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A)
     existing_path.parent.mkdir(parents=True, exist_ok=True)
     existing_content = '{"project_id": "existing", "folder_name": "Grand Canyon", "confirmed": true}'
     existing_path.write_text(existing_content, encoding="utf-8")
@@ -490,7 +490,7 @@ def test_no_files_written_under_edit_plan_dir(tmp_path: Path, monkeypatch: pytes
     at = _run_repro(tmp_path, monkeypatch)
     build_button = next(b for b in at.button if "Production EditPlan Staging erzeugen" in b.label)
     build_button.click().run()
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_exports_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -498,7 +498,7 @@ def test_no_files_written_under_exports_dir(tmp_path: Path, monkeypatch: pytest.
     at = _run_repro(tmp_path, monkeypatch)
     build_button = next(b for b in at.button if "Production EditPlan Staging erzeugen" in b.label)
     build_button.click().run()
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_supplement_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -506,7 +506,7 @@ def test_no_files_written_under_supplement_dir(tmp_path: Path, monkeypatch: pyte
     at = _run_repro(tmp_path, monkeypatch)
     build_button = next(b for b in at.button if "Production EditPlan Staging erzeugen" in b.label)
     build_button.click().run()
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_no_original_media_modified(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -521,7 +521,7 @@ def test_no_original_media_modified(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_no_audio_files_overwritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project = _build_confirmed_bridge_project(tmp_path)
-    audio_path = project.work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
+    audio_path = project.language_work_dir_path / "voiceover_generation" / "audio" / "intro.mp3"
     original = audio_path.read_bytes()
     at = _run_repro(tmp_path, monkeypatch)
     build_button = next(b for b in at.button if "Production EditPlan Staging erzeugen" in b.label)

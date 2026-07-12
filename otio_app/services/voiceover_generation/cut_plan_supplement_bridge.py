@@ -464,14 +464,14 @@ def save_cut_plan_supplement_requests(
     project: Project, document: CutPlanSupplementRequestsDocument
 ) -> Path:
     normalized = document.model_copy(update={"project_id": project.id})
-    path = get_cut_plan_supplement_requests_path(project.work_dir_path)
+    path = get_cut_plan_supplement_requests_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return path
 
 
 def load_cut_plan_supplement_requests(project: Project) -> CutPlanSupplementRequestsDocument | None:
-    path = get_cut_plan_supplement_requests_path(project.work_dir_path)
+    path = get_cut_plan_supplement_requests_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -531,7 +531,7 @@ def capture_pre_accept_item_snapshot_if_missing(
 
 
 def _load_candidates_store(project: Project) -> dict[str, CutPlanSupplementCandidatesDocument]:
-    path = get_cut_plan_supplement_candidates_path(project.work_dir_path)
+    path = get_cut_plan_supplement_candidates_path(project.language_work_dir_path)
     if not path.is_file():
         return {}
     try:
@@ -550,7 +550,7 @@ def _load_candidates_store(project: Project) -> dict[str, CutPlanSupplementCandi
 
 
 def _save_candidates_store(project: Project, store: dict[str, CutPlanSupplementCandidatesDocument]) -> Path:
-    path = get_cut_plan_supplement_candidates_path(project.work_dir_path)
+    path = get_cut_plan_supplement_candidates_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "project_id": project.id,
@@ -776,7 +776,7 @@ def stable_supplement_asset_id(provider: str, provider_asset_id: str, request_id
 
 
 def load_cut_plan_supplement_manifest(project: Project) -> CutPlanSupplementManifestDocument:
-    path = get_cut_plan_supplement_manifest_path(project.work_dir_path)
+    path = get_cut_plan_supplement_manifest_path(project.language_work_dir_path)
     if not path.is_file():
         return CutPlanSupplementManifestDocument(project_id=project.id)
     try:
@@ -790,7 +790,7 @@ def save_cut_plan_supplement_manifest(
     project: Project, document: CutPlanSupplementManifestDocument
 ) -> Path:
     normalized = document.model_copy(update={"project_id": project.id})
-    path = get_cut_plan_supplement_manifest_path(project.work_dir_path)
+    path = get_cut_plan_supplement_manifest_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return path
@@ -1059,7 +1059,7 @@ def download_cut_plan_supplement_candidate(
     except ValueError as exc:
         raise ValueError(f"Kandidat '{candidate.candidate_id}' konnte nicht rekonstruiert werden: {exc}") from exc
 
-    destination_folder = get_cut_plan_supplement_asset_request_dir(project.work_dir_path, request_id)
+    destination_folder = get_cut_plan_supplement_asset_request_dir(project.language_work_dir_path, request_id)
 
     reusable_entry = find_reusable_supplement_manifest_entry(
         project, candidate.provider, production_candidate.provider_asset_id

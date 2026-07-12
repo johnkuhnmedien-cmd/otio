@@ -200,13 +200,13 @@ def build_edit_plan_bridge_trace(
 
 def save_edit_plan_bridge_trace(project: Project, trace: EditPlanBridgeTraceDocument) -> None:
     normalized = trace.model_copy(update={"project_id": project.id})
-    path = get_cut_plan_edit_plan_bridge_trace_path(project.work_dir_path)
+    path = get_cut_plan_edit_plan_bridge_trace_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
 
 
 def load_edit_plan_bridge_trace(project: Project) -> EditPlanBridgeTraceDocument | None:
-    path = get_cut_plan_edit_plan_bridge_trace_path(project.work_dir_path)
+    path = get_cut_plan_edit_plan_bridge_trace_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:

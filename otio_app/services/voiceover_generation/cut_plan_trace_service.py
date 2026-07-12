@@ -72,13 +72,13 @@ def build_cut_plan_trace(project: Project, cut_plan: CutPlanDocument) -> CutPlan
 
 def save_cut_plan_trace(project: Project, trace: CutPlanTraceDocument) -> None:
     normalized = trace.model_copy(update={"project_id": project.id})
-    path = get_cut_plan_trace_path(project.work_dir_path)
+    path = get_cut_plan_trace_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
 
 
 def load_cut_plan_trace(project: Project) -> CutPlanTraceDocument | None:
-    path = get_cut_plan_trace_path(project.work_dir_path)
+    path = get_cut_plan_trace_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:

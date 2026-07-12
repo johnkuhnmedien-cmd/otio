@@ -148,7 +148,7 @@ def _build_intro_plan_item(
     audio_duration_sec = audio_item.audio_duration_sec if audio_item is not None else 0.0
 
     alignment = load_alignment(project, AUDIO_SCOPE_INTRO, "")
-    alignment_path = str(get_intro_alignment_path(project.work_dir_path)) if alignment is not None else ""
+    alignment_path = str(get_intro_alignment_path(project.language_work_dir_path)) if alignment is not None else ""
     alignment_items = alignment.items if alignment is not None else []
 
     readiness_status = _item_readiness_status(audio_status, bool(alignment_items), allow_blocked=False)
@@ -265,12 +265,12 @@ def _build_source_artifacts(
     project: Project, project_brief, style_profile, dramaturgy_plan, confirmed_folders_doc, confirmed_hook, audio_manifest
 ) -> dict[str, Any]:
     return {
-        "project_brief_path": str(get_project_brief_path(project.work_dir_path)),
-        "style_profile_path": str(get_voiceover_style_profile_path(project.work_dir_path)),
-        "dramaturgy_confirmed_path": str(get_dramaturgy_plan_confirmed_path(project.work_dir_path)),
+        "project_brief_path": str(get_project_brief_path(project.language_work_dir_path)),
+        "style_profile_path": str(get_voiceover_style_profile_path(project.language_work_dir_path)),
+        "dramaturgy_confirmed_path": str(get_dramaturgy_plan_confirmed_path(project.language_work_dir_path)),
         "folder_voiceovers_confirmed_path": str(get_folder_voiceovers_confirmed_path(project.work_dir_path)),
-        "intro_hook_confirmed_path": str(get_intro_hook_confirmed_path(project.work_dir_path)),
-        "audio_manifest_path": str(get_voiceover_audio_manifest_path(project.work_dir_path)),
+        "intro_hook_confirmed_path": str(get_intro_hook_confirmed_path(project.language_work_dir_path)),
+        "audio_manifest_path": str(get_voiceover_audio_manifest_path(project.language_work_dir_path)),
         "created_from_hashes": {
             "project_brief": content_hash_of_model(project_brief),
             "style_profile": content_hash_of_model(style_profile),
@@ -605,7 +605,7 @@ def validate_voiceover_project_plan_readiness(
 
 
 def load_confirmed_voiceover_project_plan(project: Project) -> ConfirmedVoiceoverProjectPlan | None:
-    path = get_confirmed_voiceover_project_plan_path(project.work_dir_path)
+    path = get_confirmed_voiceover_project_plan_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -619,7 +619,7 @@ def save_confirmed_voiceover_project_plan(
     project: Project, plan: ConfirmedVoiceoverProjectPlan
 ) -> ConfirmedVoiceoverProjectPlan:
     normalized = plan.model_copy(update={"project_id": project.id})
-    path = get_confirmed_voiceover_project_plan_path(project.work_dir_path)
+    path = get_confirmed_voiceover_project_plan_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
@@ -643,7 +643,7 @@ def is_project_plan_stale(project: Project, plan: ConfirmedVoiceoverProjectPlan)
 def export_voiceover_project_plan_json(
     project: Project, plan: ConfirmedVoiceoverProjectPlan
 ) -> Path:
-    path = get_voiceover_project_plan_json_path(project.work_dir_path)
+    path = get_voiceover_project_plan_json_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
     return path
@@ -782,7 +782,7 @@ def export_voiceover_project_plan_markdown(
     lines.append("")
 
     content = "\n".join(lines)
-    path = get_voiceover_project_plan_md_path(project.work_dir_path)
+    path = get_voiceover_project_plan_md_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
@@ -877,7 +877,7 @@ def export_voiceover_project_plan_csv(
                 }
             )
 
-    path = get_voiceover_project_plan_csv_path(project.work_dir_path)
+    path = get_voiceover_project_plan_csv_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(buffer.getvalue(), encoding="utf-8")
     return path

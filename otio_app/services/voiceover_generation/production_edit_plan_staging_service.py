@@ -110,7 +110,7 @@ def _maybe_prepend_folder_opening_title(
         folder_name=identity.folder_name,
         voice_file=voiceover_path,
         section_id=identity.production_section_id,
-        work_dir=project.work_dir_path,
+        work_dir=project.language_work_dir_path,
         project=project,
         requested_font_family=settings.folder_title_font,
         duration_sec=float(settings.folder_title_duration_sec),
@@ -363,7 +363,7 @@ def _build_staging_artifacts(project: Project) -> tuple[ProductionEditPlanPackag
         document = document.model_copy(update={"shots": shots})
 
         section_documents[identity.staging_section_id] = document
-        staged_path = get_staged_edit_plan_path(project.work_dir_path, identity.staging_section_id)
+        staged_path = get_staged_edit_plan_path(project.language_work_dir_path, identity.staging_section_id)
         sections.append(
             ProductionEditPlanSection(
                 staging_section_id=identity.staging_section_id,
@@ -415,14 +415,14 @@ def save_production_edit_plan_staging_package(
     project: Project, package: ProductionEditPlanPackage
 ) -> ProductionEditPlanPackage:
     normalized = package.model_copy(update={"project_id": project.id})
-    path = get_production_edit_plan_package_path(project.work_dir_path)
+    path = get_production_edit_plan_package_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
 
 
 def load_production_edit_plan_staging_package(project: Project) -> ProductionEditPlanPackage | None:
-    path = get_production_edit_plan_package_path(project.work_dir_path)
+    path = get_production_edit_plan_package_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -434,14 +434,14 @@ def load_production_edit_plan_staging_package(project: Project) -> ProductionEdi
 
 def save_staged_edit_plan(project: Project, staging_section_id: str, document: EditPlanDocument) -> EditPlanDocument:
     normalized = document.model_copy(update={"project_id": project.id})
-    path = get_staged_edit_plan_path(project.work_dir_path, staging_section_id)
+    path = get_staged_edit_plan_path(project.language_work_dir_path, staging_section_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
 
 
 def load_staged_edit_plan(project: Project, staging_section_id: str) -> EditPlanDocument | None:
-    path = get_staged_edit_plan_path(project.work_dir_path, staging_section_id)
+    path = get_staged_edit_plan_path(project.language_work_dir_path, staging_section_id)
     if not path.is_file():
         return None
     try:
@@ -499,7 +499,7 @@ def is_production_edit_plan_staging_stale(project: Project, package: ProductionE
     if manifest.source_cut_plan_hash != package.source_cut_plan_hash:
         return True
 
-    if not get_production_edit_plan_mapping_trace_path(project.work_dir_path).is_file():
+    if not get_production_edit_plan_mapping_trace_path(project.language_work_dir_path).is_file():
         return True
 
     for section in package.sections:

@@ -500,7 +500,7 @@ def test_json_export_is_written(tmp_path: Path) -> None:
     project = _make_fully_ready_project(tmp_path)
     plan = build_confirmed_voiceover_project_plan(project)
     path = export_voiceover_project_plan_json(project, plan)
-    assert path == get_voiceover_project_plan_json_path(project.work_dir_path)
+    assert path == get_voiceover_project_plan_json_path(project.language_work_dir_path)
     assert path.is_file()
 
 
@@ -508,7 +508,7 @@ def test_markdown_export_is_written(tmp_path: Path) -> None:
     project = _make_fully_ready_project(tmp_path)
     plan = build_confirmed_voiceover_project_plan(project)
     path = export_voiceover_project_plan_markdown(project, plan)
-    assert path == get_voiceover_project_plan_md_path(project.work_dir_path)
+    assert path == get_voiceover_project_plan_md_path(project.language_work_dir_path)
     assert path.is_file()
 
 
@@ -516,7 +516,7 @@ def test_csv_export_is_written(tmp_path: Path) -> None:
     project = _make_fully_ready_project(tmp_path)
     plan = build_confirmed_voiceover_project_plan(project)
     path = export_voiceover_project_plan_csv(project, plan)
-    assert path == get_voiceover_project_plan_csv_path(project.work_dir_path)
+    assert path == get_voiceover_project_plan_csv_path(project.language_work_dir_path)
     assert path.is_file()
 
 
@@ -562,8 +562,8 @@ def test_no_edit_plan_documents_created(tmp_path: Path) -> None:
     export_voiceover_project_plan_markdown(project, plan)
     export_voiceover_project_plan_csv(project, plan)
 
-    assert not (project.work_dir_path / "edit_plan").exists()
-    assert not (project.work_dir_path / "exports").exists()
+    assert not (project.language_work_dir_path / "edit_plan").exists()
+    assert not (project.language_work_dir_path / "exports").exists()
 
 
 def test_original_media_not_touched(tmp_path: Path) -> None:
@@ -602,7 +602,7 @@ def test_confirmed_plan_save_and_load_roundtrip(tmp_path: Path) -> None:
     loaded = load_confirmed_voiceover_project_plan(project)
     assert loaded is not None
     assert loaded.status == plan.status
-    path = get_confirmed_voiceover_project_plan_path(project.work_dir_path)
+    path = get_confirmed_voiceover_project_plan_path(project.language_work_dir_path)
     assert path.is_file()
 
 

@@ -72,10 +72,10 @@ def test_save_style_references_writes_only_under_voiceover_generation_dir(
     refs = VoiceoverStyleReferences(project_id=project.id, intro_reference_texts=["Hi"])
     save_style_references(project, refs)
 
-    path = get_voiceover_style_references_path(project.work_dir_path)
+    path = get_voiceover_style_references_path(project.language_work_dir_path)
     assert path.is_file()
-    assert path.is_relative_to(get_voiceover_generation_dir(project.work_dir_path))
-    assert not (project.work_dir_path / "edit_plan").exists()
+    assert path.is_relative_to(get_voiceover_generation_dir(project.language_work_dir_path))
+    assert not (project.language_work_dir_path / "edit_plan").exists()
 
 
 def test_save_style_references_writes_upload_as_plain_text_file(tmp_path: Path) -> None:
@@ -87,7 +87,7 @@ def test_save_style_references_writes_upload_as_plain_text_file(tmp_path: Path) 
     )
     save_style_references(project, refs)
 
-    uploads_dir = get_style_references_uploads_dir(project.work_dir_path)
+    uploads_dir = get_style_references_uploads_dir(project.language_work_dir_path)
     files = list(uploads_dir.glob("*.txt"))
     assert len(files) == 1
     assert files[0].read_text(encoding="utf-8") == "Ein Beispieltext."

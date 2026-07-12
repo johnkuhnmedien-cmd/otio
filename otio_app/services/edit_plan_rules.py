@@ -96,7 +96,7 @@ def _template_map() -> dict[str, EditPlanRuleTemplate]:
 
 
 def rules_path(project: Project) -> Path:
-    return project.work_dir_path / "edit_plan_rules.json"
+    return project.language_work_dir_path / "edit_plan_rules.json"
 
 
 def default_rules(project: Project) -> EditPlanRulesDocument:

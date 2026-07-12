@@ -227,7 +227,7 @@ def _timeline_validation_for_merge(
         voiceover=section_voiceover,
         opening_title_required=export_rules.folder_title_enabled,
         rules_doc=rules_doc,
-        work_dir_path=project.work_dir_path,
+        work_dir_path=project.language_work_dir_path,
         allow_asset_rule_overrides=True,
     )
     return validation, plan.settings, False
@@ -1714,7 +1714,7 @@ def export_otio_timeline(
         should_cancel=should_cancel,
     )
     _raise_if_export_cancelled(should_cancel)
-    path = output_path or get_otio_export_path(project.work_dir_path, project.name)
+    path = output_path or get_otio_export_path(project.language_work_dir_path, project.name)
     path.parent.mkdir(parents=True, exist_ok=True)
     _emit_export_progress(
         progress_callback,

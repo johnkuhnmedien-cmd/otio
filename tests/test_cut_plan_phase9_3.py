@@ -99,7 +99,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio(project: Project, name: str) -> Path:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     path = audio_dir / name
     path.write_bytes(b"FAKE_AUDIO_BYTES")
@@ -237,7 +237,7 @@ def test_cannot_confirm_when_report_blocked(tmp_path: Path) -> None:
     edit_plan = load_edit_plan_bridge_draft(project)
     audio_items = [item for item in edit_plan.timeline_items if item.track == "A1"]
     audio_items[0].resolved_media_path  # noqa: B018 - keep reference
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     for audio_file in audio_dir.glob("*.mp3"):
         audio_file.unlink()
     validate_edit_plan_bridge(project, edit_plan)  # Report wird jetzt BLOCKED (fehlende Audiodatei)
@@ -252,7 +252,7 @@ def test_cannot_confirm_with_blockers_in_report(tmp_path: Path) -> None:
     _build_and_validate_bridge(project)
     edit_plan = load_edit_plan_bridge_draft(project)
 
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     for audio_file in audio_dir.glob("*.mp3"):
         audio_file.unlink()
     validate_edit_plan_bridge(project, edit_plan)
@@ -376,28 +376,28 @@ def test_confirm_writes_confirmed_edit_plan_json(tmp_path: Path) -> None:
     project = _build_confirmed_project(tmp_path)
     _build_and_validate_bridge(project)
     confirm_edit_plan_bridge(project)
-    assert get_cut_plan_edit_plan_bridge_confirmed_draft_path(project.work_dir_path).is_file()
+    assert get_cut_plan_edit_plan_bridge_confirmed_draft_path(project.language_work_dir_path).is_file()
 
 
 def test_confirm_writes_confirmed_bridge_audio_plan_json(tmp_path: Path) -> None:
     project = _build_confirmed_project(tmp_path)
     _build_and_validate_bridge(project)
     confirm_edit_plan_bridge(project)
-    assert get_cut_plan_edit_plan_bridge_confirmed_audio_plan_path(project.work_dir_path).is_file()
+    assert get_cut_plan_edit_plan_bridge_confirmed_audio_plan_path(project.language_work_dir_path).is_file()
 
 
 def test_confirm_writes_confirmed_trace_json(tmp_path: Path) -> None:
     project = _build_confirmed_project(tmp_path)
     _build_and_validate_bridge(project)
     confirm_edit_plan_bridge(project)
-    assert get_cut_plan_edit_plan_bridge_confirmed_trace_path(project.work_dir_path).is_file()
+    assert get_cut_plan_edit_plan_bridge_confirmed_trace_path(project.language_work_dir_path).is_file()
 
 
 def test_confirm_writes_manifest_json(tmp_path: Path) -> None:
     project = _build_confirmed_project(tmp_path)
     _build_and_validate_bridge(project)
     confirm_edit_plan_bridge(project)
-    assert get_cut_plan_edit_plan_bridge_confirm_manifest_path(project.work_dir_path).is_file()
+    assert get_cut_plan_edit_plan_bridge_confirm_manifest_path(project.language_work_dir_path).is_file()
 
 
 def test_manifest_contains_edit_plan_hash(tmp_path: Path) -> None:
@@ -610,7 +610,7 @@ def test_no_production_edit_plan_written(tmp_path: Path) -> None:
     confirm_edit_plan_bridge(project)
     from otio_app.project_layout import get_folder_edit_plan_path
 
-    assert not get_folder_edit_plan_path(project.work_dir_path, FOLDER_A).is_file()
+    assert not get_folder_edit_plan_path(project.language_work_dir_path, FOLDER_A).is_file()
 
 
 def test_no_locked_edit_plan_created(tmp_path: Path) -> None:
@@ -625,28 +625,28 @@ def test_no_otio_export_triggered(tmp_path: Path) -> None:
     project = _build_confirmed_project(tmp_path)
     _build_and_validate_bridge(project)
     confirm_edit_plan_bridge(project)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_edit_plan_dir(tmp_path: Path) -> None:
     project = _build_confirmed_project(tmp_path)
     _build_and_validate_bridge(project)
     confirm_edit_plan_bridge(project)
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_exports_dir(tmp_path: Path) -> None:
     project = _build_confirmed_project(tmp_path)
     _build_and_validate_bridge(project)
     confirm_edit_plan_bridge(project)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_files_written_under_supplement_dir(tmp_path: Path) -> None:
     project = _build_confirmed_project(tmp_path)
     _build_and_validate_bridge(project)
     confirm_edit_plan_bridge(project)
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 def test_no_original_media_modified(tmp_path: Path) -> None:

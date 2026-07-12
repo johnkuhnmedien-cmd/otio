@@ -265,12 +265,12 @@ def render_dramaturgy_page() -> None:
         )
         run_id = last_result.get("llm_run_id")
         if run_id:
-            st.caption(f"LLM-Run: `{get_llm_run_dir(project.work_dir_path, run_id)}`")
+            st.caption(f"LLM-Run: `{get_llm_run_dir(project.language_work_dir_path, run_id)}`")
 
     if draft is None:
         st.info("Noch kein Dramaturgie-Draft vorhanden.")
         st.caption(
-            f"Ordner-Zusammenfassungen: `{get_folder_inventory_summaries_path(project.work_dir_path)}`"
+            f"Ordner-Zusammenfassungen: `{get_folder_inventory_summaries_path(project.language_work_dir_path)}`"
         )
         return
 
@@ -316,11 +316,11 @@ def render_dramaturgy_page() -> None:
         updated_draft = update_dramaturgy_order(project, edited_rows)
         confirmed_plan = confirm_dramaturgy_plan(project, updated_draft)
         st.success("Dramaturgie bestätigt.")
-        st.caption(f"Pfad: `{get_dramaturgy_plan_confirmed_path(project.work_dir_path)}`")
+        st.caption(f"Pfad: `{get_dramaturgy_plan_confirmed_path(project.language_work_dir_path)}`")
         with st.expander("Bestätigter Plan (JSON)"):
             st.json(confirmed_plan.model_dump(mode="json"))
 
-    st.caption(f"Draft-Pfad: `{get_dramaturgy_plan_draft_path(project.work_dir_path)}`")
+    st.caption(f"Draft-Pfad: `{get_dramaturgy_plan_draft_path(project.language_work_dir_path)}`")
     st.caption(
-        f"Ordner-Zusammenfassungen: `{get_folder_inventory_summaries_path(project.work_dir_path)}`"
+        f"Ordner-Zusammenfassungen: `{get_folder_inventory_summaries_path(project.language_work_dir_path)}`"
     )

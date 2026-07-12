@@ -103,7 +103,7 @@ def _promote_run_id() -> str:
 
 
 def _target_edit_plan_path_for_section(project: Project, section: ProductionEditPlanSection) -> Path:
-    return get_folder_edit_plan_path(project.work_dir_path, section.folder_name)
+    return get_folder_edit_plan_path(project.language_work_dir_path, section.folder_name)
 
 
 def can_promote_production_edit_plans(
@@ -217,7 +217,7 @@ def _backup_existing_edit_plan(
     (backup_path, backup_hash) zurück. Wirft OSError/ValueError, wenn das
     Backup nicht byte-identisch verifiziert werden kann — der Aufrufer MUSS
     in diesem Fall die Zieldatei unverändert lassen (kein Write)."""
-    backup_dir = get_production_edit_plan_promote_backup_run_dir(project.work_dir_path, promote_run_id)
+    backup_dir = get_production_edit_plan_promote_backup_run_dir(project.language_work_dir_path, promote_run_id)
     backup_dir.mkdir(parents=True, exist_ok=True)
 
     raw_text = target_path.read_text(encoding="utf-8")
@@ -311,7 +311,7 @@ def promote_production_edit_plans(
     # --- Phase 1: Backups für ALLE Overwrite-Sections ZUERST. Schlägt auch
     # nur eines fehl, wird NICHTS geschrieben (kein partieller Promote). ---
     backups: dict[str, tuple[str, str]] = {}
-    backup_dir_path = get_production_edit_plan_promote_backup_run_dir(project.work_dir_path, promote_run_id)
+    backup_dir_path = get_production_edit_plan_promote_backup_run_dir(project.language_work_dir_path, promote_run_id)
     try:
         for item in prepared:
             if item["will_overwrite"]:
@@ -391,14 +391,14 @@ def save_production_edit_plan_promote_manifest(
     project: Project, manifest: ProductionEditPlanPromoteManifest
 ) -> ProductionEditPlanPromoteManifest:
     normalized = manifest.model_copy(update={"project_id": project.id})
-    path = get_production_edit_plan_promote_manifest_path(project.work_dir_path)
+    path = get_production_edit_plan_promote_manifest_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
 
 
 def load_production_edit_plan_promote_manifest(project: Project) -> ProductionEditPlanPromoteManifest | None:
-    path = get_production_edit_plan_promote_manifest_path(project.work_dir_path)
+    path = get_production_edit_plan_promote_manifest_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -481,14 +481,14 @@ def save_voice_folder_mapping_patch(
     project: Project, patch: ProductionEditPlanVoiceFolderMappingPatch
 ) -> ProductionEditPlanVoiceFolderMappingPatch:
     normalized = patch.model_copy(update={"project_id": project.id})
-    path = get_production_edit_plan_voice_folder_mapping_patch_path(project.work_dir_path)
+    path = get_production_edit_plan_voice_folder_mapping_patch_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
 
 
 def load_voice_folder_mapping_patch(project: Project) -> ProductionEditPlanVoiceFolderMappingPatch | None:
-    path = get_production_edit_plan_voice_folder_mapping_patch_path(project.work_dir_path)
+    path = get_production_edit_plan_voice_folder_mapping_patch_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:

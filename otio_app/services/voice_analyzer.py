@@ -50,7 +50,7 @@ def _cache_path(
     engine_model: str,
 ) -> Path:
     cache_dir = (
-        project.work_dir_path
+        project.language_work_dir_path
         / "cache"
         / "voice"
         / backend

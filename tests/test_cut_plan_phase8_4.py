@@ -124,7 +124,7 @@ def _write_inventory(project: Project, filenames: list[str]) -> None:
 
 
 def _write_audio_files(project: Project, names: list[str]) -> list[Path]:
-    audio_dir = project.work_dir_path / "voiceover_generation" / "audio"
+    audio_dir = project.language_work_dir_path / "voiceover_generation" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     paths = []
     for name in names:
@@ -229,7 +229,7 @@ def _minimal_cut_plan(project: Project, **overrides) -> CutPlanDocument:
 def test_validate_cut_plan_draft_writes_validation_report(tmp_path: Path) -> None:
     project = _happy_path_plan_and_project(tmp_path)
     validate_cut_plan_draft(project)
-    assert get_cut_plan_validation_report_path(project.work_dir_path).is_file()
+    assert get_cut_plan_validation_report_path(project.language_work_dir_path).is_file()
 
 
 def test_cut_plan_without_blockers_becomes_validated(tmp_path: Path) -> None:
@@ -848,20 +848,20 @@ def test_ui_shows_validation_report_staleness(tmp_path: Path, monkeypatch: pytes
 def test_no_confirmed_or_trace_file_written(tmp_path: Path) -> None:
     project = _happy_path_plan_and_project(tmp_path)
     validate_cut_plan_draft(project)
-    assert not get_cut_plan_confirmed_path(project.work_dir_path).exists()
-    assert not get_cut_plan_trace_path(project.work_dir_path).exists()
+    assert not get_cut_plan_confirmed_path(project.language_work_dir_path).exists()
+    assert not get_cut_plan_trace_path(project.language_work_dir_path).exists()
 
 
 def test_no_edit_plan_documents_created(tmp_path: Path) -> None:
     project = _happy_path_plan_and_project(tmp_path)
     validate_cut_plan_draft(project)
-    assert not get_edit_plan_dir(project.work_dir_path).exists()
+    assert not get_edit_plan_dir(project.language_work_dir_path).exists()
 
 
 def test_no_otio_export_triggered(tmp_path: Path) -> None:
     project = _happy_path_plan_and_project(tmp_path)
     validate_cut_plan_draft(project)
-    assert not get_exports_dir(project.work_dir_path).exists()
+    assert not get_exports_dir(project.language_work_dir_path).exists()
 
 
 def test_no_original_media_modified(tmp_path: Path) -> None:
@@ -874,7 +874,7 @@ def test_no_original_media_modified(tmp_path: Path) -> None:
 def test_no_supplement_files_written(tmp_path: Path) -> None:
     project = _happy_path_plan_and_project(tmp_path)
     validate_cut_plan_draft(project)
-    assert not get_supplement_dir(project.work_dir_path).exists()
+    assert not get_supplement_dir(project.language_work_dir_path).exists()
 
 
 # --- 40-41: Struktureller Schutz / Regression ---
