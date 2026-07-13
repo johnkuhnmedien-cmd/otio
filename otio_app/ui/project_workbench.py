@@ -233,31 +233,39 @@ def _render_analysis_actions(
     asset_job_running = get_asset_analysis_job_manager().is_running(project.id)
     voice_job_running = get_voice_analysis_job_manager().is_running(project.id)
     any_job_running = asset_job_running or voice_job_running
+    without_voiceover = bool(getattr(project, "is_without_voiceover", False))
 
-    st.markdown("**Voice-over** — lokal mit Whisper (Standard) oder optional Gemini.")
-    if voice_job_running:
-        st.caption("Voice-over-Analyse läuft im Hintergrund — Fortschritt siehe oben.")
-    if st.button(
-        "🎙️ Voice-over analysieren",
-        key=f"voice_{project.id}",
-        type="primary",
-        disabled=any_job_running,
-    ):
-        if selected_voice_backend == VOICE_BACKEND_GEMINI and not is_gemini_configured():
-            st.error("GEMINI_API_KEY fehlt — unter **🔑 API-Schlüssel** oder in `.env`.")
-        elif selected_voice_backend == VOICE_BACKEND_WHISPER and not is_whisper_available():
-            st.error("Whisper nicht installiert — `pip install -r requirements.txt`.")
-        else:
-            if _start_voice_analysis_background(
-                project,
-                backend=selected_voice_backend,
-                whisper_model=selected_whisper_model,
-                gemini_model=selected_model,
-            ):
-                st.rerun()
+    if not without_voiceover:
+        st.markdown("**Voice-over** — lokal mit Whisper (Standard) oder optional Gemini.")
+        if voice_job_running:
+            st.caption("Voice-over-Analyse läuft im Hintergrund — Fortschritt siehe oben.")
+        if st.button(
+            "🎙️ Voice-over analysieren",
+            key=f"voice_{project.id}",
+            type="primary",
+            disabled=any_job_running,
+        ):
+            if selected_voice_backend == VOICE_BACKEND_GEMINI and not is_gemini_configured():
+                st.error("GEMINI_API_KEY fehlt — unter **🔑 API-Schlüssel** oder in `.env`.")
+            elif selected_voice_backend == VOICE_BACKEND_WHISPER and not is_whisper_available():
+                st.error("Whisper nicht installiert — `pip install -r requirements.txt`.")
+            else:
+                if _start_voice_analysis_background(
+                    project,
+                    backend=selected_voice_backend,
+                    whisper_model=selected_whisper_model,
+                    gemini_model=selected_model,
+                ):
+                    st.rerun()
 
-    st.divider()
+        st.divider()
+
     st.markdown("**Asset-Ordner** — Gemini analysiert nur Frame-Bilder (kostenpflichtig).")
+    if without_voiceover:
+        st.caption(
+            "Ohne Voice-Over: hier nur Hauptassets. Akzeptierte Cut-Plan-Supplements "
+            "übernimmst du unter **⑧ Cut Plan → Inventory aus Cut-Plan-Supplements**."
+        )
     if asset_job_running:
         st.caption(
             "Asset-Analyse läuft im Hintergrund — Fortschritt siehe oben. "
@@ -288,6 +296,9 @@ def _render_analysis_actions(
             update_project_selection(project.id, folders)
             if _start_asset_analysis_background(project, folders, selected_model):
                 st.rerun()
+
+    if without_voiceover:
+        return
 
     st.divider()
     if st.button(
@@ -389,22 +400,23 @@ def render_project_workbench() -> None:
         with st.expander("⚙️ Einstellungen (Modelle & API)", expanded=False):
             if not is_gemini_configured():
                 st.warning("GEMINI_API_KEY fehlt — unter **🔑 API-Schlüssel** eintragen.")
-            if not is_whisper_available():
+            if not project.is_without_voiceover and not is_whisper_available():
                 st.caption("Whisper fehlt — nur Voice-over via Gemini möglich.")
 
-            selected_voice_backend = st.selectbox(
-                "Voice-over-Engine",
-                options=list(VOICE_BACKEND_CHOICES),
-                format_func=lambda value: VOICE_BACKEND_LABELS[value],
-                key="voice_backend",
-            )
-            st.selectbox(
-                "Whisper-Modell",
-                options=list(WHISPER_MODEL_CHOICES),
-                format_func=lambda value: WHISPER_MODEL_LABELS[value],
-                key="whisper_model",
-                disabled=selected_voice_backend != VOICE_BACKEND_WHISPER,
-            )
+            if not project.is_without_voiceover:
+                selected_voice_backend = st.selectbox(
+                    "Voice-over-Engine",
+                    options=list(VOICE_BACKEND_CHOICES),
+                    format_func=lambda value: VOICE_BACKEND_LABELS[value],
+                    key="voice_backend",
+                )
+                st.selectbox(
+                    "Whisper-Modell",
+                    options=list(WHISPER_MODEL_CHOICES),
+                    format_func=lambda value: WHISPER_MODEL_LABELS[value],
+                    key="whisper_model",
+                    disabled=selected_voice_backend != VOICE_BACKEND_WHISPER,
+                )
             st.selectbox(
                 "Gemini-Modell",
                 options=list(GEMINI_MODEL_CHOICES),
@@ -426,7 +438,12 @@ def render_project_workbench() -> None:
         st.caption(f"Aktuell {len(selected_folders)} Ordner für Asset-Analyse ausgewählt.")
 
     with tab_results:
-        if project.voice_analysis_path.is_file():
+        if project.is_without_voiceover:
+            st.caption(
+                "Ohne Voice-Over: keine Voice-over-Analyse. "
+                "Cut-Plan-Supplements erscheinen im Inventory nach Import unter **⑧ Cut Plan**."
+            )
+        elif project.voice_analysis_path.is_file():
             st.markdown("**voice_over_analysis.json**")
             st.code(project.voice_analysis_path.read_text(encoding="utf-8")[:4000])
         else:

@@ -58,10 +58,9 @@ def folder_inventory_matches_media(
 ) -> bool:
     """Vergleicht nur lokale Original-Assets im Top-Level-Ordner.
 
-    Supplement-Assets liegen in `<Ordner>/_supplemental/<provider>/` und
-    werden von `discover_folder_media_paths` (bewusst nicht-rekursiver
-    Top-Level-Scan) nicht bzw. nur mit falsch rekonstruiertem Pfad erfasst
-    (Cache-Merge nimmt fälschlich `folder_path / dateiname` an). Ohne diesen
+    Supplement-Assets liegen in `<Ordner>/_supplemental/<provider>/` bzw. unter
+    `cut_plan/supplement_assets/` und werden von `discover_folder_media_paths`
+    (bewusst nicht-rekursiver Top-Level-Scan) nicht erfasst. Ohne diesen
     Ausschluss wurde ein gespeichertes Inventar mit Supplement-Assets HIER
     IMMER als "nicht mehr aktuell" erkannt und verworfen — mit der Folge,
     dass build_edit_plan() und die Stale-Hash-Prüfung unterschiedliche,
@@ -69,11 +68,13 @@ def folder_inventory_matches_media(
     frischen, korrekten Schnittplan-Rebuild einen falschen
     "Inventory changed"-Fehler.
     """
+    from otio_app.services.cut_plan_inventory_bridge import is_external_inventory_media_path
+
     current = sorted(
-        str(path) for path in media_paths if SUPPLEMENTAL_FOLDER_NAME not in path.parts
+        str(path) for path in media_paths if not is_external_inventory_media_path(path)
     )
     saved = sorted(
-        path for path in item.media_files if SUPPLEMENTAL_FOLDER_NAME not in Path(path).parts
+        path for path in item.media_files if not is_external_inventory_media_path(path)
     )
     return current == saved
 
@@ -242,6 +243,33 @@ def materialize_folder_inventory_from_cache(
         frames_used=[frame for asset in assets for frame in asset.frames_used],
         description=_folder_summary_from_assets(assets),
     )
+
+    # Bestehende Supplement-/Cut-Plan-Einträge nicht verwerfen.
+    from otio_app.services.cut_plan_inventory_bridge import is_external_inventory_media_path
+
+    previous = load_folder_inventory_file(get_folder_inventory_path(project.work_dir_path, folder_name))
+    if previous is not None:
+        primary_paths = {asset.path for asset in assets}
+        extras = [
+            asset
+            for asset in previous.assets
+            if is_external_inventory_media_path(asset.path) and asset.path not in primary_paths
+        ]
+        if extras:
+            merged_assets = list(assets) + extras
+            merged_media = list(item.media_files)
+            for asset in extras:
+                if asset.path not in merged_media:
+                    merged_media.append(asset.path)
+            item = item.model_copy(
+                update={
+                    "assets": merged_assets,
+                    "media_files": merged_media,
+                    "frames_used": [frame for asset in merged_assets for frame in asset.frames_used],
+                    "description": _folder_summary_from_assets(merged_assets),
+                }
+            )
+
     try:
         save_folder_inventory(
             get_folder_inventory_path(project.work_dir_path, folder_name),
