@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from otio_app.defaults import (
     CHAPTER_MAP_ASPECT_RATIO,
+    CHAPTER_MAP_IMAGE_SIZE_DEFAULT,
     CHAPTER_MAP_MODEL_DEFAULT,
     CHAPTER_MAP_STATUS_MISSING,
 )
@@ -24,6 +25,7 @@ class ChapterMapSettings(BaseModel):
     style_example_2_path: str = ""
     model: str = CHAPTER_MAP_MODEL_DEFAULT
     aspect_ratio: str = CHAPTER_MAP_ASPECT_RATIO
+    image_size: str = CHAPTER_MAP_IMAGE_SIZE_DEFAULT
 
 
 class ChapterMapEntry(BaseModel):

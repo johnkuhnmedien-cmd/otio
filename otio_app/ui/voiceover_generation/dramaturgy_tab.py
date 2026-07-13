@@ -7,6 +7,8 @@ from pathlib import Path
 import streamlit as st
 
 from otio_app.defaults import (
+    CHAPTER_MAP_IMAGE_SIZE_CHOICES,
+    CHAPTER_MAP_IMAGE_SIZE_DEFAULT,
     CHAPTER_MAP_MODEL_CHOICES,
     CHAPTER_MAP_MODEL_DEFAULT,
     CHAPTER_MAP_MODEL_LABELS,
@@ -450,9 +452,26 @@ def _render_chapter_maps_section(project: Project) -> None:
                 "Flash-Modelle sind schneller, aber geografisch unzuverlässiger."
             ),
         )
+        size_options = list(CHAPTER_MAP_IMAGE_SIZE_CHOICES)
+        current_size = (
+            settings.image_size if settings.image_size in size_options else CHAPTER_MAP_IMAGE_SIZE_DEFAULT
+        )
+        image_size_value = st.selectbox(
+            "Bildqualität / Größe",
+            options=size_options,
+            index=size_options.index(current_size),
+            key=f"vo_chapter_maps_image_size_{project.id}",
+            help="2K = schärfere Karten (empfohlen mit Nano Banana Pro). 1K = schneller/günstiger.",
+        )
         if st.button("Einstellungen speichern", key=f"vo_chapter_maps_save_settings_{project.id}"):
             settings = save_chapter_map_settings(
-                project, settings.model_copy(update={"model": model_value.strip()})
+                project,
+                settings.model_copy(
+                    update={
+                        "model": model_value.strip(),
+                        "image_size": image_size_value,
+                    }
+                ),
             )
             st.success("Einstellungen gespeichert.")
 
@@ -498,12 +517,21 @@ def _render_chapter_maps_section(project: Project) -> None:
         st.rerun()
 
     if bulk_clicked:
-        progress = st.progress(0.0, text="Kapitel-Karten werden erzeugt…")
-        with st.spinner("Bulk-Generierung läuft (kann je Kapitel einige Sekunden dauern)…"):
-            result = generate_all_chapter_maps(
-                project, start_order_index=int(start_index), stop_on_error=True
-            )
-        progress.progress(1.0, text="Fertig.")
+        progress = st.progress(0.0, text="Kapitel-Karten werden vorbereitet…")
+        status_box = st.empty()
+
+        def _on_progress(done: int, total: int, message: str) -> None:
+            fraction = 0.0 if total <= 0 else min(1.0, done / total)
+            progress.progress(fraction, text=f"{done}/{total} — {message}")
+            status_box.caption(message)
+
+        result = generate_all_chapter_maps(
+            project,
+            start_order_index=int(start_index),
+            stop_on_error=True,
+            progress_callback=_on_progress,
+        )
+        progress.progress(1.0, text="Bulk abgeschlossen.")
         if result.status == CHAPTER_MAP_STATUS_PASS:
             st.success(f"Bulk OK — {result.generated} Karte(n) erzeugt.")
         else:

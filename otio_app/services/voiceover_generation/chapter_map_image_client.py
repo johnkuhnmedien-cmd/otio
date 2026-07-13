@@ -7,6 +7,7 @@ from pathlib import Path
 from otio_app.defaults import (
     CHAPTER_MAP_ASPECT_RATIO,
     CHAPTER_MAP_ASPECT_RATIO_TOLERANCE,
+    CHAPTER_MAP_IMAGE_SIZE_DEFAULT,
     CHAPTER_MAP_MODEL_DEFAULT,
     CHAPTER_MAP_TARGET_HEIGHT,
     CHAPTER_MAP_TARGET_WIDTH,
@@ -56,13 +57,16 @@ def generate_chapter_map_image(
     reference_image_paths: list[Path],
     output_path: Path,
     model: str | None = None,
+    image_size: str | None = None,
 ) -> tuple[int, int]:
     """Generiert ein 16:9-Kartenbild aus Prompt + Referenzbild(ern).
 
-    Nutzt gemini-2.5-flash-image (Nano Banana). Das Ergebnis wird unverändert
+    Nutzt gemini-*-image (Nano Banana / Pro). image_size "2K" liefert bei
+    unterstützten Modellen schärfere Ausgabe. Das Ergebnis wird unverändert
     gespeichert; bei falschem Aspect Ratio wird abgebrochen (kein Crop/Stretch).
     """
     resolved_model = (model or CHAPTER_MAP_MODEL_DEFAULT).strip() or CHAPTER_MAP_MODEL_DEFAULT
+    resolved_size = (image_size or CHAPTER_MAP_IMAGE_SIZE_DEFAULT).strip() or CHAPTER_MAP_IMAGE_SIZE_DEFAULT
     client = _require_gemini_image_client()
     from google.genai import types
     from PIL import Image
@@ -77,14 +81,33 @@ def generate_chapter_map_image(
     for path in reference_image_paths:
         contents.append(Image.open(path))
 
-    response = client.models.generate_content(
-        model=resolved_model,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            response_modalities=["IMAGE"],
-            image_config=types.ImageConfig(aspect_ratio=CHAPTER_MAP_ASPECT_RATIO),
-        ),
-    )
+    image_config_kwargs: dict = {"aspect_ratio": CHAPTER_MAP_ASPECT_RATIO}
+    # 2K/1K — Pro und neuere Flash-Image-Modelle; bei Ablehnung ohne size retry.
+    if resolved_size:
+        image_config_kwargs["image_size"] = resolved_size
+
+    try:
+        response = client.models.generate_content(
+            model=resolved_model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+                image_config=types.ImageConfig(**image_config_kwargs),
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        message = str(exc).lower()
+        if "image_size" in message or "imagesize" in message:
+            response = client.models.generate_content(
+                model=resolved_model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                    image_config=types.ImageConfig(aspect_ratio=CHAPTER_MAP_ASPECT_RATIO),
+                ),
+            )
+        else:
+            raise
 
     image_bytes: bytes | None = None
     mime_type = "image/png"
@@ -106,11 +129,18 @@ def generate_chapter_map_image(
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    # Manche Responses liefern JPEG — wir speichern immer als PNG für stabile Pfade.
     from io import BytesIO
 
     with Image.open(BytesIO(image_bytes)) as generated:
         rgb = generated.convert("RGB")
-        rgb.save(output_path, format="PNG")
+        # Unter 1920px Breite: scharf hochskalieren für Timeline (kein Weichzeichner).
+        if rgb.width < CHAPTER_MAP_TARGET_WIDTH:
+            scale = CHAPTER_MAP_TARGET_WIDTH / float(rgb.width)
+            new_size = (
+                CHAPTER_MAP_TARGET_WIDTH,
+                max(1, int(round(rgb.height * scale))),
+            )
+            rgb = rgb.resize(new_size, Image.Resampling.LANCZOS)
+        rgb.save(output_path, format="PNG", optimize=True)
 
     return assert_aspect_ratio_16_9(output_path)

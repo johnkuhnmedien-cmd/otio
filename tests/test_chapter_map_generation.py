@@ -82,10 +82,33 @@ def _write_style_examples(folder: Path) -> None:
     )
 
 
-def _fake_generate_image(*, prompt, reference_image_paths, output_path, model=None):
+def _fake_generate_image(*, prompt, reference_image_paths, output_path, model=None, image_size=None):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (1920, 1080), color=(40, 90, 160)).save(output_path)
     return 1920, 1080
+
+
+def test_bulk_progress_callback_reports_steps(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    _confirm_plan(project)
+    examples = tmp_path / "Map_example"
+    _write_style_examples(examples)
+    import_style_examples_from_folder(project, examples)
+    events: list[tuple[int, int, str]] = []
+
+    with patch(
+        "otio_app.services.voiceover_generation.chapter_map_service.generate_chapter_map_image",
+        side_effect=_fake_generate_image,
+    ):
+        result = generate_all_chapter_maps(
+            project,
+            progress_callback=lambda done, total, message: events.append((done, total, message)),
+        )
+
+    assert result.status == CHAPTER_MAP_STATUS_PASS
+    assert events
+    assert events[0][1] == 2
+    assert events[-1][0] == 2
 
 
 def test_display_chapter_number_counts_down() -> None:

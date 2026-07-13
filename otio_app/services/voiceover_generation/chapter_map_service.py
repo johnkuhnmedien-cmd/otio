@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -231,6 +232,8 @@ uses the highest number {total_chapters}, last destination uses 1). Spell digits
   Do NOT place for composition/symmetry. Do NOT put Arizona locations in the Northeast, etc.
 - Write ALL visible location words in {lang_name} (project language: {language}). Keep numbers as digits.
 - Do not invent extra locations, routes, pins, or labels.
+- Image quality: crisp vector-like edges, clean flat fills, NO film grain, NO noise, \
+NO jpeg artifacts, NO blurry text. Sharp logo and sharp pin.
 """
 
     prev = previous_location_name or ""
@@ -259,6 +262,8 @@ Hard requirements:
 - Geographic accuracy over aesthetics: pins must sit on the correct region of the USA map.
 - Write ALL visible location words in {lang_name} (project language: {language}).
 - Do not restyle the brand logo or background color.
+- Image quality: crisp vector-like edges, clean flat fills, NO film grain, NO noise, \
+NO jpeg artifacts, NO blurry text. Sharp logo and sharp pins.
 """
 
 
@@ -325,6 +330,7 @@ def generate_single_chapter_map(
     settings = load_chapter_map_settings(project)
     language = _project_language(project, plan)
     model = (settings.model or CHAPTER_MAP_MODEL_DEFAULT).strip()
+    image_size = (settings.image_size or "").strip() or None
     shown_number = display_chapter_number(
         order_index=order_index, total_chapters=total_chapters
     )
@@ -386,6 +392,7 @@ def generate_single_chapter_map(
             reference_image_paths=reference_paths,
             output_path=output_path,
             model=model,
+            image_size=image_size,
         )
     except (ChapterMapImageError, GeminiNotConfiguredError) as exc:
         entry = ChapterMapEntry(
@@ -448,8 +455,12 @@ def generate_all_chapter_maps(
     *,
     start_order_index: int = 1,
     stop_on_error: bool = True,
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> ChapterMapBulkResult:
-    """Sequentieller Bulk: Kapitel ab start_order_index in Reihenfolge erzeugen."""
+    """Sequentieller Bulk: Kapitel ab start_order_index in Reihenfolge erzeugen.
+
+    progress_callback(done_count, total_count, status_text) — optional für UI-Progress.
+    """
     plan = load_confirmed_dramaturgy(project)
     if plan is None:
         return ChapterMapBulkResult(
@@ -472,8 +483,15 @@ def generate_all_chapter_maps(
     failed = 0
     errors: list[str] = []
     manifest = load_chapter_map_manifest(project)
+    total = len(ordered)
 
-    for entry in ordered:
+    for index, entry in enumerate(ordered, start=1):
+        if progress_callback is not None:
+            progress_callback(
+                index - 1,
+                total,
+                f"Kapitel {entry.order_index}/{ordered[-1].order_index}: {entry.folder_name}…",
+            )
         result = generate_single_chapter_map(
             project,
             order_index=entry.order_index,
@@ -483,12 +501,23 @@ def generate_all_chapter_maps(
             manifest = result.manifest
         if result.status == CHAPTER_MAP_STATUS_PASS:
             generated += 1
+            if progress_callback is not None:
+                progress_callback(
+                    index,
+                    total,
+                    f"Fertig {index}/{total}: {entry.folder_name}",
+                )
         else:
             failed += 1
             message = f"Kapitel {entry.order_index} ({entry.folder_name}): {result.error}"
             errors.append(message)
+            if progress_callback is not None:
+                progress_callback(index, total, f"Fehler bei {entry.folder_name}")
             if stop_on_error:
                 break
+
+    if progress_callback is not None:
+        progress_callback(total if failed == 0 else index, total, "Bulk abgeschlossen")
 
     status = CHAPTER_MAP_STATUS_PASS if failed == 0 else CHAPTER_MAP_STATUS_FAIL
     return ChapterMapBulkResult(

@@ -356,6 +356,9 @@ CHAPTER_MAP_PROVIDER_DIR = "chapter_maps"
 CHAPTER_MAP_ASPECT_RATIO = "16:9"
 CHAPTER_MAP_TARGET_WIDTH = 1920
 CHAPTER_MAP_TARGET_HEIGHT = 1080
+# Pro-Modelle unterstützen oft "1K"/"2K" — 2K = schärfere Karten für Timeline.
+CHAPTER_MAP_IMAGE_SIZE_DEFAULT = "2K"
+CHAPTER_MAP_IMAGE_SIZE_CHOICES = ("1K", "2K")
 CHAPTER_MAP_MODEL_DEFAULT = "gemini-3-pro-image-preview"
 CHAPTER_MAP_MODEL_CHOICES = (
     "gemini-3-pro-image-preview",
