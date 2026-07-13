@@ -165,3 +165,75 @@ def test_analyze_supplement_prefers_clean_media(tmp_path: Path) -> None:
     assert extract_mock.call_args.args[0] == clean.resolve()
     assert asset.path == str(media)
     assert asset.approved_for_cut_plan is True
+
+
+def test_selected_folders_not_ready_when_supplement_missing_from_manifest(
+    tmp_path: Path,
+) -> None:
+    from otio_app.analysis_models import CleanMediaManifest
+    from otio_app.services.clean_media import (
+        CLEAN_STATUS_OK,
+        count_folder_clean_status,
+        folder_clean_media_ready,
+        save_clean_media_manifest,
+        selected_folders_have_clean_media,
+    )
+
+    project = _project(tmp_path)
+    folder = "Florida Keys"
+    primary = project.project_root_path / folder / "clip.mp4"
+    _write_supplement(project, folder)
+
+    save_clean_media_manifest(
+        project.work_dir_path / "clean_media" / "Florida_Keys.json",
+        CleanMediaManifest(
+            project_id=project.id,
+            folder=folder,
+            entries=[
+                CleanMediaEntry(
+                    original_path=str(primary.resolve()),
+                    status=CLEAN_STATUS_OK,
+                )
+            ],
+        ),
+    )
+
+    assert folder_clean_media_ready(project, folder) is False
+    assert selected_folders_have_clean_media(project) is False
+    assert count_folder_clean_status(project, folder)["pending"] >= 1
+
+
+def test_folder_ready_does_not_cross_match_primary_and_supplement_same_name(
+    tmp_path: Path,
+) -> None:
+    from otio_app.analysis_models import CleanMediaManifest
+    from otio_app.services.clean_media import (
+        CLEAN_STATUS_OK,
+        folder_clean_media_ready,
+        save_clean_media_manifest,
+    )
+
+    project = _project(tmp_path)
+    folder = "Florida Keys"
+    primary = project.project_root_path / folder / "clip.mp4"
+    dest = get_provider_supplemental_dir(project.project_root_path, folder, "pexels")
+    dest.mkdir(parents=True)
+    supp = dest / "clip.mp4"
+    supp.write_bytes(b"supp")
+
+    save_clean_media_manifest(
+        project.work_dir_path / "clean_media" / "Florida_Keys.json",
+        CleanMediaManifest(
+            project_id=project.id,
+            folder=folder,
+            entries=[
+                CleanMediaEntry(
+                    original_path=str(primary.resolve()),
+                    status=CLEAN_STATUS_OK,
+                )
+            ],
+        ),
+    )
+
+    # Supplement fehlt im Manifest — trotz gleichem Dateinamen nicht „bereit“.
+    assert folder_clean_media_ready(project, folder) is False
