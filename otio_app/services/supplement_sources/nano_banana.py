@@ -18,7 +18,7 @@ from otio_app.services.supplement_sources.base import ProviderReadiness, Supplem
 
 class NanoBananaAdapter(SupplementSourceAdapter):
     provider = SUPPLEMENT_SOURCE_NANO_BANANA
-    model = "gemini-2.0-flash-preview-image-generation"
+    model = "gemini-2.5-flash-image"
     prompt_version = "supplement_v1"
 
     def readiness(self) -> ProviderReadiness:

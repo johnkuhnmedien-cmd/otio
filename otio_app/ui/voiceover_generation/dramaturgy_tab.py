@@ -2,21 +2,34 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
 from otio_app.defaults import (
+    CHAPTER_MAP_STATUS_PASS,
     DRAMATURGY_PLANNING_MODE_GEOGRAPHY,
     DRAMATURGY_PLANNING_MODE_LABELS,
     DRAMATURGY_PLANNING_MODE_VARIETY,
 )
 from otio_app.models import Project
 from otio_app.project_layout import (
+    get_chapter_maps_manifest_path,
+    get_chapter_maps_style_refs_dir,
     get_dramaturgy_plan_confirmed_path,
     get_dramaturgy_plan_draft_path,
     get_folder_inventory_summaries_path,
     get_llm_run_dir,
 )
 from otio_app.services.inventory_loader import folder_has_usable_inventory_data
+from otio_app.services.voiceover_generation.chapter_map_service import (
+    generate_all_chapter_maps,
+    generate_single_chapter_map,
+    import_style_examples_from_folder,
+    load_chapter_map_manifest,
+    load_chapter_map_settings,
+    save_chapter_map_settings,
+)
 from otio_app.services.voiceover_generation.dramaturgy_service import (
     build_dramaturgy_plan,
     confirm_dramaturgy_plan,
@@ -337,7 +350,186 @@ def render_dramaturgy_page() -> None:
         with st.expander("Bestätigter Plan (JSON)"):
             st.json(confirmed_plan.model_dump(mode="json"))
 
+    _render_chapter_maps_section(project)
+
     st.caption(f"Draft-Pfad: `{get_dramaturgy_plan_draft_path(project.language_work_dir_path)}`")
     st.caption(
         f"Ordner-Zusammenfassungen: `{get_folder_inventory_summaries_path(project.language_work_dir_path)}`"
     )
+
+
+def _render_chapter_maps_section(project: Project) -> None:
+    """Kapitel-Karten: Bulk + Einzelgenerierung nach bestätigter Dramaturgie."""
+    st.subheader("Kapitel-Karten (Nano Banana)")
+    confirmed = load_confirmed_dramaturgy(project)
+    if confirmed is None:
+        st.info(
+            "Kapitel-Karten können erst nach **bestätigter** Dramaturgie erzeugt werden "
+            "(stabile Reihenfolge nötig)."
+        )
+        return
+
+    settings = load_chapter_map_settings(project)
+    style_dir = get_chapter_maps_style_refs_dir(project.language_work_dir_path)
+
+    with st.expander("Style-Referenzen & Einstellungen", expanded=True):
+        st.caption(
+            "Benötigt `EN_MAP_EXAMPLE_1.png` (erstes Kapitel, ein Pin) und "
+            "`EN_MAP_EXAMPLE_2.png` (Folgekapitel mit Verbindungslinie). "
+            "Ausgabe immer **16:9**. Text in der Projektsprache."
+        )
+        source_folder = st.text_input(
+            "Map_example-Ordner (optional importieren)",
+            value="",
+            key=f"vo_chapter_maps_import_folder_{project.id}",
+            placeholder="/Users/…/Map_example",
+        )
+        col_import, col_paths = st.columns([1, 2])
+        with col_import:
+            if st.button("Examples importieren", key=f"vo_chapter_maps_import_{project.id}"):
+                if not source_folder.strip():
+                    st.error("Bitte einen Ordnerpfad angeben.")
+                else:
+                    try:
+                        settings = import_style_examples_from_folder(
+                            project, Path(source_folder.strip())
+                        )
+                        st.success("Style-Examples importiert.")
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(str(exc))
+        with col_paths:
+            st.caption(f"Ablage: `{style_dir}`")
+            st.caption(f"Example 1: `{settings.style_example_1_path or '—'}`")
+            st.caption(f"Example 2: `{settings.style_example_2_path or '—'}`")
+
+        uploaded = st.file_uploader(
+            "Oder beide Examples hochladen (Reihenfolge: Example 1, dann Example 2)",
+            type=["png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=True,
+            key=f"vo_chapter_maps_upload_{project.id}",
+        )
+        if uploaded and len(uploaded) >= 2:
+            if st.button("Uploads speichern", key=f"vo_chapter_maps_save_uploads_{project.id}"):
+                from otio_app.defaults import (
+                    CHAPTER_MAP_STYLE_EXAMPLE_1_FILENAME,
+                    CHAPTER_MAP_STYLE_EXAMPLE_2_FILENAME,
+                )
+
+                style_dir.mkdir(parents=True, exist_ok=True)
+                dest_1 = style_dir / CHAPTER_MAP_STYLE_EXAMPLE_1_FILENAME
+                dest_2 = style_dir / CHAPTER_MAP_STYLE_EXAMPLE_2_FILENAME
+                dest_1.write_bytes(uploaded[0].getvalue())
+                dest_2.write_bytes(uploaded[1].getvalue())
+                settings = save_chapter_map_settings(
+                    project,
+                    settings.model_copy(
+                        update={
+                            "style_example_1_path": str(dest_1),
+                            "style_example_2_path": str(dest_2),
+                        }
+                    ),
+                )
+                st.success("Uploads gespeichert.")
+
+        model_value = st.text_input(
+            "Gemini Image Modell",
+            value=settings.model,
+            key=f"vo_chapter_maps_model_{project.id}",
+        )
+        if st.button("Einstellungen speichern", key=f"vo_chapter_maps_save_settings_{project.id}"):
+            settings = save_chapter_map_settings(
+                project, settings.model_copy(update={"model": model_value.strip()})
+            )
+            st.success("Einstellungen gespeichert.")
+
+    enabled = sorted(
+        (entry for entry in confirmed.recommended_folder_order if entry.enabled),
+        key=lambda entry: entry.order_index,
+    )
+    if not enabled:
+        st.warning("Keine aktiven Kapitel in der bestätigten Dramaturgie.")
+        return
+
+    col_bulk, col_from = st.columns([2, 1])
+    with col_from:
+        start_index = st.number_input(
+            "Bulk ab Index",
+            min_value=1,
+            max_value=max(entry.order_index for entry in enabled),
+            value=1,
+            step=1,
+            key=f"vo_chapter_maps_start_{project.id}",
+        )
+    with col_bulk:
+        bulk_clicked = st.button(
+            "Alle Kapitel-Karten erzeugen (Bulk)",
+            type="primary",
+            key=f"vo_chapter_maps_bulk_{project.id}",
+        )
+        st.caption(
+            "Sequentiell: jedes Bild nutzt das zuvor generierte als Referenz "
+            "(außer Kapitel 1 → Example 1)."
+        )
+
+    if bulk_clicked:
+        progress = st.progress(0.0, text="Kapitel-Karten werden erzeugt…")
+        with st.spinner("Bulk-Generierung läuft (kann je Kapitel einige Sekunden dauern)…"):
+            # Fortschritt approximieren über Startindex — echte Zwischenstände kommen
+            # aus dem sequentiellen Service; UI pollt nicht mid-call.
+            result = generate_all_chapter_maps(
+                project, start_order_index=int(start_index), stop_on_error=True
+            )
+        progress.progress(1.0, text="Fertig.")
+        if result.status == CHAPTER_MAP_STATUS_PASS:
+            st.success(f"Bulk OK — {result.generated} Karte(n) erzeugt.")
+        else:
+            st.error(
+                f"Bulk mit Fehlern — erzeugt: {result.generated}, fehlgeschlagen: {result.failed}."
+            )
+            for err in result.errors:
+                st.caption(err)
+        st.rerun()
+
+    manifest = load_chapter_map_manifest(project)
+    status_by_index = {entry.order_index: entry for entry in manifest.entries}
+
+    st.markdown("**Einzelne Kapitel**")
+    for entry in enabled:
+        map_entry = status_by_index.get(entry.order_index)
+        status_label = map_entry.status if map_entry is not None else "MISSING"
+        cols = st.columns([3, 1, 2])
+        with cols[0]:
+            st.write(f"{entry.order_index}. **{entry.folder_name}** — `{status_label}`")
+            if map_entry is not None and map_entry.relative_path:
+                st.caption(map_entry.relative_path)
+            if map_entry is not None and map_entry.error:
+                st.caption(f"Fehler: {map_entry.error}")
+        with cols[1]:
+            if (
+                map_entry is not None
+                and map_entry.status == CHAPTER_MAP_STATUS_PASS
+                and map_entry.absolute_path
+                and Path(map_entry.absolute_path).is_file()
+            ):
+                st.image(map_entry.absolute_path, use_container_width=True)
+        with cols[2]:
+            if st.button(
+                "Nur dieses Kapitel",
+                key=f"vo_chapter_maps_single_{project.id}_{entry.order_index}",
+            ):
+                with st.spinner(f"Karte für {entry.folder_name}…"):
+                    single = generate_single_chapter_map(
+                        project, order_index=entry.order_index, invalidate_following=True
+                    )
+                if single.status == CHAPTER_MAP_STATUS_PASS:
+                    st.success(f"Kapitel {entry.order_index} erzeugt.")
+                    if entry.order_index < max(e.order_index for e in enabled):
+                        st.info(
+                            "Folgende Karten wurden als veraltet markiert — "
+                            "bitte Bulk ab dem nächsten Index ausführen."
+                        )
+                else:
+                    st.error(single.error or "Generierung fehlgeschlagen.")
+                st.rerun()
+
+    st.caption(f"Manifest: `{get_chapter_maps_manifest_path(project.language_work_dir_path)}`")
