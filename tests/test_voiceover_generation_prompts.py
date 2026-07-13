@@ -202,6 +202,43 @@ def test_dramaturgy_prompt_contains_all_folder_summaries() -> None:
     assert "VERY_FEW_ASSETS" in prompt
 
 
+def test_dramaturgy_prompt_excludes_asset_descriptions() -> None:
+    summaries = _sample_folder_summaries()
+    summaries[0].notable_asset_descriptions = [
+        "Eindrucksvolle Aufnahme von Grand Canyon bei Sonnenuntergang."
+    ]
+    prompt = build_dramaturgy_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        folder_summaries=summaries,
+    )
+    assert "notable_asset_descriptions" not in prompt
+    assert "Eindrucksvolle Aufnahme von Grand Canyon" not in prompt
+    assert "Chapters / locations" in prompt
+
+
+def test_dramaturgy_prompt_geography_mode_contains_geography_instructions() -> None:
+    prompt = build_dramaturgy_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        folder_summaries=_sample_folder_summaries(),
+        planning_mode="geography",
+    )
+    assert "GEOGRAPHY FIRST" in prompt
+    assert "coherent travel journey" in prompt
+
+
+def test_dramaturgy_prompt_variety_mode_contains_variety_instructions() -> None:
+    prompt = build_dramaturgy_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        folder_summaries=_sample_folder_summaries(),
+        planning_mode="variety",
+    )
+    assert "MAXIMUM VARIETY" in prompt
+    assert "narrative contrast" in prompt
+
+
 def test_dramaturgy_prompt_requests_json_only() -> None:
     prompt = build_dramaturgy_prompt(
         project_brief=_sample_brief(),

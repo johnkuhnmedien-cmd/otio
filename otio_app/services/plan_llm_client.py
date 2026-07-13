@@ -276,6 +276,15 @@ def _generate_gemini_text_with_usage(
     return text, token_usage
 
 
+def _is_max_tokens_param_rejected_error(exc: Exception) -> bool:
+    """Erkennt OpenAI-Fehler wie: max_tokens is not supported … Use
+    max_completion_tokens instead (GPT-5.x u. a.)."""
+    message = str(exc).lower()
+    return "max_completion_tokens" in message and (
+        "max_tokens" in message or "unsupported" in message
+    )
+
+
 def _generate_openai_text_with_usage(
     *,
     prompt: str,
@@ -298,24 +307,45 @@ def _generate_openai_text_with_usage(
 
     effective_max_tokens = max_output_tokens or DEFAULT_MAX_OUTPUT_TOKENS
     client = OpenAI(api_key=api_key)
+    messages = [{"role": "user", "content": prompt}]
+
+    def _create(*, use_temperature: bool, use_max_completion_tokens: bool):
+        kwargs: dict = {
+            "model": model,
+            "messages": messages,
+        }
+        if use_temperature:
+            kwargs["temperature"] = 0.2
+        if use_max_completion_tokens:
+            kwargs["max_completion_tokens"] = effective_max_tokens
+        else:
+            kwargs["max_tokens"] = effective_max_tokens
+        return client.chat.completions.create(**kwargs)
+
+    use_max_completion_tokens = False
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=effective_max_tokens,
-        )
+        response = _create(use_temperature=True, use_max_completion_tokens=False)
     except BadRequestError as exc:
-        if not _is_temperature_rejected_error(exc):
+        if _is_max_tokens_param_rejected_error(exc):
+            use_max_completion_tokens = True
+            try:
+                response = _create(use_temperature=True, use_max_completion_tokens=True)
+            except BadRequestError as retry_exc:
+                if not _is_temperature_rejected_error(retry_exc):
+                    raise
+                response = _create(use_temperature=False, use_max_completion_tokens=True)
+        elif _is_temperature_rejected_error(exc):
+            try:
+                response = _create(use_temperature=False, use_max_completion_tokens=False)
+            except BadRequestError as retry_exc:
+                if not _is_max_tokens_param_rejected_error(retry_exc):
+                    raise
+                use_max_completion_tokens = True
+                response = _create(use_temperature=False, use_max_completion_tokens=True)
+        else:
             raise
-        # Neuere/Reasoning-Modelle lehnen eine explizite temperature ab und
-        # verlangen den API-Standardwert — ohne temperature erneut versuchen,
-        # statt die Erzeugung komplett fehlschlagen zu lassen.
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=effective_max_tokens,
-        )
+    del use_max_completion_tokens  # nur für Lesbarkeit der Retry-Zweige
+
     usage = getattr(response, "usage", None)
     token_usage = _token_usage_dict(
         input_tokens=getattr(usage, "prompt_tokens", None),

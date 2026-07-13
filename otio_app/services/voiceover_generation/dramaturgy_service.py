@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from otio_app.defaults import (
+    DRAMATURGY_PLANNING_MODE_VARIETY,
     DRAMATURGY_ROLES,
     DRAMATURGY_STATUS_CONFIRMED,
     DRAMATURGY_STATUS_DRAFT,
@@ -247,18 +248,25 @@ def build_dramaturgy_plan(
     *,
     provider: str,
     model: str,
+    planning_mode: str | None = None,
     max_output_tokens: int | None = None,
     disable_thinking: bool = False,
 ) -> DramaturgyBuildResult:
-    """Plant die Dramaturgie über alle ausgewählten Ordner via LLM.
+    """Plant die Dramaturgie über alle ausgewählten Ordner/Kapitel via LLM.
 
     Überschreibt einen bestehenden Draft NUR bei Erfolg — bei API-Fehlern oder
     ungültigem JSON bleibt ein vorhandener Draft unverändert (siehe §6/§9).
+
+    planning_mode steuert die Prompt-Strategie:
+    - geography: Reihenfolge primär nach Geographie / Reiseverlauf
+    - variety: Reihenfolge primär nach Abwechslung / Kontrast
 
     max_output_tokens/disable_thinking erlauben es, für sehr umfangreiche
     Projekte (viele Ordner) das Output-Token-Limit gezielt zu erhöhen bzw. das
     interne "Thinking" des Modells abzuschalten, falls die Antwort sonst bei
     max_tokens abgeschnitten wird (siehe plan_llm_client.PlanLlmTruncatedResponseError)."""
+    resolved_mode = (planning_mode or DRAMATURGY_PLANNING_MODE_VARIETY).strip().lower()
+
     project_brief = load_project_brief(project)
     style_profile = load_style_profile(project)
     folder_summaries = build_and_save_folder_inventory_summaries(project)
@@ -268,6 +276,7 @@ def build_dramaturgy_plan(
         project_brief=project_brief,
         style_profile=style_profile,
         folder_summaries=folder_summaries,
+        planning_mode=resolved_mode,
     )
     prompt_hash = content_hash(prompt)
     write_llm_prompt(run_dir, prompt)

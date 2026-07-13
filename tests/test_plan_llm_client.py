@@ -460,3 +460,33 @@ def test_generate_plan_text_openai_accepts_custom_max_output_tokens(
 
     call_kwargs = mock_openai.return_value.chat.completions.create.call_args.kwargs
     assert call_kwargs["max_tokens"] == 70000
+
+
+def test_generate_plan_text_openai_retries_with_max_completion_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GPT-5.x lehnt max_tokens ab und verlangt max_completion_tokens."""
+    from openai import BadRequestError
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    mock_response = MagicMock()
+    mock_response.choices = [
+        MagicMock(message=MagicMock(content='{"beats":[]}'), finish_reason="stop")
+    ]
+
+    with patch("openai.OpenAI") as mock_openai:
+        mock_openai.return_value.chat.completions.create.side_effect = [
+            _bad_request_error(
+                BadRequestError,
+                "Unsupported parameter: 'max_tokens' is not supported with this model. "
+                "Use 'max_completion_tokens' instead.",
+            ),
+            mock_response,
+        ]
+        text = generate_plan_text(prompt="x", model="openai:gpt-5.5", max_output_tokens=70000)
+
+    assert text == '{"beats":[]}'
+    assert mock_openai.return_value.chat.completions.create.call_count == 2
+    retry_kwargs = mock_openai.return_value.chat.completions.create.call_args.kwargs
+    assert retry_kwargs["max_completion_tokens"] == 70000
+    assert "max_tokens" not in retry_kwargs

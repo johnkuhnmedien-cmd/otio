@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import streamlit as st
 
+from otio_app.defaults import (
+    DRAMATURGY_PLANNING_MODE_GEOGRAPHY,
+    DRAMATURGY_PLANNING_MODE_LABELS,
+    DRAMATURGY_PLANNING_MODE_VARIETY,
+)
 from otio_app.models import Project
 from otio_app.project_layout import (
     get_dramaturgy_plan_confirmed_path,
@@ -36,8 +41,8 @@ from otio_app.ui.voiceover_generation._shared import (
 
 # Höher als plan_llm_client.DEFAULT_MAX_OUTPUT_TOKENS — Dramaturgie-Prompts
 # können bei vielen Ordnern sehr groß werden (Nutzerfeedback: bei 37 Ordnern
-# wurde die Antwort selbst bei 16.384 Output-Tokens noch abgeschnitten). Nur
-# für den "Dramaturgie planen"-Button, nicht global für alle Rollen.
+# wurde die Antwort selbst bei 16.384 Output-Tokens noch abgeschnitten). Für
+# beide Planungs-Buttons (Geographie / Abwechslung).
 _DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS = 70000
 
 
@@ -210,32 +215,43 @@ def render_dramaturgy_page() -> None:
         st.info(f"Es gibt bereits eine **bestätigte** Dramaturgie (bestätigt: {confirmed_at}).")
 
     st.subheader("Dramaturgie planen")
-    plan_label = "Dramaturgie neu planen" if draft is not None else "Dramaturgie planen"
-    col_plan, col_no_thinking = st.columns(2)
-    with col_plan:
-        plan_clicked = st.button(
-            plan_label, disabled=not can_plan, key=f"vo_dramaturgy_plan_{project.id}"
-        )
-        st.caption(
-            f"max_tokens={_DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS:,} — erhöhtes Limit für sehr "
-            "umfangreiche Prompts (viele Ordner)."
-        )
-    with col_no_thinking:
-        no_thinking_clicked = st.button(
-            "Dramaturgie ohne Thinking",
+    st.caption(
+        "Das LLM erhält nur die **Kapitel** (Ordnernamen + kurze Kapitel-Signale), "
+        "keine einzelnen Asset-Beschreibungen."
+    )
+    col_geo, col_variety = st.columns(2)
+    with col_geo:
+        geo_clicked = st.button(
+            DRAMATURGY_PLANNING_MODE_LABELS[DRAMATURGY_PLANNING_MODE_GEOGRAPHY],
             disabled=not can_plan,
-            key=f"vo_dramaturgy_plan_no_thinking_{project.id}",
+            key=f"vo_dramaturgy_plan_geography_{project.id}",
         )
         st.caption(
-            "Deaktiviert das interne 'Thinking' des Modells — das gesamte "
-            "Token-Budget steht dann der sichtbaren Antwort zur Verfügung."
+            "Reihenfolge primär nach Geographie / sinnvollem Reiseverlauf. "
+            f"max_tokens={_DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS:,}."
+        )
+    with col_variety:
+        variety_clicked = st.button(
+            DRAMATURGY_PLANNING_MODE_LABELS[DRAMATURGY_PLANNING_MODE_VARIETY],
+            disabled=not can_plan,
+            key=f"vo_dramaturgy_plan_variety_{project.id}",
+        )
+        st.caption(
+            "Reihenfolge für maximale Abwechslung und Kontraste zwischen Kapiteln. "
+            f"max_tokens={_DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS:,}."
         )
 
     build_kwargs: dict | None = None
-    if plan_clicked:
-        build_kwargs = {"max_output_tokens": _DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS}
-    elif no_thinking_clicked:
-        build_kwargs = {"disable_thinking": True}
+    if geo_clicked:
+        build_kwargs = {
+            "planning_mode": DRAMATURGY_PLANNING_MODE_GEOGRAPHY,
+            "max_output_tokens": _DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS,
+        }
+    elif variety_clicked:
+        build_kwargs = {
+            "planning_mode": DRAMATURGY_PLANNING_MODE_VARIETY,
+            "max_output_tokens": _DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS,
+        }
 
     if build_kwargs is not None:
         if confirmed is not None:
