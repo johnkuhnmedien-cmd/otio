@@ -48,6 +48,10 @@ from otio_app.services.supplement_search import (
     request_with_keyword_query,
 )
 from otio_app.services.supplement_sources import get_provider_readiness, list_provider_readiness
+from otio_app.ui.supplement_dedupe_controls import (
+    render_all_folders_supplement_dedupe_controls,
+    render_folder_supplement_dedupe_controls,
+)
 from otio_app.services.supplement_requests import (
     load_supplement_requests,
     pending_supplement_count,
@@ -588,7 +592,7 @@ def render_supplement_assets_page() -> None:
     )
 
     pexels_readiness_for_folder = get_provider_readiness(SUPPLEMENT_SOURCE_PEXELS)
-    auto_col, coverage_col = st.columns(2)
+    auto_col, coverage_col, dedupe_col = st.columns(3)
     with auto_col:
         if st.button(
             "Alles automatisch: Top 3 suchen, herunterladen, analysieren, "
@@ -670,6 +674,18 @@ def render_supplement_assets_page() -> None:
                 st.rerun()
         except (OSError, ValueError) as exc:
             st.error(str(exc))
+
+    with dedupe_col:
+        render_all_folders_supplement_dedupe_controls(
+            project,
+            key_prefix="supp_tab_dedupe",
+            folder_names=list(project.asset_subdir_names),
+        )
+        render_folder_supplement_dedupe_controls(
+            project,
+            selected_folder,
+            key_prefix="supp_tab_dedupe",
+        )
 
     if not folder_requests:
         st.info("Keine Supplement Requests — Coverage-Prüfung ausführen oder Schnittplan vorschlagen.")
