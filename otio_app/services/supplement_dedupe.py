@@ -314,6 +314,65 @@ def _path_key(path: Path) -> str:
         return str(path)
 
 
+@dataclass
+class MultiFolderCleanupReport:
+    reports: list[CleanupReport] = field(default_factory=list)
+    dry_run: bool = True
+
+    @property
+    def folder_count(self) -> int:
+        return len(self.reports)
+
+    @property
+    def group_count(self) -> int:
+        return sum(report.group_count for report in self.reports)
+
+    @property
+    def deleted_media_count(self) -> int:
+        return sum(len(report.deleted_media) for report in self.reports)
+
+    @property
+    def duplicate_file_count(self) -> int:
+        return sum(report.duplicate_file_count for report in self.reports)
+
+    @property
+    def inventory_pruned(self) -> int:
+        return sum(report.inventory_pruned for report in self.reports)
+
+    @property
+    def deleted_clean_count(self) -> int:
+        return sum(len(report.deleted_clean) for report in self.reports)
+
+
+def scan_supplement_duplicates_for_folders(
+    project: Project,
+    folder_names: list[str],
+) -> list[tuple[str, list[DuplicateGroup]]]:
+    """Duplikat-Gruppen je Ordner (nur Ordner mit Treffern)."""
+    results: list[tuple[str, list[DuplicateGroup]]] = []
+    for folder_name in folder_names:
+        groups = scan_supplement_duplicates(project, folder_name)
+        if groups:
+            results.append((folder_name, groups))
+    return results
+
+
+def cleanup_supplement_duplicates_for_folders(
+    project: Project,
+    folder_names: list[str],
+    *,
+    dry_run: bool = True,
+) -> MultiFolderCleanupReport:
+    """Räumt `_supplemental/`-Duplikate in allen angegebenen Ordnern auf."""
+    aggregate = MultiFolderCleanupReport(dry_run=dry_run)
+    for folder_name in folder_names:
+        report = cleanup_supplement_duplicates(project, folder_name, dry_run=dry_run)
+        if report.groups:
+            aggregate.reports.append(report)
+    aggregate.dry_run = dry_run
+    return aggregate
+
+
 def cleanup_supplement_duplicates(
     project: Project,
     folder_name: str,

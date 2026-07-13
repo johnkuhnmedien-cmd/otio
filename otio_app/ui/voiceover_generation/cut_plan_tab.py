@@ -926,6 +926,7 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
         "werden über das Cut-Plan-Manifest wiederverwendet (kein erneuter Download)."
     )
     from otio_app.ui.supplement_dedupe_controls import (
+        render_all_folders_supplement_dedupe_controls,
         render_cut_plan_supplement_orphan_controls,
         render_folder_supplement_dedupe_controls,
     )
@@ -937,20 +938,25 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
             "Falls unter den Asset-Ordnern noch `_supplemental/`-Duplikate liegen "
             "(z. B. von früheren Testläufen), kannst du sie hier bereinigen."
         )
+        all_folders = list(project.asset_subdir_names)
+        render_all_folders_supplement_dedupe_controls(
+            project,
+            key_prefix="cut_plan_folder_dedupe",
+            folder_names=all_folders,
+        )
         folder_options = list(project.selected_asset_subdirs or project.asset_subdir_names)
-        if not folder_options:
-            st.caption("Keine Asset-Ordner ausgewählt.")
-        else:
-            dedupe_folder = st.selectbox(
-                "Ordner für `_supplemental/`-Duplikate",
-                options=folder_options,
-                key=f"cut_plan_folder_dedupe_select_{project.id}",
-            )
-            render_folder_supplement_dedupe_controls(
-                project,
-                dedupe_folder,
-                key_prefix="cut_plan_folder_dedupe",
-            )
+        if folder_options:
+            with st.expander("Einzeln je Ordner", expanded=False):
+                dedupe_folder = st.selectbox(
+                    "Ordner für `_supplemental/`-Duplikate",
+                    options=folder_options,
+                    key=f"cut_plan_folder_dedupe_select_{project.id}",
+                )
+                render_folder_supplement_dedupe_controls(
+                    project,
+                    dedupe_folder,
+                    key_prefix="cut_plan_folder_dedupe",
+                )
 
     query_llm_provider, query_llm_model = _render_supplement_query_model_settings(project)
 

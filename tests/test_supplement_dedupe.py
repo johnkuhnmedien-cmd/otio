@@ -279,3 +279,37 @@ def test_cut_plan_orphan_cleanup_keeps_referenced(tmp_path: Path) -> None:
     assert keep.exists()
     assert not orphan.exists()
     assert len(report.deleted_media) == 1
+
+
+def test_cleanup_all_folders_removes_duplicates(tmp_path: Path) -> None:
+    from otio_app.services.supplement_dedupe import (
+        cleanup_supplement_duplicates_for_folders,
+        scan_supplement_duplicates_for_folders,
+    )
+
+    project = _project(tmp_path, folder_name="Antelope Canyon")
+    other = "Badlands"
+    (project.project_root_path / other).mkdir(parents=True)
+    project.asset_subdir_names = ["Antelope Canyon", other]
+    project.selected_asset_subdirs = ["Antelope Canyon", other]
+
+    _write_dup(project, "Antelope Canyon", provider_asset_id="111", request_id="supp_req_a1")
+    _write_dup(project, "Antelope Canyon", provider_asset_id="111", request_id="supp_req_a2")
+    _write_dup(project, other, provider_asset_id="222", request_id="supp_req_b1")
+    _write_dup(project, other, provider_asset_id="222", request_id="supp_req_b2")
+    _write_dup(project, other, provider_asset_id="222", request_id="supp_req_b3")
+
+    scanned = scan_supplement_duplicates_for_folders(
+        project, ["Antelope Canyon", other]
+    )
+    assert len(scanned) == 2
+    assert sum(len(groups) for _folder, groups in scanned) == 2
+
+    report = cleanup_supplement_duplicates_for_folders(
+        project,
+        ["Antelope Canyon", other],
+        dry_run=False,
+    )
+    assert report.folder_count == 2
+    assert report.deleted_media_count == 3  # 1 + 2
+    assert scan_supplement_duplicates_for_folders(project, ["Antelope Canyon", other]) == []

@@ -356,20 +356,26 @@ def render_clean_media_page() -> None:
             "Hier kannst du doppelte Provider-Downloads in "
             "`{Ordner}/_supplemental/_…/` bereinigen (auch relevant für Clean Media)."
         )
-        from otio_app.ui.supplement_dedupe_controls import render_folder_supplement_dedupe_controls
-
-        target_folders = selected_folders or list(project.selected_asset_subdirs) or list(
-            project.asset_subdir_names
+        from otio_app.ui.supplement_dedupe_controls import (
+            render_all_folders_supplement_dedupe_controls,
+            render_folder_supplement_dedupe_controls,
         )
-        if not target_folders:
-            st.caption("Kein Ordner ausgewählt.")
-        else:
-            for folder_name in target_folders:
-                render_folder_supplement_dedupe_controls(
-                    project,
-                    folder_name,
-                    key_prefix="clean_media_dedupe",
-                )
+
+        all_folders = list(project.asset_subdir_names)
+        render_all_folders_supplement_dedupe_controls(
+            project,
+            key_prefix="clean_media_dedupe",
+            folder_names=all_folders,
+        )
+        target_folders = selected_folders or list(project.selected_asset_subdirs) or all_folders
+        if target_folders:
+            with st.expander("Einzeln je Ordner", expanded=False):
+                for folder_name in target_folders:
+                    render_folder_supplement_dedupe_controls(
+                        project,
+                        folder_name,
+                        key_prefix="clean_media_dedupe",
+                    )
 
     st.divider()
     st.subheader("Status je Ordner")

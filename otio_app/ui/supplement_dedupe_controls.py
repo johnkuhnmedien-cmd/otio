@@ -9,9 +9,85 @@ from otio_app.project_layout import safe_folder_slug
 from otio_app.services.supplement_dedupe import (
     cleanup_cut_plan_supplement_orphans,
     cleanup_supplement_duplicates,
+    cleanup_supplement_duplicates_for_folders,
     scan_cut_plan_supplement_orphans,
     scan_supplement_duplicates,
+    scan_supplement_duplicates_for_folders,
 )
+
+
+def _folder_list(project: Project, folder_names: list[str] | None = None) -> list[str]:
+    if folder_names is not None:
+        return list(folder_names)
+    return list(project.asset_subdir_names or project.selected_asset_subdirs or [])
+
+
+def render_all_folders_supplement_dedupe_controls(
+    project: Project,
+    *,
+    key_prefix: str,
+    folder_names: list[str] | None = None,
+) -> None:
+    """Ein Button für `_supplemental/`-Duplikate über alle Ordner."""
+    folders = _folder_list(project, folder_names)
+    if not folders:
+        st.caption("Keine Asset-Ordner vorhanden.")
+        return
+
+    per_folder = scan_supplement_duplicates_for_folders(project, folders)
+    total_files = sum(
+        sum(len(group.remove) for group in groups) for _folder, groups in per_folder
+    )
+    st.caption(
+        f"**Alle Ordner:** {total_files} Duplikat-Datei(en) in "
+        f"{len(per_folder)} von {len(folders)} Ordner(n)"
+        if per_folder
+        else f"**Alle Ordner:** keine `_supplemental/`-Duplikate in {len(folders)} Ordner(n)"
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        preview_clicked = st.button(
+            "Alle Ordner prüfen",
+            key=f"{key_prefix}_all_preview_{project.id}",
+            disabled=not per_folder,
+            help="Vorschau der Duplikate in allen Asset-Ordnern",
+        )
+    with col2:
+        cleanup_clicked = st.button(
+            "Alle Ordner aufräumen",
+            key=f"{key_prefix}_all_cleanup_{project.id}",
+            type="primary",
+            disabled=not per_folder,
+            help="Entfernt doppelte Provider-Downloads in allen Ordnern unter `_supplemental/_…/`",
+        )
+
+    if preview_clicked and per_folder:
+        with st.expander("Duplikat-Vorschau — alle Ordner", expanded=True):
+            for folder_name, groups in per_folder:
+                st.markdown(f"### {folder_name}")
+                for group in groups:
+                    st.markdown(
+                        f"**{group.provider}:{group.provider_asset_id}** "
+                        f"({group.count}×) — behalten: "
+                        f"`{group.keep.name if group.keep is not None else '—'}`"
+                    )
+                    for path in group.remove:
+                        st.caption(f"entfernen: `{path.name}`")
+
+    if cleanup_clicked and per_folder:
+        report = cleanup_supplement_duplicates_for_folders(
+            project,
+            folders,
+            dry_run=False,
+        )
+        st.success(
+            f"{report.deleted_media_count} Duplikat-Datei(en) in "
+            f"{report.folder_count} Ordner(n) entfernt "
+            f"({report.group_count} Gruppen). "
+            f"Inventory −{report.inventory_pruned}, "
+            f"Clean-Dateien −{report.deleted_clean_count}."
+        )
+        st.rerun()
 
 
 def render_folder_supplement_dedupe_controls(

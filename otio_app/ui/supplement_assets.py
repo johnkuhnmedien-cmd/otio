@@ -48,7 +48,10 @@ from otio_app.services.supplement_search import (
     request_with_keyword_query,
 )
 from otio_app.services.supplement_sources import get_provider_readiness, list_provider_readiness
-from otio_app.ui.supplement_dedupe_controls import render_folder_supplement_dedupe_controls
+from otio_app.ui.supplement_dedupe_controls import (
+    render_all_folders_supplement_dedupe_controls,
+    render_folder_supplement_dedupe_controls,
+)
 from otio_app.services.supplement_requests import (
     load_supplement_requests,
     pending_supplement_count,
@@ -673,6 +676,11 @@ def render_supplement_assets_page() -> None:
             st.error(str(exc))
 
     with dedupe_col:
+        render_all_folders_supplement_dedupe_controls(
+            project,
+            key_prefix="supp_tab_dedupe",
+            folder_names=list(project.asset_subdir_names),
+        )
         render_folder_supplement_dedupe_controls(
             project,
             selected_folder,
