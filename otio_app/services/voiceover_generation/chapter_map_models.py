@@ -28,6 +28,7 @@ class ChapterMapSettings(BaseModel):
 
 class ChapterMapEntry(BaseModel):
     order_index: int
+    display_number: int = 0
     folder_name: str
     filename: str = ""
     relative_path: str = ""

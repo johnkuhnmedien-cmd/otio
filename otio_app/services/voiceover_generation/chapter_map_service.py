@@ -192,13 +192,25 @@ def _language_display_name(language: str) -> str:
     return _LANGUAGE_DISPLAY_NAMES.get(language.upper(), language)
 
 
+def display_chapter_number(*, order_index: int, total_chapters: int) -> int:
+    """Visuelle Kapitelzahl auf der Karte: erstes Kapitel = N, letztes = 1.
+
+    Beispiel bei 37 Kapiteln: Antelope (order_index=1) → 37,
+    Niagara (order_index=2) → 36, … letztes Kapitel → 1.
+    """
+    if total_chapters < 1 or order_index < 1:
+        return order_index
+    return total_chapters - order_index + 1
+
+
 def build_chapter_map_prompt(
     *,
-    order_index: int,
+    display_number: int,
     location_name: str,
     previous_location_name: str | None,
     language: str,
     is_first: bool,
+    total_chapters: int,
 ) -> str:
     lang_name = _language_display_name(language)
     dest_geo = format_geography_hint(location_name)
@@ -209,7 +221,8 @@ provided style reference image (example 1).
 Hard requirements:
 - Output aspect ratio MUST be 16:9 (widescreen). No letterboxing, no black bars, no borders.
 - Keep colors, logo, fonts, font sizes, map styling, and layout proportions identical to the reference.
-- Top-left large chapter number: "{order_index}" (spell digits correctly; do not invent other numbers).
+- Top-left large chapter number: "{display_number}" (this is a countdown: first destination \
+uses the highest number {total_chapters}, last destination uses 1). Spell digits correctly.
 - Bottom-left large location title: "{location_name}" — spell EXACTLY like this, no typos.
 - Map callout label for the pin: "{location_name}" (uppercase styling as in the reference).
 - Place EXACTLY ONE green location pin on the TRUE geographic position:
@@ -225,13 +238,14 @@ Hard requirements:
     return f"""Edit the PREVIOUS generated chapter map (second attached image). Use the first
 attached image only as STYLE reference (example 2: red start pin + green end pin + dotted route).
 
-This is a PAIR update for chapter {order_index}: show ONLY the hop from the previous
-destination to the new destination — not the full history of all earlier pins.
+This is a PAIR update for display number "{display_number}" (countdown numbering: \
+{total_chapters} … 1). Show ONLY the hop from the previous destination to the new
+destination — not the full history of all earlier pins.
 
 Hard requirements:
 - Output aspect ratio MUST be 16:9. No letterboxing, no black bars, no borders.
 - Keep colors, logo, fonts, font sizes, map styling, and layout proportions identical.
-- Change the large top-left number to "{order_index}".
+- Change the large top-left number to "{display_number}" (countdown; do NOT use playback order).
 - Change the large bottom-left title to "{location_name}" — spell EXACTLY, no typos
   (e.g. Niagara not Niagra).
 - REMOVE any pins/labels/routes that are NOT about "{prev}" or "{location_name}".
@@ -300,6 +314,7 @@ def generate_single_chapter_map(
         )
 
     ordered = _enabled_ordered_entries(plan)
+    total_chapters = len(ordered)
     target = next((entry for entry in ordered if entry.order_index == order_index), None)
     if target is None:
         return ChapterMapGenerateResult(
@@ -310,6 +325,9 @@ def generate_single_chapter_map(
     settings = load_chapter_map_settings(project)
     language = _project_language(project, plan)
     model = (settings.model or CHAPTER_MAP_MODEL_DEFAULT).strip()
+    shown_number = display_chapter_number(
+        order_index=order_index, total_chapters=total_chapters
+    )
 
     try:
         example_1, example_2 = resolve_style_example_paths(project, settings)
@@ -340,11 +358,12 @@ def generate_single_chapter_map(
 
     is_first = order_index == 1
     prompt = build_chapter_map_prompt(
-        order_index=order_index,
+        display_number=shown_number,
         location_name=target.folder_name,
         previous_location_name=previous_entry.folder_name if previous_entry else None,
         language=language,
         is_first=is_first,
+        total_chapters=total_chapters,
     )
     if is_first:
         reference_paths = [example_1]
@@ -371,6 +390,7 @@ def generate_single_chapter_map(
     except (ChapterMapImageError, GeminiNotConfiguredError) as exc:
         entry = ChapterMapEntry(
             order_index=order_index,
+            display_number=shown_number,
             folder_name=target.folder_name,
             filename=chapter_map_filename(order_index=order_index, folder_name=target.folder_name),
             relative_path=_relative_to_project(project, output_path),
@@ -392,6 +412,7 @@ def generate_single_chapter_map(
 
     entry = ChapterMapEntry(
         order_index=order_index,
+        display_number=shown_number,
         folder_name=target.folder_name,
         filename=output_path.name,
         relative_path=_relative_to_project(project, output_path),
@@ -514,6 +535,7 @@ def delete_chapter_map(
 
     cleared = ChapterMapEntry(
         order_index=order_index,
+        display_number=0,
         folder_name=folder_name or (existing.folder_name if existing else ""),
         filename=chapter_map_filename(
             order_index=order_index, folder_name=folder_name or f"chapter_{order_index}"

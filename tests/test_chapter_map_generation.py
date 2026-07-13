@@ -21,6 +21,7 @@ from otio_app.project_layout import (
 )
 from otio_app.services.voiceover_generation.chapter_map_service import (
     build_chapter_map_prompt,
+    display_chapter_number,
     generate_all_chapter_maps,
     generate_single_chapter_map,
     import_style_examples_from_folder,
@@ -87,26 +88,34 @@ def _fake_generate_image(*, prompt, reference_image_paths, output_path, model=No
     return 1920, 1080
 
 
+def test_display_chapter_number_counts_down() -> None:
+    assert display_chapter_number(order_index=1, total_chapters=37) == 37
+    assert display_chapter_number(order_index=2, total_chapters=37) == 36
+    assert display_chapter_number(order_index=37, total_chapters=37) == 1
+
+
 def test_build_chapter_map_prompt_first_vs_followup() -> None:
     first = build_chapter_map_prompt(
-        order_index=1,
+        display_number=37,
         location_name="Antelope Canyon",
         previous_location_name=None,
         language="EN",
         is_first=True,
+        total_chapters=37,
     )
     follow = build_chapter_map_prompt(
-        order_index=2,
+        display_number=36,
         location_name="Niagara Falls",
         previous_location_name="Antelope Canyon",
         language="EN",
         is_first=False,
+        total_chapters=37,
     )
-    assert '"1"' in first
+    assert '"37"' in first
     assert "Antelope Canyon" in first
     assert "16:9" in first
     assert "Northern Arizona" in first
-    assert '"2"' in follow
+    assert '"36"' in follow
     assert "Niagara Falls" in follow
     assert "Antelope Canyon" in follow
     assert "REMOVE" in follow

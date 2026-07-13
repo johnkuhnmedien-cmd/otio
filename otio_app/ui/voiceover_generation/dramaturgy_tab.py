@@ -28,6 +28,7 @@ from otio_app.services.inventory_loader import folder_has_usable_inventory_data
 from otio_app.services.voiceover_generation.chapter_map_service import (
     delete_all_chapter_maps,
     delete_chapter_map,
+    display_chapter_number,
     generate_all_chapter_maps,
     generate_single_chapter_map,
     import_style_examples_from_folder,
@@ -482,7 +483,8 @@ def _render_chapter_maps_section(project: Project) -> None:
         st.caption(
             "Sequentiell: jedes Bild nutzt das zuvor generierte als Referenz "
             "(außer Kapitel 1 → Example 1). Pro Kapitel nur der Sprung "
-            "vorheriger Ort → neuer Ort (2 Pins)."
+            "vorheriger Ort → neuer Ort (2 Pins). "
+            "Anzeigezahl rückwärts: erstes Kapitel = N, letztes = 1."
         )
     with col_delete_all:
         delete_all_clicked = st.button(
@@ -516,12 +518,22 @@ def _render_chapter_maps_section(project: Project) -> None:
     status_by_index = {entry.order_index: entry for entry in manifest.entries}
 
     st.markdown("**Einzelne Kapitel**")
+    total_chapters = len(enabled)
     for entry in enabled:
         map_entry = status_by_index.get(entry.order_index)
         status_label = map_entry.status if map_entry is not None else "MISSING"
+        shown = (
+            map_entry.display_number
+            if map_entry is not None and map_entry.display_number
+            else display_chapter_number(
+                order_index=entry.order_index, total_chapters=total_chapters
+            )
+        )
         cols = st.columns([3, 1, 1, 1])
         with cols[0]:
-            st.write(f"{entry.order_index}. **{entry.folder_name}** — `{status_label}`")
+            st.write(
+                f"{entry.order_index}. **{entry.folder_name}** — Karten-Zahl **{shown}** — `{status_label}`"
+            )
             if map_entry is not None and map_entry.relative_path:
                 st.caption(map_entry.relative_path)
             if map_entry is not None and map_entry.error:
