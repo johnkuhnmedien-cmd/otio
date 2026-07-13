@@ -13,6 +13,9 @@ from otio_app.defaults import (
     CHAPTER_MAP_MODEL_DEFAULT,
     CHAPTER_MAP_MODEL_LABELS,
     CHAPTER_MAP_STATUS_PASS,
+    CHAPTER_MAP_UPSCALER_CHOICES,
+    CHAPTER_MAP_UPSCALER_DEFAULT,
+    CHAPTER_MAP_UPSCALER_LABELS,
     DRAMATURGY_PLANNING_MODE_GEOGRAPHY,
     DRAMATURGY_PLANNING_MODE_LABELS,
     DRAMATURGY_PLANNING_MODE_VARIETY,
@@ -448,8 +451,8 @@ def _render_chapter_maps_section(project: Project) -> None:
             format_func=lambda value: CHAPTER_MAP_MODEL_LABELS.get(value, value),
             key=f"vo_chapter_maps_model_{project.id}",
             help=(
-                "Für genaue Pin-Platzierung und Text: Nano Banana Pro. "
-                "Flash-Modelle sind schneller, aber geografisch unzuverlässiger."
+                "Standard: gemini-3.1-flash-image, danach Upscale über separate API. "
+                "Pro nur wenn Pin-/Textqualität kritisch ist."
             ),
         )
         size_options = list(CHAPTER_MAP_IMAGE_SIZE_CHOICES)
@@ -457,11 +460,26 @@ def _render_chapter_maps_section(project: Project) -> None:
             settings.image_size if settings.image_size in size_options else CHAPTER_MAP_IMAGE_SIZE_DEFAULT
         )
         image_size_value = st.selectbox(
-            "Bildqualität / Größe",
+            "Bildqualität / Größe (Gemini)",
             options=size_options,
             index=size_options.index(current_size),
             key=f"vo_chapter_maps_image_size_{project.id}",
-            help="2K = schärfere Karten (empfohlen mit Nano Banana Pro). 1K = schneller/günstiger.",
+            help="2K = schärfere Gemini-Ausgabe vor dem Upscale. 1K = schneller/günstiger.",
+        )
+        upscaler_options = list(CHAPTER_MAP_UPSCALER_CHOICES)
+        current_upscaler = (
+            settings.upscaler if settings.upscaler in upscaler_options else CHAPTER_MAP_UPSCALER_DEFAULT
+        )
+        upscaler_value = st.selectbox(
+            "Upscaler (nach Gemini)",
+            options=upscaler_options,
+            index=upscaler_options.index(current_upscaler),
+            format_func=lambda value: CHAPTER_MAP_UPSCALER_LABELS.get(value, value),
+            key=f"vo_chapter_maps_upscaler_{project.id}",
+            help=(
+                "Replicate Real-ESRGAN braucht REPLICATE_API_TOKEN unter 🔑 API-Schlüssel. "
+                "Lanczos ist lokal und kostenlos."
+            ),
         )
         if st.button("Einstellungen speichern", key=f"vo_chapter_maps_save_settings_{project.id}"):
             settings = save_chapter_map_settings(
@@ -470,6 +488,7 @@ def _render_chapter_maps_section(project: Project) -> None:
                     update={
                         "model": model_value.strip(),
                         "image_size": image_size_value,
+                        "upscaler": upscaler_value,
                     }
                 ),
             )

@@ -356,20 +356,39 @@ CHAPTER_MAP_PROVIDER_DIR = "chapter_maps"
 CHAPTER_MAP_ASPECT_RATIO = "16:9"
 CHAPTER_MAP_TARGET_WIDTH = 1920
 CHAPTER_MAP_TARGET_HEIGHT = 1080
-# Pro-Modelle unterstützen oft "1K"/"2K" — 2K = schärfere Karten für Timeline.
+# Flash Image unterstützt 1K/2K/4K — Generierung oft 1K/2K, Upscale danach separat.
 CHAPTER_MAP_IMAGE_SIZE_DEFAULT = "2K"
 CHAPTER_MAP_IMAGE_SIZE_CHOICES = ("1K", "2K")
-CHAPTER_MAP_MODEL_DEFAULT = "gemini-3-pro-image-preview"
+CHAPTER_MAP_MODEL_DEFAULT = "gemini-3.1-flash-image"
 CHAPTER_MAP_MODEL_CHOICES = (
-    "gemini-3-pro-image-preview",
+    "gemini-3.1-flash-image",
     "gemini-3.1-flash-image-preview",
+    "gemini-3-pro-image-preview",
     "gemini-2.5-flash-image",
 )
 CHAPTER_MAP_MODEL_LABELS = {
+    "gemini-3.1-flash-image": "Nano Banana 2 (gemini-3.1-flash-image) — Standard + Upscale",
+    "gemini-3.1-flash-image-preview": "Nano Banana 2 Preview (gemini-3.1-flash-image-preview)",
     "gemini-3-pro-image-preview": "Nano Banana Pro (gemini-3-pro-image-preview) — beste Platzierung/Text",
-    "gemini-3.1-flash-image-preview": "Nano Banana 2 (gemini-3.1-flash-image-preview) — schnell, gut",
     "gemini-2.5-flash-image": "Nano Banana (gemini-2.5-flash-image) — günstig/alt",
 }
+# Upscale nach Gemini: separate API (Replicate Real-ESRGAN) oder lokales Lanczos.
+CHAPTER_MAP_UPSCALER_NONE = "none"
+CHAPTER_MAP_UPSCALER_LANCZOS = "lanczos"
+CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN = "replicate_esrgan"
+CHAPTER_MAP_UPSCALER_DEFAULT = CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN
+CHAPTER_MAP_UPSCALER_CHOICES = (
+    CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN,
+    CHAPTER_MAP_UPSCALER_LANCZOS,
+    CHAPTER_MAP_UPSCALER_NONE,
+)
+CHAPTER_MAP_UPSCALER_LABELS = {
+    CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN: "Replicate Real-ESRGAN (API) — empfohlen nach Flash",
+    CHAPTER_MAP_UPSCALER_LANCZOS: "Lokal Lanczos (kein Extra-API)",
+    CHAPTER_MAP_UPSCALER_NONE: "Kein Upscale (Rohausgabe)",
+}
+CHAPTER_MAP_REPLICATE_ESRGAN_MODEL = "nightmareai/real-esrgan"
+CHAPTER_MAP_REPLICATE_API_BASE_URL = "https://api.replicate.com/v1"
 CHAPTER_MAP_STYLE_EXAMPLE_1_FILENAME = "EN_MAP_EXAMPLE_1.png"
 CHAPTER_MAP_STYLE_EXAMPLE_2_FILENAME = "EN_MAP_EXAMPLE_2.png"
 # Toleranz für 16:9-Prüfung nach Generierung (kein Letterboxing akzeptieren).

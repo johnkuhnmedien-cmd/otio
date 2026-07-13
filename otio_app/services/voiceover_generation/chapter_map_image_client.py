@@ -62,8 +62,9 @@ def generate_chapter_map_image(
     """Generiert ein 16:9-Kartenbild aus Prompt + Referenzbild(ern).
 
     Nutzt gemini-*-image (Nano Banana / Pro). image_size "2K" liefert bei
-    unterstützten Modellen schärfere Ausgabe. Das Ergebnis wird unverändert
-    gespeichert; bei falschem Aspect Ratio wird abgebrochen (kein Crop/Stretch).
+    unterstützten Modellen schärfere Ausgabe. Das Ergebnis wird roh gespeichert;
+    Upscale läuft separat (Replicate / Lanczos). Bei falschem Aspect Ratio
+    wird abgebrochen (kein Crop/Stretch).
     """
     resolved_model = (model or CHAPTER_MAP_MODEL_DEFAULT).strip() or CHAPTER_MAP_MODEL_DEFAULT
     resolved_size = (image_size or CHAPTER_MAP_IMAGE_SIZE_DEFAULT).strip() or CHAPTER_MAP_IMAGE_SIZE_DEFAULT
@@ -132,15 +133,6 @@ def generate_chapter_map_image(
     from io import BytesIO
 
     with Image.open(BytesIO(image_bytes)) as generated:
-        rgb = generated.convert("RGB")
-        # Unter 1920px Breite: scharf hochskalieren für Timeline (kein Weichzeichner).
-        if rgb.width < CHAPTER_MAP_TARGET_WIDTH:
-            scale = CHAPTER_MAP_TARGET_WIDTH / float(rgb.width)
-            new_size = (
-                CHAPTER_MAP_TARGET_WIDTH,
-                max(1, int(round(rgb.height * scale))),
-            )
-            rgb = rgb.resize(new_size, Image.Resampling.LANCZOS)
-        rgb.save(output_path, format="PNG", optimize=True)
+        generated.convert("RGB").save(output_path, format="PNG", optimize=True)
 
     return assert_aspect_ratio_16_9(output_path)

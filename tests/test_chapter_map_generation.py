@@ -1,23 +1,28 @@
-"""Tests für Kapitel-Karten (Bulk + Einzel, Prompt, Ablage)."""
+"""Tests für Kapitel-Karten (Bulk + Einzel, Prompt, Ablage, Upscale)."""
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from PIL import Image
 
 from otio_app.defaults import (
+    CHAPTER_MAP_MODEL_DEFAULT,
     CHAPTER_MAP_STATUS_MISSING,
     CHAPTER_MAP_STATUS_PASS,
     CHAPTER_MAP_STYLE_EXAMPLE_1_FILENAME,
     CHAPTER_MAP_STYLE_EXAMPLE_2_FILENAME,
+    CHAPTER_MAP_UPSCALER_DEFAULT,
+    CHAPTER_MAP_UPSCALER_LANCZOS,
+    CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN,
     DRAMATURGY_STATUS_CONFIRMED,
 )
 from otio_app.models import Project, ProjectMode
 from otio_app.project_layout import (
-    get_folder_chapter_map_path,
     get_chapter_maps_manifest_path,
+    get_folder_chapter_map_path,
 )
 from otio_app.services.voiceover_generation.chapter_map_service import (
     build_chapter_map_prompt,
@@ -27,10 +32,15 @@ from otio_app.services.voiceover_generation.chapter_map_service import (
     import_style_examples_from_folder,
     load_chapter_map_manifest,
 )
+from otio_app.services.voiceover_generation.chapter_map_upscaler import (
+    ChapterMapUpscaleError,
+    upscale_chapter_map_image,
+    upscale_lanczos,
+)
 from otio_app.services.voiceover_generation.dramaturgy_service import save_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.models import DramaturgyFolderEntry, DramaturgyPlan
-from otio_app.services.voiceover_generation.project_brief_service import save_project_brief
 from otio_app.services.voiceover_generation.models import ProjectBrief
+from otio_app.services.voiceover_generation.project_brief_service import save_project_brief
 
 
 def _make_project(tmp_path: Path) -> Project:
@@ -84,8 +94,35 @@ def _write_style_examples(folder: Path) -> None:
 
 def _fake_generate_image(*, prompt, reference_image_paths, output_path, model=None, image_size=None):
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    Image.new("RGB", (1920, 1080), color=(40, 90, 160)).save(output_path)
+    Image.new("RGB", (1024, 576), color=(40, 90, 160)).save(output_path)
+    return 1024, 576
+
+
+def _fake_upscale(image_path, *, upscaler):
+    Image.new("RGB", (1920, 1080), color=(40, 90, 160)).save(image_path)
     return 1920, 1080
+
+
+def _patched_pipeline():
+    stack = ExitStack()
+    stack.enter_context(
+        patch(
+            "otio_app.services.voiceover_generation.chapter_map_service.generate_chapter_map_image",
+            side_effect=_fake_generate_image,
+        )
+    )
+    stack.enter_context(
+        patch(
+            "otio_app.services.voiceover_generation.chapter_map_service.upscale_chapter_map_image",
+            side_effect=_fake_upscale,
+        )
+    )
+    return stack
+
+
+def test_default_model_is_flash_31_with_replicate_upscaler() -> None:
+    assert CHAPTER_MAP_MODEL_DEFAULT == "gemini-3.1-flash-image"
+    assert CHAPTER_MAP_UPSCALER_DEFAULT == CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN
 
 
 def test_bulk_progress_callback_reports_steps(tmp_path: Path) -> None:
@@ -96,10 +133,7 @@ def test_bulk_progress_callback_reports_steps(tmp_path: Path) -> None:
     import_style_examples_from_folder(project, examples)
     events: list[tuple[int, int, str]] = []
 
-    with patch(
-        "otio_app.services.voiceover_generation.chapter_map_service.generate_chapter_map_image",
-        side_effect=_fake_generate_image,
-    ):
+    with _patched_pipeline():
         result = generate_all_chapter_maps(
             project,
             progress_callback=lambda done, total, message: events.append((done, total, message)),
@@ -154,10 +188,7 @@ def test_delete_chapter_map_removes_file(tmp_path: Path) -> None:
     _write_style_examples(examples)
     import_style_examples_from_folder(project, examples)
 
-    with patch(
-        "otio_app.services.voiceover_generation.chapter_map_service.generate_chapter_map_image",
-        side_effect=_fake_generate_image,
-    ):
+    with _patched_pipeline():
         generate_all_chapter_maps(project)
 
     path_1 = get_folder_chapter_map_path(
@@ -179,10 +210,7 @@ def test_import_style_examples_and_generate_bulk(tmp_path: Path) -> None:
     _write_style_examples(examples)
     import_style_examples_from_folder(project, examples)
 
-    with patch(
-        "otio_app.services.voiceover_generation.chapter_map_service.generate_chapter_map_image",
-        side_effect=_fake_generate_image,
-    ):
+    with _patched_pipeline():
         result = generate_all_chapter_maps(project)
 
     assert result.status == CHAPTER_MAP_STATUS_PASS
@@ -208,10 +236,7 @@ def test_single_chapter_requires_previous_map(tmp_path: Path) -> None:
     _write_style_examples(examples)
     import_style_examples_from_folder(project, examples)
 
-    with patch(
-        "otio_app.services.voiceover_generation.chapter_map_service.generate_chapter_map_image",
-        side_effect=_fake_generate_image,
-    ):
+    with _patched_pipeline():
         fail = generate_single_chapter_map(project, order_index=2)
         assert fail.status != CHAPTER_MAP_STATUS_PASS
         assert "Vorgänger" in (fail.error or "")
@@ -229,10 +254,7 @@ def test_regenerate_invalidates_following(tmp_path: Path) -> None:
     _write_style_examples(examples)
     import_style_examples_from_folder(project, examples)
 
-    with patch(
-        "otio_app.services.voiceover_generation.chapter_map_service.generate_chapter_map_image",
-        side_effect=_fake_generate_image,
-    ):
+    with _patched_pipeline():
         generate_all_chapter_maps(project)
         regenerate = generate_single_chapter_map(
             project, order_index=1, invalidate_following=True
@@ -243,3 +265,112 @@ def test_regenerate_invalidates_following(tmp_path: Path) -> None:
     by_index = {entry.order_index: entry for entry in manifest.entries}
     assert by_index[1].status == CHAPTER_MAP_STATUS_PASS
     assert by_index[2].status == CHAPTER_MAP_STATUS_MISSING
+
+
+def test_upscale_lanczos_reaches_1920(tmp_path: Path) -> None:
+    path = tmp_path / "map.png"
+    Image.new("RGB", (960, 540), color=(10, 20, 30)).save(path)
+    width, height = upscale_lanczos(path)
+    assert (width, height) == (1920, 1080)
+    with Image.open(path) as image:
+        assert image.size == (1920, 1080)
+
+
+def test_upscale_replicate_calls_api(tmp_path: Path) -> None:
+    path = tmp_path / "map.png"
+    Image.new("RGB", (960, 540), color=(10, 20, 30)).save(path)
+    fake_png = BytesIO_png()
+
+    post_response = MagicMock()
+    post_response.status_code = 200
+    post_response.json.return_value = {
+        "status": "succeeded",
+        "output": "https://replicate.example/out.png",
+    }
+
+    get_response = MagicMock()
+    get_response.status_code = 200
+    get_response.content = fake_png
+
+    with (
+        patch(
+            "otio_app.services.voiceover_generation.chapter_map_upscaler.get_api_key",
+            return_value="r8_test_token",
+        ),
+        patch(
+            "otio_app.services.voiceover_generation.chapter_map_upscaler.requests.post",
+            return_value=post_response,
+        ) as post_mock,
+        patch(
+            "otio_app.services.voiceover_generation.chapter_map_upscaler.requests.get",
+            return_value=get_response,
+        ),
+    ):
+        width, height = upscale_chapter_map_image(
+            path, upscaler=CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN
+        )
+
+    assert (width, height) == (1920, 1080)
+    assert post_mock.called
+    with Image.open(path) as image:
+        assert image.size == (1920, 1080)
+
+
+def test_upscale_replicate_requires_token(tmp_path: Path) -> None:
+    path = tmp_path / "map.png"
+    Image.new("RGB", (960, 540), color=(10, 20, 30)).save(path)
+    with patch(
+        "otio_app.services.voiceover_generation.chapter_map_upscaler.get_api_key",
+        return_value="",
+    ):
+        try:
+            upscale_chapter_map_image(path, upscaler=CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN)
+            raise AssertionError("expected ChapterMapUpscaleError")
+        except ChapterMapUpscaleError as exc:
+            assert "REPLICATE_API_TOKEN" in str(exc)
+
+
+def BytesIO_png() -> bytes:
+    from io import BytesIO
+
+    buffer = BytesIO()
+    Image.new("RGB", (1920, 1080), color=(50, 60, 70)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_generate_uses_upscaler_setting(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.chapter_map_models import ChapterMapSettings
+    from otio_app.services.voiceover_generation.chapter_map_service import save_chapter_map_settings
+
+    project = _make_project(tmp_path)
+    _confirm_plan(project)
+    examples = tmp_path / "Map_example"
+    _write_style_examples(examples)
+    import_style_examples_from_folder(project, examples)
+    save_chapter_map_settings(
+        project,
+        ChapterMapSettings(upscaler=CHAPTER_MAP_UPSCALER_LANCZOS),
+    )
+
+    seen: list[str] = []
+
+    def _track_upscale(image_path, *, upscaler):
+        seen.append(upscaler)
+        return _fake_upscale(image_path, upscaler=upscaler)
+
+    with (
+        patch(
+            "otio_app.services.voiceover_generation.chapter_map_service.generate_chapter_map_image",
+            side_effect=_fake_generate_image,
+        ),
+        patch(
+            "otio_app.services.voiceover_generation.chapter_map_service.upscale_chapter_map_image",
+            side_effect=_track_upscale,
+        ),
+    ):
+        result = generate_single_chapter_map(project, order_index=1)
+
+    assert result.status == CHAPTER_MAP_STATUS_PASS
+    assert seen == [CHAPTER_MAP_UPSCALER_LANCZOS]
+    assert result.entry is not None
+    assert result.entry.upscaler == CHAPTER_MAP_UPSCALER_LANCZOS

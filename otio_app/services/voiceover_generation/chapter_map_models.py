@@ -11,6 +11,7 @@ from otio_app.defaults import (
     CHAPTER_MAP_IMAGE_SIZE_DEFAULT,
     CHAPTER_MAP_MODEL_DEFAULT,
     CHAPTER_MAP_STATUS_MISSING,
+    CHAPTER_MAP_UPSCALER_DEFAULT,
 )
 
 
@@ -26,6 +27,7 @@ class ChapterMapSettings(BaseModel):
     model: str = CHAPTER_MAP_MODEL_DEFAULT
     aspect_ratio: str = CHAPTER_MAP_ASPECT_RATIO
     image_size: str = CHAPTER_MAP_IMAGE_SIZE_DEFAULT
+    upscaler: str = CHAPTER_MAP_UPSCALER_DEFAULT
 
 
 class ChapterMapEntry(BaseModel):
@@ -38,6 +40,7 @@ class ChapterMapEntry(BaseModel):
     previous_map_path: str = ""
     language: str = "EN"
     model: str = CHAPTER_MAP_MODEL_DEFAULT
+    upscaler: str = ""
     status: str = CHAPTER_MAP_STATUS_MISSING
     error: str = ""
     width: int = 0

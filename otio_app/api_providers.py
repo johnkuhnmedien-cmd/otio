@@ -49,6 +49,17 @@ API_PROVIDERS: tuple[ApiProvider, ...] = (
         implemented=True,
     ),
     ApiProvider(
+        env_key="REPLICATE_API_TOKEN",
+        label="Replicate (Upscale)",
+        description=(
+            "Real-ESRGAN-Upscale für Kapitel-Karten nach Gemini Flash Image. "
+            "Optional — alternativ lokales Lanczos."
+        ),
+        placeholder="r8_…",
+        docs_url="https://replicate.com/account/api-tokens",
+        implemented=True,
+    ),
+    ApiProvider(
         env_key="PEXELS_API_KEY",
         label="Pexels",
         description="Geplant für Stock-Foto/Video-Fallback im Schnittplan.",

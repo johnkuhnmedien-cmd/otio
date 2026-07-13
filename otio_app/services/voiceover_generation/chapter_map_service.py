@@ -16,6 +16,7 @@ from otio_app.defaults import (
     CHAPTER_MAP_STATUS_PASS,
     CHAPTER_MAP_STYLE_EXAMPLE_1_FILENAME,
     CHAPTER_MAP_STYLE_EXAMPLE_2_FILENAME,
+    CHAPTER_MAP_UPSCALER_DEFAULT,
 )
 from otio_app.models import Project
 from otio_app.project_layout import (
@@ -38,6 +39,10 @@ from otio_app.services.voiceover_generation.chapter_map_models import (
     ChapterMapEntry,
     ChapterMapManifest,
     ChapterMapSettings,
+)
+from otio_app.services.voiceover_generation.chapter_map_upscaler import (
+    ChapterMapUpscaleError,
+    upscale_chapter_map_image,
 )
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.models import DramaturgyFolderEntry, DramaturgyPlan
@@ -331,6 +336,7 @@ def generate_single_chapter_map(
     language = _project_language(project, plan)
     model = (settings.model or CHAPTER_MAP_MODEL_DEFAULT).strip()
     image_size = (settings.image_size or "").strip() or None
+    upscaler = (settings.upscaler or CHAPTER_MAP_UPSCALER_DEFAULT).strip()
     shown_number = display_chapter_number(
         order_index=order_index, total_chapters=total_chapters
     )
@@ -394,7 +400,8 @@ def generate_single_chapter_map(
             model=model,
             image_size=image_size,
         )
-    except (ChapterMapImageError, GeminiNotConfiguredError) as exc:
+        width, height = upscale_chapter_map_image(output_path, upscaler=upscaler)
+    except (ChapterMapImageError, ChapterMapUpscaleError, GeminiNotConfiguredError) as exc:
         entry = ChapterMapEntry(
             order_index=order_index,
             display_number=shown_number,
@@ -405,6 +412,7 @@ def generate_single_chapter_map(
             previous_map_path=str(previous_path) if previous_path else "",
             language=language,
             model=model,
+            upscaler=upscaler,
             status=CHAPTER_MAP_STATUS_FAIL,
             error=str(exc),
         )
@@ -427,6 +435,7 @@ def generate_single_chapter_map(
         previous_map_path=str(previous_path) if previous_path else "",
         language=language,
         model=model,
+        upscaler=upscaler,
         status=CHAPTER_MAP_STATUS_PASS,
         width=width,
         height=height,
