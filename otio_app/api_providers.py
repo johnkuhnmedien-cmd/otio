@@ -50,10 +50,10 @@ API_PROVIDERS: tuple[ApiProvider, ...] = (
     ),
     ApiProvider(
         env_key="OPENROUTER_API_KEY",
-        label="OpenRouter (Upscale)",
+        label="OpenRouter (FLUX Qualität)",
         description=(
-            "Kapitel-Karten-Upscale über die OpenRouter Image-API "
-            "(z. B. Riverflow / Gemini / FLUX als Image-to-Image @ 2K/4K)."
+            "Kapitel-Karten-Pipeline: nach Gemini + Lanczos läuft FLUX.2 "
+            "über die OpenRouter Image-API (Image-to-Image)."
         ),
         placeholder="sk-or-…",
         docs_url="https://openrouter.ai/keys",

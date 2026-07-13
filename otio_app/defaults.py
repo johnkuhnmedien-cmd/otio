@@ -372,38 +372,40 @@ CHAPTER_MAP_MODEL_LABELS = {
     "gemini-3-pro-image-preview": "Nano Banana Pro (gemini-3-pro-image-preview) — beste Platzierung/Text",
     "gemini-2.5-flash-image": "Nano Banana (gemini-2.5-flash-image) — günstig/alt",
 }
-# Upscale nach Gemini: OpenRouter Image-API (i2i @ 2K/4K), optional Replicate/Lanczos.
+# Feste Pipeline (Default): Gemini → Lanczos 16:9 → FLUX Qualität (OpenRouter).
 CHAPTER_MAP_UPSCALER_NONE = "none"
 CHAPTER_MAP_UPSCALER_LANCZOS = "lanczos"
+CHAPTER_MAP_UPSCALER_PIPELINE = "pipeline"
 CHAPTER_MAP_UPSCALER_OPENROUTER = "openrouter"
 CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN = "replicate_esrgan"
-CHAPTER_MAP_UPSCALER_DEFAULT = CHAPTER_MAP_UPSCALER_OPENROUTER
+CHAPTER_MAP_UPSCALER_DEFAULT = CHAPTER_MAP_UPSCALER_PIPELINE
 CHAPTER_MAP_UPSCALER_CHOICES = (
-    CHAPTER_MAP_UPSCALER_OPENROUTER,
+    CHAPTER_MAP_UPSCALER_PIPELINE,
     CHAPTER_MAP_UPSCALER_LANCZOS,
-    CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN,
     CHAPTER_MAP_UPSCALER_NONE,
 )
 CHAPTER_MAP_UPSCALER_LABELS = {
-    CHAPTER_MAP_UPSCALER_OPENROUTER: "OpenRouter (Qualität via Image-API) — empfohlen",
-    CHAPTER_MAP_UPSCALER_LANCZOS: "Lokal Lanczos — immer exakt 16:9 / 1920×1080",
+    CHAPTER_MAP_UPSCALER_PIPELINE: "Pipeline: Lanczos 16:9 → FLUX Qualität (OpenRouter)",
+    CHAPTER_MAP_UPSCALER_LANCZOS: "Nur Lanczos — exakt 16:9 / 1920×1080 (ohne FLUX)",
+    CHAPTER_MAP_UPSCALER_NONE: "Kein Nachbearbeitung (Rohausgabe)",
+    # Legacy (weiter lesbar, nicht in UI-Choices):
+    CHAPTER_MAP_UPSCALER_OPENROUTER: "Nur OpenRouter (ohne Lanczos vorher)",
     CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN: "Replicate Real-ESRGAN (API)",
-    CHAPTER_MAP_UPSCALER_NONE: "Kein Upscale (Rohausgabe)",
 }
-# OpenRouter hat kein reines ESRGAN — Upscale = Image-to-Image mit höherer Auflösung.
+# OpenRouter Qualitäts-Schritt: FLUX.2 Pro (Image-to-Image).
 CHAPTER_MAP_OPENROUTER_API_BASE_URL = "https://openrouter.ai/api/v1"
-CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT = "sourceful/riverflow-v2.5-fast"
+CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT = "black-forest-labs/flux.2-pro"
 CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_CHOICES = (
-    "sourceful/riverflow-v2.5-fast",
-    "sourceful/riverflow-v2-pro",
-    "google/gemini-3.1-flash-image",
+    "black-forest-labs/flux.2-pro",
     "black-forest-labs/flux.2-klein-4b",
+    "black-forest-labs/flux.2-flex",
+    "black-forest-labs/flux.2-max",
 )
 CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_LABELS = {
-    "sourceful/riverflow-v2.5-fast": "Riverflow V2.5 Fast — günstig, 2K i2i",
-    "sourceful/riverflow-v2-pro": "Riverflow V2 Pro — stärkeres Enhancement, 2K/4K",
-    "google/gemini-3.1-flash-image": "Gemini 3.1 Flash Image (via OpenRouter) — Text/Layout treu",
-    "black-forest-labs/flux.2-klein-4b": "FLUX.2 Klein 4B — schnell/günstig i2i",
+    "black-forest-labs/flux.2-pro": "FLUX.2 Pro — Qualität (Standard)",
+    "black-forest-labs/flux.2-klein-4b": "FLUX.2 Klein 4B — schneller/günstiger",
+    "black-forest-labs/flux.2-flex": "FLUX.2 Flex",
+    "black-forest-labs/flux.2-max": "FLUX.2 Max — höchste Stufe",
 }
 CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_DEFAULT = "2K"
 CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_CHOICES = ("2K", "4K")

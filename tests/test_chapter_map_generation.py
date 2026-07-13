@@ -18,6 +18,7 @@ from otio_app.defaults import (
     CHAPTER_MAP_UPSCALER_DEFAULT,
     CHAPTER_MAP_UPSCALER_LANCZOS,
     CHAPTER_MAP_UPSCALER_OPENROUTER,
+    CHAPTER_MAP_UPSCALER_PIPELINE,
     CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN,
     DRAMATURGY_STATUS_CONFIRMED,
 )
@@ -122,10 +123,10 @@ def _patched_pipeline():
     return stack
 
 
-def test_default_model_is_flash_31_with_openrouter_upscaler() -> None:
+def test_default_pipeline_is_gemini_lanczos_flux() -> None:
     assert CHAPTER_MAP_MODEL_DEFAULT == "gemini-3.1-flash-image"
-    assert CHAPTER_MAP_UPSCALER_DEFAULT == CHAPTER_MAP_UPSCALER_OPENROUTER
-    assert CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT == "sourceful/riverflow-v2.5-fast"
+    assert CHAPTER_MAP_UPSCALER_DEFAULT == CHAPTER_MAP_UPSCALER_PIPELINE
+    assert CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT == "black-forest-labs/flux.2-pro"
 
 
 def test_bulk_progress_callback_reports_steps(tmp_path: Path) -> None:
@@ -289,6 +290,41 @@ def test_upscale_lanczos_forces_16_9_when_off(tmp_path: Path) -> None:
         assert image.size == (1920, 1080)
 
 
+def test_pipeline_runs_lanczos_then_flux(tmp_path: Path) -> None:
+    path = tmp_path / "map.png"
+    Image.new("RGB", (1000, 800), color=(10, 20, 30)).save(path)
+    calls: list[str] = []
+
+    def _fake_lanczos(image_path: Path):
+        calls.append("lanczos")
+        Image.new("RGB", (1920, 1080), color=(1, 2, 3)).save(image_path)
+        return 1920, 1080
+
+    def _fake_openrouter(image_path: Path, *, model=None, resolution=None):
+        calls.append(f"flux:{model}")
+        Image.new("RGB", (1920, 1080), color=(4, 5, 6)).save(image_path)
+        return 1920, 1080
+
+    with (
+        patch(
+            "otio_app.services.voiceover_generation.chapter_map_upscaler.upscale_lanczos",
+            side_effect=_fake_lanczos,
+        ),
+        patch(
+            "otio_app.services.voiceover_generation.chapter_map_upscaler.upscale_openrouter",
+            side_effect=_fake_openrouter,
+        ),
+    ):
+        width, height = upscale_chapter_map_image(
+            path,
+            upscaler=CHAPTER_MAP_UPSCALER_PIPELINE,
+            openrouter_model="black-forest-labs/flux.2-pro",
+        )
+
+    assert (width, height) == (1920, 1080)
+    assert calls == ["lanczos", "flux:black-forest-labs/flux.2-pro"]
+
+
 def test_upscale_openrouter_calls_api(tmp_path: Path) -> None:
     import base64
     from io import BytesIO
@@ -318,16 +354,14 @@ def test_upscale_openrouter_calls_api(tmp_path: Path) -> None:
         width, height = upscale_chapter_map_image(
             path,
             upscaler=CHAPTER_MAP_UPSCALER_OPENROUTER,
-            openrouter_model="sourceful/riverflow-v2.5-fast",
+            openrouter_model="black-forest-labs/flux.2-pro",
             openrouter_resolution="2K",
         )
 
     assert (width, height) == (1920, 1080)
     assert post_mock.called
     body = post_mock.call_args.kwargs["json"]
-    assert body["model"] == "sourceful/riverflow-v2.5-fast"
-    assert body["resolution"] == "2K"
-    assert body["aspect_ratio"] == "16:9"
+    assert body["model"] == "black-forest-labs/flux.2-pro"
     assert body["input_references"]
     with Image.open(path) as image:
         assert image.size == (1920, 1080)

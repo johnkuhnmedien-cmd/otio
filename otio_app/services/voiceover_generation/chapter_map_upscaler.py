@@ -1,14 +1,11 @@
 """Upscale für Kapitel-Karten — getrennt von der Gemini-Bildgenerierung.
 
-Unterstützt:
-- openrouter: OpenRouter Image-API (Qualität via Image-to-Image @ 2K/4K),
-  danach immer Lanczos auf exakt 1920×1080 / 16:9
-- lanczos: lokal immer exakt 16:9 bei 1920×1080 (auch bei abweichender Quelle)
-- replicate_esrgan: Real-ESRGAN über Replicate, danach Lanczos auf 16:9
-- none: Rohbild belassen (nur prüfen)
+Standard-Pipeline (`pipeline`), alles in einem Rutsch:
+1. Lanczos → exakt 16:9 / 1920×1080
+2. FLUX Qualität über OpenRouter Image-API (Image-to-Image)
+3. finales Lanczos auf 1920×1080 (in openrouter-Pfad)
 
-Hinweis: OpenRouter bietet kein reines ESRGAN/Topaz. Qualitäts-Upscale läuft als
-Image-to-Image; Lanczos erledigt die Geometrie.
+Alternativen: nur Lanczos, oder keine Nachbearbeitung.
 """
 
 from __future__ import annotations
@@ -35,6 +32,7 @@ from otio_app.defaults import (
     CHAPTER_MAP_UPSCALER_LANCZOS,
     CHAPTER_MAP_UPSCALER_NONE,
     CHAPTER_MAP_UPSCALER_OPENROUTER,
+    CHAPTER_MAP_UPSCALER_PIPELINE,
     CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN,
 )
 from otio_app.services.api_keys import get_api_key
@@ -389,7 +387,11 @@ def upscale_chapter_map_image(
     openrouter_model: str | None = None,
     openrouter_resolution: str | None = None,
 ) -> tuple[int, int]:
-    """Wendet den gewählten Upscaler auf die gespeicherte Karte an."""
+    """Nachbearbeitung der gespeicherten Karte.
+
+    Standard-Pipeline (`pipeline`): Lanczos → exakt 16:9, danach FLUX Qualität
+    über OpenRouter, abschließend wieder Lanczos auf 1920×1080.
+    """
     mode = (upscaler or CHAPTER_MAP_UPSCALER_NONE).strip().lower()
     if not image_path.is_file():
         raise ChapterMapUpscaleError(f"Bild zum Upscalen fehlt: `{image_path}`")
@@ -403,6 +405,15 @@ def upscale_chapter_map_image(
     if mode == CHAPTER_MAP_UPSCALER_LANCZOS:
         return upscale_lanczos(image_path)
 
+    if mode == CHAPTER_MAP_UPSCALER_PIPELINE:
+        # 1) Geometrie zuerst, 2) FLUX-Qualität, 3) finales 16:9 (in openrouter).
+        upscale_lanczos(image_path)
+        return upscale_openrouter(
+            image_path,
+            model=openrouter_model or CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT,
+            resolution=openrouter_resolution,
+        )
+
     if mode == CHAPTER_MAP_UPSCALER_OPENROUTER:
         return upscale_openrouter(
             image_path,
@@ -415,7 +426,6 @@ def upscale_chapter_map_image(
 
     raise ChapterMapUpscaleError(
         f"Unbekannter Upscaler `{upscaler}`. "
-        f"Erlaubt: {CHAPTER_MAP_UPSCALER_OPENROUTER}, "
-        f"{CHAPTER_MAP_UPSCALER_LANCZOS}, {CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN}, "
-        f"{CHAPTER_MAP_UPSCALER_NONE}."
+        f"Erlaubt: {CHAPTER_MAP_UPSCALER_PIPELINE}, "
+        f"{CHAPTER_MAP_UPSCALER_LANCZOS}, {CHAPTER_MAP_UPSCALER_NONE}."
     )

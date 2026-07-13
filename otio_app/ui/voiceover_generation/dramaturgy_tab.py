@@ -15,13 +15,11 @@ from otio_app.defaults import (
     CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_CHOICES,
     CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT,
     CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_LABELS,
-    CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_CHOICES,
-    CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_DEFAULT,
     CHAPTER_MAP_STATUS_PASS,
     CHAPTER_MAP_UPSCALER_CHOICES,
     CHAPTER_MAP_UPSCALER_DEFAULT,
     CHAPTER_MAP_UPSCALER_LABELS,
-    CHAPTER_MAP_UPSCALER_OPENROUTER,
+    CHAPTER_MAP_UPSCALER_PIPELINE,
     DRAMATURGY_PLANNING_MODE_GEOGRAPHY,
     DRAMATURGY_PLANNING_MODE_LABELS,
     DRAMATURGY_PLANNING_MODE_VARIETY,
@@ -457,8 +455,8 @@ def _render_chapter_maps_section(project: Project) -> None:
             format_func=lambda value: CHAPTER_MAP_MODEL_LABELS.get(value, value),
             key=f"vo_chapter_maps_model_{project.id}",
             help=(
-                "Standard: gemini-3.1-flash-image, danach Upscale über separate API. "
-                "Pro nur wenn Pin-/Textqualität kritisch ist."
+                "Standard-Pipeline: Gemini 3.1 Flash → Lanczos 16:9 → FLUX Qualität. "
+                "Alles in einem Rutsch beim Erzeugen."
             ),
         )
         size_options = list(CHAPTER_MAP_IMAGE_SIZE_CHOICES)
@@ -470,53 +468,46 @@ def _render_chapter_maps_section(project: Project) -> None:
             options=size_options,
             index=size_options.index(current_size),
             key=f"vo_chapter_maps_image_size_{project.id}",
-            help="2K = schärfere Gemini-Ausgabe vor dem Upscale. 1K = schneller/günstiger.",
+            help="2K = schärfere Gemini-Ausgabe vor Lanczos/FLUX. 1K = schneller/günstiger.",
         )
         upscaler_options = list(CHAPTER_MAP_UPSCALER_CHOICES)
         current_upscaler = (
             settings.upscaler if settings.upscaler in upscaler_options else CHAPTER_MAP_UPSCALER_DEFAULT
         )
         upscaler_value = st.selectbox(
-            "Upscaler (nach Gemini)",
+            "Nachbearbeitung",
             options=upscaler_options,
             index=upscaler_options.index(current_upscaler),
             format_func=lambda value: CHAPTER_MAP_UPSCALER_LABELS.get(value, value),
             key=f"vo_chapter_maps_upscaler_{project.id}",
             help=(
-                "OpenRouter = Bildqualität (i2i @ 2K/4K, braucht OPENROUTER_API_KEY). "
-                "Lanczos = nur Geometrie: immer exakt 16:9 / 1920×1080, auch wenn Gemini abweicht."
+                "Standard: erst Lanczos auf exakt 16:9 / 1920×1080, "
+                "dann FLUX über OpenRouter (OPENROUTER_API_KEY)."
             ),
         )
-        openrouter_model_value = settings.openrouter_upscale_model
-        openrouter_resolution_value = settings.openrouter_upscale_resolution
-        if upscaler_value == CHAPTER_MAP_UPSCALER_OPENROUTER:
+        openrouter_model_value = (
+            settings.openrouter_upscale_model or CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT
+        )
+        openrouter_resolution_value = settings.openrouter_upscale_resolution or "2K"
+        if upscaler_value == CHAPTER_MAP_UPSCALER_PIPELINE:
             or_model_options = list(CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_CHOICES)
             current_or_model = (
-                settings.openrouter_upscale_model
-                if settings.openrouter_upscale_model in or_model_options
+                openrouter_model_value
+                if openrouter_model_value in or_model_options
                 else CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT
             )
             openrouter_model_value = st.selectbox(
-                "OpenRouter Upscale-Modell",
+                "FLUX-Modell (OpenRouter)",
                 options=or_model_options,
                 index=or_model_options.index(current_or_model),
                 format_func=lambda value: CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_LABELS.get(
                     value, value
                 ),
                 key=f"vo_chapter_maps_or_upscale_model_{project.id}",
+                help="Läuft nach Lanczos automatisch mit — braucht OPENROUTER_API_KEY.",
             )
-            or_res_options = list(CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_CHOICES)
-            current_or_res = (
-                settings.openrouter_upscale_resolution
-                if settings.openrouter_upscale_resolution in or_res_options
-                else CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_DEFAULT
-            )
-            openrouter_resolution_value = st.selectbox(
-                "OpenRouter Ziel-Auflösung",
-                options=or_res_options,
-                index=or_res_options.index(current_or_res),
-                key=f"vo_chapter_maps_or_upscale_res_{project.id}",
-                help="2K reicht für 1920×1080 Timeline. 4K nur wenn das Modell es unterstützt.",
+            st.caption(
+                "Pipeline in einem Rutsch: **Gemini 3.1 Flash** → **Lanczos 16:9** → **FLUX**."
             )
         if st.button("Einstellungen speichern", key=f"vo_chapter_maps_save_settings_{project.id}"):
             settings = save_chapter_map_settings(
