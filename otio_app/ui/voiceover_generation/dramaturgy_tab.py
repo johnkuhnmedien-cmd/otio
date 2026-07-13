@@ -138,6 +138,11 @@ def _plan_to_rows(plan) -> list[dict]:
             "recommended_word_count": entry.recommended_word_count,
             "recommended_min_words": entry.recommended_min_words,
             "recommended_max_words": entry.recommended_max_words,
+            "use_transition_from_previous": entry.use_transition_from_previous,
+            "use_transition_to_next": entry.use_transition_to_next,
+            "use_callback_to_previous": entry.use_callback_to_previous,
+            "use_contrast_with_previous": entry.use_contrast_with_previous,
+            "use_commonality_with_previous": entry.use_commonality_with_previous,
             "transition_goal_to_next": entry.transition_goal_to_next,
             "risks": ", ".join(entry.risks),
         }
@@ -188,6 +193,15 @@ def _render_draft_editor(project: Project, draft) -> list[dict]:
             "recommended_max_words": st.column_config.NumberColumn(
                 "Max. Wörter", min_value=0, step=5
             ),
+            "use_transition_from_previous": st.column_config.CheckboxColumn(
+                "↑ Übergang von vorher"
+            ),
+            "use_transition_to_next": st.column_config.CheckboxColumn(
+                "Übergang zum nächsten Kapitel"
+            ),
+            "use_callback_to_previous": st.column_config.CheckboxColumn("Rückbezug"),
+            "use_contrast_with_previous": st.column_config.CheckboxColumn("Kontrast"),
+            "use_commonality_with_previous": st.column_config.CheckboxColumn("Gemeinsamkeit"),
             "transition_goal_to_next": st.column_config.TextColumn("Übergang zum nächsten Ort"),
             "risks": st.column_config.TextColumn("Risiken", disabled=True),
         },

@@ -87,8 +87,13 @@ VALID_DRAMATURGY_RESPONSE = json.dumps(
                 "recommended_min_words": 126,
                 "recommended_max_words": 154,
                 "transition_goal_to_next": "Ruhiger Ausklang danach.",
-                "transition_from_previous_hint": "",
-                "contrast_or_commonality_hint": "",
+                "transition_from_previous_hint": "From Yellowstone into the canyon.",
+                "contrast_or_commonality_hint": "Contrast geothermal vs rock.",
+                "use_transition_from_previous": True,
+                "use_transition_to_next": True,
+                "use_callback_to_previous": False,
+                "use_contrast_with_previous": True,
+                "use_commonality_with_previous": False,
                 "risks": [],
             },
             {
@@ -106,6 +111,11 @@ VALID_DRAMATURGY_RESPONSE = json.dumps(
                 "transition_goal_to_next": "Steigerung zum Grand Canyon.",
                 "transition_from_previous_hint": "",
                 "contrast_or_commonality_hint": "",
+                "use_transition_from_previous": False,
+                "use_transition_to_next": True,
+                "use_callback_to_previous": False,
+                "use_contrast_with_previous": False,
+                "use_commonality_with_previous": False,
                 "risks": [],
             },
         ],
@@ -453,3 +463,71 @@ def test_dramaturgy_writes_no_edit_plan_documents(tmp_path: Path) -> None:
 
     assert not (project.language_work_dir_path / "edit_plan").exists()
     assert not (project.language_work_dir_path / "exports").exists()
+
+
+
+def test_build_dramaturgy_plan_parses_craft_flag_booleans(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()
+    ):
+        result = build_dramaturgy_plan(project, provider="anthropic", model="claude-sonnet-5")
+
+    assert result.status == STATUS_PASS
+    assert result.plan is not None
+    by_folder = {entry.folder_name: entry for entry in result.plan.recommended_folder_order}
+    grand = by_folder["Grand Canyon"]
+    assert grand.use_transition_from_previous is True
+    assert grand.use_transition_to_next is True
+    assert grand.use_callback_to_previous is False
+    assert grand.use_contrast_with_previous is True
+    assert grand.use_commonality_with_previous is False
+    yellowstone = by_folder["Yellowstone"]
+    assert yellowstone.use_transition_from_previous is False
+    assert yellowstone.use_transition_to_next is True
+
+
+def test_update_dramaturgy_order_persists_craft_flags(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
+    draft = DramaturgyPlan(
+        project_id=project.id,
+        recommended_folder_order=[
+            DramaturgyFolderEntry(
+                folder_name="Grand Canyon",
+                order_index=1,
+                use_transition_to_next=False,
+                use_contrast_with_previous=False,
+            ),
+            DramaturgyFolderEntry(
+                folder_name="Yellowstone",
+                order_index=2,
+                use_transition_from_previous=False,
+                use_commonality_with_previous=False,
+            ),
+        ],
+    )
+    save_dramaturgy_draft(project, draft)
+    updated = update_dramaturgy_order(
+        project,
+        [
+            {
+                "folder_name": "Grand Canyon",
+                "order_index": 1,
+                "use_transition_to_next": True,
+                "use_contrast_with_previous": True,
+            },
+            {
+                "folder_name": "Yellowstone",
+                "order_index": 2,
+                "use_transition_from_previous": True,
+                "use_commonality_with_previous": True,
+                "use_callback_to_previous": True,
+            },
+        ],
+    )
+    by_folder = {entry.folder_name: entry for entry in updated.recommended_folder_order}
+    assert by_folder["Grand Canyon"].use_transition_to_next is True
+    assert by_folder["Grand Canyon"].use_contrast_with_previous is True
+    assert by_folder["Yellowstone"].use_transition_from_previous is True
+    assert by_folder["Yellowstone"].use_commonality_with_previous is True
+    assert by_folder["Yellowstone"].use_callback_to_previous is True

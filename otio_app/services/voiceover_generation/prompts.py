@@ -375,6 +375,35 @@ Decide, for the whole set of chapters above:
 - What is the most compelling overall narrative arc connecting them?
 - For EACH chapter: its role, a short reason, recommended word count for its \
 voice-over section, and a transition idea toward the NEXT chapter.
+- For EACH chapter: decide the five voice-over craft FLAGS below (booleans). \
+These flags later become checkboxes for the folder voice-over writer.
+
+### Voice-over craft flags (per chapter — REQUIRED booleans)
+Set each flag deliberately — do NOT default everything to true:
+- use_transition_from_previous: near the START, briefly bridge FROM the previous \
+chapter into this one. Must be false for the FIRST chapter (nothing before it).
+- use_transition_to_next: near the END, briefly tease the NEXT chapter. Must be \
+false for the LAST chapter (nothing after it). Prefer true for most middle chapters \
+so the film keeps flowing.
+- use_callback_to_previous: later in the text, briefly look BACK to the previous \
+chapter (a callback, not the opening bridge). Use SPARINGLY — only when a delayed \
+echo truly helps. Must be false for the FIRST chapter. Prefer false more often \
+than true.
+- use_contrast_with_previous: explicitly play this chapter AGAINST the previous \
+one (opposite mood, landscape, energy, scale, …). Must be false for the FIRST \
+chapter. Prefer true only where contrast is dramaturgically useful.
+- use_commonality_with_previous: explicitly name a SHARED motif with the previous \
+chapter (same element, theme, or visual idea). Must be false for the FIRST chapter. \
+Do NOT set both contrast AND commonality to true unless both are genuinely needed; \
+usually pick at most one.
+
+Also fill the hint strings that explain HOW to apply the flags you set true:
+- transition_goal_to_next: how to tease the next chapter (empty if \
+use_transition_to_next is false)
+- transition_from_previous_hint: how to bridge from the previous chapter (empty if \
+use_transition_from_previous is false)
+- contrast_or_commonality_hint: how to use contrast and/or commonality (empty if \
+both contrast/commonality flags are false)
 
 Write core_promise, narrative_arc, reasons, transition hints, and risks in the \
 target language (native-speaker quality). Folder/chapter names stay exactly as given.
@@ -403,6 +432,11 @@ this shape:
       "transition_goal_to_next": "...",
       "transition_from_previous_hint": "...",
       "contrast_or_commonality_hint": "...",
+      "use_transition_from_previous": false,
+      "use_transition_to_next": false,
+      "use_callback_to_previous": false,
+      "use_contrast_with_previous": false,
+      "use_commonality_with_previous": false,
       "risks": []
     }}
   ],
@@ -517,6 +551,8 @@ the stone glow from within."
 - dramaturgy_role: {dramaturgy_entry.dramaturgy_role}
 - reason for this role: {dramaturgy_entry.reason or "-"}
 - transition goal toward the NEXT location: {dramaturgy_entry.transition_goal_to_next or "-"}
+- transition-from-previous hint: {dramaturgy_entry.transition_from_previous_hint or "-"}
+- contrast/commonality hint: {dramaturgy_entry.contrast_or_commonality_hint or "-"}
 - previous location in the video: {previous_folder_name or "(none — this is the first location)"}
 - next location in the video: {next_folder_name or "(none — this is the last location)"}
 - use a transition from the previous location (as a segue near the START of \

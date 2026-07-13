@@ -50,11 +50,11 @@ def build_default_folder_voiceover_settings(project: Project) -> FolderVoiceover
     Fehlen Wortanzahl-Werte im Dramaturgie-Eintrag (0 oder nicht gesetzt),
     wird auf die Phase-3-Heuristik zurückgegriffen.
 
-    transition_from_previous/use_contrast_with_previous (rückwärtsgerichtet)
-    werden für den ERSTEN aktivierten Ordner immer auf False gezwungen — es
-    gibt dort nichts Vorheriges, auf das sich beziehen ließe. transition_to_next
-    (vorwärtsgerichtet) wird spiegelbildlich für den LETZTEN aktivierten
-    Ordner immer auf False gezwungen — dort gibt es nichts Nächstes."""
+    Die fünf Craft-Flags (Übergang vorher/nächster, Rückbezug, Kontrast,
+    Gemeinsamkeit) kommen als explizite Booleans aus der Dramaturgie.
+    Rückwärtsgerichtete Flags werden für den ERSTEN aktivierten Ordner immer
+    auf False gezwungen; transition_to_next für den LETZTEN aktivierten Ordner.
+    """
     plan = load_confirmed_dramaturgy(project)
     settings: list[FolderVoiceoverSetting] = []
     if plan is not None:
@@ -76,6 +76,41 @@ def build_default_folder_voiceover_settings(project: Project) -> FolderVoiceover
             is_first_enabled = entry.folder_name == first_enabled_folder_name
             is_last_enabled = entry.folder_name == last_enabled_folder_name
 
+            transition_from_previous = bool(entry.use_transition_from_previous)
+            transition_to_next = bool(entry.use_transition_to_next)
+            callback_to_previous = bool(entry.use_callback_to_previous)
+            use_contrast = bool(entry.use_contrast_with_previous)
+            use_commonality = bool(entry.use_commonality_with_previous)
+
+            # Legacy-Fallback: ältere confirmed-Pläne ohne explizite Flags
+            # (alle False + Hints gesetzt) → bisherige Hint-Heuristik.
+            if not any(
+                (
+                    transition_from_previous,
+                    transition_to_next,
+                    callback_to_previous,
+                    use_contrast,
+                    use_commonality,
+                )
+            ) and any(
+                (
+                    entry.transition_from_previous_hint.strip(),
+                    entry.transition_goal_to_next.strip(),
+                    entry.contrast_or_commonality_hint.strip(),
+                )
+            ):
+                transition_from_previous = bool(entry.transition_from_previous_hint.strip())
+                transition_to_next = bool(entry.transition_goal_to_next.strip())
+                use_contrast = bool(entry.contrast_or_commonality_hint.strip())
+
+            if is_first_enabled:
+                transition_from_previous = False
+                callback_to_previous = False
+                use_contrast = False
+                use_commonality = False
+            if is_last_enabled:
+                transition_to_next = False
+
             settings.append(
                 FolderVoiceoverSetting(
                     folder_name=entry.folder_name,
@@ -85,15 +120,11 @@ def build_default_folder_voiceover_settings(project: Project) -> FolderVoiceover
                     target_words=target_words,
                     min_words=min_words,
                     max_words=max_words,
-                    transition_from_previous=(
-                        bool(entry.transition_from_previous_hint) and not is_first_enabled
-                    ),
-                    use_contrast_with_previous=(
-                        bool(entry.contrast_or_commonality_hint) and not is_first_enabled
-                    ),
-                    transition_to_next=(
-                        bool(entry.transition_goal_to_next) and not is_last_enabled
-                    ),
+                    transition_from_previous=transition_from_previous,
+                    transition_to_next=transition_to_next,
+                    callback_to_previous=callback_to_previous,
+                    use_contrast_with_previous=use_contrast,
+                    use_commonality_with_previous=use_commonality,
                 )
             )
 
