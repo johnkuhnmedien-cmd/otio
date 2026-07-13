@@ -483,8 +483,8 @@ def _render_chapter_maps_section(project: Project) -> None:
             format_func=lambda value: CHAPTER_MAP_UPSCALER_LABELS.get(value, value),
             key=f"vo_chapter_maps_upscaler_{project.id}",
             help=(
-                "OpenRouter: Image-to-Image @ 2K/4K (braucht OPENROUTER_API_KEY). "
-                "OpenRouter hat kein reines ESRGAN — Upscale läuft als i2i-Enhancement."
+                "OpenRouter = Bildqualität (i2i @ 2K/4K, braucht OPENROUTER_API_KEY). "
+                "Lanczos = nur Geometrie: immer exakt 16:9 / 1920×1080, auch wenn Gemini abweicht."
             ),
         )
         openrouter_model_value = settings.openrouter_upscale_model

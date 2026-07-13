@@ -279,6 +279,16 @@ def test_upscale_lanczos_reaches_1920(tmp_path: Path) -> None:
         assert image.size == (1920, 1080)
 
 
+def test_upscale_lanczos_forces_16_9_when_off(tmp_path: Path) -> None:
+    path = tmp_path / "map_off.png"
+    Image.new("RGB", (1000, 800), color=(10, 20, 30)).save(path)
+    width, height = upscale_lanczos(path)
+    assert (width, height) == (1920, 1080)
+    assert abs(width / height - 16 / 9) < 0.001
+    with Image.open(path) as image:
+        assert image.size == (1920, 1080)
+
+
 def test_upscale_openrouter_calls_api(tmp_path: Path) -> None:
     import base64
     from io import BytesIO

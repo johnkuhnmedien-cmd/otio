@@ -63,8 +63,7 @@ def generate_chapter_map_image(
 
     Nutzt gemini-*-image (Nano Banana / Pro). image_size "2K" liefert bei
     unterstützten Modellen schärfere Ausgabe. Das Ergebnis wird roh gespeichert;
-    Upscale läuft separat (Replicate / Lanczos). Bei falschem Aspect Ratio
-    wird abgebrochen (kein Crop/Stretch).
+    Geometrie (exakt 16:9 / 1920×1080) und Qualitäts-Upscale laufen separat.
     """
     resolved_model = (model or CHAPTER_MAP_MODEL_DEFAULT).strip() or CHAPTER_MAP_MODEL_DEFAULT
     resolved_size = (image_size or CHAPTER_MAP_IMAGE_SIZE_DEFAULT).strip() or CHAPTER_MAP_IMAGE_SIZE_DEFAULT
@@ -133,6 +132,6 @@ def generate_chapter_map_image(
     from io import BytesIO
 
     with Image.open(BytesIO(image_bytes)) as generated:
-        generated.convert("RGB").save(output_path, format="PNG", optimize=True)
-
-    return assert_aspect_ratio_16_9(output_path)
+        rgb = generated.convert("RGB")
+        rgb.save(output_path, format="PNG", optimize=True)
+        return rgb.size

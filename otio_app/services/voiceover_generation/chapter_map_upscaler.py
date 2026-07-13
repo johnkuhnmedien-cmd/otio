@@ -1,13 +1,14 @@
 """Upscale für Kapitel-Karten — getrennt von der Gemini-Bildgenerierung.
 
 Unterstützt:
-- openrouter: OpenRouter Image-API (Image-to-Image @ 2K/4K)
-- lanczos: lokales PIL-Resize auf 1920×1080
-- replicate_esrgan: Real-ESRGAN über Replicate HTTP API
-- none: Rohbild belassen
+- openrouter: OpenRouter Image-API (Qualität via Image-to-Image @ 2K/4K),
+  danach immer Lanczos auf exakt 1920×1080 / 16:9
+- lanczos: lokal immer exakt 16:9 bei 1920×1080 (auch bei abweichender Quelle)
+- replicate_esrgan: Real-ESRGAN über Replicate, danach Lanczos auf 16:9
+- none: Rohbild belassen (nur prüfen)
 
-Hinweis: OpenRouter bietet kein reines ESRGAN/Topaz. Upscale läuft als
-Image-to-Image mit höherer Auflösung und Preserve-Prompt.
+Hinweis: OpenRouter bietet kein reines ESRGAN/Topaz. Qualitäts-Upscale läuft als
+Image-to-Image; Lanczos erledigt die Geometrie.
 """
 
 from __future__ import annotations
@@ -73,29 +74,24 @@ def _assert_near_16_9(width: int, height: int) -> None:
         )
 
 
-def _fit_to_target(image: Image.Image) -> Image.Image:
-    """Auf Timeline-Zielgröße bringen (Breite 1920), Aspect Ratio beibehalten."""
-    if image.width == CHAPTER_MAP_TARGET_WIDTH and image.height == CHAPTER_MAP_TARGET_HEIGHT:
+def _fit_to_exact_16_9(image: Image.Image) -> Image.Image:
+    """Immer exakt 1920×1080 (16:9) per Lanczos — auch wenn die Quelle abweicht.
+
+    Skaliert auf die Zielgröße. Bei abweichendem Aspect Ratio wird gestreckt
+    (kein Letterbox, kein Crop), damit Pins/Labels am Rand erhalten bleiben.
+    """
+    target = (CHAPTER_MAP_TARGET_WIDTH, CHAPTER_MAP_TARGET_HEIGHT)
+    if image.size == target:
         return image
-    scale = CHAPTER_MAP_TARGET_WIDTH / float(image.width)
-    new_size = (
-        CHAPTER_MAP_TARGET_WIDTH,
-        max(1, int(round(image.height * scale))),
-    )
-    return image.resize(new_size, Image.Resampling.LANCZOS)
+    return image.resize(target, Image.Resampling.LANCZOS)
 
 
 def upscale_lanczos(image_path: Path) -> tuple[int, int]:
-    """Lokales Lanczos auf Zielbreite, wenn kleiner als 1920px."""
+    """Lokales Lanczos: immer exakt 16:9 bei 1920×1080 (auch bei Abweichung)."""
     with Image.open(image_path) as image:
-        rgb = image.convert("RGB")
-        if rgb.width >= CHAPTER_MAP_TARGET_WIDTH:
-            width, height = rgb.size
-            _assert_near_16_9(width, height)
-            return width, height
-        scaled = _fit_to_target(rgb)
-        scaled.save(image_path, format="PNG", optimize=True)
-        width, height = scaled.size
+        fitted = _fit_to_exact_16_9(image.convert("RGB"))
+        fitted.save(image_path, format="PNG", optimize=True)
+        width, height = fitted.size
     _assert_near_16_9(width, height)
     return width, height
 
@@ -243,7 +239,7 @@ def upscale_openrouter(
     image_bytes = _decode_openrouter_image(payload)
     with Image.open(BytesIO(image_bytes)) as upscaled:
         rgb = upscaled.convert("RGB")
-        fitted = _fit_to_target(rgb)
+        fitted = _fit_to_exact_16_9(rgb)
         fitted.save(image_path, format="PNG", optimize=True)
         width, height = fitted.size
 
@@ -378,7 +374,7 @@ def upscale_replicate_esrgan(image_path: Path) -> tuple[int, int]:
 
     with Image.open(BytesIO(image_bytes)) as upscaled:
         rgb = upscaled.convert("RGB")
-        fitted = _fit_to_target(rgb)
+        fitted = _fit_to_exact_16_9(rgb)
         fitted.save(image_path, format="PNG", optimize=True)
         width, height = fitted.size
 

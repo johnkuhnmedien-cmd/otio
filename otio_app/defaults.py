@@ -385,8 +385,8 @@ CHAPTER_MAP_UPSCALER_CHOICES = (
     CHAPTER_MAP_UPSCALER_NONE,
 )
 CHAPTER_MAP_UPSCALER_LABELS = {
-    CHAPTER_MAP_UPSCALER_OPENROUTER: "OpenRouter (Image-API Upscale) — empfohlen",
-    CHAPTER_MAP_UPSCALER_LANCZOS: "Lokal Lanczos (kein Extra-API)",
+    CHAPTER_MAP_UPSCALER_OPENROUTER: "OpenRouter (Qualität via Image-API) — empfohlen",
+    CHAPTER_MAP_UPSCALER_LANCZOS: "Lokal Lanczos — immer exakt 16:9 / 1920×1080",
     CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN: "Replicate Real-ESRGAN (API)",
     CHAPTER_MAP_UPSCALER_NONE: "Kein Upscale (Rohausgabe)",
 }
