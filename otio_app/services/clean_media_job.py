@@ -12,7 +12,10 @@ from otio_app.analysis_models import CleanMediaManifest
 from otio_app.models import Project
 from otio_app.project_repository import get_project_by_id
 from otio_app.services.clean_media import (
+    folder_clean_media_ready,
+    folder_manifest_path,
     list_folder_media,
+    load_clean_media_manifest,
     process_folder,
     validate_folder,
 )
@@ -42,6 +45,7 @@ class CleanMediaJobState:
     total_media: int = 0
     cancel_requested: bool = False
     manifests: dict[str, CleanMediaManifest] = field(default_factory=dict)
+    skipped_folders: list[str] = field(default_factory=list)
     error: str | None = None
 
 
@@ -166,12 +170,38 @@ class CleanMediaJobManager:
                     return cancel_event.is_set()
 
                 manifests: dict[str, CleanMediaManifest] = {}
+                skipped_folders: list[str] = []
                 total_media = 0
                 done_media = 0
 
                 for folder_index, folder_name in enumerate(folders, start=1):
                     if should_cancel():
                         break
+
+                    # PROCESS: bereits grüne/bereite Ordner komplett überspringen
+                    # (VALIDATE prüft bewusst alles erneut).
+                    if mode == CleanMediaJobMode.PROCESS and folder_clean_media_ready(
+                        current, folder_name, strict=False
+                    ):
+                        existing = load_clean_media_manifest(
+                            folder_manifest_path(current, folder_name)
+                        )
+                        if existing is not None:
+                            manifests[folder_name] = existing
+                        skipped_folders.append(folder_name)
+                        with self._lock:
+                            job = self._jobs.get(project_id)
+                            if job is not None:
+                                job.phase = "folder_skipped"
+                                job.phase_data = {
+                                    "folder": folder_name,
+                                    "folder_index": folder_index,
+                                    "folder_count": len(folders),
+                                    "skipped_folders": list(skipped_folders),
+                                }
+                                job.skipped_folders = list(skipped_folders)
+                        continue
+
                     with self._lock:
                         job = self._jobs.get(project_id)
                         if job is not None:
@@ -180,6 +210,7 @@ class CleanMediaJobManager:
                                 "folder": folder_name,
                                 "folder_index": folder_index,
                                 "folder_count": len(folders),
+                                "skipped_folders": list(skipped_folders),
                             }
 
                     media_files = list_folder_media(current, folder_name)
@@ -201,6 +232,7 @@ class CleanMediaJobManager:
                                 "status": entry.status,
                                 "done_media": done_media,
                                 "total_media": max(total_media, 1),
+                                "skipped_folders": list(skipped_folders),
                             }
                             job.done_media = done_media
                             job.total_media = max(total_media, 1)
@@ -223,6 +255,7 @@ class CleanMediaJobManager:
                     if job is None:
                         return
                     job.manifests = manifests
+                    job.skipped_folders = list(skipped_folders)
                     job.status = (
                         JobStatus.CANCELLED if should_cancel() else JobStatus.COMPLETED
                     )

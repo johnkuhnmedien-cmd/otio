@@ -62,7 +62,14 @@ def _render_job_monitor(project) -> None:
     if state is None:
         return
     if state.status == JobStatus.COMPLETED:
-        st.success("Clean-Media-Lauf abgeschlossen.")
+        skipped = getattr(state, "skipped_folders", None) or []
+        if skipped:
+            st.success(
+                f"Clean-Media-Lauf abgeschlossen — {len(skipped)} bereits bereite "
+                "Ordner übersprungen."
+            )
+        else:
+            st.success("Clean-Media-Lauf abgeschlossen.")
         if st.button("Hinweis schließen", key=f"clean_dismiss_{project.id}"):
             manager.dismiss(project.id)
             st.rerun()
@@ -102,6 +109,12 @@ def _clean_media_running_panel(project) -> None:
         st.caption(
             f"Ordner **{phase_data.get('folder', '…')}** "
             f"({phase_data.get('folder_index', '?')}/{phase_data.get('folder_count', '?')})"
+        )
+    elif state.phase == "folder_skipped":
+        skipped = phase_data.get("skipped_folders") or []
+        st.caption(
+            f"⏭️ Ordner **{phase_data.get('folder', '…')}** übersprungen "
+            f"(bereits bereit) — bisher {len(skipped)} übersprungen"
         )
     elif state.phase == "media_done":
         st.caption(
@@ -306,7 +319,10 @@ def render_clean_media_page() -> None:
             key=f"clean_process_{project.id}",
             type="primary",
             disabled=job_running or not selected_folders,
-            help="Prüft Top-Level- und `_supplemental/_…/`-Medien und transcodiert bei Bedarf",
+            help=(
+                "Nur noch offene Ordner: Top-Level- und `_supplemental/_…/`-Medien "
+                "prüfen/transcodieren. Bereits grüne/bereite Ordner werden übersprungen."
+            ),
         )
     with col3:
         repair_clicked = st.button(
@@ -314,8 +330,8 @@ def render_clean_media_page() -> None:
             key=f"clean_repair_{project.id}",
             disabled=job_running or not selected_folders,
             help=(
-                "Manifest mit Disk synchronisieren — auch neue Supplement-Assets "
-                "unter `_supplemental/_…/` aufnehmen und Clean-Dateien erzeugen"
+                "Wie Prüfen & transcodieren: nur noch offene Ordner. "
+                "Bereits bereite Ordner werden übersprungen."
             ),
         )
     with col4:
@@ -323,6 +339,7 @@ def render_clean_media_page() -> None:
             "Alle Ordner verarbeiten",
             key=f"clean_all_{project.id}",
             disabled=job_running,
+            help="Alle Ordner auswählen — bereits bereite werden übersprungen",
         )
 
     manager = get_clean_media_job_manager()
