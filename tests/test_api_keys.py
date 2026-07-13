@@ -74,3 +74,21 @@ def test_adobe_stock_product_name_can_be_overridden(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setenv("ADOBE_STOCK_PRODUCT_NAME", "MyApp/2.0")
     assert AdobeStockAdapter()._product_name() == "MyApp/2.0"
+
+
+def test_xai_provider_is_marked_implemented() -> None:
+    from otio_app.api_providers import get_provider
+
+    provider = get_provider("XAI_API_KEY")
+    assert provider is not None
+    assert provider.implemented is True
+    assert "Grok" in provider.label or "xAI" in provider.label
+
+
+def test_openrouter_provider_is_marked_implemented() -> None:
+    from otio_app.api_providers import get_provider
+
+    provider = get_provider("OPENROUTER_API_KEY")
+    assert provider is not None
+    assert provider.implemented is True
+    assert "OpenRouter" in provider.label

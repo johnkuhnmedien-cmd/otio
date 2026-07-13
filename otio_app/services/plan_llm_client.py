@@ -1,4 +1,4 @@
-"""Text-LLM-Aufrufe für Schnittplan-Vorschläge (Gemini, OpenAI, Anthropic)."""
+"""Text-LLM-Aufrufe für Schnittplan-Vorschläge (Gemini, OpenAI, Anthropic, xAI, OpenRouter)."""
 
 from __future__ import annotations
 
@@ -13,11 +13,19 @@ from otio_app.services.api_keys import get_api_key, is_api_key_set
 PROVIDER_GEMINI = "gemini"
 PROVIDER_OPENAI = "openai"
 PROVIDER_ANTHROPIC = "anthropic"
+PROVIDER_XAI = "xai"
+PROVIDER_OPENROUTER = "openrouter"
+
+# OpenAI-kompatible Chat-Completions-APIs (xAI / OpenRouter).
+XAI_API_BASE_URL = "https://api.x.ai/v1"
+OPENROUTER_API_BASE_URL = "https://openrouter.ai/api/v1"
 
 _PROVIDER_ENV_KEYS = {
     PROVIDER_GEMINI: "GEMINI_API_KEY",
     PROVIDER_OPENAI: "OPENAI_API_KEY",
     PROVIDER_ANTHROPIC: "ANTHROPIC_API_KEY",
+    PROVIDER_XAI: "XAI_API_KEY",
+    PROVIDER_OPENROUTER: "OPENROUTER_API_KEY",
 }
 
 
@@ -67,6 +75,10 @@ def plan_model_provider(model_id: str | None) -> str:
         return PROVIDER_OPENAI
     if value.startswith("anthropic:"):
         return PROVIDER_ANTHROPIC
+    if value.startswith("xai:"):
+        return PROVIDER_XAI
+    if value.startswith("openrouter:"):
+        return PROVIDER_OPENROUTER
     return PROVIDER_GEMINI
 
 
@@ -82,7 +94,12 @@ def resolve_plan_model(model: Optional[str] = None) -> str:
         value = model.strip()
         if value in EDIT_PLAN_MODEL_CHOICES:
             return value
-        if value.startswith("openai:") or value.startswith("anthropic:"):
+        if (
+            value.startswith("openai:")
+            or value.startswith("anthropic:")
+            or value.startswith("xai:")
+            or value.startswith("openrouter:")
+        ):
             return value
         if value in GEMINI_MODEL_CHOICES:
             return value
@@ -162,6 +179,20 @@ def generate_plan_text_with_metadata(
         )
     elif provider == PROVIDER_ANTHROPIC:
         raw_text, token_usage = _generate_anthropic_text_with_usage(
+            prompt=prompt,
+            model=api_model,
+            max_output_tokens=max_output_tokens,
+            disable_thinking=disable_thinking,
+        )
+    elif provider == PROVIDER_XAI:
+        raw_text, token_usage = _generate_xai_text_with_usage(
+            prompt=prompt,
+            model=api_model,
+            max_output_tokens=max_output_tokens,
+            disable_thinking=disable_thinking,
+        )
+    elif provider == PROVIDER_OPENROUTER:
+        raw_text, token_usage = _generate_openrouter_text_with_usage(
             prompt=prompt,
             model=api_model,
             max_output_tokens=max_output_tokens,
@@ -409,6 +440,134 @@ def _generate_openai_text_with_usage(
             "Das Modell hat keinen verwertbaren Text zurückgegeben. Bitte erneut versuchen."
         )
     return text, token_usage
+
+
+def _generate_openai_compatible_text_with_usage(
+    *,
+    prompt: str,
+    model: str,
+    api_key_env: str,
+    base_url: str,
+    max_output_tokens: int | None = None,
+    disable_thinking: bool = False,
+    default_headers: dict[str, str] | None = None,
+) -> tuple[str, dict[str, int]]:
+    """OpenAI-kompatible Chat-Completions (xAI, OpenRouter) mit Streaming."""
+    del disable_thinking
+    api_key = get_api_key(api_key_env)
+    if not api_key:
+        raise PlanLlmNotConfiguredError(
+            f"{api_key_env} ist nicht gesetzt. "
+            "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
+        )
+    _require_sdk_module("openai")
+    from openai import BadRequestError, OpenAI
+
+    effective_max_tokens = max_output_tokens or DEFAULT_MAX_OUTPUT_TOKENS
+    client_kwargs: dict = {
+        "api_key": api_key,
+        "base_url": base_url,
+        "timeout": _LLM_REQUEST_TIMEOUT_SEC,
+    }
+    if default_headers:
+        client_kwargs["default_headers"] = default_headers
+    client = OpenAI(**client_kwargs)
+    messages = [{"role": "user", "content": prompt}]
+
+    def _stream(*, use_temperature: bool) -> tuple[str, str | None, dict[str, int]]:
+        kwargs: dict = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": effective_max_tokens,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if use_temperature:
+            kwargs["temperature"] = 0.2
+        stream = client.chat.completions.create(**kwargs)
+        text_parts: list[str] = []
+        finish_reason: str | None = None
+        token_usage: dict[str, int] = {}
+        for event in stream:
+            usage = getattr(event, "usage", None)
+            if usage is not None:
+                token_usage = _token_usage_dict(
+                    input_tokens=getattr(usage, "prompt_tokens", None),
+                    output_tokens=getattr(usage, "completion_tokens", None),
+                    total_tokens=getattr(usage, "total_tokens", None),
+                )
+            if not event.choices:
+                continue
+            choice = event.choices[0]
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
+            delta = getattr(choice.delta, "content", None)
+            if delta:
+                text_parts.append(delta)
+        return "".join(text_parts).strip(), finish_reason, token_usage
+
+    try:
+        text, finish_reason, token_usage = _stream(use_temperature=True)
+    except BadRequestError as exc:
+        if not _is_temperature_rejected_error(exc):
+            raise
+        text, finish_reason, token_usage = _stream(use_temperature=False)
+
+    if finish_reason == "length":
+        raise PlanLlmTruncatedResponseError(
+            f"Die Antwort wurde bei max_tokens={effective_max_tokens} abgeschnitten "
+            "(finish_reason=length). Der Prompt ist wahrscheinlich zu umfangreich (z. B. "
+            "sehr viele Ordner) für eine vollständige Antwort in diesem Limit. Bitte "
+            "weniger Ordner gleichzeitig planen oder den Prompt kürzen."
+        )
+    if not text:
+        raise PlanLlmTruncatedResponseError(
+            "Das Modell hat keinen verwertbaren Text zurückgegeben. Bitte erneut versuchen."
+        )
+    return text, token_usage
+
+
+def _generate_xai_text_with_usage(
+    *,
+    prompt: str,
+    model: str,
+    max_output_tokens: int | None = None,
+    disable_thinking: bool = False,
+) -> tuple[str, dict[str, int]]:
+    """xAI/Grok über die OpenAI-kompatible Chat-Completions-API."""
+    return _generate_openai_compatible_text_with_usage(
+        prompt=prompt,
+        model=model,
+        api_key_env="XAI_API_KEY",
+        base_url=XAI_API_BASE_URL,
+        max_output_tokens=max_output_tokens,
+        disable_thinking=disable_thinking,
+    )
+
+
+def _generate_openrouter_text_with_usage(
+    *,
+    prompt: str,
+    model: str,
+    max_output_tokens: int | None = None,
+    disable_thinking: bool = False,
+) -> tuple[str, dict[str, int]]:
+    """OpenRouter über die OpenAI-kompatible Chat-Completions-API.
+
+    Modell-IDs folgen der OpenRouter-Konvention (z. B. ``x-ai/grok-4.5``).
+    """
+    return _generate_openai_compatible_text_with_usage(
+        prompt=prompt,
+        model=model,
+        api_key_env="OPENROUTER_API_KEY",
+        base_url=OPENROUTER_API_BASE_URL,
+        max_output_tokens=max_output_tokens,
+        disable_thinking=disable_thinking,
+        default_headers={
+            "HTTP-Referer": "https://github.com/johnkuhnmedien-cmd/otio",
+            "X-Title": "OTIO Voiceover Generation",
+        },
+    )
 
 
 def _anthropic_final_message(client, create_kwargs: dict, *, use_temperature: bool):
