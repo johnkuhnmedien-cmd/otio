@@ -958,6 +958,11 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                     key_prefix="cut_plan_folder_dedupe",
                 )
 
+    st.caption(
+        "Akzeptierte Supplements werden automatisch ins Folder-Inventory übernommen. "
+        "Fehlende Altbestände analysierst du unter **① Analysen**."
+    )
+
     query_llm_provider, query_llm_model = _render_supplement_query_model_settings(project)
 
     requests_document = load_cut_plan_supplement_requests(project)
