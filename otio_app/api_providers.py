@@ -49,6 +49,28 @@ API_PROVIDERS: tuple[ApiProvider, ...] = (
         implemented=True,
     ),
     ApiProvider(
+        env_key="OPENROUTER_API_KEY",
+        label="OpenRouter (FLUX Qualität)",
+        description=(
+            "Kapitel-Karten-Pipeline: nach Gemini + Lanczos läuft FLUX.2 "
+            "über die OpenRouter Image-API (Image-to-Image)."
+        ),
+        placeholder="sk-or-…",
+        docs_url="https://openrouter.ai/keys",
+        implemented=True,
+    ),
+    ApiProvider(
+        env_key="REPLICATE_API_TOKEN",
+        label="Replicate (Upscale, optional)",
+        description=(
+            "Optional: Real-ESRGAN-Upscale für Kapitel-Karten. "
+            "Standard ist OpenRouter."
+        ),
+        placeholder="r8_…",
+        docs_url="https://replicate.com/account/api-tokens",
+        implemented=True,
+    ),
+    ApiProvider(
         env_key="PEXELS_API_KEY",
         label="Pexels",
         description="Geplant für Stock-Foto/Video-Fallback im Schnittplan.",

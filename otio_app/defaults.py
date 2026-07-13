@@ -347,6 +347,78 @@ DRAMATURGY_PLANNING_MODE_LABELS = {
     DRAMATURGY_PLANNING_MODE_VARIETY: "Abwechslungsreiche Dramaturgie planen",
 }
 
+# --- Kapitel-Karten (Nano Banana / Gemini Image, nach bestätigter Dramaturgie) ---
+CHAPTER_MAPS_SUBDIR = "chapter_maps"
+CHAPTER_MAPS_STYLE_REFS_SUBDIR = "style_refs"
+CHAPTER_MAPS_MANIFEST_FILENAME = "chapter_maps.manifest.json"
+CHAPTER_MAPS_SETTINGS_FILENAME = "chapter_maps_settings.json"
+CHAPTER_MAP_PROVIDER_DIR = "chapter_maps"
+CHAPTER_MAP_ASPECT_RATIO = "16:9"
+CHAPTER_MAP_TARGET_WIDTH = 1920
+CHAPTER_MAP_TARGET_HEIGHT = 1080
+# Flash Image unterstützt 1K/2K/4K — Generierung oft 1K/2K, Upscale danach separat.
+CHAPTER_MAP_IMAGE_SIZE_DEFAULT = "2K"
+CHAPTER_MAP_IMAGE_SIZE_CHOICES = ("1K", "2K")
+CHAPTER_MAP_MODEL_DEFAULT = "gemini-3.1-flash-image"
+CHAPTER_MAP_MODEL_CHOICES = (
+    "gemini-3.1-flash-image",
+    "gemini-3.1-flash-image-preview",
+    "gemini-3-pro-image-preview",
+    "gemini-2.5-flash-image",
+)
+CHAPTER_MAP_MODEL_LABELS = {
+    "gemini-3.1-flash-image": "Nano Banana 2 (gemini-3.1-flash-image) — Standard + Upscale",
+    "gemini-3.1-flash-image-preview": "Nano Banana 2 Preview (gemini-3.1-flash-image-preview)",
+    "gemini-3-pro-image-preview": "Nano Banana Pro (gemini-3-pro-image-preview) — beste Platzierung/Text",
+    "gemini-2.5-flash-image": "Nano Banana (gemini-2.5-flash-image) — günstig/alt",
+}
+# Feste Pipeline (Default): Gemini → Lanczos 16:9 → FLUX Qualität (OpenRouter).
+CHAPTER_MAP_UPSCALER_NONE = "none"
+CHAPTER_MAP_UPSCALER_LANCZOS = "lanczos"
+CHAPTER_MAP_UPSCALER_PIPELINE = "pipeline"
+CHAPTER_MAP_UPSCALER_OPENROUTER = "openrouter"
+CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN = "replicate_esrgan"
+CHAPTER_MAP_UPSCALER_DEFAULT = CHAPTER_MAP_UPSCALER_PIPELINE
+CHAPTER_MAP_UPSCALER_CHOICES = (
+    CHAPTER_MAP_UPSCALER_PIPELINE,
+    CHAPTER_MAP_UPSCALER_LANCZOS,
+    CHAPTER_MAP_UPSCALER_NONE,
+)
+CHAPTER_MAP_UPSCALER_LABELS = {
+    CHAPTER_MAP_UPSCALER_PIPELINE: "Pipeline: Lanczos 16:9 → FLUX Qualität (OpenRouter)",
+    CHAPTER_MAP_UPSCALER_LANCZOS: "Nur Lanczos — exakt 16:9 / 1920×1080 (ohne FLUX)",
+    CHAPTER_MAP_UPSCALER_NONE: "Kein Nachbearbeitung (Rohausgabe)",
+    # Legacy (weiter lesbar, nicht in UI-Choices):
+    CHAPTER_MAP_UPSCALER_OPENROUTER: "Nur OpenRouter (ohne Lanczos vorher)",
+    CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN: "Replicate Real-ESRGAN (API)",
+}
+# OpenRouter Qualitäts-Schritt: FLUX.2 Pro (Image-to-Image).
+CHAPTER_MAP_OPENROUTER_API_BASE_URL = "https://openrouter.ai/api/v1"
+CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT = "black-forest-labs/flux.2-pro"
+CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_CHOICES = (
+    "black-forest-labs/flux.2-pro",
+    "black-forest-labs/flux.2-klein-4b",
+    "black-forest-labs/flux.2-flex",
+    "black-forest-labs/flux.2-max",
+)
+CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_LABELS = {
+    "black-forest-labs/flux.2-pro": "FLUX.2 Pro — Qualität (Standard)",
+    "black-forest-labs/flux.2-klein-4b": "FLUX.2 Klein 4B — schneller/günstiger",
+    "black-forest-labs/flux.2-flex": "FLUX.2 Flex",
+    "black-forest-labs/flux.2-max": "FLUX.2 Max — höchste Stufe",
+}
+CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_DEFAULT = "2K"
+CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_CHOICES = ("2K", "4K")
+CHAPTER_MAP_REPLICATE_ESRGAN_MODEL = "nightmareai/real-esrgan"
+CHAPTER_MAP_REPLICATE_API_BASE_URL = "https://api.replicate.com/v1"
+CHAPTER_MAP_STYLE_EXAMPLE_1_FILENAME = "EN_MAP_EXAMPLE_1.png"
+CHAPTER_MAP_STYLE_EXAMPLE_2_FILENAME = "EN_MAP_EXAMPLE_2.png"
+# Toleranz für 16:9-Prüfung nach Generierung (kein Letterboxing akzeptieren).
+CHAPTER_MAP_ASPECT_RATIO_TOLERANCE = 0.04
+CHAPTER_MAP_STATUS_PASS = "PASS"
+CHAPTER_MAP_STATUS_FAIL = "FAIL"
+CHAPTER_MAP_STATUS_MISSING = "MISSING"
+
 # --- Folder Voice-overs (Phase 4) ---
 MAX_VOICEOVER_REVIEW_ATTEMPTS = 3
 WEAK_ASSET_MATCH_CONFIDENCE_THRESHOLD = 0.4

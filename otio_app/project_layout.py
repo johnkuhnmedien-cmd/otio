@@ -200,6 +200,50 @@ def get_dramaturgy_plan_confirmed_path(work_dir: Path) -> Path:
     return get_voiceover_generation_dir(work_dir) / DRAMATURGY_PLAN_CONFIRMED_FILENAME
 
 
+def get_chapter_maps_dir(work_dir: Path) -> Path:
+    """Projektweite Kapitel-Karten-Artefakte unter voiceover_generation/chapter_maps/."""
+    from otio_app.defaults import CHAPTER_MAPS_SUBDIR
+
+    return get_voiceover_generation_dir(work_dir) / CHAPTER_MAPS_SUBDIR
+
+
+def get_chapter_maps_manifest_path(work_dir: Path) -> Path:
+    from otio_app.defaults import CHAPTER_MAPS_MANIFEST_FILENAME
+
+    return get_chapter_maps_dir(work_dir) / CHAPTER_MAPS_MANIFEST_FILENAME
+
+
+def get_chapter_maps_settings_path(work_dir: Path) -> Path:
+    from otio_app.defaults import CHAPTER_MAPS_SETTINGS_FILENAME
+
+    return get_chapter_maps_dir(work_dir) / CHAPTER_MAPS_SETTINGS_FILENAME
+
+
+def get_chapter_maps_style_refs_dir(work_dir: Path) -> Path:
+    from otio_app.defaults import CHAPTER_MAPS_STYLE_REFS_SUBDIR
+
+    return get_chapter_maps_dir(work_dir) / CHAPTER_MAPS_STYLE_REFS_SUBDIR
+
+
+def get_folder_chapter_maps_dir(project_root: Path, folder_name: str) -> Path:
+    """Pro-Kapitel-Ablage: {Folder}/_supplemental/_chapter_maps/."""
+    from otio_app.defaults import CHAPTER_MAP_PROVIDER_DIR
+
+    return get_provider_supplemental_dir(project_root, folder_name, CHAPTER_MAP_PROVIDER_DIR)
+
+
+def chapter_map_filename(*, order_index: int, folder_name: str) -> str:
+    return f"map_{order_index:03d}_{safe_folder_slug(folder_name)}.png"
+
+
+def get_folder_chapter_map_path(
+    project_root: Path, *, folder_name: str, order_index: int
+) -> Path:
+    return get_folder_chapter_maps_dir(project_root, folder_name) / chapter_map_filename(
+        order_index=order_index, folder_name=folder_name
+    )
+
+
 def get_folder_voiceover_settings_path(work_dir: Path) -> Path:
     from otio_app.defaults import FOLDER_VOICEOVER_SETTINGS_FILENAME
 
