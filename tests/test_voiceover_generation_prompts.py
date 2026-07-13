@@ -1244,3 +1244,37 @@ def test_intro_and_review_prompts_include_native_speaker_rule() -> None:
         draft=_sample_confirmed_folder_voiceovers()[0],
     )
     assert "native-speaker rule (MANDATORY)" in review
+
+
+def test_dramaturgy_prompt_requires_craft_flag_booleans() -> None:
+    prompt = build_dramaturgy_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        folder_summaries=_sample_folder_summaries(),
+    )
+    assert "use_transition_from_previous" in prompt
+    assert "use_transition_to_next" in prompt
+    assert "use_callback_to_previous" in prompt
+    assert "use_contrast_with_previous" in prompt
+    assert "use_commonality_with_previous" in prompt
+    assert "Voice-over craft flags" in prompt
+
+
+def test_folder_voiceover_prompt_includes_dramaturgy_hint_texts() -> None:
+    entry = _sample_dramaturgy_entry().model_copy(
+        update={
+            "transition_from_previous_hint": "Leave the canyon silence behind.",
+            "contrast_or_commonality_hint": "Contrast stone vs steam.",
+        }
+    )
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=entry,
+        setting=_sample_setting(),
+        previous_folder_name="Grand Canyon",
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "Leave the canyon silence behind." in prompt
+    assert "Contrast stone vs steam." in prompt

@@ -299,6 +299,14 @@ class DramaturgyFolderEntry(BaseModel):
     transition_goal_to_next: str = ""
     transition_from_previous_hint: str = ""
     contrast_or_commonality_hint: str = ""
+    # Explizite Flags für Folder-Voice-over-Checkboxen (Schritt ④).
+    # Werden vom Dramaturgie-LLM gesetzt und in
+    # build_default_folder_voiceover_settings() 1:1 übernommen.
+    use_transition_from_previous: bool = False
+    use_transition_to_next: bool = False
+    use_callback_to_previous: bool = False
+    use_contrast_with_previous: bool = False
+    use_commonality_with_previous: bool = False
     risks: list[str] = Field(default_factory=list)
 
 

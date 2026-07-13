@@ -471,3 +471,102 @@ def test_update_folder_voiceover_settings_persists_segment_asset_planning_mode(
     from otio_app.defaults import SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE
 
     assert by_folder["Yellowstone"].segment_asset_planning_mode == SEGMENT_ASSET_PLANNING_MODE_PER_SENTENCE
+
+
+def test_explicit_dramaturgy_flags_map_to_checkboxes(tmp_path: Path) -> None:
+    """Explizite Booleans aus der Dramaturgie setzen die 5 Checkboxen 1:1."""
+    project_root = tmp_path / "USA"
+    project_root.mkdir()
+    folders = ["Grand Canyon", "Yellowstone", "Zion"]
+    for folder in folders:
+        (project_root / folder).mkdir()
+    project = Project(
+        id="explicit-flags",
+        name="Explicit Flags",
+        project_root=str(project_root),
+        work_dir=str(project_root / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=folders,
+        selected_asset_subdirs=folders,
+    )
+    for folder in folders:
+        path = get_folder_inventory_path(project.work_dir_path, folder)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        analysis = AssetFolderAnalysis(
+            folder=folder,
+            assets=[AssetMediaAnalysis(path=f"{folder}/clip1.mp4", description=f"{folder} view")],
+        )
+        path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
+
+    plan = DramaturgyPlan(
+        project_id=project.id,
+        recommended_folder_order=[
+            DramaturgyFolderEntry(
+                folder_name="Grand Canyon",
+                order_index=1,
+                enabled=True,
+                dramaturgy_role="opener",
+                recommended_word_count=140,
+                recommended_min_words=126,
+                recommended_max_words=154,
+                use_transition_from_previous=True,  # wird für first forced False
+                use_transition_to_next=True,
+                use_callback_to_previous=True,  # wird für first forced False
+                use_contrast_with_previous=True,  # wird für first forced False
+                use_commonality_with_previous=True,  # wird für first forced False
+            ),
+            DramaturgyFolderEntry(
+                folder_name="Yellowstone",
+                order_index=2,
+                enabled=True,
+                dramaturgy_role="setup",
+                recommended_word_count=140,
+                recommended_min_words=126,
+                recommended_max_words=154,
+                use_transition_from_previous=True,
+                use_transition_to_next=False,
+                use_callback_to_previous=True,
+                use_contrast_with_previous=False,
+                use_commonality_with_previous=True,
+            ),
+            DramaturgyFolderEntry(
+                folder_name="Zion",
+                order_index=3,
+                enabled=True,
+                dramaturgy_role="climax",
+                recommended_word_count=140,
+                recommended_min_words=126,
+                recommended_max_words=154,
+                use_transition_from_previous=True,
+                use_transition_to_next=True,  # wird für last forced False
+                use_callback_to_previous=False,
+                use_contrast_with_previous=True,
+                use_commonality_with_previous=False,
+            ),
+        ],
+    )
+    save_confirmed_dramaturgy(project, plan)
+
+    document = build_default_folder_voiceover_settings(project)
+    by_folder = {setting.folder_name: setting for setting in document.settings}
+
+    first = by_folder["Grand Canyon"]
+    assert first.transition_from_previous is False
+    assert first.transition_to_next is True
+    assert first.callback_to_previous is False
+    assert first.use_contrast_with_previous is False
+    assert first.use_commonality_with_previous is False
+
+    middle = by_folder["Yellowstone"]
+    assert middle.transition_from_previous is True
+    assert middle.transition_to_next is False
+    assert middle.callback_to_previous is True
+    assert middle.use_contrast_with_previous is False
+    assert middle.use_commonality_with_previous is True
+
+    last = by_folder["Zion"]
+    assert last.transition_from_previous is True
+    assert last.transition_to_next is False
+    assert last.callback_to_previous is False
+    assert last.use_contrast_with_previous is True
+    assert last.use_commonality_with_previous is False

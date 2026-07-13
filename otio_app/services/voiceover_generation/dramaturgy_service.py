@@ -177,6 +177,16 @@ def update_dramaturgy_order(project: Project, edited_rows: list[dict]) -> Dramat
             updates["recommended_max_words"] = int(row["recommended_max_words"])
         if "transition_goal_to_next" in row:
             updates["transition_goal_to_next"] = str(row["transition_goal_to_next"])
+        if "use_transition_from_previous" in row:
+            updates["use_transition_from_previous"] = bool(row["use_transition_from_previous"])
+        if "use_transition_to_next" in row:
+            updates["use_transition_to_next"] = bool(row["use_transition_to_next"])
+        if "use_callback_to_previous" in row:
+            updates["use_callback_to_previous"] = bool(row["use_callback_to_previous"])
+        if "use_contrast_with_previous" in row:
+            updates["use_contrast_with_previous"] = bool(row["use_contrast_with_previous"])
+        if "use_commonality_with_previous" in row:
+            updates["use_commonality_with_previous"] = bool(row["use_commonality_with_previous"])
         updated_entries.append(existing.model_copy(update=updates))
 
     updated_plan = draft.model_copy(update={"recommended_folder_order": updated_entries})
@@ -214,10 +224,54 @@ def _int_field(entry: dict, key: str, fallback: int) -> int:
         return fallback
 
 
+def _bool_field(entry: dict, key: str, default: bool = False) -> bool:
+    value = entry.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "ja"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "nein", ""}:
+            return False
+    return default
+
+
+_CRAFT_FLAG_KEYS = (
+    "use_transition_from_previous",
+    "use_transition_to_next",
+    "use_callback_to_previous",
+    "use_contrast_with_previous",
+    "use_commonality_with_previous",
+)
+
+
 def _folder_entry_from_payload(entry: dict, *, default_order: int) -> DramaturgyFolderEntry | None:
     folder_name = str(entry.get("folder_name", "")).strip()
     if not folder_name:
         return None
+
+    transition_goal_to_next = str(entry.get("transition_goal_to_next", ""))
+    transition_from_previous_hint = str(entry.get("transition_from_previous_hint", ""))
+    contrast_or_commonality_hint = str(entry.get("contrast_or_commonality_hint", ""))
+
+    # Neue LLM-Antworten liefern explizite Booleans. Ältere Payloads ohne diese
+    # Keys fallen auf die bisherige Hint-Heuristik zurück.
+    if any(key in entry for key in _CRAFT_FLAG_KEYS):
+        use_transition_from_previous = _bool_field(entry, "use_transition_from_previous")
+        use_transition_to_next = _bool_field(entry, "use_transition_to_next")
+        use_callback_to_previous = _bool_field(entry, "use_callback_to_previous")
+        use_contrast_with_previous = _bool_field(entry, "use_contrast_with_previous")
+        use_commonality_with_previous = _bool_field(entry, "use_commonality_with_previous")
+    else:
+        use_transition_from_previous = bool(transition_from_previous_hint.strip())
+        use_transition_to_next = bool(transition_goal_to_next.strip())
+        use_callback_to_previous = False
+        use_contrast_with_previous = bool(contrast_or_commonality_hint.strip())
+        use_commonality_with_previous = False
+
     return DramaturgyFolderEntry(
         folder_name=folder_name,
         order_index=_int_field(entry, "order_index", default_order),
@@ -236,9 +290,14 @@ def _folder_entry_from_payload(entry: dict, *, default_order: int) -> Dramaturgy
         recommended_max_words=_int_field(
             entry, "recommended_max_words", VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS
         ),
-        transition_goal_to_next=str(entry.get("transition_goal_to_next", "")),
-        transition_from_previous_hint=str(entry.get("transition_from_previous_hint", "")),
-        contrast_or_commonality_hint=str(entry.get("contrast_or_commonality_hint", "")),
+        transition_goal_to_next=transition_goal_to_next,
+        transition_from_previous_hint=transition_from_previous_hint,
+        contrast_or_commonality_hint=contrast_or_commonality_hint,
+        use_transition_from_previous=use_transition_from_previous,
+        use_transition_to_next=use_transition_to_next,
+        use_callback_to_previous=use_callback_to_previous,
+        use_contrast_with_previous=use_contrast_with_previous,
+        use_commonality_with_previous=use_commonality_with_previous,
         risks=as_str_list(entry.get("risks")),
     )
 
