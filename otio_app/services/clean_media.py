@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from otio_app.analysis_models import CleanMediaEntry, CleanMediaManifest, MediaProbeInfo
+from otio_app.defaults import SUPPLEMENTAL_FOLDER_NAME
 from otio_app.models import Project
 from otio_app.project_layout import (
     clean_output_path_for_media,
@@ -965,21 +966,26 @@ def folder_clean_media_ready(
 
     entries_by_original: dict[str, CleanMediaEntry] = {}
     for entry in manifest.entries:
-        entries_by_original[entry.original_path] = entry
-        entries_by_original[Path(entry.original_path).name.casefold()] = entry
-        number = media_asset_number(Path(entry.original_path))
-        if number is not None:
-            entries_by_original[f"asset:{number}"] = entry
+        entries_by_original[_path_key(Path(entry.original_path))] = entry
 
     for media_path in media_files:
-        key = str(media_path.resolve()) if path_is_readable_file(media_path) else str(media_path)
-        entry = entries_by_original.get(key)
+        entry = entries_by_original.get(_path_key(media_path))
         if entry is None:
-            entry = entries_by_original.get(media_path.name.casefold())
-        if entry is None:
-            number = media_asset_number(media_path)
-            if number is not None:
-                entry = entries_by_original.get(f"asset:{number}")
+            # Name-/Asset-Fallback nur innerhalb derselben Zone (Primary vs. Supplemental),
+            # damit z. B. `_supplemental/_pexels/clip.mp4` nicht den Primary-Eintrag trifft.
+            media_supp = SUPPLEMENTAL_FOLDER_NAME in media_path.parts
+            media_name = media_path.name.casefold()
+            media_number = media_asset_number(media_path)
+            for candidate in manifest.entries:
+                cand_path = Path(candidate.original_path)
+                if (SUPPLEMENTAL_FOLDER_NAME in cand_path.parts) != media_supp:
+                    continue
+                if cand_path.name.casefold() == media_name:
+                    entry = candidate
+                    break
+                if media_number is not None and media_asset_number(cand_path) == media_number:
+                    entry = candidate
+                    break
         if entry is None:
             return False
         if not entry_is_ready_on_disk(project, folder_name, entry, strict=strict):
@@ -1050,40 +1056,42 @@ def repair_folder_manifest(
 
 
 def selected_folders_have_clean_media(project: Project) -> bool:
-    """Schneller Workflow-Check — nur Manifest + Datei vorhanden, kein ffmpeg."""
+    """Schneller Workflow-Check — Manifest + alle Disk-Medien (inkl. `_supplemental/`).
+
+    Vergleicht bewusst mit `list_folder_media`, damit neue Supplement-Dateien
+    den Status „bereit“ zurücksetzen, auch wenn ältere Manifest-Einträge ok sind.
+    """
     folders = project.selected_asset_subdirs
     if not folders:
         return False
-    for folder_name in folders:
-        manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
-        if manifest is None or not manifest.entries:
-            return False
-        if manifest_needs_processing(manifest):
-            return False
-        for entry in manifest.entries:
-            if entry.status == CLEAN_STATUS_FAILED:
-                return False
-            if entry.status == CLEAN_STATUS_CLEAN:
-                clean = find_clean_file_for_media(
-                    project,
-                    folder_name,
-                    Path(entry.original_path),
-                )
-                if clean is None and entry.clean_path:
-                    clean = Path(entry.clean_path)
-                if not clean_file_is_present(clean):
-                    return False
-            elif entry.status == CLEAN_STATUS_OK:
-                if not path_is_readable_file(Path(entry.original_path)):
-                    return False
-    return True
+    return all(
+        folder_clean_media_ready(project, folder_name, strict=False)
+        for folder_name in folders
+    )
+
+
+def _manifest_entry_keys(manifest: CleanMediaManifest) -> set[str]:
+    keys: set[str] = set()
+    for entry in manifest.entries:
+        try:
+            keys.add(str(Path(entry.original_path).expanduser().resolve()))
+        except OSError:
+            keys.add(str(Path(entry.original_path)))
+    return keys
+
+
+def _path_key(path: Path) -> str:
+    try:
+        return str(path.expanduser().resolve())
+    except OSError:
+        return str(path)
 
 
 def count_folder_clean_status(
     project: Project,
     folder_name: str,
 ) -> dict[str, int]:
-    """Zählt Medien je Status für die UI."""
+    """Zählt Medien je Status für die UI (inkl. Dateien auf Disk ohne Manifest-Eintrag)."""
     counts = {
         CLEAN_STATUS_OK: 0,
         CLEAN_STATUS_CLEAN: 0,
@@ -1091,14 +1099,20 @@ def count_folder_clean_status(
         CLEAN_STATUS_FAILED: 0,
         CLEAN_STATUS_PENDING: 0,
     }
+    media_files = list_folder_media(project, folder_name)
     manifest = load_clean_media_manifest(folder_manifest_path(project, folder_name))
     if manifest is None:
-        media_count = len(list_folder_media(project, folder_name))
-        counts[CLEAN_STATUS_PENDING] = media_count
+        counts[CLEAN_STATUS_PENDING] = len(media_files)
         return counts
+
     for entry in manifest.entries:
         key = entry.status if entry.status in counts else CLEAN_STATUS_PENDING
         counts[key] += 1
+
+    known = _manifest_entry_keys(manifest)
+    for media_path in media_files:
+        if _path_key(media_path) not in known:
+            counts[CLEAN_STATUS_PENDING] += 1
     return counts
 
 

@@ -132,12 +132,20 @@ def _render_folder_details(project, folder_name: str) -> None:
         return
 
     counts = summarize_manifest(manifest)
+    pending = count_folder_clean_status(project, folder_name)[CLEAN_STATUS_PENDING]
     st.caption(
         f"OK: {counts[CLEAN_STATUS_OK]} · "
         f"Transcodiert: {counts[CLEAN_STATUS_CLEAN]} · "
         f"Nötig: {counts[CLEAN_STATUS_NEEDS_TRANSCODE]} · "
         f"Fehler: {counts[CLEAN_STATUS_FAILED]}"
+        + (f" · Offen (Disk): {pending}" if pending else "")
     )
+    if pending:
+        st.warning(
+            f"{pending} Datei(en) auf Disk fehlen im Manifest "
+            "(häufig neue `_supplemental/_…/`-Assets) — **Reparieren** oder "
+            "**Prüfen & transcodieren**."
+        )
     for entry in manifest.entries:
         label = _STATUS_LABELS.get(entry.status, entry.status)
         original = Path(entry.original_path)
@@ -274,8 +282,16 @@ def render_clean_media_page() -> None:
     clean_done = selected_folders_have_clean_media(project)
     if clean_done and selected_folders:
         st.success("Ausgewählte Ordner sind clean-media-bereit — du kannst mit **① Analysen** weitermachen.")
+        st.caption(
+            "Neue Dateien unter `_supplemental/_…/` werden automatisch mitgezählt. "
+            "Fehlen sie noch im Manifest, erscheint der Ordner wieder als offen — "
+            "dann **Reparieren** oder **Prüfen & transcodieren**."
+        )
     elif selected_folders:
-        st.info("Mindestens ein Ordner braucht noch Prüfung oder Transcode.")
+        st.info(
+            "Mindestens ein Ordner braucht noch Prüfung oder Transcode "
+            "(inkl. neuer Medien unter `_supplemental/_…/`)."
+        )
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -290,13 +306,17 @@ def render_clean_media_page() -> None:
             key=f"clean_process_{project.id}",
             type="primary",
             disabled=job_running or not selected_folders,
+            help="Prüft Top-Level- und `_supplemental/_…/`-Medien und transcodiert bei Bedarf",
         )
     with col3:
         repair_clicked = st.button(
             "🔧 Reparieren",
             key=f"clean_repair_{project.id}",
             disabled=job_running or not selected_folders,
-            help="Fehlende oder ungültige Clean-Dateien erneut erzeugen und Manifest synchronisieren",
+            help=(
+                "Manifest mit Disk synchronisieren — auch neue Supplement-Assets "
+                "unter `_supplemental/_…/` aufnehmen und Clean-Dateien erzeugen"
+            ),
         )
     with col4:
         all_clicked = st.button(
