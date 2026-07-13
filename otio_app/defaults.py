@@ -372,21 +372,41 @@ CHAPTER_MAP_MODEL_LABELS = {
     "gemini-3-pro-image-preview": "Nano Banana Pro (gemini-3-pro-image-preview) — beste Platzierung/Text",
     "gemini-2.5-flash-image": "Nano Banana (gemini-2.5-flash-image) — günstig/alt",
 }
-# Upscale nach Gemini: separate API (Replicate Real-ESRGAN) oder lokales Lanczos.
+# Upscale nach Gemini: OpenRouter Image-API (i2i @ 2K/4K), optional Replicate/Lanczos.
 CHAPTER_MAP_UPSCALER_NONE = "none"
 CHAPTER_MAP_UPSCALER_LANCZOS = "lanczos"
+CHAPTER_MAP_UPSCALER_OPENROUTER = "openrouter"
 CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN = "replicate_esrgan"
-CHAPTER_MAP_UPSCALER_DEFAULT = CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN
+CHAPTER_MAP_UPSCALER_DEFAULT = CHAPTER_MAP_UPSCALER_OPENROUTER
 CHAPTER_MAP_UPSCALER_CHOICES = (
-    CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN,
+    CHAPTER_MAP_UPSCALER_OPENROUTER,
     CHAPTER_MAP_UPSCALER_LANCZOS,
+    CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN,
     CHAPTER_MAP_UPSCALER_NONE,
 )
 CHAPTER_MAP_UPSCALER_LABELS = {
-    CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN: "Replicate Real-ESRGAN (API) — empfohlen nach Flash",
+    CHAPTER_MAP_UPSCALER_OPENROUTER: "OpenRouter (Image-API Upscale) — empfohlen",
     CHAPTER_MAP_UPSCALER_LANCZOS: "Lokal Lanczos (kein Extra-API)",
+    CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN: "Replicate Real-ESRGAN (API)",
     CHAPTER_MAP_UPSCALER_NONE: "Kein Upscale (Rohausgabe)",
 }
+# OpenRouter hat kein reines ESRGAN — Upscale = Image-to-Image mit höherer Auflösung.
+CHAPTER_MAP_OPENROUTER_API_BASE_URL = "https://openrouter.ai/api/v1"
+CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT = "sourceful/riverflow-v2.5-fast"
+CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_CHOICES = (
+    "sourceful/riverflow-v2.5-fast",
+    "sourceful/riverflow-v2-pro",
+    "google/gemini-3.1-flash-image",
+    "black-forest-labs/flux.2-klein-4b",
+)
+CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_LABELS = {
+    "sourceful/riverflow-v2.5-fast": "Riverflow V2.5 Fast — günstig, 2K i2i",
+    "sourceful/riverflow-v2-pro": "Riverflow V2 Pro — stärkeres Enhancement, 2K/4K",
+    "google/gemini-3.1-flash-image": "Gemini 3.1 Flash Image (via OpenRouter) — Text/Layout treu",
+    "black-forest-labs/flux.2-klein-4b": "FLUX.2 Klein 4B — schnell/günstig i2i",
+}
+CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_DEFAULT = "2K"
+CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_CHOICES = ("2K", "4K")
 CHAPTER_MAP_REPLICATE_ESRGAN_MODEL = "nightmareai/real-esrgan"
 CHAPTER_MAP_REPLICATE_API_BASE_URL = "https://api.replicate.com/v1"
 CHAPTER_MAP_STYLE_EXAMPLE_1_FILENAME = "EN_MAP_EXAMPLE_1.png"

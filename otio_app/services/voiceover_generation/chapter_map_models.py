@@ -10,6 +10,8 @@ from otio_app.defaults import (
     CHAPTER_MAP_ASPECT_RATIO,
     CHAPTER_MAP_IMAGE_SIZE_DEFAULT,
     CHAPTER_MAP_MODEL_DEFAULT,
+    CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT,
+    CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_DEFAULT,
     CHAPTER_MAP_STATUS_MISSING,
     CHAPTER_MAP_UPSCALER_DEFAULT,
 )
@@ -28,6 +30,8 @@ class ChapterMapSettings(BaseModel):
     aspect_ratio: str = CHAPTER_MAP_ASPECT_RATIO
     image_size: str = CHAPTER_MAP_IMAGE_SIZE_DEFAULT
     upscaler: str = CHAPTER_MAP_UPSCALER_DEFAULT
+    openrouter_upscale_model: str = CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT
+    openrouter_upscale_resolution: str = CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_DEFAULT
 
 
 class ChapterMapEntry(BaseModel):
@@ -41,6 +45,7 @@ class ChapterMapEntry(BaseModel):
     language: str = "EN"
     model: str = CHAPTER_MAP_MODEL_DEFAULT
     upscaler: str = ""
+    openrouter_upscale_model: str = ""
     status: str = CHAPTER_MAP_STATUS_MISSING
     error: str = ""
     width: int = 0

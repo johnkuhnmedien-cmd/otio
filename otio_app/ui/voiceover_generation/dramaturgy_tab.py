@@ -12,10 +12,16 @@ from otio_app.defaults import (
     CHAPTER_MAP_MODEL_CHOICES,
     CHAPTER_MAP_MODEL_DEFAULT,
     CHAPTER_MAP_MODEL_LABELS,
+    CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_CHOICES,
+    CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT,
+    CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_LABELS,
+    CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_CHOICES,
+    CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_DEFAULT,
     CHAPTER_MAP_STATUS_PASS,
     CHAPTER_MAP_UPSCALER_CHOICES,
     CHAPTER_MAP_UPSCALER_DEFAULT,
     CHAPTER_MAP_UPSCALER_LABELS,
+    CHAPTER_MAP_UPSCALER_OPENROUTER,
     DRAMATURGY_PLANNING_MODE_GEOGRAPHY,
     DRAMATURGY_PLANNING_MODE_LABELS,
     DRAMATURGY_PLANNING_MODE_VARIETY,
@@ -477,10 +483,41 @@ def _render_chapter_maps_section(project: Project) -> None:
             format_func=lambda value: CHAPTER_MAP_UPSCALER_LABELS.get(value, value),
             key=f"vo_chapter_maps_upscaler_{project.id}",
             help=(
-                "Replicate Real-ESRGAN braucht REPLICATE_API_TOKEN unter 🔑 API-Schlüssel. "
-                "Lanczos ist lokal und kostenlos."
+                "OpenRouter: Image-to-Image @ 2K/4K (braucht OPENROUTER_API_KEY). "
+                "OpenRouter hat kein reines ESRGAN — Upscale läuft als i2i-Enhancement."
             ),
         )
+        openrouter_model_value = settings.openrouter_upscale_model
+        openrouter_resolution_value = settings.openrouter_upscale_resolution
+        if upscaler_value == CHAPTER_MAP_UPSCALER_OPENROUTER:
+            or_model_options = list(CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_CHOICES)
+            current_or_model = (
+                settings.openrouter_upscale_model
+                if settings.openrouter_upscale_model in or_model_options
+                else CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT
+            )
+            openrouter_model_value = st.selectbox(
+                "OpenRouter Upscale-Modell",
+                options=or_model_options,
+                index=or_model_options.index(current_or_model),
+                format_func=lambda value: CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_LABELS.get(
+                    value, value
+                ),
+                key=f"vo_chapter_maps_or_upscale_model_{project.id}",
+            )
+            or_res_options = list(CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_CHOICES)
+            current_or_res = (
+                settings.openrouter_upscale_resolution
+                if settings.openrouter_upscale_resolution in or_res_options
+                else CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_DEFAULT
+            )
+            openrouter_resolution_value = st.selectbox(
+                "OpenRouter Ziel-Auflösung",
+                options=or_res_options,
+                index=or_res_options.index(current_or_res),
+                key=f"vo_chapter_maps_or_upscale_res_{project.id}",
+                help="2K reicht für 1920×1080 Timeline. 4K nur wenn das Modell es unterstützt.",
+            )
         if st.button("Einstellungen speichern", key=f"vo_chapter_maps_save_settings_{project.id}"):
             settings = save_chapter_map_settings(
                 project,
@@ -489,6 +526,8 @@ def _render_chapter_maps_section(project: Project) -> None:
                         "model": model_value.strip(),
                         "image_size": image_size_value,
                         "upscaler": upscaler_value,
+                        "openrouter_upscale_model": openrouter_model_value.strip(),
+                        "openrouter_upscale_resolution": openrouter_resolution_value.strip(),
                     }
                 ),
             )

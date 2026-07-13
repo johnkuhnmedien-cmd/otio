@@ -10,12 +10,14 @@ from PIL import Image
 
 from otio_app.defaults import (
     CHAPTER_MAP_MODEL_DEFAULT,
+    CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT,
     CHAPTER_MAP_STATUS_MISSING,
     CHAPTER_MAP_STATUS_PASS,
     CHAPTER_MAP_STYLE_EXAMPLE_1_FILENAME,
     CHAPTER_MAP_STYLE_EXAMPLE_2_FILENAME,
     CHAPTER_MAP_UPSCALER_DEFAULT,
     CHAPTER_MAP_UPSCALER_LANCZOS,
+    CHAPTER_MAP_UPSCALER_OPENROUTER,
     CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN,
     DRAMATURGY_STATUS_CONFIRMED,
 )
@@ -98,7 +100,7 @@ def _fake_generate_image(*, prompt, reference_image_paths, output_path, model=No
     return 1024, 576
 
 
-def _fake_upscale(image_path, *, upscaler):
+def _fake_upscale(image_path, *, upscaler, openrouter_model=None, openrouter_resolution=None):
     Image.new("RGB", (1920, 1080), color=(40, 90, 160)).save(image_path)
     return 1920, 1080
 
@@ -120,9 +122,10 @@ def _patched_pipeline():
     return stack
 
 
-def test_default_model_is_flash_31_with_replicate_upscaler() -> None:
+def test_default_model_is_flash_31_with_openrouter_upscaler() -> None:
     assert CHAPTER_MAP_MODEL_DEFAULT == "gemini-3.1-flash-image"
-    assert CHAPTER_MAP_UPSCALER_DEFAULT == CHAPTER_MAP_UPSCALER_REPLICATE_ESRGAN
+    assert CHAPTER_MAP_UPSCALER_DEFAULT == CHAPTER_MAP_UPSCALER_OPENROUTER
+    assert CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT == "sourceful/riverflow-v2.5-fast"
 
 
 def test_bulk_progress_callback_reports_steps(tmp_path: Path) -> None:
@@ -276,6 +279,64 @@ def test_upscale_lanczos_reaches_1920(tmp_path: Path) -> None:
         assert image.size == (1920, 1080)
 
 
+def test_upscale_openrouter_calls_api(tmp_path: Path) -> None:
+    import base64
+    from io import BytesIO
+
+    path = tmp_path / "map.png"
+    Image.new("RGB", (960, 540), color=(10, 20, 30)).save(path)
+    buffer = BytesIO()
+    Image.new("RGB", (2048, 1152), color=(50, 60, 70)).save(buffer, format="PNG")
+    b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    post_response = MagicMock()
+    post_response.status_code = 200
+    post_response.json.return_value = {
+        "data": [{"b64_json": b64, "media_type": "image/png"}]
+    }
+
+    with (
+        patch(
+            "otio_app.services.voiceover_generation.chapter_map_upscaler.get_api_key",
+            return_value="sk-or-test",
+        ),
+        patch(
+            "otio_app.services.voiceover_generation.chapter_map_upscaler.requests.post",
+            return_value=post_response,
+        ) as post_mock,
+    ):
+        width, height = upscale_chapter_map_image(
+            path,
+            upscaler=CHAPTER_MAP_UPSCALER_OPENROUTER,
+            openrouter_model="sourceful/riverflow-v2.5-fast",
+            openrouter_resolution="2K",
+        )
+
+    assert (width, height) == (1920, 1080)
+    assert post_mock.called
+    body = post_mock.call_args.kwargs["json"]
+    assert body["model"] == "sourceful/riverflow-v2.5-fast"
+    assert body["resolution"] == "2K"
+    assert body["aspect_ratio"] == "16:9"
+    assert body["input_references"]
+    with Image.open(path) as image:
+        assert image.size == (1920, 1080)
+
+
+def test_upscale_openrouter_requires_token(tmp_path: Path) -> None:
+    path = tmp_path / "map.png"
+    Image.new("RGB", (960, 540), color=(10, 20, 30)).save(path)
+    with patch(
+        "otio_app.services.voiceover_generation.chapter_map_upscaler.get_api_key",
+        return_value="",
+    ):
+        try:
+            upscale_chapter_map_image(path, upscaler=CHAPTER_MAP_UPSCALER_OPENROUTER)
+            raise AssertionError("expected ChapterMapUpscaleError")
+        except ChapterMapUpscaleError as exc:
+            assert "OPENROUTER_API_KEY" in str(exc)
+
+
 def test_upscale_replicate_calls_api(tmp_path: Path) -> None:
     path = tmp_path / "map.png"
     Image.new("RGB", (960, 540), color=(10, 20, 30)).save(path)
@@ -354,9 +415,14 @@ def test_generate_uses_upscaler_setting(tmp_path: Path) -> None:
 
     seen: list[str] = []
 
-    def _track_upscale(image_path, *, upscaler):
+    def _track_upscale(image_path, *, upscaler, openrouter_model=None, openrouter_resolution=None):
         seen.append(upscaler)
-        return _fake_upscale(image_path, upscaler=upscaler)
+        return _fake_upscale(
+            image_path,
+            upscaler=upscaler,
+            openrouter_model=openrouter_model,
+            openrouter_resolution=openrouter_resolution,
+        )
 
     with (
         patch(

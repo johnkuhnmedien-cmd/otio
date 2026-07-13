@@ -11,6 +11,8 @@ from pathlib import Path
 from otio_app.defaults import (
     CHAPTER_MAP_ASPECT_RATIO,
     CHAPTER_MAP_MODEL_DEFAULT,
+    CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT,
+    CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_DEFAULT,
     CHAPTER_MAP_STATUS_FAIL,
     CHAPTER_MAP_STATUS_MISSING,
     CHAPTER_MAP_STATUS_PASS,
@@ -337,6 +339,13 @@ def generate_single_chapter_map(
     model = (settings.model or CHAPTER_MAP_MODEL_DEFAULT).strip()
     image_size = (settings.image_size or "").strip() or None
     upscaler = (settings.upscaler or CHAPTER_MAP_UPSCALER_DEFAULT).strip()
+    openrouter_upscale_model = (
+        settings.openrouter_upscale_model or CHAPTER_MAP_OPENROUTER_UPSCALE_MODEL_DEFAULT
+    ).strip()
+    openrouter_upscale_resolution = (
+        settings.openrouter_upscale_resolution
+        or CHAPTER_MAP_OPENROUTER_UPSCALE_RESOLUTION_DEFAULT
+    ).strip()
     shown_number = display_chapter_number(
         order_index=order_index, total_chapters=total_chapters
     )
@@ -400,7 +409,12 @@ def generate_single_chapter_map(
             model=model,
             image_size=image_size,
         )
-        width, height = upscale_chapter_map_image(output_path, upscaler=upscaler)
+        width, height = upscale_chapter_map_image(
+            output_path,
+            upscaler=upscaler,
+            openrouter_model=openrouter_upscale_model,
+            openrouter_resolution=openrouter_upscale_resolution,
+        )
     except (ChapterMapImageError, ChapterMapUpscaleError, GeminiNotConfiguredError) as exc:
         entry = ChapterMapEntry(
             order_index=order_index,
@@ -413,6 +427,7 @@ def generate_single_chapter_map(
             language=language,
             model=model,
             upscaler=upscaler,
+            openrouter_upscale_model=openrouter_upscale_model,
             status=CHAPTER_MAP_STATUS_FAIL,
             error=str(exc),
         )
@@ -436,6 +451,7 @@ def generate_single_chapter_map(
         language=language,
         model=model,
         upscaler=upscaler,
+        openrouter_upscale_model=openrouter_upscale_model,
         status=CHAPTER_MAP_STATUS_PASS,
         width=width,
         height=height,
