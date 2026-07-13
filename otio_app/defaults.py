@@ -356,7 +356,17 @@ CHAPTER_MAP_PROVIDER_DIR = "chapter_maps"
 CHAPTER_MAP_ASPECT_RATIO = "16:9"
 CHAPTER_MAP_TARGET_WIDTH = 1920
 CHAPTER_MAP_TARGET_HEIGHT = 1080
-CHAPTER_MAP_MODEL_DEFAULT = "gemini-2.5-flash-image"
+CHAPTER_MAP_MODEL_DEFAULT = "gemini-3-pro-image-preview"
+CHAPTER_MAP_MODEL_CHOICES = (
+    "gemini-3-pro-image-preview",
+    "gemini-3.1-flash-image-preview",
+    "gemini-2.5-flash-image",
+)
+CHAPTER_MAP_MODEL_LABELS = {
+    "gemini-3-pro-image-preview": "Nano Banana Pro (gemini-3-pro-image-preview) — beste Platzierung/Text",
+    "gemini-3.1-flash-image-preview": "Nano Banana 2 (gemini-3.1-flash-image-preview) — schnell, gut",
+    "gemini-2.5-flash-image": "Nano Banana (gemini-2.5-flash-image) — günstig/alt",
+}
 CHAPTER_MAP_STYLE_EXAMPLE_1_FILENAME = "EN_MAP_EXAMPLE_1.png"
 CHAPTER_MAP_STYLE_EXAMPLE_2_FILENAME = "EN_MAP_EXAMPLE_2.png"
 # Toleranz für 16:9-Prüfung nach Generierung (kein Letterboxing akzeptieren).

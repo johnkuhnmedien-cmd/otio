@@ -26,6 +26,9 @@ from otio_app.project_layout import (
     get_folder_chapter_maps_dir,
 )
 from otio_app.services.gemini_client import GeminiNotConfiguredError
+from otio_app.services.voiceover_generation.chapter_map_geography import (
+    format_geography_hint,
+)
 from otio_app.services.voiceover_generation.chapter_map_image_client import (
     ChapterMapImageError,
     generate_chapter_map_image,
@@ -198,6 +201,7 @@ def build_chapter_map_prompt(
     is_first: bool,
 ) -> str:
     lang_name = _language_display_name(language)
+    dest_geo = format_geography_hint(location_name)
     if is_first:
         return f"""Create a new 16:9 chapter map image in EXACTLY the same visual style as the
 provided style reference image (example 1).
@@ -205,26 +209,40 @@ provided style reference image (example 1).
 Hard requirements:
 - Output aspect ratio MUST be 16:9 (widescreen). No letterboxing, no black bars, no borders.
 - Keep colors, logo, fonts, font sizes, map styling, and layout proportions identical to the reference.
-- Top-left large chapter number: "{order_index}"
-- Bottom-left large location title: "{location_name}"
-- Map callout label for the pin: "{location_name}" (uppercase styling as in the reference)
-- Place ONE green location pin on the correct geographic position for "{location_name}".
+- Top-left large chapter number: "{order_index}" (spell digits correctly; do not invent other numbers).
+- Bottom-left large location title: "{location_name}" — spell EXACTLY like this, no typos.
+- Map callout label for the pin: "{location_name}" (uppercase styling as in the reference).
+- Place EXACTLY ONE green location pin on the TRUE geographic position:
+  {dest_geo}
+- Pin placement must match real geography on the USA silhouette (state borders are a guide).
+  Do NOT place for composition/symmetry. Do NOT put Arizona locations in the Northeast, etc.
 - Write ALL visible location words in {lang_name} (project language: {language}). Keep numbers as digits.
-- Do not invent extra locations, routes, or labels.
+- Do not invent extra locations, routes, pins, or labels.
 """
 
-    return f"""Edit the previous generated chapter map (second attached image) using the style of the
-style reference (example 2 / first attached image).
+    prev = previous_location_name or ""
+    prev_geo = format_geography_hint(prev)
+    return f"""Edit the PREVIOUS generated chapter map (second attached image). Use the first
+attached image only as STYLE reference (example 2: red start pin + green end pin + dotted route).
+
+This is a PAIR update for chapter {order_index}: show ONLY the hop from the previous
+destination to the new destination — not the full history of all earlier pins.
 
 Hard requirements:
 - Output aspect ratio MUST be 16:9. No letterboxing, no black bars, no borders.
 - Keep colors, logo, fonts, font sizes, map styling, and layout proportions identical.
 - Change the large top-left number to "{order_index}".
-- Change the large bottom-left title to "{location_name}".
-- Keep the previous location "{previous_location_name}" as the start pin (red, as in example 2).
-- Add the new destination "{location_name}" as the end pin (green).
-- Draw a dotted connection line from "{previous_location_name}" to "{location_name}".
-- Update map callout labels accordingly.
+- Change the large bottom-left title to "{location_name}" — spell EXACTLY, no typos
+  (e.g. Niagara not Niagra).
+- REMOVE any pins/labels/routes that are NOT about "{prev}" or "{location_name}".
+  The previous image may show older places — delete them.
+- Keep/place the START pin (red, as in example 2) at the TRUE position of "{prev}":
+  {prev_geo}
+- Add/place the END pin (green) at the TRUE position of "{location_name}":
+  {dest_geo}
+- Draw ONE dotted connection line from "{prev}" → "{location_name}".
+- Update map callout labels to ONLY those two places.
+- Geographic accuracy over aesthetics: pins must sit on the correct region of the USA map.
 - Write ALL visible location words in {lang_name} (project language: {language}).
 - Do not restyle the brand logo or background color.
 """
@@ -459,3 +477,79 @@ def generate_all_chapter_maps(
         errors=errors,
         manifest=manifest,
     )
+
+
+def delete_chapter_map(
+    project: Project,
+    *,
+    order_index: int,
+    invalidate_following: bool = True,
+) -> ChapterMapManifest:
+    """Löscht die PNG eines Kapitels und markiert den Manifest-Eintrag als MISSING."""
+    plan = load_confirmed_dramaturgy(project)
+    folder_name = ""
+    if plan is not None:
+        match = next(
+            (entry for entry in plan.recommended_folder_order if entry.order_index == order_index),
+            None,
+        )
+        if match is not None:
+            folder_name = match.folder_name
+
+    manifest = load_chapter_map_manifest(project)
+    existing = next((entry for entry in manifest.entries if entry.order_index == order_index), None)
+    if not folder_name and existing is not None:
+        folder_name = existing.folder_name
+
+    if folder_name:
+        path = get_folder_chapter_map_path(
+            project.project_root_path, folder_name=folder_name, order_index=order_index
+        )
+        if path.is_file():
+            path.unlink()
+        if existing is not None and existing.absolute_path:
+            abs_path = Path(existing.absolute_path)
+            if abs_path.is_file() and abs_path != path:
+                abs_path.unlink()
+
+    cleared = ChapterMapEntry(
+        order_index=order_index,
+        folder_name=folder_name or (existing.folder_name if existing else ""),
+        filename=chapter_map_filename(
+            order_index=order_index, folder_name=folder_name or f"chapter_{order_index}"
+        )
+        if folder_name
+        else "",
+        status=CHAPTER_MAP_STATUS_MISSING,
+        error="Gelöscht",
+    )
+    manifest = _upsert_manifest_entry(manifest, cleared)
+    if invalidate_following:
+        manifest = _invalidate_following_entries(manifest, from_order_index=order_index)
+    return save_chapter_map_manifest(project, manifest)
+
+
+def delete_all_chapter_maps(project: Project) -> ChapterMapManifest:
+    """Löscht alle generierten Kapitel-Karten-PNGs und leert das Manifest."""
+    manifest = load_chapter_map_manifest(project)
+    for entry in list(manifest.entries):
+        if entry.absolute_path:
+            path = Path(entry.absolute_path)
+            if path.is_file():
+                path.unlink()
+        if entry.folder_name:
+            path = get_folder_chapter_map_path(
+                project.project_root_path,
+                folder_name=entry.folder_name,
+                order_index=entry.order_index,
+            )
+            if path.is_file():
+                path.unlink()
+    cleared = ChapterMapManifest(
+        project_id=project.id,
+        language=manifest.language,
+        model=manifest.model,
+        aspect_ratio=manifest.aspect_ratio,
+        entries=[],
+    )
+    return save_chapter_map_manifest(project, cleared)

@@ -105,10 +105,39 @@ def test_build_chapter_map_prompt_first_vs_followup() -> None:
     assert '"1"' in first
     assert "Antelope Canyon" in first
     assert "16:9" in first
+    assert "Northern Arizona" in first
     assert '"2"' in follow
     assert "Niagara Falls" in follow
     assert "Antelope Canyon" in follow
-    assert "dotted" in follow.lower() or "connection" in follow.lower()
+    assert "REMOVE" in follow
+    assert "New York" in follow or "northeastern" in follow.lower()
+
+
+def test_delete_chapter_map_removes_file(tmp_path: Path) -> None:
+    from otio_app.services.voiceover_generation.chapter_map_service import delete_chapter_map
+
+    project = _make_project(tmp_path)
+    _confirm_plan(project)
+    examples = tmp_path / "Map_example"
+    _write_style_examples(examples)
+    import_style_examples_from_folder(project, examples)
+
+    with patch(
+        "otio_app.services.voiceover_generation.chapter_map_service.generate_chapter_map_image",
+        side_effect=_fake_generate_image,
+    ):
+        generate_all_chapter_maps(project)
+
+    path_1 = get_folder_chapter_map_path(
+        project.project_root_path, folder_name="Antelope Canyon", order_index=1
+    )
+    assert path_1.is_file()
+    delete_chapter_map(project, order_index=1, invalidate_following=True)
+    assert not path_1.is_file()
+    manifest = load_chapter_map_manifest(project)
+    by_index = {entry.order_index: entry for entry in manifest.entries}
+    assert by_index[1].status == CHAPTER_MAP_STATUS_MISSING
+    assert by_index[2].status == CHAPTER_MAP_STATUS_MISSING
 
 
 def test_import_style_examples_and_generate_bulk(tmp_path: Path) -> None:

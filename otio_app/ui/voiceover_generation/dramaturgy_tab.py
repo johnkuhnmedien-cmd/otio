@@ -7,6 +7,9 @@ from pathlib import Path
 import streamlit as st
 
 from otio_app.defaults import (
+    CHAPTER_MAP_MODEL_CHOICES,
+    CHAPTER_MAP_MODEL_DEFAULT,
+    CHAPTER_MAP_MODEL_LABELS,
     CHAPTER_MAP_STATUS_PASS,
     DRAMATURGY_PLANNING_MODE_GEOGRAPHY,
     DRAMATURGY_PLANNING_MODE_LABELS,
@@ -23,6 +26,8 @@ from otio_app.project_layout import (
 )
 from otio_app.services.inventory_loader import folder_has_usable_inventory_data
 from otio_app.services.voiceover_generation.chapter_map_service import (
+    delete_all_chapter_maps,
+    delete_chapter_map,
     generate_all_chapter_maps,
     generate_single_chapter_map,
     import_style_examples_from_folder,
@@ -431,10 +436,18 @@ def _render_chapter_maps_section(project: Project) -> None:
                 )
                 st.success("Uploads gespeichert.")
 
-        model_value = st.text_input(
+        model_options = list(CHAPTER_MAP_MODEL_CHOICES)
+        current_model = settings.model if settings.model in model_options else CHAPTER_MAP_MODEL_DEFAULT
+        model_value = st.selectbox(
             "Gemini Image Modell",
-            value=settings.model,
+            options=model_options,
+            index=model_options.index(current_model),
+            format_func=lambda value: CHAPTER_MAP_MODEL_LABELS.get(value, value),
             key=f"vo_chapter_maps_model_{project.id}",
+            help=(
+                "Für genaue Pin-Platzierung und Text: Nano Banana Pro. "
+                "Flash-Modelle sind schneller, aber geografisch unzuverlässiger."
+            ),
         )
         if st.button("Einstellungen speichern", key=f"vo_chapter_maps_save_settings_{project.id}"):
             settings = save_chapter_map_settings(
@@ -450,7 +463,7 @@ def _render_chapter_maps_section(project: Project) -> None:
         st.warning("Keine aktiven Kapitel in der bestätigten Dramaturgie.")
         return
 
-    col_bulk, col_from = st.columns([2, 1])
+    col_bulk, col_from, col_delete_all = st.columns([2, 1, 1])
     with col_from:
         start_index = st.number_input(
             "Bulk ab Index",
@@ -468,14 +481,23 @@ def _render_chapter_maps_section(project: Project) -> None:
         )
         st.caption(
             "Sequentiell: jedes Bild nutzt das zuvor generierte als Referenz "
-            "(außer Kapitel 1 → Example 1)."
+            "(außer Kapitel 1 → Example 1). Pro Kapitel nur der Sprung "
+            "vorheriger Ort → neuer Ort (2 Pins)."
         )
+    with col_delete_all:
+        delete_all_clicked = st.button(
+            "Alle Karten löschen",
+            key=f"vo_chapter_maps_delete_all_{project.id}",
+        )
+
+    if delete_all_clicked:
+        delete_all_chapter_maps(project)
+        st.success("Alle Kapitel-Karten gelöscht.")
+        st.rerun()
 
     if bulk_clicked:
         progress = st.progress(0.0, text="Kapitel-Karten werden erzeugt…")
         with st.spinner("Bulk-Generierung läuft (kann je Kapitel einige Sekunden dauern)…"):
-            # Fortschritt approximieren über Startindex — echte Zwischenstände kommen
-            # aus dem sequentiellen Service; UI pollt nicht mid-call.
             result = generate_all_chapter_maps(
                 project, start_order_index=int(start_index), stop_on_error=True
             )
@@ -497,7 +519,7 @@ def _render_chapter_maps_section(project: Project) -> None:
     for entry in enabled:
         map_entry = status_by_index.get(entry.order_index)
         status_label = map_entry.status if map_entry is not None else "MISSING"
-        cols = st.columns([3, 1, 2])
+        cols = st.columns([3, 1, 1, 1])
         with cols[0]:
             st.write(f"{entry.order_index}. **{entry.folder_name}** — `{status_label}`")
             if map_entry is not None and map_entry.relative_path:
@@ -514,7 +536,7 @@ def _render_chapter_maps_section(project: Project) -> None:
                 st.image(map_entry.absolute_path, use_container_width=True)
         with cols[2]:
             if st.button(
-                "Nur dieses Kapitel",
+                "Nur dieses",
                 key=f"vo_chapter_maps_single_{project.id}_{entry.order_index}",
             ):
                 with st.spinner(f"Karte für {entry.folder_name}…"):
@@ -530,6 +552,16 @@ def _render_chapter_maps_section(project: Project) -> None:
                         )
                 else:
                     st.error(single.error or "Generierung fehlgeschlagen.")
+                st.rerun()
+        with cols[3]:
+            if st.button(
+                "Löschen",
+                key=f"vo_chapter_maps_delete_{project.id}_{entry.order_index}",
+            ):
+                delete_chapter_map(
+                    project, order_index=entry.order_index, invalidate_following=True
+                )
+                st.success(f"Kapitel {entry.order_index} gelöscht.")
                 st.rerun()
 
     st.caption(f"Manifest: `{get_chapter_maps_manifest_path(project.language_work_dir_path)}`")
