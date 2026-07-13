@@ -76,7 +76,7 @@ def test_dramaturgy_page_has_both_plan_buttons(
     assert "Dramaturgie ohne Thinking" not in button_labels
 
     captions = " ".join(caption.value for caption in at.caption)
-    assert "70" in captions and "000" in captions
+    assert "32" in captions and "768" in captions
     assert "Geographie" in captions or "Reiseverlauf" in captions
     assert "Abwechslung" in captions
 

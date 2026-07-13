@@ -140,11 +140,11 @@ def test_build_dramaturgy_plan_passes_max_output_tokens_through(tmp_path: Path) 
             provider="anthropic",
             model="claude-sonnet-5",
             planning_mode="geography",
-            max_output_tokens=70000,
+            max_output_tokens=32768,
         )
 
     assert result.status == STATUS_PASS
-    assert mock_generate.call_args.kwargs["max_output_tokens"] == 70000
+    assert mock_generate.call_args.kwargs["max_output_tokens"] == 32768
     assert mock_generate.call_args.kwargs["disable_thinking"] is False
 
 
@@ -162,7 +162,7 @@ def test_build_dramaturgy_plan_passes_planning_mode_into_prompt(tmp_path: Path) 
             provider="anthropic",
             model="claude-sonnet-5",
             planning_mode="geography",
-            max_output_tokens=70000,
+            max_output_tokens=32768,
         )
 
     assert result.status == STATUS_PASS

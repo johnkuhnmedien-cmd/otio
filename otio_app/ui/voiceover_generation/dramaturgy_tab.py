@@ -39,11 +39,12 @@ from otio_app.ui.voiceover_generation._shared import (
     style_profile_metric_value,
 )
 
-# Höher als plan_llm_client.DEFAULT_MAX_OUTPUT_TOKENS — Dramaturgie-Prompts
-# können bei vielen Ordnern sehr groß werden (Nutzerfeedback: bei 37 Ordnern
-# wurde die Antwort selbst bei 16.384 Output-Tokens noch abgeschnitten). Für
-# beide Planungs-Buttons (Geographie / Abwechslung).
-_DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS = 70000
+# Höher als plan_llm_client.DEFAULT_MAX_OUTPUT_TOKENS — genug Spielraum für
+# ~40 Kapitel-JSON, aber unter der alten 70k-Marke, die bei OpenAI/Gemini
+# lange Idle-Verbindungen begünstigte. Unverbrauchtes Limit ändert die
+# Antwortqualität nicht (Ceiling, kein Target). Anthropic-Calls darüber
+# streamen automatisch (SDK-10-Minuten-Regel).
+_DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS = 32768
 
 
 def _inventory_counts(project: Project) -> tuple[int, int]:
