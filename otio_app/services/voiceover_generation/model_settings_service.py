@@ -65,7 +65,7 @@ def resolve_llm_model_id(provider: str, model: str) -> str:
     """Baut die von plan_llm_client erwartete Modell-ID.
 
     plan_llm_client.plan_model_provider() erkennt Provider anhand von Präfixen
-    ("openai:", "anthropic:") und behandelt alles ohne Präfix als Gemini.
+    ("openai:", "anthropic:", "xai:") und behandelt alles ohne Präfix als Gemini.
     """
     normalized_provider = (provider or "").strip().lower()
     normalized_model = (model or "").strip()
@@ -73,6 +73,8 @@ def resolve_llm_model_id(provider: str, model: str) -> str:
         return f"openai:{normalized_model}"
     if normalized_provider == "anthropic":
         return f"anthropic:{normalized_model}"
+    if normalized_provider == "xai":
+        return f"xai:{normalized_model}"
     return normalized_model
 
 
@@ -85,6 +87,8 @@ def split_llm_model_id(resolved_model_id: str) -> tuple[str, str]:
         return "openai", value[len("openai:") :]
     if value.startswith("anthropic:"):
         return "anthropic", value[len("anthropic:") :]
+    if value.startswith("xai:"):
+        return "xai", value[len("xai:") :]
     return "gemini", value
 
 

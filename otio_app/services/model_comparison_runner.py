@@ -72,12 +72,14 @@ class ModelComparisonSpec:
 
 def _normalize_comparison_model_id(spec: ModelComparisonSpec) -> str:
     model = spec.model_id.strip()
-    if model.startswith("openai:") or model.startswith("anthropic:"):
+    if model.startswith("openai:") or model.startswith("anthropic:") or model.startswith("xai:"):
         return model
     if spec.provider == "openai":
         return f"openai:{model}"
     if spec.provider == "anthropic":
         return f"anthropic:{model}"
+    if spec.provider == "xai":
+        return f"xai:{model}"
     return model
 
 
