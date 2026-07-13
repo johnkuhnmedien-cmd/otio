@@ -325,6 +325,62 @@ def acquire_supplement_candidate(
         )
         raise PermissionError(message)
 
+    # Bereits vorhandenes Provider-Asset wiederverwenden (keine zweiten Downloads).
+    if candidate.provider_asset_id:
+        from otio_app.services.supplement_dedupe import find_existing_provider_asset
+
+        existing = find_existing_provider_asset(
+            project,
+            request.folder_name,
+            provider=candidate.provider,
+            provider_asset_id=candidate.provider_asset_id,
+        )
+        if existing is not None:
+            sidecar = load_sidecar(existing)
+            if sidecar is None:
+                sidecar = SupplementAssetSidecar(
+                    asset_id=f"asset_{candidate.provider}_{candidate.provider_asset_id}",
+                    supplement_request_id=request.supplement_request_id,
+                    provider=candidate.provider,
+                    provider_asset_id=candidate.provider_asset_id,
+                    source_url=candidate.source_page_url,
+                    download_url=candidate.download_url,
+                    query_used=candidate.query_used or request.query_used,
+                    location_name=candidate.location_name or request.location_name,
+                    location_match=candidate.location_match,
+                    license=candidate.license,
+                    license_url=candidate.license_url,
+                    creator=candidate.creator,
+                    creator_url=candidate.creator_url,
+                    acquisition_method="reused_existing",
+                    media_type=candidate.media_type,
+                    local_path=str(existing),
+                    original_filename=existing.name,
+                    downloaded_at=datetime.now(timezone.utc),
+                    file_hash=_file_hash(existing),
+                    rights_status=candidate.rights_status,
+                    approved_for_cut_plan=candidate.approved_for_cut_plan,
+                    supplement_validation_status=candidate.supplement_validation_status,
+                )
+            else:
+                # Request-Bezug aktualisieren, Datei bleibt kanonisch.
+                sidecar = sidecar.model_copy(
+                    update={
+                        "supplement_request_id": request.supplement_request_id,
+                        "local_path": str(existing),
+                        "file_hash": sidecar.file_hash or _file_hash(existing),
+                    }
+                )
+            save_sidecar(sidecar)
+            update_request(
+                project,
+                request.supplement_request_id,
+                status=REQUEST_STATUS_ANALYSIS_PENDING,
+                selected_source=candidate.provider,
+                query_used=candidate.query_used,
+            )
+            return SupplementAsset(local_path=existing, sidecar=sidecar)
+
     try:
         if candidate.provider == SUPPLEMENT_SOURCE_ADOBE:
             if candidate.status != "ADOBE_LICENSE_APPROVED":
@@ -390,10 +446,15 @@ def acquire_top_candidates(
 ) -> list[tuple[SupplementCandidate, SupplementAsset | None, str | None]]:
     """Lädt automatisch bis zu ``max_count`` downloadbare Kandidaten herunter.
 
+    Bereits vorhandene Provider-Asset-IDs werden übersprungen, damit der
+    Auto-Download neue Medien nachzieht statt nur bestehende wiederzuverwenden.
+
     Bricht bei einem Fehler nicht die restlichen Downloads ab — jeder Kandidat
     wird unabhängig versucht und das Ergebnis (Erfolg oder Fehlermeldung) pro
     Kandidat zurückgegeben.
     """
+    from otio_app.services.supplement_dedupe import provider_asset_already_downloaded
+
     eligible = [
         candidate
         for candidate in candidates
@@ -402,10 +463,22 @@ def acquire_top_candidates(
         and candidate.location_match != "missing"
     ]
     results: list[tuple[SupplementCandidate, SupplementAsset | None, str | None]] = []
-    for candidate in eligible[: max(0, max_count)]:
+    acquired = 0
+    limit = max(0, max_count)
+    for candidate in eligible:
+        if acquired >= limit:
+            break
+        if candidate.provider_asset_id and provider_asset_already_downloaded(
+            project,
+            request.folder_name,
+            provider=candidate.provider,
+            provider_asset_id=candidate.provider_asset_id,
+        ):
+            continue
         try:
             asset = acquire_supplement_candidate(project, candidate, request)
             results.append((candidate, asset, None))
+            acquired += 1
         except (OSError, ValueError, PermissionError, RuntimeError) as exc:
             results.append((candidate, None, str(exc)))
     return results

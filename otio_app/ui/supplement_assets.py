@@ -27,6 +27,10 @@ from otio_app.services.edit_plan_rules import save_edit_plan_rules
 from otio_app.services.generic_outro_selector import section_id_for_folder
 from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.supplement_coverage import COVERAGE_SUPPLEMENT_REQUIRED, coverage_to_supplement_request
+from otio_app.services.supplement_dedupe import (
+    cleanup_supplement_duplicates,
+    scan_supplement_duplicates,
+)
 from otio_app.services.supplement_pipeline import (
     acquire_supplement_candidate,
     acquire_top_candidates,
@@ -588,7 +592,7 @@ def render_supplement_assets_page() -> None:
     )
 
     pexels_readiness_for_folder = get_provider_readiness(SUPPLEMENT_SOURCE_PEXELS)
-    auto_col, coverage_col = st.columns(2)
+    auto_col, coverage_col, dedupe_col = st.columns(3)
     with auto_col:
         if st.button(
             "Alles automatisch: Top 3 suchen, herunterladen, analysieren, "
@@ -670,6 +674,46 @@ def render_supplement_assets_page() -> None:
                 st.rerun()
         except (OSError, ValueError) as exc:
             st.error(str(exc))
+
+    duplicate_groups = scan_supplement_duplicates(project, selected_folder)
+    duplicate_files = sum(len(group.remove) for group in duplicate_groups)
+    with dedupe_col:
+        st.caption(
+            f"Duplikate: **{duplicate_files}** Datei(en) in **{len(duplicate_groups)}** "
+            "Provider-Asset-Gruppe(n)"
+            if duplicate_groups
+            else "Keine Provider-Asset-Duplikate in `_supplemental/`"
+        )
+        preview_clicked = st.button(
+            "Duplikate prüfen",
+            key=f"dedupe_preview_{project.id}_{safe_folder_slug(selected_folder)}",
+            disabled=not duplicate_groups,
+            help="Gleiche Pexels-/Adobe-IDs aus Testläufen — je ID eine Datei behalten",
+        )
+        cleanup_clicked = st.button(
+            "Duplikate aufräumen",
+            key=f"dedupe_cleanup_{project.id}_{safe_folder_slug(selected_folder)}",
+            disabled=not duplicate_groups,
+            help="Entfernt doppelte Downloads; behält je Provider-Asset-ID die beste Datei",
+        )
+    if preview_clicked and duplicate_groups:
+        with st.expander("Duplikat-Vorschau", expanded=True):
+            for group in duplicate_groups:
+                st.markdown(
+                    f"**{group.provider}:{group.provider_asset_id}** "
+                    f"({group.count}×) — behalten: `{group.keep.name}`"
+                )
+                for path in group.remove:
+                    st.caption(f"entfernen: `{path.name}`")
+    if cleanup_clicked and duplicate_groups:
+        report = cleanup_supplement_duplicates(project, selected_folder, dry_run=False)
+        st.success(
+            f"{len(report.deleted_media)} Duplikat-Datei(en) entfernt "
+            f"({report.group_count} Gruppen). "
+            f"Inventory −{report.inventory_pruned}, "
+            f"Clean-Dateien −{len(report.deleted_clean)}."
+        )
+        st.rerun()
 
     if not folder_requests:
         st.info("Keine Supplement Requests — Coverage-Prüfung ausführen oder Schnittplan vorschlagen.")
