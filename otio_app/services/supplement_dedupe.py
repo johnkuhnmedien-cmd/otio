@@ -39,9 +39,9 @@ def load_sidecar(local_path: Path) -> SupplementAssetSidecar | None:
         return None
 
 
-# Dateiname: …_pexels_27608379.mp4 bzw. …_adobe_12345.mov
+# Dateiname: …_pexels_27608379.mp4 bzw. …_adobe_12345.mov bzw. reused_pexels_27608379.mp4
 _FILENAME_PROVIDER_ASSET_RE = re.compile(
-    r"_(?P<provider>pexels|adobe)_(?P<asset_id>[A-Za-z0-9]+)(?:\.[^.]+)+$",
+    r"(?:^|_)(?P<provider>pexels|adobe)(?:_stock)?_(?P<asset_id>[A-Za-z0-9]+)(?:\.[^.]+)+$",
     re.IGNORECASE,
 )
 
@@ -58,12 +58,12 @@ class SupplementOnDisk:
 class DuplicateGroup:
     provider: str
     provider_asset_id: str
-    keep: Path
+    keep: Path | None
     remove: list[Path] = field(default_factory=list)
 
     @property
     def count(self) -> int:
-        return 1 + len(self.remove)
+        return (1 if self.keep is not None else 0) + len(self.remove)
 
 
 @dataclass
@@ -350,5 +350,166 @@ def cleanup_supplement_duplicates(
     deleted_clean, clean_pruned = _prune_clean_artifacts(project, folder_name, deleted_media)
     report.deleted_clean = deleted_clean
     report.clean_manifest_pruned = clean_pruned
+    report.dry_run = False
+    return report
+
+
+def _cut_plan_referenced_paths(project: Project) -> set[str]:
+    """Pfade, die Draft, Manifest oder akzeptierte Requests noch brauchen."""
+    refs: set[str] = set()
+
+    def _add(raw: str | Path | None) -> None:
+        if not raw:
+            return
+        path = Path(raw)
+        refs.add(str(path))
+        refs.add(_path_key(path))
+        try:
+            refs.add(str(path.resolve()))
+        except OSError:
+            pass
+
+    from otio_app.services.voiceover_generation.cut_plan_builder import load_cut_plan_draft
+    from otio_app.services.voiceover_generation.cut_plan_supplement_bridge import (
+        load_cut_plan_supplement_manifest,
+        load_cut_plan_supplement_requests,
+    )
+
+    draft = load_cut_plan_draft(project)
+    if draft is not None:
+        for item in draft.items:
+            for segment in item.planned_visual_segments:
+                _add(segment.asset_path)
+
+    manifest = load_cut_plan_supplement_manifest(project)
+    for entry in manifest.entries:
+        _add(entry.asset_path)
+
+    requests_doc = load_cut_plan_supplement_requests(project)
+    if requests_doc is not None:
+        for request in requests_doc.requests:
+            _add(request.accepted_asset_path)
+    return refs
+
+
+def _identity_from_cut_plan_media(path: Path) -> tuple[str, str] | None:
+    # reused_pexels_<id> oder …_pexels_<id>
+    match = _FILENAME_PROVIDER_ASSET_RE.search(path.name)
+    if match is None:
+        # Fallback: reused_<provider>_<id>
+        reused = re.search(
+            r"^reused_(?P<provider>[A-Za-z0-9_]+)_(?P<asset_id>[A-Za-z0-9]+)\.[^.]+$",
+            path.name,
+            re.IGNORECASE,
+        )
+        if reused is None:
+            return None
+        provider = reused.group("provider").casefold()
+        if provider == "adobe":
+            provider = "adobe_stock"
+        return provider, reused.group("asset_id")
+    provider = match.group("provider").casefold()
+    if provider == "adobe":
+        provider = "adobe_stock"
+    return provider, match.group("asset_id")
+
+
+def iter_cut_plan_supplement_on_disk(project: Project) -> list[SupplementOnDisk]:
+    from otio_app.project_layout import get_cut_plan_supplement_assets_dir
+
+    root = get_cut_plan_supplement_assets_dir(project.language_work_dir_path)
+    if not root.is_dir():
+        return []
+    found: list[SupplementOnDisk] = []
+    try:
+        request_dirs = sorted(root.iterdir(), key=lambda path: path.name.casefold())
+    except OSError:
+        return []
+    for request_dir in request_dirs:
+        try:
+            if not request_dir.is_dir():
+                continue
+        except OSError:
+            continue
+        for media_path in list_media_files(request_dir):
+            identity = _identity_from_cut_plan_media(media_path)
+            if identity is None:
+                continue
+            provider, provider_asset_id = identity
+            found.append(
+                SupplementOnDisk(
+                    path=media_path,
+                    provider=provider,
+                    provider_asset_id=provider_asset_id,
+                    sidecar=load_sidecar(media_path),
+                )
+            )
+    return found
+
+
+def scan_cut_plan_supplement_orphans(project: Project) -> list[DuplicateGroup]:
+    """Ungenutzte Cut-Plan-Kopien derselben Provider-Asset-ID."""
+    referenced = _cut_plan_referenced_paths(project)
+    by_key: dict[tuple[str, str], list[SupplementOnDisk]] = {}
+    for entry in iter_cut_plan_supplement_on_disk(project):
+        by_key.setdefault((entry.provider, entry.provider_asset_id), []).append(entry)
+
+    groups: list[DuplicateGroup] = []
+    for (provider, provider_asset_id), entries in sorted(by_key.items()):
+        referenced_entries = [
+            entry for entry in entries if _path_key(entry.path) in referenced or str(entry.path) in referenced
+        ]
+        unreferenced = [
+            entry for entry in entries if _path_key(entry.path) not in referenced and str(entry.path) not in referenced
+        ]
+        if not unreferenced:
+            continue
+        if referenced_entries:
+            keep = referenced_entries[0].path
+            remove = [entry.path for entry in unreferenced]
+        elif len(entries) >= 2:
+            ranked = sorted(entries, key=_keeper_rank, reverse=True)
+            keep = ranked[0].path
+            remove = [item.path for item in ranked[1:]]
+        else:
+            # Einzelne unreferenzierte Datei — als Orphan löschbar
+            keep = None
+            remove = [entries[0].path]
+        if not remove:
+            continue
+        groups.append(
+            DuplicateGroup(
+                provider=provider,
+                provider_asset_id=provider_asset_id,
+                keep=keep,
+                remove=remove,
+            )
+        )
+    return groups
+
+
+def cleanup_cut_plan_supplement_orphans(
+    project: Project,
+    *,
+    dry_run: bool = True,
+) -> CleanupReport:
+    groups = scan_cut_plan_supplement_orphans(project)
+    report = CleanupReport(folder_name="cut_plan/supplement_assets", groups=groups, dry_run=dry_run)
+    if dry_run or not groups:
+        return report
+    for group in groups:
+        for path in group.remove:
+            sidecar = _sidecar_path(path)
+            if _delete_path(path):
+                report.deleted_media.append(str(path))
+            if _delete_path(sidecar):
+                report.deleted_sidecars.append(str(sidecar))
+            # Leere Request-Ordner aufräumen
+            parent = path.parent
+            try:
+                if parent.is_dir() and not any(parent.iterdir()):
+                    parent.rmdir()
+            except OSError:
+                pass
     report.dry_run = False
     return report

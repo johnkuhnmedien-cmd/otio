@@ -224,3 +224,58 @@ def test_acquire_top_skips_already_downloaded(tmp_path: Path) -> None:
 
     assert downloaded == ["222", "333"]
     assert len(results) == 2
+
+
+def test_cut_plan_orphan_cleanup_keeps_referenced(tmp_path: Path) -> None:
+    from otio_app.project_layout import get_cut_plan_supplement_asset_request_dir
+    from otio_app.services.supplement_dedupe import (
+        cleanup_cut_plan_supplement_orphans,
+        scan_cut_plan_supplement_orphans,
+    )
+    from otio_app.services.voiceover_generation.cut_plan_models import (
+        CutPlanDocument,
+        CutPlanItem,
+        VisualSegment,
+    )
+    from otio_app.services.voiceover_generation.cut_plan_builder import save_cut_plan_draft
+
+    project = _project(tmp_path)
+    req_a = get_cut_plan_supplement_asset_request_dir(project.language_work_dir_path, "req_a")
+    req_b = get_cut_plan_supplement_asset_request_dir(project.language_work_dir_path, "req_b")
+    req_a.mkdir(parents=True)
+    req_b.mkdir(parents=True)
+    keep = req_a / "Antelope_Canyon_req_a_pexels_27608379.mp4"
+    orphan = req_b / "reused_pexels_27608379.mp4"
+    keep.write_bytes(b"keep")
+    orphan.write_bytes(b"orphan")
+
+    draft = CutPlanDocument(
+        project_id=project.id,
+        items=[
+            CutPlanItem(
+                cut_item_id="item_1",
+                folder_name="Antelope Canyon",
+                timeline_start_sec=0.0,
+                duration_sec=3.0,
+                planned_visual_segments=[
+                    VisualSegment(
+                        segment_id="item_1_seg_01",
+                        asset_path=str(keep),
+                        asset_type="video",
+                        duration_sec=3.0,
+                    )
+                ],
+            )
+        ],
+    )
+    save_cut_plan_draft(project, draft)
+
+    groups = scan_cut_plan_supplement_orphans(project)
+    assert len(groups) == 1
+    assert groups[0].keep == keep
+    assert orphan in groups[0].remove
+
+    report = cleanup_cut_plan_supplement_orphans(project, dry_run=False)
+    assert keep.exists()
+    assert not orphan.exists()
+    assert len(report.deleted_media) == 1
