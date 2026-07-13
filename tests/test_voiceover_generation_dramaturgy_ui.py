@@ -52,8 +52,7 @@ def test_dramaturgy_page_renders_without_exception(without_voiceover_project: Pr
 def test_dramaturgy_page_has_both_plan_buttons(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Nutzerfeedback: neuer Button 'Dramaturgie ohne Thinking' zusätzlich zum
-    bestehenden Plan-Button (der jetzt ein erhöhtes max_tokens-Limit nutzt)."""
+    """Zwei Planungsmodi: Geographie vs. abwechslungsreiche Dramaturgie."""
     project_id = "dram-two-buttons"
     project_root = tmp_path / "USA"
     (project_root / "Grand Canyon").mkdir(parents=True)
@@ -72,12 +71,14 @@ def test_dramaturgy_page_has_both_plan_buttons(
     assert not at.exception, at.exception
 
     button_labels = {button.label for button in at.button}
-    assert "Dramaturgie planen" in button_labels
-    assert "Dramaturgie ohne Thinking" in button_labels
+    assert "Dramaturgie nach Geographie planen" in button_labels
+    assert "Abwechslungsreiche Dramaturgie planen" in button_labels
+    assert "Dramaturgie ohne Thinking" not in button_labels
 
     captions = " ".join(caption.value for caption in at.caption)
-    assert "70" in captions and "000" in captions  # max_tokens=70.000-Hinweis
-    assert "Thinking" in captions
+    assert "32" in captions and "768" in captions
+    assert "Geographie" in captions or "Reiseverlauf" in captions
+    assert "Abwechslung" in captions
 
 
 def test_dramaturgy_page_writes_no_edit_plan_documents(

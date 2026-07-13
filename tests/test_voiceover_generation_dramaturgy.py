@@ -130,24 +130,47 @@ def test_build_dramaturgy_plan_writes_draft(tmp_path: Path) -> None:
 
 
 def test_build_dramaturgy_plan_passes_max_output_tokens_through(tmp_path: Path) -> None:
-    """Nutzerfeedback: 'Option A' — max_tokens für die Dramaturgie-Planung
-    gezielt erhöhen können (z. B. bei sehr vielen Ordnern)."""
+    """Beide Planungs-Buttons nutzen ein erhöhtes max_tokens-Limit."""
     project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
     with patch(
         f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()
     ) as mock_generate:
         result = build_dramaturgy_plan(
-            project, provider="anthropic", model="claude-sonnet-5", max_output_tokens=70000
+            project,
+            provider="anthropic",
+            model="claude-sonnet-5",
+            planning_mode="geography",
+            max_output_tokens=32768,
         )
 
     assert result.status == STATUS_PASS
-    assert mock_generate.call_args.kwargs["max_output_tokens"] == 70000
+    assert mock_generate.call_args.kwargs["max_output_tokens"] == 32768
     assert mock_generate.call_args.kwargs["disable_thinking"] is False
 
 
+def test_build_dramaturgy_plan_passes_planning_mode_into_prompt(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
+    with (
+        patch(
+            f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()
+        ),
+        patch(f"{_SERVICE_MODULE}.build_dramaturgy_prompt") as mock_prompt,
+    ):
+        mock_prompt.return_value = "prompt"
+        result = build_dramaturgy_plan(
+            project,
+            provider="anthropic",
+            model="claude-sonnet-5",
+            planning_mode="geography",
+            max_output_tokens=32768,
+        )
+
+    assert result.status == STATUS_PASS
+    assert mock_prompt.call_args.kwargs["planning_mode"] == "geography"
+
+
 def test_build_dramaturgy_plan_passes_disable_thinking_through(tmp_path: Path) -> None:
-    """Nutzerfeedback: 'Option B' — internes Thinking für die Dramaturgie-
-    Planung gezielt abschalten können."""
+    """disable_thinking bleibt als Service-Parameter nutzbar (nicht mehr als UI-Button)."""
     project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
     with patch(
         f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()
@@ -162,16 +185,20 @@ def test_build_dramaturgy_plan_passes_disable_thinking_through(tmp_path: Path) -
 
 
 def test_build_dramaturgy_plan_default_kwargs_unchanged(tmp_path: Path) -> None:
-    """Rückwärtskompatibilität: ohne die neuen Parameter verhält sich der Call
-    exakt wie vorher (max_output_tokens=None, disable_thinking=False)."""
+    """Ohne explizite Parameter: variety-Mode, max_output_tokens=None, disable_thinking=False."""
     project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
-    with patch(
-        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()
-    ) as mock_generate:
+    with (
+        patch(
+            f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()
+        ) as mock_generate,
+        patch(f"{_SERVICE_MODULE}.build_dramaturgy_prompt") as mock_prompt,
+    ):
+        mock_prompt.return_value = "prompt"
         build_dramaturgy_plan(project, provider="anthropic", model="claude-sonnet-5")
 
     assert mock_generate.call_args.kwargs["max_output_tokens"] is None
     assert mock_generate.call_args.kwargs["disable_thinking"] is False
+    assert mock_prompt.call_args.kwargs["planning_mode"] == "variety"
 
     loaded = load_dramaturgy_draft(project)
     assert loaded is not None

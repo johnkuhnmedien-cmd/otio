@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from otio_app.defaults import (
     BRIEF_NEGATIVE_RULE_INSTRUCTIONS,
+    DRAMATURGY_PLANNING_MODE_GEOGRAPHY,
+    DRAMATURGY_PLANNING_MODE_VARIETY,
     PAUSE_AFTER_CHOICES,
     SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION,
     SEGMENT_ASSET_PLANNING_MODE_PER_SEGMENT,
@@ -248,24 +250,55 @@ style characteristics only.
 
 
 def _folder_summary_block(summary: FolderInventorySummary) -> str:
+    """Kapitel-/Ordner-Kurzinfo für die Dramaturgie — ohne Asset-Beschreibungen.
+
+    Pro Kapitel nur Name, Themen und grobe Kapazitäts-Signale. Volle
+    Asset-Beschreibungen blähen den Prompt bei vielen Ordnern unnötig auf und
+    gehören in spätere Voice-over-/Cut-Plan-Schritte, nicht in die
+    Reihenfolge-Planung.
+    """
     themes = ", ".join(summary.dominant_visual_themes) or "-"
-    notable = "; ".join(summary.notable_asset_descriptions) or "-"
     risks = ", ".join(summary.risks) or "-"
     return (
         f"[{summary.folder_name}]\n"
-        f"- asset_count: {summary.asset_count} (video: {summary.video_count}, "
-        f"image: {summary.image_count})\n"
-        f"- total_video_duration_sec: {summary.total_video_duration_sec}\n"
+        f"- chapter_themes: {themes}\n"
+        f"- asset_count: {summary.asset_count} "
+        f"(video: {summary.video_count}, image: {summary.image_count})\n"
         f"- visual_strength_score: {summary.visual_strength_score}\n"
         f"- asset_diversity_score: {summary.asset_diversity_score}\n"
-        f"- has_people: {summary.has_people}, has_motion: {summary.has_motion}, "
-        f"has_wide_shots: {summary.has_wide_shots}, has_detail_shots: {summary.has_detail_shots}\n"
-        f"- dominant_visual_themes: {themes}\n"
-        f"- notable_asset_descriptions: {notable}\n"
         f"- estimated_voiceover_word_count: {summary.estimated_voiceover_word_count} "
         f"({summary.estimated_min_words}-{summary.estimated_max_words})\n"
         f"- risks: {risks}"
     )
+
+
+def _dramaturgy_planning_mode_task_block(planning_mode: str) -> str:
+    mode = (planning_mode or DRAMATURGY_PLANNING_MODE_VARIETY).strip().lower()
+    if mode == DRAMATURGY_PLANNING_MODE_GEOGRAPHY:
+        return """## Planning mode: GEOGRAPHY FIRST
+Order the chapters primarily by GEOGRAPHY and a coherent travel journey:
+- Infer regions, routes, coasts, interiors, north→south / west→east from chapter \
+names and themes when possible.
+- Prefer a logical travel progression; minimize jarring geographic jumps.
+- Still assign dramaturgy roles (opener/contrast/climax/resolution) and \
+transitions, but geographic coherence outweighs pure visual-strength sorting.
+- A strong visual chapter may open the film only if it also fits the journey, \
+or after a short geographic setup.
+
+Do NOT simply sort alphabetically. Do NOT simply sort by asset count."""
+
+    return """## Planning mode: MAXIMUM VARIETY
+Order the chapters for MAXIMUM VARIETY and narrative contrast:
+- Actively alternate mood, scale, landscape type, and visual character between \
+neighboring chapters.
+- Prioritize hook potential, contrast, and overall tension arc over a strict \
+geographic travel sequence.
+- Geographic adjacency is allowed only when it also keeps the film interesting.
+- Avoid long runs of similar chapters (e.g. several deserts or cities in a row) \
+unless contrast is created another way.
+
+Do NOT simply sort alphabetically. Do NOT simply sort by asset count. Do NOT \
+default to a pure map route if that makes the film monotonous."""
 
 
 def build_dramaturgy_prompt(
@@ -274,14 +307,20 @@ def build_dramaturgy_prompt(
     style_profile: VoiceoverStyleProfile | None,
     folder_summaries: list[FolderInventorySummary],
     model_settings: VoiceoverGenerationModelSettings | None = None,
+    planning_mode: str | None = None,
 ) -> str:
-    """Baut den Prompt zur Dramaturgieplanung über alle Ordner.
+    """Baut den Prompt zur Dramaturgieplanung über alle Ordner/Kapitel.
 
     `model_settings` ist Teil der Signatur für API-Symmetrie mit den anderen
     Rollen, wird aber aktuell nicht in den Prompt-Text eingebettet — welches
     Modell aufgerufen wird, ist eine Aufrufer-Entscheidung, kein Prompt-Inhalt.
+
+    `planning_mode`: "geography" (Reise/Geographie zuerst) oder "variety"
+    (Abwechslung/Kontrast zuerst). Default: variety.
     """
     del model_settings
+
+    resolved_mode = (planning_mode or DRAMATURGY_PLANNING_MODE_VARIETY).strip().lower()
 
     tone_tags = ", ".join(project_brief.tone_tags) or "(keine Angabe)"
     active_negative_rules = _active_negative_rules_block(project_brief)
@@ -298,13 +337,14 @@ def build_dramaturgy_prompt(
 
     folders_block = (
         "\n\n".join(_folder_summary_block(summary) for summary in folder_summaries)
-        or "(keine Ordner-Zusammenfassungen verfügbar)"
+        or "(keine Kapitel verfügbar)"
     )
+    planning_mode_block = _dramaturgy_planning_mode_task_block(resolved_mode)
 
     return f"""You are a documentary story editor. Plan the DRAMATURGY (narrative \
-structure) of a travel/nature documentary across multiple locations (folders). \
-This is NOT about describing assets — it is about ORDER, TENSION ARC, and the \
-ROLE each location plays in the overall video.
+structure) of a travel/nature documentary across multiple CHAPTERS (folders / \
+locations). This is NOT about describing individual media assets — it is about \
+ORDER, TENSION ARC, and the ROLE each chapter plays in the overall video.
 
 {native_speaker_language_block(project_brief.language)}
 
@@ -319,25 +359,25 @@ ROLE each location plays in the overall video.
 ## Style Profile (already extracted — do not re-derive, just respect it)
 {style_block}
 
-## Location / folder summaries (one per location)
+## Chapters / locations (chapter-level only — NO per-asset descriptions)
+Each block is one chapter (folder name). Use these chapter names as the only \
+location identifiers. Do not invent assets or quote asset descriptions.
 {folders_block}
 
-## Task
-Decide, for the whole set of locations above:
-- Which location works best as the OPENER (hooks attention immediately)?
-- Where does a CONTRAST between locations create interest?
-- Which location works as the CLIMAX / escalation point?
-- Which location works as a calm RESOLUTION / closer?
-- What is the most compelling overall narrative arc connecting them?
-- For EACH location: its role, a short reason, recommended word count for its \
-voice-over section, and a transition idea toward the NEXT location.
+{planning_mode_block}
 
-Do NOT simply sort alphabetically. Do NOT simply sort by asset count. Consider \
-visual strength, diversity, hook potential, contrasts between locations, and the \
-overall narrative arc.
+## Task
+Decide, for the whole set of chapters above:
+- Which chapter works best as the OPENER (hooks attention immediately)?
+- Where does a CONTRAST between chapters create interest?
+- Which chapter works as the CLIMAX / escalation point?
+- Which chapter works as a calm RESOLUTION / closer?
+- What is the most compelling overall narrative arc connecting them?
+- For EACH chapter: its role, a short reason, recommended word count for its \
+voice-over section, and a transition idea toward the NEXT chapter.
 
 Write core_promise, narrative_arc, reasons, transition hints, and risks in the \
-target language (native-speaker quality). Folder names stay exactly as given.
+target language (native-speaker quality). Folder/chapter names stay exactly as given.
 
 Respond with JSON ONLY, no markdown code fences, no commentary, matching exactly \
 this shape:
@@ -369,7 +409,7 @@ this shape:
   "risks": []
 }}
 
-Include exactly one entry per location listed above, using the EXACT folder_name \
+Include exactly one entry per chapter listed above, using the EXACT folder_name \
 values given. order_index must be unique and start at 1.
 """
 
