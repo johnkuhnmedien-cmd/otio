@@ -51,13 +51,19 @@ ANTHROPIC_PLAN_MODEL_CHOICES = (
     "anthropic:claude-opus-4-8",
     "anthropic:claude-sonnet-5",
 )
-EDIT_PLAN_MODEL_CHOICES = GEMINI_MODEL_CHOICES + OPENAI_PLAN_MODEL_CHOICES + ANTHROPIC_PLAN_MODEL_CHOICES
+XAI_PLAN_MODEL_CHOICES = (
+    "xai:grok-4.5",
+)
+EDIT_PLAN_MODEL_CHOICES = (
+    GEMINI_MODEL_CHOICES + OPENAI_PLAN_MODEL_CHOICES + ANTHROPIC_PLAN_MODEL_CHOICES + XAI_PLAN_MODEL_CHOICES
+)
 EDIT_PLAN_MODEL_LABELS = {
     **GEMINI_MODEL_LABELS,
     "openai:gpt-5.5": "ChatGPT GPT-5.5 — Flagship, beste Qualität",
     "openai:gpt-5.4-mini": "ChatGPT GPT-5.4 mini — günstig, schnell",
     "anthropic:claude-opus-4-8": "Claude Opus 4.8 — Flagship, beste Qualität",
     "anthropic:claude-sonnet-5": "Claude Sonnet 5 — ausgewogen, günstiger",
+    "xai:grok-4.5": "Grok 4.5 — Flagship (xAI)",
 }
 INVENTORY_FILENAME = "inventory.json"
 INVENTORY_SUBDIR = "inventory"
@@ -116,11 +122,12 @@ YOUTUBE_QUIZ_OPTION_COUNT = 3
 # Eigenständig von EDIT_PLAN_MODEL_CHOICES: hier werden provider und model als
 # getrennte Felder gespeichert (siehe VoiceoverGenerationModelSettings), daher
 # ohne "anthropic:"/"openai:"-Präfix.
-VOICEOVER_GEN_PROVIDERS = ("anthropic", "openai", "gemini")
+VOICEOVER_GEN_PROVIDERS = ("anthropic", "openai", "gemini", "xai")
 VOICEOVER_GEN_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
     "anthropic": ("claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"),
     "openai": ("gpt-5.5", "gpt-5.4-mini"),
     "gemini": ("gemini-3.1-pro-preview", "gemini-3.1-flash-lite"),
+    "xai": ("grok-4.5",),
 }
 VOICEOVER_GEN_ROLE_STYLE_PROFILE = "style_profile"
 VOICEOVER_GEN_ROLE_DRAMATURGY = "dramaturgy"
@@ -162,7 +169,7 @@ VOICEOVER_GEN_CUT_PLAN_SUPPLEMENT_QUERY_DEFAULT_MODEL = "gemini-3.1-flash-lite"
 
 # --- Vereinfachte Modellauswahl: EIN Dropdown je Rolle (kein Freitext, keine
 # separate Provider-Spalte). Die IDs folgen exakt der Konvention von
-# resolve_llm_model_id()/split_llm_model_id() ("openai:"/"anthropic:"-Präfix,
+# resolve_llm_model_id()/split_llm_model_id() ("openai:"/"anthropic:"/"xai:"-Präfix,
 # Gemini ohne Präfix) und werden aus VOICEOVER_GEN_MODEL_PRESETS abgeleitet. ---
 VOICEOVER_GEN_MODEL_CHOICES: tuple[str, ...] = (
     "gemini-3.1-pro-preview",
@@ -172,6 +179,7 @@ VOICEOVER_GEN_MODEL_CHOICES: tuple[str, ...] = (
     "anthropic:claude-opus-4-8",
     "anthropic:claude-sonnet-5",
     "anthropic:claude-haiku-4-5",
+    "xai:grok-4.5",
 )
 VOICEOVER_GEN_MODEL_LABELS: dict[str, str] = {
     "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview — beste Qualität (Preview, teurer)",
@@ -181,6 +189,7 @@ VOICEOVER_GEN_MODEL_LABELS: dict[str, str] = {
     "anthropic:claude-opus-4-8": "Claude Opus 4.8 — Flagship, beste Qualität",
     "anthropic:claude-sonnet-5": "Claude Sonnet 5 — ausgewogen (Standard)",
     "anthropic:claude-haiku-4-5": "Claude Haiku 4.5 — sehr schnell, günstig",
+    "xai:grok-4.5": "Grok 4.5 — Flagship (xAI)",
 }
 
 # --- Style Profile Bibliothek: projektübergreifend unter data/ gespeichert
@@ -1182,6 +1191,7 @@ MODEL_COMPARISON_PRESETS: dict[str, tuple[str, ...]] = {
     "gemini": ("gemini-3.1-pro-preview", "gemini-3.1-flash-lite"),
     "anthropic": ("anthropic:claude-sonnet-5", "anthropic:claude-opus-4-8"),
     "openai": ("openai:gpt-5.5", "openai:gpt-5.4-mini"),
+    "xai": ("xai:grok-4.5",),
 }
 EXPORTS_SUBDIR = "exports"
 CLEAN_MEDIA_OUTPUT_SUBDIR = "clean"

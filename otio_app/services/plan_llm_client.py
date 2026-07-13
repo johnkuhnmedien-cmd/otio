@@ -1,4 +1,4 @@
-"""Text-LLM-Aufrufe für Schnittplan-Vorschläge (Gemini, OpenAI, Anthropic)."""
+"""Text-LLM-Aufrufe für Schnittplan-Vorschläge (Gemini, OpenAI, Anthropic, xAI)."""
 
 from __future__ import annotations
 
@@ -13,11 +13,15 @@ from otio_app.services.api_keys import get_api_key, is_api_key_set
 PROVIDER_GEMINI = "gemini"
 PROVIDER_OPENAI = "openai"
 PROVIDER_ANTHROPIC = "anthropic"
+PROVIDER_XAI = "xai"
+
+XAI_API_BASE_URL = "https://api.x.ai/v1"
 
 _PROVIDER_ENV_KEYS = {
     PROVIDER_GEMINI: "GEMINI_API_KEY",
     PROVIDER_OPENAI: "OPENAI_API_KEY",
     PROVIDER_ANTHROPIC: "ANTHROPIC_API_KEY",
+    PROVIDER_XAI: "XAI_API_KEY",
 }
 
 
@@ -58,6 +62,8 @@ def plan_model_provider(model_id: str | None) -> str:
         return PROVIDER_OPENAI
     if value.startswith("anthropic:"):
         return PROVIDER_ANTHROPIC
+    if value.startswith("xai:"):
+        return PROVIDER_XAI
     return PROVIDER_GEMINI
 
 
@@ -73,7 +79,7 @@ def resolve_plan_model(model: Optional[str] = None) -> str:
         value = model.strip()
         if value in EDIT_PLAN_MODEL_CHOICES:
             return value
-        if value.startswith("openai:") or value.startswith("anthropic:"):
+        if value.startswith("openai:") or value.startswith("anthropic:") or value.startswith("xai:"):
             return value
         if value in GEMINI_MODEL_CHOICES:
             return value
@@ -145,11 +151,24 @@ def generate_plan_text_with_metadata(
             disable_thinking=disable_thinking,
         )
     elif provider == PROVIDER_OPENAI:
-        raw_text, token_usage = _generate_openai_text_with_usage(
+        raw_text, token_usage = _generate_openai_compatible_text_with_usage(
             prompt=prompt,
             model=api_model,
             max_output_tokens=max_output_tokens,
             disable_thinking=disable_thinking,
+            api_key_env="OPENAI_API_KEY",
+            base_url=None,
+            provider_label="OpenAI",
+        )
+    elif provider == PROVIDER_XAI:
+        raw_text, token_usage = _generate_openai_compatible_text_with_usage(
+            prompt=prompt,
+            model=api_model,
+            max_output_tokens=max_output_tokens,
+            disable_thinking=disable_thinking,
+            api_key_env="XAI_API_KEY",
+            base_url=XAI_API_BASE_URL,
+            provider_label="xAI (Grok)",
         )
     elif provider == PROVIDER_ANTHROPIC:
         raw_text, token_usage = _generate_anthropic_text_with_usage(
@@ -283,21 +302,45 @@ def _generate_openai_text_with_usage(
     max_output_tokens: int | None = None,
     disable_thinking: bool = False,
 ) -> tuple[str, dict[str, int]]:
-    # disable_thinking hat für Standard-Chat-Completions-Modelle (GPT-5.x über
-    # diese API) aktuell keine Wirkung — es gibt hier keinen äquivalenten
-    # Parameter wie thinking/thinking_config bei Anthropic/Gemini.
+    return _generate_openai_compatible_text_with_usage(
+        prompt=prompt,
+        model=model,
+        max_output_tokens=max_output_tokens,
+        disable_thinking=disable_thinking,
+        api_key_env="OPENAI_API_KEY",
+        base_url=None,
+        provider_label="OpenAI",
+    )
+
+
+def _generate_openai_compatible_text_with_usage(
+    *,
+    prompt: str,
+    model: str,
+    max_output_tokens: int | None = None,
+    disable_thinking: bool = False,
+    api_key_env: str,
+    base_url: str | None,
+    provider_label: str,
+) -> tuple[str, dict[str, int]]:
+    # disable_thinking hat für Standard-Chat-Completions-Modelle aktuell keine
+    # Wirkung — es gibt hier keinen äquivalenten Parameter wie thinking/
+    # thinking_config bei Anthropic/Gemini.
     del disable_thinking
-    api_key = get_api_key("OPENAI_API_KEY")
+    api_key = get_api_key(api_key_env)
     if not api_key:
         raise PlanLlmNotConfiguredError(
-            "OPENAI_API_KEY ist nicht gesetzt. "
+            f"{api_key_env} ist nicht gesetzt. "
             "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
         )
     _require_sdk_module("openai")
     from openai import BadRequestError, OpenAI
 
     effective_max_tokens = max_output_tokens or DEFAULT_MAX_OUTPUT_TOKENS
-    client = OpenAI(api_key=api_key)
+    client_kwargs: dict[str, str] = {"api_key": api_key}
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    client = OpenAI(**client_kwargs)
     try:
         response = client.chat.completions.create(
             model=model,
@@ -335,7 +378,7 @@ def _generate_openai_text_with_usage(
     text = (message or "").strip()
     if not text:
         raise PlanLlmTruncatedResponseError(
-            "Das Modell hat keinen verwertbaren Text zurückgegeben. Bitte erneut versuchen."
+            f"{provider_label} hat keinen verwertbaren Text zurückgegeben. Bitte erneut versuchen."
         )
     return text, token_usage
 

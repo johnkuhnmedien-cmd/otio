@@ -82,7 +82,7 @@ def test_save_model_settings_writes_only_under_voiceover_generation_dir(
 ) -> None:
     project = _make_project(tmp_path)
     save_model_settings(project, default_model_settings())
-    path = get_model_settings_path(project.work_dir_path)
+    path = get_model_settings_path(project.language_work_dir_path)
     assert path.is_file()
     assert path.is_relative_to(get_voiceover_generation_dir(project.language_work_dir_path))
 
@@ -95,6 +95,10 @@ def test_resolve_llm_model_id_for_anthropic() -> None:
     assert resolve_llm_model_id("anthropic", "claude-sonnet-5") == "anthropic:claude-sonnet-5"
 
 
+def test_resolve_llm_model_id_for_xai() -> None:
+    assert resolve_llm_model_id("xai", "grok-4.5") == "xai:grok-4.5"
+
+
 def test_resolve_llm_model_id_for_gemini_has_no_prefix() -> None:
     assert resolve_llm_model_id("gemini", "gemini-3.1-flash-lite") == "gemini-3.1-flash-lite"
 
@@ -105,6 +109,10 @@ def test_split_llm_model_id_for_openai() -> None:
 
 def test_split_llm_model_id_for_anthropic() -> None:
     assert split_llm_model_id("anthropic:claude-sonnet-5") == ("anthropic", "claude-sonnet-5")
+
+
+def test_split_llm_model_id_for_xai() -> None:
+    assert split_llm_model_id("xai:grok-4.5") == ("xai", "grok-4.5")
 
 
 def test_split_llm_model_id_for_gemini_has_no_prefix() -> None:
