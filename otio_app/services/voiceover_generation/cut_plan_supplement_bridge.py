@@ -1162,8 +1162,9 @@ def accept_cut_plan_supplement_candidate(
 
     Nutzt ausschließlich `SupplementSourceAdapter.acquire` (technischer
     Adapter) — NICHT die höherstufige Produktions-Beschaffungsorchestrierung.
-    Schreibt niemals unter _otio/supplement/, keine regulären Inventory-
-    Dateien, keine Originalmedien."""
+    Schreibt niemals unter _otio/supplement/ und keine Originalmedien.
+    Nach erfolgreichem Accept wird das Asset über die Inventory-Bridge
+    (außerhalb dieses Moduls) ins Folder-Inventory übernommen."""
     requests_document = load_cut_plan_supplement_requests(project)
     if requests_document is None:
         raise ValueError("Keine Supplement Requests vorhanden.")
@@ -1223,6 +1224,17 @@ def accept_cut_plan_supplement_candidate(
         accepted_asset_id=accepted_asset.asset_id,
         accepted_asset_path=accepted_asset.asset_path,
     )
+    # Folder-Inventory automatisch erweitern (ohne VO / Cut-Plan-Pipeline).
+    # Fehler hier dürfen Accept nicht rückgängig machen.
+    try:
+        from otio_app.services.cut_plan_inventory_bridge import (
+            import_accepted_cut_plan_supplements_into_inventory,
+        )
+
+        folders = [request.folder_name] if request.folder_name else None
+        import_accepted_cut_plan_supplements_into_inventory(project, folder_names=folders)
+    except Exception:
+        pass
     return updated_cut_plan
 
 

@@ -184,3 +184,78 @@ def test_import_accepted_cut_plan_supplements_into_inventory(tmp_path: Path) -> 
     assert again.imported == 0
     assert again.skipped_existing == 1
     assert list_accepted_cut_plan_supplements_pending_inventory(project) == []
+
+
+def test_analyze_missing_supplements_from_disk(tmp_path: Path) -> None:
+    from otio_app.services.cut_plan_inventory_bridge import (
+        analyze_and_import_missing_supplement_assets,
+        list_supplement_assets_missing_from_inventory,
+    )
+
+    project = _project(tmp_path)
+    folder = "Antelope Canyon"
+    req_dir = get_cut_plan_supplement_asset_request_dir(project.language_work_dir_path, "req_orphan")
+    req_dir.mkdir(parents=True)
+    media = req_dir / "Antelope_Canyon_req_orphan_pexels_999.mp4"
+    media.write_bytes(b"orphan-supp")
+
+    primary = project.project_root_path / folder / "primary.mp4"
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, folder),
+        AssetFolderAnalysis(
+            folder=folder,
+            media_files=[str(primary)],
+            assets=[
+                AssetMediaAnalysis(
+                    path=str(primary),
+                    description="primary",
+                    frames_used=["f.jpg"],
+                    analysis_status="complete",
+                    asset_id="primary_1",
+                )
+            ],
+        ),
+    )
+    save_cut_plan_supplement_manifest(
+        project,
+        CutPlanSupplementManifestDocument(
+            project_id=project.id,
+            entries=[
+                CutPlanSupplementManifestEntry(
+                    asset_id="supplement_pexels_999",
+                    provider=SUPPLEMENT_SOURCE_PEXELS,
+                    provider_asset_id="999",
+                    asset_path=str(media),
+                    folder_name=folder,
+                    first_request_id="req_orphan",
+                )
+            ],
+        ),
+    )
+
+    missing = list_supplement_assets_missing_from_inventory(project)
+    assert any(Path(entry["asset_path"]).name == media.name for entry in missing)
+
+    fake_frame = tmp_path / "frame2.jpg"
+    fake_frame.write_bytes(b"jpg")
+
+    with (
+        patch(
+            "otio_app.services.cut_plan_inventory_bridge.extract_frames",
+            return_value=[fake_frame],
+        ),
+        patch(
+            "otio_app.services.gemini_client.describe_media_from_frames",
+            return_value="Orphan canyon shot at golden hour",
+        ),
+        patch(
+            "otio_app.services.gemini_client.is_gemini_configured",
+            return_value=True,
+        ),
+    ):
+        report = analyze_and_import_missing_supplement_assets(project)
+
+    assert report.imported == 1
+    inventory = load_folder_inventory(project, folder)
+    supp = next(asset for asset in inventory.assets if asset.path == str(media))
+    assert "golden hour" in supp.description

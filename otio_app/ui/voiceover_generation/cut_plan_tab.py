@@ -958,48 +958,10 @@ def _render_supplement_requests(project: Project, draft: CutPlanDocument) -> Non
                     key_prefix="cut_plan_folder_dedupe",
                 )
 
-    from otio_app.services.cut_plan_inventory_bridge import (
-        import_accepted_cut_plan_supplements_into_inventory,
-        list_accepted_cut_plan_supplements_pending_inventory,
-    )
-
-    pending_inventory = list_accepted_cut_plan_supplements_pending_inventory(project)
-    st.markdown("##### Inventory aus Cut-Plan-Supplements")
     st.caption(
-        "Akzeptierte Supplements liegen unter `cut_plan/supplement_assets/`. "
-        "Hier werden sie ins Folder-Inventory übernommen — mit vorhandener "
-        "Beschreibung/Validierung, ohne erneuten LLM-Lauf."
+        "Akzeptierte Supplements werden automatisch ins Folder-Inventory übernommen. "
+        "Fehlende Altbestände analysierst du unter **① Analysen**."
     )
-    if pending_inventory:
-        st.info(
-            f"{len(pending_inventory)} akzeptierte Supplement(s) noch nicht im Inventory."
-        )
-    else:
-        st.caption("Keine ausstehenden akzeptierten Supplements fürs Inventory.")
-    if st.button(
-        "📁 Akzeptierte Supplements ins Inventory übernehmen",
-        key=f"cut_plan_import_inventory_{project.id}",
-        type="primary",
-        disabled=not pending_inventory,
-    ):
-        with st.spinner("Übernehme akzeptierte Supplements ins Inventory …"):
-            report = import_accepted_cut_plan_supplements_into_inventory(project)
-        if report.imported:
-            details = ", ".join(
-                f"{folder}: {count}" for folder, count in sorted(report.imported_by_folder.items())
-            )
-            st.success(
-                f"{report.imported} Asset(s) übernommen ({details}). "
-                f"{report.skipped_existing} bereits vorhanden."
-            )
-        else:
-            st.warning(
-                f"Nichts importiert — {report.skipped_existing} bereits vorhanden, "
-                f"{len(report.skipped)} übersprungen."
-            )
-        for skip in report.skipped[:20]:
-            st.caption(f"⚠️ {skip}")
-        st.rerun()
 
     query_llm_provider, query_llm_model = _render_supplement_query_model_settings(project)
 

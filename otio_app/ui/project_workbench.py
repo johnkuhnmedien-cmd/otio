@@ -263,8 +263,8 @@ def _render_analysis_actions(
     st.markdown("**Asset-Ordner** — Gemini analysiert nur Frame-Bilder (kostenpflichtig).")
     if without_voiceover:
         st.caption(
-            "Ohne Voice-Over: hier nur Hauptassets. Akzeptierte Cut-Plan-Supplements "
-            "übernimmst du unter **⑧ Cut Plan → Inventory aus Cut-Plan-Supplements**."
+            "Ohne Voice-Over: Hauptassets hier analysieren. Fehlende Cut-Plan-/"
+            "`_supplemental/`-Supplements über den Button darunter ins Inventory holen."
         )
     if asset_job_running:
         st.caption(
@@ -296,6 +296,62 @@ def _render_analysis_actions(
             update_project_selection(project.id, folders)
             if _start_asset_analysis_background(project, folders, selected_model):
                 st.rerun()
+
+    from otio_app.services.cut_plan_inventory_bridge import (
+        analyze_and_import_missing_supplement_assets,
+        list_supplement_assets_missing_from_inventory,
+    )
+
+    missing_supplements = list_supplement_assets_missing_from_inventory(project)
+    if selected_folders:
+        missing_supplements = [
+            entry
+            for entry in missing_supplements
+            if entry["folder_name"] in set(selected_folders)
+        ]
+    st.divider()
+    st.markdown("**Supplement-Assets** — noch nicht im Inventory.")
+    if missing_supplements:
+        st.info(
+            f"{len(missing_supplements)} Supplement-Asset(s) fehlen im Inventory "
+            "(Cut-Plan und/oder `_supplemental/`)."
+        )
+        preview = ", ".join(
+            f"`{Path(entry['asset_path']).name}`" for entry in missing_supplements[:8]
+        )
+        suffix = " …" if len(missing_supplements) > 8 else ""
+        st.caption(preview + suffix)
+    else:
+        st.caption("Keine fehlenden Supplement-Assets für die aktuelle Ordnerauswahl.")
+    if st.button(
+        "🧩 Fehlende Supplement-Assets analysieren & ins Inventory",
+        key=f"analyze_missing_supplements_{project.id}",
+        disabled=any_job_running or not missing_supplements,
+        help=(
+            "Analysiert alle Supplement-Dateien, die noch nicht im Folder-Inventory "
+            "stehen, und übernimmt sie. Vorhandene LLM-Validierung wird wiederverwendet."
+        ),
+    ):
+        if not missing_supplements:
+            st.warning("Keine fehlenden Supplements.")
+        else:
+            with st.spinner("Analysiere fehlende Supplement-Assets …"):
+                report = analyze_and_import_missing_supplement_assets(
+                    project,
+                    folder_names=list(selected_folders) if selected_folders else None,
+                    gemini_model=selected_model,
+                )
+            if report.imported:
+                details = ", ".join(
+                    f"{folder}: {count}"
+                    for folder, count in sorted(report.imported_by_folder.items())
+                )
+                st.success(f"{report.imported} Supplement(s) analysiert und übernommen ({details}).")
+            else:
+                st.warning("Keine Supplements übernommen.")
+            for skip in report.skipped[:20]:
+                st.caption(f"⚠️ {skip}")
+            st.rerun()
 
     if without_voiceover:
         return
@@ -441,7 +497,7 @@ def render_project_workbench() -> None:
         if project.is_without_voiceover:
             st.caption(
                 "Ohne Voice-Over: keine Voice-over-Analyse. "
-                "Cut-Plan-Supplements erscheinen im Inventory nach Import unter **⑧ Cut Plan**."
+                "Fehlende Supplements analysierst du unter **▶️ Analysen starten**."
             )
         elif project.voice_analysis_path.is_file():
             st.markdown("**voice_over_analysis.json**")
