@@ -614,7 +614,11 @@ def _validate_shots(
             )
         )
 
-    visual_item_count = len(edit_plan.timeline_items)
+    # opening_title (V2-Overlay am Ordnerbeginn) erzeugt keinen EditPlanShot —
+    # nur V1-/Bridge-Visuals zählen für den Shot-Count-Vergleich.
+    visual_item_count = sum(
+        1 for item in edit_plan.timeline_items if item.type != "opening_title"
+    )
     if len(edit_plan.shots) != visual_item_count:
         _blocker(
             PRODUCTION_EDIT_PLAN_ERROR_SHOT_COUNT_MISMATCH,
@@ -710,10 +714,28 @@ def _validate_mapping_trace(
     # Roundtrip: alle Einträge EINER Sektion müssen denselben section_start_offset
     # teilen (original - local). Referenz kommt bevorzugt vom Audio-Eintrag
     # (autoritative Audio-Plan-Zeitbasis), sonst vom ersten Visual-Eintrag.
-    reference_entry = audio_entries[0] if audio_entries else next(iter(visual_entries.values()), None)
+    # opening_title ist ein generiertes V2-Overlay (lokal bei 0.0), kein
+    # Bridge-Visual — Roundtrip gilt nur für Bridge-gemappte Einträge/Audio.
+    title_item_ids = {
+        item.timeline_item_id for item in edit_plan.timeline_items if item.type == "opening_title"
+    }
+    bridge_visual_entries = [
+        entry
+        for entry in visual_entries.values()
+        if entry.resulting_timeline_item_id not in title_item_ids
+        and entry.mapping_reason != "generated_folder_opening_title"
+    ]
+    reference_entry = (
+        audio_entries[0] if audio_entries else (bridge_visual_entries[0] if bridge_visual_entries else None)
+    )
     if reference_entry is not None:
         reference_offset = reference_entry.original_timeline_in_sec - reference_entry.local_timeline_in_sec
         for entry in section_entries:
+            if (
+                entry.resulting_timeline_item_id in title_item_ids
+                or entry.mapping_reason == "generated_folder_opening_title"
+            ):
+                continue
             offset_in = entry.original_timeline_in_sec - entry.local_timeline_in_sec
             offset_out = entry.original_timeline_out_sec - entry.local_timeline_out_sec
             if abs(offset_in - reference_offset) > _ROUNDTRIP_TOLERANCE_SEC or abs(
