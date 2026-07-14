@@ -13,6 +13,7 @@ from pathlib import Path
 
 from otio_app.defaults import (
     AUDIO_SCOPE_FOLDER,
+    AUDIO_SCOPE_INTRO,
     CUT_PLAN_ERROR_AMBIGUOUS_ASSET_ID,
     CUT_PLAN_ERROR_ASSET_FILE_MISSING,
     CUT_PLAN_ERROR_ASSET_REUSE_DISTANCE_TOO_SHORT,
@@ -637,6 +638,10 @@ def validate_asset_usage(
 
     for index, (segment, item) in enumerate(all_segments):
         if not segment.asset_id:
+            continue
+        # Intro zählt weder für Summary noch für max_usage / reuse distance
+        # (Nutzervorgabe Juli 2026) — konsistent mit update_asset_usage_summary.
+        if item.source_scope == AUDIO_SCOPE_INTRO:
             continue
         recomputed_summary[segment.asset_id] = recomputed_summary.get(segment.asset_id, 0) + 1
         is_continuation = any(_reason_has_marker(segment.reason, marker) for marker in _CONTINUATION_REASONS)

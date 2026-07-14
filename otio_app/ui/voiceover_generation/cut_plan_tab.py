@@ -444,14 +444,16 @@ def _render_settings_editor(project: Project) -> CutPlanSettings:
             key=f"cut_plan_shot_max_{project.id}",
         )
         max_asset_usage = st.number_input(
-            "Max Asset Usage (global, Intro zählt mit)",
+            "Max Asset Usage (global, Intro zählt nicht)",
             min_value=1, max_value=20, value=settings.max_asset_usage, step=1,
             key=f"cut_plan_max_usage_{project.id}",
+            help="Intro-Nutzungen zählen weder für dieses Limit noch für den Wiederverwendungsabstand.",
         )
         min_asset_reuse_distance_shots = st.number_input(
-            "Min. Wiederverwendungsabstand (Shots)",
+            "Min. Wiederverwendungsabstand (Shots, ohne Intro)",
             min_value=0, max_value=50, value=settings.min_asset_reuse_distance_shots, step=1,
             key=f"cut_plan_min_reuse_distance_{project.id}",
+            help="Intro-Segmente zählen nicht als Nutzung und erzeugen keinen Wiederverwendungsabstand.",
         )
         black_gap_auto_hold_max_sec = st.number_input(
             "Black-Gap Auto-Hold max. (s)",

@@ -679,6 +679,37 @@ def test_max_asset_usage_exceeded_recomputed_from_visual_segments(tmp_path: Path
     assert any(error.type == CUT_PLAN_ERROR_MAX_ASSET_USAGE_EXCEEDED for error in blockers)
 
 
+def test_intro_usage_ignored_for_max_asset_usage_and_reuse_distance(tmp_path: Path) -> None:
+    """Intro-Segmente dürfen weder max_asset_usage noch den Abstand belasten."""
+    project = _make_project(tmp_path)
+    intro_segment = _minimal_segment(segment_id="seg_intro", timeline_in_sec=0.0, timeline_out_sec=5.0)
+    folder_segment = _minimal_segment(segment_id="seg_folder", timeline_in_sec=5.0, timeline_out_sec=10.0)
+    intro_item = _minimal_item(
+        cut_item_id="cut_intro",
+        source_scope="intro",
+        folder_name="",
+        planned_visual_segments=[intro_segment],
+        timeline_start_sec=0.0,
+        timeline_end_sec=5.0,
+    )
+    folder_item = _minimal_item(
+        cut_item_id="cut_folder",
+        planned_visual_segments=[folder_segment],
+        timeline_start_sec=5.0,
+        timeline_end_sec=10.0,
+    )
+    cut_plan = _minimal_cut_plan(
+        project,
+        items=[intro_item, folder_item],
+        settings_snapshot={"max_asset_usage": 1, "min_asset_reuse_distance_shots": 10},
+        asset_usage_summary={"asset_a": 1},
+    )
+    warnings, blockers = validate_asset_usage(project, cut_plan)
+    assert not any(error.type == CUT_PLAN_ERROR_MAX_ASSET_USAGE_EXCEEDED for error in blockers)
+    assert not any(error.type == CUT_PLAN_ERROR_ASSET_REUSE_DISTANCE_TOO_SHORT for error in blockers)
+    assert not any(error.type == "ASSET_USAGE_SUMMARY_MISMATCH" for error in warnings)
+
+
 def test_asset_reuse_distance_too_short_recomputed_from_visual_segments(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     segment_1 = _minimal_segment(segment_id="seg_1", timeline_in_sec=0.0, timeline_out_sec=5.0)

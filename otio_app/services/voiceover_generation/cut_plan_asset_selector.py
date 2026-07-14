@@ -26,6 +26,7 @@ from typing import Any
 
 from otio_app.defaults import (
     AUDIO_SCOPE_FOLDER,
+    AUDIO_SCOPE_INTRO,
     CUT_PLAN_ASSET_SELECTION_BACKUP_USED,
     CUT_PLAN_ASSET_SELECTION_BLOCKED,
     CUT_PLAN_ASSET_SELECTION_PRIMARY_USED,
@@ -126,12 +127,20 @@ class CutPlanAssetLookup:
         return len(folder_names) > 1
 
 
+def _counts_toward_global_asset_usage(item: CutPlanItem) -> bool:
+    """Intro-Assets zählen weder für max_asset_usage noch für den
+    Wiederverwendungsabstand (Nutzervorgabe Juli 2026)."""
+    return item.source_scope != AUDIO_SCOPE_INTRO
+
+
 @dataclass
 class UsageTracker:
-    """Globale Asset-Nutzung über den gesamten Cut Plan — Intro zählt mit
-    (§5). visual_segment_index läuft über ALLE platzierten VisualSegments in
-    Timeline-Reihenfolge, unabhängig davon, zu welchem CutPlanItem sie
-    gehören."""
+    """Globale Asset-Nutzung über Folder-/Satz-Items des Cut Plans.
+
+    Intro zählt NICHT für max_asset_usage und min_asset_reuse_distance_shots
+    (Nutzervorgabe Juli 2026). visual_segment_index läuft über alle
+    platzierten VisualSegments in Timeline-Reihenfolge; Intro-Segmente
+    rücken den Index vor, setzen aber weder Zähler noch last-use."""
 
     count_by_asset_id: dict[str, int] = field(default_factory=dict)
     last_visual_segment_index_by_asset_id: dict[str, int] = field(default_factory=dict)
@@ -600,6 +609,7 @@ def _select_candidates_for_item(
     verwenden)."""
     general_pool = _general_asset_pool(item)
     num_segments = len(segment_durations)
+    counts_toward_usage = _counts_toward_global_asset_usage(item)
 
     chosen_assets: list[CutPlanAssetCandidate] = []
     warnings: list[str] = []
@@ -642,7 +652,12 @@ def _select_candidates_for_item(
                     last_failure_type = failure
                     continue
 
-                usage_failure = _usage_violation(asset_id, usage_tracker, settings, is_continuation=False)
+                # Intro: keine globalen Usage-/Reuse-Regeln (weder prüfen noch zählen).
+                usage_failure = (
+                    _usage_violation(asset_id, usage_tracker, settings, is_continuation=False)
+                    if counts_toward_usage
+                    else None
+                )
                 if usage_failure is not None:
                     warnings.append(usage_failure)
                     last_failure_type = usage_failure
@@ -652,7 +667,7 @@ def _select_candidates_for_item(
                     primary_was_first_choice = True
                 chosen_assets.append(candidate)
                 cumulative_duration_by_asset_id[candidate.asset_id] = segment_duration
-                usage_tracker.register(asset_id, count_as_usage=True)
+                usage_tracker.register(asset_id, count_as_usage=counts_toward_usage)
                 filled = True
                 break
 
@@ -1104,12 +1119,17 @@ def merge_mini_shots_with_next_item(
 
 
 def update_asset_usage_summary(cut_plan: CutPlanDocument) -> dict[str, int]:
-    """Zählt tatsächlich platzierte VisualSegments pro asset_id — Split-/
-    Merge-Fortsetzungen sind hier bewusst NICHT dedupliziert (das Segment ist
-    sichtbar), anders als bei der redaktionellen Usage-Zählung während der
-    Auswahl (siehe UsageTracker.register(count_as_usage=False))."""
+    """Zählt platzierte VisualSegments pro asset_id für max_asset_usage.
+
+    Intro-Items sind ausgenommen (Nutzervorgabe Juli 2026). Split-/Merge-
+    Fortsetzungen in Folder-Items sind bewusst NICHT dedupliziert (das
+    Segment ist sichtbar), anders als bei der redaktionellen Usage-Zählung
+    während der Auswahl (siehe UsageTracker.register(count_as_usage=False)).
+    """
     summary: dict[str, int] = {}
     for item in cut_plan.items:
+        if not _counts_toward_global_asset_usage(item):
+            continue
         for segment in item.planned_visual_segments:
             if not segment.asset_id:
                 continue
