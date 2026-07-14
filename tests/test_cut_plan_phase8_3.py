@@ -391,11 +391,41 @@ def test_missing_supplement_reason_produces_warning(tmp_path: Path) -> None:
 # --- 10-13: Usage-Regeln ---
 
 
-def test_max_asset_usage_applied_globally_intro_counts(tmp_path: Path) -> None:
+def test_max_asset_usage_and_reuse_distance_ignore_intro(tmp_path: Path) -> None:
+    """Intro-Nutzung darf max_asset_usage und Wiederverwendungsabstand nicht
+    verbrauchen — dasselbe Asset darf direkt danach im ersten Ordner-Satz
+    noch einmal verwendet werden, auch bei max_asset_usage=1."""
     project = _make_project(tmp_path)
     _write_inventory(project, FOLDER_A, [("photo_a.jpg", "shared")])
-    # Intro nutzt asset_photo_a, Ordner will es 2 weitere Male (max_asset_usage=2 insgesamt).
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
+    save_cut_plan_settings(
+        project, _settings(project, max_asset_usage=1, min_asset_reuse_distance_shots=10)
+    )
     intro = _intro(primary_asset_id="asset_photo_a")
+    folder = _folder_with_sentence(primary_asset_id="asset_photo_a", duration_sec=5.0)
+    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=intro, folders=[folder])
+    _build_and_save_draft(project, plan)
+    updated = apply_asset_selection_to_draft(project)
+
+    intro_item = next(item for item in updated.items if item.source_scope == "intro")
+    folder_item = next(item for item in updated.items if item.source_scope == "folder")
+    assert intro_item.chosen_asset_id == "asset_photo_a"
+    assert folder_item.chosen_asset_id == "asset_photo_a"
+    assert folder_item.asset_selection_status == CUT_PLAN_ASSET_SELECTION_PRIMARY_USED
+    # Summary zählt nur Folder — Intro erscheint nicht im globalen Usage-Zähler.
+    assert updated.asset_usage_summary.get("asset_photo_a", 0) == 1
+
+
+def test_max_asset_usage_still_applies_across_folder_items(tmp_path: Path) -> None:
+    """Zwischen Folder-Sätzen gelten Usage-Regeln weiterhin hart."""
+    project = _make_project(tmp_path)
+    _write_inventory(project, FOLDER_A, [("photo_a.jpg", "shared")])
+    from otio_app.services.voiceover_generation.cut_plan_settings_service import save_cut_plan_settings
+
+    save_cut_plan_settings(
+        project, _settings(project, max_asset_usage=1, min_asset_reuse_distance_shots=0)
+    )
     folder = ConfirmedFolderPlanItem(
         folder_name=FOLDER_A,
         order_index=1,
@@ -410,20 +440,14 @@ def test_max_asset_usage_applied_globally_intro_counts(tmp_path: Path) -> None:
             AlignmentItem(sentence_id="sentence_002", audio_start_sec=10.0, audio_end_sec=15.0, duration_sec=5.0),
         ],
     )
-    plan = ConfirmedVoiceoverProjectPlan(project_id=project.id, intro=intro, folders=[folder])
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id, intro=ConfirmedIntroPlanItem(), folders=[folder]
+    )
     _build_and_save_draft(project, plan)
     updated = apply_asset_selection_to_draft(project)
 
-    intro_item = next(item for item in updated.items if item.source_scope == "intro")
     folder_items = [item for item in updated.items if item.source_scope == "folder"]
-    assert intro_item.chosen_asset_id == "asset_photo_a"
-    # Erster Folder-Versuch: direkt nach Intro -> Consecutive-Reuse-Verletzung.
-    # Zweiter Versuch (weiter entfernt) sollte scheitern, sobald max_asset_usage (2) erreicht ist.
-    assert updated.asset_usage_summary.get("asset_photo_a", 0) <= 2
-    # Phase A (Nutzervorgabe): ein Item, dessen einzige Kandidaten die
-    # Usage-Regeln verletzen, bleibt NICHT mehr dauerhaft BLOCKED, sondern
-    # wird supplementierbar — die Auto-Resolve-Pipeline kann dafür ein
-    # zusätzliches, distinktes Asset beschaffen.
+    assert updated.asset_usage_summary.get("asset_photo_a", 0) <= 1
     assert not any(item.asset_selection_status == CUT_PLAN_ASSET_SELECTION_BLOCKED for item in folder_items)
     blocked_now_supplement_item = next(
         item for item in folder_items if item.asset_selection_status == CUT_PLAN_ASSET_SELECTION_SUPPLEMENT_REQUIRED
