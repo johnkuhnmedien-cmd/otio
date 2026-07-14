@@ -182,13 +182,10 @@ def _promoted_and_mapped_project(tmp_path: Path) -> Project:
     manifest = save_production_edit_plan_promote_manifest(project, manifest)
     patch = build_voice_folder_mapping_patch(project, manifest)
     save_voice_folder_mapping_patch(project, patch)
+    # mark_entries_confirmed=True bestätigt Dokument + alle Einträge
+    # (Without-VO hat keinen Tab „② Zuordnung“).
     merge_manifest = merge_voice_folder_mapping(project, mark_entries_confirmed=True)
     save_voice_folder_mapping_merge_manifest(project, merge_manifest)
-    # Simuliert den zusätzlichen, bewusst separaten Schritt im Tab
-    # „② Zuordnung“: die GESAMTE Zuordnung (Dokument-Level) explizit
-    # bestätigen — Phase 10.7 setzt dies absichtlich NICHT automatisch.
-    mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
-    save_voice_folder_mapping(project, list(mapping.entries), confirmed=True)
     return project
 
 

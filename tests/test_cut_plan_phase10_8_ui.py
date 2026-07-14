@@ -167,8 +167,6 @@ def _promoted_and_mapped_project(tmp_path: Path) -> Project:
     save_voice_folder_mapping_patch(project, patch)
     merge_manifest = merge_voice_folder_mapping(project, mark_entries_confirmed=True)
     save_voice_folder_mapping_merge_manifest(project, merge_manifest)
-    mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
-    save_voice_folder_mapping(project, list(mapping.entries), confirmed=True)
     return project
 
 

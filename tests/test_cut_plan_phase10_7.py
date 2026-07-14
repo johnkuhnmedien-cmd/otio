@@ -327,6 +327,8 @@ def test_merge_marks_entries_confirmed_when_requested(tmp_path: Path) -> None:
     mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
     entry = next(e for e in mapping.entries if e.folder == FOLDER_A)
     assert entry.confirmed is True
+    assert mapping.confirmed is True
+    assert all(entry.confirmed for entry in mapping.entries)
 
 
 def test_merge_defaults_new_document_confirmed_to_false(tmp_path: Path) -> None:
@@ -334,6 +336,27 @@ def test_merge_defaults_new_document_confirmed_to_false(tmp_path: Path) -> None:
     merge_voice_folder_mapping(project)
     mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
     assert mapping.confirmed is False
+
+
+def test_confirm_voice_folder_mapping_for_otio_export_sets_document_and_entries(
+    tmp_path: Path,
+) -> None:
+    from otio_app.services.voiceover_generation.production_edit_plan_voice_folder_mapping_merge import (
+        confirm_voice_folder_mapping_for_otio_export,
+    )
+
+    project, manifest, patch = _promoted_project_with_patch(tmp_path)
+    merge_voice_folder_mapping(project, mark_entries_confirmed=False)
+    mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
+    assert mapping.confirmed is False
+    assert all(not entry.confirmed for entry in mapping.entries)
+
+    confirmed = confirm_voice_folder_mapping_for_otio_export(project)
+    assert confirmed.confirmed is True
+    assert all(entry.confirmed for entry in confirmed.entries)
+    reloaded = load_voice_folder_mapping(project.voice_folder_mapping_path)
+    assert reloaded is not None
+    assert reloaded.confirmed is True
 
 
 def test_merge_preserves_existing_document_confirmed_true(tmp_path: Path) -> None:
