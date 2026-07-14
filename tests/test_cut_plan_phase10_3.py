@@ -565,6 +565,77 @@ def test_report_pass_in_happy_path(tmp_path: Path) -> None:
     assert report.blockers == []
 
 
+def test_folder_opening_title_does_not_break_shot_count_or_trace_roundtrip(tmp_path: Path) -> None:
+    """Ordner-Titel (V2) dürfen weder SHOT_COUNT_MISMATCH noch
+    MAPPING_TRACE_ROUNDTRIP_FAILED auslösen — sie erzeugen keinen Shot und
+    sind kein Bridge-Visual."""
+    project = _make_project(tmp_path)
+    _write_inventory(project, ["photo_a.jpg", "photo_b.jpg"])
+    intro_audio = _write_audio(project, "intro.mp3")
+    folder_audio = _write_audio(project, "folder.mp3")
+    intro = ConfirmedIntroPlanItem(
+        hook_text="Ein Ort voller Geheimnisse.", audio_path=str(intro_audio), audio_duration_sec=5.0,
+        visual_beats=[IntroHookVisualBeat(hook_beat_id="hook_beat_001", text="x", primary_asset_id="asset_photo_a")],
+        alignment_items=[
+            AlignmentItem(sentence_id="hook_beat_001", audio_start_sec=0.0, audio_end_sec=5.0, duration_sec=5.0)
+        ],
+    )
+    folder = ConfirmedFolderPlanItem(
+        folder_name=FOLDER_A, order_index=1, audio_path=str(folder_audio), audio_duration_sec=5.0,
+        sentence_items=[SentenceItem(sentence_id="sentence_001", text="Ein Satz.", primary_asset_id="asset_photo_b")],
+        alignment_items=[
+            AlignmentItem(sentence_id="sentence_001", audio_start_sec=0.0, audio_end_sec=5.0, duration_sec=5.0)
+        ],
+    )
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id, project_title="Test", status="AUDIO_READY", intro=intro, folders=[folder]
+    )
+    save_confirmed_voiceover_project_plan(project, plan)
+    save_cut_plan_settings(
+        project,
+        CutPlanSettings(project_id=project.id, folder_title_enabled=True, folder_title_duration_sec=3.0),
+    )
+    draft = build_cut_plan_draft(project)
+    save_cut_plan_draft(project, draft)
+    apply_asset_selection_to_draft(project)
+    validate_cut_plan_draft(project)
+    confirm_cut_plan(project)
+    edit_plan = build_edit_plan_draft_from_confirmed_cut_plan(project)
+    edit_plan = save_edit_plan_bridge_draft(project, edit_plan)
+    audio_plan = build_bridge_audio_plan_from_confirmed_cut_plan(project)
+    save_bridge_audio_plan(project, audio_plan)
+    confirmed_cut_plan = load_confirmed_cut_plan(project)
+    trace = build_edit_plan_bridge_trace(project, confirmed_cut_plan, edit_plan)
+    save_edit_plan_bridge_trace(project, trace)
+    validate_edit_plan_bridge(project, edit_plan)
+    confirm_edit_plan_bridge(project)
+    build_and_save_production_edit_plan_staging(project)
+
+    folder_section_id = "001_Grand_Canyon"
+    document = load_staged_edit_plan(project, folder_section_id)
+    assert document is not None
+    titles = [item for item in document.timeline_items if item.type == "opening_title"]
+    assert len(titles) == 1
+    assert titles[0].track == "V2"
+    assert titles[0].timeline_in_sec == pytest.approx(0.0)
+    assert len(document.shots) == sum(1 for item in document.timeline_items if item.type != "opening_title")
+
+    trace = load_production_edit_plan_mapping_trace(project)
+    assert trace is not None
+    title_entries = [
+        entry
+        for entry in trace.entries
+        if entry.resulting_timeline_item_id == titles[0].timeline_item_id
+    ]
+    assert len(title_entries) == 1
+    assert title_entries[0].mapping_reason == "generated_folder_opening_title"
+
+    report = validate_production_edit_plan_staging(project)
+    assert not any(b.type == PRODUCTION_EDIT_PLAN_ERROR_SHOT_COUNT_MISMATCH for b in report.blockers)
+    assert not any(b.type == PRODUCTION_EDIT_PLAN_ERROR_MAPPING_TRACE_ROUNDTRIP_FAILED for b in report.blockers)
+    assert report.status == PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_PASS
+
+
 def test_report_warning_when_only_warnings() -> None:
     warning = ProductionEditPlanValidationError(type="SOME_WARNING", severity="WARNING")
     assert classify_production_edit_plan_validation_status([warning], []) == PRODUCTION_EDIT_PLAN_VALIDATION_STATUS_WARNING

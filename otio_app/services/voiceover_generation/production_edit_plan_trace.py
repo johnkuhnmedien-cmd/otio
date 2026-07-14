@@ -68,8 +68,48 @@ def build_production_edit_plan_mapping_trace(
         if document is None:
             continue
 
+        audio_plan_item = _matching_audio_plan_item(section, bridge_audio_plan)
+        # Section-Offset für generierte Ordner-Titel (kein Bridge-Eintrag):
+        # original = local + offset, analog zu Bridge-Visuals/Audio.
+        section_offset = 0.0
+        if document.voiceover is not None and audio_plan_item is not None:
+            section_offset = audio_plan_item.timeline_in_sec - document.voiceover.timeline_start_sec
+        else:
+            for local_item in document.timeline_items:
+                if local_item.type == "opening_title":
+                    continue
+                bridge_entry = bridge_trace_by_timeline_item_id.get(local_item.timeline_item_id)
+                if bridge_entry is not None:
+                    section_offset = bridge_entry.timeline_in_sec - local_item.timeline_in_sec
+                    break
+
         for local_item in document.timeline_items:
             bridge_entry = bridge_trace_by_timeline_item_id.get(local_item.timeline_item_id)
+            if local_item.type == "opening_title":
+                entries.append(
+                    ProductionEditPlanMappingTraceEntry(
+                        trace_id=f"prod_trace_{local_item.timeline_item_id}",
+                        source_bridge_timeline_item_id=local_item.timeline_item_id,
+                        source_cut_item_id="",
+                        source_visual_segment_id="",
+                        resulting_staging_section_id=section.staging_section_id,
+                        resulting_production_section_id=section.production_section_id,
+                        resulting_edit_plan_path=section.staged_edit_plan_path,
+                        resulting_timeline_item_id=local_item.timeline_item_id,
+                        folder_name=section.folder_name,
+                        is_intro=section.is_intro,
+                        original_timeline_in_sec=local_item.timeline_in_sec + section_offset,
+                        original_timeline_out_sec=local_item.timeline_out_sec + section_offset,
+                        local_timeline_in_sec=local_item.timeline_in_sec,
+                        local_timeline_out_sec=local_item.timeline_out_sec,
+                        asset_id=local_item.asset_id,
+                        asset_path=local_item.resolved_media_path,
+                        mapping_reason="generated_folder_opening_title",
+                        warnings=list(local_item.warnings),
+                    )
+                )
+                continue
+
             entries.append(
                 ProductionEditPlanMappingTraceEntry(
                     trace_id=f"prod_trace_{local_item.timeline_item_id}",
@@ -98,7 +138,6 @@ def build_production_edit_plan_mapping_trace(
             )
 
         if document.voiceover is not None:
-            audio_plan_item = _matching_audio_plan_item(section, bridge_audio_plan)
             entries.append(
                 ProductionEditPlanMappingTraceEntry(
                     trace_id=f"prod_trace_audio_{section.staging_section_id}",
