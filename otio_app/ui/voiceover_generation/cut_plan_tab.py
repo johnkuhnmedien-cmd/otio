@@ -283,6 +283,7 @@ from otio_app.services.voiceover_generation.production_edit_plan_promote_execute
 )
 from otio_app.services.voiceover_generation.production_edit_plan_voice_folder_mapping_merge import (
     can_merge_voice_folder_mapping,
+    confirm_voice_folder_mapping_for_otio_export,
     is_voice_folder_mapping_merge_manifest_stale,
     load_voice_folder_mapping_merge_manifest,
     merge_voice_folder_mapping,
@@ -3232,8 +3233,8 @@ def _render_voice_folder_mapping_merge(project: Project) -> None:
     st.warning("Dieser Schritt schreibt nach `voice_folder_mapping.json`.")
     st.caption("Konflikte (NEEDS_REVIEW) müssen explizit aufgelöst werden, bevor der Merge ausgeführt werden kann.")
     st.caption(
-        "Die Gesamt-Zuordnung wird dadurch NICHT automatisch als vollständig bestätigt markiert — das bleibt "
-        "Aufgabe des Tabs „② Zuordnung“."
+        "Für OTIO Export Readiness muss die Zuordnung bestätigt sein (Dokument + Einträge). "
+        "Im Without-VO-Workflow geschieht das hier — es gibt keinen Tab „② Zuordnung“."
     )
 
     patch = load_voice_folder_mapping_patch(project)
@@ -3292,8 +3293,8 @@ def _render_voice_folder_mapping_merge(project: Project) -> None:
                 folder_resolutions[entry.folder_name] = VOICE_FOLDER_MAPPING_MERGE_RESOLUTION_SKIP
 
     mark_entries_confirmed = st.checkbox(
-        "Übernommene Einträge zusätzlich als bestätigt markieren (überspringt die manuelle Prüfung im Tab "
-        "„② Zuordnung“).",
+        "Zuordnung vollständig bestätigen (Dokument + alle Einträge — nötig für OTIO Export Readiness)",
+        value=True,
         key=f"voice_folder_mapping_merge_mark_confirmed_{project.id}",
     )
 
@@ -3322,7 +3323,27 @@ def _render_voice_folder_mapping_merge(project: Project) -> None:
             st.success(
                 f"Merge abgeschlossen: {manifest.added_count} neu hinzugefügt, "
                 f"{manifest.updated_count} aktualisiert, {manifest.skipped_count} übersprungen. "
-                f"Backup: `{manifest.backup_path or '—'}`."
+                f"Backup: `{manifest.backup_path or '—'}`. "
+                + (
+                    "Zuordnung ist bestätigt."
+                    if mark_entries_confirmed
+                    else "Zuordnung noch nicht bestätigt — Button unten nutzen."
+                )
+            )
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+    if st.button(
+        "Bestehende Zuordnung für OTIO bestätigen",
+        key=f"voice_folder_mapping_confirm_existing_{project.id}",
+        help="Setzt confirmed=true auf Dokument und allen Einträgen einer bereits geschriebenen "
+        "voice_folder_mapping.json — ohne erneuten Merge.",
+    ):
+        try:
+            document = confirm_voice_folder_mapping_for_otio_export(project)
+            st.success(
+                f"Zuordnung bestätigt: {len(document.entries)} Einträge, Dokument confirmed=true."
             )
             st.rerun()
         except ValueError as exc:
@@ -3366,7 +3387,8 @@ def _render_voice_folder_mapping_merge(project: Project) -> None:
         ]
         st.dataframe(rows, use_container_width=True, hide_index=True)
         st.caption(
-            "Bitte im Tab „② Zuordnung“ prüfen, ob die Gesamt-Zuordnung weiterhin vollständig bestätigt ist."
+            "Wenn OTIO Readiness noch „mapping bestätigt: Nein“ zeigt: "
+            "„Bestehende Zuordnung für OTIO bestätigen“ oben klicken."
         )
 
 

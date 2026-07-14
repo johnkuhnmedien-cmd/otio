@@ -17,14 +17,14 @@ EditPlan-Pipeline, keine automatische Neuplanung, keine automatische
 Supplement-Suche. Verändert NIEMALS `_otio/edit_plan/`, `_otio/exports/`
 oder `_otio/supplement/`, keine Originalmedien, keine Audio-Dateien.
 
-Konfirmations-Design (bewusst konservativ):
-- Das Dokument-Level-Flag `confirmed` von `voice_folder_mapping.json` wird
-  NICHT automatisch auf True gesetzt — ein bereits bestehender Wert bleibt
-  erhalten, eine neu angelegte Datei startet mit `confirmed=False`. Die
-  bewusste Vollbestätigung der gesamten Zuordnung bleibt Aufgabe des
-  bestehenden „② Zuordnung“-Tabs.
-- Pro Eintrag wird `confirmed` nur gesetzt, wenn der Aufrufer
-  `mark_entries_confirmed=True` explizit übergibt (Default False)."""
+Konfirmations-Design:
+- Mit `mark_entries_confirmed=True` werden Dokument-Level UND alle Einträge
+  auf `confirmed=True` gesetzt — nötig für den Without-VO-/Cut-Plan-Workflow,
+  der keinen Tab „② Zuordnung“ hat.
+- Ohne Flag bleibt das Verhalten konservativ: Dokument-Level unverändert
+  (neu angelegt: False), neu geschriebene Einträge `confirmed=False`.
+- `confirm_voice_folder_mapping_for_otio_export()` bestätigt eine bereits
+  geschriebene Mapping-Datei nachträglich (ohne erneuten Patch-Merge)."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ from otio_app.project_layout import (
     get_voice_folder_mapping_merge_backup_run_dir,
     get_voice_folder_mapping_merge_manifest_path,
 )
-from otio_app.services.voice_folder_matcher import load_voice_folder_mapping
+from otio_app.services.voice_folder_matcher import load_voice_folder_mapping, save_voice_folder_mapping
 from otio_app.services.voiceover_generation.llm_trace_service import content_hash, content_hash_of_model
 from otio_app.services.voiceover_generation.production_edit_plan_promote_execute import (
     load_production_edit_plan_promote_manifest,
@@ -71,6 +71,7 @@ from otio_app.services.voiceover_generation.production_edit_plan_voice_folder_ma
 __all__ = [
     "can_merge_voice_folder_mapping",
     "merge_voice_folder_mapping",
+    "confirm_voice_folder_mapping_for_otio_export",
     "save_voice_folder_mapping_merge_manifest",
     "load_voice_folder_mapping_merge_manifest",
     "is_voice_folder_mapping_merge_manifest_stale",
@@ -160,7 +161,7 @@ def _backup_existing_voice_folder_mapping(project: Project, merge_run_id: str, r
     OSError/ValueError, wenn das Backup nicht byte-identisch verifiziert
     werden kann — der Aufrufer MUSS in diesem Fall die Datei unverändert
     lassen (kein Write)."""
-    backup_dir = get_voice_folder_mapping_merge_backup_run_dir(project.work_dir_path, merge_run_id)
+    backup_dir = get_voice_folder_mapping_merge_backup_run_dir(project.language_work_dir_path, merge_run_id)
     backup_dir.mkdir(parents=True, exist_ok=True)
 
     backup_hash = content_hash(raw_text)
@@ -334,9 +335,18 @@ def merge_voice_folder_mapping(
                     )
                 )
 
+    if mark_entries_confirmed:
+        # Without-VO hat keinen Tab „② Zuordnung“ — Vollbestätigung hier.
+        final_entries = [
+            entry.model_copy(update={"confirmed": True}) for entry in final_entries
+        ]
+        document_confirmed = True
+    else:
+        document_confirmed = existing_document_confirmed
+
     document = VoiceFolderMappingDocument(
         project_id=project.id,
-        confirmed=existing_document_confirmed,
+        confirmed=document_confirmed,
         entries=final_entries,
     )
     serialized = document.model_dump_json(indent=2)
@@ -360,18 +370,35 @@ def merge_voice_folder_mapping(
     )
 
 
+def confirm_voice_folder_mapping_for_otio_export(project: Project) -> VoiceFolderMappingDocument:
+    """Bestätigt eine bereits geschriebene voice_folder_mapping.json vollständig
+    (Dokument + alle Einträge). Without-VO-Ersatz für Tab „② Zuordnung“.
+
+    Wirft ValueError, wenn die Datei fehlt oder leer ist."""
+    mapping = load_voice_folder_mapping(project.voice_folder_mapping_path)
+    if mapping is None or not mapping.entries:
+        raise ValueError(
+            "Keine voice_folder_mapping.json mit Einträgen vorhanden — bitte zuerst "
+            "„Voice Folder Mapping aktualisieren“ ausführen."
+        )
+    confirmed_entries = [
+        entry.model_copy(update={"confirmed": True}) for entry in mapping.entries
+    ]
+    return save_voice_folder_mapping(project, confirmed_entries, confirmed=True)
+
+
 def save_voice_folder_mapping_merge_manifest(
     project: Project, manifest: VoiceFolderMappingMergeManifest
 ) -> VoiceFolderMappingMergeManifest:
     normalized = manifest.model_copy(update={"project_id": project.id})
-    path = get_voice_folder_mapping_merge_manifest_path(project.work_dir_path)
+    path = get_voice_folder_mapping_merge_manifest_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")
     return normalized
 
 
 def load_voice_folder_mapping_merge_manifest(project: Project) -> VoiceFolderMappingMergeManifest | None:
-    path = get_voice_folder_mapping_merge_manifest_path(project.work_dir_path)
+    path = get_voice_folder_mapping_merge_manifest_path(project.language_work_dir_path)
     if not path.is_file():
         return None
     try:
@@ -383,8 +410,8 @@ def load_voice_folder_mapping_merge_manifest(project: Project) -> VoiceFolderMap
 
 def is_voice_folder_mapping_merge_manifest_stale(project: Project, manifest: VoiceFolderMappingMergeManifest) -> bool:
     """True, wenn sich der Mapping Patch seit diesem Merge-Lauf geändert hat
-    oder wenn `voice_folder_mapping.json` seither extern verändert wurde
-    (z. B. über den bestehenden „② Zuordnung“-Tab). Reine Lesefunktion."""
+    oder wenn `voice_folder_mapping.json` seither extern verändert wurde.
+    Reine Lesefunktion."""
     patch = load_voice_folder_mapping_patch(project)
     if patch is None or content_hash_of_model(patch) != manifest.source_patch_hash:
         return True
