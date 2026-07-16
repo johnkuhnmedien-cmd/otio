@@ -217,10 +217,13 @@ def create_project(
     finally:
         conn.close()
 
-    # Language-Scope `_otio/{LANG}/` sofort anlegen (auch wenn _otio schon existiert).
-    from otio_app.services.language_scope import ensure_language_scope
+    # Language-Scope `_otio/{LANG}/` nur für Classic-/Without-VO-Pipelines.
+    # Discovery V2 schreibt ausschließlich unter `_otio_v2/` und legt `_otio/`
+    # bei der Projektanlage nicht an.
+    if not project.is_discovery_v2:
+        from otio_app.services.language_scope import ensure_language_scope
 
-    ensure_language_scope(project)
+        ensure_language_scope(project)
     return project
 
 

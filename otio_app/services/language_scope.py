@@ -157,6 +157,13 @@ def migrate_language_scope(project: Project) -> Path:
 
     Gibt den Language-Work-Dir zurück.
     """
+    # Discovery V2 hat keinen Classic-Language-Scope unter `_otio/`.
+    # Kein mkdir, kein Marker, keine Migration — nur Pfadauflösung.
+    if project.is_discovery_v2:
+        from otio_app.discovery_v2.paths import get_discovery_v2_root
+
+        return get_discovery_v2_root(project.project_root_path)
+
     work_dir = project.work_dir_path
     work_dir.mkdir(parents=True, exist_ok=True)
     lang = language_folder_name(project.language)

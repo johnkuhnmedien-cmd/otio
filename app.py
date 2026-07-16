@@ -139,19 +139,22 @@ def _show_saved_project(saved) -> None:
         "language": saved.language,
         "project_root": saved.project_root,
         "work_dir": saved.work_dir,
-        "language_work_dir": str(saved.language_work_dir_path),
         "alle_asset_ordner": saved.asset_subdir_names,
         "ausgewaehlte_ordner": saved.selected_asset_subdirs,
-        "inventory_dir": str(saved.inventory_dir),
-        "legacy_inventory_path": str(saved.inventory_path),
         "frames_per_shot": saved.frames_per_shot,
     }
-    if saved.is_without_voiceover:
-        details["voiceover_generation_dir"] = str(saved.voiceover_generation_dir)
+    if saved.is_discovery_v2:
+        details["discovery_v2_root"] = str(saved.discovery_v2_root)
     else:
-        details["voice_over_ordner"] = saved.voice_over_subdir
-        details["voice_over_pfad"] = str(saved.voice_over_dir)
-        details["voice_analysis_path"] = str(saved.voice_analysis_path)
+        details["language_work_dir"] = str(saved.language_work_dir_path)
+        details["inventory_dir"] = str(saved.inventory_dir)
+        details["legacy_inventory_path"] = str(saved.inventory_path)
+        if saved.is_without_voiceover:
+            details["voiceover_generation_dir"] = str(saved.voiceover_generation_dir)
+        else:
+            details["voice_over_ordner"] = saved.voice_over_subdir
+            details["voice_over_pfad"] = str(saved.voice_over_dir)
+            details["voice_analysis_path"] = str(saved.voice_analysis_path)
     st.json(details)
 
 
@@ -164,15 +167,17 @@ def _finalize_project_save(
         st.error("Bitte mindestens einen Ordner auswählen.")
         return
 
-    work_path = normalize_path(project_data.work_dir)
-    if not work_path.exists():
-        st.session_state[PENDING_KEY] = {
-            "project": project_data.model_dump(mode="json"),
-            "available_assets": available_assets,
-            "selected_asset_subdirs": selected_assets,
-        }
-        st.session_state.pop(PREVIEW_KEY, None)
-        return
+    # Discovery V2 legt keinen Classic-Arbeitsordner `_otio/` an.
+    if project_data.project_mode != ProjectMode.DISCOVERY_V2:
+        work_path = normalize_path(project_data.work_dir)
+        if not work_path.exists():
+            st.session_state[PENDING_KEY] = {
+                "project": project_data.model_dump(mode="json"),
+                "available_assets": available_assets,
+                "selected_asset_subdirs": selected_assets,
+            }
+            st.session_state.pop(PREVIEW_KEY, None)
+            return
 
     try:
         saved = create_project(
@@ -193,9 +198,12 @@ def _save_pending_project() -> None:
     if raw is None:
         return
     project_data = ProjectCreate.model_validate(raw["project"])
-    work_path = normalize_path(project_data.work_dir)
-    if not work_path.exists():
-        create_work_dir(work_path)
+    # Discovery darf den Classic-Arbeitsordner nie anlegen (Schutz, falls
+    # PENDING_KEY fälschlich gesetzt wurde).
+    if project_data.project_mode != ProjectMode.DISCOVERY_V2:
+        work_path = normalize_path(project_data.work_dir)
+        if not work_path.exists():
+            create_work_dir(work_path)
     try:
         saved = create_project(
             project_data,
@@ -604,8 +612,11 @@ def render_project_list_page() -> None:
                 st.write(f"**ID:** `{project.id}`")
                 st.write(f"**Projektmodus:** {PROJECT_MODE_LABELS[project.project_mode.value]}")
                 st.write(f"**Projektordner:** `{project.project_root}`")
-                st.write(f"**Arbeitsordner:** `{project.work_dir}`")
-                if not project.is_without_voiceover:
+                if project.is_discovery_v2:
+                    st.write(f"**Discovery-Artefaktwurzel:** `{project.discovery_v2_root}`")
+                else:
+                    st.write(f"**Arbeitsordner:** `{project.work_dir}`")
+                if project.project_mode == ProjectMode.WITH_VOICEOVER:
                     st.write(f"**🎙️ Voice-over-Ordner:** `{project.voice_over_subdir}`")
                     st.write(f"**🎙️ Voice-over Audios:** `{project.voice_over_dir}`")
                 st.write(
@@ -624,10 +635,16 @@ def render_project_list_page() -> None:
                         else "—"
                     )
                 )
-                st.write(
-                    f"**Geplante Ausgaben:** `{project.inventory_dir}/<Ordner>.json`, "
-                    f"`{project.voice_analysis_path}`"
-                )
+                if project.is_discovery_v2:
+                    st.write(
+                        f"**Artefakte:** ausschließlich unter "
+                        f"`{project.discovery_v2_root}`"
+                    )
+                else:
+                    st.write(
+                        f"**Geplante Ausgaben:** `{project.inventory_dir}/<Ordner>.json`, "
+                        f"`{project.voice_analysis_path}`"
+                    )
                 st.write(
                     f"**Vorgaben:** {project.language}, {project.frames_per_shot} Frames/Shot, "
                     f"{project.fps} fps, {project.width}×{project.height}, "
