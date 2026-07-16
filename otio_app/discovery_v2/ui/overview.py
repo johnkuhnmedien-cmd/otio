@@ -1,4 +1,4 @@
-"""Streamlit-Platzhalterseiten für Discovery V2."""
+"""Streamlit-Platzhalterseiten für Discovery V2 (Übersicht / Einstellungen)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from otio_app.ui.navigation import ACTIVE_PROJECT_KEY
 from otio_app.ui.project_context import render_project_selector
 
 
-def _active_discovery_project() -> Project | None:
+def active_discovery_project() -> Project | None:
     project = render_project_selector("Projekt")
     if project is None:
         return None
@@ -27,7 +27,7 @@ def _active_discovery_project() -> Project | None:
 def render_discovery_overview_page() -> None:
     """Erste Discovery-V2-Seite — nur Status, keine Pipeline-Aktionen."""
     st.title("Discovery V2")
-    project = _active_discovery_project()
+    project = active_discovery_project()
     if project is None:
         return
 
@@ -47,7 +47,7 @@ def render_discovery_overview_page() -> None:
 def render_discovery_settings_page() -> None:
     """Platzhalter für spätere Discovery-Projekteinstellungen."""
     st.title("Projekteinstellungen")
-    project = _active_discovery_project()
+    project = active_discovery_project()
     if project is None:
         return
 
