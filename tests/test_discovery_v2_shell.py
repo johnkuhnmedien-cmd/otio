@@ -327,3 +327,229 @@ def test_unique_index_includes_project_mode(temp_db_path: Path) -> None:
         assert "idx_projects_root_language" not in names
     finally:
         conn.close()
+
+
+def test_migration_case_a_legacy_index_to_mode_index(temp_db_path: Path) -> None:
+    """Fall A: alte DB mit idx_projects_root_language + with_voiceover-Projekt."""
+    import sqlite3
+
+    legacy = sqlite3.connect(temp_db_path)
+    try:
+        legacy.executescript(
+            """
+            CREATE TABLE projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                project_root TEXT NOT NULL,
+                work_dir TEXT NOT NULL,
+                project_mode TEXT NOT NULL DEFAULT 'with_voiceover',
+                voice_over_subdir TEXT NOT NULL DEFAULT 'Voice over',
+                language TEXT NOT NULL DEFAULT 'de',
+                frames_per_shot INTEGER NOT NULL DEFAULT 3,
+                fps REAL NOT NULL DEFAULT 25.0,
+                width INTEGER NOT NULL DEFAULT 3840,
+                height INTEGER NOT NULL DEFAULT 2160,
+                aspect_ratio TEXT NOT NULL DEFAULT '16:9',
+                target_platform TEXT NOT NULL DEFAULT 'YouTube',
+                status TEXT NOT NULL DEFAULT 'DRAFT',
+                asset_subdir_names TEXT NOT NULL DEFAULT '[]',
+                selected_asset_subdirs TEXT NOT NULL DEFAULT '[]',
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX idx_projects_root_language
+                ON projects(project_root, lower(language));
+            INSERT INTO projects (
+                id, name, project_root, work_dir, project_mode, language,
+                created_at, updated_at
+            ) VALUES (
+                'legacy-1', 'Classic Legacy', '/tmp/legacy-root',
+                '/tmp/legacy-root/_otio', 'with_voiceover', 'de', 't', 't'
+            );
+            """
+        )
+        legacy.commit()
+    finally:
+        legacy.close()
+
+    conn = get_connection(temp_db_path)
+    try:
+        row = conn.execute(
+            "SELECT id, project_mode, name FROM projects WHERE id = 'legacy-1'"
+        ).fetchone()
+        assert row is not None
+        assert row["project_mode"] == "with_voiceover"
+        assert row["name"] == "Classic Legacy"
+        names = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='projects'"
+            ).fetchall()
+        }
+        assert "idx_projects_root_language_mode" in names
+        assert "idx_projects_root_language" not in names
+    finally:
+        conn.close()
+
+
+def test_migration_case_b_idempotent(temp_db_path: Path) -> None:
+    """Fall B: Migration zweimal ausführen — stabil."""
+    conn1 = get_connection(temp_db_path)
+    names1 = {
+        r[0]
+        for r in conn1.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='projects'"
+        ).fetchall()
+    }
+    count1 = conn1.execute("SELECT COUNT(*) AS c FROM projects").fetchone()["c"]
+    conn1.close()
+
+    conn2 = get_connection(temp_db_path)
+    names2 = {
+        r[0]
+        for r in conn2.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='projects'"
+        ).fetchall()
+    }
+    count2 = conn2.execute("SELECT COUNT(*) AS c FROM projects").fetchone()["c"]
+    conn2.close()
+
+    assert names1 == names2
+    assert "idx_projects_root_language_mode" in names2
+    assert count1 == count2 == 0
+
+
+def test_migration_case_c_three_modes_parallel(
+    temp_project_layout: dict[str, Path],
+    temp_db_path: Path,
+) -> None:
+    """Fall C: with_voiceover + without_voiceover + discovery_v2 am selben Root+Lang."""
+    root = str(temp_project_layout["project_root"])
+    assets = ["Grand Canyon"]
+    modes = (
+        (ProjectMode.WITH_VOICEOVER, "Classic"),
+        (ProjectMode.WITHOUT_VOICEOVER, "WithoutVO"),
+        (ProjectMode.DISCOVERY_V2, "Discovery"),
+    )
+    ids = []
+    for mode, name in modes:
+        project = create_project(
+            ProjectCreate(
+                name=name,
+                project_root=root,
+                project_mode=mode,
+                language="de",
+            ),
+            db_path=temp_db_path,
+            asset_subdir_names=assets,
+            selected_asset_subdirs=assets,
+        )
+        ids.append(project.id)
+    assert len(set(ids)) == 3
+    for mode, _name in modes:
+        found = find_project_by_root_and_language(
+            root, "de", db_path=temp_db_path, project_mode=mode
+        )
+        assert found is not None
+        assert found.project_mode == mode
+
+
+def test_migration_case_e_multiple_existing_projects_preserved(
+    temp_project_layout: dict[str, Path],
+    temp_db_path: Path,
+    tmp_path: Path,
+) -> None:
+    """Fall E: mehrere Classic-/Without-VO-Projekte bleiben erhalten."""
+    root_a = temp_project_layout["project_root"]
+    root_b = tmp_path / "OtherProj"
+    (root_b / "Voice over" / "DE").mkdir(parents=True)
+    (root_b / "AssetA").mkdir()
+    (root_b / "_otio").mkdir()
+
+    a = create_project(
+        ProjectCreate(
+            name="USA Classic",
+            project_root=str(root_a),
+            project_mode=ProjectMode.WITH_VOICEOVER,
+            language="de",
+        ),
+        db_path=temp_db_path,
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    b = create_project(
+        ProjectCreate(
+            name="USA Without",
+            project_root=str(root_a),
+            project_mode=ProjectMode.WITHOUT_VOICEOVER,
+            language="en",
+        ),
+        db_path=temp_db_path,
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    c = create_project(
+        ProjectCreate(
+            name="Other Classic",
+            project_root=str(root_b),
+            project_mode=ProjectMode.WITH_VOICEOVER,
+            language="de",
+        ),
+        db_path=temp_db_path,
+        asset_subdir_names=["AssetA"],
+        selected_asset_subdirs=["AssetA"],
+    )
+
+    # Migration erneut anstoßen
+    conn = get_connection(temp_db_path)
+    try:
+        rows = conn.execute(
+            "SELECT id, name, project_mode, language FROM projects ORDER BY name"
+        ).fetchall()
+        assert len(rows) == 3
+        by_id = {row["id"]: row for row in rows}
+        assert by_id[a.id]["project_mode"] == "with_voiceover"
+        assert by_id[b.id]["project_mode"] == "without_voiceover"
+        assert by_id[c.id]["project_mode"] == "with_voiceover"
+        assert by_id[b.id]["language"] == "en"
+    finally:
+        conn.close()
+
+
+def test_path_no_double_otio_v2(tmp_path: Path) -> None:
+    project_root = tmp_path / "Mein Projekt"
+    project_root.mkdir()
+    root = get_discovery_v2_root(project_root)
+    assert root == project_root.resolve() / "_otio_v2"
+    # Exakt ein Path-Segment `_otio_v2` — kein `_otio_v2/_otio_v2`.
+    assert root.parts[-1] == "_otio_v2"
+    assert root.parts[-2] != "_otio_v2"
+
+
+def test_path_spaces_and_umlauts(tmp_path: Path) -> None:
+    project_root = tmp_path / "Übersee Medien"
+    project_root.mkdir()
+    root = get_discovery_v2_root(project_root)
+    nested = root / "ordner äöü" / "datei.json"
+    assert is_under_discovery_v2(nested, project_root) is True
+    assert assert_path_is_under_discovery_v2(nested, project_root) == nested.resolve()
+    classic = project_root / "_otio" / "x.json"
+    with pytest.raises(ValueError, match="_otio"):
+        assert_path_is_under_discovery_v2(classic, project_root)
+
+
+def test_otio_v2_backup_not_reserved_as_system_folder(tmp_path: Path) -> None:
+    """Nur exakter Name `_otio_v2` ist reserviert — nicht `_otio_v2_backup`."""
+    from otio_app.project_layout import classify_subdirectories_no_voiceover
+
+    project_root = tmp_path / "proj"
+    work_dir = project_root / "_otio"
+    project_root.mkdir()
+    work_dir.mkdir()
+    names = ["_otio", "_otio_v2", "_otio_v2_backup", "Grand Canyon"]
+    scan = classify_subdirectories_no_voiceover(names, work_dir, project_root)
+    assert "_otio" in scan.system_folder_names
+    assert "_otio_v2" in scan.system_folder_names
+    assert "_otio_v2_backup" in scan.asset_subdir_names
+    assert "Grand Canyon" in scan.asset_subdir_names
