@@ -4,6 +4,12 @@ from __future__ import annotations
 
 import streamlit as st
 
+from otio_app.discovery_v2.application.asset_registry_service import (
+    AssetRegistryServiceError,
+    can_import_selection,
+    get_registry_summary,
+    import_confirmed_selection,
+)
 from otio_app.discovery_v2.application.inventory_service import (
     InventoryServiceError,
     get_latest_inventory,
@@ -19,6 +25,7 @@ from otio_app.discovery_v2.application.selection_service import (
     set_group_selected,
     summarize_selection,
 )
+from otio_app.discovery_v2.domain.asset_registry import RegistryImportStatus
 from otio_app.discovery_v2.domain.inventory import InventorySnapshot, MediaKind
 from otio_app.discovery_v2.domain.selection import (
     InventorySelection,
@@ -37,6 +44,8 @@ _SESSION_SELECTION_KEY = "discovery_v2_confirmed_selection"
 _SESSION_SELECTION_STATUS_KEY = "discovery_v2_selection_status"
 _SESSION_SELECTION_WARNING_KEY = "discovery_v2_selection_warning"
 _SESSION_SELECTION_ERROR_KEY = "discovery_v2_selection_error"
+_SESSION_REGISTRY_RESULT_KEY = "discovery_v2_registry_import_result"
+_SESSION_REGISTRY_ERROR_KEY = "discovery_v2_registry_error"
 
 
 def _format_dt(value) -> str:
@@ -259,6 +268,109 @@ def _render_selection_editor(
     return st.session_state.get(_SESSION_DRAFT_KEY, draft)
 
 
+def _render_registry_section(
+    project,
+    snapshot: InventorySnapshot,
+    selection: InventorySelection | None,
+    status: SelectionStatus | None,
+) -> None:
+    st.divider()
+    st.subheader("Asset Registry")
+    st.caption(
+        "Die Registry speichert Metadaten der bestätigten Quellmedien. "
+        "Es werden keine Medien kopiert, gehasht oder technisch geprüft. "
+        "Es wird noch kein Working Media erzeugt."
+    )
+
+    reg_error = st.session_state.get(_SESSION_REGISTRY_ERROR_KEY)
+    if reg_error:
+        st.error(reg_error)
+
+    if selection is None or status is None:
+        st.info("Bestätige zuerst deine Medienauswahl.")
+        return
+
+    if status == SelectionStatus.STALE:
+        st.warning(
+            "Die bestätigte Auswahl gehört zu einer älteren Bestandsaufnahme. "
+            "Bitte prüfe und bestätige den aktuellen Bestand erneut."
+        )
+        return
+
+    ok, reason, blocked = can_import_selection(
+        project, snapshot=snapshot, selection=selection, status=status
+    )
+    if not ok:
+        if blocked == RegistryImportStatus.STALE_SELECTION:
+            st.warning(reason or "Auswahl ist veraltet.")
+        else:
+            st.info(reason or "Import derzeit nicht möglich.")
+        return
+
+    st.write(f"**Selection-ID:** `{selection.selection_id}`")
+    st.write(f"**Scan-ID:** `{selection.scan_id}`")
+    st.write(f"**Ausgewählte Medien:** {selection.selected_media_count}")
+    st.write(
+        "**Quellgruppen:** "
+        + (", ".join(selection.selected_source_groups) or "—")
+    )
+    st.write("**Registry-Pfad:** `_otio_v2/registry/assets.sqlite3`")
+
+    summary = get_registry_summary(project)
+    if summary.get("exists"):
+        st.caption(
+            f"Bereits registrierte Assets in dieser Registry: {summary['asset_count']}"
+        )
+
+    st.info(
+        "Beim Übernehmen werden **nur Metadaten** registriert. "
+        "Keine Kopie, keine Transkodierung, keine technische Medienprüfung, "
+        "kein Working Media."
+    )
+
+    if st.button(
+        "Auswahl in Asset Registry übernehmen",
+        type="primary",
+        key="discovery_v2_registry_import_btn",
+    ):
+        try:
+            result = import_confirmed_selection(project)
+            st.session_state[_SESSION_REGISTRY_RESULT_KEY] = result
+            st.session_state[_SESSION_REGISTRY_ERROR_KEY] = None
+        except (AssetRegistryServiceError, InventoryServiceError) as exc:
+            st.session_state[_SESSION_REGISTRY_ERROR_KEY] = str(exc)
+            st.error(str(exc))
+            return
+
+    result = st.session_state.get(_SESSION_REGISTRY_RESULT_KEY)
+    if result is None:
+        return
+
+    if result.status == RegistryImportStatus.IMPORTED:
+        st.success(
+            f"Import erfolgreich. Import-ID `{result.import_id}` · "
+            f"{result.asset_count} Assets "
+            f"(neu {result.new_asset_count}, wiederverwendet {result.reused_asset_count}). "
+            "Die Medien wurden noch nicht technisch geprüft oder kopiert."
+        )
+    elif result.status == RegistryImportStatus.ALREADY_IMPORTED:
+        st.info(result.message)
+    elif result.status == RegistryImportStatus.STALE_SELECTION:
+        st.warning(result.message)
+    else:
+        st.error(result.message)
+
+    if result.import_id:
+        st.write(f"**Import-ID:** `{result.import_id}`")
+        st.write(f"**Registry:** `_otio_v2/{result.registry_sqlite_relative_path}`")
+        st.write(
+            f"**Importbericht:** `_otio_v2/registry/imports/{result.import_id}.json`"
+        )
+    if result.report is not None:
+        with st.expander("Importbericht (Details)", expanded=False):
+            st.json(result.report.model_dump(mode="json"))
+
+
 def _render_confirm_panel(
     project,
     snapshot: InventorySnapshot,
@@ -383,6 +495,8 @@ def render_discovery_inventory_page() -> None:
                 _SESSION_SELECTION_STATUS_KEY,
                 _SESSION_SELECTION_WARNING_KEY,
                 _SESSION_SELECTION_ERROR_KEY,
+                _SESSION_REGISTRY_RESULT_KEY,
+                _SESSION_REGISTRY_ERROR_KEY,
             ):
                 st.session_state.pop(key, None)
             st.success("Bestandsaufnahme abgeschlossen.")
@@ -418,6 +532,13 @@ def render_discovery_inventory_page() -> None:
     draft = _render_selection_editor(snapshot, draft)
     st.session_state[_SESSION_DRAFT_KEY] = draft
     _render_confirm_panel(project, snapshot, draft)
+
+    _render_registry_section(
+        project,
+        snapshot,
+        st.session_state.get(_SESSION_SELECTION_KEY),
+        st.session_state.get(_SESSION_SELECTION_STATUS_KEY),
+    )
 
     with st.expander("Technische Details", expanded=False):
         st.write(f"**schema_version:** `{snapshot.schema_version}`")
