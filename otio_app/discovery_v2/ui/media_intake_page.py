@@ -145,6 +145,17 @@ def render_discovery_media_intake_page() -> None:
                 else:
                     st.markdown(line)
                 details = [item.reason_detail]
+                if item.video_codec:
+                    details.append(f"codec={item.video_codec}")
+                if item.pixel_format:
+                    details.append(f"pix_fmt={item.pixel_format}")
+                else:
+                    if (item.media_kind or "").lower() == "video":
+                        details.append("pix_fmt=null")
+                if item.bit_depth is not None:
+                    details.append(f"bit_depth={item.bit_depth}")
+                elif (item.media_kind or "").lower() == "video":
+                    details.append("bit_depth=null")
                 if item.proposed_target_extension:
                     details.append(f"Ziel={item.proposed_target_extension}")
                 if item.width and item.height:

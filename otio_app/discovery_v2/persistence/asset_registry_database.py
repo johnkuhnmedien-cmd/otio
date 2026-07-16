@@ -13,7 +13,7 @@ from otio_app.discovery_v2.paths import (
 )
 
 # Lesbare Schema-Versionen, die idempotent auf CURRENT migriert werden.
-_LEGACY_SCHEMA_VERSIONS = frozenset({"1", "2"})
+_LEGACY_SCHEMA_VERSIONS = frozenset({"1", "2", "3"})
 
 
 class RegistryDatabaseError(ValueError):
@@ -156,6 +156,8 @@ def _ensure_validation_tables(conn: sqlite3.Connection) -> None:
             frame_rate_denominator INTEGER,
             audio_stream_count INTEGER,
             embedded_timecode TEXT,
+            pixel_format TEXT,
+            bit_depth INTEGER,
             error_code TEXT,
             error_message TEXT,
             validated_at TEXT NOT NULL,
@@ -187,6 +189,16 @@ def _ensure_validation_tables(conn: sqlite3.Connection) -> None:
             ON asset_validations (run_id, sha256);
         """
     )
+
+
+def _ensure_validation_profile_columns(conn: sqlite3.Connection) -> None:
+    """Idempotent: pixel_format/bit_depth an bestehende asset_validations anfügen."""
+    rows = conn.execute("PRAGMA table_info(asset_validations)").fetchall()
+    columns = {str(row[1]) for row in rows}
+    if "pixel_format" not in columns:
+        conn.execute("ALTER TABLE asset_validations ADD COLUMN pixel_format TEXT")
+    if "bit_depth" not in columns:
+        conn.execute("ALTER TABLE asset_validations ADD COLUMN bit_depth INTEGER")
 
 
 def _ensure_intake_tables(conn: sqlite3.Connection) -> None:
@@ -251,6 +263,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 
     if row is None:
         _ensure_validation_tables(conn)
+        _ensure_validation_profile_columns(conn)
         _ensure_intake_tables(conn)
         conn.execute(
             """
@@ -264,6 +277,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     current = str(row["schema_version"])
     if current == REGISTRY_SCHEMA_VERSION:
         _ensure_validation_tables(conn)
+        _ensure_validation_profile_columns(conn)
         _ensure_intake_tables(conn)
         conn.execute(
             "UPDATE registry_schema SET updated_at = ? WHERE schema_version = ?",
@@ -274,6 +288,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     if current in _LEGACY_SCHEMA_VERSIONS:
         # Idempotente Migration: bestehende Assets/Imports/Validations bleiben.
         _ensure_validation_tables(conn)
+        _ensure_validation_profile_columns(conn)
         _ensure_intake_tables(conn)
         conn.execute(
             """

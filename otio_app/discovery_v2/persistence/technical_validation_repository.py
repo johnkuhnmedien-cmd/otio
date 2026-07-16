@@ -240,10 +240,11 @@ def insert_asset_validation(
             checked_size_bytes, checked_mtime_ns, sha256, media_kind,
             container_format, video_codec, audio_codec, width, height,
             duration_seconds, frame_rate_numerator, frame_rate_denominator,
-            audio_stream_count, embedded_timecode, error_code, error_message,
-            validated_at, duplicate_group_id, duplicate_hint
+            audio_stream_count, embedded_timecode, pixel_format, bit_depth,
+            error_code, error_message, validated_at, duplicate_group_id,
+            duplicate_hint
         ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
         """,
         (
@@ -266,6 +267,8 @@ def insert_asset_validation(
             record.frame_rate_denominator,
             record.audio_stream_count,
             record.embedded_timecode,
+            record.pixel_format,
+            record.bit_depth,
             record.error_code,
             record.error_message,
             record.validated_at.isoformat(),
@@ -535,6 +538,8 @@ def _row_to_validation(row: sqlite3.Row) -> AssetValidationRecord:
         frame_rate_denominator=row["frame_rate_denominator"],
         audio_stream_count=row["audio_stream_count"],
         embedded_timecode=row["embedded_timecode"],
+        pixel_format=row["pixel_format"] if "pixel_format" in keys else None,
+        bit_depth=row["bit_depth"] if "bit_depth" in keys else None,
         error_code=row["error_code"],
         error_message=row["error_message"],
         validated_at=datetime.fromisoformat(str(row["validated_at"])),

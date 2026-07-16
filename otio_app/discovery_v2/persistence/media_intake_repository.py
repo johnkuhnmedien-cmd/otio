@@ -126,7 +126,9 @@ def list_plan_items(
             v.height,
             v.frame_rate_numerator,
             v.frame_rate_denominator,
-            v.embedded_timecode
+            v.embedded_timecode,
+            v.pixel_format,
+            v.bit_depth
         FROM intake_plan_assets p
         LEFT JOIN assets a ON a.asset_id = p.asset_id
         LEFT JOIN asset_validations v ON v.validation_id = p.validation_id
@@ -202,6 +204,8 @@ def _row_to_item(row: sqlite3.Row) -> IntakePlanItem:
         frame_rate_numerator=_opt("frame_rate_numerator"),
         frame_rate_denominator=_opt("frame_rate_denominator"),
         embedded_timecode=_opt("embedded_timecode"),
+        pixel_format=_opt("pixel_format"),
+        bit_depth=_opt("bit_depth"),
         duplicate_group_id=row["duplicate_group_id"],
         planned_action=IntakeAction(str(row["planned_action"])),
         status=IntakePlanItemStatus(str(row["status"])),

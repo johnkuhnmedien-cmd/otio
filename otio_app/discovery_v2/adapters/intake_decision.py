@@ -26,6 +26,8 @@ _FRIENDLY_VIDEO_CODECS = frozenset(
     {"h264", "avc", "avc1", "libx264", "mpeg4", "mp4v"}
 )
 _FRIENDLY_CONTAINERS = frozenset({".mp4", ".mov", ".m4v"})
+_ALLOWED_PIXEL_FORMATS = frozenset({"yuv420p", "yuvj420p"})
+_ALLOWED_BIT_DEPTHS = frozenset({8})
 _PROBLEMATIC_VIDEO_CODECS = frozenset(
     {
         "hevc",
@@ -159,16 +161,31 @@ def _decide_video(
 ) -> IntakeDecision:
     codec = _normalize_codec(validation.video_codec)
     container = _container_from_fields(extension, validation.container_format)
+    pixel_format = (validation.pixel_format or "").strip().lower() or None
+    bit_depth = validation.bit_depth
 
-    # Ohne Codec/Container/Grundmaße keine sichere Copy-Entscheidung.
+    # Ohne Codec/Container/Grundmaße keine sichere Copy-/Remux-Entscheidung.
     if not codec or not container or validation.width is None or validation.height is None:
         return IntakeDecision(
             planned_action=IntakeAction.TRANSCODE,
             status=IntakePlanItemStatus.PLANNED,
             reason_code="insufficient_copy_metadata",
             reason_detail=(
-                "Für eine sichere Copy-Entscheidung fehlen gespeicherte "
+                "Für eine sichere Copy-/Remux-Entscheidung fehlen gespeicherte "
                 "technische Metadaten (Codec, Container und/oder Auflösung)."
+            ),
+            proposed_target_extension=".mp4",
+        )
+
+    # Pixel-Format und Bit-Tiefe müssen aus Validation bekannt sein.
+    if pixel_format is None or bit_depth is None:
+        return IntakeDecision(
+            planned_action=IntakeAction.TRANSCODE,
+            status=IntakePlanItemStatus.PLANNED,
+            reason_code="insufficient_copy_metadata",
+            reason_detail=(
+                "Pixel-Format und/oder Bit-Tiefe fehlen in der gespeicherten "
+                "technischen Validation — Copy/Remux ist nicht zulässig."
             ),
             proposed_target_extension=".mp4",
         )
@@ -181,7 +198,7 @@ def _decide_video(
             reason_detail=(
                 validation.error_message
                 or validation.error_code
-                or "Gespeicherter technischer Fehler verhindert Copy."
+                or "Gespeicherter technischer Fehler verhindert Copy/Remux."
             ),
             proposed_target_extension=".mp4",
         )
@@ -204,14 +221,36 @@ def _decide_video(
             proposed_target_extension=".mp4",
         )
 
+    if pixel_format not in _ALLOWED_PIXEL_FORMATS:
+        return IntakeDecision(
+            planned_action=IntakeAction.TRANSCODE,
+            status=IntakePlanItemStatus.PLANNED,
+            reason_code="incompatible_pixel_format",
+            reason_detail=(
+                f"Pixel-Format nicht für Copy/Remux freigegeben: {pixel_format}"
+            ),
+            proposed_target_extension=".mp4",
+        )
+
+    if bit_depth not in _ALLOWED_BIT_DEPTHS:
+        return IntakeDecision(
+            planned_action=IntakeAction.TRANSCODE,
+            status=IntakePlanItemStatus.PLANNED,
+            reason_code="incompatible_bit_depth",
+            reason_detail=(
+                f"Bit-Tiefe nicht für Copy/Remux freigegeben: {bit_depth}"
+            ),
+            proposed_target_extension=".mp4",
+        )
+
     if container not in _FRIENDLY_CONTAINERS:
         return IntakeDecision(
             planned_action=IntakeAction.REMUX,
             status=IntakePlanItemStatus.PLANNED,
             reason_code="unsuitable_container",
             reason_detail=(
-                f"Geeigneter Codec ({codec}), aber ungeeigneter Container "
-                f"({container})."
+                f"Geeigneter Codec/Profil ({codec}, {pixel_format}, "
+                f"{bit_depth}-bit), aber ungeeigneter Container ({container})."
             ),
             proposed_target_extension=".mp4",
         )
@@ -221,7 +260,8 @@ def _decide_video(
         status=IntakePlanItemStatus.PLANNED,
         reason_code="copy_compatible",
         reason_detail=(
-            f"Resolve-freundlicher Codec/Container ({codec}/{container})."
+            f"Resolve-freundliches Profil "
+            f"({codec}/{container}/{pixel_format}/{bit_depth}-bit)."
         ),
         proposed_target_extension=container,
     )
@@ -302,6 +342,8 @@ def build_plan_item(source: IntakeDecisionSource) -> IntakePlanItem:
         frame_rate_numerator=validation.frame_rate_numerator,
         frame_rate_denominator=validation.frame_rate_denominator,
         embedded_timecode=validation.embedded_timecode,
+        pixel_format=validation.pixel_format,
+        bit_depth=validation.bit_depth,
         duplicate_group_id=validation.duplicate_group_id,
         planned_action=decision.planned_action,
         status=decision.status,

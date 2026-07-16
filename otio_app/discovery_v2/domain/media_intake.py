@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 
 INTAKE_PLAN_SCHEMA_VERSION = "1"
-INTAKE_PLANNER_VERSION = "1"
+INTAKE_PLANNER_VERSION = "2"
 PROCESSING_PROFILE_VERSION = "1"
 
 
@@ -48,6 +48,8 @@ class IntakePlanItem(BaseModel):
     frame_rate_numerator: int | None = None
     frame_rate_denominator: int | None = None
     embedded_timecode: str | None = None
+    pixel_format: str | None = None
+    bit_depth: int | None = None
     duplicate_group_id: str | None = None
     planned_action: IntakeAction
     status: IntakePlanItemStatus

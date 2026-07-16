@@ -21,6 +21,15 @@ class MediaProbeAdapterError(Exception):
         self.message = message
 
 
+# Eng begrenzte, deterministische Ableitung — unbekannte Formate bleiben null.
+_KNOWN_PIXEL_FORMAT_BIT_DEPTH: dict[str, int] = {
+    "yuv420p": 8,
+    "yuvj420p": 8,
+    "yuv420p10le": 10,
+    "yuv422p10le": 10,
+}
+
+
 @dataclass(frozen=True)
 class NormalizedMediaProbe:
     media_kind: str
@@ -34,6 +43,27 @@ class NormalizedMediaProbe:
     frame_rate_denominator: int | None = None
     audio_stream_count: int | None = None
     embedded_timecode: str | None = None
+    pixel_format: str | None = None
+    bit_depth: int | None = None
+
+
+def derive_bit_depth(
+    pixel_format: str | None,
+    *,
+    bits_per_raw_sample: object | None = None,
+) -> int | None:
+    """Liefert Bit-Tiefe nur bei zuverlässiger Bestimmung, sonst ``None``."""
+    if bits_per_raw_sample is not None and str(bits_per_raw_sample).strip() != "":
+        try:
+            value = int(str(bits_per_raw_sample).strip())
+        except (TypeError, ValueError):
+            value = None
+        else:
+            if value > 0:
+                return value
+    if not pixel_format:
+        return None
+    return _KNOWN_PIXEL_FORMAT_BIT_DEPTH.get(str(pixel_format).strip().lower())
 
 
 def parse_frame_rate_fraction(value: str | None) -> tuple[int, int] | None:
@@ -70,7 +100,7 @@ def _run_ffprobe_json(path: Path, *, timeout_sec: int = 120) -> dict:
         "-show_entries",
         "format=format_name,duration:format_tags=timecode:"
         "stream=index,codec_type,codec_name,width,height,r_frame_rate,"
-        "codec_tag_string:stream_tags=timecode",
+        "pix_fmt,bits_per_raw_sample,codec_tag_string:stream_tags=timecode",
         "-of",
         "json",
         str(path),
@@ -177,6 +207,10 @@ def probe_source_media(
     frame_num: int | None = None
     frame_den: int | None = None
     audio_stream_count = 0
+    pixel_format: str | None = None
+    bits_per_raw_sample: object | None = None
+    if getattr(basic, "pixel_format", None):
+        pixel_format = str(basic.pixel_format).strip().lower() or None
 
     for stream in payload.get("streams") or []:
         codec_type = (stream.get("codec_type") or "").lower()
@@ -198,10 +232,26 @@ def probe_source_media(
                 frac = parse_frame_rate_fraction(stream.get("r_frame_rate"))
                 if frac is not None:
                     frame_num, frame_den = frac
+            if pixel_format is None and stream.get("pix_fmt"):
+                pixel_format = str(stream["pix_fmt"]).strip().lower() or None
+            if bits_per_raw_sample is None and stream.get("bits_per_raw_sample") not in (
+                None,
+                "",
+                "N/A",
+            ):
+                bits_per_raw_sample = stream.get("bits_per_raw_sample")
         elif codec_type == "audio":
             audio_stream_count += 1
             if audio_codec is None and codec_name:
                 audio_codec = codec_name
+
+    bit_depth = (
+        derive_bit_depth(pixel_format, bits_per_raw_sample=bits_per_raw_sample)
+        if media_kind == MediaKind.VIDEO
+        else None
+    )
+    if media_kind != MediaKind.VIDEO:
+        pixel_format = None
 
     # Bild: ffprobe liefert oft video-stream mit codec mjpeg/png/… und r_frame_rate 0/0
     if media_kind == MediaKind.IMAGE:
@@ -237,4 +287,6 @@ def probe_source_media(
         frame_rate_denominator=frame_den,
         audio_stream_count=audio_stream_count if media_kind != MediaKind.IMAGE else None,
         embedded_timecode=_extract_embedded_timecode(payload),
+        pixel_format=pixel_format,
+        bit_depth=bit_depth,
     )

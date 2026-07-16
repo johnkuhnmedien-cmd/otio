@@ -164,6 +164,14 @@ def render_discovery_technical_validation_page() -> None:
                         )
                     if item.width and item.height:
                         details.append(f"{item.width}×{item.height}")
+                    if item.media_kind == "video":
+                        details.append(
+                            f"pix_fmt={item.pixel_format or 'null'}"
+                        )
+                        details.append(
+                            f"bit_depth="
+                            f"{item.bit_depth if item.bit_depth is not None else 'null'}"
+                        )
                     if item.embedded_timecode:
                         details.append(f"tc={item.embedded_timecode}")
                     elif item.media_kind == "video":

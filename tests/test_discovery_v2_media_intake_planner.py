@@ -18,6 +18,7 @@ from otio_app.discovery_v2.adapters.intake_decision import (
     build_plan_item,
     decide_intake_action,
 )
+from otio_app.discovery_v2.adapters.media_probe import derive_bit_depth
 from otio_app.discovery_v2.application.asset_registry_service import (
     import_confirmed_selection,
 )
@@ -161,6 +162,8 @@ def _seed_validation_run(
                     "height": 1080,
                     "frame_rate_numerator": 25,
                     "frame_rate_denominator": 1,
+                    "pixel_format": "yuv420p",
+                    "bit_depth": 8,
                 },
                 "audio": {
                     "audio_codec": "pcm_s16le",
@@ -195,6 +198,8 @@ def _seed_validation_run(
                     defaults.get("frame_rate_denominator"),
                 ),
                 embedded_timecode=ov.get("embedded_timecode"),
+                pixel_format=ov.get("pixel_format", defaults.get("pixel_format")),
+                bit_depth=ov.get("bit_depth", defaults.get("bit_depth")),
                 error_code=ov.get("error_code"),
                 error_message=ov.get("error_message"),
                 validated_at=_now(),
@@ -236,6 +241,8 @@ def _decision(
         frame_rate_numerator=fields.pop("frame_rate_numerator", None),
         frame_rate_denominator=fields.pop("frame_rate_denominator", None),
         embedded_timecode=fields.pop("embedded_timecode", None),
+        pixel_format=fields.pop("pixel_format", None),
+        bit_depth=fields.pop("bit_depth", None),
         error_code=fields.pop("error_code", None),
         error_message=fields.pop("error_message", None),
         validated_at=_now(),
@@ -385,6 +392,8 @@ def test_suitable_video_copy() -> None:
         container_format="mp4",
         width=1920,
         height=1080,
+        pixel_format="yuv420p",
+        bit_depth=8,
     )
     assert d.planned_action == IntakeAction.COPY
     assert d.status == IntakePlanItemStatus.PLANNED
@@ -398,6 +407,8 @@ def test_friendly_codec_bad_container_remux() -> None:
         container_format="matroska,webm",
         width=1280,
         height=720,
+        pixel_format="yuv420p",
+        bit_depth=8,
     )
     assert d.planned_action == IntakeAction.REMUX
 
@@ -410,6 +421,8 @@ def test_problematic_codec_transcode() -> None:
         container_format="mp4",
         width=1920,
         height=1080,
+        pixel_format="yuv420p",
+        bit_depth=8,
     )
     assert d.planned_action == IntakeAction.TRANSCODE
     assert d.reason_code == "problematic_video_codec"
@@ -423,9 +436,86 @@ def test_insufficient_copy_metadata_transcode() -> None:
         container_format="mp4",
         width=None,
         height=None,
+        pixel_format="yuv420p",
+        bit_depth=8,
     )
     assert d.planned_action == IntakeAction.TRANSCODE
     assert d.reason_code == "insufficient_copy_metadata"
+
+
+def test_missing_pixel_format_forbids_copy_and_remux() -> None:
+    d = _decision(
+        media_kind="video",
+        extension=".mp4",
+        video_codec="h264",
+        container_format="mp4",
+        width=1920,
+        height=1080,
+        pixel_format=None,
+        bit_depth=8,
+    )
+    assert d.planned_action == IntakeAction.TRANSCODE
+    assert d.reason_code == "insufficient_copy_metadata"
+
+
+def test_missing_bit_depth_forbids_copy_and_remux() -> None:
+    d = _decision(
+        media_kind="video",
+        extension=".mkv",
+        video_codec="h264",
+        container_format="matroska",
+        width=1920,
+        height=1080,
+        pixel_format="yuv420p",
+        bit_depth=None,
+    )
+    assert d.planned_action == IntakeAction.TRANSCODE
+    assert d.planned_action != IntakeAction.REMUX
+    assert d.reason_code == "insufficient_copy_metadata"
+
+
+def test_incompatible_pixel_format_transcode() -> None:
+    d = _decision(
+        media_kind="video",
+        extension=".mp4",
+        video_codec="h264",
+        container_format="mp4",
+        width=1920,
+        height=1080,
+        pixel_format="yuv422p10le",
+        bit_depth=10,
+    )
+    assert d.planned_action == IntakeAction.TRANSCODE
+    assert d.reason_code == "incompatible_pixel_format"
+
+
+def test_incompatible_bit_depth_transcode() -> None:
+    d = _decision(
+        media_kind="video",
+        extension=".mp4",
+        video_codec="h264",
+        container_format="mp4",
+        width=1920,
+        height=1080,
+        pixel_format="yuv420p",
+        bit_depth=10,
+    )
+    assert d.planned_action == IntakeAction.TRANSCODE
+    assert d.reason_code == "incompatible_bit_depth"
+
+
+def test_yuvj420p_eight_bit_allows_copy() -> None:
+    d = _decision(
+        media_kind="video",
+        extension=".mp4",
+        video_codec="h264",
+        container_format="mp4",
+        width=1920,
+        height=1080,
+        pixel_format="yuvj420p",
+        bit_depth=8,
+    )
+    assert d.planned_action == IntakeAction.COPY
 
 
 @pytest.mark.parametrize(
@@ -498,6 +588,8 @@ def test_missing_timecode_does_not_block() -> None:
         container_format="mp4",
         width=1920,
         height=1080,
+        pixel_format="yuv420p",
+        bit_depth=8,
         embedded_timecode=None,
     )
     assert d.planned_action == IntakeAction.COPY
@@ -511,6 +603,8 @@ def test_non_16_9_does_not_force_action() -> None:
         container_format="mp4",
         width=1080,
         height=1920,
+        pixel_format="yuv420p",
+        bit_depth=8,
     )
     assert d.planned_action == IntakeAction.COPY
 
@@ -523,6 +617,8 @@ def test_duplicate_hint_does_not_change_action() -> None:
         container_format="mp4",
         width=1920,
         height=1080,
+        pixel_format="yuv420p",
+        bit_depth=8,
         duplicate_group_id="dup-1",
         duplicate_hint="potential_content_duplicate",
     )
@@ -540,6 +636,8 @@ def test_duplicate_hint_does_not_change_action() -> None:
                 container_format="mp4",
                 width=1920,
                 height=1080,
+                pixel_format="yuv420p",
+                bit_depth=8,
                 sha256="c" * 64,
                 validated_at=_now(),
                 duplicate_group_id="dup-1",
@@ -551,6 +649,8 @@ def test_duplicate_hint_does_not_change_action() -> None:
     )
     assert item.duplicate_group_id == "dup-1"
     assert item.planned_action == IntakeAction.COPY
+    assert item.pixel_format == "yuv420p"
+    assert item.bit_depth == 8
 
 
 def test_no_editorial_decision_fields() -> None:
@@ -561,6 +661,8 @@ def test_no_editorial_decision_fields() -> None:
         container_format="mp4",
         width=1080,
         height=1920,
+        pixel_format="yuv420p",
+        bit_depth=8,
     )
     payload = d.__dict__
     for forbidden in ("crop", "fill", "zoom", "aspect_fix", "editorial"):
@@ -582,10 +684,16 @@ def test_schema_extension_idempotent(discovery_project, imported) -> None:
     assert "intake_plan_assets" in tables
     assert "working_media" not in tables
     assert "intake_runs" not in tables
-    assert reg_db.read_schema_version(conn) == "3"
+    cols = {
+        str(r[1])
+        for r in conn.execute("PRAGMA table_info(asset_validations)").fetchall()
+    }
+    assert "pixel_format" in cols
+    assert "bit_depth" in cols
+    assert reg_db.read_schema_version(conn) == "4"
     conn.close()
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "3"
+    assert reg_db.read_schema_version(conn2) == "4"
     conn2.close()
 
 
@@ -597,12 +705,70 @@ def test_migrate_v2_preserves_registry(discovery_project, imported) -> None:
     conn.commit()
     conn.close()
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "3"
+    assert reg_db.read_schema_version(conn2) == "4"
     assert conn2.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == count
     assert conn2.execute(
         "SELECT name FROM sqlite_master WHERE name='intake_plans'"
     ).fetchone()
+    cols = {
+        str(r[1])
+        for r in conn2.execute("PRAGMA table_info(asset_validations)").fetchall()
+    }
+    assert "pixel_format" in cols and "bit_depth" in cols
     conn2.close()
+
+
+def test_migrate_v3_adds_profile_columns_without_reprobe(
+    discovery_project, imported
+) -> None:
+    _seed_validation_run(discovery_project)
+    db = reg_db.registry_sqlite_path(discovery_project.project_root_path)
+    conn = sqlite3.connect(str(db))
+    before = conn.execute("SELECT COUNT(*) FROM asset_validations").fetchone()[0]
+    # Schema-Version zurücksetzen; Profilspalten entfernen, falls DROP unterstützt.
+    conn.execute("UPDATE registry_schema SET schema_version = '3'")
+    try:
+        conn.execute("ALTER TABLE asset_validations DROP COLUMN pixel_format")
+        conn.execute("ALTER TABLE asset_validations DROP COLUMN bit_depth")
+    except sqlite3.OperationalError:
+        # Fallback: vorhandene Werte auf null setzen (Legacy-Datensätze).
+        conn.execute(
+            "UPDATE asset_validations SET pixel_format = NULL, bit_depth = NULL"
+        )
+    conn.commit()
+    conn.close()
+
+    conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
+    assert reg_db.read_schema_version(conn2) == "4"
+    after = conn2.execute("SELECT COUNT(*) FROM asset_validations").fetchone()[0]
+    assert after == before > 0
+    cols = {
+        str(r[1])
+        for r in conn2.execute("PRAGMA table_info(asset_validations)").fetchall()
+    }
+    assert "pixel_format" in cols and "bit_depth" in cols
+    # Nach Migration ohne Re-Probe bleiben Legacy-Zellen null (DROP-Pfad)
+    # bzw. wurden explizit genullt (Fallback).
+    conn2.execute(
+        "UPDATE asset_validations SET pixel_format = NULL, bit_depth = NULL"
+    )
+    conn2.commit()
+    nulls = conn2.execute(
+        """
+        SELECT COUNT(*) FROM asset_validations
+        WHERE pixel_format IS NULL AND bit_depth IS NULL
+        """
+    ).fetchone()[0]
+    assert nulls == after
+    conn2.close()
+
+    # Alte Null-Profile → kein copy/remux
+    result = create_intake_plan(discovery_project)
+    assert result.created and result.plan
+    video_items = [i for i in result.plan.items if i.media_kind == "video"]
+    assert video_items
+    assert all(i.planned_action == IntakeAction.TRANSCODE for i in video_items)
+    assert all(i.reason_code == "insufficient_copy_metadata" for i in video_items)
 
 
 def test_plan_saved_transactionally(discovery_project, imported) -> None:
@@ -757,6 +923,24 @@ def test_plan_only_via_button_and_no_start_buttons() -> None:
     # Keine Aktionsbuttons für Ausführung
     assert "key=\"discovery_v2_intake_start" not in source
     assert "Working Media" not in source
+    assert "pix_fmt=" in source
+    assert "bit_depth=" in source
+
+
+@pytest.mark.parametrize(
+    ("pix", "bits", "expected"),
+    [
+        ("yuv420p", None, 8),
+        ("yuvj420p", None, 8),
+        ("yuv420p10le", None, 10),
+        ("yuv422p10le", None, 10),
+        ("yuv444p", None, None),
+        ("yuv420p", "10", 10),
+        (None, None, None),
+    ],
+)
+def test_derive_bit_depth_deterministic(pix, bits, expected) -> None:
+    assert derive_bit_depth(pix, bits_per_raw_sample=bits) == expected
 
 
 def test_classic_and_without_vo_nav_unchanged() -> None:
