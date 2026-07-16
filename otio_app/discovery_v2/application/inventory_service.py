@@ -79,6 +79,6 @@ def get_latest_inventory(
 
 
 def inventory_artifact_root(project: Project) -> Path:
-    from otio_app.discovery_v2.paths import get_discovery_v2_root
+    from otio_app.project_work_root import resolve_project_work_root
 
-    return get_discovery_v2_root(project.project_root_path) / "inventory"
+    return resolve_project_work_root(project) / "inventory"

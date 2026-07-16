@@ -10,6 +10,9 @@ from pydantic import BaseModel, Field
 
 VALIDATION_REPORT_SCHEMA_VERSION = "1"
 
+# Fehlercode für verwaiste Hintergrund-Jobs (Prozessabbruch / kein Worker).
+WORKER_INTERRUPTED_ERROR_CODE = "worker_interrupted"
+
 
 class ValidationRunStatus(str, Enum):
     QUEUED = "queued"

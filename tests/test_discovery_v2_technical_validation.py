@@ -275,12 +275,17 @@ def test_classic_db_unchanged_by_validation(
 
 
 def test_duplicate_active_run_prevented(discovery_project, imported) -> None:
-    conn = val_repo.open_registry(discovery_project.project_root_path)
+    import threading
+
     from datetime import datetime, timezone
     from uuid import uuid4
 
+    from otio_app.discovery_v2.adapters.validation_job_launcher import (
+        get_validation_job_launcher,
+    )
     from otio_app.discovery_v2.domain.technical_validation import ValidationRunRecord
 
+    conn = val_repo.open_registry(discovery_project.project_root_path)
     run = ValidationRunRecord(
         run_id=str(uuid4()),
         project_id=discovery_project.id,
@@ -295,9 +300,24 @@ def test_duplicate_active_run_prevented(discovery_project, imported) -> None:
     conn.commit()
     conn.close()
 
-    result = start_technical_validation(discovery_project, sync=True)
-    assert result.started is False
-    assert "bereits" in result.message.lower()
+    # Lebender Worker — verwaiste Runs werden recovered; aktive nicht.
+    launcher = get_validation_job_launcher()
+    stop = threading.Event()
+
+    def _block() -> None:
+        stop.wait(timeout=5)
+
+    thread = threading.Thread(target=_block, daemon=True)
+    launcher._threads[discovery_project.id] = thread
+    thread.start()
+    try:
+        result = start_technical_validation(discovery_project, sync=True)
+        assert result.started is False
+        assert "bereits" in result.message.lower()
+    finally:
+        stop.set()
+        thread.join(timeout=2)
+        launcher._threads.pop(discovery_project.id, None)
 
 
 def test_run_status_survives_reload(discovery_project, imported) -> None:

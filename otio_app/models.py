@@ -321,6 +321,16 @@ class Project(BaseModel):
 
         return get_discovery_v2_root(self.project_root_path)
 
+    @property
+    def resolved_work_root(self) -> Path:
+        """Mode-aware Arbeitswurzel — Discovery: `_otio_v2`, sonst gespeicherter `work_dir`.
+
+        Für Discovery darf der DB-Wert ``work_dir`` nicht als Schreibziel dienen.
+        """
+        from otio_app.project_work_root import resolve_project_work_root
+
+        return resolve_project_work_root(self)
+
     @classmethod
     def from_create(
         cls,

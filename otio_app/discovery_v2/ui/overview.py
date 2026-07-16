@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import streamlit as st
 
-from otio_app.discovery_v2.paths import get_discovery_v2_root
 from otio_app.models import Project, ProjectMode
 from otio_app.ui.navigation import ACTIVE_PROJECT_KEY
 from otio_app.ui.project_context import render_project_selector
@@ -34,7 +33,7 @@ def render_discovery_overview_page() -> None:
     st.markdown("**Status:** Grundgerüst aktiv")
     st.info("Die Discovery-Pipeline wird schrittweise aufgebaut.")
 
-    root = get_discovery_v2_root(project.project_root_path)
+    root = project.resolved_work_root
     st.subheader("Artefaktwurzel")
     st.code(str(root), language=None)
     st.caption(
@@ -58,5 +57,5 @@ def render_discovery_settings_page() -> None:
     st.write(f"**Sprache:** {project.language}")
     st.write(f"**FPS:** {project.fps}")
     st.write(f"**Auflösung:** {project.width} × {project.height}")
-    st.code(str(get_discovery_v2_root(project.project_root_path)), language=None)
+    st.code(str(project.resolved_work_root), language=None)
     st.caption(f"Session-Projekt-ID: `{st.session_state.get(ACTIVE_PROJECT_KEY, '—')}`")

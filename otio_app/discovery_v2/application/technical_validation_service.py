@@ -16,6 +16,9 @@ from otio_app.discovery_v2.application.inventory_service import (
 from otio_app.discovery_v2.application.selection_service import (
     get_latest_confirmed_selection,
 )
+from otio_app.discovery_v2.application.validation_job_recovery import (
+    reconcile_orphaned_validation_run,
+)
 from otio_app.discovery_v2.domain.selection import SelectionStatus
 from otio_app.discovery_v2.domain.technical_validation import (
     AssetValidationRecord,
@@ -58,14 +61,18 @@ def _now() -> datetime:
 def can_start_technical_validation(
     project: Project,
 ) -> tuple[bool, str | None, dict | None]:
-    """Prüft Startvoraussetzungen ohne Seiteneffekte.
+    """Prüft Startvoraussetzungen.
 
+    Führt zuvor die Job-Recovery für verwaiste Runs aus (kein Job-Start).
     Returns (ok, error_message, context).
     """
     try:
         require_discovery_project(project)
     except InventoryServiceError as exc:
         return False, str(exc), None
+
+    # Verwaiste running/queued-Jobs freigeben, bevor ein aktiver Run blockiert.
+    reconcile_orphaned_validation_run(project)
 
     snapshot, snap_warn = get_latest_inventory(project)
     if snapshot is None:
@@ -155,6 +162,7 @@ def start_technical_validation(
 ) -> ValidationStartResult:
     """Legt einen Prüfauftrag an und startet den Worker (oder sync für Tests)."""
     project = require_discovery_project(project)
+    reconcile_orphaned_validation_run(project)
     ok, message, ctx = can_start_technical_validation(project)
     if not ok or ctx is None:
         return ValidationStartResult(
@@ -252,6 +260,9 @@ def get_validation_status(
         project = require_discovery_project(project)
     except InventoryServiceError as exc:
         return None, [], str(exc)
+
+    # Recovery außerhalb der UI: verwaiste Jobs nicht dauerhaft als aktiv zeigen.
+    reconcile_orphaned_validation_run(project)
 
     try:
         conn = open_registry(project.project_root_path)

@@ -8,7 +8,10 @@ from otio_app.defaults import DEFAULT_DISCOVERY_V2_WORK_SUBDIR, DEFAULT_WORK_SUB
 
 
 def get_discovery_v2_root(project_root: Path) -> Path:
-    """Berechnet die Discovery-Artefaktwurzel: ``<project_root>/_otio_v2``."""
+    """Berechnet die Discovery-Artefaktwurzel: ``<project_root>/_otio_v2``.
+
+    Ignoriert jeden gespeicherten Classic-``work_dir``. Kein mkdir.
+    """
     return Path(project_root).expanduser().resolve() / DEFAULT_DISCOVERY_V2_WORK_SUBDIR
 
 
@@ -26,6 +29,7 @@ def assert_path_is_under_discovery_v2(path: Path, project_root: Path) -> Path:
     """Stellt sicher, dass ein Schreibziel unter ``_otio_v2`` liegt.
 
     Verhindert versehentliches Schreiben nach ``_otio/`` oder in Asset-Ordner.
+    Relative Ausbrüche (``..``) werden über ``resolve()`` abgefangen.
     """
     resolved = Path(path).expanduser().resolve()
     root = get_discovery_v2_root(project_root)
@@ -46,4 +50,9 @@ def assert_path_is_under_discovery_v2(path: Path, project_root: Path) -> Path:
             f"Discovery V2 darf nur unter `{DEFAULT_DISCOVERY_V2_WORK_SUBDIR}/` "
             f"schreiben (Ziel: {resolved}, erlaubt: {root})."
         ) from exc
+    # Kein doppeltes `_otio_v2/_otio_v2` als produktive Wurzel.
+    if resolved == root / DEFAULT_DISCOVERY_V2_WORK_SUBDIR:
+        raise ValueError(
+            f"Ungültige doppelte Discovery-Wurzel: {resolved}"
+        )
     return resolved
