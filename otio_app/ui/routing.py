@@ -33,6 +33,7 @@ from otio_app.discovery_v2.ui import (
     render_discovery_inventory_page,
     render_discovery_overview_page,
     render_discovery_settings_page,
+    render_discovery_technical_validation_page,
 )
 
 
@@ -221,6 +222,7 @@ def _build_discovery_v2_pages(
         PAGE_DISCOVERY_INVENTORY,
         PAGE_DISCOVERY_OVERVIEW,
         PAGE_DISCOVERY_SETTINGS,
+        PAGE_DISCOVERY_TECHNICAL_VALIDATION,
         PAGE_LIST,
         PAGE_NEW,
         PAGE_STATUS,
@@ -238,6 +240,14 @@ def _build_discovery_v2_pages(
             _wrap_page(PAGE_DISCOVERY_INVENTORY, render_discovery_inventory_page),
             title=PAGE_DISCOVERY_INVENTORY,
             url_path="discovery-medienbestand",
+        ),
+        st.Page(
+            _wrap_page(
+                PAGE_DISCOVERY_TECHNICAL_VALIDATION,
+                render_discovery_technical_validation_page,
+            ),
+            title=PAGE_DISCOVERY_TECHNICAL_VALIDATION,
+            url_path="discovery-technische-pruefung",
         ),
         st.Page(
             _wrap_page(PAGE_DISCOVERY_SETTINGS, render_discovery_settings_page),
@@ -268,7 +278,10 @@ def run_app_navigation(
         workflow_caption = "Workflow (ohne Voice-Over): ⓪ → ① → ① Brief → ② → ③ → ④ → ⑤ → ⑥ → ⑦ → ⑧"
     elif mode == ProjectMode.DISCOVERY_V2:
         pages = _build_discovery_v2_pages(render_new_project, render_project_list)
-        workflow_caption = "Workflow (Discovery V2): Übersicht · Medienbestand · Projekteinstellungen"
+        workflow_caption = (
+            "Workflow (Discovery V2): Übersicht · Medienbestand · "
+            "Technische Prüfung · Projekteinstellungen"
+        )
     else:
         pages = _build_with_voiceover_pages(render_new_project, render_project_list)
         workflow_caption = "Workflow: ⓪ → ① → ② → ②½ → ③ · API-Keys & Diagnose in der Sidebar"
@@ -299,6 +312,7 @@ def _run_legacy_pages(
         PAGE_DISCOVERY_INVENTORY,
         PAGE_DISCOVERY_OVERVIEW,
         PAGE_DISCOVERY_SETTINGS,
+        PAGE_DISCOVERY_TECHNICAL_VALIDATION,
         PAGE_DRAMATURGY,
         PAGE_EDIT_PLAN,
         PAGE_FINAL_OUTPUT,
@@ -378,6 +392,11 @@ def _run_legacy_pages(
         _wrap_page(PAGE_DISCOVERY_OVERVIEW, render_discovery_overview_page)()
     elif page == PAGE_DISCOVERY_INVENTORY:
         _wrap_page(PAGE_DISCOVERY_INVENTORY, render_discovery_inventory_page)()
+    elif page == PAGE_DISCOVERY_TECHNICAL_VALIDATION:
+        _wrap_page(
+            PAGE_DISCOVERY_TECHNICAL_VALIDATION,
+            render_discovery_technical_validation_page,
+        )()
     elif page == PAGE_DISCOVERY_SETTINGS:
         _wrap_page(PAGE_DISCOVERY_SETTINGS, render_discovery_settings_page)()
     elif page == PAGE_API_KEYS:
