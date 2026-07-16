@@ -126,6 +126,7 @@ def test_discovery_has_only_placeholder_navigation() -> None:
         "Discovery V2 – Übersicht",
         "Medienbestand",
         "Technische Prüfung",
+        "Media Intake",
         "Projekteinstellungen",
         "🔑 API-Schlüssel",
         "Systemstatus",
@@ -145,14 +146,17 @@ def test_discovery_has_only_placeholder_navigation() -> None:
     assert "Discovery V2 – Übersicht" in DISCOVERY_V2_NAVIGATION_OPTIONS
     assert "Medienbestand" in DISCOVERY_V2_NAVIGATION_OPTIONS
     assert "Technische Prüfung" in DISCOVERY_V2_NAVIGATION_OPTIONS
+    assert "Media Intake" in DISCOVERY_V2_NAVIGATION_OPTIONS
     assert "Projekteinstellungen" in DISCOVERY_V2_NAVIGATION_OPTIONS
     # Bestehende Listen unverändert und getrennt
     assert "Discovery V2 – Übersicht" not in NAVIGATION_OPTIONS
     assert "Medienbestand" not in NAVIGATION_OPTIONS
     assert "Technische Prüfung" not in NAVIGATION_OPTIONS
+    assert "Media Intake" not in NAVIGATION_OPTIONS
     assert "Discovery V2 – Übersicht" not in VOICEOVER_GEN_NAVIGATION_OPTIONS
     assert "Medienbestand" not in VOICEOVER_GEN_NAVIGATION_OPTIONS
     assert "Technische Prüfung" not in VOICEOVER_GEN_NAVIGATION_OPTIONS
+    assert "Media Intake" not in VOICEOVER_GEN_NAVIGATION_OPTIONS
 
 
 def test_active_project_mode_defaults_remain_with_voiceover(

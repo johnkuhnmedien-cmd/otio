@@ -13,7 +13,7 @@ from otio_app.discovery_v2.paths import (
 )
 
 # Lesbare Schema-Versionen, die idempotent auf CURRENT migriert werden.
-_LEGACY_SCHEMA_VERSIONS = frozenset({"1"})
+_LEGACY_SCHEMA_VERSIONS = frozenset({"1", "2"})
 
 
 class RegistryDatabaseError(ValueError):
@@ -189,6 +189,59 @@ def _ensure_validation_tables(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_intake_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS intake_plans (
+            plan_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            import_id TEXT NOT NULL,
+            selection_id TEXT NOT NULL,
+            scan_id TEXT NOT NULL,
+            validation_run_id TEXT NOT NULL,
+            planner_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            total_assets INTEGER NOT NULL DEFAULT 0,
+            copy_count INTEGER NOT NULL DEFAULT 0,
+            remux_count INTEGER NOT NULL DEFAULT 0,
+            transcode_count INTEGER NOT NULL DEFAULT 0,
+            blocked_count INTEGER NOT NULL DEFAULT 0,
+            duplicate_warning_count INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (import_id) REFERENCES selection_imports(import_id),
+            FOREIGN KEY (validation_run_id) REFERENCES validation_runs(run_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS intake_plan_assets (
+            plan_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            validation_id TEXT NOT NULL,
+            source_sha256 TEXT,
+            source_relative_path TEXT NOT NULL,
+            source_group TEXT NOT NULL,
+            media_kind TEXT NOT NULL,
+            planned_action TEXT NOT NULL,
+            status TEXT NOT NULL,
+            reason_code TEXT NOT NULL,
+            reason_detail TEXT NOT NULL,
+            proposed_target_extension TEXT,
+            processing_profile_version TEXT NOT NULL,
+            duplicate_group_id TEXT,
+            PRIMARY KEY (plan_id, asset_id),
+            FOREIGN KEY (plan_id) REFERENCES intake_plans(plan_id),
+            FOREIGN KEY (asset_id) REFERENCES assets(asset_id),
+            FOREIGN KEY (validation_id) REFERENCES asset_validations(validation_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_intake_plans_project_created
+            ON intake_plans (project_id, created_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_intake_plan_assets_plan
+            ON intake_plan_assets (plan_id);
+        """
+    )
+
+
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_base_tables(conn)
     now = datetime.now(timezone.utc).isoformat()
@@ -198,6 +251,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 
     if row is None:
         _ensure_validation_tables(conn)
+        _ensure_intake_tables(conn)
         conn.execute(
             """
             INSERT INTO registry_schema (schema_version, initialized_at, updated_at)
@@ -210,6 +264,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     current = str(row["schema_version"])
     if current == REGISTRY_SCHEMA_VERSION:
         _ensure_validation_tables(conn)
+        _ensure_intake_tables(conn)
         conn.execute(
             "UPDATE registry_schema SET updated_at = ? WHERE schema_version = ?",
             (now, REGISTRY_SCHEMA_VERSION),
@@ -217,8 +272,9 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         return
 
     if current in _LEGACY_SCHEMA_VERSIONS:
-        # Idempotente Migration: bestehende Assets/Imports bleiben erhalten.
+        # Idempotente Migration: bestehende Assets/Imports/Validations bleiben.
         _ensure_validation_tables(conn)
+        _ensure_intake_tables(conn)
         conn.execute(
             """
             UPDATE registry_schema
