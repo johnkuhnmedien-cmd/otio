@@ -55,5 +55,20 @@ VOICEOVER_GEN_NAVIGATION_OPTIONS = (
     + (PAGE_API_KEYS, PAGE_STATUS)
 )
 
+# --- Discovery V2: eigene Platzhalter-Navigation (keine Classic-/Without-VO-Fachseiten) ---
+PAGE_DISCOVERY_OVERVIEW = "Discovery V2 – Übersicht"
+PAGE_DISCOVERY_SETTINGS = "Projekteinstellungen"
+
+DISCOVERY_V2_WORKFLOW_PAGES = (
+    PAGE_DISCOVERY_OVERVIEW,
+    PAGE_DISCOVERY_SETTINGS,
+)
+
+DISCOVERY_V2_NAVIGATION_OPTIONS = (
+    (PAGE_NEW, PAGE_LIST)
+    + DISCOVERY_V2_WORKFLOW_PAGES
+    + (PAGE_API_KEYS, PAGE_STATUS)
+)
+
 ACTIVE_PROJECT_KEY = "active_project_id"
 LAST_NAV_PAGE_KEY = "_last_nav_page"

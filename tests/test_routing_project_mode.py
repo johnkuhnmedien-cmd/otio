@@ -183,6 +183,7 @@ def test_run_app_navigation_dispatches_by_mode(monkeypatch: pytest.MonkeyPatch) 
     routing.run_app_navigation(render_new_project=_noop, render_project_list=_noop)
     with_titles = [page.title for page in captured["pages"]]
     assert "② Zuordnung" in with_titles
+    assert "Discovery V2 – Übersicht" not in with_titles
 
     # Aktives Projekt ohne Voice-Over -> neue Seitenliste.
     fake_project = SimpleNamespace(project_mode=ProjectMode.WITHOUT_VOICEOVER)
@@ -192,3 +193,4 @@ def test_run_app_navigation_dispatches_by_mode(monkeypatch: pytest.MonkeyPatch) 
     without_titles = [page.title for page in captured["pages"]]
     assert "② Zuordnung" not in without_titles
     assert "① Project Brief" in without_titles
+    assert "Discovery V2 – Übersicht" not in without_titles

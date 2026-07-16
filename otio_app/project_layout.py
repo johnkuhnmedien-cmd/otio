@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from otio_app.defaults import (
+    DEFAULT_DISCOVERY_V2_WORK_SUBDIR,
     DEFAULT_WORK_SUBDIR,
     EDIT_PLAN_FILENAME,
     EDIT_PLAN_SUBDIR,
@@ -1140,7 +1141,10 @@ def classify_subdirectories(
         voice_over_subdir,
     )
 
-    reserved_names: set[str] = {DEFAULT_WORK_SUBDIR.casefold()}
+    reserved_names: set[str] = {
+        DEFAULT_WORK_SUBDIR.casefold(),
+        DEFAULT_DISCOVERY_V2_WORK_SUBDIR.casefold(),
+    }
     if work_dir.parent == project_root:
         reserved_names.add(work_dir.name.casefold())
 
@@ -1229,9 +1233,12 @@ def classify_subdirectories_no_voiceover(
 
     Für "Projekt ohne Voice-Over": Es gibt keinen Voice-over-Ordner, der aus der
     Asset-Auswahl ausgenommen werden müsste — alle Unterordner (außer dem
-    Arbeitsordner _otio) gelten als Asset-Ordner.
+    Arbeitsordner _otio und Discovery `_otio_v2`) gelten als Asset-Ordner.
     """
-    reserved_names: set[str] = {DEFAULT_WORK_SUBDIR.casefold()}
+    reserved_names: set[str] = {
+        DEFAULT_WORK_SUBDIR.casefold(),
+        DEFAULT_DISCOVERY_V2_WORK_SUBDIR.casefold(),
+    }
     if work_dir.parent == project_root:
         reserved_names.add(work_dir.name.casefold())
 

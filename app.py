@@ -11,12 +11,15 @@ from pydantic import ValidationError
 
 from otio_app.defaults import (
     BRIEF_LANGUAGE_CHOICES,
+    DEFAULT_DISCOVERY_V2_WORK_SUBDIR,
     DEFAULT_FRAMES_PER_SHOT,
     DEFAULT_VOICE_OVER_SUBDIR,
+    PROJECT_MODE_DISCOVERY_V2,
     PROJECT_MODE_LABELS,
     PROJECT_MODE_WITH_VOICEOVER,
     PROJECT_MODE_WITHOUT_VOICEOVER,
 )
+from otio_app.discovery_v2.paths import get_discovery_v2_root
 from otio_app.models import ProjectCreate, ProjectMode
 from otio_app.paths import clean_user_path_input, create_work_dir, normalize_path
 from otio_app.project_layout import (
@@ -227,6 +230,7 @@ def render_new_project_page() -> None:
     mode_labels = {
         PROJECT_MODE_WITH_VOICEOVER: PROJECT_MODE_LABELS[PROJECT_MODE_WITH_VOICEOVER],
         PROJECT_MODE_WITHOUT_VOICEOVER: PROJECT_MODE_LABELS[PROJECT_MODE_WITHOUT_VOICEOVER],
+        PROJECT_MODE_DISCOVERY_V2: PROJECT_MODE_LABELS[PROJECT_MODE_DISCOVERY_V2],
     }
     project_mode_value = st.radio(
         "Projektmodus *",
@@ -234,14 +238,21 @@ def render_new_project_page() -> None:
         format_func=lambda value: mode_labels[value],
         key="new_project_mode",
         help=(
-            "„Projekt mit Voice-Over“ ist der bestehende Workflow mit vorhandenen "
-            "Voice-over-Dateien. „Projekt ohne Voice-Over“ startet die neue "
-            "Dramaturgie-/Voice-over-Generierungs-Pipeline — der Modus kann später "
-            "nicht mehr umgeschaltet werden."
+            "„Projekt mit Voice-Over“ und „Projekt ohne Voice-Over“ sind die "
+            "bestehenden Workflows. „Discovery V2“ ist eine getrennte dritte "
+            "Pipeline mit eigener Navigation und Artefakten unter `_otio_v2/`. "
+            "Der Modus kann später nicht mehr umgeschaltet werden."
         ),
     )
     is_with_voiceover = project_mode_value == PROJECT_MODE_WITH_VOICEOVER
-    if not is_with_voiceover:
+    is_discovery_v2 = project_mode_value == PROJECT_MODE_DISCOVERY_V2
+    if is_discovery_v2:
+        st.info(
+            "🧭 Discovery V2: eigene Platzhalter-Navigation. "
+            f"Artefakte liegen unter `{DEFAULT_DISCOVERY_V2_WORK_SUBDIR}/` — "
+            "nicht unter `_otio/`. Die Fachpipeline wird schrittweise aufgebaut."
+        )
+    elif not is_with_voiceover:
         st.info(
             "🆕 Projekt ohne Voice-Over: Clean Media und Analysen/Inventory werden "
             "wiederverwendet. Voice-over-Texte, Dramaturgie, Intro und Vertonung "
@@ -336,15 +347,19 @@ def render_new_project_page() -> None:
                 for error in exc.errors():
                     st.error(error["msg"])
             else:
-                same_lang = find_project_by_root_and_language(
+                same_mode = find_project_by_root_and_language(
                     project_data.project_root,
                     project_data.language,
+                    project_mode=project_data.project_mode,
                 )
-                if same_lang is not None:
+                if same_mode is not None:
                     st.error(
                         f"Am Ordner gibt es bereits ein Projekt in Sprache "
-                        f"**{same_lang.language}** („{same_lang.name}“). "
-                        "Bitte das bestehende öffnen oder eine andere Sprache wählen."
+                        f"**{same_mode.language}** mit Modus "
+                        f"**{PROJECT_MODE_LABELS[same_mode.project_mode.value]}** "
+                        f"(„{same_mode.name}“). "
+                        "Bitte das bestehende öffnen oder einen anderen Modus / "
+                        "eine andere Sprache wählen."
                     )
                     st.session_state.pop(PREVIEW_KEY, None)
                     return
@@ -356,11 +371,15 @@ def render_new_project_page() -> None:
                     )
                     st.info(
                         f"Am gleichen Pfad existieren bereits Projekte "
-                        f"({langs}). Clean Media & Inventory werden geteilt; "
-                        f"Editorial landet unter `_otio/{language_folder_name(project_data.language)}/`."
+                        f"({langs}). Clean Media & Inventory unter `_otio/` "
+                        f"können geteilt werden; Discovery nutzt "
+                        f"`{DEFAULT_DISCOVERY_V2_WORK_SUBDIR}/`."
                     )
 
-                if project_data.project_mode == ProjectMode.WITHOUT_VOICEOVER:
+                if project_data.project_mode in (
+                    ProjectMode.WITHOUT_VOICEOVER,
+                    ProjectMode.DISCOVERY_V2,
+                ):
                     scan = scan_project_structure_no_voiceover(
                         project_data.project_root_path,
                         project_data.work_dir_path,
@@ -409,6 +428,13 @@ def render_new_project_page() -> None:
             )
 
         is_with_voiceover_preview = project_data.project_mode == ProjectMode.WITH_VOICEOVER
+        is_discovery_preview = project_data.project_mode == ProjectMode.DISCOVERY_V2
+
+        if is_discovery_preview:
+            st.caption(
+                "Discovery-Artefaktwurzel (noch nicht angelegt): "
+                f"`{get_discovery_v2_root(project_data.project_root_path)}`"
+            )
 
         if not all_subdirs:
             if st.button("Erneut scannen"):

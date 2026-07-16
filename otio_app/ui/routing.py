@@ -29,6 +29,10 @@ from otio_app.ui.voiceover_generation.folder_voiceovers_tab import render_folder
 from otio_app.ui.voiceover_generation.intro_tab import render_intro_page
 from otio_app.ui.voiceover_generation.project_brief_tab import render_project_brief_page
 from otio_app.ui.voiceover_generation.style_references_tab import render_style_references_page
+from otio_app.discovery_v2.ui import (
+    render_discovery_overview_page,
+    render_discovery_settings_page,
+)
 
 
 _CURRENT_PAGE_KEY = "_otio_current_page"
@@ -207,6 +211,37 @@ def _build_without_voiceover_pages(
     ]
 
 
+def _build_discovery_v2_pages(
+    render_new_project: Callable[[], None],
+    render_project_list: Callable[[], None],
+) -> list:
+    from otio_app.ui.navigation import (
+        PAGE_API_KEYS,
+        PAGE_DISCOVERY_OVERVIEW,
+        PAGE_DISCOVERY_SETTINGS,
+        PAGE_LIST,
+        PAGE_NEW,
+        PAGE_STATUS,
+    )
+
+    return [
+        st.Page(render_new_project, title=PAGE_NEW, url_path="neues-projekt", default=True),
+        st.Page(render_project_list, title=PAGE_LIST, url_path="projekte"),
+        st.Page(
+            _wrap_page(PAGE_DISCOVERY_OVERVIEW, render_discovery_overview_page),
+            title=PAGE_DISCOVERY_OVERVIEW,
+            url_path="discovery-v2",
+        ),
+        st.Page(
+            _wrap_page(PAGE_DISCOVERY_SETTINGS, render_discovery_settings_page),
+            title=PAGE_DISCOVERY_SETTINGS,
+            url_path="discovery-settings",
+        ),
+        st.Page(render_api_keys_page, title=PAGE_API_KEYS, url_path="api-schluessel"),
+        st.Page(render_system_status_page, title=PAGE_STATUS, url_path="systemstatus"),
+    ]
+
+
 def run_app_navigation(
     *,
     render_new_project: Callable[[], None],
@@ -224,6 +259,9 @@ def run_app_navigation(
     if mode == ProjectMode.WITHOUT_VOICEOVER:
         pages = _build_without_voiceover_pages(render_new_project, render_project_list)
         workflow_caption = "Workflow (ohne Voice-Over): ⓪ → ① → ① Brief → ② → ③ → ④ → ⑤ → ⑥ → ⑦ → ⑧"
+    elif mode == ProjectMode.DISCOVERY_V2:
+        pages = _build_discovery_v2_pages(render_new_project, render_project_list)
+        workflow_caption = "Workflow (Discovery V2): Übersicht · Projekteinstellungen"
     else:
         pages = _build_with_voiceover_pages(render_new_project, render_project_list)
         workflow_caption = "Workflow: ⓪ → ① → ② → ②½ → ③ · API-Keys & Diagnose in der Sidebar"
@@ -245,11 +283,14 @@ def _run_legacy_pages(
     """Fallback ohne st.navigation (ältere Streamlit-Version)."""
     from otio_app.shutdown import is_shutting_down
     from otio_app.ui.navigation import (
+        DISCOVERY_V2_NAVIGATION_OPTIONS,
         LAST_NAV_PAGE_KEY,
         NAVIGATION_OPTIONS,
         PAGE_AUDIO,
         PAGE_CLEAN_MEDIA,
         PAGE_CUT_PLAN,
+        PAGE_DISCOVERY_OVERVIEW,
+        PAGE_DISCOVERY_SETTINGS,
         PAGE_DRAMATURGY,
         PAGE_EDIT_PLAN,
         PAGE_FINAL_OUTPUT,
@@ -266,11 +307,12 @@ def _run_legacy_pages(
     )
 
     mode = _active_project_mode()
-    options = (
-        VOICEOVER_GEN_NAVIGATION_OPTIONS
-        if mode == ProjectMode.WITHOUT_VOICEOVER
-        else NAVIGATION_OPTIONS
-    )
+    if mode == ProjectMode.WITHOUT_VOICEOVER:
+        options = VOICEOVER_GEN_NAVIGATION_OPTIONS
+    elif mode == ProjectMode.DISCOVERY_V2:
+        options = DISCOVERY_V2_NAVIGATION_OPTIONS
+    else:
+        options = NAVIGATION_OPTIONS
 
     with st.sidebar:
         st.markdown("**Projekt**")
@@ -324,6 +366,10 @@ def _run_legacy_pages(
         _wrap_page(PAGE_FINAL_OUTPUT, render_final_output_page)()
     elif page == PAGE_CUT_PLAN:
         _wrap_page(PAGE_CUT_PLAN, render_cut_plan_page)()
+    elif page == PAGE_DISCOVERY_OVERVIEW:
+        _wrap_page(PAGE_DISCOVERY_OVERVIEW, render_discovery_overview_page)()
+    elif page == PAGE_DISCOVERY_SETTINGS:
+        _wrap_page(PAGE_DISCOVERY_SETTINGS, render_discovery_settings_page)()
     elif page == PAGE_API_KEYS:
         render_api_keys_page()
     elif page == PAGE_STATUS:

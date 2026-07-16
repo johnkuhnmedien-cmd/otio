@@ -34,12 +34,19 @@ def _create(
 
 
 def test_unique_index_root_language(temp_db_path: Path) -> None:
+    """Unique Key enthält seit Discovery V2 zusätzlich project_mode."""
     conn = get_connection(temp_db_path)
     try:
         rows = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_projects_root_language'"
+            "SELECT name FROM sqlite_master WHERE type='index' "
+            "AND name='idx_projects_root_language_mode'"
         ).fetchall()
         assert rows
+        legacy = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' "
+            "AND name='idx_projects_root_language'"
+        ).fetchall()
+        assert not legacy
     finally:
         conn.close()
 

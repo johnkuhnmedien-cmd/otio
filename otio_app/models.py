@@ -53,10 +53,14 @@ class ProjectMode(str, Enum):
 
     WITHOUT_VOICEOVER: neue Dramaturgie-/Voice-over-Generierungs-Pipeline. Es gibt
     absichtlich kein nachträgliches Umschalten und keinen Mischmodus.
+
+    DISCOVERY_V2: dritte, getrennte Pipeline — eigene Navigation und Artefakte
+    unter `_otio_v2/`. Kein Mischmodus mit den anderen Projektarten.
     """
 
     WITH_VOICEOVER = "with_voiceover"
     WITHOUT_VOICEOVER = "without_voiceover"
+    DISCOVERY_V2 = "discovery_v2"
 
 
 def validate_asset_selection(
@@ -305,6 +309,17 @@ class Project(BaseModel):
     @property
     def is_without_voiceover(self) -> bool:
         return self.project_mode == ProjectMode.WITHOUT_VOICEOVER
+
+    @property
+    def is_discovery_v2(self) -> bool:
+        return self.project_mode == ProjectMode.DISCOVERY_V2
+
+    @property
+    def discovery_v2_root(self) -> Path:
+        """Artefaktwurzel nur für Discovery V2 (`project_root/_otio_v2`)."""
+        from otio_app.discovery_v2.paths import get_discovery_v2_root
+
+        return get_discovery_v2_root(self.project_root_path)
 
     @classmethod
     def from_create(

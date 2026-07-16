@@ -31,6 +31,89 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 """
 
+_INDEX_ROOT_LANGUAGE = "idx_projects_root_language"
+_INDEX_ROOT_LANGUAGE_MODE = "idx_projects_root_language_mode"
+
+
+def _index_names(conn: sqlite3.Connection) -> set[str]:
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='projects'"
+    ).fetchall()
+    return {row[0] for row in rows if row[0]}
+
+
+def _ensure_root_language_mode_unique_index(conn: sqlite3.Connection) -> None:
+    """Unique Key: project_root + language + project_mode (idempotent).
+
+    Ersetzt den älteren Index ohne ``project_mode``, damit am selben Ordner
+    und in derselben Sprache unterschiedliche Pipeline-Modi parallel existieren
+    können (Classic / Without-VO / Discovery V2).
+    """
+    names = _index_names(conn)
+    if _INDEX_ROOT_LANGUAGE_MODE in names:
+        if _INDEX_ROOT_LANGUAGE in names:
+            conn.execute(f"DROP INDEX IF EXISTS {_INDEX_ROOT_LANGUAGE}")
+        return
+
+    # Ohne project_mode-Spalte (sehr alte DB vor Spalten-Migration) nicht umstellen.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(projects)").fetchall()}
+    if "project_mode" not in columns:
+        if _INDEX_ROOT_LANGUAGE not in names:
+            duplicates = conn.execute(
+                """
+                SELECT project_root, lower(language) AS lang, COUNT(*) AS cnt
+                FROM projects
+                GROUP BY project_root, lower(language)
+                HAVING cnt > 1
+                """
+            ).fetchall()
+            if not duplicates:
+                conn.execute(
+                    f"""
+                    CREATE UNIQUE INDEX IF NOT EXISTS {_INDEX_ROOT_LANGUAGE}
+                    ON projects(project_root, lower(language))
+                    """
+                )
+        return
+
+    mode_duplicates = conn.execute(
+        """
+        SELECT project_root, lower(language) AS lang, project_mode, COUNT(*) AS cnt
+        FROM projects
+        GROUP BY project_root, lower(language), project_mode
+        HAVING cnt > 1
+        """
+    ).fetchall()
+    if mode_duplicates:
+        # Unsichere Datenlage — alten Index belassen, keinen Datenverlust riskieren.
+        if _INDEX_ROOT_LANGUAGE not in names:
+            legacy_duplicates = conn.execute(
+                """
+                SELECT project_root, lower(language) AS lang, COUNT(*) AS cnt
+                FROM projects
+                GROUP BY project_root, lower(language)
+                HAVING cnt > 1
+                """
+            ).fetchall()
+            if not legacy_duplicates:
+                conn.execute(
+                    f"""
+                    CREATE UNIQUE INDEX IF NOT EXISTS {_INDEX_ROOT_LANGUAGE}
+                    ON projects(project_root, lower(language))
+                    """
+                )
+        return
+
+    if _INDEX_ROOT_LANGUAGE in names:
+        conn.execute(f"DROP INDEX IF EXISTS {_INDEX_ROOT_LANGUAGE}")
+
+    conn.execute(
+        f"""
+        CREATE UNIQUE INDEX IF NOT EXISTS {_INDEX_ROOT_LANGUAGE_MODE}
+        ON projects(project_root, lower(language), project_mode)
+        """
+    )
+
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
     """Aktualisiert ältere Datenbankschemas auf das neue Projektmodell."""
@@ -68,24 +151,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
                     "ALTER TABLE projects ADD COLUMN project_mode TEXT NOT NULL DEFAULT 'with_voiceover'"
                 )
 
-    # Ein DB-Projekt = eine Sprache. Gleicher Root + gleiche Sprache ist verboten;
-    # gleicher Root + andere Sprache (DE/EN) ist erwünscht.
-    # lower(language): "de" und "DE" gelten als dieselbe Sprache.
-    duplicates = conn.execute(
-        """
-        SELECT project_root, lower(language) AS lang, COUNT(*) AS cnt
-        FROM projects
-        GROUP BY project_root, lower(language)
-        HAVING cnt > 1
-        """
-    ).fetchall()
-    if not duplicates:
-        conn.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_root_language
-            ON projects(project_root, lower(language))
-            """
-        )
+    _ensure_root_language_mode_unique_index(conn)
 
 
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
