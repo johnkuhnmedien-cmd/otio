@@ -389,9 +389,10 @@ def test_scan_only_via_explicit_button(
         scan_calls.append(project.id)
         return run_inventory_scan(project)
 
-    # Fake Streamlit API
-    state: dict = {}
-    buttons: dict[str, bool] = {"discovery_v2_inventory_scan_btn": False}
+    buttons: dict[str, bool] = {
+        "discovery_v2_inventory_scan_btn": False,
+        "discovery_v2_confirm_selection_btn": False,
+    }
 
     class _Session(dict):
         pass
@@ -405,6 +406,10 @@ def test_scan_only_via_explicit_button(
     monkeypatch.setattr(inventory_ui, "st", MagicMock())
     inventory_ui.st.session_state = session
     inventory_ui.st.button = _button
+    inventory_ui.st.checkbox = lambda *_a, **kwargs: kwargs.get("value", False)
+    inventory_ui.st.text_input = lambda *_a, **_k: ""
+    inventory_ui.st.divider = lambda: None
+    inventory_ui.st.markdown = lambda *_a, **_k: None
     inventory_ui.st.title = lambda *_a, **_k: None
     inventory_ui.st.info = lambda *_a, **_k: None
     inventory_ui.st.write = lambda *_a, **_k: None
@@ -428,6 +433,11 @@ def test_scan_only_via_explicit_button(
         "get_latest_inventory",
         lambda project: (None, None),
     )
+    monkeypatch.setattr(
+        inventory_ui,
+        "get_latest_confirmed_selection",
+        lambda project, current_scan_id=None: (None, None, None),
+    )
 
     # Rerun ohne Button
     inventory_ui.render_discovery_inventory_page()
@@ -449,11 +459,13 @@ def test_reload_shows_latest_snapshot(discovery_project: Project) -> None:
 
 
 def test_no_working_media_or_confirm_button_in_page_source() -> None:
+    """Kein Working-Media-/Intake-Aktionsbutton — Auswahlbestätigung ist erlaubt."""
     source = Path(inventory_ui.__file__).read_text(encoding="utf-8")
-    assert "Working Media" not in source or "kein Working Media" in source
-    assert "Bestätigen" not in source
-    assert "Intake" not in source
+    assert "kein Working Media" in source
+    assert "Working Media erzeugen" not in source
+    assert "Media Intake starten" not in source
     assert "discovery_v2_inventory_scan_btn" in source
+    assert "Medienauswahl bestätigen" in source
 
 
 def test_non_discovery_project_rejected(temp_db_path: Path, tmp_path: Path) -> None:

@@ -12,14 +12,24 @@ from otio_app.discovery_v2.domain.inventory import (
     ScanStatus,
     SourceGroupSummary,
 )
+from otio_app.discovery_v2.domain.selection import (
+    EXCLUSION_REASON_USER,
+    InventorySelection,
+    SelectionDraft,
+    SelectionStatus,
+)
 
 __all__ = [
     "ROOT_SOURCE_GROUP",
     "ROOT_SOURCE_GROUP_LABEL",
+    "EXCLUSION_REASON_USER",
     "ExcludedEntry",
     "InventoryFileEntry",
+    "InventorySelection",
     "InventorySnapshot",
     "MediaKind",
     "ScanStatus",
+    "SelectionDraft",
+    "SelectionStatus",
     "SourceGroupSummary",
 ]
