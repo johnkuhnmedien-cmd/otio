@@ -32,9 +32,28 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 ## Repository-Lage
 
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Phase 7–8: **APPROVED** · Schema **14** · Fake Vision only
+- Phase 7–8: **vollständig abgeschlossen / APPROVED**
+- Registry-Schema: **14**
+- Vision: Fake-only; echte Vision-Provider gesperrt
 - Teststand 8D-Closeout: 2806 / 2787 / 18 / 1
-- Nächster Produktschritt: Phase 9 (nicht begonnen)
+- Documentation Bootstrap: freigegeben
+- **Aktueller Schritt: Phase-9-Planung**
+- Plan: `docs/source_plans/PHASE9_EDITORIAL_CORE_COVERAGE_PLAN.md`
+- Phase-9-Produktimplementierung: **nicht begonnen**
+
+## Nächste erlaubte Aktion
+
+Nach Freigabe des Phase-9-Plans:
+
+→ **Phase-9-Implementierung** (Editorial Core + Coverage, Fake Text zuerst)
+
+Weiterhin gesperrt ohne eigene Gates:
+
+- echte Textprovider
+- echte Vision-Provider
+- Phase 10+ (Stock, Script Lock, …)
+- Voice / Pausenregie / Timing
+- OTIO Export
 
 ## Verbindliche Kurzregeln
 
