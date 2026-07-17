@@ -14,22 +14,23 @@
 - Phase 9 Editorial Core / Coverage: **implementiert (Fake Text E2E)**
 - Phase 10 Supplementation / Script Lock: **implementiert (Fake Stock E2E)**
 - Phase 11 Voice / Pause / Timing: **implementiert (Fake Voice E2E)**
+- Phase-11 Contract Hardening R1: **angewendet** (Schema **18**)
 - SoT Bootstrap: `RECONSTRUCTED_BOOTSTRAP` — für dieses Repository neu konsolidiert;
   Recovery-Suche → `NOT_FOUND`; andere Projekte und gelöschter GPT-Wissensstand
   sind keine Repositoryquelle; Authority-Restore der verbindlichen Regeln
   (D-DOC-008 … D-DOC-010; D-DOC-006/007 nur zusammen mit diesen)
-- Registry-Schema: **17**
+- Registry-Schema: **18**
 - Fake Vision: aktiv (`provider=fake`)
 - Fake Text Editorial: aktiv (`provider=fake`, `fake-editorial-v1`)
 - Fake Stock Search: aktiv (`provider=fake`)
 - Fake Voice: aktiv (`provider=fake`, `fake-neutral-v1`, WAV PCM s16le 48 kHz mono)
 - Echte Vision-/Text-/Stock-/Voice-Provider: **gesperrt**
 - Kein ElevenLabs; keine echte Adobe-OAuth-/Lizenz-/Download-Integration
-- Aktiver Produktauftrag: keiner (Phase 11 Fake-Pfad abgeschlossen)
+- Aktiver Produktauftrag: keiner (Phase 11 Fake-Pfad abgeschlossen; Hardening R1)
 - Nächster erlaubter Schritt nach Freigabe: **Phase 12 planen**
 - Phase 12 noch nicht begonnen
 - Gesperrt ohne eigenen Auftrag: echte Provider, Visual Edit Plan, Humanity, OTIO
-- Teststand nach Phase 11: **2877 collected / 2858 passed / 18 failed / 1 skipped**
+- Teststand nach Contract Hardening R1: **2883 collected / 2864 passed / 18 failed / 1 skipped**
 
 ## Source of Truth
 
@@ -825,7 +826,10 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 
 ## Phase 11 – Voice / Pause / Timing (Fake, implementiert)
 
-- Schema **17**: `narration_project_state`, `voice_profiles`,
+- Schema **17** (ursprünglich) → Contract Hardening R1 → Schema **18**
+  (keine neuen Tabellen; ergänzte Spalten an `voice_profiles`, `voice_segments`,
+  `pause_directions`; `current_timeline_id` unverändert)
+- Tabellen: `narration_project_state`, `voice_profiles`,
   `voice_generation_runs`/`attempts`, `voice_segments`,
   `pause_direction_plans`/`pause_directions`,
   `narration_timelines`/`narration_timeline_entries`
@@ -833,7 +837,8 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 - Pause: UI → Pause Service → DiscoveryTextGateway (`pause_direction`) → FakeTextAdapter
 - Timing: UI → Narration Timing Service → deterministischer Python Resolver
 - Artefakte unter `_otio_v2/narration/`; Narration-Audio ≠ Working Media
-- Entscheidungen: D-11-001 … D-11-008
+- Permanente Pause-Referenzfehler ohne Adapter-Retry (D-11-010)
+- Entscheidungen: D-11-001 … D-11-011
 - Plan: `docs/source_plans/PHASE11_VOICE_PAUSE_TIMING_PLAN.md`
 - Kein ElevenLabs; keine Phase-12-Funktion; Phase 12 nicht begonnen
 

@@ -36,12 +36,13 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - Phase 9 Editorial Core / Coverage: **abgeschlossen** (Fake Text)
 - Phase 10 Supplementation / Script Lock: **abgeschlossen** (Fake Stock)
 - Phase 11 Voice / Pause / Timing: **abgeschlossen** (Fake Voice)
-- Registry-Schema: **17**
+- Phase-11 Contract Hardening R1: **angewendet** (Schema 18)
+- Registry-Schema: **18**
 - Vision / Text Editorial / Stock / Voice: Fake-only
-- Teststand: **2877 / 2858 / 18 / 1**
+- Teststand: **2883 / 2864 / 18 / 1**
 - **Aktueller Schritt: Phase 11 abgeschlossen; Phase 12 noch nicht begonnen**
 - Plan Phase 11: `docs/source_plans/PHASE11_VOICE_PAUSE_TIMING_PLAN.md`
-- Entscheidungen: D-10-001 … D-10-008; D-11-001 … D-11-008
+- Entscheidungen: D-10-001 … D-10-008; D-11-001 … D-11-011
 
 ## Nächste erlaubte Aktion
 

@@ -312,3 +312,25 @@ und werden durch Änderungen ihrer exakten Inputkette stale.
 
 **Entscheidung:** ElevenLabs und andere reale Voiceprovider bleiben ein separates
 Freigabegate und sind im lokalen Fake-Alpha-Pfad nicht aktiviert.
+
+---
+
+## D-11-009 — Direkte Versions-, Script- und Ordnungsbindungen
+
+**Entscheidung:** Voice Profile, Voice Segment und Pause Direction speichern ihre
+Versions-, Script- und Ordnungsbindungen nach der Phase-11-Verifikation direkt und
+eindeutig.
+
+---
+
+## D-11-010 — Ungültige Pause-Referenzen sind permanent
+
+**Entscheidung:** Ungültige Satz- oder Segmentreferenzen in einer Pause-Antwort sind
+permanente Fehler und werden nicht erneut an den Textadapter gesendet.
+
+---
+
+## D-11-011 — Schema 18 als enge Phase-11-Korrekturmigration
+
+**Entscheidung:** Schema 18 ist eine enge Phase-11-Korrekturmigration ohne neue
+Fachphase oder neue Tabellen.
