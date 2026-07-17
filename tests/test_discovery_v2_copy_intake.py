@@ -215,7 +215,7 @@ def _source_snapshots(root: Path) -> dict[str, tuple[int, bytes]]:
 
 def test_schema_versioned_unique(discovery_project) -> None:
     conn = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn) == "10"
+    assert reg_db.read_schema_version(conn) == "11"
     cols = {
         str(r[1])
         for r in conn.execute("PRAGMA table_info(working_media)").fetchall()
@@ -592,7 +592,7 @@ def test_migrate_from_v5_unique(discovery_project, imported) -> None:
     conn.commit()
     conn.close()
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "10"
+    assert reg_db.read_schema_version(conn2) == "11"
     cols = {
         str(r[1])
         for r in conn2.execute("PRAGMA table_info(working_media)").fetchall()

@@ -320,6 +320,21 @@ def list_asset_validations(
     return [_row_to_validation(row) for row in rows]
 
 
+def get_validation_by_id(
+    conn: sqlite3.Connection, *, validation_id: str
+) -> AssetValidationRecord | None:
+    row = conn.execute(
+        """
+        SELECT v.*, a.source_group
+        FROM asset_validations v
+        LEFT JOIN assets a ON a.asset_id = v.asset_id
+        WHERE v.validation_id = ?
+        """,
+        (validation_id,),
+    ).fetchone()
+    return None if row is None else _row_to_validation(row)
+
+
 def set_duplicate_on_validation(
     conn: sqlite3.Connection,
     *,

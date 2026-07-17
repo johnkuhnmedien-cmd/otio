@@ -13,7 +13,9 @@ from otio_app.discovery_v2.paths import (
 )
 
 # Lesbare Schema-Versionen, die idempotent auf CURRENT migriert werden.
-_LEGACY_SCHEMA_VERSIONS = frozenset({"1", "2", "3", "4", "5", "6", "7", "8", "9"})
+_LEGACY_SCHEMA_VERSIONS = frozenset(
+    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
+)
 
 
 class RegistryDatabaseError(ValueError):
@@ -549,6 +551,87 @@ def _migrate_working_media_schema(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_analysis_tables(conn: sqlite3.Connection) -> None:
+    """Phase 8A: minimale Analysis-Run-/Identity-Tabellen (keine Shots/Frames)."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS analysis_runs (
+            run_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            analysis_profile_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            total_assets INTEGER NOT NULL DEFAULT 0,
+            prepared_assets INTEGER NOT NULL DEFAULT 0,
+            not_applicable_assets INTEGER NOT NULL DEFAULT 0,
+            failed_assets INTEGER NOT NULL DEFAULT 0,
+            interrupted_assets INTEGER NOT NULL DEFAULT 0,
+            error_summary TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS analysis_run_assets (
+            run_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            working_media_id TEXT NOT NULL,
+            validation_id TEXT NOT NULL,
+            source_sha256 TEXT NOT NULL,
+            output_sha256 TEXT NOT NULL,
+            processing_profile_version TEXT NOT NULL,
+            analysis_profile_version TEXT NOT NULL,
+            media_kind TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error_code TEXT,
+            error_message TEXT,
+            created_at TEXT,
+            completed_at TEXT,
+            UNIQUE (run_id, asset_id, working_media_id),
+            FOREIGN KEY (run_id) REFERENCES analysis_runs(run_id),
+            FOREIGN KEY (asset_id) REFERENCES assets(asset_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS analysis_identities (
+            analysis_identity_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            working_media_id TEXT NOT NULL,
+            output_sha256 TEXT NOT NULL,
+            processing_profile_version TEXT NOT NULL,
+            analysis_profile_version TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (
+                project_id,
+                asset_id,
+                working_media_id,
+                output_sha256,
+                processing_profile_version,
+                analysis_profile_version
+            )
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_analysis_runs_project_status
+            ON analysis_runs (project_id, status);
+
+        CREATE INDEX IF NOT EXISTS idx_analysis_run_assets_run
+            ON analysis_run_assets (run_id);
+
+        CREATE INDEX IF NOT EXISTS idx_analysis_identities_project
+            ON analysis_identities (project_id, asset_id);
+        """
+    )
+
+
+def _apply_current_schema_objects(conn: sqlite3.Connection) -> None:
+    _ensure_validation_tables(conn)
+    _ensure_validation_profile_columns(conn)
+    _ensure_validation_image_columns(conn)
+    _ensure_intake_tables(conn)
+    _ensure_copy_intake_tables(conn)
+    _ensure_analysis_tables(conn)
+
+
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_base_tables(conn)
     now = datetime.now(timezone.utc).isoformat()
@@ -557,11 +640,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     ).fetchone()
 
     if row is None:
-        _ensure_validation_tables(conn)
-        _ensure_validation_profile_columns(conn)
-        _ensure_validation_image_columns(conn)
-        _ensure_intake_tables(conn)
-        _ensure_copy_intake_tables(conn)
+        _apply_current_schema_objects(conn)
         conn.execute(
             """
             INSERT INTO registry_schema (schema_version, initialized_at, updated_at)
@@ -573,11 +652,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 
     current = str(row["schema_version"])
     if current == REGISTRY_SCHEMA_VERSION:
-        _ensure_validation_tables(conn)
-        _ensure_validation_profile_columns(conn)
-        _ensure_validation_image_columns(conn)
-        _ensure_intake_tables(conn)
-        _ensure_copy_intake_tables(conn)
+        _apply_current_schema_objects(conn)
         conn.execute(
             "UPDATE registry_schema SET updated_at = ? WHERE schema_version = ?",
             (now, REGISTRY_SCHEMA_VERSION),
@@ -586,11 +661,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 
     if current in _LEGACY_SCHEMA_VERSIONS:
         # Idempotente Migration: bestehende Assets/Imports/Validations bleiben.
-        _ensure_validation_tables(conn)
-        _ensure_validation_profile_columns(conn)
-        _ensure_validation_image_columns(conn)
-        _ensure_intake_tables(conn)
-        _ensure_copy_intake_tables(conn)
+        _apply_current_schema_objects(conn)
         conn.execute(
             """
             UPDATE registry_schema

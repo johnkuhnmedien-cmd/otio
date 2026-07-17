@@ -30,6 +30,7 @@ from otio_app.ui.voiceover_generation.intro_tab import render_intro_page
 from otio_app.ui.voiceover_generation.project_brief_tab import render_project_brief_page
 from otio_app.ui.voiceover_generation.style_references_tab import render_style_references_page
 from otio_app.discovery_v2.ui import (
+    render_discovery_asset_analysis_page,
     render_discovery_inventory_page,
     render_discovery_media_intake_page,
     render_discovery_overview_page,
@@ -220,6 +221,7 @@ def _build_discovery_v2_pages(
 ) -> list:
     from otio_app.ui.navigation import (
         PAGE_API_KEYS,
+        PAGE_DISCOVERY_ASSET_ANALYSIS,
         PAGE_DISCOVERY_INVENTORY,
         PAGE_DISCOVERY_MEDIA_INTAKE,
         PAGE_DISCOVERY_OVERVIEW,
@@ -260,6 +262,14 @@ def _build_discovery_v2_pages(
             url_path="discovery-media-intake",
         ),
         st.Page(
+            _wrap_page(
+                PAGE_DISCOVERY_ASSET_ANALYSIS,
+                render_discovery_asset_analysis_page,
+            ),
+            title=PAGE_DISCOVERY_ASSET_ANALYSIS,
+            url_path="discovery-assetanalyse",
+        ),
+        st.Page(
             _wrap_page(PAGE_DISCOVERY_SETTINGS, render_discovery_settings_page),
             title=PAGE_DISCOVERY_SETTINGS,
             url_path="discovery-settings",
@@ -290,7 +300,7 @@ def run_app_navigation(
         pages = _build_discovery_v2_pages(render_new_project, render_project_list)
         workflow_caption = (
             "Workflow (Discovery V2): Übersicht · Medienbestand · "
-            "Technische Prüfung · Media Intake · Projekteinstellungen"
+            "Technische Prüfung · Media Intake · Assetanalyse · Projekteinstellungen"
         )
     else:
         pages = _build_with_voiceover_pages(render_new_project, render_project_list)
@@ -319,6 +329,7 @@ def _run_legacy_pages(
         PAGE_AUDIO,
         PAGE_CLEAN_MEDIA,
         PAGE_CUT_PLAN,
+        PAGE_DISCOVERY_ASSET_ANALYSIS,
         PAGE_DISCOVERY_INVENTORY,
         PAGE_DISCOVERY_MEDIA_INTAKE,
         PAGE_DISCOVERY_OVERVIEW,
@@ -412,6 +423,11 @@ def _run_legacy_pages(
         _wrap_page(
             PAGE_DISCOVERY_MEDIA_INTAKE,
             render_discovery_media_intake_page,
+        )()
+    elif page == PAGE_DISCOVERY_ASSET_ANALYSIS:
+        _wrap_page(
+            PAGE_DISCOVERY_ASSET_ANALYSIS,
+            render_discovery_asset_analysis_page,
         )()
     elif page == PAGE_DISCOVERY_SETTINGS:
         _wrap_page(PAGE_DISCOVERY_SETTINGS, render_discovery_settings_page)()

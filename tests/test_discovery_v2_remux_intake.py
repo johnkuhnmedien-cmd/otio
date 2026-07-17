@@ -543,7 +543,7 @@ def test_timecode_preservation_and_absence() -> None:
 
 def test_schema_has_scope(discovery_project) -> None:
     conn = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn) == "10"
+    assert reg_db.read_schema_version(conn) == "11"
     cols = {
         str(r[1]) for r in conn.execute("PRAGMA table_info(intake_runs)").fetchall()
     }
