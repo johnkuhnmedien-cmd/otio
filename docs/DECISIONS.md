@@ -200,3 +200,59 @@ explizit (`structure_pending` bis zum Structure-Run).
 **Entscheidung:** Coverage verwendet ausschließlich aktuelle accepted Observations,
 begrenzt lokale Kandidaten auf fünf pro Intent (ohne stille Kürzung) und startet
 keine Stock-Suche.
+
+---
+
+## D-10-001 — StockSearchGateway mit FakeStockSearchAdapter
+
+**Entscheidung:** Phase 10 verwendet einen zentralen StockSearchGateway mit
+FakeStockSearchAdapter. Echte Stockprovider bleiben gesperrt.
+
+---
+
+## D-10-002 — Candidate ≠ Asset / Working Media / Editorial Asset
+
+**Entscheidung:** StockCandidate, Preview, Original, Working Media und Editorial Asset
+sind getrennte Zustände. Candidate-Akzeptanz erzeugt kein Asset.
+
+---
+
+## D-10-003 — Coverage-Gap-Eskalation versioniert und append-only
+
+**Entscheidung:** Die Coverage-Gap-Eskalationsreihenfolge ist versioniert und
+append-only nachvollziehbar.
+
+---
+
+## D-10-004 — Claimentscheidungen menschlich und versionsgebunden
+
+**Entscheidung:** Claimentscheidungen sind menschliche, append-only Ereignisse und an
+die exakte Claim- und Script-Version gebunden.
+
+---
+
+## D-10-005 — Script Locks als unveränderliche Snapshots
+
+**Entscheidung:** Script Locks sind unveränderliche Snapshots der aktuellen Brief-,
+Hook-, Script-, Struktur-, Coverage-, Claim- und Observation-Kette.
+
+---
+
+## D-10-006 — Lock-Invalidierung bei Input-Änderung
+
+**Entscheidung:** Änderungen an einem Lock-Input invalidieren den bisherigen Lock. Ein
+neuer Lock ist erforderlich.
+
+---
+
+## D-10-007 — Candidate löst Gap erst nach Intake und Re-Audit
+
+**Entscheidung:** Ein akzeptierter Stockkandidat löst einen Coverage Gap erst nach
+normalem Intake, aktueller Analyse, Review und erneutem Coverage Audit.
+
+---
+
+## D-10-008 — Adobe OAuth / Lizenz / Auto-Download bleiben UNKNOWN
+
+**Entscheidung:** Adobe OAuth, Lizenzierung, Preise und automatische Downloads bleiben
+UNKNOWN und außerhalb des Fake-Alpha-Pfads.

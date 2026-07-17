@@ -34,24 +34,25 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
 - Phase 7–8: **APPROVED**
 - Phase 9 Editorial Core / Coverage: **abgeschlossen** (Fake Text)
-- Registry-Schema: **15**
-- Vision / Text Editorial: Fake-only
-- Teststand: **2831 / 2812 / 18 / 1**
-- **Aktueller Schritt: Phase-10-Planung**
-- Plan: `docs/source_plans/PHASE10_SUPPLEMENTATION_SCRIPT_LOCK_PLAN.md`
-- Phase-10-Produktimplementierung: **nicht begonnen**
+- Phase 10 Supplementation / Script Lock: **abgeschlossen** (Fake Stock)
+- Registry-Schema: **16**
+- Vision / Text Editorial / Stock Search: Fake-only
+- Teststand: **2850 / 2831 / 18 / 1**
+- **Aktueller Schritt: Phase 10 abgeschlossen; Phase 11 noch nicht begonnen**
+- Plan Phase 10: `docs/source_plans/PHASE10_SUPPLEMENTATION_SCRIPT_LOCK_PLAN.md`
+- Entscheidungen: D-10-001 … D-10-008
 
 ## Nächste erlaubte Aktion
 
-Nach Freigabe des Phase-10-Plans:
+Nach Freigabe:
 
-→ **Phase-10-Implementierung** (Supplementation Fake + Script Lock)
+→ **Phase 11 planen** (Voice, Pausenregie, Timing)
 
 Weiterhin gesperrt ohne eigene Gates:
 
 - echte Stockprovider und Adobe OAuth / Lizenz / Auto-Download
 - echte Text-/Vision-Provider
-- Phase 11+ (Voice, Pausenregie, Timing, …)
+- Phase 11+ Produkt (Voice, Pausenregie, Timing, …)
 - OTIO Export
 
 ## Verbindliche Kurzregeln

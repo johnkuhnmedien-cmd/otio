@@ -12,19 +12,22 @@
 - Phase 8C: `APPROVED`
 - Phase 8D / Phase 8 Closeout: `APPROVED`
 - Phase 9 Editorial Core / Coverage: **implementiert (Fake Text E2E)**
+- Phase 10 Supplementation / Script Lock: **implementiert (Fake Stock E2E)**
 - SoT Bootstrap: `RECONSTRUCTED_BOOTSTRAP` — für dieses Repository neu konsolidiert;
   Recovery-Suche → `NOT_FOUND`; andere Projekte und gelöschter GPT-Wissensstand
   sind keine Repositoryquelle; Authority-Restore der verbindlichen Regeln
   (D-DOC-008 … D-DOC-010; D-DOC-006/007 nur zusammen mit diesen)
-- Registry-Schema: **15**
+- Registry-Schema: **16**
 - Fake Vision: aktiv (`provider=fake`)
 - Fake Text Editorial: aktiv (`provider=fake`, `fake-editorial-v1`)
-- Echte Vision-/Text-Provider: **gesperrt**
-- Phase-9-Einschränkungen: kein Stock, kein Script Lock, keine Voice/Timing/OTIO
-- Aktiver Produktauftrag: keiner (Phase 9 Fake-Pfad abgeschlossen)
-- Nächster erlaubter Schritt nach Freigabe: **Phase 10 planen**
-- Gesperrt ohne eigenen Auftrag: echte Provider, Phase-10-Produkt, Voice, OTIO
-- Teststand nach Phase 9: **2831 collected / 2812 passed / 18 failed / 1 skipped**
+- Fake Stock Search: aktiv (`provider=fake`)
+- Echte Vision-/Text-/Stock-Provider: **gesperrt**
+- Keine echte Adobe-OAuth-/Lizenz-/Download-Integration
+- Aktiver Produktauftrag: keiner (Phase 10 Fake-Pfad abgeschlossen)
+- Nächster erlaubter Schritt nach Freigabe: **Phase 11 planen**
+- Phase 11 noch nicht begonnen
+- Gesperrt ohne eigenen Auftrag: echte Provider, Voice, Pausenregie, Timing, OTIO
+- Teststand nach Phase 10: **2850 collected / 2831 passed / 18 failed / 1 skipped**
 
 ## Source of Truth
 
@@ -803,6 +806,21 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 - Entscheidungen: D-9-001 … D-9-006
 - Plan: `docs/source_plans/PHASE9_EDITORIAL_CORE_COVERAGE_PLAN.md`
 
+## Phase 10 – Supplementation / Script Lock (Fake, implementiert)
+
+- Schema **16**: `coverage_gaps`, `coverage_gap_events`, `supplementation_runs`,
+  `supplementation_attempts`, `supplementation_requests`, `stock_search_attempts`,
+  `stock_candidates`, `stock_candidate_decisions`, `claim_decisions`,
+  `graphic_plans`, `script_locks`, `script_lock_risks`;
+  `editorial_project_state.current_script_lock_id`
+- Pfad Suche: UI → Supplementation Service → StockSearchGateway → FakeStockSearchAdapter
+- Pfad Lock: UI → ScriptLock Service → Domainvalidierung → Persistence
+- Candidate/Preview ≠ Working Media; Original nur über normalen Media Intake
+- Eskalation append-only; Script Lock = unveränderlicher Fingerprint-Snapshot
+- Entscheidungen: D-10-001 … D-10-008
+- Plan: `docs/source_plans/PHASE10_SUPPLEMENTATION_SCRIPT_LOCK_PLAN.md`
+- Keine echte Adobe-/Stockintegration; keine Voice/Timing/OTIO; Phase 11 nicht begonnen
+
 ## Verbleibender Fahrplan
 
 1. ~~Phase 7 Media Intake~~ — APPROVED
@@ -811,8 +829,8 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 4. ~~Phase 8C Fake Vision~~ — APPROVED
 5. ~~Phase 8D Observation Review / Closeout~~ — APPROVED
 6. ~~Phase 9 Editorial Core / Coverage (Fake)~~ — implementiert
-7. Phase 10: Supplementation und Script Lock (**planen** nach Freigabe)
-8. Phase 11: Voice, Pausen und Timing
+7. ~~Phase 10: Supplementation und Script Lock (Fake)~~ — implementiert
+8. Phase 11: Voice, Pausen und Timing (**planen** nach Freigabe)
 9. Phase 12: Visual Edit Plan und Quality
 10. Phase 13: Review und OTIO
 
