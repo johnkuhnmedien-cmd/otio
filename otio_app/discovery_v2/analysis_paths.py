@@ -57,6 +57,18 @@ def analysis_manifest_json_relative_path(analysis_identity_id: str) -> str:
     )
 
 
+def analysis_observation_json_relative_path(
+    analysis_identity_id: str,
+    observation_id: str,
+) -> str:
+    _reject_unsafe_segment(analysis_identity_id, "analysis_identity_id")
+    _reject_unsafe_segment(observation_id, "observation_id")
+    return (
+        f"{ANALYSIS_ROOT_SEGMENT}/observations/"
+        f"{analysis_identity_id}/{observation_id}.json"
+    )
+
+
 def analysis_latest_prepare_run_relative_path() -> str:
     return f"{ANALYSIS_ROOT_SEGMENT}/latest_prepare_run.json"
 

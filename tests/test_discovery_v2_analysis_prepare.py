@@ -518,7 +518,7 @@ def test_prepare_still_preview_opaque_jpeg_and_alpha_png(tmp_path: Path) -> None
 # --- Schema / contracts ----------------------------------------------------
 
 
-def test_schema_11_to_12_preserves_data_and_is_idempotent(
+def test_schema_12_to_13_preserves_data_and_is_idempotent(
     tmp_path: Path, temp_db_path: Path
 ) -> None:
     root = tmp_path / "Project"
@@ -528,7 +528,7 @@ def test_schema_11_to_12_preserves_data_and_is_idempotent(
 
     conn = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn) == "12"
+        assert reg_db.read_schema_version(conn) == "13"
         conn.execute(
             """
             INSERT INTO assets (
@@ -552,14 +552,14 @@ def test_schema_11_to_12_preserves_data_and_is_idempotent(
         )
         conn.execute("DROP TABLE representative_frames")
         conn.execute("DROP TABLE technical_shots")
-        conn.execute("UPDATE registry_schema SET schema_version = '11'")
+        conn.execute("UPDATE registry_schema SET schema_version = '12'")
         conn.commit()
     finally:
         conn.close()
 
     conn2 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn2) == "12"
+        assert reg_db.read_schema_version(conn2) == "13"
         assert conn2.execute(
             "SELECT COUNT(*) FROM assets WHERE asset_id = 'asset-keep'"
         ).fetchone()[0] == 1
@@ -570,11 +570,15 @@ def test_schema_11_to_12_preserves_data_and_is_idempotent(
             ).fetchall()
         }
         assert {"technical_shots", "representative_frames"}.issubset(tables)
-        for forbidden in (
+        assert {
             "visual_observations",
             "model_analysis_attempts",
-            "consent_events",
             "analysis_consent_events",
+        }.issubset(tables)
+        for forbidden in (
+            "consent_events",
+            "dramaturgy",
+            "visual_beats",
         ):
             assert forbidden not in tables
     finally:
@@ -582,7 +586,7 @@ def test_schema_11_to_12_preserves_data_and_is_idempotent(
 
     conn3 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn3) == REGISTRY_SCHEMA_VERSION == "12"
+        assert reg_db.read_schema_version(conn3) == REGISTRY_SCHEMA_VERSION == "13"
     finally:
         conn3.close()
 
@@ -768,13 +772,12 @@ def test_asset_analysis_ui_source_is_prepare_only_and_no_media_io() -> None:
         "Provider",
         "model_id",
         "consent_events",
-        "visual_observations",
-        "model_analysis_attempts",
         "openai",
         "gemini",
     ):
         assert needle not in source
     assert "start_analysis_prepare" in source
+    assert "start_model_analysis" in source
     tree = ast.parse(source)
     start_calls = [
         node
@@ -784,6 +787,14 @@ def test_asset_analysis_ui_source_is_prepare_only_and_no_media_io() -> None:
         and node.func.id == "start_analysis_prepare"
     ]
     assert len(start_calls) == 1
+    model_start_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "start_model_analysis"
+    ]
+    assert len(model_start_calls) == 1
     button_calls = [
         node
         for node in ast.walk(tree)

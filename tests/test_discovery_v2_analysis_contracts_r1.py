@@ -351,10 +351,10 @@ def _patch_no_media_io(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Path, "stat", _guarded_stat)
 
 
-# --- Schema 12 SQLite-Nachweis ------------------------------------------------
+# --- Schema 13 SQLite-Nachweis ------------------------------------------------
 
 
-def test_r1_schema12_tables_constraints_and_migration(discovery_project: Project) -> None:
+def test_r1_schema13_tables_constraints_and_migration(discovery_project: Project) -> None:
     root = discovery_project.project_root_path
     _import_project(discovery_project)
     plan = _seed_validation_and_plan(discovery_project)
@@ -370,7 +370,7 @@ def test_r1_schema12_tables_constraints_and_migration(discovery_project: Project
 
     conn = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn) == "12"
+        assert reg_db.read_schema_version(conn) == "13"
         # Persistierte Baseline-Daten vor Downgrade merken
         asset_count = conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
         val_count = conn.execute("SELECT COUNT(*) FROM asset_validations").fetchone()[0]
@@ -389,14 +389,15 @@ def test_r1_schema12_tables_constraints_and_migration(discovery_project: Project
         assert "analysis_runs" in tables
         assert "analysis_run_assets" in tables
         assert "analysis_identities" in tables
-        for required in ("technical_shots", "representative_frames"):
-            assert required in tables
-        for forbidden in (
+        for required in (
+            "technical_shots",
+            "representative_frames",
             "visual_observations",
             "model_analysis_attempts",
             "analysis_consent_events",
-            "consent_events",
         ):
+            assert required in tables
+        for forbidden in ("consent_events", "dramaturgy", "visual_beats"):
             assert forbidden not in tables
 
         # Identity-Unique: alle sechs Bestandteile
@@ -441,15 +442,15 @@ def test_r1_schema12_tables_constraints_and_migration(discovery_project: Project
                 break
         assert wm_unique
 
-        # Schema-11 → 12 Migration erhält Daten
-        conn.execute("UPDATE registry_schema SET schema_version = '11'")
+        # Schema-12 -> 13 Migration erhält Daten
+        conn.execute("UPDATE registry_schema SET schema_version = '12'")
         conn.commit()
     finally:
         conn.close()
 
     conn2 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn2) == "12"
+        assert reg_db.read_schema_version(conn2) == "13"
         assert (
             conn2.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == asset_count
         )
@@ -474,7 +475,7 @@ def test_r1_schema12_tables_constraints_and_migration(discovery_project: Project
         conn2.close()
     conn3 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn3) == v_before == "12"
+        assert reg_db.read_schema_version(conn3) == v_before == "13"
         assert (
             conn3.execute("SELECT project_id FROM assets LIMIT 1").fetchone()[0]
             == project_id
@@ -861,7 +862,15 @@ def test_r1_eligibility_and_ui_fail_on_media_io(
             raise AssertionError("Provider/Modell-Selectbox verboten")
 
         def checkbox(self, *a: Any, **k: Any) -> bool:
-            raise AssertionError("Consent-Checkbox verboten")
+            # Phase 8C: Consent-Checkbox ist erlaubt; Default bleibt False.
+            return False
+
+        def multiselect(self, *a: Any, **k: Any) -> list[Any]:
+            if "default" in k and k["default"] is not None:
+                return list(k["default"])
+            if len(a) > 1:
+                return list(a[1])
+            return []
 
     fake = _FakeSt()
     monkeypatch.setattr(analysis_ui, "st", fake)
@@ -906,17 +915,14 @@ def test_r1_eligibility_and_ui_fail_on_media_io(
     assert runs_after == runs_before == 0
 
 
-def test_r1_ui_source_has_no_provider_consent_or_media_io() -> None:
+def test_r1_ui_source_has_no_provider_or_media_io() -> None:
     source = Path("otio_app/discovery_v2/ui/asset_analysis_page.py").read_text(
         encoding="utf-8"
     )
     for needle in (
         "st.selectbox",
-        "st.checkbox",
         "Provider",
         "model_id",
-        "Consent",
-        "Zustimmung",
         "openrouter",
         "gemini",
         "openai",
@@ -930,7 +936,9 @@ def test_r1_ui_source_has_no_provider_consent_or_media_io() -> None:
     ):
         assert needle not in source
     assert "st.button" in source
+    assert "st.checkbox" in source
     assert "start_analysis_prepare" in source
+    assert "start_model_analysis" in source
     assert "Assetanalyse" in DISCOVERY_V2_NAVIGATION_OPTIONS
     assert "Assetanalyse" not in NAVIGATION_OPTIONS
     assert "Assetanalyse" not in VOICEOVER_GEN_NAVIGATION_OPTIONS

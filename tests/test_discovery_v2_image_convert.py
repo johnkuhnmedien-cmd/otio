@@ -341,7 +341,7 @@ def test_schema_10_adds_image_columns_and_converted_counter(
     discovery_project,
 ) -> None:
     conn = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn) == "12"
+    assert reg_db.read_schema_version(conn) == "13"
     cols = {
         r[1]
         for r in conn.execute("PRAGMA table_info(asset_validations)").fetchall()
@@ -364,7 +364,7 @@ def test_schema_10_adds_image_columns_and_converted_counter(
     conn.close()
     # idempotent
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "12"
+    assert reg_db.read_schema_version(conn2) == "13"
     conn2.close()
 
 
@@ -384,7 +384,7 @@ def test_migrate_schema_v9_preserves_validation_rows(
     conn.close()
 
     conn2 = reg_db.get_registry_connection(root)
-    assert reg_db.read_schema_version(conn2) == "12"
+    assert reg_db.read_schema_version(conn2) == "13"
     after = conn2.execute("SELECT COUNT(*) FROM asset_validations").fetchone()[0]
     assert after == before
     row = conn2.execute(

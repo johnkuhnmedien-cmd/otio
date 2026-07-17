@@ -9,11 +9,11 @@ import threading
 from pathlib import Path
 from typing import Callable, Literal
 
-WorkerKind = Literal["analysis_prepare"]
+WorkerKind = Literal["analysis_prepare", "model_analysis"]
 
 
 class AnalysisJobLauncher:
-    """One active analysis-prepare thread per project."""
+    """One active analysis thread per project."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -34,6 +34,12 @@ class AnalysisJobLauncher:
             )
 
             return process_analysis_prepare_run
+        if worker == "model_analysis":
+            from otio_app.discovery_v2.jobs.model_analysis_worker import (
+                process_model_analysis_run,
+            )
+
+            return process_model_analysis_run
         raise ValueError(f"Unsupported analysis worker: {worker}")
 
     def launch(

@@ -100,13 +100,13 @@ MATRIX_86: dict[int, list[tuple[str, str]]] = {
     1: [
         (
             "sqlite",
-            "tests/test_discovery_v2_analysis_prepare.py::test_schema_11_to_12_preserves_data_and_is_idempotent",
+            "tests/test_discovery_v2_analysis_prepare.py::test_schema_12_to_13_preserves_data_and_is_idempotent",
         )
     ],
     2: [
         (
             "sqlite",
-            "tests/test_discovery_v2_analysis_prepare.py::test_schema_11_to_12_preserves_data_and_is_idempotent",
+            "tests/test_discovery_v2_analysis_prepare.py::test_schema_12_to_13_preserves_data_and_is_idempotent",
         )
     ],
     3: [
@@ -570,7 +570,7 @@ MATRIX_86: dict[int, list[tuple[str, str]]] = {
     78: [
         (
             "source_ast",
-            "tests/test_discovery_v2_analysis_contracts_r1.py::test_r1_ui_source_has_no_provider_consent_or_media_io",
+            "tests/test_discovery_v2_analysis_contracts_r1.py::test_r1_ui_source_has_no_provider_or_media_io",
         )
     ],
     79: [

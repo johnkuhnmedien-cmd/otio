@@ -14,7 +14,7 @@ from otio_app.discovery_v2.paths import (
 
 # Lesbare Schema-Versionen, die idempotent auf CURRENT migriert werden.
 _LEGACY_SCHEMA_VERSIONS = frozenset(
-    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"}
+    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"}
 )
 
 
@@ -694,6 +694,110 @@ def _ensure_analysis_tables(conn: sqlite3.Connection) -> None:
     _ensure_analysis_run_columns(conn)
 
 
+def _ensure_model_analysis_tables(conn: sqlite3.Connection) -> None:
+    """Phase 8C: fake vision consent, attempts, and observations."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS analysis_consent_events (
+            consent_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            frame_count INTEGER NOT NULL,
+            total_bytes INTEGER NOT NULL,
+            acknowledged INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            model_identifier TEXT NOT NULL,
+            gateway_version TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            response_schema_version TEXT NOT NULL,
+            CHECK (frame_count >= 0),
+            CHECK (total_bytes >= 0),
+            CHECK (acknowledged IN (0, 1)),
+            FOREIGN KEY (run_id) REFERENCES analysis_runs(run_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS model_analysis_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            analysis_identity_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model_identifier TEXT NOT NULL,
+            gateway_version TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            response_schema_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            error_code TEXT,
+            error_message TEXT,
+            frame_count INTEGER NOT NULL,
+            frame_hash_fingerprint TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            CHECK (attempt_number >= 1),
+            CHECK (frame_count >= 0),
+            FOREIGN KEY (analysis_identity_id)
+                REFERENCES analysis_identities(analysis_identity_id),
+            FOREIGN KEY (run_id) REFERENCES analysis_runs(run_id),
+            FOREIGN KEY (asset_id) REFERENCES assets(asset_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS visual_observations (
+            observation_id TEXT PRIMARY KEY,
+            analysis_identity_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model_identifier TEXT NOT NULL,
+            gateway_version TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            response_schema_version TEXT NOT NULL,
+            frame_hash_fingerprint TEXT NOT NULL,
+            relative_json_path TEXT NOT NULL,
+            observation_json TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE (
+                analysis_identity_id,
+                provider,
+                model_identifier,
+                prompt_version,
+                response_schema_version,
+                gateway_version,
+                frame_hash_fingerprint
+            ),
+            FOREIGN KEY (analysis_identity_id)
+                REFERENCES analysis_identities(analysis_identity_id),
+            FOREIGN KEY (attempt_id) REFERENCES model_analysis_attempts(attempt_id),
+            FOREIGN KEY (asset_id) REFERENCES assets(asset_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_analysis_consent_events_project_run
+            ON analysis_consent_events (project_id, run_id);
+
+        CREATE INDEX IF NOT EXISTS idx_model_analysis_attempts_cache
+            ON model_analysis_attempts (
+                analysis_identity_id,
+                provider,
+                model_identifier,
+                prompt_version,
+                response_schema_version,
+                gateway_version,
+                frame_hash_fingerprint,
+                status
+            );
+
+        CREATE INDEX IF NOT EXISTS idx_model_analysis_attempts_run
+            ON model_analysis_attempts (run_id);
+
+        CREATE INDEX IF NOT EXISTS idx_visual_observations_project
+            ON visual_observations (project_id, created_at DESC);
+        """
+    )
+
+
 def _ensure_analysis_run_columns(conn: sqlite3.Connection) -> None:
     """Idempotente Spalten-Nachrüstung für Schema 11 → 12."""
     run_cols = {
@@ -724,6 +828,7 @@ def _apply_current_schema_objects(conn: sqlite3.Connection) -> None:
     _ensure_intake_tables(conn)
     _ensure_copy_intake_tables(conn)
     _ensure_analysis_tables(conn)
+    _ensure_model_analysis_tables(conn)
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:

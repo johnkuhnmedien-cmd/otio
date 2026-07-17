@@ -11,6 +11,7 @@ from uuid import uuid4
 from otio_app.discovery_v2.analysis_paths import (
     analysis_latest_prepare_run_relative_path,
     analysis_manifest_json_relative_path,
+    analysis_observation_json_relative_path,
     analysis_run_json_relative_path,
     assert_analysis_relative_path,
     resolve_analysis_relative_path,
@@ -30,6 +31,13 @@ from otio_app.discovery_v2.domain.asset_analysis import (
     RepresentativeFrameRecord,
     SHOT_DETECT_PROFILE_VERSION,
     TechnicalShotRecord,
+)
+from otio_app.discovery_v2.domain.visual_observation import (
+    AnalysisConsentEventRecord,
+    AnalysisModelAssetStatus,
+    ModelAnalysisAttemptRecord,
+    VisualObservation,
+    VisualObservationRecord,
 )
 from otio_app.discovery_v2.persistence.asset_registry_database import (
     get_registry_connection,
@@ -57,6 +65,18 @@ def new_shot_id() -> str:
 
 
 def new_frame_id() -> str:
+    return str(uuid4())
+
+
+def new_analysis_consent_id() -> str:
+    return str(uuid4())
+
+
+def new_model_analysis_attempt_id() -> str:
+    return str(uuid4())
+
+
+def new_visual_observation_id() -> str:
     return str(uuid4())
 
 
@@ -573,6 +593,324 @@ def replace_prepare_artifacts(
         insert_representative_frame(conn, frame)
 
 
+def insert_analysis_consent_event(
+    conn: sqlite3.Connection,
+    event: AnalysisConsentEventRecord,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO analysis_consent_events (
+            consent_id, project_id, run_id, created_at, frame_count, total_bytes,
+            acknowledged, provider, model_identifier, gateway_version,
+            prompt_version, response_schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event.consent_id,
+            event.project_id,
+            event.run_id,
+            event.created_at.isoformat(),
+            event.frame_count,
+            event.total_bytes,
+            1 if event.acknowledged else 0,
+            event.provider,
+            event.model_identifier,
+            event.gateway_version,
+            event.prompt_version,
+            event.response_schema_version,
+        ),
+    )
+
+
+def insert_model_analysis_attempt(
+    conn: sqlite3.Connection,
+    attempt: ModelAnalysisAttemptRecord,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO model_analysis_attempts (
+            attempt_id, analysis_identity_id, project_id, asset_id, run_id,
+            provider, model_identifier, gateway_version, prompt_version,
+            response_schema_version, status, attempt_number, error_code,
+            error_message, frame_count, frame_hash_fingerprint, created_at,
+            completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        _attempt_values(attempt),
+    )
+
+
+def update_model_analysis_attempt(
+    conn: sqlite3.Connection,
+    attempt: ModelAnalysisAttemptRecord,
+) -> None:
+    conn.execute(
+        """
+        UPDATE model_analysis_attempts SET
+            status = ?,
+            error_code = ?,
+            error_message = ?,
+            frame_count = ?,
+            frame_hash_fingerprint = ?,
+            completed_at = ?
+        WHERE attempt_id = ?
+        """,
+        (
+            attempt.status,
+            attempt.error_code,
+            attempt.error_message,
+            attempt.frame_count,
+            attempt.frame_hash_fingerprint,
+            None if attempt.completed_at is None else attempt.completed_at.isoformat(),
+            attempt.attempt_id,
+        ),
+    )
+
+
+def next_model_analysis_attempt_number(
+    conn: sqlite3.Connection,
+    *,
+    analysis_identity_id: str,
+    provider: str,
+    model_identifier: str,
+    gateway_version: str,
+    prompt_version: str,
+    response_schema_version: str,
+    frame_hash_fingerprint: str,
+) -> int:
+    row = conn.execute(
+        """
+        SELECT MAX(attempt_number) AS max_attempt
+        FROM model_analysis_attempts
+        WHERE analysis_identity_id = ?
+          AND provider = ?
+          AND model_identifier = ?
+          AND gateway_version = ?
+          AND prompt_version = ?
+          AND response_schema_version = ?
+          AND frame_hash_fingerprint = ?
+        """,
+        (
+            analysis_identity_id,
+            provider,
+            model_identifier,
+            gateway_version,
+            prompt_version,
+            response_schema_version,
+            frame_hash_fingerprint,
+        ),
+    ).fetchone()
+    return int(row["max_attempt"] or 0) + 1
+
+
+def find_completed_model_analysis_attempt(
+    conn: sqlite3.Connection,
+    *,
+    analysis_identity_id: str,
+    provider: str,
+    model_identifier: str,
+    gateway_version: str,
+    prompt_version: str,
+    response_schema_version: str,
+    frame_hash_fingerprint: str,
+) -> ModelAnalysisAttemptRecord | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM model_analysis_attempts
+        WHERE analysis_identity_id = ?
+          AND provider = ?
+          AND model_identifier = ?
+          AND gateway_version = ?
+          AND prompt_version = ?
+          AND response_schema_version = ?
+          AND frame_hash_fingerprint = ?
+          AND status = 'completed'
+        ORDER BY completed_at DESC, created_at DESC
+        LIMIT 1
+        """,
+        (
+            analysis_identity_id,
+            provider,
+            model_identifier,
+            gateway_version,
+            prompt_version,
+            response_schema_version,
+            frame_hash_fingerprint,
+        ),
+    ).fetchone()
+    return None if row is None else _row_to_attempt(row)
+
+
+def list_model_analysis_attempts(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str | None = None,
+    project_id: str | None = None,
+) -> list[ModelAnalysisAttemptRecord]:
+    if run_id is not None:
+        rows = conn.execute(
+            """
+            SELECT * FROM model_analysis_attempts
+            WHERE run_id = ?
+            ORDER BY created_at, attempt_id
+            """,
+            (run_id,),
+        ).fetchall()
+    elif project_id is not None:
+        rows = conn.execute(
+            """
+            SELECT * FROM model_analysis_attempts
+            WHERE project_id = ?
+            ORDER BY created_at, attempt_id
+            """,
+            (project_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM model_analysis_attempts ORDER BY created_at, attempt_id"
+        ).fetchall()
+    return [_row_to_attempt(row) for row in rows]
+
+
+def insert_visual_observation(
+    conn: sqlite3.Connection,
+    observation: VisualObservationRecord,
+) -> None:
+    assert_analysis_relative_path(observation.relative_json_path)
+    conn.execute(
+        """
+        INSERT INTO visual_observations (
+            observation_id, analysis_identity_id, project_id, asset_id, attempt_id,
+            provider, model_identifier, gateway_version, prompt_version,
+            response_schema_version, frame_hash_fingerprint, relative_json_path,
+            observation_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            observation.observation_id,
+            observation.analysis_identity_id,
+            observation.project_id,
+            observation.asset_id,
+            observation.attempt_id,
+            observation.provider,
+            observation.model_identifier,
+            observation.gateway_version,
+            observation.prompt_version,
+            observation.response_schema_version,
+            observation.frame_hash_fingerprint,
+            observation.relative_json_path,
+            observation.observation_json,
+            observation.created_at.isoformat(),
+        ),
+    )
+
+
+def get_visual_observation_for_attempt(
+    conn: sqlite3.Connection,
+    *,
+    attempt_id: str,
+) -> VisualObservationRecord | None:
+    row = conn.execute(
+        "SELECT * FROM visual_observations WHERE attempt_id = ?",
+        (attempt_id,),
+    ).fetchone()
+    return None if row is None else _row_to_observation(row)
+
+
+def get_visual_observation_for_versions(
+    conn: sqlite3.Connection,
+    *,
+    analysis_identity_id: str,
+    provider: str,
+    model_identifier: str,
+    gateway_version: str,
+    prompt_version: str,
+    response_schema_version: str,
+    frame_hash_fingerprint: str,
+) -> VisualObservationRecord | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM visual_observations
+        WHERE analysis_identity_id = ?
+          AND provider = ?
+          AND model_identifier = ?
+          AND gateway_version = ?
+          AND prompt_version = ?
+          AND response_schema_version = ?
+          AND frame_hash_fingerprint = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (
+            analysis_identity_id,
+            provider,
+            model_identifier,
+            gateway_version,
+            prompt_version,
+            response_schema_version,
+            frame_hash_fingerprint,
+        ),
+    ).fetchone()
+    return None if row is None else _row_to_observation(row)
+
+
+def list_visual_observations_for_project(
+    conn: sqlite3.Connection,
+    *,
+    project_id: str,
+) -> list[VisualObservationRecord]:
+    rows = conn.execute(
+        """
+        SELECT * FROM visual_observations
+        WHERE project_id = ?
+        ORDER BY created_at DESC, observation_id DESC
+        """,
+        (project_id,),
+    ).fetchall()
+    return [_row_to_observation(row) for row in rows]
+
+
+def save_visual_observation_json(
+    project_root: Path,
+    *,
+    analysis_identity_id: str,
+    observation_id: str,
+    observation: VisualObservation,
+    provider: str,
+    model_identifier: str,
+    gateway_version: str,
+    prompt_version: str,
+    response_schema_version: str,
+) -> tuple[str, str]:
+    relative = analysis_observation_json_relative_path(
+        analysis_identity_id,
+        observation_id,
+    )
+    payload = {
+        "provider": provider,
+        "model_identifier": model_identifier,
+        "gateway_version": gateway_version,
+        "prompt_version": prompt_version,
+        "response_schema_version": response_schema_version,
+        "observation": observation.model_dump(mode="json"),
+    }
+    _assert_no_absolute_paths(payload)
+    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+    path = resolve_analysis_relative_path(project_root, relative)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(path)
+    except OSError as exc:
+        raise InventoryArtifactError(
+            f"Visual-Observation-JSON konnte nicht geschrieben werden: {exc}"
+        ) from exc
+    return relative, text
+
+
 def analysis_table_names(conn: sqlite3.Connection) -> set[str]:
     rows = conn.execute(
         """
@@ -587,7 +925,8 @@ def analysis_table_names(conn: sqlite3.Connection) -> set[str]:
         SELECT name FROM sqlite_master
         WHERE type='table' AND name IN (
             'technical_shots', 'representative_frames',
-            'visual_observations', 'model_analysis_attempts', 'consent_events'
+            'visual_observations', 'model_analysis_attempts',
+            'analysis_consent_events'
         )
         """
     ).fetchall()
@@ -627,17 +966,18 @@ def save_analysis_run_report(
             f"Analysis-Runbericht konnte nicht geschrieben werden: {exc}"
         ) from exc
 
-    latest_rel = analysis_latest_prepare_run_relative_path()
-    latest = resolve_analysis_relative_path(project_root, latest_rel)
-    latest.parent.mkdir(parents=True, exist_ok=True)
-    latest_tmp = latest.with_suffix(latest.suffix + ".tmp")
-    try:
-        latest_tmp.write_text(text, encoding="utf-8")
-        latest_tmp.replace(latest)
-    except OSError as exc:
-        raise InventoryArtifactError(
-            f"latest_prepare_run.json konnte nicht geschrieben werden: {exc}"
-        ) from exc
+    if report.scope == ANALYSIS_RUN_SCOPE_PREPARE_ONLY:
+        latest_rel = analysis_latest_prepare_run_relative_path()
+        latest = resolve_analysis_relative_path(project_root, latest_rel)
+        latest.parent.mkdir(parents=True, exist_ok=True)
+        latest_tmp = latest.with_suffix(latest.suffix + ".tmp")
+        try:
+            latest_tmp.write_text(text, encoding="utf-8")
+            latest_tmp.replace(latest)
+        except OSError as exc:
+            raise InventoryArtifactError(
+                f"latest_prepare_run.json konnte nicht geschrieben werden: {exc}"
+            ) from exc
     return path
 
 
@@ -740,6 +1080,13 @@ def _row_to_run_asset(row: sqlite3.Row) -> AnalysisRunAsset:
     identity = None
     if "analysis_identity_id" in keys and row["analysis_identity_id"] is not None:
         identity = str(row["analysis_identity_id"])
+    status_text = str(row["status"])
+    try:
+        status: AnalysisPrepareAssetStatus | AnalysisModelAssetStatus = (
+            AnalysisPrepareAssetStatus(status_text)
+        )
+    except ValueError:
+        status = AnalysisModelAssetStatus(status_text)
     return AnalysisRunAsset(
         run_id=str(row["run_id"]),
         asset_id=str(row["asset_id"]),
@@ -750,7 +1097,7 @@ def _row_to_run_asset(row: sqlite3.Row) -> AnalysisRunAsset:
         processing_profile_version=str(row["processing_profile_version"]),
         analysis_profile_version=str(row["analysis_profile_version"]),
         media_kind=str(row["media_kind"]),
-        status=AnalysisPrepareAssetStatus(str(row["status"])),
+        status=status,
         error_code=row["error_code"],
         error_message=row["error_message"],
         created_at=_parse_dt(row["created_at"]),
@@ -805,6 +1152,71 @@ def _row_to_frame(row: sqlite3.Row) -> RepresentativeFrameRecord:
     )
 
 
+def _attempt_values(attempt: ModelAnalysisAttemptRecord) -> tuple[object, ...]:
+    return (
+        attempt.attempt_id,
+        attempt.analysis_identity_id,
+        attempt.project_id,
+        attempt.asset_id,
+        attempt.run_id,
+        attempt.provider,
+        attempt.model_identifier,
+        attempt.gateway_version,
+        attempt.prompt_version,
+        attempt.response_schema_version,
+        attempt.status,
+        attempt.attempt_number,
+        attempt.error_code,
+        attempt.error_message,
+        attempt.frame_count,
+        attempt.frame_hash_fingerprint,
+        attempt.created_at.isoformat(),
+        None if attempt.completed_at is None else attempt.completed_at.isoformat(),
+    )
+
+
+def _row_to_attempt(row: sqlite3.Row) -> ModelAnalysisAttemptRecord:
+    return ModelAnalysisAttemptRecord(
+        attempt_id=str(row["attempt_id"]),
+        analysis_identity_id=str(row["analysis_identity_id"]),
+        project_id=str(row["project_id"]),
+        asset_id=str(row["asset_id"]),
+        run_id=str(row["run_id"]),
+        provider=str(row["provider"]),
+        model_identifier=str(row["model_identifier"]),
+        gateway_version=str(row["gateway_version"]),
+        prompt_version=str(row["prompt_version"]),
+        response_schema_version=str(row["response_schema_version"]),
+        status=str(row["status"]),
+        attempt_number=int(row["attempt_number"]),
+        error_code=row["error_code"],
+        error_message=row["error_message"],
+        frame_count=int(row["frame_count"] or 0),
+        frame_hash_fingerprint=str(row["frame_hash_fingerprint"]),
+        created_at=_parse_dt(row["created_at"]) or _now(),
+        completed_at=_parse_dt(row["completed_at"]),
+    )
+
+
+def _row_to_observation(row: sqlite3.Row) -> VisualObservationRecord:
+    return VisualObservationRecord(
+        observation_id=str(row["observation_id"]),
+        analysis_identity_id=str(row["analysis_identity_id"]),
+        project_id=str(row["project_id"]),
+        asset_id=str(row["asset_id"]),
+        attempt_id=str(row["attempt_id"]),
+        provider=str(row["provider"]),
+        model_identifier=str(row["model_identifier"]),
+        gateway_version=str(row["gateway_version"]),
+        prompt_version=str(row["prompt_version"]),
+        response_schema_version=str(row["response_schema_version"]),
+        frame_hash_fingerprint=str(row["frame_hash_fingerprint"]),
+        relative_json_path=str(row["relative_json_path"]),
+        observation_json=str(row["observation_json"] or ""),
+        created_at=_parse_dt(row["created_at"]) or _now(),
+    )
+
+
 # Re-export helper for callers that need v2 root.
 def discovery_v2_root(project_root: Path) -> Path:
     return get_discovery_v2_root(project_root)
@@ -816,33 +1228,47 @@ __all__ = [
     "ANALYSIS_PREPARE_PROFILE_VERSION",
     "analysis_table_names",
     "cleanup_analysis_temp",
+    "find_completed_model_analysis_attempt",
     "find_active_analysis_run",
     "find_analysis_identity",
     "find_or_create_analysis_identity",
     "get_analysis_identity",
     "get_analysis_run",
     "get_latest_analysis_run",
+    "get_visual_observation_for_attempt",
+    "get_visual_observation_for_versions",
+    "insert_analysis_consent_event",
     "insert_analysis_run",
     "insert_analysis_run_asset",
+    "insert_model_analysis_attempt",
     "insert_representative_frame",
     "insert_technical_shot",
+    "insert_visual_observation",
     "list_analysis_identities",
     "list_analysis_run_assets",
     "list_analysis_runs",
+    "list_model_analysis_attempts",
     "list_representative_frames",
     "list_representative_frames_for_project",
     "list_technical_shots",
     "list_technical_shots_for_project",
+    "list_visual_observations_for_project",
+    "new_analysis_consent_id",
     "new_analysis_identity_id",
     "new_analysis_run_id",
     "new_frame_id",
+    "new_model_analysis_attempt_id",
     "new_shot_id",
+    "new_visual_observation_id",
+    "next_model_analysis_attempt_number",
     "open_analysis_registry",
     "parse_analysis_run_report",
     "replace_prepare_artifacts",
     "save_analysis_run_report",
     "save_prepare_manifest",
+    "save_visual_observation_json",
     "serialize_analysis_run_report",
+    "update_model_analysis_attempt",
     "update_analysis_run",
     "update_analysis_run_asset",
 ]

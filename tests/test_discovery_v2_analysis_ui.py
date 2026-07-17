@@ -122,11 +122,11 @@ def test_ui_source_has_no_media_or_api_io() -> None:
         "insert_analysis_run",
         "subprocess",
         "Provider",
-        "Consent",
         "model_id",
     ):
         assert needle not in source
     assert "start_analysis_prepare" in source
+    assert "start_model_analysis" in source
     tree = ast.parse(source)
     calls = [
         n.func.id

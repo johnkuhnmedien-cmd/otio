@@ -1,4 +1,4 @@
-"""Streamlit-Seite: Discovery V2 Assetanalyse (Phase 8B — lokale Vorbereitung)."""
+"""Streamlit-Seite: Discovery V2 Assetanalyse (Prepare + Fake-Modellanalyse)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,11 @@ import streamlit as st
 from otio_app.discovery_v2.application.analysis_prepare_service import (
     get_analysis_prepare_view,
     start_analysis_prepare,
+)
+from otio_app.discovery_v2.application.model_analysis_service import (
+    get_model_analysis_view,
+    preview_model_analysis_selection,
+    start_model_analysis,
 )
 from otio_app.discovery_v2.domain.asset_analysis import (
     ANALYSIS_PREPARE_PROFILE_VERSION,
@@ -114,13 +119,7 @@ def render_discovery_asset_analysis_page() -> None:
             st.warning(result.message)
 
     _render_prepare_review(project.id, project.project_root_path)
-
-    st.subheader("Noch nicht implementiert")
-    st.markdown(
-        "- externe Modellanalyse folgt in Phase 8C\n"
-        "- visuelle Beobachtungen / Freigaben folgen später\n"
-        "- Visual Beats / Dramaturgie folgen später"
-    )
+    _render_model_analysis_section(project)
 
 
 def _render_prepare_review(project_id: str, project_root) -> None:
@@ -184,3 +183,159 @@ def _render_prepare_review(project_id: str, project_root) -> None:
             use_container_width=True,
             hide_index=True,
         )
+
+
+def _render_model_analysis_section(project) -> None:
+    st.subheader("Modellanalyse")
+    try:
+        model_view = get_model_analysis_view(project)
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"Modellanalyse nicht verfügbar: {exc}")
+        return
+    if not model_view.ok:
+        st.warning(model_view.message or "Modellanalyse nicht verfügbar.")
+        return
+
+    st.caption(
+        f"Vision-Konfiguration: `{model_view.config_provider or '—'}` · "
+        f"Modell: `{model_view.config_model_label or '—'}`"
+    )
+    st.info(
+        "Für diesen Stand wird der Fake-Adapter lokal verwendet; es werden "
+        "keine Medien an externe Dienste gesendet."
+    )
+    if model_view.active_run is not None:
+        st.caption(
+            f"Aktiver Analysis-Run: `{model_view.active_run.run_id}` "
+            f"({model_view.active_run.scope}/{model_view.active_run.status.value})"
+        )
+    elif model_view.latest_run is not None:
+        st.caption(
+            f"Letzter Modellanalyse-Run: `{model_view.latest_run.run_id}` "
+            f"({model_view.latest_run.status.value})"
+        )
+
+    prepared = model_view.prepared_assets
+    if not prepared:
+        st.write("Noch keine vorbereiteten Assets mit Analyseframes vorhanden.")
+        _render_observation_review(model_view.observations)
+        return
+
+    st.markdown("**Vorbereitete Assets**")
+    st.dataframe(
+        [
+            {
+                "Asset": item.asset_id,
+                "Analysis Identity": item.analysis_identity_id,
+                "Medienart": item.media_kind,
+                "Frames": item.frame_count,
+                "Bytes": item.total_bytes,
+            }
+            for item in prepared
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    asset_options = [item.asset_id for item in prepared]
+    selected_asset_ids = _model_asset_selection(asset_options)
+    preview = preview_model_analysis_selection(project, selected_asset_ids)
+    st.caption(
+        f"Auswahl: {preview.asset_count} Asset(s), "
+        f"{preview.frame_count} Frame(s), {preview.total_bytes} Bytes."
+    )
+    if preview.error_code:
+        st.warning(f"{preview.error_code}: {preview.message or 'Auswahl ungültig.'}")
+
+    consent = _model_consent_checkbox()
+    can_start_model = (
+        consent
+        and preview.frame_count > 0
+        and preview.error_code is None
+        and model_view.can_start
+        and model_view.chain_ok
+    )
+    start_clicked = st.button(
+        "Modellanalyse starten",
+        disabled=not can_start_model,
+        key="discovery_v2_model_analysis_start",
+    )
+    if start_clicked and can_start_model:
+        result = start_model_analysis(
+            project,
+            asset_ids=selected_asset_ids,
+            consent_acknowledged=consent,
+            sync=False,
+        )
+        if result.started:
+            st.success(result.message)
+        else:
+            st.warning(result.message)
+
+    _render_observation_review(model_view.observations)
+
+
+def _model_asset_selection(asset_options: list[str]) -> list[str]:
+    if hasattr(st, "multiselect"):
+        selected = st.multiselect(
+            "Assets für Modellanalyse",
+            asset_options,
+            default=asset_options,
+            key="discovery_v2_model_analysis_assets",
+        )
+        return list(selected)
+    return list(asset_options)
+
+
+def _model_consent_checkbox() -> bool:
+    label = (
+        "Ich bestätige diese Modellanalyse für die ausgewählten "
+        "persistierten Representative Frames."
+    )
+    if hasattr(st, "checkbox"):
+        return bool(
+            st.checkbox(
+                label,
+                value=False,
+                key="discovery_v2_model_analysis_consent",
+            )
+        )
+    return False
+
+
+def _render_observation_review(observations) -> None:
+    st.subheader("Review: Visual Observations")
+    if not observations:
+        st.write("Noch keine Visual Observations persistiert.")
+        return
+    rows = []
+    for record in observations:
+        summary = "—"
+        geographic_confidence = "—"
+        synthetic_confidence = "—"
+        evidence = "—"
+        uncertainty = "—"
+        try:
+            import json
+
+            payload = json.loads(record.observation_json or "{}")
+            observation = payload.get("observation", payload)
+            summary = observation.get("summary") or "—"
+            geographic_confidence = observation.get("geographic_confidence", "—")
+            synthetic_confidence = observation.get("synthetic_confidence", "—")
+            evidence = ", ".join(observation.get("evidence_frame_ids") or []) or "—"
+            uncertainty = "; ".join(observation.get("uncertainty_notes") or []) or "—"
+        except (TypeError, ValueError):
+            pass
+        rows.append(
+            {
+                "Asset": record.asset_id,
+                "Summary": summary,
+                "Geo": geographic_confidence,
+                "Synthetic": synthetic_confidence,
+                "Evidence Frames": evidence,
+                "Uncertainty": uncertainty,
+                "Pfad": record.relative_json_path,
+            }
+        )
+    st.dataframe(rows, use_container_width=True, hide_index=True)

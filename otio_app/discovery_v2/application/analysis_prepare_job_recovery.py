@@ -8,6 +8,7 @@ from otio_app.discovery_v2.adapters.analysis_job_launcher import (
     get_analysis_job_launcher,
 )
 from otio_app.discovery_v2.domain.asset_analysis import (
+    ANALYSIS_RUN_SCOPE_MODEL,
     WORKER_INTERRUPTED_ANALYSIS_ERROR_CODE,
     AnalysisInputIdentity,
     AnalysisPrepareAssetStatus,
@@ -19,16 +20,19 @@ from otio_app.discovery_v2.domain.asset_analysis import (
     AnalysisRunReportError,
     AnalysisRunStatus,
 )
+from otio_app.discovery_v2.domain.visual_observation import AnalysisModelAssetStatus
 from otio_app.discovery_v2.persistence.asset_analysis_repository import (
     cleanup_analysis_temp,
     find_active_analysis_run,
     list_analysis_run_assets,
+    list_model_analysis_attempts,
     list_representative_frames,
     list_technical_shots,
     open_analysis_registry,
     save_analysis_run_report,
     update_analysis_run,
     update_analysis_run_asset,
+    update_model_analysis_attempt,
 )
 from otio_app.discovery_v2.persistence.asset_registry_database import (
     RegistryDatabaseError,
@@ -43,6 +47,11 @@ _UNFINISHED_ASSET_STATUSES = {
     AnalysisPrepareAssetStatus.PENDING,
     AnalysisPrepareAssetStatus.DETECTING_SHOTS,
     AnalysisPrepareAssetStatus.EXTRACTING_FRAMES,
+}
+
+_UNFINISHED_MODEL_ASSET_STATUSES = {
+    AnalysisModelAssetStatus.PENDING,
+    AnalysisModelAssetStatus.ANALYZING,
 }
 
 
@@ -67,6 +76,9 @@ def reconcile_orphaned_analysis_run(project: Project) -> AnalysisRun | None:
             return None
         if launcher.is_active(project.id):
             return None
+
+        if active.scope == ANALYSIS_RUN_SCOPE_MODEL:
+            return _reconcile_model_run(conn, project, active)
 
         interrupted_at = _now()
         for asset in list_analysis_run_assets(conn, run_id=active.run_id):
@@ -216,6 +228,82 @@ def build_report_from_analysis_run(
         shot_count=counts.shot_count,
         frame_count=counts.frame_count,
     )
+
+
+def _reconcile_model_run(conn, project: Project, active: AnalysisRun) -> AnalysisRun:
+    interrupted_at = _now()
+    for asset in list_analysis_run_assets(conn, run_id=active.run_id):
+        if asset.status in _UNFINISHED_MODEL_ASSET_STATUSES:
+            update_analysis_run_asset(
+                conn,
+                asset.model_copy(
+                    update={
+                        "status": AnalysisModelAssetStatus.INTERRUPTED,
+                        "error_code": WORKER_INTERRUPTED_ANALYSIS_ERROR_CODE,
+                        "error_message": (
+                            "Modellanalyse-Worker ist nicht mehr aktiv "
+                            "(Prozessabbruch oder Neustart)."
+                        ),
+                        "completed_at": interrupted_at,
+                    }
+                ),
+            )
+
+    for attempt in list_model_analysis_attempts(conn, run_id=active.run_id):
+        if attempt.status in {"queued", "running"}:
+            update_model_analysis_attempt(
+                conn,
+                attempt.model_copy(
+                    update={
+                        "status": "interrupted",
+                        "error_code": WORKER_INTERRUPTED_ANALYSIS_ERROR_CODE,
+                        "error_message": (
+                            "Modellanalyse-Worker ist nicht mehr aktiv "
+                            "(Prozessabbruch oder Neustart)."
+                        ),
+                        "completed_at": interrupted_at,
+                    }
+                ),
+            )
+
+    assets = list_analysis_run_assets(conn, run_id=active.run_id)
+    completed = sum(
+        1 for asset in assets if asset.status == AnalysisModelAssetStatus.COMPLETED
+    )
+    reused = sum(1 for asset in assets if asset.status == AnalysisModelAssetStatus.REUSED)
+    not_applicable = sum(
+        1 for asset in assets if asset.status == AnalysisModelAssetStatus.NOT_APPLICABLE
+    )
+    failed = sum(1 for asset in assets if asset.status == AnalysisModelAssetStatus.FAILED)
+    interrupted = sum(
+        1 for asset in assets if asset.status == AnalysisModelAssetStatus.INTERRUPTED
+    )
+    updated = active.model_copy(
+        update={
+            "status": AnalysisRunStatus.FAILED,
+            "completed_at": interrupted_at,
+            "prepared_assets": completed,
+            "reused_assets": reused,
+            "not_applicable_assets": not_applicable,
+            "failed_assets": failed,
+            "interrupted_assets": interrupted,
+            "error_summary": (
+                f"{WORKER_INTERRUPTED_ANALYSIS_ERROR_CODE}: "
+                "Modellanalyse-Worker ist nicht mehr aktiv "
+                "(Prozessabbruch oder Neustart)."
+            ),
+        }
+    )
+    update_analysis_run(conn, updated)
+    conn.commit()
+    try:
+        save_analysis_run_report(
+            project.project_root_path,
+            build_report_from_analysis_run(conn, updated, assets=assets),
+        )
+    except (InventoryArtifactError, OSError, ValueError):
+        pass
+    return updated
 
 
 def _counts_from_assets(

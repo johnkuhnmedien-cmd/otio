@@ -7,6 +7,11 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from otio_app.discovery_v2.domain.visual_observation import (
+    ANALYSIS_MODEL_PROFILE,
+    AnalysisModelAssetStatus,
+)
+
 
 ANALYSIS_CONTRACT_PROFILE_VERSION = "analysis-contract-v1"
 ANALYSIS_PREPARE_PROFILE_VERSION = "analysis-prepare-v1"
@@ -113,7 +118,7 @@ class AnalysisRunAsset(BaseModel):
     processing_profile_version: str
     analysis_profile_version: str = ANALYSIS_CONTRACT_PROFILE_VERSION
     media_kind: str
-    status: AnalysisPrepareAssetStatus
+    status: AnalysisPrepareAssetStatus | AnalysisModelAssetStatus
     error_code: str | None = None
     error_message: str | None = None
     created_at: datetime | None = None
@@ -243,7 +248,7 @@ class AnalysisRunReportAsset(BaseModel):
     asset_id: str
     working_media_id: str
     media_kind: str
-    status: AnalysisPrepareAssetStatus
+    status: AnalysisPrepareAssetStatus | AnalysisModelAssetStatus
     shot_count: int = 0
     frame_count: int = 0
     relative_frame_paths: list[str] = Field(default_factory=list)
