@@ -105,24 +105,29 @@ INTAKE_RUN_SCHEMA_VERSION = "1"
 COPY_INTAKE_WORKER_VERSION = "1"
 REMUX_INTAKE_WORKER_VERSION = "1"
 VIDEO_TRANSCODE_WORKER_VERSION = "1"
+IMAGE_CONVERT_WORKER_VERSION = "1"
 WORKER_INTERRUPTED_INTAKE_ERROR_CODE = "worker_interrupted"
 # Kanonische Working-Media-Profile (Whitelist für Pfadsegmente).
 COPY_WORKING_PROFILE_VERSION = "copy-v1"
 REMUX_WORKING_PROFILE_VERSION = "remux-mp4-v1"
 VIDEO_H264_PROFILE_VERSION = "video-h264-v1"
+IMAGE_PNG_PROFILE_VERSION = "image-png-v1"
 COPY_WORKING_ACTION = "copy"
 REMUX_WORKING_ACTION = "remux"
 VIDEO_TRANSCODE_ACTION = "transcode"
+IMAGE_CONVERT_ACTION = "transcode"
 ALLOWED_WORKING_PROFILE_VERSIONS = frozenset(
     {
         COPY_WORKING_PROFILE_VERSION,
         REMUX_WORKING_PROFILE_VERSION,
         VIDEO_H264_PROFILE_VERSION,
+        IMAGE_PNG_PROFILE_VERSION,
     }
 )
 INTAKE_RUN_SCOPE_COPY_ONLY = "copy_only"
 INTAKE_RUN_SCOPE_REMUX_ONLY = "remux_only"
 INTAKE_RUN_SCOPE_VIDEO_TRANSCODE_ONLY = "video_transcode_only"
+INTAKE_RUN_SCOPE_IMAGE_CONVERT_ONLY = "image_convert_only"
 
 
 class IntakeRunStatus(str, Enum):
@@ -187,6 +192,7 @@ class IntakeRunRecord(BaseModel):
     copied_assets: int = 0
     remuxed_assets: int = 0
     transcoded_assets: int = 0
+    converted_assets: int = 0
     reused_assets: int = 0
     error_summary: str | None = None
     worker_version: str = COPY_INTAKE_WORKER_VERSION
@@ -240,6 +246,17 @@ class IntakeRunReportAsset(BaseModel):
     audio_policy: str | None = None
     timecode_policy: str | None = None
     output_sha256: str | None = None
+    source_image_format: str | None = None
+    source_image_mode: str | None = None
+    source_width: int | None = None
+    source_height: int | None = None
+    output_image_format: str | None = None
+    output_image_mode: str | None = None
+    output_width: int | None = None
+    output_height: int | None = None
+    orientation_result: str | None = None
+    alpha_result: str | None = None
+    pixel_digest: str | None = None
 
 
 class IntakeRunReport(BaseModel):
@@ -265,6 +282,9 @@ class IntakeRunReport(BaseModel):
     transcoded_assets: int = 0
     # Kurzer JSON-Alias für Video-Transcode-Berichte (gleicher Wert).
     transcoded: int = 0
+    converted_assets: int = 0
+    # Kurzer JSON-Alias für Bildkonvertierung (gleicher Wert).
+    converted: int = 0
     reused_assets: int = 0
     # Kurzer JSON-Alias (gleicher Wert wie reused_assets).
     reused: int = 0

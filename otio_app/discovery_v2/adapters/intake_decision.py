@@ -10,6 +10,7 @@ from pathlib import PurePosixPath
 
 from otio_app.discovery_v2.domain.inventory import MediaKind
 from otio_app.discovery_v2.domain.media_intake import (
+    IMAGE_PNG_PROFILE_VERSION,
     PROCESSING_PROFILE_VERSION,
     IntakeAction,
     IntakePlanItem,
@@ -47,7 +48,9 @@ _SUITABLE_AUDIO_EXTENSIONS = frozenset(
     {".wav", ".mp3", ".aac", ".m4a", ".flac", ".aiff", ".aif", ".ogg"}
 )
 _COPY_IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
-_TRANSCODE_IMAGE_EXTENSIONS = frozenset({".heic", ".tif", ".tiff"})
+_TIFF_IMAGE_EXTENSIONS = frozenset({".tif", ".tiff"})
+_HEIC_IMAGE_EXTENSIONS = frozenset({".heic", ".heif"})
+_TRANSCODE_IMAGE_EXTENSIONS = _TIFF_IMAGE_EXTENSIONS | _HEIC_IMAGE_EXTENSIONS
 
 _BLOCKED_VALIDATION_STATUSES = frozenset(
     {
@@ -76,6 +79,7 @@ class IntakeDecision:
     reason_code: str
     reason_detail: str
     proposed_target_extension: str | None = None
+    processing_profile_version: str = PROCESSING_PROFILE_VERSION
 
 
 def _normalize_extension(extension: str | None, relative_path: str) -> str:
@@ -300,16 +304,29 @@ def _decide_image(extension: str) -> IntakeDecision:
             reason_detail=f"Geeignetes Bildformat ({extension}).",
             proposed_target_extension=extension,
         )
-    if extension in _TRANSCODE_IMAGE_EXTENSIONS:
+    if extension in _TIFF_IMAGE_EXTENSIONS:
+        return IntakeDecision(
+            planned_action=IntakeAction.TRANSCODE,
+            status=IntakePlanItemStatus.PLANNED,
+            reason_code="image_transcode_required",
+            reason_detail=(
+                f"TIFF erfordert Konvertierung nach PNG ({extension}) "
+                f"mit Profil {IMAGE_PNG_PROFILE_VERSION}."
+            ),
+            proposed_target_extension=".png",
+            processing_profile_version=IMAGE_PNG_PROFILE_VERSION,
+        )
+    if extension in _HEIC_IMAGE_EXTENSIONS:
         return IntakeDecision(
             planned_action=IntakeAction.TRANSCODE,
             status=IntakePlanItemStatus.PLANNED,
             reason_code="image_transcode_required",
             reason_detail=(
                 f"Bildformat erfordert Transkodierung ({extension}); "
-                "Zielendung noch nicht festgelegt."
+                "Zielprofil noch nicht freigegeben (kein HEIC-Decoder)."
             ),
             proposed_target_extension=None,
+            processing_profile_version=PROCESSING_PROFILE_VERSION,
         )
     return IntakeDecision(
         planned_action=IntakeAction.BLOCKED,
@@ -350,5 +367,5 @@ def build_plan_item(source: IntakeDecisionSource) -> IntakePlanItem:
         reason_code=decision.reason_code,
         reason_detail=decision.reason_detail,
         proposed_target_extension=decision.proposed_target_extension,
-        processing_profile_version=PROCESSING_PROFILE_VERSION,
+        processing_profile_version=decision.processing_profile_version,
     )

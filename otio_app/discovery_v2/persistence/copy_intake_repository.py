@@ -14,6 +14,7 @@ from otio_app.discovery_v2.domain.media_intake import (
     COPY_WORKING_ACTION,
     COPY_WORKING_PROFILE_VERSION,
     INTAKE_RUN_SCOPE_COPY_ONLY,
+    INTAKE_RUN_SCOPE_IMAGE_CONVERT_ONLY,
     INTAKE_RUN_SCOPE_REMUX_ONLY,
     INTAKE_RUN_SCOPE_VIDEO_TRANSCODE_ONLY,
     IntakeAction,
@@ -169,8 +170,9 @@ def insert_intake_run(conn: sqlite3.Connection, run: IntakeRunRecord) -> None:
             validation_run_id, status, created_at, started_at, completed_at,
             total_assets, processed_assets, succeeded_assets, failed_assets,
             skipped_assets, error_summary, worker_version, scope,
-            copied_assets, remuxed_assets, transcoded_assets, reused_assets
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            copied_assets, remuxed_assets, transcoded_assets, converted_assets,
+            reused_assets
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run.run_id,
@@ -195,6 +197,7 @@ def insert_intake_run(conn: sqlite3.Connection, run: IntakeRunRecord) -> None:
             run.copied_assets,
             run.remuxed_assets,
             run.transcoded_assets,
+            run.converted_assets,
             run.reused_assets,
         ),
     )
@@ -250,6 +253,7 @@ def update_intake_run(conn: sqlite3.Connection, run: IntakeRunRecord) -> None:
             copied_assets = ?,
             remuxed_assets = ?,
             transcoded_assets = ?,
+            converted_assets = ?,
             reused_assets = ?
         WHERE run_id = ?
         """,
@@ -268,6 +272,7 @@ def update_intake_run(conn: sqlite3.Connection, run: IntakeRunRecord) -> None:
             run.copied_assets,
             run.remuxed_assets,
             run.transcoded_assets,
+            run.converted_assets,
             run.reused_assets,
             run.run_id,
         ),
@@ -523,6 +528,7 @@ def build_report_from_intake_run(
     copied = 0
     remuxed = 0
     transcoded = 0
+    converted = 0
     reused = 0
     failed = 0
 
@@ -535,6 +541,8 @@ def build_report_from_intake_run(
                     remuxed += 1
                 elif scope == INTAKE_RUN_SCOPE_VIDEO_TRANSCODE_ONLY:
                     transcoded += 1
+                elif scope == INTAKE_RUN_SCOPE_IMAGE_CONVERT_ONLY:
+                    converted += 1
                 elif asset.planned_action == IntakeAction.COPY:
                     copied += 1
                 elif asset.planned_action == IntakeAction.REMUX:
@@ -557,12 +565,24 @@ def build_report_from_intake_run(
                     audio_policy=detail.get("audio_policy"),
                     timecode_policy=detail.get("timecode_policy"),
                     output_sha256=asset.output_sha256,
+                    source_image_format=detail.get("source_image_format"),
+                    source_image_mode=detail.get("source_image_mode"),
+                    source_width=_optional_int(detail.get("source_width")),
+                    source_height=_optional_int(detail.get("source_height")),
+                    output_image_format=detail.get("output_image_format"),
+                    output_image_mode=detail.get("output_image_mode"),
+                    output_width=_optional_int(detail.get("output_width")),
+                    output_height=_optional_int(detail.get("output_height")),
+                    orientation_result=detail.get("orientation_result"),
+                    alpha_result=detail.get("alpha_result"),
+                    pixel_digest=detail.get("pixel_digest"),
                 )
             )
     else:
         copied = run.copied_assets
         remuxed = run.remuxed_assets
         transcoded = run.transcoded_assets
+        converted = run.converted_assets
         reused = run.reused_assets
         failed = run.failed_assets
 
@@ -587,6 +607,8 @@ def build_report_from_intake_run(
         remuxed_assets=remuxed,
         transcoded_assets=transcoded,
         transcoded=transcoded,
+        converted_assets=converted,
+        converted=converted,
         reused_assets=reused,
         reused=reused,
         failed=failed,
@@ -646,6 +668,15 @@ def _parse_optional_dt(value: object) -> datetime | None:
     return datetime.fromisoformat(str(value))
 
 
+def _optional_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 def _row_to_run(row: sqlite3.Row) -> IntakeRunRecord:
     keys = set(row.keys())
     scope = (
@@ -679,6 +710,7 @@ def _row_to_run(row: sqlite3.Row) -> IntakeRunRecord:
         copied_assets=_counter("copied_assets"),
         remuxed_assets=_counter("remuxed_assets"),
         transcoded_assets=_counter("transcoded_assets"),
+        converted_assets=_counter("converted_assets"),
         reused_assets=_counter("reused_assets"),
         error_summary=row["error_summary"],
         worker_version=str(row["worker_version"]),

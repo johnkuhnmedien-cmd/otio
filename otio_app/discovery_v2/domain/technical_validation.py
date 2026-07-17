@@ -90,6 +90,14 @@ class AssetValidationRecord(BaseModel):
     pixel_format: str | None = None
     bit_depth: int | None = None
     rotation_degrees: float | None = None
+    image_format: str | None = None
+    image_mode: str | None = None
+    image_frame_count: int | None = None
+    has_alpha: bool | None = None
+    has_icc_profile: bool | None = None
+    exif_orientation: int | None = None
+    image_bit_depth: int | None = None
+    image_is_bigtiff: bool | None = None
     error_code: str | None = None
     error_message: str | None = None
     validated_at: datetime

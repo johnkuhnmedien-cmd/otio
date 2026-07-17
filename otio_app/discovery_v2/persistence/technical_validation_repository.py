@@ -242,10 +242,13 @@ def insert_asset_validation(
             duration_seconds, frame_rate_numerator, frame_rate_denominator,
             audio_stream_count, audio_channel_count, embedded_timecode,
             pixel_format, bit_depth, rotation_degrees,
+            image_format, image_mode, image_frame_count, has_alpha,
+            has_icc_profile, exif_orientation, image_bit_depth, image_is_bigtiff,
             error_code, error_message, validated_at, duplicate_group_id,
             duplicate_hint
         ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
         """,
         (
@@ -272,6 +275,26 @@ def insert_asset_validation(
             record.pixel_format,
             record.bit_depth,
             record.rotation_degrees,
+            record.image_format,
+            record.image_mode,
+            record.image_frame_count,
+            (
+                None
+                if record.has_alpha is None
+                else (1 if record.has_alpha else 0)
+            ),
+            (
+                None
+                if record.has_icc_profile is None
+                else (1 if record.has_icc_profile else 0)
+            ),
+            record.exif_orientation,
+            record.image_bit_depth,
+            (
+                None
+                if record.image_is_bigtiff is None
+                else (1 if record.image_is_bigtiff else 0)
+            ),
             record.error_code,
             record.error_message,
             record.validated_at.isoformat(),
@@ -550,6 +573,38 @@ def _row_to_validation(row: sqlite3.Row) -> AssetValidationRecord:
             float(row["rotation_degrees"])
             if "rotation_degrees" in keys and row["rotation_degrees"] is not None
             else None
+        ),
+        image_format=row["image_format"] if "image_format" in keys else None,
+        image_mode=row["image_mode"] if "image_mode" in keys else None,
+        image_frame_count=(
+            int(row["image_frame_count"])
+            if "image_frame_count" in keys and row["image_frame_count"] is not None
+            else None
+        ),
+        has_alpha=(
+            None
+            if "has_alpha" not in keys or row["has_alpha"] is None
+            else bool(int(row["has_alpha"]))
+        ),
+        has_icc_profile=(
+            None
+            if "has_icc_profile" not in keys or row["has_icc_profile"] is None
+            else bool(int(row["has_icc_profile"]))
+        ),
+        exif_orientation=(
+            int(row["exif_orientation"])
+            if "exif_orientation" in keys and row["exif_orientation"] is not None
+            else None
+        ),
+        image_bit_depth=(
+            int(row["image_bit_depth"])
+            if "image_bit_depth" in keys and row["image_bit_depth"] is not None
+            else None
+        ),
+        image_is_bigtiff=(
+            None
+            if "image_is_bigtiff" not in keys or row["image_is_bigtiff"] is None
+            else bool(int(row["image_is_bigtiff"]))
         ),
         error_code=row["error_code"],
         error_message=row["error_message"],

@@ -567,11 +567,47 @@ def test_copy_images(ext) -> None:
     assert d.planned_action == IntakeAction.COPY
 
 
-@pytest.mark.parametrize("ext", [".heic", ".tif", ".tiff"])
-def test_transcode_images(ext) -> None:
+def _build_image_item(extension: str):
+    validation = AssetValidationRecord(
+        validation_id="v1",
+        run_id="r1",
+        asset_id="a1",
+        source_relative_path=f"group/file{extension}",
+        status=AssetValidationStatus.PROBE_SUCCEEDED,
+        media_kind="image",
+        sha256="b" * 64,
+        validated_at=_now(),
+        source_group="group",
+    )
+    return build_plan_item(
+        IntakeDecisionSource(
+            validation=validation,
+            extension=extension,
+            source_group="group",
+        )
+    )
+
+
+@pytest.mark.parametrize("ext", [".tif", ".tiff"])
+def test_transcode_tiff_images_get_png_profile(ext) -> None:
+    from otio_app.discovery_v2.domain.media_intake import IMAGE_PNG_PROFILE_VERSION
+
+    d = _decision(media_kind="image", extension=ext)
+    assert d.planned_action == IntakeAction.TRANSCODE
+    assert d.proposed_target_extension == ".png"
+    item = _build_image_item(ext)
+    assert item.proposed_target_extension == ".png"
+    assert item.processing_profile_version == IMAGE_PNG_PROFILE_VERSION
+
+
+@pytest.mark.parametrize("ext", [".heic", ".heif"])
+def test_transcode_heic_images_keep_open_target(ext) -> None:
     d = _decision(media_kind="image", extension=ext)
     assert d.planned_action == IntakeAction.TRANSCODE
     assert d.proposed_target_extension is None
+    item = _build_image_item(ext)
+    assert item.proposed_target_extension is None
+    assert item.processing_profile_version != "image-png-v1"
 
 
 def test_other_blocked() -> None:
@@ -691,10 +727,10 @@ def test_schema_extension_idempotent(discovery_project, imported) -> None:
     }
     assert "pixel_format" in cols
     assert "bit_depth" in cols
-    assert reg_db.read_schema_version(conn) == "9"
+    assert reg_db.read_schema_version(conn) == "10"
     conn.close()
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "9"
+    assert reg_db.read_schema_version(conn2) == "10"
     conn2.close()
 
 
@@ -706,7 +742,7 @@ def test_migrate_v2_preserves_registry(discovery_project, imported) -> None:
     conn.commit()
     conn.close()
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "9"
+    assert reg_db.read_schema_version(conn2) == "10"
     assert conn2.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == count
     assert conn2.execute(
         "SELECT name FROM sqlite_master WHERE name='intake_plans'"
@@ -740,7 +776,7 @@ def test_migrate_v3_adds_profile_columns_without_reprobe(
     conn.close()
 
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "9"
+    assert reg_db.read_schema_version(conn2) == "10"
     after = conn2.execute("SELECT COUNT(*) FROM asset_validations").fetchone()[0]
     assert after == before > 0
     cols = {

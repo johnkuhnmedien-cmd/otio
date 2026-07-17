@@ -25,6 +25,13 @@ from otio_app.discovery_v2.application.remux_intake_service import (
     list_open_remux_plan_items,
     start_remux_intake,
 )
+from otio_app.discovery_v2.application.image_convert_service import (
+    ImageConvertServiceError,
+    can_start_image_convert_intake,
+    get_image_convert_status,
+    list_image_convert_plan_item_views,
+    start_image_convert_intake,
+)
 from otio_app.discovery_v2.application.video_transcode_service import (
     VideoTranscodeServiceError,
     can_start_video_transcode_intake,
@@ -36,6 +43,7 @@ from otio_app.discovery_v2.application.video_transcode_service import (
 )
 from otio_app.discovery_v2.domain.media_intake import (
     ACTIVE_INTAKE_RUN_STATUSES,
+    IMAGE_PNG_PROFILE_VERSION,
     IntakeAction,
     IntakePlanStatus,
     IntakeRunAssetStatus,
@@ -58,8 +66,8 @@ def render_discovery_media_intake_page() -> None:
     st.caption(
         "Plant die technische Übernahme. Copy übernimmt bytegenau; "
         "Remux ändert nur den Container per Stream Copy; "
-        "Video-Transkodierung wandelt nach H.264/yuv420p/8-Bit um. "
-        "Bildkonvertierung ist hier nicht enthalten."
+        "Video-Transkodierung wandelt nach H.264/yuv420p/8-Bit um; "
+        "TIFF-Konvertierung erzeugt einzelne PNG-Dateien (image-png-v1)."
     )
 
     error = st.session_state.pop(_SESSION_ERROR_KEY, None)
@@ -157,10 +165,15 @@ def render_discovery_media_intake_page() -> None:
 
     remux_run, _, _, _ = get_remux_intake_status(project)
     vt_run, _, _, _ = get_video_transcode_status(project)
+    img_run_active, _, _, _ = get_image_convert_status(project)
     any_active = (
         (run is not None and run.status in ACTIVE_INTAKE_RUN_STATUSES)
         or (remux_run is not None and remux_run.status in ACTIVE_INTAKE_RUN_STATUSES)
         or (vt_run is not None and vt_run.status in ACTIVE_INTAKE_RUN_STATUSES)
+        or (
+            img_run_active is not None
+            and img_run_active.status in ACTIVE_INTAKE_RUN_STATUSES
+        )
     )
     can_click_copy = copy_ok and not any_active and not is_stale
 
@@ -435,6 +448,146 @@ def render_discovery_media_intake_page() -> None:
     if vt_working:
         st.markdown(f"**Video-Transcode Working Media ({len(vt_working)})**")
         for wm in vt_working[:50]:
+            st.caption(
+                f"`{wm.source_relative_path}` → `{wm.working_relative_path}` "
+                f"(sha256={wm.output_sha256[:12]}…)"
+            )
+
+    # --- TIFF-Konvertierung (Phase 7C3A) ------------------------------------
+    st.subheader("TIFF-Konvertierung")
+    st.caption(
+        "TIFF-Bilder werden verlustfrei in einzelne PNG-Dateien "
+        "umgewandelt. Es wird kein Video erzeugt und keine Bildgestaltung "
+        "vorgenommen."
+    )
+    st.caption(
+        "HEIC/HEIF kann in dieser Installation derzeit nicht dekodiert werden."
+    )
+    img_ok, img_msg, img_ctx = can_start_image_convert_intake(project)
+    img_views = list_image_convert_plan_item_views(project)
+    img_run, img_assets, img_working, img_status_err = get_image_convert_status(
+        project
+    )
+    if img_status_err:
+        st.warning(img_status_err)
+    if img_ctx is not None:
+        st.write(
+            f"**Offene TIFF→PNG-Items:** "
+            f"{img_ctx.get('image_convert_item_count', 0)}"
+        )
+        if img_ctx.get("image_conversion_profile_missing"):
+            st.warning(
+                "image_conversion_profile_missing: Bitte einen neuen "
+                "Intake-Plan erzeugen (Profil image-png-v1 / Ziel .png)."
+            )
+    if img_views:
+        st.markdown("**Offene TIFF-Positionen**")
+        for view in img_views:
+            item = view.item
+            alpha = (
+                "—"
+                if view.has_alpha is None
+                else ("ja" if view.has_alpha else "nein")
+            )
+            icc = (
+                "—"
+                if view.has_icc_profile is None
+                else ("ja" if view.has_icc_profile else "nein")
+            )
+            orient = (
+                "—"
+                if view.exif_orientation is None
+                else str(view.exif_orientation)
+            )
+            frames = (
+                "—"
+                if view.image_frame_count is None
+                else str(view.image_frame_count)
+            )
+            bit = (
+                "—"
+                if view.image_bit_depth is None
+                else str(view.image_bit_depth)
+            )
+            profile = item.processing_profile_version or "—"
+            target = item.proposed_target_extension or "—"
+            st.markdown(
+                f"`{item.source_relative_path}` · "
+                f"Format=`{view.image_format or item.extension}` · "
+                f"{view.width or '—'}×{view.height or '—'} · "
+                f"Modus=`{view.image_mode or '—'}` · "
+                f"bit=`{bit}` · Seiten=`{frames}` · "
+                f"Alpha={alpha} · EXIF-Orientierung={orient} · "
+                f"ICC={icc} · Ziel=`{target}` · Profil=`{profile}`"
+            )
+            block = item.reason_detail
+            if profile != IMAGE_PNG_PROFILE_VERSION or target != ".png":
+                block = (
+                    "image_conversion_profile_missing — neuer Intake-Plan nötig. "
+                    + block
+                )
+            st.caption(f"Block-/Planungsgrund: {item.reason_code}: {block}")
+    else:
+        st.caption("Keine offenen TIFF-Konvertierungs-Items im aktuellen Plan.")
+
+    can_click_img = img_ok and not any_active and not is_stale
+    if can_click_img:
+        if st.button(
+            "TIFF-Konvertierung starten",
+            type="primary",
+            key="discovery_v2_image_convert_start_btn",
+        ):
+            try:
+                result = start_image_convert_intake(project, sync=False)
+            except ImageConvertServiceError as exc:
+                st.session_state[_SESSION_ERROR_KEY] = str(exc)
+            else:
+                if result.started:
+                    st.session_state[_SESSION_INFO_KEY] = result.message
+                else:
+                    st.session_state[_SESSION_ERROR_KEY] = result.message
+            st.rerun()
+    else:
+        st.caption(img_msg or "TIFF-Konvertierung derzeit nicht startbar.")
+
+    if img_run is not None:
+        st.write(f"**TIFF-Convert-Run-ID:** `{img_run.run_id}`")
+        st.write(
+            f"**Scope:** `{img_run.scope}` · **Status:** `{img_run.status.value}`"
+        )
+        st.write(
+            f"**Fortschritt:** {img_run.processed_assets} / {img_run.total_assets} · "
+            f"converted={img_run.converted_assets} · "
+            f"reused={img_run.reused_assets} · "
+            f"transcoded={img_run.transcoded_assets} · "
+            f"Skip={img_run.skipped_assets} · "
+            f"Fehler={img_run.failed_assets}"
+        )
+        if img_run.error_summary:
+            st.error(img_run.error_summary)
+        if img_run.status in ACTIVE_INTAKE_RUN_STATUSES:
+            st.info(
+                "TIFF-Konvertierung läuft … Seite neu laden, um den Fortschritt "
+                "zu aktualisieren."
+            )
+        st.caption(f"Bericht: `_otio_v2/intake/runs/{img_run.run_id}.json`")
+        if img_assets:
+            st.markdown("**TIFF-Convert-Ergebnisse**")
+            for item in img_assets:
+                path = item.working_relative_path or "—"
+                st.markdown(
+                    f"`{item.source_relative_path}` — **{item.status.value}** · "
+                    f"working=`{path}`"
+                )
+                if item.error_code or item.error_message:
+                    st.caption(
+                        f"{item.error_code or ''}: {item.error_message or ''}".strip(
+                            ": "
+                        )
+                    )
+    if img_working:
+        st.markdown(f"**TIFF Working Media ({len(img_working)})**")
+        for wm in img_working[:50]:
             st.caption(
                 f"`{wm.source_relative_path}` → `{wm.working_relative_path}` "
                 f"(sha256={wm.output_sha256[:12]}…)"

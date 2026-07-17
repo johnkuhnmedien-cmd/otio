@@ -8,6 +8,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from otio_app.defaults import DEFAULT_DISCOVERY_V2_WORK_SUBDIR, DEFAULT_WORK_SUBDIR
+from otio_app.discovery_v2.adapters.image_probe import (
+    ImageProbeError,
+    probe_image_file,
+)
 from otio_app.discovery_v2.adapters.media_probe import (
     MediaProbeAdapterError,
     probe_source_media,
@@ -289,6 +293,37 @@ def _validate_one_asset(
             source_group=asset.source_group,
         )
 
+    image_format = None
+    image_mode = None
+    image_frame_count = None
+    has_alpha = None
+    has_icc_profile = None
+    exif_orientation = None
+    image_bit_depth = None
+    image_is_bigtiff = None
+    width = probe.width
+    height = probe.height
+
+    if asset.media_kind == MediaKind.IMAGE:
+        # Genau ein Pillow-Image-Probe für persistierte Bildfelder.
+        try:
+            image_probe = probe_image_file(path)
+        except ImageProbeError:
+            image_probe = None
+        if image_probe is not None:
+            image_format = image_probe.image_format
+            image_mode = image_probe.image_mode
+            image_frame_count = image_probe.image_frame_count
+            has_alpha = image_probe.has_alpha
+            has_icc_profile = image_probe.has_icc_profile
+            exif_orientation = image_probe.exif_orientation
+            image_bit_depth = image_probe.image_bit_depth
+            image_is_bigtiff = image_probe.image_is_bigtiff
+            if width is None:
+                width = image_probe.width
+            if height is None:
+                height = image_probe.height
+
     return AssetValidationRecord(
         validation_id=new_validation_id(),
         run_id=run_id,
@@ -302,8 +337,8 @@ def _validate_one_asset(
         container_format=probe.container_format,
         video_codec=probe.video_codec,
         audio_codec=probe.audio_codec,
-        width=probe.width,
-        height=probe.height,
+        width=width,
+        height=height,
         duration_seconds=probe.duration_seconds,
         frame_rate_numerator=probe.frame_rate_numerator,
         frame_rate_denominator=probe.frame_rate_denominator,
@@ -313,6 +348,14 @@ def _validate_one_asset(
         pixel_format=probe.pixel_format,
         bit_depth=probe.bit_depth,
         rotation_degrees=probe.rotation_degrees,
+        image_format=image_format,
+        image_mode=image_mode,
+        image_frame_count=image_frame_count,
+        has_alpha=has_alpha,
+        has_icc_profile=has_icc_profile,
+        exif_orientation=exif_orientation,
+        image_bit_depth=image_bit_depth,
+        image_is_bigtiff=image_is_bigtiff,
         validated_at=now,
         source_group=asset.source_group,
     )

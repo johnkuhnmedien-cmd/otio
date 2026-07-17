@@ -13,7 +13,7 @@ from otio_app.discovery_v2.paths import (
 )
 
 # Lesbare Schema-Versionen, die idempotent auf CURRENT migriert werden.
-_LEGACY_SCHEMA_VERSIONS = frozenset({"1", "2", "3", "4", "5", "6", "7", "8"})
+_LEGACY_SCHEMA_VERSIONS = frozenset({"1", "2", "3", "4", "5", "6", "7", "8", "9"})
 
 
 class RegistryDatabaseError(ValueError):
@@ -160,6 +160,14 @@ def _ensure_validation_tables(conn: sqlite3.Connection) -> None:
             pixel_format TEXT,
             bit_depth INTEGER,
             rotation_degrees REAL,
+            image_format TEXT,
+            image_mode TEXT,
+            image_frame_count INTEGER,
+            has_alpha INTEGER,
+            has_icc_profile INTEGER,
+            exif_orientation INTEGER,
+            image_bit_depth INTEGER,
+            image_is_bigtiff INTEGER,
             error_code TEXT,
             error_message TEXT,
             validated_at TEXT NOT NULL,
@@ -209,6 +217,25 @@ def _ensure_validation_profile_columns(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE asset_validations ADD COLUMN rotation_degrees REAL"
         )
+    _ensure_validation_image_columns(conn)
+
+
+def _ensure_validation_image_columns(conn: sqlite3.Connection) -> None:
+    """Idempotent: Bildfelder an bestehende asset_validations anfügen (Schema 10)."""
+    rows = conn.execute("PRAGMA table_info(asset_validations)").fetchall()
+    columns = {str(row[1]) for row in rows}
+    for name, decl in (
+        ("image_format", "TEXT"),
+        ("image_mode", "TEXT"),
+        ("image_frame_count", "INTEGER"),
+        ("has_alpha", "INTEGER"),
+        ("has_icc_profile", "INTEGER"),
+        ("exif_orientation", "INTEGER"),
+        ("image_bit_depth", "INTEGER"),
+        ("image_is_bigtiff", "INTEGER"),
+    ):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE asset_validations ADD COLUMN {name} {decl}")
 
 
 def _ensure_intake_tables(conn: sqlite3.Connection) -> None:
@@ -291,6 +318,7 @@ def _ensure_copy_intake_tables(conn: sqlite3.Connection) -> None:
             copied_assets INTEGER NOT NULL DEFAULT 0,
             remuxed_assets INTEGER NOT NULL DEFAULT 0,
             transcoded_assets INTEGER NOT NULL DEFAULT 0,
+            converted_assets INTEGER NOT NULL DEFAULT 0,
             reused_assets INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (plan_id) REFERENCES intake_plans(plan_id),
             FOREIGN KEY (import_id) REFERENCES selection_imports(import_id),
@@ -399,6 +427,7 @@ def _migrate_intake_runs_action_counters(conn: sqlite3.Connection) -> None:
         "copied_assets",
         "remuxed_assets",
         "transcoded_assets",
+        "converted_assets",
         "reused_assets",
     ):
         if column not in cols:
@@ -530,6 +559,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     if row is None:
         _ensure_validation_tables(conn)
         _ensure_validation_profile_columns(conn)
+        _ensure_validation_image_columns(conn)
         _ensure_intake_tables(conn)
         _ensure_copy_intake_tables(conn)
         conn.execute(
@@ -545,6 +575,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     if current == REGISTRY_SCHEMA_VERSION:
         _ensure_validation_tables(conn)
         _ensure_validation_profile_columns(conn)
+        _ensure_validation_image_columns(conn)
         _ensure_intake_tables(conn)
         _ensure_copy_intake_tables(conn)
         conn.execute(
@@ -557,6 +588,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         # Idempotente Migration: bestehende Assets/Imports/Validations bleiben.
         _ensure_validation_tables(conn)
         _ensure_validation_profile_columns(conn)
+        _ensure_validation_image_columns(conn)
         _ensure_intake_tables(conn)
         _ensure_copy_intake_tables(conn)
         conn.execute(

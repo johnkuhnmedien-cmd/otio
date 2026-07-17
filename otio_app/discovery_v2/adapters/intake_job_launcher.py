@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from otio_app.discovery_v2.jobs.copy_intake_worker import process_copy_intake_run
+from otio_app.discovery_v2.jobs.image_convert_worker import process_image_convert_run
 from otio_app.discovery_v2.jobs.remux_intake_worker import process_remux_intake_run
 from otio_app.discovery_v2.jobs.video_transcode_worker import (
     process_video_transcode_run,
 )
 
-WorkerKind = Literal["copy", "remux", "video_transcode"]
+WorkerKind = Literal["copy", "remux", "video_transcode", "image_convert"]
 
 
 class IntakeJobLauncher:
@@ -38,6 +39,8 @@ class IntakeJobLauncher:
             return process_remux_intake_run
         if worker == "video_transcode":
             return process_video_transcode_run
+        if worker == "image_convert":
+            return process_image_convert_run
         return process_copy_intake_run
 
     def launch(

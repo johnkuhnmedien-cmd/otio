@@ -1088,15 +1088,22 @@ def test_navigation_and_no_classic_hooks() -> None:
     assert "_otio/" not in adapter or "_otio_v2" in adapter
 
 
-def test_no_image_convert_api_surface() -> None:
+def test_no_heic_convert_or_http_api_surface() -> None:
+    """TIFF-Convert ist freigegeben; HEIC-Start und HTTP-APIs bleiben verboten."""
     ui = Path(intake_ui.__file__).read_text(encoding="utf-8")
-    assert "Bildkonvertierung starten" not in ui
-    assert "start_image" not in ui
+    assert "HEIC-Konvertierung starten" not in ui
+    assert "discovery_v2_heic" not in ui.lower()
+    assert "pillow_heif" not in ui
     service = Path(
         "otio_app/discovery_v2/application/video_transcode_service.py"
     ).read_text(encoding="utf-8")
     assert "FastAPI" not in service
     assert "@app." not in service
+    image_service = Path(
+        "otio_app/discovery_v2/application/image_convert_service.py"
+    ).read_text(encoding="utf-8")
+    assert "FastAPI" not in image_service
+    assert "@app." not in image_service
 
 
 # --- Phase 7C2-R1: Zähler, tmcd, View, VFR ---------------------------------

@@ -263,7 +263,7 @@ def test_schema_v6_to_v9_preserves_copy_history(tmp_path: Path) -> None:
     _build_v6_registry(root)
 
     conn = reg_db.get_registry_connection(root)
-    assert reg_db.read_schema_version(conn) == "9"
+    assert reg_db.read_schema_version(conn) == "10"
     cols = {r[1] for r in conn.execute("PRAGMA table_info(intake_runs)")}
     assert "scope" in cols
     assert "transcoded_assets" in cols
@@ -284,7 +284,7 @@ def test_schema_v6_to_v9_preserves_copy_history(tmp_path: Path) -> None:
 
     # Idempotent erneut öffnen
     conn2 = reg_db.get_registry_connection(root)
-    assert reg_db.read_schema_version(conn2) == "9"
+    assert reg_db.read_schema_version(conn2) == "10"
     assert conn2.execute("SELECT COUNT(*) FROM intake_runs").fetchone()[0] == 1
     assert conn2.execute(
         "SELECT scope FROM intake_runs WHERE run_id='run-copy-hist'"
@@ -451,4 +451,25 @@ def test_terminal_video_transcode_does_not_block(tmp_path: Path) -> None:
         status=IntakeRunStatus.COMPLETED,
     )
     assert copy_repo.find_active_intake_run(conn, project_id="proj-scope") is None
+    conn.close()
+
+
+def test_active_image_convert_blocks_other_scopes(tmp_path: Path) -> None:
+    from otio_app.discovery_v2.domain.media_intake import (
+        INTAKE_RUN_SCOPE_IMAGE_CONVERT_ONLY,
+    )
+
+    root = tmp_path / "Project"
+    root.mkdir()
+    _build_v6_registry(root)
+    conn = reg_db.get_registry_connection(root)
+    img_id = _insert_active(
+        conn,
+        project_id="proj-scope",
+        scope=INTAKE_RUN_SCOPE_IMAGE_CONVERT_ONLY,
+    )
+    active = copy_repo.find_active_intake_run(conn, project_id="proj-scope")
+    assert active is not None
+    assert active.run_id == img_id
+    assert active.scope == INTAKE_RUN_SCOPE_IMAGE_CONVERT_ONLY
     conn.close()
