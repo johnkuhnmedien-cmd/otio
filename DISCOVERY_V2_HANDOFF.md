@@ -16,25 +16,28 @@
 - Phase 11 Voice / Pause / Timing: **implementiert (Fake Voice E2E)**
 - Phase-11 Contract Hardening R1: **angewendet** (Schema **18**)
 - Phase 12 Visual Edit / Humanity / Feasibility / Repair: **implementiert (Fake E2E)**
+- Phase 13 Editorial Approval / OTIO Export / Reparse / Alpha-E2E: **implementiert (Fake E2E)**
 - SoT Bootstrap: `RECONSTRUCTED_BOOTSTRAP` — für dieses Repository neu konsolidiert;
   Recovery-Suche → `NOT_FOUND`; andere Projekte und gelöschter GPT-Wissensstand
   sind keine Repositoryquelle; Authority-Restore der verbindlichen Regeln
   (D-DOC-008 … D-DOC-010; D-DOC-006/007 nur zusammen mit diesen)
-- Registry-Schema: **19**
+- Registry-Schema: **20**
 - Fake Vision: aktiv (`provider=fake`)
 - Fake Text Editorial / Visual Edit: aktiv (`provider=fake`, `fake-editorial-v1` /
   `fake-visual-edit-v1`)
 - Fake Stock Search: aktiv (`provider=fake`)
 - Fake Voice: aktiv (`provider=fake`, `fake-neutral-v1`, WAV PCM s16le 48 kHz mono)
+- OTIO-Profil: `discovery-otio-export-v1` · OpenTimelineIO **0.18.1**
 - Echte Vision-/Text-/Stock-/Voice-Provider: **gesperrt**
 - Kein ElevenLabs; keine echte Adobe-OAuth-/Lizenz-/Download-Integration
-- Aktiver Produktauftrag: keiner (Phase 12 Fake-Pfad abgeschlossen)
-- Nächster erlaubter Schritt nach Freigabe: **Phase 13 planen**
-- Phase 13 noch nicht begonnen
-- Gesperrt ohne eigenen Auftrag: echte Provider, finale Editorial Approval, OTIO
-- Teststand nach Phase 12: **2898 collected / 2879 passed / 18 failed / 1 skipped**
-- Artefakte Phase 12 unter `_otio_v2/editing/`
-- Endstatus Phase 12: `ready_for_editorial_review` (keine Exportfreigabe)
+- Keine proprietären NLE-Exporte; kein Cloud-Publish
+- Aktiver Produktauftrag: keiner (lokaler Fake-Alpha-Pfad Phase 13 abgeschlossen)
+- Nächster erlaubter Schritt nach Freigabe: **Alpha-Abnahme und Release-Readiness-Prüfung**
+- Keine neue Produktphase begonnen
+- Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
+- Teststand nach Phase 13: **2915 collected / 2896 passed / 18 failed / 1 skipped**
+- Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
+- Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 
 ## Source of Truth
 

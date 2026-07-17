@@ -390,3 +390,61 @@ Bereitschaft.
 
 **Entscheidung:** `ready_for_editorial_review` ist keine finale Exportfreigabe. OTIO
 bleibt Phase 13 vorbehalten.
+
+---
+
+## D-13-001 — Finale Editorial Approval ist menschlich
+
+**Entscheidung:** Finale Editorial Approval ist eine ausdrückliche menschliche
+Entscheidung und kann nicht durch ein Modell oder einen automatischen Run erzeugt
+werden.
+
+---
+
+## D-13-002 — Approval an exakten aktuellen Zustand gebunden
+
+**Entscheidung:** Approval ist an den exakten aktuellen Script-, Narration-,
+Visual-Edit-, Humanity-, Feasibility-, Repair- und Medienzustand gebunden.
+
+---
+
+## D-13-003 — Export Validation als Pflichtgate
+
+**Entscheidung:** Export Validation ist ein deterministisches Pflichtgate vor jedem
+OTIO-Export.
+
+---
+
+## D-13-004 — OTIO nur Working Media und Narration-WAVs
+
+**Entscheidung:** OTIO referenziert ausschließlich aktuelle validierte Working Media
+und aktuelle validierte Narration-Audiosegmente.
+
+---
+
+## D-13-005 — Zentraler Discovery-V2-OTIO-Adapter
+
+**Entscheidung:** OpenTimelineIO-Erzeugung erfolgt über einen zentralen
+Discovery-V2-Adapter und enthält keine redaktionelle Entscheidungslogik.
+
+---
+
+## D-13-006 — Completed erst nach Reparse und Semantik
+
+**Entscheidung:** Ein OTIO-Export gilt erst nach erfolgreichem Reparse und
+semantischem Vergleich als abgeschlossen.
+
+---
+
+## D-13-007 — KI-Timelines bleiben NEGATIVE_REFERENCE
+
+**Entscheidung:** Die vorhandenen KI-Timelines bleiben ausschließlich
+`NEGATIVE_REFERENCE` und sind keine positive Export- oder Schnittvorlage.
+
+---
+
+## D-13-008 — Phase 13 schließt den lokalen Fake-Alpha-Pfad ab
+
+**Entscheidung:** Phase 13 schließt den lokalen Fake-Alpha-Pfad ab. Proprietäre
+NLE-Exporte, reale Provider, Veröffentlichung und Cloud-Rendering bleiben außerhalb
+des Alpha-Scopes.
