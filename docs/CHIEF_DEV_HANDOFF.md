@@ -35,38 +35,42 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - Phase 7–8: **APPROVED**
 - Phase 9 Editorial Core / Coverage: **abgeschlossen** (Fake Text)
 - Phase 10 Supplementation / Script Lock: **abgeschlossen** (Fake Stock)
-- Phase 11 Voice / Pause / Timing: **abgeschlossen** (Fake Voice)
-- Phase-11 Contract Hardening R1: **angewendet** (Schema 18)
+- Phase 11 Voice / Pause / Timing: **vollständig abgeschlossen** (Fake Voice)
+- Phase-11 Contract Hardening R1: **angewendet** (Schema **18**)
 - Registry-Schema: **18**
 - Vision / Text Editorial / Stock / Voice: Fake-only
 - Teststand: **2883 / 2864 / 18 / 1**
-- **Aktueller Schritt: Phase 11 abgeschlossen; Phase 12 noch nicht begonnen**
+- **Aktueller Schritt: Phase-12-Planung**
 - Plan Phase 11: `docs/source_plans/PHASE11_VOICE_PAUSE_TIMING_PLAN.md`
+- Plan Phase 12: `docs/source_plans/PHASE12_VISUAL_EDIT_HUMANITY_FEASIBILITY_REPAIR_PLAN.md`
 - Entscheidungen: D-10-001 … D-10-008; D-11-001 … D-11-011
+  (Phase-12-Entscheidungen E1–E24 im Plan; `docs/DECISIONS.md` unverändert in diesem Planungsauftrag)
 
 ## Nächste erlaubte Aktion
 
-Nach Freigabe:
+Nach Freigabe dieses Phase-12-Plans:
 
-→ **Phase 12 planen** (Visual Edit Plan / Quality)
+→ **Phase-12-Implementierung** (Visual Edit Plan, Humanity, Feasibility, Repair — Fake only; Schema 19)
 
 Weiterhin gesperrt ohne eigene Gates:
 
 - echte Stockprovider und Adobe OAuth / Lizenz / Auto-Download
 - echte Text-/Vision-Provider
 - ElevenLabs und echte Voiceprovider
-- Phase 12+ Produkt (Visual Edit Plan, Humanity, Feasibility, OTIO)
+- Phase 13 (Editorial Approval, Export Validation, OTIO, Reparse, NLE)
 
 ## Verbindliche Kurzregeln
 
 - MANUAL Alpha-Standard; CHECKPOINT vorbereitet; AUTOMATIC post-alpha
 - Script Lock vor Voice; Coverage vor Stock; LLM-Pausenregie vor Timing
+- Visual Edit erst nach validierter Narration Timeline
 - Stock-Eskalation und Adobe-Medienfolge verbindlich; Preview ≠ Working Media
-- Humanity & Authenticity = eigener späterer Review-Schritt
+- Humanity & Authenticity = eigener Review-Schritt vor Ready/Export
 - Working Media = einzige OTIO-Medienquelle; Classic `_otio/` read-only
 - Gateways zentral; kein Default/Aktiv für reale Provider behaupten
 - Visual Observation ≠ Fakten-/Assetfreigabe
 - KI-Timelines = `NEGATIVE_REFERENCE`
+- Sentence ≠ Beat ≠ Intent ≠ Editorial Shot ≠ Technical Shot ≠ Asset
 
 ## Alpha-DoD (Auszug)
 

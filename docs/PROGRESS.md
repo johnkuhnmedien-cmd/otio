@@ -6,11 +6,14 @@
 
 Contract Hardening R1 angewendet (Schema **18**).
 
-- Schema: **18**
+**Phase 12 — Visual Edit / Humanity / Feasibility / Repair: in Planung.**
+
+Plan: `docs/source_plans/PHASE12_VISUAL_EDIT_HUMANITY_FEASIBILITY_REPAIR_PLAN.md`
+
+- Schema: **18** (Phase-12-Zielschema **19**, noch nicht migriert)
 - Fake Voice aktiv (`provider=fake`, `fake-neutral-v1`)
 - Pause Direction über DiscoveryTextGateway (`pause_direction`)
 - Resolved Narration Timeline (rationale Timebases)
-- Direkte Profil-/Segment-/Direction-Verträge; permanente Pause-Referenzfehler ohne Retry
 - Echte Stock-/Adobe-/Text-/Vision-/Voice-Provider (inkl. ElevenLabs): gesperrt
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
 
@@ -24,7 +27,8 @@ Contract Hardening R1 angewendet (Schema **18**).
 | 9 Editorial Core / Coverage | freigegeben / abgeschlossen (Fake) |
 | 10 Supplementation / Script Lock | freigegeben / abgeschlossen (Fake) |
 | 11 Voice / Pause / Timing | **freigegeben / abgeschlossen (Fake)** + Contract Hardening R1 |
-| 12–13 | gesperrt |
+| 12 Visual Edit / Humanity / Feasibility / Repair | **in Planung** (keine Produktimplementierung) |
+| 13 Review / OTIO | gesperrt |
 
 ## Teststand (nach Phase 11 Contract Hardening R1)
 
@@ -39,9 +43,8 @@ keine neuen Fehler oder Skips (+6 Hardening-Tests, alle grün).
 
 ## Nächster erlaubter Schritt
 
-Nach Freigabe: **Phase 12 planen** (Visual Edit Plan / Quality).
-
-Phase 12 noch nicht begonnen.
+Nach Freigabe dieses Phase-12-Plans: **Phase-12-Implementierung**
+(Visual Edit Plan, Humanity, Feasibility, Repair — Fake only).
 
 Gesperrt: ElevenLabs und echte Voiceprovider, echte Stock/Adobe,
-Visual Edit Plan, Humanity, Feasibility, Repair, OTIO.
+echte Text-/Vision-Provider, Phase 13, OTIO-Export/Reparse/NLE.
