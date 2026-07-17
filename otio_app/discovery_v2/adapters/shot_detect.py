@@ -137,7 +137,14 @@ def _sorted_deduped_cuts(
             cut = float(raw)
         except (TypeError, ValueError):
             continue
-        if math.isfinite(cut) and 0.0 < cut < duration_seconds:
+        # NaN/Infinity sind ungültige Grenzen und blockieren deterministisch.
+        if not math.isfinite(cut):
+            raise ShotDetectError(
+                "invalid_shot_boundaries",
+                f"Nicht-finite Cut-Zeit: {raw!r}",
+            )
+        # Werte außerhalb (0, duration) werden entfernt (nicht als Grenze genutzt).
+        if 0.0 < cut < duration_seconds:
             valid.append(cut)
     return _dedupe_sorted(valid)
 
@@ -145,7 +152,7 @@ def _sorted_deduped_cuts(
 def _dedupe_sorted(values: list[float]) -> list[float]:
     deduped: list[float] = []
     for value in sorted(values):
-        if deduped and abs(value - deduped[-1]) <= CUT_DEDUPE_SECONDS:
+        if deduped and abs(value - deduped[-1]) <= CUT_DEDUPE_SECONDS + 1e-9:
             continue
         deduped.append(value)
     return deduped
