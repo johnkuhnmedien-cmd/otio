@@ -5,11 +5,18 @@
 - Branch: `cursor/discovery-v2-integration`
 - PR: `#69`
 - Ursprüngliche Basis: `7187d163a5959351a1ee79f5c931b0d651e21d49`
-- Letzter technisch freigegebener Commit: `0d8ec2f060107a1720c750b11e4372c3529a2c61`
+- Technischer Ausgang vor Phase 8D: `1b5f0d564c46050c7702734557357cce6dbcb26c`
 - Phase 7: `APPROVED`
 - Phase 8A: `APPROVED`
 - Phase 8B: `APPROVED`
-- Aktiver Produktauftrag: keiner (lokale Analysevorbereitung abgeschlossen)
+- Phase 8C: `APPROVED`
+- Phase 8D / Phase 8 Closeout: `APPROVED`
+- Registry-Schema: **14**
+- Fake Vision: aktiv (`provider=fake`)
+- Echte Vision Provider: **gesperrt**
+- Aktiver Produktauftrag: keiner (Phase 8 abgeschlossen)
+- Nächster erlaubter Schritt: **Phase 9** (Editorial Core / Coverage)
+- Gesperrt ohne eigenen Auftrag: echte Vision Provider, Phase 10+, Voice, OTIO
 
 ## Projektmodi
 
@@ -256,22 +263,30 @@ Unter `_otio_v2/analysis/`:
 - Technical Shot Segment
 - Representative Frame
 - lokale technische Signale
-- Visual Observation *(noch nicht implementiert)*
+- Visual Observation *(implementiert, Fake Vision)*
+- Observation Review *(implementiert)*
 - Visual Beat *(noch nicht implementiert)*
 
 `prepared` bedeutet nicht modellanalysiert, nicht redaktionell akzeptiert und nicht für Visual Beats freigegeben.
 
-### Noch nicht implementiert (nach Phase 8B)
+## Phase 8C – Fake Vision (APPROVED)
 
-- kein Vision-Gateway
-- keine LLM-/API-Aufrufe
-- keine Visual Observations
-- kein Nutzer-Consent
-- keine Providerintegration
-- keine Dramaturgie
-- keine Visual Beats
-- kein OCR-Produktlauf
-- keine Synthetic-/Geo-Entscheidung als redaktionelle Wahrheit
+- Technischer Commit: `21bd454f1cd667539ecc22e26f2d5a23ad3945d3`
+- R1 Evidence: `1b5f0d564c46050c7702734557357cce6dbcb26c`
+- Schema **13**: `analysis_consent_events`, `model_analysis_attempts`, `visual_observations`
+- Aufrufpfad: UI → Model Analysis Service → Discovery Vision Gateway → FakeVisionAdapter
+- Explizite Consent pro Model-Run; kein HTTP/SDK; keine echten Provider
+
+## Phase 8D – Observation Review / Closeout (APPROVED)
+
+- Schema **14**: ausschließlich neue Tabelle `visual_observation_reviews`
+- Unveränderliche Reviewrevisionen: `accepted` | `reanalyze_requested` | `rejected`
+- Editorial-Ready-Gate nur für aktuelle, gültige, akzeptierte Observations
+- `accepted` ist keine Asset-/Fakten-/Geo-/Synthetic-/Beat-Freigabe
+- `reanalyze_requested` startet keinen automatischen Model-Run
+- UI: manuelles Review auf Assetanalyse ohne Medien-/Gateway-I/O
+- Alpha Execution Manifest: `docs/ALPHA_EXECUTION_MANIFEST.md` (untergeordnet)
+- Bekannter VFR-Skip bleibt; 18 Baseline-Failures bewusst unrepariert
 
 ## Implementierter Ablauf
 
@@ -752,20 +767,16 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 1. ~~Phase 7 Media Intake~~ — APPROVED
 2. ~~Phase 8A Analysis Contracts~~ — APPROVED
 3. ~~Phase 8B lokale Shot-/Frame-Vorbereitung~~ — APPROVED
-4. Phase 8C: Vision-Gateway, Fake-Adapter, Visual Observations, Consent
-5. Phase 8D: Review-UI, Caching, Recovery, Nutzer-Smoke
-6. Projektbrief und Dramaturgie
-7. Kapitel und Karten
-8. Skript und Visual Beats
-9. Coverage Audit
-10. Stock-Supplementation
-11. Script Lock und ElevenLabs
-12. Pausen und Timing
-13. Visual Edit Plan
-14. Humanity Review
-15. Feasibility und Repair
-16. Freigabe
-17. Discovery-OTIO-Export
+4. ~~Phase 8C Fake Vision~~ — APPROVED
+5. ~~Phase 8D Observation Review / Closeout~~ — APPROVED
+6. Phase 9: Editorial Core und Coverage (Project Brief, Script Draft, Visual Beats, Coverage Audit)
+7. Phase 10: Supplementation und Script Lock
+8. Phase 11: Voice, Pausen und Timing
+9. Phase 12: Visual Edit Plan und Quality
+10. Phase 13: Review und OTIO
+
+Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
+(untergeordnet gegenüber DECISIONS/MASTER_PLAN/ALPHA_SCOPE/…).
 
 ## Arbeitsdisziplin
 
