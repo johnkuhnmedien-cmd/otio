@@ -140,6 +140,16 @@ def start_model_analysis(
         raise ModelAnalysisServiceError(str(exc)) from exc
 
     try:
+        from otio_app.discovery_v2.persistence.export_repository import (
+            find_active_export_run,
+        )
+
+        if find_active_export_run(conn, project_id=project.id) is not None:
+            return ModelAnalysisStartResult(
+                started=False,
+                message="Es läuft bereits ein Export-Run.",
+                error_code="export_run_already_active",
+            )
         active = find_active_analysis_run(conn, project_id=project.id)
         if active is not None:
             return ModelAnalysisStartResult(

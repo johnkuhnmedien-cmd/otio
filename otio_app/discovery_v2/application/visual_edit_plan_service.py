@@ -448,6 +448,10 @@ def _require_effective_visual_lock(project: Project):
 
 
 def _active_blocker(conn, *, project_id: str) -> tuple[str, str] | None:
+    from otio_app.discovery_v2.persistence.export_repository import find_active_export_run
+
+    if find_active_export_run(conn, project_id=project_id) is not None:
+        return "export_run_already_active", "Export-Run ist aktiv."
     if find_active_analysis_run(conn, project_id=project_id) is not None:
         return VISUAL_EDIT_ERROR_ANALYSIS_RUN_ALREADY_ACTIVE, "Analysis-Run ist aktiv."
     if find_active_editorial_run(conn, project_id=project_id) is not None:

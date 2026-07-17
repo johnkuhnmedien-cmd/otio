@@ -131,6 +131,7 @@ def test_discovery_has_only_placeholder_navigation() -> None:
         "Editorial",
         "Narration",
         "Visual Edit",
+        "Review & Export",
         "Projekteinstellungen",
         "🔑 API-Schlüssel",
         "Systemstatus",
@@ -155,6 +156,7 @@ def test_discovery_has_only_placeholder_navigation() -> None:
     assert "Editorial" in DISCOVERY_V2_NAVIGATION_OPTIONS
     assert "Narration" in DISCOVERY_V2_NAVIGATION_OPTIONS
     assert "Visual Edit" in DISCOVERY_V2_NAVIGATION_OPTIONS
+    assert "Review & Export" in DISCOVERY_V2_NAVIGATION_OPTIONS
     assert "Projekteinstellungen" in DISCOVERY_V2_NAVIGATION_OPTIONS
     # Bestehende Listen unverändert und getrennt
     assert "Discovery V2 – Übersicht" not in NAVIGATION_OPTIONS

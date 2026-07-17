@@ -425,6 +425,16 @@ def _start_run(project: Project, *, scope: str, sync: bool) -> EditorialStartRes
     reconcile_orphaned_editorial_run(project)
     conn = repo.open_editorial_registry(project.project_root_path)
     try:
+        from otio_app.discovery_v2.persistence.export_repository import (
+            find_active_export_run,
+        )
+
+        if find_active_export_run(conn, project_id=project.id) is not None:
+            return EditorialStartResult(
+                started=False,
+                message="Es läuft bereits ein Export-Run.",
+                error_code="export_run_already_active",
+            )
         analysis_active = find_active_analysis_run(conn, project_id=project.id)
         if analysis_active is not None:
             return EditorialStartResult(

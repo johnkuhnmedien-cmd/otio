@@ -104,7 +104,7 @@ def test_schema_13_to_14_preserves_data_and_is_idempotent(
     project = _new_project(root, temp_db_path, name="Phase 8D Schema")
     conn = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn) == "19"
+        assert reg_db.read_schema_version(conn) == "20"
         conn.execute(
             """
             INSERT INTO assets (
@@ -133,7 +133,7 @@ def test_schema_13_to_14_preserves_data_and_is_idempotent(
 
     conn2 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn2) == REGISTRY_SCHEMA_VERSION == "19"
+        assert reg_db.read_schema_version(conn2) == REGISTRY_SCHEMA_VERSION == "20"
         assert (
             conn2.execute(
                 "SELECT COUNT(*) FROM assets WHERE asset_id = 'asset-keep'"
@@ -157,7 +157,7 @@ def test_schema_13_to_14_preserves_data_and_is_idempotent(
 
     conn3 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn3) == "19"
+        assert reg_db.read_schema_version(conn3) == "20"
     finally:
         conn3.close()
 

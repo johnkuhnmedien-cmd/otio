@@ -134,12 +134,14 @@ def test_discovery_v2_pages_include_narration_after_editorial() -> None:
         "Editorial",
         "Narration",
         "Visual Edit",
+        "Review & Export",
         "Projekteinstellungen",
         "🔑 API-Schlüssel",
         "Systemstatus",
     ]
     assert titles.index("Narration") == titles.index("Editorial") + 1
     assert titles.index("Visual Edit") == titles.index("Narration") + 1
+    assert titles.index("Review & Export") == titles.index("Visual Edit") + 1
 
 
 def test_active_project_mode_defaults_when_no_active_project(

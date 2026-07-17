@@ -135,6 +135,15 @@ def start_analysis_prepare(
         raise AnalysisPrepareServiceError(str(exc)) from exc
 
     try:
+        from otio_app.discovery_v2.persistence.export_repository import (
+            find_active_export_run,
+        )
+
+        if find_active_export_run(conn, project_id=project.id) is not None:
+            return AnalysisPrepareStartResult(
+                started=False,
+                message="Es läuft bereits ein Export-Run.",
+            )
         active = find_active_analysis_run(conn, project_id=project.id)
         if active is not None:
             return AnalysisPrepareStartResult(

@@ -106,6 +106,17 @@ def create_script_lock(
     materialize_gaps_from_current_coverage(project)
     conn = repo.open_supplementation_registry(project.project_root_path)
     try:
+        from otio_app.discovery_v2.persistence.export_repository import (
+            find_active_export_run,
+        )
+
+        active_export = find_active_export_run(conn, project_id=project.id)
+        if active_export is not None:
+            return ScriptLockResult(
+                ok=False,
+                message="Export-Run ist aktiv.",
+                error_code="export_run_already_active",
+            )
         active_supp = repo.find_active_supplementation_run(conn, project_id=project.id)
         if active_supp is not None:
             return ScriptLockResult(

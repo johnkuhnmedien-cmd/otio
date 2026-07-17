@@ -57,7 +57,7 @@ def test_narration_contract_constants_and_helpers() -> None:
 def test_schema_19_creates_phase11_and_phase12_tables(tmp_path: Path) -> None:
     conn = reg_db.get_registry_connection(tmp_path)
     try:
-        assert reg_db.read_schema_version(conn) == REGISTRY_SCHEMA_VERSION == "19"
+        assert reg_db.read_schema_version(conn) == REGISTRY_SCHEMA_VERSION == "20"
         tables = {
             row["name"]
             for row in conn.execute(
@@ -101,7 +101,7 @@ def test_schema_19_creates_phase11_and_phase12_tables(tmp_path: Path) -> None:
         conn.close()
     conn2 = reg_db.get_registry_connection(tmp_path)
     try:
-        assert reg_db.read_schema_version(conn2) == "19"
+        assert reg_db.read_schema_version(conn2) == "20"
     finally:
         conn2.close()
 
@@ -126,7 +126,7 @@ def test_schema_16_to_19_migration_preserves_existing_data(tmp_path: Path) -> No
     raw.close()
     conn = reg_db.get_registry_connection(tmp_path)
     try:
-        assert reg_db.read_schema_version(conn) == "19"
+        assert reg_db.read_schema_version(conn) == "20"
         assert conn.execute("SELECT COUNT(*) AS n FROM assets").fetchone()["n"] == 1
     finally:
         conn.close()
@@ -300,7 +300,7 @@ def test_schema_17_to_19_migration_backfills_narration_contracts(tmp_path: Path)
 
     conn = reg_db.get_registry_connection(tmp_path)
     try:
-        assert reg_db.read_schema_version(conn) == "19"
+        assert reg_db.read_schema_version(conn) == "20"
         profile = conn.execute(
             "SELECT * FROM voice_profiles WHERE voice_profile_id = 'profile-1'"
         ).fetchone()

@@ -33,6 +33,7 @@ _LEGACY_SCHEMA_VERSIONS = frozenset(
         "16",
         "17",
         "18",
+        "19",
     }
 )
 
@@ -1886,6 +1887,158 @@ def _ensure_visual_edit_tables(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_export_tables(conn: sqlite3.Connection) -> None:
+    """Phase 13: human editorial approval and OTIO export state (Schema 20)."""
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS export_project_state (
+            project_id TEXT PRIMARY KEY,
+            current_editorial_approval_id TEXT,
+            current_export_validation_report_id TEXT,
+            current_otio_export_run_id TEXT,
+            current_otio_artifact_id TEXT,
+            current_reparse_report_id TEXT,
+            current_visual_edit_plan_id TEXT,
+            current_narration_timeline_id TEXT,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS editorial_approvals (
+            approval_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            visual_edit_plan_id TEXT NOT NULL,
+            humanity_review_id TEXT NOT NULL,
+            feasibility_report_id TEXT NOT NULL,
+            script_lock_id TEXT NOT NULL,
+            narration_timeline_id TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            user_decision TEXT NOT NULL,
+            user_comment TEXT NOT NULL,
+            confirmation_checked INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            UNIQUE (project_id, revision)
+        );
+
+        CREATE TABLE IF NOT EXISTS editorial_approval_risks (
+            approval_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            risk_id TEXT NOT NULL,
+            category TEXT NOT NULL,
+            description TEXT NOT NULL,
+            source_ref TEXT NOT NULL,
+            PRIMARY KEY (approval_id, ordinal),
+            FOREIGN KEY (approval_id) REFERENCES editorial_approvals(approval_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS export_validation_reports (
+            report_id TEXT PRIMARY KEY,
+            approval_id TEXT NOT NULL,
+            visual_edit_plan_id TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            otio_profile_version TEXT NOT NULL,
+            timebase TEXT NOT NULL,
+            status TEXT NOT NULL,
+            issues_json TEXT NOT NULL,
+            metrics_json TEXT NOT NULL,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            FOREIGN KEY (approval_id) REFERENCES editorial_approvals(approval_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS export_validation_issues (
+            issue_id TEXT PRIMARY KEY,
+            report_id TEXT NOT NULL,
+            shot_id TEXT,
+            assignment_id TEXT,
+            error_code TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            technical_details TEXT NOT NULL,
+            blocks_export INTEGER NOT NULL,
+            FOREIGN KEY (report_id) REFERENCES export_validation_reports(report_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS otio_export_runs (
+            run_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            approval_id TEXT NOT NULL,
+            validation_report_id TEXT NOT NULL,
+            visual_edit_plan_id TEXT NOT NULL,
+            export_profile_version TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            output_relative_path TEXT,
+            otio_sha256 TEXT,
+            status TEXT NOT NULL,
+            error_code TEXT,
+            error_message TEXT,
+            relative_report_path TEXT,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            schema_version TEXT NOT NULL,
+            FOREIGN KEY (approval_id) REFERENCES editorial_approvals(approval_id),
+            FOREIGN KEY (validation_report_id) REFERENCES export_validation_reports(report_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS otio_export_artifacts (
+            artifact_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            byte_size INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            otio_library_version TEXT NOT NULL,
+            track_count INTEGER NOT NULL,
+            clip_count INTEGER NOT NULL,
+            total_duration_seconds REAL NOT NULL,
+            total_frames INTEGER NOT NULL,
+            timebase TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            UNIQUE (run_id, relative_path),
+            FOREIGN KEY (run_id) REFERENCES otio_export_runs(run_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS otio_reparse_reports (
+            report_id TEXT PRIMARY KEY,
+            export_run_id TEXT NOT NULL,
+            artifact_id TEXT,
+            parseable INTEGER NOT NULL,
+            semantically_equivalent INTEGER NOT NULL,
+            deviations_json TEXT NOT NULL,
+            track_count INTEGER NOT NULL,
+            clip_count INTEGER NOT NULL,
+            total_duration_seconds REAL NOT NULL,
+            total_frames INTEGER NOT NULL,
+            timebase TEXT NOT NULL,
+            status TEXT NOT NULL,
+            relative_json_path TEXT,
+            created_at TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            FOREIGN KEY (export_run_id) REFERENCES otio_export_runs(run_id),
+            FOREIGN KEY (artifact_id) REFERENCES otio_export_artifacts(artifact_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_editorial_approvals_project_status
+            ON editorial_approvals (project_id, status);
+        CREATE INDEX IF NOT EXISTS idx_export_validation_reports_approval
+            ON export_validation_reports (approval_id, status);
+        CREATE INDEX IF NOT EXISTS idx_export_validation_issues_report
+            ON export_validation_issues (report_id);
+        CREATE INDEX IF NOT EXISTS idx_otio_export_runs_project_status
+            ON otio_export_runs (project_id, status);
+        CREATE INDEX IF NOT EXISTS idx_otio_export_artifacts_run
+            ON otio_export_artifacts (run_id);
+        CREATE INDEX IF NOT EXISTS idx_otio_reparse_reports_run
+            ON otio_reparse_reports (export_run_id);
+        """
+    )
+
+
 def _ensure_analysis_run_columns(conn: sqlite3.Connection) -> None:
     """Idempotente Spalten-Nachrüstung für Schema 11 → 12."""
     run_cols = {
@@ -1922,6 +2075,7 @@ def _apply_current_schema_objects(conn: sqlite3.Connection) -> None:
     _ensure_supplementation_tables(conn)
     _ensure_narration_tables(conn)
     _ensure_visual_edit_tables(conn)
+    _ensure_export_tables(conn)
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:

@@ -63,7 +63,7 @@ def test_schema_18_to_19_adds_visual_edit_tables_idempotently(tmp_path: Path) ->
     raw.close()
     conn = reg_db.get_registry_connection(tmp_path)
     try:
-        assert reg_db.read_schema_version(conn) == REGISTRY_SCHEMA_VERSION == "19"
+        assert reg_db.read_schema_version(conn) == REGISTRY_SCHEMA_VERSION == "20"
         tables = {
             row["name"]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
@@ -83,7 +83,7 @@ def test_schema_18_to_19_adds_visual_edit_tables_idempotently(tmp_path: Path) ->
         conn.close()
     conn2 = reg_db.get_registry_connection(tmp_path)
     try:
-        assert reg_db.read_schema_version(conn2) == "19"
+        assert reg_db.read_schema_version(conn2) == "20"
     finally:
         conn2.close()
 

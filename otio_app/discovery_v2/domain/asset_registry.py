@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from otio_app.discovery_v2.domain.inventory import MediaKind
 
 
-REGISTRY_SCHEMA_VERSION = "19"
+REGISTRY_SCHEMA_VERSION = "20"
 IMPORT_REPORT_SCHEMA_VERSION = "1"
 
 

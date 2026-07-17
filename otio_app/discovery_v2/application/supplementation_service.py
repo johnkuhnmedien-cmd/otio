@@ -553,6 +553,16 @@ def _start_run(
     materialize_gaps_from_current_coverage(project)
     conn = repo.open_supplementation_registry(project.project_root_path)
     try:
+        from otio_app.discovery_v2.persistence.export_repository import (
+            find_active_export_run,
+        )
+
+        if find_active_export_run(conn, project_id=project.id) is not None:
+            return SupplementationStartResult(
+                started=False,
+                message="Es laeuft bereits ein Export-Run.",
+                error_code="export_run_already_active",
+            )
         active_analysis = find_active_analysis_run(conn, project_id=project.id)
         if active_analysis is not None:
             return SupplementationStartResult(
