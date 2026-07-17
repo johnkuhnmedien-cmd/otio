@@ -155,3 +155,48 @@ Authority-Restore-Commit wiederhergestellt.
 
 **Kontext:** D-DOC-006 und D-DOC-007 bleiben historisch sichtbar, gelten aber nur
 zusammen mit D-DOC-008 bis D-DOC-010.
+
+---
+
+## D-9-001 — DiscoveryTextGateway mit FakeTextAdapter
+
+**Entscheidung:** Phase 9 verwendet einen eigenen zentralen DiscoveryTextGateway
+mit FakeTextAdapter als erstem Adapter. Alle Editorial-Textaufrufe laufen über
+diesen Gateway. Keine direkten Adapteraufrufe aus UI/Domain; kein stiller Fallback.
+
+---
+
+## D-9-002 — Phase 9 endet nach Coverage Audit
+
+**Entscheidung:** Phase 9 endet nach dem Coverage Audit. Stock, Script Lock,
+Voice, Timing und OTIO bleiben Folgephasen.
+
+---
+
+## D-9-003 — Getrennte versionierte Editorial-Modelle
+
+**Entscheidung:** Project Brief, Narrative Plan, Hook, Script, Sentence, Claim,
+Visual Beat, Visual Intent und Coverage Audit sind getrennte versionierte Modelle.
+
+---
+
+## D-9-004 — Many-to-Many Beats und keine Kapitel aus Source Groups
+
+**Entscheidung:** Ein Satz kann mehreren Visual Beats zugeordnet sein, und ein
+Visual Beat kann mehrere Sätze enthalten. Source Groups erzeugen keine Kapitel.
+
+---
+
+## D-9-005 — Nutzerbearbeitungen versionieren und stale machen
+
+**Entscheidung:** Nutzerbearbeitungen erzeugen neue Script-Versionen und machen
+strukturierte Ableitungen sowie Coverage stale. Strukturaktualisierung ist
+explizit (`structure_pending` bis zum Structure-Run).
+
+---
+
+## D-9-006 — Coverage nur mit accepted Observations, max. fünf Kandidaten
+
+**Entscheidung:** Coverage verwendet ausschließlich aktuelle accepted Observations,
+begrenzt lokale Kandidaten auf fünf pro Intent (ohne stille Kürzung) und startet
+keine Stock-Suche.

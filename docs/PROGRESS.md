@@ -2,19 +2,15 @@
 
 ## Aktueller Stand
 
-**Phase 8 — Assetanalyse ist formal abgeschlossen.**
+**Phase 9 — Editorial Core und Coverage ist implementiert (Fake Text E2E).**
 
-**Documentation Bootstrap** ist freigegeben (`RECONSTRUCTED_BOOTSTRAP`, Authority-Restore).
-
-**Phase 9 — Editorial Core und Coverage ist in Planung.**
-
-Plan: `docs/source_plans/PHASE9_EDITORIAL_CORE_COVERAGE_PLAN.md`
-Keine Phase-9-Produktimplementierung in diesem Stand.
-
-- Schema: **14** (Phase-9-Plan schlägt **15** vor)
-- Fake Vision End-to-End + Observation Review / Editorial-Ready-Gate
-- Echter Vision-/Text-Provider: gesperrt bis eigene Gates
+- Schema: **15**
+- DiscoveryTextGateway + FakeTextAdapter (`fake-editorial-v1`)
+- Project Brief → Narrative → 3 Hooks → Script → Structure → Coverage Audit
+- Echte Text-/Vision-Provider: gesperrt
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
+
+Documentation Bootstrap bleibt freigegeben. Phase 8 formal abgeschlossen.
 
 ## Phase-Status
 
@@ -22,20 +18,26 @@ Keine Phase-9-Produktimplementierung in diesem Stand.
 |---|---|
 | 7 Media Intake | abgeschlossen |
 | 8A–8D Assetanalyse | formal abgeschlossen |
-| SoT Bootstrap / Provenienz / Authority-Restore | freigegeben |
-| 9 Editorial Core / Coverage | **in Planung** (Plan-Datei; Implementierung nicht begonnen) |
-| 10–13 | geplant / gesperrt |
+| SoT Bootstrap | freigegeben |
+| 9 Editorial Core / Coverage | **abgeschlossen (Fake)** |
+| 10 Supplementation / Script Lock | nächster Schritt nach Freigabe: planen |
+| 11–13 | gesperrt |
 
-## Teststand (Phase 8D Closeout)
+## Teststand (nach Phase 9)
 
-- Vor 8D: 2793 / 2774 / 18 / 1
-- Nach 8D: **2806 / 2787 / 18 / 1**
+Baseline vor Phase 9 (8D Closeout):
 
-Dieselben 18 Baseline-Failures; Docs-Aufträge ohne Produktcodeänderung.
+- 2806 collected / 2787 passed / 18 failed / 1 skipped
+
+Nach Phase 9:
+
+- **2831 collected / 2812 passed / 18 failed / 1 skipped**
+
+Dieselben 18 Baseline-Failures; bekannter VFR-Skip unverändert.
+Keine neuen auftragsbedingten Fehler.
 
 ## Nächster erlaubter Schritt
 
-1. Freigabe des Phase-9-Plans
-2. Danach Phase-9-**Implementierungs**-Makroauftrag (Fake Text zuerst)
+Nach Freigabe: **Phase 10 planen** (Stock-Supplementation / Script Lock).
 
-Gesperrt: echte Text-/Vision-Provider, Phase 10+, Voice, OTIO Export.
+Gesperrt: echte Text-/Vision-Provider, Phase-10-Produkt, Voice, OTIO.

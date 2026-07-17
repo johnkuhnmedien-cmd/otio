@@ -11,16 +11,20 @@
 - Phase 8B: `APPROVED`
 - Phase 8C: `APPROVED`
 - Phase 8D / Phase 8 Closeout: `APPROVED`
+- Phase 9 Editorial Core / Coverage: **implementiert (Fake Text E2E)**
 - SoT Bootstrap: `RECONSTRUCTED_BOOTSTRAP` — für dieses Repository neu konsolidiert;
   Recovery-Suche → `NOT_FOUND`; andere Projekte und gelöschter GPT-Wissensstand
   sind keine Repositoryquelle; Authority-Restore der verbindlichen Regeln
   (D-DOC-008 … D-DOC-010; D-DOC-006/007 nur zusammen mit diesen)
-- Registry-Schema: **14**
+- Registry-Schema: **15**
 - Fake Vision: aktiv (`provider=fake`)
-- Echte Vision Provider: **gesperrt**
-- Aktiver Produktauftrag: keiner (Phase 8 abgeschlossen; Docs-Arbeit getrennt)
-- Nächster erlaubter Produktschritt: **Phase 9** (Editorial Core / Coverage)
-- Gesperrt ohne eigenen Auftrag: echte Vision Provider, Phase 10+, Voice, OTIO
+- Fake Text Editorial: aktiv (`provider=fake`, `fake-editorial-v1`)
+- Echte Vision-/Text-Provider: **gesperrt**
+- Phase-9-Einschränkungen: kein Stock, kein Script Lock, keine Voice/Timing/OTIO
+- Aktiver Produktauftrag: keiner (Phase 9 Fake-Pfad abgeschlossen)
+- Nächster erlaubter Schritt nach Freigabe: **Phase 10 planen**
+- Gesperrt ohne eigenen Auftrag: echte Provider, Phase-10-Produkt, Voice, OTIO
+- Teststand nach Phase 9: **2831 collected / 2812 passed / 18 failed / 1 skipped**
 
 ## Source of Truth
 
@@ -788,6 +792,17 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 
 ---
 
+## Phase 9 – Editorial Core / Coverage (Fake, implementiert)
+
+- Schema **15**: Editorial-Tabellen (`project_briefs`, `narrative_plans`,
+  `hook_variants`, `script_drafts`, Sentences/Claims/Beats/Intents,
+  `coverage_audits`, Runs/Attempts, `editorial_project_state`)
+- Pfad: UI → Editorial Services → DiscoveryTextGateway → FakeTextAdapter
+- Artefakte unter `_otio_v2/editorial/`
+- MANUAL-Seite **Editorial**; Observation-Inputs nur editorial-ready
+- Entscheidungen: D-9-001 … D-9-006
+- Plan: `docs/source_plans/PHASE9_EDITORIAL_CORE_COVERAGE_PLAN.md`
+
 ## Verbleibender Fahrplan
 
 1. ~~Phase 7 Media Intake~~ — APPROVED
@@ -795,8 +810,8 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 3. ~~Phase 8B lokale Shot-/Frame-Vorbereitung~~ — APPROVED
 4. ~~Phase 8C Fake Vision~~ — APPROVED
 5. ~~Phase 8D Observation Review / Closeout~~ — APPROVED
-6. Phase 9: Editorial Core und Coverage (Project Brief, Script Draft, Visual Beats, Coverage Audit)
-7. Phase 10: Supplementation und Script Lock
+6. ~~Phase 9 Editorial Core / Coverage (Fake)~~ — implementiert
+7. Phase 10: Supplementation und Script Lock (**planen** nach Freigabe)
 8. Phase 11: Voice, Pausen und Timing
 9. Phase 12: Visual Edit Plan und Quality
 10. Phase 13: Review und OTIO

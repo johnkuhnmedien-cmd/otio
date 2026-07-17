@@ -25,45 +25,30 @@ Operative Details: `DISCOVERY_V2_HANDOFF.md`.
 10. `docs/CLASSIC_MIGRATION_CONTRACT.md`
 11. `docs/PROGRESS.md`
 12. `docs/CHIEF_DEV_HANDOFF.md`
-13. `docs/source_plans/*` (nachrangig; ggf. leer; überschreibt nichts Höheres)
+13. `docs/source_plans/*` (nachrangig; überschreibt nichts Höheres)
 
 Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 ## Repository-Lage
 
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Phase 7–8: **vollständig abgeschlossen / APPROVED**
-- Registry-Schema: **14**
-- Vision: Fake-only; echte Vision-Provider gesperrt
-- Teststand 8D-Closeout: 2806 / 2787 / 18 / 1
-- Documentation Bootstrap: freigegeben
-- **Aktueller Schritt: Phase-9-Planung**
-- Plan: `docs/source_plans/PHASE9_EDITORIAL_CORE_COVERAGE_PLAN.md`
-- Phase-9-Produktimplementierung: **nicht begonnen**
-
-## Nächste erlaubte Aktion
-
-Nach Freigabe des Phase-9-Plans:
-
-→ **Phase-9-Implementierung** (Editorial Core + Coverage, Fake Text zuerst)
-
-Weiterhin gesperrt ohne eigene Gates:
-
-- echte Textprovider
-- echte Vision-Provider
-- Phase 10+ (Stock, Script Lock, …)
-- Voice / Pausenregie / Timing
-- OTIO Export
+- Phase 7–8: **APPROVED**
+- Phase 9 Editorial Core / Coverage: **implementiert (Fake Text)**
+- Registry-Schema: **15**
+- Vision: Fake-only · Text Editorial: Fake-only (`fake-editorial-v1`)
+- Teststand: **2831 / 2812 / 18 / 1**
+- Phase-9-Einschränkungen: kein Stock, kein Script Lock, keine Voice/Timing/OTIO
+- Nächster erlaubter Schritt nach Freigabe: **Phase 10 planen**
+- Echte Textprovider weiterhin gesperrt · Phase 10 noch nicht begonnen
 
 ## Verbindliche Kurzregeln
 
-- MANUAL Alpha-Standard; CHECKPOINT vorbereitet (nicht fertig behaupten); AUTOMATIC post-alpha
-- Hauptpipeline inkl. LLM-Pausenregie vor Python-Timing; Script Lock vor Voice
-- Coverage vor Stock; Adobe-Reihenfolge und Stock-Eskalation verbindlich
-- Humanity & Authenticity = eigener Review-Schritt
+- MANUAL Alpha-Standard; CHECKPOINT vorbereitet; AUTOMATIC post-alpha
+- Script Lock vor Voice; Coverage vor Stock; LLM-Pausenregie vor Timing
+- Humanity & Authenticity = eigener späterer Review-Schritt
 - Working Media = einzige OTIO-Medienquelle; Classic `_otio/` read-only
-- Gateways zentral; OpenRouter/direkt konfigurierbar; kein Default/Aktiv behaupten
-- Echter Vision-Provider gesperrt; Visual Observation ≠ Fakten-/Assetfreigabe
+- Gateways zentral; kein Default/Aktiv für reale Provider behaupten
+- Visual Observation ≠ Fakten-/Assetfreigabe
 - KI-Timelines = `NEGATIVE_REFERENCE`
 
 ## Alpha-DoD (Auszug)
