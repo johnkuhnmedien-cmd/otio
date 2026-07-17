@@ -15,22 +15,26 @@
 - Phase 10 Supplementation / Script Lock: **implementiert (Fake Stock E2E)**
 - Phase 11 Voice / Pause / Timing: **implementiert (Fake Voice E2E)**
 - Phase-11 Contract Hardening R1: **angewendet** (Schema **18**)
+- Phase 12 Visual Edit / Humanity / Feasibility / Repair: **implementiert (Fake E2E)**
 - SoT Bootstrap: `RECONSTRUCTED_BOOTSTRAP` — für dieses Repository neu konsolidiert;
   Recovery-Suche → `NOT_FOUND`; andere Projekte und gelöschter GPT-Wissensstand
   sind keine Repositoryquelle; Authority-Restore der verbindlichen Regeln
   (D-DOC-008 … D-DOC-010; D-DOC-006/007 nur zusammen mit diesen)
-- Registry-Schema: **18**
+- Registry-Schema: **19**
 - Fake Vision: aktiv (`provider=fake`)
-- Fake Text Editorial: aktiv (`provider=fake`, `fake-editorial-v1`)
+- Fake Text Editorial / Visual Edit: aktiv (`provider=fake`, `fake-editorial-v1` /
+  `fake-visual-edit-v1`)
 - Fake Stock Search: aktiv (`provider=fake`)
 - Fake Voice: aktiv (`provider=fake`, `fake-neutral-v1`, WAV PCM s16le 48 kHz mono)
 - Echte Vision-/Text-/Stock-/Voice-Provider: **gesperrt**
 - Kein ElevenLabs; keine echte Adobe-OAuth-/Lizenz-/Download-Integration
-- Aktiver Produktauftrag: keiner (Phase 11 Fake-Pfad abgeschlossen; Hardening R1)
-- Nächster erlaubter Schritt nach Freigabe: **Phase 12 planen**
-- Phase 12 noch nicht begonnen
-- Gesperrt ohne eigenen Auftrag: echte Provider, Visual Edit Plan, Humanity, OTIO
-- Teststand nach Contract Hardening R1: **2883 collected / 2864 passed / 18 failed / 1 skipped**
+- Aktiver Produktauftrag: keiner (Phase 12 Fake-Pfad abgeschlossen)
+- Nächster erlaubter Schritt nach Freigabe: **Phase 13 planen**
+- Phase 13 noch nicht begonnen
+- Gesperrt ohne eigenen Auftrag: echte Provider, finale Editorial Approval, OTIO
+- Teststand nach Phase 12: **2898 collected / 2879 passed / 18 failed / 1 skipped**
+- Artefakte Phase 12 unter `_otio_v2/editing/`
+- Endstatus Phase 12: `ready_for_editorial_review` (keine Exportfreigabe)
 
 ## Source of Truth
 

@@ -334,3 +334,59 @@ permanente Fehler und werden nicht erneut an den Textadapter gesendet.
 
 **Entscheidung:** Schema 18 ist eine enge Phase-11-Korrekturmigration ohne neue
 Fachphase oder neue Tabellen.
+
+---
+
+## D-12-001 — Editorial Shots sind eigenständige Modelle
+
+**Entscheidung:** Editorial Shots sind eigenständige redaktionelle Modelle und weder
+Technical Shots noch Assets.
+
+---
+
+## D-12-002 — Nur aktuelle Produktionsmedien in Phase 12
+
+**Entscheidung:** Phase 12 verwendet ausschließlich aktuelle completed Working Media,
+aktuelle Analysis Identities und akzeptierte Visual Observations.
+
+---
+
+## D-12-003 — LLM plant, Python löst technisch auf
+
+**Entscheidung:** LLM beziehungsweise Fake Text plant redaktionelle Shotfunktionen und
+Repair-Vorschläge; Python löst Source-Ranges, Frames und technische Machbarkeit auf.
+
+---
+
+## D-12-004 — Humanity & Authenticity als Pflichtreview
+
+**Entscheidung:** Humanity & Authenticity ist ein eigenständiger Pflichtreview vor der
+finalen Editorial Review.
+
+---
+
+## D-12-005 — Deterministische Feasibility
+
+**Entscheidung:** Feasibility ist deterministisch und prüft Timeline, Source-Ranges,
+Working-Media-Verträge und technische Blocker.
+
+---
+
+## D-12-006 — Repairs erzeugen neue Planversionen
+
+**Entscheidung:** Repairs erzeugen neue Planversionen. Redaktionelle Repairs werden
+nicht still angewandt.
+
+---
+
+## D-12-007 — Planned Graphics ohne Working Media blockieren
+
+**Entscheidung:** Planned Graphics ohne reales Working Media blockieren die technische
+Bereitschaft.
+
+---
+
+## D-12-008 — ready_for_editorial_review ist keine Exportfreigabe
+
+**Entscheidung:** `ready_for_editorial_review` ist keine finale Exportfreigabe. OTIO
+bleibt Phase 13 vorbehalten.

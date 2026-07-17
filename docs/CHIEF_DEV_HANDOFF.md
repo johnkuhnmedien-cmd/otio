@@ -35,37 +35,36 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - Phase 7–8: **APPROVED**
 - Phase 9 Editorial Core / Coverage: **abgeschlossen** (Fake Text)
 - Phase 10 Supplementation / Script Lock: **abgeschlossen** (Fake Stock)
-- Phase 11 Voice / Pause / Timing: **vollständig abgeschlossen** (Fake Voice)
-- Phase-11 Contract Hardening R1: **angewendet** (Schema **18**)
-- Registry-Schema: **18**
+- Phase 11 Voice / Pause / Timing: **vollständig abgeschlossen** (Fake Voice, Schema 18)
+- Phase 12 Visual Edit / Humanity / Feasibility / Repair: **abgeschlossen** (Fake, Schema **19**)
+- Registry-Schema: **19**
 - Vision / Text Editorial / Stock / Voice: Fake-only
-- Teststand: **2883 / 2864 / 18 / 1**
-- **Aktueller Schritt: Phase-12-Planung**
-- Plan Phase 11: `docs/source_plans/PHASE11_VOICE_PAUSE_TIMING_PLAN.md`
+- Teststand: **2898 / 2879 / 18 / 1**
+- **Aktueller Schritt: Phase 12 abgeschlossen; Phase 13 noch nicht begonnen**
 - Plan Phase 12: `docs/source_plans/PHASE12_VISUAL_EDIT_HUMANITY_FEASIBILITY_REPAIR_PLAN.md`
-- Entscheidungen: D-10-001 … D-10-008; D-11-001 … D-11-011
-  (Phase-12-Entscheidungen E1–E24 im Plan; `docs/DECISIONS.md` unverändert in diesem Planungsauftrag)
+- Entscheidungen: D-10-001 … D-10-008; D-11-001 … D-11-011; D-12-001 … D-12-008
 
 ## Nächste erlaubte Aktion
 
-Nach Freigabe dieses Phase-12-Plans:
+Nach Freigabe:
 
-→ **Phase-12-Implementierung** (Visual Edit Plan, Humanity, Feasibility, Repair — Fake only; Schema 19)
+→ **Phase 13 planen** (Editorial Review, Export Validation, OTIO, Reparse)
 
 Weiterhin gesperrt ohne eigene Gates:
 
 - echte Stockprovider und Adobe OAuth / Lizenz / Auto-Download
 - echte Text-/Vision-Provider
 - ElevenLabs und echte Voiceprovider
-- Phase 13 (Editorial Approval, Export Validation, OTIO, Reparse, NLE)
+- Phase-13-Produkt (finale Approval, Export Validation, OTIO, Reparse, NLE)
 
 ## Verbindliche Kurzregeln
 
 - MANUAL Alpha-Standard; CHECKPOINT vorbereitet; AUTOMATIC post-alpha
 - Script Lock vor Voice; Coverage vor Stock; LLM-Pausenregie vor Timing
 - Visual Edit erst nach validierter Narration Timeline
-- Stock-Eskalation und Adobe-Medienfolge verbindlich; Preview ≠ Working Media
 - Humanity & Authenticity = eigener Review-Schritt vor Ready/Export
+- Feasibility deterministisch; Repairs versionieren Pläne
+- `ready_for_editorial_review` ≠ Exportfreigabe
 - Working Media = einzige OTIO-Medienquelle; Classic `_otio/` read-only
 - Gateways zentral; kein Default/Aktiv für reale Provider behaupten
 - Visual Observation ≠ Fakten-/Assetfreigabe

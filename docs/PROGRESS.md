@@ -2,19 +2,17 @@
 
 ## Aktueller Stand
 
-**Phase 11 — Voice, Pausenregie und Timing ist freigegeben / abgeschlossen (Fake Voice + MANUAL).**
+**Phase 12 — Visual Edit / Humanity / Feasibility / Repair ist freigegeben / abgeschlossen (Fake + MANUAL).**
 
-Contract Hardening R1 angewendet (Schema **18**).
-
-**Phase 12 — Visual Edit / Humanity / Feasibility / Repair: in Planung.**
-
-Plan: `docs/source_plans/PHASE12_VISUAL_EDIT_HUMANITY_FEASIBILITY_REPAIR_PLAN.md`
-
-- Schema: **18** (Phase-12-Zielschema **19**, noch nicht migriert)
-- Fake Voice aktiv (`provider=fake`, `fake-neutral-v1`)
-- Pause Direction über DiscoveryTextGateway (`pause_direction`)
-- Resolved Narration Timeline (rationale Timebases)
+- Schema: **19**
+- Visual Edit Plan über DiscoveryTextGateway (`visual_edit_plan`)
+- Humanity & Authenticity Review (`humanity_review` + deterministische Signale)
+- Deterministische Feasibility Engine
+- Repair-Proposals / neue Planversionen / Ready-Gate `ready_for_editorial_review`
+- Artefakte unter `_otio_v2/editing/`
+- MANUAL-UI-Seite **Visual Edit**
 - Echte Stock-/Adobe-/Text-/Vision-/Voice-Provider (inkl. ElevenLabs): gesperrt
+- Phase 13 / OTIO: gesperrt
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
 
 ## Phase-Status
@@ -26,25 +24,32 @@ Plan: `docs/source_plans/PHASE12_VISUAL_EDIT_HUMANITY_FEASIBILITY_REPAIR_PLAN.md
 | SoT Bootstrap | freigegeben |
 | 9 Editorial Core / Coverage | freigegeben / abgeschlossen (Fake) |
 | 10 Supplementation / Script Lock | freigegeben / abgeschlossen (Fake) |
-| 11 Voice / Pause / Timing | **freigegeben / abgeschlossen (Fake)** + Contract Hardening R1 |
-| 12 Visual Edit / Humanity / Feasibility / Repair | **in Planung** (keine Produktimplementierung) |
-| 13 Review / OTIO | gesperrt |
+| 11 Voice / Pause / Timing | freigegeben / abgeschlossen (Fake) + Contract Hardening R1 |
+| 12 Visual Edit / Humanity / Feasibility / Repair | **freigegeben / abgeschlossen (Fake)** |
+| 13 Review / OTIO | gesperrt / noch nicht begonnen |
 
-## Teststand (nach Phase 11 Contract Hardening R1)
+## Teststand (nach Phase 12)
 
 - Baseline 8D: 2806 / 2787 / 18 / 1
 - Nach Phase 9: 2831 / 2812 / 18 / 1
 - Nach Phase 10: 2850 / 2831 / 18 / 1
 - Nach Phase 11: 2877 / 2858 / 18 / 1
-- Nach Contract Hardening R1: **2883 collected / 2864 passed / 18 failed / 1 skipped**
+- Nach Contract Hardening R1: 2883 / 2864 / 18 / 1
+- Nach Phase 12: **2898 collected / 2879 passed / 18 failed / 1 skipped**
 
 18 bekannte Baseline-Fehler unverändert; 1 bekannter VFR-Skip unverändert;
-keine neuen Fehler oder Skips (+6 Hardening-Tests, alle grün).
+keine neuen auftragsbedingten Failures (+15 Phase-12-Tests, alle grün).
+
+## Bekannte Einschränkungen
+
+- Fake Text / Fake Vision / Fake Stock / Fake Voice only
+- Keine finale Editorial Approval
+- Kein OTIO-Export / Reparse / NLE
+- Planned Graphics ohne Working Media bleiben technisch blockierend
+- `ready_for_editorial_review` ≠ Exportfreigabe
 
 ## Nächster erlaubter Schritt
 
-Nach Freigabe dieses Phase-12-Plans: **Phase-12-Implementierung**
-(Visual Edit Plan, Humanity, Feasibility, Repair — Fake only).
+Nach Freigabe: **Phase 13 planen** (Editorial Review, Export Validation, OTIO).
 
-Gesperrt: ElevenLabs und echte Voiceprovider, echte Stock/Adobe,
-echte Text-/Vision-Provider, Phase 13, OTIO-Export/Reparse/NLE.
+Gesperrt: echte Provider, OTIO-Export/Reparse/NLE, finale Exportfreigabe ohne Phase 13.
