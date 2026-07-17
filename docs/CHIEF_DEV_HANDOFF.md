@@ -33,46 +33,43 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
 - Phase 7–8: **APPROVED**
-- Phase 9 Editorial Core / Coverage: **abgeschlossen** (Fake Text)
-- Phase 10 Supplementation / Script Lock: **abgeschlossen** (Fake Stock)
-- Phase 11 Voice / Pause / Timing: **vollständig abgeschlossen** (Fake Voice, Schema 18)
-- Phase 12 Visual Edit / Humanity / Feasibility / Repair: **abgeschlossen** (Fake, Schema **19**)
+- Phase 9–11: **abgeschlossen** (Fake)
+- Phase 12 Visual Edit / Humanity / Feasibility / Repair: **abgeschlossen** (Fake)
 - Registry-Schema: **19**
-- Vision / Text Editorial / Stock / Voice: Fake-only
+- Vision / Text / Stock / Voice: Fake-only
 - Teststand: **2898 / 2879 / 18 / 1**
-- **Aktueller Schritt: Phase 12 abgeschlossen; Phase 13 noch nicht begonnen**
+- **Aktueller Schritt: Phase-13-Planung**
 - Plan Phase 12: `docs/source_plans/PHASE12_VISUAL_EDIT_HUMANITY_FEASIBILITY_REPAIR_PLAN.md`
+- Plan Phase 13: `docs/source_plans/PHASE13_EDITORIAL_APPROVAL_OTIO_E2E_PLAN.md`
 - Entscheidungen: D-10-001 … D-10-008; D-11-001 … D-11-011; D-12-001 … D-12-008
+  (`docs/DECISIONS.md` unverändert in diesem Planungsauftrag)
+- OTIO-Export: **noch nicht implementiert**
+- Installierte Bibliothek (Planungsprüfung): `opentimelineio==0.18.1`
 
 ## Nächste erlaubte Aktion
 
-Nach Freigabe:
+Nach Freigabe dieses Phase-13-Plans:
 
-→ **Phase 13 planen** (Editorial Review, Export Validation, OTIO, Reparse)
+→ **Phase-13-Implementierung** (Editorial Approval, Export Validation, OTIO, Reparse, Alpha-E2E)
 
 Weiterhin gesperrt ohne eigene Gates:
 
-- echte Stockprovider und Adobe OAuth / Lizenz / Auto-Download
-- echte Text-/Vision-Provider
-- ElevenLabs und echte Voiceprovider
-- Phase-13-Produkt (finale Approval, Export Validation, OTIO, Reparse, NLE)
+- echte Stock-/Text-/Vision-/Voice-Provider
+- proprietäre NLE-Exporte (Premiere / DaVinci / Final Cut)
+- Cloud-Upload / Publishing
 
 ## Verbindliche Kurzregeln
 
-- MANUAL Alpha-Standard; CHECKPOINT vorbereitet; AUTOMATIC post-alpha
-- Script Lock vor Voice; Coverage vor Stock; LLM-Pausenregie vor Timing
-- Visual Edit erst nach validierter Narration Timeline
-- Humanity & Authenticity = eigener Review-Schritt vor Ready/Export
-- Feasibility deterministisch; Repairs versionieren Pläne
+- MANUAL Alpha-Standard
 - `ready_for_editorial_review` ≠ Exportfreigabe
-- Working Media = einzige OTIO-Medienquelle; Classic `_otio/` read-only
-- Gateways zentral; kein Default/Aktiv für reale Provider behaupten
-- Visual Observation ≠ Fakten-/Assetfreigabe
+- Approval nur durch Menschen; Checkbox nie vorselektiert
+- Working Media + aktuelle Narration-WAVs = einzige OTIO-Quellen
+- Classic `_otio/` read-only; Discovery Export unter `_otio_v2/export/`
 - KI-Timelines = `NEGATIVE_REFERENCE`
-- Sentence ≠ Beat ≠ Intent ≠ Editorial Shot ≠ Technical Shot ≠ Asset
+- Gateways zentral; keine stillen Provider
 
 ## Alpha-DoD (Auszug)
 
 MANUAL-Hauptpfad, keine Originaländerung, Stale-Gates, versionierte Artefakte,
-validiertes Working Media, Humanity Review, Feasibility, Freigabe, parsebares OTIO,
-keine neuen Discovery-bedingten Testfehler.
+validiertes Working Media, Humanity Review, Feasibility, Nutzerfreigabe,
+parsebares OTIO, keine neuen Discovery-bedingten Testfehler.
