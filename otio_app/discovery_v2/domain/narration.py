@@ -232,8 +232,32 @@ class VoiceProfile(BaseModel):
     voice_identifier: str = VOICE_IDENTIFIER_FAKE
     voice_settings_version: str = VOICE_SETTINGS_VERSION_FAKE
     output_profile: VoiceOutputProfile = Field(default_factory=VoiceOutputProfile)
+    version: int = Field(default=1, ge=1)
+    adapter_version: str = VOICE_ADAPTER_VERSION_FAKE
+    audio_format: Literal["wav-pcm-s16le"] = VOICE_AUDIO_FORMAT
+    sample_rate: int = Field(default=VOICE_SAMPLE_RATE_HZ, gt=0)
+    channels: int = Field(default=VOICE_CHANNELS, ge=1)
+    supersedes_voice_profile_id: str | None = None
     status: VoiceProfileStatus = VoiceProfileStatus.ACTIVE
     created_at: datetime
+
+    @model_validator(mode="after")
+    def _fake_profile_contract(self) -> "VoiceProfile":
+        if self.audio_format != VOICE_AUDIO_FORMAT:
+            raise ValueError("Fake voice profile audio_format must be wav-pcm-s16le")
+        if self.sample_rate != VOICE_SAMPLE_RATE_HZ:
+            raise ValueError("Fake voice profile sample_rate must be 48000")
+        if self.channels != VOICE_CHANNELS:
+            raise ValueError("Fake voice profile channels must be 1")
+        if self.output_profile.audio_format != self.audio_format:
+            raise ValueError("Voice profile output_profile audio_format mismatch")
+        if self.output_profile.sample_rate_hz != self.sample_rate:
+            raise ValueError("Voice profile output_profile sample_rate mismatch")
+        if self.output_profile.channels != self.channels:
+            raise ValueError("Voice profile output_profile channels mismatch")
+        if self.supersedes_voice_profile_id == self.voice_profile_id:
+            raise ValueError("Voice profile cannot supersede itself")
+        return self
 
 
 class VoiceGenerationRun(BaseModel):
@@ -289,6 +313,7 @@ class VoiceSegment(BaseModel):
     segment_id: str
     run_id: str
     script_lock_id: str
+    script_id: str
     sentence_id: str
     sentence_ordinal: int = Field(ge=0)
     text_hash: str
@@ -321,6 +346,7 @@ class PauseDirection(BaseModel):
 
     direction_id: str
     pause_plan_id: str
+    ordinal: int = Field(ge=0)
     position_kind: PausePositionKind
     sentence_id: str | None = None
     segment_id: str | None = None
@@ -513,19 +539,24 @@ def voice_segment_cache_identity(
     sentence_id: str,
     sentence_text: str,
     voice_profile: VoiceProfile,
-    adapter_version: str = VOICE_ADAPTER_VERSION_FAKE,
+    adapter_version: str | None = None,
 ) -> VoiceSegmentCacheIdentity:
     text_hash = sentence_text_hash(sentence_text)
+    effective_adapter_version = adapter_version or voice_profile.adapter_version
     cache_key = compute_sha256(
         {
             "script_lock_id": script_lock_id,
             "sentence_id": sentence_id,
             "text_hash": text_hash,
             "voice_profile_id": voice_profile.voice_profile_id,
+            "voice_profile_version": voice_profile.version,
             "provider": voice_profile.provider,
             "voice_identifier": voice_profile.voice_identifier,
             "voice_settings_version": voice_profile.voice_settings_version,
-            "adapter_version": adapter_version,
+            "adapter_version": effective_adapter_version,
+            "audio_format": voice_profile.audio_format,
+            "sample_rate": voice_profile.sample_rate,
+            "channels": voice_profile.channels,
             "output_profile": voice_profile.output_profile.model_dump(mode="json"),
         }
     )
@@ -560,7 +591,7 @@ def voice_run_input_fingerprint(
             "lock_fingerprint": lock_fingerprint,
             "voice_profile": voice_profile.model_dump(mode="json"),
             "sentences": rows,
-            "adapter_version": VOICE_ADAPTER_VERSION_FAKE,
+            "adapter_version": voice_profile.adapter_version,
         }
     )
 

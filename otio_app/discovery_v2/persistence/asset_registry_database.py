@@ -31,6 +31,7 @@ _LEGACY_SCHEMA_VERSIONS = frozenset(
         "14",
         "15",
         "16",
+        "17",
     }
 )
 
@@ -1369,6 +1370,12 @@ def _ensure_narration_tables(conn: sqlite3.Connection) -> None:
             voice_identifier TEXT NOT NULL,
             voice_settings_version TEXT NOT NULL,
             output_profile_json TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            adapter_version TEXT NOT NULL,
+            audio_format TEXT NOT NULL,
+            sample_rate INTEGER NOT NULL,
+            channels INTEGER NOT NULL,
+            supersedes_voice_profile_id TEXT,
             status TEXT NOT NULL,
             relative_json_path TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -1427,6 +1434,7 @@ def _ensure_narration_tables(conn: sqlite3.Connection) -> None:
             segment_id TEXT PRIMARY KEY,
             run_id TEXT NOT NULL,
             script_lock_id TEXT NOT NULL,
+            script_id TEXT NOT NULL,
             sentence_id TEXT NOT NULL,
             sentence_ordinal INTEGER NOT NULL,
             text_hash TEXT NOT NULL,
@@ -1473,6 +1481,7 @@ def _ensure_narration_tables(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS pause_directions (
             direction_id TEXT NOT NULL,
             pause_plan_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
             position_kind TEXT NOT NULL,
             sentence_id TEXT,
             segment_id TEXT,
@@ -1485,6 +1494,7 @@ def _ensure_narration_tables(conn: sqlite3.Connection) -> None:
             rationale TEXT NOT NULL,
             uncertainty TEXT NOT NULL,
             PRIMARY KEY (pause_plan_id, direction_id),
+            UNIQUE (pause_plan_id, ordinal),
             FOREIGN KEY (pause_plan_id) REFERENCES pause_direction_plans(pause_plan_id)
         );
 
@@ -1537,6 +1547,96 @@ def _ensure_narration_tables(conn: sqlite3.Connection) -> None:
             ON pause_direction_plans (project_id, status);
         CREATE INDEX IF NOT EXISTS idx_narration_timelines_project_status
             ON narration_timelines (project_id, status);
+        """
+    )
+    _ensure_narration_schema18_columns(conn)
+
+
+def _ensure_narration_schema18_columns(conn: sqlite3.Connection) -> None:
+    """Idempotente Spalten-Nachrüstung für Schema 17 → 18."""
+
+    profile_cols = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(voice_profiles)").fetchall()
+    }
+    for column, decl in (
+        ("version", "INTEGER NOT NULL DEFAULT 1"),
+        ("adapter_version", "TEXT NOT NULL DEFAULT 'fake-voice-v1'"),
+        ("audio_format", "TEXT NOT NULL DEFAULT 'wav-pcm-s16le'"),
+        ("sample_rate", "INTEGER NOT NULL DEFAULT 48000"),
+        ("channels", "INTEGER NOT NULL DEFAULT 1"),
+        ("supersedes_voice_profile_id", "TEXT"),
+    ):
+        if column not in profile_cols:
+            conn.execute(f"ALTER TABLE voice_profiles ADD COLUMN {column} {decl}")
+    conn.execute(
+        """
+        UPDATE voice_profiles
+        SET version = COALESCE(version, 1),
+            adapter_version = COALESCE(adapter_version, 'fake-voice-v1'),
+            audio_format = COALESCE(audio_format, 'wav-pcm-s16le'),
+            sample_rate = COALESCE(sample_rate, 48000),
+            channels = COALESCE(channels, 1)
+        """
+    )
+
+    segment_cols = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(voice_segments)").fetchall()
+    }
+    if "script_id" not in segment_cols:
+        conn.execute(
+            "ALTER TABLE voice_segments ADD COLUMN script_id TEXT NOT NULL DEFAULT ''"
+        )
+    conn.execute(
+        """
+        UPDATE voice_segments
+        SET script_id = COALESCE(
+            NULLIF(script_id, ''),
+            (
+                SELECT voice_generation_runs.script_id
+                FROM voice_generation_runs
+                WHERE voice_generation_runs.run_id = voice_segments.run_id
+            ),
+            ''
+        )
+        """
+    )
+
+    direction_cols = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(pause_directions)").fetchall()
+    }
+    added_direction_ordinal = "ordinal" not in direction_cols
+    if "ordinal" not in direction_cols:
+        conn.execute(
+            "ALTER TABLE pause_directions ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 0"
+        )
+    if added_direction_ordinal:
+        rows = conn.execute(
+            """
+            SELECT pause_plan_id, direction_id
+            FROM pause_directions
+            ORDER BY pause_plan_id, direction_id
+            """
+        ).fetchall()
+        current_plan: str | None = None
+        ordinal = 0
+        for row in rows:
+            plan_id = str(row["pause_plan_id"])
+            if plan_id != current_plan:
+                current_plan = plan_id
+                ordinal = 0
+            conn.execute(
+                """
+                UPDATE pause_directions
+                SET ordinal = ?
+                WHERE pause_plan_id = ? AND direction_id = ?
+                """,
+                (ordinal, plan_id, str(row["direction_id"])),
+            )
+            ordinal += 1
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_pause_directions_plan_ordinal
+            ON pause_directions (pause_plan_id, ordinal)
         """
     )
 

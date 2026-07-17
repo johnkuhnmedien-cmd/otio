@@ -251,6 +251,12 @@ def get_effective_script_lock(project: Project) -> ScriptLockResult:
             lock = repo.get_current_script_lock(conn, project_id=project.id)
         if lock is None:
             return ScriptLockResult(ok=False, message="Kein aktiver Script Lock.")
+        if lock.status != ScriptLockStatus.LOCKED:
+            return ScriptLockResult(
+                ok=False,
+                message="Script Lock ist nicht wirksam.",
+                error_code=SUPPLEMENTATION_ERROR_SCRIPT_LOCK_INVALIDATED,
+            )
         preview = _build_preview(conn, project, allow_existing_lock=True)
         if preview.lock_fingerprint != lock.lock_fingerprint or preview.blockers:
             conn.execute("BEGIN IMMEDIATE")

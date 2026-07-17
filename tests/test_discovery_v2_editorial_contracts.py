@@ -41,7 +41,7 @@ def test_schema_14_to_15_preserves_assets_and_adds_editorial_tables(
     project = _new_project(root, temp_db_path, name="Phase 9 Schema")
     conn = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn) == "17"
+        assert reg_db.read_schema_version(conn) == "18"
         conn.execute(
             """
             INSERT INTO assets (
@@ -70,7 +70,7 @@ def test_schema_14_to_15_preserves_assets_and_adds_editorial_tables(
 
     conn2 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn2) == REGISTRY_SCHEMA_VERSION == "17"
+        assert reg_db.read_schema_version(conn2) == REGISTRY_SCHEMA_VERSION == "18"
         assert conn2.execute(
             "SELECT COUNT(*) FROM assets WHERE asset_id = 'asset-keep'"
         ).fetchone()[0] == 1

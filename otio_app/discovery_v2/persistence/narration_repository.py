@@ -12,6 +12,8 @@ from uuid import uuid4
 
 from otio_app.discovery_v2.domain.narration import (
     ACTIVE_NARRATION_RUN_STATUSES,
+    NARRATION_ERROR_PAUSE_DIRECTION_CONFLICT,
+    NARRATION_ERROR_VOICE_SEGMENT_INVALID,
     NarrationAttemptStatus,
     NarrationProjectState,
     NarrationRunStatus,
@@ -290,9 +292,10 @@ def insert_voice_profile(conn: sqlite3.Connection, profile: VoiceProfile, relati
         """
         INSERT INTO voice_profiles (
             voice_profile_id, project_id, language, provider, voice_identifier,
-            voice_settings_version, output_profile_json, status, relative_json_path,
-            created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            voice_settings_version, output_profile_json, version, adapter_version,
+            audio_format, sample_rate, channels, supersedes_voice_profile_id,
+            status, relative_json_path, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             profile.voice_profile_id,
@@ -302,6 +305,12 @@ def insert_voice_profile(conn: sqlite3.Connection, profile: VoiceProfile, relati
             profile.voice_identifier,
             profile.voice_settings_version,
             _json(profile.output_profile.model_dump(mode="json")),
+            profile.version,
+            profile.adapter_version,
+            profile.audio_format,
+            profile.sample_rate,
+            profile.channels,
+            profile.supersedes_voice_profile_id,
             profile.status.value,
             relative_json_path,
             profile.created_at.isoformat(),
@@ -474,15 +483,21 @@ def list_voice_attempts(conn: sqlite3.Connection, *, run_id: str) -> list[VoiceG
 
 
 def insert_voice_segment(conn: sqlite3.Connection, segment: VoiceSegment) -> None:
+    row = conn.execute(
+        "SELECT script_id FROM voice_generation_runs WHERE run_id = ?",
+        (segment.run_id,),
+    ).fetchone()
+    if row is None or str(row["script_id"]) != segment.script_id:
+        raise ValueError(NARRATION_ERROR_VOICE_SEGMENT_INVALID)
     conn.execute(
         """
         INSERT OR IGNORE INTO voice_segments (
-            segment_id, run_id, script_lock_id, sentence_id, sentence_ordinal,
-            text_hash, voice_profile_id, provider, voice_identifier,
+            segment_id, run_id, script_lock_id, script_id, sentence_id,
+            sentence_ordinal, text_hash, voice_profile_id, provider, voice_identifier,
             voice_settings_version, adapter_version, audio_format, sample_rate_hz,
             channels, sample_count, duration_seconds, byte_size, audio_sha256,
             relative_path, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         _segment_values(segment),
     )
@@ -593,18 +608,28 @@ def insert_pause_plan(
 
 
 def insert_pause_direction(conn: sqlite3.Connection, direction: PauseDirection) -> None:
+    row = conn.execute(
+        """
+        SELECT direction_id FROM pause_directions
+        WHERE pause_plan_id = ? AND ordinal = ?
+        """,
+        (direction.pause_plan_id, direction.ordinal),
+    ).fetchone()
+    if row is not None and str(row["direction_id"]) != direction.direction_id:
+        raise ValueError(NARRATION_ERROR_PAUSE_DIRECTION_CONFLICT)
     conn.execute(
         """
         INSERT INTO pause_directions (
-            direction_id, pause_plan_id, position_kind, sentence_id, segment_id,
-            anchor_ordinal, function, min_duration_intent_s,
+            direction_id, pause_plan_id, ordinal, position_kind, sentence_id,
+            segment_id, anchor_ordinal, function, min_duration_intent_s,
             preferred_duration_intent_s, max_duration_intent_s, hardness,
             rationale, uncertainty
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             direction.direction_id,
             direction.pause_plan_id,
+            direction.ordinal,
             direction.position_kind.value,
             direction.sentence_id,
             direction.segment_id,
@@ -645,7 +670,7 @@ def list_pause_directions(conn: sqlite3.Connection, *, pause_plan_id: str) -> li
         """
         SELECT * FROM pause_directions
         WHERE pause_plan_id = ?
-        ORDER BY COALESCE(anchor_ordinal, -1), direction_id
+        ORDER BY ordinal, direction_id
         """,
         (pause_plan_id,),
     ).fetchall()
@@ -875,6 +900,12 @@ def _row_to_voice_profile(row: sqlite3.Row) -> VoiceProfile:
         voice_identifier=str(row["voice_identifier"]),
         voice_settings_version=str(row["voice_settings_version"]),
         output_profile=VoiceOutputProfile.model_validate(json.loads(row["output_profile_json"])),
+        version=int(row["version"]),
+        adapter_version=str(row["adapter_version"]),
+        audio_format=str(row["audio_format"]),
+        sample_rate=int(row["sample_rate"]),
+        channels=int(row["channels"]),
+        supersedes_voice_profile_id=row["supersedes_voice_profile_id"],
         status=VoiceProfileStatus(str(row["status"])),
         created_at=_parse_dt(row["created_at"]) or _now(),
     )
@@ -979,6 +1010,7 @@ def _segment_values(segment: VoiceSegment) -> tuple[object, ...]:
         segment.segment_id,
         segment.run_id,
         segment.script_lock_id,
+        segment.script_id,
         segment.sentence_id,
         segment.sentence_ordinal,
         segment.text_hash,
@@ -1005,6 +1037,7 @@ def _row_to_segment(row: sqlite3.Row) -> VoiceSegment:
         segment_id=str(row["segment_id"]),
         run_id=str(row["run_id"]),
         script_lock_id=str(row["script_lock_id"]),
+        script_id=str(row["script_id"]),
         sentence_id=str(row["sentence_id"]),
         sentence_ordinal=int(row["sentence_ordinal"]),
         text_hash=str(row["text_hash"]),
@@ -1049,6 +1082,7 @@ def _row_to_pause_direction(row: sqlite3.Row) -> PauseDirection:
     return PauseDirection(
         direction_id=str(row["direction_id"]),
         pause_plan_id=str(row["pause_plan_id"]),
+        ordinal=int(row["ordinal"]),
         position_kind=PausePositionKind(str(row["position_kind"])),
         sentence_id=row["sentence_id"],
         segment_id=row["segment_id"],

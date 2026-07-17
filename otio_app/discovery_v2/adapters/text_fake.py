@@ -383,6 +383,7 @@ class FakeTextAdapter:
                 _pause_direction_payload(
                     plan_id,
                     "timeline-start",
+                    len(directions),
                     PausePositionKind.TIMELINE_START.value,
                     PauseFunction.COLD_OPEN.value,
                     0.0,
@@ -399,6 +400,7 @@ class FakeTextAdapter:
                 _pause_direction_payload(
                     plan_id,
                     first.sentence_id,
+                    len(directions),
                     PausePositionKind.AFTER_SENTENCE.value,
                     PauseFunction.HOOK_BREATH.value if first.ordinal == 0 else PauseFunction.SENTENCE_TRANSITION.value,
                     0.15,
@@ -421,6 +423,7 @@ class FakeTextAdapter:
                 _pause_direction_payload(
                     plan_id,
                     f"{previous.sentence_id}:{current.sentence_id}",
+                    len(directions),
                     PausePositionKind.BETWEEN_SENTENCES.value,
                     function,
                     0.15,
@@ -439,6 +442,7 @@ class FakeTextAdapter:
                 _pause_direction_payload(
                     plan_id,
                     "timeline-end",
+                    len(directions),
                     PausePositionKind.TIMELINE_END.value,
                     PauseFunction.CLOSING_HOLD.value,
                     0.0,
@@ -509,6 +513,7 @@ def _id(*parts: str) -> str:
 def _pause_direction_payload(
     plan_id: str,
     key: str,
+    ordinal: int,
     position_kind: str,
     function: str,
     minimum: float,
@@ -524,6 +529,7 @@ def _pause_direction_payload(
     return {
         "direction_id": _id("pause-direction", plan_id, key, function),
         "pause_plan_id": plan_id,
+        "ordinal": ordinal,
         "position_kind": position_kind,
         "sentence_id": sentence_id,
         "segment_id": segment_id,

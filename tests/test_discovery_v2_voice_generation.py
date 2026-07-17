@@ -201,6 +201,8 @@ def test_smoke_c_new_voice_profile_creates_new_segments_and_stales_pause_timelin
     )
     assert new_profile.voice_profile_id != old_profile.voice_profile_id
     assert new_profile.voice_settings_version == "fake-voice-settings-v2"
+    assert new_profile.version == old_profile.version + 1
+    assert new_profile.supersedes_voice_profile_id == old_profile.voice_profile_id
 
     second = start_voice_generation_run(project, sync=True)
     assert second.started and second.run is not None

@@ -21,7 +21,6 @@ from otio_app.discovery_v2.application.script_lock_service import create_script_
 from otio_app.discovery_v2.application.voice_generation_service import start_voice_generation_run
 from otio_app.discovery_v2.domain.narration import (
     NARRATION_ERROR_INVALID_PAUSE_REFERENCE,
-    NARRATION_ERROR_PAUSE_RETRY_EXHAUSTED,
     NarrationRunStatus,
     PauseFunction,
 )
@@ -94,10 +93,12 @@ def test_smoke_e_pause_invalid_ref_retries_and_no_plan(
     tmp_path: Path, temp_db_path: Path
 ) -> None:
     project = _voiced_project(tmp_path, temp_db_path)
+    calls = {"pause_direction": 0}
 
     def bad_ref(request):
         if request.request_kind != "pause_direction":
             return None
+        calls["pause_direction"] += 1
         plan_id = "bad-plan"
         return {
             "pause_plan": {
@@ -119,6 +120,7 @@ def test_smoke_e_pause_invalid_ref_retries_and_no_plan(
                 {
                     "direction_id": "bad-direction",
                     "pause_plan_id": plan_id,
+                    "ordinal": 0,
                     "position_kind": "after_sentence",
                     "sentence_id": "missing-sentence",
                     "segment_id": None,
@@ -142,12 +144,13 @@ def test_smoke_e_pause_invalid_ref_retries_and_no_plan(
         final = narration_repo.get_voice_run(conn, run_id=result.run.run_id)
         assert final is not None
         assert final.status == NarrationRunStatus.FAILED
-        assert final.error_code in {
-            NARRATION_ERROR_PAUSE_RETRY_EXHAUSTED,
-            NARRATION_ERROR_INVALID_PAUSE_REFERENCE,
-        }
+        assert final.error_code == NARRATION_ERROR_INVALID_PAUSE_REFERENCE
         state = narration_repo.get_project_state(conn, project_id=project.id)
         assert state is not None
         assert state.current_pause_plan_id is None
+        assert state.current_timeline_id is None
+        assert narration_repo.list_pause_plans(conn, project_id=project.id) == []
+        assert narration_repo.list_timelines(conn, project_id=project.id) == []
     finally:
         conn.close()
+    assert calls["pause_direction"] == 1

@@ -84,6 +84,8 @@ class DiscoveryTextGateway:
             except FakeTextTransientError as exc:
                 last_error = exc
             except TextGatewayError as exc:
+                if exc.code == NARRATION_ERROR_INVALID_PAUSE_REFERENCE:
+                    raise
                 if exc.code not in {
                     EDITORIAL_ERROR_RESPONSE_INVALID,
                     EDITORIAL_ERROR_RESPONSE_SCHEMA_MISMATCH,
@@ -92,7 +94,6 @@ class DiscoveryTextGateway:
                     EDITORIAL_ERROR_INVALID_VISUAL_INTENT_REFERENCE,
                     NARRATION_ERROR_PAUSE_RESPONSE_INVALID,
                     NARRATION_ERROR_PAUSE_RESPONSE_SCHEMA_MISMATCH,
-                    NARRATION_ERROR_INVALID_PAUSE_REFERENCE,
                 }:
                     raise
                 last_error = exc

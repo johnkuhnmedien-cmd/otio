@@ -383,7 +383,7 @@ def test_r1_matrix_15_complete() -> None:
 def test_r1_schema_13_to_14_still_preserves_assets(
     tmp_path: Path, temp_db_path: Path
 ) -> None:
-    """Diff-Nachweis: Schema-Migration 13→14 bleibt datenhaltend."""
+    """Diff-Nachweis: Schema-Migration 13→18 bleibt datenhaltend."""
     from otio_app.discovery_v2.domain.asset_registry import REGISTRY_SCHEMA_VERSION
     from otio_app.discovery_v2.persistence import asset_registry_database as reg_db
 
@@ -393,14 +393,14 @@ def test_r1_schema_13_to_14_still_preserves_assets(
     _new_project(root, temp_db_path, name="Phase 8C R1 Schema")
     conn = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn) == "17"
+        assert reg_db.read_schema_version(conn) == "18"
         conn.execute("UPDATE registry_schema SET schema_version = '13'")
         conn.commit()
     finally:
         conn.close()
     conn2 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn2) == REGISTRY_SCHEMA_VERSION == "17"
+        assert reg_db.read_schema_version(conn2) == REGISTRY_SCHEMA_VERSION == "18"
         tables = {
             str(row[0])
             for row in conn2.execute(

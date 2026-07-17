@@ -11,8 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from otio_app.discovery_v2.adapters.analysis_job_launcher import reset_analysis_job_launcher_for_tests
 from otio_app.discovery_v2.adapters.editorial_job_launcher import reset_editorial_job_launcher_for_tests
+from otio_app.discovery_v2.adapters.narration_job_launcher import reset_narration_job_launcher_for_tests
 from otio_app.discovery_v2.adapters.supplementation_job_launcher import reset_supplementation_job_launcher_for_tests
 from otio_app.discovery_v2.adapters.text_fake import reset_fake_text_test_hook
+from otio_app.discovery_v2.adapters.voice_fake import fake_voice_call_count, reset_fake_voice_call_count
 from otio_app.discovery_v2.application.coverage_gap_service import (
     accept_gap_unresolved,
     mark_gap_resolved_with_local_asset,
@@ -30,17 +32,21 @@ from otio_app.discovery_v2.application.script_lock_service import (
     get_effective_script_lock,
     preview_script_lock,
 )
+from otio_app.discovery_v2.application.narration_timing_service import start_narration_timing_run
+from otio_app.discovery_v2.application.pause_direction_service import start_pause_direction_run
 from otio_app.discovery_v2.application.supplementation_service import (
     link_imported_completed_asset_to_gap,
     record_candidate_decision,
     record_claim_decision,
     start_search_run,
 )
+from otio_app.discovery_v2.application.voice_generation_service import start_voice_generation_run
 from otio_app.discovery_v2.domain.supplementation import (
     CoverageGapStatus,
     CoverageRiskFlag,
     ScriptLockStatus,
 )
+from otio_app.discovery_v2.persistence import editorial_repository as editorial_repo
 from otio_app.discovery_v2.persistence import supplementation_repository as repo
 from otio_app.discovery_v2.persistence import asset_analysis_repository as analysis_repo
 from otio_app.discovery_v2.application.observation_review_service import submit_observation_review
@@ -54,9 +60,13 @@ def _reset_state() -> None:
     reset_analysis_job_launcher_for_tests()
     reset_editorial_job_launcher_for_tests()
     reset_supplementation_job_launcher_for_tests()
+    reset_narration_job_launcher_for_tests()
     reset_fake_text_test_hook()
+    reset_fake_voice_call_count()
     yield
+    reset_fake_voice_call_count()
     reset_fake_text_test_hook()
+    reset_narration_job_launcher_for_tests()
     reset_supplementation_job_launcher_for_tests()
     reset_editorial_job_launcher_for_tests()
     reset_analysis_job_launcher_for_tests()
@@ -300,3 +310,85 @@ def test_smoke_g_new_script_version_invalidates_existing_lock_without_voice(
     assert effective.error_code == "script_lock_invalidated"
     assert not hasattr(locked.lock, "voice_id")
     assert start_structure_run(project, sync=True).started
+
+
+def test_historical_script_lock_never_becomes_effective_for_narration(
+    tmp_path: Path, temp_db_path: Path
+) -> None:
+    project = _script_coverage_project(tmp_path, temp_db_path)
+    _resolve_all_gaps_locally(project)
+    _decide_all_claims(project)
+    preview = preview_script_lock(project)
+    current = create_script_lock(
+        project,
+        user_confirmed=True,
+        confirmed_fingerprint=preview.lock_fingerprint,
+    )
+    assert current.ok and current.lock is not None
+
+    historical = current.lock.model_copy(
+        update={
+            "lock_id": "historical-lock",
+            "lock_version": current.lock.lock_version + 10,
+            "status": ScriptLockStatus.SUPERSEDED,
+            "created_at": current.lock.created_at.replace(year=current.lock.created_at.year - 1),
+        }
+    )
+    conn = repo.open_supplementation_registry(project.project_root_path)
+    try:
+        repo.insert_script_lock(
+            conn,
+            historical,
+            "editorial/script_locks/historical-lock.json",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    effective = get_effective_script_lock(project)
+    assert effective.ok and effective.lock is not None
+    assert effective.lock.lock_id == current.lock.lock_id
+    voice = start_voice_generation_run(project, sync=True)
+    assert voice.started and voice.run is not None
+    assert voice.run.script_lock_id == current.lock.lock_id
+
+    conn = repo.open_supplementation_registry(project.project_root_path)
+    try:
+        state = editorial_repo.get_project_state(conn, project_id=project.id)
+        assert state is not None
+        editorial_repo.upsert_project_state(
+            conn,
+            state.model_copy(
+                update={
+                    "current_script_lock_id": historical.lock_id,
+                    "updated_at": current.lock.created_at,
+                }
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    calls_before_blocked = fake_voice_call_count()
+    blocked_voice = start_voice_generation_run(project, sync=True)
+    assert not blocked_voice.started
+    assert blocked_voice.error_code == "script_lock_invalidated"
+    assert fake_voice_call_count() == calls_before_blocked
+
+    conn = repo.open_supplementation_registry(project.project_root_path)
+    try:
+        repo.update_script_lock_status(
+            conn,
+            lock_id=historical.lock_id,
+            status=ScriptLockStatus.INVALIDATED,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    blocked_pause = start_pause_direction_run(project, sync=True)
+    assert not blocked_pause.started
+    assert blocked_pause.error_code == "script_lock_invalidated"
+    blocked_timing = start_narration_timing_run(project, sync=True)
+    assert not blocked_timing.started
+    assert blocked_timing.error_code == "script_lock_invalidated"

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import NAMESPACE_URL, uuid5
 
 from otio_app.discovery_v2.adapters.narration_job_launcher import get_narration_job_launcher
 from otio_app.discovery_v2.application.inventory_service import require_discovery_project
@@ -171,6 +172,7 @@ def resolve_narration_timing(project: Project, *, run_id: str | None = None) -> 
             segments=segments,
             directions=directions,
             timebase=timebase,
+            created_at=pause_plan.created_at,
         )
         relative = repo.save_timeline_json(project.project_root_path, timeline)
         conn.execute("BEGIN IMMEDIATE")
@@ -193,17 +195,15 @@ def resolve_narration_timing(project: Project, *, run_id: str | None = None) -> 
         conn.rollback()
         code = getattr(exc, "code", str(exc) or NARRATION_ERROR_TIMING_RESOLUTION_FAILED)
         if run is not None:
-            repo.update_voice_run(
-                conn,
-                run.model_copy(
-                    update={
-                        "status": NarrationRunStatus.FAILED,
-                        "error_code": code,
-                        "error_message": "Timing resolution failed.",
-                        "finished_at": _now(),
-                    }
-                ),
+            run = run.model_copy(
+                update={
+                    "status": NarrationRunStatus.FAILED,
+                    "error_code": code,
+                    "error_message": "Timing resolution failed.",
+                    "finished_at": _now(),
+                }
             )
+            repo.update_voice_run(conn, run)
             conn.commit()
         return TimingResolveResult(False, "Narration Timing fehlgeschlagen.", run=run, error_code=code)
     finally:
@@ -233,9 +233,22 @@ def _resolve_timeline(
     segments: list[VoiceSegment],
     directions: list[PauseDirection],
     timebase,
+    created_at: datetime,
 ) -> ResolvedNarrationTimeline:
     ordered_segments = sorted(segments, key=lambda item: (item.sentence_ordinal, item.segment_id))
     selected_directions = _select_non_conflicting_directions(directions)
+    input_fingerprint = timing_input_fingerprint(
+        script_lock_id=script_lock_id,
+        voice_run_id=voice_run_id,
+        pause_plan_id=pause_plan_id,
+        timebase=timebase,
+    )
+    timeline_id = str(
+        uuid5(
+            NAMESPACE_URL,
+            f"otio-discovery-v2-narration-timeline:{input_fingerprint}",
+        )
+    )
     speech_duration = sum(segment.duration_seconds for segment in ordered_segments)
     max_pause_total = speech_duration * MAX_PAUSE_RATIO
     pause_duration_total = sum(
@@ -283,10 +296,27 @@ def _resolve_timeline(
         end = cursor + duration
         start_frame = previous_end_frame
         end_frame = max(start_frame + 1, seconds_to_frame_floor(end, timebase))
+        ordinal = len(entries)
         entries.append(
             NarrationTimelineEntry(
-                entry_id=repo.new_timeline_entry_id(),
-                ordinal=len(entries),
+                entry_id=str(
+                    uuid5(
+                        NAMESPACE_URL,
+                        ":".join(
+                            [
+                                "otio-discovery-v2-narration-timeline-entry",
+                                timeline_id,
+                                str(ordinal),
+                                entry_type.value,
+                                sentence_id or "",
+                                segment_id or "",
+                                direction_id or "",
+                                function,
+                            ]
+                        ),
+                    )
+                ),
+                ordinal=ordinal,
                 entry_type=entry_type,
                 sentence_id=sentence_id,
                 voice_segment_id=segment_id,
@@ -323,7 +353,6 @@ def _resolve_timeline(
 
     if not entries:
         raise NarrationServiceError(NARRATION_ERROR_INVALID_TIMELINE)
-    timeline_id = repo.new_timeline_id()
     return ResolvedNarrationTimeline(
         timeline_id=timeline_id,
         project_id=project_id,
@@ -335,14 +364,9 @@ def _resolve_timeline(
         total_duration_seconds=entries[-1].end_seconds,
         total_frames=entries[-1].end_frame,
         entries=entries,
-        input_fingerprint=timing_input_fingerprint(
-            script_lock_id=script_lock_id,
-            voice_run_id=voice_run_id,
-            pause_plan_id=pause_plan_id,
-            timebase=timebase,
-        ),
+        input_fingerprint=input_fingerprint,
         status=NarrationTimelineStatus.COMPLETED,
-        created_at=_now(),
+        created_at=created_at,
     )
 
 
