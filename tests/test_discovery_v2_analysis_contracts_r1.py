@@ -370,7 +370,7 @@ def test_r1_schema14_tables_constraints_and_migration(discovery_project: Project
 
     conn = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn) == "16"
+        assert reg_db.read_schema_version(conn) == "17"
         # Persistierte Baseline-Daten vor Downgrade merken
         asset_count = conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
         val_count = conn.execute("SELECT COUNT(*) FROM asset_validations").fetchone()[0]
@@ -451,7 +451,7 @@ def test_r1_schema14_tables_constraints_and_migration(discovery_project: Project
 
     conn2 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn2) == "16"
+        assert reg_db.read_schema_version(conn2) == "17"
         assert (
             conn2.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == asset_count
         )
@@ -476,7 +476,7 @@ def test_r1_schema14_tables_constraints_and_migration(discovery_project: Project
         conn2.close()
     conn3 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn3) == v_before == "16"
+        assert reg_db.read_schema_version(conn3) == v_before == "17"
         assert (
             conn3.execute("SELECT project_id FROM assets LIMIT 1").fetchone()[0]
             == project_id

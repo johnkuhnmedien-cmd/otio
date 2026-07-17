@@ -129,6 +129,7 @@ def test_discovery_has_only_placeholder_navigation() -> None:
         "Media Intake",
         "Assetanalyse",
         "Editorial",
+        "Narration",
         "Projekteinstellungen",
         "🔑 API-Schlüssel",
         "Systemstatus",
@@ -150,6 +151,8 @@ def test_discovery_has_only_placeholder_navigation() -> None:
     assert "Technische Prüfung" in DISCOVERY_V2_NAVIGATION_OPTIONS
     assert "Media Intake" in DISCOVERY_V2_NAVIGATION_OPTIONS
     assert "Assetanalyse" in DISCOVERY_V2_NAVIGATION_OPTIONS
+    assert "Editorial" in DISCOVERY_V2_NAVIGATION_OPTIONS
+    assert "Narration" in DISCOVERY_V2_NAVIGATION_OPTIONS
     assert "Projekteinstellungen" in DISCOVERY_V2_NAVIGATION_OPTIONS
     # Bestehende Listen unverändert und getrennt
     assert "Discovery V2 – Übersicht" not in NAVIGATION_OPTIONS

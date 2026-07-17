@@ -120,6 +120,26 @@ def test_without_voiceover_reuses_clean_media_and_analysis() -> None:
     }
 
 
+def test_discovery_v2_pages_include_narration_after_editorial() -> None:
+    pages = routing._build_discovery_v2_pages(_noop, _noop)
+    titles = [page.title for page in pages]
+    assert titles == [
+        "Neues Projekt",
+        "Gespeicherte Projekte",
+        "Discovery V2 – Übersicht",
+        "Medienbestand",
+        "Technische Prüfung",
+        "Media Intake",
+        "Assetanalyse",
+        "Editorial",
+        "Narration",
+        "Projekteinstellungen",
+        "🔑 API-Schlüssel",
+        "Systemstatus",
+    ]
+    assert titles.index("Narration") == titles.index("Editorial") + 1
+
+
 def test_active_project_mode_defaults_when_no_active_project(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

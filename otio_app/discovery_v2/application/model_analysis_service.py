@@ -57,6 +57,9 @@ from otio_app.discovery_v2.persistence.editorial_repository import (
 from otio_app.discovery_v2.persistence.supplementation_repository import (
     find_active_supplementation_run,
 )
+from otio_app.discovery_v2.persistence.narration_repository import (
+    find_active_narration_run,
+)
 from otio_app.discovery_v2.persistence.asset_registry_database import (
     RegistryDatabaseError,
 )
@@ -166,6 +169,16 @@ def start_model_analysis(
                     f"({active_supplementation.scope}/{active_supplementation.status.value})."
                 ),
                 error_code="supplementation_run_already_active",
+            )
+        active_narration = find_active_narration_run(conn, project_id=project.id)
+        if active_narration is not None:
+            return ModelAnalysisStartResult(
+                started=False,
+                message=(
+                    f"Es läuft bereits ein Narration-Run "
+                    f"({active_narration.scope}/{active_narration.status.value})."
+                ),
+                error_code="narration_run_already_active",
             )
 
         selected = _selected_prepared_assets(

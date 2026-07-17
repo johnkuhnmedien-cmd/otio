@@ -34,6 +34,7 @@ from otio_app.discovery_v2.ui import (
     render_discovery_editorial_page,
     render_discovery_inventory_page,
     render_discovery_media_intake_page,
+    render_discovery_narration_page,
     render_discovery_overview_page,
     render_discovery_settings_page,
     render_discovery_technical_validation_page,
@@ -226,6 +227,7 @@ def _build_discovery_v2_pages(
         PAGE_DISCOVERY_EDITORIAL,
         PAGE_DISCOVERY_INVENTORY,
         PAGE_DISCOVERY_MEDIA_INTAKE,
+        PAGE_DISCOVERY_NARRATION,
         PAGE_DISCOVERY_OVERVIEW,
         PAGE_DISCOVERY_SETTINGS,
         PAGE_DISCOVERY_TECHNICAL_VALIDATION,
@@ -280,6 +282,14 @@ def _build_discovery_v2_pages(
             url_path="discovery-editorial",
         ),
         st.Page(
+            _wrap_page(
+                PAGE_DISCOVERY_NARRATION,
+                render_discovery_narration_page,
+            ),
+            title=PAGE_DISCOVERY_NARRATION,
+            url_path="discovery-narration",
+        ),
+        st.Page(
             _wrap_page(PAGE_DISCOVERY_SETTINGS, render_discovery_settings_page),
             title=PAGE_DISCOVERY_SETTINGS,
             url_path="discovery-settings",
@@ -310,7 +320,7 @@ def run_app_navigation(
         pages = _build_discovery_v2_pages(render_new_project, render_project_list)
         workflow_caption = (
             "Workflow (Discovery V2): Übersicht · Medienbestand · "
-            "Technische Prüfung · Media Intake · Assetanalyse · Editorial · Projekteinstellungen"
+            "Technische Prüfung · Media Intake · Assetanalyse · Editorial · Narration · Projekteinstellungen"
         )
     else:
         pages = _build_with_voiceover_pages(render_new_project, render_project_list)
@@ -343,6 +353,7 @@ def _run_legacy_pages(
         PAGE_DISCOVERY_EDITORIAL,
         PAGE_DISCOVERY_INVENTORY,
         PAGE_DISCOVERY_MEDIA_INTAKE,
+        PAGE_DISCOVERY_NARRATION,
         PAGE_DISCOVERY_OVERVIEW,
         PAGE_DISCOVERY_SETTINGS,
         PAGE_DISCOVERY_TECHNICAL_VALIDATION,
@@ -444,6 +455,11 @@ def _run_legacy_pages(
         _wrap_page(
             PAGE_DISCOVERY_EDITORIAL,
             render_discovery_editorial_page,
+        )()
+    elif page == PAGE_DISCOVERY_NARRATION:
+        _wrap_page(
+            PAGE_DISCOVERY_NARRATION,
+            render_discovery_narration_page,
         )()
     elif page == PAGE_DISCOVERY_SETTINGS:
         _wrap_page(PAGE_DISCOVERY_SETTINGS, render_discovery_settings_page)()

@@ -54,6 +54,9 @@ from otio_app.discovery_v2.persistence import editorial_repository as repo
 from otio_app.discovery_v2.persistence.supplementation_repository import (
     find_active_supplementation_run,
 )
+from otio_app.discovery_v2.persistence.narration_repository import (
+    find_active_narration_run,
+)
 from otio_app.models import Project
 
 
@@ -441,6 +444,16 @@ def _start_run(project: Project, *, scope: str, sync: bool) -> EditorialStartRes
                     f"({supplementation_active.scope}/{supplementation_active.status.value})."
                 ),
                 error_code="supplementation_run_already_active",
+            )
+        narration_active = find_active_narration_run(conn, project_id=project.id)
+        if narration_active is not None:
+            return EditorialStartResult(
+                started=False,
+                message=(
+                    f"Es laeuft bereits ein Narration-Run "
+                    f"({narration_active.scope}/{narration_active.status.value})."
+                ),
+                error_code="narration_run_already_active",
             )
         active = repo.find_active_editorial_run(conn, project_id=project.id)
         if active is not None:

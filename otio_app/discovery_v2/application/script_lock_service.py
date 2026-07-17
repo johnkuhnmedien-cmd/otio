@@ -53,6 +53,9 @@ from otio_app.discovery_v2.persistence.asset_registry_database import RegistryDa
 from otio_app.discovery_v2.persistence.editorial_repository import (
     find_active_editorial_run,
 )
+from otio_app.discovery_v2.persistence.narration_repository import (
+    find_active_narration_run,
+)
 from otio_app.models import Project
 
 
@@ -123,6 +126,13 @@ def create_script_lock(
                 ok=False,
                 message="Editorial-Run ist aktiv.",
                 error_code=SUPPLEMENTATION_ERROR_EDITORIAL_RUN_ALREADY_ACTIVE,
+            )
+        active_narration = find_active_narration_run(conn, project_id=project.id)
+        if active_narration is not None:
+            return ScriptLockResult(
+                ok=False,
+                message="Narration-Run ist aktiv.",
+                error_code="narration_run_already_active",
             )
         preview = _build_preview(
             conn,

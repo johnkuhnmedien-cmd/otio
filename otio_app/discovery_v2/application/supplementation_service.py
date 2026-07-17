@@ -65,6 +65,9 @@ from otio_app.discovery_v2.persistence.asset_registry_database import RegistryDa
 from otio_app.discovery_v2.persistence.editorial_repository import (
     find_active_editorial_run,
 )
+from otio_app.discovery_v2.persistence.narration_repository import (
+    find_active_narration_run,
+)
 from otio_app.models import Project
 
 
@@ -571,6 +574,13 @@ def _start_run(
                 message="Es laeuft bereits ein Supplementation-Run.",
                 run=active,
                 error_code=SUPPLEMENTATION_ERROR_RUN_ALREADY_ACTIVE,
+            )
+        active_narration = find_active_narration_run(conn, project_id=project.id)
+        if active_narration is not None:
+            return SupplementationStartResult(
+                started=False,
+                message="Es laeuft bereits ein Narration-Run.",
+                error_code="narration_run_already_active",
             )
         selected = [
             repo.get_coverage_gap(conn, gap_id=gap_id)

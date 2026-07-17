@@ -19,6 +19,15 @@ from otio_app.discovery_v2.domain.editorial import (
     TextGatewayRequest,
     compute_text_sha256,
 )
+from otio_app.discovery_v2.domain.narration import (
+    NARRATION_RUN_SCOPE_PAUSE,
+    PauseFunction,
+    PauseHardness,
+    PausePositionKind,
+    PauseUncertainty,
+    PROMPT_VERSION_PAUSE_DIRECTION,
+    RESPONSE_SCHEMA_PAUSE_DIRECTION,
+)
 
 
 class FakeTextTransientError(RuntimeError):
@@ -65,6 +74,8 @@ class FakeTextAdapter:
             payload = self._script_or_structure(request)
         elif request.request_kind == "coverage":
             payload = self._coverage(request)
+        elif request.request_kind == "pause_direction":
+            payload = self._pause_direction(request)
         else:  # pragma: no cover - Pydantic guards this.
             payload = {}
 
@@ -84,6 +95,8 @@ class FakeTextAdapter:
                 payload["visual_beats"][0]["sentence_ids"] = ["missing-sentence"]
             if "coverage_audit" in payload and payload["coverage_audit"]["results"]:
                 payload["coverage_audit"]["results"][0]["visual_intent_id"] = "missing-intent"
+            if "directions" in payload and payload["directions"]:
+                payload["directions"][0]["sentence_id"] = "missing-sentence"
         if forced == "too_many_candidates" and "coverage_audit" in payload:
             for result in payload["coverage_audit"]["results"]:
                 result["candidate_asset_ids"] = [f"asset-{i}" for i in range(6)]
@@ -356,6 +369,110 @@ class FakeTextAdapter:
             }
         }
 
+    def _pause_direction(self, request: TextGatewayRequest) -> dict:
+        plan_id = _id("pause-plan", request.project_id, request.run_id, request.input_fingerprint)
+        directions = []
+        ordered_sentences = sorted(request.sentences, key=lambda item: item.ordinal)
+        segment_by_sentence = {
+            str(item.get("sentence_id")): str(item.get("segment_id"))
+            for item in request.pause_voice_segments
+        }
+        if ordered_sentences:
+            first = ordered_sentences[0]
+            directions.append(
+                _pause_direction_payload(
+                    plan_id,
+                    "timeline-start",
+                    PausePositionKind.TIMELINE_START.value,
+                    PauseFunction.COLD_OPEN.value,
+                    0.0,
+                    0.35,
+                    3.0,
+                    PauseHardness.SOFT.value,
+                    "Kurzer lokaler Fake-Cold-Open vor dem ersten Satz.",
+                    sentence_id=None,
+                    segment_id=None,
+                    anchor_ordinal=0,
+                )
+            )
+            directions.append(
+                _pause_direction_payload(
+                    plan_id,
+                    first.sentence_id,
+                    PausePositionKind.AFTER_SENTENCE.value,
+                    PauseFunction.HOOK_BREATH.value if first.ordinal == 0 else PauseFunction.SENTENCE_TRANSITION.value,
+                    0.15,
+                    0.25,
+                    2.5,
+                    PauseHardness.SOFT.value,
+                    "Fake-Pause fuer verstaendliche Satztrennung.",
+                    sentence_id=first.sentence_id,
+                    segment_id=segment_by_sentence.get(first.sentence_id),
+                    anchor_ordinal=first.ordinal,
+                )
+            )
+        for previous, current in zip(ordered_sentences, ordered_sentences[1:]):
+            function = (
+                PauseFunction.SECTION_TRANSITION.value
+                if current.narrative_function != previous.narrative_function
+                else PauseFunction.SENTENCE_TRANSITION.value
+            )
+            directions.append(
+                _pause_direction_payload(
+                    plan_id,
+                    f"{previous.sentence_id}:{current.sentence_id}",
+                    PausePositionKind.BETWEEN_SENTENCES.value,
+                    function,
+                    0.15,
+                    0.2,
+                    2.5,
+                    PauseHardness.SOFT.value,
+                    "Deterministische Fake-Pausenregie zwischen Saetzen.",
+                    sentence_id=current.sentence_id,
+                    segment_id=segment_by_sentence.get(current.sentence_id),
+                    anchor_ordinal=current.ordinal,
+                )
+            )
+        if ordered_sentences:
+            last = ordered_sentences[-1]
+            directions.append(
+                _pause_direction_payload(
+                    plan_id,
+                    "timeline-end",
+                    PausePositionKind.TIMELINE_END.value,
+                    PauseFunction.CLOSING_HOLD.value,
+                    0.0,
+                    0.45,
+                    5.0,
+                    PauseHardness.SOFT.value,
+                    "Kurzer Schluss-Hold fuer Review ohne Visual Edit Plan.",
+                    sentence_id=last.sentence_id,
+                    segment_id=segment_by_sentence.get(last.sentence_id),
+                    anchor_ordinal=last.ordinal,
+                )
+            )
+        return {
+            "pause_plan": {
+                "pause_plan_id": plan_id,
+                "project_id": request.project_id,
+                "script_lock_id": request.selected_hook_id or "missing-lock",
+                "voice_run_id": request.run_id,
+                "prompt_version": PROMPT_VERSION_PAUSE_DIRECTION,
+                "model_identifier": request.model_identifier,
+                "gateway_version": request.gateway_version,
+                "response_schema_version": RESPONSE_SCHEMA_PAUSE_DIRECTION,
+                "provider": request.provider,
+                "input_fingerprint": request.input_fingerprint,
+                "global_notes": [
+                    "FakeText plant Pause-Funktionen, keine Frames.",
+                    f"scope={NARRATION_RUN_SCOPE_PAUSE}",
+                ],
+                "status": "completed",
+                "created_at": _now(),
+            },
+            "directions": directions,
+        }
+
 
 def _forced_error_from_request(request: TextGatewayRequest) -> str | None:
     fields = [
@@ -387,6 +504,38 @@ def _split_sentences(text: str) -> list[str]:
 
 def _id(*parts: str) -> str:
     return str(uuid5(NAMESPACE_URL, "otio-discovery-v2-editorial:" + ":".join(parts)))
+
+
+def _pause_direction_payload(
+    plan_id: str,
+    key: str,
+    position_kind: str,
+    function: str,
+    minimum: float,
+    preferred: float,
+    maximum: float,
+    hardness: str,
+    rationale: str,
+    *,
+    sentence_id: str | None,
+    segment_id: str | None,
+    anchor_ordinal: int | None,
+) -> dict:
+    return {
+        "direction_id": _id("pause-direction", plan_id, key, function),
+        "pause_plan_id": plan_id,
+        "position_kind": position_kind,
+        "sentence_id": sentence_id,
+        "segment_id": segment_id,
+        "anchor_ordinal": anchor_ordinal,
+        "function": function,
+        "min_duration_intent_s": minimum,
+        "preferred_duration_intent_s": preferred,
+        "max_duration_intent_s": maximum,
+        "hardness": hardness,
+        "rationale": rationale,
+        "uncertainty": PauseUncertainty.LOW.value,
+    }
 
 
 def _now() -> str:

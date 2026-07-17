@@ -27,6 +27,13 @@ from otio_app.discovery_v2.domain.editorial import (
     TextGatewayRequest,
     TextGatewayResponse,
 )
+from otio_app.discovery_v2.domain.narration import (
+    NARRATION_ERROR_INVALID_PAUSE_REFERENCE,
+    NARRATION_ERROR_PAUSE_RESPONSE_INVALID,
+    NARRATION_ERROR_PAUSE_RESPONSE_SCHEMA_MISMATCH,
+    NARRATION_ERROR_PAUSE_RETRY_EXHAUSTED,
+    PauseDirectionGatewayPayload,
+)
 
 
 class TextGatewayError(RuntimeError):
@@ -70,6 +77,9 @@ class DiscoveryTextGateway:
                     narrative=payload if isinstance(payload, NarrativeGatewayPayload) else None,
                     script=payload if isinstance(payload, ScriptGatewayPayload) else None,
                     coverage=payload if isinstance(payload, CoverageGatewayPayload) else None,
+                    pause_direction=(
+                        payload if isinstance(payload, PauseDirectionGatewayPayload) else None
+                    ),
                 )
             except FakeTextTransientError as exc:
                 last_error = exc
@@ -80,18 +90,25 @@ class DiscoveryTextGateway:
                     EDITORIAL_ERROR_INVALID_SENTENCE_REFERENCE,
                     EDITORIAL_ERROR_INVALID_VISUAL_BEAT_REFERENCE,
                     EDITORIAL_ERROR_INVALID_VISUAL_INTENT_REFERENCE,
+                    NARRATION_ERROR_PAUSE_RESPONSE_INVALID,
+                    NARRATION_ERROR_PAUSE_RESPONSE_SCHEMA_MISMATCH,
+                    NARRATION_ERROR_INVALID_PAUSE_REFERENCE,
                 }:
                     raise
                 last_error = exc
             if attempt_index >= self.config.max_retries:
-                raise TextGatewayError(
-                    EDITORIAL_ERROR_RETRY_EXHAUSTED,
-                    "Text gateway response failed after retries.",
-                ) from last_error
-        raise TextGatewayError(
-            EDITORIAL_ERROR_RETRY_EXHAUSTED,
-            "Text gateway response failed after retries.",
-        ) from last_error
+                code = (
+                    NARRATION_ERROR_PAUSE_RETRY_EXHAUSTED
+                    if request.request_kind == "pause_direction"
+                    else EDITORIAL_ERROR_RETRY_EXHAUSTED
+                )
+                raise TextGatewayError(code, "Text gateway response failed after retries.") from last_error
+        code = (
+            NARRATION_ERROR_PAUSE_RETRY_EXHAUSTED
+            if request.request_kind == "pause_direction"
+            else EDITORIAL_ERROR_RETRY_EXHAUSTED
+        )
+        raise TextGatewayError(code, "Text gateway response failed after retries.") from last_error
 
     def _select_adapter(self, config: TextConfig) -> TextAdapter:
         if not config.enabled:
@@ -127,7 +144,7 @@ class DiscoveryTextGateway:
         self,
         raw: object,
         request: TextGatewayRequest,
-    ) -> NarrativeGatewayPayload | ScriptGatewayPayload | CoverageGatewayPayload:
+    ) -> NarrativeGatewayPayload | ScriptGatewayPayload | CoverageGatewayPayload | PauseDirectionGatewayPayload:
         if not isinstance(raw, dict):
             raise TextGatewayError(
                 EDITORIAL_ERROR_RESPONSE_INVALID,
@@ -146,9 +163,13 @@ class DiscoveryTextGateway:
                 payload = CoverageGatewayPayload.model_validate(raw)
                 self._validate_coverage_refs(payload, request)
                 return payload
+            if request.request_kind == "pause_direction":
+                payload = PauseDirectionGatewayPayload.model_validate(raw)
+                self._validate_pause_direction_refs(payload, request)
+                return payload
         except ValidationError as exc:
             raise TextGatewayError(
-                _validation_error_code(exc),
+                _validation_error_code(exc, request_kind=request.request_kind),
                 "Text model response failed schema validation.",
             ) from exc
         raise TextGatewayError(
@@ -232,8 +253,46 @@ class DiscoveryTextGateway:
                     "Coverage referenced unknown accepted observation.",
                 )
 
+    def _validate_pause_direction_refs(
+        self,
+        payload: PauseDirectionGatewayPayload,
+        request: TextGatewayRequest,
+    ) -> None:
+        known_sentences = {sentence.sentence_id for sentence in request.sentences}
+        known_segments = {
+            str(item.get("segment_id"))
+            for item in request.pause_voice_segments
+            if item.get("segment_id") is not None
+        }
+        if payload.pause_plan.voice_run_id != request.run_id:
+            raise TextGatewayError(
+                NARRATION_ERROR_PAUSE_RESPONSE_SCHEMA_MISMATCH,
+                "Pause plan references a different voice run.",
+            )
+        if payload.pause_plan.input_fingerprint != request.input_fingerprint:
+            raise TextGatewayError(
+                NARRATION_ERROR_PAUSE_RESPONSE_SCHEMA_MISMATCH,
+                "Pause plan input fingerprint mismatch.",
+            )
+        for direction in payload.directions:
+            if direction.pause_plan_id != payload.pause_plan.pause_plan_id:
+                raise TextGatewayError(
+                    NARRATION_ERROR_PAUSE_RESPONSE_SCHEMA_MISMATCH,
+                    "Pause direction references a different plan.",
+                )
+            if direction.sentence_id is not None and direction.sentence_id not in known_sentences:
+                raise TextGatewayError(
+                    NARRATION_ERROR_INVALID_PAUSE_REFERENCE,
+                    "Pause direction referenced unknown sentence.",
+                )
+            if direction.segment_id is not None and direction.segment_id not in known_segments:
+                raise TextGatewayError(
+                    NARRATION_ERROR_INVALID_PAUSE_REFERENCE,
+                    "Pause direction referenced unknown voice segment.",
+                )
 
-def _validation_error_code(exc: ValidationError) -> str:
+
+def _validation_error_code(exc: ValidationError, *, request_kind: str = "") -> str:
     schema_error_types = {
         "extra_forbidden",
         "missing",
@@ -244,7 +303,11 @@ def _validation_error_code(exc: ValidationError) -> str:
     }
     for error in exc.errors():
         if str(error.get("type")) in schema_error_types:
+            if request_kind == "pause_direction":
+                return NARRATION_ERROR_PAUSE_RESPONSE_SCHEMA_MISMATCH
             return EDITORIAL_ERROR_RESPONSE_SCHEMA_MISMATCH
+    if request_kind == "pause_direction":
+        return NARRATION_ERROR_PAUSE_RESPONSE_INVALID
     return EDITORIAL_ERROR_RESPONSE_INVALID
 
 

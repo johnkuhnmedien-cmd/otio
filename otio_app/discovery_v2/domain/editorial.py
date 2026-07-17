@@ -11,6 +11,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from otio_app.discovery_v2.domain.narration import (
+    PauseDirectionGatewayPayload,
+    PROMPT_VERSION_PAUSE_DIRECTION,
+    RESPONSE_SCHEMA_PAUSE_DIRECTION,
+)
+
 EDITORIAL_SCHEMA_VERSION = "editorial-v1"
 GATEWAY_VERSION = "discovery-text-gateway-v1"
 TEXT_MODEL_IDENTIFIER = "fake-editorial-v1"
@@ -390,7 +396,7 @@ class EditorialAttempt(BaseModel):
     attempt_id: str
     run_id: str
     project_id: str
-    request_kind: Literal["narrative", "script", "structure", "coverage"]
+    request_kind: Literal["narrative", "script", "structure", "coverage", "pause_direction"]
     provider: str
     model_identifier: str
     gateway_version: str
@@ -453,7 +459,7 @@ class TextGatewayRequest(BaseModel):
 
     project_id: str
     run_id: str
-    request_kind: Literal["narrative", "script", "structure", "coverage"]
+    request_kind: Literal["narrative", "script", "structure", "coverage", "pause_direction"]
     prompt: str
     provider: str
     model_identifier: str
@@ -471,6 +477,7 @@ class TextGatewayRequest(BaseModel):
     visual_intents: list[VisualIntent] = Field(default_factory=list)
     observations: list[EditorialReadyObservationInput] = Field(default_factory=list)
     candidate_asset_ids: list[str] = Field(default_factory=list)
+    pause_voice_segments: list[dict[str, object]] = Field(default_factory=list)
     input_fingerprint: str
 
 
@@ -506,7 +513,7 @@ class CoverageGatewayPayload(BaseModel):
 class TextGatewayResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    request_kind: Literal["narrative", "script", "structure", "coverage"]
+    request_kind: Literal["narrative", "script", "structure", "coverage", "pause_direction"]
     provider: str
     model_identifier: str
     gateway_version: str
@@ -516,6 +523,7 @@ class TextGatewayResponse(BaseModel):
     narrative: NarrativeGatewayPayload | None = None
     script: ScriptGatewayPayload | None = None
     coverage: CoverageGatewayPayload | None = None
+    pause_direction: PauseDirectionGatewayPayload | None = None
 
 
 def compute_text_sha256(value: object) -> str:
@@ -575,12 +583,14 @@ __all__ = [name for name in globals() if name.startswith("EDITORIAL_")] + [
     "NarrativePlanStatus",
     "PROMPT_VERSION_COVERAGE",
     "PROMPT_VERSION_NARRATIVE",
+    "PROMPT_VERSION_PAUSE_DIRECTION",
     "PROMPT_VERSION_SCRIPT",
     "PROMPT_VERSION_STRUCTURE",
     "ProjectBrief",
     "ProjectBriefStatus",
     "RESPONSE_SCHEMA_COVERAGE",
     "RESPONSE_SCHEMA_NARRATIVE",
+    "RESPONSE_SCHEMA_PAUSE_DIRECTION",
     "RESPONSE_SCHEMA_SCRIPT",
     "RESPONSE_SCHEMA_STRUCTURE",
     "ScriptDraft",

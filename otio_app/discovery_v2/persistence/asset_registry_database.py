@@ -30,6 +30,7 @@ _LEGACY_SCHEMA_VERSIONS = frozenset(
         "13",
         "14",
         "15",
+        "16",
     }
 )
 
@@ -1345,6 +1346,201 @@ def _ensure_supplementation_tables(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_narration_tables(conn: sqlite3.Connection) -> None:
+    """Phase 11: fake voice, pause direction, and resolved narration timing."""
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS narration_project_state (
+            project_id TEXT PRIMARY KEY,
+            current_voice_profile_id TEXT,
+            current_voice_run_id TEXT,
+            current_pause_plan_id TEXT,
+            current_timeline_id TEXT,
+            current_script_lock_id TEXT,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS voice_profiles (
+            voice_profile_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            language TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            voice_identifier TEXT NOT NULL,
+            voice_settings_version TEXT NOT NULL,
+            output_profile_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (project_id, voice_profile_id)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_voice_profiles_one_active
+            ON voice_profiles (project_id)
+            WHERE status = 'active';
+
+        CREATE TABLE IF NOT EXISTS voice_generation_runs (
+            run_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            script_lock_id TEXT NOT NULL,
+            script_id TEXT NOT NULL,
+            voice_profile_id TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            adapter_version TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            status TEXT NOT NULL,
+            sentence_count INTEGER NOT NULL,
+            segments_created INTEGER NOT NULL DEFAULT 0,
+            segments_reused INTEGER NOT NULL DEFAULT 0,
+            segments_failed INTEGER NOT NULL DEFAULT 0,
+            error_code TEXT,
+            error_message TEXT,
+            relative_report_path TEXT,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            schema_version TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS voice_generation_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            sentence_id TEXT,
+            segment_id TEXT,
+            cache_key TEXT,
+            provider TEXT NOT NULL,
+            adapter_version TEXT,
+            input_fingerprint TEXT,
+            status TEXT NOT NULL,
+            relative_json_path TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            FOREIGN KEY (run_id) REFERENCES voice_generation_runs(run_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS voice_segments (
+            segment_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            script_lock_id TEXT NOT NULL,
+            sentence_id TEXT NOT NULL,
+            sentence_ordinal INTEGER NOT NULL,
+            text_hash TEXT NOT NULL,
+            voice_profile_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            voice_identifier TEXT NOT NULL,
+            voice_settings_version TEXT NOT NULL,
+            adapter_version TEXT NOT NULL,
+            audio_format TEXT NOT NULL,
+            sample_rate_hz INTEGER NOT NULL,
+            channels INTEGER NOT NULL,
+            sample_count INTEGER NOT NULL,
+            duration_seconds REAL NOT NULL,
+            byte_size INTEGER NOT NULL,
+            audio_sha256 TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (
+                script_lock_id, sentence_id, text_hash, voice_profile_id,
+                provider, voice_identifier, voice_settings_version, adapter_version,
+                audio_format, sample_rate_hz, channels
+            )
+        );
+
+        CREATE TABLE IF NOT EXISTS pause_direction_plans (
+            pause_plan_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            script_lock_id TEXT NOT NULL,
+            voice_run_id TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            model_identifier TEXT NOT NULL,
+            gateway_version TEXT NOT NULL,
+            response_schema_version TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            global_notes_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            schema_version TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS pause_directions (
+            direction_id TEXT NOT NULL,
+            pause_plan_id TEXT NOT NULL,
+            position_kind TEXT NOT NULL,
+            sentence_id TEXT,
+            segment_id TEXT,
+            anchor_ordinal INTEGER,
+            function TEXT NOT NULL,
+            min_duration_intent_s REAL NOT NULL,
+            preferred_duration_intent_s REAL NOT NULL,
+            max_duration_intent_s REAL NOT NULL,
+            hardness TEXT NOT NULL,
+            rationale TEXT NOT NULL,
+            uncertainty TEXT NOT NULL,
+            PRIMARY KEY (pause_plan_id, direction_id),
+            FOREIGN KEY (pause_plan_id) REFERENCES pause_direction_plans(pause_plan_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS narration_timelines (
+            timeline_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            script_lock_id TEXT NOT NULL,
+            voice_run_id TEXT NOT NULL,
+            pause_plan_id TEXT NOT NULL,
+            timing_profile_version TEXT NOT NULL,
+            fps_numerator INTEGER NOT NULL,
+            fps_denominator INTEGER NOT NULL,
+            fps REAL NOT NULL,
+            total_duration_seconds REAL NOT NULL,
+            total_frames INTEGER NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            schema_version TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS narration_timeline_entries (
+            timeline_id TEXT NOT NULL,
+            entry_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            entry_type TEXT NOT NULL,
+            sentence_id TEXT,
+            voice_segment_id TEXT,
+            pause_direction_id TEXT,
+            start_seconds REAL NOT NULL,
+            end_seconds REAL NOT NULL,
+            duration_seconds REAL NOT NULL,
+            start_frame INTEGER NOT NULL,
+            end_frame INTEGER NOT NULL,
+            function TEXT NOT NULL,
+            technical_notes_json TEXT NOT NULL,
+            PRIMARY KEY (timeline_id, ordinal),
+            UNIQUE (timeline_id, entry_id),
+            FOREIGN KEY (timeline_id) REFERENCES narration_timelines(timeline_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_voice_generation_runs_project_status
+            ON voice_generation_runs (project_id, status);
+        CREATE INDEX IF NOT EXISTS idx_voice_generation_attempts_run
+            ON voice_generation_attempts (run_id);
+        CREATE INDEX IF NOT EXISTS idx_voice_segments_lock_order
+            ON voice_segments (script_lock_id, sentence_ordinal);
+        CREATE INDEX IF NOT EXISTS idx_pause_direction_plans_project_status
+            ON pause_direction_plans (project_id, status);
+        CREATE INDEX IF NOT EXISTS idx_narration_timelines_project_status
+            ON narration_timelines (project_id, status);
+        """
+    )
+
+
 def _ensure_analysis_run_columns(conn: sqlite3.Connection) -> None:
     """Idempotente Spalten-Nachrüstung für Schema 11 → 12."""
     run_cols = {
@@ -1379,6 +1575,7 @@ def _apply_current_schema_objects(conn: sqlite3.Connection) -> None:
     _ensure_observation_review_tables(conn)
     _ensure_editorial_tables(conn)
     _ensure_supplementation_tables(conn)
+    _ensure_narration_tables(conn)
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
