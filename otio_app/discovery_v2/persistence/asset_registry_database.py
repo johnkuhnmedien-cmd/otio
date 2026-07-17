@@ -32,6 +32,7 @@ _LEGACY_SCHEMA_VERSIONS = frozenset(
         "15",
         "16",
         "17",
+        "18",
     }
 )
 
@@ -1641,6 +1642,250 @@ def _ensure_narration_schema18_columns(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_visual_edit_tables(conn: sqlite3.Connection) -> None:
+    """Phase 12: Visual Edit, Humanity, Feasibility und Repair (Schema 19)."""
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS visual_edit_project_state (
+            project_id TEXT PRIMARY KEY,
+            current_visual_edit_plan_id TEXT,
+            current_humanity_review_id TEXT,
+            current_feasibility_report_id TEXT,
+            current_repair_run_id TEXT,
+            current_script_lock_id TEXT,
+            current_narration_timeline_id TEXT,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS visual_edit_runs (
+            run_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            status TEXT NOT NULL,
+            script_lock_id TEXT,
+            narration_timeline_id TEXT,
+            plan_id TEXT,
+            input_fingerprint TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            relative_report_path TEXT,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            schema_version TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS visual_edit_plans (
+            plan_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            script_lock_id TEXT NOT NULL,
+            narration_timeline_id TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            plan_version INTEGER NOT NULL,
+            gateway_version TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            total_shot_count INTEGER NOT NULL,
+            expected_visual_duration_seconds REAL NOT NULL,
+            accepted_risks_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            artifact_relpath TEXT,
+            UNIQUE (project_id, plan_version)
+        );
+
+        CREATE TABLE IF NOT EXISTS editorial_shots (
+            shot_id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            shot_function TEXT NOT NULL,
+            timeline_start_seconds REAL NOT NULL,
+            timeline_end_seconds REAL NOT NULL,
+            duration_seconds REAL NOT NULL,
+            timeline_start_frame INTEGER NOT NULL,
+            timeline_end_frame INTEGER NOT NULL,
+            transition_intent TEXT,
+            continuity_intent TEXT,
+            rhythm_intent TEXT,
+            media_strategy TEXT NOT NULL,
+            priority INTEGER NOT NULL,
+            uncertainty_notes_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            UNIQUE (plan_id, ordinal),
+            FOREIGN KEY (plan_id) REFERENCES visual_edit_plans(plan_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS editorial_shot_narration_entries (
+            shot_id TEXT NOT NULL,
+            narration_entry_id TEXT NOT NULL,
+            PRIMARY KEY (shot_id, narration_entry_id),
+            FOREIGN KEY (shot_id) REFERENCES editorial_shots(shot_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS editorial_shot_sentences (
+            shot_id TEXT NOT NULL,
+            sentence_id TEXT NOT NULL,
+            PRIMARY KEY (shot_id, sentence_id),
+            FOREIGN KEY (shot_id) REFERENCES editorial_shots(shot_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS editorial_shot_visual_beats (
+            shot_id TEXT NOT NULL,
+            visual_beat_id TEXT NOT NULL,
+            PRIMARY KEY (shot_id, visual_beat_id),
+            FOREIGN KEY (shot_id) REFERENCES editorial_shots(shot_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS editorial_shot_visual_intents (
+            shot_id TEXT NOT NULL,
+            visual_intent_id TEXT NOT NULL,
+            PRIMARY KEY (shot_id, visual_intent_id),
+            FOREIGN KEY (shot_id) REFERENCES editorial_shots(shot_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS shot_media_assignments (
+            assignment_id TEXT PRIMARY KEY,
+            shot_id TEXT NOT NULL,
+            asset_id TEXT,
+            working_media_id TEXT,
+            technical_shot_id TEXT,
+            visual_observation_id TEXT,
+            assignment_priority INTEGER NOT NULL,
+            source_range_intent_json TEXT NOT NULL,
+            technical_source_in_seconds REAL,
+            technical_source_out_seconds REAL,
+            technical_source_in_frame INTEGER,
+            technical_source_out_frame INTEGER,
+            duration_seconds REAL NOT NULL,
+            selection_rationale TEXT NOT NULL,
+            status TEXT NOT NULL,
+            UNIQUE (shot_id, assignment_priority),
+            FOREIGN KEY (shot_id) REFERENCES editorial_shots(shot_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS shot_transitions (
+            transition_id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL,
+            from_shot_id TEXT NOT NULL,
+            to_shot_id TEXT NOT NULL,
+            editorial_function TEXT NOT NULL,
+            technical_type TEXT NOT NULL,
+            desired_duration_seconds REAL NOT NULL,
+            resolved_duration_seconds REAL NOT NULL,
+            status TEXT NOT NULL,
+            UNIQUE (plan_id, from_shot_id, to_shot_id),
+            FOREIGN KEY (plan_id) REFERENCES visual_edit_plans(plan_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS humanity_reviews (
+            review_id TEXT PRIMARY KEY,
+            visual_edit_plan_id TEXT NOT NULL,
+            review_version INTEGER NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL,
+            overall_judgment TEXT NOT NULL,
+            deterministic_signals_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            artifact_relpath TEXT,
+            UNIQUE (visual_edit_plan_id, review_version),
+            FOREIGN KEY (visual_edit_plan_id) REFERENCES visual_edit_plans(plan_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS humanity_findings (
+            finding_id TEXT PRIMARY KEY,
+            review_id TEXT NOT NULL,
+            shot_id TEXT,
+            plan_level INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            rationale TEXT NOT NULL,
+            evidence_refs_json TEXT NOT NULL,
+            recommended_action TEXT NOT NULL,
+            user_status TEXT NOT NULL,
+            FOREIGN KEY (review_id) REFERENCES humanity_reviews(review_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS feasibility_reports (
+            report_id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            timebase TEXT NOT NULL,
+            status TEXT NOT NULL,
+            overall_technical_assessment TEXT NOT NULL,
+            metrics_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            artifact_relpath TEXT,
+            FOREIGN KEY (plan_id) REFERENCES visual_edit_plans(plan_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS feasibility_issues (
+            issue_id TEXT PRIMARY KEY,
+            report_id TEXT NOT NULL,
+            shot_id TEXT,
+            assignment_id TEXT,
+            error_code TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            technical_details TEXT NOT NULL,
+            deterministically_repairable INTEGER NOT NULL,
+            blocks_phase_13 INTEGER NOT NULL,
+            FOREIGN KEY (report_id) REFERENCES feasibility_reports(report_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS repair_proposals (
+            proposal_id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL,
+            humanity_review_id TEXT,
+            feasibility_report_id TEXT,
+            source TEXT NOT NULL,
+            repair_type TEXT NOT NULL,
+            affected_ids_json TEXT NOT NULL,
+            description TEXT NOT NULL,
+            expected_effect TEXT NOT NULL,
+            user_status TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            FOREIGN KEY (plan_id) REFERENCES visual_edit_plans(plan_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS repair_runs (
+            run_id TEXT PRIMARY KEY,
+            input_plan_id TEXT NOT NULL,
+            selected_proposal_ids_json TEXT NOT NULL,
+            output_plan_id TEXT,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (input_plan_id) REFERENCES visual_edit_plans(plan_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS repair_results (
+            result_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            changes_json TEXT NOT NULL,
+            remaining_findings_json TEXT NOT NULL,
+            remaining_feasibility_issues_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (run_id) REFERENCES repair_runs(run_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_visual_edit_runs_project_status
+            ON visual_edit_runs (project_id, status);
+        CREATE INDEX IF NOT EXISTS idx_visual_edit_plans_project_status
+            ON visual_edit_plans (project_id, status);
+        CREATE INDEX IF NOT EXISTS idx_editorial_shots_plan
+            ON editorial_shots (plan_id, ordinal);
+        CREATE INDEX IF NOT EXISTS idx_shot_media_assignments_shot
+            ON shot_media_assignments (shot_id);
+        CREATE INDEX IF NOT EXISTS idx_humanity_reviews_plan
+            ON humanity_reviews (visual_edit_plan_id, status);
+        CREATE INDEX IF NOT EXISTS idx_feasibility_reports_plan
+            ON feasibility_reports (plan_id, status);
+        CREATE INDEX IF NOT EXISTS idx_repair_proposals_plan
+            ON repair_proposals (plan_id, user_status);
+        """
+    )
+
+
 def _ensure_analysis_run_columns(conn: sqlite3.Connection) -> None:
     """Idempotente Spalten-Nachrüstung für Schema 11 → 12."""
     run_cols = {
@@ -1676,6 +1921,7 @@ def _apply_current_schema_objects(conn: sqlite3.Connection) -> None:
     _ensure_editorial_tables(conn)
     _ensure_supplementation_tables(conn)
     _ensure_narration_tables(conn)
+    _ensure_visual_edit_tables(conn)
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:

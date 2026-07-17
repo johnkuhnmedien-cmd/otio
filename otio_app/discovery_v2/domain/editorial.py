@@ -16,6 +16,20 @@ from otio_app.discovery_v2.domain.narration import (
     PROMPT_VERSION_PAUSE_DIRECTION,
     RESPONSE_SCHEMA_PAUSE_DIRECTION,
 )
+from otio_app.discovery_v2.domain.visual_edit import (
+    EditorialRepairProposalGatewayPayload,
+    HumanityReviewGatewayPayload,
+    PROMPT_VERSION_EDITORIAL_REPAIR_PROPOSAL,
+    PROMPT_VERSION_HUMANITY_REVIEW,
+    PROMPT_VERSION_VISUAL_EDIT_PLAN,
+    RESPONSE_SCHEMA_EDITORIAL_REPAIR_PROPOSAL,
+    RESPONSE_SCHEMA_HUMANITY_REVIEW,
+    RESPONSE_SCHEMA_VISUAL_EDIT_PLAN,
+    TEXT_REQUEST_KIND_EDITORIAL_REPAIR_PROPOSAL,
+    TEXT_REQUEST_KIND_HUMANITY_REVIEW,
+    TEXT_REQUEST_KIND_VISUAL_EDIT_PLAN,
+    VisualEditPlanGatewayPayload,
+)
 
 EDITORIAL_SCHEMA_VERSION = "editorial-v1"
 GATEWAY_VERSION = "discovery-text-gateway-v1"
@@ -459,7 +473,16 @@ class TextGatewayRequest(BaseModel):
 
     project_id: str
     run_id: str
-    request_kind: Literal["narrative", "script", "structure", "coverage", "pause_direction"]
+    request_kind: Literal[
+        "narrative",
+        "script",
+        "structure",
+        "coverage",
+        "pause_direction",
+        "visual_edit_plan",
+        "humanity_review",
+        "editorial_repair_proposal",
+    ]
     prompt: str
     provider: str
     model_identifier: str
@@ -478,6 +501,7 @@ class TextGatewayRequest(BaseModel):
     observations: list[EditorialReadyObservationInput] = Field(default_factory=list)
     candidate_asset_ids: list[str] = Field(default_factory=list)
     pause_voice_segments: list[dict[str, object]] = Field(default_factory=list)
+    visual_edit_input: dict[str, object] = Field(default_factory=dict)
     input_fingerprint: str
 
 
@@ -513,7 +537,16 @@ class CoverageGatewayPayload(BaseModel):
 class TextGatewayResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    request_kind: Literal["narrative", "script", "structure", "coverage", "pause_direction"]
+    request_kind: Literal[
+        "narrative",
+        "script",
+        "structure",
+        "coverage",
+        "pause_direction",
+        "visual_edit_plan",
+        "humanity_review",
+        "editorial_repair_proposal",
+    ]
     provider: str
     model_identifier: str
     gateway_version: str
@@ -524,6 +557,9 @@ class TextGatewayResponse(BaseModel):
     script: ScriptGatewayPayload | None = None
     coverage: CoverageGatewayPayload | None = None
     pause_direction: PauseDirectionGatewayPayload | None = None
+    visual_edit_plan: VisualEditPlanGatewayPayload | None = None
+    humanity_review: HumanityReviewGatewayPayload | None = None
+    editorial_repair_proposal: EditorialRepairProposalGatewayPayload | None = None
 
 
 def compute_text_sha256(value: object) -> str:
@@ -582,17 +618,23 @@ __all__ = [name for name in globals() if name.startswith("EDITORIAL_")] + [
     "NarrativePlan",
     "NarrativePlanStatus",
     "PROMPT_VERSION_COVERAGE",
+    "PROMPT_VERSION_EDITORIAL_REPAIR_PROPOSAL",
+    "PROMPT_VERSION_HUMANITY_REVIEW",
     "PROMPT_VERSION_NARRATIVE",
     "PROMPT_VERSION_PAUSE_DIRECTION",
     "PROMPT_VERSION_SCRIPT",
     "PROMPT_VERSION_STRUCTURE",
+    "PROMPT_VERSION_VISUAL_EDIT_PLAN",
     "ProjectBrief",
     "ProjectBriefStatus",
     "RESPONSE_SCHEMA_COVERAGE",
+    "RESPONSE_SCHEMA_EDITORIAL_REPAIR_PROPOSAL",
+    "RESPONSE_SCHEMA_HUMANITY_REVIEW",
     "RESPONSE_SCHEMA_NARRATIVE",
     "RESPONSE_SCHEMA_PAUSE_DIRECTION",
     "RESPONSE_SCHEMA_SCRIPT",
     "RESPONSE_SCHEMA_STRUCTURE",
+    "RESPONSE_SCHEMA_VISUAL_EDIT_PLAN",
     "ScriptDraft",
     "ScriptDraftStatus",
     "ScriptGatewayPayload",
@@ -600,6 +642,9 @@ __all__ = [name for name in globals() if name.startswith("EDITORIAL_")] + [
     "Sentence",
     "TEXT_MODEL_IDENTIFIER",
     "TEXT_PROVIDER",
+    "TEXT_REQUEST_KIND_EDITORIAL_REPAIR_PROPOSAL",
+    "TEXT_REQUEST_KIND_HUMANITY_REVIEW",
+    "TEXT_REQUEST_KIND_VISUAL_EDIT_PLAN",
     "TextConfig",
     "TextGatewayRequest",
     "TextGatewayResponse",

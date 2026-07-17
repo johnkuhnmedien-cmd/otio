@@ -263,7 +263,7 @@ def test_schema_v6_to_v9_preserves_copy_history(tmp_path: Path) -> None:
     _build_v6_registry(root)
 
     conn = reg_db.get_registry_connection(root)
-    assert reg_db.read_schema_version(conn) == "18"
+    assert reg_db.read_schema_version(conn) == "19"
     cols = {r[1] for r in conn.execute("PRAGMA table_info(intake_runs)")}
     assert "scope" in cols
     assert "transcoded_assets" in cols
@@ -284,7 +284,7 @@ def test_schema_v6_to_v9_preserves_copy_history(tmp_path: Path) -> None:
 
     # Idempotent erneut öffnen
     conn2 = reg_db.get_registry_connection(root)
-    assert reg_db.read_schema_version(conn2) == "18"
+    assert reg_db.read_schema_version(conn2) == "19"
     assert conn2.execute("SELECT COUNT(*) FROM intake_runs").fetchone()[0] == 1
     assert conn2.execute(
         "SELECT scope FROM intake_runs WHERE run_id='run-copy-hist'"

@@ -34,6 +34,21 @@ from otio_app.discovery_v2.domain.narration import (
     NARRATION_ERROR_PAUSE_RETRY_EXHAUSTED,
     PauseDirectionGatewayPayload,
 )
+from otio_app.discovery_v2.domain.visual_edit import (
+    EditorialRepairProposalGatewayPayload,
+    HumanityReviewGatewayPayload,
+    VISUAL_EDIT_ERROR_INVALID_ASSET_REFERENCE,
+    VISUAL_EDIT_ERROR_INVALID_NARRATION_ENTRY_REFERENCE,
+    VISUAL_EDIT_ERROR_INVALID_OBSERVATION_REFERENCE,
+    VISUAL_EDIT_ERROR_INVALID_SENTENCE_REFERENCE,
+    VISUAL_EDIT_ERROR_INVALID_TECHNICAL_SHOT_REFERENCE,
+    VISUAL_EDIT_ERROR_INVALID_VISUAL_BEAT_REFERENCE,
+    VISUAL_EDIT_ERROR_INVALID_VISUAL_INTENT_REFERENCE,
+    VISUAL_EDIT_ERROR_INVALID_WORKING_MEDIA_REFERENCE,
+    VISUAL_EDIT_ERROR_RESPONSE_INVALID,
+    VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+    VisualEditPlanGatewayPayload,
+)
 
 
 class TextGatewayError(RuntimeError):
@@ -80,11 +95,32 @@ class DiscoveryTextGateway:
                     pause_direction=(
                         payload if isinstance(payload, PauseDirectionGatewayPayload) else None
                     ),
+                    visual_edit_plan=(
+                        payload if isinstance(payload, VisualEditPlanGatewayPayload) else None
+                    ),
+                    humanity_review=(
+                        payload if isinstance(payload, HumanityReviewGatewayPayload) else None
+                    ),
+                    editorial_repair_proposal=(
+                        payload
+                        if isinstance(payload, EditorialRepairProposalGatewayPayload)
+                        else None
+                    ),
                 )
             except FakeTextTransientError as exc:
                 last_error = exc
             except TextGatewayError as exc:
-                if exc.code == NARRATION_ERROR_INVALID_PAUSE_REFERENCE:
+                if exc.code in {
+                    NARRATION_ERROR_INVALID_PAUSE_REFERENCE,
+                    VISUAL_EDIT_ERROR_INVALID_NARRATION_ENTRY_REFERENCE,
+                    VISUAL_EDIT_ERROR_INVALID_SENTENCE_REFERENCE,
+                    VISUAL_EDIT_ERROR_INVALID_VISUAL_BEAT_REFERENCE,
+                    VISUAL_EDIT_ERROR_INVALID_VISUAL_INTENT_REFERENCE,
+                    VISUAL_EDIT_ERROR_INVALID_ASSET_REFERENCE,
+                    VISUAL_EDIT_ERROR_INVALID_WORKING_MEDIA_REFERENCE,
+                    VISUAL_EDIT_ERROR_INVALID_OBSERVATION_REFERENCE,
+                    VISUAL_EDIT_ERROR_INVALID_TECHNICAL_SHOT_REFERENCE,
+                }:
                     raise
                 if exc.code not in {
                     EDITORIAL_ERROR_RESPONSE_INVALID,
@@ -94,6 +130,8 @@ class DiscoveryTextGateway:
                     EDITORIAL_ERROR_INVALID_VISUAL_INTENT_REFERENCE,
                     NARRATION_ERROR_PAUSE_RESPONSE_INVALID,
                     NARRATION_ERROR_PAUSE_RESPONSE_SCHEMA_MISMATCH,
+                    VISUAL_EDIT_ERROR_RESPONSE_INVALID,
+                    VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
                 }:
                     raise
                 last_error = exc
@@ -145,7 +183,15 @@ class DiscoveryTextGateway:
         self,
         raw: object,
         request: TextGatewayRequest,
-    ) -> NarrativeGatewayPayload | ScriptGatewayPayload | CoverageGatewayPayload | PauseDirectionGatewayPayload:
+    ) -> (
+        NarrativeGatewayPayload
+        | ScriptGatewayPayload
+        | CoverageGatewayPayload
+        | PauseDirectionGatewayPayload
+        | VisualEditPlanGatewayPayload
+        | HumanityReviewGatewayPayload
+        | EditorialRepairProposalGatewayPayload
+    ):
         if not isinstance(raw, dict):
             raise TextGatewayError(
                 EDITORIAL_ERROR_RESPONSE_INVALID,
@@ -167,6 +213,18 @@ class DiscoveryTextGateway:
             if request.request_kind == "pause_direction":
                 payload = PauseDirectionGatewayPayload.model_validate(raw)
                 self._validate_pause_direction_refs(payload, request)
+                return payload
+            if request.request_kind == "visual_edit_plan":
+                payload = VisualEditPlanGatewayPayload.model_validate(raw)
+                self._validate_visual_edit_plan_refs(payload, request)
+                return payload
+            if request.request_kind == "humanity_review":
+                payload = HumanityReviewGatewayPayload.model_validate(raw)
+                self._validate_humanity_review_refs(payload, request)
+                return payload
+            if request.request_kind == "editorial_repair_proposal":
+                payload = EditorialRepairProposalGatewayPayload.model_validate(raw)
+                self._validate_repair_proposal_refs(payload, request)
                 return payload
         except ValidationError as exc:
             raise TextGatewayError(
@@ -292,6 +350,164 @@ class DiscoveryTextGateway:
                     "Pause direction referenced unknown voice segment.",
                 )
 
+    def _validate_visual_edit_plan_refs(
+        self,
+        payload: VisualEditPlanGatewayPayload,
+        request: TextGatewayRequest,
+    ) -> None:
+        inputs = request.visual_edit_input
+        if payload.project_id != request.project_id:
+            raise TextGatewayError(
+                VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                "Visual edit plan references a different project.",
+            )
+        if payload.input_fingerprint != request.input_fingerprint:
+            raise TextGatewayError(
+                VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                "Visual edit plan input fingerprint mismatch.",
+            )
+        if payload.script_lock_id != str(inputs.get("script_lock_id", "")):
+            raise TextGatewayError(
+                VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                "Visual edit plan script lock mismatch.",
+            )
+        if payload.narration_timeline_id != str(inputs.get("narration_timeline_id", "")):
+            raise TextGatewayError(
+                VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                "Visual edit plan narration timeline mismatch.",
+            )
+        timeline = inputs.get("narration_timeline", {})
+        known_entries = (
+            set(_ids(timeline.get("entries", []), "entry_id"))
+            if isinstance(timeline, dict)
+            else set()
+        )
+        known_sentences = {sentence.sentence_id for sentence in request.sentences}
+        known_beats = {beat.visual_beat_id for beat in request.visual_beats}
+        known_intents = {intent.visual_intent_id for intent in request.visual_intents}
+        candidates = inputs.get("candidates", [])
+        candidates = candidates if isinstance(candidates, list) else []
+        known_assets = set(_ids(candidates, "asset_id"))
+        known_working = set(_ids(candidates, "working_media_id"))
+        known_observations = set(_ids(candidates, "observation_id"))
+        known_technical = {
+            str(shot.get("technical_shot_id"))
+            for candidate in candidates
+            if isinstance(candidate, dict)
+            for shot in candidate.get("technical_shots", [])
+            if isinstance(shot, dict) and shot.get("technical_shot_id") is not None
+        }
+        shot_ids = {shot.shot_id for shot in payload.shots}
+        for shot in payload.shots:
+            if not set(shot.narration_entry_ids).issubset(known_entries):
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_INVALID_NARRATION_ENTRY_REFERENCE,
+                    "Visual edit shot referenced unknown narration entry.",
+                )
+            if not set(shot.sentence_ids).issubset(known_sentences):
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_INVALID_SENTENCE_REFERENCE,
+                    "Visual edit shot referenced unknown sentence.",
+                )
+            if not set(shot.visual_beat_ids).issubset(known_beats):
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_INVALID_VISUAL_BEAT_REFERENCE,
+                    "Visual edit shot referenced unknown visual beat.",
+                )
+            if not set(shot.visual_intent_ids).issubset(known_intents):
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_INVALID_VISUAL_INTENT_REFERENCE,
+                    "Visual edit shot referenced unknown visual intent.",
+                )
+            if shot.candidate_asset_id is not None and shot.candidate_asset_id not in known_assets:
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_INVALID_ASSET_REFERENCE,
+                    "Visual edit shot referenced unknown asset.",
+                )
+            if shot.candidate_working_media_id is not None and shot.candidate_working_media_id not in known_working:
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_INVALID_WORKING_MEDIA_REFERENCE,
+                    "Visual edit shot referenced unknown working media.",
+                )
+            if shot.candidate_observation_id is not None and shot.candidate_observation_id not in known_observations:
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_INVALID_OBSERVATION_REFERENCE,
+                    "Visual edit shot referenced unknown observation.",
+                )
+            if shot.candidate_technical_shot_id is not None and shot.candidate_technical_shot_id not in known_technical:
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_INVALID_TECHNICAL_SHOT_REFERENCE,
+                    "Visual edit shot referenced unknown technical shot.",
+                )
+        for transition in payload.transitions:
+            if transition.from_shot_id not in shot_ids or transition.to_shot_id not in shot_ids:
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                    "Visual edit transition referenced unknown shot.",
+                )
+
+    def _validate_humanity_review_refs(
+        self,
+        payload: HumanityReviewGatewayPayload,
+        request: TextGatewayRequest,
+    ) -> None:
+        plan = request.visual_edit_input.get("plan", {})
+        plan_id = str(plan.get("plan_id", "")) if isinstance(plan, dict) else ""
+        if payload.visual_edit_plan_id != plan_id:
+            raise TextGatewayError(
+                VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                "Humanity review references a different plan.",
+            )
+        if payload.input_fingerprint != request.input_fingerprint:
+            raise TextGatewayError(
+                VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                "Humanity review input fingerprint mismatch.",
+            )
+        known_shots = set(_ids(request.visual_edit_input.get("shots", []), "shot_id"))
+        for finding in payload.findings:
+            if finding.review_id != payload.review_id:
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                    "Humanity finding references a different review.",
+                )
+            if finding.shot_id is not None and finding.shot_id not in known_shots:
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                    "Humanity finding referenced unknown shot.",
+                )
+
+    def _validate_repair_proposal_refs(
+        self,
+        payload: EditorialRepairProposalGatewayPayload,
+        request: TextGatewayRequest,
+    ) -> None:
+        plan = request.visual_edit_input.get("plan", {})
+        plan_id = str(plan.get("plan_id", "")) if isinstance(plan, dict) else ""
+        if payload.plan_id != plan_id:
+            raise TextGatewayError(
+                VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                "Repair proposals reference a different plan.",
+            )
+        if payload.input_fingerprint != request.input_fingerprint:
+            raise TextGatewayError(
+                VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                "Repair proposal input fingerprint mismatch.",
+            )
+        known = {plan_id}
+        known.update(_ids(request.visual_edit_input.get("shots", []), "shot_id"))
+        known.update(_ids(request.visual_edit_input.get("assignments", []), "assignment_id"))
+        for proposal in payload.proposals:
+            if proposal.plan_id != plan_id:
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                    "Repair proposal references a different plan.",
+                )
+            if not set(proposal.affected_ids).issubset(known):
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                    "Repair proposal referenced unknown item.",
+                )
+
 
 def _validation_error_code(exc: ValidationError, *, request_kind: str = "") -> str:
     schema_error_types = {
@@ -306,10 +522,28 @@ def _validation_error_code(exc: ValidationError, *, request_kind: str = "") -> s
         if str(error.get("type")) in schema_error_types:
             if request_kind == "pause_direction":
                 return NARRATION_ERROR_PAUSE_RESPONSE_SCHEMA_MISMATCH
+            if request_kind in {
+                "visual_edit_plan",
+                "humanity_review",
+                "editorial_repair_proposal",
+            }:
+                return VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH
             return EDITORIAL_ERROR_RESPONSE_SCHEMA_MISMATCH
     if request_kind == "pause_direction":
         return NARRATION_ERROR_PAUSE_RESPONSE_INVALID
+    if request_kind in {"visual_edit_plan", "humanity_review", "editorial_repair_proposal"}:
+        return VISUAL_EDIT_ERROR_RESPONSE_INVALID
     return EDITORIAL_ERROR_RESPONSE_INVALID
+
+
+def _ids(rows: object, key: str) -> list[str]:
+    result: list[str] = []
+    if not isinstance(rows, list):
+        return result
+    for row in rows:
+        if isinstance(row, dict) and row.get(key) is not None:
+            result.append(str(row[key]))
+    return result
 
 
 __all__ = ["DiscoveryTextGateway", "TextAdapter", "TextGatewayError"]

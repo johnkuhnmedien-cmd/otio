@@ -14,6 +14,7 @@ from otio_app.discovery_v2.ui.overview import (
 from otio_app.discovery_v2.ui.technical_validation_page import (
     render_discovery_technical_validation_page,
 )
+from otio_app.discovery_v2.ui.visual_edit_page import render_discovery_visual_edit_page
 
 __all__ = [
     "render_discovery_asset_analysis_page",
@@ -24,4 +25,5 @@ __all__ = [
     "render_discovery_overview_page",
     "render_discovery_settings_page",
     "render_discovery_technical_validation_page",
+    "render_discovery_visual_edit_page",
 ]

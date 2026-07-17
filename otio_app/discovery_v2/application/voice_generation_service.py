@@ -609,12 +609,18 @@ def _segment_artifact_valid(root: Path, segment: VoiceSegment) -> bool:
 
 
 def _active_blocker(conn, *, project_id: str) -> tuple[str, str] | None:
+    from otio_app.discovery_v2.persistence.visual_edit_repository import (
+        find_active_visual_edit_run,
+    )
+
     if find_active_analysis_run(conn, project_id=project_id) is not None:
         return NARRATION_ERROR_ANALYSIS_RUN_ALREADY_ACTIVE, "Analysis-Run ist aktiv."
     if find_active_editorial_run(conn, project_id=project_id) is not None:
         return NARRATION_ERROR_EDITORIAL_RUN_ALREADY_ACTIVE, "Editorial-Run ist aktiv."
     if find_active_supplementation_run(conn, project_id=project_id) is not None:
         return NARRATION_ERROR_SUPPLEMENTATION_RUN_ALREADY_ACTIVE, "Supplementation-Run ist aktiv."
+    if find_active_visual_edit_run(conn, project_id=project_id) is not None:
+        return "visual_edit_run_already_active", "Visual-Edit-Run ist aktiv."
     if repo.find_active_narration_run(conn, project_id=project_id) is not None:
         return NARRATION_ERROR_RUN_ALREADY_ACTIVE, "Narration-Run ist aktiv."
     return None

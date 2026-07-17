@@ -28,6 +28,18 @@ from otio_app.discovery_v2.domain.narration import (
     PROMPT_VERSION_PAUSE_DIRECTION,
     RESPONSE_SCHEMA_PAUSE_DIRECTION,
 )
+from otio_app.discovery_v2.domain.visual_edit import (
+    PROMPT_VERSION_EDITORIAL_REPAIR_PROPOSAL,
+    PROMPT_VERSION_HUMANITY_REVIEW,
+    PROMPT_VERSION_VISUAL_EDIT_PLAN,
+    RESPONSE_SCHEMA_EDITORIAL_REPAIR_PROPOSAL,
+    RESPONSE_SCHEMA_HUMANITY_REVIEW,
+    RESPONSE_SCHEMA_VISUAL_EDIT_PLAN,
+    TEXT_REQUEST_KIND_EDITORIAL_REPAIR_PROPOSAL,
+    TEXT_REQUEST_KIND_HUMANITY_REVIEW,
+    TEXT_REQUEST_KIND_VISUAL_EDIT_PLAN,
+    VISUAL_EDIT_MODEL_IDENTIFIER,
+)
 
 
 class FakeTextTransientError(RuntimeError):
@@ -76,6 +88,12 @@ class FakeTextAdapter:
             payload = self._coverage(request)
         elif request.request_kind == "pause_direction":
             payload = self._pause_direction(request)
+        elif request.request_kind == TEXT_REQUEST_KIND_VISUAL_EDIT_PLAN:
+            payload = self._visual_edit_plan(request)
+        elif request.request_kind == TEXT_REQUEST_KIND_HUMANITY_REVIEW:
+            payload = self._humanity_review(request)
+        elif request.request_kind == TEXT_REQUEST_KIND_EDITORIAL_REPAIR_PROPOSAL:
+            payload = self._editorial_repair_proposal(request)
         else:  # pragma: no cover - Pydantic guards this.
             payload = {}
 
@@ -477,6 +495,215 @@ class FakeTextAdapter:
             "directions": directions,
         }
 
+    def _visual_edit_plan(self, request: TextGatewayRequest) -> dict:
+        inputs = request.visual_edit_input
+        timeline = inputs.get("narration_timeline", {})
+        entries = timeline.get("entries", []) if isinstance(timeline, dict) else []
+        entry_ids = [str(item.get("entry_id")) for item in entries if isinstance(item, dict)]
+        sentences = sorted(request.sentences, key=lambda item: item.ordinal)
+        sentence_ids = [sentence.sentence_id for sentence in sentences]
+        beat_ids = [beat.visual_beat_id for beat in request.visual_beats]
+        intent_ids = [intent.visual_intent_id for intent in request.visual_intents]
+        candidates = inputs.get("candidates", [])
+        candidates = candidates if isinstance(candidates, list) else []
+        candidate = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
+        technical_shots = candidate.get("technical_shots", []) if isinstance(candidate, dict) else []
+        first_tech = (
+            technical_shots[0].get("technical_shot_id")
+            if technical_shots and isinstance(technical_shots[0], dict)
+            else None
+        )
+        media_kind = str(candidate.get("media_kind", "image"))
+        strategy = "local_video" if media_kind == "video" and first_tech else "local_photo"
+        plan_id = _id("visual-edit-plan", request.project_id, request.input_fingerprint)
+        total = float(timeline.get("total_duration_seconds", 0.0)) if isinstance(timeline, dict) else 0.0
+        if total <= 0:
+            total = 12.0
+        shot_count = 3 if len(candidates) <= 1 else (6 if len(sentence_ids) >= 3 else max(3, len(sentence_ids) + 2))
+        weights = [1.0, 1.65, 1.2, 2.1, 1.35, 1.9][:shot_count]
+        functions = ["hook", "detail", "bridge", "establish", "hold", "closing"][:shot_count]
+        biases = ["beginning", "middle", "end", "middle", "beginning", "end"][:shot_count]
+
+        def pick(values: list[str], start: int, width: int = 1) -> list[str]:
+            if not values:
+                return []
+            return values[start : start + width] or values[-1:]
+
+        shots = []
+        for idx in range(shot_count):
+            shot_sentence_ids: list[str]
+            if idx == 0 and sentence_ids:
+                shot_sentence_ids = sentence_ids[:1]
+            elif idx == 1 and sentence_ids:
+                shot_sentence_ids = sentence_ids[:1]
+            elif idx == 2 and len(sentence_ids) >= 2:
+                shot_sentence_ids = sentence_ids[:2]
+            elif idx == 3 and len(sentence_ids) >= 3:
+                shot_sentence_ids = sentence_ids[1:3]
+            else:
+                shot_sentence_ids = pick(sentence_ids, min(idx, max(0, len(sentence_ids) - 1)))
+            shot_id = _id("visual-edit-shot", plan_id, str(idx))
+            shots.append(
+                {
+                    "shot_id": shot_id,
+                    "ordinal": idx,
+                    "shot_function": functions[idx],
+                    "duration_weight": weights[idx],
+                    "narration_entry_ids": pick(entry_ids, min(idx, max(0, len(entry_ids) - 1)), 2 if idx == 2 else 1),
+                    "sentence_ids": shot_sentence_ids,
+                    "visual_beat_ids": pick(beat_ids, idx % max(1, len(beat_ids))),
+                    "visual_intent_ids": pick(intent_ids, idx % max(1, len(intent_ids))),
+                    "media_strategy": strategy,
+                    "candidate_asset_id": candidate.get("asset_id"),
+                    "candidate_working_media_id": candidate.get("working_media_id"),
+                    "candidate_technical_shot_id": first_tech if strategy == "local_video" else None,
+                    "candidate_observation_id": candidate.get("observation_id"),
+                    "source_range_intent": {
+                        "start_bias": biases[idx],
+                        "desired_duration_seconds": None,
+                        "action_hint": "FakeText chooses motif intent only; Python resolves exact source range.",
+                        "continuity_hint": "avoid source-group chapter formation",
+                    },
+                    "transition_intent": "cut" if idx % 3 else "soft continuity",
+                    "continuity_intent": "bridge over narration shape, not one-shot-per-sentence",
+                    "rhythm_intent": "varied",
+                    "selection_rationale": "Structured fake local candidate, no filename or path evidence.",
+                    "uncertainty_notes": [
+                        "FakeText is not a semantic editor.",
+                        "Source group is ignored as chapter structure.",
+                    ],
+                    "priority": idx,
+                }
+            )
+        transitions = []
+        for left, right in zip(shots, shots[1:]):
+            idx = len(transitions)
+            transitions.append(
+                {
+                    "transition_id": _id("visual-edit-transition", left["shot_id"], right["shot_id"]),
+                    "from_shot_id": left["shot_id"],
+                    "to_shot_id": right["shot_id"],
+                    "editorial_function": "rhythm_cut" if idx % 2 else "visual_bridge",
+                    "technical_type": "cut" if idx % 2 else "dissolve",
+                    "desired_duration_seconds": 0.0 if idx % 2 else 0.35,
+                }
+            )
+        return {
+            "plan_id": plan_id,
+            "project_id": request.project_id,
+            "script_lock_id": str(inputs.get("script_lock_id", "missing-lock")),
+            "narration_timeline_id": str(inputs.get("narration_timeline_id", "missing-timeline")),
+            "input_fingerprint": request.input_fingerprint,
+            "plan_version": int(inputs.get("next_plan_version", 1)),
+            "model_id": VISUAL_EDIT_MODEL_IDENTIFIER,
+            "prompt_version": PROMPT_VERSION_VISUAL_EDIT_PLAN,
+            "schema_version": RESPONSE_SCHEMA_VISUAL_EDIT_PLAN,
+            "expected_visual_duration_seconds": total,
+            "accepted_risks": [
+                {"risk_id": str(risk), "category": "accepted_unresolved", "rationale": "Visible from script lock."}
+                for risk in inputs.get("accepted_open_risks", [])
+            ],
+            "shots": shots,
+            "transitions": transitions,
+            "created_at": _now(),
+        }
+
+    def _humanity_review(self, request: TextGatewayRequest) -> dict:
+        inputs = request.visual_edit_input
+        plan = inputs.get("plan", {}) if isinstance(inputs.get("plan", {}), dict) else {}
+        signals = inputs.get("deterministic_signals", {})
+        signals = signals if isinstance(signals, dict) else {}
+        plan_id = str(plan.get("plan_id", "missing-plan"))
+        review_id = _id("humanity-review", plan_id, request.input_fingerprint)
+        findings = []
+        boundary_ratio = float(signals.get("sentence_boundary_cut_ratio", 0.0) or 0.0)
+        generic_ratio = float(signals.get("generic_stock_ratio", 0.0) or 0.0)
+        similar_run = int(signals.get("max_similar_motif_run", 0) or 0)
+        if boundary_ratio > 0.65:
+            findings.append(
+                _humanity_finding(
+                    review_id,
+                    "sentence-boundary",
+                    None,
+                    "sentence_boundary_cut_risk",
+                    "blocking" if boundary_ratio > 0.85 else "warning",
+                    "Viele Schnitte liegen exakt auf Satzgrenzen; Nutzer soll Mechanik pruefen.",
+                )
+            )
+        if generic_ratio >= 0.40:
+            findings.append(
+                _humanity_finding(
+                    review_id,
+                    "generic-stock",
+                    None,
+                    "generic_stock_risk",
+                    "blocking" if generic_ratio >= 0.60 else "warning",
+                    "Lokale Detailwirkung koennte zu generisch sein.",
+                )
+            )
+        if similar_run >= 3:
+            findings.append(
+                _humanity_finding(
+                    review_id,
+                    "similar-motif",
+                    None,
+                    "similar_motif_sequence",
+                    "blocking" if similar_run >= 4 else "warning",
+                    "Mehrere aufeinanderfolgende Shots nutzen ein aehnliches Motiv.",
+                )
+            )
+        if signals.get("duration_variance_warning"):
+            findings.append(
+                _humanity_finding(
+                    review_id,
+                    "duration-variance",
+                    None,
+                    "shot_duration_variance",
+                    "warning",
+                    "Shotdauern wirken zu gleichfoermig.",
+                )
+            )
+        overall = "blocked" if any(item["severity"] == "blocking" for item in findings) else "pass_with_risks"
+        return {
+            "review_id": review_id,
+            "visual_edit_plan_id": plan_id,
+            "review_version": int(inputs.get("next_review_version", 1)),
+            "input_fingerprint": request.input_fingerprint,
+            "overall_judgment": overall,
+            "deterministic_signals": signals,
+            "findings": findings,
+            "created_at": _now(),
+        }
+
+    def _editorial_repair_proposal(self, request: TextGatewayRequest) -> dict:
+        inputs = request.visual_edit_input
+        plan = inputs.get("plan", {}) if isinstance(inputs.get("plan", {}), dict) else {}
+        plan_id = str(plan.get("plan_id", "missing-plan"))
+        shots = inputs.get("shots", [])
+        affected = []
+        if isinstance(shots, list) and shots:
+            first = shots[0]
+            if isinstance(first, dict):
+                affected = [str(first.get("shot_id"))]
+        proposal = {
+            "proposal_id": _id("repair-proposal", plan_id, request.input_fingerprint),
+            "plan_id": plan_id,
+            "humanity_review_id": inputs.get("humanity_review_id"),
+            "feasibility_report_id": inputs.get("feasibility_report_id"),
+            "source": "editorial_fake_llm",
+            "repair_type": "vary_first_local_motif",
+            "affected_ids": affected or [plan_id],
+            "description": "Fake proposal: vary the first motif or transition after user selection.",
+            "expected_effect": "Reduces mechanical rhythm without auto-export or OTIO.",
+            "user_status": "proposed",
+            "version": 1,
+        }
+        return {
+            "plan_id": plan_id,
+            "input_fingerprint": request.input_fingerprint,
+            "proposals": [proposal],
+        }
+
 
 def _forced_error_from_request(request: TextGatewayRequest) -> str | None:
     fields = [
@@ -541,6 +768,28 @@ def _pause_direction_payload(
         "hardness": hardness,
         "rationale": rationale,
         "uncertainty": PauseUncertainty.LOW.value,
+    }
+
+
+def _humanity_finding(
+    review_id: str,
+    key: str,
+    shot_id: str | None,
+    category: str,
+    severity: str,
+    rationale: str,
+) -> dict:
+    return {
+        "finding_id": _id("humanity-finding", review_id, key),
+        "review_id": review_id,
+        "shot_id": shot_id,
+        "plan_level": shot_id is None,
+        "category": category,
+        "severity": severity,
+        "rationale": rationale,
+        "evidence_refs": [key],
+        "recommended_action": "Review or select a repair before Phase 13.",
+        "user_status": "open",
     }
 
 

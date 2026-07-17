@@ -455,6 +455,20 @@ def _start_run(project: Project, *, scope: str, sync: bool) -> EditorialStartRes
                 ),
                 error_code="narration_run_already_active",
             )
+        from otio_app.discovery_v2.persistence.visual_edit_repository import (
+            find_active_visual_edit_run,
+        )
+
+        visual_edit_active = find_active_visual_edit_run(conn, project_id=project.id)
+        if visual_edit_active is not None:
+            return EditorialStartResult(
+                started=False,
+                message=(
+                    f"Es laeuft bereits ein Visual-Edit-Run "
+                    f"({visual_edit_active.scope}/{visual_edit_active.status.value})."
+                ),
+                error_code="visual_edit_run_already_active",
+            )
         active = repo.find_active_editorial_run(conn, project_id=project.id)
         if active is not None:
             return EditorialStartResult(

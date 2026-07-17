@@ -54,10 +54,10 @@ def test_narration_contract_constants_and_helpers() -> None:
     assert fake_voice_sample_count("abc") == int(0.4 * 48000)
 
 
-def test_schema_18_creates_only_phase11_narration_tables(tmp_path: Path) -> None:
+def test_schema_19_creates_phase11_and_phase12_tables(tmp_path: Path) -> None:
     conn = reg_db.get_registry_connection(tmp_path)
     try:
-        assert reg_db.read_schema_version(conn) == REGISTRY_SCHEMA_VERSION == "18"
+        assert reg_db.read_schema_version(conn) == REGISTRY_SCHEMA_VERSION == "19"
         tables = {
             row["name"]
             for row in conn.execute(
@@ -94,18 +94,19 @@ def test_schema_18_creates_only_phase11_narration_tables(tmp_path: Path) -> None
             row["name"] for row in conn.execute("PRAGMA table_info(pause_directions)").fetchall()
         }
         assert "ordinal" in direction_cols
-        assert "visual_edit_plans" not in tables
+        assert "visual_edit_plans" in tables
+        assert "visual_edit_project_state" in tables
         assert "otio_exports" not in tables
     finally:
         conn.close()
     conn2 = reg_db.get_registry_connection(tmp_path)
     try:
-        assert reg_db.read_schema_version(conn2) == "18"
+        assert reg_db.read_schema_version(conn2) == "19"
     finally:
         conn2.close()
 
 
-def test_schema_16_to_18_migration_preserves_existing_data(tmp_path: Path) -> None:
+def test_schema_16_to_19_migration_preserves_existing_data(tmp_path: Path) -> None:
     db_dir = reg_db.ensure_registry_dir(tmp_path)
     db_path = db_dir / "assets.sqlite3"
     raw = sqlite3.connect(str(db_path))
@@ -125,13 +126,13 @@ def test_schema_16_to_18_migration_preserves_existing_data(tmp_path: Path) -> No
     raw.close()
     conn = reg_db.get_registry_connection(tmp_path)
     try:
-        assert reg_db.read_schema_version(conn) == "18"
+        assert reg_db.read_schema_version(conn) == "19"
         assert conn.execute("SELECT COUNT(*) AS n FROM assets").fetchone()["n"] == 1
     finally:
         conn.close()
 
 
-def test_schema_17_to_18_migration_backfills_narration_contracts(tmp_path: Path) -> None:
+def test_schema_17_to_19_migration_backfills_narration_contracts(tmp_path: Path) -> None:
     db_dir = reg_db.ensure_registry_dir(tmp_path)
     db_path = db_dir / "assets.sqlite3"
     raw = sqlite3.connect(str(db_path))
@@ -299,7 +300,7 @@ def test_schema_17_to_18_migration_backfills_narration_contracts(tmp_path: Path)
 
     conn = reg_db.get_registry_connection(tmp_path)
     try:
-        assert reg_db.read_schema_version(conn) == "18"
+        assert reg_db.read_schema_version(conn) == "19"
         profile = conn.execute(
             "SELECT * FROM voice_profiles WHERE voice_profile_id = 'profile-1'"
         ).fetchone()

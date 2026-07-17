@@ -134,6 +134,17 @@ def create_script_lock(
                 message="Narration-Run ist aktiv.",
                 error_code="narration_run_already_active",
             )
+        from otio_app.discovery_v2.persistence.visual_edit_repository import (
+            find_active_visual_edit_run,
+        )
+
+        active_visual_edit = find_active_visual_edit_run(conn, project_id=project.id)
+        if active_visual_edit is not None:
+            return ScriptLockResult(
+                ok=False,
+                message="Visual-Edit-Run ist aktiv.",
+                error_code="visual_edit_run_already_active",
+            )
         preview = _build_preview(
             conn,
             project,
