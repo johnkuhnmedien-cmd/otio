@@ -256,3 +256,59 @@ normalem Intake, aktueller Analyse, Review und erneutem Coverage Audit.
 
 **Entscheidung:** Adobe OAuth, Lizenzierung, Preise und automatische Downloads bleiben
 UNKNOWN und außerhalb des Fake-Alpha-Pfads.
+
+---
+
+## D-11-001 — VoiceGenerationGateway mit FakeVoiceAdapter
+
+**Entscheidung:** Phase 11 verwendet einen zentralen providerneutralen
+VoiceGenerationGateway mit FakeVoiceAdapter als erstem Adapter.
+
+---
+
+## D-11-002 — Wirksamer Script Lock als Narration-Startbedingung
+
+**Entscheidung:** Phase 11 darf ausschließlich von einem aktuellen wirksamen Script
+Lock gestartet werden.
+
+---
+
+## D-11-003 — Fake-Voice-WAV-Vertrag
+
+**Entscheidung:** Der Fake-Voice-Pfad erzeugt deterministische lokale WAV-Segmente mit
+PCM s16le, 48 kHz und Mono. Er behauptet keine natürliche Stimme.
+
+---
+
+## D-11-004 — Pausenregie über DiscoveryTextGateway
+
+**Entscheidung:** Die Pausenregie läuft über den zentralen DiscoveryTextGateway. Sie
+liefert Funktionen und Dauerabsichten, keine finalen Frames.
+
+---
+
+## D-11-005 — Deterministische Python-Timingauflösung
+
+**Entscheidung:** Python löst Audio, Pausen, Visual-only-Intervalle, Sekundenwerte und
+rationale Framegrenzen deterministisch auf.
+
+---
+
+## D-11-006 — Versionierte Narration-Artefakte und Stale-Kette
+
+**Entscheidung:** Voice-Segmente, Pause-Pläne und Narration Timelines sind versioniert
+und werden durch Änderungen ihrer exakten Inputkette stale.
+
+---
+
+## D-11-007 — Rationale Timebases
+
+**Entscheidung:** Narration verwendet rationale Timebases. 23,976 und 29,97 werden als
+24000/1001 beziehungsweise 30000/1001 gespeichert.
+
+---
+
+## D-11-008 — ElevenLabs bleibt separates Freigabegate
+
+**Entscheidung:** ElevenLabs und andere reale Voiceprovider bleiben ein separates
+Freigabegate und sind im lokalen Fake-Alpha-Pfad nicht aktiviert.
