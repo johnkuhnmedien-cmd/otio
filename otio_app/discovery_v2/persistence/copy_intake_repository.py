@@ -1,0 +1,466 @@
+"""SQLite + JSON Persistenz für Discovery-V2 Copy-Intake-Runs."""
+
+from __future__ import annotations
+
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+from uuid import uuid4
+
+from otio_app.discovery_v2.domain.media_intake import (
+    ACTIVE_INTAKE_RUN_STATUSES,
+    IntakeAction,
+    IntakeRunAssetRecord,
+    IntakeRunAssetStatus,
+    IntakeRunLatestPointer,
+    IntakeRunRecord,
+    IntakeRunReport,
+    IntakeRunStatus,
+    WorkingMediaRecord,
+    WorkingMediaStatus,
+)
+from otio_app.discovery_v2.persistence.asset_registry_database import (
+    get_registry_connection,
+)
+from otio_app.discovery_v2.persistence.inventory_artifact_store import (
+    InventoryArtifactError,
+    _atomic_write_text,
+)
+from otio_app.discovery_v2.paths import (
+    assert_path_is_under_discovery_v2,
+    get_discovery_v2_root,
+)
+
+
+def open_registry(project_root: Path) -> sqlite3.Connection:
+    return get_registry_connection(project_root)
+
+
+def new_intake_run_id() -> str:
+    return str(uuid4())
+
+
+def new_run_asset_id() -> str:
+    return str(uuid4())
+
+
+def new_working_media_id() -> str:
+    return str(uuid4())
+
+
+def intake_runs_dir(project_root: Path) -> Path:
+    return get_discovery_v2_root(project_root) / "intake" / "runs"
+
+
+def intake_run_report_path(project_root: Path, run_id: str) -> Path:
+    return intake_runs_dir(project_root) / f"{run_id}.json"
+
+
+def latest_intake_run_pointer_path(project_root: Path) -> Path:
+    return get_discovery_v2_root(project_root) / "intake" / "latest_run.json"
+
+
+def media_working_dir(project_root: Path) -> Path:
+    return get_discovery_v2_root(project_root) / "media" / "working"
+
+
+def media_temp_dir(project_root: Path, run_id: str) -> Path:
+    return get_discovery_v2_root(project_root) / "media" / "temp" / run_id
+
+
+def working_relative_path_for(source_relative_path: str) -> str:
+    """Relative Posix-Pfad unter ``media/working/``."""
+    rel = source_relative_path.replace("\\", "/").lstrip("/")
+    return f"media/working/{rel}"
+
+
+def ensure_intake_run_dirs(project_root: Path) -> None:
+    try:
+        intake_runs_dir(project_root).mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise InventoryArtifactError(
+            f"Intake-Run-Verzeichnis nicht beschreibbar: {exc}"
+        ) from exc
+    assert_path_is_under_discovery_v2(intake_runs_dir(project_root), project_root)
+
+
+def insert_intake_run(conn: sqlite3.Connection, run: IntakeRunRecord) -> None:
+    conn.execute(
+        """
+        INSERT INTO intake_runs (
+            run_id, project_id, plan_id, import_id, selection_id, scan_id,
+            validation_run_id, status, created_at, started_at, completed_at,
+            total_assets, processed_assets, succeeded_assets, failed_assets,
+            skipped_assets, error_summary, worker_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run.run_id,
+            run.project_id,
+            run.plan_id,
+            run.import_id,
+            run.selection_id,
+            run.scan_id,
+            run.validation_run_id,
+            run.status.value,
+            run.created_at.isoformat(),
+            run.started_at.isoformat() if run.started_at else None,
+            run.completed_at.isoformat() if run.completed_at else None,
+            run.total_assets,
+            run.processed_assets,
+            run.succeeded_assets,
+            run.failed_assets,
+            run.skipped_assets,
+            run.error_summary,
+            run.worker_version,
+        ),
+    )
+
+
+def insert_intake_run_asset(
+    conn: sqlite3.Connection, record: IntakeRunAssetRecord
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO intake_run_assets (
+            run_asset_id, run_id, plan_id, asset_id, source_relative_path,
+            source_group, media_kind, planned_action, status, source_sha256,
+            output_sha256, working_relative_path, error_code, error_message,
+            processed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            record.run_asset_id,
+            record.run_id,
+            record.plan_id,
+            record.asset_id,
+            record.source_relative_path,
+            record.source_group,
+            record.media_kind,
+            record.planned_action.value,
+            record.status.value,
+            record.source_sha256,
+            record.output_sha256,
+            record.working_relative_path,
+            record.error_code,
+            record.error_message,
+            record.processed_at.isoformat() if record.processed_at else None,
+        ),
+    )
+
+
+def update_intake_run(conn: sqlite3.Connection, run: IntakeRunRecord) -> None:
+    conn.execute(
+        """
+        UPDATE intake_runs
+        SET status = ?,
+            started_at = ?,
+            completed_at = ?,
+            total_assets = ?,
+            processed_assets = ?,
+            succeeded_assets = ?,
+            failed_assets = ?,
+            skipped_assets = ?,
+            error_summary = ?,
+            worker_version = ?
+        WHERE run_id = ?
+        """,
+        (
+            run.status.value,
+            run.started_at.isoformat() if run.started_at else None,
+            run.completed_at.isoformat() if run.completed_at else None,
+            run.total_assets,
+            run.processed_assets,
+            run.succeeded_assets,
+            run.failed_assets,
+            run.skipped_assets,
+            run.error_summary,
+            run.worker_version,
+            run.run_id,
+        ),
+    )
+
+
+def update_intake_run_asset(
+    conn: sqlite3.Connection, record: IntakeRunAssetRecord
+) -> None:
+    conn.execute(
+        """
+        UPDATE intake_run_assets
+        SET status = ?,
+            source_sha256 = ?,
+            output_sha256 = ?,
+            working_relative_path = ?,
+            error_code = ?,
+            error_message = ?,
+            processed_at = ?
+        WHERE run_asset_id = ?
+        """,
+        (
+            record.status.value,
+            record.source_sha256,
+            record.output_sha256,
+            record.working_relative_path,
+            record.error_code,
+            record.error_message,
+            record.processed_at.isoformat() if record.processed_at else None,
+            record.run_asset_id,
+        ),
+    )
+
+
+def upsert_working_media(
+    conn: sqlite3.Connection, record: WorkingMediaRecord
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO working_media (
+            working_media_id, project_id, asset_id, plan_id, intake_run_id,
+            source_relative_path, working_relative_path, source_sha256,
+            output_sha256, media_kind, extension, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project_id, asset_id) DO UPDATE SET
+            working_media_id = excluded.working_media_id,
+            plan_id = excluded.plan_id,
+            intake_run_id = excluded.intake_run_id,
+            source_relative_path = excluded.source_relative_path,
+            working_relative_path = excluded.working_relative_path,
+            source_sha256 = excluded.source_sha256,
+            output_sha256 = excluded.output_sha256,
+            media_kind = excluded.media_kind,
+            extension = excluded.extension,
+            status = excluded.status,
+            updated_at = excluded.updated_at
+        """,
+        (
+            record.working_media_id,
+            record.project_id,
+            record.asset_id,
+            record.plan_id,
+            record.intake_run_id,
+            record.source_relative_path,
+            record.working_relative_path,
+            record.source_sha256,
+            record.output_sha256,
+            record.media_kind,
+            record.extension,
+            record.status.value,
+            record.created_at.isoformat(),
+            record.updated_at.isoformat(),
+        ),
+    )
+
+
+def get_intake_run(
+    conn: sqlite3.Connection, *, run_id: str
+) -> IntakeRunRecord | None:
+    row = conn.execute(
+        "SELECT * FROM intake_runs WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    return None if row is None else _row_to_run(row)
+
+
+def get_latest_intake_run(
+    conn: sqlite3.Connection, *, project_id: str
+) -> IntakeRunRecord | None:
+    row = conn.execute(
+        """
+        SELECT * FROM intake_runs
+        WHERE project_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (project_id,),
+    ).fetchone()
+    return None if row is None else _row_to_run(row)
+
+
+def find_active_intake_run(
+    conn: sqlite3.Connection, *, project_id: str
+) -> IntakeRunRecord | None:
+    placeholders = ", ".join("?" for _ in ACTIVE_INTAKE_RUN_STATUSES)
+    row = conn.execute(
+        f"""
+        SELECT * FROM intake_runs
+        WHERE project_id = ?
+          AND status IN ({placeholders})
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (project_id, *[s.value for s in ACTIVE_INTAKE_RUN_STATUSES]),
+    ).fetchone()
+    return None if row is None else _row_to_run(row)
+
+
+def list_intake_run_assets(
+    conn: sqlite3.Connection, *, run_id: str
+) -> list[IntakeRunAssetRecord]:
+    rows = conn.execute(
+        """
+        SELECT * FROM intake_run_assets
+        WHERE run_id = ?
+        ORDER BY source_relative_path
+        """,
+        (run_id,),
+    ).fetchall()
+    return [_row_to_run_asset(row) for row in rows]
+
+
+def get_working_media(
+    conn: sqlite3.Connection, *, project_id: str, asset_id: str
+) -> WorkingMediaRecord | None:
+    row = conn.execute(
+        """
+        SELECT * FROM working_media
+        WHERE project_id = ? AND asset_id = ?
+        """,
+        (project_id, asset_id),
+    ).fetchone()
+    return None if row is None else _row_to_working(row)
+
+
+def list_working_media(
+    conn: sqlite3.Connection, *, project_id: str
+) -> list[WorkingMediaRecord]:
+    rows = conn.execute(
+        """
+        SELECT * FROM working_media
+        WHERE project_id = ?
+        ORDER BY source_relative_path
+        """,
+        (project_id,),
+    ).fetchall()
+    return [_row_to_working(row) for row in rows]
+
+
+def build_report_from_intake_run(run: IntakeRunRecord) -> IntakeRunReport:
+    return IntakeRunReport(
+        run_id=run.run_id,
+        project_id=run.project_id,
+        plan_id=run.plan_id,
+        import_id=run.import_id,
+        selection_id=run.selection_id,
+        scan_id=run.scan_id,
+        validation_run_id=run.validation_run_id,
+        status=run.status,
+        created_at=run.created_at,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        total_assets=run.total_assets,
+        processed_assets=run.processed_assets,
+        succeeded_assets=run.succeeded_assets,
+        failed_assets=run.failed_assets,
+        skipped_assets=run.skipped_assets,
+        error_summary=run.error_summary,
+        worker_version=run.worker_version,
+        report_relative_path=f"intake/runs/{run.run_id}.json",
+    )
+
+
+def save_intake_run_report(project_root: Path, report: IntakeRunReport) -> Path:
+    ensure_intake_run_dirs(project_root)
+    target = intake_run_report_path(project_root, report.run_id)
+    assert_path_is_under_discovery_v2(target, project_root)
+    try:
+        _atomic_write_text(target, report.model_dump_json(indent=2))
+    except OSError as exc:
+        raise InventoryArtifactError(
+            f"Intake-Run-Bericht konnte nicht geschrieben werden: {exc}"
+        ) from exc
+
+    if report.status in {
+        IntakeRunStatus.COMPLETED,
+        IntakeRunStatus.COMPLETED_WITH_ERRORS,
+        IntakeRunStatus.FAILED,
+        IntakeRunStatus.CANCELLED,
+    }:
+        pointer = IntakeRunLatestPointer(
+            run_id=report.run_id,
+            plan_id=report.plan_id,
+            import_id=report.import_id,
+            selection_id=report.selection_id,
+            scan_id=report.scan_id,
+            validation_run_id=report.validation_run_id,
+            status=report.status,
+            completed_at=report.completed_at,
+            report_relative_path=report.report_relative_path
+            or f"intake/runs/{report.run_id}.json",
+        )
+        latest = latest_intake_run_pointer_path(project_root)
+        assert_path_is_under_discovery_v2(latest, project_root)
+        try:
+            _atomic_write_text(latest, pointer.model_dump_json(indent=2))
+        except OSError as exc:
+            raise InventoryArtifactError(
+                f"latest_run.json (intake) konnte nicht geschrieben werden: {exc}"
+            ) from exc
+    return target
+
+
+def _parse_optional_dt(value: object) -> datetime | None:
+    if value is None:
+        return None
+    return datetime.fromisoformat(str(value))
+
+
+def _row_to_run(row: sqlite3.Row) -> IntakeRunRecord:
+    return IntakeRunRecord(
+        run_id=str(row["run_id"]),
+        project_id=str(row["project_id"]),
+        plan_id=str(row["plan_id"]),
+        import_id=str(row["import_id"]),
+        selection_id=str(row["selection_id"]),
+        scan_id=str(row["scan_id"]),
+        validation_run_id=str(row["validation_run_id"]),
+        status=IntakeRunStatus(str(row["status"])),
+        created_at=datetime.fromisoformat(str(row["created_at"])),
+        started_at=_parse_optional_dt(row["started_at"]),
+        completed_at=_parse_optional_dt(row["completed_at"]),
+        total_assets=int(row["total_assets"]),
+        processed_assets=int(row["processed_assets"]),
+        succeeded_assets=int(row["succeeded_assets"]),
+        failed_assets=int(row["failed_assets"]),
+        skipped_assets=int(row["skipped_assets"]),
+        error_summary=row["error_summary"],
+        worker_version=str(row["worker_version"]),
+    )
+
+
+def _row_to_run_asset(row: sqlite3.Row) -> IntakeRunAssetRecord:
+    return IntakeRunAssetRecord(
+        run_asset_id=str(row["run_asset_id"]),
+        run_id=str(row["run_id"]),
+        plan_id=str(row["plan_id"]),
+        asset_id=str(row["asset_id"]),
+        source_relative_path=str(row["source_relative_path"]),
+        source_group=str(row["source_group"]),
+        media_kind=str(row["media_kind"]),
+        planned_action=IntakeAction(str(row["planned_action"])),
+        status=IntakeRunAssetStatus(str(row["status"])),
+        source_sha256=row["source_sha256"],
+        output_sha256=row["output_sha256"],
+        working_relative_path=row["working_relative_path"],
+        error_code=row["error_code"],
+        error_message=row["error_message"],
+        processed_at=_parse_optional_dt(row["processed_at"]),
+    )
+
+
+def _row_to_working(row: sqlite3.Row) -> WorkingMediaRecord:
+    return WorkingMediaRecord(
+        working_media_id=str(row["working_media_id"]),
+        project_id=str(row["project_id"]),
+        asset_id=str(row["asset_id"]),
+        plan_id=str(row["plan_id"]),
+        intake_run_id=str(row["intake_run_id"]),
+        source_relative_path=str(row["source_relative_path"]),
+        working_relative_path=str(row["working_relative_path"]),
+        source_sha256=str(row["source_sha256"]),
+        output_sha256=str(row["output_sha256"]),
+        media_kind=str(row["media_kind"]),
+        extension=str(row["extension"]),
+        status=WorkingMediaStatus(str(row["status"])),
+        created_at=datetime.fromisoformat(str(row["created_at"])),
+        updated_at=datetime.fromisoformat(str(row["updated_at"])),
+    )

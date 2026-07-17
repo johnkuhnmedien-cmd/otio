@@ -13,7 +13,7 @@ from otio_app.discovery_v2.paths import (
 )
 
 # Lesbare Schema-Versionen, die idempotent auf CURRENT migriert werden.
-_LEGACY_SCHEMA_VERSIONS = frozenset({"1", "2", "3"})
+_LEGACY_SCHEMA_VERSIONS = frozenset({"1", "2", "3", "4"})
 
 
 class RegistryDatabaseError(ValueError):
@@ -254,6 +254,89 @@ def _ensure_intake_tables(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_copy_intake_tables(conn: sqlite3.Connection) -> None:
+    """Phase 7B: Intake-Runs und Working-Media (nur Copy)."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS intake_runs (
+            run_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            plan_id TEXT NOT NULL,
+            import_id TEXT NOT NULL,
+            selection_id TEXT NOT NULL,
+            scan_id TEXT NOT NULL,
+            validation_run_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            total_assets INTEGER NOT NULL DEFAULT 0,
+            processed_assets INTEGER NOT NULL DEFAULT 0,
+            succeeded_assets INTEGER NOT NULL DEFAULT 0,
+            failed_assets INTEGER NOT NULL DEFAULT 0,
+            skipped_assets INTEGER NOT NULL DEFAULT 0,
+            error_summary TEXT,
+            worker_version TEXT NOT NULL,
+            FOREIGN KEY (plan_id) REFERENCES intake_plans(plan_id),
+            FOREIGN KEY (import_id) REFERENCES selection_imports(import_id),
+            FOREIGN KEY (validation_run_id) REFERENCES validation_runs(run_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS intake_run_assets (
+            run_asset_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            plan_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            source_relative_path TEXT NOT NULL,
+            source_group TEXT NOT NULL,
+            media_kind TEXT NOT NULL,
+            planned_action TEXT NOT NULL,
+            status TEXT NOT NULL,
+            source_sha256 TEXT,
+            output_sha256 TEXT,
+            working_relative_path TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            processed_at TEXT,
+            UNIQUE (run_id, asset_id),
+            FOREIGN KEY (run_id) REFERENCES intake_runs(run_id),
+            FOREIGN KEY (plan_id) REFERENCES intake_plans(plan_id),
+            FOREIGN KEY (asset_id) REFERENCES assets(asset_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS working_media (
+            working_media_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            plan_id TEXT NOT NULL,
+            intake_run_id TEXT NOT NULL,
+            source_relative_path TEXT NOT NULL,
+            working_relative_path TEXT NOT NULL,
+            source_sha256 TEXT NOT NULL,
+            output_sha256 TEXT NOT NULL,
+            media_kind TEXT NOT NULL,
+            extension TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (project_id, asset_id),
+            FOREIGN KEY (asset_id) REFERENCES assets(asset_id),
+            FOREIGN KEY (plan_id) REFERENCES intake_plans(plan_id),
+            FOREIGN KEY (intake_run_id) REFERENCES intake_runs(run_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_intake_runs_project_status
+            ON intake_runs (project_id, status);
+
+        CREATE INDEX IF NOT EXISTS idx_intake_run_assets_run
+            ON intake_run_assets (run_id);
+
+        CREATE INDEX IF NOT EXISTS idx_working_media_project
+            ON working_media (project_id);
+        """
+    )
+
+
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_base_tables(conn)
     now = datetime.now(timezone.utc).isoformat()
@@ -265,6 +348,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         _ensure_validation_tables(conn)
         _ensure_validation_profile_columns(conn)
         _ensure_intake_tables(conn)
+        _ensure_copy_intake_tables(conn)
         conn.execute(
             """
             INSERT INTO registry_schema (schema_version, initialized_at, updated_at)
@@ -279,6 +363,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         _ensure_validation_tables(conn)
         _ensure_validation_profile_columns(conn)
         _ensure_intake_tables(conn)
+        _ensure_copy_intake_tables(conn)
         conn.execute(
             "UPDATE registry_schema SET updated_at = ? WHERE schema_version = ?",
             (now, REGISTRY_SCHEMA_VERSION),
@@ -290,6 +375,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         _ensure_validation_tables(conn)
         _ensure_validation_profile_columns(conn)
         _ensure_intake_tables(conn)
+        _ensure_copy_intake_tables(conn)
         conn.execute(
             """
             UPDATE registry_schema

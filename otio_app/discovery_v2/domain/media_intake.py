@@ -97,3 +97,147 @@ class IntakePlanCreateResult(BaseModel):
     created: bool
     message: str
     plan: IntakePlan | None = None
+
+
+# --- Phase 7B: Copy-Intake-Runs / Working Media --------------------------------
+
+INTAKE_RUN_SCHEMA_VERSION = "1"
+COPY_INTAKE_WORKER_VERSION = "1"
+WORKER_INTERRUPTED_INTAKE_ERROR_CODE = "worker_interrupted"
+
+
+class IntakeRunStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    COMPLETED_WITH_ERRORS = "completed_with_errors"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class IntakeRunAssetStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class WorkingMediaStatus(str, Enum):
+    READY = "ready"
+    FAILED = "failed"
+
+
+ACTIVE_INTAKE_RUN_STATUSES = frozenset(
+    {
+        IntakeRunStatus.QUEUED,
+        IntakeRunStatus.RUNNING,
+    }
+)
+
+TERMINAL_INTAKE_RUN_STATUSES = frozenset(
+    {
+        IntakeRunStatus.COMPLETED,
+        IntakeRunStatus.COMPLETED_WITH_ERRORS,
+        IntakeRunStatus.FAILED,
+        IntakeRunStatus.CANCELLED,
+    }
+)
+
+
+class IntakeRunRecord(BaseModel):
+    run_id: str
+    project_id: str
+    plan_id: str
+    import_id: str
+    selection_id: str
+    scan_id: str
+    validation_run_id: str
+    status: IntakeRunStatus
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    total_assets: int = 0
+    processed_assets: int = 0
+    succeeded_assets: int = 0
+    failed_assets: int = 0
+    skipped_assets: int = 0
+    error_summary: str | None = None
+    worker_version: str = COPY_INTAKE_WORKER_VERSION
+
+
+class IntakeRunAssetRecord(BaseModel):
+    run_asset_id: str
+    run_id: str
+    plan_id: str
+    asset_id: str
+    source_relative_path: str
+    source_group: str
+    media_kind: str
+    planned_action: IntakeAction = IntakeAction.COPY
+    status: IntakeRunAssetStatus
+    source_sha256: str | None = None
+    output_sha256: str | None = None
+    working_relative_path: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    processed_at: datetime | None = None
+
+
+class WorkingMediaRecord(BaseModel):
+    working_media_id: str
+    project_id: str
+    asset_id: str
+    plan_id: str
+    intake_run_id: str
+    source_relative_path: str
+    working_relative_path: str
+    source_sha256: str
+    output_sha256: str
+    media_kind: str
+    extension: str
+    status: WorkingMediaStatus = WorkingMediaStatus.READY
+    created_at: datetime
+    updated_at: datetime
+
+
+class IntakeRunReport(BaseModel):
+    schema_version: str = INTAKE_RUN_SCHEMA_VERSION
+    run_id: str
+    project_id: str
+    plan_id: str
+    import_id: str
+    selection_id: str
+    scan_id: str
+    validation_run_id: str
+    status: IntakeRunStatus
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    total_assets: int = 0
+    processed_assets: int = 0
+    succeeded_assets: int = 0
+    failed_assets: int = 0
+    skipped_assets: int = 0
+    error_summary: str | None = None
+    worker_version: str = COPY_INTAKE_WORKER_VERSION
+    report_relative_path: str = ""
+
+
+class IntakeRunLatestPointer(BaseModel):
+    schema_version: str = INTAKE_RUN_SCHEMA_VERSION
+    run_id: str
+    plan_id: str
+    import_id: str
+    selection_id: str
+    scan_id: str
+    validation_run_id: str
+    status: IntakeRunStatus
+    completed_at: datetime | None = None
+    report_relative_path: str
+
+
+class IntakeRunStartResult(BaseModel):
+    started: bool
+    message: str
+    run: IntakeRunRecord | None = None

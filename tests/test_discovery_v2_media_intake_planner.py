@@ -682,18 +682,19 @@ def test_schema_extension_idempotent(discovery_project, imported) -> None:
     }
     assert "intake_plans" in tables
     assert "intake_plan_assets" in tables
-    assert "working_media" not in tables
-    assert "intake_runs" not in tables
+    assert "intake_runs" in tables
+    assert "intake_run_assets" in tables
+    assert "working_media" in tables
     cols = {
         str(r[1])
         for r in conn.execute("PRAGMA table_info(asset_validations)").fetchall()
     }
     assert "pixel_format" in cols
     assert "bit_depth" in cols
-    assert reg_db.read_schema_version(conn) == "4"
+    assert reg_db.read_schema_version(conn) == "5"
     conn.close()
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "4"
+    assert reg_db.read_schema_version(conn2) == "5"
     conn2.close()
 
 
@@ -705,7 +706,7 @@ def test_migrate_v2_preserves_registry(discovery_project, imported) -> None:
     conn.commit()
     conn.close()
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "4"
+    assert reg_db.read_schema_version(conn2) == "5"
     assert conn2.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == count
     assert conn2.execute(
         "SELECT name FROM sqlite_master WHERE name='intake_plans'"
@@ -739,7 +740,7 @@ def test_migrate_v3_adds_profile_columns_without_reprobe(
     conn.close()
 
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "4"
+    assert reg_db.read_schema_version(conn2) == "5"
     after = conn2.execute("SELECT COUNT(*) FROM asset_validations").fetchone()[0]
     assert after == before > 0
     cols = {
@@ -919,12 +920,12 @@ def test_plan_only_via_button_and_no_start_buttons() -> None:
     assert "Media Intake starten" not in source
     assert "Working Media erzeugen" not in source
     assert "Transkodieren" not in source
+    assert "Remux starten" not in source
     assert "st.button" in source and "Media-Intake-Plan erstellen" in source
-    # Keine Aktionsbuttons für Ausführung
-    assert "key=\"discovery_v2_intake_start" not in source
-    assert "Working Media" not in source
     assert "pix_fmt=" in source
     assert "bit_depth=" in source
+    # Copy-Start nur über expliziten Button-Key (Phase 7B)
+    assert "discovery_v2_copy_intake_start_btn" in source
 
 
 @pytest.mark.parametrize(
