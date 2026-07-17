@@ -8,7 +8,7 @@
 
 **Phase 9 — Editorial Core und Coverage ist in Planung.**
 
-Plan: `docs/source_plans/PHASE9_EDITORIAL_CORE_COVERAGE_PLAN.md`  
+Plan: `docs/source_plans/PHASE9_EDITORIAL_CORE_COVERAGE_PLAN.md`
 Keine Phase-9-Produktimplementierung in diesem Stand.
 
 - Schema: **14** (Phase-9-Plan schlägt **15** vor)

@@ -1,9 +1,9 @@
 # Phase 9 — Editorial Core und Coverage Plan
 
-**Auftrags-ID:** `DISCOVERY-V2-PHASE9-EDITORIAL-CORE-COVERAGE-PLAN-001`  
-**Status:** PLANNING ONLY — keine Produktimplementierung  
-**Basis-HEAD:** `15e7d943e4c7b2b6e67920e99371e6f253719442`  
-**Registry-Ausgang:** Schema **14**  
+**Auftrags-ID:** `DISCOVERY-V2-PHASE9-EDITORIAL-CORE-COVERAGE-PLAN-001`
+**Status:** PLANNING ONLY — keine Produktimplementierung
+**Basis-HEAD:** `15e7d943e4c7b2b6e67920e99371e6f253719442`
+**Registry-Ausgang:** Schema **14**
 **SoT-Rang:** `docs/source_plans/*` — nachrangig; überschreibt keine höheren Dokumente
 
 ---
@@ -709,7 +709,7 @@ Contracts + Schema 15
 | 9B Fake Gateway + Narrative/Hook/Script | LLM-Pfad |
 | 9C Coverage + UI-Feinschliff | Audit-Gate |
 
-**Default:** ein Makroauftrag.  
+**Default:** ein Makroauftrag.
 **Echter Textprovider:** immer separates Gate nach Phase-9-Fake-APPROVED.
 
 ---
