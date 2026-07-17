@@ -105,6 +105,7 @@ class ScriptDraftStatus(str, Enum):
     DRAFT = "draft"
     REVIEW_REQUESTED = "review_requested"
     USER_EDITED = "user_edited"
+    STRUCTURE_PENDING = "structure_pending"
     SUPERSEDED = "superseded"
 
 
@@ -413,6 +414,7 @@ class EditorialProjectState(BaseModel):
     selected_hook_id: str | None = None
     active_script_id: str | None = None
     active_coverage_audit_id: str | None = None
+    current_script_lock_id: str | None = None
     observation_fingerprint: str | None = None
     status: EditorialProjectStateStatus = EditorialProjectStateStatus.ACTIVE
     updated_at: datetime

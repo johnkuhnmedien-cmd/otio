@@ -794,7 +794,7 @@ def get_active_script(conn: sqlite3.Connection, *, project_id: str) -> ScriptDra
     row = conn.execute(
         """
         SELECT relative_json_path FROM script_drafts
-        WHERE project_id = ? AND status IN ('draft', 'review_requested', 'user_edited')
+        WHERE project_id = ? AND status IN ('draft', 'review_requested', 'user_edited', 'structure_pending')
         ORDER BY script_version DESC
         LIMIT 1
         """,
@@ -951,15 +951,16 @@ def upsert_project_state(conn: sqlite3.Connection, state: EditorialProjectState)
         """
         INSERT INTO editorial_project_state (
             project_id, active_brief_id, active_narrative_plan_id, selected_hook_id,
-            active_script_id, active_coverage_audit_id, observation_fingerprint,
-            status, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            active_script_id, active_coverage_audit_id, current_script_lock_id,
+            observation_fingerprint, status, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project_id) DO UPDATE SET
             active_brief_id = excluded.active_brief_id,
             active_narrative_plan_id = excluded.active_narrative_plan_id,
             selected_hook_id = excluded.selected_hook_id,
             active_script_id = excluded.active_script_id,
             active_coverage_audit_id = excluded.active_coverage_audit_id,
+            current_script_lock_id = excluded.current_script_lock_id,
             observation_fingerprint = excluded.observation_fingerprint,
             status = excluded.status,
             updated_at = excluded.updated_at
@@ -971,6 +972,7 @@ def upsert_project_state(conn: sqlite3.Connection, state: EditorialProjectState)
             state.selected_hook_id,
             state.active_script_id,
             state.active_coverage_audit_id,
+            state.current_script_lock_id,
             state.observation_fingerprint,
             state.status.value,
             state.updated_at.isoformat(),
@@ -1280,6 +1282,11 @@ def _row_to_state(row: sqlite3.Row) -> EditorialProjectState:
         selected_hook_id=row["selected_hook_id"],
         active_script_id=row["active_script_id"],
         active_coverage_audit_id=row["active_coverage_audit_id"],
+        current_script_lock_id=(
+            row["current_script_lock_id"]
+            if "current_script_lock_id" in set(row.keys())
+            else None
+        ),
         observation_fingerprint=row["observation_fingerprint"],
         status=EditorialProjectStateStatus(str(row["status"])),
         updated_at=_parse_dt(row["updated_at"]) or _now(),

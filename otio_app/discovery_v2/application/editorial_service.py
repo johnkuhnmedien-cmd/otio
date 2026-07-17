@@ -51,6 +51,9 @@ from otio_app.discovery_v2.persistence.asset_analysis_repository import (
 )
 from otio_app.discovery_v2.persistence.asset_registry_database import RegistryDatabaseError
 from otio_app.discovery_v2.persistence import editorial_repository as repo
+from otio_app.discovery_v2.persistence.supplementation_repository import (
+    find_active_supplementation_run,
+)
 from otio_app.models import Project
 
 
@@ -302,7 +305,7 @@ def save_user_script_edit(
             source_kind=ScriptSourceKind.USER_EDIT,
             supersedes_script_id=current.script_id,
             content_sha256=compute_text_sha256(full_text),
-            status=ScriptDraftStatus.USER_EDITED,
+            status=ScriptDraftStatus.STRUCTURE_PENDING,
             created_at=_now(),
         )
         relative = repo.save_script_bundle_json(
@@ -428,6 +431,16 @@ def _start_run(project: Project, *, scope: str, sync: bool) -> EditorialStartRes
                     f"({analysis_active.scope}/{analysis_active.status.value})."
                 ),
                 error_code=EDITORIAL_ERROR_ANALYSIS_RUN_ALREADY_ACTIVE,
+            )
+        supplementation_active = find_active_supplementation_run(conn, project_id=project.id)
+        if supplementation_active is not None:
+            return EditorialStartResult(
+                started=False,
+                message=(
+                    f"Es laeuft bereits ein Supplementation-Run "
+                    f"({supplementation_active.scope}/{supplementation_active.status.value})."
+                ),
+                error_code="supplementation_run_already_active",
             )
         active = repo.find_active_editorial_run(conn, project_id=project.id)
         if active is not None:

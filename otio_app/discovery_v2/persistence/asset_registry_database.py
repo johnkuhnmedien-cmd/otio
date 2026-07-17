@@ -14,7 +14,23 @@ from otio_app.discovery_v2.paths import (
 
 # Lesbare Schema-Versionen, die idempotent auf CURRENT migriert werden.
 _LEGACY_SCHEMA_VERSIONS = frozenset(
-    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14"}
+    {
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+    }
 )
 
 
@@ -846,6 +862,7 @@ def _ensure_editorial_tables(conn: sqlite3.Connection) -> None:
             selected_hook_id TEXT,
             active_script_id TEXT,
             active_coverage_audit_id TEXT,
+            current_script_lock_id TEXT,
             observation_fingerprint TEXT,
             status TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -1075,6 +1092,257 @@ def _ensure_editorial_tables(conn: sqlite3.Connection) -> None:
             ON coverage_audits (project_id, status);
         """
     )
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(editorial_project_state)").fetchall()
+    }
+    if "current_script_lock_id" not in columns:
+        conn.execute(
+            "ALTER TABLE editorial_project_state ADD COLUMN current_script_lock_id TEXT"
+        )
+
+
+def _ensure_supplementation_tables(conn: sqlite3.Connection) -> None:
+    """Phase 10: coverage gaps, fake stock supplementation, and script locks."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS coverage_gaps (
+            gap_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            script_id TEXT NOT NULL,
+            script_version INTEGER NOT NULL,
+            coverage_audit_id TEXT NOT NULL,
+            visual_intent_id TEXT NOT NULL,
+            coverage_level TEXT NOT NULL,
+            risk_flags_json TEXT NOT NULL,
+            missing_properties_json TEXT NOT NULL,
+            current_escalation_step TEXT NOT NULL,
+            prior_attempt_summaries_json TEXT NOT NULL,
+            user_decision TEXT,
+            outcome TEXT,
+            status TEXT NOT NULL,
+            gap_version INTEGER NOT NULL,
+            accepted_unresolved_risks_json TEXT NOT NULL,
+            resolved_asset_id TEXT,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (project_id, visual_intent_id, gap_version)
+        );
+
+        CREATE TABLE IF NOT EXISTS coverage_gap_events (
+            event_id TEXT PRIMARY KEY,
+            gap_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            from_step TEXT,
+            to_step TEXT,
+            message TEXT,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (gap_id) REFERENCES coverage_gaps(gap_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS supplementation_runs (
+            run_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            status TEXT NOT NULL,
+            selected_gap_ids_json TEXT NOT NULL,
+            error_code TEXT,
+            error_message TEXT,
+            relative_report_path TEXT,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            schema_version TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS supplementation_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            gap_id TEXT,
+            request_id TEXT,
+            cache_key TEXT,
+            status TEXT NOT NULL,
+            relative_json_path TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            FOREIGN KEY (run_id) REFERENCES supplementation_runs(run_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS supplementation_requests (
+            request_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            gap_id TEXT NOT NULL,
+            script_id TEXT NOT NULL,
+            visual_intent_id TEXT NOT NULL,
+            motif TEXT NOT NULL,
+            action TEXT NOT NULL,
+            setting TEXT NOT NULL,
+            geographic_requirements TEXT,
+            authenticity_requirements_json TEXT NOT NULL,
+            allowed_media_kinds_json TEXT NOT NULL,
+            query_text TEXT NOT NULL,
+            search_version INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (gap_id) REFERENCES coverage_gaps(gap_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS stock_search_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            request_id TEXT NOT NULL,
+            gap_id TEXT NOT NULL,
+            query_text TEXT NOT NULL,
+            search_strategy TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            adapter_version TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            result_count INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            error_code TEXT,
+            error_message TEXT,
+            relative_json_path TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE (request_id, attempt_number),
+            FOREIGN KEY (request_id) REFERENCES supplementation_requests(request_id),
+            FOREIGN KEY (gap_id) REFERENCES coverage_gaps(gap_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS stock_candidates (
+            candidate_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            request_id TEXT NOT NULL,
+            gap_id TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            provider_candidate_id TEXT NOT NULL,
+            preview_ref TEXT,
+            description TEXT NOT NULL,
+            media_kind TEXT NOT NULL,
+            visible_metadata_json TEXT NOT NULL,
+            geographic_hint TEXT,
+            license_status TEXT NOT NULL,
+            duplicate_status TEXT NOT NULL,
+            user_status TEXT NOT NULL,
+            metadata_fingerprint TEXT,
+            preview_sha256 TEXT,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (attempt_id, provider, provider_candidate_id),
+            FOREIGN KEY (attempt_id) REFERENCES stock_search_attempts(attempt_id),
+            FOREIGN KEY (request_id) REFERENCES supplementation_requests(request_id),
+            FOREIGN KEY (gap_id) REFERENCES coverage_gaps(gap_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS stock_candidate_decisions (
+            decision_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            gap_id TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            decision TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            user_note TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE (candidate_id, revision),
+            FOREIGN KEY (candidate_id) REFERENCES stock_candidates(candidate_id),
+            FOREIGN KEY (gap_id) REFERENCES coverage_gaps(gap_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS claim_decisions (
+            decision_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            script_id TEXT NOT NULL,
+            claim_id TEXT NOT NULL,
+            claim_content_sha256 TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            decision TEXT NOT NULL,
+            reason TEXT,
+            user_note TEXT,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (script_id, claim_id, revision)
+        );
+
+        CREATE TABLE IF NOT EXISTS graphic_plans (
+            graphic_plan_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            visual_intent_id TEXT NOT NULL,
+            gap_id TEXT NOT NULL,
+            description TEXT NOT NULL,
+            required_data_json TEXT NOT NULL,
+            geographic_scope TEXT,
+            user_status TEXT NOT NULL,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (gap_id) REFERENCES coverage_gaps(gap_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS script_locks (
+            lock_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            script_id TEXT NOT NULL,
+            script_version INTEGER NOT NULL,
+            project_brief_id TEXT NOT NULL,
+            narrative_plan_id TEXT NOT NULL,
+            selected_hook_id TEXT NOT NULL,
+            coverage_audit_id TEXT NOT NULL,
+            observation_set_fingerprint TEXT NOT NULL,
+            script_hash TEXT NOT NULL,
+            structure_fingerprint TEXT NOT NULL,
+            coverage_fingerprint TEXT NOT NULL,
+            accepted_open_risks_json TEXT NOT NULL,
+            claim_decision_snapshot_json TEXT NOT NULL,
+            user_confirmed INTEGER NOT NULL,
+            user_confirmed_at TEXT,
+            confirmation_fingerprint TEXT NOT NULL,
+            lock_fingerprint TEXT NOT NULL,
+            lock_version INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS script_lock_risks (
+            lock_id TEXT NOT NULL,
+            risk_key TEXT NOT NULL,
+            confirmed_at TEXT NOT NULL,
+            confirmation_fingerprint TEXT NOT NULL,
+            PRIMARY KEY (lock_id, risk_key),
+            FOREIGN KEY (lock_id) REFERENCES script_locks(lock_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_coverage_gaps_project_status
+            ON coverage_gaps (project_id, status);
+        CREATE INDEX IF NOT EXISTS idx_coverage_gap_events_gap
+            ON coverage_gap_events (gap_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_supplementation_runs_project_status
+            ON supplementation_runs (project_id, status);
+        CREATE INDEX IF NOT EXISTS idx_supplementation_attempts_run
+            ON supplementation_attempts (run_id);
+        CREATE INDEX IF NOT EXISTS idx_supplementation_requests_gap
+            ON supplementation_requests (gap_id, search_version);
+        CREATE INDEX IF NOT EXISTS idx_stock_search_attempts_gap
+            ON stock_search_attempts (gap_id, attempt_number);
+        CREATE INDEX IF NOT EXISTS idx_stock_candidates_gap
+            ON stock_candidates (gap_id, user_status);
+        CREATE INDEX IF NOT EXISTS idx_claim_decisions_script_claim
+            ON claim_decisions (script_id, claim_id, revision DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_script_locks_one_current
+            ON script_locks (project_id)
+            WHERE status = 'locked';
+        """
+    )
 
 
 def _ensure_analysis_run_columns(conn: sqlite3.Connection) -> None:
@@ -1110,6 +1378,7 @@ def _apply_current_schema_objects(conn: sqlite3.Connection) -> None:
     _ensure_model_analysis_tables(conn)
     _ensure_observation_review_tables(conn)
     _ensure_editorial_tables(conn)
+    _ensure_supplementation_tables(conn)
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:

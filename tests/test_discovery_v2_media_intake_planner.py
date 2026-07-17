@@ -727,10 +727,10 @@ def test_schema_extension_idempotent(discovery_project, imported) -> None:
     }
     assert "pixel_format" in cols
     assert "bit_depth" in cols
-    assert reg_db.read_schema_version(conn) == "15"
+    assert reg_db.read_schema_version(conn) == "16"
     conn.close()
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "15"
+    assert reg_db.read_schema_version(conn2) == "16"
     conn2.close()
 
 
@@ -742,7 +742,7 @@ def test_migrate_v2_preserves_registry(discovery_project, imported) -> None:
     conn.commit()
     conn.close()
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "15"
+    assert reg_db.read_schema_version(conn2) == "16"
     assert conn2.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == count
     assert conn2.execute(
         "SELECT name FROM sqlite_master WHERE name='intake_plans'"
@@ -776,7 +776,7 @@ def test_migrate_v3_adds_profile_columns_without_reprobe(
     conn.close()
 
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "15"
+    assert reg_db.read_schema_version(conn2) == "16"
     after = conn2.execute("SELECT COUNT(*) FROM asset_validations").fetchone()[0]
     assert after == before > 0
     cols = {

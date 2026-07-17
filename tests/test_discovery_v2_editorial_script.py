@@ -123,7 +123,7 @@ def test_user_script_edit_creates_new_version_and_structure_refresh(
     edited = save_user_script_edit(project, full_text=view.script.full_text + " Neuer Satz.")
     assert edited.ok and edited.script is not None
     assert edited.script.script_version == 2
-    assert edited.script.status == ScriptDraftStatus.USER_EDITED
+    assert edited.script.status == ScriptDraftStatus.STRUCTURE_PENDING
     stale_view = get_editorial_view(project)
     assert stale_view.stale is True
     assert start_structure_run(project, sync=True).started

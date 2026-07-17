@@ -48,6 +48,9 @@ from otio_app.discovery_v2.persistence.asset_analysis_repository import (
 from otio_app.discovery_v2.persistence.editorial_repository import (
     find_active_editorial_run,
 )
+from otio_app.discovery_v2.persistence.supplementation_repository import (
+    find_active_supplementation_run,
+)
 from otio_app.discovery_v2.persistence.asset_registry_database import (
     RegistryDatabaseError,
 )
@@ -146,6 +149,15 @@ def start_analysis_prepare(
                 message=(
                     f"Es läuft bereits ein Editorial-Run "
                     f"({active_editorial.scope}/{active_editorial.status.value})."
+                ),
+            )
+        active_supplementation = find_active_supplementation_run(conn, project_id=project.id)
+        if active_supplementation is not None:
+            return AnalysisPrepareStartResult(
+                started=False,
+                message=(
+                    f"Es läuft bereits ein Supplementation-Run "
+                    f"({active_supplementation.scope}/{active_supplementation.status.value})."
                 ),
             )
 

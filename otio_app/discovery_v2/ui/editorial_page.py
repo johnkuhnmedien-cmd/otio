@@ -16,6 +16,21 @@ from otio_app.discovery_v2.application.editorial_service import (
     start_script_run,
     start_structure_run,
 )
+from otio_app.discovery_v2.application.coverage_gap_service import (
+    accept_gap_unresolved,
+    assign_local_deeper_review,
+    escalate_gap,
+    materialize_gaps_from_current_coverage,
+)
+from otio_app.discovery_v2.application.script_lock_service import create_script_lock
+from otio_app.discovery_v2.application.supplementation_service import (
+    create_graphic_plan,
+    get_supplementation_view,
+    record_candidate_decision,
+    record_claim_decision,
+    start_candidate_validation_run,
+    start_search_run,
+)
 from otio_app.discovery_v2.ui.overview import active_discovery_project
 
 
@@ -28,6 +43,10 @@ def render_discovery_editorial_page() -> None:
     st.info(
         "Lokaler Fake-Textadapter: Es werden keine Projektdaten an externe "
         "Dienste übertragen. (`fake-editorial-v1`, kein HTTP/SDK)"
+    )
+    st.info(
+        "Phase 10 nutzt nur lokale Fake-Ergaenzungskandidaten. Keine Adobe-/Stock-"
+        "Netzwerke, keine Lizenzierung, keine Preview-Binaerdaten werden geoeffnet."
     )
     view = get_editorial_view(project)
     if not view.ok:
@@ -45,6 +64,8 @@ def render_discovery_editorial_page() -> None:
     _render_narrative(project, view)
     _render_script(project, view)
     _render_coverage(project, view)
+    _render_supplementation(project, view)
+    _render_script_lock(project, view)
     _render_runs(view)
 
 
@@ -209,6 +230,29 @@ def _render_script(project, view) -> None:
             use_container_width=True,
             hide_index=True,
         )
+        for item in bundle["claims"]:
+            cols = st.columns(4)
+            decisions = [
+                ("Bestaetigt", "confirmed"),
+                ("Abgelehnt", "rejected"),
+                ("Als unsicher akzeptiert", "accepted_as_uncertain"),
+                ("Revision erforderlich", "revision_required"),
+            ]
+            for column, (label, value) in zip(cols, decisions):
+                with column:
+                    if st.button(
+                        label,
+                        key=f"discovery_v2_claim_decision_{item['claim_id']}_{value}",
+                    ):
+                        record_claim_decision(
+                            project,
+                            script_id=script.script_id,
+                            claim_id=item["claim_id"],
+                            claim_text=item["statement"],
+                            decision=value,
+                            reason="UI-Entscheidung",
+                        )
+                        st.success("Claim-Entscheidung gespeichert.")
     if bundle.get("visual_beats"):
         st.markdown("**Visual Beats**")
         st.dataframe(bundle["visual_beats"], use_container_width=True, hide_index=True)
@@ -250,6 +294,198 @@ def _render_coverage(project, view) -> None:
     )
 
 
+def _render_supplementation(project, view) -> None:
+    st.subheader("Coverage Gaps und Supplementation")
+    if st.button(
+        "Coverage Gaps materialisieren",
+        key="discovery_v2_materialize_gaps",
+    ):
+        result = materialize_gaps_from_current_coverage(project)
+        st.success(result.message) if result.ok else st.warning(result.message)
+    supp_view = get_supplementation_view(project)
+    if not supp_view.ok:
+        st.warning(supp_view.message or "Supplementation nicht verfuegbar.")
+        return
+    if supp_view.active_run is not None:
+        st.caption(
+            f"Aktiver Supplementation-Run: `{supp_view.active_run.run_id}` "
+            f"({supp_view.active_run.scope}/{supp_view.active_run.status.value})"
+        )
+    gaps = supp_view.gaps
+    if not gaps:
+        st.write("Keine offenen Coverage Gaps materialisiert.")
+        return
+    gap_ids = [gap.gap_id for gap in gaps if gap.status.value != "superseded"]
+    cols = st.columns(2)
+    with cols[0]:
+        if st.button(
+            "Ergaenzungskandidaten suchen",
+            key="discovery_v2_supplementation_search",
+            disabled=not gap_ids,
+        ):
+            result = start_search_run(project, gap_ids=gap_ids, sync=False)
+            st.success(result.message) if result.started else st.warning(result.message)
+    with cols[1]:
+        if st.button(
+            "Kandidaten validieren",
+            key="discovery_v2_supplementation_validate",
+            disabled=not gap_ids,
+        ):
+            result = start_candidate_validation_run(project, gap_ids=gap_ids, sync=False)
+            st.success(result.message) if result.started else st.warning(result.message)
+    for gap in gaps:
+        with st.container():
+            st.markdown(
+                f"**Gap {gap.visual_intent_id}** - {gap.coverage_level.value} / "
+                f"{gap.status.value}"
+            )
+            if gap.risk_flags:
+                st.caption("Risiken: " + ", ".join(risk.value for risk in gap.risk_flags))
+            if gap.missing_properties:
+                st.caption("Fehlt: " + ", ".join(gap.missing_properties))
+            st.caption(f"Eskalation: {gap.current_escalation_step.value}")
+            gap_cols = st.columns(4)
+            with gap_cols[0]:
+                if st.button(
+                    "Lokale Assets erneut pruefen",
+                    key=f"discovery_v2_gap_local_{gap.gap_id}",
+                ):
+                    result = assign_local_deeper_review(project, gap_id=gap.gap_id)
+                    st.success(result.message) if result.ok else st.warning(result.message)
+            with gap_cols[1]:
+                if st.button(
+                    "Naechste Eskalation",
+                    key=f"discovery_v2_gap_escalate_{gap.gap_id}",
+                ):
+                    result = escalate_gap(project, gap_id=gap.gap_id)
+                    st.success(result.message) if result.ok else st.warning(result.message)
+            with gap_cols[2]:
+                if st.button(
+                    "Karte/Grafik planen",
+                    key=f"discovery_v2_gap_graphic_{gap.gap_id}",
+                ):
+                    create_graphic_plan(
+                        project,
+                        gap_id=gap.gap_id,
+                        description="Manueller GraphicPlan fuer Coverage Gap.",
+                    )
+                    st.success("GraphicPlan angelegt; keine Grafik erzeugt.")
+            with gap_cols[3]:
+                if st.button(
+                    "Risiko unaufgeloest akzeptieren",
+                    key=f"discovery_v2_gap_accept_unresolved_{gap.gap_id}",
+                    disabled=not gap.risk_flags,
+                ):
+                    result = accept_gap_unresolved(
+                        project,
+                        gap_id=gap.gap_id,
+                        confirmed_risks=[risk.value for risk in gap.risk_flags],
+                    )
+                    st.success(result.message) if result.ok else st.warning(result.message)
+            candidates = supp_view.candidates_by_gap.get(gap.gap_id, [])
+            if candidates:
+                st.dataframe(
+                    [
+                        {
+                            "Kandidat": candidate.candidate_id,
+                            "Preview-Metadaten": candidate.preview_ref or "—",
+                            "Quelle": candidate.provider,
+                            "Medienart": candidate.media_kind,
+                            "Beschreibung": candidate.description,
+                            "Dubletten": candidate.duplicate_status.value,
+                            "Lizenz": candidate.license_status.value,
+                            "Status": candidate.user_status.value,
+                        }
+                        for candidate in candidates
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                for candidate in candidates:
+                    cand_cols = st.columns(3)
+                    with cand_cols[0]:
+                        if st.button(
+                            "Fuer Import akzeptieren",
+                            key=f"discovery_v2_candidate_accept_{candidate.candidate_id}",
+                        ):
+                            result = record_candidate_decision(
+                                project,
+                                candidate_id=candidate.candidate_id,
+                                decision="accepted_for_import",
+                                reason="UI-Entscheidung",
+                            )
+                            st.success(result.message) if result.ok else st.warning(result.message)
+                    with cand_cols[1]:
+                        if st.button(
+                            "Ablehnen",
+                            key=f"discovery_v2_candidate_reject_{candidate.candidate_id}",
+                        ):
+                            result = record_candidate_decision(
+                                project,
+                                candidate_id=candidate.candidate_id,
+                                decision="rejected",
+                                reason="UI-Entscheidung",
+                            )
+                            st.success(result.message) if result.ok else st.warning(result.message)
+                    with cand_cols[2]:
+                        if st.button(
+                            "Pruefung noetig",
+                            key=f"discovery_v2_candidate_review_{candidate.candidate_id}",
+                        ):
+                            result = record_candidate_decision(
+                                project,
+                                candidate_id=candidate.candidate_id,
+                                decision="needs_review",
+                                reason="UI-Entscheidung",
+                            )
+                            st.success(result.message) if result.ok else st.warning(result.message)
+
+
+def _render_script_lock(project, view) -> None:
+    st.subheader("Script Lock")
+    supp_view = get_supplementation_view(project)
+    if supp_view.script_locks:
+        latest = supp_view.script_locks[0]
+        st.caption(
+            f"Aktueller Lock: {latest.lock_id} / {latest.status.value} / "
+            f"Fingerprint {latest.lock_fingerprint[:12]}"
+        )
+    st.write(
+        "Lock ist synchron und manuell. Die Checkbox ist absichtlich nicht vorselektiert."
+    )
+    fingerprint = st.text_input(
+        "Zu bestaetigender Lock-Fingerprint",
+        value="",
+        key="discovery_v2_lock_fingerprint",
+    )
+    confirmed = _checkbox(
+        "Skript fuer Voice und Timing sperren",
+        value=False,
+        key="discovery_v2_lock_confirmed",
+    )
+    risk_confirmations: dict[str, bool] = {}
+    for gap in supp_view.gaps:
+        if gap.status.value == "accepted_unresolved":
+            for risk in gap.risk_flags:
+                key = f"{gap.gap_id}:{risk.value}"
+                risk_confirmations[key] = _checkbox(
+                    f"Offenes Risiko bestaetigen: {risk.value} ({gap.visual_intent_id})",
+                    value=False,
+                    key=f"discovery_v2_lock_risk_{gap.gap_id}_{risk.value}",
+                )
+    if st.button(
+        "Skript fuer Voice und Timing sperren",
+        key="discovery_v2_create_script_lock",
+    ):
+        result = create_script_lock(
+            project,
+            user_confirmed=bool(confirmed),
+            confirmed_fingerprint=fingerprint or None,
+            accepted_unresolved_risk_confirmations=risk_confirmations,
+        )
+        st.success(result.message) if result.ok else st.warning(result.message)
+
+
 def _render_runs(view) -> None:
     st.subheader("Run-Historie")
     if not view.runs:
@@ -272,6 +508,13 @@ def _render_runs(view) -> None:
 
 def _lines(value: str) -> list[str]:
     return [line.strip() for line in value.splitlines() if line.strip()]
+
+
+def _checkbox(label: str, value: bool = False, **kwargs) -> bool:
+    checkbox = getattr(st, "checkbox", None)
+    if checkbox is None:
+        return value
+    return bool(checkbox(label, value=value, **kwargs))
 
 
 __all__ = ["render_discovery_editorial_page"]

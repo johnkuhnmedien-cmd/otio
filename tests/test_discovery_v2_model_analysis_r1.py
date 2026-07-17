@@ -393,14 +393,14 @@ def test_r1_schema_13_to_14_still_preserves_assets(
     _new_project(root, temp_db_path, name="Phase 8C R1 Schema")
     conn = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn) == "15"
+        assert reg_db.read_schema_version(conn) == "16"
         conn.execute("UPDATE registry_schema SET schema_version = '13'")
         conn.commit()
     finally:
         conn.close()
     conn2 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn2) == REGISTRY_SCHEMA_VERSION == "15"
+        assert reg_db.read_schema_version(conn2) == REGISTRY_SCHEMA_VERSION == "16"
         tables = {
             str(row[0])
             for row in conn2.execute(
