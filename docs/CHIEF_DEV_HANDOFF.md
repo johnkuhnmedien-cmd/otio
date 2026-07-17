@@ -38,22 +38,24 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - Registry-Schema: **16**
 - Vision / Text Editorial / Stock Search: Fake-only
 - Teststand: **2850 / 2831 / 18 / 1**
-- **Aktueller Schritt: Phase 10 abgeschlossen; Phase 11 noch nicht begonnen**
+- **Aktueller Schritt: Phase-11-Planung**
 - Plan Phase 10: `docs/source_plans/PHASE10_SUPPLEMENTATION_SCRIPT_LOCK_PLAN.md`
-- Entscheidungen: D-10-001 … D-10-008
+- Plan Phase 11: `docs/source_plans/PHASE11_VOICE_PAUSE_TIMING_PLAN.md`
+- Entscheidungen Phase 10: D-10-001 … D-10-008
+- Phase-11-Produktimplementierung: **nicht begonnen**
 
 ## Nächste erlaubte Aktion
 
-Nach Freigabe:
+Nach Freigabe des Phase-11-Plans:
 
-→ **Phase 11 planen** (Voice, Pausenregie, Timing)
+→ **Phase-11-Implementierung** (Fake Voice + LLM-Pausenregie + Python-Timing)
 
 Weiterhin gesperrt ohne eigene Gates:
 
 - echte Stockprovider und Adobe OAuth / Lizenz / Auto-Download
 - echte Text-/Vision-Provider
-- Phase 11+ Produkt (Voice, Pausenregie, Timing, …)
-- OTIO Export
+- ElevenLabs und echte Voiceprovider
+- Phase 12+ (Visual Edit Plan, Humanity, Feasibility, OTIO)
 
 ## Verbindliche Kurzregeln
 
