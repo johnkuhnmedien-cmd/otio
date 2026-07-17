@@ -6,23 +6,34 @@ alwaysApply: true
 > **RECONSTRUCTED_BOOTSTRAP**
 >
 > - Dokumente wurden für dieses Repository neu konsolidiert.
-> - Andere Projekte sind keine fachliche Quelle.
-> - Übernommene Dokumentstrukturen besitzen keine normative Bedeutung.
-> - Verbindlich ist ausschließlich der für Discovery V2 verifizierte Inhalt ab dem Bereinigungscommit.
+> - Andere Projekte sind keine normative Discovery-V2-Quelle.
+> - Gelöschter GPT-Wissensstand ist keine Repositoryquelle.
+> - Verbindlich ist der für Discovery V2 geprüfte Inhalt ab den Bootstrap- und Korrekturcommits.
+> - Der Bootstrap beansprucht keine historische Wortlauttreue.
 > - Nicht belegte externe Details bleiben **UNKNOWN**.
-> - Kein Anspruch auf wiedergefundene historische Originale.
 
 # Discovery V2 — Step Discipline
 
-Entwicklungsprozess für Discovery V2 in diesem Repository.
-
 ## Source-of-Truth-Reihenfolge
 
-Identisch zu `00-core-architecture.mdc` (inkl. reserviertem Slot `docs/source_plans/*`).
+1. `.cursor/rules/00-core-architecture.mdc`
+2. `.cursor/rules/01-step-discipline.mdc`
+3. `docs/DECISIONS.md`
+4. `docs/MASTER_PLAN.md`
+5. `docs/ALPHA_SCOPE.md`
+6. `docs/PIPELINE_SPEC.md`
+7. `docs/MEDIA_LIFECYCLE.md`
+8. `docs/EDITORIAL_QUALITY.md`
+9. `docs/MODEL_ROUTING.md`
+10. `docs/CLASSIC_MIGRATION_CONTRACT.md`
+11. `docs/PROGRESS.md`
+12. `docs/CHIEF_DEV_HANDOFF.md`
+13. `docs/source_plans/*`
+
+`docs/source_plans/*` ist nachrangig: aktuell möglicherweise leer/nicht vorhanden;
+zukünftige akzeptierte Source Plans dürfen höhere Dokumente nicht überschreiben.
 
 ## Verbindlicher Entwicklungsprozess
-
-Aus dem akzeptierten Discovery-V2-Handoff und den Alpha-Decisions:
 
 1. Projektstand und relevante Dokumente prüfen.
 2. Nur den nächsten freigegebenen Schritt planen.
@@ -40,19 +51,18 @@ Aus dem akzeptierten Discovery-V2-Handoff und den Alpha-Decisions:
 
 ## Zusätzliche Regeln
 
-- Keine spätere Phase vorwegnehmen — Handoff
+- Keine spätere Phase vorwegnehmen
 - Kein `APPROVED` ohne nachvollziehbaren Diff und passende Tests
 - Keine stillen Architekturänderungen
-- Keine Reparatur fremder Baseline-Fehler ohne eigenen Auftrag — Handoff / Phase-8D-Praxis
-- Keine Secrets in Code, Logs, Commits oder Berichten
+- Keine Reparatur fremder Baseline-Fehler ohne eigenen Auftrag
+- Keine Secrets
 - Keine Originalmedien ändern
-- Stop-Regel je Auftrag einhalten
-- Beschleunigte Makroaufträge erlaubt, solange Gates und Ausschlüsse klar bleiben — D-8D-001 / Manifest
-- `docs/ALPHA_EXECUTION_MANIFEST.md` darf Fachentscheidungen nicht still überschreiben — D-8D-002
+- Stop-Regel je Auftrag
+- Beschleunigte Makroaufträge erlaubt, solange Gates und Ausschlüsse klar bleiben
+- `docs/ALPHA_EXECUTION_MANIFEST.md` darf Fachentscheidungen nicht still überschreiben
+- Hinterlegte KI-Timelines sind `NEGATIVE_REFERENCE`, keine Qualitätsvorlage
 
 ## Pflichtbericht (14 Punkte)
-
-Wie im akzeptierten `DISCOVERY_V2_HANDOFF.md`:
 
 1. Auftrags-ID
 2. Zusammenfassung
@@ -72,5 +82,5 @@ Wie im akzeptierten `DISCOVERY_V2_HANDOFF.md`:
 ## Freigabe-Gates
 
 - Produktphasen nur mit explizitem Auftrag nach Freigabe der Vorgängerarbeit
-- Provider-Gates (Vision, Voice, Stock) getrennt — Manifest / D-8D-003
+- Provider-Gates (Vision, Voice, Stock) getrennt; keine stillen Fallbacks
 - `BLOCKED` bei ungelöstem SoT-Konflikt, Secret-Risiko oder Pfadvertragsverletzung

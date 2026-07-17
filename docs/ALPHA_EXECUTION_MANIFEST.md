@@ -22,11 +22,13 @@ Bei Widerspruch gelten die höheren Quellen. Das Manifest darf keine fachliche
 Entscheidung still verändern.
 
 Die genannten höheren Dokumente sind als **RECONSTRUCTED_BOOTSTRAP**
-gekennzeichnet: für dieses Repository neu konsolidiert; andere Projekte sind
-keine fachliche Quelle; verbindlich ist der verifizierte Inhalt ab dem
-Provenienz-Bereinigungscommit.
+gekennzeichnet: für dieses Repository neu konsolidiert; andere Projekte und
+gelöschter GPT-Wissensstand sind keine Repositoryquelle; verbindlich ist der
+für Discovery V2 geprüfte Inhalt ab den Bootstrap- und Korrekturcommits.
 
-**MANUAL bleibt Alpha-Standard.** Keine stillen Automationen, keine ungefragten Uploads.
+**MANUAL bleibt Alpha-Standard.** CHECKPOINT ist architektonisch vorbereitet
+(nicht als fertig implementiert behaupten). AUTOMATIC ist Post-Alpha.
+Keine stillen Automationen, keine ungefragten Uploads.
 
 ## 2. Aktueller Stand
 
@@ -35,7 +37,7 @@ Provenienz-Bereinigungscommit.
 - Phase 8B Shot-/Frame-Prepare — abgeschlossen
 - Phase 8C Fake Vision Model Analysis — abgeschlossen
 - Phase 8D Observation Review / Editorial-Ready-Gate — abgeschlossen
-- SoT Bootstrap + Provenienz-Bereinigung (Dokumentation) — abgeschlossen
+- SoT Bootstrap / Provenienz / Authority-Restore (Dokumentation) — abgeschlossen
 - Registry-Schema: **14**
 - Fake Vision: aktiv (`provider=fake`)
 - Echter Vision-Provider: **gesperrt** (separates Gate)
@@ -46,12 +48,13 @@ Provenienz-Bereinigungscommit.
 - UI → Application → Domain → Adapters → Persistence
 - SQLite ist die interne Wahrheit
 - JSON-Artefakte sind versioniert und relativ unter `_otio_v2/`
-- LLM/Vision nur über zentrale Gateways
-- Python für Timing, Technik und Export
-- nur `completed` Working Media als Analysebasis
-- Classic bleibt read-only für Discovery
+- Text-/Vision-Aufrufe nur über zentrale Gateways; OpenRouter/direkt konfigurierbar
+- keine hart codierten Modelle; keine stillen Providerfallbacks
+- Python für Timing, Technik und Export; LLM für Pausenregie u. a.
+- nur `completed` Working Media als Analyse-/Produktions-/OTIO-Medienquelle
+- Classic `_otio/` read-only für Discovery
 - keine Originalmedien ändern
-- keine `_otio/`-Schreibzugriffe durch Discovery
+- KI-Timelines = `NEGATIVE_REFERENCE`
 
 ## 4. Beschleunigter Prozess
 
@@ -88,11 +91,14 @@ Eingabe aus Phase 8: nur **editorial-ready** Visual Observations (accepted, aktu
 Mindestens:
 
 - Coverage-Gaps
-- Eskalationsreihenfolge
+- verbindliche Stock-Eskalation (lokal tiefer prüfen → Foto → bessere Suche →
+  Satz umformulieren → erneut suchen → Karte/Grafik → Nutzerentscheidung)
 - providerneutrale Supplementation
-- Adobe OAuth bleibt UNKNOWN
+- Adobe-Medienfolge (Bestand → … → Preview → … → Akzeptanz → OAuth → Lizenz → …)
+- Adobe OAuth-Variante bleibt UNKNOWN
 - Script-Lock-Gate
 - Stale-Regeln
+- keine finale Voice vor Script Lock
 
 ## 7. Phase 11 — Voice, Pausen und Timing
 
@@ -100,9 +106,10 @@ Mindestens:
 
 - Fake Voice zuerst
 - optional ElevenLabs hinter Provider-Gate
-- LLM-Pausenfunktion
-- Python-Timingauflösung
+- LLM-Pausenregie (Pausenfunktion, Cold Open, visuelle Atemzüge, Übergangspausen)
+- danach Python-Timingauflösung (Zeiten, Dauern, Überlappung, Framerundung)
 - Narration Timeline
+- keine Visual-Edit-Timeline vor finalem Narration Timing
 
 ## 8. Phase 12 — Visual Edit Plan und Quality
 
@@ -110,7 +117,10 @@ Mindestens:
 
 - konkrete Shot-Instanzen
 - Satz/Shot-Many-to-Many
-- Humanity & Authenticity Review
+- Humanity & Authenticity Review als eigener Schritt (Hook, Skriptvariation,
+  lokale Details, Klischees/Faktenlisten, generischer Stock, Geo-Genauigkeit,
+  Asset-Wiederholung, Schnitte an Satzgrenzen, Shotdauer-Varianz, ähnliche Motive,
+  visuelle Kontinuität, ggf. synthetische Assets)
 - Feasibility
 - deterministische und redaktionelle Repairs
 

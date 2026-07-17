@@ -1,61 +1,60 @@
 > **RECONSTRUCTED_BOOTSTRAP**
 >
 > - Dokumente wurden für dieses Repository neu konsolidiert.
-> - Andere Projekte sind keine fachliche Quelle.
-> - Übernommene Dokumentstrukturen besitzen keine normative Bedeutung.
-> - Verbindlich ist ausschließlich der für Discovery V2 verifizierte Inhalt ab dem Bereinigungscommit.
+> - Andere Projekte sind keine normative Discovery-V2-Quelle.
+> - Gelöschter GPT-Wissensstand ist keine Repositoryquelle.
+> - Verbindlich ist der für Discovery V2 geprüfte Inhalt ab den Bootstrap- und Korrekturcommits.
+> - Der Bootstrap beansprucht keine historische Wortlauttreue.
 > - Nicht belegte externe Details bleiben **UNKNOWN**.
-> - Kein Anspruch auf wiedergefundene historische Originale.
 
 # Model Routing — Discovery V2
 
-## Discovery Vision (implementiert)
+## Zentrale Gateways
 
-Aufrufpfad — Code Phase 8C:
+- Alle Text- und Vision-Modellaufrufe laufen über zentrale Gateways
+- OpenRouter und direkte Anbieter sind grundsätzlich konfigurierbar
+- Keine hart codierten Modelle in Domain- oder Fachmodulen
+- Keine stillen Providerfallbacks
+
+Nicht behaupten:
+
+- OpenRouter sei aktuell Default
+- ein realer Provider sei bereits aktiviert
+- bestimmte Vision-Capabilities seien bereits nachgewiesen
+
+## Discovery Vision (aktueller Stand)
 
 ```text
-UI / Application (model_analysis_service)
-  → Discovery Vision Gateway
-      → FakeVisionAdapter
+Application → Discovery Vision Gateway → FakeVisionAdapter
 ```
 
-| Einstellung | Wert | Beleg |
-|---|---|---|
-| Provider | `fake` | `vision_config.py` |
-| Model | `fake-vision-v1` | `vision_config.py` |
-| Enabled | `true` | `vision_config.py` |
-| Echte Provider | gesperrt | D-8D-003 / Handoff |
+| Einstellung | Wert |
+|---|---|
+| Provider | `fake` |
+| Model | `fake-vision-v1` |
+| Enabled | `true` |
+| Reale Provider | gesperrt / deaktiviert bis Freigabegate |
 
-- Consent pro Model-Run — Code / Tests
-- Cache über Identity-, Config-Versionen und Frame-Hash-Fingerprint — Code / Tests
-- Kein HTTP/SDK in Discovery Vision — Tests / Handoff
-
-## Text-LLM und Voice (geplant)
-
-- Text-LLM für Phase 9+: über bestehende konfigurierbare Infrastruktur nutzbar, aber nur hinter Discovery-Application und ohne hart codierte Modelle in Discovery-Fachmodulen — Manifest / Handoff
-- Konkrete Default-Modell-IDs für Discovery-Editorial: **UNKNOWN**
-- Voice: Fake Voice zuerst; optional ElevenLabs hinter Phase-11-Gate — Manifest
-- Adobe Stock / OAuth: **UNKNOWN** / später — Manifest
+Consent pro Model-Run; Cache über Identity-/Config-Versionen und Frame-Hashes.
+Konkrete reale Modell-IDs und Vision-Capabilities: **UNKNOWN** bis Gate.
 
 ## Provider-Gates
 
 | Gate | Status |
 |---|---|
 | Vision (nicht-fake) | gesperrt |
-| Text-LLM Discovery Editorial | Phase 9+; Details UNKNOWN |
-| ElevenLabs | gesperrt bis Phase 11 |
-| Adobe Stock | UNKNOWN |
+| Text-LLM Editorial | Phase 9+; konfigurierbar, kein Default behaupten |
+| ElevenLabs / Voice | gesperrt bis Phase 11; Fake Voice zuerst |
+| Adobe Stock / OAuth-Variante | **UNKNOWN** / später |
 
-Keine stillen Provideraktivierungen — Manifest.
+## Voice und Pausenregie (geplant)
+
+- keine finale Voice vor Script Lock
+- nach Voice: LLM-Pausenregie, danach Python-Timingauflösung
 
 ## Verbote
 
-- hart codierte Modell-IDs in Discovery-Domain-/Application-Fachmodulen
-- Secret-Leak in Logs/Artefakten/Fehlermeldungen
+- Secret-Leak
 - ungefragte Uploads
 - Vision über Text-only-Classic-Client als Discovery-Gateway
 - Model-Start durch Streamlit-Rerun ohne Consent
-
-## LLM- vs. Python-Zuständigkeit
-
-Siehe `00-core-architecture.mdc`.

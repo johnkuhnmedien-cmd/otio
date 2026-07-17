@@ -12,8 +12,9 @@
 - Phase 8C: `APPROVED`
 - Phase 8D / Phase 8 Closeout: `APPROVED`
 - SoT Bootstrap: `RECONSTRUCTED_BOOTSTRAP` — für dieses Repository neu konsolidiert;
-  andere Projekte sind keine fachliche Quelle; Recovery-Suche → `NOT_FOUND`;
-  Provenienz-Bereinigung gegen Discovery-V2-Quellen (D-DOC-006 / D-DOC-007)
+  Recovery-Suche → `NOT_FOUND`; andere Projekte und gelöschter GPT-Wissensstand
+  sind keine Repositoryquelle; Authority-Restore der verbindlichen Regeln
+  (D-DOC-008 … D-DOC-010; D-DOC-006/007 nur zusammen mit diesen)
 - Registry-Schema: **14**
 - Fake Vision: aktiv (`provider=fake`)
 - Echte Vision Provider: **gesperrt**
@@ -37,11 +38,11 @@ Verbindliche Reihenfolge:
 10. `docs/CLASSIC_MIGRATION_CONTRACT.md`
 11. `docs/PROGRESS.md`
 12. `docs/CHIEF_DEV_HANDOFF.md`
-13. `docs/source_plans/*` (reserviert; derzeit ohne normative Inhalte)
+13. `docs/source_plans/*` (nachrangig; ggf. leer/nicht vorhanden; überschreibt nichts Höheres)
 
 `docs/ALPHA_EXECUTION_MANIFEST.md` und dieses Handoff-Dokument sind untergeordnet.
-Bei Widerspruch gilt die höhere Quelle. Übernommene Dokumentstrukturen besitzen
-keine normative Bedeutung; verbindlich ist der für Discovery V2 verifizierte Inhalt.
+Bei Widerspruch gilt die höhere Quelle. Verbindlich ist der für Discovery V2
+geprüfte Inhalt ab den Bootstrap- und Korrekturcommits.
 
 ## Projektmodi
 

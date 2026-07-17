@@ -1,11 +1,11 @@
 > **RECONSTRUCTED_BOOTSTRAP**
 >
 > - Dokumente wurden für dieses Repository neu konsolidiert.
-> - Andere Projekte sind keine fachliche Quelle.
-> - Übernommene Dokumentstrukturen besitzen keine normative Bedeutung.
-> - Verbindlich ist ausschließlich der für Discovery V2 verifizierte Inhalt ab dem Bereinigungscommit.
+> - Andere Projekte sind keine normative Discovery-V2-Quelle.
+> - Gelöschter GPT-Wissensstand ist keine Repositoryquelle.
+> - Verbindlich ist der für Discovery V2 geprüfte Inhalt ab den Bootstrap- und Korrekturcommits.
+> - Der Bootstrap beansprucht keine historische Wortlauttreue.
 > - Nicht belegte externe Details bleiben **UNKNOWN**.
-> - Kein Anspruch auf wiedergefundene historische Originale.
 
 # Media Lifecycle — Discovery V2
 
@@ -13,51 +13,50 @@
 
 | Objekt | Rolle | Discovery-Schreibzugriff |
 |---|---|---|
-| Originalquelle im Projektbaum | Herkunft | nein |
-| Classic `_otio/` | fremde Pipeline | nein (read-only) |
-| Working Media | kanonische Analyse-/Produktionsbasis | nur `_otio_v2/media/working/` |
-| Analysis Frames | Analysehilfe | `_otio_v2/analysis/`; nicht Working Media |
-| Temp | Laufzeit | unter `_otio_v2/**/temp/` |
-| OTIO-Referenzen | geplanter Export | nur completed Working Media (Alpha-Ziel) |
+| Originalquelle | Herkunft | nein |
+| Classic `_otio/` | fremde Pipeline | nein (Classic read-only) |
+| Working Media | einzige Produktions- und OTIO-Medienquelle | `_otio_v2/media/working/` |
+| Analysis Frames | Analysehilfe | `_otio_v2/analysis/` |
+| Stock Preview | Entscheidungsvorschau | nie Working Media |
+| Temp | Laufzeit | `_otio_v2/**/temp/` |
 
-## Zustandsfolge (implementiert bis Editorial-Ready)
+## Zustandsfolge (bis Editorial-Ready implementiert)
 
 ```text
-Source (Inventory)
-→ Selected
-→ Registered
-→ Technically Validated
-→ Intake Planned
+Source → Selected → Registered → Validated → Intake Planned
 → Working Media (… → completed | failed)
-→ Analysis Eligible (nur completed)
-→ Prepared (shots/frames)
-→ Model-Observed (Visual Observation)
-→ Review (accepted | reanalyze_requested | rejected)
-→ Editorial-Ready (Gate)
+→ Analysis Eligible → Prepared → Observed → Reviewed → Editorial-Ready
 ```
 
-Spätere Editorial-/Exportzustände: geplant, **UNKNOWN** im Detail bis Phasen 9–13.
+## Working Media
 
-## Working Media Regeln (belegt)
+- Nur Rohstatus **`completed`** für Analyse, Produktion und OTIO-Export
+- Identity-Bindung an Validation/Source-SHA, Action, Profilversion
+- Analysis Frames und Stock Previews sind keine Working Media / kein OTIO-Media
 
-- Rohstatus **`completed`** ist Voraussetzung für Assetanalyse-Eligibility — Code
-- Identity bindet `project_id`, `asset_id`, Validation/Source-SHA, Action, `processing_profile_version` — Code / Handoff
-- historische Versionen bleiben erhalten — Handoff
-- `source_relative_path` ist Herkunftsmetadatum, kein kanonischer Zielpfad — Handoff
-- Analysis Frames sind weder Working Media noch OTIO-Media — Prepare-Tests / Handoff
+## Adobe-Medienfolge
 
-## Hash und Pfadprüfung
+```text
+Bestand → Suche → Preview → Validierung → Dublettenprüfung
+→ Akzeptanz → OAuth-Prüfung → Lizenzierung → Originaldownload
+→ Media Intake → Registry
+```
 
-Python/Worker prüfen SHA-256 und Pfade unter `_otio_v2`; Classic- und Originalpfade als unzulässige Analyse-/Schreibziele — Code / Tests.
+- keine Lizenzierung vor Akzeptanz und OAuth-Prüfung
+- Adobe OAuth-Variante: **UNKNOWN**
+- akzeptierte ungenutzte Assets nicht automatisch löschen
 
-## Preview vs. Production
+## Stock-Eskalation
 
-- Analysis Frames: lokal für Vision/Review; keine Produktionsquelle — Code Phase 8
-- Working Media: einzige kanonische Medienbasis für Analyse und geplante Produktion/Export
-- Stock-/Adobe-Beschaffung und Preview-Lizenzfluss für Discovery: **UNKNOWN** bis Provider-Gate
+```text
+lokal tiefer prüfen → Foto → bessere Suche → Satz gezielt umformulieren
+→ erneut suchen → Karte oder Grafik → Nutzerentscheidung
+```
+
+Kein beliebiges Ersatzasset.
 
 ## Retention
 
-Keine automatische Löschung historischer Imports, Validierungen, Intake-Pläne,
-Working Media, Analysis Identities, Shots, Frames, Observations oder Reviews — Handoff.
-Konflikte überschreiben keine kanonischen Ausgaben — Intake-Regeln.
+Keine automatische Löschung historischer Imports, Validierungen, Pläne,
+Working Media, Analysis-Daten, Observations oder Reviews.
+Konflikte überschreiben keine kanonischen Ausgaben.

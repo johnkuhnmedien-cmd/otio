@@ -1,83 +1,94 @@
 > **RECONSTRUCTED_BOOTSTRAP**
 >
 > - Dokumente wurden für dieses Repository neu konsolidiert.
-> - Andere Projekte sind keine fachliche Quelle.
-> - Übernommene Dokumentstrukturen besitzen keine normative Bedeutung.
-> - Verbindlich ist ausschließlich der für Discovery V2 verifizierte Inhalt ab dem Bereinigungscommit.
+> - Andere Projekte sind keine normative Discovery-V2-Quelle.
+> - Gelöschter GPT-Wissensstand ist keine Repositoryquelle.
+> - Verbindlich ist der für Discovery V2 geprüfte Inhalt ab den Bootstrap- und Korrekturcommits.
+> - Der Bootstrap beansprucht keine historische Wortlauttreue.
 > - Nicht belegte externe Details bleiben **UNKNOWN**.
-> - Kein Anspruch auf wiedergefundene historische Originale.
 
 # Pipeline Spec — Discovery V2
 
-Technische Stufen der Discovery-Pipeline in diesem Repository.
-
-## Module (Code)
+## Module
 
 ```text
 otio_app/discovery_v2/
-  ui/
-  application/
-  domain/
-  adapters/
-  persistence/
-  jobs/
+  ui/  application/  domain/  adapters/  persistence/  jobs/
 ```
 
-## Stufe A — Inventory und Selection (implementiert)
+## Stufe A–D — implementiert (Phasen 7–8)
 
-- rekursiver read-only Scan
-- relative Pfade; oberster Ordner = `source_group` (kein Kapitel)
-- Artefakte unter `_otio_v2/inventory/`
-- Selection an `scan_id` gebunden; neuer Scan macht alte Selection stale
+### Inventory / Selection
 
-Beleg: Handoff / Inventory- und Selection-Tests.
+- read-only Scan; `source_group` ≠ Kapitel
+- Selection an `scan_id`; neuer Scan → stale
 
-## Stufe B — Registry und Validierung (implementiert)
+### Registry / Validierung
 
-- SQLite: `_otio_v2/registry/assets.sqlite3`
-- `REGISTRY_SCHEMA_VERSION = "14"` — Code
-- keine automatische Löschung historischer Imports/Validierungen/Pläne/Working-Media/Analysis-Daten
-- technische Validierung im Worker (Größe, mtime, SHA-256, Container, Codecs, Auflösung, rationale Framerate, Timecode oder `null`, Pixel-Format, Bit-Tiefe, Dublettenhinweise)
-- fehlender Timecode ist kein Fehler
+- SQLite `_otio_v2/registry/assets.sqlite3`, Schema **14**
+- Worker-Validierung inkl. SHA-256; fehlender Timecode kein Fehler
 
-## Stufe C — Media Intake (implementiert, Phase 7 APPROVED)
+### Media Intake
 
-| Aktion | Profil |
-|---|---|
-| bytegenaue Kopie | `copy-v1` |
-| Container-Remux | `remux-mp4-v1` |
-| H.264-Video-Transkodierung | `video-h264-v1` |
-| TIFF→PNG | `image-png-v1` |
+Profile: `copy-v1`, `remux-mp4-v1`, `video-h264-v1`, `image-png-v1`.
+Working Media unter `_otio_v2/media/working/...`; Temp unter `_otio_v2/**/temp/`.
 
-- gegenseitige Run-Sperre; Orphan → `worker_interrupted`
-- Idempotenz/Reuse ohne Binärdubletten; Konflikte nie überschreiben
-- Copy/Remux nur bei kompatiblem Codec/Container und `yuv420p`/`yuvj420p` + 8-bit
+### Assetanalyse
+
+Eligibility nur `completed` Working Media → Prepare → Fake Vision Gateway →
+Observation Review / Editorial-Ready-Gate.
+
+## Stufe E — geplante Hauptpipeline
+
+Siehe `docs/MASTER_PLAN.md`. Kurz:
+
+Coverage → Stock-Supplementation → Script Lock → ElevenLabs →
+LLM-Pausenregie → Python-Timing → Visual Edit Plan → Humanity →
+Feasibility → Freigabe → OTIO.
+
+## Adobe-Medienfolge (verbindlich)
 
 ```text
-_otio_v2/media/working/<asset_id>/<source_sha256>/<profile>/<asset_id>.<ext>
-_otio_v2/media/temp/<run_id>/...
+Bestand
+→ Suche
+→ Preview
+→ Validierung
+→ Dublettenprüfung
+→ Akzeptanz
+→ OAuth-Prüfung
+→ Lizenzierung
+→ Originaldownload
+→ Media Intake
+→ Registry
 ```
 
-## Stufe D — Assetanalyse (implementiert, Phase 8 APPROVED)
+Zusätzlich:
 
-1. Contracts / Eligibility — nur Working Media Rohstatus `completed` + exakte Planbindung
-2. Prepare — Technical Shots, Representative Frames, lokale Signale (`analysis-prepare-v1`)
-3. Model Analysis — Discovery Vision Gateway → FakeVisionAdapter; echte Provider gesperrt
-4. Observation Review — append-only Reviews; Editorial-Ready-Gate
+- konkrete Adobe OAuth-Variante bleibt **UNKNOWN**
+- keine Lizenzierung vor Akzeptanz und OAuth-Prüfung
+- Stock Preview ist niemals Working Media
+- akzeptierte ungenutzte Assets werden nicht automatisch gelöscht
 
-Audio-only: visuelle Analyse `not_applicable`.
+## Stock-Eskalation (verbindlich)
 
-## Stufe E — Editorial bis Export (geplant)
+```text
+lokal tiefer prüfen
+→ Foto
+→ bessere Suche
+→ Satz gezielt umformulieren
+→ erneut suchen
+→ Karte oder Grafik
+→ Nutzerentscheidung
+```
 
-Phasen 9–13 laut `docs/MASTER_PLAN.md` / Manifest. Noch kein Produktcode.
-Eingabe nur editorial-ready Observations.
+Kein beliebiges Ersatzasset. Provider-/OAuth-/Lizenzdetails dürfen UNKNOWN bleiben;
+diese Eskalationsreihenfolge selbst ist verbindlich und nicht UNKNOWN.
 
-## UI-No-I/O (belegt)
+## UI-No-I/O
 
-Beim normalen Streamlit-Rendering verboten: ffprobe, FFmpeg, Pillow `Image.open`,
-Hashing, Medien-`stat`/mtime, automatischer Jobstart durch Rerun, Provider-Aufrufe.
+Beim normalen Rendering verboten: ffprobe, FFmpeg, Pillow-Open, Hashing,
+Medien-stat, automatischer Jobstart, Provider-Aufrufe.
 
 ## Blockierte Formate (Phase 7)
 
-HEIC/HEIF, 16-Bit-TIFF, BigTIFF, Mehrseiten-TIFF, TIFF mit ICC, exotische TIFF-Modi —
-kontrolliert blockiert, keine stille Konvertierung.
+HEIC/HEIF, 16-Bit-/Big-/Mehrseiten-TIFF, TIFF mit ICC, exotische TIFF-Modi.

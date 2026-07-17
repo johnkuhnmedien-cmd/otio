@@ -5,7 +5,8 @@ Bestehende Einträge werden nicht umgeschrieben; neue Entscheidungen werden
 angehängt.
 
 Source-of-Truth-Reihenfolge (Auszug): Regeln `00`/`01` → dieses Dokument →
-`MASTER_PLAN` → … → `CHIEF_DEV_HANDOFF` → `docs/source_plans/*`.
+`MASTER_PLAN` → … → `CHIEF_DEV_HANDOFF` → `docs/source_plans/*`
+(nachrangig; ggf. leer; überschreibt nichts Höheres).
 Bei Widerspruch gilt die höhere Quelle.
 
 ---
@@ -122,3 +123,35 @@ zugelassene Audit-Abgrenzung) neu verifiziert und geschrieben.
 **Kontext:** Verbindlich ist der für Discovery V2 verifizierte Inhalt ab dem
 Provenienz-Bereinigungscommit. Übernommene Dokumentstrukturen besitzen keine
 normative Bedeutung. Nicht belegte externe Details bleiben UNKNOWN.
+
+---
+
+## D-DOC-008 — Korrektur zur Provenienzannahme in D-DOC-006
+
+**Entscheidung / Feststellung:** Die Aussage in D-DOC-006 beruhte auf einer
+später korrigierten Provenienzannahme. Es gibt keinen belastbaren Nachweis, dass
+Cursor fachliche Source-of-Truth-Dokumente aus einem fremden Repository
+übernommen hat.
+
+**Kontext:** D-DOC-006 bleibt aus Append-only-Gründen historisch sichtbar und
+gilt nur zusammen mit D-DOC-008 bis D-DOC-010.
+
+---
+
+## D-DOC-009 — Gelöschte GPT-Wissensdateien sind keine Repositoryquelle
+
+**Entscheidung:** Gelöschte oder frühere GPT-Wissensdateien sind keine
+Repositoryquelle und verändern weder Git-Historie noch Produktcode.
+
+---
+
+## D-DOC-010 — Wiederherstellung verbindlicher Bootstrap-Regeln
+
+**Entscheidung:** Beim Provenance-Rework (`9daf2739c22279872bc096f5970eb02e2c2c8357`)
+wurden mehrere verbindliche Discovery-V2-Regeln zu stark entfernt.
+CHECKPOINT-Vorbereitung, LLM-Pausenregie, Providerkonfigurierbarkeit,
+Adobe-Reihenfolge, Stock-Eskalation und Humanity-Kriterien werden mit dem
+Authority-Restore-Commit wiederhergestellt.
+
+**Kontext:** D-DOC-006 und D-DOC-007 bleiben historisch sichtbar, gelten aber nur
+zusammen mit D-DOC-008 bis D-DOC-010.

@@ -1,61 +1,74 @@
 > **RECONSTRUCTED_BOOTSTRAP**
 >
 > - Dokumente wurden für dieses Repository neu konsolidiert.
-> - Andere Projekte sind keine fachliche Quelle.
-> - Übernommene Dokumentstrukturen besitzen keine normative Bedeutung.
-> - Verbindlich ist ausschließlich der für Discovery V2 verifizierte Inhalt ab dem Bereinigungscommit.
+> - Andere Projekte sind keine normative Discovery-V2-Quelle.
+> - Gelöschter GPT-Wissensstand ist keine Repositoryquelle.
+> - Verbindlich ist der für Discovery V2 geprüfte Inhalt ab den Bootstrap- und Korrekturcommits.
+> - Der Bootstrap beansprucht keine historische Wortlauttreue.
 > - Nicht belegte externe Details bleiben **UNKNOWN**.
-> - Kein Anspruch auf wiedergefundene historische Originale.
 
 # Editorial Quality — Discovery V2
 
 ## Grundsatz
 
-LLM liefert redaktionelle Vorschläge; Python erzwingt Technik, Timing und Exportintegrität
-(Handoff-Verantwortungsteilung). Alpha bleibt MANUAL — Manifest.
+LLM: redaktionelle Entscheidungen inkl. LLM-Pausenregie.
+Python: exakte Zeitauflösung, Dauern, Überlappungen, Framerundung, technische Konsistenz.
+Alpha: MANUAL; CHECKPOINT vorbereitet; AUTOMATIC post-alpha.
 
-## Observation Review (implementiert, Phase 8D)
+## Observation Review (implementiert)
 
-- `accepted` — Observation darf als editorial-ready Eingabe gelten (bei aktuellen Identities/Configs/gültigem Schema)
-- `reanalyze_requested` — kein automatischer Model-Run
-- `rejected` — nicht editorial-ready
-- sonst `unreviewed`
+- `accepted` / `reanalyze_requested` / `rejected` / sonst `unreviewed`
+- Reviews append-only mit `review_revision`
+- Visual Observation ist **keine** Fakten-, Geo-, Echtheitsbestätigung und **keine** automatische Assetauswahl
 
-Reviews sind append-only mit monotoner `review_revision` — Code / D-8D-005.
+## Coverage und Supplementation (geplant)
 
-`accepted` bedeutet nicht Asset-Auswahl, Faktenfreigabe, Geo, Synthetic, Dramaturgie
-oder Visual-Beat-Freigabe — D-8D-004.
+- Coverage Audit vor Stock-Supplementation
+- Stock-Eskalation verbindlich (siehe `PIPELINE_SPEC.md` / `MEDIA_LIFECYCLE.md`)
+- kein beliebiges Ersatzasset
 
-## Geplante Gates (Manifest; nicht implementiert)
+## Script Lock und Timing (geplant)
 
-### Coverage Audit (Phase 9)
+- keine finale Voice vor Script Lock
+- LLM-Pausenregie vor Python-Timingauflösung
+- keine Visual-Edit-Timeline vor finalem Narration Timing
 
-Coverage gegen Visual Beats/Intents und verfügbare editorial-ready Observations.
-Details der Bewertungsmatrix: **UNKNOWN** bis Umsetzungsauftrag.
+LLM-Pausenregie umfasst: Pausenfunktion, Cold Open, visuelle Atemzüge,
+Übergangspausen und andere redaktionelle Pausenentscheidungen.
 
-### Script Lock (Phase 10)
+## Humanity & Authenticity Review (eigener Schritt)
 
-Script-Lock-Gate und Stale-Regeln vor Voice — Manifest.
-Konkrete Stale-Trigger: **UNKNOWN** bis Umsetzungsauftrag.
-Ohne gültigen Lock keine Voice-/Timing-Produktion — Manifest-Reihenfolge.
+Mindestens prüfen:
 
-### Humanity & Authenticity Review (Phase 12)
+- Hook-Qualität
+- Skriptvariation
+- lokale Details
+- Klischees und Faktenlisten
+- generischer Stock-Anteil
+- geografische Genauigkeit
+- Asset-Wiederholung
+- Schnitte an Satzgrenzen
+- Shotdauer-Varianz
+- ähnliche Motive in Folge
+- visuelle Kontinuität
+- möglicherweise synthetische Assets
 
-Manuelles Qualitätsgate vor Freigabe — Manifest.
-Bewertungskriterien im Detail: **UNKNOWN** bis Umsetzungsauftrag.
+Humanity & Authenticity bleibt ein **eigener** Review-Schritt vor Freigabe/Export.
 
-### Feasibility und Repair (Phase 12)
+## Feasibility und Repair
 
-Python: deterministische Reparaturen; LLM: redaktionelle Reparaturvorschläge — Manifest.
-Export erst nach bestandener Feasibility — Manifest-DoD.
+- Python: deterministische technische Repairs
+- LLM: redaktionelle Reparaturvorschläge
+- Export erst nach bestandener Feasibility und Nutzerfreigabe
 
-### Editorial Review / Freigabe (Phase 13)
+## NEGATIVE_REFERENCE
 
-Nutzerfreigabe, Export Validation, Reparse — Manifest.
+Hinterlegte KI-Timelines sind ausschließlich `NEGATIVE_REFERENCE` —
+keine Qualitätsvorlage; keine positive Schnitt- oder Dramaturgieregel ableiten.
 
-## Qualitätsverbote (Alpha)
+## Qualitätsverbote
 
-- keine stillen Automationen (MANUAL)
-- Shot/Satz nicht als stilles hartes 1:1 voraussetzen (Many-to-Many geplant in Phase 12)
-- keine unvalidierten Timingdaten im Export
-- keine OTIO-Medienreferenzen außerhalb completed Working Media
+- keine stillen Automationen im Alpha (MANUAL)
+- Shot ≠ Satz als stilles 1:1 (Many-to-Many geplant)
+- keine OTIO-Medien außerhalb completed Working Media
+- Classic `_otio/` read-only

@@ -6,11 +6,11 @@ alwaysApply: true
 > **RECONSTRUCTED_BOOTSTRAP**
 >
 > - Dokumente wurden für dieses Repository neu konsolidiert.
-> - Andere Projekte sind keine fachliche Quelle.
-> - Übernommene Dokumentstrukturen besitzen keine normative Bedeutung.
-> - Verbindlich ist ausschließlich der für Discovery V2 verifizierte Inhalt ab dem Bereinigungscommit.
+> - Andere Projekte sind keine normative Discovery-V2-Quelle.
+> - Gelöschter GPT-Wissensstand ist keine Repositoryquelle.
+> - Verbindlich ist der für Discovery V2 geprüfte Inhalt ab den Bootstrap- und Korrekturcommits.
+> - Der Bootstrap beansprucht keine historische Wortlauttreue.
 > - Nicht belegte externe Details bleiben **UNKNOWN**.
-> - Kein Anspruch auf wiedergefundene historische Originale.
 
 # Discovery V2 — Core Architecture
 
@@ -32,77 +32,104 @@ Bei Widersprüchen gilt die höhere Quelle. Kritische ungelöste Konflikte block
 10. `docs/CLASSIC_MIGRATION_CONTRACT.md`
 11. `docs/PROGRESS.md`
 12. `docs/CHIEF_DEV_HANDOFF.md`
-13. `docs/source_plans/*` (reserviert; derzeit ohne normative Inhalte)
+13. `docs/source_plans/*`
+
+Zu `docs/source_plans/*`:
+
+- aktuell möglicherweise leer oder nicht vorhanden
+- zukünftige akzeptierte Source Plans sind nachrangige Detailquellen
+- sie dürfen höhere Dokumente nicht überschreiben
 
 Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`, `DISCOVERY_V2_HANDOFF.md`.
 
-## Stack (belegt)
+## Stack
 
-- Python 3.12 — Handoff
-- Streamlit — Handoff / Runtime
-- modularer Monolith unter `otio_app/discovery_v2/` — Code
-- Pydantic-Domainverträge — Code
-- SQLite als interne Discovery-Wahrheit (`_otio_v2/registry/assets.sqlite3`, Schema **14**) — Code / Handoff
-- versionierte JSON-Artefakte unter `_otio_v2/` — Code / Handoff
-- OpenTimelineIO — Requirements / Handoff (Export-Produktpfad noch nicht in Discovery implementiert)
-- pytest — Tests
-- FFmpeg/ffprobe nur über Discovery-Adapter und nur in kontrollierten Workern — Code / Handoff
+- Python 3.12
+- Streamlit für Alpha
+- modularer Monolith unter `otio_app/discovery_v2/`
+- Pydantic für Domainverträge
+- SQLite als interne Wahrheit (Discovery-Registry, Schema **14**)
+- versionierte JSON-Artefakte unter `_otio_v2/`
+- OpenTimelineIO
+- pytest
+- FFmpeg und ffprobe nur über Adapter und nur in kontrollierten Workern
 
-## Schichtvertrag (belegt)
+## Schichtvertrag
 
 ```text
 UI → Application → Domain → Adapters → Persistence
 ```
 
-- Keine Fachlogik in der Streamlit-UI — Handoff / UI-No-I/O-Tests
-- Application orchestriert Use-Cases, Gates und Recovery — Code
-- Domain ohne I/O — Code
-- Adapters für Dateisystem, FFmpeg/ffprobe, Vision-Gateway — Code
-- Persistence für SQLite und JSON — Code
+- Keine Fachlogik in der Streamlit-UI
+- Application orchestriert Use-Cases, Gates und Recovery
+- Domain ohne I/O
+- Adapters für Dateisystem, FFmpeg/ffprobe, externe Dienste und Gateways
+- Persistence für SQLite und JSON-Artefakte
 
-## Pfad- und Medienvertrag (belegt)
+## Pfad- und Medienvertrag
 
-- Discovery schreibt ausschließlich unter `_otio_v2/` (Standard: `<project_root>/_otio_v2/`) — Code `paths.py` / Handoff
-- `_otio/` ist für Discovery read-only — Handoff / Isolation-Tests
-- Classic-`work_dir` ist kein Discovery-Schreibziel — Handoff
-- Originalmedien werden nicht verändert — Handoff
-- Analyse-, Produktions- und geplanter Exportpfad basieren auf Working Media mit Rohstatus **`completed`** — Eligibility-Code / Manifest-DoD
-- Analysis Frames sind keine Working Media und kein OTIO-Media — Prepare-Tests / Handoff
+- Discovery schreibt ausschließlich unter `_otio_v2/` (Standard: `<project_root>/_otio_v2/`)
+- `_otio/` ist für Discovery **read-only** (Classic read-only)
+- Classic-`work_dir` ist kein Discovery-Schreibziel
+- Originalmedien werden nie verändert
+- Für Produktion und OTIO-Export gilt ausschließlich **completed Working Media**
+- Analysis Frames / Stock Previews sind keine Working Media und kein OTIO-Media
 
-## Betriebsmodi
+## Betriebsarten
 
-- Modi: `with_voiceover`, `without_voiceover`, `discovery_v2` — Code / Handoff
-- Classic und Without-VO bleiben unverändert — Handoff / Migration Contract
-- **MANUAL** ist Alpha-Standard — Manifest / Decisions
-- **AUTOMATIC** ist post-alpha — Manifest
-- Zwischenfreigabe-Automatik jenseits MANUAL: **UNKNOWN** (nicht im Code)
+- **MANUAL** ist Alpha-Standard
+- **CHECKPOINT** ist architektonisch vorbereitet, aber noch nicht als vollständig implementierter Modus zu behaupten
+- **AUTOMATIC** ist eine spätere Phase beziehungsweise Post-Alpha
 
 ## Externe Dienste und Modelle
 
-- Externe Dienste nur über Adapter — Handoff
-- Discovery-Vision nur über Discovery Vision Gateway — Code Phase 8C
-- Aktuell: Fake Vision (`provider=fake`, `fake-vision-v1`) — Code / Handoff
-- Echte Vision-Provider gesperrt bis eigenes Gate — D-8D-003
-- Keine hart codierten Modelle in Discovery-Fachmodulen — Handoff
-- Konkrete produktive Modell-IDs und OAuth-/Lizenzdetails: **UNKNOWN**
+- Externe Dienste ausschließlich über Adapter
+- Alle Text- und Vision-Modellaufrufe über zentrale Gateways
+- OpenRouter und direkte Anbieter sind grundsätzlich konfigurierbar
+- Keine hart codierten Modelle in Domain- oder Fachmodulen
+- Keine stillen Providerfallbacks
+- Aktuelle Discovery-Vision-Implementierung: Fake-only (`provider=fake`)
+- Reale Provider und konkrete Modell-IDs bleiben bis zum jeweiligen Freigabegate UNKNOWN beziehungsweise deaktiviert
+- Adobe-OAuth-Variante: **UNKNOWN**
 
-## Schwere Arbeit (belegt)
+## Schwere Arbeit
 
-- Probe, Hash, Intake, Prepare und Model-Analysis laufen in Workern außerhalb normaler Streamlit-Reruns — Code
-- Orphan-Recovery Teil des Laufzeitvertrags — Code / Tests
-- Rerender startet keine Jobs und kein Medien-I/O — UI-Regeln / Tests
+- Schwere Jobs außerhalb normaler Streamlit-Reruns
+- Orphan-/Crash-Recovery Teil des Laufzeitvertrags
+- Rerender startet keine Jobs und kein Medien-I/O
 
-## Verantwortung LLM vs. Python
+## Redaktionelle Verantwortung
 
-Geplant laut Alpha-Manifest / Handoff-Fahrplan (Phasen 9–13 noch nicht implementiert):
+### LLM
 
-**LLM (geplant):** Dramaturgie, Skript, Hook, Visual Beats, Visual Intents, Pausenfunktion, Übergänge, redaktionelle Reparaturvorschläge.
+- Dramaturgie
+- Skript
+- Hook
+- Visual Beats
+- Visual Intents
+- Pausenfunktion / LLM-Pausenregie
+- Cold Open
+- visuelle Atemzüge
+- Übergangspausen
+- andere redaktionelle Pausenentscheidungen
+- Übergänge
+- redaktionelle Reparaturvorschläge
 
-**Python (teilweise implementiert für Medien/Analyse; Timing/Export geplant):** Zeiten, Source-Ranges, Framerundung, Machbarkeit, Hash-/Pfadprüfung, deterministische Reparaturen, Validierung, Export.
+### Python
 
-## Domaintrennung (belegt für Phase 7–8)
+- exakte Zeitauflösung
+- Dauern
+- Überlappungsprüfung
+- Framerundung
+- technische Konsistenz
+- Source-Ranges
+- Machbarkeit
+- Hash- und Pfadprüfung
+- deterministische Reparaturen
+- Validierung
+- Export
 
-Getrennt halten:
+## Domaintrennung
 
 - Working Media
 - Technical Shot Segment
@@ -110,7 +137,16 @@ Getrennt halten:
 - lokale technische Signale
 - Visual Observation
 - Observation Review
-- Visual Beat / Visual Intent (noch nicht implementiert)
+- Visual Beat / Visual Intent (spätere Phasen)
 
 `prepared` ≠ modellanalysiert ≠ redaktionell akzeptiert ≠ Visual-Beat-Freigabe.  
-`accepted` Observation ≠ Asset-/Fakten-/Geo-/Synthetic-/Beat-Freigabe — D-8D-004.
+`accepted` Observation ≠ Asset-Auswahl ≠ Fakten-/Geo-/Echtheits-/Beat-Freigabe.
+
+## NEGATIVE_REFERENCE
+
+Die hinterlegten KI-Timelines sind ausschließlich **`NEGATIVE_REFERENCE`**:
+
+- keine Qualitätsvorlage
+- daraus darf keine positive Schnitt- oder Dramaturgieregel abgeleitet werden
+
+Keine nicht vorhandenen Dateinamen erfinden.

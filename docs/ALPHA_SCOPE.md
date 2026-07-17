@@ -1,67 +1,62 @@
 > **RECONSTRUCTED_BOOTSTRAP**
 >
 > - Dokumente wurden für dieses Repository neu konsolidiert.
-> - Andere Projekte sind keine fachliche Quelle.
-> - Übernommene Dokumentstrukturen besitzen keine normative Bedeutung.
-> - Verbindlich ist ausschließlich der für Discovery V2 verifizierte Inhalt ab dem Bereinigungscommit.
+> - Andere Projekte sind keine normative Discovery-V2-Quelle.
+> - Gelöschter GPT-Wissensstand ist keine Repositoryquelle.
+> - Verbindlich ist der für Discovery V2 geprüfte Inhalt ab den Bootstrap- und Korrekturcommits.
+> - Der Bootstrap beansprucht keine historische Wortlauttreue.
 > - Nicht belegte externe Details bleiben **UNKNOWN**.
-> - Kein Anspruch auf wiedergefundene historische Originale.
 
 # Alpha Scope — Discovery V2
 
 ## In Scope
 
-Bereits umgesetzt (Code / Tests / Handoff):
+Umgesetzt:
 
-- Projektmodus `discovery_v2` parallel zu Classic und Without-VO
-- Working Media unter `_otio_v2/` (Copy, Remux, H.264-Transcode, TIFF→PNG)
-- Lokale Assetanalyse inkl. Fake Vision und manuellem Observation Review
-- SQLite-Registry Schema **14** + versionierte JSON-Artefakte
-- Identity-/Stale-Gates für Selection, Intake und Analysis
+- Modus `discovery_v2` parallel zu Classic / Without-VO
+- Working Media unter `_otio_v2/`
+- Fake Vision + Observation Review; Registry Schema **14**
+- Identity-/Stale-Gates für Inventory/Intake/Analysis
 
-Geplant für Alpha (Manifest / D-8D-001; noch nicht implementiert):
+Geplant (MANUAL-Hauptpfad):
 
-- MANUAL-Hauptpfad bis parsebarem OTIO-Export
-- Editorial Core, Coverage, Script Lock, Voice/Timing, Visual Edit Plan
-- Humanity Review, Feasibility, Nutzerfreigabe, OTIO
+- Editorial Core, Coverage, Stock-Supplementation, Script Lock
+- ElevenLabs hinter Gate, LLM-Pausenregie, Python-Timing
+- Visual Edit Plan, Humanity & Authenticity Review, Feasibility, Freigabe, OTIO
 
-## Betriebsstandard
+## Betriebsarten
 
-- **MANUAL** = Alpha-Standard — Manifest
-- **AUTOMATIC** = post-alpha — Manifest
-- Weitere Automatisierungsmodi: **UNKNOWN**
+- **MANUAL** = Alpha-Standard
+- **CHECKPOINT** = architektonisch vorbereitet; nicht als vollständig implementiert behaupten
+- **AUTOMATIC** = Post-Alpha / spätere Phase
 
-## Explizit Out of Scope / verschoben
-
-Aus Manifest Post-Alpha und Handoff-Sperren:
+## Out of Scope / verschoben
 
 - AUTOMATIC End-to-End-Orchestrierung
-- echte Vision-Provider ohne separates Gate (aktuell Fake-only)
-- vollständiges Adobe OAuth — **UNKNOWN**/später
+- echte Vision-Provider ohne Gate (aktuell Fake-only)
+- konkrete Adobe-OAuth-Variante (**UNKNOWN**)
 - HEIC/HEIF und exotische TIFF-Varianten
 - OCR, Gesichtserkennung, bestätigte Geolokalisierung
 - automatische Synthetic-Erkennung
 - verteilte Queue, Multi-User, Cloud Storage
-- umfassende Performanceoptimierung
-- Änderungen an Classic- oder Without-VO-Fachpfaden
+- Classic-/Without-VO-Fachänderungen
 
-## Qualitätsgrenzen Alpha
+## Qualitätsgrenzen
 
-- keine Originaländerung
-- keine `_otio/`-Schreibzugriffe durch Discovery
-- nur `completed` Working Media als Analysebasis (implementiert) und als geplante Produktions-/Exportbasis
-- keine Secrets in Artefakten oder Logs
-- kein ungefragter Upload
-- Humanity Review + Feasibility + Nutzerfreigabe vor Export (geplant)
-- parsebares OTIO als Alpha-DoD (geplant)
+- keine Originaländerung; Classic `_otio/` read-only
+- nur completed Working Media für Produktion und OTIO-Export
+- Stock Preview ist niemals Working Media
+- keine finale Voice vor Script Lock
+- keine Visual-Edit-Timeline vor finalem Narration Timing
+- Humanity & Authenticity als eigener Review-Schritt
+- keine Secrets; kein ungefragter Upload
+- hinterlegte KI-Timelines = `NEGATIVE_REFERENCE`
 
-## Eingangsbedingung Phase 9+
+## Eingang Phase 9+
 
-Nur editorial-ready Visual Observations — Code Observation-Review-Service / D-8D-004:
+Nur editorial-ready Visual Observations. Eine Visual Observation ist:
 
-- aktuelle Analysis Identity
-- aktuelle Vision-Config-Versionen
-- gültiges Response-Schema
-- aktuelles Review = `accepted`
-
-`accepted` ist keine Asset-, Fakten-, Geo-, Synthetic- oder Visual-Beat-Freigabe.
+- keine Faktenbestätigung
+- keine geografische Bestätigung
+- keine Echtheitsbestätigung
+- keine automatische Assetauswahl

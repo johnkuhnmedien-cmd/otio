@@ -1,15 +1,15 @@
 > **RECONSTRUCTED_BOOTSTRAP**
 >
 > - Dokumente wurden für dieses Repository neu konsolidiert.
-> - Andere Projekte sind keine fachliche Quelle.
-> - Übernommene Dokumentstrukturen besitzen keine normative Bedeutung.
-> - Verbindlich ist ausschließlich der für Discovery V2 verifizierte Inhalt ab dem Bereinigungscommit.
+> - Andere Projekte sind keine normative Discovery-V2-Quelle.
+> - Gelöschter GPT-Wissensstand ist keine Repositoryquelle.
+> - Verbindlich ist der für Discovery V2 geprüfte Inhalt ab den Bootstrap- und Korrekturcommits.
+> - Der Bootstrap beansprucht keine historische Wortlauttreue.
 > - Nicht belegte externe Details bleiben **UNKNOWN**.
-> - Kein Anspruch auf wiedergefundene historische Originale.
 
 # Chief Dev Handoff — Discovery V2
 
-Kurzlage für technische Führung. Operative Details: `DISCOVERY_V2_HANDOFF.md`.
+Operative Details: `DISCOVERY_V2_HANDOFF.md`.
 
 ## Source-of-Truth-Reihenfolge
 
@@ -25,36 +25,30 @@ Kurzlage für technische Führung. Operative Details: `DISCOVERY_V2_HANDOFF.md`.
 10. `docs/CLASSIC_MIGRATION_CONTRACT.md`
 11. `docs/PROGRESS.md`
 12. `docs/CHIEF_DEV_HANDOFF.md`
-13. `docs/source_plans/*` (reserviert; derzeit ohne normative Inhalte)
+13. `docs/source_plans/*` (nachrangig; ggf. leer; überschreibt nichts Höheres)
 
-Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`. Operativer Handoff: `DISCOVERY_V2_HANDOFF.md`.
+Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 ## Repository-Lage
 
-- Branch: `cursor/discovery-v2-integration`
-- PR: `#69`
-- Phase 7 Media Intake: **APPROVED**
-- Phase 8 Assetanalyse (8A–8D): **APPROVED**
-- Registry-Schema: **14**
-- Vision: Fake-only (`provider=fake`); echte Provider gesperrt
-- Teststand Phase-8D-Closeout: 2806 collected / 2787 passed / 18 failed / 1 skipped
-- Nächster erlaubter Produktschritt: **Phase 9** (nur mit eigenem Auftrag)
-- Phase 9 nicht begonnen
+- Branch: `cursor/discovery-v2-integration` · PR `#69`
+- Phase 7–8: **APPROVED** · Schema **14** · Fake Vision only
+- Teststand 8D-Closeout: 2806 / 2787 / 18 / 1
+- Nächster Produktschritt: Phase 9 (nicht begonnen)
 
-## Architektur (Kurz)
+## Verbindliche Kurzregeln
 
-UI → Application → Domain → Adapters → Persistence; SQLite + versionierte JSON unter
-`_otio_v2/`; Classic `_otio/` read-only; Analyse auf completed Working Media.
+- MANUAL Alpha-Standard; CHECKPOINT vorbereitet (nicht fertig behaupten); AUTOMATIC post-alpha
+- Hauptpipeline inkl. LLM-Pausenregie vor Python-Timing; Script Lock vor Voice
+- Coverage vor Stock; Adobe-Reihenfolge und Stock-Eskalation verbindlich
+- Humanity & Authenticity = eigener Review-Schritt
+- Working Media = einzige OTIO-Medienquelle; Classic `_otio/` read-only
+- Gateways zentral; OpenRouter/direkt konfigurierbar; kein Default/Aktiv behaupten
+- Echter Vision-Provider gesperrt; Visual Observation ≠ Fakten-/Assetfreigabe
+- KI-Timelines = `NEGATIVE_REFERENCE`
 
-## Führungsregeln
-
-- Bootstrap-Dokumente sind für dieses Repository neu konsolidiert; andere Projekte sind keine SoT.
-- Bei Konflikt: Regeln → DECISIONS → MASTER_PLAN → …
-- Provider-Gates getrennt; keine Baseline-Fremdreparaturen ohne Auftrag.
-- Adobe OAuth, produktive Vision-Modell-IDs und nicht implementierte Editorial-Details: **UNKNOWN**.
-
-## Alpha-DoD (Manifest, Auszug)
+## Alpha-DoD (Auszug)
 
 MANUAL-Hauptpfad, keine Originaländerung, Stale-Gates, versionierte Artefakte,
-validiertes Working Media, Humanity Review, Feasibility, Nutzerfreigabe,
-parsebares OTIO, keine neuen Discovery-bedingten Testfehler.
+validiertes Working Media, Humanity Review, Feasibility, Freigabe, parsebares OTIO,
+keine neuen Discovery-bedingten Testfehler.
