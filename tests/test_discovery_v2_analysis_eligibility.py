@@ -591,10 +591,8 @@ def test_ambiguous_working_media(discovery_project: Project) -> None:
     plan = _seed_validation_and_plan(discovery_project)
     item = _by_path(plan, "clip.mp4")
     sha = item.source_sha256 or ""
-    # Unique-Constraint verhindert echte Duplikate — simuliere ambig via zweitem Insert umgehen:
-    # Wir setzen denselben Unique-Key nicht; statt dessen prüfen wir den Code-Pfad mit
-    # zwei Rows gleichen Filters durch temporäres Droppen der Unique (nicht erlaubt).
-    # Alternative: monkeypatch list_working_media_for_asset.
+    # Produktive Unique-Constraint verhindert echte Duplikate (siehe R1-Constraint-Test).
+    # Service-Pfad gegen mehrere Repository-Treffer mit Fake-Raw-Liste.
     wm1 = _insert_wm(
         discovery_project,
         asset_id=item.asset_id,
@@ -608,27 +606,47 @@ def test_ambiguous_working_media(discovery_project: Project) -> None:
     import otio_app.discovery_v2.application.asset_analysis_eligibility_service as svc
 
     fake = [
-        wm1,
-        wm1.model_copy(
-            update={
-                "working_media_id": str(uuid4()),
-                "output_sha256": "b" * 64,
-            }
-        ),
+        {
+            "working_media_id": wm1.working_media_id,
+            "project_id": discovery_project.id,
+            "asset_id": item.asset_id,
+            "source_sha256": sha,
+            "output_sha256": "a" * 64,
+            "action": COPY_WORKING_ACTION,
+            "processing_profile_version": COPY_WORKING_PROFILE_VERSION,
+            "status": "completed",
+        },
+        {
+            "working_media_id": str(uuid4()),
+            "project_id": discovery_project.id,
+            "asset_id": item.asset_id,
+            "source_sha256": sha,
+            "output_sha256": "b" * 64,
+            "action": COPY_WORKING_ACTION,
+            "processing_profile_version": COPY_WORKING_PROFILE_VERSION,
+            "status": "completed",
+        },
     ]
 
-    original = svc.list_working_media_for_asset
+    original = svc._list_working_media_raw
 
-    def _fake(conn, *, project_id, asset_id):
-        if asset_id == item.asset_id:
+    def _fake(conn, *, project_id, asset_id, source_sha256, action, processing_profile_version):
+        if asset_id == item.asset_id and action == COPY_WORKING_ACTION:
             return fake
-        return original(conn, project_id=project_id, asset_id=asset_id)
+        return original(
+            conn,
+            project_id=project_id,
+            asset_id=asset_id,
+            source_sha256=source_sha256,
+            action=action,
+            processing_profile_version=processing_profile_version,
+        )
 
-    svc.list_working_media_for_asset = _fake  # type: ignore[assignment]
+    svc._list_working_media_raw = _fake  # type: ignore[assignment]
     try:
         view = get_analysis_eligibility_view(discovery_project)
         el = next(i for i in view.items if i.asset_id == item.asset_id)
         assert el.eligible is False
         assert el.reason_code == "analysis_working_media_ambiguous"
     finally:
-        svc.list_working_media_for_asset = original  # type: ignore[assignment]
+        svc._list_working_media_raw = original  # type: ignore[assignment]

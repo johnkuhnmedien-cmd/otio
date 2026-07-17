@@ -57,9 +57,6 @@ from otio_app.discovery_v2.persistence.asset_registry_database import (
 from otio_app.discovery_v2.persistence.asset_registry_repository import (
     load_latest_import_report,
 )
-from otio_app.discovery_v2.persistence.copy_intake_repository import (
-    list_working_media_for_asset,
-)
 from otio_app.discovery_v2.persistence.technical_validation_repository import (
     get_validation_by_id,
 )
@@ -355,15 +352,15 @@ def evaluate_plan_item_eligibility(
     if validation.run_id != plan.validation_run_id:
         return base.model_copy(update={"reason_code": "stale_validation"})
 
-    candidates = [
-        wm
-        for wm in list_working_media_for_asset(
-            conn, project_id=project.id, asset_id=item.asset_id
-        )
-        if wm.source_sha256.lower() == source_sha
-        and wm.action == expected_action
-        and wm.processing_profile_version == expected_profile
-    ]
+    # Roh-SQL: vermeidet Enum-Crash bei pending/unknown Status in _row_to_working.
+    candidates = _list_working_media_raw(
+        conn,
+        project_id=project.id,
+        asset_id=item.asset_id,
+        source_sha256=source_sha,
+        action=expected_action,
+        processing_profile_version=expected_profile,
+    )
 
     if len(candidates) > 1:
         return base.model_copy(
@@ -371,27 +368,28 @@ def evaluate_plan_item_eligibility(
         )
     if not candidates:
         # Liegt ein WM mit anderer Action/Profil vor → mismatch, sonst missing.
-        same_sha = [
-            wm
-            for wm in list_working_media_for_asset(
-                conn, project_id=project.id, asset_id=item.asset_id
-            )
-            if wm.source_sha256.lower() == source_sha
-        ]
+        same_sha = _list_working_media_raw(
+            conn,
+            project_id=project.id,
+            asset_id=item.asset_id,
+            source_sha256=source_sha,
+            action=None,
+            processing_profile_version=None,
+        )
         if same_sha:
             wrong_profile = any(
-                wm.processing_profile_version != expected_profile
-                or wm.action != expected_action
+                wm["processing_profile_version"] != expected_profile
+                or wm["action"] != expected_action
                 for wm in same_sha
             )
             if wrong_profile:
-                actual = same_sha[0].processing_profile_version
+                actual = same_sha[0]["processing_profile_version"]
                 return base.model_copy(
                     update={
                         "reason_code": "analysis_profile_mismatch",
                         "actual_processing_profile_version": actual,
-                        "working_media_id": same_sha[0].working_media_id,
-                        "output_sha256": same_sha[0].output_sha256,
+                        "working_media_id": same_sha[0]["working_media_id"],
+                        "output_sha256": same_sha[0]["output_sha256"],
                     }
                 )
         return base.model_copy(
@@ -401,28 +399,28 @@ def evaluate_plan_item_eligibility(
     working = candidates[0]
     base = base.model_copy(
         update={
-            "working_media_id": working.working_media_id,
-            "actual_processing_profile_version": working.processing_profile_version,
-            "output_sha256": working.output_sha256,
+            "working_media_id": working["working_media_id"],
+            "actual_processing_profile_version": working["processing_profile_version"],
+            "output_sha256": working["output_sha256"],
         }
     )
 
     # Rohstatus aus SQLite — Repository mappt legacy "ready" sonst auf completed.
-    raw_status = _raw_working_media_status(conn, working.working_media_id)
+    raw_status = str(working["status"] or "")
     if raw_status != WorkingMediaStatus.COMPLETED.value:
         return base.model_copy(
             update={"reason_code": "analysis_working_media_not_completed"}
         )
 
-    if working.project_id != project.id or working.asset_id != item.asset_id:
+    if working["project_id"] != project.id or working["asset_id"] != item.asset_id:
         return base.model_copy(
             update={"reason_code": "analysis_working_media_missing"}
         )
-    if working.source_sha256.lower() != source_sha:
+    if str(working["source_sha256"]).lower() != source_sha:
         return base.model_copy(update={"reason_code": "stale_validation"})
-    if working.action != expected_action:
+    if working["action"] != expected_action:
         return base.model_copy(update={"reason_code": "analysis_profile_mismatch"})
-    if working.processing_profile_version != expected_profile:
+    if working["processing_profile_version"] != expected_profile:
         return base.model_copy(update={"reason_code": "analysis_profile_mismatch"})
 
     # Audio: Working Media kann existieren, visuelle Analyse ist not_applicable.
@@ -438,14 +436,49 @@ def evaluate_plan_item_eligibility(
     return base.model_copy(update={"eligible": True, "reason_code": None})
 
 
-def _raw_working_media_status(conn, working_media_id: str) -> str:
-    row = conn.execute(
-        "SELECT status FROM working_media WHERE working_media_id = ?",
-        (working_media_id,),
-    ).fetchone()
-    if row is None:
-        return ""
-    return str(row["status"] if hasattr(row, "keys") else row[0])
+def _list_working_media_raw(
+    conn,
+    *,
+    project_id: str,
+    asset_id: str,
+    source_sha256: str,
+    action: str | None,
+    processing_profile_version: str | None,
+) -> list[dict]:
+    """Liest Working-Media-Zeilen ohne Status-Enum-Mapping (Rohstatus bleibt)."""
+    sql = """
+        SELECT
+            working_media_id, project_id, asset_id, source_sha256, output_sha256,
+            action, processing_profile_version, status
+        FROM working_media
+        WHERE project_id = ?
+          AND asset_id = ?
+          AND lower(source_sha256) = ?
+    """
+    params: list[object] = [project_id, asset_id, source_sha256.lower()]
+    if action is not None:
+        sql += " AND action = ?"
+        params.append(action)
+    if processing_profile_version is not None:
+        sql += " AND processing_profile_version = ?"
+        params.append(processing_profile_version)
+    sql += " ORDER BY created_at, working_media_id"
+    rows = conn.execute(sql, params).fetchall()
+    result: list[dict] = []
+    for row in rows:
+        result.append(
+            {
+                "working_media_id": str(row["working_media_id"]),
+                "project_id": str(row["project_id"]),
+                "asset_id": str(row["asset_id"]),
+                "source_sha256": str(row["source_sha256"]),
+                "output_sha256": str(row["output_sha256"]),
+                "action": str(row["action"]),
+                "processing_profile_version": str(row["processing_profile_version"]),
+                "status": str(row["status"]),
+            }
+        )
+    return result
 
 
 def _chain_error_from_plan_gate(message: str | None) -> str:
