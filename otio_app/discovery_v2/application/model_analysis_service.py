@@ -34,6 +34,9 @@ from otio_app.discovery_v2.domain.visual_observation import (
     AnalysisModelAssetStatus,
     VisualObservationRecord,
 )
+from otio_app.discovery_v2.domain.editorial import (
+    EDITORIAL_ERROR_RUN_ALREADY_ACTIVE,
+)
 from otio_app.discovery_v2.persistence.asset_analysis_repository import (
     find_active_analysis_run,
     get_latest_analysis_run,
@@ -47,6 +50,9 @@ from otio_app.discovery_v2.persistence.asset_analysis_repository import (
     new_analysis_consent_id,
     new_analysis_run_id,
     open_analysis_registry,
+)
+from otio_app.discovery_v2.persistence.editorial_repository import (
+    find_active_editorial_run,
 )
 from otio_app.discovery_v2.persistence.asset_registry_database import (
     RegistryDatabaseError,
@@ -137,6 +143,16 @@ def start_model_analysis(
                     f"({active.scope}/{active.status.value})."
                 ),
                 run=active,
+            )
+        active_editorial = find_active_editorial_run(conn, project_id=project.id)
+        if active_editorial is not None:
+            return ModelAnalysisStartResult(
+                started=False,
+                message=(
+                    f"Es läuft bereits ein Editorial-Run "
+                    f"({active_editorial.scope}/{active_editorial.status.value})."
+                ),
+                error_code=EDITORIAL_ERROR_RUN_ALREADY_ACTIVE,
             )
 
         selected = _selected_prepared_assets(

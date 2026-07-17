@@ -14,7 +14,7 @@ from otio_app.discovery_v2.paths import (
 
 # Lesbare Schema-Versionen, die idempotent auf CURRENT migriert werden.
 _LEGACY_SCHEMA_VERSIONS = frozenset(
-    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"}
+    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14"}
 )
 
 
@@ -835,6 +835,248 @@ def _ensure_observation_review_tables(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_editorial_tables(conn: sqlite3.Connection) -> None:
+    """Phase 9: editorial brief, text attempts, script structure, and coverage."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS editorial_project_state (
+            project_id TEXT PRIMARY KEY,
+            active_brief_id TEXT,
+            active_narrative_plan_id TEXT,
+            selected_hook_id TEXT,
+            active_script_id TEXT,
+            active_coverage_audit_id TEXT,
+            observation_fingerprint TEXT,
+            status TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS editorial_runs (
+            run_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            status TEXT NOT NULL,
+            brief_id TEXT,
+            brief_version INTEGER,
+            narrative_plan_id TEXT,
+            script_id TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            relative_report_path TEXT,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            schema_version TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS editorial_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            request_kind TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model_identifier TEXT NOT NULL,
+            gateway_version TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            response_schema_version TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL,
+            relative_json_path TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            FOREIGN KEY (run_id) REFERENCES editorial_runs(run_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS project_briefs (
+            project_brief_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            language TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            target_audience TEXT NOT NULL,
+            desired_duration_seconds INTEGER,
+            tone TEXT NOT NULL,
+            geographic_frame TEXT,
+            brief_version INTEGER NOT NULL,
+            content_sha256 TEXT NOT NULL,
+            status TEXT NOT NULL,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            supersedes_brief_id TEXT,
+            UNIQUE (project_id, brief_version)
+        );
+
+        CREATE TABLE IF NOT EXISTS narrative_plans (
+            narrative_plan_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            project_brief_id TEXT NOT NULL,
+            brief_version INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            input_observation_fingerprint TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model_identifier TEXT NOT NULL,
+            gateway_version TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            response_schema_version TEXT NOT NULL,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (project_brief_id) REFERENCES project_briefs(project_brief_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS hook_variants (
+            hook_id TEXT PRIMARY KEY,
+            narrative_plan_id TEXT NOT NULL,
+            hook_text TEXT NOT NULL,
+            hook_type TEXT NOT NULL,
+            intended_effect TEXT NOT NULL,
+            user_status TEXT NOT NULL,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (narrative_plan_id) REFERENCES narrative_plans(narrative_plan_id)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_hook_variants_one_selected
+            ON hook_variants (narrative_plan_id)
+            WHERE user_status = 'selected';
+
+        CREATE TABLE IF NOT EXISTS script_drafts (
+            script_id TEXT PRIMARY KEY,
+            script_version INTEGER NOT NULL,
+            project_id TEXT NOT NULL,
+            language TEXT NOT NULL,
+            narrative_plan_id TEXT NOT NULL,
+            selected_hook_id TEXT,
+            project_brief_id TEXT NOT NULL,
+            brief_version INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            supersedes_script_id TEXT,
+            content_sha256 TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model_identifier TEXT NOT NULL,
+            gateway_version TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            response_schema_version TEXT NOT NULL,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (project_id, script_version),
+            FOREIGN KEY (narrative_plan_id) REFERENCES narrative_plans(narrative_plan_id),
+            FOREIGN KEY (selected_hook_id) REFERENCES hook_variants(hook_id),
+            FOREIGN KEY (project_brief_id) REFERENCES project_briefs(project_brief_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS script_sentences (
+            sentence_id TEXT PRIMARY KEY,
+            script_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            narrative_function TEXT NOT NULL,
+            claim_ids_json TEXT NOT NULL,
+            visual_beat_ids_json TEXT NOT NULL,
+            UNIQUE (script_id, ordinal),
+            FOREIGN KEY (script_id) REFERENCES script_drafts(script_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS script_claims (
+            claim_id TEXT PRIMARY KEY,
+            script_id TEXT NOT NULL,
+            statement TEXT NOT NULL,
+            claim_type TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            evidence_refs_json TEXT NOT NULL,
+            user_note TEXT,
+            status TEXT NOT NULL,
+            FOREIGN KEY (script_id) REFERENCES script_drafts(script_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS visual_beats (
+            visual_beat_id TEXT PRIMARY KEY,
+            script_id TEXT NOT NULL,
+            function TEXT NOT NULL,
+            description TEXT NOT NULL,
+            rhythm_function TEXT NOT NULL,
+            continuity_requirements_json TEXT NOT NULL,
+            intended_duration_hint_seconds REAL,
+            FOREIGN KEY (script_id) REFERENCES script_drafts(script_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS visual_beat_sentences (
+            visual_beat_id TEXT NOT NULL,
+            sentence_id TEXT NOT NULL,
+            PRIMARY KEY (visual_beat_id, sentence_id),
+            FOREIGN KEY (visual_beat_id) REFERENCES visual_beats(visual_beat_id),
+            FOREIGN KEY (sentence_id) REFERENCES script_sentences(sentence_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS visual_intents (
+            visual_intent_id TEXT PRIMARY KEY,
+            visual_beat_id TEXT NOT NULL,
+            desired_motif TEXT NOT NULL,
+            action TEXT NOT NULL,
+            setting TEXT NOT NULL,
+            geographic_requirements TEXT,
+            authenticity_requirements_json TEXT NOT NULL,
+            allowed_media_kinds_json TEXT NOT NULL,
+            priority INTEGER NOT NULL,
+            FOREIGN KEY (visual_beat_id) REFERENCES visual_beats(visual_beat_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS coverage_audits (
+            coverage_audit_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            script_id TEXT NOT NULL,
+            script_version INTEGER NOT NULL,
+            brief_version INTEGER NOT NULL,
+            narrative_plan_id TEXT NOT NULL,
+            input_observation_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model_identifier TEXT NOT NULL,
+            gateway_version TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            response_schema_version TEXT NOT NULL,
+            relative_json_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (script_id) REFERENCES script_drafts(script_id),
+            FOREIGN KEY (narrative_plan_id) REFERENCES narrative_plans(narrative_plan_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS coverage_intent_results (
+            coverage_audit_id TEXT NOT NULL,
+            visual_intent_id TEXT NOT NULL,
+            coverage_status TEXT NOT NULL,
+            candidate_asset_ids_json TEXT NOT NULL,
+            accepted_observation_ids_json TEXT NOT NULL,
+            rationale TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            missing_properties_json TEXT NOT NULL,
+            recommended_next_action TEXT NOT NULL,
+            PRIMARY KEY (coverage_audit_id, visual_intent_id),
+            FOREIGN KEY (coverage_audit_id) REFERENCES coverage_audits(coverage_audit_id),
+            FOREIGN KEY (visual_intent_id) REFERENCES visual_intents(visual_intent_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_editorial_runs_project_status
+            ON editorial_runs (project_id, status);
+        CREATE INDEX IF NOT EXISTS idx_editorial_attempts_cache
+            ON editorial_attempts (
+                project_id, request_kind, provider, model_identifier,
+                gateway_version, prompt_version, response_schema_version,
+                input_fingerprint, status
+            );
+        CREATE INDEX IF NOT EXISTS idx_project_briefs_project_status
+            ON project_briefs (project_id, status);
+        CREATE INDEX IF NOT EXISTS idx_narrative_plans_project_status
+            ON narrative_plans (project_id, status);
+        CREATE INDEX IF NOT EXISTS idx_script_drafts_project_status
+            ON script_drafts (project_id, status);
+        CREATE INDEX IF NOT EXISTS idx_coverage_audits_project_status
+            ON coverage_audits (project_id, status);
+        """
+    )
+
+
 def _ensure_analysis_run_columns(conn: sqlite3.Connection) -> None:
     """Idempotente Spalten-Nachrüstung für Schema 11 → 12."""
     run_cols = {
@@ -867,6 +1109,7 @@ def _apply_current_schema_objects(conn: sqlite3.Connection) -> None:
     _ensure_analysis_tables(conn)
     _ensure_model_analysis_tables(conn)
     _ensure_observation_review_tables(conn)
+    _ensure_editorial_tables(conn)
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:

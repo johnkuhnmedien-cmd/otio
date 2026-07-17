@@ -126,7 +126,7 @@ def test_schema_13_to_14_preserves_data_and_is_idempotent(tmp_path: Path, temp_d
     project = _new_project(root, temp_db_path)
     conn = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn) == "14"
+        assert reg_db.read_schema_version(conn) == "15"
         conn.execute(
             """
             INSERT INTO assets (
@@ -155,18 +155,18 @@ def test_schema_13_to_14_preserves_data_and_is_idempotent(tmp_path: Path, temp_d
 
     conn2 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn2) == REGISTRY_SCHEMA_VERSION == "14"
+        assert reg_db.read_schema_version(conn2) == REGISTRY_SCHEMA_VERSION == "15"
         assert conn2.execute("SELECT COUNT(*) FROM assets WHERE asset_id = 'asset-keep'").fetchone()[0] == 1
     finally:
         conn2.close()
     conn3 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn3) == "14"
+        assert reg_db.read_schema_version(conn3) == "15"
     finally:
         conn3.close()
 
 
-def test_schema_14_tables_exist_without_dramaturgy_or_visual_beats(tmp_path: Path, temp_db_path: Path) -> None:
+def test_schema_15_tables_include_phase9_without_dramaturgy(tmp_path: Path, temp_db_path: Path) -> None:
     root = tmp_path / "Project"
     (root / "Media").mkdir(parents=True)
     _new_project(root, temp_db_path)
@@ -174,8 +174,8 @@ def test_schema_14_tables_exist_without_dramaturgy_or_visual_beats(tmp_path: Pat
     try:
         tables = {str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         assert {"analysis_consent_events", "model_analysis_attempts", "visual_observations", "visual_observation_reviews"}.issubset(tables)
+        assert {"editorial_runs", "project_briefs", "visual_beats", "coverage_audits"}.issubset(tables)
         assert "dramaturgy" not in tables
-        assert "visual_beats" not in tables
     finally:
         conn.close()
 

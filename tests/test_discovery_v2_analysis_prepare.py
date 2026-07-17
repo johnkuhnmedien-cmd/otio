@@ -528,7 +528,7 @@ def test_schema_13_to_14_preserves_data_and_is_idempotent(
 
     conn = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn) == "14"
+        assert reg_db.read_schema_version(conn) == "15"
         conn.execute(
             """
             INSERT INTO assets (
@@ -559,7 +559,7 @@ def test_schema_13_to_14_preserves_data_and_is_idempotent(
 
     conn2 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn2) == "14"
+        assert reg_db.read_schema_version(conn2) == "15"
         assert conn2.execute(
             "SELECT COUNT(*) FROM assets WHERE asset_id = 'asset-keep'"
         ).fetchone()[0] == 1
@@ -579,7 +579,6 @@ def test_schema_13_to_14_preserves_data_and_is_idempotent(
         for forbidden in (
             "consent_events",
             "dramaturgy",
-            "visual_beats",
         ):
             assert forbidden not in tables
     finally:
@@ -587,7 +586,7 @@ def test_schema_13_to_14_preserves_data_and_is_idempotent(
 
     conn3 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn3) == REGISTRY_SCHEMA_VERSION == "14"
+        assert reg_db.read_schema_version(conn3) == REGISTRY_SCHEMA_VERSION == "15"
     finally:
         conn3.close()
 

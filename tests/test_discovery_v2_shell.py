@@ -128,6 +128,7 @@ def test_discovery_has_only_placeholder_navigation() -> None:
         "Technische Prüfung",
         "Media Intake",
         "Assetanalyse",
+        "Editorial",
         "Projekteinstellungen",
         "🔑 API-Schlüssel",
         "Systemstatus",
