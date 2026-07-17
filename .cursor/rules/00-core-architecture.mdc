@@ -1,0 +1,131 @@
+---
+description: Discovery V2 core architecture (reconstructed bootstrap SoT)
+alwaysApply: true
+---
+
+> **RECONSTRUCTED_BOOTSTRAP**
+>
+> - erstellt, weil nach vollständiger Repository- und Dateisystemsuche kein historisches Original auffindbar war
+> - gilt ab dem Bootstrap-Commit als Repositoryvertrag
+> - erhebt keinen Anspruch, den exakten Wortlaut früherer, nicht auffindbarer Dokumente wiederzugeben
+> - basiert auf akzeptiertem Handoff, bestehendem Code, Tests, dokumentierten Architekturentscheidungen und Audit-Referenzen
+> - ungeklärte externe API-, OAuth-, Lizenz- und Providerdetails bleiben **UNKNOWN**
+
+# Discovery V2 — Core Architecture
+
+Höchste Source-of-Truth für Architektur- und Schichtregeln.
+
+## Source-of-Truth-Reihenfolge
+
+Bei Widersprüchen gilt die höhere Quelle. Kritische ungelöste Konflikte blockieren den betroffenen Schritt. Originalquellen dürfen später nicht still umgeschrieben werden.
+
+1. `.cursor/rules/00-core-architecture.mdc`
+2. `.cursor/rules/01-step-discipline.mdc`
+3. `docs/DECISIONS.md`
+4. `docs/MASTER_PLAN.md`
+5. `docs/ALPHA_SCOPE.md`
+6. `docs/PIPELINE_SPEC.md`
+7. `docs/MEDIA_LIFECYCLE.md`
+8. `docs/EDITORIAL_QUALITY.md`
+9. `docs/MODEL_ROUTING.md`
+10. `docs/CLASSIC_MIGRATION_CONTRACT.md`
+11. `docs/PROGRESS.md`
+12. `docs/CHIEF_DEV_HANDOFF.md`
+13. `docs/source_plans/*`
+
+Untergeordnet (nicht in der Kernhierarchie, aber nutzbar): `docs/ALPHA_EXECUTION_MANIFEST.md`, `DISCOVERY_V2_HANDOFF.md` als Arbeitsstand/Handoff.
+
+## Stack
+
+- Python 3.12
+- Streamlit für Alpha
+- modularer Monolith unter `otio_app/discovery_v2/`
+- Pydantic für Domainverträge
+- SQLite als interne Wahrheit (Discovery-Registry)
+- versionierte JSON-Artefakte unter der Discovery-Wurzel
+- OpenTimelineIO für Export
+- pytest für Tests
+- FFmpeg und ffprobe nur über Adapter und nur in kontrollierten Workern
+
+## Schichtvertrag
+
+```text
+UI → Application → Domain → Adapters → Persistence
+```
+
+- Keine Fachlogik in der UI (Streamlit).
+- UI liest persistierte Zustände und startet Jobs nur über explizite Nutzeraktionen.
+- Application orchestriert Use-Cases, Gates und Recovery.
+- Domain enthält reine Verträge, Regeln und Statusübergänge ohne I/O.
+- Adapters kapseln Dateisystem, FFmpeg/ffprobe, externe Dienste und Gateways.
+- Persistence speichert SQLite- und JSON-Artefakte.
+
+## Pfad- und Medienvertrag
+
+- Discovery V2 schreibt ausschließlich unter konfigurierbarem `_otio_v2/` (Standard: `<project_root>/_otio_v2/`).
+- `_otio/` ist für Discovery **read-only**; kein Erzeugen, Ändern, Löschen.
+- Classic-`work_dir` darf nicht als Discovery-Schreibziel verwendet werden.
+- Originalmedien werden nie verändert.
+- Für Produktion und Export gilt ausschließlich **completed Working Media**.
+- Preview-/Analyseframes sind keine Working Media und kein OTIO-Media.
+
+## Betriebsmodi und Automatisierung
+
+- Projektmodus `discovery_v2` ist parallel zu Classic (`with_voiceover`) und Without-VO (`without_voiceover`).
+- Classic und Without-VO bleiben unverändert und verhaltenidentisch.
+- **MANUAL** ist Alpha-Standard.
+- **CHECKPOINT** ist vorbereitet (explizite Zwischenfreigaben).
+- **AUTOMATIC** ist post-alpha; keine stillen Automationen im Alpha.
+
+## Externe Dienste und Modelle
+
+- Externe Dienste ausschließlich über Adapter.
+- Alle LLM-/Vision-Aufrufe über zentrale Gateways (kein Direktaufruf aus UI/Domain/Fachmodulen).
+- OpenRouter und direkte Provider sind konfigurierbar; keine hart codierten Modelle in Fachmodulen.
+- Discovery Vision ist derzeit Fake-only; echte Vision-Provider bleiben hinter separatem Gate gesperrt.
+- Ungeklärte Adobe-OAuth-, Lizenz- und Providerdetails: **UNKNOWN**.
+
+## Schwere Arbeit
+
+- Schwere Jobs (Probe, Hash, Intake, Prepare, Model-Analysis) laufen außerhalb normaler Streamlit-Reruns.
+- Orphan-/Crash-Recovery ist Teil des Laufzeitvertrags.
+- Rerender startet keine Jobs und führt kein Medien-I/O aus.
+
+## Redaktionelle Verantwortung
+
+### LLM
+
+- Dramaturgie
+- Skript
+- Hook
+- Visual Beats
+- Visual Intents
+- Pausenfunktion
+- Übergänge
+- redaktionelle Reparaturvorschläge
+
+### Python
+
+- Zeiten
+- Source-Ranges
+- Framerundung
+- Machbarkeit
+- Hash- und Pfadprüfung
+- deterministische Reparaturen
+- Validierung
+- Export
+
+## Domaintrennung (verbindlich)
+
+Mindestens getrennt halten:
+
+- Working Media
+- Technical Shot Segment
+- Representative Frame
+- lokale technische Signale
+- Visual Observation
+- Observation Review
+- Visual Beat / Visual Intent (spätere Phasen)
+
+`prepared` ≠ modellanalysiert ≠ redaktionell akzeptiert ≠ Visual-Beat-Freigabe.  
+`accepted` Observation ≠ Asset-Auswahl ≠ Fakten-/Geo-/Synthetic-/Beat-Freigabe.

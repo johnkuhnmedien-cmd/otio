@@ -7,6 +7,8 @@ Dieses Dokument ist der **beschleunigte Alpha-Ausführungsplan** für Discovery 
 Es bündelt die Reihenfolge der Makrophasen und Provider-Gates. Es ist ausdrücklich
 **untergeordnet** gegenüber:
 
+- `.cursor/rules/00-core-architecture.mdc`
+- `.cursor/rules/01-step-discipline.mdc`
 - `docs/DECISIONS.md`
 - `docs/MASTER_PLAN.md`
 - `docs/ALPHA_SCOPE.md`
@@ -14,9 +16,13 @@ Es bündelt die Reihenfolge der Makrophasen und Provider-Gates. Es ist ausdrück
 - `docs/MEDIA_LIFECYCLE.md`
 - `docs/EDITORIAL_QUALITY.md`
 - `docs/MODEL_ROUTING.md`
+- `docs/CLASSIC_MIGRATION_CONTRACT.md`
 
 Bei Widerspruch gelten die höheren Quellen. Das Manifest darf keine fachliche
 Entscheidung still verändern.
+
+Die genannten höheren Dokumente sind als **RECONSTRUCTED_BOOTSTRAP**
+gekennzeichnet (keine wiedergefundenen Originale).
 
 **MANUAL bleibt Alpha-Standard.** Keine stillen Automationen, keine ungefragten Uploads.
 
@@ -26,10 +32,12 @@ Entscheidung still verändern.
 - Phase 8A Analysis Contracts — abgeschlossen
 - Phase 8B Shot-/Frame-Prepare — abgeschlossen
 - Phase 8C Fake Vision Model Analysis — abgeschlossen
-- Phase 8D Observation Review / Editorial-Ready-Gate — abgeschlossen mit diesem Auftrag
+- Phase 8D Observation Review / Editorial-Ready-Gate — abgeschlossen
+- SoT Bootstrap (Dokumentation) — abgeschlossen
 - Registry-Schema: **14**
 - Fake Vision: aktiv (`provider=fake`)
 - Echter Vision-Provider: **gesperrt** (separates Gate)
+- Phase 9 Produktarbeit: **nicht begonnen**
 
 ## 3. Architekturregeln
 

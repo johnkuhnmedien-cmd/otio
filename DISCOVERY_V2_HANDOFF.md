@@ -11,12 +11,35 @@
 - Phase 8B: `APPROVED`
 - Phase 8C: `APPROVED`
 - Phase 8D / Phase 8 Closeout: `APPROVED`
+- SoT Bootstrap: rekonstruiert und als `RECONSTRUCTED_BOOTSTRAP` gekennzeichnet
+  (kein Anspruch auf wiedergefundene Originale; Recovery-Suche → `NOT_FOUND`)
 - Registry-Schema: **14**
 - Fake Vision: aktiv (`provider=fake`)
 - Echte Vision Provider: **gesperrt**
-- Aktiver Produktauftrag: keiner (Phase 8 abgeschlossen)
-- Nächster erlaubter Schritt: **Phase 9** (Editorial Core / Coverage)
+- Aktiver Produktauftrag: keiner (Phase 8 abgeschlossen; Docs-Bootstrap getrennt)
+- Nächster erlaubter Produktschritt: **Phase 9** (Editorial Core / Coverage)
 - Gesperrt ohne eigenen Auftrag: echte Vision Provider, Phase 10+, Voice, OTIO
+
+## Source of Truth
+
+Verbindliche Reihenfolge:
+
+1. `.cursor/rules/00-core-architecture.mdc`
+2. `.cursor/rules/01-step-discipline.mdc`
+3. `docs/DECISIONS.md`
+4. `docs/MASTER_PLAN.md`
+5. `docs/ALPHA_SCOPE.md`
+6. `docs/PIPELINE_SPEC.md`
+7. `docs/MEDIA_LIFECYCLE.md`
+8. `docs/EDITORIAL_QUALITY.md`
+9. `docs/MODEL_ROUTING.md`
+10. `docs/CLASSIC_MIGRATION_CONTRACT.md`
+11. `docs/PROGRESS.md`
+12. `docs/CHIEF_DEV_HANDOFF.md`
+13. `docs/source_plans/*`
+
+`docs/ALPHA_EXECUTION_MANIFEST.md` und dieses Handoff-Dokument sind untergeordnet.
+Bei Widerspruch gilt die höhere Quelle.
 
 ## Projektmodi
 
@@ -776,11 +799,12 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 10. Phase 13: Review und OTIO
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
-(untergeordnet gegenüber DECISIONS/MASTER_PLAN/ALPHA_SCOPE/…).
+(untergeordnet gegenüber Regeln, DECISIONS, MASTER_PLAN, ALPHA_SCOPE, …).
 
 ## Arbeitsdisziplin
 
-Cursor muss vor jeder Arbeit `DISCOVERY_V2_CURRENT_TASK.md` vollständig lesen.
+Cursor muss vor jeder Arbeit die Source-of-Truth-Hierarchie und den aktuellen
+Auftrag prüfen (siehe `.cursor/rules/01-step-discipline.mdc`).
 
 Nur diesen Auftrag umsetzen.
 

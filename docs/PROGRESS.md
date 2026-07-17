@@ -4,6 +4,10 @@
 
 **Phase 8 — Assetanalyse ist abgeschlossen.**
 
+**Documentation Bootstrap:** rekonstruierte Source-of-Truth-Dateien angelegt
+(`DISCOVERY-V2-DOCUMENTATION-BOOTSTRAP-RECONSTRUCT-001`). Kennzeichnung
+`RECONSTRUCTED_BOOTSTRAP` — keine wiedergefundenen Originale.
+
 - Schema: **14**
 - Fake-Vision End-to-End: Prepare → Consent → Fake Model → Visual Observation → manuelles Review
 - Observation Review: unveränderliche Revisionen (`accepted` / `reanalyze_requested` / `rejected`)
@@ -21,8 +25,9 @@
 | 8B Shot/Frame Prepare | abgeschlossen |
 | 8C Fake Vision | abgeschlossen |
 | 8D Observation Review / Closeout | abgeschlossen |
-| 9 Editorial Core / Coverage | **nächster Schritt** |
-| 10–13 | geplant im Alpha Execution Manifest |
+| SoT Bootstrap (Docs only) | abgeschlossen (dieser Auftrag) |
+| 9 Editorial Core / Coverage | **nächster Produktschritt** (nicht begonnen) |
+| 10–13 | geplant im Alpha Execution Manifest / MASTER_PLAN |
 
 ## Teststand (Phase 8D Closeout)
 
@@ -37,9 +42,12 @@ Nach 8D:
 Dieselben 18 Baseline-Failures; keine neuen auftragsbedingten Fehler.
 Bekannter VFR-/ffmpeg-Skip bleibt möglich.
 
+Bootstrap-Dokumentation ändert keinen Produktcode; keine neue Vollsuite in diesem Auftrag erforderlich.
+
 ## Nächster erlaubter Schritt
 
-**Phase 9 — Editorial Core und Coverage** laut `docs/ALPHA_EXECUTION_MANIFEST.md`.
+**Phase 9 — Editorial Core und Coverage** laut `docs/MASTER_PLAN.md` und
+`docs/ALPHA_EXECUTION_MANIFEST.md`, nur mit eigenem Produktauftrag.
 
 Gesperrt bis zu eigenen Gates:
 

@@ -1,0 +1,90 @@
+---
+description: Discovery V2 step discipline and review gates (reconstructed bootstrap SoT)
+alwaysApply: true
+---
+
+> **RECONSTRUCTED_BOOTSTRAP**
+>
+> - erstellt, weil nach vollständiger Repository- und Dateisystemsuche kein historisches Original auffindbar war
+> - gilt ab dem Bootstrap-Commit als Repositoryvertrag
+> - erhebt keinen Anspruch, den exakten Wortlaut früherer, nicht auffindbarer Dokumente wiederzugeben
+> - basiert auf akzeptiertem Handoff, bestehendem Code, Tests, dokumentierten Architekturentscheidungen und Audit-Referenzen
+> - ungeklärte externe API-, OAuth-, Lizenz- und Providerdetails bleiben **UNKNOWN**
+
+# Discovery V2 — Step Discipline
+
+Zweitgrößte Source-of-Truth für den Entwicklungsprozess.
+
+## Source-of-Truth-Reihenfolge
+
+Identisch zu `00-core-architecture.mdc`:
+
+1. `.cursor/rules/00-core-architecture.mdc`
+2. `.cursor/rules/01-step-discipline.mdc`
+3. `docs/DECISIONS.md`
+4. `docs/MASTER_PLAN.md`
+5. `docs/ALPHA_SCOPE.md`
+6. `docs/PIPELINE_SPEC.md`
+7. `docs/MEDIA_LIFECYCLE.md`
+8. `docs/EDITORIAL_QUALITY.md`
+9. `docs/MODEL_ROUTING.md`
+10. `docs/CLASSIC_MIGRATION_CONTRACT.md`
+11. `docs/PROGRESS.md`
+12. `docs/CHIEF_DEV_HANDOFF.md`
+13. `docs/source_plans/*`
+
+Bei Widersprüchen gilt die höhere Quelle. Kritische ungelöste Konflikte blockieren den betroffenen Schritt.
+
+## Verbindlicher Entwicklungsprozess
+
+1. Projektstand und relevante Dokumente prüfen.
+2. Nur den nächsten freigegebenen Schritt planen.
+3. Präzisen Cursor-Auftrag formulieren.
+4. Nur diesen Auftrag umsetzen.
+5. Bericht, Diff und Tests liefern.
+6. Gegen Regeln und Kriterien prüfen.
+7. Genau einen Status vergeben:
+   - `APPROVED`
+   - `APPROVED_WITH_CONDITIONS`
+   - `REWORK_REQUIRED`
+   - `REJECTED`
+   - `BLOCKED`
+8. Erst nach Freigabe Folgephase beginnen.
+
+## Zusätzliche Regeln
+
+- Keine spätere Phase vorwegnehmen.
+- Kein `APPROVED` ohne nachvollziehbaren Diff und passende Tests.
+- Keine stillen Architekturänderungen.
+- Keine Reparatur fremder Baseline-Fehler ohne eigenen Auftrag.
+- Keine Secrets in Code, Logs, Commits oder Berichten.
+- Keine Originalmedien ändern.
+- Stop-Regel je Auftrag strikt einhalten.
+- Beschleunigte Makroaufträge sind erlaubt, solange Gates, Ausschlüsse und DoD klar bleiben.
+- Nicht pullen/mergen/rebasen/amendieren, sofern der Auftrag es nicht ausdrücklich verlangt.
+- `docs/ALPHA_EXECUTION_MANIFEST.md` darf Fachentscheidungen nicht still überschreiben.
+
+## Pflichtbericht (14 Punkte)
+
+Nach jedem Umsetzungsauftrag berichten:
+
+1. Auftrags-ID
+2. Zusammenfassung
+3. neue/geänderte/gelöschte Dateien
+4. Git-Diff
+5. Architektur- und Schemaänderungen
+6. Befehle
+7. Tests
+8. fehlgeschlagene Tests
+9. Smoke-Test
+10. Risiken
+11. Abweichungen
+12. Classic unverändert
+13. keine Secrets
+14. keine Folgephase begonnen
+
+## Freigabe-Gates
+
+- Produktphasen starten nur mit explizitem Auftrag und nach Status `APPROVED` / `APPROVED_WITH_CONDITIONS` der Vorgängerarbeit.
+- Provider-Gates (Vision, Voice, Stock) sind getrennt und dürfen nicht still aktiviert werden.
+- `BLOCKED` bei fehlender höherer SoT, ungelöstem Konflikt, Secret-Risiko oder Pfadvertragsverletzung.
