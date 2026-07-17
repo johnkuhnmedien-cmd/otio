@@ -110,6 +110,119 @@ def _pixel_digest(image: Image.Image) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _expected_alpha_for_palette_index(
+    index: int, transparency: object
+) -> int | None:
+    """Erwarteter Alpha-Wert für einen Palette-Index; None = nicht kontrollierbar."""
+    if isinstance(transparency, int):
+        if transparency < 0 or transparency > 255:
+            return None
+        return 0 if index == transparency else 255
+    if isinstance(transparency, (bytes, bytearray)):
+        if len(transparency) == 0 or len(transparency) > 256:
+            return None
+        if index < 0 or index > 255:
+            return None
+        if index < len(transparency):
+            return int(transparency[index])
+        return 255
+    if isinstance(transparency, tuple) and transparency:
+        if not all(isinstance(v, int) and 0 <= v <= 255 for v in transparency):
+            return None
+        if index < 0 or index > 255:
+            return None
+        if index < len(transparency):
+            return int(transparency[index])
+        return 255
+    return None
+
+
+def _convert_palette_preserving_alpha(image: Image.Image) -> Image.Image:
+    """P mit transparency → RGBA, nur bei nachweisbarer Alpha-Erhaltung."""
+    transparency = image.info.get("transparency")
+    if transparency is None:
+        return image.convert("RGB")
+
+    if isinstance(transparency, int):
+        if transparency < 0 or transparency > 255:
+            raise ImageConvertError(
+                "image_alpha_preservation_failed",
+                f"Palette-Transparenz-Index ungültig: {transparency}",
+            )
+    elif isinstance(transparency, (bytes, bytearray)):
+        if len(transparency) == 0 or len(transparency) > 256:
+            raise ImageConvertError(
+                "image_alpha_preservation_failed",
+                "Palette-Transparenz-Map hat ungültige Länge.",
+            )
+    elif isinstance(transparency, tuple):
+        if (
+            not transparency
+            or len(transparency) > 256
+            or not all(
+                isinstance(v, int) and 0 <= v <= 255 for v in transparency
+            )
+        ):
+            raise ImageConvertError(
+                "image_alpha_preservation_failed",
+                "Palette-Transparenz-Tuple ist nicht kontrollierbar.",
+            )
+    else:
+        raise ImageConvertError(
+            "image_alpha_preservation_failed",
+            (
+                "Palette-Transparenz nicht kontrollierbar: "
+                f"{type(transparency).__name__}"
+            ),
+        )
+
+    width, height = image.size
+    expected_alphas: list[int] = []
+    for y in range(height):
+        for x in range(width):
+            raw = image.getpixel((x, y))
+            try:
+                index = int(raw)  # type: ignore[arg-type]
+            except (TypeError, ValueError) as exc:
+                raise ImageConvertError(
+                    "image_alpha_preservation_failed",
+                    f"Palette-Index nicht lesbar: {raw!r}",
+                ) from exc
+            alpha = _expected_alpha_for_palette_index(index, transparency)
+            if alpha is None:
+                raise ImageConvertError(
+                    "image_alpha_preservation_failed",
+                    "Palette-Transparenz konnte nicht deterministisch abgebildet werden.",
+                )
+            expected_alphas.append(alpha)
+
+    rgba = image.convert("RGBA")
+    if rgba.size != image.size:
+        raise ImageConvertError(
+            "image_alpha_preservation_failed",
+            "Palette→RGBA änderte die Bildgröße.",
+        )
+    idx = 0
+    for y in range(height):
+        for x in range(width):
+            pixel = rgba.getpixel((x, y))
+            if not isinstance(pixel, tuple) or len(pixel) < 4:
+                raise ImageConvertError(
+                    "image_alpha_preservation_failed",
+                    "Unerwartetes Pixeldatenformat nach Palette→RGBA.",
+                )
+            if int(pixel[3]) != expected_alphas[idx]:
+                raise ImageConvertError(
+                    "image_alpha_preservation_failed",
+                    (
+                        f"Alpha an Pixel {idx} nicht erhalten "
+                        f"(ist {pixel[3]}, erwartet {expected_alphas[idx]})."
+                    ),
+                )
+            idx += 1
+    return rgba
+
+
 def _normalize_source(image: Image.Image) -> tuple[Image.Image, bool]:
     """Modus normalisieren + EXIF-Transpose (vor load()).
 
@@ -181,10 +294,7 @@ def _normalize_source(image: Image.Image) -> tuple[Image.Image, bool]:
     elif working.mode == "PA":
         working = working.convert("RGBA")
     elif working.mode == "P":
-        if _mode_has_alpha(working):
-            working = working.convert("RGBA")
-        else:
-            working = working.convert("RGB")
+        working = _convert_palette_preserving_alpha(working)
     elif working.mode not in {"L", "LA", "RGB", "RGBA"}:
         raise ImageConvertError(
             "image_mode_unsupported",
