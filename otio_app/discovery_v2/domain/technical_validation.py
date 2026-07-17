@@ -85,9 +85,11 @@ class AssetValidationRecord(BaseModel):
     frame_rate_numerator: int | None = None
     frame_rate_denominator: int | None = None
     audio_stream_count: int | None = None
+    audio_channel_count: int | None = None
     embedded_timecode: str | None = None
     pixel_format: str | None = None
     bit_depth: int | None = None
+    rotation_degrees: float | None = None
     error_code: str | None = None
     error_message: str | None = None
     validated_at: datetime

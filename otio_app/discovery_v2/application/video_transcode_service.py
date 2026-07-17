@@ -4,13 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 
 from otio_app.discovery_v2.adapters.intake_job_launcher import get_intake_job_launcher
-from otio_app.discovery_v2.adapters.media_probe import (
-    MediaProbeAdapterError,
-    probe_source_media,
-)
 from otio_app.discovery_v2.application.inventory_service import (
     InventoryServiceError,
     require_discovery_project,
@@ -38,6 +33,7 @@ from otio_app.discovery_v2.domain.media_intake import (
     IntakeRunStatus,
     WorkingMediaRecord,
 )
+from otio_app.discovery_v2.domain.technical_validation import AssetValidationRecord
 from otio_app.discovery_v2.persistence.asset_registry_database import (
     RegistryDatabaseError,
 )
@@ -54,6 +50,7 @@ from otio_app.discovery_v2.persistence.copy_intake_repository import (
     open_registry,
 )
 from otio_app.discovery_v2.persistence.technical_validation_repository import (
+    get_run as get_validation_run,
     list_asset_validations,
 )
 from otio_app.models import Project
@@ -61,12 +58,17 @@ from otio_app.models import Project
 
 @dataclass(frozen=True)
 class VideoTranscodePlanItemView:
-    """UI-Viewmodell: Plan-Item + angereicherte Validation/Probe-Felder."""
+    """UI-Viewmodell: Plan-Item + persistierte Validation-Felder."""
 
     item: IntakePlanItem
     audio_stream_count: int | None = None
-    audio_channels: int | None = None
+    audio_channel_count: int | None = None
     rotation_degrees: float | None = None
+
+    @property
+    def audio_channels(self) -> int | None:
+        """Alias für UI/Tests."""
+        return self.audio_channel_count
 
 
 class VideoTranscodeServiceError(InventoryServiceError):
@@ -346,10 +348,28 @@ def list_open_video_transcode_plan_items(project: Project) -> list[IntakePlanIte
     return _video_transcode_items(plan)
 
 
+def _validation_matches_plan(
+    validation_run,
+    plan: IntakePlan,
+    *,
+    project_id: str,
+) -> bool:
+    if validation_run is None:
+        return False
+    return (
+        validation_run.run_id == plan.validation_run_id
+        and validation_run.project_id == project_id
+        and validation_run.project_id == plan.project_id
+        and validation_run.import_id == plan.import_id
+        and validation_run.selection_id == plan.selection_id
+        and validation_run.scan_id == plan.scan_id
+    )
+
+
 def list_video_transcode_plan_item_views(
     project: Project,
 ) -> list[VideoTranscodePlanItemView]:
-    """Reichert offene Video-Transcode-Items für die UI an (keine DB in Streamlit)."""
+    """UI-View aus persistierter Plan-Validation — kein Live-Probe."""
     try:
         project = require_discovery_project(project)
     except InventoryServiceError:
@@ -362,54 +382,66 @@ def list_video_transcode_plan_item_views(
     if not items:
         return []
 
-    validation_by_asset: dict[str, object] = {}
+    validation_by_asset: dict[str, AssetValidationRecord] = {}
     try:
         conn = open_registry(project.project_root_path)
         try:
-            for record in list_asset_validations(
+            validation_run = get_validation_run(
                 conn, run_id=plan.validation_run_id
+            )
+            if _validation_matches_plan(
+                validation_run, plan, project_id=project.id
             ):
-                validation_by_asset[record.asset_id] = record
+                for record in list_asset_validations(
+                    conn, run_id=plan.validation_run_id
+                ):
+                    # Nur exakte Validation-IDs aus dem Plan-Item akzeptieren.
+                    validation_by_asset[record.asset_id] = record
         finally:
             conn.close()
     except RegistryDatabaseError:
         validation_by_asset = {}
 
     views: list[VideoTranscodePlanItemView] = []
-    root = Path(project.project_root_path)
     for item in items:
         validation = validation_by_asset.get(item.asset_id)
-        audio_streams = getattr(validation, "audio_stream_count", None)
-        audio_channels: int | None = None
-        rotation: float | None = None
-        source_path = root / item.source_relative_path
-        if source_path.is_file() and not source_path.is_symlink():
-            try:
-                probe = probe_source_media(source_path, media_kind=MediaKind.VIDEO)
-            except MediaProbeAdapterError:
-                probe = None
-            except Exception:  # noqa: BLE001
-                probe = None
-            if probe is not None:
-                if audio_streams is None:
-                    audio_streams = probe.audio_stream_count
-                audio_channels = probe.audio_channels
-                rotation = probe.rotation_degrees
+        if validation is not None and validation.validation_id != item.validation_id:
+            # Plan-Item verweist auf andere Validation → Felder unbekannt.
+            validation = None
         views.append(
             VideoTranscodePlanItemView(
                 item=item,
-                audio_stream_count=audio_streams,
-                audio_channels=audio_channels,
-                rotation_degrees=rotation,
+                audio_stream_count=(
+                    validation.audio_stream_count if validation else None
+                ),
+                audio_channel_count=(
+                    validation.audio_channel_count if validation else None
+                ),
+                rotation_degrees=(
+                    validation.rotation_degrees if validation else None
+                ),
             )
         )
     return views
 
 
+def format_audio_display(
+    audio_stream_count: int | None,
+    audio_channel_count: int | None,
+) -> str:
+    """UI-Formatierung für Audio-Vorschau aus persistierten Werten."""
+    if audio_stream_count is None and audio_channel_count is None:
+        return "—"
+    streams = "—" if audio_stream_count is None else str(audio_stream_count)
+    channels = "—" if audio_channel_count is None else str(audio_channel_count)
+    stream_label = "Stream" if audio_stream_count == 1 else "Streams"
+    return f"{streams} {stream_label}, {channels} Kanäle"
+
+
 def format_rotation_display(rotation_degrees: float | None) -> str:
-    """UI-Formatierung: bekannte Rotation bzw. kontrollierter Nullwert."""
+    """UI-Formatierung: bekannte Rotation; unbekannt → —."""
     if rotation_degrees is None:
-        return "keine Rotation"
+        return "—"
     if abs(rotation_degrees) < 0.01:
         return "0°"
     if float(rotation_degrees).is_integer():

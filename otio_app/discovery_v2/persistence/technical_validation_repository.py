@@ -240,11 +240,12 @@ def insert_asset_validation(
             checked_size_bytes, checked_mtime_ns, sha256, media_kind,
             container_format, video_codec, audio_codec, width, height,
             duration_seconds, frame_rate_numerator, frame_rate_denominator,
-            audio_stream_count, embedded_timecode, pixel_format, bit_depth,
+            audio_stream_count, audio_channel_count, embedded_timecode,
+            pixel_format, bit_depth, rotation_degrees,
             error_code, error_message, validated_at, duplicate_group_id,
             duplicate_hint
         ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
         """,
         (
@@ -266,9 +267,11 @@ def insert_asset_validation(
             record.frame_rate_numerator,
             record.frame_rate_denominator,
             record.audio_stream_count,
+            record.audio_channel_count,
             record.embedded_timecode,
             record.pixel_format,
             record.bit_depth,
+            record.rotation_degrees,
             record.error_code,
             record.error_message,
             record.validated_at.isoformat(),
@@ -537,9 +540,17 @@ def _row_to_validation(row: sqlite3.Row) -> AssetValidationRecord:
         frame_rate_numerator=row["frame_rate_numerator"],
         frame_rate_denominator=row["frame_rate_denominator"],
         audio_stream_count=row["audio_stream_count"],
+        audio_channel_count=(
+            row["audio_channel_count"] if "audio_channel_count" in keys else None
+        ),
         embedded_timecode=row["embedded_timecode"],
         pixel_format=row["pixel_format"] if "pixel_format" in keys else None,
         bit_depth=row["bit_depth"] if "bit_depth" in keys else None,
+        rotation_degrees=(
+            float(row["rotation_degrees"])
+            if "rotation_degrees" in keys and row["rotation_degrees"] is not None
+            else None
+        ),
         error_code=row["error_code"],
         error_message=row["error_message"],
         validated_at=datetime.fromisoformat(str(row["validated_at"])),

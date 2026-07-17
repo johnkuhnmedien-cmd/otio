@@ -53,6 +53,7 @@ from otio_app.discovery_v2.application.selection_service import (
 )
 from otio_app.discovery_v2.application.video_transcode_service import (
     can_start_video_transcode_intake,
+    format_audio_display,
     format_rotation_display,
     get_video_transcode_status,
     list_video_transcode_plan_item_views,
@@ -299,6 +300,8 @@ def _seed_validation_and_plan(project: Project) -> object:
                         "bit_depth": 10,
                         "duration_seconds": 0.4,
                         "audio_stream_count": 1,
+                        "audio_channel_count": 2,
+                        "rotation_degrees": 0.0,
                         "checked_size_bytes": size,
                         "checked_mtime_ns": mtime,
                     }
@@ -315,6 +318,8 @@ def _seed_validation_and_plan(project: Project) -> object:
                         "bit_depth": 8,
                         "duration_seconds": 0.4,
                         "audio_stream_count": 0,
+                        "audio_channel_count": None,
+                        "rotation_degrees": 90.0,
                         "checked_size_bytes": size,
                         "checked_mtime_ns": mtime,
                     }
@@ -331,6 +336,8 @@ def _seed_validation_and_plan(project: Project) -> object:
                         "bit_depth": 8,
                         "duration_seconds": 0.4,
                         "audio_stream_count": 1,
+                        "audio_channel_count": 1,
+                        "rotation_degrees": None,
                         "checked_size_bytes": size,
                         "checked_mtime_ns": mtime,
                     }
@@ -347,6 +354,8 @@ def _seed_validation_and_plan(project: Project) -> object:
                         "bit_depth": 8,
                         "duration_seconds": 1.0,
                         "audio_stream_count": 1,
+                        "audio_channel_count": 2,
+                        "rotation_degrees": None,
                         "checked_size_bytes": size,
                         "checked_mtime_ns": mtime,
                     }
@@ -1256,17 +1265,30 @@ def test_r1_view_model_channels_and_rotation(discovery_project, imported) -> Non
     _seed_validation_and_plan(discovery_project)
     views = list_video_transcode_plan_item_views(discovery_project)
     assert views
-    # echte Fixtures liefern Kanalanzahl / Rotation (null/0)
-    known_channels = [v for v in views if v.audio_channels is not None]
+    # Persistierte Seed-Werte — kein Live-Probe
+    known_channels = [v for v in views if v.audio_channel_count is not None]
     assert known_channels
+    assert any(v.audio_channel_count == 2 for v in known_channels)
+    assert any(v.rotation_degrees == 90.0 for v in views)
+    assert any(v.rotation_degrees == 0.0 for v in views)
     assert format_rotation_display(90.0) == "90°"
     assert format_rotation_display(0.0) == "0°"
-    assert format_rotation_display(None) == "keine Rotation"
+    assert format_rotation_display(None) == "—"
+    assert format_audio_display(1, 2) == "1 Stream, 2 Kanäle"
+    assert format_audio_display(None, None) == "—"
     ui_src = Path(intake_ui.__file__).read_text(encoding="utf-8")
     assert "list_video_transcode_plan_item_views" in ui_src
+    assert "format_audio_display" in ui_src
     assert "sqlite3" not in ui_src
     assert "open_registry" not in ui_src
+    assert "probe_source_media" not in ui_src
     assert "transcoded=" in ui_src
+    service_src = Path(
+        "otio_app/discovery_v2/application/video_transcode_service.py"
+    ).read_text(encoding="utf-8")
+    assert "probe_source_media" not in service_src
+    assert "from otio_app.discovery_v2.adapters.media_probe" not in service_src
+    assert "import subprocess" not in service_src
 
 
 def test_r1_real_no_tc_and_with_tc_reports(tmp_path: Path) -> None:
@@ -1331,3 +1353,93 @@ def test_r1_real_no_tc_and_with_tc_reports(tmp_path: Path) -> None:
     assert result_b.output_probe.tmcd_stream_count == 1
     assert result_b.output_probe.data_stream_count == 1
     assert result_b.output_probe.subtitle_stream_count == 0
+
+
+def test_r2_view_uses_only_persisted_validation(discovery_project, imported, monkeypatch) -> None:
+    """Kein Live-Probe im Viewpfad; fehlende Felder bleiben null → —."""
+    calls: list[str] = []
+
+    def _banned_probe(*args, **kwargs):
+        calls.append("probe")
+        raise AssertionError("Live-Probe im Viewpfad verboten")
+
+    monkeypatch.setattr(
+        "otio_app.discovery_v2.adapters.media_probe.probe_source_media",
+        _banned_probe,
+    )
+    plan = _seed_validation_and_plan(discovery_project)
+    views = list_video_transcode_plan_item_views(discovery_project)
+    assert views
+    assert calls == []
+    # clip10: 1 Stream, 2 Kanäle, Rotation 0
+    clip10 = next(
+        v for v in views if "clip10" in v.item.source_relative_path.lower()
+    )
+    assert clip10.audio_stream_count == 1
+    assert clip10.audio_channel_count == 2
+    assert clip10.rotation_degrees == 0.0
+    assert format_audio_display(
+        clip10.audio_stream_count, clip10.audio_channel_count
+    ) == "1 Stream, 2 Kanäle"
+    assert format_rotation_display(clip10.rotation_degrees) == "0°"
+    # clip422: 0 Streams, Rotation 90
+    clip422 = next(
+        v for v in views if "clip422" in v.item.source_relative_path.lower()
+    )
+    assert clip422.audio_stream_count == 0
+    assert clip422.audio_channel_count is None
+    assert clip422.rotation_degrees == 90.0
+    assert format_rotation_display(clip422.rotation_degrees) == "90°"
+    # validation_id muss zum Plan-Item passen
+    plan_vt = [
+        i
+        for i in plan.items
+        if i.planned_action == IntakeAction.TRANSCODE and i.media_kind == "video"
+    ]
+    by_asset = {i.asset_id: i for i in plan_vt}
+    for view in views:
+        assert view.item.validation_id == by_asset[view.item.asset_id].validation_id
+
+
+def test_r2_mismatched_validation_binding_yields_null(
+    discovery_project, imported, monkeypatch
+) -> None:
+    _seed_validation_and_plan(discovery_project)
+
+    def _wrong_run(conn, *, run_id: str):
+        real = val_repo.get_run(conn, run_id=run_id)
+        assert real is not None
+        return real.model_copy(update={"import_id": "not-the-plan-import"})
+
+    monkeypatch.setattr(
+        "otio_app.discovery_v2.application.video_transcode_service.get_validation_run",
+        _wrong_run,
+    )
+    views = list_video_transcode_plan_item_views(discovery_project)
+    assert views
+    for view in views:
+        assert view.audio_stream_count is None
+        assert view.audio_channel_count is None
+        assert view.rotation_degrees is None
+
+
+def test_r2_validation_worker_persists_channel_and_rotation() -> None:
+    from otio_app.discovery_v2.jobs import technical_validation_worker as tvw
+
+    src = Path(tvw.__file__).read_text(encoding="utf-8")
+    assert "audio_channel_count=probe.audio_channels" in src
+    assert "rotation_degrees=probe.rotation_degrees" in src
+    record = AssetValidationRecord(
+        validation_id=str(uuid4()),
+        run_id=str(uuid4()),
+        asset_id="a1",
+        source_relative_path="F/a.mp4",
+        status=AssetValidationStatus.PROBE_SUCCEEDED,
+        media_kind="video",
+        audio_stream_count=1,
+        audio_channel_count=2,
+        rotation_degrees=90.0,
+        validated_at=_now(),
+    )
+    assert record.audio_channel_count == 2
+    assert record.rotation_degrees == 90.0

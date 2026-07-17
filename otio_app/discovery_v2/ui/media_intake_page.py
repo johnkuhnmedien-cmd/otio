@@ -28,6 +28,7 @@ from otio_app.discovery_v2.application.remux_intake_service import (
 from otio_app.discovery_v2.application.video_transcode_service import (
     VideoTranscodeServiceError,
     can_start_video_transcode_intake,
+    format_audio_display,
     format_rotation_display,
     get_video_transcode_status,
     list_video_transcode_plan_item_views,
@@ -355,13 +356,8 @@ def render_discovery_media_intake_page() -> None:
             fps = None
             if item.frame_rate_numerator and item.frame_rate_denominator:
                 fps = f"{item.frame_rate_numerator}/{item.frame_rate_denominator}"
-            audio_streams = (
-                str(view.audio_stream_count)
-                if view.audio_stream_count is not None
-                else "—"
-            )
-            channels = (
-                str(view.audio_channels) if view.audio_channels is not None else "—"
+            audio_text = format_audio_display(
+                view.audio_stream_count, view.audio_channel_count
             )
             rotation = format_rotation_display(view.rotation_degrees)
             st.markdown(
@@ -371,9 +367,7 @@ def render_discovery_media_intake_page() -> None:
                 f"bit=`{item.bit_depth}` · "
                 f"{item.width}×{item.height} · fps=`{fps or '—'}` · "
                 f"audio_codec=`{item.audio_codec or '—'}` · "
-                f"Audio: {audio_streams} Stream"
-                f"{'' if audio_streams == '1' else 's'}, "
-                f"{channels} Kanäle · "
+                f"Audio: {audio_text} · "
                 f"tc=`{item.embedded_timecode or 'null'}` · "
                 f"Rotation: {rotation}"
             )

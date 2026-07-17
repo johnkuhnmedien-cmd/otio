@@ -308,9 +308,11 @@ def _validate_one_asset(
         frame_rate_numerator=probe.frame_rate_numerator,
         frame_rate_denominator=probe.frame_rate_denominator,
         audio_stream_count=probe.audio_stream_count,
+        audio_channel_count=probe.audio_channels,
         embedded_timecode=probe.embedded_timecode,
         pixel_format=probe.pixel_format,
         bit_depth=probe.bit_depth,
+        rotation_degrees=probe.rotation_degrees,
         validated_at=now,
         source_group=asset.source_group,
     )

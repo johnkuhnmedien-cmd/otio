@@ -13,7 +13,7 @@ from otio_app.discovery_v2.paths import (
 )
 
 # Lesbare Schema-Versionen, die idempotent auf CURRENT migriert werden.
-_LEGACY_SCHEMA_VERSIONS = frozenset({"1", "2", "3", "4", "5", "6", "7"})
+_LEGACY_SCHEMA_VERSIONS = frozenset({"1", "2", "3", "4", "5", "6", "7", "8"})
 
 
 class RegistryDatabaseError(ValueError):
@@ -155,9 +155,11 @@ def _ensure_validation_tables(conn: sqlite3.Connection) -> None:
             frame_rate_numerator INTEGER,
             frame_rate_denominator INTEGER,
             audio_stream_count INTEGER,
+            audio_channel_count INTEGER,
             embedded_timecode TEXT,
             pixel_format TEXT,
             bit_depth INTEGER,
+            rotation_degrees REAL,
             error_code TEXT,
             error_message TEXT,
             validated_at TEXT NOT NULL,
@@ -192,13 +194,21 @@ def _ensure_validation_tables(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_validation_profile_columns(conn: sqlite3.Connection) -> None:
-    """Idempotent: pixel_format/bit_depth an bestehende asset_validations anfügen."""
+    """Idempotent: Profilfelder an bestehende asset_validations anfügen."""
     rows = conn.execute("PRAGMA table_info(asset_validations)").fetchall()
     columns = {str(row[1]) for row in rows}
     if "pixel_format" not in columns:
         conn.execute("ALTER TABLE asset_validations ADD COLUMN pixel_format TEXT")
     if "bit_depth" not in columns:
         conn.execute("ALTER TABLE asset_validations ADD COLUMN bit_depth INTEGER")
+    if "audio_channel_count" not in columns:
+        conn.execute(
+            "ALTER TABLE asset_validations ADD COLUMN audio_channel_count INTEGER"
+        )
+    if "rotation_degrees" not in columns:
+        conn.execute(
+            "ALTER TABLE asset_validations ADD COLUMN rotation_degrees REAL"
+        )
 
 
 def _ensure_intake_tables(conn: sqlite3.Connection) -> None:
