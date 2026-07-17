@@ -99,14 +99,25 @@ class IntakePlanCreateResult(BaseModel):
     plan: IntakePlan | None = None
 
 
-# --- Phase 7B: Copy-Intake-Runs / Working Media --------------------------------
+# --- Phase 7B/7C: Intake-Runs / Working Media --------------------------------
 
 INTAKE_RUN_SCHEMA_VERSION = "1"
 COPY_INTAKE_WORKER_VERSION = "1"
+REMUX_INTAKE_WORKER_VERSION = "1"
 WORKER_INTERRUPTED_INTAKE_ERROR_CODE = "worker_interrupted"
-# Kanonisches Working-Media-Profil für Phase-7B-Copy.
+# Kanonische Working-Media-Profile (Whitelist für Pfadsegmente).
 COPY_WORKING_PROFILE_VERSION = "copy-v1"
+REMUX_WORKING_PROFILE_VERSION = "remux-mp4-v1"
 COPY_WORKING_ACTION = "copy"
+REMUX_WORKING_ACTION = "remux"
+ALLOWED_WORKING_PROFILE_VERSIONS = frozenset(
+    {
+        COPY_WORKING_PROFILE_VERSION,
+        REMUX_WORKING_PROFILE_VERSION,
+    }
+)
+INTAKE_RUN_SCOPE_COPY_ONLY = "copy_only"
+INTAKE_RUN_SCOPE_REMUX_ONLY = "remux_only"
 
 
 class IntakeRunStatus(str, Enum):
@@ -170,6 +181,7 @@ class IntakeRunRecord(BaseModel):
     skipped_assets: int = 0
     error_summary: str | None = None
     worker_version: str = COPY_INTAKE_WORKER_VERSION
+    scope: str = INTAKE_RUN_SCOPE_COPY_ONLY
 
 
 class IntakeRunAssetRecord(BaseModel):
@@ -209,6 +221,18 @@ class WorkingMediaRecord(BaseModel):
     updated_at: datetime
 
 
+class IntakeRunReportAsset(BaseModel):
+    asset_id: str
+    source_relative_path: str
+    status: str
+    working_relative_path: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    audio_policy: str | None = None
+    timecode_policy: str | None = None
+    output_sha256: str | None = None
+
+
 class IntakeRunReport(BaseModel):
     schema_version: str = INTAKE_RUN_SCHEMA_VERSION
     run_id: str
@@ -227,9 +251,14 @@ class IntakeRunReport(BaseModel):
     succeeded_assets: int = 0
     failed_assets: int = 0
     skipped_assets: int = 0
+    remuxed_assets: int = 0
+    reused_assets: int = 0
     error_summary: str | None = None
     worker_version: str = COPY_INTAKE_WORKER_VERSION
+    scope: str = INTAKE_RUN_SCOPE_COPY_ONLY
     report_relative_path: str = ""
+    registry_sqlite_relative_path: str = "registry/assets.sqlite3"
+    assets: list[IntakeRunReportAsset] = Field(default_factory=list)
 
 
 class IntakeRunLatestPointer(BaseModel):
@@ -243,6 +272,7 @@ class IntakeRunLatestPointer(BaseModel):
     status: IntakeRunStatus
     completed_at: datetime | None = None
     report_relative_path: str
+    scope: str = INTAKE_RUN_SCOPE_COPY_ONLY
 
 
 class IntakeRunStartResult(BaseModel):

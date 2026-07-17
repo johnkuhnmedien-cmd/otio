@@ -1,4 +1,4 @@
-"""Discovery-spezifischer Launcher für Copy-Intake-Jobs (Phase 7B).
+"""Discovery-spezifischer Launcher für Intake-Jobs (Copy/Remux).
 
 Kein Anschluss an die Classic-Job-Registry — Daemon-Threads + SQLite-Status.
 """
@@ -7,12 +7,16 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from typing import Callable, Literal
 
 from otio_app.discovery_v2.jobs.copy_intake_worker import process_copy_intake_run
+from otio_app.discovery_v2.jobs.remux_intake_worker import process_remux_intake_run
+
+WorkerKind = Literal["copy", "remux"]
 
 
 class IntakeJobLauncher:
-    """Ein aktiver Copy-Intake-Thread pro Projekt."""
+    """Ein aktiver Intake-Thread pro Projekt (Copy oder Remux)."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -26,14 +30,21 @@ class IntakeJobLauncher:
     def is_active(self, project_id: str) -> bool:
         return self.is_thread_alive(project_id)
 
+    def _worker_fn(self, worker: WorkerKind) -> Callable[[Path, str], object]:
+        if worker == "remux":
+            return process_remux_intake_run
+        return process_copy_intake_run
+
     def launch(
         self,
         *,
         project_id: str,
         project_root: Path,
         run_id: str,
+        worker: WorkerKind = "copy",
         sync: bool = False,
     ) -> bool:
+        process_fn = self._worker_fn(worker)
         if sync:
             with self._lock:
                 existing = self._threads.get(project_id)
@@ -41,7 +52,7 @@ class IntakeJobLauncher:
                     return False
                 self._threads[project_id] = threading.current_thread()
             try:
-                process_copy_intake_run(project_root, run_id)
+                process_fn(project_root, run_id)
             finally:
                 with self._lock:
                     current = self._threads.get(project_id)
@@ -55,8 +66,8 @@ class IntakeJobLauncher:
                 return False
             thread = threading.Thread(
                 target=self._run_in_thread,
-                args=(project_id, project_root, run_id),
-                name=f"discovery-v2-copy-intake-{run_id[:8]}",
+                args=(project_id, project_root, run_id, worker),
+                name=f"discovery-v2-{worker}-intake-{run_id[:8]}",
                 daemon=True,
             )
             self._threads[project_id] = thread
@@ -64,10 +75,14 @@ class IntakeJobLauncher:
             return True
 
     def _run_in_thread(
-        self, project_id: str, project_root: Path, run_id: str
+        self,
+        project_id: str,
+        project_root: Path,
+        run_id: str,
+        worker: WorkerKind,
     ) -> None:
         try:
-            process_copy_intake_run(project_root, run_id)
+            self._worker_fn(worker)(project_root, run_id)
         finally:
             with self._lock:
                 current = self._threads.get(project_id)

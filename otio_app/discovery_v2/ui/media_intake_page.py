@@ -1,4 +1,4 @@
-"""Streamlit-Seite: Discovery V2 Media Intake (Planung + Copy-Intake Phase 7B)."""
+"""Streamlit-Seite: Discovery V2 Media Intake (Plan + Copy + Remux)."""
 
 from __future__ import annotations
 
@@ -18,6 +18,13 @@ from otio_app.discovery_v2.application.media_intake_planning_service import (
     create_intake_plan,
     get_current_intake_plan,
 )
+from otio_app.discovery_v2.application.remux_intake_service import (
+    RemuxIntakeServiceError,
+    can_start_remux_intake,
+    get_remux_intake_status,
+    list_open_remux_plan_items,
+    start_remux_intake,
+)
 from otio_app.discovery_v2.domain.media_intake import (
     ACTIVE_INTAKE_RUN_STATUSES,
     IntakeAction,
@@ -33,16 +40,16 @@ _SESSION_INFO_KEY = "discovery_v2_intake_info"
 
 
 def render_discovery_media_intake_page() -> None:
-    """Media Intake — Plan + Copy-Start nur über explizite Buttons."""
+    """Media Intake — Plan + Copy/Remux nur über explizite Buttons."""
     st.title("Media Intake")
     project = active_discovery_project()
     if project is None:
         return
 
     st.caption(
-        "Plant die technische Übernahme und kopiert ausschließlich als "
-        "`copy` geplante Assets bytegenau nach Working Media. "
-        "Remux und Transkodierung sind in dieser Phase nicht enthalten."
+        "Plant die technische Übernahme. Copy übernimmt bytegenau; "
+        "Remux ändert nur den Container per Stream Copy. "
+        "Video-Transkodierung und Bildkonvertierung sind hier nicht enthalten."
     )
 
     error = st.session_state.pop(_SESSION_ERROR_KEY, None)
@@ -138,8 +145,12 @@ def render_discovery_media_intake_page() -> None:
     if copy_ctx is not None:
         st.write(f"**Geplante Copy-Assets:** {copy_ctx.get('copy_item_count', 0)}")
 
-    active = run is not None and run.status in ACTIVE_INTAKE_RUN_STATUSES
-    can_click_copy = copy_ok and not active and not is_stale
+    remux_run, _, _, _ = get_remux_intake_status(project)
+    any_active = (
+        (run is not None and run.status in ACTIVE_INTAKE_RUN_STATUSES)
+        or (remux_run is not None and remux_run.status in ACTIVE_INTAKE_RUN_STATUSES)
+    )
+    can_click_copy = copy_ok and not any_active and not is_stale
 
     if can_click_copy:
         if st.button(
@@ -160,7 +171,6 @@ def render_discovery_media_intake_page() -> None:
     else:
         st.caption(copy_msg or "Copy-Intake derzeit nicht startbar.")
 
-    # Keine Remux-/Transcode-Startbuttons in Phase 7B.
     run, run_assets, working, _ = get_copy_intake_status(project)
     if run is None:
         st.info(
@@ -203,8 +213,105 @@ def render_discovery_media_intake_page() -> None:
                     st.markdown(line)
 
     if working:
-        st.markdown(f"**Working Media ({len(working)})**")
+        st.markdown(f"**Copy Working Media ({len(working)})**")
         for wm in working[:50]:
+            st.caption(
+                f"`{wm.source_relative_path}` → `{wm.working_relative_path}` "
+                f"(sha256={wm.output_sha256[:12]}…)"
+            )
+
+    # --- Remux-Intake (Phase 7C1) -------------------------------------------
+    st.subheader("Remux")
+    st.caption(
+        "Beim Remux wird nur der Container geändert. Video und unterstütztes "
+        "Audio werden nicht neu codiert."
+    )
+    remux_ok, remux_msg, remux_ctx = can_start_remux_intake(project)
+    remux_items = list_open_remux_plan_items(project)
+    remux_run, remux_assets, remux_working, remux_status_err = get_remux_intake_status(
+        project
+    )
+    if remux_status_err:
+        st.warning(remux_status_err)
+
+    if remux_ctx is not None:
+        st.write(
+            f"**Offene Remux-Items:** {remux_ctx.get('remux_item_count', 0)} · "
+            f"**Gate OK:** {remux_ctx.get('eligible_remux_item_count', 0)}"
+        )
+
+    if remux_items:
+        st.markdown("**Offene Remux-Positionen**")
+        for item in remux_items:
+            tc = item.embedded_timecode or "null"
+            st.markdown(
+                f"`{item.source_relative_path}` · Gruppe=`{item.source_group}` · "
+                f"Container=`{item.container_format or item.extension}` · "
+                f"codec=`{item.video_codec}` · pix=`{item.pixel_format}` · "
+                f"bit=`{item.bit_depth}` · audio=`{item.audio_codec or '—'}` · "
+                f"tc=`{tc}`"
+            )
+            st.caption(f"{item.reason_code}: {item.reason_detail}")
+    else:
+        st.caption("Keine offenen Remux-Items im aktuellen Plan.")
+
+    remux_active = (
+        remux_run is not None and remux_run.status in ACTIVE_INTAKE_RUN_STATUSES
+    )
+    copy_active = run is not None and run.status in ACTIVE_INTAKE_RUN_STATUSES
+    can_click_remux = remux_ok and not remux_active and not copy_active and not is_stale
+
+    if can_click_remux:
+        if st.button(
+            "Remux-Intake starten",
+            type="primary",
+            key="discovery_v2_remux_intake_start_btn",
+        ):
+            try:
+                result = start_remux_intake(project, sync=False)
+            except RemuxIntakeServiceError as exc:
+                st.session_state[_SESSION_ERROR_KEY] = str(exc)
+            else:
+                if result.started:
+                    st.session_state[_SESSION_INFO_KEY] = result.message
+                else:
+                    st.session_state[_SESSION_ERROR_KEY] = result.message
+            st.rerun()
+    else:
+        st.caption(remux_msg or "Remux-Intake derzeit nicht startbar.")
+
+    if remux_run is not None:
+        st.write(f"**Remux-Run-ID:** `{remux_run.run_id}`")
+        st.write(f"**Scope:** `{remux_run.scope}` · **Status:** `{remux_run.status.value}`")
+        st.write(
+            f"**Fortschritt:** {remux_run.processed_assets} / {remux_run.total_assets} · "
+            f"OK={remux_run.succeeded_assets} · Skip={remux_run.skipped_assets} · "
+            f"Fehler={remux_run.failed_assets}"
+        )
+        if remux_run.error_summary:
+            st.error(remux_run.error_summary)
+        if remux_run.status in ACTIVE_INTAKE_RUN_STATUSES:
+            st.info(
+                "Remux-Intake läuft … Seite neu laden, um den Fortschritt zu aktualisieren."
+            )
+        st.caption(f"Bericht: `_otio_v2/intake/runs/{remux_run.run_id}.json`")
+        if remux_assets:
+            st.markdown("**Remux-Ergebnisse**")
+            for item in remux_assets:
+                path = item.working_relative_path or "—"
+                line = (
+                    f"`{item.source_relative_path}` — **{item.status.value}** · "
+                    f"working=`{path}`"
+                )
+                st.markdown(line)
+                if item.error_code or item.error_message:
+                    st.caption(
+                        f"{item.error_code or ''}: {item.error_message or ''}".strip(": ")
+                    )
+
+    if remux_working:
+        st.markdown(f"**Remux Working Media ({len(remux_working)})**")
+        for wm in remux_working[:50]:
             st.caption(
                 f"`{wm.source_relative_path}` → `{wm.working_relative_path}` "
                 f"(sha256={wm.output_sha256[:12]}…)"

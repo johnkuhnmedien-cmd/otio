@@ -1,13 +1,11 @@
-"""Application-Service: bytegenauer Copy-Intake (Phase 7B)."""
+"""Application-Service: Discovery-V2 Remux-Intake (Phase 7C1)."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from otio_app.discovery_v2.adapters.intake_job_launcher import get_intake_job_launcher
-from otio_app.discovery_v2.application.copy_intake_job_recovery import (
-    reconcile_orphaned_copy_intake_run,
-)
+from otio_app.discovery_v2.adapters.media_remux import evaluate_remux_gate
 from otio_app.discovery_v2.application.inventory_service import (
     InventoryServiceError,
     require_discovery_project,
@@ -16,11 +14,15 @@ from otio_app.discovery_v2.application.media_intake_planning_service import (
     can_create_intake_plan,
     get_current_intake_plan,
 )
+from otio_app.discovery_v2.application.remux_intake_job_recovery import (
+    reconcile_orphaned_remux_intake_run,
+)
 from otio_app.discovery_v2.domain.media_intake import (
-    COPY_INTAKE_WORKER_VERSION,
-    INTAKE_RUN_SCOPE_COPY_ONLY,
+    INTAKE_RUN_SCOPE_REMUX_ONLY,
+    REMUX_INTAKE_WORKER_VERSION,
     IntakeAction,
     IntakePlan,
+    IntakePlanItem,
     IntakePlanItemStatus,
     IntakePlanStatus,
     IntakeRunAssetRecord,
@@ -48,15 +50,47 @@ from otio_app.discovery_v2.persistence.copy_intake_repository import (
 from otio_app.models import Project
 
 
-class CopyIntakeServiceError(InventoryServiceError):
-    """Fachlicher Fehler des Copy-Intakes."""
+class RemuxIntakeServiceError(InventoryServiceError):
+    """Fachlicher Fehler des Remux-Intakes."""
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def can_start_copy_intake(
+def _remux_items(plan: IntakePlan) -> list[IntakePlanItem]:
+    return [
+        item
+        for item in plan.items
+        if item.planned_action == IntakeAction.REMUX
+        and item.status == IntakePlanItemStatus.PLANNED
+    ]
+
+
+def _item_passes_remux_gate(item: IntakePlanItem) -> tuple[bool, str | None]:
+    gate = evaluate_remux_gate(
+        planned_action=item.planned_action,
+        media_kind=item.media_kind,
+        video_codec=item.video_codec,
+        pixel_format=item.pixel_format,
+        bit_depth=item.bit_depth,
+        extension=item.extension,
+        container_format=item.container_format,
+        source_relative_path=item.source_relative_path,
+        validation_status="probe_succeeded",
+    )
+    if not gate.ok:
+        return False, gate.error_message
+    audio = (item.audio_codec or "").strip().lower()
+    if audio and audio not in {"aac", "mp3"}:
+        return (
+            False,
+            f"Audiocodec nicht für Remux-Stream-Copy freigegeben: {audio}",
+        )
+    return True, None
+
+
+def can_start_remux_intake(
     project: Project,
 ) -> tuple[bool, str | None, dict | None]:
     """Prüft Startvoraussetzungen im Application-Service."""
@@ -65,14 +99,14 @@ def can_start_copy_intake(
     except InventoryServiceError as exc:
         return False, str(exc), None
 
-    reconcile_orphaned_copy_intake_run(project)
+    reconcile_orphaned_remux_intake_run(project)
 
     plan_ok, plan_msg, plan_ctx = can_create_intake_plan(project)
     if not plan_ok or plan_ctx is None:
         return (
             False,
             plan_msg
-            or "Keine gültige Selection/Import/Validation-Basis für Copy-Intake.",
+            or "Keine gültige Selection/Import/Validation-Basis für Remux-Intake.",
             None,
         )
 
@@ -80,14 +114,15 @@ def can_start_copy_intake(
     if plan is None:
         return (
             False,
-            plan_warn or "Kein Media-Intake-Plan vorhanden. Bitte zuerst einen Plan erstellen.",
+            plan_warn
+            or "Kein Media-Intake-Plan vorhanden. Bitte zuerst einen Plan erstellen.",
             None,
         )
     if is_stale or plan.status == IntakePlanStatus.STALE:
         return (
             False,
-            "Der aktuelle Intake-Plan ist veraltet. "
-            "Bitte einen neuen Plan erstellen, bevor Copy-Intake startet.",
+            "Der aktuelle Intake-Plan ist veraltet (stale_plan). "
+            "Bitte einen neuen Plan erstellen, bevor Remux-Intake startet.",
             None,
         )
 
@@ -104,20 +139,28 @@ def can_start_copy_intake(
             None,
         )
 
-    copy_items = [
-        item
-        for item in plan.items
-        if item.planned_action == IntakeAction.COPY
-        and item.status == IntakePlanItemStatus.PLANNED
-    ]
-    if not copy_items:
+    remux_items = _remux_items(plan)
+    eligible = [i for i in remux_items if _item_passes_remux_gate(i)[0]]
+    if not remux_items:
         return (
             False,
-            "Der aktuelle Plan enthält keine geplanten Copy-Assets.",
+            "Der aktuelle Plan enthält keine geplanten Remux-Assets.",
             {
                 **plan_ctx,
                 "plan_id": plan.plan_id,
-                "copy_item_count": 0,
+                "remux_item_count": 0,
+                "eligible_remux_item_count": 0,
+            },
+        )
+    if not eligible:
+        return (
+            False,
+            "Keine Remux-Assets bestehen die Remux-Sicherheitsprüfung.",
+            {
+                **plan_ctx,
+                "plan_id": plan.plan_id,
+                "remux_item_count": len(remux_items),
+                "eligible_remux_item_count": 0,
             },
         )
 
@@ -131,11 +174,15 @@ def can_start_copy_intake(
         if active is not None:
             return (
                 False,
-                f"Es läuft bereits ein Copy-Intake ({active.status.value}).",
+                (
+                    f"Es läuft bereits ein Intake-/Transform-Run "
+                    f"({active.scope}/{active.status.value})."
+                ),
                 {
                     **plan_ctx,
                     "plan_id": plan.plan_id,
-                    "copy_item_count": len(copy_items),
+                    "remux_item_count": len(remux_items),
+                    "eligible_remux_item_count": len(eligible),
                     "active_run_id": active.run_id,
                 },
             )
@@ -148,49 +195,47 @@ def can_start_copy_intake(
         {
             **plan_ctx,
             "plan_id": plan.plan_id,
-            "copy_item_count": len(copy_items),
+            "remux_item_count": len(remux_items),
+            "eligible_remux_item_count": len(eligible),
         },
     )
 
 
-def start_copy_intake(
+def start_remux_intake(
     project: Project,
     *,
     sync: bool = False,
 ) -> IntakeRunStartResult:
-    """Legt einen Copy-Intake-Run an und startet den Worker."""
+    """Legt einen Remux-Intake-Run an und startet den Worker."""
     project = require_discovery_project(project)
-    reconcile_orphaned_copy_intake_run(project)
-    ok, message, ctx = can_start_copy_intake(project)
+    reconcile_orphaned_remux_intake_run(project)
+    ok, message, ctx = can_start_remux_intake(project)
     if not ok or ctx is None:
         return IntakeRunStartResult(
             started=False,
-            message=message or "Copy-Intake kann nicht gestartet werden.",
+            message=message or "Remux-Intake kann nicht gestartet werden.",
         )
 
     plan, is_stale, _ = get_current_intake_plan(project)
     if plan is None or is_stale:
         return IntakeRunStartResult(
             started=False,
-            message="Intake-Plan ist nicht mehr gültig.",
+            message="Intake-Plan ist nicht mehr gültig (stale_plan).",
         )
 
-    copy_items = [
-        item
-        for item in plan.items
-        if item.planned_action == IntakeAction.COPY
-        and item.status == IntakePlanItemStatus.PLANNED
+    remux_items = [
+        item for item in _remux_items(plan) if _item_passes_remux_gate(item)[0]
     ]
-    if not copy_items:
+    if not remux_items:
         return IntakeRunStartResult(
             started=False,
-            message="Keine Copy-Assets im Plan.",
+            message="Keine zulässigen Remux-Assets im Plan.",
         )
 
     try:
         conn = open_registry(project.project_root_path)
     except RegistryDatabaseError as exc:
-        raise CopyIntakeServiceError(str(exc)) from exc
+        raise RemuxIntakeServiceError(str(exc)) from exc
 
     try:
         active = find_active_intake_run(conn, project_id=project.id)
@@ -198,7 +243,8 @@ def start_copy_intake(
             return IntakeRunStartResult(
                 started=False,
                 message=(
-                    f"Es läuft bereits ein Copy-Intake ({active.status.value})."
+                    f"Es läuft bereits ein Intake-/Transform-Run "
+                    f"({active.scope}/{active.status.value})."
                 ),
                 run=active,
             )
@@ -213,12 +259,12 @@ def start_copy_intake(
             validation_run_id=plan.validation_run_id,
             status=IntakeRunStatus.QUEUED,
             created_at=_now(),
-            total_assets=len(copy_items),
-            worker_version=COPY_INTAKE_WORKER_VERSION,
-            scope=INTAKE_RUN_SCOPE_COPY_ONLY,
+            total_assets=len(remux_items),
+            worker_version=REMUX_INTAKE_WORKER_VERSION,
+            scope=INTAKE_RUN_SCOPE_REMUX_ONLY,
         )
         insert_intake_run(conn, run)
-        for item in copy_items:
+        for item in remux_items:
             insert_intake_run_asset(
                 conn,
                 IntakeRunAssetRecord(
@@ -229,7 +275,7 @@ def start_copy_intake(
                     source_relative_path=item.source_relative_path,
                     source_group=item.source_group,
                     media_kind=item.media_kind,
-                    planned_action=IntakeAction.COPY,
+                    planned_action=IntakeAction.REMUX,
                     status=IntakeRunAssetStatus.PENDING,
                     source_sha256=item.source_sha256,
                 ),
@@ -238,7 +284,7 @@ def start_copy_intake(
     except Exception as exc:  # noqa: BLE001
         conn.rollback()
         conn.close()
-        raise CopyIntakeServiceError(str(exc)) from exc
+        raise RemuxIntakeServiceError(str(exc)) from exc
     else:
         conn.close()
 
@@ -247,13 +293,13 @@ def start_copy_intake(
         project_id=project.id,
         project_root=project.project_root_path,
         run_id=run.run_id,
-        worker="copy",
+        worker="remux",
         sync=sync,
     )
     if not launched and not sync:
         return IntakeRunStartResult(
             started=False,
-            message="Copy-Intake-Worker konnte nicht gestartet werden (bereits aktiv).",
+            message="Remux-Intake-Worker konnte nicht gestartet werden (bereits aktiv).",
             run=run,
         )
 
@@ -266,18 +312,18 @@ def start_copy_intake(
             final = run
         return IntakeRunStartResult(
             started=True,
-            message="Copy-Intake abgeschlossen.",
+            message="Remux-Intake abgeschlossen.",
             run=final,
         )
 
     return IntakeRunStartResult(
         started=True,
-        message="Copy-Intake gestartet.",
+        message="Remux-Intake gestartet.",
         run=run,
     )
 
 
-def get_copy_intake_status(
+def get_remux_intake_status(
     project: Project,
 ) -> tuple[
     IntakeRunRecord | None,
@@ -285,13 +331,13 @@ def get_copy_intake_status(
     list[WorkingMediaRecord],
     str | None,
 ]:
-    """Liest letzten/aktiven Copy-Run inkl. Assets und Working Media."""
+    """Liest letzten Remux-Run inkl. Assets und Working Media."""
     try:
         project = require_discovery_project(project)
     except InventoryServiceError as exc:
         return None, [], [], str(exc)
 
-    reconcile_orphaned_copy_intake_run(project)
+    reconcile_orphaned_remux_intake_run(project)
 
     try:
         conn = open_registry(project.project_root_path)
@@ -302,21 +348,21 @@ def get_copy_intake_status(
         run = get_latest_intake_run(
             conn,
             project_id=project.id,
-            scope=INTAKE_RUN_SCOPE_COPY_ONLY,
+            scope=INTAKE_RUN_SCOPE_REMUX_ONLY,
         )
         assets = list_intake_run_assets(conn, run_id=run.run_id) if run else []
         working = [
             wm
             for wm in list_working_media(conn, project_id=project.id)
-            if wm.action == "copy"
+            if wm.action == "remux"
         ]
         return run, assets, working, None
     finally:
         conn.close()
 
 
-def current_plan_for_copy(project: Project) -> IntakePlan | None:
+def list_open_remux_plan_items(project: Project) -> list[IntakePlanItem]:
     plan, stale, _ = get_current_intake_plan(project)
     if plan is None or stale:
-        return None
-    return plan
+        return []
+    return _remux_items(plan)

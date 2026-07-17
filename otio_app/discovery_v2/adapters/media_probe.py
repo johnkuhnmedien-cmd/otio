@@ -148,25 +148,35 @@ def _run_ffprobe_json(path: Path, *, timeout_sec: int = 120) -> dict:
     return payload
 
 
+def _tag_timecode(tags: dict | None) -> str | None:
+    if not tags:
+        return None
+    for key, value in tags.items():
+        if str(key).strip().lower() == "timecode" and value not in (None, ""):
+            return str(value)
+    return None
+
+
 def _extract_embedded_timecode(payload: dict) -> str | None:
     format_tags = (payload.get("format") or {}).get("tags") or {}
-    if format_tags.get("timecode"):
-        return str(format_tags["timecode"])
+    format_tc = _tag_timecode(format_tags)
+    if format_tc:
+        return format_tc
 
     tmcd_tc: str | None = None
     other_tc: str | None = None
     for stream in payload.get("streams") or []:
         tags = stream.get("tags") or {}
-        tag_value = tags.get("timecode")
+        tag_value = _tag_timecode(tags)
         if not tag_value:
             continue
         is_tmcd = (stream.get("codec_type") or "").lower() == "data" or (
             stream.get("codec_tag_string") or ""
         ).lower() == "tmcd"
         if is_tmcd and tmcd_tc is None:
-            tmcd_tc = str(tag_value)
+            tmcd_tc = tag_value
         elif other_tc is None:
-            other_tc = str(tag_value)
+            other_tc = tag_value
     return tmcd_tc or other_tc
 
 

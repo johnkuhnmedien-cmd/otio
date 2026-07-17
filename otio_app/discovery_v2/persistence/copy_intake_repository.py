@@ -10,14 +10,17 @@ from uuid import uuid4
 
 from otio_app.discovery_v2.domain.media_intake import (
     ACTIVE_INTAKE_RUN_STATUSES,
+    ALLOWED_WORKING_PROFILE_VERSIONS,
     COPY_WORKING_ACTION,
     COPY_WORKING_PROFILE_VERSION,
+    INTAKE_RUN_SCOPE_COPY_ONLY,
     IntakeAction,
     IntakeRunAssetRecord,
     IntakeRunAssetStatus,
     IntakeRunLatestPointer,
     IntakeRunRecord,
     IntakeRunReport,
+    IntakeRunReportAsset,
     IntakeRunStatus,
     WorkingMediaRecord,
     WorkingMediaStatus,
@@ -104,14 +107,14 @@ def build_working_relative_path(
 ) -> str:
     """Kanonischer relativer Pfad unter ``_otio_v2``:
 
-    ``media/working/<asset_id>/<source_sha256>/copy-v1/<asset_id>.<ext>``
+    ``media/working/<asset_id>/<source_sha256>/<profile>/<asset_id>.<ext>``
     """
     asset = _assert_safe_token(asset_id, label="asset_id")
     digest = (source_sha256 or "").strip().lower()
     if not _SHA256_RE.match(digest):
         raise ValueError(f"Ungültiger source_sha256: {source_sha256!r}")
     profile = _assert_safe_token(profile_version, label="processing_profile_version")
-    if profile != COPY_WORKING_PROFILE_VERSION:
+    if profile not in ALLOWED_WORKING_PROFILE_VERSIONS:
         raise ValueError(f"Unsupported Working-Media-Profil: {profile}")
     ext = normalize_extension(extension)
     filename = f"{asset}{ext}"
@@ -134,7 +137,7 @@ def is_canonical_working_relative_path(relative_path: str) -> bool:
         len(parts) == 5
         and parts[0] == "media"
         and parts[1] == "working"
-        and parts[3] == COPY_WORKING_PROFILE_VERSION
+        and parts[3] in ALLOWED_WORKING_PROFILE_VERSIONS
     )
 
 
@@ -163,8 +166,8 @@ def insert_intake_run(conn: sqlite3.Connection, run: IntakeRunRecord) -> None:
             run_id, project_id, plan_id, import_id, selection_id, scan_id,
             validation_run_id, status, created_at, started_at, completed_at,
             total_assets, processed_assets, succeeded_assets, failed_assets,
-            skipped_assets, error_summary, worker_version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            skipped_assets, error_summary, worker_version, scope
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run.run_id,
@@ -185,6 +188,7 @@ def insert_intake_run(conn: sqlite3.Connection, run: IntakeRunRecord) -> None:
             run.skipped_assets,
             run.error_summary,
             run.worker_version,
+            run.scope or INTAKE_RUN_SCOPE_COPY_ONLY,
         ),
     )
 
@@ -234,7 +238,8 @@ def update_intake_run(conn: sqlite3.Connection, run: IntakeRunRecord) -> None:
             failed_assets = ?,
             skipped_assets = ?,
             error_summary = ?,
-            worker_version = ?
+            worker_version = ?,
+            scope = ?
         WHERE run_id = ?
         """,
         (
@@ -248,6 +253,7 @@ def update_intake_run(conn: sqlite3.Connection, run: IntakeRunRecord) -> None:
             run.skipped_assets,
             run.error_summary,
             run.worker_version,
+            run.scope or INTAKE_RUN_SCOPE_COPY_ONLY,
             run.run_id,
         ),
     )
@@ -372,17 +378,32 @@ def get_intake_run(
 
 
 def get_latest_intake_run(
-    conn: sqlite3.Connection, *, project_id: str
+    conn: sqlite3.Connection,
+    *,
+    project_id: str,
+    scope: str | None = None,
 ) -> IntakeRunRecord | None:
-    row = conn.execute(
-        """
-        SELECT * FROM intake_runs
-        WHERE project_id = ?
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        (project_id,),
-    ).fetchone()
+    if scope is None:
+        row = conn.execute(
+            """
+            SELECT * FROM intake_runs
+            WHERE project_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (project_id,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT * FROM intake_runs
+            WHERE project_id = ?
+              AND scope = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (project_id, scope),
+        ).fetchone()
     return None if row is None else _row_to_run(row)
 
 
@@ -474,7 +495,36 @@ def list_working_media_for_asset(
     return [_row_to_working(row) for row in rows]
 
 
-def build_report_from_intake_run(run: IntakeRunRecord) -> IntakeRunReport:
+def build_report_from_intake_run(
+    run: IntakeRunRecord,
+    *,
+    assets: list[IntakeRunAssetRecord] | None = None,
+    asset_extras: dict[str, dict[str, str | None]] | None = None,
+) -> IntakeRunReport:
+    extras = asset_extras or {}
+    report_assets: list[IntakeRunReportAsset] = []
+    remuxed = 0
+    reused = 0
+    if assets:
+        for asset in assets:
+            if asset.status == IntakeRunAssetStatus.SUCCEEDED:
+                remuxed += 1
+            elif asset.status == IntakeRunAssetStatus.REUSED:
+                reused += 1
+            detail = extras.get(asset.asset_id, {})
+            report_assets.append(
+                IntakeRunReportAsset(
+                    asset_id=asset.asset_id,
+                    source_relative_path=asset.source_relative_path,
+                    status=asset.status.value,
+                    working_relative_path=asset.working_relative_path,
+                    error_code=asset.error_code,
+                    error_message=asset.error_message,
+                    audio_policy=detail.get("audio_policy"),
+                    timecode_policy=detail.get("timecode_policy"),
+                    output_sha256=asset.output_sha256,
+                )
+            )
     return IntakeRunReport(
         run_id=run.run_id,
         project_id=run.project_id,
@@ -492,9 +542,14 @@ def build_report_from_intake_run(run: IntakeRunRecord) -> IntakeRunReport:
         succeeded_assets=run.succeeded_assets,
         failed_assets=run.failed_assets,
         skipped_assets=run.skipped_assets,
+        remuxed_assets=remuxed,
+        reused_assets=reused,
         error_summary=run.error_summary,
         worker_version=run.worker_version,
+        scope=run.scope or INTAKE_RUN_SCOPE_COPY_ONLY,
         report_relative_path=f"intake/runs/{run.run_id}.json",
+        registry_sqlite_relative_path="registry/assets.sqlite3",
+        assets=report_assets,
     )
 
 
@@ -526,6 +581,7 @@ def save_intake_run_report(project_root: Path, report: IntakeRunReport) -> Path:
             completed_at=report.completed_at,
             report_relative_path=report.report_relative_path
             or f"intake/runs/{report.run_id}.json",
+            scope=report.scope or INTAKE_RUN_SCOPE_COPY_ONLY,
         )
         latest = latest_intake_run_pointer_path(project_root)
         assert_path_is_under_discovery_v2(latest, project_root)
@@ -545,6 +601,12 @@ def _parse_optional_dt(value: object) -> datetime | None:
 
 
 def _row_to_run(row: sqlite3.Row) -> IntakeRunRecord:
+    keys = set(row.keys())
+    scope = (
+        str(row["scope"])
+        if "scope" in keys and row["scope"]
+        else INTAKE_RUN_SCOPE_COPY_ONLY
+    )
     return IntakeRunRecord(
         run_id=str(row["run_id"]),
         project_id=str(row["project_id"]),
@@ -564,6 +626,7 @@ def _row_to_run(row: sqlite3.Row) -> IntakeRunRecord:
         skipped_assets=int(row["skipped_assets"]),
         error_summary=row["error_summary"],
         worker_version=str(row["worker_version"]),
+        scope=scope,
     )
 
 

@@ -13,7 +13,7 @@ from otio_app.discovery_v2.paths import (
 )
 
 # Lesbare Schema-Versionen, die idempotent auf CURRENT migriert werden.
-_LEGACY_SCHEMA_VERSIONS = frozenset({"1", "2", "3", "4", "5"})
+_LEGACY_SCHEMA_VERSIONS = frozenset({"1", "2", "3", "4", "5", "6"})
 
 
 class RegistryDatabaseError(ValueError):
@@ -277,6 +277,7 @@ def _ensure_copy_intake_tables(conn: sqlite3.Connection) -> None:
             skipped_assets INTEGER NOT NULL DEFAULT 0,
             error_summary TEXT,
             worker_version TEXT NOT NULL,
+            scope TEXT NOT NULL DEFAULT 'copy_only',
             FOREIGN KEY (plan_id) REFERENCES intake_plans(plan_id),
             FOREIGN KEY (import_id) REFERENCES selection_imports(import_id),
             FOREIGN KEY (validation_run_id) REFERENCES validation_runs(run_id)
@@ -344,6 +345,26 @@ def _ensure_copy_intake_tables(conn: sqlite3.Connection) -> None:
         """
     )
     _migrate_working_media_schema(conn)
+    _migrate_intake_runs_scope(conn)
+
+
+def _migrate_intake_runs_scope(conn: sqlite3.Connection) -> None:
+    """Idempotent: scope-Spalte für Copy-/Remux-Trennung."""
+    row = conn.execute(
+        """
+        SELECT name FROM sqlite_master
+        WHERE type='table' AND name='intake_runs'
+        """
+    ).fetchone()
+    if row is None:
+        return
+    cols = {
+        str(r[1]) for r in conn.execute("PRAGMA table_info(intake_runs)").fetchall()
+    }
+    if "scope" not in cols:
+        conn.execute(
+            "ALTER TABLE intake_runs ADD COLUMN scope TEXT NOT NULL DEFAULT 'copy_only'"
+        )
 
 
 def _migrate_working_media_schema(conn: sqlite3.Connection) -> None:
