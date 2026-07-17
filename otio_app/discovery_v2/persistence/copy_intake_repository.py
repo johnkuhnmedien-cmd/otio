@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
 from otio_app.discovery_v2.domain.media_intake import (
     ACTIVE_INTAKE_RUN_STATUSES,
+    COPY_WORKING_ACTION,
+    COPY_WORKING_PROFILE_VERSION,
     IntakeAction,
     IntakeRunAssetRecord,
     IntakeRunAssetStatus,
@@ -60,6 +63,10 @@ def latest_intake_run_pointer_path(project_root: Path) -> Path:
     return get_discovery_v2_root(project_root) / "intake" / "latest_run.json"
 
 
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
 def media_working_dir(project_root: Path) -> Path:
     return get_discovery_v2_root(project_root) / "media" / "working"
 
@@ -68,10 +75,75 @@ def media_temp_dir(project_root: Path, run_id: str) -> Path:
     return get_discovery_v2_root(project_root) / "media" / "temp" / run_id
 
 
-def working_relative_path_for(source_relative_path: str) -> str:
-    """Relative Posix-Pfad unter ``media/working/``."""
-    rel = source_relative_path.replace("\\", "/").lstrip("/")
-    return f"media/working/{rel}"
+def normalize_extension(extension: str | None, *, source_relative_path: str = "") -> str:
+    raw = (extension or "").strip().lower()
+    if not raw:
+        raw = PurePosixPath(source_relative_path.replace("\\", "/")).suffix.lower()
+    if raw and not raw.startswith("."):
+        raw = f".{raw}"
+    if not raw or "/" in raw or ".." in raw:
+        raise ValueError(f"Ungültige Dateiendung: {extension!r}")
+    return raw
+
+
+def _assert_safe_token(value: str, *, label: str) -> str:
+    text = (value or "").strip()
+    if not text or ".." in text or "/" in text or "\\" in text:
+        raise ValueError(f"Ungültiges {label}: {value!r}")
+    if not _SAFE_TOKEN_RE.match(text):
+        raise ValueError(f"Ungültiges {label}: {value!r}")
+    return text
+
+
+def build_working_relative_path(
+    *,
+    asset_id: str,
+    source_sha256: str,
+    extension: str,
+    profile_version: str = COPY_WORKING_PROFILE_VERSION,
+) -> str:
+    """Kanonischer relativer Pfad unter ``_otio_v2``:
+
+    ``media/working/<asset_id>/<source_sha256>/copy-v1/<asset_id>.<ext>``
+    """
+    asset = _assert_safe_token(asset_id, label="asset_id")
+    digest = (source_sha256 or "").strip().lower()
+    if not _SHA256_RE.match(digest):
+        raise ValueError(f"Ungültiger source_sha256: {source_sha256!r}")
+    profile = _assert_safe_token(profile_version, label="processing_profile_version")
+    if profile != COPY_WORKING_PROFILE_VERSION:
+        raise ValueError(f"Unsupported Working-Media-Profil: {profile}")
+    ext = normalize_extension(extension)
+    filename = f"{asset}{ext}"
+    return f"media/working/{asset}/{digest}/{profile}/{filename}"
+
+
+def build_temp_relative_path(
+    *, run_id: str, asset_id: str, extension: str
+) -> str:
+    run = _assert_safe_token(run_id, label="run_id")
+    asset = _assert_safe_token(asset_id, label="asset_id")
+    ext = normalize_extension(extension)
+    # z. B. media/temp/<run_id>/<asset_id>.tmp.mp4
+    return f"media/temp/{run}/{asset}.tmp{ext}"
+
+
+def is_canonical_working_relative_path(relative_path: str) -> bool:
+    parts = PurePosixPath(relative_path.replace("\\", "/")).parts
+    return (
+        len(parts) == 5
+        and parts[0] == "media"
+        and parts[1] == "working"
+        and parts[3] == COPY_WORKING_PROFILE_VERSION
+    )
+
+
+def is_legacy_working_relative_path(relative_path: str) -> bool:
+    """Altes Muster ``media/working/<source_relative_path>`` ohne copy-v1."""
+    text = relative_path.replace("\\", "/").lstrip("/")
+    if not text.startswith("media/working/"):
+        return False
+    return not is_canonical_working_relative_path(text)
 
 
 def ensure_intake_run_dirs(project_root: Path) -> None:
@@ -209,23 +281,59 @@ def update_intake_run_asset(
     )
 
 
-def upsert_working_media(
+def insert_working_media(
     conn: sqlite3.Connection, record: WorkingMediaRecord
 ) -> None:
+    """Fügt eine Working-Media-Version ein (kein Überschreiben anderer Hashes)."""
     conn.execute(
         """
         INSERT INTO working_media (
             working_media_id, project_id, asset_id, plan_id, intake_run_id,
             source_relative_path, working_relative_path, source_sha256,
-            output_sha256, media_kind, extension, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(project_id, asset_id) DO UPDATE SET
-            working_media_id = excluded.working_media_id,
+            output_sha256, media_kind, extension, action,
+            processing_profile_version, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            record.working_media_id,
+            record.project_id,
+            record.asset_id,
+            record.plan_id,
+            record.intake_run_id,
+            record.source_relative_path,
+            record.working_relative_path,
+            record.source_sha256,
+            record.output_sha256,
+            record.media_kind,
+            record.extension,
+            record.action,
+            record.processing_profile_version,
+            record.status.value,
+            record.created_at.isoformat(),
+            record.updated_at.isoformat(),
+        ),
+    )
+
+
+def upsert_working_media(
+    conn: sqlite3.Connection, record: WorkingMediaRecord
+) -> None:
+    """Idempotent für dieselbe Hash/Action/Profil-Version."""
+    conn.execute(
+        """
+        INSERT INTO working_media (
+            working_media_id, project_id, asset_id, plan_id, intake_run_id,
+            source_relative_path, working_relative_path, source_sha256,
+            output_sha256, media_kind, extension, action,
+            processing_profile_version, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(
+            project_id, asset_id, source_sha256, action, processing_profile_version
+        ) DO UPDATE SET
             plan_id = excluded.plan_id,
             intake_run_id = excluded.intake_run_id,
             source_relative_path = excluded.source_relative_path,
             working_relative_path = excluded.working_relative_path,
-            source_sha256 = excluded.source_sha256,
             output_sha256 = excluded.output_sha256,
             media_kind = excluded.media_kind,
             extension = excluded.extension,
@@ -244,6 +352,8 @@ def upsert_working_media(
             record.output_sha256,
             record.media_kind,
             record.extension,
+            record.action,
+            record.processing_profile_version,
             record.status.value,
             record.created_at.isoformat(),
             record.updated_at.isoformat(),
@@ -308,14 +418,30 @@ def list_intake_run_assets(
 
 
 def get_working_media(
-    conn: sqlite3.Connection, *, project_id: str, asset_id: str
+    conn: sqlite3.Connection,
+    *,
+    project_id: str,
+    asset_id: str,
+    source_sha256: str,
+    action: str = COPY_WORKING_ACTION,
+    processing_profile_version: str = COPY_WORKING_PROFILE_VERSION,
 ) -> WorkingMediaRecord | None:
     row = conn.execute(
         """
         SELECT * FROM working_media
-        WHERE project_id = ? AND asset_id = ?
+        WHERE project_id = ?
+          AND asset_id = ?
+          AND source_sha256 = ?
+          AND action = ?
+          AND processing_profile_version = ?
         """,
-        (project_id, asset_id),
+        (
+            project_id,
+            asset_id,
+            source_sha256.lower(),
+            action,
+            processing_profile_version,
+        ),
     ).fetchone()
     return None if row is None else _row_to_working(row)
 
@@ -327,9 +453,23 @@ def list_working_media(
         """
         SELECT * FROM working_media
         WHERE project_id = ?
-        ORDER BY source_relative_path
+        ORDER BY asset_id, source_sha256, created_at
         """,
         (project_id,),
+    ).fetchall()
+    return [_row_to_working(row) for row in rows]
+
+
+def list_working_media_for_asset(
+    conn: sqlite3.Connection, *, project_id: str, asset_id: str
+) -> list[WorkingMediaRecord]:
+    rows = conn.execute(
+        """
+        SELECT * FROM working_media
+        WHERE project_id = ? AND asset_id = ?
+        ORDER BY created_at
+        """,
+        (project_id, asset_id),
     ).fetchall()
     return [_row_to_working(row) for row in rows]
 
@@ -448,6 +588,10 @@ def _row_to_run_asset(row: sqlite3.Row) -> IntakeRunAssetRecord:
 
 
 def _row_to_working(row: sqlite3.Row) -> WorkingMediaRecord:
+    keys = set(row.keys())
+    status_raw = str(row["status"])
+    if status_raw == WorkingMediaStatus.READY.value:
+        status_raw = WorkingMediaStatus.COMPLETED.value
     return WorkingMediaRecord(
         working_media_id=str(row["working_media_id"]),
         project_id=str(row["project_id"]),
@@ -460,7 +604,13 @@ def _row_to_working(row: sqlite3.Row) -> WorkingMediaRecord:
         output_sha256=str(row["output_sha256"]),
         media_kind=str(row["media_kind"]),
         extension=str(row["extension"]),
-        status=WorkingMediaStatus(str(row["status"])),
+        action=str(row["action"]) if "action" in keys and row["action"] else COPY_WORKING_ACTION,
+        processing_profile_version=(
+            str(row["processing_profile_version"])
+            if "processing_profile_version" in keys and row["processing_profile_version"]
+            else COPY_WORKING_PROFILE_VERSION
+        ),
+        status=WorkingMediaStatus(status_raw),
         created_at=datetime.fromisoformat(str(row["created_at"])),
         updated_at=datetime.fromisoformat(str(row["updated_at"])),
     )

@@ -104,6 +104,9 @@ class IntakePlanCreateResult(BaseModel):
 INTAKE_RUN_SCHEMA_VERSION = "1"
 COPY_INTAKE_WORKER_VERSION = "1"
 WORKER_INTERRUPTED_INTAKE_ERROR_CODE = "worker_interrupted"
+# Kanonisches Working-Media-Profil für Phase-7B-Copy.
+COPY_WORKING_PROFILE_VERSION = "copy-v1"
+COPY_WORKING_ACTION = "copy"
 
 
 class IntakeRunStatus(str, Enum):
@@ -121,11 +124,14 @@ class IntakeRunAssetStatus(str, Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     SKIPPED = "skipped"
+    REUSED = "reused"
 
 
 class WorkingMediaStatus(str, Enum):
-    READY = "ready"
+    COMPLETED = "completed"
     FAILED = "failed"
+    # Legacy-Alias aus früherem 7B-Stand.
+    READY = "ready"
 
 
 ACTIVE_INTAKE_RUN_STATUSES = frozenset(
@@ -196,7 +202,9 @@ class WorkingMediaRecord(BaseModel):
     output_sha256: str
     media_kind: str
     extension: str
-    status: WorkingMediaStatus = WorkingMediaStatus.READY
+    action: str = COPY_WORKING_ACTION
+    processing_profile_version: str = COPY_WORKING_PROFILE_VERSION
+    status: WorkingMediaStatus = WorkingMediaStatus.COMPLETED
     created_at: datetime
     updated_at: datetime
 

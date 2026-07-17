@@ -2,6 +2,7 @@
 
 Ablauf: Temp-Datei → Source-/Output-Hash → Re-Probe → atomare Veröffentlichung.
 Keine Remux-/Transcode-/Encode-Pfade. Originalquellen werden nicht verändert.
+Bestehende Final-Dateien werden niemals mit ``os.replace`` überschrieben.
 """
 
 from __future__ import annotations
@@ -48,10 +49,17 @@ def publish_byte_exact_copy(
     """Kopiert bytegenau über Temp, prüft Hash + Probe, veröffentlicht atomar.
 
     ``source_path`` wird nur gelesen. ``temp_path`` und ``working_path`` müssen
-    unter ``_otio_v2`` liegen.
+    unter ``_otio_v2`` liegen. Existiert ``working_path`` bereits, wird mit
+    ``working_media_conflict`` abgebrochen — kein Replace.
     """
     assert_path_is_under_discovery_v2(temp_path, project_root)
     assert_path_is_under_discovery_v2(working_path, project_root)
+
+    if working_path.exists():
+        raise ByteCopyError(
+            "working_media_conflict",
+            f"Finale Working-Media-Datei existiert bereits: {working_path.name}",
+        )
 
     if not source_path.is_file() or source_path.is_symlink():
         raise ByteCopyError(
@@ -73,7 +81,6 @@ def publish_byte_exact_copy(
     temp_path.parent.mkdir(parents=True, exist_ok=True)
     working_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Vorherige Temp-Reste entfernen.
     try:
         if temp_path.exists():
             temp_path.unlink()
@@ -81,7 +88,6 @@ def publish_byte_exact_copy(
         pass
 
     try:
-        # Inhaltliche Kopie — Original bleibt unverändert.
         shutil.copyfile(source_path, temp_path)
     except OSError as exc:
         raise ByteCopyError("copy_failed", f"Temp-Kopie fehlgeschlagen: {exc}") from exc
@@ -107,6 +113,14 @@ def publish_byte_exact_copy(
     except Exception as exc:  # noqa: BLE001
         _cleanup(temp_path)
         raise ByteCopyError("output_probe_failed", str(exc)) from exc
+
+    # Erneute Existenzprüfung unmittelbar vor Replace (Race/Crash-Fenster).
+    if working_path.exists():
+        _cleanup(temp_path)
+        raise ByteCopyError(
+            "working_media_conflict",
+            f"Finale Working-Media-Datei existiert bereits: {working_path.name}",
+        )
 
     try:
         os.replace(str(temp_path), str(working_path))

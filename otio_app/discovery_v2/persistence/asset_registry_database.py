@@ -13,7 +13,7 @@ from otio_app.discovery_v2.paths import (
 )
 
 # Lesbare Schema-Versionen, die idempotent auf CURRENT migriert werden.
-_LEGACY_SCHEMA_VERSIONS = frozenset({"1", "2", "3", "4"})
+_LEGACY_SCHEMA_VERSIONS = frozenset({"1", "2", "3", "4", "5"})
 
 
 class RegistryDatabaseError(ValueError):
@@ -316,10 +316,18 @@ def _ensure_copy_intake_tables(conn: sqlite3.Connection) -> None:
             output_sha256 TEXT NOT NULL,
             media_kind TEXT NOT NULL,
             extension TEXT NOT NULL,
+            action TEXT NOT NULL DEFAULT 'copy',
+            processing_profile_version TEXT NOT NULL DEFAULT 'copy-v1',
             status TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            UNIQUE (project_id, asset_id),
+            UNIQUE (
+                project_id,
+                asset_id,
+                source_sha256,
+                action,
+                processing_profile_version
+            ),
             FOREIGN KEY (asset_id) REFERENCES assets(asset_id),
             FOREIGN KEY (plan_id) REFERENCES intake_plans(plan_id),
             FOREIGN KEY (intake_run_id) REFERENCES intake_runs(run_id)
@@ -333,6 +341,120 @@ def _ensure_copy_intake_tables(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_working_media_project
             ON working_media (project_id);
+        """
+    )
+    _migrate_working_media_schema(conn)
+
+
+def _migrate_working_media_schema(conn: sqlite3.Connection) -> None:
+    """Idempotent: Unique-Key und Profilspalten für historische Hash-Versionen."""
+    row = conn.execute(
+        """
+        SELECT name FROM sqlite_master
+        WHERE type='table' AND name='working_media'
+        """
+    ).fetchone()
+    if row is None:
+        return
+
+    cols = {
+        str(r[1])
+        for r in conn.execute("PRAGMA table_info(working_media)").fetchall()
+    }
+    indexes = {
+        str(r[1])
+        for r in conn.execute("PRAGMA index_list(working_media)").fetchall()
+    }
+    # sqlite autoindex names vary; prüfe Unique-Index-Spalten.
+    has_versioned_unique = False
+    for idx_name in indexes:
+        idx_cols = [
+            str(r[2])
+            for r in conn.execute(f"PRAGMA index_info('{idx_name}')").fetchall()
+        ]
+        if idx_cols == [
+            "project_id",
+            "asset_id",
+            "source_sha256",
+            "action",
+            "processing_profile_version",
+        ]:
+            has_versioned_unique = True
+            break
+
+    needs_rebuild = (
+        "action" not in cols
+        or "processing_profile_version" not in cols
+        or not has_versioned_unique
+    )
+    if not needs_rebuild:
+        return
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS working_media__v6 (
+            working_media_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            plan_id TEXT NOT NULL,
+            intake_run_id TEXT NOT NULL,
+            source_relative_path TEXT NOT NULL,
+            working_relative_path TEXT NOT NULL,
+            source_sha256 TEXT NOT NULL,
+            output_sha256 TEXT NOT NULL,
+            media_kind TEXT NOT NULL,
+            extension TEXT NOT NULL,
+            action TEXT NOT NULL DEFAULT 'copy',
+            processing_profile_version TEXT NOT NULL DEFAULT 'copy-v1',
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (
+                project_id,
+                asset_id,
+                source_sha256,
+                action,
+                processing_profile_version
+            ),
+            FOREIGN KEY (asset_id) REFERENCES assets(asset_id),
+            FOREIGN KEY (plan_id) REFERENCES intake_plans(plan_id),
+            FOREIGN KEY (intake_run_id) REFERENCES intake_runs(run_id)
+        );
+        """
+    )
+    # Spalten robust lesen — fehlende Profilfelder mit Defaults füllen.
+    select_action = "action" if "action" in cols else "'copy'"
+    select_profile = (
+        "processing_profile_version"
+        if "processing_profile_version" in cols
+        else "'copy-v1'"
+    )
+    # Legacy status ready → completed
+    conn.execute(
+        f"""
+        INSERT OR IGNORE INTO working_media__v6 (
+            working_media_id, project_id, asset_id, plan_id, intake_run_id,
+            source_relative_path, working_relative_path, source_sha256,
+            output_sha256, media_kind, extension, action,
+            processing_profile_version, status, created_at, updated_at
+        )
+        SELECT
+            working_media_id, project_id, asset_id, plan_id, intake_run_id,
+            source_relative_path, working_relative_path, source_sha256,
+            output_sha256, media_kind, extension,
+            {select_action},
+            {select_profile},
+            CASE WHEN status = 'ready' THEN 'completed' ELSE status END,
+            created_at, updated_at
+        FROM working_media
+        """
+    )
+    conn.execute("DROP TABLE working_media")
+    conn.execute("ALTER TABLE working_media__v6 RENAME TO working_media")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_working_media_project
+            ON working_media (project_id)
         """
     )
 
