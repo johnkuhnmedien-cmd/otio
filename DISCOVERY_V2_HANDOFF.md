@@ -5,9 +5,10 @@
 - Branch: `cursor/discovery-v2-integration`
 - PR: `#69`
 - Ursprüngliche Basis: `7187d163a5959351a1ee79f5c931b0d651e21d49`
-- Letzter technisch freigegebener Commit: `3ba0716a6d2cc12a4e0fdf9f61b5c2dcdead5016`
+- Letzter technisch freigegebener Commit: `11e5cf8ae96e38cd9686cd7d915ad85b66be98e9`
 - Phase 7: `APPROVED`
-- Aktiver Produktauftrag: keiner (Media-Intake abgeschlossen)
+- Phase 8A: `APPROVED`
+- Aktiver Produktauftrag: keiner (Analysis-Contracts abgeschlossen)
 
 ## Projektmodi
 
@@ -102,6 +103,18 @@ Der gespeicherte Classic-`work_dir` darf bei Discovery nicht als Schreibziel ver
 17. Phase-7-Abschlusshärtung
     `3ba0716a6d2cc12a4e0fdf9f61b5c2dcdead5016`
 
+18. Phase-7-Handoff-Abschluss
+    `26030b024d959f77c7eead850053e5b16afade4b`
+
+19. Analysis-Contracts (Phase 8A)
+    `8168c8b84d693c5b29556759a755d2ded78677d7`
+
+20. Assetanalyse-Navigationstest
+    `39d42f81392bf9ec06a5aa87f9a15ac230480684`
+
+21. Phase-8A-Härtung (Rohstatus-Eligibility)
+    `11e5cf8ae96e38cd9686cd7d915ad85b66be98e9`
+
 ## Phase 7 – Media Intake (APPROVED)
 
 Phase 7 ist abgeschlossen und freigegeben.
@@ -131,6 +144,87 @@ Phase 7 ist abgeschlossen und freigegeben.
 - Ausgaben bleiben historisch unter den jeweiligen Profilpfaden getrennt
 - Discovery schreibt nur unter `_otio_v2`
 
+## Phase 8A – Analysis Contracts (APPROVED)
+
+Phase 8A ist abgeschlossen und freigegeben.
+
+### Freigegebene Commits
+
+- `8168c8b84d693c5b29556759a755d2ded78677d7` — `feat: add Discovery V2 analysis contracts`
+- `39d42f81392bf9ec06a5aa87f9a15ac230480684` — `test: allow Assetanalyse in Discovery navigation`
+- `11e5cf8ae96e38cd9686cd7d915ad85b66be98e9` — `fix: harden Discovery V2 analysis contracts`
+
+### Implementierter Umfang
+
+- Analysis-Domainverträge (`AnalysisInputIdentity`, Eligibility, Run/RunAsset, Shot-/Frame-Vertragsformen ohne Produktinstanzen)
+- Analysis-Identity-Profil: `analysis-contract-v1`
+- Registry-Schema **11**
+- Tabellen:
+  - `analysis_runs`
+  - `analysis_run_assets`
+  - `analysis_identities`
+- exakte aktuelle Plan-zu-Working-Media-Bindung (keine Profilpriorität, kein `created_at`, kein Pfad)
+- Eligibility nur bei Working-Media-Rohstatus `completed`
+- read-only Discovery-Seite **Assetanalyse**
+- Analysis-Pfadvertrag unter `_otio_v2/analysis/`
+- versionierte Analysis-Run-JSON-Verträge (noch ohne produktive Run-Erzeugung aus der UI)
+
+### Verbindliche Eligibility-Regel
+
+Nur zulässig:
+
+`working_media` Rohstatus = `completed`
+
+und exakte Übereinstimmung mit dem aktuellen Intake-Plan-Item:
+
+- `project_id`
+- `asset_id`
+- `validation_id` / Source-SHA der aktuellen Validation
+- erwartete `action`
+- erwartete `processing_profile_version`
+
+Nicht zulässig:
+
+- Rohstatus `ready`
+- `pending`
+- `failed`
+- unbekannter Status
+- historische Ersatzprofile
+- Auswahl nach `created_at`
+- Auswahl nach Pfad oder Dateiname
+
+Audio-only: `not_applicable` für visuelle Analyse (kein Dummyframe, kein Analysis-Run aus der UI).
+
+### Noch nicht implementiert (Phase 8A)
+
+- keine Shot-Erkennung
+- keine Frame-Extraktion
+- keine Analyseframes
+- keine lokalen Bildsignale
+- keine Visual Observations
+- kein Vision-Gateway
+- keine Providerintegration
+- kein Nutzer-Consent
+- keine Modellanalyse
+- keine Dramaturgie
+- keine Visual Beats
+
+### Analysis-Pfade
+
+Ausschließlich unter:
+
+`_otio_v2/analysis/`
+
+Unter anderem:
+
+- `analysis/runs/<run_id>.json`
+- `analysis/manifests/<analysis_identity_id>.json`
+- `analysis/temp/<run_id>/`
+- `analysis/frames/`
+- `analysis/observations/`
+
+Analysis-Artefakte sind niemals Working Media und dürfen niemals an OTIO übergeben werden.
+
 ## Implementierter Ablauf
 
 Projekt anlegen
@@ -146,6 +240,7 @@ Projekt anlegen
 → Remux-Intake
 → Video-Transcode-Intake
 → TIFF-Image-Convert
+→ Assetanalyse-Eligibility (read-only)
 
 ## Inventory
 
@@ -169,7 +264,7 @@ Regeln:
 
 Registry-Schema:
 
-`10`
+`11`
 
 SQLite:
 
@@ -177,7 +272,15 @@ SQLite:
 
 SQLite ist interne Wahrheit.
 
-Historische Imports, Validierungen, Intake-Pläne und Working-Media-Versionen dürfen nicht automatisch gelöscht werden.
+Historische Imports, Validierungen, Intake-Pläne, Working-Media-Versionen und Analysis-Identities dürfen nicht automatisch gelöscht werden.
+
+Noch keine Tabellen für:
+
+- `technical_shots`
+- `representative_frames`
+- `visual_observations`
+- `model_analysis_attempts`
+- Consent-Events
 
 ## Technische Validierung
 
@@ -251,7 +354,9 @@ Beim normalen Streamlit-Rendering ist verboten:
 - `stat` oder mtime der Medien
 - automatischer Jobstart durch Rerun
 
-Die UI liest ausschließlich persistierte Validation-/Registry-Daten.
+Die UI liest ausschließlich persistierte Validation-/Registry-/Analysis-Vertragsdaten.
+
+Die Seite **Assetanalyse** ist in Phase 8A read-only: kein Startbutton, kein Provider, kein Modell, kein Consent.
 
 ## Verbindliche Einschränkungen (Phase 7)
 
@@ -268,14 +373,14 @@ Keine neuen Medienformate oder Profile ohne eigenen freigegebenen Auftrag.
 
 ## Aktueller Teststand
 
-Nach Phase-7-Abschlusshärtung (`3ba0716a6d2cc12a4e0fdf9f61b5c2dcdead5016`):
+Nach Phase-8A-Härtung (`11e5cf8ae96e38cd9686cd7d915ad85b66be98e9`):
 
-- 2649 gesammelt
-- 2631 bestanden
+- 2687 gesammelt
+- 2669 bestanden
 - 18 fehlgeschlagen
 - 0 übersprungen
 
-Bekannte Baseline-Bereiche (nicht durch Discovery-Intake verursacht):
+Bekannte Baseline-Bereiche (nicht durch Discovery-Analysis-Contracts verursacht):
 
 - cut_plan
 - voiceover_generation
@@ -284,7 +389,15 @@ Bekannte Baseline-Bereiche (nicht durch Discovery-Intake verursacht):
 
 Neue Discovery-, Routing-, Classic- oder Without-VO-Fehler sind nicht zulässig.
 
-### Historische Baseline vor Copy-Intake-R1
+### Historische Baselines
+
+Nach Phase-7-Abschlusshärtung (`3ba0716a6d2cc12a4e0fdf9f61b5c2dcdead5016`):
+
+- 2649 gesammelt
+- 2631 bestanden
+- 18 fehlgeschlagen
+
+Vor Copy-Intake-R1:
 
 - 2545 gesammelt
 - 2527 bestanden
@@ -292,14 +405,18 @@ Neue Discovery-, Routing-, Classic- oder Without-VO-Fehler sind nicht zulässig.
 
 ## Nächster erlaubter Schritt
 
-Nur Planung der redaktionellen Assetanalyse.
+Nur:
+
+Phase 8B — lokale technische Shot-Erkennung und repräsentative Frame-Vorbereitung planen beziehungsweise gemäß separatem Auftrag umsetzen.
 
 Noch nicht erlaubt:
 
-- Implementierung der Assetanalyse
+- Vision-Gateway
 - LLM-Aufrufe
-- Frame-Extraktion
-- Shot-Erkennung
+- API-/Provideraufrufe
+- externe Bildübertragung
+- Visual Observations als Produktlauf
+- Visual Beats
 - Dramaturgie
 - Kapitel
 - Skript
@@ -311,20 +428,22 @@ Noch nicht erlaubt:
 ## Verbleibender Fahrplan
 
 1. ~~Phase 7 Media Intake~~ — APPROVED
-2. Planung der redaktionellen Assetanalyse
-3. redaktionelle Assetanalyse (erst nach Freigabe der Planung)
-4. Projektbrief und Dramaturgie
-5. Kapitel und Karten
-6. Skript und Visual Beats
-7. Coverage Audit
-8. Stock-Supplementation
-9. Script Lock und ElevenLabs
-10. Pausen und Timing
-11. Visual Edit Plan
-12. Humanity Review
-13. Feasibility und Repair
-14. Freigabe
-15. Discovery-OTIO-Export
+2. ~~Phase 8A Analysis Contracts~~ — APPROVED
+3. Phase 8B: lokale Shot-Erkennung und repräsentative Frames
+4. Phase 8C: Vision-Gateway und strukturierte Beobachtungen (nach Freigabe)
+5. Phase 8D: Review-UI, Caching, Recovery, Nutzer-Smoke
+6. Projektbrief und Dramaturgie
+7. Kapitel und Karten
+8. Skript und Visual Beats
+9. Coverage Audit
+10. Stock-Supplementation
+11. Script Lock und ElevenLabs
+12. Pausen und Timing
+13. Visual Edit Plan
+14. Humanity Review
+15. Feasibility und Repair
+16. Freigabe
+17. Discovery-OTIO-Export
 
 ## Arbeitsdisziplin
 
