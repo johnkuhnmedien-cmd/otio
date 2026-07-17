@@ -14,7 +14,7 @@ from otio_app.discovery_v2.paths import (
 
 # Lesbare Schema-Versionen, die idempotent auf CURRENT migriert werden.
 _LEGACY_SCHEMA_VERSIONS = frozenset(
-    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"}
+    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"}
 )
 
 
@@ -798,6 +798,43 @@ def _ensure_model_analysis_tables(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_observation_review_tables(conn: sqlite3.Connection) -> None:
+    """Phase 8D: immutable editorial reviews for visual observations."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS visual_observation_reviews (
+            review_id TEXT PRIMARY KEY,
+            observation_id TEXT NOT NULL,
+            analysis_identity_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            working_media_id TEXT NOT NULL,
+            observation_sha256 TEXT NOT NULL,
+            frame_set_fingerprint TEXT NOT NULL,
+            review_revision INTEGER NOT NULL,
+            decision TEXT NOT NULL,
+            reason_code TEXT,
+            review_note TEXT,
+            created_at TEXT NOT NULL,
+            supersedes_review_id TEXT,
+            CHECK (review_revision >= 1),
+            CHECK (decision IN ('accepted', 'reanalyze_requested', 'rejected')),
+            UNIQUE (observation_id, review_revision),
+            FOREIGN KEY (observation_id) REFERENCES visual_observations(observation_id),
+            FOREIGN KEY (analysis_identity_id)
+                REFERENCES analysis_identities(analysis_identity_id),
+            FOREIGN KEY (asset_id) REFERENCES assets(asset_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_visual_observation_reviews_project
+            ON visual_observation_reviews (project_id, created_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_visual_observation_reviews_observation_current
+            ON visual_observation_reviews (observation_id, review_revision DESC);
+        """
+    )
+
+
 def _ensure_analysis_run_columns(conn: sqlite3.Connection) -> None:
     """Idempotente Spalten-Nachrüstung für Schema 11 → 12."""
     run_cols = {
@@ -829,6 +866,7 @@ def _apply_current_schema_objects(conn: sqlite3.Connection) -> None:
     _ensure_copy_intake_tables(conn)
     _ensure_analysis_tables(conn)
     _ensure_model_analysis_tables(conn)
+    _ensure_observation_review_tables(conn)
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:

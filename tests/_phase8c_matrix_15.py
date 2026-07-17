@@ -154,7 +154,7 @@ MATRIX_15: dict[int, list[tuple[str, str]]] = {
     15: [
         (
             "sqlite",
-            "tests/test_discovery_v2_model_analysis_fake.py::test_schema_13_tables_exist_without_dramaturgy_or_visual_beats",
+            "tests/test_discovery_v2_model_analysis_fake.py::test_schema_14_tables_exist_without_dramaturgy_or_visual_beats",
         ),
         (
             "source_ast",

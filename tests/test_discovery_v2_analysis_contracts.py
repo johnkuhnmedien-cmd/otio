@@ -1,4 +1,4 @@
-"""Phase 8A/8B/8C: Analysis-Contracts, Schema 13, Pfade, JSON — ohne Medien-I/O."""
+"""Phase 8A/8B/8C: Analysis-Contracts, Schema 14, Pfade, JSON — ohne Medien-I/O."""
 
 from __future__ import annotations
 
@@ -68,11 +68,11 @@ def discovery_project(tmp_path: Path, temp_db_path: Path):
     )
 
 
-def test_schema_12_to_13_preserves_data(discovery_project) -> None:
+def test_schema_13_to_14_preserves_data(discovery_project) -> None:
     root = discovery_project.project_root_path
     conn = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn) == "13"
+        assert reg_db.read_schema_version(conn) == "14"
         conn.execute(
             """
             INSERT INTO assets (
@@ -95,14 +95,14 @@ def test_schema_12_to_13_preserves_data(discovery_project) -> None:
                 _now().isoformat(),
             ),
         )
-        conn.execute("UPDATE registry_schema SET schema_version = '12'")
+        conn.execute("UPDATE registry_schema SET schema_version = '13'")
         conn.commit()
     finally:
         conn.close()
 
     conn2 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn2) == "13"
+        assert reg_db.read_schema_version(conn2) == "14"
         row = conn2.execute(
             "SELECT asset_id FROM assets WHERE asset_id = ?", ("asset-keep",)
         ).fetchone()
@@ -116,6 +116,7 @@ def test_schema_12_to_13_preserves_data(discovery_project) -> None:
         assert "visual_observations" in tables
         assert "model_analysis_attempts" in tables
         assert "analysis_consent_events" in tables
+        assert "visual_observation_reviews" in tables
         assert "consent_events" not in tables
     finally:
         conn2.close()
@@ -129,7 +130,7 @@ def test_schema_init_idempotent(discovery_project) -> None:
     conn2 = reg_db.get_registry_connection(root)
     v2 = reg_db.read_schema_version(conn2)
     conn2.close()
-    assert v1 == v2 == REGISTRY_SCHEMA_VERSION == "13"
+    assert v1 == v2 == REGISTRY_SCHEMA_VERSION == "14"
 
 
 def test_analysis_identity_unique_and_historical(discovery_project) -> None:

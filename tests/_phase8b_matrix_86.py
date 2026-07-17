@@ -100,13 +100,13 @@ MATRIX_86: dict[int, list[tuple[str, str]]] = {
     1: [
         (
             "sqlite",
-            "tests/test_discovery_v2_analysis_prepare.py::test_schema_12_to_13_preserves_data_and_is_idempotent",
+            "tests/test_discovery_v2_analysis_prepare.py::test_schema_13_to_14_preserves_data_and_is_idempotent",
         )
     ],
     2: [
         (
             "sqlite",
-            "tests/test_discovery_v2_analysis_prepare.py::test_schema_12_to_13_preserves_data_and_is_idempotent",
+            "tests/test_discovery_v2_analysis_prepare.py::test_schema_13_to_14_preserves_data_and_is_idempotent",
         )
     ],
     3: [

@@ -518,7 +518,7 @@ def test_prepare_still_preview_opaque_jpeg_and_alpha_png(tmp_path: Path) -> None
 # --- Schema / contracts ----------------------------------------------------
 
 
-def test_schema_12_to_13_preserves_data_and_is_idempotent(
+def test_schema_13_to_14_preserves_data_and_is_idempotent(
     tmp_path: Path, temp_db_path: Path
 ) -> None:
     root = tmp_path / "Project"
@@ -528,7 +528,7 @@ def test_schema_12_to_13_preserves_data_and_is_idempotent(
 
     conn = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn) == "13"
+        assert reg_db.read_schema_version(conn) == "14"
         conn.execute(
             """
             INSERT INTO assets (
@@ -552,14 +552,14 @@ def test_schema_12_to_13_preserves_data_and_is_idempotent(
         )
         conn.execute("DROP TABLE representative_frames")
         conn.execute("DROP TABLE technical_shots")
-        conn.execute("UPDATE registry_schema SET schema_version = '12'")
+        conn.execute("UPDATE registry_schema SET schema_version = '13'")
         conn.commit()
     finally:
         conn.close()
 
     conn2 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn2) == "13"
+        assert reg_db.read_schema_version(conn2) == "14"
         assert conn2.execute(
             "SELECT COUNT(*) FROM assets WHERE asset_id = 'asset-keep'"
         ).fetchone()[0] == 1
@@ -574,6 +574,7 @@ def test_schema_12_to_13_preserves_data_and_is_idempotent(
             "visual_observations",
             "model_analysis_attempts",
             "analysis_consent_events",
+            "visual_observation_reviews",
         }.issubset(tables)
         for forbidden in (
             "consent_events",
@@ -586,7 +587,7 @@ def test_schema_12_to_13_preserves_data_and_is_idempotent(
 
     conn3 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn3) == REGISTRY_SCHEMA_VERSION == "13"
+        assert reg_db.read_schema_version(conn3) == REGISTRY_SCHEMA_VERSION == "14"
     finally:
         conn3.close()
 

@@ -1,10 +1,11 @@
-"""Streamlit-Seite: Discovery V2 Assetanalyse (Prepare + Fake-Modellanalyse)."""
+"""Streamlit-Seite: Discovery V2 Assetanalyse (Prepare, Fake Vision, Review)."""
 
 from __future__ import annotations
 
 import streamlit as st
 
 from otio_app.discovery_v2.application.analysis_prepare_service import (
+    get_analysis_prepare_artifact_review,
     get_analysis_prepare_view,
     start_analysis_prepare,
 )
@@ -13,18 +14,15 @@ from otio_app.discovery_v2.application.model_analysis_service import (
     preview_model_analysis_selection,
     start_model_analysis,
 )
+from otio_app.discovery_v2.application.observation_review_service import (
+    get_observation_review_view,
+    get_phase8_project_summary,
+    submit_observation_review,
+)
 from otio_app.discovery_v2.domain.asset_analysis import (
     ANALYSIS_PREPARE_PROFILE_VERSION,
     FRAME_SAMPLE_PROFILE_VERSION,
     SHOT_DETECT_PROFILE_VERSION,
-)
-from otio_app.discovery_v2.persistence.asset_analysis_repository import (
-    list_representative_frames_for_project,
-    list_technical_shots_for_project,
-    open_analysis_registry,
-)
-from otio_app.discovery_v2.persistence.asset_registry_database import (
-    RegistryDatabaseError,
 )
 from otio_app.discovery_v2.ui.overview import active_discovery_project
 
@@ -118,22 +116,18 @@ def render_discovery_asset_analysis_page() -> None:
         else:
             st.warning(result.message)
 
-    _render_prepare_review(project.id, project.project_root_path)
+    _render_prepare_review(project)
     _render_model_analysis_section(project)
 
 
-def _render_prepare_review(project_id: str, project_root) -> None:
+def _render_prepare_review(project) -> None:
     st.subheader("Review: Technical Shots und Frames")
-    try:
-        conn = open_analysis_registry(project_root)
-    except RegistryDatabaseError as exc:
-        st.caption(f"Registry nicht lesbar: {exc}")
+    review = get_analysis_prepare_artifact_review(project)
+    if not review.ok:
+        st.caption(f"Registry nicht lesbar: {review.message or 'unbekannter Fehler'}")
         return
-    try:
-        shots = list_technical_shots_for_project(conn, project_id=project_id)
-        frames = list_representative_frames_for_project(conn, project_id=project_id)
-    finally:
-        conn.close()
+    shots = review.shots
+    frames = review.frames
 
     if not shots and not frames:
         st.write("Noch keine persistierten Shots oder Frames vorhanden.")
@@ -218,7 +212,7 @@ def _render_model_analysis_section(project) -> None:
     prepared = model_view.prepared_assets
     if not prepared:
         st.write("Noch keine vorbereiteten Assets mit Analyseframes vorhanden.")
-        _render_observation_review(model_view.observations)
+        _render_observation_review(project)
         return
 
     st.markdown("**Vorbereitete Assets**")
@@ -272,7 +266,7 @@ def _render_model_analysis_section(project) -> None:
         else:
             st.warning(result.message)
 
-    _render_observation_review(model_view.observations)
+    _render_observation_review(project)
 
 
 def _model_asset_selection(asset_options: list[str]) -> list[str]:
@@ -303,39 +297,166 @@ def _model_consent_checkbox() -> bool:
     return False
 
 
-def _render_observation_review(observations) -> None:
+def _render_observation_review(project) -> None:
     st.subheader("Review: Visual Observations")
+    summary = get_phase8_project_summary(project)
+    if summary.ok:
+        if summary.status_counts:
+            st.dataframe(
+                [
+                    {"Status": status, "Assets": count}
+                    for status, count in sorted(summary.status_counts.items())
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+        st.caption(
+            f"Phase-8 Assets: {summary.total_assets} · "
+            f"not_applicable: {summary.not_applicable_count}"
+        )
+    elif summary.message:
+        st.caption(f"Phase-8 Summary nicht verfügbar: {summary.message}")
+
+    st.info(
+        "Freigabe bestätigt nur die strukturierte Beobachtung als redaktionelle "
+        "Eingabe; sie bestätigt weder Geografie noch Echtheit und trifft keine "
+        "automatische Asset-Auswahl."
+    )
+
+    view = get_observation_review_view(project)
+    if not view.ok:
+        st.warning(view.message or "Observation Review nicht verfügbar.")
+        return
+    observations = view.observations
     if not observations:
         st.write("Noch keine Visual Observations persistiert.")
         return
-    rows = []
-    for record in observations:
-        summary = "—"
-        geographic_confidence = "—"
-        synthetic_confidence = "—"
-        evidence = "—"
-        uncertainty = "—"
-        try:
-            import json
-
-            payload = json.loads(record.observation_json or "{}")
-            observation = payload.get("observation", payload)
-            summary = observation.get("summary") or "—"
-            geographic_confidence = observation.get("geographic_confidence", "—")
-            synthetic_confidence = observation.get("synthetic_confidence", "—")
-            evidence = ", ".join(observation.get("evidence_frame_ids") or []) or "—"
-            uncertainty = "; ".join(observation.get("uncertainty_notes") or []) or "—"
-        except (TypeError, ValueError):
-            pass
-        rows.append(
+    st.dataframe(
+        [
             {
-                "Asset": record.asset_id,
-                "Summary": summary,
-                "Geo": geographic_confidence,
-                "Synthetic": synthetic_confidence,
-                "Evidence Frames": evidence,
-                "Uncertainty": uncertainty,
-                "Pfad": record.relative_json_path,
+                "Asset": item.asset_id,
+                "Status": item.status,
+                "Review": item.current_review_decision,
+                "Current": "ja" if item.is_current_identity else "nein",
+                "Editorial Ready": "ja" if item.is_editorial_ready else "nein",
+                "Summary": item.summary,
+                "Geo": (
+                    "—"
+                    if item.geographic_confidence is None
+                    else item.geographic_confidence
+                ),
+                "Synthetic": (
+                    "—"
+                    if item.synthetic_confidence is None
+                    else item.synthetic_confidence
+                ),
+                "Evidence Frames": ", ".join(item.evidence_frame_ids) or "—",
+                "Uncertainty": "; ".join(item.uncertainty_notes) or "—",
+                "Observation": item.observation_id,
+                "Analysis Identity": item.analysis_identity_id,
+                "Frames": _short_hash(item.frame_set_fingerprint),
+                "JSON": _short_hash(item.observation_sha256),
+                "Fehler": item.error_code or "—",
             }
+            for item in observations
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    for item in observations:
+        st.markdown(f"**{item.asset_id}** · `{item.observation_id}`")
+        st.caption(
+            f"Identity: `{item.analysis_identity_id}` · "
+            f"Working Media: `{item.working_media_id or '—'}` · "
+            f"Prompt: `{item.prompt_version}` · Schema: `{item.response_schema_version}`"
         )
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+        if item.review_history:
+            st.dataframe(
+                [
+                    {
+                        "Revision": review.review_revision,
+                        "Entscheidung": review.decision,
+                        "Grund": review.reason_code or "—",
+                        "Notiz": review.review_note or "—",
+                        "Erstellt": review.created_at.isoformat(),
+                        "Review ID": review.review_id,
+                    }
+                    for review in item.review_history
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.caption("Noch keine Review-Revision.")
+
+        reason = _review_reason_input(item.observation_id)
+        if st.button(
+            "Observation akzeptieren",
+            key=f"discovery_v2_observation_accept_{item.observation_id}",
+            disabled=not item.is_valid,
+        ):
+            _submit_review_action(
+                project,
+                observation_id=item.observation_id,
+                decision="accepted",
+            )
+        if st.button(
+            "Erneute Analyse anfordern",
+            key=f"discovery_v2_observation_reanalyze_{item.observation_id}",
+            disabled=not item.is_valid,
+        ):
+            if not reason:
+                st.warning("Für Reanalyse bitte einen Grund eingeben.")
+            else:
+                _submit_review_action(
+                    project,
+                    observation_id=item.observation_id,
+                    decision="reanalyze_requested",
+                    reason_code=reason,
+                )
+        if st.button(
+            "Observation ablehnen",
+            key=f"discovery_v2_observation_reject_{item.observation_id}",
+            disabled=not item.is_valid,
+        ):
+            if not reason:
+                st.warning("Für Ablehnung bitte einen Grund eingeben.")
+            else:
+                _submit_review_action(
+                    project,
+                    observation_id=item.observation_id,
+                    decision="rejected",
+                    reason_code=reason,
+                )
+
+
+def _review_reason_input(observation_id: str) -> str:
+    label = "Grund für Reject/Reanalyse"
+    key = f"discovery_v2_observation_reason_{observation_id}"
+    if hasattr(st, "text_area"):
+        return str(st.text_area(label, key=key) or "").strip()
+    if hasattr(st, "text_input"):
+        return str(st.text_input(label, key=key) or "").strip()
+    return ""
+
+
+def _submit_review_action(
+    project,
+    *,
+    observation_id: str,
+    decision: str,
+    reason_code: str | None = None,
+) -> None:
+    result = submit_observation_review(
+        project,
+        observation_id=observation_id,
+        decision=decision,
+        reason_code=reason_code,
+    )
+    if result.ok:
+        st.success(result.message)
+    else:
+        st.warning(
+            f"{result.error_code or 'observation_review_failed'}: {result.message}"
+        )

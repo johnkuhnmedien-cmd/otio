@@ -28,6 +28,8 @@ from otio_app.discovery_v2.domain.asset_analysis import (
     AnalysisRun,
     AnalysisRunAsset,
     AnalysisRunStatus,
+    RepresentativeFrameRecord,
+    TechnicalShotRecord,
 )
 from otio_app.discovery_v2.domain.inventory import MediaKind
 from otio_app.discovery_v2.persistence.asset_analysis_repository import (
@@ -38,6 +40,8 @@ from otio_app.discovery_v2.persistence.asset_analysis_repository import (
     insert_analysis_run,
     insert_analysis_run_asset,
     list_analysis_run_assets,
+    list_representative_frames_for_project,
+    list_technical_shots_for_project,
     new_analysis_run_id,
     open_analysis_registry,
 )
@@ -86,6 +90,14 @@ class AnalysisPrepareStatusView:
     latest_run: AnalysisRun | None = None
     chain_ok: bool = False
     can_start: bool = False
+
+
+@dataclass(frozen=True)
+class AnalysisPrepareArtifactReviewView:
+    ok: bool
+    message: str | None = None
+    shots: list[TechnicalShotRecord] = field(default_factory=list)
+    frames: list[RepresentativeFrameRecord] = field(default_factory=list)
 
 
 def _now() -> datetime:
@@ -296,6 +308,26 @@ def count_prepare_artifacts_for_identity(
     return shot_count, frame_count
 
 
+def get_analysis_prepare_artifact_review(
+    project: Project,
+) -> AnalysisPrepareArtifactReviewView:
+    """Return persisted shot/frame rows for UI review without media I/O."""
+    try:
+        project = require_discovery_project(project)
+    except InventoryServiceError as exc:
+        return AnalysisPrepareArtifactReviewView(ok=False, message=str(exc))
+    try:
+        conn = open_analysis_registry(project.project_root_path)
+    except RegistryDatabaseError as exc:
+        return AnalysisPrepareArtifactReviewView(ok=False, message=str(exc))
+    try:
+        shots = list_technical_shots_for_project(conn, project_id=project.id)
+        frames = list_representative_frames_for_project(conn, project_id=project.id)
+    finally:
+        conn.close()
+    return AnalysisPrepareArtifactReviewView(ok=True, shots=shots, frames=frames)
+
+
 def _build_run_assets_from_eligibility(
     conn,
     *,
@@ -470,10 +502,12 @@ def _get_working_media_raw(
 
 __all__ = [
     "AnalysisPrepareEligibilityItemView",
+    "AnalysisPrepareArtifactReviewView",
     "AnalysisPrepareServiceError",
     "AnalysisPrepareStartResult",
     "AnalysisPrepareStatusView",
     "count_prepare_artifacts_for_identity",
+    "get_analysis_prepare_artifact_review",
     "get_analysis_prepare_view",
     "start_analysis_prepare",
 ]

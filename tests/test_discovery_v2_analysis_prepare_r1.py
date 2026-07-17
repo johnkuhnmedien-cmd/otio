@@ -1148,7 +1148,7 @@ def test_r1_render_prepare_review_reads_real_sqlite_shots_and_frames(
     fake_st = _FakeStreamlit(clicked=False)
     monkeypatch.setattr(analysis_ui, "st", fake_st)
 
-    analysis_ui._render_prepare_review(project.id, root)
+    analysis_ui._render_prepare_review(project)
 
     flattened = json.dumps(fake_st.dataframes, default=str)
     assert "shot-detect-v1" in flattened

@@ -380,10 +380,10 @@ def test_r1_matrix_15_complete() -> None:
             assert test_name in cache[file_name], node_id
 
 
-def test_r1_schema_12_to_13_still_preserves_assets(
+def test_r1_schema_13_to_14_still_preserves_assets(
     tmp_path: Path, temp_db_path: Path
 ) -> None:
-    """Diff-Nachweis: Schema-Migration 12→13 bleibt datenhaltend."""
+    """Diff-Nachweis: Schema-Migration 13→14 bleibt datenhaltend."""
     from otio_app.discovery_v2.domain.asset_registry import REGISTRY_SCHEMA_VERSION
     from otio_app.discovery_v2.persistence import asset_registry_database as reg_db
 
@@ -393,14 +393,14 @@ def test_r1_schema_12_to_13_still_preserves_assets(
     _new_project(root, temp_db_path, name="Phase 8C R1 Schema")
     conn = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn) == "13"
-        conn.execute("UPDATE registry_schema SET schema_version = '12'")
+        assert reg_db.read_schema_version(conn) == "14"
+        conn.execute("UPDATE registry_schema SET schema_version = '13'")
         conn.commit()
     finally:
         conn.close()
     conn2 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn2) == REGISTRY_SCHEMA_VERSION == "13"
+        assert reg_db.read_schema_version(conn2) == REGISTRY_SCHEMA_VERSION == "14"
         tables = {
             str(row[0])
             for row in conn2.execute(
@@ -411,6 +411,7 @@ def test_r1_schema_12_to_13_still_preserves_assets(
             "analysis_consent_events",
             "model_analysis_attempts",
             "visual_observations",
+            "visual_observation_reviews",
         }.issubset(tables)
     finally:
         conn2.close()

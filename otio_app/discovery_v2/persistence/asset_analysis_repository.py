@@ -32,6 +32,10 @@ from otio_app.discovery_v2.domain.asset_analysis import (
     SHOT_DETECT_PROFILE_VERSION,
     TechnicalShotRecord,
 )
+from otio_app.discovery_v2.domain.observation_review import (
+    ObservationReviewRecord,
+    compute_observation_sha256,
+)
 from otio_app.discovery_v2.domain.visual_observation import (
     AnalysisConsentEventRecord,
     AnalysisModelAssetStatus,
@@ -77,6 +81,10 @@ def new_model_analysis_attempt_id() -> str:
 
 
 def new_visual_observation_id() -> str:
+    return str(uuid4())
+
+
+def new_observation_review_id() -> str:
     return str(uuid4())
 
 
@@ -818,6 +826,18 @@ def get_visual_observation_for_attempt(
     return None if row is None else _row_to_observation(row)
 
 
+def get_visual_observation(
+    conn: sqlite3.Connection,
+    *,
+    observation_id: str,
+) -> VisualObservationRecord | None:
+    row = conn.execute(
+        "SELECT * FROM visual_observations WHERE observation_id = ?",
+        (observation_id,),
+    ).fetchone()
+    return None if row is None else _row_to_observation(row)
+
+
 def get_visual_observation_for_versions(
     conn: sqlite3.Connection,
     *,
@@ -870,6 +890,123 @@ def list_visual_observations_for_project(
         (project_id,),
     ).fetchall()
     return [_row_to_observation(row) for row in rows]
+
+
+def insert_observation_review(
+    conn: sqlite3.Connection,
+    review: ObservationReviewRecord,
+) -> None:
+    decision = (
+        review.decision.value
+        if hasattr(review.decision, "value")
+        else str(review.decision)
+    )
+    conn.execute(
+        """
+        INSERT INTO visual_observation_reviews (
+            review_id, observation_id, analysis_identity_id, project_id, asset_id,
+            working_media_id, observation_sha256, frame_set_fingerprint,
+            review_revision, decision, reason_code, review_note, created_at,
+            supersedes_review_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            review.review_id,
+            review.observation_id,
+            review.analysis_identity_id,
+            review.project_id,
+            review.asset_id,
+            review.working_media_id,
+            review.observation_sha256,
+            review.frame_set_fingerprint,
+            review.review_revision,
+            decision,
+            review.reason_code,
+            review.review_note,
+            review.created_at.isoformat(),
+            review.supersedes_review_id,
+        ),
+    )
+
+
+def next_observation_review_revision(
+    conn: sqlite3.Connection,
+    *,
+    observation_id: str,
+) -> int:
+    row = conn.execute(
+        """
+        SELECT MAX(review_revision) AS max_revision
+        FROM visual_observation_reviews
+        WHERE observation_id = ?
+        """,
+        (observation_id,),
+    ).fetchone()
+    return int(row["max_revision"] or 0) + 1
+
+
+def get_current_observation_review(
+    conn: sqlite3.Connection,
+    *,
+    observation_id: str,
+) -> ObservationReviewRecord | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM visual_observation_reviews
+        WHERE observation_id = ?
+        ORDER BY review_revision DESC
+        LIMIT 1
+        """,
+        (observation_id,),
+    ).fetchone()
+    return None if row is None else _row_to_review(row)
+
+
+def list_observation_reviews(
+    conn: sqlite3.Connection,
+    *,
+    observation_id: str | None = None,
+    project_id: str | None = None,
+) -> list[ObservationReviewRecord]:
+    sql = "SELECT * FROM visual_observation_reviews"
+    clauses: list[str] = []
+    params: list[object] = []
+    if observation_id is not None:
+        clauses.append("observation_id = ?")
+        params.append(observation_id)
+    if project_id is not None:
+        clauses.append("project_id = ?")
+        params.append(project_id)
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY observation_id, review_revision"
+    rows = conn.execute(sql, params).fetchall()
+    return [_row_to_review(row) for row in rows]
+
+
+def list_editorial_ready_observation_rows(
+    conn: sqlite3.Connection,
+    *,
+    project_id: str,
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT observation.*
+        FROM visual_observations AS observation
+        JOIN visual_observation_reviews AS review
+          ON review.observation_id = observation.observation_id
+        WHERE observation.project_id = ?
+          AND review.decision = 'accepted'
+          AND review.review_revision = (
+              SELECT MAX(inner_review.review_revision)
+              FROM visual_observation_reviews AS inner_review
+              WHERE inner_review.observation_id = observation.observation_id
+          )
+        ORDER BY observation.created_at DESC, observation.observation_id DESC
+        """,
+        (project_id,),
+    ).fetchall()
 
 
 def save_visual_observation_json(
@@ -926,7 +1063,7 @@ def analysis_table_names(conn: sqlite3.Connection) -> set[str]:
         WHERE type='table' AND name IN (
             'technical_shots', 'representative_frames',
             'visual_observations', 'model_analysis_attempts',
-            'analysis_consent_events'
+            'analysis_consent_events', 'visual_observation_reviews'
         )
         """
     ).fetchall()
@@ -1217,6 +1354,25 @@ def _row_to_observation(row: sqlite3.Row) -> VisualObservationRecord:
     )
 
 
+def _row_to_review(row: sqlite3.Row) -> ObservationReviewRecord:
+    return ObservationReviewRecord(
+        review_id=str(row["review_id"]),
+        observation_id=str(row["observation_id"]),
+        analysis_identity_id=str(row["analysis_identity_id"]),
+        project_id=str(row["project_id"]),
+        asset_id=str(row["asset_id"]),
+        working_media_id=str(row["working_media_id"]),
+        observation_sha256=str(row["observation_sha256"]),
+        frame_set_fingerprint=str(row["frame_set_fingerprint"]),
+        review_revision=int(row["review_revision"]),
+        decision=str(row["decision"]),
+        reason_code=row["reason_code"],
+        review_note=row["review_note"],
+        created_at=_parse_dt(row["created_at"]) or _now(),
+        supersedes_review_id=row["supersedes_review_id"],
+    )
+
+
 # Re-export helper for callers that need v2 root.
 def discovery_v2_root(project_root: Path) -> Path:
     return get_discovery_v2_root(project_root)
@@ -1228,6 +1384,7 @@ __all__ = [
     "ANALYSIS_PREPARE_PROFILE_VERSION",
     "analysis_table_names",
     "cleanup_analysis_temp",
+    "compute_observation_sha256",
     "find_completed_model_analysis_attempt",
     "find_active_analysis_run",
     "find_analysis_identity",
@@ -1235,12 +1392,15 @@ __all__ = [
     "get_analysis_identity",
     "get_analysis_run",
     "get_latest_analysis_run",
+    "get_current_observation_review",
+    "get_visual_observation",
     "get_visual_observation_for_attempt",
     "get_visual_observation_for_versions",
     "insert_analysis_consent_event",
     "insert_analysis_run",
     "insert_analysis_run_asset",
     "insert_model_analysis_attempt",
+    "insert_observation_review",
     "insert_representative_frame",
     "insert_technical_shot",
     "insert_visual_observation",
@@ -1248,6 +1408,8 @@ __all__ = [
     "list_analysis_run_assets",
     "list_analysis_runs",
     "list_model_analysis_attempts",
+    "list_editorial_ready_observation_rows",
+    "list_observation_reviews",
     "list_representative_frames",
     "list_representative_frames_for_project",
     "list_technical_shots",
@@ -1258,9 +1420,11 @@ __all__ = [
     "new_analysis_run_id",
     "new_frame_id",
     "new_model_analysis_attempt_id",
+    "new_observation_review_id",
     "new_shot_id",
     "new_visual_observation_id",
     "next_model_analysis_attempt_number",
+    "next_observation_review_revision",
     "open_analysis_registry",
     "parse_analysis_run_report",
     "replace_prepare_artifacts",

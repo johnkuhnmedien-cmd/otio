@@ -351,10 +351,10 @@ def _patch_no_media_io(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Path, "stat", _guarded_stat)
 
 
-# --- Schema 13 SQLite-Nachweis ------------------------------------------------
+# --- Schema 14 SQLite-Nachweis ------------------------------------------------
 
 
-def test_r1_schema13_tables_constraints_and_migration(discovery_project: Project) -> None:
+def test_r1_schema14_tables_constraints_and_migration(discovery_project: Project) -> None:
     root = discovery_project.project_root_path
     _import_project(discovery_project)
     plan = _seed_validation_and_plan(discovery_project)
@@ -370,7 +370,7 @@ def test_r1_schema13_tables_constraints_and_migration(discovery_project: Project
 
     conn = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn) == "13"
+        assert reg_db.read_schema_version(conn) == "14"
         # Persistierte Baseline-Daten vor Downgrade merken
         asset_count = conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
         val_count = conn.execute("SELECT COUNT(*) FROM asset_validations").fetchone()[0]
@@ -395,6 +395,7 @@ def test_r1_schema13_tables_constraints_and_migration(discovery_project: Project
             "visual_observations",
             "model_analysis_attempts",
             "analysis_consent_events",
+            "visual_observation_reviews",
         ):
             assert required in tables
         for forbidden in ("consent_events", "dramaturgy", "visual_beats"):
@@ -442,15 +443,15 @@ def test_r1_schema13_tables_constraints_and_migration(discovery_project: Project
                 break
         assert wm_unique
 
-        # Schema-12 -> 13 Migration erhält Daten
-        conn.execute("UPDATE registry_schema SET schema_version = '12'")
+        # Schema-13 -> 14 Migration erhält Daten
+        conn.execute("UPDATE registry_schema SET schema_version = '13'")
         conn.commit()
     finally:
         conn.close()
 
     conn2 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn2) == "13"
+        assert reg_db.read_schema_version(conn2) == "14"
         assert (
             conn2.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == asset_count
         )
@@ -475,7 +476,7 @@ def test_r1_schema13_tables_constraints_and_migration(discovery_project: Project
         conn2.close()
     conn3 = reg_db.get_registry_connection(root)
     try:
-        assert reg_db.read_schema_version(conn3) == v_before == "13"
+        assert reg_db.read_schema_version(conn3) == v_before == "14"
         assert (
             conn3.execute("SELECT project_id FROM assets LIMIT 1").fetchone()[0]
             == project_id
