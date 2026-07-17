@@ -28,8 +28,9 @@ from otio_app.discovery_v2.application.remux_intake_service import (
 from otio_app.discovery_v2.application.video_transcode_service import (
     VideoTranscodeServiceError,
     can_start_video_transcode_intake,
+    format_rotation_display,
     get_video_transcode_status,
-    list_open_video_transcode_plan_items,
+    list_video_transcode_plan_item_views,
     start_video_transcode_intake,
 )
 from otio_app.discovery_v2.domain.media_intake import (
@@ -338,7 +339,7 @@ def render_discovery_media_intake_page() -> None:
         "Crop, Zoom oder automatisches 16:9."
     )
     vt_ok, vt_msg, vt_ctx = can_start_video_transcode_intake(project)
-    vt_items = list_open_video_transcode_plan_items(project)
+    vt_views = list_video_transcode_plan_item_views(project)
     vt_run, vt_assets, vt_working, vt_status_err = get_video_transcode_status(project)
     if vt_status_err:
         st.warning(vt_status_err)
@@ -347,12 +348,22 @@ def render_discovery_media_intake_page() -> None:
             f"**Offene Video-Transcode-Items:** "
             f"{vt_ctx.get('video_transcode_item_count', 0)}"
         )
-    if vt_items:
+    if vt_views:
         st.markdown("**Offene Video-Transcode-Positionen**")
-        for item in vt_items:
+        for view in vt_views:
+            item = view.item
             fps = None
             if item.frame_rate_numerator and item.frame_rate_denominator:
                 fps = f"{item.frame_rate_numerator}/{item.frame_rate_denominator}"
+            audio_streams = (
+                str(view.audio_stream_count)
+                if view.audio_stream_count is not None
+                else "—"
+            )
+            channels = (
+                str(view.audio_channels) if view.audio_channels is not None else "—"
+            )
+            rotation = format_rotation_display(view.rotation_degrees)
             st.markdown(
                 f"`{item.source_relative_path}` · "
                 f"Container=`{item.container_format or item.extension}` · "
@@ -360,9 +371,11 @@ def render_discovery_media_intake_page() -> None:
                 f"bit=`{item.bit_depth}` · "
                 f"{item.width}×{item.height} · fps=`{fps or '—'}` · "
                 f"audio_codec=`{item.audio_codec or '—'}` · "
-                f"audio_streams=`—` · channels=`—` · "
+                f"Audio: {audio_streams} Stream"
+                f"{'' if audio_streams == '1' else 's'}, "
+                f"{channels} Kanäle · "
                 f"tc=`{item.embedded_timecode or 'null'}` · "
-                f"rotation=`—`"
+                f"Rotation: {rotation}"
             )
             st.caption(
                 f"Block-/Planungsgrund: {item.reason_code}: {item.reason_detail}"
@@ -397,7 +410,10 @@ def render_discovery_media_intake_page() -> None:
         )
         st.write(
             f"**Fortschritt:** {vt_run.processed_assets} / {vt_run.total_assets} · "
-            f"OK={vt_run.succeeded_assets} · Skip={vt_run.skipped_assets} · "
+            f"transcoded={vt_run.transcoded_assets} · "
+            f"reused={vt_run.reused_assets} · "
+            f"remuxed={vt_run.remuxed_assets} · "
+            f"Skip={vt_run.skipped_assets} · "
             f"Fehler={vt_run.failed_assets}"
         )
         if vt_run.error_summary:

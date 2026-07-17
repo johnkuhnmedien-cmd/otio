@@ -15,6 +15,7 @@ from otio_app.discovery_v2.adapters.intake_job_launcher import (
     reset_intake_job_launcher_for_tests,
 )
 from otio_app.discovery_v2.adapters.media_probe import (
+    DataStreamInfo,
     NormalizedMediaProbe,
     probe_source_media,
 )
@@ -52,7 +53,9 @@ from otio_app.discovery_v2.application.selection_service import (
 )
 from otio_app.discovery_v2.application.video_transcode_service import (
     can_start_video_transcode_intake,
+    format_rotation_display,
     get_video_transcode_status,
+    list_video_transcode_plan_item_views,
     start_video_transcode_intake,
 )
 from otio_app.discovery_v2.domain.inventory import MediaKind
@@ -510,7 +513,12 @@ def test_output_policy_duration_and_timecode_rotation() -> None:
     audio_tc = evaluate_video_audio_policy(src_tc)
     validate_video_h264_output_policy(
         source=src_tc,
-        output=_probe(embedded_timecode="01:00:00:00", data_stream_count=1),
+        output=_probe(
+            embedded_timecode="01:00:00:00",
+            data_stream_count=1,
+            tmcd_stream_count=1,
+            data_streams=(DataStreamInfo(codec_name=None, codec_tag="tmcd"),),
+        ),
         expected_audio=audio_tc,
     )
     with pytest.raises(VideoTranscodeError) as exc2:
@@ -1017,7 +1025,12 @@ def test_report_scope_and_relative_paths(discovery_project, imported) -> None:
     assert data["registry_sqlite_relative_path"] == "registry/assets.sqlite3"
     dumped = json.dumps(data)
     assert str(discovery_project.project_root_path) not in dumped
-    assert data.get("remuxed_assets", 0) + data.get("reused_assets", 0) >= 1
+    assert data.get("transcoded_assets", 0) + data.get("reused_assets", 0) >= 1
+    assert data.get("transcoded", 0) == data.get("transcoded_assets", 0)
+    assert data.get("remuxed_assets", 0) == 0
+    assert data.get("copied_assets", 0) == 0
+    assert result.run.transcoded_assets >= 1
+    assert result.run.remuxed_assets == 0
 
 
 def test_failed_policy_leaves_no_final(tmp_path: Path) -> None:
@@ -1075,3 +1088,246 @@ def test_no_image_convert_api_surface() -> None:
     ).read_text(encoding="utf-8")
     assert "FastAPI" not in service
     assert "@app." not in service
+
+
+# --- Phase 7C2-R1: Zähler, tmcd, View, VFR ---------------------------------
+
+
+def test_r1_counters_transcoded_not_remuxed(discovery_project, imported) -> None:
+    _seed_validation_and_plan(discovery_project)
+    result = start_video_transcode_intake(discovery_project, sync=True)
+    assert result.run
+    assert result.run.transcoded_assets >= 1
+    assert result.run.remuxed_assets == 0
+    assert result.run.copied_assets == 0
+    report_path = copy_repo.intake_run_report_path(
+        discovery_project.project_root_path, result.run.run_id
+    )
+    data = json.loads(report_path.read_text(encoding="utf-8"))
+    assert data["transcoded"] >= 1
+    assert data["transcoded_assets"] == data["transcoded"]
+    assert data["remuxed_assets"] == 0
+    assert data["failed"] == data["failed_assets"] or data["failed"] >= 0
+
+    # Reuse: reused steigt, transcoded des zweiten Runs nicht erneut
+    second = start_video_transcode_intake(discovery_project, sync=True)
+    assert second.run
+    assert second.run.reused_assets >= 1
+    assert second.run.transcoded_assets == 0
+    data2 = json.loads(
+        copy_repo.intake_run_report_path(
+            discovery_project.project_root_path, second.run.run_id
+        ).read_text(encoding="utf-8")
+    )
+    assert data2["reused"] >= 1
+    assert data2["reused_assets"] == data2["reused"]
+    assert data2["transcoded"] == 0
+    assert data2["remuxed_assets"] == 0
+
+
+def test_r1_tmcd_policy_matrix() -> None:
+    audio = evaluate_video_audio_policy(_probe(audio_stream_count=0))
+    # ohne TC → kein tmcd
+    validate_video_h264_output_policy(
+        source=_probe(),
+        output=_probe(),
+        expected_audio=audio,
+    )
+    with pytest.raises(VideoTranscodeError) as e_tmcd:
+        validate_video_h264_output_policy(
+            source=_probe(),
+            output=_probe(
+                tmcd_stream_count=1,
+                data_stream_count=1,
+                data_streams=(DataStreamInfo(codec_tag="tmcd"),),
+            ),
+            expected_audio=audio,
+        )
+    assert e_tmcd.value.code == "unexpected_timecode_stream"
+
+    src_tc = _probe(embedded_timecode="01:00:00:00")
+    audio_tc = evaluate_video_audio_policy(src_tc)
+    validate_video_h264_output_policy(
+        source=src_tc,
+        output=_probe(
+            embedded_timecode="01:00:00:00",
+            tmcd_stream_count=1,
+            data_stream_count=1,
+            data_streams=(DataStreamInfo(codec_tag="tmcd"),),
+        ),
+        expected_audio=audio_tc,
+    )
+    with pytest.raises(VideoTranscodeError) as e_no_tmcd:
+        validate_video_h264_output_policy(
+            source=src_tc,
+            output=_probe(embedded_timecode="01:00:00:00", data_stream_count=0),
+            expected_audio=audio_tc,
+        )
+    assert e_no_tmcd.value.code == "timecode_preservation_failed"
+
+    with pytest.raises(VideoTranscodeError) as e_mismatch:
+        validate_video_h264_output_policy(
+            source=src_tc,
+            output=_probe(
+                embedded_timecode="02:00:00:00",
+                tmcd_stream_count=1,
+                data_stream_count=1,
+                data_streams=(DataStreamInfo(codec_tag="tmcd"),),
+            ),
+            expected_audio=audio_tc,
+        )
+    assert e_mismatch.value.code == "timecode_preservation_failed"
+
+    with pytest.raises(VideoTranscodeError) as e_multi:
+        validate_video_h264_output_policy(
+            source=src_tc,
+            output=_probe(
+                embedded_timecode="01:00:00:00",
+                tmcd_stream_count=1,
+                data_stream_count=2,
+                data_streams=(
+                    DataStreamInfo(codec_tag="tmcd"),
+                    DataStreamInfo(codec_tag="text"),
+                ),
+            ),
+            expected_audio=audio_tc,
+        )
+    assert e_multi.value.code == "unexpected_data_stream"
+
+    with pytest.raises(VideoTranscodeError) as e_sub:
+        validate_video_h264_output_policy(
+            source=_probe(),
+            output=_probe(subtitle_stream_count=1),
+            expected_audio=audio,
+        )
+    assert e_sub.value.code == "unexpected_subtitle_stream"
+
+    with pytest.raises(VideoTranscodeError) as e_att:
+        validate_video_h264_output_policy(
+            source=_probe(),
+            output=_probe(attachment_stream_count=1),
+            expected_audio=audio,
+        )
+    assert e_att.value.code == "unexpected_attachment_stream"
+
+
+def test_r1_vfr_does_not_fail_on_avg_mismatch_alone() -> None:
+    audio = evaluate_video_audio_policy(_probe(audio_stream_count=0))
+    src = _probe(
+        frame_rate_numerator=30000,
+        frame_rate_denominator=1001,
+        avg_frame_rate_numerator=25,
+        avg_frame_rate_denominator=1,
+        duration_seconds=1.0,
+    )
+    out = _probe(
+        frame_rate_numerator=25,
+        frame_rate_denominator=1,
+        avg_frame_rate_numerator=25,
+        avg_frame_rate_denominator=1,
+        duration_seconds=1.0,
+    )
+    # VFR/uneindeutig: keine reine Framerate-Ablehnung
+    validate_video_h264_output_policy(source=src, output=out, expected_audio=audio)
+
+    # CFR (r==avg): Framerate muss passen
+    src_cfr = _probe(
+        frame_rate_numerator=25,
+        frame_rate_denominator=1,
+        avg_frame_rate_numerator=25,
+        avg_frame_rate_denominator=1,
+        duration_seconds=1.0,
+    )
+    out_bad = _probe(
+        frame_rate_numerator=30,
+        frame_rate_denominator=1,
+        avg_frame_rate_numerator=30,
+        avg_frame_rate_denominator=1,
+        duration_seconds=1.0,
+    )
+    with pytest.raises(VideoTranscodeError) as exc:
+        validate_video_h264_output_policy(
+            source=src_cfr, output=out_bad, expected_audio=audio
+        )
+    assert exc.value.code == "output_policy_mismatch"
+
+
+def test_r1_view_model_channels_and_rotation(discovery_project, imported) -> None:
+    _seed_validation_and_plan(discovery_project)
+    views = list_video_transcode_plan_item_views(discovery_project)
+    assert views
+    # echte Fixtures liefern Kanalanzahl / Rotation (null/0)
+    known_channels = [v for v in views if v.audio_channels is not None]
+    assert known_channels
+    assert format_rotation_display(90.0) == "90°"
+    assert format_rotation_display(0.0) == "0°"
+    assert format_rotation_display(None) == "keine Rotation"
+    ui_src = Path(intake_ui.__file__).read_text(encoding="utf-8")
+    assert "list_video_transcode_plan_item_views" in ui_src
+    assert "sqlite3" not in ui_src
+    assert "open_registry" not in ui_src
+    assert "transcoded=" in ui_src
+
+
+def test_r1_real_no_tc_and_with_tc_reports(tmp_path: Path) -> None:
+    # A: ohne Timecode
+    src = tmp_path / "no_tc.mp4"
+    _ffmpeg_make_video(src, pix_fmt="yuv422p", with_audio=False)
+    root = tmp_path / "projA"
+    root.mkdir()
+    sha = compute_sha256_hex(src)
+    pin = probe_source_media(src, media_kind=MediaKind.VIDEO)
+    assert pin.embedded_timecode is None
+    result = publish_video_h264_v1(
+        project_root=root,
+        source_path=src,
+        temp_path=root / "_otio_v2" / "media" / "temp" / "r" / "a.tmp.mp4",
+        working_path=(
+            root
+            / "_otio_v2"
+            / "media"
+            / "working"
+            / "a"
+            / sha
+            / VIDEO_H264_PROFILE_VERSION
+            / "a.mp4"
+        ),
+        expected_source_sha256=sha,
+        source_probe=pin,
+    )
+    assert result.timecode_policy == "absent"
+    assert result.output_probe.embedded_timecode is None
+    assert result.output_probe.tmcd_stream_count == 0
+    assert result.output_probe.data_stream_count == 0
+    assert result.output_probe.subtitle_stream_count == 0
+
+    # B: mit Timecode
+    src_tc = tmp_path / "with_tc.mp4"
+    _ffmpeg_make_video(src_tc, pix_fmt="yuv422p", timecode="01:02:03:04")
+    root_b = tmp_path / "projB"
+    root_b.mkdir()
+    sha_b = compute_sha256_hex(src_tc)
+    pin_b = probe_source_media(src_tc, media_kind=MediaKind.VIDEO)
+    assert pin_b.embedded_timecode == "01:02:03:04"
+    result_b = publish_video_h264_v1(
+        project_root=root_b,
+        source_path=src_tc,
+        temp_path=root_b / "_otio_v2" / "media" / "temp" / "r" / "b.tmp.mp4",
+        working_path=(
+            root_b
+            / "_otio_v2"
+            / "media"
+            / "working"
+            / "b"
+            / sha_b
+            / VIDEO_H264_PROFILE_VERSION
+            / "b.mp4"
+        ),
+        expected_source_sha256=sha_b,
+        source_probe=pin_b,
+    )
+    assert result_b.timecode_policy == "preserved"
+    assert result_b.output_probe.embedded_timecode == "01:02:03:04"
+    assert result_b.output_probe.tmcd_stream_count == 1
+    assert result_b.output_probe.data_stream_count == 1
+    assert result_b.output_probe.subtitle_stream_count == 0

@@ -17,6 +17,7 @@ from otio_app.discovery_v2.adapters.media_probe import (
     MediaProbeAdapterError,
     NormalizedMediaProbe,
     is_hdr_color_profile,
+    is_reliable_constant_frame_rate,
     probe_source_media,
 )
 from otio_app.discovery_v2.adapters.source_hash import compute_sha256_hex
@@ -332,11 +333,10 @@ def validate_video_h264_output_policy(
                 "Seitenverhältnis/Hochformat verändert.",
             )
 
-    if (
-        source.frame_rate_numerator
-        and source.frame_rate_denominator
-        and output.frame_rate_numerator
-        and output.frame_rate_denominator
+    # Exakte Framerate-Gleichheit nur bei zuverlässig erkannter CFR-Quelle.
+    # VFR / uneinheitliche avg vs r → nur Dauer/Plausibilität prüfen.
+    if is_reliable_constant_frame_rate(source) and (
+        output.frame_rate_numerator and output.frame_rate_denominator
     ):
         try:
             src_fps = Fraction(
@@ -348,8 +348,33 @@ def validate_video_h264_output_policy(
         except (ZeroDivisionError, ValueError):
             src_fps = out_fps = None  # type: ignore[assignment]
         if src_fps is not None and out_fps is not None and src_fps != out_fps:
-            # Konstante Framerate: rationale Gleichheit verlangen.
-            # Uneindeutige/VFR-Quellen ohne klare Zähler/Nenner fallen hier nicht an.
+            raise VideoTranscodeError(
+                "output_policy_mismatch",
+                (
+                    "Framerate weicht von der CFR-Source ab: "
+                    f"{source.frame_rate_numerator}/{source.frame_rate_denominator} → "
+                    f"{output.frame_rate_numerator}/{output.frame_rate_denominator}"
+                ),
+            )
+    elif (
+        source.frame_rate_numerator
+        and source.frame_rate_denominator
+        and output.frame_rate_numerator
+        and output.frame_rate_denominator
+        and source.avg_frame_rate_numerator is None
+        and source.avg_frame_rate_denominator is None
+    ):
+        # Unit-/Legacy-Probes ohne avg: bisheriges CFR-Verhalten beibehalten.
+        try:
+            src_fps = Fraction(
+                source.frame_rate_numerator, source.frame_rate_denominator
+            )
+            out_fps = Fraction(
+                output.frame_rate_numerator, output.frame_rate_denominator
+            )
+        except (ZeroDivisionError, ValueError):
+            src_fps = out_fps = None  # type: ignore[assignment]
+        if src_fps is not None and out_fps is not None and src_fps != out_fps:
             raise VideoTranscodeError(
                 "output_policy_mismatch",
                 (
@@ -407,17 +432,42 @@ def validate_video_h264_output_policy(
 
     if output.subtitle_stream_count:
         raise VideoTranscodeError(
-            "output_policy_mismatch",
-            "Unerwartete Untertitelstreams in der Ausgabe.",
+            "unexpected_subtitle_stream",
+            f"Unerwartete Untertitelstreams: {output.subtitle_stream_count}",
+        )
+    if output.attachment_stream_count:
+        raise VideoTranscodeError(
+            "unexpected_attachment_stream",
+            f"Unerwartete Attachments: {output.attachment_stream_count}",
         )
 
     src_tc = source.embedded_timecode
     out_tc = output.embedded_timecode
+    tmcd_count = output.tmcd_stream_count
+    non_tmcd_data = max(0, int(output.data_stream_count or 0) - int(tmcd_count or 0))
+    # Falls Probe nur data_stream_count ohne Klassifikation liefert: konservativ.
+    if output.data_streams:
+        tmcd_count = sum(1 for d in output.data_streams if d.is_tmcd)
+        non_tmcd_data = sum(1 for d in output.data_streams if not d.is_tmcd)
+
     if src_tc:
-        if out_tc != src_tc:
+        if not out_tc or out_tc != src_tc:
             raise VideoTranscodeError(
                 "timecode_preservation_failed",
                 f"Timecode nicht erhalten: source={src_tc!r}, output={out_tc!r}",
+            )
+        if tmcd_count != 1:
+            raise VideoTranscodeError(
+                "timecode_preservation_failed",
+                (
+                    "Quelle mit Timecode erfordert genau einen erkennbaren "
+                    f"tmcd-Stream (gefunden={tmcd_count})."
+                ),
+            )
+        if non_tmcd_data > 0 or (output.data_stream_count or 0) > 1:
+            raise VideoTranscodeError(
+                "unexpected_data_stream",
+                "Zusätzliche oder nicht-tmcd-Datenstreams in der Ausgabe.",
             )
         timecode_policy = "preserved"
     else:
@@ -426,16 +476,17 @@ def validate_video_h264_output_policy(
                 "timecode_preservation_failed",
                 f"Timecode wurde erfunden: {out_tc!r}",
             )
-        timecode_policy = "absent"
-
-    # Ein tmcd-Datenstream ist bei Timecode-Erhalt in MP4 technisch üblich und
-    # zulässig — sonst keine Datenstreams.
-    if output.data_stream_count:
-        if not (src_tc and out_tc == src_tc and output.data_stream_count == 1):
+        if tmcd_count > 0:
             raise VideoTranscodeError(
-                "output_policy_mismatch",
-                "Unerwartete Datenstreams in der Ausgabe.",
+                "unexpected_timecode_stream",
+                "tmcd-Datenstream ohne Source-Timecode.",
             )
+        if (output.data_stream_count or 0) > 0 or non_tmcd_data > 0:
+            raise VideoTranscodeError(
+                "unexpected_data_stream",
+                "Unerwartete Datenstreams ohne Source-Timecode.",
+            )
+        timecode_policy = "absent"
 
     src_rot = evaluate_source_rotation(source)
     out_rot = evaluate_source_rotation(output)

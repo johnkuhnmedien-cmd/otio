@@ -51,6 +51,18 @@ _DISPLAYMATRIX_RE = re.compile(
 
 
 @dataclass(frozen=True)
+class DataStreamInfo:
+    codec_name: str | None = None
+    codec_tag: str | None = None
+
+    @property
+    def is_tmcd(self) -> bool:
+        tag = (self.codec_tag or "").strip().lower()
+        name = (self.codec_name or "").strip().lower()
+        return tag == "tmcd" or name in {"tmcd", "timedcode"}
+
+
+@dataclass(frozen=True)
 class NormalizedMediaProbe:
     media_kind: str
     container_format: str | None = None
@@ -61,6 +73,8 @@ class NormalizedMediaProbe:
     duration_seconds: float | None = None
     frame_rate_numerator: int | None = None
     frame_rate_denominator: int | None = None
+    avg_frame_rate_numerator: int | None = None
+    avg_frame_rate_denominator: int | None = None
     audio_stream_count: int | None = None
     embedded_timecode: str | None = None
     pixel_format: str | None = None
@@ -74,6 +88,28 @@ class NormalizedMediaProbe:
     color_primaries: str | None = None
     subtitle_stream_count: int = 0
     data_stream_count: int = 0
+    tmcd_stream_count: int = 0
+    attachment_stream_count: int = 0
+    data_streams: tuple[DataStreamInfo, ...] = ()
+
+
+def is_reliable_constant_frame_rate(probe: NormalizedMediaProbe) -> bool:
+    """True nur wenn r_frame_rate und avg_frame_rate übereinstimmen."""
+    if not (
+        probe.frame_rate_numerator
+        and probe.frame_rate_denominator
+        and probe.avg_frame_rate_numerator
+        and probe.avg_frame_rate_denominator
+    ):
+        return False
+    try:
+        r = Fraction(probe.frame_rate_numerator, probe.frame_rate_denominator)
+        avg = Fraction(
+            probe.avg_frame_rate_numerator, probe.avg_frame_rate_denominator
+        )
+    except (ZeroDivisionError, ValueError):
+        return False
+    return r == avg
 
 
 def derive_bit_depth(
@@ -139,7 +175,7 @@ def _run_ffprobe_json(path: Path, *, timeout_sec: int = 120) -> dict:
         "-show_entries",
         "format=format_name,duration:format_tags=timecode:"
         "stream=index,codec_type,codec_name,width,height,r_frame_rate,"
-        "pix_fmt,bits_per_raw_sample,codec_tag_string,channels,"
+        "avg_frame_rate,pix_fmt,bits_per_raw_sample,codec_tag_string,channels,"
         "sample_aspect_ratio,color_range,color_space,color_transfer,"
         "color_primaries:stream_tags=timecode,rotate:"
         "stream_side_data=rotation,side_data_type",
@@ -306,9 +342,14 @@ def probe_source_media(
     height = basic.height
     frame_num: int | None = None
     frame_den: int | None = None
+    avg_frame_num: int | None = None
+    avg_frame_den: int | None = None
     audio_stream_count = 0
     subtitle_stream_count = 0
     data_stream_count = 0
+    tmcd_stream_count = 0
+    attachment_stream_count = 0
+    data_streams: list[DataStreamInfo] = []
     audio_channels: int | None = None
     pixel_format: str | None = None
     bits_per_raw_sample: object | None = None
@@ -324,6 +365,7 @@ def probe_source_media(
     for stream in payload.get("streams") or []:
         codec_type = (stream.get("codec_type") or "").lower()
         codec_name = (stream.get("codec_name") or "").lower() or None
+        codec_tag = (stream.get("codec_tag_string") or "").strip() or None
         if codec_type == "video":
             if video_codec is None and codec_name:
                 video_codec = codec_name
@@ -341,6 +383,10 @@ def probe_source_media(
                 frac = parse_frame_rate_fraction(stream.get("r_frame_rate"))
                 if frac is not None:
                     frame_num, frame_den = frac
+            if avg_frame_num is None:
+                avg_frac = parse_frame_rate_fraction(stream.get("avg_frame_rate"))
+                if avg_frac is not None:
+                    avg_frame_num, avg_frame_den = avg_frac
             if pixel_format is None and stream.get("pix_fmt"):
                 pixel_format = str(stream["pix_fmt"]).strip().lower() or None
             if bits_per_raw_sample is None and stream.get("bits_per_raw_sample") not in (
@@ -374,8 +420,14 @@ def probe_source_media(
                     audio_channels = None
         elif codec_type == "subtitle":
             subtitle_stream_count += 1
+        elif codec_type == "attachment":
+            attachment_stream_count += 1
         elif codec_type == "data":
+            info = DataStreamInfo(codec_name=codec_name, codec_tag=codec_tag)
+            data_streams.append(info)
             data_stream_count += 1
+            if info.is_tmcd:
+                tmcd_stream_count += 1
 
     bit_depth = (
         derive_bit_depth(pixel_format, bits_per_raw_sample=bits_per_raw_sample)
@@ -389,6 +441,8 @@ def probe_source_media(
     if media_kind == MediaKind.IMAGE:
         frame_num = None
         frame_den = None
+        avg_frame_num = None
+        avg_frame_den = None
         if width is None or height is None:
             raise MediaProbeAdapterError(
                 "unreadable_media",
@@ -417,6 +471,10 @@ def probe_source_media(
         duration_seconds=duration,
         frame_rate_numerator=frame_num,
         frame_rate_denominator=frame_den,
+        avg_frame_rate_numerator=avg_frame_num if media_kind == MediaKind.VIDEO else None,
+        avg_frame_rate_denominator=(
+            avg_frame_den if media_kind == MediaKind.VIDEO else None
+        ),
         audio_stream_count=audio_stream_count if media_kind != MediaKind.IMAGE else None,
         embedded_timecode=_extract_embedded_timecode(payload),
         pixel_format=pixel_format,
@@ -430,4 +488,7 @@ def probe_source_media(
         color_primaries=color_primaries if media_kind == MediaKind.VIDEO else None,
         subtitle_stream_count=subtitle_stream_count,
         data_stream_count=data_stream_count,
+        tmcd_stream_count=tmcd_stream_count,
+        attachment_stream_count=attachment_stream_count,
+        data_streams=tuple(data_streams),
     )

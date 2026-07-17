@@ -215,7 +215,7 @@ def _source_snapshots(root: Path) -> dict[str, tuple[int, bytes]]:
 
 def test_schema_versioned_unique(discovery_project) -> None:
     conn = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn) == "7"
+    assert reg_db.read_schema_version(conn) == "8"
     cols = {
         str(r[1])
         for r in conn.execute("PRAGMA table_info(working_media)").fetchall()
@@ -346,8 +346,9 @@ def test_idempotent_reuse_same_hash(discovery_project, imported, monkeypatch) ->
 
     second = start_copy_intake(discovery_project, sync=True)
     assert second.run
-    assert second.run.skipped_assets == second.run.total_assets
+    assert second.run.reused_assets == second.run.total_assets
     assert second.run.succeeded_assets == 0
+    assert second.run.copied_assets == 0
     _, assets, _, _ = get_copy_intake_status(discovery_project)
     assert all(a.status == IntakeRunAssetStatus.REUSED for a in assets)
 
@@ -591,7 +592,7 @@ def test_migrate_from_v5_unique(discovery_project, imported) -> None:
     conn.commit()
     conn.close()
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "7"
+    assert reg_db.read_schema_version(conn2) == "8"
     cols = {
         str(r[1])
         for r in conn2.execute("PRAGMA table_info(working_media)").fetchall()

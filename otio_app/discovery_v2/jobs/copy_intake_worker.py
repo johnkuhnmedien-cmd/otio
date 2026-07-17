@@ -172,25 +172,31 @@ def process_copy_intake_run(project_root: Path, run_id: str) -> IntakeRunRecord:
         succeeded = 0
         failed = 0
         skipped = 0
+        copied = 0
+        reused = 0
 
         for asset in assets:
             updated = _process_one_asset(conn, root, run, asset)
             if updated.status == IntakeRunAssetStatus.SUCCEEDED:
                 succeeded += 1
-            elif updated.status in {
-                IntakeRunAssetStatus.SKIPPED,
-                IntakeRunAssetStatus.REUSED,
-            }:
+                copied += 1
+            elif updated.status == IntakeRunAssetStatus.REUSED:
+                reused += 1
+            elif updated.status == IntakeRunAssetStatus.SKIPPED:
                 skipped += 1
             else:
                 failed += 1
-            processed = succeeded + failed + skipped
+            processed = succeeded + failed + skipped + reused
             run = run.model_copy(
                 update={
                     "processed_assets": processed,
                     "succeeded_assets": succeeded,
                     "failed_assets": failed,
                     "skipped_assets": skipped,
+                    "copied_assets": copied,
+                    "reused_assets": reused,
+                    "remuxed_assets": 0,
+                    "transcoded_assets": 0,
                 }
             )
             update_intake_run(conn, run)
@@ -198,7 +204,7 @@ def process_copy_intake_run(project_root: Path, run_id: str) -> IntakeRunRecord:
 
         if failed == 0:
             final_status = IntakeRunStatus.COMPLETED
-        elif succeeded + skipped > 0:
+        elif succeeded + skipped + reused > 0:
             final_status = IntakeRunStatus.COMPLETED_WITH_ERRORS
         else:
             final_status = IntakeRunStatus.FAILED
@@ -207,10 +213,14 @@ def process_copy_intake_run(project_root: Path, run_id: str) -> IntakeRunRecord:
             update={
                 "status": final_status,
                 "completed_at": _now(),
-                "processed_assets": succeeded + failed + skipped,
+                "processed_assets": succeeded + failed + skipped + reused,
                 "succeeded_assets": succeeded,
                 "failed_assets": failed,
                 "skipped_assets": skipped,
+                "copied_assets": copied,
+                "reused_assets": reused,
+                "remuxed_assets": 0,
+                "transcoded_assets": 0,
                 "error_summary": (
                     None
                     if failed == 0

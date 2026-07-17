@@ -257,29 +257,37 @@ def _build_v6_registry(project_root: Path) -> Path:
     return db_path
 
 
-def test_schema_v6_to_v7_preserves_copy_history(tmp_path: Path) -> None:
+def test_schema_v6_to_v8_preserves_copy_history(tmp_path: Path) -> None:
     root = tmp_path / "Project"
     root.mkdir()
     _build_v6_registry(root)
 
     conn = reg_db.get_registry_connection(root)
-    assert reg_db.read_schema_version(conn) == "7"
+    assert reg_db.read_schema_version(conn) == "8"
     cols = {r[1] for r in conn.execute("PRAGMA table_info(intake_runs)")}
     assert "scope" in cols
+    assert "transcoded_assets" in cols
+    assert "copied_assets" in cols
+    assert "remuxed_assets" in cols
+    assert "reused_assets" in cols
     run = conn.execute("SELECT * FROM intake_runs WHERE run_id='run-copy-hist'").fetchone()
     assert run is not None
     assert run["scope"] == "copy_only"
+    assert int(run["transcoded_assets"]) == 0
+    assert int(run["remuxed_assets"]) == 0
     assert conn.execute("SELECT COUNT(*) FROM working_media").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM intake_run_assets").fetchone()[0] == 1
     conn.close()
 
     # Idempotent erneut öffnen
     conn2 = reg_db.get_registry_connection(root)
-    assert reg_db.read_schema_version(conn2) == "7"
+    assert reg_db.read_schema_version(conn2) == "8"
     assert conn2.execute("SELECT COUNT(*) FROM intake_runs").fetchone()[0] == 1
     assert conn2.execute(
         "SELECT scope FROM intake_runs WHERE run_id='run-copy-hist'"
     ).fetchone()[0] == "copy_only"
+    cols2 = {r[1] for r in conn2.execute("PRAGMA table_info(intake_runs)")}
+    assert "transcoded_assets" in cols2
     conn2.close()
 
 

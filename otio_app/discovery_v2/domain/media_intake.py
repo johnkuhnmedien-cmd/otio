@@ -184,6 +184,10 @@ class IntakeRunRecord(BaseModel):
     succeeded_assets: int = 0
     failed_assets: int = 0
     skipped_assets: int = 0
+    copied_assets: int = 0
+    remuxed_assets: int = 0
+    transcoded_assets: int = 0
+    reused_assets: int = 0
     error_summary: str | None = None
     worker_version: str = COPY_INTAKE_WORKER_VERSION
     scope: str = INTAKE_RUN_SCOPE_COPY_ONLY
@@ -256,8 +260,16 @@ class IntakeRunReport(BaseModel):
     succeeded_assets: int = 0
     failed_assets: int = 0
     skipped_assets: int = 0
+    copied_assets: int = 0
     remuxed_assets: int = 0
+    transcoded_assets: int = 0
+    # Kurzer JSON-Alias für Video-Transcode-Berichte (gleicher Wert).
+    transcoded: int = 0
     reused_assets: int = 0
+    # Kurzer JSON-Alias (gleicher Wert wie reused_assets).
+    reused: int = 0
+    # Kurzer JSON-Alias für fehlgeschlagene Assets.
+    failed: int = 0
     error_summary: str | None = None
     worker_version: str = COPY_INTAKE_WORKER_VERSION
     scope: str = INTAKE_RUN_SCOPE_COPY_ONLY

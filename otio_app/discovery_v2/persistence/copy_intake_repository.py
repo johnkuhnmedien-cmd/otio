@@ -14,6 +14,8 @@ from otio_app.discovery_v2.domain.media_intake import (
     COPY_WORKING_ACTION,
     COPY_WORKING_PROFILE_VERSION,
     INTAKE_RUN_SCOPE_COPY_ONLY,
+    INTAKE_RUN_SCOPE_REMUX_ONLY,
+    INTAKE_RUN_SCOPE_VIDEO_TRANSCODE_ONLY,
     IntakeAction,
     IntakeRunAssetRecord,
     IntakeRunAssetStatus,
@@ -166,8 +168,9 @@ def insert_intake_run(conn: sqlite3.Connection, run: IntakeRunRecord) -> None:
             run_id, project_id, plan_id, import_id, selection_id, scan_id,
             validation_run_id, status, created_at, started_at, completed_at,
             total_assets, processed_assets, succeeded_assets, failed_assets,
-            skipped_assets, error_summary, worker_version, scope
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            skipped_assets, error_summary, worker_version, scope,
+            copied_assets, remuxed_assets, transcoded_assets, reused_assets
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run.run_id,
@@ -189,6 +192,10 @@ def insert_intake_run(conn: sqlite3.Connection, run: IntakeRunRecord) -> None:
             run.error_summary,
             run.worker_version,
             run.scope or INTAKE_RUN_SCOPE_COPY_ONLY,
+            run.copied_assets,
+            run.remuxed_assets,
+            run.transcoded_assets,
+            run.reused_assets,
         ),
     )
 
@@ -239,7 +246,11 @@ def update_intake_run(conn: sqlite3.Connection, run: IntakeRunRecord) -> None:
             skipped_assets = ?,
             error_summary = ?,
             worker_version = ?,
-            scope = ?
+            scope = ?,
+            copied_assets = ?,
+            remuxed_assets = ?,
+            transcoded_assets = ?,
+            reused_assets = ?
         WHERE run_id = ?
         """,
         (
@@ -254,6 +265,10 @@ def update_intake_run(conn: sqlite3.Connection, run: IntakeRunRecord) -> None:
             run.error_summary,
             run.worker_version,
             run.scope or INTAKE_RUN_SCOPE_COPY_ONLY,
+            run.copied_assets,
+            run.remuxed_assets,
+            run.transcoded_assets,
+            run.reused_assets,
             run.run_id,
         ),
     )
@@ -501,16 +516,35 @@ def build_report_from_intake_run(
     assets: list[IntakeRunAssetRecord] | None = None,
     asset_extras: dict[str, dict[str, str | None]] | None = None,
 ) -> IntakeRunReport:
+    """Baut den JSON-Bericht; Zähler sind scope-getrennt (kein Remux für VT)."""
     extras = asset_extras or {}
     report_assets: list[IntakeRunReportAsset] = []
+    scope = run.scope or INTAKE_RUN_SCOPE_COPY_ONLY
+    copied = 0
     remuxed = 0
+    transcoded = 0
     reused = 0
-    if assets:
+    failed = 0
+
+    if assets is not None:
         for asset in assets:
             if asset.status == IntakeRunAssetStatus.SUCCEEDED:
-                remuxed += 1
+                if scope == INTAKE_RUN_SCOPE_COPY_ONLY:
+                    copied += 1
+                elif scope == INTAKE_RUN_SCOPE_REMUX_ONLY:
+                    remuxed += 1
+                elif scope == INTAKE_RUN_SCOPE_VIDEO_TRANSCODE_ONLY:
+                    transcoded += 1
+                elif asset.planned_action == IntakeAction.COPY:
+                    copied += 1
+                elif asset.planned_action == IntakeAction.REMUX:
+                    remuxed += 1
+                elif asset.planned_action == IntakeAction.TRANSCODE:
+                    transcoded += 1
             elif asset.status == IntakeRunAssetStatus.REUSED:
                 reused += 1
+            elif asset.status == IntakeRunAssetStatus.FAILED:
+                failed += 1
             detail = extras.get(asset.asset_id, {})
             report_assets.append(
                 IntakeRunReportAsset(
@@ -525,6 +559,13 @@ def build_report_from_intake_run(
                     output_sha256=asset.output_sha256,
                 )
             )
+    else:
+        copied = run.copied_assets
+        remuxed = run.remuxed_assets
+        transcoded = run.transcoded_assets
+        reused = run.reused_assets
+        failed = run.failed_assets
+
     return IntakeRunReport(
         run_id=run.run_id,
         project_id=run.project_id,
@@ -542,11 +583,16 @@ def build_report_from_intake_run(
         succeeded_assets=run.succeeded_assets,
         failed_assets=run.failed_assets,
         skipped_assets=run.skipped_assets,
+        copied_assets=copied,
         remuxed_assets=remuxed,
+        transcoded_assets=transcoded,
+        transcoded=transcoded,
         reused_assets=reused,
+        reused=reused,
+        failed=failed,
         error_summary=run.error_summary,
         worker_version=run.worker_version,
-        scope=run.scope or INTAKE_RUN_SCOPE_COPY_ONLY,
+        scope=scope,
         report_relative_path=f"intake/runs/{run.run_id}.json",
         registry_sqlite_relative_path="registry/assets.sqlite3",
         assets=report_assets,
@@ -607,6 +653,12 @@ def _row_to_run(row: sqlite3.Row) -> IntakeRunRecord:
         if "scope" in keys and row["scope"]
         else INTAKE_RUN_SCOPE_COPY_ONLY
     )
+
+    def _counter(name: str) -> int:
+        if name not in keys or row[name] is None:
+            return 0
+        return int(row[name])
+
     return IntakeRunRecord(
         run_id=str(row["run_id"]),
         project_id=str(row["project_id"]),
@@ -624,6 +676,10 @@ def _row_to_run(row: sqlite3.Row) -> IntakeRunRecord:
         succeeded_assets=int(row["succeeded_assets"]),
         failed_assets=int(row["failed_assets"]),
         skipped_assets=int(row["skipped_assets"]),
+        copied_assets=_counter("copied_assets"),
+        remuxed_assets=_counter("remuxed_assets"),
+        transcoded_assets=_counter("transcoded_assets"),
+        reused_assets=_counter("reused_assets"),
         error_summary=row["error_summary"],
         worker_version=str(row["worker_version"]),
         scope=scope,

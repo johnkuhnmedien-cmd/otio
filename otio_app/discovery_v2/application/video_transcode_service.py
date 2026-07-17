@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 from otio_app.discovery_v2.adapters.intake_job_launcher import get_intake_job_launcher
+from otio_app.discovery_v2.adapters.media_probe import (
+    MediaProbeAdapterError,
+    probe_source_media,
+)
 from otio_app.discovery_v2.application.inventory_service import (
     InventoryServiceError,
     require_discovery_project,
@@ -47,7 +53,20 @@ from otio_app.discovery_v2.persistence.copy_intake_repository import (
     new_run_asset_id,
     open_registry,
 )
+from otio_app.discovery_v2.persistence.technical_validation_repository import (
+    list_asset_validations,
+)
 from otio_app.models import Project
+
+
+@dataclass(frozen=True)
+class VideoTranscodePlanItemView:
+    """UI-Viewmodell: Plan-Item + angereicherte Validation/Probe-Felder."""
+
+    item: IntakePlanItem
+    audio_stream_count: int | None = None
+    audio_channels: int | None = None
+    rotation_degrees: float | None = None
 
 
 class VideoTranscodeServiceError(InventoryServiceError):
@@ -325,3 +344,74 @@ def list_open_video_transcode_plan_items(project: Project) -> list[IntakePlanIte
     if plan is None or stale:
         return []
     return _video_transcode_items(plan)
+
+
+def list_video_transcode_plan_item_views(
+    project: Project,
+) -> list[VideoTranscodePlanItemView]:
+    """Reichert offene Video-Transcode-Items für die UI an (keine DB in Streamlit)."""
+    try:
+        project = require_discovery_project(project)
+    except InventoryServiceError:
+        return []
+
+    plan, stale, _ = get_current_intake_plan(project)
+    if plan is None or stale:
+        return []
+    items = _video_transcode_items(plan)
+    if not items:
+        return []
+
+    validation_by_asset: dict[str, object] = {}
+    try:
+        conn = open_registry(project.project_root_path)
+        try:
+            for record in list_asset_validations(
+                conn, run_id=plan.validation_run_id
+            ):
+                validation_by_asset[record.asset_id] = record
+        finally:
+            conn.close()
+    except RegistryDatabaseError:
+        validation_by_asset = {}
+
+    views: list[VideoTranscodePlanItemView] = []
+    root = Path(project.project_root_path)
+    for item in items:
+        validation = validation_by_asset.get(item.asset_id)
+        audio_streams = getattr(validation, "audio_stream_count", None)
+        audio_channels: int | None = None
+        rotation: float | None = None
+        source_path = root / item.source_relative_path
+        if source_path.is_file() and not source_path.is_symlink():
+            try:
+                probe = probe_source_media(source_path, media_kind=MediaKind.VIDEO)
+            except MediaProbeAdapterError:
+                probe = None
+            except Exception:  # noqa: BLE001
+                probe = None
+            if probe is not None:
+                if audio_streams is None:
+                    audio_streams = probe.audio_stream_count
+                audio_channels = probe.audio_channels
+                rotation = probe.rotation_degrees
+        views.append(
+            VideoTranscodePlanItemView(
+                item=item,
+                audio_stream_count=audio_streams,
+                audio_channels=audio_channels,
+                rotation_degrees=rotation,
+            )
+        )
+    return views
+
+
+def format_rotation_display(rotation_degrees: float | None) -> str:
+    """UI-Formatierung: bekannte Rotation bzw. kontrollierter Nullwert."""
+    if rotation_degrees is None:
+        return "keine Rotation"
+    if abs(rotation_degrees) < 0.01:
+        return "0°"
+    if float(rotation_degrees).is_integer():
+        return f"{int(rotation_degrees)}°"
+    return f"{rotation_degrees}°"
