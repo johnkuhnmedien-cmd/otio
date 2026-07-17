@@ -27,6 +27,28 @@ def ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
 
 
+def ffmpeg_encoder_available(encoder: str) -> bool:
+    """True, wenn ``ffmpeg -encoders`` den Encoder auflistet."""
+    if not ffmpeg_available():
+        return False
+    try:
+        completed = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+            shell=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    if completed.returncode != 0:
+        return False
+    token = f" {encoder} "
+    text = f" {completed.stdout or ''} "
+    return token in text
+
+
 def run_ffmpeg(
     argv: list[str],
     *,

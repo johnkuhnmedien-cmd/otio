@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 import subprocess
 from dataclasses import dataclass
 from fractions import Fraction
@@ -25,9 +27,27 @@ class MediaProbeAdapterError(Exception):
 _KNOWN_PIXEL_FORMAT_BIT_DEPTH: dict[str, int] = {
     "yuv420p": 8,
     "yuvj420p": 8,
+    "yuv422p": 8,
+    "yuv444p": 8,
     "yuv420p10le": 10,
     "yuv422p10le": 10,
+    "yuv444p10le": 10,
+    "yuv420p12le": 12,
 }
+
+_HDR_TRANSFERS = frozenset(
+    {
+        "smpte2084",
+        "arib-std-b67",
+        "smpte2086",
+    }
+)
+_HDR_PRIMARIES = frozenset({"bt2020"})
+
+_DISPLAYMATRIX_RE = re.compile(
+    r"([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)",
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True)
@@ -45,6 +65,15 @@ class NormalizedMediaProbe:
     embedded_timecode: str | None = None
     pixel_format: str | None = None
     bit_depth: int | None = None
+    audio_channels: int | None = None
+    sample_aspect_ratio: str | None = None
+    rotation_degrees: float | None = None
+    color_range: str | None = None
+    color_space: str | None = None
+    color_transfer: str | None = None
+    color_primaries: str | None = None
+    subtitle_stream_count: int = 0
+    data_stream_count: int = 0
 
 
 def derive_bit_depth(
@@ -91,6 +120,16 @@ def parse_frame_rate_fraction(value: str | None) -> tuple[int, int] | None:
         return None
 
 
+def is_hdr_color_profile(
+    *,
+    color_transfer: str | None,
+    color_primaries: str | None,
+) -> bool:
+    transfer = (color_transfer or "").strip().lower()
+    primaries = (color_primaries or "").strip().lower()
+    return transfer in _HDR_TRANSFERS or primaries in _HDR_PRIMARIES
+
+
 def _run_ffprobe_json(path: Path, *, timeout_sec: int = 120) -> dict:
     """Ruft ffprobe als Argumentliste auf (keine Shell-Injection)."""
     command = [
@@ -100,7 +139,10 @@ def _run_ffprobe_json(path: Path, *, timeout_sec: int = 120) -> dict:
         "-show_entries",
         "format=format_name,duration:format_tags=timecode:"
         "stream=index,codec_type,codec_name,width,height,r_frame_rate,"
-        "pix_fmt,bits_per_raw_sample,codec_tag_string:stream_tags=timecode",
+        "pix_fmt,bits_per_raw_sample,codec_tag_string,channels,"
+        "sample_aspect_ratio,color_range,color_space,color_transfer,"
+        "color_primaries:stream_tags=timecode,rotate:"
+        "stream_side_data=rotation,side_data_type",
         "-of",
         "json",
         str(path),
@@ -180,6 +222,54 @@ def _extract_embedded_timecode(payload: dict) -> str | None:
     return tmcd_tc or other_tc
 
 
+def _normalize_rotation(value: object | None) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        degrees = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(degrees) or math.isinf(degrees):
+        return None
+    # Normalisiere nahe Null zu 0.
+    if abs(degrees) < 0.01:
+        return 0.0
+    return degrees
+
+
+def _extract_rotation(stream: dict) -> float | None:
+    tags = stream.get("tags") or {}
+    for key, value in tags.items():
+        if str(key).strip().lower() == "rotate":
+            rot = _normalize_rotation(value)
+            if rot is not None:
+                return rot
+    side_data = stream.get("side_data_list") or []
+    for entry in side_data:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("rotation") is not None:
+            rot = _normalize_rotation(entry.get("rotation"))
+            if rot is not None:
+                return rot
+        # Manche Builds liefern Display Matrix als Text.
+        matrix = entry.get("displaymatrix")
+        if isinstance(matrix, str) and "rotation" in matrix.lower():
+            match = re.search(r"rotation of\s+([+-]?\d+(?:\.\d+)?)", matrix, re.I)
+            if match:
+                return _normalize_rotation(match.group(1))
+    return None
+
+
+def _normalize_color_token(value: object | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text or text in {"unknown", "unspecified", "n/a"}:
+        return None
+    return text
+
+
 def probe_source_media(
     path: Path,
     *,
@@ -217,8 +307,17 @@ def probe_source_media(
     frame_num: int | None = None
     frame_den: int | None = None
     audio_stream_count = 0
+    subtitle_stream_count = 0
+    data_stream_count = 0
+    audio_channels: int | None = None
     pixel_format: str | None = None
     bits_per_raw_sample: object | None = None
+    sample_aspect_ratio: str | None = None
+    rotation_degrees: float | None = None
+    color_range: str | None = None
+    color_space: str | None = None
+    color_transfer: str | None = None
+    color_primaries: str | None = None
     if getattr(basic, "pixel_format", None):
         pixel_format = str(basic.pixel_format).strip().lower() or None
 
@@ -250,10 +349,33 @@ def probe_source_media(
                 "N/A",
             ):
                 bits_per_raw_sample = stream.get("bits_per_raw_sample")
+            if sample_aspect_ratio is None and stream.get("sample_aspect_ratio"):
+                sar = str(stream["sample_aspect_ratio"]).strip()
+                if sar and sar not in {"0:1", "N/A"}:
+                    sample_aspect_ratio = sar
+            if rotation_degrees is None:
+                rotation_degrees = _extract_rotation(stream)
+            if color_range is None:
+                color_range = _normalize_color_token(stream.get("color_range"))
+            if color_space is None:
+                color_space = _normalize_color_token(stream.get("color_space"))
+            if color_transfer is None:
+                color_transfer = _normalize_color_token(stream.get("color_transfer"))
+            if color_primaries is None:
+                color_primaries = _normalize_color_token(stream.get("color_primaries"))
         elif codec_type == "audio":
             audio_stream_count += 1
             if audio_codec is None and codec_name:
                 audio_codec = codec_name
+            if audio_channels is None and stream.get("channels") is not None:
+                try:
+                    audio_channels = int(stream["channels"])
+                except (TypeError, ValueError):
+                    audio_channels = None
+        elif codec_type == "subtitle":
+            subtitle_stream_count += 1
+        elif codec_type == "data":
+            data_stream_count += 1
 
     bit_depth = (
         derive_bit_depth(pixel_format, bits_per_raw_sample=bits_per_raw_sample)
@@ -299,4 +421,13 @@ def probe_source_media(
         embedded_timecode=_extract_embedded_timecode(payload),
         pixel_format=pixel_format,
         bit_depth=bit_depth,
+        audio_channels=audio_channels if media_kind != MediaKind.IMAGE else None,
+        sample_aspect_ratio=sample_aspect_ratio if media_kind == MediaKind.VIDEO else None,
+        rotation_degrees=rotation_degrees if media_kind == MediaKind.VIDEO else None,
+        color_range=color_range if media_kind == MediaKind.VIDEO else None,
+        color_space=color_space if media_kind == MediaKind.VIDEO else None,
+        color_transfer=color_transfer if media_kind == MediaKind.VIDEO else None,
+        color_primaries=color_primaries if media_kind == MediaKind.VIDEO else None,
+        subtitle_stream_count=subtitle_stream_count,
+        data_stream_count=data_stream_count,
     )

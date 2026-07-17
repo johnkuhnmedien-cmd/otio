@@ -25,6 +25,13 @@ from otio_app.discovery_v2.application.remux_intake_service import (
     list_open_remux_plan_items,
     start_remux_intake,
 )
+from otio_app.discovery_v2.application.video_transcode_service import (
+    VideoTranscodeServiceError,
+    can_start_video_transcode_intake,
+    get_video_transcode_status,
+    list_open_video_transcode_plan_items,
+    start_video_transcode_intake,
+)
 from otio_app.discovery_v2.domain.media_intake import (
     ACTIVE_INTAKE_RUN_STATUSES,
     IntakeAction,
@@ -48,8 +55,9 @@ def render_discovery_media_intake_page() -> None:
 
     st.caption(
         "Plant die technische Übernahme. Copy übernimmt bytegenau; "
-        "Remux ändert nur den Container per Stream Copy. "
-        "Video-Transkodierung und Bildkonvertierung sind hier nicht enthalten."
+        "Remux ändert nur den Container per Stream Copy; "
+        "Video-Transkodierung wandelt nach H.264/yuv420p/8-Bit um. "
+        "Bildkonvertierung ist hier nicht enthalten."
     )
 
     error = st.session_state.pop(_SESSION_ERROR_KEY, None)
@@ -146,9 +154,11 @@ def render_discovery_media_intake_page() -> None:
         st.write(f"**Geplante Copy-Assets:** {copy_ctx.get('copy_item_count', 0)}")
 
     remux_run, _, _, _ = get_remux_intake_status(project)
+    vt_run, _, _, _ = get_video_transcode_status(project)
     any_active = (
         (run is not None and run.status in ACTIVE_INTAKE_RUN_STATUSES)
         or (remux_run is not None and remux_run.status in ACTIVE_INTAKE_RUN_STATUSES)
+        or (vt_run is not None and vt_run.status in ACTIVE_INTAKE_RUN_STATUSES)
     )
     can_click_copy = copy_ok and not any_active and not is_stale
 
@@ -259,7 +269,10 @@ def render_discovery_media_intake_page() -> None:
         remux_run is not None and remux_run.status in ACTIVE_INTAKE_RUN_STATUSES
     )
     copy_active = run is not None and run.status in ACTIVE_INTAKE_RUN_STATUSES
-    can_click_remux = remux_ok and not remux_active and not copy_active and not is_stale
+    vt_active = vt_run is not None and vt_run.status in ACTIVE_INTAKE_RUN_STATUSES
+    can_click_remux = (
+        remux_ok and not remux_active and not copy_active and not vt_active and not is_stale
+    )
 
     if can_click_remux:
         if st.button(
@@ -312,6 +325,106 @@ def render_discovery_media_intake_page() -> None:
     if remux_working:
         st.markdown(f"**Remux Working Media ({len(remux_working)})**")
         for wm in remux_working[:50]:
+            st.caption(
+                f"`{wm.source_relative_path}` → `{wm.working_relative_path}` "
+                f"(sha256={wm.output_sha256[:12]}…)"
+            )
+
+    # --- Video-Transkodierung (Phase 7C2) -----------------------------------
+    st.subheader("Video-Transkodierung")
+    st.caption(
+        "Video wird technisch nach H.264/yuv420p/8-Bit umgewandelt. "
+        "Auflösung und Seitenverhältnis bleiben erhalten. Es erfolgt kein "
+        "Crop, Zoom oder automatisches 16:9."
+    )
+    vt_ok, vt_msg, vt_ctx = can_start_video_transcode_intake(project)
+    vt_items = list_open_video_transcode_plan_items(project)
+    vt_run, vt_assets, vt_working, vt_status_err = get_video_transcode_status(project)
+    if vt_status_err:
+        st.warning(vt_status_err)
+    if vt_ctx is not None:
+        st.write(
+            f"**Offene Video-Transcode-Items:** "
+            f"{vt_ctx.get('video_transcode_item_count', 0)}"
+        )
+    if vt_items:
+        st.markdown("**Offene Video-Transcode-Positionen**")
+        for item in vt_items:
+            fps = None
+            if item.frame_rate_numerator and item.frame_rate_denominator:
+                fps = f"{item.frame_rate_numerator}/{item.frame_rate_denominator}"
+            st.markdown(
+                f"`{item.source_relative_path}` · "
+                f"Container=`{item.container_format or item.extension}` · "
+                f"codec=`{item.video_codec}` · pix=`{item.pixel_format}` · "
+                f"bit=`{item.bit_depth}` · "
+                f"{item.width}×{item.height} · fps=`{fps or '—'}` · "
+                f"audio_codec=`{item.audio_codec or '—'}` · "
+                f"audio_streams=`—` · channels=`—` · "
+                f"tc=`{item.embedded_timecode or 'null'}` · "
+                f"rotation=`—`"
+            )
+            st.caption(
+                f"Block-/Planungsgrund: {item.reason_code}: {item.reason_detail}"
+            )
+    else:
+        st.caption("Keine offenen Video-Transcode-Items im aktuellen Plan.")
+
+    can_click_vt = vt_ok and not any_active and not is_stale
+    if can_click_vt:
+        if st.button(
+            "Video-Transkodierung starten",
+            type="primary",
+            key="discovery_v2_video_transcode_start_btn",
+        ):
+            try:
+                result = start_video_transcode_intake(project, sync=False)
+            except VideoTranscodeServiceError as exc:
+                st.session_state[_SESSION_ERROR_KEY] = str(exc)
+            else:
+                if result.started:
+                    st.session_state[_SESSION_INFO_KEY] = result.message
+                else:
+                    st.session_state[_SESSION_ERROR_KEY] = result.message
+            st.rerun()
+    else:
+        st.caption(vt_msg or "Video-Transkodierung derzeit nicht startbar.")
+
+    if vt_run is not None:
+        st.write(f"**Video-Transcode-Run-ID:** `{vt_run.run_id}`")
+        st.write(
+            f"**Scope:** `{vt_run.scope}` · **Status:** `{vt_run.status.value}`"
+        )
+        st.write(
+            f"**Fortschritt:** {vt_run.processed_assets} / {vt_run.total_assets} · "
+            f"OK={vt_run.succeeded_assets} · Skip={vt_run.skipped_assets} · "
+            f"Fehler={vt_run.failed_assets}"
+        )
+        if vt_run.error_summary:
+            st.error(vt_run.error_summary)
+        if vt_run.status in ACTIVE_INTAKE_RUN_STATUSES:
+            st.info(
+                "Video-Transkodierung läuft … Seite neu laden, um den Fortschritt "
+                "zu aktualisieren."
+            )
+        st.caption(f"Bericht: `_otio_v2/intake/runs/{vt_run.run_id}.json`")
+        if vt_assets:
+            st.markdown("**Video-Transcode-Ergebnisse**")
+            for item in vt_assets:
+                path = item.working_relative_path or "—"
+                st.markdown(
+                    f"`{item.source_relative_path}` — **{item.status.value}** · "
+                    f"working=`{path}`"
+                )
+                if item.error_code or item.error_message:
+                    st.caption(
+                        f"{item.error_code or ''}: {item.error_message or ''}".strip(
+                            ": "
+                        )
+                    )
+    if vt_working:
+        st.markdown(f"**Video-Transcode Working Media ({len(vt_working)})**")
+        for wm in vt_working[:50]:
             st.caption(
                 f"`{wm.source_relative_path}` → `{wm.working_relative_path}` "
                 f"(sha256={wm.output_sha256[:12]}…)"

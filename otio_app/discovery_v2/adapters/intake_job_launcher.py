@@ -1,4 +1,4 @@
-"""Discovery-spezifischer Launcher für Intake-Jobs (Copy/Remux).
+"""Discovery-spezifischer Launcher für Intake-Jobs (Copy/Remux/Video-Transcode).
 
 Kein Anschluss an die Classic-Job-Registry — Daemon-Threads + SQLite-Status.
 """
@@ -11,12 +11,15 @@ from typing import Callable, Literal
 
 from otio_app.discovery_v2.jobs.copy_intake_worker import process_copy_intake_run
 from otio_app.discovery_v2.jobs.remux_intake_worker import process_remux_intake_run
+from otio_app.discovery_v2.jobs.video_transcode_worker import (
+    process_video_transcode_run,
+)
 
-WorkerKind = Literal["copy", "remux"]
+WorkerKind = Literal["copy", "remux", "video_transcode"]
 
 
 class IntakeJobLauncher:
-    """Ein aktiver Intake-Thread pro Projekt (Copy oder Remux)."""
+    """Ein aktiver Intake-Thread pro Projekt."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -33,6 +36,8 @@ class IntakeJobLauncher:
     def _worker_fn(self, worker: WorkerKind) -> Callable[[Path, str], object]:
         if worker == "remux":
             return process_remux_intake_run
+        if worker == "video_transcode":
+            return process_video_transcode_run
         return process_copy_intake_run
 
     def launch(

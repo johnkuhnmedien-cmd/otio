@@ -935,7 +935,7 @@ def test_plan_only_via_button_and_no_start_buttons() -> None:
         ("yuvj420p", None, 8),
         ("yuv420p10le", None, 10),
         ("yuv422p10le", None, 10),
-        ("yuv444p", None, None),
+        ("yuv444p", None, 8),
         ("yuv420p", "10", 10),
         (None, None, None),
     ],
