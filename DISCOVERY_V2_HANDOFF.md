@@ -821,7 +821,21 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 - Eskalation append-only; Script Lock = unveränderlicher Fingerprint-Snapshot
 - Entscheidungen: D-10-001 … D-10-008
 - Plan: `docs/source_plans/PHASE10_SUPPLEMENTATION_SCRIPT_LOCK_PLAN.md`
-- Keine echte Adobe-/Stockintegration; keine Voice/Timing/OTIO; Phase 11 nicht begonnen
+- Keine echte Adobe-/Stockintegration
+
+## Phase 11 – Voice / Pause / Timing (Fake, implementiert)
+
+- Schema **17**: `narration_project_state`, `voice_profiles`,
+  `voice_generation_runs`/`attempts`, `voice_segments`,
+  `pause_direction_plans`/`pause_directions`,
+  `narration_timelines`/`narration_timeline_entries`
+- Voice: UI → Voice Service → VoiceGenerationGateway → FakeVoiceAdapter
+- Pause: UI → Pause Service → DiscoveryTextGateway (`pause_direction`) → FakeTextAdapter
+- Timing: UI → Narration Timing Service → deterministischer Python Resolver
+- Artefakte unter `_otio_v2/narration/`; Narration-Audio ≠ Working Media
+- Entscheidungen: D-11-001 … D-11-008
+- Plan: `docs/source_plans/PHASE11_VOICE_PAUSE_TIMING_PLAN.md`
+- Kein ElevenLabs; keine Phase-12-Funktion; Phase 12 nicht begonnen
 
 ## Verbleibender Fahrplan
 
@@ -832,8 +846,8 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 5. ~~Phase 8D Observation Review / Closeout~~ — APPROVED
 6. ~~Phase 9 Editorial Core / Coverage (Fake)~~ — implementiert
 7. ~~Phase 10: Supplementation und Script Lock (Fake)~~ — implementiert
-8. Phase 11: Voice, Pausen und Timing (**planen** nach Freigabe)
-9. Phase 12: Visual Edit Plan und Quality
+8. ~~Phase 11: Voice, Pausen und Timing (Fake)~~ — implementiert
+9. Phase 12: Visual Edit Plan und Quality (**planen** nach Freigabe)
 10. Phase 13: Review und OTIO
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
