@@ -5,10 +5,11 @@
 - Branch: `cursor/discovery-v2-integration`
 - PR: `#69`
 - Ursprüngliche Basis: `7187d163a5959351a1ee79f5c931b0d651e21d49`
-- Letzter technisch freigegebener Commit: `11e5cf8ae96e38cd9686cd7d915ad85b66be98e9`
+- Letzter technisch freigegebener Commit: `0d8ec2f060107a1720c750b11e4372c3529a2c61`
 - Phase 7: `APPROVED`
 - Phase 8A: `APPROVED`
-- Aktiver Produktauftrag: keiner (Analysis-Contracts abgeschlossen)
+- Phase 8B: `APPROVED`
+- Aktiver Produktauftrag: keiner (lokale Analysevorbereitung abgeschlossen)
 
 ## Projektmodi
 
@@ -115,6 +116,15 @@ Der gespeicherte Classic-`work_dir` darf bei Discovery nicht als Schreibziel ver
 21. Phase-8A-Härtung (Rohstatus-Eligibility)
     `11e5cf8ae96e38cd9686cd7d915ad85b66be98e9`
 
+22. Phase-8A-Handoff
+    `c104d785f0d32ce1df3c7dcafbb5787a7ba1f57a`
+
+23. Shot-/Frame-Prepare (Phase 8B)
+    `867267184e4afd368b5ae5404131ad090fa46ef3`
+
+24. Phase-8B-Härtung / Evidenzmatrix
+    `0d8ec2f060107a1720c750b11e4372c3529a2c61`
+
 ## Phase 7 – Media Intake (APPROVED)
 
 Phase 7 ist abgeschlossen und freigegeben.
@@ -156,18 +166,17 @@ Phase 8A ist abgeschlossen und freigegeben.
 
 ### Implementierter Umfang
 
-- Analysis-Domainverträge (`AnalysisInputIdentity`, Eligibility, Run/RunAsset, Shot-/Frame-Vertragsformen ohne Produktinstanzen)
+- Analysis-Domainverträge (`AnalysisInputIdentity`, Eligibility, Run/RunAsset, Shot-/Frame-Vertragsformen)
 - Analysis-Identity-Profil: `analysis-contract-v1`
-- Registry-Schema **11**
+- Registry-Schema zunächst **11** (durch Phase 8B auf **12** erhöht)
 - Tabellen:
   - `analysis_runs`
   - `analysis_run_assets`
   - `analysis_identities`
-- exakte aktuelle Plan-zu-Working-Media-Bindung (keine Profilpriorität, kein `created_at`, kein Pfad)
+- exakte aktuelle Plan-zu-Working-Media-Bindung
 - Eligibility nur bei Working-Media-Rohstatus `completed`
-- read-only Discovery-Seite **Assetanalyse**
+- Discovery-Seite **Assetanalyse**
 - Analysis-Pfadvertrag unter `_otio_v2/analysis/`
-- versionierte Analysis-Run-JSON-Verträge (noch ohne produktive Run-Erzeugung aus der UI)
 
 ### Verbindliche Eligibility-Regel
 
@@ -193,37 +202,76 @@ Nicht zulässig:
 - Auswahl nach `created_at`
 - Auswahl nach Pfad oder Dateiname
 
-Audio-only: `not_applicable` für visuelle Analyse (kein Dummyframe, kein Analysis-Run aus der UI).
+Audio-only: `not_applicable` für visuelle Analyse.
 
-### Noch nicht implementiert (Phase 8A)
+## Phase 8B – Shot- und Frame-Vorbereitung (APPROVED)
 
-- keine Shot-Erkennung
-- keine Frame-Extraktion
-- keine Analyseframes
-- keine lokalen Bildsignale
-- keine Visual Observations
+Phase 8B ist abgeschlossen und freigegeben.
+
+### Freigegebene Commits
+
+- Technischer Commit:
+  `867267184e4afd368b5ae5404131ad090fa46ef3`
+  — `feat: add Discovery V2 shot and frame preparation`
+- Hardening-Commit:
+  `0d8ec2f060107a1720c750b11e4372c3529a2c61`
+  — `test: harden Discovery V2 analysis prepare R1 evidence`
+
+### Implementierter Umfang
+
+- Registry-Schema **12**
+- Tabellen:
+  - `technical_shots`
+  - `representative_frames`
+- Profile:
+  - `analysis-prepare-v1`
+  - `shot-detect-v1`
+  - `frame-sample-v1`
+- Run-Scope: `analysis_prepare_only`
+- FFmpeg-Scene-Detection über Discovery-Adapter (`select='gt(scene,0.35)'`)
+- deterministische Shot-Grenzen (Dedup 0,04 s, Min 0,40 s, Max 30 s)
+- repräsentative Frames (Mittelpunkt, Schwarz-Kandidaten, Cap 24)
+- lokale technische Signale (`brightness_mean`, `black_fraction`, `is_black`, `sharpness_score`, Hashes)
+- Standbild-Previews (JPEG/PNG) ohne künstliche Shots/Timestamps
+- Audio → `not_applicable`
+- Prepare-Worker, Launcher, Orphan-Recovery
+- JSON-Runberichte unter `analysis/runs/`
+- UI-Button „Lokale Analyse vorbereiten“ + persistierte Review-Ansicht
+- keine Visual Observations, kein Gateway, keine APIs, keine Modellanalyse
+
+### Artefaktpfade
+
+Unter `_otio_v2/analysis/`:
+
+- `analysis/frames/<working_media_id>/frame-sample-v1/<shot-or-still>/<frame_id>.<jpg|png>`
+- `analysis/temp/<run_id>/`
+- `analysis/runs/<run_id>.json`
+- `analysis/latest_prepare_run.json`
+- `analysis/manifests/<analysis_identity_id>/analysis-prepare-v1.json`
+- `analysis/observations/` (Pfadvertrag vorhanden, noch ohne Produktinhalt)
+
+### Domaintrennung (weiterhin verbindlich)
+
+- Working Media
+- Technical Shot Segment
+- Representative Frame
+- lokale technische Signale
+- Visual Observation *(noch nicht implementiert)*
+- Visual Beat *(noch nicht implementiert)*
+
+`prepared` bedeutet nicht modellanalysiert, nicht redaktionell akzeptiert und nicht für Visual Beats freigegeben.
+
+### Noch nicht implementiert (nach Phase 8B)
+
 - kein Vision-Gateway
-- keine Providerintegration
+- keine LLM-/API-Aufrufe
+- keine Visual Observations
 - kein Nutzer-Consent
-- keine Modellanalyse
+- keine Providerintegration
 - keine Dramaturgie
 - keine Visual Beats
-
-### Analysis-Pfade
-
-Ausschließlich unter:
-
-`_otio_v2/analysis/`
-
-Unter anderem:
-
-- `analysis/runs/<run_id>.json`
-- `analysis/manifests/<analysis_identity_id>.json`
-- `analysis/temp/<run_id>/`
-- `analysis/frames/`
-- `analysis/observations/`
-
-Analysis-Artefakte sind niemals Working Media und dürfen niemals an OTIO übergeben werden.
+- kein OCR-Produktlauf
+- keine Synthetic-/Geo-Entscheidung als redaktionelle Wahrheit
 
 ## Implementierter Ablauf
 
@@ -240,7 +288,8 @@ Projekt anlegen
 → Remux-Intake
 → Video-Transcode-Intake
 → TIFF-Image-Convert
-→ Assetanalyse-Eligibility (read-only)
+→ Assetanalyse-Eligibility
+→ lokale Analysevorbereitung (Shots/Frames)
 
 ## Inventory
 
@@ -264,7 +313,7 @@ Regeln:
 
 Registry-Schema:
 
-`11`
+`12`
 
 SQLite:
 
@@ -272,15 +321,13 @@ SQLite:
 
 SQLite ist interne Wahrheit.
 
-Historische Imports, Validierungen, Intake-Pläne, Working-Media-Versionen und Analysis-Identities dürfen nicht automatisch gelöscht werden.
+Historische Imports, Validierungen, Intake-Pläne, Working-Media-Versionen, Analysis-Identities, Technical Shots und Representative Frames dürfen nicht automatisch gelöscht werden.
 
 Noch keine Tabellen für:
 
-- `technical_shots`
-- `representative_frames`
 - `visual_observations`
 - `model_analysis_attempts`
-- Consent-Events
+- `analysis_consent_events`
 
 ## Technische Validierung
 
@@ -296,7 +343,7 @@ Gespeichert werden unter anderem:
 - Pixel-Format
 - Bit-Tiefe
 - Dublettenhinweise
-- Bildfelder für TIFF/PNG-Intake (u. a. Modus, Orientierung, ICC-/BigTIFF-/Mehrseiten-Hinweise)
+- Bildfelder für TIFF/PNG-Intake
 
 Fehlender Timecode ist kein Fehler.
 
@@ -341,8 +388,6 @@ Temporäre Dateien:
 
 `source_relative_path` ist nur Herkunftsmetadatum und darf nicht der kanonische Zielpfad sein.
 
-Eine neue Quellversion mit neuem SHA-256 erhält eine neue historische Ausgabe.
-
 ## UI-Regel
 
 Beim normalen Streamlit-Rendering ist verboten:
@@ -353,10 +398,12 @@ Beim normalen Streamlit-Rendering ist verboten:
 - Hashing
 - `stat` oder mtime der Medien
 - automatischer Jobstart durch Rerun
+- Provider-/API-Aufrufe
 
-Die UI liest ausschließlich persistierte Validation-/Registry-/Analysis-Vertragsdaten.
+Die UI liest ausschließlich persistierte Validation-/Registry-/Analysis-Daten.
 
-Die Seite **Assetanalyse** ist in Phase 8A read-only: kein Startbutton, kein Provider, kein Modell, kein Consent.
+Die Seite **Assetanalyse** startet lokale Vorbereitung nur über den expliziten Button
+„Lokale Analyse vorbereiten“. Noch kein Modellstart, kein Consent, kein Provider.
 
 ## Verbindliche Einschränkungen (Phase 7)
 
@@ -373,6 +420,23 @@ Keine neuen Medienformate oder Profile ohne eigenen freigegebenen Auftrag.
 
 ## Aktueller Teststand
 
+Nach Phase-8B-Härtung (`0d8ec2f060107a1720c750b11e4372c3529a2c61`):
+
+- 2761 gesammelt
+- 2742 bestanden
+- 18 fehlgeschlagen
+- 1 übersprungen
+
+Hinweise:
+
+- VFR-End-to-End-Smoke: `NOT_EXECUTABLE` / skipped; Vertragsprüfung (Sekundenwerte, kein `-r`) PASS
+- die 18 Baseline-Fehler liegen außerhalb Discovery-Analysis-Prepare
+  (cut_plan, voiceover_generation, timing, Gemini retry)
+
+Neue Discovery-, Routing-, Classic- oder Without-VO-Fehler sind nicht zulässig.
+
+### Historische Baselines
+
 Nach Phase-8A-Härtung (`11e5cf8ae96e38cd9686cd7d915ad85b66be98e9`):
 
 - 2687 gesammelt
@@ -380,44 +444,25 @@ Nach Phase-8A-Härtung (`11e5cf8ae96e38cd9686cd7d915ad85b66be98e9`):
 - 18 fehlgeschlagen
 - 0 übersprungen
 
-Bekannte Baseline-Bereiche (nicht durch Discovery-Analysis-Contracts verursacht):
-
-- cut_plan
-- voiceover_generation
-- timing
-- Gemini retry
-
-Neue Discovery-, Routing-, Classic- oder Without-VO-Fehler sind nicht zulässig.
-
-### Historische Baselines
-
 Nach Phase-7-Abschlusshärtung (`3ba0716a6d2cc12a4e0fdf9f61b5c2dcdead5016`):
 
 - 2649 gesammelt
 - 2631 bestanden
 - 18 fehlgeschlagen
 
-Vor Copy-Intake-R1:
-
-- 2545 gesammelt
-- 2527 bestanden
-- 18 bekannte Fehler
-
 ## Nächster erlaubter Schritt
 
 Nur:
 
-Phase 8B — lokale technische Shot-Erkennung und repräsentative Frame-Vorbereitung planen beziehungsweise gemäß separatem Auftrag umsetzen.
+Phase 8C — zentraler multimodaler Vision-Gateway, Fake-Adapter, strukturierte
+Visual Observations und explizite Nutzerfreigabe gemäß Plan unten.
 
 Noch nicht erlaubt:
 
-- Vision-Gateway
-- LLM-Aufrufe
-- API-/Provideraufrufe
-- externe Bildübertragung
-- Visual Observations als Produktlauf
-- Visual Beats
+- Phase 8C Produktcode ohne eigenen Umsetzungsauftrag
+- echte Provider-Smokes ohne separate Nutzerfreigabe
 - Dramaturgie
+- Visual Beats
 - Kapitel
 - Skript
 - Karten
@@ -425,12 +470,289 @@ Noch nicht erlaubt:
 - HEIC-/HEIF-Unterstützung
 - neue Video-/Audio-/Bildprofile
 
+---
+
+## Phase 8C – Implementierungsplan (PLANNING ONLY)
+
+Stand: dokumentiert im Handoff; **nicht implementiert**.
+
+### Ziel
+
+Assetanalyse erhält einen **zentralen multimodalen Discovery Vision Gateway**:
+
+```text
+UI / Application (Model-Analysis-Service)
+  → Discovery Vision Gateway
+      → FakeVisionAdapter (verpflichtend zuerst)
+      → optional ein realer Provideradapter (nur wenn Codebasis ihn trägt)
+```
+
+Keine direkten Provideraufrufe aus UI, Domain oder Prepare-Worker.
+
+### Untersuchte Infrastruktur
+
+Gelesen / ausgewertet:
+
+- `otio_app/services/plan_llm_client.py` — Text-LLM-Router (Gemini/OpenAI/Anthropic/xAI/OpenRouter), nur Text
+- `otio_app/services/gemini_client.py` — klassische Frame→Gemini-Bildteile (`Part.from_bytes`, JPEG)
+- `otio_app/services/api_keys.py`, `otio_app/api_providers.py`, `otio_app/config.py`, `otio_app/defaults.py`
+- Classic `asset_analyzer.py` / `frame_extract.py` (nur Referenz)
+- Discovery Prepare: Domain, Repository, Worker, UI, Frame-Pfade
+
+### Wiederverwendbar
+
+- API-Key-Laden / Runtime-Overrides / Settings-UI
+- Provider-ID-Präfixe und Key-Mapping aus `plan_llm_client`
+- Discovery Representative Frames + Hashes + Identity als alleiniger Upload-Input
+- Analysis-Run-/Worker-/Recovery-Muster aus Phase 8B
+- Gemini-Bildteil-Muster aus `gemini_client.py` als **Adapter-Referenz**, nicht als Gateway
+
+### Nicht wiederverwendbar / Classic-only
+
+- Classic `asset_analyzer.py`-Orchestrierung und Inventory-Cache
+- Classic `frame_extract.py` als Discovery-Input
+- direkter Gemini-Aufruf aus Fachmodulen
+- Text-only `plan_llm_client` als Multimodal-Gateway erweitern *(Entscheidung: nein)*
+
+### Gateway-Architektur (Entscheidung)
+
+**Neuen Discovery-Vision-Gateway neben dem Text-Router etablieren**, nicht
+`plan_llm_client` multimodal aufblasen.
+
+Geplante Module (Umsetzungsauftrag):
+
+- `otio_app/discovery_v2/application/model_analysis_service.py`
+- `otio_app/discovery_v2/adapters/vision_gateway.py`
+- `otio_app/discovery_v2/adapters/vision_fake.py`
+- optional später: `otio_app/discovery_v2/adapters/vision_gemini.py`
+- `otio_app/discovery_v2/jobs/model_analysis_worker.py`
+- `otio_app/discovery_v2/domain/visual_observation.py`
+- Persistenz-Erweiterungen in `asset_analysis_repository` / Schema 13
+
+Gateway-Verantwortlichkeiten:
+
+- Capability `vision`
+- gemeinsame Konfiguration (Provider, Modell-ID, Limits, Prompt-/Schema-Version)
+- Request-Objekt: Textprompt + geordnete Frame-Parts (MIME, bytes/path resolve, frame_id, hashes)
+- Response: untrusted JSON → Pydantic `VisualObservation`
+- kein Secret in Logs/Berichten
+- Verhalten ohne konfigurierten Provider:
+  - Fake-Adapter bleibt nutzbar für Tests und lokale Entwicklung
+  - realer Providerlauf → `analysis_gateway_unconfigured` / `vision_model_unavailable`
+
+### Providerumfang (erste Implementierung)
+
+1. **FakeVisionAdapter** — verpflichtend, vollständig, deterministisch, offline
+2. **Genau ein realer Adapter nur wenn ohne Spekulation möglich:**
+   - **Gemini** ist der einzige Provider mit vorhandenem Bild-Upload-Code
+     (`gemini_client.describe_media_from_frames`)
+   - daher: optional `VisionGeminiAdapter` hinter manueller/deaktivierter Konfiguration
+   - **kein** automatischer Produktiv-Upload in Phase 8C ohne separate Nutzerfreigabe
+
+UNKNOWN (nicht als wired behaupten):
+
+- OpenAI Vision Payload
+- Anthropic Image Content Blocks
+- OpenRouter Vision
+- xAI Vision
+
+Text-Routing dieser Provider bleibt unberührt.
+
+### Visual-Observation-Schema
+
+Pydantic-Modell `VisualObservation` (Schema-Version z. B. `visual-observation-v1`):
+
+Pflichtfelder mindestens:
+
+- `summary: str`
+- `visible_subjects: list[str]`
+- `actions: list[str]`
+- `setting: str | None`
+- `indoor_outdoor: Literal["indoor","outdoor","mixed","unknown"]`
+- `day_night: Literal["day","night","mixed","unknown"]`
+- `people_present: bool | None`
+- `crowd_level: Literal["none","few","many","crowd","unknown"]`
+- `camera_scale: Literal["extreme_closeup","closeup","medium","wide","aerial","unknown"]`
+- `camera_motion_hint: Literal["static","pan","tilt","handheld","tracking","unknown"]`
+- `visual_quality_notes: list[str]`
+- `readable_text_present: bool | None`
+- `readable_text_summary: str | None`
+- `possible_location_clues: list[str]`
+- `geographic_confidence: float`  # 0..1, Hinweis nur
+- `landmark_candidates: list[str]`
+- `weather_visible: str | None`
+- `safety_or_sensitive_content: list[str]`
+- `possible_synthetic_indicators: list[str]`
+- `synthetic_confidence: float`  # 0..1, Hinweis nur
+- `uncertainty_notes: list[str]`
+- `evidence_frame_ids: list[str]`
+- `editorial_signals: list[str]`
+
+Regeln:
+
+- unbekannt bleibt unbekannt (`unknown` / `null` / leere Listen)
+- Geo- und Synthetic-Angaben nur Hinweise mit Konfidenz, keine redaktionelle Wahrheit
+- jede Evidence-ID muss zu persistiertem Representative Frame derselben Analysis Identity gehören
+- zusätzliche Felder / Pfade / Befehle → `model_response_schema_mismatch`
+- Modelloutput ist untrusted und wird strikt validiert
+
+### Persistenz und Schema 13
+
+Voraussichtliche Schema-Erhöhung: **12 → 13**.
+
+Nur diese neuen Tabellen:
+
+1. `visual_observations`
+2. `model_analysis_attempts`
+3. `analysis_consent_events`
+
+Keine vorsorglichen Zusatztabellen.
+
+Historische Versionierung mindestens über:
+
+- `analysis_identity_id`
+- `gateway_version`
+- `provider`
+- `model_identifier`
+- `prompt_version`
+- `response_schema_version`
+
+JSON-Artefakte unter:
+
+`_otio_v2/analysis/observations/<analysis_identity_id>/...`
+
+sowie Runberichte für Model-Runs (`scope = model` bzw. `analysis_model_only` —
+finale Scope-Konstante im Umsetzungsauftrag festlegen; Phase 8B hat
+`ANALYSIS_RUN_SCOPE_MODEL = "model"` vorbereitet).
+
+Maximal ein aktiver Analysis-Run pro Projekt bleibt gültig (Prepare und Model
+gegenseitig sperren).
+
+### Nutzerfreigabe (MANUAL)
+
+Standard:
+
+1. lokale Vorbereitung muss für die gewählten Assets `prepared` sein
+2. UI zeigt exakte Anzahl der zu übertragenden Frames (und Summe Bytes)
+3. Nutzer bestätigt explizit externe Verarbeitung
+4. Zustimmung gilt **nur für diesen Model-Run**
+5. kein automatischer Upload, kein Streamlit-Rerun-Start
+6. kein vollständiges Video, keine Working-Media-Videos, keine Originale
+7. keine Übernahme alter Consent-Events
+8. keine Secrets persistieren
+
+Fehler ohne Consent: `analysis_consent_required`.
+
+### Frame- und Run-Limits
+
+- nur persistierte Representative Frames
+- max. **24 Frames je Video-Asset** (bereits Prepare-Cap)
+- globale Run-Obergrenze (Vorschlag zur Umsetzung): **96 Frames / Run**
+- Dateigrößenlimit je Frame (Vorschlag): **8 MiB**
+- Dateigrößenlimit je Run (Vorschlag): **64 MiB**
+- bei Überschreitung: `analysis_frame_limit_exceeded`
+- fehlende/veränderte Frames: `analysis_frame_missing` / `analysis_frame_hash_mismatch`
+
+Exacte Zahlen im Umsetzungsauftrag als Konstanten festnageln; Werte hier sind
+Planungsvorschläge, nicht Produktdefaults.
+
+### Retry und Caching
+
+- höchstens **zwei** kontrollierte Wiederholungen nach transienten Providerfehlern
+- keine Endlosschleife
+- identische Modellanalyse (gleiche Identity + Provider + Modell + Prompt- + Schema-Version + Frame-Hash-Satz) → Cache / `reused`
+- neue Prompt-/Modell-/Schema-Version → neue Attempt-Identität
+- Providerfehler und Schemafehler getrennt
+- nach Retry-Erschöpfung: `analysis_retry_exhausted`
+- keine Secrets in Logs/Berichten
+
+### UI (Phase 8C)
+
+Auf **Assetanalyse** ergänzen:
+
+- Provider/Modell nur aus zentraler Konfiguration (keine hart codierten IDs in UI)
+- Frameanzahl und Hinweis auf externe Verarbeitung vor Start
+- expliziter Button z. B. „Modellanalyse starten“
+- Consent-Checkbox nur für den aktuellen Run
+- persistierter Fortschritt / Attempt-Status
+- strukturierte Observations inkl. Konfidenz und Unsicherheit
+- weiterhin: kein FFmpeg/ffprobe/Pillow/Hash/API beim Rendering
+
+### Fehlercodes (mindestens)
+
+- `analysis_consent_required`
+- `analysis_gateway_unconfigured`
+- `vision_model_unavailable`
+- `analysis_frame_missing`
+- `analysis_frame_hash_mismatch`
+- `analysis_frame_limit_exceeded`
+- `provider_auth_failed`
+- `provider_timeout`
+- `provider_rate_limited`
+- `model_response_invalid`
+- `model_response_schema_mismatch`
+- `analysis_retry_exhausted`
+- `analysis_artifact_write_failed`
+- `analysis_registry_write_failed`
+- `worker_interrupted`
+
+### Testplan (konkrete Gruppen)
+
+1. zentrale Gateway-Nutzung — keine direkten Providerimporte in UI/Domain/Worker
+2. Fake-Adapter End-to-End — Observation persistiert ohne Netz
+3. keine hart codierten Modelle in Fachmodulen
+4. explizite Nutzerfreigabe erforderlich
+5. Rerun startet keinen Model-Job
+6. nur persistierte Frames; Originale/Working-Videos blockiert
+7. Frame- und Run-Limits
+8. Pydantic-Validierung gültiger/ungültiger Responses
+9. ungültige Evidence-IDs abgelehnt
+10. Retry-Limit (max. 2)
+11. Caching und historische Versionen getrennt
+12. Providerfehler ohne Secret-Leak
+13. Orphan-Recovery (`worker_interrupted`)
+14. UI-No-I/O beim Rendering
+15. keine Dramaturgie-/Visual-Beat-Felder oder -Tabellen
+
+### Implementierungsaufteilung (empfohlen)
+
+1. **8C-A Contracts + Schema 13**
+   Domain `VisualObservation`, Consent-/Attempt-Verträge, Tabellen, Pfade, Fake-Gateway-Interface
+
+2. **8C-B Fake End-to-End**
+   Model-Service, Worker, Consent-UI, Fake-Adapter, Persistenz, Reports, Tests 1–11/14–15
+
+3. **8C-C Optional Gemini-Adapter (deaktiviert)**
+   Nur hinter Konfiguration; kein automatischer Smoke; MIME korrekt (JPEG/PNG); Tests 3/12
+
+4. **8C-D Hardening**
+   Recovery, Limits, Cache-Kanten, Secret-Leak-Guards
+
+Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit echter Freigabe.
+
+### Risiken
+
+- Gemini-Classic sendet Frames derzeit immer als `image/jpeg` — Discovery-PNG-Stills brauchen korrekte MIME
+- Consent-/Kostenkommunikation muss klar von lokaler Vorbereitung getrennt bleiben
+- Provider-Vision außerhalb Gemini ist UNKNOWN und darf nicht spekulativ verdrahtet werden
+- Mutual exclusion Prepare↔Model-Run muss in Startgates beider Services erzwungen werden
+
+### UNKNOWN-Punkte
+
+- OpenAI / Anthropic / OpenRouter / xAI Vision-Payloads im bestehenden Code: **nicht vorhanden**
+- produktive Default-Modell-ID für Discovery Vision: noch festzulegen (nicht aus Classic übernehmen ohne Auftrag)
+- endgültige numerische Run-/Byte-Limits: Vorschläge oben, Freigabe im Umsetzungsauftrag
+- exakter Model-Run-Scope-String (`model` vs. `analysis_model_only`): im Code derzeit Alias `model`
+- ob Gemini-Adapter in 8C-C überhaupt aktiviert werden darf: nur mit separater Nutzerfreigabe
+
+---
+
 ## Verbleibender Fahrplan
 
 1. ~~Phase 7 Media Intake~~ — APPROVED
 2. ~~Phase 8A Analysis Contracts~~ — APPROVED
-3. Phase 8B: lokale Shot-Erkennung und repräsentative Frames
-4. Phase 8C: Vision-Gateway und strukturierte Beobachtungen (nach Freigabe)
+3. ~~Phase 8B lokale Shot-/Frame-Vorbereitung~~ — APPROVED
+4. Phase 8C: Vision-Gateway, Fake-Adapter, Visual Observations, Consent
 5. Phase 8D: Review-UI, Caching, Recovery, Nutzer-Smoke
 6. Projektbrief und Dramaturgie
 7. Kapitel und Karten
