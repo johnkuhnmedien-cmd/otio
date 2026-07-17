@@ -14,7 +14,7 @@ from otio_app.discovery_v2.paths import (
 
 # Lesbare Schema-Versionen, die idempotent auf CURRENT migriert werden.
 _LEGACY_SCHEMA_VERSIONS = frozenset(
-    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
+    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"}
 )
 
 
@@ -552,7 +552,7 @@ def _migrate_working_media_schema(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_analysis_tables(conn: sqlite3.Connection) -> None:
-    """Phase 8A: minimale Analysis-Run-/Identity-Tabellen (keine Shots/Frames)."""
+    """Phase 8A/8B: Analysis-Runs, Identities, Technical Shots, Frames."""
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS analysis_runs (
@@ -566,6 +566,7 @@ def _ensure_analysis_tables(conn: sqlite3.Connection) -> None:
             completed_at TEXT,
             total_assets INTEGER NOT NULL DEFAULT 0,
             prepared_assets INTEGER NOT NULL DEFAULT 0,
+            reused_assets INTEGER NOT NULL DEFAULT 0,
             not_applicable_assets INTEGER NOT NULL DEFAULT 0,
             failed_assets INTEGER NOT NULL DEFAULT 0,
             interrupted_assets INTEGER NOT NULL DEFAULT 0,
@@ -587,6 +588,7 @@ def _ensure_analysis_tables(conn: sqlite3.Connection) -> None:
             error_message TEXT,
             created_at TEXT,
             completed_at TEXT,
+            analysis_identity_id TEXT,
             UNIQUE (run_id, asset_id, working_media_id),
             FOREIGN KEY (run_id) REFERENCES analysis_runs(run_id),
             FOREIGN KEY (asset_id) REFERENCES assets(asset_id)
@@ -611,6 +613,66 @@ def _ensure_analysis_tables(conn: sqlite3.Connection) -> None:
             )
         );
 
+        CREATE TABLE IF NOT EXISTS technical_shots (
+            shot_id TEXT PRIMARY KEY,
+            analysis_identity_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            working_media_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            start_seconds REAL NOT NULL,
+            end_seconds REAL NOT NULL,
+            duration_seconds REAL NOT NULL,
+            detection_profile_version TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK (ordinal >= 0),
+            CHECK (start_seconds >= 0),
+            CHECK (end_seconds > start_seconds),
+            CHECK (duration_seconds > 0),
+            UNIQUE (
+                analysis_identity_id,
+                detection_profile_version,
+                ordinal
+            ),
+            FOREIGN KEY (analysis_identity_id)
+                REFERENCES analysis_identities(analysis_identity_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS representative_frames (
+            frame_id TEXT PRIMARY KEY,
+            analysis_identity_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            working_media_id TEXT NOT NULL,
+            shot_id TEXT,
+            ordinal INTEGER NOT NULL,
+            timestamp_seconds REAL,
+            relative_path TEXT NOT NULL,
+            frame_sha256 TEXT NOT NULL,
+            pixel_sha256 TEXT NOT NULL,
+            file_size_bytes INTEGER NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            sampling_profile_version TEXT NOT NULL,
+            brightness_mean REAL NOT NULL,
+            black_fraction REAL NOT NULL,
+            sharpness_score REAL NOT NULL,
+            is_black INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK (ordinal >= 0),
+            CHECK (file_size_bytes >= 0),
+            CHECK (width > 0),
+            CHECK (height > 0),
+            UNIQUE (
+                analysis_identity_id,
+                sampling_profile_version,
+                ordinal
+            ),
+            FOREIGN KEY (analysis_identity_id)
+                REFERENCES analysis_identities(analysis_identity_id),
+            FOREIGN KEY (shot_id) REFERENCES technical_shots(shot_id)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_analysis_runs_project_status
             ON analysis_runs (project_id, status);
 
@@ -619,8 +681,40 @@ def _ensure_analysis_tables(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_analysis_identities_project
             ON analysis_identities (project_id, asset_id);
+
+        CREATE INDEX IF NOT EXISTS idx_technical_shots_identity
+            ON technical_shots (analysis_identity_id, detection_profile_version);
+
+        CREATE INDEX IF NOT EXISTS idx_representative_frames_identity
+            ON representative_frames (
+                analysis_identity_id, sampling_profile_version
+            );
         """
     )
+    _ensure_analysis_run_columns(conn)
+
+
+def _ensure_analysis_run_columns(conn: sqlite3.Connection) -> None:
+    """Idempotente Spalten-Nachrüstung für Schema 11 → 12."""
+    run_cols = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(analysis_runs)").fetchall()
+    }
+    if "reused_assets" not in run_cols:
+        conn.execute(
+            "ALTER TABLE analysis_runs "
+            "ADD COLUMN reused_assets INTEGER NOT NULL DEFAULT 0"
+        )
+
+    asset_cols = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(analysis_run_assets)").fetchall()
+    }
+    if "analysis_identity_id" not in asset_cols:
+        conn.execute(
+            "ALTER TABLE analysis_run_assets "
+            "ADD COLUMN analysis_identity_id TEXT"
+        )
 
 
 def _apply_current_schema_objects(conn: sqlite3.Connection) -> None:

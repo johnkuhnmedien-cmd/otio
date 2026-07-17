@@ -216,7 +216,7 @@ def test_validation_schema_created(discovery_project) -> None:
     assert "validation_runs" in tables
     assert "asset_validations" in tables
     assert "duplicate_groups" in tables
-    assert reg_db.read_schema_version(conn) == "11"
+    assert reg_db.read_schema_version(conn) == "12"
     conn.close()
 
 
@@ -227,7 +227,7 @@ def test_schema_init_idempotent_keeps_assets(discovery_project, imported) -> Non
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
     after = conn2.execute("SELECT COUNT(*) AS c FROM assets").fetchone()["c"]
     assert before == after > 0
-    assert reg_db.read_schema_version(conn2) == "11"
+    assert reg_db.read_schema_version(conn2) == "12"
     conn2.close()
 
 
@@ -244,7 +244,7 @@ def test_migrate_from_schema_v1_preserves_assets(
     conn.close()
 
     conn2 = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn2) == "11"
+    assert reg_db.read_schema_version(conn2) == "12"
     assert conn2.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == count
     assert conn2.execute(
         "SELECT name FROM sqlite_master WHERE name='validation_runs'"

@@ -151,7 +151,7 @@ def test_foreign_keys_active(discovery_project) -> None:
 
 def test_schema_version_readable(discovery_project) -> None:
     conn = reg_db.get_registry_connection(discovery_project.project_root_path)
-    assert reg_db.read_schema_version(conn) == "11"
+    assert reg_db.read_schema_version(conn) == "12"
     conn.close()
 
 

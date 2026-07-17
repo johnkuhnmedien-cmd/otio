@@ -51,7 +51,53 @@ def analysis_run_json_relative_path(run_id: str) -> str:
 
 def analysis_manifest_json_relative_path(analysis_identity_id: str) -> str:
     _reject_unsafe_segment(analysis_identity_id, "analysis_identity_id")
-    return f"{ANALYSIS_ROOT_SEGMENT}/manifests/{analysis_identity_id}.json"
+    return (
+        f"{ANALYSIS_ROOT_SEGMENT}/manifests/"
+        f"{analysis_identity_id}/analysis-prepare-v1.json"
+    )
+
+
+def analysis_latest_prepare_run_relative_path() -> str:
+    return f"{ANALYSIS_ROOT_SEGMENT}/latest_prepare_run.json"
+
+
+def analysis_frame_relative_path(
+    *,
+    working_media_id: str,
+    sampling_profile_version: str,
+    shot_or_still: str,
+    frame_id: str,
+    extension: str,
+) -> str:
+    _reject_unsafe_segment(working_media_id, "working_media_id")
+    _reject_unsafe_segment(sampling_profile_version, "sampling_profile_version")
+    _reject_unsafe_segment(shot_or_still, "shot_or_still")
+    _reject_unsafe_segment(frame_id, "frame_id")
+    ext = extension.strip().lower().lstrip(".")
+    if ext not in {"jpg", "jpeg", "png"}:
+        raise AnalysisPathError(f"Ungültige Frame-Extension: {extension}")
+    if ext == "jpeg":
+        ext = "jpg"
+    return (
+        f"{ANALYSIS_ROOT_SEGMENT}/frames/{working_media_id}/"
+        f"{sampling_profile_version}/{shot_or_still}/{frame_id}.{ext}"
+    )
+
+
+def analysis_temp_frame_relative_path(
+    *,
+    run_id: str,
+    frame_id: str,
+    extension: str,
+) -> str:
+    _reject_unsafe_segment(run_id, "run_id")
+    _reject_unsafe_segment(frame_id, "frame_id")
+    ext = extension.strip().lower().lstrip(".")
+    if ext not in {"jpg", "jpeg", "png"}:
+        raise AnalysisPathError(f"Ungültige Frame-Extension: {extension}")
+    if ext == "jpeg":
+        ext = "jpg"
+    return f"{ANALYSIS_ROOT_SEGMENT}/temp/{run_id}/{frame_id}.tmp.{ext}"
 
 
 def analysis_temp_relative_path(run_id: str) -> str:
