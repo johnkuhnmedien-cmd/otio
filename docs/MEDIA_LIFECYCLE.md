@@ -1,27 +1,26 @@
 > **RECONSTRUCTED_BOOTSTRAP**
 >
-> - erstellt, weil nach vollständiger Repository- und Dateisystemsuche kein historisches Original auffindbar war
-> - gilt ab dem Bootstrap-Commit als Repositoryvertrag
-> - erhebt keinen Anspruch, den exakten Wortlaut früherer, nicht auffindbarer Dokumente wiederzugeben
-> - basiert auf akzeptiertem Handoff, bestehendem Code, Tests, dokumentierten Architekturentscheidungen und Audit-Referenzen
-> - ungeklärte externe API-, OAuth-, Lizenz- und Providerdetails bleiben **UNKNOWN**
+> - Dokumente wurden für dieses Repository neu konsolidiert.
+> - Andere Projekte sind keine fachliche Quelle.
+> - Übernommene Dokumentstrukturen besitzen keine normative Bedeutung.
+> - Verbindlich ist ausschließlich der für Discovery V2 verifizierte Inhalt ab dem Bereinigungscommit.
+> - Nicht belegte externe Details bleiben **UNKNOWN**.
+> - Kein Anspruch auf wiedergefundene historische Originale.
 
 # Media Lifecycle — Discovery V2
 
-Lebenszyklus von Originalmedien über Working Media bis Export-Referenzen.
+## Rollen
 
-## Rollen der Medienobjekte
-
-| Objekt | Rolle | Schreibbar? |
+| Objekt | Rolle | Discovery-Schreibzugriff |
 |---|---|---|
-| Originalquelle im Projektbaum | Herkunft; nie ändern | nein (Discovery) |
-| Classic `_otio/` | fremde Pipeline | read-only für Discovery |
-| Discovery Working Media | kanonische Produktionsbasis | nur unter `_otio_v2/media/working/` |
-| Analysis Frames / Previews | Analysehilfe | unter `_otio_v2/analysis/`; nicht Working Media |
-| Temp | Laufzeit | `_otio_v2/**/temp/`; austauschbar |
-| OTIO-Referenzen | Export | nur auf completed Working Media |
+| Originalquelle im Projektbaum | Herkunft | nein |
+| Classic `_otio/` | fremde Pipeline | nein (read-only) |
+| Working Media | kanonische Analyse-/Produktionsbasis | nur `_otio_v2/media/working/` |
+| Analysis Frames | Analysehilfe | `_otio_v2/analysis/`; nicht Working Media |
+| Temp | Laufzeit | unter `_otio_v2/**/temp/` |
+| OTIO-Referenzen | geplanter Export | nur completed Working Media (Alpha-Ziel) |
 
-## Zustandsfolge
+## Zustandsfolge (implementiert bis Editorial-Ready)
 
 ```text
 Source (Inventory)
@@ -29,36 +28,36 @@ Source (Inventory)
 → Registered
 → Technically Validated
 → Intake Planned
-→ Working Media (ready → … → completed | failed)
+→ Working Media (… → completed | failed)
 → Analysis Eligible (nur completed)
 → Prepared (shots/frames)
 → Model-Observed (Visual Observation)
 → Review (accepted | reanalyze_requested | rejected)
 → Editorial-Ready (Gate)
-→ … spätere Editorial-/Exportnutzung
 ```
 
-## Working Media Regeln
+Spätere Editorial-/Exportzustände: geplant, **UNKNOWN** im Detail bis Phasen 9–13.
 
-- Nur Rohstatus **`completed`** ist Analyse-, Produktions- und Exportbasis.
-- Identity bindet `project_id`, `asset_id`, Source-SHA/Validation, erwartete Action und `processing_profile_version`.
-- Historische Working-Media-Versionen bleiben erhalten; neue Identities bei Hash-/Profilwechsel.
-- `source_relative_path` ist Herkunftsmetadatum, nie kanonischer Zielpfad.
-- Preview/Working-Trennung: Analysis Frames dürfen nicht als OTIO-Media oder Working Media gelten.
+## Working Media Regeln (belegt)
 
-## Hash und Pfadprüfung (Python)
+- Rohstatus **`completed`** ist Voraussetzung für Assetanalyse-Eligibility — Code
+- Identity bindet `project_id`, `asset_id`, Validation/Source-SHA, Action, `processing_profile_version` — Code / Handoff
+- historische Versionen bleiben erhalten — Handoff
+- `source_relative_path` ist Herkunftsmetadatum, kein kanonischer Zielpfad — Handoff
+- Analysis Frames sind weder Working Media noch OTIO-Media — Prepare-Tests / Handoff
 
-- SHA-256 der Source und Working-Media-Integrität im Worker
-- Pfade müssen unter `_otio_v2` liegen; Classic- und Originalpfade als Schreib-/Analyseziel ablehnen
-- Hash-Mismatch und fehlende Dateien sind terminale/recoverable Fehlercodes laut Domain
+## Hash und Pfadprüfung
+
+Python/Worker prüfen SHA-256 und Pfade unter `_otio_v2`; Classic- und Originalpfade als unzulässige Analyse-/Schreibziele — Code / Tests.
 
 ## Preview vs. Production
 
-- **Preview / Analysis Frames:** lokal, für Vision und Review; keine Produktionsquelle
-- **Working Media:** einzige Produktions- und Exportquelle im Alpha
-- Stock-/Adobe-Preview-first: gewünschtes Soll laut Audit-Vergleich; Discovery-Integration **UNKNOWN** bis Provider-Gate
+- Analysis Frames: lokal für Vision/Review; keine Produktionsquelle — Code Phase 8
+- Working Media: einzige kanonische Medienbasis für Analyse und geplante Produktion/Export
+- Stock-/Adobe-Beschaffung und Preview-Lizenzfluss für Discovery: **UNKNOWN** bis Provider-Gate
 
-## Lösch- und Retention-Politik
+## Retention
 
-- Keine automatische Löschung historischer Imports, Validierungen, Intake-Pläne, Working Media, Analysis Identities, Shots, Frames, Observations oder Reviews
-- Konflikte überschreiben nie bestehende kanonische Ausgaben
+Keine automatische Löschung historischer Imports, Validierungen, Intake-Pläne,
+Working Media, Analysis Identities, Shots, Frames, Observations oder Reviews — Handoff.
+Konflikte überschreiben keine kanonischen Ausgaben — Intake-Regeln.

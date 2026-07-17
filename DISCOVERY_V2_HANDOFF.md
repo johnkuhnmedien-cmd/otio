@@ -11,12 +11,13 @@
 - Phase 8B: `APPROVED`
 - Phase 8C: `APPROVED`
 - Phase 8D / Phase 8 Closeout: `APPROVED`
-- SoT Bootstrap: rekonstruiert und als `RECONSTRUCTED_BOOTSTRAP` gekennzeichnet
-  (kein Anspruch auf wiedergefundene Originale; Recovery-Suche → `NOT_FOUND`)
+- SoT Bootstrap: `RECONSTRUCTED_BOOTSTRAP` — für dieses Repository neu konsolidiert;
+  andere Projekte sind keine fachliche Quelle; Recovery-Suche → `NOT_FOUND`;
+  Provenienz-Bereinigung gegen Discovery-V2-Quellen (D-DOC-006 / D-DOC-007)
 - Registry-Schema: **14**
 - Fake Vision: aktiv (`provider=fake`)
 - Echte Vision Provider: **gesperrt**
-- Aktiver Produktauftrag: keiner (Phase 8 abgeschlossen; Docs-Bootstrap getrennt)
+- Aktiver Produktauftrag: keiner (Phase 8 abgeschlossen; Docs-Arbeit getrennt)
 - Nächster erlaubter Produktschritt: **Phase 9** (Editorial Core / Coverage)
 - Gesperrt ohne eigenen Auftrag: echte Vision Provider, Phase 10+, Voice, OTIO
 
@@ -36,10 +37,11 @@ Verbindliche Reihenfolge:
 10. `docs/CLASSIC_MIGRATION_CONTRACT.md`
 11. `docs/PROGRESS.md`
 12. `docs/CHIEF_DEV_HANDOFF.md`
-13. `docs/source_plans/*`
+13. `docs/source_plans/*` (reserviert; derzeit ohne normative Inhalte)
 
 `docs/ALPHA_EXECUTION_MANIFEST.md` und dieses Handoff-Dokument sind untergeordnet.
-Bei Widerspruch gilt die höhere Quelle.
+Bei Widerspruch gilt die höhere Quelle. Übernommene Dokumentstrukturen besitzen
+keine normative Bedeutung; verbindlich ist der für Discovery V2 verifizierte Inhalt.
 
 ## Projektmodi
 

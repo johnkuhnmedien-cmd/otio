@@ -1,39 +1,43 @@
 > **RECONSTRUCTED_BOOTSTRAP**
 >
-> - erstellt, weil nach vollständiger Repository- und Dateisystemsuche kein historisches Original auffindbar war
-> - gilt ab dem Bootstrap-Commit als Repositoryvertrag
-> - erhebt keinen Anspruch, den exakten Wortlaut früherer, nicht auffindbarer Dokumente wiederzugeben
-> - basiert auf akzeptiertem Handoff, bestehendem Code, Tests, dokumentierten Architekturentscheidungen und Audit-Referenzen
-> - ungeklärte externe API-, OAuth-, Lizenz- und Providerdetails bleiben **UNKNOWN**
+> - Dokumente wurden für dieses Repository neu konsolidiert.
+> - Andere Projekte sind keine fachliche Quelle.
+> - Übernommene Dokumentstrukturen besitzen keine normative Bedeutung.
+> - Verbindlich ist ausschließlich der für Discovery V2 verifizierte Inhalt ab dem Bereinigungscommit.
+> - Nicht belegte externe Details bleiben **UNKNOWN**.
+> - Kein Anspruch auf wiedergefundene historische Originale.
 
 # Alpha Scope — Discovery V2
 
-Was Alpha leisten muss und was ausdrücklich ausgeschlossen ist.
+## In Scope
 
-## In Scope (Alpha)
+Bereits umgesetzt (Code / Tests / Handoff):
 
-- Dritter Projektmodus `discovery_v2` parallel zu Classic und Without-VO
-- MANUAL-Hauptpfad von Inventory bis parsebarem OTIO-Export
+- Projektmodus `discovery_v2` parallel zu Classic und Without-VO
 - Working Media unter `_otio_v2/` (Copy, Remux, H.264-Transcode, TIFF→PNG)
 - Lokale Assetanalyse inkl. Fake Vision und manuellem Observation Review
-- Editorial Core, Coverage, Script Lock, Voice/Timing, Visual Edit Plan, Humanity Review, Feasibility, Freigabe, OTIO
-- SQLite-Registry + versionierte JSON-Artefakte
-- Stale-Gates und Identity-Bindungen
-- pytest-Abdeckung neuer Discovery-Pfade ohne neue Discovery-bedingte Suite-Regressionen
+- SQLite-Registry Schema **14** + versionierte JSON-Artefakte
+- Identity-/Stale-Gates für Selection, Intake und Analysis
+
+Geplant für Alpha (Manifest / D-8D-001; noch nicht implementiert):
+
+- MANUAL-Hauptpfad bis parsebarem OTIO-Export
+- Editorial Core, Coverage, Script Lock, Voice/Timing, Visual Edit Plan
+- Humanity Review, Feasibility, Nutzerfreigabe, OTIO
 
 ## Betriebsstandard
 
-- **MANUAL** = Alpha-Standard
-- **CHECKPOINT** = vorbereitet für explizite Zwischenfreigaben
-- **AUTOMATIC** = post-alpha
+- **MANUAL** = Alpha-Standard — Manifest
+- **AUTOMATIC** = post-alpha — Manifest
+- Weitere Automatisierungsmodi: **UNKNOWN**
 
-## Explizit Out of Scope (Alpha / Post-Alpha)
+## Explizit Out of Scope / verschoben
 
-Mindestens verschoben:
+Aus Manifest Post-Alpha und Handoff-Sperren:
 
 - AUTOMATIC End-to-End-Orchestrierung
 - echte Vision-Provider ohne separates Gate (aktuell Fake-only)
-- vollständiges Adobe OAuth / License-before-Preview-Korrekturen als Discovery-Default (**UNKNOWN**/später)
+- vollständiges Adobe OAuth — **UNKNOWN**/später
 - HEIC/HEIF und exotische TIFF-Varianten
 - OCR, Gesichtserkennung, bestätigte Geolokalisierung
 - automatische Synthetic-Erkennung
@@ -45,15 +49,15 @@ Mindestens verschoben:
 
 - keine Originaländerung
 - keine `_otio/`-Schreibzugriffe durch Discovery
-- nur `completed` Working Media für Analyse/Produktion/Export
+- nur `completed` Working Media als Analysebasis (implementiert) und als geplante Produktions-/Exportbasis
 - keine Secrets in Artefakten oder Logs
 - kein ungefragter Upload
-- Humanity Review + Feasibility + Nutzerfreigabe vor Export
-- parsebares OTIO als Alpha-DoD
+- Humanity Review + Feasibility + Nutzerfreigabe vor Export (geplant)
+- parsebares OTIO als Alpha-DoD (geplant)
 
-## Eingangsbedingung für Editorial (Phase 9+)
+## Eingangsbedingung Phase 9+
 
-Nur editorial-ready Visual Observations:
+Nur editorial-ready Visual Observations — Code Observation-Review-Service / D-8D-004:
 
 - aktuelle Analysis Identity
 - aktuelle Vision-Config-Versionen

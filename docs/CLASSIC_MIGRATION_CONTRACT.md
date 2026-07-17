@@ -1,56 +1,61 @@
 > **RECONSTRUCTED_BOOTSTRAP**
 >
-> - erstellt, weil nach vollständiger Repository- und Dateisystemsuche kein historisches Original auffindbar war
-> - gilt ab dem Bootstrap-Commit als Repositoryvertrag
-> - erhebt keinen Anspruch, den exakten Wortlaut früherer, nicht auffindbarer Dokumente wiederzugeben
-> - basiert auf akzeptiertem Handoff, bestehendem Code, Tests, dokumentierten Architekturentscheidungen und Audit-Referenzen
-> - ungeklärte externe API-, OAuth-, Lizenz- und Providerdetails bleiben **UNKNOWN**
+> - Dokumente wurden für dieses Repository neu konsolidiert.
+> - Andere Projekte sind keine fachliche Quelle.
+> - Übernommene Dokumentstrukturen besitzen keine normative Bedeutung.
+> - Verbindlich ist ausschließlich der für Discovery V2 verifizierte Inhalt ab dem Bereinigungscommit.
+> - Nicht belegte externe Details bleiben **UNKNOWN**.
+> - Kein Anspruch auf wiedergefundene historische Originale.
 
 # Classic Migration Contract — Discovery V2
 
-Vertrag zwischen Discovery V2 und den bestehenden Pipelines Classic (With-VO) sowie Without-VO.
+Vertrag zwischen Discovery V2 und den Pipelines Classic (`with_voiceover`) sowie
+Without-VO (`without_voiceover`) in diesem Repository.
 
-## Parallelbetrieb
+## Parallelbetrieb (belegt)
 
-- Drei Modi: `with_voiceover`, `without_voiceover`, `discovery_v2`
-- Modus wird bei Projektanlage gesetzt und nicht gemischt
-- Discovery ist Greenfield-Unterbaum `otio_app/discovery_v2/`, keine Big-Bang-Migration der Classic-UI
+- Drei Modi: `with_voiceover`, `without_voiceover`, `discovery_v2` — Code / Handoff
+- Modus bei Anlage gesetzt; kein Mischmodus — Handoff / Audit-Abgrenzung
+- Discovery-Code unter `otio_app/discovery_v2/`; keine Big-Bang-Migration der Classic-UI — Code-Lage
 
-## Unveränderlichkeitsvertrag
+## Unveränderlichkeitsvertrag (belegt)
 
 Discovery darf nicht:
 
 - Classic- oder Without-VO-Fachverhalten ändern
 - unter `_otio/` schreiben, ändern oder löschen
 - Originalmedien mutieren
-- Classic-Working-Media oder Classic-Caches als Discovery-Schreibziel verwenden
+- Classic-Arbeitswurzeln als Discovery-Schreibziel verwenden
 
 Discovery darf:
 
-- Integrationshaut additiv erweitern (Mode, Routing, Navigation, Labels, Unique-Index inkl. `project_mode`)
-- Adapter-Ideen aus Classic lesen (FFmpeg, OTIO-Export, Key-Laden) und **neu** hinter Discovery-Verträgen verdrahten
+- Integrationshaut additiv erweitern (Mode, Routing, Navigation, Labels, Uniqueness inkl. `project_mode`)
+- Adapter-Muster aus Classic lesen und neu hinter Discovery-Verträgen verdrahten
 
-## Erlaubte Wiederverwendung (Adapter-Ebene)
+## Wiederverwendung
 
-Typischerweise wiederverwendbar nach Entkopplung:
+Erlaubt als Referenz/Adapter-Idee (Handoff Phase-8C-Planung):
 
-- FFmpeg/ffprobe-Muster, Frame-Extraktion als Referenz
+- FFmpeg/ffprobe-Muster
 - API-Key-/Settings-Infrastruktur
-- OTIO-Exporter-Kern nach Entkopplung von Classic-Staging/Bridge
-- Stock-Client-Bausteine — Preview-first-Soll bleibt **UNKNOWN**/Gate
+- OTIO-Exporter-Kern nach Entkopplung von Classic-Staging (Export in Discovery noch nicht implementiert)
 
-Nicht wiederverwenden als Orchestrierung:
+Nicht als Discovery-Orchestrierung übernehmen:
 
 - Classic `asset_analyzer.py`-Pipeline
 - Classic Inventory-Cache als Discovery-Wahrheit
 - Text-only `plan_llm_client` als Vision-Gateway
 
+Stock-/Adobe-Lizenz- und Preview-Flüsse für Discovery: **UNKNOWN**.
+
 ## Testschutz
 
-- Classic- und Without-VO-Seitennamen/Navigationslisten bleiben verhaltenidentisch
-- Neue Discovery-Tests dürfen keine neuen Discovery-bedingten Suite-Fehler erzeugen
-- Fremde Baseline-Failures (außerhalb Discovery) werden ohne Auftrag nicht repariert
+- Classic-/Without-VO-Navigation verhaltenidentisch halten — bestehende Routing-Tests / Handoff
+- Keine neuen Discovery-bedingten Suite-Fehler
+- Baseline-Failures außerhalb Discovery ohne Auftrag nicht reparieren
 
-## Externe Audits
+## Audit-Referenzen
 
-`/workspace/DISCOVERY_V2_PHASE1_AUDIT-001.md` und `/workspace/OTIO_WITHOUT_VO_IST_BERICHT.md` sind Vergleichs- und Belegquellen, **keine** höhere Source of Truth.
+Die Dateien `DISCOVERY_V2_PHASE1_AUDIT-001.md` und `OTIO_WITHOUT_VO_IST_BERICHT.md`
+dienen nur der Abgrenzung Classic/Without-VO. Sie sind keine höhere Source of Truth
+für Discovery V2.

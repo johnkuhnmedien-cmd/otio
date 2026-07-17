@@ -1,52 +1,61 @@
 > **RECONSTRUCTED_BOOTSTRAP**
 >
-> - erstellt, weil nach vollständiger Repository- und Dateisystemsuche kein historisches Original auffindbar war
-> - gilt ab dem Bootstrap-Commit als Repositoryvertrag
-> - erhebt keinen Anspruch, den exakten Wortlaut früherer, nicht auffindbarer Dokumente wiederzugeben
-> - basiert auf akzeptiertem Handoff, bestehendem Code, Tests, dokumentierten Architekturentscheidungen und Audit-Referenzen
-> - ungeklärte externe API-, OAuth-, Lizenz- und Providerdetails bleiben **UNKNOWN**
+> - Dokumente wurden für dieses Repository neu konsolidiert.
+> - Andere Projekte sind keine fachliche Quelle.
+> - Übernommene Dokumentstrukturen besitzen keine normative Bedeutung.
+> - Verbindlich ist ausschließlich der für Discovery V2 verifizierte Inhalt ab dem Bereinigungscommit.
+> - Nicht belegte externe Details bleiben **UNKNOWN**.
+> - Kein Anspruch auf wiedergefundene historische Originale.
 
 # Model Routing — Discovery V2
 
-Routing, Gates und Verbote für LLM-/Vision-/Voice-Aufrufe in Discovery.
+## Discovery Vision (implementiert)
 
-## Zentrale Gateways
+Aufrufpfad — Code Phase 8C:
 
-- **Discovery Vision Gateway** (`otio_app/discovery_v2/adapters/vision_gateway.py`) — multimodal, Discovery-only
-- Classic Text-LLM-Router (`plan_llm_client`) bleibt Classic/bestehend; nicht als Discovery-Vision-Gateway erweitern
-- Alle Discovery-Vision-Aufrufe: Application → Gateway → Adapter
-- Keine direkten Providerimporte in UI, Domain oder Prepare-/Fachworkern außerhalb des Gateway-Adapters
+```text
+UI / Application (model_analysis_service)
+  → Discovery Vision Gateway
+      → FakeVisionAdapter
+```
 
-## Aktueller Vision-Stand (Phase 8)
+| Einstellung | Wert | Beleg |
+|---|---|---|
+| Provider | `fake` | `vision_config.py` |
+| Model | `fake-vision-v1` | `vision_config.py` |
+| Enabled | `true` | `vision_config.py` |
+| Echte Provider | gesperrt | D-8D-003 / Handoff |
 
-| Einstellung | Wert |
-|---|---|
-| Provider | `fake` |
-| Model Identifier | `fake-vision-v1` |
-| Enabled | `true` |
-| Echte Provider | **gesperrt** |
+- Consent pro Model-Run — Code / Tests
+- Cache über Identity-, Config-Versionen und Frame-Hash-Fingerprint — Code / Tests
+- Kein HTTP/SDK in Discovery Vision — Tests / Handoff
 
-Consent ist pro Model-Run erforderlich. Cache bindet Identity- und Config-Versionen sowie Frame-Hash-Fingerprint.
+## Text-LLM und Voice (geplant)
+
+- Text-LLM für Phase 9+: über bestehende konfigurierbare Infrastruktur nutzbar, aber nur hinter Discovery-Application und ohne hart codierte Modelle in Discovery-Fachmodulen — Manifest / Handoff
+- Konkrete Default-Modell-IDs für Discovery-Editorial: **UNKNOWN**
+- Voice: Fake Voice zuerst; optional ElevenLabs hinter Phase-11-Gate — Manifest
+- Adobe Stock / OAuth: **UNKNOWN** / später — Manifest
 
 ## Provider-Gates
 
 | Gate | Status |
 |---|---|
-| Vision (Gemini/OpenAI/Anthropic/OpenRouter/xAI) | gesperrt bis eigener Auftrag |
-| Text-LLM für Editorial (Phase 9+) | Classic-Infrastruktur nutzbar hinter Discovery-Application; keine hart codierten Modelle in Fachmodulen |
-| ElevenLabs / Voice | gesperrt bis Phase-11-Gate; Fake Voice zuerst |
-| Adobe Stock / OAuth | **UNKNOWN** / später |
+| Vision (nicht-fake) | gesperrt |
+| Text-LLM Discovery Editorial | Phase 9+; Details UNKNOWN |
+| ElevenLabs | gesperrt bis Phase 11 |
+| Adobe Stock | UNKNOWN |
 
-Keine stillen Provideraktivierungen. OpenRouter und direkte Provider sind konfigurierbar, sobald ein Gate sie freigibt.
+Keine stillen Provideraktivierungen — Manifest.
 
 ## Verbote
 
-- hart codierte Modell-IDs in Domain-/Application-Fachmodulen
-- Secret-Leak in Logs, Artefakten, Fehlermeldungen
+- hart codierte Modell-IDs in Discovery-Domain-/Application-Fachmodulen
+- Secret-Leak in Logs/Artefakten/Fehlermeldungen
 - ungefragte Uploads
-- Vision über Text-only-Client „nebenbei“
+- Vision über Text-only-Classic-Client als Discovery-Gateway
 - Model-Start durch Streamlit-Rerun ohne Consent
 
 ## LLM- vs. Python-Zuständigkeit
 
-Siehe `00-core-architecture.mdc`: LLM für redaktionelle Inhalte; Python für Timing, Ranges, Hashes, Validierung, Export.
+Siehe `00-core-architecture.mdc`.

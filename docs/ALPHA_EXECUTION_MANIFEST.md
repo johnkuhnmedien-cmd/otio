@@ -22,7 +22,9 @@ Bei Widerspruch gelten die höheren Quellen. Das Manifest darf keine fachliche
 Entscheidung still verändern.
 
 Die genannten höheren Dokumente sind als **RECONSTRUCTED_BOOTSTRAP**
-gekennzeichnet (keine wiedergefundenen Originale).
+gekennzeichnet: für dieses Repository neu konsolidiert; andere Projekte sind
+keine fachliche Quelle; verbindlich ist der verifizierte Inhalt ab dem
+Provenienz-Bereinigungscommit.
 
 **MANUAL bleibt Alpha-Standard.** Keine stillen Automationen, keine ungefragten Uploads.
 
@@ -33,7 +35,7 @@ gekennzeichnet (keine wiedergefundenen Originale).
 - Phase 8B Shot-/Frame-Prepare — abgeschlossen
 - Phase 8C Fake Vision Model Analysis — abgeschlossen
 - Phase 8D Observation Review / Editorial-Ready-Gate — abgeschlossen
-- SoT Bootstrap (Dokumentation) — abgeschlossen
+- SoT Bootstrap + Provenienz-Bereinigung (Dokumentation) — abgeschlossen
 - Registry-Schema: **14**
 - Fake Vision: aktiv (`provider=fake`)
 - Echter Vision-Provider: **gesperrt** (separates Gate)

@@ -96,3 +96,29 @@ werden darf. Es bedeutet nicht:
 `review_revision` je `observation_id`. Bestehende Reviewzeilen werden nicht
 überschrieben oder gelöscht. Der aktuelle Review ist die höchste Revision.
 `reanalyze_requested` startet keinen automatischen Model-Run.
+
+---
+
+## D-DOC-006 — Bootstrap nutzte fremdes Ausgangsmaterial
+
+**Entscheidung / Feststellung:** Bei der ersten Bootstrap-Erstellung
+(`44e6bf0c2ceeef787c607380f3cb8d6022947ef0`) wurden Dokumentstrukturen
+beziehungsweise Inhalte aus einem anderen Projekt als Ausgangsmaterial
+verwendet.
+
+**Kontext:** Die so entstandenen Dateien sind keine wiedergefundenen Discovery-V2-
+Originale. Sie erfordern eine Provenienz-Bereinigung gegen ausschließlich
+Discovery-V2-Quellen.
+
+---
+
+## D-DOC-007 — Andere Projekte sind keine Discovery-V2-SoT
+
+**Entscheidung:** Andere Projekte sind keine Source of Truth für Discovery V2.
+Projektfremde Fachinhalte wurden entfernt oder anhand des aktuellen
+Discovery-V2-Stands (Handoff, Code, Tests, akzeptierte Decisions/Manifest,
+zugelassene Audit-Abgrenzung) neu verifiziert und geschrieben.
+
+**Kontext:** Verbindlich ist der für Discovery V2 verifizierte Inhalt ab dem
+Provenienz-Bereinigungscommit. Übernommene Dokumentstrukturen besitzen keine
+normative Bedeutung. Nicht belegte externe Details bleiben UNKNOWN.

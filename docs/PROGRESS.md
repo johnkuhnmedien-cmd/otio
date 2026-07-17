@@ -4,9 +4,10 @@
 
 **Phase 8 — Assetanalyse ist abgeschlossen.**
 
-**Documentation Bootstrap:** rekonstruierte Source-of-Truth-Dateien angelegt
-(`DISCOVERY-V2-DOCUMENTATION-BOOTSTRAP-RECONSTRUCT-001`). Kennzeichnung
-`RECONSTRUCTED_BOOTSTRAP` — keine wiedergefundenen Originale.
+**Documentation:** Bootstrap-SoT angelegt und anschließend auf Discovery-V2-
+Provenienz bereinigt (`DISCOVERY-V2-DOCUMENTATION-BOOTSTRAP-PROVENANCE-REWORK-001`).
+Kennzeichnung `RECONSTRUCTED_BOOTSTRAP` — für dieses Repository neu konsolidiert;
+andere Projekte sind keine fachliche Quelle.
 
 - Schema: **14**
 - Fake-Vision End-to-End: Prepare → Consent → Fake Model → Visual Observation → manuelles Review
@@ -25,7 +26,7 @@
 | 8B Shot/Frame Prepare | abgeschlossen |
 | 8C Fake Vision | abgeschlossen |
 | 8D Observation Review / Closeout | abgeschlossen |
-| SoT Bootstrap (Docs only) | abgeschlossen (dieser Auftrag) |
+| SoT Bootstrap + Provenienz-Bereinigung | abgeschlossen (Docs only) |
 | 9 Editorial Core / Coverage | **nächster Produktschritt** (nicht begonnen) |
 | 10–13 | geplant im Alpha Execution Manifest / MASTER_PLAN |
 
@@ -42,7 +43,7 @@ Nach 8D:
 Dieselben 18 Baseline-Failures; keine neuen auftragsbedingten Fehler.
 Bekannter VFR-/ffmpeg-Skip bleibt möglich.
 
-Bootstrap-Dokumentation ändert keinen Produktcode; keine neue Vollsuite in diesem Auftrag erforderlich.
+Dokumentationsaufträge ändern keinen Produktcode; keine neue Vollsuite in diesem Auftrag.
 
 ## Nächster erlaubter Schritt
 

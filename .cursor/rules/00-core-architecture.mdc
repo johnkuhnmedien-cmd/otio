@@ -5,19 +5,20 @@ alwaysApply: true
 
 > **RECONSTRUCTED_BOOTSTRAP**
 >
-> - erstellt, weil nach vollständiger Repository- und Dateisystemsuche kein historisches Original auffindbar war
-> - gilt ab dem Bootstrap-Commit als Repositoryvertrag
-> - erhebt keinen Anspruch, den exakten Wortlaut früherer, nicht auffindbarer Dokumente wiederzugeben
-> - basiert auf akzeptiertem Handoff, bestehendem Code, Tests, dokumentierten Architekturentscheidungen und Audit-Referenzen
-> - ungeklärte externe API-, OAuth-, Lizenz- und Providerdetails bleiben **UNKNOWN**
+> - Dokumente wurden für dieses Repository neu konsolidiert.
+> - Andere Projekte sind keine fachliche Quelle.
+> - Übernommene Dokumentstrukturen besitzen keine normative Bedeutung.
+> - Verbindlich ist ausschließlich der für Discovery V2 verifizierte Inhalt ab dem Bereinigungscommit.
+> - Nicht belegte externe Details bleiben **UNKNOWN**.
+> - Kein Anspruch auf wiedergefundene historische Originale.
 
 # Discovery V2 — Core Architecture
 
-Höchste Source-of-Truth für Architektur- und Schichtregeln.
+Höchste Source-of-Truth für Architektur- und Schichtregeln dieses Repositories.
 
 ## Source-of-Truth-Reihenfolge
 
-Bei Widersprüchen gilt die höhere Quelle. Kritische ungelöste Konflikte blockieren den betroffenen Schritt. Originalquellen dürfen später nicht still umgeschrieben werden.
+Bei Widersprüchen gilt die höhere Quelle. Kritische ungelöste Konflikte blockieren den betroffenen Schritt. Bestehende Einträge in höheren Quellen werden nicht still umgeschrieben.
 
 1. `.cursor/rules/00-core-architecture.mdc`
 2. `.cursor/rules/01-step-discipline.mdc`
@@ -31,93 +32,77 @@ Bei Widersprüchen gilt die höhere Quelle. Kritische ungelöste Konflikte block
 10. `docs/CLASSIC_MIGRATION_CONTRACT.md`
 11. `docs/PROGRESS.md`
 12. `docs/CHIEF_DEV_HANDOFF.md`
-13. `docs/source_plans/*`
+13. `docs/source_plans/*` (reserviert; derzeit ohne normative Inhalte)
 
-Untergeordnet (nicht in der Kernhierarchie, aber nutzbar): `docs/ALPHA_EXECUTION_MANIFEST.md`, `DISCOVERY_V2_HANDOFF.md` als Arbeitsstand/Handoff.
+Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`, `DISCOVERY_V2_HANDOFF.md`.
 
-## Stack
+## Stack (belegt)
 
-- Python 3.12
-- Streamlit für Alpha
-- modularer Monolith unter `otio_app/discovery_v2/`
-- Pydantic für Domainverträge
-- SQLite als interne Wahrheit (Discovery-Registry)
-- versionierte JSON-Artefakte unter der Discovery-Wurzel
-- OpenTimelineIO für Export
-- pytest für Tests
-- FFmpeg und ffprobe nur über Adapter und nur in kontrollierten Workern
+- Python 3.12 — Handoff
+- Streamlit — Handoff / Runtime
+- modularer Monolith unter `otio_app/discovery_v2/` — Code
+- Pydantic-Domainverträge — Code
+- SQLite als interne Discovery-Wahrheit (`_otio_v2/registry/assets.sqlite3`, Schema **14**) — Code / Handoff
+- versionierte JSON-Artefakte unter `_otio_v2/` — Code / Handoff
+- OpenTimelineIO — Requirements / Handoff (Export-Produktpfad noch nicht in Discovery implementiert)
+- pytest — Tests
+- FFmpeg/ffprobe nur über Discovery-Adapter und nur in kontrollierten Workern — Code / Handoff
 
-## Schichtvertrag
+## Schichtvertrag (belegt)
 
 ```text
 UI → Application → Domain → Adapters → Persistence
 ```
 
-- Keine Fachlogik in der UI (Streamlit).
-- UI liest persistierte Zustände und startet Jobs nur über explizite Nutzeraktionen.
-- Application orchestriert Use-Cases, Gates und Recovery.
-- Domain enthält reine Verträge, Regeln und Statusübergänge ohne I/O.
-- Adapters kapseln Dateisystem, FFmpeg/ffprobe, externe Dienste und Gateways.
-- Persistence speichert SQLite- und JSON-Artefakte.
+- Keine Fachlogik in der Streamlit-UI — Handoff / UI-No-I/O-Tests
+- Application orchestriert Use-Cases, Gates und Recovery — Code
+- Domain ohne I/O — Code
+- Adapters für Dateisystem, FFmpeg/ffprobe, Vision-Gateway — Code
+- Persistence für SQLite und JSON — Code
 
-## Pfad- und Medienvertrag
+## Pfad- und Medienvertrag (belegt)
 
-- Discovery V2 schreibt ausschließlich unter konfigurierbarem `_otio_v2/` (Standard: `<project_root>/_otio_v2/`).
-- `_otio/` ist für Discovery **read-only**; kein Erzeugen, Ändern, Löschen.
-- Classic-`work_dir` darf nicht als Discovery-Schreibziel verwendet werden.
-- Originalmedien werden nie verändert.
-- Für Produktion und Export gilt ausschließlich **completed Working Media**.
-- Preview-/Analyseframes sind keine Working Media und kein OTIO-Media.
+- Discovery schreibt ausschließlich unter `_otio_v2/` (Standard: `<project_root>/_otio_v2/`) — Code `paths.py` / Handoff
+- `_otio/` ist für Discovery read-only — Handoff / Isolation-Tests
+- Classic-`work_dir` ist kein Discovery-Schreibziel — Handoff
+- Originalmedien werden nicht verändert — Handoff
+- Analyse-, Produktions- und geplanter Exportpfad basieren auf Working Media mit Rohstatus **`completed`** — Eligibility-Code / Manifest-DoD
+- Analysis Frames sind keine Working Media und kein OTIO-Media — Prepare-Tests / Handoff
 
-## Betriebsmodi und Automatisierung
+## Betriebsmodi
 
-- Projektmodus `discovery_v2` ist parallel zu Classic (`with_voiceover`) und Without-VO (`without_voiceover`).
-- Classic und Without-VO bleiben unverändert und verhaltenidentisch.
-- **MANUAL** ist Alpha-Standard.
-- **CHECKPOINT** ist vorbereitet (explizite Zwischenfreigaben).
-- **AUTOMATIC** ist post-alpha; keine stillen Automationen im Alpha.
+- Modi: `with_voiceover`, `without_voiceover`, `discovery_v2` — Code / Handoff
+- Classic und Without-VO bleiben unverändert — Handoff / Migration Contract
+- **MANUAL** ist Alpha-Standard — Manifest / Decisions
+- **AUTOMATIC** ist post-alpha — Manifest
+- Zwischenfreigabe-Automatik jenseits MANUAL: **UNKNOWN** (nicht im Code)
 
 ## Externe Dienste und Modelle
 
-- Externe Dienste ausschließlich über Adapter.
-- Alle LLM-/Vision-Aufrufe über zentrale Gateways (kein Direktaufruf aus UI/Domain/Fachmodulen).
-- OpenRouter und direkte Provider sind konfigurierbar; keine hart codierten Modelle in Fachmodulen.
-- Discovery Vision ist derzeit Fake-only; echte Vision-Provider bleiben hinter separatem Gate gesperrt.
-- Ungeklärte Adobe-OAuth-, Lizenz- und Providerdetails: **UNKNOWN**.
+- Externe Dienste nur über Adapter — Handoff
+- Discovery-Vision nur über Discovery Vision Gateway — Code Phase 8C
+- Aktuell: Fake Vision (`provider=fake`, `fake-vision-v1`) — Code / Handoff
+- Echte Vision-Provider gesperrt bis eigenes Gate — D-8D-003
+- Keine hart codierten Modelle in Discovery-Fachmodulen — Handoff
+- Konkrete produktive Modell-IDs und OAuth-/Lizenzdetails: **UNKNOWN**
 
-## Schwere Arbeit
+## Schwere Arbeit (belegt)
 
-- Schwere Jobs (Probe, Hash, Intake, Prepare, Model-Analysis) laufen außerhalb normaler Streamlit-Reruns.
-- Orphan-/Crash-Recovery ist Teil des Laufzeitvertrags.
-- Rerender startet keine Jobs und führt kein Medien-I/O aus.
+- Probe, Hash, Intake, Prepare und Model-Analysis laufen in Workern außerhalb normaler Streamlit-Reruns — Code
+- Orphan-Recovery Teil des Laufzeitvertrags — Code / Tests
+- Rerender startet keine Jobs und kein Medien-I/O — UI-Regeln / Tests
 
-## Redaktionelle Verantwortung
+## Verantwortung LLM vs. Python
 
-### LLM
+Geplant laut Alpha-Manifest / Handoff-Fahrplan (Phasen 9–13 noch nicht implementiert):
 
-- Dramaturgie
-- Skript
-- Hook
-- Visual Beats
-- Visual Intents
-- Pausenfunktion
-- Übergänge
-- redaktionelle Reparaturvorschläge
+**LLM (geplant):** Dramaturgie, Skript, Hook, Visual Beats, Visual Intents, Pausenfunktion, Übergänge, redaktionelle Reparaturvorschläge.
 
-### Python
+**Python (teilweise implementiert für Medien/Analyse; Timing/Export geplant):** Zeiten, Source-Ranges, Framerundung, Machbarkeit, Hash-/Pfadprüfung, deterministische Reparaturen, Validierung, Export.
 
-- Zeiten
-- Source-Ranges
-- Framerundung
-- Machbarkeit
-- Hash- und Pfadprüfung
-- deterministische Reparaturen
-- Validierung
-- Export
+## Domaintrennung (belegt für Phase 7–8)
 
-## Domaintrennung (verbindlich)
-
-Mindestens getrennt halten:
+Getrennt halten:
 
 - Working Media
 - Technical Shot Segment
@@ -125,7 +110,7 @@ Mindestens getrennt halten:
 - lokale technische Signale
 - Visual Observation
 - Observation Review
-- Visual Beat / Visual Intent (spätere Phasen)
+- Visual Beat / Visual Intent (noch nicht implementiert)
 
 `prepared` ≠ modellanalysiert ≠ redaktionell akzeptiert ≠ Visual-Beat-Freigabe.  
-`accepted` Observation ≠ Asset-Auswahl ≠ Fakten-/Geo-/Synthetic-/Beat-Freigabe.
+`accepted` Observation ≠ Asset-/Fakten-/Geo-/Synthetic-/Beat-Freigabe — D-8D-004.

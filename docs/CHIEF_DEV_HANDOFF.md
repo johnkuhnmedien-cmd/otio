@@ -1,14 +1,15 @@
 > **RECONSTRUCTED_BOOTSTRAP**
 >
-> - erstellt, weil nach vollständiger Repository- und Dateisystemsuche kein historisches Original auffindbar war
-> - gilt ab dem Bootstrap-Commit als Repositoryvertrag
-> - erhebt keinen Anspruch, den exakten Wortlaut früherer, nicht auffindbarer Dokumente wiederzugeben
-> - basiert auf akzeptiertem Handoff, bestehendem Code, Tests, dokumentierten Architekturentscheidungen und Audit-Referenzen
-> - ungeklärte externe API-, OAuth-, Lizenz- und Providerdetails bleiben **UNKNOWN**
+> - Dokumente wurden für dieses Repository neu konsolidiert.
+> - Andere Projekte sind keine fachliche Quelle.
+> - Übernommene Dokumentstrukturen besitzen keine normative Bedeutung.
+> - Verbindlich ist ausschließlich der für Discovery V2 verifizierte Inhalt ab dem Bereinigungscommit.
+> - Nicht belegte externe Details bleiben **UNKNOWN**.
+> - Kein Anspruch auf wiedergefundene historische Originale.
 
 # Chief Dev Handoff — Discovery V2
 
-Kurzlage für technische Führung. Arbeitsdetails und Commit-Historie: `DISCOVERY_V2_HANDOFF.md`.
+Kurzlage für technische Führung. Operative Details: `DISCOVERY_V2_HANDOFF.md`.
 
 ## Source-of-Truth-Reihenfolge
 
@@ -24,11 +25,11 @@ Kurzlage für technische Führung. Arbeitsdetails und Commit-Historie: `DISCOVER
 10. `docs/CLASSIC_MIGRATION_CONTRACT.md`
 11. `docs/PROGRESS.md`
 12. `docs/CHIEF_DEV_HANDOFF.md`
-13. `docs/source_plans/*`
+13. `docs/source_plans/*` (reserviert; derzeit ohne normative Inhalte)
 
 Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`. Operativer Handoff: `DISCOVERY_V2_HANDOFF.md`.
 
-## Repository-Lage (Bootstrap)
+## Repository-Lage
 
 - Branch: `cursor/discovery-v2-integration`
 - PR: `#69`
@@ -36,20 +37,24 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`. Operativer Handoff: `DISCOVER
 - Phase 8 Assetanalyse (8A–8D): **APPROVED**
 - Registry-Schema: **14**
 - Vision: Fake-only (`provider=fake`); echte Provider gesperrt
+- Teststand Phase-8D-Closeout: 2806 collected / 2787 passed / 18 failed / 1 skipped
 - Nächster erlaubter Produktschritt: **Phase 9** (nur mit eigenem Auftrag)
-- Keine Phase 9 in diesem Bootstrap-Auftrag
+- Phase 9 nicht begonnen
 
-## Architektur in einem Satz
+## Architektur (Kurz)
 
-Modularer Streamlit-Monolith: UI → Application → Domain → Adapters → Persistence; SQLite + versionierte JSON unter `_otio_v2/`; Classic `_otio/` read-only; nur completed Working Media für Produktion/Export.
+UI → Application → Domain → Adapters → Persistence; SQLite + versionierte JSON unter
+`_otio_v2/`; Classic `_otio/` read-only; Analyse auf completed Working Media.
 
-## Sofortige Führungsentscheidungen
+## Führungsregeln
 
-- Diese Dokumente sind **rekonstruierte Bootstrap-SoT**, keine wiedergefundenen Originale.
-- Bei Konflikt: Regeln → DECISIONS → MASTER_PLAN → …; Manifest darf nicht still überschreiben.
-- Provider-Gates getrennt halten; keine Baseline-Fremdreparaturen ohne Auftrag.
-- Adobe OAuth / Lizenzdetails / nicht vorhandene Vision-Payloads: **UNKNOWN**.
+- Bootstrap-Dokumente sind für dieses Repository neu konsolidiert; andere Projekte sind keine SoT.
+- Bei Konflikt: Regeln → DECISIONS → MASTER_PLAN → …
+- Provider-Gates getrennt; keine Baseline-Fremdreparaturen ohne Auftrag.
+- Adobe OAuth, produktive Vision-Modell-IDs und nicht implementierte Editorial-Details: **UNKNOWN**.
 
-## Definition of Done (Alpha, Auszug)
+## Alpha-DoD (Manifest, Auszug)
 
-MANUAL-Hauptpfad, keine Originaländerung, Stale-Gates, versionierte Artefakte, validiertes Working Media, Humanity Review, Feasibility, Nutzerfreigabe, parsebares OTIO, keine neuen Discovery-bedingten Testfehler.
+MANUAL-Hauptpfad, keine Originaländerung, Stale-Gates, versionierte Artefakte,
+validiertes Working Media, Humanity Review, Feasibility, Nutzerfreigabe,
+parsebares OTIO, keine neuen Discovery-bedingten Testfehler.
