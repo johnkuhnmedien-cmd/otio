@@ -46,7 +46,6 @@ from otio_app.discovery_v2.application.coverage_gap_service import (
 from otio_app.discovery_v2.application.coverage_idempotency_service import (
     build_current_canonical_coverage,
     find_completed_equivalent_current_audit,
-    reconstruct_legacy_canonical_fingerprint,
 )
 from otio_app.discovery_v2.application.coverage_revalidation_service import (
     revalidate_coverage_after_accepted_reviews,
@@ -69,11 +68,20 @@ from otio_app.discovery_v2.application.supplementation_service import (
 )
 from otio_app.discovery_v2.domain.coverage_input import (
     COVERAGE_INPUT_SCHEMA_VERSION,
+    EDITORIAL_ERROR_LEGACY_AUDIT_MISSING_CANONICAL_FINGERPRINT,
+    LEGACY_COVERAGE_RECOMPUTE_MESSAGE,
     build_canonical_coverage_input,
     build_coverage_run_dedup_key,
     compute_canonical_coverage_fingerprint,
 )
-from otio_app.discovery_v2.domain.editorial import CoverageAuditStatus
+from otio_app.discovery_v2.domain.editorial import (
+    Claim,
+    CoverageAuditStatus,
+    ScriptDraft,
+    Sentence,
+    VisualBeat,
+    VisualIntent,
+)
 from otio_app.discovery_v2.domain.supplementation import (
     CoverageGapStatus,
     EscalationStep,
@@ -142,6 +150,99 @@ def _resolve_sibling_gaps(project, *, keep_gap_id: str) -> None:
         assert mark_gap_resolved_with_local_asset(
             project, gap_id=gap.gap_id, asset_id="asset-local"
         ).ok
+
+
+def _coverage_run_ids(project) -> set[str]:
+    conn = editorial_repo.open_editorial_registry(project.project_root_path)
+    try:
+        return {
+            run.run_id
+            for run in editorial_repo.list_editorial_runs(conn, project_id=project.id)
+            if run.scope == "editorial_coverage_only"
+        }
+    finally:
+        conn.close()
+
+
+def _strip_stored_canonical_fingerprint(project) -> str:
+    """Make the current completed audit a legacy audit (no stored fingerprint)."""
+
+    audit_id = current_audit_id(project)
+    audit = load_audit(project, audit_id)
+    assert audit.canonical_coverage_input_fingerprint
+    legacy = audit.model_copy(update={"canonical_coverage_input_fingerprint": None})
+    editorial_repo.save_coverage_json(project.project_root_path, legacy)
+    reloaded = load_audit(project, audit_id)
+    assert reloaded.canonical_coverage_input_fingerprint in (None, "")
+    assert current_audit_id(project) == audit_id
+    return audit_id
+
+
+def _mutate_script_bundle_under_same_script_id(
+    project,
+    *,
+    beat_description_suffix: str | None = None,
+    intent_motif_suffix: str | None = None,
+) -> str:
+    """Overwrite the mutable script JSON under the same script_id.
+
+    Uses the JSON artifact path that ``get_script_bundle`` reads. DB row
+    replacement is avoided (FK links from coverage results/gaps); product
+    ``replace_script_structure`` remains the mutable overwrite API under the
+    same ``script_id``.
+    """
+
+    prior_audit_id = current_audit_id(project)
+    conn = editorial_repo.open_editorial_registry(project.project_root_path)
+    try:
+        script = editorial_repo.get_active_script(conn, project_id=project.id)
+        assert script is not None
+        script_id = script.script_id
+        bundle = editorial_repo.get_script_bundle(conn, script_id=script_id)
+        assert bundle is not None
+        script_model = ScriptDraft.model_validate(bundle["script"])
+        sentences = [Sentence.model_validate(item) for item in bundle.get("sentences", [])]
+        claims = [Claim.model_validate(item) for item in bundle.get("claims", [])]
+        beats = [VisualBeat.model_validate(item) for item in bundle.get("visual_beats", [])]
+        intents = [
+            VisualIntent.model_validate(item) for item in bundle.get("visual_intents", [])
+        ]
+        assert beats and intents
+        if beat_description_suffix is not None:
+            beats[0] = beats[0].model_copy(
+                update={
+                    "description": beats[0].description + beat_description_suffix,
+                }
+            )
+        if intent_motif_suffix is not None:
+            intents[0] = intents[0].model_copy(
+                update={
+                    "desired_motif": intents[0].desired_motif + intent_motif_suffix,
+                }
+            )
+        editorial_repo.save_script_bundle_json(
+            project.project_root_path,
+            script=script_model,
+            sentences=sentences,
+            claims=claims,
+            visual_beats=beats,
+            visual_intents=intents,
+        )
+    finally:
+        conn.close()
+    assert current_audit_id(project) == prior_audit_id
+    # Prove the live bundle now differs under the same script_id.
+    conn = editorial_repo.open_editorial_registry(project.project_root_path)
+    try:
+        mutated = editorial_repo.get_script_bundle(conn, script_id=script_id)
+    finally:
+        conn.close()
+    assert mutated is not None
+    if beat_description_suffix is not None:
+        assert beat_description_suffix in mutated["visual_beats"][0]["description"]
+    if intent_motif_suffix is not None:
+        assert intent_motif_suffix in mutated["visual_intents"][0]["desired_motif"]
+    return script_id
 
 
 # --- Canonical input ---------------------------------------------------------
@@ -402,44 +503,26 @@ def test_c2_smoke_e_observation_change_starts_new_coverage_run(
 def test_c2_smoke_f_unsafe_legacy_audit_is_not_reused(
     tmp_path: Path, temp_db_path: Path
 ) -> None:
+    """No stored fingerprint → never reuse, even if current artefacts look reconstructable."""
+
     project = build_script_ready_project(tmp_path, temp_db_path)
     run_manual_coverage(project, sync=True)
-    audit_id = current_audit_id(project)
-    audit = load_audit(project, audit_id)
-    # Strip stored fingerprint and break reconstructable script identity.
-    broken = audit.model_copy(
-        update={
-            "canonical_coverage_input_fingerprint": None,
-            "script_id": "missing-script-for-legacy",
-        }
-    )
-    relative = editorial_repo.save_coverage_json(project.project_root_path, broken)
-    conn = editorial_repo.open_editorial_registry(project.project_root_path)
-    try:
-        # Update JSON pointer content only (row already exists); rewrite artifact.
-        state = editorial_repo.get_project_state(conn, project_id=project.id)
-        assert state is not None
-        editorial_repo.upsert_project_state(
-            conn,
-            state.model_copy(update={"active_coverage_audit_id": audit_id}),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    # Overwrite artifact file used by get_coverage_audit.
-    editorial_repo.save_coverage_json(project.project_root_path, broken)
+    audit_id = _strip_stored_canonical_fingerprint(project)
+    # Current brief/narrative/script/bundle remain intact and would have been
+    # reconstructable under the removed legacy path — must still fail closed.
     built = build_current_canonical_coverage(project)
     assert built.ok
     match = find_completed_equivalent_current_audit(
         project, fingerprint=built.fingerprint or ""
     )
     assert not match.ok
-    assert match.unsafe_legacy or match.error_code == (
-        "coverage_completed_audit_reuse_unsafe"
-    )
-    # Normal start must not silently reuse the broken current audit identity.
+    assert match.unsafe_legacy is True
+    assert match.error_code == EDITORIAL_ERROR_LEGACY_AUDIT_MISSING_CANONICAL_FINGERPRINT
     started = start_coverage_run(project, sync=True)
     assert started.started and not started.reused
+    assert started.error_code == EDITORIAL_ERROR_LEGACY_AUDIT_MISSING_CANONICAL_FINGERPRINT
+    assert started.message == LEGACY_COVERAGE_RECOMPUTE_MESSAGE
+    assert current_audit_id(project) != audit_id
 
 
 def test_c2_completed_reuse_skips_supersede_and_materialize(
@@ -534,3 +617,196 @@ def test_c2_reproduction_uses_no_real_gateway_and_no_media_io(
     reused = start_coverage_run(project, sync=True)
     assert reused.reused
     assert load_text_config().provider == "fake"
+
+
+# --- C2-R1 Legacy fail-closed -------------------------------------------------
+
+
+def test_c2_r1_legacy_audit_without_fingerprint_is_never_reused(
+    tmp_path: Path, temp_db_path: Path
+) -> None:
+    project = build_script_ready_project(tmp_path, temp_db_path)
+    run_manual_coverage(project, sync=True)
+    legacy_id = _strip_stored_canonical_fingerprint(project)
+    match = find_completed_equivalent_current_audit(
+        project,
+        fingerprint=build_current_canonical_coverage(project).fingerprint or "",
+    )
+    assert not match.ok
+    assert match.error_code == EDITORIAL_ERROR_LEGACY_AUDIT_MISSING_CANONICAL_FINGERPRINT
+    started = start_coverage_run(project, sync=True)
+    assert started.started and not started.reused
+    assert started.coverage_audit_id is None
+    assert current_audit_id(project) != legacy_id
+
+
+def test_c2_r1_legacy_reuse_does_not_read_mutable_script_bundle(
+    tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = build_script_ready_project(tmp_path, temp_db_path)
+    run_manual_coverage(project, sync=True)
+    _strip_stored_canonical_fingerprint(project)
+    bundle_reads: list[str] = []
+    original = editorial_repo.get_script_bundle
+
+    def _tracked(conn, *, script_id: str):
+        bundle_reads.append(script_id)
+        return original(conn, script_id=script_id)
+
+    monkeypatch.setattr(
+        "otio_app.discovery_v2.application.coverage_idempotency_service.repo.get_script_bundle",
+        _tracked,
+    )
+    built = build_current_canonical_coverage(project)
+    assert built.ok
+    # Reset: build_current reads the active bundle; completed reuse must not.
+    bundle_reads.clear()
+    match = find_completed_equivalent_current_audit(
+        project, fingerprint=built.fingerprint or ""
+    )
+    assert not match.ok
+    assert match.error_code == EDITORIAL_ERROR_LEGACY_AUDIT_MISSING_CANONICAL_FINGERPRINT
+    assert bundle_reads == []
+
+
+def test_c2_r1_structure_change_under_same_script_id_cannot_false_reuse_legacy_audit(
+    tmp_path: Path, temp_db_path: Path
+) -> None:
+    project = build_script_ready_project(tmp_path, temp_db_path)
+    run_manual_coverage(project, sync=True)
+    legacy_id = _strip_stored_canonical_fingerprint(project)
+    script_id = _mutate_script_bundle_under_same_script_id(
+        project, beat_description_suffix=" [C2R1 structure mutate]"
+    )
+    view = get_editorial_view(project)
+    assert view.script is not None
+    assert view.script.script_id == script_id
+    started = start_coverage_run(project, sync=True)
+    assert started.started and not started.reused
+    assert current_audit_id(project) != legacy_id
+
+
+def test_c2_r1_visual_intent_change_under_same_script_id_cannot_false_reuse_legacy_audit(
+    tmp_path: Path, temp_db_path: Path
+) -> None:
+    project = build_script_ready_project(tmp_path, temp_db_path)
+    run_manual_coverage(project, sync=True)
+    legacy_id = _strip_stored_canonical_fingerprint(project)
+    script_id = _mutate_script_bundle_under_same_script_id(
+        project, intent_motif_suffix=" [C2R1 intent mutate]"
+    )
+    view = get_editorial_view(project)
+    assert view.script is not None
+    assert view.script.script_id == script_id
+    started = start_coverage_run(project, sync=True)
+    assert started.started and not started.reused
+    assert current_audit_id(project) != legacy_id
+
+
+def test_c2_r1_first_legacy_request_starts_exactly_one_normal_run(
+    tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _gateway_counter(monkeypatch)
+    project = build_script_ready_project(tmp_path, temp_db_path)
+    run_manual_coverage(project, sync=True)
+    _strip_stored_canonical_fingerprint(project)
+    before_runs = _coverage_run_ids(project)
+    before_calls = calls.count("coverage")
+    started = start_coverage_run(project, sync=True)
+    assert started.started and not started.reused
+    assert started.run is not None
+    assert started.run.run_id not in before_runs
+    assert len(_coverage_run_ids(project) - before_runs) == 1
+    assert calls.count("coverage") == before_calls + 1
+    assert started.error_code == EDITORIAL_ERROR_LEGACY_AUDIT_MISSING_CANONICAL_FINGERPRINT
+
+
+def test_c2_r1_new_audit_after_legacy_recompute_stores_canonical_fingerprint(
+    tmp_path: Path, temp_db_path: Path
+) -> None:
+    project = build_script_ready_project(tmp_path, temp_db_path)
+    run_manual_coverage(project, sync=True)
+    _strip_stored_canonical_fingerprint(project)
+    started = start_coverage_run(project, sync=True)
+    assert started.started and not started.reused
+    new_audit = load_audit(project, current_audit_id(project))
+    assert new_audit.canonical_coverage_input_fingerprint
+    built = build_current_canonical_coverage(project)
+    assert built.ok
+    assert new_audit.canonical_coverage_input_fingerprint == built.fingerprint
+
+
+def test_c2_r1_second_identical_request_reuses_new_fingerprinted_audit(
+    tmp_path: Path, temp_db_path: Path
+) -> None:
+    project = build_script_ready_project(tmp_path, temp_db_path)
+    run_manual_coverage(project, sync=True)
+    _strip_stored_canonical_fingerprint(project)
+    assert start_coverage_run(project, sync=True).started
+    audit_id = current_audit_id(project)
+    second = start_coverage_run(project, sync=True)
+    assert second.reused is True
+    assert second.started is False
+    assert second.run is None
+    assert second.coverage_audit_id == audit_id
+    assert second.reuse_reason == "completed_equivalent_current_audit"
+
+
+def test_c2_r1_second_identical_request_starts_no_gateway_worker_or_gap_materialization(
+    tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _gateway_counter(monkeypatch)
+    project = build_script_ready_project(tmp_path, temp_db_path)
+    run_manual_coverage(project, sync=True)
+    _strip_stored_canonical_fingerprint(project)
+    assert start_coverage_run(project, sync=True).started
+    audit_id = current_audit_id(project)
+    progressed = progress_three_gaps(project)
+    gap_ids = {gap.gap_id for gap in progressed.gaps}
+    materialize = MagicMock(wraps=materialize_gaps_from_current_coverage)
+    monkeypatch.setattr(
+        "otio_app.discovery_v2.application.coverage_gap_service.materialize_gaps_from_current_coverage",
+        materialize,
+    )
+    monkeypatch.setattr(
+        "otio_app.discovery_v2.application.coverage_revalidation_service.materialize_gaps_from_current_coverage",
+        materialize,
+    )
+    before_calls = calls.count("coverage")
+    before_runs = _coverage_run_ids(project)
+    second = start_coverage_run(project, sync=True)
+    assert second.reused and second.coverage_audit_id == audit_id
+    assert calls.count("coverage") == before_calls
+    assert _coverage_run_ids(project) == before_runs
+    materialize.assert_not_called()
+    assert get_editorial_job_launcher().is_active(project.id) is False
+    current_gaps = {
+        gap.gap_id
+        for gap in list_all_gaps(project)
+        if gap.status != CoverageGapStatus.SUPERSEDED
+    }
+    assert gap_ids <= current_gaps
+
+
+def test_c2_r1_active_equivalent_run_reuse_remains_unchanged(
+    tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = build_script_ready_project(tmp_path, temp_db_path)
+    release = threading.Event()
+    entered = threading.Event()
+    install_active_coverage_worker_gate(
+        monkeypatch, release=release, entered=entered
+    )
+    first = start_coverage_run(project, sync=False)
+    assert first.started and first.run is not None and not first.reused
+    assert entered.wait(timeout=5)
+    second = start_coverage_run(project, sync=False)
+    assert second.reused is True
+    assert second.started is True
+    assert second.run is not None
+    assert second.run.run_id == first.run.run_id
+    release.set()
+    deadline = time.time() + 10
+    while time.time() < deadline and get_editorial_job_launcher().is_active(project.id):
+        time.sleep(0.05)
+    assert current_audit_id(project)

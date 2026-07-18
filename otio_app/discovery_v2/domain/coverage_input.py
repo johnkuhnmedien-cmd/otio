@@ -35,9 +35,18 @@ EDITORIAL_ERROR_COVERAGE_COMPLETED_AUDIT_REUSE_UNSAFE = (
 EDITORIAL_ERROR_COVERAGE_INPUT_FINGERPRINT_MISMATCH = (
     "coverage_input_fingerprint_mismatch"
 )
+EDITORIAL_ERROR_LEGACY_AUDIT_MISSING_CANONICAL_FINGERPRINT = (
+    "legacy_audit_missing_canonical_fingerprint"
+)
 
 REUSE_REASON_COMPLETED_CURRENT_AUDIT = "completed_equivalent_current_audit"
 REUSE_REASON_ACTIVE_EQUIVALENT_RUN = "active_equivalent_run"
+
+LEGACY_COVERAGE_RECOMPUTE_MESSAGE = (
+    "Der bestehende Coverage-Stand stammt aus einer aelteren Version "
+    "und kann nicht sicher wiederverwendet werden. "
+    "Coverage wird einmalig neu berechnet."
+)
 
 
 class CanonicalBriefRef(BaseModel):
@@ -292,6 +301,8 @@ __all__ = [
     "EDITORIAL_ERROR_COVERAGE_COMPLETED_AUDIT_REUSE_UNSAFE",
     "EDITORIAL_ERROR_COVERAGE_CURRENT_AUDIT_INPUT_UNAVAILABLE",
     "EDITORIAL_ERROR_COVERAGE_INPUT_FINGERPRINT_MISMATCH",
+    "EDITORIAL_ERROR_LEGACY_AUDIT_MISSING_CANONICAL_FINGERPRINT",
+    "LEGACY_COVERAGE_RECOMPUTE_MESSAGE",
     "REUSE_REASON_ACTIVE_EQUIVALENT_RUN",
     "REUSE_REASON_COMPLETED_CURRENT_AUDIT",
     "audit_has_stored_canonical_fingerprint",

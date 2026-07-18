@@ -249,7 +249,11 @@ def start_coverage_run(
         find_active_equivalent_coverage_run,
         find_completed_equivalent_current_audit,
     )
-    from otio_app.discovery_v2.domain.coverage_input import CoverageExecutionMode
+    from otio_app.discovery_v2.domain.coverage_input import (
+        EDITORIAL_ERROR_LEGACY_AUDIT_MISSING_CANONICAL_FINGERPRINT,
+        LEGACY_COVERAGE_RECOMPUTE_MESSAGE,
+        CoverageExecutionMode,
+    )
 
     mode: CoverageExecutionMode
     if execution_mode in {"normal", "retry_failed", "force_recompute"}:
@@ -268,6 +272,7 @@ def start_coverage_run(
             error_code=built.error_code,
             canonical_input_fingerprint=built.fingerprint,
         )
+    legacy_recompute = False
     if mode != "force_recompute":
         completed = find_completed_equivalent_current_audit(
             project, fingerprint=built.fingerprint
@@ -281,6 +286,11 @@ def start_coverage_run(
                 canonical_input_fingerprint=built.fingerprint,
                 reuse_reason=completed.reuse_reason,
             )
+        if (
+            completed.error_code
+            == EDITORIAL_ERROR_LEGACY_AUDIT_MISSING_CANONICAL_FINGERPRINT
+        ):
+            legacy_recompute = True
         active = find_active_equivalent_coverage_run(
             project,
             fingerprint=built.fingerprint,
@@ -304,7 +314,7 @@ def start_coverage_run(
                 error_code=active.error_code or EDITORIAL_ERROR_RUN_ALREADY_ACTIVE,
                 canonical_input_fingerprint=built.fingerprint,
             )
-    return _start_run(
+    started = _start_run(
         project,
         scope=EDITORIAL_RUN_SCOPE_COVERAGE,
         sync=sync,
@@ -312,6 +322,18 @@ def start_coverage_run(
         coverage_dedup_key=built.dedup_key,
         coverage_execution_mode=mode,
     )
+    if legacy_recompute and started.started and not started.reused:
+        return EditorialStartResult(
+            started=started.started,
+            message=LEGACY_COVERAGE_RECOMPUTE_MESSAGE,
+            run=started.run,
+            error_code=EDITORIAL_ERROR_LEGACY_AUDIT_MISSING_CANONICAL_FINGERPRINT,
+            reused=False,
+            coverage_audit_id=None,
+            canonical_input_fingerprint=built.fingerprint,
+            reuse_reason=None,
+        )
+    return started
 
 
 def select_hook(project: Project, *, hook_id: str) -> HookSelectResult:

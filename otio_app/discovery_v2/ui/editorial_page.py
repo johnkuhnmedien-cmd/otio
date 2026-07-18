@@ -439,6 +439,8 @@ def _render_coverage(project, view) -> None:
         if result.reused:
             _flash_and_rerun(result.message, level="info")
         elif result.started:
+            # Legacy audits without stored fingerprint start one normal recompute;
+            # message already explains one-time recompute (C2-R1).
             _flash_and_rerun(result.message, level="info")
         else:
             st.warning(result.message)

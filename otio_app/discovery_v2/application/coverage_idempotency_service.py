@@ -1,4 +1,4 @@
-"""Canonical Coverage Input build, fingerprint, and reuse lookup (C2)."""
+"""Canonical Coverage Input build, fingerprint, and reuse lookup (C2 / C2-R1)."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from otio_app.discovery_v2.domain.coverage_input import (
     CoverageExecutionMode,
     EDITORIAL_ERROR_COVERAGE_ACTIVE_RUN_INPUT_UNAVAILABLE,
     EDITORIAL_ERROR_COVERAGE_CANONICAL_INPUT_INVALID,
-    EDITORIAL_ERROR_COVERAGE_COMPLETED_AUDIT_REUSE_UNSAFE,
     EDITORIAL_ERROR_COVERAGE_CURRENT_AUDIT_INPUT_UNAVAILABLE,
+    EDITORIAL_ERROR_LEGACY_AUDIT_MISSING_CANONICAL_FINGERPRINT,
     REUSE_REASON_ACTIVE_EQUIVALENT_RUN,
     REUSE_REASON_COMPLETED_CURRENT_AUDIT,
     audit_has_stored_canonical_fingerprint,
@@ -202,62 +202,17 @@ def find_active_equivalent_coverage_run(
     )
 
 
-def reconstruct_legacy_canonical_fingerprint(
-    project: Project,
-    audit: CoverageAudit,
-) -> tuple[str | None, str | None]:
-    """Return (fingerprint, error_code). error_code set when reconstruction unsafe."""
-
-    conn = repo.open_editorial_registry(project.project_root_path)
-    try:
-        brief = repo.get_project_brief_by_version(
-            conn, project_id=project.id, brief_version=audit.brief_version
-        )
-        narrative = repo.get_narrative_plan(
-            conn, narrative_plan_id=audit.narrative_plan_id
-        )
-        script = repo.get_script_draft(conn, script_id=audit.script_id)
-        if brief is None or narrative is None or script is None:
-            return None, EDITORIAL_ERROR_COVERAGE_COMPLETED_AUDIT_REUSE_UNSAFE
-        if script.script_version != audit.script_version:
-            return None, EDITORIAL_ERROR_COVERAGE_COMPLETED_AUDIT_REUSE_UNSAFE
-        if not script.selected_hook_id:
-            return None, EDITORIAL_ERROR_COVERAGE_COMPLETED_AUDIT_REUSE_UNSAFE
-        hook = repo.get_hook_variant(conn, hook_id=script.selected_hook_id)
-        if hook is None or hook.narrative_plan_id != audit.narrative_plan_id:
-            return None, EDITORIAL_ERROR_COVERAGE_COMPLETED_AUDIT_REUSE_UNSAFE
-        bundle = repo.get_script_bundle(conn, script_id=script.script_id)
-        if bundle is None:
-            return None, EDITORIAL_ERROR_COVERAGE_COMPLETED_AUDIT_REUSE_UNSAFE
-        # Model routing from the audit itself (reconstructable legacy components).
-        # response_schema_version is audit.schema_version for coverage-audit-v1.
-        try:
-            coverage_input = build_canonical_coverage_input(
-                project_id=audit.project_id,
-                brief=brief,
-                narrative=narrative,
-                hook=hook,
-                script=script,
-                script_bundle=bundle,
-                observation_fingerprint=audit.input_observation_fingerprint,
-                provider=audit.provider,
-                model_identifier=audit.model_identifier,
-                gateway_version=audit.gateway_version,
-                prompt_version=audit.prompt_version,
-                response_schema_version=audit.schema_version,
-            )
-        except Exception:
-            return None, EDITORIAL_ERROR_COVERAGE_COMPLETED_AUDIT_REUSE_UNSAFE
-    finally:
-        conn.close()
-    return compute_canonical_coverage_fingerprint(coverage_input), None
-
-
 def find_completed_equivalent_current_audit(
     project: Project,
     *,
     fingerprint: str,
 ) -> CompletedAuditReuseMatch:
+    """Reuse only when the current completed audit stores an identical fingerprint.
+
+    Audits without a stored canonical fingerprint are never reconstructed from
+    mutable project artefacts (C2-R1 fail-closed).
+    """
+
     project = require_discovery_project(project)
     conn = repo.open_editorial_registry(project.project_root_path)
     try:
@@ -285,45 +240,31 @@ def find_completed_equivalent_current_audit(
             audit=audit,
             message="Current Coverage Audit ist nicht completed.",
         )
-    if audit_has_stored_canonical_fingerprint(audit):
-        stored = str(audit.canonical_coverage_input_fingerprint)
-        if stored == fingerprint:
-            return CompletedAuditReuseMatch(
-                ok=True,
-                audit=audit,
-                fingerprint=fingerprint,
-                reuse_reason=REUSE_REASON_COMPLETED_CURRENT_AUDIT,
-                message="Completed Current Audit wiederverwendet.",
-            )
+    if not audit_has_stored_canonical_fingerprint(audit):
         return CompletedAuditReuseMatch(
             ok=False,
             audit=audit,
-            fingerprint=stored,
-            message="Canonical Fingerprint weicht ab.",
-            error_code="coverage_input_fingerprint_mismatch",
-        )
-    legacy_fp, unsafe = reconstruct_legacy_canonical_fingerprint(project, audit)
-    if unsafe or legacy_fp is None:
-        return CompletedAuditReuseMatch(
-            ok=False,
-            audit=audit,
-            message="Legacy-Audit nicht sicher rekonstruierbar.",
-            error_code=EDITORIAL_ERROR_COVERAGE_COMPLETED_AUDIT_REUSE_UNSAFE,
+            message=(
+                "Legacy Coverage Audit ohne gespeicherten Canonical Fingerprint; "
+                "kein Reuse, normale Neuberechnung."
+            ),
+            error_code=EDITORIAL_ERROR_LEGACY_AUDIT_MISSING_CANONICAL_FINGERPRINT,
             unsafe_legacy=True,
         )
-    if legacy_fp == fingerprint:
+    stored = str(audit.canonical_coverage_input_fingerprint)
+    if stored == fingerprint:
         return CompletedAuditReuseMatch(
             ok=True,
             audit=audit,
             fingerprint=fingerprint,
             reuse_reason=REUSE_REASON_COMPLETED_CURRENT_AUDIT,
-            message="Legacy Completed Current Audit sicher wiederverwendet.",
+            message="Completed Current Audit wiederverwendet.",
         )
     return CompletedAuditReuseMatch(
         ok=False,
         audit=audit,
-        fingerprint=legacy_fp,
-        message="Legacy-Fingerprint weicht ab.",
+        fingerprint=stored,
+        message="Canonical Fingerprint weicht ab.",
         error_code="coverage_input_fingerprint_mismatch",
     )
 
@@ -336,5 +277,4 @@ __all__ = [
     "build_current_canonical_coverage",
     "find_active_equivalent_coverage_run",
     "find_completed_equivalent_current_audit",
-    "reconstruct_legacy_canonical_fingerprint",
 ]
