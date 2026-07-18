@@ -357,12 +357,13 @@ def _render_observation_review(project) -> None:
         "Technische Warnung": "technical_warning",
     }
     filter_label = "Unreviewed"
-    if hasattr(st, "selectbox"):
-        filter_label = st.selectbox(
+    if hasattr(st, "radio"):
+        filter_label = st.radio(
             "Filter",
             list(filter_options.keys()),
             index=list(filter_options.keys()).index("Unreviewed"),
             key="discovery_v2_observation_review_filter",
+            horizontal=True,
         )
     visible = filter_observation_review_items(
         observations,
