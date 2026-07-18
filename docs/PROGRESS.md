@@ -2,7 +2,7 @@
 
 ## Aktueller Stand
 
-**Coverage Stability C2 + C2-R1 vollständig abgenommen — Schema weiterhin 20.**
+**Coverage Stability C2 vollständig abgeschlossen — C3-Planung aktiv — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
 - Script-Lock Realtest: **erfolgreich**
@@ -14,13 +14,13 @@
 - Visual Edit Rework **V1–V3**: implementiert
 - Coverage Idempotency Plan: dokumentiert
 - **Coverage Stability C1**: Reproduktion (`94b6e0f`)
-- **Coverage Stability C2**: Canonical Input + Active-/Completed-Reuse (`7e8db48`)
-- **Coverage Stability C2-R1**: Legacy Fail-Closed (`86b5ac1`)
+- **Coverage Stability C2 + C2-R1**: vollständig abgeschlossen / USA_v2 abgenommen
 - Decisions: D-COVERAGE-STABILITY-001…004
-- **USA_v2-Realtest: erfolgreich** (C2-Abnahme)
-- Plan: `docs/source_plans/ALPHA_COVERAGE_IDEMPOTENCY_CARRY_FORWARD_PLAN.md`
-- **Nächster zu planender Schritt: Coverage Stability C3**
-- **C4, V4 und R1.4 gesperrt**
+- **C3-Planung aktiv** (keine C3-Implementierung)
+- C3-Plan: `docs/source_plans/ALPHA_COVERAGE_STABILITY_C3_GAP_IDENTITY_CARRY_FORWARD_PLAN.md`
+- Roadmap: `docs/source_plans/ALPHA_COVERAGE_IDEMPOTENCY_CARRY_FORWARD_PLAN.md`
+- **Nächste erlaubte Aktion nach Planfreigabe: C3.1 Root-Cause-Fixtures**
+- **C3.2–C3.4, C4, V4 und R1.4 gesperrt**
 - Keine neue Produktphase · echte Provider gesperrt
 
 ## Phase-Status
@@ -32,9 +32,10 @@
 | Visual Edit Rework V1–V3 | abgeschlossen |
 | Coverage Idempotency Plan | dokumentiert |
 | Coverage Stability C1 | abgeschlossen (Reproduktion) |
-| Coverage Stability C2 | **abgenommen** (Canonical Reuse + USA_v2) |
-| Coverage Stability C2-R1 | **abgenommen** (Legacy Fail-Closed + USA_v2) |
-| Coverage Stability C3 | nächster zu planender Schritt |
+| Coverage Stability C2 | **vollständig abgeschlossen** (Canonical Reuse + USA_v2) |
+| Coverage Stability C2-R1 | **vollständig abgeschlossen** |
+| Coverage Stability C3 | **Planung aktiv** (keine Implementierung) |
+| Coverage Stability C3.1–C3.4 | gesperrt bis jeweilige Freigabe (nach Plan: zuerst C3.1) |
 | Coverage Stability C4 | **gesperrt** |
 | Visual Edit Rework V4 Loop/UI | **gesperrt** |
 | R1.4 Job-UX / Progress-Polling | **gesperrt** |
@@ -85,9 +86,11 @@ Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Ga
 
 ## Nächste erlaubte Aktivität
 
-→ **Coverage Stability C3** (Gap Identity / Carry-Forward) — planen/implementieren nach Freigabe
+Nach Freigabe des C3-Plans:
 
-Danach C4 (Atomarität / UI).
+→ **C3.1 Root-Cause-Fixtures** (Gap-ID-/Event-Bindung, Script-Lock-Auswirkung; keine Carry-Forward-Produktlogik)
 
-Noch gesperrt: C4, V4, R1.4–R1.6, echte Provider, neue Produktphase,
-Nutzerregistry-Reparatur.
+Danach C3.2 → C3.3 → C3.4 nach Freigabe. C4 erst nach C3.
+
+Noch gesperrt: C3.2–C3.4 bis Freigabe, C4, V4, R1.4–R1.6, echte Provider,
+neue Produktphase, Nutzerregistry-Reparatur.

@@ -33,7 +33,7 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 - Repository / Worktree: Discovery-V2-Integration (`cursor/discovery-v2-integration`)
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Aktueller HEAD: Coverage Stability C2 Realtest-Closeout (docs)
+- Aktueller HEAD: Coverage Stability C3-Planung (docs)
 - V1–V3 Visual Edit: `70ffe6e` / `0fba7bd` / `f1b982a`
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
 - R1.1–R1.3 abgeschlossen · Script-Lock Realtest **erfolgreich**
@@ -45,28 +45,26 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - Decisions: D-R1.1-001…004 · D-R1.2-001…003 · D-R1.3-001…004 ·
   D-VE-REWORK-001…006 · D-COVERAGE-STABILITY-001…004
 - Visual Edit V1–V3: **abgeschlossen**
-- **Coverage Stability C1+C2+C2-R1 vollständig abgenommen**
+- **Coverage Stability C2 vollständig akzeptiert** (C1+C2+C2-R1 + USA_v2)
 - Canonical Coverage Input `coverage-input-v1` + Completed/Active Reuse
 - Legacy-Audits ohne Fingerprint: fail-closed, einmaliger Recompute
-- **USA_v2-Realtest erfolgreich**
-  - Audit `c2b32d64-3961-53bf-ab85-391932a2bf43`
-  - Run `7bb2273b-96ca-4942-9924-6de34b29d471`
-  - Zweiter identischer Coverage-Aufruf: Completed Current Audit reused;
-    kein neuer Run, keine neue Audit-ID, keine neuen Gap-IDs, keine Statusverluste
-  - Gaps: `094f0390-…` resolved_by_graphic_plan;
-    `2c36238e-…` accepted_unresolved;
-    `95a924fe-…` in_progress / user_decision
-- Offener UI-Befund: Visual-Intent-ID teilweise als Gap-ID beschriftet
-- Plan: `docs/source_plans/ALPHA_COVERAGE_IDEMPOTENCY_CARRY_FORWARD_PLAN.md`
-- **Nächster zu planender Schritt: Coverage Stability C3**
-- **C4, V4 und R1.4 gesperrt** · echte Provider gesperrt
+- USA_v2-Realtest: Audit `c2b32d64-…` · Run `7bb2273b-…` · Reuse bestätigt
+- Offener UI-Befund: Visual-Intent-ID teilweise als Gap-ID beschriftet (nicht C3)
+- **Aktueller Schritt: C3-Planung**
+  - Plan: `docs/source_plans/ALPHA_COVERAGE_STABILITY_C3_GAP_IDENTITY_CARRY_FORWARD_PLAN.md`
+  - Empfohlen: Option C (neue `gap_id` + Semantic Key + Carry-Forward-Report)
+  - Schema 20 ohne Migration
+  - **Keine C3-Implementierung**
+- Roadmap: `docs/source_plans/ALPHA_COVERAGE_IDEMPOTENCY_CARRY_FORWARD_PLAN.md`
+- **Nächste erlaubte Aktion nach Planfreigabe: C3.1 Root-Cause-Fixtures**
+- **C3.2–C3.4, C4, V4 und R1.4 gesperrt** · echte Provider gesperrt
 - Keine neue Produktphase · keine Nutzerregistry-Reparatur
 
-## Nächste erlaubte Aktion
+## Nächste erlaubte Aktion nach Planfreigabe
 
-→ **Coverage Stability C3** (Gap Identity / Carry-Forward) — planen nach Freigabe
+→ **C3.1 Root-Cause-Fixtures** (Gap-ID-/Event-/Lock-Bindung belegen; keine Carry-Forward-Logik)
 
-**Noch gesperrt:** C4, Rework V4, R1.4–R1.6,
+**Noch gesperrt:** C3.2–C3.4 bis Freigabe, C4, Rework V4, R1.4–R1.6,
 echte Provider, Style References, Shared Working Media, Schema-21 ohne Zwang,
 neue Produktphase.
 

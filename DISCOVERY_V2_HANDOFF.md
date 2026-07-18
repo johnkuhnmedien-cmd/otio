@@ -93,7 +93,7 @@
 - Reuse-Pfad: kein Gateway, kein Worker, kein Supersede, Gaps bleiben
 - Legacy-Audits: **kein Reuse** → normaler neuer Run → neuer Audit speichert Fingerprint
 - Diagnosegrund: `legacy_audit_missing_canonical_fingerprint`
-- **USA_v2-Realtest erfolgreich — C2 + C2-R1 vollständig abgenommen**
+- **USA_v2-Realtest erfolgreich — C2 + C2-R1 vollständig akzeptiert**
   - Aktiver Audit: `c2b32d64-3961-53bf-ab85-391932a2bf43`
   - Letzter Run: `7bb2273b-96ca-4942-9924-6de34b29d471`
   - Zweiter identischer Coverage-Aufruf: completed Current Audit reused;
@@ -102,12 +102,17 @@
     - `094f0390-cfb2-41e7-a19f-65ca4d583fb0` → `resolved_by_graphic_plan`
     - `2c36238e-6a1e-44ee-ae00-0abf8f398acf` → `accepted_unresolved`
     - `95a924fe-2995-4da7-80ff-d172cca3221b` → `in_progress` / `user_decision`
-- Offener UI-Befund: Visual-Intent-ID wird teilweise als Gap-ID beschriftet
+- Offener UI-Befund: Visual-Intent-ID wird teilweise als Gap-ID beschriftet (nicht C3)
 - Schema: **20**
-- Aktiver Auftrag: keiner (C2 abgenommen; C3 noch nicht implementiert)
+- **Aktueller Schritt: C3-Planung** (keine C3-Implementierung)
+  - Plan: `docs/source_plans/ALPHA_COVERAGE_STABILITY_C3_GAP_IDENTITY_CARRY_FORWARD_PLAN.md`
+  - Root Cause: `gap_id = uuid4()`; neuer Audit ⇒ Supersede + neue IDs; Lock Keys `gap_id:risk_code`
+  - Empfohlen: Option C — neue Instance-ID + `coverage-gap-semantic-key-v1` + Carry-Forward-Report
+  - Schema 20 ohne Migration (Sidecar)
+- Aktiver Auftrag: C3-Plan dokumentiert; Implementierung gesperrt bis Freigabe
 - R1.3 Acceptance Evidence weiterhin offen
-- Nächster zu planender Schritt: **Coverage Stability C3**
-- **C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
+- Nächste erlaubte Aktion nach Planfreigabe: **C3.1 Root-Cause-Fixtures**
+- **C3.2–C3.4, C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
