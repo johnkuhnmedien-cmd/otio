@@ -421,6 +421,107 @@ def record_claim_decision(
     return record
 
 
+@dataclass(frozen=True)
+class ClaimBatchDecisionResult:
+    ok: bool
+    message: str
+    batch_id: str | None = None
+    decisions: list[ClaimDecision] = field(default_factory=list)
+    failed_claim_ids: list[str] = field(default_factory=list)
+    reused_existing_batch: bool = False
+    error_code: str | None = None
+
+
+def record_claim_decision_batch(
+    project: Project,
+    *,
+    script_id: str,
+    claims: list[dict[str, str]],
+    decision: str,
+    user_confirmed: bool = False,
+    batch_id: str | None = None,
+    reason: str | None = None,
+) -> ClaimBatchDecisionResult:
+    """Append-only per-claim decisions sharing one batch_id (Schema 20 via reason)."""
+    from uuid import uuid4
+
+    from otio_app.discovery_v2.domain.batch_decision import (
+        encode_batch_marker,
+        parse_batch_id,
+    )
+
+    project = require_discovery_project(project)
+    items = [
+        item
+        for item in claims
+        if str(item.get("claim_id", "")).strip() and str(item.get("claim_text", "")).strip()
+    ]
+    if not items:
+        return ClaimBatchDecisionResult(
+            ok=False,
+            message="Keine Claims ausgewaehlt.",
+            error_code="claim_batch_empty",
+        )
+    if not user_confirmed:
+        return ClaimBatchDecisionResult(
+            ok=False,
+            message=f"Bitte bestaetigen: {len(items)} Claims werden entschieden.",
+            error_code="claim_batch_confirmation_required",
+        )
+    resolved_batch_id = (batch_id or "").strip() or str(uuid4())
+    conn = repo.open_supplementation_registry(project.project_root_path)
+    try:
+        latest = repo.latest_claim_decisions_for_script(
+            conn, project_id=project.id, script_id=script_id
+        )
+        if items and all(
+            (latest.get(str(item["claim_id"])) is not None)
+            and parse_batch_id(latest[str(item["claim_id"])].reason) == resolved_batch_id
+            for item in items
+        ):
+            return ClaimBatchDecisionResult(
+                ok=True,
+                message="Batch-Claim-Entscheidung bereits gespeichert.",
+                batch_id=resolved_batch_id,
+                decisions=[latest[str(item["claim_id"])] for item in items],
+                reused_existing_batch=True,
+            )
+    finally:
+        conn.close()
+
+    marker_reason = encode_batch_marker(resolved_batch_id, trailing=reason)
+    decisions: list[ClaimDecision] = []
+    failed: list[str] = []
+    for item in items:
+        claim_id = str(item["claim_id"]).strip()
+        try:
+            decisions.append(
+                record_claim_decision(
+                    project,
+                    script_id=script_id,
+                    claim_id=claim_id,
+                    claim_text=str(item["claim_text"]),
+                    decision=decision,
+                    reason=marker_reason,
+                )
+            )
+        except Exception:
+            failed.append(claim_id)
+    ok = bool(decisions) and not failed
+    return ClaimBatchDecisionResult(
+        ok=ok,
+        message=(
+            f"Batch {resolved_batch_id}: {len(decisions)} Claim-Entscheidung(en)"
+            + (f", {len(failed)} fehlgeschlagen" if failed else "")
+            + "."
+        ),
+        batch_id=resolved_batch_id,
+        decisions=decisions,
+        failed_claim_ids=failed,
+        error_code=None if ok else "claim_batch_partial_failure",
+    )
+
+
 def link_imported_completed_asset_to_gap(
     project: Project,
     *,
@@ -710,6 +811,7 @@ def _get_or_create_request(
 
 
 __all__ = [
+    "ClaimBatchDecisionResult",
     "SupplementationActionResult",
     "SupplementationServiceError",
     "SupplementationStartResult",
@@ -720,6 +822,7 @@ __all__ = [
     "perform_search_for_gap",
     "record_candidate_decision",
     "record_claim_decision",
+    "record_claim_decision_batch",
     "start_candidate_validation_run",
     "start_local_review_run",
     "start_search_run",

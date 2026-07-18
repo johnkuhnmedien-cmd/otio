@@ -23,6 +23,12 @@ from otio_app.discovery_v2.domain.asset_analysis import (
     ANALYSIS_RUN_SCOPE_PREPARE_ONLY,
     AnalysisPrepareAssetStatus,
 )
+from uuid import uuid4
+
+from otio_app.discovery_v2.domain.batch_decision import (
+    encode_batch_marker,
+    parse_batch_id,
+)
 from otio_app.discovery_v2.domain.observation_review import (
     OBSERVATION_REVIEW_ERROR_CONFLICT,
     OBSERVATION_REVIEW_ERROR_REASON_REQUIRED,
@@ -82,6 +88,18 @@ class ReviewSubmitResult:
     message: str
     review: ObservationReviewRecord | None = None
     error_code: str | None = None
+
+
+@dataclass(frozen=True)
+class BatchReviewSubmitResult:
+    ok: bool
+    message: str
+    batch_id: str | None = None
+    reviews: list[ObservationReviewRecord] = field(default_factory=list)
+    failed_observation_ids: list[str] = field(default_factory=list)
+    error_code: str | None = None
+    reused_existing_batch: bool = False
+    coverage_started: bool = False
 
 
 @dataclass(frozen=True)
@@ -176,6 +194,8 @@ def submit_observation_review(
     decision: str | ObservationReviewDecision,
     reason_code: str | None = None,
     review_note: str | None = None,
+    trigger_coverage: bool = True,
+    coverage_sync: bool = False,
 ) -> ReviewSubmitResult:
     project = require_discovery_project(project)
     try:
@@ -250,7 +270,10 @@ def submit_observation_review(
                 error_code=OBSERVATION_REVIEW_ERROR_VISUAL_OBSERVATION_STALE,
             )
         frame_set_fingerprint = _frame_set_fingerprint_from_frames(frames)
-        if frame_set_fingerprint != observation.frame_hash_fingerprint:
+        if not _frame_fingerprint_matches_prepared(
+            observation.frame_hash_fingerprint,
+            frame_set_fingerprint,
+        ):
             return ReviewSubmitResult(
                 ok=False,
                 message="Frame-Fingerprint der Visual Observation passt nicht mehr.",
@@ -305,11 +328,159 @@ def submit_observation_review(
     finally:
         conn.close()
 
+    coverage_started = False
+    if (
+        trigger_coverage
+        and decision_value == ObservationReviewDecision.ACCEPTED.value
+    ):
+        from otio_app.discovery_v2.application.coverage_revalidation_service import (
+            revalidate_coverage_after_accepted_reviews,
+        )
+
+        revalidate = revalidate_coverage_after_accepted_reviews(
+            project, sync=coverage_sync
+        )
+        coverage_started = revalidate.coverage_started
+
+    message = "Observation Review gespeichert."
+    if coverage_started:
+        message = "Observation Review gespeichert; Coverage-Neuberechnung gestartet."
+
     return ReviewSubmitResult(
         ok=True,
-        message="Observation Review gespeichert.",
+        message=message,
         review=review,
     )
+
+
+def submit_observation_review_batch(
+    project: Project,
+    *,
+    observation_ids: list[str],
+    decision: str | ObservationReviewDecision,
+    reason_code: str | None = None,
+    review_note: str | None = None,
+    user_confirmed: bool = False,
+    batch_id: str | None = None,
+    trigger_coverage: bool = True,
+    coverage_sync: bool = False,
+) -> BatchReviewSubmitResult:
+    """Append-only per-observation decisions sharing one batch_id (Schema 20)."""
+    project = require_discovery_project(project)
+    ids = [str(item).strip() for item in observation_ids if str(item).strip()]
+    if not ids:
+        return BatchReviewSubmitResult(
+            ok=False,
+            message="Keine Observations ausgewaehlt.",
+            error_code=OBSERVATION_REVIEW_ERROR_REGISTRY_WRITE_FAILED,
+        )
+    if not user_confirmed:
+        return BatchReviewSubmitResult(
+            ok=False,
+            message=f"Bitte bestaetigen: {len(ids)} Observations werden entschieden.",
+            error_code=OBSERVATION_REVIEW_ERROR_REASON_REQUIRED,
+        )
+
+    resolved_batch_id = (batch_id or "").strip() or str(uuid4())
+    # Idempotent replay: if every target already has this batch_id as latest decision.
+    existing = _existing_batch_reviews(project, observation_ids=ids, batch_id=resolved_batch_id)
+    if existing is not None:
+        return BatchReviewSubmitResult(
+            ok=True,
+            message="Batch-Entscheidung bereits gespeichert.",
+            batch_id=resolved_batch_id,
+            reviews=existing,
+            reused_existing_batch=True,
+        )
+
+    marker_note = encode_batch_marker(resolved_batch_id, trailing=review_note)
+    reviews: list[ObservationReviewRecord] = []
+    failed: list[str] = []
+    for observation_id in ids:
+        result = submit_observation_review(
+            project,
+            observation_id=observation_id,
+            decision=decision,
+            reason_code=reason_code,
+            review_note=marker_note,
+            trigger_coverage=False,
+        )
+        if result.ok and result.review is not None:
+            reviews.append(result.review)
+        else:
+            failed.append(observation_id)
+
+    decision_value = (
+        decision.value
+        if isinstance(decision, ObservationReviewDecision)
+        else str(decision)
+    )
+    coverage_started = False
+    if (
+        trigger_coverage
+        and decision_value == ObservationReviewDecision.ACCEPTED.value
+        and reviews
+    ):
+        from otio_app.discovery_v2.application.coverage_revalidation_service import (
+            revalidate_coverage_after_accepted_reviews,
+        )
+
+        revalidate = revalidate_coverage_after_accepted_reviews(
+            project, sync=coverage_sync
+        )
+        coverage_started = revalidate.coverage_started
+
+    if (
+        decision_value == ObservationReviewDecision.REANALYZE_REQUESTED.value
+        and reviews
+    ):
+        asset_ids = sorted({review.asset_id for review in reviews})
+        from otio_app.discovery_v2.application.model_analysis_service import (
+            start_model_analysis,
+        )
+
+        start_model_analysis(
+            project,
+            asset_ids=asset_ids,
+            consent_acknowledged=True,
+            sync=coverage_sync,
+        )
+
+    ok = bool(reviews) and not failed
+    return BatchReviewSubmitResult(
+        ok=ok,
+        message=(
+            f"Batch {resolved_batch_id}: {len(reviews)} gespeichert"
+            + (f", {len(failed)} fehlgeschlagen" if failed else "")
+            + "."
+        ),
+        batch_id=resolved_batch_id,
+        reviews=reviews,
+        failed_observation_ids=failed,
+        coverage_started=coverage_started,
+        error_code=None if ok else OBSERVATION_REVIEW_ERROR_REGISTRY_WRITE_FAILED,
+    )
+
+
+def _existing_batch_reviews(
+    project: Project,
+    *,
+    observation_ids: list[str],
+    batch_id: str,
+) -> list[ObservationReviewRecord] | None:
+    conn = open_analysis_registry(project.project_root_path)
+    try:
+        found: list[ObservationReviewRecord] = []
+        for observation_id in observation_ids:
+            current = get_current_observation_review(
+                conn, observation_id=observation_id
+            )
+            if current is None or parse_batch_id(current.review_note) != batch_id:
+                return None
+            found.append(current)
+        return found
+    finally:
+        conn.close()
 
 
 def list_editorial_ready_observations(
@@ -336,7 +507,10 @@ def list_editorial_ready_observations(
                 or review is None
                 or review.decision != ObservationReviewDecision.ACCEPTED.value
                 or observation.analysis_identity_id != prepared.analysis_identity_id
-                or observation.frame_hash_fingerprint != prepared.frame_set_fingerprint
+                or not _frame_fingerprint_matches_prepared(
+                    observation.frame_hash_fingerprint,
+                    prepared.frame_set_fingerprint,
+                )
                 or not _observation_matches_current_config(observation, config)
             ):
                 continue
@@ -565,7 +739,10 @@ def _observation_item_view(
     is_current = (
         prepared is not None
         and observation.analysis_identity_id == prepared.analysis_identity_id
-        and observation.frame_hash_fingerprint == prepared.frame_set_fingerprint
+        and _frame_fingerprint_matches_prepared(
+            observation.frame_hash_fingerprint,
+            prepared.frame_set_fingerprint,
+        )
         and _observation_matches_current_config(observation, vision)
     )
     error_code = None
@@ -643,6 +820,54 @@ def _observation_matches_current_config(observation: VisualObservationRecord, co
         and observation.prompt_version == config.prompt_version
         and observation.response_schema_version == config.response_schema_version
     )
+
+
+def _frame_fingerprint_matches_prepared(
+    observation_fingerprint: str, prepared_fingerprint: str
+) -> bool:
+    from otio_app.discovery_v2.jobs.model_analysis_worker import (
+        frame_fingerprint_matches_prepared,
+    )
+
+    return frame_fingerprint_matches_prepared(
+        observation_fingerprint, prepared_fingerprint
+    )
+
+
+def filter_observation_review_items(
+    items: list[ObservationReviewItemView],
+    *,
+    status_filter: str = "all",
+) -> list[ObservationReviewItemView]:
+    """Filter observation review rows for batch UI (no I/O)."""
+    key = (status_filter or "all").strip().lower()
+    if key in {"", "all", "*"}:
+        return list(items)
+    filtered: list[ObservationReviewItemView] = []
+    for item in items:
+        decision = (item.current_review_decision or "").lower()
+        if key == "unreviewed" and decision == OBSERVATION_REVIEW_STATUS_UNREVIEWED:
+            filtered.append(item)
+        elif key == "accepted" and decision == ObservationReviewDecision.ACCEPTED.value:
+            filtered.append(item)
+        elif key == "rejected" and decision == ObservationReviewDecision.REJECTED.value:
+            filtered.append(item)
+        elif key in {"low_confidence", "geringe_confidence"}:
+            geo = item.geographic_confidence
+            syn = item.synthetic_confidence
+            if (geo is not None and geo < 0.4) or (syn is not None and syn > 0.5):
+                filtered.append(item)
+        elif key in {"geographic_risk", "geografisches_risiko"}:
+            if item.geographic_confidence is not None and item.geographic_confidence >= 0.5:
+                filtered.append(item)
+        elif key in {"possibly_synthetic", "moeglicherweise_synthetisch"}:
+            if item.synthetic_confidence is not None and item.synthetic_confidence >= 0.4:
+                filtered.append(item)
+        elif key in {"technical_warning", "technische_warnung"}:
+            notes = " ".join(item.uncertainty_notes).lower()
+            if "warn" in notes or "fake_adapter" in notes or item.error_code:
+                filtered.append(item)
+    return filtered
 
 
 def _current_prepared_assets_by_asset(
@@ -746,12 +971,15 @@ def _now() -> datetime:
 
 __all__ = [
     "EditorialReadyObservationView",
+    "BatchReviewSubmitResult",
     "ObservationReviewItemView",
     "ObservationReviewProjectView",
     "ObservationReviewServiceError",
+    "submit_observation_review_batch",
     "Phase8AssetSummary",
     "Phase8ProjectSummary",
     "ReviewSubmitResult",
+    "filter_observation_review_items",
     "get_observation_review_view",
     "get_phase8_project_summary",
     "list_editorial_ready_observations",

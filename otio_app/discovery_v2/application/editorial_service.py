@@ -118,6 +118,7 @@ class EditorialView:
     can_start_script: bool = False
     can_start_structure: bool = False
     can_start_coverage: bool = False
+    latest_claim_decisions: dict[str, object] = field(default_factory=dict)
 
 
 def _now() -> datetime:
@@ -388,6 +389,24 @@ def get_editorial_view(project: Project) -> EditorialView:
         coverage = repo.get_latest_coverage_audit(conn, project_id=project.id)
     finally:
         conn.close()
+    latest_claim_decisions: dict[str, object] = {}
+    if script is not None:
+        from otio_app.discovery_v2.persistence import supplementation_repository as supp_repo
+
+        try:
+            supp_conn = supp_repo.open_supplementation_registry(project.project_root_path)
+            try:
+                latest_claim_decisions = dict(
+                    supp_repo.latest_claim_decisions_for_script(
+                        supp_conn,
+                        project_id=project.id,
+                        script_id=script.script_id,
+                    )
+                )
+            finally:
+                supp_conn.close()
+        except RegistryDatabaseError:
+            latest_claim_decisions = {}
     stale = bool(
         (narrative is not None and narrative.input_observation_fingerprint != fingerprint)
         or (coverage is not None and coverage.input_observation_fingerprint != fingerprint)
@@ -417,6 +436,7 @@ def get_editorial_view(project: Project) -> EditorialView:
             and script_bundle is not None
             and bool(script_bundle.get("visual_intents"))
         ),
+        latest_claim_decisions=latest_claim_decisions,
     )
 
 

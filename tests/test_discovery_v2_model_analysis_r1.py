@@ -37,7 +37,7 @@ from otio_app.discovery_v2.domain.asset_analysis import (
     prepared_is_not_model_analyzed,
 )
 from otio_app.discovery_v2.domain.visual_observation import (
-    ANALYSIS_ERROR_ANALYSIS_FRAME_LIMIT_EXCEEDED,
+    ANALYSIS_ERROR_ANALYSIS_ASSET_FRAME_LIMIT_EXCEEDED,
     ANALYSIS_ERROR_ANALYSIS_FRAME_MISSING,
     ANALYSIS_ERROR_ANALYSIS_GATEWAY_UNCONFIGURED,
     ANALYSIS_ERROR_ANALYSIS_RETRY_EXHAUSTED,
@@ -177,32 +177,25 @@ def test_r1_working_media_relative_path_rejected_as_model_input(
 def test_r1_worker_enforces_max_frames_per_run(
     tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """R1.3: per-asset frame limit (max_frames_per_video) fails only that asset."""
     project = _prepared_still_project(tmp_path, temp_db_path)
-    tiny = replace(vision_config.load_vision_config(), max_frames_per_run=0)
+    tiny = replace(vision_config.load_vision_config(), max_frames_per_video=0)
     import otio_app.discovery_v2.jobs.model_analysis_worker as worker
 
     monkeypatch.setattr(model_analysis_service, "load_vision_config", lambda: tiny)
     monkeypatch.setattr(worker, "load_vision_config", lambda: tiny)
-    # Bypass preview gate so the worker path is exercised.
-    monkeypatch.setattr(
-        model_analysis_service,
-        "_preview_from_assets",
-        lambda selected, config: model_analysis_service.ModelAnalysisSelectionPreview(
-            asset_count=len(selected),
-            frame_count=1,
-            total_bytes=1,
-            assets=[],
-        ),
-    )
     result = start_model_analysis(
         project, asset_ids=None, consent_acknowledged=True, sync=True
     )
     assert result.run is not None
+    assert result.run.status == AnalysisRunStatus.FAILED or (
+        result.run.status == AnalysisRunStatus.COMPLETED_WITH_ERRORS
+    )
     conn = analysis_repo.open_analysis_registry(project.project_root_path)
     try:
         asset = analysis_repo.list_analysis_run_assets(conn, run_id=result.run.run_id)[0]
         assert asset.status == AnalysisModelAssetStatus.FAILED
-        assert asset.error_code == ANALYSIS_ERROR_ANALYSIS_FRAME_LIMIT_EXCEEDED
+        assert asset.error_code == ANALYSIS_ERROR_ANALYSIS_ASSET_FRAME_LIMIT_EXCEEDED
     finally:
         conn.close()
 

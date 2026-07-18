@@ -27,8 +27,10 @@ from otio_app.discovery_v2.domain.asset_analysis import (
     AnalysisRunStatus,
 )
 from otio_app.discovery_v2.domain.visual_observation import (
+    ANALYSIS_ERROR_ANALYSIS_ASSET_BYTE_LIMIT_EXCEEDED,
+    ANALYSIS_ERROR_ANALYSIS_ASSET_FRAME_LIMIT_EXCEEDED,
+    ANALYSIS_ERROR_ANALYSIS_ASSET_HAS_NO_REPRESENTATIVE_FRAMES,
     ANALYSIS_ERROR_ANALYSIS_FRAME_HASH_MISMATCH,
-    ANALYSIS_ERROR_ANALYSIS_FRAME_LIMIT_EXCEEDED,
     ANALYSIS_ERROR_ANALYSIS_FRAME_MISSING,
     ANALYSIS_ERROR_ANALYSIS_REGISTRY_WRITE_FAILED,
     AnalysisModelAssetStatus,
@@ -159,22 +161,35 @@ def _process_one_model_asset(
         analysis_identity_id=asset.analysis_identity_id,
     )
     if not frames:
-        raise ModelAnalysisWorkerError(ANALYSIS_ERROR_ANALYSIS_FRAME_MISSING)
-    if (
-        asset.media_kind == "video"
-        and len(frames) > config.max_frames_per_video
-    ) or len(frames) > config.max_frames_per_run:
-        raise ModelAnalysisWorkerError(ANALYSIS_ERROR_ANALYSIS_FRAME_LIMIT_EXCEEDED)
+        raise ModelAnalysisWorkerError(
+            ANALYSIS_ERROR_ANALYSIS_ASSET_HAS_NO_REPRESENTATIVE_FRAMES
+        )
+    # R1.3: per-asset frame limit (not aggregate run limit).
+    max_frames_per_asset = int(config.max_frames_per_video)
+    if len(frames) > max_frames_per_asset:
+        raise ModelAnalysisWorkerError(
+            ANALYSIS_ERROR_ANALYSIS_ASSET_FRAME_LIMIT_EXCEEDED
+        )
 
     frame_parts = _verify_frame_parts(
         project_root,
         frames,
         max_frame_bytes=config.max_frame_bytes,
+        oversized_code=ANALYSIS_ERROR_ANALYSIS_ASSET_BYTE_LIMIT_EXCEEDED,
     )
     total_bytes = sum(frame.file_size_bytes for frame in frame_parts)
-    if total_bytes > config.max_run_bytes:
-        raise ModelAnalysisWorkerError(ANALYSIS_ERROR_ANALYSIS_FRAME_LIMIT_EXCEEDED)
+    # Per-asset byte budget reuses max_run_bytes as the single-asset ceiling.
+    if total_bytes > int(config.max_run_bytes):
+        raise ModelAnalysisWorkerError(
+            ANALYSIS_ERROR_ANALYSIS_ASSET_BYTE_LIMIT_EXCEEDED
+        )
     fingerprint = frame_hash_fingerprint([frame.frame_sha256 for frame in frame_parts])
+    fingerprint = _maybe_salt_fingerprint_for_reanalyze(
+        conn,
+        asset_id=asset.asset_id,
+        analysis_identity_id=asset.analysis_identity_id,
+        fingerprint=fingerprint,
+    )
 
     cached_attempt = find_completed_model_analysis_attempt(
         conn,
@@ -353,6 +368,7 @@ def _verify_frame_parts(
     frames,
     *,
     max_frame_bytes: int,
+    oversized_code: str = ANALYSIS_ERROR_ANALYSIS_ASSET_BYTE_LIMIT_EXCEEDED,
 ) -> list[VisionFramePart]:
     parts: list[VisionFramePart] = []
     for frame in sorted(frames, key=lambda item: item.ordinal):
@@ -369,7 +385,7 @@ def _verify_frame_parts(
                 str(exc),
             ) from exc
         if stat.st_size > max_frame_bytes:
-            raise ModelAnalysisWorkerError(ANALYSIS_ERROR_ANALYSIS_FRAME_LIMIT_EXCEEDED)
+            raise ModelAnalysisWorkerError(oversized_code)
         if stat.st_size != frame.file_size_bytes:
             raise ModelAnalysisWorkerError(
                 ANALYSIS_ERROR_ANALYSIS_FRAME_HASH_MISMATCH
@@ -395,6 +411,66 @@ def _verify_frame_parts(
 def frame_hash_fingerprint(frame_hashes: list[str]) -> str:
     normalized = "\n".join(sorted(item.lower() for item in frame_hashes))
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+REANALYZE_FINGERPRINT_MARKER = ":reanalyze:"
+
+
+def _maybe_salt_fingerprint_for_reanalyze(
+    conn: sqlite3.Connection,
+    *,
+    asset_id: str,
+    analysis_identity_id: str,
+    fingerprint: str,
+) -> str:
+    """Bust UNIQUE/cache when current review asks for reanalysis (Schema 20).
+
+    Append form keeps the base frame fingerprint recoverable so editorial-ready
+    and current-identity checks can still bind the new observation to the
+    prepared frame set after reanalysis.
+    """
+    from otio_app.discovery_v2.domain.observation_review import (
+        ObservationReviewDecision,
+    )
+    from otio_app.discovery_v2.persistence.asset_analysis_repository import (
+        get_current_observation_review,
+        list_visual_observations_for_project,
+    )
+
+    try:
+        project_id = _project_id_for_identity(conn, analysis_identity_id)
+        observations = [
+            item
+            for item in list_visual_observations_for_project(
+                conn, project_id=project_id
+            )
+            if item.asset_id == asset_id
+            and item.analysis_identity_id == analysis_identity_id
+        ]
+    except Exception:
+        return fingerprint
+    if not observations:
+        return fingerprint
+    latest = max(observations, key=lambda item: item.created_at)
+    review = get_current_observation_review(conn, observation_id=latest.observation_id)
+    if review is None or review.decision != ObservationReviewDecision.REANALYZE_REQUESTED.value:
+        return fingerprint
+    return f"{fingerprint}{REANALYZE_FINGERPRINT_MARKER}{review.review_revision}"
+
+
+def _project_id_for_identity(conn: sqlite3.Connection, analysis_identity_id: str) -> str:
+    identity = get_analysis_identity(conn, analysis_identity_id=analysis_identity_id)
+    return identity.project_id if identity is not None else ""
+
+
+def frame_fingerprint_matches_prepared(
+    observation_fingerprint: str, prepared_fingerprint: str
+) -> bool:
+    """True when fingerprints are equal or a reanalyze revision of the prepared set."""
+    if observation_fingerprint == prepared_fingerprint:
+        return True
+    prefix = f"{prepared_fingerprint}{REANALYZE_FINGERPRINT_MARKER}"
+    return observation_fingerprint.startswith(prefix)
 
 
 def _mime_type(relative_path: str) -> str:
@@ -504,4 +580,9 @@ def _append_error_summary(current: str | None, addition: str) -> str:
     return addition
 
 
-__all__ = ["frame_hash_fingerprint", "process_model_analysis_run"]
+__all__ = [
+    "REANALYZE_FINGERPRINT_MARKER",
+    "frame_fingerprint_matches_prepared",
+    "frame_hash_fingerprint",
+    "process_model_analysis_run",
+]

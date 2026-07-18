@@ -50,8 +50,8 @@ from otio_app.discovery_v2.domain.asset_registry import REGISTRY_SCHEMA_VERSION
 from otio_app.discovery_v2.domain.media_intake import COPY_WORKING_PROFILE_VERSION
 from otio_app.discovery_v2.domain.visual_observation import (
     ANALYSIS_ERROR_ANALYSIS_CONSENT_REQUIRED,
+    ANALYSIS_ERROR_ANALYSIS_ASSET_FRAME_LIMIT_EXCEEDED,
     ANALYSIS_ERROR_ANALYSIS_FRAME_HASH_MISMATCH,
-    ANALYSIS_ERROR_ANALYSIS_FRAME_LIMIT_EXCEEDED,
     ANALYSIS_ERROR_ANALYSIS_FRAME_MISSING,
     ANALYSIS_ERROR_MODEL_RESPONSE_SCHEMA_MISMATCH,
     AnalysisModelAssetStatus,
@@ -340,11 +340,31 @@ def test_frame_missing_and_hash_mismatch(tmp_path: Path, temp_db_path: Path, mod
 
 
 def test_frame_limit_exceeded_from_config(tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """R1.3: aggregate max_frames_per_run no longer blocks start; per-asset limit does."""
     project = _prepared_still_project(tmp_path, temp_db_path)
-    tiny = replace(vision_config.load_vision_config(), max_frames_per_run=0)
+    tiny = replace(vision_config.load_vision_config(), max_frames_per_video=0)
     monkeypatch.setattr(model_analysis_service, "load_vision_config", lambda: tiny)
     preview = preview_model_analysis_selection(project, asset_ids=None)
-    assert preview.error_code == ANALYSIS_ERROR_ANALYSIS_FRAME_LIMIT_EXCEEDED
+    # Queue start remains allowed; oversized assets are reported in the message.
+    assert preview.error_code is None
+    assert preview.asset_count >= 1
+    assert preview.message is not None
+    assert "Per-Asset" in preview.message or "Asset" in preview.message
+    import otio_app.discovery_v2.jobs.model_analysis_worker as worker
+
+    monkeypatch.setattr(worker, "load_vision_config", lambda: tiny)
+    result = start_model_analysis(
+        project, asset_ids=None, consent_acknowledged=True, sync=True
+    )
+    assert result.started is True
+    assert result.run is not None
+    conn = analysis_repo.open_analysis_registry(project.project_root_path)
+    try:
+        asset = analysis_repo.list_analysis_run_assets(conn, run_id=result.run.run_id)[0]
+        assert asset.status == AnalysisModelAssetStatus.FAILED
+        assert asset.error_code == ANALYSIS_ERROR_ANALYSIS_ASSET_FRAME_LIMIT_EXCEEDED
+    finally:
+        conn.close()
 
 
 def test_retry_succeeds_once(tmp_path: Path, temp_db_path: Path) -> None:

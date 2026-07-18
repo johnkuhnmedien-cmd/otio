@@ -205,22 +205,18 @@ def start_model_analysis(
                 error_code="visual_edit_run_already_active",
             )
 
+        # R1.3 default: all prepared eligible assets (no manual ID picking).
         selected = _selected_prepared_assets(
             conn,
             project_id=project.id,
             asset_ids=asset_ids,
         )
         preview = _preview_from_assets(selected, config=config)
-        if preview.error_code:
-            return ModelAnalysisStartResult(
-                started=False,
-                message=preview.message or "Modellanalyse-Auswahl ist ungültig.",
-                error_code=preview.error_code,
-            )
         if not selected:
             return ModelAnalysisStartResult(
                 started=False,
                 message="Keine vorbereiteten Analyseframes vorhanden.",
+                error_code="analysis_asset_not_eligible",
             )
 
         run = AnalysisRun(
@@ -447,45 +443,59 @@ def _preview_from_assets(
     *,
     config,
 ) -> ModelAnalysisSelectionPreview:
+    """Preview queue selection.
+
+    R1.3: aggregate run limits do **not** block the whole start. Oversized
+    individual assets are reported but remain in the queue; the worker marks
+    only those assets failed with per-asset error codes.
+    """
     frame_count = sum(len(asset.frames) for asset in assets)
     total_bytes = sum(frame.file_size_bytes for asset in assets for frame in asset.frames)
-    for asset in assets:
-        if (
-            asset.source_asset.media_kind == "video"
-            and len(asset.frames) > config.max_frames_per_video
-        ):
-            return ModelAnalysisSelectionPreview(
-                asset_count=len(assets),
-                frame_count=frame_count,
-                total_bytes=total_bytes,
-                error_code=ANALYSIS_ERROR_ANALYSIS_FRAME_LIMIT_EXCEEDED,
-                message="Zu viele Frames fuer ein Video-Asset.",
-                assets=[asset.view for asset in assets],
-            )
-    if frame_count > config.max_frames_per_run or total_bytes > config.max_run_bytes:
+    if not assets:
         return ModelAnalysisSelectionPreview(
-            asset_count=len(assets),
-            frame_count=frame_count,
-            total_bytes=total_bytes,
-            error_code=ANALYSIS_ERROR_ANALYSIS_FRAME_LIMIT_EXCEEDED,
-            message="Die Modellanalyse-Auswahl ueberschreitet die Run-Limits.",
-            assets=[asset.view for asset in assets],
+            asset_count=0,
+            frame_count=0,
+            total_bytes=0,
+            message="Keine vorbereiteten Analyseframes vorhanden.",
+            assets=[],
         )
-    if any(frame.file_size_bytes > config.max_frame_bytes for asset in assets for frame in asset.frames):
-        return ModelAnalysisSelectionPreview(
-            asset_count=len(assets),
-            frame_count=frame_count,
-            total_bytes=total_bytes,
-            error_code=ANALYSIS_ERROR_ANALYSIS_FRAME_LIMIT_EXCEEDED,
-            message="Mindestens ein Analyseframe ueberschreitet das Groessenlimit.",
-            assets=[asset.view for asset in assets],
+    oversized = [
+        asset.source_asset.asset_id
+        for asset in assets
+        if _asset_exceeds_per_asset_limits(asset, config=config)
+    ]
+    message = None
+    if oversized:
+        message = (
+            f"{len(oversized)} Asset(s) ueberschreiten Per-Asset-Limits und "
+            "werden in der Queue als fehlgeschlagen markiert; die uebrigen "
+            "Assets werden weiterverarbeitet."
         )
     return ModelAnalysisSelectionPreview(
         asset_count=len(assets),
         frame_count=frame_count,
         total_bytes=total_bytes,
+        message=message,
         assets=[asset.view for asset in assets],
     )
+
+
+def _asset_exceeds_per_asset_limits(
+    asset: _PreparedAssetCandidate,
+    *,
+    config,
+) -> bool:
+    if not asset.frames:
+        return True
+    max_frames = int(config.max_frames_per_video)
+    if len(asset.frames) > max_frames:
+        return True
+    total_bytes = sum(frame.file_size_bytes for frame in asset.frames)
+    if total_bytes > int(config.max_run_bytes):
+        return True
+    if any(frame.file_size_bytes > int(config.max_frame_bytes) for frame in asset.frames):
+        return True
+    return False
 
 
 __all__ = [

@@ -15,9 +15,11 @@ from otio_app.discovery_v2.application.model_analysis_service import (
     start_model_analysis,
 )
 from otio_app.discovery_v2.application.observation_review_service import (
+    filter_observation_review_items,
     get_observation_review_view,
     get_phase8_project_summary,
     submit_observation_review,
+    submit_observation_review_batch,
 )
 from otio_app.discovery_v2.domain.asset_analysis import (
     ANALYSIS_PREPARE_PROFILE_VERSION,
@@ -232,13 +234,22 @@ def _render_model_analysis_section(project) -> None:
         hide_index=True,
     )
 
+    # Optional advanced filter — default path analyzes all prepared assets.
     asset_options = [item.asset_id for item in prepared]
-    selected_asset_ids = _model_asset_selection(asset_options)
+    selected_asset_ids = list(asset_options)
+    if hasattr(st, "expander"):
+        with st.expander("Optionaler Asset-Filter", expanded=False):
+            selected_asset_ids = _model_asset_selection(asset_options)
+    else:
+        selected_asset_ids = _model_asset_selection(asset_options)
     preview = preview_model_analysis_selection(project, selected_asset_ids)
     st.caption(
-        f"Auswahl: {preview.asset_count} Asset(s), "
-        f"{preview.frame_count} Frame(s), {preview.total_bytes} Bytes."
+        f"Queue: {preview.asset_count} Asset(s), "
+        f"{preview.frame_count} Frame(s), {preview.total_bytes} Bytes "
+        "(assetweise, Fake-Parallelität=1)."
     )
+    if preview.message:
+        st.info(preview.message)
     if preview.error_code:
         st.warning(f"{preview.error_code}: {preview.message or 'Auswahl ungültig.'}")
 
@@ -251,19 +262,21 @@ def _render_model_analysis_section(project) -> None:
         and model_view.chain_ok
     )
     start_clicked = st.button(
-        "Modellanalyse starten",
+        "Vorbereitete Assets analysieren",
         disabled=not can_start_model,
         key="discovery_v2_model_analysis_start",
     )
     if start_clicked and can_start_model:
+        # None = all prepared eligible assets (no manual multi-ID picking required).
+        use_filter = set(selected_asset_ids) != set(asset_options)
         result = start_model_analysis(
             project,
-            asset_ids=selected_asset_ids,
+            asset_ids=selected_asset_ids if use_filter else None,
             consent_acknowledged=consent,
             sync=False,
         )
         if result.started:
-            st.success(result.message)
+            discovery_ui_flash_and_rerun(result.message, level="info")
         else:
             st.warning(result.message)
 
@@ -273,7 +286,7 @@ def _render_model_analysis_section(project) -> None:
 def _model_asset_selection(asset_options: list[str]) -> list[str]:
     if hasattr(st, "multiselect"):
         selected = st.multiselect(
-            "Assets für Modellanalyse",
+            "Optional: Assets eingrenzen (Standard = alle vorbereiteten)",
             asset_options,
             default=asset_options,
             key="discovery_v2_model_analysis_assets",
@@ -284,8 +297,8 @@ def _model_asset_selection(asset_options: list[str]) -> list[str]:
 
 def _model_consent_checkbox() -> bool:
     label = (
-        "Ich bestätige diese Modellanalyse für die ausgewählten "
-        "persistierten Representative Frames."
+        "Ich bestätige die Modellanalyse für die persistierten "
+        "Representative Frames der Queue (Fake Vision, assetweise)."
     )
     if hasattr(st, "checkbox"):
         return bool(
@@ -321,7 +334,7 @@ def _render_observation_review(project) -> None:
     st.info(
         "Freigabe bestätigt nur die strukturierte Beobachtung als redaktionelle "
         "Eingabe; sie bestätigt weder Geografie noch Echtheit und trifft keine "
-        "automatische Asset-Auswahl."
+        "automatische Asset-Auswahl. Unreviewed Observations bleiben unreviewed."
     )
 
     view = get_observation_review_view(project)
@@ -332,6 +345,31 @@ def _render_observation_review(project) -> None:
     if not observations:
         st.write("Noch keine Visual Observations persistiert.")
         return
+
+    filter_options = {
+        "Alle": "all",
+        "Unreviewed": "unreviewed",
+        "Accepted": "accepted",
+        "Rejected": "rejected",
+        "Geringe Confidence": "low_confidence",
+        "Geografisches Risiko": "geographic_risk",
+        "Möglicherweise synthetisch": "possibly_synthetic",
+        "Technische Warnung": "technical_warning",
+    }
+    filter_label = "Unreviewed"
+    if hasattr(st, "selectbox"):
+        filter_label = st.selectbox(
+            "Filter",
+            list(filter_options.keys()),
+            index=list(filter_options.keys()).index("Unreviewed"),
+            key="discovery_v2_observation_review_filter",
+        )
+    visible = filter_observation_review_items(
+        observations,
+        status_filter=filter_options.get(str(filter_label), "all"),
+    )
+    st.caption(f"Sichtbar: {len(visible)} von {len(observations)} Observation(s).")
+
     st.dataframe(
         [
             {
@@ -359,17 +397,100 @@ def _render_observation_review(project) -> None:
                 "JSON": _short_hash(item.observation_sha256),
                 "Fehler": item.error_code or "—",
             }
-            for item in observations
+            for item in visible
         ],
         use_container_width=True,
         hide_index=True,
     )
 
-    for item in observations:
+    visible_ids = [item.observation_id for item in visible if item.is_valid]
+    select_all = False
+    if hasattr(st, "checkbox"):
+        select_all = bool(
+            st.checkbox(
+                "Alle sichtbaren auswählen",
+                value=False,
+                key="discovery_v2_observation_select_all_visible",
+            )
+        )
+    selected_ids: list[str] = list(visible_ids) if select_all else []
+    if hasattr(st, "multiselect") and not select_all:
+        selected_ids = list(
+            st.multiselect(
+                "Observations für Batch",
+                visible_ids,
+                default=[],
+                key="discovery_v2_observation_batch_ids",
+            )
+        )
+    st.caption(f"Ausgewählt: {len(selected_ids)} Observation(s).")
+
+    batch_reason = ""
+    if hasattr(st, "text_input"):
+        batch_reason = str(
+            st.text_input(
+                "Batch-Grund (Reject/Reanalyse)",
+                key="discovery_v2_observation_batch_reason",
+            )
+            or ""
+        ).strip()
+    confirm_count = False
+    if hasattr(st, "checkbox"):
+        confirm_count = bool(
+            st.checkbox(
+                (
+                    f"{len(selected_ids)} Observations werden entschieden. "
+                    "Diese Entscheidung wird für jede Observation protokolliert."
+                ),
+                value=False,
+                key="discovery_v2_observation_batch_confirm",
+                disabled=not selected_ids,
+            )
+        )
+
+    if st.button(
+        "Ausgewählte akzeptieren",
+        key="discovery_v2_observation_batch_accept",
+        disabled=not selected_ids or not confirm_count,
+    ):
+        _submit_batch_review(
+            project,
+            observation_ids=selected_ids,
+            decision="accepted",
+            user_confirmed=confirm_count,
+        )
+    if st.button(
+        "Ausgewählte ablehnen",
+        key="discovery_v2_observation_batch_reject",
+        disabled=not selected_ids or not confirm_count or not batch_reason,
+    ):
+        _submit_batch_review(
+            project,
+            observation_ids=selected_ids,
+            decision="rejected",
+            reason_code=batch_reason or "batch_reject",
+            user_confirmed=confirm_count,
+        )
+    if st.button(
+        "Ausgewählte erneut analysieren",
+        key="discovery_v2_observation_batch_reanalyze",
+        disabled=not selected_ids or not confirm_count or not batch_reason,
+    ):
+        _submit_batch_review(
+            project,
+            observation_ids=selected_ids,
+            decision="reanalyze_requested",
+            reason_code=batch_reason or "batch_reanalyze",
+            user_confirmed=confirm_count,
+        )
+
+    st.markdown("**Einzelansicht**")
+    for item in visible:
         st.markdown(f"**{item.asset_id}** · `{item.observation_id}`")
         st.caption(
             f"Identity: `{item.analysis_identity_id}` · "
             f"Working Media: `{item.working_media_id or '—'}` · "
+            f"Frames: {', '.join(item.evidence_frame_ids) or '—'} · "
             f"Prompt: `{item.prompt_version}` · Schema: `{item.response_schema_version}`"
         )
         if item.review_history:
@@ -460,4 +581,27 @@ def _submit_review_action(
     else:
         st.warning(
             f"{result.error_code or 'observation_review_failed'}: {result.message}"
+        )
+
+
+def _submit_batch_review(
+    project,
+    *,
+    observation_ids: list[str],
+    decision: str,
+    reason_code: str | None = None,
+    user_confirmed: bool = False,
+) -> None:
+    result = submit_observation_review_batch(
+        project,
+        observation_ids=observation_ids,
+        decision=decision,
+        reason_code=reason_code,
+        user_confirmed=user_confirmed,
+    )
+    if result.ok:
+        discovery_ui_flash_and_rerun(result.message)
+    else:
+        st.warning(
+            f"{result.error_code or 'observation_batch_failed'}: {result.message}"
         )

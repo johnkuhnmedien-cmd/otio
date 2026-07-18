@@ -32,6 +32,7 @@ from otio_app.discovery_v2.application.supplementation_service import (
     get_supplementation_view,
     record_candidate_decision,
     record_claim_decision,
+    record_claim_decision_batch,
     start_candidate_validation_run,
     start_search_run,
 )
@@ -242,20 +243,161 @@ def _render_script(project, view) -> None:
         st.markdown("**Saetze**")
         st.dataframe(bundle["sentences"], use_container_width=True, hide_index=True)
     if bundle.get("claims"):
-        st.markdown("**Claims (nicht automatisch supported)**")
-        st.dataframe(
-            [
+        st.markdown("**Claims (Modellstatus ≠ Nutzerentscheidung)**")
+        latest = getattr(view, "latest_claim_decisions", {}) or {}
+        claim_rows = []
+        for item in bundle["claims"]:
+            user_dec = latest.get(item["claim_id"])
+            claim_rows.append(
                 {
                     "Claim": item["statement"],
-                    "Status": item["status"],
-                    "Confidence": item["confidence"],
+                    "Modellstatus": item["status"],
+                    "Modell-Confidence": item.get("confidence", "—"),
+                    "Nutzerentscheidung": (
+                        "—" if user_dec is None else user_dec.decision.value
+                    ),
+                    "Entscheidungszeitpunkt": (
+                        "—"
+                        if user_dec is None
+                        else user_dec.created_at.isoformat()
+                    ),
+                    "Aktuell entschieden": "ja" if user_dec is not None else "nein",
+                    "Claim-ID": item["claim_id"],
                 }
-                for item in bundle["claims"]
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
+            )
+        st.dataframe(claim_rows, use_container_width=True, hide_index=True)
+
+        filter_label = "offen"
+        if hasattr(st, "selectbox"):
+            filter_label = st.selectbox(
+                "Claim-Filter",
+                ["alle", "offen", "uncertain", "user_confirmation_required", "conflict"],
+                index=1,
+                key="discovery_v2_claim_filter",
+            )
+        filtered_claims = []
         for item in bundle["claims"]:
+            model_status = str(item.get("status") or "").lower()
+            decided = item["claim_id"] in latest
+            if filter_label == "alle":
+                filtered_claims.append(item)
+            elif filter_label == "offen" and not decided:
+                filtered_claims.append(item)
+            elif filter_label == "uncertain" and "uncertain" in model_status:
+                filtered_claims.append(item)
+            elif filter_label == "user_confirmation_required" and (
+                "user_confirmation" in model_status or "confirmation" in model_status
+            ):
+                filtered_claims.append(item)
+            elif filter_label == "conflict" and "conflict" in model_status:
+                filtered_claims.append(item)
+
+        visible_claim_ids = [item["claim_id"] for item in filtered_claims]
+        select_all_claims = False
+        if hasattr(st, "checkbox"):
+            select_all_claims = bool(
+                st.checkbox(
+                    "Alle sichtbaren Claims auswählen",
+                    value=False,
+                    key="discovery_v2_claim_select_all",
+                )
+            )
+        selected_claim_ids: list[str] = (
+            list(visible_claim_ids) if select_all_claims else []
+        )
+        if hasattr(st, "multiselect") and not select_all_claims:
+            selected_claim_ids = list(
+                st.multiselect(
+                    "Claims für Batch",
+                    visible_claim_ids,
+                    default=[],
+                    key="discovery_v2_claim_batch_ids",
+                )
+            )
+        st.caption(f"Ausgewählt: {len(selected_claim_ids)} Claim(s).")
+        confirm_claims = False
+        if hasattr(st, "checkbox"):
+            confirm_claims = bool(
+                st.checkbox(
+                    (
+                        f"{len(selected_claim_ids)} Claims werden entschieden. "
+                        "Jede Entscheidung wird append-only protokolliert."
+                    ),
+                    value=False,
+                    key="discovery_v2_claim_batch_confirm",
+                    disabled=not selected_claim_ids,
+                )
+            )
+        claim_by_id = {item["claim_id"]: item for item in bundle["claims"]}
+        batch_payload = [
+            {
+                "claim_id": claim_id,
+                "claim_text": str(claim_by_id[claim_id]["statement"]),
+            }
+            for claim_id in selected_claim_ids
+            if claim_id in claim_by_id
+        ]
+        if st.button(
+            "Ausgewählte bestätigen",
+            key="discovery_v2_claim_batch_confirm_btn",
+            disabled=not batch_payload or not confirm_claims,
+        ):
+            result = record_claim_decision_batch(
+                project,
+                script_id=script.script_id,
+                claims=batch_payload,
+                decision="confirmed",
+                user_confirmed=confirm_claims,
+                reason="UI-Batch",
+            )
+            if result.ok:
+                _flash_and_rerun(result.message)
+            else:
+                st.warning(result.message)
+        if st.button(
+            "Ausgewählte als unsicher akzeptieren",
+            key="discovery_v2_claim_batch_uncertain_btn",
+            disabled=not batch_payload or not confirm_claims,
+        ):
+            result = record_claim_decision_batch(
+                project,
+                script_id=script.script_id,
+                claims=batch_payload,
+                decision="accepted_as_uncertain",
+                user_confirmed=confirm_claims,
+                reason="UI-Batch",
+            )
+            if result.ok:
+                _flash_and_rerun(result.message)
+            else:
+                st.warning(result.message)
+        if st.button(
+            "Ausgewählte zurückweisen",
+            key="discovery_v2_claim_batch_reject_btn",
+            disabled=not batch_payload or not confirm_claims,
+        ):
+            result = record_claim_decision_batch(
+                project,
+                script_id=script.script_id,
+                claims=batch_payload,
+                decision="rejected",
+                user_confirmed=confirm_claims,
+                reason="UI-Batch",
+            )
+            if result.ok:
+                _flash_and_rerun(result.message)
+            else:
+                st.warning(result.message)
+
+        st.markdown("**Einzelentscheidung (inkl. Konflikte)**")
+        for item in bundle["claims"]:
+            user_dec = latest.get(item["claim_id"])
+            st.caption(
+                f"`{item['claim_id']}` · Modellstatus: `{item['status']}` · "
+                f"Nutzerentscheidung: "
+                f"`{'—' if user_dec is None else user_dec.decision.value}` · "
+                f"Aktuell entschieden: `{'ja' if user_dec is not None else 'nein'}`"
+            )
             cols = st.columns(4)
             decisions = [
                 ("Bestaetigt", "confirmed"),
