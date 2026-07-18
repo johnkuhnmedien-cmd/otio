@@ -33,6 +33,7 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 - Repository / Worktree: Discovery-V2-Integration (`cursor/discovery-v2-integration`)
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
+- Aktueller HEAD (Planungsbasis): `1e16916ee16f10fc7617d001093d46d67d412c6c`
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
 - R1.1 Produktcommit: `f3e015bad59e063ec2717f8ef793ca55a1362ae2`
 - R1.1 Script-Lock Identity: `8f4b9aacf0d854ff4dda02f80d37fa883d7797d7`
@@ -45,21 +46,23 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - Teststand: **2988 collected / 2969 passed / 18 failed / 1 skipped**
 - Provider: Fake-only · Adobe: UNKNOWN · NLE: lokaler OTIO-Serialize/Reparse
 - **R1.1 abgeschlossen** · **R1.2 abgeschlossen** · **R1.3 abgeschlossen**
-- Script-Lock Root Cause: Fingerprint an UI-Risikobestätigungen gekoppelt
-  (zirkulär) → Preview jetzt fachlich unabhängig; Schlüssel `gap_id:risk_code`
-- Manueller Realtest Script Lock (USA_v2) muss wiederholt werden
+- Script-Lock Realtest: **erfolgreich**
 - R1.3 Acceptance Evidence weiterhin offen
 - Decisions: D-R1.1-001…004 · D-R1.2-001…003 · D-R1.3-001…004
-- **Nächster erlaubter Schritt nach Freigabe: R1.4**
-- R1.5–R1.6 weiterhin gesperrt
+- Reproduziert: Visual Edit E3 (Asset ×6 > reuse max 3) + E4 (Source-Range
+  Overlap); `deterministically_repairable=false`; Repair Apply ohne
+  Reassignment-Ops; identische Feasibility-Schleife
+- Plan: `docs/source_plans/ALPHA_VISUAL_EDIT_REPAIR_REWORK_PLAN.md`
+- **Nächster erlaubter Schritt nach Freigabe: Visual Edit Rework V1**
+- **R1.4 und spätere Arbeit gesperrt**
 - Keine neue Produktphase
 
 ## Nächste erlaubte Aktion nach Freigabe
 
-→ **R1.4** (Job-UX / Progress-Polling)
+→ **Visual Edit Rework V1** (Fixtures, E3/E4-Repro, identische-Run-Erkennung)
 
-**Noch gesperrt:** R1.5–R1.6, echte Provider, Style References,
-Shared Working Media, Schema-21 ohne Zwang, neue Produktphase.
+**Noch gesperrt:** Rework V2–V4 vor V1-Abschluss, R1.4–R1.6, echte Provider,
+Style References, Shared Working Media, Schema-21 ohne Zwang, neue Produktphase.
 
 ## Verbindliche Kurzregeln
 

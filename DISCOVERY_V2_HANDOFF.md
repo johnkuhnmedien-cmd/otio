@@ -39,6 +39,7 @@
 - R1.1 Script-Lock Identity Rework: **abgeschlossen** (`8f4b9aa`)
 - R1.2 State/Routing: **abgeschlossen** (Produktcommit `4c6bfd9`)
 - R1.3 Review/Analyse: **abgeschlossen** (Produktcommits `45a5b4f`, `8b4c2ad`)
+- Aktueller HEAD: `1e16916ee16f10fc7617d001093d46d67d412c6c`
 - Root Cause `editorial_registry_write_failed`: FakeText Coverage-Audit-ID ohne
   `run_id` → UNIQUE auf `coverage_audits.coverage_audit_id` bei Wiederanlauf
 - Root Cause Reload/Routing: Project nur in `session_state`; Mode-Fallback
@@ -49,21 +50,28 @@
   UI-Risikobestätigungen als fachliche Blocker und unterdrückte den Fingerprint
   (zirkulär). Fix: Preview fachlich unabhängig; Bestätigungsschlüssel
   `gap_id:risk_code` (nicht `visual_intent_id`)
+- Script-Lock Realtest: **erfolgreich**
+- Root Cause Visual-Edit-Blocker: Fake `_visual_edit_plan` bindet alle Shots an
+  `candidates[0]` → E3; `_resolve_video_range` ohne Occupancy → E4; Repair Apply
+  klont nur; Fake Repair `vary_first_local_motif` nicht blockerbezogen; UI setzt
+  nie `user_status=selected`
+- Plan: `docs/source_plans/ALPHA_VISUAL_EDIT_REPAIR_REWORK_PLAN.md`
 - Kanonische Route: `?project_id=<uuid>&page=<slug>` (+ Streamlit `url_path`);
   Flash + kontrollierter Rerun nach Mutationen/Jobstarts
 - Assetweise Fake-Vision-Queue; Batch Observation Review; Claim-Dualstatus;
   Coverage-Revalidierung nach accepted Reviews; Supplement-Gap nur nach Match
-- Aktiver Produktauftrag: keiner (Script-Lock Identity erledigt)
-- Manueller Realtest Script Lock muss wiederholt werden
+- Aktiver Auftrag: Visual-Edit-Repair-Rework-**Planung** (keine Produktänderung)
 - R1.3 Acceptance Evidence weiterhin offen
-- Nächste erlaubte Aktivität nach Freigabe: **R1.4**
-  (Job-UX / Progress-Polling)
+- End-to-End Visual Edit / Repair: **blockiert** (E3/E4-Schleife)
+- Nächste erlaubte Aktivität nach Freigabe: **Visual Edit Rework V1**
+- **R1.4 und spätere Arbeit gesperrt** (kein Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
 - Teststand: **2988 collected / 2969 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
-- Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
+- Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse) — Visual-Edit-
+  Repair-Pfad im manuellen Alpha jedoch E3/E4-blockiert
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
 
 ## Source of Truth
@@ -895,10 +903,13 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 15. ~~R1.1 Script-Lock Identity Rework~~ — **abgeschlossen** (`8f4b9aa`)
 16. ~~R1.2 State / Routing~~ — **abgeschlossen** (`4c6bfd9`)
 17. ~~R1.3 Review / Analyse-Queue~~ — **abgeschlossen** (`45a5b4f`)
+18. Visual Edit / Repair Rework Plan — **aktiv**
+    (`docs/source_plans/ALPHA_VISUAL_EDIT_REPAIR_REWORK_PLAN.md`)
 
-Nächste erlaubte Aktivität nach Freigabe: **R1.4**
-(Job-UX / Progress-Polling). Manueller Script-Lock-Realtest ausstehend.
-R1.5–R1.6 weiterhin gesperrt. Keine neue Produktphase freigegeben.
+Nächste erlaubte Aktivität nach Freigabe: **Visual Edit Rework V1**.
+Script-Lock Realtest erfolgreich. End-to-End Visual Edit/Repair blockiert
+(E3/E4). **R1.4 und spätere Arbeit gesperrt.** R1.5–R1.6 weiterhin gesperrt.
+Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
 (untergeordnet gegenüber Regeln, DECISIONS, MASTER_PLAN, ALPHA_SCOPE, …).
