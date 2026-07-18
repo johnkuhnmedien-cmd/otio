@@ -84,20 +84,24 @@
 - **Coverage Stability C1 abgeschlossen** (`94b6e0f`)
 - **Coverage Stability C2 abgeschlossen** (`7e8db48`):
   Canonical Input `coverage-input-v1`, Active-Run-Reuse, Completed-Current-Audit-Reuse
-- Decisions: D-COVERAGE-STABILITY-001…003
+- **Coverage Stability C2-R1 abgeschlossen** (`86b5ac1`):
+  Legacy-Audits ohne gespeicherten Canonical Fingerprint fail-closed
+  (keine Rekonstruktion aus mutable Script Bundles; einmaliger Recompute)
+- Decisions: D-COVERAGE-STABILITY-001…004
 - Fake-Audit-ID darf weiterhin `run_id` enthalten (R1.1); fachlicher Reuse über
   `canonical_coverage_input_fingerprint`
 - Reuse-Pfad: kein Gateway, kein Worker, kein Supersede, Gaps bleiben
-- Legacy-Audits: sichere Rekonstruktion oder kein Reuse
-- **Manueller Reuse-Test erforderlich** (temporäres Projekt; keine USA_v2-Registry)
-- Aktiver Auftrag: keiner (C2 implementiert; C3 gesperrt bis Freigabe)
+- Legacy-Audits: **kein Reuse** → normaler neuer Run → neuer Audit speichert Fingerprint
+- Diagnosegrund: `legacy_audit_missing_canonical_fingerprint`
+- **Realer USA_v2-Test noch erforderlich** (nach Chief-Dev-Freigabe; kein Autostart)
+- Aktiver Auftrag: keiner (C2-R1 implementiert; C3 gesperrt bis Freigabe)
 - R1.3 Acceptance Evidence weiterhin offen
 - Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C3**
-- **C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
+- **C3, C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **3034 collected / 3015 passed / 18 failed / 1 skipped**
+- Teststand: **3043 collected / 3024 passed / 18 failed / 1 skipped** (Ziel C2-R1)
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**

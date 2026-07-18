@@ -33,31 +33,32 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 - Repository / Worktree: Discovery-V2-Integration (`cursor/discovery-v2-integration`)
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Aktueller HEAD: Coverage Stability C2 (`7e8db48`)
+- Aktueller HEAD: Coverage Stability C2-R1 (`86b5ac1`)
 - V1–V3 Visual Edit: `70ffe6e` / `0fba7bd` / `f1b982a`
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
 - R1.1–R1.3 abgeschlossen · Script-Lock Realtest **erfolgreich**
 - Chief-Dev Alpha-Produktstand: **APPROVED**
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - Registry-Schema: **20**
-- Teststand: **3034 collected / 3015 passed / 18 failed / 1 skipped**
+- Teststand: **3043 collected / 3024 passed / 18 failed / 1 skipped** (Ziel C2-R1)
 - Provider: Fake-only · Adobe: UNKNOWN · NLE: lokaler OTIO-Serialize/Reparse
 - Decisions: D-R1.1-001…004 · D-R1.2-001…003 · D-R1.3-001…004 ·
-  D-VE-REWORK-001…006 · D-COVERAGE-STABILITY-001…003
+  D-VE-REWORK-001…006 · D-COVERAGE-STABILITY-001…004
 - Visual Edit V1–V3: **abgeschlossen**
-- **Coverage Stability C1+C2 abgeschlossen**
+- **Coverage Stability C1+C2+C2-R1 abgeschlossen**
 - Canonical Coverage Input `coverage-input-v1` + Completed/Active Reuse
-- **Manueller Reuse-Test erforderlich** (temporäres Projekt)
+- Legacy-Audits ohne Fingerprint: fail-closed, einmaliger Recompute
+- **Realer USA_v2-Test noch erforderlich** (nach Freigabe; kein Autostart)
 - Plan: `docs/source_plans/ALPHA_COVERAGE_IDEMPOTENCY_CARRY_FORWARD_PLAN.md`
 - **Nächster erlaubter Schritt nach Freigabe: Coverage Stability C3**
-- **C4, V4 und R1.4 gesperrt** · echte Provider gesperrt
+- **C3, C4, V4 und R1.4 gesperrt** · echte Provider gesperrt
 - Keine neue Produktphase · keine Nutzerregistry-Reparatur
 
 ## Nächste erlaubte Aktion nach Freigabe
 
 → **Coverage Stability C3** (Gap Identity / Carry-Forward)
 
-**Noch gesperrt:** C4 bis nach C3-Freigabe, Rework V4, R1.4–R1.6,
+**Noch gesperrt:** C3/C4 bis Freigabe, Rework V4, R1.4–R1.6,
 echte Provider, Style References, Shared Working Media, Schema-21 ohne Zwang,
 neue Produktphase.
 

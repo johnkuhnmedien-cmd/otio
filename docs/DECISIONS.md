@@ -666,3 +666,15 @@ den bestehenden Gap-IDs erhalten.
 Audit-IDs, Gap-IDs, Timestamps, Artefaktpfade oder UI-/Session-Zustände. Der
 Fingerprint ist SHA-256 über eine versionierte, UTF-8-kodierte,
 sortierungsstabile JSON-Darstellung von `coverage-input-v1`.
+
+---
+
+## D-COVERAGE-STABILITY-004 — Legacy-Audits ohne Canonical Fingerprint fail-closed
+
+**Entscheidung:** Coverage Audits ohne gespeicherten Canonical Coverage
+Fingerprint werden nicht aus aktuellen, veränderbaren Editorial-Artefakten
+rückwirkend rekonstruiert oder wiederverwendet.
+
+Sie benötigen genau eine normale Neuberechnung. Danach gelten die regulären
+C2-Reuse-Verträge (gespeicherter Fingerprint + Identität → Completed Reuse;
+äquivalenter aktiver Run → Active Reuse).

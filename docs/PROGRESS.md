@@ -2,7 +2,7 @@
 
 ## Aktueller Stand
 
-**Coverage Stability C2 abgeschlossen — Schema weiterhin 20.**
+**Coverage Stability C2-R1 (Legacy Fail-Closed) abgeschlossen — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
 - Script-Lock Realtest: **erfolgreich**
@@ -15,11 +15,12 @@
 - Coverage Idempotency Plan: dokumentiert
 - **Coverage Stability C1**: Reproduktion (`94b6e0f`)
 - **Coverage Stability C2**: Canonical Input + Active-/Completed-Reuse (`7e8db48`)
-- Decisions: D-COVERAGE-STABILITY-001…003
-- **Manueller Reuse-Test erforderlich** (temporäres Projekt; keine USA_v2-Registry)
+- **Coverage Stability C2-R1**: Legacy Fail-Closed (`86b5ac1`)
+- Decisions: D-COVERAGE-STABILITY-001…004
+- **Manueller Temp-Projekt-Test / USA_v2 noch erforderlich** (nach Freigabe)
 - Plan: `docs/source_plans/ALPHA_COVERAGE_IDEMPOTENCY_CARRY_FORWARD_PLAN.md`
 - **Nächster erlaubter Schritt nach Freigabe: Coverage Stability C3**
-- **C4, V4 und R1.4 gesperrt** bis Freigabe
+- **C3, C4, V4 und R1.4 gesperrt** bis Freigabe
 - Keine neue Produktphase · echte Provider gesperrt
 
 ## Phase-Status
@@ -31,29 +32,28 @@
 | Visual Edit Rework V1–V3 | abgeschlossen |
 | Coverage Idempotency Plan | dokumentiert |
 | Coverage Stability C1 | abgeschlossen (Reproduktion) |
-| Coverage Stability C2 | **abgeschlossen** (Canonical Reuse) |
+| Coverage Stability C2 | abgeschlossen (Canonical Reuse) |
+| Coverage Stability C2-R1 | **abgeschlossen** (Legacy Fail-Closed) |
 | Coverage Stability C3–C4 | nächster erlaubter Schritt (nach Freigabe: C3) |
 | Visual Edit Rework V4 Loop/UI | **gesperrt** |
 | R1.4 Job-UX / Progress-Polling | **gesperrt** |
 | R1.5–R1.6 | gesperrt |
 
-## Coverage Stability C2 — Kurzstand
+## Coverage Stability C2-R1 — Kurzstand
 
-- Canonical Input Schema: `coverage-input-v1`
-- Fingerprint: SHA-256 über sortierungsstabiles JSON (ohne run/audit/gap/timestamps/paths)
-- Dedup-Key: `project_id|fingerprint|editorial_coverage_only|mode`
-- Completed Current Audit Reuse → kein Gateway, kein Worker, keine neuen Gaps
-- Active equivalent Run Reuse → dieselbe Run-ID, kein zweiter Worker
-- Neue Audits speichern `canonical_coverage_input_fingerprint` im JSON-Artefakt
-- Legacy: sichere Rekonstruktion oder kein Reuse
-- `force_recompute` nur explizit; normale UI nutzt `normal`
+- Audits ohne gespeicherten Canonical Fingerprint: **kein Reuse**
+- Keine Rekonstruktion aus mutable Brief/Narrative/Script-Bundle
+- Genau ein normaler Recompute → neuer Audit speichert Fingerprint
+- Zweiter identischer Aufruf → Completed Reuse (kein Gateway/Worker/Gaps)
+- Active-Run-Reuse unverändert
+- Diagnosegrund: `legacy_audit_missing_canonical_fingerprint`
+- Decision: D-COVERAGE-STABILITY-004
 
 ## Teststand
 
-**3034 collected / 3015 passed / 18 failed / 1 skipped** (~320s)
+**3043 collected / 3024 passed / 18 failed / 1 skipped** (Ziel nach C2-R1; +9 Tests)
 
-Baseline C1 (3017/2998) +17 C2-Tests. 18 bekannte Classic/Without-VO-Fehler
-und 1 VFR-Skip unverändert.
+18 bekannte Classic/Without-VO-Fehler und 1 VFR-Skip unverändert.
 
 ## Nächste erlaubte Aktivität
 
