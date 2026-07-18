@@ -573,3 +573,34 @@ sichtbar, sobald Brief/Narrative/Hook/Script/Struktur/Claims/Coverage und
 terminale Gaps erfüllt sind — unabhängig davon, ob UI-Checkboxen bereits
 gesetzt sind. Checkboxen bestätigen diesen Stand; fehlende Bestätigungen
 deaktivieren den Lock-Button, leeren den Fingerprint aber nicht.
+
+---
+
+## D-VE-REWORK-001 — E3/E4-aware Planauflösung bei neuer Planerzeugung
+
+**Entscheidung:** Bei der Erzeugung neuer Visual-Edit-Planversionen prüft und
+erzwingt Python die zentralen Policies `ASSET_REUSE_MAX` (E3) und
+`SOURCE_RANGE_OVERLAP_RATIO_MAX` (E4) bereits während Assignment- und
+Source-Range-Auflösung. Feasibility bleibt die finale Validierung; technisch
+vermeidbare E3/E4-Verletzungen dürfen nicht erst dort entstehen.
+
+---
+
+## D-VE-REWORK-002 — Redaktionelle Kandidatenmenge versus technische Auswahl
+
+**Entscheidung:** Fake-/LLM-Planer liefern geordnete redaktionelle
+Kandidatenmengen pro Shot (`ranked_candidates`). Python wählt daraus
+deterministisch die erste technisch zulässige Option (E3-Zählung, E4-Occupancy,
+gültiges completed Working Media, akzeptierte Observation). Python darf kein
+Asset außerhalb dieser redaktionellen Menge einsetzen.
+
+---
+
+## D-VE-REWORK-003 — Ungültiger neuer Plan wird nicht Current
+
+**Entscheidung:** Scheitert die E3-/E4-konforme Auflösung oder die
+Domainvalidierung, wird kein neuer Current Plan veröffentlicht. Der vorherige
+Current Plan bleibt erhalten; der fehlgeschlagene Run endet mit strukturiertem
+Fehlercode (`visual_edit_no_e3_compliant_assignment` bzw.
+`visual_edit_no_e4_compliant_source_range`). Bestehende Planversionen werden
+nicht in-place umgeschrieben.
