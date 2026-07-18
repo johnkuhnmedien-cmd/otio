@@ -2,20 +2,22 @@
 
 ## Aktueller Stand
 
-**Interner MANUAL-/Fake-Alpha getestet — End-to-End am Coverage-/Script-Lock-Gate blockiert.**
+**R1.1 Coverage-/Script-Lock-Blocker behoben — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
+- R1.1 Blocker-Fix: **abgeschlossen** (Produktcommit `f3e015b`)
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
-- Schema: **20**
+- Schema: **20** (keine Schema-21-Migration)
 - Provider: **Fake-only**
 - Adobe: **UNKNOWN**
 - NLE: nur lokaler OTIO-Serialize/Reparse
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Interne Alpha-Erprobung: **blockiert** am Coverage-/Script-Lock-Gate
-  (`partially_covered` + `exact_match_not_verified` + leere `risk_flags`
-  → Accept-Button disabled → kein Script Lock)
-- **R1-Planung aktiv:**
-  `docs/source_plans/ALPHA_UX_WORKFLOW_STABILIZATION_R1_PLAN.md`
+- Interne Alpha-Erprobung: Coverage-Partial-Pfad + Script Lock wieder gangbar
+  (`exact_match_not_verified` → sichtbares Risiko → `accepted_unresolved` → Lock)
+- Root Cause `editorial_registry_write_failed`: FakeText Coverage-Audit-IDs
+  ohne `run_id` → UNIQUE-Konflikt bei Wiederanlauf (siehe DECISIONS / Handoff)
+- **Nächster erlaubter Schritt nach Freigabe: R1.2**
+- R1.3–R1.6 weiterhin gesperrt
 - Keine neue Produktphase
 - Echte Provider weiterhin gesperrt
 
@@ -25,31 +27,33 @@
 |---|---|
 | 7–13 Produktpfad | freigegeben / Fake-Alpha |
 | Alpha Release Closeout | dokumentiert (`1ac7fba`) |
-| Interne Alpha-Erprobung | blockiert (Coverage / Script Lock) |
-| UX Workflow Stabilization R1 | **Planung** (kein Implementierungsstart) |
+| UX Workflow Stabilization R1 Plan | dokumentiert (`cac5e76`) |
+| R1.1 Coverage / Script Lock Blocker | **abgeschlossen** (`f3e015b`) |
+| R1.2 Stale Viewmodels / Reload | nächster erlaubter Schritt (nach Freigabe) |
+| R1.3–R1.6 | gesperrt |
 
-## Teststand (Baseline unverändert)
+## Teststand
 
-**2915 collected / 2896 passed / 18 failed / 1 skipped**
+**2935 collected / 2916 passed / 18 failed / 1 skipped**
 
-18 bekannte Baseline-Fehler unverändert; 1 bekannter VFR-Skip unverändert.
-Keine R1-Produktänderungen in diesem Planungsstand.
+Vergleich zur R1-Plan-Baseline **2915 / 2896 / 18 / 1**:
+- +20 Tests (R1.1 Smokes/Regressionen), alle grün
+- 18 bekannte Classic/Without-VO Baseline-Fehler unverändert
+- 1 bekannter VFR-Skip unverändert
 
 ## Bekannte Einschränkungen / UNKNOWN
 
 - Fake-only Provider
 - Adobe OAuth / Lizenz / Auto-Download: **UNKNOWN**
 - Keine proprietären NLE-Exporte
-- Coverage-Partial-Pfad ohne sichtbares `risk_flags` blockiert Lock (R1.1)
 - Stale Viewmodels / Reload / Progress / Batch-Review: R1.2–R1.6
 - Style References / Shared Working Media: deferred
 
 ## Nächste erlaubte Aktivität
 
-Nach Freigabe des R1-Plans:
+Nach Freigabe:
 
-→ **R1.1 Blocker-Implementierung**
-  (Coverage `accepted_unresolved`, Registry-Write, Lock-Gate, Fingerprint-UX)
+→ **R1.2** (Stale Viewmodels / Reload / Projektkontext)
 
-Noch gesperrt: R1.2–R1.6, echte Provider, Style References,
+Noch gesperrt: R1.3–R1.6, echte Provider, Style References,
 Shared Working Media, neue Produktphase.

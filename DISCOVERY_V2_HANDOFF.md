@@ -17,7 +17,7 @@
 - Phase-11 Contract Hardening R1: **angewendet** (Schema **18**)
 - Phase 12 Visual Edit / Humanity / Feasibility / Repair: **implementiert (Fake E2E)**
 - Phase 13 Editorial Approval / OTIO Export / Reparse / Alpha-E2E: **implementiert (Fake E2E)**
-- Alpha Release Closeout: **`APPROVED_WITH_CONDITIONS`**
+- Alpha Release Closeout: **`APPROVED`** (nach Chief-Dev-Upgrade; Closeout-Commit `1ac7fba`)
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - SoT Bootstrap: `RECONSTRUCTED_BOOTSTRAP` — für dieses Repository neu konsolidiert;
   Recovery-Suche → `NOT_FOUND`; andere Projekte und gelöschter GPT-Wissensstand
@@ -35,11 +35,18 @@
 - Adobe: **UNKNOWN** (kein ElevenLabs; keine echte Adobe-OAuth-/Lizenz-/Download-Integration)
 - NLE: **nur lokaler OTIO-Serialize/Reparse-Nachweis** (keine proprietären NLE-Exporte)
 - Kein Cloud-Publish
-- Aktiver Produktauftrag: keiner
-- Nächste erlaubte Aktivität: **kontrollierter Alpha-Merge beziehungsweise interne Alpha-Erprobung**
+- R1.1 Coverage-/Script-Lock-Blocker: **abgeschlossen** (Produktcommit `f3e015b`)
+- Root Cause `editorial_registry_write_failed`: FakeText Coverage-Audit-ID ohne
+  `run_id` → UNIQUE auf `coverage_audits.coverage_audit_id` bei Wiederanlauf
+- Risiko-/Lock-Vertrag: Allow-List-Risiken, aktuelle Candidate Decisions,
+  `accepted_unresolved`, staged Coverage-Persistenz, serverseitiger Fingerprint
+- Aktiver Produktauftrag: keiner (R1.1 erledigt)
+- Nächste erlaubte Aktivität nach Freigabe: **R1.2**
+  (Stale Viewmodels / Reload / Projektkontext)
+- R1.3–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **2915 collected / 2896 passed / 18 failed / 1 skipped**
+- Teststand: **2935 collected / 2916 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
@@ -867,10 +874,13 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 9. ~~Phase 12: Visual Edit / Humanity / Feasibility / Repair (Fake)~~ — implementiert
 10. ~~Phase 13: Review / OTIO / Alpha-E2E (Fake)~~ — implementiert
 11. ~~Alpha Release Readiness Verify~~ — `ALPHA_READY_WITH_LIMITATIONS`
-12. ~~Alpha Release Closeout~~ — **`APPROVED_WITH_CONDITIONS`**
+12. ~~Alpha Release Closeout~~ — **`APPROVED`**
+13. ~~R1 Plan~~ — dokumentiert (`cac5e76`)
+14. ~~R1.1 Coverage / Script Lock Blocker~~ — **abgeschlossen** (`f3e015b`)
 
-Nächste erlaubte Aktivität: **kontrollierter Alpha-Merge beziehungsweise interne Alpha-Erprobung**.
-Keine neue Produktphase freigegeben.
+Nächste erlaubte Aktivität nach Freigabe: **R1.2**
+(Stale Viewmodels / Reload / Projektkontext).
+R1.3–R1.6 weiterhin gesperrt. Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
 (untergeordnet gegenüber Regeln, DECISIONS, MASTER_PLAN, ALPHA_SCOPE, …).

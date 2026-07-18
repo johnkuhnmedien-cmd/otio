@@ -448,3 +448,41 @@ semantischem Vergleich als abgeschlossen.
 **Entscheidung:** Phase 13 schließt den lokalen Fake-Alpha-Pfad ab. Proprietäre
 NLE-Exporte, reale Provider, Veröffentlichung und Cloud-Rendering bleiben außerhalb
 des Alpha-Scopes.
+
+---
+
+## D-R1.1-001 — Acceptable Coverage Risks sind Allow-List
+
+**Entscheidung:** Sichtbare akzeptierbare Coverage-Risiken werden nur über eine
+explizite, deterministische Abbildung aus `missing_properties` abgeleitet.
+Mindestens: `exact_match_not_verified` → `coverage_exact_match_not_verified`.
+Unbekannte `missing_properties` gelten nicht automatisch als akzeptierbar.
+Risikoannahme (`accepted_unresolved`) erfordert offene/in_progress Gaps auf
+Eskalation `user_decision`, aktuelle Candidate Decisions alle `rejected`,
+mindestens ein sichtbares akzeptierbares Risiko und ausdrückliche
+Nutzerbestätigung. Historische Candidate Decisions zählen nicht; nur die
+aktuelle Entscheidung pro Candidate.
+
+---
+
+## D-R1.1-002 — Coverage-Persistenz ist staged und idempotent
+
+**Entscheidung:** Coverage-Materialisierung bleibt atomar bezüglich Current State:
+ein fehlgeschlagener Run wird niemals Current; ein vorheriger gültiger Current
+Audit bleibt bei Fehlern erhalten; keine halben Gap-Sätze; identischer
+Wiederanlauf ist idempotent. Persistenzfehler werden staged ausgewiesen
+(z. B. `coverage_artifact_publish_failed`, `coverage_audit_persist_failed`,
+`coverage_current_state_update_failed`) statt undifferenziertem Catch-all.
+Coverage-Audit-IDs müssen pro Run eindeutig sein (inkl. `run_id`).
+
+---
+
+## D-R1.1-003 — Script-Lock-Fingerprint ist serverseitig
+
+**Entscheidung:** Der Script-Lock-Fingerprint wird serverseitig berechnet und
+angezeigt; freies Editieren entfällt. Lock erfordert Checkbox-Bestätigung des
+angezeigten Stands. Fingerprint-Änderung zwischen Anzeige und Klick blockiert
+mit `code=script_lock_fingerprint_mismatch`. Ein historischer fehlgeschlagener
+Coverage-Run blockiert den Lock nicht, solange ein gültiger Current Audit
+vorliegt und alle Gaps terminal sind; geänderte Inputs seit dem Audit blockieren
+mit `coverage_audit_stale`.
