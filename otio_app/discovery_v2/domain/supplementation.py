@@ -658,6 +658,50 @@ def coverage_gap_fingerprint(
     )
 
 
+LOCK_RISK_CONFIRMATION_SEPARATOR = ":"
+
+
+def make_lock_risk_confirmation_key(gap_id: str, risk_code: str | CoverageRiskFlag) -> str:
+    """Canonical Script-Lock risk confirmation identity: gap_id + risk_code."""
+    gap = str(gap_id or "").strip()
+    code = (
+        risk_code.value
+        if isinstance(risk_code, CoverageRiskFlag)
+        else str(risk_code or "").strip()
+    )
+    if not gap:
+        raise ValueError("gap_id required for lock risk confirmation key")
+    if not code:
+        raise ValueError("risk_code required for lock risk confirmation key")
+    if LOCK_RISK_CONFIRMATION_SEPARATOR in gap:
+        raise ValueError("gap_id must not contain confirmation separator")
+    return f"{gap}{LOCK_RISK_CONFIRMATION_SEPARATOR}{code}"
+
+
+def parse_lock_risk_confirmation_key(key: str) -> tuple[str, str]:
+    raw = str(key or "").strip()
+    if LOCK_RISK_CONFIRMATION_SEPARATOR not in raw:
+        raise ValueError("invalid lock risk confirmation key")
+    gap_id, risk_code = raw.split(LOCK_RISK_CONFIRMATION_SEPARATOR, 1)
+    gap_id = gap_id.strip()
+    risk_code = risk_code.strip()
+    if not gap_id or not risk_code:
+        raise ValueError("invalid lock risk confirmation key")
+    return gap_id, risk_code
+
+
+def persisted_accepted_lock_risk_keys(gaps: list[CoverageGap]) -> list[str]:
+    """Sorted canonical risk keys from terminal accepted_unresolved gaps."""
+    keys: list[str] = []
+    for gap in gaps:
+        if gap.status != CoverageGapStatus.ACCEPTED_UNRESOLVED:
+            continue
+        risks = gap.accepted_unresolved_risks or ()
+        for risk in risks:
+            keys.append(make_lock_risk_confirmation_key(gap.gap_id, risk))
+    return sorted(keys)
+
+
 def script_lock_fingerprint(
     *,
     project_id: str,
@@ -716,6 +760,7 @@ __all__ = [name for name in globals() if name.startswith("SUPPLEMENTATION_")] + 
     "GraphicPlan",
     "GraphicPlanUserStatus",
     "LOCK_COMPATIBLE_CLAIM_DECISIONS",
+    "LOCK_RISK_CONFIRMATION_SEPARATOR",
     "MAX_SEARCH_ATTEMPTS_PER_GAP_VERSION",
     "MAX_STOCK_CANDIDATES_PER_ATTEMPT",
     "STOCK_GATEWAY_VERSION",
@@ -742,9 +787,12 @@ __all__ = [name for name in globals() if name.startswith("SUPPLEMENTATION_")] + 
     "TERMINAL_GAP_STATUSES",
     "coverage_gap_fingerprint",
     "derive_acceptable_risks_from_missing_properties",
+    "make_lock_risk_confirmation_key",
     "merge_gap_risk_flags",
     "metadata_fingerprint",
     "observation_identity_fingerprint",
+    "parse_lock_risk_confirmation_key",
+    "persisted_accepted_lock_risk_keys",
     "preview_hash_from_bytes",
     "script_lock_fingerprint",
     "script_structure_fingerprint",

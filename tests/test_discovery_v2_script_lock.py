@@ -231,11 +231,14 @@ def test_smoke_e_accepted_unresolved_requires_per_risk_confirmation_for_lock(
     for other in gaps[1:]:
         mark_gap_resolved_with_local_asset(project, gap_id=other.gap_id, asset_id="asset-local")
     _decide_all_claims(project)
-    blocked = preview_script_lock(project)
-    assert not blocked.ok
+    preview = preview_script_lock(project)
+    # Fingerprint is visible without UI checkboxes; lock remains gated.
+    assert preview.ok
+    assert preview.lock_fingerprint
+    assert not preview.can_lock
+    assert preview.confirmation_blockers
     key = f"{gap.gap_id}:too_generic"
-    confirmed_preview = preview_script_lock(project)
-    assert not confirmed_preview.ok
+    assert any(key in item for item in preview.confirmation_blockers)
     ok = create_script_lock(
         project,
         user_confirmed=True,
@@ -243,8 +246,6 @@ def test_smoke_e_accepted_unresolved_requires_per_risk_confirmation_for_lock(
         accepted_unresolved_risk_confirmations={key: True},
     )
     assert ok.error_code == "script_lock_fingerprint_mismatch"
-    preview = preview_script_lock(project)
-    # Preview is intentionally still blocked without per-risk UI state; creation receives it.
     result_preview = create_script_lock(
         project,
         user_confirmed=False,

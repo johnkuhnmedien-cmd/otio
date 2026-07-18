@@ -37,10 +37,14 @@ from otio_app.discovery_v2.domain.supplementation import (
     SUPPLEMENTATION_ERROR_SCRIPT_LOCK_REQUIREMENTS_NOT_MET,
     CoverageGap,
     CoverageGapStatus,
+    CoverageRiskFlag,
     ScriptLock,
     ScriptLockRisk,
     ScriptLockStatus,
     coverage_gap_fingerprint,
+    make_lock_risk_confirmation_key,
+    parse_lock_risk_confirmation_key,
+    persisted_accepted_lock_risk_keys,
     script_lock_fingerprint,
     script_structure_fingerprint,
 )
@@ -76,6 +80,7 @@ class ScriptLockPreview:
     lock_fingerprint: str | None = None
     fingerprint_display: str | None = None
     blockers: list[str] = field(default_factory=list)
+    confirmation_blockers: list[str] = field(default_factory=list)
     fulfilled_requirements: list[str] = field(default_factory=list)
     blocking_requirements: list[str] = field(default_factory=list)
     requirement_details: list[ScriptLockRequirement] = field(default_factory=list)
@@ -84,7 +89,12 @@ class ScriptLockPreview:
 
     @property
     def can_lock(self) -> bool:
-        return bool(self.ok and self.lock_fingerprint)
+        """Lock is allowed only when fachlich ready and all UI confirmations match."""
+        return bool(
+            self.ok
+            and self.lock_fingerprint
+            and not self.confirmation_blockers
+        )
 
 
 @dataclass(frozen=True)
@@ -180,6 +190,16 @@ def create_script_lock(
             return ScriptLockResult(
                 ok=False,
                 message="Script Lock Anforderungen nicht erfuellt.",
+                preview=preview,
+                error_code=SUPPLEMENTATION_ERROR_SCRIPT_LOCK_REQUIREMENTS_NOT_MET,
+            )
+        if preview.confirmation_blockers:
+            return ScriptLockResult(
+                ok=False,
+                message=(
+                    "Risikobestaetigung fehlt oder ist ungueltig: "
+                    + ", ".join(preview.confirmation_blockers)
+                ),
                 preview=preview,
                 error_code=SUPPLEMENTATION_ERROR_SCRIPT_LOCK_REQUIREMENTS_NOT_MET,
             )
@@ -390,32 +410,28 @@ def _build_preview(
             coverage_audit_id=coverage.coverage_audit_id,
         )
     )
-    accepted_risks: list[str] = []
     open_gap_count = 0
-    confirmations = accepted_unresolved_risk_confirmations or {}
     for gap in gaps:
         if gap.status in {
             CoverageGapStatus.RESOLVED_WITH_LOCAL_ASSET,
             CoverageGapStatus.RESOLVED_WITH_SUPPLEMENT,
             CoverageGapStatus.RESOLVED_BY_SCRIPT_REVISION,
             CoverageGapStatus.RESOLVED_BY_GRAPHIC_PLAN,
+            CoverageGapStatus.ACCEPTED_UNRESOLVED,
             CoverageGapStatus.SUPERSEDED,
         }:
             continue
-        if gap.status == CoverageGapStatus.ACCEPTED_UNRESOLVED:
-            # Use persisted accepted risks only — do not re-derive from
-            # missing_properties after an explicit accept decision.
-            for risk in gap.accepted_unresolved_risks or gap.risk_flags:
-                key = f"{gap.gap_id}:{risk.value}"
-                if risk not in gap.accepted_unresolved_risks or not confirmations.get(
-                    key, allow_existing_lock
-                ):
-                    blockers.append(f"accepted_unresolved_risk_unconfirmed:{key}")
-                else:
-                    accepted_risks.append(key)
-            continue
         open_gap_count += 1
         blockers.append(f"coverage_gap_open:{gap.gap_id}")
+    # Persisted accepted risks always contribute to the fachlichen Lock-Stand /
+    # Fingerprint. UI checkboxes confirm that stand; they do not create it.
+    accepted_risks = persisted_accepted_lock_risk_keys(gaps)
+    confirmation_blockers = _confirmation_blockers(
+        gaps=gaps,
+        required_keys=accepted_risks,
+        confirmations=accepted_unresolved_risk_confirmations or {},
+        allow_existing_lock=allow_existing_lock,
+    )
     claim_snapshot, claim_blockers = _claim_snapshot_and_blockers(conn, project, script, bundle)
     blockers.extend(claim_blockers)
     # Active runs are checked in create_script_lock; preview focuses on data readiness.
@@ -434,16 +450,23 @@ def _build_preview(
         coverage_ok=coverage is not None
         and coverage.status == CoverageAuditStatus.COMPLETED
         and not stale_inputs,
-        gaps_terminal=open_gap_count == 0
-        and not any(item.startswith("accepted_unresolved_risk_unconfirmed:") for item in blockers),
+        gaps_terminal=open_gap_count == 0,
         open_gap_count=open_gap_count,
     )
     fulfilled = [item.label for item in details if item.ok]
     blocking = [item.label for item in details if not item.ok]
-    if blockers or script is None or brief is None or coverage is None or state is None:
+    fachlich_ready = (
+        not blockers
+        and script is not None
+        and brief is not None
+        and coverage is not None
+        and state is not None
+    )
+    if not fachlich_ready:
         return ScriptLockPreview(
             ok=False,
             blockers=blockers,
+            confirmation_blockers=confirmation_blockers,
             fulfilled_requirements=fulfilled,
             blocking_requirements=blocking,
             requirement_details=details,
@@ -480,12 +503,61 @@ def _build_preview(
         lock_fingerprint=fingerprint,
         fingerprint_display=fingerprint[:12],
         blockers=[],
+        confirmation_blockers=confirmation_blockers,
         fulfilled_requirements=fulfilled,
-        blocking_requirements=[],
+        blocking_requirements=blocking,
         requirement_details=details,
         accepted_open_risks=accepted_risks,
         claim_snapshot=claim_snapshot,
     )
+
+
+def _confirmation_blockers(
+    *,
+    gaps: list[CoverageGap],
+    required_keys: list[str],
+    confirmations: dict[str, bool],
+    allow_existing_lock: bool,
+) -> list[str]:
+    """Validate UI risk confirmations against persisted accepted risks (gap_id+code)."""
+    if allow_existing_lock:
+        return []
+    accepted_gaps = {
+        gap.gap_id: gap
+        for gap in gaps
+        if gap.status == CoverageGapStatus.ACCEPTED_UNRESOLVED
+    }
+    required = set(required_keys)
+    blockers: list[str] = []
+    for key in sorted(required):
+        if not confirmations.get(key, False):
+            blockers.append(f"accepted_unresolved_risk_unconfirmed:{key}")
+    for key, confirmed in confirmations.items():
+        if not confirmed:
+            continue
+        try:
+            gap_id, risk_code = parse_lock_risk_confirmation_key(key)
+        except ValueError:
+            blockers.append(f"accepted_unresolved_risk_invalid_key:{key}")
+            continue
+        gap = accepted_gaps.get(gap_id)
+        if gap is None:
+            # Reject visual_intent_id (or any non-gap identity) silently matching.
+            blockers.append(f"accepted_unresolved_risk_unknown_gap:{key}")
+            continue
+        try:
+            risk = CoverageRiskFlag(risk_code)
+        except ValueError:
+            blockers.append(f"accepted_unresolved_risk_unknown_code:{key}")
+            continue
+        if risk not in (gap.accepted_unresolved_risks or ()):
+            blockers.append(f"accepted_unresolved_risk_not_on_gap:{key}")
+            continue
+        expected = make_lock_risk_confirmation_key(gap.gap_id, risk)
+        if key != expected:
+            blockers.append(f"accepted_unresolved_risk_invalid_key:{key}")
+    # Deterministic unique order
+    return sorted(set(blockers))
 
 
 def _requirement_details(

@@ -261,28 +261,25 @@ def test_r1_accept_unresolved_makes_gap_terminal_and_exposes_fingerprint(
     assert any(event.event_type.value == "user_decision_recorded" for event in events)
     key = f"{gap_id}:coverage_exact_match_not_verified"
     preview = preview_script_lock(project)
-    # Still needs per-risk confirmation for lock.
-    assert not preview.ok or key
-    ready = create_script_lock(
-        project,
-        user_confirmed=True,
-        confirmed_fingerprint=None,
-        accepted_unresolved_risk_confirmations={key: True},
-    )
-    # Recompute after confirmation path.
-    preview = create_script_lock(
+    # Fingerprint visible without UI checkboxes; lock gated by confirmation.
+    assert preview.ok
+    assert preview.lock_fingerprint
+    assert not preview.can_lock
+    assert any(key in item for item in preview.confirmation_blockers)
+    gated = create_script_lock(
         project,
         user_confirmed=False,
-        confirmed_fingerprint="x",
+        confirmed_fingerprint=preview.lock_fingerprint,
         accepted_unresolved_risk_confirmations={key: True},
     )
-    assert preview.preview is not None
-    assert preview.preview.lock_fingerprint
-    assert preview.preview.fingerprint_display
+    assert gated.preview is not None
+    assert gated.preview.lock_fingerprint
+    assert gated.preview.fingerprint_display
+    assert gated.preview.can_lock
     locked = create_script_lock(
         project,
         user_confirmed=True,
-        confirmed_fingerprint=preview.preview.lock_fingerprint,
+        confirmed_fingerprint=gated.preview.lock_fingerprint,
         accepted_unresolved_risk_confirmations={key: True},
     )
     assert locked.ok, (locked.message, locked.error_code, locked.preview.blockers if locked.preview else None)

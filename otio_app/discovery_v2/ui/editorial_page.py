@@ -655,6 +655,10 @@ def _render_supplementation(project, view) -> None:
 
 
 def _render_script_lock(project, view) -> None:
+    from otio_app.discovery_v2.domain.supplementation import (
+        make_lock_risk_confirmation_key,
+    )
+
     st.subheader("Script Lock")
     supp_view = get_supplementation_view(project)
     if supp_view.script_locks:
@@ -681,9 +685,14 @@ def _render_script_lock(project, view) -> None:
         st.code(f"Fingerprint: {preview.fingerprint_display or displayed_fingerprint[:12]}…")
         with st.expander("Technische Details anzeigen", expanded=False):
             st.code(displayed_fingerprint)
+            detail_risks = list(getattr(preview, "accepted_open_risks", None) or [])
+            if detail_risks:
+                st.caption("Kanonische Risikenschluessel (gap_id:risk_code)")
+                for key in detail_risks:
+                    st.code(key)
         st.session_state["discovery_v2_lock_displayed_fingerprint"] = displayed_fingerprint
     else:
-        st.caption("Kein Fingerprint verfuegbar, solange Blocker offen sind.")
+        st.caption("Kein Fingerprint verfuegbar, solange fachliche Blocker offen sind.")
         st.session_state.pop("discovery_v2_lock_displayed_fingerprint", None)
     confirmed = _checkbox(
         "Ich bestaetige genau diesen aktuellen Stand.",
@@ -691,19 +700,38 @@ def _render_script_lock(project, view) -> None:
         key="discovery_v2_lock_confirmed",
     )
     risk_confirmations: dict[str, bool] = {}
-    for gap in supp_view.gaps:
-        if gap.status.value == "accepted_unresolved":
-            for risk in gap.risk_flags:
-                key = f"{gap.gap_id}:{risk.value}"
-                risk_confirmations[key] = _checkbox(
-                    f"Offenes Risiko bestaetigen: {risk.value} ({gap.visual_intent_id})",
-                    value=False,
-                    key=f"discovery_v2_lock_risk_{gap.gap_id}_{risk.value}",
-                )
+    required_risk_keys = list(getattr(preview, "accepted_open_risks", None) or [])
+    confirmation_blockers = list(getattr(preview, "confirmation_blockers", None) or [])
+    gaps_by_id = {gap.gap_id: gap for gap in supp_view.gaps}
+    for key in required_risk_keys:
+        gap_id, risk_code = key.split(":", 1)
+        gap = gaps_by_id.get(gap_id)
+        intent_label = (
+            gap.visual_intent_id if gap is not None else "unbekannter Intent"
+        )
+        risk_confirmations[key] = _checkbox(
+            (
+                f"Risiko bestaetigen: {risk_code} "
+                f"(Intent {intent_label})"
+            ),
+            value=False,
+            key=f"discovery_v2_lock_risk_{gap_id}_{risk_code}",
+        )
+        # Ensure the widget key stays bound to the canonical gap_id identity.
+        _ = make_lock_risk_confirmation_key(gap_id, risk_code)
+    if confirmation_blockers and displayed_fingerprint:
+        st.caption(
+            "Fingerprint ist sichtbar. Lock-Button bleibt deaktiviert, "
+            "bis Stand und alle Risiken bestaetigt sind."
+        )
+    risks_ok = (not required_risk_keys) or all(
+        risk_confirmations.get(key, False) for key in required_risk_keys
+    )
+    can_click = bool(displayed_fingerprint and confirmed and risks_ok)
     if st.button(
         "Skript fuer Voice und Timing sperren",
         key="discovery_v2_create_script_lock",
-        disabled=not bool(displayed_fingerprint),
+        disabled=not can_click,
     ):
         result = create_script_lock(
             project,
