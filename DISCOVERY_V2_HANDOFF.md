@@ -918,10 +918,11 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 18. ~~Visual Edit / Repair Rework Plan~~ — dokumentiert (`655fcc8`)
 19. ~~Visual Edit Rework V1 Fixtures~~ — **abgeschlossen** (`70ffe6e`)
 20. ~~Visual Edit Rework V2 Planer~~ — **abgeschlossen** (`0fba7bd`)
+21. ~~Visual Edit Rework V3 Executable Repairs~~ — **abgeschlossen** (`f1b982a`)
 
-Nächste erlaubte Aktivität nach Freigabe: **Visual Edit Rework V3**.
-Script-Lock Realtest erfolgreich. Manueller Visual-Edit-Realtest erforderlich.
-**V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
+Nächste erlaubte Aktivität nach Freigabe: **Visual Edit Rework V4**.
+Script-Lock Realtest erfolgreich. Manueller V3-Realtest erforderlich.
+**V4 und R1.4 weiterhin gesperrt bis Freigabe.** R1.5–R1.6 weiterhin gesperrt.
 Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
