@@ -604,3 +604,36 @@ Current Plan bleibt erhalten; der fehlgeschlagene Run endet mit strukturiertem
 Fehlercode (`visual_edit_no_e3_compliant_assignment` bzw.
 `visual_edit_no_e4_compliant_source_range`). Bestehende Planversionen werden
 nicht in-place umgeschrieben.
+
+---
+
+## D-VE-REWORK-004 — Ausführbare versionierte Repair-Operationen
+
+**Entscheidung:** Repair Proposals enthalten versionierte, Pydantic-validierte
+ausführbare Operationen (`replace_assignment_asset`,
+`replace_assignment_source_range`, Schema `repair-operation-v1`). Die
+Operationsartefakte liegen als Sidecar-JSON unter `_otio_v2/editing/repairs/`
+(`repair_proposal_<id>.ops.json`). Freie, unversionierte JSON-Dictionaries sind
+nicht zulässig. Registry-Schema bleibt 20.
+
+---
+
+## D-VE-REWORK-005 — Explizite append-only Repair-Auswahl
+
+**Entscheidung:** Repair-Auswahl ist eine ausdrückliche append-only
+Nutzerentscheidung (`selected` / `rejected`) mit Decision-Sidecar
+(`repair_proposal_<id>.decisions.json`). Kein Proposal wird still angewendet.
+Generische Proposals ohne Operation sowie stale/rejected/applied Proposals sind
+nicht auswählbar. Doppelklick erzeugt keine doppelte fachliche Entscheidung
+(Decision-Fingerprint-Idempotenz).
+
+---
+
+## D-VE-REWORK-006 — Repair Apply erzeugt neue Planversion
+
+**Entscheidung:** Repair Apply erzeugt eine neue Visual-Edit-Planversion mit
+neuer Plan-ID und neuem Inhaltsfingerprint; bestehende Pläne bleiben unverändert
+historisch erhalten (`superseded`). Der neue Plan erhält `status=review_required`.
+Alte Humanity-/Feasibility-Ergebnisse werden nicht als Current übernommen.
+Humanity und Feasibility müssen separat erneut geprüft werden. No-Op-Apply und
+Konflikte erzeugen keinen neuen Current Plan.

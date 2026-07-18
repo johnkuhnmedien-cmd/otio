@@ -39,10 +39,11 @@
 - R1.1 Script-Lock Identity Rework: **abgeschlossen** (`8f4b9aa`)
 - R1.2 State/Routing: **abgeschlossen** (Produktcommit `4c6bfd9`)
 - R1.3 Review/Analyse: **abgeschlossen** (Produktcommits `45a5b4f`, `8b4c2ad`)
-- Aktueller HEAD: `0fba7bd4af0101ab44829a3fd1821319be4a7955`
+- Aktueller HEAD: `f1b982ae3a0b2b40b86f96d435909c482c30cc5f`
 - Visual Edit Rework Plan: `655fcc8`
 - Visual Edit Rework V1 Fixtures: `70ffe6e`
 - Visual Edit Rework V2 Planer: `0fba7bd`
+- Visual Edit Rework V3 Executable Repairs: `f1b982a`
 - Root Cause `editorial_registry_write_failed`: FakeText Coverage-Audit-ID ohne
   `run_id` → UNIQUE auf `coverage_audits.coverage_audit_id` bei Wiederanlauf
 - Root Cause Reload/Routing: Project nur in `session_state`; Mode-Fallback
@@ -54,33 +55,33 @@
   (zirkulär). Fix: Preview fachlich unabhängig; Bestätigungsschlüssel
   `gap_id:risk_code` (nicht `visual_intent_id`)
 - Script-Lock Realtest: **erfolgreich**
-- Root Cause Visual-Edit-Blocker: Fake `_visual_edit_plan` bindet alle Shots an
-  `candidates[0]` → E3; `_resolve_video_range` ohne Occupancy → E4; Repair Apply
-  klont nur; Fake Repair `vary_first_local_motif` nicht blockerbezogen; UI setzt
-  nie `user_status=selected`
+- Root Cause fehlende Repair-Auswahl: UI zeigte Proposals, setzte aber nie
+  `user_status=selected` → Apply blieb deaktiviert
+- Root Cause nicht ausführbare Proposals: Fake `vary_first_local_motif` ohne
+  Operationsartefakt; Apply klonte nur IDs ohne Asset-/Range-Diff
 - Plan: `docs/source_plans/ALPHA_VISUAL_EDIT_REPAIR_REWORK_PLAN.md`
 - V1+V2: Fake liefert `ranked_candidates` (Rotation A…F); Python erzwingt
-  E3/E4 bei Assignment/Range; Fehlercodes
-  `visual_edit_no_e3_compliant_assignment` /
-  `visual_edit_no_e4_compliant_source_range`; ungültiger Plan nicht Current
+  E3/E4 bei Assignment/Range; ungültiger Plan nicht Current
+- V2-Realtest: sechs unterschiedliche Assets
+- V3: Sidecar-Ops `repair-operation-v1`; Auswahl/Ablehnung append-only;
+  Apply → neue Planversion `review_required`; stale/conflict/no-effect blockiert
 - E3-Policy: `domain/visual_edit.py` `ASSET_REUSE_MAX = 3` (unverändert)
 - E4-Policy: `domain/visual_edit.py` `SOURCE_RANGE_OVERLAP_RATIO_MAX = 0.90`
   (unverändert)
-- Repair-Lücke (V3): `vary_first_local_motif` ohne ausführbare Ops — unverändert
-- Decisions: D-VE-REWORK-001…003
+- Decisions: D-VE-REWORK-001…006
 - Kanonische Route: `?project_id=<uuid>&page=<slug>` (+ Streamlit `url_path`);
   Flash + kontrollierter Rerun nach Mutationen/Jobstarts
 - Assetweise Fake-Vision-Queue; Batch Observation Review; Claim-Dualstatus;
   Coverage-Revalidierung nach accepted Reviews; Supplement-Gap nur nach Match
-- Aktiver Auftrag: keiner (V2 Planer erledigt)
+- Aktiver Auftrag: keiner (V3 Executable Repairs erledigt)
 - R1.3 Acceptance Evidence weiterhin offen
-- Manueller Realtest Visual Edit Plan (USA_v2) erforderlich
-- Nächste erlaubte Aktivität nach Freigabe: **Visual Edit Rework V3**
+- Manueller V3-Realtest (USA_v2) erforderlich
+- Nächste erlaubte Aktivität nach Freigabe: **Visual Edit Rework V4**
 - **V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **3001 collected / 2982 passed / 18 failed / 1 skipped**
+- Teststand: **3011 collected / 2992 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**

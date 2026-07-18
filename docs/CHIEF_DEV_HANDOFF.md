@@ -33,8 +33,8 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 - Repository / Worktree: Discovery-V2-Integration (`cursor/discovery-v2-integration`)
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Aktueller HEAD: `0fba7bd4af0101ab44829a3fd1821319be4a7955` (V2 Planer)
-- V1 Fixtures: `70ffe6e` · Plan: `655fcc8`
+- Aktueller HEAD: `f1b982ae3a0b2b40b86f96d435909c482c30cc5f` (V3 Executable Repairs)
+- V1 Fixtures: `70ffe6e` · V2 Planer: `0fba7bd` · Plan: `655fcc8`
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
 - R1.1 Produktcommit: `f3e015bad59e063ec2717f8ef793ca55a1362ae2`
 - R1.1 Script-Lock Identity: `8f4b9aacf0d854ff4dda02f80d37fa883d7797d7`
@@ -44,25 +44,26 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - Chief-Dev Alpha-Produktstand: **APPROVED**
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - Registry-Schema: **20**
-- Teststand: **3001 collected / 2982 passed / 18 failed / 1 skipped**
+- Teststand: **3011 collected / 2992 passed / 18 failed / 1 skipped**
 - Provider: Fake-only · Adobe: UNKNOWN · NLE: lokaler OTIO-Serialize/Reparse
 - **R1.1–R1.3 abgeschlossen** · Script-Lock Realtest **erfolgreich**
 - R1.3 Acceptance Evidence weiterhin offen
 - Decisions: D-R1.1-001…004 · D-R1.2-001…003 · D-R1.3-001…004 ·
-  D-VE-REWORK-001…003
-- Visual Edit Rework V1+V2: **abgeschlossen** — Fake `ranked_candidates`,
-  Python E3-/E4-Resolver; ungültiger Plan nicht Current; Policies unverändert
+  D-VE-REWORK-001…006
+- Visual Edit Rework V1+V2+V3: **abgeschlossen** — ausführbare Ops,
+  Auswahl/Ablehnung append-only, Apply → neue Planversion `review_required`
+- V2-Realtest: sechs unterschiedliche Assets
 - Plan: `docs/source_plans/ALPHA_VISUAL_EDIT_REPAIR_REWORK_PLAN.md`
-- **Manueller Realtest erforderlich** (neuen Visual Edit Plan erzeugen)
-- **Nächster erlaubter Schritt nach Freigabe: Visual Edit Rework V3**
-- **V4 und R1.4 weiterhin gesperrt**
+- **Manueller V3-Realtest erforderlich** (Proposal auswählen → Apply)
+- **Nächster erlaubter Schritt nach Freigabe: Visual Edit Rework V4**
+- **V4 und R1.4 weiterhin gesperrt bis Freigabe**
 - Keine neue Produktphase
 
 ## Nächste erlaubte Aktion nach Freigabe
 
-→ **Visual Edit Rework V3** (ausführbare Asset-/Range-Reassignment-Repairs)
+→ **Visual Edit Rework V4** (Loop-/Wiederholungs- und UI-Schutz)
 
-**Noch gesperrt:** Rework V4, R1.4–R1.6, echte Provider,
+**Noch gesperrt:** Rework V4 bis Freigabe, R1.4–R1.6, echte Provider,
 Style References, Shared Working Media, Schema-21 ohne Zwang, neue Produktphase.
 
 ## Verbindliche Kurzregeln
