@@ -86,7 +86,13 @@ def test_accepted_unresolved_keeps_risk_flags_separate_from_coverage_level(
 ) -> None:
     project = _coverage_project(tmp_path, temp_db_path)
     gap = materialize_gaps_from_current_coverage(project).gaps[0]
-    risk_gap = gap.model_copy(update={"risk_flags": [CoverageRiskFlag.TOO_GENERIC]})
+    risk_gap = gap.model_copy(
+        update={
+            "risk_flags": [CoverageRiskFlag.TOO_GENERIC],
+            "current_escalation_step": EscalationStep.USER_DECISION,
+            "status": CoverageGapStatus.IN_PROGRESS,
+        }
+    )
     from otio_app.discovery_v2.persistence import supplementation_repository as repo
 
     conn = repo.open_supplementation_registry(project.project_root_path)

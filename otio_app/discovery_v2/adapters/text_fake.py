@@ -342,7 +342,15 @@ class FakeTextAdapter:
             script_version = script.script_version
             brief_version = script.brief_version
             narrative_id = script.narrative_plan_id
-        audit_id = _id("coverage", request.project_id, script_id, request.input_fingerprint)
+        # Include run_id so repeated coverage runs with identical inputs do not
+        # collide on coverage_audits.coverage_audit_id (UNIQUE).
+        audit_id = _id(
+            "coverage",
+            request.project_id,
+            script_id,
+            request.input_fingerprint,
+            request.run_id,
+        )
         candidate_asset_ids = sorted(set(request.candidate_asset_ids))[:5]
         accepted_ids = [obs.observation_id for obs in request.observations]
         results = []

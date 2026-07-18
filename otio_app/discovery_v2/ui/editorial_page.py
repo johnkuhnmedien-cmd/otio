@@ -20,9 +20,13 @@ from otio_app.discovery_v2.application.coverage_gap_service import (
     accept_gap_unresolved,
     assign_local_deeper_review,
     escalate_gap,
+    evaluate_gap_accept_unresolved_eligibility,
     materialize_gaps_from_current_coverage,
 )
-from otio_app.discovery_v2.application.script_lock_service import create_script_lock
+from otio_app.discovery_v2.application.script_lock_service import (
+    create_script_lock,
+    preview_script_lock,
+)
 from otio_app.discovery_v2.application.supplementation_service import (
     create_graphic_plan,
     get_supplementation_view,
@@ -33,12 +37,26 @@ from otio_app.discovery_v2.application.supplementation_service import (
 )
 from otio_app.discovery_v2.ui.overview import active_discovery_project
 
+_FLASH_KEY = "discovery_v2_editorial_flash"
+
+
+def _consume_flash() -> None:
+    message = st.session_state.pop(_FLASH_KEY, None)
+    if message:
+        st.success(str(message))
+
+
+def _flash_and_rerun(message: str) -> None:
+    st.session_state[_FLASH_KEY] = message
+    st.rerun()
+
 
 def render_discovery_editorial_page() -> None:
     st.title("Editorial")
     project = active_discovery_project()
     if project is None:
         return
+    _consume_flash()
 
     st.info(
         "Lokaler Fake-Textadapter: Es werden keine Projektdaten an externe "
@@ -371,17 +389,36 @@ def _render_supplementation(project, view) -> None:
                     )
                     st.success("GraphicPlan angelegt; keine Grafik erzeugt.")
             with gap_cols[3]:
+                eligibility = evaluate_gap_accept_unresolved_eligibility(
+                    project, gap_id=gap.gap_id
+                )
+                if eligibility.visible_risks:
+                    st.caption(
+                        "Akzeptierbare Risiken: "
+                        + ", ".join(risk.value for risk in eligibility.visible_risks)
+                    )
+                if not eligibility.ok and eligibility.blockers:
+                    st.caption("Risikoannahme blockiert: " + "; ".join(eligibility.blockers))
+                confirm_accept = _checkbox(
+                    "Ich akzeptiere dieses Coverage-Risiko unaufgeloest",
+                    value=False,
+                    key=f"discovery_v2_gap_accept_confirm_{gap.gap_id}",
+                )
                 if st.button(
                     "Risiko unaufgeloest akzeptieren",
                     key=f"discovery_v2_gap_accept_unresolved_{gap.gap_id}",
-                    disabled=not gap.risk_flags,
+                    disabled=not (eligibility.ok and confirm_accept),
                 ):
                     result = accept_gap_unresolved(
                         project,
                         gap_id=gap.gap_id,
-                        confirmed_risks=[risk.value for risk in gap.risk_flags],
+                        confirmed_risks=[risk.value for risk in eligibility.visible_risks],
+                        user_confirmed=bool(confirm_accept),
                     )
-                    st.success(result.message) if result.ok else st.warning(result.message)
+                    if result.ok:
+                        _flash_and_rerun(result.message)
+                    else:
+                        st.warning(result.message)
             candidates = supp_view.candidates_by_gap.get(gap.gap_id, [])
             if candidates:
                 st.dataframe(
@@ -453,13 +490,27 @@ def _render_script_lock(project, view) -> None:
     st.write(
         "Lock ist synchron und manuell. Die Checkbox ist absichtlich nicht vorselektiert."
     )
-    fingerprint = st.text_input(
-        "Zu bestaetigender Lock-Fingerprint",
-        value="",
-        key="discovery_v2_lock_fingerprint",
-    )
+    preview = preview_script_lock(project)
+    if preview.fulfilled_requirements:
+        st.markdown("**Erfuellt**")
+        for item in preview.fulfilled_requirements:
+            st.write(f"✓ {item}")
+    if preview.blocking_requirements:
+        st.markdown("**Script Lock noch nicht moeglich**")
+        for item in preview.blocking_requirements:
+            st.write(f"✗ {item}")
+    displayed_fingerprint = preview.lock_fingerprint
+    if displayed_fingerprint:
+        st.markdown("**Aktueller Lock-Stand**")
+        st.code(f"Fingerprint: {preview.fingerprint_display or displayed_fingerprint[:12]}…")
+        with st.expander("Technische Details anzeigen", expanded=False):
+            st.code(displayed_fingerprint)
+        st.session_state["discovery_v2_lock_displayed_fingerprint"] = displayed_fingerprint
+    else:
+        st.caption("Kein Fingerprint verfuegbar, solange Blocker offen sind.")
+        st.session_state.pop("discovery_v2_lock_displayed_fingerprint", None)
     confirmed = _checkbox(
-        "Skript fuer Voice und Timing sperren",
+        "Ich bestaetige genau diesen aktuellen Stand.",
         value=False,
         key="discovery_v2_lock_confirmed",
     )
@@ -476,14 +527,20 @@ def _render_script_lock(project, view) -> None:
     if st.button(
         "Skript fuer Voice und Timing sperren",
         key="discovery_v2_create_script_lock",
+        disabled=not bool(displayed_fingerprint),
     ):
         result = create_script_lock(
             project,
             user_confirmed=bool(confirmed),
-            confirmed_fingerprint=fingerprint or None,
+            confirmed_fingerprint=st.session_state.get(
+                "discovery_v2_lock_displayed_fingerprint"
+            ),
             accepted_unresolved_risk_confirmations=risk_confirmations,
         )
-        st.success(result.message) if result.ok else st.warning(result.message)
+        if result.ok:
+            _flash_and_rerun(result.message)
+        else:
+            st.warning(result.message)
 
 
 def _render_runs(view) -> None:

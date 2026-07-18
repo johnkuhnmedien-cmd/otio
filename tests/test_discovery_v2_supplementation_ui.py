@@ -29,6 +29,7 @@ class _FakeStreamlit:
         self.buttons: list[str] = []
         self.messages: list[str] = []
         self.checkboxes: list[tuple[str, bool]] = []
+        self.session_state: dict = {}
 
     def title(self, text):
         self.messages.append(str(text))
@@ -66,6 +67,9 @@ class _FakeStreamlit:
     def container(self):
         return _FakeContext()
 
+    def expander(self, *args, **kwargs):
+        return _FakeContext()
+
     def columns(self, count):
         return [_FakeContext() for _ in range(count)]
 
@@ -89,6 +93,9 @@ class _FakeStreamlit:
     def checkbox(self, label, value=False, **kwargs):
         self.checkboxes.append((label, value))
         return value
+
+    def rerun(self):
+        return None
 
 
 def _project(tmp_path):
@@ -135,12 +142,35 @@ def test_supplementation_ui_renders_buttons_without_gateway_or_binary_preview(
         "get_supplementation_view",
         lambda p: SupplementationView(ok=True, gaps=[gap], can_start_supplementation=True),
     )
+    monkeypatch.setattr(
+        editorial_page,
+        "evaluate_gap_accept_unresolved_eligibility",
+        lambda project, gap_id: SimpleNamespace(
+            ok=False,
+            visible_risks=[],
+            blockers=["escalation_not_user_decision"],
+            message="blocked",
+        ),
+    )
+    monkeypatch.setattr(
+        editorial_page,
+        "preview_script_lock",
+        lambda p: SimpleNamespace(
+            ok=False,
+            lock_fingerprint=None,
+            fingerprint_display=None,
+            fulfilled_requirements=[],
+            blocking_requirements=["Coverage Gaps noch offen"],
+            blockers=["coverage_gap_open:gap-1"],
+        ),
+    )
     for name in (
         "start_search_run",
         "start_candidate_validation_run",
         "record_candidate_decision",
         "materialize_gaps_from_current_coverage",
         "create_script_lock",
+        "accept_gap_unresolved",
     ):
         monkeypatch.setattr(
             editorial_page,
@@ -157,4 +187,4 @@ def test_supplementation_ui_renders_buttons_without_gateway_or_binary_preview(
     assert "Ergaenzungskandidaten suchen" in fake_st.buttons
     assert "Skript fuer Voice und Timing sperren" in fake_st.buttons
     assert any("Fake-Ergaenzungskandidaten" in message for message in fake_st.messages)
-    assert ("Skript fuer Voice und Timing sperren", False) in fake_st.checkboxes
+    assert ("Ich bestaetige genau diesen aktuellen Stand.", False) in fake_st.checkboxes

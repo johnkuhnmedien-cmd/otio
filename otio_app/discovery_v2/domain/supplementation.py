@@ -115,6 +115,46 @@ class CoverageRiskFlag(str, Enum):
     REPETITION_RISK = "repetition_risk"
     POSSIBLE_SYNTHETIC_RISK = "possible_synthetic_risk"
     USER_DECISION_REQUIRED = "user_decision_required"
+    COVERAGE_EXACT_MATCH_NOT_VERIFIED = "coverage_exact_match_not_verified"
+
+
+# Explicit allow-list only. Unknown missing_properties are never auto-acceptable.
+ACCEPTABLE_MISSING_PROPERTY_RISK_MAP: dict[str, CoverageRiskFlag] = {
+    "exact_match_not_verified": CoverageRiskFlag.COVERAGE_EXACT_MATCH_NOT_VERIFIED,
+}
+
+
+def derive_acceptable_risks_from_missing_properties(
+    missing_properties: list[str] | tuple[str, ...] | None,
+) -> list[CoverageRiskFlag]:
+    """Map known missing_properties onto visible acceptable CoverageRiskFlags."""
+    derived: list[CoverageRiskFlag] = []
+    seen: set[CoverageRiskFlag] = set()
+    for item in missing_properties or ():
+        key = str(item).strip()
+        mapped = ACCEPTABLE_MISSING_PROPERTY_RISK_MAP.get(key)
+        if mapped is None or mapped in seen:
+            continue
+        derived.append(mapped)
+        seen.add(mapped)
+    return derived
+
+
+def merge_gap_risk_flags(
+    existing: list[CoverageRiskFlag] | tuple[CoverageRiskFlag, ...] | None,
+    missing_properties: list[str] | tuple[str, ...] | None,
+) -> list[CoverageRiskFlag]:
+    """Union existing risk_flags with explicitly derived acceptable risks."""
+    merged: list[CoverageRiskFlag] = []
+    seen: set[CoverageRiskFlag] = set()
+    for risk in list(existing or ()) + derive_acceptable_risks_from_missing_properties(
+        missing_properties
+    ):
+        if risk in seen:
+            continue
+        merged.append(risk)
+        seen.add(risk)
+    return merged
 
 
 class CoverageGapStatus(str, Enum):
@@ -666,6 +706,7 @@ __all__ = [name for name in globals() if name.startswith("SUPPLEMENTATION_")] + 
     "CoverageGap",
     "CoverageGapStatus",
     "CoverageLevel",
+    "ACCEPTABLE_MISSING_PROPERTY_RISK_MAP",
     "CoverageRiskFlag",
     "ESCALATION_SEQUENCE",
     "EscalationStep",
@@ -700,6 +741,8 @@ __all__ = [name for name in globals() if name.startswith("SUPPLEMENTATION_")] + 
     "SupplementationRunStatus",
     "TERMINAL_GAP_STATUSES",
     "coverage_gap_fingerprint",
+    "derive_acceptable_risks_from_missing_properties",
+    "merge_gap_risk_flags",
     "metadata_fingerprint",
     "observation_identity_fingerprint",
     "preview_hash_from_bytes",

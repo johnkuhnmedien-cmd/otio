@@ -64,12 +64,27 @@ class ScriptLockServiceError(InventoryServiceError):
 
 
 @dataclass(frozen=True)
+class ScriptLockRequirement:
+    code: str
+    label: str
+    ok: bool
+
+
+@dataclass(frozen=True)
 class ScriptLockPreview:
     ok: bool
     lock_fingerprint: str | None = None
+    fingerprint_display: str | None = None
     blockers: list[str] = field(default_factory=list)
+    fulfilled_requirements: list[str] = field(default_factory=list)
+    blocking_requirements: list[str] = field(default_factory=list)
+    requirement_details: list[ScriptLockRequirement] = field(default_factory=list)
     accepted_open_risks: list[str] = field(default_factory=list)
     claim_snapshot: list[dict[str, object]] = field(default_factory=list)
+
+    @property
+    def can_lock(self) -> bool:
+        return bool(self.ok and self.lock_fingerprint)
 
 
 @dataclass(frozen=True)
@@ -332,7 +347,8 @@ def _build_preview(
     elif script.status == ScriptDraftStatus.STRUCTURE_PENDING:
         blockers.append("script_structure_pending")
     bundle = None if script is None else editorial_repo.get_script_bundle(conn, script_id=script.script_id)
-    if not _bundle_has_full_structure(bundle):
+    structure_ok = _bundle_has_full_structure(bundle)
+    if not structure_ok:
         blockers.append("script_structure_incomplete")
     coverage = None
     if state is not None and state.active_coverage_audit_id:
@@ -342,8 +358,10 @@ def _build_preview(
         )
     if coverage is None or coverage.status != CoverageAuditStatus.COMPLETED:
         blockers.append("coverage_audit_missing_or_stale")
+    stale_inputs = False
     if script is not None and coverage is not None and coverage.script_id != script.script_id:
-        blockers.append("coverage_script_stale")
+        blockers.append("coverage_audit_stale")
+        stale_inputs = True
     observations = list_editorial_ready_observations(project)
     observation_fingerprint = compute_observation_set_fingerprint(
         [
@@ -361,7 +379,8 @@ def _build_preview(
         ]
     )
     if coverage is not None and coverage.input_observation_fingerprint != observation_fingerprint:
-        blockers.append("observation_fingerprint_stale")
+        blockers.append("coverage_audit_stale")
+        stale_inputs = True
     gaps = (
         []
         if coverage is None
@@ -372,6 +391,7 @@ def _build_preview(
         )
     )
     accepted_risks: list[str] = []
+    open_gap_count = 0
     confirmations = accepted_unresolved_risk_confirmations or {}
     for gap in gaps:
         if gap.status in {
@@ -379,23 +399,54 @@ def _build_preview(
             CoverageGapStatus.RESOLVED_WITH_SUPPLEMENT,
             CoverageGapStatus.RESOLVED_BY_SCRIPT_REVISION,
             CoverageGapStatus.RESOLVED_BY_GRAPHIC_PLAN,
+            CoverageGapStatus.SUPERSEDED,
         }:
             continue
         if gap.status == CoverageGapStatus.ACCEPTED_UNRESOLVED:
-            for risk in gap.risk_flags:
+            # Use persisted accepted risks only — do not re-derive from
+            # missing_properties after an explicit accept decision.
+            for risk in gap.accepted_unresolved_risks or gap.risk_flags:
                 key = f"{gap.gap_id}:{risk.value}"
-                if risk not in gap.accepted_unresolved_risks or not confirmations.get(key, allow_existing_lock):
+                if risk not in gap.accepted_unresolved_risks or not confirmations.get(
+                    key, allow_existing_lock
+                ):
                     blockers.append(f"accepted_unresolved_risk_unconfirmed:{key}")
                 else:
                     accepted_risks.append(key)
             continue
+        open_gap_count += 1
         blockers.append(f"coverage_gap_open:{gap.gap_id}")
     claim_snapshot, claim_blockers = _claim_snapshot_and_blockers(conn, project, script, bundle)
     blockers.extend(claim_blockers)
+    # Active runs are checked in create_script_lock; preview focuses on data readiness.
+    details = _requirement_details(
+        brief_ok=brief is not None,
+        narrative_ok=bool(state and state.active_narrative_plan_id),
+        hook_ok=bool(state and state.selected_hook_id),
+        script_ok=script is not None,
+        structure_ok=structure_ok,
+        claims_ok=not any(
+            item.startswith(SUPPLEMENTATION_ERROR_CLAIM_DECISION_REQUIRED)
+            or item.startswith(SUPPLEMENTATION_ERROR_CLAIM_DECISION_STALE)
+            or item.startswith("claim_revision_required:")
+            for item in blockers
+        ),
+        coverage_ok=coverage is not None
+        and coverage.status == CoverageAuditStatus.COMPLETED
+        and not stale_inputs,
+        gaps_terminal=open_gap_count == 0
+        and not any(item.startswith("accepted_unresolved_risk_unconfirmed:") for item in blockers),
+        open_gap_count=open_gap_count,
+    )
+    fulfilled = [item.label for item in details if item.ok]
+    blocking = [item.label for item in details if not item.ok]
     if blockers or script is None or brief is None or coverage is None or state is None:
         return ScriptLockPreview(
             ok=False,
             blockers=blockers,
+            fulfilled_requirements=fulfilled,
+            blocking_requirements=blocking,
+            requirement_details=details,
             accepted_open_risks=accepted_risks,
             claim_snapshot=claim_snapshot,
         )
@@ -427,10 +478,43 @@ def _build_preview(
     return ScriptLockPreview(
         ok=True,
         lock_fingerprint=fingerprint,
+        fingerprint_display=fingerprint[:12],
         blockers=[],
+        fulfilled_requirements=fulfilled,
+        blocking_requirements=[],
+        requirement_details=details,
         accepted_open_risks=accepted_risks,
         claim_snapshot=claim_snapshot,
     )
+
+
+def _requirement_details(
+    *,
+    brief_ok: bool,
+    narrative_ok: bool,
+    hook_ok: bool,
+    script_ok: bool,
+    structure_ok: bool,
+    claims_ok: bool,
+    coverage_ok: bool,
+    gaps_terminal: bool,
+    open_gap_count: int,
+) -> list[ScriptLockRequirement]:
+    gap_label = (
+        "alle Coverage Gaps terminal"
+        if gaps_terminal
+        else f"{open_gap_count} Coverage Gaps noch offen"
+    )
+    return [
+        ScriptLockRequirement("project_brief", "aktueller Brief", brief_ok),
+        ScriptLockRequirement("narrative_plan", "aktueller Narrative Plan", narrative_ok),
+        ScriptLockRequirement("selected_hook", "ausgewählter Hook", hook_ok),
+        ScriptLockRequirement("script", "aktuelles Script", script_ok),
+        ScriptLockRequirement("structure", "Struktur aktuell", structure_ok),
+        ScriptLockRequirement("claims", "Claims entschieden", claims_ok),
+        ScriptLockRequirement("coverage_audit", "aktueller Coverage Audit", coverage_ok),
+        ScriptLockRequirement("coverage_gaps", gap_label, gaps_terminal),
+    ]
 
 
 def _bundle_has_full_structure(bundle: dict | None) -> bool:
@@ -503,6 +587,7 @@ def _coverage_fingerprint(conn, project: Project, coverage_audit_id: str) -> str
 
 __all__ = [
     "ScriptLockPreview",
+    "ScriptLockRequirement",
     "ScriptLockResult",
     "ScriptLockServiceError",
     "create_script_lock",

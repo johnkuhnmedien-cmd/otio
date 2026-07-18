@@ -26,6 +26,7 @@ class _FakeStreamlit:
     def __init__(self) -> None:
         self.buttons: list[str] = []
         self.messages: list[str] = []
+        self.session_state: dict = {}
 
     def title(self, text):
         self.messages.append(str(text))
@@ -63,6 +64,9 @@ class _FakeStreamlit:
     def container(self):
         return _FakeContext()
 
+    def expander(self, *args, **kwargs):
+        return _FakeContext()
+
     def columns(self, count):
         return [_FakeContext() for _ in range(count)]
 
@@ -75,6 +79,9 @@ class _FakeStreamlit:
     def number_input(self, label, value=0, **kwargs):
         return value
 
+    def checkbox(self, label, value=False, **kwargs):
+        return value
+
     def form_submit_button(self, label, **kwargs):
         self.buttons.append(label)
         return False
@@ -82,6 +89,9 @@ class _FakeStreamlit:
     def button(self, label, **kwargs):
         self.buttons.append(label)
         return False
+
+    def rerun(self):
+        return None
 
 
 def _project(tmp_path):
@@ -108,6 +118,30 @@ def test_editorial_ui_renders_without_starting_jobs_or_gateway(tmp_path, monkeyp
         "get_editorial_view",
         lambda p: EditorialView(ok=True, can_start_narrative=True),
     )
+    monkeypatch.setattr(
+        editorial_page,
+        "get_supplementation_view",
+        lambda p: SimpleNamespace(
+            ok=True,
+            gaps=[],
+            candidates_by_gap={},
+            script_locks=[],
+            active_run=None,
+            message=None,
+        ),
+    )
+    monkeypatch.setattr(
+        editorial_page,
+        "preview_script_lock",
+        lambda p: SimpleNamespace(
+            ok=False,
+            lock_fingerprint=None,
+            fingerprint_display=None,
+            fulfilled_requirements=[],
+            blocking_requirements=["aktuelles Script"],
+            blockers=["script_missing"],
+        ),
+    )
     for name in (
         "start_narrative_run",
         "start_script_run",
@@ -116,6 +150,8 @@ def test_editorial_ui_renders_without_starting_jobs_or_gateway(tmp_path, monkeyp
         "save_project_brief",
         "save_user_script_edit",
         "select_hook",
+        "create_script_lock",
+        "accept_gap_unresolved",
     ):
         monkeypatch.setattr(
             editorial_page,

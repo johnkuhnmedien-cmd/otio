@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,6 +15,9 @@ from otio_app.discovery_v2.application.observation_review_service import (
     list_editorial_ready_observations,
 )
 from otio_app.discovery_v2.domain.editorial import (
+    EDITORIAL_ERROR_COVERAGE_ARTIFACT_PUBLISH_FAILED,
+    EDITORIAL_ERROR_COVERAGE_AUDIT_PERSIST_FAILED,
+    EDITORIAL_ERROR_COVERAGE_CURRENT_STATE_UPDATE_FAILED,
     EDITORIAL_ERROR_INPUT_STALE,
     EDITORIAL_ERROR_PROJECT_BRIEF_MISSING,
     EDITORIAL_ERROR_REGISTRY_WRITE_FAILED,
@@ -369,29 +373,109 @@ def _process_coverage(conn, root: Path, run: EditorialRun) -> EditorialRun:
     if response.coverage is None:
         raise EditorialWorkerError(EDITORIAL_ERROR_INPUT_STALE, "Coverage response missing.")
     audit = response.coverage.coverage_audit
-    relative = repo.save_coverage_json(root, audit)
+
+    # Preserve prior current audit until the new audit is fully persisted.
+    prior_state = repo.get_project_state(conn, project_id=run.project_id)
+    prior_audit_id = None if prior_state is None else prior_state.active_coverage_audit_id
+
+    existing = repo.get_coverage_audit(conn, coverage_audit_id=audit.coverage_audit_id)
+    if existing is not None:
+        # Idempotent reuse of an already-persisted audit identity.
+        relative = repo.save_coverage_json(root, existing)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            state = repo.get_project_state(conn, project_id=run.project_id)
+            if state is not None:
+                repo.upsert_project_state(
+                    conn,
+                    state.model_copy(
+                        update={
+                            "active_coverage_audit_id": existing.coverage_audit_id,
+                            "observation_fingerprint": observation_fingerprint,
+                            "status": EditorialProjectStateStatus.ACTIVE,
+                            "updated_at": _now(),
+                        }
+                    ),
+                )
+            _complete_attempt(
+                conn,
+                root,
+                attempt,
+                {"coverage_audit": existing.model_dump(mode="json"), "reused": True},
+            )
+            conn.commit()
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            raise EditorialWorkerError(
+                EDITORIAL_ERROR_COVERAGE_CURRENT_STATE_UPDATE_FAILED,
+                _sanitize_stage_error(exc),
+            ) from exc
+        return _complete_run(conn, run)
+
+    try:
+        relative = repo.save_coverage_json(root, audit)
+    except Exception as exc:  # noqa: BLE001
+        raise EditorialWorkerError(
+            EDITORIAL_ERROR_COVERAGE_ARTIFACT_PUBLISH_FAILED,
+            _sanitize_stage_error(exc),
+        ) from exc
+
     try:
         conn.execute("BEGIN IMMEDIATE")
-        repo.insert_coverage_audit(conn, audit, relative)
-        state = repo.get_project_state(conn, project_id=run.project_id)
-        if state is not None:
-            repo.upsert_project_state(
-                conn,
-                state.model_copy(
-                    update={
-                        "active_coverage_audit_id": audit.coverage_audit_id,
-                        "observation_fingerprint": observation_fingerprint,
-                        "status": EditorialProjectStateStatus.ACTIVE,
-                        "updated_at": _now(),
-                    }
-                ),
-            )
+        try:
+            repo.insert_coverage_audit(conn, audit, relative)
+        except sqlite3.IntegrityError as exc:
+            conn.rollback()
+            # Race / deterministic-id collision: never promote a failed write.
+            if prior_state is not None and prior_audit_id:
+                # Ensure current pointer is unchanged after rollback.
+                pass
+            raise EditorialWorkerError(
+                EDITORIAL_ERROR_COVERAGE_AUDIT_PERSIST_FAILED,
+                _sanitize_stage_error(exc),
+            ) from exc
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            raise EditorialWorkerError(
+                EDITORIAL_ERROR_COVERAGE_AUDIT_PERSIST_FAILED,
+                _sanitize_stage_error(exc),
+            ) from exc
+        try:
+            state = repo.get_project_state(conn, project_id=run.project_id)
+            if state is not None:
+                repo.upsert_project_state(
+                    conn,
+                    state.model_copy(
+                        update={
+                            "active_coverage_audit_id": audit.coverage_audit_id,
+                            "observation_fingerprint": observation_fingerprint,
+                            "status": EditorialProjectStateStatus.ACTIVE,
+                            "updated_at": _now(),
+                        }
+                    ),
+                )
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            raise EditorialWorkerError(
+                EDITORIAL_ERROR_COVERAGE_CURRENT_STATE_UPDATE_FAILED,
+                _sanitize_stage_error(exc),
+            ) from exc
         _complete_attempt(conn, root, attempt, {"coverage_audit": audit.model_dump(mode="json")})
         conn.commit()
-    except Exception:
-        conn.rollback()
+    except EditorialWorkerError:
         raise
+    except Exception as exc:  # noqa: BLE001
+        conn.rollback()
+        raise EditorialWorkerError(
+            EDITORIAL_ERROR_REGISTRY_WRITE_FAILED,
+            _sanitize_stage_error(exc),
+        ) from exc
     return _complete_run(conn, run)
+
+
+def _sanitize_stage_error(exc: BaseException) -> str:
+    text = " ".join(str(exc).split())
+    return text[:500] if text else "coverage_persist_failed"
 
 
 def _start_attempt(conn, run: EditorialRun, request: TextGatewayRequest) -> EditorialAttempt:

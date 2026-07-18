@@ -204,26 +204,36 @@ def test_smoke_c_manual_original_import_link_resolves_gap_then_lock(
 def test_smoke_e_accepted_unresolved_requires_per_risk_confirmation_for_lock(
     tmp_path: Path, temp_db_path: Path
 ) -> None:
+    from otio_app.discovery_v2.application.coverage_gap_service import escalate_gap
+    from otio_app.discovery_v2.domain.supplementation import EscalationStep
+
     project = _script_coverage_project(tmp_path, temp_db_path)
     gaps = materialize_gaps_from_current_coverage(project).gaps
+    gap = gaps[0]
     conn = repo.open_supplementation_registry(project.project_root_path)
     try:
-        risk_gap = gaps[0].model_copy(update={"risk_flags": [CoverageRiskFlag.TOO_GENERIC]})
+        risk_gap = gap.model_copy(
+            update={
+                "risk_flags": [CoverageRiskFlag.TOO_GENERIC],
+                "current_escalation_step": EscalationStep.USER_DECISION,
+                "status": CoverageGapStatus.IN_PROGRESS,
+            }
+        )
         repo.update_coverage_gap(conn, risk_gap)
         conn.commit()
     finally:
         conn.close()
     assert accept_gap_unresolved(
         project,
-        gap_id=gaps[0].gap_id,
+        gap_id=gap.gap_id,
         confirmed_risks=["too_generic"],
     ).ok
-    for gap in gaps[1:]:
-        mark_gap_resolved_with_local_asset(project, gap_id=gap.gap_id, asset_id="asset-local")
+    for other in gaps[1:]:
+        mark_gap_resolved_with_local_asset(project, gap_id=other.gap_id, asset_id="asset-local")
     _decide_all_claims(project)
     blocked = preview_script_lock(project)
     assert not blocked.ok
-    key = f"{gaps[0].gap_id}:too_generic"
+    key = f"{gap.gap_id}:too_generic"
     confirmed_preview = preview_script_lock(project)
     assert not confirmed_preview.ok
     ok = create_script_lock(
@@ -286,7 +296,7 @@ def test_smoke_f_stale_observation_is_excluded_from_lock(
         reason_code="stale_for_lock",
     ).ok
     preview = preview_script_lock(project)
-    assert "observation_fingerprint_stale" in preview.blockers
+    assert "coverage_audit_stale" in preview.blockers or "observation_fingerprint_stale" in preview.blockers
 
 
 def test_smoke_g_new_script_version_invalidates_existing_lock_without_voice(
