@@ -39,11 +39,13 @@
 - R1.1 Script-Lock Identity Rework: **abgeschlossen** (`8f4b9aa`)
 - R1.2 State/Routing: **abgeschlossen** (Produktcommit `4c6bfd9`)
 - R1.3 Review/Analyse: **abgeschlossen** (Produktcommits `45a5b4f`, `8b4c2ad`)
-- Aktueller HEAD: `f1b982ae3a0b2b40b86f96d435909c482c30cc5f`
+- Aktueller HEAD: Coverage-Idempotenz-Plan (Basis `8e9a02c` + Plan-Commit)
 - Visual Edit Rework Plan: `655fcc8`
 - Visual Edit Rework V1 Fixtures: `70ffe6e`
 - Visual Edit Rework V2 Planer: `0fba7bd`
 - Visual Edit Rework V3 Executable Repairs: `f1b982a`
+- Coverage Idempotency Plan:
+  `docs/source_plans/ALPHA_COVERAGE_IDEMPOTENCY_CARRY_FORWARD_PLAN.md`
 - Root Cause `editorial_registry_write_failed`: FakeText Coverage-Audit-ID ohne
   `run_id` → UNIQUE auf `coverage_audits.coverage_audit_id` bei Wiederanlauf
 - Root Cause Reload/Routing: Project nur in `session_state`; Mode-Fallback
@@ -73,13 +75,18 @@
   Flash + kontrollierter Rerun nach Mutationen/Jobstarts
 - Assetweise Fake-Vision-Queue; Batch Observation Review; Claim-Dualstatus;
   Coverage-Revalidierung nach accepted Reviews; Supplement-Gap nur nach Match
-- Aktiver Auftrag: keiner (V3 Executable Repairs erledigt)
+- V3-Realtest: ehrlicher `additional_coverage_required`-Fall erreicht
+- Reproduzierbarer Coverage-Reset (read-only): Audits
+  `969e015d-…` und `211d6cee-…` fachlich gleichwertig, trotzdem neue Gap-IDs
+  und Verlust von Eskalation/`user_decision` → Script Lock erneut offen
+- Root Cause: Fake-Audit-ID inkl. `run_id`; Worker-Reuse nur per Audit-ID;
+  Gap-Materialisierung supersedet audit-fremd ohne Input-Äquivalenzprüfung
+- Aktiver Auftrag: keiner (Coverage-Idempotenz-Plan dokumentiert)
 - R1.3 Acceptance Evidence weiterhin offen
-- Manueller V3-Realtest (USA_v2) erforderlich
-- Nächste erlaubte Aktivität nach Freigabe: **Visual Edit Rework V4**
-- **V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
+- Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C1**
+- **C2–C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
-- Keine neue Produktphase freigegeben
+- Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
 - Teststand: **3011 collected / 2992 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
@@ -919,10 +926,12 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 19. ~~Visual Edit Rework V1 Fixtures~~ — **abgeschlossen** (`70ffe6e`)
 20. ~~Visual Edit Rework V2 Planer~~ — **abgeschlossen** (`0fba7bd`)
 21. ~~Visual Edit Rework V3 Executable Repairs~~ — **abgeschlossen** (`f1b982a`)
+22. ~~Coverage Idempotency / Carry-Forward Plan~~ — dokumentiert
 
-Nächste erlaubte Aktivität nach Freigabe: **Visual Edit Rework V4**.
-Script-Lock Realtest erfolgreich. Manueller V3-Realtest erforderlich.
-**V4 und R1.4 weiterhin gesperrt bis Freigabe.** R1.5–R1.6 weiterhin gesperrt.
+Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C1**.
+Script-Lock Realtest erfolgreich. V3-Realtest:
+`additional_coverage_required` ehrlich; E2E durch Coverage-Reset blockiert.
+**C2–C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
 Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`

@@ -33,38 +33,33 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 - Repository / Worktree: Discovery-V2-Integration (`cursor/discovery-v2-integration`)
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Aktueller HEAD: `f1b982ae3a0b2b40b86f96d435909c482c30cc5f` (V3 Executable Repairs)
-- V1 Fixtures: `70ffe6e` · V2 Planer: `0fba7bd` · Plan: `655fcc8`
+- Aktueller HEAD: Planungsstand Coverage-Idempotenz (Basis `8e9a02c` + Plan-Commit)
+- V1–V3 Visual Edit: `70ffe6e` / `0fba7bd` / `f1b982a`
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
-- R1.1 Produktcommit: `f3e015bad59e063ec2717f8ef793ca55a1362ae2`
-- R1.1 Script-Lock Identity: `8f4b9aacf0d854ff4dda02f80d37fa883d7797d7`
-- R1.2 Produktcommit: `4c6bfd99c50de075c15597d94c728918697bf6c9`
-- R1.3 Produktcommits: `45a5b4fd3144b7b0bfa6e0489e8cd9bbdbc9cc96`,
-  `8b4c2ad1d1562e50657f2759a8e68debda469bf2`
+- R1.1–R1.3 abgeschlossen · Script-Lock Realtest **erfolgreich**
 - Chief-Dev Alpha-Produktstand: **APPROVED**
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - Registry-Schema: **20**
 - Teststand: **3011 collected / 2992 passed / 18 failed / 1 skipped**
 - Provider: Fake-only · Adobe: UNKNOWN · NLE: lokaler OTIO-Serialize/Reparse
-- **R1.1–R1.3 abgeschlossen** · Script-Lock Realtest **erfolgreich**
-- R1.3 Acceptance Evidence weiterhin offen
 - Decisions: D-R1.1-001…004 · D-R1.2-001…003 · D-R1.3-001…004 ·
   D-VE-REWORK-001…006
-- Visual Edit Rework V1+V2+V3: **abgeschlossen** — ausführbare Ops,
-  Auswahl/Ablehnung append-only, Apply → neue Planversion `review_required`
-- V2-Realtest: sechs unterschiedliche Assets
-- Plan: `docs/source_plans/ALPHA_VISUAL_EDIT_REPAIR_REWORK_PLAN.md`
-- **Manueller V3-Realtest erforderlich** (Proposal auswählen → Apply)
-- **Nächster erlaubter Schritt nach Freigabe: Visual Edit Rework V4**
-- **V4 und R1.4 weiterhin gesperrt bis Freigabe**
-- Keine neue Produktphase
+- Visual Edit V1–V3: **abgeschlossen**; V3-Realtest:
+  `additional_coverage_required` ehrlich
+- **Blocker End-to-End:** äquivalenter Coverage-Audit erhält neue Audit-ID →
+  Gaps superseded → Eskalation/Decisions verloren → Script Lock erneut offen
+- Plan: `docs/source_plans/ALPHA_COVERAGE_IDEMPOTENCY_CARRY_FORWARD_PLAN.md`
+- **Nächster erlaubter Schritt nach Freigabe: Coverage Stability C1**
+- **C2–C4, V4 und R1.4 gesperrt** · echte Provider gesperrt
+- Keine neue Produktphase · keine Nutzerregistry-Reparatur
 
 ## Nächste erlaubte Aktion nach Freigabe
 
-→ **Visual Edit Rework V4** (Loop-/Wiederholungs- und UI-Schutz)
+→ **Coverage Stability C1** (Fixtures + reproduzierbarer Root-Cause-Test)
 
-**Noch gesperrt:** Rework V4 bis Freigabe, R1.4–R1.6, echte Provider,
-Style References, Shared Working Media, Schema-21 ohne Zwang, neue Produktphase.
+**Noch gesperrt:** C2–C4 bis nach C1-Freigabe, Rework V4, R1.4–R1.6,
+echte Provider, Style References, Shared Working Media, Schema-21 ohne Zwang,
+neue Produktphase.
 
 ## Verbindliche Kurzregeln
 
