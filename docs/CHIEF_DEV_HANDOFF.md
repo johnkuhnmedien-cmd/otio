@@ -31,34 +31,43 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 ## Repository-Lage
 
+- Repository / Worktree: Discovery-V2-Integration (`cursor/discovery-v2-integration`)
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Chief-Dev-Status: **`APPROVED_WITH_CONDITIONS`**
+- Aktueller Planungs-Ausgang-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
+- Chief-Dev Alpha-Produktstand: **APPROVED**
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
-- Phase 7–13: **abgeschlossen** (Fake / MANUAL)
 - Registry-Schema: **20**
-- OTIO-Profil: `discovery-otio-export-v1` · OpenTimelineIO **0.18.1**
-- Vision / Text / Stock / Voice: **Fake-only**
-- Adobe: **UNKNOWN**
-- NLE: **nur lokaler OTIO-Serialize/Reparse-Nachweis**
 - Teststand: **2915 collected / 2896 passed / 18 failed / 1 skipped**
-- Alpha-E2E: **bestanden** (lokal, Fake-only)
-- Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
-- **Aktueller Schritt: Alpha-Release Closeout — keine neue Produktphase**
-- Plan Phase 13: `docs/source_plans/PHASE13_EDITORIAL_APPROVAL_OTIO_E2E_PLAN.md`
-- Entscheidungen: D-10-001 … D-10-008; D-11-001 … D-11-011; D-12-001 … D-12-008; D-13-001 … D-13-008
+- Provider: Fake-only · Adobe: UNKNOWN · NLE: lokaler OTIO-Serialize/Reparse
+- Interne Alpha-Erprobung: **End-to-End blockiert** am Coverage-/Script-Lock-Gate
+- Reproduzierter Blocker:
+  - Coverage `partially_covered`
+  - Gap `in_progress` @ Escalation `user_decision`
+  - `missing_properties=["exact_match_not_verified"]`
+  - `risk_flags=[]`
+  - Candidates alle `rejected`
+  - UI „Risiko unaufgelöst akzeptieren“ disabled
+  - Script-Lock-Fingerprint leer
+- Zusätzlich beobachtet: `editorial_registry_write_failed`, stale Viewmodels,
+  Reload verliert Projekt/Seite, fehlendes Job-Polling, Analyse-Frame-Limit,
+  Einzel-Observation-Review, Claim-Status unsichtbar, Intake ohne Speicher-Preflight
+- **Aktueller Schritt: R1-Planung** —
+  `docs/source_plans/ALPHA_UX_WORKFLOW_STABILIZATION_R1_PLAN.md`
+- Keine neue Produktphase
 
-## Nächste erlaubte Aktivität
+## Nächste erlaubte Aktion nach Freigabe
 
-→ **Kontrollierter Alpha-Merge beziehungsweise interne Alpha-Erprobung**
+→ **R1.1 Blocker-Implementierung**
 
-Keine neue Produktphase freigegeben.
+Umfasst nur:
 
-Weiterhin gesperrt ohne eigene Gates:
+1. Coverage Gap `accepted_unresolved` für Partial-Coverage-Pfad
+2. `editorial_registry_write_failed` RCA + atomare Writes
+3. Script-Lock-Gate verständlich
+4. Fingerprint-UX (Checkbox, kein Freitext; Sicherheit erhalten)
 
-- echte Stock-/Text-/Vision-/Voice-Provider
-- proprietäre NLE-Exporte (Premiere / DaVinci / Final Cut)
-- Cloud-Upload / Publishing
-- AUTOMATIC-Orchestrierung (Post-Alpha)
+**Noch gesperrt:** R1.2–R1.6, echte Provider, Style References,
+Shared Working Media, Schema-21 ohne Zwang, neue Produktphase.
 
 ## Verbindliche Kurzregeln
 
@@ -67,9 +76,10 @@ Weiterhin gesperrt ohne eigene Gates:
 - Export Validation vor jedem OTIO
 - OTIO nur Working Media + aktuelle Narration-WAVs
 - Completed erst nach Reparse + Semantik
-- Classic `_otio/` read-only; Discovery Export unter `_otio_v2/export/`
+- Classic `_otio/` read-only; Discovery unter `_otio_v2/`
 - KI-Timelines = `NEGATIVE_REFERENCE`
 - Gateways zentral; keine stillen Provider
+- Keine Registry-Manipulation durch die UI
 
 ## Alpha-DoD (Auszug)
 
