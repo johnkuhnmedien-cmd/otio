@@ -486,3 +486,35 @@ mit `code=script_lock_fingerprint_mismatch`. Ein historischer fehlgeschlagener
 Coverage-Run blockiert den Lock nicht, solange ein gültiger Current Audit
 vorliegt und alle Gaps terminal sind; geänderte Inputs seit dem Audit blockieren
 mit `coverage_audit_stale`.
+
+---
+
+## D-R1.2-001 — Discovery-Route ist reload-fähig und kanonisch
+
+**Entscheidung:** Discovery-V2-Projekt und -Seite besitzen einen reload-fähigen
+kanonischen Routenzustand über Query-Parameter (`project_id`, `page`) und die
+bestehenden Streamlit-`url_path`-Segmente. `st.session_state` darf UI-Zustand
+cachen, ist aber nicht alleinige Wahrheit für Project-ID, Project Mode oder
+aktuelle Discovery-Seite. Der Projektmodus wird aus dem persistierten Projekt
+geladen und nicht blind aus der URL vertraut. Ungültige Project-IDs und
+Moduskonflikte führen zu verständlicher Projektauswahl bzw. Moduskonflikt —
+nicht zu einem stillen Classic-Fallback. Unbekannte Seiten fallen kontrolliert
+auf die Discovery-Startseite (`overview`) zurück; die Project-ID bleibt erhalten.
+
+---
+
+## D-R1.2-002 — Erfolgreiche Mutationen laden frische Viewmodels
+
+**Entscheidung:** Erfolgreiche synchrone Discovery-V2-Mutationen und explizite
+Jobstarts speichern eine Flash-Meldung und lösen genau einmal `st.rerun()` aus.
+Der Folgerender lädt das Application-Viewmodel neu. Es gibt kein stilles
+Auto-Accept und keine doppelte fachliche Mutation durch den Rerun.
+
+---
+
+## D-R1.2-003 — Rendering und Rerun starten keine I/O-Folgen
+
+**Entscheidung:** Rendering, Browser-Reload und kontrollierte Reruns starten
+keine Jobs, Gateways oder Medienoperationen automatisch. Jobstarts erfolgen
+nur über explizite Buttonklicks; ein Rerun nach Jobstart erzeugt denselben Job
+nicht erneut. Automatisches Polling bleibt R1.4 vorbehalten.

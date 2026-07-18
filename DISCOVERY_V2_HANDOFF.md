@@ -36,17 +36,20 @@
 - NLE: **nur lokaler OTIO-Serialize/Reparse-Nachweis** (keine proprietären NLE-Exporte)
 - Kein Cloud-Publish
 - R1.1 Coverage-/Script-Lock-Blocker: **abgeschlossen** (Produktcommit `f3e015b`)
+- R1.2 State/Routing: **abgeschlossen** (Produktcommit `4c6bfd9`)
 - Root Cause `editorial_registry_write_failed`: FakeText Coverage-Audit-ID ohne
   `run_id` → UNIQUE auf `coverage_audits.coverage_audit_id` bei Wiederanlauf
-- Risiko-/Lock-Vertrag: Allow-List-Risiken, aktuelle Candidate Decisions,
-  `accepted_unresolved`, staged Coverage-Persistenz, serverseitiger Fingerprint
-- Aktiver Produktauftrag: keiner (R1.1 erledigt)
-- Nächste erlaubte Aktivität nach Freigabe: **R1.2**
-  (Stale Viewmodels / Reload / Projektkontext)
-- R1.3–R1.6 weiterhin gesperrt
+- Root Cause Reload/Routing: Project nur in `session_state`; Mode-Fallback
+  `WITH_VOICEOVER` → Default „Neues Projekt“
+- Kanonische Route: `?project_id=<uuid>&page=<slug>` (+ Streamlit `url_path`);
+  Flash + kontrollierter Rerun nach Mutationen/Jobstarts
+- Aktiver Produktauftrag: keiner (R1.2 erledigt)
+- Nächste erlaubte Aktivität nach Freigabe: **R1.3**
+  (Analyse-Queue / Observation-Review-Mengen)
+- R1.4–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **2935 collected / 2916 passed / 18 failed / 1 skipped**
+- Teststand: siehe `docs/PROGRESS.md` (R1.2-Nachlauf)
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
@@ -877,10 +880,11 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 12. ~~Alpha Release Closeout~~ — **`APPROVED`**
 13. ~~R1 Plan~~ — dokumentiert (`cac5e76`)
 14. ~~R1.1 Coverage / Script Lock Blocker~~ — **abgeschlossen** (`f3e015b`)
+15. ~~R1.2 State / Routing~~ — **abgeschlossen** (`4c6bfd9`)
 
-Nächste erlaubte Aktivität nach Freigabe: **R1.2**
-(Stale Viewmodels / Reload / Projektkontext).
-R1.3–R1.6 weiterhin gesperrt. Keine neue Produktphase freigegeben.
+Nächste erlaubte Aktivität nach Freigabe: **R1.3**
+(Analyse-Queue / Observation-Review-Mengen).
+R1.4–R1.6 weiterhin gesperrt. Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
 (untergeordnet gegenüber Regeln, DECISIONS, MASTER_PLAN, ALPHA_SCOPE, …).

@@ -35,35 +35,26 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
 - R1.1 Produktcommit: `f3e015bad59e063ec2717f8ef793ca55a1362ae2`
+- R1.2 Produktcommit: `4c6bfd99c50de075c15597d94c728918697bf6c9`
 - Chief-Dev Alpha-Produktstand: **APPROVED**
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - Registry-Schema: **20**
-- Teststand: **2935 collected / 2916 passed / 18 failed / 1 skipped**
 - Provider: Fake-only · Adobe: UNKNOWN · NLE: lokaler OTIO-Serialize/Reparse
-- **R1.1 abgeschlossen:** Coverage-Partial-Pfad + Script Lock wieder gangbar
-- Root Cause `editorial_registry_write_failed` (nachgewiesen):
-  FakeText Coverage-Audit-IDs waren `uuid5(project, script, fingerprint)`
-  **ohne `run_id`** → zweiter Coverage-Run →
-  `UNIQUE constraint failed: coverage_audits.coverage_audit_id` →
-  Catch-all `editorial_registry_write_failed`
-- Korrigiert: Audit-ID inkl. `run_id`; staged Persistenzfehler;
-  Idempotenz bei Wiederanlauf; gültiger Current Audit bleibt bei Fehler erhalten
-- Risiko-/Lock-Vertrag:
-  - `exact_match_not_verified` → `coverage_exact_match_not_verified` (Allow-List)
-  - aktuelle Candidate Decisions: alle `rejected` nötig für Risikoannahme
-  - `accepted_unresolved` append-only + Lock-Gate neu berechnet
-  - Fingerprint serverseitig, Checkbox, kein Freitextfeld
-  - historischer failed Coverage-Run blockiert gültigen Current Audit nicht
-  - stale Inputs → `coverage_audit_stale`
-- **Nächster erlaubter Schritt nach Freigabe: R1.2**
-- R1.3–R1.6 weiterhin gesperrt
+- **R1.1 abgeschlossen** · **R1.2 abgeschlossen**
+- Root Cause Reload/Routing: Projekt nur in `session_state`; fehlende ID → stiller Mode-Fallback `WITH_VOICEOVER` → Default „Neues Projekt“
+- Korrigiert: kanonische Route `project_id` + `page` (Query) / Streamlit `url_path`;
+  Wiederherstellung vor Nav-Aufbau; Discovery-Shell bei ungültiger ID;
+  kein stiller Classic-Fallback; Post-Mutation Flash + einmaliger Rerun
+- Decisions: D-R1.1-001…003 · D-R1.2-001…003
+- **Nächster erlaubter Schritt nach Freigabe: R1.3**
+- R1.4–R1.6 weiterhin gesperrt
 - Keine neue Produktphase
 
 ## Nächste erlaubte Aktion nach Freigabe
 
-→ **R1.2** (Stale Viewmodels / Reload / Projektkontext)
+→ **R1.3** (Analyse-Queue / Observation-Review-Mengen)
 
-**Noch gesperrt:** R1.3–R1.6, echte Provider, Style References,
+**Noch gesperrt:** R1.4–R1.6, echte Provider, Style References,
 Shared Working Media, Schema-21 ohne Zwang, neue Produktphase.
 
 ## Verbindliche Kurzregeln
@@ -77,6 +68,8 @@ Shared Working Media, Schema-21 ohne Zwang, neue Produktphase.
 - KI-Timelines = `NEGATIVE_REFERENCE`
 - Gateways zentral; keine stillen Provider
 - Keine Registry-Manipulation durch die UI
+- Discovery Route: URL + Application Service; session_state nicht alleinige Wahrheit
+- Rendering/Reload/Rerun starten keine Jobs/Gateways/Medien-I/O automatisch
 
 ## Alpha-DoD (Auszug)
 
