@@ -891,12 +891,13 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 11. ~~Alpha Release Readiness Verify~~ — `ALPHA_READY_WITH_LIMITATIONS`
 12. ~~Alpha Release Closeout~~ — **`APPROVED`**
 13. ~~R1 Plan~~ — dokumentiert (`cac5e76`)
-14. ~~R1.1 Coverage / Script Lock Blocker~~ — **abgeschlossen** (`f3e015b`)
-15. ~~R1.2 State / Routing~~ — **abgeschlossen** (`4c6bfd9`)
-16. ~~R1.3 Review / Analyse-Queue~~ — **abgeschlossen** (`45a5b4f`)
+14. ~~R1.1 Coverage / Accept Blocker~~ — **abgeschlossen** (`f3e015b`)
+15. ~~R1.1 Script-Lock Identity Rework~~ — **abgeschlossen** (`8f4b9aa`)
+16. ~~R1.2 State / Routing~~ — **abgeschlossen** (`4c6bfd9`)
+17. ~~R1.3 Review / Analyse-Queue~~ — **abgeschlossen** (`45a5b4f`)
 
 Nächste erlaubte Aktivität nach Freigabe: **R1.4**
-(Job-UX / Progress-Polling).
+(Job-UX / Progress-Polling). Manueller Script-Lock-Realtest ausstehend.
 R1.5–R1.6 weiterhin gesperrt. Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
