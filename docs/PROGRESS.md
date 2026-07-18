@@ -2,7 +2,7 @@
 
 ## Aktueller Stand
 
-**Coverage Stability C2 vollständig abgeschlossen — C3-Planung aktiv — Schema weiterhin 20.**
+**Coverage Stability C3.1 Root-Cause-Fixtures abgeschlossen — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
 - Script-Lock Realtest: **erfolgreich**
@@ -12,15 +12,12 @@
 - Provider: **Fake-only**
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
 - Visual Edit Rework **V1–V3**: implementiert
-- Coverage Idempotency Plan: dokumentiert
-- **Coverage Stability C1**: Reproduktion (`94b6e0f`)
-- **Coverage Stability C2 + C2-R1**: vollständig abgeschlossen / USA_v2 abgenommen
+- **Coverage Stability C1 / C2 / C2-R1**: vollständig abgeschlossen / USA_v2 abgenommen
 - Decisions: D-COVERAGE-STABILITY-001…004
-- **C3-Planung aktiv** (keine C3-Implementierung)
 - C3-Plan: `docs/source_plans/ALPHA_COVERAGE_STABILITY_C3_GAP_IDENTITY_CARRY_FORWARD_PLAN.md`
-- Roadmap: `docs/source_plans/ALPHA_COVERAGE_IDEMPOTENCY_CARRY_FORWARD_PLAN.md`
-- **Nächste erlaubte Aktion nach Planfreigabe: C3.1 Root-Cause-Fixtures**
-- **C3.2–C3.4, C4, V4 und R1.4 gesperrt**
+- **C3.1 abgeschlossen** (`36367d2`): Gap-Identity-Boundaries reproduziert (keine Produktänderung)
+- **Nächste erlaubte Aktion nach Freigabe: C3.2 Semantic Gap Identity**
+- **C3.3 / C3.4, C4, V4 und R1.4 gesperrt**
 - Keine neue Produktphase · echte Provider gesperrt
 
 ## Phase-Status
@@ -30,16 +27,27 @@
 | 7–13 Produktpfad | freigegeben / Fake-Alpha |
 | R1.1–R1.3 | abgeschlossen |
 | Visual Edit Rework V1–V3 | abgeschlossen |
-| Coverage Idempotency Plan | dokumentiert |
 | Coverage Stability C1 | abgeschlossen (Reproduktion) |
-| Coverage Stability C2 | **vollständig abgeschlossen** (Canonical Reuse + USA_v2) |
-| Coverage Stability C2-R1 | **vollständig abgeschlossen** |
-| Coverage Stability C3 | **Planung aktiv** (keine Implementierung) |
-| Coverage Stability C3.1–C3.4 | gesperrt bis jeweilige Freigabe (nach Plan: zuerst C3.1) |
+| Coverage Stability C2 | vollständig abgeschlossen |
+| Coverage Stability C2-R1 | vollständig abgeschlossen |
+| Coverage Stability C3 Plan | dokumentiert |
+| Coverage Stability C3.1 | **abgeschlossen** (Root-Cause-Fixtures) |
+| Coverage Stability C3.2 | nächster erlaubter Schritt (nach Freigabe) |
+| Coverage Stability C3.3–C3.4 | **gesperrt** |
 | Coverage Stability C4 | **gesperrt** |
 | Visual Edit Rework V4 Loop/UI | **gesperrt** |
 | R1.4 Job-UX / Progress-Polling | **gesperrt** |
 | R1.5–R1.6 | gesperrt |
+
+## Coverage Stability C3.1 — Kurzstand
+
+- `gap_id` = `uuid4()`; neuer fachlicher Audit ⇒ Supersede + neue Gap-Instanzen
+- Events / Candidate Decisions / `accepted_unresolved` bleiben an alter `gap_id`
+- Script-Lock Keys `gap_id:risk_code` und Lock-Fingerprint ändern sich
+- keine persistierte `semantic_gap_key` / `predecessor_gap_id`
+- Match-Shape-Fixtures: 1:1, 1:N, N:1, kein Vorgänger
+- Tests: `tests/test_discovery_v2_coverage_stability_c3_1.py` (12 Node-IDs)
+- Fixtures: `tests/fixtures/coverage_stability_c3_1.py`
 
 ## USA_v2 Coverage-Reuse-Realtest — Abnahme
 
@@ -80,17 +88,17 @@ Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Ga
 
 ## Teststand
 
-**3043 collected / 3024 passed / 18 failed / 1 skipped** (~322s; +9 C2-R1-Tests)
+**3055 collected / 3036 passed / 18 failed / 1 skipped** (~337s; +12 C3.1-Tests)
 
 18 bekannte Classic/Without-VO-Fehler und 1 VFR-Skip unverändert.
 
 ## Nächste erlaubte Aktivität
 
-Nach Freigabe des C3-Plans:
+Nach Freigabe:
 
-→ **C3.1 Root-Cause-Fixtures** (Gap-ID-/Event-Bindung, Script-Lock-Auswirkung; keine Carry-Forward-Produktlogik)
+→ **C3.2 Semantic Gap Identity** (Domainmodell `coverage-gap-semantic-key-v1`; keine Match-Engine)
 
-Danach C3.2 → C3.3 → C3.4 nach Freigabe. C4 erst nach C3.
+Danach C3.3 → C3.4 nach Freigabe. C4 erst nach C3.
 
-Noch gesperrt: C3.2–C3.4 bis Freigabe, C4, V4, R1.4–R1.6, echte Provider,
+Noch gesperrt: C3.3–C3.4 bis Freigabe, C4, V4, R1.4–R1.6, echte Provider,
 neue Produktphase, Nutzerregistry-Reparatur.
