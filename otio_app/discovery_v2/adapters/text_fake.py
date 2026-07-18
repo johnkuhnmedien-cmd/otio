@@ -512,18 +512,20 @@ class FakeTextAdapter:
         sentence_ids = [sentence.sentence_id for sentence in sentences]
         beat_ids = [beat.visual_beat_id for beat in request.visual_beats]
         intent_ids = [intent.visual_intent_id for intent in request.visual_intents]
-        candidates = inputs.get("candidates", [])
-        candidates = candidates if isinstance(candidates, list) else []
-        candidate = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
-        technical_shots = candidate.get("technical_shots", []) if isinstance(candidate, dict) else []
-        first_tech = (
-            technical_shots[0].get("technical_shot_id")
-            if technical_shots and isinstance(technical_shots[0], dict)
-            else None
+        raw_candidates = inputs.get("candidates", [])
+        raw_candidates = raw_candidates if isinstance(raw_candidates, list) else []
+        # Stable editorial order: asset_id then observation_id (equal ranks stay deterministic).
+        candidates = sorted(
+            [item for item in raw_candidates if isinstance(item, dict)],
+            key=lambda item: (str(item.get("asset_id") or ""), str(item.get("observation_id") or "")),
         )
-        media_kind = str(candidate.get("media_kind", "image"))
-        strategy = "local_video" if media_kind == "video" and first_tech else "local_photo"
-        plan_id = _id("visual-edit-plan", request.project_id, request.input_fingerprint)
+        next_plan_version = int(inputs.get("next_plan_version", 1))
+        plan_id = _id(
+            "visual-edit-plan",
+            request.project_id,
+            request.input_fingerprint,
+            str(next_plan_version),
+        )
         total = float(timeline.get("total_duration_seconds", 0.0)) if isinstance(timeline, dict) else 0.0
         if total <= 0:
             total = 12.0
@@ -536,6 +538,31 @@ class FakeTextAdapter:
             if not values:
                 return []
             return values[start : start + width] or values[-1:]
+
+        def ranked_for_shot(shot_index: int) -> list[dict]:
+            if not candidates:
+                return []
+            # Rotate so equal-rank fixtures yield Shot1→A … Shot6→F deterministically.
+            start = shot_index % len(candidates)
+            ordered = candidates[start:] + candidates[:start]
+            refs = []
+            for item in ordered:
+                tech_shots = item.get("technical_shots", [])
+                tech_shots = tech_shots if isinstance(tech_shots, list) else []
+                first_tech = (
+                    tech_shots[0].get("technical_shot_id")
+                    if tech_shots and isinstance(tech_shots[0], dict)
+                    else None
+                )
+                refs.append(
+                    {
+                        "asset_id": item.get("asset_id"),
+                        "working_media_id": item.get("working_media_id"),
+                        "observation_id": item.get("observation_id"),
+                        "technical_shot_id": first_tech,
+                    }
+                )
+            return refs
 
         shots = []
         for idx in range(shot_count):
@@ -551,6 +578,24 @@ class FakeTextAdapter:
             else:
                 shot_sentence_ids = pick(sentence_ids, min(idx, max(0, len(sentence_ids) - 1)))
             shot_id = _id("visual-edit-shot", plan_id, str(idx))
+            ranked = ranked_for_shot(idx)
+            preferred = ranked[0] if ranked else {}
+            preferred_full = next(
+                (
+                    item
+                    for item in candidates
+                    if item.get("asset_id") == preferred.get("asset_id")
+                    and item.get("working_media_id") == preferred.get("working_media_id")
+                    and item.get("observation_id") == preferred.get("observation_id")
+                ),
+                {},
+            )
+            media_kind = str(preferred_full.get("media_kind", "image"))
+            strategy = (
+                "local_video"
+                if media_kind == "video" and preferred.get("technical_shot_id")
+                else "local_photo"
+            )
             shots.append(
                 {
                     "shot_id": shot_id,
@@ -562,10 +607,13 @@ class FakeTextAdapter:
                     "visual_beat_ids": pick(beat_ids, idx % max(1, len(beat_ids))),
                     "visual_intent_ids": pick(intent_ids, idx % max(1, len(intent_ids))),
                     "media_strategy": strategy,
-                    "candidate_asset_id": candidate.get("asset_id"),
-                    "candidate_working_media_id": candidate.get("working_media_id"),
-                    "candidate_technical_shot_id": first_tech if strategy == "local_video" else None,
-                    "candidate_observation_id": candidate.get("observation_id"),
+                    "candidate_asset_id": preferred.get("asset_id"),
+                    "candidate_working_media_id": preferred.get("working_media_id"),
+                    "candidate_technical_shot_id": (
+                        preferred.get("technical_shot_id") if strategy == "local_video" else None
+                    ),
+                    "candidate_observation_id": preferred.get("observation_id"),
+                    "ranked_candidates": ranked,
                     "source_range_intent": {
                         "start_bias": biases[idx],
                         "desired_duration_seconds": None,
@@ -575,7 +623,9 @@ class FakeTextAdapter:
                     "transition_intent": "cut" if idx % 3 else "soft continuity",
                     "continuity_intent": "bridge over narration shape, not one-shot-per-sentence",
                     "rhythm_intent": "varied",
-                    "selection_rationale": "Structured fake local candidate, no filename or path evidence.",
+                    "selection_rationale": (
+                        "Structured fake local candidate ranking; Python enforces E3/E4."
+                    ),
                     "uncertainty_notes": [
                         "FakeText is not a semantic editor.",
                         "Source group is ignored as chapter structure.",
@@ -602,7 +652,7 @@ class FakeTextAdapter:
             "script_lock_id": str(inputs.get("script_lock_id", "missing-lock")),
             "narration_timeline_id": str(inputs.get("narration_timeline_id", "missing-timeline")),
             "input_fingerprint": request.input_fingerprint,
-            "plan_version": int(inputs.get("next_plan_version", 1)),
+            "plan_version": next_plan_version,
             "model_id": VISUAL_EDIT_MODEL_IDENTIFIER,
             "prompt_version": PROMPT_VERSION_VISUAL_EDIT_PLAN,
             "schema_version": RESPONSE_SCHEMA_VISUAL_EDIT_PLAN,

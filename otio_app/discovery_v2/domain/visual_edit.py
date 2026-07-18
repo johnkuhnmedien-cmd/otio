@@ -93,6 +93,8 @@ VISUAL_EDIT_ERROR_REGISTRY_WRITE_FAILED = "visual_edit_registry_write_failed"
 VISUAL_EDIT_ERROR_ARTIFACT_WRITE_FAILED = "visual_edit_artifact_write_failed"
 VISUAL_EDIT_ERROR_WORKER_INTERRUPTED = "worker_interrupted"
 VISUAL_EDIT_ERROR_REPORT_WRITE_FAILED = "report_write_failed"
+VISUAL_EDIT_ERROR_NO_E3_COMPLIANT_ASSIGNMENT = "visual_edit_no_e3_compliant_assignment"
+VISUAL_EDIT_ERROR_NO_E4_COMPLIANT_SOURCE_RANGE = "visual_edit_no_e4_compliant_source_range"
 
 VISUAL_EDIT_ERROR_CODES = (
     VISUAL_EDIT_ERROR_SCRIPT_LOCK_MISSING,
@@ -132,6 +134,8 @@ VISUAL_EDIT_ERROR_CODES = (
     VISUAL_EDIT_ERROR_ARTIFACT_WRITE_FAILED,
     VISUAL_EDIT_ERROR_WORKER_INTERRUPTED,
     VISUAL_EDIT_ERROR_REPORT_WRITE_FAILED,
+    VISUAL_EDIT_ERROR_NO_E3_COMPLIANT_ASSIGNMENT,
+    VISUAL_EDIT_ERROR_NO_E4_COMPLIANT_SOURCE_RANGE,
 )
 
 VisualEditPlanStatusLiteral = Literal[
@@ -449,6 +453,17 @@ class RepairResult(BaseModel):
     created_at: datetime
 
 
+class RankedCandidateRef(BaseModel):
+    """Editorial candidate offered by Fake/LLM for technical Python selection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    asset_id: str
+    working_media_id: str
+    observation_id: str
+    technical_shot_id: str | None = None
+
+
 class VisualEditPlanShotIntent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -465,6 +480,7 @@ class VisualEditPlanShotIntent(BaseModel):
     candidate_working_media_id: str | None = None
     candidate_technical_shot_id: str | None = None
     candidate_observation_id: str | None = None
+    ranked_candidates: list[RankedCandidateRef] = Field(default_factory=list)
     source_range_intent: SourceRangeIntent = Field(default_factory=SourceRangeIntent)
     transition_intent: str | None = None
     continuity_intent: str | None = None
@@ -693,6 +709,7 @@ __all__ = [name for name in globals() if name.startswith("VISUAL_EDIT_")] + [
     "PROMPT_VERSION_EDITORIAL_REPAIR_PROPOSAL",
     "PROMPT_VERSION_HUMANITY_REVIEW",
     "PROMPT_VERSION_VISUAL_EDIT_PLAN",
+    "RankedCandidateRef",
     "RESPONSE_SCHEMA_EDITORIAL_REPAIR_PROPOSAL",
     "RESPONSE_SCHEMA_HUMANITY_REVIEW",
     "RESPONSE_SCHEMA_VISUAL_EDIT_PLAN",

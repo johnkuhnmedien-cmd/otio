@@ -1,4 +1,4 @@
-"""V1 reproduction tests for Visual Edit E3/E4 repair loop (no product fix)."""
+"""V1 fixture retained: after V2 planner hardening, same setup yields a valid plan."""
 
 from __future__ import annotations
 
@@ -39,6 +39,7 @@ from otio_app.discovery_v2.application.feasibility_service import (
     start_feasibility_check_run,
 )
 from otio_app.discovery_v2.application.narration_timing_service import start_narration_timing_run
+from otio_app.discovery_v2.application.pause_direction_service import start_pause_direction_run
 from otio_app.discovery_v2.application.script_lock_service import (
     create_script_lock,
     preview_script_lock,
@@ -47,14 +48,8 @@ from otio_app.discovery_v2.application.visual_edit_plan_service import (
     build_visual_edit_input_context,
     start_visual_edit_plan_run,
 )
-from otio_app.discovery_v2.application.visual_edit_repair_service import (
-    apply_selected_repair_proposals,
-    propose_editorial_repairs,
-)
 from otio_app.discovery_v2.application.voice_generation_service import start_voice_generation_run
-from otio_app.discovery_v2.application.pause_direction_service import start_pause_direction_run
 from otio_app.discovery_v2.domain.asset_registry import REGISTRY_SCHEMA_VERSION
-from otio_app.discovery_v2.domain.visual_edit import VISUAL_EDIT_ERROR_FEASIBILITY_BLOCKING_ISSUE
 from otio_app.discovery_v2.persistence import visual_edit_repository as visual_repo
 from test_discovery_v2_script_lock import (
     _decide_all_claims,
@@ -95,9 +90,8 @@ def _current_bundle(project):
 
 
 def _reproduced_project(tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Ready project + 6 video candidates; Fake planner still binds all shots to Asset A."""
+    """Same V1 fixture: six equal video candidates A–F after script lock."""
 
-    # Pad intents before Script Lock so the lock fingerprint includes six intents.
     project = _script_coverage_project(tmp_path, temp_db_path)
     intents = ensure_six_visual_intents(project)
     assert len(intents) == 6
@@ -115,7 +109,6 @@ def _reproduced_project(tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.
     seeded = seed_six_video_candidates(project)
     assert [item["asset_id"] for item in seeded] == list(ASSET_IDS)
     install_six_candidate_observation_hook(monkeypatch, project, seeded)
-    # Guard only after fixture bootstrap — reproduction path must stay metadata-only.
     install_no_media_io_guards(monkeypatch)
     return project, seeded
 
@@ -123,6 +116,8 @@ def _reproduced_project(tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.
 def test_fixture_has_multiple_valid_assets_but_fake_plan_uses_first_asset_only(
     tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Smoke A (V1 fixture): Fake ranks A..F; Python assigns six distinct assets."""
+
     project, seeded = _reproduced_project(tmp_path, temp_db_path, monkeypatch)
     conn = visual_repo.open_visual_edit_registry(project.project_root_path)
     try:
@@ -141,26 +136,24 @@ def test_fixture_has_multiple_valid_assets_but_fake_plan_uses_first_asset_only(
     assert len(bundle.shots) == 6
     assert len(bundle.assignments) == 6
     chosen = [item.asset_id for item in bundle.assignments]
-    assert chosen == [ASSET_A_ID] * 6
-    assert len(set(chosen)) == 1
-    # Candidates B–F were available but unused by Fake candidates[0] selection.
-    unused = set(ASSET_IDS) - {ASSET_A_ID}
-    assert unused.isdisjoint(set(chosen))
+    assert chosen == list(ASSET_IDS)
+    assert len(set(chosen)) == 6
     assert seeded[0]["asset_id"] == ASSET_A_ID
 
 
 def test_reproduced_plan_fails_e3_asset_reuse(
     tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """V2: E3 is prevented at plan time — reuse stays within ASSET_REUSE_MAX."""
+
     project, _seeded = _reproduced_project(tmp_path, temp_db_path, monkeypatch)
     assert start_visual_edit_plan_run(project, sync=True).started
     bundle = _current_bundle(project)
     assert len(bundle.assignments) == 6
-    assert len({item.asset_id for item in bundle.assignments}) == 1
-    reuse = sum(1 for item in bundle.assignments if item.asset_id == ASSET_A_ID)
-    assert reuse == 6
-    assert reuse > ASSET_REUSE_MAX
-    # Policy source must be the domain constant, not a test-local number.
+    reuse = {asset_id: 0 for asset_id in ASSET_IDS}
+    for item in bundle.assignments:
+        reuse[item.asset_id] = reuse.get(item.asset_id, 0) + 1
+    assert all(count <= ASSET_REUSE_MAX for count in reuse.values())
     assert ASSET_REUSE_MAX == 3
 
     conn = visual_repo.open_visual_edit_registry(project.project_root_path)
@@ -170,23 +163,16 @@ def test_reproduced_plan_fails_e3_asset_reuse(
     finally:
         conn.close()
 
-    e3 = [
-        issue
-        for issue in report.issues
-        if issue.severity == "blocking"
-        and "E3" in issue.technical_details
-        and ASSET_A_ID in issue.technical_details
-    ]
-    assert e3, report.issues
-    assert all(issue.blocks_phase_13 for issue in e3)
-    assert all(issue.error_code == VISUAL_EDIT_ERROR_FEASIBILITY_BLOCKING_ISSUE for issue in e3)
-    assert report.report.metrics.get("asset_reuse_counts", {}).get(ASSET_A_ID) == 6
-    assert report.report.overall_technical_assessment == "fail"
+    e3 = [issue for issue in report.issues if "E3" in issue.technical_details]
+    assert e3 == []
+    assert report.report.overall_technical_assessment in {"pass", "pass_with_warnings"}
 
 
 def test_reproduced_plan_fails_e4_source_range_overlap(
     tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """V2: distinct assets avoid E4; policy constant remains central."""
+
     project, _seeded = _reproduced_project(tmp_path, temp_db_path, monkeypatch)
     assert start_visual_edit_plan_run(project, sync=True).started
     bundle = _current_bundle(project)
@@ -199,19 +185,15 @@ def test_reproduced_plan_fails_e4_source_range_overlap(
     assert len(video_assignments) == 6
     assert SOURCE_RANGE_OVERLAP_RATIO_MAX == 0.90
 
-    overlaps: list[tuple[str, str, float]] = []
+    severe = []
     for index, left in enumerate(video_assignments):
         for right in video_assignments[index + 1 :]:
             if left.asset_id != right.asset_id or left.working_media_id != right.working_media_id:
                 continue
             ratio = overlap_ratio(left, right)
-            overlaps.append((left.assignment_id, right.assignment_id, ratio))
-    severe = [item for item in overlaps if item[2] >= SOURCE_RANGE_OVERLAP_RATIO_MAX]
-    assert len(severe) >= 3, overlaps
-    # Persist concrete overlap values for the Pflichtbericht.
-    assert all(item[2] == pytest.approx(1.0) for item in severe[:3]) or any(
-        item[2] >= SOURCE_RANGE_OVERLAP_RATIO_MAX for item in severe
-    )
+            if ratio >= SOURCE_RANGE_OVERLAP_RATIO_MAX:
+                severe.append((left.assignment_id, right.assignment_id, ratio))
+    assert severe == []
 
     conn = visual_repo.open_visual_edit_registry(project.project_root_path)
     try:
@@ -220,68 +202,28 @@ def test_reproduced_plan_fails_e4_source_range_overlap(
     finally:
         conn.close()
 
-    e4 = [
-        issue
-        for issue in report.issues
-        if issue.severity == "blocking" and "E4" in issue.technical_details
-    ]
-    assert e4, report.issues
-    assert all(issue.blocks_phase_13 for issue in e4)
-    # Current product sets assignment_id on the right-hand pair member; shot_id may be None (V2 finding).
-    assert any(issue.assignment_id for issue in e4), (
-        "V2-Befund: E4-Issues sollten Assignment-IDs tragen; aktuell mindestens eine erwartet"
-    )
-    missing_shot = [issue for issue in e4 if issue.shot_id is None]
-    assert missing_shot  # document current gap for V2 — do not fix here
+    e4 = [issue for issue in report.issues if "E4" in issue.technical_details]
+    assert e4 == []
+    assert report.report.overall_technical_assessment in {"pass", "pass_with_warnings"}
 
 
 def test_current_repair_proposal_has_no_executable_reassignment(
     tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Repair path remains V3-deferred; V2 plan is already technically feasible."""
+
     project, _seeded = _reproduced_project(tmp_path, temp_db_path, monkeypatch)
     assert start_visual_edit_plan_run(project, sync=True).started
-    before = _current_bundle(project)
     feasibility = start_feasibility_check_run(project, sync=True)
     assert feasibility.report is not None
-    assert feasibility.report.overall_technical_assessment == "fail"
-
-    proposals = propose_editorial_repairs(project)
-    assert proposals.ok and proposals.proposals
-    proposal = proposals.proposals[0]
-    assert proposal.repair_type == "vary_first_local_motif"
-    assert proposal.user_status == "proposed"
-    # No executable reassignment contract on the current RepairProposal model.
-    assert not hasattr(proposal, "operations")
-    assert not hasattr(proposal, "target_asset_id")
-    assert not hasattr(proposal, "target_source_in_seconds")
-    assert "replace_assignment_asset" not in proposal.repair_type
-    assert "replace_assignment_source_range" not in proposal.repair_type
-    assert ASSET_A_ID not in (proposal.description + proposal.expected_effect)
-    # Fake proposal touches only the first shot id (or plan id), not E3/E4 assignment targets.
-    assert proposal.affected_ids
-    assignment_ids = {item.assignment_id for item in before.assignments}
-    assert assignment_ids.isdisjoint(set(proposal.affected_ids))
-
-    applied = apply_selected_repair_proposals(
-        project,
-        selected_proposal_ids=[proposal.proposal_id],
-    )
-    assert applied.ok and applied.output_plan is not None
-    after = _current_bundle(project)
-    assert after.plan.plan_id != before.plan.plan_id
-    assert [item.asset_id for item in after.assignments] == [ASSET_A_ID] * 6
-    assert [
-        (item.technical_source_in_seconds, item.technical_source_out_seconds)
-        for item in after.assignments
-    ] == [
-        (item.technical_source_in_seconds, item.technical_source_out_seconds)
-        for item in before.assignments
-    ]
+    assert feasibility.report.overall_technical_assessment in {"pass", "pass_with_warnings"}
 
 
 def test_repeated_feasibility_of_unchanged_plan_has_same_issue_signature(
     tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Unchanged valid plan: repeated feasibility keeps fingerprints; no E3/E4 issues."""
+
     project, _seeded = _reproduced_project(tmp_path, temp_db_path, monkeypatch)
     assert start_visual_edit_plan_run(project, sync=True).started
     bundle = _current_bundle(project)
@@ -323,8 +265,8 @@ def test_repeated_feasibility_of_unchanged_plan_has_same_issue_signature(
         plan_fingerprint=bundle.plan.input_fingerprint,
     )
     assert sig1 == sig2
-    assert any("E3" in issue.technical_details for issue in first_bundle.issues)
-    assert any("E4" in issue.technical_details for issue in first_bundle.issues)
+    assert not any("E3" in issue.technical_details for issue in first_bundle.issues)
+    assert not any("E4" in issue.technical_details for issue in first_bundle.issues)
 
 
 def test_reproduction_uses_no_gateway_and_no_media_io(
@@ -337,8 +279,4 @@ def test_reproduction_uses_no_gateway_and_no_media_io(
 
     assert start_visual_edit_plan_run(project, sync=True).started
     assert start_feasibility_check_run(project, sync=True).report is not None
-    proposals = propose_editorial_repairs(project)
-    assert proposals.ok
-    # Guards installed in _reproduced_project fail on media I/O / subprocess.
-    # Fake text provider is the only allowed text path.
     assert config.provider == "fake"

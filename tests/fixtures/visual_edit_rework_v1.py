@@ -185,9 +185,16 @@ def ensure_six_visual_intents(project) -> list[dict[str, Any]]:
         conn.close()
 
 
-def seed_six_video_candidates(project) -> list[dict[str, str]]:
-    """Insert six completed video candidates (metadata only; no media I/O)."""
+def seed_video_candidates(
+    project,
+    *,
+    labels: tuple[str, ...] = ASSET_LABELS,
+    tech_ranges: list[tuple[float, float]] | None = None,
+    id_prefix: str = "rework-v1",
+) -> list[dict[str, str]]:
+    """Insert completed video candidates (metadata only; no media I/O)."""
 
+    ranges = tech_ranges or [(TECH_SHOT_START_SECONDS, TECH_SHOT_END_SECONDS)]
     conn = reg_db.get_registry_connection(project.project_root_path)
     try:
         existing = copy_repo.list_working_media(conn, project_id=project.id)
@@ -196,10 +203,11 @@ def seed_six_video_candidates(project) -> list[dict[str, str]]:
         intake_run_id = existing[0].intake_run_id
         now = _now()
         seeded: list[dict[str, str]] = []
-        for index, asset_id in enumerate(ASSET_IDS):
-            wm_id = f"wm-rework-v1-{ASSET_LABELS[index]}"
-            obs_id = f"obs-rework-v1-{ASSET_LABELS[index]}"
-            sha = hashlib.sha256(f"rework-v1-{asset_id}".encode("utf-8")).hexdigest()
+        for index, label in enumerate(labels):
+            asset_id = f"asset-{id_prefix}-{label}"
+            wm_id = f"wm-{id_prefix}-{label}"
+            obs_id = f"obs-{id_prefix}-{label}"
+            sha = hashlib.sha256(f"{id_prefix}-{asset_id}".encode("utf-8")).hexdigest()
             conn.execute(
                 """
                 INSERT OR IGNORE INTO assets (
@@ -210,9 +218,9 @@ def seed_six_video_candidates(project) -> list[dict[str, str]]:
                 (
                     asset_id,
                     project.id,
-                    f"Media/rework-v1-{ASSET_LABELS[index]}.mp4",
+                    f"Media/{id_prefix}-{label}.mp4",
                     "Media",
-                    f"rework-v1-{ASSET_LABELS[index]}.mp4",
+                    f"{id_prefix}-{label}.mp4",
                     ".mp4",
                     "video",
                     1,
@@ -227,7 +235,7 @@ def seed_six_video_candidates(project) -> list[dict[str, str]]:
                 asset_id=asset_id,
                 plan_id=plan_id,
                 intake_run_id=intake_run_id,
-                source_relative_path=f"Media/rework-v1-{ASSET_LABELS[index]}.mp4",
+                source_relative_path=f"Media/{id_prefix}-{label}.mp4",
                 working_relative_path=(
                     f"media/working/{asset_id}/{sha}/{COPY_WORKING_PROFILE_VERSION}/"
                     f"{asset_id}.mp4"
@@ -257,38 +265,42 @@ def seed_six_video_candidates(project) -> list[dict[str, str]]:
                 processing_profile_version=COPY_WORKING_PROFILE_VERSION,
                 analysis_profile_version=ANALYSIS_CONTRACT_PROFILE_VERSION,
             )
-            tech_id = f"tech-rework-v1-{ASSET_LABELS[index]}"
-            if (
-                conn.execute(
-                    "SELECT 1 FROM technical_shots WHERE shot_id = ?", (tech_id,)
-                ).fetchone()
-                is None
-            ):
-                analysis_repo.insert_technical_shot(
-                    conn,
-                    TechnicalShotRecord(
-                        shot_id=tech_id,
-                        analysis_identity_id=identity.analysis_identity_id,
-                        project_id=project.id,
-                        asset_id=asset_id,
-                        working_media_id=wm_id,
-                        ordinal=0,
-                        start_seconds=TECH_SHOT_START_SECONDS,
-                        end_seconds=TECH_SHOT_END_SECONDS,
-                        duration_seconds=TECH_SHOT_END_SECONDS - TECH_SHOT_START_SECONDS,
-                        detection_profile_version=SHOT_DETECT_PROFILE_VERSION,
-                        created_at=now,
-                    ),
-                )
+            tech_ids: list[str] = []
+            for tech_ordinal, (tech_start, tech_end) in enumerate(ranges):
+                tech_id = f"tech-{id_prefix}-{label}-{tech_ordinal}"
+                tech_ids.append(tech_id)
+                if (
+                    conn.execute(
+                        "SELECT 1 FROM technical_shots WHERE shot_id = ?", (tech_id,)
+                    ).fetchone()
+                    is None
+                ):
+                    analysis_repo.insert_technical_shot(
+                        conn,
+                        TechnicalShotRecord(
+                            shot_id=tech_id,
+                            analysis_identity_id=identity.analysis_identity_id,
+                            project_id=project.id,
+                            asset_id=asset_id,
+                            working_media_id=wm_id,
+                            ordinal=tech_ordinal,
+                            start_seconds=tech_start,
+                            end_seconds=tech_end,
+                            duration_seconds=tech_end - tech_start,
+                            detection_profile_version=SHOT_DETECT_PROFILE_VERSION,
+                            created_at=now,
+                        ),
+                    )
             seeded.append(
                 {
-                    "label": ASSET_LABELS[index],
+                    "label": label,
                     "asset_id": asset_id,
                     "working_media_id": wm_id,
                     "observation_id": obs_id,
                     "analysis_identity_id": identity.analysis_identity_id,
-                    "technical_shot_id": tech_id,
-                    "frame_set_fingerprint": f"fp-rework-v1-{ASSET_LABELS[index]}",
+                    "technical_shot_id": tech_ids[0],
+                    "technical_shot_ids": ",".join(tech_ids),
+                    "frame_set_fingerprint": f"fp-{id_prefix}-{label}",
                     "observation_sha256": hashlib.sha256(
                         f"obs-{asset_id}".encode("utf-8")
                     ).hexdigest(),
@@ -298,6 +310,12 @@ def seed_six_video_candidates(project) -> list[dict[str, str]]:
         return seeded
     finally:
         conn.close()
+
+
+def seed_six_video_candidates(project) -> list[dict[str, str]]:
+    """Insert six completed video candidates (metadata only; no media I/O)."""
+
+    return seed_video_candidates(project, labels=ASSET_LABELS, id_prefix="rework-v1")
 
 
 def editorial_ready_views_for_seed(
@@ -412,4 +430,5 @@ __all__ = [
     "overlap_ratio",
     "plan_content_fingerprint",
     "seed_six_video_candidates",
+    "seed_video_candidates",
 ]

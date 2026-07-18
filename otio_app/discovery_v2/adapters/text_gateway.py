@@ -439,6 +439,30 @@ class DiscoveryTextGateway:
                     VISUAL_EDIT_ERROR_INVALID_TECHNICAL_SHOT_REFERENCE,
                     "Visual edit shot referenced unknown technical shot.",
                 )
+            for ranked in shot.ranked_candidates:
+                if ranked.asset_id not in known_assets:
+                    raise TextGatewayError(
+                        VISUAL_EDIT_ERROR_INVALID_ASSET_REFERENCE,
+                        "Visual edit ranked candidate referenced unknown asset.",
+                    )
+                if ranked.working_media_id not in known_working:
+                    raise TextGatewayError(
+                        VISUAL_EDIT_ERROR_INVALID_WORKING_MEDIA_REFERENCE,
+                        "Visual edit ranked candidate referenced unknown working media.",
+                    )
+                if ranked.observation_id not in known_observations:
+                    raise TextGatewayError(
+                        VISUAL_EDIT_ERROR_INVALID_OBSERVATION_REFERENCE,
+                        "Visual edit ranked candidate referenced unknown observation.",
+                    )
+                if (
+                    ranked.technical_shot_id is not None
+                    and ranked.technical_shot_id not in known_technical
+                ):
+                    raise TextGatewayError(
+                        VISUAL_EDIT_ERROR_INVALID_TECHNICAL_SHOT_REFERENCE,
+                        "Visual edit ranked candidate referenced unknown technical shot.",
+                    )
         for transition in payload.transitions:
             if transition.from_shot_id not in shot_ids or transition.to_shot_id not in shot_ids:
                 raise TextGatewayError(

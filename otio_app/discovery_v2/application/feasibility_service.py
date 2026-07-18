@@ -285,7 +285,16 @@ def evaluate_feasibility(bundle: VisualEditPlanBundle, package: dict[str, object
     for left, right in _video_range_pairs(bundle.assignments):
         overlap = _overlap_ratio(left, right)
         if overlap >= SOURCE_RANGE_OVERLAP_RATIO_MAX:
-            issues.append(_issue(report_id, None, right.assignment_id, VISUAL_EDIT_ERROR_FEASIBILITY_BLOCKING_ISSUE, "blocking", "Video source range reuse exceeds E4."))
+            issues.append(
+                _issue(
+                    report_id,
+                    right.shot_id,
+                    right.assignment_id,
+                    VISUAL_EDIT_ERROR_FEASIBILITY_BLOCKING_ISSUE,
+                    "blocking",
+                    f"Video source range reuse exceeds E4 for asset {right.asset_id}.",
+                )
+            )
     for transition in bundle.transitions:
         left = shot_by_id.get(transition.from_shot_id)
         right = shot_by_id.get(transition.to_shot_id)

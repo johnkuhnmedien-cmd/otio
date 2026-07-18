@@ -21,12 +21,14 @@ from otio_app.discovery_v2.domain.editorial import (
 from otio_app.discovery_v2.domain.media_intake import WorkingMediaStatus
 from otio_app.discovery_v2.domain.narration import NarrationTimelineStatus
 from otio_app.discovery_v2.domain.visual_edit import (
+    ASSET_REUSE_MAX,
     CLOSING_HOLD_MAX_SECONDS,
     MIN_SOURCE_HANDLE_SECONDS,
     PHOTO_SHOT_MAX_SECONDS,
     PHOTO_SHOT_MIN_SECONDS,
     PROMPT_VERSION_VISUAL_EDIT_PLAN,
     RESPONSE_SCHEMA_VISUAL_EDIT_PLAN,
+    SOURCE_RANGE_OVERLAP_RATIO_MAX,
     TEXT_REQUEST_KIND_VISUAL_EDIT_PLAN,
     TRANSITION_CUT_SECONDS,
     TRANSITION_MAX_SECONDS,
@@ -41,6 +43,8 @@ from otio_app.discovery_v2.domain.visual_edit import (
     VISUAL_EDIT_ERROR_NARRATION_RUN_ALREADY_ACTIVE,
     VISUAL_EDIT_ERROR_NARRATION_TIMELINE_MISSING,
     VISUAL_EDIT_ERROR_NARRATION_TIMELINE_STALE,
+    VISUAL_EDIT_ERROR_NO_E3_COMPLIANT_ASSIGNMENT,
+    VISUAL_EDIT_ERROR_NO_E4_COMPLIANT_SOURCE_RANGE,
     VISUAL_EDIT_ERROR_RESPONSE_INVALID,
     VISUAL_EDIT_ERROR_RUN_ALREADY_ACTIVE,
     VISUAL_EDIT_ERROR_SCRIPT_LOCK_INVALIDATED,
@@ -50,6 +54,7 @@ from otio_app.discovery_v2.domain.visual_edit import (
     VISUAL_EDIT_MODEL_IDENTIFIER,
     VISUAL_EDIT_RUN_SCOPE_PLAN,
     EditorialShot,
+    RankedCandidateRef,
     ShotMediaAssignment,
     ShotTransition,
     SourceRangeIntent,
@@ -57,6 +62,7 @@ from otio_app.discovery_v2.domain.visual_edit import (
     VisualEditPlan,
     VisualEditPlanBundle,
     VisualEditPlanGatewayPayload,
+    VisualEditPlanShotIntent,
     VisualEditRun,
     VisualEditRunStatus,
     seconds_to_frame_nearest,
@@ -579,6 +585,8 @@ def _build_bundle_from_gateway(
     candidates = _candidates_by_key(context.package)
     shots: list[EditorialShot] = []
     assignments: list[ShotMediaAssignment] = []
+    reuse_counts: dict[str, int] = {}
+    occupancy: dict[str, list[tuple[float, float]]] = {}
     cursor = 0.0
     previous_frame = 0
     for idx, intent in enumerate(payload.shots):
@@ -614,7 +622,27 @@ def _build_bundle_from_gateway(
         )
         shots.append(shot)
         if intent.media_strategy in {"local_video", "local_photo"}:
-            assignments.append(_resolve_assignment(intent, shot, candidates, fps))
+            assignment = _resolve_assignment(
+                intent,
+                shot,
+                candidates,
+                fps,
+                reuse_counts=reuse_counts,
+                occupancy=occupancy,
+            )
+            assignments.append(assignment)
+            reuse_counts[assignment.asset_id] = reuse_counts.get(assignment.asset_id, 0) + 1
+            if (
+                assignment.technical_source_in_seconds is not None
+                and assignment.technical_source_out_seconds is not None
+            ):
+                occ_key = f"{assignment.asset_id}:{assignment.working_media_id}"
+                occupancy.setdefault(occ_key, []).append(
+                    (
+                        float(assignment.technical_source_in_seconds),
+                        float(assignment.technical_source_out_seconds),
+                    )
+                )
         cursor = end
         previous_frame = end_frame
     transitions = [
@@ -624,50 +652,109 @@ def _build_bundle_from_gateway(
     return VisualEditPlanBundle(plan=plan, shots=shots, assignments=assignments, transitions=transitions)
 
 
-def _resolve_assignment(intent, shot: EditorialShot, candidates: dict[str, dict[str, object]], fps: float) -> ShotMediaAssignment:
-    key = f"{intent.candidate_asset_id}:{intent.candidate_working_media_id}:{intent.candidate_observation_id}"
-    candidate = candidates.get(key)
-    if candidate is None:
+def _editorial_ranked_refs(intent: VisualEditPlanShotIntent) -> list[RankedCandidateRef]:
+    if intent.ranked_candidates:
+        return list(intent.ranked_candidates)
+    if intent.candidate_asset_id and intent.candidate_working_media_id and intent.candidate_observation_id:
+        return [
+            RankedCandidateRef(
+                asset_id=intent.candidate_asset_id,
+                working_media_id=intent.candidate_working_media_id,
+                observation_id=intent.candidate_observation_id,
+                technical_shot_id=intent.candidate_technical_shot_id,
+            )
+        ]
+    return []
+
+
+def _resolve_assignment(
+    intent: VisualEditPlanShotIntent,
+    shot: EditorialShot,
+    candidates: dict[str, dict[str, object]],
+    fps: float,
+    *,
+    reuse_counts: dict[str, int],
+    occupancy: dict[str, list[tuple[float, float]]],
+) -> ShotMediaAssignment:
+    ranked = _editorial_ranked_refs(intent)
+    if not ranked:
         raise VisualEditServiceError(VISUAL_EDIT_ERROR_INPUT_STALE)
-    source_intent = intent.source_range_intent
-    if shot.media_strategy == "local_photo":
-        duration = min(PHOTO_SHOT_MAX_SECONDS, max(PHOTO_SHOT_MIN_SECONDS, shot.duration_seconds))
+    skipped_for_e3 = False
+    failed_e4_while_e3_ok = False
+    for priority, ref in enumerate(ranked):
+        key = f"{ref.asset_id}:{ref.working_media_id}:{ref.observation_id}"
+        candidate = candidates.get(key)
+        if candidate is None:
+            continue
+        asset_id = str(candidate["asset_id"])
+        if reuse_counts.get(asset_id, 0) >= ASSET_REUSE_MAX:
+            skipped_for_e3 = True
+            continue
+        source_intent = intent.source_range_intent
+        if shot.media_strategy == "local_photo":
+            duration = min(PHOTO_SHOT_MAX_SECONDS, max(PHOTO_SHOT_MIN_SECONDS, shot.duration_seconds))
+            return ShotMediaAssignment(
+                assignment_id=str(uuid5(NAMESPACE_URL, f"visual-edit-assignment:{shot.shot_id}:0")),
+                shot_id=shot.shot_id,
+                asset_id=asset_id,
+                working_media_id=str(candidate["working_media_id"]),
+                technical_shot_id=None,
+                visual_observation_id=str(candidate["observation_id"]),
+                assignment_priority=priority,
+                source_range_intent=source_intent,
+                duration_seconds=duration,
+                selection_rationale=intent.selection_rationale,
+                status="resolved",
+            )
+        desired = min(VIDEO_SHOT_MAX_SECONDS, max(VIDEO_SHOT_MIN_SECONDS, shot.duration_seconds))
+        occ_key = f"{candidate['asset_id']}:{candidate['working_media_id']}"
+        occupied = occupancy.get(occ_key, [])
+        resolved = _select_e4_compliant_video_range(
+            candidate=candidate,
+            preferred_technical_shot_id=ref.technical_shot_id or intent.candidate_technical_shot_id,
+            desired=desired,
+            bias=source_intent.start_bias,
+            occupied=occupied,
+            fps=fps,
+        )
+        if resolved is None:
+            failed_e4_while_e3_ok = True
+            continue
+        tech, start, end, notes = resolved
+        in_frame = seconds_to_frame_nearest(start, fps)
+        out_frame = max(in_frame + 1, seconds_to_frame_nearest(end, fps))
+        if notes and "technical_short_handles_zero" not in shot.uncertainty_notes:
+            shot.uncertainty_notes.extend(notes)
         return ShotMediaAssignment(
             assignment_id=str(uuid5(NAMESPACE_URL, f"visual-edit-assignment:{shot.shot_id}:0")),
             shot_id=shot.shot_id,
-            asset_id=str(candidate["asset_id"]),
+            asset_id=asset_id,
             working_media_id=str(candidate["working_media_id"]),
-            technical_shot_id=None,
+            technical_shot_id=str(tech["technical_shot_id"]),
             visual_observation_id=str(candidate["observation_id"]),
-            assignment_priority=0,
+            assignment_priority=priority,
             source_range_intent=source_intent,
-            duration_seconds=duration,
+            technical_source_in_seconds=start,
+            technical_source_out_seconds=end,
+            technical_source_in_frame=in_frame,
+            technical_source_out_frame=out_frame,
+            duration_seconds=(out_frame - in_frame) / fps,
             selection_rationale=intent.selection_rationale,
             status="resolved",
         )
-    tech = _select_technical_shot(intent, candidate)
-    desired = min(VIDEO_SHOT_MAX_SECONDS, max(VIDEO_SHOT_MIN_SECONDS, shot.duration_seconds))
-    start, end, notes = _resolve_video_range(tech, desired, source_intent.start_bias)
-    in_frame = seconds_to_frame_nearest(start, fps)
-    out_frame = max(in_frame + 1, seconds_to_frame_nearest(end, fps))
-    if notes and "technical_short_handles_zero" not in shot.uncertainty_notes:
-        shot.uncertainty_notes.extend(notes)
-    return ShotMediaAssignment(
-        assignment_id=str(uuid5(NAMESPACE_URL, f"visual-edit-assignment:{shot.shot_id}:0")),
-        shot_id=shot.shot_id,
-        asset_id=str(candidate["asset_id"]),
-        working_media_id=str(candidate["working_media_id"]),
-        technical_shot_id=str(tech["technical_shot_id"]),
-        visual_observation_id=str(candidate["observation_id"]),
-        assignment_priority=0,
-        source_range_intent=source_intent,
-        technical_source_in_seconds=start,
-        technical_source_out_seconds=end,
-        technical_source_in_frame=in_frame,
-        technical_source_out_frame=out_frame,
-        duration_seconds=(out_frame - in_frame) / fps,
-        selection_rationale=intent.selection_rationale,
-        status="resolved",
+    if failed_e4_while_e3_ok:
+        raise VisualEditServiceError(
+            VISUAL_EDIT_ERROR_NO_E4_COMPLIANT_SOURCE_RANGE,
+            f"No E4-compliant source range for shot {shot.shot_id}.",
+        )
+    if skipped_for_e3:
+        raise VisualEditServiceError(
+            VISUAL_EDIT_ERROR_NO_E3_COMPLIANT_ASSIGNMENT,
+            f"No E3-compliant assignment for shot {shot.shot_id}.",
+        )
+    raise VisualEditServiceError(
+        VISUAL_EDIT_ERROR_INPUT_STALE,
+        f"No valid editorial candidate materialized for shot {shot.shot_id}.",
     )
 
 
@@ -697,19 +784,104 @@ def _resolve_video_range(tech: dict[str, object], desired: float, bias: str) -> 
     return round(source_in, 6), round(source_out, 6), notes
 
 
-def _select_technical_shot(intent, candidate: dict[str, object]) -> dict[str, object]:
-    shots = candidate.get("technical_shots", [])
-    shots = shots if isinstance(shots, list) else []
-    if not shots:
-        raise VisualEditServiceError(VISUAL_EDIT_ERROR_SOURCE_RANGE_OUT_OF_BOUNDS)
-    wanted = intent.candidate_technical_shot_id
-    for shot in shots:
-        if isinstance(shot, dict) and shot.get("technical_shot_id") == wanted:
-            return shot
-    first = shots[0]
-    if not isinstance(first, dict):
-        raise VisualEditServiceError(VISUAL_EDIT_ERROR_SOURCE_RANGE_OUT_OF_BOUNDS)
-    return first
+def _overlap_ratio_seconds(left: tuple[float, float], right: tuple[float, float]) -> float:
+    left_start, left_end = left
+    right_start, right_end = right
+    overlap = max(0.0, min(left_end, right_end) - max(left_start, right_start))
+    shortest = min(left_end - left_start, right_end - right_start)
+    return 0.0 if shortest <= 0 else overlap / shortest
+
+
+def _range_respects_e4(candidate: tuple[float, float], occupied: list[tuple[float, float]]) -> bool:
+    for existing in occupied:
+        if _overlap_ratio_seconds(candidate, existing) >= SOURCE_RANGE_OVERLAP_RATIO_MAX:
+            return False
+    return True
+
+
+def _iter_range_candidates(
+    tech: dict[str, object],
+    desired: float,
+    bias: str,
+) -> list[tuple[float, float, list[str]]]:
+    """Deterministic candidate ranges: bias-first, then earliest valid windows."""
+
+    try:
+        preferred = _resolve_video_range(tech, desired, bias)
+    except VisualEditServiceError:
+        preferred = None
+    start = float(tech["start_seconds"])
+    end = float(tech["end_seconds"])
+    available = end - start
+    if available <= 0:
+        return []
+    handle = 0.0 if available < desired + (2 * MIN_SOURCE_HANDLE_SECONDS) else MIN_SOURCE_HANDLE_SECONDS
+    notes = ["technical_short_handles_zero"] if handle == 0.0 else []
+    inner_start = start + handle
+    inner_end = end - handle
+    duration = min(desired, max(0.05, inner_end - inner_start))
+    if duration <= 0 or inner_end <= inner_start:
+        return [preferred] if preferred else []
+    options: list[tuple[float, float, list[str]]] = []
+    if preferred is not None:
+        options.append(preferred)
+    # Scan earliest → latest with a stable step tied to duration (no random).
+    step = max(0.05, duration * (1.0 - SOURCE_RANGE_OVERLAP_RATIO_MAX))
+    cursor = inner_start
+    while cursor + duration <= inner_end + 1e-9:
+        source_in = round(cursor, 6)
+        source_out = round(min(end, source_in + duration), 6)
+        if source_out > source_in:
+            options.append((source_in, source_out, list(notes)))
+        cursor += step
+    # Deduplicate while preserving order.
+    seen: set[tuple[float, float]] = set()
+    unique: list[tuple[float, float, list[str]]] = []
+    for item in options:
+        key = (item[0], item[1])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
+def _select_e4_compliant_video_range(
+    *,
+    candidate: dict[str, object],
+    preferred_technical_shot_id: str | None,
+    desired: float,
+    bias: str,
+    occupied: list[tuple[float, float]],
+    fps: float,
+) -> tuple[dict[str, object], float, float, list[str]] | None:
+    tech_shots = candidate.get("technical_shots", [])
+    tech_shots = [item for item in tech_shots if isinstance(item, dict)] if isinstance(tech_shots, list) else []
+    if not tech_shots:
+        return None
+    ordered = sorted(
+        tech_shots,
+        key=lambda item: (
+            0 if preferred_technical_shot_id and item.get("technical_shot_id") == preferred_technical_shot_id else 1,
+            int(item.get("ordinal", 0) or 0),
+            str(item.get("technical_shot_id") or ""),
+        ),
+    )
+    for tech in ordered:
+        for source_in, source_out, notes in _iter_range_candidates(tech, desired, bias):
+            # Frame-round then re-check bounds and E4 using the rounded seconds.
+            in_frame = seconds_to_frame_nearest(source_in, fps)
+            out_frame = max(in_frame + 1, seconds_to_frame_nearest(source_out, fps))
+            rounded_in = in_frame / fps
+            rounded_out = out_frame / fps
+            tech_start = float(tech["start_seconds"])
+            tech_end = float(tech["end_seconds"])
+            if rounded_in < tech_start - 1e-6 or rounded_out > tech_end + 1e-6:
+                continue
+            if not _range_respects_e4((rounded_in, rounded_out), occupied):
+                continue
+            return tech, round(rounded_in, 6), round(rounded_out, 6), notes
+    return None
 
 
 def _resolve_transition(intent, *, shots_by_id: dict[str, EditorialShot]) -> ShotTransition:
