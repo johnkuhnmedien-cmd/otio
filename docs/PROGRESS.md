@@ -34,10 +34,11 @@
 
 ## Teststand
 
-**2962 collected / 2943 passed / 18 failed / 1 skipped** (Ziel nach Vollsuite-Nachlauf)
+**2962 collected / 2943 passed / 18 failed / 1 skipped** (~238s)
 
 Vergleich zur R1.1-Baseline **2935 / 2916 / 18 / 1**:
-- +~27 R1.2-Tests, gleiche 18 Classic/Without-VO Baseline-Fehler
+- +27 Tests (R1.2), alle grün
+- 18 bekannte Classic/Without-VO Baseline-Fehler unverändert
 - 1 bekannter VFR-Skip unverändert
 
 ## Bekannte Einschränkungen / UNKNOWN

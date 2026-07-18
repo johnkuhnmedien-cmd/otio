@@ -39,6 +39,7 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - Chief-Dev Alpha-Produktstand: **APPROVED**
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - Registry-Schema: **20**
+- Teststand: **2962 collected / 2943 passed / 18 failed / 1 skipped**
 - Provider: Fake-only · Adobe: UNKNOWN · NLE: lokaler OTIO-Serialize/Reparse
 - **R1.1 abgeschlossen** · **R1.2 abgeschlossen**
 - Root Cause Reload/Routing: Projekt nur in `session_state`; fehlende ID → stiller Mode-Fallback `WITH_VOICEOVER` → Default „Neues Projekt“
