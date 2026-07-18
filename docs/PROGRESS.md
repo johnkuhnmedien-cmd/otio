@@ -2,16 +2,22 @@
 
 ## Aktueller Stand
 
-**Phase 13 — Editorial Approval / OTIO Export / Reparse / Alpha-E2E ist freigegeben / abgeschlossen (Fake + MANUAL).**
+**Alpha-Release Closeout — `APPROVED_WITH_CONDITIONS`.**
 
+- Chief-Dev-Status: **`APPROVED_WITH_CONDITIONS`**
+- Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - Schema: **20**
 - OTIO-Profil: `discovery-otio-export-v1`
 - OpenTimelineIO: **0.18.1**
+- Provider: **Fake-only** (Vision / Text / Stock / Voice)
+- Adobe: **UNKNOWN** (OAuth / Lizenz / Auto-Download nicht verdrahtet)
+- NLE: **nur lokaler OTIO-Serialize/Reparse-Nachweis** (kein Premiere / DaVinci / Final Cut)
 - Artefakte unter `_otio_v2/export/`
 - MANUAL-UI-Seite **Review & Export**
 - Alpha-E2E-Smoke: bestanden (Fake-only, lokal)
-- Echte Provider und proprietäre NLE-Exporte: gesperrt
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
+- Product-Abschlusscommit Phase 13: `e1860b6`
+- Docs-Abschluss Phase 13: `5cc8f23`
 
 ## Phase-Status
 
@@ -25,25 +31,31 @@
 | 11 Voice / Pause / Timing | freigegeben / abgeschlossen (Fake) |
 | 12 Visual Edit / Humanity / Feasibility / Repair | freigegeben / abgeschlossen (Fake) |
 | 13 Review / OTIO / Alpha-E2E | **freigegeben / abgeschlossen (Fake)** |
+| Alpha Release Readiness Verify | **bestanden** (`ALPHA_READY_WITH_LIMITATIONS`) |
+| Alpha Release Closeout | **`APPROVED_WITH_CONDITIONS`** |
 
-## Teststand (nach Phase 13)
+## Teststand (Alpha)
 
-- Nach Phase 12: 2898 / 2879 / 18 / 1
-- Nach Phase 13: **2915 collected / 2896 passed / 18 failed / 1 skipped**
+**2915 collected / 2896 passed / 18 failed / 1 skipped**
 
-18 bekannte Baseline-Fehler unverändert; 1 bekannter VFR-Skip unverändert;
-keine neuen auftragsbedingten Failures (+17 Phase-13-Tests, alle grün).
+18 bekannte Baseline-Fehler unverändert (Classic / Without-VO-Territorium);
+1 bekannter VFR-Skip unverändert; keine neuen Discovery-bedingten Failures.
 
 ## Bekannte Einschränkungen / UNKNOWN
 
+- Fake-only Provider — keine reale Bildanalyse, Redaktion, Stock-Lizenz oder natürliche Stimme
+- Adobe OAuth / Lizenzierung / automatischer Originaldownload: **UNKNOWN**
 - Keine proprietären NLE-Exporte (Premiere / DaVinci / Final Cut)
-- Keine echten Provider; kein Cloud-Upload / Publishing
+- Kein Cloud-Upload / Publishing
 - NLE-Nachimport-Verhalten außerhalb Alpha
 - Ken-Burns / komplexe Effekte nicht Teil des Alpha-OTIO
+- CHECKPOINT architektonisch vorbereitet; AUTOMATIC = Post-Alpha
+- KI-Timelines = `NEGATIVE_REFERENCE`
 
-## Nächster erlaubter Schritt
+## Nächste erlaubte Aktivität
 
-Nach Freigabe: **Alpha-Abnahme und Release-Readiness-Prüfung**.
+**Kontrollierter Alpha-Merge beziehungsweise interne Alpha-Erprobung.**
 
-Keine neue Produktphase begonnen.
-Gesperrt: echte Provider, proprietäre NLE-Exporte, automatische Veröffentlichung.
+Keine neue Produktphase freigegeben.
+Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte,
+automatische Veröffentlichung, Cloud-/Multi-User-Funktionen.

@@ -32,29 +32,33 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 ## Repository-Lage
 
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Phase 7–12: **abgeschlossen** (Fake / MANUAL)
-- Phase 13 Editorial Approval / OTIO / Reparse / Alpha-E2E: **abgeschlossen** (Fake)
+- Chief-Dev-Status: **`APPROVED_WITH_CONDITIONS`**
+- Releaseklasse: **interner MANUAL-/Fake-Alpha**
+- Phase 7–13: **abgeschlossen** (Fake / MANUAL)
 - Registry-Schema: **20**
 - OTIO-Profil: `discovery-otio-export-v1` · OpenTimelineIO **0.18.1**
-- Vision / Text / Stock / Voice: Fake-only
-- Teststand: **2915 / 2896 / 18 / 1**
+- Vision / Text / Stock / Voice: **Fake-only**
+- Adobe: **UNKNOWN**
+- NLE: **nur lokaler OTIO-Serialize/Reparse-Nachweis**
+- Teststand: **2915 collected / 2896 passed / 18 failed / 1 skipped**
 - Alpha-E2E: **bestanden** (lokal, Fake-only)
-- **Aktueller Schritt: Phase 13 / lokaler Fake-Alpha-Pfad abgeschlossen**
+- Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
+- **Aktueller Schritt: Alpha-Release Closeout — keine neue Produktphase**
 - Plan Phase 13: `docs/source_plans/PHASE13_EDITORIAL_APPROVAL_OTIO_E2E_PLAN.md`
 - Entscheidungen: D-10-001 … D-10-008; D-11-001 … D-11-011; D-12-001 … D-12-008; D-13-001 … D-13-008
 
-## Nächste erlaubte Aktion
+## Nächste erlaubte Aktivität
 
-Nach Freigabe:
+→ **Kontrollierter Alpha-Merge beziehungsweise interne Alpha-Erprobung**
 
-→ **Alpha-Abnahme und Release-Readiness-Prüfung**
+Keine neue Produktphase freigegeben.
 
 Weiterhin gesperrt ohne eigene Gates:
 
 - echte Stock-/Text-/Vision-/Voice-Provider
 - proprietäre NLE-Exporte (Premiere / DaVinci / Final Cut)
 - Cloud-Upload / Publishing
-- keine neue Produktphase ohne eigenen Auftrag
+- AUTOMATIC-Orchestrierung (Post-Alpha)
 
 ## Verbindliche Kurzregeln
 

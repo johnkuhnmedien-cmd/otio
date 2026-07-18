@@ -17,6 +17,8 @@
 - Phase-11 Contract Hardening R1: **angewendet** (Schema **18**)
 - Phase 12 Visual Edit / Humanity / Feasibility / Repair: **implementiert (Fake E2E)**
 - Phase 13 Editorial Approval / OTIO Export / Reparse / Alpha-E2E: **implementiert (Fake E2E)**
+- Alpha Release Closeout: **`APPROVED_WITH_CONDITIONS`**
+- Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - SoT Bootstrap: `RECONSTRUCTED_BOOTSTRAP` — für dieses Repository neu konsolidiert;
   Recovery-Suche → `NOT_FOUND`; andere Projekte und gelöschter GPT-Wissensstand
   sind keine Repositoryquelle; Authority-Restore der verbindlichen Regeln
@@ -27,17 +29,20 @@
   `fake-visual-edit-v1`)
 - Fake Stock Search: aktiv (`provider=fake`)
 - Fake Voice: aktiv (`provider=fake`, `fake-neutral-v1`, WAV PCM s16le 48 kHz mono)
+- Provider: **Fake-only**
 - OTIO-Profil: `discovery-otio-export-v1` · OpenTimelineIO **0.18.1**
 - Echte Vision-/Text-/Stock-/Voice-Provider: **gesperrt**
-- Kein ElevenLabs; keine echte Adobe-OAuth-/Lizenz-/Download-Integration
-- Keine proprietären NLE-Exporte; kein Cloud-Publish
-- Aktiver Produktauftrag: keiner (lokaler Fake-Alpha-Pfad Phase 13 abgeschlossen)
-- Nächster erlaubter Schritt nach Freigabe: **Alpha-Abnahme und Release-Readiness-Prüfung**
-- Keine neue Produktphase begonnen
+- Adobe: **UNKNOWN** (kein ElevenLabs; keine echte Adobe-OAuth-/Lizenz-/Download-Integration)
+- NLE: **nur lokaler OTIO-Serialize/Reparse-Nachweis** (keine proprietären NLE-Exporte)
+- Kein Cloud-Publish
+- Aktiver Produktauftrag: keiner
+- Nächste erlaubte Aktivität: **kontrollierter Alpha-Merge beziehungsweise interne Alpha-Erprobung**
+- Keine neue Produktphase freigegeben
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand nach Phase 13: **2915 collected / 2896 passed / 18 failed / 1 skipped**
+- Teststand: **2915 collected / 2896 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
+- Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
 
 ## Source of Truth
 
@@ -859,8 +864,13 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 6. ~~Phase 9 Editorial Core / Coverage (Fake)~~ — implementiert
 7. ~~Phase 10: Supplementation und Script Lock (Fake)~~ — implementiert
 8. ~~Phase 11: Voice, Pausen und Timing (Fake)~~ — implementiert
-9. Phase 12: Visual Edit Plan und Quality (**planen** nach Freigabe)
-10. Phase 13: Review und OTIO
+9. ~~Phase 12: Visual Edit / Humanity / Feasibility / Repair (Fake)~~ — implementiert
+10. ~~Phase 13: Review / OTIO / Alpha-E2E (Fake)~~ — implementiert
+11. ~~Alpha Release Readiness Verify~~ — `ALPHA_READY_WITH_LIMITATIONS`
+12. ~~Alpha Release Closeout~~ — **`APPROVED_WITH_CONDITIONS`**
+
+Nächste erlaubte Aktivität: **kontrollierter Alpha-Merge beziehungsweise interne Alpha-Erprobung**.
+Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
 (untergeordnet gegenüber Regeln, DECISIONS, MASTER_PLAN, ALPHA_SCOPE, …).

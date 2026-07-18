@@ -139,7 +139,7 @@ UI → Application → Domain → Adapters → Persistence
 - Observation Review
 - Visual Beat / Visual Intent (spätere Phasen)
 
-`prepared` ≠ modellanalysiert ≠ redaktionell akzeptiert ≠ Visual-Beat-Freigabe.  
+`prepared` ≠ modellanalysiert ≠ redaktionell akzeptiert ≠ Visual-Beat-Freigabe.
 `accepted` Observation ≠ Asset-Auswahl ≠ Fakten-/Geo-/Echtheits-/Beat-Freigabe.
 
 ## NEGATIVE_REFERENCE
