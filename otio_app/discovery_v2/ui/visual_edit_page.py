@@ -12,7 +12,10 @@ from otio_app.discovery_v2.application.visual_edit_plan_service import (
 )
 from otio_app.discovery_v2.application.visual_edit_repair_service import (
     apply_selected_repair_proposals,
+    list_repair_proposal_views,
     propose_editorial_repairs,
+    reject_repair_proposals,
+    select_repair_proposals,
 )
 from otio_app.discovery_v2.ui.flash import discovery_ui_flash_and_rerun
 from otio_app.discovery_v2.ui.overview import active_discovery_project
@@ -36,7 +39,7 @@ def render_discovery_visual_edit_page() -> None:
     _render_plan(view)
     _render_humanity(view)
     _render_feasibility(view)
-    _render_repairs(view)
+    _render_repairs(project, view)
 
 
 def _render_input_status(view) -> None:
@@ -103,10 +106,11 @@ def _render_actions(project, view) -> None:
             discovery_ui_flash_and_rerun(result.message)
         else:
             st.warning(result.message)
+    repair_views = list_repair_proposal_views(project) if view.current_bundle is not None else []
     selected = [
-        proposal.proposal_id
-        for proposal in view.repair_proposals
-        if getattr(proposal, "user_status", "") == "selected"
+        item.proposal.proposal_id
+        for item in repair_views
+        if item.selected and item.selectable
     ]
     if st.button(
         "Ausgewaehlte Reparaturen anwenden",
@@ -232,25 +236,89 @@ def _render_feasibility(view) -> None:
         )
 
 
-def _render_repairs(view) -> None:
+def _render_repairs(project, view) -> None:
     st.subheader("Repair")
     if not view.repair_proposals:
         st.caption("Keine Repair Proposals.")
         return
-    st.dataframe(
-        [
+    repair_views = list_repair_proposal_views(project)
+    if not repair_views:
+        st.caption("Keine Repair Proposals.")
+        return
+    pending_select: list[str] = []
+    pending_reject: list[str] = []
+    for item in repair_views:
+        proposal = item.proposal
+        st.markdown(f"**Proposal** `{proposal.proposal_id}`")
+        checked = item.selected
+        if item.selectable:
+            checkbox = getattr(st, "checkbox", None)
+            if checkbox is not None:
+                checked = bool(
+                    checkbox(
+                        "Proposal auswaehlen",
+                        value=item.selected,
+                        key=f"discovery_v2_repair_select_{proposal.proposal_id}",
+                    )
+                )
+            if checked:
+                pending_select.append(proposal.proposal_id)
+            elif item.selected:
+                pending_reject.append(proposal.proposal_id)
+        else:
+            st.caption("Nicht auswaehlbar (keine ausfuehrbare Operation oder veraltet).")
+        st.write(
             {
-                "Proposal": proposal.proposal_id,
-                "Source": proposal.source,
-                "Type": proposal.repair_type,
+                "Quelle": proposal.source,
+                "Finding/Issue": (
+                    []
+                    if item.artifact is None
+                    else list(item.artifact.source_issue_ids)
+                ),
+                "Betroffener Shot": item.affected_shot_id,
+                "Aktuelles Asset": item.current_asset_id,
+                "Vorgeschlagenes Asset": item.proposed_asset_id,
+                "Erwartete Wirkung": (
+                    ", ".join(item.expected_effects)
+                    if item.expected_effects
+                    else proposal.expected_effect
+                ),
                 "Status": proposal.user_status,
-                "Affected": ", ".join(proposal.affected_ids),
+                "Ausfuehrbar": bool(item.artifact and item.artifact.operations),
             }
-            for proposal in view.repair_proposals
-        ],
-        hide_index=True,
-        use_container_width=True,
-    )
+        )
+        if item.proposed_range is not None:
+            st.caption(
+                "Zielrange: "
+                f"{item.proposed_range.in_seconds}–{item.proposed_range.out_seconds}"
+            )
+    cols_fn = getattr(st, "columns", None)
+    cols = cols_fn(2) if cols_fn is not None else [st, st]
+    with cols[0]:
+        if st.button(
+            "Ausgewaehlte Vorschlaege auswaehlen",
+            key="discovery_v2_visual_edit_confirm_select_repairs",
+            disabled=not pending_select,
+        ):
+            result = select_repair_proposals(project, proposal_ids=pending_select)
+            if result.ok:
+                discovery_ui_flash_and_rerun(result.message)
+            else:
+                st.warning(result.message)
+    with cols[1]:
+        reject_ids = pending_reject or [
+            item.proposal.proposal_id for item in repair_views if item.selected
+        ]
+        if st.button(
+            "Ausgewaehlte Vorschlaege ablehnen",
+            key="discovery_v2_visual_edit_reject_repairs",
+            disabled=not reject_ids,
+        ):
+            result = reject_repair_proposals(project, proposal_ids=reject_ids)
+            if result.ok:
+                discovery_ui_flash_and_rerun(result.message)
+            else:
+                st.warning(result.message)
 
 
 __all__ = ["render_discovery_visual_edit_page"]

@@ -29,16 +29,25 @@ from otio_app.discovery_v2.domain.narration import (
     RESPONSE_SCHEMA_PAUSE_DIRECTION,
 )
 from otio_app.discovery_v2.domain.visual_edit import (
+    ASSET_REUSE_MAX,
     PROMPT_VERSION_EDITORIAL_REPAIR_PROPOSAL,
     PROMPT_VERSION_HUMANITY_REVIEW,
     PROMPT_VERSION_VISUAL_EDIT_PLAN,
+    REPAIR_EXPECTED_EFFECT_ASSET_REUSE_REDUCED,
+    REPAIR_EXPECTED_EFFECT_SIMILAR_MOTIF_RUN_REDUCED,
+    REPAIR_EXPECTED_EFFECT_SOURCE_RANGE_OVERLAP_REDUCED,
+    REPAIR_OPERATION_SCHEMA_VERSION,
+    REPAIR_PROPOSAL_OPS_SCHEMA_VERSION,
     RESPONSE_SCHEMA_EDITORIAL_REPAIR_PROPOSAL,
     RESPONSE_SCHEMA_HUMANITY_REVIEW,
     RESPONSE_SCHEMA_VISUAL_EDIT_PLAN,
+    SOURCE_RANGE_OVERLAP_RATIO_MAX,
     TEXT_REQUEST_KIND_EDITORIAL_REPAIR_PROPOSAL,
     TEXT_REQUEST_KIND_HUMANITY_REVIEW,
     TEXT_REQUEST_KIND_VISUAL_EDIT_PLAN,
     VISUAL_EDIT_MODEL_IDENTIFIER,
+    compute_visual_edit_sha256,
+    seconds_to_frame_nearest,
 )
 
 
@@ -734,33 +743,7 @@ class FakeTextAdapter:
         }
 
     def _editorial_repair_proposal(self, request: TextGatewayRequest) -> dict:
-        inputs = request.visual_edit_input
-        plan = inputs.get("plan", {}) if isinstance(inputs.get("plan", {}), dict) else {}
-        plan_id = str(plan.get("plan_id", "missing-plan"))
-        shots = inputs.get("shots", [])
-        affected = []
-        if isinstance(shots, list) and shots:
-            first = shots[0]
-            if isinstance(first, dict):
-                affected = [str(first.get("shot_id"))]
-        proposal = {
-            "proposal_id": _id("repair-proposal", plan_id, request.input_fingerprint),
-            "plan_id": plan_id,
-            "humanity_review_id": inputs.get("humanity_review_id"),
-            "feasibility_report_id": inputs.get("feasibility_report_id"),
-            "source": "editorial_fake_llm",
-            "repair_type": "vary_first_local_motif",
-            "affected_ids": affected or [plan_id],
-            "description": "Fake proposal: vary the first motif or transition after user selection.",
-            "expected_effect": "Reduces mechanical rhythm without auto-export or OTIO.",
-            "user_status": "proposed",
-            "version": 1,
-        }
-        return {
-            "plan_id": plan_id,
-            "input_fingerprint": request.input_fingerprint,
-            "proposals": [proposal],
-        }
+        return _build_editorial_repair_proposal_payload(request)
 
 
 def _forced_error_from_request(request: TextGatewayRequest) -> str | None:
@@ -849,6 +832,823 @@ def _humanity_finding(
         "recommended_action": "Review or select a repair before Phase 13.",
         "user_status": "open",
     }
+
+
+def _build_editorial_repair_proposal_payload(request: TextGatewayRequest) -> dict:
+    inputs = request.visual_edit_input if isinstance(request.visual_edit_input, dict) else {}
+    plan = inputs.get("plan", {}) if isinstance(inputs.get("plan", {}), dict) else {}
+    plan_id = str(plan.get("plan_id", "missing-plan"))
+    plan_fp = str(inputs.get("source_plan_fingerprint") or request.input_fingerprint)
+    provider = str(inputs.get("provider") or request.provider or "fake")
+    model = str(inputs.get("model_identifier") or request.model_identifier or VISUAL_EDIT_MODEL_IDENTIFIER)
+    shots = [item for item in inputs.get("shots", []) if isinstance(item, dict)]
+    assignments = [item for item in inputs.get("assignments", []) if isinstance(item, dict)]
+    candidates = sorted(
+        [item for item in inputs.get("candidates", []) if isinstance(item, dict)],
+        key=lambda item: (str(item.get("asset_id") or ""), str(item.get("observation_id") or "")),
+    )
+    findings = [item for item in inputs.get("findings", []) if isinstance(item, dict)]
+    issues = [item for item in inputs.get("feasibility_issues", []) if isinstance(item, dict)]
+    fps = 25.0
+    timeline = plan.get("narration_timeline") if isinstance(plan.get("narration_timeline"), dict) else {}
+    if not timeline:
+        # fps is only needed for frame rounding of proposed ranges
+        fps = 25.0
+    proposals: list[dict] = []
+    artifacts: list[dict] = []
+
+    motif_finding = next(
+        (
+            item
+            for item in findings
+            if item.get("category") == "similar_motif_sequence"
+            and item.get("user_status", "open") == "open"
+        ),
+        None,
+    )
+    if motif_finding is not None:
+        built = _fake_similar_motif_repair(
+            request=request,
+            plan_id=plan_id,
+            plan_fp=plan_fp,
+            provider=provider,
+            model=model,
+            shots=shots,
+            assignments=assignments,
+            candidates=candidates,
+            finding=motif_finding,
+            fps=fps,
+        )
+        if built is not None:
+            proposals.append(built[0])
+            artifacts.append(built[1])
+
+    e3_issues = [
+        item
+        for item in issues
+        if item.get("severity") == "blocking" and "E3" in str(item.get("technical_details") or "")
+    ]
+    if e3_issues:
+        built = _fake_e3_repair(
+            request=request,
+            plan_id=plan_id,
+            plan_fp=plan_fp,
+            provider=provider,
+            model=model,
+            shots=shots,
+            assignments=assignments,
+            candidates=candidates,
+            issues=e3_issues,
+            fps=fps,
+        )
+        if built is not None:
+            proposals.append(built[0])
+            artifacts.append(built[1])
+
+    e4_issues = [
+        item
+        for item in issues
+        if item.get("severity") == "blocking" and "E4" in str(item.get("technical_details") or "")
+    ]
+    if e4_issues:
+        built = _fake_e4_repair(
+            request=request,
+            plan_id=plan_id,
+            plan_fp=plan_fp,
+            provider=provider,
+            model=model,
+            assignments=assignments,
+            candidates=candidates,
+            issues=e4_issues,
+            fps=fps,
+        )
+        if built is not None:
+            proposals.append(built[0])
+            artifacts.append(built[1])
+
+    if not proposals:
+        # Visible but non-executable generic proposal when no actionable blocker repair exists.
+        affected = [str(shots[0]["shot_id"])] if shots and shots[0].get("shot_id") else [plan_id]
+        proposal_id = _id("repair-proposal", plan_id, request.input_fingerprint, "generic")
+        proposals.append(
+            {
+                "proposal_id": proposal_id,
+                "plan_id": plan_id,
+                "humanity_review_id": inputs.get("humanity_review_id"),
+                "feasibility_report_id": inputs.get("feasibility_report_id"),
+                "source": "editorial_fake_llm",
+                "repair_type": "vary_first_local_motif",
+                "affected_ids": affected,
+                "description": "Generischer Hinweis ohne ausfuehrbare Operation.",
+                "expected_effect": "Nicht anwendbar ohne konkrete Alternative.",
+                "user_status": "proposed",
+                "version": 1,
+            }
+        )
+        artifacts.append(
+            _ops_artifact(
+                proposal_id=proposal_id,
+                plan_id=plan_id,
+                plan_fp=plan_fp,
+                proposal_type="vary_first_local_motif",
+                provider=provider,
+                model=model,
+                input_fingerprint=request.input_fingerprint,
+                source_review_id=inputs.get("humanity_review_id"),
+                source_report_id=inputs.get("feasibility_report_id"),
+                source_issue_ids=[],
+                operations=[],
+            )
+        )
+
+    return {
+        "plan_id": plan_id,
+        "input_fingerprint": request.input_fingerprint,
+        "proposals": proposals,
+        "executable_artifacts": artifacts,
+    }
+
+
+def _fake_similar_motif_repair(
+    *,
+    request: TextGatewayRequest,
+    plan_id: str,
+    plan_fp: str,
+    provider: str,
+    model: str,
+    shots: list[dict],
+    assignments: list[dict],
+    candidates: list[dict],
+    finding: dict,
+    fps: float,
+) -> tuple[dict, dict] | None:
+    candidate_by_obs = {
+        str(item.get("observation_id")): item
+        for item in candidates
+        if item.get("observation_id")
+    }
+    ordered = _assignments_in_shot_order(shots, assignments)
+    if not ordered:
+        return None
+    run_start = 0
+    best = (0, 0)  # start, length
+    previous = None
+    current_start = 0
+    current_len = 0
+    for index, assignment in enumerate(ordered):
+        obs = candidate_by_obs.get(str(assignment.get("visual_observation_id")))
+        motif = None if obs is None else obs.get("motif_hash")
+        if motif is not None and motif == previous:
+            current_len += 1
+        else:
+            current_start = index
+            current_len = 1
+            previous = motif
+        if current_len > best[1]:
+            best = (current_start, current_len)
+            run_start = current_start
+    target_assignment = ordered[run_start]
+    source_asset = str(target_assignment.get("asset_id") or "")
+    source_motif = None
+    source_obs = candidate_by_obs.get(str(target_assignment.get("visual_observation_id")))
+    if source_obs is not None:
+        source_motif = source_obs.get("motif_hash")
+    reuse = _asset_reuse_counts(assignments)
+    alt = _pick_alternate_candidate(
+        candidates=candidates,
+        source_asset_id=source_asset,
+        source_motif=source_motif,
+        reuse_counts=reuse,
+        require_different_motif=True,
+        desired_duration=_assignment_desired_duration(target_assignment, shots),
+        occupied=_occupied_ranges_except(assignments, str(target_assignment.get("assignment_id"))),
+        fps=fps,
+    )
+    proposal_id = _id(
+        "repair-proposal",
+        plan_id,
+        request.input_fingerprint,
+        "similar-motif",
+        str(finding.get("finding_id")),
+    )
+    if alt is None:
+        proposal = {
+            "proposal_id": proposal_id,
+            "plan_id": plan_id,
+            "humanity_review_id": finding.get("review_id") or request.visual_edit_input.get("humanity_review_id"),
+            "feasibility_report_id": request.visual_edit_input.get("feasibility_report_id"),
+            "source": "editorial_fake_llm",
+            "repair_type": "additional_coverage_required",
+            "affected_ids": [
+                str(target_assignment.get("shot_id") or ""),
+                str(target_assignment.get("assignment_id") or ""),
+            ],
+            "description": "Keine gueltige Motivalternative in der Kandidatenmenge.",
+            "expected_effect": "additional_coverage_required",
+            "user_status": "proposed",
+            "version": 1,
+        }
+        artifact = _ops_artifact(
+            proposal_id=proposal_id,
+            plan_id=plan_id,
+            plan_fp=plan_fp,
+            proposal_type="additional_coverage_required",
+            provider=provider,
+            model=model,
+            input_fingerprint=request.input_fingerprint,
+            source_review_id=finding.get("review_id") or request.visual_edit_input.get("humanity_review_id"),
+            source_report_id=request.visual_edit_input.get("feasibility_report_id"),
+            source_issue_ids=[str(finding.get("finding_id"))],
+            operations=[],
+        )
+        return proposal, artifact
+    alt_candidate, target_range = alt
+    operation = _replace_asset_operation(
+        plan_id=plan_id,
+        plan_fp=plan_fp,
+        assignment=target_assignment,
+        target_candidate=alt_candidate,
+        target_range=target_range,
+        addressed_issue_ids=[str(finding.get("finding_id"))],
+        expected_effects=[REPAIR_EXPECTED_EFFECT_SIMILAR_MOTIF_RUN_REDUCED],
+    )
+    proposal = {
+        "proposal_id": proposal_id,
+        "plan_id": plan_id,
+        "humanity_review_id": finding.get("review_id") or request.visual_edit_input.get("humanity_review_id"),
+        "feasibility_report_id": request.visual_edit_input.get("feasibility_report_id"),
+        "source": "editorial_fake_llm",
+        "repair_type": "replace_assignment_asset",
+        "affected_ids": [
+            str(target_assignment.get("assignment_id") or ""),
+            str(target_assignment.get("shot_id") or ""),
+            source_asset,
+            str(alt_candidate.get("asset_id") or ""),
+        ],
+        "description": (
+            f"Fake editorial: Shot {target_assignment.get('shot_id')} von "
+            f"{source_asset} auf {alt_candidate.get('asset_id')} umstellen."
+        ),
+        "expected_effect": "aehnliche Motivfolge wird reduziert",
+        "user_status": "proposed",
+        "version": 1,
+    }
+    artifact = _ops_artifact(
+        proposal_id=proposal_id,
+        plan_id=plan_id,
+        plan_fp=plan_fp,
+        proposal_type="replace_assignment_asset",
+        provider=provider,
+        model=model,
+        input_fingerprint=request.input_fingerprint,
+        source_review_id=finding.get("review_id") or request.visual_edit_input.get("humanity_review_id"),
+        source_report_id=request.visual_edit_input.get("feasibility_report_id"),
+        source_issue_ids=[str(finding.get("finding_id"))],
+        operations=[operation],
+    )
+    return proposal, artifact
+
+
+def _fake_e3_repair(
+    *,
+    request: TextGatewayRequest,
+    plan_id: str,
+    plan_fp: str,
+    provider: str,
+    model: str,
+    shots: list[dict],
+    assignments: list[dict],
+    candidates: list[dict],
+    issues: list[dict],
+    fps: float,
+) -> tuple[dict, dict] | None:
+    reuse = _asset_reuse_counts(assignments)
+    overused = sorted(
+        [asset_id for asset_id, count in reuse.items() if count > ASSET_REUSE_MAX],
+        key=lambda item: item,
+    )
+    if not overused:
+        return None
+    asset_id = overused[0]
+    excess = reuse[asset_id] - ASSET_REUSE_MAX
+    ordered = [
+        item
+        for item in _assignments_in_shot_order(shots, assignments)
+        if str(item.get("asset_id")) == asset_id
+    ]
+    # Keep earliest assignments; repair the latest excess ones.
+    to_repair = list(reversed(ordered))[:excess]
+    operations: list[dict] = []
+    working_reuse = dict(reuse)
+    working_assignments = [dict(item) for item in assignments]
+    for assignment in to_repair:
+        occupied = _occupied_ranges_except(
+            working_assignments, str(assignment.get("assignment_id"))
+        )
+        alt = _pick_alternate_candidate(
+            candidates=candidates,
+            source_asset_id=asset_id,
+            source_motif=None,
+            reuse_counts=working_reuse,
+            require_different_motif=False,
+            desired_duration=_assignment_desired_duration(assignment, shots),
+            occupied=occupied,
+            fps=fps,
+        )
+        if alt is None:
+            continue
+        alt_candidate, target_range = alt
+        operations.append(
+            _replace_asset_operation(
+                plan_id=plan_id,
+                plan_fp=plan_fp,
+                assignment=assignment,
+                target_candidate=alt_candidate,
+                target_range=target_range,
+                addressed_issue_ids=[str(item.get("issue_id")) for item in issues if item.get("issue_id")],
+                expected_effects=[REPAIR_EXPECTED_EFFECT_ASSET_REUSE_REDUCED],
+            )
+        )
+        target_asset = str(alt_candidate.get("asset_id"))
+        working_reuse[asset_id] = working_reuse.get(asset_id, 1) - 1
+        working_reuse[target_asset] = working_reuse.get(target_asset, 0) + 1
+        for row in working_assignments:
+            if row.get("assignment_id") == assignment.get("assignment_id"):
+                row["asset_id"] = target_asset
+                row["working_media_id"] = alt_candidate.get("working_media_id")
+                row["visual_observation_id"] = alt_candidate.get("observation_id")
+                row["technical_shot_id"] = target_range.get("technical_shot_id")
+                row["technical_source_in_seconds"] = target_range.get("in_seconds")
+                row["technical_source_out_seconds"] = target_range.get("out_seconds")
+                break
+    proposal_id = _id("repair-proposal", plan_id, request.input_fingerprint, "e3", asset_id)
+    if not operations:
+        proposal = {
+            "proposal_id": proposal_id,
+            "plan_id": plan_id,
+            "humanity_review_id": request.visual_edit_input.get("humanity_review_id"),
+            "feasibility_report_id": request.visual_edit_input.get("feasibility_report_id"),
+            "source": "editorial_fake_llm",
+            "repair_type": "additional_coverage_required",
+            "affected_ids": [asset_id],
+            "description": "Keine E3-konforme Ersatzassets in der Kandidatenmenge.",
+            "expected_effect": "additional_coverage_required",
+            "user_status": "proposed",
+            "version": 1,
+        }
+        artifact = _ops_artifact(
+            proposal_id=proposal_id,
+            plan_id=plan_id,
+            plan_fp=plan_fp,
+            proposal_type="additional_coverage_required",
+            provider=provider,
+            model=model,
+            input_fingerprint=request.input_fingerprint,
+            source_review_id=request.visual_edit_input.get("humanity_review_id"),
+            source_report_id=request.visual_edit_input.get("feasibility_report_id"),
+            source_issue_ids=[str(item.get("issue_id")) for item in issues if item.get("issue_id")],
+            operations=[],
+        )
+        return proposal, artifact
+    proposal = {
+        "proposal_id": proposal_id,
+        "plan_id": plan_id,
+        "humanity_review_id": request.visual_edit_input.get("humanity_review_id"),
+        "feasibility_report_id": request.visual_edit_input.get("feasibility_report_id"),
+        "source": "editorial_fake_llm",
+        "repair_type": "replace_assignment_asset",
+        "affected_ids": [str(op["source_assignment_id"]) for op in operations] + [asset_id],
+        "description": f"Fake editorial: E3-Reuse fuer {asset_id} durch Ersatzassets senken.",
+        "expected_effect": "Asset-Wiederverwendung wird reduziert",
+        "user_status": "proposed",
+        "version": 1,
+    }
+    artifact = _ops_artifact(
+        proposal_id=proposal_id,
+        plan_id=plan_id,
+        plan_fp=plan_fp,
+        proposal_type="replace_assignment_asset",
+        provider=provider,
+        model=model,
+        input_fingerprint=request.input_fingerprint,
+        source_review_id=request.visual_edit_input.get("humanity_review_id"),
+        source_report_id=request.visual_edit_input.get("feasibility_report_id"),
+        source_issue_ids=[str(item.get("issue_id")) for item in issues if item.get("issue_id")],
+        operations=operations,
+    )
+    return proposal, artifact
+
+
+def _fake_e4_repair(
+    *,
+    request: TextGatewayRequest,
+    plan_id: str,
+    plan_fp: str,
+    provider: str,
+    model: str,
+    assignments: list[dict],
+    candidates: list[dict],
+    issues: list[dict],
+    fps: float,
+) -> tuple[dict, dict] | None:
+    issue = issues[0]
+    assignment_id = str(issue.get("assignment_id") or "")
+    assignment = next(
+        (item for item in assignments if str(item.get("assignment_id")) == assignment_id),
+        None,
+    )
+    if assignment is None:
+        # Fall back to first overlapping pair member mentioned in details.
+        for item in assignments:
+            if str(item.get("asset_id") or "") in str(issue.get("technical_details") or ""):
+                assignment = item
+                break
+    if assignment is None:
+        return None
+    candidate = next(
+        (
+            item
+            for item in candidates
+            if str(item.get("asset_id")) == str(assignment.get("asset_id"))
+        ),
+        None,
+    )
+    if candidate is None:
+        return None
+    occupied_map = _occupied_ranges_except(assignments, str(assignment.get("assignment_id")))
+    desired = float(assignment.get("duration_seconds") or 1.0)
+    occ_key = f"{assignment.get('asset_id')}:{assignment.get('working_media_id')}"
+    alt_range = _find_e4_range(
+        candidate,
+        desired=desired,
+        occupied=occupied_map.get(occ_key, []),
+        fps=fps,
+    )
+    proposal_id = _id(
+        "repair-proposal",
+        plan_id,
+        request.input_fingerprint,
+        "e4",
+        str(assignment.get("assignment_id")),
+    )
+    before = {
+        "working_media_id": str(assignment.get("working_media_id")),
+        "observation_id": str(assignment.get("visual_observation_id")),
+        "technical_shot_id": assignment.get("technical_shot_id"),
+        "in_seconds": assignment.get("technical_source_in_seconds"),
+        "out_seconds": assignment.get("technical_source_out_seconds"),
+        "in_frame": assignment.get("technical_source_in_frame"),
+        "out_frame": assignment.get("technical_source_out_frame"),
+    }
+    if alt_range is not None:
+        operation = {
+            "operation_version": REPAIR_OPERATION_SCHEMA_VERSION,
+            "operation_id": _id("repair-op", plan_id, str(assignment.get("assignment_id")), "range"),
+            "operation_type": "replace_assignment_source_range",
+            "source_plan_id": plan_id,
+            "source_plan_fingerprint": plan_fp,
+            "source_assignment_id": str(assignment.get("assignment_id")),
+            "source_shot_id": str(assignment.get("shot_id")),
+            "asset_id": str(assignment.get("asset_id")),
+            "source_range_before": before,
+            "source_range_after": alt_range,
+            "addressed_issue_ids": [str(item.get("issue_id")) for item in issues if item.get("issue_id")],
+            "expected_effects": [REPAIR_EXPECTED_EFFECT_SOURCE_RANGE_OVERLAP_REDUCED],
+            "operation_fingerprint": "",
+        }
+        operation["operation_fingerprint"] = compute_visual_edit_sha256(
+            {key: value for key, value in operation.items() if key != "operation_fingerprint"}
+        )
+        proposal = {
+            "proposal_id": proposal_id,
+            "plan_id": plan_id,
+            "humanity_review_id": request.visual_edit_input.get("humanity_review_id"),
+            "feasibility_report_id": request.visual_edit_input.get("feasibility_report_id"),
+            "source": "editorial_fake_llm",
+            "repair_type": "replace_assignment_source_range",
+            "affected_ids": [
+                str(assignment.get("assignment_id")),
+                str(assignment.get("shot_id")),
+            ],
+            "description": "Fake editorial: alternative Source-Range unter E4-Grenze.",
+            "expected_effect": "Source-Range-Overlap wird reduziert",
+            "user_status": "proposed",
+            "version": 1,
+        }
+        artifact = _ops_artifact(
+            proposal_id=proposal_id,
+            plan_id=plan_id,
+            plan_fp=plan_fp,
+            proposal_type="replace_assignment_source_range",
+            provider=provider,
+            model=model,
+            input_fingerprint=request.input_fingerprint,
+            source_review_id=request.visual_edit_input.get("humanity_review_id"),
+            source_report_id=request.visual_edit_input.get("feasibility_report_id"),
+            source_issue_ids=[str(item.get("issue_id")) for item in issues if item.get("issue_id")],
+            operations=[operation],
+        )
+        return proposal, artifact
+    # No alternate range → try asset replacement.
+    reuse = _asset_reuse_counts(assignments)
+    alt = _pick_alternate_candidate(
+        candidates=candidates,
+        source_asset_id=str(assignment.get("asset_id")),
+        source_motif=None,
+        reuse_counts=reuse,
+        require_different_motif=False,
+        desired_duration=desired,
+        occupied=_occupied_ranges_except(assignments, str(assignment.get("assignment_id"))),
+        fps=fps,
+    )
+    if alt is None:
+        return None
+    alt_candidate, target_range = alt
+    operation = _replace_asset_operation(
+        plan_id=plan_id,
+        plan_fp=plan_fp,
+        assignment=assignment,
+        target_candidate=alt_candidate,
+        target_range=target_range,
+        addressed_issue_ids=[str(item.get("issue_id")) for item in issues if item.get("issue_id")],
+        expected_effects=[REPAIR_EXPECTED_EFFECT_SOURCE_RANGE_OVERLAP_REDUCED],
+    )
+    proposal = {
+        "proposal_id": proposal_id,
+        "plan_id": plan_id,
+        "humanity_review_id": request.visual_edit_input.get("humanity_review_id"),
+        "feasibility_report_id": request.visual_edit_input.get("feasibility_report_id"),
+        "source": "editorial_fake_llm",
+        "repair_type": "replace_assignment_asset",
+        "affected_ids": [
+            str(assignment.get("assignment_id")),
+            str(assignment.get("shot_id")),
+            str(alt_candidate.get("asset_id")),
+        ],
+        "description": "Fake editorial: E4 ohne freie Range → Asset-Ersatz.",
+        "expected_effect": "Source-Range-Overlap wird reduziert",
+        "user_status": "proposed",
+        "version": 1,
+    }
+    artifact = _ops_artifact(
+        proposal_id=proposal_id,
+        plan_id=plan_id,
+        plan_fp=plan_fp,
+        proposal_type="replace_assignment_asset",
+        provider=provider,
+        model=model,
+        input_fingerprint=request.input_fingerprint,
+        source_review_id=request.visual_edit_input.get("humanity_review_id"),
+        source_report_id=request.visual_edit_input.get("feasibility_report_id"),
+        source_issue_ids=[str(item.get("issue_id")) for item in issues if item.get("issue_id")],
+        operations=[operation],
+    )
+    return proposal, artifact
+
+
+def _ops_artifact(
+    *,
+    proposal_id: str,
+    plan_id: str,
+    plan_fp: str,
+    proposal_type: str,
+    provider: str,
+    model: str,
+    input_fingerprint: str,
+    source_review_id: object,
+    source_report_id: object,
+    source_issue_ids: list[str],
+    operations: list[dict],
+) -> dict:
+    body = {
+        "schema_version": REPAIR_PROPOSAL_OPS_SCHEMA_VERSION,
+        "proposal_id": proposal_id,
+        "source_plan_id": plan_id,
+        "source_plan_fingerprint": plan_fp,
+        "source_review_id": source_review_id,
+        "source_report_id": source_report_id,
+        "source_issue_ids": source_issue_ids,
+        "proposal_type": proposal_type,
+        "provider": provider,
+        "model": model,
+        "input_fingerprint": input_fingerprint,
+        "created_at": _now(),
+        "operations": operations,
+        "artifact_fingerprint": "",
+    }
+    body["artifact_fingerprint"] = compute_visual_edit_sha256(
+        {key: value for key, value in body.items() if key != "artifact_fingerprint"}
+    )
+    return body
+
+
+def _replace_asset_operation(
+    *,
+    plan_id: str,
+    plan_fp: str,
+    assignment: dict,
+    target_candidate: dict,
+    target_range: dict,
+    addressed_issue_ids: list[str],
+    expected_effects: list[str],
+) -> dict:
+    operation = {
+        "operation_version": REPAIR_OPERATION_SCHEMA_VERSION,
+        "operation_id": _id(
+            "repair-op",
+            plan_id,
+            str(assignment.get("assignment_id")),
+            str(target_candidate.get("asset_id")),
+        ),
+        "operation_type": "replace_assignment_asset",
+        "source_plan_id": plan_id,
+        "source_plan_fingerprint": plan_fp,
+        "source_assignment_id": str(assignment.get("assignment_id")),
+        "source_shot_id": str(assignment.get("shot_id")),
+        "source_asset_id": str(assignment.get("asset_id")),
+        "target_asset_id": str(target_candidate.get("asset_id")),
+        "target_source_range": target_range,
+        "addressed_issue_ids": addressed_issue_ids,
+        "expected_effects": expected_effects,
+        "operation_fingerprint": "",
+    }
+    operation["operation_fingerprint"] = compute_visual_edit_sha256(
+        {key: value for key, value in operation.items() if key != "operation_fingerprint"}
+    )
+    return operation
+
+
+def _pick_alternate_candidate(
+    *,
+    candidates: list[dict],
+    source_asset_id: str,
+    source_motif: object,
+    reuse_counts: dict[str, int],
+    require_different_motif: bool,
+    desired_duration: float,
+    occupied: dict[str, list[tuple[float, float]]],
+    fps: float,
+) -> tuple[dict, dict] | None:
+    for candidate in candidates:
+        asset_id = str(candidate.get("asset_id") or "")
+        if not asset_id or asset_id == source_asset_id:
+            continue
+        if reuse_counts.get(asset_id, 0) >= ASSET_REUSE_MAX:
+            continue
+        if require_different_motif and source_motif is not None:
+            if candidate.get("motif_hash") == source_motif:
+                continue
+        occ_key = f"{asset_id}:{candidate.get('working_media_id')}"
+        target_range = _find_e4_range(
+            candidate,
+            desired=desired_duration,
+            occupied=occupied.get(occ_key, []),
+            fps=fps,
+        )
+        if target_range is None and str(candidate.get("media_kind")) == "image":
+            target_range = {
+                "working_media_id": str(candidate.get("working_media_id")),
+                "observation_id": str(candidate.get("observation_id")),
+                "technical_shot_id": None,
+                "in_seconds": None,
+                "out_seconds": None,
+                "in_frame": None,
+                "out_frame": None,
+            }
+        if target_range is None:
+            continue
+        return candidate, target_range
+    return None
+
+
+def _find_e4_range(
+    candidate: dict,
+    *,
+    desired: float,
+    occupied: list[tuple[float, float]],
+    fps: float,
+) -> dict | None:
+    if str(candidate.get("media_kind")) == "image":
+        return {
+            "working_media_id": str(candidate.get("working_media_id")),
+            "observation_id": str(candidate.get("observation_id")),
+            "technical_shot_id": None,
+            "in_seconds": None,
+            "out_seconds": None,
+            "in_frame": None,
+            "out_frame": None,
+        }
+    tech_shots = candidate.get("technical_shots", [])
+    tech_shots = [item for item in tech_shots if isinstance(item, dict)] if isinstance(tech_shots, list) else []
+    for tech in tech_shots:
+        try:
+            start = float(tech.get("start_seconds") or 0.0)
+            end = float(tech.get("end_seconds") or 0.0)
+            duration_desired = float(desired)
+        except (TypeError, ValueError):
+            continue
+        available = end - start
+        if available <= 0:
+            continue
+        duration = min(max(0.05, duration_desired), available)
+        step = max(0.05, duration * (1.0 - SOURCE_RANGE_OVERLAP_RATIO_MAX))
+        cursor = start
+        while cursor + duration <= end + 1e-9:
+            source_in = round(cursor, 6)
+            source_out = round(min(end, source_in + duration), 6)
+            in_frame = seconds_to_frame_nearest(source_in, fps)
+            out_frame = max(in_frame + 1, seconds_to_frame_nearest(source_out, fps))
+            rounded_in = in_frame / fps
+            rounded_out = out_frame / fps
+            if rounded_in < start - 1e-6 or rounded_out > end + 1e-6:
+                cursor += step
+                continue
+            if _range_ok((rounded_in, rounded_out), occupied):
+                return {
+                    "working_media_id": str(candidate.get("working_media_id")),
+                    "observation_id": str(candidate.get("observation_id")),
+                    "technical_shot_id": str(tech.get("technical_shot_id")),
+                    "in_seconds": round(rounded_in, 6),
+                    "out_seconds": round(rounded_out, 6),
+                    "in_frame": in_frame,
+                    "out_frame": out_frame,
+                }
+            cursor += step
+    return None
+
+
+def _range_ok(candidate: tuple[float, float], occupied: list[tuple[float, float]]) -> bool:
+    for existing in occupied:
+        try:
+            existing_range = (float(existing[0]), float(existing[1]))
+        except (TypeError, ValueError, IndexError):
+            continue
+        overlap = max(
+            0.0,
+            min(candidate[1], existing_range[1]) - max(candidate[0], existing_range[0]),
+        )
+        shortest = min(candidate[1] - candidate[0], existing_range[1] - existing_range[0])
+        ratio = 0.0 if shortest <= 0 else overlap / shortest
+        if ratio >= SOURCE_RANGE_OVERLAP_RATIO_MAX:
+            return False
+    return True
+
+
+def _assignments_in_shot_order(shots: list[dict], assignments: list[dict]) -> list[dict]:
+    ordinal = {
+        str(shot.get("shot_id")): int(shot.get("ordinal") or 0)
+        for shot in shots
+        if shot.get("shot_id")
+    }
+    return sorted(
+        assignments,
+        key=lambda item: (
+            ordinal.get(str(item.get("shot_id")), 10**9),
+            str(item.get("assignment_id") or ""),
+        ),
+    )
+
+
+def _asset_reuse_counts(assignments: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in assignments:
+        asset_id = str(item.get("asset_id") or "")
+        if not asset_id:
+            continue
+        counts[asset_id] = counts.get(asset_id, 0) + 1
+    return counts
+
+
+def _occupied_ranges_except(
+    assignments: list[dict],
+    assignment_id: str,
+) -> dict[str, list[tuple[float, float]]]:
+    occupied: dict[str, list[tuple[float, float]]] = {}
+    for item in assignments:
+        if str(item.get("assignment_id")) == assignment_id:
+            continue
+        if item.get("technical_source_in_seconds") is None or item.get("technical_source_out_seconds") is None:
+            continue
+        key = f"{item.get('asset_id')}:{item.get('working_media_id')}"
+        occupied.setdefault(key, []).append(
+            (
+                float(item["technical_source_in_seconds"]),
+                float(item["technical_source_out_seconds"]),
+            )
+        )
+    return occupied
+
+
+def _assignment_desired_duration(assignment: dict, shots: list[dict]) -> float:
+    shot = next(
+        (item for item in shots if str(item.get("shot_id")) == str(assignment.get("shot_id"))),
+        None,
+    )
+    if shot is not None and shot.get("duration_seconds") is not None:
+        return float(shot["duration_seconds"])
+    if assignment.get("duration_seconds") is not None:
+        return float(assignment["duration_seconds"])
+    return 1.0
 
 
 def _now() -> str:

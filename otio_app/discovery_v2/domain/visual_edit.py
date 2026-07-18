@@ -8,7 +8,7 @@ import math
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -83,6 +83,23 @@ VISUAL_EDIT_ERROR_FEASIBILITY_BLOCKING_ISSUE = "feasibility_blocking_issue"
 VISUAL_EDIT_ERROR_REPAIR_PROPOSAL_INVALID = "repair_proposal_invalid"
 VISUAL_EDIT_ERROR_REPAIR_CONFLICT = "repair_conflict"
 VISUAL_EDIT_ERROR_REPAIR_VALIDATION_FAILED = "repair_validation_failed"
+VISUAL_EDIT_ERROR_REPAIR_PROPOSAL_NOT_SELECTED = "repair_proposal_not_selected"
+VISUAL_EDIT_ERROR_REPAIR_PROPOSAL_NOT_EXECUTABLE = "repair_proposal_not_executable"
+VISUAL_EDIT_ERROR_REPAIR_PROPOSAL_STALE = "repair_proposal_stale"
+VISUAL_EDIT_ERROR_REPAIR_OPERATION_TARGET_MISSING = "repair_operation_target_missing"
+VISUAL_EDIT_ERROR_REPAIR_REPLACEMENT_ASSET_INVALID = "repair_replacement_asset_invalid"
+VISUAL_EDIT_ERROR_REPAIR_REPLACEMENT_OBSERVATION_NOT_ACCEPTED = (
+    "repair_replacement_observation_not_accepted"
+)
+VISUAL_EDIT_ERROR_REPAIR_SOURCE_RANGE_INVALID = "repair_source_range_invalid"
+VISUAL_EDIT_ERROR_REPAIR_OPERATION_NO_EFFECT = "repair_operation_no_effect"
+VISUAL_EDIT_ERROR_REPAIR_APPLY_PERSIST_FAILED = "repair_apply_persist_failed"
+REPAIR_OPERATION_SCHEMA_VERSION = "repair-operation-v1"
+REPAIR_PROPOSAL_OPS_SCHEMA_VERSION = "repair-proposal-ops-v1"
+REPAIR_DECISION_SCHEMA_VERSION = "repair-decision-v1"
+REPAIR_EXPECTED_EFFECT_SIMILAR_MOTIF_RUN_REDUCED = "similar_motif_run_reduced"
+REPAIR_EXPECTED_EFFECT_ASSET_REUSE_REDUCED = "asset_reuse_reduced"
+REPAIR_EXPECTED_EFFECT_SOURCE_RANGE_OVERLAP_REDUCED = "source_range_overlap_reduced"
 VISUAL_EDIT_ERROR_RUN_ALREADY_ACTIVE = "visual_edit_run_already_active"
 VISUAL_EDIT_ERROR_NARRATION_RUN_ALREADY_ACTIVE = "narration_run_already_active"
 VISUAL_EDIT_ERROR_ANALYSIS_RUN_ALREADY_ACTIVE = "analysis_run_already_active"
@@ -124,6 +141,15 @@ VISUAL_EDIT_ERROR_CODES = (
     VISUAL_EDIT_ERROR_REPAIR_PROPOSAL_INVALID,
     VISUAL_EDIT_ERROR_REPAIR_CONFLICT,
     VISUAL_EDIT_ERROR_REPAIR_VALIDATION_FAILED,
+    VISUAL_EDIT_ERROR_REPAIR_PROPOSAL_NOT_SELECTED,
+    VISUAL_EDIT_ERROR_REPAIR_PROPOSAL_NOT_EXECUTABLE,
+    VISUAL_EDIT_ERROR_REPAIR_PROPOSAL_STALE,
+    VISUAL_EDIT_ERROR_REPAIR_OPERATION_TARGET_MISSING,
+    VISUAL_EDIT_ERROR_REPAIR_REPLACEMENT_ASSET_INVALID,
+    VISUAL_EDIT_ERROR_REPAIR_REPLACEMENT_OBSERVATION_NOT_ACCEPTED,
+    VISUAL_EDIT_ERROR_REPAIR_SOURCE_RANGE_INVALID,
+    VISUAL_EDIT_ERROR_REPAIR_OPERATION_NO_EFFECT,
+    VISUAL_EDIT_ERROR_REPAIR_APPLY_PERSIST_FAILED,
     VISUAL_EDIT_ERROR_RUN_ALREADY_ACTIVE,
     VISUAL_EDIT_ERROR_NARRATION_RUN_ALREADY_ACTIVE,
     VISUAL_EDIT_ERROR_ANALYSIS_RUN_ALREADY_ACTIVE,
@@ -181,6 +207,16 @@ RepairProposalStatusLiteral = Literal[
     "applied",
     "rejected",
     "superseded",
+]
+RepairDecisionLiteral = Literal["selected", "rejected"]
+RepairOperationTypeLiteral = Literal[
+    "replace_assignment_asset",
+    "replace_assignment_source_range",
+]
+RepairExpectedEffectLiteral = Literal[
+    "similar_motif_run_reduced",
+    "asset_reuse_reduced",
+    "source_range_overlap_reduced",
 ]
 RepairRunStatusLiteral = Literal["queued", "running", "completed", "failed", "interrupted"]
 VisualEditRunScopeLiteral = Literal[
@@ -431,6 +467,111 @@ class RepairProposal(BaseModel):
     version: int = Field(default=1, ge=1)
 
 
+class RepairSourceRangeSpec(BaseModel):
+    """Concrete technical source range for repair operations."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    working_media_id: str
+    observation_id: str
+    technical_shot_id: str | None = None
+    in_seconds: float | None = None
+    out_seconds: float | None = None
+    in_frame: int | None = None
+    out_frame: int | None = None
+
+    @model_validator(mode="after")
+    def _validate_pair(self) -> "RepairSourceRangeSpec":
+        has_in = self.in_seconds is not None
+        has_out = self.out_seconds is not None
+        if has_in != has_out:
+            raise ValueError("source range in/out must be paired")
+        if has_in and has_out and float(self.out_seconds) <= float(self.in_seconds):
+            raise ValueError("source range out must be greater than in")
+        return self
+
+
+class ReplaceAssignmentAssetOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_version: str = REPAIR_OPERATION_SCHEMA_VERSION
+    operation_id: str
+    operation_type: Literal["replace_assignment_asset"] = "replace_assignment_asset"
+    source_plan_id: str
+    source_plan_fingerprint: str
+    source_assignment_id: str
+    source_shot_id: str
+    source_asset_id: str
+    target_asset_id: str
+    target_source_range: RepairSourceRangeSpec
+    addressed_issue_ids: list[str] = Field(default_factory=list)
+    expected_effects: list[RepairExpectedEffectLiteral] = Field(default_factory=list)
+    operation_fingerprint: str
+
+
+class ReplaceAssignmentSourceRangeOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_version: str = REPAIR_OPERATION_SCHEMA_VERSION
+    operation_id: str
+    operation_type: Literal["replace_assignment_source_range"] = (
+        "replace_assignment_source_range"
+    )
+    source_plan_id: str
+    source_plan_fingerprint: str
+    source_assignment_id: str
+    source_shot_id: str
+    asset_id: str
+    source_range_before: RepairSourceRangeSpec
+    source_range_after: RepairSourceRangeSpec
+    addressed_issue_ids: list[str] = Field(default_factory=list)
+    expected_effects: list[RepairExpectedEffectLiteral] = Field(default_factory=list)
+    operation_fingerprint: str
+
+
+RepairOperation = Annotated[
+    Union[ReplaceAssignmentAssetOperation, ReplaceAssignmentSourceRangeOperation],
+    Field(discriminator="operation_type"),
+]
+
+
+class RepairProposalOpsArtifact(BaseModel):
+    """Versioned executable operations sidecar for a repair proposal (Schema 20)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = REPAIR_PROPOSAL_OPS_SCHEMA_VERSION
+    proposal_id: str
+    source_plan_id: str
+    source_plan_fingerprint: str
+    source_review_id: str | None = None
+    source_report_id: str | None = None
+    source_issue_ids: list[str] = Field(default_factory=list)
+    proposal_type: str
+    provider: str
+    model: str
+    input_fingerprint: str
+    created_at: datetime
+    operations: list[RepairOperation] = Field(default_factory=list)
+    artifact_fingerprint: str
+
+
+class RepairProposalDecision(BaseModel):
+    """Append-only explicit user decision for a repair proposal."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = REPAIR_DECISION_SCHEMA_VERSION
+    decision_id: str
+    proposal_id: str
+    decision: RepairDecisionLiteral
+    actor: str = "user"
+    created_at: datetime
+    proposal_fingerprint: str
+    source_plan_fingerprint: str
+    decision_fingerprint: str
+
+
 class RepairRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -539,6 +680,7 @@ class EditorialRepairProposalGatewayPayload(BaseModel):
     plan_id: str
     input_fingerprint: str
     proposals: list[RepairProposal] = Field(default_factory=list)
+    executable_artifacts: list[RepairProposalOpsArtifact] = Field(default_factory=list)
 
 
 class VisualEditPlanBundle(BaseModel):
@@ -594,6 +736,108 @@ def compute_visual_edit_sha256(value: object) -> str:
             separators=(",", ":"),
         ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def visual_edit_plan_content_fingerprint(bundle: "VisualEditPlanBundle") -> str:
+    """Stable plan-content fingerprint (assets/ranges/structure; ignores volatile IDs)."""
+
+    shots_by_id = {shot.shot_id: shot for shot in bundle.shots}
+    assignment_rows = []
+    for assignment in sorted(
+        bundle.assignments,
+        key=lambda item: (
+            int(shots_by_id[item.shot_id].ordinal) if item.shot_id in shots_by_id else 10**9,
+            str(item.assignment_id),
+        ),
+    ):
+        shot = shots_by_id.get(assignment.shot_id)
+        assignment_rows.append(
+            {
+                "ordinal": None if shot is None else shot.ordinal,
+                "media_strategy": None if shot is None else shot.media_strategy,
+                "asset_id": assignment.asset_id,
+                "working_media_id": assignment.working_media_id,
+                "technical_shot_id": assignment.technical_shot_id,
+                "visual_observation_id": assignment.visual_observation_id,
+                "technical_source_in_seconds": assignment.technical_source_in_seconds,
+                "technical_source_out_seconds": assignment.technical_source_out_seconds,
+                "technical_source_in_frame": assignment.technical_source_in_frame,
+                "technical_source_out_frame": assignment.technical_source_out_frame,
+            }
+        )
+    payload = {
+        "input_fingerprint": bundle.plan.input_fingerprint,
+        "shots": [
+            {
+                "ordinal": shot.ordinal,
+                "shot_function": shot.shot_function,
+                "media_strategy": shot.media_strategy,
+                "duration_seconds": shot.duration_seconds,
+                "timeline_start_frame": shot.timeline_start_frame,
+                "timeline_end_frame": shot.timeline_end_frame,
+            }
+            for shot in sorted(bundle.shots, key=lambda item: item.ordinal)
+        ],
+        "assignments": assignment_rows,
+        "transitions": [
+            {
+                "from_ordinal": shots_by_id[item.from_shot_id].ordinal
+                if item.from_shot_id in shots_by_id
+                else None,
+                "to_ordinal": shots_by_id[item.to_shot_id].ordinal
+                if item.to_shot_id in shots_by_id
+                else None,
+                "technical_type": item.technical_type,
+                "resolved_duration_seconds": item.resolved_duration_seconds,
+            }
+            for item in sorted(bundle.transitions, key=lambda row: row.transition_id)
+        ],
+    }
+    return compute_visual_edit_sha256(payload)
+
+
+def repair_operation_fingerprint(payload: dict[str, object]) -> str:
+    return compute_visual_edit_sha256(payload)
+
+
+def repair_proposal_ops_fingerprint(artifact: "RepairProposalOpsArtifact") -> str:
+    body = artifact.model_dump(mode="json")
+    body.pop("artifact_fingerprint", None)
+    return compute_visual_edit_sha256(body)
+
+
+def repair_decision_fingerprint(
+    *,
+    proposal_id: str,
+    decision: str,
+    proposal_fingerprint: str,
+    source_plan_fingerprint: str,
+) -> str:
+    return compute_visual_edit_sha256(
+        {
+            "proposal_id": proposal_id,
+            "decision": decision,
+            "proposal_fingerprint": proposal_fingerprint,
+            "source_plan_fingerprint": source_plan_fingerprint,
+        }
+    )
+
+
+def repair_apply_idempotency_key(
+    *,
+    source_plan_id: str,
+    source_plan_fingerprint: str,
+    selected_proposal_ids: list[str],
+    decision_fingerprints: list[str],
+) -> str:
+    return compute_visual_edit_sha256(
+        {
+            "source_plan_id": source_plan_id,
+            "source_plan_fingerprint": source_plan_fingerprint,
+            "selected_proposal_ids": sorted(selected_proposal_ids),
+            "decision_fingerprints": sorted(decision_fingerprints),
+        }
+    )
 
 
 def visual_edit_input_fingerprint(
@@ -709,14 +953,26 @@ __all__ = [name for name in globals() if name.startswith("VISUAL_EDIT_")] + [
     "PROMPT_VERSION_EDITORIAL_REPAIR_PROPOSAL",
     "PROMPT_VERSION_HUMANITY_REVIEW",
     "PROMPT_VERSION_VISUAL_EDIT_PLAN",
+    "REPAIR_DECISION_SCHEMA_VERSION",
+    "REPAIR_EXPECTED_EFFECT_ASSET_REUSE_REDUCED",
+    "REPAIR_EXPECTED_EFFECT_SIMILAR_MOTIF_RUN_REDUCED",
+    "REPAIR_EXPECTED_EFFECT_SOURCE_RANGE_OVERLAP_REDUCED",
+    "REPAIR_OPERATION_SCHEMA_VERSION",
+    "REPAIR_PROPOSAL_OPS_SCHEMA_VERSION",
     "RankedCandidateRef",
     "RESPONSE_SCHEMA_EDITORIAL_REPAIR_PROPOSAL",
     "RESPONSE_SCHEMA_HUMANITY_REVIEW",
     "RESPONSE_SCHEMA_VISUAL_EDIT_PLAN",
+    "RepairOperation",
     "RepairProposal",
+    "RepairProposalDecision",
+    "RepairProposalOpsArtifact",
     "RepairResult",
     "RepairRun",
     "RepairRunBundle",
+    "RepairSourceRangeSpec",
+    "ReplaceAssignmentAssetOperation",
+    "ReplaceAssignmentSourceRangeOperation",
     "SHOT_DURATION_VARIANCE_MIN_RATIO",
     "SHOT_DURATION_VARIANCE_MIN_SHOTS",
     "SENTENCE_BOUNDARY_BLOCKING_RATIO",
@@ -746,6 +1002,11 @@ __all__ = [name for name in globals() if name.startswith("VISUAL_EDIT_")] + [
     "VisualEditRunStatus",
     "VisualEditTransitionIntent",
     "compute_visual_edit_sha256",
+    "repair_apply_idempotency_key",
+    "repair_decision_fingerprint",
+    "repair_operation_fingerprint",
+    "repair_proposal_ops_fingerprint",
     "seconds_to_frame_nearest",
     "visual_edit_input_fingerprint",
+    "visual_edit_plan_content_fingerprint",
 ]

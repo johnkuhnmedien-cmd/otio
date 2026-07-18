@@ -38,6 +38,21 @@ def repair_run_json_relative_path(run_id: str) -> str:
     return f"{EDITING_ROOT_SEGMENT}/repairs/{run_id}.json"
 
 
+def repair_proposal_ops_json_relative_path(proposal_id: str) -> str:
+    _reject_unsafe_segment(proposal_id, "proposal_id")
+    return f"{EDITING_ROOT_SEGMENT}/repairs/repair_proposal_{proposal_id}.ops.json"
+
+
+def repair_proposal_decisions_json_relative_path(proposal_id: str) -> str:
+    _reject_unsafe_segment(proposal_id, "proposal_id")
+    return f"{EDITING_ROOT_SEGMENT}/repairs/repair_proposal_{proposal_id}.decisions.json"
+
+
+def repair_apply_idempotency_json_relative_path(idempotency_key: str) -> str:
+    _reject_unsafe_segment(idempotency_key, "idempotency_key")
+    return f"{EDITING_ROOT_SEGMENT}/repairs/apply_{idempotency_key}.json"
+
+
 def visual_edit_run_json_relative_path(run_id: str) -> str:
     _reject_unsafe_segment(run_id, "run_id")
     return f"{EDITING_ROOT_SEGMENT}/runs/{run_id}.json"
@@ -131,6 +146,9 @@ __all__ = [
     "latest_repair_run_relative_path",
     "latest_visual_edit_plan_relative_path",
     "normalize_editing_relative_path",
+    "repair_apply_idempotency_json_relative_path",
+    "repair_proposal_decisions_json_relative_path",
+    "repair_proposal_ops_json_relative_path",
     "repair_run_json_relative_path",
     "resolve_editing_relative_path",
     "visual_edit_plan_json_relative_path",

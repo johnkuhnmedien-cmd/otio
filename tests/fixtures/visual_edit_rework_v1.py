@@ -321,6 +321,8 @@ def seed_six_video_candidates(project) -> list[dict[str, str]]:
 def editorial_ready_views_for_seed(
     project,
     seeded: list[dict[str, str]],
+    *,
+    summary_by_label: dict[str, str] | None = None,
 ) -> list[EditorialReadyObservationView]:
     """Build accepted editorial-ready views for seeded video candidates (A..F order)."""
 
@@ -339,13 +341,17 @@ def editorial_ready_views_for_seed(
             decision="accepted",
             created_at=_now(),
         )
+        if summary_by_label and item["label"] in summary_by_label:
+            summary = summary_by_label[item["label"]]
+        else:
+            summary = f"Synthetic accepted observation for {item['label']}"
         views.append(
             EditorialReadyObservationView(
                 observation_id=item["observation_id"],
                 asset_id=item["asset_id"],
                 analysis_identity_id=item["analysis_identity_id"],
                 working_media_id=item["working_media_id"],
-                summary=f"Synthetic accepted observation for {item['label']}",
+                summary=summary,
                 evidence_frame_ids=[f"frame-{item['label']}"],
                 geographic_confidence=0.0,
                 synthetic_confidence=0.0,
@@ -362,6 +368,11 @@ def install_six_candidate_observation_hook(monkeypatch, project, seeded) -> None
     """Monkeypatch only observation listing; Feasibility/E3/E4 remain real."""
 
     views = editorial_ready_views_for_seed(project, seeded)
+    install_observation_hook(monkeypatch, views)
+
+
+def install_observation_hook(monkeypatch, views: list[EditorialReadyObservationView]) -> None:
+    """Monkeypatch observation listing to a fixed editorial-ready view list."""
 
     def _list(_project=None):
         return list(views)
@@ -425,6 +436,7 @@ __all__ = [
     "editorial_ready_views_for_seed",
     "ensure_six_visual_intents",
     "install_no_media_io_guards",
+    "install_observation_hook",
     "install_six_candidate_observation_hook",
     "normalize_issue_signature",
     "overlap_ratio",

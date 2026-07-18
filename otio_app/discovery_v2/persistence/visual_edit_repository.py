@@ -21,6 +21,8 @@ from otio_app.discovery_v2.domain.visual_edit import (
     HumanityReview,
     HumanityReviewBundle,
     RepairProposal,
+    RepairProposalDecision,
+    RepairProposalOpsArtifact,
     RepairResult,
     RepairRun,
     ShotMediaAssignment,
@@ -40,6 +42,9 @@ from otio_app.discovery_v2.editing_paths import (
     latest_humanity_review_relative_path,
     latest_repair_run_relative_path,
     latest_visual_edit_plan_relative_path,
+    repair_apply_idempotency_json_relative_path,
+    repair_proposal_decisions_json_relative_path,
+    repair_proposal_ops_json_relative_path,
     repair_run_json_relative_path,
     resolve_editing_relative_path,
     visual_edit_plan_json_relative_path,
@@ -101,6 +106,14 @@ def new_feasibility_issue_id() -> str:
 
 
 def new_repair_proposal_id() -> str:
+    return str(uuid4())
+
+
+def new_repair_decision_id() -> str:
+    return str(uuid4())
+
+
+def new_repair_operation_id() -> str:
     return str(uuid4())
 
 
@@ -202,6 +215,106 @@ def save_feasibility_report_json(project_root: Path, bundle: FeasibilityReportBu
         feasibility_report_json_relative_path(bundle.report.report_id),
         bundle.model_dump(mode="json"),
     )
+
+
+def save_repair_proposal_ops_json(
+    project_root: Path,
+    artifact: RepairProposalOpsArtifact,
+) -> str:
+    relative = repair_proposal_ops_json_relative_path(artifact.proposal_id)
+    return save_json_artifact(project_root, relative, artifact.model_dump(mode="json"))
+
+
+def load_repair_proposal_ops_json(
+    project_root: Path,
+    *,
+    proposal_id: str,
+) -> RepairProposalOpsArtifact | None:
+    relative = repair_proposal_ops_json_relative_path(proposal_id)
+    target = resolve_editing_relative_path(project_root, relative)
+    if not target.exists():
+        return None
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    return RepairProposalOpsArtifact.model_validate(payload)
+
+
+def list_repair_proposal_decisions(
+    project_root: Path,
+    *,
+    proposal_id: str,
+) -> list[RepairProposalDecision]:
+    relative = repair_proposal_decisions_json_relative_path(proposal_id)
+    target = resolve_editing_relative_path(project_root, relative)
+    if not target.exists():
+        return []
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    rows = payload.get("decisions", []) if isinstance(payload, dict) else []
+    result: list[RepairProposalDecision] = []
+    if not isinstance(rows, list):
+        return result
+    for row in rows:
+        if isinstance(row, dict):
+            result.append(RepairProposalDecision.model_validate(row))
+    return result
+
+
+def append_repair_proposal_decision(
+    project_root: Path,
+    decision: RepairProposalDecision,
+) -> tuple[str, bool]:
+    """Append a decision sidecar row. Returns (relative_path, created_new)."""
+
+    relative = repair_proposal_decisions_json_relative_path(decision.proposal_id)
+    target = resolve_editing_relative_path(project_root, relative)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    existing: list[dict[str, object]] = []
+    if target.exists():
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        rows = payload.get("decisions", []) if isinstance(payload, dict) else []
+        if isinstance(rows, list):
+            existing = [row for row in rows if isinstance(row, dict)]
+        for row in existing:
+            if str(row.get("decision_fingerprint") or "") == decision.decision_fingerprint:
+                return relative, False
+    existing.append(decision.model_dump(mode="json"))
+    data = json.dumps(
+        {"proposal_id": decision.proposal_id, "decisions": existing},
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ).encode("utf-8")
+    tmp = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    try:
+        tmp.write_bytes(data)
+        json.loads(tmp.read_text(encoding="utf-8"))
+        os.replace(tmp, target)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+    return relative, True
+
+
+def save_repair_apply_idempotency_json(
+    project_root: Path,
+    *,
+    idempotency_key: str,
+    payload: dict[str, object],
+) -> str:
+    relative = repair_apply_idempotency_json_relative_path(idempotency_key)
+    return save_json_artifact(project_root, relative, payload)
+
+
+def load_repair_apply_idempotency_json(
+    project_root: Path,
+    *,
+    idempotency_key: str,
+) -> dict[str, object] | None:
+    relative = repair_apply_idempotency_json_relative_path(idempotency_key)
+    target = resolve_editing_relative_path(project_root, relative)
+    if not target.exists():
+        return None
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else None
 
 
 def save_repair_run_json(project_root: Path, run: RepairRun, result: RepairResult | None) -> str:

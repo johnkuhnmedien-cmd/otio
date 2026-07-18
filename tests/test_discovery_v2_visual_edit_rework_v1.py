@@ -210,7 +210,7 @@ def test_reproduced_plan_fails_e4_source_range_overlap(
 def test_current_repair_proposal_has_no_executable_reassignment(
     tmp_path: Path, temp_db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Repair path remains V3-deferred; V2 plan is already technically feasible."""
+    """V2 plan is technically feasible; executable humanity repairs are covered in V3."""
 
     project, _seeded = _reproduced_project(tmp_path, temp_db_path, monkeypatch)
     assert start_visual_edit_plan_run(project, sync=True).started

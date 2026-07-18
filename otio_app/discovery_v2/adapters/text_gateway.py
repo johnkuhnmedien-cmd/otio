@@ -520,6 +520,8 @@ class DiscoveryTextGateway:
         known = {plan_id}
         known.update(_ids(request.visual_edit_input.get("shots", []), "shot_id"))
         known.update(_ids(request.visual_edit_input.get("assignments", []), "assignment_id"))
+        known.update(_ids(request.visual_edit_input.get("assignments", []), "asset_id"))
+        known.update(_ids(request.visual_edit_input.get("candidates", []), "asset_id"))
         for proposal in payload.proposals:
             if proposal.plan_id != plan_id:
                 raise TextGatewayError(
@@ -531,6 +533,33 @@ class DiscoveryTextGateway:
                     VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
                     "Repair proposal referenced unknown item.",
                 )
+        for artifact in payload.executable_artifacts:
+            if artifact.source_plan_id != plan_id:
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                    "Repair ops artifact references a different plan.",
+                )
+            if artifact.input_fingerprint != request.input_fingerprint:
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                    "Repair ops artifact input fingerprint mismatch.",
+                )
+            if artifact.proposal_id not in {item.proposal_id for item in payload.proposals}:
+                raise TextGatewayError(
+                    VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                    "Repair ops artifact references unknown proposal.",
+                )
+            for operation in artifact.operations:
+                if operation.source_assignment_id not in known:
+                    raise TextGatewayError(
+                        VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                        "Repair operation references unknown assignment.",
+                    )
+                if operation.source_shot_id not in known:
+                    raise TextGatewayError(
+                        VISUAL_EDIT_ERROR_RESPONSE_SCHEMA_MISMATCH,
+                        "Repair operation references unknown shot.",
+                    )
 
 
 def _validation_error_code(exc: ValidationError, *, request_kind: str = "") -> str:

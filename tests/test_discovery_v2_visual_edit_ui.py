@@ -39,6 +39,19 @@ class _FakeStreamlit:
     def dataframe(self, *args, **kwargs):
         return None
 
+    def checkbox(self, label, **kwargs):
+        self.messages.append(str(label))
+        return bool(kwargs.get("value", False))
+
+    def columns(self, n):
+        return [self for _ in range(n)]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
     def button(self, label, **kwargs):
         self.buttons.append(label)
         return False
@@ -84,6 +97,9 @@ def test_smoke_h_visual_edit_ui_double_render_has_no_gateway_job_or_otio(tmp_pat
     monkeypatch.setattr(visual_edit_page, "start_feasibility_check_run", lambda *a, **k: calls.__setitem__("feasibility", calls["feasibility"] + 1))
     monkeypatch.setattr(visual_edit_page, "propose_editorial_repairs", lambda *a, **k: calls.__setitem__("propose", calls["propose"] + 1))
     monkeypatch.setattr(visual_edit_page, "apply_selected_repair_proposals", lambda *a, **k: calls.__setitem__("repair", calls["repair"] + 1))
+    monkeypatch.setattr(visual_edit_page, "list_repair_proposal_views", lambda *_a, **_k: [])
+    monkeypatch.setattr(visual_edit_page, "select_repair_proposals", lambda *a, **k: calls.__setitem__("propose", calls["propose"] + 1))
+    monkeypatch.setattr(visual_edit_page, "reject_repair_proposals", lambda *a, **k: calls.__setitem__("propose", calls["propose"] + 1))
 
     visual_edit_page.render_discovery_visual_edit_page()
     visual_edit_page.render_discovery_visual_edit_page()
