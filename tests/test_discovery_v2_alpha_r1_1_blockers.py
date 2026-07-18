@@ -392,7 +392,8 @@ def test_smoke_c_atomic_coverage_retry_preserves_current_audit(
     # Also patch the worker's bound repo reference.
     monkeypatch.setattr(worker.repo, "insert_coverage_audit", flaky_insert)
 
-    failed = start_coverage_run(project, sync=True)
+    # force_recompute bypasses completed-audit reuse so the persist/retry path runs.
+    failed = start_coverage_run(project, sync=True, execution_mode="force_recompute")
     assert failed.started
     assert failed.run is not None
     assert failed.run.status.value == "failed"
@@ -411,7 +412,7 @@ def test_smoke_c_atomic_coverage_retry_preserves_current_audit(
     # Retry succeeds with unique run-scoped audit id (FakeText includes run_id).
     monkeypatch.setattr(editorial_repo, "insert_coverage_audit", original_insert)
     monkeypatch.setattr(worker.repo, "insert_coverage_audit", original_insert)
-    ok = start_coverage_run(project, sync=True)
+    ok = start_coverage_run(project, sync=True, execution_mode="force_recompute")
     assert ok.started and ok.run is not None
     assert ok.run.status.value == "completed"
     conn = editorial_repo.open_editorial_registry(project.project_root_path)
@@ -432,7 +433,10 @@ def test_r1_repeated_coverage_run_no_longer_unique_collision(
     tmp_path: Path, temp_db_path: Path
 ) -> None:
     project = _coverage_project(tmp_path, temp_db_path)
-    second = start_coverage_run(project, sync=True)
+    # Normal second call reuses (C2). force_recompute still proves R1.1 UNIQUE safety.
+    reused = start_coverage_run(project, sync=True)
+    assert reused.reused and reused.coverage_audit_id
+    second = start_coverage_run(project, sync=True, execution_mode="force_recompute")
     assert second.started and second.run is not None
     assert second.run.status.value == "completed"
     assert second.run.error_code is None

@@ -385,6 +385,8 @@ class CoverageAudit(BaseModel):
     model_identifier: str
     provider: str
     results: list[CoverageIntentResult] = Field(default_factory=list)
+    # Optional fachlicher Idempotenz-Fingerprint (coverage-input-v1). Legacy audits omit it.
+    canonical_coverage_input_fingerprint: str | None = None
 
 
 class EditorialRun(BaseModel):

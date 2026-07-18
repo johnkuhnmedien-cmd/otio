@@ -436,7 +436,9 @@ def _render_coverage(project, view) -> None:
         key="discovery_v2_editorial_start_coverage",
     ):
         result = start_coverage_run(project, sync=False)
-        if result.started:
+        if result.reused:
+            _flash_and_rerun(result.message, level="info")
+        elif result.started:
             _flash_and_rerun(result.message, level="info")
         else:
             st.warning(result.message)

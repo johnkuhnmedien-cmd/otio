@@ -36,6 +36,7 @@ from otio_app.discovery_v2.editorial_paths import (
     editorial_attempt_json_relative_path,
     editorial_brief_json_relative_path,
     editorial_coverage_json_relative_path,
+    editorial_coverage_run_dedup_relative_path,
     editorial_hook_json_relative_path,
     editorial_latest_brief_relative_path,
     editorial_latest_coverage_relative_path,
@@ -354,6 +355,21 @@ def get_active_project_brief(conn: sqlite3.Connection, *, project_id: str) -> Pr
         LIMIT 1
         """,
         (project_id,),
+    ).fetchone()
+    return None if row is None else _row_to_brief(row)
+
+
+def get_project_brief_by_version(
+    conn: sqlite3.Connection, *, project_id: str, brief_version: int
+) -> ProjectBrief | None:
+    row = conn.execute(
+        """
+        SELECT * FROM project_briefs
+        WHERE project_id = ? AND brief_version = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (project_id, brief_version),
     ).fetchone()
     return None if row is None else _row_to_brief(row)
 
@@ -1045,6 +1061,45 @@ def save_coverage_json(project_root: Path, audit: CoverageAudit) -> str:
     )
 
 
+def save_coverage_run_dedup_marker(
+    project_root: Path,
+    *,
+    run_id: str,
+    canonical_coverage_input_fingerprint: str,
+    dedup_key: str,
+    coverage_scope: str,
+    execution_mode: str,
+) -> str:
+    return _save_json(
+        project_root,
+        editorial_coverage_run_dedup_relative_path(run_id),
+        {
+            "schema_version": "coverage-run-dedup-v1",
+            "run_id": run_id,
+            "canonical_coverage_input_fingerprint": canonical_coverage_input_fingerprint,
+            "dedup_key": dedup_key,
+            "coverage_scope": coverage_scope,
+            "execution_mode": execution_mode,
+        },
+    )
+
+
+def load_coverage_run_dedup_marker(
+    project_root: Path, *, run_id: str
+) -> dict | None:
+    relative = editorial_coverage_run_dedup_relative_path(run_id)
+    path = resolve_editorial_relative_path(project_root, relative)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
 def save_editorial_run_report(project_root: Path, run: EditorialRun, payload: dict) -> str:
     relative = editorial_run_json_relative_path(run.run_id)
     return _save_json(project_root, relative, payload)
@@ -1302,6 +1357,9 @@ __all__ = [
     "find_completed_editorial_attempt",
     "get_active_narrative_plan",
     "get_active_project_brief",
+    "get_project_brief_by_version",
+    "load_coverage_run_dedup_marker",
+    "save_coverage_run_dedup_marker",
     "get_active_script",
     "get_coverage_audit",
     "get_editorial_run",

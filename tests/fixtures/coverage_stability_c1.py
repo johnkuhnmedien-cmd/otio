@@ -263,9 +263,17 @@ def snapshot_after_coverage_run(project, *, run_id: str) -> CoverageRunSnapshot:
     )
 
 
-def run_manual_coverage(project, *, sync: bool = True):
+def run_manual_coverage(
+    project, *, sync: bool = True, expect_reuse: bool = False
+):
     before = {run.run_id for run in _coverage_runs(project)}
     started = start_coverage_run(project, sync=sync)
+    if expect_reuse or started.reused:
+        assert started.reused, started.message
+        assert started.coverage_audit_id or (
+            started.run is not None and started.run.run_id in before
+        )
+        return started
     assert started.started and started.run is not None, started.message
     assert started.run.run_id not in before
     if sync:
@@ -278,16 +286,16 @@ def run_automatic_coverage_revalidation(project, *, sync: bool = True):
     before = {run.run_id for run in _coverage_runs(project)}
     result = revalidate_coverage_after_accepted_reviews(project, sync=sync)
     assert result.ok, result.message
-    assert result.coverage_started, result.message
-    assert result.run_id and result.run_id not in before
-    if sync:
-        conn = editorial_repo.open_editorial_registry(project.project_root_path)
-        try:
-            run = editorial_repo.get_editorial_run(conn, run_id=result.run_id)
-        finally:
-            conn.close()
-        assert run is not None
-        assert run.status.value == "completed"
+    if result.coverage_started:
+        assert result.run_id and result.run_id not in before
+        if sync:
+            conn = editorial_repo.open_editorial_registry(project.project_root_path)
+            try:
+                run = editorial_repo.get_editorial_run(conn, run_id=result.run_id)
+            finally:
+                conn.close()
+            assert run is not None
+            assert run.status.value == "completed"
     return result
 
 

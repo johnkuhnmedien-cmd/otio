@@ -58,6 +58,11 @@ def editorial_coverage_json_relative_path(coverage_audit_id: str) -> str:
     return f"{EDITORIAL_ROOT_SEGMENT}/coverage/{coverage_audit_id}.json"
 
 
+def editorial_coverage_run_dedup_relative_path(run_id: str) -> str:
+    _reject_unsafe_segment(run_id, "run_id")
+    return f"{EDITORIAL_ROOT_SEGMENT}/coverage_dedup/{run_id}.json"
+
+
 def editorial_run_json_relative_path(run_id: str) -> str:
     _reject_unsafe_segment(run_id, "run_id")
     return f"{EDITORIAL_ROOT_SEGMENT}/runs/{run_id}.json"
@@ -164,6 +169,7 @@ __all__ = [
     "editorial_attempt_json_relative_path",
     "editorial_brief_json_relative_path",
     "editorial_coverage_json_relative_path",
+    "editorial_coverage_run_dedup_relative_path",
     "editorial_hook_json_relative_path",
     "editorial_latest_brief_relative_path",
     "editorial_latest_coverage_relative_path",

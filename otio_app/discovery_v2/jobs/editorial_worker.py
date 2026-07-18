@@ -373,6 +373,18 @@ def _process_coverage(conn, root: Path, run: EditorialRun) -> EditorialRun:
     if response.coverage is None:
         raise EditorialWorkerError(EDITORIAL_ERROR_INPUT_STALE, "Coverage response missing.")
     audit = response.coverage.coverage_audit
+    dedup_marker = repo.load_coverage_run_dedup_marker(
+        root, run_id=run.run_id
+    )
+    canonical_fp = None
+    if isinstance(dedup_marker, dict):
+        raw_fp = dedup_marker.get("canonical_coverage_input_fingerprint")
+        if isinstance(raw_fp, str) and raw_fp.strip():
+            canonical_fp = raw_fp.strip()
+    if canonical_fp:
+        audit = audit.model_copy(
+            update={"canonical_coverage_input_fingerprint": canonical_fp}
+        )
 
     # Preserve prior current audit until the new audit is fully persisted.
     prior_state = repo.get_project_state(conn, project_id=run.project_id)

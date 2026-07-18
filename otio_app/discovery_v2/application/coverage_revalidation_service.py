@@ -61,6 +61,23 @@ def revalidate_coverage_after_accepted_reviews(
             coverage_started=False,
         )
     started = start_coverage_run(project, sync=sync)
+    if started.reused and started.coverage_audit_id:
+        # Completed-audit reuse: no worker, no gap rematerialization.
+        return CoverageRevalidationResult(
+            ok=True,
+            message=started.message,
+            coverage_started=False,
+            run_id=None,
+            gaps_resolved=0,
+        )
+    if started.reused and started.run is not None:
+        return CoverageRevalidationResult(
+            ok=True,
+            message=started.message,
+            coverage_started=True,
+            run_id=started.run.run_id,
+            gaps_resolved=0,
+        )
     if not started.started:
         return CoverageRevalidationResult(
             ok=False,

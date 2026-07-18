@@ -70,6 +70,10 @@ class EditorialStartResult:
     message: str
     run: EditorialRun | None = None
     error_code: str | None = None
+    reused: bool = False
+    coverage_audit_id: str | None = None
+    canonical_input_fingerprint: str | None = None
+    reuse_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -232,8 +236,82 @@ def start_structure_run(project: Project, *, sync: bool = False) -> EditorialSta
     return _start_run(project, scope=EDITORIAL_RUN_SCOPE_STRUCTURE, sync=sync)
 
 
-def start_coverage_run(project: Project, *, sync: bool = False) -> EditorialStartResult:
-    return _start_run(project, scope=EDITORIAL_RUN_SCOPE_COVERAGE, sync=sync)
+def start_coverage_run(
+    project: Project,
+    *,
+    sync: bool = False,
+    execution_mode: str = "normal",
+) -> EditorialStartResult:
+    """Start coverage or reuse an equivalent active run / completed current audit."""
+
+    from otio_app.discovery_v2.application.coverage_idempotency_service import (
+        build_current_canonical_coverage,
+        find_active_equivalent_coverage_run,
+        find_completed_equivalent_current_audit,
+    )
+    from otio_app.discovery_v2.domain.coverage_input import CoverageExecutionMode
+
+    mode: CoverageExecutionMode
+    if execution_mode in {"normal", "retry_failed", "force_recompute"}:
+        mode = execution_mode  # type: ignore[assignment]
+    else:
+        return EditorialStartResult(
+            started=False,
+            message=f"Ungueltiger Coverage-Execution-Mode: {execution_mode}",
+            error_code="coverage_canonical_input_invalid",
+        )
+    built = build_current_canonical_coverage(project, execution_mode=mode)
+    if not built.ok or not built.fingerprint or not built.dedup_key:
+        return EditorialStartResult(
+            started=False,
+            message=built.message,
+            error_code=built.error_code,
+            canonical_input_fingerprint=built.fingerprint,
+        )
+    if mode != "force_recompute":
+        completed = find_completed_equivalent_current_audit(
+            project, fingerprint=built.fingerprint
+        )
+        if completed.ok and completed.audit is not None:
+            return EditorialStartResult(
+                started=False,
+                message=completed.message,
+                reused=True,
+                coverage_audit_id=completed.audit.coverage_audit_id,
+                canonical_input_fingerprint=built.fingerprint,
+                reuse_reason=completed.reuse_reason,
+            )
+        active = find_active_equivalent_coverage_run(
+            project,
+            fingerprint=built.fingerprint,
+            dedup_key=built.dedup_key,
+        )
+        if active.ok and active.run is not None:
+            return EditorialStartResult(
+                started=True,
+                message=active.message,
+                run=active.run,
+                reused=True,
+                coverage_audit_id=None,
+                canonical_input_fingerprint=built.fingerprint,
+                reuse_reason=active.reuse_reason,
+            )
+        if active.conflict:
+            return EditorialStartResult(
+                started=False,
+                message=active.message,
+                run=active.run,
+                error_code=active.error_code or EDITORIAL_ERROR_RUN_ALREADY_ACTIVE,
+                canonical_input_fingerprint=built.fingerprint,
+            )
+    return _start_run(
+        project,
+        scope=EDITORIAL_RUN_SCOPE_COVERAGE,
+        sync=sync,
+        coverage_fingerprint=built.fingerprint,
+        coverage_dedup_key=built.dedup_key,
+        coverage_execution_mode=mode,
+    )
 
 
 def select_hook(project: Project, *, hook_id: str) -> HookSelectResult:
@@ -440,7 +518,15 @@ def get_editorial_view(project: Project) -> EditorialView:
     )
 
 
-def _start_run(project: Project, *, scope: str, sync: bool) -> EditorialStartResult:
+def _start_run(
+    project: Project,
+    *,
+    scope: str,
+    sync: bool,
+    coverage_fingerprint: str | None = None,
+    coverage_dedup_key: str | None = None,
+    coverage_execution_mode: str = "normal",
+) -> EditorialStartResult:
     project = require_discovery_project(project)
     reconcile_orphaned_editorial_run(project)
     conn = repo.open_editorial_registry(project.project_root_path)
@@ -551,6 +637,19 @@ def _start_run(project: Project, *, scope: str, sync: bool) -> EditorialStartRes
             schema_version=EDITORIAL_SCHEMA_VERSION,
         )
         repo.insert_editorial_run(conn, run)
+        if (
+            scope == EDITORIAL_RUN_SCOPE_COVERAGE
+            and coverage_fingerprint
+            and coverage_dedup_key
+        ):
+            repo.save_coverage_run_dedup_marker(
+                project.project_root_path,
+                run_id=run.run_id,
+                canonical_coverage_input_fingerprint=coverage_fingerprint,
+                dedup_key=coverage_dedup_key,
+                coverage_scope=EDITORIAL_RUN_SCOPE_COVERAGE,
+                execution_mode=coverage_execution_mode,
+            )
         conn.commit()
     except Exception as exc:  # noqa: BLE001
         conn.rollback()
@@ -576,6 +675,7 @@ def _start_run(project: Project, *, scope: str, sync: bool) -> EditorialStartRes
             message="Editorial-Worker konnte nicht gestartet werden (bereits aktiv).",
             run=run,
             error_code=EDITORIAL_ERROR_RUN_ALREADY_ACTIVE,
+            canonical_input_fingerprint=coverage_fingerprint,
         )
     if sync:
         conn = repo.open_editorial_registry(project.project_root_path)
@@ -583,8 +683,18 @@ def _start_run(project: Project, *, scope: str, sync: bool) -> EditorialStartRes
             final = repo.get_editorial_run(conn, run_id=run.run_id) or run
         finally:
             conn.close()
-        return EditorialStartResult(started=True, message="Editorial-Run abgeschlossen.", run=final)
-    return EditorialStartResult(started=True, message="Editorial-Run gestartet.", run=run)
+        return EditorialStartResult(
+            started=True,
+            message="Editorial-Run abgeschlossen.",
+            run=final,
+            canonical_input_fingerprint=coverage_fingerprint,
+        )
+    return EditorialStartResult(
+        started=True,
+        message="Editorial-Run gestartet.",
+        run=run,
+        canonical_input_fingerprint=coverage_fingerprint,
+    )
 
 
 def _editorial_ready_inputs(project: Project) -> list[EditorialReadyObservationInput]:
