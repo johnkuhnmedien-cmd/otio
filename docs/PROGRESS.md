@@ -2,7 +2,7 @@
 
 ## Aktueller Stand
 
-**Coverage Stability C2-R1 (Legacy Fail-Closed) abgeschlossen — Schema weiterhin 20.**
+**Coverage Stability C2 + C2-R1 vollständig abgenommen — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
 - Script-Lock Realtest: **erfolgreich**
@@ -17,10 +17,10 @@
 - **Coverage Stability C2**: Canonical Input + Active-/Completed-Reuse (`7e8db48`)
 - **Coverage Stability C2-R1**: Legacy Fail-Closed (`86b5ac1`)
 - Decisions: D-COVERAGE-STABILITY-001…004
-- **Manueller Temp-Projekt-Test / USA_v2 noch erforderlich** (nach Freigabe)
+- **USA_v2-Realtest: erfolgreich** (C2-Abnahme)
 - Plan: `docs/source_plans/ALPHA_COVERAGE_IDEMPOTENCY_CARRY_FORWARD_PLAN.md`
-- **Nächster erlaubter Schritt nach Freigabe: Coverage Stability C3**
-- **C3, C4, V4 und R1.4 gesperrt** bis Freigabe
+- **Nächster zu planender Schritt: Coverage Stability C3**
+- **C4, V4 und R1.4 gesperrt**
 - Keine neue Produktphase · echte Provider gesperrt
 
 ## Phase-Status
@@ -32,12 +32,40 @@
 | Visual Edit Rework V1–V3 | abgeschlossen |
 | Coverage Idempotency Plan | dokumentiert |
 | Coverage Stability C1 | abgeschlossen (Reproduktion) |
-| Coverage Stability C2 | abgeschlossen (Canonical Reuse) |
-| Coverage Stability C2-R1 | **abgeschlossen** (Legacy Fail-Closed) |
-| Coverage Stability C3–C4 | nächster erlaubter Schritt (nach Freigabe: C3) |
+| Coverage Stability C2 | **abgenommen** (Canonical Reuse + USA_v2) |
+| Coverage Stability C2-R1 | **abgenommen** (Legacy Fail-Closed + USA_v2) |
+| Coverage Stability C3 | nächster zu planender Schritt |
+| Coverage Stability C4 | **gesperrt** |
 | Visual Edit Rework V4 Loop/UI | **gesperrt** |
 | R1.4 Job-UX / Progress-Polling | **gesperrt** |
 | R1.5–R1.6 | gesperrt |
+
+## USA_v2 Coverage-Reuse-Realtest — Abnahme
+
+Projekt: **USA_v2** · Schema **20**
+
+| Feld | Wert |
+|---|---|
+| Aktiver Audit | `c2b32d64-3961-53bf-ab85-391932a2bf43` |
+| Letzter Run | `7bb2273b-96ca-4942-9924-6de34b29d471` |
+
+Zweiter identischer Coverage-Aufruf:
+
+- completed Current Audit **reused**
+- kein neuer Run
+- keine neue Audit-ID
+- keine neuen Gap-IDs
+- keine Gap-Statusverluste
+
+Aktuelle Gaps:
+
+| Gap-ID | Status |
+|---|---|
+| `094f0390-cfb2-41e7-a19f-65ca4d583fb0` | `resolved_by_graphic_plan` |
+| `2c36238e-6a1e-44ee-ae00-0abf8f398acf` | `accepted_unresolved` |
+| `95a924fe-2995-4da7-80ff-d172cca3221b` | `in_progress` / `user_decision` |
+
+Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Gap-ID beschriftet.
 
 ## Coverage Stability C2-R1 — Kurzstand
 
@@ -57,11 +85,9 @@
 
 ## Nächste erlaubte Aktivität
 
-Nach Freigabe:
-
-→ **Coverage Stability C3** (Gap Identity / Carry-Forward)
+→ **Coverage Stability C3** (Gap Identity / Carry-Forward) — planen/implementieren nach Freigabe
 
 Danach C4 (Atomarität / UI).
 
-Noch gesperrt: V4, R1.4–R1.6, echte Provider, neue Produktphase,
+Noch gesperrt: C4, V4, R1.4–R1.6, echte Provider, neue Produktphase,
 Nutzerregistry-Reparatur.
