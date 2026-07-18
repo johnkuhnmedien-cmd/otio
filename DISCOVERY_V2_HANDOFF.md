@@ -76,19 +76,28 @@
 - Assetweise Fake-Vision-Queue; Batch Observation Review; Claim-Dualstatus;
   Coverage-Revalidierung nach accepted Reviews; Supplement-Gap nur nach Match
 - V3-Realtest: ehrlicher `additional_coverage_required`-Fall erreicht
-- Reproduzierbarer Coverage-Reset (read-only): Audits
-  `969e015d-…` und `211d6cee-…` fachlich gleichwertig, trotzdem neue Gap-IDs
-  und Verlust von Eskalation/`user_decision` → Script Lock erneut offen
+- Reproduzierbarer Coverage-Reset (read-only + C1-Fixtures): Audits
+  fachlich gleichwertig, trotzdem neue Gap-IDs und Verlust von
+  Eskalation/`user_decision`/`accepted_unresolved` → Script Lock erneut offen
 - Root Cause: Fake-Audit-ID inkl. `run_id`; Worker-Reuse nur per Audit-ID;
   Gap-Materialisierung supersedet audit-fremd ohne Input-Äquivalenzprüfung
-- Aktiver Auftrag: keiner (Coverage-Idempotenz-Plan dokumentiert)
+- **Coverage Stability C1 abgeschlossen** (`94b6e0f`):
+  `tests/test_discovery_v2_coverage_stability_c1.py` (6 Node-IDs)
+- Exakte Audit-ID-Formel (FakeText `_coverage` / `_id`):
+  `uuid5(NAMESPACE_URL, "otio-discovery-v2-editorial:" +
+  "coverage:project_id:script_id:observation_fingerprint:run_id")`
+- Fehlender completed-input Reuse-Lookup bestätigt (manuell + auto)
+- Supersede-Reihenfolge: Audit persist → Current setzen → später
+  `materialize_gaps_from_current_coverage` → `supersede_gaps_not_in_audit`
+  → neue Gaps
+- Aktiver Auftrag: keiner (C1 dokumentiert; Produktfix gesperrt)
 - R1.3 Acceptance Evidence weiterhin offen
-- Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C1**
-- **C2–C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
+- Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C2**
+- **C3/C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **3011 collected / 2992 passed / 18 failed / 1 skipped**
+- Teststand: **3017 collected / 2998 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
