@@ -1,11 +1,11 @@
 # Alpha — Coverage Idempotency & Carry-Forward Plan
 
-**Auftrags-ID:** `DISCOVERY-V2-ALPHA-COVERAGE-IDEMPOTENCY-CARRY-FORWARD-PLAN-001`  
-**Status:** PLANNING ONLY — keine Produkt- oder Testimplementierung  
-**Basis-HEAD:** `8e9a02c88057e5cc6f0ebc2ce7c193ec3d56621e`  
-**Branch:** `cursor/discovery-v2-integration` · PR `#69`  
-**Registry-Schema:** **20** (bleibt 20; keine Migration in diesem Plan)  
-**SoT-Rang:** `docs/source_plans/*` — nachrangig; überschreibt keine höheren Dokumente  
+**Auftrags-ID:** `DISCOVERY-V2-ALPHA-COVERAGE-IDEMPOTENCY-CARRY-FORWARD-PLAN-001`
+**Status:** PLANNING ONLY — keine Produkt- oder Testimplementierung
+**Basis-HEAD:** `8e9a02c88057e5cc6f0ebc2ce7c193ec3d56621e`
+**Branch:** `cursor/discovery-v2-integration` · PR `#69`
+**Registry-Schema:** **20** (bleibt 20; keine Migration in diesem Plan)
+**SoT-Rang:** `docs/source_plans/*` — nachrangig; überschreibt keine höheren Dokumente
 **Vorgänger:** `PHASE9_EDITORIAL_CORE_COVERAGE_PLAN.md`, `PHASE10_SUPPLEMENTATION_SCRIPT_LOCK_PLAN.md`, R1.1/R1.3
 
 ---
@@ -279,8 +279,8 @@ gesonderter Vertrag (später / deferred), sonst immer `normal`.
 
 Vor `DiscoveryTextGateway.generate` für Coverage:
 
-1. Active Run mit gleichem Dedup-Key? → zurückgeben  
-2. Completed equivalent Audit (Schema-20-Felder / kanonischer FP)? → reuse, kein Gateway  
+1. Active Run mit gleichem Dedup-Key? → zurückgeben
+2. Completed equivalent Audit (Schema-20-Felder / kanonischer FP)? → reuse, kein Gateway
 3. Sonst: neuer technischer Run + Gateway
 
 Bestehende `find_completed_editorial_attempt` ist ungenutzt und kann als
@@ -392,14 +392,14 @@ Keine verwaiste `active_coverage_audit_id`.
 
 ### Reuse
 
-> Coverage ist bereits aktuell.  
+> Coverage ist bereits aktuell.
 > Bestehender Audit und Gap-Entscheidungen wurden wiederverwendet.
 
 Nicht: „neuer Audit erzeugt“.
 
 ### Recompute
 
-> Coverage wurde neu berechnet, weil sich `<konkreter Input>` geändert hat.  
+> Coverage wurde neu berechnet, weil sich `<konkreter Input>` geändert hat.
 > Frühere Gap-Entscheidungen gelten für den alten Stand.
 
 Anzeigen (gekürzt):
@@ -468,7 +468,7 @@ oder Laufzeit-Ableitung bevorzugen.
 
 ## 16. Testmatrix (Vorschlag)
 
-Neue Datei: `tests/test_discovery_v2_coverage_idempotency_c1.py` (C1)  
+Neue Datei: `tests/test_discovery_v2_coverage_idempotency_c1.py` (C1)
 Folge: `…_c2.py`, `…_c3.py`, `…_c4.py` oder eine Suite mit Markern.
 
 ### 16.1 Audit-Idempotenz
