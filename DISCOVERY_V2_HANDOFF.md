@@ -101,7 +101,7 @@
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **3043 collected / 3024 passed / 18 failed / 1 skipped** (Ziel C2-R1)
+- Teststand: **3043 collected / 3024 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**

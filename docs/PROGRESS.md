@@ -51,7 +51,7 @@
 
 ## Teststand
 
-**3043 collected / 3024 passed / 18 failed / 1 skipped** (Ziel nach C2-R1; +9 Tests)
+**3043 collected / 3024 passed / 18 failed / 1 skipped** (~322s; +9 C2-R1-Tests)
 
 18 bekannte Classic/Without-VO-Fehler und 1 VFR-Skip unverändert.
 
