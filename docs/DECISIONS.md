@@ -637,3 +637,32 @@ historisch erhalten (`superseded`). Der neue Plan erhält `status=review_require
 Alte Humanity-/Feasibility-Ergebnisse werden nicht als Current übernommen.
 Humanity und Feasibility müssen separat erneut geprüft werden. No-Op-Apply und
 Konflikte erzeugen keinen neuen Current Plan.
+
+---
+
+## D-COVERAGE-STABILITY-001 — Technische Run-Identität ≠ fachliche Coverage-Input-Identität
+
+**Entscheidung:** Technische Coverage-Run-Identität (`editorial_run_id`, und bei
+neuen Fake-Audits weiterhin `run_id` in der Audit-UUID5) und fachliche
+Coverage-Input-Identität (`canonical_coverage_input_fingerprint`, Schema
+`coverage-input-v1`) sind getrennte Verträge. R1.1-UNIQUE-Schutz für Audit-IDs
+bleibt erhalten; fachliche Idempotenz läuft über den Canonical Fingerprint.
+
+---
+
+## D-COVERAGE-STABILITY-002 — Completed Current Audit Reuse ohne Gateway/Gaps
+
+**Entscheidung:** Ein completed Current Audit wird bei identischem Canonical
+Coverage Input wiederverwendet. Dabei entstehen weder Gatewayaufruf noch
+Workerstart, weder neue Audit-ID noch neue Gaps, und es findet kein Supersede
+statt. Eskalationen, Candidate Decisions und `accepted_unresolved` bleiben auf
+den bestehenden Gap-IDs erhalten.
+
+---
+
+## D-COVERAGE-STABILITY-003 — Canonical Fingerprints ohne technische Zufallswerte
+
+**Entscheidung:** Canonical Coverage Fingerprints enthalten keine Run-IDs,
+Audit-IDs, Gap-IDs, Timestamps, Artefaktpfade oder UI-/Session-Zustände. Der
+Fingerprint ist SHA-256 über eine versionierte, UTF-8-kodierte,
+sortierungsstabile JSON-Darstellung von `coverage-input-v1`.

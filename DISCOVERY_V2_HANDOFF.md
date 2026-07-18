@@ -81,23 +81,23 @@
   Eskalation/`user_decision`/`accepted_unresolved` → Script Lock erneut offen
 - Root Cause: Fake-Audit-ID inkl. `run_id`; Worker-Reuse nur per Audit-ID;
   Gap-Materialisierung supersedet audit-fremd ohne Input-Äquivalenzprüfung
-- **Coverage Stability C1 abgeschlossen** (`94b6e0f`):
-  `tests/test_discovery_v2_coverage_stability_c1.py` (6 Node-IDs)
-- Exakte Audit-ID-Formel (FakeText `_coverage` / `_id`):
-  `uuid5(NAMESPACE_URL, "otio-discovery-v2-editorial:" +
-  "coverage:project_id:script_id:observation_fingerprint:run_id")`
-- Fehlender completed-input Reuse-Lookup bestätigt (manuell + auto)
-- Supersede-Reihenfolge: Audit persist → Current setzen → später
-  `materialize_gaps_from_current_coverage` → `supersede_gaps_not_in_audit`
-  → neue Gaps
-- Aktiver Auftrag: keiner (C1 dokumentiert; Produktfix gesperrt)
+- **Coverage Stability C1 abgeschlossen** (`94b6e0f`)
+- **Coverage Stability C2 abgeschlossen** (`7e8db48`):
+  Canonical Input `coverage-input-v1`, Active-Run-Reuse, Completed-Current-Audit-Reuse
+- Decisions: D-COVERAGE-STABILITY-001…003
+- Fake-Audit-ID darf weiterhin `run_id` enthalten (R1.1); fachlicher Reuse über
+  `canonical_coverage_input_fingerprint`
+- Reuse-Pfad: kein Gateway, kein Worker, kein Supersede, Gaps bleiben
+- Legacy-Audits: sichere Rekonstruktion oder kein Reuse
+- **Manueller Reuse-Test erforderlich** (temporäres Projekt; keine USA_v2-Registry)
+- Aktiver Auftrag: keiner (C2 implementiert; C3 gesperrt bis Freigabe)
 - R1.3 Acceptance Evidence weiterhin offen
-- Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C2**
-- **C3/C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
+- Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C3**
+- **C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **3017 collected / 2998 passed / 18 failed / 1 skipped**
+- Teststand: **3034 collected / 3015 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
@@ -937,12 +937,12 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 21. ~~Visual Edit Rework V3 Executable Repairs~~ — **abgeschlossen** (`f1b982a`)
 22. ~~Coverage Idempotency / Carry-Forward Plan~~ — dokumentiert
 23. ~~Coverage Stability C1 Fixtures~~ — **abgeschlossen** (`94b6e0f`)
+24. ~~Coverage Stability C2 Canonical Reuse~~ — **abgeschlossen** (`7e8db48`)
 
-Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C2**.
-Script-Lock Realtest erfolgreich. V3-Realtest:
-`additional_coverage_required` ehrlich; E2E durch Coverage-Reset blockiert.
-**C3/C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
-Keine neue Produktphase freigegeben.
+Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C3**.
+Script-Lock Realtest erfolgreich. C2 behebt äquivalenten Coverage-Reset.
+**C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
+Keine neue Produktphase freigegeben. Manueller Reuse-Test erforderlich.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
 (untergeordnet gegenüber Regeln, DECISIONS, MASTER_PLAN, ALPHA_SCOPE, …).
