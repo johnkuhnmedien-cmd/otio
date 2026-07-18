@@ -39,7 +39,9 @@
 - R1.1 Script-Lock Identity Rework: **abgeschlossen** (`8f4b9aa`)
 - R1.2 State/Routing: **abgeschlossen** (Produktcommit `4c6bfd9`)
 - R1.3 Review/Analyse: **abgeschlossen** (Produktcommits `45a5b4f`, `8b4c2ad`)
-- Aktueller HEAD: `1e16916ee16f10fc7617d001093d46d67d412c6c`
+- Aktueller HEAD: `70ffe6e3b39d227132999b3be11d0663226e780b`
+- Visual Edit Rework Plan: `655fcc8`
+- Visual Edit Rework V1 Fixtures: `70ffe6e`
 - Root Cause `editorial_registry_write_failed`: FakeText Coverage-Audit-ID ohne
   `run_id` → UNIQUE auf `coverage_audits.coverage_audit_id` bei Wiederanlauf
 - Root Cause Reload/Routing: Project nur in `session_state`; Mode-Fallback
@@ -56,19 +58,26 @@
   klont nur; Fake Repair `vary_first_local_motif` nicht blockerbezogen; UI setzt
   nie `user_status=selected`
 - Plan: `docs/source_plans/ALPHA_VISUAL_EDIT_REPAIR_REWORK_PLAN.md`
+- V1 Fixtures: `tests/test_discovery_v2_visual_edit_rework_v1.py` +
+  `tests/fixtures/visual_edit_rework_v1.py` (6 Assets A–F; Fake nutzt nur A;
+  E3/E4; Repair ohne Ops; gleiche Issue-Signatur bei Wiederholung)
+- E3-Policy: `domain/visual_edit.py` `ASSET_REUSE_MAX = 3`
+- E4-Policy: `domain/visual_edit.py` `SOURCE_RANGE_OVERLAP_RATIO_MAX = 0.90`
+- Repair-Lücke: `repair_type=vary_first_local_motif`, keine
+  `replace_assignment_asset` / `replace_assignment_source_range`
 - Kanonische Route: `?project_id=<uuid>&page=<slug>` (+ Streamlit `url_path`);
   Flash + kontrollierter Rerun nach Mutationen/Jobstarts
 - Assetweise Fake-Vision-Queue; Batch Observation Review; Claim-Dualstatus;
   Coverage-Revalidierung nach accepted Reviews; Supplement-Gap nur nach Match
-- Aktiver Auftrag: Visual-Edit-Repair-Rework-**Planung** (keine Produktänderung)
+- Aktiver Auftrag: keiner (V1 Fixtures erledigt; keine Produktänderung)
 - R1.3 Acceptance Evidence weiterhin offen
-- End-to-End Visual Edit / Repair: **blockiert** (E3/E4-Schleife)
-- Nächste erlaubte Aktivität nach Freigabe: **Visual Edit Rework V1**
-- **R1.4 und spätere Arbeit gesperrt** (kein Progress-Polling)
+- End-to-End Visual Edit / Repair: **blockiert** (E3/E4-Schleife; Fix ab V2)
+- Nächste erlaubte Aktivität nach Freigabe: **Visual Edit Rework V2**
+- **V3/V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **2988 collected / 2969 passed / 18 failed / 1 skipped**
+- Teststand: **2994 collected / 2975 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse) — Visual-Edit-
   Repair-Pfad im manuellen Alpha jedoch E3/E4-blockiert
@@ -903,13 +912,13 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 15. ~~R1.1 Script-Lock Identity Rework~~ — **abgeschlossen** (`8f4b9aa`)
 16. ~~R1.2 State / Routing~~ — **abgeschlossen** (`4c6bfd9`)
 17. ~~R1.3 Review / Analyse-Queue~~ — **abgeschlossen** (`45a5b4f`)
-18. Visual Edit / Repair Rework Plan — **aktiv**
-    (`docs/source_plans/ALPHA_VISUAL_EDIT_REPAIR_REWORK_PLAN.md`)
+18. ~~Visual Edit / Repair Rework Plan~~ — dokumentiert (`655fcc8`)
+19. ~~Visual Edit Rework V1 Fixtures~~ — **abgeschlossen** (`70ffe6e`)
 
-Nächste erlaubte Aktivität nach Freigabe: **Visual Edit Rework V1**.
+Nächste erlaubte Aktivität nach Freigabe: **Visual Edit Rework V2**.
 Script-Lock Realtest erfolgreich. End-to-End Visual Edit/Repair blockiert
-(E3/E4). **R1.4 und spätere Arbeit gesperrt.** R1.5–R1.6 weiterhin gesperrt.
-Keine neue Produktphase freigegeben.
+(E3/E4; V1 reproduziert). **V3/V4 und R1.4 weiterhin gesperrt.**
+R1.5–R1.6 weiterhin gesperrt. Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
 (untergeordnet gegenüber Regeln, DECISIONS, MASTER_PLAN, ALPHA_SCOPE, …).

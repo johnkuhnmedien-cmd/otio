@@ -2,25 +2,24 @@
 
 ## Aktueller Stand
 
-**Visual-Edit-Rework-Planung aktiv — Schema weiterhin 20.**
+**Visual Edit Rework V1 (Fixtures) abgeschlossen — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
-- R1.1 Coverage-/Accept-Blocker: abgeschlossen (`f3e015b`)
-- R1.1 Script-Lock Identity Rework: abgeschlossen (`8f4b9aa`)
 - Script-Lock Realtest: **erfolgreich**
-- R1.2 State/Routing: abgeschlossen (`4c6bfd9`)
-- R1.3 Review/Analyse: abgeschlossen (`45a5b4f`, `8b4c2ad`)
+- R1.1–R1.3: abgeschlossen
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - Schema: **20**
 - Provider: **Fake-only**
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- End-to-End-Test am Visual-Edit-/Repair-Schritt: **blockiert**
-  (E3 Asset-Reuse + E4 Source-Range-Reuse; Repair ohne ausführbare
-  Reassignment-Ops; identische Feasibility-Schleife)
 - Plan: `docs/source_plans/ALPHA_VISUAL_EDIT_REPAIR_REWORK_PLAN.md`
-- **Nächster erlaubter Schritt nach Freigabe: Visual Edit Rework V1**
-- **R1.4 weiterhin gesperrt** (kein Progress-Polling)
-- R1.5–R1.6 weiterhin gesperrt
+- Visual Edit Rework **V1 Fixtures**: **abgeschlossen** (`70ffe6e`)
+- Reproduktion: Fake-Planer nutzt `candidates[0]` trotz 6 gültiger Assets →
+  E3 (`ASSET_REUSE_MAX=3`) + E4 (`SOURCE_RANGE_OVERLAP_RATIO_MAX=0.90`);
+  Repair `vary_first_local_motif` ohne ausführbare Reassignment-Ops;
+  wiederholte Feasibility → gleiche Issue-Signatur
+- **Nächster erlaubter Schritt nach Freigabe: Visual Edit Rework V2**
+  (Planer-Härtung: Diversität, E3-/E4-aware Assignment)
+- **V3/V4 und R1.4 weiterhin gesperrt**
 - Keine neue Produktphase · echte Provider gesperrt
 
 ## Phase-Status
@@ -28,26 +27,41 @@
 | Phase | Status |
 |---|---|
 | 7–13 Produktpfad | freigegeben / Fake-Alpha |
-| R1.1 Coverage / Accept | abgeschlossen (`f3e015b`) |
-| R1.1 Script-Lock Identity | abgeschlossen (`8f4b9aa`) |
-| R1.2 State / Routing | abgeschlossen (`4c6bfd9`) |
-| R1.3 Review / Analyse-Queue | abgeschlossen (`45a5b4f`) |
-| Visual Edit Repair Rework Plan | **aktiv / Planung** |
-| Visual Edit Rework V1–V4 | gesperrt bis Freigabe (nach Plan) |
+| R1.1–R1.3 | abgeschlossen |
+| Visual Edit Repair Rework Plan | dokumentiert |
+| Visual Edit Rework V1 Fixtures | **abgeschlossen** (`70ffe6e`) |
+| Visual Edit Rework V2 Planer | nächster erlaubter Schritt (nach Freigabe) |
+| Visual Edit Rework V3–V4 | **gesperrt** |
 | R1.4 Job-UX / Progress-Polling | **gesperrt** |
 | R1.5–R1.6 | gesperrt |
 
+## Reproduzierende Node-IDs (V1)
+
+- `tests/test_discovery_v2_visual_edit_rework_v1.py::test_fixture_has_multiple_valid_assets_but_fake_plan_uses_first_asset_only`
+- `tests/test_discovery_v2_visual_edit_rework_v1.py::test_reproduced_plan_fails_e3_asset_reuse`
+- `tests/test_discovery_v2_visual_edit_rework_v1.py::test_reproduced_plan_fails_e4_source_range_overlap`
+- `tests/test_discovery_v2_visual_edit_rework_v1.py::test_current_repair_proposal_has_no_executable_reassignment`
+- `tests/test_discovery_v2_visual_edit_rework_v1.py::test_repeated_feasibility_of_unchanged_plan_has_same_issue_signature`
+- `tests/test_discovery_v2_visual_edit_rework_v1.py::test_reproduction_uses_no_gateway_and_no_media_io`
+
+Policy: `otio_app/discovery_v2/domain/visual_edit.py` —
+`ASSET_REUSE_MAX`, `SOURCE_RANGE_OVERLAP_RATIO_MAX`.
+
 ## Teststand
 
-**2988 collected / 2969 passed / 18 failed / 1 skipped** (Baseline unverändert;
-dieser Auftrag ändert keine Produkt-/Testdateien)
+**2994 collected / 2975 passed / 18 failed / 1 skipped** (~270s)
+
+Vergleich zur Baseline **2988 / 2969 / 18 / 1**:
+- +6 V1-Reproduktionstests, alle grün
+- 18 bekannte Classic/Without-VO Baseline-Fehler unverändert
+- 1 bekannter VFR-Skip unverändert
+- 0 xfailed / 0 xpassed
 
 ## Nächste erlaubte Aktivität
 
 Nach Freigabe:
 
-→ **Visual Edit Rework V1** (Fixtures, E3/E4-Vertrags-/Repro-Tests,
-identische-Run-Erkennung)
+→ **Visual Edit Rework V2** (Planer-Härtung)
 
-Noch gesperrt: Rework V2–V4 vor V1-Abschluss, R1.4–R1.6, echte Provider,
+Noch gesperrt: V3 Repairs, V4 Loop/UI, R1.4–R1.6, echte Provider,
 Style References, Shared Working Media, neue Produktphase.
