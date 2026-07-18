@@ -886,10 +886,11 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 13. ~~R1 Plan~~ — dokumentiert (`cac5e76`)
 14. ~~R1.1 Coverage / Script Lock Blocker~~ — **abgeschlossen** (`f3e015b`)
 15. ~~R1.2 State / Routing~~ — **abgeschlossen** (`4c6bfd9`)
+16. ~~R1.3 Review / Analyse-Queue~~ — **abgeschlossen** (`45a5b4f`)
 
-Nächste erlaubte Aktivität nach Freigabe: **R1.3**
-(Analyse-Queue / Observation-Review-Mengen).
-R1.4–R1.6 weiterhin gesperrt. Keine neue Produktphase freigegeben.
+Nächste erlaubte Aktivität nach Freigabe: **R1.4**
+(Job-UX / Progress-Polling).
+R1.5–R1.6 weiterhin gesperrt. Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
 (untergeordnet gegenüber Regeln, DECISIONS, MASTER_PLAN, ALPHA_SCOPE, …).
