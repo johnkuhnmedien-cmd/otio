@@ -24,6 +24,7 @@ from otio_app.discovery_v2.domain.asset_analysis import (
     FRAME_SAMPLE_PROFILE_VERSION,
     SHOT_DETECT_PROFILE_VERSION,
 )
+from otio_app.discovery_v2.ui.flash import discovery_ui_flash_and_rerun
 from otio_app.discovery_v2.ui.overview import active_discovery_project
 
 
@@ -112,7 +113,7 @@ def render_discovery_asset_analysis_page() -> None:
     if start_clicked and view.can_start:
         result = start_analysis_prepare(project, sync=False)
         if result.started:
-            st.success(result.message)
+            discovery_ui_flash_and_rerun(result.message, level="info")
         else:
             st.warning(result.message)
 
@@ -455,7 +456,7 @@ def _submit_review_action(
         reason_code=reason_code,
     )
     if result.ok:
-        st.success(result.message)
+        discovery_ui_flash_and_rerun(result.message)
     else:
         st.warning(
             f"{result.error_code or 'observation_review_failed'}: {result.message}"

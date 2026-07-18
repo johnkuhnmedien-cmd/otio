@@ -21,11 +21,8 @@ from otio_app.discovery_v2.domain.technical_validation import (
     ValidationRunStatus,
 )
 from otio_app.discovery_v2.paths import get_discovery_v2_root
+from otio_app.discovery_v2.ui.flash import discovery_ui_flash_and_rerun
 from otio_app.discovery_v2.ui.overview import active_discovery_project
-
-
-_SESSION_ERROR_KEY = "discovery_v2_validation_error"
-_SESSION_INFO_KEY = "discovery_v2_validation_info"
 
 
 def render_discovery_technical_validation_page() -> None:
@@ -39,13 +36,6 @@ def render_discovery_technical_validation_page() -> None:
         "Die Quelldateien werden gelesen und technisch geprüft. Es werden "
         "keine Medien kopiert oder verändert."
     )
-
-    error = st.session_state.pop(_SESSION_ERROR_KEY, None)
-    info = st.session_state.pop(_SESSION_INFO_KEY, None)
-    if error:
-        st.error(error)
-    if info:
-        st.info(info)
 
     ok, block_msg, ctx = can_start_technical_validation(project)
     run, validations, status_err = get_validation_status(project)
@@ -76,13 +66,12 @@ def render_discovery_technical_validation_page() -> None:
         try:
             result = start_technical_validation(project, sync=False)
         except TechnicalValidationServiceError as exc:
-            st.session_state[_SESSION_ERROR_KEY] = str(exc)
+            discovery_ui_flash_and_rerun(str(exc), level="error")
         else:
             if result.started:
-                st.session_state[_SESSION_INFO_KEY] = result.message
+                discovery_ui_flash_and_rerun(result.message, level="info")
             else:
-                st.session_state[_SESSION_ERROR_KEY] = result.message
-        st.rerun()
+                discovery_ui_flash_and_rerun(result.message, level="error")
 
     if not can_click and block_msg and not active:
         st.caption(block_msg)

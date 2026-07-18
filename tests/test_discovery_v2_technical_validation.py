@@ -740,6 +740,9 @@ def test_button_starts_exactly_one_run(
     st.rerun = MagicMock()
     monkeypatch.setattr(val_ui, "st", st)
     monkeypatch.setattr(val_ui, "active_discovery_project", lambda: discovery_project)
+    from otio_app.discovery_v2.ui import flash as flash_mod
+
+    monkeypatch.setattr(flash_mod, "st", st)
 
     # Sync starten statt Thread
     real_start = tvs.start_technical_validation

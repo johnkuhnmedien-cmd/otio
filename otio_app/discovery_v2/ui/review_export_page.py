@@ -11,6 +11,7 @@ from otio_app.discovery_v2.application.editorial_approval_service import (
 from otio_app.discovery_v2.application.export_validation_service import start_export_validation_run
 from otio_app.discovery_v2.application.otio_export_service import start_otio_export_run
 from otio_app.discovery_v2.domain.export import AcceptedExportRisk
+from otio_app.discovery_v2.ui.flash import discovery_ui_flash_and_rerun
 from otio_app.discovery_v2.ui.overview import active_discovery_project
 
 
@@ -100,7 +101,10 @@ def _render_approval(project, view) -> None:
             accepted_risks=risks,
             confirmed_fingerprint=view.preview.fingerprint if view.preview else None,
         )
-        st.success(result.message) if result.ok else st.warning(result.message)
+        if result.ok:
+            discovery_ui_flash_and_rerun(result.message)
+        else:
+            st.warning(result.message)
     if st.button(
         "Editorial-Freigabe ablehnen",
         disabled=not view.can_approve,
@@ -114,7 +118,10 @@ def _render_approval(project, view) -> None:
             accepted_risks=[],
             confirmed_fingerprint=view.preview.fingerprint if view.preview else None,
         )
-        st.success(result.message) if result.ok else st.warning(result.message)
+        if result.ok:
+            discovery_ui_flash_and_rerun(result.message)
+        else:
+            st.warning(result.message)
 
 
 def _render_validation(project, view) -> None:
@@ -150,7 +157,10 @@ def _render_validation(project, view) -> None:
         key="discovery_v2_export_validate",
     ):
         result = start_export_validation_run(project, sync=True)
-        st.success(result.message) if result.ok else st.warning(result.message)
+        if result.ok:
+            discovery_ui_flash_and_rerun(result.message, level="info")
+        else:
+            st.warning(result.message)
 
 
 def _render_export(project, view) -> None:
@@ -195,7 +205,10 @@ def _render_export(project, view) -> None:
         key="discovery_v2_export_otio",
     ):
         result = start_otio_export_run(project, sync=False)
-        st.success(result.message) if result.started else st.warning(result.message)
+        if result.started:
+            discovery_ui_flash_and_rerun(result.message, level="info")
+        else:
+            st.warning(result.message)
 
 
 __all__ = ["render_discovery_review_export_page"]

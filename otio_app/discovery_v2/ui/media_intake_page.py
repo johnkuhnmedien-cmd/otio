@@ -49,11 +49,9 @@ from otio_app.discovery_v2.domain.media_intake import (
     IntakeRunAssetStatus,
 )
 from otio_app.discovery_v2.paths import get_discovery_v2_root
+from otio_app.discovery_v2.ui.flash import discovery_ui_flash_and_rerun
 from otio_app.discovery_v2.ui.overview import active_discovery_project
 
-
-_SESSION_ERROR_KEY = "discovery_v2_intake_error"
-_SESSION_INFO_KEY = "discovery_v2_intake_info"
 
 
 def render_discovery_media_intake_page() -> None:
@@ -69,13 +67,6 @@ def render_discovery_media_intake_page() -> None:
         "Video-Transkodierung wandelt nach H.264/yuv420p/8-Bit um; "
         "TIFF-Konvertierung erzeugt einzelne PNG-Dateien (image-png-v1)."
     )
-
-    error = st.session_state.pop(_SESSION_ERROR_KEY, None)
-    info = st.session_state.pop(_SESSION_INFO_KEY, None)
-    if error:
-        st.error(error)
-    if info:
-        st.info(info)
 
     ok, block_msg, ctx = can_create_intake_plan(project)
     plan, is_stale, plan_warn = get_current_intake_plan(project)
@@ -108,13 +99,12 @@ def render_discovery_media_intake_page() -> None:
             try:
                 result = create_intake_plan(project)
             except MediaIntakePlanningServiceError as exc:
-                st.session_state[_SESSION_ERROR_KEY] = str(exc)
+                discovery_ui_flash_and_rerun(str(exc), level="error")
             else:
                 if result.created:
-                    st.session_state[_SESSION_INFO_KEY] = result.message
+                    discovery_ui_flash_and_rerun(result.message, level="info")
                 else:
-                    st.session_state[_SESSION_ERROR_KEY] = result.message
-            st.rerun()
+                    discovery_ui_flash_and_rerun(result.message, level="error")
     else:
         st.caption(block_msg or "Planung derzeit nicht möglich.")
 
@@ -186,13 +176,12 @@ def render_discovery_media_intake_page() -> None:
             try:
                 result = start_copy_intake(project, sync=False)
             except CopyIntakeServiceError as exc:
-                st.session_state[_SESSION_ERROR_KEY] = str(exc)
+                discovery_ui_flash_and_rerun(str(exc), level="error")
             else:
                 if result.started:
-                    st.session_state[_SESSION_INFO_KEY] = result.message
+                    discovery_ui_flash_and_rerun(result.message, level="info")
                 else:
-                    st.session_state[_SESSION_ERROR_KEY] = result.message
-            st.rerun()
+                    discovery_ui_flash_and_rerun(result.message, level="error")
     else:
         st.caption(copy_msg or "Copy-Intake derzeit nicht startbar.")
 
@@ -298,13 +287,12 @@ def render_discovery_media_intake_page() -> None:
             try:
                 result = start_remux_intake(project, sync=False)
             except RemuxIntakeServiceError as exc:
-                st.session_state[_SESSION_ERROR_KEY] = str(exc)
+                discovery_ui_flash_and_rerun(str(exc), level="error")
             else:
                 if result.started:
-                    st.session_state[_SESSION_INFO_KEY] = result.message
+                    discovery_ui_flash_and_rerun(result.message, level="info")
                 else:
-                    st.session_state[_SESSION_ERROR_KEY] = result.message
-            st.rerun()
+                    discovery_ui_flash_and_rerun(result.message, level="error")
     else:
         st.caption(remux_msg or "Remux-Intake derzeit nicht startbar.")
 
@@ -400,13 +388,12 @@ def render_discovery_media_intake_page() -> None:
             try:
                 result = start_video_transcode_intake(project, sync=False)
             except VideoTranscodeServiceError as exc:
-                st.session_state[_SESSION_ERROR_KEY] = str(exc)
+                discovery_ui_flash_and_rerun(str(exc), level="error")
             else:
                 if result.started:
-                    st.session_state[_SESSION_INFO_KEY] = result.message
+                    discovery_ui_flash_and_rerun(result.message, level="info")
                 else:
-                    st.session_state[_SESSION_ERROR_KEY] = result.message
-            st.rerun()
+                    discovery_ui_flash_and_rerun(result.message, level="error")
     else:
         st.caption(vt_msg or "Video-Transkodierung derzeit nicht startbar.")
 
@@ -540,13 +527,12 @@ def render_discovery_media_intake_page() -> None:
             try:
                 result = start_image_convert_intake(project, sync=False)
             except ImageConvertServiceError as exc:
-                st.session_state[_SESSION_ERROR_KEY] = str(exc)
+                discovery_ui_flash_and_rerun(str(exc), level="error")
             else:
                 if result.started:
-                    st.session_state[_SESSION_INFO_KEY] = result.message
+                    discovery_ui_flash_and_rerun(result.message, level="info")
                 else:
-                    st.session_state[_SESSION_ERROR_KEY] = result.message
-            st.rerun()
+                    discovery_ui_flash_and_rerun(result.message, level="error")
     else:
         st.caption(img_msg or "TIFF-Konvertierung derzeit nicht startbar.")
 

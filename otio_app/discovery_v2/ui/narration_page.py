@@ -14,6 +14,7 @@ from otio_app.discovery_v2.application.voice_generation_service import (
     get_narration_view,
     start_voice_generation_run,
 )
+from otio_app.discovery_v2.ui.flash import discovery_ui_flash_and_rerun
 from otio_app.discovery_v2.ui.overview import active_discovery_project
 
 
@@ -75,7 +76,10 @@ def _render_voice(project, view) -> None:
         key="discovery_v2_narration_start_voice",
     ):
         result = start_voice_generation_run(project, sync=False)
-        st.success(result.message) if result.started else st.warning(result.message)
+        if result.started:
+            discovery_ui_flash_and_rerun(result.message, level="info")
+        else:
+            st.warning(result.message)
     if view.active_run is not None:
         st.caption(
             f"Aktiver Narration-Run: `{view.active_run.run_id}` "
@@ -108,7 +112,10 @@ def _render_pause(project, view) -> None:
         key="discovery_v2_narration_start_pause",
     ):
         result = start_pause_direction_run(project, sync=False)
-        st.success(result.message) if result.started else st.warning(result.message)
+        if result.started:
+            discovery_ui_flash_and_rerun(result.message, level="info")
+        else:
+            st.warning(result.message)
     if view.pause_plans:
         st.dataframe(
             [
@@ -135,7 +142,10 @@ def _render_timing(project, view) -> None:
         key="discovery_v2_narration_start_timing",
     ):
         result = start_narration_timing_run(project, sync=True)
-        st.success(result.message) if result.started else st.warning(result.message)
+        if result.started:
+            discovery_ui_flash_and_rerun(result.message, level="info")
+        else:
+            st.warning(result.message)
     if view.timelines:
         st.dataframe(
             [

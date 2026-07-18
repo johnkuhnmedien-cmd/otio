@@ -41,6 +41,11 @@ from otio_app.discovery_v2.ui import (
     render_discovery_technical_validation_page,
     render_discovery_visual_edit_page,
 )
+from otio_app.discovery_v2.ui.route_context import (
+    discovery_shell_requested,
+    restore_discovery_route_context,
+    sync_discovery_page_route,
+)
 
 
 _CURRENT_PAGE_KEY = "_otio_current_page"
@@ -49,10 +54,21 @@ _CURRENT_PAGE_KEY = "_otio_current_page"
 def _active_project_mode() -> ProjectMode:
     """Ermittelt den Projektmodus des aktiven Projekts (Default: mit Voice-Over).
 
-    Wird ohne Datenbankzugriff auf 'with_voiceover' aufgelöst, solange noch kein
-    Projekt aktiv ist (z. B. beim allerersten App-Start) — die bestehende
-    Navigation bleibt dadurch für alle bisherigen Projekte unverändert.
+    Discovery-Reload/Deep-Link: Wenn die Route einen Discovery-Kontext verlangt
+    (query/path), bleibt die Discovery-Navigation erhalten — kein stiller
+    Classic-Fallback bei fehlender/ungültiger Project-ID.
+
+    Ohne Projekt und ohne Discovery-Route-Hinweis bleibt der Default
+    ``with_voiceover`` (erster App-Start / Classic unverändert).
     """
+    if discovery_shell_requested():
+        project_id = st.session_state.get(ACTIVE_PROJECT_KEY)
+        if project_id:
+            project = get_project_by_id(project_id)
+            if project is not None and project.project_mode == ProjectMode.DISCOVERY_V2:
+                return ProjectMode.DISCOVERY_V2
+        return ProjectMode.DISCOVERY_V2
+
     project_id = st.session_state.get(ACTIVE_PROJECT_KEY)
     if not project_id:
         return ProjectMode.WITH_VOICEOVER
@@ -68,6 +84,7 @@ def _wrap_page(
     *,
     show_jobs_banner: bool = False,
     purge_mapping_on_enter: bool = False,
+    discovery_page_slug: str | None = None,
 ) -> Callable[[], None]:
     def wrapped() -> None:
         previous_page = st.session_state.get(_CURRENT_PAGE_KEY)
@@ -75,6 +92,9 @@ def _wrap_page(
             if purge_mapping_on_enter:
                 clear_page_widget_state(PAGE_MAPPING)
             st.session_state[_CURRENT_PAGE_KEY] = page_id
+
+        if discovery_page_slug:
+            sync_discovery_page_route(discovery_page_slug)
 
         reconcile_all_jobs()
         record_script_run(page_id)
@@ -244,12 +264,20 @@ def _build_discovery_v2_pages(
         st.Page(render_new_project, title=PAGE_NEW, url_path="neues-projekt", default=True),
         st.Page(render_project_list, title=PAGE_LIST, url_path="projekte"),
         st.Page(
-            _wrap_page(PAGE_DISCOVERY_OVERVIEW, render_discovery_overview_page),
+            _wrap_page(
+                PAGE_DISCOVERY_OVERVIEW,
+                render_discovery_overview_page,
+                discovery_page_slug="overview",
+            ),
             title=PAGE_DISCOVERY_OVERVIEW,
             url_path="discovery-v2",
         ),
         st.Page(
-            _wrap_page(PAGE_DISCOVERY_INVENTORY, render_discovery_inventory_page),
+            _wrap_page(
+                PAGE_DISCOVERY_INVENTORY,
+                render_discovery_inventory_page,
+                discovery_page_slug="inventory",
+            ),
             title=PAGE_DISCOVERY_INVENTORY,
             url_path="discovery-medienbestand",
         ),
@@ -257,6 +285,7 @@ def _build_discovery_v2_pages(
             _wrap_page(
                 PAGE_DISCOVERY_TECHNICAL_VALIDATION,
                 render_discovery_technical_validation_page,
+                discovery_page_slug="technical_validation",
             ),
             title=PAGE_DISCOVERY_TECHNICAL_VALIDATION,
             url_path="discovery-technische-pruefung",
@@ -265,6 +294,7 @@ def _build_discovery_v2_pages(
             _wrap_page(
                 PAGE_DISCOVERY_MEDIA_INTAKE,
                 render_discovery_media_intake_page,
+                discovery_page_slug="media_intake",
             ),
             title=PAGE_DISCOVERY_MEDIA_INTAKE,
             url_path="discovery-media-intake",
@@ -273,6 +303,7 @@ def _build_discovery_v2_pages(
             _wrap_page(
                 PAGE_DISCOVERY_ASSET_ANALYSIS,
                 render_discovery_asset_analysis_page,
+                discovery_page_slug="asset_analysis",
             ),
             title=PAGE_DISCOVERY_ASSET_ANALYSIS,
             url_path="discovery-assetanalyse",
@@ -281,6 +312,7 @@ def _build_discovery_v2_pages(
             _wrap_page(
                 PAGE_DISCOVERY_EDITORIAL,
                 render_discovery_editorial_page,
+                discovery_page_slug="editorial",
             ),
             title=PAGE_DISCOVERY_EDITORIAL,
             url_path="discovery-editorial",
@@ -289,6 +321,7 @@ def _build_discovery_v2_pages(
             _wrap_page(
                 PAGE_DISCOVERY_NARRATION,
                 render_discovery_narration_page,
+                discovery_page_slug="narration",
             ),
             title=PAGE_DISCOVERY_NARRATION,
             url_path="discovery-narration",
@@ -297,6 +330,7 @@ def _build_discovery_v2_pages(
             _wrap_page(
                 PAGE_DISCOVERY_VISUAL_EDIT,
                 render_discovery_visual_edit_page,
+                discovery_page_slug="visual_edit",
             ),
             title=PAGE_DISCOVERY_VISUAL_EDIT,
             url_path="discovery-visual-edit",
@@ -305,12 +339,17 @@ def _build_discovery_v2_pages(
             _wrap_page(
                 PAGE_DISCOVERY_REVIEW_EXPORT,
                 render_discovery_review_export_page,
+                discovery_page_slug="review_export",
             ),
             title=PAGE_DISCOVERY_REVIEW_EXPORT,
             url_path="discovery-review-export",
         ),
         st.Page(
-            _wrap_page(PAGE_DISCOVERY_SETTINGS, render_discovery_settings_page),
+            _wrap_page(
+                PAGE_DISCOVERY_SETTINGS,
+                render_discovery_settings_page,
+                discovery_page_slug="settings",
+            ),
             title=PAGE_DISCOVERY_SETTINGS,
             url_path="discovery-settings",
         ),
@@ -325,6 +364,9 @@ def run_app_navigation(
     render_project_list: Callable[[], None],
 ) -> None:
     """Startet st.navigation — nur die aktive Seite wird gerendert."""
+    # Reload/Deep-Link: Project-ID aus der Route vor Mode-/Nav-Aufbau laden.
+    restore_discovery_route_context()
+
     if not hasattr(st, "navigation"):
         _run_legacy_pages(
             render_new_project=render_new_project,

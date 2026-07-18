@@ -575,8 +575,12 @@ def test_r1_ui_accept_and_lock_trigger_targeted_rerun(monkeypatch) -> None:
     st.checkbox.return_value = True
     st.button.return_value = False
     monkeypatch.setattr(editorial_page, "st", st)
+    from otio_app.discovery_v2.ui import flash as flash_mod
+    from otio_app.discovery_v2.ui.flash import FLASH_KEY
+
+    monkeypatch.setattr(flash_mod, "st", st)
     editorial_page._flash_and_rerun("ok")
-    assert session[editorial_page._FLASH_KEY] == "ok"
+    assert session[FLASH_KEY] == {"level": "success", "message": "ok"}
     assert calls == ["rerun"]
 
 

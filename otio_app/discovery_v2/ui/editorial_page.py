@@ -35,20 +35,13 @@ from otio_app.discovery_v2.application.supplementation_service import (
     start_candidate_validation_run,
     start_search_run,
 )
+from otio_app.discovery_v2.ui.flash import discovery_ui_flash_and_rerun
 from otio_app.discovery_v2.ui.overview import active_discovery_project
 
-_FLASH_KEY = "discovery_v2_editorial_flash"
 
-
-def _consume_flash() -> None:
-    message = st.session_state.pop(_FLASH_KEY, None)
-    if message:
-        st.success(str(message))
-
-
-def _flash_and_rerun(message: str) -> None:
-    st.session_state[_FLASH_KEY] = message
-    st.rerun()
+def _flash_and_rerun(message: str, *, level: str = "success") -> None:
+    """Compat wrapper used by R1.1 tests and local call sites."""
+    discovery_ui_flash_and_rerun(message, level=level)  # type: ignore[arg-type]
 
 
 def render_discovery_editorial_page() -> None:
@@ -56,7 +49,6 @@ def render_discovery_editorial_page() -> None:
     project = active_discovery_project()
     if project is None:
         return
-    _consume_flash()
 
     st.info(
         "Lokaler Fake-Textadapter: Es werden keine Projektdaten an externe "
@@ -131,7 +123,7 @@ def _render_brief(project, view) -> None:
             user_notes=notes,
         )
         if result.ok:
-            st.success(result.message)
+            _flash_and_rerun(result.message)
         else:
             st.warning(result.message)
     if view.briefs:
@@ -158,7 +150,10 @@ def _render_narrative(project, view) -> None:
         key="discovery_v2_editorial_start_narrative",
     ):
         result = start_narrative_run(project, sync=False)
-        st.success(result.message) if result.started else st.warning(result.message)
+        if result.started:
+            _flash_and_rerun(result.message, level="info")
+        else:
+            st.warning(result.message)
     plan = view.narrative_plan
     if plan is not None:
         st.markdown(f"**Zentrale Frage:** {plan.central_question}")
@@ -178,7 +173,10 @@ def _render_narrative(project, view) -> None:
                     disabled=selected,
                 ):
                     result = select_hook(project, hook_id=hook.hook_id)
-                    st.success(result.message) if result.ok else st.warning(result.message)
+                    if result.ok:
+                        _flash_and_rerun(result.message)
+                    else:
+                        st.warning(result.message)
 
 
 def _render_script(project, view) -> None:
@@ -191,7 +189,10 @@ def _render_script(project, view) -> None:
             key="discovery_v2_editorial_start_script",
         ):
             result = start_script_run(project, sync=False)
-            st.success(result.message) if result.started else st.warning(result.message)
+            if result.started:
+                _flash_and_rerun(result.message, level="info")
+            else:
+                st.warning(result.message)
     with cols[1]:
         if st.button(
             "Struktur aktualisieren",
@@ -199,7 +200,10 @@ def _render_script(project, view) -> None:
             key="discovery_v2_editorial_start_structure",
         ):
             result = start_structure_run(project, sync=False)
-            st.success(result.message) if result.started else st.warning(result.message)
+            if result.started:
+                _flash_and_rerun(result.message, level="info")
+            else:
+                st.warning(result.message)
     script = view.script
     if script is None:
         st.write("Noch kein Script Draft vorhanden.")
@@ -216,7 +220,10 @@ def _render_script(project, view) -> None:
         disabled=edited_text == script.full_text,
     ):
         result = save_user_script_edit(project, full_text=edited_text)
-        st.success(result.message) if result.ok else st.warning(result.message)
+        if result.ok:
+            _flash_and_rerun(result.message)
+        else:
+            st.warning(result.message)
     if len(view.script_versions) >= 2:
         st.markdown("**Diff zur vorherigen Version**")
         previous = view.script_versions[1]
@@ -270,7 +277,7 @@ def _render_script(project, view) -> None:
                             decision=value,
                             reason="UI-Entscheidung",
                         )
-                        st.success("Claim-Entscheidung gespeichert.")
+                        _flash_and_rerun("Claim-Entscheidung gespeichert.")
     if bundle.get("visual_beats"):
         st.markdown("**Visual Beats**")
         st.dataframe(bundle["visual_beats"], use_container_width=True, hide_index=True)
@@ -287,7 +294,10 @@ def _render_coverage(project, view) -> None:
         key="discovery_v2_editorial_start_coverage",
     ):
         result = start_coverage_run(project, sync=False)
-        st.success(result.message) if result.started else st.warning(result.message)
+        if result.started:
+            _flash_and_rerun(result.message, level="info")
+        else:
+            st.warning(result.message)
     audit = view.coverage_audit
     if audit is None:
         st.write("Noch kein Coverage Audit vorhanden.")
@@ -319,7 +329,10 @@ def _render_supplementation(project, view) -> None:
         key="discovery_v2_materialize_gaps",
     ):
         result = materialize_gaps_from_current_coverage(project)
-        st.success(result.message) if result.ok else st.warning(result.message)
+        if result.ok:
+            _flash_and_rerun(result.message)
+        else:
+            st.warning(result.message)
     supp_view = get_supplementation_view(project)
     if not supp_view.ok:
         st.warning(supp_view.message or "Supplementation nicht verfuegbar.")
@@ -342,7 +355,10 @@ def _render_supplementation(project, view) -> None:
             disabled=not gap_ids,
         ):
             result = start_search_run(project, gap_ids=gap_ids, sync=False)
-            st.success(result.message) if result.started else st.warning(result.message)
+            if result.started:
+                _flash_and_rerun(result.message, level="info")
+            else:
+                st.warning(result.message)
     with cols[1]:
         if st.button(
             "Kandidaten validieren",
@@ -350,7 +366,10 @@ def _render_supplementation(project, view) -> None:
             disabled=not gap_ids,
         ):
             result = start_candidate_validation_run(project, gap_ids=gap_ids, sync=False)
-            st.success(result.message) if result.started else st.warning(result.message)
+            if result.started:
+                _flash_and_rerun(result.message, level="info")
+            else:
+                st.warning(result.message)
     for gap in gaps:
         with st.container():
             st.markdown(
@@ -369,14 +388,20 @@ def _render_supplementation(project, view) -> None:
                     key=f"discovery_v2_gap_local_{gap.gap_id}",
                 ):
                     result = assign_local_deeper_review(project, gap_id=gap.gap_id)
-                    st.success(result.message) if result.ok else st.warning(result.message)
+                    if result.ok:
+                        _flash_and_rerun(result.message)
+                    else:
+                        st.warning(result.message)
             with gap_cols[1]:
                 if st.button(
                     "Naechste Eskalation",
                     key=f"discovery_v2_gap_escalate_{gap.gap_id}",
                 ):
                     result = escalate_gap(project, gap_id=gap.gap_id)
-                    st.success(result.message) if result.ok else st.warning(result.message)
+                    if result.ok:
+                        _flash_and_rerun(result.message)
+                    else:
+                        st.warning(result.message)
             with gap_cols[2]:
                 if st.button(
                     "Karte/Grafik planen",
@@ -387,7 +412,7 @@ def _render_supplementation(project, view) -> None:
                         gap_id=gap.gap_id,
                         description="Manueller GraphicPlan fuer Coverage Gap.",
                     )
-                    st.success("GraphicPlan angelegt; keine Grafik erzeugt.")
+                    _flash_and_rerun("GraphicPlan angelegt; keine Grafik erzeugt.")
             with gap_cols[3]:
                 eligibility = evaluate_gap_accept_unresolved_eligibility(
                     project, gap_id=gap.gap_id
@@ -451,7 +476,10 @@ def _render_supplementation(project, view) -> None:
                                 decision="accepted_for_import",
                                 reason="UI-Entscheidung",
                             )
-                            st.success(result.message) if result.ok else st.warning(result.message)
+                            if result.ok:
+                                _flash_and_rerun(result.message)
+                            else:
+                                st.warning(result.message)
                     with cand_cols[1]:
                         if st.button(
                             "Ablehnen",
@@ -463,7 +491,10 @@ def _render_supplementation(project, view) -> None:
                                 decision="rejected",
                                 reason="UI-Entscheidung",
                             )
-                            st.success(result.message) if result.ok else st.warning(result.message)
+                            if result.ok:
+                                _flash_and_rerun(result.message)
+                            else:
+                                st.warning(result.message)
                     with cand_cols[2]:
                         if st.button(
                             "Pruefung noetig",
@@ -475,7 +506,10 @@ def _render_supplementation(project, view) -> None:
                                 decision="needs_review",
                                 reason="UI-Entscheidung",
                             )
-                            st.success(result.message) if result.ok else st.warning(result.message)
+                            if result.ok:
+                                _flash_and_rerun(result.message)
+                            else:
+                                st.warning(result.message)
 
 
 def _render_script_lock(project, view) -> None:

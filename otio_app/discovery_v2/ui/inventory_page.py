@@ -33,6 +33,7 @@ from otio_app.discovery_v2.domain.selection import (
     SelectionStatus,
 )
 from otio_app.discovery_v2.paths import get_discovery_v2_root
+from otio_app.discovery_v2.ui.flash import discovery_ui_flash_and_rerun
 from otio_app.discovery_v2.ui.overview import active_discovery_project
 
 
@@ -499,10 +500,10 @@ def render_discovery_inventory_page() -> None:
                 _SESSION_REGISTRY_ERROR_KEY,
             ):
                 st.session_state.pop(key, None)
-            st.success("Bestandsaufnahme abgeschlossen.")
+            discovery_ui_flash_and_rerun("Bestandsaufnahme abgeschlossen.")
         except InventoryServiceError as exc:
             st.session_state[_SESSION_ERROR_KEY] = str(exc)
-            st.error(str(exc))
+            discovery_ui_flash_and_rerun(str(exc), level="error")
 
     snapshot = st.session_state.get(_SESSION_SNAPSHOT_KEY)
     if snapshot is None:

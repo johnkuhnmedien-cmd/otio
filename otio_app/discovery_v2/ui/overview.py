@@ -4,20 +4,20 @@ from __future__ import annotations
 
 import streamlit as st
 
+from otio_app.discovery_v2.ui.route_context import render_discovery_project_selector
 from otio_app.models import Project, ProjectMode
 from otio_app.ui.navigation import ACTIVE_PROJECT_KEY
-from otio_app.ui.project_context import render_project_selector
 
 
 def active_discovery_project() -> Project | None:
-    project = render_project_selector("Projekt")
+    """Bindet das aktive Discovery-V2-Projekt (Route + Application Service)."""
+    project = render_discovery_project_selector("Projekt")
     if project is None:
         return None
     if project.project_mode != ProjectMode.DISCOVERY_V2:
         st.warning(
-            "Diese Seite gehört zu **Discovery V2**. "
-            "Bitte ein Discovery-V2-Projekt in der Sidebar aktivieren "
-            "oder unter „Neues Projekt“ eines anlegen."
+            "project_mode_mismatch: Diese Seite gehört zu **Discovery V2**. "
+            "Bitte ein Discovery-V2-Projekt wählen."
         )
         return None
     return project

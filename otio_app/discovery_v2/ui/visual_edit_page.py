@@ -14,6 +14,7 @@ from otio_app.discovery_v2.application.visual_edit_repair_service import (
     apply_selected_repair_proposals,
     propose_editorial_repairs,
 )
+from otio_app.discovery_v2.ui.flash import discovery_ui_flash_and_rerun
 from otio_app.discovery_v2.ui.overview import active_discovery_project
 
 
@@ -68,28 +69,40 @@ def _render_actions(project, view) -> None:
         key="discovery_v2_visual_edit_start_plan",
     ):
         result = start_visual_edit_plan_run(project, sync=False)
-        st.success(result.message) if result.started else st.warning(result.message)
+        if result.started:
+            discovery_ui_flash_and_rerun(result.message, level="info")
+        else:
+            st.warning(result.message)
     if st.button(
         "Humanity & Authenticity pruefen",
         disabled=not view.can_start_humanity,
         key="discovery_v2_visual_edit_start_humanity",
     ):
         result = start_humanity_review_run(project, sync=False)
-        st.success(result.message) if result.ok else st.warning(result.message)
+        if result.ok:
+            discovery_ui_flash_and_rerun(result.message, level="info")
+        else:
+            st.warning(result.message)
     if st.button(
         "Technische Machbarkeit pruefen",
         disabled=not view.can_start_feasibility,
         key="discovery_v2_visual_edit_start_feasibility",
     ):
         result = start_feasibility_check_run(project, sync=False)
-        st.success(result.message) if result.ok else st.warning(result.message)
+        if result.ok:
+            discovery_ui_flash_and_rerun(result.message, level="info")
+        else:
+            st.warning(result.message)
     if st.button(
         "Repair Proposals erzeugen",
         disabled=view.current_bundle is None,
         key="discovery_v2_visual_edit_propose_repairs",
     ):
         result = propose_editorial_repairs(project)
-        st.success(result.message) if result.ok else st.warning(result.message)
+        if result.ok:
+            discovery_ui_flash_and_rerun(result.message)
+        else:
+            st.warning(result.message)
     selected = [
         proposal.proposal_id
         for proposal in view.repair_proposals
@@ -101,7 +114,10 @@ def _render_actions(project, view) -> None:
         key="discovery_v2_visual_edit_apply_repairs",
     ):
         result = apply_selected_repair_proposals(project, selected_proposal_ids=selected)
-        st.success(result.message) if result.ok else st.warning(result.message)
+        if result.ok:
+            discovery_ui_flash_and_rerun(result.message)
+        else:
+            st.warning(result.message)
 
 
 def _render_plan(view) -> None:
