@@ -560,3 +560,16 @@ Working Media completed ist, Analysevorbereitung und Vision-Observation
 vorliegen und die Observation ausdrücklich akzeptiert wurde. Candidate Preview,
 ungeprüfte Observations oder Modellvorschläge allein lösen keinen Gap.
 Terminalstatus bei bestätigtem Match: `resolved_with_supplement`.
+
+---
+
+## D-R1.1-004 — Script-Lock-Risiken sind gap_id-gebunden; Preview ohne Checkboxen
+
+**Entscheidung:** Die kanonische Identität einer Lock-Risikobestätigung ist
+`gap_id + risk_code` (Darstellung `gap_id:risk_code`). `visual_intent_id`
+allein ist keine gültige Bestätigungsidentität. Der serverseitige
+Lock-Fingerprint beschreibt den persistierten fachlichen Stand und wird
+sichtbar, sobald Brief/Narrative/Hook/Script/Struktur/Claims/Coverage und
+terminale Gaps erfüllt sind — unabhängig davon, ob UI-Checkboxen bereits
+gesetzt sind. Checkboxen bestätigen diesen Stand; fehlende Bestätigungen
+deaktivieren den Lock-Button, leeren den Fingerprint aber nicht.

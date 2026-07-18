@@ -35,7 +35,8 @@
 - Adobe: **UNKNOWN** (kein ElevenLabs; keine echte Adobe-OAuth-/Lizenz-/Download-Integration)
 - NLE: **nur lokaler OTIO-Serialize/Reparse-Nachweis** (keine proprietären NLE-Exporte)
 - Kein Cloud-Publish
-- R1.1 Coverage-/Script-Lock-Blocker: **abgeschlossen** (Produktcommit `f3e015b`)
+- R1.1 Coverage-/Accept-Blocker: **abgeschlossen** (Produktcommit `f3e015b`)
+- R1.1 Script-Lock Identity Rework: **abgeschlossen** (`8f4b9aa`)
 - R1.2 State/Routing: **abgeschlossen** (Produktcommit `4c6bfd9`)
 - R1.3 Review/Analyse: **abgeschlossen** (Produktcommits `45a5b4f`, `8b4c2ad`)
 - Root Cause `editorial_registry_write_failed`: FakeText Coverage-Audit-ID ohne
@@ -44,17 +45,23 @@
   `WITH_VOICEOVER` → Default „Neues Projekt“
 - Root Cause Frame-Limit großer Bestände: globales `max_frames_per_run` blockierte
   den gesamten Analyse-Start → Per-Asset-Limits + assetweise Queue
+- Root Cause Script Lock „Kein Fingerprint“: Preview behandelte fehlende
+  UI-Risikobestätigungen als fachliche Blocker und unterdrückte den Fingerprint
+  (zirkulär). Fix: Preview fachlich unabhängig; Bestätigungsschlüssel
+  `gap_id:risk_code` (nicht `visual_intent_id`)
 - Kanonische Route: `?project_id=<uuid>&page=<slug>` (+ Streamlit `url_path`);
   Flash + kontrollierter Rerun nach Mutationen/Jobstarts
 - Assetweise Fake-Vision-Queue; Batch Observation Review; Claim-Dualstatus;
   Coverage-Revalidierung nach accepted Reviews; Supplement-Gap nur nach Match
-- Aktiver Produktauftrag: keiner (R1.3 erledigt)
+- Aktiver Produktauftrag: keiner (Script-Lock Identity erledigt)
+- Manueller Realtest Script Lock muss wiederholt werden
+- R1.3 Acceptance Evidence weiterhin offen
 - Nächste erlaubte Aktivität nach Freigabe: **R1.4**
   (Job-UX / Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **2976 collected / 2957 passed / 18 failed / 1 skipped**
+- Teststand: **2988 collected / 2969 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**

@@ -35,19 +35,21 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
 - R1.1 Produktcommit: `f3e015bad59e063ec2717f8ef793ca55a1362ae2`
+- R1.1 Script-Lock Identity: `8f4b9aacf0d854ff4dda02f80d37fa883d7797d7`
 - R1.2 Produktcommit: `4c6bfd99c50de075c15597d94c728918697bf6c9`
 - R1.3 Produktcommits: `45a5b4fd3144b7b0bfa6e0489e8cd9bbdbc9cc96`,
   `8b4c2ad1d1562e50657f2759a8e68debda469bf2`
 - Chief-Dev Alpha-Produktstand: **APPROVED**
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - Registry-Schema: **20**
-- Teststand: **2976 collected / 2957 passed / 18 failed / 1 skipped**
+- Teststand: **2988 collected / 2969 passed / 18 failed / 1 skipped**
 - Provider: Fake-only · Adobe: UNKNOWN · NLE: lokaler OTIO-Serialize/Reparse
 - **R1.1 abgeschlossen** · **R1.2 abgeschlossen** · **R1.3 abgeschlossen**
-- Root Cause Frame-Limit bei großen Beständen: globales `max_frames_per_run`
-  blockierte den gesamten Start → Per-Asset-Limits; assetweise Queue
-- Batch Observation Review + Claim-Dualstatus; Coverage nur nach accepted Reviews
-- Decisions: D-R1.1-001…003 · D-R1.2-001…003 · D-R1.3-001…004
+- Script-Lock Root Cause: Fingerprint an UI-Risikobestätigungen gekoppelt
+  (zirkulär) → Preview jetzt fachlich unabhängig; Schlüssel `gap_id:risk_code`
+- Manueller Realtest Script Lock (USA_v2) muss wiederholt werden
+- R1.3 Acceptance Evidence weiterhin offen
+- Decisions: D-R1.1-001…004 · D-R1.2-001…003 · D-R1.3-001…004
 - **Nächster erlaubter Schritt nach Freigabe: R1.4**
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase
