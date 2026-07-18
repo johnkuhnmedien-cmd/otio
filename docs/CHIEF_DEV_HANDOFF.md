@@ -36,26 +36,27 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
 - R1.1 Produktcommit: `f3e015bad59e063ec2717f8ef793ca55a1362ae2`
 - R1.2 Produktcommit: `4c6bfd99c50de075c15597d94c728918697bf6c9`
+- R1.3 Produktcommits: `45a5b4fd3144b7b0bfa6e0489e8cd9bbdbc9cc96`,
+  `8b4c2ad1d1562e50657f2759a8e68debda469bf2`
 - Chief-Dev Alpha-Produktstand: **APPROVED**
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - Registry-Schema: **20**
-- Teststand: **2962 collected / 2943 passed / 18 failed / 1 skipped**
+- Teststand: **2976 collected / 2957 passed / 18 failed / 1 skipped**
 - Provider: Fake-only · Adobe: UNKNOWN · NLE: lokaler OTIO-Serialize/Reparse
-- **R1.1 abgeschlossen** · **R1.2 abgeschlossen**
-- Root Cause Reload/Routing: Projekt nur in `session_state`; fehlende ID → stiller Mode-Fallback `WITH_VOICEOVER` → Default „Neues Projekt“
-- Korrigiert: kanonische Route `project_id` + `page` (Query) / Streamlit `url_path`;
-  Wiederherstellung vor Nav-Aufbau; Discovery-Shell bei ungültiger ID;
-  kein stiller Classic-Fallback; Post-Mutation Flash + einmaliger Rerun
-- Decisions: D-R1.1-001…003 · D-R1.2-001…003
-- **Nächster erlaubter Schritt nach Freigabe: R1.3**
-- R1.4–R1.6 weiterhin gesperrt
+- **R1.1 abgeschlossen** · **R1.2 abgeschlossen** · **R1.3 abgeschlossen**
+- Root Cause Frame-Limit bei großen Beständen: globales `max_frames_per_run`
+  blockierte den gesamten Start → Per-Asset-Limits; assetweise Queue
+- Batch Observation Review + Claim-Dualstatus; Coverage nur nach accepted Reviews
+- Decisions: D-R1.1-001…003 · D-R1.2-001…003 · D-R1.3-001…004
+- **Nächster erlaubter Schritt nach Freigabe: R1.4**
+- R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase
 
 ## Nächste erlaubte Aktion nach Freigabe
 
-→ **R1.3** (Analyse-Queue / Observation-Review-Mengen)
+→ **R1.4** (Job-UX / Progress-Polling)
 
-**Noch gesperrt:** R1.4–R1.6, echte Provider, Style References,
+**Noch gesperrt:** R1.5–R1.6, echte Provider, Style References,
 Shared Working Media, Schema-21 ohne Zwang, neue Produktphase.
 
 ## Verbindliche Kurzregeln

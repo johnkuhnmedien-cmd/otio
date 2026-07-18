@@ -518,3 +518,45 @@ Auto-Accept und keine doppelte fachliche Mutation durch den Rerun.
 keine Jobs, Gateways oder Medienoperationen automatisch. Jobstarts erfolgen
 nur über explizite Buttonklicks; ein Rerun nach Jobstart erzeugt denselben Job
 nicht erneut. Automatisches Polling bleibt R1.4 vorbehalten.
+
+---
+
+## D-R1.3-001 — Vision-Analyseeinheiten sind assetgebunden
+
+**Entscheidung:** Eine Fake-Vision-/Gateway-Anfrage entspricht genau einem Asset.
+Alle zulässigen Representative Frames dieses Assets werden gemeinsam analysiert.
+Frames verschiedener Assets werden nicht in derselben Anfrage vermischt.
+Asset-ID und Frame-IDs sind explizit im Requestvertrag; Fake-Alpha-Parallelität
+ist genau eins; die Queue-Reihenfolge ist deterministisch (Asset-ID).
+
+---
+
+## D-R1.3-002 — Visual Observations bleiben bis zur Reviewentscheidung unreviewed
+
+**Entscheidung:** Fake Vision erzeugt Observations mit Reviewstatus `unreviewed`.
+Es gibt kein stilles Auto-Accept durch Adapter oder Worker. Erst eine
+ausdrückliche Einzel- oder Batch-Reviewentscheidung ändert den aktuellen Status.
+Batch-Aktionen erzeugen append-only Einzelentscheidungen mit gemeinsamer
+Batch-ID (Schema 20: kodiert in bestehenden TEXT-Feldern).
+
+---
+
+## D-R1.3-003 — Coverage nutzt nur aktuelle akzeptierte Observations
+
+**Entscheidung:** Unreviewed und rejected Observations sind keine
+Coverage-Inputs. Nach einer relevanten akzeptierten Reviewänderung wird
+höchstens ein Coverage-only-Run angelegt und außerhalb des UI-Renders
+ausgeführt. Mehrere Decisions derselben Batchaktion erzeugen höchstens einen
+Coverage-Run. Historisch gültige Current Audits bleiben erhalten, bis der neue
+Audit erfolgreich Current wird.
+
+---
+
+## D-R1.3-004 — Supplement erfüllt Coverage erst nach regulärem Pfad
+
+**Entscheidung:** Supplement Assets können Gaps erst terminal lösen, wenn sie
+als Kandidat markiert wurden, echtes Original via Media Intake vorhanden ist,
+Working Media completed ist, Analysevorbereitung und Vision-Observation
+vorliegen und die Observation ausdrücklich akzeptiert wurde. Candidate Preview,
+ungeprüfte Observations oder Modellvorschläge allein lösen keinen Gap.
+Terminalstatus bei bestätigtem Match: `resolved_with_supplement`.

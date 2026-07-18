@@ -37,19 +37,24 @@
 - Kein Cloud-Publish
 - R1.1 Coverage-/Script-Lock-Blocker: **abgeschlossen** (Produktcommit `f3e015b`)
 - R1.2 State/Routing: **abgeschlossen** (Produktcommit `4c6bfd9`)
+- R1.3 Review/Analyse: **abgeschlossen** (Produktcommits `45a5b4f`, `8b4c2ad`)
 - Root Cause `editorial_registry_write_failed`: FakeText Coverage-Audit-ID ohne
   `run_id` → UNIQUE auf `coverage_audits.coverage_audit_id` bei Wiederanlauf
 - Root Cause Reload/Routing: Project nur in `session_state`; Mode-Fallback
   `WITH_VOICEOVER` → Default „Neues Projekt“
+- Root Cause Frame-Limit großer Bestände: globales `max_frames_per_run` blockierte
+  den gesamten Analyse-Start → Per-Asset-Limits + assetweise Queue
 - Kanonische Route: `?project_id=<uuid>&page=<slug>` (+ Streamlit `url_path`);
   Flash + kontrollierter Rerun nach Mutationen/Jobstarts
-- Aktiver Produktauftrag: keiner (R1.2 erledigt)
-- Nächste erlaubte Aktivität nach Freigabe: **R1.3**
-  (Analyse-Queue / Observation-Review-Mengen)
-- R1.4–R1.6 weiterhin gesperrt
+- Assetweise Fake-Vision-Queue; Batch Observation Review; Claim-Dualstatus;
+  Coverage-Revalidierung nach accepted Reviews; Supplement-Gap nur nach Match
+- Aktiver Produktauftrag: keiner (R1.3 erledigt)
+- Nächste erlaubte Aktivität nach Freigabe: **R1.4**
+  (Job-UX / Progress-Polling)
+- R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **2962 collected / 2943 passed / 18 failed / 1 skipped**
+- Teststand: **2976 collected / 2957 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
