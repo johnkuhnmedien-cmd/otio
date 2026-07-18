@@ -936,11 +936,12 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 20. ~~Visual Edit Rework V2 Planer~~ — **abgeschlossen** (`0fba7bd`)
 21. ~~Visual Edit Rework V3 Executable Repairs~~ — **abgeschlossen** (`f1b982a`)
 22. ~~Coverage Idempotency / Carry-Forward Plan~~ — dokumentiert
+23. ~~Coverage Stability C1 Fixtures~~ — **abgeschlossen** (`94b6e0f`)
 
-Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C1**.
+Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C2**.
 Script-Lock Realtest erfolgreich. V3-Realtest:
 `additional_coverage_required` ehrlich; E2E durch Coverage-Reset blockiert.
-**C2–C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
+**C3/C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
 Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
