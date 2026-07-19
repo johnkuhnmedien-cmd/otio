@@ -119,15 +119,21 @@
   - Editorial-Pointer Pflicht; kein latest-locked Fallback
   - Decisions: D-SCRIPT-LOCK-CURRENT-001 / D-SCRIPT-LOCK-CURRENT-002
   - Tests: `tests/test_discovery_v2_script_lock_current_state_l2.py` (34 Node-IDs)
-  - Nächster Schritt nach Chief-Dev-Freigabe: **L3 Editorial-/Narration-Gate-Integration**
-- Aktiver Auftrag: keiner (L2 fertig; L3 gesperrt bis Freigabe)
+- **Script-Lock L3 Editorial-/Narration-Gates umgesetzt** (`6852e7c`)
+  - `EditorialScriptLockGateState` / `NarrationGateState` auf L2-Resolver
+  - Current ≠ History; New-Lock unabhängig von Historie
+  - Voice/Pause/Timing nur Effective-Lock-Artefakte; stale Narration-Pointer fail-closed
+  - Decisions: D-SCRIPT-LOCK-CURRENT-003 / D-SCRIPT-LOCK-CURRENT-004
+  - Tests: `tests/test_discovery_v2_script_lock_current_state_l3.py` (30 Node-IDs)
+  - Nächster Schritt nach Chief-Dev-Freigabe: **L4 Pointer-/Artefaktinvalidierung**
+- Aktiver Auftrag: keiner (L3 fertig; L4 gesperrt bis Freigabe)
 - R1.3 Acceptance Evidence weiterhin offen
-- Nächste erlaubte Aktion nach Freigabe: **L3 Editorial-/Narration-Gate-Integration**
-- **L4/L5, C3.4, C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
+- Nächste erlaubte Aktion nach Freigabe: **L4 Pointer-/Artefaktinvalidierung**
+- **L5, C3.4, C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **3159 collected / 3140 passed / 18 failed / 1 skipped**
+- Teststand: **3189 collected / 3170 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**

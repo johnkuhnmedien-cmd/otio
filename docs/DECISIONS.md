@@ -759,3 +759,28 @@ den kanonischen Script-Lock-Fingerprint sowie aktuelle
 `gap_id:risk_code`-Bestätigungen fail-closed. Nur `status=locked` kann wirksam
 sein. Der Resolver erzeugt keine Locks, ändert keine Pointer und invalidiert
 keine Artefakte.
+
+---
+
+## D-SCRIPT-LOCK-CURRENT-003 — Editorial and Narration share Effective Lock resolution
+
+**Entscheidung:** Editorial und Narration verwenden dieselbe zentrale
+Effective-Lock-Auflösung. Historische Locks und Artefakte werden sichtbar
+getrennt, aber niemals als Current verwendet.
+
+Die Editorial-UI zeigt Current ausschließlich über
+`resolve_effective_current_script_lock` / `EditorialScriptLockGateState`.
+`list_script_locks()[0]` ist kein Current. Narration Voice-/Pause-/Timing-Gates
+nutzen `NarrationGateState` auf demselben L2-Resolver.
+
+---
+
+## D-SCRIPT-LOCK-CURRENT-004 — Narration artifacts must bind to Effective Lock
+
+**Entscheidung:** Voice-, Pause- und Timing-Gates akzeptieren nur Artefakte,
+deren `script_lock_id` dem wirksamen Current Lock entspricht.
+
+Ein staler `narration_project_state.current_script_lock_id` schaltet nichts frei
+(`narration_script_lock_stale`, fail-closed in L3; Bereinigung erst L4).
+Historische Voice-/Pause-/Timeline-Zeilen dürfen gelistet, aber nicht als
+Current verwendet werden.
