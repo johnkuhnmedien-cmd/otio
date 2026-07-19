@@ -620,14 +620,26 @@ def test_r1_editorial_ui_double_render_no_gateway_or_job(tmp_path, monkeypatch) 
     )
     monkeypatch.setattr(
         editorial_page,
-        "preview_script_lock",
-        lambda _p: MagicMock(
-            ok=False,
-            lock_fingerprint=None,
-            fingerprint_display=None,
-            fulfilled_requirements=[],
-            blocking_requirements=["aktuelles Script"],
-            blockers=["script_missing"],
+        "resolve_editorial_script_lock_gate",
+        lambda _p, **_kwargs: MagicMock(
+            has_effective_current_lock=False,
+            effective_lock=None,
+            historical_locks=(),
+            current_preview=MagicMock(
+                ok=False,
+                lock_fingerprint=None,
+                fingerprint_display=None,
+                fulfilled_requirements=[],
+                blocking_requirements=["aktuelles Script"],
+                blockers=["script_missing"],
+            ),
+            current_fingerprint=None,
+            required_risk_keys=(),
+            confirmed_risk_keys=(),
+            confirmations_complete=False,
+            can_create_lock=False,
+            blocking_reason_codes=(),
+            diagnostics=[],
         ),
     )
     start_cov = MagicMock()

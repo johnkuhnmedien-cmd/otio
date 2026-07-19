@@ -154,14 +154,26 @@ def test_supplementation_ui_renders_buttons_without_gateway_or_binary_preview(
     )
     monkeypatch.setattr(
         editorial_page,
-        "preview_script_lock",
-        lambda p: SimpleNamespace(
-            ok=False,
-            lock_fingerprint=None,
-            fingerprint_display=None,
-            fulfilled_requirements=[],
-            blocking_requirements=["Coverage Gaps noch offen"],
-            blockers=["coverage_gap_open:gap-1"],
+        "resolve_editorial_script_lock_gate",
+        lambda p, **kwargs: SimpleNamespace(
+            has_effective_current_lock=False,
+            effective_lock=None,
+            historical_locks=(),
+            current_preview=SimpleNamespace(
+                ok=False,
+                lock_fingerprint=None,
+                fingerprint_display=None,
+                fulfilled_requirements=[],
+                blocking_requirements=["Coverage Gaps noch offen"],
+                blockers=["coverage_gap_open:gap-1"],
+            ),
+            current_fingerprint=None,
+            required_risk_keys=(),
+            confirmed_risk_keys=(),
+            confirmations_complete=False,
+            can_create_lock=False,
+            blocking_reason_codes=(),
+            diagnostics=[],
         ),
     )
     for name in (

@@ -397,13 +397,14 @@ def test_double_create_does_not_create_second_active_lock(
 def test_ui_source_uses_canonical_gap_risk_keys_not_intent_only() -> None:
     source = Path(editorial_ui.__file__).read_text(encoding="utf-8")
     assert "make_lock_risk_confirmation_key" in source
-    assert "accepted_open_risks" in source
+    # L3: UI reads required_risk_keys from the Editorial gate (preview risks).
+    assert "required_risk_keys" in source
     assert "discovery_v2_lock_risk_" in source
     # Must not build confirmation keys from visual_intent_id alone.
     tree = ast.parse(source)
     text = source
     assert 'f"{gap.visual_intent_id}:' not in text
-    assert "Kein Fingerprint verfuegbar, solange fachliche Blocker" in source
+    assert "Script-Lock-Fingerprint verfuegbar" in source
 
 
 def test_schema_remains_20() -> None:
