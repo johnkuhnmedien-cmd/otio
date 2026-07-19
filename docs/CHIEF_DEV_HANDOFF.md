@@ -33,14 +33,14 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 - Repository / Worktree: Discovery-V2-Integration (`cursor/discovery-v2-integration`)
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Aktueller HEAD: Script-Lock Current-State Consistency Plan (`6a33d0f`)
+- Aktueller HEAD: Script-Lock L1 Fixtures (`a492c54` + Docs)
 - V1–V3 Visual Edit: `70ffe6e` / `0fba7bd` / `f1b982a`
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
 - R1.1–R1.3 abgeschlossen · Script-Lock Realtest **erfolgreich**
 - Chief-Dev Alpha-Produktstand: **APPROVED**
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - Registry-Schema: **20**
-- Teststand: **3115 collected / 3096 passed / 18 failed / 1 skipped**
+- Teststand: **3125 collected / 3106 passed / 18 failed / 1 skipped**
 - Provider: Fake-only · Adobe: UNKNOWN · NLE: lokaler OTIO-Serialize/Reparse
 - Decisions: D-R1.1-001…004 · D-R1.2-001…003 · D-R1.3-001…004 ·
   D-VE-REWORK-001…006 · D-COVERAGE-STABILITY-001…008
@@ -48,20 +48,21 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - **Coverage Stability C2 vollständig akzeptiert** (C1+C2+C2-R1 + USA_v2)
 - **C3.1 / C3.2 abgeschlossen** (`36367d2` / `47cfafd`)
 - **C3.3 Exact Match Engine umgesetzt** (`7ba6468`)
-- **Script-Lock Current-State Consistency Plan dokumentiert** (`6a33d0f`)
+- **Script-Lock Current-State Plan dokumentiert** (`6a33d0f`)
+- **Script-Lock L1 Root-Cause-Fixtures abgeschlossen** (`a492c54`)
   - Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
-  - USA_v2: Editorial zeigt historischen Lock als Current; Narration blockiert korrekt
+  - Editorial-Deadlock, stale Narration-Pointer, latest-lock-Fallback belegt
   - Root Cause: UI=`list_script_locks[0]` vs Gates=`get_effective_script_lock`; stale Narration-Pointer
 - Offener UI-Befund: Visual-Intent-ID teilweise als Gap-ID beschriftet (nicht C3)
-- **Nächste erlaubte Aktion nach Planfreigabe: L1 Script-Lock Root-Cause-Fixtures**
-- **C3.4, C4, V4 und R1.4 gesperrt** · echte Provider gesperrt
+- **Nächste erlaubte Aktion nach Freigabe: L2 Effective-Lock-Resolver**
+- **L3–L5, C3.4, C4, V4 und R1.4 gesperrt** · echte Provider gesperrt
 - Keine neue Produktphase · keine Nutzerregistry-Reparatur
 
 ## Nächste erlaubte Aktion nach Freigabe
 
-**L1 Script-Lock Root-Cause-Fixtures** nach Planfreigabe.
+**L2 Effective-Lock-Resolver** nach Freigabe.
 
-Gesperrt: L2–L5 bis Freigabe; C3.4, C4, UI Gap-Label, V4, R1.4, echte Provider.
+Gesperrt: L3–L5 bis Freigabe; C3.4, C4, UI Gap-Label, V4, R1.4, echte Provider.
 
 ## Verbindliche Kurzregeln
 

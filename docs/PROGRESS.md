@@ -2,7 +2,7 @@
 
 ## Aktueller Stand
 
-**Script-Lock Current-State Consistency Plan dokumentiert — Schema weiterhin 20.**
+**Script-Lock Current-State L1 Fixtures abgeschlossen — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
 - Script-Lock Realtest: **erfolgreich**
@@ -19,8 +19,9 @@
 - **C3.3 umgesetzt** (`7ba6468`): Exact Match Engine `coverage-gap-match-report-v1`
 - **Fake-Alpha-Test an Narration-Grenze blockiert** (USA_v2): historischer Lock ≠ Effective Lock
 - Script-Lock-Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md` (`6a33d0f`)
-- **Nächste erlaubte Aktion nach Planfreigabe: L1 Root-Cause-Fixtures**
-- **C3.4, C4, V4 und R1.4 gesperrt**
+- **L1 Root-Cause-Fixtures abgeschlossen** (`a492c54`)
+- **Nächste erlaubte Aktion nach Freigabe: L2 Effective-Lock-Resolver**
+- **L3–L5, C3.4, C4, V4 und R1.4 gesperrt**
 - Keine neue Produktphase · echte Provider gesperrt
 
 ## Phase-Status
@@ -39,8 +40,9 @@
 | Coverage Stability C3.3 | umgesetzt (Exact Match Engine) |
 | Coverage Stability C3.4 | **gesperrt** |
 | Script-Lock Current-State Plan | **dokumentiert** |
-| Script-Lock L1 Fixtures | nächster erlaubter Schritt (nach Planfreigabe) |
-| Script-Lock L2–L5 | **gesperrt** bis jeweilige Freigabe |
+| Script-Lock L1 Fixtures | **abgeschlossen** (Root-Cause-Reproduktion) |
+| Script-Lock L2 Effective Resolver | nächster erlaubter Schritt (nach Freigabe) |
+| Script-Lock L3–L5 | **gesperrt** bis jeweilige Freigabe |
 | Coverage Stability C4 | **gesperrt** |
 | Visual Edit Rework V4 Loop/UI | **gesperrt** |
 | R1.4 Job-UX / Progress-Polling | **gesperrt** |
@@ -49,12 +51,20 @@
 ## Script-Lock Current-State Consistency — Kurzstand
 
 - Fake-Alpha USA_v2 an Narration-Grenze blockiert
-- Editorial zeigt historischen Lock (`07c69bb1-…`, Script v1) fälschlich als „Aktueller Lock“
-- `editorial_project_state.current_script_lock_id = NULL`; Narration-Pointer stale auf denselben Lock
-- Narration blockiert korrekt: „Kein wirksamer Script Lock“
-- Root Cause: Editorial-UI = `list_script_locks[0]`; Gates = `get_effective_script_lock`; Narration-Pointer wird bei Invalidierung nicht geleert
+- **L1 abgeschlossen** — deterministische Fixtures A/B/C + 10 grüne Regressionstests
+- Root Cause (belegt):
+  - Editorial-UI = `list_script_locks[0]` als „Aktueller Lock“ trotz `editorial current_script_lock_id=NULL`
+  - New-Lock-Button deaktiviert im Deadlock-Stand (Preview/Confirm-Pfad)
+  - Fingerprint-Widerspruch: historischer Lock-FP in Caption vs. aktueller Preview-Stand
+  - Narration/`get_effective_script_lock` lehnt mismatched Lock korrekt ab; Voice bleibt gesperrt
+  - Invalidierung (`save_user_script_edit` → `get_effective_script_lock`) leert nur Editorial-Pointer; Narration-Pointer bleibt stale
+  - Missing Editorial-Pointer → Fallback auf latest `status='locked'` (`get_current_script_lock`)
+- Fixtures: `tests/fixtures/script_lock_current_state_l1.py`
+- Tests: `tests/test_discovery_v2_script_lock_current_state_l1.py` (10 Node-IDs)
+- Testcommit: `a492c54`
 - Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
-- Nächster Schritt nach Freigabe: **L1 Root-Cause-Fixtures**
+- Nächster Schritt nach Freigabe: **L2 Effective-Lock-Resolver**
+- Gesperrt: L3–L5, C3.4, C4, V4, R1.4
 
 ## Coverage Stability C3.3 — Kurzstand
 
@@ -131,15 +141,15 @@ Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Ga
 
 ## Teststand
 
-**3115 collected / 3096 passed / 18 failed / 1 skipped** (~338s; +30 C3.3-Tests)
+**3125 collected / 3106 passed / 18 failed / 1 skipped** (~357s; +10 L1-Tests)
 
 18 bekannte Classic/Without-VO-Fehler und 1 VFR-Skip unverändert.
 
 ## Nächste erlaubte Aktivität
 
-Nach Planfreigabe:
+Nach Freigabe:
 
-→ **L1 Script-Lock Root-Cause-Fixtures**
+→ **L2 Effective-Lock-Resolver**
 
-Danach L2–L5 nach Freigabe. Weiter gesperrt: C3.4, C4, V4, R1.4–R1.6,
+Weiter gesperrt: L3–L5, C3.4, C4, V4, R1.4–R1.6,
 echte Provider, neue Produktphase, Nutzerregistry-Reparatur.

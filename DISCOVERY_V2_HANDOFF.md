@@ -109,18 +109,21 @@
 - **C3.3 Exact Match Engine umgesetzt** (`7ba6468`)
 - **Script-Lock Current-State Consistency Plan dokumentiert** (`6a33d0f`)
   - Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
+- **Script-Lock L1 Root-Cause-Fixtures abgeschlossen** (`a492c54`)
   - Fake-Alpha USA_v2 an Narration-Grenze blockiert
   - Editorial: historischer Lock fälschlich als Current; `editorial current_script_lock_id=NULL`
   - Narration: korrekt „kein wirksamer Lock“; stale `narration current_script_lock_id`
-  - Nächster Schritt nach Freigabe: **L1 Root-Cause-Fixtures**
-- Aktiver Auftrag: keiner (Plan fertig; L1 gesperrt bis Freigabe)
+  - latest-locked Fallback bei fehlendem Editorial-Pointer belegt
+  - Tests: `tests/test_discovery_v2_script_lock_current_state_l1.py` (10 Node-IDs)
+  - Nächster Schritt nach Freigabe: **L2 Effective-Lock-Resolver**
+- Aktiver Auftrag: keiner (L1 fertig; L2 gesperrt bis Freigabe)
 - R1.3 Acceptance Evidence weiterhin offen
-- Nächste erlaubte Aktion nach Planfreigabe: **L1 Script-Lock Root-Cause-Fixtures**
-- **C3.4, C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
+- Nächste erlaubte Aktion nach Freigabe: **L2 Effective-Lock-Resolver**
+- **L3–L5, C3.4, C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **3115 collected / 3096 passed / 18 failed / 1 skipped**
+- Teststand: **3125 collected / 3106 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
