@@ -2,6 +2,11 @@
 
 ## Aktueller Stand
 
+**Projekt-öffnen-Routing-Hotfix umgesetzt — Schema weiterhin 20.**
+
+- **„Projekt bearbeiten“** bindet mode-aware (`activate_project_for_editing`): Discovery → Overview / Classic → Analysen; kein harter `st.switch_page("analysen")` mehr unter Discovery-Nav
+- Tests: `tests/test_project_list_open_routing.py`
+
 **Active-Script-Pointer-Recovery-Hotfix umgesetzt — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
@@ -104,6 +109,10 @@
   - Expliziter Command setzt atomar `active_script_id` / Narrative / Hook; kein Content-Rewrite
   - UI: „Aktuelles Script vN wiederherstellen“; danach normal „Struktur aktualisieren“
   - Tests: `tests/test_discovery_v2_active_script_recovery.py` (14 Node-IDs)
+- **Projekt-öffnen-Routing-Hotfix** (`a541ab1`)
+  - Ursache: `st.switch_page("analysen")` unter Discovery-Nav → `StreamlitAPIException`
+  - Fix: `activate_project_for_editing` + pending Switch nach Mode-Nav (`discovery-v2` / `analysen`)
+  - Tests: `tests/test_project_list_open_routing.py` (5 Node-IDs)
 - Nächster Schritt nach Freigabe: **L5 USA_v2-Realtest**
 - Gesperrt: L5 bis Freigabe; C3.4, C4, V4, R1.4
 - Fake-Alpha weiterhin bis L5 pausiert

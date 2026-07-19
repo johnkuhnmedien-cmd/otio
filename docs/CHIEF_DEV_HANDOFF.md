@@ -33,7 +33,7 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 - Repository / Worktree: Discovery-V2-Integration (`cursor/discovery-v2-integration`)
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Aktueller HEAD: Active-Script-Pointer-Recovery-Hotfix (`1dac126` + Docs)
+- Aktueller HEAD: Projekt-öffnen-Routing-Hotfix (`a541ab1` + Docs)
 - V1–V3 Visual Edit: `70ffe6e` / `0fba7bd` / `f1b982a`
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
 - R1.1–R1.3 abgeschlossen · Script-Lock Realtest **erfolgreich**
@@ -73,6 +73,11 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
   - nur genau ein verifizierter Kandidat; bewusster Button; keine Auto-Auswahl
   - setzt atomar Script-/Narrative-/Hook-Pointer; kein Content-/Coverage-/Lock-Rewrite
   - Tests: `tests/test_discovery_v2_active_script_recovery.py`
+- **Projekt-öffnen-Routing-Hotfix umgesetzt** (`a541ab1`)
+  - `activate_project_for_editing` + pending `st.switch_page` nach Mode-Nav-Aufbau
+  - Discovery → `discovery-v2` Overview; Classic → `analysen`
+  - behebt `StreamlitAPIException: Could not find page: analysen` unter Discovery-Shell
+  - Tests: `tests/test_project_list_open_routing.py`
 - Offener UI-Befund: Visual-Intent-ID teilweise als Gap-ID beschriftet (nicht C3)
 - **Fake-Alpha weiterhin bis L5 pausiert**
 - **Nächste erlaubte Aktion nach Chief-Dev-Freigabe: L5 USA_v2-Realtest**
