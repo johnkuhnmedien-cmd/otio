@@ -107,7 +107,7 @@
 - C3-Plan: `docs/source_plans/ALPHA_COVERAGE_STABILITY_C3_GAP_IDENTITY_CARRY_FORWARD_PLAN.md`
 - **C3.1 / C3.2 abgeschlossen** (`36367d2` / `47cfafd`)
 - **C3.3 Exact Match Engine umgesetzt** (`7ba6468`)
-- **Script-Lock Current-State Consistency Plan dokumentiert**
+- **Script-Lock Current-State Consistency Plan dokumentiert** ()
   - Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
   - Fake-Alpha USA_v2 an Narration-Grenze blockiert
   - Editorial: historischer Lock fälschlich als Current; `editorial current_script_lock_id=NULL`
@@ -964,7 +964,7 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 25. ~~Coverage Stability C3.1 Root-Cause-Fixtures~~ — **abgeschlossen** (`36367d2`)
 26. ~~Coverage Stability C3.2 Semantic Gap Identity~~ — **abgeschlossen** (`47cfafd`)
 27. ~~Coverage Stability C3.3 Exact Match Engine~~ — **abgeschlossen** (`7ba6468`)
-28. ~~Script-Lock Current-State Consistency Plan~~ — **dokumentiert**
+28. ~~Script-Lock Current-State Consistency Plan~~ — **dokumentiert** ()
 
 Nächste erlaubte Aktivität nach Planfreigabe: **Script-Lock L1 Root-Cause-Fixtures**.
 Fake-Alpha an Narration-Grenze blockiert (USA_v2 Effective-Lock-Widerspruch).
