@@ -108,14 +108,23 @@ def render_enhanced_cut_plan_page() -> None:
     cols = st.columns(len(SUPPORTED_STOCK_PROVIDERS))
     for index, provider_name in enumerate(SUPPORTED_STOCK_PROVIDERS):
         current = config.providers[provider_name].enabled
+        widget_key = f"enh_provider_{project.id}_{provider_name}"
+        # Seed session_state once from disk. Do NOT pass value= on every rerun —
+        # otherwise Save would re-apply the old disk value and discard the UI toggle.
+        if widget_key not in st.session_state:
+            st.session_state[widget_key] = current
         with cols[index]:
             enabled_draft[provider_name] = st.checkbox(
                 PROVIDER_UI_LABELS[provider_name],
-                value=current,
-                key=f"enh_provider_{project.id}_{provider_name}",
+                key=widget_key,
             )
     if st.button("Anbieterauswahl speichern", key="enh_save_providers"):
         saved = save_stock_providers_config(project, enabled_draft)
+        # Keep widget state aligned with what we just persisted.
+        for name in SUPPORTED_STOCK_PROVIDERS:
+            st.session_state[f"enh_provider_{project.id}_{name}"] = saved.providers[
+                name
+            ].enabled
         st.success(
             "Anbieterauswahl gespeichert: "
             + ", ".join(
