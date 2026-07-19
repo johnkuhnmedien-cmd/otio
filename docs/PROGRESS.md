@@ -2,7 +2,7 @@
 
 ## Aktueller Stand
 
-**Coverage Stability C3.2 Semantic Gap Identity umgesetzt — Schema weiterhin 20.**
+**Coverage Stability C3.3 Exact Match Engine umgesetzt — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
 - Script-Lock Realtest: **erfolgreich**
@@ -13,12 +13,12 @@
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
 - Visual Edit Rework **V1–V3**: implementiert
 - **Coverage Stability C1 / C2 / C2-R1**: vollständig abgeschlossen / USA_v2 abgenommen
-- Decisions: D-COVERAGE-STABILITY-001…006
+- Decisions: D-COVERAGE-STABILITY-001…008
 - C3-Plan: `docs/source_plans/ALPHA_COVERAGE_STABILITY_C3_GAP_IDENTITY_CARRY_FORWARD_PLAN.md`
-- **C3.1 abgeschlossen** (`36367d2`): Gap-Identity-Boundaries reproduziert
-- **C3.2 umgesetzt** (`47cfafd`): `coverage-gap-semantic-key-v1` Domainvertrag (keine Persistenz/Materialize-Integration)
-- **Nächste erlaubte Aktion nach Freigabe: C3.3 Match Engine**
-- **C3.4, C4, V4 und R1.4 gesperrt**
+- **C3.1 / C3.2 abgeschlossen** (`36367d2` / `47cfafd`)
+- **C3.3 umgesetzt** (`7ba6468`): Exact Match Engine `coverage-gap-match-report-v1` (keine Persistenz/Carry-Forward)
+- **Nächste erlaubte Aktion nach Freigabe: C3.4 Carry-Forward Safety/Report**
+- **C4, V4 und R1.4 gesperrt**
 - Keine neue Produktphase · echte Provider gesperrt
 
 ## Phase-Status
@@ -33,13 +33,26 @@
 | Coverage Stability C2-R1 | vollständig abgeschlossen |
 | Coverage Stability C3 Plan | dokumentiert |
 | Coverage Stability C3.1 | abgeschlossen (Root-Cause-Fixtures) |
-| Coverage Stability C3.2 | **umgesetzt** (Semantic Gap Identity) |
-| Coverage Stability C3.3 | nächster erlaubter Schritt (nach Freigabe) |
-| Coverage Stability C3.4 | **gesperrt** |
+| Coverage Stability C3.2 | umgesetzt (Semantic Gap Identity) |
+| Coverage Stability C3.3 | **umgesetzt** (Exact Match Engine) |
+| Coverage Stability C3.4 | nächster erlaubter Schritt (nach Freigabe) |
 | Coverage Stability C4 | **gesperrt** |
 | Visual Edit Rework V4 Loop/UI | **gesperrt** |
 | R1.4 Job-UX / Progress-Polling | **gesperrt** |
 | R1.5–R1.6 | gesperrt |
+
+## Coverage Stability C3.3 — Kurzstand
+
+- Schema-Identifier: `coverage-gap-match-report-v1`
+- Domain: `otio_app/discovery_v2/domain/coverage_gap_matching.py`
+- Application: `otio_app/discovery_v2/application/coverage_gap_matching_service.py`
+- Exact Match: gleicher Schema-Identifier + Semantic Key + vollständiger Identity-Payload
+- Nur `exact_one_to_one` → `carry_forward_evaluation_allowed=true` (noch keine Übernahme)
+- 1:N / N:1 / N:N / Kollision / Schema-Mismatch → fail-closed, kein Similarity Matching
+- Stabiler Report-Fingerprint; Eingabereihenfolge irrelevant
+- Decisions: D-COVERAGE-STABILITY-007, D-COVERAGE-STABILITY-008
+- Tests: `tests/test_discovery_v2_coverage_stability_c3_3.py` (30 Node-IDs)
+- Produktcommit: `7ba6468`
 
 ## Coverage Stability C3.2 — Kurzstand
 
@@ -103,7 +116,7 @@ Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Ga
 
 ## Teststand
 
-**3085 collected / 3066 passed / 18 failed / 1 skipped** (~344s; +30 C3.2-Tests)
+**3115 collected / 3096 passed / 18 failed / 1 skipped** (~338s; +30 C3.3-Tests)
 
 18 bekannte Classic/Without-VO-Fehler und 1 VFR-Skip unverändert.
 
@@ -111,9 +124,7 @@ Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Ga
 
 Nach Freigabe:
 
-→ **C3.3 Match Engine** (Vorgängerzuordnung; keine Carry-Forward-Integration)
+→ **C3.4 Carry-Forward Safety und Report-Integration**
 
-Danach C3.4 nach Freigabe. C4 erst nach C3.
-
-Noch gesperrt: C3.4 bis Freigabe, C4, V4, R1.4–R1.6, echte Provider,
+C4 erst nach C3. Noch gesperrt: C4, V4, R1.4–R1.6, echte Provider,
 neue Produktphase, Nutzerregistry-Reparatur.

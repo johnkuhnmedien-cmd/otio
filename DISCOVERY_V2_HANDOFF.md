@@ -105,24 +105,23 @@
 - Offener UI-Befund: Visual-Intent-ID wird teilweise als Gap-ID beschriftet (nicht C3)
 - Schema: **20**
 - C3-Plan: `docs/source_plans/ALPHA_COVERAGE_STABILITY_C3_GAP_IDENTITY_CARRY_FORWARD_PLAN.md`
-- **C3.1 Root-Cause-Fixtures abgeschlossen** (`36367d2`)
-- **C3.2 Semantic Gap Identity umgesetzt** (`47cfafd`)
-  - Schema: `coverage-gap-semantic-key-v1`
-  - Domain/App: `coverage_gap_identity.py` / `coverage_gap_identity_service.py`
-  - `gap_id` = UUID4-Instanz; Semantic Key getrennt; nicht persistiert; nicht in Materialize
-  - Key: project_id + Intent-Semantik + coverage_level/missing/risk_codes
-  - ausgeschlossen: IDs, Status, Decisions, Fingerprints, Pfade, `priority`
-  - Kollision: `coverage_gap_semantic_key_collision`
-  - Decisions: D-COVERAGE-STABILITY-005 / 006
-  - Tests: `tests/test_discovery_v2_coverage_stability_c3_2.py` (30 Node-IDs)
-- Aktiver Auftrag: keiner (C3.2 fertig; C3.3 gesperrt bis Freigabe)
+- **C3.1 / C3.2 abgeschlossen** (`36367d2` / `47cfafd`)
+- **C3.3 Exact Match Engine umgesetzt** (`7ba6468`)
+  - Schema: `coverage-gap-match-report-v1`
+  - Domain/App: `coverage_gap_matching.py` / `coverage_gap_matching_service.py`
+  - Exact: Schema + Semantic Key + vollständiger Identity-Payload
+  - Nur `exact_one_to_one` → `carry_forward_evaluation_allowed=true`
+  - Ambiguous / Collision / Schema-Mismatch fail-closed; kein Similarity Matching
+  - Decisions: D-COVERAGE-STABILITY-007 / 008
+  - Tests: `tests/test_discovery_v2_coverage_stability_c3_3.py` (30 Node-IDs)
+- Aktiver Auftrag: keiner (C3.3 fertig; C3.4 gesperrt bis Freigabe)
 - R1.3 Acceptance Evidence weiterhin offen
-- Nächste erlaubte Aktion nach Freigabe: **C3.3 Match Engine**
-- **C3.4, C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
+- Nächste erlaubte Aktion nach Freigabe: **C3.4 Carry-Forward Safety/Report**
+- **C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **3085 collected / 3066 passed / 18 failed / 1 skipped**
+- Teststand: **3115 collected / 3096 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
@@ -965,10 +964,11 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 24. ~~Coverage Stability C2 Canonical Reuse~~ — **abgeschlossen** (`7e8db48`)
 25. ~~Coverage Stability C3.1 Root-Cause-Fixtures~~ — **abgeschlossen** (`36367d2`)
 26. ~~Coverage Stability C3.2 Semantic Gap Identity~~ — **abgeschlossen** (`47cfafd`)
+27. ~~Coverage Stability C3.3 Exact Match Engine~~ — **abgeschlossen** (`7ba6468`)
 
-Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C3.3 Match Engine**.
+Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C3.4 Carry-Forward**.
 Script-Lock Realtest erfolgreich. C2 behebt äquivalenten Coverage-Reset.
-**C3.4, C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
+**C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
 Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`

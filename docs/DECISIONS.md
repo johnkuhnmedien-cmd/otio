@@ -711,3 +711,27 @@ allowed media kinds) + Coverage-Problem-Signatur (`coverage_level`,
 `priority` ist bewusst kein Identitätsbestandteil (nur späteres Match-/Safety-
 Metadatum). Gleicher Key bei unterschiedlichem kanonischem Payload ist
 `coverage_gap_semantic_key_collision` (fail-closed).
+
+---
+
+## D-COVERAGE-STABILITY-007 — Exact 1:1 Identity Match before Carry-Forward Evaluation
+
+**Entscheidung:** Automatisch auswertbare Vorgängerbeziehungen erfordern ein
+exaktes, kollisionsgeprüftes Eins-zu-eins-Match der vollständigen Semantic Gap
+Identity (`coverage-gap-semantic-key-v1`: gleicher Schema-Identifier, gleicher
+Semantic Key und identischer kanonischer Identity-Payload).
+
+Nur die Match-Klasse `exact_one_to_one` setzt
+`carry_forward_evaluation_allowed=true`. Das erlaubt C3.4 später zu prüfen, ob
+Informationen fortgeführt werden dürfen — es ist noch keine Übernahme.
+
+---
+
+## D-COVERAGE-STABILITY-008 — Ambiguous and Collision Matches stay Fail-Closed
+
+**Entscheidung:** Eins-zu-viele-, Viele-zu-eins-, Viele-zu-viele-, Schema- und
+Kollisionsfälle bleiben fail-closed. C3 verwendet kein Fuzzy-, Embedding- oder
+LLM-Matching. Geänderte Risk Sets, Missing Properties oder Intent-Semantik
+erzeugen andere Semantic Keys und damit unmatched Gaps — keine Similarity-
+Verbindung.
+
