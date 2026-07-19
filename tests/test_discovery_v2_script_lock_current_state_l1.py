@@ -16,7 +16,6 @@ from fixtures.script_lock_current_state_l1 import (
     build_fixture_b_latest_locked_fallback,
     build_fixture_c_stale_narration_after_invalidation,
     build_lock_ready_matching_project,
-    clear_editorial_current_script_lock_pointer,
     current_observation_fingerprint,
     identity_mismatches,
     install_no_media_io_guards,
