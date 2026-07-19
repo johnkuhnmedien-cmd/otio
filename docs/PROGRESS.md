@@ -25,6 +25,7 @@
 - **L4 Current-State-Invalidierung umgesetzt** (`f1ddcb2`)
 - **Structure-Finalization-Hotfix umgesetzt** (`aaf7696`): vollständige Struktur → `review_requested`
 - Preview-Blocker-UI-Hotfix (`069cada`)
+- **Structure-Persistence-Atomicity-Hotfix umgesetzt** (`bac1bbc`): Registry-Commit vor JSON-Publish; Preview fail-closed
 - **Fake-Alpha weiterhin bis L5 pausiert**
 - **Nächste erlaubte Aktion nach Chief-Dev-Freigabe: L5 USA_v2-Realtest**
 - **L5, C3.4, C4, V4 und R1.4 gesperrt**
@@ -87,6 +88,11 @@
   - Unvollständig: fail-closed, Status bleibt `structure_pending`, sichtbarer Fehlercode
   - UI „Struktur aktualisieren“ sync → „Struktur aktualisiert.“ oder Fehlercode
   - Tests: `tests/test_discovery_v2_structure_finalization.py` (12 Node-IDs)
+- **Structure-Persistence-Atomicity-Hotfix** (`bac1bbc`)
+  - Root Cause: JSON `review_requested` vor Registry-Commit; FK auf `coverage_intent_results` → divergenter Stand + falscher Preview-Fingerprint
+  - Neu: Registry-Replace → State → JSON-Publish → Commit; Snapshot-Restore bei Fehler
+  - Preview: `registry_artifact_mismatch` / `editorial_script_identity_mismatch` / `active_script_pointer_missing`
+  - Tests: `tests/test_discovery_v2_structure_persistence_atomicity.py` (12 Node-IDs)
 - Nächster Schritt nach Freigabe: **L5 USA_v2-Realtest**
 - Gesperrt: L5 bis Freigabe; C3.4, C4, V4, R1.4
 - Fake-Alpha weiterhin bis L5 pausiert
@@ -166,7 +172,7 @@ Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Ga
 
 ## Teststand
 
-**3232 collected / 3213 passed / 18 failed / 1 skipped** (+12 Structure-Finalization-Tests)
+**3244 collected / 3225 passed / 18 failed / 1 skipped** (+12 Structure-Persistence-Atomicity-Tests; Baseline-18 unverändert)
 
 18 bekannte Classic/Without-VO-Fehler und 1 VFR-Skip unverändert.
 

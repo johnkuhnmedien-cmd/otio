@@ -136,7 +136,12 @@
   - Root Cause: Structure-Payload behielt `structure_pending`; Worker finalisiert jetzt bei vollständiger Struktur auf `review_requested`
   - UI „Struktur aktualisieren“ sync mit Erfolg/Fehlercode
   - Tests: `tests/test_discovery_v2_structure_finalization.py` (12 Node-IDs)
-- Aktiver Auftrag: keiner (Hotfix fertig; L5 gesperrt bis Freigabe)
+- **Structure-Persistence-Atomicity-Hotfix umgesetzt** (`bac1bbc`)
+  - Root Cause: JSON-Publish vor Registry-Commit + FK `coverage_intent_results` → `visual_intents`
+  - Atomar: identity check → replace (FK-Cleanup) → state → JSON → commit; Restore bei Fehler
+  - Preview: kein Fingerprint bei `registry_artifact_mismatch` / Identity-Mismatch / fehlendem `active_script_id`
+  - Tests: `tests/test_discovery_v2_structure_persistence_atomicity.py` (12 Node-IDs)
+- Aktiver Auftrag: keiner (Atomicity-Hotfix fertig; L5 USA_v2-Realtest gesperrt bis Freigabe)
 - R1.3 Acceptance Evidence weiterhin offen
 - Fake-Alpha weiterhin bis L5 pausiert
 - Nächste erlaubte Aktion nach Freigabe: **L5 USA_v2-Realtest**
@@ -144,7 +149,7 @@
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **3232 collected / 3213 passed / 18 failed / 1 skipped**
+- Teststand: **3244 collected / 3225 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
@@ -994,6 +999,7 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 31. ~~Script-Lock L3 Editorial-/Narration-Gates~~ — **umgesetzt** (`6852e7c`)
 32. ~~Script-Lock L4 Current-State-Invalidierung~~ — **umgesetzt** (`f1ddcb2`)
 33. ~~Structure-Finalization-Hotfix~~ — **umgesetzt** (`aaf7696`)
+34. ~~Structure-Persistence-Atomicity-Hotfix~~ — **umgesetzt** (`bac1bbc`)
 
 Nächste erlaubte Aktivität nach Chief-Dev-Freigabe: **Script-Lock L5 USA_v2-Realtest**.
 Fake-Alpha weiterhin bis L5 pausiert (USA_v2 Effective-Lock-/Pointer-Konsistenz).
