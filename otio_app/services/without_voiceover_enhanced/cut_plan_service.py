@@ -50,7 +50,17 @@ from otio_app.services.without_voiceover_enhanced.script_prompts import (
     build_final_cut_prompt,
     build_rough_cut_prompt,
 )
-from otio_app.services.without_voiceover_enhanced.stock.registry import search_all_providers
+from otio_app.services.without_voiceover_enhanced.local_media_service import (
+    STATUS_LOCAL_MEDIA_MISSING,
+    list_export_ready_supplements,
+    refresh_supplement_validation,
+)
+from otio_app.services.without_voiceover_enhanced.stock.registry import (
+    search_configured_providers,
+)
+from otio_app.services.without_voiceover_enhanced.stock_provider_config import (
+    enabled_provider_names,
+)
 
 
 class CutPlanError(RuntimeError):
@@ -255,16 +265,47 @@ def search_supplements_for_gaps(
     if coverage is None or not coverage.gaps:
         raise CutPlanError("Keine Coverage Gaps vorhanden.")
 
+    enabled = enabled_provider_names(project)
+    if not enabled:
+        # Preserve any previous search results; do not error.
+        existing = load_model(stock_search_results_path(project), StockSearchResultsDocument)
+        document = StockSearchResultsDocument(
+            script_version=locked.script_version,
+            provider_status={
+                "pexels": "disabled",
+                "pixabay": "disabled",
+                "wikimedia": "disabled",
+                "openverse": "disabled",
+                "archive_org": "disabled",
+            },
+            candidates=list(existing.candidates) if existing is not None else [],
+            message="Keine Stockanbieter aktiviert.",
+        )
+        write_json(stock_search_results_path(project), document)
+        return document
+
     all_candidates: list[StockCandidate] = []
     provider_status: dict[str, str] = {}
     for gap in coverage.gaps:
         queries = gap.search_queries or [gap.subject or gap.action or gap.gap_id]
         for query in queries:
-            found, status = search_all_providers(
-                query,
-                media_type=gap.preferred_media_type,
-                providers=providers,
-            )
+            if providers is not None:
+                from otio_app.services.without_voiceover_enhanced.stock.registry import (
+                    search_all_providers,
+                )
+
+                found, status = search_all_providers(
+                    query,
+                    media_type=gap.preferred_media_type,
+                    providers=providers,
+                    enabled_names=enabled,
+                )
+            else:
+                found, status, _enabled = search_configured_providers(
+                    project,
+                    query,
+                    media_type=gap.preferred_media_type,
+                )
             for key, value in status.items():
                 provider_status.setdefault(key, value)
             for candidate in found:
@@ -275,6 +316,7 @@ def search_supplements_for_gaps(
         script_version=locked.script_version,
         provider_status=provider_status,
         candidates=all_candidates,
+        message="",
     )
     write_json(stock_search_results_path(project), document)
     return document
@@ -296,6 +338,14 @@ def accept_supplement_candidates(
                 # still allow manual accept but flag in attribution note.
                 candidate.license = candidate.license or None
             candidate.selected = True
+            if candidate.local_media_path:
+                candidate = refresh_supplement_validation(candidate)
+            else:
+                candidate.media_validation_status = STATUS_LOCAL_MEDIA_MISSING
+                candidate.media_validation_error = (
+                    f"Supplement {candidate.candidate_id} besitzt keine validierte "
+                    "lokale Mediendatei. Ordne zuerst eine lokale Originaldatei zu."
+                )
             selected.append(candidate)
     document = AcceptedSupplementsDocument(
         script_version=locked.script_version,
@@ -358,15 +408,19 @@ def generate_final_cut_plan(
     locked = require_locked_script(project)
     rough = load_model(rough_cut_plan_path(project), RoughCutPlanDocument)
     timeline = load_model(narration_timeline_path(project), NarrationTimelineDocument)
-    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     if rough is None or timeline is None:
         raise CutPlanError("Grober Cut Plan / Narrationstimeline fehlt.")
-    accepted_json = (
-        accepted.model_dump_json(indent=2)
-        if accepted is not None
-        else json.dumps({"supplements": []})
+    # Only accepted AND export_ready supplements may enter LLM run 3.
+    export_ready = list_export_ready_supplements(project)
+    accepted_json = json.dumps(
+        {
+            "schema_version": "enhanced-accepted-supplements-v1",
+            "script_version": locked.script_version,
+            "supplements": [s.model_dump(mode="json") for s in export_ready],
+        },
+        ensure_ascii=False,
+        indent=2,
     )
-    # Only accepted supplements may enter LLM run 3.
     prompt = build_final_cut_prompt(
         locked_script_json=locked.model_dump_json(indent=2),
         narration_timeline_json=timeline.model_dump_json(indent=2),

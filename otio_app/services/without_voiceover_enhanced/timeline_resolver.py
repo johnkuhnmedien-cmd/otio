@@ -12,6 +12,12 @@ from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
     load_segment_timings,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
+from otio_app.services.without_voiceover_enhanced.local_media_service import (
+    STATUS_EXPORT_READY,
+    is_http_url,
+    list_export_ready_supplements,
+    refresh_supplement_validation,
+)
 from otio_app.services.without_voiceover_enhanced.models import (
     AcceptedSupplementsDocument,
     FinalCutPlanDocument,
@@ -59,14 +65,35 @@ def _asset_catalog(project: Project) -> dict[str, dict]:
                 "path": str(path),
                 "duration_seconds": float(duration) if duration else None,
             }
+    # Only export_ready supplements are technically available assets.
+    # Selected-but-missing remain visible in UI/search, but not in the catalog.
     accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     if accepted is not None:
         for supplement in accepted.supplements:
+            refreshed = refresh_supplement_validation(supplement)
+            if refreshed.media_validation_status != STATUS_EXPORT_READY:
+                continue
+            local_path = str(refreshed.local_media_path or "").strip()
+            if not local_path or is_http_url(local_path):
+                continue
             catalog[supplement.candidate_id] = {
-                "path": supplement.preview_url or supplement.source_page,
-                "duration_seconds": supplement.duration_seconds,
+                "path": local_path,
+                "duration_seconds": refreshed.duration_seconds,
                 "supplement": True,
+                "export_ready": True,
             }
+    for supplement in list_export_ready_supplements(project):
+        local_path = str(supplement.local_media_path or "").strip()
+        if local_path and not is_http_url(local_path):
+            catalog.setdefault(
+                supplement.candidate_id,
+                {
+                    "path": local_path,
+                    "duration_seconds": supplement.duration_seconds,
+                    "supplement": True,
+                    "export_ready": True,
+                },
+            )
     return catalog
 
 
@@ -147,7 +174,23 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
             errors.append(f"Unbekannte Segment-ID: {shot.narration_end_anchor.segment_id}")
             continue
         if shot.asset_id not in catalog:
-            errors.append(f"Unbekannte Asset-ID: {shot.asset_id}")
+            accepted = load_model(
+                accepted_supplements_path(project), AcceptedSupplementsDocument
+            )
+            if accepted is not None and any(
+                s.candidate_id == shot.asset_id for s in accepted.supplements
+            ):
+                errors.append(
+                    f"Supplement {shot.asset_id} ist nicht export_ready "
+                    "(lokale Mediendatei fehlt oder ist ungültig)."
+                )
+            else:
+                errors.append(f"Unbekannte Asset-ID: {shot.asset_id}")
+            continue
+        if is_http_url(str(catalog[shot.asset_id].get("path") or "")):
+            errors.append(
+                f"Asset {shot.asset_id} besitzt eine Web-URL statt lokaler Datei."
+            )
             continue
 
         start = _anchor_to_seconds(

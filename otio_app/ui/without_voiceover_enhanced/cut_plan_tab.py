@@ -1,4 +1,4 @@
-"""Schritt 7 Enhanced Cut Plan MVP — drei Aktionen hintereinander."""
+"""Schritt 7 Enhanced Cut Plan MVP — drei Aktionen hintereinander (R1)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,11 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     search_supplements_for_gaps,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model
+from otio_app.services.without_voiceover_enhanced.local_media_service import (
+    LocalMediaError,
+    assign_local_media_path,
+    refresh_supplement_validation,
+)
 from otio_app.services.without_voiceover_enhanced.models import (
     AcceptedSupplementsDocument,
     CoverageGapsDocument,
@@ -27,6 +32,12 @@ from otio_app.services.without_voiceover_enhanced.paths import (
     narration_timeline_path,
     rough_cut_plan_path,
     stock_search_results_path,
+)
+from otio_app.services.without_voiceover_enhanced.stock_provider_config import (
+    PROVIDER_UI_LABELS,
+    SUPPORTED_STOCK_PROVIDERS,
+    load_stock_providers_config,
+    save_stock_providers_config,
 )
 from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
     TimelineResolveError,
@@ -90,13 +101,42 @@ def render_enhanced_cut_plan_page() -> None:
 
     st.divider()
     st.subheader("2. Supplements suchen und auswählen")
-    if st.button("Stock suchen (5 Anbieter)", key="enh_stock_search"):
-        try:
-            with st.spinner("Pexels / Pixabay / Wikimedia / Openverse / Archive.org…"):
-                results = search_supplements_for_gaps(project)
-            st.success(
-                f"{len(results.candidates)} Kandidaten. Provider: {results.provider_status}"
+
+    st.markdown("**Stockanbieter verwenden:**")
+    config = load_stock_providers_config(project)
+    enabled_draft: dict[str, bool] = {}
+    cols = st.columns(len(SUPPORTED_STOCK_PROVIDERS))
+    for index, provider_name in enumerate(SUPPORTED_STOCK_PROVIDERS):
+        current = config.providers[provider_name].enabled
+        with cols[index]:
+            enabled_draft[provider_name] = st.checkbox(
+                PROVIDER_UI_LABELS[provider_name],
+                value=current,
+                key=f"enh_provider_{project.id}_{provider_name}",
             )
+    if st.button("Anbieterauswahl speichern", key="enh_save_providers"):
+        saved = save_stock_providers_config(project, enabled_draft)
+        st.success(
+            "Anbieterauswahl gespeichert: "
+            + ", ".join(
+                f"{PROVIDER_UI_LABELS[n]}="
+                f"{'an' if saved.providers[n].enabled else 'aus'}"
+                for n in SUPPORTED_STOCK_PROVIDERS
+            )
+        )
+        st.rerun()
+
+    if st.button("Stock suchen", key="enh_stock_search"):
+        try:
+            with st.spinner("Aktive Stockanbieter werden abgefragt…"):
+                results = search_supplements_for_gaps(project)
+            if results.message:
+                st.warning(results.message)
+            else:
+                st.success(
+                    f"{len(results.candidates)} Kandidaten. "
+                    f"Status: {results.provider_status}"
+                )
             st.rerun()
         except CutPlanError as exc:
             st.error(str(exc))
@@ -106,6 +146,9 @@ def render_enhanced_cut_plan_page() -> None:
     results = load_model(stock_search_results_path(project), StockSearchResultsDocument)
     selected_ids: list[str] = []
     if results is not None:
+        if results.message:
+            st.warning(results.message)
+        st.write("**Provider-Status**")
         st.json(results.provider_status)
         for candidate in results.candidates:
             checked = st.checkbox(
@@ -120,12 +163,43 @@ def render_enhanced_cut_plan_page() -> None:
                 selected_ids.append(candidate.candidate_id)
         if st.button("Auswahl akzeptieren", key="enh_accept_stock"):
             accepted = accept_supplement_candidates(project, selected_ids)
-            st.success(f"{len(accepted.supplements)} Supplements akzeptiert.")
+            st.success(
+                f"{len(accepted.supplements)} Supplements akzeptiert "
+                "(lokale Dateizuordnung noch erforderlich für Export)."
+            )
             st.rerun()
 
     accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     if accepted is not None:
         st.info(f"Akzeptiert: {len(accepted.supplements)} Supplements")
+        st.markdown("**Lokale Dateizuordnung (manuell)**")
+        for supplement in accepted.supplements:
+            refreshed = refresh_supplement_validation(supplement)
+            st.write(
+                f"`{refreshed.candidate_id}` · status=`{refreshed.media_validation_status}`"
+            )
+            if refreshed.media_validation_error:
+                st.caption(refreshed.media_validation_error)
+            path_value = st.text_input(
+                f"local_media_path für {refreshed.candidate_id}",
+                value=refreshed.local_media_path or "",
+                key=f"enh_local_{project.id}_{refreshed.candidate_id}",
+                help="Lokaler Dateipfad — keine http(s)-URL.",
+            )
+            if st.button(
+                f"Lokale Datei zuordnen & validieren ({refreshed.candidate_id})",
+                key=f"enh_assign_{project.id}_{refreshed.candidate_id}",
+            ):
+                try:
+                    updated = assign_local_media_path(
+                        project, refreshed.candidate_id, path_value
+                    )
+                    st.success(
+                        f"{updated.candidate_id} → {updated.media_validation_status}"
+                    )
+                    st.rerun()
+                except LocalMediaError as exc:
+                    st.error(str(exc))
 
     st.divider()
     st.subheader("3. Finalen Cut Plan erzeugen und technisch auflösen")

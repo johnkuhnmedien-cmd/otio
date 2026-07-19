@@ -13,7 +13,7 @@ from otio_app.services.without_voiceover_enhanced.stock.base import (
 
 
 class ArchiveOrgStockProvider(StockProvider):
-    provider_name = "archive.org"
+    provider_name = "archive_org"
 
     def readiness(self) -> ProviderStatus:
         return ProviderStatus(self.provider_name, "ready")

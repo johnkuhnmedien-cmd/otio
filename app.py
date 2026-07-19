@@ -357,15 +357,19 @@ def render_new_project_page() -> None:
                 for error in exc.errors():
                     st.error(error["msg"])
             else:
-                same_lang = find_project_by_root_and_language(
+                same_mode = find_project_by_root_and_language(
                     project_data.project_root,
                     project_data.language,
+                    project_mode=project_data.project_mode,
                 )
-                if same_lang is not None:
+                if same_mode is not None:
                     st.error(
                         f"Am Ordner gibt es bereits ein Projekt in Sprache "
-                        f"**{same_lang.language}** („{same_lang.name}“). "
-                        "Bitte das bestehende öffnen oder eine andere Sprache wählen."
+                        f"**{same_mode.language}** und Modus "
+                        f"**{PROJECT_MODE_LABELS.get(same_mode.project_mode.value, same_mode.project_mode.value)}** "
+                        f"(„{same_mode.name}“). "
+                        "Bitte das bestehende öffnen, eine andere Sprache wählen "
+                        "oder einen anderen Modus nutzen."
                     )
                     st.session_state.pop(PREVIEW_KEY, None)
                     return
@@ -375,10 +379,19 @@ def render_new_project_page() -> None:
                     langs = ", ".join(
                         sorted({language_folder_name(p.language) for p in siblings})
                     )
+                    modes = ", ".join(
+                        sorted({p.project_mode.value for p in siblings})
+                    )
+                    work_hint = (
+                        f"`_otio_enhanced/{language_folder_name(project_data.language)}/`"
+                        if project_data.project_mode
+                        == ProjectMode.WITHOUT_VOICEOVER_ENHANCED
+                        else f"`_otio/{language_folder_name(project_data.language)}/`"
+                    )
                     st.info(
                         f"Am gleichen Pfad existieren bereits Projekte "
-                        f"({langs}). Clean Media & Inventory werden geteilt; "
-                        f"Editorial landet unter `_otio/{language_folder_name(project_data.language)}/`."
+                        f"({langs}; Modi: {modes}). "
+                        f"Editorial dieses Projekts landet unter {work_hint}."
                     )
 
                 if project_data.project_mode in (

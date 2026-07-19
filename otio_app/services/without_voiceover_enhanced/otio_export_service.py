@@ -1,4 +1,4 @@
-"""OTIO-Export ausschließlich aus der technisch aufgelösten Timeline."""
+"""OTIO-Export ausschließlich aus der technisch aufgelösten Timeline (R1 fail-closed)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,11 @@ from otio_app.models import Project
 from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model
+from otio_app.services.without_voiceover_enhanced.local_media_service import (
+    is_http_url,
+    list_export_ready_supplements,
+    require_export_ready_local_path,
+)
 from otio_app.services.without_voiceover_enhanced.models import (
     AcceptedSupplementsDocument,
     ResolvedTimelineDocument,
@@ -26,6 +31,24 @@ class EnhancedOtioExportError(RuntimeError):
     pass
 
 
+def _assert_local_media_reference(path: str, *, label: str) -> str:
+    text = str(path or "").strip()
+    if not text:
+        raise EnhancedOtioExportError(f"{label}: leere Medienreferenz.")
+    if is_http_url(text):
+        raise EnhancedOtioExportError(
+            f"{label}: OTIO darf keine Web-URL enthalten ({text})."
+        )
+    if text.lower().startswith("http://") or text.lower().startswith("https://"):
+        raise EnhancedOtioExportError(
+            f"{label}: OTIO darf keine Web-URL enthalten ({text})."
+        )
+    local = Path(text).expanduser()
+    if not local.is_file():
+        raise EnhancedOtioExportError(f"{label}: lokale Datei fehlt: {local}")
+    return str(local)
+
+
 def _media_path_for_asset(project: Project, asset_id: str) -> str:
     for folder in project.selected_asset_subdirs:
         inventory = load_folder_inventory(project, folder)
@@ -37,13 +60,46 @@ def _media_path_for_asset(project: Project, asset_id: str) -> str:
                 continue
             current_id = getattr(asset, "asset_id", None) or asset_id_for_path(str(path))
             if str(current_id) == asset_id:
-                return str(path)
+                return _assert_local_media_reference(str(path), label=f"Asset {asset_id}")
+
     accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     if accepted is not None:
         for supplement in accepted.supplements:
-            if supplement.candidate_id == asset_id:
-                return supplement.preview_url or supplement.source_page
-    raise EnhancedOtioExportError(f"Medienreferenz fehlt für Asset {asset_id}")
+            if supplement.candidate_id != asset_id:
+                continue
+            try:
+                local_path = require_export_ready_local_path(supplement)
+            except Exception as exc:  # LocalMediaError
+                raise EnhancedOtioExportError(str(exc)) from exc
+            return _assert_local_media_reference(
+                local_path, label=f"Supplement {asset_id}"
+            )
+
+    # Also allow currently export_ready list (revalidated).
+    for supplement in list_export_ready_supplements(project):
+        if supplement.candidate_id == asset_id:
+            return _assert_local_media_reference(
+                str(supplement.local_media_path),
+                label=f"Supplement {asset_id}",
+            )
+
+    raise EnhancedOtioExportError(
+        f"Supplement {asset_id} besitzt keine validierte lokale Mediendatei. "
+        "Ordne zuerst eine lokale Originaldatei zu."
+    )
+
+
+def _collect_target_urls(timeline: otio.schema.Timeline) -> list[str]:
+    urls: list[str] = []
+    for track in timeline.tracks:
+        for item in track:
+            media = getattr(item, "media_reference", None)
+            if media is None:
+                continue
+            target = getattr(media, "target_url", None)
+            if target:
+                urls.append(str(target))
+    return urls
 
 
 def export_otio_from_resolved_timeline(
@@ -65,7 +121,6 @@ def export_otio_from_resolved_timeline(
     video_track = otio.schema.Track(name="Video", kind=otio.schema.TrackKind.Video)
     audio_track = otio.schema.Track(name="Narration", kind=otio.schema.TrackKind.Audio)
 
-    # Video shots — intentionally NOT tied to sentence boundaries.
     cursor = 0.0
     for shot in sorted(resolved.shots, key=lambda s: s.timeline_start_seconds):
         if shot.timeline_start_seconds > cursor + 1e-6:
@@ -94,7 +149,6 @@ def export_otio_from_resolved_timeline(
         video_track.append(clip)
         cursor = shot.timeline_end_seconds
 
-    # Audio with explicit pause gaps.
     audio_cursor = 0.0
     for segment in resolved.audio_segments:
         if segment.timeline_start_seconds > audio_cursor + 1e-6:
@@ -107,12 +161,13 @@ def export_otio_from_resolved_timeline(
                     )
                 )
             )
+        audio_path = _assert_local_media_reference(
+            segment.audio_path, label=f"Audio {segment.segment_id}"
+        )
         duration = segment.timeline_end_seconds - segment.timeline_start_seconds
         clip = otio.schema.Clip(
             name=segment.segment_id,
-            media_reference=otio.schema.ExternalReference(
-                target_url=segment.audio_path
-            ),
+            media_reference=otio.schema.ExternalReference(target_url=audio_path),
             source_range=otio.opentime.TimeRange(
                 start_time=otio.opentime.RationalTime(0, fps),
                 duration=otio.opentime.RationalTime(duration * fps, fps),
@@ -135,6 +190,12 @@ def export_otio_from_resolved_timeline(
 
     timeline.tracks.append(video_track)
     timeline.tracks.append(audio_track)
+
+    for url in _collect_target_urls(timeline):
+        if is_http_url(url):
+            raise EnhancedOtioExportError(
+                f"OTIO enthält verbotene Web-URL als Medienreferenz: {url}"
+            )
 
     out_dir = exports_dir(project)
     out_dir.mkdir(parents=True, exist_ok=True)

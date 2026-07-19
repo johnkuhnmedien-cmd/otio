@@ -373,7 +373,15 @@ def test_shot_freedom_multi_segment_and_multi_shot() -> None:
 
 def test_stock_providers_registered_and_unavailable_does_not_stop_others() -> None:
     names = [p.provider_name for p in get_stock_providers()]
-    assert set(REQUIRED_PROVIDER_NAMES).issubset(set(names))
+    assert list(REQUIRED_PROVIDER_NAMES) == [
+        "pexels",
+        "pixabay",
+        "wikimedia",
+        "openverse",
+        "archive_org",
+    ]
+    assert set(REQUIRED_PROVIDER_NAMES) == set(names)
+    assert "adobe_stock" not in names
 
     class UnavailableProvider(MockStockProvider):
         provider_name = "mock_unavailable"
@@ -386,9 +394,10 @@ def test_stock_providers_registered_and_unavailable_does_not_stop_others() -> No
     candidates, status = search_all_providers(
         "Monument Valley",
         providers=[unavailable, ready],
+        enabled_names=["mock_unavailable", "mock_ready"],
     )
-    assert status["mock_unavailable"].startswith("unavailable")
-    assert status["mock_ready"].startswith("ok:")
+    assert status["mock_unavailable"] == "unavailable"
+    assert status["mock_ready"] == "completed"
     assert candidates
     assert candidates[0].license == "CC0"
     assert candidates[0].width == 4000
@@ -491,6 +500,8 @@ def test_final_plan_rejects_unknown_ids_and_resolves_deterministically(tmp_path:
     write_json(narration_timeline_path(project), timeline)
 
     # Create local asset catalog via accepted supplement (avoid inventory dependency).
+    media_file = project.work_dir_path / "local_media.mp4"
+    media_file.write_bytes(b"\x00" * 64)
     write_json(
         accepted_supplements_path(project),
         {
@@ -502,7 +513,10 @@ def test_final_plan_rejects_unknown_ids_and_resolves_deterministically(tmp_path:
                     "provider": "mock",
                     "title": "wide",
                     "media_type": "video",
-                    "preview_url": str(wav1),
+                    "preview_url": "https://example.com/preview.jpg",
+                    "source_page": "https://example.com/source",
+                    "local_media_path": str(media_file),
+                    "media_validation_status": "export_ready",
                     "duration_seconds": 10.0,
                     "license": "CC0",
                     "selected": True,
@@ -631,6 +645,8 @@ def test_otio_from_resolved_only(tmp_path: Path) -> None:
             "errors": [],
         },
     )
+    media_file = project.work_dir_path / "local_clip.bin"
+    media_file.write_bytes(b"\x00" * 64)
     write_json(
         accepted_supplements_path(project),
         {
@@ -640,8 +656,10 @@ def test_otio_from_resolved_only(tmp_path: Path) -> None:
                 {
                     "candidate_id": "asset_local_1",
                     "provider": "mock",
-                    "preview_url": str(wav),
-                    "source_page": str(wav),
+                    "preview_url": "https://example.com/preview.jpg",
+                    "source_page": "https://example.com/source",
+                    "local_media_path": str(media_file),
+                    "media_validation_status": "export_ready",
                     "duration_seconds": 10.0,
                     "selected": True,
                 }
@@ -654,6 +672,9 @@ def test_otio_from_resolved_only(tmp_path: Path) -> None:
     assert "segment_001" in payload
     assert "shot_001" in payload
     assert "shot_002" in payload
+    assert "https://" not in payload
+    assert "http://" not in payload
+    assert str(media_file) in payload
 
 
 def test_coverage_gap_has_search_queries_and_links() -> None:

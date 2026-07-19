@@ -12,7 +12,9 @@ AUDIO_SUBDIR = "audio"
 CUT_SUBDIR = "cut"
 COVERAGE_SUBDIR = "coverage"
 STOCK_SUBDIR = "stock"
+CONFIG_SUBDIR = "config"
 EXPORTS_SUBDIR = "exports"
+STOCK_PROVIDERS_CONFIG_FILENAME = "stock_providers.json"
 
 SCRIPT_LOCKED_FILENAME = "script_locked.json"
 SCRIPT_DRAFT_FILENAME = "script_draft.json"
@@ -71,6 +73,16 @@ def coverage_dir(project: Project) -> Path:
 
 def stock_dir(project: Project) -> Path:
     return enhanced_generation_root(project) / STOCK_SUBDIR
+
+
+def config_dir(project: Project) -> Path:
+    """``_otio_enhanced/config`` — projektweite Enhanced-Konfiguration."""
+    assert_enhanced_work_root(project)
+    return project.work_dir_path / CONFIG_SUBDIR
+
+
+def stock_providers_config_path(project: Project) -> Path:
+    return config_dir(project) / STOCK_PROVIDERS_CONFIG_FILENAME
 
 
 def exports_dir(project: Project) -> Path:

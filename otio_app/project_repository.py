@@ -89,8 +89,14 @@ def find_project_by_root_and_language(
     project_root: str | Path,
     language: str,
     db_path: Path | None = None,
+    *,
+    project_mode: ProjectMode | str | None = None,
 ) -> Project | None:
-    """Findet ein Projekt mit gleichem Root und (case-insensitive) gleicher Sprache."""
+    """Findet ein Projekt mit gleichem Root, Sprache und optional Modus.
+
+    Ohne ``project_mode`` bleibt das bisherige Verhalten (erster Treffer) für
+    Legacy-Aufrufe erhalten. Für Neuanlagen bitte immer den Modus mitgeben.
+    """
     try:
         root = str(Path(project_root).expanduser().resolve())
     except OSError:
@@ -98,14 +104,29 @@ def find_project_by_root_and_language(
     lang = _normalize_language(language)
     conn = get_connection(db_path)
     try:
-        row = conn.execute(
-            """
-            SELECT * FROM projects
-            WHERE project_root = ? AND lower(language) = ?
-            LIMIT 1
-            """,
-            (root, lang),
-        ).fetchone()
+        if project_mode is None:
+            row = conn.execute(
+                """
+                SELECT * FROM projects
+                WHERE project_root = ? AND lower(language) = ?
+                LIMIT 1
+                """,
+                (root, lang),
+            ).fetchone()
+        else:
+            mode_value = (
+                project_mode.value
+                if isinstance(project_mode, ProjectMode)
+                else str(project_mode)
+            )
+            row = conn.execute(
+                """
+                SELECT * FROM projects
+                WHERE project_root = ? AND lower(language) = ? AND project_mode = ?
+                LIMIT 1
+                """,
+                (root, lang, mode_value),
+            ).fetchone()
     finally:
         conn.close()
     if row is None:
@@ -127,13 +148,15 @@ def create_project(
         data.project_root,
         data.language,
         db_path=db_path,
+        project_mode=data.project_mode,
     )
     if existing is not None:
         raise ValueError(
             f"Am Projektordner gibt es bereits ein Projekt in Sprache "
-            f"„{existing.language}“ (Name: {existing.name}). "
-            "Für dieselbe Sprache bitte das bestehende Projekt öffnen — "
-            "für eine andere Sprache ein neues Projekt mit anderer Sprache anlegen."
+            f"„{existing.language}“ und Modus „{existing.project_mode.value}“ "
+            f"(Name: {existing.name}). "
+            "Für denselben Modus bitte das bestehende Projekt öffnen — "
+            "ein anderer Modus (z. B. Classic Without-VO vs Enhanced) ist erlaubt."
         )
 
     if asset_subdir_names is None:

@@ -68,22 +68,24 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
                     "ALTER TABLE projects ADD COLUMN project_mode TEXT NOT NULL DEFAULT 'with_voiceover'"
                 )
 
-    # Ein DB-Projekt = eine Sprache. Gleicher Root + gleiche Sprache ist verboten;
-    # gleicher Root + andere Sprache (DE/EN) ist erwünscht.
+    # Ein DB-Projekt = eine Sprache + ein Modus.
+    # Classic without_voiceover und Enhanced dürfen denselben Root/Sprache teilen,
+    # besitzen aber getrennte Arbeitswurzeln (_otio vs _otio_enhanced).
     # lower(language): "de" und "DE" gelten als dieselbe Sprache.
+    conn.execute("DROP INDEX IF EXISTS idx_projects_root_language")
     duplicates = conn.execute(
         """
-        SELECT project_root, lower(language) AS lang, COUNT(*) AS cnt
+        SELECT project_root, lower(language) AS lang, project_mode, COUNT(*) AS cnt
         FROM projects
-        GROUP BY project_root, lower(language)
+        GROUP BY project_root, lower(language), project_mode
         HAVING cnt > 1
         """
     ).fetchall()
     if not duplicates:
         conn.execute(
             """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_root_language
-            ON projects(project_root, lower(language))
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_root_language_mode
+            ON projects(project_root, lower(language), project_mode)
             """
         )
 

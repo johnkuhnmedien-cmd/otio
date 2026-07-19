@@ -163,6 +163,11 @@ class StockCandidate(BaseModel):
     attribution: Optional[str] = None
     selected: bool = False
     gap_id: str = ""
+    # R1: lokale Mediendatei vor Final Cut / OTIO erforderlich.
+    local_media_path: Optional[str] = None
+    media_validation_status: str = "selected"
+    # selected | local_media_missing | local_media_invalid | export_ready
+    media_validation_error: Optional[str] = None
 
 
 class StockSearchResultsDocument(BaseModel):
@@ -170,6 +175,7 @@ class StockSearchResultsDocument(BaseModel):
     script_version: str
     provider_status: dict[str, str] = Field(default_factory=dict)
     candidates: list[StockCandidate] = Field(default_factory=list)
+    message: str = ""
 
 
 class AcceptedSupplementsDocument(BaseModel):
