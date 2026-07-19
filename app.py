@@ -36,16 +36,13 @@ from otio_app.project_repository import (
     find_projects_by_root,
     list_projects,
 )
-from otio_app.ui.navigation import PAGE_ANALYSIS, PAGE_NEW
-from otio_app.ui.routing import run_app_navigation
+from otio_app.ui.routing import activate_project_for_editing, run_app_navigation
 
 st.set_page_config(
     page_title="OTIO Schnittplaner",
     page_icon="🎬",
     layout="wide",
 )
-
-PAGE_WORK = PAGE_ANALYSIS  # alias für ältere session_state-Keys
 
 PREVIEW_KEY = "project_preview"
 PENDING_KEY = "pending_project"
@@ -657,12 +654,10 @@ def render_project_list_page() -> None:
                     f"Aktualisiert: {project.updated_at.isoformat()}"
                 )
                 if st.button("Projekt bearbeiten", key=f"open_{project.id}"):
-                    st.session_state["workbench_project_id"] = project.id
-                    if hasattr(st, "switch_page"):
-                        st.switch_page("analysen")
-                    else:
-                        st.session_state["sidebar_nav"] = PAGE_WORK
-                        st.rerun()
+                    # Mode-aware activation: Discovery → overview; Classic → Analysen.
+                    # Never call st.switch_page("analysen") under Discovery nav.
+                    activate_project_for_editing(project)
+                    st.rerun()
 
 
 run_app_navigation(

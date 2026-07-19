@@ -8,7 +8,7 @@ import streamlit as st
 
 from otio_app.services.job_registry import reconcile_all_jobs
 from otio_app.build_info import expected_feature_markers, format_build_label
-from otio_app.models import ProjectMode
+from otio_app.models import Project, ProjectMode
 from otio_app.project_repository import get_project_by_id
 from otio_app.ui.activity import record_script_run, render_activity_panel
 from otio_app.ui.analysis_jobs_ui import render_analysis_jobs_banner
@@ -42,6 +42,8 @@ from otio_app.discovery_v2.ui import (
     render_discovery_visual_edit_page,
 )
 from otio_app.discovery_v2.ui.route_context import (
+    ROUTE_HINT_KEY,
+    bind_active_discovery_project,
     discovery_shell_requested,
     restore_discovery_route_context,
     sync_discovery_page_route,
@@ -49,6 +51,54 @@ from otio_app.discovery_v2.ui.route_context import (
 
 
 _CURRENT_PAGE_KEY = "_otio_current_page"
+PENDING_SWITCH_URL_KEY = "_otio_pending_switch_url"
+
+
+def activate_project_for_editing(project: Project) -> None:
+    """Bind a saved project as active and queue its workflow start page.
+
+    Must not call ``st.switch_page("analysen")`` while the Discovery shell is
+    active — that page is absent from Discovery navigation and raises
+    ``StreamlitAPIException``.
+    """
+
+    from otio_app.ui.navigation import PAGE_DISCOVERY_OVERVIEW
+
+    st.session_state[ACTIVE_PROJECT_KEY] = project.id
+    # Historical session key kept for older call sites / diagnostics.
+    st.session_state["workbench_project_id"] = project.id
+
+    if project.is_discovery_v2 or project.project_mode == ProjectMode.DISCOVERY_V2:
+        bind_active_discovery_project(project.id, page_slug="overview")
+        st.session_state["sidebar_nav"] = PAGE_DISCOVERY_OVERVIEW
+        st.session_state[PENDING_SWITCH_URL_KEY] = "discovery-v2"
+        return
+
+    st.session_state.pop(ROUTE_HINT_KEY, None)
+    st.session_state["sidebar_nav"] = PAGE_ANALYSIS
+    st.session_state[PENDING_SWITCH_URL_KEY] = "analysen"
+
+
+def _consume_pending_page_switch(pages: list) -> None:
+    """Switch to a queued url_path after mode-specific pages are registered."""
+
+    target = st.session_state.pop(PENDING_SWITCH_URL_KEY, None)
+    if not target:
+        return
+    switch = getattr(st, "switch_page", None)
+    if not callable(switch):
+        return
+    for page in pages:
+        if getattr(page, "url_path", None) == target:
+            try:
+                switch(page)
+                return
+            except Exception:
+                break
+    try:
+        switch(target)
+    except Exception:
+        return
 
 
 def _active_project_mode() -> ProjectMode:
@@ -394,6 +444,8 @@ def run_app_navigation(
         render_activity_panel()
 
     navigation = st.navigation(pages, position="sidebar")
+    # After pages for the active mode are registered, honor "Projekt bearbeiten".
+    _consume_pending_page_switch(pages)
     navigation.run()
 
 
