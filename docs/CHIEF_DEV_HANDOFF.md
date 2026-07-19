@@ -33,7 +33,7 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 - Repository / Worktree: Discovery-V2-Integration (`cursor/discovery-v2-integration`)
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Aktueller HEAD: Coverage Stability C3.3 (`7ba6468`)
+- Aktueller HEAD: Script-Lock Current-State Consistency Plan (nur Docs)
 - V1–V3 Visual Edit: `70ffe6e` / `0fba7bd` / `f1b982a`
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
 - R1.1–R1.3 abgeschlossen · Script-Lock Realtest **erfolgreich**
@@ -48,21 +48,20 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - **Coverage Stability C2 vollständig akzeptiert** (C1+C2+C2-R1 + USA_v2)
 - **C3.1 / C3.2 abgeschlossen** (`36367d2` / `47cfafd`)
 - **C3.3 Exact Match Engine umgesetzt** (`7ba6468`)
-  - `coverage-gap-match-report-v1`; nur exact 1:1 ist carry-forward-evaluation-eligible
-  - 1:N / N:1 / N:N / Kollision fail-closed; kein Similarity Matching (D-007 / D-008)
-  - keine Persistenz, keine Carry-Forward-Übernahme, kein Registry-I/O
-  - Tests: `tests/test_discovery_v2_coverage_stability_c3_3.py` (30 Node-IDs)
-- Plan: `docs/source_plans/ALPHA_COVERAGE_STABILITY_C3_GAP_IDENTITY_CARRY_FORWARD_PLAN.md`
+- **Script-Lock Current-State Consistency Plan dokumentiert**
+  - Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
+  - USA_v2: Editorial zeigt historischen Lock als Current; Narration blockiert korrekt
+  - Root Cause: UI=`list_script_locks[0]` vs Gates=`get_effective_script_lock`; stale Narration-Pointer
 - Offener UI-Befund: Visual-Intent-ID teilweise als Gap-ID beschriftet (nicht C3)
-- **Nächste erlaubte Aktion nach Freigabe: C3.4 Carry-Forward Safety/Report**
-- **C4, V4 und R1.4 gesperrt** · echte Provider gesperrt
+- **Nächste erlaubte Aktion nach Planfreigabe: L1 Script-Lock Root-Cause-Fixtures**
+- **C3.4, C4, V4 und R1.4 gesperrt** · echte Provider gesperrt
 - Keine neue Produktphase · keine Nutzerregistry-Reparatur
 
 ## Nächste erlaubte Aktion nach Freigabe
 
-**C3.4 Carry-Forward Safety und Report-Integration** nach Chief-Dev-Freigabe.
+**L1 Script-Lock Root-Cause-Fixtures** nach Planfreigabe.
 
-Gesperrt: C4, UI-Beschriftungsfix, V4, R1.4, echte Provider.
+Gesperrt: L2–L5 bis Freigabe; C3.4, C4, UI Gap-Label, V4, R1.4, echte Provider.
 
 ## Verbindliche Kurzregeln
 

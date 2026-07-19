@@ -2,7 +2,7 @@
 
 ## Aktueller Stand
 
-**Coverage Stability C3.3 Exact Match Engine umgesetzt — Schema weiterhin 20.**
+**Script-Lock Current-State Consistency Plan dokumentiert — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
 - Script-Lock Realtest: **erfolgreich**
@@ -16,9 +16,11 @@
 - Decisions: D-COVERAGE-STABILITY-001…008
 - C3-Plan: `docs/source_plans/ALPHA_COVERAGE_STABILITY_C3_GAP_IDENTITY_CARRY_FORWARD_PLAN.md`
 - **C3.1 / C3.2 abgeschlossen** (`36367d2` / `47cfafd`)
-- **C3.3 umgesetzt** (`7ba6468`): Exact Match Engine `coverage-gap-match-report-v1` (keine Persistenz/Carry-Forward)
-- **Nächste erlaubte Aktion nach Freigabe: C3.4 Carry-Forward Safety/Report**
-- **C4, V4 und R1.4 gesperrt**
+- **C3.3 umgesetzt** (`7ba6468`): Exact Match Engine `coverage-gap-match-report-v1`
+- **Fake-Alpha-Test an Narration-Grenze blockiert** (USA_v2): historischer Lock ≠ Effective Lock
+- Script-Lock-Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
+- **Nächste erlaubte Aktion nach Planfreigabe: L1 Root-Cause-Fixtures**
+- **C3.4, C4, V4 und R1.4 gesperrt**
 - Keine neue Produktphase · echte Provider gesperrt
 
 ## Phase-Status
@@ -34,12 +36,25 @@
 | Coverage Stability C3 Plan | dokumentiert |
 | Coverage Stability C3.1 | abgeschlossen (Root-Cause-Fixtures) |
 | Coverage Stability C3.2 | umgesetzt (Semantic Gap Identity) |
-| Coverage Stability C3.3 | **umgesetzt** (Exact Match Engine) |
-| Coverage Stability C3.4 | nächster erlaubter Schritt (nach Freigabe) |
+| Coverage Stability C3.3 | umgesetzt (Exact Match Engine) |
+| Coverage Stability C3.4 | **gesperrt** |
+| Script-Lock Current-State Plan | **dokumentiert** |
+| Script-Lock L1 Fixtures | nächster erlaubter Schritt (nach Planfreigabe) |
+| Script-Lock L2–L5 | **gesperrt** bis jeweilige Freigabe |
 | Coverage Stability C4 | **gesperrt** |
 | Visual Edit Rework V4 Loop/UI | **gesperrt** |
 | R1.4 Job-UX / Progress-Polling | **gesperrt** |
 | R1.5–R1.6 | gesperrt |
+
+## Script-Lock Current-State Consistency — Kurzstand
+
+- Fake-Alpha USA_v2 an Narration-Grenze blockiert
+- Editorial zeigt historischen Lock (`07c69bb1-…`, Script v1) fälschlich als „Aktueller Lock“
+- `editorial_project_state.current_script_lock_id = NULL`; Narration-Pointer stale auf denselben Lock
+- Narration blockiert korrekt: „Kein wirksamer Script Lock“
+- Root Cause: Editorial-UI = `list_script_locks[0]`; Gates = `get_effective_script_lock`; Narration-Pointer wird bei Invalidierung nicht geleert
+- Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
+- Nächster Schritt nach Freigabe: **L1 Root-Cause-Fixtures**
 
 ## Coverage Stability C3.3 — Kurzstand
 
@@ -122,9 +137,9 @@ Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Ga
 
 ## Nächste erlaubte Aktivität
 
-Nach Freigabe:
+Nach Planfreigabe:
 
-→ **C3.4 Carry-Forward Safety und Report-Integration**
+→ **L1 Script-Lock Root-Cause-Fixtures**
 
-C4 erst nach C3. Noch gesperrt: C4, V4, R1.4–R1.6, echte Provider,
-neue Produktphase, Nutzerregistry-Reparatur.
+Danach L2–L5 nach Freigabe. Weiter gesperrt: C3.4, C4, V4, R1.4–R1.6,
+echte Provider, neue Produktphase, Nutzerregistry-Reparatur.

@@ -107,17 +107,16 @@
 - C3-Plan: `docs/source_plans/ALPHA_COVERAGE_STABILITY_C3_GAP_IDENTITY_CARRY_FORWARD_PLAN.md`
 - **C3.1 / C3.2 abgeschlossen** (`36367d2` / `47cfafd`)
 - **C3.3 Exact Match Engine umgesetzt** (`7ba6468`)
-  - Schema: `coverage-gap-match-report-v1`
-  - Domain/App: `coverage_gap_matching.py` / `coverage_gap_matching_service.py`
-  - Exact: Schema + Semantic Key + vollständiger Identity-Payload
-  - Nur `exact_one_to_one` → `carry_forward_evaluation_allowed=true`
-  - Ambiguous / Collision / Schema-Mismatch fail-closed; kein Similarity Matching
-  - Decisions: D-COVERAGE-STABILITY-007 / 008
-  - Tests: `tests/test_discovery_v2_coverage_stability_c3_3.py` (30 Node-IDs)
-- Aktiver Auftrag: keiner (C3.3 fertig; C3.4 gesperrt bis Freigabe)
+- **Script-Lock Current-State Consistency Plan dokumentiert**
+  - Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
+  - Fake-Alpha USA_v2 an Narration-Grenze blockiert
+  - Editorial: historischer Lock fälschlich als Current; `editorial current_script_lock_id=NULL`
+  - Narration: korrekt „kein wirksamer Lock“; stale `narration current_script_lock_id`
+  - Nächster Schritt nach Freigabe: **L1 Root-Cause-Fixtures**
+- Aktiver Auftrag: keiner (Plan fertig; L1 gesperrt bis Freigabe)
 - R1.3 Acceptance Evidence weiterhin offen
-- Nächste erlaubte Aktion nach Freigabe: **C3.4 Carry-Forward Safety/Report**
-- **C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
+- Nächste erlaubte Aktion nach Planfreigabe: **L1 Script-Lock Root-Cause-Fixtures**
+- **C3.4, C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
@@ -965,10 +964,11 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 25. ~~Coverage Stability C3.1 Root-Cause-Fixtures~~ — **abgeschlossen** (`36367d2`)
 26. ~~Coverage Stability C3.2 Semantic Gap Identity~~ — **abgeschlossen** (`47cfafd`)
 27. ~~Coverage Stability C3.3 Exact Match Engine~~ — **abgeschlossen** (`7ba6468`)
+28. ~~Script-Lock Current-State Consistency Plan~~ — **dokumentiert**
 
-Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C3.4 Carry-Forward**.
-Script-Lock Realtest erfolgreich. C2 behebt äquivalenten Coverage-Reset.
-**C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
+Nächste erlaubte Aktivität nach Planfreigabe: **Script-Lock L1 Root-Cause-Fixtures**.
+Fake-Alpha an Narration-Grenze blockiert (USA_v2 Effective-Lock-Widerspruch).
+**C3.4, C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
 Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
