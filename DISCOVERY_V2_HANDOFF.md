@@ -968,10 +968,11 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 26. ~~Coverage Stability C3.2 Semantic Gap Identity~~ — **abgeschlossen** (`47cfafd`)
 27. ~~Coverage Stability C3.3 Exact Match Engine~~ — **abgeschlossen** (`7ba6468`)
 28. ~~Script-Lock Current-State Consistency Plan~~ — **dokumentiert** (`6a33d0f`)
+29. ~~Script-Lock L1 Root-Cause-Fixtures~~ — **abgeschlossen** (`a492c54`)
 
-Nächste erlaubte Aktivität nach Planfreigabe: **Script-Lock L1 Root-Cause-Fixtures**.
+Nächste erlaubte Aktivität nach Freigabe: **Script-Lock L2 Effective-Lock-Resolver**.
 Fake-Alpha an Narration-Grenze blockiert (USA_v2 Effective-Lock-Widerspruch).
-**C3.4, C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
+**L3–L5, C3.4, C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
 Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
