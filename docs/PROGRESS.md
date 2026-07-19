@@ -18,7 +18,7 @@
 - **C3.1 / C3.2 abgeschlossen** (`36367d2` / `47cfafd`)
 - **C3.3 umgesetzt** (`7ba6468`): Exact Match Engine `coverage-gap-match-report-v1`
 - **Fake-Alpha-Test an Narration-Grenze blockiert** (USA_v2): historischer Lock ≠ Effective Lock
-- Script-Lock-Plan:  ()`docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
+- Script-Lock-Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md` (`6a33d0f`)
 - **Nächste erlaubte Aktion nach Planfreigabe: L1 Root-Cause-Fixtures**
 - **C3.4, C4, V4 und R1.4 gesperrt**
 - Keine neue Produktphase · echte Provider gesperrt
