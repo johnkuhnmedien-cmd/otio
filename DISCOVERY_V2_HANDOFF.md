@@ -145,7 +145,12 @@
   - Intent-Upsert; referenzierte Intents nicht still löschen (`script_structure_replacement_conflicts_with_coverage`)
   - Decision: D-STRUCTURE-RECOVERY-001
   - Tests: `tests/test_discovery_v2_structure_persistence_atomicity.py` (20 Node-IDs)
-- Aktiver Auftrag: keiner (Crash-Recovery-Rework fertig; L5 USA_v2-Realtest gesperrt bis Freigabe)
+- **Active-Script-Pointer-Recovery-Hotfix umgesetzt** (`1dac126`)
+  - Root Cause: `active_script_id = NULL` → Structure fail-closed `active_script_pointer_missing`
+  - Diagnose nur bei genau einem verifizierten Kandidaten; UI-Button „Aktuelles Script vN wiederherstellen“
+  - atomare Pointer-Wiederherstellung (Script/Narrative/Hook); kein neues Script, keine Auto-Struktur
+  - Tests: `tests/test_discovery_v2_active_script_recovery.py` (14 Node-IDs)
+- Aktiver Auftrag: keiner (Pointer-Recovery fertig; L5 USA_v2-Realtest gesperrt bis Freigabe)
 - R1.3 Acceptance Evidence weiterhin offen
 - Fake-Alpha weiterhin bis L5 pausiert
 - Nächste erlaubte Aktion nach Freigabe: **L5 USA_v2-Realtest**
@@ -153,7 +158,7 @@
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **3252 collected / 3233 passed / 18 failed / 1 skipped**
+- Teststand: **3266 collected / 3247 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
@@ -1005,6 +1010,7 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 33. ~~Structure-Finalization-Hotfix~~ — **umgesetzt** (`aaf7696`)
 34. ~~Structure-Persistence-Atomicity-Hotfix~~ — **umgesetzt** (`bac1bbc`)
 35. ~~Structure-Persistence Crash-Recovery-Rework~~ — **umgesetzt** (`3af76c8`)
+36. ~~Active-Script-Pointer-Recovery-Hotfix~~ — **umgesetzt** (`1dac126`)
 
 Nächste erlaubte Aktivität nach Chief-Dev-Freigabe: **Script-Lock L5 USA_v2-Realtest**.
 Fake-Alpha weiterhin bis L5 pausiert (USA_v2 Effective-Lock-/Pointer-Konsistenz).
