@@ -10,7 +10,9 @@ from uuid import uuid4
 
 from otio_app.discovery_v2.domain.editorial import (
     ACTIVE_EDITORIAL_RUN_STATUSES,
+    EDITORIAL_ERROR_STRUCTURE_REPLACEMENT_CONFLICTS_WITH_COVERAGE,
     EDITORIAL_SCHEMA_VERSION,
+    Claim,
     CoverageAudit,
     CoverageAuditStatus,
     CoverageIntentResult,
@@ -642,6 +644,59 @@ def insert_script_bundle(
         )
 
 
+class ScriptStructureReplacementError(Exception):
+    """Fail-closed when structure replace would drop referenced visual intents."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.code = EDITORIAL_ERROR_STRUCTURE_REPLACEMENT_CONFLICTS_WITH_COVERAGE
+        self.message = message
+
+
+def _script_visual_intent_ids(conn: sqlite3.Connection, *, script_id: str) -> set[str]:
+    rows = conn.execute(
+        """
+        SELECT vi.visual_intent_id AS visual_intent_id
+        FROM visual_intents vi
+        JOIN visual_beats vb ON vb.visual_beat_id = vi.visual_beat_id
+        WHERE vb.script_id = ?
+        """,
+        (script_id,),
+    ).fetchall()
+    return {str(row["visual_intent_id"]) for row in rows}
+
+
+def _referenced_visual_intent_ids(
+    conn: sqlite3.Connection, intent_ids: set[str]
+) -> set[str]:
+    """Return intent IDs that still have coverage/gap/graphic/shot references."""
+
+    if not intent_ids:
+        return set()
+    placeholders = ",".join("?" for _ in intent_ids)
+    params = tuple(sorted(intent_ids))
+    referenced: set[str] = set()
+    for sql in (
+        f"SELECT visual_intent_id FROM coverage_intent_results WHERE visual_intent_id IN ({placeholders})",
+        f"SELECT visual_intent_id FROM coverage_gaps WHERE visual_intent_id IN ({placeholders})",
+    ):
+        for row in conn.execute(sql, params).fetchall():
+            referenced.add(str(row["visual_intent_id"]))
+    for table in ("graphic_plans", "editorial_shot_visual_intents"):
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()
+        if exists is None:
+            continue
+        for row in conn.execute(
+            f"SELECT visual_intent_id FROM {table} WHERE visual_intent_id IN ({placeholders})",
+            params,
+        ).fetchall():
+            referenced.add(str(row["visual_intent_id"]))
+    return referenced
+
+
 def replace_script_structure(
     conn: sqlite3.Connection,
     *,
@@ -652,68 +707,49 @@ def replace_script_structure(
     visual_intents: list[VisualIntent],
     relative_json_path: str,
 ) -> None:
+    """Upsert script structure without silently deleting referenced intents.
+
+    Existing ``coverage_intent_results`` for a completed/current audit are kept.
+    Intent IDs that are still referenced by coverage/gaps/graphics/shots may only
+    be updated in place; removing them fails closed.
+    """
+
     assert_editorial_relative_path(relative_json_path)
-    old_beats = [
+    old_intent_ids = _script_visual_intent_ids(conn, script_id=script.script_id)
+    new_intent_ids = {intent.visual_intent_id for intent in visual_intents}
+    referenced = _referenced_visual_intent_ids(conn, old_intent_ids)
+    removing_referenced = referenced - new_intent_ids
+    if removing_referenced:
+        raise ScriptStructureReplacementError(
+            "Structure replace would remove referenced visual intent ids: "
+            + ",".join(sorted(removing_referenced))
+        )
+
+    old_beats = {
         str(row["visual_beat_id"])
         for row in conn.execute(
             "SELECT visual_beat_id FROM visual_beats WHERE script_id = ?",
             (script.script_id,),
         ).fetchall()
-    ]
-    old_sentences = [
+    }
+    old_sentences = {
         str(row["sentence_id"])
         for row in conn.execute(
             "SELECT sentence_id FROM script_sentences WHERE script_id = ?",
             (script.script_id,),
         ).fetchall()
-    ]
-    if old_beats:
-        # coverage_intent_results.visual_intent_id → visual_intents (FK).
-        # Clear dependent rows before deleting intents during structure replace.
-        intent_placeholders = ",".join("?" for _ in old_beats)
-        conn.execute(
-            f"""
-            DELETE FROM coverage_intent_results
-            WHERE visual_intent_id IN (
-                SELECT visual_intent_id FROM visual_intents
-                WHERE visual_beat_id IN ({intent_placeholders})
-            )
-            """,
-            old_beats,
-        )
-        shot_join = conn.execute(
-            """
-            SELECT name FROM sqlite_master
-            WHERE type='table' AND name='editorial_shot_visual_intents'
-            """
-        ).fetchone()
-        if shot_join is not None:
-            conn.execute(
-                f"""
-                DELETE FROM editorial_shot_visual_intents
-                WHERE visual_intent_id IN (
-                    SELECT visual_intent_id FROM visual_intents
-                    WHERE visual_beat_id IN ({intent_placeholders})
-                )
-                """,
-                old_beats,
-            )
-        conn.execute(
-            f"DELETE FROM visual_intents WHERE visual_beat_id IN ({intent_placeholders})",
-            old_beats,
-        )
-        conn.execute(
-            f"DELETE FROM visual_beat_sentences WHERE visual_beat_id IN ({intent_placeholders})",
-            old_beats,
-        )
-    if old_sentences:
-        conn.execute(
-            f"DELETE FROM visual_beat_sentences WHERE sentence_id IN ({','.join('?' for _ in old_sentences)})",
-            old_sentences,
-        )
-    conn.execute("DELETE FROM visual_beats WHERE script_id = ?", (script.script_id,))
-    conn.execute("DELETE FROM script_claims WHERE script_id = ?", (script.script_id,))
-    conn.execute("DELETE FROM script_sentences WHERE script_id = ?", (script.script_id,))
+    }
+    old_claims = {
+        str(row["claim_id"])
+        for row in conn.execute(
+            "SELECT claim_id FROM script_claims WHERE script_id = ?",
+            (script.script_id,),
+        ).fetchall()
+    }
+    new_beat_ids = {beat.visual_beat_id for beat in visual_beats}
+    new_sentence_ids = {sentence.sentence_id for sentence in sentences}
+    new_claim_ids = {claim.claim_id for claim in claims}
+
     conn.execute(
         """
         UPDATE script_drafts SET
@@ -734,7 +770,8 @@ def replace_script_structure(
             script.script_id,
         ),
     )
-    # Reuse insert row logic for dependent structures without touching script_drafts.
+
+    # Upsert sentences / claims / beats before intents so FK targets exist.
     for sentence in sentences:
         conn.execute(
             """
@@ -742,6 +779,13 @@ def replace_script_structure(
                 sentence_id, script_id, ordinal, text, narrative_function,
                 claim_ids_json, visual_beat_ids_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(sentence_id) DO UPDATE SET
+                script_id = excluded.script_id,
+                ordinal = excluded.ordinal,
+                text = excluded.text,
+                narrative_function = excluded.narrative_function,
+                claim_ids_json = excluded.claim_ids_json,
+                visual_beat_ids_json = excluded.visual_beat_ids_json
             """,
             (
                 sentence.sentence_id,
@@ -760,6 +804,14 @@ def replace_script_structure(
                 claim_id, script_id, statement, claim_type, confidence,
                 evidence_refs_json, user_note, status
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(claim_id) DO UPDATE SET
+                script_id = excluded.script_id,
+                statement = excluded.statement,
+                claim_type = excluded.claim_type,
+                confidence = excluded.confidence,
+                evidence_refs_json = excluded.evidence_refs_json,
+                user_note = excluded.user_note,
+                status = excluded.status
             """,
             (
                 claim.claim_id,
@@ -779,6 +831,13 @@ def replace_script_structure(
                 visual_beat_id, script_id, function, description, rhythm_function,
                 continuity_requirements_json, intended_duration_hint_seconds
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(visual_beat_id) DO UPDATE SET
+                script_id = excluded.script_id,
+                function = excluded.function,
+                description = excluded.description,
+                rhythm_function = excluded.rhythm_function,
+                continuity_requirements_json = excluded.continuity_requirements_json,
+                intended_duration_hint_seconds = excluded.intended_duration_hint_seconds
             """,
             (
                 beat.visual_beat_id,
@@ -789,6 +848,10 @@ def replace_script_structure(
                 _json(beat.continuity_requirements),
                 beat.intended_duration_hint_seconds,
             ),
+        )
+        conn.execute(
+            "DELETE FROM visual_beat_sentences WHERE visual_beat_id = ?",
+            (beat.visual_beat_id,),
         )
         for sentence_id in beat.sentence_ids:
             conn.execute(
@@ -803,6 +866,15 @@ def replace_script_structure(
                 geographic_requirements, authenticity_requirements_json,
                 allowed_media_kinds_json, priority
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(visual_intent_id) DO UPDATE SET
+                visual_beat_id = excluded.visual_beat_id,
+                desired_motif = excluded.desired_motif,
+                action = excluded.action,
+                setting = excluded.setting,
+                geographic_requirements = excluded.geographic_requirements,
+                authenticity_requirements_json = excluded.authenticity_requirements_json,
+                allowed_media_kinds_json = excluded.allowed_media_kinds_json,
+                priority = excluded.priority
             """,
             (
                 intent.visual_intent_id,
@@ -815,6 +887,31 @@ def replace_script_structure(
                 _json(intent.allowed_media_kinds),
                 intent.priority,
             ),
+        )
+
+    # Delete only unreferenced orphans — never coverage_intent_results.
+    deletable_intents = sorted(old_intent_ids - new_intent_ids)
+    for intent_id in deletable_intents:
+        conn.execute(
+            "DELETE FROM visual_intents WHERE visual_intent_id = ?",
+            (intent_id,),
+        )
+    for beat_id in sorted(old_beats - new_beat_ids):
+        conn.execute(
+            "DELETE FROM visual_beat_sentences WHERE visual_beat_id = ?",
+            (beat_id,),
+        )
+        conn.execute("DELETE FROM visual_beats WHERE visual_beat_id = ?", (beat_id,))
+    for claim_id in sorted(old_claims - new_claim_ids):
+        conn.execute("DELETE FROM script_claims WHERE claim_id = ?", (claim_id,))
+    for sentence_id in sorted(old_sentences - new_sentence_ids):
+        conn.execute(
+            "DELETE FROM visual_beat_sentences WHERE sentence_id = ?",
+            (sentence_id,),
+        )
+        conn.execute(
+            "DELETE FROM script_sentences WHERE sentence_id = ?",
+            (sentence_id,),
         )
 
 
@@ -837,18 +934,18 @@ def get_script_draft(conn: sqlite3.Connection, *, script_id: str) -> ScriptDraft
 
 
 def get_active_script(conn: sqlite3.Connection, *, project_id: str) -> ScriptDraft | None:
-    """Return the active script with SQLite status as source of truth.
+    """Return the active script using the versioned registry JSON path.
 
-    When ``editorial_project_state.active_script_id`` is set, that row is used.
-    JSON status is overwritten by the registry ``script_drafts.status`` column so
-    a partially published artifact cannot pretend to be ``review_requested``.
+    SQLite ``script_drafts`` is source of truth for status/identity overlays.
+    ``latest_script.json`` is never consulted here (alias only).
     """
 
     state = get_project_state(conn, project_id=project_id)
     if state is not None and state.active_script_id:
         row = conn.execute(
             """
-            SELECT script_id, status, relative_json_path FROM script_drafts
+            SELECT script_id, status, narrative_plan_id, selected_hook_id, relative_json_path
+            FROM script_drafts
             WHERE project_id = ? AND script_id = ?
               AND status IN ('draft', 'review_requested', 'user_edited', 'structure_pending')
             """,
@@ -857,7 +954,8 @@ def get_active_script(conn: sqlite3.Connection, *, project_id: str) -> ScriptDra
     else:
         row = conn.execute(
             """
-            SELECT script_id, status, relative_json_path FROM script_drafts
+            SELECT script_id, status, narrative_plan_id, selected_hook_id, relative_json_path
+            FROM script_drafts
             WHERE project_id = ?
               AND status IN ('draft', 'review_requested', 'user_edited', 'structure_pending')
             ORDER BY script_version DESC
@@ -867,65 +965,334 @@ def get_active_script(conn: sqlite3.Connection, *, project_id: str) -> ScriptDra
         ).fetchone()
     if row is None:
         return None
-    payload = _read_json_from_relative(row["relative_json_path"])
-    script = ScriptDraft.model_validate(payload["script"])
+    try:
+        payload = _read_json_from_relative(row["relative_json_path"])
+        script = ScriptDraft.model_validate(payload["script"])
+    except (OSError, InventoryArtifactError, json.JSONDecodeError, FileNotFoundError):
+        # After DB commit a missing versioned artifact is recoverable from tables.
+        payload = load_script_bundle_from_registry(conn, script_id=str(row["script_id"]))
+        if payload is None:
+            return None
+        script = ScriptDraft.model_validate(payload["script"])
+    overlays: dict = {}
     db_status = ScriptDraftStatus(str(row["status"]))
     if script.status != db_status:
-        script = script.model_copy(update={"status": db_status})
+        overlays["status"] = db_status
+    if str(script.script_id) != str(row["script_id"]):
+        overlays["script_id"] = str(row["script_id"])
+    if str(script.narrative_plan_id or "") != str(row["narrative_plan_id"] or ""):
+        overlays["narrative_plan_id"] = str(row["narrative_plan_id"] or "")
+    if str(script.selected_hook_id or "") != str(row["selected_hook_id"] or ""):
+        overlays["selected_hook_id"] = row["selected_hook_id"]
+    if overlays:
+        script = script.model_copy(update=overlays)
     return script
 
 
 def script_registry_json_status_mismatch(
     conn: sqlite3.Connection, *, script_id: str
 ) -> bool:
-    """True when JSON script.status disagrees with script_drafts.status."""
+    """True when versioned JSON disagrees with registry identity/status columns."""
 
     row = conn.execute(
-        "SELECT status, relative_json_path FROM script_drafts WHERE script_id = ?",
+        """
+        SELECT script_id, status, narrative_plan_id, selected_hook_id, relative_json_path
+        FROM script_drafts WHERE script_id = ?
+        """,
         (script_id,),
     ).fetchone()
     if row is None:
         return False
-    payload = _read_json_from_relative(row["relative_json_path"])
-    json_status = str((payload.get("script") or {}).get("status") or "")
-    return json_status != str(row["status"])
-
-
-def snapshot_script_bundle_artifacts(
-    project_root: Path, *, script_id: str
-) -> dict[str, str | None]:
-    """Capture script JSON + latest_script.json text for restore-on-failure."""
-
-    relatives = (
-        editorial_script_json_relative_path(script_id),
-        editorial_latest_script_relative_path(),
+    try:
+        payload = _read_json_from_relative(row["relative_json_path"])
+    except (OSError, InventoryArtifactError, json.JSONDecodeError, FileNotFoundError):
+        return True
+    script = payload.get("script") or {}
+    return (
+        str(script.get("status") or "") != str(row["status"])
+        or str(script.get("script_id") or "") != str(row["script_id"])
+        or str(script.get("narrative_plan_id") or "") != str(row["narrative_plan_id"] or "")
+        or str(script.get("selected_hook_id") or "") != str(row["selected_hook_id"] or "")
     )
-    snapshot: dict[str, str | None] = {}
-    for relative in relatives:
-        path = resolve_editorial_relative_path(project_root, relative)
-        if path.is_file():
-            snapshot[relative] = path.read_text(encoding="utf-8")
-        else:
-            snapshot[relative] = None
-    return snapshot
 
 
-def restore_script_bundle_artifacts(
-    project_root: Path, snapshot: dict[str, str | None]
-) -> None:
-    """Restore script JSON artifacts from :func:`snapshot_script_bundle_artifacts`."""
+def script_latest_alias_mismatch(conn: sqlite3.Connection, *, script_id: str) -> bool:
+    """True when latest_script.json alias disagrees with the versioned registry artifact.
 
-    for relative, text in snapshot.items():
-        assert_editorial_relative_path(relative)
-        path = resolve_editorial_relative_path(project_root, relative)
-        if text is None:
-            if path.is_file():
-                path.unlink()
-            continue
+    ``latest_script.json`` is never source of truth for Current-State reads.
+    """
+
+    row = conn.execute(
+        "SELECT relative_json_path FROM script_drafts WHERE script_id = ?",
+        (script_id,),
+    ).fetchone()
+    if row is None:
+        return False
+    root = _CURRENT_PROJECT_ROOT
+    if root is None:
+        return False
+    versioned = resolve_editorial_relative_path(root, str(row["relative_json_path"]))
+    latest = resolve_editorial_relative_path(root, editorial_latest_script_relative_path())
+    if not versioned.is_file():
+        return True
+    if not latest.is_file():
+        return True
+    try:
+        versioned_payload = json.loads(versioned.read_text(encoding="utf-8"))
+        latest_payload = json.loads(latest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return True
+    v_script = versioned_payload.get("script") or {}
+    l_script = latest_payload.get("script") or {}
+    for key in ("script_id", "status", "narrative_plan_id", "selected_hook_id", "content_sha256"):
+        if str(v_script.get(key) or "") != str(l_script.get(key) or ""):
+            return True
+    return False
+
+
+def stage_script_bundle_json(
+    project_root: Path,
+    *,
+    run_id: str,
+    script: ScriptDraft,
+    sentences: list[Sentence],
+    claims: list,
+    visual_beats: list[VisualBeat],
+    visual_intents: list[VisualIntent],
+) -> dict[str, Path]:
+    """Write versioned + latest payloads under editorial/temp/{run_id}/ only.
+
+    Staged files are not Current and are invisible to normal registry readers.
+    """
+
+    payload = {
+        "script": script.model_dump(mode="json"),
+        "sentences": [item.model_dump(mode="json") for item in sentences],
+        "claims": [item.model_dump(mode="json") for item in claims],
+        "visual_beats": [item.model_dump(mode="json") for item in visual_beats],
+        "visual_intents": [item.model_dump(mode="json") for item in visual_intents],
+    }
+    _assert_no_absolute_paths(payload)
+    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+    temp_root = editorial_temp_dir(project_root, run_id)
+    staged_versioned = temp_root / "scripts" / f"{script.script_id}.json"
+    staged_latest = temp_root / "latest_script.json"
+    for path in (staged_versioned, staged_latest):
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(text, encoding="utf-8")
-        tmp.replace(path)
+        # Staging name is not a current reader path (temp/{run_id}/...).
+        write_tmp = path.parent / (path.name + ".staging")
+        write_tmp.write_text(text, encoding="utf-8")
+        write_tmp.replace(path)
+    return {
+        "versioned": staged_versioned,
+        "latest": staged_latest,
+    }
+
+
+def publish_staged_script_bundle_json(
+    project_root: Path,
+    *,
+    script_id: str,
+    staged: dict[str, Path],
+) -> None:
+    """Atomically publish staged temp files via Path.replace after DB commit."""
+
+    versioned_relative = editorial_script_json_relative_path(script_id)
+    latest_relative = editorial_latest_script_relative_path()
+    assert_editorial_relative_path(versioned_relative)
+    assert_editorial_relative_path(latest_relative)
+    target_versioned = resolve_editorial_relative_path(project_root, versioned_relative)
+    target_latest = resolve_editorial_relative_path(project_root, latest_relative)
+    staged_versioned = Path(staged["versioned"])
+    staged_latest = Path(staged["latest"])
+    if not staged_versioned.is_file() or not staged_latest.is_file():
+        raise InventoryArtifactError("Staged script artifacts missing before publish.")
+    try:
+        target_versioned.parent.mkdir(parents=True, exist_ok=True)
+        target_latest.parent.mkdir(parents=True, exist_ok=True)
+        # Separate replaces: a crash between them leaves versioned current and
+        # latest as a stale alias — readers must use the registry path.
+        staged_versioned.replace(target_versioned)
+        staged_latest.replace(target_latest)
+    except OSError as exc:
+        raise InventoryArtifactError(
+            f"Editorial JSON could not be published: {exc}"
+        ) from exc
+
+
+def load_script_bundle_from_registry(
+    conn: sqlite3.Connection, *, script_id: str
+) -> dict | None:
+    """Rebuild a script bundle payload from SQLite structure tables."""
+
+    row = conn.execute(
+        "SELECT * FROM script_drafts WHERE script_id = ?",
+        (script_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    # Prefer JSON when it matches; otherwise synthesize from tables for recovery.
+    try:
+        if not script_registry_json_status_mismatch(conn, script_id=script_id):
+            payload = _read_json_from_relative(str(row["relative_json_path"]))
+            return payload
+    except (OSError, InventoryArtifactError, json.JSONDecodeError, FileNotFoundError):
+        pass
+
+    sentence_rows = conn.execute(
+        """
+        SELECT * FROM script_sentences
+        WHERE script_id = ?
+        ORDER BY ordinal ASC
+        """,
+        (script_id,),
+    ).fetchall()
+    claim_rows = conn.execute(
+        "SELECT * FROM script_claims WHERE script_id = ?",
+        (script_id,),
+    ).fetchall()
+    beat_rows = conn.execute(
+        "SELECT * FROM visual_beats WHERE script_id = ?",
+        (script_id,),
+    ).fetchall()
+    sentences = []
+    for item in sentence_rows:
+        sentences.append(
+            {
+                "sentence_id": item["sentence_id"],
+                "script_id": item["script_id"],
+                "ordinal": item["ordinal"],
+                "text": item["text"],
+                "narrative_function": item["narrative_function"],
+                "claim_ids": json.loads(item["claim_ids_json"] or "[]"),
+                "visual_beat_ids": json.loads(item["visual_beat_ids_json"] or "[]"),
+            }
+        )
+    claims = []
+    for item in claim_rows:
+        claims.append(
+            {
+                "claim_id": item["claim_id"],
+                "script_id": item["script_id"],
+                "statement": item["statement"],
+                "claim_type": item["claim_type"],
+                "confidence": item["confidence"],
+                "evidence_refs": json.loads(item["evidence_refs_json"] or "[]"),
+                "user_note": item["user_note"],
+                "status": item["status"],
+            }
+        )
+    beats = []
+    intents = []
+    for beat in beat_rows:
+        link_rows = conn.execute(
+            "SELECT sentence_id FROM visual_beat_sentences WHERE visual_beat_id = ?",
+            (beat["visual_beat_id"],),
+        ).fetchall()
+        beats.append(
+            {
+                "visual_beat_id": beat["visual_beat_id"],
+                "script_id": beat["script_id"],
+                "function": beat["function"],
+                "description": beat["description"],
+                "rhythm_function": beat["rhythm_function"],
+                "continuity_requirements": json.loads(
+                    beat["continuity_requirements_json"] or "[]"
+                ),
+                "intended_duration_hint_seconds": beat["intended_duration_hint_seconds"],
+                "sentence_ids": [str(link["sentence_id"]) for link in link_rows],
+            }
+        )
+        for intent in conn.execute(
+            "SELECT * FROM visual_intents WHERE visual_beat_id = ?",
+            (beat["visual_beat_id"],),
+        ).fetchall():
+            intents.append(
+                {
+                    "visual_intent_id": intent["visual_intent_id"],
+                    "visual_beat_id": intent["visual_beat_id"],
+                    "desired_motif": intent["desired_motif"],
+                    "action": intent["action"],
+                    "setting": intent["setting"],
+                    "geographic_requirements": intent["geographic_requirements"],
+                    "authenticity_requirements": json.loads(
+                        intent["authenticity_requirements_json"] or "[]"
+                    ),
+                    "allowed_media_kinds": json.loads(
+                        intent["allowed_media_kinds_json"] or "[]"
+                    ),
+                    "priority": intent["priority"],
+                }
+            )
+    script = {
+        "schema_version": row["response_schema_version"],
+        "script_id": row["script_id"],
+        "script_version": row["script_version"],
+        "project_id": row["project_id"],
+        "language": row["language"],
+        "full_text": "",  # filled from JSON if present; recovery uses table status
+        "sentence_order": [item["sentence_id"] for item in sentences],
+        "narrative_plan_id": row["narrative_plan_id"],
+        "selected_hook_id": row["selected_hook_id"],
+        "project_brief_id": row["project_brief_id"],
+        "brief_version": row["brief_version"],
+        "prompt_version": row["prompt_version"],
+        "gateway_version": row["gateway_version"],
+        "model_identifier": row["model_identifier"],
+        "provider": row["provider"],
+        "source_kind": row["source_kind"],
+        "supersedes_script_id": row["supersedes_script_id"],
+        "content_sha256": row["content_sha256"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+    }
+    # Preserve full_text from stale JSON when available.
+    try:
+        stale = _read_json_from_relative(str(row["relative_json_path"]))
+        script["full_text"] = str((stale.get("script") or {}).get("full_text") or "")
+    except (OSError, InventoryArtifactError, json.JSONDecodeError, FileNotFoundError):
+        script["full_text"] = " ".join(item["text"] for item in sentences)
+    return {
+        "script": script,
+        "sentences": sentences,
+        "claims": claims,
+        "visual_beats": beats,
+        "visual_intents": intents,
+    }
+
+
+def republish_script_bundle_from_registry(
+    conn: sqlite3.Connection,
+    project_root: Path,
+    *,
+    run_id: str,
+    script_id: str,
+) -> None:
+    """Deterministic artifact recovery: stage from registry, then atomic publish."""
+
+    payload = load_script_bundle_from_registry(conn, script_id=script_id)
+    if payload is None:
+        raise InventoryArtifactError("Registry script bundle missing for republish.")
+    script = ScriptDraft.model_validate(payload["script"])
+    sentences = [Sentence.model_validate(item) for item in payload.get("sentences") or []]
+    claims = [Claim.model_validate(item) for item in payload.get("claims") or []]
+    beats = [VisualBeat.model_validate(item) for item in payload.get("visual_beats") or []]
+    intents = [
+        VisualIntent.model_validate(item) for item in payload.get("visual_intents") or []
+    ]
+    staged = stage_script_bundle_json(
+        project_root,
+        run_id=run_id,
+        script=script,
+        sentences=sentences,
+        claims=claims,
+        visual_beats=beats,
+        visual_intents=intents,
+    )
+    publish_staged_script_bundle_json(
+        project_root, script_id=script_id, staged=staged
+    )
+    cleanup_editorial_temp(project_root, run_id=run_id)
 
 
 def list_script_drafts(conn: sqlite3.Connection, *, project_id: str) -> list[ScriptDraft]:
@@ -1512,9 +1879,13 @@ __all__ = [
     "save_project_brief_json",
     "save_script_bundle_json",
     "script_registry_json_status_mismatch",
+    "script_latest_alias_mismatch",
+    "stage_script_bundle_json",
+    "publish_staged_script_bundle_json",
+    "load_script_bundle_from_registry",
+    "republish_script_bundle_from_registry",
+    "ScriptStructureReplacementError",
     "set_selected_hook",
-    "snapshot_script_bundle_artifacts",
-    "restore_script_bundle_artifacts",
     "update_editorial_attempt",
     "update_editorial_run",
     "update_narrative_plan_status",

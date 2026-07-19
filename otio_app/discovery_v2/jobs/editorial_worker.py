@@ -16,6 +16,7 @@ from otio_app.discovery_v2.application.observation_review_service import (
 )
 from otio_app.discovery_v2.domain.editorial import (
     EDITORIAL_ERROR_ACTIVE_SCRIPT_POINTER_MISSING,
+    EDITORIAL_ERROR_ARTIFACT_WRITE_FAILED,
     EDITORIAL_ERROR_COVERAGE_ARTIFACT_PUBLISH_FAILED,
     EDITORIAL_ERROR_COVERAGE_AUDIT_PERSIST_FAILED,
     EDITORIAL_ERROR_COVERAGE_CURRENT_STATE_UPDATE_FAILED,
@@ -25,6 +26,7 @@ from otio_app.discovery_v2.domain.editorial import (
     EDITORIAL_ERROR_SCRIPT_IDENTITY_MISMATCH,
     EDITORIAL_ERROR_STRUCTURE_BEATS_MISSING,
     EDITORIAL_ERROR_STRUCTURE_INCOMPLETE,
+    EDITORIAL_ERROR_STRUCTURE_REPLACEMENT_CONFLICTS_WITH_COVERAGE,
     EDITORIAL_ERROR_STRUCTURE_SENTENCES_INCOMPLETE,
     EDITORIAL_ERROR_STRUCTURE_VISUAL_INTENTS_MISSING,
     EDITORIAL_RUN_SCOPE_COVERAGE,
@@ -274,8 +276,17 @@ def _process_script(conn, root: Path, run: EditorialRun) -> EditorialRun:
 
 
 def _process_structure(conn, root: Path, run: EditorialRun) -> EditorialRun:
+    from otio_app.discovery_v2.editorial_paths import editorial_script_json_relative_path
+    from otio_app.discovery_v2.persistence.inventory_artifact_store import (
+        InventoryArtifactError,
+    )
+
     config = load_text_config()
     script = _require_script(conn, run)
+    # Deterministic recovery: DB already finalized but artifacts diverge.
+    repaired = _maybe_repair_structure_artifacts(conn, root, run, script)
+    if repaired is not None:
+        return repaired
     brief = repo.get_project_brief(conn, project_brief_id=script.project_brief_id)
     narrative = repo.get_narrative_plan(conn, narrative_plan_id=script.narrative_plan_id)
     observations = _observations(root, run.project_id)
@@ -314,21 +325,27 @@ def _process_structure(conn, root: Path, run: EditorialRun) -> EditorialRun:
             structure_error,
             "Structure response is incomplete; script remains structure_pending.",
         )
-    # Canonical transition after a complete structure payload.
+    # 1) Final artifact in memory.
     finalized_script = bundle.script.model_copy(
         update={"status": ScriptDraftStatus.REVIEW_REQUESTED}
     )
-    # Atomic boundary: registry commit first; JSON publish only inside the
-    # transaction after replace succeeds. Snapshot prior artifacts so a failed
-    # publish/commit cannot leave review_requested JSON over structure_pending DB.
-    from otio_app.discovery_v2.editorial_paths import editorial_script_json_relative_path
-
     relative = editorial_script_json_relative_path(finalized_script.script_id)
-    prior_artifacts = repo.snapshot_script_bundle_artifacts(
-        root, script_id=finalized_script.script_id
+    # 2–3) Stage temp files only — not yet Current.
+    staged = repo.stage_script_bundle_json(
+        root,
+        run_id=run.run_id,
+        script=finalized_script,
+        sentences=bundle.sentences,
+        claims=bundle.claims,
+        visual_beats=bundle.visual_beats,
+        visual_intents=bundle.visual_intents,
     )
-    json_published = False
+    prior_intent_ids = repo._script_visual_intent_ids(
+        conn, script_id=finalized_script.script_id
+    )
+    new_intent_ids = {intent.visual_intent_id for intent in bundle.visual_intents}
     try:
+        # 4–5) Registry transaction + commit before any Current JSON publish.
         conn.execute("BEGIN IMMEDIATE")
         state = repo.get_project_state(conn, project_id=run.project_id)
         _assert_structure_identity(state=state, script=finalized_script)
@@ -342,52 +359,93 @@ def _process_structure(conn, root: Path, run: EditorialRun) -> EditorialRun:
                 visual_intents=bundle.visual_intents,
                 relative_json_path=relative,
             )
+        except repo.ScriptStructureReplacementError as exc:
+            raise EditorialWorkerError(exc.code, exc.message) from exc
         except sqlite3.IntegrityError as exc:
             raise EditorialWorkerError(
                 EDITORIAL_ERROR_REGISTRY_WRITE_FAILED,
                 _sanitize_stage_error(exc),
             ) from exc
-        repo.upsert_project_state(
-            conn,
-            state.model_copy(
-                update={
-                    "active_script_id": finalized_script.script_id,
-                    "active_coverage_audit_id": None,
-                    "observation_fingerprint": observation_fingerprint,
-                    "status": EditorialProjectStateStatus.ACTIVE,
-                    "updated_at": _now(),
-                }
-            ),
-        )
-        repo.save_script_bundle_json(
-            root,
-            script=finalized_script,
-            sentences=bundle.sentences,
-            claims=bundle.claims,
-            visual_beats=bundle.visual_beats,
-            visual_intents=bundle.visual_intents,
-        )
-        json_published = True
+        state_update: dict = {
+            "active_script_id": finalized_script.script_id,
+            "observation_fingerprint": observation_fingerprint,
+            "status": EditorialProjectStateStatus.ACTIVE,
+            "updated_at": _now(),
+        }
+        if prior_intent_ids != new_intent_ids:
+            # Structure content changed: use existing coverage invalidation contract.
+            repo.mark_coverage_stale_for_script(
+                conn, script_id=finalized_script.script_id
+            )
+            state_update["active_coverage_audit_id"] = None
+        repo.upsert_project_state(conn, state.model_copy(update=state_update))
         finalized_payload = _bundle_payload(bundle)
         finalized_payload["script"] = finalized_script.model_dump(mode="json")
         _complete_attempt(conn, root, attempt, finalized_payload)
         conn.commit()
     except EditorialWorkerError:
         conn.rollback()
-        if json_published:
-            repo.restore_script_bundle_artifacts(root, prior_artifacts)
+        repo.cleanup_editorial_temp(root, run_id=run.run_id)
         raise
     except Exception as exc:  # noqa: BLE001
         conn.rollback()
-        if json_published:
-            repo.restore_script_bundle_artifacts(root, prior_artifacts)
+        repo.cleanup_editorial_temp(root, run_id=run.run_id)
         raise EditorialWorkerError(
             EDITORIAL_ERROR_REGISTRY_WRITE_FAILED,
             _sanitize_stage_error(exc),
         ) from exc
+
+    # 6–7) Atomic Current publish only after successful DB commit.
+    try:
+        repo.publish_staged_script_bundle_json(
+            root,
+            script_id=finalized_script.script_id,
+            staged=staged,
+        )
+    except (InventoryArtifactError, OSError) as exc:
+        repo.cleanup_editorial_temp(root, run_id=run.run_id)
+        # DB stand is new; JSON may be partial/missing → fail-closed, retryable.
+        raise EditorialWorkerError(
+            EDITORIAL_ERROR_ARTIFACT_WRITE_FAILED,
+            _sanitize_stage_error(exc),
+        ) from exc
+    repo.cleanup_editorial_temp(root, run_id=run.run_id)
+    # 8) Run completed only after both artifacts are published.
     return _complete_run(
         conn, run.model_copy(update={"script_id": finalized_script.script_id})
     )
+
+
+def _maybe_repair_structure_artifacts(
+    conn, root: Path, run: EditorialRun, script: ScriptDraft
+) -> EditorialRun | None:
+    """Republish artifacts from registry when DB is ahead of JSON/alias."""
+
+    if script.status != ScriptDraftStatus.REVIEW_REQUESTED:
+        return None
+    versioned_mismatch = repo.script_registry_json_status_mismatch(
+        conn, script_id=script.script_id
+    )
+    latest_mismatch = repo.script_latest_alias_mismatch(
+        conn, script_id=script.script_id
+    )
+    if not versioned_mismatch and not latest_mismatch:
+        return None
+    state = repo.get_project_state(conn, project_id=run.project_id)
+    _assert_structure_identity(state=state, script=script)
+    try:
+        repo.republish_script_bundle_from_registry(
+            conn,
+            root,
+            run_id=run.run_id,
+            script_id=script.script_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise EditorialWorkerError(
+            EDITORIAL_ERROR_ARTIFACT_WRITE_FAILED,
+            _sanitize_stage_error(exc),
+        ) from exc
+    return _complete_run(conn, run.model_copy(update={"script_id": script.script_id}))
 
 
 def _process_coverage(conn, root: Path, run: EditorialRun) -> EditorialRun:

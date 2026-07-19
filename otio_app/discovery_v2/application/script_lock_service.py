@@ -421,10 +421,16 @@ def _build_preview(
         )
     ):
         blockers.append(EDITORIAL_ERROR_SCRIPT_IDENTITY_MISMATCH)
-    if script is not None and editorial_repo.script_registry_json_status_mismatch(
-        conn, script_id=script.script_id
+    if script is not None and (
+        editorial_repo.script_registry_json_status_mismatch(
+            conn, script_id=script.script_id
+        )
+        or editorial_repo.script_latest_alias_mismatch(
+            conn, script_id=script.script_id
+        )
     ):
-        # Divergent JSON (e.g. review_requested) must not mint a fingerprint.
+        # Divergent versioned JSON or stale latest alias must not mint a fingerprint.
+        # latest_script.json is never Current-State source of truth.
         blockers.append(EDITORIAL_ERROR_REGISTRY_ARTIFACT_MISMATCH)
     bundle = None if script is None else editorial_repo.get_script_bundle(conn, script_id=script.script_id)
     # Bundle fullness alone is not enough: STRUCTURE_PENDING remains a blocker.
