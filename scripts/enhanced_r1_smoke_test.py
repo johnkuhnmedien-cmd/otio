@@ -306,9 +306,11 @@ def main() -> int:
         subtitle=blocked_msg[:120],
     )
 
-    # 12-16 assign local + export
+    # 12-16 assign local + export (R2: echtes JPEG, kein Fake-Header)
+    from PIL import Image
+
     local = enhanced_work / "original_valley.jpg"
-    local.write_bytes(b"\xff\xd8\xff" + b"\x00" * 128)
+    Image.new("RGB", (32, 32), color=(30, 90, 140)).save(local, format="JPEG")
     assign_local_media_path(enhanced, "wikimedia_001", str(local))
     otio_path = export_otio_from_resolved_timeline(enhanced, basename="smoke_ok")
     payload = otio_path.read_text(encoding="utf-8")

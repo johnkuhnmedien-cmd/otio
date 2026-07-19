@@ -500,8 +500,31 @@ def test_final_plan_rejects_unknown_ids_and_resolves_deterministically(tmp_path:
     write_json(narration_timeline_path(project), timeline)
 
     # Create local asset catalog via accepted supplement (avoid inventory dependency).
+    # R2: echte kleine Videodatei (ffprobe muss Videospur erkennen).
+    import subprocess
+
     media_file = project.work_dir_path / "local_media.mp4"
-    media_file.write_bytes(b"\x00" * 64)
+    created = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:s=16x16:d=1",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-t",
+            "1",
+            str(media_file),
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if created.returncode != 0 or not media_file.is_file():
+        pytest.skip("ffmpeg konnte keine Test-Videodatei erzeugen")
     write_json(
         accepted_supplements_path(project),
         {
@@ -645,8 +668,10 @@ def test_otio_from_resolved_only(tmp_path: Path) -> None:
             "errors": [],
         },
     )
-    media_file = project.work_dir_path / "local_clip.bin"
-    media_file.write_bytes(b"\x00" * 64)
+    from PIL import Image
+
+    media_file = project.work_dir_path / "local_clip.jpg"
+    Image.new("RGB", (16, 16), color=(10, 20, 30)).save(media_file, format="JPEG")
     write_json(
         accepted_supplements_path(project),
         {
@@ -656,6 +681,7 @@ def test_otio_from_resolved_only(tmp_path: Path) -> None:
                 {
                     "candidate_id": "asset_local_1",
                     "provider": "mock",
+                    "media_type": "photo",
                     "preview_url": "https://example.com/preview.jpg",
                     "source_page": "https://example.com/source",
                     "local_media_path": str(media_file),

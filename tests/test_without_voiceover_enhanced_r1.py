@@ -333,8 +333,10 @@ def test_local_media_validation_and_otio_fail_closed(tmp_path: Path) -> None:
     assert status == STATUS_LOCAL_MEDIA_INVALID
     assert err is not None
 
+    from PIL import Image
+
     local = project.work_dir_path / "original.jpg"
-    local.write_bytes(b"\xff\xd8\xff" + b"\x00" * 32)
+    Image.new("RGB", (16, 16), color=(20, 40, 60)).save(local, format="JPEG")
     updated = assign_local_media_path(project, "stock_123", str(local))
     assert updated.media_validation_status == STATUS_EXPORT_READY
     assert updated.local_media_path == str(local)
