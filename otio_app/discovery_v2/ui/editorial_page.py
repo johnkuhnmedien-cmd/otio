@@ -6,6 +6,10 @@ import difflib
 
 import streamlit as st
 
+from otio_app.discovery_v2.application.active_script_recovery_service import (
+    diagnose_active_script_recovery,
+    recover_active_script_current_state,
+)
 from otio_app.discovery_v2.application.editorial_service import (
     get_editorial_view,
     save_project_brief,
@@ -15,6 +19,9 @@ from otio_app.discovery_v2.application.editorial_service import (
     start_narrative_run,
     start_script_run,
     start_structure_run,
+)
+from otio_app.discovery_v2.domain.editorial import (
+    EDITORIAL_ERROR_ACTIVE_SCRIPT_POINTER_MISSING,
 )
 from otio_app.discovery_v2.application.coverage_gap_service import (
     accept_gap_unresolved,
@@ -182,6 +189,7 @@ def _render_narrative(project, view) -> None:
 
 def _render_script(project, view) -> None:
     st.subheader("Script Draft, Claims, Beats, Intents")
+    _render_active_script_recovery(project)
     cols = st.columns(2)
     with cols[0]:
         if st.button(
@@ -720,6 +728,11 @@ def _render_script_lock(project, view) -> None:
             st.caption("Preview-Blocker (Fingerprint gesperrt):")
             for code in preview.blockers:
                 st.code(code)
+            if EDITORIAL_ERROR_ACTIVE_SCRIPT_POINTER_MISSING in preview.blockers:
+                st.caption(
+                    "Wiederherstellung: siehe Abschnitt Script Draft "
+                    "(„Aktuelles Script … wiederherstellen“)."
+                )
         else:
             st.caption(
                 "Fuer den aktuellen Editorial-Stand ist noch kein "
@@ -817,6 +830,44 @@ def _render_runs(view) -> None:
         use_container_width=True,
         hide_index=True,
     )
+
+
+def _render_active_script_recovery(project) -> None:
+    """Read-only diagnosis + explicit recover button for missing active_script_id."""
+
+    diagnosis = diagnose_active_script_recovery(project)
+    if not diagnosis.pointer_missing:
+        return
+    st.warning("Aktives Script fehlt.")
+    if not diagnosis.ok or diagnosis.candidate is None:
+        for code in diagnosis.blockers:
+            st.code(code)
+        if diagnosis.message:
+            st.caption(diagnosis.message)
+        return
+    candidate = diagnosis.candidate
+    st.info(
+        "Verifizierter Wiederherstellungskandidat:\n\n"
+        f"Script v{candidate.script_version}\n"
+        f"ID: {candidate.script_id}\n\n"
+        "Die Wiederherstellung setzt nur den aktuellen Script-, "
+        "Narrative- und Hook-Verweis. Inhalte werden nicht neu erzeugt."
+    )
+    label = f"Aktuelles Script v{candidate.script_version} wiederherstellen"
+    if st.button(
+        label,
+        key=f"discovery_v2_recover_active_script_{candidate.script_id}",
+    ):
+        result = recover_active_script_current_state(
+            project,
+            script_id=candidate.script_id,
+            user_confirmed=True,
+        )
+        if result.ok:
+            _flash_and_rerun(result.message, level="success")
+        else:
+            code = result.error_code or result.message or "active_script_recovery_failed"
+            _flash_and_rerun(code, level="warning")
 
 
 def _lines(value: str) -> list[str]:
