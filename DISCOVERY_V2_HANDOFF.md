@@ -132,7 +132,11 @@
   - historische Locks/Voice/Pause/Timeline bleiben erhalten
   - Decisions: D-SCRIPT-LOCK-CURRENT-005 / D-SCRIPT-LOCK-CURRENT-006
   - Tests: `tests/test_discovery_v2_script_lock_current_state_l4.py` (30 Node-IDs)
-- Aktiver Auftrag: keiner (L4 fertig; L5 gesperrt bis Freigabe)
+- **Structure-Finalization-Hotfix umgesetzt** (`aaf7696`)
+  - Root Cause: Structure-Payload behielt `structure_pending`; Worker finalisiert jetzt bei vollständiger Struktur auf `review_requested`
+  - UI „Struktur aktualisieren“ sync mit Erfolg/Fehlercode
+  - Tests: `tests/test_discovery_v2_structure_finalization.py` (12 Node-IDs)
+- Aktiver Auftrag: keiner (Hotfix fertig; L5 gesperrt bis Freigabe)
 - R1.3 Acceptance Evidence weiterhin offen
 - Fake-Alpha weiterhin bis L5 pausiert
 - Nächste erlaubte Aktion nach Freigabe: **L5 USA_v2-Realtest**
@@ -140,7 +144,7 @@
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **3219 collected / 3200 passed / 18 failed / 1 skipped**
+- Teststand: **3232 collected / 3213 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
@@ -989,6 +993,7 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 30. ~~Script-Lock L2 Effective-Lock-Resolver~~ — **umgesetzt** (`5bca917`)
 31. ~~Script-Lock L3 Editorial-/Narration-Gates~~ — **umgesetzt** (`6852e7c`)
 32. ~~Script-Lock L4 Current-State-Invalidierung~~ — **umgesetzt** (`f1ddcb2`)
+33. ~~Structure-Finalization-Hotfix~~ — **umgesetzt** (`aaf7696`)
 
 Nächste erlaubte Aktivität nach Chief-Dev-Freigabe: **Script-Lock L5 USA_v2-Realtest**.
 Fake-Alpha weiterhin bis L5 pausiert (USA_v2 Effective-Lock-/Pointer-Konsistenz).

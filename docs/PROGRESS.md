@@ -23,6 +23,8 @@
 - **L2 Effective-Lock-Resolver umgesetzt** (`5bca917`)
 - **L3 Editorial-/Narration-Gate-Integration umgesetzt** (`6852e7c`)
 - **L4 Current-State-Invalidierung umgesetzt** (`f1ddcb2`)
+- **Structure-Finalization-Hotfix umgesetzt** (`aaf7696`): vollständige Struktur → `review_requested`
+- Preview-Blocker-UI-Hotfix (`069cada`)
 - **Fake-Alpha weiterhin bis L5 pausiert**
 - **Nächste erlaubte Aktion nach Chief-Dev-Freigabe: L5 USA_v2-Realtest**
 - **L5, C3.4, C4, V4 und R1.4 gesperrt**
@@ -79,6 +81,12 @@
   `editorial_script_lock_gate_service.py`, `narration_gate_service.py`
 - Tests: L2 (34) · L3 (30) · L4 (`tests/test_discovery_v2_script_lock_current_state_l4.py`, 30 Node-IDs)
 - Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
+- **Structure-Finalization-Hotfix** (`aaf7696`)
+  - Root Cause: Structure-Runs schrieben `structure_pending` zurück (Fake + Worker)
+  - Bei vollständiger Struktur: kanonisch `review_requested` (JSON + DB)
+  - Unvollständig: fail-closed, Status bleibt `structure_pending`, sichtbarer Fehlercode
+  - UI „Struktur aktualisieren“ sync → „Struktur aktualisiert.“ oder Fehlercode
+  - Tests: `tests/test_discovery_v2_structure_finalization.py` (12 Node-IDs)
 - Nächster Schritt nach Freigabe: **L5 USA_v2-Realtest**
 - Gesperrt: L5 bis Freigabe; C3.4, C4, V4, R1.4
 - Fake-Alpha weiterhin bis L5 pausiert
@@ -158,7 +166,7 @@ Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Ga
 
 ## Teststand
 
-**3219 collected / 3200 passed / 18 failed / 1 skipped** (+30 L4-Tests)
+**3232 collected / 3213 passed / 18 failed / 1 skipped** (+12 Structure-Finalization-Tests)
 
 18 bekannte Classic/Without-VO-Fehler und 1 VFR-Skip unverändert.
 
