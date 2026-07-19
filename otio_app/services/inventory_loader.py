@@ -280,6 +280,54 @@ def materialize_folder_inventory_from_cache(
     return item, None
 
 
+def probe_folder_inventory_statuses(
+    project: Project,
+    folder_names: list[str] | None = None,
+) -> list[FolderInventorySyncStatus]:
+    """Read-only Inventar-Status für die UI — ohne Migrate/Sync/Schreiben."""
+    from otio_app.services.media_inventory_cache import list_cache_dirs_for_folder
+    from otio_app.services.media_utils import list_media_files
+
+    targets = folder_names if folder_names is not None else project.asset_subdir_names
+    statuses: list[FolderInventorySyncStatus] = []
+    for folder_name in targets:
+        out_path = get_folder_inventory_path(project.work_dir_path, folder_name)
+        folder_path = project.project_root_path / folder_name
+        try:
+            media_count = len(list_media_files(folder_path)) if folder_path.is_dir() else 0
+        except OSError:
+            media_count = 0
+        cache_count = 0
+        for cache_dir in list_cache_dirs_for_folder(project, folder_name):
+            if not cache_dir.is_dir():
+                continue
+            try:
+                cache_count += sum(1 for _ in cache_dir.glob("*.json"))
+            except OSError:
+                continue
+        if out_path.is_file():
+            statuses.append(
+                FolderInventorySyncStatus(
+                    folder=folder_name,
+                    state="exists",
+                    detail=f"Vorhanden: `{out_path.name}`",
+                    cache_files=cache_count,
+                    media_files=media_count,
+                )
+            )
+        else:
+            statuses.append(
+                FolderInventorySyncStatus(
+                    folder=folder_name,
+                    state="incomplete",
+                    detail="Kein Inventar — Button „aus Cache aufbauen“ nutzen",
+                    cache_files=cache_count,
+                    media_files=media_count,
+                )
+            )
+    return statuses
+
+
 def sync_folder_inventories_from_cache(
     project: Project,
     folder_names: list[str] | None = None,

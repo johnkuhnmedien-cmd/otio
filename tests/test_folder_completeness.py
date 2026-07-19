@@ -53,6 +53,11 @@ def test_partial_folder_is_not_complete_with_stale_inventory(
 
     state = get_folder_analysis_state(project, "Grand Canyon")
     assert state == FolderAnalysisState.PARTIAL
+    # Status-Anzeige löscht stale Inventory nicht mehr; Sync räumt auf.
+    from otio_app.services.inventory_loader import sync_folder_inventory_with_status
+
+    assert project.folder_inventory_path("Grand Canyon").is_file()
+    sync_folder_inventory_with_status(project, "Grand Canyon")
     assert not project.folder_inventory_path("Grand Canyon").is_file()
 
 

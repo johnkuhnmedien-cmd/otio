@@ -28,7 +28,10 @@ from otio_app.services.gemini_client import (
     get_default_gemini_model,
     is_gemini_configured,
 )
-from otio_app.services.inventory_loader import sync_folder_inventories_from_cache
+from otio_app.services.inventory_loader import (
+    probe_folder_inventory_statuses,
+    sync_folder_inventories_from_cache,
+)
 from otio_app.services.media_inventory_cache import (
     discover_folder_media_paths,
     list_assets_missing_successful_cache,
@@ -46,18 +49,68 @@ from otio_app.services.folder_analysis_status import (
     count_folder_states,
     format_folder_with_status,
     get_folder_analysis_state,
-    list_open_folder_names,
 )
-from otio_app.services.folder_asset_status import folder_is_fully_analyzed
 from otio_app.services.manual_folder_completion import is_manually_complete, set_manually_complete
 from otio_app.ui.analysis_jobs_ui import render_analysis_jobs_monitor
-from otio_app.services.clean_media import selected_folders_have_clean_media
 from otio_app.ui.project_context import (
+    get_workflow_status,
     render_file_paths,
     render_output_status,
     render_project_selector,
     render_workflow_progress,
 )
+
+
+def _folder_status_cache_keys(project_id: str) -> tuple[str, str]:
+    return (
+        f"wb_folder_status_cache_{project_id}",
+        f"wb_folder_status_fp_{project_id}",
+    )
+
+
+def _invalidate_folder_status_cache(project_id: str) -> None:
+    cache_key, fp_key = _folder_status_cache_keys(project_id)
+    st.session_state.pop(cache_key, None)
+    st.session_state.pop(fp_key, None)
+
+
+def _folder_status_fingerprint(project) -> str:
+    asset_job = get_asset_analysis_job_manager().get_state(project.id)
+    if asset_job is None:
+        asset_fp = "none"
+    else:
+        asset_fp = (
+            f"{asset_job.status.value}:{asset_job.done_media}:"
+            f"{asset_job.phase}:{asset_job.phase_data.get('folder', '')}"
+        )
+    return (
+        f"{asset_fp}|{len(project.asset_subdir_names)}|"
+        f"{project.inventory_dir.is_dir()}"
+    )
+
+
+def _get_folder_status_cache(project) -> dict[str, FolderAnalysisState]:
+    """Session-Cache für Ordner-Status — vermeidet Media/Cache-Scans bei jedem Klick."""
+    cache_key, fp_key = _folder_status_cache_keys(project.id)
+    fingerprint = _folder_status_fingerprint(project)
+    cached = st.session_state.get(cache_key)
+    if cached is not None and st.session_state.get(fp_key) == fingerprint:
+        # Neue Ordner nachziehen, ohne alles neu zu scannen.
+        missing = [name for name in project.asset_subdir_names if name not in cached]
+        if not missing:
+            return cached
+        for name in missing:
+            cached[name] = get_folder_analysis_state(project, name)
+        st.session_state[cache_key] = cached
+        return cached
+
+    states = {
+        name: get_folder_analysis_state(project, name)
+        for name in project.asset_subdir_names
+    }
+    st.session_state[cache_key] = states
+    st.session_state[fp_key] = fingerprint
+    return states
 
 
 def _start_voice_analysis_background(
@@ -106,10 +159,16 @@ def _render_folder_picker(project) -> list[str]:
     if folder_state_key not in st.session_state:
         st.session_state[folder_state_key] = list(project.selected_asset_subdirs)
 
+    status_cache = _get_folder_status_cache(project)
+    label_cache = {
+        name: format_folder_with_status(project, name, state=state)
+        for name, state in status_cache.items()
+    }
+
     selected_folders = st.multiselect(
         "Zu bearbeitende Asset-Ordner",
         options=project.asset_subdir_names,
-        format_func=lambda name: format_folder_with_status(project, name),
+        format_func=lambda name: label_cache.get(name, name),
         key=folder_state_key,
     )
     st.caption(
@@ -123,9 +182,13 @@ def _render_folder_picker(project) -> list[str]:
             st.rerun()
     with btn_col2:
         if st.button("Nur offene Ordner", key=f"open_{project.id}"):
-            st.session_state[folder_state_key] = list_open_folder_names(
-                project, project.asset_subdir_names
-            )
+            open_names = [
+                name
+                for name in project.asset_subdir_names
+                if status_cache.get(name)
+                in {FolderAnalysisState.PENDING, FolderAnalysisState.PARTIAL}
+            ]
+            st.session_state[folder_state_key] = open_names
             st.rerun()
     with btn_col3:
         if st.button("Gespeicherte Auswahl", key=f"reload_{project.id}"):
@@ -142,39 +205,55 @@ def _render_folder_picker(project) -> list[str]:
 
 def _render_folder_status_overview(project) -> None:
     """Statusübersicht aller Asset-Ordner (Tab „Ordner“)."""
-    counts = count_folder_states(project, project.asset_subdir_names)
+    status_cache = _get_folder_status_cache(project)
+    counts = count_folder_states(
+        project, project.asset_subdir_names, states=status_cache
+    )
     st.caption(
         f"🟢 {counts[FolderAnalysisState.COMPLETE]} fertig · "
         f"🟡 {counts[FolderAnalysisState.PARTIAL]} teilweise · "
         f"⚪ {counts[FolderAnalysisState.PENDING]} offen · "
         f"➖ {counts[FolderAnalysisState.EMPTY]} leer"
     )
+    if st.button("Status aktualisieren", key=f"refresh_folder_status_{project.id}"):
+        _invalidate_folder_status_cache(project.id)
+        st.rerun()
 
     for folder_name in project.asset_subdir_names:
-        state = get_folder_analysis_state(project, folder_name)
-        label = format_folder_with_status(project, folder_name)
+        state = status_cache.get(
+            folder_name, get_folder_analysis_state(project, folder_name)
+        )
+        label = format_folder_with_status(project, folder_name, state=state)
         col_status, col_action = st.columns([5, 1])
         with col_status:
             if state == FolderAnalysisState.COMPLETE:
                 st.success(label)
             elif state == FolderAnalysisState.PARTIAL:
                 st.warning(label)
-                gaps = list_missing_or_failed_assets(project, folder_name)
-                if gaps:
-                    with st.expander(f"Details · {folder_name}", expanded=False):
-                        for gap in gaps:
-                            if gap.state == AssetAnalysisState.MISSING:
-                                st.caption(f"⚪ `{gap.path.name}` — noch nicht analysiert")
-                            else:
-                                st.caption(
-                                    f"❌ `{gap.path.name}` — {gap.error or 'Fehler ohne Details'}"
-                                )
+                # Checkbox statt Expander: Inhalt nur bei aktivem Haken ausführen.
+                if st.checkbox(
+                    f"Details · {folder_name}",
+                    key=f"gaps_{project.id}_{folder_name}",
+                    value=False,
+                ):
+                    gaps = list_missing_or_failed_assets(project, folder_name)
+                    if not gaps:
+                        st.caption("Keine offenen Assets.")
+                    for gap in gaps:
+                        if gap.state == AssetAnalysisState.MISSING:
+                            st.caption(f"⚪ `{gap.path.name}` — noch nicht analysiert")
+                        else:
+                            st.caption(
+                                f"❌ `{gap.path.name}` — {gap.error or 'Fehler ohne Details'}"
+                            )
             elif state == FolderAnalysisState.EMPTY:
                 st.caption(label)
             else:
                 st.info(label)
         with col_action:
-            if folder_is_fully_analyzed(project, folder_name):
+            if state == FolderAnalysisState.COMPLETE and not is_manually_complete(
+                project, folder_name
+            ):
                 st.caption("✓")
             elif is_manually_complete(project, folder_name):
                 if st.button(
@@ -183,6 +262,7 @@ def _render_folder_status_overview(project) -> None:
                     help="Manuelle Markierung aufheben",
                 ):
                     set_manually_complete(project, folder_name, complete=False)
+                    _invalidate_folder_status_cache(project.id)
                     st.rerun()
             elif state in {FolderAnalysisState.PARTIAL, FolderAnalysisState.PENDING}:
                 if st.button(
@@ -191,6 +271,7 @@ def _render_folder_status_overview(project) -> None:
                     help="Manuell als fertig markieren",
                 ):
                     set_manually_complete(project, folder_name, complete=True)
+                    _invalidate_folder_status_cache(project.id)
                     st.rerun()
 
     st.caption("Rechts: ✓ = manuell als fertig markieren · ↩ = Markierung aufheben")
@@ -274,7 +355,11 @@ def _render_analysis_actions(
             "Asset-Analyse läuft im Hintergrund — Fortschritt siehe oben. "
             "Du kannst zu **③ Schnittplan** wechseln."
         )
-    if selected_folders:
+    if selected_folders and st.checkbox(
+        "Fehlende Analysen je Ordner anzeigen",
+        key=f"show_missing_assets_{project.id}",
+        value=False,
+    ):
         for folder_name in selected_folders:
             missing = list_assets_missing_successful_cache(project, folder_name)
             total = len(discover_folder_media_paths(project, folder_name))
@@ -285,6 +370,8 @@ def _render_analysis_actions(
                     f"**{folder_name}:** {len(missing)} von {total} Assets ohne Analyse-JSON "
                     f"({labels}{suffix})"
                 )
+            else:
+                st.caption(f"**{folder_name}:** alle Assets analysiert ({total})")
     if st.button(
         "📁 Ausgewählte Ordner analysieren",
         key=f"assets_{project.id}",
@@ -399,44 +486,64 @@ def render_project_workbench() -> None:
         or getattr(project, "is_without_voiceover", False)
     )
 
-    render_workflow_progress(project, current_step="analysis")
-    if not selected_folders_have_clean_media(project):
+    render_workflow_progress(project, current_step="analysis", lightweight=True)
+    if not get_workflow_status(project, lightweight=True).clean_media_done:
         st.warning(
             "**Clean Media noch nicht abgeschlossen** — unter **⓪ Clean Media** Medien "
             "prüfen und ggf. transcodieren, bevor du analysierst."
         )
     render_analysis_jobs_monitor(project)
-    created_inventories, sync_statuses = sync_folder_inventories_from_cache(project)
-    if created_inventories:
-        st.success(
-            "Ordner-Inventare erstellt: "
-            + ", ".join(f"`{name}`" for name in created_inventories)
-        )
-    with st.expander("Inventar-Sync (Diagnose)", expanded=not project.inventory_dir.is_dir()):
+    diag_key = f"inv_sync_diag_{project.id}"
+    with st.expander(
+        "Inventar-Sync (Diagnose)",
+        expanded=not project.inventory_dir.is_dir(),
+    ):
         st.caption(f"Zielordner: `{project.inventory_dir}`")
         st.caption(f"Cache: `{project.work_dir_path / 'cache' / 'inventory'}`")
         if project.inventory_path.is_file():
             st.caption(f"Legacy: `{project.inventory_path}` wird beim Sync aufgeteilt.")
-        if not sync_statuses:
-            st.write("Noch keine Asset-Ordner gescannt.")
-        for status in sync_statuses:
-            label = (
-                f"**{status.folder}** — {status.detail} "
-                f"({status.cache_files} Cache / {status.media_files} Medien)"
+        st.caption(
+            "Inventar-Sync läuft nicht mehr bei jedem Klick — nur auf Button-Druck."
+        )
+        sync_statuses = st.session_state.get(diag_key)
+        if sync_statuses is None:
+            st.write(
+                "Noch nicht geprüft. „Status prüfen“ oder „aus Cache aufbauen“ klicken."
             )
-            if status.state == "created":
-                st.success(label)
-            elif status.state == "exists":
-                st.info(label)
-            else:
-                st.warning(label)
-        if st.button("Inventar jetzt aus Cache aufbauen", key=f"sync_inv_{project.id}"):
-            created, refreshed = sync_folder_inventories_from_cache(project)
-            if created:
-                st.success("Erstellt: " + ", ".join(created))
-            else:
-                st.warning("Keine neuen Ordner-Inventare erstellt — siehe Status oben.")
-            st.rerun()
+        elif not sync_statuses:
+            st.write("Noch keine Asset-Ordner gescannt.")
+        else:
+            for status in sync_statuses:
+                label = (
+                    f"**{status.folder}** — {status.detail} "
+                    f"({status.cache_files} Cache / {status.media_files} Medien)"
+                )
+                if status.state == "created":
+                    st.success(label)
+                elif status.state == "exists":
+                    st.info(label)
+                else:
+                    st.warning(label)
+        btn_probe, btn_sync = st.columns(2)
+        with btn_probe:
+            if st.button("Status prüfen", key=f"probe_inv_{project.id}"):
+                st.session_state[diag_key] = probe_folder_inventory_statuses(project)
+                st.rerun()
+        with btn_sync:
+            if st.button(
+                "Inventar jetzt aus Cache aufbauen",
+                key=f"sync_inv_{project.id}",
+            ):
+                created, refreshed = sync_folder_inventories_from_cache(project)
+                st.session_state[diag_key] = refreshed
+                _invalidate_folder_status_cache(project.id)
+                if created:
+                    st.success("Erstellt: " + ", ".join(created))
+                else:
+                    st.warning(
+                        "Keine neuen Ordner-Inventare erstellt — siehe Status oben."
+                    )
+                st.rerun()
     render_output_status(project)
     st.caption(
         f"Status: {project.status.value} · "

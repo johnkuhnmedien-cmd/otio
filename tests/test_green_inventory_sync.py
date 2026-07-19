@@ -38,7 +38,10 @@ def test_inventory_json_only_when_folder_green(temp_project_layout: dict[str, Pa
         media_cache_path(project, "Grand Canyon", folder / "clip2.mp4"),
         AssetMediaAnalysis(path=str(folder / "clip2.mp4"), description="OK 2"),
     )
+    # Status-Anzeige ist read-only — Inventory erst per Sync.
     assert get_folder_analysis_state(project, "Grand Canyon") == FolderAnalysisState.COMPLETE
+    assert not project.folder_inventory_path("Grand Canyon").is_file()
+    assert sync_folder_inventory_with_status(project, "Grand Canyon") is True
     assert project.folder_inventory_path("Grand Canyon").is_file()
 
     save_cached_media(
@@ -46,7 +49,7 @@ def test_inventory_json_only_when_folder_green(temp_project_layout: dict[str, Pa
         AssetMediaAnalysis(path=str(folder / "clip2.mp4"), description=""),
     )
     assert get_folder_analysis_state(project, "Grand Canyon") == FolderAnalysisState.PARTIAL
-    assert not project.folder_inventory_path("Grand Canyon").is_file()
+    assert project.folder_inventory_path("Grand Canyon").is_file()
 
     sync_folder_inventory_with_status(project, "Grand Canyon")
     assert not project.folder_inventory_path("Grand Canyon").is_file()
