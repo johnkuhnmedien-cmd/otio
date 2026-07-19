@@ -53,9 +53,11 @@ from otio_app.discovery_v2.application.script_lock_current_state_service import 
     resolve_effective_current_script_lock,
 )
 from otio_app.discovery_v2.application.script_lock_service import (
+    build_current_script_lock_preview,
     create_script_lock,
     preview_script_lock,
 )
+from otio_app.discovery_v2.persistence import editorial_repository as editorial_repo
 from otio_app.discovery_v2.application.voice_generation_service import (
     get_narration_view,
     start_voice_generation_run,
@@ -363,6 +365,37 @@ def test_l3_new_lock_button_enabled_when_current_preview_and_confirmations_are_c
     assert lock_buttons[0].get("disabled") is False
 
 
+def test_l3_stale_editorial_state_is_visible_checklist_blocker(
+    tmp_path: Path, temp_db_path: Path, monkeypatch
+) -> None:
+    """editorial_state_stale must appear in checklist/UI — not only as missing fingerprint."""
+
+    from otio_app.discovery_v2.domain.editorial import EditorialProjectStateStatus
+
+    project, _lock = build_lock_ready_matching_project(tmp_path, temp_db_path)
+    conn = get_registry_connection(project.project_root_path)
+    try:
+        state = editorial_repo.get_project_state(conn, project_id=project.id)
+        assert state is not None
+        # Keep coverage/script pointers so only editorial_state_stale is the hidden gap.
+        editorial_repo.upsert_project_state(
+            conn,
+            state.model_copy(update={"status": EditorialProjectStateStatus.STALE}),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    preview = build_current_script_lock_preview(project)
+    assert preview.ok is False
+    assert preview.lock_fingerprint is None
+    assert "editorial_state_stale" in preview.blockers
+    assert "Editorial-Stand aktiv (nicht stale)" in preview.blocking_requirements
+    fake_st = _render_editorial_script_lock(project, monkeypatch, checkbox_value=True)
+    joined = "\n".join(fake_st.messages)
+    assert "editorial_state_stale" in joined
+    assert "Bestaetigungs-Kaestchen allein reichen nicht" in joined
+
+
 def test_l3_new_lock_button_disabled_when_current_preview_is_unavailable(
     tmp_path: Path, temp_db_path: Path, monkeypatch
 ) -> None:
@@ -377,7 +410,11 @@ def test_l3_new_lock_button_disabled_when_current_preview_is_unavailable(
         project, monkeypatch, checkbox_value=True
     )
     joined = "\n".join(fake_st.messages)
-    assert "Script-Lock-Fingerprint verfuegbar" in joined
+    assert (
+        "Kein Current Preview Fingerprint" in joined
+        or "Script-Lock-Fingerprint verfuegbar" in joined
+    )
+    assert "Bestaetigungs-Kaestchen allein reichen nicht" in joined
     lock_buttons = [
         call
         for call in fake_st.button_calls

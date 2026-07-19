@@ -708,10 +708,19 @@ def _render_script_lock(project, view) -> None:
                     st.code(key)
         st.session_state["discovery_v2_lock_displayed_fingerprint"] = displayed_fingerprint
     else:
-        st.caption(
-            "Fuer den aktuellen Editorial-Stand ist noch kein "
-            "Script-Lock-Fingerprint verfuegbar."
+        st.warning(
+            "Kein Current Preview Fingerprint — der Lock-Button bleibt deaktiviert. "
+            "Bestaetigungs-Kaestchen allein reichen nicht."
         )
+        if preview.blockers:
+            st.caption("Preview-Blocker (Fingerprint gesperrt):")
+            for code in preview.blockers:
+                st.code(code)
+        else:
+            st.caption(
+                "Fuer den aktuellen Editorial-Stand ist noch kein "
+                "Script-Lock-Fingerprint verfuegbar."
+            )
         st.session_state.pop("discovery_v2_lock_displayed_fingerprint", None)
 
     if provisional.historical_locks:
@@ -758,6 +767,15 @@ def _render_script_lock(project, view) -> None:
             "Fingerprint ist sichtbar. Lock-Button bleibt deaktiviert, "
             "bis Stand und alle Risiken bestaetigt sind."
         )
+    if (
+        displayed_fingerprint
+        and gate.confirmations_complete
+        and not gate.can_create_lock
+        and gate.blocking_reason_codes
+    ):
+        st.caption("Lock weiterhin blockiert:")
+        for code in gate.blocking_reason_codes:
+            st.code(code)
     if st.button(
         "Skript fuer Voice und Timing sperren",
         key="discovery_v2_create_script_lock",

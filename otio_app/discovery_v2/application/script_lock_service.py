@@ -398,13 +398,19 @@ def _build_preview(
         blockers.append("narrative_plan_missing")
     if state is None or not state.selected_hook_id:
         blockers.append("selected_hook_missing")
+    editorial_state_ok = (
+        state is not None and state.status != EditorialProjectStateStatus.STALE
+    )
     if script is None:
         blockers.append("script_missing")
     elif script.status == ScriptDraftStatus.STRUCTURE_PENDING:
         blockers.append("script_structure_pending")
     bundle = None if script is None else editorial_repo.get_script_bundle(conn, script_id=script.script_id)
-    structure_ok = _bundle_has_full_structure(bundle)
-    if not structure_ok:
+    # Bundle fullness alone is not enough: STRUCTURE_PENDING remains a blocker.
+    structure_ok = _bundle_has_full_structure(bundle) and not (
+        script is not None and script.status == ScriptDraftStatus.STRUCTURE_PENDING
+    )
+    if not _bundle_has_full_structure(bundle):
         blockers.append("script_structure_incomplete")
     coverage = None
     if state is not None and state.active_coverage_audit_id:
@@ -472,6 +478,7 @@ def _build_preview(
     blockers.extend(claim_blockers)
     # Active runs are checked in create_script_lock; preview focuses on data readiness.
     details = _requirement_details(
+        editorial_state_ok=editorial_state_ok,
         brief_ok=brief is not None,
         narrative_ok=bool(state and state.active_narrative_plan_id),
         hook_ok=bool(state and state.selected_hook_id),
@@ -598,6 +605,7 @@ def _confirmation_blockers(
 
 def _requirement_details(
     *,
+    editorial_state_ok: bool,
     brief_ok: bool,
     narrative_ok: bool,
     hook_ok: bool,
@@ -614,6 +622,11 @@ def _requirement_details(
         else f"{open_gap_count} Coverage Gaps noch offen"
     )
     return [
+        ScriptLockRequirement(
+            "editorial_state",
+            "Editorial-Stand aktiv (nicht stale)",
+            editorial_state_ok,
+        ),
         ScriptLockRequirement("project_brief", "aktueller Brief", brief_ok),
         ScriptLockRequirement("narrative_plan", "aktueller Narrative Plan", narrative_ok),
         ScriptLockRequirement("selected_hook", "ausgewählter Hook", hook_ok),
