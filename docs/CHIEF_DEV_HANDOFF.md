@@ -40,7 +40,7 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - Chief-Dev Alpha-Produktstand: **APPROVED**
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - Registry-Schema: **20**
-- Teststand: **3266 collected / 3247 passed / 18 failed / 1 skipped**
+- Teststand: **3271 collected / 3252 passed / 18 failed / 1 skipped**
 - Provider: Fake-only · Adobe: UNKNOWN · NLE: lokaler OTIO-Serialize/Reparse
 - Decisions: D-R1.1-001…004 · D-R1.2-001…003 · D-R1.3-001…004 ·
   D-VE-REWORK-001…006 · D-COVERAGE-STABILITY-001…008 ·

@@ -192,7 +192,7 @@ Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Ga
 
 ## Teststand
 
-**3266 collected / 3247 passed / 18 failed / 1 skipped** (+14 Active-Script-Recovery-Tests; Baseline-18 unverändert)
+**3271 collected / 3252 passed / 18 failed / 1 skipped** (+5 Projekt-öffnen-Routing-Tests; Baseline-18 unverändert)
 
 18 bekannte Classic/Without-VO-Fehler und 1 VFR-Skip unverändert.
 
