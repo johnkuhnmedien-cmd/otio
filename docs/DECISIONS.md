@@ -678,3 +678,37 @@ rückwirkend rekonstruiert oder wiederverwendet.
 Sie benötigen genau eine normale Neuberechnung. Danach gelten die regulären
 C2-Reuse-Verträge (gespeicherter Fingerprint + Identität → Completed Reuse;
 äquivalenter aktiver Run → Active Reuse).
+
+---
+
+## D-COVERAGE-STABILITY-005 — Gap Instance ID ≠ Semantic Gap Identity
+
+**Entscheidung:** Coverage Gap Instance ID und Semantic Gap Identity sind getrennte
+Verträge.
+
+`gap_id` bleibt die konkrete auditgebundene UUID4-Instanz.
+Der versionierte Semantic Gap Key (`coverage-gap-semantic-key-v1`) beschreibt
+ausschließlich die kanonische fachliche Problemidentität und ersetzt `gap_id`
+nicht.
+
+---
+
+## D-COVERAGE-STABILITY-006 — Semantic Gap Key ohne technische/dynamische Felder
+
+**Entscheidung:** `coverage-gap-semantic-key-v1` enthält weder Audit-, Run-,
+Gap- oder Visual-Intent-IDs noch Timestamps, Pfade, Observation Fingerprints,
+Kandidaten, Nutzerentscheidungen, Gap-Status, Eskalationsstufe,
+`accepted_unresolved`, Lock-Fingerprints oder den Canonical Coverage Input
+Fingerprint als Ganzes.
+
+Der Key wird zentral aus `project_id` + Visual-Intent-Semantik
+(`desired_motif`, `action`, `setting`, geografische/Authentizitätsanforderungen,
+allowed media kinds) + Coverage-Problem-Signatur (`coverage_level`,
+`missing_properties`, `risk_codes`) gebildet: Pydantic-validiertes Modell →
+`model_dump(mode="json")` → sortierungsstabiles JSON → SHA-256 →
+`coverage-gap-semantic-key-v1:<64 hex>`.
+
+`priority` ist bewusst kein Identitätsbestandteil (nur späteres Match-/Safety-
+Metadatum). Gleicher Key bei unterschiedlichem kanonischem Payload ist
+`coverage_gap_semantic_key_collision` (fail-closed).
+

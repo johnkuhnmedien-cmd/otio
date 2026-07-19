@@ -105,22 +105,24 @@
 - Offener UI-Befund: Visual-Intent-ID wird teilweise als Gap-ID beschriftet (nicht C3)
 - Schema: **20**
 - C3-Plan: `docs/source_plans/ALPHA_COVERAGE_STABILITY_C3_GAP_IDENTITY_CARRY_FORWARD_PLAN.md`
-- **C3.1 Root-Cause-Fixtures abgeschlossen** (`36367d2`) — nur Tests/Fixtures
-  - Root Cause bestätigt: `new_gap_id()` → `uuid4()`; Materialize supersedet + mintet neue IDs
-  - Events / Candidate Decisions / `accepted_unresolved` bleiben an Gap A
-  - Script-Lock: `gap_id:risk_code` und Fingerprint ändern sich; alte Bestätigung gilt nicht
-  - keine persistierte Semantic Identity / Predecessor-Beziehung
-  - Match-Shapes: 1:1, 1:N, N:1, kein Vorgänger
-  - Tests: `tests/test_discovery_v2_coverage_stability_c3_1.py` (12 Node-IDs)
-  - Fixtures: `tests/fixtures/coverage_stability_c3_1.py`
-- Aktiver Auftrag: keiner (C3.1 fertig; C3.2 gesperrt bis Freigabe)
+- **C3.1 Root-Cause-Fixtures abgeschlossen** (`36367d2`)
+- **C3.2 Semantic Gap Identity umgesetzt** (`47cfafd`)
+  - Schema: `coverage-gap-semantic-key-v1`
+  - Domain/App: `coverage_gap_identity.py` / `coverage_gap_identity_service.py`
+  - `gap_id` = UUID4-Instanz; Semantic Key getrennt; nicht persistiert; nicht in Materialize
+  - Key: project_id + Intent-Semantik + coverage_level/missing/risk_codes
+  - ausgeschlossen: IDs, Status, Decisions, Fingerprints, Pfade, `priority`
+  - Kollision: `coverage_gap_semantic_key_collision`
+  - Decisions: D-COVERAGE-STABILITY-005 / 006
+  - Tests: `tests/test_discovery_v2_coverage_stability_c3_2.py` (30 Node-IDs)
+- Aktiver Auftrag: keiner (C3.2 fertig; C3.3 gesperrt bis Freigabe)
 - R1.3 Acceptance Evidence weiterhin offen
-- Nächste erlaubte Aktion nach Freigabe: **C3.2 Semantic Gap Identity**
-- **C3.3–C3.4, C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
+- Nächste erlaubte Aktion nach Freigabe: **C3.3 Match Engine**
+- **C3.4, C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **3055 collected / 3036 passed / 18 failed / 1 skipped**
+- Teststand: **3085 collected / 3066 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
