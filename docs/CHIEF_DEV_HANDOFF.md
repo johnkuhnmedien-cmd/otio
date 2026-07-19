@@ -33,7 +33,7 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 - Repository / Worktree: Discovery-V2-Integration (`cursor/discovery-v2-integration`)
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Aktueller HEAD: Script-Lock Current-State Consistency Plan ()
+- Aktueller HEAD: Script-Lock Current-State Consistency Plan (`6a33d0f`)
 - V1–V3 Visual Edit: `70ffe6e` / `0fba7bd` / `f1b982a`
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
 - R1.1–R1.3 abgeschlossen · Script-Lock Realtest **erfolgreich**
@@ -48,7 +48,7 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - **Coverage Stability C2 vollständig akzeptiert** (C1+C2+C2-R1 + USA_v2)
 - **C3.1 / C3.2 abgeschlossen** (`36367d2` / `47cfafd`)
 - **C3.3 Exact Match Engine umgesetzt** (`7ba6468`)
-- **Script-Lock Current-State Consistency Plan dokumentiert** ()
+- **Script-Lock Current-State Consistency Plan dokumentiert** (`6a33d0f`)
   - Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
   - USA_v2: Editorial zeigt historischen Lock als Current; Narration blockiert korrekt
   - Root Cause: UI=`list_script_locks[0]` vs Gates=`get_effective_script_lock`; stale Narration-Pointer
