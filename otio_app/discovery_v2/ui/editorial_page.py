@@ -23,10 +23,10 @@ from otio_app.discovery_v2.application.coverage_gap_service import (
     evaluate_gap_accept_unresolved_eligibility,
     materialize_gaps_from_current_coverage,
 )
-from otio_app.discovery_v2.application.script_lock_service import (
-    create_script_lock,
-    preview_script_lock,
+from otio_app.discovery_v2.application.editorial_script_lock_gate_service import (
+    resolve_editorial_script_lock_gate,
 )
+from otio_app.discovery_v2.application.script_lock_service import create_script_lock
 from otio_app.discovery_v2.application.supplementation_service import (
     create_graphic_plan,
     get_supplementation_view,
@@ -664,17 +664,14 @@ def _render_script_lock(project, view) -> None:
     )
 
     st.subheader("Script Lock")
-    supp_view = get_supplementation_view(project)
-    if supp_view.script_locks:
-        latest = supp_view.script_locks[0]
-        st.caption(
-            f"Aktueller Lock: {latest.lock_id} / {latest.status.value} / "
-            f"Fingerprint {latest.lock_fingerprint[:12]}"
-        )
     st.write(
         "Lock ist synchron und manuell. Die Checkbox ist absichtlich nicht vorselektiert."
     )
-    preview = preview_script_lock(project)
+    supp_view = get_supplementation_view(project)
+    # Collect confirmation widget values first, then resolve the gate model.
+    # Placeholder gate without confirmations drives required risk keys / preview.
+    provisional = resolve_editorial_script_lock_gate(project)
+    preview = provisional.current_preview
     if preview.fulfilled_requirements:
         st.markdown("**Erfuellt**")
         for item in preview.fulfilled_requirements:
@@ -683,29 +680,56 @@ def _render_script_lock(project, view) -> None:
         st.markdown("**Script Lock noch nicht moeglich**")
         for item in preview.blocking_requirements:
             st.write(f"✗ {item}")
-    displayed_fingerprint = preview.lock_fingerprint
+
+    if provisional.has_effective_current_lock and provisional.effective_lock is not None:
+        lock = provisional.effective_lock
+        st.markdown("**Aktueller wirksamer Script Lock**")
+        st.write(f"Lock-ID: {lock.lock_id}")
+        st.write(f"Script: {lock.script_id} / Version {lock.script_version}")
+        st.write(f"Coverage Audit: {lock.coverage_audit_id}")
+        st.write(f"Status: {lock.status.value}")
+        st.markdown("**Effective Lock Fingerprint**")
+        st.code(f"{lock.lock_fingerprint[:12]}…")
+    else:
+        st.warning("Kein wirksamer Script Lock vorhanden.")
+
+    displayed_fingerprint = provisional.current_fingerprint
     if displayed_fingerprint:
-        st.markdown("**Aktueller Lock-Stand**")
-        st.code(f"Fingerprint: {preview.fingerprint_display or displayed_fingerprint[:12]}…")
+        st.markdown("**Current Preview Fingerprint**")
+        st.code(
+            f"Fingerprint: {preview.fingerprint_display or displayed_fingerprint[:12]}…"
+        )
         with st.expander("Technische Details anzeigen", expanded=False):
             st.code(displayed_fingerprint)
-            detail_risks = list(getattr(preview, "accepted_open_risks", None) or [])
+            detail_risks = list(provisional.required_risk_keys)
             if detail_risks:
                 st.caption("Kanonische Risikenschluessel (gap_id:risk_code)")
                 for key in detail_risks:
                     st.code(key)
         st.session_state["discovery_v2_lock_displayed_fingerprint"] = displayed_fingerprint
     else:
-        st.caption("Kein Fingerprint verfuegbar, solange fachliche Blocker offen sind.")
+        st.caption(
+            "Fuer den aktuellen Editorial-Stand ist noch kein "
+            "Script-Lock-Fingerprint verfuegbar."
+        )
         st.session_state.pop("discovery_v2_lock_displayed_fingerprint", None)
+
+    if provisional.historical_locks:
+        st.markdown("**Historische Script Locks**")
+        for hist in provisional.historical_locks:
+            st.caption(
+                f"Historischer Lock: {hist.lock_id} / {hist.status.value} / "
+                f"Script v{hist.script_version} / "
+                f"Fingerprint {hist.lock_fingerprint[:12]}"
+            )
+
     confirmed = _checkbox(
         "Ich bestaetige genau diesen aktuellen Stand.",
         value=False,
         key="discovery_v2_lock_confirmed",
     )
     risk_confirmations: dict[str, bool] = {}
-    required_risk_keys = list(getattr(preview, "accepted_open_risks", None) or [])
-    confirmation_blockers = list(getattr(preview, "confirmation_blockers", None) or [])
+    required_risk_keys = list(provisional.required_risk_keys)
     gaps_by_id = {gap.gap_id: gap for gap in supp_view.gaps}
     for key in required_risk_keys:
         gap_id, risk_code = key.split(":", 1)
@@ -723,19 +747,21 @@ def _render_script_lock(project, view) -> None:
         )
         # Ensure the widget key stays bound to the canonical gap_id identity.
         _ = make_lock_risk_confirmation_key(gap_id, risk_code)
-    if confirmation_blockers and displayed_fingerprint:
+
+    gate = resolve_editorial_script_lock_gate(
+        project,
+        user_confirmed=bool(confirmed),
+        risk_confirmations=risk_confirmations,
+    )
+    if gate.required_risk_keys and displayed_fingerprint and not gate.confirmations_complete:
         st.caption(
             "Fingerprint ist sichtbar. Lock-Button bleibt deaktiviert, "
             "bis Stand und alle Risiken bestaetigt sind."
         )
-    risks_ok = (not required_risk_keys) or all(
-        risk_confirmations.get(key, False) for key in required_risk_keys
-    )
-    can_click = bool(displayed_fingerprint and confirmed and risks_ok)
     if st.button(
         "Skript fuer Voice und Timing sperren",
         key="discovery_v2_create_script_lock",
-        disabled=not can_click,
+        disabled=not gate.can_create_lock,
     ):
         result = create_script_lock(
             project,

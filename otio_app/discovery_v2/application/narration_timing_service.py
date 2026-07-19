@@ -85,6 +85,34 @@ def start_narration_timing_run(project: Project, *, sync: bool = True) -> Narrat
                 "Completed Voice-Run fehlt.",
                 error_code=NARRATION_ERROR_INPUT_STALE,
             )
+        pause_plan = repo.get_pause_plan(conn, pause_plan_id=state.current_pause_plan_id)
+        if pause_plan is None:
+            return NarrationStartResult(
+                False,
+                "Pause-Plan fehlt.",
+                error_code=NARRATION_ERROR_INPUT_STALE,
+            )
+        # L3: Voice and Pause must both bind to the effective current lock.
+        if voice_run.script_lock_id != lock_input.lock.lock_id:
+            from otio_app.discovery_v2.domain.script_lock_current_state import (
+                NARRATION_VOICE_NOT_CURRENT,
+            )
+
+            return NarrationStartResult(
+                False,
+                "Voice-Run gehoert nicht zum wirksamen Script Lock.",
+                error_code=NARRATION_VOICE_NOT_CURRENT,
+            )
+        if pause_plan.script_lock_id != lock_input.lock.lock_id:
+            from otio_app.discovery_v2.domain.script_lock_current_state import (
+                NARRATION_PAUSE_PLAN_NOT_CURRENT,
+            )
+
+            return NarrationStartResult(
+                False,
+                "Pause-Plan gehoert nicht zum wirksamen Script Lock.",
+                error_code=NARRATION_PAUSE_PLAN_NOT_CURRENT,
+            )
         timebase = timebase_from_fps(float(project.fps or 25.0))
         fingerprint = timing_input_fingerprint(
             script_lock_id=lock_input.lock.lock_id,

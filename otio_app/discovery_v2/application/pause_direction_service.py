@@ -75,6 +75,17 @@ def start_pause_direction_run(project: Project, *, sync: bool = False) -> Narrat
                 "Completed Voice-Run fehlt.",
                 error_code=NARRATION_ERROR_INPUT_STALE,
             )
+        # L3: historical voice for another lock is never current for Pause.
+        if voice_run.script_lock_id != lock_input.lock.lock_id:
+            from otio_app.discovery_v2.domain.script_lock_current_state import (
+                NARRATION_VOICE_NOT_CURRENT,
+            )
+
+            return NarrationStartResult(
+                False,
+                "Voice-Run gehoert nicht zum wirksamen Script Lock.",
+                error_code=NARRATION_VOICE_NOT_CURRENT,
+            )
         segments = repo.list_voice_segments_for_run(conn, run_id=voice_run.run_id)
         if len(segments) < len(lock_input.sentences):
             return NarrationStartResult(

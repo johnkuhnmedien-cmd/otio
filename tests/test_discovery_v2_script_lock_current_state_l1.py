@@ -207,9 +207,15 @@ def _render_narration_page(project, monkeypatch):
     return fake_st
 
 
-def test_l1_editorial_displays_historical_locked_row_as_current_without_current_pointer(
-    tmp_path: Path, temp_db_path: Path, monkeypatch
+def test_l1_fixture_a_has_historical_locked_row_without_editorial_pointer(
+    tmp_path: Path, temp_db_path: Path
 ) -> None:
+    """L1 Fixture-Nachweis (pre-L3 UI deadlock surface retained as data proof).
+
+    Replaces UI expectation that list_script_locks[0] was shown as
+    ``Aktueller Lock``. Product contract for Current/History is asserted in L3.
+    """
+
     fx = build_fixture_a_usa_v2_deadlock(
         tmp_path, temp_db_path, with_pause_and_timeline=False
     )
@@ -222,60 +228,46 @@ def test_l1_editorial_displays_historical_locked_row_as_current_without_current_
     supp = get_supplementation_view(fx.project)
     assert supp.script_locks
     assert supp.script_locks[0].lock_id == fx.lock_a.lock_id
-
-    fake_st = _render_editorial_script_lock(fx.project, monkeypatch)
-    captions = [m for m in fake_st.messages if m.startswith("Aktueller Lock:")]
-    assert captions, fake_st.messages
-    assert fx.lock_a.lock_id in captions[0]
-    assert fx.lock_fingerprint_a[:12] in captions[0]
-    # Historical row treated as Current despite NULL editorial pointer.
     assert read_editorial_current_script_lock_id(fx.project) is None
+    # Historical locked row exists while Editorial Current pointer is NULL.
+    assert fx.lock_a.lock_id == locks[0].lock_id
 
 
-def test_l1_historical_lock_disables_new_lock_button_despite_no_effective_current_lock(
-    tmp_path: Path, temp_db_path: Path, monkeypatch
+def test_l1_fixture_a_preview_ready_with_unchecked_confirmations_surface(
+    tmp_path: Path, temp_db_path: Path
 ) -> None:
+    """L1 Fixture-Nachweis: Script B preview ready; confirmations not yet set.
+
+    Pre-L3 UI showed a disabled New-Lock button beside a false Current caption.
+    L3 product behaviour for the button is covered separately.
+    """
+
     fx = build_fixture_a_usa_v2_deadlock(
         tmp_path, temp_db_path, with_pause_and_timeline=False
     )
     assert fx.editorial_current_script_lock_id is None
-    # Do not call get_effective here — Editorial UI path never does.
-    fake_st = _render_editorial_script_lock(
-        fx.project, monkeypatch, checkbox_value=False
-    )
-    lock_buttons = [
-        call
-        for call in fake_st.button_calls
-        if call["label"] == "Skript fuer Voice und Timing sperren"
-    ]
-    assert lock_buttons
-    assert lock_buttons[0].get("disabled") is True
-    assert any(m.startswith("Aktueller Lock:") for m in fake_st.messages)
+    preview = preview_script_lock(fx.project)
+    assert preview.ok and preview.lock_fingerprint
+    assert preview.lock_fingerprint == fx.preview_fingerprint_b
+    assert preview.lock_fingerprint != fx.lock_fingerprint_a
 
 
-def test_l1_editorial_can_show_historical_fingerprint_with_current_preview_warning(
-    tmp_path: Path, temp_db_path: Path, monkeypatch
+def test_l1_fixture_a_historical_fingerprint_differs_from_current_preview(
+    tmp_path: Path, temp_db_path: Path
 ) -> None:
+    """L1 Fixture-Nachweis: historical lock FP ≠ current preview FP.
+
+    Pre-L3 UI mixed both under Current labels; L3 separates the labels.
+    """
+
     fx = build_fixture_a_usa_v2_deadlock(
         tmp_path, temp_db_path, with_pause_and_timeline=False
     )
     preview = preview_script_lock(fx.project)
-    fake_st = _render_editorial_script_lock(fx.project, monkeypatch)
-    joined = "\n".join(fake_st.messages)
-    assert "Aktueller Lock:" in joined
-    assert fx.lock_fingerprint_a[:12] in joined
-    # Equivalent contradiction with lock-ready Script B: historical FP in
-    # "Aktueller Lock" caption vs different current preview FP under
-    # "Aktueller Lock-Stand" (USA_v2 also shows preview warning when blocked).
-    if preview.lock_fingerprint:
-        assert "Aktueller Lock-Stand" in joined
-        assert preview.lock_fingerprint != fx.lock_fingerprint_a
-        assert (
-            (preview.fingerprint_display or preview.lock_fingerprint[:12]) in joined
-            or preview.lock_fingerprint[:12] in joined
-        )
-    else:
-        assert "Kein Fingerprint verfuegbar" in joined
+    assert preview.lock_fingerprint
+    assert fx.lock_fingerprint_a
+    assert preview.lock_fingerprint != fx.lock_fingerprint_a
+    assert fx.preview_fingerprint_b == preview.lock_fingerprint
 
 
 def test_l1_narration_rejects_stale_lock_for_new_script_and_coverage_state(
@@ -338,8 +330,11 @@ def test_l1_old_pause_and_timeline_artifacts_are_not_current_for_new_editorial_s
     assert any(p.pause_plan_id == fx.pause_plan_id for p in view.pause_plans)
     assert any(t.timeline_id == fx.timeline_id for t in view.timelines)
     assert view.effective_lock is None
-    # get_narration_view already ran get_effective_script_lock → Lock A invalidated.
-    # Subsequent starts see no locked row (missing) or invalidated — never current.
+    # L3: get_narration_view uses the read-only resolver — Lock A stays locked.
+    assert (
+        read_script_lock(fx.project, lock_id=fx.lock_a.lock_id).status
+        == ScriptLockStatus.LOCKED
+    )
     blocked_pause = start_pause_direction_run(fx.project, sync=True)
     assert not blocked_pause.started
     assert blocked_pause.error_code in {

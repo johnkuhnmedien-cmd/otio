@@ -21,6 +21,9 @@ from otio_app.discovery_v2.application.inventory_service import (
     require_discovery_project,
 )
 from otio_app.discovery_v2.application.script_lock_service import get_effective_script_lock
+from otio_app.discovery_v2.domain.script_lock_current_state import (
+    NARRATION_SCRIPT_LOCK_STALE,
+)
 from otio_app.discovery_v2.domain.narration import (
     MAX_SEGMENTS,
     MAX_TEXT_LEN,
@@ -111,6 +114,9 @@ class NarrationView:
     can_start_voice: bool = False
     can_start_pause: bool = False
     can_resolve_timing: bool = False
+    narration_pointer_state: str | None = None
+    blocking_reason_codes: tuple[str, ...] = ()
+    gate_diagnostics: list[str] = field(default_factory=list)
 
 
 def _now() -> datetime:
@@ -118,49 +124,63 @@ def _now() -> datetime:
 
 
 def get_narration_view(project: Project) -> NarrationView:
+    """Build Narration UI view from the read-only L3 Narration gate."""
+
     try:
         project = require_discovery_project(project)
     except InventoryServiceError as exc:
         return NarrationView(ok=False, message=str(exc))
+    # Lazy import: narration_gate_service must not create an import cycle.
+    from otio_app.discovery_v2.application.narration_gate_service import (
+        resolve_narration_gate_state,
+    )
+
     try:
+        gate = resolve_narration_gate_state(project)
         conn = repo.open_narration_registry(project.project_root_path)
     except RegistryDatabaseError as exc:
         return NarrationView(ok=False, message=str(exc))
     try:
-        active = repo.find_active_narration_run(conn, project_id=project.id)
-        state = repo.get_project_state(conn, project_id=project.id)
+        state = gate.state
         profile = (
             None
             if state is None or state.current_voice_profile_id is None
             else repo.get_voice_profile(conn, voice_profile_id=state.current_voice_profile_id)
         ) or repo.get_active_voice_profile(conn, project_id=project.id)
         runs = repo.list_voice_runs(conn, project_id=project.id)
+        # Segments only for the gate's current (effective-lock-bound) voice run.
         segments = (
             []
-            if state is None or state.current_voice_run_id is None
-            else repo.list_voice_segments_for_run(conn, run_id=state.current_voice_run_id)
+            if gate.current_voice_run is None
+            else repo.list_voice_segments_for_run(
+                conn, run_id=gate.current_voice_run.run_id
+            )
         )
         pause_plans = repo.list_pause_plans(conn, project_id=project.id)
         timelines = repo.list_timelines(conn, project_id=project.id)
     finally:
         conn.close()
-    effective = get_effective_script_lock(project)
-    can_voice = effective.ok and active is None
-    can_pause = bool(state and state.current_voice_run_id) and active is None
-    can_timing = bool(state and state.current_pause_plan_id) and active is None
+    effective_lock = (
+        gate.effective_lock_resolution.effective_lock
+        if gate.effective_lock_resolution.is_effective
+        else None
+    )
     return NarrationView(
         ok=True,
         state=state,
-        effective_lock=effective.lock,
+        effective_lock=effective_lock,
         voice_profile=profile,
-        active_run=active,
+        active_run=gate.active_run,
         voice_runs=runs,
         voice_segments=segments,
         pause_plans=pause_plans,
         timelines=timelines,
-        can_start_voice=can_voice,
-        can_start_pause=can_pause,
-        can_resolve_timing=can_timing,
+        can_start_voice=gate.can_start_voice,
+        can_start_pause=gate.can_start_pause_direction,
+        can_resolve_timing=gate.can_resolve_timing,
+        narration_pointer_state=gate.narration_pointer_state,
+        blocking_reason_codes=gate.blocking_reason_codes,
+        gate_diagnostics=list(gate.diagnostics),
     )
 
 
@@ -325,6 +345,23 @@ def start_voice_generation_run(project: Project, *, sync: bool = False) -> Narra
         lock_input = require_effective_lock_for_narration(project)
     except NarrationServiceError as exc:
         return NarrationStartResult(False, str(exc), error_code=exc.code)
+    # L3: stale narration pointer must not unlock Voice (cleanup is L4).
+    from otio_app.discovery_v2.application.narration_gate_service import (
+        resolve_narration_gate_state,
+    )
+
+    gate = resolve_narration_gate_state(project)
+    if not gate.can_start_voice:
+        code = (
+            NARRATION_SCRIPT_LOCK_STALE
+            if NARRATION_SCRIPT_LOCK_STALE in gate.blocking_reason_codes
+            else (gate.blocking_reason_codes[0] if gate.blocking_reason_codes else NARRATION_ERROR_SCRIPT_LOCK_MISSING)
+        )
+        return NarrationStartResult(
+            False,
+            "Voice-Start durch Narration-Gate blockiert.",
+            error_code=code,
+        )
     profile = ensure_default_voice_profile(project)
     conn = repo.open_narration_registry(project.project_root_path)
     try:

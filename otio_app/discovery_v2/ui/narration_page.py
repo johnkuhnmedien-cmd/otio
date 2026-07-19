@@ -44,7 +44,10 @@ def _render_lock(view) -> None:
     lock = view.effective_lock
     if lock is None:
         st.warning("Kein wirksamer Script Lock vorhanden.")
+        if view.narration_pointer_state == "stale":
+            st.caption("Narration-Pointer ist stale und ersetzt keinen Effective Lock.")
         return
+    st.markdown("**Aktueller wirksamer Script Lock**")
     st.write(
         {
             "lock_id": lock.lock_id,
@@ -54,6 +57,10 @@ def _render_lock(view) -> None:
             "status": lock.status.value,
         }
     )
+    if view.narration_pointer_state == "stale":
+        st.warning("Narration-Pointer ist stale (Voice-Start fail-closed bis L4).")
+    elif view.narration_pointer_state == "missing":
+        st.caption("Narration-Pointer fehlt — Voice-Start fachlich zulaessig.")
 
 
 def _render_voice(project, view) -> None:

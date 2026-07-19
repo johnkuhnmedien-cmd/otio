@@ -21,6 +21,14 @@ SCRIPT_LOCK_FINGERPRINT_UNAVAILABLE = "script_lock_fingerprint_unavailable"
 SCRIPT_LOCK_FINGERPRINT_MISMATCH = "script_lock_fingerprint_mismatch"
 SCRIPT_LOCK_RISK_CONFIRMATION_MISMATCH = "script_lock_risk_confirmation_mismatch"
 NARRATION_SCRIPT_LOCK_STALE = "narration_script_lock_stale"
+NARRATION_SCRIPT_LOCK_MISSING = "narration_script_lock_missing"
+NARRATION_VOICE_NOT_CURRENT = "narration_voice_not_current"
+NARRATION_PAUSE_PLAN_NOT_CURRENT = "narration_pause_plan_not_current"
+NARRATION_TIMELINE_NOT_CURRENT = "narration_timeline_not_current"
+
+NARRATION_POINTER_MISSING = "missing"
+NARRATION_POINTER_MATCHING = "matching"
+NARRATION_POINTER_STALE = "stale"
 
 
 @dataclass(frozen=True)
@@ -43,7 +51,14 @@ class EffectiveScriptLockResolution:
 
 __all__ = [
     "EffectiveScriptLockResolution",
+    "NARRATION_PAUSE_PLAN_NOT_CURRENT",
+    "NARRATION_POINTER_MATCHING",
+    "NARRATION_POINTER_MISSING",
+    "NARRATION_POINTER_STALE",
+    "NARRATION_SCRIPT_LOCK_MISSING",
     "NARRATION_SCRIPT_LOCK_STALE",
+    "NARRATION_TIMELINE_NOT_CURRENT",
+    "NARRATION_VOICE_NOT_CURRENT",
     "SCRIPT_LOCK_CURRENT_POINTER_MISSING",
     "SCRIPT_LOCK_CURRENT_POINTER_STALE",
     "SCRIPT_LOCK_CURRENT_STATE_SCHEMA_VERSION",

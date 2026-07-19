@@ -132,14 +132,27 @@ def test_editorial_ui_renders_without_starting_jobs_or_gateway(tmp_path, monkeyp
     )
     monkeypatch.setattr(
         editorial_page,
-        "preview_script_lock",
-        lambda p: SimpleNamespace(
-            ok=False,
-            lock_fingerprint=None,
-            fingerprint_display=None,
-            fulfilled_requirements=[],
-            blocking_requirements=["aktuelles Script"],
-            blockers=["script_missing"],
+        "resolve_editorial_script_lock_gate",
+        lambda p, **kwargs: SimpleNamespace(
+            resolution=None,
+            has_effective_current_lock=False,
+            effective_lock=None,
+            historical_locks=(),
+            current_preview=SimpleNamespace(
+                ok=False,
+                lock_fingerprint=None,
+                fingerprint_display=None,
+                fulfilled_requirements=[],
+                blocking_requirements=["aktuelles Script"],
+                blockers=["script_missing"],
+            ),
+            current_fingerprint=None,
+            required_risk_keys=(),
+            confirmed_risk_keys=(),
+            confirmations_complete=False,
+            can_create_lock=False,
+            blocking_reason_codes=(),
+            diagnostics=[],
         ),
     )
     for name in (
