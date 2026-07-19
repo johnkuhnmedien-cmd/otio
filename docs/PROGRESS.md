@@ -2,7 +2,7 @@
 
 ## Aktueller Stand
 
-**Script-Lock Current-State L4 Invalidierung umgesetzt — Schema weiterhin 20.**
+**Structure-Persistence-Atomicity-Hotfix umgesetzt — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
 - Script-Lock Realtest: **erfolgreich**
