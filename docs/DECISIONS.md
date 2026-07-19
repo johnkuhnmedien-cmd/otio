@@ -711,4 +711,3 @@ allowed media kinds) + Coverage-Problem-Signatur (`coverage_level`,
 `priority` ist bewusst kein Identitätsbestandteil (nur späteres Match-/Safety-
 Metadatum). Gleicher Key bei unterschiedlichem kanonischem Payload ist
 `coverage_gap_semantic_key_collision` (fail-closed).
-

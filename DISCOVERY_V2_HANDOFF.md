@@ -963,11 +963,13 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 22. ~~Coverage Idempotency / Carry-Forward Plan~~ — dokumentiert
 23. ~~Coverage Stability C1 Fixtures~~ — **abgeschlossen** (`94b6e0f`)
 24. ~~Coverage Stability C2 Canonical Reuse~~ — **abgeschlossen** (`7e8db48`)
+25. ~~Coverage Stability C3.1 Root-Cause-Fixtures~~ — **abgeschlossen** (`36367d2`)
+26. ~~Coverage Stability C3.2 Semantic Gap Identity~~ — **abgeschlossen** (`47cfafd`)
 
-Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C3**.
+Nächste erlaubte Aktivität nach Freigabe: **Coverage Stability C3.3 Match Engine**.
 Script-Lock Realtest erfolgreich. C2 behebt äquivalenten Coverage-Reset.
-**C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
-Keine neue Produktphase freigegeben. Manueller Reuse-Test erforderlich.
+**C3.4, C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
+Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`
 (untergeordnet gegenüber Regeln, DECISIONS, MASTER_PLAN, ALPHA_SCOPE, …).
