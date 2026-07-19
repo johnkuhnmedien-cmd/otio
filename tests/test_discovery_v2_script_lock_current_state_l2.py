@@ -16,6 +16,7 @@ from fixtures.script_lock_current_state_l1 import (
     build_fixture_b_latest_locked_fallback,
     build_fixture_c_stale_narration_after_invalidation,
     build_lock_ready_matching_project,
+    restamp_editorial_current_script_lock_pointer,
     read_editorial_current_script_lock_id,
     read_latest_locked_script_lock,
     read_narration_current_script_lock_id,
@@ -316,7 +317,8 @@ def test_l2_script_id_mismatch_is_not_effective(
     assert start_coverage_run(project, sync=True).started
     _resolve_all_gaps_locally(project)
     _decide_all_claims(project)
-    # Keep pointer on Lock A (script edit preserves pointer).
+    # L4 edit clears pointer — restamp for read-only resolver mismatch proof.
+    restamp_editorial_current_script_lock_pointer(project, lock_id=lock.lock_id)
     assert read_editorial_current_script_lock_id(project) == lock.lock_id
     resolution = resolve_effective_current_script_lock(project)
     assert resolution.is_effective is False
@@ -337,6 +339,7 @@ def test_l2_script_version_mismatch_is_not_effective(
     view2 = get_editorial_view(project)
     assert view2.script is not None
     assert view2.script.script_version == 2
+    restamp_editorial_current_script_lock_pointer(project, lock_id=lock.lock_id)
     assert read_editorial_current_script_lock_id(project) == lock.lock_id
     resolution = resolve_effective_current_script_lock(project)
     assert resolution.is_effective is False
@@ -394,6 +397,8 @@ def test_l2_observation_fingerprint_mismatch_is_not_effective(
         decision="rejected",
         reason_code="l2_obs_mismatch",
     ).ok
+    # L4 clears pointer on observation change — restamp for mismatch proof.
+    restamp_editorial_current_script_lock_pointer(project, lock_id=lock.lock_id)
     resolution = resolve_effective_current_script_lock(project)
     assert resolution.is_effective is False
     assert resolution.reason_code in {
@@ -417,7 +422,8 @@ def test_l2_lock_fingerprint_mismatch_is_not_effective(
     assert save_user_script_edit(
         project, full_text=view.script.full_text + " Fingerprint drift."
     ).ok
-    # Pointer still on old lock; identity/fingerprint fail-closed.
+    # L4 clears pointer on edit — restamp for fingerprint fail-closed proof.
+    restamp_editorial_current_script_lock_pointer(project, lock_id=lock.lock_id)
     resolution = resolve_effective_current_script_lock(project)
     assert resolution.is_effective is False
     assert resolution.reason_code in {
@@ -442,6 +448,8 @@ def test_l2_unavailable_current_fingerprint_fails_closed(
         decision="rejected",
         reason_code="l2_fp_unavailable",
     ).ok
+    # L4 clears pointer on observation change — restamp for fingerprint proof.
+    restamp_editorial_current_script_lock_pointer(project, lock_id=lock.lock_id)
     # Rejecting observations makes coverage stale → preview fingerprint unavailable
     # after identity observation mismatch or as fingerprint_unavailable.
     resolution = resolve_effective_current_script_lock(project)
@@ -503,6 +511,8 @@ def test_l2_new_gap_id_with_same_risk_code_requires_new_confirmation(
     new_gap_id, new_code = risk_key_b.split(":", 1)
     assert new_gap_id != old_gap_id
     assert new_code == risk_code or True  # same risk family when fixture yields it
+    # L4 clears pointer during editorial advance — restamp Lock A for risk proof.
+    restamp_editorial_current_script_lock_pointer(project, lock_id=lock.lock_id)
     assert read_editorial_current_script_lock_id(project) == lock.lock_id
 
     preview = build_current_script_lock_preview(project)
@@ -544,14 +554,16 @@ def test_l2_exact_current_lock_is_effective(
 def test_l2_stale_narration_pointer_does_not_replace_editorial_pointer(
     tmp_path: Path, temp_db_path: Path
 ) -> None:
+    """After L4 invalidation both pointers are NULL; Narration never substitutes."""
+
     fx = build_fixture_c_stale_narration_after_invalidation(tmp_path, temp_db_path)
     assert fx.editorial_current_script_lock_id is None
-    assert fx.narration_current_script_lock_id == fx.lock.lock_id
+    assert fx.narration_current_script_lock_id is None
     resolution = resolve_effective_current_script_lock(fx.project)
     assert resolution.is_effective is False
     assert resolution.reason_code == SCRIPT_LOCK_CURRENT_POINTER_MISSING
-    assert NARRATION_SCRIPT_LOCK_STALE in resolution.diagnostics
-    assert resolution.narration_current_script_lock_id == fx.lock.lock_id
+    assert resolution.effective_lock is None
+    assert resolution.narration_current_script_lock_id is None
 
 
 def test_l2_narration_pointer_mismatch_is_reported_without_mutation(
@@ -679,6 +691,7 @@ def test_l2_smoke_c_script_version_changed(
     view2 = get_editorial_view(project)
     assert view2.script is not None
     assert view2.script.script_version == 2
+    restamp_editorial_current_script_lock_pointer(project, lock_id=lock.lock_id)
     resolution = resolve_effective_current_script_lock(project)
     assert resolution.is_effective is False
     assert resolution.reason_code == SCRIPT_LOCK_EDITORIAL_STATE_MISMATCH

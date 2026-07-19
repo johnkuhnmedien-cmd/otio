@@ -307,7 +307,8 @@ def test_l1_voice_remains_blocked_when_only_stale_narration_pointer_exists(
     # No editorial pointer → gate reports missing (not invalidated-via-fallback).
     assert blocked.error_code == NARRATION_ERROR_SCRIPT_LOCK_MISSING
     assert fake_voice_call_count() == calls_before
-    assert read_narration_current_script_lock_id(fx.project) == fx.lock_a.lock_id
+    # L4: get_effective_script_lock clears stale Narration current on miss.
+    assert read_narration_current_script_lock_id(fx.project) is None
     assert (
         read_script_lock(fx.project, lock_id=fx.lock_a.lock_id).status
         == ScriptLockStatus.LOCKED
@@ -347,8 +348,8 @@ def test_l1_old_pause_and_timeline_artifacts_are_not_current_for_new_editorial_s
         NARRATION_ERROR_SCRIPT_LOCK_INVALIDATED,
         NARRATION_ERROR_SCRIPT_LOCK_MISSING,
     }
-    # Narration pointer may still reference historical Lock A; artifacts are not current.
-    assert read_narration_current_script_lock_id(fx.project) == fx.lock_a.lock_id
+    # L4: start paths clear stale Narration current via get_effective invalidation.
+    assert read_narration_current_script_lock_id(fx.project) is None
 
 
 def test_l1_missing_editorial_pointer_uses_or_attempts_latest_locked_fallback(
@@ -390,14 +391,16 @@ def test_l1_missing_editorial_pointer_uses_or_attempts_latest_locked_fallback(
     assert still_latest.status.value == "locked"
 
 
-def test_l1_invalidation_clears_editorial_pointer_but_leaves_narration_pointer_stale(
+def test_l1_invalidation_clears_editorial_and_narration_current_pointers(
     tmp_path: Path, temp_db_path: Path
 ) -> None:
+    """L4 product contract: Fixture C now clears both Current pointers."""
+
     fx = build_fixture_c_stale_narration_after_invalidation(tmp_path, temp_db_path)
     assert fx.editorial_current_script_lock_id is None
-    assert fx.narration_current_script_lock_id == fx.lock.lock_id
+    assert fx.narration_current_script_lock_id is None
     assert fx.lock_status_after == ScriptLockStatus.INVALIDATED.value
-    assert "get_effective_script_lock" in fx.invalidation_path
+    assert "apply_script_lock_context_invalidation" in fx.invalidation_path
     assert "save_user_script_edit" in fx.invalidation_path
 
 
@@ -440,10 +443,14 @@ def test_l1_lock_identity_mismatch_matrix_is_fail_closed_in_narration_gate(
         after = current_observation_fingerprint(project)
         assert after != before
         assert after != lock.observation_set_fingerprint
-        # Pointer still set → gate invalidates mismatched pointed lock.
+        # L4 observation change clears Editorial current and invalidates Lock.
+        assert read_editorial_current_script_lock_id(project) is None
+        assert read_script_lock(project, lock_id=lock.lock_id).status == (
+            ScriptLockStatus.INVALIDATED
+        )
         effective = get_effective_script_lock(project)
         assert effective.ok is False
-        assert effective.error_code == "script_lock_invalidated"
+        assert effective.error_code in {None, "script_lock_invalidated"}
 
     with pytest.raises(NarrationServiceError) as excinfo:
         require_effective_lock_for_narration(fx.project)

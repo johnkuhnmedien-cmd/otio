@@ -271,7 +271,8 @@ def test_crash_window_abort_after_all_wavs_before_voice_completion_state(
     try:
         state = narration_repo.get_project_state(conn, project_id=project.id)
         assert state is not None
-        assert state.current_voice_run_id is None
+        # L4 binds Narration current_voice_run_id atomically at Voice start.
+        assert state.current_voice_run_id == run.run_id
     finally:
         conn.close()
     assert not narration_temp_dir(project.project_root_path, run.run_id).exists()

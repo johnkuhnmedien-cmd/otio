@@ -279,6 +279,79 @@ def clear_editorial_current_script_lock_pointer(project) -> None:
         conn.close()
 
 
+def _restamp_stale_narration_pointer(
+    project,
+    *,
+    script_lock_id: str,
+    voice_run_id: str | None = None,
+    pause_plan_id: str | None = None,
+    timeline_id: str | None = None,
+) -> None:
+    """Fixture-only: restore a stale Narration current pointer after L4 clears."""
+
+    from otio_app.discovery_v2.domain.narration import NarrationProjectState
+
+    conn = narration_repo.open_narration_registry(project.project_root_path)
+    try:
+        state = narration_repo.get_project_state(conn, project_id=project.id)
+        if state is None:
+            state = NarrationProjectState(project_id=project.id, updated_at=_now())
+        narration_repo.upsert_project_state(
+            conn,
+            state.model_copy(
+                update={
+                    "current_script_lock_id": script_lock_id,
+                    "current_voice_run_id": voice_run_id or state.current_voice_run_id,
+                    "current_pause_plan_id": pause_plan_id or state.current_pause_plan_id,
+                    "current_timeline_id": timeline_id or state.current_timeline_id,
+                    "updated_at": _now(),
+                }
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def restamp_editorial_current_script_lock_pointer(
+    project,
+    *,
+    lock_id: str,
+    restore_locked_status: bool = True,
+) -> None:
+    """Test-only: restore Editorial current pointer for read-only mismatch proofs.
+
+    L4 fachlich invalidates the pointed lock (status → invalidated) and clears
+    the pointer. Resolver identity/fingerprint proofs need the pointer back on
+    a ``locked`` row; restore that status when ``restore_locked_status`` is set.
+    """
+
+    conn = editorial_repo.open_editorial_registry(project.project_root_path)
+    try:
+        state = editorial_repo.get_project_state(conn, project_id=project.id)
+        assert state is not None
+        editorial_repo.upsert_project_state(
+            conn,
+            state.model_copy(
+                update={
+                    "current_script_lock_id": lock_id,
+                    "updated_at": _now(),
+                }
+            ),
+        )
+        if restore_locked_status:
+            lock = supp_repo.get_script_lock(conn, lock_id=lock_id)
+            if lock is not None and lock.status != ScriptLockStatus.LOCKED:
+                supp_repo.update_script_lock_status(
+                    conn,
+                    lock_id=lock_id,
+                    status=ScriptLockStatus.LOCKED,
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def read_editorial_current_script_lock_id(project) -> str | None:
     conn = editorial_repo.open_editorial_registry(project.project_root_path)
     try:
@@ -669,9 +742,12 @@ def build_fixture_a_usa_v2_deadlock(
         timeline_id = narr_state.current_timeline_id
         assert pause_plan_id and timeline_id
 
-    # Advance editorial stand without calling get_effective_script_lock first
-    # (that would invalidate the locked row). Pointer may still reference Lock A
-    # until we clear it explicitly — matching USA_v2 editorial wipe / NULL.
+    # Simulate USA_v2 editorial wipe BEFORE fachliche advance: clear Editorial
+    # pointer without invalidating Lock A. L4 select_hook/structure/coverage then
+    # clear Narration current state but do not mutate a non-current locked row.
+    clear_editorial_current_script_lock_pointer(project)
+    assert read_editorial_current_script_lock_id(project) is None
+
     _advance_to_script_b_with_new_narrative(project)
     _resolve_all_gaps_locally(project)
     _decide_all_claims(project)
@@ -696,7 +772,6 @@ def build_fixture_a_usa_v2_deadlock(
     assert preview_b.ok and preview_b.lock_fingerprint, preview_b.blockers
     assert preview_b.lock_fingerprint != lock_fingerprint_a
 
-    clear_editorial_current_script_lock_pointer(project)
     editorial_pointer = read_editorial_current_script_lock_id(project)
     assert editorial_pointer is None
 
@@ -704,14 +779,23 @@ def build_fixture_a_usa_v2_deadlock(
     assert lock_row is not None
     assert lock_row.status == ScriptLockStatus.LOCKED
 
+    # Re-stamp stale Narration pointer for L1/L2/L3 deadlock proofs. L4 product
+    # paths clear this; the stamp models the pre-L4 / wipe residue.
+    _restamp_stale_narration_pointer(
+        project,
+        script_lock_id=lock_a.lock_id,
+        voice_run_id=voice_run_id,
+        pause_plan_id=pause_plan_id,
+        timeline_id=timeline_id,
+    )
     narration_pointer = read_narration_current_script_lock_id(project)
     assert narration_pointer == lock_a.lock_id
 
     notes = [
         "editorial_current_script_lock_id=NULL",
         "historical lock status remains locked",
-        "narration_current_script_lock_id still points at Lock A",
-        "UI list_script_locks[0] will present Lock A as Aktueller Lock",
+        "narration_current_script_lock_id restamped to Lock A for deadlock proofs",
+        "L4 product paths clear Narration current; restamp is fixture-only",
         "get_effective_script_lock not called during fixture build",
     ]
     return FixtureADeadlock(
@@ -771,7 +855,7 @@ def build_fixture_c_stale_narration_after_invalidation(
     tmp_path: Path,
     temp_db_path: Path,
 ) -> FixtureCStaleNarrationPointer:
-    """Normal invalidation clears editorial pointer; narration pointer stays."""
+    """L4: fachliche Invalidierung leert Editorial- und Narration-Current."""
 
     project = _script_coverage_project(tmp_path, temp_db_path)
     assert_schema_20(project)
@@ -790,23 +874,19 @@ def build_fixture_c_stale_narration_after_invalidation(
     )
     assert edited.ok
 
-    # Canonical invalidation control flow used by Narration/Voice gates today.
     invalidation_path = (
-        "save_user_script_edit → get_effective_script_lock "
-        "(fingerprint mismatch → status=invalidated, "
-        "editorial current_script_lock_id=NULL; "
-        "narration current_script_lock_id untouched)"
+        "save_user_script_edit → apply_script_lock_context_invalidation "
+        "(lock invalidated; editorial + narration current pointers NULL)"
     )
-    effective = get_effective_script_lock(project)
-    assert effective.ok is False
-    assert effective.error_code == "script_lock_invalidated"
-
     editorial_pointer = read_editorial_current_script_lock_id(project)
     narration_pointer = read_narration_current_script_lock_id(project)
+    narr_state = read_narration_state(project)
     lock_after = read_script_lock(project, lock_id=lock.lock_id)
     assert lock_after is not None
     assert editorial_pointer is None
-    assert narration_pointer == lock.lock_id
+    assert narration_pointer is None
+    assert narr_state is not None
+    assert narr_state.current_voice_run_id is None
     assert lock_after.status == ScriptLockStatus.INVALIDATED
 
     return FixtureCStaleNarrationPointer(

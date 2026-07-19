@@ -317,8 +317,20 @@ def test_smoke_g_new_script_version_invalidates_existing_lock_without_voice(
     assert view.script is not None
     edited = save_user_script_edit(project, full_text=view.script.full_text + " Neuer Satz.")
     assert edited.ok
+    # L4: script edit atomically invalidates lock and clears Editorial current.
+    conn = repo.open_supplementation_registry(project.project_root_path)
+    try:
+        lock_after = repo.get_script_lock(conn, lock_id=locked.lock.lock_id)
+        state_after = editorial_repo.get_project_state(conn, project_id=project.id)
+    finally:
+        conn.close()
+    assert lock_after is not None
+    assert lock_after.status == ScriptLockStatus.INVALIDATED
+    assert state_after is not None
+    assert state_after.current_script_lock_id is None
     effective = get_effective_script_lock(project)
-    assert effective.error_code == "script_lock_invalidated"
+    assert effective.ok is False
+    assert effective.error_code in {None, "script_lock_invalidated", "script_lock_missing"}
     assert not hasattr(locked.lock, "voice_id")
     assert start_structure_run(project, sync=True).started
 
@@ -383,7 +395,12 @@ def test_historical_script_lock_never_becomes_effective_for_narration(
     calls_before_blocked = fake_voice_call_count()
     blocked_voice = start_voice_generation_run(project, sync=True)
     assert not blocked_voice.started
-    assert blocked_voice.error_code == "script_lock_invalidated"
+    # Non-current / superseded pointer is fail-closed; L4 may clear current first.
+    assert blocked_voice.error_code in {
+        "script_lock_invalidated",
+        "script_lock_missing",
+        "script_lock_status_not_effective",
+    }
     assert fake_voice_call_count() == calls_before_blocked
 
     conn = repo.open_supplementation_registry(project.project_root_path)
@@ -399,7 +416,15 @@ def test_historical_script_lock_never_becomes_effective_for_narration(
 
     blocked_pause = start_pause_direction_run(project, sync=True)
     assert not blocked_pause.started
-    assert blocked_pause.error_code == "script_lock_invalidated"
+    assert blocked_pause.error_code in {
+        "script_lock_invalidated",
+        "script_lock_missing",
+        "script_lock_status_not_effective",
+    }
     blocked_timing = start_narration_timing_run(project, sync=True)
     assert not blocked_timing.started
-    assert blocked_timing.error_code == "script_lock_invalidated"
+    assert blocked_timing.error_code in {
+        "script_lock_invalidated",
+        "script_lock_missing",
+        "script_lock_status_not_effective",
+    }

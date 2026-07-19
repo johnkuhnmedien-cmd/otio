@@ -383,6 +383,16 @@ def accept_gap_unresolved(
                 created_at=_now(),
             ),
         )
+        from otio_app.discovery_v2.application.script_lock_current_state_mutation_service import (
+            apply_script_lock_context_invalidation,
+        )
+
+        apply_script_lock_context_invalidation(
+            conn,
+            project_id=project.id,
+            reason_code="risk_confirmation_changed",
+            source_operation_id="accept_gap_unresolved",
+        )
         conn.commit()
     except Exception as exc:  # noqa: BLE001
         conn.rollback()

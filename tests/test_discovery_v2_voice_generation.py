@@ -34,6 +34,7 @@ from otio_app.discovery_v2.application.voice_generation_service import (
 )
 from otio_app.discovery_v2.domain.narration import (
     NARRATION_ERROR_SCRIPT_LOCK_INVALIDATED,
+    NARRATION_ERROR_SCRIPT_LOCK_MISSING,
     NARRATION_ERROR_VOICE_GENERATION_FAILED,
     VOICE_CHANNELS,
     VOICE_SAMPLE_RATE_HZ,
@@ -243,7 +244,13 @@ def test_smoke_d_invalidated_lock_blocks_voice_without_audio(
     assert save_user_script_edit(project, full_text=view.script.full_text + " Neuer Satz.").ok
     result = start_voice_generation_run(project, sync=True)
     assert not result.started
-    assert result.error_code in {NARRATION_ERROR_SCRIPT_LOCK_INVALIDATED, "script_lock_invalidated"}
+    # L4 clears Editorial current on edit → missing or invalidated both block Voice.
+    assert result.error_code in {
+        NARRATION_ERROR_SCRIPT_LOCK_INVALIDATED,
+        "script_lock_invalidated",
+        "script_lock_missing",
+        NARRATION_ERROR_SCRIPT_LOCK_MISSING,
+    }
     assert fake_voice_call_count() == 0
 
 

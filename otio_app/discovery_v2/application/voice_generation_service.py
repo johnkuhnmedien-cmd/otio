@@ -395,7 +395,20 @@ def start_voice_generation_run(project: Project, *, sync: bool = False) -> Narra
             sentence_count=len(lock_input.sentences),
             created_at=_now(),
         )
+        conn.execute("BEGIN IMMEDIATE")
         repo.insert_voice_run(conn, run)
+        # L4: successful voice start binds Narration current to Effective Lock.
+        from otio_app.discovery_v2.application.script_lock_current_state_mutation_service import (
+            bind_narration_voice_start_on_conn,
+        )
+
+        bind_narration_voice_start_on_conn(
+            conn,
+            project_id=project.id,
+            script_lock_id=lock_input.lock.lock_id,
+            voice_profile_id=profile.voice_profile_id,
+            voice_run_id=run.run_id,
+        )
         conn.commit()
     except Exception as exc:  # noqa: BLE001
         conn.rollback()

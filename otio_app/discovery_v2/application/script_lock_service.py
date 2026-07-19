@@ -302,6 +302,12 @@ def create_script_lock(
             }
         )
         editorial_repo.upsert_project_state(conn, repo_conn_state)
+        # L4: new lock is Editorial Current only — Narration starts unbound.
+        from otio_app.discovery_v2.application.script_lock_current_state_mutation_service import (
+            clear_narration_current_artifacts_on_conn,
+        )
+
+        clear_narration_current_artifacts_on_conn(conn, project_id=project.id)
         conn.commit()
     except Exception as exc:  # noqa: BLE001
         conn.rollback()
@@ -341,56 +347,36 @@ def get_effective_script_lock(project: Project) -> ScriptLockResult:
             lock=resolution.effective_lock,
         )
 
+    # L4: any non-effective resolution clears Editorial + Narration current state
+    # atomically (including stale narration-only pointers when editorial is NULL).
+    from otio_app.discovery_v2.application.script_lock_current_state_mutation_service import (
+        ScriptLockCurrentStateMutationError,
+        invalidate_current_script_lock_context,
+    )
+
+    try:
+        invalidation = invalidate_current_script_lock_context(
+            project,
+            reason_code=resolution.reason_code,
+            source_operation_id="get_effective_script_lock",
+        )
+    except ScriptLockCurrentStateMutationError as exc:
+        raise ScriptLockServiceError(str(exc)) from exc
+
     if resolution.reason_code == SCRIPT_LOCK_CURRENT_POINTER_MISSING:
         return ScriptLockResult(ok=False, message="Kein aktiver Script Lock.")
 
-    if resolution.reason_code in {
-        SCRIPT_LOCK_CURRENT_POINTER_STALE,
-        SCRIPT_LOCK_STATUS_NOT_EFFECTIVE,
-    }:
-        return ScriptLockResult(
-            ok=False,
-            message="Script Lock ist nicht wirksam.",
-            error_code=SUPPLEMENTATION_ERROR_SCRIPT_LOCK_INVALIDATED,
-        )
-
-    conn = repo.open_supplementation_registry(project.project_root_path)
-    try:
-        state = editorial_repo.get_project_state(conn, project_id=project.id)
-        lock = None
-        if state is not None and state.current_script_lock_id:
-            lock = repo.get_script_lock(conn, lock_id=state.current_script_lock_id)
-        if lock is None or lock.status != ScriptLockStatus.LOCKED:
-            return ScriptLockResult(
-                ok=False,
-                message="Script Lock ist nicht wirksam.",
-                error_code=SUPPLEMENTATION_ERROR_SCRIPT_LOCK_INVALIDATED,
-            )
-        preview = _build_preview(conn, project, allow_existing_lock=True)
-        conn.execute("BEGIN IMMEDIATE")
-        repo.update_script_lock_status(
-            conn,
-            lock_id=lock.lock_id,
-            status=ScriptLockStatus.INVALIDATED,
-        )
-        if state is not None:
-            editorial_repo.upsert_project_state(
-                conn,
-                state.model_copy(
-                    update={"current_script_lock_id": None, "updated_at": _now()}
-                ),
-            )
-        conn.commit()
-        return ScriptLockResult(
-            ok=False,
-            message="Script Lock ist invalidiert.",
-            preview=preview,
-            error_code=SUPPLEMENTATION_ERROR_SCRIPT_LOCK_INVALIDATED,
-        )
-    except RegistryDatabaseError as exc:
-        raise ScriptLockServiceError(str(exc)) from exc
-    finally:
-        conn.close()
+    preview = build_current_script_lock_preview(project)
+    return ScriptLockResult(
+        ok=False,
+        message=(
+            "Script Lock ist bereits invalidiert."
+            if invalidation.already_invalid
+            else "Script Lock ist invalidiert."
+        ),
+        preview=preview,
+        error_code=SUPPLEMENTATION_ERROR_SCRIPT_LOCK_INVALIDATED,
+    )
 
 
 def _build_preview(

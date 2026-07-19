@@ -342,6 +342,16 @@ def submit_observation_review(
         )
         coverage_started = revalidate.coverage_started
 
+    from otio_app.discovery_v2.application.script_lock_current_state_mutation_service import (
+        invalidate_current_script_lock_context,
+    )
+
+    invalidate_current_script_lock_context(
+        project,
+        reason_code="observation_fingerprint_changed",
+        source_operation_id="submit_observation_review",
+    )
+
     message = "Observation Review gespeichert."
     if coverage_started:
         message = "Observation Review gespeichert; Coverage-Neuberechnung gestartet."

@@ -277,6 +277,14 @@ def _build_effective_lock_with_stale_narration_pointer(tmp_path, temp_db_path):
     _decide_all_claims(project)
     lock_b = _create_lock(project)
     assert read_editorial_current_script_lock_id(project) == lock_b.lock_id
+    # L4 create_script_lock clears Narration current — restamp stale A for L3 gate proofs.
+    from fixtures.script_lock_current_state_l1 import _restamp_stale_narration_pointer
+
+    _restamp_stale_narration_pointer(
+        project,
+        script_lock_id=lock_a.lock_id,
+        voice_run_id=None if voice.run is None else voice.run.run_id,
+    )
     assert read_narration_current_script_lock_id(project) == lock_a.lock_id
     return project, lock_a, lock_b, voice.run
 

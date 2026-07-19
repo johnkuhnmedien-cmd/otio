@@ -233,7 +233,18 @@ def start_script_run(project: Project, *, sync: bool = False) -> EditorialStartR
 
 
 def start_structure_run(project: Project, *, sync: bool = False) -> EditorialStartResult:
-    return _start_run(project, scope=EDITORIAL_RUN_SCOPE_STRUCTURE, sync=sync)
+    result = _start_run(project, scope=EDITORIAL_RUN_SCOPE_STRUCTURE, sync=sync)
+    if result.started:
+        from otio_app.discovery_v2.application.script_lock_current_state_mutation_service import (
+            invalidate_current_script_lock_context,
+        )
+
+        invalidate_current_script_lock_context(
+            project,
+            reason_code="structure_run_started",
+            source_operation_id="start_structure_run",
+        )
+    return result
 
 
 def start_coverage_run(
@@ -322,6 +333,16 @@ def start_coverage_run(
         coverage_dedup_key=built.dedup_key,
         coverage_execution_mode=mode,
     )
+    if started.started and not started.reused:
+        from otio_app.discovery_v2.application.script_lock_current_state_mutation_service import (
+            invalidate_current_script_lock_context,
+        )
+
+        invalidate_current_script_lock_context(
+            project,
+            reason_code="coverage_audit_change",
+            source_operation_id="start_coverage_run",
+        )
     if legacy_recompute and started.started and not started.reused:
         return EditorialStartResult(
             started=started.started,
@@ -359,6 +380,16 @@ def select_hook(project: Project, *, hook_id: str) -> HookSelectResult:
             active_coverage_audit_id=None,
         )
         repo.upsert_project_state(conn, state)
+        from otio_app.discovery_v2.application.script_lock_current_state_mutation_service import (
+            apply_script_lock_context_invalidation,
+        )
+
+        apply_script_lock_context_invalidation(
+            conn,
+            project_id=project.id,
+            reason_code="hook_selection_changed",
+            source_operation_id="select_hook",
+        )
         conn.commit()
     except Exception as exc:  # noqa: BLE001
         conn.rollback()
@@ -446,6 +477,16 @@ def save_user_script_edit(
                     "updated_at": _now(),
                 }
             ),
+        )
+        from otio_app.discovery_v2.application.script_lock_current_state_mutation_service import (
+            apply_script_lock_context_invalidation,
+        )
+
+        apply_script_lock_context_invalidation(
+            conn,
+            project_id=project.id,
+            reason_code="user_script_edit",
+            source_operation_id="save_user_script_edit",
         )
         conn.commit()
     except Exception as exc:  # noqa: BLE001
