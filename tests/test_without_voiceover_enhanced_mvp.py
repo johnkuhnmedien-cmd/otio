@@ -15,21 +15,15 @@ from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
 )
 from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     accept_supplement_candidates,
-    parse_final_cut_response,
     parse_rough_cut_response,
-    search_supplements_for_gaps,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import write_json
 from otio_app.services.without_voiceover_enhanced.models import (
-    CoverageGapsDocument,
     EnhancedScriptDocument,
     FinalCutPlanDocument,
     FinalShot,
     NarrationAnchor,
-    NarrationTimelineDocument,
     PauseDirective,
-    RoughCutPlanDocument,
-    RoughShot,
     ScriptSegment,
     SegmentTiming,
     SegmentTimingsDocument,
@@ -43,7 +37,6 @@ from otio_app.services.without_voiceover_enhanced.otio_export_service import (
 from otio_app.services.without_voiceover_enhanced.paths import (
     accepted_supplements_path,
     assert_enhanced_work_root,
-    coverage_gaps_path,
     final_cut_plan_path,
     narration_timeline_path,
     resolved_timeline_path,
