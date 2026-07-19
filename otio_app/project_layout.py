@@ -8,11 +8,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from otio_app.defaults import (
+    DEFAULT_ENHANCED_WORK_SUBDIR,
     DEFAULT_WORK_SUBDIR,
     EDIT_PLAN_FILENAME,
     EDIT_PLAN_SUBDIR,
     INVENTORY_FILENAME,
     INVENTORY_SUBDIR,
+    RESERVED_WORK_SUBDIRS,
     VOICE_ANALYSIS_FILENAME,
     VOICE_FOLDER_MAPPING_FILENAME,
 )
@@ -47,6 +49,19 @@ def get_language_work_dir(work_dir: Path, language: str) -> Path:
 def default_work_dir(project_root: Path) -> Path:
     """Standard-Arbeitsordner innerhalb des Projektroots."""
     return project_root / DEFAULT_WORK_SUBDIR
+
+
+def default_enhanced_work_dir(project_root: Path) -> Path:
+    """Arbeitsordner für without_voiceover_enhanced (`_otio_enhanced`)."""
+    return project_root / DEFAULT_ENHANCED_WORK_SUBDIR
+
+
+def default_work_dir_for_mode(project_root: Path, project_mode: object) -> Path:
+    """Wählt den Standard-Arbeitsordner je Projektmodus."""
+    mode_value = getattr(project_mode, "value", project_mode)
+    if mode_value == "without_voiceover_enhanced":
+        return default_enhanced_work_dir(project_root)
+    return default_work_dir(project_root)
 
 
 def get_voice_over_dir(
@@ -1140,7 +1155,7 @@ def classify_subdirectories(
         voice_over_subdir,
     )
 
-    reserved_names: set[str] = {DEFAULT_WORK_SUBDIR.casefold()}
+    reserved_names: set[str] = {name.casefold() for name in RESERVED_WORK_SUBDIRS}
     if work_dir.parent == project_root:
         reserved_names.add(work_dir.name.casefold())
 
@@ -1231,7 +1246,7 @@ def classify_subdirectories_no_voiceover(
     Asset-Auswahl ausgenommen werden müsste — alle Unterordner (außer dem
     Arbeitsordner _otio) gelten als Asset-Ordner.
     """
-    reserved_names: set[str] = {DEFAULT_WORK_SUBDIR.casefold()}
+    reserved_names: set[str] = {name.casefold() for name in RESERVED_WORK_SUBDIRS}
     if work_dir.parent == project_root:
         reserved_names.add(work_dir.name.casefold())
 

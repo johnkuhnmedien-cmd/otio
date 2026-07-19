@@ -29,6 +29,14 @@ from otio_app.ui.voiceover_generation.folder_voiceovers_tab import render_folder
 from otio_app.ui.voiceover_generation.intro_tab import render_intro_page
 from otio_app.ui.voiceover_generation.project_brief_tab import render_project_brief_page
 from otio_app.ui.voiceover_generation.style_references_tab import render_style_references_page
+from otio_app.ui.without_voiceover_enhanced.audio_tab import render_enhanced_audio_page
+from otio_app.ui.without_voiceover_enhanced.cut_plan_tab import render_enhanced_cut_plan_page
+from otio_app.ui.without_voiceover_enhanced.final_output_tab import (
+    render_enhanced_final_output_page,
+)
+from otio_app.ui.without_voiceover_enhanced.folder_voiceovers_tab import (
+    render_enhanced_folder_voiceovers_page,
+)
 
 
 _CURRENT_PAGE_KEY = "_otio_current_page"
@@ -207,6 +215,85 @@ def _build_without_voiceover_pages(
     ]
 
 
+def _build_without_voiceover_enhanced_pages(
+    render_new_project: Callable[[], None],
+    render_project_list: Callable[[], None],
+) -> list:
+    """Enhanced MVP: gleiche frühen Schritte, aber Audio → Cut Plan → Final Output."""
+    from otio_app.ui.navigation import (
+        PAGE_API_KEYS,
+        PAGE_AUDIO,
+        PAGE_CLEAN_MEDIA,
+        PAGE_CUT_PLAN_ENHANCED,
+        PAGE_DRAMATURGY,
+        PAGE_FINAL_OUTPUT_ENHANCED,
+        PAGE_FOLDER_VOICEOVERS,
+        PAGE_INTRO,
+        PAGE_LIST,
+        PAGE_NEW,
+        PAGE_PROJECT_BRIEF,
+        PAGE_STATUS,
+        PAGE_STYLE_REFERENCES,
+    )
+
+    return [
+        st.Page(render_new_project, title=PAGE_NEW, url_path="neues-projekt", default=True),
+        st.Page(render_project_list, title=PAGE_LIST, url_path="projekte"),
+        st.Page(
+            _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, show_jobs_banner=True),
+            title=PAGE_CLEAN_MEDIA,
+            url_path="clean-media",
+        ),
+        st.Page(
+            _wrap_page(PAGE_ANALYSIS, render_project_workbench),
+            title=PAGE_ANALYSIS,
+            url_path="analysen",
+        ),
+        st.Page(
+            _wrap_page(PAGE_PROJECT_BRIEF, render_project_brief_page),
+            title=PAGE_PROJECT_BRIEF,
+            url_path="project-brief",
+        ),
+        st.Page(
+            _wrap_page(PAGE_STYLE_REFERENCES, render_style_references_page),
+            title=PAGE_STYLE_REFERENCES,
+            url_path="style-references",
+        ),
+        st.Page(
+            _wrap_page(PAGE_DRAMATURGY, render_dramaturgy_page),
+            title=PAGE_DRAMATURGY,
+            url_path="dramaturgie",
+        ),
+        st.Page(
+            _wrap_page(PAGE_FOLDER_VOICEOVERS, render_enhanced_folder_voiceovers_page),
+            title=PAGE_FOLDER_VOICEOVERS,
+            url_path="folder-voiceovers",
+        ),
+        st.Page(
+            _wrap_page(PAGE_INTRO, render_intro_page),
+            title=PAGE_INTRO,
+            url_path="intro",
+        ),
+        st.Page(
+            _wrap_page(PAGE_AUDIO, render_enhanced_audio_page),
+            title=PAGE_AUDIO,
+            url_path="audio",
+        ),
+        st.Page(
+            _wrap_page(PAGE_CUT_PLAN_ENHANCED, render_enhanced_cut_plan_page),
+            title=PAGE_CUT_PLAN_ENHANCED,
+            url_path="cut-plan",
+        ),
+        st.Page(
+            _wrap_page(PAGE_FINAL_OUTPUT_ENHANCED, render_enhanced_final_output_page),
+            title=PAGE_FINAL_OUTPUT_ENHANCED,
+            url_path="final-output",
+        ),
+        st.Page(render_api_keys_page, title=PAGE_API_KEYS, url_path="api-schluessel"),
+        st.Page(render_system_status_page, title=PAGE_STATUS, url_path="systemstatus"),
+    ]
+
+
 def run_app_navigation(
     *,
     render_new_project: Callable[[], None],
@@ -221,7 +308,15 @@ def run_app_navigation(
         return
 
     mode = _active_project_mode()
-    if mode == ProjectMode.WITHOUT_VOICEOVER:
+    if mode == ProjectMode.WITHOUT_VOICEOVER_ENHANCED:
+        pages = _build_without_voiceover_enhanced_pages(
+            render_new_project, render_project_list
+        )
+        workflow_caption = (
+            "Workflow (Enhanced MVP): ⓪ → ① → Brief → ② → ③ → ④ → ⑤ → "
+            "⑥ Audio → ⑦ Cut Plan → ⑧ Final Output"
+        )
+    elif mode == ProjectMode.WITHOUT_VOICEOVER:
         pages = _build_without_voiceover_pages(render_new_project, render_project_list)
         workflow_caption = "Workflow (ohne Voice-Over): ⓪ → ① → ① Brief → ② → ③ → ④ → ⑤ → ⑥ → ⑦ → ⑧"
     else:
@@ -250,9 +345,11 @@ def _run_legacy_pages(
         PAGE_AUDIO,
         PAGE_CLEAN_MEDIA,
         PAGE_CUT_PLAN,
+        PAGE_CUT_PLAN_ENHANCED,
         PAGE_DRAMATURGY,
         PAGE_EDIT_PLAN,
         PAGE_FINAL_OUTPUT,
+        PAGE_FINAL_OUTPUT_ENHANCED,
         PAGE_FOLDER_VOICEOVERS,
         PAGE_INTRO,
         PAGE_LIST,
@@ -262,15 +359,17 @@ def _run_legacy_pages(
         PAGE_STATUS,
         PAGE_STYLE_REFERENCES,
         PAGE_SUPPLEMENT,
+        VOICEOVER_GEN_ENHANCED_NAVIGATION_OPTIONS,
         VOICEOVER_GEN_NAVIGATION_OPTIONS,
     )
 
     mode = _active_project_mode()
-    options = (
-        VOICEOVER_GEN_NAVIGATION_OPTIONS
-        if mode == ProjectMode.WITHOUT_VOICEOVER
-        else NAVIGATION_OPTIONS
-    )
+    if mode == ProjectMode.WITHOUT_VOICEOVER_ENHANCED:
+        options = VOICEOVER_GEN_ENHANCED_NAVIGATION_OPTIONS
+    elif mode == ProjectMode.WITHOUT_VOICEOVER:
+        options = VOICEOVER_GEN_NAVIGATION_OPTIONS
+    else:
+        options = NAVIGATION_OPTIONS
 
     with st.sidebar:
         st.markdown("**Projekt**")
@@ -315,15 +414,25 @@ def _run_legacy_pages(
     elif page == PAGE_DRAMATURGY:
         _wrap_page(PAGE_DRAMATURGY, render_dramaturgy_page)()
     elif page == PAGE_FOLDER_VOICEOVERS:
-        _wrap_page(PAGE_FOLDER_VOICEOVERS, render_folder_voiceovers_page)()
+        if mode == ProjectMode.WITHOUT_VOICEOVER_ENHANCED:
+            _wrap_page(PAGE_FOLDER_VOICEOVERS, render_enhanced_folder_voiceovers_page)()
+        else:
+            _wrap_page(PAGE_FOLDER_VOICEOVERS, render_folder_voiceovers_page)()
     elif page == PAGE_INTRO:
         _wrap_page(PAGE_INTRO, render_intro_page)()
     elif page == PAGE_AUDIO:
-        _wrap_page(PAGE_AUDIO, render_audio_page)()
+        if mode == ProjectMode.WITHOUT_VOICEOVER_ENHANCED:
+            _wrap_page(PAGE_AUDIO, render_enhanced_audio_page)()
+        else:
+            _wrap_page(PAGE_AUDIO, render_audio_page)()
     elif page == PAGE_FINAL_OUTPUT:
         _wrap_page(PAGE_FINAL_OUTPUT, render_final_output_page)()
     elif page == PAGE_CUT_PLAN:
         _wrap_page(PAGE_CUT_PLAN, render_cut_plan_page)()
+    elif page == PAGE_CUT_PLAN_ENHANCED:
+        _wrap_page(PAGE_CUT_PLAN_ENHANCED, render_enhanced_cut_plan_page)()
+    elif page == PAGE_FINAL_OUTPUT_ENHANCED:
+        _wrap_page(PAGE_FINAL_OUTPUT_ENHANCED, render_enhanced_final_output_page)()
     elif page == PAGE_API_KEYS:
         render_api_keys_page()
     elif page == PAGE_STATUS:

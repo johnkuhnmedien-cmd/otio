@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 DEFAULT_WORK_SUBDIR = "_otio"
+DEFAULT_ENHANCED_WORK_SUBDIR = "_otio_enhanced"
+# Reserved work roots — never treat as asset folders; enhanced must not touch _otio_v2.
+RESERVED_WORK_SUBDIRS = (
+    DEFAULT_WORK_SUBDIR,
+    DEFAULT_ENHANCED_WORK_SUBDIR,
+    "_otio_v2",
+)
 DEFAULT_VOICE_OVER_SUBDIR = "Voice over"
 DEFAULT_FRAMES_PER_SHOT = 3
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
@@ -69,10 +76,16 @@ EDIT_PLAN_SUBDIR = "edit_plan"
 
 PROJECT_MODE_WITH_VOICEOVER = "with_voiceover"
 PROJECT_MODE_WITHOUT_VOICEOVER = "without_voiceover"
-PROJECT_MODE_CHOICES = (PROJECT_MODE_WITH_VOICEOVER, PROJECT_MODE_WITHOUT_VOICEOVER)
+PROJECT_MODE_WITHOUT_VOICEOVER_ENHANCED = "without_voiceover_enhanced"
+PROJECT_MODE_CHOICES = (
+    PROJECT_MODE_WITH_VOICEOVER,
+    PROJECT_MODE_WITHOUT_VOICEOVER,
+    PROJECT_MODE_WITHOUT_VOICEOVER_ENHANCED,
+)
 PROJECT_MODE_LABELS = {
     PROJECT_MODE_WITH_VOICEOVER: "Projekt mit Voice-Over",
     PROJECT_MODE_WITHOUT_VOICEOVER: "Projekt ohne Voice-Over",
+    PROJECT_MODE_WITHOUT_VOICEOVER_ENHANCED: "Projekt ohne Voice-Over (Enhanced MVP)",
 }
 
 VOICEOVER_GENERATION_SUBDIR = "voiceover_generation"

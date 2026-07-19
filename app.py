@@ -11,11 +11,13 @@ from pydantic import ValidationError
 
 from otio_app.defaults import (
     BRIEF_LANGUAGE_CHOICES,
+    DEFAULT_ENHANCED_WORK_SUBDIR,
     DEFAULT_FRAMES_PER_SHOT,
     DEFAULT_VOICE_OVER_SUBDIR,
     PROJECT_MODE_LABELS,
     PROJECT_MODE_WITH_VOICEOVER,
     PROJECT_MODE_WITHOUT_VOICEOVER,
+    PROJECT_MODE_WITHOUT_VOICEOVER_ENHANCED,
 )
 from otio_app.models import ProjectCreate, ProjectMode
 from otio_app.paths import clean_user_path_input, create_work_dir, normalize_path
@@ -23,6 +25,7 @@ from otio_app.project_layout import (
     classify_subdirectories,
     classify_subdirectories_no_voiceover,
     default_work_dir,
+    default_work_dir_for_mode,
     language_folder_name,
     scan_project_structure,
     scan_project_structure_no_voiceover,
@@ -227,6 +230,9 @@ def render_new_project_page() -> None:
     mode_labels = {
         PROJECT_MODE_WITH_VOICEOVER: PROJECT_MODE_LABELS[PROJECT_MODE_WITH_VOICEOVER],
         PROJECT_MODE_WITHOUT_VOICEOVER: PROJECT_MODE_LABELS[PROJECT_MODE_WITHOUT_VOICEOVER],
+        PROJECT_MODE_WITHOUT_VOICEOVER_ENHANCED: PROJECT_MODE_LABELS[
+            PROJECT_MODE_WITHOUT_VOICEOVER_ENHANCED
+        ],
     }
     project_mode_value = st.radio(
         "Projektmodus *",
@@ -235,13 +241,23 @@ def render_new_project_page() -> None:
         key="new_project_mode",
         help=(
             "„Projekt mit Voice-Over“ ist der bestehende Workflow mit vorhandenen "
-            "Voice-over-Dateien. „Projekt ohne Voice-Over“ startet die neue "
-            "Dramaturgie-/Voice-over-Generierungs-Pipeline — der Modus kann später "
-            "nicht mehr umgeschaltet werden."
+            "Voice-over-Dateien. „Projekt ohne Voice-Over“ startet die klassische "
+            "Dramaturgie-/Voice-over-Generierungs-Pipeline. „Enhanced MVP“ ist eine "
+            "getrennte Kopie mit freierer Skript-Narration, Script Lock, "
+            "Pausen/Coverage/Stock und Cut Plan vor Final Output. Der Modus kann "
+            "später nicht mehr umgeschaltet werden."
         ),
     )
     is_with_voiceover = project_mode_value == PROJECT_MODE_WITH_VOICEOVER
-    if not is_with_voiceover:
+    is_enhanced = project_mode_value == PROJECT_MODE_WITHOUT_VOICEOVER_ENHANCED
+    if is_enhanced:
+        st.info(
+            "🆕 Enhanced MVP: eigener Arbeitsordner `_otio_enhanced/`. "
+            "Ablauf: Project Brief → Style → Dramaturgie → Folder Voice-overs "
+            "(freiere Narration) → Intro → Audio/ElevenLabs → Cut Plan → Final Output. "
+            "Bestehende `_otio/`- und Discovery-`_otio_v2/`-Artefakte bleiben unberührt."
+        )
+    elif not is_with_voiceover:
         st.info(
             "🆕 Projekt ohne Voice-Over: Clean Media und Analysen/Inventory werden "
             "wiederverwendet. Voice-over-Texte, Dramaturgie, Intro und Vertonung "
@@ -269,10 +285,15 @@ def render_new_project_page() -> None:
                 "Kein Voice-over-Unterordner nötig — alle Unterordner werden als "
                 "Asset-Ordner erkannt."
             )
+        default_work_hint = (
+            f"<Projektordner>/{DEFAULT_ENHANCED_WORK_SUBDIR}"
+            if is_enhanced
+            else "<Projektordner>/_otio"
+        )
         work_dir = st.text_input(
             "Arbeitsordner (optional)",
             value="",
-            help="Leer lassen = automatisch <Projektordner>/_otio für Cache und Frames",
+            help=f"Leer lassen = automatisch {default_work_hint} für Cache und Frames",
         )
 
         st.subheader("Projektvorgaben")
@@ -360,7 +381,10 @@ def render_new_project_page() -> None:
                         f"Editorial landet unter `_otio/{language_folder_name(project_data.language)}/`."
                     )
 
-                if project_data.project_mode == ProjectMode.WITHOUT_VOICEOVER:
+                if project_data.project_mode in (
+                    ProjectMode.WITHOUT_VOICEOVER,
+                    ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+                ):
                     scan = scan_project_structure_no_voiceover(
                         project_data.project_root_path,
                         project_data.work_dir_path,
@@ -539,7 +563,10 @@ def render_new_project_page() -> None:
         pending = st.session_state[PENDING_KEY]
         project_data = ProjectCreate.model_validate(pending["project"])
         work_path = normalize_path(project_data.work_dir)
-        default_path = default_work_dir(normalize_path(project_data.project_root))
+        default_path = default_work_dir_for_mode(
+            normalize_path(project_data.project_root),
+            project_data.project_mode,
+        )
         st.warning(f"Der Arbeitsordner existiert noch nicht:\n`{work_path}`")
         if work_path == default_path:
             st.info(

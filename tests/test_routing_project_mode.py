@@ -192,3 +192,67 @@ def test_run_app_navigation_dispatches_by_mode(monkeypatch: pytest.MonkeyPatch) 
     without_titles = [page.title for page in captured["pages"]]
     assert "② Zuordnung" not in without_titles
     assert "① Project Brief" in without_titles
+
+
+def test_without_voiceover_pages_order_unchanged_final_before_cut() -> None:
+    """Klassischer Without-VO-Modus behält Final Output vor Cut Plan."""
+    pages = routing._build_without_voiceover_pages(_noop, _noop)
+    titles = [page.title for page in pages]
+    assert titles.index("⑦ Final Output") < titles.index("⑧ Cut Plan")
+
+
+def test_enhanced_pages_cut_plan_before_final_output() -> None:
+    pages = routing._build_without_voiceover_enhanced_pages(_noop, _noop)
+    titles = [page.title for page in pages]
+    assert titles == [
+        "Neues Projekt",
+        "Gespeicherte Projekte",
+        "⓪ Clean Media",
+        "① Analysen",
+        "① Project Brief",
+        "② Style References",
+        "③ Dramaturgie",
+        "④ Folder Voice-overs",
+        "⑤ Intro",
+        "⑥ Audio / ElevenLabs",
+        "⑦ Cut Plan",
+        "⑧ Final Output",
+        "🔑 API-Schlüssel",
+        "Systemstatus",
+    ]
+    assert titles.index("⑦ Cut Plan") < titles.index("⑧ Final Output")
+
+
+def test_active_project_mode_reads_enhanced_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_project = SimpleNamespace(project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED)
+    monkeypatch.setattr(routing.st, "session_state", {"active_project_id": "p1"})
+    monkeypatch.setattr(routing, "get_project_by_id", lambda project_id: fake_project)
+    assert routing._active_project_mode() == ProjectMode.WITHOUT_VOICEOVER_ENHANCED
+
+
+def test_run_app_navigation_dispatches_enhanced(monkeypatch: pytest.MonkeyPatch) -> None:
+    import contextlib
+
+    captured: dict[str, list] = {}
+
+    def _fake_navigation(pages, position="sidebar"):
+        captured["pages"] = pages
+        return _FakeNavigation(pages)
+
+    monkeypatch.setattr(routing.st, "navigation", _fake_navigation)
+    monkeypatch.setattr(routing.st, "sidebar", contextlib.nullcontext())
+    monkeypatch.setattr(routing.st, "caption", lambda *_a, **_k: None)
+    monkeypatch.setattr(routing, "render_activity_panel", lambda: None)
+    monkeypatch.setattr(routing, "format_build_label", lambda: "test-build")
+
+    fake_project = SimpleNamespace(project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED)
+    monkeypatch.setattr(routing.st, "session_state", {"active_project_id": "p1"})
+    monkeypatch.setattr(routing, "get_project_by_id", lambda project_id: fake_project)
+    routing.run_app_navigation(render_new_project=_noop, render_project_list=_noop)
+    titles = [page.title for page in captured["pages"]]
+    assert "⑦ Cut Plan" in titles
+    assert "⑧ Final Output" in titles
+    assert titles.index("⑦ Cut Plan") < titles.index("⑧ Final Output")
+    assert "② Zuordnung" not in titles

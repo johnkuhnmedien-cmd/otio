@@ -1,0 +1,87 @@
+"""Pexels StockProvider."""
+
+from __future__ import annotations
+
+import os
+
+import requests
+
+from otio_app.services.api_keys import get_api_key
+from otio_app.services.without_voiceover_enhanced.models import StockCandidate
+from otio_app.services.without_voiceover_enhanced.stock.base import (
+    ProviderStatus,
+    StockProvider,
+    unknown_or_null,
+)
+
+
+class PexelsStockProvider(StockProvider):
+    provider_name = "pexels"
+
+    def readiness(self) -> ProviderStatus:
+        key = get_api_key("PEXELS_API_KEY") or os.environ.get("PEXELS_API_KEY")
+        if not key:
+            return ProviderStatus(self.provider_name, "unavailable", "PEXELS_API_KEY fehlt")
+        return ProviderStatus(self.provider_name, "ready")
+
+    def search(self, query: str, media_type: str | None = None) -> list[StockCandidate]:
+        status = self.readiness()
+        if status.status != "ready":
+            raise RuntimeError(status.message)
+        key = get_api_key("PEXELS_API_KEY") or os.environ.get("PEXELS_API_KEY")
+        headers = {"Authorization": key}
+        want_video = (media_type or "video").lower() == "video"
+        url = "https://api.pexels.com/videos/search" if want_video else "https://api.pexels.com/v1/search"
+        response = requests.get(
+            url,
+            headers=headers,
+            params={"query": query, "per_page": 8},
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        candidates: list[StockCandidate] = []
+        if want_video:
+            for index, item in enumerate(payload.get("videos") or [], start=1):
+                user = item.get("user") or {}
+                candidates.append(
+                    StockCandidate(
+                        candidate_id=f"pexels_video_{item.get('id', index)}",
+                        provider=self.provider_name,
+                        provider_asset_id=str(item.get("id") or ""),
+                        title=str(item.get("url") or query),
+                        media_type="video",
+                        creator=unknown_or_null(user.get("name")),
+                        source_page=unknown_or_null(item.get("url")) or "",
+                        preview_url=unknown_or_null(
+                            (item.get("image") or "")
+                        ) or "",
+                        width=item.get("width"),
+                        height=item.get("height"),
+                        duration_seconds=item.get("duration"),
+                        license="Pexels License",
+                        attribution=unknown_or_null(user.get("name")),
+                    )
+                )
+        else:
+            for index, item in enumerate(payload.get("photos") or [], start=1):
+                src = item.get("src") or {}
+                photographer = item.get("photographer")
+                candidates.append(
+                    StockCandidate(
+                        candidate_id=f"pexels_photo_{item.get('id', index)}",
+                        provider=self.provider_name,
+                        provider_asset_id=str(item.get("id") or ""),
+                        title=str(item.get("alt") or query),
+                        media_type="photo",
+                        creator=unknown_or_null(photographer),
+                        source_page=unknown_or_null(item.get("url")) or "",
+                        preview_url=unknown_or_null(src.get("medium")) or "",
+                        width=item.get("width"),
+                        height=item.get("height"),
+                        duration_seconds=None,
+                        license="Pexels License",
+                        attribution=unknown_or_null(photographer),
+                    )
+                )
+        return candidates

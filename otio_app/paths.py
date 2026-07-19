@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from otio_app.defaults import DEFAULT_WORK_SUBDIR
+from otio_app.defaults import DEFAULT_WORK_SUBDIR, RESERVED_WORK_SUBDIRS
 from otio_app.project_layout import default_work_dir
 
 
@@ -65,7 +65,10 @@ def validate_project_layout(
             "work_dir darf nicht im Voice-over-Ordner liegen."
         )
 
-    if work_dir.parent == project_root and work_dir.name != DEFAULT_WORK_SUBDIR:
+    if (
+        work_dir.parent == project_root
+        and work_dir.name not in RESERVED_WORK_SUBDIRS
+    ):
         raise PathValidationError(
             f"work_dir darf kein Asset-Unterordner sein: {work_dir.name}"
         )

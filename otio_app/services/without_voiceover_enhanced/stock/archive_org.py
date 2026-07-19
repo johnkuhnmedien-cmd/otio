@@ -1,0 +1,58 @@
+"""Internet Archive (Archive.org) StockProvider."""
+
+from __future__ import annotations
+
+import requests
+
+from otio_app.services.without_voiceover_enhanced.models import StockCandidate
+from otio_app.services.without_voiceover_enhanced.stock.base import (
+    ProviderStatus,
+    StockProvider,
+    unknown_or_null,
+)
+
+
+class ArchiveOrgStockProvider(StockProvider):
+    provider_name = "archive.org"
+
+    def readiness(self) -> ProviderStatus:
+        return ProviderStatus(self.provider_name, "ready")
+
+    def search(self, query: str, media_type: str | None = None) -> list[StockCandidate]:
+        mediatype = "movies" if (media_type or "").lower() == "video" else "image"
+        response = requests.get(
+            "https://archive.org/advancedsearch.php",
+            params={
+                "q": f"{query} AND mediatype:({mediatype})",
+                "fl[]": ["identifier", "title", "creator", "licenseurl"],
+                "rows": 8,
+                "page": 1,
+                "output": "json",
+            },
+            timeout=30,
+            headers={"User-Agent": "otio-without-vo-enhanced-mvp/1.0"},
+        )
+        response.raise_for_status()
+        docs = ((response.json().get("response") or {}).get("docs")) or []
+        candidates: list[StockCandidate] = []
+        for index, item in enumerate(docs, start=1):
+            identifier = str(item.get("identifier") or index)
+            source = f"https://archive.org/details/{identifier}"
+            candidates.append(
+                StockCandidate(
+                    candidate_id=f"archive_{identifier}",
+                    provider=self.provider_name,
+                    provider_asset_id=identifier,
+                    title=str(item.get("title") or query),
+                    media_type="video" if mediatype == "movies" else "photo",
+                    creator=unknown_or_null(item.get("creator")),
+                    source_page=source,
+                    preview_url=source,
+                    width=None,
+                    height=None,
+                    duration_seconds=None,
+                    license=unknown_or_null(item.get("licenseurl")),
+                    attribution=unknown_or_null(item.get("creator")),
+                )
+            )
+        return candidates

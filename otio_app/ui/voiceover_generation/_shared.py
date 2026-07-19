@@ -37,7 +37,10 @@ def render_placeholder_page(
     if project is None:
         return
 
-    if project.project_mode != ProjectMode.WITHOUT_VOICEOVER:
+    if project.project_mode not in (
+        ProjectMode.WITHOUT_VOICEOVER,
+        ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+    ):
         st.warning(
             "Dieses Projekt ist auf „Projekt mit Voice-Over“ eingestellt. "
             "Diese Seite gehört zur Pipeline „Projekt ohne Voice-Over“ und "
@@ -163,8 +166,17 @@ def render_new_feature_button(
 
 def require_without_voiceover_mode(project: Project) -> bool:
     """Zeigt eine Warnung und liefert False, wenn das Projekt nicht im Modus
-    "ohne Voice-Over" ist. Aufrufer dürfen dann nichts schreiben."""
-    if project.project_mode != ProjectMode.WITHOUT_VOICEOVER:
+    "ohne Voice-Over" (klassisch oder Enhanced-MVP) ist. Aufrufer dürfen dann
+    nichts schreiben.
+
+    Additive Erweiterung: ``without_voiceover_enhanced`` darf dieselben frühen
+    Pipeline-Seiten (Brief/Style/Dramaturgie/Intro) nutzen; Fachverhalten von
+    ``without_voiceover`` bleibt unverändert.
+    """
+    if project.project_mode not in (
+        ProjectMode.WITHOUT_VOICEOVER,
+        ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+    ):
         st.warning(
             "Dieses Projekt ist auf „Projekt mit Voice-Over“ eingestellt. "
             "Diese Seite gehört zur Pipeline „Projekt ohne Voice-Over“ und "

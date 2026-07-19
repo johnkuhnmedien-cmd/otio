@@ -233,7 +233,10 @@ def _render_analysis_actions(
     asset_job_running = get_asset_analysis_job_manager().is_running(project.id)
     voice_job_running = get_voice_analysis_job_manager().is_running(project.id)
     any_job_running = asset_job_running or voice_job_running
-    without_voiceover = bool(getattr(project, "is_without_voiceover", False))
+    without_voiceover = bool(
+        getattr(project, "is_without_voiceover_pipeline", False)
+        or getattr(project, "is_without_voiceover", False)
+    )
 
     if not without_voiceover:
         st.markdown("**Voice-over** — lokal mit Whisper (Standard) oder optional Gemini.")
@@ -391,6 +394,11 @@ def render_project_workbench() -> None:
     if project is None:
         return
 
+    without_voiceover = bool(
+        getattr(project, "is_without_voiceover_pipeline", False)
+        or getattr(project, "is_without_voiceover", False)
+    )
+
     render_workflow_progress(project, current_step="analysis")
     if not selected_folders_have_clean_media(project):
         st.warning(
@@ -456,10 +464,10 @@ def render_project_workbench() -> None:
         with st.expander("⚙️ Einstellungen (Modelle & API)", expanded=False):
             if not is_gemini_configured():
                 st.warning("GEMINI_API_KEY fehlt — unter **🔑 API-Schlüssel** eintragen.")
-            if not project.is_without_voiceover and not is_whisper_available():
+            if not without_voiceover and not is_whisper_available():
                 st.caption("Whisper fehlt — nur Voice-over via Gemini möglich.")
 
-            if not project.is_without_voiceover:
+            if not without_voiceover:
                 selected_voice_backend = st.selectbox(
                     "Voice-over-Engine",
                     options=list(VOICE_BACKEND_CHOICES),
@@ -494,7 +502,7 @@ def render_project_workbench() -> None:
         st.caption(f"Aktuell {len(selected_folders)} Ordner für Asset-Analyse ausgewählt.")
 
     with tab_results:
-        if project.is_without_voiceover:
+        if getattr(project, "is_without_voiceover_pipeline", project.is_without_voiceover):
             st.caption(
                 "Ohne Voice-Over: keine Voice-over-Analyse. "
                 "Fehlende Supplements analysierst du unter **▶️ Analysen starten**."

@@ -53,10 +53,15 @@ class ProjectMode(str, Enum):
 
     WITHOUT_VOICEOVER: neue Dramaturgie-/Voice-over-Generierungs-Pipeline. Es gibt
     absichtlich kein nachträgliches Umschalten und keinen Mischmodus.
+
+    WITHOUT_VOICEOVER_ENHANCED: getrennte MVP-Kopie von WITHOUT_VOICEOVER mit
+    freierer Skript-Narration, Script Lock, Pausen/Coverage/Stock und Cut Plan
+    vor Final Output. Nutzt eigenen Arbeitsordner ``_otio_enhanced``.
     """
 
     WITH_VOICEOVER = "with_voiceover"
     WITHOUT_VOICEOVER = "without_voiceover"
+    WITHOUT_VOICEOVER_ENHANCED = "without_voiceover_enhanced"
 
 
 def validate_asset_selection(
@@ -130,7 +135,12 @@ class ProjectCreate(BaseModel):
     @model_validator(mode="after")
     def validate_paths(self) -> Self:
         root = normalize_path(self.project_root)
-        work = resolve_work_dir(root, self.work_dir)
+        if self.work_dir is None or not str(self.work_dir).strip():
+            from otio_app.project_layout import default_work_dir_for_mode
+
+            work = default_work_dir_for_mode(root, self.project_mode)
+        else:
+            work = resolve_work_dir(root, self.work_dir)
 
         try:
             validate_project_layout(root, work, self.voice_over_subdir)
@@ -305,6 +315,18 @@ class Project(BaseModel):
     @property
     def is_without_voiceover(self) -> bool:
         return self.project_mode == ProjectMode.WITHOUT_VOICEOVER
+
+    @property
+    def is_without_voiceover_enhanced(self) -> bool:
+        return self.project_mode == ProjectMode.WITHOUT_VOICEOVER_ENHANCED
+
+    @property
+    def is_without_voiceover_pipeline(self) -> bool:
+        """True for classic without_voiceover and the enhanced MVP copy."""
+        return self.project_mode in (
+            ProjectMode.WITHOUT_VOICEOVER,
+            ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        )
 
     @classmethod
     def from_create(

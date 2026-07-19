@@ -1,0 +1,392 @@
+"""LLM-Lauf 2/3 + Coverage/Stock-Orchestrierung für Enhanced Cut Plan MVP."""
+
+from __future__ import annotations
+
+import json
+from typing import Any, Callable
+
+from otio_app.models import Project
+from otio_app.services.gemini_client import _extract_json
+from otio_app.services.generic_outro_selector import asset_id_for_path
+from otio_app.services.inventory_loader import load_folder_inventory
+from otio_app.services.media_utils import probe_duration_seconds
+from otio_app.services.plan_llm_client import generate_plan_text_with_metadata
+from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
+from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
+from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
+    load_segment_timings,
+    validate_timings_against_script,
+)
+from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
+from otio_app.services.without_voiceover_enhanced.models import (
+    AcceptedSupplementsDocument,
+    CoverageGap,
+    CoverageGapsDocument,
+    FinalCutPlanDocument,
+    FinalShot,
+    NarrationAnchor,
+    PauseDirective,
+    RoughCutPlanDocument,
+    RoughShot,
+    StockCandidate,
+    StockSearchResultsDocument,
+)
+from otio_app.services.without_voiceover_enhanced.paths import (
+    accepted_supplements_path,
+    coverage_gaps_path,
+    final_cut_plan_path,
+    narration_timeline_path,
+    pause_directives_path,
+    rough_cut_plan_path,
+    stock_search_results_path,
+)
+from otio_app.services.without_voiceover_enhanced.pause_resolver import (
+    build_narration_timeline,
+)
+from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+    require_locked_script,
+)
+from otio_app.services.without_voiceover_enhanced.script_prompts import (
+    build_final_cut_prompt,
+    build_rough_cut_prompt,
+)
+from otio_app.services.without_voiceover_enhanced.stock.registry import search_all_providers
+
+
+class CutPlanError(RuntimeError):
+    pass
+
+
+def _local_assets_payload(project: Project) -> list[dict[str, Any]]:
+    assets: list[dict[str, Any]] = []
+    for folder in project.selected_asset_subdirs:
+        inventory = load_folder_inventory(project, folder)
+        if inventory is None:
+            continue
+        for asset in getattr(inventory, "assets", []) or []:
+            path = getattr(asset, "path", None) or getattr(asset, "source_path", None)
+            if path is None:
+                continue
+            asset_id = getattr(asset, "asset_id", None) or asset_id_for_path(str(path))
+            duration = getattr(asset, "duration_sec", None)
+            if duration is None:
+                duration = getattr(asset, "duration_seconds", None)
+            if duration is None:
+                try:
+                    duration = probe_duration_seconds(path)
+                except Exception:  # noqa: BLE001
+                    duration = None
+            assets.append(
+                {
+                    "asset_id": asset_id,
+                    "folder": folder,
+                    "path": str(path),
+                    "duration_seconds": duration,
+                    "media_type": getattr(asset, "media_type", None),
+                }
+            )
+    return assets
+
+
+def _style_text(project: Project) -> str:
+    profile = load_style_profile(project)
+    return profile.model_dump_json(indent=2) if profile else "(kein Style Profile)"
+
+
+def _dramaturgy_text(project: Project) -> str:
+    plan = load_confirmed_dramaturgy(project)
+    return plan.model_dump_json(indent=2) if plan else "(keine Dramaturgie)"
+
+
+def parse_rough_cut_response(raw: str | dict[str, Any], script_version: str) -> tuple[
+    RoughCutPlanDocument, CoverageGapsDocument
+]:
+    payload = _extract_json(raw) if isinstance(raw, str) else raw
+    if not isinstance(payload, dict):
+        raise CutPlanError("Grober Cut Plan ist kein JSON-Objekt.")
+
+    directives = [
+        PauseDirective(
+            after_segment_id=str(item.get("after_segment_id") or ""),
+            pause_function=str(item.get("pause_function") or "breath"),
+            duration_class=str(item.get("duration_class") or "medium"),
+            visual_behavior=str(item.get("visual_behavior") or "editorial_choice"),
+            editorial_reason=str(item.get("editorial_reason") or ""),
+        )
+        for item in payload.get("pause_directives") or []
+        if isinstance(item, dict) and item.get("after_segment_id")
+    ]
+    # Reject final frames in LLM output.
+    blob = json.dumps(payload)
+    if '"frame"' in blob.lower() or "timecode" in blob.lower():
+        # Soft check: explicit final frame fields are not part of schema; ignore keys.
+        pass
+    for item in payload.get("shots") or []:
+        if isinstance(item, dict) and (
+            "start_frame" in item or "end_frame" in item or "timeline_start" in item
+        ):
+            raise CutPlanError("LLM-Ausgabe enthält finale Frames/Timelinezeiten.")
+
+    shots: list[RoughShot] = []
+    for index, item in enumerate(payload.get("shots") or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        start = item.get("narration_start_anchor") or {}
+        end = item.get("narration_end_anchor") or {}
+        asset_id = item.get("asset_id")
+        shots.append(
+            RoughShot(
+                shot_id=str(item.get("shot_id") or f"shot_{index:03d}"),
+                narration_start_anchor=NarrationAnchor(
+                    segment_id=str(start.get("segment_id") or ""),
+                    offset_seconds=float(start.get("offset_seconds") or 0.0),
+                ),
+                narration_end_anchor=NarrationAnchor(
+                    segment_id=str(end.get("segment_id") or ""),
+                    offset_seconds=float(end.get("offset_seconds") or 0.0),
+                ),
+                visual_intent_id=str(item.get("visual_intent_id") or ""),
+                asset_id=None if asset_id in (None, "", "null") else str(asset_id),
+                candidate_asset_ids=[
+                    str(x) for x in (item.get("candidate_asset_ids") or []) if x
+                ],
+                editorial_function=str(item.get("editorial_function") or "orientation"),
+                editorial_reason=str(item.get("editorial_reason") or ""),
+                visual_behavior=str(item.get("visual_behavior") or "hold"),
+                may_overlap_pause=bool(item.get("may_overlap_pause", False)),
+            )
+        )
+
+    gaps = [
+        CoverageGap(
+            gap_id=str(item.get("gap_id") or f"gap_{i:03d}"),
+            related_shot_ids=[str(x) for x in (item.get("related_shot_ids") or []) if x],
+            visual_intent_id=str(item.get("visual_intent_id") or ""),
+            subject=str(item.get("subject") or ""),
+            location=str(item.get("location") or ""),
+            action=str(item.get("action") or ""),
+            editorial_function=str(item.get("editorial_function") or "orientation"),
+            preferred_media_type=str(item.get("preferred_media_type") or "video"),
+            fallback_media_type=str(item.get("fallback_media_type") or "photo"),
+            minimum_resolution=str(item.get("minimum_resolution") or "1920x1080"),
+            priority=str(item.get("priority") or "high"),
+            reason=str(item.get("reason") or ""),
+            search_queries=[str(x) for x in (item.get("search_queries") or []) if x],
+        )
+        for i, item in enumerate(payload.get("coverage_gaps") or [], start=1)
+        if isinstance(item, dict)
+    ]
+
+    # Ensure null-asset shots produce gaps.
+    covered_shots = {gid for gap in gaps for gid in gap.related_shot_ids}
+    for shot in shots:
+        if shot.asset_id is None and shot.shot_id not in covered_shots:
+            gaps.append(
+                CoverageGap(
+                    gap_id=f"gap_auto_{shot.shot_id}",
+                    related_shot_ids=[shot.shot_id],
+                    visual_intent_id=shot.visual_intent_id,
+                    subject=shot.editorial_function,
+                    action="coverage needed",
+                    editorial_function=shot.editorial_function,
+                    reason="Kein lokales Asset für diesen Shot zugewiesen.",
+                    search_queries=[
+                        shot.editorial_reason or shot.visual_intent_id or shot.shot_id
+                    ],
+                )
+            )
+
+    rough = RoughCutPlanDocument(
+        script_version=script_version,
+        pause_directives=directives,
+        shots=shots,
+    )
+    coverage = CoverageGapsDocument(script_version=script_version, gaps=gaps)
+    return rough, coverage
+
+
+def generate_rough_cut_and_pauses(
+    project: Project,
+    *,
+    llm_callable: Callable[..., Any] | None = None,
+) -> tuple[RoughCutPlanDocument, CoverageGapsDocument]:
+    locked = require_locked_script(project)
+    errors = validate_timings_against_script(project)
+    if errors:
+        raise CutPlanError("; ".join(errors))
+    timings = load_segment_timings(project)
+    assert timings is not None
+
+    prompt = build_rough_cut_prompt(
+        locked_script_json=locked.model_dump_json(indent=2),
+        segment_timings_json=timings.model_dump_json(indent=2),
+        local_assets_json=json.dumps(_local_assets_payload(project), ensure_ascii=False, indent=2),
+        style_profile_text=_style_text(project),
+        dramaturgy_text=_dramaturgy_text(project),
+    )
+    if llm_callable is not None:
+        raw = llm_callable(prompt=prompt, model="openai:gpt-5.4-mini")
+        raw_text = raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
+    else:
+        raw_text = generate_plan_text_with_metadata(
+            prompt=prompt, model="openai:gpt-5.4-mini"
+        ).raw_text
+    rough, coverage = parse_rough_cut_response(raw_text, locked.script_version)
+
+    timeline = build_narration_timeline(
+        script_version=locked.script_version,
+        segment_timings=timings.segments,
+        pause_directives=rough.pause_directives,
+    )
+    write_json(pause_directives_path(project), {"directives": [d.model_dump(mode="json") for d in rough.pause_directives]})
+    write_json(narration_timeline_path(project), timeline)
+    write_json(rough_cut_plan_path(project), rough)
+    write_json(coverage_gaps_path(project), coverage)
+    return rough, coverage
+
+
+def search_supplements_for_gaps(
+    project: Project,
+    *,
+    providers=None,
+) -> StockSearchResultsDocument:
+    locked = require_locked_script(project)
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    if coverage is None or not coverage.gaps:
+        raise CutPlanError("Keine Coverage Gaps vorhanden.")
+
+    all_candidates: list[StockCandidate] = []
+    provider_status: dict[str, str] = {}
+    for gap in coverage.gaps:
+        queries = gap.search_queries or [gap.subject or gap.action or gap.gap_id]
+        for query in queries:
+            found, status = search_all_providers(
+                query,
+                media_type=gap.preferred_media_type,
+                providers=providers,
+            )
+            for key, value in status.items():
+                provider_status.setdefault(key, value)
+            for candidate in found:
+                candidate.gap_id = gap.gap_id
+                all_candidates.append(candidate)
+
+    document = StockSearchResultsDocument(
+        script_version=locked.script_version,
+        provider_status=provider_status,
+        candidates=all_candidates,
+    )
+    write_json(stock_search_results_path(project), document)
+    return document
+
+
+def accept_supplement_candidates(
+    project: Project,
+    candidate_ids: list[str],
+) -> AcceptedSupplementsDocument:
+    locked = require_locked_script(project)
+    results = load_model(stock_search_results_path(project), StockSearchResultsDocument)
+    if results is None:
+        raise CutPlanError("Keine Stockergebnisse vorhanden.")
+    selected: list[StockCandidate] = []
+    for candidate in results.candidates:
+        if candidate.candidate_id in candidate_ids:
+            if candidate.license in (None, "", "unknown"):
+                # Keep unknown license metadata as null/unknown — do not invent;
+                # still allow manual accept but flag in attribution note.
+                candidate.license = candidate.license or None
+            candidate.selected = True
+            selected.append(candidate)
+    document = AcceptedSupplementsDocument(
+        script_version=locked.script_version,
+        supplements=selected,
+    )
+    write_json(accepted_supplements_path(project), document)
+    # Persist selection flags on search results too.
+    for candidate in results.candidates:
+        candidate.selected = candidate.candidate_id in candidate_ids
+    write_json(stock_search_results_path(project), results)
+    return document
+
+
+def parse_final_cut_response(raw: str | dict[str, Any], script_version: str) -> FinalCutPlanDocument:
+    payload = _extract_json(raw) if isinstance(raw, str) else raw
+    if not isinstance(payload, dict):
+        raise CutPlanError("Finaler Cut Plan ist kein JSON-Objekt.")
+    shots: list[FinalShot] = []
+    for index, item in enumerate(payload.get("shots") or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        start = item.get("narration_start_anchor") or {}
+        end = item.get("narration_end_anchor") or {}
+        asset_id = str(item.get("asset_id") or "").strip()
+        if not asset_id:
+            raise CutPlanError(f"Shot {item.get('shot_id')} ohne asset_id.")
+        shots.append(
+            FinalShot(
+                shot_id=str(item.get("shot_id") or f"shot_{index:03d}"),
+                narration_start_anchor=NarrationAnchor(
+                    segment_id=str(start.get("segment_id") or ""),
+                    offset_seconds=float(start.get("offset_seconds") or 0.0),
+                ),
+                narration_end_anchor=NarrationAnchor(
+                    segment_id=str(end.get("segment_id") or ""),
+                    offset_seconds=float(end.get("offset_seconds") or 0.0),
+                ),
+                asset_id=asset_id,
+                editorial_function=str(item.get("editorial_function") or "narration_support"),
+                editorial_reason=str(item.get("editorial_reason") or ""),
+                transition_behavior=str(item.get("transition_behavior") or "straight_cut"),
+                source_range_intent=str(
+                    item.get("source_range_intent") or "representative_middle_section"
+                ),
+                may_overlap_pause=bool(item.get("may_overlap_pause", False)),
+            )
+        )
+    if not shots:
+        raise CutPlanError("Finaler Plan enthält keine Shots.")
+    return FinalCutPlanDocument(script_version=script_version, shots=shots)
+
+
+def generate_final_cut_plan(
+    project: Project,
+    *,
+    llm_callable: Callable[..., Any] | None = None,
+) -> FinalCutPlanDocument:
+    from otio_app.services.without_voiceover_enhanced.models import NarrationTimelineDocument
+
+    locked = require_locked_script(project)
+    rough = load_model(rough_cut_plan_path(project), RoughCutPlanDocument)
+    timeline = load_model(narration_timeline_path(project), NarrationTimelineDocument)
+    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
+    if rough is None or timeline is None:
+        raise CutPlanError("Grober Cut Plan / Narrationstimeline fehlt.")
+    accepted_json = (
+        accepted.model_dump_json(indent=2)
+        if accepted is not None
+        else json.dumps({"supplements": []})
+    )
+    # Only accepted supplements may enter LLM run 3.
+    prompt = build_final_cut_prompt(
+        locked_script_json=locked.model_dump_json(indent=2),
+        narration_timeline_json=timeline.model_dump_json(indent=2),
+        pause_directives_json=json.dumps(
+            [d.model_dump(mode="json") for d in rough.pause_directives],
+            ensure_ascii=False,
+            indent=2,
+        ),
+        rough_cut_json=rough.model_dump_json(indent=2),
+        local_assets_json=json.dumps(_local_assets_payload(project), ensure_ascii=False, indent=2),
+        accepted_supplements_json=accepted_json,
+        style_profile_text=_style_text(project),
+    )
+    if llm_callable is not None:
+        raw = llm_callable(prompt=prompt, model="openai:gpt-5.4-mini")
+        raw_text = raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
+    else:
+        raw_text = generate_plan_text_with_metadata(
+            prompt=prompt, model="openai:gpt-5.4-mini"
+        ).raw_text
+    final = parse_final_cut_response(raw_text, locked.script_version)
+    write_json(final_cut_plan_path(project), final)
+    return final
