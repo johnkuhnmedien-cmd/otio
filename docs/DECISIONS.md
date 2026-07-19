@@ -734,4 +734,3 @@ Kollisionsfälle bleiben fail-closed. C3 verwendet kein Fuzzy-, Embedding- oder
 LLM-Matching. Geänderte Risk Sets, Missing Properties oder Intent-Semantik
 erzeugen andere Semantic Keys und damit unmatched Gaps — keine Similarity-
 Verbindung.
-
