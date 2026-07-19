@@ -734,3 +734,28 @@ Kollisionsfälle bleiben fail-closed. C3 verwendet kein Fuzzy-, Embedding- oder
 LLM-Matching. Geänderte Risk Sets, Missing Properties oder Intent-Semantik
 erzeugen andere Semantic Keys und damit unmatched Gaps — keine Similarity-
 Verbindung.
+
+---
+
+## D-SCRIPT-LOCK-CURRENT-001 — Editorial Current Pointer is mandatory
+
+**Entscheidung:** Ein wirksamer Script Lock erfordert einen expliziten
+`editorial_project_state.current_script_lock_id`.
+
+Ein historischer `locked`-Datensatz wird niemals allein aufgrund seines Status
+oder seiner zeitlichen Reihenfolge zum Current Lock. Es gibt keinen Fallback auf
+`list_script_locks()[0]` oder `get_current_script_lock` (latest locked). Ein
+staler `narration_project_state.current_script_lock_id` ersetzt den fehlenden
+Editorial-Pointer nicht.
+
+---
+
+## D-SCRIPT-LOCK-CURRENT-002 — Read-only Effective Lock resolution is fail-closed
+
+**Entscheidung:** Die Effective-Lock-Auflösung
+(`resolve_effective_current_script_lock`) ist read-only und prüft
+Current-Identity (project/script/version/narrative/hook/audit/observation),
+den kanonischen Script-Lock-Fingerprint sowie aktuelle
+`gap_id:risk_code`-Bestätigungen fail-closed. Nur `status=locked` kann wirksam
+sein. Der Resolver erzeugt keine Locks, ändert keine Pointer und invalidiert
+keine Artefakte.

@@ -111,19 +111,23 @@
   - Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
 - **Script-Lock L1 Root-Cause-Fixtures abgeschlossen** (`a492c54`)
   - Fake-Alpha USA_v2 an Narration-Grenze blockiert
-  - Editorial: historischer Lock fälschlich als Current; `editorial current_script_lock_id=NULL`
-  - Narration: korrekt „kein wirksamer Lock“; stale `narration current_script_lock_id`
-  - latest-locked Fallback bei fehlendem Editorial-Pointer belegt
+  - Editorial-UI: historischer Lock fälschlich als Current (bis L3)
+  - stale `narration current_script_lock_id` (bis L4)
   - Tests: `tests/test_discovery_v2_script_lock_current_state_l1.py` (10 Node-IDs)
-  - Nächster Schritt nach Freigabe: **L2 Effective-Lock-Resolver**
-- Aktiver Auftrag: keiner (L1 fertig; L2 gesperrt bis Freigabe)
+- **Script-Lock L2 Effective Resolver umgesetzt** (`5bca917`)
+  - `resolve_effective_current_script_lock` read-only / fail-closed
+  - Editorial-Pointer Pflicht; kein latest-locked Fallback
+  - Decisions: D-SCRIPT-LOCK-CURRENT-001 / D-SCRIPT-LOCK-CURRENT-002
+  - Tests: `tests/test_discovery_v2_script_lock_current_state_l2.py` (34 Node-IDs)
+  - Nächster Schritt nach Chief-Dev-Freigabe: **L3 Editorial-/Narration-Gate-Integration**
+- Aktiver Auftrag: keiner (L2 fertig; L3 gesperrt bis Freigabe)
 - R1.3 Acceptance Evidence weiterhin offen
-- Nächste erlaubte Aktion nach Freigabe: **L2 Effective-Lock-Resolver**
-- **L3–L5, C3.4, C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
+- Nächste erlaubte Aktion nach Freigabe: **L3 Editorial-/Narration-Gate-Integration**
+- **L4/L5, C3.4, C4, V4 und R1.4 weiterhin gesperrt** (kein Progress-Polling)
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **3125 collected / 3106 passed / 18 failed / 1 skipped**
+- Teststand: **3159 collected / 3140 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
@@ -969,10 +973,11 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 27. ~~Coverage Stability C3.3 Exact Match Engine~~ — **abgeschlossen** (`7ba6468`)
 28. ~~Script-Lock Current-State Consistency Plan~~ — **dokumentiert** (`6a33d0f`)
 29. ~~Script-Lock L1 Root-Cause-Fixtures~~ — **abgeschlossen** (`a492c54`)
+30. ~~Script-Lock L2 Effective-Lock-Resolver~~ — **umgesetzt** (`5bca917`)
 
-Nächste erlaubte Aktivität nach Freigabe: **Script-Lock L2 Effective-Lock-Resolver**.
-Fake-Alpha an Narration-Grenze blockiert (USA_v2 Effective-Lock-Widerspruch).
-**L3–L5, C3.4, C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
+Nächste erlaubte Aktivität nach Chief-Dev-Freigabe: **Script-Lock L3 Editorial-/Narration-Gate-Integration**.
+Fake-Alpha an Narration-Grenze blockiert (USA_v2 Effective-Lock-Widerspruch; UI bis L3).
+**L4/L5, C3.4, C4, V4 und R1.4 weiterhin gesperrt.** R1.5–R1.6 weiterhin gesperrt.
 Keine neue Produktphase freigegeben.
 
 Ausführungsreihenfolge und Gates: `docs/ALPHA_EXECUTION_MANIFEST.md`

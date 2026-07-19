@@ -2,7 +2,7 @@
 
 ## Aktueller Stand
 
-**Script-Lock Current-State L1 Fixtures abgeschlossen — Schema weiterhin 20.**
+**Script-Lock Current-State L2 Effective Resolver umgesetzt — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
 - Script-Lock Realtest: **erfolgreich**
@@ -13,15 +13,16 @@
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
 - Visual Edit Rework **V1–V3**: implementiert
 - **Coverage Stability C1 / C2 / C2-R1**: vollständig abgeschlossen / USA_v2 abgenommen
-- Decisions: D-COVERAGE-STABILITY-001…008
+- Decisions: D-COVERAGE-STABILITY-001…008 · **D-SCRIPT-LOCK-CURRENT-001/002**
 - C3-Plan: `docs/source_plans/ALPHA_COVERAGE_STABILITY_C3_GAP_IDENTITY_CARRY_FORWARD_PLAN.md`
 - **C3.1 / C3.2 abgeschlossen** (`36367d2` / `47cfafd`)
 - **C3.3 umgesetzt** (`7ba6468`): Exact Match Engine `coverage-gap-match-report-v1`
 - **Fake-Alpha-Test an Narration-Grenze blockiert** (USA_v2): historischer Lock ≠ Effective Lock
 - Script-Lock-Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md` (`6a33d0f`)
 - **L1 Root-Cause-Fixtures abgeschlossen** (`a492c54`)
-- **Nächste erlaubte Aktion nach Freigabe: L2 Effective-Lock-Resolver**
-- **L3–L5, C3.4, C4, V4 und R1.4 gesperrt**
+- **L2 Effective-Lock-Resolver umgesetzt** (`5bca917`)
+- **Nächste erlaubte Aktion nach Chief-Dev-Freigabe: L3 Editorial-/Narration-Gate-Integration**
+- **L4/L5, C3.4, C4, V4 und R1.4 gesperrt**
 - Keine neue Produktphase · echte Provider gesperrt
 
 ## Phase-Status
@@ -41,8 +42,9 @@
 | Coverage Stability C3.4 | **gesperrt** |
 | Script-Lock Current-State Plan | **dokumentiert** |
 | Script-Lock L1 Fixtures | **abgeschlossen** (Root-Cause-Reproduktion) |
-| Script-Lock L2 Effective Resolver | nächster erlaubter Schritt (nach Freigabe) |
-| Script-Lock L3–L5 | **gesperrt** bis jeweilige Freigabe |
+| Script-Lock L2 Effective Resolver | **umgesetzt** (read-only, fail-closed) |
+| Script-Lock L3 UI/Gate Integration | nächster erlaubter Schritt (nach Freigabe) |
+| Script-Lock L4/L5 | **gesperrt** bis jeweilige Freigabe |
 | Coverage Stability C4 | **gesperrt** |
 | Visual Edit Rework V4 Loop/UI | **gesperrt** |
 | R1.4 Job-UX / Progress-Polling | **gesperrt** |
@@ -51,20 +53,20 @@
 ## Script-Lock Current-State Consistency — Kurzstand
 
 - Fake-Alpha USA_v2 an Narration-Grenze blockiert
-- **L1 abgeschlossen** — deterministische Fixtures A/B/C + 10 grüne Regressionstests
-- Root Cause (belegt):
-  - Editorial-UI = `list_script_locks[0]` als „Aktueller Lock“ trotz `editorial current_script_lock_id=NULL`
-  - New-Lock-Button deaktiviert im Deadlock-Stand (Preview/Confirm-Pfad)
-  - Fingerprint-Widerspruch: historischer Lock-FP in Caption vs. aktueller Preview-Stand
-  - Narration/`get_effective_script_lock` lehnt mismatched Lock korrekt ab; Voice bleibt gesperrt
-  - Invalidierung (`save_user_script_edit` → `get_effective_script_lock`) leert nur Editorial-Pointer; Narration-Pointer bleibt stale
-  - Missing Editorial-Pointer → Fallback auf latest `status='locked'` (`get_current_script_lock`)
-- Fixtures: `tests/fixtures/script_lock_current_state_l1.py`
-- Tests: `tests/test_discovery_v2_script_lock_current_state_l1.py` (10 Node-IDs)
-- Testcommit: `a492c54`
+- **L1 abgeschlossen** — Fixtures A/B/C + UI-Deadlock-Nachweise (`a492c54`)
+- **L2 umgesetzt** — `resolve_effective_current_script_lock` read-only / fail-closed (`5bca917`)
+  - Editorial `current_script_lock_id` Pflicht; kein latest-locked Fallback
+  - Identity + kanonischer Fingerprint + `gap_id:risk_code` + `status=locked`
+  - Narration-Pointer nur diagnostisch (`narration_script_lock_stale`)
+  - Decisions: D-SCRIPT-LOCK-CURRENT-001 / D-SCRIPT-LOCK-CURRENT-002
+- Editorial-UI zeigt historischen Lock weiterhin fälschlich als Current (**bis L3**)
+- stale Narration-Pointer bleibt (**bis L4**)
+- Domain: `otio_app/discovery_v2/domain/script_lock_current_state.py`
+- Application: `otio_app/discovery_v2/application/script_lock_current_state_service.py`
+- Tests: `tests/test_discovery_v2_script_lock_current_state_l2.py` (34 Node-IDs)
 - Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
-- Nächster Schritt nach Freigabe: **L2 Effective-Lock-Resolver**
-- Gesperrt: L3–L5, C3.4, C4, V4, R1.4
+- Nächster Schritt nach Freigabe: **L3 Editorial-/Narration-Gate-Integration**
+- Gesperrt: L4/L5, C3.4, C4, V4, R1.4
 
 ## Coverage Stability C3.3 — Kurzstand
 
@@ -141,15 +143,15 @@ Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Ga
 
 ## Teststand
 
-**3125 collected / 3106 passed / 18 failed / 1 skipped** (~357s; +10 L1-Tests)
+**3159 collected / 3140 passed / 18 failed / 1 skipped** (~412s; +34 L2-Tests)
 
 18 bekannte Classic/Without-VO-Fehler und 1 VFR-Skip unverändert.
 
 ## Nächste erlaubte Aktivität
 
-Nach Freigabe:
+Nach Chief-Dev-Freigabe:
 
-→ **L2 Effective-Lock-Resolver**
+→ **L3 Editorial-/Narration-Gate-Integration**
 
-Weiter gesperrt: L3–L5, C3.4, C4, V4, R1.4–R1.6,
+Weiter gesperrt: L4/L5, C3.4, C4, V4, R1.4–R1.6,
 echte Provider, neue Produktphase, Nutzerregistry-Reparatur.

@@ -33,36 +33,38 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 - Repository / Worktree: Discovery-V2-Integration (`cursor/discovery-v2-integration`)
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Aktueller HEAD: Script-Lock L1 Fixtures (`a492c54` + Docs)
+- Aktueller HEAD: Script-Lock L2 Effective Resolver (`5bca917` + Docs)
 - V1–V3 Visual Edit: `70ffe6e` / `0fba7bd` / `f1b982a`
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
 - R1.1–R1.3 abgeschlossen · Script-Lock Realtest **erfolgreich**
 - Chief-Dev Alpha-Produktstand: **APPROVED**
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - Registry-Schema: **20**
-- Teststand: **3125 collected / 3106 passed / 18 failed / 1 skipped**
+- Teststand: **3159 collected / 3140 passed / 18 failed / 1 skipped**
 - Provider: Fake-only · Adobe: UNKNOWN · NLE: lokaler OTIO-Serialize/Reparse
 - Decisions: D-R1.1-001…004 · D-R1.2-001…003 · D-R1.3-001…004 ·
-  D-VE-REWORK-001…006 · D-COVERAGE-STABILITY-001…008
+  D-VE-REWORK-001…006 · D-COVERAGE-STABILITY-001…008 ·
+  **D-SCRIPT-LOCK-CURRENT-001/002**
 - Visual Edit V1–V3: **abgeschlossen**
 - **Coverage Stability C2 vollständig akzeptiert** (C1+C2+C2-R1 + USA_v2)
 - **C3.1 / C3.2 abgeschlossen** (`36367d2` / `47cfafd`)
 - **C3.3 Exact Match Engine umgesetzt** (`7ba6468`)
 - **Script-Lock Current-State Plan dokumentiert** (`6a33d0f`)
 - **Script-Lock L1 Root-Cause-Fixtures abgeschlossen** (`a492c54`)
+- **Script-Lock L2 Effective Resolver umgesetzt** (`5bca917`)
   - Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
-  - Editorial-Deadlock, stale Narration-Pointer, latest-lock-Fallback belegt
-  - Root Cause: UI=`list_script_locks[0]` vs Gates=`get_effective_script_lock`; stale Narration-Pointer
+  - Editorial-Pointer Pflicht; kein latest-locked Fallback; read-only Resolver
+  - Editorial-UI-Deadlock bleibt bis L3; stale Narration-Pointer bis L4
 - Offener UI-Befund: Visual-Intent-ID teilweise als Gap-ID beschriftet (nicht C3)
-- **Nächste erlaubte Aktion nach Freigabe: L2 Effective-Lock-Resolver**
-- **L3–L5, C3.4, C4, V4 und R1.4 gesperrt** · echte Provider gesperrt
+- **Nächste erlaubte Aktion nach Chief-Dev-Freigabe: L3 Editorial-/Narration-Gate-Integration**
+- **L4/L5, C3.4, C4, V4 und R1.4 gesperrt** · echte Provider gesperrt
 - Keine neue Produktphase · keine Nutzerregistry-Reparatur
 
 ## Nächste erlaubte Aktion nach Freigabe
 
-**L2 Effective-Lock-Resolver** nach Freigabe.
+**L3 Editorial-/Narration-Gate-Integration** nach Chief-Dev-Freigabe.
 
-Gesperrt: L3–L5 bis Freigabe; C3.4, C4, UI Gap-Label, V4, R1.4, echte Provider.
+Gesperrt: L4/L5 bis Freigabe; C3.4, C4, UI Gap-Label, V4, R1.4, echte Provider.
 
 ## Verbindliche Kurzregeln
 
