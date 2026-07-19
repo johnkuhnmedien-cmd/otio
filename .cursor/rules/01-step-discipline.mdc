@@ -1,0 +1,86 @@
+---
+description: Discovery V2 step discipline and review gates (reconstructed bootstrap SoT)
+alwaysApply: true
+---
+
+> **RECONSTRUCTED_BOOTSTRAP**
+>
+> - Dokumente wurden für dieses Repository neu konsolidiert.
+> - Andere Projekte sind keine normative Discovery-V2-Quelle.
+> - Gelöschter GPT-Wissensstand ist keine Repositoryquelle.
+> - Verbindlich ist der für Discovery V2 geprüfte Inhalt ab den Bootstrap- und Korrekturcommits.
+> - Der Bootstrap beansprucht keine historische Wortlauttreue.
+> - Nicht belegte externe Details bleiben **UNKNOWN**.
+
+# Discovery V2 — Step Discipline
+
+## Source-of-Truth-Reihenfolge
+
+1. `.cursor/rules/00-core-architecture.mdc`
+2. `.cursor/rules/01-step-discipline.mdc`
+3. `docs/DECISIONS.md`
+4. `docs/MASTER_PLAN.md`
+5. `docs/ALPHA_SCOPE.md`
+6. `docs/PIPELINE_SPEC.md`
+7. `docs/MEDIA_LIFECYCLE.md`
+8. `docs/EDITORIAL_QUALITY.md`
+9. `docs/MODEL_ROUTING.md`
+10. `docs/CLASSIC_MIGRATION_CONTRACT.md`
+11. `docs/PROGRESS.md`
+12. `docs/CHIEF_DEV_HANDOFF.md`
+13. `docs/source_plans/*`
+
+`docs/source_plans/*` ist nachrangig: aktuell möglicherweise leer/nicht vorhanden;
+zukünftige akzeptierte Source Plans dürfen höhere Dokumente nicht überschreiben.
+
+## Verbindlicher Entwicklungsprozess
+
+1. Projektstand und relevante Dokumente prüfen.
+2. Nur den nächsten freigegebenen Schritt planen.
+3. Präzisen Cursor-Auftrag formulieren.
+4. Nur diesen Auftrag umsetzen.
+5. Bericht, Diff und Tests liefern.
+6. Gegen Regeln und Kriterien prüfen.
+7. Genau einen Status vergeben:
+   - `APPROVED`
+   - `APPROVED_WITH_CONDITIONS`
+   - `REWORK_REQUIRED`
+   - `REJECTED`
+   - `BLOCKED`
+8. Erst nach Freigabe Folgephase beginnen.
+
+## Zusätzliche Regeln
+
+- Keine spätere Phase vorwegnehmen
+- Kein `APPROVED` ohne nachvollziehbaren Diff und passende Tests
+- Keine stillen Architekturänderungen
+- Keine Reparatur fremder Baseline-Fehler ohne eigenen Auftrag
+- Keine Secrets
+- Keine Originalmedien ändern
+- Stop-Regel je Auftrag
+- Beschleunigte Makroaufträge erlaubt, solange Gates und Ausschlüsse klar bleiben
+- `docs/ALPHA_EXECUTION_MANIFEST.md` darf Fachentscheidungen nicht still überschreiben
+- Hinterlegte KI-Timelines sind `NEGATIVE_REFERENCE`, keine Qualitätsvorlage
+
+## Pflichtbericht (14 Punkte)
+
+1. Auftrags-ID
+2. Zusammenfassung
+3. neue/geänderte/gelöschte Dateien
+4. Git-Diff
+5. Architektur- und Schemaänderungen
+6. Befehle
+7. Tests
+8. fehlgeschlagene Tests
+9. Smoke-Test
+10. Risiken
+11. Abweichungen
+12. Classic unverändert
+13. keine Secrets
+14. keine Folgephase begonnen
+
+## Freigabe-Gates
+
+- Produktphasen nur mit explizitem Auftrag nach Freigabe der Vorgängerarbeit
+- Provider-Gates (Vision, Voice, Stock) getrennt; keine stillen Fallbacks
+- `BLOCKED` bei ungelöstem SoT-Konflikt, Secret-Risiko oder Pfadvertragsverletzung

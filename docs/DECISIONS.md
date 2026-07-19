@@ -1,0 +1,863 @@
+# Decisions — Discovery V2 / Alpha
+
+Dieses Dokument ist Source of Truth für verbindliche Produktentscheidungen.
+Bestehende Einträge werden nicht umgeschrieben; neue Entscheidungen werden
+angehängt.
+
+Source-of-Truth-Reihenfolge (Auszug): Regeln `00`/`01` → dieses Dokument →
+`MASTER_PLAN` → … → `CHIEF_DEV_HANDOFF` → `docs/source_plans/*`
+(nachrangig; ggf. leer; überschreibt nichts Höheres).
+Bei Widerspruch gilt die höhere Quelle.
+
+---
+
+## D-BOOTSTRAP-001 — Rekonstruierte Bootstrap-Source-of-Truth
+
+**Entscheidung:** Die fehlenden Architektur- und Planungsdokumente werden als
+transparent gekennzeichnete **RECONSTRUCTED_BOOTSTRAP**-Basis angelegt und gelten
+ab dem Bootstrap-Commit als Repositoryvertrag. Sie erheben keinen Anspruch, den
+exakten Wortlaut früherer, nicht auffindbarer Originale wiederzugeben
+(`DISCOVERY-V2-SOURCE-OF-TRUTH-RECOVERY-001` → `NOT_FOUND`).
+
+**Kontext:** Nach Repository- und Dateisystemsuche waren keine historischen
+Originale der höheren SoT-Dateien auffindbar. Die Rekonstruktion konsolidiert
+akzeptierten Handoff, Code/Tests der Phasen 7–8, bestehende Decisions und
+externe Audit-Referenzen (Vergleichsquellen, nicht höhere SoT). Ungeklärte
+API-/OAuth-/Lizenz-/Providerdetails bleiben UNKNOWN.
+
+**Betroffene Dateien:**
+
+- `.cursor/rules/00-core-architecture.mdc`
+- `.cursor/rules/01-step-discipline.mdc`
+- `docs/MASTER_PLAN.md`
+- `docs/ALPHA_SCOPE.md`
+- `docs/PIPELINE_SPEC.md`
+- `docs/MEDIA_LIFECYCLE.md`
+- `docs/EDITORIAL_QUALITY.md`
+- `docs/MODEL_ROUTING.md`
+- `docs/CLASSIC_MIGRATION_CONTRACT.md`
+- `docs/CHIEF_DEV_HANDOFF.md`
+
+---
+
+## D-8D-001 — Beschleunigte Makrophasen 9–13
+
+**Entscheidung:** Nach Abschluss von Phase 8 folgt der Alpha-Pfad in fünf
+beschleunigten Makrophasen (9 Editorial Core, 10 Supplementation/Script Lock,
+11 Voice/Timing, 12 Visual Edit Plan/Quality, 13 Review/OTIO), wie im
+Alpha Execution Manifest beschrieben.
+
+**Kontext:** Phase 8 liefert lokale Assetanalyse inkl. Fake Vision und
+Observation Review. Der weitere Alpha-Pfad wird gebündelt, ohne MANUAL oder
+höhere Spezifikationen zu ersetzen.
+
+---
+
+## D-8D-002 — Alpha Execution Manifest ist untergeordnet
+
+**Entscheidung:** `docs/ALPHA_EXECUTION_MANIFEST.md` ist ein
+Ausführungs-/Bündelungsplan und bleibt untergeordnet gegenüber
+`.cursor/rules/00-core-architecture.mdc`,
+`.cursor/rules/01-step-discipline.mdc`, `DECISIONS.md`, `MASTER_PLAN.md`,
+`ALPHA_SCOPE.md`, `PIPELINE_SPEC.md`, `MEDIA_LIFECYCLE.md`,
+`EDITORIAL_QUALITY.md`, `MODEL_ROUTING.md` und
+`CLASSIC_MIGRATION_CONTRACT.md`.
+
+Bei Widerspruch gelten die höheren Quellen. Das Manifest darf keine fachliche
+Entscheidung still verändern.
+
+---
+
+## D-8D-003 — Echter Vision-Provider bleibt separates Gate
+
+**Entscheidung:** Phase 8 schließt mit Fake Vision ab. Gemini/OpenAI/Anthropic/
+OpenRouter/xAI Vision bleiben gesperrt, bis ein eigener Provider-Gate-Auftrag
+sie freigibt. Kein stiller Produktiv-Upload, kein HTTP/SDK in Discovery Vision.
+
+---
+
+## D-8D-004 — Akzeptierte Visual Observation ist keine Asset- oder Faktenfreigabe
+
+**Entscheidung:** `accepted` bedeutet nur, dass die strukturierte Visual
+Observation als geprüfte redaktionelle Eingabe für eine spätere Phase angeboten
+werden darf. Es bedeutet nicht:
+
+- automatische Asset-Auswahl für das Video
+- faktische Bestätigung
+- bestätigte Geografie
+- bestätigte Synthetic-Klassifikation
+- dramaturgische Eignung
+- Freigabe für Visual Beats
+
+---
+
+## D-8D-005 — Observation-Reviewhistorie ist unveränderlich und versioniert
+
+**Entscheidung:** Reviews sind append-only Ereignisse mit monoton steigender
+`review_revision` je `observation_id`. Bestehende Reviewzeilen werden nicht
+überschrieben oder gelöscht. Der aktuelle Review ist die höchste Revision.
+`reanalyze_requested` startet keinen automatischen Model-Run.
+
+---
+
+## D-DOC-006 — Bootstrap nutzte fremdes Ausgangsmaterial
+
+**Entscheidung / Feststellung:** Bei der ersten Bootstrap-Erstellung
+(`44e6bf0c2ceeef787c607380f3cb8d6022947ef0`) wurden Dokumentstrukturen
+beziehungsweise Inhalte aus einem anderen Projekt als Ausgangsmaterial
+verwendet.
+
+**Kontext:** Die so entstandenen Dateien sind keine wiedergefundenen Discovery-V2-
+Originale. Sie erfordern eine Provenienz-Bereinigung gegen ausschließlich
+Discovery-V2-Quellen.
+
+---
+
+## D-DOC-007 — Andere Projekte sind keine Discovery-V2-SoT
+
+**Entscheidung:** Andere Projekte sind keine Source of Truth für Discovery V2.
+Projektfremde Fachinhalte wurden entfernt oder anhand des aktuellen
+Discovery-V2-Stands (Handoff, Code, Tests, akzeptierte Decisions/Manifest,
+zugelassene Audit-Abgrenzung) neu verifiziert und geschrieben.
+
+**Kontext:** Verbindlich ist der für Discovery V2 verifizierte Inhalt ab dem
+Provenienz-Bereinigungscommit. Übernommene Dokumentstrukturen besitzen keine
+normative Bedeutung. Nicht belegte externe Details bleiben UNKNOWN.
+
+---
+
+## D-DOC-008 — Korrektur zur Provenienzannahme in D-DOC-006
+
+**Entscheidung / Feststellung:** Die Aussage in D-DOC-006 beruhte auf einer
+später korrigierten Provenienzannahme. Es gibt keinen belastbaren Nachweis, dass
+Cursor fachliche Source-of-Truth-Dokumente aus einem fremden Repository
+übernommen hat.
+
+**Kontext:** D-DOC-006 bleibt aus Append-only-Gründen historisch sichtbar und
+gilt nur zusammen mit D-DOC-008 bis D-DOC-010.
+
+---
+
+## D-DOC-009 — Gelöschte GPT-Wissensdateien sind keine Repositoryquelle
+
+**Entscheidung:** Gelöschte oder frühere GPT-Wissensdateien sind keine
+Repositoryquelle und verändern weder Git-Historie noch Produktcode.
+
+---
+
+## D-DOC-010 — Wiederherstellung verbindlicher Bootstrap-Regeln
+
+**Entscheidung:** Beim Provenance-Rework (`9daf2739c22279872bc096f5970eb02e2c2c8357`)
+wurden mehrere verbindliche Discovery-V2-Regeln zu stark entfernt.
+CHECKPOINT-Vorbereitung, LLM-Pausenregie, Providerkonfigurierbarkeit,
+Adobe-Reihenfolge, Stock-Eskalation und Humanity-Kriterien werden mit dem
+Authority-Restore-Commit wiederhergestellt.
+
+**Kontext:** D-DOC-006 und D-DOC-007 bleiben historisch sichtbar, gelten aber nur
+zusammen mit D-DOC-008 bis D-DOC-010.
+
+---
+
+## D-9-001 — DiscoveryTextGateway mit FakeTextAdapter
+
+**Entscheidung:** Phase 9 verwendet einen eigenen zentralen DiscoveryTextGateway
+mit FakeTextAdapter als erstem Adapter. Alle Editorial-Textaufrufe laufen über
+diesen Gateway. Keine direkten Adapteraufrufe aus UI/Domain; kein stiller Fallback.
+
+---
+
+## D-9-002 — Phase 9 endet nach Coverage Audit
+
+**Entscheidung:** Phase 9 endet nach dem Coverage Audit. Stock, Script Lock,
+Voice, Timing und OTIO bleiben Folgephasen.
+
+---
+
+## D-9-003 — Getrennte versionierte Editorial-Modelle
+
+**Entscheidung:** Project Brief, Narrative Plan, Hook, Script, Sentence, Claim,
+Visual Beat, Visual Intent und Coverage Audit sind getrennte versionierte Modelle.
+
+---
+
+## D-9-004 — Many-to-Many Beats und keine Kapitel aus Source Groups
+
+**Entscheidung:** Ein Satz kann mehreren Visual Beats zugeordnet sein, und ein
+Visual Beat kann mehrere Sätze enthalten. Source Groups erzeugen keine Kapitel.
+
+---
+
+## D-9-005 — Nutzerbearbeitungen versionieren und stale machen
+
+**Entscheidung:** Nutzerbearbeitungen erzeugen neue Script-Versionen und machen
+strukturierte Ableitungen sowie Coverage stale. Strukturaktualisierung ist
+explizit (`structure_pending` bis zum Structure-Run).
+
+---
+
+## D-9-006 — Coverage nur mit accepted Observations, max. fünf Kandidaten
+
+**Entscheidung:** Coverage verwendet ausschließlich aktuelle accepted Observations,
+begrenzt lokale Kandidaten auf fünf pro Intent (ohne stille Kürzung) und startet
+keine Stock-Suche.
+
+---
+
+## D-10-001 — StockSearchGateway mit FakeStockSearchAdapter
+
+**Entscheidung:** Phase 10 verwendet einen zentralen StockSearchGateway mit
+FakeStockSearchAdapter. Echte Stockprovider bleiben gesperrt.
+
+---
+
+## D-10-002 — Candidate ≠ Asset / Working Media / Editorial Asset
+
+**Entscheidung:** StockCandidate, Preview, Original, Working Media und Editorial Asset
+sind getrennte Zustände. Candidate-Akzeptanz erzeugt kein Asset.
+
+---
+
+## D-10-003 — Coverage-Gap-Eskalation versioniert und append-only
+
+**Entscheidung:** Die Coverage-Gap-Eskalationsreihenfolge ist versioniert und
+append-only nachvollziehbar.
+
+---
+
+## D-10-004 — Claimentscheidungen menschlich und versionsgebunden
+
+**Entscheidung:** Claimentscheidungen sind menschliche, append-only Ereignisse und an
+die exakte Claim- und Script-Version gebunden.
+
+---
+
+## D-10-005 — Script Locks als unveränderliche Snapshots
+
+**Entscheidung:** Script Locks sind unveränderliche Snapshots der aktuellen Brief-,
+Hook-, Script-, Struktur-, Coverage-, Claim- und Observation-Kette.
+
+---
+
+## D-10-006 — Lock-Invalidierung bei Input-Änderung
+
+**Entscheidung:** Änderungen an einem Lock-Input invalidieren den bisherigen Lock. Ein
+neuer Lock ist erforderlich.
+
+---
+
+## D-10-007 — Candidate löst Gap erst nach Intake und Re-Audit
+
+**Entscheidung:** Ein akzeptierter Stockkandidat löst einen Coverage Gap erst nach
+normalem Intake, aktueller Analyse, Review und erneutem Coverage Audit.
+
+---
+
+## D-10-008 — Adobe OAuth / Lizenz / Auto-Download bleiben UNKNOWN
+
+**Entscheidung:** Adobe OAuth, Lizenzierung, Preise und automatische Downloads bleiben
+UNKNOWN und außerhalb des Fake-Alpha-Pfads.
+
+---
+
+## D-11-001 — VoiceGenerationGateway mit FakeVoiceAdapter
+
+**Entscheidung:** Phase 11 verwendet einen zentralen providerneutralen
+VoiceGenerationGateway mit FakeVoiceAdapter als erstem Adapter.
+
+---
+
+## D-11-002 — Wirksamer Script Lock als Narration-Startbedingung
+
+**Entscheidung:** Phase 11 darf ausschließlich von einem aktuellen wirksamen Script
+Lock gestartet werden.
+
+---
+
+## D-11-003 — Fake-Voice-WAV-Vertrag
+
+**Entscheidung:** Der Fake-Voice-Pfad erzeugt deterministische lokale WAV-Segmente mit
+PCM s16le, 48 kHz und Mono. Er behauptet keine natürliche Stimme.
+
+---
+
+## D-11-004 — Pausenregie über DiscoveryTextGateway
+
+**Entscheidung:** Die Pausenregie läuft über den zentralen DiscoveryTextGateway. Sie
+liefert Funktionen und Dauerabsichten, keine finalen Frames.
+
+---
+
+## D-11-005 — Deterministische Python-Timingauflösung
+
+**Entscheidung:** Python löst Audio, Pausen, Visual-only-Intervalle, Sekundenwerte und
+rationale Framegrenzen deterministisch auf.
+
+---
+
+## D-11-006 — Versionierte Narration-Artefakte und Stale-Kette
+
+**Entscheidung:** Voice-Segmente, Pause-Pläne und Narration Timelines sind versioniert
+und werden durch Änderungen ihrer exakten Inputkette stale.
+
+---
+
+## D-11-007 — Rationale Timebases
+
+**Entscheidung:** Narration verwendet rationale Timebases. 23,976 und 29,97 werden als
+24000/1001 beziehungsweise 30000/1001 gespeichert.
+
+---
+
+## D-11-008 — ElevenLabs bleibt separates Freigabegate
+
+**Entscheidung:** ElevenLabs und andere reale Voiceprovider bleiben ein separates
+Freigabegate und sind im lokalen Fake-Alpha-Pfad nicht aktiviert.
+
+---
+
+## D-11-009 — Direkte Versions-, Script- und Ordnungsbindungen
+
+**Entscheidung:** Voice Profile, Voice Segment und Pause Direction speichern ihre
+Versions-, Script- und Ordnungsbindungen nach der Phase-11-Verifikation direkt und
+eindeutig.
+
+---
+
+## D-11-010 — Ungültige Pause-Referenzen sind permanent
+
+**Entscheidung:** Ungültige Satz- oder Segmentreferenzen in einer Pause-Antwort sind
+permanente Fehler und werden nicht erneut an den Textadapter gesendet.
+
+---
+
+## D-11-011 — Schema 18 als enge Phase-11-Korrekturmigration
+
+**Entscheidung:** Schema 18 ist eine enge Phase-11-Korrekturmigration ohne neue
+Fachphase oder neue Tabellen.
+
+---
+
+## D-12-001 — Editorial Shots sind eigenständige Modelle
+
+**Entscheidung:** Editorial Shots sind eigenständige redaktionelle Modelle und weder
+Technical Shots noch Assets.
+
+---
+
+## D-12-002 — Nur aktuelle Produktionsmedien in Phase 12
+
+**Entscheidung:** Phase 12 verwendet ausschließlich aktuelle completed Working Media,
+aktuelle Analysis Identities und akzeptierte Visual Observations.
+
+---
+
+## D-12-003 — LLM plant, Python löst technisch auf
+
+**Entscheidung:** LLM beziehungsweise Fake Text plant redaktionelle Shotfunktionen und
+Repair-Vorschläge; Python löst Source-Ranges, Frames und technische Machbarkeit auf.
+
+---
+
+## D-12-004 — Humanity & Authenticity als Pflichtreview
+
+**Entscheidung:** Humanity & Authenticity ist ein eigenständiger Pflichtreview vor der
+finalen Editorial Review.
+
+---
+
+## D-12-005 — Deterministische Feasibility
+
+**Entscheidung:** Feasibility ist deterministisch und prüft Timeline, Source-Ranges,
+Working-Media-Verträge und technische Blocker.
+
+---
+
+## D-12-006 — Repairs erzeugen neue Planversionen
+
+**Entscheidung:** Repairs erzeugen neue Planversionen. Redaktionelle Repairs werden
+nicht still angewandt.
+
+---
+
+## D-12-007 — Planned Graphics ohne Working Media blockieren
+
+**Entscheidung:** Planned Graphics ohne reales Working Media blockieren die technische
+Bereitschaft.
+
+---
+
+## D-12-008 — ready_for_editorial_review ist keine Exportfreigabe
+
+**Entscheidung:** `ready_for_editorial_review` ist keine finale Exportfreigabe. OTIO
+bleibt Phase 13 vorbehalten.
+
+---
+
+## D-13-001 — Finale Editorial Approval ist menschlich
+
+**Entscheidung:** Finale Editorial Approval ist eine ausdrückliche menschliche
+Entscheidung und kann nicht durch ein Modell oder einen automatischen Run erzeugt
+werden.
+
+---
+
+## D-13-002 — Approval an exakten aktuellen Zustand gebunden
+
+**Entscheidung:** Approval ist an den exakten aktuellen Script-, Narration-,
+Visual-Edit-, Humanity-, Feasibility-, Repair- und Medienzustand gebunden.
+
+---
+
+## D-13-003 — Export Validation als Pflichtgate
+
+**Entscheidung:** Export Validation ist ein deterministisches Pflichtgate vor jedem
+OTIO-Export.
+
+---
+
+## D-13-004 — OTIO nur Working Media und Narration-WAVs
+
+**Entscheidung:** OTIO referenziert ausschließlich aktuelle validierte Working Media
+und aktuelle validierte Narration-Audiosegmente.
+
+---
+
+## D-13-005 — Zentraler Discovery-V2-OTIO-Adapter
+
+**Entscheidung:** OpenTimelineIO-Erzeugung erfolgt über einen zentralen
+Discovery-V2-Adapter und enthält keine redaktionelle Entscheidungslogik.
+
+---
+
+## D-13-006 — Completed erst nach Reparse und Semantik
+
+**Entscheidung:** Ein OTIO-Export gilt erst nach erfolgreichem Reparse und
+semantischem Vergleich als abgeschlossen.
+
+---
+
+## D-13-007 — KI-Timelines bleiben NEGATIVE_REFERENCE
+
+**Entscheidung:** Die vorhandenen KI-Timelines bleiben ausschließlich
+`NEGATIVE_REFERENCE` und sind keine positive Export- oder Schnittvorlage.
+
+---
+
+## D-13-008 — Phase 13 schließt den lokalen Fake-Alpha-Pfad ab
+
+**Entscheidung:** Phase 13 schließt den lokalen Fake-Alpha-Pfad ab. Proprietäre
+NLE-Exporte, reale Provider, Veröffentlichung und Cloud-Rendering bleiben außerhalb
+des Alpha-Scopes.
+
+---
+
+## D-R1.1-001 — Acceptable Coverage Risks sind Allow-List
+
+**Entscheidung:** Sichtbare akzeptierbare Coverage-Risiken werden nur über eine
+explizite, deterministische Abbildung aus `missing_properties` abgeleitet.
+Mindestens: `exact_match_not_verified` → `coverage_exact_match_not_verified`.
+Unbekannte `missing_properties` gelten nicht automatisch als akzeptierbar.
+Risikoannahme (`accepted_unresolved`) erfordert offene/in_progress Gaps auf
+Eskalation `user_decision`, aktuelle Candidate Decisions alle `rejected`,
+mindestens ein sichtbares akzeptierbares Risiko und ausdrückliche
+Nutzerbestätigung. Historische Candidate Decisions zählen nicht; nur die
+aktuelle Entscheidung pro Candidate.
+
+---
+
+## D-R1.1-002 — Coverage-Persistenz ist staged und idempotent
+
+**Entscheidung:** Coverage-Materialisierung bleibt atomar bezüglich Current State:
+ein fehlgeschlagener Run wird niemals Current; ein vorheriger gültiger Current
+Audit bleibt bei Fehlern erhalten; keine halben Gap-Sätze; identischer
+Wiederanlauf ist idempotent. Persistenzfehler werden staged ausgewiesen
+(z. B. `coverage_artifact_publish_failed`, `coverage_audit_persist_failed`,
+`coverage_current_state_update_failed`) statt undifferenziertem Catch-all.
+Coverage-Audit-IDs müssen pro Run eindeutig sein (inkl. `run_id`).
+
+---
+
+## D-R1.1-003 — Script-Lock-Fingerprint ist serverseitig
+
+**Entscheidung:** Der Script-Lock-Fingerprint wird serverseitig berechnet und
+angezeigt; freies Editieren entfällt. Lock erfordert Checkbox-Bestätigung des
+angezeigten Stands. Fingerprint-Änderung zwischen Anzeige und Klick blockiert
+mit `code=script_lock_fingerprint_mismatch`. Ein historischer fehlgeschlagener
+Coverage-Run blockiert den Lock nicht, solange ein gültiger Current Audit
+vorliegt und alle Gaps terminal sind; geänderte Inputs seit dem Audit blockieren
+mit `coverage_audit_stale`.
+
+---
+
+## D-R1.2-001 — Discovery-Route ist reload-fähig und kanonisch
+
+**Entscheidung:** Discovery-V2-Projekt und -Seite besitzen einen reload-fähigen
+kanonischen Routenzustand über Query-Parameter (`project_id`, `page`) und die
+bestehenden Streamlit-`url_path`-Segmente. `st.session_state` darf UI-Zustand
+cachen, ist aber nicht alleinige Wahrheit für Project-ID, Project Mode oder
+aktuelle Discovery-Seite. Der Projektmodus wird aus dem persistierten Projekt
+geladen und nicht blind aus der URL vertraut. Ungültige Project-IDs und
+Moduskonflikte führen zu verständlicher Projektauswahl bzw. Moduskonflikt —
+nicht zu einem stillen Classic-Fallback. Unbekannte Seiten fallen kontrolliert
+auf die Discovery-Startseite (`overview`) zurück; die Project-ID bleibt erhalten.
+
+---
+
+## D-R1.2-002 — Erfolgreiche Mutationen laden frische Viewmodels
+
+**Entscheidung:** Erfolgreiche synchrone Discovery-V2-Mutationen und explizite
+Jobstarts speichern eine Flash-Meldung und lösen genau einmal `st.rerun()` aus.
+Der Folgerender lädt das Application-Viewmodel neu. Es gibt kein stilles
+Auto-Accept und keine doppelte fachliche Mutation durch den Rerun.
+
+---
+
+## D-R1.2-003 — Rendering und Rerun starten keine I/O-Folgen
+
+**Entscheidung:** Rendering, Browser-Reload und kontrollierte Reruns starten
+keine Jobs, Gateways oder Medienoperationen automatisch. Jobstarts erfolgen
+nur über explizite Buttonklicks; ein Rerun nach Jobstart erzeugt denselben Job
+nicht erneut. Automatisches Polling bleibt R1.4 vorbehalten.
+
+---
+
+## D-R1.3-001 — Vision-Analyseeinheiten sind assetgebunden
+
+**Entscheidung:** Eine Fake-Vision-/Gateway-Anfrage entspricht genau einem Asset.
+Alle zulässigen Representative Frames dieses Assets werden gemeinsam analysiert.
+Frames verschiedener Assets werden nicht in derselben Anfrage vermischt.
+Asset-ID und Frame-IDs sind explizit im Requestvertrag; Fake-Alpha-Parallelität
+ist genau eins; die Queue-Reihenfolge ist deterministisch (Asset-ID).
+
+---
+
+## D-R1.3-002 — Visual Observations bleiben bis zur Reviewentscheidung unreviewed
+
+**Entscheidung:** Fake Vision erzeugt Observations mit Reviewstatus `unreviewed`.
+Es gibt kein stilles Auto-Accept durch Adapter oder Worker. Erst eine
+ausdrückliche Einzel- oder Batch-Reviewentscheidung ändert den aktuellen Status.
+Batch-Aktionen erzeugen append-only Einzelentscheidungen mit gemeinsamer
+Batch-ID (Schema 20: kodiert in bestehenden TEXT-Feldern).
+
+---
+
+## D-R1.3-003 — Coverage nutzt nur aktuelle akzeptierte Observations
+
+**Entscheidung:** Unreviewed und rejected Observations sind keine
+Coverage-Inputs. Nach einer relevanten akzeptierten Reviewänderung wird
+höchstens ein Coverage-only-Run angelegt und außerhalb des UI-Renders
+ausgeführt. Mehrere Decisions derselben Batchaktion erzeugen höchstens einen
+Coverage-Run. Historisch gültige Current Audits bleiben erhalten, bis der neue
+Audit erfolgreich Current wird.
+
+---
+
+## D-R1.3-004 — Supplement erfüllt Coverage erst nach regulärem Pfad
+
+**Entscheidung:** Supplement Assets können Gaps erst terminal lösen, wenn sie
+als Kandidat markiert wurden, echtes Original via Media Intake vorhanden ist,
+Working Media completed ist, Analysevorbereitung und Vision-Observation
+vorliegen und die Observation ausdrücklich akzeptiert wurde. Candidate Preview,
+ungeprüfte Observations oder Modellvorschläge allein lösen keinen Gap.
+Terminalstatus bei bestätigtem Match: `resolved_with_supplement`.
+
+---
+
+## D-R1.1-004 — Script-Lock-Risiken sind gap_id-gebunden; Preview ohne Checkboxen
+
+**Entscheidung:** Die kanonische Identität einer Lock-Risikobestätigung ist
+`gap_id + risk_code` (Darstellung `gap_id:risk_code`). `visual_intent_id`
+allein ist keine gültige Bestätigungsidentität. Der serverseitige
+Lock-Fingerprint beschreibt den persistierten fachlichen Stand und wird
+sichtbar, sobald Brief/Narrative/Hook/Script/Struktur/Claims/Coverage und
+terminale Gaps erfüllt sind — unabhängig davon, ob UI-Checkboxen bereits
+gesetzt sind. Checkboxen bestätigen diesen Stand; fehlende Bestätigungen
+deaktivieren den Lock-Button, leeren den Fingerprint aber nicht.
+
+---
+
+## D-VE-REWORK-001 — E3/E4-aware Planauflösung bei neuer Planerzeugung
+
+**Entscheidung:** Bei der Erzeugung neuer Visual-Edit-Planversionen prüft und
+erzwingt Python die zentralen Policies `ASSET_REUSE_MAX` (E3) und
+`SOURCE_RANGE_OVERLAP_RATIO_MAX` (E4) bereits während Assignment- und
+Source-Range-Auflösung. Feasibility bleibt die finale Validierung; technisch
+vermeidbare E3/E4-Verletzungen dürfen nicht erst dort entstehen.
+
+---
+
+## D-VE-REWORK-002 — Redaktionelle Kandidatenmenge versus technische Auswahl
+
+**Entscheidung:** Fake-/LLM-Planer liefern geordnete redaktionelle
+Kandidatenmengen pro Shot (`ranked_candidates`). Python wählt daraus
+deterministisch die erste technisch zulässige Option (E3-Zählung, E4-Occupancy,
+gültiges completed Working Media, akzeptierte Observation). Python darf kein
+Asset außerhalb dieser redaktionellen Menge einsetzen.
+
+---
+
+## D-VE-REWORK-003 — Ungültiger neuer Plan wird nicht Current
+
+**Entscheidung:** Scheitert die E3-/E4-konforme Auflösung oder die
+Domainvalidierung, wird kein neuer Current Plan veröffentlicht. Der vorherige
+Current Plan bleibt erhalten; der fehlgeschlagene Run endet mit strukturiertem
+Fehlercode (`visual_edit_no_e3_compliant_assignment` bzw.
+`visual_edit_no_e4_compliant_source_range`). Bestehende Planversionen werden
+nicht in-place umgeschrieben.
+
+---
+
+## D-VE-REWORK-004 — Ausführbare versionierte Repair-Operationen
+
+**Entscheidung:** Repair Proposals enthalten versionierte, Pydantic-validierte
+ausführbare Operationen (`replace_assignment_asset`,
+`replace_assignment_source_range`, Schema `repair-operation-v1`). Die
+Operationsartefakte liegen als Sidecar-JSON unter `_otio_v2/editing/repairs/`
+(`repair_proposal_<id>.ops.json`). Freie, unversionierte JSON-Dictionaries sind
+nicht zulässig. Registry-Schema bleibt 20.
+
+---
+
+## D-VE-REWORK-005 — Explizite append-only Repair-Auswahl
+
+**Entscheidung:** Repair-Auswahl ist eine ausdrückliche append-only
+Nutzerentscheidung (`selected` / `rejected`) mit Decision-Sidecar
+(`repair_proposal_<id>.decisions.json`). Kein Proposal wird still angewendet.
+Generische Proposals ohne Operation sowie stale/rejected/applied Proposals sind
+nicht auswählbar. Doppelklick erzeugt keine doppelte fachliche Entscheidung
+(Decision-Fingerprint-Idempotenz).
+
+---
+
+## D-VE-REWORK-006 — Repair Apply erzeugt neue Planversion
+
+**Entscheidung:** Repair Apply erzeugt eine neue Visual-Edit-Planversion mit
+neuer Plan-ID und neuem Inhaltsfingerprint; bestehende Pläne bleiben unverändert
+historisch erhalten (`superseded`). Der neue Plan erhält `status=review_required`.
+Alte Humanity-/Feasibility-Ergebnisse werden nicht als Current übernommen.
+Humanity und Feasibility müssen separat erneut geprüft werden. No-Op-Apply und
+Konflikte erzeugen keinen neuen Current Plan.
+
+---
+
+## D-COVERAGE-STABILITY-001 — Technische Run-Identität ≠ fachliche Coverage-Input-Identität
+
+**Entscheidung:** Technische Coverage-Run-Identität (`editorial_run_id`, und bei
+neuen Fake-Audits weiterhin `run_id` in der Audit-UUID5) und fachliche
+Coverage-Input-Identität (`canonical_coverage_input_fingerprint`, Schema
+`coverage-input-v1`) sind getrennte Verträge. R1.1-UNIQUE-Schutz für Audit-IDs
+bleibt erhalten; fachliche Idempotenz läuft über den Canonical Fingerprint.
+
+---
+
+## D-COVERAGE-STABILITY-002 — Completed Current Audit Reuse ohne Gateway/Gaps
+
+**Entscheidung:** Ein completed Current Audit wird bei identischem Canonical
+Coverage Input wiederverwendet. Dabei entstehen weder Gatewayaufruf noch
+Workerstart, weder neue Audit-ID noch neue Gaps, und es findet kein Supersede
+statt. Eskalationen, Candidate Decisions und `accepted_unresolved` bleiben auf
+den bestehenden Gap-IDs erhalten.
+
+---
+
+## D-COVERAGE-STABILITY-003 — Canonical Fingerprints ohne technische Zufallswerte
+
+**Entscheidung:** Canonical Coverage Fingerprints enthalten keine Run-IDs,
+Audit-IDs, Gap-IDs, Timestamps, Artefaktpfade oder UI-/Session-Zustände. Der
+Fingerprint ist SHA-256 über eine versionierte, UTF-8-kodierte,
+sortierungsstabile JSON-Darstellung von `coverage-input-v1`.
+
+---
+
+## D-COVERAGE-STABILITY-004 — Legacy-Audits ohne Canonical Fingerprint fail-closed
+
+**Entscheidung:** Coverage Audits ohne gespeicherten Canonical Coverage
+Fingerprint werden nicht aus aktuellen, veränderbaren Editorial-Artefakten
+rückwirkend rekonstruiert oder wiederverwendet.
+
+Sie benötigen genau eine normale Neuberechnung. Danach gelten die regulären
+C2-Reuse-Verträge (gespeicherter Fingerprint + Identität → Completed Reuse;
+äquivalenter aktiver Run → Active Reuse).
+
+---
+
+## D-COVERAGE-STABILITY-005 — Gap Instance ID ≠ Semantic Gap Identity
+
+**Entscheidung:** Coverage Gap Instance ID und Semantic Gap Identity sind getrennte
+Verträge.
+
+`gap_id` bleibt die konkrete auditgebundene UUID4-Instanz.
+Der versionierte Semantic Gap Key (`coverage-gap-semantic-key-v1`) beschreibt
+ausschließlich die kanonische fachliche Problemidentität und ersetzt `gap_id`
+nicht.
+
+---
+
+## D-COVERAGE-STABILITY-006 — Semantic Gap Key ohne technische/dynamische Felder
+
+**Entscheidung:** `coverage-gap-semantic-key-v1` enthält weder Audit-, Run-,
+Gap- oder Visual-Intent-IDs noch Timestamps, Pfade, Observation Fingerprints,
+Kandidaten, Nutzerentscheidungen, Gap-Status, Eskalationsstufe,
+`accepted_unresolved`, Lock-Fingerprints oder den Canonical Coverage Input
+Fingerprint als Ganzes.
+
+Der Key wird zentral aus `project_id` + Visual-Intent-Semantik
+(`desired_motif`, `action`, `setting`, geografische/Authentizitätsanforderungen,
+allowed media kinds) + Coverage-Problem-Signatur (`coverage_level`,
+`missing_properties`, `risk_codes`) gebildet: Pydantic-validiertes Modell →
+`model_dump(mode="json")` → sortierungsstabiles JSON → SHA-256 →
+`coverage-gap-semantic-key-v1:<64 hex>`.
+
+`priority` ist bewusst kein Identitätsbestandteil (nur späteres Match-/Safety-
+Metadatum). Gleicher Key bei unterschiedlichem kanonischem Payload ist
+`coverage_gap_semantic_key_collision` (fail-closed).
+
+---
+
+## D-COVERAGE-STABILITY-007 — Exact 1:1 Identity Match before Carry-Forward Evaluation
+
+**Entscheidung:** Automatisch auswertbare Vorgängerbeziehungen erfordern ein
+exaktes, kollisionsgeprüftes Eins-zu-eins-Match der vollständigen Semantic Gap
+Identity (`coverage-gap-semantic-key-v1`: gleicher Schema-Identifier, gleicher
+Semantic Key und identischer kanonischer Identity-Payload).
+
+Nur die Match-Klasse `exact_one_to_one` setzt
+`carry_forward_evaluation_allowed=true`. Das erlaubt C3.4 später zu prüfen, ob
+Informationen fortgeführt werden dürfen — es ist noch keine Übernahme.
+
+---
+
+## D-COVERAGE-STABILITY-008 — Ambiguous and Collision Matches stay Fail-Closed
+
+**Entscheidung:** Eins-zu-viele-, Viele-zu-eins-, Viele-zu-viele-, Schema- und
+Kollisionsfälle bleiben fail-closed. C3 verwendet kein Fuzzy-, Embedding- oder
+LLM-Matching. Geänderte Risk Sets, Missing Properties oder Intent-Semantik
+erzeugen andere Semantic Keys und damit unmatched Gaps — keine Similarity-
+Verbindung.
+
+---
+
+## D-SCRIPT-LOCK-CURRENT-001 — Editorial Current Pointer is mandatory
+
+**Entscheidung:** Ein wirksamer Script Lock erfordert einen expliziten
+`editorial_project_state.current_script_lock_id`.
+
+Ein historischer `locked`-Datensatz wird niemals allein aufgrund seines Status
+oder seiner zeitlichen Reihenfolge zum Current Lock. Es gibt keinen Fallback auf
+`list_script_locks()[0]` oder `get_current_script_lock` (latest locked). Ein
+staler `narration_project_state.current_script_lock_id` ersetzt den fehlenden
+Editorial-Pointer nicht.
+
+---
+
+## D-SCRIPT-LOCK-CURRENT-002 — Read-only Effective Lock resolution is fail-closed
+
+**Entscheidung:** Die Effective-Lock-Auflösung
+(`resolve_effective_current_script_lock`) ist read-only und prüft
+Current-Identity (project/script/version/narrative/hook/audit/observation),
+den kanonischen Script-Lock-Fingerprint sowie aktuelle
+`gap_id:risk_code`-Bestätigungen fail-closed. Nur `status=locked` kann wirksam
+sein. Der Resolver erzeugt keine Locks, ändert keine Pointer und invalidiert
+keine Artefakte.
+
+---
+
+## D-SCRIPT-LOCK-CURRENT-003 — Editorial and Narration share Effective Lock resolution
+
+**Entscheidung:** Editorial und Narration verwenden dieselbe zentrale
+Effective-Lock-Auflösung. Historische Locks und Artefakte werden sichtbar
+getrennt, aber niemals als Current verwendet.
+
+Die Editorial-UI zeigt Current ausschließlich über
+`resolve_effective_current_script_lock` / `EditorialScriptLockGateState`.
+`list_script_locks()[0]` ist kein Current. Narration Voice-/Pause-/Timing-Gates
+nutzen `NarrationGateState` auf demselben L2-Resolver.
+
+---
+
+## D-SCRIPT-LOCK-CURRENT-004 — Narration artifacts must bind to Effective Lock
+
+**Entscheidung:** Voice-, Pause- und Timing-Gates akzeptieren nur Artefakte,
+deren `script_lock_id` dem wirksamen Current Lock entspricht.
+
+Ein staler `narration_project_state.current_script_lock_id` schaltet nichts frei
+(`narration_script_lock_stale`, fail-closed in L3; Bereinigung erst L4).
+Historische Voice-/Pause-/Timeline-Zeilen dürfen gelistet, aber nicht als
+Current verwendet werden.
+
+---
+
+## D-SCRIPT-LOCK-CURRENT-005 — Fachliche Invalidierung leert Current atomar
+
+**Entscheidung:** Fachliche Script-Lock-Invalidierung leert Editorial- und
+Narration-Current-Pointer sowie aktuelle Narrationsartefakt-Referenzen atomar.
+Historische Datensätze bleiben erhalten.
+
+In einer Registry-Transaktion (`BEGIN IMMEDIATE` auf Schema-20-SQLite):
+
+1. Current Editorial-Lock und Narration-State ermitteln
+2. zulässige Statusübergänge ausführen (Current Lock → `invalidated`;
+   aktive Voice-/Pause-/Timing-Runs `queued`/`running` → `interrupted`)
+3. Editorial `current_script_lock_id` → NULL
+4. Narration `current_script_lock_id` / `current_voice_run_id` /
+   `current_pause_plan_id` / `current_timeline_id` → NULL
+5. Ergebnis/Diagnose zurückgeben
+
+Keine historischen Zeilen löschen. Keine stillen Best-Effort-Writes außerhalb
+der Persistence-Schicht. Zentraler Command:
+`invalidate_current_script_lock_context` /
+`apply_script_lock_context_invalidation`.
+
+---
+
+## D-SCRIPT-LOCK-CURRENT-006 — Neuer Lock ist zunächst nur Editorial Current
+
+**Entscheidung:** Ein neuer Script Lock wird zunächst nur Editorial Current.
+Der Narration-Current-Pointer wird erst durch einen bewussten Voice-Start an
+diesen wirksamen Lock gebunden.
+
+Nach Lock-Erstellung:
+
+- Editorial `current_script_lock_id` = neue Lock-ID
+- Narration `current_script_lock_id` / Voice / Pause / Timeline = NULL
+
+Alte Narrationsartefakte bleiben historisch und werden nicht wiederverwendet.
+Bei Voice-Start (Pointer missing oder matching, Effective Lock gültig):
+
+- Narration `current_script_lock_id` = Effective Lock
+- `current_voice_run_id` = neuer Run
+- Pause-/Timeline-Current → NULL
+
+Stale Narration-Pointer bleibt fail-closed und wird nicht still überschrieben.
+
+---
+
+## D-STRUCTURE-RECOVERY-001 — Structure-Publish ist crash-konsistent
+
+**Entscheidung:** Structure-Finalisierung publiziert Current-JSON erst nach
+erfolgreichem SQLite-Commit. SQLite bleibt Source of Truth.
+
+Verbindlicher Ablauf:
+
+1. finales Script-Artefakt im Speicher
+2. versionierte JSON + `latest_script.json` nur unter `editorial/temp/{run_id}/`
+3. Temp-Dateien sind nicht Current und für normale Reader unsichtbar
+4. SQLite-Transaktion (Identity-Check, Intent-Upsert, State)
+5. Commit
+6. atomare Veröffentlichung der versionierten Script-Datei (`Path.replace`)
+7. atomare Veröffentlichung von `latest_script.json`
+8. erst danach Editorial-Run = `completed`
+
+`latest_script.json` ist nur Alias, nie Current-State-Quelle.
+`get_active_script` liest den versionierten Registry-Pfad und überlagert
+Status/Identität aus `script_drafts`.
+
+Fehler vor Commit: Current-JSON unverändert; Run failed.
+Fehler nach Commit (Dateisystem): DB neuer Stand; Run nicht completed;
+Preview fail-closed mit `registry_artifact_mismatch`; deterministischer Retry
+darf Artefakte aus dem Registry-Stand neu publizieren ohne Satz-/Beat-/Intent-
+Duplikate.
+
+Referenzierte Visual Intents (`coverage_intent_results`, Gaps, Graphics, Shots)
+werden nicht still gelöscht. Upsert stabiler IDs; Entfernen referenzierter IDs
+→ `script_structure_replacement_conflicts_with_coverage`, kein Teilwrite.
