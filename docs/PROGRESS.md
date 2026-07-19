@@ -2,7 +2,7 @@
 
 ## Aktueller Stand
 
-**Structure-Persistence Crash-Recovery-Rework umgesetzt — Schema weiterhin 20.**
+**Active-Script-Pointer-Recovery-Hotfix umgesetzt — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
 - Script-Lock Realtest: **erfolgreich**
@@ -27,6 +27,7 @@
 - Preview-Blocker-UI-Hotfix (`069cada`)
 - **Structure-Persistence-Atomicity-Hotfix umgesetzt** (`bac1bbc`): Registry-Commit vor JSON-Publish; Preview fail-closed
 - **Structure-Persistence Crash-Recovery-Rework umgesetzt** (`3af76c8`): Temp→Commit→atomic Publish; Intent-Upsert ohne Coverage-Löschung
+- **Active-Script-Pointer-Recovery-Hotfix umgesetzt** (`1dac126`): verifizierter Kandidat + bewusster Button, keine Auto-Auswahl
 - **Fake-Alpha weiterhin bis L5 pausiert**
 - **Nächste erlaubte Aktion nach Chief-Dev-Freigabe: L5 USA_v2-Realtest**
 - **L5, C3.4, C4, V4 und R1.4 gesperrt**
@@ -98,6 +99,11 @@
   - `latest_script.json` nur Alias; SoT = SQLite + versionierter Registry-Pfad
   - Visual Intents upsert; referenzierte Intents werden nicht still gelöscht (`script_structure_replacement_conflicts_with_coverage`)
   - Tests: `tests/test_discovery_v2_structure_persistence_atomicity.py` (20 Node-IDs)
+- **Active-Script-Pointer-Recovery-Hotfix** (`1dac126`)
+  - Diagnose nur bei genau einem verifizierten Kandidaten (DB↔JSON, Narrative/Hook, Coverage)
+  - Expliziter Command setzt atomar `active_script_id` / Narrative / Hook; kein Content-Rewrite
+  - UI: „Aktuelles Script vN wiederherstellen“; danach normal „Struktur aktualisieren“
+  - Tests: `tests/test_discovery_v2_active_script_recovery.py` (14 Node-IDs)
 - Nächster Schritt nach Freigabe: **L5 USA_v2-Realtest**
 - Gesperrt: L5 bis Freigabe; C3.4, C4, V4, R1.4
 - Fake-Alpha weiterhin bis L5 pausiert
@@ -177,7 +183,7 @@ Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Ga
 
 ## Teststand
 
-**3252 collected / 3233 passed / 18 failed / 1 skipped** (+8 Crash-Recovery-Tests net; Baseline-18 unverändert)
+**3266 collected / 3247 passed / 18 failed / 1 skipped** (+14 Active-Script-Recovery-Tests; Baseline-18 unverändert)
 
 18 bekannte Classic/Without-VO-Fehler und 1 VFR-Skip unverändert.
 
