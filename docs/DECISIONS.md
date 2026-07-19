@@ -829,3 +829,35 @@ Bei Voice-Start (Pointer missing oder matching, Effective Lock gültig):
 - Pause-/Timeline-Current → NULL
 
 Stale Narration-Pointer bleibt fail-closed und wird nicht still überschrieben.
+
+---
+
+## D-STRUCTURE-RECOVERY-001 — Structure-Publish ist crash-konsistent
+
+**Entscheidung:** Structure-Finalisierung publiziert Current-JSON erst nach
+erfolgreichem SQLite-Commit. SQLite bleibt Source of Truth.
+
+Verbindlicher Ablauf:
+
+1. finales Script-Artefakt im Speicher
+2. versionierte JSON + `latest_script.json` nur unter `editorial/temp/{run_id}/`
+3. Temp-Dateien sind nicht Current und für normale Reader unsichtbar
+4. SQLite-Transaktion (Identity-Check, Intent-Upsert, State)
+5. Commit
+6. atomare Veröffentlichung der versionierten Script-Datei (`Path.replace`)
+7. atomare Veröffentlichung von `latest_script.json`
+8. erst danach Editorial-Run = `completed`
+
+`latest_script.json` ist nur Alias, nie Current-State-Quelle.
+`get_active_script` liest den versionierten Registry-Pfad und überlagert
+Status/Identität aus `script_drafts`.
+
+Fehler vor Commit: Current-JSON unverändert; Run failed.
+Fehler nach Commit (Dateisystem): DB neuer Stand; Run nicht completed;
+Preview fail-closed mit `registry_artifact_mismatch`; deterministischer Retry
+darf Artefakte aus dem Registry-Stand neu publizieren ohne Satz-/Beat-/Intent-
+Duplikate.
+
+Referenzierte Visual Intents (`coverage_intent_results`, Gaps, Graphics, Shots)
+werden nicht still gelöscht. Upsert stabiler IDs; Entfernen referenzierter IDs
+→ `script_structure_replacement_conflicts_with_coverage`, kein Teilwrite.

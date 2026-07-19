@@ -137,11 +137,15 @@
   - UI „Struktur aktualisieren“ sync mit Erfolg/Fehlercode
   - Tests: `tests/test_discovery_v2_structure_finalization.py` (12 Node-IDs)
 - **Structure-Persistence-Atomicity-Hotfix umgesetzt** (`bac1bbc`)
-  - Root Cause: JSON-Publish vor Registry-Commit + FK `coverage_intent_results` → `visual_intents`
-  - Atomar: identity check → replace (FK-Cleanup) → state → JSON → commit; Restore bei Fehler
-  - Preview: kein Fingerprint bei `registry_artifact_mismatch` / Identity-Mismatch / fehlendem `active_script_id`
-  - Tests: `tests/test_discovery_v2_structure_persistence_atomicity.py` (12 Node-IDs)
-- Aktiver Auftrag: keiner (Atomicity-Hotfix fertig; L5 USA_v2-Realtest gesperrt bis Freigabe)
+  - erste Publikationsgrenze Registry vor Current-JSON
+- **Structure-Persistence Crash-Recovery-Rework umgesetzt** (`3af76c8`)
+  - Temp-Stage unter `editorial/temp/{run_id}/` → SQLite-Commit → atomic versioned Publish → atomic latest Publish → Run completed
+  - FS-Fehler nach Commit: Run failed; Preview `registry_artifact_mismatch`; Retry republiziert aus Registry ohne Duplikate
+  - `latest_script.json` nur Alias; SoT = SQLite + versionierter Registry-Pfad
+  - Intent-Upsert; referenzierte Intents nicht still löschen (`script_structure_replacement_conflicts_with_coverage`)
+  - Decision: D-STRUCTURE-RECOVERY-001
+  - Tests: `tests/test_discovery_v2_structure_persistence_atomicity.py` (20 Node-IDs)
+- Aktiver Auftrag: keiner (Crash-Recovery-Rework fertig; L5 USA_v2-Realtest gesperrt bis Freigabe)
 - R1.3 Acceptance Evidence weiterhin offen
 - Fake-Alpha weiterhin bis L5 pausiert
 - Nächste erlaubte Aktion nach Freigabe: **L5 USA_v2-Realtest**
@@ -149,7 +153,7 @@
 - R1.5–R1.6 weiterhin gesperrt
 - Keine neue Produktphase freigegeben · keine Nutzerregistry-Reparatur
 - Gesperrt ohne eigenen Auftrag: echte Provider, proprietäre NLE-Exporte, Publishing
-- Teststand: **3244 collected / 3225 passed / 18 failed / 1 skipped**
+- Teststand: **3252 collected / 3233 passed / 18 failed / 1 skipped**
 - Artefakte Phase 12 unter `_otio_v2/editing/`; Phase 13 unter `_otio_v2/export/`
 - Alpha-E2E: bestanden (Approval → Validation → OTIO → Reparse)
 - Release-Readiness-Verify: **`ALPHA_READY_WITH_LIMITATIONS`**
@@ -1000,6 +1004,7 @@ Phase 8D bleibt separat: Review-UI-Feinschliff, Caching-UX, Nutzer-Smoke mit ech
 32. ~~Script-Lock L4 Current-State-Invalidierung~~ — **umgesetzt** (`f1ddcb2`)
 33. ~~Structure-Finalization-Hotfix~~ — **umgesetzt** (`aaf7696`)
 34. ~~Structure-Persistence-Atomicity-Hotfix~~ — **umgesetzt** (`bac1bbc`)
+35. ~~Structure-Persistence Crash-Recovery-Rework~~ — **umgesetzt** (`3af76c8`)
 
 Nächste erlaubte Aktivität nach Chief-Dev-Freigabe: **Script-Lock L5 USA_v2-Realtest**.
 Fake-Alpha weiterhin bis L5 pausiert (USA_v2 Effective-Lock-/Pointer-Konsistenz).

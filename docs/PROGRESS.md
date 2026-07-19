@@ -2,7 +2,7 @@
 
 ## Aktueller Stand
 
-**Structure-Persistence-Atomicity-Hotfix umgesetzt — Schema weiterhin 20.**
+**Structure-Persistence Crash-Recovery-Rework umgesetzt — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
 - Script-Lock Realtest: **erfolgreich**
@@ -26,6 +26,7 @@
 - **Structure-Finalization-Hotfix umgesetzt** (`aaf7696`): vollständige Struktur → `review_requested`
 - Preview-Blocker-UI-Hotfix (`069cada`)
 - **Structure-Persistence-Atomicity-Hotfix umgesetzt** (`bac1bbc`): Registry-Commit vor JSON-Publish; Preview fail-closed
+- **Structure-Persistence Crash-Recovery-Rework umgesetzt** (`3af76c8`): Temp→Commit→atomic Publish; Intent-Upsert ohne Coverage-Löschung
 - **Fake-Alpha weiterhin bis L5 pausiert**
 - **Nächste erlaubte Aktion nach Chief-Dev-Freigabe: L5 USA_v2-Realtest**
 - **L5, C3.4, C4, V4 und R1.4 gesperrt**
@@ -90,9 +91,13 @@
   - Tests: `tests/test_discovery_v2_structure_finalization.py` (12 Node-IDs)
 - **Structure-Persistence-Atomicity-Hotfix** (`bac1bbc`)
   - Root Cause: JSON `review_requested` vor Registry-Commit; FK auf `coverage_intent_results` → divergenter Stand + falscher Preview-Fingerprint
-  - Neu: Registry-Replace → State → JSON-Publish → Commit; Snapshot-Restore bei Fehler
-  - Preview: `registry_artifact_mismatch` / `editorial_script_identity_mismatch` / `active_script_pointer_missing`
-  - Tests: `tests/test_discovery_v2_structure_persistence_atomicity.py` (12 Node-IDs)
+  - Erste Grenze: Registry vor Current-JSON; Preview fail-closed
+- **Structure-Persistence Crash-Recovery-Rework** (`3af76c8`) / Decision **D-STRUCTURE-RECOVERY-001**
+  - Finaler Fluss: In-Memory → Temp-Stage → SQLite-Commit → atomic versioned Publish → atomic `latest_script` Publish → Run `completed`
+  - FS-Fehler nach Commit: Run nicht completed; `registry_artifact_mismatch`; Retry republiziert aus Registry ohne Duplikate
+  - `latest_script.json` nur Alias; SoT = SQLite + versionierter Registry-Pfad
+  - Visual Intents upsert; referenzierte Intents werden nicht still gelöscht (`script_structure_replacement_conflicts_with_coverage`)
+  - Tests: `tests/test_discovery_v2_structure_persistence_atomicity.py` (20 Node-IDs)
 - Nächster Schritt nach Freigabe: **L5 USA_v2-Realtest**
 - Gesperrt: L5 bis Freigabe; C3.4, C4, V4, R1.4
 - Fake-Alpha weiterhin bis L5 pausiert
@@ -172,7 +177,7 @@ Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Ga
 
 ## Teststand
 
-**3244 collected / 3225 passed / 18 failed / 1 skipped** (+12 Structure-Persistence-Atomicity-Tests; Baseline-18 unverändert)
+**3252 collected / 3233 passed / 18 failed / 1 skipped** (+8 Crash-Recovery-Tests net; Baseline-18 unverändert)
 
 18 bekannte Classic/Without-VO-Fehler und 1 VFR-Skip unverändert.
 

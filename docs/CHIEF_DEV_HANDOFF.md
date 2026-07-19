@@ -33,18 +33,18 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 - Repository / Worktree: Discovery-V2-Integration (`cursor/discovery-v2-integration`)
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Aktueller HEAD: Structure-Persistence-Atomicity-Hotfix (`bac1bbc` + Docs)
+- Aktueller HEAD: Structure-Persistence Crash-Recovery-Rework (`3af76c8` + Docs)
 - V1–V3 Visual Edit: `70ffe6e` / `0fba7bd` / `f1b982a`
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
 - R1.1–R1.3 abgeschlossen · Script-Lock Realtest **erfolgreich**
 - Chief-Dev Alpha-Produktstand: **APPROVED**
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - Registry-Schema: **20**
-- Teststand: **3244 collected / 3225 passed / 18 failed / 1 skipped**
+- Teststand: **3252 collected / 3233 passed / 18 failed / 1 skipped**
 - Provider: Fake-only · Adobe: UNKNOWN · NLE: lokaler OTIO-Serialize/Reparse
 - Decisions: D-R1.1-001…004 · D-R1.2-001…003 · D-R1.3-001…004 ·
   D-VE-REWORK-001…006 · D-COVERAGE-STABILITY-001…008 ·
-  **D-SCRIPT-LOCK-CURRENT-001…006**
+  **D-SCRIPT-LOCK-CURRENT-001…006** · **D-STRUCTURE-RECOVERY-001**
 - Visual Edit V1–V3: **abgeschlossen**
 - **Coverage Stability C2 vollständig akzeptiert** (C1+C2+C2-R1 + USA_v2)
 - **C3.1 / C3.2 abgeschlossen** (`36367d2` / `47cfafd`)
@@ -62,9 +62,11 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
   - vollständige Struktur → kanonisch `review_requested` (nicht mehr dauerhaft `structure_pending`)
   - unvollständig → fail-closed + sichtbarer Fehlercode; UI sync „Struktur aktualisiert.“ / Fehler
   - Tests: `tests/test_discovery_v2_structure_finalization.py`
-- **Structure-Persistence-Atomicity-Hotfix umgesetzt** (`bac1bbc`)
-  - Registry-Commit vor JSON-Publish; FK-Cleanup vor Intent-Delete; Snapshot-Restore
-  - Preview fail-closed bei DB/JSON- und Narrative-/Hook-/Script-Identitätsmismatch
+- **Structure-Persistence Crash-Recovery-Rework umgesetzt** (`3af76c8`)
+  - Temp-Stage → SQLite-Commit → atomic versioned + `latest_script` Publish → Run completed
+  - FS-Fehler nach Commit fail-closed (`editorial_artifact_write_failed` / Preview `registry_artifact_mismatch`); Retry aus Registry
+  - Intent-Upsert; keine stille Löschung referenzierter Coverage Results
+  - Decision: D-STRUCTURE-RECOVERY-001
   - Tests: `tests/test_discovery_v2_structure_persistence_atomicity.py`
 - Offener UI-Befund: Visual-Intent-ID teilweise als Gap-ID beschriftet (nicht C3)
 - **Fake-Alpha weiterhin bis L5 pausiert**
