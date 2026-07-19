@@ -33,18 +33,18 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 
 - Repository / Worktree: Discovery-V2-Integration (`cursor/discovery-v2-integration`)
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
-- Aktueller HEAD: Script-Lock L3 Gate-Integration (`6852e7c` + Docs)
+- Aktueller HEAD: Script-Lock L4 Current-State-Invalidierung (`f1ddcb2` + Docs)
 - V1–V3 Visual Edit: `70ffe6e` / `0fba7bd` / `f1b982a`
 - Alpha-Produktstand-HEAD: `1ac7fba2bf2c1a7f0ae783a81c82495e2c7c600e`
 - R1.1–R1.3 abgeschlossen · Script-Lock Realtest **erfolgreich**
 - Chief-Dev Alpha-Produktstand: **APPROVED**
 - Releaseklasse: **interner MANUAL-/Fake-Alpha**
 - Registry-Schema: **20**
-- Teststand: **3189 collected / 3170 passed / 18 failed / 1 skipped**
+- Teststand: **3219 collected / 3200 passed / 18 failed / 1 skipped**
 - Provider: Fake-only · Adobe: UNKNOWN · NLE: lokaler OTIO-Serialize/Reparse
 - Decisions: D-R1.1-001…004 · D-R1.2-001…003 · D-R1.3-001…004 ·
   D-VE-REWORK-001…006 · D-COVERAGE-STABILITY-001…008 ·
-  **D-SCRIPT-LOCK-CURRENT-001…004**
+  **D-SCRIPT-LOCK-CURRENT-001…006**
 - Visual Edit V1–V3: **abgeschlossen**
 - **Coverage Stability C2 vollständig akzeptiert** (C1+C2+C2-R1 + USA_v2)
 - **C3.1 / C3.2 abgeschlossen** (`36367d2` / `47cfafd`)
@@ -53,20 +53,23 @@ Untergeordnet: `docs/ALPHA_EXECUTION_MANIFEST.md`.
 - **Script-Lock L1 Root-Cause-Fixtures abgeschlossen** (`a492c54`)
 - **Script-Lock L2 Effective Resolver umgesetzt** (`5bca917`)
 - **Script-Lock L3 Editorial-/Narration-Gates umgesetzt** (`6852e7c`)
+- **Script-Lock L4 Current-State-Invalidierung umgesetzt** (`f1ddcb2`)
   - Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
-  - Current ausschließlich via L2-Resolver; Historie getrennt; New-Lock unabhängig
-  - Voice/Pause/Timing nur Effective-Lock-Artefakte; stale Narration-Pointer fail-closed
-  - stale Narration-Pointer bleibt in DB bis L4
+  - atomare Editorial-/Narration-Pointer-Clears; Historie erhalten
+  - neuer Lock = Editorial Current only; Narration bindet bei Voice-Start
+  - Decisions: D-SCRIPT-LOCK-CURRENT-005 / D-SCRIPT-LOCK-CURRENT-006
 - Offener UI-Befund: Visual-Intent-ID teilweise als Gap-ID beschriftet (nicht C3)
-- **Nächste erlaubte Aktion nach Chief-Dev-Freigabe: L4 Pointer-/Artefaktinvalidierung**
+- **Fake-Alpha weiterhin bis L5 pausiert**
+- **Nächste erlaubte Aktion nach Chief-Dev-Freigabe: L5 USA_v2-Realtest**
 - **L5, C3.4, C4, V4 und R1.4 gesperrt** · echte Provider gesperrt
 - Keine neue Produktphase · keine Nutzerregistry-Reparatur
 
 ## Nächste erlaubte Aktion nach Freigabe
 
-**L4 Pointer-/Artefaktinvalidierung** nach Chief-Dev-Freigabe.
+**L5 USA_v2-Realtest** nach Chief-Dev-Freigabe.
 
 Gesperrt: L5 bis Freigabe; C3.4, C4, UI Gap-Label, V4, R1.4, echte Provider.
+Fake-Alpha weiterhin bis L5 pausiert.
 
 ## Verbindliche Kurzregeln
 

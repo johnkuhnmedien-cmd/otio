@@ -784,3 +784,48 @@ Ein staler `narration_project_state.current_script_lock_id` schaltet nichts frei
 (`narration_script_lock_stale`, fail-closed in L3; Bereinigung erst L4).
 Historische Voice-/Pause-/Timeline-Zeilen dürfen gelistet, aber nicht als
 Current verwendet werden.
+
+---
+
+## D-SCRIPT-LOCK-CURRENT-005 — Fachliche Invalidierung leert Current atomar
+
+**Entscheidung:** Fachliche Script-Lock-Invalidierung leert Editorial- und
+Narration-Current-Pointer sowie aktuelle Narrationsartefakt-Referenzen atomar.
+Historische Datensätze bleiben erhalten.
+
+In einer Registry-Transaktion (`BEGIN IMMEDIATE` auf Schema-20-SQLite):
+
+1. Current Editorial-Lock und Narration-State ermitteln
+2. zulässige Statusübergänge ausführen (Current Lock → `invalidated`;
+   aktive Voice-/Pause-/Timing-Runs `queued`/`running` → `interrupted`)
+3. Editorial `current_script_lock_id` → NULL
+4. Narration `current_script_lock_id` / `current_voice_run_id` /
+   `current_pause_plan_id` / `current_timeline_id` → NULL
+5. Ergebnis/Diagnose zurückgeben
+
+Keine historischen Zeilen löschen. Keine stillen Best-Effort-Writes außerhalb
+der Persistence-Schicht. Zentraler Command:
+`invalidate_current_script_lock_context` /
+`apply_script_lock_context_invalidation`.
+
+---
+
+## D-SCRIPT-LOCK-CURRENT-006 — Neuer Lock ist zunächst nur Editorial Current
+
+**Entscheidung:** Ein neuer Script Lock wird zunächst nur Editorial Current.
+Der Narration-Current-Pointer wird erst durch einen bewussten Voice-Start an
+diesen wirksamen Lock gebunden.
+
+Nach Lock-Erstellung:
+
+- Editorial `current_script_lock_id` = neue Lock-ID
+- Narration `current_script_lock_id` / Voice / Pause / Timeline = NULL
+
+Alte Narrationsartefakte bleiben historisch und werden nicht wiederverwendet.
+Bei Voice-Start (Pointer missing oder matching, Effective Lock gültig):
+
+- Narration `current_script_lock_id` = Effective Lock
+- `current_voice_run_id` = neuer Run
+- Pause-/Timeline-Current → NULL
+
+Stale Narration-Pointer bleibt fail-closed und wird nicht still überschrieben.

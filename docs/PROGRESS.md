@@ -2,7 +2,7 @@
 
 ## Aktueller Stand
 
-**Script-Lock Current-State L3 Gate-Integration umgesetzt — Schema weiterhin 20.**
+**Script-Lock Current-State L4 Invalidierung umgesetzt — Schema weiterhin 20.**
 
 - Chief-Dev-Status Alpha-Produktstand: **APPROVED** (Commit `1ac7fba`)
 - Script-Lock Realtest: **erfolgreich**
@@ -13,7 +13,7 @@
 - Branch: `cursor/discovery-v2-integration` · PR `#69`
 - Visual Edit Rework **V1–V3**: implementiert
 - **Coverage Stability C1 / C2 / C2-R1**: vollständig abgeschlossen / USA_v2 abgenommen
-- Decisions: D-COVERAGE-STABILITY-001…008 · **D-SCRIPT-LOCK-CURRENT-001…004**
+- Decisions: D-COVERAGE-STABILITY-001…008 · **D-SCRIPT-LOCK-CURRENT-001…006**
 - C3-Plan: `docs/source_plans/ALPHA_COVERAGE_STABILITY_C3_GAP_IDENTITY_CARRY_FORWARD_PLAN.md`
 - **C3.1 / C3.2 abgeschlossen** (`36367d2` / `47cfafd`)
 - **C3.3 umgesetzt** (`7ba6468`): Exact Match Engine `coverage-gap-match-report-v1`
@@ -22,7 +22,9 @@
 - **L1 Root-Cause-Fixtures abgeschlossen** (`a492c54`)
 - **L2 Effective-Lock-Resolver umgesetzt** (`5bca917`)
 - **L3 Editorial-/Narration-Gate-Integration umgesetzt** (`6852e7c`)
-- **Nächste erlaubte Aktion nach Chief-Dev-Freigabe: L4 Pointer-/Artefaktinvalidierung**
+- **L4 Current-State-Invalidierung umgesetzt** (`f1ddcb2`)
+- **Fake-Alpha weiterhin bis L5 pausiert**
+- **Nächste erlaubte Aktion nach Chief-Dev-Freigabe: L5 USA_v2-Realtest**
 - **L5, C3.4, C4, V4 und R1.4 gesperrt**
 - Keine neue Produktphase · echte Provider gesperrt
 
@@ -45,7 +47,8 @@
 | Script-Lock L1 Fixtures | **abgeschlossen** (Root-Cause-Reproduktion) |
 | Script-Lock L2 Effective Resolver | **umgesetzt** (read-only, fail-closed) |
 | Script-Lock L3 UI/Gate Integration | **umgesetzt** (Editorial + Narration Gates) |
-| Script-Lock L4/L5 | **gesperrt** bis jeweilige Freigabe |
+| Script-Lock L4 Current-State Invalidation | **umgesetzt** (atomare Pointer-Clears) |
+| Script-Lock L5 | **gesperrt** bis Chief-Dev-Freigabe |
 | Coverage Stability C4 | **gesperrt** |
 | Visual Edit Rework V4 Loop/UI | **gesperrt** |
 | R1.4 Job-UX / Progress-Polling | **gesperrt** |
@@ -65,13 +68,20 @@
   - Current ≠ History; New-Lock unabhängig von Historie
   - Voice/Pause/Timing nur Effective-Lock-Artefakte; stale Narration-Pointer fail-closed
   - Decisions: D-SCRIPT-LOCK-CURRENT-003 / D-SCRIPT-LOCK-CURRENT-004
-- stale Narration-Pointer bleibt in DB (**bis L4**)
+- **L4 umgesetzt** — atomare Current-State-Invalidierung (`f1ddcb2`)
+  - `invalidate_current_script_lock_context` / `apply_script_lock_context_invalidation`
+  - Fachliche Pfade: Script-Edit, Structure/Coverage, Observation, Risk, Hook
+  - Neuer Lock = Editorial Current only; Narration bindet erst bei Voice-Start
+  - Historische Locks/Voice/Pause/Timeline bleiben erhalten
+  - Decisions: D-SCRIPT-LOCK-CURRENT-005 / D-SCRIPT-LOCK-CURRENT-006
 - Domain: `otio_app/discovery_v2/domain/script_lock_current_state.py`
-- Application: `script_lock_current_state_service.py`, `editorial_script_lock_gate_service.py`, `narration_gate_service.py`
-- Tests: L2 (34) · L3 (`tests/test_discovery_v2_script_lock_current_state_l3.py`, 30 Node-IDs)
+- Application: `script_lock_current_state_service.py`, `script_lock_current_state_mutation_service.py`,
+  `editorial_script_lock_gate_service.py`, `narration_gate_service.py`
+- Tests: L2 (34) · L3 (30) · L4 (`tests/test_discovery_v2_script_lock_current_state_l4.py`, 30 Node-IDs)
 - Plan: `docs/source_plans/ALPHA_SCRIPT_LOCK_CURRENT_STATE_CONSISTENCY_PLAN.md`
-- Nächster Schritt nach Freigabe: **L4 Pointer-/Artefaktinvalidierung**
-- Gesperrt: L5, C3.4, C4, V4, R1.4
+- Nächster Schritt nach Freigabe: **L5 USA_v2-Realtest**
+- Gesperrt: L5 bis Freigabe; C3.4, C4, V4, R1.4
+- Fake-Alpha weiterhin bis L5 pausiert
 
 ## Coverage Stability C3.3 — Kurzstand
 
@@ -148,7 +158,7 @@ Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Ga
 
 ## Teststand
 
-**3159 collected / 3140 passed / 18 failed / 1 skipped** (~412s; +34 L2-Tests)
+**3219 collected / 3200 passed / 18 failed / 1 skipped** (+30 L4-Tests)
 
 18 bekannte Classic/Without-VO-Fehler und 1 VFR-Skip unverändert.
 
@@ -156,7 +166,8 @@ Offener UI-Befund (nicht C2-blockierend): Visual-Intent-ID wird teilweise als Ga
 
 Nach Chief-Dev-Freigabe:
 
-→ **L3 Editorial-/Narration-Gate-Integration**
+→ **L5 USA_v2-Realtest** (Script-Lock Current-State Consistency)
 
-Weiter gesperrt: L4/L5, C3.4, C4, V4, R1.4–R1.6,
+Weiter gesperrt: L5 bis Freigabe; C3.4, C4, V4, R1.4–R1.6,
 echte Provider, neue Produktphase, Nutzerregistry-Reparatur.
+Fake-Alpha weiterhin bis L5 pausiert.
