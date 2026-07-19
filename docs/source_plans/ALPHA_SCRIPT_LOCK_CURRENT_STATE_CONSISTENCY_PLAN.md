@@ -1,9 +1,9 @@
 # ALPHA — Script Lock Current-State Consistency
 
-**Plan-ID:** `DISCOVERY-V2-ALPHA-SCRIPT-LOCK-CURRENT-STATE-CONSISTENCY-PLAN-001`  
-**Status:** Planung (keine Implementierung)  
-**Schema-Ziel:** `REGISTRY_SCHEMA_VERSION = 20` (keine Migration)  
-**Branch / PR:** `cursor/discovery-v2-integration` · `#69`  
+**Plan-ID:** `DISCOVERY-V2-ALPHA-SCRIPT-LOCK-CURRENT-STATE-CONSISTENCY-PLAN-001`
+**Status:** Planung (keine Implementierung)
+**Schema-Ziel:** `REGISTRY_SCHEMA_VERSION = 20` (keine Migration)
+**Branch / PR:** `cursor/discovery-v2-integration` · `#69`
 **Bezug:** Fake-Alpha an Narration-Grenze blockiert (USA_v2 Realzustand)
 
 ---
@@ -267,7 +267,7 @@ Alte Artefakte dürfen nicht still für den neuen Lock weitergelten.
 
 ### 7.4 Pause/Timing-Alignment
 
-Heute: `can_start_pause` / `can_resolve_timing` prüfen teils nur `current_voice_run_id` / `current_pause_plan_id`, nicht `effective.ok`.  
+Heute: `can_start_pause` / `can_resolve_timing` prüfen teils nur `current_voice_run_id` / `current_pause_plan_id`, nicht `effective.ok`.
 L3: Voice **und** Pause/Timing erfordern wirksamen Effective Lock (+ passende Current-Artefakt-Kette).
 
 ---
@@ -416,5 +416,5 @@ Der Plan ist abnahmefähig, wenn:
 
 → **L1 Root-Cause-Fixtures**
 
-Danach gesperrt bis jeweilige Freigabe: L2 → L3 → L4 → L5.  
+Danach gesperrt bis jeweilige Freigabe: L2 → L3 → L4 → L5.
 Weiter gesperrt: C3.4, C4, V4, R1.4, echte Provider.
