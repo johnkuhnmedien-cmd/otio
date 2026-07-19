@@ -200,11 +200,15 @@ def _render_script(project, view) -> None:
             disabled=not view.can_start_structure,
             key="discovery_v2_editorial_start_structure",
         ):
-            result = start_structure_run(project, sync=False)
+            # Sync so UI can show definitive success/failure (no silent async).
+            result = start_structure_run(project, sync=True)
             if result.started:
-                _flash_and_rerun(result.message, level="info")
+                _flash_and_rerun(
+                    result.message or "Struktur aktualisiert.", level="success"
+                )
             else:
-                st.warning(result.message)
+                code = result.error_code or result.message or "structure_update_failed"
+                _flash_and_rerun(code, level="warning")
     script = view.script
     if script is None:
         st.write("Noch kein Script Draft vorhanden.")

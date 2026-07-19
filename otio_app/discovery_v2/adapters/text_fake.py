@@ -229,7 +229,12 @@ class FakeTextAdapter:
             selected_hook = request.script.selected_hook_id
             full_text = request.script.full_text
             sentence_texts = _split_sentences(full_text)
-            status = request.script.status.value
+            # Structure runs must not preserve structure_pending once Fake emits
+            # a complete structured payload (sentences/beats/intents).
+            if request.request_kind == "structure":
+                status = ScriptDraftStatus.REVIEW_REQUESTED.value
+            else:
+                status = request.script.status.value
             source_kind = request.script.source_kind.value
             supersedes = request.script.supersedes_script_id
 

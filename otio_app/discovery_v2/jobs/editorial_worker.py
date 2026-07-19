@@ -21,6 +21,10 @@ from otio_app.discovery_v2.domain.editorial import (
     EDITORIAL_ERROR_INPUT_STALE,
     EDITORIAL_ERROR_PROJECT_BRIEF_MISSING,
     EDITORIAL_ERROR_REGISTRY_WRITE_FAILED,
+    EDITORIAL_ERROR_STRUCTURE_BEATS_MISSING,
+    EDITORIAL_ERROR_STRUCTURE_INCOMPLETE,
+    EDITORIAL_ERROR_STRUCTURE_SENTENCES_INCOMPLETE,
+    EDITORIAL_ERROR_STRUCTURE_VISUAL_INTENTS_MISSING,
     EDITORIAL_RUN_SCOPE_COVERAGE,
     EDITORIAL_RUN_SCOPE_NARRATIVE,
     EDITORIAL_RUN_SCOPE_SCRIPT,
@@ -296,9 +300,25 @@ def _process_structure(conn, root: Path, run: EditorialRun) -> EditorialRun:
     if response.script is None:
         raise EditorialWorkerError(EDITORIAL_ERROR_INPUT_STALE, "Structure response missing.")
     bundle = response.script
+    structure_error = _structure_completeness_error(
+        sentences=bundle.sentences,
+        claims=bundle.claims,
+        visual_beats=bundle.visual_beats,
+        visual_intents=bundle.visual_intents,
+    )
+    if structure_error is not None:
+        # Fail-closed: do not persist an incomplete structure or clear pending.
+        raise EditorialWorkerError(
+            structure_error,
+            "Structure response is incomplete; script remains structure_pending.",
+        )
+    # Canonical transition after a complete structure payload.
+    finalized_script = bundle.script.model_copy(
+        update={"status": ScriptDraftStatus.REVIEW_REQUESTED}
+    )
     relative = repo.save_script_bundle_json(
         root,
-        script=bundle.script,
+        script=finalized_script,
         sentences=bundle.sentences,
         claims=bundle.claims,
         visual_beats=bundle.visual_beats,
@@ -308,7 +328,7 @@ def _process_structure(conn, root: Path, run: EditorialRun) -> EditorialRun:
         conn.execute("BEGIN IMMEDIATE")
         repo.replace_script_structure(
             conn,
-            script=bundle.script,
+            script=finalized_script,
             sentences=bundle.sentences,
             claims=bundle.claims,
             visual_beats=bundle.visual_beats,
@@ -321,7 +341,7 @@ def _process_structure(conn, root: Path, run: EditorialRun) -> EditorialRun:
                 conn,
                 state.model_copy(
                     update={
-                        "active_script_id": bundle.script.script_id,
+                        "active_script_id": finalized_script.script_id,
                         "active_coverage_audit_id": None,
                         "observation_fingerprint": observation_fingerprint,
                         "status": EditorialProjectStateStatus.ACTIVE,
@@ -329,12 +349,16 @@ def _process_structure(conn, root: Path, run: EditorialRun) -> EditorialRun:
                     }
                 ),
             )
-        _complete_attempt(conn, root, attempt, _bundle_payload(bundle))
+        finalized_payload = _bundle_payload(bundle)
+        finalized_payload["script"] = finalized_script.model_dump(mode="json")
+        _complete_attempt(conn, root, attempt, finalized_payload)
         conn.commit()
     except Exception:
         conn.rollback()
         raise
-    return _complete_run(conn, run.model_copy(update={"script_id": bundle.script.script_id}))
+    return _complete_run(
+        conn, run.model_copy(update={"script_id": finalized_script.script_id})
+    )
 
 
 def _process_coverage(conn, root: Path, run: EditorialRun) -> EditorialRun:
@@ -654,6 +678,26 @@ def _observations(root: Path, project_id: str) -> list[EditorialReadyObservation
         )
         for item in list_editorial_ready_observations(project)
     ]
+
+
+def _structure_completeness_error(
+    *,
+    sentences: list,
+    claims: list,
+    visual_beats: list,
+    visual_intents: list,
+) -> str | None:
+    """Return a fail-closed error code when structure payload is incomplete."""
+
+    if not sentences:
+        return EDITORIAL_ERROR_STRUCTURE_SENTENCES_INCOMPLETE
+    if not visual_beats:
+        return EDITORIAL_ERROR_STRUCTURE_BEATS_MISSING
+    if not visual_intents:
+        return EDITORIAL_ERROR_STRUCTURE_VISUAL_INTENTS_MISSING
+    if not claims:
+        return EDITORIAL_ERROR_STRUCTURE_INCOMPLETE
+    return None
 
 
 def _bundle_payload(bundle) -> dict:

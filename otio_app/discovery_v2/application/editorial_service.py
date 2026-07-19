@@ -244,7 +244,36 @@ def start_structure_run(project: Project, *, sync: bool = False) -> EditorialSta
             reason_code="structure_run_started",
             source_operation_id="start_structure_run",
         )
-    return result
+    if not sync:
+        return result
+    if result.run is not None and result.run.status == EditorialRunStatus.FAILED:
+        code = result.run.error_code or EDITORIAL_ERROR_INPUT_STALE
+        return EditorialStartResult(
+            started=False,
+            message=code,
+            run=result.run,
+            error_code=code,
+        )
+    if not result.started:
+        return result
+    # Sync success: confirm script left structure_pending via canonical status.
+    conn = repo.open_editorial_registry(project.project_root_path)
+    try:
+        script = repo.get_active_script(conn, project_id=project.id)
+    finally:
+        conn.close()
+    if script is None or script.status == ScriptDraftStatus.STRUCTURE_PENDING:
+        return EditorialStartResult(
+            started=False,
+            message="script_structure_pending",
+            run=result.run,
+            error_code="script_structure_pending",
+        )
+    return EditorialStartResult(
+        started=True,
+        message="Struktur aktualisiert.",
+        run=result.run,
+    )
 
 
 def start_coverage_run(
