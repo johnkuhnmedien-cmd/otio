@@ -15,12 +15,14 @@ from otio_app.discovery_v2.application.observation_review_service import (
     list_editorial_ready_observations,
 )
 from otio_app.discovery_v2.domain.editorial import (
+    EDITORIAL_ERROR_ACTIVE_SCRIPT_POINTER_MISSING,
     EDITORIAL_ERROR_COVERAGE_ARTIFACT_PUBLISH_FAILED,
     EDITORIAL_ERROR_COVERAGE_AUDIT_PERSIST_FAILED,
     EDITORIAL_ERROR_COVERAGE_CURRENT_STATE_UPDATE_FAILED,
     EDITORIAL_ERROR_INPUT_STALE,
     EDITORIAL_ERROR_PROJECT_BRIEF_MISSING,
     EDITORIAL_ERROR_REGISTRY_WRITE_FAILED,
+    EDITORIAL_ERROR_SCRIPT_IDENTITY_MISMATCH,
     EDITORIAL_ERROR_STRUCTURE_BEATS_MISSING,
     EDITORIAL_ERROR_STRUCTURE_INCOMPLETE,
     EDITORIAL_ERROR_STRUCTURE_SENTENCES_INCOMPLETE,
@@ -316,46 +318,73 @@ def _process_structure(conn, root: Path, run: EditorialRun) -> EditorialRun:
     finalized_script = bundle.script.model_copy(
         update={"status": ScriptDraftStatus.REVIEW_REQUESTED}
     )
-    relative = repo.save_script_bundle_json(
-        root,
-        script=finalized_script,
-        sentences=bundle.sentences,
-        claims=bundle.claims,
-        visual_beats=bundle.visual_beats,
-        visual_intents=bundle.visual_intents,
+    # Atomic boundary: registry commit first; JSON publish only inside the
+    # transaction after replace succeeds. Snapshot prior artifacts so a failed
+    # publish/commit cannot leave review_requested JSON over structure_pending DB.
+    from otio_app.discovery_v2.editorial_paths import editorial_script_json_relative_path
+
+    relative = editorial_script_json_relative_path(finalized_script.script_id)
+    prior_artifacts = repo.snapshot_script_bundle_artifacts(
+        root, script_id=finalized_script.script_id
     )
+    json_published = False
     try:
         conn.execute("BEGIN IMMEDIATE")
-        repo.replace_script_structure(
+        state = repo.get_project_state(conn, project_id=run.project_id)
+        _assert_structure_identity(state=state, script=finalized_script)
+        try:
+            repo.replace_script_structure(
+                conn,
+                script=finalized_script,
+                sentences=bundle.sentences,
+                claims=bundle.claims,
+                visual_beats=bundle.visual_beats,
+                visual_intents=bundle.visual_intents,
+                relative_json_path=relative,
+            )
+        except sqlite3.IntegrityError as exc:
+            raise EditorialWorkerError(
+                EDITORIAL_ERROR_REGISTRY_WRITE_FAILED,
+                _sanitize_stage_error(exc),
+            ) from exc
+        repo.upsert_project_state(
             conn,
+            state.model_copy(
+                update={
+                    "active_script_id": finalized_script.script_id,
+                    "active_coverage_audit_id": None,
+                    "observation_fingerprint": observation_fingerprint,
+                    "status": EditorialProjectStateStatus.ACTIVE,
+                    "updated_at": _now(),
+                }
+            ),
+        )
+        repo.save_script_bundle_json(
+            root,
             script=finalized_script,
             sentences=bundle.sentences,
             claims=bundle.claims,
             visual_beats=bundle.visual_beats,
             visual_intents=bundle.visual_intents,
-            relative_json_path=relative,
         )
-        state = repo.get_project_state(conn, project_id=run.project_id)
-        if state is not None:
-            repo.upsert_project_state(
-                conn,
-                state.model_copy(
-                    update={
-                        "active_script_id": finalized_script.script_id,
-                        "active_coverage_audit_id": None,
-                        "observation_fingerprint": observation_fingerprint,
-                        "status": EditorialProjectStateStatus.ACTIVE,
-                        "updated_at": _now(),
-                    }
-                ),
-            )
+        json_published = True
         finalized_payload = _bundle_payload(bundle)
         finalized_payload["script"] = finalized_script.model_dump(mode="json")
         _complete_attempt(conn, root, attempt, finalized_payload)
         conn.commit()
-    except Exception:
+    except EditorialWorkerError:
         conn.rollback()
+        if json_published:
+            repo.restore_script_bundle_artifacts(root, prior_artifacts)
         raise
+    except Exception as exc:  # noqa: BLE001
+        conn.rollback()
+        if json_published:
+            repo.restore_script_bundle_artifacts(root, prior_artifacts)
+        raise EditorialWorkerError(
+            EDITORIAL_ERROR_REGISTRY_WRITE_FAILED,
+            _sanitize_stage_error(exc),
+        ) from exc
     return _complete_run(
         conn, run.model_copy(update={"script_id": finalized_script.script_id})
     )
@@ -678,6 +707,38 @@ def _observations(root: Path, project_id: str) -> list[EditorialReadyObservation
         )
         for item in list_editorial_ready_observations(project)
     ]
+
+
+def _assert_structure_identity(
+    *,
+    state: EditorialProjectState | None,
+    script: ScriptDraft,
+) -> None:
+    """Fail-closed when Current-State pointers disagree with the script under finalize.
+
+    Narrative-/Hook-/Script-IDs are never rewritten silently.
+    """
+
+    if state is None or not state.active_script_id:
+        raise EditorialWorkerError(
+            EDITORIAL_ERROR_ACTIVE_SCRIPT_POINTER_MISSING,
+            "active_script_id missing; structure finalization refuses JSON-only success.",
+        )
+    if state.active_script_id != script.script_id:
+        raise EditorialWorkerError(
+            EDITORIAL_ERROR_SCRIPT_IDENTITY_MISMATCH,
+            "active_script_id does not match script under structure finalization.",
+        )
+    if state.active_narrative_plan_id != script.narrative_plan_id:
+        raise EditorialWorkerError(
+            EDITORIAL_ERROR_SCRIPT_IDENTITY_MISMATCH,
+            "active_narrative_plan_id does not match script.narrative_plan_id.",
+        )
+    if (state.selected_hook_id or None) != (script.selected_hook_id or None):
+        raise EditorialWorkerError(
+            EDITORIAL_ERROR_SCRIPT_IDENTITY_MISMATCH,
+            "selected_hook_id does not match script.selected_hook_id.",
+        )
 
 
 def _structure_completeness_error(

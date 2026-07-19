@@ -668,12 +668,42 @@ def replace_script_structure(
         ).fetchall()
     ]
     if old_beats:
+        # coverage_intent_results.visual_intent_id → visual_intents (FK).
+        # Clear dependent rows before deleting intents during structure replace.
+        intent_placeholders = ",".join("?" for _ in old_beats)
         conn.execute(
-            f"DELETE FROM visual_intents WHERE visual_beat_id IN ({','.join('?' for _ in old_beats)})",
+            f"""
+            DELETE FROM coverage_intent_results
+            WHERE visual_intent_id IN (
+                SELECT visual_intent_id FROM visual_intents
+                WHERE visual_beat_id IN ({intent_placeholders})
+            )
+            """,
+            old_beats,
+        )
+        shot_join = conn.execute(
+            """
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='editorial_shot_visual_intents'
+            """
+        ).fetchone()
+        if shot_join is not None:
+            conn.execute(
+                f"""
+                DELETE FROM editorial_shot_visual_intents
+                WHERE visual_intent_id IN (
+                    SELECT visual_intent_id FROM visual_intents
+                    WHERE visual_beat_id IN ({intent_placeholders})
+                )
+                """,
+                old_beats,
+            )
+        conn.execute(
+            f"DELETE FROM visual_intents WHERE visual_beat_id IN ({intent_placeholders})",
             old_beats,
         )
         conn.execute(
-            f"DELETE FROM visual_beat_sentences WHERE visual_beat_id IN ({','.join('?' for _ in old_beats)})",
+            f"DELETE FROM visual_beat_sentences WHERE visual_beat_id IN ({intent_placeholders})",
             old_beats,
         )
     if old_sentences:
@@ -807,19 +837,95 @@ def get_script_draft(conn: sqlite3.Connection, *, script_id: str) -> ScriptDraft
 
 
 def get_active_script(conn: sqlite3.Connection, *, project_id: str) -> ScriptDraft | None:
-    row = conn.execute(
-        """
-        SELECT relative_json_path FROM script_drafts
-        WHERE project_id = ? AND status IN ('draft', 'review_requested', 'user_edited', 'structure_pending')
-        ORDER BY script_version DESC
-        LIMIT 1
-        """,
-        (project_id,),
-    ).fetchone()
+    """Return the active script with SQLite status as source of truth.
+
+    When ``editorial_project_state.active_script_id`` is set, that row is used.
+    JSON status is overwritten by the registry ``script_drafts.status`` column so
+    a partially published artifact cannot pretend to be ``review_requested``.
+    """
+
+    state = get_project_state(conn, project_id=project_id)
+    if state is not None and state.active_script_id:
+        row = conn.execute(
+            """
+            SELECT script_id, status, relative_json_path FROM script_drafts
+            WHERE project_id = ? AND script_id = ?
+              AND status IN ('draft', 'review_requested', 'user_edited', 'structure_pending')
+            """,
+            (project_id, state.active_script_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT script_id, status, relative_json_path FROM script_drafts
+            WHERE project_id = ?
+              AND status IN ('draft', 'review_requested', 'user_edited', 'structure_pending')
+            ORDER BY script_version DESC
+            LIMIT 1
+            """,
+            (project_id,),
+        ).fetchone()
     if row is None:
         return None
     payload = _read_json_from_relative(row["relative_json_path"])
-    return ScriptDraft.model_validate(payload["script"])
+    script = ScriptDraft.model_validate(payload["script"])
+    db_status = ScriptDraftStatus(str(row["status"]))
+    if script.status != db_status:
+        script = script.model_copy(update={"status": db_status})
+    return script
+
+
+def script_registry_json_status_mismatch(
+    conn: sqlite3.Connection, *, script_id: str
+) -> bool:
+    """True when JSON script.status disagrees with script_drafts.status."""
+
+    row = conn.execute(
+        "SELECT status, relative_json_path FROM script_drafts WHERE script_id = ?",
+        (script_id,),
+    ).fetchone()
+    if row is None:
+        return False
+    payload = _read_json_from_relative(row["relative_json_path"])
+    json_status = str((payload.get("script") or {}).get("status") or "")
+    return json_status != str(row["status"])
+
+
+def snapshot_script_bundle_artifacts(
+    project_root: Path, *, script_id: str
+) -> dict[str, str | None]:
+    """Capture script JSON + latest_script.json text for restore-on-failure."""
+
+    relatives = (
+        editorial_script_json_relative_path(script_id),
+        editorial_latest_script_relative_path(),
+    )
+    snapshot: dict[str, str | None] = {}
+    for relative in relatives:
+        path = resolve_editorial_relative_path(project_root, relative)
+        if path.is_file():
+            snapshot[relative] = path.read_text(encoding="utf-8")
+        else:
+            snapshot[relative] = None
+    return snapshot
+
+
+def restore_script_bundle_artifacts(
+    project_root: Path, snapshot: dict[str, str | None]
+) -> None:
+    """Restore script JSON artifacts from :func:`snapshot_script_bundle_artifacts`."""
+
+    for relative, text in snapshot.items():
+        assert_editorial_relative_path(relative)
+        path = resolve_editorial_relative_path(project_root, relative)
+        if text is None:
+            if path.is_file():
+                path.unlink()
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(path)
 
 
 def list_script_drafts(conn: sqlite3.Connection, *, project_id: str) -> list[ScriptDraft]:
@@ -1405,7 +1511,10 @@ __all__ = [
     "save_narrative_json",
     "save_project_brief_json",
     "save_script_bundle_json",
+    "script_registry_json_status_mismatch",
     "set_selected_hook",
+    "snapshot_script_bundle_artifacts",
+    "restore_script_bundle_artifacts",
     "update_editorial_attempt",
     "update_editorial_run",
     "update_narrative_plan_status",

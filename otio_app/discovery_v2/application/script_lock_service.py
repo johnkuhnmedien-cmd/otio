@@ -16,6 +16,9 @@ from otio_app.discovery_v2.application.observation_review_service import (
     list_editorial_ready_observations,
 )
 from otio_app.discovery_v2.domain.editorial import (
+    EDITORIAL_ERROR_ACTIVE_SCRIPT_POINTER_MISSING,
+    EDITORIAL_ERROR_REGISTRY_ARTIFACT_MISMATCH,
+    EDITORIAL_ERROR_SCRIPT_IDENTITY_MISMATCH,
     ClaimStatus,
     CoverageAuditStatus,
     EditorialProjectStateStatus,
@@ -398,6 +401,9 @@ def _build_preview(
         blockers.append("narrative_plan_missing")
     if state is None or not state.selected_hook_id:
         blockers.append("selected_hook_missing")
+    # SQLite Current-State is source of truth: no fingerprint without pointer.
+    if state is None or not state.active_script_id:
+        blockers.append(EDITORIAL_ERROR_ACTIVE_SCRIPT_POINTER_MISSING)
     editorial_state_ok = (
         state is not None and state.status != EditorialProjectStateStatus.STALE
     )
@@ -405,11 +411,26 @@ def _build_preview(
         blockers.append("script_missing")
     elif script.status == ScriptDraftStatus.STRUCTURE_PENDING:
         blockers.append("script_structure_pending")
+    if (
+        state is not None
+        and script is not None
+        and (
+            state.active_script_id != script.script_id
+            or state.active_narrative_plan_id != script.narrative_plan_id
+            or (state.selected_hook_id or None) != (script.selected_hook_id or None)
+        )
+    ):
+        blockers.append(EDITORIAL_ERROR_SCRIPT_IDENTITY_MISMATCH)
+    if script is not None and editorial_repo.script_registry_json_status_mismatch(
+        conn, script_id=script.script_id
+    ):
+        # Divergent JSON (e.g. review_requested) must not mint a fingerprint.
+        blockers.append(EDITORIAL_ERROR_REGISTRY_ARTIFACT_MISMATCH)
     bundle = None if script is None else editorial_repo.get_script_bundle(conn, script_id=script.script_id)
     # Bundle fullness alone is not enough: STRUCTURE_PENDING remains a blocker.
     structure_ok = _bundle_has_full_structure(bundle) and not (
         script is not None and script.status == ScriptDraftStatus.STRUCTURE_PENDING
-    )
+    ) and EDITORIAL_ERROR_REGISTRY_ARTIFACT_MISMATCH not in blockers
     if not _bundle_has_full_structure(bundle):
         blockers.append("script_structure_incomplete")
     coverage = None
@@ -423,6 +444,14 @@ def _build_preview(
     stale_inputs = False
     if script is not None and coverage is not None and coverage.script_id != script.script_id:
         blockers.append("coverage_audit_stale")
+        stale_inputs = True
+    if (
+        script is not None
+        and coverage is not None
+        and coverage.narrative_plan_id
+        and coverage.narrative_plan_id != script.narrative_plan_id
+    ):
+        blockers.append(EDITORIAL_ERROR_SCRIPT_IDENTITY_MISMATCH)
         stale_inputs = True
     observations = list_editorial_ready_observations(project)
     observation_fingerprint = compute_observation_set_fingerprint(
