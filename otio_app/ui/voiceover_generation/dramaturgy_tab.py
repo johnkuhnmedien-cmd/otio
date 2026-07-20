@@ -30,6 +30,11 @@ from otio_app.services.voiceover_generation.model_settings_service import (
     save_model_settings,
 )
 from otio_app.services.voiceover_generation.models import DRAMATURGY_ROLES
+from otio_app.services.voiceover_generation.llm_pricing import (
+    estimate_call_cost_usd,
+    estimate_tokens_from_text,
+    format_usd,
+)
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
 from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
 from otio_app.ui.project_context import render_project_selector
@@ -39,12 +44,12 @@ from otio_app.ui.voiceover_generation._shared import (
     style_source_metric_value,
 )
 
-# Höher als plan_llm_client.DEFAULT_MAX_OUTPUT_TOKENS — genug Spielraum für
-# ~40 Kapitel-JSON, aber unter der alten 70k-Marke, die bei OpenAI/Gemini
-# lange Idle-Verbindungen begünstigte. Unverbrauchtes Limit ändert die
-# Antwortqualität nicht (Ceiling, kein Target). Anthropic-Calls darüber
-# streamen automatisch (SDK-10-Minuten-Regel).
-_DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS = 32768
+# Output-Token-Ceiling für Dramaturgie. Unverbrauchtes Limit kostet nichts
+# (Ceiling, kein Target). Anthropic streamt oberhalb ~20k automatisch.
+_DRAMATURGY_MAX_OUTPUT_TOKENS_MIN = 16_384
+_DRAMATURGY_MAX_OUTPUT_TOKENS_MAX = 100_000
+_DRAMATURGY_MAX_OUTPUT_TOKENS_DEFAULT = 100_000
+_DRAMATURGY_MAX_OUTPUT_TOKENS_STEP = 4_096
 
 
 def _inventory_counts(project: Project) -> tuple[int, int]:
@@ -134,6 +139,66 @@ def _render_model_settings(project: Project) -> tuple[str, str]:
             save_model_settings(project, updated)
             st.success("Modell-Einstellung für Dramaturgie gespeichert.")
     return role_settings.provider, role_settings.model
+
+
+def _estimate_dramaturgy_input_tokens(project: Project) -> int:
+    """Grobe Input-Schätzung aus Brief + Ordner-Summaries (falls vorhanden)."""
+    parts: list[str] = []
+    brief = load_project_brief(project)
+    parts.append(brief.model_dump_json())
+    summaries_path = get_folder_inventory_summaries_path(project.language_work_dir_path)
+    if summaries_path.is_file():
+        try:
+            parts.append(summaries_path.read_text(encoding="utf-8"))
+        except OSError:
+            pass
+    # Prompt-Rahmen / Instruktionen grob dazuaddieren
+    overhead = 4_000
+    return estimate_tokens_from_text("\n".join(parts)) + overhead
+
+
+def _render_max_tokens_slider(
+    project: Project,
+    *,
+    provider: str,
+    model: str,
+) -> int:
+    slider_key = f"vo_dramaturgy_max_tokens_{project.id}"
+    if slider_key not in st.session_state:
+        st.session_state[slider_key] = _DRAMATURGY_MAX_OUTPUT_TOKENS_DEFAULT
+
+    max_tokens = st.slider(
+        "Max. Output-Tokens (Ceiling)",
+        min_value=_DRAMATURGY_MAX_OUTPUT_TOKENS_MIN,
+        max_value=_DRAMATURGY_MAX_OUTPUT_TOKENS_MAX,
+        step=_DRAMATURGY_MAX_OUTPUT_TOKENS_STEP,
+        key=slider_key,
+        help=(
+            "Obergrenze für die Antwortlänge. Du zahlst nur die tatsächlich "
+            "erzeugten Output-Tokens — nicht automatisch das volle Limit."
+        ),
+    )
+
+    input_tokens = _estimate_dramaturgy_input_tokens(project)
+    estimate = estimate_call_cost_usd(
+        provider=provider,
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens_ceiling=int(max_tokens),
+    )
+    st.caption(
+        f"**Kostenschätzung** ({estimate.price.label}): "
+        f"Input ≈ {estimate.input_tokens:,} Tok → {format_usd(estimate.input_cost_usd)} · "
+        f"Output-Worst-Case {estimate.output_tokens_ceiling:,} Tok → "
+        f"{format_usd(estimate.output_ceiling_cost_usd)} · "
+        f"**Summe-Ceiling ≈ {format_usd(estimate.total_ceiling_usd)}**"
+    )
+    st.caption(
+        "Hinweis: Bei deinem vorherigen Abbruch bei 32 768 Tokens lag die echte "
+        "Antwortlänge vermutlich knapp darüber — typisch zahlst du deutlich weniger "
+        "als den Worst-Case bei 100 000."
+    )
+    return int(max_tokens)
 
 
 def _plan_to_rows(plan) -> list[dict]:
@@ -246,6 +311,9 @@ def render_dramaturgy_page() -> None:
         "Das LLM erhält nur die **Kapitel** (Ordnernamen + kurze Kapitel-Signale), "
         "keine einzelnen Asset-Beschreibungen."
     )
+    max_output_tokens = _render_max_tokens_slider(
+        project, provider=provider, model=model
+    )
     col_geo, col_variety = st.columns(2)
     with col_geo:
         geo_clicked = st.button(
@@ -255,7 +323,7 @@ def render_dramaturgy_page() -> None:
         )
         st.caption(
             "Reihenfolge primär nach Geographie / sinnvollem Reiseverlauf. "
-            f"max_tokens={_DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS:,}."
+            f"Aktuelles Limit: max_tokens={max_output_tokens:,}."
         )
     with col_variety:
         variety_clicked = st.button(
@@ -265,19 +333,19 @@ def render_dramaturgy_page() -> None:
         )
         st.caption(
             "Reihenfolge für maximale Abwechslung und Kontraste zwischen Kapiteln. "
-            f"max_tokens={_DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS:,}."
+            f"Aktuelles Limit: max_tokens={max_output_tokens:,}."
         )
 
     build_kwargs: dict | None = None
     if geo_clicked:
         build_kwargs = {
             "planning_mode": DRAMATURGY_PLANNING_MODE_GEOGRAPHY,
-            "max_output_tokens": _DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS,
+            "max_output_tokens": max_output_tokens,
         }
     elif variety_clicked:
         build_kwargs = {
             "planning_mode": DRAMATURGY_PLANNING_MODE_VARIETY,
-            "max_output_tokens": _DRAMATURGY_HIGH_MAX_OUTPUT_TOKENS,
+            "max_output_tokens": max_output_tokens,
         }
 
     if build_kwargs is not None:

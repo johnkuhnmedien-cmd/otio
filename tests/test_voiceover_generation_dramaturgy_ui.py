@@ -76,8 +76,11 @@ def test_dramaturgy_page_has_both_plan_buttons(
     assert "Dramaturgie ohne Thinking" not in button_labels
 
     captions = " ".join(caption.value for caption in at.caption)
-    assert "32" in captions and "768" in captions
+    assert "100" in captions and "000" in captions
+    assert "Kostenschätzung" in captions or "Worst-Case" in captions or "Ceiling" in captions
     assert "Geographie" in captions or "Reiseverlauf" in captions
+    slider_labels = [slider.label for slider in at.slider]
+    assert "Max. Output-Tokens (Ceiling)" in slider_labels
     assert "Abwechslung" in captions
 
 
