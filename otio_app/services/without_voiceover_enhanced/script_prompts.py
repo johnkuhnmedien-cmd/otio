@@ -275,12 +275,19 @@ Create:
 2) rough visual edit plan (shots may span multiple segments; multiple shots may sit inside one segment)
 3) concrete coverage_gaps for shots without a suitable local asset
 
-FORBIDDEN:
-- one sentence = one asset
-- one voice segment = one shot
-- sentence end = picture cut
-- number of shots must equal number of sentences
-- final frames / exact timeline times
+EDITORIAL GUIDANCE (variety — nothing is banned by structure):
+- Prefer a varied, documentary rhythm: holds across statements, detail inserts \
+inside a sentence, and occasional one-shot-per-sentence are all allowed.
+- Do NOT default to a monotonous grid where every sentence/segment becomes \
+exactly one shot with one asset. Mix structures when it serves the story.
+- Picture cuts need not land on sentence ends; they also may, when that cut \
+is the strongest editorial choice.
+
+TECHNICAL SCOPE (Python finalizes the timeline later):
+- Do NOT output final absolute timeline times, frame numbers, source \
+timecodes, or start_frame/end_frame fields.
+- Describe shot ranges only via narration anchors \
+(segment_id + offset_seconds within that segment).
 
 pause_function: breath|emphasis|anticipation|reveal|chapter_transition|reflection|no_pause
 duration_class: short|medium|long
@@ -367,13 +374,15 @@ You decide:
 - cuts during or outside pauses
 - avoid unnecessary repetition
 
-You do NOT decide:
-- final frames
+You do NOT decide (Python finalizes these later):
+- final absolute timeline times / frame numbers
 - technical source timecodes
 - validated source ranges
 - final frame rounding
 
-FORBIDDEN one-to-one sentence/asset assignment.
+EDITORIAL GUIDANCE: Prefer a varied shot structure. One sentence may map to \
+one asset when that is the best cut — but do not default to a rigid \
+one-sentence-one-asset grid for the whole film.
 
 OUTPUT JSON:
 {{

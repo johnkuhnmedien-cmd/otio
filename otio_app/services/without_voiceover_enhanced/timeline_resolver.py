@@ -146,10 +146,12 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
     known_segments = {s.segment_id for s in locked.segments}
     fps = float(project.fps)
 
+    # One-sentence-one-asset is allowed when editorial; no hard reject.
+    # Kept as an optional note for debugging / transparency only.
     if detect_one_to_one_sentence_asset(final, len(locked.segments)):
-        errors.append(
-            "Finaler Plan enthält keine freie Shotstruktur "
-            "(Eins-zu-eins Satz/Segment → Asset erkannt)."
+        repairs.append(
+            "Hinweis: Shotstruktur ist durchgängig 1 Segment → 1 Shot "
+            "(erlaubt, aber oft weniger abwechslungsreich)."
         )
 
     timing_map = {item.segment_id: item for item in timings.segments}
