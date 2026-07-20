@@ -62,11 +62,99 @@ def get_active_voiceover_gen_project() -> Project | None:
     return render_project_selector("Projekt")
 
 
+def render_llm_input_info(
+    text: str,
+    *,
+    title: str = "Was das LLM bekommt",
+) -> None:
+    """Kurzer Hinweis, welche Kontexte in diesen LLM-Call gehen."""
+    st.caption(f"**{title}:** {text}")
+
+
+# Kurze, UI-taugliche Beschreibungen der Prompt-Inputs je LLM-Rolle/Schritt.
+LLM_INPUT_INFO = {
+    "style_profile": (
+        "Project Brief (Titel, Ton, Zusatzprompt) · Negative Rules · "
+        "Forbidden Phrases · Intro-/Segment-/Upload-Referenzen "
+        "(nur Stil ableiten, nicht wörtlich kopieren)."
+    ),
+    "dramaturgy": (
+        "Project Brief · Negative Rules · Style Profile/Raw-Text · "
+        "Kapitel-Summaries (Ordnername, Themen, Scores, Asset-Anzahl, Risiken) — "
+        "keine einzelnen Asset-Beschreibungen · Planning-Mode-Hinweise."
+    ),
+    "voiceover_author": (
+        "Brief (Ton, Negative Rules, Forbidden) · Style · Dramaturgie-Kapitel "
+        "(Rolle, Reason, Nachbarn, Craft) · Folder-Settings (Wortziel, Energy, "
+        "Factuality, Must-Include/Avoid, Zusatzprompt) · volles lokales "
+        "Asset-Inventar (IDs, Dauer, Beschreibungen, Frames)."
+    ),
+    "voiceover_review": (
+        "Style · Forbidden/Negative Rules · Factuality-Modus · "
+        "kompletter VO-Text · Satz-Breakdown. "
+        "Bei Blockern folgt Correction mit Originaltext + Fehlerliste "
+        "(ohne volles Inventar)."
+    ),
+    "asset_allocation": (
+        "Style · lokales Inventar · bestehender VO-Text/Sätze/Closing · "
+        "Readiness-Issues — Text bleibt, nur Asset-Zuordnung wird repariert."
+    ),
+    "intro": (
+        "Intro-Settings · Brief/Negative Rules/Forbidden · Style · "
+        "Dramaturgie (Arc/Promise) · alle bestätigten Folder-VOs "
+        "(Text + Satz-Assets) · Inventory-Summaries pro Ordner."
+    ),
+    "enhanced_script": (
+        "Project Brief · Film-Kontext (Titel, Promise, Arc) · "
+        "Kapitel-Dramaturgie (Rolle, Reason, Wortziel) · "
+        "Vorgänger-/Nachfolger-Kapitel · Style Profile · verifizierte "
+        "Fakten/Metadaten · Asset-Inventar nur als visuelle Ressource "
+        "(keine Inhaltsgrenze) · Regeln gegen Bildunterschriften & "
+        "erfundene Fakten. Ein Call = nur dieses Kapitel."
+    ),
+    "enhanced_rough_cut": (
+        "Gesperrtes Skript (JSON) · Segment-Timings · lokale Assets (JSON) · "
+        "Style · Dramaturgie → grober Cut + Pausen + Coverage Gaps/Queries."
+    ),
+    "enhanced_final_cut": (
+        "Gesperrtes Skript · Narration-Timeline · Pause-Direktiven · "
+        "Rough Cut · lokale Assets · akzeptierte Supplements · Style → "
+        "finaler redaktioneller Cut Plan."
+    ),
+    "cut_plan_supplement_query": (
+        "Ordnername · VO-Satz · Visual Intent · Reason · optionaler "
+        "Search-Hint → bis zu 3 englische Stock-Suchqueries."
+    ),
+    "youtube_publish": (
+        "Sprache · Titel · Dauer · feste Kapitel-Timestamps aus Timeline-Merge · "
+        "Intro-Skript · Folder-Skripte → Beschreibung, Hashtags, Quiz."
+    ),
+    "analysis_assets": (
+        "Frame-Bilder des jeweiligen Mediums + kurzer Kontext "
+        "(Dateiname, Ordner, Sprache) → visuelle Beschreibung."
+    ),
+    "analysis_voice_gemini": (
+        "Voice-over-Audio + Transkriptions-Schema → Segmente/Text "
+        "(nur wenn Gemini als Voice-Engine gewählt)."
+    ),
+    "edit_plan": (
+        "Alle Whisper-Segmente des Ordners · alle Asset-Beschreibungen · "
+        "Timing-/Asset-Regeln · Editor-/Gemini-Freitext · optional "
+        "Korrektur-Hinweise — in einem gesamtheitlichen Call."
+    ),
+    "supplement_auto_resolve": (
+        "Pro Kandidat: Frame-Bilder + VO-Passage · Visual Intent · "
+        "Must-Show/Avoid · Ort — Gemini prüft Passung (PASS = übernehmen)."
+    ),
+}
+
+
 def render_llm_model_selectbox(
     *,
     label: str,
     role_settings: LlmRoleSettings,
     key: str,
+    input_info: str | None = None,
 ) -> LlmRoleSettings:
     """Ein einziges Dropdown aus VOICEOVER_GEN_MODEL_CHOICES statt Provider-
     Selectbox + Modell-Freitext.
@@ -75,7 +163,10 @@ def render_llm_model_selectbox(
     nur konkrete, bekannt funktionierende Modelle wählbar sind. Liefert die
     Auswahl direkt als LlmRoleSettings(provider, model) zurück — das
     Speicherformat bleibt dadurch unverändert (Rückwärtskompatibilität mit
-    bereits gespeicherten model_settings.json)."""
+    bereits gespeicherten model_settings.json).
+
+    Optional ``input_info``: kurzer Hinweis, was dieser LLM-Call mitbekommt.
+    """
     current_id = combined_model_id(role_settings)
     options = list(VOICEOVER_GEN_MODEL_CHOICES)
     if current_id not in options:
@@ -89,6 +180,8 @@ def render_llm_model_selectbox(
         format_func=format_voiceover_gen_model_label,
         key=key,
     )
+    if input_info:
+        render_llm_input_info(input_info)
     provider, model = split_llm_model_id(selected)
     return LlmRoleSettings(provider=provider, model=model)
 

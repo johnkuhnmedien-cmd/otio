@@ -124,6 +124,10 @@ from otio_app.ui.project_context import (
     render_project_selector,
     render_workflow_progress,
 )
+from otio_app.ui.voiceover_generation._shared import (
+    LLM_INPUT_INFO,
+    render_llm_input_info,
+)
 from otio_app.ui.youtube_publish import render_youtube_publish_block
 
 
@@ -636,6 +640,7 @@ def _render_timing_gemini_controls(project) -> None:
     elif st.session_state[gemini_key] not in model_choices:
         st.session_state[gemini_key] = get_default_gemini_model()
     st.selectbox("Planungs-Modell (Motiv → Asset)", **selectbox_kwargs)
+    render_llm_input_info(LLM_INPUT_INFO["edit_plan"])
 
     saved_settings = load_edit_plan_timing_settings(project)
     save_col, info_col = st.columns([1, 3])
@@ -1231,10 +1236,10 @@ def _run_suggest_edit_plan(
 
 def _render_tab_generate(project, selected_folder: str, saved: EditPlanDocument | None) -> None:
     st.markdown(
-        f"Vorschlag für **{selected_folder}** — Gemini erhält **alle Whisper-Segmente**, "
-        "**alle Asset-Beschreibungen** und deine **Zusatzhinweise** in **einem** "
-        "gesamtheitlichen Call (Tab Regeln)."
+        f"Vorschlag für **{selected_folder}** — in **einem** gesamtheitlichen Call "
+        "(Tab Regeln)."
     )
+    render_llm_input_info(LLM_INPUT_INFO["edit_plan"])
     timing = _current_timing_settings(project)
     if not is_plan_model_configured(timing.gemini_model):
         st.warning(

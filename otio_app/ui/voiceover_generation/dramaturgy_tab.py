@@ -40,6 +40,8 @@ from otio_app.services.voiceover_generation.project_brief_service import load_pr
 from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
 from otio_app.ui.project_context import render_project_selector
 from otio_app.ui.voiceover_generation._shared import (
+    LLM_INPUT_INFO,
+    render_llm_input_info,
     render_llm_model_selectbox,
     require_without_voiceover_mode,
     style_source_metric_value,
@@ -134,6 +136,7 @@ def _render_model_settings(project: Project) -> tuple[str, str]:
             label="Modell",
             role_settings=settings.dramaturgy,
             key=f"vo_dramaturgy_model_{project.id}",
+            input_info=LLM_INPUT_INFO["dramaturgy"],
         )
         if st.button("Speichern", key=f"vo_dramaturgy_model_save_{project.id}"):
             updated = settings.model_copy(update={"dramaturgy": role_settings})
@@ -308,10 +311,7 @@ def render_dramaturgy_page() -> None:
         st.info(f"Es gibt bereits eine **bestätigte** Dramaturgie (bestätigt: {confirmed_at}).")
 
     st.subheader("Dramaturgie planen")
-    st.caption(
-        "Das LLM erhält nur die **Kapitel** (Ordnernamen + kurze Kapitel-Signale), "
-        "keine einzelnen Asset-Beschreibungen."
-    )
+    render_llm_input_info(LLM_INPUT_INFO["dramaturgy"])
     max_output_tokens = _render_max_tokens_slider(
         project, provider=provider, model=model
     )

@@ -27,7 +27,10 @@ from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     lock_script,
     mark_segment_text_changed,
 )
-from otio_app.ui.voiceover_generation._shared import render_llm_model_selectbox
+from otio_app.ui.voiceover_generation._shared import (
+    LLM_INPUT_INFO,
+    render_llm_model_selectbox,
+)
 from otio_app.ui.without_voiceover_enhanced._shared import get_enhanced_project
 
 _MAX_TOKENS_MIN = 16_384
@@ -43,14 +46,7 @@ def _render_model_and_tokens(project) -> tuple[str, str, int]:
             label="Modell (LLM-Lauf 1)",
             role_settings=settings.voiceover_author,
             key=f"enh_script_model_{project.id}",
-        )
-        st.caption(
-            "**Was das LLM pro Kapitel bekommt:** Project Brief · Film-Kontext "
-            "(Titel, Promise, Arc) · Kapitel-Dramaturgie (Rolle, Reason, Wortziel) · "
-            "Vorgänger-/Nachfolger-Kapitel · Style Profile · verifizierte Fakten/"
-            "Metadaten · Asset-Inventar nur als visuelle Ressource (keine Inhaltsgrenze) · "
-            "Regeln gegen Bildunterschriften & erfundene Fakten. "
-            "Ein Call = nur dieses Kapitel, nicht der ganze Film."
+            input_info=LLM_INPUT_INFO["enhanced_script"],
         )
         if st.button("Modell speichern", key=f"enh_script_model_save_{project.id}"):
             updated = settings.model_copy(update={"voiceover_author": role_settings})

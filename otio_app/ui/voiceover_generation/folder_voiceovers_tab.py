@@ -81,6 +81,8 @@ from otio_app.services.voiceover_generation.voiceover_review_service import (
 )
 from otio_app.ui.project_context import render_project_selector
 from otio_app.ui.voiceover_generation._shared import (
+    LLM_INPUT_INFO,
+    render_llm_input_info,
     render_llm_model_selectbox,
     render_new_feature_button,
     require_without_voiceover_mode,
@@ -198,6 +200,7 @@ def _render_model_settings(project: Project) -> tuple[str, str, str, str]:
                 label="Modell (Autor)",
                 role_settings=settings.voiceover_author,
                 key=f"vo_fvo_author_model_{project.id}",
+                input_info=LLM_INPUT_INFO["voiceover_author"],
             )
         with col2:
             st.markdown("**Voice-over Review**")
@@ -205,7 +208,12 @@ def _render_model_settings(project: Project) -> tuple[str, str, str, str]:
                 label="Modell (Review)",
                 role_settings=settings.voiceover_review,
                 key=f"vo_fvo_review_model_{project.id}",
+                input_info=LLM_INPUT_INFO["voiceover_review"],
             )
+        render_llm_input_info(
+            LLM_INPUT_INFO["asset_allocation"],
+            title="Asset-Allokation (Autor-Modell)",
+        )
         if st.button("Modelle speichern", key=f"vo_fvo_models_save_{project.id}"):
             updated = settings.model_copy(
                 update={

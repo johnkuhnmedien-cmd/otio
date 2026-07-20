@@ -43,6 +43,10 @@ from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
     TimelineResolveError,
     resolve_final_timeline,
 )
+from otio_app.ui.voiceover_generation._shared import (
+    LLM_INPUT_INFO,
+    render_llm_input_info,
+)
 from otio_app.ui.without_voiceover_enhanced._shared import get_enhanced_project
 
 
@@ -58,6 +62,7 @@ def render_enhanced_cut_plan_page() -> None:
         return
 
     st.subheader("1. Groben Cut Plan und Pausen erzeugen")
+    render_llm_input_info(LLM_INPUT_INFO["enhanced_rough_cut"])
     if st.button("LLM-Lauf 2 starten", type="primary", key="enh_rough_cut"):
         try:
             with st.spinner("Pausen + grober Cut…"):
@@ -212,6 +217,7 @@ def render_enhanced_cut_plan_page() -> None:
 
     st.divider()
     st.subheader("3. Finalen Cut Plan erzeugen und technisch auflösen")
+    render_llm_input_info(LLM_INPUT_INFO["enhanced_final_cut"])
     if st.button("LLM-Lauf 3 + Python-Finalisierung", type="primary", key="enh_final_cut"):
         try:
             with st.spinner("Finaler redaktioneller Plan…"):

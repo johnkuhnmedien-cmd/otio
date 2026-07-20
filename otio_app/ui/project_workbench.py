@@ -59,6 +59,10 @@ from otio_app.ui.project_context import (
     render_project_selector,
     render_workflow_progress,
 )
+from otio_app.ui.voiceover_generation._shared import (
+    LLM_INPUT_INFO,
+    render_llm_input_info,
+)
 
 
 def _folder_status_cache_keys(project_id: str) -> tuple[str, str]:
@@ -594,6 +598,15 @@ def render_project_workbench() -> None:
                 format_func=format_gemini_model_label,
                 key="gemini_model",
             )
+            render_llm_input_info(
+                LLM_INPUT_INFO["analysis_assets"],
+                title="Assets (Gemini)",
+            )
+            if not without_voiceover:
+                render_llm_input_info(
+                    LLM_INPUT_INFO["analysis_voice_gemini"],
+                    title="Voice-over (nur Gemini-Engine)",
+                )
             st.caption("API-Schlüssel wechseln: **🔑 API-Schlüssel**")
 
         voice_backend, whisper_model, gemini_model = _init_model_settings()

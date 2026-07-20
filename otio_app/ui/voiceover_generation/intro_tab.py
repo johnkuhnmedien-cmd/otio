@@ -31,6 +31,7 @@ from otio_app.services.voiceover_generation.project_brief_service import load_pr
 from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
 from otio_app.ui.project_context import render_project_selector
 from otio_app.ui.voiceover_generation._shared import (
+    LLM_INPUT_INFO,
     render_llm_model_selectbox,
     require_without_voiceover_mode,
     style_source_metric_value,
@@ -181,6 +182,7 @@ def _render_model_settings(project: Project) -> tuple[str, str]:
             label="Modell",
             role_settings=settings.intro,
             key=f"vo_intro_model_{project.id}",
+            input_info=LLM_INPUT_INFO["intro"],
         )
         if st.button("Speichern", key=f"vo_intro_model_save_{project.id}"):
             updated = settings.model_copy(update={"intro": role_settings})

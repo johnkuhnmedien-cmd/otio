@@ -325,6 +325,8 @@ from otio_app.ui.project_context import render_project_selector
 from otio_app.ui.navigation import PAGE_CUT_PLAN
 from otio_app.ui.youtube_publish import render_youtube_publish_block
 from otio_app.ui.voiceover_generation._shared import (
+    LLM_INPUT_INFO,
+    render_llm_input_info,
     render_llm_model_selectbox,
     require_without_voiceover_mode,
 )
@@ -903,6 +905,7 @@ def _render_supplement_query_model_settings(project: Project) -> tuple[str, str]
             label="Modell (LLM-Suchqueries)",
             role_settings=settings.cut_plan_supplement_query,
             key=f"cut_plan_supplement_query_model_{project.id}",
+            input_info=LLM_INPUT_INFO["cut_plan_supplement_query"],
         )
         if st.button("Modell speichern", key=f"cut_plan_supplement_query_model_save_{project.id}"):
             updated = settings.model_copy(update={"cut_plan_supplement_query": query_settings})
@@ -1541,6 +1544,10 @@ def _render_bulk_auto_resolve_action(
     st.caption(
         f"{len(open_requests)} von {len(requests_document.requests)} Request(s) noch ohne übernommenes Asset. "
         "Läuft sequenziell — ein Request nach dem anderen, ohne Abbrechen-Möglichkeit."
+    )
+    render_llm_input_info(
+        LLM_INPUT_INFO["supplement_auto_resolve"],
+        title="Gemini-Prüfung (Auto-Resolve)",
     )
     adobe_ready, pexels_ready = _supplement_provider_readiness()
     any_ready = adobe_ready or pexels_ready

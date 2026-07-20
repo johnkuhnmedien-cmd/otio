@@ -48,6 +48,8 @@ from otio_app.services.voiceover_generation.style_reference_service import (
 )
 from otio_app.ui.project_context import render_project_selector
 from otio_app.ui.voiceover_generation._shared import (
+    LLM_INPUT_INFO,
+    render_llm_input_info,
     render_llm_model_selectbox,
     require_without_voiceover_mode,
 )
@@ -93,10 +95,13 @@ def _render_model_settings_editor(project: Project) -> None:
         updated_roles = {}
         for role in VOICEOVER_GEN_ROLES:
             label = VOICEOVER_GEN_ROLE_LABELS[role]
+            # Style-Seite: nur Style-Profile aktiv; Info nur dort, um Rauschen zu vermeiden.
+            info = LLM_INPUT_INFO["style_profile"] if role == "style_profile" else None
             updated_roles[role] = render_llm_model_selectbox(
                 label=label,
                 role_settings=getattr(settings, role),
                 key=f"vo_model_{role}_{project.id}",
+                input_info=info,
             )
 
         if st.button(
@@ -351,6 +356,7 @@ def render_style_references_page() -> None:
             )
         with col_build:
             build_clicked = st.button(build_label, key=f"vo_style_profile_build_{project.id}")
+            render_llm_input_info(LLM_INPUT_INFO["style_profile"])
             if existing_profile_before_click is not None:
                 st.caption("Ersetzt das aktuell gespeicherte Style Profile dieses Projekts.")
 

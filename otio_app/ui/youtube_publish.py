@@ -26,7 +26,10 @@ from otio_app.services.youtube_publish_service import (
     youtube_metadata_path,
 )
 from otio_app.ui.activity import log_heavy_operation
-from otio_app.ui.voiceover_generation._shared import render_llm_model_selectbox
+from otio_app.ui.voiceover_generation._shared import (
+    LLM_INPUT_INFO,
+    render_llm_model_selectbox,
+)
 
 
 def _merge_blockers_message(
@@ -149,6 +152,7 @@ def render_youtube_publish_block(
             label="Modell",
             role_settings=settings.youtube_publish,
             key=f"{key_prefix}_yt_publish_model_{project.id}",
+            input_info=LLM_INPUT_INFO["youtube_publish"],
         )
         if st.button("Modell speichern", key=f"{key_prefix}_yt_publish_model_save_{project.id}"):
             updated = settings.model_copy(update={"youtube_publish": role_settings})
