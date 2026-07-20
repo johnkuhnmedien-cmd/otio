@@ -266,7 +266,29 @@ def build_rough_cut_prompt(
     local_assets_json: str,
     style_profile_text: str,
     dramaturgy_text: str,
+    folder_name: str = "",
+    folder_slug: str = "",
+    previous_folder_name: str | None = None,
+    next_folder_name: str | None = None,
 ) -> str:
+    chapter_scope = ""
+    if folder_name:
+        slug = folder_slug or folder_name
+        prev = previous_folder_name or "(none — this is the first chapter)"
+        nxt = next_folder_name or "(none — this is the last chapter)"
+        chapter_scope = f"""
+CHAPTER SCOPE (CRITICAL):
+
+- Plan ONLY the chapter "{folder_name}" (id prefix: {slug}_).
+- The LOCKED SCRIPT / SEGMENT TIMINGS / LOCAL ASSETS below contain only this chapter.
+- Use only segment IDs from this chapter.
+- Prefix every shot_id and coverage_gap_id with "{slug}_" (e.g. {slug}_shot_001).
+- Do not invent shots for previous or next chapters.
+- Previous chapter: {prev}
+- Next chapter: {nxt}
+- If a next chapter exists, prefer pause_function "chapter_transition" after this chapter's last segment when editorially justified.
+"""
+
     return f"""\
 You are LLM 2, the editorial rough-cut planner for a documentary pipeline.
 
@@ -278,6 +300,7 @@ Your task is to create:
 
 The locked narration provides a continuous time carpet.
 The visual edit plan cuts freely across that time carpet.
+{chapter_scope}
 
 NON-NEGOTIABLE EDITORIAL RULES:
 
@@ -488,7 +511,29 @@ def build_final_cut_prompt(
     local_assets_json: str,
     accepted_supplements_json: str,
     style_profile_text: str,
+    folder_name: str = "",
+    folder_slug: str = "",
+    previous_folder_name: str | None = None,
+    next_folder_name: str | None = None,
 ) -> str:
+    chapter_scope = ""
+    if folder_name:
+        slug = folder_slug or folder_name
+        prev = previous_folder_name or "(none — this is the first chapter)"
+        nxt = next_folder_name or "(none — this is the last chapter)"
+        chapter_scope = f"""
+CHAPTER SCOPE (CRITICAL):
+
+- Finalize ONLY the chapter "{folder_name}" (id prefix: {slug}_).
+- Inputs below are scoped to this chapter (script, timeline slice, rough cut, assets).
+- Use only segment IDs from this chapter.
+- Prefix every shot_id with "{slug}_".
+- Do not create shots for previous or next chapters.
+- Previous chapter: {prev}
+- Next chapter: {nxt}
+- Accepted supplements may be used when they fit this chapter's coverage needs.
+"""
+
     return f"""\
 Create the FINAL editorial cut plan.
 
@@ -504,7 +549,7 @@ You do NOT decide (Python finalizes these later):
 - technical source timecodes
 - validated source ranges
 - final frame rounding
-
+{chapter_scope}
 EDITORIAL GUIDANCE: Prefer a varied shot structure. One sentence may map to \
 one asset when that is the best cut — but do not default to a rigid \
 one-sentence-one-asset grid for the whole film.

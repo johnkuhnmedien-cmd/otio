@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from otio_app.models import Project
+from otio_app.project_layout import safe_folder_slug
 from otio_app.services.gemini_client import _extract_json
 from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.inventory_loader import load_folder_inventory
@@ -25,12 +27,15 @@ from otio_app.services.without_voiceover_enhanced.models import (
     CoverageGap,
     CoverageGapsDocument,
     EditorialAnchor,
+    EnhancedScriptDocument,
     FinalCutPlanDocument,
     FinalShot,
     NarrationAnchor,
+    NarrationTimelineDocument,
     PauseDirective,
     RoughCutPlanDocument,
     RoughShot,
+    SegmentTimingsDocument,
     StockCandidate,
     StockSearchResultsDocument,
 )
@@ -70,9 +75,20 @@ class CutPlanError(RuntimeError):
     pass
 
 
-def _local_assets_payload(project: Project) -> list[dict[str, Any]]:
+def _local_assets_payload(
+    project: Project,
+    *,
+    folder_name: str | None = None,
+) -> list[dict[str, Any]]:
     assets: list[dict[str, Any]] = []
-    for folder in project.selected_asset_subdirs:
+    folders = (
+        [folder_name]
+        if folder_name
+        else list(project.selected_asset_subdirs)
+    )
+    for folder in folders:
+        if not folder:
+            continue
         inventory = load_folder_inventory(project, folder)
         if inventory is None:
             continue
@@ -109,6 +125,344 @@ def _style_text(project: Project) -> str:
 def _dramaturgy_text(project: Project) -> str:
     plan = load_confirmed_dramaturgy(project)
     return plan.model_dump_json(indent=2) if plan else "(keine Dramaturgie)"
+
+
+def _chapter_dramaturgy_text_for_folder(project: Project, folder_name: str) -> str:
+    from otio_app.services.without_voiceover_enhanced.script_author_service import (
+        _chapter_dramaturgy_text,
+        list_enabled_dramaturgy_folders,
+    )
+
+    for entry in list_enabled_dramaturgy_folders(project):
+        if entry.folder_name == folder_name:
+            return _chapter_dramaturgy_text(entry)
+    return f"folder_name: {folder_name}"
+
+
+@dataclass
+class FolderRoughCutResult:
+    folder_name: str
+    status: str  # PASS | FAIL
+    rough: RoughCutPlanDocument | None = None
+    coverage: CoverageGapsDocument | None = None
+    error: str | None = None
+    shot_count: int = 0
+    pause_count: int = 0
+    gap_count: int = 0
+
+
+@dataclass
+class FolderFinalCutResult:
+    folder_name: str
+    status: str  # PASS | FAIL
+    final: FinalCutPlanDocument | None = None
+    error: str | None = None
+    shot_count: int = 0
+
+
+@dataclass
+class _ChapterCutContext:
+    folder_name: str
+    folder_slug: str
+    previous_folder_name: str | None
+    next_folder_name: str | None
+    segment_ids: set[str]
+    script_slice: EnhancedScriptDocument
+    timings_slice: SegmentTimingsDocument
+
+
+def list_cut_plan_chapter_names(
+    project: Project,
+    locked: EnhancedScriptDocument | None = None,
+) -> list[str]:
+    """Kapitel-Reihenfolge für LLM-Lauf 2/3 (wie Lauf 1: Dramaturgie-Ordner)."""
+    from otio_app.services.without_voiceover_enhanced.script_author_service import (
+        group_segments_by_folder,
+        list_enabled_dramaturgy_folders,
+        segments_for_folder,
+    )
+
+    if locked is None:
+        locked = require_locked_script(project)
+    entries = list_enabled_dramaturgy_folders(project)
+    if entries:
+        names = [
+            entry.folder_name
+            for entry in entries
+            if segments_for_folder(locked, entry.folder_name)
+        ]
+        if names:
+            return names
+    grouped = group_segments_by_folder(locked)
+    names = [name for name, segs in grouped if name and segs]
+    if names:
+        return names
+    # Legacy: Skript ohne Ordner-Zuordnung → ein Gesamtlauf.
+    return [""] if locked.segments else []
+
+
+def _script_slice_for_folder(
+    locked: EnhancedScriptDocument,
+    folder_name: str,
+) -> EnhancedScriptDocument:
+    if not folder_name:
+        return locked
+    segments = [s for s in locked.segments if s.folder_name == folder_name]
+    segment_ids = {s.segment_id for s in segments}
+    intents = [
+        intent
+        for intent in locked.visual_intents
+        if intent.folder_name == folder_name
+        or any(
+            intent.intent_id in (seg.visual_intent_ids or [])
+            for seg in segments
+        )
+    ]
+    intent_ids = {intent.intent_id for intent in intents}
+    beats = [
+        beat
+        for beat in locked.visual_beats
+        if any(sid in segment_ids for sid in beat.related_segment_ids)
+        or any(iid in intent_ids for iid in beat.visual_intent_ids)
+    ]
+    needs = [
+        need
+        for need in locked.coverage_needs
+        if not need.visual_intent_id or need.visual_intent_id in intent_ids
+    ]
+    hints = [
+        hint
+        for hint in locked.fact_check_hints
+        if not hint.related_segment_id or hint.related_segment_id in segment_ids
+    ]
+    return locked.model_copy(
+        update={
+            "narration_full": " ".join(s.text for s in segments if s.text.strip()),
+            "segments": segments,
+            "visual_intents": intents,
+            "visual_beats": beats,
+            "coverage_needs": needs,
+            "fact_check_hints": hints,
+        }
+    )
+
+
+def _timings_slice(
+    timings: SegmentTimingsDocument,
+    segment_ids: set[str],
+) -> SegmentTimingsDocument:
+    return SegmentTimingsDocument(
+        schema_version=timings.schema_version,
+        script_version=timings.script_version,
+        segments=[s for s in timings.segments if s.segment_id in segment_ids],
+    )
+
+
+def _timeline_slice(
+    timeline: NarrationTimelineDocument,
+    segment_ids: set[str],
+) -> NarrationTimelineDocument:
+    entries = [e for e in timeline.entries if e.segment_id in segment_ids]
+    total = 0.0
+    if entries:
+        total = max(
+            float(timeline.total_duration_seconds),
+            max(e.end_seconds + e.pause_after_seconds for e in entries),
+        )
+    return NarrationTimelineDocument(
+        schema_version=timeline.schema_version,
+        script_version=timeline.script_version,
+        total_duration_seconds=total,
+        entries=entries,
+    )
+
+
+def _rough_slice_for_segments(
+    rough: RoughCutPlanDocument,
+    segment_ids: set[str],
+) -> RoughCutPlanDocument:
+    def _anchor_ok(anchor: EditorialAnchor) -> bool:
+        if anchor.type == "pause":
+            sid = (anchor.after_segment_id or anchor.segment_id or "").strip()
+        else:
+            sid = (anchor.segment_id or "").strip()
+        return bool(sid) and sid in segment_ids
+
+    shots = [
+        shot
+        for shot in rough.shots
+        if _anchor_ok(shot.start_anchor) and _anchor_ok(shot.end_anchor)
+    ]
+    # Legacy bridge when editorial anchors are empty.
+    if not shots and any(s.narration_start_anchor.segment_id for s in rough.shots):
+        shots = [
+            shot
+            for shot in rough.shots
+            if shot.narration_start_anchor.segment_id in segment_ids
+            and shot.narration_end_anchor.segment_id in segment_ids
+        ]
+    pauses = [
+        pause
+        for pause in rough.pause_directives
+        if pause.after_segment_id in segment_ids
+    ]
+    return RoughCutPlanDocument(
+        schema_version=rough.schema_version,
+        script_version=rough.script_version,
+        pause_directives=pauses,
+        shots=shots,
+    )
+
+
+def _with_folder_prefix(raw_id: str, folder_slug: str, kind: str, index: int) -> str:
+    raw = (raw_id or "").strip()
+    if not folder_slug:
+        return raw or f"{kind}_{index:03d}"
+    prefix = f"{folder_slug}_"
+    if raw.startswith(prefix):
+        return raw
+    if raw:
+        return f"{prefix}{raw}"
+    return f"{prefix}{kind}_{index:03d}"
+
+
+def _prefix_rough_ids(
+    rough: RoughCutPlanDocument,
+    coverage: CoverageGapsDocument,
+    folder_slug: str,
+) -> tuple[RoughCutPlanDocument, CoverageGapsDocument]:
+    if not folder_slug:
+        return rough, coverage
+    id_map: dict[str, str] = {}
+    for index, shot in enumerate(rough.shots, start=1):
+        new_id = _with_folder_prefix(shot.shot_id, folder_slug, "shot", index)
+        id_map[shot.shot_id] = new_id
+        shot.shot_id = new_id
+        if shot.coverage_gap_id:
+            shot.coverage_gap_id = _with_folder_prefix(
+                shot.coverage_gap_id, folder_slug, "gap", index
+            )
+    for index, gap in enumerate(coverage.gaps, start=1):
+        new_id = _with_folder_prefix(gap.gap_id, folder_slug, "gap", index)
+        id_map[gap.gap_id] = new_id
+        gap.gap_id = new_id
+        gap.related_shot_ids = [
+            id_map.get(sid, _with_folder_prefix(sid, folder_slug, "shot", i + 1))
+            for i, sid in enumerate(gap.related_shot_ids)
+        ]
+    for shot in rough.shots:
+        if shot.coverage_gap_id and shot.coverage_gap_id in id_map:
+            shot.coverage_gap_id = id_map[shot.coverage_gap_id]
+    return rough, coverage
+
+
+def _prefix_final_ids(
+    final: FinalCutPlanDocument,
+    folder_slug: str,
+) -> FinalCutPlanDocument:
+    if not folder_slug:
+        return final
+    for index, shot in enumerate(final.shots, start=1):
+        shot.shot_id = _with_folder_prefix(shot.shot_id, folder_slug, "shot", index)
+    return final
+
+
+def _validate_rough_chapter_scope(
+    rough: RoughCutPlanDocument,
+    segment_ids: set[str],
+    folder_name: str,
+) -> None:
+    if not folder_name:
+        return
+    for shot in rough.shots:
+        for label, anchor in (
+            ("start", shot.start_anchor),
+            ("end", shot.end_anchor),
+        ):
+            if anchor.type == "pause":
+                sid = (anchor.after_segment_id or anchor.segment_id or "").strip()
+            else:
+                sid = (anchor.segment_id or "").strip()
+            if sid and sid not in segment_ids:
+                raise CutPlanError(
+                    f"Kapitel „{folder_name}“: Shot {shot.shot_id} {label}-Anker "
+                    f"verweist auf fremdes Segment {sid}."
+                )
+    for pause in rough.pause_directives:
+        if pause.after_segment_id and pause.after_segment_id not in segment_ids:
+            raise CutPlanError(
+                f"Kapitel „{folder_name}“: Pause nach fremdem Segment "
+                f"{pause.after_segment_id}."
+            )
+
+
+def _validate_final_chapter_scope(
+    final: FinalCutPlanDocument,
+    segment_ids: set[str],
+    folder_name: str,
+) -> None:
+    if not folder_name:
+        return
+    for shot in final.shots:
+        for sid in (
+            shot.narration_start_anchor.segment_id,
+            shot.narration_end_anchor.segment_id,
+        ):
+            if sid and sid not in segment_ids:
+                raise CutPlanError(
+                    f"Kapitel „{folder_name}“: Final-Shot {shot.shot_id} "
+                    f"verweist auf fremdes Segment {sid}."
+                )
+
+
+def _build_chapter_contexts(
+    project: Project,
+    locked: EnhancedScriptDocument,
+    timings: SegmentTimingsDocument | None = None,
+) -> list[_ChapterCutContext]:
+    from otio_app.services.without_voiceover_enhanced.script_author_service import (
+        list_enabled_dramaturgy_folders,
+        _previous_and_next_folder,
+    )
+
+    chapter_names = list_cut_plan_chapter_names(project, locked)
+    entries = list_enabled_dramaturgy_folders(project)
+    empty_timings = SegmentTimingsDocument(
+        script_version=locked.script_version,
+        segments=[],
+    )
+    contexts: list[_ChapterCutContext] = []
+    for folder_name in chapter_names:
+        script_slice = _script_slice_for_folder(locked, folder_name)
+        segment_ids = {s.segment_id for s in script_slice.segments}
+        if not segment_ids:
+            continue
+        previous_name: str | None = None
+        next_name: str | None = None
+        if folder_name and entries:
+            previous_name, next_name = _previous_and_next_folder(entries, folder_name)
+        elif folder_name:
+            idx = chapter_names.index(folder_name)
+            previous_name = chapter_names[idx - 1] if idx > 0 else None
+            next_name = (
+                chapter_names[idx + 1] if idx + 1 < len(chapter_names) else None
+            )
+        contexts.append(
+            _ChapterCutContext(
+                folder_name=folder_name,
+                folder_slug=safe_folder_slug(folder_name) if folder_name else "",
+                previous_folder_name=previous_name,
+                next_folder_name=next_name,
+                segment_ids=segment_ids,
+                script_slice=script_slice,
+                timings_slice=(
+                    _timings_slice(timings, segment_ids)
+                    if timings is not None
+                    else empty_timings
+                ),
+            )
+        )
+    return contexts
 
 
 _POSITION_FRACTION = {
@@ -371,51 +725,209 @@ def parse_rough_cut_response(raw: str | dict[str, Any], script_version: str) -> 
     return rough, coverage
 
 
-def generate_rough_cut_and_pauses(
+def generate_rough_cut_for_folder(
+    project: Project,
+    folder_name: str,
+    *,
+    provider: str = "openai",
+    model: str = "gpt-5.6-terra",
+    llm_callable: Callable[..., Any] | None = None,
+    context: _ChapterCutContext | None = None,
+) -> FolderRoughCutResult:
+    """Ein LLM-Lauf-2-Call für genau ein Kapitel."""
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        resolve_llm_model_id,
+    )
+
+    display_name = folder_name or "(gesamtes Skript)"
+    try:
+        locked = require_locked_script(project)
+        timings = load_segment_timings(project)
+        if timings is None:
+            raise CutPlanError("Segment-Timings fehlen.")
+        if context is None:
+            contexts = _build_chapter_contexts(project, locked, timings)
+            context = next(
+                (c for c in contexts if c.folder_name == folder_name),
+                None,
+            )
+            if context is None:
+                raise CutPlanError(f"Kein Kapitel-Kontext für „{display_name}“.")
+        if not context.timings_slice.segments:
+            raise CutPlanError(
+                f"Kapitel „{display_name}“: keine Segment-Timings."
+            )
+
+        assets_folder = folder_name or None
+        # Wenn der Kapitel-Ordner nicht in selected_asset_subdirs liegt,
+        # trotzdem Assets dieses Namens versuchen; sonst alle (Legacy).
+        if assets_folder and assets_folder not in project.selected_asset_subdirs:
+            local_assets = _local_assets_payload(project, folder_name=assets_folder)
+            if not local_assets:
+                local_assets = _local_assets_payload(project)
+        else:
+            local_assets = _local_assets_payload(project, folder_name=assets_folder)
+
+        dramaturgy_text = (
+            _chapter_dramaturgy_text_for_folder(project, folder_name)
+            if folder_name
+            else _dramaturgy_text(project)
+        )
+        prompt = build_rough_cut_prompt(
+            locked_script_json=context.script_slice.model_dump_json(indent=2),
+            segment_timings_json=context.timings_slice.model_dump_json(indent=2),
+            local_assets_json=json.dumps(
+                local_assets, ensure_ascii=False, indent=2
+            ),
+            style_profile_text=_style_text(project),
+            dramaturgy_text=dramaturgy_text,
+            folder_name=folder_name,
+            folder_slug=context.folder_slug,
+            previous_folder_name=context.previous_folder_name,
+            next_folder_name=context.next_folder_name,
+        )
+        model_id = resolve_llm_model_id(provider, model)
+        if llm_callable is not None:
+            raw = llm_callable(prompt=prompt, model=model_id)
+            raw_text = (
+                raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
+            )
+        else:
+            raw_text = generate_plan_text_with_metadata(
+                prompt=prompt, model=model_id
+            ).raw_text
+        rough, coverage = parse_rough_cut_response(raw_text, locked.script_version)
+        _validate_rough_chapter_scope(rough, context.segment_ids, folder_name)
+        rough, coverage = _prefix_rough_ids(rough, coverage, context.folder_slug)
+        if not rough.shots:
+            raise CutPlanError("LLM-Antwort enthielt keine Shots.")
+        return FolderRoughCutResult(
+            folder_name=display_name,
+            status="PASS",
+            rough=rough,
+            coverage=coverage,
+            shot_count=len(rough.shots),
+            pause_count=len(rough.pause_directives),
+            gap_count=len(coverage.gaps),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return FolderRoughCutResult(
+            folder_name=display_name,
+            status="FAIL",
+            error=str(exc),
+        )
+
+
+def generate_all_rough_cuts(
     project: Project,
     *,
     provider: str = "openai",
     model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
-) -> tuple[RoughCutPlanDocument, CoverageGapsDocument]:
-    from otio_app.services.voiceover_generation.model_settings_service import (
-        resolve_llm_model_id,
-    )
-
+    progress_callback: Callable[[str, int, int], None] | None = None,
+) -> list[FolderRoughCutResult]:
+    """LLM-Lauf 2 sequenziell pro Kapitel (Dramaturgie-Reihenfolge)."""
     locked = require_locked_script(project)
     errors = validate_timings_against_script(project)
     if errors:
         raise CutPlanError("; ".join(errors))
     timings = load_segment_timings(project)
     assert timings is not None
+    contexts = _build_chapter_contexts(project, locked, timings)
+    if not contexts:
+        raise CutPlanError("Keine Kapitel mit Segmenten für den Rough Cut.")
 
-    prompt = build_rough_cut_prompt(
-        locked_script_json=locked.model_dump_json(indent=2),
-        segment_timings_json=timings.model_dump_json(indent=2),
-        local_assets_json=json.dumps(_local_assets_payload(project), ensure_ascii=False, indent=2),
-        style_profile_text=_style_text(project),
-        dramaturgy_text=_dramaturgy_text(project),
+    results: list[FolderRoughCutResult] = []
+    total = len(contexts)
+    for index, context in enumerate(contexts, start=1):
+        label = context.folder_name or "(gesamtes Skript)"
+        if progress_callback is not None:
+            progress_callback(label, index, total)
+        results.append(
+            generate_rough_cut_for_folder(
+                project,
+                context.folder_name,
+                provider=provider,
+                model=model,
+                llm_callable=llm_callable,
+                context=context,
+            )
+        )
+    return results
+
+
+def merge_and_persist_rough_cuts(
+    project: Project,
+    results: list[FolderRoughCutResult],
+) -> tuple[RoughCutPlanDocument, CoverageGapsDocument]:
+    """Merged Kapitel-Ergebnisse → globale Rough-/Timeline-/Gap-Artefakte."""
+    locked = require_locked_script(project)
+    timings = load_segment_timings(project)
+    if timings is None:
+        raise CutPlanError("Segment-Timings fehlen.")
+
+    ok = [r for r in results if r.status == "PASS" and r.rough is not None]
+    fail = [r for r in results if r.status != "PASS"]
+    if not ok:
+        details = "; ".join(f"{r.folder_name}: {r.error}" for r in fail) or "unbekannt"
+        raise CutPlanError(f"LLM-Lauf 2 fehlgeschlagen für alle Kapitel. {details}")
+
+    merged_pauses: list[PauseDirective] = []
+    merged_shots: list[RoughShot] = []
+    merged_gaps: list[CoverageGap] = []
+    seen_pause_segments: set[str] = set()
+    for result in ok:
+        assert result.rough is not None
+        assert result.coverage is not None
+        for pause in result.rough.pause_directives:
+            if pause.after_segment_id in seen_pause_segments:
+                continue
+            seen_pause_segments.add(pause.after_segment_id)
+            merged_pauses.append(pause)
+        merged_shots.extend(result.rough.shots)
+        merged_gaps.extend(result.coverage.gaps)
+
+    rough = RoughCutPlanDocument(
+        script_version=locked.script_version,
+        pause_directives=merged_pauses,
+        shots=merged_shots,
     )
-    model_id = resolve_llm_model_id(provider, model)
-    if llm_callable is not None:
-        raw = llm_callable(prompt=prompt, model=model_id)
-        raw_text = raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
-    else:
-        raw_text = generate_plan_text_with_metadata(
-            prompt=prompt, model=model_id
-        ).raw_text
-    rough, coverage = parse_rough_cut_response(raw_text, locked.script_version)
-
+    coverage = CoverageGapsDocument(
+        script_version=locked.script_version,
+        gaps=merged_gaps,
+    )
     timeline = build_narration_timeline(
         script_version=locked.script_version,
         segment_timings=timings.segments,
         pause_directives=rough.pause_directives,
     )
-    write_json(pause_directives_path(project), {"directives": [d.model_dump(mode="json") for d in rough.pause_directives]})
+    write_json(
+        pause_directives_path(project),
+        {"directives": [d.model_dump(mode="json") for d in rough.pause_directives]},
+    )
     write_json(narration_timeline_path(project), timeline)
     write_json(rough_cut_plan_path(project), rough)
     write_json(coverage_gaps_path(project), coverage)
     return rough, coverage
+
+
+def generate_rough_cut_and_pauses(
+    project: Project,
+    *,
+    provider: str = "openai",
+    model: str = "gpt-5.6-terra",
+    llm_callable: Callable[..., Any] | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+) -> tuple[RoughCutPlanDocument, CoverageGapsDocument]:
+    """Kompatibilitäts-Wrapper: Kapitel-Calls mergen → globale Artefakte schreiben."""
+    results = generate_all_rough_cuts(
+        project,
+        provider=provider,
+        model=model,
+        llm_callable=llm_callable,
+        progress_callback=progress_callback,
+    )
+    return merge_and_persist_rough_cuts(project, results)
 
 
 def search_supplements_for_gaps(
@@ -565,55 +1077,188 @@ def parse_final_cut_response(raw: str | dict[str, Any], script_version: str) -> 
     return FinalCutPlanDocument(script_version=script_version, shots=shots)
 
 
+def generate_final_cut_for_folder(
+    project: Project,
+    folder_name: str,
+    *,
+    provider: str = "openai",
+    model: str = "gpt-5.6-terra",
+    llm_callable: Callable[..., Any] | None = None,
+    context: _ChapterCutContext | None = None,
+    rough: RoughCutPlanDocument | None = None,
+    timeline: NarrationTimelineDocument | None = None,
+) -> FolderFinalCutResult:
+    """Ein LLM-Lauf-3-Call für genau ein Kapitel."""
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        resolve_llm_model_id,
+    )
+
+    display_name = folder_name or "(gesamtes Skript)"
+    try:
+        locked = require_locked_script(project)
+        timings = load_segment_timings(project)
+        if rough is None:
+            rough = load_model(rough_cut_plan_path(project), RoughCutPlanDocument)
+        if timeline is None:
+            timeline = load_model(
+                narration_timeline_path(project), NarrationTimelineDocument
+            )
+        if rough is None or timeline is None:
+            raise CutPlanError("Grober Cut Plan / Narrationstimeline fehlt.")
+        if context is None:
+            contexts = _build_chapter_contexts(project, locked, timings)
+            context = next(
+                (c for c in contexts if c.folder_name == folder_name),
+                None,
+            )
+            if context is None:
+                raise CutPlanError(f"Kein Kapitel-Kontext für „{display_name}“.")
+
+        script_slice = context.script_slice
+        rough_slice = _rough_slice_for_segments(rough, context.segment_ids)
+        timeline_slice = _timeline_slice(timeline, context.segment_ids)
+        if not rough_slice.shots:
+            raise CutPlanError(
+                f"Kapitel „{display_name}“: kein Rough-Cut für dieses Kapitel."
+            )
+
+        assets_folder = folder_name or None
+        if assets_folder and assets_folder not in project.selected_asset_subdirs:
+            local_assets = _local_assets_payload(project, folder_name=assets_folder)
+            if not local_assets:
+                local_assets = _local_assets_payload(project)
+        else:
+            local_assets = _local_assets_payload(project, folder_name=assets_folder)
+
+        export_ready = list_export_ready_supplements(project)
+        accepted_json = json.dumps(
+            {
+                "schema_version": "enhanced-accepted-supplements-v1",
+                "script_version": locked.script_version,
+                "supplements": [s.model_dump(mode="json") for s in export_ready],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        prompt = build_final_cut_prompt(
+            locked_script_json=script_slice.model_dump_json(indent=2),
+            narration_timeline_json=timeline_slice.model_dump_json(indent=2),
+            pause_directives_json=json.dumps(
+                [d.model_dump(mode="json") for d in rough_slice.pause_directives],
+                ensure_ascii=False,
+                indent=2,
+            ),
+            rough_cut_json=rough_slice.model_dump_json(indent=2),
+            local_assets_json=json.dumps(
+                local_assets, ensure_ascii=False, indent=2
+            ),
+            accepted_supplements_json=accepted_json,
+            style_profile_text=_style_text(project),
+            folder_name=folder_name,
+            folder_slug=context.folder_slug,
+            previous_folder_name=context.previous_folder_name,
+            next_folder_name=context.next_folder_name,
+        )
+        model_id = resolve_llm_model_id(provider, model)
+        if llm_callable is not None:
+            raw = llm_callable(prompt=prompt, model=model_id)
+            raw_text = (
+                raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
+            )
+        else:
+            raw_text = generate_plan_text_with_metadata(
+                prompt=prompt, model=model_id
+            ).raw_text
+        final = parse_final_cut_response(raw_text, locked.script_version)
+        _validate_final_chapter_scope(final, context.segment_ids, folder_name)
+        final = _prefix_final_ids(final, context.folder_slug)
+        return FolderFinalCutResult(
+            folder_name=display_name,
+            status="PASS",
+            final=final,
+            shot_count=len(final.shots),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return FolderFinalCutResult(
+            folder_name=display_name,
+            status="FAIL",
+            error=str(exc),
+        )
+
+
+def generate_all_final_cuts(
+    project: Project,
+    *,
+    provider: str = "openai",
+    model: str = "gpt-5.6-terra",
+    llm_callable: Callable[..., Any] | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+) -> list[FolderFinalCutResult]:
+    """LLM-Lauf 3 sequenziell pro Kapitel."""
+    locked = require_locked_script(project)
+    timings = load_segment_timings(project)
+    rough = load_model(rough_cut_plan_path(project), RoughCutPlanDocument)
+    timeline = load_model(narration_timeline_path(project), NarrationTimelineDocument)
+    if rough is None or timeline is None:
+        raise CutPlanError("Grober Cut Plan / Narrationstimeline fehlt.")
+    contexts = _build_chapter_contexts(project, locked, timings)
+    if not contexts:
+        raise CutPlanError("Keine Kapitel mit Segmenten für den Final Cut.")
+
+    results: list[FolderFinalCutResult] = []
+    total = len(contexts)
+    for index, context in enumerate(contexts, start=1):
+        label = context.folder_name or "(gesamtes Skript)"
+        if progress_callback is not None:
+            progress_callback(label, index, total)
+        results.append(
+            generate_final_cut_for_folder(
+                project,
+                context.folder_name,
+                provider=provider,
+                model=model,
+                llm_callable=llm_callable,
+                context=context,
+                rough=rough,
+                timeline=timeline,
+            )
+        )
+    return results
+
+
+def merge_and_persist_final_cuts(
+    project: Project,
+    results: list[FolderFinalCutResult],
+) -> FinalCutPlanDocument:
+    locked = require_locked_script(project)
+    ok = [r for r in results if r.status == "PASS" and r.final is not None]
+    fail = [r for r in results if r.status != "PASS"]
+    if not ok:
+        details = "; ".join(f"{r.folder_name}: {r.error}" for r in fail) or "unbekannt"
+        raise CutPlanError(f"LLM-Lauf 3 fehlgeschlagen für alle Kapitel. {details}")
+    shots: list[FinalShot] = []
+    for result in ok:
+        assert result.final is not None
+        shots.extend(result.final.shots)
+    final = FinalCutPlanDocument(script_version=locked.script_version, shots=shots)
+    write_json(final_cut_plan_path(project), final)
+    return final
+
+
 def generate_final_cut_plan(
     project: Project,
     *,
     provider: str = "openai",
     model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> FinalCutPlanDocument:
-    from otio_app.services.voiceover_generation.model_settings_service import (
-        resolve_llm_model_id,
+    """Kompatibilitäts-Wrapper: Kapitel-Calls mergen → final_cut_plan.json."""
+    results = generate_all_final_cuts(
+        project,
+        provider=provider,
+        model=model,
+        llm_callable=llm_callable,
+        progress_callback=progress_callback,
     )
-    from otio_app.services.without_voiceover_enhanced.models import NarrationTimelineDocument
-
-    locked = require_locked_script(project)
-    rough = load_model(rough_cut_plan_path(project), RoughCutPlanDocument)
-    timeline = load_model(narration_timeline_path(project), NarrationTimelineDocument)
-    if rough is None or timeline is None:
-        raise CutPlanError("Grober Cut Plan / Narrationstimeline fehlt.")
-    # Only accepted AND export_ready supplements may enter LLM run 3.
-    export_ready = list_export_ready_supplements(project)
-    accepted_json = json.dumps(
-        {
-            "schema_version": "enhanced-accepted-supplements-v1",
-            "script_version": locked.script_version,
-            "supplements": [s.model_dump(mode="json") for s in export_ready],
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
-    prompt = build_final_cut_prompt(
-        locked_script_json=locked.model_dump_json(indent=2),
-        narration_timeline_json=timeline.model_dump_json(indent=2),
-        pause_directives_json=json.dumps(
-            [d.model_dump(mode="json") for d in rough.pause_directives],
-            ensure_ascii=False,
-            indent=2,
-        ),
-        rough_cut_json=rough.model_dump_json(indent=2),
-        local_assets_json=json.dumps(_local_assets_payload(project), ensure_ascii=False, indent=2),
-        accepted_supplements_json=accepted_json,
-        style_profile_text=_style_text(project),
-    )
-    model_id = resolve_llm_model_id(provider, model)
-    if llm_callable is not None:
-        raw = llm_callable(prompt=prompt, model=model_id)
-        raw_text = raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
-    else:
-        raw_text = generate_plan_text_with_metadata(
-            prompt=prompt, model=model_id
-        ).raw_text
-    final = parse_final_cut_response(raw_text, locked.script_version)
-    write_json(final_cut_plan_path(project), final)
-    return final
+    return merge_and_persist_final_cuts(project, results)

@@ -118,14 +118,15 @@ LLM_INPUT_INFO = {
         "Kein Brief, keine Dramaturgie, kein Style, kein Inventory."
     ),
     "enhanced_rough_cut": (
-        "Gesperrtes Skript (JSON) · Segment-Timings · lokale Assets (JSON) · "
-        "Style · Dramaturgie → Pausen + grober Cut mit Editorial-Ankern "
-        "(start/early/middle/late/end, keine Sekunden) + Coverage Gaps."
+        "Pro Kapitel (sequenziell): Kapitel-Skript · Kapitel-Timings · "
+        "Ordner-Assets · Style · Kapitel-Dramaturgie → Pausen + grober Cut "
+        "mit Editorial-Ankern (keine Sekunden) + Coverage Gaps. "
+        "Ein LLM-Call pro Dramaturgie-Kapitel."
     ),
     "enhanced_final_cut": (
-        "Gesperrtes Skript · Narration-Timeline · Pause-Direktiven · "
-        "Rough Cut · lokale Assets · akzeptierte Supplements · Style → "
-        "finaler redaktioneller Cut Plan."
+        "Pro Kapitel (sequenziell): Kapitel-Skript · Timeline-Slice · "
+        "Kapitel-Rough-Cut · Ordner-Assets · akzeptierte Supplements · Style → "
+        "finaler Cut Plan. Ein LLM-Call pro Dramaturgie-Kapitel."
     ),
     "cut_plan_supplement_query": (
         "Ordnername · VO-Satz · Visual Intent · Reason · optionaler "

@@ -22,9 +22,15 @@ from otio_app.services.voiceover_generation.models import LlmRoleSettings
 from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     CutPlanError,
     accept_supplement_candidates,
-    generate_final_cut_plan,
-    generate_rough_cut_and_pauses,
+    generate_all_final_cuts,
+    generate_all_rough_cuts,
+    list_cut_plan_chapter_names,
+    merge_and_persist_final_cuts,
+    merge_and_persist_rough_cuts,
     search_supplements_for_gaps,
+)
+from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+    load_locked_script,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
@@ -86,21 +92,36 @@ def _estimate_path_tokens(path) -> int:
         return 0
 
 
-def _estimate_rough_cut_input_tokens(project) -> int:
-    return (
+def _cut_chapter_count(project) -> int:
+    locked = load_locked_script(project)
+    if locked is None:
+        return 1
+    names = list_cut_plan_chapter_names(project, locked)
+    return max(1, len(names))
+
+
+def _estimate_rough_cut_input_tokens(project) -> tuple[int, int]:
+    """Returns (tokens_per_chapter_estimate, chapter_count)."""
+    chapters = _cut_chapter_count(project)
+    whole = (
         _estimate_path_tokens(script_locked_path(project))
         + _estimate_path_tokens(segment_timings_path(project))
         + 3_000  # style + dramaturgy + assets overhead
     )
+    per_chapter = max(400, whole // chapters)
+    return per_chapter, chapters
 
 
-def _estimate_final_cut_input_tokens(project) -> int:
-    return (
+def _estimate_final_cut_input_tokens(project) -> tuple[int, int]:
+    chapters = _cut_chapter_count(project)
+    whole = (
         _estimate_path_tokens(script_locked_path(project))
         + _estimate_path_tokens(rough_cut_plan_path(project))
         + _estimate_path_tokens(narration_timeline_path(project))
         + 4_000  # pauses + assets + supplements + style overhead
     )
+    per_chapter = max(400, whole // chapters)
+    return per_chapter, chapters
 
 
 def _render_cost_caption(
@@ -109,6 +130,7 @@ def _render_cost_caption(
     model: str,
     input_tokens: int,
     output_ceiling: int,
+    chapter_count: int = 1,
 ) -> None:
     estimate = estimate_call_cost_usd(
         provider=provider,
@@ -116,16 +138,23 @@ def _render_cost_caption(
         input_tokens=input_tokens,
         output_tokens_ceiling=output_ceiling,
     )
+    total_input = estimate.input_cost_usd * chapter_count
+    total_output = estimate.output_ceiling_cost_usd * chapter_count
+    total = estimate.total_ceiling_usd * chapter_count
     st.caption(
-        f"**Kostenschätzung** ({estimate.price.label}): "
-        f"Input ≈ {estimate.input_tokens:,} Tok → {format_usd(estimate.input_cost_usd)} · "
-        f"Output-Worst-Case {estimate.output_tokens_ceiling:,} Tok → "
-        f"{format_usd(estimate.output_ceiling_cost_usd)} · "
-        f"**Summe-Ceiling ≈ {format_usd(estimate.total_ceiling_usd)}**"
+        f"**Kostenschätzung** ({estimate.price.label}) · "
+        f"{chapter_count} Kapitel-Call(s): "
+        f"Input ≈ {estimate.input_tokens:,} Tok/Kap. → "
+        f"{format_usd(estimate.input_cost_usd)} × {chapter_count} = "
+        f"{format_usd(total_input)} · "
+        f"Output-Worst-Case {estimate.output_tokens_ceiling:,} Tok/Kap. → "
+        f"{format_usd(total_output)} · "
+        f"**Summe-Ceiling ≈ {format_usd(total)}**"
     )
     st.caption(
         "Hinweis: Abgerechnet werden nur tatsächlich erzeugte Tokens — "
-        "nicht automatisch das volle Output-Limit."
+        "nicht automatisch das volle Output-Limit. "
+        "Lauf 2/3: ein LLM-Call pro Dramaturgie-Kapitel."
     )
 
 
@@ -138,6 +167,7 @@ def _render_enhanced_cut_model(
     input_info: str,
     input_tokens: int,
     default_output_tokens: int,
+    chapter_count: int = 1,
 ) -> tuple[str, str, int]:
     settings = load_model_settings(project)
     role_settings: LlmRoleSettings = getattr(settings, role_attr)
@@ -167,8 +197,9 @@ def _render_enhanced_cut_model(
             step=_OUTPUT_TOKENS_STEP,
             key=token_key,
             help=(
-                "Obergrenze für die Antwortlänge. Du zahlst nur die tatsächlich "
-                "erzeugten Output-Tokens — nicht automatisch das volle Limit."
+                "Obergrenze für die Antwortlänge pro Kapitel-Call. "
+                "Du zahlst nur die tatsächlich erzeugten Output-Tokens — "
+                "nicht automatisch das volle Limit."
             ),
         )
         _render_cost_caption(
@@ -176,6 +207,7 @@ def _render_enhanced_cut_model(
             model=updated.model,
             input_tokens=input_tokens,
             output_ceiling=int(max_tokens),
+            chapter_count=chapter_count,
         )
     return updated.provider, updated.model, int(max_tokens)
 
@@ -192,29 +224,49 @@ def render_enhanced_cut_plan_page() -> None:
         return
 
     st.subheader("1. Groben Cut Plan und Pausen erzeugen")
+    rough_tokens, rough_chapters = _estimate_rough_cut_input_tokens(project)
     rough_provider, rough_model, _rough_max = _render_enhanced_cut_model(
         project,
         role_attr="enhanced_rough_cut",
         label="Modell (LLM-Lauf 2)",
         key_prefix="enh_rough",
         input_info=LLM_INPUT_INFO["enhanced_rough_cut"],
-        input_tokens=_estimate_rough_cut_input_tokens(project),
+        input_tokens=rough_tokens,
         default_output_tokens=_ROUGH_CUT_OUTPUT_DEFAULT,
+        chapter_count=rough_chapters,
+    )
+    st.caption(
+        f"Lauf 2 läuft sequenziell: **ein LLM-Call pro Kapitel** "
+        f"({rough_chapters} Kapitel)."
     )
     if st.button("LLM-Lauf 2 starten", type="primary", key="enh_rough_cut"):
         try:
-            with st.spinner(
-                f"Pausen + grober Cut ({resolve_llm_model_id(rough_provider, rough_model)})…"
-            ):
-                rough, coverage = generate_rough_cut_and_pauses(
+            progress = st.empty()
+
+            def _rough_progress(folder_name: str, index: int, total: int) -> None:
+                progress.info(
+                    f"LLM-Lauf 2 · Kapitel {index}/{total}: „{folder_name}“ "
+                    f"({resolve_llm_model_id(rough_provider, rough_model)})…"
+                )
+
+            with st.spinner("Pausen + grober Cut — Kapitel nacheinander…"):
+                results = generate_all_rough_cuts(
                     project,
                     provider=rough_provider,
                     model=rough_model,
+                    progress_callback=_rough_progress,
                 )
+                rough, coverage = merge_and_persist_rough_cuts(project, results)
+            progress.empty()
+            ok = [r for r in results if r.status == "PASS"]
+            fail = [r for r in results if r.status != "PASS"]
             st.success(
-                f"{len(rough.shots)} Shots, {len(rough.pause_directives)} Pausen, "
+                f"{len(ok)}/{len(results)} Kapitel · {len(rough.shots)} Shots · "
+                f"{len(rough.pause_directives)} Pausen · "
                 f"{len(coverage.gaps)} Coverage Gaps."
             )
+            for result in fail:
+                st.error(f"„{result.folder_name}“: {result.error}")
             st.rerun()
         except CutPlanError as exc:
             st.error(str(exc))
@@ -377,27 +429,47 @@ def render_enhanced_cut_plan_page() -> None:
 
     st.divider()
     st.subheader("3. Finalen Cut Plan erzeugen und technisch auflösen")
+    final_tokens, final_chapters = _estimate_final_cut_input_tokens(project)
     final_provider, final_model, _final_max = _render_enhanced_cut_model(
         project,
         role_attr="enhanced_final_cut",
         label="Modell (LLM-Lauf 3)",
         key_prefix="enh_final",
         input_info=LLM_INPUT_INFO["enhanced_final_cut"],
-        input_tokens=_estimate_final_cut_input_tokens(project),
+        input_tokens=final_tokens,
         default_output_tokens=_FINAL_CUT_OUTPUT_DEFAULT,
+        chapter_count=final_chapters,
+    )
+    st.caption(
+        f"Lauf 3 läuft sequenziell: **ein LLM-Call pro Kapitel** "
+        f"({final_chapters} Kapitel), danach Python-Auflösung."
     )
     if st.button("LLM-Lauf 3 + Python-Finalisierung", type="primary", key="enh_final_cut"):
         try:
-            with st.spinner(
-                f"Finaler redaktioneller Plan "
-                f"({resolve_llm_model_id(final_provider, final_model)})…"
-            ):
-                final = generate_final_cut_plan(
+            progress = st.empty()
+
+            def _final_progress(folder_name: str, index: int, total: int) -> None:
+                progress.info(
+                    f"LLM-Lauf 3 · Kapitel {index}/{total}: „{folder_name}“ "
+                    f"({resolve_llm_model_id(final_provider, final_model)})…"
+                )
+
+            with st.spinner("Finaler Cut — Kapitel nacheinander…"):
+                results = generate_all_final_cuts(
                     project,
                     provider=final_provider,
                     model=final_model,
+                    progress_callback=_final_progress,
                 )
-            st.success(f"{len(final.shots)} finale Shots.")
+                final = merge_and_persist_final_cuts(project, results)
+            progress.empty()
+            ok = [r for r in results if r.status == "PASS"]
+            fail = [r for r in results if r.status != "PASS"]
+            st.success(
+                f"{len(ok)}/{len(results)} Kapitel · {len(final.shots)} finale Shots."
+            )
+            for result in fail:
+                st.error(f"„{result.folder_name}“: {result.error}")
             with st.spinner("Technische Auflösung…"):
                 resolved = resolve_final_timeline(project)
             st.success(
