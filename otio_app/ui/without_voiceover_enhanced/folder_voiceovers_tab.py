@@ -366,4 +366,3 @@ def render_enhanced_folder_voiceovers_page() -> None:
             "Arbeits- und Vertonungseinheit ist das einzelne Kapitel."
         )
         st.write(show.narration_full)
-)
