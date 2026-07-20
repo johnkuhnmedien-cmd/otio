@@ -44,6 +44,14 @@ def _render_model_and_tokens(project) -> tuple[str, str, int]:
             role_settings=settings.voiceover_author,
             key=f"enh_script_model_{project.id}",
         )
+        st.caption(
+            "**Was das LLM pro Kapitel bekommt:** Project Brief · Film-Kontext "
+            "(Titel, Promise, Arc) · Kapitel-Dramaturgie (Rolle, Reason, Wortziel) · "
+            "Vorgänger-/Nachfolger-Kapitel · Style Profile · verifizierte Fakten/"
+            "Metadaten · Asset-Inventar nur als visuelle Ressource (keine Inhaltsgrenze) · "
+            "Regeln gegen Bildunterschriften & erfundene Fakten. "
+            "Ein Call = nur dieses Kapitel, nicht der ganze Film."
+        )
         if st.button("Modell speichern", key=f"enh_script_model_save_{project.id}"):
             updated = settings.model_copy(update={"voiceover_author": role_settings})
             save_model_settings(project, updated)
