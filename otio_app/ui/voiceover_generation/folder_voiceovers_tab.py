@@ -84,7 +84,7 @@ from otio_app.ui.voiceover_generation._shared import (
     render_llm_model_selectbox,
     render_new_feature_button,
     require_without_voiceover_mode,
-    style_profile_metric_value,
+    style_source_metric_value,
 )
 
 import streamlit as st
@@ -620,7 +620,7 @@ def render_folder_voiceovers_page() -> None:
     with col1:
         st.metric("Project Brief", "✓" if (brief.video_title or brief.tone_tags) else "—")
     with col2:
-        st.metric("Style Profile", style_profile_metric_value(style_profile))
+        st.metric("Style", style_source_metric_value(project, style_profile))
     with col3:
         st.metric("Dramaturgie bestätigt", "✓" if confirmed_plan is not None else "—")
     with col4:
@@ -640,7 +640,16 @@ def render_folder_voiceovers_page() -> None:
             "Hinweis: Kein Project Brief ausgefüllt — Voice-overs werden mit neutralem "
             "Kontext erzeugt."
         )
-    if style_profile is None:
+    from otio_app.services.voiceover_generation.style_reference_service import (
+        is_raw_style_mode,
+        load_style_references,
+    )
+
+    refs = load_style_references(project)
+    if is_raw_style_mode(refs):
+        if not refs.raw_reference_text.strip():
+            st.info("Hinweis: Raw-Text-Modus aktiv, aber noch kein Text gespeichert.")
+    elif style_profile is None:
         st.info("Hinweis: Kein Style Profile vorhanden — Voice-overs nutzen einen neutralen Stil.")
 
     active_entries = sorted(

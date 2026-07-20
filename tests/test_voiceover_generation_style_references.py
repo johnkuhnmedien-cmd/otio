@@ -10,12 +10,21 @@ from otio_app.project_layout import (
     get_voiceover_generation_dir,
     get_voiceover_style_references_path,
 )
-from otio_app.services.voiceover_generation.models import VoiceoverStyleReferences
+from otio_app.services.voiceover_generation.models import (
+    STYLE_MODE_PROFILE,
+    STYLE_MODE_RAW_TEXT,
+    VoiceoverStyleProfile,
+    VoiceoverStyleReferences,
+)
+from otio_app.services.voiceover_generation.style_profile_service import save_style_profile
 from otio_app.services.voiceover_generation.style_reference_service import (
     default_style_references,
+    format_raw_style_reference_for_prompts,
     is_allowed_upload_filename,
+    is_raw_style_mode,
     load_style_references,
     save_style_references,
+    style_context_text_for_prompts,
     truncate_upload_text,
 )
 
@@ -114,3 +123,62 @@ def test_truncate_upload_text_over_limit_is_truncated() -> None:
     truncated, was_truncated = truncate_upload_text(text, max_chars=10)
     assert truncated == "x" * 10
     assert was_truncated is True
+
+
+def test_raw_style_mode_roundtrip_and_prompt_context(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    save_style_profile(
+        project,
+        VoiceoverStyleProfile(
+            project_id=project.id,
+            overall_tone="calm",
+            style_summary_for_prompts="calm documentary",
+        ),
+    )
+    refs = VoiceoverStyleReferences(
+        project_id=project.id,
+        style_mode=STYLE_MODE_RAW_TEXT,
+        raw_reference_text="Speak like a quiet trail guide at dusk.",
+        intro_reference_texts=["ignored in raw mode"],
+    )
+    save_style_references(project, refs)
+
+    loaded = load_style_references(project)
+    assert loaded.style_mode == STYLE_MODE_RAW_TEXT
+    assert is_raw_style_mode(loaded) is True
+    assert loaded.raw_reference_text == "Speak like a quiet trail guide at dusk."
+
+    context = style_context_text_for_prompts(project, detailed=True)
+    assert "RAW STYLE REFERENCE" in context
+    assert "quiet trail guide" in context
+    assert "overall_tone" not in context
+    assert "calm documentary" not in context
+
+
+def test_profile_mode_still_uses_style_profile_json(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    save_style_profile(
+        project,
+        VoiceoverStyleProfile(
+            project_id=project.id,
+            overall_tone="calm",
+            style_summary_for_prompts="calm documentary",
+        ),
+    )
+    save_style_references(
+        project,
+        VoiceoverStyleReferences(
+            project_id=project.id,
+            style_mode=STYLE_MODE_PROFILE,
+            raw_reference_text="should be ignored in profile mode",
+        ),
+    )
+    context = style_context_text_for_prompts(project, detailed=True)
+    assert "overall_tone" in context
+    assert "calm" in context
+    assert "RAW STYLE REFERENCE" not in context
+
+
+def test_format_raw_style_reference_for_prompts_empty() -> None:
+    text = format_raw_style_reference_for_prompts("   ")
+    assert "kein Raw-Style-Text" in text

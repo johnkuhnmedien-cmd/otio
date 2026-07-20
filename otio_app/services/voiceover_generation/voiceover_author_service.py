@@ -814,6 +814,10 @@ def generate_folder_voiceover(
     inventory_assets = build_inventory_asset_context(project, folder_name)
 
     run_id, run_dir = create_llm_run_dir(project, STAGE_FOLDER_VOICEOVER)
+    from otio_app.services.voiceover_generation.style_reference_service import (
+        style_context_text_for_prompts,
+    )
+
     prompt = build_folder_voiceover_prompt(
         project_brief=project_brief,
         style_profile=style_profile,
@@ -822,6 +826,7 @@ def generate_folder_voiceover(
         previous_folder_name=previous_name,
         next_folder_name=next_name,
         inventory_assets=inventory_assets,
+        style_context_text=style_context_text_for_prompts(project),
     )
     prompt_hash = content_hash(prompt)
     write_llm_prompt(run_dir, prompt)

@@ -11,7 +11,9 @@ from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.plan_llm_client import generate_plan_text_with_metadata
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
-from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
+from otio_app.services.voiceover_generation.style_reference_service import (
+    style_context_text_for_prompts,
+)
 from otio_app.services.without_voiceover_enhanced.io_utils import write_json
 from otio_app.services.without_voiceover_enhanced.models import (
     CoverageNeed,
@@ -46,10 +48,7 @@ def _dramaturgy_text(project: Project) -> str:
 
 
 def _style_text(project: Project) -> str:
-    profile = load_style_profile(project)
-    if profile is None:
-        return "(kein Style Profile)"
-    return profile.model_dump_json(indent=2)
+    return style_context_text_for_prompts(project, detailed=True)
 
 
 def _verified_facts_text(project: Project) -> str:

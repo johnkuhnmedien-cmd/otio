@@ -56,8 +56,8 @@ def test_style_profile_metric_shows_dash_when_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, render_function: str, setup: str
 ) -> None:
     at = _run_repro(tmp_path, monkeypatch, render_function, setup=setup)
-    style_profile_metric = next(m for m in at.metric if m.label == "Style Profile")
-    assert style_profile_metric.value == "—"
+    style_metric = next(m for m in at.metric if m.label == "Style")
+    assert style_metric.value == "—"
 
 
 @pytest.mark.parametrize(
@@ -84,5 +84,5 @@ def test_style_profile_metric_shows_library_name_when_loaded_from_library(
         setup=setup,
         library_name="Ruhige Dokumentation",
     )
-    style_profile_metric = next(m for m in at.metric if m.label == "Style Profile")
-    assert style_profile_metric.value == "Ruhige Dokumentation"
+    style_metric = next(m for m in at.metric if m.label == "Style")
+    assert style_metric.value == "Ruhige Dokumentation"

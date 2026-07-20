@@ -330,12 +330,17 @@ def build_dramaturgy_plan(
     style_profile = load_style_profile(project)
     folder_summaries = build_and_save_folder_inventory_summaries(project)
 
+    from otio_app.services.voiceover_generation.style_reference_service import (
+        style_context_text_for_prompts,
+    )
+
     run_id, run_dir = create_llm_run_dir(project, STAGE_DRAMATURGY)
     prompt = build_dramaturgy_prompt(
         project_brief=project_brief,
         style_profile=style_profile,
         folder_summaries=folder_summaries,
         planning_mode=resolved_mode,
+        style_context_text=style_context_text_for_prompts(project),
     )
     prompt_hash = content_hash(prompt)
     write_llm_prompt(run_dir, prompt)

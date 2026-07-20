@@ -201,6 +201,10 @@ def run_asset_allocation_correction(
     while attempt < MAX_ASSET_ALLOCATION_CORRECTION_ATTEMPTS:
         attempt += 1
         inventory_assets = build_inventory_asset_context(project, folder_name)
+        from otio_app.services.voiceover_generation.style_reference_service import (
+            style_context_text_for_prompts,
+        )
+
         prompt = build_asset_allocation_correction_prompt(
             project_brief=project_brief,
             style_profile=style_profile,
@@ -208,6 +212,7 @@ def run_asset_allocation_correction(
             draft=current_draft,
             inventory_assets=inventory_assets,
             issues=report.issues,
+            style_context_text=style_context_text_for_prompts(project),
         )
         prompt_hash = content_hash(prompt)
         run_id, run_dir = create_llm_run_dir(project, STAGE_ASSET_ALLOCATION_CORRECTION)

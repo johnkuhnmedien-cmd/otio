@@ -256,9 +256,17 @@ def review_folder_voiceover(
     project_brief = load_project_brief(project)
     style_profile = load_style_profile(project)
 
+    from otio_app.services.voiceover_generation.style_reference_service import (
+        style_context_text_for_prompts,
+    )
+
     run_id, run_dir = create_llm_run_dir(project, STAGE_VOICEOVER_REVIEW)
     prompt = build_voiceover_review_prompt(
-        project_brief=project_brief, style_profile=style_profile, setting=setting, draft=draft
+        project_brief=project_brief,
+        style_profile=style_profile,
+        setting=setting,
+        draft=draft,
+        style_context_text=style_context_text_for_prompts(project),
     )
     prompt_hash = content_hash(prompt)
     write_llm_prompt(run_dir, prompt)
@@ -350,12 +358,17 @@ def build_correction_prompt(
     project_brief = load_project_brief(project)
     style_profile = load_style_profile(project)
     setting = _resolve_setting(project, folder_name, draft)
+    from otio_app.services.voiceover_generation.style_reference_service import (
+        style_context_text_for_prompts,
+    )
+
     return build_voiceover_correction_prompt(
         project_brief=project_brief,
         style_profile=style_profile,
         setting=setting,
         draft=draft,
         errors=errors,
+        style_context_text=style_context_text_for_prompts(project),
     )
 
 

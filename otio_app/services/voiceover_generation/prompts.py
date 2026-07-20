@@ -308,6 +308,7 @@ def build_dramaturgy_prompt(
     folder_summaries: list[FolderInventorySummary],
     model_settings: VoiceoverGenerationModelSettings | None = None,
     planning_mode: str | None = None,
+    style_context_text: str | None = None,
 ) -> str:
     """Baut den Prompt zur Dramaturgieplanung über alle Ordner/Kapitel.
 
@@ -317,6 +318,8 @@ def build_dramaturgy_prompt(
 
     `planning_mode`: "geography" (Reise/Geographie zuerst) oder "variety"
     (Abwechslung/Kontrast zuerst). Default: variety.
+
+    `style_context_text`: optional vorformatierter Stilblock (z. B. Raw Text).
     """
     del model_settings
 
@@ -325,8 +328,9 @@ def build_dramaturgy_prompt(
     tone_tags = ", ".join(project_brief.tone_tags) or "(keine Angabe)"
     active_negative_rules = _active_negative_rules_block(project_brief)
 
-    style_block = "(kein Style Profile vorhanden — neutraler Standardstil)"
-    if style_profile is not None:
+    if style_context_text is not None:
+        style_block = style_context_text
+    elif style_profile is not None:
         style_block = (
             f"- overall_tone: {style_profile.overall_tone or '-'}\n"
             f"- narration_style: {style_profile.narration_style or '-'}\n"
@@ -334,6 +338,8 @@ def build_dramaturgy_prompt(
             f"- intro_hook_style: {style_profile.intro_hook_style or '-'}\n"
             f"- style_summary_for_prompts: {style_profile.style_summary_for_prompts or '-'}"
         )
+    else:
+        style_block = "(kein Style Profile vorhanden — neutraler Standardstil)"
 
     folders_block = (
         "\n\n".join(_folder_summary_block(summary) for summary in folder_summaries)
@@ -448,18 +454,18 @@ values given. order_index must be unique and start at 1.
 """
 
 
-def _style_summary_block(style_profile: VoiceoverStyleProfile | None) -> str:
-    if style_profile is None:
-        return "(kein Style Profile vorhanden — neutraler dokumentarischer Standardstil)"
-    return (
-        f"- overall_tone: {style_profile.overall_tone or '-'}\n"
-        f"- narration_style: {style_profile.narration_style or '-'}\n"
-        f"- sentence_length: {style_profile.sentence_length or '-'}\n"
-        f"- pacing: {style_profile.pacing or '-'}\n"
-        f"- imagery_style: {style_profile.imagery_style or '-'}\n"
-        f"- segment_style: {style_profile.segment_style or '-'}\n"
-        f"- style_summary_for_prompts: {style_profile.style_summary_for_prompts or '-'}"
+def _style_summary_block(
+    style_profile: VoiceoverStyleProfile | None,
+    *,
+    style_context_text: str | None = None,
+) -> str:
+    if style_context_text is not None:
+        return style_context_text
+    from otio_app.services.voiceover_generation.style_reference_service import (
+        format_style_profile_summary_for_prompts,
     )
+
+    return format_style_profile_summary_for_prompts(style_profile)
 
 
 def _combined_forbidden_phrases(
@@ -507,6 +513,7 @@ def build_folder_voiceover_prompt(
     previous_folder_name: str | None,
     next_folder_name: str | None,
     inventory_assets: list[dict],
+    style_context_text: str | None = None,
 ) -> str:
     """Baut den Prompt für die Erzeugung des Voice-over-Textes EINES Ordners.
 
@@ -544,7 +551,7 @@ the stone glow from within."
 {forbidden_block}
 
 ## Style Profile (respect it — do not copy any reference text)
-{_style_summary_block(style_profile)}
+{_style_summary_block(style_profile, style_context_text=style_context_text)}
 
 ## This location
 - folder_name: {dramaturgy_entry.folder_name}
@@ -774,6 +781,7 @@ def build_voiceover_review_prompt(
     style_profile: VoiceoverStyleProfile | None,
     setting: FolderVoiceoverSetting,
     draft: FolderVoiceoverDraft,
+    style_context_text: str | None = None,
 ) -> str:
     """Baut den Review-Prompt für die weichen (nicht-deterministischen) Kriterien.
 
@@ -807,7 +815,7 @@ asset-ID validity are already checked separately by code.
 {native_speaker_language_block(project_brief.language)}
 
 ## Style Profile (the text should match this style)
-{_style_summary_block(style_profile)}
+{_style_summary_block(style_profile, style_context_text=style_context_text)}
 
 ## Negative rules / forbidden phrases (global + folder)
 {forbidden_block}
@@ -857,6 +865,7 @@ def build_voiceover_correction_prompt(
     setting: FolderVoiceoverSetting,
     draft: FolderVoiceoverDraft,
     errors: list[ValidationError],
+    style_context_text: str | None = None,
 ) -> str:
     """Baut den Correction-Prompt: identische Ausgabestruktur wie der
     Autor-Prompt, aber mit dem Original-Entwurf + konkreten Fehlern als Input."""
@@ -880,7 +889,7 @@ issue directly affects them.
 {native_speaker_language_block(project_brief.language)}
 
 ## Style Profile
-{_style_summary_block(style_profile)}
+{_style_summary_block(style_profile, style_context_text=style_context_text)}
 
 ## Target length
 target_words: {setting.target_words} (min {setting.min_words}, max {setting.max_words})
@@ -964,6 +973,7 @@ def build_asset_allocation_correction_prompt(
     draft: FolderVoiceoverDraft,
     inventory_assets: list[dict],
     issues: list[SentenceAssetReadinessIssue],
+    style_context_text: str | None = None,
 ) -> str:
     """Nutzervorgabe (Juli 2026): eigenständiger Correction-Prompt für die
     Asset-READINESS-Diagnose (siehe folder_asset_readiness.py) — bewusst
@@ -1001,7 +1011,7 @@ DEDICATED asset-allocation repair pass, not a general rewrite.
 {native_speaker_language_block(project_brief.language)}
 
 ## Style Profile
-{_style_summary_block(style_profile)}
+{_style_summary_block(style_profile, style_context_text=style_context_text)}
 
 ## Inventory for this location (CONTENT SOURCE ONLY — asset_id values are EXACT)
 ## Do not copy inventory wording; re-express meaning in the target language.
@@ -1125,6 +1135,7 @@ def build_intro_hook_prompt(
     confirmed_folder_voiceovers: list[FolderVoiceoverDraft],
     settings: IntroHookSettings,
     inventory_by_folder: dict[str, list[dict]] | None = None,
+    style_context_text: str | None = None,
 ) -> str:
     """Baut den Prompt zur Erzeugung von genau 5 Intro-Hook-Kandidaten.
 
@@ -1178,7 +1189,7 @@ sentence_items or inventory summaries below.
 {forbidden_block}
 
 ## Style Profile (respect it — do not copy any reference text)
-{_style_summary_block(style_profile)}
+{_style_summary_block(style_profile, style_context_text=style_context_text)}
 
 ## Hook rules for this project
 - allow_questions: {settings.allow_questions}

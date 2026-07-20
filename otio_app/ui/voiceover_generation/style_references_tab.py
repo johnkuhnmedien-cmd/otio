@@ -16,6 +16,10 @@ from otio_app.services.voiceover_generation.model_settings_service import (
     save_model_settings,
 )
 from otio_app.services.voiceover_generation.models import (
+    STYLE_MODE_CHOICES,
+    STYLE_MODE_LABELS,
+    STYLE_MODE_PROFILE,
+    STYLE_MODE_RAW_TEXT,
     VOICEOVER_GEN_ROLE_LABELS,
     VOICEOVER_GEN_ROLES,
     VoiceoverGenerationModelSettings,
@@ -36,7 +40,9 @@ from otio_app.services.voiceover_generation.style_profile_service import (
 )
 from otio_app.services.voiceover_generation.style_reference_service import (
     is_allowed_upload_filename,
+    is_raw_style_mode,
     load_style_references,
+    normalize_style_mode,
     save_style_references,
     truncate_upload_text,
 )
@@ -53,6 +59,14 @@ def _ref_key(project_id: str, kind: str, index: int) -> str:
     return f"vo_style_ref_{kind}_{index}_{project_id}"
 
 
+def _mode_key(project_id: str) -> str:
+    return f"vo_style_mode_{project_id}"
+
+
+def _raw_key(project_id: str) -> str:
+    return f"vo_style_raw_{project_id}"
+
+
 def _padded(values: list[str], size: int = _REF_SLOTS) -> list[str]:
     padded = list(values[:size])
     while len(padded) < size:
@@ -61,6 +75,8 @@ def _padded(values: list[str], size: int = _REF_SLOTS) -> list[str]:
 
 
 def _apply_refs_to_session(project_id: str, refs: VoiceoverStyleReferences) -> None:
+    st.session_state[_mode_key(project_id)] = normalize_style_mode(refs.style_mode)
+    st.session_state[_raw_key(project_id)] = refs.raw_reference_text or ""
     for index, text in enumerate(_padded(refs.intro_reference_texts)):
         st.session_state[_ref_key(project_id, "intro", index)] = text
     for index, text in enumerate(_padded(refs.segment_reference_texts)):
@@ -201,44 +217,7 @@ def _render_style_profile_library(project: Project) -> None:
     st.caption(f"Pfad: `{get_style_profile_library_path()}`")
 
 
-def render_style_references_page() -> None:
-    st.header("② Style References")
-    st.info(
-        "Die Referenzen werden nicht kopiert. Das Modell soll daraus nur "
-        "Stilmerkmale ableiten."
-    )
-
-    project = render_project_selector("Projekt")
-    if project is None:
-        return
-    if not require_without_voiceover_mode(project):
-        return
-
-    loaded_key = f"vo_style_refs_loaded_{project.id}"
-    if loaded_key not in st.session_state:
-        _apply_refs_to_session(project.id, load_style_references(project))
-        st.session_state[loaded_key] = True
-
-    st.subheader("Intro-Referenzen")
-    intro_texts = [
-        st.text_area(
-            f"Beispiel-Intro {index + 1}",
-            key=_ref_key(project.id, "intro", index),
-            height=100,
-        )
-        for index in range(_REF_SLOTS)
-    ]
-
-    st.subheader("Ordner-/Segment-Voice-over-Referenzen")
-    segment_texts = [
-        st.text_area(
-            f"Beispiel-Segment {index + 1}",
-            key=_ref_key(project.id, "segment", index),
-            height=100,
-        )
-        for index in range(_REF_SLOTS)
-    ]
-
+def _collect_uploads(project: Project) -> tuple[list[str], list[str]]:
     st.subheader("Optional: Datei-Upload")
     st.caption("Nur .txt und .md — keine PDF/DOCX-Verarbeitung.")
     uploaded_files = st.file_uploader(
@@ -269,27 +248,116 @@ def render_style_references_page() -> None:
             uploaded_file_texts.append(truncated_text)
             with st.expander(f"Vorschau: {uploaded_file.name}"):
                 st.text(truncated_text[:2000])
+    return uploaded_file_names, uploaded_file_texts
 
-    # Nur EIN Erzeugen-Button, je nach Zustand unterschiedlich benannt — vorher
-    # gab es zwei Buttons ("erstellen"/"neu erstellen") mit identischer
-    # Funktion, was Verwirrung stiftete ("Was ist der Unterschied zwischen den
-    # beiden Buttons?"). Beide haben immer schon dasselbe getan: ein neues
-    # Style Profile per LLM erzeugen und das bestehende (falls vorhanden)
-    # ersetzen.
-    existing_profile_before_click = load_style_profile(project)
-    build_label = (
-        "Style Profile neu erstellen" if existing_profile_before_click is not None else "Style Profile erstellen"
+
+def render_style_references_page() -> None:
+    st.header("② Style References")
+
+    project = render_project_selector("Projekt")
+    if project is None:
+        return
+    if not require_without_voiceover_mode(project):
+        return
+
+    loaded_key = f"vo_style_refs_loaded_{project.id}"
+    if loaded_key not in st.session_state:
+        _apply_refs_to_session(project.id, load_style_references(project))
+        st.session_state[loaded_key] = True
+
+    st.subheader("Stil-Quelle")
+    selected_mode = st.radio(
+        "Wie soll der Stil an die späteren LLM-Schritte gehen?",
+        options=list(STYLE_MODE_CHOICES),
+        format_func=lambda mode: STYLE_MODE_LABELS[mode],
+        key=_mode_key(project.id),
+        horizontal=False,
     )
-    col_save, col_build = st.columns(2)
-    with col_save:
-        save_clicked = st.button("Referenzen speichern", key=f"vo_style_refs_save_{project.id}")
-    with col_build:
-        build_clicked = st.button(build_label, key=f"vo_style_profile_build_{project.id}")
-        if existing_profile_before_click is not None:
-            st.caption("Ersetzt das aktuell gespeicherte Style Profile dieses Projekts.")
+    selected_mode = normalize_style_mode(selected_mode)
+
+    existing_refs = load_style_references(project)
+    intro_texts = _padded(existing_refs.intro_reference_texts)
+    segment_texts = _padded(existing_refs.segment_reference_texts)
+    raw_text = st.session_state.get(_raw_key(project.id), existing_refs.raw_reference_text or "")
+    uploaded_file_names: list[str] = list(existing_refs.uploaded_file_names)
+    uploaded_file_texts: list[str] = list(existing_refs.uploaded_file_texts)
+
+    if selected_mode == STYLE_MODE_RAW_TEXT:
+        st.info(
+            "Ohne Style Profile: Der Raw Text wird späteren LLM-Schritten "
+            "nur als Stil-Referenz mitgegeben — nicht wörtlich kopieren."
+        )
+        raw_text = st.text_area(
+            "Raw Text / Stil-Beispiel",
+            key=_raw_key(project.id),
+            height=280,
+            help=(
+                "Ein oder mehrere Beispielabsätze, Tonfall-Notizen oder "
+                "Referenzskripte. Wird direkt als Referenzblock in die Prompts gelegt."
+            ),
+        )
+        st.caption(
+            "Intro-/Segment-Slots und „Style Profile erstellen“ sind in diesem "
+            "Modus nicht nötig. Gespeicherte Profile bleiben unberührt."
+        )
+        save_clicked = st.button(
+            "Raw Text speichern",
+            key=f"vo_style_refs_save_{project.id}",
+        )
+        build_clicked = False
+    else:
+        st.info(
+            "Die Referenzen werden nicht kopiert. Das Modell soll daraus nur "
+            "Stilmerkmale ableiten."
+        )
+        st.subheader("Intro-Referenzen")
+        intro_texts = [
+            st.text_area(
+                f"Beispiel-Intro {index + 1}",
+                key=_ref_key(project.id, "intro", index),
+                height=100,
+            )
+            for index in range(_REF_SLOTS)
+        ]
+
+        st.subheader("Ordner-/Segment-Voice-over-Referenzen")
+        segment_texts = [
+            st.text_area(
+                f"Beispiel-Segment {index + 1}",
+                key=_ref_key(project.id, "segment", index),
+                height=100,
+            )
+            for index in range(_REF_SLOTS)
+        ]
+
+        uploaded_file_names, uploaded_file_texts = _collect_uploads(project)
+
+        # Nur EIN Erzeugen-Button, je nach Zustand unterschiedlich benannt — vorher
+        # gab es zwei Buttons ("erstellen"/"neu erstellen") mit identischer
+        # Funktion, was Verwirrung stiftete ("Was ist der Unterschied zwischen den
+        # beiden Buttons?"). Beide haben immer schon dasselbe getan: ein neues
+        # Style Profile per LLM erzeugen und das bestehende (falls vorhanden)
+        # ersetzen.
+        existing_profile_before_click = load_style_profile(project)
+        build_label = (
+            "Style Profile neu erstellen"
+            if existing_profile_before_click is not None
+            else "Style Profile erstellen"
+        )
+        col_save, col_build = st.columns(2)
+        with col_save:
+            save_clicked = st.button(
+                "Referenzen speichern", key=f"vo_style_refs_save_{project.id}"
+            )
+        with col_build:
+            build_clicked = st.button(build_label, key=f"vo_style_profile_build_{project.id}")
+            if existing_profile_before_click is not None:
+                st.caption("Ersetzt das aktuell gespeicherte Style Profile dieses Projekts.")
 
     current_refs = VoiceoverStyleReferences(
         project_id=project.id,
+        style_mode=selected_mode,
+        raw_reference_text=raw_text,
         intro_reference_texts=intro_texts,
         segment_reference_texts=segment_texts,
         uploaded_file_names=uploaded_file_names,
@@ -298,7 +366,10 @@ def render_style_references_page() -> None:
 
     if save_clicked:
         saved = save_style_references(project, current_refs)
-        st.success("Style References gespeichert.")
+        if is_raw_style_mode(saved):
+            st.success("Raw-Style-Referenz gespeichert — spätere LLM-Schritte nutzen diesen Text.")
+        else:
+            st.success("Style References gespeichert.")
         st.caption(f"Pfad: `{get_voiceover_style_references_path(project.language_work_dir_path)}`")
         with st.expander("JSON-Vorschau"):
             st.json(saved.model_dump(mode="json"))
@@ -328,6 +399,15 @@ def render_style_references_page() -> None:
         else:
             st.error(f"Style Profile fehlgeschlagen ({result.status}): {result.error}")
 
-    _render_model_settings_editor(project)
-    _render_style_profile_status(project)
-    _render_style_profile_library(project)
+    if selected_mode == STYLE_MODE_RAW_TEXT:
+        refs_on_disk = load_style_references(project)
+        if is_raw_style_mode(refs_on_disk) and refs_on_disk.raw_reference_text.strip():
+            st.success("Status: **RAW TEXT READY** — Style Profile wird übersprungen.")
+            with st.expander("Gespeicherter Raw Text"):
+                st.text(refs_on_disk.raw_reference_text)
+        else:
+            st.warning("Raw Text noch nicht gespeichert oder leer.")
+    else:
+        _render_model_settings_editor(project)
+        _render_style_profile_status(project)
+        _render_style_profile_library(project)

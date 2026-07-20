@@ -439,6 +439,10 @@ def build_intro_hook_candidates(
     }
 
     run_id, run_dir = create_llm_run_dir(project, STAGE_INTRO_HOOK)
+    from otio_app.services.voiceover_generation.style_reference_service import (
+        style_context_text_for_prompts,
+    )
+
     prompt = build_intro_hook_prompt(
         project_brief=project_brief,
         style_profile=style_profile,
@@ -446,6 +450,7 @@ def build_intro_hook_candidates(
         confirmed_folder_voiceovers=confirmed_drafts,
         settings=settings,
         inventory_by_folder=inventory_by_folder,
+        style_context_text=style_context_text_for_prompts(project),
     )
     prompt_hash = content_hash(prompt)
     write_llm_prompt(run_dir, prompt)

@@ -12,7 +12,9 @@ from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.media_utils import probe_duration_seconds
 from otio_app.services.plan_llm_client import generate_plan_text_with_metadata
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
-from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
+from otio_app.services.voiceover_generation.style_reference_service import (
+    style_context_text_for_prompts,
+)
 from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
     load_segment_timings,
     validate_timings_against_script,
@@ -99,8 +101,7 @@ def _local_assets_payload(project: Project) -> list[dict[str, Any]]:
 
 
 def _style_text(project: Project) -> str:
-    profile = load_style_profile(project)
-    return profile.model_dump_json(indent=2) if profile else "(kein Style Profile)"
+    return style_context_text_for_prompts(project, detailed=True)
 
 
 def _dramaturgy_text(project: Project) -> str:

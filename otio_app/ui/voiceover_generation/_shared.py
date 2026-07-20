@@ -107,6 +107,28 @@ def style_profile_metric_value(profile: VoiceoverStyleProfile | None) -> str:
     return profile.library_name or "✓"
 
 
+def style_source_metric_value(
+    project: Project,
+    profile: VoiceoverStyleProfile | None = None,
+) -> str:
+    """Style-Kennzahl inkl. Raw-Text-Modus (ohne Style Profile)."""
+    from otio_app.services.voiceover_generation.style_reference_service import (
+        is_raw_style_mode,
+        load_style_references,
+    )
+
+    refs = load_style_references(project)
+    if is_raw_style_mode(refs):
+        return "Raw text" if refs.raw_reference_text.strip() else "—"
+    if profile is None:
+        from otio_app.services.voiceover_generation.style_profile_service import (
+            load_style_profile,
+        )
+
+        profile = load_style_profile(project)
+    return style_profile_metric_value(profile)
+
+
 _GREEN_BUTTON_BACKGROUND = "#1e8e3e"
 _GREEN_BUTTON_HOVER_BACKGROUND = "#17703a"
 

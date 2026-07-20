@@ -36,7 +36,7 @@ from otio_app.ui.project_context import render_project_selector
 from otio_app.ui.voiceover_generation._shared import (
     render_llm_model_selectbox,
     require_without_voiceover_mode,
-    style_profile_metric_value,
+    style_source_metric_value,
 )
 
 # Höher als plan_llm_client.DEFAULT_MAX_OUTPUT_TOKENS — genug Spielraum für
@@ -64,15 +64,22 @@ def _inventory_counts(project: Project) -> tuple[int, int]:
 
 
 def _render_prerequisites(project: Project) -> bool:
+    from otio_app.services.voiceover_generation.style_reference_service import (
+        is_raw_style_mode,
+        load_style_references,
+    )
+
     brief = load_project_brief(project)
     profile = load_style_profile(project)
+    refs = load_style_references(project)
     folder_count, folders_with_inventory = _inventory_counts(project)
+    style_metric = style_source_metric_value(project, profile)
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Project Brief", "✓" if (brief.video_title or brief.tone_tags) else "—")
     with col2:
-        st.metric("Style Profile", style_profile_metric_value(profile))
+        st.metric("Style", style_metric)
     with col3:
         st.metric("Ordner erkannt", folder_count)
     with col4:
@@ -84,11 +91,16 @@ def _render_prerequisites(project: Project) -> bool:
             "Titel/Ton/Regeln festlegen — die Dramaturgie funktioniert auch ohne, "
             "aber mit weniger Kontext."
         )
-    if profile is None:
+    if is_raw_style_mode(refs) and not refs.raw_reference_text.strip():
         st.warning(
-            "Kein Style Profile gefunden. Bitte zuerst unter „② Style References“ "
-            "ein Style Profile erstellen — die Dramaturgie kann auch ohne geplant "
-            "werden, nutzt dann aber keinen abgeleiteten Stil."
+            "Raw-Text-Modus aktiv, aber noch kein Text gespeichert — unter "
+            "„② Style References“ Raw Text speichern."
+        )
+    elif not is_raw_style_mode(refs) and profile is None:
+        st.warning(
+            "Kein Style Profile gefunden. Unter „② Style References“ ein Style "
+            "Profile erstellen — oder auf Raw Text umschalten. Die Dramaturgie "
+            "kann auch ohne geplant werden, nutzt dann aber keinen Stilkontext."
         )
 
     can_plan = True

@@ -154,9 +154,21 @@ class ProjectBrief(BaseModel):
     global_extra_prompt: str = ""
 
 
+STYLE_MODE_PROFILE = "profile"
+STYLE_MODE_RAW_TEXT = "raw_text"
+STYLE_MODE_CHOICES = (STYLE_MODE_PROFILE, STYLE_MODE_RAW_TEXT)
+STYLE_MODE_LABELS = {
+    STYLE_MODE_PROFILE: "Style Profile (Beispiele → abgeleiteter Stil)",
+    STYLE_MODE_RAW_TEXT: "Raw Text (direkt als Referenz ans LLM)",
+}
+
+
 class VoiceoverStyleReferences(BaseModel):
     project_id: str
     generated_at: datetime = Field(default_factory=_utcnow)
+    # profile = Beispiele ableiten; raw_text = einen Textblock als Stil-Referenz nutzen
+    style_mode: str = STYLE_MODE_PROFILE
+    raw_reference_text: str = ""
     intro_reference_texts: list[str] = Field(default_factory=list)
     segment_reference_texts: list[str] = Field(default_factory=list)
     uploaded_file_names: list[str] = Field(default_factory=list)

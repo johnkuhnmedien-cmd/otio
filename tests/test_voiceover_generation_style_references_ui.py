@@ -32,6 +32,14 @@ def test_page_renders_without_exception(tmp_path: Path, monkeypatch: pytest.Monk
     _run_repro(tmp_path, monkeypatch)
 
 
+def test_style_source_mode_radio_is_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = _run_repro(tmp_path, monkeypatch)
+    radio_labels = [radio.label for radio in at.radio]
+    assert "Wie soll der Stil an die späteren LLM-Schritte gehen?" in radio_labels
+
+
 def test_only_one_build_button_when_no_profile_exists_yet(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
