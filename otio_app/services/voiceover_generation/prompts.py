@@ -1130,20 +1130,34 @@ same shape as the original assignment:
 """
 
 
+def _intro_chapter_signal_block(entry: DramaturgyFolderEntry) -> str:
+    """Kurzes Kapitel-Signal für den Intro-Prompt — ohne Fließtext/Skript."""
+    return (
+        f"- folder_name: {entry.folder_name}\n"
+        f"  order_index: {entry.order_index}\n"
+        f"  dramaturgy_role: {entry.dramaturgy_role or '-'}\n"
+        f"  reason: {entry.reason or '-'}\n"
+        f"  hook_potential_score: {entry.hook_potential_score}\n"
+        f"  visual_strength_score: {entry.visual_strength_score}"
+    )
+
+
 def _folder_voiceover_block(
     entry: DramaturgyFolderEntry | None,
     draft: FolderVoiceoverDraft,
     inventory_assets: list[dict] | None = None,
 ) -> str:
-    """Kapitel-Block für den Intro-Prompt — nur Rolle + gesprochener Text.
-
-    Keine sentence_items, keine Asset-IDs, kein Inventory (zu lang / zu granular).
-    """
+    """Kompatibilitätshülle — Intro nutzt nur noch Dramaturgie-Signale."""
     del inventory_assets
-    role = entry.dramaturgy_role if entry is not None else "-"
+    if entry is not None:
+        return _intro_chapter_signal_block(entry)
     return (
-        f"[{draft.folder_name}] (dramaturgy_role: {role})\n"
-        f"  Chapter narration:\n  {draft.voiceover_text_full}"
+        f"- folder_name: {draft.folder_name}\n"
+        f"  order_index: {draft.order_index}\n"
+        f"  dramaturgy_role: -\n"
+        f"  reason: -\n"
+        f"  hook_potential_score: 0\n"
+        f"  visual_strength_score: 0"
     )
 
 
@@ -1159,11 +1173,15 @@ def build_intro_hook_prompt(
 ) -> str:
     """Baut den Prompt zur Erzeugung von genau 5 Intro-Hook-Kandidaten.
 
-    Quelle: nur Kapitel-Narration (Ordnername, Dramaturgie-Rolle, Fließtext) —
-    keine Folder-VO-Satzlisten und kein Inventory.
+    Quelle: nur kurze Kapitel-Signale aus der Dramaturgie (Name, Rolle, Reason,
+    Scores) für die freigegebenen/gelockten Kapitel — **kein** Fließtext,
+    keine Folder-VO-Sätze, kein Inventory.
     """
     del inventory_by_folder
-    entries_by_folder = {entry.folder_name: entry for entry in dramaturgy_plan.recommended_folder_order}
+    entries_by_folder = {
+        entry.folder_name: entry for entry in dramaturgy_plan.recommended_folder_order
+    }
+    ready_names = [draft.folder_name for draft in confirmed_folder_voiceovers]
 
     tone_tags = ", ".join(project_brief.tone_tags) or "(keine Angabe)"
     active_negative_rules = _active_negative_rules_block(project_brief)
@@ -1174,22 +1192,25 @@ def build_intro_hook_prompt(
     forbidden_phrases.extend(settings.must_avoid)
     forbidden_block = "\n".join(f"- {phrase}" for phrase in forbidden_phrases) or "(keine)"
 
-    folder_blocks = "\n\n".join(
+    chapter_blocks = "\n".join(
         _folder_voiceover_block(entries_by_folder.get(draft.folder_name), draft)
         for draft in confirmed_folder_voiceovers
-    ) or "(keine Kapitel-Skripte verfügbar)"
+    ) or "(keine freigegebenen Kapitel verfügbar)"
 
     must_include_block = ", ".join(settings.must_include) or "(keine Angabe)"
+    ready_list = ", ".join(ready_names) or "(none)"
 
     return f"""You are a documentary editor writing the OPENING HOOK for a \
-multi-location travel/nature documentary. You have the chapter narrations \
-below (spoken text per location only — not full folder voice-over breakdowns).
+multi-location travel/nature documentary. You receive SHORT chapter signals \
+only (location name, dramaturgy role, reason, scores) — NOT the spoken \
+chapter scripts / voice-over body text.
 
-Do not merely summarize the chapters. Create a strong documentary opening hook.
+Do not invent plot details that are not implied by the chapter signals, \
+project brief, or style. Create a strong documentary opening hook.
 
-Do not invent asset IDs. No sentence_items or inventory are provided. For \
-visual_beats, set primary_asset_id to "" and needs_supplement_asset=true with \
-a concrete supplement_reason, unless you leave asset fields empty intentionally.
+Do not invent asset IDs. No scripts, sentence_items, or inventory are provided. \
+For visual_beats, set primary_asset_id to "" and needs_supplement_asset=true \
+with a concrete supplement_reason.
 
 {native_speaker_language_block(settings.language or project_brief.language)}
 
@@ -1218,11 +1239,14 @@ a concrete supplement_reason, unless you leave asset fields empty intentionally.
 - editor's extra instructions: {settings.freeform_rule_for_llm or "(none)"}
 - target_words: {settings.target_words} (min {settings.min_words}, max {settings.max_words})
 
-## Chapter narrations (source material for the hook — spoken text only)
-{folder_blocks}
+## Ready chapters (use ONLY these folder_name values in used_folders / source_folder_name)
+{ready_list}
+
+## Chapter signals (NO spoken narration text)
+{chapter_blocks}
 
 ## Task
-Analyze the chapters above and decide:
+Analyze the chapter signals above and decide:
 - Which location has the STRONGEST hook potential?
 - Which CONTRAST between locations works best as an opener?
 - What OPEN QUESTION creates suspense?
@@ -1236,7 +1260,7 @@ cinematic_promise, question, emotional). Each hook must read like real \
 documentary prose — never like a list of assets or a plot summary.
 
 For each candidate, also provide visual_beats: a beat breakdown of the hook \
-text. Set source_folder_name to a chapter name from above when relevant. \
+text. Set source_folder_name to a ready chapter name from above when relevant. \
 Leave source_sentence_id and primary_asset_id empty (""), set \
 needs_supplement_asset=true, and give a concrete supplement_reason describing \
 the needed visual.

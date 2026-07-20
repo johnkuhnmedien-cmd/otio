@@ -1126,7 +1126,7 @@ def test_intro_hook_prompt_contains_style_summary() -> None:
     assert style_profile.style_summary_for_prompts in prompt
 
 
-def test_intro_hook_prompt_contains_confirmed_folder_voiceovers() -> None:
+def test_intro_hook_prompt_contains_chapter_signals_not_scripts() -> None:
     prompt = build_intro_hook_prompt(
         project_brief=_sample_brief(),
         style_profile=None,
@@ -1134,24 +1134,15 @@ def test_intro_hook_prompt_contains_confirmed_folder_voiceovers() -> None:
         confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
         settings=_sample_intro_settings(),
     )
-    assert "Zwischen den roten Felswänden scheint das Licht von innen zu leuchten." in prompt
-    assert "Heiße Quellen brodeln unter einem Himmel aus Dampf." in prompt
-
-
-def test_intro_hook_prompt_uses_chapter_narration_not_sentence_assets() -> None:
-    prompt = build_intro_hook_prompt(
-        project_brief=_sample_brief(),
-        style_profile=None,
-        dramaturgy_plan=_sample_dramaturgy_plan(),
-        confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
-        settings=_sample_intro_settings(),
-    )
-    assert "Chapter narrations" in prompt
-    assert "Zwischen den roten Felswänden scheint das Licht von innen zu leuchten." in prompt
+    assert "Grand Canyon" in prompt
+    assert "Yellowstone" in prompt
+    assert "Chapter signals" in prompt
+    assert "dramaturgy_role: opener" in prompt
+    assert "Zwischen den roten Felswänden scheint das Licht von innen zu leuchten." not in prompt
+    assert "Heiße Quellen brodeln unter einem Himmel aus Dampf." not in prompt
     assert "sentence_001" not in prompt
     assert "asset_clip1" not in prompt
-    assert "asset_geyser1" not in prompt
-    assert "Sentence/beat breakdown" not in prompt
+    assert "NOT the spoken" in prompt
 
 
 def test_intro_hook_prompt_requests_exactly_5_candidates() -> None:
@@ -1173,7 +1164,8 @@ def test_intro_hook_prompt_contains_do_not_merely_summarize() -> None:
         confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
         settings=_sample_intro_settings(),
     )
-    assert "Do not merely summarize" in prompt
+    assert "Create a strong documentary opening hook" in prompt
+    assert "Do not invent plot details" in prompt
 
 
 def test_intro_hook_prompt_forbids_inventing_asset_ids() -> None:
