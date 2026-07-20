@@ -166,13 +166,32 @@ STYLE_MODE_LABELS = {
 class VoiceoverStyleReferences(BaseModel):
     project_id: str
     generated_at: datetime = Field(default_factory=_utcnow)
-    # profile = Beispiele ableiten; raw_text = einen Textblock als Stil-Referenz nutzen
+    # profile = Beispiele ableiten; raw_text = Textblöcke als Stil-Referenz nutzen
     style_mode: str = STYLE_MODE_PROFILE
     raw_reference_text: str = ""
+    # Nur für Intro-LLM (Schritt ⑤); leer → Fallback auf raw_reference_text.
+    raw_intro_reference_text: str = ""
+    # Name des zuletzt geladenen Raw-Bibliothekseintrags (leer = lokal).
+    raw_library_name: str = ""
     intro_reference_texts: list[str] = Field(default_factory=list)
     segment_reference_texts: list[str] = Field(default_factory=list)
     uploaded_file_names: list[str] = Field(default_factory=list)
     uploaded_file_texts: list[str] = Field(default_factory=list)
+
+
+class RawStyleLibraryEntry(BaseModel):
+    """Benannter Raw-Text-Snapshot (allgemein + Intro) für Wiederverwendung."""
+
+    name: str
+    raw_reference_text: str = ""
+    raw_intro_reference_text: str = ""
+    saved_at: datetime = Field(default_factory=_utcnow)
+
+
+class RawStyleLibrary(BaseModel):
+    """Projektübergreifende Bibliothek für Raw-Style-Texte (global unter data/)."""
+
+    entries: list[RawStyleLibraryEntry] = Field(default_factory=list)
 
 
 class VoiceoverStyleProfile(BaseModel):

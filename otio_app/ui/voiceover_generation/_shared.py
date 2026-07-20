@@ -100,9 +100,10 @@ LLM_INPUT_INFO = {
         "Readiness-Issues — Text bleibt, nur Asset-Zuordnung wird repariert."
     ),
     "intro": (
-        "Intro-Settings · Brief/Negative Rules/Forbidden · Style · "
-        "Dramaturgie (Arc/Promise) · alle bestätigten Folder-VOs "
-        "(Text + Satz-Assets) · Inventory-Summaries pro Ordner."
+        "Intro-Settings · Brief/Negative Rules/Forbidden · Style "
+        "(Raw Intro Text oder Style Profile) · Dramaturgie (Arc/Promise) · "
+        "alle bestätigten Folder-VOs (Text + Satz-Assets) · "
+        "Inventory-Summaries pro Ordner."
     ),
     "enhanced_script": (
         "Project Brief · Film-Kontext (Titel, Promise, Arc) · "
@@ -212,7 +213,12 @@ def style_source_metric_value(
 
     refs = load_style_references(project)
     if is_raw_style_mode(refs):
-        return "Raw text" if refs.raw_reference_text.strip() else "—"
+        if refs.raw_library_name:
+            return f"Raw: {refs.raw_library_name}"
+        has_any = bool(
+            refs.raw_reference_text.strip() or refs.raw_intro_reference_text.strip()
+        )
+        return "Raw text" if has_any else "—"
     if profile is None:
         from otio_app.services.voiceover_generation.style_profile_service import (
             load_style_profile,

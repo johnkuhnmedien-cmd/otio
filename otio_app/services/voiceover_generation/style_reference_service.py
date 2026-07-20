@@ -43,14 +43,18 @@ def is_raw_style_mode(refs: VoiceoverStyleReferences) -> bool:
     return normalize_style_mode(refs.style_mode) == STYLE_MODE_RAW_TEXT
 
 
-def format_raw_style_reference_for_prompts(raw_text: str) -> str:
+def format_raw_style_reference_for_prompts(
+    raw_text: str,
+    *,
+    label: str = "RAW STYLE REFERENCE",
+) -> str:
     text = (raw_text or "").strip()
     if not text:
         return (
             "(kein Raw-Style-Text hinterlegt — neutraler dokumentarischer Standardstil)"
         )
     return (
-        "RAW STYLE REFERENCE — use only as style inspiration; "
+        f"{label} — use only as style inspiration; "
         "do not copy wording or sentences verbatim:\n"
         f"{text}"
     )
@@ -76,10 +80,22 @@ def style_context_text_for_prompts(
     project: Project,
     *,
     detailed: bool = False,
+    for_intro: bool = False,
 ) -> str:
-    """Textblock für LLM-Prompts: Raw-Referenz oder Style Profile."""
+    """Textblock für LLM-Prompts: Raw-Referenz oder Style Profile.
+
+    for_intro=True nutzt im Raw-Modus bevorzugt ``raw_intro_reference_text``
+    (Fallback: allgemeiner ``raw_reference_text``).
+    """
     refs = load_style_references(project)
     if is_raw_style_mode(refs):
+        if for_intro:
+            intro_text = (refs.raw_intro_reference_text or "").strip()
+            text = intro_text or (refs.raw_reference_text or "")
+            return format_raw_style_reference_for_prompts(
+                text,
+                label="RAW INTRO STYLE REFERENCE",
+            )
         return format_raw_style_reference_for_prompts(refs.raw_reference_text)
 
     from otio_app.services.voiceover_generation.style_profile_service import (
@@ -132,12 +148,16 @@ def save_style_references(
     raw_text = refs.raw_reference_text or ""
     if len(raw_text) > MAX_RAW_REFERENCE_CHARS:
         raw_text = raw_text[:MAX_RAW_REFERENCE_CHARS]
+    raw_intro = refs.raw_intro_reference_text or ""
+    if len(raw_intro) > MAX_RAW_REFERENCE_CHARS:
+        raw_intro = raw_intro[:MAX_RAW_REFERENCE_CHARS]
     normalized = refs.model_copy(
         update={
             "project_id": project.id,
             "generated_at": datetime.now(timezone.utc),
             "style_mode": normalize_style_mode(refs.style_mode),
             "raw_reference_text": raw_text,
+            "raw_intro_reference_text": raw_intro,
         }
     )
     path = get_voiceover_style_references_path(project.language_work_dir_path)

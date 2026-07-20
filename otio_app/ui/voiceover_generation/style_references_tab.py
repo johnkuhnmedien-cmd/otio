@@ -26,6 +26,13 @@ from otio_app.services.voiceover_generation.models import (
     VoiceoverStyleReferences,
 )
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
+from otio_app.services.voiceover_generation.raw_style_library_service import (
+    delete_raw_from_library,
+    get_raw_from_library,
+    get_raw_style_library_path,
+    load_raw_style_library,
+    save_raw_to_library,
+)
 from otio_app.services.voiceover_generation.style_profile_library_service import (
     delete_profile_from_library,
     get_profile_from_library,
@@ -69,6 +76,10 @@ def _raw_key(project_id: str) -> str:
     return f"vo_style_raw_{project_id}"
 
 
+def _raw_intro_key(project_id: str) -> str:
+    return f"vo_style_raw_intro_{project_id}"
+
+
 def _padded(values: list[str], size: int = _REF_SLOTS) -> list[str]:
     padded = list(values[:size])
     while len(padded) < size:
@@ -79,6 +90,7 @@ def _padded(values: list[str], size: int = _REF_SLOTS) -> list[str]:
 def _apply_refs_to_session(project_id: str, refs: VoiceoverStyleReferences) -> None:
     st.session_state[_mode_key(project_id)] = normalize_style_mode(refs.style_mode)
     st.session_state[_raw_key(project_id)] = refs.raw_reference_text or ""
+    st.session_state[_raw_intro_key(project_id)] = refs.raw_intro_reference_text or ""
     for index, text in enumerate(_padded(refs.intro_reference_texts)):
         st.session_state[_ref_key(project_id, "intro", index)] = text
     for index, text in enumerate(_padded(refs.segment_reference_texts)):
@@ -222,6 +234,93 @@ def _render_style_profile_library(project: Project) -> None:
     st.caption(f"Pfad: `{get_style_profile_library_path()}`")
 
 
+def _render_raw_style_library(
+    project: Project,
+    *,
+    raw_text: str,
+    raw_intro_text: str,
+) -> None:
+    st.subheader("Raw-Text Bibliothek (projektübergreifend)")
+    st.caption(
+        "Raw-Texte (allgemein + Intro) hier speichern und in anderen Projekten laden. "
+        f"Ablage: `{get_raw_style_library_path()}`"
+    )
+    library = load_raw_style_library()
+    existing = load_style_references(project)
+
+    col_save, col_apply = st.columns(2)
+    with col_save:
+        st.markdown("**Aktuelle Raw-Texte in Bibliothek speichern**")
+        default_name = existing.raw_library_name or ""
+        library_name = st.text_input(
+            "Name in der Bibliothek",
+            value=default_name,
+            key=f"vo_raw_lib_save_name_{project.id}",
+        )
+        if st.button("In Bibliothek speichern", key=f"vo_raw_lib_save_{project.id}"):
+            cleaned = library_name.strip()
+            if not cleaned:
+                st.warning("Bitte einen Namen angeben.")
+            elif not raw_text.strip() and not raw_intro_text.strip():
+                st.warning("Beide Raw-Text-Felder sind leer.")
+            else:
+                save_raw_to_library(
+                    cleaned,
+                    raw_reference_text=raw_text,
+                    raw_intro_reference_text=raw_intro_text,
+                )
+                save_style_references(
+                    project,
+                    VoiceoverStyleReferences(
+                        project_id=project.id,
+                        style_mode=STYLE_MODE_RAW_TEXT,
+                        raw_reference_text=raw_text,
+                        raw_intro_reference_text=raw_intro_text,
+                        raw_library_name=cleaned,
+                    ),
+                )
+                st.success(f"Raw-Texte als „{cleaned}“ gespeichert.")
+                st.rerun()
+
+    with col_apply:
+        st.markdown("**Raw-Texte aus Bibliothek laden**")
+        if not library.entries:
+            st.caption("Bibliothek ist noch leer.")
+        else:
+            names = [entry.name for entry in library.entries]
+            selected_name = st.selectbox(
+                "Gespeicherter Raw-Text-Satz",
+                options=names,
+                key=f"vo_raw_lib_select_{project.id}",
+            )
+            col_load, col_delete = st.columns(2)
+            with col_load:
+                if st.button("In dieses Projekt laden", key=f"vo_raw_lib_load_{project.id}"):
+                    entry = get_raw_from_library(selected_name)
+                    if entry is not None:
+                        saved = save_style_references(
+                            project,
+                            VoiceoverStyleReferences(
+                                project_id=project.id,
+                                style_mode=STYLE_MODE_RAW_TEXT,
+                                raw_reference_text=entry.raw_reference_text,
+                                raw_intro_reference_text=entry.raw_intro_reference_text,
+                                raw_library_name=selected_name,
+                            ),
+                        )
+                        _apply_refs_to_session(project.id, saved)
+                        st.success(f"„{selected_name}“ übernommen.")
+                        st.rerun()
+            with col_delete:
+                if st.button("Aus Bibliothek löschen", key=f"vo_raw_lib_delete_{project.id}"):
+                    delete_raw_from_library(selected_name)
+                    st.success(f"„{selected_name}“ gelöscht.")
+                    st.rerun()
+
+    with st.expander("Alle Raw-Bibliothekseinträge (JSON)"):
+        st.json(library.model_dump(mode="json"))
+
+
 def _collect_uploads(project: Project) -> tuple[list[str], list[str]]:
     st.subheader("Optional: Datei-Upload")
     st.caption("Nur .txt und .md — keine PDF/DOCX-Verarbeitung.")
@@ -283,33 +382,51 @@ def render_style_references_page() -> None:
     existing_refs = load_style_references(project)
     intro_texts = _padded(existing_refs.intro_reference_texts)
     segment_texts = _padded(existing_refs.segment_reference_texts)
-    raw_text = st.session_state.get(_raw_key(project.id), existing_refs.raw_reference_text or "")
+    raw_text = st.session_state.get(
+        _raw_key(project.id), existing_refs.raw_reference_text or ""
+    )
+    raw_intro_text = st.session_state.get(
+        _raw_intro_key(project.id), existing_refs.raw_intro_reference_text or ""
+    )
     uploaded_file_names: list[str] = list(existing_refs.uploaded_file_names)
     uploaded_file_texts: list[str] = list(existing_refs.uploaded_file_texts)
 
     if selected_mode == STYLE_MODE_RAW_TEXT:
         st.info(
-            "Ohne Style Profile: Der Raw Text wird späteren LLM-Schritten "
-            "nur als Stil-Referenz mitgegeben — nicht wörtlich kopieren."
+            "Ohne Style Profile: Raw-Texte gehen als Stil-Referenz an die LLMs — "
+            "nicht wörtlich kopieren. "
+            "**Raw Text** → Kapitel-VOs u. a.; **Raw Text Intro** → nur Intro (⑤)."
         )
         raw_text = st.text_area(
-            "Raw Text / Stil-Beispiel",
+            "Raw Text (Kapitel / allgemein)",
             key=_raw_key(project.id),
-            height=280,
+            height=220,
             help=(
-                "Ein oder mehrere Beispielabsätze, Tonfall-Notizen oder "
-                "Referenzskripte. Wird direkt als Referenzblock in die Prompts gelegt."
+                "Stil-Beispiel für Folder Voice-overs, Dramaturgie, Cut Plan usw. "
+                "Nicht wörtlich kopieren."
+            ),
+        )
+        raw_intro_text = st.text_area(
+            "Raw Text Intro",
+            key=_raw_intro_key(project.id),
+            height=220,
+            help=(
+                "Stil-Beispiel nur für den Intro-Hook (Schritt ⑤). "
+                "Leer = Fallback auf den allgemeinen Raw Text."
             ),
         )
         st.caption(
-            "Intro-/Segment-Slots und „Style Profile erstellen“ sind in diesem "
-            "Modus nicht nötig. Gespeicherte Profile bleiben unberührt."
+            "Style Profile ist in diesem Modus nicht nötig. "
+            "Gespeicherte Profile bleiben unberührt."
         )
         save_clicked = st.button(
-            "Raw Text speichern",
+            "Raw-Texte speichern",
             key=f"vo_style_refs_save_{project.id}",
         )
         build_clicked = False
+        _render_raw_style_library(
+            project, raw_text=raw_text, raw_intro_text=raw_intro_text
+        )
     else:
         st.info(
             "Die Referenzen werden nicht kopiert. Das Modell soll daraus nur "
@@ -364,6 +481,8 @@ def render_style_references_page() -> None:
         project_id=project.id,
         style_mode=selected_mode,
         raw_reference_text=raw_text,
+        raw_intro_reference_text=raw_intro_text,
+        raw_library_name=existing_refs.raw_library_name,
         intro_reference_texts=intro_texts,
         segment_reference_texts=segment_texts,
         uploaded_file_names=uploaded_file_names,
@@ -373,10 +492,15 @@ def render_style_references_page() -> None:
     if save_clicked:
         saved = save_style_references(project, current_refs)
         if is_raw_style_mode(saved):
-            st.success("Raw-Style-Referenz gespeichert — spätere LLM-Schritte nutzen diesen Text.")
+            st.success(
+                "Raw-Texte gespeichert — Kapitel-LLMs nutzen Raw Text, "
+                "Intro nutzt Raw Text Intro (Fallback: Raw Text)."
+            )
         else:
             st.success("Style References gespeichert.")
-        st.caption(f"Pfad: `{get_voiceover_style_references_path(project.language_work_dir_path)}`")
+        st.caption(
+            f"Pfad: `{get_voiceover_style_references_path(project.language_work_dir_path)}`"
+        )
         with st.expander("JSON-Vorschau"):
             st.json(saved.model_dump(mode="json"))
 
@@ -407,12 +531,30 @@ def render_style_references_page() -> None:
 
     if selected_mode == STYLE_MODE_RAW_TEXT:
         refs_on_disk = load_style_references(project)
-        if is_raw_style_mode(refs_on_disk) and refs_on_disk.raw_reference_text.strip():
-            st.success("Status: **RAW TEXT READY** — Style Profile wird übersprungen.")
-            with st.expander("Gespeicherter Raw Text"):
-                st.text(refs_on_disk.raw_reference_text)
+        has_general = bool(refs_on_disk.raw_reference_text.strip())
+        has_intro = bool(refs_on_disk.raw_intro_reference_text.strip())
+        if is_raw_style_mode(refs_on_disk) and (has_general or has_intro):
+            bits = []
+            if has_general:
+                bits.append("Raw Text")
+            if has_intro:
+                bits.append("Raw Text Intro")
+            lib = (
+                f" · Bibliothek „{refs_on_disk.raw_library_name}“"
+                if refs_on_disk.raw_library_name
+                else ""
+            )
+            st.success(
+                f"Status: **RAW TEXT READY** ({', '.join(bits)}){lib} — "
+                "Style Profile wird übersprungen."
+            )
+            with st.expander("Gespeicherte Raw-Texte"):
+                st.markdown("**Raw Text (Kapitel / allgemein)**")
+                st.text(refs_on_disk.raw_reference_text or "(leer)")
+                st.markdown("**Raw Text Intro**")
+                st.text(refs_on_disk.raw_intro_reference_text or "(leer — Fallback Raw Text)")
         else:
-            st.warning("Raw Text noch nicht gespeichert oder leer.")
+            st.warning("Raw-Texte noch nicht gespeichert oder leer.")
     else:
         _render_model_settings_editor(project)
         _render_style_profile_status(project)

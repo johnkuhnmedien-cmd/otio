@@ -450,7 +450,7 @@ def build_intro_hook_candidates(
         confirmed_folder_voiceovers=confirmed_drafts,
         settings=settings,
         inventory_by_folder=inventory_by_folder,
-        style_context_text=style_context_text_for_prompts(project),
+        style_context_text=style_context_text_for_prompts(project, for_intro=True),
     )
     prompt_hash = content_hash(prompt)
     write_llm_prompt(run_dir, prompt)

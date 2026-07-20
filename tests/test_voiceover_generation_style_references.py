@@ -139,6 +139,7 @@ def test_raw_style_mode_roundtrip_and_prompt_context(tmp_path: Path) -> None:
         project_id=project.id,
         style_mode=STYLE_MODE_RAW_TEXT,
         raw_reference_text="Speak like a quiet trail guide at dusk.",
+        raw_intro_reference_text="Open with a single cinematic question.",
         intro_reference_texts=["ignored in raw mode"],
     )
     save_style_references(project, refs)
@@ -147,12 +148,52 @@ def test_raw_style_mode_roundtrip_and_prompt_context(tmp_path: Path) -> None:
     assert loaded.style_mode == STYLE_MODE_RAW_TEXT
     assert is_raw_style_mode(loaded) is True
     assert loaded.raw_reference_text == "Speak like a quiet trail guide at dusk."
+    assert loaded.raw_intro_reference_text == "Open with a single cinematic question."
 
     context = style_context_text_for_prompts(project, detailed=True)
     assert "RAW STYLE REFERENCE" in context
     assert "quiet trail guide" in context
+    assert "cinematic question" not in context
     assert "overall_tone" not in context
     assert "calm documentary" not in context
+
+    intro_context = style_context_text_for_prompts(project, for_intro=True)
+    assert "RAW INTRO STYLE REFERENCE" in intro_context
+    assert "cinematic question" in intro_context
+    assert "quiet trail guide" not in intro_context
+
+
+def test_raw_intro_falls_back_to_general_raw_text(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    save_style_references(
+        project,
+        VoiceoverStyleReferences(
+            project_id=project.id,
+            style_mode=STYLE_MODE_RAW_TEXT,
+            raw_reference_text="General calm voice.",
+            raw_intro_reference_text="   ",
+        ),
+    )
+    intro_context = style_context_text_for_prompts(project, for_intro=True)
+    assert "General calm voice." in intro_context
+
+
+def test_raw_style_library_roundtrip(tmp_path: Path, monkeypatch) -> None:
+    from otio_app.services.voiceover_generation import raw_style_library_service as lib
+
+    monkeypatch.setattr(lib, "get_raw_style_library_path", lambda: tmp_path / "raw_lib.json")
+    saved = lib.save_raw_to_library(
+        "usa_v3",
+        raw_reference_text="chapter style",
+        raw_intro_reference_text="intro style",
+    )
+    assert [e.name for e in saved.entries] == ["usa_v3"]
+    entry = lib.get_raw_from_library("usa_v3")
+    assert entry is not None
+    assert entry.raw_reference_text == "chapter style"
+    assert entry.raw_intro_reference_text == "intro style"
+    lib.delete_raw_from_library("usa_v3")
+    assert lib.get_raw_from_library("usa_v3") is None
 
 
 def test_profile_mode_still_uses_style_profile_json(tmp_path: Path) -> None:
