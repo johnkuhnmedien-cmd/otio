@@ -21,6 +21,10 @@ from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     ScriptLockError,
     load_locked_script,
 )
+from otio_app.ui.voiceover_generation.elevenlabs_settings_ui import (
+    render_elevenlabs_settings_form,
+    voice_id_is_set,
+)
 from otio_app.ui.without_voiceover_enhanced._shared import get_enhanced_project
 
 
@@ -35,14 +39,29 @@ def render_enhanced_audio_page() -> None:
     if project is None:
         return
 
+    api_ready = is_elevenlabs_configured()
+    if not api_ready:
+        st.warning("ELEVENLABS_API_KEY fehlt unter API-Schlüssel.")
+
+    render_elevenlabs_settings_form(
+        project,
+        key_prefix="enh_audio",
+        sample_language=project.language,
+    )
+    voice_ready = voice_id_is_set(project)
+    can_tts = api_ready and voice_ready
+    if api_ready and not voice_ready:
+        st.warning(
+            "Keine ElevenLabs Voice-ID konfiguriert. "
+            "Bitte oben eintragen und „Settings speichern“."
+        )
+
     locked = load_locked_script(project)
     if locked is None:
         st.error("Kein gesperrtes Skript vorhanden — zuerst Script Lock in Schritt 4.")
         return
 
     st.info(f"Skriptversion: `{locked.script_version}`")
-    if not is_elevenlabs_configured():
-        st.warning("ELEVENLABS_API_KEY fehlt unter API-Schlüssel.")
 
     entries = list_enabled_dramaturgy_folders(project)
     folder_order = [entry.folder_name for entry in entries]
@@ -52,7 +71,12 @@ def render_enhanced_audio_page() -> None:
         item.segment_id: item for item in (timings.segments if timings else [])
     }
 
-    if st.button("Alle Kapitel vertonen", type="primary", key="enh_audio_all"):
+    if st.button(
+        "Alle Kapitel vertonen",
+        type="primary",
+        key="enh_audio_all",
+        disabled=not can_tts,
+    ):
         try:
             with st.spinner("ElevenLabs — alle Kapitel…"):
                 timings = synthesize_locked_script_audio(project)
@@ -85,7 +109,7 @@ def render_enhanced_audio_page() -> None:
                 if st.button(
                     f"Kapitel „{folder_name}“ vertonen",
                     key=f"enh_audio_folder_{project.id}_{folder_name}",
-                    disabled=not is_elevenlabs_configured(),
+                    disabled=not can_tts,
                 ):
                     try:
                         with st.spinner(f"ElevenLabs — „{folder_name}“…"):

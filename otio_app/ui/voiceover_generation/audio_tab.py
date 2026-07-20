@@ -8,7 +8,6 @@ from otio_app.defaults import (
     AUDIO_STATUS_READY,
     AUDIO_STATUS_READY_WITH_WARNINGS,
     AUDIO_STATUS_STALE,
-    ELEVENLABS_MODEL_PRESETS,
 )
 from otio_app.models import Project
 from otio_app.services.voiceover_generation.audio_alignment_service import load_alignment
@@ -19,10 +18,8 @@ from otio_app.services.voiceover_generation.elevenlabs_client import (
 )
 from otio_app.services.voiceover_generation.elevenlabs_settings_service import (
     load_elevenlabs_settings,
-    save_elevenlabs_settings,
 )
 from otio_app.services.voiceover_generation.intro_hook_service import load_confirmed_intro_hook
-from otio_app.services.voiceover_generation.models import ElevenLabsSettings
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
 from otio_app.services.voiceover_generation.tts_orchestration_service import (
     load_audio_manifest,
@@ -30,13 +27,15 @@ from otio_app.services.voiceover_generation.tts_orchestration_service import (
     synthesize_all_confirmed_voiceovers,
     synthesize_folder_voiceover,
     synthesize_intro,
-    synthesize_test_voice,
 )
 from otio_app.services.voiceover_generation.voiceover_author_service import (
     load_folder_voiceovers_confirmed,
 )
 from otio_app.ui.project_context import render_project_selector
 from otio_app.ui.voiceover_generation._shared import require_without_voiceover_mode
+from otio_app.ui.voiceover_generation.elevenlabs_settings_ui import (
+    render_elevenlabs_settings_form,
+)
 
 import streamlit as st
 
@@ -72,97 +71,6 @@ def _render_prerequisites(project: Project) -> tuple[bool, bool]:
         st.warning("Keine ElevenLabs Voice-ID konfiguriert. Bitte unten in den Settings eintragen.")
 
     return api_ready, voice_id_set
-
-
-def _render_elevenlabs_settings(project: Project) -> ElevenLabsSettings:
-    settings = load_elevenlabs_settings(project)
-    st.subheader("ElevenLabs Settings")
-
-    voice_id = st.text_input("Voice-ID", value=settings.voice_id, key=f"vo_audio_voice_id_{project.id}")
-
-    model_options = list(ELEVENLABS_MODEL_PRESETS)
-    if settings.model_id not in model_options:
-        model_options = [settings.model_id, *model_options]
-    model_id = st.selectbox(
-        "Modell", options=model_options, index=model_options.index(settings.model_id),
-        key=f"vo_audio_model_{project.id}",
-    )
-
-    col1, col2 = st.columns(2)
-    with col1:
-        output_format = st.text_input(
-            "Output-Format", value=settings.output_format, key=f"vo_audio_format_{project.id}",
-            help="z. B. mp3_44100_128, pcm_16000, wav_44100",
-        )
-        stability = st.slider(
-            "Stability", 0.0, 1.0, value=settings.stability, key=f"vo_audio_stability_{project.id}"
-        )
-        similarity_boost = st.slider(
-            "Similarity Boost", 0.0, 1.0, value=settings.similarity_boost,
-            key=f"vo_audio_similarity_{project.id}",
-        )
-    with col2:
-        style = st.slider("Style", 0.0, 1.0, value=settings.style, key=f"vo_audio_style_{project.id}")
-        use_speaker_boost = st.checkbox(
-            "Speaker Boost", value=settings.use_speaker_boost, key=f"vo_audio_speaker_boost_{project.id}"
-        )
-        speed = st.slider(
-            "Speed", 0.25, 4.0, value=settings.speed, key=f"vo_audio_speed_{project.id}"
-        )
-
-    with st.expander("Erweitert", expanded=False):
-        language_code = st.text_input(
-            "Language Code (optional — nur senden, wenn ausgefüllt)",
-            value=settings.language_code, key=f"vo_audio_lang_code_{project.id}",
-            help="Wird nur an ElevenLabs gesendet, wenn nicht leer. Nicht an bestimmte "
-            "Modelle gekoppelt — kein Modell wird deswegen blockiert.",
-        )
-
-    updated = settings.model_copy(
-        update={
-            "voice_id": voice_id,
-            "model_id": model_id,
-            "output_format": output_format,
-            "stability": stability,
-            "similarity_boost": similarity_boost,
-            "style": style,
-            "use_speaker_boost": use_speaker_boost,
-            "speed": speed,
-            "language_code": language_code,
-        }
-    )
-
-    col_save, col_reload, col_test = st.columns(3)
-    with col_save:
-        if st.button("Settings speichern", key=f"vo_audio_settings_save_{project.id}"):
-            save_elevenlabs_settings(project, updated)
-            st.success("ElevenLabs-Settings gespeichert.")
-            st.rerun()
-    with col_reload:
-        if st.button("Neu laden", key=f"vo_audio_settings_reload_{project.id}"):
-            st.rerun()
-    with col_test:
-        test_disabled = not (is_elevenlabs_configured() and voice_id.strip())
-        if st.button("Test Voice", key=f"vo_audio_test_voice_{project.id}", disabled=test_disabled):
-            brief = load_project_brief(project)
-            sample_texts = {
-                "DE": "Dies ist ein kurzer Test der Stimme.",
-                "EN": "This is a short voice test.",
-                "FR": "Ceci est un court test de voix.",
-                "ES": "Esta es una breve prueba de voz.",
-                "PT": "Este é um breve teste de voz.",
-                "IT": "Questo è un breve test vocale.",
-            }
-            sample_text = sample_texts.get(brief.language, sample_texts["EN"])
-            try:
-                with st.spinner("Test-Audio wird erzeugt…"):
-                    path = synthesize_test_voice(project, sample_text)
-                st.success(f"Test-Audio erzeugt: `{path}`")
-                st.audio(str(path))
-            except ElevenLabsTtsError as exc:
-                st.error(f"Test Voice fehlgeschlagen: {exc}")
-
-    return updated
 
 
 def _character_counts(project: Project) -> tuple[int, dict[str, int], int]:
@@ -386,7 +294,12 @@ def render_audio_page() -> None:
     api_ready, voice_id_set = _render_prerequisites(project)
     can_tts = api_ready and voice_id_set
 
-    _render_elevenlabs_settings(project)
+    brief = load_project_brief(project)
+    render_elevenlabs_settings_form(
+        project,
+        key_prefix="vo_audio",
+        sample_language=brief.language,
+    )
 
     cost_confirmed = _render_cost_transparency(project)
     _render_actions(project, can_tts=can_tts, cost_confirmed=cost_confirmed)
