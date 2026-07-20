@@ -1135,21 +1135,15 @@ def _folder_voiceover_block(
     draft: FolderVoiceoverDraft,
     inventory_assets: list[dict] | None = None,
 ) -> str:
-    """Ordner-Block für den Intro-Prompt.
+    """Kapitel-Block für den Intro-Prompt — nur Rolle + gesprochener Text.
 
-    Inventory-Summaries werden bewusst NICHT mehr mitgegeben — bei vielen
-    Orten wurde der Prompt zu lang. Asset-IDs kommen nur aus sentence_items.
+    Keine sentence_items, keine Asset-IDs, kein Inventory (zu lang / zu granular).
     """
-    del inventory_assets  # kept for call-site compatibility; not sent to the LLM
+    del inventory_assets
     role = entry.dramaturgy_role if entry is not None else "-"
-    sentence_lines = "\n".join(
-        f"    - sentence_id={item.sentence_id} primary_asset_id={item.primary_asset_id or '(none)'}: {item.text}"
-        for item in draft.sentence_items
-    ) or "    (keine sentence_items)"
     return (
         f"[{draft.folder_name}] (dramaturgy_role: {role})\n"
-        f"  Full voice-over text:\n  {draft.voiceover_text_full}\n"
-        f"  Sentence/beat breakdown:\n{sentence_lines}"
+        f"  Chapter narration:\n  {draft.voiceover_text_full}"
     )
 
 
@@ -1165,12 +1159,8 @@ def build_intro_hook_prompt(
 ) -> str:
     """Baut den Prompt zur Erzeugung von genau 5 Intro-Hook-Kandidaten.
 
-    Fordert echte Doku-Prosa (kein Assetlisten-Stil, keine reine
-    Zusammenfassung) UND eine vollständige visuelle Zuordnung (visual_beats)
-    für jeden Kandidaten im selben JSON-Response.
-
-    ``inventory_by_folder`` wird ignoriert (Rückwärtskompatibilität) — zu lang
-    bei vielen Ordnern; Asset-IDs nur aus sentence_items.
+    Quelle: nur Kapitel-Narration (Ordnername, Dramaturgie-Rolle, Fließtext) —
+    keine Folder-VO-Satzlisten und kein Inventory.
     """
     del inventory_by_folder
     entries_by_folder = {entry.folder_name: entry for entry in dramaturgy_plan.recommended_folder_order}
@@ -1187,19 +1177,19 @@ def build_intro_hook_prompt(
     folder_blocks = "\n\n".join(
         _folder_voiceover_block(entries_by_folder.get(draft.folder_name), draft)
         for draft in confirmed_folder_voiceovers
-    ) or "(keine bestätigten Folder Voice-overs verfügbar)"
+    ) or "(keine Kapitel-Skripte verfügbar)"
 
     must_include_block = ", ".join(settings.must_include) or "(keine Angabe)"
 
     return f"""You are a documentary editor writing the OPENING HOOK for a \
-multi-location travel/nature documentary. You have all confirmed location \
-voice-overs available below.
+multi-location travel/nature documentary. You have the chapter narrations \
+below (spoken text per location only — not full folder voice-over breakdowns).
 
-Do not merely summarize the folder voice-overs. Create a strong documentary \
-opening hook.
+Do not merely summarize the chapters. Create a strong documentary opening hook.
 
-Do not invent asset IDs. Use only asset IDs present in the provided confirmed \
-sentence_items below (no separate inventory list is provided).
+Do not invent asset IDs. No sentence_items or inventory are provided. For \
+visual_beats, set primary_asset_id to "" and needs_supplement_asset=true with \
+a concrete supplement_reason, unless you leave asset fields empty intentionally.
 
 {native_speaker_language_block(settings.language or project_brief.language)}
 
@@ -1228,11 +1218,11 @@ sentence_items below (no separate inventory list is provided).
 - editor's extra instructions: {settings.freeform_rule_for_llm or "(none)"}
 - target_words: {settings.target_words} (min {settings.min_words}, max {settings.max_words})
 
-## All confirmed location voice-overs (source material for the hook)
+## Chapter narrations (source material for the hook — spoken text only)
 {folder_blocks}
 
 ## Task
-Analyze all locations above and decide:
+Analyze the chapters above and decide:
 - Which location has the STRONGEST hook potential?
 - Which CONTRAST between locations works best as an opener?
 - What OPEN QUESTION creates suspense?
@@ -1245,14 +1235,11 @@ distinct strategic approach (e.g. mystery, contrast, surprise, \
 cinematic_promise, question, emotional). Each hook must read like real \
 documentary prose — never like a list of assets or a plot summary.
 
-For each candidate, also provide visual_beats: a full sentence/beat-to-asset \
-breakdown of the hook text itself, exactly like the folder voice-over sentence \
-breakdown above. Each visual_beat's primary_asset_id MUST be an asset_id taken \
-from the sentence_items or inventory listed above — either reference an \
-existing sentence_id from a folder (source_sentence_id) if you reuse that \
-moment, or reference a fitting inventory asset_id directly. If nothing fits, \
-set primary_asset_id to "", needs_supplement_asset=true, and give a concrete \
-supplement_reason.
+For each candidate, also provide visual_beats: a beat breakdown of the hook \
+text. Set source_folder_name to a chapter name from above when relevant. \
+Leave source_sentence_id and primary_asset_id empty (""), set \
+needs_supplement_asset=true, and give a concrete supplement_reason describing \
+the needed visual.
 
 Respond with JSON ONLY, no markdown code fences, no commentary, matching exactly \
 this shape:

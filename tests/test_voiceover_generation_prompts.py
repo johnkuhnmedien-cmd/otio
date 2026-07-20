@@ -1138,7 +1138,7 @@ def test_intro_hook_prompt_contains_confirmed_folder_voiceovers() -> None:
     assert "Heiße Quellen brodeln unter einem Himmel aus Dampf." in prompt
 
 
-def test_intro_hook_prompt_contains_sentence_items() -> None:
+def test_intro_hook_prompt_uses_chapter_narration_not_sentence_assets() -> None:
     prompt = build_intro_hook_prompt(
         project_brief=_sample_brief(),
         style_profile=None,
@@ -1146,9 +1146,12 @@ def test_intro_hook_prompt_contains_sentence_items() -> None:
         confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
         settings=_sample_intro_settings(),
     )
-    assert "sentence_001" in prompt
-    assert "asset_clip1" in prompt
-    assert "asset_geyser1" in prompt
+    assert "Chapter narrations" in prompt
+    assert "Zwischen den roten Felswänden scheint das Licht von innen zu leuchten." in prompt
+    assert "sentence_001" not in prompt
+    assert "asset_clip1" not in prompt
+    assert "asset_geyser1" not in prompt
+    assert "Sentence/beat breakdown" not in prompt
 
 
 def test_intro_hook_prompt_requests_exactly_5_candidates() -> None:
@@ -1182,6 +1185,7 @@ def test_intro_hook_prompt_forbids_inventing_asset_ids() -> None:
         settings=_sample_intro_settings(),
     )
     assert "Do not invent asset IDs" in prompt
+    assert "No sentence_items or inventory are provided" in prompt
 
 
 def test_intro_hook_prompt_contains_active_negative_rule_instructions() -> None:
