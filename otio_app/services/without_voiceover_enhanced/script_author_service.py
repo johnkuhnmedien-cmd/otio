@@ -43,9 +43,11 @@ from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     detect_forbidden_phrases,
     load_script_draft,
     save_script_draft,
+    update_folder_chapter_narration,
 )
 from otio_app.services.without_voiceover_enhanced.script_prompts import (
     build_enhanced_folder_script_prompt,
+    build_enhanced_script_revision_prompt,
 )
 
 DEFAULT_ENHANCED_SCRIPT_MODEL = "openai:gpt-5.4-mini"
@@ -432,6 +434,133 @@ def group_segments_by_folder(
         if name not in seen:
             ordered.append((name, segs))
     return ordered
+
+
+def _strip_plain_narration_response(raw_text: str) -> str:
+    text = (raw_text or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
+
+
+def revise_enhanced_script_for_folder(
+    project: Project,
+    folder_name: str,
+    *,
+    editor_instructions: str,
+    provider: str = "openai",
+    model: str = "gpt-5.4-mini",
+    max_output_tokens: int | None = DEFAULT_ENHANCED_SCRIPT_MAX_OUTPUT_TOKENS,
+    llm_callable: Callable[..., Any] | None = None,
+) -> FolderScriptBuildResult:
+    """Revidiert ein bestehendes Kapitel-Skript — nur Freitext + aktuelles Skript ans LLM."""
+    instructions = (editor_instructions or "").strip()
+    if not instructions:
+        return FolderScriptBuildResult(
+            folder_name=folder_name,
+            status="FAIL",
+            error="Freitext-Anweisung ist leer.",
+        )
+
+    draft = load_script_draft(project)
+    current = chapter_narration_text(draft, folder_name).strip()
+    if not current:
+        return FolderScriptBuildResult(
+            folder_name=folder_name,
+            status="FAIL",
+            error=f"Kein bestehendes Skript für „{folder_name}“ — zuerst erzeugen.",
+        )
+
+    prompt = build_enhanced_script_revision_prompt(
+        editor_instructions=instructions,
+        current_script=current,
+        folder_name=folder_name,
+        language=project.language,
+    )
+    model_id = resolve_llm_model_id(provider, model)
+    try:
+        if llm_callable is not None:
+            raw = llm_callable(
+                prompt=prompt,
+                model=model_id,
+                max_output_tokens=max_output_tokens,
+            )
+            raw_text = raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
+        else:
+            raw_text = generate_plan_text_with_metadata(
+                prompt=prompt,
+                model=model_id,
+                max_output_tokens=max_output_tokens,
+            ).raw_text
+        revised = _strip_plain_narration_response(raw_text)
+        if not revised:
+            return FolderScriptBuildResult(
+                folder_name=folder_name,
+                status="FAIL",
+                error="LLM-Antwort war leer.",
+            )
+        updated = update_folder_chapter_narration(project, folder_name, revised)
+        return FolderScriptBuildResult(
+            folder_name=folder_name,
+            status="PASS",
+            document=updated,
+            segment_count=sum(
+                1 for seg in updated.segments if seg.folder_name == folder_name
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return FolderScriptBuildResult(
+            folder_name=folder_name,
+            status="FAIL",
+            error=str(exc),
+        )
+
+
+def revise_all_enhanced_scripts(
+    project: Project,
+    *,
+    editor_instructions: str,
+    provider: str = "openai",
+    model: str = "gpt-5.4-mini",
+    max_output_tokens: int | None = DEFAULT_ENHANCED_SCRIPT_MAX_OUTPUT_TOKENS,
+    llm_callable: Callable[..., Any] | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+) -> list[FolderScriptBuildResult]:
+    """Wendet denselben Freitext sequenziell auf alle vorhandenen Kapitel-Skripte an."""
+    draft = load_script_draft(project)
+    present = sorted(
+        folders_present_in_script(draft),
+        key=lambda name: next(
+            (
+                entry.order_index
+                for entry in list_enabled_dramaturgy_folders(project)
+                if entry.folder_name == name
+            ),
+            10_000,
+        ),
+    )
+    results: list[FolderScriptBuildResult] = []
+    total = len(present)
+    for index, folder_name in enumerate(present, start=1):
+        if progress_callback is not None:
+            progress_callback(folder_name, index, total)
+        results.append(
+            revise_enhanced_script_for_folder(
+                project,
+                folder_name,
+                editor_instructions=editor_instructions,
+                provider=provider,
+                model=model,
+                max_output_tokens=max_output_tokens,
+                llm_callable=llm_callable,
+            )
+        )
+    return results
 
 
 def generate_enhanced_script_for_folder(

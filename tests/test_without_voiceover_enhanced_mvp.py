@@ -67,6 +67,7 @@ from otio_app.services.without_voiceover_enhanced.script_author_service import (
     list_enabled_dramaturgy_folders,
     merge_folder_script_into_document,
     parse_enhanced_script_response,
+    revise_enhanced_script_for_folder,
 )
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_script_draft,
@@ -79,6 +80,7 @@ from otio_app.services.without_voiceover_enhanced.script_prompts import (
     FORBIDDEN_PHRASES,
     build_enhanced_folder_script_prompt,
     build_enhanced_script_prompt,
+    build_enhanced_script_revision_prompt,
 )
 from otio_app.services.without_voiceover_enhanced.stock.mock import MockStockProvider
 from otio_app.services.without_voiceover_enhanced.stock.registry import (
@@ -897,6 +899,62 @@ def test_update_folder_chapter_narration_collapses_to_one_script(tmp_path: Path)
     assert len(desert) == 1
     assert desert[0].text == "B1"
     assert chapter_narration_text(updated, "Canyon").startswith("Neuer Canyon")
+
+
+def test_revision_prompt_contains_only_instructions_and_script() -> None:
+    prompt = build_enhanced_script_revision_prompt(
+        editor_instructions="Make it calmer.",
+        current_script="The canyon glows red at dusk.",
+        folder_name="Antelope Canyon",
+        language="en",
+    )
+    assert "Make it calmer." in prompt
+    assert "The canyon glows red at dusk." in prompt
+    assert "Antelope Canyon" in prompt
+    assert "Project Brief" not in prompt
+    assert "DRAMATURGY" not in prompt
+    assert "inventory" not in prompt.lower()
+    assert "Style Profile" not in prompt
+
+
+def test_revise_enhanced_script_for_folder_uses_only_freetext_and_script(
+    tmp_path: Path,
+) -> None:
+    folders = ["Canyon"]
+    project = _project(tmp_path, folders=folders)
+    _confirm_dramaturgy(project, folders)
+    save_script_draft(
+        project,
+        EnhancedScriptDocument(
+            segments=[
+                ScriptSegment(
+                    segment_id="c1",
+                    text="Old canyon narration.",
+                    sequence_index=1,
+                    folder_name="Canyon",
+                    folder_order_index=0,
+                )
+            ]
+        ),
+    )
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del model, max_output_tokens
+        assert "Old canyon narration." in prompt
+        assert "shorter please" in prompt
+        assert "Project Brief" not in prompt
+        return "Shorter canyon narration."
+
+    result = revise_enhanced_script_for_folder(
+        project,
+        "Canyon",
+        editor_instructions="shorter please",
+        llm_callable=fake_llm,
+    )
+    assert result.status == "PASS"
+    draft = load_script_draft(project)
+    assert draft is not None
+    assert chapter_narration_text(draft, "Canyon") == "Shorter canyon narration."
 
 
 def test_folder_script_prompt_binds_to_dramaturgy_chapter() -> None:

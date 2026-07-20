@@ -113,6 +113,10 @@ LLM_INPUT_INFO = {
         "(keine Inhaltsgrenze) · Regeln gegen Bildunterschriften & "
         "erfundene Fakten. Ein Call = nur dieses Kapitel."
     ),
+    "enhanced_script_revision": (
+        "Nur dein Freitext + das bereits erzeugte Kapitel-Skript. "
+        "Kein Brief, keine Dramaturgie, kein Style, kein Inventory."
+    ),
     "enhanced_rough_cut": (
         "Gesperrtes Skript (JSON) · Segment-Timings · lokale Assets (JSON) · "
         "Style · Dramaturgie → grober Cut + Pausen + Coverage Gaps/Queries."

@@ -163,6 +163,34 @@ LOCAL ASSET INVENTORY (visual resource, not content limit):
 """
 
 
+def build_enhanced_script_revision_prompt(
+    *,
+    editor_instructions: str,
+    current_script: str,
+    folder_name: str,
+    language: str = "de",
+) -> str:
+    """Minimaler Revisions-Prompt: nur Freitext-Anweisung + bestehendes Skript."""
+    instructions = (editor_instructions or "").strip()
+    script = (current_script or "").strip()
+    return f"""\
+Revise the spoken narration for ONE documentary chapter.
+
+LANGUAGE: {language}
+CHAPTER / folder_name: {folder_name}
+
+EDITOR INSTRUCTIONS (follow these; they override the current wording where they conflict):
+{instructions or "(no instructions provided)"}
+
+CURRENT SCRIPT:
+{script or "(empty)"}
+
+Return ONLY the revised spoken narration as plain text.
+No JSON, no markdown code fences, no commentary, no bullet lists of notes —
+only the narration that should be spoken aloud for this chapter.
+"""
+
+
 def build_enhanced_folder_script_prompt(
     *,
     project_brief_text: str,

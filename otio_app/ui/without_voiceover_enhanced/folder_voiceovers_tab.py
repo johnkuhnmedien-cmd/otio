@@ -22,6 +22,8 @@ from otio_app.services.without_voiceover_enhanced.script_author_service import (
     group_segments_by_folder,
     list_enabled_dramaturgy_folders,
     looks_like_asset_inventory_script,
+    revise_all_enhanced_scripts,
+    revise_enhanced_script_for_folder,
     segments_for_folder,
 )
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
@@ -34,6 +36,7 @@ from otio_app.services.without_voiceover_enhanced.script_lock_service import (
 )
 from otio_app.ui.voiceover_generation._shared import (
     LLM_INPUT_INFO,
+    render_llm_input_info,
     render_llm_model_selectbox,
 )
 from otio_app.ui.without_voiceover_enhanced._shared import get_enhanced_project
@@ -439,3 +442,103 @@ def render_enhanced_folder_voiceovers_page() -> None:
                 "Arbeits- und Vertonungseinheit ist das einzelne Kapitel."
             )
             st.write(show.narration_full)
+
+        st.divider()
+        _render_script_revision_section(
+            project,
+            show,
+            provider=provider,
+            model=model,
+            max_tokens=max_tokens,
+        )
+
+
+def _render_script_revision_section(
+    project,
+    document: EnhancedScriptDocument,
+    *,
+    provider: str,
+    model: str,
+    max_tokens: int,
+) -> None:
+    st.subheader("Skript mit Freitext nachbearbeiten")
+    render_llm_input_info(LLM_INPUT_INFO["enhanced_script_revision"])
+    present = sorted(folders_present_in_script(document))
+    if not present:
+        st.info("Noch kein Kapitel-Skript zum Nachbearbeiten vorhanden.")
+        return
+
+    selected = st.selectbox(
+        "Kapitel für Nachbearbeitung",
+        options=present,
+        key=f"enh_revise_folder_{project.id}",
+    )
+    instructions = st.text_area(
+        "Freitext-Anweisung an das LLM",
+        key=f"enh_revise_prompt_{project.id}",
+        height=160,
+        placeholder=(
+            "z. B. Kürzer, weniger Pathos, mehr konkrete Ortsdetails, "
+            "Ton ruhiger …"
+        ),
+        help="Nur dieser Text und das aktuelle Kapitel-Skript gehen an das LLM.",
+    )
+    preview = chapter_narration_text(document, selected)
+    with st.expander("Aktuelles Skript (wird mitgeschickt)", expanded=False):
+        st.write(preview or "(leer)")
+
+    col_one, col_all = st.columns(2)
+    with col_one:
+        if st.button(
+            "Ausgewähltes Kapitel nachbearbeiten",
+            type="primary",
+            key=f"enh_revise_one_{project.id}",
+        ):
+            if not (instructions or "").strip():
+                st.warning("Bitte zuerst eine Freitext-Anweisung eingeben.")
+            else:
+                with st.spinner(f"„{selected}“ wird nachbearbeitet…"):
+                    result = revise_enhanced_script_for_folder(
+                        project,
+                        selected,
+                        editor_instructions=instructions,
+                        provider=provider,
+                        model=model,
+                        max_output_tokens=max_tokens,
+                    )
+                if result.status == "PASS":
+                    mark_audio_stale_for_changed_segments(project)
+                    st.success(f"„{selected}“ nachbearbeitet — Script Lock aufgehoben.")
+                else:
+                    st.error(result.error or "Fehlgeschlagen.")
+                st.rerun()
+    with col_all:
+        if st.button(
+            "Alle vorhandenen Kapitel nachbearbeiten",
+            key=f"enh_revise_all_{project.id}",
+        ):
+            if not (instructions or "").strip():
+                st.warning("Bitte zuerst eine Freitext-Anweisung eingeben.")
+            else:
+                progress = st.empty()
+
+                def _progress(folder_name: str, index: int, total: int) -> None:
+                    progress.info(f"Kapitel {index}/{total}: „{folder_name}“…")
+
+                with st.spinner("Alle Kapitel werden nacheinander nachbearbeitet…"):
+                    results = revise_all_enhanced_scripts(
+                        project,
+                        editor_instructions=instructions,
+                        provider=provider,
+                        model=model,
+                        max_output_tokens=max_tokens,
+                        progress_callback=_progress,
+                    )
+                progress.empty()
+                ok = [r for r in results if r.status == "PASS"]
+                fail = [r for r in results if r.status != "PASS"]
+                mark_audio_stale_for_changed_segments(project)
+                st.success(f"{len(ok)}/{len(results)} Kapitel nachbearbeitet.")
+                for result in fail:
+                    st.error(f"„{result.folder_name}“: {result.error}")
+                st.rerun()
