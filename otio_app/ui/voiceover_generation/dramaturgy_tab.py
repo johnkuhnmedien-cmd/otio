@@ -20,6 +20,7 @@ from otio_app.services.inventory_loader import folder_has_usable_inventory_data
 from otio_app.services.voiceover_generation.dramaturgy_service import (
     build_dramaturgy_plan,
     confirm_dramaturgy_plan,
+    disable_dramaturgy_craft_flags,
     load_confirmed_dramaturgy,
     load_dramaturgy_draft,
     update_dramaturgy_order,
@@ -386,9 +387,14 @@ def render_dramaturgy_page() -> None:
         return
 
     st.subheader("Dramaturgie-Draft")
+    if draft.craft_flags_disabled:
+        st.info(
+            "Craft-Flags sind deaktiviert — Übergang/Rückbezug/Kontrast/Gemeinsamkeit "
+            "werden an Folder-Voice-over-Prompts nicht mehr mitgegeben."
+        )
     edited_rows = _render_draft_editor(project, draft)
 
-    col_apply, col_sort, col_reload = st.columns(3)
+    col_apply, col_sort, col_reload, col_clear = st.columns(4)
     with col_apply:
         apply_clicked = st.button("Änderungen übernehmen", key=f"vo_dramaturgy_apply_{project.id}")
     with col_sort:
@@ -397,6 +403,22 @@ def render_dramaturgy_page() -> None:
         )
     with col_reload:
         reload_clicked = st.button("Draft neu laden", key=f"vo_dramaturgy_reload_{project.id}")
+    with col_clear:
+        clear_craft_clicked = st.button(
+            "Craft-Kästchen deaktivieren",
+            key=f"vo_dramaturgy_clear_craft_{project.id}",
+            help=(
+                "Setzt alle Übergang-/Rückbezug-/Kontrast-/Gemeinsamkeit-Flags "
+                "auf aus und entfernt sie aus späteren Folder-Voice-over-Prompts."
+            ),
+        )
+    if clear_craft_clicked:
+        disable_dramaturgy_craft_flags(project)
+        st.success(
+            "Alle Craft-Kästchen deaktiviert. Folder-Voice-overs bekommen diese "
+            "Parameter nicht mehr mit."
+        )
+        st.rerun()
 
     if reload_clicked:
         st.rerun()

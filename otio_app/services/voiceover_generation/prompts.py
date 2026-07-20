@@ -379,40 +379,26 @@ Decide, for the whole set of chapters above:
 - Which chapter works as the CLIMAX / escalation point?
 - Which chapter works as a calm RESOLUTION / closer?
 - What is the most compelling overall narrative arc connecting them?
-- For EACH chapter: its role, a short reason, recommended word count for its \
-voice-over section, and a transition idea toward the NEXT chapter.
-- For EACH chapter: decide the five voice-over craft FLAGS below (booleans). \
-These flags later become checkboxes for the folder voice-over writer.
+- For EACH chapter: its role, a short reason, and recommended word count for its \
+voice-over section.
 
-### Voice-over craft flags (per chapter — REQUIRED booleans)
-Set each flag deliberately — do NOT default everything to true:
-- use_transition_from_previous: near the START, briefly bridge FROM the previous \
-chapter into this one. Must be false for the FIRST chapter (nothing before it).
-- use_transition_to_next: near the END, briefly tease the NEXT chapter. Must be \
-false for the LAST chapter (nothing after it). Prefer true for most middle chapters \
-so the film keeps flowing.
-- use_callback_to_previous: later in the text, briefly look BACK to the previous \
-chapter (a callback, not the opening bridge). Use SPARINGLY — only when a delayed \
-echo truly helps. Must be false for the FIRST chapter. Prefer false more often \
-than true.
-- use_contrast_with_previous: explicitly play this chapter AGAINST the previous \
-one (opposite mood, landscape, energy, scale, …). Must be false for the FIRST \
-chapter. Prefer true only where contrast is dramaturgically useful.
-- use_commonality_with_previous: explicitly name a SHARED motif with the previous \
-chapter (same element, theme, or visual idea). Must be false for the FIRST chapter. \
-Do NOT set both contrast AND commonality to true unless both are genuinely needed; \
-usually pick at most one.
+### Voice-over craft flags (per chapter — leave ALL false by default)
+Do NOT invent transition/callback/contrast craft requirements during planning. \
+Leave every craft flag FALSE and every hint string EMPTY. These optional editor \
+checkboxes can be enabled later manually if needed; forcing them here duplicates \
+work and over-constrains folder voice-over writing.
+- use_transition_from_previous: false
+- use_transition_to_next: false
+- use_callback_to_previous: false
+- use_contrast_with_previous: false
+- use_commonality_with_previous: false
+- transition_goal_to_next: ""
+- transition_from_previous_hint: ""
+- contrast_or_commonality_hint: ""
 
-Also fill the hint strings that explain HOW to apply the flags you set true:
-- transition_goal_to_next: how to tease the next chapter (empty if \
-use_transition_to_next is false)
-- transition_from_previous_hint: how to bridge from the previous chapter (empty if \
-use_transition_from_previous is false)
-- contrast_or_commonality_hint: how to use contrast and/or commonality (empty if \
-both contrast/commonality flags are false)
-
-Write core_promise, narrative_arc, reasons, transition hints, and risks in the \
-target language (native-speaker quality). Folder/chapter names stay exactly as given.
+Still include those keys in the JSON (all false / empty). Write core_promise, \
+narrative_arc, reasons, and risks in the target language (native-speaker quality). \
+Folder/chapter names stay exactly as given.
 
 Respond with JSON ONLY, no markdown code fences, no commentary, matching exactly \
 this shape:
@@ -504,6 +490,61 @@ def _inventory_asset_block(inventory_assets: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _folder_craft_flags_active(setting: FolderVoiceoverSetting) -> bool:
+    return any(
+        (
+            setting.transition_from_previous,
+            setting.transition_to_next,
+            setting.callback_to_previous,
+            setting.use_contrast_with_previous,
+            setting.use_commonality_with_previous,
+        )
+    )
+
+
+def _folder_location_craft_block(
+    *,
+    dramaturgy_entry: DramaturgyFolderEntry,
+    setting: FolderVoiceoverSetting,
+    previous_folder_name: str | None,
+    next_folder_name: str | None,
+) -> str:
+    """Übergangs-/Craft-Instruktionen — nur wenn mindestens ein Flag aktiv ist."""
+    if not _folder_craft_flags_active(setting):
+        return (
+            "- voice-over craft flags: none active for this location — write a "
+            "self-contained section without forced bridges, teasers, callbacks, "
+            "contrast, or commonality toward neighboring chapters"
+        )
+
+    lines = [
+        f"- transition goal toward the NEXT location: "
+        f"{dramaturgy_entry.transition_goal_to_next or '-'}",
+        f"- transition-from-previous hint: "
+        f"{dramaturgy_entry.transition_from_previous_hint or '-'}",
+        f"- contrast/commonality hint: "
+        f"{dramaturgy_entry.contrast_or_commonality_hint or '-'}",
+        (
+            "- use a transition from the previous location (as a segue near the START of "
+            f"this section): {setting.transition_from_previous}"
+        ),
+        (
+            f'- end this section with a brief teaser toward "{next_folder_name or "-"}", which is '
+            "the VERY NEXT section of the video (immediately after this one, not later, not "
+            "eventually — the viewer will see it right after this): "
+            f"{setting.transition_to_next}. "
+            "Use the transition goal above. Do NOT reveal details about it, but ALSO do not use "
+            "deferral language that implies it is far away or will be covered \"later\"/\"eventually\" "
+            "in the video (e.g. avoid phrasing like \"von der später noch die Rede sein wird\", "
+            '"later in this video", "eventually", "in due time") — it comes right after this section.'
+        ),
+        f"- callback to the previous location later in the text: {setting.callback_to_previous}",
+        f"- use a contrast with the previous location: {setting.use_contrast_with_previous}",
+        f"- use a commonality with the previous location: {setting.use_commonality_with_previous}",
+    ]
+    return "\n".join(lines)
+
+
 def build_folder_voiceover_prompt(
     *,
     project_brief: ProjectBrief,
@@ -524,6 +565,12 @@ def build_folder_voiceover_prompt(
     forbidden_phrases = _combined_forbidden_phrases(project_brief, style_profile, setting)
     forbidden_block = "\n".join(f"- {phrase}" for phrase in forbidden_phrases) or "(keine)"
     must_include_block = ", ".join(setting.must_include) or "(keine Angabe)"
+    craft_block = _folder_location_craft_block(
+        dramaturgy_entry=dramaturgy_entry,
+        setting=setting,
+        previous_folder_name=previous_folder_name,
+        next_folder_name=next_folder_name,
+    )
 
     return f"""You are a documentary narration writer. Write the voice-over section \
 for ONE location in a multi-location travel/nature documentary.
@@ -557,23 +604,9 @@ the stone glow from within."
 - folder_name: {dramaturgy_entry.folder_name}
 - dramaturgy_role: {dramaturgy_entry.dramaturgy_role}
 - reason for this role: {dramaturgy_entry.reason or "-"}
-- transition goal toward the NEXT location: {dramaturgy_entry.transition_goal_to_next or "-"}
-- transition-from-previous hint: {dramaturgy_entry.transition_from_previous_hint or "-"}
-- contrast/commonality hint: {dramaturgy_entry.contrast_or_commonality_hint or "-"}
 - previous location in the video: {previous_folder_name or "(none — this is the first location)"}
 - next location in the video: {next_folder_name or "(none — this is the last location)"}
-- use a transition from the previous location (as a segue near the START of \
-this section): {setting.transition_from_previous}
-- end this section with a brief teaser toward "{next_folder_name or "-"}", which is \
-the VERY NEXT section of the video (immediately after this one, not later, not \
-eventually — the viewer will see it right after this): {setting.transition_to_next}. \
-Use the transition goal above. Do NOT reveal details about it, but ALSO do not use \
-deferral language that implies it is far away or will be covered "later"/"eventually" \
-in the video (e.g. avoid phrasing like "von der später noch die Rede sein wird", \
-"later in this video", "eventually", "in due time") — it comes right after this section.
-- callback to the previous location later in the text: {setting.callback_to_previous}
-- use a contrast with the previous location: {setting.use_contrast_with_previous}
-- use a commonality with the previous location: {setting.use_commonality_with_previous}
+{craft_block}
 - factuality mode: {setting.factuality_mode} (strict_inventory_only = only claim what \
 is visible in the assets below; normal_safe_general_knowledge = safe, well-known \
 general facts allowed; atmospheric_no_hard_facts = avoid factual claims entirely, \

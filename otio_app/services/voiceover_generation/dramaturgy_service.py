@@ -61,8 +61,78 @@ __all__ = [
     "save_confirmed_dramaturgy",
     "confirm_dramaturgy_plan",
     "update_dramaturgy_order",
+    "disable_dramaturgy_craft_flags",
     "build_dramaturgy_plan",
 ]
+
+
+_CRAFT_FLAG_CLEAR_UPDATES = {
+    "use_transition_from_previous": False,
+    "use_transition_to_next": False,
+    "use_callback_to_previous": False,
+    "use_contrast_with_previous": False,
+    "use_commonality_with_previous": False,
+    "transition_goal_to_next": "",
+    "transition_from_previous_hint": "",
+    "contrast_or_commonality_hint": "",
+}
+
+
+def _plan_with_craft_flags_disabled(plan: DramaturgyPlan) -> DramaturgyPlan:
+    cleared_entries = [
+        entry.model_copy(update=dict(_CRAFT_FLAG_CLEAR_UPDATES))
+        for entry in plan.recommended_folder_order
+    ]
+    return plan.model_copy(
+        update={
+            "recommended_folder_order": cleared_entries,
+            "craft_flags_disabled": True,
+            "global_transition_strategy": "",
+        }
+    )
+
+
+def disable_dramaturgy_craft_flags(project: Project) -> DramaturgyPlan | None:
+    """Deaktiviert alle Übergang-/Craft-Kästchen im Draft (und Confirm/Settings).
+
+    Folder-Voice-over-Prompts bekommen diese Parameter danach nicht mehr
+    mitgeliefert (Flags bleiben false, Hints leer).
+    """
+    draft = load_dramaturgy_draft(project)
+    if draft is None:
+        return None
+
+    cleared_draft = save_dramaturgy_draft(project, _plan_with_craft_flags_disabled(draft))
+
+    confirmed = load_confirmed_dramaturgy(project)
+    if confirmed is not None:
+        save_confirmed_dramaturgy(project, _plan_with_craft_flags_disabled(confirmed))
+
+    from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
+        load_folder_voiceover_settings,
+        save_folder_voiceover_settings,
+    )
+
+    settings_doc = load_folder_voiceover_settings(project)
+    if settings_doc is not None:
+        cleared_settings = [
+            setting.model_copy(
+                update={
+                    "transition_from_previous": False,
+                    "transition_to_next": False,
+                    "callback_to_previous": False,
+                    "use_contrast_with_previous": False,
+                    "use_commonality_with_previous": False,
+                }
+            )
+            for setting in settings_doc.settings
+        ]
+        save_folder_voiceover_settings(
+            project,
+            settings_doc.model_copy(update={"settings": cleared_settings}),
+        )
+
+    return cleared_draft
 
 
 def load_dramaturgy_draft(project: Project) -> DramaturgyPlan | None:

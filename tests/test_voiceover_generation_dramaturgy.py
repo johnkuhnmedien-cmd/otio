@@ -20,6 +20,7 @@ from otio_app.services.plan_llm_client import PlanLlmNotConfiguredError, PlanLlm
 from otio_app.services.voiceover_generation.dramaturgy_service import (
     build_dramaturgy_plan,
     confirm_dramaturgy_plan,
+    disable_dramaturgy_craft_flags,
     load_confirmed_dramaturgy,
     load_dramaturgy_draft,
     save_dramaturgy_draft,
@@ -531,3 +532,47 @@ def test_update_dramaturgy_order_persists_craft_flags(tmp_path: Path) -> None:
     assert by_folder["Yellowstone"].use_transition_from_previous is True
     assert by_folder["Yellowstone"].use_commonality_with_previous is True
     assert by_folder["Yellowstone"].use_callback_to_previous is True
+
+
+def test_disable_dramaturgy_craft_flags_clears_all_craft_fields(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
+    draft = DramaturgyPlan(
+        project_id=project.id,
+        recommended_folder_order=[
+            DramaturgyFolderEntry(
+                folder_name="Grand Canyon",
+                order_index=1,
+                use_transition_to_next=True,
+                use_contrast_with_previous=True,
+                transition_goal_to_next="Tease Yellowstone",
+                contrast_or_commonality_hint="rock vs steam",
+            ),
+            DramaturgyFolderEntry(
+                folder_name="Yellowstone",
+                order_index=2,
+                use_transition_from_previous=True,
+                use_callback_to_previous=True,
+                transition_from_previous_hint="from the canyon",
+            ),
+        ],
+    )
+    save_dramaturgy_draft(project, draft)
+    confirm_dramaturgy_plan(project, draft)
+
+    cleared = disable_dramaturgy_craft_flags(project)
+    assert cleared is not None
+    assert cleared.craft_flags_disabled is True
+    for entry in cleared.recommended_folder_order:
+        assert entry.use_transition_from_previous is False
+        assert entry.use_transition_to_next is False
+        assert entry.use_callback_to_previous is False
+        assert entry.use_contrast_with_previous is False
+        assert entry.use_commonality_with_previous is False
+        assert entry.transition_goal_to_next == ""
+        assert entry.transition_from_previous_hint == ""
+        assert entry.contrast_or_commonality_hint == ""
+
+    confirmed = load_confirmed_dramaturgy(project)
+    assert confirmed is not None
+    assert confirmed.craft_flags_disabled is True
+    assert all(not entry.use_transition_to_next for entry in confirmed.recommended_folder_order)

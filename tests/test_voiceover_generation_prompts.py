@@ -1246,21 +1246,18 @@ def test_intro_and_review_prompts_include_native_speaker_rule() -> None:
     assert "native-speaker rule (MANDATORY)" in review
 
 
-def test_dramaturgy_prompt_requires_craft_flag_booleans() -> None:
+def test_dramaturgy_prompt_defaults_craft_flags_to_false() -> None:
     prompt = build_dramaturgy_prompt(
         project_brief=_sample_brief(),
         style_profile=_sample_style_profile(),
         folder_summaries=_sample_folder_summaries(),
     )
     assert "use_transition_from_previous" in prompt
-    assert "use_transition_to_next" in prompt
-    assert "use_callback_to_previous" in prompt
-    assert "use_contrast_with_previous" in prompt
-    assert "use_commonality_with_previous" in prompt
-    assert "Voice-over craft flags" in prompt
+    assert "leave ALL false by default" in prompt
+    assert "Do NOT invent transition/callback/contrast craft requirements" in prompt
 
 
-def test_folder_voiceover_prompt_includes_dramaturgy_hint_texts() -> None:
+def test_folder_voiceover_prompt_omits_craft_params_when_flags_inactive() -> None:
     entry = _sample_dramaturgy_entry().model_copy(
         update={
             "transition_from_previous_hint": "Leave the canyon silence behind.",
@@ -1272,9 +1269,38 @@ def test_folder_voiceover_prompt_includes_dramaturgy_hint_texts() -> None:
         style_profile=None,
         dramaturgy_entry=entry,
         setting=_sample_setting(),
-        previous_folder_name="Grand Canyon",
+        previous_folder_name="Antelope Canyon",
+        next_folder_name="Yellowstone",
+        inventory_assets=_sample_inventory_assets(),
+    )
+    assert "none active for this location" in prompt
+    assert "Leave the canyon silence behind." not in prompt
+    assert "Contrast stone vs steam." not in prompt
+    assert "brief teaser toward" not in prompt
+
+
+def test_folder_voiceover_prompt_includes_craft_params_when_flag_active() -> None:
+    entry = _sample_dramaturgy_entry().model_copy(
+        update={
+            "transition_from_previous_hint": "Leave the canyon silence behind.",
+            "contrast_or_commonality_hint": "Contrast stone vs steam.",
+        }
+    )
+    setting = _sample_setting().model_copy(
+        update={
+            "transition_from_previous": True,
+            "use_contrast_with_previous": True,
+        }
+    )
+    prompt = build_folder_voiceover_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_entry=entry,
+        setting=setting,
+        previous_folder_name="Antelope Canyon",
         next_folder_name="Yellowstone",
         inventory_assets=_sample_inventory_assets(),
     )
     assert "Leave the canyon silence behind." in prompt
     assert "Contrast stone vs steam." in prompt
+    assert "transition from the previous location" in prompt

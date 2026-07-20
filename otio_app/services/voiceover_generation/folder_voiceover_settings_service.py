@@ -76,32 +76,39 @@ def build_default_folder_voiceover_settings(project: Project) -> FolderVoiceover
             is_first_enabled = entry.folder_name == first_enabled_folder_name
             is_last_enabled = entry.folder_name == last_enabled_folder_name
 
-            transition_from_previous = bool(entry.use_transition_from_previous)
-            transition_to_next = bool(entry.use_transition_to_next)
-            callback_to_previous = bool(entry.use_callback_to_previous)
-            use_contrast = bool(entry.use_contrast_with_previous)
-            use_commonality = bool(entry.use_commonality_with_previous)
+            if plan.craft_flags_disabled:
+                transition_from_previous = False
+                transition_to_next = False
+                callback_to_previous = False
+                use_contrast = False
+                use_commonality = False
+            else:
+                transition_from_previous = bool(entry.use_transition_from_previous)
+                transition_to_next = bool(entry.use_transition_to_next)
+                callback_to_previous = bool(entry.use_callback_to_previous)
+                use_contrast = bool(entry.use_contrast_with_previous)
+                use_commonality = bool(entry.use_commonality_with_previous)
 
-            # Legacy-Fallback: ältere confirmed-Pläne ohne explizite Flags
-            # (alle False + Hints gesetzt) → bisherige Hint-Heuristik.
-            if not any(
-                (
-                    transition_from_previous,
-                    transition_to_next,
-                    callback_to_previous,
-                    use_contrast,
-                    use_commonality,
-                )
-            ) and any(
-                (
-                    entry.transition_from_previous_hint.strip(),
-                    entry.transition_goal_to_next.strip(),
-                    entry.contrast_or_commonality_hint.strip(),
-                )
-            ):
-                transition_from_previous = bool(entry.transition_from_previous_hint.strip())
-                transition_to_next = bool(entry.transition_goal_to_next.strip())
-                use_contrast = bool(entry.contrast_or_commonality_hint.strip())
+                # Legacy-Fallback: ältere confirmed-Pläne ohne explizite Flags
+                # (alle False + Hints gesetzt) → bisherige Hint-Heuristik.
+                if not any(
+                    (
+                        transition_from_previous,
+                        transition_to_next,
+                        callback_to_previous,
+                        use_contrast,
+                        use_commonality,
+                    )
+                ) and any(
+                    (
+                        entry.transition_from_previous_hint.strip(),
+                        entry.transition_goal_to_next.strip(),
+                        entry.contrast_or_commonality_hint.strip(),
+                    )
+                ):
+                    transition_from_previous = bool(entry.transition_from_previous_hint.strip())
+                    transition_to_next = bool(entry.transition_goal_to_next.strip())
+                    use_contrast = bool(entry.contrast_or_commonality_hint.strip())
 
             if is_first_enabled:
                 transition_from_previous = False

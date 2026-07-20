@@ -338,6 +338,9 @@ class DramaturgyPlan(BaseModel):
     llm_run_id: str = ""
     status: str = DRAMATURGY_STATUS_DRAFT
     risks: list[str] = Field(default_factory=list)
+    # Wenn True: Craft-Flags (Übergang/Rückbezug/Kontrast/…) bleiben aus —
+    # kein Legacy-Hint-Fallback in Folder-Voice-over-Settings.
+    craft_flags_disabled: bool = False
 
 
 # --- Phase 4: Folder Voice-overs ---
