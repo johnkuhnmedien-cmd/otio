@@ -1177,7 +1177,7 @@ def test_intro_hook_prompt_forbids_inventing_asset_ids() -> None:
         settings=_sample_intro_settings(),
     )
     assert "Do not invent asset IDs" in prompt
-    assert "No sentence_items or inventory are provided" in prompt
+    assert "No scripts, sentence_items, or inventory are provided" in prompt
 
 
 def test_intro_hook_prompt_contains_active_negative_rule_instructions() -> None:
