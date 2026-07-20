@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import mimetypes
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Sequence
 
 from otio_app.config import get_gemini_model_from_env
 from otio_app.defaults import EDIT_PLAN_MODEL_CHOICES, EDIT_PLAN_MODEL_LABELS, GEMINI_MODEL_CHOICES
@@ -57,6 +60,21 @@ _ANTHROPIC_NONSTREAMING_MAX_TOKENS = 20_000
 # die Antwortqualität zu ändern (Timeout betrifft nur die HTTP-Schicht).
 _LLM_REQUEST_TIMEOUT_SEC = 600.0
 _GEMINI_HTTP_TIMEOUT_MS = 600_000
+
+
+@dataclass(frozen=True)
+class PlanImageAttachment:
+    """Lokales Bild für multimodale Plan-Calls (z. B. Mittel-Frame pro Asset)."""
+
+    path: Path
+    label: str = ""
+    mime_type: str = "image/jpeg"
+
+    def resolve_mime(self) -> str:
+        if self.mime_type:
+            return self.mime_type
+        guessed, _ = mimetypes.guess_type(str(self.path))
+        return guessed or "image/jpeg"
 
 
 @dataclass
@@ -131,6 +149,7 @@ def generate_plan_text(
     model: Optional[str] = None,
     max_output_tokens: int | None = None,
     disable_thinking: bool = False,
+    images: Sequence[PlanImageAttachment] | None = None,
 ) -> str:
     """Sendet den Schnittplan-Prompt an das gewählte Text-LLM."""
     return generate_plan_text_with_metadata(
@@ -138,6 +157,7 @@ def generate_plan_text(
         model=model,
         max_output_tokens=max_output_tokens,
         disable_thinking=disable_thinking,
+        images=images,
     ).raw_text
 
 
@@ -147,6 +167,7 @@ def generate_plan_text_with_metadata(
     model: Optional[str] = None,
     max_output_tokens: int | None = None,
     disable_thinking: bool = False,
+    images: Sequence[PlanImageAttachment] | None = None,
 ) -> PlanLlmResponse:
     """Wie generate_plan_text, inkl. Latenz und Token-Nutzung für Diagnose-Runs.
 
@@ -157,11 +178,16 @@ def generate_plan_text_with_metadata(
     aus — damit steht das gesamte max_output_tokens-Budget der sichtbaren
     Antwort zur Verfügung, statt (teilweise) für internes Reasoning verbraucht
     zu werden. Für OpenAI-Modelle über die Chat-Completions-API hat
-    disable_thinking aktuell keine Wirkung (kein äquivalenter Parameter)."""
+    disable_thinking aktuell keine Wirkung (kein äquivalenter Parameter).
+
+    images: optionale lokale Mittel-Frames (Gemini + OpenAI). Andere Provider
+    lehnen Bilder mit PlanLlmNotConfiguredError ab.
+    """
     resolved = resolve_plan_model(model)
     provider = plan_model_provider(resolved)
     api_model = _provider_api_model(resolved)
     started = time.perf_counter()
+    image_list = list(images or [])
 
     if provider == PROVIDER_GEMINI:
         raw_text, token_usage = _generate_gemini_text_with_usage(
@@ -169,6 +195,7 @@ def generate_plan_text_with_metadata(
             model=api_model,
             max_output_tokens=max_output_tokens,
             disable_thinking=disable_thinking,
+            images=image_list,
         )
     elif provider == PROVIDER_OPENAI:
         raw_text, token_usage = _generate_openai_text_with_usage(
@@ -176,8 +203,15 @@ def generate_plan_text_with_metadata(
             model=api_model,
             max_output_tokens=max_output_tokens,
             disable_thinking=disable_thinking,
+            images=image_list,
         )
     elif provider == PROVIDER_ANTHROPIC:
+        if image_list:
+            raise PlanLlmNotConfiguredError(
+                "Mittel-Frames für LLM-Lauf 2 sind mit Anthropic hier noch "
+                "nicht verdrahtet. Bitte Gemini oder OpenAI (Terra/Sol) wählen "
+                "oder die Option deaktivieren."
+            )
         raw_text, token_usage = _generate_anthropic_text_with_usage(
             prompt=prompt,
             model=api_model,
@@ -185,6 +219,12 @@ def generate_plan_text_with_metadata(
             disable_thinking=disable_thinking,
         )
     elif provider == PROVIDER_XAI:
+        if image_list:
+            raise PlanLlmNotConfiguredError(
+                "Mittel-Frames für LLM-Lauf 2 sind mit xAI hier noch nicht "
+                "verdrahtet. Bitte Gemini oder OpenAI wählen oder die Option "
+                "deaktivieren."
+            )
         raw_text, token_usage = _generate_xai_text_with_usage(
             prompt=prompt,
             model=api_model,
@@ -192,6 +232,12 @@ def generate_plan_text_with_metadata(
             disable_thinking=disable_thinking,
         )
     elif provider == PROVIDER_OPENROUTER:
+        if image_list:
+            raise PlanLlmNotConfiguredError(
+                "Mittel-Frames für LLM-Lauf 2 sind mit OpenRouter hier noch "
+                "nicht verdrahtet. Bitte Gemini oder OpenAI wählen oder die "
+                "Option deaktivieren."
+            )
         raw_text, token_usage = _generate_openrouter_text_with_usage(
             prompt=prompt,
             model=api_model,
@@ -259,12 +305,69 @@ def _is_temperature_rejected_error(exc: Exception) -> bool:
     return "temperature" in message
 
 
+def _gemini_user_parts(
+    prompt: str,
+    images: Sequence[PlanImageAttachment],
+    types_module,
+) -> list:
+    parts = [types_module.Part.from_text(text=prompt)]
+    for image in images:
+        path = Path(image.path)
+        if not path.is_file():
+            continue
+        label = (image.label or path.name).strip()
+        if label:
+            parts.append(
+                types_module.Part.from_text(
+                    text=f"IMAGE for local_asset_id={label}"
+                )
+            )
+        parts.append(
+            types_module.Part.from_bytes(
+                data=path.read_bytes(),
+                mime_type=image.resolve_mime(),
+            )
+        )
+    return parts
+
+
+def _openai_user_content(
+    prompt: str,
+    images: Sequence[PlanImageAttachment],
+) -> str | list[dict]:
+    if not images:
+        return prompt
+    content: list[dict] = [{"type": "text", "text": prompt}]
+    for image in images:
+        path = Path(image.path)
+        if not path.is_file():
+            continue
+        label = (image.label or path.name).strip()
+        if label:
+            content.append(
+                {
+                    "type": "text",
+                    "text": f"IMAGE for local_asset_id={label}",
+                }
+            )
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        mime = image.resolve_mime()
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{encoded}"},
+            }
+        )
+    return content
+
+
 def _generate_gemini_text_with_usage(
     *,
     prompt: str,
     model: str,
     max_output_tokens: int | None = None,
     disable_thinking: bool = False,
+    images: Sequence[PlanImageAttachment] | None = None,
 ) -> tuple[str, dict[str, int]]:
     api_key = get_api_key("GEMINI_API_KEY")
     if not api_key:
@@ -291,11 +394,12 @@ def _generate_gemini_text_with_usage(
         api_key=api_key,
         http_options=types.HttpOptions(timeout=_GEMINI_HTTP_TIMEOUT_MS),
     )
+    user_parts = _gemini_user_parts(prompt, list(images or []), types)
     # Streaming hält die Verbindung bei langen Antworten offen; am Ende
     # aggregieren wir denselben Text wie bei einem Non-Stream-Call.
     stream = client.models.generate_content_stream(
         model=model,
-        contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
+        contents=[types.Content(role="user", parts=user_parts)],
         config=types.GenerateContentConfig(**config_kwargs),
     )
     text_parts: list[str] = []
@@ -345,6 +449,7 @@ def _generate_openai_text_with_usage(
     model: str,
     max_output_tokens: int | None = None,
     disable_thinking: bool = False,
+    images: Sequence[PlanImageAttachment] | None = None,
 ) -> tuple[str, dict[str, int]]:
     # disable_thinking hat für Standard-Chat-Completions-Modelle (GPT-5.x über
     # diese API) aktuell keine Wirkung — es gibt hier keinen äquivalenten
@@ -361,7 +466,12 @@ def _generate_openai_text_with_usage(
 
     effective_max_tokens = max_output_tokens or DEFAULT_MAX_OUTPUT_TOKENS
     client = OpenAI(api_key=api_key, timeout=_LLM_REQUEST_TIMEOUT_SEC)
-    messages = [{"role": "user", "content": prompt}]
+    messages = [
+        {
+            "role": "user",
+            "content": _openai_user_content(prompt, list(images or [])),
+        }
+    ]
 
     def _stream(*, use_temperature: bool, use_max_completion_tokens: bool) -> tuple[str, str | None, dict[str, int]]:
         kwargs: dict = {

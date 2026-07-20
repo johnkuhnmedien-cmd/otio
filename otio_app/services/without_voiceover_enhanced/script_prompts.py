@@ -270,6 +270,7 @@ def build_rough_cut_prompt(
     folder_slug: str = "",
     previous_folder_name: str | None = None,
     next_folder_name: str | None = None,
+    include_middle_frames: bool = False,
 ) -> str:
     chapter_scope = ""
     if folder_name:
@@ -289,6 +290,27 @@ CHAPTER SCOPE (CRITICAL):
 - If a next chapter exists, prefer pause_function "chapter_transition" after this chapter's last segment when editorially justified.
 """
 
+    vision_rules = ""
+    if include_middle_frames:
+        vision_rules = """
+MIDDLE-FRAME VISION (OPTIONAL INPUT):
+
+- After the text prompt you may receive JPEG stills labeled
+  "IMAGE for local_asset_id=<id>".
+- Each image is the middle analysis frame of that local asset (or the only
+  frame for still photos).
+- Use these images together with LOCAL ASSETS metadata/descriptions to choose
+  the most suitable local_asset_id for each shot.
+- Prefer assets whose visible content matches the shot's visual_intent.
+- VISUAL DIVERSITY: consecutive shots should not look nearly identical.
+  Avoid back-to-back picks that share the same framing, subject distance,
+  color palette and composition unless a deliberate hold/match-cut is justified
+  in continuity_notes / asset_fit_reason.
+- Do not invent visual details that are not supported by the image or description.
+- If no attached image exists for an asset, fall back to its text description.
+- Never invent an asset ID that is not listed in LOCAL ASSETS.
+"""
+
     return f"""\
 You are LLM 2, the editorial rough-cut planner for a documentary pipeline.
 
@@ -300,8 +322,7 @@ Your task is to create:
 
 The locked narration provides a continuous time carpet.
 The visual edit plan cuts freely across that time carpet.
-{chapter_scope}
-
+{chapter_scope}{vision_rules}
 NON-NEGOTIABLE EDITORIAL RULES:
 
 - A sentence is not a shot.
@@ -357,12 +378,14 @@ ASSET RULES:
 - Use only local_asset_id values that exist in LOCAL ASSETS.
 - Never invent an asset ID, file path, URL, provider result or media description.
 - Do not infer visual content from a filename or file extension alone.
-- Judge an asset only from the metadata and analysis supplied in LOCAL ASSETS.
+- Judge an asset from the metadata/analysis in LOCAL ASSETS
+  (and from attached middle-frame images when provided).
 - Existing local assets are visual resources, not the narrative boundary.
 - Do not force an unsuitable local asset into a shot.
 - If no suitable local asset exists, set local_asset_id to null.
 - Every shot with local_asset_id null must reference exactly one coverage_gap_id.
 - A shot with a suitable local asset must have coverage_gap_id null.
+- Prefer varied local assets across neighboring shots when equally suitable.
 
 PAUSE RULES:
 

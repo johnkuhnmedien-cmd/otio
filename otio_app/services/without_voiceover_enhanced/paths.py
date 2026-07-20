@@ -15,6 +15,7 @@ STOCK_SUBDIR = "stock"
 CONFIG_SUBDIR = "config"
 EXPORTS_SUBDIR = "exports"
 STOCK_PROVIDERS_CONFIG_FILENAME = "stock_providers.json"
+CUT_PLAN_OPTIONS_FILENAME = "cut_plan_options.json"
 
 SCRIPT_LOCKED_FILENAME = "script_locked.json"
 SCRIPT_DRAFT_FILENAME = "script_draft.json"
@@ -83,6 +84,10 @@ def config_dir(project: Project) -> Path:
 
 def stock_providers_config_path(project: Project) -> Path:
     return config_dir(project) / STOCK_PROVIDERS_CONFIG_FILENAME
+
+
+def cut_plan_options_path(project: Project) -> Path:
+    return config_dir(project) / CUT_PLAN_OPTIONS_FILENAME
 
 
 def exports_dir(project: Project) -> Path:

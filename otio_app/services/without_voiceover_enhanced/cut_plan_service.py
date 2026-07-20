@@ -6,13 +6,21 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from pathlib import Path
+
 from otio_app.models import Project
 from otio_app.project_layout import safe_folder_slug
 from otio_app.services.gemini_client import _extract_json
 from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.media_utils import probe_duration_seconds
-from otio_app.services.plan_llm_client import generate_plan_text_with_metadata
+from otio_app.services.plan_llm_client import (
+    PlanImageAttachment,
+    generate_plan_text_with_metadata,
+)
+from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    load_cut_plan_options,
+)
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.style_reference_service import (
     style_context_text_for_prompts,
@@ -75,10 +83,46 @@ class CutPlanError(RuntimeError):
     pass
 
 
+def select_middle_frame_path(frames_used: list[str] | None) -> Path | None:
+    """Wählt das mittlere Analyse-Frame (bei 3 Frames: frame_002 / duration/2)."""
+    existing = [Path(p) for p in (frames_used or []) if p and Path(p).is_file()]
+    if not existing:
+        return None
+    return existing[len(existing) // 2]
+
+
+def middle_frame_attachments_from_payload(
+    assets: list[dict[str, Any]],
+    *,
+    max_images: int,
+) -> list[PlanImageAttachment]:
+    """Baut multimodale Attachments aus Payload-Einträgen mit middle_frame_path."""
+    images: list[PlanImageAttachment] = []
+    for item in assets:
+        if len(images) >= max_images:
+            break
+        frame = str(item.get("middle_frame_path") or "").strip()
+        if not frame:
+            continue
+        path = Path(frame)
+        if not path.is_file():
+            continue
+        asset_id = str(item.get("local_asset_id") or item.get("asset_id") or path.stem)
+        images.append(
+            PlanImageAttachment(
+                path=path,
+                label=asset_id,
+                mime_type="image/jpeg",
+            )
+        )
+    return images
+
+
 def _local_assets_payload(
     project: Project,
     *,
     folder_name: str | None = None,
+    include_middle_frames: bool = False,
 ) -> list[dict[str, Any]]:
     assets: list[dict[str, Any]] = []
     folders = (
@@ -105,16 +149,22 @@ def _local_assets_payload(
                     duration = probe_duration_seconds(path)
                 except Exception:  # noqa: BLE001
                     duration = None
-            assets.append(
-                {
-                    "local_asset_id": asset_id,
-                    "asset_id": asset_id,
-                    "folder": folder,
-                    "path": str(path),
-                    "duration_seconds": duration,
-                    "media_type": getattr(asset, "media_type", None),
-                }
-            )
+            entry: dict[str, Any] = {
+                "local_asset_id": asset_id,
+                "asset_id": asset_id,
+                "folder": folder,
+                "path": str(path),
+                "duration_seconds": duration,
+                "media_type": getattr(asset, "media_type", None),
+            }
+            if include_middle_frames:
+                description = str(getattr(asset, "description", "") or "").strip()
+                frames_used = list(getattr(asset, "frames_used", None) or [])
+                middle = select_middle_frame_path(frames_used)
+                entry["description"] = description
+                entry["middle_frame_path"] = str(middle) if middle is not None else None
+                entry["has_middle_frame"] = middle is not None
+            assets.append(entry)
     return assets
 
 
@@ -758,15 +808,27 @@ def generate_rough_cut_for_folder(
                 f"Kapitel „{display_name}“: keine Segment-Timings."
             )
 
+        options = load_cut_plan_options(project)
+        include_frames = bool(options.include_middle_frames)
         assets_folder = folder_name or None
         # Wenn der Kapitel-Ordner nicht in selected_asset_subdirs liegt,
         # trotzdem Assets dieses Namens versuchen; sonst alle (Legacy).
         if assets_folder and assets_folder not in project.selected_asset_subdirs:
-            local_assets = _local_assets_payload(project, folder_name=assets_folder)
+            local_assets = _local_assets_payload(
+                project,
+                folder_name=assets_folder,
+                include_middle_frames=include_frames,
+            )
             if not local_assets:
-                local_assets = _local_assets_payload(project)
+                local_assets = _local_assets_payload(
+                    project, include_middle_frames=include_frames
+                )
         else:
-            local_assets = _local_assets_payload(project, folder_name=assets_folder)
+            local_assets = _local_assets_payload(
+                project,
+                folder_name=assets_folder,
+                include_middle_frames=include_frames,
+            )
 
         dramaturgy_text = (
             _chapter_dramaturgy_text_for_folder(project, folder_name)
@@ -785,16 +847,31 @@ def generate_rough_cut_for_folder(
             folder_slug=context.folder_slug,
             previous_folder_name=context.previous_folder_name,
             next_folder_name=context.next_folder_name,
+            include_middle_frames=include_frames,
+        )
+        images = (
+            middle_frame_attachments_from_payload(
+                local_assets,
+                max_images=int(options.max_middle_frames_per_chapter),
+            )
+            if include_frames
+            else []
         )
         model_id = resolve_llm_model_id(provider, model)
         if llm_callable is not None:
-            raw = llm_callable(prompt=prompt, model=model_id)
+            try:
+                raw = llm_callable(prompt=prompt, model=model_id, images=images)
+            except TypeError:
+                # Ältere Test-Doubles ohne images-Parameter.
+                raw = llm_callable(prompt=prompt, model=model_id)
             raw_text = (
                 raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
             )
         else:
             raw_text = generate_plan_text_with_metadata(
-                prompt=prompt, model=model_id
+                prompt=prompt,
+                model=model_id,
+                images=images or None,
             ).raw_text
         rough, coverage = parse_rough_cut_response(raw_text, locked.script_version)
         _validate_rough_chapter_scope(rough, context.segment_ids, folder_name)

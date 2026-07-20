@@ -121,7 +121,8 @@ LLM_INPUT_INFO = {
         "Pro Kapitel (sequenziell): Kapitel-Skript · Kapitel-Timings · "
         "Ordner-Assets · Style · Kapitel-Dramaturgie → Pausen + grober Cut "
         "mit Editorial-Ankern (keine Sekunden) + Coverage Gaps. "
-        "Ein LLM-Call pro Dramaturgie-Kapitel."
+        "Ein LLM-Call pro Dramaturgie-Kapitel. "
+        "Optional: Mittel-Frames (Vision) zur Asset-Auswahl."
     ),
     "enhanced_final_cut": (
         "Pro Kapitel (sequenziell): Kapitel-Skript · Timeline-Slice · "

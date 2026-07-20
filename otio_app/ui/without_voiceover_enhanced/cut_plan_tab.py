@@ -19,6 +19,11 @@ from otio_app.services.voiceover_generation.model_settings_service import (
     save_model_settings,
 )
 from otio_app.services.voiceover_generation.models import LlmRoleSettings
+from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    CutPlanOptions,
+    load_cut_plan_options,
+    save_cut_plan_options,
+)
 from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     CutPlanError,
     accept_supplement_candidates,
@@ -239,6 +244,35 @@ def render_enhanced_cut_plan_page() -> None:
         f"Lauf 2 läuft sequenziell: **ein LLM-Call pro Kapitel** "
         f"({rough_chapters} Kapitel)."
     )
+    cut_options = load_cut_plan_options(project)
+    frame_key = f"enh_rough_middle_frames_{project.id}"
+    if frame_key not in st.session_state:
+        st.session_state[frame_key] = cut_options.include_middle_frames
+    include_middle_frames = st.checkbox(
+        "Mittel-Frames der Asset-Analyse mitsenden (Vision)",
+        key=frame_key,
+        help=(
+            "Optional: pro lokalem Asset das mittlere Analyse-Frame "
+            "(bei 3 Frames: Mitte) an LLM-Lauf 2 senden. "
+            "Hilft bei der Asset-Auswahl und visueller Abwechslung. "
+            "Standard aus = bisheriger Text-Modus. "
+            "Unterstützt Gemini und OpenAI (Terra/Sol)."
+        ),
+    )
+    if include_middle_frames != cut_options.include_middle_frames:
+        save_cut_plan_options(
+            project,
+            CutPlanOptions(
+                include_middle_frames=include_middle_frames,
+                max_middle_frames_per_chapter=cut_options.max_middle_frames_per_chapter,
+            ),
+        )
+    if include_middle_frames:
+        st.caption(
+            "Vision aktiv: Beschreibungen + Mittel-Frames gehen in den Prompt "
+            f"(max. {cut_options.max_middle_frames_per_chapter} Bilder/Kapitel). "
+            "Mehr Tokens/Kosten als Text-only."
+        )
     if st.button("LLM-Lauf 2 starten", type="primary", key="enh_rough_cut"):
         try:
             progress = st.empty()
