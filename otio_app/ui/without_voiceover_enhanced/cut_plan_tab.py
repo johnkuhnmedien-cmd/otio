@@ -125,11 +125,9 @@ def render_enhanced_cut_plan_page() -> None:
             )
     if st.button("Anbieterauswahl speichern", key="enh_save_providers"):
         saved = save_stock_providers_config(project, enabled_draft)
-        # Keep widget state aligned with what we just persisted.
-        for name in SUPPORTED_STOCK_PROVIDERS:
-            st.session_state[f"enh_provider_{project.id}_{name}"] = saved.providers[
-                name
-            ].enabled
+        # Do not write checkbox keys here — Streamlit forbids mutating a
+        # widget's session_state after the widget was instantiated. The
+        # checkboxes already hold the saved values; persist + rerun is enough.
         st.success(
             "Anbieterauswahl gespeichert: "
             + ", ".join(
