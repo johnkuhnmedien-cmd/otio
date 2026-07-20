@@ -117,4 +117,3 @@ def render_enhanced_audio_page() -> None:
             st.error(err)
     elif timings is not None:
         st.success("Segment-Timings gültig und zur Skriptversion passend.")
-)
