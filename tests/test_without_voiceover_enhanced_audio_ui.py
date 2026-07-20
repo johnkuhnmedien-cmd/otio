@@ -138,3 +138,129 @@ def test_page_renders_when_voice_id_configured(
 
     render_enhanced_audio_page()
     assert voice_id_is_set(project)
+
+
+def test_tts_progress_callback_reports_chapters_sequentially(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services.voiceover_generation.dramaturgy_service import (
+        save_confirmed_dramaturgy,
+    )
+    from otio_app.services.voiceover_generation.elevenlabs_client import (
+        ElevenLabsTtsResult,
+    )
+    from otio_app.services.voiceover_generation.models import (
+        DramaturgyFolderEntry,
+        DramaturgyPlan,
+    )
+    from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
+        synthesize_locked_script_audio,
+    )
+    from otio_app.services.without_voiceover_enhanced.models import (
+        EnhancedScriptDocument,
+        ScriptSegment,
+        VisualIntent,
+    )
+    from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+        lock_script,
+        save_script_draft,
+    )
+
+    root = tmp_path / "USA2"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    for name in ("Antelope Canyon", "Grand Canyon"):
+        (root / name).mkdir()
+    project = Project(
+        id="enh-audio-progress",
+        name="Enhanced Audio Progress",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="en",
+        asset_subdir_names=["Antelope Canyon", "Grand Canyon"],
+        selected_asset_subdirs=["Antelope Canyon", "Grand Canyon"],
+    )
+    save_confirmed_dramaturgy(
+        project,
+        DramaturgyPlan(
+            project_id=project.id,
+            recommended_folder_order=[
+                DramaturgyFolderEntry(
+                    folder_name="Antelope Canyon", order_index=1, enabled=True
+                ),
+                DramaturgyFolderEntry(
+                    folder_name="Grand Canyon", order_index=2, enabled=True
+                ),
+            ],
+        ),
+    )
+    save_script_draft(
+        project,
+        EnhancedScriptDocument(
+            narration_full="One. Two.",
+            segments=[
+                ScriptSegment(
+                    segment_id="Antelope_Canyon_segment_001",
+                    text="One.",
+                    sequence_index=1,
+                    folder_name="Antelope Canyon",
+                    folder_order_index=1,
+                ),
+                ScriptSegment(
+                    segment_id="Grand_Canyon_segment_001",
+                    text="Two.",
+                    sequence_index=2,
+                    folder_name="Grand Canyon",
+                    folder_order_index=2,
+                ),
+            ],
+            visual_intents=[
+                VisualIntent(intent_id="intent_001", description="canyon")
+            ],
+        ),
+    )
+    lock_script(project)
+    save_elevenlabs_settings(
+        project, ElevenLabsSettings(project_id=project.id, voice_id="voice-abc")
+    )
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "sk_test")
+
+    def _fake_tts(text: str, settings):  # noqa: ANN001
+        return ElevenLabsTtsResult(
+            audio_bytes=b"FAKE",
+            alignment={},
+            normalized_alignment={},
+            response_metadata={"status_code": 200},
+        )
+
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.audio_timing_service."
+        "synthesize_speech_with_timestamps",
+        _fake_tts,
+    )
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.audio_timing_service."
+        "measure_audio_duration_seconds",
+        lambda path: 1.25,
+    )
+
+    events: list[tuple[str, int, int, int, int]] = []
+
+    def _progress(
+        folder_name: str,
+        chapter_index: int,
+        chapter_total: int,
+        segment_index: int,
+        segment_total: int,
+    ) -> None:
+        events.append(
+            (folder_name, chapter_index, chapter_total, segment_index, segment_total)
+        )
+
+    doc = synthesize_locked_script_audio(project, progress_callback=_progress)
+    assert len(doc.segments) == 2
+    assert events == [
+        ("Antelope Canyon", 1, 2, 1, 1),
+        ("Grand Canyon", 2, 2, 1, 1),
+    ]

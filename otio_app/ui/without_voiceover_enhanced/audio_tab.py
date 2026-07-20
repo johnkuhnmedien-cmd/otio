@@ -28,11 +28,25 @@ from otio_app.ui.voiceover_generation.elevenlabs_settings_ui import (
 from otio_app.ui.without_voiceover_enhanced._shared import get_enhanced_project
 
 
+def _format_tts_progress(
+    folder_name: str,
+    chapter_index: int,
+    chapter_total: int,
+    segment_index: int,
+    segment_total: int,
+) -> str:
+    label = folder_name or "(ohne Kapitel)"
+    message = f"Kapitel {chapter_index}/{chapter_total}: „{label}“"
+    if segment_total > 1:
+        message += f" · Segment {segment_index}/{segment_total}"
+    return f"{message} → ElevenLabs…"
+
+
 def render_enhanced_audio_page() -> None:
     st.header("⑥ Audio / ElevenLabs (Enhanced)")
     st.caption(
-        "Nur gesperrte Skripte. Vertonung **pro Dramaturgie-Kapitel** "
-        "(wie klassische Folder-VOs) — intern eine Audiodatei pro Segment, "
+        "Nur gesperrte Skripte. Vertonung **pro Dramaturgie-Kapitel sequenziell** "
+        "(wie die Skripterzeugung) — jedes Segment ein eigener ElevenLabs-Call, "
         "gruppiert nach Kapitel."
     )
     project = get_enhanced_project()
@@ -72,17 +86,45 @@ def render_enhanced_audio_page() -> None:
     }
 
     if st.button(
-        "Alle Kapitel vertonen",
+        "Alle Kapitel sequenziell vertonen",
         type="primary",
         key="enh_audio_all",
         disabled=not can_tts,
     ):
+        progress = st.empty()
+
+        def _progress(
+            folder_name: str,
+            chapter_index: int,
+            chapter_total: int,
+            segment_index: int,
+            segment_total: int,
+        ) -> None:
+            progress.info(
+                _format_tts_progress(
+                    folder_name,
+                    chapter_index,
+                    chapter_total,
+                    segment_index,
+                    segment_total,
+                )
+            )
+
         try:
-            with st.spinner("ElevenLabs — alle Kapitel…"):
-                timings = synthesize_locked_script_audio(project)
-            st.success(f"{len(timings.segments)} Segmente vertont.")
+            with st.spinner(
+                "Alle Kapitel werden nacheinander an ElevenLabs gesendet…"
+            ):
+                timings = synthesize_locked_script_audio(
+                    project,
+                    progress_callback=_progress,
+                )
+            progress.empty()
+            st.success(
+                f"{len(timings.segments)} Segmente in {len(groups)} Kapitel(n) vertont."
+            )
             st.rerun()
         except (AudioTimingError, ScriptLockError) as exc:
+            progress.empty()
             st.error(str(exc))
 
     st.subheader("Kapitel")
@@ -111,12 +153,41 @@ def render_enhanced_audio_page() -> None:
                     key=f"enh_audio_folder_{project.id}_{folder_name}",
                     disabled=not can_tts,
                 ):
+                    progress = st.empty()
+
+                    def _folder_progress(
+                        name: str,
+                        chapter_index: int,
+                        chapter_total: int,
+                        segment_index: int,
+                        segment_total: int,
+                        *,
+                        _folder: str = folder_name,
+                    ) -> None:
+                        progress.info(
+                            _format_tts_progress(
+                                _folder or name,
+                                chapter_index,
+                                chapter_total,
+                                segment_index,
+                                segment_total,
+                            )
+                        )
+
                     try:
-                        with st.spinner(f"ElevenLabs — „{folder_name}“…"):
-                            synthesize_folder_script_audio(project, folder_name)
+                        with st.spinner(
+                            f"Kapitel „{folder_name}“ wird an ElevenLabs gesendet…"
+                        ):
+                            synthesize_folder_script_audio(
+                                project,
+                                folder_name,
+                                progress_callback=_folder_progress,
+                            )
+                        progress.empty()
                         st.success(f"„{folder_name}“ vertont.")
                         st.rerun()
                     except (AudioTimingError, ScriptLockError) as exc:
+                        progress.empty()
                         st.error(str(exc))
             for seg in segments:
                 item = timing_by_id.get(seg.segment_id)

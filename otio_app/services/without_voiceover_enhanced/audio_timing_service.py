@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from otio_app.models import Project
@@ -24,10 +25,17 @@ from otio_app.services.without_voiceover_enhanced.paths import (
     audio_dir,
     segment_timings_path,
 )
+from otio_app.services.without_voiceover_enhanced.script_author_service import (
+    group_segments_by_folder,
+    list_enabled_dramaturgy_folders,
+)
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     ScriptLockError,
     require_locked_script,
 )
+
+# folder_name, chapter_index, chapter_total, segment_index, segment_total
+TtsProgressCallback = Callable[[str, int, int, int, int], None]
 
 
 class AudioTimingError(RuntimeError):
@@ -72,6 +80,10 @@ def _synthesize_segments(
     *,
     segments,
     existing: SegmentTimingsDocument | None,
+    chapter_index: int = 1,
+    chapter_total: int = 1,
+    folder_name: str = "",
+    progress_callback: TtsProgressCallback | None = None,
 ) -> SegmentTimingsDocument:
     if not is_elevenlabs_configured():
         raise AudioTimingError("ElevenLabs ist nicht konfiguriert.")
@@ -82,7 +94,17 @@ def _synthesize_segments(
     ext, _ = audio_extension_for_output_format(settings.output_format)
 
     by_id = {item.segment_id: item for item in (existing.segments if existing else [])}
-    for segment in segments:
+    segment_total = len(segments)
+    label = folder_name or (segments[0].folder_name if segments else "") or "(ohne Kapitel)"
+    for segment_index, segment in enumerate(segments, start=1):
+        if progress_callback is not None:
+            progress_callback(
+                label,
+                chapter_index,
+                chapter_total,
+                segment_index,
+                segment_total,
+            )
         try:
             result = synthesize_speech_with_timestamps(segment.text, settings)
         except ElevenLabsTtsError as exc:
@@ -113,15 +135,41 @@ def _synthesize_segments(
     return document
 
 
-def synthesize_locked_script_audio(project: Project) -> SegmentTimingsDocument:
-    """Erzeugt eine Audiodatei pro Segment (alle Kapitel); misst echte Dauer."""
+def synthesize_locked_script_audio(
+    project: Project,
+    *,
+    progress_callback: TtsProgressCallback | None = None,
+) -> SegmentTimingsDocument:
+    """Erzeugt Audiodateien sequenziell: Kapitel für Kapitel, Segment für Segment."""
     locked = require_locked_script(project)
-    return _synthesize_segments(project, segments=locked.segments, existing=None)
+    folder_order = [
+        entry.folder_name for entry in list_enabled_dramaturgy_folders(project)
+    ]
+    groups = group_segments_by_folder(locked, folder_order=folder_order)
+    if not groups:
+        raise AudioTimingError("Keine Segmente im gesperrten Skript.")
+
+    timings: SegmentTimingsDocument | None = None
+    chapter_total = len(groups)
+    for chapter_index, (folder_name, segments) in enumerate(groups, start=1):
+        timings = _synthesize_segments(
+            project,
+            segments=segments,
+            existing=timings,
+            chapter_index=chapter_index,
+            chapter_total=chapter_total,
+            folder_name=folder_name,
+            progress_callback=progress_callback,
+        )
+    assert timings is not None
+    return timings
 
 
 def synthesize_folder_script_audio(
     project: Project,
     folder_name: str,
+    *,
+    progress_callback: TtsProgressCallback | None = None,
 ) -> SegmentTimingsDocument:
     """Vertont nur die Segmente eines Dramaturgie-Kapitels (wie klassisch pro Ordner)."""
     locked = require_locked_script(project)
@@ -134,7 +182,13 @@ def synthesize_folder_script_audio(
         )
     existing = load_segment_timings(project)
     return _synthesize_segments(
-        project, segments=folder_segments, existing=existing
+        project,
+        segments=folder_segments,
+        existing=existing,
+        chapter_index=1,
+        chapter_total=1,
+        folder_name=folder_name,
+        progress_callback=progress_callback,
     )
 
 
