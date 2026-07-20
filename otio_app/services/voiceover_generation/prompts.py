@@ -382,23 +382,12 @@ Decide, for the whole set of chapters above:
 - For EACH chapter: its role, a short reason, and recommended word count for its \
 voice-over section.
 
-### Voice-over craft flags (per chapter — leave ALL false by default)
-Do NOT invent transition/callback/contrast craft requirements during planning. \
-Leave every craft flag FALSE and every hint string EMPTY. These optional editor \
-checkboxes can be enabled later manually if needed; forcing them here duplicates \
-work and over-constrains folder voice-over writing.
-- use_transition_from_previous: false
-- use_transition_to_next: false
-- use_callback_to_previous: false
-- use_contrast_with_previous: false
-- use_commonality_with_previous: false
-- transition_goal_to_next: ""
-- transition_from_previous_hint: ""
-- contrast_or_commonality_hint: ""
+Do NOT output per-chapter transition/callback/contrast checkboxes, hint strings, \
+or craft flags. Those optional editor controls are handled outside this prompt and \
+must not appear in the JSON (saves tokens).
 
-Still include those keys in the JSON (all false / empty). Write core_promise, \
-narrative_arc, reasons, and risks in the target language (native-speaker quality). \
-Folder/chapter names stay exactly as given.
+Write core_promise, narrative_arc, reasons, and risks in the target language \
+(native-speaker quality). Folder/chapter names stay exactly as given.
 
 Respond with JSON ONLY, no markdown code fences, no commentary, matching exactly \
 this shape:
@@ -421,14 +410,6 @@ this shape:
       "recommended_word_count": 135,
       "recommended_min_words": 120,
       "recommended_max_words": 150,
-      "transition_goal_to_next": "...",
-      "transition_from_previous_hint": "...",
-      "contrast_or_commonality_hint": "...",
-      "use_transition_from_previous": false,
-      "use_transition_to_next": false,
-      "use_callback_to_previous": false,
-      "use_contrast_with_previous": false,
-      "use_commonality_with_previous": false,
       "risks": []
     }}
   ],

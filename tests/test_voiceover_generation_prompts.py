@@ -1246,15 +1246,23 @@ def test_intro_and_review_prompts_include_native_speaker_rule() -> None:
     assert "native-speaker rule (MANDATORY)" in review
 
 
-def test_dramaturgy_prompt_defaults_craft_flags_to_false() -> None:
+def test_dramaturgy_prompt_omits_craft_flags_entirely() -> None:
     prompt = build_dramaturgy_prompt(
         project_brief=_sample_brief(),
         style_profile=_sample_style_profile(),
         folder_summaries=_sample_folder_summaries(),
     )
-    assert "use_transition_from_previous" in prompt
-    assert "leave ALL false by default" in prompt
-    assert "Do NOT invent transition/callback/contrast craft requirements" in prompt
+    assert "use_transition_from_previous" not in prompt
+    assert "use_transition_to_next" not in prompt
+    assert "use_callback_to_previous" not in prompt
+    assert "use_contrast_with_previous" not in prompt
+    assert "use_commonality_with_previous" not in prompt
+    assert "transition_goal_to_next" not in prompt
+    assert "transition_from_previous_hint" not in prompt
+    assert "contrast_or_commonality_hint" not in prompt
+    assert "Do NOT output per-chapter transition/callback/contrast checkboxes" in prompt
+    assert '"recommended_word_count": 135' in prompt
+    assert '"risks": []' in prompt
 
 
 def test_folder_voiceover_prompt_omits_craft_params_when_flags_inactive() -> None:

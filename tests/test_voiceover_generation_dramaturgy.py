@@ -467,7 +467,8 @@ def test_dramaturgy_writes_no_edit_plan_documents(tmp_path: Path) -> None:
 
 
 
-def test_build_dramaturgy_plan_parses_craft_flag_booleans(tmp_path: Path) -> None:
+def test_build_dramaturgy_plan_ignores_llm_craft_flag_booleans(tmp_path: Path) -> None:
+    """Craft-Flags sind aus dem Prompt entfernt — LLM-Werte werden ignoriert."""
     project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
     with patch(
         f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()
@@ -476,16 +477,16 @@ def test_build_dramaturgy_plan_parses_craft_flag_booleans(tmp_path: Path) -> Non
 
     assert result.status == STATUS_PASS
     assert result.plan is not None
-    by_folder = {entry.folder_name: entry for entry in result.plan.recommended_folder_order}
-    grand = by_folder["Grand Canyon"]
-    assert grand.use_transition_from_previous is True
-    assert grand.use_transition_to_next is True
-    assert grand.use_callback_to_previous is False
-    assert grand.use_contrast_with_previous is True
-    assert grand.use_commonality_with_previous is False
-    yellowstone = by_folder["Yellowstone"]
-    assert yellowstone.use_transition_from_previous is False
-    assert yellowstone.use_transition_to_next is True
+    assert result.plan.craft_flags_disabled is True
+    for entry in result.plan.recommended_folder_order:
+        assert entry.use_transition_from_previous is False
+        assert entry.use_transition_to_next is False
+        assert entry.use_callback_to_previous is False
+        assert entry.use_contrast_with_previous is False
+        assert entry.use_commonality_with_previous is False
+        assert entry.transition_goal_to_next == ""
+        assert entry.transition_from_previous_hint == ""
+        assert entry.contrast_or_commonality_hint == ""
 
 
 def test_update_dramaturgy_order_persists_craft_flags(tmp_path: Path) -> None:

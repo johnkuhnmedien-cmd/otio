@@ -309,39 +309,14 @@ def _bool_field(entry: dict, key: str, default: bool = False) -> bool:
     return default
 
 
-_CRAFT_FLAG_KEYS = (
-    "use_transition_from_previous",
-    "use_transition_to_next",
-    "use_callback_to_previous",
-    "use_contrast_with_previous",
-    "use_commonality_with_previous",
-)
-
-
 def _folder_entry_from_payload(entry: dict, *, default_order: int) -> DramaturgyFolderEntry | None:
     folder_name = str(entry.get("folder_name", "")).strip()
     if not folder_name:
         return None
 
-    transition_goal_to_next = str(entry.get("transition_goal_to_next", ""))
-    transition_from_previous_hint = str(entry.get("transition_from_previous_hint", ""))
-    contrast_or_commonality_hint = str(entry.get("contrast_or_commonality_hint", ""))
-
-    # Neue LLM-Antworten liefern explizite Booleans. Ältere Payloads ohne diese
-    # Keys fallen auf die bisherige Hint-Heuristik zurück.
-    if any(key in entry for key in _CRAFT_FLAG_KEYS):
-        use_transition_from_previous = _bool_field(entry, "use_transition_from_previous")
-        use_transition_to_next = _bool_field(entry, "use_transition_to_next")
-        use_callback_to_previous = _bool_field(entry, "use_callback_to_previous")
-        use_contrast_with_previous = _bool_field(entry, "use_contrast_with_previous")
-        use_commonality_with_previous = _bool_field(entry, "use_commonality_with_previous")
-    else:
-        use_transition_from_previous = bool(transition_from_previous_hint.strip())
-        use_transition_to_next = bool(transition_goal_to_next.strip())
-        use_callback_to_previous = False
-        use_contrast_with_previous = bool(contrast_or_commonality_hint.strip())
-        use_commonality_with_previous = False
-
+    # Craft-Flags/Hints kommen bewusst NICHT mehr aus dem LLM-Prompt.
+    # Auch wenn ein Modell sie trotzdem mitschickt: ignorieren — spart Kosten
+    # und verhindert doppelte Steuerung. Manuell weiterhin über die UI setzbar.
     return DramaturgyFolderEntry(
         folder_name=folder_name,
         order_index=_int_field(entry, "order_index", default_order),
@@ -360,14 +335,14 @@ def _folder_entry_from_payload(entry: dict, *, default_order: int) -> Dramaturgy
         recommended_max_words=_int_field(
             entry, "recommended_max_words", VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS
         ),
-        transition_goal_to_next=transition_goal_to_next,
-        transition_from_previous_hint=transition_from_previous_hint,
-        contrast_or_commonality_hint=contrast_or_commonality_hint,
-        use_transition_from_previous=use_transition_from_previous,
-        use_transition_to_next=use_transition_to_next,
-        use_callback_to_previous=use_callback_to_previous,
-        use_contrast_with_previous=use_contrast_with_previous,
-        use_commonality_with_previous=use_commonality_with_previous,
+        transition_goal_to_next="",
+        transition_from_previous_hint="",
+        contrast_or_commonality_hint="",
+        use_transition_from_previous=False,
+        use_transition_to_next=False,
+        use_callback_to_previous=False,
+        use_contrast_with_previous=False,
+        use_commonality_with_previous=False,
         risks=as_str_list(entry.get("risks")),
     )
 
@@ -518,6 +493,7 @@ def build_dramaturgy_plan(
         llm_run_id=run_id,
         status=DRAMATURGY_STATUS_DRAFT,
         risks=as_str_list(payload.get("risks")),
+        craft_flags_disabled=True,
     )
     saved = save_dramaturgy_draft(project, plan)
     write_llm_parsed_response(run_dir, saved.model_dump(mode="json"))
