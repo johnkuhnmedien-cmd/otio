@@ -16,6 +16,7 @@ from otio_app.defaults import (
     VO_ERROR_MISSING_ASSET_MAPPING,
     VO_ERROR_MISSING_SUPPLEMENT_REASON,
 )
+from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
 from otio_app.models import Project, ProjectMode
 from otio_app.project_layout import (
     get_folder_inventory_path,
@@ -28,11 +29,22 @@ from otio_app.services.voiceover_generation.dramaturgy_service import save_confi
 from otio_app.services.voiceover_generation.intro_hook_service import (
     build_intro_hook_candidates,
     confirm_intro_hook,
+    folder_drafts_from_locked_enhanced_script,
+    intro_source_ready,
     load_confirmed_intro_hook,
     load_intro_hook_candidates,
+    missing_intro_source_folder_names,
     regenerate_intro_hook_candidates,
     unconfirm_intro_hook,
     validate_intro_hook_candidate,
+)
+from otio_app.services.without_voiceover_enhanced.models import (
+    EnhancedScriptDocument,
+    ScriptSegment,
+)
+from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+    lock_script,
+    save_script_draft,
 )
 from otio_app.services.voiceover_generation.intro_hook_settings_service import (
     load_intro_hook_settings,
@@ -154,6 +166,80 @@ VALID_INTRO_RESPONSE = json.dumps(
 
 def _fake_response(raw_text: str = VALID_INTRO_RESPONSE) -> PlanLlmResponse:
     return PlanLlmResponse(provider="anthropic", model="claude-sonnet-5", raw_text=raw_text)
+
+
+def test_enhanced_intro_requires_script_lock_and_all_chapters(tmp_path: Path) -> None:
+    root = tmp_path / "enhanced"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    for folder in ("A", "B"):
+        (root / folder).mkdir()
+    project = Project(
+        name="Enhanced Intro",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="en",
+        asset_subdir_names=["A", "B"],
+        selected_asset_subdirs=["A", "B"],
+    )
+    save_confirmed_dramaturgy(
+        project,
+        DramaturgyPlan(
+            project_id=project.id,
+            recommended_folder_order=[
+                DramaturgyFolderEntry(folder_name="A", order_index=0, enabled=True),
+                DramaturgyFolderEntry(folder_name="B", order_index=1, enabled=True),
+            ],
+        ),
+    )
+    assert missing_intro_source_folder_names(project) == ["A", "B"]
+    assert intro_source_ready(project) is False
+
+    save_script_draft(
+        project,
+        EnhancedScriptDocument(
+            segments=[
+                ScriptSegment(
+                    segment_id="a1",
+                    text="Chapter A narration.",
+                    sequence_index=1,
+                    folder_name="A",
+                    folder_order_index=0,
+                )
+            ]
+        ),
+    )
+    lock_script(project)
+    assert missing_intro_source_folder_names(project) == ["B"]
+
+    save_script_draft(
+        project,
+        EnhancedScriptDocument(
+            segments=[
+                ScriptSegment(
+                    segment_id="a1",
+                    text="Chapter A narration.",
+                    sequence_index=1,
+                    folder_name="A",
+                    folder_order_index=0,
+                ),
+                ScriptSegment(
+                    segment_id="b1",
+                    text="Chapter B narration.",
+                    sequence_index=2,
+                    folder_name="B",
+                    folder_order_index=1,
+                ),
+            ]
+        ),
+    )
+    lock_script(project)
+    assert missing_intro_source_folder_names(project) == []
+    assert intro_source_ready(project) is True
+    drafts = folder_drafts_from_locked_enhanced_script(project)
+    assert [d.folder_name for d in drafts] == ["A", "B"]
+    assert drafts[0].voiceover_text_full == "Chapter A narration."
 
 
 def test_build_writes_intro_hook_candidates_json(tmp_path: Path) -> None:

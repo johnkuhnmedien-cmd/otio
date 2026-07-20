@@ -52,11 +52,13 @@ from otio_app.services.voiceover_generation.llm_trace_service import (
 from otio_app.services.voiceover_generation.model_settings_service import resolve_llm_model_id
 from otio_app.services.voiceover_generation.models import (
     ConfirmedIntroHook,
+    FolderVoiceoverDraft,
     IntroHookCandidate,
     IntroHookCandidatesDocument,
     IntroHookSettings,
     IntroHookVisualBeat,
     LlmRunManifest,
+    SentenceItem,
     as_str_list,
 )
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
@@ -74,6 +76,10 @@ __all__ = [
     "get_confirmed_folder_voiceover_names",
     "missing_confirmed_folder_names",
     "all_active_folders_confirmed",
+    "missing_intro_source_folder_names",
+    "intro_source_ready",
+    "get_intro_source_folder_names",
+    "load_intro_source_folder_drafts",
     "parse_intro_hook_response",
     "validate_intro_hook_candidate",
     "build_intro_hook_candidates",
@@ -115,6 +121,119 @@ def missing_confirmed_folder_names(project: Project) -> list[str]:
 def all_active_folders_confirmed(project: Project) -> bool:
     active = get_active_dramaturgy_folder_names(project)
     return bool(active) and not missing_confirmed_folder_names(project)
+
+
+def _enhanced_locked_chapter_names(project: Project) -> list[str]:
+    """Kapitel mit Segmenten im gesperrten Enhanced-Skript (Dramaturgie-Reihenfolge)."""
+    from otio_app.services.without_voiceover_enhanced.script_author_service import (
+        chapter_narration_text,
+        list_enabled_dramaturgy_folders,
+    )
+    from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+        load_locked_script,
+    )
+
+    locked = load_locked_script(project)
+    if locked is None or not locked.segments:
+        return []
+    names: list[str] = []
+    for entry in list_enabled_dramaturgy_folders(project):
+        if chapter_narration_text(locked, entry.folder_name).strip():
+            names.append(entry.folder_name)
+    return names
+
+
+def get_intro_source_folder_names(project: Project) -> list[str]:
+    """Ordner, die als Intro-Quelle gelten (klassisch bestätigt / Enhanced gelockt)."""
+    if project.is_without_voiceover_enhanced:
+        return _enhanced_locked_chapter_names(project)
+    return get_confirmed_folder_voiceover_names(project)
+
+
+def missing_intro_source_folder_names(project: Project) -> list[str]:
+    """Aktive Dramaturgie-Ordner ohne Intro-Quelle."""
+    if project.is_without_voiceover_enhanced:
+        from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+            load_locked_script,
+        )
+
+        locked = load_locked_script(project)
+        if locked is None:
+            return get_active_dramaturgy_folder_names(project)
+        present = set(_enhanced_locked_chapter_names(project))
+        return [
+            name
+            for name in get_active_dramaturgy_folder_names(project)
+            if name not in present
+        ]
+    return missing_confirmed_folder_names(project)
+
+
+def intro_source_ready(project: Project) -> bool:
+    active = get_active_dramaturgy_folder_names(project)
+    return bool(active) and not missing_intro_source_folder_names(project)
+
+
+def folder_drafts_from_locked_enhanced_script(
+    project: Project,
+) -> list[FolderVoiceoverDraft]:
+    """Mapped gesperrte Enhanced-Kapitel auf FolderVoiceoverDraft für den Intro-Prompt."""
+    from otio_app.services.without_voiceover_enhanced.script_author_service import (
+        chapter_narration_text,
+        list_enabled_dramaturgy_folders,
+        segments_for_folder,
+    )
+    from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+        load_locked_script,
+    )
+
+    locked = load_locked_script(project)
+    if locked is None:
+        return []
+
+    drafts: list[FolderVoiceoverDraft] = []
+    for entry in list_enabled_dramaturgy_folders(project):
+        narration = chapter_narration_text(locked, entry.folder_name).strip()
+        if not narration:
+            continue
+        segments = segments_for_folder(locked, entry.folder_name)
+        sentence_items = [
+            SentenceItem(
+                sentence_id=segment.segment_id,
+                beat_id=segment.segment_id,
+                text=segment.text,
+                visual_intent=segment.semantic_function or "",
+            )
+            for segment in segments
+            if segment.text.strip()
+        ]
+        drafts.append(
+            FolderVoiceoverDraft(
+                project_id=project.id,
+                folder_name=entry.folder_name,
+                order_index=entry.order_index,
+                language=project.language,
+                voiceover_text_full=narration,
+                word_count=_count_words(narration),
+                sentence_items=sentence_items,
+                status="confirmed",
+            )
+        )
+    return drafts
+
+
+def load_intro_source_folder_drafts(project: Project) -> list[FolderVoiceoverDraft]:
+    """Folder-Drafts für den Intro-Prompt (klassisch confirmed / Enhanced locked)."""
+    active = set(get_active_dramaturgy_folder_names(project))
+    if project.is_without_voiceover_enhanced:
+        drafts = folder_drafts_from_locked_enhanced_script(project)
+    else:
+        document = load_folder_voiceovers_confirmed(project)
+        drafts = list(document.items)
+    return sorted(
+        (item for item in drafts if item.folder_name in active),
+        key=lambda item: item.order_index,
+    )
 
 
 def parse_intro_hook_response(raw_text: str) -> dict[str, Any]:
@@ -410,11 +529,27 @@ def build_intro_hook_candidates(
     provider: str,
     model: str,
 ) -> IntroHookBuildResult:
-    """Erzeugt genau 5 Intro-Hook-Kandidaten aus allen bestätigten Folder-
-    Voice-overs. Voraussetzung: alle aktiven Ordner der bestätigten
-    Dramaturgie haben einen bestätigten Voice-over-Eintrag (§1)."""
-    missing = missing_confirmed_folder_names(project)
+    """Erzeugt genau 5 Intro-Hook-Kandidaten.
+
+    Klassisch: alle aktiven Ordner mit bestätigtem Folder-Voice-over.
+    Enhanced: Script Lock + Kapitel-Skript für jeden aktiven Dramaturgie-Ordner.
+    """
+    missing = missing_intro_source_folder_names(project)
     if missing:
+        if project.is_without_voiceover_enhanced:
+            from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+                load_locked_script,
+            )
+
+            if load_locked_script(project) is None:
+                raise ValueError(
+                    "Kein Script Lock — bitte unter ④ alle Kapitel erzeugen "
+                    "und Script Lock setzen."
+                )
+            raise ValueError(
+                "Nicht alle aktiven Kapitel haben ein Skript im gesperrten Draft: "
+                + ", ".join(missing)
+            )
         raise ValueError(
             "Nicht alle aktiven Ordner haben einen bestätigten Voice-over-Eintrag: "
             + ", ".join(missing)
@@ -427,11 +562,7 @@ def build_intro_hook_candidates(
     style_profile = load_style_profile(project)
     dramaturgy_plan = load_confirmed_dramaturgy(project)
     settings = load_intro_hook_settings(project)
-    confirmed_document = load_folder_voiceovers_confirmed(project)
-    confirmed_drafts = sorted(
-        (item for item in confirmed_document.items if item.folder_name in active_names),
-        key=lambda item: item.order_index,
-    )
+    confirmed_drafts = load_intro_source_folder_drafts(project)
 
     inventory_by_folder = {
         draft.folder_name: build_inventory_asset_context(project, draft.folder_name)

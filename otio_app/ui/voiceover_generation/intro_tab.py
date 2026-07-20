@@ -8,10 +8,11 @@ from otio_app.services.voiceover_generation.intro_hook_service import (
     build_intro_hook_candidates,
     confirm_intro_hook,
     get_active_dramaturgy_folder_names,
-    get_confirmed_folder_voiceover_names,
+    get_intro_source_folder_names,
+    intro_source_ready,
     load_confirmed_intro_hook,
     load_intro_hook_candidates,
-    missing_confirmed_folder_names,
+    missing_intro_source_folder_names,
     regenerate_intro_hook_candidates,
     unconfirm_intro_hook,
     update_intro_hook_candidate,
@@ -45,8 +46,9 @@ def _render_prerequisites(project: Project) -> bool:
     style_profile = load_style_profile(project)
     confirmed_plan = load_confirmed_dramaturgy(project)
     active_names = get_active_dramaturgy_folder_names(project)
-    confirmed_names = get_confirmed_folder_voiceover_names(project)
-    missing_names = missing_confirmed_folder_names(project)
+    source_names = get_intro_source_folder_names(project)
+    missing_names = missing_intro_source_folder_names(project)
+    enhanced = project.is_without_voiceover_enhanced
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -59,23 +61,51 @@ def _render_prerequisites(project: Project) -> bool:
         st.metric("Aktive Ordner", len(active_names))
 
     st.caption(f"Aktive Ordner laut Dramaturgie: {', '.join(active_names) or '—'}")
-    st.caption(
-        f"Bestätigte Voice-over-Ordner: {', '.join(confirmed_names) or '—'} "
-        f"({len(confirmed_names)}/{len(active_names)})"
-    )
+    if enhanced:
+        st.caption(
+            f"Kapitel im Script Lock: {', '.join(source_names) or '—'} "
+            f"({len(source_names)}/{len(active_names)})"
+        )
+    else:
+        st.caption(
+            f"Bestätigte Voice-over-Ordner: {', '.join(source_names) or '—'} "
+            f"({len(source_names)}/{len(active_names)})"
+        )
 
     if confirmed_plan is None:
         st.warning("Bitte zuerst die Dramaturgie bestätigen.")
         return False
 
     if missing_names:
-        st.warning("Bitte zuerst alle aktiven Folder Voice-overs bestätigen.")
-        st.caption(f"Fehlende Ordner: {', '.join(missing_names)}")
+        if enhanced:
+            from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+                load_locked_script,
+            )
+
+            if load_locked_script(project) is None:
+                st.warning(
+                    "Bitte unter **④ Folder Voice-overs** alle Kapitel-Skripte erzeugen "
+                    "und **Script Lock** setzen."
+                )
+            else:
+                st.warning(
+                    "Script Lock ist gesetzt, aber noch nicht alle aktiven Kapitel "
+                    "haben ein Skript. Bitte fehlende Kapitel erzeugen und erneut locken."
+                )
+            st.caption(f"Fehlende Kapitel: {', '.join(missing_names)}")
+        else:
+            st.warning("Bitte zuerst alle aktiven Folder Voice-overs bestätigen.")
+            st.caption(f"Fehlende Ordner: {', '.join(missing_names)}")
         return False
 
     if not active_names:
         st.error("Keine aktiven Ordner in der bestätigten Dramaturgie.")
         return False
+
+    if enhanced and intro_source_ready(project):
+        st.success(
+            f"Script Lock bereit — {len(source_names)} Kapitel als Intro-Quelle."
+        )
 
     return True
 
