@@ -12,13 +12,17 @@ from otio_app.services.voiceover_generation.model_settings_service import (
 from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
     mark_audio_stale_for_changed_segments,
 )
+from otio_app.services.without_voiceover_enhanced.models import EnhancedScriptDocument
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
     DEFAULT_ENHANCED_SCRIPT_MAX_OUTPUT_TOKENS,
+    chapter_narration_text,
     folders_present_in_script,
     generate_all_enhanced_scripts,
     generate_enhanced_script_for_folder,
+    group_segments_by_folder,
     list_enabled_dramaturgy_folders,
     looks_like_asset_inventory_script,
+    segments_for_folder,
 )
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     ScriptLockError,
@@ -26,6 +30,7 @@ from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_script_draft,
     lock_script,
     mark_segment_text_changed,
+    update_folder_chapter_narration,
 )
 from otio_app.ui.voiceover_generation._shared import (
     LLM_INPUT_INFO,
@@ -88,7 +93,8 @@ def _render_generation_controls(
     draft = load_script_draft(project)
     present = folders_present_in_script(draft)
     st.caption(
-        f"{len(present)}/{len(entries)} Kapitel haben bereits Segmente im Draft."
+        f"{len(present)}/{len(entries)} Kapitel haben bereits ein Skript — "
+        "jedes Kapitel wird getrennt erzeugt und später einzeln vertont."
     )
 
     folder_names = [entry.folder_name for entry in entries]
@@ -119,7 +125,7 @@ def _render_generation_controls(
             if result.status == "PASS":
                 st.success(
                     f"„{selected}“: {result.segment_count} Segmente "
-                    f"(Draft gesamt: {len(result.document.segments) if result.document else 0})."
+                    f"(Kapitel-Skripte: {len(folders_present_in_script(result.document))})."
                 )
                 if result.document and looks_like_asset_inventory_script(result.document):
                     st.warning("Skript wirkt noch zu assetgebunden — bitte prüfen.")
@@ -153,21 +159,150 @@ def _render_generation_controls(
                 st.error(f"„{result.folder_name}“: {result.error}")
             st.rerun()
 
-    st.subheader("Kapitel-Status")
-    for entry in entries:
-        status = "fertig" if entry.folder_name in present else "offen"
-        words = entry.recommended_word_count or "—"
-        st.caption(
-            f"{entry.order_index}. **{entry.folder_name}** · "
-            f"Rolle `{entry.dramaturgy_role}` · Zielwörter {words} · {status}"
+
+def _word_count(text: str) -> int:
+    return len([part for part in text.split() if part])
+
+
+def _render_chapter_scripts(
+    project,
+    document: EnhancedScriptDocument,
+    *,
+    editable: bool,
+) -> None:
+    entries = list_enabled_dramaturgy_folders(project)
+    folder_order = [entry.folder_name for entry in entries]
+    role_by_folder = {entry.folder_name: entry.dramaturgy_role for entry in entries}
+    groups = group_segments_by_folder(document, folder_order=folder_order)
+
+    if not groups:
+        st.info("Noch kein Kapitel-Skript vorhanden.")
+        return
+
+    unassigned = [name for name, _ in groups if not name]
+    if unassigned:
+        st.warning(
+            "Einige Segmente haben keine Kapitelzuordnung (älterer Monolith-Draft). "
+            "Bitte Kapitel neu erzeugen — dann erscheinen sie getrennt wie im "
+            "klassischen Without-Voice-Over-Modus."
         )
+
+    st.subheader("Kapitel-Skripte")
+    st.caption(
+        "Ein Skript pro Dramaturgie-Kapitel — analog zur klassischen Folder-VO-Pipeline. "
+        "Nicht als ein Film-Block. Vertonung später pro Kapitel unter ⑥ Audio."
+    )
+
+    for folder_name, segments in groups:
+        label = folder_name or "(ohne Kapitelzuordnung)"
+        role = role_by_folder.get(folder_name, "—")
+        narration = chapter_narration_text(document, folder_name) if folder_name else (
+            " ".join(seg.text for seg in segments)
+        )
+        words = _word_count(narration)
+        with st.expander(
+            f"{segments[0].folder_order_index if folder_name else '—'} · "
+            f"{label} · Rolle `{role}` · {words} Wörter · {len(segments)} Segment(e)",
+            expanded=bool(folder_name),
+        ):
+            if folder_name and editable:
+                text_key = f"enh_chapter_text_{project.id}_{folder_name}"
+                if text_key not in st.session_state:
+                    st.session_state[text_key] = narration
+                # Keep widget in sync when regenerating the chapter
+                if st.session_state.get(f"{text_key}__src") != narration:
+                    st.session_state[text_key] = narration
+                    st.session_state[f"{text_key}__src"] = narration
+
+                new_text = st.text_area(
+                    "Voice-over-Text (Kapitel)",
+                    key=text_key,
+                    height=220,
+                )
+                col_save, col_regen, col_meta = st.columns([1, 1, 2])
+                with col_save:
+                    if st.button(
+                        "Kapitel-Text speichern",
+                        key=f"enh_chapter_save_{project.id}_{folder_name}",
+                    ):
+                        try:
+                            update_folder_chapter_narration(
+                                project, folder_name, new_text
+                            )
+                            mark_audio_stale_for_changed_segments(project)
+                            st.success(
+                                "Kapitel gespeichert — Script Lock aufgehoben "
+                                "(ein Segment für dieses Kapitel)."
+                            )
+                            st.rerun()
+                        except ScriptLockError as exc:
+                            st.error(str(exc))
+                with col_regen:
+                    st.caption("Neu erzeugen: oben „Skript für ausgewähltes Kapitel“.")
+                with col_meta:
+                    st.caption(
+                        f"{words} Wörter · {len(segments_for_folder(document, folder_name))} "
+                        "Segment(e) · wird unter ⑥ Audio als Kapitel vertont"
+                    )
+            else:
+                st.write(narration)
+                st.caption(f"{words} Wörter · {len(segments)} Segment(e)")
+
+            with st.expander("Segmente (Cut-Plan / Feinbearbeitung)", expanded=False):
+                for segment in segments:
+                    st.markdown(
+                        f"**{segment.sequence_index}. `{segment.segment_id}`** "
+                        f"({segment.semantic_function})"
+                    )
+                    if editable and folder_name:
+                        seg_key = f"enh_seg_{project.id}_{segment.segment_id}"
+                        seg_text = st.text_area(
+                            "Segment-Text",
+                            value=segment.text,
+                            key=seg_key,
+                            height=100,
+                        )
+                        if st.button(
+                            "Segment speichern",
+                            key=f"enh_seg_save_{project.id}_{segment.segment_id}",
+                        ):
+                            try:
+                                mark_segment_text_changed(
+                                    project, segment.segment_id, seg_text
+                                )
+                                mark_audio_stale_for_changed_segments(project)
+                                st.success("Segment aktualisiert — Script Lock aufgehoben.")
+                                st.rerun()
+                            except ScriptLockError as exc:
+                                st.error(str(exc))
+                    else:
+                        st.write(segment.text)
+
+            chapter_intents = [
+                intent
+                for intent in document.visual_intents
+                if intent.folder_name == folder_name
+                or (
+                    not intent.folder_name
+                    and any(
+                        intent.intent_id in seg.visual_intent_ids for seg in segments
+                    )
+                )
+            ]
+            if chapter_intents:
+                st.markdown("**Visual Intents**")
+                for intent in chapter_intents:
+                    st.caption(
+                        f"`{intent.intent_id}`: {intent.description} "
+                        f"({intent.preferred_media_type})"
+                    )
 
 
 def render_enhanced_folder_voiceovers_page() -> None:
     st.header("④ Folder Voice-overs / Skripterzeugung (Enhanced)")
     st.caption(
-        "Redaktionelle Narration zu Geschichte, Besonderheiten und Atmosphäre — "
-        "ein LLM-Call pro Dramaturgie-Kapitel (wie in der klassischen Pipeline). "
+        "Redaktionelle Narration pro Dramaturgie-Kapitel — "
+        "ein LLM-Call und ein Skript pro Kapitel (wie in der klassischen Pipeline). "
         "Assets sind visuelle Ressource, keine Inhaltsgrenze."
     )
     project = get_enhanced_project()
@@ -214,44 +349,21 @@ def render_enhanced_folder_voiceovers_page() -> None:
         st.info("Noch kein Skript vorhanden — Kapitel oben erzeugen.")
         return
 
-    st.subheader("Gesprochene Narration")
-    st.write(show.narration_full)
     if show.forbidden_phrases_found:
-        real = [p for p in show.forbidden_phrases_found if not p.startswith("PARTIAL_FAIL:")]
+        real = [
+            phrase
+            for phrase in show.forbidden_phrases_found
+            if not phrase.startswith("PARTIAL_FAIL:")
+        ]
         if real:
             st.warning("Verbotene Phrasen: " + ", ".join(real))
 
-    st.subheader("Segmente")
-    for segment in show.segments:
-        folder_label = f" · {segment.folder_name}" if segment.folder_name else ""
-        with st.expander(
-            f"{segment.sequence_index}. {segment.segment_id}{folder_label} "
-            f"({segment.semantic_function})"
-        ):
-            new_text = st.text_area(
-                "Text",
-                value=segment.text,
-                key=f"enh_seg_{project.id}_{segment.segment_id}",
-                height=120,
-            )
-            if st.button(
-                "Text speichern",
-                key=f"enh_seg_save_{project.id}_{segment.segment_id}",
-            ):
-                try:
-                    updated = mark_segment_text_changed(
-                        project, segment.segment_id, new_text
-                    )
-                    mark_audio_stale_for_changed_segments(project, updated)
-                    st.success("Segment aktualisiert — Script Lock aufgehoben.")
-                    st.rerun()
-                except ScriptLockError as exc:
-                    st.error(str(exc))
+    _render_chapter_scripts(project, show, editable=True)
 
-    st.subheader("Visual Intents")
-    for intent in show.visual_intents:
-        folder_bit = f" · {intent.folder_name}" if intent.folder_name else ""
+    with st.expander("Gesamtfilm (nur abgeleitet, nicht die Arbeitsansicht)", expanded=False):
         st.caption(
-            f"`{intent.intent_id}`{folder_bit}: {intent.description} "
-            f"({intent.preferred_media_type})"
+            "Zusammengehängte Narration aller Kapitel — nur zur Kontrolle. "
+            "Arbeits- und Vertonungseinheit ist das einzelne Kapitel."
         )
+        st.write(show.narration_full)
+)

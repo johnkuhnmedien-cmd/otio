@@ -386,6 +386,54 @@ def folders_present_in_script(document: EnhancedScriptDocument | None) -> set[st
     return {seg.folder_name for seg in document.segments if seg.folder_name}
 
 
+def chapter_narration_text(
+    document: EnhancedScriptDocument | None,
+    folder_name: str,
+) -> str:
+    if document is None:
+        return ""
+    parts = [
+        seg.text.strip()
+        for seg in document.segments
+        if seg.folder_name == folder_name and seg.text.strip()
+    ]
+    return " ".join(parts)
+
+
+def segments_for_folder(
+    document: EnhancedScriptDocument | None,
+    folder_name: str,
+) -> list[ScriptSegment]:
+    if document is None:
+        return []
+    return [seg for seg in document.segments if seg.folder_name == folder_name]
+
+
+def group_segments_by_folder(
+    document: EnhancedScriptDocument | None,
+    *,
+    folder_order: list[str] | None = None,
+) -> list[tuple[str, list[ScriptSegment]]]:
+    """Kapitel-Gruppen in Dramaturgie-Reihenfolge; unzugeordnete Segmente zuletzt."""
+    if document is None or not document.segments:
+        return []
+    buckets: dict[str, list[ScriptSegment]] = {}
+    for segment in document.segments:
+        key = segment.folder_name or ""
+        buckets.setdefault(key, []).append(segment)
+
+    ordered: list[tuple[str, list[ScriptSegment]]] = []
+    seen: set[str] = set()
+    for name in folder_order or []:
+        if name in buckets:
+            ordered.append((name, buckets[name]))
+            seen.add(name)
+    for name, segs in buckets.items():
+        if name not in seen:
+            ordered.append((name, segs))
+    return ordered
+
+
 def generate_enhanced_script_for_folder(
     project: Project,
     folder_name: str,

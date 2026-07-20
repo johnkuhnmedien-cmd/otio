@@ -85,19 +85,28 @@ def lock_script(project: Project, document: EnhancedScriptDocument | None = None
     return draft
 
 
+def _invalidate_lock_keep_draft(document: EnhancedScriptDocument, project: Project) -> EnhancedScriptDocument:
+    document.narration_full = " ".join(s.text for s in document.segments)
+    document.script_status = "draft"
+    document.forbidden_phrases_found = detect_forbidden_phrases(document.narration_full)
+    write_json(script_draft_path(project), document)
+    if script_locked_path(project).is_file():
+        script_locked_path(project).unlink()
+    return document
+
+
 def mark_segment_text_changed(
     project: Project,
     segment_id: str,
     new_text: str,
 ) -> EnhancedScriptDocument:
-    """Textänderung an gesperrtem Skript → Segment geändert, Version bleibt bis Relock.
-
-    Audio muss als stale markiert werden (Aufrufer / audio_timing_service).
-    """
-    locked = require_locked_script(project)
+    """Textänderung → Draft speichern, Script Lock aufheben (Audio stale)."""
+    draft = load_script_draft(project) or load_locked_script(project)
+    if draft is None:
+        raise ScriptLockError("Kein Skript zum Bearbeiten vorhanden.")
     found = False
     updated_segments: list[ScriptSegment] = []
-    for segment in locked.segments:
+    for segment in draft.segments:
         if segment.segment_id == segment_id:
             if segment.text != new_text:
                 segment = segment.model_copy(
@@ -107,14 +116,61 @@ def mark_segment_text_changed(
         updated_segments.append(segment)
     if not found:
         raise ScriptLockError(f"Unbekannte Segment-ID: {segment_id}")
-    locked.segments = updated_segments
-    locked.narration_full = " ".join(s.text for s in updated_segments)
-    locked.script_status = "draft"  # must re-lock after edits
-    write_json(script_draft_path(project), locked)
-    # Invalidate lock file so ElevenLabs cannot silently use old text.
-    if script_locked_path(project).is_file():
-        script_locked_path(project).unlink()
-    return locked
+    draft.segments = updated_segments
+    return _invalidate_lock_keep_draft(draft, project)
+
+
+def update_folder_chapter_narration(
+    project: Project,
+    folder_name: str,
+    new_text: str,
+) -> EnhancedScriptDocument:
+    """Ersetzt das Kapitel-Skript (alle Segmente dieses Ordners) durch einen Textblock.
+
+    Entspricht dem klassischen Folder-Voice-over-Text pro Kapitel. Cut-Plan-
+    Segmente werden zu einem Segment zusammengezogen; Relock nötig.
+    """
+    draft = load_script_draft(project) or load_locked_script(project)
+    if draft is None:
+        raise ScriptLockError("Kein Skript zum Bearbeiten vorhanden.")
+    text = (new_text or "").strip()
+    if not text:
+        raise ScriptLockError("Kapitel-Text darf nicht leer sein.")
+
+    keep = [seg for seg in draft.segments if seg.folder_name != folder_name]
+    old = [seg for seg in draft.segments if seg.folder_name == folder_name]
+    if not old:
+        raise ScriptLockError(f"Kein Skript für Kapitel „{folder_name}“ vorhanden.")
+
+    order_index = old[0].folder_order_index
+    intent_ids: list[str] = []
+    for seg in old:
+        for intent_id in seg.visual_intent_ids:
+            if intent_id not in intent_ids:
+                intent_ids.append(intent_id)
+
+    from otio_app.project_layout import safe_folder_slug
+
+    slug = safe_folder_slug(folder_name)
+    replacement = ScriptSegment(
+        segment_id=f"{slug}_segment_001",
+        text=text,
+        sequence_index=1,
+        semantic_function=old[0].semantic_function or "narration",
+        visual_intent_ids=intent_ids,
+        fact_check_required=any(seg.fact_check_required for seg in old),
+        text_changed=True,
+        folder_name=folder_name,
+        folder_order_index=order_index,
+    )
+    draft.segments = keep + [replacement]
+    # Reihenfolge: nach folder_order_index, dann sequence
+    draft.segments.sort(
+        key=lambda seg: (seg.folder_order_index, seg.sequence_index, seg.segment_id)
+    )
+    for index, segment in enumerate(draft.segments, start=1):
+        segment.sequence_index = index
+    return _invalidate_lock_keep_draft(draft, project)
 
 
 def content_fingerprint(document: EnhancedScriptDocument) -> str:

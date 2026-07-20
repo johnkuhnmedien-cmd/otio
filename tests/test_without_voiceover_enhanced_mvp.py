@@ -59,9 +59,11 @@ from otio_app.services.voiceover_generation.models import (
     DramaturgyPlan,
 )
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
+    chapter_narration_text,
     folders_present_in_script,
     generate_all_enhanced_scripts,
     generate_enhanced_script_for_folder,
+    group_segments_by_folder,
     list_enabled_dramaturgy_folders,
     merge_folder_script_into_document,
     parse_enhanced_script_response,
@@ -71,6 +73,7 @@ from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     lock_script,
     mark_segment_text_changed,
     save_script_draft,
+    update_folder_chapter_narration,
 )
 from otio_app.services.without_voiceover_enhanced.script_prompts import (
     FORBIDDEN_PHRASES,
@@ -814,6 +817,86 @@ def test_coverage_gap_has_search_queries_and_links() -> None:
     assert gap.related_shot_ids == ["shot_007"]
     assert gap.visual_intent_id == "intent_004"
     assert "Monument Valley wide landscape" in gap.search_queries
+
+
+def test_chapter_narration_groups_segments_like_classic_folder_vos() -> None:
+    doc = EnhancedScriptDocument(
+        segments=[
+            ScriptSegment(
+                segment_id="a1",
+                text="Kapitel A Satz eins.",
+                sequence_index=1,
+                folder_name="Canyon",
+                folder_order_index=0,
+            ),
+            ScriptSegment(
+                segment_id="b1",
+                text="Kapitel B.",
+                sequence_index=2,
+                folder_name="Desert",
+                folder_order_index=1,
+            ),
+            ScriptSegment(
+                segment_id="a2",
+                text="Kapitel A Satz zwei.",
+                sequence_index=3,
+                folder_name="Canyon",
+                folder_order_index=0,
+            ),
+        ]
+    )
+    assert chapter_narration_text(doc, "Canyon") == (
+        "Kapitel A Satz eins. Kapitel A Satz zwei."
+    )
+    groups = group_segments_by_folder(doc, folder_order=["Canyon", "Desert"])
+    assert [name for name, _ in groups] == ["Canyon", "Desert"]
+    assert len(groups[0][1]) == 2
+
+
+def test_update_folder_chapter_narration_collapses_to_one_script(tmp_path: Path) -> None:
+    project = _project(tmp_path, folders=["Canyon", "Desert"])
+    draft = EnhancedScriptDocument(
+        narration_full="A1 A2 B1",
+        segments=[
+            ScriptSegment(
+                segment_id="c_a1",
+                text="A1",
+                sequence_index=1,
+                folder_name="Canyon",
+                folder_order_index=0,
+                visual_intent_ids=["ia"],
+            ),
+            ScriptSegment(
+                segment_id="c_a2",
+                text="A2",
+                sequence_index=2,
+                folder_name="Canyon",
+                folder_order_index=0,
+            ),
+            ScriptSegment(
+                segment_id="d_b1",
+                text="B1",
+                sequence_index=3,
+                folder_name="Desert",
+                folder_order_index=1,
+            ),
+        ],
+    )
+    save_script_draft(project, draft)
+    lock_script(project)
+
+    updated = update_folder_chapter_narration(
+        project, "Canyon", "Neuer Canyon-Text über die Schlucht."
+    )
+    assert not script_locked_path(project).is_file()
+    canyon = [s for s in updated.segments if s.folder_name == "Canyon"]
+    desert = [s for s in updated.segments if s.folder_name == "Desert"]
+    assert len(canyon) == 1
+    assert canyon[0].text == "Neuer Canyon-Text über die Schlucht."
+    assert canyon[0].visual_intent_ids == ["ia"]
+    assert len(desert) == 1
+    assert desert[0].text == "B1"
+    assert chapter_narration_text(updated, "Canyon").startswith("Neuer Canyon")
 
 
 def test_folder_script_prompt_binds_to_dramaturgy_chapter() -> None:
