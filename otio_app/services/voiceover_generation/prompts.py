@@ -1133,23 +1133,23 @@ same shape as the original assignment:
 def _folder_voiceover_block(
     entry: DramaturgyFolderEntry | None,
     draft: FolderVoiceoverDraft,
-    inventory_assets: list[dict],
+    inventory_assets: list[dict] | None = None,
 ) -> str:
+    """Ordner-Block für den Intro-Prompt.
+
+    Inventory-Summaries werden bewusst NICHT mehr mitgegeben — bei vielen
+    Orten wurde der Prompt zu lang. Asset-IDs kommen nur aus sentence_items.
+    """
+    del inventory_assets  # kept for call-site compatibility; not sent to the LLM
     role = entry.dramaturgy_role if entry is not None else "-"
     sentence_lines = "\n".join(
         f"    - sentence_id={item.sentence_id} primary_asset_id={item.primary_asset_id or '(none)'}: {item.text}"
         for item in draft.sentence_items
     ) or "    (keine sentence_items)"
-    inventory_lines = "\n".join(
-        f"    - asset_id: {asset.get('asset_id', '')} | type: {asset.get('media_type', '?')} "
-        f"| description: {asset.get('description', '')}"
-        for asset in inventory_assets
-    ) or "    (kein zusätzliches Inventory verfügbar)"
     return (
         f"[{draft.folder_name}] (dramaturgy_role: {role})\n"
         f"  Full voice-over text:\n  {draft.voiceover_text_full}\n"
-        f"  Sentence/beat breakdown:\n{sentence_lines}\n"
-        f"  Additional inventory for this location (for supplement options):\n{inventory_lines}"
+        f"  Sentence/beat breakdown:\n{sentence_lines}"
     )
 
 
@@ -1167,8 +1167,12 @@ def build_intro_hook_prompt(
 
     Fordert echte Doku-Prosa (kein Assetlisten-Stil, keine reine
     Zusammenfassung) UND eine vollständige visuelle Zuordnung (visual_beats)
-    für jeden Kandidaten im selben JSON-Response."""
-    inventory_by_folder = inventory_by_folder or {}
+    für jeden Kandidaten im selben JSON-Response.
+
+    ``inventory_by_folder`` wird ignoriert (Rückwärtskompatibilität) — zu lang
+    bei vielen Ordnern; Asset-IDs nur aus sentence_items.
+    """
+    del inventory_by_folder
     entries_by_folder = {entry.folder_name: entry for entry in dramaturgy_plan.recommended_folder_order}
 
     tone_tags = ", ".join(project_brief.tone_tags) or "(keine Angabe)"
@@ -1181,9 +1185,7 @@ def build_intro_hook_prompt(
     forbidden_block = "\n".join(f"- {phrase}" for phrase in forbidden_phrases) or "(keine)"
 
     folder_blocks = "\n\n".join(
-        _folder_voiceover_block(
-            entries_by_folder.get(draft.folder_name), draft, inventory_by_folder.get(draft.folder_name, [])
-        )
+        _folder_voiceover_block(entries_by_folder.get(draft.folder_name), draft)
         for draft in confirmed_folder_voiceovers
     ) or "(keine bestätigten Folder Voice-overs verfügbar)"
 
@@ -1197,7 +1199,7 @@ Do not merely summarize the folder voice-overs. Create a strong documentary \
 opening hook.
 
 Do not invent asset IDs. Use only asset IDs present in the provided confirmed \
-sentence_items or inventory summaries below.
+sentence_items below (no separate inventory list is provided).
 
 {native_speaker_language_block(settings.language or project_brief.language)}
 

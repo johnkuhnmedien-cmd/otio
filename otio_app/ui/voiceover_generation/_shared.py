@@ -102,8 +102,8 @@ LLM_INPUT_INFO = {
     "intro": (
         "Intro-Settings · Brief/Negative Rules/Forbidden · Style "
         "(Raw Intro Text oder Style Profile) · Dramaturgie (Arc/Promise) · "
-        "alle bestätigten Folder-VOs (Text + Satz-Assets) · "
-        "Inventory-Summaries pro Ordner."
+        "alle Kapitel-/Folder-VOs (Text + Satz-Assets). "
+        "Kein Inventory-Dump (zu lang)."
     ),
     "enhanced_script": (
         "Project Brief · Film-Kontext (Titel, Promise, Arc) · "

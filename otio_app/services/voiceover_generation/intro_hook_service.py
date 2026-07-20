@@ -564,6 +564,8 @@ def build_intro_hook_candidates(
     settings = load_intro_hook_settings(project)
     confirmed_drafts = load_intro_source_folder_drafts(project)
 
+    # Inventory nur noch für Post-Validierung der Asset-IDs — nicht im Prompt
+    # (bei vielen Ordnern zu lang).
     inventory_by_folder = {
         draft.folder_name: build_inventory_asset_context(project, draft.folder_name)
         for draft in confirmed_drafts
@@ -580,7 +582,6 @@ def build_intro_hook_candidates(
         dramaturgy_plan=dramaturgy_plan,
         confirmed_folder_voiceovers=confirmed_drafts,
         settings=settings,
-        inventory_by_folder=inventory_by_folder,
         style_context_text=style_context_text_for_prompts(project, for_intro=True),
     )
     prompt_hash = content_hash(prompt)
