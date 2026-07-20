@@ -544,7 +544,10 @@ def test_apply_word_target_button_is_present_with_green_marker(
     Erkennungsmerkmal (🟢) direkt im Label."""
     at = _run_repro(tmp_path, monkeypatch, "fvo-word-target-ui-project")
     button_labels = {button.label for button in at.button}
-    assert "🟢 Zielwortanzahl 135 auf alle aktiven Folder anwenden" in button_labels
+    assert (
+        f"🟢 Zielwortanzahl {VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS} "
+        "auf alle aktiven Folder anwenden"
+    ) in button_labels
 
 
 def test_apply_word_target_button_click_overrides_enabled_folder_words(
@@ -584,7 +587,13 @@ def test_apply_word_target_button_click_overrides_enabled_folder_words(
     assert not at.exception, at.exception
 
     apply_button = next(
-        b for b in at.button if b.label == "🟢 Zielwortanzahl 135 auf alle aktiven Folder anwenden"
+        b
+        for b in at.button
+        if b.label
+        == (
+            f"🟢 Zielwortanzahl {VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS} "
+            "auf alle aktiven Folder anwenden"
+        )
     )
     at = apply_button.click().run()
     assert not at.exception, at.exception
@@ -621,7 +630,13 @@ def test_apply_word_target_button_click_does_not_change_existing_voiceover_text(
     assert not at.exception, at.exception
 
     apply_button = next(
-        b for b in at.button if b.label == "🟢 Zielwortanzahl 135 auf alle aktiven Folder anwenden"
+        b
+        for b in at.button
+        if b.label
+        == (
+            f"🟢 Zielwortanzahl {VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS} "
+            "auf alle aktiven Folder anwenden"
+        )
     )
     at = apply_button.click().run()
     assert not at.exception, at.exception
@@ -788,8 +803,14 @@ def test_asset_aware_regen_buttons_are_present_with_green_marker(
     at = _run_repro(tmp_path, monkeypatch, "fvo-asset-aware-present-project")
     at = _open_draft_in_apptest(at)
     button_labels = {button.label for button in at.button}
-    assert "🟢 Asset-bewusst neu generieren (135 Wörter)" in button_labels
-    assert "🟢 Alle asset-bewusst neu generieren (135 Wörter)" in button_labels
+    assert (
+        f"🟢 Asset-bewusst neu generieren ({VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS} Wörter)"
+        in button_labels
+    )
+    assert (
+        f"🟢 Alle asset-bewusst neu generieren ({VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS} Wörter)"
+        in button_labels
+    )
 
 
 def test_asset_aware_regen_button_click_updates_settings_and_regenerates(
@@ -818,7 +839,10 @@ def test_asset_aware_regen_button_click_updates_settings_and_regenerates(
 
     at = _open_draft_in_apptest(at)
     regen_button = next(
-        b for b in at.button if b.label == "🟢 Asset-bewusst neu generieren (135 Wörter)"
+        b
+        for b in at.button
+        if b.label
+        == f"🟢 Asset-bewusst neu generieren ({VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS} Wörter)"
     )
     at = regen_button.click().run()
     assert not at.exception, at.exception
@@ -850,7 +874,13 @@ def test_bulk_asset_aware_regen_button_click_updates_all_enabled_folders(
     assert not at.exception, at.exception
 
     bulk_button = next(
-        b for b in at.button if b.label == "🟢 Alle asset-bewusst neu generieren (135 Wörter)"
+        b
+        for b in at.button
+        if b.label
+        == (
+            f"🟢 Alle asset-bewusst neu generieren "
+            f"({VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS} Wörter)"
+        )
     )
     at = bulk_button.click().run()
     assert not at.exception, at.exception

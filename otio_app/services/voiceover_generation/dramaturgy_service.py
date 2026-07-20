@@ -18,6 +18,7 @@ from otio_app.defaults import (
     VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
     VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
     VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
+    VOICEOVER_GEN_FOLDER_WORD_TOLERANCE,
 )
 from otio_app.models import Project
 from otio_app.project_layout import (
@@ -294,25 +295,46 @@ def _int_field(entry: dict, key: str, fallback: int) -> int:
         return fallback
 
 
-def _bool_field(entry: dict, key: str, default: bool = False) -> bool:
-    value = entry.get(key, default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "1", "yes", "y", "ja"}:
-            return True
-        if normalized in {"false", "0", "no", "n", "nein", ""}:
-            return False
-    return default
+def _normalize_recommended_word_targets(
+    target: int,
+    min_words: int,
+    max_words: int,
+) -> tuple[int, int, int]:
+    """Hält Zielwortzahl im Band 150±30 (120–180) und leitet min/max ab."""
+    band_min = VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS
+    band_max = VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS
+    baseline = VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+    tolerance = VOICEOVER_GEN_FOLDER_WORD_TOLERANCE
+
+    if target <= 0:
+        target = baseline
+    target = max(band_min, min(band_max, target))
+
+    if min_words <= 0 or max_words <= 0 or min_words > max_words:
+        min_words = max(band_min, target - tolerance)
+        max_words = min(band_max, target + tolerance)
+    else:
+        min_words = max(band_min, min(min_words, target))
+        max_words = min(band_max, max(max_words, target))
+        # Zu enge LLM-Spannen (z. B. ±10%) auf ±tolerance aufweiten, solange
+        # im Band — sonst wirkt die Tabelle wieder starr.
+        if max_words - min_words < tolerance:
+            min_words = max(band_min, target - tolerance)
+            max_words = min(band_max, target + tolerance)
+
+    return target, min_words, max_words
 
 
 def _folder_entry_from_payload(entry: dict, *, default_order: int) -> DramaturgyFolderEntry | None:
     folder_name = str(entry.get("folder_name", "")).strip()
     if not folder_name:
         return None
+
+    target, min_words, max_words = _normalize_recommended_word_targets(
+        _int_field(entry, "recommended_word_count", VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS),
+        _int_field(entry, "recommended_min_words", VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS),
+        _int_field(entry, "recommended_max_words", VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS),
+    )
 
     # Craft-Flags/Hints kommen bewusst NICHT mehr aus dem LLM-Prompt.
     # Auch wenn ein Modell sie trotzdem mitschickt: ignorieren — spart Kosten
@@ -326,15 +348,9 @@ def _folder_entry_from_payload(entry: dict, *, default_order: int) -> Dramaturgy
         visual_strength_score=_float_field(entry, "visual_strength_score"),
         asset_diversity_score=_float_field(entry, "asset_diversity_score"),
         hook_potential_score=_float_field(entry, "hook_potential_score"),
-        recommended_word_count=_int_field(
-            entry, "recommended_word_count", VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
-        ),
-        recommended_min_words=_int_field(
-            entry, "recommended_min_words", VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS
-        ),
-        recommended_max_words=_int_field(
-            entry, "recommended_max_words", VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS
-        ),
+        recommended_word_count=target,
+        recommended_min_words=min_words,
+        recommended_max_words=max_words,
         transition_goal_to_next="",
         transition_from_previous_hint="",
         contrast_or_commonality_hint="",

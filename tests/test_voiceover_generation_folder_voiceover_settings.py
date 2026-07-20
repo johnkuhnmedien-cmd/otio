@@ -327,9 +327,9 @@ def test_folder_voiceover_setting_model_default_is_135_words() -> None:
     neuen Standard entsprechen — Nutzerwunsch, die Zielwortanzahl auf 135 zu
     senken, um dem Cut Plan mehr Spielraum zu geben."""
     setting = FolderVoiceoverSetting(folder_name="Grand Canyon")
-    assert setting.target_words == 135 == VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
+    assert setting.target_words == 150 == VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS
     assert setting.min_words == 120 == VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS
-    assert setting.max_words == 150 == VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS
+    assert setting.max_words == 180 == VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS
 
 
 def test_apply_standard_word_target_raises_without_existing_settings(tmp_path: Path) -> None:

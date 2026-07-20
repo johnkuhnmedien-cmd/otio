@@ -225,10 +225,10 @@ def apply_standard_word_target_to_enabled_settings(project: Project) -> FolderVo
     """Setzt target_words/min_words/max_words für ALLE aktivierten
     (enabled=True) Folder-Settings explizit auf den neuen Standard
     (VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS/_MIN_WORDS/_MAX_WORDS) —
-    ausschließlich bei explizitem Klick auf den Button „Zielwortanzahl 135
-    auf alle aktiven Folder anwenden“ (Nutzerwunsch, Juli 2026). Bestehende
-    Settings werden NIE automatisch/heimlich überschrieben — nur dieser
-    eine, bewusste Aufruf ändert etwas.
+    ausschließlich bei explizitem Klick auf den Button „Zielwortanzahl …
+    auf alle aktiven Folder anwenden“. Bestehende Settings werden NIE
+    automatisch/heimlich überschrieben — nur dieser eine, bewusste Aufruf
+    ändert etwas.
 
     Ändert AUSSCHLIESSLICH diese drei Wortanzahl-Felder; alle anderen
     Settings (Übergänge, must_include/-avoid, folder_extra_prompt, etc.)

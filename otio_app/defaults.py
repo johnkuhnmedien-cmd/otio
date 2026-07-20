@@ -281,21 +281,19 @@ DEFAULT_NEGATIVE_RULE_FLAGS: dict[str, bool] = {flag: True for flag in BRIEF_NEG
 
 # --- Dramaturgie: Wortanzahl-Heuristik pro Ordner (Phase 3) ---
 # Ausgangsheuristik — soll später in der UI pro Projekt überschreibbar sein.
-VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT = 10
+VOICEOVER_GEN_DEFAULT_WORD_TOLERANCE_PERCENT = 20
 VOICEOVER_GEN_MIN_FOLDER_WORDS = 50
 VOICEOVER_GEN_MAX_FOLDER_WORDS = 180
 
-# --- Asset-bewusste Cut-Plan-Vorbereitung, Phase 1 (Juli 2026 Nutzerwunsch):
-# neuer Standard-Zielwortanzahl-Bereich für Folder Voice-overs. Kürzere
-# Segmente lassen dem späteren Cut Plan mehr Spielraum bei Asset-Auswahl/
-# Split, ohne die Emotion/Atmosphäre des Textes zu verlieren. Gilt NUR für
-# NEU erzeugte FolderVoiceoverSetting-Werte (Modell-Default, Fallback bei
-# fehlender Dramaturgie-Empfehlung) sowie für den expliziten Button
-# "Zielwortanzahl 135 auf alle aktiven Folder anwenden" — überschreibt
-# NIEMALS automatisch bereits gespeicherte folder_voiceover_settings.json.
-VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS = 135
+# Baseline für Dramaturgie-/Folder-VO-Wortziele: 150 ± 30 Wörter.
+# Das LLM soll innerhalb dieses Bandes je Kapitel entscheiden, wie viel zu
+# berichten ist (interessant/dicht → eher oben, dünn/atmosphärisch → eher unten).
+# Gilt für NEU erzeugte Defaults und den Button „Zielwortanzahl … anwenden“ —
+# überschreibt NIEMALS automatisch bereits gespeicherte Settings.
+VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS = 150
 VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS = 120
-VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS = 150
+VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS = 180
+VOICEOVER_GEN_FOLDER_WORD_TOLERANCE = 30
 
 # --- Asset-bewusste Cut-Plan-Vorbereitung, Phase 2: reine Diagnose-Heuristik
 # für die Folder-Voice-over-Asset-Readiness (siehe

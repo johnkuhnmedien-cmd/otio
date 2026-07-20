@@ -1261,7 +1261,11 @@ def test_dramaturgy_prompt_omits_craft_flags_entirely() -> None:
     assert "transition_from_previous_hint" not in prompt
     assert "contrast_or_commonality_hint" not in prompt
     assert "Do NOT output per-chapter transition/callback/contrast checkboxes" in prompt
-    assert '"recommended_word_count": 135' in prompt
+    assert '"recommended_word_count": 150' in prompt
+    assert "about 150 words" in prompt
+    assert "120–180" in prompt or "120-180" in prompt
+    assert "Do NOT use rigid fixed pairs" in prompt
+    assert "estimated_voiceover_word_count" not in prompt
     assert '"risks": []' in prompt
 
 

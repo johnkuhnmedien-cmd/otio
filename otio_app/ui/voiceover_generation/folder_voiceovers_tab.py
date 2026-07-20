@@ -561,12 +561,12 @@ def _render_folder_draft(
                 st.rerun()
 
     if render_new_feature_button(
-        "🟢 Asset-bewusst neu generieren (135 Wörter)",
+        f"🟢 Asset-bewusst neu generieren ({VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS} Wörter)",
         key=f"vo_fvo_regen_asset_aware_{folder_name}_{project.id}",
-        help="NEU: hebt NUR diesen Ordner zuerst auf die neue Standard-Zielwortanzahl "
-        "(135, min 120, max 150) und generiert danach in einem Schritt neu — nutzt "
-        "automatisch den bereits asset-bewussten Prompt (kein neuer Prompt, nur ein "
-        "Komfort-Klick für bereits vor dieser Änderung generierte Ordner).",
+        help="Hebt NUR diesen Ordner zuerst auf die Standard-Zielwortanzahl "
+        f"({VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS}, min {VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS}, "
+        f"max {VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS}) und generiert danach in einem Schritt neu — "
+        "nutzt den asset-bewussten Prompt (Komfort-Klick für ältere Ordner).",
     ):
         with st.spinner("Zielwortanzahl wird angehoben und neu erzeugt…"):
             try:
@@ -704,13 +704,16 @@ def render_folder_voiceovers_page() -> None:
             st.rerun()
     with col_word_target:
         if render_new_feature_button(
-            "🟢 Zielwortanzahl 135 auf alle aktiven Folder anwenden",
+            f"🟢 Zielwortanzahl {VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS} "
+            "auf alle aktiven Folder anwenden",
             key=f"vo_fvo_apply_word_target_{project.id}",
-            help=f"NEU: setzt target_words/min_words/max_words für alle aktivierten Ordner explizit auf "
-            f"{VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS} (min {VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS}, "
-            f"max {VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS}) — kürzer und flexibler für den späteren Cut "
-            "Plan. Ändert NUR die Settings, nicht sofort die bereits erzeugten Texte. Deaktivierte Ordner "
-            "und alle anderen Settings-Felder bleiben unverändert.",
+            help=(
+                "Setzt target_words/min_words/max_words für alle aktivierten Ordner explizit auf "
+                f"{VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS} "
+                f"(min {VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS}, "
+                f"max {VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS}) — Baseline 150 ± 30. "
+                "Ändert NUR die Settings, nicht sofort die bereits erzeugten Texte."
+            ),
         ):
             apply_standard_word_target_to_enabled_settings(project)
             st.success(
@@ -1005,11 +1008,15 @@ def _render_bulk_draft_actions(
             st.rerun()
 
     if render_new_feature_button(
-        "🟢 Alle asset-bewusst neu generieren (135 Wörter)",
+        f"🟢 Alle asset-bewusst neu generieren ({VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS} Wörter)",
         key=f"vo_fvo_regen_all_asset_aware_{project.id}",
-        help="NEU: hebt ALLE aktivierten Ordner zuerst auf die neue Standard-"
-        "Zielwortanzahl (135, min 120, max 150) und generiert danach sequenziell "
-        "neu — Komfort-Aktion für bereits vor dieser Änderung generierte Projekte.",
+        help=(
+            "Hebt ALLE aktivierten Ordner zuerst auf die Standard-Zielwortanzahl "
+            f"({VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS}, "
+            f"min {VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS}, "
+            f"max {VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS}) und generiert danach "
+            "sequenziell neu — Komfort-Aktion für ältere Projekte."
+        ),
     ):
         progress_placeholder = st.empty()
 

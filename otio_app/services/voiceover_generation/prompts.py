@@ -266,8 +266,6 @@ def _folder_summary_block(summary: FolderInventorySummary) -> str:
         f"(video: {summary.video_count}, image: {summary.image_count})\n"
         f"- visual_strength_score: {summary.visual_strength_score}\n"
         f"- asset_diversity_score: {summary.asset_diversity_score}\n"
-        f"- estimated_voiceover_word_count: {summary.estimated_voiceover_word_count} "
-        f"({summary.estimated_min_words}-{summary.estimated_max_words})\n"
         f"- risks: {risks}"
     )
 
@@ -379,8 +377,22 @@ Decide, for the whole set of chapters above:
 - Which chapter works as the CLIMAX / escalation point?
 - Which chapter works as a calm RESOLUTION / closer?
 - What is the most compelling overall narrative arc connecting them?
-- For EACH chapter: its role, a short reason, and recommended word count for its \
-voice-over section.
+- For EACH chapter: its role, a short reason, and a recommended voice-over \
+word count.
+
+### Voice-over length per chapter (IMPORTANT — decide freely, do not copy a grid)
+Baseline orientation: about 150 words per chapter, with a hard band of \
+120–180 words (±30 around the baseline).
+YOU choose the exact target for each chapter based on narrative need:
+- richer story / higher interest / climax / opener with more to say → toward 160–180
+- thinner material / calmer bridge / less to report → toward 120–140
+- typical middle chapters → near 150
+Do NOT use rigid fixed pairs like only 115 or only 165. Vary targets across \
+chapters when the story justifies it. Then set:
+- recommended_word_count = your chosen target (integer in 120–180)
+- recommended_min_words = target − 30 (not below 120)
+- recommended_max_words = target + 30 (not above 180)
+Asset counts are only weak capacity signals — they must NOT dictate word count.
 
 Do NOT output per-chapter transition/callback/contrast checkboxes, hint strings, \
 or craft flags. Those optional editor controls are handled outside this prompt and \
@@ -407,9 +419,9 @@ this shape:
       "visual_strength_score": 0.0,
       "asset_diversity_score": 0.0,
       "hook_potential_score": 0.0,
-      "recommended_word_count": 135,
+      "recommended_word_count": 150,
       "recommended_min_words": 120,
-      "recommended_max_words": 150,
+      "recommended_max_words": 180,
       "risks": []
     }}
   ],

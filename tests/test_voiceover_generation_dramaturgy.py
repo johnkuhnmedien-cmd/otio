@@ -467,6 +467,57 @@ def test_dramaturgy_writes_no_edit_plan_documents(tmp_path: Path) -> None:
 
 
 
+def test_build_dramaturgy_plan_normalizes_word_targets_to_150_band(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
+    payload = {
+        "project_title": "USA",
+        "core_promise": "x",
+        "narrative_arc": "y",
+        "global_transition_strategy": "z",
+        "recommended_folder_order": [
+            {
+                "folder_name": "Grand Canyon",
+                "order_index": 1,
+                "enabled": True,
+                "dramaturgy_role": "opener",
+                "reason": "stark",
+                "recommended_word_count": 115,
+                "recommended_min_words": 104,
+                "recommended_max_words": 126,
+            },
+            {
+                "folder_name": "Yellowstone",
+                "order_index": 2,
+                "enabled": True,
+                "dramaturgy_role": "climax",
+                "reason": "dicht",
+                "recommended_word_count": 165,
+                "recommended_min_words": 148,
+                "recommended_max_words": 180,
+            },
+        ],
+        "risks": [],
+    }
+    fake = _fake_response()
+    fake.raw_text = json.dumps(payload)
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata", return_value=fake
+    ):
+        result = build_dramaturgy_plan(project, provider="anthropic", model="claude-sonnet-5")
+
+    assert result.status == STATUS_PASS
+    assert result.plan is not None
+    by_folder = {entry.folder_name: entry for entry in result.plan.recommended_folder_order}
+    grand = by_folder["Grand Canyon"]
+    assert grand.recommended_word_count == 120  # 115 clamped up into 120–180
+    assert grand.recommended_min_words == 120
+    assert grand.recommended_max_words == 150  # enge ±10%-Spanne auf ±30 geweitet
+    yellowstone = by_folder["Yellowstone"]
+    assert yellowstone.recommended_word_count == 165
+    assert yellowstone.recommended_min_words == 148
+    assert yellowstone.recommended_max_words == 180
+
+
 def test_build_dramaturgy_plan_ignores_llm_craft_flag_booleans(tmp_path: Path) -> None:
     """Craft-Flags sind aus dem Prompt entfernt — LLM-Werte werden ignoriert."""
     project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone"])
