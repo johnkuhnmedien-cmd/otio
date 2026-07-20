@@ -268,85 +268,210 @@ def build_rough_cut_prompt(
     dramaturgy_text: str,
 ) -> str:
     return f"""\
-You are an editorial planner for a documentary cut.
+You are LLM 2, the editorial rough-cut planner for a documentary pipeline.
 
-Create:
-1) pause_directives (editorial pauses only — NO milliseconds, NO frames)
-2) rough visual edit plan (shots may span multiple segments; multiple shots may sit inside one segment)
-3) concrete coverage_gaps for shots without a suitable local asset
+Your task is to create:
 
-EDITORIAL GUIDANCE (variety — nothing is banned by structure):
-- Prefer a varied, documentary rhythm: holds across statements, detail inserts \
-inside a sentence, and occasional one-shot-per-sentence are all allowed.
-- Do NOT default to a monotonous grid where every sentence/segment becomes \
-exactly one shot with one asset. Mix structures when it serves the story.
-- Picture cuts need not land on sentence ends; they also may, when that cut \
-is the strongest editorial choice.
+1. editorial pause decisions,
+2. a rough visual edit plan,
+3. concrete coverage gaps where no suitable local asset exists.
 
-TECHNICAL SCOPE (Python finalizes the timeline later):
-- Do NOT output final absolute timeline times, frame numbers, source \
-timecodes, or start_frame/end_frame fields.
-- Describe shot ranges only via narration anchors \
-(segment_id + offset_seconds within that segment).
+The locked narration provides a continuous time carpet.
+The visual edit plan cuts freely across that time carpet.
 
-pause_function: breath|emphasis|anticipation|reveal|chapter_transition|reflection|no_pause
-duration_class: short|medium|long
-visual_behavior: hold_current_shot|next_shot_may_start_during_pause|cut_at_pause_start|cut_at_pause_end|editorial_choice
+NON-NEGOTIABLE EDITORIAL RULES:
 
-OUTPUT JSON:
+- A sentence is not a shot.
+- A sentence is not an asset.
+- A voice segment is not a shot.
+- A visual beat is not a sentence.
+- A sentence ending is not automatically a picture cut.
+- A pause does not automatically require a picture cut.
+- A picture cut may happen during narration or during a pause.
+- One shot may span multiple narration segments.
+- Multiple shots may occur inside one narration segment.
+- Do not create one shot per sentence or one shot per segment.
+- Prefer meaningful editorial shot spans over unnecessary rapid cutting.
+
+SCRIPT LOCK:
+
+- The locked script is immutable.
+- Do not rewrite, shorten, expand, summarize or correct the narration.
+- Do not reorder narration segments.
+- Do not create new narration text or new narration segments.
+- Use only segment IDs that exist in the provided inputs.
+
+TIMING RULES:
+
+- Segment timings are authoritative measured durations.
+- Use them only to judge pacing and relative shot length.
+- Do not invent or modify audio durations.
+- Do not output seconds, milliseconds, timecodes or frames.
+- Do not calculate final timeline positions.
+
+Use only these editorial anchor positions:
+
+start | early | middle | late | end
+
+A segment anchor must have this form:
+
+{{
+  "type": "segment",
+  "segment_id": "segment_001",
+  "position": "start|early|middle|late|end"
+}}
+
+When a shot boundary is explicitly tied to a pause, a pause anchor may be used:
+
+{{
+  "type": "pause",
+  "after_segment_id": "segment_001",
+  "position": "start|middle|end"
+}}
+
+ASSET RULES:
+
+- Use only local_asset_id values that exist in LOCAL ASSETS.
+- Never invent an asset ID, file path, URL, provider result or media description.
+- Do not infer visual content from a filename or file extension alone.
+- Judge an asset only from the metadata and analysis supplied in LOCAL ASSETS.
+- Existing local assets are visual resources, not the narrative boundary.
+- Do not force an unsuitable local asset into a shot.
+- If no suitable local asset exists, set local_asset_id to null.
+- Every shot with local_asset_id null must reference exactly one coverage_gap_id.
+- A shot with a suitable local asset must have coverage_gap_id null.
+
+PAUSE RULES:
+
+Allowed pause_function values:
+
+breath | emphasis | anticipation | reveal |
+chapter_transition | reflection | no_pause
+
+Allowed duration_class values:
+
+short | medium | long
+
+Allowed visual_behavior values:
+
+hold_current_shot |
+next_shot_may_start_during_pause |
+cut_at_pause_start |
+cut_at_pause_end |
+editorial_choice
+
+- Do not output pause durations in seconds or milliseconds.
+- Emit a pause directive only when the boundary decision is editorially meaningful.
+- Use no_pause only when an important boundary should explicitly remain continuous.
+- Every pause directive must include an editorial reason.
+- At most one pause directive may exist for the same after_segment_id.
+
+SHOT RULES:
+
+- Shots must be ordered chronologically.
+- Shot anchors must not run backwards.
+- Do not create overlapping shots.
+- A shot may start or end inside a segment.
+- A shot may span several segments.
+- Multiple shots may use the same local asset when editorially justified.
+- Do not change pictures merely because a sentence or segment ends.
+- visual_intent describes what the image should communicate.
+- It must not fabricate details about an unseen asset.
+
+COVERAGE-GAP RULES:
+
+- Create a coverage gap only for a concrete shot that lacks a suitable local asset.
+- Each gap must describe the missing visual need precisely enough for later stock search or media generation.
+- Do not select a stock provider.
+- Do not invent search results.
+- Mark fact_check_required as true when the requested visual depends on uncertain historical, geographical or cultural claims.
+
+RETURN STRICT JSON ONLY.
+
+Do not use Markdown.
+Do not add explanations before or after the JSON.
+Do not use comments.
+Do not use trailing commas.
+Use empty arrays when no entries exist.
+
+OUTPUT SCHEMA:
+
 {{
   "pause_directives": [
     {{
-      "after_segment_id": "segment_012",
-      "pause_function": "anticipation",
-      "duration_class": "medium",
-      "visual_behavior": "next_shot_may_start_during_pause",
-      "editorial_reason": "..."
+      "after_segment_id": "segment_001",
+      "pause_function": "breath|emphasis|anticipation|reveal|chapter_transition|reflection|no_pause",
+      "duration_class": "short|medium|long",
+      "visual_behavior": "hold_current_shot|next_shot_may_start_during_pause|cut_at_pause_start|cut_at_pause_end|editorial_choice",
+      "editorial_reason": "Concise editorial explanation."
     }}
   ],
   "shots": [
     {{
-      "shot_id": "shot_007",
-      "narration_start_anchor": {{"segment_id": "segment_003", "offset_seconds": 1.2}},
-      "narration_end_anchor": {{"segment_id": "segment_005", "offset_seconds": 0.4}},
-      "visual_intent_id": "intent_004",
-      "asset_id": null,
-      "candidate_asset_ids": [],
-      "editorial_function": "orientation",
-      "editorial_reason": "...",
-      "visual_behavior": "hold",
-      "may_overlap_pause": true
+      "shot_id": "shot_001",
+      "start_anchor": {{
+        "type": "segment|pause",
+        "segment_id": "segment_001",
+        "after_segment_id": null,
+        "position": "start|early|middle|late|end"
+      }},
+      "end_anchor": {{
+        "type": "segment|pause",
+        "segment_id": "segment_002",
+        "after_segment_id": null,
+        "position": "start|early|middle|late|end"
+      }},
+      "narrative_function": "orientation|context|evidence|atmosphere|transition|contrast|reveal|reflection",
+      "visual_intent": "What the shot should communicate editorially.",
+      "local_asset_id": "existing_asset_id_or_null",
+      "asset_fit": "strong|acceptable|none",
+      "asset_fit_reason": "Why the asset is or is not suitable.",
+      "continuity_notes": "Relevant movement, composition or transition guidance.",
+      "coverage_gap_id": "gap_001_or_null"
     }}
   ],
   "coverage_gaps": [
     {{
-      "gap_id": "gap_008",
-      "related_shot_ids": ["shot_007"],
-      "visual_intent_id": "intent_004",
-      "subject": "...",
-      "location": "...",
-      "action": "wide establishing shot",
-      "editorial_function": "orientation",
-      "preferred_media_type": "video",
-      "fallback_media_type": "photo",
-      "minimum_resolution": "1920x1080",
-      "priority": "high",
-      "reason": "...",
-      "search_queries": ["...", "..."]
+      "coverage_gap_id": "gap_001",
+      "shot_id": "shot_001",
+      "needed_visual": "Concrete description of the missing visual.",
+      "editorial_purpose": "Why this visual is needed.",
+      "preferred_media_type": "photo|video|map|archive|illustration|either",
+      "search_concepts": [
+        "concise search concept"
+      ],
+      "must_include": [
+        "required visible element"
+      ],
+      "must_avoid": [
+        "misleading or unsuitable element"
+      ],
+      "fact_check_required": false
     }}
   ]
 }}
 
+FINAL VALIDATION BEFORE RETURNING JSON:
+
+- All IDs are unique where required.
+- All referenced segment IDs exist.
+- All referenced local asset IDs exist.
+- Shots are chronological and non-overlapping.
+- No seconds, milliseconds, timecodes or frames are present.
+- Every shot without a suitable asset has exactly one linked coverage gap.
+- No shot is created merely because a sentence or segment ends.
+- The locked narration has not been changed.
+
 LOCKED SCRIPT:
 {locked_script_json}
 
-SEGMENT TIMINGS (real measured durations — do not invent):
+SEGMENT TIMINGS:
 {segment_timings_json}
 
 LOCAL ASSETS:
 {local_assets_json}
 
-STYLE:
+STYLE PROFILE:
 {style_profile_text}
 
 DRAMATURGY:

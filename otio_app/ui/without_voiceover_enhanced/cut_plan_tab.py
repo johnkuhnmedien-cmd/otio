@@ -93,15 +93,30 @@ def render_enhanced_cut_plan_page() -> None:
     if rough is not None:
         st.write(f"Grober Plan: {len(rough.shots)} Shots")
         for shot in rough.shots:
+            start = shot.start_anchor
+            end = shot.end_anchor
+            start_label = (
+                f"pause after {start.after_segment_id}@{start.position}"
+                if start.type == "pause"
+                else f"{start.segment_id}@{start.position}"
+            )
+            end_label = (
+                f"pause after {end.after_segment_id}@{end.position}"
+                if end.type == "pause"
+                else f"{end.segment_id}@{end.position}"
+            )
             st.caption(
-                f"{shot.shot_id}: {shot.narration_start_anchor.segment_id}→"
-                f"{shot.narration_end_anchor.segment_id} · asset={shot.asset_id}"
+                f"{shot.shot_id}: {start_label}→{end_label} · "
+                f"asset={shot.local_asset_id or shot.asset_id} · "
+                f"fit={shot.asset_fit}"
             )
     if coverage is not None and coverage.gaps:
         st.write(f"Coverage Gaps: {len(coverage.gaps)}")
         for gap in coverage.gaps:
+            queries = gap.search_concepts or gap.search_queries
             st.caption(
-                f"{gap.gap_id}: {gap.subject} · queries={gap.search_queries}"
+                f"{gap.gap_id}: {gap.needed_visual or gap.subject} · "
+                f"queries={queries}"
             )
 
     st.divider()

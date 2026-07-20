@@ -8,8 +8,19 @@ from pydantic import BaseModel, Field
 
 
 class NarrationAnchor(BaseModel):
+    """Absolute/sekundenbasierte Anker (Final Cut / Timeline-Resolver)."""
+
     segment_id: str
     offset_seconds: float = 0.0
+
+
+class EditorialAnchor(BaseModel):
+    """Redaktionelle Anker aus LLM-Lauf 2 (keine Sekunden/Frames)."""
+
+    type: str = "segment"  # segment | pause
+    segment_id: str = ""
+    after_segment_id: Optional[str] = None
+    position: str = "start"  # start|early|middle|late|end
 
 
 class ScriptSegment(BaseModel):
@@ -111,8 +122,22 @@ class NarrationTimelineDocument(BaseModel):
 
 class RoughShot(BaseModel):
     shot_id: str
-    narration_start_anchor: NarrationAnchor
-    narration_end_anchor: NarrationAnchor
+    start_anchor: EditorialAnchor = Field(default_factory=EditorialAnchor)
+    end_anchor: EditorialAnchor = Field(default_factory=EditorialAnchor)
+    narrative_function: str = "orientation"
+    visual_intent: str = ""
+    local_asset_id: Optional[str] = None
+    asset_fit: str = "none"
+    asset_fit_reason: str = ""
+    continuity_notes: str = ""
+    coverage_gap_id: Optional[str] = None
+    # Compat bridge for older UI / Final-Cut consumers:
+    narration_start_anchor: NarrationAnchor = Field(
+        default_factory=lambda: NarrationAnchor(segment_id="")
+    )
+    narration_end_anchor: NarrationAnchor = Field(
+        default_factory=lambda: NarrationAnchor(segment_id="")
+    )
     visual_intent_id: str = ""
     asset_id: Optional[str] = None
     candidate_asset_ids: list[str] = Field(default_factory=list)
@@ -123,7 +148,7 @@ class RoughShot(BaseModel):
 
 
 class RoughCutPlanDocument(BaseModel):
-    schema_version: str = "enhanced-rough-cut-v1"
+    schema_version: str = "enhanced-rough-cut-v2"
     script_version: str
     pause_directives: list[PauseDirective] = Field(default_factory=list)
     shots: list[RoughShot] = Field(default_factory=list)
@@ -132,12 +157,19 @@ class RoughCutPlanDocument(BaseModel):
 class CoverageGap(BaseModel):
     gap_id: str
     related_shot_ids: list[str] = Field(default_factory=list)
+    needed_visual: str = ""
+    editorial_purpose: str = ""
+    preferred_media_type: str = "video"
+    search_concepts: list[str] = Field(default_factory=list)
+    must_include: list[str] = Field(default_factory=list)
+    must_avoid: list[str] = Field(default_factory=list)
+    fact_check_required: bool = False
+    # Legacy / compat fields (still filled when useful):
     visual_intent_id: str = ""
     subject: str = ""
     location: str = ""
     action: str = ""
     editorial_function: str = "orientation"
-    preferred_media_type: str = "video"
     fallback_media_type: str = "photo"
     minimum_resolution: str = "1920x1080"
     priority: str = "high"
@@ -146,7 +178,7 @@ class CoverageGap(BaseModel):
 
 
 class CoverageGapsDocument(BaseModel):
-    schema_version: str = "enhanced-coverage-gaps-v1"
+    schema_version: str = "enhanced-coverage-gaps-v2"
     script_version: str
     gaps: list[CoverageGap] = Field(default_factory=list)
 

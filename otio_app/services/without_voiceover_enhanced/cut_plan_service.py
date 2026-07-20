@@ -24,6 +24,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
     AcceptedSupplementsDocument,
     CoverageGap,
     CoverageGapsDocument,
+    EditorialAnchor,
     FinalCutPlanDocument,
     FinalShot,
     NarrationAnchor,
@@ -90,6 +91,7 @@ def _local_assets_payload(project: Project) -> list[dict[str, Any]]:
                     duration = None
             assets.append(
                 {
+                    "local_asset_id": asset_id,
                     "asset_id": asset_id,
                     "folder": folder,
                     "path": str(path),
@@ -107,6 +109,81 @@ def _style_text(project: Project) -> str:
 def _dramaturgy_text(project: Project) -> str:
     plan = load_confirmed_dramaturgy(project)
     return plan.model_dump_json(indent=2) if plan else "(keine Dramaturgie)"
+
+
+_POSITION_FRACTION = {
+    "start": 0.0,
+    "early": 0.25,
+    "middle": 0.5,
+    "late": 0.75,
+    "end": 1.0,
+}
+
+
+def _nullish(value: Any) -> bool:
+    return value in (None, "", "null")
+
+
+def _parse_editorial_anchor(raw: Any) -> EditorialAnchor:
+    if not isinstance(raw, dict):
+        return EditorialAnchor()
+    anchor_type = str(raw.get("type") or "segment").strip().lower() or "segment"
+    position = str(raw.get("position") or "start").strip().lower() or "start"
+    if position not in _POSITION_FRACTION:
+        position = "start"
+    after = raw.get("after_segment_id")
+    segment_id = str(raw.get("segment_id") or "")
+    if anchor_type == "pause":
+        after_id = str(after or segment_id or "")
+        return EditorialAnchor(
+            type="pause",
+            segment_id=segment_id or after_id,
+            after_segment_id=after_id or None,
+            position=position if position in {"start", "middle", "end"} else "start",
+        )
+    return EditorialAnchor(
+        type="segment",
+        segment_id=segment_id,
+        after_segment_id=None if _nullish(after) else str(after),
+        position=position,
+    )
+
+
+def _editorial_to_narration_anchor(anchor: EditorialAnchor) -> NarrationAnchor:
+    """Bridge: editorial position → NarrationAnchor (fraction stored as offset).
+
+    Final Cut / Resolver still use real seconds; LLM 2 must not emit seconds.
+    Fractions (0–1) are a compact bridge for UI and later timing mapping.
+    """
+    if anchor.type == "pause":
+        segment_id = str(anchor.after_segment_id or anchor.segment_id or "")
+        # Pause start ≈ end of preceding segment; middle/end stay at end for now.
+        fraction = 1.0 if anchor.position in {"start", "middle", "end"} else 1.0
+        return NarrationAnchor(segment_id=segment_id, offset_seconds=fraction)
+    fraction = _POSITION_FRACTION.get(anchor.position, 0.0)
+    return NarrationAnchor(
+        segment_id=anchor.segment_id,
+        offset_seconds=float(fraction),
+    )
+
+
+def _legacy_anchor_to_editorial(raw: Any) -> EditorialAnchor:
+    if not isinstance(raw, dict):
+        return EditorialAnchor()
+    segment_id = str(raw.get("segment_id") or "")
+    offset = float(raw.get("offset_seconds") or 0.0)
+    # Map rough offset buckets when legacy payloads still use seconds.
+    if offset <= 0.05:
+        position = "start"
+    elif offset < 0.35:
+        position = "early"
+    elif offset < 0.65:
+        position = "middle"
+    elif offset < 0.9:
+        position = "late"
+    else:
+        position = "end"
+    return EditorialAnchor(type="segment", segment_id=segment_id, position=position)
 
 
 def parse_rough_cut_response(raw: str | dict[str, Any], script_version: str) -> tuple[
@@ -127,11 +204,7 @@ def parse_rough_cut_response(raw: str | dict[str, Any], script_version: str) -> 
         for item in payload.get("pause_directives") or []
         if isinstance(item, dict) and item.get("after_segment_id")
     ]
-    # Reject final frames in LLM output.
-    blob = json.dumps(payload)
-    if '"frame"' in blob.lower() or "timecode" in blob.lower():
-        # Soft check: explicit final frame fields are not part of schema; ignore keys.
-        pass
+
     for item in payload.get("shots") or []:
         if isinstance(item, dict) and (
             "start_frame" in item or "end_frame" in item or "timeline_start" in item
@@ -142,70 +215,152 @@ def parse_rough_cut_response(raw: str | dict[str, Any], script_version: str) -> 
     for index, item in enumerate(payload.get("shots") or [], start=1):
         if not isinstance(item, dict):
             continue
-        start = item.get("narration_start_anchor") or {}
-        end = item.get("narration_end_anchor") or {}
-        asset_id = item.get("asset_id")
+        uses_editorial = "start_anchor" in item or "end_anchor" in item
+        if uses_editorial:
+            if (
+                "offset_seconds" in (item.get("start_anchor") or {})
+                or "offset_seconds" in (item.get("end_anchor") or {})
+            ):
+                raise CutPlanError(
+                    "LLM-Ausgabe enthält Sekunden in Editorial-Ankern — "
+                    "nur position (start|early|middle|late|end) erlaubt."
+                )
+            start_anchor = _parse_editorial_anchor(item.get("start_anchor"))
+            end_anchor = _parse_editorial_anchor(item.get("end_anchor"))
+        else:
+            start_anchor = _legacy_anchor_to_editorial(item.get("narration_start_anchor"))
+            end_anchor = _legacy_anchor_to_editorial(item.get("narration_end_anchor"))
+
+        local_asset = item.get("local_asset_id", item.get("asset_id"))
+        local_asset_id = None if _nullish(local_asset) else str(local_asset)
+        gap_ref = item.get("coverage_gap_id")
+        coverage_gap_id = None if _nullish(gap_ref) else str(gap_ref)
+        narrative_function = str(
+            item.get("narrative_function")
+            or item.get("editorial_function")
+            or "orientation"
+        )
+        visual_intent = str(
+            item.get("visual_intent") or item.get("visual_intent_id") or ""
+        )
+        asset_fit = str(item.get("asset_fit") or ("none" if local_asset_id is None else "acceptable"))
+        asset_fit_reason = str(
+            item.get("asset_fit_reason") or item.get("editorial_reason") or ""
+        )
+        narration_start = _editorial_to_narration_anchor(start_anchor)
+        narration_end = _editorial_to_narration_anchor(end_anchor)
+        if not uses_editorial:
+            # Preserve legacy absolute offsets for older fixtures.
+            legacy_start = item.get("narration_start_anchor") or {}
+            legacy_end = item.get("narration_end_anchor") or {}
+            if isinstance(legacy_start, dict):
+                narration_start = NarrationAnchor(
+                    segment_id=str(legacy_start.get("segment_id") or ""),
+                    offset_seconds=float(legacy_start.get("offset_seconds") or 0.0),
+                )
+            if isinstance(legacy_end, dict):
+                narration_end = NarrationAnchor(
+                    segment_id=str(legacy_end.get("segment_id") or ""),
+                    offset_seconds=float(legacy_end.get("offset_seconds") or 0.0),
+                )
+
         shots.append(
             RoughShot(
                 shot_id=str(item.get("shot_id") or f"shot_{index:03d}"),
-                narration_start_anchor=NarrationAnchor(
-                    segment_id=str(start.get("segment_id") or ""),
-                    offset_seconds=float(start.get("offset_seconds") or 0.0),
-                ),
-                narration_end_anchor=NarrationAnchor(
-                    segment_id=str(end.get("segment_id") or ""),
-                    offset_seconds=float(end.get("offset_seconds") or 0.0),
-                ),
-                visual_intent_id=str(item.get("visual_intent_id") or ""),
-                asset_id=None if asset_id in (None, "", "null") else str(asset_id),
+                start_anchor=start_anchor,
+                end_anchor=end_anchor,
+                narrative_function=narrative_function,
+                visual_intent=visual_intent,
+                local_asset_id=local_asset_id,
+                asset_fit=asset_fit,
+                asset_fit_reason=asset_fit_reason,
+                continuity_notes=str(item.get("continuity_notes") or ""),
+                coverage_gap_id=coverage_gap_id,
+                narration_start_anchor=narration_start,
+                narration_end_anchor=narration_end,
+                visual_intent_id=str(item.get("visual_intent_id") or visual_intent),
+                asset_id=local_asset_id,
                 candidate_asset_ids=[
                     str(x) for x in (item.get("candidate_asset_ids") or []) if x
                 ],
-                editorial_function=str(item.get("editorial_function") or "orientation"),
-                editorial_reason=str(item.get("editorial_reason") or ""),
+                editorial_function=narrative_function,
+                editorial_reason=asset_fit_reason,
                 visual_behavior=str(item.get("visual_behavior") or "hold"),
                 may_overlap_pause=bool(item.get("may_overlap_pause", False)),
             )
         )
 
-    gaps = [
-        CoverageGap(
-            gap_id=str(item.get("gap_id") or f"gap_{i:03d}"),
-            related_shot_ids=[str(x) for x in (item.get("related_shot_ids") or []) if x],
-            visual_intent_id=str(item.get("visual_intent_id") or ""),
-            subject=str(item.get("subject") or ""),
-            location=str(item.get("location") or ""),
-            action=str(item.get("action") or ""),
-            editorial_function=str(item.get("editorial_function") or "orientation"),
-            preferred_media_type=str(item.get("preferred_media_type") or "video"),
-            fallback_media_type=str(item.get("fallback_media_type") or "photo"),
-            minimum_resolution=str(item.get("minimum_resolution") or "1920x1080"),
-            priority=str(item.get("priority") or "high"),
-            reason=str(item.get("reason") or ""),
-            search_queries=[str(x) for x in (item.get("search_queries") or []) if x],
-        )
-        for i, item in enumerate(payload.get("coverage_gaps") or [], start=1)
-        if isinstance(item, dict)
-    ]
-
-    # Ensure null-asset shots produce gaps.
-    covered_shots = {gid for gap in gaps for gid in gap.related_shot_ids}
-    for shot in shots:
-        if shot.asset_id is None and shot.shot_id not in covered_shots:
-            gaps.append(
-                CoverageGap(
-                    gap_id=f"gap_auto_{shot.shot_id}",
-                    related_shot_ids=[shot.shot_id],
-                    visual_intent_id=shot.visual_intent_id,
-                    subject=shot.editorial_function,
-                    action="coverage needed",
-                    editorial_function=shot.editorial_function,
-                    reason="Kein lokales Asset für diesen Shot zugewiesen.",
-                    search_queries=[
-                        shot.editorial_reason or shot.visual_intent_id or shot.shot_id
-                    ],
-                )
+    gaps: list[CoverageGap] = []
+    for i, item in enumerate(payload.get("coverage_gaps") or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        gap_id = str(item.get("coverage_gap_id") or item.get("gap_id") or f"gap_{i:03d}")
+        shot_id = item.get("shot_id")
+        related = [str(x) for x in (item.get("related_shot_ids") or []) if x]
+        if shot_id and str(shot_id) not in related:
+            related = [str(shot_id), *related]
+        needed = str(item.get("needed_visual") or item.get("subject") or "")
+        purpose = str(item.get("editorial_purpose") or item.get("reason") or "")
+        concepts = [str(x) for x in (item.get("search_concepts") or []) if x]
+        queries = [str(x) for x in (item.get("search_queries") or []) if x]
+        if not queries:
+            queries = list(concepts)
+        gaps.append(
+            CoverageGap(
+                gap_id=gap_id,
+                related_shot_ids=related,
+                needed_visual=needed,
+                editorial_purpose=purpose,
+                preferred_media_type=str(item.get("preferred_media_type") or "video"),
+                search_concepts=concepts or list(queries),
+                must_include=[str(x) for x in (item.get("must_include") or []) if x],
+                must_avoid=[str(x) for x in (item.get("must_avoid") or []) if x],
+                fact_check_required=bool(item.get("fact_check_required", False)),
+                visual_intent_id=str(item.get("visual_intent_id") or ""),
+                subject=needed or str(item.get("subject") or ""),
+                location=str(item.get("location") or ""),
+                action=str(item.get("action") or ""),
+                editorial_function=str(item.get("editorial_function") or "orientation"),
+                fallback_media_type=str(item.get("fallback_media_type") or "photo"),
+                minimum_resolution=str(item.get("minimum_resolution") or "1920x1080"),
+                priority=str(item.get("priority") or "high"),
+                reason=purpose or str(item.get("reason") or ""),
+                search_queries=queries,
             )
+        )
+
+    gaps_by_id = {gap.gap_id: gap for gap in gaps}
+    covered_shots = {sid for gap in gaps for sid in gap.related_shot_ids}
+    for shot in shots:
+        if shot.local_asset_id is not None:
+            continue
+        if shot.coverage_gap_id and shot.coverage_gap_id in gaps_by_id:
+            gap = gaps_by_id[shot.coverage_gap_id]
+            if shot.shot_id not in gap.related_shot_ids:
+                gap.related_shot_ids.append(shot.shot_id)
+            continue
+        if shot.shot_id in covered_shots:
+            continue
+        auto_id = shot.coverage_gap_id or f"gap_auto_{shot.shot_id}"
+        gaps.append(
+            CoverageGap(
+                gap_id=auto_id,
+                related_shot_ids=[shot.shot_id],
+                needed_visual=shot.visual_intent or shot.narrative_function,
+                editorial_purpose=shot.asset_fit_reason
+                or "Kein lokales Asset für diesen Shot zugewiesen.",
+                preferred_media_type="video",
+                search_concepts=[
+                    shot.visual_intent or shot.narrative_function or shot.shot_id
+                ],
+                subject=shot.visual_intent or shot.narrative_function,
+                reason="Kein lokales Asset für diesen Shot zugewiesen.",
+                search_queries=[
+                    shot.visual_intent or shot.narrative_function or shot.shot_id
+                ],
+            )
+        )
+        shot.coverage_gap_id = auto_id
 
     rough = RoughCutPlanDocument(
         script_version=script_version,
@@ -288,7 +443,11 @@ def search_supplements_for_gaps(
     all_candidates: list[StockCandidate] = []
     provider_status: dict[str, str] = {}
     for gap in coverage.gaps:
-        queries = gap.search_queries or [gap.subject or gap.action or gap.gap_id]
+        queries = (
+            gap.search_concepts
+            or gap.search_queries
+            or [gap.needed_visual or gap.subject or gap.action or gap.gap_id]
+        )
         for query in queries:
             if providers is not None:
                 from otio_app.services.without_voiceover_enhanced.stock.registry import (

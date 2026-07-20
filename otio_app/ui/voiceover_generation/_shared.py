@@ -119,7 +119,8 @@ LLM_INPUT_INFO = {
     ),
     "enhanced_rough_cut": (
         "Gesperrtes Skript (JSON) · Segment-Timings · lokale Assets (JSON) · "
-        "Style · Dramaturgie → grober Cut + Pausen + Coverage Gaps/Queries."
+        "Style · Dramaturgie → Pausen + grober Cut mit Editorial-Ankern "
+        "(start/early/middle/late/end, keine Sekunden) + Coverage Gaps."
     ),
     "enhanced_final_cut": (
         "Gesperrtes Skript · Narration-Timeline · Pause-Direktiven · "

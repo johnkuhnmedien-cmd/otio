@@ -403,45 +403,93 @@ def test_shot_freedom_multi_segment_and_multi_shot() -> None:
             "shots": [
                 {
                     "shot_id": "shot_001",
-                    "narration_start_anchor": {
+                    "start_anchor": {
+                        "type": "segment",
                         "segment_id": "segment_001",
-                        "offset_seconds": 0.0,
+                        "after_segment_id": None,
+                        "position": "start",
                     },
-                    "narration_end_anchor": {
+                    "end_anchor": {
+                        "type": "segment",
                         "segment_id": "segment_002",
-                        "offset_seconds": 0.5,
+                        "after_segment_id": None,
+                        "position": "middle",
                     },
-                    "visual_intent_id": "intent_001",
-                    "asset_id": "asset_a",
-                    "editorial_function": "orientation",
-                    "editorial_reason": "Hold across two statements",
-                    "may_overlap_pause": True,
+                    "narrative_function": "orientation",
+                    "visual_intent": "Hold across two statements",
+                    "local_asset_id": "asset_a",
+                    "asset_fit": "strong",
+                    "asset_fit_reason": "Clear establishing landscape",
+                    "continuity_notes": "",
+                    "coverage_gap_id": None,
                 },
                 {
                     "shot_id": "shot_002",
-                    "narration_start_anchor": {
+                    "start_anchor": {
+                        "type": "segment",
                         "segment_id": "segment_002",
-                        "offset_seconds": 0.5,
+                        "after_segment_id": None,
+                        "position": "middle",
                     },
-                    "narration_end_anchor": {
+                    "end_anchor": {
+                        "type": "segment",
                         "segment_id": "segment_002",
-                        "offset_seconds": 2.0,
+                        "after_segment_id": None,
+                        "position": "end",
                     },
-                    "visual_intent_id": "intent_002",
-                    "asset_id": None,
-                    "editorial_function": "detail",
-                    "editorial_reason": "Detail inside same segment",
+                    "narrative_function": "evidence",
+                    "visual_intent": "Detail inside same segment",
+                    "local_asset_id": None,
+                    "asset_fit": "none",
+                    "asset_fit_reason": "No matching local detail",
+                    "continuity_notes": "",
+                    "coverage_gap_id": "gap_002",
                 },
             ],
-            "coverage_gaps": [],
+            "coverage_gaps": [
+                {
+                    "coverage_gap_id": "gap_002",
+                    "shot_id": "shot_002",
+                    "needed_visual": "Close rock texture detail",
+                    "editorial_purpose": "Detail insert",
+                    "preferred_media_type": "photo",
+                    "search_concepts": ["red sandstone close up"],
+                    "must_include": ["rock texture"],
+                    "must_avoid": ["city skyline"],
+                    "fact_check_required": False,
+                }
+            ],
         },
         "script-v1",
     )
     assert len(rough.shots) == 2
-    assert rough.shots[0].narration_start_anchor.segment_id != rough.shots[0].narration_end_anchor.segment_id
-    assert rough.shots[1].narration_start_anchor.segment_id == "segment_002"
-    assert any(g.related_shot_ids == ["shot_002"] for g in coverage.gaps)
+    assert rough.shots[0].start_anchor.segment_id != rough.shots[0].end_anchor.segment_id
+    assert rough.shots[1].start_anchor.segment_id == "segment_002"
+    assert rough.shots[1].local_asset_id is None
+    assert rough.shots[1].coverage_gap_id == "gap_002"
+    assert any(g.gap_id == "gap_002" and g.related_shot_ids == ["shot_002"] for g in coverage.gaps)
+    assert coverage.gaps[0].search_concepts == ["red sandstone close up"]
     assert all("frame" not in d.model_dump_json() for d in rough.pause_directives)
+
+
+def test_rough_cut_prompt_uses_editorial_anchors_not_seconds() -> None:
+    from otio_app.services.without_voiceover_enhanced.script_prompts import (
+        build_rough_cut_prompt,
+    )
+
+    prompt = build_rough_cut_prompt(
+        locked_script_json="{}",
+        segment_timings_json="{}",
+        local_assets_json="[]",
+        style_profile_text="style",
+        dramaturgy_text="drama",
+    )
+    assert "You are LLM 2" in prompt
+    assert "start | early | middle | late | end" in prompt
+    assert "Do not output seconds" in prompt
+    assert "offset_seconds" not in prompt
+    assert "coverage_gap_id" in prompt
+    assert "local_asset_id" in prompt
 
 
 def test_stock_providers_registered_and_unavailable_does_not_stop_others() -> None:
@@ -783,33 +831,38 @@ def test_coverage_gap_has_search_queries_and_links() -> None:
             "shots": [
                 {
                     "shot_id": "shot_007",
-                    "narration_start_anchor": {
+                    "start_anchor": {
+                        "type": "segment",
                         "segment_id": "segment_003",
-                        "offset_seconds": 1.2,
+                        "position": "early",
                     },
-                    "narration_end_anchor": {
+                    "end_anchor": {
+                        "type": "segment",
                         "segment_id": "segment_005",
-                        "offset_seconds": 0.4,
+                        "position": "middle",
                     },
-                    "visual_intent_id": "intent_004",
-                    "asset_id": None,
-                    "editorial_function": "orientation",
-                    "editorial_reason": "missing local",
+                    "narrative_function": "orientation",
+                    "visual_intent": "Monument Valley establish",
+                    "local_asset_id": None,
+                    "asset_fit": "none",
+                    "asset_fit_reason": "missing local",
+                    "coverage_gap_id": "gap_008",
                 }
             ],
             "coverage_gaps": [
                 {
-                    "gap_id": "gap_008",
-                    "related_shot_ids": ["shot_007"],
-                    "visual_intent_id": "intent_004",
-                    "subject": "Monument Valley",
-                    "location": "Utah/Arizona",
-                    "action": "wide establishing shot",
-                    "search_queries": [
+                    "coverage_gap_id": "gap_008",
+                    "shot_id": "shot_007",
+                    "needed_visual": "Monument Valley wide establishing shot",
+                    "editorial_purpose": "Kein geografisch passendes lokales Asset vorhanden.",
+                    "preferred_media_type": "video",
+                    "search_concepts": [
                         "Monument Valley wide landscape",
                         "Monument Valley sunset panorama",
                     ],
-                    "reason": "Kein geografisch passendes lokales Asset vorhanden.",
+                    "must_include": ["buttes"],
+                    "must_avoid": ["highway traffic"],
+                    "fact_check_required": True,
                 }
             ],
         },
@@ -817,8 +870,9 @@ def test_coverage_gap_has_search_queries_and_links() -> None:
     )
     gap = coverage.gaps[0]
     assert gap.related_shot_ids == ["shot_007"]
-    assert gap.visual_intent_id == "intent_004"
-    assert "Monument Valley wide landscape" in gap.search_queries
+    assert gap.needed_visual.startswith("Monument Valley")
+    assert "Monument Valley wide landscape" in gap.search_concepts
+    assert gap.fact_check_required is True
 
 
 def test_chapter_narration_groups_segments_like_classic_folder_vos() -> None:
