@@ -15,21 +15,7 @@ FORBIDDEN_PHRASES = (
 )
 
 
-def build_enhanced_script_prompt(
-    *,
-    project_brief_text: str,
-    dramaturgy_text: str,
-    style_profile_text: str,
-    verified_facts_text: str,
-    asset_inventory_summary: str,
-    language: str = "de",
-) -> str:
-    forbidden = "\n".join(f'- "{p}"' for p in FORBIDDEN_PHRASES)
-    return f"""\
-You are writing documentary narration for a travel/place film.
-
-LANGUAGE: {language}
-
+_SHARED_SCRIPT_RULES = """\
 GOAL
 Write editorial narration focused on:
 - history of the place
@@ -54,12 +40,6 @@ Use ONLY:
 Unverified claims must be omitted OR marked fact_check_required=true.
 Never invent years, events, names, or superlatives.
 
-STRICTLY AVOID these phrases and patterns:
-{forbidden}
-- pure inventories of visible objects
-- describing every available asset
-- mechanical one-sentence-per-image assignment
-
 ALLOWED:
 - atmospheric language
 - concrete local details
@@ -70,40 +50,58 @@ ALLOWED:
 BAD: "Das Bild zeigt Berge bei Sonnenuntergang."
 GOOD: "Am Abend, wenn die Sonne hinter den Gipfeln verschwindet, beginnen die Felsen beinahe wie Kristalle zu funkeln."
 
+RULES FOR SEGMENTS
+- A segment may be a short sentence, several tightly related sentences, or a clause at a natural speech boundary.
+- Never split mid-word.
+- visual_intents are SEPARATE from spoken text.
+- Do NOT assign one asset per sentence.
+- Do NOT bind narration to listing available assets.
+"""
+
+
+def _json_schema_block(*, id_prefix: str = "") -> str:
+    seg = f"{id_prefix}segment_001" if id_prefix else "segment_001"
+    intent = f"{id_prefix}intent_001" if id_prefix else "intent_001"
+    beat = f"{id_prefix}beat_001" if id_prefix else "beat_001"
+    need = f"{id_prefix}need_001" if id_prefix else "need_001"
+    fact = f"{id_prefix}fact_001" if id_prefix else "fact_001"
+    return f"""\
 OUTPUT (JSON only):
 {{
-  "narration_full": "... spoken narration ...",
+  "narration_full": "... spoken narration for THIS chapter only ...",
   "segments": [
     {{
-      "segment_id": "segment_001",
+      "segment_id": "{seg}",
       "text": "...",
       "sequence_index": 1,
       "semantic_function": "atmosphere|history|geography|culture|fact|transition",
-      "visual_intent_ids": ["intent_001"],
-      "fact_check_required": false
+      "visual_intent_ids": ["{intent}"],
+      "fact_check_required": false,
+      "folder_name": "EXACT_FOLDER_NAME"
     }}
   ],
   "visual_beats": [
     {{
-      "beat_id": "beat_001",
+      "beat_id": "{beat}",
       "description": "...",
-      "related_segment_ids": ["segment_001"],
-      "visual_intent_ids": ["intent_001"]
+      "related_segment_ids": ["{seg}"],
+      "visual_intent_ids": ["{intent}"]
     }}
   ],
   "visual_intents": [
     {{
-      "intent_id": "intent_001",
+      "intent_id": "{intent}",
       "description": "...",
       "subject": "...",
-      "location": "...",
-      "preferred_media_type": "video|photo"
+      "location": "EXACT_FOLDER_NAME",
+      "preferred_media_type": "video|photo",
+      "folder_name": "EXACT_FOLDER_NAME"
     }}
   ],
   "coverage_needs": [
     {{
-      "need_id": "need_001",
-      "visual_intent_id": "intent_001",
+      "need_id": "{need}",
+      "visual_intent_id": "{intent}",
       "subject": "...",
       "reason": "...",
       "search_queries": ["..."]
@@ -111,21 +109,42 @@ OUTPUT (JSON only):
   ],
   "fact_check_hints": [
     {{
-      "hint_id": "fact_001",
-      "related_segment_id": "segment_001",
+      "hint_id": "{fact}",
+      "related_segment_id": "{seg}",
       "claim": "...",
       "status": "fact_check_required",
       "note": "..."
     }}
   ]
 }}
+"""
 
-RULES FOR SEGMENTS
-- A segment may be a short sentence, several tightly related sentences, or a clause at a natural speech boundary.
-- Never split mid-word.
-- visual_intents are SEPARATE from spoken text.
-- Do NOT assign one asset per sentence.
-- Do NOT bind narration to listing available assets.
+
+def build_enhanced_script_prompt(
+    *,
+    project_brief_text: str,
+    dramaturgy_text: str,
+    style_profile_text: str,
+    verified_facts_text: str,
+    asset_inventory_summary: str,
+    language: str = "de",
+) -> str:
+    """Legacy: gesamtes Film-Skript in einem Call (nicht mehr UI-Standard)."""
+    forbidden = "\n".join(f'- "{p}"' for p in FORBIDDEN_PHRASES)
+    return f"""\
+You are writing documentary narration for a travel/place film.
+
+LANGUAGE: {language}
+
+{_SHARED_SCRIPT_RULES}
+
+STRICTLY AVOID these phrases and patterns:
+{forbidden}
+- pure inventories of visible objects
+- describing every available asset
+- mechanical one-sentence-per-image assignment
+
+{_json_schema_block()}
 
 PROJECT BRIEF:
 {project_brief_text}
@@ -140,6 +159,74 @@ VERIFIED FACTS / METADATA (only these may be stated as facts):
 {verified_facts_text}
 
 LOCAL ASSET INVENTORY (visual resource, not content limit):
+{asset_inventory_summary}
+"""
+
+
+def build_enhanced_folder_script_prompt(
+    *,
+    project_brief_text: str,
+    film_context_text: str,
+    chapter_dramaturgy_text: str,
+    style_profile_text: str,
+    verified_facts_text: str,
+    asset_inventory_summary: str,
+    folder_name: str,
+    folder_slug: str,
+    dramaturgy_role: str,
+    target_words: int,
+    min_words: int,
+    max_words: int,
+    previous_folder_name: str | None,
+    next_folder_name: str | None,
+    language: str = "de",
+) -> str:
+    """Ein Dramaturgie-Kapitel / Ordner — analog zur klassischen Folder-VO-Pipeline."""
+    forbidden = "\n".join(f'- "{p}"' for p in FORBIDDEN_PHRASES)
+    id_prefix = f"{folder_slug}_"
+    prev = previous_folder_name or "(none — first enabled chapter)"
+    nxt = next_folder_name or "(none — last enabled chapter)"
+    return f"""\
+You are writing documentary narration for ONE chapter of a multi-location travel film.
+
+LANGUAGE: {language}
+
+{_SHARED_SCRIPT_RULES}
+
+STRICTLY AVOID these phrases and patterns:
+{forbidden}
+- pure inventories of visible objects
+- describing every available asset
+- mechanical one-sentence-per-image assignment
+
+THIS CHAPTER ONLY
+- folder_name (EXACT): {folder_name}
+- dramaturgy_role: {dramaturgy_role}
+- previous chapter in the film: {prev}
+- next chapter in the film: {nxt}
+- target_words: {target_words} (soft target; stay within {min_words}-{max_words})
+- Write ONLY the spoken narration for this chapter — not the whole film.
+- Every segment/intent MUST set folder_name to exactly "{folder_name}".
+- Use ID prefixes starting with "{id_prefix}" (e.g. {id_prefix}segment_001).
+
+{_json_schema_block(id_prefix=id_prefix).replace("EXACT_FOLDER_NAME", folder_name)}
+
+PROJECT BRIEF:
+{project_brief_text}
+
+FILM CONTEXT (global arc — do not rewrite other chapters):
+{film_context_text}
+
+THIS CHAPTER DRAMATURGY:
+{chapter_dramaturgy_text}
+
+STYLE PROFILE:
+{style_profile_text}
+
+VERIFIED FACTS / METADATA (only these may be stated as facts):
+{verified_facts_text}
+
+LOCAL ASSETS FOR THIS CHAPTER (visual resource, not content limit):
 {asset_inventory_summary}
 """
 

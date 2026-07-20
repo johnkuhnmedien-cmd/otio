@@ -20,6 +20,9 @@ class ScriptSegment(BaseModel):
     visual_intent_ids: list[str] = Field(default_factory=list)
     fact_check_required: bool = False
     text_changed: bool = False
+    # Dramaturgie-Kapitel — leer bei älteren Drafts ohne Ordner-Zuordnung.
+    folder_name: str = ""
+    folder_order_index: int = 0
 
 
 class VisualIntent(BaseModel):
@@ -28,6 +31,7 @@ class VisualIntent(BaseModel):
     subject: str = ""
     location: str = ""
     preferred_media_type: str = "video"
+    folder_name: str = ""
 
 
 class VisualBeat(BaseModel):

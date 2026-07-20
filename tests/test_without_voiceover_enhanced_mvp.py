@@ -51,16 +51,30 @@ from otio_app.services.without_voiceover_enhanced.pause_config import (
 from otio_app.services.without_voiceover_enhanced.pause_resolver import (
     build_narration_timeline,
 )
+from otio_app.services.voiceover_generation.dramaturgy_service import (
+    save_confirmed_dramaturgy,
+)
+from otio_app.services.voiceover_generation.models import (
+    DramaturgyFolderEntry,
+    DramaturgyPlan,
+)
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
+    folders_present_in_script,
+    generate_all_enhanced_scripts,
+    generate_enhanced_script_for_folder,
+    list_enabled_dramaturgy_folders,
+    merge_folder_script_into_document,
     parse_enhanced_script_response,
 )
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+    load_script_draft,
     lock_script,
     mark_segment_text_changed,
     save_script_draft,
 )
 from otio_app.services.without_voiceover_enhanced.script_prompts import (
     FORBIDDEN_PHRASES,
+    build_enhanced_folder_script_prompt,
     build_enhanced_script_prompt,
 )
 from otio_app.services.without_voiceover_enhanced.stock.mock import MockStockProvider
@@ -76,20 +90,74 @@ from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
 )
 
 
-def _project(tmp_path: Path) -> Project:
+def _project(tmp_path: Path, folders: list[str] | None = None) -> Project:
     root = tmp_path / "proj"
     work = root / DEFAULT_ENHANCED_WORK_SUBDIR
     work.mkdir(parents=True)
-    (root / "Assets").mkdir()
+    folder_names = folders or ["Assets"]
+    for folder in folder_names:
+        (root / folder).mkdir(exist_ok=True)
     return Project(
         name="Enhanced Test",
         project_root=str(root),
         work_dir=str(work),
         project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
         language="de",
-        asset_subdir_names=["Assets"],
-        selected_asset_subdirs=["Assets"],
+        asset_subdir_names=folder_names,
+        selected_asset_subdirs=folder_names,
         fps=25.0,
+    )
+
+
+def _confirm_dramaturgy(project: Project, folders: list[str]) -> DramaturgyPlan:
+    plan = DramaturgyPlan(
+        project_id=project.id,
+        project_title="Enhanced Test Film",
+        core_promise="Atmosphäre und Geschichte",
+        narrative_arc="Hook → Entwicklung → Payoff",
+        recommended_folder_order=[
+            DramaturgyFolderEntry(
+                folder_name=folder,
+                order_index=index,
+                enabled=True,
+                dramaturgy_role="hook" if index == 0 else "development",
+                reason=f"Kapitel {folder}",
+                recommended_word_count=150,
+                recommended_min_words=120,
+                recommended_max_words=180,
+            )
+            for index, folder in enumerate(folders)
+        ],
+    )
+    return save_confirmed_dramaturgy(project, plan)
+
+
+def _fake_folder_llm_response(folder_name: str) -> str:
+    slug = folder_name.lower().replace(" ", "_")
+    return (
+        "{"
+        f'"narration_full": "Narration für {folder_name}.",'
+        f'"segments": [{{'
+        f'"segment_id": "{slug}_segment_001",'
+        f'"text": "Narration für {folder_name}.",'
+        f'"sequence_index": 1,'
+        f'"semantic_function": "atmosphere",'
+        f'"visual_intent_ids": ["{slug}_intent_001"],'
+        f'"fact_check_required": false,'
+        f'"folder_name": "{folder_name}"'
+        "}],"
+        f'"visual_intents": [{{'
+        f'"intent_id": "{slug}_intent_001",'
+        f'"description": "Wide establishing for {folder_name}",'
+        f'"subject": "{folder_name}",'
+        f'"location": "{folder_name}",'
+        f'"preferred_media_type": "video",'
+        f'"folder_name": "{folder_name}"'
+        "}],"
+        '"visual_beats": [],'
+        '"coverage_needs": [],'
+        '"fact_check_hints": []'
+        "}"
     )
 
 
@@ -746,3 +814,161 @@ def test_coverage_gap_has_search_queries_and_links() -> None:
     assert gap.related_shot_ids == ["shot_007"]
     assert gap.visual_intent_id == "intent_004"
     assert "Monument Valley wide landscape" in gap.search_queries
+
+
+def test_folder_script_prompt_binds_to_dramaturgy_chapter() -> None:
+    prompt = build_enhanced_folder_script_prompt(
+        project_brief_text="Brief",
+        film_context_text="core_promise: promise",
+        chapter_dramaturgy_text="folder_name: Canyon\ndramaturgy_role: hook",
+        style_profile_text="Style",
+        verified_facts_text="Facts",
+        asset_inventory_summary="- Canyon: 3 assets",
+        folder_name="Canyon",
+        folder_slug="canyon",
+        dramaturgy_role="hook",
+        target_words=150,
+        min_words=120,
+        max_words=180,
+        previous_folder_name=None,
+        next_folder_name="Desert",
+        language="de",
+    )
+    assert 'folder_name (EXACT): Canyon' in prompt
+    assert "dramaturgy_role: hook" in prompt
+    assert "target_words: 150" in prompt
+    assert "120-180" in prompt
+    assert "next chapter in the film: Desert" in prompt
+    assert "THIS CHAPTER DRAMATURGY:" in prompt
+    for phrase in FORBIDDEN_PHRASES:
+        assert phrase in prompt
+
+
+def test_merge_folder_script_keeps_other_chapters() -> None:
+    base = EnhancedScriptDocument(
+        segments=[
+            ScriptSegment(
+                segment_id="a_001",
+                text="old A",
+                sequence_index=1,
+                folder_name="A",
+                folder_order_index=0,
+            ),
+            ScriptSegment(
+                segment_id="b_001",
+                text="old B",
+                sequence_index=2,
+                folder_name="B",
+                folder_order_index=1,
+            ),
+        ],
+        visual_intents=[
+            VisualIntent(
+                intent_id="ia",
+                description="A",
+                folder_name="A",
+            ),
+            VisualIntent(
+                intent_id="ib",
+                description="B",
+                folder_name="B",
+            ),
+        ],
+    )
+    incoming = EnhancedScriptDocument(
+        segments=[
+            ScriptSegment(
+                segment_id="a_new",
+                text="new A",
+                sequence_index=1,
+                folder_name="A",
+                folder_order_index=0,
+            )
+        ],
+        visual_intents=[
+            VisualIntent(intent_id="ia_new", description="new A", folder_name="A")
+        ],
+    )
+    merged = merge_folder_script_into_document(
+        base,
+        incoming,
+        folder_name="A",
+        folder_order_index=0,
+        folder_order=["A", "B"],
+    )
+    assert [seg.text for seg in merged.segments] == ["new A", "old B"]
+    assert [intent.intent_id for intent in merged.visual_intents] == ["ib", "ia_new"]
+    assert folders_present_in_script(merged) == {"A", "B"}
+
+
+def test_generate_scripts_follow_dramaturgy_order_sequentially(tmp_path: Path) -> None:
+    folders = ["Canyon", "Desert", "Coast"]
+    project = _project(tmp_path, folders=folders)
+    _confirm_dramaturgy(project, folders)
+
+    enabled = list_enabled_dramaturgy_folders(project)
+    assert [entry.folder_name for entry in enabled] == folders
+
+    seen: list[str] = []
+    token_caps: list[int | None] = []
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        assert "openai:gpt-5.4-mini" in model or model.endswith("gpt-5.4-mini")
+        token_caps.append(max_output_tokens)
+        for folder in folders:
+            marker = f'folder_name (EXACT): {folder}'
+            if marker in prompt:
+                seen.append(folder)
+                assert f"dramaturgy_role:" in prompt
+                return _fake_folder_llm_response(folder)
+        raise AssertionError(f"unexpected prompt without chapter marker:\n{prompt[:400]}")
+
+    results = generate_all_enhanced_scripts(
+        project,
+        provider="openai",
+        model="gpt-5.4-mini",
+        max_output_tokens=50_000,
+        llm_callable=fake_llm,
+    )
+    assert seen == folders
+    assert all(cap == 50_000 for cap in token_caps)
+    assert all(result.status == "PASS" for result in results)
+
+    draft = load_script_draft(project)
+    assert draft is not None
+    assert [seg.folder_name for seg in draft.segments] == folders
+    assert folders_present_in_script(draft) == set(folders)
+
+
+def test_generate_single_folder_merges_into_existing_draft(tmp_path: Path) -> None:
+    folders = ["Canyon", "Desert"]
+    project = _project(tmp_path, folders=folders)
+    _confirm_dramaturgy(project, folders)
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del model, max_output_tokens
+        if "Canyon" in prompt and 'folder_name (EXACT): Canyon' in prompt:
+            return _fake_folder_llm_response("Canyon")
+        if "Desert" in prompt and 'folder_name (EXACT): Desert' in prompt:
+            return _fake_folder_llm_response("Desert")
+        raise AssertionError("unexpected folder prompt")
+
+    first = generate_enhanced_script_for_folder(
+        project, "Canyon", llm_callable=fake_llm, max_output_tokens=20_000
+    )
+    assert first.status == "PASS"
+    assert folders_present_in_script(first.document) == {"Canyon"}
+
+    second = generate_enhanced_script_for_folder(
+        project, "Desert", llm_callable=fake_llm, max_output_tokens=20_000
+    )
+    assert second.status == "PASS"
+    assert [seg.folder_name for seg in second.document.segments] == ["Canyon", "Desert"]
+
+    # Regenerating Canyon must keep Desert
+    regen = generate_enhanced_script_for_folder(
+        project, "Canyon", llm_callable=fake_llm, max_output_tokens=20_000
+    )
+    assert regen.status == "PASS"
+    assert [seg.folder_name for seg in regen.document.segments] == ["Canyon", "Desert"]
+    assert regen.document.segments[0].text == "Narration für Canyon."
