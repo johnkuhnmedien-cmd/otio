@@ -37,14 +37,17 @@ from otio_app.services.without_voiceover_enhanced.models import (
     CoverageGapsDocument,
     FinalCutPlanDocument,
     NarrationTimelineDocument,
+    ResolvedTimelineDocument,
     RoughCutPlanDocument,
     StockSearchResultsDocument,
 )
+from otio_app.ui.without_voiceover_enhanced.timeline_view import render_realtime_timeline
 from otio_app.services.without_voiceover_enhanced.paths import (
     accepted_supplements_path,
     coverage_gaps_path,
     final_cut_plan_path,
     narration_timeline_path,
+    resolved_timeline_path,
     rough_cut_plan_path,
     script_locked_path,
     segment_timings_path,
@@ -221,44 +224,51 @@ def render_enhanced_cut_plan_page() -> None:
     rough = load_model(rough_cut_plan_path(project), RoughCutPlanDocument)
     timeline = load_model(narration_timeline_path(project), NarrationTimelineDocument)
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
-    if timeline is not None:
-        st.write(
-            f"Narrationstimeline: {timeline.total_duration_seconds:.2f}s · "
-            f"{len(timeline.entries)} Segmente"
-        )
-        for entry in timeline.entries:
-            st.caption(
-                f"{entry.segment_id}: {entry.start_seconds:.2f}–{entry.end_seconds:.2f} "
-                f"+ pause {entry.pause_after_seconds:.2f}s"
-            )
+    final_preview = load_model(final_cut_plan_path(project), FinalCutPlanDocument)
+    resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
+
+    render_realtime_timeline(
+        narration_timeline=timeline,
+        rough=rough,
+        final=final_preview,
+        resolved=resolved,
+    )
+
     if rough is not None:
-        st.write(f"Grober Plan: {len(rough.shots)} Shots")
-        for shot in rough.shots:
-            start = shot.start_anchor
-            end = shot.end_anchor
-            start_label = (
-                f"pause after {start.after_segment_id}@{start.position}"
-                if start.type == "pause"
-                else f"{start.segment_id}@{start.position}"
-            )
-            end_label = (
-                f"pause after {end.after_segment_id}@{end.position}"
-                if end.type == "pause"
-                else f"{end.segment_id}@{end.position}"
-            )
-            st.caption(
-                f"{shot.shot_id}: {start_label}→{end_label} · "
-                f"asset={shot.local_asset_id or shot.asset_id} · "
-                f"fit={shot.asset_fit}"
-            )
+        with st.expander(
+            f"Rough-Cut Details · {len(rough.shots)} Shots · "
+            f"{len(rough.pause_directives)} Pausen",
+            expanded=False,
+        ):
+            for shot in rough.shots:
+                start = shot.start_anchor
+                end = shot.end_anchor
+                start_label = (
+                    f"pause after {start.after_segment_id}@{start.position}"
+                    if start.type == "pause"
+                    else f"{start.segment_id}@{start.position}"
+                )
+                end_label = (
+                    f"pause after {end.after_segment_id}@{end.position}"
+                    if end.type == "pause"
+                    else f"{end.segment_id}@{end.position}"
+                )
+                st.caption(
+                    f"{shot.shot_id}: {start_label}→{end_label} · "
+                    f"asset={shot.local_asset_id or shot.asset_id} · "
+                    f"fit={shot.asset_fit}"
+                )
     if coverage is not None and coverage.gaps:
-        st.write(f"Coverage Gaps: {len(coverage.gaps)}")
-        for gap in coverage.gaps:
-            queries = gap.search_concepts or gap.search_queries
-            st.caption(
-                f"{gap.gap_id}: {gap.needed_visual or gap.subject} · "
-                f"queries={queries}"
-            )
+        with st.expander(
+            f"Coverage Gaps · {len(coverage.gaps)}",
+            expanded=False,
+        ):
+            for gap in coverage.gaps:
+                queries = gap.search_concepts or gap.search_queries
+                st.caption(
+                    f"{gap.gap_id}: {gap.needed_visual or gap.subject} · "
+                    f"queries={queries}"
+                )
 
     st.divider()
     st.subheader("2. Supplements suchen und auswählen")
