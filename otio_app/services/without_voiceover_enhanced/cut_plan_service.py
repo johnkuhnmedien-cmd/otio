@@ -374,8 +374,14 @@ def parse_rough_cut_response(raw: str | dict[str, Any], script_version: str) -> 
 def generate_rough_cut_and_pauses(
     project: Project,
     *,
+    provider: str = "openai",
+    model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
 ) -> tuple[RoughCutPlanDocument, CoverageGapsDocument]:
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        resolve_llm_model_id,
+    )
+
     locked = require_locked_script(project)
     errors = validate_timings_against_script(project)
     if errors:
@@ -390,12 +396,13 @@ def generate_rough_cut_and_pauses(
         style_profile_text=_style_text(project),
         dramaturgy_text=_dramaturgy_text(project),
     )
+    model_id = resolve_llm_model_id(provider, model)
     if llm_callable is not None:
-        raw = llm_callable(prompt=prompt, model="openai:gpt-5.4-mini")
+        raw = llm_callable(prompt=prompt, model=model_id)
         raw_text = raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
     else:
         raw_text = generate_plan_text_with_metadata(
-            prompt=prompt, model="openai:gpt-5.4-mini"
+            prompt=prompt, model=model_id
         ).raw_text
     rough, coverage = parse_rough_cut_response(raw_text, locked.script_version)
 
@@ -561,8 +568,13 @@ def parse_final_cut_response(raw: str | dict[str, Any], script_version: str) -> 
 def generate_final_cut_plan(
     project: Project,
     *,
+    provider: str = "openai",
+    model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
 ) -> FinalCutPlanDocument:
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        resolve_llm_model_id,
+    )
     from otio_app.services.without_voiceover_enhanced.models import NarrationTimelineDocument
 
     locked = require_locked_script(project)
@@ -594,12 +606,13 @@ def generate_final_cut_plan(
         accepted_supplements_json=accepted_json,
         style_profile_text=_style_text(project),
     )
+    model_id = resolve_llm_model_id(provider, model)
     if llm_callable is not None:
-        raw = llm_callable(prompt=prompt, model="openai:gpt-5.4-mini")
+        raw = llm_callable(prompt=prompt, model=model_id)
         raw_text = raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
     else:
         raw_text = generate_plan_text_with_metadata(
-            prompt=prompt, model="openai:gpt-5.4-mini"
+            prompt=prompt, model=model_id
         ).raw_text
     final = parse_final_cut_response(raw_text, locked.script_version)
     write_json(final_cut_plan_path(project), final)

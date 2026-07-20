@@ -40,11 +40,13 @@ WHISPER_MODEL_LABELS = {
     "large-v3": "Whisper large-v3 — beste Qualität, am langsamsten (Standard)",
 }
 GEMINI_MODEL_CHOICES = (
+    "gemini-3.5-flash",
     "gemini-3-flash-preview",
     "gemini-3.1-flash-lite",
     "gemini-3.1-pro-preview",
 )
 GEMINI_MODEL_LABELS = {
+    "gemini-3.5-flash": "Gemini 3.5 Flash — schnell, frontier-level",
     "gemini-3-flash-preview": "Gemini 3 Flash Preview — schnell, Pro-Niveau (Preview)",
     "gemini-3.1-flash-lite": "Gemini 3.1 Flash Lite — günstig, Preview (Standard)",
     "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview — beste Qualität (Preview, teurer)",
@@ -132,8 +134,8 @@ YOUTUBE_QUIZ_OPTION_COUNT = 3
 VOICEOVER_GEN_PROVIDERS = ("anthropic", "openai", "gemini", "openrouter", "xai")
 VOICEOVER_GEN_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
     "anthropic": ("claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"),
-    "openai": ("gpt-5.5", "gpt-5.4-mini"),
-    "gemini": ("gemini-3.1-pro-preview", "gemini-3.1-flash-lite"),
+    "openai": ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5", "gpt-5.4-mini"),
+    "gemini": ("gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite"),
     "openrouter": ("x-ai/grok-4.5",),
     "xai": ("grok-4.5",),
 }
@@ -149,6 +151,8 @@ VOICEOVER_GEN_ROLE_INTRO = "intro"
 # Kandidaten suchen“ im Cut-Plan-Tab erfolgt.
 VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY = "cut_plan_supplement_query"
 VOICEOVER_GEN_ROLE_YOUTUBE_PUBLISH = "youtube_publish"
+VOICEOVER_GEN_ROLE_ENHANCED_ROUGH_CUT = "enhanced_rough_cut"
+VOICEOVER_GEN_ROLE_ENHANCED_FINAL_CUT = "enhanced_final_cut"
 VOICEOVER_GEN_ROLES = (
     VOICEOVER_GEN_ROLE_STYLE_PROFILE,
     VOICEOVER_GEN_ROLE_DRAMATURGY,
@@ -157,6 +161,8 @@ VOICEOVER_GEN_ROLES = (
     VOICEOVER_GEN_ROLE_INTRO,
     VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY,
     VOICEOVER_GEN_ROLE_YOUTUBE_PUBLISH,
+    VOICEOVER_GEN_ROLE_ENHANCED_ROUGH_CUT,
+    VOICEOVER_GEN_ROLE_ENHANCED_FINAL_CUT,
 )
 VOICEOVER_GEN_ROLE_LABELS = {
     VOICEOVER_GEN_ROLE_STYLE_PROFILE: "Style Profile",
@@ -166,6 +172,8 @@ VOICEOVER_GEN_ROLE_LABELS = {
     VOICEOVER_GEN_ROLE_INTRO: "Intro",
     VOICEOVER_GEN_ROLE_CUT_PLAN_SUPPLEMENT_QUERY: "Cut Plan Suchqueries",
     VOICEOVER_GEN_ROLE_YOUTUBE_PUBLISH: "YouTube Publish",
+    VOICEOVER_GEN_ROLE_ENHANCED_ROUGH_CUT: "Enhanced Rough Cut (LLM 2)",
+    VOICEOVER_GEN_ROLE_ENHANCED_FINAL_CUT: "Enhanced Final Cut (LLM 3)",
 }
 VOICEOVER_GEN_DEFAULT_PROVIDER = "anthropic"
 VOICEOVER_GEN_DEFAULT_MODEL = "claude-sonnet-5"
@@ -174,6 +182,19 @@ VOICEOVER_GEN_DEFAULT_MODEL = "claude-sonnet-5"
 # Rolle nur kurze Suchqueries generiert, keine langen redaktionellen Texte.
 VOICEOVER_GEN_CUT_PLAN_SUPPLEMENT_QUERY_DEFAULT_PROVIDER = "gemini"
 VOICEOVER_GEN_CUT_PLAN_SUPPLEMENT_QUERY_DEFAULT_MODEL = "gemini-3.1-flash-lite"
+# Enhanced Cut Plan LLM 2/3: kuratierte Auswahl Terra / Sol / Gemini 3.5 Flash.
+VOICEOVER_GEN_ENHANCED_CUT_DEFAULT_PROVIDER = "openai"
+VOICEOVER_GEN_ENHANCED_CUT_DEFAULT_MODEL = "gpt-5.6-terra"
+ENHANCED_CUT_LLM_MODEL_CHOICES: tuple[str, ...] = (
+    "openai:gpt-5.6-terra",
+    "openai:gpt-5.6-sol",
+    "gemini-3.5-flash",
+)
+ENHANCED_CUT_LLM_MODEL_LABELS: dict[str, str] = {
+    "openai:gpt-5.6-terra": "GPT-5.6 Terra — ausgewogen (Standard)",
+    "openai:gpt-5.6-sol": "GPT-5.6 Sol — Flagship",
+    "gemini-3.5-flash": "Gemini 3.5 Flash — schnell",
+}
 
 # --- Vereinfachte Modellauswahl: EIN Dropdown je Rolle (kein Freitext, keine
 # separate Provider-Spalte). Die IDs folgen exakt der Konvention von
@@ -181,6 +202,9 @@ VOICEOVER_GEN_CUT_PLAN_SUPPLEMENT_QUERY_DEFAULT_MODEL = "gemini-3.1-flash-lite"
 # ("openai:"/"anthropic:"/"xai:"/"openrouter:"-Präfix, Gemini ohne Präfix)
 # und werden aus VOICEOVER_GEN_MODEL_PRESETS abgeleitet. ---
 VOICEOVER_GEN_MODEL_CHOICES: tuple[str, ...] = (
+    "openai:gpt-5.6-sol",
+    "openai:gpt-5.6-terra",
+    "gemini-3.5-flash",
     "gemini-3.1-pro-preview",
     "gemini-3.1-flash-lite",
     "openai:gpt-5.5",
@@ -192,6 +216,9 @@ VOICEOVER_GEN_MODEL_CHOICES: tuple[str, ...] = (
     "xai:grok-4.5",
 )
 VOICEOVER_GEN_MODEL_LABELS: dict[str, str] = {
+    "openai:gpt-5.6-sol": "GPT-5.6 Sol — Flagship",
+    "openai:gpt-5.6-terra": "GPT-5.6 Terra — ausgewogen",
+    "gemini-3.5-flash": "Gemini 3.5 Flash — schnell, frontier-level",
     "gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview — beste Qualität (Preview, teurer)",
     "gemini-3.1-flash-lite": "Gemini 3.1 Flash Lite — günstig, Preview",
     "openai:gpt-5.5": "ChatGPT GPT-5.5 — Flagship, beste Qualität",

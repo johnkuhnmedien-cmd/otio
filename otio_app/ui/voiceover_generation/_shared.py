@@ -161,6 +161,9 @@ def render_llm_model_selectbox(
     role_settings: LlmRoleSettings,
     key: str,
     input_info: str | None = None,
+    options: list[str] | tuple[str, ...] | None = None,
+    labels: dict[str, str] | None = None,
+    show_estimated_costs: bool = False,
 ) -> LlmRoleSettings:
     """Ein einziges Dropdown aus VOICEOVER_GEN_MODEL_CHOICES statt Provider-
     Selectbox + Modell-Freitext.
@@ -172,18 +175,35 @@ def render_llm_model_selectbox(
     bereits gespeicherten model_settings.json).
 
     Optional ``input_info``: kurzer Hinweis, was dieser LLM-Call mitbekommt.
+    Optional ``options``/``labels``: eingeschränkte Auswahl (z. B. Enhanced Cut).
+    Optional ``show_estimated_costs``: Preis-/1M-Hinweis in den Optionslabels.
     """
+    from otio_app.services.voiceover_generation.llm_pricing import (
+        format_model_price_suffix,
+    )
+
     current_id = combined_model_id(role_settings)
-    options = list(VOICEOVER_GEN_MODEL_CHOICES)
-    if current_id not in options:
+    choice_options = list(options) if options is not None else list(VOICEOVER_GEN_MODEL_CHOICES)
+    if current_id not in choice_options:
         # Bewahrt einen bereits gespeicherten, nicht (mehr) kuratierten Wert,
         # anstatt ihn beim Öffnen der Seite stillschweigend zu überschreiben.
-        options = [current_id] + options
+        choice_options = [current_id] + choice_options
+
+    def _format(model_id: str) -> str:
+        if labels is not None and model_id in labels:
+            base = labels[model_id]
+        else:
+            base = format_voiceover_gen_model_label(model_id)
+        if not show_estimated_costs:
+            return base
+        provider, model = split_llm_model_id(model_id)
+        return f"{base}{format_model_price_suffix(provider, model)}"
+
     selected = st.selectbox(
         label,
-        options=options,
-        index=options.index(current_id),
-        format_func=format_voiceover_gen_model_label,
+        options=choice_options,
+        index=choice_options.index(current_id),
+        format_func=_format,
         key=key,
     )
     if input_info:

@@ -250,6 +250,18 @@ def _default_cut_plan_supplement_query_settings() -> LlmRoleSettings:
     )
 
 
+def _default_enhanced_cut_settings() -> LlmRoleSettings:
+    from otio_app.defaults import (
+        VOICEOVER_GEN_ENHANCED_CUT_DEFAULT_MODEL,
+        VOICEOVER_GEN_ENHANCED_CUT_DEFAULT_PROVIDER,
+    )
+
+    return LlmRoleSettings(
+        provider=VOICEOVER_GEN_ENHANCED_CUT_DEFAULT_PROVIDER,
+        model=VOICEOVER_GEN_ENHANCED_CUT_DEFAULT_MODEL,
+    )
+
+
 class VoiceoverGenerationModelSettings(BaseModel):
     style_profile: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
     dramaturgy: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
@@ -260,6 +272,12 @@ class VoiceoverGenerationModelSettings(BaseModel):
         default_factory=_default_cut_plan_supplement_query_settings
     )
     youtube_publish: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
+    enhanced_rough_cut: LlmRoleSettings = Field(
+        default_factory=_default_enhanced_cut_settings
+    )
+    enhanced_final_cut: LlmRoleSettings = Field(
+        default_factory=_default_enhanced_cut_settings
+    )
 
 
 class LlmRunManifest(BaseModel):
