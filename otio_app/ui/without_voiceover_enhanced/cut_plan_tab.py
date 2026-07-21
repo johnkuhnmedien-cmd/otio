@@ -477,6 +477,134 @@ def render_enhanced_cut_plan_page() -> None:
                 "Provider-Status: "
                 + ", ".join(f"{k}={v}" for k, v in results.provider_status.items())
             )
+
+        # Funnel-Auswahl VOR der langen Kandidaten-Checkboxliste — kompakt und
+        # zuverlässig bedienbar (st.pills; st.multiselect ist in 1.59/BaseWeb
+        # für echten Browser-Smoke ungeeignet).
+        st.markdown("**Coverage Gaps automatisch auflösen**")
+        open_gap_ids = list_open_funnel_gap_ids(project)
+        gap_by_id = {g.gap_id: g for g in (coverage.gaps if coverage else [])}
+        select_key = f"enh_funnel_gap_multiselect_{project.id}"
+
+        # Veraltete R3-Checkbox-Keys bereinigen (einmalig / bei Reruns).
+        for gap_id in list(gap_by_id):
+            legacy_key = f"enh_funnel_gap_select_{project.id}_{gap_id}"
+            if legacy_key in st.session_state:
+                del st.session_state[legacy_key]
+
+        selected_open_ids: list[str] = []
+        if open_gap_ids:
+
+            def _format_open_gap(gap_id: str) -> str:
+                gap = gap_by_id.get(gap_id)
+                visual = ""
+                if gap is not None:
+                    visual = (gap.needed_visual or gap.subject or "").strip()
+                visual = visual or "—"
+                if len(visual) > 80:
+                    visual = visual[:77] + "…"
+                return f"{gap_id} · {visual}"
+
+            selected_raw = st.pills(
+                "Offene Coverage Gaps auswählen",
+                options=open_gap_ids,
+                selection_mode="multi",
+                format_func=_format_open_gap,
+                key=select_key,
+                help="Nur offene Gaps. Erfüllte Gaps erscheinen nicht.",
+            )
+            open_set = set(open_gap_ids)
+            if isinstance(selected_raw, list):
+                selected_open_ids = [gid for gid in selected_raw if gid in open_set]
+            elif selected_raw and str(selected_raw) in open_set:
+                selected_open_ids = [str(selected_raw)]
+            else:
+                selected_open_ids = []
+        else:
+            st.info("Keine offenen Coverage Gaps.")
+            if select_key in st.session_state:
+                del st.session_state[select_key]
+
+        def _run_funnel_with_gap_ids(gap_ids: list[str]) -> None:
+            progress_bar = st.progress(0.0, text="Funnel startet…")
+            status_box = st.empty()
+            log_box = st.empty()
+            log_lines: list[str] = []
+
+            def _funnel_progress(event: FunnelProgressEvent) -> None:
+                label = event.message or event.phase
+                progress_bar.progress(
+                    min(1.0, max(0.0, float(event.fraction))),
+                    text=label[:120],
+                )
+                status_box.info(label)
+                log_lines.append(label)
+                log_box.caption("\n".join(log_lines[-14:]))
+
+            funnel_report = run_supplement_funnel_for_gaps(
+                project,
+                gap_ids=gap_ids,
+                progress_callback=_funnel_progress,
+            )
+            progress_bar.progress(1.0, text=funnel_report.message)
+            status_box.success(funnel_report.message)
+            # Erfüllte Gaps aus der Mehrfachauswahl entfernen.
+            if select_key in st.session_state:
+                current_sel = st.session_state.get(select_key) or []
+                if isinstance(current_sel, list):
+                    filled = set(funnel_report.filled_gap_ids or [])
+                    st.session_state[select_key] = [
+                        gid for gid in current_sel if gid not in filled
+                    ]
+            st.rerun()
+
+        cols_funnel = st.columns(2)
+        with cols_funnel[0]:
+            all_disabled = not open_gap_ids
+            if st.button(
+                "Alle offenen Gaps automatisch auflösen",
+                type="primary",
+                key="enh_funnel_all_open",
+                disabled=all_disabled,
+                help=(
+                    "Verarbeitet alle aktuell offenen Coverage Gaps sequenziell. "
+                    "Mehrfachauswahl wird ignoriert."
+                ),
+            ):
+                try:
+                    # Auswahl bewusst ignorieren — frische Open-Liste.
+                    _run_funnel_with_gap_ids(list_open_funnel_gap_ids(project))
+                except SupplementFunnelError as exc:
+                    st.error(str(exc))
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Fehler: {exc}")
+        with cols_funnel[1]:
+            selected_disabled = not selected_open_ids
+            if st.button(
+                "Ausgewählte Gaps automatisch auflösen",
+                key="enh_funnel_selected",
+                disabled=selected_disabled,
+                help=(
+                    "Verarbeitet nur ausgewählte offene Gaps. "
+                    "Gleicher Funnel-Service wie „Alle“."
+                ),
+            ):
+                try:
+                    # Nur noch gültige offene IDs (Session kann veraltet sein).
+                    current_open = set(list_open_funnel_gap_ids(project))
+                    valid_selected = [
+                        gid for gid in selected_open_ids if gid in current_open
+                    ]
+                    if not valid_selected:
+                        st.warning("Keine gültige Gap-Auswahl.")
+                    else:
+                        _run_funnel_with_gap_ids(valid_selected)
+                except SupplementFunnelError as exc:
+                    st.error(str(exc))
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Fehler: {exc}")
+
+        st.markdown("**Kandidaten manuell prüfen (optional)**")
         gap_passages = _gap_passage_map(coverage)
         selected_ids: list[str] = []
         for index, candidate in enumerate(results.candidates):
@@ -503,109 +631,6 @@ def render_enhanced_cut_plan_page() -> None:
                     st.rerun()
                 except CutPlanError as exc:
                     st.error(str(exc))
-        st.markdown("**Coverage Gaps automatisch auflösen**")
-        open_gap_ids = list_open_funnel_gap_ids(project)
-        gap_by_id = {g.gap_id: g for g in (coverage.gaps if coverage else [])}
-        # Veraltete Checkbox-Keys für inzwischen erfüllte Gaps bereinigen.
-        for gap_id in list(gap_by_id):
-            key = f"enh_funnel_gap_select_{project.id}_{gap_id}"
-            if gap_id not in open_gap_ids and key in st.session_state:
-                del st.session_state[key]
-
-        selected_open_ids: list[str] = []
-        if open_gap_ids:
-            st.caption("Nur offene Gaps sind auswählbar.")
-            for gap_id in open_gap_ids:
-                gap = gap_by_id.get(gap_id)
-                if gap is None:
-                    continue
-                visual = (gap.needed_visual or gap.subject or "").strip() or "—"
-                if len(visual) > 80:
-                    visual = visual[:77] + "…"
-                checked = st.checkbox(
-                    f"`{gap_id}` · {visual} · Status: offen",
-                    key=f"enh_funnel_gap_select_{project.id}_{gap_id}",
-                )
-                if checked:
-                    selected_open_ids.append(gap_id)
-        else:
-            st.info("Keine offenen Coverage Gaps.")
-
-        def _run_funnel_with_gap_ids(gap_ids: list[str]) -> None:
-            progress_bar = st.progress(0.0, text="Funnel startet…")
-            status_box = st.empty()
-            log_box = st.empty()
-            log_lines: list[str] = []
-
-            def _funnel_progress(event: FunnelProgressEvent) -> None:
-                label = event.message or event.phase
-                progress_bar.progress(
-                    min(1.0, max(0.0, float(event.fraction))),
-                    text=label[:120],
-                )
-                status_box.info(label)
-                log_lines.append(label)
-                log_box.caption("\n".join(log_lines[-14:]))
-
-            funnel_report = run_supplement_funnel_for_gaps(
-                project,
-                gap_ids=gap_ids,
-                progress_callback=_funnel_progress,
-            )
-            progress_bar.progress(1.0, text=funnel_report.message)
-            status_box.success(funnel_report.message)
-            # Erfüllte Gaps aus der Checkbox-Auswahl entfernen.
-            for filled_id in funnel_report.filled_gap_ids:
-                key = f"enh_funnel_gap_select_{project.id}_{filled_id}"
-                if key in st.session_state:
-                    del st.session_state[key]
-            st.rerun()
-
-        cols_funnel = st.columns(2)
-        with cols_funnel[0]:
-            all_disabled = not open_gap_ids
-            if st.button(
-                "Alle offenen Gaps automatisch auflösen",
-                type="primary",
-                key="enh_funnel_all_open",
-                disabled=all_disabled,
-                help=(
-                    "Verarbeitet alle aktuell offenen Coverage Gaps sequenziell. "
-                    "Checkboxauswahl wird ignoriert."
-                ),
-            ):
-                try:
-                    # Checkbox-Zustand bewusst ignorieren — frische Open-Liste.
-                    _run_funnel_with_gap_ids(list_open_funnel_gap_ids(project))
-                except SupplementFunnelError as exc:
-                    st.error(str(exc))
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Fehler: {exc}")
-        with cols_funnel[1]:
-            selected_disabled = not selected_open_ids
-            if st.button(
-                "Ausgewählte Gaps automatisch auflösen",
-                key="enh_funnel_selected",
-                disabled=selected_disabled,
-                help=(
-                    "Verarbeitet nur markierte offene Gaps. "
-                    "Gleicher Funnel-Service wie „Alle“."
-                ),
-            ):
-                try:
-                    # Nur noch gültige offene IDs (Session kann veraltet sein).
-                    current_open = set(list_open_funnel_gap_ids(project))
-                    valid_selected = [
-                        gid for gid in selected_open_ids if gid in current_open
-                    ]
-                    if not valid_selected:
-                        st.warning("Keine gültige Gap-Auswahl.")
-                    else:
-                        _run_funnel_with_gap_ids(valid_selected)
-                except SupplementFunnelError as exc:
-                    st.error(str(exc))
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Fehler: {exc}")
 
         funnel_report = load_model(
             supplement_funnel_report_path(project),
@@ -632,12 +657,24 @@ def render_enhanced_cut_plan_page() -> None:
                     license_label = " · Lizenzdaten teilweise vorhanden"
                 elif gap_rep.license_metadata_status == "missing":
                     license_label = " · Keine Lizenzmetadaten geliefert"
+                pool_label = ""
+                counts = getattr(gap_rep, "provider_candidate_counts", None) or {}
+                if counts:
+                    parts = [
+                        f"{name} {counts[name]}"
+                        for name in sorted(counts)
+                    ]
+                    pool_label = (
+                        f" · Pool {sum(int(v) for v in counts.values())}"
+                        f"/{getattr(gap_rep, 'candidate_pool_limit', 20)}"
+                        f" ({' · '.join(parts)})"
+                    )
                 st.write(
                     f"`{gap_rep.gap_id}` · "
                     + (
-                        f"export_ready `{ready}`{license_label}"
+                        f"export_ready `{ready}`{license_label}{pool_label}"
                         if ready
-                        else (gap_rep.message or "offen")
+                        else ((gap_rep.message or "offen") + pool_label)
                     )
                 )
             if funnel_report.open_gap_ids:

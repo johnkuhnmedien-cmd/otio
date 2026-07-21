@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 from urllib.parse import urlparse
 
@@ -180,15 +181,76 @@ def apply_hard_exclusions(
     return out
 
 
-def select_funnel_candidates(
+_BLOCKED_PROVIDER_STATUSES = frozenset({"disabled", "unavailable", "failed"})
+
+
+@dataclass(frozen=True)
+class BalancedCandidatePool:
+    """Provider-balancierter Pool vor Text-/Thumbnail-Ranking."""
+
+    candidates: list[StockCandidate]
+    candidate_pool_limit: int = 20
+    eligible_providers: list[str] = field(default_factory=list)
+    provider_candidate_counts: dict[str, int] = field(default_factory=dict)
+
+
+def media_type_fits_preferred(media_type: str, preferred_media_type: str) -> bool:
+    """Ob ein Kandidat für den gewünschten/zwingenden Medientyp zählt."""
+    preferred = (preferred_media_type or "").strip().lower()
+    media = (media_type or "").strip().lower()
+    if preferred in {"video"}:
+        return media == "video"
+    if preferred in {"photo", "image"}:
+        return media in {"photo", "image"}
+    # either / leer / sonstige → photo/image/video zulässig
+    return media in {"photo", "image", "video"}
+
+
+def _provider_presort_key(
+    candidate: StockCandidate, *, preferred_media_type: str
+) -> tuple:
+    """Deterministische Vorsortierung innerhalb eines Providers (höher = besser)."""
+    preferred = (preferred_media_type or "").strip().lower()
+    media = (candidate.media_type or "").strip().lower()
+    media_match = 1 if media_type_fits_preferred(media, preferred) else 0
+    if preferred and media == preferred:
+        media_match = 2
+    preview_url, _status = resolve_preview_url(candidate)
+    has_preview = 1 if preview_url else 0
+    has_resolution = 1 if int(candidate.width or 0) > 0 and int(candidate.height or 0) > 0 else 0
+    has_duration = 1 if float(candidate.duration_seconds or 0.0) > 0 else 0
+    has_title = 1 if (candidate.title or "").strip() else 0
+    return (
+        -media_match,
+        -has_preview,
+        -has_resolution,
+        -has_duration,
+        -has_title,
+        (candidate.provider or "").strip().lower(),
+        (candidate.candidate_id or "").strip(),
+    )
+
+
+def select_provider_balanced_candidates(
     candidates: Sequence[StockCandidate],
     *,
     enabled_providers: set[str],
     preferred_media_type: str,
     limit: int = 20,
-) -> list[StockCandidate]:
-    """Dedup (provider+asset_id), stabile Sortierung, Cap."""
-    # Stabile Sortierung vor Cap.
+    provider_status: dict[str, str] | None = None,
+) -> BalancedCandidatePool:
+    """Fairer 20er-Pool: Grundquote je geeignetem Provider, Rest umverteilen.
+
+    Nach der Poolbildung bleibt das Ranking providerneutral (kein Bonus/Malus).
+    """
+    pool_limit = max(1, min(20, int(limit)))
+    status_map = {
+        str(k).strip().lower(): str(v or "").strip().lower()
+        for k, v in (provider_status or {}).items()
+    }
+    enabled = {(p or "").strip().lower() for p in enabled_providers if p}
+
+    # Stabile Eingangsreihenfolge — unabhängig von API-/Dict-Ordnung.
     ordered = sorted(
         candidates,
         key=lambda c: (
@@ -197,26 +259,138 @@ def select_funnel_candidates(
             (c.candidate_id or ""),
         ),
     )
-    filtered: list[StockCandidate] = []
-    seen: set[tuple[str, str]] = set()
+
+    by_provider: dict[str, list[StockCandidate]] = {}
+    seen_keys: set[tuple[str, str]] = set()
     for candidate, reason in apply_hard_exclusions(
         ordered,
-        enabled_providers=enabled_providers,
+        enabled_providers=enabled,
         preferred_media_type=preferred_media_type,
     ):
         if reason:
             continue
-        key = (
-            (candidate.provider or "").lower(),
-            (candidate.provider_asset_id or "").strip(),
-        )
-        if key in seen:
+        provider = (candidate.provider or "").strip().lower()
+        if not provider:
             continue
-        seen.add(key)
-        filtered.append(candidate)
-        if len(filtered) >= max(1, min(20, int(limit))):
-            break
-    return filtered
+        if status_map.get(provider) in _BLOCKED_PROVIDER_STATUSES:
+            continue
+        if not media_type_fits_preferred(candidate.media_type, preferred_media_type):
+            continue
+        key = (provider, (candidate.provider_asset_id or "").strip())
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        by_provider.setdefault(provider, []).append(candidate)
+
+    eligible_providers = sorted(
+        name for name, items in by_provider.items() if items
+    )
+    if not eligible_providers:
+        return BalancedCandidatePool(
+            candidates=[],
+            candidate_pool_limit=pool_limit,
+            eligible_providers=[],
+            provider_candidate_counts={},
+        )
+
+    for name in eligible_providers:
+        by_provider[name] = sorted(
+            by_provider[name],
+            key=lambda c: _provider_presort_key(
+                c, preferred_media_type=preferred_media_type
+            ),
+        )
+
+    n_providers = len(eligible_providers)
+    base_quota = pool_limit // n_providers
+    remainder = pool_limit % n_providers
+    quotas = {name: base_quota for name in eligible_providers}
+    for name in eligible_providers[:remainder]:
+        quotas[name] += 1
+
+    selected: list[StockCandidate] = []
+    selected_ids: set[str] = set()
+    used_counts: dict[str, int] = {name: 0 for name in eligible_providers}
+    cursors: dict[str, int] = {name: 0 for name in eligible_providers}
+    unused_slots = 0
+
+    for name in eligible_providers:
+        available = by_provider[name]
+        take = min(quotas[name], len(available))
+        for idx in range(take):
+            cand = available[idx]
+            selected.append(cand)
+            selected_ids.add(cand.candidate_id)
+            used_counts[name] += 1
+        cursors[name] = take
+        unused_slots += quotas[name] - take
+
+    if unused_slots > 0 and len(selected) < pool_limit:
+        leftovers: list[tuple[tuple, StockCandidate]] = []
+        for name in eligible_providers:
+            available = by_provider[name]
+            for idx in range(cursors[name], len(available)):
+                cand = available[idx]
+                if cand.candidate_id in selected_ids:
+                    continue
+                # Tie-Break: Provider-interner Rang, Providername, candidate_id
+                leftovers.append(((idx, name, cand.candidate_id), cand))
+        leftovers.sort(key=lambda item: item[0])
+        for _key, cand in leftovers:
+            if unused_slots <= 0 or len(selected) >= pool_limit:
+                break
+            selected.append(cand)
+            selected_ids.add(cand.candidate_id)
+            used_counts[(cand.provider or "").strip().lower()] += 1
+            unused_slots -= 1
+
+    selected = selected[:pool_limit]
+    counts = {
+        name: used_counts[name]
+        for name in eligible_providers
+        if used_counts[name] > 0
+    }
+    return BalancedCandidatePool(
+        candidates=selected,
+        candidate_pool_limit=pool_limit,
+        eligible_providers=list(eligible_providers),
+        provider_candidate_counts=counts,
+    )
+
+
+def format_provider_distribution(counts: dict[str, int]) -> str:
+    """Kompakte Anzeige: ``Pexels 5 · Pixabay 5``."""
+    labels = {
+        "pexels": "Pexels",
+        "pixabay": "Pixabay",
+        "wikimedia": "Wikimedia",
+        "openverse": "Openverse",
+        "archive_org": "Archive.org",
+    }
+    parts: list[str] = []
+    for name in sorted(counts):
+        label = labels.get(name, name.replace("_", " ").title())
+        parts.append(f"{label} {int(counts[name])}")
+    return " · ".join(parts)
+
+
+def select_funnel_candidates(
+    candidates: Sequence[StockCandidate],
+    *,
+    enabled_providers: set[str],
+    preferred_media_type: str,
+    limit: int = 20,
+    provider_status: dict[str, str] | None = None,
+) -> list[StockCandidate]:
+    """Provider-balancierter Pool (max. 20) für Text-/Thumbnail-Ranking."""
+    pool = select_provider_balanced_candidates(
+        candidates,
+        enabled_providers=enabled_providers,
+        preferred_media_type=preferred_media_type,
+        limit=limit,
+        provider_status=provider_status,
+    )
+    return list(pool.candidates)
 
 
 def validate_text_reviews_payload(

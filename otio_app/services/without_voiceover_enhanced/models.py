@@ -343,10 +343,14 @@ class SupplementFunnelGapReport(BaseModel):
     license_metadata_status: str = ""
     fallback_used: bool = False
     message: str = ""
+    # R4: provider-balancierter 20er-Pool (historische Reports ohne Felder bleiben lesbar)
+    candidate_pool_limit: int = 20
+    eligible_providers: list[str] = Field(default_factory=list)
+    provider_candidate_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class SupplementFunnelReport(BaseModel):
-    schema_version: str = "enhanced-supplement-funnel-v3"
+    schema_version: str = "enhanced-supplement-funnel-v4"
     run_id: str = ""
     script_version: str = ""
     max_candidates_per_gap: int = 20

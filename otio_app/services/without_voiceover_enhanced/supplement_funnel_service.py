@@ -78,12 +78,13 @@ from otio_app.services.without_voiceover_enhanced.supplement_thumbnail_rank_serv
     FunnelRankError,
     compute_preliminary_score,
     fetch_preview_bytes_for_candidate,
+    format_provider_distribution,
     order_by_final_scores,
     pick_finalists_from_batches,
     run_final_comparison,
     run_text_ranking,
     run_thumbnail_batch,
-    select_funnel_candidates,
+    select_provider_balanced_candidates,
     split_thumbnail_batches,
 )
 
@@ -727,12 +728,17 @@ def run_supplement_funnel_for_gaps(
 
         raw_candidates = _candidates_for_gap(results, gap.gap_id)
         ranked_meta = rank_candidates_for_gap(raw_candidates, gap)
-        selected = select_funnel_candidates(
+        pool = select_provider_balanced_candidates(
             ranked_meta,
             enabled_providers=enabled,
             preferred_media_type=gap.preferred_media_type,
             limit=top_n,
+            provider_status=results.provider_status or {},
         )
+        selected = list(pool.candidates)
+        gap_report.candidate_pool_limit = pool.candidate_pool_limit
+        gap_report.eligible_providers = list(pool.eligible_providers)
+        gap_report.provider_candidate_counts = dict(pool.provider_candidate_counts)
         by_id = {c.candidate_id: c for c in selected}
         records: list[FunnelCandidateRecord] = [
             FunnelCandidateRecord(
@@ -755,6 +761,7 @@ def run_supplement_funnel_for_gaps(
             report.open_gap_ids.append(gap.gap_id)
             continue
 
+        distribution = format_provider_distribution(pool.provider_candidate_counts)
         _emit(
             progress_callback,
             FunnelProgressEvent(
@@ -762,10 +769,25 @@ def run_supplement_funnel_for_gaps(
                 gap_id=gap.gap_id,
                 gap_index=gap_index,
                 gap_total=total,
-                message=f"Gap {gap_index}/{total} · {len(selected)} Kandidaten gefunden",
-                fraction=(gap_index - 0.9) / max(1, total),
+                message=(
+                    f"Gap {gap_index}/{total} · "
+                    f"{len(selected)} Kandidaten ausgewählt"
+                ),
+                fraction=(gap_index - 0.92) / max(1, total),
             ),
         )
+        if distribution:
+            _emit(
+                progress_callback,
+                FunnelProgressEvent(
+                    phase="provider_distribution",
+                    gap_id=gap.gap_id,
+                    gap_index=gap_index,
+                    gap_total=total,
+                    message=f"Gap {gap_index}/{total} · Providerverteilung: {distribution}",
+                    fraction=(gap_index - 0.9) / max(1, total),
+                ),
+            )
 
         # Textbewertung
         _emit(

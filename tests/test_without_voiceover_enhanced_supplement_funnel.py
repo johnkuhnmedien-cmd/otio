@@ -48,10 +48,12 @@ from otio_app.services.without_voiceover_enhanced.supplement_funnel_service impo
 from otio_app.services.without_voiceover_enhanced.supplement_thumbnail_rank_service import (
     FunnelRankError,
     compute_preliminary_score,
+    format_provider_distribution,
     order_by_final_scores,
     pick_finalists_from_batches,
     resolve_preview_url,
     select_funnel_candidates,
+    select_provider_balanced_candidates,
     split_thumbnail_batches,
     validate_text_reviews_payload,
 )
@@ -579,7 +581,7 @@ def test_no_llm_key_does_not_auto_accept(tmp_path: Path, monkeypatch) -> None:
         coverage_gaps_path(project),
         CoverageGapsDocument(
             script_version="script-v1",
-            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road")],
+            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road", preferred_media_type="photo")],
         ),
     )
     write_json(
@@ -738,11 +740,17 @@ def test_ui_two_funnel_buttons_and_gap_keys() -> None:
     assert "Ausgewählte Gaps automatisch auflösen" in source
     assert "enh_funnel_all_open" in source
     assert "enh_funnel_selected" in source
-    assert "enh_funnel_gap_select_{project.id}_{gap_id}" in source
+    assert "Offene Coverage Gaps auswählen" in source
+    assert "st.pills(" in source
+    assert 'selection_mode="multi"' in source
+    assert "enh_funnel_gap_multiselect_{project.id}" in source
     assert "disabled=selected_disabled" in source
     assert "disabled=all_disabled" in source
     assert "gap_ids=gap_ids" in source
     assert "list_open_funnel_gap_ids" in source
+    # Kein Query-Parameter als Produktionsauslöser
+    assert 'query_params.get("smoke_action"' not in source
+    assert "st.query_params" not in source
 
 
 def test_redirect_target_revalidated(monkeypatch) -> None:
@@ -841,7 +849,7 @@ def test_max_three_full_downloads(tmp_path: Path) -> None:
         coverage_gaps_path(project),
         CoverageGapsDocument(
             script_version="script-v1",
-            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road")],
+            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road", preferred_media_type="photo")],
         ),
     )
     cands = _make_candidates(20)
@@ -898,7 +906,7 @@ def test_funnel_never_extracts_frames_or_full_review(
         coverage_gaps_path(project),
         CoverageGapsDocument(
             script_version="script-v1",
-            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road")],
+            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road", preferred_media_type="photo")],
         ),
     )
     cands = _make_candidates(8)
@@ -974,7 +982,7 @@ def test_missing_license_no_fallback_auto_export_ready(tmp_path: Path) -> None:
         coverage_gaps_path(project),
         CoverageGapsDocument(
             script_version="script-v1",
-            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road")],
+            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road", preferred_media_type="photo")],
         ),
     )
     cands = _make_candidates(12)
@@ -1046,7 +1054,7 @@ def test_rank1_download_error_falls_back(tmp_path: Path) -> None:
         coverage_gaps_path(project),
         CoverageGapsDocument(
             script_version="script-v1",
-            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road")],
+            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road", preferred_media_type="photo")],
         ),
     )
     cands = _make_candidates(10)
@@ -1103,7 +1111,7 @@ def test_cleanup_on_tech_invalid(tmp_path: Path) -> None:
         coverage_gaps_path(project),
         CoverageGapsDocument(
             script_version="script-v1",
-            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road")],
+            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road", preferred_media_type="photo")],
         ),
     )
     cands = _make_candidates(12)
@@ -1159,7 +1167,7 @@ def test_idempotent_skip_export_ready_gaps(tmp_path: Path) -> None:
         coverage_gaps_path(project),
         CoverageGapsDocument(
             script_version="script-v1",
-            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road")],
+            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road", preferred_media_type="photo")],
         ),
     )
     write_json(
@@ -1256,7 +1264,7 @@ def test_inventory_import_and_no_duplicate_on_rerun(tmp_path: Path) -> None:
         coverage_gaps_path(project),
         CoverageGapsDocument(
             script_version="script-v1",
-            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road")],
+            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road", preferred_media_type="photo")],
         ),
     )
     cands = _make_candidates(8)
@@ -1389,7 +1397,7 @@ def test_gap_ids_unknown_and_duplicate_raise(tmp_path: Path) -> None:
         coverage_gaps_path(project),
         CoverageGapsDocument(
             script_version="script-v1",
-            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road")],
+            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road", preferred_media_type="photo")],
         ),
     )
     write_json(
@@ -1432,9 +1440,9 @@ def test_selected_then_all_open_gaps_integration(tmp_path: Path) -> None:
         },
     )
     gaps = [
-        CoverageGap(gap_id="gap_1", needed_visual="road"),
-        CoverageGap(gap_id="gap_2", needed_visual="river"),
-        CoverageGap(gap_id="gap_3", needed_visual="forest"),
+        CoverageGap(gap_id="gap_1", needed_visual="road", preferred_media_type="photo"),
+        CoverageGap(gap_id="gap_2", needed_visual="river", preferred_media_type="photo"),
+        CoverageGap(gap_id="gap_3", needed_visual="forest", preferred_media_type="photo"),
     ]
     write_json(
         coverage_gaps_path(project),
@@ -1529,8 +1537,8 @@ def test_one_gap_failure_continues_others(tmp_path: Path) -> None:
         CoverageGapsDocument(
             script_version="script-v1",
             gaps=[
-                CoverageGap(gap_id="gap_1", needed_visual="a"),
-                CoverageGap(gap_id="gap_2", needed_visual="b"),
+                CoverageGap(gap_id="gap_1", needed_visual="a", preferred_media_type="photo"),
+                CoverageGap(gap_id="gap_2", needed_visual="b", preferred_media_type="photo"),
             ],
         ),
     )
@@ -1568,3 +1576,435 @@ def test_one_gap_failure_continues_others(tmp_path: Path) -> None:
     )
     assert "gap_1" in report.open_gap_ids
     assert "gap_2" in report.filled_gap_ids
+
+
+def _cand(
+    provider: str,
+    idx: int,
+    *,
+    media_type: str = "photo",
+    gap_id: str = "gap_1",
+    width: int = 1920,
+    height: int = 1080,
+    duration: float | None = None,
+) -> StockCandidate:
+    host = {
+        "pexels": ("images.pexels.com", "https://www.pexels.com/photo"),
+        "pixabay": ("cdn.pixabay.com", "https://pixabay.com/photos"),
+        "wikimedia": (
+            "upload.wikimedia.org",
+            "https://commons.wikimedia.org/wiki/File",
+        ),
+        "openverse": ("api.openverse.org", "https://openverse.org/image"),
+        "archive_org": ("archive.org", "https://archive.org/details"),
+    }[provider]
+    preview = f"https://{host[0]}/p/{provider}-{idx}.jpg"
+    if provider == "wikimedia":
+        preview = (
+            f"https://upload.wikimedia.org/wikipedia/commons/thumb/a/a1/"
+            f"{provider}_{idx}.jpg/320px-{provider}_{idx}.jpg"
+        )
+    return StockCandidate(
+        candidate_id=f"{provider}_{idx:03d}",
+        provider=provider,
+        provider_asset_id=f"{provider}-asset-{idx}",
+        title=f"{provider} scene {idx}",
+        media_type=media_type,
+        creator="Tester",
+        source_page=f"{host[1]}/{idx}/",
+        preview_url=preview,
+        download_url=f"https://{host[0]}/f/{provider}-{idx}.jpg",
+        width=width,
+        height=height,
+        duration_seconds=duration,
+        license=f"{provider} License",
+        attribution="Tester",
+        gap_id=gap_id,
+    )
+
+
+def test_provider_balance_four_providers_five_each() -> None:
+    cands = []
+    for provider in ("pexels", "pixabay", "wikimedia", "openverse"):
+        cands.extend(_cand(provider, i) for i in range(1, 9))
+    pool = select_provider_balanced_candidates(
+        cands,
+        enabled_providers={"pexels", "pixabay", "wikimedia", "openverse"},
+        preferred_media_type="photo",
+        limit=20,
+    )
+    assert len(pool.candidates) == 20
+    assert pool.provider_candidate_counts == {
+        "openverse": 5,
+        "pexels": 5,
+        "pixabay": 5,
+        "wikimedia": 5,
+    }
+
+
+def test_provider_balance_five_providers_four_each() -> None:
+    providers = ("archive_org", "openverse", "pexels", "pixabay", "wikimedia")
+    cands = []
+    for provider in providers:
+        for i in range(1, 8):
+            c = _cand(provider, i)
+            if provider == "archive_org":
+                # archive: harte Exclusion erlaubt Source-Page; Balancing braucht
+                # aber usable download != source für Nicht-Archive — hier ok.
+                c.download_url = f"https://archive.org/download/x/{i}.jpg"
+                c.preview_url = f"https://archive.org/download/x/{i}_thumb.jpg"
+            cands.append(c)
+    pool = select_provider_balanced_candidates(
+        cands,
+        enabled_providers=set(providers),
+        preferred_media_type="photo",
+        limit=20,
+    )
+    assert len(pool.candidates) == 20
+    assert pool.provider_candidate_counts == {
+        "archive_org": 4,
+        "openverse": 4,
+        "pexels": 4,
+        "pixabay": 4,
+        "wikimedia": 4,
+    }
+
+
+def test_provider_balance_three_providers_remainder() -> None:
+    cands = []
+    for provider in ("pexels", "pixabay", "wikimedia"):
+        cands.extend(_cand(provider, i) for i in range(1, 12))
+    pool = select_provider_balanced_candidates(
+        cands,
+        enabled_providers={"pexels", "pixabay", "wikimedia"},
+        preferred_media_type="photo",
+        limit=20,
+    )
+    assert len(pool.candidates) == 20
+    # base 6, remainder 2 → alphabetisch erste zwei +1
+    assert pool.provider_candidate_counts == {
+        "pexels": 7,
+        "pixabay": 7,
+        "wikimedia": 6,
+    }
+
+
+def test_provider_balance_short_provider_redistributes() -> None:
+    cands = [_cand("pexels", i) for i in range(1, 9)]
+    cands += [_cand("pixabay", i) for i in range(1, 9)]
+    cands += [_cand("wikimedia", i) for i in range(1, 3)]  # nur 2
+    cands += [_cand("openverse", i) for i in range(1, 9)]
+    pool = select_provider_balanced_candidates(
+        cands,
+        enabled_providers={"pexels", "pixabay", "wikimedia", "openverse"},
+        preferred_media_type="photo",
+        limit=20,
+        provider_status={
+            "pexels": "completed",
+            "pixabay": "completed",
+            "wikimedia": "completed",
+            "openverse": "completed",
+        },
+    )
+    assert len(pool.candidates) == 20
+    assert pool.provider_candidate_counts["wikimedia"] == 2
+    assert sum(pool.provider_candidate_counts.values()) == 20
+    assert len({c.candidate_id for c in pool.candidates}) == 20
+    # freie Wikimedia-Plätze auf andere mit Restkandidaten verteilt
+    others = (
+        pool.provider_candidate_counts["pexels"]
+        + pool.provider_candidate_counts["pixabay"]
+        + pool.provider_candidate_counts["openverse"]
+    )
+    assert others == 18
+
+
+def test_provider_balance_no_quota_without_eligible_hits() -> None:
+    cands = [_cand("pexels", i) for i in range(1, 12)]
+    cands += [_cand("pixabay", i) for i in range(1, 12)]
+    # openverse nur Videos bei Photo-Gap → keine Quote
+    cands += [_cand("openverse", i, media_type="video") for i in range(1, 5)]
+    pool = select_provider_balanced_candidates(
+        cands,
+        enabled_providers={"pexels", "pixabay", "openverse"},
+        preferred_media_type="photo",
+        limit=20,
+    )
+    assert "openverse" not in pool.eligible_providers
+    assert "openverse" not in pool.provider_candidate_counts
+    assert len(pool.candidates) == 20
+    assert pool.provider_candidate_counts == {"pexels": 10, "pixabay": 10}
+
+
+def test_provider_balance_single_provider_up_to_20() -> None:
+    cands = [_cand("pexels", i) for i in range(1, 30)]
+    pool = select_provider_balanced_candidates(
+        cands,
+        enabled_providers={"pexels", "pixabay"},
+        preferred_media_type="photo",
+        limit=20,
+    )
+    assert len(pool.candidates) == 20
+    assert pool.eligible_providers == ["pexels"]
+    assert pool.provider_candidate_counts == {"pexels": 20}
+
+
+def test_provider_balance_fewer_than_20_uses_all() -> None:
+    cands = [_cand("pexels", i) for i in range(1, 4)]
+    cands += [_cand("pixabay", i) for i in range(1, 3)]
+    pool = select_provider_balanced_candidates(
+        cands,
+        enabled_providers={"pexels", "pixabay"},
+        preferred_media_type="photo",
+        limit=20,
+    )
+    assert len(pool.candidates) == 5
+    assert sum(pool.provider_candidate_counts.values()) == 5
+
+
+def test_provider_balance_no_duplicates_and_max_20() -> None:
+    cands = []
+    for provider in ("pexels", "pixabay", "wikimedia", "openverse"):
+        cands.extend(_cand(provider, i) for i in range(1, 15))
+    # Duplikat-Asset
+    dup = _cand("pexels", 1)
+    dup.candidate_id = "pexels_dup"
+    cands.append(dup)
+    pool = select_provider_balanced_candidates(
+        cands,
+        enabled_providers={"pexels", "pixabay", "wikimedia", "openverse"},
+        preferred_media_type="photo",
+        limit=20,
+    )
+    ids = [c.candidate_id for c in pool.candidates]
+    assert len(ids) == 20
+    assert len(ids) == len(set(ids))
+    asset_keys = {(c.provider, c.provider_asset_id) for c in pool.candidates}
+    assert len(asset_keys) == 20
+
+
+def test_provider_balance_independent_of_input_order() -> None:
+    cands = []
+    for provider in ("pexels", "pixabay", "wikimedia", "openverse"):
+        cands.extend(_cand(provider, i) for i in range(1, 9))
+    forward = select_provider_balanced_candidates(
+        cands,
+        enabled_providers={"pexels", "pixabay", "wikimedia", "openverse"},
+        preferred_media_type="photo",
+        limit=20,
+    )
+    reverse = select_provider_balanced_candidates(
+        list(reversed(cands)),
+        enabled_providers={"openverse", "wikimedia", "pixabay", "pexels"},
+        preferred_media_type="photo",
+        limit=20,
+    )
+    assert {c.candidate_id for c in forward.candidates} == {
+        c.candidate_id for c in reverse.candidates
+    }
+    assert forward.provider_candidate_counts == reverse.provider_candidate_counts
+
+
+def test_provider_balance_disabled_and_failed_status() -> None:
+    cands = [_cand("pexels", i) for i in range(1, 10)]
+    cands += [_cand("pixabay", i) for i in range(1, 10)]
+    cands += [_cand("wikimedia", i) for i in range(1, 10)]
+    pool = select_provider_balanced_candidates(
+        cands,
+        enabled_providers={"pexels", "pixabay", "wikimedia"},
+        preferred_media_type="photo",
+        limit=20,
+        provider_status={
+            "pexels": "completed",
+            "pixabay": "disabled",
+            "wikimedia": "failed",
+        },
+    )
+    assert pool.eligible_providers == ["pexels"]
+    assert all(c.provider == "pexels" for c in pool.candidates)
+    assert len(pool.candidates) == 9
+
+
+def test_provider_balance_video_gap_skips_photo_only() -> None:
+    cands = [_cand("pexels", i, media_type="photo") for i in range(1, 6)]
+    cands += [
+        _cand("pixabay", i, media_type="video", duration=8.0) for i in range(1, 8)
+    ]
+    pool = select_provider_balanced_candidates(
+        cands,
+        enabled_providers={"pexels", "pixabay"},
+        preferred_media_type="video",
+        limit=20,
+    )
+    assert pool.eligible_providers == ["pixabay"]
+    assert all(c.media_type == "video" for c in pool.candidates)
+    assert "pexels" not in pool.provider_candidate_counts
+
+
+def test_provider_balance_ranking_remains_provider_neutral() -> None:
+    """Poolbildung ≠ Ranking: kein Providerbonus in Scores/Finalisten."""
+    from otio_app.services.without_voiceover_enhanced.supplement_thumbnail_rank_service import (
+        compute_preliminary_score,
+    )
+
+    cands = []
+    for provider in ("pexels", "pixabay"):
+        cands.extend(_cand(provider, i) for i in range(1, 12))
+    pool = select_provider_balanced_candidates(
+        cands,
+        enabled_providers={"pexels", "pixabay"},
+        preferred_media_type="photo",
+        limit=20,
+    )
+    # Identische Score-Inputs → identischer Score unabhängig vom Provider
+    scores = []
+    for c in pool.candidates:
+        scores.append(
+            (
+                c.provider,
+                compute_preliminary_score(
+                    text_relevance=80,
+                    semantic_fit=80,
+                    editorial_function_fit=80,
+                    style_fit=80,
+                    continuity_fit=80,
+                    composition_quality=80,
+                    visual_quality=80,
+                    misrepresentation_risk=10,
+                ),
+            )
+        )
+    assert len({s for _, s in scores}) == 1
+
+
+def test_provider_distribution_persisted_in_report(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = _project(tmp_path)
+    _lock(project)
+    save_stock_providers_config(
+        project,
+        {
+            "pexels": True,
+            "pixabay": True,
+            "wikimedia": True,
+            "openverse": True,
+            "archive_org": False,
+        },
+    )
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            gaps=[
+                CoverageGap(
+                    gap_id="gap_1",
+                    needed_visual="road",
+                    preferred_media_type="photo",
+                )
+            ],
+        ),
+    )
+    cands = []
+    for provider in ("pexels", "pixabay", "wikimedia", "openverse"):
+        for i in range(1, 9):
+            c = _cand(provider, i)
+            cands.append(c)
+    # Wikimedia nur 2
+    cands = [c for c in cands if not (c.provider == "wikimedia" and int(c.provider_asset_id.split("-")[-1]) > 2)]
+    write_json(
+        stock_search_results_path(project),
+        StockSearchResultsDocument(
+            script_version="script-v1",
+            provider_status={
+                "pexels": "completed",
+                "pixabay": "completed",
+                "wikimedia": "completed",
+                "openverse": "completed",
+            },
+            candidates=cands,
+        ),
+    )
+
+    def download_callable(project, candidate, *, gap_id: str) -> Path:
+        from otio_app.services.without_voiceover_enhanced.paths import (
+            stock_candidate_download_dir,
+        )
+
+        d = stock_candidate_download_dir(
+            project, gap_id=gap_id, candidate_id=candidate.candidate_id
+        )
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"{candidate.candidate_id}.jpg"
+        path.write_bytes(_jpeg_bytes())
+        return path
+
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.supplement_funnel_service._extract_validation_frames",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("no frames")),
+    )
+
+    progress: list[str] = []
+    report = run_supplement_funnel_for_gaps(
+        project,
+        text_llm=_fake_text_llm_any(cands),
+        vision_llm=_fake_vision_llm(),
+        preview_fetch=_preview_fetch,
+        download_callable=download_callable,
+        force_restart=True,
+        progress_callback=lambda e: progress.append(e.message or e.phase),
+    )
+    gap = report.gaps[0]
+    assert gap.candidate_pool_limit == 20
+    assert set(gap.eligible_providers) == {
+        "openverse",
+        "pexels",
+        "pixabay",
+        "wikimedia",
+    }
+    assert gap.provider_candidate_counts["wikimedia"] == 2
+    assert sum(gap.provider_candidate_counts.values()) == 20
+    assert any("Providerverteilung:" in m for m in progress)
+    assert any("Kandidaten ausgewählt" in m for m in progress)
+    assert format_provider_distribution(gap.provider_candidate_counts)
+
+
+def test_ui_multiselect_project_scoped_and_same_service() -> None:
+    source = Path(
+        "otio_app/ui/without_voiceover_enhanced/cut_plan_tab.py"
+    ).read_text(encoding="utf-8")
+    assert 'f"enh_funnel_gap_multiselect_{project.id}"' in source
+    assert "st.pills(" in source
+    assert 'selection_mode="multi"' in source
+    assert "run_supplement_funnel_for_gaps" in source
+    # Beide Buttons rufen denselben Helper / Service
+    assert source.count("_run_funnel_with_gap_ids(") >= 3
+    assert "list_open_funnel_gap_ids(project)" in source
+    assert "Mehrfachauswahl wird ignoriert" in source
+    svc = Path(
+        "otio_app/services/without_voiceover_enhanced/supplement_funnel_service.py"
+    ).read_text(encoding="utf-8")
+    assert "select_provider_balanced_candidates" in svc
+    assert "full_review_llm" in svc
+    assert "del full_review_llm" in svc
+
+
+def test_historical_funnel_report_without_pool_fields_readable() -> None:
+    from otio_app.services.without_voiceover_enhanced.models import (
+        SupplementFunnelGapReport,
+        SupplementFunnelReport,
+    )
+
+    legacy = {
+        "schema_version": "enhanced-supplement-funnel-v3",
+        "run_id": "funnel_old",
+        "script_version": "script-v1",
+        "gaps": [{"gap_id": "gap_1", "filled": True}],
+        "filled_gap_ids": ["gap_1"],
+    }
+    report = SupplementFunnelReport.model_validate(legacy)
+    assert report.gaps[0].candidate_pool_limit == 20
+    assert report.gaps[0].eligible_providers == []
+    assert report.gaps[0].provider_candidate_counts == {}
+    gap = SupplementFunnelGapReport.model_validate({"gap_id": "gap_x"})
+    assert gap.candidate_pool_limit == 20
