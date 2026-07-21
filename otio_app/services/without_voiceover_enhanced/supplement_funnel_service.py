@@ -368,6 +368,7 @@ def confirm_funnel_candidate(
 
     candidate.local_media_path = str(media_path)
     candidate.selected = True
+    candidate.funnel_managed = True
     record.funnel_status = transition(record.funnel_status, "selected")
     record.review_status = "accepted"
 

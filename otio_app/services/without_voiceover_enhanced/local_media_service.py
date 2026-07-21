@@ -273,6 +273,33 @@ def license_metadata_complete(candidate: StockCandidate) -> bool:
     return has_license and has_source
 
 
+def _apply_funnel_license_gate_if_needed(
+    candidate: StockCandidate,
+    *,
+    technical_status: str,
+    technical_error: str | None,
+) -> StockCandidate:
+    """Funnel-Supplements: technisch gültig ≠ export_ready ohne Lizenz-Gate."""
+    if not getattr(candidate, "funnel_managed", False):
+        candidate.media_validation_status = technical_status
+        candidate.media_validation_error = technical_error
+        return candidate
+    if technical_status != STATUS_EXPORT_READY:
+        candidate.media_validation_status = technical_status
+        candidate.media_validation_error = technical_error
+        return candidate
+    if not license_metadata_complete(candidate):
+        candidate.media_validation_status = STATUS_LICENSE_REVIEW_REQUIRED
+        candidate.media_validation_error = (
+            "Lizenzmetadaten unvollständig — kein export_ready "
+            "(Funnel-Lizenz-Gate)."
+        )
+        return candidate
+    candidate.media_validation_status = STATUS_EXPORT_READY
+    candidate.media_validation_error = None
+    return candidate
+
+
 def refresh_supplement_validation(candidate: StockCandidate) -> StockCandidate:
     if not candidate.selected and not candidate.local_media_path:
         candidate.media_validation_status = STATUS_SELECTED
@@ -285,26 +312,25 @@ def refresh_supplement_validation(candidate: StockCandidate) -> StockCandidate:
             "Mediendatei. Ordne zuerst eine lokale Originaldatei zu."
         )
         return candidate
+    if is_http_url(candidate.local_media_path):
+        candidate.media_validation_status = STATUS_LOCAL_MEDIA_INVALID
+        candidate.media_validation_error = (
+            "Remote-URL als local_media_path ist nicht erlaubt."
+        )
+        return candidate
     status, error = validate_local_media_path(
         candidate.local_media_path,
         media_type=candidate.media_type,
     )
-    candidate.media_validation_status = status
-    candidate.media_validation_error = error
-    return candidate
+    return _apply_funnel_license_gate_if_needed(
+        candidate, technical_status=status, technical_error=error
+    )
 
 
 def apply_license_export_gate(candidate: StockCandidate) -> StockCandidate:
-    """Funnel/Lizenz-Gate: technisch gültig, aber Lizenz unvollständig → kein export_ready."""
-    candidate = refresh_supplement_validation(candidate)
-    if candidate.media_validation_status != STATUS_EXPORT_READY:
-        return candidate
-    if not license_metadata_complete(candidate):
-        candidate.media_validation_status = STATUS_LICENSE_REVIEW_REQUIRED
-        candidate.media_validation_error = (
-            "Lizenzmetadaten unvollständig — kein export_ready."
-        )
-    return candidate
+    """Explizites Funnel-Lizenz-Gate (setzt funnel_managed und prüft erneut)."""
+    candidate.funnel_managed = True
+    return refresh_supplement_validation(candidate)
 
 
 def assign_local_media_path(
@@ -319,8 +345,14 @@ def assign_local_media_path(
     for index, candidate in enumerate(accepted.supplements):
         if candidate.candidate_id != candidate_id:
             continue
-        candidate.local_media_path = str(local_media_path).strip()
+        path_value = str(local_media_path).strip()
+        if is_http_url(path_value):
+            raise LocalMediaError(
+                "Remote-URL als local_media_path ist nicht erlaubt."
+            )
+        candidate.local_media_path = path_value
         candidate.selected = True
+        # Funnel-Merkmal bleibt erhalten — Gate darf nicht umgangen werden.
         candidate = refresh_supplement_validation(candidate)
         accepted.supplements[index] = candidate
         updated = candidate

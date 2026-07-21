@@ -34,11 +34,6 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     merge_and_persist_rough_cuts,
     search_supplements_for_gaps,
 )
-from otio_app.services.without_voiceover_enhanced.supplement_resolve_service import (
-    SupplementResolveError,
-    SupplementResolveProgressEvent,
-    resolve_supplements_for_gaps,
-)
 from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
     FunnelProgressEvent,
     SupplementFunnelError,
@@ -48,7 +43,7 @@ from otio_app.services.without_voiceover_enhanced.supplement_funnel_service impo
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_locked_script,
 )
-from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
+from otio_app.services.without_voiceover_enhanced.io_utils import load_model
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
     LocalMediaError,
     assign_local_media_path,
@@ -64,7 +59,6 @@ from otio_app.services.without_voiceover_enhanced.models import (
     StockCandidate,
     StockSearchResultsDocument,
     SupplementFunnelReport,
-    SupplementResolveReport,
 )
 from otio_app.ui.without_voiceover_enhanced.timeline_view import render_realtime_timeline
 from otio_app.services.without_voiceover_enhanced.paths import (
@@ -78,7 +72,6 @@ from otio_app.services.without_voiceover_enhanced.paths import (
     segment_timings_path,
     stock_search_results_path,
     supplement_funnel_report_path,
-    supplement_resolve_report_path,
 )
 from otio_app.services.without_voiceover_enhanced.stock_provider_config import (
     PROVIDER_UI_LABELS,
@@ -142,10 +135,6 @@ def _stock_candidate_checkbox_label(
         f"{candidate.provider}: {passage_part} · {gap_part} "
         f"({candidate.media_type}, license={license_label})"
     )
-
-
-def _resolve_run_key(project_id: str) -> str:
-    return f"enh_resolve_run_{project_id}"
 
 
 def _estimate_path_tokens(path) -> int:
@@ -481,8 +470,6 @@ def render_enhanced_cut_plan_page() -> None:
             st.error(f"Fehler: {exc}")
 
     results = load_model(stock_search_results_path(project), StockSearchResultsDocument)
-    resolve_key = _resolve_run_key(project.id)
-    resolve_run = st.session_state.get(resolve_key)
 
     if results is not None:
         if results.provider_status:
@@ -501,188 +488,59 @@ def render_enhanced_cut_plan_page() -> None:
             if checked:
                 selected_ids.append(candidate.candidate_id)
 
-        # Laufende sequenzielle Prüfung: ein Gap pro Rerun.
-        # Stop-Klick während Gap N wird zu Beginn von Gap N+1 ausgewertet.
-        if isinstance(resolve_run, dict) and resolve_run.get("active"):
-            gap_ids: list[str] = list(resolve_run.get("gap_ids") or [])
-            index = int(resolve_run.get("index") or 0)
-            log_lines: list[str] = list(resolve_run.get("log") or [])
-            total = max(1, len(gap_ids))
-
-            st.markdown("**Sequenzielle Prüfung läuft…**")
-            cols_run = st.columns(2)
-            with cols_run[0]:
-                stop_clicked = st.button(
-                    "Prüfung stoppen",
-                    key="enh_resolve_stop",
-                    type="secondary",
-                    help=(
-                        "Stoppt vor dem nächsten Gap. "
-                        "Für Sofort-Abbruch: Streamlit-Stop oben rechts."
-                    ),
-                )
-            with cols_run[1]:
-                st.caption(
-                    "Stop greift vor dem nächsten Gap · "
-                    "Streamlit-Stop (oben rechts) bricht sofort ab."
-                )
-
-            progress_bar = st.progress(
-                min(1.0, index / total),
-                text=f"Gap {min(index + 1, total)}/{total}…",
-            )
-            status_box = st.empty()
-            log_box = st.empty()
-            if log_lines:
-                log_box.caption("\n".join(log_lines[-12:]))
-
-            if stop_clicked or resolve_run.get("stop_requested"):
-                resolve_run["active"] = False
-                resolve_run["stop_requested"] = True
-                st.session_state[resolve_key] = resolve_run
-                existing = load_model(
-                    supplement_resolve_report_path(project),
-                    SupplementResolveReport,
-                )
-                if existing is not None:
-                    existing.stopped = True
-                    existing.message = (
-                        f"Abgebrochen nach {index}/{total} Gaps · "
-                        f"{len(existing.filled_gap_ids)} gefüllt · "
-                        f"{len(existing.unfilled_gap_ids)} ohne Treffer"
+        cols_stock = st.columns(2)
+        with cols_stock[0]:
+            if st.button("Auswahl akzeptieren", key="enh_accept_stock"):
+                try:
+                    accepted = accept_supplement_candidates(
+                        project, selected_ids
                     )
-                    write_json(supplement_resolve_report_path(project), existing)
-                st.warning(f"Prüfung gestoppt nach {index}/{total} Gaps.")
-                st.rerun()
-
-            if index >= len(gap_ids):
-                resolve_run["active"] = False
-                st.session_state[resolve_key] = resolve_run
-                final_report = load_model(
-                    supplement_resolve_report_path(project),
-                    SupplementResolveReport,
-                )
-                msg = (
-                    final_report.message
-                    if final_report is not None
-                    else "Prüfung abgeschlossen."
-                )
-                st.success(msg)
-                st.rerun()
-
-            current_gap_id = gap_ids[index]
-            status_box.info(f"Prüfe Gap {index + 1}/{total}: `{current_gap_id}`")
-
-            def _resolve_progress(event: SupplementResolveProgressEvent) -> None:
-                label = event.message or event.phase
-                # Service meldet bereits Gesamtfortschritt über alle Gaps.
-                progress_bar.progress(
-                    min(1.0, max(0.0, float(event.fraction))),
-                    text=label[:120],
-                )
-                status_box.info(label)
-                if event.phase in {"result", "gap_done", "finished"}:
-                    log_lines.append(label)
-                    log_box.caption("\n".join(log_lines[-12:]))
-
-            try:
-                resolve_supplements_for_gaps(
-                    project,
-                    only_gap_ids=[current_gap_id],
-                    merge_report=index > 0,
-                    progress_callback=_resolve_progress,
-                )
-                resolve_run["index"] = index + 1
-                resolve_run["log"] = log_lines[-40:]
-                st.session_state[resolve_key] = resolve_run
-                st.rerun()
-            except SupplementResolveError as exc:
-                resolve_run["active"] = False
-                st.session_state[resolve_key] = resolve_run
-                st.error(str(exc))
-            except Exception as exc:  # noqa: BLE001
-                resolve_run["active"] = False
-                st.session_state[resolve_key] = resolve_run
-                st.error(f"Fehler: {exc}")
-        else:
-            cols_stock = st.columns(3)
-            with cols_stock[0]:
-                if st.button("Auswahl akzeptieren", key="enh_accept_stock"):
-                    try:
-                        accepted = accept_supplement_candidates(
-                            project, selected_ids
-                        )
-                        st.success(
-                            f"{len(accepted.supplements)} Supplements akzeptiert "
-                            "(manuell — ohne Download/LLM). "
-                            "Lokale Datei ggf. darunter zuordnen."
-                        )
-                        st.rerun()
-                    except CutPlanError as exc:
-                        st.error(str(exc))
-            with cols_stock[1]:
-                if st.button(
-                    "20 Kandidaten vorprüfen",
-                    type="primary",
-                    key="enh_funnel_stock",
-                    help=(
-                        "Funnel: Text → Thumbnails (2×10) → Finalvergleich → "
-                        "nur Rang 1 downloaden. Keine Auto-Auswahl; "
-                        "review_ready erfordert manuelle Freigabe."
-                    ),
-                ):
-                    try:
-                        progress_bar = st.progress(0.0, text="Funnel startet…")
-                        status_box = st.empty()
-                        log_box = st.empty()
-                        log_lines: list[str] = []
-
-                        def _funnel_progress(event: FunnelProgressEvent) -> None:
-                            label = event.message or event.phase
-                            progress_bar.progress(
-                                min(1.0, max(0.0, float(event.fraction))),
-                                text=label[:120],
-                            )
-                            status_box.info(label)
-                            log_lines.append(label)
-                            log_box.caption("\n".join(log_lines[-14:]))
-
-                        funnel_report = run_supplement_funnel_for_gaps(
-                            project,
-                            progress_callback=_funnel_progress,
-                        )
-                        progress_bar.progress(1.0, text=funnel_report.message)
-                        status_box.success(funnel_report.message)
-                        st.rerun()
-                    except SupplementFunnelError as exc:
-                        st.error(str(exc))
-                    except Exception as exc:  # noqa: BLE001
-                        st.error(f"Fehler: {exc}")
-            with cols_stock[2]:
-                if st.button(
-                    "Supplements sequenziell prüfen",
-                    key="enh_resolve_stock",
-                    help=(
-                        "Legacy: Top-N nacheinander downloaden. "
-                        "Bevorzugt: „20 Kandidaten vorprüfen“."
-                    ),
-                ):
-                    gap_ids = (
-                        [g.gap_id for g in coverage.gaps]
-                        if coverage is not None
-                        else []
+                    st.success(
+                        f"{len(accepted.supplements)} Supplements akzeptiert "
+                        "(manuell — ohne Download/LLM). "
+                        "Lokale Datei ggf. darunter zuordnen."
                     )
-                    if not gap_ids:
-                        st.error("Keine Coverage Gaps vorhanden.")
-                    else:
-                        st.session_state[resolve_key] = {
-                            "active": True,
-                            "stop_requested": False,
-                            "gap_ids": gap_ids,
-                            "index": 0,
-                            "log": [],
-                        }
-                        st.rerun()
+                    st.rerun()
+                except CutPlanError as exc:
+                    st.error(str(exc))
+        with cols_stock[1]:
+            if st.button(
+                "20 Kandidaten vorprüfen",
+                type="primary",
+                key="enh_funnel_stock",
+                help=(
+                    "Funnel: Text → Thumbnails (2×10) → Finalvergleich → "
+                    "nur Rang 1 downloaden. Keine Auto-Auswahl; "
+                    "review_ready erfordert manuelle Freigabe."
+                ),
+            ):
+                try:
+                    progress_bar = st.progress(0.0, text="Funnel startet…")
+                    status_box = st.empty()
+                    log_box = st.empty()
+                    log_lines: list[str] = []
+
+                    def _funnel_progress(event: FunnelProgressEvent) -> None:
+                        label = event.message or event.phase
+                        progress_bar.progress(
+                            min(1.0, max(0.0, float(event.fraction))),
+                            text=label[:120],
+                        )
+                        status_box.info(label)
+                        log_lines.append(label)
+                        log_box.caption("\n".join(log_lines[-14:]))
+
+                    funnel_report = run_supplement_funnel_for_gaps(
+                        project,
+                        progress_callback=_funnel_progress,
+                    )
+                    progress_bar.progress(1.0, text=funnel_report.message)
+                    status_box.success(funnel_report.message)
+                    st.rerun()
+                except SupplementFunnelError as exc:
+                    st.error(str(exc))
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Fehler: {exc}")
 
         funnel_report = load_model(
             supplement_funnel_report_path(project),
@@ -727,7 +585,10 @@ def render_enhanced_cut_plan_page() -> None:
                 if review_id:
                     if st.button(
                         f"Manuell freigeben: {review_id}",
-                        key=f"enh_funnel_confirm_{project.id}_{gap_rep.gap_id}_{review_id}",
+                        key=(
+                            f"enh_funnel_confirm_{project.id}_"
+                            f"{gap_rep.gap_id}_{review_id}"
+                        ),
                     ):
                         try:
                             confirmed = confirm_funnel_candidate(
@@ -746,17 +607,6 @@ def render_enhanced_cut_plan_page() -> None:
                 st.warning(
                     "Offene Gaps: " + ", ".join(funnel_report.open_gap_ids[:12])
                 )
-
-        resolve_report = load_model(
-            supplement_resolve_report_path(project),
-            SupplementResolveReport,
-        )
-        if resolve_report is not None:
-            stopped_note = " · abgebrochen" if resolve_report.stopped else ""
-            st.caption(
-                f"Letzter Legacy-Resolve: {resolve_report.message} · "
-                f"Top-N={resolve_report.max_candidates_per_gap}{stopped_note}"
-            )
 
     accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     if accepted is not None:

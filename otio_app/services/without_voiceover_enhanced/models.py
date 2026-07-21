@@ -203,8 +203,11 @@ class StockCandidate(BaseModel):
     # R1: lokale Mediendatei vor Final Cut / OTIO erforderlich.
     local_media_path: Optional[str] = None
     media_validation_status: str = "selected"
-    # selected | local_media_missing | local_media_invalid | export_ready
+    # selected | local_media_missing | local_media_invalid |
+    # license_review_required | export_ready
     media_validation_error: Optional[str] = None
+    # True = aus Supplement-Funnel freigegeben → Lizenz-Gate fail-closed.
+    funnel_managed: bool = False
 
 
 class StockSearchResultsDocument(BaseModel):
