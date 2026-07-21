@@ -7,6 +7,8 @@ import streamlit as st
 from otio_app.defaults import (
     ENHANCED_CUT_LLM_MODEL_CHOICES,
     ENHANCED_CUT_LLM_MODEL_LABELS,
+    ENHANCED_FUNNEL_LLM_MODEL_CHOICES,
+    ENHANCED_FUNNEL_LLM_MODEL_LABELS,
 )
 from otio_app.services.voiceover_generation.llm_pricing import (
     estimate_call_cost_usd,
@@ -507,6 +509,35 @@ def render_enhanced_cut_plan_page() -> None:
             f"gesamt **{total_gaps}**"
         )
 
+        funnel_settings = load_model_settings(project)
+        funnel_role = funnel_settings.enhanced_supplement_funnel
+        with st.expander("⚙️ Funnel-Modell (Text + Thumbnail)", expanded=False):
+            funnel_updated = render_llm_model_selectbox(
+                label="Funnel-Modell",
+                role_settings=funnel_role,
+                key=f"enh_funnel_model_{project.id}",
+                input_info=LLM_INPUT_INFO["enhanced_supplement_funnel"],
+                options=ENHANCED_FUNNEL_LLM_MODEL_CHOICES,
+                labels=ENHANCED_FUNNEL_LLM_MODEL_LABELS,
+                show_estimated_costs=True,
+            )
+            if st.button(
+                "Funnel-Modell speichern",
+                key=f"enh_funnel_model_save_{project.id}",
+            ):
+                save_model_settings(
+                    project,
+                    funnel_settings.model_copy(
+                        update={"enhanced_supplement_funnel": funnel_updated}
+                    ),
+                )
+                st.success("Funnel-Modell gespeichert.")
+            st.caption(
+                f"Aktiv: **{funnel_updated.model}** · "
+                "Für günstige Tests: Gemini 3.1 Flash Lite."
+            )
+        funnel_model_id = funnel_updated.model
+
         # Veraltete R3-Checkbox-Keys bereinigen (einmalig / bei Reruns).
         for gap_id in list(gap_by_id):
             legacy_key = f"enh_funnel_gap_select_{project.id}_{gap_id}"
@@ -578,6 +609,7 @@ def render_enhanced_cut_plan_page() -> None:
                 project,
                 gap_ids=gap_ids,
                 progress_callback=_funnel_progress,
+                model=funnel_model_id,
             )
             progress_bar.progress(1.0, text=funnel_report.message)
             status_box.success(funnel_report.message)
@@ -685,6 +717,8 @@ def render_enhanced_cut_plan_page() -> None:
                 expanded=False,
             ):
                 st.caption(funnel_report.message)
+                if funnel_report.llm_model:
+                    st.caption(f"Modell: `{funnel_report.llm_model}`")
                 st.write(
                     f"Angefordert: **{len(funnel_report.requested_gap_ids)}** · "
                     f"erfüllt: **{filled_n}** · "

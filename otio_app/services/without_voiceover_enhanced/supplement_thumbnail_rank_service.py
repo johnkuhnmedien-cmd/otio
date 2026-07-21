@@ -622,7 +622,7 @@ def order_by_final_scores(
     return updated
 
 
-def _default_text_llm(prompt: str, *, model: str = DEFAULT_FUNNEL_MODEL) -> str:
+def default_funnel_text_llm(prompt: str, *, model: str = DEFAULT_FUNNEL_MODEL) -> str:
     if not is_api_key_set("GEMINI_API_KEY"):
         raise FunnelRankError("GEMINI_API_KEY fehlt.")
     client = _get_client()
@@ -635,7 +635,7 @@ def _default_text_llm(prompt: str, *, model: str = DEFAULT_FUNNEL_MODEL) -> str:
     return (response.text or "").strip()
 
 
-def _default_vision_llm(
+def default_funnel_vision_llm(
     prompt: str,
     images: list[tuple[str, bytes]],
     *,
@@ -654,6 +654,11 @@ def _default_vision_llm(
         contents=[types.Content(role="user", parts=parts)],
     )
     return (response.text or "").strip()
+
+
+# Kompatibilitäts-Aliase (ältere Imports/Tests).
+_default_text_llm = default_funnel_text_llm
+_default_vision_llm = default_funnel_vision_llm
 
 
 def _parse_json_with_repair(

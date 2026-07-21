@@ -53,6 +53,9 @@ def test_default_model_settings_has_all_roles() -> None:
         elif role in {"enhanced_rough_cut", "enhanced_final_cut"}:
             assert role_settings.provider == "openai"
             assert role_settings.model == "gpt-5.6-terra"
+        elif role == "enhanced_supplement_funnel":
+            assert role_settings.provider == "gemini"
+            assert role_settings.model == "gemini-3.5-flash"
         else:
             assert role_settings.provider == "anthropic"
             assert role_settings.model == "claude-sonnet-5"

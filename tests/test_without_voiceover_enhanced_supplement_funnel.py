@@ -757,6 +757,11 @@ def test_ui_two_funnel_buttons_and_gap_keys() -> None:
     assert "Funnel-Abschluss" in source
     assert "Lokale Dateizuordnung (manuell)" in source
     assert source.count("expanded=False") >= 4
+    # Funnel-Modell wählbar (günstige Gemini-Varianten)
+    assert "ENHANCED_FUNNEL_LLM_MODEL_CHOICES" in source
+    assert "enh_funnel_model_" in source
+    assert "model=funnel_model_id" in source
+    assert "enhanced_supplement_funnel" in source
     # Kein Query-Parameter als Produktionsauslöser
     assert 'query_params.get("smoke_action"' not in source
     assert "st.query_params" not in source
@@ -2015,5 +2020,63 @@ def test_historical_funnel_report_without_pool_fields_readable() -> None:
     assert report.gaps[0].candidate_pool_limit == 20
     assert report.gaps[0].eligible_providers == []
     assert report.gaps[0].provider_candidate_counts == {}
+    assert report.llm_model == ""
     gap = SupplementFunnelGapReport.model_validate({"gap_id": "gap_x"})
     assert gap.candidate_pool_limit == 20
+
+
+def test_funnel_records_selected_llm_model(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _lock(project)
+    save_stock_providers_config(
+        project,
+        {
+            "pexels": True,
+            "pixabay": False,
+            "wikimedia": False,
+            "openverse": False,
+            "archive_org": False,
+        },
+    )
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            gaps=[
+                CoverageGap(
+                    gap_id="gap_1",
+                    needed_visual="road",
+                    preferred_media_type="photo",
+                )
+            ],
+        ),
+    )
+    cands = _make_candidates(4)
+    write_json(
+        stock_search_results_path(project),
+        StockSearchResultsDocument(script_version="script-v1", candidates=cands),
+    )
+
+    def download_callable(project, candidate, *, gap_id: str) -> Path:
+        from otio_app.services.without_voiceover_enhanced.paths import (
+            stock_candidate_download_dir,
+        )
+
+        d = stock_candidate_download_dir(
+            project, gap_id=gap_id, candidate_id=candidate.candidate_id
+        )
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"{candidate.candidate_id}.jpg"
+        path.write_bytes(_jpeg_bytes())
+        return path
+
+    report = run_supplement_funnel_for_gaps(
+        project,
+        text_llm=_fake_text_llm(cands),
+        vision_llm=_fake_vision_llm(),
+        preview_fetch=_preview_fetch,
+        download_callable=download_callable,
+        force_restart=True,
+        model="gemini-3.1-flash-lite",
+    )
+    assert report.llm_model == "gemini-3.1-flash-lite"

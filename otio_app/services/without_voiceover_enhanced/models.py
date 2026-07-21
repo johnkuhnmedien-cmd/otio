@@ -355,6 +355,8 @@ class SupplementFunnelReport(BaseModel):
     script_version: str = ""
     max_candidates_per_gap: int = 20
     max_full_download_attempts_per_gap: int = 3
+    # Gemini-Modell für Text- + Thumbnail-Ranking (historische Reports: leer).
+    llm_model: str = ""
     gaps: list[SupplementFunnelGapReport] = Field(default_factory=list)
     requested_gap_ids: list[str] = Field(default_factory=list)
     skipped_gap_ids: list[str] = Field(default_factory=list)

@@ -77,6 +77,8 @@ from otio_app.services.without_voiceover_enhanced.supplement_resolve_service imp
 from otio_app.services.without_voiceover_enhanced.supplement_thumbnail_rank_service import (
     FunnelRankError,
     compute_preliminary_score,
+    default_funnel_text_llm,
+    default_funnel_vision_llm,
     fetch_preview_bytes_for_candidate,
     format_provider_distribution,
     order_by_final_scores,
@@ -644,11 +646,15 @@ def run_supplement_funnel_for_gaps(
     preview_fetch: Callable[..., Any] | None = None,
     download_callable: Callable[..., Path] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    model: str | None = None,
 ) -> SupplementFunnelReport:
     """Haupt-Orchestrierung: Thumbnail-Ranking ist letzte semantische Stufe.
 
     ``gap_ids`` (bevorzugt) oder ``only_gap_ids``: explizite Gap-Liste.
     ``full_review_llm`` wird ignoriert — kein zweiter LLM-Call.
+    ``model``: Gemini-Modell-ID für Text-/Thumbnail-Ranking (Default:
+    ``DEFAULT_FUNNEL_MODEL``). Wird ignoriert, wenn ``text_llm`` /
+    ``vision_llm`` explizit übergeben werden.
     """
     del full_review_llm  # bewusst nicht verwendet (R2/R3)
 
@@ -670,6 +676,17 @@ def run_supplement_funnel_for_gaps(
     )
     max_downloads = max(1, min(3, max_downloads))
     enabled = set(enabled_provider_names(project))
+    funnel_model = (model or DEFAULT_FUNNEL_MODEL).strip() or DEFAULT_FUNNEL_MODEL
+    if text_llm is None:
+        text_llm = lambda prompt: default_funnel_text_llm(
+            prompt, model=funnel_model
+        )
+    if vision_llm is None:
+        vision_llm = (
+            lambda prompt, images: default_funnel_vision_llm(
+                prompt, images, model=funnel_model
+            )
+        )
 
     gaps = _resolve_requested_gaps(
         coverage, gap_ids=gap_ids, only_gap_ids=only_gap_ids
@@ -680,6 +697,7 @@ def run_supplement_funnel_for_gaps(
         script_version=locked.script_version,
         max_candidates_per_gap=top_n,
         max_full_download_attempts_per_gap=max_downloads,
+        llm_model=funnel_model,
         requested_gap_ids=[g.gap_id for g in gaps],
     )
 

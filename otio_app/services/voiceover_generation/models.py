@@ -262,6 +262,18 @@ def _default_enhanced_cut_settings() -> LlmRoleSettings:
     )
 
 
+def _default_enhanced_funnel_settings() -> LlmRoleSettings:
+    from otio_app.defaults import (
+        VOICEOVER_GEN_ENHANCED_FUNNEL_DEFAULT_MODEL,
+        VOICEOVER_GEN_ENHANCED_FUNNEL_DEFAULT_PROVIDER,
+    )
+
+    return LlmRoleSettings(
+        provider=VOICEOVER_GEN_ENHANCED_FUNNEL_DEFAULT_PROVIDER,
+        model=VOICEOVER_GEN_ENHANCED_FUNNEL_DEFAULT_MODEL,
+    )
+
+
 class VoiceoverGenerationModelSettings(BaseModel):
     style_profile: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
     dramaturgy: LlmRoleSettings = Field(default_factory=LlmRoleSettings)
@@ -277,6 +289,9 @@ class VoiceoverGenerationModelSettings(BaseModel):
     )
     enhanced_final_cut: LlmRoleSettings = Field(
         default_factory=_default_enhanced_cut_settings
+    )
+    enhanced_supplement_funnel: LlmRoleSettings = Field(
+        default_factory=_default_enhanced_funnel_settings
     )
 
 

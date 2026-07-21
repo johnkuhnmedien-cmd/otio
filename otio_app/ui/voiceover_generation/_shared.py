@@ -129,6 +129,11 @@ LLM_INPUT_INFO = {
         "Kapitel-Rough-Cut · Ordner-Assets · akzeptierte Supplements · Style → "
         "finaler Cut Plan. Ein LLM-Call pro Dramaturgie-Kapitel."
     ),
+    "enhanced_supplement_funnel": (
+        "Pro offenem Coverage Gap: Text-Ranking der Stock-Metadaten · "
+        "Thumbnail-Vision in Batches · Finalisten-Vergleich. "
+        "Nur Gemini-Modelle (Vision). Günstig starten: Flash Lite."
+    ),
     "cut_plan_supplement_query": (
         "Ordnername · VO-Satz · Visual Intent · Reason · optionaler "
         "Search-Hint → bis zu 3 englische Stock-Suchqueries."
