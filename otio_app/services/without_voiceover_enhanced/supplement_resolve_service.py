@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
@@ -62,11 +63,58 @@ from otio_app.services.without_voiceover_enhanced.stock.http_utils import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_VALIDATION_MODEL = "gemini-3.5-flash"
-ProgressCallback = Callable[[str, int, int], None]
+
+
+@dataclass(frozen=True)
+class SupplementResolveProgressEvent:
+    """Live-Fortschritt für UI (Progress-Bar + Statuszeile)."""
+
+    phase: str
+    # gap_start | download | frames | llm | result | gap_done | finished
+    gap_id: str = ""
+    gap_index: int = 0
+    gap_total: int = 0
+    candidate_id: str = ""
+    candidate_index: int = 0
+    candidate_total: int = 0
+    provider: str = ""
+    status: str = ""
+    message: str = ""
+    fraction: float = 0.0
+
+
+ProgressCallback = Callable[[SupplementResolveProgressEvent], None]
 
 
 class SupplementResolveError(RuntimeError):
     pass
+
+
+def _progress_fraction(
+    *,
+    gap_index: int,
+    gap_total: int,
+    candidate_index: int = 0,
+    candidate_total: int = 0,
+    within: float = 0.0,
+) -> float:
+    """Gesamtfortschritt 0..1 über Gaps; optional Anteil innerhalb des aktuellen Gaps."""
+    if gap_total <= 0:
+        return 0.0
+    base = max(0, gap_index - 1) / gap_total
+    slice_size = 1.0 / gap_total
+    if candidate_total > 0 and candidate_index > 0:
+        cand_frac = (candidate_index - 1 + max(0.0, min(1.0, within))) / candidate_total
+        return min(1.0, base + slice_size * cand_frac)
+    return min(1.0, base + slice_size * max(0.0, min(1.0, within)))
+
+
+def _emit(
+    progress_callback: ProgressCallback | None,
+    event: SupplementResolveProgressEvent,
+) -> None:
+    if progress_callback is not None:
+        progress_callback(event)
 
 
 def _extension_for_candidate(candidate: StockCandidate, url: str) -> str:
@@ -384,8 +432,6 @@ def resolve_supplements_for_gaps(
 
     total_gaps = len(coverage.gaps)
     for gap_index, gap in enumerate(coverage.gaps, start=1):
-        if progress_callback is not None:
-            progress_callback(gap.gap_id, gap_index, total_gaps)
         gap_result = SupplementResolveGapResult(gap_id=gap.gap_id)
         folder_name = _folder_for_gap(project, gap, locked)
         passage = _passage_for_gap(gap, locked)
@@ -393,6 +439,24 @@ def resolve_supplements_for_gaps(
         ranked = rank_candidates_for_gap(
             _candidates_for_gap(results, gap.gap_id), gap
         )[:top_n]
+        candidate_total = len(ranked)
+
+        _emit(
+            progress_callback,
+            SupplementResolveProgressEvent(
+                phase="gap_start",
+                gap_id=gap.gap_id,
+                gap_index=gap_index,
+                gap_total=total_gaps,
+                candidate_total=candidate_total,
+                message=f"Gap {gap_index}/{total_gaps}: {gap.gap_id}",
+                fraction=_progress_fraction(
+                    gap_index=gap_index,
+                    gap_total=total_gaps,
+                    within=0.0,
+                ),
+            ),
+        )
 
         if not ranked:
             gap_result.attempts.append(
@@ -405,9 +469,25 @@ def resolve_supplements_for_gaps(
             )
             report.gaps.append(gap_result)
             report.unfilled_gap_ids.append(gap.gap_id)
+            _emit(
+                progress_callback,
+                SupplementResolveProgressEvent(
+                    phase="gap_done",
+                    gap_id=gap.gap_id,
+                    gap_index=gap_index,
+                    gap_total=total_gaps,
+                    status="SKIPPED",
+                    message=f"Gap {gap_index}/{total_gaps}: keine Kandidaten",
+                    fraction=_progress_fraction(
+                        gap_index=gap_index,
+                        gap_total=total_gaps,
+                        within=1.0,
+                    ),
+                ),
+            )
             continue
 
-        for candidate in ranked:
+        for cand_index, candidate in enumerate(ranked, start=1):
             attempt = SupplementResolveAttempt(
                 gap_id=gap.gap_id,
                 candidate_id=candidate.candidate_id,
@@ -415,6 +495,31 @@ def resolve_supplements_for_gaps(
             )
             media_path: Path | None = None
             try:
+                _emit(
+                    progress_callback,
+                    SupplementResolveProgressEvent(
+                        phase="download",
+                        gap_id=gap.gap_id,
+                        gap_index=gap_index,
+                        gap_total=total_gaps,
+                        candidate_id=candidate.candidate_id,
+                        candidate_index=cand_index,
+                        candidate_total=candidate_total,
+                        provider=candidate.provider,
+                        message=(
+                            f"Gap {gap_index}/{total_gaps} · "
+                            f"Kandidat {cand_index}/{candidate_total}: "
+                            f"Download {candidate.provider}/{candidate.candidate_id}"
+                        ),
+                        fraction=_progress_fraction(
+                            gap_index=gap_index,
+                            gap_total=total_gaps,
+                            candidate_index=cand_index,
+                            candidate_total=candidate_total,
+                            within=0.1,
+                        ),
+                    ),
+                )
                 if download_callable is not None:
                     media_path = download_callable(
                         project, candidate, gap_id=gap.gap_id
@@ -423,9 +528,59 @@ def resolve_supplements_for_gaps(
                     media_path = download_stock_candidate(
                         project, candidate, gap_id=gap.gap_id
                     )
+
+                _emit(
+                    progress_callback,
+                    SupplementResolveProgressEvent(
+                        phase="frames",
+                        gap_id=gap.gap_id,
+                        gap_index=gap_index,
+                        gap_total=total_gaps,
+                        candidate_id=candidate.candidate_id,
+                        candidate_index=cand_index,
+                        candidate_total=candidate_total,
+                        provider=candidate.provider,
+                        message=(
+                            f"Gap {gap_index}/{total_gaps} · "
+                            f"Kandidat {cand_index}/{candidate_total}: Frames…"
+                        ),
+                        fraction=_progress_fraction(
+                            gap_index=gap_index,
+                            gap_total=total_gaps,
+                            candidate_index=cand_index,
+                            candidate_total=candidate_total,
+                            within=0.4,
+                        ),
+                    ),
+                )
                 frames = _extract_validation_frames(project, media_path)
                 if not frames:
                     raise SupplementResolveError("Keine Frames extrahiert.")
+
+                _emit(
+                    progress_callback,
+                    SupplementResolveProgressEvent(
+                        phase="llm",
+                        gap_id=gap.gap_id,
+                        gap_index=gap_index,
+                        gap_total=total_gaps,
+                        candidate_id=candidate.candidate_id,
+                        candidate_index=cand_index,
+                        candidate_total=candidate_total,
+                        provider=candidate.provider,
+                        message=(
+                            f"Gap {gap_index}/{total_gaps} · "
+                            f"Kandidat {cand_index}/{candidate_total}: LLM-Match…"
+                        ),
+                        fraction=_progress_fraction(
+                            gap_index=gap_index,
+                            gap_total=total_gaps,
+                            candidate_index=cand_index,
+                            candidate_total=candidate_total,
+                            within=0.7,
+                        ),
+                    ),
+                )
                 validation = _validate_with_llm(
                     project=project,
                     candidate=candidate,
@@ -444,6 +599,33 @@ def resolve_supplements_for_gaps(
                 attempt.description = str(validation.get("description") or "")
                 attempt.local_media_path = str(media_path)
                 attempt.frames_used = [str(p) for p in frames]
+
+                _emit(
+                    progress_callback,
+                    SupplementResolveProgressEvent(
+                        phase="result",
+                        gap_id=gap.gap_id,
+                        gap_index=gap_index,
+                        gap_total=total_gaps,
+                        candidate_id=candidate.candidate_id,
+                        candidate_index=cand_index,
+                        candidate_total=candidate_total,
+                        provider=candidate.provider,
+                        status=status,
+                        message=(
+                            f"Gap {gap_index}/{total_gaps} · "
+                            f"{candidate.candidate_id} → {status}"
+                            + (f" — {attempt.reason}" if attempt.reason else "")
+                        ),
+                        fraction=_progress_fraction(
+                            gap_index=gap_index,
+                            gap_total=total_gaps,
+                            candidate_index=cand_index,
+                            candidate_total=candidate_total,
+                            within=1.0,
+                        ),
+                    ),
+                )
 
                 if status == "PASS":
                     _persist_accepted(project, candidate, media_path=media_path)
@@ -483,16 +665,73 @@ def resolve_supplements_for_gaps(
                 )
                 attempt.reason = str(exc)
                 gap_result.attempts.append(attempt)
+                _emit(
+                    progress_callback,
+                    SupplementResolveProgressEvent(
+                        phase="result",
+                        gap_id=gap.gap_id,
+                        gap_index=gap_index,
+                        gap_total=total_gaps,
+                        candidate_id=candidate.candidate_id,
+                        candidate_index=cand_index,
+                        candidate_total=candidate_total,
+                        provider=candidate.provider,
+                        status=attempt.status,
+                        message=(
+                            f"Gap {gap_index}/{total_gaps} · "
+                            f"{candidate.candidate_id} → {attempt.status}: {exc}"
+                        ),
+                        fraction=_progress_fraction(
+                            gap_index=gap_index,
+                            gap_total=total_gaps,
+                            candidate_index=cand_index,
+                            candidate_total=candidate_total,
+                            within=1.0,
+                        ),
+                    ),
+                )
 
         report.gaps.append(gap_result)
         if gap_result.filled:
             report.filled_gap_ids.append(gap.gap_id)
         else:
             report.unfilled_gap_ids.append(gap.gap_id)
+        _emit(
+            progress_callback,
+            SupplementResolveProgressEvent(
+                phase="gap_done",
+                gap_id=gap.gap_id,
+                gap_index=gap_index,
+                gap_total=total_gaps,
+                status="PASS" if gap_result.filled else "UNFILLED",
+                message=(
+                    f"Gap {gap_index}/{total_gaps} fertig: "
+                    + (
+                        f"PASS `{gap_result.accepted_candidate_id}`"
+                        if gap_result.filled
+                        else "kein Treffer"
+                    )
+                ),
+                fraction=_progress_fraction(
+                    gap_index=gap_index,
+                    gap_total=total_gaps,
+                    within=1.0,
+                ),
+            ),
+        )
 
     report.message = (
         f"{len(report.filled_gap_ids)}/{total_gaps} Gaps gefüllt · "
         f"{len(report.unfilled_gap_ids)} offen"
     )
     write_json(supplement_resolve_report_path(project), report)
+    _emit(
+        progress_callback,
+        SupplementResolveProgressEvent(
+            phase="finished",
+            gap_total=total_gaps,
+            message=report.message,
+            fraction=1.0,
+        ),
+    )
     return report

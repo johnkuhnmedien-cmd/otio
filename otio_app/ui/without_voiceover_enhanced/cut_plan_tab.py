@@ -36,6 +36,7 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
 )
 from otio_app.services.without_voiceover_enhanced.supplement_resolve_service import (
     SupplementResolveError,
+    SupplementResolveProgressEvent,
     resolve_supplements_for_gaps,
 )
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
@@ -449,20 +450,28 @@ def render_enhanced_cut_plan_page() -> None:
                 ),
             ):
                 try:
-                    progress = st.empty()
+                    progress_bar = st.progress(0.0, text="Supplement-Resolve startet…")
+                    status_box = st.empty()
+                    log_box = st.empty()
+                    log_lines: list[str] = []
 
-                    def _resolve_progress(gap_id: str, index: int, total: int) -> None:
-                        progress.info(
-                            f"Supplement-Resolve · Gap {index}/{total}: `{gap_id}`…"
+                    def _resolve_progress(event: SupplementResolveProgressEvent) -> None:
+                        label = event.message or event.phase
+                        progress_bar.progress(
+                            min(1.0, max(0.0, float(event.fraction))),
+                            text=label[:120],
                         )
+                        status_box.info(label)
+                        if event.phase in {"result", "gap_done", "finished"}:
+                            log_lines.append(label)
+                            log_box.caption("\n".join(log_lines[-12:]))
 
-                    with st.spinner("Download → Frames → LLM-Match…"):
-                        report = resolve_supplements_for_gaps(
-                            project,
-                            progress_callback=_resolve_progress,
-                        )
-                    progress.empty()
-                    st.success(report.message)
+                    report = resolve_supplements_for_gaps(
+                        project,
+                        progress_callback=_resolve_progress,
+                    )
+                    progress_bar.progress(1.0, text=report.message)
+                    status_box.success(report.message)
                     if report.unfilled_gap_ids:
                         st.warning(
                             "Offen: " + ", ".join(report.unfilled_gap_ids[:12])

@@ -70,6 +70,89 @@ def _lock(project: Project) -> None:
     lock_script(project)
 
 
+def test_progress_events_include_fraction(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _lock(project)
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            gaps=[
+                CoverageGap(
+                    gap_id="gap_1",
+                    needed_visual="road",
+                    preferred_media_type="photo",
+                )
+            ],
+        ),
+    )
+    write_json(
+        stock_search_results_path(project),
+        StockSearchResultsDocument(
+            script_version="script-v1",
+            candidates=[
+                StockCandidate(
+                    candidate_id="cand_pass",
+                    provider="pexels",
+                    media_type="photo",
+                    download_url="https://example.com/pass.jpg",
+                    gap_id="gap_1",
+                )
+            ],
+        ),
+    )
+
+    def fake_download(project, candidate, *, gap_id: str) -> Path:
+        from otio_app.services.without_voiceover_enhanced.paths import (
+            stock_candidate_download_dir,
+        )
+        from PIL import Image
+
+        target_dir = stock_candidate_download_dir(
+            project, gap_id=gap_id, candidate_id=candidate.candidate_id
+        )
+        target_dir.mkdir(parents=True, exist_ok=True)
+        path = target_dir / f"{candidate.candidate_id}.jpg"
+        Image.new("RGB", (24, 24), color=(10, 20, 30)).save(path, format="JPEG")
+        return path
+
+    events: list = []
+
+    import otio_app.services.without_voiceover_enhanced.supplement_resolve_service as svc
+
+    def fake_frames(project, media_path: Path):
+        frame = media_path.parent / "frames" / "frame_001.jpg"
+        frame.parent.mkdir(parents=True, exist_ok=True)
+        frame.write_bytes(media_path.read_bytes())
+        return [frame]
+
+    original = svc._extract_validation_frames
+    svc._extract_validation_frames = fake_frames  # type: ignore[assignment]
+    try:
+        resolve_supplements_for_gaps(
+            project,
+            llm_callable=lambda **kwargs: {
+                "description": "road",
+                "status": "PASS",
+                "score": 0.9,
+                "reason": "ok",
+            },
+            download_callable=fake_download,
+            progress_callback=events.append,
+        )
+    finally:
+        svc._extract_validation_frames = original  # type: ignore[assignment]
+
+    phases = [e.phase for e in events]
+    assert "gap_start" in phases
+    assert "download" in phases
+    assert "frames" in phases
+    assert "llm" in phases
+    assert "finished" in phases
+    assert events[-1].fraction == 1.0
+    assert all(0.0 <= e.fraction <= 1.0 for e in events)
+
+
 def test_dedupe_and_rank() -> None:
     gap = CoverageGap(gap_id="gap_1", preferred_media_type="video", needed_visual="road")
     candidates = [
