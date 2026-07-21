@@ -243,6 +243,7 @@ class SupplementResolveReport(BaseModel):
     filled_gap_ids: list[str] = Field(default_factory=list)
     unfilled_gap_ids: list[str] = Field(default_factory=list)
     message: str = ""
+    stopped: bool = False
 
 
 class AcceptedSupplementsDocument(BaseModel):

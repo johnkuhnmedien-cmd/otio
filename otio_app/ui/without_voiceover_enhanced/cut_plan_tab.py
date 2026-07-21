@@ -42,7 +42,7 @@ from otio_app.services.without_voiceover_enhanced.supplement_resolve_service imp
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_locked_script,
 )
-from otio_app.services.without_voiceover_enhanced.io_utils import load_model
+from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
     LocalMediaError,
     assign_local_media_path,
@@ -55,6 +55,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
     NarrationTimelineDocument,
     ResolvedTimelineDocument,
     RoughCutPlanDocument,
+    StockCandidate,
     StockSearchResultsDocument,
     SupplementResolveReport,
 )
@@ -93,6 +94,50 @@ _FINAL_CUT_OUTPUT_DEFAULT = 16_384
 _OUTPUT_TOKENS_MIN = 2_048
 _OUTPUT_TOKENS_MAX = 65_536
 _OUTPUT_TOKENS_STEP = 1_024
+_STOCK_PASSAGE_LABEL_LEN = 110
+
+
+def _gap_passage_map(coverage: CoverageGapsDocument | None) -> dict[str, str]:
+    if coverage is None:
+        return {}
+    out: dict[str, str] = {}
+    for gap in coverage.gaps:
+        text = (
+            (gap.needed_visual or "").strip()
+            or (gap.subject or "").strip()
+            or (gap.reason or "").strip()
+        )
+        out[gap.gap_id] = text
+    return out
+
+
+def _stock_candidate_checkbox_label(
+    candidate: StockCandidate,
+    gap_passages: dict[str, str],
+    *,
+    max_passage_len: int = _STOCK_PASSAGE_LABEL_LEN,
+) -> str:
+    """Vorschau: Textpassage + Gap statt Link/Titel-URL."""
+    gap_id = (candidate.gap_id or "").strip()
+    passage = (gap_passages.get(gap_id) or "").strip()
+    if not passage:
+        title = (candidate.title or "").strip()
+        # URLs als Titel sind unbrauchbar — dann nur Gap zeigen.
+        if title and not title.startswith(("http://", "https://")):
+            passage = title
+    if len(passage) > max_passage_len:
+        passage = passage[: max_passage_len - 1].rstrip() + "…"
+    gap_part = f"Gap {gap_id}" if gap_id else "Gap ?"
+    passage_part = passage or "(keine Textpassage)"
+    license_label = candidate.license or "unknown"
+    return (
+        f"{candidate.provider}: {passage_part} · {gap_part} "
+        f"({candidate.media_type}, license={license_label})"
+    )
+
+
+def _resolve_run_key(project_id: str) -> str:
+    return f"enh_resolve_run_{project_id}"
 
 
 def _estimate_path_tokens(path) -> int:
@@ -428,91 +473,183 @@ def render_enhanced_cut_plan_page() -> None:
             st.error(f"Fehler: {exc}")
 
     results = load_model(stock_search_results_path(project), StockSearchResultsDocument)
+    resolve_key = _resolve_run_key(project.id)
+    resolve_run = st.session_state.get(resolve_key)
+
     if results is not None:
         if results.provider_status:
             st.caption(
                 "Provider-Status: "
                 + ", ".join(f"{k}={v}" for k, v in results.provider_status.items())
             )
+        gap_passages = _gap_passage_map(coverage)
         selected_ids: list[str] = []
         for index, candidate in enumerate(results.candidates):
-            title = (candidate.title or candidate.candidate_id).strip()
-            link = (candidate.source_page or candidate.download_url or "").strip()
-            # Pexels setzt oft die URL als title — dann nicht doppelt anzeigen.
-            link_suffix = ""
-            if link and link not in title:
-                link_suffix = f" · {link}"
             checked = st.checkbox(
-                f"{candidate.provider}: {title}{link_suffix} "
-                f"({candidate.media_type}, license={candidate.license}"
-                f"{', gap=' + candidate.gap_id if candidate.gap_id else ''})",
+                _stock_candidate_checkbox_label(candidate, gap_passages),
                 value=candidate.selected,
                 key=f"enh_stock_{project.id}_{index}_{candidate.candidate_id}",
             )
             if checked:
                 selected_ids.append(candidate.candidate_id)
-        cols_stock = st.columns(2)
-        with cols_stock[0]:
-            if st.button("Auswahl akzeptieren", key="enh_accept_stock"):
-                try:
-                    accepted = accept_supplement_candidates(project, selected_ids)
-                    st.success(f"{len(accepted.supplements)} Supplements akzeptiert.")
-                    st.rerun()
-                except CutPlanError as exc:
-                    st.error(str(exc))
-        with cols_stock[1]:
-            if st.button(
-                "Supplements sequenziell prüfen",
-                type="primary",
-                key="enh_resolve_stock",
-                help=(
-                    "Pro Gap: Top-N Kandidaten nacheinander downloaden, "
-                    "Frames extrahieren, per Gemini prüfen. "
-                    "PASS → Inventar; FAIL → Dateien löschen."
-                ),
-            ):
-                try:
-                    progress_bar = st.progress(0.0, text="Supplement-Resolve startet…")
-                    status_box = st.empty()
-                    log_box = st.empty()
-                    log_lines: list[str] = []
 
-                    def _resolve_progress(event: SupplementResolveProgressEvent) -> None:
-                        label = event.message or event.phase
-                        progress_bar.progress(
-                            min(1.0, max(0.0, float(event.fraction))),
-                            text=label[:120],
-                        )
-                        status_box.info(label)
-                        if event.phase in {"result", "gap_done", "finished"}:
-                            log_lines.append(label)
-                            log_box.caption("\n".join(log_lines[-12:]))
+        # Laufende sequenzielle Prüfung: ein Gap pro Rerun.
+        # Stop-Klick während Gap N wird zu Beginn von Gap N+1 ausgewertet.
+        if isinstance(resolve_run, dict) and resolve_run.get("active"):
+            gap_ids: list[str] = list(resolve_run.get("gap_ids") or [])
+            index = int(resolve_run.get("index") or 0)
+            log_lines: list[str] = list(resolve_run.get("log") or [])
+            total = max(1, len(gap_ids))
 
-                    report = resolve_supplements_for_gaps(
-                        project,
-                        progress_callback=_resolve_progress,
+            st.markdown("**Sequenzielle Prüfung läuft…**")
+            cols_run = st.columns(2)
+            with cols_run[0]:
+                stop_clicked = st.button(
+                    "Prüfung stoppen",
+                    key="enh_resolve_stop",
+                    type="secondary",
+                    help=(
+                        "Stoppt vor dem nächsten Gap. "
+                        "Für Sofort-Abbruch: Streamlit-Stop oben rechts."
+                    ),
+                )
+            with cols_run[1]:
+                st.caption(
+                    "Stop greift vor dem nächsten Gap · "
+                    "Streamlit-Stop (oben rechts) bricht sofort ab."
+                )
+
+            progress_bar = st.progress(
+                min(1.0, index / total),
+                text=f"Gap {min(index + 1, total)}/{total}…",
+            )
+            status_box = st.empty()
+            log_box = st.empty()
+            if log_lines:
+                log_box.caption("\n".join(log_lines[-12:]))
+
+            if stop_clicked or resolve_run.get("stop_requested"):
+                resolve_run["active"] = False
+                resolve_run["stop_requested"] = True
+                st.session_state[resolve_key] = resolve_run
+                existing = load_model(
+                    supplement_resolve_report_path(project),
+                    SupplementResolveReport,
+                )
+                if existing is not None:
+                    existing.stopped = True
+                    existing.message = (
+                        f"Abgebrochen nach {index}/{total} Gaps · "
+                        f"{len(existing.filled_gap_ids)} gefüllt · "
+                        f"{len(existing.unfilled_gap_ids)} ohne Treffer"
                     )
-                    progress_bar.progress(1.0, text=report.message)
-                    status_box.success(report.message)
-                    if report.unfilled_gap_ids:
-                        st.warning(
-                            "Offen: " + ", ".join(report.unfilled_gap_ids[:12])
-                            + ("…" if len(report.unfilled_gap_ids) > 12 else "")
+                    write_json(supplement_resolve_report_path(project), existing)
+                st.warning(f"Prüfung gestoppt nach {index}/{total} Gaps.")
+                st.rerun()
+
+            if index >= len(gap_ids):
+                resolve_run["active"] = False
+                st.session_state[resolve_key] = resolve_run
+                final_report = load_model(
+                    supplement_resolve_report_path(project),
+                    SupplementResolveReport,
+                )
+                msg = (
+                    final_report.message
+                    if final_report is not None
+                    else "Prüfung abgeschlossen."
+                )
+                st.success(msg)
+                st.rerun()
+
+            current_gap_id = gap_ids[index]
+            status_box.info(f"Prüfe Gap {index + 1}/{total}: `{current_gap_id}`")
+
+            def _resolve_progress(event: SupplementResolveProgressEvent) -> None:
+                label = event.message or event.phase
+                # Service meldet bereits Gesamtfortschritt über alle Gaps.
+                progress_bar.progress(
+                    min(1.0, max(0.0, float(event.fraction))),
+                    text=label[:120],
+                )
+                status_box.info(label)
+                if event.phase in {"result", "gap_done", "finished"}:
+                    log_lines.append(label)
+                    log_box.caption("\n".join(log_lines[-12:]))
+
+            try:
+                resolve_supplements_for_gaps(
+                    project,
+                    only_gap_ids=[current_gap_id],
+                    merge_report=index > 0,
+                    progress_callback=_resolve_progress,
+                )
+                resolve_run["index"] = index + 1
+                resolve_run["log"] = log_lines[-40:]
+                st.session_state[resolve_key] = resolve_run
+                st.rerun()
+            except SupplementResolveError as exc:
+                resolve_run["active"] = False
+                st.session_state[resolve_key] = resolve_run
+                st.error(str(exc))
+            except Exception as exc:  # noqa: BLE001
+                resolve_run["active"] = False
+                st.session_state[resolve_key] = resolve_run
+                st.error(f"Fehler: {exc}")
+        else:
+            cols_stock = st.columns(2)
+            with cols_stock[0]:
+                if st.button("Auswahl akzeptieren", key="enh_accept_stock"):
+                    try:
+                        accepted = accept_supplement_candidates(
+                            project, selected_ids
                         )
-                    st.rerun()
-                except SupplementResolveError as exc:
-                    st.error(str(exc))
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Fehler: {exc}")
+                        st.success(
+                            f"{len(accepted.supplements)} Supplements akzeptiert "
+                            "(manuell — ohne Download/LLM). "
+                            "Lokale Datei ggf. darunter zuordnen."
+                        )
+                        st.rerun()
+                    except CutPlanError as exc:
+                        st.error(str(exc))
+            with cols_stock[1]:
+                if st.button(
+                    "Supplements sequenziell prüfen",
+                    type="primary",
+                    key="enh_resolve_stock",
+                    help=(
+                        "Pro Gap: Top-5 Kandidaten nacheinander downloaden, "
+                        "Frames extrahieren, per Gemini prüfen. "
+                        "PASS → Inventar; FAIL → Dateien löschen. "
+                        "Stoppen mit „Prüfung stoppen“."
+                    ),
+                ):
+                    gap_ids = (
+                        [g.gap_id for g in coverage.gaps]
+                        if coverage is not None
+                        else []
+                    )
+                    if not gap_ids:
+                        st.error("Keine Coverage Gaps vorhanden.")
+                    else:
+                        st.session_state[resolve_key] = {
+                            "active": True,
+                            "stop_requested": False,
+                            "gap_ids": gap_ids,
+                            "index": 0,
+                            "log": [],
+                        }
+                        st.rerun()
 
         resolve_report = load_model(
             supplement_resolve_report_path(project),
             SupplementResolveReport,
         )
         if resolve_report is not None:
+            stopped_note = " · abgebrochen" if resolve_report.stopped else ""
             st.caption(
                 f"Letzter Resolve: {resolve_report.message} · "
-                f"Top-N={resolve_report.max_candidates_per_gap}"
+                f"Top-N={resolve_report.max_candidates_per_gap}{stopped_note}"
             )
 
     accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)

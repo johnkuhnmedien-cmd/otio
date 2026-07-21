@@ -316,3 +316,141 @@ def test_resolve_stops_on_first_pass_and_cleans_fail(tmp_path: Path) -> None:
     )
     assert inventory is not None
     assert any(a.asset_id == "cand_pass" for a in inventory.assets)
+
+
+def test_resolve_only_gap_ids_and_should_stop(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _lock(project)
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            gaps=[
+                CoverageGap(gap_id="gap_1", needed_visual="road"),
+                CoverageGap(gap_id="gap_2", needed_visual="mountain"),
+            ],
+        ),
+    )
+    write_json(
+        stock_search_results_path(project),
+        StockSearchResultsDocument(
+            script_version="script-v1",
+            candidates=[
+                StockCandidate(
+                    candidate_id="c1",
+                    provider="pexels",
+                    media_type="photo",
+                    download_url="https://example.com/1.jpg",
+                    gap_id="gap_1",
+                ),
+                StockCandidate(
+                    candidate_id="c2",
+                    provider="pexels",
+                    media_type="photo",
+                    download_url="https://example.com/2.jpg",
+                    gap_id="gap_2",
+                ),
+            ],
+        ),
+    )
+
+    def fake_download(project, candidate, *, gap_id: str) -> Path:
+        from otio_app.services.without_voiceover_enhanced.paths import (
+            stock_candidate_download_dir,
+        )
+        from PIL import Image
+
+        target_dir = stock_candidate_download_dir(
+            project, gap_id=gap_id, candidate_id=candidate.candidate_id
+        )
+        target_dir.mkdir(parents=True, exist_ok=True)
+        path = target_dir / f"{candidate.candidate_id}.jpg"
+        Image.new("RGB", (16, 16), color=(1, 2, 3)).save(path, format="JPEG")
+        return path
+
+    import otio_app.services.without_voiceover_enhanced.supplement_resolve_service as svc
+
+    original = svc._extract_validation_frames
+
+    def fake_frames(project, media_path: Path):
+        frame = media_path.parent / "frames" / "frame_001.jpg"
+        frame.parent.mkdir(parents=True, exist_ok=True)
+        frame.write_bytes(media_path.read_bytes())
+        return [frame]
+
+    svc._extract_validation_frames = fake_frames  # type: ignore[assignment]
+    try:
+        first = resolve_supplements_for_gaps(
+            project,
+            only_gap_ids=["gap_1"],
+            llm_callable=lambda **kwargs: {
+                "description": "road",
+                "status": "FAIL",
+                "score": 0.1,
+                "reason": "no",
+            },
+            download_callable=fake_download,
+        )
+        assert first.unfilled_gap_ids == ["gap_1"]
+        assert first.filled_gap_ids == []
+
+        second = resolve_supplements_for_gaps(
+            project,
+            only_gap_ids=["gap_2"],
+            merge_report=True,
+            llm_callable=lambda **kwargs: {
+                "description": "mountain",
+                "status": "PASS",
+                "score": 0.9,
+                "reason": "ok",
+            },
+            download_callable=fake_download,
+        )
+        assert "gap_1" in second.unfilled_gap_ids
+        assert second.filled_gap_ids == ["gap_2"]
+
+        stop_flags = {"n": 0}
+
+        def should_stop() -> bool:
+            stop_flags["n"] += 1
+            return True
+
+        stopped = resolve_supplements_for_gaps(
+            project,
+            should_stop=should_stop,
+            llm_callable=lambda **kwargs: {
+                "description": "x",
+                "status": "PASS",
+                "score": 0.9,
+                "reason": "ok",
+            },
+            download_callable=fake_download,
+        )
+        assert stopped.stopped is True
+        assert "Abgebrochen" in stopped.message
+    finally:
+        svc._extract_validation_frames = original  # type: ignore[assignment]
+
+
+def test_stock_candidate_checkbox_label_uses_passage_and_gap() -> None:
+    from otio_app.ui.without_voiceover_enhanced.cut_plan_tab import (
+        _stock_candidate_checkbox_label,
+    )
+
+    candidate = StockCandidate(
+        candidate_id="c1",
+        provider="openverse",
+        title="https://example.com/asset",
+        media_type="photo",
+        license="by-nc-nd",
+        gap_id="Zion_National_Park_gap_001",
+        source_page="https://example.com/asset",
+    )
+    label = _stock_candidate_checkbox_label(
+        candidate,
+        {"Zion_National_Park_gap_001": "Herbstfarben im Zion Canyon bei Sonnenuntergang"},
+    )
+    assert "Herbstfarben im Zion Canyon" in label
+    assert "Gap Zion_National_Park_gap_001" in label
+    assert "https://example.com" not in label
+    assert "openverse:" in label

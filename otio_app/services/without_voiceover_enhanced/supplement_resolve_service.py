@@ -413,8 +413,16 @@ def resolve_supplements_for_gaps(
     progress_callback: ProgressCallback | None = None,
     llm_callable: Callable[..., dict] | None = None,
     download_callable: Callable[..., Path] | None = None,
+    only_gap_ids: list[str] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    merge_report: bool = False,
 ) -> SupplementResolveReport:
-    """Haupt-Orchestrierung: sequenziell pro Gap bis erster PASS."""
+    """Haupt-Orchestrierung: sequenziell pro Gap bis erster PASS.
+
+    only_gap_ids: optional nur diese Gaps verarbeiten (für Gap-für-Gap-UI).
+    should_stop: kooperativer Abbruch zwischen Gaps/Kandidaten.
+    merge_report: bestehende Report-Ergebnisse anderer Gaps behalten.
+    """
     locked = require_locked_script(project)
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
     results = load_model(stock_search_results_path(project), StockSearchResultsDocument)
@@ -425,13 +433,58 @@ def resolve_supplements_for_gaps(
 
     options = load_cut_plan_options(project)
     top_n = int(max_candidates_per_gap or options.max_candidates_per_gap)
-    report = SupplementResolveReport(
-        script_version=locked.script_version,
-        max_candidates_per_gap=top_n,
-    )
 
-    total_gaps = len(coverage.gaps)
-    for gap_index, gap in enumerate(coverage.gaps, start=1):
+    all_gaps = list(coverage.gaps)
+    if only_gap_ids is not None:
+        wanted = {str(g).strip() for g in only_gap_ids if str(g).strip()}
+        gaps_to_process = [g for g in all_gaps if g.gap_id in wanted]
+        if not gaps_to_process:
+            raise SupplementResolveError(
+                "Keine passenden Coverage Gaps für only_gap_ids."
+            )
+    else:
+        gaps_to_process = all_gaps
+
+    gap_index_by_id = {g.gap_id: i for i, g in enumerate(all_gaps, start=1)}
+    total_gaps = len(all_gaps)
+
+    reprocess_ids = {g.gap_id for g in gaps_to_process}
+    if merge_report:
+        existing = load_model(
+            supplement_resolve_report_path(project), SupplementResolveReport
+        )
+        if existing is not None:
+            report = existing
+            report.script_version = locked.script_version
+            report.max_candidates_per_gap = top_n
+            report.stopped = False
+            report.gaps = [g for g in report.gaps if g.gap_id not in reprocess_ids]
+            report.filled_gap_ids = [
+                x for x in report.filled_gap_ids if x not in reprocess_ids
+            ]
+            report.unfilled_gap_ids = [
+                x for x in report.unfilled_gap_ids if x not in reprocess_ids
+            ]
+        else:
+            report = SupplementResolveReport(
+                script_version=locked.script_version,
+                max_candidates_per_gap=top_n,
+            )
+    else:
+        report = SupplementResolveReport(
+            script_version=locked.script_version,
+            max_candidates_per_gap=top_n,
+        )
+
+    def _stop_requested() -> bool:
+        return bool(should_stop and should_stop())
+
+    for gap in gaps_to_process:
+        if _stop_requested():
+            report.stopped = True
+            break
+
+        gap_index = gap_index_by_id.get(gap.gap_id, 1)
         gap_result = SupplementResolveGapResult(gap_id=gap.gap_id)
         folder_name = _folder_for_gap(project, gap, locked)
         passage = _passage_for_gap(gap, locked)
@@ -488,6 +541,19 @@ def resolve_supplements_for_gaps(
             continue
 
         for cand_index, candidate in enumerate(ranked, start=1):
+            if _stop_requested():
+                report.stopped = True
+                gap_result.attempts.append(
+                    SupplementResolveAttempt(
+                        gap_id=gap.gap_id,
+                        candidate_id=candidate.candidate_id,
+                        provider=candidate.provider,
+                        status="SKIPPED",
+                        reason="Abbruch durch Benutzer.",
+                    )
+                )
+                break
+
             attempt = SupplementResolveAttempt(
                 gap_id=gap.gap_id,
                 candidate_id=candidate.candidate_id,
@@ -694,6 +760,9 @@ def resolve_supplements_for_gaps(
         report.gaps.append(gap_result)
         if gap_result.filled:
             report.filled_gap_ids.append(gap.gap_id)
+        elif report.stopped and not gap_result.filled:
+            # Abbruch mitten im Gap: weder filled noch unfilled zählen.
+            pass
         else:
             report.unfilled_gap_ids.append(gap.gap_id)
         _emit(
@@ -703,13 +772,21 @@ def resolve_supplements_for_gaps(
                 gap_id=gap.gap_id,
                 gap_index=gap_index,
                 gap_total=total_gaps,
-                status="PASS" if gap_result.filled else "UNFILLED",
+                status=(
+                    "PASS"
+                    if gap_result.filled
+                    else ("STOPPED" if report.stopped else "UNFILLED")
+                ),
                 message=(
                     f"Gap {gap_index}/{total_gaps} fertig: "
                     + (
                         f"PASS `{gap_result.accepted_candidate_id}`"
                         if gap_result.filled
-                        else "kein Treffer"
+                        else (
+                            "abgebrochen"
+                            if report.stopped
+                            else "kein Treffer"
+                        )
                     )
                 ),
                 fraction=_progress_fraction(
@@ -719,19 +796,34 @@ def resolve_supplements_for_gaps(
                 ),
             ),
         )
+        if report.stopped:
+            break
 
-    report.message = (
-        f"{len(report.filled_gap_ids)}/{total_gaps} Gaps gefüllt · "
-        f"{len(report.unfilled_gap_ids)} offen"
-    )
+    processed = len(report.gaps)
+    if report.stopped:
+        report.message = (
+            f"Abgebrochen nach {processed}/{total_gaps} Gaps · "
+            f"{len(report.filled_gap_ids)} gefüllt · "
+            f"{len(report.unfilled_gap_ids)} ohne Treffer"
+        )
+    else:
+        report.message = (
+            f"{len(report.filled_gap_ids)}/{total_gaps} Gaps gefüllt · "
+            f"{len(report.unfilled_gap_ids)} offen"
+        )
     write_json(supplement_resolve_report_path(project), report)
     _emit(
         progress_callback,
         SupplementResolveProgressEvent(
             phase="finished",
             gap_total=total_gaps,
+            status="STOPPED" if report.stopped else "DONE",
             message=report.message,
-            fraction=1.0,
+            fraction=1.0 if not report.stopped else _progress_fraction(
+                gap_index=max(1, processed),
+                gap_total=total_gaps,
+                within=1.0,
+            ),
         ),
     )
     return report
