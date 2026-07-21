@@ -400,9 +400,25 @@ def render_enhanced_cut_plan_page() -> None:
 
     if st.button("Stock suchen", key="enh_stock_search"):
         try:
-            with st.spinner("Aktive Stockanbieter werden abgefragt…"):
-                results = search_supplements_for_gaps(project)
-            st.success(f"{len(results.candidates)} Kandidaten gefunden.")
+            progress_bar = st.progress(0.0, text="Stocksuche startet…")
+            status_box = st.empty()
+
+            def _search_progress(fraction: float, message: str) -> None:
+                progress_bar.progress(
+                    min(1.0, max(0.0, float(fraction))),
+                    text=(message or "Stocksuche…")[:120],
+                )
+                status_box.info(message)
+
+            results = search_supplements_for_gaps(
+                project,
+                progress_callback=_search_progress,
+            )
+            progress_bar.progress(
+                1.0,
+                text=f"{len(results.candidates)} Kandidaten gefunden",
+            )
+            status_box.success(f"{len(results.candidates)} Kandidaten gefunden.")
             if results.message:
                 st.warning(results.message)
             st.rerun()

@@ -1031,8 +1031,13 @@ def search_supplements_for_gaps(
     project: Project,
     *,
     providers=None,
+    progress_callback: Callable[[float, str], None] | None = None,
 ) -> StockSearchResultsDocument:
     import time
+
+    def _progress(fraction: float, message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(min(1.0, max(0.0, fraction)), message)
 
     locked = require_locked_script(project)
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
@@ -1056,26 +1061,41 @@ def search_supplements_for_gaps(
             message="Keine Stockanbieter aktiviert.",
         )
         write_json(stock_search_results_path(project), document)
+        _progress(1.0, "Keine Stockanbieter aktiviert.")
         return document
 
     clear_rate_limit_circuit()
     all_candidates: list[StockCandidate] = []
     provider_status: dict[str, str] = {}
-    query_index = 0
-    for gap in coverage.gaps:
+    gaps = list(coverage.gaps)
+    # Vorab Query-Anzahl schätzen für stabile Progress-Bar.
+    planned_queries = 0
+    gap_queries: list[tuple[Any, list[str]]] = []
+    for gap in gaps:
         raw_queries = (
             gap.search_concepts
             or gap.search_queries
             or [gap.needed_visual or gap.subject or gap.action or gap.gap_id]
         )
-        # Weniger Queries/Gap → weniger Rate-Limits (Wikimedia/Openverse).
         queries = [q for q in raw_queries if str(q).strip()][:_MAX_QUERIES_PER_GAP]
         if not queries:
             queries = [gap.gap_id]
+        gap_queries.append((gap, queries))
+        planned_queries += len(queries)
+    planned_queries = max(1, planned_queries)
+
+    _progress(0.0, f"Stocksuche startet · {len(gaps)} Gaps · {planned_queries} Queries…")
+    query_index = 0
+    for gap_index, (gap, queries) in enumerate(gap_queries, start=1):
         for query in queries:
             if query_index > 0:
                 time.sleep(_STOCK_QUERY_PAUSE_SEC)
             query_index += 1
+            _progress(
+                (query_index - 1) / planned_queries,
+                f"Gap {gap_index}/{len(gaps)} · Query {query_index}/{planned_queries}: "
+                f"{gap.gap_id} · „{str(query)[:60]}“",
+            )
             if providers is not None:
                 found, status = search_all_providers(
                     query,
@@ -1093,6 +1113,11 @@ def search_supplements_for_gaps(
             for candidate in found:
                 candidate.gap_id = gap.gap_id
                 all_candidates.append(candidate)
+            _progress(
+                query_index / planned_queries,
+                f"Gap {gap_index}/{len(gaps)} · Query {query_index}/{planned_queries} fertig · "
+                f"+{len(found)} Treffer",
+            )
 
     from otio_app.services.without_voiceover_enhanced.supplement_resolve_service import (
         dedupe_stock_candidates,
@@ -1126,6 +1151,10 @@ def search_supplements_for_gaps(
         message=message,
     )
     write_json(stock_search_results_path(project), document)
+    _progress(
+        1.0,
+        f"Stocksuche fertig · {len(unique_candidates)} Kandidaten",
+    )
     return document
 
 
