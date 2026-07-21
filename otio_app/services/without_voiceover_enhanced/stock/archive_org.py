@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import requests
-
 from otio_app.services.without_voiceover_enhanced.models import StockCandidate
 from otio_app.services.without_voiceover_enhanced.stock.base import (
     ProviderStatus,
     StockProvider,
     unknown_or_null,
 )
+from otio_app.services.without_voiceover_enhanced.stock.http_utils import stock_get
 
 
 class ArchiveOrgStockProvider(StockProvider):
@@ -20,7 +19,7 @@ class ArchiveOrgStockProvider(StockProvider):
 
     def search(self, query: str, media_type: str | None = None) -> list[StockCandidate]:
         mediatype = "movies" if (media_type or "").lower() == "video" else "image"
-        response = requests.get(
+        response = stock_get(
             "https://archive.org/advancedsearch.php",
             params={
                 "q": f"{query} AND mediatype:({mediatype})",
@@ -29,10 +28,7 @@ class ArchiveOrgStockProvider(StockProvider):
                 "page": 1,
                 "output": "json",
             },
-            timeout=30,
-            headers={"User-Agent": "otio-without-vo-enhanced-mvp/1.0"},
         )
-        response.raise_for_status()
         docs = ((response.json().get("response") or {}).get("docs")) or []
         candidates: list[StockCandidate] = []
         for index, item in enumerate(docs, start=1):

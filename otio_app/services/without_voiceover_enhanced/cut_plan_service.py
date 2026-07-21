@@ -72,6 +72,8 @@ from otio_app.services.without_voiceover_enhanced.local_media_service import (
     refresh_supplement_validation,
 )
 from otio_app.services.without_voiceover_enhanced.stock.registry import (
+    clear_rate_limit_circuit,
+    search_all_providers,
     search_configured_providers,
 )
 from otio_app.services.without_voiceover_enhanced.stock_provider_config import (
@@ -1007,11 +1009,31 @@ def generate_rough_cut_and_pauses(
     return merge_and_persist_rough_cuts(project, results)
 
 
+_MAX_QUERIES_PER_GAP = 2
+_STOCK_QUERY_PAUSE_SEC = 0.35
+
+
+def _merge_provider_status(current: dict[str, str], incoming: dict[str, str]) -> None:
+    """completed gewinnt; failed überschreibt nur, wenn noch kein completed."""
+    from otio_app.services.without_voiceover_enhanced.stock_provider_config import (
+        PROVIDER_STATUS_COMPLETED,
+    )
+
+    for key, value in incoming.items():
+        prev = current.get(key)
+        if prev == PROVIDER_STATUS_COMPLETED:
+            continue
+        if value == PROVIDER_STATUS_COMPLETED or prev is None:
+            current[key] = value
+
+
 def search_supplements_for_gaps(
     project: Project,
     *,
     providers=None,
 ) -> StockSearchResultsDocument:
+    import time
+
     locked = require_locked_script(project)
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
     if coverage is None or not coverage.gaps:
@@ -1036,20 +1058,25 @@ def search_supplements_for_gaps(
         write_json(stock_search_results_path(project), document)
         return document
 
+    clear_rate_limit_circuit()
     all_candidates: list[StockCandidate] = []
     provider_status: dict[str, str] = {}
+    query_index = 0
     for gap in coverage.gaps:
-        queries = (
+        raw_queries = (
             gap.search_concepts
             or gap.search_queries
             or [gap.needed_visual or gap.subject or gap.action or gap.gap_id]
         )
+        # Weniger Queries/Gap → weniger Rate-Limits (Wikimedia/Openverse).
+        queries = [q for q in raw_queries if str(q).strip()][:_MAX_QUERIES_PER_GAP]
+        if not queries:
+            queries = [gap.gap_id]
         for query in queries:
+            if query_index > 0:
+                time.sleep(_STOCK_QUERY_PAUSE_SEC)
+            query_index += 1
             if providers is not None:
-                from otio_app.services.without_voiceover_enhanced.stock.registry import (
-                    search_all_providers,
-                )
-
                 found, status = search_all_providers(
                     query,
                     media_type=gap.preferred_media_type,
@@ -1062,17 +1089,31 @@ def search_supplements_for_gaps(
                     query,
                     media_type=gap.preferred_media_type,
                 )
-            for key, value in status.items():
-                provider_status.setdefault(key, value)
+            _merge_provider_status(provider_status, status)
             for candidate in found:
                 candidate.gap_id = gap.gap_id
                 all_candidates.append(candidate)
+
+    failed = [
+        name
+        for name, status in provider_status.items()
+        if status == "failed"
+    ]
+    message = ""
+    if not all_candidates and failed:
+        message = (
+            "Keine Treffer — Anbieter fehlgeschlagen: "
+            + ", ".join(failed)
+            + ". Oft Rate-Limit (429) oder falscher Endpoint."
+        )
+    elif failed:
+        message = "Teilweise fehlgeschlagen: " + ", ".join(failed)
 
     document = StockSearchResultsDocument(
         script_version=locked.script_version,
         provider_status=provider_status,
         candidates=all_candidates,
-        message="",
+        message=message,
     )
     write_json(stock_search_results_path(project), document)
     return document

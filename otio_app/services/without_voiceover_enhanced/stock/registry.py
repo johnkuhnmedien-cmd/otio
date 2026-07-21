@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Iterable
 
+import requests
+
 from otio_app.models import Project
 from otio_app.services.without_voiceover_enhanced.models import StockCandidate
 from otio_app.services.without_voiceover_enhanced.stock.archive_org import (
@@ -34,6 +36,23 @@ logger = logging.getLogger(__name__)
 
 # Canonical names — Adobe Stock must never appear here.
 REQUIRED_PROVIDER_NAMES = SUPPORTED_STOCK_PROVIDERS
+
+# Provider, die in diesem Suchlauf wegen Rate-Limit übersprungen werden.
+_rate_limited_providers: set[str] = set()
+
+
+def clear_rate_limit_circuit() -> None:
+    """Vor einem kompletten Stock-Suchlauf zurücksetzen."""
+    _rate_limited_providers.clear()
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    if isinstance(exc, requests.HTTPError):
+        response = getattr(exc, "response", None)
+        if response is not None and getattr(response, "status_code", None) == 429:
+            return True
+    message = str(exc).lower()
+    return "429" in message or "too many requests" in message
 
 
 def get_stock_providers() -> list[StockProvider]:
@@ -93,6 +112,9 @@ def search_all_providers(
         if provider is None:
             status_map[name] = PROVIDER_STATUS_UNAVAILABLE
             continue
+        if name in _rate_limited_providers:
+            status_map[name] = PROVIDER_STATUS_FAILED
+            continue
         readiness = provider.readiness()
         if readiness.status != "ready":
             status_map[name] = PROVIDER_STATUS_UNAVAILABLE
@@ -104,6 +126,12 @@ def search_all_providers(
         except Exception as exc:  # noqa: BLE001 — provider isolation
             logger.warning("Stock provider %s failed: %s", name, exc)
             status_map[name] = PROVIDER_STATUS_FAILED
+            if _is_rate_limit_error(exc):
+                _rate_limited_providers.add(name)
+                logger.warning(
+                    "Stock provider %s rate-limited — skipping for rest of this search run",
+                    name,
+                )
 
     return candidates, status_map
 

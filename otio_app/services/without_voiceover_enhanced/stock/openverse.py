@@ -1,8 +1,11 @@
-"""Openverse StockProvider (no API key required for basic search)."""
+"""Openverse StockProvider (no API key required for basic search).
+
+Openverse bietet nur ``/v1/images/`` und ``/v1/audio/`` — kein Video-Katalog.
+Bei preferred_media_type=video fallen wir auf Bilder zurück (Stills als
+Supplement), statt den nicht existierenden Endpoint ``/v1/videos/`` (404).
+"""
 
 from __future__ import annotations
-
-import requests
 
 from otio_app.services.without_voiceover_enhanced.models import StockCandidate
 from otio_app.services.without_voiceover_enhanced.stock.base import (
@@ -10,6 +13,7 @@ from otio_app.services.without_voiceover_enhanced.stock.base import (
     StockProvider,
     unknown_or_null,
 )
+from otio_app.services.without_voiceover_enhanced.stock.http_utils import stock_get
 
 
 class OpenverseStockProvider(StockProvider):
@@ -19,18 +23,19 @@ class OpenverseStockProvider(StockProvider):
         return ProviderStatus(self.provider_name, "ready")
 
     def search(self, query: str, media_type: str | None = None) -> list[StockCandidate]:
-        endpoint = "images"
-        resolved_type = "photo"
-        if (media_type or "").lower() == "video":
-            endpoint = "videos"
-            resolved_type = "video"
-        response = requests.get(
+        requested = (media_type or "").lower().strip()
+        if requested == "audio":
+            endpoint = "audio"
+            resolved_type = "audio"
+        else:
+            # photo | video | map | archive | illustration | either | …
+            # → images (Openverse has no video search endpoint)
+            endpoint = "images"
+            resolved_type = "photo"
+        response = stock_get(
             f"https://api.openverse.org/v1/{endpoint}/",
             params={"q": query, "page_size": 8},
-            timeout=30,
-            headers={"User-Agent": "otio-without-vo-enhanced-mvp/1.0"},
         )
-        response.raise_for_status()
         results = response.json().get("results") or []
         candidates: list[StockCandidate] = []
         for index, item in enumerate(results, start=1):
@@ -41,14 +46,19 @@ class OpenverseStockProvider(StockProvider):
                     provider_asset_id=str(item.get("id") or ""),
                     title=str(item.get("title") or query),
                     media_type=resolved_type,
-                    creator=unknown_or_null(item.get("creator")),
+                    creator=unknown_or_null(item.get("creator")) or "",
                     source_page=unknown_or_null(item.get("foreign_landing_url")) or "",
-                    preview_url=unknown_or_null(item.get("url") or item.get("thumbnail")) or "",
+                    preview_url=unknown_or_null(
+                        item.get("url") or item.get("thumbnail")
+                    )
+                    or "",
                     width=item.get("width"),
                     height=item.get("height"),
                     duration_seconds=None,
                     license=unknown_or_null(item.get("license")),
-                    attribution=unknown_or_null(item.get("attribution") or item.get("creator")),
+                    attribution=unknown_or_null(
+                        item.get("attribution") or item.get("creator")
+                    ),
                 )
             )
         return candidates

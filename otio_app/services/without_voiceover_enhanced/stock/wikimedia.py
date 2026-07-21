@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import requests
-
 from otio_app.services.without_voiceover_enhanced.models import StockCandidate
 from otio_app.services.without_voiceover_enhanced.stock.base import (
     ProviderStatus,
     StockProvider,
     unknown_or_null,
 )
+from otio_app.services.without_voiceover_enhanced.stock.http_utils import stock_get
 
 
 class WikimediaStockProvider(StockProvider):
@@ -19,32 +18,43 @@ class WikimediaStockProvider(StockProvider):
         return ProviderStatus(self.provider_name, "ready")
 
     def search(self, query: str, media_type: str | None = None) -> list[StockCandidate]:
-        response = requests.get(
+        # filetype-Hints reduzieren irrelevante Treffer und API-Last.
+        search_query = query.strip()
+        requested = (media_type or "").lower().strip()
+        if requested == "video" and "filetype:" not in search_query.lower():
+            search_query = f"{search_query} filetype:video"
+        elif requested in {"photo", "image", "illustration", "map"} and (
+            "filetype:" not in search_query.lower()
+        ):
+            search_query = f"{search_query} filetype:bitmap|filetype:drawing"
+
+        response = stock_get(
             "https://commons.wikimedia.org/w/api.php",
             params={
                 "action": "query",
                 "format": "json",
                 "generator": "search",
-                "gsrsearch": query,
+                "gsrsearch": search_query,
                 "gsrlimit": 8,
                 "gsrnamespace": 6,
                 "prop": "imageinfo",
                 "iiprop": "url|size|extmetadata|mime",
             },
-            timeout=30,
-            headers={"User-Agent": "otio-without-vo-enhanced-mvp/1.0"},
         )
-        response.raise_for_status()
         pages = (response.json().get("query") or {}).get("pages") or {}
         candidates: list[StockCandidate] = []
         for index, page in enumerate(pages.values(), start=1):
             info = (page.get("imageinfo") or [{}])[0]
             meta = info.get("extmetadata") or {}
-            license_name = unknown_or_null((meta.get("LicenseShortName") or {}).get("value"))
-            artist = unknown_or_null((meta.get("Artist") or {}).get("value"))
+            license_name = unknown_or_null(
+                (meta.get("LicenseShortName") or {}).get("value")
+            )
+            artist = unknown_or_null((meta.get("Artist") or {}).get("value")) or ""
             mime = str(info.get("mime") or "")
             media = "video" if mime.startswith("video/") else "photo"
-            if media_type and media_type != media:
+            if requested == "video" and media != "video":
+                continue
+            if requested in {"photo", "image", "illustration", "map"} and media != "photo":
                 continue
             candidates.append(
                 StockCandidate(

@@ -394,10 +394,9 @@ def render_enhanced_cut_plan_page() -> None:
         try:
             with st.spinner("Aktive Stockanbieter werden abgefragt…"):
                 results = search_supplements_for_gaps(project)
+            st.success(f"{len(results.candidates)} Kandidaten gefunden.")
             if results.message:
                 st.warning(results.message)
-            else:
-                st.success(f"{len(results.candidates)} Kandidaten gefunden.")
             st.rerun()
         except CutPlanError as exc:
             st.error(str(exc))
