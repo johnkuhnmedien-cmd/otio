@@ -6,6 +6,7 @@ from otio_app.services.without_voiceover_enhanced.models import StockCandidate
 from otio_app.services.without_voiceover_enhanced.stock.base import (
     ProviderStatus,
     StockProvider,
+    optional_text,
     unknown_or_null,
 )
 from otio_app.services.without_voiceover_enhanced.stock.http_utils import stock_get
@@ -49,7 +50,7 @@ class WikimediaStockProvider(StockProvider):
             license_name = unknown_or_null(
                 (meta.get("LicenseShortName") or {}).get("value")
             )
-            artist = unknown_or_null((meta.get("Artist") or {}).get("value")) or ""
+            artist = optional_text((meta.get("Artist") or {}).get("value"))
             mime = str(info.get("mime") or "")
             media = "video" if mime.startswith("video/") else "photo"
             if requested == "video" and media != "video":

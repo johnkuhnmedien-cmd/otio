@@ -11,6 +11,7 @@ from otio_app.services.without_voiceover_enhanced.models import StockCandidate
 from otio_app.services.without_voiceover_enhanced.stock.base import (
     ProviderStatus,
     StockProvider,
+    optional_text,
     unknown_or_null,
 )
 from otio_app.services.without_voiceover_enhanced.stock.http_utils import stock_get
@@ -46,7 +47,7 @@ class OpenverseStockProvider(StockProvider):
                     provider_asset_id=str(item.get("id") or ""),
                     title=str(item.get("title") or query),
                     media_type=resolved_type,
-                    creator=unknown_or_null(item.get("creator")) or "",
+                    creator=optional_text(item.get("creator")),
                     source_page=unknown_or_null(item.get("foreign_landing_url")) or "",
                     preview_url=unknown_or_null(
                         item.get("url") or item.get("thumbnail")

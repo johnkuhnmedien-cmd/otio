@@ -22,6 +22,36 @@ from otio_app.services.without_voiceover_enhanced.stock.base import (
 from otio_app.services.without_voiceover_enhanced.models import StockCandidate
 
 
+def test_archive_org_accepts_missing_or_list_creator() -> None:
+    from otio_app.services.without_voiceover_enhanced.stock.archive_org import (
+        ArchiveOrgStockProvider,
+    )
+
+    provider = ArchiveOrgStockProvider()
+    fake = MagicMock()
+    fake.json.return_value = {
+        "response": {
+            "docs": [
+                {"identifier": "a1", "title": "One", "creator": None},
+                {
+                    "identifier": "a2",
+                    "title": ["Two", "Alt"],
+                    "creator": ["Alice", "Bob"],
+                },
+            ]
+        }
+    }
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.stock.archive_org.stock_get",
+        return_value=fake,
+    ):
+        found = provider.search("denali", media_type="video")
+    assert len(found) == 2
+    assert found[0].creator == ""
+    assert found[1].creator == "Alice, Bob"
+    assert found[1].title == "Two, Alt"
+
+
 def test_openverse_video_request_uses_images_endpoint() -> None:
     provider = OpenverseStockProvider()
     fake = MagicMock()

@@ -11,6 +11,7 @@ from otio_app.services.without_voiceover_enhanced.models import StockCandidate
 from otio_app.services.without_voiceover_enhanced.stock.base import (
     ProviderStatus,
     StockProvider,
+    optional_text,
     unknown_or_null,
 )
 
@@ -51,7 +52,7 @@ class PixabayStockProvider(StockProvider):
                     provider_asset_id=str(item.get("id") or ""),
                     title=str(item.get("tags") or query),
                     media_type=media,
-                    creator=unknown_or_null(item.get("user")),
+                    creator=optional_text(item.get("user")),
                     source_page=unknown_or_null(item.get("pageURL")) or "",
                     preview_url=unknown_or_null(
                         item.get("previewURL") or item.get("userImageURL")

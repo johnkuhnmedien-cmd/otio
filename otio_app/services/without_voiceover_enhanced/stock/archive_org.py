@@ -6,6 +6,7 @@ from otio_app.services.without_voiceover_enhanced.models import StockCandidate
 from otio_app.services.without_voiceover_enhanced.stock.base import (
     ProviderStatus,
     StockProvider,
+    optional_text,
     unknown_or_null,
 )
 from otio_app.services.without_voiceover_enhanced.stock.http_utils import stock_get
@@ -39,9 +40,9 @@ class ArchiveOrgStockProvider(StockProvider):
                     candidate_id=f"archive_{identifier}",
                     provider=self.provider_name,
                     provider_asset_id=identifier,
-                    title=str(item.get("title") or query),
+                    title=optional_text(item.get("title"), default=query),
                     media_type="video" if mediatype == "movies" else "photo",
-                    creator=unknown_or_null(item.get("creator")),
+                    creator=optional_text(item.get("creator")),
                     source_page=source,
                     preview_url=source,
                     width=None,

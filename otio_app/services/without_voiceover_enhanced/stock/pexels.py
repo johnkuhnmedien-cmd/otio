@@ -11,6 +11,7 @@ from otio_app.services.without_voiceover_enhanced.models import StockCandidate
 from otio_app.services.without_voiceover_enhanced.stock.base import (
     ProviderStatus,
     StockProvider,
+    optional_text,
     unknown_or_null,
 )
 
@@ -51,7 +52,7 @@ class PexelsStockProvider(StockProvider):
                         provider_asset_id=str(item.get("id") or ""),
                         title=str(item.get("url") or query),
                         media_type="video",
-                        creator=unknown_or_null(user.get("name")),
+                        creator=optional_text(user.get("name")),
                         source_page=unknown_or_null(item.get("url")) or "",
                         preview_url=unknown_or_null(
                             (item.get("image") or "")
@@ -74,7 +75,7 @@ class PexelsStockProvider(StockProvider):
                         provider_asset_id=str(item.get("id") or ""),
                         title=str(item.get("alt") or query),
                         media_type="photo",
-                        creator=unknown_or_null(photographer),
+                        creator=optional_text(photographer),
                         source_page=unknown_or_null(item.get("url")) or "",
                         preview_url=unknown_or_null(src.get("medium")) or "",
                         width=item.get("width"),
