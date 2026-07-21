@@ -45,6 +45,22 @@ class PixabayStockProvider(StockProvider):
         candidates: list[StockCandidate] = []
         for index, item in enumerate(payload.get("hits") or [], start=1):
             media = "video" if want_video else "photo"
+            if want_video:
+                videos = item.get("videos") or {}
+                medium = videos.get("medium") or videos.get("small") or videos.get("tiny") or {}
+                download_url = str(medium.get("url") or "")
+                width = medium.get("width")
+                height = medium.get("height")
+            else:
+                download_url = str(
+                    item.get("fullHDURL")
+                    or item.get("largeImageURL")
+                    or item.get("webformatURL")
+                    or item.get("previewURL")
+                    or ""
+                )
+                width = item.get("imageWidth")
+                height = item.get("imageHeight")
             candidates.append(
                 StockCandidate(
                     candidate_id=f"pixabay_{media}_{item.get('id', index)}",
@@ -57,8 +73,9 @@ class PixabayStockProvider(StockProvider):
                     preview_url=unknown_or_null(
                         item.get("previewURL") or item.get("userImageURL")
                     ) or "",
-                    width=item.get("imageWidth") or item.get("videos", {}).get("medium", {}).get("width"),
-                    height=item.get("imageHeight") or item.get("videos", {}).get("medium", {}).get("height"),
+                    download_url=download_url,
+                    width=width,
+                    height=height,
                     duration_seconds=item.get("duration"),
                     license="Pixabay License",
                     attribution=unknown_or_null(item.get("user")),

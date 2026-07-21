@@ -67,6 +67,7 @@ class WikimediaStockProvider(StockProvider):
                     creator=artist,
                     source_page=unknown_or_null(info.get("descriptionurl")) or "",
                     preview_url=unknown_or_null(info.get("url")) or "",
+                    download_url=unknown_or_null(info.get("url")) or "",
                     width=info.get("width"),
                     height=info.get("height"),
                     duration_seconds=None,

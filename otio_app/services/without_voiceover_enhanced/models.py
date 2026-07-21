@@ -192,6 +192,7 @@ class StockCandidate(BaseModel):
     creator: str = ""
     source_page: str = ""
     preview_url: str = ""
+    download_url: str = ""
     width: Optional[int] = None
     height: Optional[int] = None
     duration_seconds: Optional[float] = None
@@ -211,6 +212,36 @@ class StockSearchResultsDocument(BaseModel):
     script_version: str
     provider_status: dict[str, str] = Field(default_factory=dict)
     candidates: list[StockCandidate] = Field(default_factory=list)
+    message: str = ""
+
+
+class SupplementResolveAttempt(BaseModel):
+    gap_id: str
+    candidate_id: str
+    provider: str = ""
+    status: str = ""  # PASS | FAIL | WEAK_PASS | DOWNLOAD_FAILED | ERROR | SKIPPED
+    reason: str = ""
+    score: float = 0.0
+    description: str = ""
+    local_media_path: Optional[str] = None
+    frames_used: list[str] = Field(default_factory=list)
+    inventory_folder: str = ""
+
+
+class SupplementResolveGapResult(BaseModel):
+    gap_id: str
+    filled: bool = False
+    accepted_candidate_id: Optional[str] = None
+    attempts: list[SupplementResolveAttempt] = Field(default_factory=list)
+
+
+class SupplementResolveReport(BaseModel):
+    schema_version: str = "enhanced-supplement-resolve-v1"
+    script_version: str = ""
+    max_candidates_per_gap: int = 5
+    gaps: list[SupplementResolveGapResult] = Field(default_factory=list)
+    filled_gap_ids: list[str] = Field(default_factory=list)
+    unfilled_gap_ids: list[str] = Field(default_factory=list)
     message: str = ""
 
 

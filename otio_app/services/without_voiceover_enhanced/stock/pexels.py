@@ -45,6 +45,7 @@ class PexelsStockProvider(StockProvider):
         if want_video:
             for index, item in enumerate(payload.get("videos") or [], start=1):
                 user = item.get("user") or {}
+                download_url = _best_pexels_video_url(item.get("video_files") or [])
                 candidates.append(
                     StockCandidate(
                         candidate_id=f"pexels_video_{item.get('id', index)}",
@@ -57,6 +58,7 @@ class PexelsStockProvider(StockProvider):
                         preview_url=unknown_or_null(
                             (item.get("image") or "")
                         ) or "",
+                        download_url=download_url,
                         width=item.get("width"),
                         height=item.get("height"),
                         duration_seconds=item.get("duration"),
@@ -68,6 +70,13 @@ class PexelsStockProvider(StockProvider):
             for index, item in enumerate(payload.get("photos") or [], start=1):
                 src = item.get("src") or {}
                 photographer = item.get("photographer")
+                download_url = str(
+                    src.get("original")
+                    or src.get("large2x")
+                    or src.get("large")
+                    or src.get("medium")
+                    or ""
+                )
                 candidates.append(
                     StockCandidate(
                         candidate_id=f"pexels_photo_{item.get('id', index)}",
@@ -78,6 +87,7 @@ class PexelsStockProvider(StockProvider):
                         creator=optional_text(photographer),
                         source_page=unknown_or_null(item.get("url")) or "",
                         preview_url=unknown_or_null(src.get("medium")) or "",
+                        download_url=download_url,
                         width=item.get("width"),
                         height=item.get("height"),
                         duration_seconds=None,
@@ -86,3 +96,25 @@ class PexelsStockProvider(StockProvider):
                     )
                 )
         return candidates
+
+
+def _best_pexels_video_url(files: list) -> str:
+    """Wählt eine möglichst große HD-Datei ohne unnötig riesige 4K-Last."""
+    scored: list[tuple[int, str]] = []
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        link = str(item.get("link") or "").strip()
+        if not link:
+            continue
+        width = int(item.get("width") or 0)
+        height = int(item.get("height") or 0)
+        # Bevorzuge ~1080p; bestrafe sehr kleine und sehr große Dateien leicht.
+        score = width * height
+        if 720 <= height <= 1080:
+            score += 10_000_000
+        scored.append((score, link))
+    if not scored:
+        return ""
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return scored[0][1]

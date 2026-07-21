@@ -14,6 +14,9 @@ from otio_app.services.without_voiceover_enhanced.paths import cut_plan_options_
 DEFAULT_MAX_MIDDLE_FRAMES_PER_CHAPTER = 40
 
 
+DEFAULT_MAX_CANDIDATES_PER_GAP = 5
+
+
 class CutPlanOptions(BaseModel):
     schema_version: str = "1.0"
     # Default aus: bisheriges Text-only Verhalten von LLM-Lauf 2.
@@ -22,6 +25,12 @@ class CutPlanOptions(BaseModel):
         default=DEFAULT_MAX_MIDDLE_FRAMES_PER_CHAPTER,
         ge=1,
         le=200,
+    )
+    # Sequenzielle Supplement-Auflösung: Top-N Kandidaten pro Gap.
+    max_candidates_per_gap: int = Field(
+        default=DEFAULT_MAX_CANDIDATES_PER_GAP,
+        ge=1,
+        le=20,
     )
 
 
@@ -42,6 +51,13 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
                 defaults.max_middle_frames_per_chapter,
             )
             or defaults.max_middle_frames_per_chapter
+        ),
+        max_candidates_per_gap=int(
+            raw.get(
+                "max_candidates_per_gap",
+                defaults.max_candidates_per_gap,
+            )
+            or defaults.max_candidates_per_gap
         ),
     )
 

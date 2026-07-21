@@ -26,6 +26,8 @@ ROUGH_CUT_PLAN_FILENAME = "rough_cut_plan.json"
 COVERAGE_GAPS_FILENAME = "coverage_gaps.json"
 STOCK_SEARCH_RESULTS_FILENAME = "search_results.json"
 ACCEPTED_SUPPLEMENTS_FILENAME = "accepted_supplements.json"
+SUPPLEMENT_RESOLVE_REPORT_FILENAME = "supplement_resolve_report.json"
+STOCK_DOWNLOADS_SUBDIR = "downloads"
 FINAL_CUT_PLAN_FILENAME = "final_cut_plan.json"
 RESOLVED_TIMELINE_FILENAME = "resolved_timeline.json"
 REPAIR_LOG_FILENAME = "timeline_repair_log.json"
@@ -128,6 +130,29 @@ def stock_search_results_path(project: Project) -> Path:
 
 def accepted_supplements_path(project: Project) -> Path:
     return stock_dir(project) / ACCEPTED_SUPPLEMENTS_FILENAME
+
+
+def supplement_resolve_report_path(project: Project) -> Path:
+    return stock_dir(project) / SUPPLEMENT_RESOLVE_REPORT_FILENAME
+
+
+def stock_downloads_dir(project: Project) -> Path:
+    return stock_dir(project) / STOCK_DOWNLOADS_SUBDIR
+
+
+def stock_candidate_download_dir(
+    project: Project,
+    *,
+    gap_id: str,
+    candidate_id: str,
+) -> Path:
+    from otio_app.project_layout import safe_folder_slug
+
+    return (
+        stock_downloads_dir(project)
+        / safe_folder_slug(gap_id or "gap")
+        / safe_folder_slug(candidate_id or "candidate")
+    )
 
 
 def final_cut_plan_path(project: Project) -> Path:

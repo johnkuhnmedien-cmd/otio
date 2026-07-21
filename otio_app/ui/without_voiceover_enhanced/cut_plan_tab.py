@@ -34,6 +34,10 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     merge_and_persist_rough_cuts,
     search_supplements_for_gaps,
 )
+from otio_app.services.without_voiceover_enhanced.supplement_resolve_service import (
+    SupplementResolveError,
+    resolve_supplements_for_gaps,
+)
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_locked_script,
 )
@@ -51,6 +55,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
     ResolvedTimelineDocument,
     RoughCutPlanDocument,
     StockSearchResultsDocument,
+    SupplementResolveReport,
 )
 from otio_app.ui.without_voiceover_enhanced.timeline_view import render_realtime_timeline
 from otio_app.services.without_voiceover_enhanced.paths import (
@@ -63,6 +68,7 @@ from otio_app.services.without_voiceover_enhanced.paths import (
     script_locked_path,
     segment_timings_path,
     stock_search_results_path,
+    supplement_resolve_report_path,
 )
 from otio_app.services.without_voiceover_enhanced.stock_provider_config import (
     PROVIDER_UI_LABELS,
@@ -265,6 +271,7 @@ def render_enhanced_cut_plan_page() -> None:
             CutPlanOptions(
                 include_middle_frames=include_middle_frames,
                 max_middle_frames_per_chapter=cut_options.max_middle_frames_per_chapter,
+                max_candidates_per_gap=cut_options.max_candidates_per_gap,
             ),
         )
     if include_middle_frames:
@@ -411,22 +418,71 @@ def render_enhanced_cut_plan_page() -> None:
                 + ", ".join(f"{k}={v}" for k, v in results.provider_status.items())
             )
         selected_ids: list[str] = []
-        for candidate in results.candidates:
+        for index, candidate in enumerate(results.candidates):
             checked = st.checkbox(
                 f"{candidate.provider}: {candidate.title or candidate.candidate_id} "
-                f"({candidate.media_type}, license={candidate.license})",
+                f"({candidate.media_type}, license={candidate.license}"
+                f"{', gap=' + candidate.gap_id if candidate.gap_id else ''})",
                 value=candidate.selected,
-                key=f"enh_stock_{project.id}_{candidate.candidate_id}",
+                key=f"enh_stock_{project.id}_{index}_{candidate.candidate_id}",
             )
             if checked:
                 selected_ids.append(candidate.candidate_id)
-        if st.button("Auswahl akzeptieren", key="enh_accept_stock"):
-            try:
-                accepted = accept_supplement_candidates(project, selected_ids)
-                st.success(f"{len(accepted.supplements)} Supplements akzeptiert.")
-                st.rerun()
-            except CutPlanError as exc:
-                st.error(str(exc))
+        cols_stock = st.columns(2)
+        with cols_stock[0]:
+            if st.button("Auswahl akzeptieren", key="enh_accept_stock"):
+                try:
+                    accepted = accept_supplement_candidates(project, selected_ids)
+                    st.success(f"{len(accepted.supplements)} Supplements akzeptiert.")
+                    st.rerun()
+                except CutPlanError as exc:
+                    st.error(str(exc))
+        with cols_stock[1]:
+            if st.button(
+                "Supplements sequenziell prüfen",
+                type="primary",
+                key="enh_resolve_stock",
+                help=(
+                    "Pro Gap: Top-N Kandidaten nacheinander downloaden, "
+                    "Frames extrahieren, per Gemini prüfen. "
+                    "PASS → Inventar; FAIL → Dateien löschen."
+                ),
+            ):
+                try:
+                    progress = st.empty()
+
+                    def _resolve_progress(gap_id: str, index: int, total: int) -> None:
+                        progress.info(
+                            f"Supplement-Resolve · Gap {index}/{total}: `{gap_id}`…"
+                        )
+
+                    with st.spinner("Download → Frames → LLM-Match…"):
+                        report = resolve_supplements_for_gaps(
+                            project,
+                            progress_callback=_resolve_progress,
+                        )
+                    progress.empty()
+                    st.success(report.message)
+                    if report.unfilled_gap_ids:
+                        st.warning(
+                            "Offen: " + ", ".join(report.unfilled_gap_ids[:12])
+                            + ("…" if len(report.unfilled_gap_ids) > 12 else "")
+                        )
+                    st.rerun()
+                except SupplementResolveError as exc:
+                    st.error(str(exc))
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Fehler: {exc}")
+
+        resolve_report = load_model(
+            supplement_resolve_report_path(project),
+            SupplementResolveReport,
+        )
+        if resolve_report is not None:
+            st.caption(
+                f"Letzter Resolve: {resolve_report.message} · "
+                f"Top-N={resolve_report.max_candidates_per_gap}"
+            )
 
     accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     if accepted is not None:

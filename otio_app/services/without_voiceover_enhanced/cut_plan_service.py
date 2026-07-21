@@ -1094,13 +1094,19 @@ def search_supplements_for_gaps(
                 candidate.gap_id = gap.gap_id
                 all_candidates.append(candidate)
 
+    from otio_app.services.without_voiceover_enhanced.supplement_resolve_service import (
+        dedupe_stock_candidates,
+    )
+
+    unique_candidates = dedupe_stock_candidates(all_candidates)
+
     failed = [
         name
         for name, status in provider_status.items()
         if status == "failed"
     ]
     message = ""
-    if not all_candidates and failed:
+    if not unique_candidates and failed:
         message = (
             "Keine Treffer — Anbieter fehlgeschlagen: "
             + ", ".join(failed)
@@ -1108,11 +1114,15 @@ def search_supplements_for_gaps(
         )
     elif failed:
         message = "Teilweise fehlgeschlagen: " + ", ".join(failed)
+    if len(unique_candidates) < len(all_candidates):
+        dropped = len(all_candidates) - len(unique_candidates)
+        note = f"{dropped} Doppelte Treffer entfernt."
+        message = f"{message} {note}".strip() if message else note
 
     document = StockSearchResultsDocument(
         script_version=locked.script_version,
         provider_status=provider_status,
-        candidates=all_candidates,
+        candidates=unique_candidates,
         message=message,
     )
     write_json(stock_search_results_path(project), document)

@@ -53,6 +53,10 @@ class OpenverseStockProvider(StockProvider):
                         item.get("url") or item.get("thumbnail")
                     )
                     or "",
+                    download_url=unknown_or_null(
+                        item.get("url") or item.get("thumbnail")
+                    )
+                    or "",
                     width=item.get("width"),
                     height=item.get("height"),
                     duration_seconds=None,
