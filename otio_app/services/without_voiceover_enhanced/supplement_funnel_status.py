@@ -28,11 +28,18 @@ ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     "thumbnail_unavailable": frozenset(
         {
             "finalist",
-            "manual_review_required",
             "download_pending",
+            # Historisch lesbar:
+            "manual_review_required",
         }
     ),
-    "thumbnail_scored": frozenset({"finalist", "manual_review_required"}),
+    "thumbnail_scored": frozenset(
+        {
+            "finalist",
+            "download_pending",
+            "manual_review_required",
+        }
+    ),
     "finalist": frozenset(
         {
             "download_pending",
@@ -50,11 +57,15 @@ ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     "local_media_invalid": frozenset(set()),
     "technically_valid": frozenset(
         {
+            "selected",
+            "license_metadata_incomplete",
+            # Historisch (R1 Full-Review-Pfad):
             "full_review_rejected",
             "manual_review_required",
             "review_ready",
         }
     ),
+    "license_metadata_incomplete": frozenset(set()),
     "full_review_rejected": frozenset(set()),
     "manual_review_required": frozenset(
         {
@@ -73,6 +84,7 @@ ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     "selected": frozenset(
         {
             "license_review_required",
+            "license_metadata_incomplete",
             "export_ready",
         }
     ),

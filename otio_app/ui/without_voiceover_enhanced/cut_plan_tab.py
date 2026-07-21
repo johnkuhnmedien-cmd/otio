@@ -37,7 +37,6 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
 from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
     FunnelProgressEvent,
     SupplementFunnelError,
-    confirm_funnel_candidate,
     run_supplement_funnel_for_gaps,
 )
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
@@ -505,13 +504,14 @@ def render_enhanced_cut_plan_page() -> None:
                     st.error(str(exc))
         with cols_stock[1]:
             if st.button(
-                "20 Kandidaten vorprüfen",
+                "Supplements automatisch auflösen",
                 type="primary",
                 key="enh_funnel_stock",
                 help=(
-                    "Funnel: Text → Thumbnails (2×10) → Finalvergleich → "
-                    "nur Rang 1 downloaden. Keine Auto-Auswahl; "
-                    "review_ready erfordert manuelle Freigabe."
+                    "Automatischer Funnel: Text → Thumbnails → Finalvergleich → "
+                    "Voll-Download Rang 1–3 → technische Prüfung → Lizenzprüfung → "
+                    "automatische Übernahme. Keine zweite LLM-Prüfung, "
+                    "keine manuelle Funnel-Freigabe."
                 ),
             ):
                 try:
@@ -547,62 +547,27 @@ def render_enhanced_cut_plan_page() -> None:
             SupplementFunnelReport,
         )
         if funnel_report is not None:
-            st.markdown("**Funnel-Ergebnis**")
+            st.markdown("**Funnel-Abschluss**")
             st.caption(funnel_report.message)
+            st.write(
+                f"Gaps erfüllt: **{len(funnel_report.filled_gap_ids)}** · "
+                f"Gaps offen: **{len(funnel_report.open_gap_ids)}** · "
+                f"Voll-Downloads: **{funnel_report.full_download_count}** · "
+                f"technisch ungültig: **{funnel_report.technically_invalid_count}** · "
+                f"Lizenzdaten unvollständig: "
+                f"**{funnel_report.license_incomplete_count}** · "
+                f"Fallbacks: **{funnel_report.fallback_used_count}**"
+            )
             for gap_rep in funnel_report.gaps:
-                ranked = sorted(
-                    [c for c in gap_rep.candidates if c.rank is not None],
-                    key=lambda c: c.rank or 999,
-                )
-                winner = next(
-                    (c for c in ranked if c.decision == "winner"),
-                    ranked[0] if ranked else None,
-                )
+                ready = gap_rep.export_ready_candidate_id
                 st.write(
-                    f"`{gap_rep.gap_id}` · {gap_rep.message}"
+                    f"`{gap_rep.gap_id}` · "
                     + (
-                        f" · Inventar-Reuse: {', '.join(gap_rep.inventory_reuse_ids[:5])}"
-                        if gap_rep.inventory_reuse_ids
-                        else ""
+                        f"export_ready `{ready}`"
+                        if ready
+                        else (gap_rep.message or "offen")
                     )
                 )
-                if winner is not None:
-                    st.caption(
-                        f"Gewinner/Rang1: `{winner.candidate_id}` · "
-                        f"final={winner.final_score} · "
-                        f"prelim={winner.preliminary_score:.1f} · "
-                        f"status={winner.funnel_status} · "
-                        f"preview={winner.preview_status}"
-                    )
-                for cand in ranked[:5]:
-                    st.caption(
-                        f"  #{cand.rank} `{cand.candidate_id}` · "
-                        f"{cand.decision or '-'} · "
-                        f"final={cand.final_score} · {cand.funnel_status}"
-                        + (f" — {cand.reason[:80]}" if cand.reason else "")
-                    )
-                review_id = gap_rep.review_ready_candidate_id
-                if review_id:
-                    if st.button(
-                        f"Manuell freigeben: {review_id}",
-                        key=(
-                            f"enh_funnel_confirm_{project.id}_"
-                            f"{gap_rep.gap_id}_{review_id}"
-                        ),
-                    ):
-                        try:
-                            confirmed = confirm_funnel_candidate(
-                                project,
-                                gap_id=gap_rep.gap_id,
-                                candidate_id=review_id,
-                            )
-                            st.success(
-                                f"{confirmed.candidate_id} → "
-                                f"{confirmed.media_validation_status}"
-                            )
-                            st.rerun()
-                        except SupplementFunnelError as exc:
-                            st.error(str(exc))
             if funnel_report.open_gap_ids:
                 st.warning(
                     "Offene Gaps: " + ", ".join(funnel_report.open_gap_ids[:12])

@@ -261,6 +261,8 @@ FUNNEL_STATUSES = (
     "download_failed",
     "local_media_invalid",
     "technically_valid",
+    "license_metadata_incomplete",
+    # Historische Statuswerte bleiben lesbar (kein Auto-Hauptweg mehr).
     "full_review_rejected",
     "manual_review_required",
     "review_ready",
@@ -325,12 +327,19 @@ class SupplementFunnelGapReport(BaseModel):
     inventory_reuse_ids: list[str] = Field(default_factory=list)
     candidates: list[FunnelCandidateRecord] = Field(default_factory=list)
     winner_candidate_id: Optional[str] = None
+    # Historisch (R1); neuer Auto-Hauptweg nutzt export_ready_candidate_id.
     review_ready_candidate_id: Optional[str] = None
+    export_ready_candidate_id: Optional[str] = None
+    filled: bool = False
+    full_download_attempts: int = 0
+    technically_invalid_count: int = 0
+    license_incomplete_count: int = 0
+    fallback_used: bool = False
     message: str = ""
 
 
 class SupplementFunnelReport(BaseModel):
-    schema_version: str = "enhanced-supplement-funnel-v1"
+    schema_version: str = "enhanced-supplement-funnel-v2"
     run_id: str = ""
     script_version: str = ""
     max_candidates_per_gap: int = 20
@@ -338,6 +347,11 @@ class SupplementFunnelReport(BaseModel):
     gaps: list[SupplementFunnelGapReport] = Field(default_factory=list)
     skipped_gap_ids: list[str] = Field(default_factory=list)
     open_gap_ids: list[str] = Field(default_factory=list)
+    filled_gap_ids: list[str] = Field(default_factory=list)
+    full_download_count: int = 0
+    technically_invalid_count: int = 0
+    license_incomplete_count: int = 0
+    fallback_used_count: int = 0
     message: str = ""
     stopped: bool = False
 

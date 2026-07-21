@@ -263,14 +263,48 @@ def validate_local_media_path(
     )
 
 
+# Bekannte Provider-Lizenzen aus den Adaptern (kein LLM-Erfinden).
+_KNOWN_PROVIDER_LICENSES: dict[str, str] = {
+    "pexels": "Pexels License",
+    "pixabay": "Pixabay License",
+}
+
+
 def license_metadata_complete(candidate: StockCandidate) -> bool:
-    """Separates Lizenz-Gate — LLM darf Lizenz nicht aus Bildern ableiten."""
+    """Fail-closed Lizenz-Gate — LLM darf Lizenz nicht erzeugen/ergänzen.
+
+    Providerregeln:
+    - Pexels/Pixabay: bekannte Adapter-Lizenz; Creator optional (Dokumentierter Fallback).
+    - Wikimedia/Openverse: konkrete Asset-Lizenz + Creator/Attribution.
+    - Archive.org: echte Lizenzmetadaten + Creator/Attribution (nicht nur Source-Page).
+    """
     provider = (candidate.provider or "").strip().lower()
-    has_license = bool((candidate.license or "").strip())
-    has_source = bool((candidate.source_page or "").strip())
-    if provider == "archive_org":
-        return has_source
-    return has_license and has_source
+    if not provider:
+        return False
+    if not str(candidate.provider_asset_id or "").strip():
+        return False
+    source = (candidate.source_page or "").strip()
+    if not source:
+        return False
+    license_name = (candidate.license or "").strip()
+    creator = (candidate.creator or "").strip()
+    attribution = (candidate.attribution or "").strip()
+    has_creator = bool(creator or attribution)
+
+    if provider in _KNOWN_PROVIDER_LICENSES:
+        known = _KNOWN_PROVIDER_LICENSES[provider]
+        if not license_name:
+            return False
+        # Adapter setzt exakt die bekannte Lizenz; toleriere Case.
+        if license_name.casefold() != known.casefold():
+            return False
+        # Creator optional: dokumentierter Provider-Fallback.
+        return True
+
+    if provider in {"wikimedia", "openverse", "archive_org"}:
+        return bool(license_name) and has_creator
+
+    return bool(license_name) and has_creator
 
 
 def _apply_funnel_license_gate_if_needed(

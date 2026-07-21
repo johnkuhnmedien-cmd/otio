@@ -1,7 +1,8 @@
-"""Dreistufiger Supplement-Funnel: Text → Thumbnail → sequenzieller Download.
+"""Automatischer Supplement-Funnel: Text → Thumbnail → Download → Tech → Lizenz.
 
-Keine automatische Nutzerfreigabe: review_ready erfordert manuelle Bestätigung
-bevor selected / export_ready / Inventar-Import.
+Semantische Auswahl endet mit dem Thumbnail-Ranking.
+Nach dem Voll-Download: keine zweite LLM-Prüfung, keine Frame-Extraktion,
+keine manuelle Freigabe. Technisch gültig + Lizenzmetadaten → auto export_ready.
 """
 
 from __future__ import annotations
@@ -26,8 +27,8 @@ from otio_app.services.without_voiceover_enhanced.io_utils import load_model, wr
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
     STATUS_EXPORT_READY,
     STATUS_LICENSE_REVIEW_REQUIRED,
-    STATUS_LOCAL_MEDIA_INVALID,
     apply_license_export_gate,
+    license_metadata_complete,
     list_export_ready_supplements,
     validate_local_media_path,
 )
@@ -37,8 +38,6 @@ from otio_app.services.without_voiceover_enhanced.models import (
     CoverageGapsDocument,
     EnhancedScriptDocument,
     FunnelCandidateRecord,
-    FunnelTextScores,
-    FunnelThumbnailScores,
     RoughCutPlanDocument,
     StockCandidate,
     StockSearchResultsDocument,
@@ -91,6 +90,16 @@ from otio_app.services.without_voiceover_enhanced.supplement_thumbnail_rank_serv
 logger = logging.getLogger(__name__)
 
 DEFAULT_FUNNEL_MODEL = "gemini-3.5-flash"
+
+# Re-export für Tests/Kompatibilität (nicht im Auto-Funnel-Pfad).
+__all__ = [
+    "FunnelProgressEvent",
+    "SupplementFunnelError",
+    "confirm_funnel_candidate",
+    "download_full_candidate_safe",
+    "run_full_content_review",
+    "run_supplement_funnel_for_gaps",
+]
 
 
 class SupplementFunnelError(RuntimeError):
@@ -145,6 +154,27 @@ def _inventory_reuse_ids(project: Project, gap: CoverageGap) -> list[str]:
         if supplement.candidate_id and supplement.candidate_id not in ids:
             ids.append(supplement.candidate_id)
     return ids
+
+
+def _gap_already_export_ready(
+    previous: SupplementFunnelReport | None,
+    *,
+    gap_id: str,
+    project: Project,
+) -> bool:
+    """Idempotenz: bereits export_ready Gaps nicht erneut laden."""
+    if previous is not None:
+        for gap_rep in previous.gaps:
+            if gap_rep.gap_id != gap_id:
+                continue
+            if gap_rep.filled or gap_rep.export_ready_candidate_id:
+                return True
+            if any(c.funnel_status == "export_ready" for c in gap_rep.candidates):
+                return True
+    for supplement in list_export_ready_supplements(project):
+        if (supplement.gap_id or "") == gap_id:
+            return True
+    return False
 
 
 def _gap_context(
@@ -225,7 +255,7 @@ def download_full_candidate_safe(
 
 
 def _map_full_review_decision(raw: dict[str, Any]) -> dict[str, Any]:
-    """Mappt Gemini PASS/FAIL auf Funnel-Decisions."""
+    """Mappt Gemini PASS/FAIL auf Funnel-Decisions (Legacy, nicht Auto-Pfad)."""
     status = str(raw.get("status") or raw.get("decision") or "").upper()
     decision = str(raw.get("decision") or "").strip()
     if decision in {"review_ready", "reject", "manual_review_required"}:
@@ -261,16 +291,16 @@ def run_full_content_review(
     locked: EnhancedScriptDocument,
     llm_callable: FullReviewLlm | None = None,
 ) -> dict[str, Any]:
+    """Legacy Full-Review (Frames + LLM). Nicht Teil des automatischen Funnels."""
     folder = _folder_for_gap(project, gap, locked)
     passage = _passage_for_gap(gap, locked)
     visual = gap.needed_visual or gap.subject or passage
 
-    # Technische Validierung VOR Frames.
     status, error = validate_local_media_path(media_path, candidate.media_type)
     if status != STATUS_EXPORT_READY:
         return {
             "decision": "reject",
-            "reason": error or STATUS_LOCAL_MEDIA_INVALID,
+            "reason": error or "local_media_invalid",
             "technically_valid": False,
         }
 
@@ -327,7 +357,10 @@ def confirm_funnel_candidate(
     gap_id: str,
     candidate_id: str,
 ) -> StockCandidate:
-    """Manuelle Freigabe: review_ready → selected → license gate → export_ready."""
+    """Legacy-Freigabe für historische review_ready-Dokumente.
+
+    Nicht Teil des automatischen Hauptwegs (R2).
+    """
     report = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
     if report is None:
         raise SupplementFunnelError("Kein Funnel-Report vorhanden.")
@@ -343,6 +376,8 @@ def confirm_funnel_candidate(
         "review_ready",
         "manual_review_required",
         "license_review_required",
+        "technically_valid",
+        "selected",
     }:
         raise SupplementFunnelError(
             f"Kandidat nicht freigabefähig (Status={record.funnel_status})."
@@ -395,18 +430,52 @@ def confirm_funnel_candidate(
         )
         return candidate
 
+    return _persist_export_ready(
+        project,
+        report=report,
+        gap_report=gap_report,
+        record=record,
+        candidate=candidate,
+        media_path=media_path,
+        gap_id=gap_id,
+    )
+
+
+def _persist_export_ready(
+    project: Project,
+    *,
+    report: SupplementFunnelReport,
+    gap_report: SupplementFunnelGapReport,
+    record: FunnelCandidateRecord,
+    candidate: StockCandidate,
+    media_path: Path,
+    gap_id: str,
+) -> StockCandidate:
+    """technically_valid → selected → export_ready → Accepted + Inventar."""
+    if record.funnel_status != "selected":
+        record.funnel_status = transition(record.funnel_status, "selected")
     record.funnel_status = transition(record.funnel_status, "export_ready")
+    record.review_status = "accepted"
+    record.download_status = "accepted"
+    record.local_media_path = str(media_path)
     record.sha256 = file_sha256(media_path)
-    record.fetched_at = _utcnow()
+    record.fetched_at = record.fetched_at or _utcnow()
     record.license_name = candidate.license
     record.source_page = candidate.source_page
     record.creator = candidate.creator
     record.attribution = candidate.attribution
 
+    candidate.local_media_path = str(media_path)
+    candidate.selected = True
+    candidate.funnel_managed = True
+    candidate.media_validation_status = STATUS_EXPORT_READY
+    candidate.media_validation_error = None
+    candidate.gap_id = gap_id
+
     locked = require_locked_script(project)
     existing = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     supplements = list(existing.supplements) if existing else []
-    supplements = [s for s in supplements if s.candidate_id != candidate_id]
+    supplements = [s for s in supplements if s.candidate_id != candidate.candidate_id]
     supplements.append(candidate)
     write_json(
         accepted_supplements_path(project),
@@ -421,22 +490,145 @@ def confirm_funnel_candidate(
         gap = next((g for g in coverage.gaps if g.gap_id == gap_id), None)
     if gap is not None:
         folder = _folder_for_gap(project, gap, locked)
-        frames_dir = media_path.parent / "frames"
-        frames = list(frames_dir.glob("*.jpg")) + list(frames_dir.glob("*.jpeg"))
+        # Keine Validierungsframes im Auto-Funnel — Inventar ohne Framepfade.
         _import_into_inventory(
             project,
             folder_name=folder,
             candidate=candidate,
             media_path=media_path,
-            frames=frames,
-            description=record.reason or candidate.title or candidate_id,
+            frames=[],
+            description=record.reason or candidate.title or candidate.candidate_id,
             validation_status="PASS",
             validation_score=float(record.final_score or 0) / 100.0,
         )
 
-    gap_report.review_ready_candidate_id = candidate_id
+    gap_report.export_ready_candidate_id = candidate.candidate_id
+    gap_report.filled = True
+    gap_report.review_ready_candidate_id = None
+    _upsert_gap_report(report, gap_report)
     write_json(supplement_funnel_report_path(project), report)
     return candidate
+
+
+def _upsert_gap_report(
+    report: SupplementFunnelReport, gap_report: SupplementFunnelGapReport
+) -> None:
+    for index, existing_gap in enumerate(report.gaps):
+        if existing_gap.gap_id == gap_report.gap_id:
+            report.gaps[index] = gap_report
+            return
+    report.gaps.append(gap_report)
+
+
+def _try_auto_accept_candidate(
+    project: Project,
+    *,
+    report: SupplementFunnelReport,
+    gap_report: SupplementFunnelGapReport,
+    record: FunnelCandidateRecord,
+    candidate: StockCandidate,
+    media_path: Path,
+    gap: CoverageGap,
+    locked: EnhancedScriptDocument,
+    progress_callback: ProgressCallback | None,
+    gap_index: int,
+    gap_total: int,
+) -> str:
+    """Technik + Lizenz prüfen. Rückgabe: accepted | local_media_invalid | license_incomplete."""
+    _emit(
+        progress_callback,
+        FunnelProgressEvent(
+            phase="technical",
+            gap_id=gap.gap_id,
+            gap_index=gap_index,
+            gap_total=gap_total,
+            message=f"Gap {gap_index}/{gap_total} · Technische Prüfung",
+            fraction=(gap_index - 0.15) / max(1, gap_total),
+        ),
+    )
+    status, error = validate_local_media_path(media_path, candidate.media_type)
+    if status != STATUS_EXPORT_READY:
+        record.funnel_status = transition(record.funnel_status, "local_media_invalid")
+        record.download_status = "invalid"
+        record.reason = error or "local_media_invalid"
+        _cleanup_candidate_dir(media_path)
+        return "local_media_invalid"
+
+    record.funnel_status = transition(record.funnel_status, "technically_valid")
+    record.local_media_path = str(media_path)
+    record.sha256 = file_sha256(media_path)
+    record.fetched_at = _utcnow()
+    record.license_name = candidate.license
+    record.source_page = candidate.source_page
+    record.creator = candidate.creator
+    record.attribution = candidate.attribution
+
+    _emit(
+        progress_callback,
+        FunnelProgressEvent(
+            phase="license",
+            gap_id=gap.gap_id,
+            gap_index=gap_index,
+            gap_total=gap_total,
+            message=f"Gap {gap_index}/{gap_total} · Lizenzprüfung",
+            fraction=(gap_index - 0.08) / max(1, gap_total),
+        ),
+    )
+
+    candidate.local_media_path = str(media_path)
+    candidate.selected = True
+    candidate.funnel_managed = True
+    if not license_metadata_complete(candidate):
+        record.funnel_status = transition(
+            record.funnel_status, "license_metadata_incomplete"
+        )
+        record.download_status = "license_incomplete"
+        record.reason = "license_metadata_incomplete"
+        record.local_media_path = None
+        record.sha256 = None
+        _cleanup_candidate_dir(media_path)
+        return "license_incomplete"
+
+    # Explizites Gate (setzt export_ready oder license_review_required).
+    candidate.media_validation_status = STATUS_EXPORT_READY
+    candidate.media_validation_error = None
+    candidate = apply_license_export_gate(candidate)
+    if candidate.media_validation_status != STATUS_EXPORT_READY:
+        record.funnel_status = transition(
+            record.funnel_status, "license_metadata_incomplete"
+        )
+        record.download_status = "license_incomplete"
+        record.reason = (
+            candidate.media_validation_error or "license_metadata_incomplete"
+        )
+        record.local_media_path = None
+        record.sha256 = None
+        _cleanup_candidate_dir(media_path)
+        return "license_incomplete"
+
+    _persist_export_ready(
+        project,
+        report=report,
+        gap_report=gap_report,
+        record=record,
+        candidate=candidate,
+        media_path=media_path,
+        gap_id=gap.gap_id,
+    )
+    _emit(
+        progress_callback,
+        FunnelProgressEvent(
+            phase="accepted",
+            gap_id=gap.gap_id,
+            gap_index=gap_index,
+            gap_total=gap_total,
+            message=(
+                f"Gap {gap_index}/{gap_total} · Übernommen: {candidate.candidate_id}"
+            ),
+            fraction=gap_index / max(1, gap_total),
+        ),
+    )
+    return "accepted"
 
 
 def run_supplement_funnel_for_gaps(
@@ -455,7 +647,12 @@ def run_supplement_funnel_for_gaps(
     download_callable: Callable[..., Path] | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> SupplementFunnelReport:
-    """Haupt-Orchestrierung des Funnels. Kein Auto-Accept."""
+    """Haupt-Orchestrierung: Thumbnail-Ranking ist letzte semantische Stufe.
+
+    ``full_review_llm`` wird ignoriert (API-Kompatibilität) — kein zweiter LLM-Call.
+    """
+    del full_review_llm  # bewusst nicht verwendet (R2)
+
     locked = require_locked_script(project)
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
     results = load_model(stock_search_results_path(project), StockSearchResultsDocument)
@@ -484,14 +681,6 @@ def run_supplement_funnel_for_gaps(
     )
 
     previous = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
-    already_review_ready: set[str] = set()
-    if previous is not None and skip_filled and not force_restart:
-        for gap_rep in previous.gaps:
-            if gap_rep.review_ready_candidate_id or any(
-                c.funnel_status in {"review_ready", "selected", "export_ready"}
-                for c in gap_rep.candidates
-            ):
-                already_review_ready.add(gap_rep.gap_id)
 
     gaps = list(coverage.gaps)
     if only_gap_ids is not None:
@@ -503,7 +692,9 @@ def run_supplement_funnel_for_gaps(
         if should_stop and should_stop():
             report.stopped = True
             break
-        if gap.gap_id in already_review_ready:
+        if skip_filled and not force_restart and _gap_already_export_ready(
+            previous, gap_id=gap.gap_id, project=project
+        ):
             report.skipped_gap_ids.append(gap.gap_id)
             _emit(
                 progress_callback,
@@ -512,7 +703,10 @@ def run_supplement_funnel_for_gaps(
                     gap_id=gap.gap_id,
                     gap_index=gap_index,
                     gap_total=total,
-                    message=f"Gap {gap_index}/{total}: übersprungen (bereits review_ready)",
+                    message=(
+                        f"Gap {gap_index}/{total}: übersprungen "
+                        "(bereits export_ready)"
+                    ),
                     fraction=gap_index / max(1, total),
                 ),
             )
@@ -525,7 +719,7 @@ def run_supplement_funnel_for_gaps(
                 gap_id=gap.gap_id,
                 gap_index=gap_index,
                 gap_total=total,
-                message=f"Gap {gap_index}/{total}: {gap.gap_id}",
+                message=f"Gap {gap_index}/{total}",
                 fraction=(gap_index - 1) / max(1, total),
             ),
         )
@@ -564,7 +758,19 @@ def run_supplement_funnel_for_gaps(
             report.open_gap_ids.append(gap.gap_id)
             continue
 
-        # Stufe 3: Textbewertung
+        _emit(
+            progress_callback,
+            FunnelProgressEvent(
+                phase="candidates",
+                gap_id=gap.gap_id,
+                gap_index=gap_index,
+                gap_total=total,
+                message=f"Gap {gap_index}/{total} · {len(selected)} Kandidaten gefunden",
+                fraction=(gap_index - 0.9) / max(1, total),
+            ),
+        )
+
+        # Textbewertung
         _emit(
             progress_callback,
             FunnelProgressEvent(
@@ -572,7 +778,7 @@ def run_supplement_funnel_for_gaps(
                 gap_id=gap.gap_id,
                 gap_index=gap_index,
                 gap_total=total,
-                message=f"Gap {gap_index}/{total} · Textprüfung {len(selected)}/{len(selected)}",
+                message=f"Gap {gap_index}/{total} · Textprüfung",
                 fraction=(gap_index - 0.8) / max(1, total),
             ),
         )
@@ -594,7 +800,7 @@ def run_supplement_funnel_for_gaps(
             record.text_scores = scores
             record.funnel_status = transition(record.funnel_status, "text_ranked")
 
-        # Stufe 4–8: Previews + Thumbnail-Batches
+        # Previews + Thumbnail-Batches
         preview_bytes: dict[str, bytes] = {}
         scored_ids: list[str] = []
         for record in records:
@@ -644,7 +850,9 @@ def run_supplement_funnel_for_gaps(
                         f"Gap {gap_index}/{total} · Thumbnailprüfung "
                         f"Batch {batch_index}/{len(batches)}"
                     ),
-                    fraction=(gap_index - 0.55 + 0.1 * batch_index / max(1, len(batches)))
+                    fraction=(
+                        gap_index - 0.55 + 0.1 * batch_index / max(1, len(batches))
+                    )
                     / max(1, total),
                 ),
             )
@@ -658,7 +866,6 @@ def run_supplement_funnel_for_gaps(
                 )
             except FunnelRankError as exc:
                 gap_report.message = f"Thumbnailprüfung fehlgeschlagen: {exc}"
-                # Previewbytes verwerfen
                 preview_bytes.clear()
                 report.gaps.append(gap_report)
                 report.open_gap_ids.append(gap.gap_id)
@@ -692,7 +899,6 @@ def run_supplement_funnel_for_gaps(
         ):
             continue
 
-        # Für Kandidaten ohne Preview: preliminary nur aus Text (niedrig gewichtet)
         for record in records:
             if record.preview_status != "scored":
                 record.preliminary_score = compute_preliminary_score(
@@ -722,10 +928,7 @@ def run_supplement_funnel_for_gaps(
                 gap_id=gap.gap_id,
                 gap_index=gap_index,
                 gap_total=total,
-                message=(
-                    f"Gap {gap_index}/{total} · Finalvergleich "
-                    f"{len(finalist_ids)} Kandidaten"
-                ),
+                message=f"Gap {gap_index}/{total} · Finalvergleich",
                 fraction=(gap_index - 0.35) / max(1, total),
             ),
         )
@@ -749,7 +952,7 @@ def run_supplement_funnel_for_gaps(
             preview_bytes.clear()
             continue
 
-        # Previewbytes nach Calls verwerfen.
+        # Previewbytes nach Calls verwerfen (keine Persistenz).
         preview_bytes.clear()
 
         download_order = [
@@ -763,14 +966,16 @@ def run_supplement_funnel_for_gaps(
             continue
 
         gap_report.winner_candidate_id = download_order[0].candidate_id
-        attempts = 0
-        review_ready_id: str | None = None
+        accepted_id: str | None = None
 
         for rank_index, finalist in enumerate(download_order[:max_downloads], start=1):
             if should_stop and should_stop():
                 report.stopped = True
                 break
-            attempts += 1
+            gap_report.full_download_attempts += 1
+            report.full_download_count += 1
+            if rank_index > 1:
+                gap_report.fallback_used = True
             candidate = by_id[finalist.candidate_id]
             record = record_by_id[finalist.candidate_id]
             record.funnel_status = transition(record.funnel_status, "download_pending")
@@ -784,7 +989,7 @@ def run_supplement_funnel_for_gaps(
                     gap_total=total,
                     message=(
                         f"Gap {gap_index}/{total} · Download Rang "
-                        f"{rank_index}/{max_downloads}: {candidate.candidate_id}"
+                        f"{rank_index}/{max_downloads}"
                     ),
                     fraction=(gap_index - 0.25) / max(1, total),
                 ),
@@ -808,91 +1013,54 @@ def run_supplement_funnel_for_gaps(
                 _cleanup_candidate_dir(media_path)
                 continue
 
-            _emit(
-                progress_callback,
-                FunnelProgressEvent(
-                    phase="technical",
-                    gap_id=gap.gap_id,
-                    gap_index=gap_index,
-                    gap_total=total,
-                    message=f"Gap {gap_index}/{total} · Technische Prüfung",
-                    fraction=(gap_index - 0.15) / max(1, total),
-                ),
-            )
-            status, error = validate_local_media_path(
-                media_path, candidate.media_type
-            )
-            if status != STATUS_EXPORT_READY:
-                record.funnel_status = transition(
-                    record.funnel_status, "local_media_invalid"
-                )
-                record.download_status = "invalid"
-                record.reason = error or STATUS_LOCAL_MEDIA_INVALID
-                _cleanup_candidate_dir(media_path)
-                continue
-
-            record.funnel_status = transition(record.funnel_status, "technically_valid")
-            record.local_media_path = str(media_path)
-            record.sha256 = file_sha256(media_path)
-
-            _emit(
-                progress_callback,
-                FunnelProgressEvent(
-                    phase="full_review",
-                    gap_id=gap.gap_id,
-                    gap_index=gap_index,
-                    gap_total=total,
-                    message=f"Gap {gap_index}/{total} · Finale Inhaltsprüfung",
-                    fraction=(gap_index - 0.05) / max(1, total),
-                ),
-            )
-            review = run_full_content_review(
-                project=project,
+            outcome = _try_auto_accept_candidate(
+                project,
+                report=report,
+                gap_report=gap_report,
+                record=record,
                 candidate=candidate,
                 media_path=media_path,
                 gap=gap,
                 locked=locked,
-                llm_callable=full_review_llm,
+                progress_callback=progress_callback,
+                gap_index=gap_index,
+                gap_total=total,
             )
-            decision = review.get("decision")
-            record.reason = str(review.get("reason") or "")
-            if decision == "reject":
-                record.funnel_status = transition(
-                    record.funnel_status, "full_review_rejected"
-                )
-                record.local_media_path = None
-                _cleanup_candidate_dir(media_path)
+            if outcome == "local_media_invalid":
+                gap_report.technically_invalid_count += 1
+                report.technically_invalid_count += 1
                 continue
-            if decision == "manual_review_required":
-                record.funnel_status = transition(
-                    record.funnel_status, "manual_review_required"
-                )
-                record.review_status = "needs_user"
-                review_ready_id = candidate.candidate_id
-                break
-            # review_ready — NICHT selected/export_ready
-            record.funnel_status = transition(record.funnel_status, "review_ready")
-            record.review_status = "pending_user"
-            review_ready_id = candidate.candidate_id
+            if outcome == "license_incomplete":
+                gap_report.license_incomplete_count += 1
+                report.license_incomplete_count += 1
+                continue
+            # accepted
+            accepted_id = candidate.candidate_id
             break
 
+        if gap_report.fallback_used:
+            report.fallback_used_count += 1
+
         gap_report.candidates = records
-        gap_report.review_ready_candidate_id = review_ready_id
-        if review_ready_id:
-            gap_report.message = (
-                f"review_ready: {review_ready_id} (manuelle Freigabe nötig)"
-            )
+        if accepted_id:
+            gap_report.message = f"export_ready: {accepted_id} (automatisch übernommen)"
+            if gap.gap_id not in report.filled_gap_ids:
+                report.filled_gap_ids.append(gap.gap_id)
         else:
             gap_report.message = (
-                f"Kein review_ready nach {attempts} Download-Versuch(en)."
+                f"Kein export_ready nach {gap_report.full_download_attempts} "
+                "Download-Versuch(en)."
             )
             report.open_gap_ids.append(gap.gap_id)
-        report.gaps.append(gap_report)
+        _upsert_gap_report(report, gap_report)
 
     report.message = (
-        f"Funnel {run_id}: {len(report.gaps)} Gaps · "
+        f"Funnel {run_id}: {len(report.filled_gap_ids)} Gaps erfüllt · "
         f"{len(report.open_gap_ids)} offen · "
-        f"{len(report.skipped_gap_ids)} übersprungen"
+        f"{report.full_download_count} Voll-Downloads · "
+        f"{report.technically_invalid_count} technisch ungültig · "
+        f"{report.license_incomplete_count} Lizenz unvollständig · "
+        f"{report.fallback_used_count} Fallbacks"
         + (" · abgebrochen" if report.stopped else "")
     )
     write_json(supplement_funnel_report_path(project), report)
