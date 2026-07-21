@@ -45,6 +45,7 @@ class ArchiveOrgStockProvider(StockProvider):
                     creator=optional_text(item.get("creator")),
                     source_page=source,
                     preview_url=source,
+                    download_url=source,
                     width=None,
                     height=None,
                     duration_seconds=None,

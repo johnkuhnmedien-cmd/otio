@@ -436,8 +436,14 @@ def render_enhanced_cut_plan_page() -> None:
             )
         selected_ids: list[str] = []
         for index, candidate in enumerate(results.candidates):
+            title = (candidate.title or candidate.candidate_id).strip()
+            link = (candidate.source_page or candidate.download_url or "").strip()
+            # Pexels setzt oft die URL als title — dann nicht doppelt anzeigen.
+            link_suffix = ""
+            if link and link not in title:
+                link_suffix = f" · {link}"
             checked = st.checkbox(
-                f"{candidate.provider}: {candidate.title or candidate.candidate_id} "
+                f"{candidate.provider}: {title}{link_suffix} "
                 f"({candidate.media_type}, license={candidate.license}"
                 f"{', gap=' + candidate.gap_id if candidate.gap_id else ''})",
                 value=candidate.selected,
