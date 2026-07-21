@@ -242,16 +242,20 @@ def _install_fakes(project: Project) -> None:
             }
         )
 
-    calls: list[dict] = []
-
     def download_callable(proj, candidate, *, gap_id: str) -> Path:
         from otio_app.services.without_voiceover_enhanced.paths import (
             stock_candidate_download_dir,
         )
 
-        calls.append({"gap_id": gap_id, "candidate_id": candidate.candidate_id})
         download_log.parent.mkdir(parents=True, exist_ok=True)
-        download_log.write_text(json.dumps(calls), encoding="utf-8")
+        existing: list[dict] = []
+        if download_log.is_file():
+            try:
+                existing = json.loads(download_log.read_text(encoding="utf-8"))
+            except Exception:
+                existing = []
+        existing.append({"gap_id": gap_id, "candidate_id": candidate.candidate_id})
+        download_log.write_text(json.dumps(existing), encoding="utf-8")
         d = stock_candidate_download_dir(
             proj, gap_id=gap_id, candidate_id=candidate.candidate_id
         )
