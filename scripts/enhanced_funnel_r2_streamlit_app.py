@@ -239,14 +239,18 @@ def _install_fakes(project: Project) -> None:
             path.write_bytes(_jpeg((30, 120, 40)))
         return path
 
-    original = funnel_svc.run_supplement_funnel_for_gaps
+    # Streamlit-Reruns: Original nur einmal fassen, nicht mehrfach wrappen.
+    original = getattr(
+        funnel_svc, "_r2_smoke_original_run", funnel_svc.run_supplement_funnel_for_gaps
+    )
+    funnel_svc._r2_smoke_original_run = original
 
     def wrapped(proj, **kwargs):
         progress_lines: list[str] = []
+        user_cb = kwargs.get("progress_callback")
 
         def _cb(event):
             progress_lines.append(event.message or event.phase)
-            user_cb = kwargs.get("progress_callback")
             if user_cb is not None:
                 user_cb(event)
 
