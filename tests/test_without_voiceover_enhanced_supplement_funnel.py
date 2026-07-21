@@ -748,6 +748,15 @@ def test_ui_two_funnel_buttons_and_gap_keys() -> None:
     assert "disabled=all_disabled" in source
     assert "gap_ids=gap_ids" in source
     assert "list_open_funnel_gap_ids" in source
+    # Fortschritt oben + lange Listen standardmäßig eingeklappt
+    assert "Gaps: **offen" in source
+    assert "erfüllt" in source
+    assert "gesamt" in source
+    assert 'f"Offene Coverage Gaps auswählen · {len(open_gap_ids)}"' in source
+    assert "Kandidaten manuell prüfen (optional)" in source
+    assert "Funnel-Abschluss" in source
+    assert "Lokale Dateizuordnung (manuell)" in source
+    assert source.count("expanded=False") >= 4
     # Kein Query-Parameter als Produktionsauslöser
     assert 'query_params.get("smoke_action"' not in source
     assert "st.query_params" not in source
