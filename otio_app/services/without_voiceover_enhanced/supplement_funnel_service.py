@@ -930,6 +930,11 @@ def run_supplement_funnel_for_gaps(
 
         if report.stopped:
             preview_bytes.clear()
+            gap_report.candidates = records
+            gap_report.message = "Abgebrochen während Thumbnailprüfung."
+            if gap.gap_id not in report.open_gap_ids:
+                report.open_gap_ids.append(gap.gap_id)
+            _upsert_gap_report(report, gap_report)
             break
         if gap.gap_id in report.open_gap_ids and gap_report.message.startswith(
             "Thumbnail"

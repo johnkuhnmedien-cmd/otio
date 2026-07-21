@@ -57,7 +57,26 @@ def _select_gaps_in_multiselect(page, gap_ids: list[str]) -> None:
 
 
 def _wait_progress(page, text: str, timeout: int = 180000) -> None:
-    page.wait_for_selector(f"text={text}", timeout=timeout)
+    """Wartet auf Fortschrittstext; klickt bei Bedarf Aktualisieren (Hintergrund-Job)."""
+    import time
+
+    deadline = time.time() + (timeout / 1000.0)
+    while time.time() < deadline:
+        try:
+            if page.get_by_text(text, exact=False).count() > 0:
+                return
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            btn = page.get_by_role("button", name="Aktualisieren")
+            if btn.count() > 0:
+                btn.first.click()
+                page.wait_for_timeout(400)
+                continue
+        except Exception:  # noqa: BLE001
+            pass
+        page.wait_for_timeout(500)
+    page.wait_for_selector(f"text={text}", timeout=5_000)
 
 
 def _export_otio(project_root: Path) -> Path:

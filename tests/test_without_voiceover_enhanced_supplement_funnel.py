@@ -762,6 +762,11 @@ def test_ui_two_funnel_buttons_and_gap_keys() -> None:
     assert "enh_funnel_model_" in source
     assert "model=funnel_model_id" in source
     assert "enhanced_supplement_funnel" in source
+    # Hintergrund-Job + Abbrechen
+    assert "get_supplement_funnel_job_manager" in source
+    assert "Funnel abbrechen" in source
+    assert "request_cancel" in source
+    assert "funnel_job_mgr.start" in source
     # Kein Query-Parameter als Produktionsauslöser
     assert 'query_params.get("smoke_action"' not in source
     assert "st.query_params" not in source
@@ -1990,9 +1995,9 @@ def test_ui_multiselect_project_scoped_and_same_service() -> None:
     assert 'f"enh_funnel_gap_multiselect_{project.id}"' in source
     assert "st.pills(" in source
     assert 'selection_mode="multi"' in source
-    assert "run_supplement_funnel_for_gaps" in source
-    # Beide Buttons rufen denselben Helper / Service
-    assert source.count("_run_funnel_with_gap_ids(") >= 3
+    # Beide Buttons starten denselben Hintergrund-Job-Helper
+    assert source.count("_start_funnel_job(") >= 3
+    assert "get_supplement_funnel_job_manager" in source
     assert "list_open_funnel_gap_ids(project)" in source
     assert "Mehrfachauswahl wird ignoriert" in source
     svc = Path(
@@ -2001,6 +2006,11 @@ def test_ui_multiselect_project_scoped_and_same_service() -> None:
     assert "select_provider_balanced_candidates" in svc
     assert "full_review_llm" in svc
     assert "del full_review_llm" in svc
+    job = Path(
+        "otio_app/services/without_voiceover_enhanced/supplement_funnel_job.py"
+    ).read_text(encoding="utf-8")
+    assert "funnel_svc.run_supplement_funnel_for_gaps" in job
+    assert "should_stop=should_cancel" in job
 
 
 def test_historical_funnel_report_without_pool_fields_readable() -> None:
@@ -2023,6 +2033,89 @@ def test_historical_funnel_report_without_pool_fields_readable() -> None:
     assert report.llm_model == ""
     gap = SupplementFunnelGapReport.model_validate({"gap_id": "gap_x"})
     assert gap.candidate_pool_limit == 20
+
+
+def test_funnel_job_cancel_stops_between_gaps(tmp_path: Path, monkeypatch) -> None:
+    import threading
+    import time
+
+    import otio_app.services.without_voiceover_enhanced.supplement_funnel_service as funnel_svc
+    from otio_app.services.without_voiceover_enhanced.models import (
+        SupplementFunnelReport,
+    )
+    from otio_app.services.without_voiceover_enhanced.supplement_funnel_job import (
+        JobStatus,
+        SupplementFunnelJobManager,
+    )
+    from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
+        FunnelProgressEvent,
+    )
+
+    project = _project(tmp_path)
+    manager = SupplementFunnelJobManager()
+    started_gaps: list[str] = []
+    block_second = threading.Event()
+    release_second = threading.Event()
+
+    def fake_run(project_arg, **kwargs):
+        del project_arg
+        gap_ids = list(kwargs.get("gap_ids") or [])
+        cb = kwargs.get("progress_callback")
+        should_stop = kwargs.get("should_stop")
+        report = SupplementFunnelReport(
+            run_id="job_cancel_test",
+            script_version="script-v1",
+            requested_gap_ids=gap_ids,
+            llm_model=kwargs.get("model") or "",
+        )
+        for index, gap_id in enumerate(gap_ids, start=1):
+            if should_stop and should_stop():
+                report.stopped = True
+                break
+            started_gaps.append(gap_id)
+            if cb:
+                cb(
+                    FunnelProgressEvent(
+                        phase="gap_start",
+                        gap_id=gap_id,
+                        gap_index=index,
+                        gap_total=len(gap_ids),
+                        message=f"Gap {index}/{len(gap_ids)}",
+                        fraction=(index - 1) / max(1, len(gap_ids)),
+                    )
+                )
+            if index == 1:
+                report.filled_gap_ids.append(gap_id)
+                time.sleep(0.05)
+                block_second.set()
+                release_second.wait(timeout=2)
+            if should_stop and should_stop():
+                report.stopped = True
+                break
+        report.message = "done" + (" · abgebrochen" if report.stopped else "")
+        return report
+
+    monkeypatch.setattr(funnel_svc, "run_supplement_funnel_for_gaps", fake_run)
+
+    assert manager.start(
+        project, gap_ids=["gap_1", "gap_2"], model="gemini-3.1-flash-lite"
+    )
+    assert block_second.wait(timeout=2)
+    assert manager.request_cancel(project.id)
+    release_second.set()
+
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        state = manager.get_state(project.id)
+        if state is not None and state.status != JobStatus.RUNNING:
+            break
+        time.sleep(0.05)
+    state = manager.get_state(project.id)
+    assert state is not None
+    assert state.status == JobStatus.CANCELLED
+    assert started_gaps == ["gap_1"]
+    assert state.report is not None
+    assert state.report.stopped is True
 
 
 def test_funnel_records_selected_llm_model(tmp_path: Path) -> None:

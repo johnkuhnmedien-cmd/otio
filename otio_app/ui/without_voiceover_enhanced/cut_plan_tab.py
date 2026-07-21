@@ -36,12 +36,14 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     merge_and_persist_rough_cuts,
     search_supplements_for_gaps,
 )
-from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
-    FunnelProgressEvent,
-    SupplementFunnelError,
-    list_open_funnel_gap_ids,
-    run_supplement_funnel_for_gaps,
+from otio_app.services.without_voiceover_enhanced.supplement_funnel_job import (
+    JobStatus as FunnelJobStatus,
+    get_supplement_funnel_job_manager,
 )
+from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
+    list_open_funnel_gap_ids,
+)
+from otio_app.ui.polling import poll_while_running
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_locked_script,
 )
@@ -589,43 +591,86 @@ def render_enhanced_cut_plan_page() -> None:
             if select_key in st.session_state:
                 del st.session_state[select_key]
 
-        def _run_funnel_with_gap_ids(gap_ids: list[str]) -> None:
-            progress_bar = st.progress(0.0, text="Funnel startet…")
-            status_box = st.empty()
-            log_box = st.empty()
-            log_lines: list[str] = []
+        funnel_job_mgr = get_supplement_funnel_job_manager()
+        funnel_running = funnel_job_mgr.is_running(project.id)
 
-            def _funnel_progress(event: FunnelProgressEvent) -> None:
-                label = event.message or event.phase
-                progress_bar.progress(
-                    min(1.0, max(0.0, float(event.fraction))),
-                    text=label[:120],
-                )
-                status_box.info(label)
-                log_lines.append(label)
-                log_box.caption("\n".join(log_lines[-14:]))
-
-            funnel_report = run_supplement_funnel_for_gaps(
+        def _start_funnel_job(gap_ids: list[str]) -> None:
+            started = funnel_job_mgr.start(
                 project,
                 gap_ids=gap_ids,
-                progress_callback=_funnel_progress,
                 model=funnel_model_id,
             )
-            progress_bar.progress(1.0, text=funnel_report.message)
-            status_box.success(funnel_report.message)
+            if not started:
+                st.warning("Funnel läuft bereits — bitte Abbrechen oder warten.")
+            st.rerun()
+
+        def _render_funnel_job_panel() -> None:
+            state = funnel_job_mgr.get_state(project.id)
+            if state is None:
+                return
+            if state.status == FunnelJobStatus.RUNNING:
+                st.progress(
+                    min(1.0, max(0.0, float(state.fraction))),
+                    text=(state.message or "Funnel läuft…")[:120],
+                )
+                st.info(state.message or "Funnel läuft im Hintergrund…")
+                if state.model:
+                    st.caption(f"Modell: `{state.model}`")
+                if state.cancel_requested:
+                    st.warning(
+                        "Abbruch angefordert — aktueller LLM-/Download-Schritt "
+                        "wird noch beendet, danach stoppt der Funnel."
+                    )
+                if st.button(
+                    "⏹ Funnel abbrechen",
+                    key=f"enh_funnel_cancel_{project.id}",
+                    disabled=state.cancel_requested,
+                    type="primary",
+                ):
+                    funnel_job_mgr.request_cancel(project.id)
+                    st.rerun()
+                if state.log_lines:
+                    st.caption("\n".join(state.log_lines[-14:]))
+                return
+
+            if state.status == FunnelJobStatus.CANCELLED:
+                st.warning(
+                    state.message
+                    or "Funnel abgebrochen. Bereits erfüllte Gaps bleiben erhalten."
+                )
+            elif state.status == FunnelJobStatus.FAILED:
+                st.error(state.error or "Funnel fehlgeschlagen.")
+            elif state.status == FunnelJobStatus.COMPLETED:
+                st.success(state.message or "Funnel abgeschlossen.")
+
             # Erfüllte Gaps aus der Mehrfachauswahl entfernen.
-            if select_key in st.session_state:
+            if state.report is not None and select_key in st.session_state:
                 current_sel = st.session_state.get(select_key) or []
                 if isinstance(current_sel, list):
-                    filled = set(funnel_report.filled_gap_ids or [])
+                    filled = set(state.report.filled_gap_ids or [])
                     st.session_state[select_key] = [
                         gid for gid in current_sel if gid not in filled
                     ]
-            st.rerun()
+            if st.button(
+                "Hinweis schließen",
+                key=f"enh_funnel_dismiss_{project.id}",
+            ):
+                funnel_job_mgr.dismiss(project.id)
+                st.rerun()
+
+        funnel_state = funnel_job_mgr.get_state(project.id)
+        if funnel_state is not None and funnel_state.status == FunnelJobStatus.RUNNING:
+            poll_while_running(
+                _render_funnel_job_panel,
+                lambda: funnel_job_mgr.is_running(project.id),
+                refresh_key=f"enh_funnel_poll_{project.id}",
+            )
+        elif funnel_state is not None:
+            _render_funnel_job_panel()
 
         cols_funnel = st.columns(2)
         with cols_funnel[0]:
-            all_disabled = not open_gap_ids
+            all_disabled = (not open_gap_ids) or funnel_running
             if st.button(
                 "Alle offenen Gaps automatisch auflösen",
                 type="primary",
@@ -633,41 +678,32 @@ def render_enhanced_cut_plan_page() -> None:
                 disabled=all_disabled,
                 help=(
                     "Verarbeitet alle aktuell offenen Coverage Gaps sequenziell. "
-                    "Mehrfachauswahl wird ignoriert."
+                    "Mehrfachauswahl wird ignoriert. Läuft im Hintergrund — "
+                    "Abbrechen möglich."
                 ),
             ):
-                try:
-                    # Auswahl bewusst ignorieren — frische Open-Liste.
-                    _run_funnel_with_gap_ids(list_open_funnel_gap_ids(project))
-                except SupplementFunnelError as exc:
-                    st.error(str(exc))
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Fehler: {exc}")
+                # Auswahl bewusst ignorieren — frische Open-Liste.
+                _start_funnel_job(list_open_funnel_gap_ids(project))
         with cols_funnel[1]:
-            selected_disabled = not selected_open_ids
+            selected_disabled = (not selected_open_ids) or funnel_running
             if st.button(
                 "Ausgewählte Gaps automatisch auflösen",
                 key="enh_funnel_selected",
                 disabled=selected_disabled,
                 help=(
                     "Verarbeitet nur ausgewählte offene Gaps. "
-                    "Gleicher Funnel-Service wie „Alle“."
+                    "Gleicher Funnel-Service wie „Alle“. Läuft im Hintergrund."
                 ),
             ):
-                try:
-                    # Nur noch gültige offene IDs (Session kann veraltet sein).
-                    current_open = set(list_open_funnel_gap_ids(project))
-                    valid_selected = [
-                        gid for gid in selected_open_ids if gid in current_open
-                    ]
-                    if not valid_selected:
-                        st.warning("Keine gültige Gap-Auswahl.")
-                    else:
-                        _run_funnel_with_gap_ids(valid_selected)
-                except SupplementFunnelError as exc:
-                    st.error(str(exc))
-                except Exception as exc:  # noqa: BLE001
-                    st.error(f"Fehler: {exc}")
+                # Nur noch gültige offene IDs (Session kann veraltet sein).
+                current_open = set(list_open_funnel_gap_ids(project))
+                valid_selected = [
+                    gid for gid in selected_open_ids if gid in current_open
+                ]
+                if not valid_selected:
+                    st.warning("Keine gültige Gap-Auswahl.")
+                else:
+                    _start_funnel_job(valid_selected)
 
         candidate_count = len(results.candidates)
         with st.expander(
