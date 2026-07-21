@@ -246,6 +246,99 @@ class SupplementResolveReport(BaseModel):
     stopped: bool = False
 
 
+# Additive Funnel-Status (ohne bestehende Provider-Status zu ändern).
+FUNNEL_STATUSES = (
+    "discovered",
+    "text_ranked",
+    "thumbnail_pending",
+    "thumbnail_unavailable",
+    "thumbnail_scored",
+    "finalist",
+    "download_pending",
+    "download_failed",
+    "local_media_invalid",
+    "technically_valid",
+    "full_review_rejected",
+    "manual_review_required",
+    "review_ready",
+    "selected",
+    "license_review_required",
+    "export_ready",
+)
+
+
+class FunnelTextScores(BaseModel):
+    text_relevance: int = 0
+    metadata_quality: int = 0
+    media_type_fit: int = 0
+    license_metadata_quality: int = 0
+    misrepresentation_risk: int = 0
+    reason: str = ""
+
+
+class FunnelThumbnailScores(BaseModel):
+    semantic_fit: int = 0
+    editorial_function_fit: int = 0
+    style_fit: int = 0
+    continuity_fit: int = 0
+    composition_quality: int = 0
+    visual_quality: int = 0
+    misrepresentation_risk: int = 0
+    reason: str = ""
+
+
+class FunnelCandidateRecord(BaseModel):
+    candidate_id: str
+    provider: str = ""
+    provider_asset_id: str = ""
+    funnel_status: str = "discovered"
+    text_scores: FunnelTextScores = Field(default_factory=FunnelTextScores)
+    thumbnail_scores: FunnelThumbnailScores = Field(
+        default_factory=FunnelThumbnailScores
+    )
+    preliminary_score: float = 0.0
+    final_score: Optional[int] = None
+    rank: Optional[int] = None
+    decision: str = ""
+    reason: str = ""
+    preview_status: str = "thumbnail_pending"
+    download_status: str = "not_started"
+    review_status: str = "not_reviewed"
+    local_media_path: Optional[str] = None
+    sha256: Optional[str] = None
+    license_name: Optional[str] = None
+    license_url: Optional[str] = None
+    creator: Optional[str] = None
+    source_page: Optional[str] = None
+    attribution: Optional[str] = None
+    fetched_at: Optional[str] = None
+    excluded: bool = False
+    exclude_reason: str = ""
+
+
+class SupplementFunnelGapReport(BaseModel):
+    gap_id: str
+    run_id: str = ""
+    inventory_reuse_ids: list[str] = Field(default_factory=list)
+    candidates: list[FunnelCandidateRecord] = Field(default_factory=list)
+    winner_candidate_id: Optional[str] = None
+    review_ready_candidate_id: Optional[str] = None
+    message: str = ""
+
+
+class SupplementFunnelReport(BaseModel):
+    schema_version: str = "enhanced-supplement-funnel-v1"
+    run_id: str = ""
+    script_version: str = ""
+    max_candidates_per_gap: int = 20
+    max_full_download_attempts_per_gap: int = 3
+    gaps: list[SupplementFunnelGapReport] = Field(default_factory=list)
+    skipped_gap_ids: list[str] = Field(default_factory=list)
+    open_gap_ids: list[str] = Field(default_factory=list)
+    message: str = ""
+    stopped: bool = False
+
+
 class AcceptedSupplementsDocument(BaseModel):
     schema_version: str = "enhanced-accepted-supplements-v1"
     script_version: str

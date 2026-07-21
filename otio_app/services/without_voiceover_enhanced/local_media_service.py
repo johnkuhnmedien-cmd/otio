@@ -21,6 +21,7 @@ from otio_app.services.without_voiceover_enhanced.paths import accepted_suppleme
 STATUS_SELECTED = "selected"
 STATUS_LOCAL_MEDIA_MISSING = "local_media_missing"
 STATUS_LOCAL_MEDIA_INVALID = "local_media_invalid"
+STATUS_LICENSE_REVIEW_REQUIRED = "license_review_required"
 STATUS_EXPORT_READY = "export_ready"
 
 # Supplements im Enhanced-Modell: photo/image/video (kein Audio).
@@ -262,6 +263,16 @@ def validate_local_media_path(
     )
 
 
+def license_metadata_complete(candidate: StockCandidate) -> bool:
+    """Separates Lizenz-Gate — LLM darf Lizenz nicht aus Bildern ableiten."""
+    provider = (candidate.provider or "").strip().lower()
+    has_license = bool((candidate.license or "").strip())
+    has_source = bool((candidate.source_page or "").strip())
+    if provider == "archive_org":
+        return has_source
+    return has_license and has_source
+
+
 def refresh_supplement_validation(candidate: StockCandidate) -> StockCandidate:
     if not candidate.selected and not candidate.local_media_path:
         candidate.media_validation_status = STATUS_SELECTED
@@ -280,6 +291,19 @@ def refresh_supplement_validation(candidate: StockCandidate) -> StockCandidate:
     )
     candidate.media_validation_status = status
     candidate.media_validation_error = error
+    return candidate
+
+
+def apply_license_export_gate(candidate: StockCandidate) -> StockCandidate:
+    """Funnel/Lizenz-Gate: technisch gültig, aber Lizenz unvollständig → kein export_ready."""
+    candidate = refresh_supplement_validation(candidate)
+    if candidate.media_validation_status != STATUS_EXPORT_READY:
+        return candidate
+    if not license_metadata_complete(candidate):
+        candidate.media_validation_status = STATUS_LICENSE_REVIEW_REQUIRED
+        candidate.media_validation_error = (
+            "Lizenzmetadaten unvollständig — kein export_ready."
+        )
     return candidate
 
 

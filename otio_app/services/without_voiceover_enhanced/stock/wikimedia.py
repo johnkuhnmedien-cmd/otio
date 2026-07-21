@@ -39,7 +39,9 @@ class WikimediaStockProvider(StockProvider):
                 "gsrlimit": 8,
                 "gsrnamespace": 6,
                 "prop": "imageinfo",
+                # iiurlwidth liefert echte begrenzte Thumbnails (thumburl), kein Scraping.
                 "iiprop": "url|size|extmetadata|mime",
+                "iiurlwidth": 320,
             },
         )
         pages = (response.json().get("query") or {}).get("pages") or {}
@@ -57,6 +59,12 @@ class WikimediaStockProvider(StockProvider):
                 continue
             if requested in {"photo", "image", "illustration", "map"} and media != "photo":
                 continue
+            full_url = unknown_or_null(info.get("url")) or ""
+            # Nur echte Thumb-URL als Preview — niemals Vollmediendatei.
+            thumb_url = unknown_or_null(info.get("thumburl")) or ""
+            preview_url = ""
+            if thumb_url and thumb_url != full_url:
+                preview_url = thumb_url
             candidates.append(
                 StockCandidate(
                     candidate_id=f"wikimedia_{page.get('pageid', index)}",
@@ -66,8 +74,8 @@ class WikimediaStockProvider(StockProvider):
                     media_type=media,
                     creator=artist,
                     source_page=unknown_or_null(info.get("descriptionurl")) or "",
-                    preview_url=unknown_or_null(info.get("url")) or "",
-                    download_url=unknown_or_null(info.get("url")) or "",
+                    preview_url=preview_url,
+                    download_url=full_url,
                     width=info.get("width"),
                     height=info.get("height"),
                     duration_seconds=None,

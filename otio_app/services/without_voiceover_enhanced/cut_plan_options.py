@@ -14,7 +14,8 @@ from otio_app.services.without_voiceover_enhanced.paths import cut_plan_options_
 DEFAULT_MAX_MIDDLE_FRAMES_PER_CHAPTER = 40
 
 
-DEFAULT_MAX_CANDIDATES_PER_GAP = 5
+DEFAULT_MAX_CANDIDATES_PER_GAP = 20
+DEFAULT_MAX_FULL_DOWNLOAD_ATTEMPTS_PER_GAP = 3
 
 
 class CutPlanOptions(BaseModel):
@@ -26,11 +27,16 @@ class CutPlanOptions(BaseModel):
         ge=1,
         le=200,
     )
-    # Sequenzielle Supplement-Auflösung: Top-N Kandidaten pro Gap.
+    # Supplement-Funnel: Top-N Kandidaten pro Gap (Text + Thumbnail).
     max_candidates_per_gap: int = Field(
         default=DEFAULT_MAX_CANDIDATES_PER_GAP,
         ge=1,
         le=20,
+    )
+    max_full_download_attempts_per_gap: int = Field(
+        default=DEFAULT_MAX_FULL_DOWNLOAD_ATTEMPTS_PER_GAP,
+        ge=1,
+        le=3,
     )
 
 
@@ -58,6 +64,13 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
                 defaults.max_candidates_per_gap,
             )
             or defaults.max_candidates_per_gap
+        ),
+        max_full_download_attempts_per_gap=int(
+            raw.get(
+                "max_full_download_attempts_per_gap",
+                defaults.max_full_download_attempts_per_gap,
+            )
+            or defaults.max_full_download_attempts_per_gap
         ),
     )
 

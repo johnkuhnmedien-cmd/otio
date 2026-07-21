@@ -27,6 +27,7 @@ COVERAGE_GAPS_FILENAME = "coverage_gaps.json"
 STOCK_SEARCH_RESULTS_FILENAME = "search_results.json"
 ACCEPTED_SUPPLEMENTS_FILENAME = "accepted_supplements.json"
 SUPPLEMENT_RESOLVE_REPORT_FILENAME = "supplement_resolve_report.json"
+SUPPLEMENT_FUNNEL_REPORT_FILENAME = "supplement_funnel_report.json"
 STOCK_DOWNLOADS_SUBDIR = "downloads"
 FINAL_CUT_PLAN_FILENAME = "final_cut_plan.json"
 RESOLVED_TIMELINE_FILENAME = "resolved_timeline.json"
@@ -134,6 +135,10 @@ def accepted_supplements_path(project: Project) -> Path:
 
 def supplement_resolve_report_path(project: Project) -> Path:
     return stock_dir(project) / SUPPLEMENT_RESOLVE_REPORT_FILENAME
+
+
+def supplement_funnel_report_path(project: Project) -> Path:
+    return stock_dir(project) / SUPPLEMENT_FUNNEL_REPORT_FILENAME
 
 
 def stock_downloads_dir(project: Project) -> Path:

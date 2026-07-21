@@ -39,6 +39,12 @@ from otio_app.services.without_voiceover_enhanced.supplement_resolve_service imp
     SupplementResolveProgressEvent,
     resolve_supplements_for_gaps,
 )
+from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
+    FunnelProgressEvent,
+    SupplementFunnelError,
+    confirm_funnel_candidate,
+    run_supplement_funnel_for_gaps,
+)
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_locked_script,
 )
@@ -57,6 +63,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
     RoughCutPlanDocument,
     StockCandidate,
     StockSearchResultsDocument,
+    SupplementFunnelReport,
     SupplementResolveReport,
 )
 from otio_app.ui.without_voiceover_enhanced.timeline_view import render_realtime_timeline
@@ -70,6 +77,7 @@ from otio_app.services.without_voiceover_enhanced.paths import (
     script_locked_path,
     segment_timings_path,
     stock_search_results_path,
+    supplement_funnel_report_path,
     supplement_resolve_report_path,
 )
 from otio_app.services.without_voiceover_enhanced.stock_provider_config import (
@@ -597,7 +605,7 @@ def render_enhanced_cut_plan_page() -> None:
                 st.session_state[resolve_key] = resolve_run
                 st.error(f"Fehler: {exc}")
         else:
-            cols_stock = st.columns(2)
+            cols_stock = st.columns(3)
             with cols_stock[0]:
                 if st.button("Auswahl akzeptieren", key="enh_accept_stock"):
                     try:
@@ -614,14 +622,49 @@ def render_enhanced_cut_plan_page() -> None:
                         st.error(str(exc))
             with cols_stock[1]:
                 if st.button(
-                    "Supplements sequenziell prüfen",
+                    "20 Kandidaten vorprüfen",
                     type="primary",
+                    key="enh_funnel_stock",
+                    help=(
+                        "Funnel: Text → Thumbnails (2×10) → Finalvergleich → "
+                        "nur Rang 1 downloaden. Keine Auto-Auswahl; "
+                        "review_ready erfordert manuelle Freigabe."
+                    ),
+                ):
+                    try:
+                        progress_bar = st.progress(0.0, text="Funnel startet…")
+                        status_box = st.empty()
+                        log_box = st.empty()
+                        log_lines: list[str] = []
+
+                        def _funnel_progress(event: FunnelProgressEvent) -> None:
+                            label = event.message or event.phase
+                            progress_bar.progress(
+                                min(1.0, max(0.0, float(event.fraction))),
+                                text=label[:120],
+                            )
+                            status_box.info(label)
+                            log_lines.append(label)
+                            log_box.caption("\n".join(log_lines[-14:]))
+
+                        funnel_report = run_supplement_funnel_for_gaps(
+                            project,
+                            progress_callback=_funnel_progress,
+                        )
+                        progress_bar.progress(1.0, text=funnel_report.message)
+                        status_box.success(funnel_report.message)
+                        st.rerun()
+                    except SupplementFunnelError as exc:
+                        st.error(str(exc))
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Fehler: {exc}")
+            with cols_stock[2]:
+                if st.button(
+                    "Supplements sequenziell prüfen",
                     key="enh_resolve_stock",
                     help=(
-                        "Pro Gap: Top-5 Kandidaten nacheinander downloaden, "
-                        "Frames extrahieren, per Gemini prüfen. "
-                        "PASS → Inventar; FAIL → Dateien löschen. "
-                        "Stoppen mit „Prüfung stoppen“."
+                        "Legacy: Top-N nacheinander downloaden. "
+                        "Bevorzugt: „20 Kandidaten vorprüfen“."
                     ),
                 ):
                     gap_ids = (
@@ -641,6 +684,69 @@ def render_enhanced_cut_plan_page() -> None:
                         }
                         st.rerun()
 
+        funnel_report = load_model(
+            supplement_funnel_report_path(project),
+            SupplementFunnelReport,
+        )
+        if funnel_report is not None:
+            st.markdown("**Funnel-Ergebnis**")
+            st.caption(funnel_report.message)
+            for gap_rep in funnel_report.gaps:
+                ranked = sorted(
+                    [c for c in gap_rep.candidates if c.rank is not None],
+                    key=lambda c: c.rank or 999,
+                )
+                winner = next(
+                    (c for c in ranked if c.decision == "winner"),
+                    ranked[0] if ranked else None,
+                )
+                st.write(
+                    f"`{gap_rep.gap_id}` · {gap_rep.message}"
+                    + (
+                        f" · Inventar-Reuse: {', '.join(gap_rep.inventory_reuse_ids[:5])}"
+                        if gap_rep.inventory_reuse_ids
+                        else ""
+                    )
+                )
+                if winner is not None:
+                    st.caption(
+                        f"Gewinner/Rang1: `{winner.candidate_id}` · "
+                        f"final={winner.final_score} · "
+                        f"prelim={winner.preliminary_score:.1f} · "
+                        f"status={winner.funnel_status} · "
+                        f"preview={winner.preview_status}"
+                    )
+                for cand in ranked[:5]:
+                    st.caption(
+                        f"  #{cand.rank} `{cand.candidate_id}` · "
+                        f"{cand.decision or '-'} · "
+                        f"final={cand.final_score} · {cand.funnel_status}"
+                        + (f" — {cand.reason[:80]}" if cand.reason else "")
+                    )
+                review_id = gap_rep.review_ready_candidate_id
+                if review_id:
+                    if st.button(
+                        f"Manuell freigeben: {review_id}",
+                        key=f"enh_funnel_confirm_{project.id}_{gap_rep.gap_id}_{review_id}",
+                    ):
+                        try:
+                            confirmed = confirm_funnel_candidate(
+                                project,
+                                gap_id=gap_rep.gap_id,
+                                candidate_id=review_id,
+                            )
+                            st.success(
+                                f"{confirmed.candidate_id} → "
+                                f"{confirmed.media_validation_status}"
+                            )
+                            st.rerun()
+                        except SupplementFunnelError as exc:
+                            st.error(str(exc))
+            if funnel_report.open_gap_ids:
+                st.warning(
+                    "Offene Gaps: " + ", ".join(funnel_report.open_gap_ids[:12])
+                )
+
         resolve_report = load_model(
             supplement_resolve_report_path(project),
             SupplementResolveReport,
@@ -648,7 +754,7 @@ def render_enhanced_cut_plan_page() -> None:
         if resolve_report is not None:
             stopped_note = " · abgebrochen" if resolve_report.stopped else ""
             st.caption(
-                f"Letzter Resolve: {resolve_report.message} · "
+                f"Letzter Legacy-Resolve: {resolve_report.message} · "
                 f"Top-N={resolve_report.max_candidates_per_gap}{stopped_note}"
             )
 
