@@ -1,8 +1,9 @@
-"""Automatischer Supplement-Funnel: Text → Thumbnail → Download → Tech → Lizenz.
+"""Automatischer Supplement-Funnel: Text → Thumbnail → Download → Tech.
 
 Semantische Auswahl endet mit dem Thumbnail-Ranking.
 Nach dem Voll-Download: keine zweite LLM-Prüfung, keine Frame-Extraktion,
-keine manuelle Freigabe. Technisch gültig + Lizenzmetadaten → auto export_ready.
+keine manuelle Freigabe. Technisch gültig → auto export_ready.
+Lizenzmetadaten werden bestmöglich gespeichert, blockieren aber nicht.
 """
 
 from __future__ import annotations
@@ -26,9 +27,8 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
     STATUS_EXPORT_READY,
-    STATUS_LICENSE_REVIEW_REQUIRED,
     apply_license_export_gate,
-    license_metadata_complete,
+    classify_license_metadata_status,
     list_export_ready_supplements,
     validate_local_media_path,
 )
@@ -97,6 +97,7 @@ __all__ = [
     "SupplementFunnelError",
     "confirm_funnel_candidate",
     "download_full_candidate_safe",
+    "list_open_funnel_gap_ids",
     "run_full_content_review",
     "run_supplement_funnel_for_gaps",
 ]
@@ -406,29 +407,7 @@ def confirm_funnel_candidate(
     candidate.funnel_managed = True
     record.funnel_status = transition(record.funnel_status, "selected")
     record.review_status = "accepted"
-
-    candidate.media_validation_status = STATUS_EXPORT_READY
-    candidate.media_validation_error = None
     candidate = apply_license_export_gate(candidate)
-    if candidate.media_validation_status == STATUS_LICENSE_REVIEW_REQUIRED:
-        record.funnel_status = transition(
-            record.funnel_status, "license_review_required"
-        )
-        write_json(supplement_funnel_report_path(project), report)
-        locked = require_locked_script(project)
-        existing = load_model(
-            accepted_supplements_path(project), AcceptedSupplementsDocument
-        )
-        supplements = list(existing.supplements) if existing else []
-        supplements = [s for s in supplements if s.candidate_id != candidate_id]
-        supplements.append(candidate)
-        write_json(
-            accepted_supplements_path(project),
-            AcceptedSupplementsDocument(
-                script_version=locked.script_version, supplements=supplements
-            ),
-        )
-        return candidate
 
     return _persist_export_ready(
         project,
@@ -461,15 +440,22 @@ def _persist_export_ready(
     record.sha256 = file_sha256(media_path)
     record.fetched_at = record.fetched_at or _utcnow()
     record.license_name = candidate.license
+    record.license_url = getattr(candidate, "license_url", None)
     record.source_page = candidate.source_page
     record.creator = candidate.creator
     record.attribution = candidate.attribution
+    license_status = classify_license_metadata_status(candidate)
+    record.license_metadata_status = license_status
+    gap_report.license_metadata_status = license_status
+    if license_status != "complete":
+        report.license_incomplete_count += 1
 
     candidate.local_media_path = str(media_path)
     candidate.selected = True
     candidate.funnel_managed = True
     candidate.media_validation_status = STATUS_EXPORT_READY
     candidate.media_validation_error = None
+    candidate.license_metadata_status = license_status
     candidate.gap_id = gap_id
 
     locked = require_locked_script(project)
@@ -534,7 +520,11 @@ def _try_auto_accept_candidate(
     gap_index: int,
     gap_total: int,
 ) -> str:
-    """Technik + Lizenz prüfen. Rückgabe: accepted | local_media_invalid | license_incomplete."""
+    """Technische Prüfung. Rückgabe: accepted | local_media_invalid.
+
+    Lizenzmetadaten werden gespeichert, blockieren aber nicht (R3).
+    """
+    del locked  # Kontext nur für Signatur-Kompatibilität
     _emit(
         progress_callback,
         FunnelProgressEvent(
@@ -558,53 +548,18 @@ def _try_auto_accept_candidate(
     record.local_media_path = str(media_path)
     record.sha256 = file_sha256(media_path)
     record.fetched_at = _utcnow()
+    # Vorhandene Herkunfts-/Lizenzdaten speichern — nichts erfinden.
     record.license_name = candidate.license
+    record.license_url = getattr(candidate, "license_url", None)
     record.source_page = candidate.source_page
     record.creator = candidate.creator
     record.attribution = candidate.attribution
-
-    _emit(
-        progress_callback,
-        FunnelProgressEvent(
-            phase="license",
-            gap_id=gap.gap_id,
-            gap_index=gap_index,
-            gap_total=gap_total,
-            message=f"Gap {gap_index}/{gap_total} · Lizenzprüfung",
-            fraction=(gap_index - 0.08) / max(1, gap_total),
-        ),
-    )
+    record.license_metadata_status = classify_license_metadata_status(candidate)
 
     candidate.local_media_path = str(media_path)
     candidate.selected = True
     candidate.funnel_managed = True
-    if not license_metadata_complete(candidate):
-        record.funnel_status = transition(
-            record.funnel_status, "license_metadata_incomplete"
-        )
-        record.download_status = "license_incomplete"
-        record.reason = "license_metadata_incomplete"
-        record.local_media_path = None
-        record.sha256 = None
-        _cleanup_candidate_dir(media_path)
-        return "license_incomplete"
-
-    # Explizites Gate (setzt export_ready oder license_review_required).
-    candidate.media_validation_status = STATUS_EXPORT_READY
-    candidate.media_validation_error = None
     candidate = apply_license_export_gate(candidate)
-    if candidate.media_validation_status != STATUS_EXPORT_READY:
-        record.funnel_status = transition(
-            record.funnel_status, "license_metadata_incomplete"
-        )
-        record.download_status = "license_incomplete"
-        record.reason = (
-            candidate.media_validation_error or "license_metadata_incomplete"
-        )
-        record.local_media_path = None
-        record.sha256 = None
-        _cleanup_candidate_dir(media_path)
-        return "license_incomplete"
 
     _persist_export_ready(
         project,
@@ -631,11 +586,53 @@ def _try_auto_accept_candidate(
     return "accepted"
 
 
+def list_open_funnel_gap_ids(project: Project) -> list[str]:
+    """Offene Coverage-Gap-IDs in Coverage-Dokument-Reihenfolge."""
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    if coverage is None or not coverage.gaps:
+        return []
+    previous = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
+    open_ids: list[str] = []
+    for gap in coverage.gaps:
+        if not _gap_already_export_ready(
+            previous, gap_id=gap.gap_id, project=project
+        ):
+            open_ids.append(gap.gap_id)
+    return open_ids
+
+
+def _resolve_requested_gaps(
+    coverage: CoverageGapsDocument,
+    *,
+    gap_ids: list[str] | None,
+    only_gap_ids: list[str] | None,
+) -> list[CoverageGap]:
+    """Validiert und ordnet angeforderte Gap-IDs deterministisch."""
+    requested = gap_ids if gap_ids is not None else only_gap_ids
+    if requested is None:
+        return list(coverage.gaps)
+    by_id = {g.gap_id: g for g in coverage.gaps}
+    ordered: list[CoverageGap] = []
+    seen: set[str] = set()
+    for raw in requested:
+        gid = str(raw or "").strip()
+        if not gid:
+            raise SupplementFunnelError("Leere Gap-ID ist nicht erlaubt.")
+        if gid in seen:
+            raise SupplementFunnelError(f"Doppelte Gap-ID: {gid}")
+        if gid not in by_id:
+            raise SupplementFunnelError(f"Unbekannte Gap-ID: {gid}")
+        seen.add(gid)
+        ordered.append(by_id[gid])
+    return ordered
+
+
 def run_supplement_funnel_for_gaps(
     project: Project,
     *,
     max_candidates_per_gap: int | None = None,
     max_full_download_attempts: int | None = None,
+    gap_ids: list[str] | None = None,
     only_gap_ids: list[str] | None = None,
     skip_filled: bool = True,
     force_restart: bool = False,
@@ -649,9 +646,10 @@ def run_supplement_funnel_for_gaps(
 ) -> SupplementFunnelReport:
     """Haupt-Orchestrierung: Thumbnail-Ranking ist letzte semantische Stufe.
 
-    ``full_review_llm`` wird ignoriert (API-Kompatibilität) — kein zweiter LLM-Call.
+    ``gap_ids`` (bevorzugt) oder ``only_gap_ids``: explizite Gap-Liste.
+    ``full_review_llm`` wird ignoriert — kein zweiter LLM-Call.
     """
-    del full_review_llm  # bewusst nicht verwendet (R2)
+    del full_review_llm  # bewusst nicht verwendet (R2/R3)
 
     locked = require_locked_script(project)
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
@@ -672,20 +670,19 @@ def run_supplement_funnel_for_gaps(
     max_downloads = max(1, min(3, max_downloads))
     enabled = set(enabled_provider_names(project))
 
+    gaps = _resolve_requested_gaps(
+        coverage, gap_ids=gap_ids, only_gap_ids=only_gap_ids
+    )
     run_id = f"funnel_{uuid.uuid4().hex[:12]}"
     report = SupplementFunnelReport(
         run_id=run_id,
         script_version=locked.script_version,
         max_candidates_per_gap=top_n,
         max_full_download_attempts_per_gap=max_downloads,
+        requested_gap_ids=[g.gap_id for g in gaps],
     )
 
     previous = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
-
-    gaps = list(coverage.gaps)
-    if only_gap_ids is not None:
-        wanted = {str(g).strip() for g in only_gap_ids}
-        gaps = [g for g in gaps if g.gap_id in wanted]
 
     total = len(gaps)
     for gap_index, gap in enumerate(gaps, start=1):
@@ -1030,11 +1027,7 @@ def run_supplement_funnel_for_gaps(
                 gap_report.technically_invalid_count += 1
                 report.technically_invalid_count += 1
                 continue
-            if outcome == "license_incomplete":
-                gap_report.license_incomplete_count += 1
-                report.license_incomplete_count += 1
-                continue
-            # accepted
+            # accepted (Lizenzstatus nur informativ)
             accepted_id = candidate.candidate_id
             break
 
@@ -1043,7 +1036,17 @@ def run_supplement_funnel_for_gaps(
 
         gap_report.candidates = records
         if accepted_id:
-            gap_report.message = f"export_ready: {accepted_id} (automatisch übernommen)"
+            license_note = ""
+            if gap_report.license_metadata_status == "partial":
+                license_note = " · Lizenzdaten teilweise vorhanden"
+            elif gap_report.license_metadata_status == "missing":
+                license_note = " · Keine Lizenzmetadaten geliefert"
+            elif gap_report.license_metadata_status == "complete":
+                license_note = " · Lizenzdaten vollständig"
+            gap_report.message = (
+                f"export_ready: {accepted_id} (automatisch übernommen)"
+                f"{license_note}"
+            )
             if gap.gap_id not in report.filled_gap_ids:
                 report.filled_gap_ids.append(gap.gap_id)
         else:
@@ -1055,11 +1058,11 @@ def run_supplement_funnel_for_gaps(
         _upsert_gap_report(report, gap_report)
 
     report.message = (
-        f"Funnel {run_id}: {len(report.filled_gap_ids)} Gaps erfüllt · "
+        f"Funnel {run_id}: {len(report.requested_gap_ids)} angefordert · "
+        f"{len(report.filled_gap_ids)} erfüllt · "
         f"{len(report.open_gap_ids)} offen · "
         f"{report.full_download_count} Voll-Downloads · "
         f"{report.technically_invalid_count} technisch ungültig · "
-        f"{report.license_incomplete_count} Lizenz unvollständig · "
         f"{report.fallback_used_count} Fallbacks"
         + (" · abgebrochen" if report.stopped else "")
     )

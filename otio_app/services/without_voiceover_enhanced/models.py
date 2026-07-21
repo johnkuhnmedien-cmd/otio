@@ -197,6 +197,7 @@ class StockCandidate(BaseModel):
     height: Optional[int] = None
     duration_seconds: Optional[float] = None
     license: Optional[str] = None
+    license_url: Optional[str] = None
     attribution: Optional[str] = None
     selected: bool = False
     gap_id: str = ""
@@ -206,8 +207,10 @@ class StockCandidate(BaseModel):
     # selected | local_media_missing | local_media_invalid |
     # license_review_required | export_ready
     media_validation_error: Optional[str] = None
-    # True = aus Supplement-Funnel freigegeben → Lizenz-Gate fail-closed.
+    # True = aus Supplement-Funnel übernommen (R3: Lizenz nur informativ).
     funnel_managed: bool = False
+    # Informativ: complete | partial | missing (blockiert export_ready nicht).
+    license_metadata_status: str = ""
 
 
 class StockSearchResultsDocument(BaseModel):
@@ -317,6 +320,8 @@ class FunnelCandidateRecord(BaseModel):
     source_page: Optional[str] = None
     attribution: Optional[str] = None
     fetched_at: Optional[str] = None
+    # Informativ: complete | partial | missing
+    license_metadata_status: str = ""
     excluded: bool = False
     exclude_reason: str = ""
 
@@ -333,23 +338,27 @@ class SupplementFunnelGapReport(BaseModel):
     filled: bool = False
     full_download_attempts: int = 0
     technically_invalid_count: int = 0
+    # Historisch (R2 Fail-Closed); R3 zählt nur noch informativ.
     license_incomplete_count: int = 0
+    license_metadata_status: str = ""
     fallback_used: bool = False
     message: str = ""
 
 
 class SupplementFunnelReport(BaseModel):
-    schema_version: str = "enhanced-supplement-funnel-v2"
+    schema_version: str = "enhanced-supplement-funnel-v3"
     run_id: str = ""
     script_version: str = ""
     max_candidates_per_gap: int = 20
     max_full_download_attempts_per_gap: int = 3
     gaps: list[SupplementFunnelGapReport] = Field(default_factory=list)
+    requested_gap_ids: list[str] = Field(default_factory=list)
     skipped_gap_ids: list[str] = Field(default_factory=list)
     open_gap_ids: list[str] = Field(default_factory=list)
     filled_gap_ids: list[str] = Field(default_factory=list)
     full_download_count: int = 0
     technically_invalid_count: int = 0
+    # Informativ: akzeptierte Kandidaten mit partial/missing Lizenzdaten.
     license_incomplete_count: int = 0
     fallback_used_count: int = 0
     message: str = ""

@@ -387,12 +387,17 @@ def _fake_text_llm(candidates: list[StockCandidate]):
 def _fake_vision_llm():
     def vision_llm(prompt: str, images: list[tuple[str, bytes]]) -> str:
         import json
+        import re
 
         ids = [label for label, _ in images]
+        gap_m = re.search(r"gap_id[=:]?\s*[\"']?([A-Za-z0-9_\-]+)", prompt)
+        if not gap_m:
+            gap_m = re.search(r"Coverage Gap:\s*([A-Za-z0-9_\-]+)", prompt)
+        gap_id = gap_m.group(1) if gap_m else "gap_1"
         if "Finalisten" in prompt or "finalists" in prompt.lower():
             return json.dumps(
                 {
-                    "gap_id": "gap_1",
+                    "gap_id": gap_id,
                     "finalists": [
                         {
                             "candidate_id": cid,
@@ -596,10 +601,11 @@ def test_no_llm_key_does_not_auto_accept(tmp_path: Path, monkeypatch) -> None:
     assert not accepted_supplements_path(project).is_file()
 
 
-def test_license_gate_blocks_export_ready(tmp_path: Path) -> None:
+def test_license_missing_does_not_block_export_ready(tmp_path: Path) -> None:
     from otio_app.services.without_voiceover_enhanced.local_media_service import (
-        STATUS_LICENSE_REVIEW_REQUIRED,
+        STATUS_EXPORT_READY,
         apply_license_export_gate,
+        classify_license_metadata_status,
         license_metadata_complete,
     )
 
@@ -611,20 +617,24 @@ def test_license_gate_blocks_export_ready(tmp_path: Path) -> None:
         provider_asset_id="1",
         media_type="photo",
         selected=True,
+        funnel_managed=True,
         license="",
         source_page="",
         local_media_path=str(media),
     )
     assert license_metadata_complete(cand) is False
+    assert classify_license_metadata_status(cand) == "missing"
     gated = apply_license_export_gate(cand)
-    assert gated.media_validation_status == STATUS_LICENSE_REVIEW_REQUIRED
+    assert gated.media_validation_status == STATUS_EXPORT_READY
+    assert gated.license_metadata_status == "missing"
 
 
-def test_funnel_license_gate_survives_refresh_assign_and_reload(tmp_path: Path) -> None:
+def test_license_partial_and_complete_status(tmp_path: Path) -> None:
     from otio_app.services.without_voiceover_enhanced.local_media_service import (
         STATUS_EXPORT_READY,
-        STATUS_LICENSE_REVIEW_REQUIRED,
+        apply_license_export_gate,
         assign_local_media_path,
+        classify_license_metadata_status,
         list_export_ready_supplements,
         refresh_supplement_validation,
     )
@@ -644,32 +654,28 @@ def test_funnel_license_gate_survives_refresh_assign_and_reload(tmp_path: Path) 
         selected=True,
         funnel_managed=True,
         license="",
-        source_page="",
+        source_page="https://www.pexels.com/photo/99/",
         local_media_path=str(media),
         title="road",
     )
+    assert classify_license_metadata_status(cand) == "partial"
     write_json(
         accepted_supplements_path(project),
         AccDoc(script_version="script-v1", supplements=[cand]),
     )
     refreshed = refresh_supplement_validation(cand)
-    assert refreshed.media_validation_status == STATUS_LICENSE_REVIEW_REQUIRED
-    assert list_export_ready_supplements(project) == []
+    assert refreshed.media_validation_status == STATUS_EXPORT_READY
+    assert refreshed.license_metadata_status == "partial"
+    assert [s.candidate_id for s in list_export_ready_supplements(project)] == [
+        "pexels_photo_099"
+    ]
 
-    # Reload from disk
-    loaded = load_model(accepted_supplements_path(project), AccDoc)
-    assert loaded is not None
-    again = refresh_supplement_validation(loaded.supplements[0])
-    assert again.media_validation_status == STATUS_LICENSE_REVIEW_REQUIRED
-
-    # Manual path assign must not bypass funnel license gate
     other = Path(project.work_dir) / "other.jpg"
     other.write_bytes(_jpeg_bytes(color=(1, 2, 3)))
     assigned = assign_local_media_path(project, "pexels_photo_099", str(other))
     assert assigned.funnel_managed is True
-    assert assigned.media_validation_status == STATUS_LICENSE_REVIEW_REQUIRED
+    assert assigned.media_validation_status == STATUS_EXPORT_READY
 
-    # Complete license → export_ready
     loaded2 = load_model(accepted_supplements_path(project), AccDoc)
     assert loaded2 is not None
     loaded2.supplements[0].license = "Pexels License"
@@ -677,9 +683,9 @@ def test_funnel_license_gate_survives_refresh_assign_and_reload(tmp_path: Path) 
     write_json(accepted_supplements_path(project), loaded2)
     ready = refresh_supplement_validation(loaded2.supplements[0])
     assert ready.media_validation_status == STATUS_EXPORT_READY
-    assert [s.candidate_id for s in list_export_ready_supplements(project)] == [
-        "pexels_photo_099"
-    ]
+    assert ready.license_metadata_status == "complete"
+    gated = apply_license_export_gate(ready)
+    assert gated.license_metadata_status == "complete"
 
 
 def test_remote_url_rejected_as_local_media_path(tmp_path: Path) -> None:
@@ -717,7 +723,7 @@ def test_remote_url_rejected_as_local_media_path(tmp_path: Path) -> None:
         )
 
 
-def test_ui_automatic_resolve_no_manual_confirm() -> None:
+def test_ui_two_funnel_buttons_and_gap_keys() -> None:
     source = Path(
         "otio_app/ui/without_voiceover_enhanced/cut_plan_tab.py"
     ).read_text(encoding="utf-8")
@@ -727,9 +733,16 @@ def test_ui_automatic_resolve_no_manual_confirm() -> None:
     assert "20 Kandidaten vorprüfen" not in source
     assert "Manuell freigeben" not in source
     assert "confirm_funnel_candidate" not in source
-    assert "Supplements automatisch auflösen" in source
-    assert "enh_funnel_stock" in source
-    assert "Gaps erfüllt" in source
+    assert "Supplements automatisch auflösen" not in source
+    assert "Alle offenen Gaps automatisch auflösen" in source
+    assert "Ausgewählte Gaps automatisch auflösen" in source
+    assert "enh_funnel_all_open" in source
+    assert "enh_funnel_selected" in source
+    assert "enh_funnel_gap_select_{project.id}_{gap_id}" in source
+    assert "disabled=selected_disabled" in source
+    assert "disabled=all_disabled" in source
+    assert "gap_ids=gap_ids" in source
+    assert "list_open_funnel_gap_ids" in source
 
 
 def test_redirect_target_revalidated(monkeypatch) -> None:
@@ -939,7 +952,12 @@ def test_funnel_never_extracts_frames_or_full_review(
     assert report.gaps[0].review_ready_candidate_id is None
 
 
-def test_rank1_license_incomplete_falls_back_to_rank2(tmp_path: Path) -> None:
+def test_missing_license_no_fallback_auto_export_ready(tmp_path: Path) -> None:
+    """Technisch gültig ohne Lizenz → kein Fallback, export_ready, status missing."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        AcceptedSupplementsDocument,
+    )
+
     project = _project(tmp_path)
     _lock(project)
     save_stock_providers_config(
@@ -960,6 +978,11 @@ def test_rank1_license_incomplete_falls_back_to_rank2(tmp_path: Path) -> None:
         ),
     )
     cands = _make_candidates(12)
+    for cand in cands:
+        cand.license = ""
+        cand.source_page = ""
+        cand.creator = ""
+        cand.attribution = ""
     write_json(
         stock_search_results_path(project),
         StockSearchResultsDocument(script_version="script-v1", candidates=cands),
@@ -972,9 +995,6 @@ def test_rank1_license_incomplete_falls_back_to_rank2(tmp_path: Path) -> None:
         )
 
         downloads.append(candidate.candidate_id)
-        # Ersten Download ohne Lizenz machen: setze license leer auf dem Candidate
-        if len(downloads) == 1:
-            candidate.license = ""
         d = stock_candidate_download_dir(
             project, gap_id=gap_id, candidate_id=candidate.candidate_id
         )
@@ -991,20 +1011,22 @@ def test_rank1_license_incomplete_falls_back_to_rank2(tmp_path: Path) -> None:
         download_callable=download_callable,
         force_restart=True,
     )
-    assert len(downloads) >= 2
+    assert len(downloads) == 1  # kein Fallback wegen fehlender Lizenz
     gap = report.gaps[0]
-    assert gap.license_incomplete_count >= 1
-    assert gap.export_ready_candidate_id == downloads[1]
-    assert gap.export_ready_candidate_id != downloads[0]
-    # Rang1-Datei gelöscht
-    from otio_app.services.without_voiceover_enhanced.paths import (
-        stock_candidate_download_dir,
+    assert gap.export_ready_candidate_id == downloads[0]
+    assert gap.license_metadata_status == "missing"
+    ready = next(
+        c for c in gap.candidates if c.candidate_id == gap.export_ready_candidate_id
     )
-
-    rank1_dir = stock_candidate_download_dir(
-        project, gap_id="gap_1", candidate_id=downloads[0]
-    )
-    assert not rank1_dir.exists()
+    assert ready.funnel_status == "export_ready"
+    assert ready.license_metadata_status == "missing"
+    assert ready.license_name in (None, "")
+    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
+    assert accepted is not None
+    assert accepted.supplements[0].media_validation_status == "export_ready"
+    assert accepted.supplements[0].license_metadata_status == "missing"
+    # Keine erfundenen Lizenzfelder
+    assert not (accepted.supplements[0].license or "").strip()
 
 
 def test_rank1_download_error_falls_back(tmp_path: Path) -> None:
@@ -1290,3 +1312,259 @@ def test_inventory_import_and_no_duplicate_on_rerun(tmp_path: Path) -> None:
     assert accepted is not None
     assert len(accepted.supplements) == 1
     assert accepted.supplements[0].candidate_id == first_downloads[0]
+
+
+def _candidates_for_gaps(gap_ids: list[str], n: int = 8) -> list[StockCandidate]:
+    out: list[StockCandidate] = []
+    for gap_id in gap_ids:
+        for i in range(1, n + 1):
+            out.append(
+                StockCandidate(
+                    candidate_id=f"pexels_{gap_id}_{i:03d}",
+                    provider="pexels",
+                    provider_asset_id=f"{gap_id}-{i}",
+                    title=f"{gap_id} scene {i}",
+                    media_type="photo",
+                    creator="Tester",
+                    source_page=f"https://www.pexels.com/photo/{gap_id}-{i}/",
+                    preview_url=f"https://images.pexels.com/photos/{gap_id}-{i}/p.jpg",
+                    download_url=f"https://images.pexels.com/photos/{gap_id}-{i}/f.jpg",
+                    width=1920,
+                    height=1080,
+                    license="Pexels License",
+                    attribution="Tester",
+                    gap_id=gap_id,
+                )
+            )
+    return out
+
+
+def _fake_text_llm_any(candidates: list[StockCandidate]):
+    def text_llm(prompt: str) -> str:
+        import json
+        import re
+
+        m = re.search(r"Coverage Gap:\s*([A-Za-z0-9_\-]+)", prompt)
+        if not m:
+            m = re.search(r'"gap_id"\s*:\s*"([^"]+)"', prompt)
+        gap_hint = m.group(1) if m else ""
+        present = [c.candidate_id for c in candidates if c.candidate_id in prompt]
+        if gap_hint:
+            present = [
+                c.candidate_id
+                for c in candidates
+                if c.gap_id == gap_hint and c.candidate_id in prompt
+            ] or present
+        if not present:
+            present = [
+                c.candidate_id
+                for c in candidates
+                if not gap_hint or c.gap_id == gap_hint
+            ]
+        return json.dumps(
+            {
+                "gap_id": gap_hint or "gap_1",
+                "candidate_reviews": [
+                    {
+                        "candidate_id": cid,
+                        "text_relevance": 90 - (i % 10),
+                        "metadata_quality": 80,
+                        "media_type_fit": 85,
+                        "license_metadata_quality": 90,
+                        "misrepresentation_risk": 5,
+                        "reason": "fit",
+                    }
+                    for i, cid in enumerate(present)
+                ],
+            }
+        )
+
+    return text_llm
+
+
+def test_gap_ids_unknown_and_duplicate_raise(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _lock(project)
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road")],
+        ),
+    )
+    write_json(
+        stock_search_results_path(project),
+        StockSearchResultsDocument(
+            script_version="script-v1", candidates=_make_candidates(3)
+        ),
+    )
+    with pytest.raises(Exception) as exc:
+        run_supplement_funnel_for_gaps(
+            project, gap_ids=["gap_unknown"], force_restart=True
+        )
+    assert "Unbekannte Gap-ID" in str(exc.value)
+    with pytest.raises(Exception) as exc2:
+        run_supplement_funnel_for_gaps(
+            project, gap_ids=["gap_1", "gap_1"], force_restart=True
+        )
+    assert "Doppelte Gap-ID" in str(exc2.value)
+
+
+def test_selected_then_all_open_gaps_integration(tmp_path: Path) -> None:
+    """3 Gaps: Auswahl 1+3, danach Alle verarbeitet nur Gap 2."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        AcceptedSupplementsDocument,
+    )
+    from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
+        list_open_funnel_gap_ids,
+    )
+
+    project = _project(tmp_path)
+    _lock(project)
+    save_stock_providers_config(
+        project,
+        {
+            "pexels": True,
+            "pixabay": False,
+            "wikimedia": False,
+            "openverse": False,
+            "archive_org": False,
+        },
+    )
+    gaps = [
+        CoverageGap(gap_id="gap_1", needed_visual="road"),
+        CoverageGap(gap_id="gap_2", needed_visual="river"),
+        CoverageGap(gap_id="gap_3", needed_visual="forest"),
+    ]
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(script_version="script-v1", gaps=gaps),
+    )
+    cands = _candidates_for_gaps(["gap_1", "gap_2", "gap_3"], n=8)
+    write_json(
+        stock_search_results_path(project),
+        StockSearchResultsDocument(script_version="script-v1", candidates=cands),
+    )
+    assert list_open_funnel_gap_ids(project) == ["gap_1", "gap_2", "gap_3"]
+
+    downloads: list[tuple[str, str]] = []
+    progress_totals: list[int] = []
+
+    def download_callable(project, candidate, *, gap_id: str) -> Path:
+        from otio_app.services.without_voiceover_enhanced.paths import (
+            stock_candidate_download_dir,
+        )
+
+        downloads.append((gap_id, candidate.candidate_id))
+        d = stock_candidate_download_dir(
+            project, gap_id=gap_id, candidate_id=candidate.candidate_id
+        )
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"{candidate.candidate_id}.jpg"
+        path.write_bytes(_jpeg_bytes())
+        return path
+
+    def on_progress(event):
+        if event.gap_total:
+            progress_totals.append(event.gap_total)
+
+    report1 = run_supplement_funnel_for_gaps(
+        project,
+        gap_ids=["gap_1", "gap_3"],
+        text_llm=_fake_text_llm_any(cands),
+        vision_llm=_fake_vision_llm(),
+        preview_fetch=_preview_fetch,
+        download_callable=download_callable,
+        progress_callback=on_progress,
+        force_restart=True,
+    )
+    assert report1.requested_gap_ids == ["gap_1", "gap_3"]
+    assert set(report1.filled_gap_ids) == {"gap_1", "gap_3"}
+    assert "gap_2" not in report1.filled_gap_ids
+    assert {g for g, _ in downloads} == {"gap_1", "gap_3"}
+    assert 2 in progress_totals
+    assert list_open_funnel_gap_ids(project) == ["gap_2"]
+
+    downloads.clear()
+    progress_totals.clear()
+    report2 = run_supplement_funnel_for_gaps(
+        project,
+        gap_ids=list_open_funnel_gap_ids(project),
+        text_llm=_fake_text_llm_any(cands),
+        vision_llm=_fake_vision_llm(),
+        preview_fetch=_preview_fetch,
+        download_callable=download_callable,
+        progress_callback=on_progress,
+        skip_filled=True,
+        force_restart=False,
+    )
+    assert report2.requested_gap_ids == ["gap_2"]
+    assert report2.filled_gap_ids == ["gap_2"] or "gap_2" in report2.filled_gap_ids
+    assert {g for g, _ in downloads} == {"gap_2"}
+    assert 1 in progress_totals
+    assert list_open_funnel_gap_ids(project) == []
+
+    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
+    assert accepted is not None
+    assert len(accepted.supplements) == 3
+    ids = {s.candidate_id for s in accepted.supplements}
+    assert len(ids) == 3
+
+
+def test_one_gap_failure_continues_others(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _lock(project)
+    save_stock_providers_config(
+        project,
+        {
+            "pexels": True,
+            "pixabay": False,
+            "wikimedia": False,
+            "openverse": False,
+            "archive_org": False,
+        },
+    )
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            gaps=[
+                CoverageGap(gap_id="gap_1", needed_visual="a"),
+                CoverageGap(gap_id="gap_2", needed_visual="b"),
+            ],
+        ),
+    )
+    cands = _candidates_for_gaps(["gap_1", "gap_2"], n=6)
+    write_json(
+        stock_search_results_path(project),
+        StockSearchResultsDocument(script_version="script-v1", candidates=cands),
+    )
+
+    def download_callable(project, candidate, *, gap_id: str) -> Path:
+        from otio_app.services.without_voiceover_enhanced.paths import (
+            stock_candidate_download_dir,
+        )
+
+        d = stock_candidate_download_dir(
+            project, gap_id=gap_id, candidate_id=candidate.candidate_id
+        )
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"{candidate.candidate_id}.jpg"
+        if gap_id == "gap_1":
+            path.write_bytes(b"broken")
+        else:
+            path.write_bytes(_jpeg_bytes())
+        return path
+
+    report = run_supplement_funnel_for_gaps(
+        project,
+        gap_ids=["gap_1", "gap_2"],
+        text_llm=_fake_text_llm_any(cands),
+        vision_llm=_fake_vision_llm(),
+        preview_fetch=_preview_fetch,
+        download_callable=download_callable,
+        force_restart=True,
+        max_full_download_attempts=2,
+    )
+    assert "gap_1" in report.open_gap_ids
+    assert "gap_2" in report.filled_gap_ids

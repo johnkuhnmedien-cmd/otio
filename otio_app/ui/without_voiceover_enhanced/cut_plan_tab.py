@@ -37,6 +37,7 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
 from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
     FunnelProgressEvent,
     SupplementFunnelError,
+    list_open_funnel_gap_ids,
     run_supplement_funnel_for_gaps,
 )
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
@@ -502,41 +503,105 @@ def render_enhanced_cut_plan_page() -> None:
                     st.rerun()
                 except CutPlanError as exc:
                     st.error(str(exc))
-        with cols_stock[1]:
+        st.markdown("**Coverage Gaps automatisch auflösen**")
+        open_gap_ids = list_open_funnel_gap_ids(project)
+        gap_by_id = {g.gap_id: g for g in (coverage.gaps if coverage else [])}
+        # Veraltete Checkbox-Keys für inzwischen erfüllte Gaps bereinigen.
+        for gap_id in list(gap_by_id):
+            key = f"enh_funnel_gap_select_{project.id}_{gap_id}"
+            if gap_id not in open_gap_ids and key in st.session_state:
+                del st.session_state[key]
+
+        selected_open_ids: list[str] = []
+        if open_gap_ids:
+            st.caption("Nur offene Gaps sind auswählbar.")
+            for gap_id in open_gap_ids:
+                gap = gap_by_id.get(gap_id)
+                if gap is None:
+                    continue
+                visual = (gap.needed_visual or gap.subject or "").strip() or "—"
+                if len(visual) > 80:
+                    visual = visual[:77] + "…"
+                checked = st.checkbox(
+                    f"`{gap_id}` · {visual} · Status: offen",
+                    key=f"enh_funnel_gap_select_{project.id}_{gap_id}",
+                )
+                if checked:
+                    selected_open_ids.append(gap_id)
+        else:
+            st.info("Keine offenen Coverage Gaps.")
+
+        def _run_funnel_with_gap_ids(gap_ids: list[str]) -> None:
+            progress_bar = st.progress(0.0, text="Funnel startet…")
+            status_box = st.empty()
+            log_box = st.empty()
+            log_lines: list[str] = []
+
+            def _funnel_progress(event: FunnelProgressEvent) -> None:
+                label = event.message or event.phase
+                progress_bar.progress(
+                    min(1.0, max(0.0, float(event.fraction))),
+                    text=label[:120],
+                )
+                status_box.info(label)
+                log_lines.append(label)
+                log_box.caption("\n".join(log_lines[-14:]))
+
+            funnel_report = run_supplement_funnel_for_gaps(
+                project,
+                gap_ids=gap_ids,
+                progress_callback=_funnel_progress,
+            )
+            progress_bar.progress(1.0, text=funnel_report.message)
+            status_box.success(funnel_report.message)
+            # Erfüllte Gaps aus der Checkbox-Auswahl entfernen.
+            for filled_id in funnel_report.filled_gap_ids:
+                key = f"enh_funnel_gap_select_{project.id}_{filled_id}"
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
+
+        cols_funnel = st.columns(2)
+        with cols_funnel[0]:
+            all_disabled = not open_gap_ids
             if st.button(
-                "Supplements automatisch auflösen",
+                "Alle offenen Gaps automatisch auflösen",
                 type="primary",
-                key="enh_funnel_stock",
+                key="enh_funnel_all_open",
+                disabled=all_disabled,
                 help=(
-                    "Automatischer Funnel: Text → Thumbnails → Finalvergleich → "
-                    "Voll-Download Rang 1–3 → technische Prüfung → Lizenzprüfung → "
-                    "automatische Übernahme. Keine zweite LLM-Prüfung, "
-                    "keine manuelle Funnel-Freigabe."
+                    "Verarbeitet alle aktuell offenen Coverage Gaps sequenziell. "
+                    "Checkboxauswahl wird ignoriert."
                 ),
             ):
                 try:
-                    progress_bar = st.progress(0.0, text="Funnel startet…")
-                    status_box = st.empty()
-                    log_box = st.empty()
-                    log_lines: list[str] = []
-
-                    def _funnel_progress(event: FunnelProgressEvent) -> None:
-                        label = event.message or event.phase
-                        progress_bar.progress(
-                            min(1.0, max(0.0, float(event.fraction))),
-                            text=label[:120],
-                        )
-                        status_box.info(label)
-                        log_lines.append(label)
-                        log_box.caption("\n".join(log_lines[-14:]))
-
-                    funnel_report = run_supplement_funnel_for_gaps(
-                        project,
-                        progress_callback=_funnel_progress,
-                    )
-                    progress_bar.progress(1.0, text=funnel_report.message)
-                    status_box.success(funnel_report.message)
-                    st.rerun()
+                    # Checkbox-Zustand bewusst ignorieren — frische Open-Liste.
+                    _run_funnel_with_gap_ids(list_open_funnel_gap_ids(project))
+                except SupplementFunnelError as exc:
+                    st.error(str(exc))
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Fehler: {exc}")
+        with cols_funnel[1]:
+            selected_disabled = not selected_open_ids
+            if st.button(
+                "Ausgewählte Gaps automatisch auflösen",
+                key="enh_funnel_selected",
+                disabled=selected_disabled,
+                help=(
+                    "Verarbeitet nur markierte offene Gaps. "
+                    "Gleicher Funnel-Service wie „Alle“."
+                ),
+            ):
+                try:
+                    # Nur noch gültige offene IDs (Session kann veraltet sein).
+                    current_open = set(list_open_funnel_gap_ids(project))
+                    valid_selected = [
+                        gid for gid in selected_open_ids if gid in current_open
+                    ]
+                    if not valid_selected:
+                        st.warning("Keine gültige Gap-Auswahl.")
+                    else:
+                        _run_funnel_with_gap_ids(valid_selected)
                 except SupplementFunnelError as exc:
                     st.error(str(exc))
                 except Exception as exc:  # noqa: BLE001
@@ -550,20 +615,27 @@ def render_enhanced_cut_plan_page() -> None:
             st.markdown("**Funnel-Abschluss**")
             st.caption(funnel_report.message)
             st.write(
-                f"Gaps erfüllt: **{len(funnel_report.filled_gap_ids)}** · "
-                f"Gaps offen: **{len(funnel_report.open_gap_ids)}** · "
+                f"Angefordert: **{len(funnel_report.requested_gap_ids)}** · "
+                f"erfüllt: **{len(funnel_report.filled_gap_ids)}** · "
+                f"offen: **{len(funnel_report.open_gap_ids)}** · "
                 f"Voll-Downloads: **{funnel_report.full_download_count}** · "
-                f"technisch ungültig: **{funnel_report.technically_invalid_count}** · "
-                f"Lizenzdaten unvollständig: "
-                f"**{funnel_report.license_incomplete_count}** · "
+                f"technisch ungültig: "
+                f"**{funnel_report.technically_invalid_count}** · "
                 f"Fallbacks: **{funnel_report.fallback_used_count}**"
             )
             for gap_rep in funnel_report.gaps:
                 ready = gap_rep.export_ready_candidate_id
+                license_label = ""
+                if gap_rep.license_metadata_status == "complete":
+                    license_label = " · Lizenzdaten vollständig"
+                elif gap_rep.license_metadata_status == "partial":
+                    license_label = " · Lizenzdaten teilweise vorhanden"
+                elif gap_rep.license_metadata_status == "missing":
+                    license_label = " · Keine Lizenzmetadaten geliefert"
                 st.write(
                     f"`{gap_rep.gap_id}` · "
                     + (
-                        f"export_ready `{ready}`"
+                        f"export_ready `{ready}`{license_label}"
                         if ready
                         else (gap_rep.message or "offen")
                     )

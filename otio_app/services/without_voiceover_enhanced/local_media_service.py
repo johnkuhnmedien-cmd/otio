@@ -269,14 +269,17 @@ _KNOWN_PROVIDER_LICENSES: dict[str, str] = {
     "pixabay": "Pixabay License",
 }
 
+LICENSE_METADATA_COMPLETE = "complete"
+LICENSE_METADATA_PARTIAL = "partial"
+LICENSE_METADATA_MISSING = "missing"
+
 
 def license_metadata_complete(candidate: StockCandidate) -> bool:
-    """Fail-closed Lizenz-Gate — LLM darf Lizenz nicht erzeugen/ergänzen.
+    """Klassifikation „vollständig“ — LLM darf Lizenz nicht erzeugen/ergänzen.
 
-    Providerregeln:
-    - Pexels/Pixabay: bekannte Adapter-Lizenz; Creator optional (Dokumentierter Fallback).
-    - Wikimedia/Openverse: konkrete Asset-Lizenz + Creator/Attribution.
-    - Archive.org: echte Lizenzmetadaten + Creator/Attribution (nicht nur Source-Page).
+    Providerregeln (nur informativ; blockiert export_ready seit R3 nicht):
+    - Pexels/Pixabay: bekannte Adapter-Lizenz; Creator optional.
+    - Wikimedia/Openverse/Archive.org: konkrete Asset-Lizenz + Creator/Attribution.
     """
     provider = (candidate.provider or "").strip().lower()
     if not provider:
@@ -295,10 +298,8 @@ def license_metadata_complete(candidate: StockCandidate) -> bool:
         known = _KNOWN_PROVIDER_LICENSES[provider]
         if not license_name:
             return False
-        # Adapter setzt exakt die bekannte Lizenz; toleriere Case.
         if license_name.casefold() != known.casefold():
             return False
-        # Creator optional: dokumentierter Provider-Fallback.
         return True
 
     if provider in {"wikimedia", "openverse", "archive_org"}:
@@ -307,30 +308,44 @@ def license_metadata_complete(candidate: StockCandidate) -> bool:
     return bool(license_name) and has_creator
 
 
+def classify_license_metadata_status(candidate: StockCandidate) -> str:
+    """Informativer Status: complete | partial | missing. Kein LLM-Erfinden."""
+    if license_metadata_complete(candidate):
+        return LICENSE_METADATA_COMPLETE
+    has_any = any(
+        str(value or "").strip()
+        for value in (
+            candidate.license,
+            getattr(candidate, "license_url", None),
+            candidate.source_page,
+            candidate.creator,
+            candidate.attribution,
+        )
+    )
+    if has_any:
+        return LICENSE_METADATA_PARTIAL
+    return LICENSE_METADATA_MISSING
+
+
 def _apply_funnel_license_gate_if_needed(
     candidate: StockCandidate,
     *,
     technical_status: str,
     technical_error: str | None,
 ) -> StockCandidate:
-    """Funnel-Supplements: technisch gültig ≠ export_ready ohne Lizenz-Gate."""
-    if not getattr(candidate, "funnel_managed", False):
-        candidate.media_validation_status = technical_status
-        candidate.media_validation_error = technical_error
-        return candidate
+    """R3: Lizenzmetadaten sind informativ — blockieren export_ready nicht."""
     if technical_status != STATUS_EXPORT_READY:
         candidate.media_validation_status = technical_status
         candidate.media_validation_error = technical_error
-        return candidate
-    if not license_metadata_complete(candidate):
-        candidate.media_validation_status = STATUS_LICENSE_REVIEW_REQUIRED
-        candidate.media_validation_error = (
-            "Lizenzmetadaten unvollständig — kein export_ready "
-            "(Funnel-Lizenz-Gate)."
-        )
+        if getattr(candidate, "funnel_managed", False):
+            candidate.license_metadata_status = classify_license_metadata_status(
+                candidate
+            )
         return candidate
     candidate.media_validation_status = STATUS_EXPORT_READY
     candidate.media_validation_error = None
+    if getattr(candidate, "funnel_managed", False):
+        candidate.license_metadata_status = classify_license_metadata_status(candidate)
     return candidate
 
 
