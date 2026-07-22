@@ -185,14 +185,14 @@ def _render_chapter_multiselect(
     key_prefix: str,
     help_text: str,
 ) -> list[str]:
-    """Kapitel-Auswahl für Teil-Läufe; Default = alle."""
+    """Kapitel-Auswahl für Teil-Läufe; Default leer (bewusst wählen)."""
     chapters = _cut_chapter_names(project)
     if not chapters:
         st.caption("Keine Kapitel mit Segmenten gefunden.")
         return []
     state_key = f"{key_prefix}_folders_{project.id}"
     if state_key not in st.session_state:
-        st.session_state[state_key] = list(chapters)
+        st.session_state[state_key] = []
 
     col_all, col_none, _ = st.columns([1, 1, 4])
     with col_all:
