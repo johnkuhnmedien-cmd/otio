@@ -768,6 +768,9 @@ def test_ui_two_funnel_buttons_and_gap_keys() -> None:
     assert "Funnel abbrechen" in source
     assert "request_cancel" in source
     assert "funnel_job_mgr.start" in source
+    # Leichte Monitor-Seite während Job (Abbrechen ohne schweren Rerun)
+    assert "_render_lightweight_funnel_monitor" in source
+    assert "enh_funnel_cancel_lite_" in source
     # Session-State erst vor Pills bereinigen (nicht nach Widget)
     assert "enh_funnel_pending_deselect_" in source
     # Kein Query-Parameter als Produktionsauslöser

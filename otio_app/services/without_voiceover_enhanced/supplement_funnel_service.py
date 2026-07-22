@@ -807,6 +807,26 @@ def run_supplement_funnel_for_gaps(
                 ),
             )
 
+        if should_stop and should_stop():
+            report.stopped = True
+            gap_report.candidates = records
+            gap_report.message = "Abgebrochen vor Textprüfung."
+            if gap.gap_id not in report.open_gap_ids:
+                report.open_gap_ids.append(gap.gap_id)
+            _upsert_gap_report(report, gap_report)
+            _emit(
+                progress_callback,
+                FunnelProgressEvent(
+                    phase="stopped",
+                    gap_id=gap.gap_id,
+                    gap_index=gap_index,
+                    gap_total=total,
+                    message=f"Gap {gap_index}/{total} · Abbruch…",
+                    fraction=gap_index / max(1, total),
+                ),
+            )
+            break
+
         # Textbewertung
         _emit(
             progress_callback,
@@ -832,6 +852,26 @@ def run_supplement_funnel_for_gaps(
             report.open_gap_ids.append(gap.gap_id)
             continue
 
+        if should_stop and should_stop():
+            report.stopped = True
+            gap_report.candidates = records
+            gap_report.message = "Abgebrochen nach Textprüfung."
+            if gap.gap_id not in report.open_gap_ids:
+                report.open_gap_ids.append(gap.gap_id)
+            _upsert_gap_report(report, gap_report)
+            _emit(
+                progress_callback,
+                FunnelProgressEvent(
+                    phase="stopped",
+                    gap_id=gap.gap_id,
+                    gap_index=gap_index,
+                    gap_total=total,
+                    message=f"Gap {gap_index}/{total} · Abbruch…",
+                    fraction=gap_index / max(1, total),
+                ),
+            )
+            break
+
         for cid, scores in text_scores.items():
             record = record_by_id[cid]
             record.text_scores = scores
@@ -841,6 +881,9 @@ def run_supplement_funnel_for_gaps(
         preview_bytes: dict[str, bytes] = {}
         scored_ids: list[str] = []
         for record in records:
+            if should_stop and should_stop():
+                report.stopped = True
+                break
             candidate = by_id[record.candidate_id]
             record.funnel_status = transition(record.funnel_status, "thumbnail_pending")
             data, preview_status = fetch_preview_bytes_for_candidate(
@@ -855,6 +898,26 @@ def run_supplement_funnel_for_gaps(
                 preview_bytes[record.candidate_id] = data
                 record.preview_status = "scored"
                 scored_ids.append(record.candidate_id)
+
+        if report.stopped:
+            preview_bytes.clear()
+            gap_report.candidates = records
+            gap_report.message = "Abgebrochen während Preview-Download."
+            if gap.gap_id not in report.open_gap_ids:
+                report.open_gap_ids.append(gap.gap_id)
+            _upsert_gap_report(report, gap_report)
+            _emit(
+                progress_callback,
+                FunnelProgressEvent(
+                    phase="stopped",
+                    gap_id=gap.gap_id,
+                    gap_index=gap_index,
+                    gap_total=total,
+                    message=f"Gap {gap_index}/{total} · Abbruch…",
+                    fraction=gap_index / max(1, total),
+                ),
+            )
+            break
 
         batches = split_thumbnail_batches(scored_ids)
         _emit(

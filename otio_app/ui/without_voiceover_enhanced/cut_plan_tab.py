@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import streamlit as st
 
 from otio_app.defaults import (
@@ -270,6 +272,69 @@ def _render_enhanced_cut_model(
     return updated.provider, updated.model, int(max_tokens)
 
 
+def _render_lightweight_funnel_monitor(project) -> None:
+    """Schlanke Seite während der Funnel läuft — Abbrechen ohne schweren Rerun."""
+    mgr = get_supplement_funnel_job_manager()
+    state = mgr.get_state(project.id)
+    if state is None or state.status != FunnelJobStatus.RUNNING:
+        return
+
+    st.subheader("Supplement-Funnel läuft")
+    st.progress(
+        min(1.0, max(0.0, float(state.fraction))),
+        text=(state.message or "Funnel läuft…")[:120],
+    )
+    st.info(state.message or "Funnel läuft im Hintergrund…")
+    if state.model:
+        st.caption(f"Modell: `{state.model}`")
+    if state.gap_total:
+        st.caption(
+            f"Gap {state.gap_index}/{state.gap_total}"
+            + (f" · `{state.gap_id}`" if state.gap_id else "")
+        )
+
+    if state.cancel_requested:
+        st.warning(
+            "Abbruch angefordert. Der aktuelle Gemini-/Download-Schritt "
+            "(oft Thumbnail-Batch mit bis zu 10 Bildern) wird noch beendet — "
+            "danach stoppt der Funnel. Bereits erfüllte Gaps bleiben."
+        )
+    else:
+        st.caption(
+            "Abbrechen wirkt nach dem laufenden LLM-/Download-Schritt, "
+            "nicht mitten im API-Call."
+        )
+
+    cols = st.columns(2)
+    with cols[0]:
+        if st.button(
+            "⏹ Funnel abbrechen",
+            key=f"enh_funnel_cancel_lite_{project.id}",
+            disabled=state.cancel_requested,
+            type="primary",
+        ):
+            mgr.request_cancel(project.id)
+            st.rerun()
+    with cols[1]:
+        if st.button(
+            "🔄 Aktualisieren",
+            key=f"enh_funnel_refresh_lite_{project.id}",
+        ):
+            st.rerun()
+
+    if state.log_lines:
+        with st.expander("Letzte Fortschrittszeilen", expanded=False):
+            st.caption("\n".join(state.log_lines[-20:]))
+
+    st.caption(
+        "Leichte Ansicht während der Funnel läuft "
+        "(Cut-Plan-Details ausgeblendet, damit Abbrechen schnell reagiert)."
+    )
+    # Kurzes Auto-Refresh, damit Stop ohne manuelles Klicken sichtbar wird.
+    time.sleep(1.5)
+    st.rerun()
+
+
 def render_enhanced_cut_plan_page() -> None:
     st.header("⑦ Cut Plan (Enhanced MVP)")
     st.caption(
@@ -279,6 +344,12 @@ def render_enhanced_cut_plan_page() -> None:
     )
     project = get_enhanced_project()
     if project is None:
+        return
+
+    # Während der Funnel läuft: keine schweren JSON-/Widget-Reruns.
+    funnel_mgr_early = get_supplement_funnel_job_manager()
+    if funnel_mgr_early.is_running(project.id):
+        _render_lightweight_funnel_monitor(project)
         return
 
     st.subheader("1. Groben Cut Plan und Pausen erzeugen")
