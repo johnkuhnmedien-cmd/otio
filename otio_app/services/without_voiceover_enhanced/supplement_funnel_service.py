@@ -1017,6 +1017,16 @@ def run_supplement_funnel_for_gaps(
                     misrepresentation_risk=record.text_scores.misrepresentation_risk,
                 )
 
+        if should_stop and should_stop():
+            report.stopped = True
+            preview_bytes.clear()
+            gap_report.candidates = records
+            gap_report.message = "Abgebrochen vor Finalvergleich."
+            if gap.gap_id not in report.open_gap_ids:
+                report.open_gap_ids.append(gap.gap_id)
+            _upsert_gap_report(report, gap_report)
+            break
+
         finalist_ids = pick_finalists_from_batches(records, batch_ids=batches)
         if not finalist_ids:
             gap_report.candidates = records
