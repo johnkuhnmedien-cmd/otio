@@ -761,6 +761,10 @@ def test_ui_two_funnel_buttons_and_gap_keys() -> None:
     assert "Funnel-Abschlussdetails laden" in source
     assert "Lokale Dateizuordnung laden" in source
     assert "enh_show_local_assign_" in source
+    assert "Offene Gaps manuell zuordnen" in source
+    assert "enh_show_manual_gap_assign_" in source
+    assert "assign_local_file_to_open_gap" in source
+    assert "gap_search_queries" in source
     assert "enh_show_open_gap_pills_" in source
     assert "Echtzeit-Timeline laden" in source
     # Stock-JSON / Report nicht bei jedem Rerun

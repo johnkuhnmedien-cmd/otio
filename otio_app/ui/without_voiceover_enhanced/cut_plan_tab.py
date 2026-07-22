@@ -57,6 +57,11 @@ from otio_app.services.without_voiceover_enhanced.local_media_service import (
     assign_local_media_path,
     refresh_supplement_validation,
 )
+from otio_app.services.without_voiceover_enhanced.manual_gap_assign_service import (
+    ManualGapAssignError,
+    assign_local_file_to_open_gap,
+    gap_search_queries,
+)
 from otio_app.services.without_voiceover_enhanced.models import (
     AcceptedSupplementsDocument,
     CoverageGapsDocument,
@@ -888,6 +893,87 @@ def _render_section_funnel(project) -> None:
                 st.warning("Keine gültige Gap-Auswahl.")
             else:
                 _start_funnel_job(valid_selected)
+
+    st.markdown("**Offene Gaps manuell zuordnen**")
+    st.caption(
+        "Links Gap · Mitte Search-Queries (kopierbar) · "
+        "Rechts lokaler Dateipfad → wird nach stock/downloads kopiert, "
+        "export_ready gesetzt und inventarisiert."
+    )
+    show_manual_gaps_key = f"enh_show_manual_gap_assign_{project.id}"
+    st.checkbox(
+        f"Offene Gaps manuell zuordnen laden ({open_gaps_count})",
+        key=show_manual_gaps_key,
+        help=(
+            "Zeigt offene Gaps mit Search-Queries und Pfadfeld. "
+            "Nur bei Bedarf — sonst schnellerer Rerun."
+        ),
+        disabled=not open_gap_ids,
+    )
+    if open_gap_ids and st.session_state.get(show_manual_gaps_key):
+        head_l, head_m, head_r = st.columns([1.2, 1.4, 1.2])
+        with head_l:
+            st.caption("Offene Gap")
+        with head_m:
+            st.caption("Search Queries (kopieren)")
+        with head_r:
+            st.caption("Lokaler Dateipfad")
+        for gap_id in open_gap_ids:
+            gap = gap_by_id.get(gap_id)
+            if gap is None:
+                continue
+            col_gap, col_queries, col_path = st.columns([1.2, 1.4, 1.2])
+            with col_gap:
+                st.markdown(f"`{gap.gap_id}`")
+                visual = (gap.needed_visual or gap.subject or "").strip()
+                if visual:
+                    st.caption(visual if len(visual) <= 160 else visual[:157] + "…")
+                if (gap.reason or "").strip():
+                    st.caption(f"Grund: {gap.reason.strip()[:120]}")
+            with col_queries:
+                queries = gap_search_queries(gap)
+                if queries:
+                    for query in queries:
+                        st.code(query, language=None)
+                else:
+                    st.caption("Keine Search-Queries hinterlegt.")
+            with col_path:
+                path_key = f"enh_manual_gap_path_{project.id}_{gap.gap_id}"
+                path_value = st.text_input(
+                    f"Pfad für {gap.gap_id}",
+                    value="",
+                    key=path_key,
+                    label_visibility="collapsed",
+                    placeholder="/pfad/zur/datei.mp4",
+                    help="Lokaler Dateipfad — keine http(s)-URL.",
+                )
+                if st.button(
+                    "Zuordnen & inventarisieren",
+                    key=f"enh_manual_gap_assign_{project.id}_{gap.gap_id}",
+                ):
+                    try:
+                        assigned = assign_local_file_to_open_gap(
+                            project,
+                            gap_id=gap.gap_id,
+                            source_path=path_value,
+                        )
+                        st.session_state[
+                            f"enh_funnel_pending_deselect_{project.id}"
+                        ] = [gap.gap_id]
+                        st.success(
+                            f"`{gap.gap_id}` → `{assigned.candidate_id}` "
+                            f"({assigned.media_validation_status})"
+                        )
+                        st.rerun()
+                    except ManualGapAssignError as exc:
+                        st.error(str(exc))
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Fehler: {exc}")
+    elif open_gap_ids:
+        st.caption(
+            f"Manuelle Gap-Zuordnung ausgeblendet ({open_gaps_count} offen). "
+            "Checkbox aktivieren zum Bearbeiten."
+        )
 
     # Schwere Stock-JSON nur bei Opt-in laden (nicht nur Checkboxen).
     show_manual_key = f"enh_show_manual_candidates_{project.id}"
