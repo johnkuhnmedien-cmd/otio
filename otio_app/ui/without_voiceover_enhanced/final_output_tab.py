@@ -9,6 +9,7 @@ from otio_app.services.without_voiceover_enhanced.models import ResolvedTimeline
 from otio_app.services.without_voiceover_enhanced.otio_export_service import (
     EnhancedOtioExportError,
     export_otio_from_resolved_timeline,
+    export_portable_otio_package,
     validate_resolved_timeline_for_production,
 )
 from otio_app.services.without_voiceover_enhanced.paths import resolved_timeline_path
@@ -20,7 +21,8 @@ def render_enhanced_final_output_page() -> None:
     st.caption(
         "Keine neue redaktionelle Planung. Lädt freigegebenen finalen Cut Plan / "
         "technisch aufgelöste Timeline und erzeugt OTIO. "
-        "Produktions-Export prüft reale Medien und Source-Ranges fail-closed."
+        "Produktions-Export prüft reale Medien und Source-Ranges fail-closed "
+        "und erzeugt ein portables Medienpaket mit eindeutigen Dateinamen."
     )
     project = get_enhanced_project()
     if project is None:
@@ -73,26 +75,55 @@ def render_enhanced_final_output_page() -> None:
             )
 
     basename = st.text_input(
-        "OTIO-Dateiname",
+        "Export-Basename (Paketordner)",
         value=f"{project.name}_enhanced",
         key=f"enh_otio_name_{project.id}",
     )
     if st.button(
-        "Produktions-OTIO erzeugen",
+        "Portablen Produktions-Export erzeugen",
         type="primary",
-        key=f"enh_otio_export_{project.id}",
+        key=f"enh_otio_export_portable_{project.id}",
         disabled=has_errors,
         help=(
             "Fail-closed: blockiert bei Resolve-/Medienfehlern."
             if has_errors
-            else "Produktions-Export (fail-closed, allow_errors=False)."
+            else "Portables Paket (timeline.otio + media/ + Manifest), allow_errors=False."
         ),
+    ):
+        try:
+            package_dir = export_portable_otio_package(
+                project,
+                basename=basename.strip() or "enhanced",
+                allow_errors=False,
+            )
+            media_dir = package_dir / "media"
+            media_files = sorted(p.name for p in media_dir.glob("*") if p.is_file())
+            st.success(
+                f"Portables Produktionspaket geschrieben: `{package_dir}` "
+                f"({len(media_files)} Medien, allow_errors=False)."
+            )
+            st.caption(f"`timeline.otio` · `media_manifest.json` · `media/`")
+            with st.expander("Paketmedien anzeigen", expanded=True):
+                for name in media_files:
+                    st.write(f"- `{name}`")
+        except EnhancedOtioExportError as exc:
+            st.error(str(exc))
+
+    st.markdown("**Lokale Einzel-OTIO (nicht portabel)**")
+    st.caption(
+        "Schreibt nur eine `.otio` mit absoluten Quellpfaden — nicht für "
+        "Transfer auf einen anderen Rechner. Für Resolve-Import das portable Paket nutzen."
+    )
+    if st.button(
+        "Lokale Produktions-OTIO erzeugen",
+        key=f"enh_otio_export_{project.id}",
+        disabled=has_errors,
     ):
         try:
             path = export_otio_from_resolved_timeline(
                 project, basename=basename.strip() or "enhanced", allow_errors=False
             )
-            st.success(f"Produktions-OTIO geschrieben: `{path}`")
+            st.success(f"Lokale Produktions-OTIO geschrieben: `{path}`")
         except EnhancedOtioExportError as exc:
             st.error(str(exc))
 

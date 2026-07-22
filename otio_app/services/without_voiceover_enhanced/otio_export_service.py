@@ -33,6 +33,16 @@ from otio_app.services.without_voiceover_enhanced.paths import (
     resolved_timeline_path,
     segment_timings_path,
 )
+from otio_app.services.without_voiceover_enhanced.portable_export import (
+    PortableExportError,
+    assert_portable_target_urls,
+    lookup_packaged_path,
+    package_dir_for_export,
+    relative_media_target_url,
+    stage_media_into_package,
+    write_media_manifest,
+    write_package_readme,
+)
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_locked_script,
 )
@@ -449,3 +459,208 @@ def export_otio_from_resolved_timeline(
     out_path = out_dir / f"{basename}.otio"
     otio.adapters.write_to_file(timeline, str(out_path))
     return out_path
+
+
+def export_portable_otio_package(
+    project: Project,
+    *,
+    basename: str = "enhanced_timeline",
+    allow_errors: bool = False,
+) -> Path:
+    """Produktions-Export als portables Paket mit eindeutigen Mediendateinamen.
+
+    Struktur::
+
+        <basename>_package/
+            timeline.otio
+            media/<unique-files>
+            media_manifest.json
+            README.md
+
+    ``allow_errors=True`` ist nur für Diagnose gedacht und schreibt trotzdem
+    kein Paket mit Lücken-Medien — bei Fehlern wird blockiert, außer wenn
+    explizit Gaps-Export über ``export_otio_from_resolved_timeline`` genutzt wird.
+    """
+    if allow_errors:
+        raise EnhancedOtioExportError(
+            "Portabler Produktions-Export erlaubt keine allow_errors=True. "
+            "Für Diagnose den Test-OTIO-Export mit Lücken verwenden."
+        )
+
+    assert_enhanced_work_root(project)
+    resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
+    if resolved is None:
+        raise EnhancedOtioExportError("Aufgelöste Timeline fehlt — kein OTIO-Export.")
+
+    fps = float(resolved.fps or project.fps or 25.0)
+    if resolved.errors:
+        raise EnhancedOtioExportError(
+            "Aufgelöste Timeline enthält Fehler: " + "; ".join(resolved.errors)
+        )
+    gate_errors = validate_resolved_timeline_for_production(project, resolved)
+    if gate_errors:
+        raise EnhancedOtioExportError(
+            "Produktions-Export blockiert (Medien/Range-Gate): "
+            + "; ".join(gate_errors)
+        )
+
+    package_root = package_dir_for_export(project, basename)
+    if package_root.exists():
+        import shutil
+
+        try:
+            shutil.rmtree(package_root)
+        except OSError as exc:
+            raise EnhancedOtioExportError(
+                f"Alter Paketordner nicht löschbar: {package_root} ({exc})"
+            ) from exc
+    try:
+        package_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise EnhancedOtioExportError(
+            f"Paketordner nicht beschreibbar: {package_root} ({exc})"
+        ) from exc
+
+    timeline = otio.schema.Timeline(name=f"{project.name} enhanced portable")
+    video_track = otio.schema.Track(name="Video", kind=otio.schema.TrackKind.Video)
+    audio_track = otio.schema.Track(name="Narration", kind=otio.schema.TrackKind.Audio)
+
+    # (source_path, asset_id, media_kind) — vor dem Staging sammeln
+    stage_items: list[tuple[Path, str, str]] = []
+    # Clip → original media path for rewrite after staging
+    pending_video: list[tuple[otio.schema.Clip, Path, str]] = []
+    pending_audio: list[tuple[otio.schema.Clip, Path, str]] = []
+
+    cursor = 0.0
+    for shot in sorted(resolved.shots, key=lambda s: s.timeline_start_seconds):
+        if shot.timeline_start_seconds > cursor + 1e-6:
+            gap = shot.timeline_start_seconds - cursor
+            video_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
+        media_path, avail_start, source_start, source_end, rate = (
+            _ensure_shot_media_for_export(project, shot, fps=fps)
+        )
+        source_duration = source_end - source_start
+        file_avail_start, file_dur, file_rate = _validate_video_file(
+            media_path, label=f"{shot.shot_id}", fps=fps
+        )
+        kind = "still_hold" if (shot.hold_mode or "").startswith(
+            ("freeze_video", "still_hold")
+        ) or "hold_cache" in media_path.parts else "video"
+        stage_items.append((media_path, shot.asset_id, kind))
+        # Placeholder URL — nach Staging umgeschrieben
+        media_ref = otio.schema.ExternalReference(
+            target_url=str(media_path),
+            available_range=_time_range(
+                file_dur, file_rate, start_sec=file_avail_start
+            ),
+        )
+        clip = otio.schema.Clip(
+            name=shot.shot_id,
+            media_reference=media_ref,
+            source_range=_time_range(
+                source_duration, file_rate, start_sec=source_start
+            ),
+        )
+        clip.metadata["asset_id"] = shot.asset_id
+        clip.metadata["original_media_path"] = str(media_path)
+        if shot.hold_mode:
+            clip.metadata["hold_mode"] = shot.hold_mode
+        video_track.append(clip)
+        pending_video.append((clip, media_path, shot.asset_id))
+        cursor = shot.timeline_end_seconds
+
+    audio_cursor = 0.0
+    for segment in resolved.audio_segments:
+        if segment.timeline_start_seconds > audio_cursor + 1e-6:
+            gap = segment.timeline_start_seconds - audio_cursor
+            audio_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
+        audio_path = _assert_local_file(
+            segment.audio_path, label=f"Audio {segment.segment_id}"
+        )
+        stage_items.append((audio_path, segment.segment_id, "audio"))
+        duration = segment.timeline_end_seconds - segment.timeline_start_seconds
+        source_start = float(getattr(segment, "source_start_seconds", 0.0) or 0.0)
+        clip_name = segment.segment_id
+        split_label = str(getattr(segment, "split_label", "") or "").strip()
+        if split_label:
+            clip_name = f"{segment.segment_id}:{split_label}"
+        audio_dur = probe_duration_seconds(audio_path) or max(duration, 0.01)
+        clip = otio.schema.Clip(
+            name=clip_name,
+            media_reference=otio.schema.ExternalReference(
+                target_url=str(audio_path),
+                available_range=_time_range(audio_dur, fps, start_sec=0.0),
+            ),
+            source_range=_time_range(max(0.01, duration), fps, start_sec=source_start),
+        )
+        clip.metadata["segment_id"] = segment.segment_id
+        clip.metadata["original_media_path"] = str(audio_path)
+        audio_track.append(clip)
+        pending_audio.append((clip, audio_path, segment.segment_id))
+        audio_cursor = segment.timeline_end_seconds
+        if segment.pause_after_seconds > 0:
+            audio_track.append(
+                otio.schema.Gap(
+                    source_range=_time_range(segment.pause_after_seconds, fps)
+                )
+            )
+            audio_cursor += segment.pause_after_seconds
+
+    timeline.tracks.append(video_track)
+    timeline.tracks.append(audio_track)
+    timeline.metadata["enhanced_export_mode"] = "production_portable"
+
+    try:
+        entries = stage_media_into_package(project, package_root, stage_items)
+    except PortableExportError as exc:
+        raise EnhancedOtioExportError(str(exc)) from exc
+
+    # Rewrite target_urls → relative media/<unique>
+    for clip, original, _asset_id in pending_video + pending_audio:
+        try:
+            entry = lookup_packaged_path(entries, original)
+        except PortableExportError as exc:
+            raise EnhancedOtioExportError(str(exc)) from exc
+        rel_url = relative_media_target_url(entry.packaged_filename)
+        clip.media_reference.target_url = rel_url
+        clip.metadata["packaged_filename"] = entry.packaged_filename
+        clip.metadata["packaged_sha256"] = entry.sha256
+
+    urls = _collect_target_urls(timeline)
+    try:
+        assert_portable_target_urls(urls, package_root=package_root)
+    except PortableExportError as exc:
+        raise EnhancedOtioExportError(str(exc)) from exc
+
+    # Basename uniqueness of packaged files already enforced in stage;
+    # additionally ensure every target_url maps to a distinct file when assets differ.
+    url_to_assets: dict[str, set[str]] = {}
+    for clip, _original, asset_id in pending_video:
+        url = str(clip.media_reference.target_url)
+        url_to_assets.setdefault(url, set()).add(asset_id)
+    for url, assets in url_to_assets.items():
+        if len(assets) > 1:
+            raise EnhancedOtioExportError(
+                "Mehrere Asset-IDs teilen dieselbe OTIO-Medienreferenz "
+                f"{url!r}: {sorted(assets)}. Export blockiert."
+            )
+
+    safe_basename = package_root.name.removesuffix("_package")
+    write_media_manifest(package_root / "media_manifest.json", entries)
+    write_package_readme(package_root / "README.md", basename=safe_basename)
+
+    out_otio = package_root / "timeline.otio"
+    otio.adapters.write_to_file(timeline, str(out_otio))
+
+    # Post-write readback: keine Host-Pfade
+    readback = otio.adapters.read_from_file(str(out_otio))
+    try:
+        assert_portable_target_urls(
+            _collect_target_urls(readback), package_root=package_root
+        )
+    except PortableExportError as exc:
+        raise EnhancedOtioExportError(
+            f"Portable OTIO nach Schreiben ungültig: {exc}"
+        ) from exc
+
+    return package_root
