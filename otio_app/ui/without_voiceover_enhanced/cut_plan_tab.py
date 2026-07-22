@@ -81,6 +81,7 @@ from otio_app.ui.without_voiceover_enhanced.timeline_view import render_realtime
 from otio_app.services.without_voiceover_enhanced.otio_export_service import (
     EnhancedOtioExportError,
     export_otio_from_resolved_timeline,
+    export_portable_otio_package,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
     accepted_supplements_path,
@@ -1545,23 +1546,65 @@ def _render_section_final(project) -> None:
                     st.write(f"- {err}")
                 if len(resolved.errors) > 40:
                     st.caption(f"… +{len(resolved.errors) - 40} weitere")
-            if st.button(
-                "Test-OTIO mit Lücken erzeugen",
-                key=f"enh_final_test_otio_gaps_{project.id}",
-                help=(
-                    "Exportiert bereits aufgelöste Shots; fehlende bleiben Gaps. "
-                    "Auch unter ⑧ Final Output."
-                ),
-            ):
-                try:
-                    path = export_otio_from_resolved_timeline(
-                        project,
-                        basename=f"{project.name}_enhanced_preview_gaps",
-                        allow_errors=True,
-                    )
-                    st.success(f"Test-OTIO: `{path}`")
-                except EnhancedOtioExportError as exc:
-                    st.error(str(exc))
+
+        st.markdown("##### OTIO exportieren")
+        default_otio_name = (project.name or "enhanced").strip() or "enhanced"
+        otio_basename = st.text_input(
+            "Dateiname / Paket-Basename",
+            value=default_otio_name,
+            key=f"enh_final_otio_basename_{project.id}",
+            help=(
+                "Ohne Endung. Portabler Export erzeugt "
+                "`<Name>_package/timeline.otio` + `media/`."
+            ),
+        )
+        export_disabled = bool(resolved.errors)
+        if st.button(
+            "OTIO exportieren",
+            type="primary",
+            key=f"enh_final_otio_export_{project.id}",
+            disabled=export_disabled,
+            help=(
+                "Produktions-Export gesperrt wegen Resolve-Fehlern."
+                if export_disabled
+                else "Portables Produktionspaket (fail-closed, allow_errors=False)."
+            ),
+        ):
+            try:
+                package_dir = export_portable_otio_package(
+                    project,
+                    basename=(otio_basename or default_otio_name).strip()
+                    or default_otio_name,
+                    allow_errors=False,
+                )
+                media_count = len(list((package_dir / "media").glob("*")))
+                st.success(
+                    f"Portables OTIO-Paket: `{package_dir}` · "
+                    f"{media_count} Medien · `timeline.otio`"
+                )
+            except EnhancedOtioExportError as exc:
+                st.error(str(exc))
+
+        if resolved.errors and st.button(
+            "Test-OTIO mit Lücken erzeugen",
+            key=f"enh_final_test_otio_gaps_{project.id}",
+            help=(
+                "Exportiert bereits aufgelöste Shots; fehlende bleiben Gaps. "
+                "Auch unter ⑧ Final Output."
+            ),
+        ):
+            try:
+                path = export_otio_from_resolved_timeline(
+                    project,
+                    basename=(
+                        f"{(otio_basename or default_otio_name).strip() or default_otio_name}"
+                        "_preview_gaps"
+                    ),
+                    allow_errors=True,
+                )
+                st.success(f"Test-OTIO: `{path}`")
+            except EnhancedOtioExportError as exc:
+                st.error(str(exc))
 
     show_timeline_key = f"enh_show_timeline_final_{project.id}"
     st.checkbox(
