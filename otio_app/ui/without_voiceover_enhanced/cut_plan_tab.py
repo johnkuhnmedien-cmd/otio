@@ -548,6 +548,17 @@ def render_enhanced_cut_plan_page() -> None:
 
         selected_open_ids: list[str] = []
         if open_gap_ids:
+            # Auswahl erst NACH Job-Ende bereinigen — nicht nach Widget-Erzeugung
+            # (Streamlit verbietet session_state-Schreiben auf existierende Keys).
+            pending_deselect_key = f"enh_funnel_pending_deselect_{project.id}"
+            pending_filled = st.session_state.pop(pending_deselect_key, None)
+            if pending_filled and select_key in st.session_state:
+                filled = set(pending_filled)
+                current_sel = st.session_state.get(select_key) or []
+                if isinstance(current_sel, list):
+                    st.session_state[select_key] = [
+                        gid for gid in current_sel if gid not in filled
+                    ]
 
             def _format_open_gap(gap_id: str) -> str:
                 gap = gap_by_id.get(gap_id)
@@ -643,14 +654,11 @@ def render_enhanced_cut_plan_page() -> None:
             elif state.status == FunnelJobStatus.COMPLETED:
                 st.success(state.message or "Funnel abgeschlossen.")
 
-            # Erfüllte Gaps aus der Mehrfachauswahl entfernen.
-            if state.report is not None and select_key in st.session_state:
-                current_sel = st.session_state.get(select_key) or []
-                if isinstance(current_sel, list):
-                    filled = set(state.report.filled_gap_ids or [])
-                    st.session_state[select_key] = [
-                        gid for gid in current_sel if gid not in filled
-                    ]
+            # Erfüllte Gaps vorm nächsten Pills-Render bereinigen (nicht hier).
+            if state.report is not None:
+                st.session_state[f"enh_funnel_pending_deselect_{project.id}"] = list(
+                    state.report.filled_gap_ids or []
+                )
             if st.button(
                 "Hinweis schließen",
                 key=f"enh_funnel_dismiss_{project.id}",
@@ -706,36 +714,56 @@ def render_enhanced_cut_plan_page() -> None:
                     _start_funnel_job(valid_selected)
 
         candidate_count = len(results.candidates)
-        with st.expander(
-            f"Kandidaten manuell prüfen (optional) · {candidate_count}",
-            expanded=False,
-        ):
-            gap_passages = _gap_passage_map(coverage)
-            selected_ids: list[str] = []
-            for index, candidate in enumerate(results.candidates):
-                checked = st.checkbox(
-                    _stock_candidate_checkbox_label(candidate, gap_passages),
-                    value=candidate.selected,
-                    key=f"enh_stock_{project.id}_{index}_{candidate.candidate_id}",
-                )
-                if checked:
-                    selected_ids.append(candidate.candidate_id)
+        # Wichtig: st.expander führt den Body trotzdem bei JEDEM Rerun aus.
+        # 2000+ Checkboxen deshalb nur nach explizitem Opt-in rendern.
+        show_manual_key = f"enh_show_manual_candidates_{project.id}"
+        st.checkbox(
+            f"Kandidaten manuell prüfen laden ({candidate_count})",
+            key=show_manual_key,
+            help=(
+                "Standard aus — sonst werden bei jedem Modellwechsel "
+                "alle Stock-Checkboxen neu gebaut (sehr langsam)."
+            ),
+        )
+        if st.session_state.get(show_manual_key):
+            with st.expander(
+                f"Kandidaten manuell prüfen · {candidate_count}",
+                expanded=True,
+            ):
+                gap_passages = _gap_passage_map(coverage)
+                selected_ids: list[str] = []
+                for index, candidate in enumerate(results.candidates):
+                    checked = st.checkbox(
+                        _stock_candidate_checkbox_label(candidate, gap_passages),
+                        value=candidate.selected,
+                        key=(
+                            f"enh_stock_{project.id}_{index}_"
+                            f"{candidate.candidate_id}"
+                        ),
+                    )
+                    if checked:
+                        selected_ids.append(candidate.candidate_id)
 
-            cols_stock = st.columns(2)
-            with cols_stock[0]:
-                if st.button("Auswahl akzeptieren", key="enh_accept_stock"):
-                    try:
-                        accepted = accept_supplement_candidates(
-                            project, selected_ids
-                        )
-                        st.success(
-                            f"{len(accepted.supplements)} Supplements akzeptiert "
-                            "(manuell — ohne Download/LLM). "
-                            "Lokale Datei ggf. darunter zuordnen."
-                        )
-                        st.rerun()
-                    except CutPlanError as exc:
-                        st.error(str(exc))
+                cols_stock = st.columns(2)
+                with cols_stock[0]:
+                    if st.button("Auswahl akzeptieren", key="enh_accept_stock"):
+                        try:
+                            accepted = accept_supplement_candidates(
+                                project, selected_ids
+                            )
+                            st.success(
+                                f"{len(accepted.supplements)} Supplements "
+                                "akzeptiert (manuell — ohne Download/LLM). "
+                                "Lokale Datei ggf. darunter zuordnen."
+                            )
+                            st.rerun()
+                        except CutPlanError as exc:
+                            st.error(str(exc))
+        else:
+            st.caption(
+                f"Manuelle Kandidatenliste ausgeblendet ({candidate_count}). "
+                "Zum Prüfen Checkbox oben aktivieren."
+            )
 
         funnel_report = load_model(
             supplement_funnel_report_path(project),
@@ -744,96 +772,109 @@ def render_enhanced_cut_plan_page() -> None:
         if funnel_report is not None:
             filled_n = len(funnel_report.filled_gap_ids)
             open_n = len(funnel_report.open_gap_ids)
-            with st.expander(
+            show_report_key = f"enh_show_funnel_report_{project.id}"
+            st.checkbox(
                 (
-                    f"Funnel-Abschluss · erfüllt {filled_n} · "
-                    f"offen {open_n} · "
-                    f"Downloads {funnel_report.full_download_count}"
+                    f"Funnel-Abschlussdetails laden · erfüllt {filled_n} · "
+                    f"offen {open_n}"
                 ),
-                expanded=False,
-            ):
-                st.caption(funnel_report.message)
-                if funnel_report.llm_model:
-                    st.caption(f"Modell: `{funnel_report.llm_model}`")
-                st.write(
-                    f"Angefordert: **{len(funnel_report.requested_gap_ids)}** · "
-                    f"erfüllt: **{filled_n}** · "
-                    f"offen: **{open_n}** · "
-                    f"Voll-Downloads: **{funnel_report.full_download_count}** · "
-                    f"technisch ungültig: "
-                    f"**{funnel_report.technically_invalid_count}** · "
-                    f"Fallbacks: **{funnel_report.fallback_used_count}**"
-                )
-                for gap_rep in funnel_report.gaps:
-                    ready = gap_rep.export_ready_candidate_id
-                    license_label = ""
-                    if gap_rep.license_metadata_status == "complete":
-                        license_label = " · Lizenzdaten vollständig"
-                    elif gap_rep.license_metadata_status == "partial":
-                        license_label = " · Lizenzdaten teilweise vorhanden"
-                    elif gap_rep.license_metadata_status == "missing":
-                        license_label = " · Keine Lizenzmetadaten geliefert"
-                    pool_label = ""
-                    counts = getattr(gap_rep, "provider_candidate_counts", None) or {}
-                    if counts:
-                        parts = [
-                            f"{name} {counts[name]}"
-                            for name in sorted(counts)
-                        ]
-                        pool_label = (
-                            f" · Pool {sum(int(v) for v in counts.values())}"
-                            f"/{getattr(gap_rep, 'candidate_pool_limit', 20)}"
-                            f" ({' · '.join(parts)})"
-                        )
+                key=show_report_key,
+                help="Detailzeilen pro Gap nur bei Bedarf laden.",
+            )
+            if st.session_state.get(show_report_key):
+                with st.expander("Funnel-Abschluss", expanded=True):
+                    st.caption(funnel_report.message)
+                    if funnel_report.llm_model:
+                        st.caption(f"Modell: `{funnel_report.llm_model}`")
                     st.write(
-                        f"`{gap_rep.gap_id}` · "
-                        + (
-                            f"export_ready `{ready}`{license_label}{pool_label}"
-                            if ready
-                            else ((gap_rep.message or "offen") + pool_label)
+                        f"Angefordert: **{len(funnel_report.requested_gap_ids)}** · "
+                        f"erfüllt: **{filled_n}** · "
+                        f"offen: **{open_n}** · "
+                        f"Voll-Downloads: **{funnel_report.full_download_count}** · "
+                        f"technisch ungültig: "
+                        f"**{funnel_report.technically_invalid_count}** · "
+                        f"Fallbacks: **{funnel_report.fallback_used_count}**"
+                    )
+                    for gap_rep in funnel_report.gaps:
+                        ready = gap_rep.export_ready_candidate_id
+                        license_label = ""
+                        if gap_rep.license_metadata_status == "complete":
+                            license_label = " · Lizenzdaten vollständig"
+                        elif gap_rep.license_metadata_status == "partial":
+                            license_label = " · Lizenzdaten teilweise vorhanden"
+                        elif gap_rep.license_metadata_status == "missing":
+                            license_label = " · Keine Lizenzmetadaten geliefert"
+                        pool_label = ""
+                        counts = (
+                            getattr(gap_rep, "provider_candidate_counts", None) or {}
                         )
-                    )
-                if funnel_report.open_gap_ids:
-                    st.warning(
-                        "Offene Gaps: " + ", ".join(funnel_report.open_gap_ids[:12])
-                    )
+                        if counts:
+                            parts = [
+                                f"{name} {counts[name]}"
+                                for name in sorted(counts)
+                            ]
+                            pool_label = (
+                                f" · Pool {sum(int(v) for v in counts.values())}"
+                                f"/{getattr(gap_rep, 'candidate_pool_limit', 20)}"
+                                f" ({' · '.join(parts)})"
+                            )
+                        st.write(
+                            f"`{gap_rep.gap_id}` · "
+                            + (
+                                f"export_ready `{ready}`{license_label}{pool_label}"
+                                if ready
+                                else ((gap_rep.message or "offen") + pool_label)
+                            )
+                        )
+                    if funnel_report.open_gap_ids:
+                        st.warning(
+                            "Offene Gaps: "
+                            + ", ".join(funnel_report.open_gap_ids[:12])
+                        )
 
     accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     if accepted is not None:
         st.info(f"Akzeptiert: {len(accepted.supplements)} Supplements")
-        with st.expander(
-            f"Lokale Dateizuordnung (manuell) · {len(accepted.supplements)}",
-            expanded=False,
-        ):
-            for supplement in accepted.supplements:
-                refreshed = refresh_supplement_validation(supplement)
-                st.write(
-                    f"`{refreshed.candidate_id}` · "
-                    f"status=`{refreshed.media_validation_status}`"
-                )
-                if refreshed.media_validation_error:
-                    st.caption(refreshed.media_validation_error)
-                path_value = st.text_input(
-                    f"local_media_path für {refreshed.candidate_id}",
-                    value=refreshed.local_media_path or "",
-                    key=f"enh_local_{project.id}_{refreshed.candidate_id}",
-                    help="Lokaler Dateipfad — keine http(s)-URL.",
-                )
-                if st.button(
-                    f"Lokale Datei zuordnen & validieren ({refreshed.candidate_id})",
-                    key=f"enh_assign_{project.id}_{refreshed.candidate_id}",
-                ):
-                    try:
-                        updated = assign_local_media_path(
-                            project, refreshed.candidate_id, path_value
-                        )
-                        st.success(
-                            f"{updated.candidate_id} → "
-                            f"{updated.media_validation_status}"
-                        )
-                        st.rerun()
-                    except LocalMediaError as exc:
-                        st.error(str(exc))
+        show_local_key = f"enh_show_local_assign_{project.id}"
+        st.checkbox(
+            f"Lokale Dateizuordnung laden ({len(accepted.supplements)})",
+            key=show_local_key,
+            help="Optional — Funnel-Downloads sind meist schon export_ready.",
+        )
+        if st.session_state.get(show_local_key):
+            with st.expander(
+                f"Lokale Dateizuordnung (manuell) · {len(accepted.supplements)}",
+                expanded=True,
+            ):
+                for supplement in accepted.supplements:
+                    refreshed = refresh_supplement_validation(supplement)
+                    st.write(
+                        f"`{refreshed.candidate_id}` · "
+                        f"status=`{refreshed.media_validation_status}`"
+                    )
+                    if refreshed.media_validation_error:
+                        st.caption(refreshed.media_validation_error)
+                    path_value = st.text_input(
+                        f"local_media_path für {refreshed.candidate_id}",
+                        value=refreshed.local_media_path or "",
+                        key=f"enh_local_{project.id}_{refreshed.candidate_id}",
+                        help="Lokaler Dateipfad — keine http(s)-URL.",
+                    )
+                    if st.button(
+                        f"Lokale Datei zuordnen & validieren ({refreshed.candidate_id})",
+                        key=f"enh_assign_{project.id}_{refreshed.candidate_id}",
+                    ):
+                        try:
+                            updated = assign_local_media_path(
+                                project, refreshed.candidate_id, path_value
+                            )
+                            st.success(
+                                f"{updated.candidate_id} → "
+                                f"{updated.media_validation_status}"
+                            )
+                            st.rerun()
+                        except LocalMediaError as exc:
+                            st.error(str(exc))
 
     st.divider()
     st.subheader("3. Finalen Cut Plan erzeugen und technisch auflösen")

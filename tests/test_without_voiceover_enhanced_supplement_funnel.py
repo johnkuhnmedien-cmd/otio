@@ -753,10 +753,11 @@ def test_ui_two_funnel_buttons_and_gap_keys() -> None:
     assert "erfüllt" in source
     assert "gesamt" in source
     assert 'f"Offene Coverage Gaps auswählen · {len(open_gap_ids)}"' in source
-    assert "Kandidaten manuell prüfen (optional)" in source
-    assert "Funnel-Abschluss" in source
-    assert "Lokale Dateizuordnung (manuell)" in source
-    assert source.count("expanded=False") >= 4
+    assert "Kandidaten manuell prüfen laden" in source
+    assert "enh_show_manual_candidates_" in source
+    assert "Funnel-Abschlussdetails laden" in source
+    assert "Lokale Dateizuordnung laden" in source
+    assert "enh_show_local_assign_" in source
     # Funnel-Modell wählbar (günstige Gemini-Varianten)
     assert "ENHANCED_FUNNEL_LLM_MODEL_CHOICES" in source
     assert "enh_funnel_model_" in source
@@ -767,6 +768,8 @@ def test_ui_two_funnel_buttons_and_gap_keys() -> None:
     assert "Funnel abbrechen" in source
     assert "request_cancel" in source
     assert "funnel_job_mgr.start" in source
+    # Session-State erst vor Pills bereinigen (nicht nach Widget)
+    assert "enh_funnel_pending_deselect_" in source
     # Kein Query-Parameter als Produktionsauslöser
     assert 'query_params.get("smoke_action"' not in source
     assert "st.query_params" not in source
