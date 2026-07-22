@@ -1,0 +1,210 @@
+"""Deterministische Python-Auflösung von Pause Directives."""
+
+from __future__ import annotations
+
+from otio_app.services.without_voiceover_enhanced.models import (
+    IntraPauseMarker,
+    NarrationTimelineDocument,
+    NarrationTimelineEntry,
+    PauseDirective,
+    SegmentTiming,
+    SentenceTiming,
+)
+from otio_app.services.without_voiceover_enhanced.pause_config import (
+    resolve_pause_duration_seconds,
+)
+
+
+class PauseResolveError(ValueError):
+    pass
+
+
+def mid_silence_split_seconds(
+    *,
+    sentence: SentenceTiming,
+    next_sentence: SentenceTiming | None,
+    audio_duration_seconds: float,
+) -> float:
+    """Mitte der Original-Stille nach ``sentence`` (Segment-relativ)."""
+    silence_start = max(0.0, float(sentence.end_seconds))
+    if next_sentence is not None:
+        silence_end = max(silence_start, float(next_sentence.start_seconds))
+    else:
+        silence_end = max(silence_start, float(audio_duration_seconds))
+    return round((silence_start + silence_end) / 2.0, 6)
+
+
+def source_seconds_to_timeline(
+    entry: NarrationTimelineEntry,
+    source_seconds: float,
+) -> float:
+    """Segment-lokale Audiozeit → absolute Timeline (inkl. Intra-Pausen)."""
+    audio_dur = entry.audio_duration_seconds
+    if audio_dur is None:
+        # Legacy: end-start war die Audio-Spanne ohne Intra-Pausen.
+        audio_dur = max(0.0, float(entry.end_seconds) - float(entry.start_seconds))
+        for pause in entry.intra_pauses:
+            audio_dur = max(0.0, audio_dur - float(pause.pause_seconds))
+    local = max(0.0, min(float(source_seconds), float(audio_dur)))
+    shift = 0.0
+    for pause in sorted(entry.intra_pauses, key=lambda p: p.source_split_seconds):
+        if local >= float(pause.source_split_seconds) - 1e-9:
+            shift += float(pause.pause_seconds)
+        else:
+            break
+    return round(float(entry.start_seconds) + local + shift, 6)
+
+
+def _sentences_for_segment(
+    sentence_index: dict[str, SentenceTiming],
+    segment_id: str,
+) -> list[SentenceTiming]:
+    rows = [
+        sentence
+        for sentence in sentence_index.values()
+        if sentence.segment_id == segment_id
+    ]
+    return sorted(rows, key=lambda item: (item.start_seconds, item.sentence_id))
+
+
+def _build_intra_pauses(
+    *,
+    segment_id: str,
+    audio_duration_seconds: float,
+    sentence_directives: list[PauseDirective],
+    sentence_index: dict[str, SentenceTiming],
+) -> list[IntraPauseMarker]:
+    if not sentence_directives:
+        return []
+    sentences = _sentences_for_segment(sentence_index, segment_id)
+    by_id = {item.sentence_id: item for item in sentences}
+    markers: list[IntraPauseMarker] = []
+    seen: set[str] = set()
+    for directive in sentence_directives:
+        sentence_id = str(directive.after_sentence_id or "").strip()
+        if not sentence_id or sentence_id in seen:
+            continue
+        sentence = by_id.get(sentence_id)
+        if sentence is None:
+            raise PauseResolveError(
+                f"Unbekannte after_sentence_id für Pause: {sentence_id}"
+            )
+        # Nächster Satz im selben Segment (sonst Stille bis Audioende).
+        next_sentence = None
+        for candidate in sentences:
+            if candidate.start_seconds > sentence.end_seconds + 1e-9:
+                next_sentence = candidate
+                break
+        pause_seconds = resolve_pause_duration_seconds(directive.duration_class)
+        if pause_seconds <= 0:
+            continue
+        split = mid_silence_split_seconds(
+            sentence=sentence,
+            next_sentence=next_sentence,
+            audio_duration_seconds=audio_duration_seconds,
+        )
+        markers.append(
+            IntraPauseMarker(
+                after_sentence_id=sentence_id,
+                source_split_seconds=split,
+                pause_seconds=round(pause_seconds, 6),
+            )
+        )
+        seen.add(sentence_id)
+    markers.sort(key=lambda item: item.source_split_seconds)
+    return markers
+
+
+def build_narration_timeline(
+    *,
+    script_version: str,
+    segment_timings: list[SegmentTiming],
+    pause_directives: list[PauseDirective],
+    sentence_index: dict[str, SentenceTiming] | None = None,
+) -> NarrationTimelineDocument:
+    """Ende Voice-Segment + aufgelöste Pause = Beginn nächstes Segment.
+
+    Intra-Segment-Pausen (``after_sentence_id``): Segment-Wanduhr verlängert sich
+    um die Pausenlänge; Audio wird später am Silence-Midpoint gesplittet (kein
+    Time-Stretch). Gleiche Inputs → identische Zeiten.
+    """
+    if not segment_timings:
+        raise PauseResolveError("Keine Segment-Timings vorhanden.")
+
+    ordered = list(segment_timings)
+    sentences = sentence_index or {}
+
+    pause_by_segment: dict[str, PauseDirective] = {}
+    pauses_by_sentence_segment: dict[str, list[PauseDirective]] = {}
+    for directive in pause_directives:
+        if directive.pause_function == "no_pause":
+            continue
+        # Validate duration class early (deterministic failure).
+        resolve_pause_duration_seconds(directive.duration_class)
+        sentence_id = str(directive.after_sentence_id or "").strip()
+        if sentence_id:
+            sentence = sentences.get(sentence_id)
+            if sentence is None:
+                raise PauseResolveError(
+                    f"Unbekannte after_sentence_id für Pause: {sentence_id}"
+                )
+            segment_id = sentence.segment_id
+            pauses_by_sentence_segment.setdefault(segment_id, []).append(directive)
+            continue
+        after_segment = str(directive.after_segment_id or "").strip()
+        if not after_segment:
+            continue
+        if after_segment in pause_by_segment:
+            raise PauseResolveError(
+                f"Doppelte Pause nach Segment {after_segment}"
+            )
+        pause_by_segment[after_segment] = directive
+
+    entries: list[NarrationTimelineEntry] = []
+    cursor = 0.0
+    for index, timing in enumerate(ordered):
+        if timing.audio_status != "valid":
+            raise PauseResolveError(
+                f"Segment {timing.segment_id} hat audio_status={timing.audio_status}"
+            )
+        if timing.script_version != script_version:
+            raise PauseResolveError(
+                f"Skriptversion passt nicht zur Audiodatei für {timing.segment_id}: "
+                f"{timing.script_version} != {script_version}"
+            )
+        audio_duration = float(timing.duration_seconds)
+        intra = _build_intra_pauses(
+            segment_id=timing.segment_id,
+            audio_duration_seconds=audio_duration,
+            sentence_directives=pauses_by_sentence_segment.get(timing.segment_id, []),
+            sentence_index=sentences,
+        )
+        intra_total = sum(float(item.pause_seconds) for item in intra)
+        start = cursor
+        end = start + audio_duration + intra_total
+        pause_seconds = 0.0
+        directive = pause_by_segment.get(timing.segment_id)
+        if directive is not None:
+            pause_seconds = resolve_pause_duration_seconds(directive.duration_class)
+        next_start = end + pause_seconds
+        entries.append(
+            NarrationTimelineEntry(
+                segment_id=timing.segment_id,
+                start_seconds=round(start, 6),
+                end_seconds=round(end, 6),
+                pause_after_seconds=round(pause_seconds, 6),
+                next_segment_start_seconds=(
+                    round(next_start, 6) if index < len(ordered) - 1 else None
+                ),
+                audio_duration_seconds=round(audio_duration, 6),
+                intra_pauses=intra,
+            )
+        )
+        cursor = next_start
+
+    total = entries[-1].end_seconds + entries[-1].pause_after_seconds
+    return NarrationTimelineDocument(
+        script_version=script_version,
+        total_duration_seconds=round(total, 6),
+        entries=entries,
+    )
