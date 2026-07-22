@@ -26,6 +26,7 @@ from otio_app.services.media_utils import (
     is_video_media,
     list_media_files,
     probe_duration_seconds,
+    probe_leading_black_seconds,
 )
 
 
@@ -456,6 +457,10 @@ def transcode_to_clean(
     if not path_is_readable_file(output_path) or output_path.stat().st_size < 1024:
         raise RuntimeError("Transcode lieferte keine gültige Ausgabedatei")
 
+    # Manche Clean-Encodes starten mit ~1–2 Schwarzframes — wegtrimmen, wenn kurz.
+    if not is_image_media(original):
+        _trim_tiny_leading_black(output_path)
+
     valid, validation_error = validate_clean_output(output_path)
     if not valid:
         try:
@@ -479,6 +484,43 @@ def transcode_to_clean(
             raise RuntimeError(
                 f"Transcode lieferte {actual}, erwartet {expected_width}×{expected_height}"
             )
+
+
+def _trim_tiny_leading_black(path: Path, *, max_trim_seconds: float = 0.12) -> None:
+    """Schneidet sehr kurzes führendes Schwarz nach dem Clean-Encode ab."""
+    leading = probe_leading_black_seconds(path)
+    if leading is None or leading <= 0 or leading > max_trim_seconds:
+        return
+    tmp_path = path.with_suffix(path.suffix + ".trimtmp")
+    command = [
+        "ffmpeg",
+        "-y",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-ss",
+        f"{leading:.3f}",
+        "-i",
+        str(path),
+        "-c",
+        "copy",
+        "-avoid_negative_ts",
+        "make_zero",
+        str(tmp_path),
+    ]
+    try:
+        result = _run_command(command, timeout_sec=120)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        tmp_path.unlink(missing_ok=True)
+        return
+    if result.returncode != 0 or not path_is_readable_file(tmp_path):
+        tmp_path.unlink(missing_ok=True)
+        return
+    try:
+        tmp_path.replace(path)
+    except OSError:
+        tmp_path.unlink(missing_ok=True)
 
 
 def validate_media_file(path: Path) -> CleanMediaEntry:

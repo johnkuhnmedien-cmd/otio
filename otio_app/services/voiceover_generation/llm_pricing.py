@@ -22,6 +22,7 @@ _PRICING_TABLE: tuple[tuple[str, str, float, float, str], ...] = (
     ("openai", "gpt-5", 5.0, 15.0, "OpenAI GPT-5-Klasse (Näherung)"),
     ("openai", "gpt-4", 2.5, 10.0, "OpenAI GPT-4-Klasse (Näherung)"),
     ("anthropic", "opus", 5.0, 25.0, "Claude Opus (~$5/$25 pro 1M)"),
+    ("anthropic", "fable-5", 10.0, 50.0, "Claude Fable 5 (~$10/$50 pro 1M)"),
     ("anthropic", "haiku", 1.0, 5.0, "Claude Haiku (~$1/$5 pro 1M)"),
     ("anthropic", "sonnet-5", 2.0, 10.0, "Claude Sonnet 5 Intro (~$2/$10 pro 1M bis 31.08.2026)"),
     ("anthropic", "sonnet", 3.0, 15.0, "Claude Sonnet (~$3/$15 pro 1M)"),

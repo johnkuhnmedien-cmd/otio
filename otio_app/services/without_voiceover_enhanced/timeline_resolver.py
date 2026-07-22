@@ -23,13 +23,19 @@ from otio_app.services.without_voiceover_enhanced.local_media_service import (
     list_export_ready_supplements,
     refresh_supplement_validation,
 )
+from otio_app.services.without_voiceover_enhanced.cut_rhythm_validator import (
+    assess_cut_rhythm,
+)
 from otio_app.services.without_voiceover_enhanced.models import (
     AcceptedSupplementsDocument,
     FinalCutPlanDocument,
+    NarrationAnchor,
     NarrationTimelineDocument,
+    NarrationTimelineEntry,
     ResolvedAudioSegment,
     ResolvedShot,
     ResolvedTimelineDocument,
+    SentenceTiming,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
     accepted_supplements_path,
@@ -38,8 +44,17 @@ from otio_app.services.without_voiceover_enhanced.paths import (
     repair_log_path,
     resolved_timeline_path,
 )
+from otio_app.services.without_voiceover_enhanced.pause_resolver import (
+    source_seconds_to_timeline,
+)
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     require_locked_script,
+)
+from otio_app.services.without_voiceover_enhanced.segment_alignment_service import (
+    load_segment_alignments,
+)
+from otio_app.services.without_voiceover_enhanced.sentence_timing_prompt import (
+    sentence_index_by_id,
 )
 
 # Technisches Minimum (Frame-Sicherheit); redaktionelle min/max kommen aus Settings.
@@ -67,12 +82,14 @@ def _asset_catalog(project: Project) -> dict[str, dict]:
                 duration = getattr(asset, "duration_seconds", None)
             if duration is None:
                 duration = probe_duration_seconds(Path(path))
+            usable_in = getattr(asset, "usable_in_s", None)
             media_type = getattr(asset, "media_type", None) or (
                 "photo" if is_image_media(Path(path)) else "video"
             )
             catalog[str(asset_id)] = {
                 "path": str(path),
                 "duration_seconds": float(duration) if duration else None,
+                "usable_in_s": float(usable_in) if usable_in is not None else None,
                 "folder": folder,
                 "media_type": str(media_type or "video").lower(),
             }
@@ -118,18 +135,108 @@ def _is_intro_folder(folder: str | None) -> bool:
     return name in {"intro", "introduction"} or name.startswith("intro_")
 
 
+def _entry_audio_duration(entry: NarrationTimelineEntry) -> float:
+    if entry.audio_duration_seconds is not None:
+        return max(0.0, float(entry.audio_duration_seconds))
+    span = max(0.0, float(entry.end_seconds) - float(entry.start_seconds))
+    for pause in entry.intra_pauses:
+        span = max(0.0, span - float(pause.pause_seconds))
+    return span
+
+
 def _anchor_to_seconds(
     timeline: NarrationTimelineDocument,
-    segment_id: str,
-    offset_seconds: float,
+    anchor: NarrationAnchor,
+    *,
+    sentence_index: dict[str, SentenceTiming],
 ) -> float:
     entry_map = {entry.segment_id: entry for entry in timeline.entries}
-    entry = entry_map.get(segment_id)
+    entry = entry_map.get(anchor.segment_id)
     if entry is None:
-        raise TimelineResolveError(f"Unbekannte Segment-ID: {segment_id}")
-    span = entry.end_seconds - entry.start_seconds
-    offset = max(0.0, min(float(offset_seconds), span))
-    return round(entry.start_seconds + offset, 6)
+        raise TimelineResolveError(f"Unbekannte Segment-ID: {anchor.segment_id}")
+
+    sentence_id = str(anchor.sentence_id or "").strip()
+    if sentence_id:
+        sentence = sentence_index.get(sentence_id)
+        if sentence is None:
+            raise TimelineResolveError(f"Unbekannte Sentence-ID: {sentence_id}")
+        if sentence.segment_id != anchor.segment_id:
+            raise TimelineResolveError(
+                f"Sentence {sentence_id} gehört zu {sentence.segment_id}, "
+                f"nicht zu {anchor.segment_id}."
+            )
+        span = max(0.0, float(sentence.end_seconds) - float(sentence.start_seconds))
+        offset = max(0.0, min(float(anchor.offset_seconds), span))
+        source = float(sentence.start_seconds) + offset
+        return source_seconds_to_timeline(entry, source)
+
+    audio_dur = _entry_audio_duration(entry)
+    offset = max(0.0, min(float(anchor.offset_seconds), audio_dur))
+    return source_seconds_to_timeline(entry, offset)
+
+
+def _build_resolved_audio_segments(
+    *,
+    timeline: NarrationTimelineDocument,
+    timing_map: dict,
+) -> list[ResolvedAudioSegment]:
+    """Segment-MP3s; Intra-Pausen → Silence-Mid-Split + Gap (kein Time-Stretch)."""
+    audio_segments: list[ResolvedAudioSegment] = []
+    for entry in timeline.entries:
+        timing = timing_map.get(entry.segment_id)
+        if timing is None:
+            continue
+        audio_path = timing.audio_path
+        audio_dur = _entry_audio_duration(entry)
+        intra = sorted(entry.intra_pauses, key=lambda p: p.source_split_seconds)
+        if not intra:
+            audio_segments.append(
+                ResolvedAudioSegment(
+                    segment_id=entry.segment_id,
+                    audio_path=audio_path,
+                    timeline_start_seconds=entry.start_seconds,
+                    timeline_end_seconds=entry.end_seconds,
+                    pause_after_seconds=entry.pause_after_seconds,
+                    source_start_seconds=0.0,
+                    source_end_seconds=round(audio_dur, 6),
+                )
+            )
+            continue
+
+        source_cursor = 0.0
+        timeline_cursor = float(entry.start_seconds)
+        for pause in intra:
+            split = max(source_cursor, min(float(pause.source_split_seconds), audio_dur))
+            piece_dur = max(0.0, split - source_cursor)
+            audio_segments.append(
+                ResolvedAudioSegment(
+                    segment_id=entry.segment_id,
+                    audio_path=audio_path,
+                    timeline_start_seconds=round(timeline_cursor, 6),
+                    timeline_end_seconds=round(timeline_cursor + piece_dur, 6),
+                    pause_after_seconds=round(float(pause.pause_seconds), 6),
+                    source_start_seconds=round(source_cursor, 6),
+                    source_end_seconds=round(split, 6),
+                    split_label=f"after:{pause.after_sentence_id}",
+                )
+            )
+            timeline_cursor += piece_dur + float(pause.pause_seconds)
+            source_cursor = split
+
+        remainder = max(0.0, audio_dur - source_cursor)
+        audio_segments.append(
+            ResolvedAudioSegment(
+                segment_id=entry.segment_id,
+                audio_path=audio_path,
+                timeline_start_seconds=round(timeline_cursor, 6),
+                timeline_end_seconds=round(timeline_cursor + remainder, 6),
+                pause_after_seconds=entry.pause_after_seconds,
+                source_start_seconds=round(source_cursor, 6),
+                source_end_seconds=round(audio_dur, 6),
+                split_label="tail",
+            )
+        )
+    return audio_segments
 
 
 def _seconds_to_frame(seconds: float, fps: float) -> float:
@@ -199,17 +306,11 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
         )
 
     timing_map = {item.segment_id: item for item in timings.segments}
-    audio_segments = [
-        ResolvedAudioSegment(
-            segment_id=entry.segment_id,
-            audio_path=timing_map[entry.segment_id].audio_path,
-            timeline_start_seconds=entry.start_seconds,
-            timeline_end_seconds=entry.end_seconds,
-            pause_after_seconds=entry.pause_after_seconds,
-        )
-        for entry in timeline.entries
-        if entry.segment_id in timing_map
-    ]
+    sentence_index = sentence_index_by_id(load_segment_alignments(project))
+    audio_segments = _build_resolved_audio_segments(
+        timeline=timeline,
+        timing_map=timing_map,
+    )
 
     resolved_shots: list[ResolvedShot] = []
     for shot in final.shots:
@@ -239,16 +340,20 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
             )
             continue
 
-        start = _anchor_to_seconds(
-            timeline,
-            shot.narration_start_anchor.segment_id,
-            shot.narration_start_anchor.offset_seconds,
-        )
-        end = _anchor_to_seconds(
-            timeline,
-            shot.narration_end_anchor.segment_id,
-            shot.narration_end_anchor.offset_seconds,
-        )
+        try:
+            start = _anchor_to_seconds(
+                timeline,
+                shot.narration_start_anchor,
+                sentence_index=sentence_index,
+            )
+            end = _anchor_to_seconds(
+                timeline,
+                shot.narration_end_anchor,
+                sentence_index=sentence_index,
+            )
+        except TimelineResolveError as exc:
+            errors.append(str(exc))
+            continue
         start = _seconds_to_frame(start, fps)
         end = _seconds_to_frame(end, fps)
         if end <= start:
@@ -302,10 +407,15 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
             source_start = 0.0
             source_end = duration
         else:
-            trim = head_trim if is_video else 0.0
+            usable_in = entry.get("usable_in_s")
+            trim = 0.0
+            if is_video:
+                trim = head_trim
+                if usable_in is not None:
+                    trim = max(trim, max(0.0, float(usable_in)))
             if trim >= float(media_duration):
                 errors.append(
-                    f"Asset {shot.asset_id}: video_head_trim ({trim}s) "
+                    f"Asset {shot.asset_id}: Head-Trim/usable_in ({trim}s) "
                     f">= Mediendauer ({media_duration}s)."
                 )
                 continue
@@ -323,7 +433,8 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
                     errors.append(
                         f"Source-Range für {shot.asset_id} würde nutzbare "
                         f"Mediendauer überschreiten "
-                        f"(shot {duration}s > usable {usable}s nach Head-Trim)."
+                        f"(shot {duration}s > usable {usable}s nach Head-Trim/"
+                        f"usable_in_s)."
                     )
                     continue
             source_start = trim + max(0.0, (usable - duration) / 2.0)
@@ -462,6 +573,8 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
                         f"{gap_shots} Shots (min Abstand {reuse_distance})."
                     )
             last_index[shot.asset_id] = index
+
+    repairs.extend(assess_cut_rhythm(final, ordered))
 
     total = timeline.total_duration_seconds + preroll + postroll
     if ordered:

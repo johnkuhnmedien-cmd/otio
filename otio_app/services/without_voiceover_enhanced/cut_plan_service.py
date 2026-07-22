@@ -64,8 +64,16 @@ from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     require_locked_script,
 )
 from otio_app.services.without_voiceover_enhanced.script_prompts import (
+    DEFAULT_CUT_RHYTHM_TARGETS,
     build_final_cut_prompt,
     build_rough_cut_prompt,
+)
+from otio_app.services.without_voiceover_enhanced.segment_alignment_service import (
+    load_segment_alignments,
+)
+from otio_app.services.without_voiceover_enhanced.sentence_timing_prompt import (
+    build_sentence_timings_json_for_segments,
+    sentence_index_by_id,
 )
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
     STATUS_LOCAL_MEDIA_MISSING,
@@ -557,18 +565,30 @@ def _parse_editorial_anchor(raw: Any) -> EditorialAnchor:
         position = "start"
     after = raw.get("after_segment_id")
     segment_id = str(raw.get("segment_id") or "")
+    sentence_raw = raw.get("sentence_id")
+    sentence_id = None if _nullish(sentence_raw) else str(sentence_raw)
     if anchor_type == "pause":
         after_id = str(after or segment_id or "")
         return EditorialAnchor(
             type="pause",
             segment_id=segment_id or after_id,
             after_segment_id=after_id or None,
+            sentence_id=sentence_id,
             position=position if position in {"start", "middle", "end"} else "start",
+        )
+    if anchor_type == "sentence" or sentence_id:
+        return EditorialAnchor(
+            type="sentence",
+            segment_id=segment_id,
+            after_segment_id=None if _nullish(after) else str(after),
+            sentence_id=sentence_id,
+            position=position,
         )
     return EditorialAnchor(
         type="segment",
         segment_id=segment_id,
         after_segment_id=None if _nullish(after) else str(after),
+        sentence_id=None,
         position=position,
     )
 
@@ -578,16 +598,21 @@ def _editorial_to_narration_anchor(anchor: EditorialAnchor) -> NarrationAnchor:
 
     Final Cut / Resolver still use real seconds; LLM 2 must not emit seconds.
     Fractions (0–1) are a compact bridge for UI and later timing mapping.
+    For sentence anchors the fraction is relative to the sentence span.
     """
     if anchor.type == "pause":
         segment_id = str(anchor.after_segment_id or anchor.segment_id or "")
-        # Pause start ≈ end of preceding segment; middle/end stay at end for now.
         fraction = 1.0 if anchor.position in {"start", "middle", "end"} else 1.0
-        return NarrationAnchor(segment_id=segment_id, offset_seconds=fraction)
+        return NarrationAnchor(
+            segment_id=segment_id,
+            offset_seconds=fraction,
+            sentence_id=anchor.sentence_id,
+        )
     fraction = _POSITION_FRACTION.get(anchor.position, 0.0)
     return NarrationAnchor(
         segment_id=anchor.segment_id,
         offset_seconds=float(fraction),
+        sentence_id=anchor.sentence_id if anchor.type == "sentence" else None,
     )
 
 
@@ -617,17 +642,29 @@ def parse_rough_cut_response(raw: str | dict[str, Any], script_version: str) -> 
     if not isinstance(payload, dict):
         raise CutPlanError("Grober Cut Plan ist kein JSON-Objekt.")
 
-    directives = [
-        PauseDirective(
-            after_segment_id=str(item.get("after_segment_id") or ""),
-            pause_function=str(item.get("pause_function") or "breath"),
-            duration_class=str(item.get("duration_class") or "medium"),
-            visual_behavior=str(item.get("visual_behavior") or "editorial_choice"),
-            editorial_reason=str(item.get("editorial_reason") or ""),
+    directives: list[PauseDirective] = []
+    for item in payload.get("pause_directives") or []:
+        if not isinstance(item, dict):
+            continue
+        after_segment = str(item.get("after_segment_id") or "")
+        after_sentence_raw = item.get("after_sentence_id")
+        after_sentence = (
+            None if _nullish(after_sentence_raw) else str(after_sentence_raw)
         )
-        for item in payload.get("pause_directives") or []
-        if isinstance(item, dict) and item.get("after_segment_id")
-    ]
+        if not after_segment and not after_sentence:
+            continue
+        directives.append(
+            PauseDirective(
+                after_segment_id=after_segment,
+                after_sentence_id=after_sentence,
+                pause_function=str(item.get("pause_function") or "breath"),
+                duration_class=str(item.get("duration_class") or "medium"),
+                visual_behavior=str(
+                    item.get("visual_behavior") or "editorial_choice"
+                ),
+                editorial_reason=str(item.get("editorial_reason") or ""),
+            )
+        )
 
     for item in payload.get("shots") or []:
         if isinstance(item, dict) and (
@@ -688,6 +725,9 @@ def parse_rough_cut_response(raw: str | dict[str, Any], script_version: str) -> 
                     offset_seconds=float(legacy_end.get("offset_seconds") or 0.0),
                 )
 
+        alignment = str(item.get("start_cut_alignment") or "").strip().lower()
+        if alignment not in {"mid_sentence", "sentence_boundary", "in_pause"}:
+            alignment = ""
         shots.append(
             RoughShot(
                 shot_id=str(item.get("shot_id") or f"shot_{index:03d}"),
@@ -700,6 +740,7 @@ def parse_rough_cut_response(raw: str | dict[str, Any], script_version: str) -> 
                 asset_fit_reason=asset_fit_reason,
                 continuity_notes=str(item.get("continuity_notes") or ""),
                 coverage_gap_id=coverage_gap_id,
+                start_cut_alignment=alignment,
                 narration_start_anchor=narration_start,
                 narration_end_anchor=narration_end,
                 visual_intent_id=str(item.get("visual_intent_id") or visual_intent),
@@ -740,6 +781,11 @@ def parse_rough_cut_response(raw: str | dict[str, Any], script_version: str) -> 
                 must_include=[str(x) for x in (item.get("must_include") or []) if x],
                 must_avoid=[str(x) for x in (item.get("must_avoid") or []) if x],
                 fact_check_required=bool(item.get("fact_check_required", False)),
+                covered_sentence_ids=[
+                    str(x) for x in (item.get("covered_sentence_ids") or []) if x
+                ],
+                desired_motion=str(item.get("desired_motion") or ""),
+                desired_framing=str(item.get("desired_framing") or ""),
                 visual_intent_id=str(item.get("visual_intent_id") or ""),
                 subject=needed or str(item.get("subject") or ""),
                 location=str(item.get("location") or ""),
@@ -855,6 +901,10 @@ def generate_rough_cut_for_folder(
             if folder_name
             else _dramaturgy_text(project)
         )
+        segment_ids = [seg.segment_id for seg in context.script_slice.segments]
+        sentence_timings_json = build_sentence_timings_json_for_segments(
+            project, segment_ids=segment_ids
+        )
         prompt = build_rough_cut_prompt(
             locked_script_json=context.script_slice.model_dump_json(indent=2),
             segment_timings_json=context.timings_slice.model_dump_json(indent=2),
@@ -869,6 +919,8 @@ def generate_rough_cut_for_folder(
             next_folder_name=context.next_folder_name,
             include_middle_frames=include_frames,
             shot_constraints_text=format_shot_constraints_for_prompt(options),
+            sentence_timings_json=sentence_timings_json,
+            cut_rhythm_targets_text=DEFAULT_CUT_RHYTHM_TARGETS,
         )
         images = (
             middle_frame_attachments_from_payload(
@@ -973,14 +1025,19 @@ def merge_and_persist_rough_cuts(
     merged_pauses: list[PauseDirective] = []
     merged_shots: list[RoughShot] = []
     merged_gaps: list[CoverageGap] = []
-    seen_pause_segments: set[str] = set()
+    seen_pause_keys: set[str] = set()
     for result in ok:
         assert result.rough is not None
         assert result.coverage is not None
         for pause in result.rough.pause_directives:
-            if pause.after_segment_id in seen_pause_segments:
+            sentence_id = str(pause.after_sentence_id or "").strip()
+            if sentence_id:
+                key = f"sentence:{sentence_id}"
+            else:
+                key = f"segment:{pause.after_segment_id}"
+            if key in seen_pause_keys:
                 continue
-            seen_pause_segments.add(pause.after_segment_id)
+            seen_pause_keys.add(key)
             merged_pauses.append(pause)
         merged_shots.extend(result.rough.shots)
         merged_gaps.extend(result.coverage.gaps)
@@ -998,6 +1055,7 @@ def merge_and_persist_rough_cuts(
         script_version=locked.script_version,
         segment_timings=timings.segments,
         pause_directives=rough.pause_directives,
+        sentence_index=sentence_index_by_id(load_segment_alignments(project)),
     )
     write_json(
         pause_directives_path(project),
@@ -1227,16 +1285,27 @@ def parse_final_cut_response(raw: str | dict[str, Any], script_version: str) -> 
         asset_id = str(item.get("asset_id") or "").strip()
         if not asset_id:
             raise CutPlanError(f"Shot {item.get('shot_id')} ohne asset_id.")
+        start_sentence = start.get("sentence_id")
+        end_sentence = end.get("sentence_id")
+        alignment = str(item.get("start_cut_alignment") or "").strip().lower()
+        if alignment not in {"mid_sentence", "sentence_boundary", "in_pause"}:
+            alignment = ""
         shots.append(
             FinalShot(
                 shot_id=str(item.get("shot_id") or f"shot_{index:03d}"),
                 narration_start_anchor=NarrationAnchor(
                     segment_id=str(start.get("segment_id") or ""),
                     offset_seconds=float(start.get("offset_seconds") or 0.0),
+                    sentence_id=(
+                        None if _nullish(start_sentence) else str(start_sentence)
+                    ),
                 ),
                 narration_end_anchor=NarrationAnchor(
                     segment_id=str(end.get("segment_id") or ""),
                     offset_seconds=float(end.get("offset_seconds") or 0.0),
+                    sentence_id=(
+                        None if _nullish(end_sentence) else str(end_sentence)
+                    ),
                 ),
                 asset_id=asset_id,
                 editorial_function=str(item.get("editorial_function") or "narration_support"),
@@ -1246,6 +1315,7 @@ def parse_final_cut_response(raw: str | dict[str, Any], script_version: str) -> 
                     item.get("source_range_intent") or "representative_middle_section"
                 ),
                 may_overlap_pause=bool(item.get("may_overlap_pause", False)),
+                start_cut_alignment=alignment,
             )
         )
     if not shots:
@@ -1347,6 +1417,10 @@ def generate_final_cut_for_folder(
             ensure_ascii=False,
             indent=2,
         )
+        segment_ids = [seg.segment_id for seg in script_slice.segments]
+        sentence_alignment_json = build_sentence_timings_json_for_segments(
+            project, segment_ids=segment_ids
+        )
         prompt = build_final_cut_prompt(
             locked_script_json=script_slice.model_dump_json(indent=2),
             narration_timeline_json=timeline_slice.model_dump_json(indent=2),
@@ -1366,6 +1440,8 @@ def generate_final_cut_for_folder(
             previous_folder_name=context.previous_folder_name,
             next_folder_name=context.next_folder_name,
             shot_constraints_text=format_shot_constraints_for_prompt(options),
+            sentence_alignment_json=sentence_alignment_json,
+            cut_rhythm_targets_text=DEFAULT_CUT_RHYTHM_TARGETS,
         )
         model_id = resolve_llm_model_id(provider, model)
         if llm_callable is not None:

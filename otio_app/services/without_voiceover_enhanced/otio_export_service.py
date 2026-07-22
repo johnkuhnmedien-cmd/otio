@@ -224,11 +224,16 @@ def export_otio_from_resolved_timeline(
             segment.audio_path, label=f"Audio {segment.segment_id}"
         )
         duration = segment.timeline_end_seconds - segment.timeline_start_seconds
+        source_start = float(getattr(segment, "source_start_seconds", 0.0) or 0.0)
+        clip_name = segment.segment_id
+        split_label = str(getattr(segment, "split_label", "") or "").strip()
+        if split_label:
+            clip_name = f"{segment.segment_id}:{split_label}"
         clip = otio.schema.Clip(
-            name=segment.segment_id,
+            name=clip_name,
             media_reference=otio.schema.ExternalReference(target_url=audio_path),
             source_range=otio.opentime.TimeRange(
-                start_time=otio.opentime.RationalTime(0, fps),
+                start_time=otio.opentime.RationalTime(source_start * fps, fps),
                 duration=otio.opentime.RationalTime(duration * fps, fps),
             ),
         )

@@ -10,9 +10,14 @@ import streamlit as st
 from otio_app.services.without_voiceover_enhanced.models import (
     EditorialAnchor,
     FinalCutPlanDocument,
+    NarrationAnchor,
     NarrationTimelineDocument,
     ResolvedTimelineDocument,
     RoughCutPlanDocument,
+    SentenceTiming,
+)
+from otio_app.services.without_voiceover_enhanced.pause_resolver import (
+    source_seconds_to_timeline,
 )
 
 _POSITION_FRACTION = {
@@ -41,6 +46,8 @@ class TimelineBlock:
 def editorial_anchor_to_seconds(
     anchor: EditorialAnchor,
     timeline: NarrationTimelineDocument,
+    *,
+    sentence_index: dict[str, SentenceTiming] | None = None,
 ) -> float | None:
     """Mappt Editorial-Anker auf absolute Timeline-Sekunden."""
     by_id = {entry.segment_id: entry for entry in timeline.entries}
@@ -55,9 +62,25 @@ def editorial_anchor_to_seconds(
     entry = by_id.get((anchor.segment_id or "").strip())
     if entry is None:
         return None
-    span = max(0.0, entry.end_seconds - entry.start_seconds)
+
+    sentence_id = str(anchor.sentence_id or "").strip()
+    if (anchor.type == "sentence" or sentence_id) and sentence_index:
+        sentence = sentence_index.get(sentence_id)
+        if sentence is None:
+            return None
+        span = max(0.0, float(sentence.end_seconds) - float(sentence.start_seconds))
+        frac = _POSITION_FRACTION.get(anchor.position, 0.0)
+        source = float(sentence.start_seconds) + span * frac
+        return float(source_seconds_to_timeline(entry, source))
+
+    # Segment-Anker: Position über Roh-Audio (Intra-Pausen werden gemappt).
+    audio_dur = entry.audio_duration_seconds
+    if audio_dur is None:
+        audio_dur = max(0.0, float(entry.end_seconds) - float(entry.start_seconds))
+        for pause in entry.intra_pauses:
+            audio_dur = max(0.0, audio_dur - float(pause.pause_seconds))
     frac = _POSITION_FRACTION.get(anchor.position, 0.0)
-    return float(entry.start_seconds + span * frac)
+    return float(source_seconds_to_timeline(entry, float(audio_dur) * frac))
 
 
 def narration_blocks(timeline: NarrationTimelineDocument) -> list[TimelineBlock]:
@@ -90,11 +113,17 @@ def narration_blocks(timeline: NarrationTimelineDocument) -> list[TimelineBlock]
 def rough_shot_blocks(
     rough: RoughCutPlanDocument,
     timeline: NarrationTimelineDocument,
+    *,
+    sentence_index: dict[str, SentenceTiming] | None = None,
 ) -> list[TimelineBlock]:
     blocks: list[TimelineBlock] = []
     for shot in rough.shots:
-        start = editorial_anchor_to_seconds(shot.start_anchor, timeline)
-        end = editorial_anchor_to_seconds(shot.end_anchor, timeline)
+        start = editorial_anchor_to_seconds(
+            shot.start_anchor, timeline, sentence_index=sentence_index
+        )
+        end = editorial_anchor_to_seconds(
+            shot.end_anchor, timeline, sentence_index=sentence_index
+        )
         if start is None or end is None:
             continue
         if end < start:
@@ -116,34 +145,51 @@ def rough_shot_blocks(
 
 def _narration_anchor_to_seconds(
     timeline: NarrationTimelineDocument,
-    segment_id: str,
-    offset_seconds: float,
+    anchor: NarrationAnchor,
+    *,
+    sentence_index: dict[str, SentenceTiming] | None = None,
 ) -> float | None:
-    """Wie timeline_resolver._anchor_to_seconds — Offset in Segment-Sekunden."""
+    """Wie timeline_resolver._anchor_to_seconds — Offset in Source-/Satz-Sekunden."""
     by_id = {entry.segment_id: entry for entry in timeline.entries}
-    entry = by_id.get(segment_id)
+    entry = by_id.get(anchor.segment_id)
     if entry is None:
         return None
-    span = max(0.0, entry.end_seconds - entry.start_seconds)
-    offset = max(0.0, min(float(offset_seconds), span))
-    return float(entry.start_seconds + offset)
+    sentence_id = str(anchor.sentence_id or "").strip()
+    if sentence_id and sentence_index:
+        sentence = sentence_index.get(sentence_id)
+        if sentence is None:
+            return None
+        span = max(0.0, float(sentence.end_seconds) - float(sentence.start_seconds))
+        offset = max(0.0, min(float(anchor.offset_seconds), span))
+        return float(
+            source_seconds_to_timeline(entry, float(sentence.start_seconds) + offset)
+        )
+    audio_dur = entry.audio_duration_seconds
+    if audio_dur is None:
+        audio_dur = max(0.0, float(entry.end_seconds) - float(entry.start_seconds))
+        for pause in entry.intra_pauses:
+            audio_dur = max(0.0, audio_dur - float(pause.pause_seconds))
+    offset = max(0.0, min(float(anchor.offset_seconds), float(audio_dur)))
+    return float(source_seconds_to_timeline(entry, offset))
 
 
 def final_shot_blocks(
     final: FinalCutPlanDocument,
     timeline: NarrationTimelineDocument,
+    *,
+    sentence_index: dict[str, SentenceTiming] | None = None,
 ) -> list[TimelineBlock]:
     blocks: list[TimelineBlock] = []
     for shot in final.shots:
         start = _narration_anchor_to_seconds(
             timeline,
-            shot.narration_start_anchor.segment_id,
-            shot.narration_start_anchor.offset_seconds,
+            shot.narration_start_anchor,
+            sentence_index=sentence_index,
         )
         end = _narration_anchor_to_seconds(
             timeline,
-            shot.narration_end_anchor.segment_id,
-            shot.narration_end_anchor.offset_seconds,
+            shot.narration_end_anchor,
+            sentence_index=sentence_index,
         )
         if start is None or end is None:
             continue

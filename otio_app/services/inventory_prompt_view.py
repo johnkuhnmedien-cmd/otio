@@ -146,6 +146,9 @@ def build_slim_folder_inventory(
             "dauer_s": dauer,
             "beschreibung": str(asset.description or "").strip(),
         }
+        usable_in = getattr(asset, "usable_in_s", None)
+        if type_label == "video" and usable_in is not None:
+            entry["usable_in_s"] = round(float(usable_in), 3)
         motion = str(getattr(asset, "motion", "") or "").strip()
         framing = str(getattr(asset, "framing", "") or "").strip()
         if motion:
@@ -217,6 +220,8 @@ def slim_assets_for_cut_plan_prompt(
             "media_type": media_type,
             "description": item.get("beschreibung") or "",
         }
+        if "usable_in_s" in item:
+            row["usable_in_s"] = item["usable_in_s"]
         for key in ("motion", "framing", "people", "people_action", "defects"):
             if key in item:
                 row[key] = item[key]

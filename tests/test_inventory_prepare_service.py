@@ -87,6 +87,10 @@ def test_prepare_writes_duration_and_slim(tmp_path: Path, monkeypatch) -> None:
         lambda path: 14.25 if path.suffix == ".mp4" else None,
     )
     monkeypatch.setattr(
+        "otio_app.services.inventory_prepare_service.probe_leading_black_seconds",
+        lambda path: 0.08 if path.suffix == ".mp4" else None,
+    )
+    monkeypatch.setattr(
         "otio_app.services.inventory_prompt_view.probe_duration_seconds",
         lambda path: 14.25 if path.suffix == ".mp4" else None,
     )
@@ -107,6 +111,7 @@ def test_prepare_writes_duration_and_slim(tmp_path: Path, monkeypatch) -> None:
     assert inventory is not None
     video = next(a for a in inventory.assets if a.asset_id == "asset_canyon_clip")
     assert video.duration_seconds == 14.25
+    assert video.usable_in_s == 0.08
     still = next(a for a in inventory.assets if a.asset_id == "asset_canyon_still")
     assert still.duration_seconds is None
 
@@ -116,11 +121,13 @@ def test_prepare_writes_duration_and_slim(tmp_path: Path, monkeypatch) -> None:
     slim = json.loads(slim_path.read_text(encoding="utf-8"))
     by_id = {a["id"]: a for a in slim["assets"]}
     assert by_id["asset_canyon_clip"]["dauer_s"] == 14.25
+    assert by_id["asset_canyon_clip"]["usable_in_s"] == 0.08
     assert by_id["asset_canyon_still"]["dauer_s"] is None
 
     # Zweiter Lauf ohne force: nichts neu messen.
     report2 = prepare_inventories_for_cut_plan(project)
     assert report2.durations_newly_measured == 0
+    assert report2.usable_in_newly_measured == 0
     assert report2.assets_with_duration == 1
 
 

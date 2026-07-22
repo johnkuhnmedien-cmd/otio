@@ -192,6 +192,7 @@ ENHANCED_CUT_LLM_MODEL_CHOICES: tuple[str, ...] = (
     "openai:gpt-5.6-terra",
     "openai:gpt-5.6-sol",
     "openai:gpt-5.4-mini",
+    "anthropic:claude-fable-5",
     "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
 )
@@ -199,6 +200,7 @@ ENHANCED_CUT_LLM_MODEL_LABELS: dict[str, str] = {
     "openai:gpt-5.6-terra": "GPT-5.6 Terra — ausgewogen (Standard)",
     "openai:gpt-5.6-sol": "GPT-5.6 Sol — Flagship",
     "openai:gpt-5.4-mini": "GPT-5.4 mini — günstig, schnell",
+    "anthropic:claude-fable-5": "Claude Fable 5 — stark für Cut-Prompts",
     "gemini-3.5-flash": "Gemini 3.5 Flash — schnell",
     "gemini-3.1-flash-lite": "Gemini 3.1 Flash Lite — günstig",
 }

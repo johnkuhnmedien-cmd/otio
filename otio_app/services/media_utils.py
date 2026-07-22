@@ -319,6 +319,65 @@ def probe_duration_seconds(path: Path) -> Optional[float]:
         return None
 
 
+_BLACKDETECT_RE = re.compile(
+    r"black_start:(?P<start>[-+]?\d*\.?\d+).*?black_end:(?P<end>[-+]?\d*\.?\d+)",
+    re.IGNORECASE,
+)
+
+
+def probe_leading_black_seconds(
+    path: Path,
+    *,
+    max_probe_seconds: float = 5.0,
+    min_black_duration: float = 0.04,
+    pixel_threshold: float = 0.10,
+) -> Optional[float]:
+    """Dauer des Schwarz-/Lead-Ins am Clip-Anfang (ffmpeg blackdetect).
+
+    Liefert ``None`` wenn kein führendes Schwarz gefunden oder ffmpeg fehlt.
+    """
+    if not path.is_file():
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-nostdin",
+                "-i",
+                str(path),
+                "-t",
+                str(max(0.1, float(max_probe_seconds))),
+                "-vf",
+                (
+                    f"blackdetect=d={float(min_black_duration):.3f}"
+                    f":pix_th={float(pixel_threshold):.3f}"
+                ),
+                "-an",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+
+    text = f"{result.stderr or ''}\n{result.stdout or ''}"
+    for match in _BLACKDETECT_RE.finditer(text):
+        try:
+            start = float(match.group("start"))
+            end = float(match.group("end"))
+        except (TypeError, ValueError):
+            continue
+        if start <= 0.05 and end > start:
+            return round(end, 3)
+    return 0.0
+
+
 def ffmpeg_has_drawtext() -> bool:
     """Prüft, ob die lokale ffmpeg-Installation den drawtext-Filter enthält."""
     return _probe_ffmpeg_drawtext()

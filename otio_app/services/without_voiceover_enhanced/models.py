@@ -8,18 +8,24 @@ from pydantic import BaseModel, Field
 
 
 class NarrationAnchor(BaseModel):
-    """Absolute/sekundenbasierte Anker (Final Cut / Timeline-Resolver)."""
+    """Absolute/sekundenbasierte Anker (Final Cut / Timeline-Resolver).
+
+    Mit ``sentence_id`` ist ``offset_seconds`` relativ zum Satzanfang
+    (nicht zum Segment). Ohne ``sentence_id`` wie bisher relativ zum Segment.
+    """
 
     segment_id: str
     offset_seconds: float = 0.0
+    sentence_id: Optional[str] = None
 
 
 class EditorialAnchor(BaseModel):
     """Redaktionelle Anker aus LLM-Lauf 2 (keine Sekunden/Frames)."""
 
-    type: str = "segment"  # segment | pause
+    type: str = "segment"  # segment | pause | sentence
     segment_id: str = ""
     after_segment_id: Optional[str] = None
+    sentence_id: Optional[str] = None
     position: str = "start"  # start|early|middle|late|end
 
 
@@ -133,11 +139,21 @@ class SegmentAlignmentsDocument(BaseModel):
 
 
 class PauseDirective(BaseModel):
-    after_segment_id: str
+    after_segment_id: str = ""
+    # Pause an Satzgrenze INNERHALB eines Segments (optional).
+    after_sentence_id: Optional[str] = None
     pause_function: str
     duration_class: str
     visual_behavior: str = "editorial_choice"
     editorial_reason: str = ""
+
+
+class IntraPauseMarker(BaseModel):
+    """Aufgezogene Pause INNERHALB eines Segments (Mitte der Original-Stille)."""
+
+    after_sentence_id: str
+    source_split_seconds: float
+    pause_seconds: float
 
 
 class NarrationTimelineEntry(BaseModel):
@@ -146,6 +162,9 @@ class NarrationTimelineEntry(BaseModel):
     end_seconds: float
     pause_after_seconds: float = 0.0
     next_segment_start_seconds: Optional[float] = None
+    # Rohdauer der Segment-MP3 (ohne aufgezogene Intra-Pausen). Legacy: None.
+    audio_duration_seconds: Optional[float] = None
+    intra_pauses: list[IntraPauseMarker] = Field(default_factory=list)
 
 
 class NarrationTimelineDocument(BaseModel):
@@ -166,6 +185,8 @@ class RoughShot(BaseModel):
     asset_fit_reason: str = ""
     continuity_notes: str = ""
     coverage_gap_id: Optional[str] = None
+    # mid_sentence | sentence_boundary | in_pause — für Rhythmus-Quoten
+    start_cut_alignment: str = ""
     # Compat bridge for older UI / Final-Cut consumers:
     narration_start_anchor: NarrationAnchor = Field(
         default_factory=lambda: NarrationAnchor(segment_id="")
@@ -199,6 +220,9 @@ class CoverageGap(BaseModel):
     must_include: list[str] = Field(default_factory=list)
     must_avoid: list[str] = Field(default_factory=list)
     fact_check_required: bool = False
+    covered_sentence_ids: list[str] = Field(default_factory=list)
+    desired_motion: str = ""
+    desired_framing: str = ""
     # Legacy / compat fields (still filled when useful):
     visual_intent_id: str = ""
     subject: str = ""
@@ -422,6 +446,7 @@ class FinalShot(BaseModel):
     transition_behavior: str = "straight_cut"
     source_range_intent: str = "representative_middle_section"
     may_overlap_pause: bool = False
+    start_cut_alignment: str = ""
 
 
 class FinalCutPlanDocument(BaseModel):
@@ -450,6 +475,10 @@ class ResolvedAudioSegment(BaseModel):
     timeline_start_seconds: float
     timeline_end_seconds: float
     pause_after_seconds: float = 0.0
+    # Innerhalb der Quell-MP3 (für Intra-Segment-Splits an Satzpausen).
+    source_start_seconds: float = 0.0
+    source_end_seconds: Optional[float] = None
+    split_label: str = ""
 
 
 class ResolvedTimelineDocument(BaseModel):

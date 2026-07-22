@@ -80,6 +80,9 @@ class AssetMediaAnalysis(BaseModel):
     # Gemessene Mediendauer (ffprobe); optional — ältere Inventare ohne Feld bleiben gültig.
     # Gehört NICHT in den Inventory-Hash (Stale-Erkennung nur inhaltlich).
     duration_seconds: Optional[float] = None
+    # Schwarz-/Lead-In am Asset-Anfang (ffmpeg blackdetect); nutzbare Länge =
+    # duration_seconds - usable_in_s.
+    usable_in_s: Optional[float] = None
     # Strukturierte Frame-Analyse (asset_v2_structured); optional für Altbestände.
     motion: str = ""
     framing: str = ""

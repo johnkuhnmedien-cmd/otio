@@ -14,6 +14,24 @@ FORBIDDEN_PHRASES = (
     "Here we see",
 )
 
+# Quantitative Stilziele (Referenz: WUNDER DEUTSCHLANDS Stichprobe).
+# Nur in Prompts, wenn Aufrufer cut_rhythm_targets_text setzt.
+DEFAULT_CUT_RHYTHM_TARGETS = """\
+CUT RHYTHM TARGETS (BINDING STYLE TARGETS — aim for this distribution):
+
+- Shot length: typically 10–17 seconds of narration time (median around 13.5s).
+  Prefer this band unless a deliberate hold or micro-cut is editorially justified.
+- Cut placement mix (self-classify each shot via start_cut_alignment):
+  - ~65% mid_sentence (cut during a spoken sentence, not at its edge)
+  - ~25% sentence_boundary (cut at a sentence start/end)
+  - ~10% in_pause (cut during an explicit pause)
+- Intra-sentence / between-sentence pauses are usually short (0.3–0.8s class).
+  Occasional longer pauses (1.5–2.5s class) are allowed for emphasis/reveal.
+- Chapter endings: prefer a longer music-only / breath pause (3–8s class) when
+  using pause_function chapter_transition after the last segment.
+- Do NOT invent sentence boundaries that are not in SENTENCE TIMINGS.
+"""
+
 
 _SHARED_SCRIPT_RULES = """\
 GOAL
@@ -273,6 +291,8 @@ def build_rough_cut_prompt(
     next_folder_name: str | None = None,
     include_middle_frames: bool = False,
     shot_constraints_text: str = "",
+    sentence_timings_json: str = "",
+    cut_rhythm_targets_text: str = "",
 ) -> str:
     chapter_scope = ""
     if folder_name:
@@ -313,6 +333,33 @@ MIDDLE-FRAME VISION (OPTIONAL INPUT):
 - Never invent an asset ID that is not listed in LOCAL ASSETS.
 """
 
+    sentence_block = ""
+    sentence_anchor_rules = ""
+    if sentence_timings_json.strip():
+        sentence_block = f"""
+SENTENCE TIMINGS (authoritative, relative to each segment's audio):
+{sentence_timings_json}
+"""
+        sentence_anchor_rules = """
+SENTENCE ANCHORS (when SENTENCE TIMINGS are provided):
+
+- Prefer sentence anchors for mid-sentence cuts and sentence-boundary cuts.
+- A sentence anchor has this form:
+  {"type": "sentence", "sentence_id": "Sedona_segment_001__s002", "position": "start|early|middle|late|end"}
+- You may still use segment or pause anchors when appropriate.
+- Pause inside a segment (between sentences): set pause_directives[].after_sentence_id
+  to the sentence_id AFTER which the pause occurs (and after_segment_id to that sentence's segment).
+- Every shot MUST set start_cut_alignment to exactly one of:
+  mid_sentence | sentence_boundary | in_pause
+- Do not invent sentence_ids. Use only IDs from SENTENCE TIMINGS.
+"""
+
+    rhythm_block = ""
+    if cut_rhythm_targets_text.strip():
+        rhythm_block = f"""
+{cut_rhythm_targets_text.strip()}
+"""
+
     return f"""\
 You are LLM 2, the editorial rough-cut planner for a documentary pipeline.
 
@@ -324,7 +371,7 @@ Your task is to create:
 
 The locked narration provides a continuous time carpet.
 The visual edit plan cuts freely across that time carpet.
-{chapter_scope}{vision_rules}
+{chapter_scope}{vision_rules}{rhythm_block}{sentence_anchor_rules}
 NON-NEGOTIABLE EDITORIAL RULES:
 
 - A sentence is not a shot.
@@ -390,6 +437,10 @@ ASSET RULES:
 - Every shot with local_asset_id null must reference exactly one coverage_gap_id.
 - A shot with a suitable local asset must have coverage_gap_id null.
 - Prefer varied local assets across neighboring shots when equally suitable.
+- Usable video length ≈ duration_seconds - usable_in_s (black/lead-in). Prefer assets
+  whose usable length covers the intended shot span.
+- Photos/stills: do not plan long static holds as if they were motion clips;
+  keep still spans short unless a deliberate still is justified.
 
 PAUSE RULES:
 
@@ -450,6 +501,7 @@ OUTPUT SCHEMA:
   "pause_directives": [
     {{
       "after_segment_id": "segment_001",
+      "after_sentence_id": "segment_001__s002_or_null",
       "pause_function": "breath|emphasis|anticipation|reveal|chapter_transition|reflection|no_pause",
       "duration_class": "short|medium|long",
       "visual_behavior": "hold_current_shot|next_shot_may_start_during_pause|cut_at_pause_start|cut_at_pause_end|editorial_choice",
@@ -460,17 +512,20 @@ OUTPUT SCHEMA:
     {{
       "shot_id": "shot_001",
       "start_anchor": {{
-        "type": "segment|pause",
+        "type": "segment|pause|sentence",
         "segment_id": "segment_001",
+        "sentence_id": "segment_001__s002_or_null",
         "after_segment_id": null,
         "position": "start|early|middle|late|end"
       }},
       "end_anchor": {{
-        "type": "segment|pause",
+        "type": "segment|pause|sentence",
         "segment_id": "segment_002",
+        "sentence_id": null,
         "after_segment_id": null,
         "position": "start|early|middle|late|end"
       }},
+      "start_cut_alignment": "mid_sentence|sentence_boundary|in_pause",
       "narrative_function": "orientation|context|evidence|atmosphere|transition|contrast|reveal|reflection",
       "visual_intent": "What the shot should communicate editorially.",
       "local_asset_id": "existing_asset_id_or_null",
@@ -496,6 +551,9 @@ OUTPUT SCHEMA:
       "must_avoid": [
         "misleading or unsuitable element"
       ],
+      "covered_sentence_ids": ["segment_001__s002"],
+      "desired_motion": "static|pan|tilt|tracking|drone|handheld|zoom|unknown",
+      "desired_framing": "close|medium|wide|aerial|pov",
       "fact_check_required": false
     }}
   ]
@@ -517,7 +575,7 @@ LOCKED SCRIPT:
 
 SEGMENT TIMINGS:
 {segment_timings_json}
-
+{sentence_block}
 LOCAL ASSETS:
 {local_assets_json}
 
@@ -543,6 +601,8 @@ def build_final_cut_prompt(
     previous_folder_name: str | None = None,
     next_folder_name: str | None = None,
     shot_constraints_text: str = "",
+    sentence_alignment_json: str = "",
+    cut_rhythm_targets_text: str = "",
 ) -> str:
     chapter_scope = ""
     if folder_name:
@@ -562,6 +622,32 @@ CHAPTER SCOPE (CRITICAL):
 - Accepted supplements may be used when they fit this chapter's coverage needs.
 """
 
+    sentence_block = ""
+    sentence_rules = ""
+    if sentence_alignment_json.strip():
+        sentence_block = f"""
+SENTENCE TIMINGS (authoritative, relative to each segment's audio):
+{sentence_alignment_json}
+"""
+        sentence_rules = """
+SENTENCE ANCHOR RULES:
+
+- Narration anchors may include optional sentence_id.
+- When sentence_id is set, offset_seconds is RELATIVE TO THAT SENTENCE START
+  (not the segment start).
+- Keep cuts ≥ 0.4s away from sentence edges unless start_cut_alignment is
+  sentence_boundary.
+- Every shot MUST set start_cut_alignment:
+  mid_sentence | sentence_boundary | in_pause
+- Do not invent sentence_ids.
+"""
+
+    rhythm_block = ""
+    if cut_rhythm_targets_text.strip():
+        rhythm_block = f"""
+{cut_rhythm_targets_text.strip()}
+"""
+
     return f"""\
 Create the FINAL editorial cut plan.
 
@@ -577,14 +663,19 @@ You do NOT decide (Python finalizes these later):
 - technical source timecodes
 - validated source ranges
 - final frame rounding
-{chapter_scope}{shot_constraints_text}
+{chapter_scope}{shot_constraints_text}{rhythm_block}{sentence_rules}
 Use narration_timeline start/end seconds together with asset duration_seconds
-to keep each shot within shot_min/shot_max and within the chosen asset length.
+(and usable_in_s when present) to keep each shot within shot_min/shot_max and
+within the chosen asset's usable length.
 If an asset is too short, pick another asset or shorten the narration span.
 
 EDITORIAL GUIDANCE: Prefer a varied shot structure. One sentence may map to \
 one asset when that is the best cut — but do not default to a rigid \
 one-sentence-one-asset grid for the whole film.
+
+RETURN STRICT JSON ONLY.
+Do not use Markdown.
+Do not add explanations before or after the JSON.
 
 OUTPUT JSON:
 {{
@@ -593,8 +684,17 @@ OUTPUT JSON:
   "shots": [
     {{
       "shot_id": "shot_019",
-      "narration_start_anchor": {{"segment_id": "segment_009", "offset_seconds": 0.8}},
-      "narration_end_anchor": {{"segment_id": "segment_011", "offset_seconds": 1.1}},
+      "narration_start_anchor": {{
+        "segment_id": "segment_009",
+        "sentence_id": "segment_009__s002_or_null",
+        "offset_seconds": 0.8
+      }},
+      "narration_end_anchor": {{
+        "segment_id": "segment_011",
+        "sentence_id": null,
+        "offset_seconds": 1.1
+      }},
+      "start_cut_alignment": "mid_sentence|sentence_boundary|in_pause",
       "asset_id": "asset_423",
       "editorial_function": "historical_context",
       "editorial_reason": "...",
@@ -609,12 +709,19 @@ Include voiceover_preroll_sec / voiceover_postroll_sec when the project settings
 ask the LLM to decide (see SHOT / ASSET CONSTRAINTS). Otherwise omit them or
 mirror the fixed setting values. Always keep Intro coverage complete.
 
+FINAL VALIDATION BEFORE RETURNING JSON:
+- All shot_ids unique; all segment_ids / sentence_ids exist in inputs.
+- Offsets are non-negative; sentence-relative offsets stay within that sentence.
+- start_cut_alignment set on every shot.
+- Shots chronological and non-overlapping on the narration carpet.
+- Asset usable length covers each shot (duration_seconds - usable_in_s).
+
 LOCKED SCRIPT:
 {locked_script_json}
 
 NARRATION TIMELINE:
 {narration_timeline_json}
-
+{sentence_block}
 PAUSE DIRECTIVES:
 {pause_directives_json}
 

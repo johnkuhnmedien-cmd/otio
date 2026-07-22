@@ -14,7 +14,11 @@ from otio_app.models import Project
 from otio_app.project_layout import get_folder_inventory_path
 from otio_app.services.inventory_loader import load_folder_inventory, save_folder_inventory
 from otio_app.services.inventory_prompt_view import slim_inventory_path_for
-from otio_app.services.media_utils import is_image_media, probe_duration_seconds
+from otio_app.services.media_utils import (
+    is_image_media,
+    probe_duration_seconds,
+    probe_leading_black_seconds,
+)
 
 __all__ = [
     "InventoryPrepareReport",
@@ -31,6 +35,7 @@ class InventoryPrepareReport:
     assets_missing_duration: int = 0
     assets_non_video: int = 0
     durations_newly_measured: int = 0
+    usable_in_newly_measured: int = 0
     slim_files_written: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -127,53 +132,77 @@ def prepare_inventories_for_cut_plan(
 
             if not _is_video_asset(path, asset.media_type):
                 report.assets_non_video += 1
-                # Bilder/Audio: Dauer explizit leeren (null in Slim).
+                # Bilder/Audio: Dauer/Lead-In explizit leeren (null in Slim).
+                updates: dict = {}
                 if asset.duration_seconds is not None:
-                    updated_assets.append(
-                        asset.model_copy(update={"duration_seconds": None})
-                    )
+                    updates["duration_seconds"] = None
+                if asset.usable_in_s is not None:
+                    updates["usable_in_s"] = None
+                if updates:
+                    updated_assets.append(asset.model_copy(update=updates))
                     changed = True
                 else:
                     updated_assets.append(asset)
                 continue
 
             existing = asset.duration_seconds
+            updates: dict = {}
+            media_path = Path(path)
+
             if (
-                not force_reprobe
-                and existing is not None
-                and float(existing) > 0
+                force_reprobe
+                or existing is None
+                or float(existing) <= 0
             ):
-                report.assets_with_duration += 1
-                updated_assets.append(asset)
-                continue
+                if not media_path.is_file():
+                    report.assets_missing_duration += 1
+                    report.errors.append(f"Datei fehlt: {path}")
+                    updated_assets.append(asset)
+                    continue
+                try:
+                    probed = probe_duration_seconds(media_path)
+                except Exception as exc:  # noqa: BLE001
+                    report.assets_missing_duration += 1
+                    report.errors.append(
+                        f"Dauer nicht lesbar ({media_path.name}): {exc}"
+                    )
+                    updated_assets.append(asset)
+                    continue
+                if probed is None or probed <= 0:
+                    report.assets_missing_duration += 1
+                    report.errors.append(f"Dauer ≤ 0: {media_path.name}")
+                    updated_assets.append(asset)
+                    continue
+                updates["duration_seconds"] = round(float(probed), 3)
+                report.durations_newly_measured += 1
 
-            if not Path(path).is_file():
-                report.assets_missing_duration += 1
-                report.errors.append(f"Datei fehlt: {path}")
-                updated_assets.append(asset)
-                continue
+            # usable_in_s: Schwarz-Lead-In (auch wenn Dauer schon bekannt).
+            need_usable = force_reprobe or asset.usable_in_s is None
+            if need_usable:
+                if not media_path.is_file():
+                    if "duration_seconds" not in updates:
+                        report.assets_missing_duration += 1
+                        report.errors.append(f"Datei fehlt: {path}")
+                        updated_assets.append(asset)
+                        continue
+                else:
+                    try:
+                        leading = probe_leading_black_seconds(media_path)
+                    except Exception as exc:  # noqa: BLE001
+                        report.errors.append(
+                            f"usable_in_s nicht lesbar ({media_path.name}): {exc}"
+                        )
+                        leading = None
+                    if leading is not None:
+                        updates["usable_in_s"] = round(float(leading), 3)
+                        report.usable_in_newly_measured += 1
 
-            try:
-                probed = probe_duration_seconds(Path(path))
-            except Exception as exc:  # noqa: BLE001
-                report.assets_missing_duration += 1
-                report.errors.append(f"Dauer nicht lesbar ({Path(path).name}): {exc}")
+            if updates:
+                updated_assets.append(asset.model_copy(update=updates))
+                changed = True
+            else:
                 updated_assets.append(asset)
-                continue
-
-            if probed is None or probed <= 0:
-                report.assets_missing_duration += 1
-                report.errors.append(f"Dauer ≤ 0: {Path(path).name}")
-                updated_assets.append(asset)
-                continue
-
-            duration = round(float(probed), 3)
-            updated_assets.append(
-                asset.model_copy(update={"duration_seconds": duration})
-            )
             report.assets_with_duration += 1
-            report.durations_newly_measured += 1
-            changed = True
 
         folder_doc = inventory.model_copy(update={"assets": updated_assets})
         inv_path = get_folder_inventory_path(project.work_dir_path, folder)
