@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import time
 
 import streamlit as st
@@ -335,23 +337,100 @@ def _render_lightweight_funnel_monitor(project) -> None:
     st.rerun()
 
 
-def render_enhanced_cut_plan_page() -> None:
-    st.header("⑦ Cut Plan (Enhanced MVP)")
-    st.caption(
-        "1) Grober Cut Plan + Pausen · 2) Supplements suchen/auswählen · "
-        "3) Finaler Cut Plan + technische Auflösung. "
-        "Kein Satz = ein Asset."
+
+
+_SECTION_ROUGH = "1 · Rough Cut (LLM 2)"
+_SECTION_FUNNEL = "2 · Supplements / Funnel"
+_SECTION_FINAL = "3 · Final Cut (LLM 3)"
+_SECTION_OPTIONS = (_SECTION_ROUGH, _SECTION_FUNNEL, _SECTION_FINAL)
+
+
+def _json_mtime_count_cache(
+    project_id: str, path: Path, *, list_key: str
+) -> int:
+    """Zählt Listeneinträge in JSON mit Session-Cache (mtime)."""
+    if not path.is_file():
+        return 0
+    cache_key = f"_json_count_{project_id}_{path.name}_{list_key}"
+    mtime = path.stat().st_mtime_ns
+    cached = st.session_state.get(cache_key)
+    if isinstance(cached, tuple) and cached[0] == mtime:
+        return int(cached[1])
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        st.session_state[cache_key] = (mtime, 0)
+        return 0
+    count = len(payload.get(list_key) or []) if isinstance(payload, dict) else 0
+    st.session_state[cache_key] = (mtime, count)
+    return int(count)
+
+
+def _stock_candidate_count(project) -> int:
+    return _json_mtime_count_cache(
+        project.id, stock_search_results_path(project), list_key="candidates"
     )
-    project = get_enhanced_project()
-    if project is None:
-        return
 
-    # Während der Funnel läuft: keine schweren JSON-/Widget-Reruns.
-    funnel_mgr_early = get_supplement_funnel_job_manager()
-    if funnel_mgr_early.is_running(project.id):
-        _render_lightweight_funnel_monitor(project)
-        return
 
+def _accepted_count(project) -> int:
+    return _json_mtime_count_cache(
+        project.id, accepted_supplements_path(project), list_key="supplements"
+    )
+
+
+def _funnel_report_top_summary(project) -> dict | None:
+    """Nur Top-Level-Felder — kein Pydantic über 2MB Candidate-Records."""
+    path = supplement_funnel_report_path(project)
+    if not path.is_file():
+        return None
+    cache_key = f"_funnel_top_{project.id}"
+    mtime = path.stat().st_mtime_ns
+    cached = st.session_state.get(cache_key)
+    if isinstance(cached, tuple) and cached[0] == mtime:
+        return cached[1]
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        st.session_state[cache_key] = (mtime, None)
+        return None
+    if not isinstance(raw, dict):
+        st.session_state[cache_key] = (mtime, None)
+        return None
+    summary = {
+        "message": str(raw.get("message") or ""),
+        "llm_model": str(raw.get("llm_model") or ""),
+        "requested": len(raw.get("requested_gap_ids") or []),
+        "filled": len(raw.get("filled_gap_ids") or []),
+        "open": len(raw.get("open_gap_ids") or []),
+        "downloads": int(raw.get("full_download_count") or 0),
+        "invalid": int(raw.get("technically_invalid_count") or 0),
+        "fallbacks": int(raw.get("fallback_used_count") or 0),
+        "open_gap_ids": list(raw.get("open_gap_ids") or [])[:12],
+    }
+    st.session_state[cache_key] = (mtime, summary)
+    return summary
+
+
+def _filled_gap_ids_from_accepted(project) -> set[str]:
+    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
+    if accepted is None:
+        return set()
+    return {
+        (s.gap_id or "").strip()
+        for s in accepted.supplements
+        if (s.gap_id or "").strip()
+    }
+
+
+def _default_cut_section(project) -> str:
+    if stock_search_results_path(project).is_file():
+        return _SECTION_FUNNEL
+    if final_cut_plan_path(project).is_file():
+        return _SECTION_FINAL
+    return _SECTION_ROUGH
+
+
+def _render_section_rough(project) -> None:
     st.subheader("1. Groben Cut Plan und Pausen erzeugen")
     rough_tokens, rough_chapters = _estimate_rough_cut_input_tokens(project)
     rough_provider, rough_model, _rough_max = _render_enhanced_cut_model(
@@ -432,26 +511,40 @@ def render_enhanced_cut_plan_page() -> None:
         except Exception as exc:  # noqa: BLE001
             st.error(f"Fehler: {exc}")
 
-    rough = load_model(rough_cut_plan_path(project), RoughCutPlanDocument)
-    timeline = load_model(narration_timeline_path(project), NarrationTimelineDocument)
-    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
-    final_preview = load_model(final_cut_plan_path(project), FinalCutPlanDocument)
-    resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
-
-    render_realtime_timeline(
-        narration_timeline=timeline,
-        rough=rough,
-        final=final_preview,
-        resolved=resolved,
+    show_timeline_key = f"enh_show_timeline_{project.id}"
+    st.checkbox(
+        "Echtzeit-Timeline laden",
+        key=show_timeline_key,
+        help="Standard aus — große HTML-Timeline nur bei Bedarf.",
     )
+    if st.session_state.get(show_timeline_key):
+        rough = load_model(rough_cut_plan_path(project), RoughCutPlanDocument)
+        timeline = load_model(
+            narration_timeline_path(project), NarrationTimelineDocument
+        )
+        final_preview = load_model(final_cut_plan_path(project), FinalCutPlanDocument)
+        resolved = load_model(
+            resolved_timeline_path(project), ResolvedTimelineDocument
+        )
+        render_realtime_timeline(
+            narration_timeline=timeline,
+            rough=rough,
+            final=final_preview,
+            resolved=resolved,
+        )
 
-    if rough is not None:
-        with st.expander(
-            f"Rough-Cut Details · {len(rough.shots)} Shots · "
-            f"{len(rough.pause_directives)} Pausen",
-            expanded=False,
-        ):
-            for shot in rough.shots:
+    show_rough_key = f"enh_show_rough_details_{project.id}"
+    rough_meta = load_model(rough_cut_plan_path(project), RoughCutPlanDocument)
+    if rough_meta is not None:
+        st.checkbox(
+            (
+                f"Rough-Cut Details laden · {len(rough_meta.shots)} Shots · "
+                f"{len(rough_meta.pause_directives)} Pausen"
+            ),
+            key=show_rough_key,
+        )
+        if st.session_state.get(show_rough_key):
+            for shot in rough_meta.shots:
                 start = shot.start_anchor
                 end = shot.end_anchor
                 start_label = (
@@ -469,35 +562,34 @@ def render_enhanced_cut_plan_page() -> None:
                     f"asset={shot.local_asset_id or shot.asset_id} · "
                     f"fit={shot.asset_fit}"
                 )
-    open_gap_ids_overview = list_open_funnel_gap_ids(project)
-    total_gaps = len(coverage.gaps) if coverage is not None else 0
-    open_gaps_count = len(open_gap_ids_overview)
-    filled_gaps_count = max(0, total_gaps - open_gaps_count)
-    if total_gaps > 0:
+
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    if coverage is not None and coverage.gaps:
+        filled_ids = _filled_gap_ids_from_accepted(project)
+        total_gaps = len(coverage.gaps)
+        open_n = sum(1 for g in coverage.gaps if g.gap_id not in filled_ids)
+        filled_n = max(0, total_gaps - open_n)
         st.info(
-            f"Gaps: **offen {open_gaps_count}** · "
-            f"**erfüllt {filled_gaps_count}** · "
+            f"Gaps: **offen {open_n}** · "
+            f"**erfüllt {filled_n}** · "
             f"**gesamt {total_gaps}**"
         )
-
-    if coverage is not None and coverage.gaps:
-        with st.expander(
-            (
-                f"Coverage Gaps · gesamt {total_gaps} · "
-                f"offen {open_gaps_count} · erfüllt {filled_gaps_count}"
-            ),
-            expanded=False,
-        ):
+        show_gaps_key = f"enh_show_coverage_gaps_{project.id}"
+        st.checkbox(
+            f"Coverage-Gap-Liste laden ({total_gaps})",
+            key=show_gaps_key,
+        )
+        if st.session_state.get(show_gaps_key):
             for gap in coverage.gaps:
                 queries = gap.search_concepts or gap.search_queries
-                is_open = gap.gap_id in open_gap_ids_overview
-                status = "offen" if is_open else "erfüllt"
+                status = "offen" if gap.gap_id not in filled_ids else "erfüllt"
                 st.caption(
                     f"{gap.gap_id}: {gap.needed_visual or gap.subject} · "
                     f"Status: {status} · queries={queries}"
                 )
 
-    st.divider()
+
+def _render_section_funnel(project) -> None:
     st.subheader("2. Supplements suchen und auswählen")
 
     st.markdown("**Stockanbieter verwenden:**")
@@ -507,8 +599,6 @@ def render_enhanced_cut_plan_page() -> None:
     for index, provider_name in enumerate(SUPPORTED_STOCK_PROVIDERS):
         current = config.providers[provider_name].enabled
         widget_key = f"enh_provider_{project.id}_{provider_name}"
-        # Seed session_state once from disk. Do NOT pass value= on every rerun —
-        # otherwise Save would re-apply the old disk value and discard the UI toggle.
         if widget_key not in st.session_state:
             st.session_state[widget_key] = current
         with cols[index]:
@@ -518,9 +608,6 @@ def render_enhanced_cut_plan_page() -> None:
             )
     if st.button("Anbieterauswahl speichern", key="enh_save_providers"):
         saved = save_stock_providers_config(project, enabled_draft)
-        # Do not write checkbox keys here — Streamlit forbids mutating a
-        # widget's session_state after the widget was instantiated. The
-        # checkboxes already hold the saved values; persist + rerun is enough.
         st.success(
             "Anbieterauswahl gespeichert: "
             + ", ".join(
@@ -547,6 +634,17 @@ def render_enhanced_cut_plan_page() -> None:
                 project,
                 progress_callback=_search_progress,
             )
+            # Count-/Status-Caches aktualisieren (ohne späteren Full-Parse).
+            st.session_state[
+                f"_json_count_{project.id}_"
+                f"{stock_search_results_path(project).name}_candidates"
+            ] = (
+                stock_search_results_path(project).stat().st_mtime_ns,
+                len(results.candidates),
+            )
+            st.session_state[f"_stock_provider_status_{project.id}"] = dict(
+                results.provider_status or {}
+            )
             progress_bar.progress(
                 1.0,
                 text=f"{len(results.candidates)} Kandidaten gefunden",
@@ -560,394 +658,371 @@ def render_enhanced_cut_plan_page() -> None:
         except Exception as exc:  # noqa: BLE001
             st.error(f"Fehler: {exc}")
 
-    results = load_model(stock_search_results_path(project), StockSearchResultsDocument)
-
-    if results is not None:
-        if results.provider_status:
-            st.caption(
-                "Provider-Status: "
-                + ", ".join(f"{k}={v}" for k, v in results.provider_status.items())
-            )
-
-        # Funnel-Auswahl VOR der langen Kandidaten-Checkboxliste — kompakt und
-        # zuverlässig bedienbar (st.pills; st.multiselect ist in 1.59/BaseWeb
-        # für echten Browser-Smoke ungeeignet).
-        st.markdown("**Coverage Gaps automatisch auflösen**")
-        open_gap_ids = list(open_gap_ids_overview)
-        gap_by_id = {g.gap_id: g for g in (coverage.gaps if coverage else [])}
-        select_key = f"enh_funnel_gap_multiselect_{project.id}"
+    stock_path = stock_search_results_path(project)
+    has_stock = stock_path.is_file()
+    candidate_count = _stock_candidate_count(project) if has_stock else 0
+    # Provider-Status nur aus Cache / leichter Teil — nicht die ganze Stock-JSON.
+    provider_status = st.session_state.get(f"_stock_provider_status_{project.id}")
+    if isinstance(provider_status, dict) and provider_status:
         st.caption(
-            f"Aktuell: offen **{len(open_gap_ids)}** · "
-            f"erfüllt **{filled_gaps_count}** · "
-            f"gesamt **{total_gaps}**"
+            "Provider-Status: "
+            + ", ".join(f"{k}={v}" for k, v in provider_status.items())
         )
 
-        funnel_settings = load_model_settings(project)
-        funnel_role = funnel_settings.enhanced_supplement_funnel
-        with st.expander("⚙️ Funnel-Modell (Text + Thumbnail)", expanded=False):
-            funnel_updated = render_llm_model_selectbox(
-                label="Funnel-Modell",
-                role_settings=funnel_role,
-                key=f"enh_funnel_model_{project.id}",
-                input_info=LLM_INPUT_INFO["enhanced_supplement_funnel"],
-                options=ENHANCED_FUNNEL_LLM_MODEL_CHOICES,
-                labels=ENHANCED_FUNNEL_LLM_MODEL_LABELS,
-                show_estimated_costs=True,
-            )
-            if st.button(
-                "Funnel-Modell speichern",
-                key=f"enh_funnel_model_save_{project.id}",
-            ):
-                save_model_settings(
-                    project,
-                    funnel_settings.model_copy(
-                        update={"enhanced_supplement_funnel": funnel_updated}
-                    ),
-                )
-                st.success("Funnel-Modell gespeichert.")
-            st.caption(
-                f"Aktiv: **{funnel_updated.model}** · "
-                "Für günstige Tests: Gemini 3.1 Flash Lite."
-            )
-        funnel_model_id = funnel_updated.model
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    # UI-Zähler leicht: Coverage + Accepted (kein 2MB-Funnel-Report pro Rerun).
+    filled_ids = _filled_gap_ids_from_accepted(project)
+    total_gaps = len(coverage.gaps) if coverage is not None else 0
+    open_gap_ids = [
+        g.gap_id
+        for g in (coverage.gaps if coverage else [])
+        if g.gap_id not in filled_ids
+    ]
+    open_gaps_count = len(open_gap_ids)
+    filled_gaps_count = max(0, total_gaps - open_gaps_count)
 
-        # Veraltete R3-Checkbox-Keys bereinigen (einmalig / bei Reruns).
-        for gap_id in list(gap_by_id):
-            legacy_key = f"enh_funnel_gap_select_{project.id}_{gap_id}"
-            if legacy_key in st.session_state:
-                del st.session_state[legacy_key]
+    st.markdown("**Coverage Gaps automatisch auflösen**")
+    st.caption(
+        f"Aktuell: offen **{open_gaps_count}** · "
+        f"erfüllt **{filled_gaps_count}** · "
+        f"gesamt **{total_gaps}**"
+    )
 
-        selected_open_ids: list[str] = []
-        if open_gap_ids:
-            # Auswahl erst NACH Job-Ende bereinigen — nicht nach Widget-Erzeugung
-            # (Streamlit verbietet session_state-Schreiben auf existierende Keys).
-            pending_deselect_key = f"enh_funnel_pending_deselect_{project.id}"
-            pending_filled = st.session_state.pop(pending_deselect_key, None)
-            if pending_filled and select_key in st.session_state:
-                filled = set(pending_filled)
-                current_sel = st.session_state.get(select_key) or []
-                if isinstance(current_sel, list):
-                    st.session_state[select_key] = [
-                        gid for gid in current_sel if gid not in filled
-                    ]
-
-            def _format_open_gap(gap_id: str) -> str:
-                gap = gap_by_id.get(gap_id)
-                visual = ""
-                if gap is not None:
-                    visual = (gap.needed_visual or gap.subject or "").strip()
-                visual = visual or "—"
-                if len(visual) > 80:
-                    visual = visual[:77] + "…"
-                return f"{gap_id} · {visual}"
-
-            with st.expander(
-                f"Offene Coverage Gaps auswählen · {len(open_gap_ids)}",
-                expanded=False,
-            ):
-                selected_raw = st.pills(
-                    "Offene Coverage Gaps auswählen",
-                    options=open_gap_ids,
-                    selection_mode="multi",
-                    format_func=_format_open_gap,
-                    key=select_key,
-                    help="Nur offene Gaps. Erfüllte Gaps erscheinen nicht.",
-                    label_visibility="collapsed",
-                )
-                open_set = set(open_gap_ids)
-                if isinstance(selected_raw, list):
-                    selected_open_ids = [
-                        gid for gid in selected_raw if gid in open_set
-                    ]
-                elif selected_raw and str(selected_raw) in open_set:
-                    selected_open_ids = [str(selected_raw)]
-                else:
-                    selected_open_ids = []
-                if selected_open_ids:
-                    st.caption(
-                        "Ausgewählt: " + ", ".join(selected_open_ids[:12])
-                        + ("…" if len(selected_open_ids) > 12 else "")
-                    )
-        else:
-            st.info("Keine offenen Coverage Gaps.")
-            if select_key in st.session_state:
-                del st.session_state[select_key]
-
-        funnel_job_mgr = get_supplement_funnel_job_manager()
-        funnel_running = funnel_job_mgr.is_running(project.id)
-
-        def _start_funnel_job(gap_ids: list[str]) -> None:
-            started = funnel_job_mgr.start(
+    funnel_settings = load_model_settings(project)
+    funnel_role = funnel_settings.enhanced_supplement_funnel
+    with st.expander("⚙️ Funnel-Modell (Text + Thumbnail)", expanded=False):
+        funnel_updated = render_llm_model_selectbox(
+            label="Funnel-Modell",
+            role_settings=funnel_role,
+            key=f"enh_funnel_model_{project.id}",
+            input_info=LLM_INPUT_INFO["enhanced_supplement_funnel"],
+            options=ENHANCED_FUNNEL_LLM_MODEL_CHOICES,
+            labels=ENHANCED_FUNNEL_LLM_MODEL_LABELS,
+            show_estimated_costs=True,
+        )
+        if st.button(
+            "Funnel-Modell speichern",
+            key=f"enh_funnel_model_save_{project.id}",
+        ):
+            save_model_settings(
                 project,
-                gap_ids=gap_ids,
-                model=funnel_model_id,
+                funnel_settings.model_copy(
+                    update={"enhanced_supplement_funnel": funnel_updated}
+                ),
             )
-            if not started:
-                st.warning("Funnel läuft bereits — bitte Abbrechen oder warten.")
+            st.success("Funnel-Modell gespeichert.")
+        st.caption(
+            f"Aktiv: **{funnel_updated.model}** · "
+            "Für günstige Tests: Gemini 3.1 Flash Lite."
+        )
+    funnel_model_id = funnel_updated.model
+
+    gap_by_id = {g.gap_id: g for g in (coverage.gaps if coverage else [])}
+    select_key = f"enh_funnel_gap_multiselect_{project.id}"
+    for gap_id in list(gap_by_id):
+        legacy_key = f"enh_funnel_gap_select_{project.id}_{gap_id}"
+        if legacy_key in st.session_state:
+            del st.session_state[legacy_key]
+
+    selected_open_ids: list[str] = []
+    if open_gap_ids:
+        pending_deselect_key = f"enh_funnel_pending_deselect_{project.id}"
+        pending_filled = st.session_state.pop(pending_deselect_key, None)
+        if pending_filled and select_key in st.session_state:
+            filled = set(pending_filled)
+            current_sel = st.session_state.get(select_key) or []
+            if isinstance(current_sel, list):
+                st.session_state[select_key] = [
+                    gid for gid in current_sel if gid not in filled
+                ]
+
+        def _format_open_gap(gap_id: str) -> str:
+            gap = gap_by_id.get(gap_id)
+            visual = ""
+            if gap is not None:
+                visual = (gap.needed_visual or gap.subject or "").strip()
+            visual = visual or "—"
+            if len(visual) > 80:
+                visual = visual[:77] + "…"
+            return f"{gap_id} · {visual}"
+
+        show_pills_key = f"enh_show_open_gap_pills_{project.id}"
+        st.checkbox(
+            f"Offene Coverage Gaps auswählen laden · {len(open_gap_ids)}",
+            key=show_pills_key,
+            help="Pills nur bei Bedarf — sonst schnellerer Rerun.",
+        )
+        if st.session_state.get(show_pills_key):
+            selected_raw = st.pills(
+                "Offene Coverage Gaps auswählen",
+                options=open_gap_ids,
+                selection_mode="multi",
+                format_func=_format_open_gap,
+                key=select_key,
+                help="Nur offene Gaps. Erfüllte Gaps erscheinen nicht.",
+                label_visibility="collapsed",
+            )
+            open_set = set(open_gap_ids)
+            if isinstance(selected_raw, list):
+                selected_open_ids = [gid for gid in selected_raw if gid in open_set]
+            elif selected_raw and str(selected_raw) in open_set:
+                selected_open_ids = [str(selected_raw)]
+            else:
+                selected_open_ids = []
+            if selected_open_ids:
+                st.caption(
+                    "Ausgewählt: " + ", ".join(selected_open_ids[:12])
+                    + ("…" if len(selected_open_ids) > 12 else "")
+                )
+        else:
+            st.caption(
+                f"Gap-Auswahl ausgeblendet ({len(open_gap_ids)} offen). "
+                "Checkbox aktivieren zum Auswählen einzelner Gaps."
+            )
+    else:
+        st.info("Keine offenen Coverage Gaps.")
+        if select_key in st.session_state:
+            del st.session_state[select_key]
+
+    funnel_job_mgr = get_supplement_funnel_job_manager()
+    funnel_running = funnel_job_mgr.is_running(project.id)
+
+    def _start_funnel_job(gap_ids: list[str]) -> None:
+        started = funnel_job_mgr.start(
+            project,
+            gap_ids=gap_ids,
+            model=funnel_model_id,
+        )
+        if not started:
+            st.warning("Funnel läuft bereits — bitte Abbrechen oder warten.")
+        st.rerun()
+
+    def _render_funnel_job_panel() -> None:
+        state = funnel_job_mgr.get_state(project.id)
+        if state is None:
+            return
+        if state.status == FunnelJobStatus.RUNNING:
+            st.progress(
+                min(1.0, max(0.0, float(state.fraction))),
+                text=(state.message or "Funnel läuft…")[:120],
+            )
+            st.info(state.message or "Funnel läuft im Hintergrund…")
+            if state.cancel_requested:
+                st.warning(
+                    "Abbruch angefordert — aktueller LLM-/Download-Schritt "
+                    "wird noch beendet, danach stoppt der Funnel."
+                )
+            if st.button(
+                "⏹ Funnel abbrechen",
+                key=f"enh_funnel_cancel_{project.id}",
+                disabled=state.cancel_requested,
+                type="primary",
+            ):
+                funnel_job_mgr.request_cancel(project.id)
+                st.rerun()
+            return
+
+        if state.status == FunnelJobStatus.CANCELLED:
+            st.warning(
+                state.message
+                or "Funnel abgebrochen. Bereits erfüllte Gaps bleiben erhalten."
+            )
+        elif state.status == FunnelJobStatus.FAILED:
+            st.error(state.error or "Funnel fehlgeschlagen.")
+        elif state.status == FunnelJobStatus.COMPLETED:
+            st.success(state.message or "Funnel abgeschlossen.")
+
+        if state.report is not None:
+            st.session_state[f"enh_funnel_pending_deselect_{project.id}"] = list(
+                state.report.filled_gap_ids or []
+            )
+        if st.button(
+            "Hinweis schließen",
+            key=f"enh_funnel_dismiss_{project.id}",
+        ):
+            funnel_job_mgr.dismiss(project.id)
             st.rerun()
 
-        def _render_funnel_job_panel() -> None:
-            state = funnel_job_mgr.get_state(project.id)
-            if state is None:
-                return
-            if state.status == FunnelJobStatus.RUNNING:
-                st.progress(
-                    min(1.0, max(0.0, float(state.fraction))),
-                    text=(state.message or "Funnel läuft…")[:120],
-                )
-                st.info(state.message or "Funnel läuft im Hintergrund…")
-                if state.model:
-                    st.caption(f"Modell: `{state.model}`")
-                if state.cancel_requested:
-                    st.warning(
-                        "Abbruch angefordert — aktueller LLM-/Download-Schritt "
-                        "wird noch beendet, danach stoppt der Funnel."
-                    )
-                if st.button(
-                    "⏹ Funnel abbrechen",
-                    key=f"enh_funnel_cancel_{project.id}",
-                    disabled=state.cancel_requested,
-                    type="primary",
-                ):
-                    funnel_job_mgr.request_cancel(project.id)
-                    st.rerun()
-                if state.log_lines:
-                    st.caption("\n".join(state.log_lines[-14:]))
-                return
+    funnel_state = funnel_job_mgr.get_state(project.id)
+    if funnel_state is not None and funnel_state.status == FunnelJobStatus.RUNNING:
+        poll_while_running(
+            _render_funnel_job_panel,
+            lambda: funnel_job_mgr.is_running(project.id),
+            refresh_key=f"enh_funnel_poll_{project.id}",
+        )
+    elif funnel_state is not None:
+        _render_funnel_job_panel()
 
-            if state.status == FunnelJobStatus.CANCELLED:
-                st.warning(
-                    state.message
-                    or "Funnel abgebrochen. Bereits erfüllte Gaps bleiben erhalten."
-                )
-            elif state.status == FunnelJobStatus.FAILED:
-                st.error(state.error or "Funnel fehlgeschlagen.")
-            elif state.status == FunnelJobStatus.COMPLETED:
-                st.success(state.message or "Funnel abgeschlossen.")
-
-            # Erfüllte Gaps vorm nächsten Pills-Render bereinigen (nicht hier).
-            if state.report is not None:
-                st.session_state[f"enh_funnel_pending_deselect_{project.id}"] = list(
-                    state.report.filled_gap_ids or []
-                )
-            if st.button(
-                "Hinweis schließen",
-                key=f"enh_funnel_dismiss_{project.id}",
-            ):
-                funnel_job_mgr.dismiss(project.id)
-                st.rerun()
-
-        funnel_state = funnel_job_mgr.get_state(project.id)
-        if funnel_state is not None and funnel_state.status == FunnelJobStatus.RUNNING:
-            poll_while_running(
-                _render_funnel_job_panel,
-                lambda: funnel_job_mgr.is_running(project.id),
-                refresh_key=f"enh_funnel_poll_{project.id}",
-            )
-        elif funnel_state is not None:
-            _render_funnel_job_panel()
-
-        cols_funnel = st.columns(2)
-        with cols_funnel[0]:
-            all_disabled = (not open_gap_ids) or funnel_running
-            if st.button(
-                "Alle offenen Gaps automatisch auflösen",
-                type="primary",
-                key="enh_funnel_all_open",
-                disabled=all_disabled,
-                help=(
-                    "Verarbeitet alle aktuell offenen Coverage Gaps sequenziell. "
-                    "Mehrfachauswahl wird ignoriert. Läuft im Hintergrund — "
-                    "Abbrechen möglich."
-                ),
-            ):
-                # Auswahl bewusst ignorieren — frische Open-Liste.
-                _start_funnel_job(list_open_funnel_gap_ids(project))
-        with cols_funnel[1]:
-            selected_disabled = (not selected_open_ids) or funnel_running
-            if st.button(
-                "Ausgewählte Gaps automatisch auflösen",
-                key="enh_funnel_selected",
-                disabled=selected_disabled,
-                help=(
-                    "Verarbeitet nur ausgewählte offene Gaps. "
-                    "Gleicher Funnel-Service wie „Alle“. Läuft im Hintergrund."
-                ),
-            ):
-                # Nur noch gültige offene IDs (Session kann veraltet sein).
-                current_open = set(list_open_funnel_gap_ids(project))
-                valid_selected = [
-                    gid for gid in selected_open_ids if gid in current_open
-                ]
-                if not valid_selected:
-                    st.warning("Keine gültige Gap-Auswahl.")
-                else:
-                    _start_funnel_job(valid_selected)
-
-        candidate_count = len(results.candidates)
-        # Wichtig: st.expander führt den Body trotzdem bei JEDEM Rerun aus.
-        # 2000+ Checkboxen deshalb nur nach explizitem Opt-in rendern.
-        show_manual_key = f"enh_show_manual_candidates_{project.id}"
-        st.checkbox(
-            f"Kandidaten manuell prüfen laden ({candidate_count})",
-            key=show_manual_key,
+    cols_funnel = st.columns(2)
+    with cols_funnel[0]:
+        all_disabled = (not open_gap_ids) or funnel_running
+        if st.button(
+            "Alle offenen Gaps automatisch auflösen",
+            type="primary",
+            key="enh_funnel_all_open",
+            disabled=all_disabled,
             help=(
-                "Standard aus — sonst werden bei jedem Modellwechsel "
-                "alle Stock-Checkboxen neu gebaut (sehr langsam)."
+                "Verarbeitet alle aktuell offenen Coverage Gaps sequenziell. "
+                "Mehrfachauswahl wird ignoriert. Läuft im Hintergrund — "
+                "Abbrechen möglich."
             ),
-        )
-        if st.session_state.get(show_manual_key):
-            with st.expander(
-                f"Kandidaten manuell prüfen · {candidate_count}",
-                expanded=True,
-            ):
-                gap_passages = _gap_passage_map(coverage)
-                selected_ids: list[str] = []
-                for index, candidate in enumerate(results.candidates):
-                    checked = st.checkbox(
-                        _stock_candidate_checkbox_label(candidate, gap_passages),
-                        value=candidate.selected,
-                        key=(
-                            f"enh_stock_{project.id}_{index}_"
-                            f"{candidate.candidate_id}"
-                        ),
+        ):
+            # Service-Liste erst beim Start (lädt Report) — nicht bei jedem Rerun.
+            _start_funnel_job(list_open_funnel_gap_ids(project))
+    with cols_funnel[1]:
+        selected_disabled = (not selected_open_ids) or funnel_running
+        if st.button(
+            "Ausgewählte Gaps automatisch auflösen",
+            key="enh_funnel_selected",
+            disabled=selected_disabled,
+            help=(
+                "Verarbeitet nur ausgewählte offene Gaps. "
+                "Gleicher Funnel-Service wie „Alle“. Läuft im Hintergrund."
+            ),
+        ):
+            current_open = set(list_open_funnel_gap_ids(project))
+            valid_selected = [
+                gid for gid in selected_open_ids if gid in current_open
+            ]
+            if not valid_selected:
+                st.warning("Keine gültige Gap-Auswahl.")
+            else:
+                _start_funnel_job(valid_selected)
+
+    # Schwere Stock-JSON nur bei Opt-in laden (nicht nur Checkboxen).
+    show_manual_key = f"enh_show_manual_candidates_{project.id}"
+    st.checkbox(
+        f"Kandidaten manuell prüfen laden ({candidate_count})",
+        key=show_manual_key,
+        help=(
+            "Lädt die komplette Stock-JSON und baut Checkboxen. "
+            "Standard aus — sonst sehr langsam."
+        ),
+        disabled=not has_stock,
+    )
+    if has_stock and st.session_state.get(show_manual_key):
+        results = load_model(stock_path, StockSearchResultsDocument)
+        if results is not None:
+            gap_passages = _gap_passage_map(coverage)
+            selected_ids: list[str] = []
+            for index, candidate in enumerate(results.candidates):
+                checked = st.checkbox(
+                    _stock_candidate_checkbox_label(candidate, gap_passages),
+                    value=candidate.selected,
+                    key=(
+                        f"enh_stock_{project.id}_{index}_"
+                        f"{candidate.candidate_id}"
+                    ),
+                )
+                if checked:
+                    selected_ids.append(candidate.candidate_id)
+            if st.button("Auswahl akzeptieren", key="enh_accept_stock"):
+                try:
+                    accepted = accept_supplement_candidates(project, selected_ids)
+                    st.success(
+                        f"{len(accepted.supplements)} Supplements "
+                        "akzeptiert (manuell — ohne Download/LLM)."
                     )
-                    if checked:
-                        selected_ids.append(candidate.candidate_id)
-
-                cols_stock = st.columns(2)
-                with cols_stock[0]:
-                    if st.button("Auswahl akzeptieren", key="enh_accept_stock"):
-                        try:
-                            accepted = accept_supplement_candidates(
-                                project, selected_ids
-                            )
-                            st.success(
-                                f"{len(accepted.supplements)} Supplements "
-                                "akzeptiert (manuell — ohne Download/LLM). "
-                                "Lokale Datei ggf. darunter zuordnen."
-                            )
-                            st.rerun()
-                        except CutPlanError as exc:
-                            st.error(str(exc))
-        else:
-            st.caption(
-                f"Manuelle Kandidatenliste ausgeblendet ({candidate_count}). "
-                "Zum Prüfen Checkbox oben aktivieren."
-            )
-
-        funnel_report = load_model(
-            supplement_funnel_report_path(project),
-            SupplementFunnelReport,
+                    st.rerun()
+                except CutPlanError as exc:
+                    st.error(str(exc))
+    elif has_stock:
+        st.caption(
+            f"Stock-Kandidaten nicht geladen ({candidate_count}). "
+            "Checkbox aktivieren zum manuellen Prüfen."
         )
-        if funnel_report is not None:
-            filled_n = len(funnel_report.filled_gap_ids)
-            open_n = len(funnel_report.open_gap_ids)
-            show_report_key = f"enh_show_funnel_report_{project.id}"
-            st.checkbox(
-                (
-                    f"Funnel-Abschlussdetails laden · erfüllt {filled_n} · "
-                    f"offen {open_n}"
-                ),
-                key=show_report_key,
-                help="Detailzeilen pro Gap nur bei Bedarf laden.",
-            )
-            if st.session_state.get(show_report_key):
-                with st.expander("Funnel-Abschluss", expanded=True):
-                    st.caption(funnel_report.message)
-                    if funnel_report.llm_model:
-                        st.caption(f"Modell: `{funnel_report.llm_model}`")
-                    st.write(
-                        f"Angefordert: **{len(funnel_report.requested_gap_ids)}** · "
-                        f"erfüllt: **{filled_n}** · "
-                        f"offen: **{open_n}** · "
-                        f"Voll-Downloads: **{funnel_report.full_download_count}** · "
-                        f"technisch ungültig: "
-                        f"**{funnel_report.technically_invalid_count}** · "
-                        f"Fallbacks: **{funnel_report.fallback_used_count}**"
-                    )
-                    for gap_rep in funnel_report.gaps:
-                        ready = gap_rep.export_ready_candidate_id
-                        license_label = ""
-                        if gap_rep.license_metadata_status == "complete":
-                            license_label = " · Lizenzdaten vollständig"
-                        elif gap_rep.license_metadata_status == "partial":
-                            license_label = " · Lizenzdaten teilweise vorhanden"
-                        elif gap_rep.license_metadata_status == "missing":
-                            license_label = " · Keine Lizenzmetadaten geliefert"
-                        pool_label = ""
-                        counts = (
-                            getattr(gap_rep, "provider_candidate_counts", None) or {}
-                        )
-                        if counts:
-                            parts = [
-                                f"{name} {counts[name]}"
-                                for name in sorted(counts)
-                            ]
-                            pool_label = (
-                                f" · Pool {sum(int(v) for v in counts.values())}"
-                                f"/{getattr(gap_rep, 'candidate_pool_limit', 20)}"
-                                f" ({' · '.join(parts)})"
-                            )
-                        st.write(
-                            f"`{gap_rep.gap_id}` · "
-                            + (
-                                f"export_ready `{ready}`{license_label}{pool_label}"
-                                if ready
-                                else ((gap_rep.message or "offen") + pool_label)
-                            )
-                        )
-                    if funnel_report.open_gap_ids:
-                        st.warning(
-                            "Offene Gaps: "
-                            + ", ".join(funnel_report.open_gap_ids[:12])
-                        )
+    else:
+        st.caption("Noch keine Stocksuche — zuerst „Stock suchen“.")
 
-    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
-    if accepted is not None:
-        st.info(f"Akzeptiert: {len(accepted.supplements)} Supplements")
-        show_local_key = f"enh_show_local_assign_{project.id}"
+    show_report_key = f"enh_show_funnel_report_{project.id}"
+    report_path = supplement_funnel_report_path(project)
+    if report_path.is_file():
         st.checkbox(
-            f"Lokale Dateizuordnung laden ({len(accepted.supplements)})",
-            key=show_local_key,
-            help="Optional — Funnel-Downloads sind meist schon export_ready.",
+            "Funnel-Abschlussdetails laden",
+            key=show_report_key,
+            help="Lädt den großen Funnel-Report inkl. Gap-Zeilen — nur bei Bedarf.",
         )
-        if st.session_state.get(show_local_key):
-            with st.expander(
-                f"Lokale Dateizuordnung (manuell) · {len(accepted.supplements)}",
-                expanded=True,
-            ):
-                for supplement in accepted.supplements:
-                    refreshed = refresh_supplement_validation(supplement)
+        if st.session_state.get(show_report_key):
+            summary = _funnel_report_top_summary(project)
+            if summary is not None:
+                st.caption(summary["message"])
+                if summary["llm_model"]:
+                    st.caption(f"Modell: `{summary['llm_model']}`")
+                st.write(
+                    f"Angefordert: **{summary['requested']}** · "
+                    f"erfüllt: **{summary['filled']}** · "
+                    f"offen: **{summary['open']}** · "
+                    f"Voll-Downloads: **{summary['downloads']}** · "
+                    f"technisch ungültig: **{summary['invalid']}** · "
+                    f"Fallbacks: **{summary['fallbacks']}**"
+                )
+            funnel_report = load_model(report_path, SupplementFunnelReport)
+            if funnel_report is not None:
+                for gap_rep in funnel_report.gaps:
+                    ready = gap_rep.export_ready_candidate_id
                     st.write(
-                        f"`{refreshed.candidate_id}` · "
-                        f"status=`{refreshed.media_validation_status}`"
+                        f"`{gap_rep.gap_id}` · "
+                        + (
+                            f"export_ready `{ready}`"
+                            if ready
+                            else (gap_rep.message or "offen")
+                        )
                     )
-                    if refreshed.media_validation_error:
-                        st.caption(refreshed.media_validation_error)
-                    path_value = st.text_input(
-                        f"local_media_path für {refreshed.candidate_id}",
-                        value=refreshed.local_media_path or "",
-                        key=f"enh_local_{project.id}_{refreshed.candidate_id}",
-                        help="Lokaler Dateipfad — keine http(s)-URL.",
+                if funnel_report.open_gap_ids:
+                    st.warning(
+                        "Offene Gaps: "
+                        + ", ".join(funnel_report.open_gap_ids[:12])
                     )
-                    if st.button(
-                        f"Lokale Datei zuordnen & validieren ({refreshed.candidate_id})",
-                        key=f"enh_assign_{project.id}_{refreshed.candidate_id}",
-                    ):
-                        try:
-                            updated = assign_local_media_path(
-                                project, refreshed.candidate_id, path_value
-                            )
-                            st.success(
-                                f"{updated.candidate_id} → "
-                                f"{updated.media_validation_status}"
-                            )
-                            st.rerun()
-                        except LocalMediaError as exc:
-                            st.error(str(exc))
+    else:
+        st.caption("Noch kein Funnel-Report vorhanden.")
 
-    st.divider()
+    accepted_n = _accepted_count(project)
+    if accepted_n:
+        st.info(f"Akzeptiert: {accepted_n} Supplements")
+    show_local_key = f"enh_show_local_assign_{project.id}"
+    st.checkbox(
+        f"Lokale Dateizuordnung laden ({accepted_n})",
+        key=show_local_key,
+        help="Optional — Funnel-Downloads sind meist schon export_ready.",
+        disabled=accepted_n == 0,
+    )
+    if accepted_n and st.session_state.get(show_local_key):
+        accepted = load_model(
+            accepted_supplements_path(project), AcceptedSupplementsDocument
+        )
+        if accepted is not None:
+            for supplement in accepted.supplements:
+                refreshed = refresh_supplement_validation(supplement)
+                st.write(
+                    f"`{refreshed.candidate_id}` · "
+                    f"status=`{refreshed.media_validation_status}`"
+                )
+                if refreshed.media_validation_error:
+                    st.caption(refreshed.media_validation_error)
+                path_value = st.text_input(
+                    f"local_media_path für {refreshed.candidate_id}",
+                    value=refreshed.local_media_path or "",
+                    key=f"enh_local_{project.id}_{refreshed.candidate_id}",
+                    help="Lokaler Dateipfad — keine http(s)-URL.",
+                )
+                if st.button(
+                    f"Lokale Datei zuordnen & validieren ({refreshed.candidate_id})",
+                    key=f"enh_assign_{project.id}_{refreshed.candidate_id}",
+                ):
+                    try:
+                        updated = assign_local_media_path(
+                            project, refreshed.candidate_id, path_value
+                        )
+                        st.success(
+                            f"{updated.candidate_id} → "
+                            f"{updated.media_validation_status}"
+                        )
+                        st.rerun()
+                    except LocalMediaError as exc:
+                        st.error(str(exc))
+
+
+def _render_section_final(project) -> None:
     st.subheader("3. Finalen Cut Plan erzeugen und technisch auflösen")
     final_tokens, final_chapters = _estimate_final_cut_input_tokens(project)
     final_provider, final_model, _final_max = _render_enhanced_cut_model(
@@ -964,7 +1039,11 @@ def render_enhanced_cut_plan_page() -> None:
         f"Lauf 3 läuft sequenziell: **ein LLM-Call pro Kapitel** "
         f"({final_chapters} Kapitel), danach Python-Auflösung."
     )
-    if st.button("LLM-Lauf 3 + Python-Finalisierung", type="primary", key="enh_final_cut"):
+    if st.button(
+        "LLM-Lauf 3 + Python-Finalisierung",
+        type="primary",
+        key="enh_final_cut",
+    ):
         try:
             progress = st.empty()
 
@@ -1005,12 +1084,75 @@ def render_enhanced_cut_plan_page() -> None:
         except Exception as exc:  # noqa: BLE001
             st.error(f"Fehler: {exc}")
 
+    show_final_key = f"enh_show_final_shots_{project.id}"
     final = load_model(final_cut_plan_path(project), FinalCutPlanDocument)
     if final is not None:
-        st.write(f"Finaler Plan: {len(final.shots)} Shots")
-        for shot in final.shots:
-            st.caption(
-                f"{shot.shot_id}: {shot.asset_id} · "
-                f"{shot.narration_start_anchor.segment_id}→"
-                f"{shot.narration_end_anchor.segment_id}"
-            )
+        st.checkbox(
+            f"Finale Shot-Liste laden ({len(final.shots)})",
+            key=show_final_key,
+        )
+        if st.session_state.get(show_final_key):
+            st.write(f"Finaler Plan: {len(final.shots)} Shots")
+            for shot in final.shots:
+                st.caption(
+                    f"{shot.shot_id}: {shot.asset_id} · "
+                    f"{shot.narration_start_anchor.segment_id}→"
+                    f"{shot.narration_end_anchor.segment_id}"
+                )
+
+    show_timeline_key = f"enh_show_timeline_final_{project.id}"
+    st.checkbox(
+        "Echtzeit-Timeline laden",
+        key=show_timeline_key,
+    )
+    if st.session_state.get(show_timeline_key):
+        rough = load_model(rough_cut_plan_path(project), RoughCutPlanDocument)
+        timeline = load_model(
+            narration_timeline_path(project), NarrationTimelineDocument
+        )
+        resolved = load_model(
+            resolved_timeline_path(project), ResolvedTimelineDocument
+        )
+        render_realtime_timeline(
+            narration_timeline=timeline,
+            rough=rough,
+            final=final,
+            resolved=resolved,
+        )
+
+
+def render_enhanced_cut_plan_page() -> None:
+    st.header("⑦ Cut Plan (Enhanced MVP)")
+    st.caption(
+        "Bereiche getrennt laden — nur der aktive Bereich wird aufgebaut. "
+        "Kein Satz = ein Asset."
+    )
+    project = get_enhanced_project()
+    if project is None:
+        return
+
+    funnel_mgr_early = get_supplement_funnel_job_manager()
+    if funnel_mgr_early.is_running(project.id):
+        _render_lightweight_funnel_monitor(project)
+        return
+
+    # Wichtig: st.tabs führt ALLE Tabs aus — daher Radio + nur ein Renderer.
+    section_key = f"enh_cut_section_{project.id}"
+    if section_key not in st.session_state:
+        st.session_state[section_key] = _default_cut_section(project)
+    section = st.radio(
+        "Bereich",
+        options=list(_SECTION_OPTIONS),
+        key=section_key,
+        horizontal=True,
+        help=(
+            "Nur der gewählte Bereich wird geladen. "
+            "So bleiben Modellwechsel und Funnel-Klicks schnell."
+        ),
+    )
+    if section == _SECTION_ROUGH:
+        _render_section_rough(project)
+    elif section == _SECTION_FUNNEL:
+        _render_section_funnel(project)
+    else:
+        _render_section_final(project)

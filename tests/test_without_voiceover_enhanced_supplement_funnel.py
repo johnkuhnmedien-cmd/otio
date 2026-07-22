@@ -746,18 +746,26 @@ def test_ui_two_funnel_buttons_and_gap_keys() -> None:
     assert "enh_funnel_gap_multiselect_{project.id}" in source
     assert "disabled=selected_disabled" in source
     assert "disabled=all_disabled" in source
-    assert "gap_ids=gap_ids" in source
     assert "list_open_funnel_gap_ids" in source
-    # Fortschritt oben + lange Listen standardmäßig eingeklappt
+    # Bereiche getrennt (Radio, nicht st.tabs — Tabs führen alles aus)
+    assert "_SECTION_FUNNEL" in source
+    assert "_render_section_funnel" in source
+    assert "_render_section_rough" in source
+    assert "_render_section_final" in source
+    assert "st.radio(" in source
+    assert "Nur der gewählte Bereich wird geladen" in source or "Bereich" in source
+    # Fortschritt + Lazy-Loads
     assert "Gaps: **offen" in source
-    assert "erfüllt" in source
-    assert "gesamt" in source
-    assert 'f"Offene Coverage Gaps auswählen · {len(open_gap_ids)}"' in source
     assert "Kandidaten manuell prüfen laden" in source
     assert "enh_show_manual_candidates_" in source
     assert "Funnel-Abschlussdetails laden" in source
     assert "Lokale Dateizuordnung laden" in source
     assert "enh_show_local_assign_" in source
+    assert "enh_show_open_gap_pills_" in source
+    assert "Echtzeit-Timeline laden" in source
+    # Stock-JSON / Report nicht bei jedem Rerun
+    assert "_stock_candidate_count" in source
+    assert "_funnel_report_top_summary" in source
     # Funnel-Modell wählbar (günstige Gemini-Varianten)
     assert "ENHANCED_FUNNEL_LLM_MODEL_CHOICES" in source
     assert "enh_funnel_model_" in source
@@ -2006,6 +2014,7 @@ def test_ui_multiselect_project_scoped_and_same_service() -> None:
     assert "get_supplement_funnel_job_manager" in source
     assert "list_open_funnel_gap_ids(project)" in source
     assert "Mehrfachauswahl wird ignoriert" in source
+    assert "_render_section_funnel" in source
     svc = Path(
         "otio_app/services/without_voiceover_enhanced/supplement_funnel_service.py"
     ).read_text(encoding="utf-8")

@@ -43,6 +43,18 @@ def _button(page, label: str):
 
 def _select_gaps_in_multiselect(page, gap_ids: list[str]) -> None:
     """Bedient die sichtbare Gap-Mehrfachauswahl (st.pills) ohne Query-Parameter."""
+    # Pills sind lazy — erst Opt-in-Checkbox aktivieren.
+    load_cb = page.get_by_text("Offene Coverage Gaps auswählen laden", exact=False)
+    if load_cb.count() > 0:
+        load_cb.first.scroll_into_view_if_needed()
+        # Streamlit-Checkbox: Label klicken
+        try:
+            load_cb.first.click()
+        except Exception:  # noqa: BLE001
+            page.get_by_label(
+                re.compile("Offene Coverage Gaps auswählen laden")
+            ).check(force=True)
+        page.wait_for_timeout(800)
     label = page.get_by_text("Offene Coverage Gaps auswählen", exact=False).first
     label.scroll_into_view_if_needed()
     page.wait_for_timeout(300)
@@ -198,10 +210,10 @@ def main() -> int:
             page.wait_for_timeout(2500)
 
             body = page.content()
-            assert "gap_1" in body and "gap_2" in body and "gap_3" in body
             assert "Offene Coverage Gaps auswählen" in body
             assert "Alle offenen Gaps automatisch auflösen" in body
             assert "Ausgewählte Gaps automatisch auflösen" in body
+            assert "2 · Supplements / Funnel" in body or "Supplements / Funnel" in body
 
             selected_btn = _button(page, "Ausgewählte Gaps automatisch auflösen")
             assert selected_btn.is_disabled(), "Auswahlbutton muss ohne Auswahl disabled sein"
@@ -211,6 +223,8 @@ def main() -> int:
 
             page.screenshot(path=str(shots / "02_gap_multiselect.png"), full_page=True)
             _select_gaps_in_multiselect(page, ["gap_1", "gap_3"])
+            body = page.content()
+            assert "gap_1" in body and "gap_3" in body
             page.wait_for_timeout(800)
             # Button sollte nun enabled sein
             selected_btn = _button(page, "Ausgewählte Gaps automatisch auflösen")
