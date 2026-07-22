@@ -9,6 +9,10 @@ import opentimelineio as otio
 from otio_app.models import Project
 from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.inventory_loader import load_folder_inventory
+from otio_app.services.still_image_export_style import ensure_styled_still_for_export
+from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    load_cut_plan_options,
+)
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
     is_http_url,
@@ -49,7 +53,8 @@ def _assert_local_media_reference(path: str, *, label: str) -> str:
     return str(local)
 
 
-def _media_path_for_asset(project: Project, asset_id: str) -> str:
+def _media_ref_for_asset(project: Project, asset_id: str) -> tuple[str, str]:
+    """Returns (local_path, folder_name_for_still_cache)."""
     for folder in project.selected_asset_subdirs:
         inventory = load_folder_inventory(project, folder)
         if inventory is None:
@@ -60,7 +65,10 @@ def _media_path_for_asset(project: Project, asset_id: str) -> str:
                 continue
             current_id = getattr(asset, "asset_id", None) or asset_id_for_path(str(path))
             if str(current_id) == asset_id:
-                return _assert_local_media_reference(str(path), label=f"Asset {asset_id}")
+                local = _assert_local_media_reference(
+                    str(path), label=f"Asset {asset_id}"
+                )
+                return local, folder
 
     accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     if accepted is not None:
@@ -71,21 +79,44 @@ def _media_path_for_asset(project: Project, asset_id: str) -> str:
                 local_path = require_export_ready_local_path(supplement)
             except Exception as exc:  # LocalMediaError
                 raise EnhancedOtioExportError(str(exc)) from exc
-            return _assert_local_media_reference(
+            local = _assert_local_media_reference(
                 local_path, label=f"Supplement {asset_id}"
             )
+            return local, "_supplemental"
 
-    # Also allow currently export_ready list (revalidated).
     for supplement in list_export_ready_supplements(project):
         if supplement.candidate_id == asset_id:
-            return _assert_local_media_reference(
+            local = _assert_local_media_reference(
                 str(supplement.local_media_path),
                 label=f"Supplement {asset_id}",
             )
+            return local, "_supplemental"
 
     raise EnhancedOtioExportError(
         f"Supplement {asset_id} besitzt keine validierte lokale Mediendatei. "
         "Ordne zuerst eine lokale Originaldatei zu."
+    )
+
+
+def _media_path_for_asset(project: Project, asset_id: str) -> str:
+    path, _folder = _media_ref_for_asset(project, asset_id)
+    return path
+
+
+def _export_media_path_for_asset(project: Project, asset_id: str) -> str:
+    """Lokaler Pfad inkl. optionalem Still-Styling aus CutPlanOptions."""
+    path, folder = _media_ref_for_asset(project, asset_id)
+    options = load_cut_plan_options(project)
+    styled = ensure_styled_still_for_export(
+        project,
+        folder or "_enhanced",
+        Path(path),
+        enabled=bool(options.still_image_style_enabled),
+        zoom=float(options.still_image_zoom),
+        background_style=str(options.still_image_background_style),
+    )
+    return _assert_local_media_reference(
+        str(styled), label=f"Asset {asset_id} (export)"
     )
 
 
@@ -140,7 +171,7 @@ def export_otio_from_resolved_timeline(
                     )
                 )
             )
-        media_path = _media_path_for_asset(project, shot.asset_id)
+        media_path = _export_media_path_for_asset(project, shot.asset_id)
         available = otio.schema.ExternalReference(target_url=media_path)
         duration = shot.timeline_end_seconds - shot.timeline_start_seconds
         clip = otio.schema.Clip(

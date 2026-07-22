@@ -305,8 +305,16 @@ def test_provider_failure_isolation() -> None:
 
 
 def test_local_media_validation_and_otio_fail_closed(tmp_path: Path) -> None:
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        CutPlanOptions,
+        save_cut_plan_options,
+    )
+
     project = _enhanced_project(tmp_path)
     _lock_minimal(project)
+    save_cut_plan_options(
+        project, CutPlanOptions(still_image_style_enabled=False)
+    )
     write_json(
         stock_search_results_path(project),
         StockSearchResultsDocument(
@@ -511,8 +519,16 @@ def test_otio_allow_errors_exports_partial_timeline_with_gaps(tmp_path: Path) ->
     """Test-Export trotz Resolve-Fehler: aufgelöste Shots bleiben, Lücken als Gaps."""
     from PIL import Image
 
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        CutPlanOptions,
+        save_cut_plan_options,
+    )
+
     project = _enhanced_project(tmp_path)
     _lock_minimal(project)
+    save_cut_plan_options(
+        project, CutPlanOptions(still_image_style_enabled=False)
+    )
     local = project.work_dir_path / "clip.jpg"
     Image.new("RGB", (16, 16), color=(10, 20, 30)).save(local, format="JPEG")
     write_json(

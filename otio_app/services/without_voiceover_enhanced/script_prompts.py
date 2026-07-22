@@ -271,6 +271,7 @@ def build_rough_cut_prompt(
     previous_folder_name: str | None = None,
     next_folder_name: str | None = None,
     include_middle_frames: bool = False,
+    shot_constraints_text: str = "",
 ) -> str:
     chapter_scope = ""
     if folder_name:
@@ -352,7 +353,9 @@ TIMING RULES:
 - Do not invent or modify audio durations.
 - Do not output seconds, milliseconds, timecodes or frames.
 - Do not calculate final timeline positions.
-
+- Still respect the SHOT / ASSET CONSTRAINTS below when judging relative length
+  (e.g. avoid planning one shot across a span that is clearly longer than shot_max).
+{shot_constraints_text}
 Use only these editorial anchor positions:
 
 start | early | middle | late | end
@@ -538,6 +541,7 @@ def build_final_cut_prompt(
     folder_slug: str = "",
     previous_folder_name: str | None = None,
     next_folder_name: str | None = None,
+    shot_constraints_text: str = "",
 ) -> str:
     chapter_scope = ""
     if folder_name:
@@ -572,7 +576,11 @@ You do NOT decide (Python finalizes these later):
 - technical source timecodes
 - validated source ranges
 - final frame rounding
-{chapter_scope}
+{chapter_scope}{shot_constraints_text}
+Use narration_timeline start/end seconds together with asset duration_seconds
+to keep each shot within shot_min/shot_max and within the chosen asset length.
+If an asset is too short, pick another asset or shorten the narration span.
+
 EDITORIAL GUIDANCE: Prefer a varied shot structure. One sentence may map to \
 one asset when that is the best cut — but do not default to a rigid \
 one-sentence-one-asset grid for the whole film.

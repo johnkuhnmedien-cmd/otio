@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 
 from otio_app.models import Project
 from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.inventory_loader import load_folder_inventory
-from otio_app.services.media_utils import probe_duration_seconds
+from otio_app.services.media_utils import is_image_media, probe_duration_seconds
 from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
     load_segment_timings,
+)
+from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    load_cut_plan_options,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
@@ -37,8 +41,9 @@ from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     require_locked_script,
 )
 
-MIN_SHOT_SECONDS = 0.4
-MAX_SHOT_SECONDS = 120.0
+# Technisches Minimum (Frame-Sicherheit); redaktionelle min/max kommen aus Settings.
+TECH_MIN_SHOT_SECONDS = 0.4
+TECH_MAX_SHOT_SECONDS = 120.0
 
 
 class TimelineResolveError(RuntimeError):
@@ -61,9 +66,14 @@ def _asset_catalog(project: Project) -> dict[str, dict]:
                 duration = getattr(asset, "duration_seconds", None)
             if duration is None:
                 duration = probe_duration_seconds(Path(path))
+            media_type = getattr(asset, "media_type", None) or (
+                "photo" if is_image_media(Path(path)) else "video"
+            )
             catalog[str(asset_id)] = {
                 "path": str(path),
                 "duration_seconds": float(duration) if duration else None,
+                "folder": folder,
+                "media_type": str(media_type or "video").lower(),
             }
     # Only export_ready supplements are technically available assets.
     # Selected-but-missing remain visible in UI/search, but not in the catalog.
@@ -76,11 +86,14 @@ def _asset_catalog(project: Project) -> dict[str, dict]:
             local_path = str(refreshed.local_media_path or "").strip()
             if not local_path or is_http_url(local_path):
                 continue
+            media_type = (refreshed.media_type or "photo").lower()
             catalog[supplement.candidate_id] = {
                 "path": local_path,
                 "duration_seconds": refreshed.duration_seconds,
                 "supplement": True,
                 "export_ready": True,
+                "folder": "",
+                "media_type": media_type,
             }
     for supplement in list_export_ready_supplements(project):
         local_path = str(supplement.local_media_path or "").strip()
@@ -92,9 +105,16 @@ def _asset_catalog(project: Project) -> dict[str, dict]:
                     "duration_seconds": supplement.duration_seconds,
                     "supplement": True,
                     "export_ready": True,
+                    "folder": "",
+                    "media_type": (supplement.media_type or "photo").lower(),
                 },
             )
     return catalog
+
+
+def _is_intro_folder(folder: str | None) -> bool:
+    name = (folder or "").strip().lower()
+    return name in {"intro", "introduction"} or name.startswith("intro_")
 
 
 def _anchor_to_seconds(
@@ -143,6 +163,13 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
     errors: list[str] = []
     repairs: list[str] = []
     catalog = _asset_catalog(project)
+    options = load_cut_plan_options(project)
+    editorial_min = max(TECH_MIN_SHOT_SECONDS, float(options.shot_min_sec))
+    editorial_max = min(
+        TECH_MAX_SHOT_SECONDS,
+        max(editorial_min, float(options.shot_max_sec)),
+    )
+    head_trim = max(0.0, float(options.video_head_trim_sec))
     known_segments = {s.segment_id for s in locked.segments}
     fps = float(project.fps)
 
@@ -208,21 +235,35 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
         start = _seconds_to_frame(start, fps)
         end = _seconds_to_frame(end, fps)
         if end <= start:
-            end = _seconds_to_frame(start + MIN_SHOT_SECONDS, fps)
+            end = _seconds_to_frame(start + editorial_min, fps)
             repairs.append(
-                f"{shot.shot_id}: Ende vor/gleich Start — auf Mindestlänge {MIN_SHOT_SECONDS}s gesetzt."
+                f"{shot.shot_id}: Ende vor/gleich Start — auf Mindestlänge "
+                f"{editorial_min}s gesetzt."
             )
         duration = end - start
-        if duration < MIN_SHOT_SECONDS:
-            end = _seconds_to_frame(start + MIN_SHOT_SECONDS, fps)
-            repairs.append(f"{shot.shot_id}: unter Mindestlänge — verlängert.")
+        if duration < editorial_min:
+            end = _seconds_to_frame(start + editorial_min, fps)
+            repairs.append(
+                f"{shot.shot_id}: unter shot_min ({editorial_min}s) — verlängert."
+            )
             duration = end - start
-        if duration > MAX_SHOT_SECONDS:
-            end = _seconds_to_frame(start + MAX_SHOT_SECONDS, fps)
-            repairs.append(f"{shot.shot_id}: über Maximallänge — gekürzt.")
+        if duration > editorial_max:
+            end = _seconds_to_frame(start + editorial_max, fps)
+            repairs.append(
+                f"{shot.shot_id}: über shot_max ({editorial_max}s) — gekürzt."
+            )
             duration = end - start
 
-        media_duration = catalog[shot.asset_id].get("duration_seconds")
+        entry = catalog[shot.asset_id]
+        media_duration = entry.get("duration_seconds")
+        media_type = str(entry.get("media_type") or "").lower()
+        is_video = media_type in {"video"} or (
+            media_type not in {"photo", "image"}
+            and media_duration is not None
+            and float(media_duration) > 0
+            and not is_image_media(Path(str(entry.get("path") or "")))
+        )
+
         if media_duration is not None and media_duration < duration:
             errors.append(
                 f"Asset {shot.asset_id} ist kürzer als gewünschter Shot "
@@ -235,16 +276,24 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
             source_start = 0.0
             source_end = duration
         else:
-            # representative middle section
-            usable = media_duration
-            if duration > usable:
+            trim = head_trim if is_video else 0.0
+            if trim >= float(media_duration):
                 errors.append(
-                    f"Source-Range für {shot.asset_id} würde Mediendauer überschreiten."
+                    f"Asset {shot.asset_id}: video_head_trim ({trim}s) "
+                    f">= Mediendauer ({media_duration}s)."
                 )
                 continue
-            source_start = max(0.0, (usable - duration) / 2.0)
+            usable = float(media_duration) - trim
+            if duration > usable + 1e-6:
+                errors.append(
+                    f"Source-Range für {shot.asset_id} würde nutzbare "
+                    f"Mediendauer überschreiten "
+                    f"(shot {duration}s > usable {usable}s nach Head-Trim)."
+                )
+                continue
+            source_start = trim + max(0.0, (usable - duration) / 2.0)
             source_end = source_start + duration
-            if source_end > usable + 1e-6:
+            if source_end > float(media_duration) + 1e-6:
                 errors.append(
                     f"Source-Range außerhalb der Mediendauer für {shot.asset_id}."
                 )
@@ -281,6 +330,36 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
             repairs.append(
                 f"Visuelle Lücke {gap:.3f}s zwischen {prev.shot_id} und {curr.shot_id} erkannt."
             )
+
+    # Max asset usage (Intro zählt nicht).
+    usage_counts = Counter(shot.asset_id for shot in ordered)
+    for asset_id, count in sorted(usage_counts.items()):
+        folder = str((catalog.get(asset_id) or {}).get("folder") or "")
+        if _is_intro_folder(folder):
+            continue
+        if count > int(options.max_asset_usage):
+            errors.append(
+                f"Asset {asset_id} wird {count}× genutzt "
+                f"(max_asset_usage={options.max_asset_usage}; Intro zählt nicht)."
+            )
+
+    # Wiederverwendungsabstand (soft: nur Repair/Hinweis).
+    reuse_distance = int(options.min_asset_reuse_distance_shots)
+    if reuse_distance > 0:
+        last_index: dict[str, int] = {}
+        for index, shot in enumerate(ordered):
+            folder = str((catalog.get(shot.asset_id) or {}).get("folder") or "")
+            if _is_intro_folder(folder):
+                continue
+            prev_index = last_index.get(shot.asset_id)
+            if prev_index is not None:
+                gap_shots = index - prev_index - 1
+                if gap_shots < reuse_distance:
+                    repairs.append(
+                        f"{shot.shot_id}: Asset {shot.asset_id} erneut nach "
+                        f"{gap_shots} Shots (min Abstand {reuse_distance})."
+                    )
+            last_index[shot.asset_id] = index
 
     total = timeline.total_duration_seconds
     if ordered:

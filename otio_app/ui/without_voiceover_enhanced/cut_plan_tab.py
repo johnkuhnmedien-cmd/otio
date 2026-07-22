@@ -26,6 +26,7 @@ from otio_app.services.voiceover_generation.model_settings_service import (
 )
 from otio_app.services.voiceover_generation.models import LlmRoleSettings
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    STILL_BACKGROUND_CHOICES,
     CutPlanOptions,
     load_cut_plan_options,
     save_cut_plan_options,
@@ -439,6 +440,196 @@ def _default_cut_section(project) -> str:
     return _SECTION_ROUGH
 
 
+def _render_cut_plan_settings(project) -> CutPlanOptions:
+    """Gemeinsame Settings für Lauf 2/3 + Python/OTIO (vor den Bereichen)."""
+    current = load_cut_plan_options(project)
+    with st.expander("Cut Plan Settings", expanded=False):
+        st.caption(
+            "Shot/Usage → LLM 2+3 und Python-Resolver. "
+            "Head-Trim → nur Python. "
+            "Titel + Still-Look → nur OTIO-Export (Titel-Einblendung folgt)."
+        )
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            shot_min_sec = st.number_input(
+                "Shot Min (s)",
+                min_value=0.4,
+                max_value=60.0,
+                value=float(current.shot_min_sec),
+                step=0.5,
+                key=f"enh_opt_shot_min_{project.id}",
+            )
+            shot_max_sec = st.number_input(
+                "Shot Max (s)",
+                min_value=0.4,
+                max_value=120.0,
+                value=float(current.shot_max_sec),
+                step=0.5,
+                key=f"enh_opt_shot_max_{project.id}",
+                help="Python kürzt längere Shots hart auf diesen Wert.",
+            )
+            video_head_trim_sec = st.number_input(
+                "Video Head Trim (s)",
+                min_value=0.0,
+                max_value=10.0,
+                value=float(current.video_head_trim_sec),
+                step=0.1,
+                key=f"enh_opt_head_trim_{project.id}",
+                help="Nur Video — Anfang der Source-Range wird übersprungen.",
+            )
+        with col2:
+            max_asset_usage = st.number_input(
+                "Max Asset Usage (Intro zählt nicht)",
+                min_value=1,
+                max_value=50,
+                value=int(current.max_asset_usage),
+                step=1,
+                key=f"enh_opt_max_usage_{project.id}",
+            )
+            min_asset_reuse_distance_shots = st.number_input(
+                "Min. Wiederverwendungsabstand (Shots)",
+                min_value=0,
+                max_value=100,
+                value=int(current.min_asset_reuse_distance_shots),
+                step=1,
+                key=f"enh_opt_reuse_distance_{project.id}",
+                help="Unterschreitung → Hinweis im Resolve (kein harter Block).",
+            )
+            include_middle_frames = st.checkbox(
+                "Mittel-Frames an LLM 2 (Vision)",
+                value=bool(current.include_middle_frames),
+                key=f"enh_opt_middle_frames_{project.id}",
+            )
+            max_middle_frames_per_chapter = st.number_input(
+                "Max. Mittel-Frames / Kapitel",
+                min_value=1,
+                max_value=200,
+                value=int(current.max_middle_frames_per_chapter),
+                step=1,
+                key=f"enh_opt_max_frames_{project.id}",
+                disabled=not include_middle_frames,
+            )
+        with col3:
+            max_candidates_per_gap = st.number_input(
+                "Funnel: Max Kandidaten / Gap",
+                min_value=1,
+                max_value=20,
+                value=int(current.max_candidates_per_gap),
+                step=1,
+                key=f"enh_opt_funnel_cands_{project.id}",
+            )
+            max_full_download_attempts_per_gap = st.number_input(
+                "Funnel: Max Downloads / Gap",
+                min_value=1,
+                max_value=3,
+                value=int(current.max_full_download_attempts_per_gap),
+                step=1,
+                key=f"enh_opt_funnel_dl_{project.id}",
+            )
+
+        st.markdown("##### Ordner-Titel (OTIO)")
+        folder_title_enabled = st.checkbox(
+            "Ordner-Titel einblenden",
+            value=bool(current.folder_title_enabled),
+            key=f"enh_opt_folder_title_{project.id}",
+            help="Gespeichert für den OTIO-Export; Einblendung wird noch verdrahtet.",
+        )
+        t1, t2, t3 = st.columns(3)
+        with t1:
+            folder_title_font = st.text_input(
+                "Titel-Font",
+                value=current.folder_title_font,
+                key=f"enh_opt_title_font_{project.id}",
+                disabled=not folder_title_enabled,
+            )
+        with t2:
+            folder_title_duration_sec = st.number_input(
+                "Titel-Dauer (s)",
+                min_value=0.5,
+                max_value=30.0,
+                value=float(current.folder_title_duration_sec),
+                step=0.5,
+                key=f"enh_opt_title_dur_{project.id}",
+                disabled=not folder_title_enabled,
+            )
+        with t3:
+            folder_title_font_size = st.number_input(
+                "Titel-Schriftgröße (0 = auto)",
+                min_value=0.0,
+                max_value=400.0,
+                value=float(current.folder_title_font_size),
+                step=1.0,
+                key=f"enh_opt_title_size_{project.id}",
+                disabled=not folder_title_enabled,
+            )
+
+        st.markdown("##### Still-Bilder (OTIO-Export)")
+        still_image_style_enabled = st.checkbox(
+            "Still-Style aktiv (Background + Skalierung)",
+            value=bool(current.still_image_style_enabled),
+            key=f"enh_opt_still_style_{project.id}",
+        )
+        s1, s2 = st.columns(2)
+        with s1:
+            still_image_zoom = st.number_input(
+                "Still Zoom (fit-Anteil)",
+                min_value=0.05,
+                max_value=1.0,
+                value=float(current.still_image_zoom),
+                step=0.05,
+                key=f"enh_opt_still_zoom_{project.id}",
+                disabled=not still_image_style_enabled,
+            )
+        with s2:
+            bg_options = list(STILL_BACKGROUND_CHOICES)
+            bg_index = (
+                bg_options.index(current.still_image_background_style)
+                if current.still_image_background_style in bg_options
+                else 0
+            )
+            still_image_background_style = st.selectbox(
+                "Still Background",
+                options=bg_options,
+                index=bg_index,
+                key=f"enh_opt_still_bg_{project.id}",
+                disabled=not still_image_style_enabled,
+            )
+
+        draft = CutPlanOptions(
+            schema_version=current.schema_version,
+            include_middle_frames=bool(include_middle_frames),
+            max_middle_frames_per_chapter=int(max_middle_frames_per_chapter),
+            max_candidates_per_gap=int(max_candidates_per_gap),
+            max_full_download_attempts_per_gap=int(
+                max_full_download_attempts_per_gap
+            ),
+            shot_min_sec=float(shot_min_sec),
+            shot_max_sec=float(shot_max_sec),
+            video_head_trim_sec=float(video_head_trim_sec),
+            max_asset_usage=int(max_asset_usage),
+            min_asset_reuse_distance_shots=int(min_asset_reuse_distance_shots),
+            folder_title_enabled=bool(folder_title_enabled),
+            folder_title_font=str(folder_title_font or current.folder_title_font),
+            folder_title_duration_sec=float(folder_title_duration_sec),
+            folder_title_font_size=float(folder_title_font_size),
+            still_image_style_enabled=bool(still_image_style_enabled),
+            still_image_zoom=float(still_image_zoom),
+            still_image_background_style=str(still_image_background_style),
+        )
+        if st.button(
+            "Cut Plan Settings speichern",
+            key=f"enh_opt_save_{project.id}",
+            type="primary",
+        ):
+            saved = save_cut_plan_options(project, draft)
+            st.success(
+                f"Gespeichert: shot {saved.shot_min_sec}–{saved.shot_max_sec}s · "
+                f"usage≤{saved.max_asset_usage} · head-trim {saved.video_head_trim_sec}s"
+            )
+            st.rerun()
+        return current
+
+
 def _render_section_rough(project) -> None:
     st.subheader("1. Groben Cut Plan und Pausen erzeugen")
     rough_tokens, rough_chapters = _estimate_rough_cut_input_tokens(project)
@@ -457,34 +648,14 @@ def _render_section_rough(project) -> None:
         f"({rough_chapters} Kapitel)."
     )
     cut_options = load_cut_plan_options(project)
-    frame_key = f"enh_rough_middle_frames_{project.id}"
-    if frame_key not in st.session_state:
-        st.session_state[frame_key] = cut_options.include_middle_frames
-    include_middle_frames = st.checkbox(
-        "Mittel-Frames der Asset-Analyse mitsenden (Vision)",
-        key=frame_key,
-        help=(
-            "Optional: pro lokalem Asset das mittlere Analyse-Frame "
-            "(bei 3 Frames: Mitte) an LLM-Lauf 2 senden. "
-            "Hilft bei der Asset-Auswahl und visueller Abwechslung. "
-            "Standard aus = bisheriger Text-Modus. "
-            "Unterstützt Gemini und OpenAI (Terra/Sol)."
-        ),
-    )
-    if include_middle_frames != cut_options.include_middle_frames:
-        save_cut_plan_options(
-            project,
-            CutPlanOptions(
-                include_middle_frames=include_middle_frames,
-                max_middle_frames_per_chapter=cut_options.max_middle_frames_per_chapter,
-                max_candidates_per_gap=cut_options.max_candidates_per_gap,
-            ),
-        )
-    if include_middle_frames:
+    if cut_options.include_middle_frames:
         st.caption(
-            "Vision aktiv: Beschreibungen + Mittel-Frames gehen in den Prompt "
-            f"(max. {cut_options.max_middle_frames_per_chapter} Bilder/Kapitel). "
-            "Mehr Tokens/Kosten als Text-only."
+            "Vision aktiv (Cut Plan Settings): Mittel-Frames an LLM 2 "
+            f"(max. {cut_options.max_middle_frames_per_chapter}/Kapitel)."
+        )
+    else:
+        st.caption(
+            "Vision aus — Mittel-Frames unter „Cut Plan Settings“ aktivierbar."
         )
     if st.button("LLM-Lauf 2 starten", type="primary", key="enh_rough_cut"):
         try:
@@ -1257,6 +1428,8 @@ def render_enhanced_cut_plan_page() -> None:
     if funnel_mgr_early.is_running(project.id):
         _render_lightweight_funnel_monitor(project)
         return
+
+    _render_cut_plan_settings(project)
 
     # Wichtig: st.tabs führt ALLE Tabs aus — daher Radio + nur ein Renderer.
     section_key = f"enh_cut_section_{project.id}"

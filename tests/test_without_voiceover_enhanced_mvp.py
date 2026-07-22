@@ -748,7 +748,15 @@ def test_final_plan_rejects_unknown_ids_and_resolves_deterministically(tmp_path:
 
 
 def test_otio_from_resolved_only(tmp_path: Path) -> None:
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        CutPlanOptions,
+        save_cut_plan_options,
+    )
+
     project = _project(tmp_path)
+    save_cut_plan_options(
+        project, CutPlanOptions(still_image_style_enabled=False)
+    )
     wav = project.work_dir_path / "voice.wav"
     _write_silent_wav(wav, 1.0)
     write_json(

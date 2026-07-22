@@ -19,6 +19,7 @@ from otio_app.services.plan_llm_client import (
     generate_plan_text_with_metadata,
 )
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    format_shot_constraints_for_prompt,
     load_cut_plan_options,
 )
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
@@ -850,6 +851,7 @@ def generate_rough_cut_for_folder(
             previous_folder_name=context.previous_folder_name,
             next_folder_name=context.next_folder_name,
             include_middle_frames=include_frames,
+            shot_constraints_text=format_shot_constraints_for_prompt(options),
         )
         images = (
             middle_frame_attachments_from_payload(
@@ -1279,6 +1281,7 @@ def generate_final_cut_for_folder(
                 f"Kapitel „{display_name}“: kein Rough-Cut für dieses Kapitel."
             )
 
+        options = load_cut_plan_options(project)
         assets_folder = folder_name or None
         if assets_folder and assets_folder not in project.selected_asset_subdirs:
             local_assets = _local_assets_payload(project, folder_name=assets_folder)
@@ -1315,6 +1318,7 @@ def generate_final_cut_for_folder(
             folder_slug=context.folder_slug,
             previous_folder_name=context.previous_folder_name,
             next_folder_name=context.next_folder_name,
+            shot_constraints_text=format_shot_constraints_for_prompt(options),
         )
         model_id = resolve_llm_model_id(provider, model)
         if llm_callable is not None:
