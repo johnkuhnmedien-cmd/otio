@@ -167,12 +167,54 @@ def _estimate_path_tokens(path) -> int:
         return 0
 
 
-def _cut_chapter_count(project) -> int:
+def _cut_chapter_names(project) -> list[str]:
     locked = load_locked_script(project)
     if locked is None:
-        return 1
-    names = list_cut_plan_chapter_names(project, locked)
-    return max(1, len(names))
+        return []
+    return list_cut_plan_chapter_names(project, locked)
+
+
+def _cut_chapter_count(project) -> int:
+    names = _cut_chapter_names(project)
+    return max(1, len(names)) if names else 1
+
+
+def _render_chapter_multiselect(
+    project,
+    *,
+    key_prefix: str,
+    help_text: str,
+) -> list[str]:
+    """Kapitel-Auswahl für Teil-Läufe; Default = alle."""
+    chapters = _cut_chapter_names(project)
+    if not chapters:
+        st.caption("Keine Kapitel mit Segmenten gefunden.")
+        return []
+    state_key = f"{key_prefix}_folders_{project.id}"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = list(chapters)
+
+    col_all, col_none, _ = st.columns([1, 1, 4])
+    with col_all:
+        if st.button("Alle Kapitel", key=f"{key_prefix}_all_{project.id}"):
+            st.session_state[state_key] = list(chapters)
+            st.rerun()
+    with col_none:
+        if st.button("Auswahl leeren", key=f"{key_prefix}_none_{project.id}"):
+            st.session_state[state_key] = []
+            st.rerun()
+
+    selected = st.multiselect(
+        "Kapitel auswählen",
+        options=chapters,
+        key=state_key,
+        help=help_text,
+    )
+    st.caption(
+        f"**{len(selected)}/{len(chapters)}** Kapitel gewählt "
+        "(Teil-Lauf ersetzt nur diese; andere Kapitel bleiben erhalten)."
+    )
+    return list(selected)
 
 
 def _estimate_rough_cut_input_tokens(project) -> tuple[int, int]:
@@ -762,7 +804,16 @@ def _render_inventory_prepare(project) -> None:
 def _render_section_rough(project) -> None:
     st.subheader("1. Groben Cut Plan und Pausen erzeugen")
     _render_inventory_prepare(project)
-    rough_tokens, rough_chapters = _estimate_rough_cut_input_tokens(project)
+    selected_folders = _render_chapter_multiselect(
+        project,
+        key_prefix="enh_rough",
+        help_text=(
+            "Nur gewählte Kapitel werden neu geplant. "
+            "Bereits vorhandene Ergebnisse anderer Kapitel bleiben erhalten."
+        ),
+    )
+    rough_tokens, _rough_all = _estimate_rough_cut_input_tokens(project)
+    rough_chapters = max(1, len(selected_folders)) if selected_folders else 0
     rough_provider, rough_model, _rough_max = _render_enhanced_cut_model(
         project,
         role_attr="enhanced_rough_cut",
@@ -771,11 +822,11 @@ def _render_section_rough(project) -> None:
         input_info=LLM_INPUT_INFO["enhanced_rough_cut"],
         input_tokens=rough_tokens,
         default_output_tokens=_ROUGH_CUT_OUTPUT_DEFAULT,
-        chapter_count=rough_chapters,
+        chapter_count=max(1, rough_chapters),
     )
     st.caption(
-        f"Lauf 2 läuft sequenziell: **ein LLM-Call pro Kapitel** "
-        f"({rough_chapters} Kapitel)."
+        f"Lauf 2 läuft sequenziell: **ein LLM-Call pro gewähltem Kapitel** "
+        f"({rough_chapters} gewählt)."
     )
     cut_options = load_cut_plan_options(project)
     if cut_options.include_middle_frames:
@@ -788,6 +839,9 @@ def _render_section_rough(project) -> None:
             "Vision aus — Mittel-Frames unter „Cut Plan Settings“ aktivierbar."
         )
     if st.button("LLM-Lauf 2 starten", type="primary", key="enh_rough_cut"):
+        if not selected_folders:
+            st.error("Bitte mindestens ein Kapitel auswählen.")
+            return
         try:
             progress = st.empty()
 
@@ -803,8 +857,13 @@ def _render_section_rough(project) -> None:
                     provider=rough_provider,
                     model=rough_model,
                     progress_callback=_rough_progress,
+                    folder_names=selected_folders,
                 )
-                rough, coverage = merge_and_persist_rough_cuts(project, results)
+                rough, coverage = merge_and_persist_rough_cuts(
+                    project,
+                    results,
+                    replace_folder_names=selected_folders,
+                )
             progress.empty()
             ok = [r for r in results if r.status == "PASS"]
             fail = [r for r in results if r.status != "PASS"]
@@ -1415,7 +1474,16 @@ def _render_section_funnel(project) -> None:
 
 def _render_section_final(project) -> None:
     st.subheader("3. Finalen Cut Plan erzeugen und technisch auflösen")
-    final_tokens, final_chapters = _estimate_final_cut_input_tokens(project)
+    selected_folders = _render_chapter_multiselect(
+        project,
+        key_prefix="enh_final",
+        help_text=(
+            "Nur gewählte Kapitel werden finalisiert. "
+            "Bereits vorhandene Final-Shots anderer Kapitel bleiben erhalten."
+        ),
+    )
+    final_tokens, _final_all = _estimate_final_cut_input_tokens(project)
+    final_chapters = max(1, len(selected_folders)) if selected_folders else 0
     final_provider, final_model, _final_max = _render_enhanced_cut_model(
         project,
         role_attr="enhanced_final_cut",
@@ -1424,17 +1492,20 @@ def _render_section_final(project) -> None:
         input_info=LLM_INPUT_INFO["enhanced_final_cut"],
         input_tokens=final_tokens,
         default_output_tokens=_FINAL_CUT_OUTPUT_DEFAULT,
-        chapter_count=final_chapters,
+        chapter_count=max(1, final_chapters),
     )
     st.caption(
-        f"Lauf 3 läuft sequenziell: **ein LLM-Call pro Kapitel** "
-        f"({final_chapters} Kapitel), danach Python-Auflösung."
+        f"Lauf 3 läuft sequenziell: **ein LLM-Call pro gewähltem Kapitel** "
+        f"({final_chapters} gewählt), danach Python-Auflösung."
     )
     if st.button(
         "LLM-Lauf 3 + Python-Finalisierung",
         type="primary",
         key="enh_final_cut",
     ):
+        if not selected_folders:
+            st.error("Bitte mindestens ein Kapitel auswählen.")
+            return
         try:
             progress = st.empty()
 
@@ -1450,8 +1521,13 @@ def _render_section_final(project) -> None:
                     provider=final_provider,
                     model=final_model,
                     progress_callback=_final_progress,
+                    folder_names=selected_folders,
                 )
-                final = merge_and_persist_final_cuts(project, results)
+                final = merge_and_persist_final_cuts(
+                    project,
+                    results,
+                    replace_folder_names=selected_folders,
+                )
             progress.empty()
             ok = [r for r in results if r.status == "PASS"]
             fail = [r for r in results if r.status != "PASS"]

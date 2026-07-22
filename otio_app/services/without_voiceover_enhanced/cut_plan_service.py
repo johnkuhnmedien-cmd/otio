@@ -968,6 +968,83 @@ def generate_rough_cut_for_folder(
         )
 
 
+def _normalize_folder_filter(
+    folder_names: list[str] | None,
+    *,
+    available: list[str],
+) -> list[str] | None:
+    """None = alle Kapitel; sonst Reihenfolge aus ``available`` beibehalten."""
+    if folder_names is None:
+        return None
+    wanted = {str(name).strip() for name in folder_names if str(name).strip()}
+    if not wanted:
+        raise CutPlanError("Keine Kapitel ausgewählt.")
+    selected = [name for name in available if name in wanted]
+    unknown = sorted(wanted - set(selected))
+    if unknown:
+        raise CutPlanError(
+            "Unbekannte Kapitel-Auswahl: " + ", ".join(unknown)
+        )
+    if not selected:
+        raise CutPlanError("Keine gültigen Kapitel ausgewählt.")
+    return selected
+
+
+def _segment_ids_for_folders(
+    locked: EnhancedScriptDocument,
+    folder_names: set[str],
+) -> set[str]:
+    if not folder_names:
+        return set()
+    if "" in folder_names:
+        return {seg.segment_id for seg in locked.segments}
+    return {
+        seg.segment_id
+        for seg in locked.segments
+        if (seg.folder_name or "") in folder_names
+    }
+
+
+def _editorial_anchor_segment_id(anchor: EditorialAnchor) -> str:
+    if anchor.type == "pause":
+        return str(anchor.after_segment_id or anchor.segment_id or "").strip()
+    return str(anchor.segment_id or "").strip()
+
+
+def _rough_shot_in_segments(shot: RoughShot, segment_ids: set[str]) -> bool:
+    start = _editorial_anchor_segment_id(shot.start_anchor)
+    end = _editorial_anchor_segment_id(shot.end_anchor)
+    if start or end:
+        return bool(start) and start in segment_ids and bool(end) and end in segment_ids
+    start_legacy = str(shot.narration_start_anchor.segment_id or "").strip()
+    end_legacy = str(shot.narration_end_anchor.segment_id or "").strip()
+    return (
+        bool(start_legacy)
+        and start_legacy in segment_ids
+        and bool(end_legacy)
+        and end_legacy in segment_ids
+    )
+
+
+def _pause_in_segments(pause: PauseDirective, segment_ids: set[str]) -> bool:
+    after_segment = str(pause.after_segment_id or "").strip()
+    if after_segment:
+        return after_segment in segment_ids
+    # Nur Satz-Pause: Segment steckt typischerweise im Sentence-Prefix.
+    sentence_id = str(pause.after_sentence_id or "").strip()
+    if not sentence_id:
+        return False
+    return any(
+        sentence_id.startswith(f"{segment_id}__") for segment_id in segment_ids
+    )
+
+
+def _final_shot_in_segments(shot: FinalShot, segment_ids: set[str]) -> bool:
+    start = str(shot.narration_start_anchor.segment_id or "").strip()
+    end = str(shot.narration_end_anchor.segment_id or "").strip()
+    return bool(start) and start in segment_ids and bool(end) and end in segment_ids
+
+
 def generate_all_rough_cuts(
     project: Project,
     *,
@@ -975,8 +1052,12 @@ def generate_all_rough_cuts(
     model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    folder_names: list[str] | None = None,
 ) -> list[FolderRoughCutResult]:
-    """LLM-Lauf 2 sequenziell pro Kapitel (Dramaturgie-Reihenfolge)."""
+    """LLM-Lauf 2 sequenziell pro Kapitel (Dramaturgie-Reihenfolge).
+
+    ``folder_names``: optional nur diese Kapitel (Test/Teil-Lauf).
+    """
     locked = require_locked_script(project)
     errors = validate_timings_against_script(project)
     if errors:
@@ -984,6 +1065,13 @@ def generate_all_rough_cuts(
     timings = load_segment_timings(project)
     assert timings is not None
     contexts = _build_chapter_contexts(project, locked, timings)
+    if not contexts:
+        raise CutPlanError("Keine Kapitel mit Segmenten für den Rough Cut.")
+    available = [ctx.folder_name for ctx in contexts]
+    selected = _normalize_folder_filter(folder_names, available=available)
+    if selected is not None:
+        selected_set = set(selected)
+        contexts = [ctx for ctx in contexts if ctx.folder_name in selected_set]
     if not contexts:
         raise CutPlanError("Keine Kapitel mit Segmenten für den Rough Cut.")
 
@@ -1009,8 +1097,14 @@ def generate_all_rough_cuts(
 def merge_and_persist_rough_cuts(
     project: Project,
     results: list[FolderRoughCutResult],
+    *,
+    replace_folder_names: list[str] | None = None,
 ) -> tuple[RoughCutPlanDocument, CoverageGapsDocument]:
-    """Merged Kapitel-Ergebnisse → globale Rough-/Timeline-/Gap-Artefakte."""
+    """Merged Kapitel-Ergebnisse → globale Rough-/Timeline-/Gap-Artefakte.
+
+    Bei Teil-Lauf (``replace_folder_names``): bestehende Artefakte anderer
+    Kapitel bleiben erhalten; nur PASS-Kapitel werden ersetzt.
+    """
     locked = require_locked_script(project)
     timings = load_segment_timings(project)
     if timings is None:
@@ -1026,6 +1120,63 @@ def merge_and_persist_rough_cuts(
     merged_shots: list[RoughShot] = []
     merged_gaps: list[CoverageGap] = []
     seen_pause_keys: set[str] = set()
+    seen_gap_ids: set[str] = set()
+
+    # Teil-Lauf: alte Inhalte anderer Kapitel behalten.
+    replaced_folders = {
+        str(r.folder_name or "").strip()
+        for r in ok
+        if replace_folder_names is None or r.folder_name in set(replace_folder_names)
+    }
+    if replace_folder_names is not None:
+        existing_rough = load_model(rough_cut_plan_path(project), RoughCutPlanDocument)
+        existing_coverage = load_model(
+            coverage_gaps_path(project), CoverageGapsDocument
+        )
+        replaced_segments = _segment_ids_for_folders(locked, replaced_folders)
+        if existing_rough is not None:
+            for shot in existing_rough.shots:
+                if _rough_shot_in_segments(shot, replaced_segments):
+                    continue
+                merged_shots.append(shot)
+            for pause in existing_rough.pause_directives:
+                if _pause_in_segments(pause, replaced_segments):
+                    continue
+                sentence_id = str(pause.after_sentence_id or "").strip()
+                key = (
+                    f"sentence:{sentence_id}"
+                    if sentence_id
+                    else f"segment:{pause.after_segment_id}"
+                )
+                if key in seen_pause_keys:
+                    continue
+                seen_pause_keys.add(key)
+                merged_pauses.append(pause)
+        replaced_shot_ids = {
+            shot.shot_id
+            for shot in (existing_rough.shots if existing_rough else [])
+            if _rough_shot_in_segments(shot, replaced_segments)
+        }
+        replaced_slugs = {
+            safe_folder_slug(folder)
+            for folder in replaced_folders
+            if folder
+        }
+        if existing_coverage is not None:
+            for gap in existing_coverage.gaps:
+                related = list(gap.related_shot_ids or [])
+                if related and any(sid in replaced_shot_ids for sid in related):
+                    continue
+                if any(
+                    slug and gap.gap_id.startswith(f"{slug}_")
+                    for slug in replaced_slugs
+                ):
+                    continue
+                if gap.gap_id in seen_gap_ids:
+                    continue
+                seen_gap_ids.add(gap.gap_id)
+                merged_gaps.append(gap)
+
     for result in ok:
         assert result.rough is not None
         assert result.coverage is not None
@@ -1040,7 +1191,11 @@ def merge_and_persist_rough_cuts(
             seen_pause_keys.add(key)
             merged_pauses.append(pause)
         merged_shots.extend(result.rough.shots)
-        merged_gaps.extend(result.coverage.gaps)
+        for gap in result.coverage.gaps:
+            if gap.gap_id in seen_gap_ids:
+                continue
+            seen_gap_ids.add(gap.gap_id)
+            merged_gaps.append(gap)
 
     rough = RoughCutPlanDocument(
         script_version=locked.script_version,
@@ -1074,6 +1229,7 @@ def generate_rough_cut_and_pauses(
     model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    folder_names: list[str] | None = None,
 ) -> tuple[RoughCutPlanDocument, CoverageGapsDocument]:
     """Kompatibilitäts-Wrapper: Kapitel-Calls mergen → globale Artefakte schreiben."""
     results = generate_all_rough_cuts(
@@ -1082,8 +1238,13 @@ def generate_rough_cut_and_pauses(
         model=model,
         llm_callable=llm_callable,
         progress_callback=progress_callback,
+        folder_names=folder_names,
     )
-    return merge_and_persist_rough_cuts(project, results)
+    return merge_and_persist_rough_cuts(
+        project,
+        results,
+        replace_folder_names=folder_names,
+    )
 
 
 _MAX_QUERIES_PER_GAP = 2
@@ -1477,8 +1638,12 @@ def generate_all_final_cuts(
     model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    folder_names: list[str] | None = None,
 ) -> list[FolderFinalCutResult]:
-    """LLM-Lauf 3 sequenziell pro Kapitel."""
+    """LLM-Lauf 3 sequenziell pro Kapitel.
+
+    ``folder_names``: optional nur diese Kapitel (Test/Teil-Lauf).
+    """
     locked = require_locked_script(project)
     timings = load_segment_timings(project)
     rough = load_model(rough_cut_plan_path(project), RoughCutPlanDocument)
@@ -1486,6 +1651,13 @@ def generate_all_final_cuts(
     if rough is None or timeline is None:
         raise CutPlanError("Grober Cut Plan / Narrationstimeline fehlt.")
     contexts = _build_chapter_contexts(project, locked, timings)
+    if not contexts:
+        raise CutPlanError("Keine Kapitel mit Segmenten für den Final Cut.")
+    available = [ctx.folder_name for ctx in contexts]
+    selected = _normalize_folder_filter(folder_names, available=available)
+    if selected is not None:
+        selected_set = set(selected)
+        contexts = [ctx for ctx in contexts if ctx.folder_name in selected_set]
     if not contexts:
         raise CutPlanError("Keine Kapitel mit Segmenten für den Final Cut.")
 
@@ -1513,6 +1685,8 @@ def generate_all_final_cuts(
 def merge_and_persist_final_cuts(
     project: Project,
     results: list[FolderFinalCutResult],
+    *,
+    replace_folder_names: list[str] | None = None,
 ) -> FinalCutPlanDocument:
     locked = require_locked_script(project)
     ok = [r for r in results if r.status == "PASS" and r.final is not None]
@@ -1523,6 +1697,25 @@ def merge_and_persist_final_cuts(
     shots: list[FinalShot] = []
     preroll: float | None = None
     postroll: float | None = None
+
+    replaced_folders = {
+        str(r.folder_name or "").strip()
+        for r in ok
+        if replace_folder_names is None or r.folder_name in set(replace_folder_names)
+    }
+    if replace_folder_names is not None:
+        existing = load_model(final_cut_plan_path(project), FinalCutPlanDocument)
+        replaced_segments = _segment_ids_for_folders(locked, replaced_folders)
+        if existing is not None:
+            for shot in existing.shots:
+                if _final_shot_in_segments(shot, replaced_segments):
+                    continue
+                shots.append(shot)
+            if preroll is None:
+                preroll = existing.voiceover_preroll_sec
+            if postroll is None:
+                postroll = existing.voiceover_postroll_sec
+
     for result in ok:
         assert result.final is not None
         shots.extend(result.final.shots)
@@ -1547,6 +1740,7 @@ def generate_final_cut_plan(
     model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    folder_names: list[str] | None = None,
 ) -> FinalCutPlanDocument:
     """Kompatibilitäts-Wrapper: Kapitel-Calls mergen → final_cut_plan.json."""
     results = generate_all_final_cuts(
@@ -1555,5 +1749,10 @@ def generate_final_cut_plan(
         model=model,
         llm_callable=llm_callable,
         progress_callback=progress_callback,
+        folder_names=folder_names,
     )
-    return merge_and_persist_final_cuts(project, results)
+    return merge_and_persist_final_cuts(
+        project,
+        results,
+        replace_folder_names=folder_names,
+    )

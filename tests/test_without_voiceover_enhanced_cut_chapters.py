@@ -16,9 +16,13 @@ from otio_app.services.voiceover_generation.models import (
     DramaturgyPlan,
 )
 from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
+    generate_all_final_cuts,
+    generate_all_rough_cuts,
     generate_final_cut_plan,
     generate_rough_cut_and_pauses,
     list_cut_plan_chapter_names,
+    merge_and_persist_final_cuts,
+    merge_and_persist_rough_cuts,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import write_json
 from otio_app.services.without_voiceover_enhanced.models import (
@@ -423,3 +427,191 @@ def test_generate_final_cut_one_call_per_chapter(tmp_path: Path) -> None:
         "Canyon_shot_001",
         "Desert_shot_001",
     }
+
+
+def test_rough_cut_folder_filter_runs_only_selected_chapter(tmp_path: Path) -> None:
+    project = _project(tmp_path, ["Canyon", "Desert"])
+    _confirm(project, ["Canyon", "Desert"])
+    _lock_two_chapters(project)
+    _write_timings(project)
+
+    calls: list[str] = []
+
+    def fake_llm(*, prompt: str, model: str) -> str:
+        if 'ONLY the chapter "Canyon"' in prompt:
+            calls.append("Canyon")
+            folder, seg = "Canyon", "Canyon_segment_001"
+        elif 'ONLY the chapter "Desert"' in prompt:
+            calls.append("Desert")
+            folder, seg = "Desert", "Desert_segment_001"
+        else:
+            raise AssertionError("unexpected prompt")
+        return json.dumps(
+            {
+                "pause_directives": [],
+                "shots": [
+                    {
+                        "shot_id": f"{folder}_shot_001",
+                        "start_anchor": {
+                            "type": "segment",
+                            "segment_id": seg,
+                            "position": "start",
+                        },
+                        "end_anchor": {
+                            "type": "segment",
+                            "segment_id": seg,
+                            "position": "end",
+                        },
+                        "narrative_function": "orientation",
+                        "visual_intent": folder,
+                        "local_asset_id": None,
+                        "asset_fit": "none",
+                        "coverage_gap_id": f"{folder}_gap_001",
+                    }
+                ],
+                "coverage_gaps": [
+                    {
+                        "coverage_gap_id": f"{folder}_gap_001",
+                        "shot_id": f"{folder}_shot_001",
+                        "needed_visual": folder,
+                        "editorial_purpose": "place",
+                        "preferred_media_type": "video",
+                        "search_concepts": [folder],
+                    }
+                ],
+            }
+        )
+
+    # Erst beide Kapitel, dann nur Desert neu — Canyon bleibt.
+    generate_rough_cut_and_pauses(project, llm_callable=fake_llm)
+    calls.clear()
+    results = generate_all_rough_cuts(
+        project,
+        llm_callable=fake_llm,
+        folder_names=["Desert"],
+    )
+    rough, coverage = merge_and_persist_rough_cuts(
+        project,
+        results,
+        replace_folder_names=["Desert"],
+    )
+    assert calls == ["Desert"]
+    assert {s.shot_id for s in rough.shots} == {
+        "Canyon_shot_001",
+        "Desert_shot_001",
+    }
+    assert {g.gap_id for g in coverage.gaps} == {
+        "Canyon_gap_001",
+        "Desert_gap_001",
+    }
+
+
+def test_final_cut_folder_filter_keeps_other_chapters(tmp_path: Path) -> None:
+    project = _project(tmp_path, ["Canyon", "Desert"])
+    _confirm(project, ["Canyon", "Desert"])
+    _lock_two_chapters(project)
+    _write_timings(project)
+
+    write_json(
+        narration_timeline_path(project),
+        NarrationTimelineDocument(
+            script_version="script-v1",
+            total_duration_seconds=5.5,
+            entries=[
+                NarrationTimelineEntry(
+                    segment_id="Canyon_segment_001",
+                    start_seconds=0.0,
+                    end_seconds=2.0,
+                    pause_after_seconds=0.5,
+                ),
+                NarrationTimelineEntry(
+                    segment_id="Desert_segment_001",
+                    start_seconds=2.5,
+                    end_seconds=5.5,
+                    pause_after_seconds=0.0,
+                ),
+            ],
+        ),
+    )
+    from otio_app.services.without_voiceover_enhanced.models import EditorialAnchor
+
+    write_json(
+        rough_cut_plan_path(project),
+        RoughCutPlanDocument(
+            script_version="script-v1",
+            shots=[
+                RoughShot(
+                    shot_id="Canyon_shot_001",
+                    start_anchor=EditorialAnchor(
+                        type="segment",
+                        segment_id="Canyon_segment_001",
+                        position="start",
+                    ),
+                    end_anchor=EditorialAnchor(
+                        type="segment",
+                        segment_id="Canyon_segment_001",
+                        position="end",
+                    ),
+                    local_asset_id="asset_canyon",
+                    asset_id="asset_canyon",
+                ),
+                RoughShot(
+                    shot_id="Desert_shot_001",
+                    start_anchor=EditorialAnchor(
+                        type="segment",
+                        segment_id="Desert_segment_001",
+                        position="start",
+                    ),
+                    end_anchor=EditorialAnchor(
+                        type="segment",
+                        segment_id="Desert_segment_001",
+                        position="end",
+                    ),
+                    local_asset_id="asset_desert",
+                    asset_id="asset_desert",
+                ),
+            ],
+        ),
+    )
+
+    def fake_llm(*, prompt: str, model: str) -> str:
+        if 'ONLY the chapter "Canyon"' in prompt:
+            seg, asset, folder = "Canyon_segment_001", "asset_canyon", "Canyon"
+        elif 'ONLY the chapter "Desert"' in prompt:
+            seg, asset, folder = "Desert_segment_001", "asset_desert_v2", "Desert"
+        else:
+            raise AssertionError("unexpected prompt")
+        return json.dumps(
+            {
+                "shots": [
+                    {
+                        "shot_id": f"{folder}_shot_001",
+                        "narration_start_anchor": {
+                            "segment_id": seg,
+                            "offset_seconds": 0.0,
+                        },
+                        "narration_end_anchor": {
+                            "segment_id": seg,
+                            "offset_seconds": 1.0,
+                        },
+                        "asset_id": asset,
+                    }
+                ]
+            }
+        )
+
+    generate_final_cut_plan(project, llm_callable=fake_llm)
+    results = generate_all_final_cuts(
+        project,
+        llm_callable=fake_llm,
+        folder_names=["Desert"],
+    )
+    final = merge_and_persist_final_cuts(
+        project,
+        results,
+        replace_folder_names=["Desert"],
+    )
+    by_id = {shot.shot_id: shot for shot in final.shots}
+    assert set(by_id) == {"Canyon_shot_001", "Desert_shot_001"}
+    assert by_id["Canyon_shot_001"].asset_id == "asset_canyon"
+    assert by_id["Desert_shot_001"].asset_id == "asset_desert_v2"
