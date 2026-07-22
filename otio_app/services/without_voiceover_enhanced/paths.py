@@ -20,6 +20,11 @@ CUT_PLAN_OPTIONS_FILENAME = "cut_plan_options.json"
 SCRIPT_LOCKED_FILENAME = "script_locked.json"
 SCRIPT_DRAFT_FILENAME = "script_draft.json"
 SEGMENT_TIMINGS_FILENAME = "segment_timings.json"
+SEGMENT_ALIGNMENTS_FILENAME = "segment_alignments.json"
+ALIGNMENTS_SUBDIR = "alignments"
+ELEVENLABS_TIMESTAMPS_FILENAME = "elevenlabs_timestamps.json"
+ELEVENLABS_TTS_METADATA_FILENAME = "elevenlabs_tts_response_metadata.json"
+SEGMENT_SENTENCE_ALIGNMENT_FILENAME = "sentence_alignment.json"
 PAUSE_DIRECTIVES_FILENAME = "pause_directives.json"
 NARRATION_TIMELINE_FILENAME = "narration_timeline.json"
 ROUGH_CUT_PLAN_FILENAME = "rough_cut_plan.json"
@@ -107,6 +112,34 @@ def script_draft_path(project: Project) -> Path:
 
 def segment_timings_path(project: Project) -> Path:
     return audio_dir(project) / SEGMENT_TIMINGS_FILENAME
+
+
+def segment_alignments_path(project: Project) -> Path:
+    """Aggregierter Index: ``audio/segment_alignments.json``."""
+    return audio_dir(project) / SEGMENT_ALIGNMENTS_FILENAME
+
+
+def alignments_dir(project: Project) -> Path:
+    """``audio/alignments/`` — Roh-Timestamps + Satz-Alignment pro Segment."""
+    return audio_dir(project) / ALIGNMENTS_SUBDIR
+
+
+def segment_alignment_dir(project: Project, segment_id: str) -> Path:
+    return alignments_dir(project) / segment_id
+
+
+def segment_timestamps_path(project: Project, segment_id: str) -> Path:
+    return segment_alignment_dir(project, segment_id) / ELEVENLABS_TIMESTAMPS_FILENAME
+
+
+def segment_tts_metadata_path(project: Project, segment_id: str) -> Path:
+    return segment_alignment_dir(project, segment_id) / ELEVENLABS_TTS_METADATA_FILENAME
+
+
+def segment_sentence_alignment_path(project: Project, segment_id: str) -> Path:
+    return (
+        segment_alignment_dir(project, segment_id) / SEGMENT_SENTENCE_ALIGNMENT_FILENAME
+    )
 
 
 def pause_directives_path(project: Project) -> Path:

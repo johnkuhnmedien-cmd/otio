@@ -47,7 +47,8 @@ def render_enhanced_audio_page() -> None:
     st.caption(
         "Nur gesperrte Skripte. Vertonung **pro Dramaturgie-Kapitel sequenziell** "
         "(wie die Skripterzeugung) — jedes Segment ein eigener ElevenLabs-Call, "
-        "gruppiert nach Kapitel."
+        "gruppiert nach Kapitel. Pro Segment werden ElevenLabs-Timestamps und "
+        "abgeleitete Satzzeiten unter `audio/alignments/` gespeichert."
     )
     project = get_enhanced_project()
     if project is None:
@@ -199,6 +200,8 @@ def render_enhanced_audio_page() -> None:
                         f"{item.audio_status} · v={item.script_version}"
                     )
                     st.caption(item.audio_path)
+                    if item.timestamps_path:
+                        st.caption(f"Timestamps: `{item.timestamps_path}`")
 
     errors: list[str] = []
     try:
@@ -211,4 +214,8 @@ def render_enhanced_audio_page() -> None:
         for err in errors:
             st.error(err)
     elif timings is not None:
-        st.success("Segment-Timings gültig und zur Skriptversion passend.")
+        with_ts = sum(1 for item in timings.segments if item.timestamps_path)
+        st.success(
+            "Segment-Timings gültig und zur Skriptversion passend "
+            f"({with_ts}/{len(timings.segments)} mit ElevenLabs-Timestamps)."
+        )

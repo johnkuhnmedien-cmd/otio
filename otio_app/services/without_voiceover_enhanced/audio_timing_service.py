@@ -23,6 +23,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
     audio_dir,
+    segment_sentence_alignment_path,
     segment_timings_path,
 )
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
@@ -32,6 +33,10 @@ from otio_app.services.without_voiceover_enhanced.script_author_service import (
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     ScriptLockError,
     require_locked_script,
+)
+from otio_app.services.without_voiceover_enhanced.segment_alignment_service import (
+    persist_segment_tts_alignment,
+    rebuild_segment_alignments_index,
 )
 
 # folder_name, chapter_index, chapter_total, segment_index, segment_total
@@ -112,16 +117,32 @@ def _synthesize_segments(
         audio_path = out_dir / f"{segment.segment_id}{ext}"
         audio_path.write_bytes(result.audio_bytes)
         duration = measure_audio_duration_seconds(audio_path)
+        alignment = persist_segment_tts_alignment(
+            project,
+            segment_id=segment.segment_id,
+            script_version=locked.script_version,
+            audio_path=str(audio_path),
+            audio_duration_seconds=duration,
+            tts_text=segment.text,
+            alignment=result.alignment,
+            normalized_alignment=result.normalized_alignment,
+            response_metadata=result.response_metadata,
+        )
         by_id[segment.segment_id] = SegmentTiming(
             segment_id=segment.segment_id,
             script_version=locked.script_version,
             audio_path=str(audio_path),
             duration_seconds=duration,
             audio_status="valid",
+            timestamps_path=alignment.timestamps_path,
+            alignment_path=str(
+                segment_sentence_alignment_path(project, segment.segment_id)
+            ),
         )
 
     # Drop timings for segments that no longer exist in the locked script.
     live_ids = {seg.segment_id for seg in locked.segments}
+    live_order = [seg.segment_id for seg in locked.segments]
     merged = [by_id[seg_id] for seg_id in by_id if seg_id in live_ids]
     # Stable order = locked script order
     order = {seg.segment_id: index for index, seg in enumerate(locked.segments)}
@@ -132,6 +153,11 @@ def _synthesize_segments(
         segments=merged,
     )
     write_json(segment_timings_path(project), document)
+    rebuild_segment_alignments_index(
+        project,
+        script_version=locked.script_version,
+        live_segment_ids=live_order,
+    )
     return document
 
 

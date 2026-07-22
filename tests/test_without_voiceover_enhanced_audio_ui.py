@@ -264,3 +264,8 @@ def test_tts_progress_callback_reports_chapters_sequentially(
         ("Antelope Canyon", 1, 2, 1, 1),
         ("Grand Canyon", 2, 2, 1, 1),
     ]
+    for item in doc.segments:
+        assert item.timestamps_path
+        assert Path(item.timestamps_path).is_file()
+        assert item.alignment_path
+        assert Path(item.alignment_path).is_file()

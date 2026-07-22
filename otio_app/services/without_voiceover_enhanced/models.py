@@ -89,12 +89,47 @@ class SegmentTiming(BaseModel):
     audio_path: str
     duration_seconds: float
     audio_status: str = "valid"  # valid | stale | missing | unreadable
+    timestamps_path: str = ""
+    alignment_path: str = ""
 
 
 class SegmentTimingsDocument(BaseModel):
     schema_version: str = "enhanced-segment-timings-v1"
     script_version: str
     segments: list[SegmentTiming] = Field(default_factory=list)
+
+
+class SentenceTiming(BaseModel):
+    """Satzzeiten relativ zur Segment-MP3 (ElevenLabs Character-Timestamps)."""
+
+    sentence_id: str
+    segment_id: str
+    text: str
+    start_seconds: float
+    end_seconds: float
+    duration_seconds: float
+
+
+class SegmentAlignment(BaseModel):
+    """Abgeleitetes Alignment eines vertonten Segments inkl. Satzzeiten."""
+
+    segment_id: str
+    script_version: str
+    audio_path: str
+    audio_duration_seconds: float
+    tts_text: str
+    timestamps_path: str
+    alignment_source: str = "elevenlabs_timestamps"
+    sentences: list[SentenceTiming] = Field(default_factory=list)
+    alignment_warnings: list[str] = Field(default_factory=list)
+
+
+class SegmentAlignmentsDocument(BaseModel):
+    """Index aller Segment-Alignments für Cut-Plan / LLM-Nutzung."""
+
+    schema_version: str = "enhanced-segment-alignments-v1"
+    script_version: str
+    segments: list[SegmentAlignment] = Field(default_factory=list)
 
 
 class PauseDirective(BaseModel):
