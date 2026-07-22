@@ -347,10 +347,10 @@ SENTENCE ANCHORS (when SENTENCE TIMINGS are provided):
 - A sentence anchor has this form:
   {"type": "sentence", "sentence_id": "Sedona_segment_001__s002", "position": "start|early|middle|late|end"}
 - You may still use segment or pause anchors when appropriate.
-- Pause inside a segment (between sentences): set pause_directives[].after_sentence_id
-  to the sentence_id AFTER which the pause occurs (and after_segment_id to that sentence's segment).
+- Voice-over pauses are disabled for now — do not use after_sentence_id pauses.
 - Every shot MUST set start_cut_alignment to exactly one of:
   mid_sentence | sentence_boundary | in_pause
+  (use in_pause only if an existing natural silence is already in the audio; do not create new VO gaps)
 - Do not invent sentence_ids. Use only IDs from SENTENCE TIMINGS.
 """
 
@@ -442,30 +442,13 @@ ASSET RULES:
 - Photos/stills: do not plan long static holds as if they were motion clips;
   keep still spans short unless a deliberate still is justified.
 
-PAUSE RULES:
+PAUSE RULES (TEMPORARILY DISABLED):
 
-Allowed pause_function values:
-
-breath | emphasis | anticipation | reveal |
-chapter_transition | reflection | no_pause
-
-Allowed duration_class values:
-
-short | medium | long
-
-Allowed visual_behavior values:
-
-hold_current_shot |
-next_shot_may_start_during_pause |
-cut_at_pause_start |
-cut_at_pause_end |
-editorial_choice
-
-- Do not output pause durations in seconds or milliseconds.
-- Emit a pause directive only when the boundary decision is editorially meaningful.
-- Use no_pause only when an important boundary should explicitly remain continuous.
-- Every pause directive must include an editorial reason.
-- At most one pause directive may exist for the same after_segment_id.
+- Do NOT insert editorial voice-over pauses.
+- Set pause_directives to an empty list [].
+- Keep narration continuous: segments abut without extra silence gaps.
+- Do not use after_sentence_id pauses.
+- Picture changes are independent of sentence/segment ends; plan continuous video coverage.
 
 SHOT RULES:
 

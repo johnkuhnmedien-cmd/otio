@@ -290,7 +290,12 @@ def test_script_lock_version_and_text_change_invalidates(tmp_path: Path) -> None
     assert not script_locked_path(project).is_file()
 
 
-def test_pause_duration_classes_central_and_deterministic() -> None:
+def test_pause_duration_classes_central_and_deterministic(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.pause_config."
+        "ENHANCED_VOICEOVER_PAUSES_ENABLED",
+        True,
+    )
     assert PAUSE_DURATION_SECONDS["short"] == 0.35
     assert PAUSE_DURATION_SECONDS["medium"] == 0.80
     assert PAUSE_DURATION_SECONDS["long"] == 1.50
@@ -301,7 +306,24 @@ def test_pause_duration_classes_central_and_deterministic() -> None:
         resolve_pause_duration_seconds("huge")
 
 
-def test_pause_resolver_identical_inputs_identical_outputs_and_pause_without_cut() -> None:
+def test_voiceover_pauses_disabled_resolve_to_zero() -> None:
+    from otio_app.services.without_voiceover_enhanced.pause_config import (
+        ENHANCED_VOICEOVER_PAUSES_ENABLED,
+    )
+
+    assert ENHANCED_VOICEOVER_PAUSES_ENABLED is False
+    assert resolve_pause_duration_seconds("medium") == 0.0
+    assert resolve_pause_duration_seconds("huge") == 0.0
+
+
+def test_pause_resolver_identical_inputs_identical_outputs_and_pause_without_cut(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.pause_config."
+        "ENHANCED_VOICEOVER_PAUSES_ENABLED",
+        True,
+    )
     timings = [
         SegmentTiming(
             segment_id="segment_001",

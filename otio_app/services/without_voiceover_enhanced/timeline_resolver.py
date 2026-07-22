@@ -44,7 +44,11 @@ from otio_app.services.without_voiceover_enhanced.paths import (
     repair_log_path,
     resolved_timeline_path,
 )
+from otio_app.services.without_voiceover_enhanced.pause_config import (
+    voiceover_pauses_enabled,
+)
 from otio_app.services.without_voiceover_enhanced.pause_resolver import (
+    build_narration_timeline,
     source_seconds_to_timeline,
 )
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
@@ -307,6 +311,18 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
 
     timing_map = {item.segment_id: item for item in timings.segments}
     sentence_index = sentence_index_by_id(load_segment_alignments(project))
+    # Pausen temporär aus: durchgehende VO-Timeline aus Segment-Timings,
+    # unabhängig von gespeicherten pause_directives / intra_pauses.
+    if not voiceover_pauses_enabled():
+        timeline = build_narration_timeline(
+            script_version=locked.script_version,
+            segment_timings=timings.segments,
+            pause_directives=[],
+            sentence_index=sentence_index,
+        )
+        repairs.append(
+            "Voice-over-Pausen deaktiviert — Narration durchgehend ohne Gaps."
+        )
     audio_segments = _build_resolved_audio_segments(
         timeline=timeline,
         timing_map=timing_map,
@@ -539,9 +555,23 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
                 )
         gap = curr.timeline_start_seconds - prev.timeline_end_seconds
         if gap > 0.05:
-            # Unintended visual gap (audio pauses are separate).
+            # Keine schwarzen Lücken auf der Video-Spur: vorherigen Shot halten.
+            prev.timeline_end_seconds = round(curr.timeline_start_seconds, 6)
+            hold_duration = (
+                prev.timeline_end_seconds - prev.timeline_start_seconds
+            )
+            media_duration = catalog.get(prev.asset_id, {}).get("duration_seconds")
+            if media_duration is None or float(media_duration or 0) <= 0:
+                prev.source_end_seconds = round(
+                    prev.source_start_seconds + hold_duration, 6
+                )
+            else:
+                max_end = float(media_duration)
+                desired_end = prev.source_start_seconds + hold_duration
+                prev.source_end_seconds = round(min(max_end, desired_end), 6)
             repairs.append(
-                f"Visuelle Lücke {gap:.3f}s zwischen {prev.shot_id} und {curr.shot_id} erkannt."
+                f"Visuelle Lücke {gap:.3f}s zwischen {prev.shot_id} und "
+                f"{curr.shot_id} — vorherigen Shot gehalten (kein Video-Gap)."
             )
 
     # Max asset usage (Intro zählt nicht).

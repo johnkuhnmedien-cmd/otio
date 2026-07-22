@@ -61,7 +61,14 @@ def test_mid_silence_split_between_sentences() -> None:
     assert split == 1.2
 
 
-def test_intra_sentence_pause_expands_timeline_without_stretching_audio() -> None:
+def test_intra_sentence_pause_expands_timeline_without_stretching_audio(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.pause_config."
+        "ENHANCED_VOICEOVER_PAUSES_ENABLED",
+        True,
+    )
     timings = [
         SegmentTiming(
             segment_id="seg_001",
@@ -104,7 +111,12 @@ def test_intra_sentence_pause_expands_timeline_without_stretching_audio() -> Non
     assert source_seconds_to_timeline(entry, 1.4) == 2.2
 
 
-def test_resolved_audio_splits_at_silence_midpoint() -> None:
+def test_resolved_audio_splits_at_silence_midpoint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.pause_config."
+        "ENHANCED_VOICEOVER_PAUSES_ENABLED",
+        True,
+    )
     timings = [
         SegmentTiming(
             segment_id="seg_001",
