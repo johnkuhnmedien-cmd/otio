@@ -254,7 +254,8 @@ STYLE PROFILE:
 VERIFIED FACTS / METADATA (only these may be stated as facts):
 {verified_facts_text}
 
-LOCAL ASSETS FOR THIS CHAPTER (visual resource, not content limit):
+LOCAL ASSETS FOR THIS CHAPTER (slim inventory: id/file/type/duration/description;
+visual resource, not content limit):
 {asset_inventory_summary}
 """
 
