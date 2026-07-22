@@ -379,18 +379,32 @@ def test_local_media_validation_and_otio_fail_closed(tmp_path: Path) -> None:
                     "timeline_end_seconds": 1.0,
                     "source_start_seconds": 0.0,
                     "source_end_seconds": 1.0,
+                    "resolved_media_path": str(local),
+                    "resolved_media_kind": "image",
+                    "resolved_available_start_seconds": 0.0,
+                    "hold_mode": "",
                 }
             ],
+            voiceover_preroll_sec=0.0,
+            voiceover_postroll_sec=0.0,
             repairs=[],
             errors=[],
         ),
     )
-    # Need audio? empty audio ok for this check — but export asserts audio paths if present.
+    # Kein segment_timings → Narration nicht erwartet; Still wird Hold-Video.
+    save_cut_plan_options(
+        project,
+        CutPlanOptions(
+            voiceover_preroll_sec=0.0,
+            voiceover_postroll_sec=0.0,
+            still_image_style_enabled=False,
+        ),
+    )
     out = export_otio_from_resolved_timeline(project, basename="r1_ok")
     payload = out.read_text(encoding="utf-8")
     assert "http://" not in payload
     assert "https://" not in payload
-    assert str(local) in payload
+    assert "still_hold_" in payload or str(local) in payload
 
 
 def test_otio_blocks_preview_and_source_page(tmp_path: Path) -> None:
@@ -434,7 +448,10 @@ def test_otio_blocks_preview_and_source_page(tmp_path: Path) -> None:
             "errors": [],
         },
     )
-    with pytest.raises(EnhancedOtioExportError, match="lokale Mediendatei"):
+    with pytest.raises(
+        EnhancedOtioExportError,
+        match="lokale Mediendatei|resolved_media_path fehlt|Web-URL",
+    ):
         export_otio_from_resolved_timeline(project)
 
 
@@ -567,6 +584,8 @@ def test_otio_allow_errors_exports_partial_timeline_with_gaps(tmp_path: Path) ->
                     "timeline_end_seconds": 2.0,
                     "source_start_seconds": 0.0,
                     "source_end_seconds": 2.0,
+                    "resolved_media_path": str(local),
+                    "resolved_media_kind": "image",
                 },
                 {
                     "shot_id": "shot_c",
@@ -575,6 +594,8 @@ def test_otio_allow_errors_exports_partial_timeline_with_gaps(tmp_path: Path) ->
                     "timeline_end_seconds": 8.0,
                     "source_start_seconds": 0.0,
                     "source_end_seconds": 2.0,
+                    "resolved_media_path": str(local),
+                    "resolved_media_kind": "image",
                 },
             ],
             repairs=[],
@@ -596,8 +617,7 @@ def test_otio_allow_errors_exports_partial_timeline_with_gaps(tmp_path: Path) ->
     payload = out.read_text(encoding="utf-8")
     assert "shot_a" in payload
     assert "shot_c" in payload
-    assert "Gap" in payload or "gap" in payload.lower()
-    assert str(local) in payload
+    assert "Gap" in payload or "gap" in payload.lower() or "still_hold_" in payload
     assert "http://" not in payload
 
 

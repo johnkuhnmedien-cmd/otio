@@ -130,10 +130,31 @@ def prepare_inventories_for_cut_plan(
                 updated_assets.append(asset)
                 continue
 
+            # Enhanced: eindeutige Asset-IDs (Ordner-Scope + Stem + Hash).
+            from otio_app.services.without_voiceover_enhanced.asset_identity import (
+                canonicalize_inventory_asset_id,
+            )
+
+            media_path_for_id = Path(path)
+            if not media_path_for_id.is_file():
+                media_path_for_id = (
+                    Path(project.project_root).expanduser() / path
+                )
+            canonical_id = canonicalize_inventory_asset_id(
+                project,
+                path=media_path_for_id if media_path_for_id.is_file() else path,
+                folder_name=folder,
+                existing_id=str(asset.asset_id or ""),
+            )
+            id_updates: dict = {}
+            if canonical_id and canonical_id != str(asset.asset_id or ""):
+                id_updates["asset_id"] = canonical_id
+                changed = True
+
             if not _is_video_asset(path, asset.media_type):
                 report.assets_non_video += 1
                 # Bilder/Audio: Dauer/Lead-In explizit leeren (null in Slim).
-                updates: dict = {}
+                updates: dict = dict(id_updates)
                 if asset.duration_seconds is not None:
                     updates["duration_seconds"] = None
                 if asset.usable_in_s is not None:
@@ -146,7 +167,7 @@ def prepare_inventories_for_cut_plan(
                 continue
 
             existing = asset.duration_seconds
-            updates: dict = {}
+            updates: dict = dict(id_updates)
             media_path = Path(path)
 
             if (

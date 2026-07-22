@@ -2,19 +2,30 @@
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from otio_app.models import Project
-from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.inventory_loader import load_folder_inventory
-from otio_app.services.media_utils import is_image_media, probe_duration_seconds
+from otio_app.services.media_utils import (
+    is_image_media,
+    probe_duration_seconds,
+    probe_media_timing,
+)
+from otio_app.services.without_voiceover_enhanced.asset_identity import (
+    canonicalize_inventory_asset_id,
+    is_legacy_ambiguous_asset_id,
+)
 from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
     load_segment_timings,
 )
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     load_cut_plan_options,
     resolve_timing_seconds,
+)
+from otio_app.services.without_voiceover_enhanced.cut_rhythm_validator import (
+    assess_cut_rhythm,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
@@ -23,8 +34,10 @@ from otio_app.services.without_voiceover_enhanced.local_media_service import (
     list_export_ready_supplements,
     refresh_supplement_validation,
 )
-from otio_app.services.without_voiceover_enhanced.cut_rhythm_validator import (
-    assess_cut_rhythm,
+from otio_app.services.without_voiceover_enhanced.media_hold import (
+    MediaHoldError,
+    ensure_still_hold_video,
+    ensure_video_padded_hold,
 )
 from otio_app.services.without_voiceover_enhanced.models import (
     AcceptedSupplementsDocument,
@@ -66,35 +79,134 @@ class TimelineResolveError(RuntimeError):
     pass
 
 
-def _asset_catalog(project: Project) -> dict[str, dict]:
-    catalog: dict[str, dict] = {}
+@dataclass
+class AssetCatalog:
+    """Eindeutige Asset-Einträge; Kollisionen und Legacy-Aliase separat."""
+
+    by_id: dict[str, dict] = field(default_factory=dict)
+    collisions: list[str] = field(default_factory=list)
+    legacy_to_ids: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
+
+
+def _resolve_local_path(project: Project, raw: str | Path) -> Path:
+    path = Path(str(raw)).expanduser()
+    if path.is_file():
+        return path.resolve()
+    candidate = (Path(project.project_root).expanduser() / path).resolve()
+    if candidate.is_file():
+        return candidate
+    return path
+
+
+def _probe_entry(
+    project: Project,
+    *,
+    path: Path,
+    folder: str,
+    asset_id: str,
+    usable_in: float | None,
+    media_type_hint: str,
+    fps: float,
+) -> dict:
+    timing = probe_media_timing(path, default_rate=fps)
+    duration = timing.duration_sec
+    if duration is None:
+        duration = probe_duration_seconds(path)
+    kind = "image" if is_image_media(path) or media_type_hint in {"photo", "image"} else "video"
+    return {
+        "path": str(path),
+        "duration_seconds": float(duration) if duration else None,
+        "usable_in_s": float(usable_in) if usable_in is not None else None,
+        "folder": folder,
+        "media_type": media_type_hint or kind,
+        "media_kind": kind,
+        "available_start_seconds": float(timing.start_sec or 0.0),
+        "media_rate": float(timing.rate or fps),
+        "canonical_id": asset_id,
+    }
+
+
+def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
+    """Baut eindeutigen Katalog; doppelte explizite IDs → collisions."""
+    result = AssetCatalog()
+    explicit_paths: dict[str, list[str]] = defaultdict(list)
+
+    def _register(entry_id: str, entry: dict, *, raw_id: str) -> None:
+        path = str(entry["path"])
+        if entry_id in result.by_id and result.by_id[entry_id]["path"] != path:
+            explicit_paths[entry_id].append(path)
+            explicit_paths[entry_id].append(result.by_id[entry_id]["path"])
+            return
+        if entry_id in result.by_id:
+            return
+        result.by_id[entry_id] = entry
+        if is_legacy_ambiguous_asset_id(raw_id):
+            if entry_id not in result.legacy_to_ids[raw_id]:
+                result.legacy_to_ids[raw_id].append(entry_id)
+        # Auch Stem-Legacy aus Dateiname indexieren (für alte Cut-Pläne).
+        stem_legacy = f"asset_{Path(path).stem}"
+        stem_legacy = (
+            "asset_"
+            + "".join(ch if ch.isalnum() else "_" for ch in Path(path).stem).strip("_").lower()
+        )
+        if stem_legacy and entry_id not in result.legacy_to_ids[stem_legacy]:
+            result.legacy_to_ids[stem_legacy].append(entry_id)
+
     for folder in project.selected_asset_subdirs:
         inventory = load_folder_inventory(project, folder)
         if inventory is None:
             continue
         for asset in getattr(inventory, "assets", []) or []:
-            path = getattr(asset, "path", None) or getattr(asset, "source_path", None)
-            if path is None:
+            raw_path = getattr(asset, "path", None) or getattr(asset, "source_path", None)
+            if raw_path is None:
                 continue
-            asset_id = getattr(asset, "asset_id", None) or asset_id_for_path(str(path))
+            path = _resolve_local_path(project, raw_path)
+            if not path.is_file():
+                continue
+            if is_http_url(str(path)):
+                continue
+            existing = str(getattr(asset, "asset_id", "") or "").strip()
+            canonical = canonicalize_inventory_asset_id(
+                project,
+                path=path,
+                folder_name=folder,
+                existing_id=existing,
+            )
+            if existing and not is_legacy_ambiguous_asset_id(existing):
+                # Explizite ID: Kollision prüfen (gleiche ID, anderer Pfad).
+                if existing in result.by_id and result.by_id[existing]["path"] != str(path):
+                    explicit_paths[existing].extend(
+                        [result.by_id[existing]["path"], str(path)]
+                    )
+                    continue
             duration = getattr(asset, "duration_sec", None)
             if duration is None:
                 duration = getattr(asset, "duration_seconds", None)
-            if duration is None:
-                duration = probe_duration_seconds(Path(path))
             usable_in = getattr(asset, "usable_in_s", None)
             media_type = getattr(asset, "media_type", None) or (
-                "photo" if is_image_media(Path(path)) else "video"
+                "photo" if is_image_media(path) else "video"
             )
-            catalog[str(asset_id)] = {
-                "path": str(path),
-                "duration_seconds": float(duration) if duration else None,
-                "usable_in_s": float(usable_in) if usable_in is not None else None,
-                "folder": folder,
-                "media_type": str(media_type or "video").lower(),
-            }
-    # Only export_ready supplements are technically available assets.
-    # Selected-but-missing remain visible in UI/search, but not in the catalog.
+            entry = _probe_entry(
+                project,
+                path=path,
+                folder=folder,
+                asset_id=canonical,
+                usable_in=float(usable_in) if usable_in is not None else None,
+                media_type_hint=str(media_type or "video").lower(),
+                fps=fps,
+            )
+            if duration is not None and entry["duration_seconds"] is None:
+                entry["duration_seconds"] = float(duration)
+            register_id = (
+                existing
+                if existing and not is_legacy_ambiguous_asset_id(existing)
+                else canonical
+            )
+            entry["canonical_id"] = register_id
+            _register(register_id, entry, raw_id=existing or canonical)
+            if register_id != canonical:
+                _register(canonical, entry, raw_id=existing or canonical)
+
     accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     if accepted is not None:
         for supplement in accepted.supplements:
@@ -104,30 +216,90 @@ def _asset_catalog(project: Project) -> dict[str, dict]:
             local_path = str(refreshed.local_media_path or "").strip()
             if not local_path or is_http_url(local_path):
                 continue
+            path = _resolve_local_path(project, local_path)
+            if not path.is_file():
+                continue
             media_type = (refreshed.media_type or "photo").lower()
-            catalog[supplement.candidate_id] = {
-                "path": local_path,
-                "duration_seconds": refreshed.duration_seconds,
-                "supplement": True,
-                "export_ready": True,
-                "folder": "",
-                "media_type": media_type,
-            }
+            entry = _probe_entry(
+                project,
+                path=path,
+                folder="",
+                asset_id=supplement.candidate_id,
+                usable_in=None,
+                media_type_hint=media_type,
+                fps=fps,
+            )
+            entry["supplement"] = True
+            entry["export_ready"] = True
+            if refreshed.duration_seconds is not None:
+                entry["duration_seconds"] = refreshed.duration_seconds
+            _register(supplement.candidate_id, entry, raw_id=supplement.candidate_id)
+
     for supplement in list_export_ready_supplements(project):
         local_path = str(supplement.local_media_path or "").strip()
-        if local_path and not is_http_url(local_path):
-            catalog.setdefault(
-                supplement.candidate_id,
-                {
-                    "path": local_path,
-                    "duration_seconds": supplement.duration_seconds,
-                    "supplement": True,
-                    "export_ready": True,
-                    "folder": "",
-                    "media_type": (supplement.media_type or "photo").lower(),
-                },
-            )
-    return catalog
+        if not local_path or is_http_url(local_path):
+            continue
+        path = _resolve_local_path(project, local_path)
+        if not path.is_file():
+            continue
+        if supplement.candidate_id in result.by_id:
+            continue
+        entry = _probe_entry(
+            project,
+            path=path,
+            folder="",
+            asset_id=supplement.candidate_id,
+            usable_in=None,
+            media_type_hint=(supplement.media_type or "photo").lower(),
+            fps=fps,
+        )
+        entry["supplement"] = True
+        entry["export_ready"] = True
+        if supplement.duration_seconds is not None:
+            entry["duration_seconds"] = supplement.duration_seconds
+        _register(supplement.candidate_id, entry, raw_id=supplement.candidate_id)
+
+    for asset_id, paths in sorted(explicit_paths.items()):
+        unique_paths = sorted(set(paths))
+        if len(unique_paths) < 2:
+            continue
+        listed = "; ".join(unique_paths)
+        result.collisions.append(
+            f"Asset-ID '{asset_id}' zeigt auf mehrere lokale Pfade: {listed}. "
+            "Inventar sowie Lauf 2 und Lauf 3 neu erzeugen."
+        )
+        # Mehrdeutige ID aus Katalog entfernen — kein stilles first/last.
+        result.by_id.pop(asset_id, None)
+    return result
+
+
+def _asset_catalog(project: Project) -> dict[str, dict]:
+    """Kompatibilitäts-Wrapper (eindeutige IDs)."""
+    return build_asset_catalog(project).by_id
+
+
+def lookup_catalog_entry(
+    catalog: AssetCatalog,
+    asset_id: str,
+) -> tuple[dict | None, str | None]:
+    """Gibt (entry, error) zurück — nie stilles first/last bei Mehrdeutigkeit."""
+    key = (asset_id or "").strip()
+    if not key:
+        return None, "Leere Asset-ID."
+    if key in catalog.by_id:
+        return catalog.by_id[key], None
+    aliases = catalog.legacy_to_ids.get(key) or []
+    if len(aliases) == 1:
+        return catalog.by_id[aliases[0]], None
+    if len(aliases) > 1:
+        paths = [catalog.by_id[a]["path"] for a in aliases if a in catalog.by_id]
+        return None, (
+            f"Mehrdeutige Legacy-Asset-ID '{key}' trifft "
+            f"{len(paths)} Dateien: {'; '.join(paths)}. "
+            "Inventar sowie Lauf 2 und Lauf 3 neu erzeugen "
+            "(eindeutige Ordner-Scoped-IDs erforderlich)."
+        )
+    return None, f"Unbekannte Asset-ID: {key}"
 
 
 def _is_intro_folder(folder: str | None) -> bool:
@@ -245,6 +417,60 @@ def _seconds_to_frame(seconds: float, fps: float) -> float:
     return round(frame / fps, 6)
 
 
+def _reapply_hold_for_timeline_span(
+    project: Project,
+    shot: ResolvedShot,
+    *,
+    fps: float,
+    repairs: list[str],
+    label: str,
+) -> None:
+    """Passt Source an Timeline-Span an; bei Overflow Hold-Video, nie Source>Datei."""
+    need = max(0.0, shot.timeline_end_seconds - shot.timeline_start_seconds)
+    source_span = max(0.0, shot.source_end_seconds - shot.source_start_seconds)
+    if need <= source_span + 1e-6:
+        return
+    path = Path(shot.resolved_media_path or "")
+    if not path.is_file():
+        raise TimelineResolveError(
+            f"{shot.shot_id}: {label}-Hold unmöglich — Medienpfad fehlt "
+            f"({shot.resolved_media_path})."
+        )
+    available_start = float(shot.resolved_available_start_seconds or 0.0)
+    media_dur = shot.resolved_media_duration_seconds
+    if media_dur is not None:
+        available_end = available_start + float(media_dur)
+        # Zuerst: Source nach vorne schieben, wenn Datei lang genug.
+        if float(media_dur) + 1e-6 >= need:
+            shot.source_start_seconds = round(available_start, 6)
+            shot.source_end_seconds = round(available_start + need, 6)
+            if shot.source_end_seconds <= available_end + 1e-6:
+                repairs.append(
+                    f"{shot.shot_id}: {label} — Source auf Dateianfang geschoben."
+                )
+                return
+    # Hold-Video erzeugen (Still → Loop-Video, Video → tpad clone).
+    try:
+        if is_image_media(path):
+            hold = ensure_still_hold_video(
+                project, path, duration_seconds=need, fps=fps
+            )
+        else:
+            hold = ensure_video_padded_hold(
+                project, path, target_duration_seconds=need, fps=fps
+            )
+    except MediaHoldError as exc:
+        raise TimelineResolveError(f"{shot.shot_id}: {label}-Hold fehlgeschlagen: {exc}") from exc
+    shot.resolved_media_path = str(hold)
+    shot.resolved_media_kind = "video"
+    shot.resolved_available_start_seconds = 0.0
+    shot.resolved_media_duration_seconds = need
+    shot.source_start_seconds = 0.0
+    shot.source_end_seconds = round(need, 6)
+    shot.hold_mode = "freeze_video"
+    repairs.append(f"{shot.shot_id}: {label}-Hold-Video {need:.2f}s ({hold.name}).")
+
+
 def detect_one_to_one_sentence_asset(final: FinalCutPlanDocument, segment_count: int) -> bool:
     """True wenn Shotanzahl == Segmentanzahl und jeder Shot genau ein Segment spannt."""
     if len(final.shots) != segment_count or segment_count == 0:
@@ -253,6 +479,157 @@ def detect_one_to_one_sentence_asset(final: FinalCutPlanDocument, segment_count:
         shot.narration_start_anchor.segment_id == shot.narration_end_anchor.segment_id
         and shot.narration_start_anchor.offset_seconds == 0.0
         for shot in final.shots
+    )
+
+
+def _resolve_shot_media(
+    project: Project,
+    *,
+    shot_id: str,
+    asset_id: str,
+    entry: dict,
+    timeline_start: float,
+    timeline_end: float,
+    fps: float,
+    head_trim: float,
+    short_tolerance: float,
+    editorial_function: str,
+    may_overlap_pause: bool,
+    repairs: list[str],
+) -> ResolvedShot:
+    """Berechnet Source-Ranges inkl. Embedded-TC und Hold-Medien."""
+    duration = max(0.0, timeline_end - timeline_start)
+    media_path = Path(str(entry["path"]))
+    available_start = float(entry.get("available_start_seconds") or 0.0)
+    media_duration = entry.get("duration_seconds")
+    media_kind = str(entry.get("media_kind") or "").lower()
+    if not media_kind:
+        media_kind = "image" if is_image_media(media_path) else "video"
+    hold_mode = ""
+    resolved_path = media_path
+
+    if media_kind == "image" or (media_duration is None or float(media_duration or 0) <= 0):
+        # Stills: Hold-Video über die volle Timeline-Dauer (Resolve-sicher).
+        try:
+            hold_path = ensure_still_hold_video(
+                project,
+                media_path,
+                duration_seconds=max(duration, TECH_MIN_SHOT_SECONDS),
+                fps=fps,
+            )
+        except MediaHoldError as exc:
+            raise TimelineResolveError(f"{shot_id}: {exc}") from exc
+        resolved_path = hold_path
+        hold_mode = "freeze_video"
+        available_start = 0.0
+        media_duration = max(duration, TECH_MIN_SHOT_SECONDS)
+        media_kind = "video"
+        source_start = 0.0
+        source_end = duration
+        repairs.append(
+            f"{shot_id}: Still → Hold-Video {duration:.2f}s ({hold_path.name})."
+        )
+    else:
+        media_duration_f = float(media_duration)
+        usable_in = entry.get("usable_in_s")
+        trim = head_trim
+        if usable_in is not None:
+            trim = max(trim, max(0.0, float(usable_in)))
+        if trim >= media_duration_f:
+            raise TimelineResolveError(
+                f"{shot_id}: Asset {asset_id}: Head-Trim/usable_in ({trim}s) "
+                f">= Mediendauer ({media_duration_f}s) · Pfad {media_path}."
+            )
+        usable = media_duration_f - trim
+        need = duration
+        if need > usable + 1e-6:
+            shortfall = need - usable
+            if shortfall <= short_tolerance + 1e-6:
+                need = usable
+                timeline_end = _seconds_to_frame(timeline_start + need, fps)
+                duration = need
+                repairs.append(
+                    f"{shot_id}: nutzbare Dauer knapp ({shortfall:.2f}s) — "
+                    "Toleranz, Shot gekürzt."
+                )
+            else:
+                # Anderen gültigen Source-Start wählen hilft nicht, wenn need > usable.
+                # Hold-Video mit tpad (letztes Frame klonen).
+                try:
+                    hold_path = ensure_video_padded_hold(
+                        project,
+                        media_path,
+                        target_duration_seconds=need,
+                        fps=fps,
+                    )
+                except MediaHoldError as exc:
+                    raise TimelineResolveError(
+                        f"{shot_id}: Asset {asset_id} zu kurz "
+                        f"({media_duration_f}s < {need}s; Toleranz "
+                        f"{short_tolerance:.1f}s) und Hold fehlgeschlagen: {exc} "
+                        f"· Pfad {media_path}."
+                    ) from exc
+                resolved_path = hold_path
+                hold_mode = "freeze_video"
+                available_start = 0.0
+                media_duration_f = need
+                source_start = 0.0
+                source_end = need
+                repairs.append(
+                    f"{shot_id}: Video-Hold {need:.2f}s via tpad ({hold_path.name})."
+                )
+                return ResolvedShot(
+                    shot_id=shot_id,
+                    asset_id=asset_id,
+                    timeline_start_seconds=timeline_start,
+                    timeline_end_seconds=timeline_end,
+                    source_start_seconds=round(source_start, 6),
+                    source_end_seconds=round(source_end, 6),
+                    editorial_function=editorial_function,
+                    may_overlap_pause=may_overlap_pause,
+                    resolved_media_path=str(resolved_path),
+                    resolved_media_kind=media_kind,
+                    resolved_media_duration_seconds=round(media_duration_f, 6),
+                    resolved_available_start_seconds=round(available_start, 6),
+                    folder_name=str(entry.get("folder") or ""),
+                    hold_mode=hold_mode,
+                )
+
+        # Mitte der nutzbaren Zone; Source im Embedded-TC-Raum.
+        content_start = trim + max(0.0, (usable - need) / 2.0)
+        source_start = available_start + content_start
+        source_end = source_start + need
+        available_end = available_start + media_duration_f
+        if source_end > available_end + 1e-6:
+            # Nach links schieben, sofern möglich.
+            shift = source_end - available_end
+            source_start = max(available_start + trim, source_start - shift)
+            source_end = source_start + need
+        if source_start < available_start - 1e-6 or source_end > available_end + 1e-6:
+            raise TimelineResolveError(
+                f"{shot_id}: Source-Range außerhalb der verfügbaren Range für "
+                f"{asset_id} (source {source_start:.3f}–{source_end:.3f}, "
+                f"available {available_start:.3f}–{available_end:.3f}) · "
+                f"Pfad {media_path}."
+            )
+
+    return ResolvedShot(
+        shot_id=shot_id,
+        asset_id=asset_id,
+        timeline_start_seconds=timeline_start,
+        timeline_end_seconds=timeline_end,
+        source_start_seconds=round(source_start, 6),
+        source_end_seconds=round(source_end, 6),
+        editorial_function=editorial_function,
+        may_overlap_pause=may_overlap_pause,
+        resolved_media_path=str(resolved_path),
+        resolved_media_kind=media_kind,
+        resolved_media_duration_seconds=(
+            round(float(media_duration), 6) if media_duration is not None else None
+        ),
+        resolved_available_start_seconds=round(available_start, 6),
+        folder_name=str(entry.get("folder") or ""),
+        hold_mode=hold_mode,
     )
 
 
@@ -270,7 +647,9 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
 
     errors: list[str] = []
     repairs: list[str] = []
-    catalog = _asset_catalog(project)
+    fps = float(project.fps)
+    catalog = build_asset_catalog(project, fps=fps)
+    errors.extend(catalog.collisions)
     options = load_cut_plan_options(project)
     editorial_min = max(TECH_MIN_SHOT_SECONDS, float(options.shot_min_sec))
     editorial_max = min(
@@ -285,7 +664,6 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
         for s in locked.segments
         if _is_intro_folder(s.folder_name)
     }
-    fps = float(project.fps)
     preroll = resolve_timing_seconds(
         mode=options.voiceover_preroll_mode,
         setting_max=options.voiceover_preroll_sec,
@@ -320,7 +698,8 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
         if shot.narration_end_anchor.segment_id not in known_segments:
             errors.append(f"Unbekannte Segment-ID: {shot.narration_end_anchor.segment_id}")
             continue
-        if shot.asset_id not in catalog:
+        entry, lookup_error = lookup_catalog_entry(catalog, shot.asset_id)
+        if entry is None:
             accepted = load_model(
                 accepted_supplements_path(project), AcceptedSupplementsDocument
             )
@@ -328,15 +707,22 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
                 s.candidate_id == shot.asset_id for s in accepted.supplements
             ):
                 errors.append(
-                    f"Supplement {shot.asset_id} ist nicht export_ready "
-                    "(lokale Mediendatei fehlt oder ist ungültig)."
+                    f"{shot.shot_id}: Supplement {shot.asset_id} ist nicht "
+                    "export_ready (lokale Mediendatei fehlt oder ist ungültig)."
                 )
             else:
-                errors.append(f"Unbekannte Asset-ID: {shot.asset_id}")
+                errors.append(f"{shot.shot_id}: {lookup_error}")
             continue
-        if is_http_url(str(catalog[shot.asset_id].get("path") or "")):
+        media_path = Path(str(entry.get("path") or ""))
+        if is_http_url(str(media_path)):
             errors.append(
-                f"Asset {shot.asset_id} besitzt eine Web-URL statt lokaler Datei."
+                f"{shot.shot_id}: Asset {shot.asset_id} besitzt eine Web-URL "
+                f"statt lokaler Datei ({media_path})."
+            )
+            continue
+        if not media_path.is_file():
+            errors.append(
+                f"{shot.shot_id}: lokale Datei fehlt für {shot.asset_id}: {media_path}"
             )
             continue
 
@@ -352,7 +738,7 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
                 sentence_index=sentence_index,
             )
         except TimelineResolveError as exc:
-            errors.append(str(exc))
+            errors.append(f"{shot.shot_id}: {exc}")
             continue
         start = _seconds_to_frame(start, fps)
         end = _seconds_to_frame(end, fps)
@@ -376,87 +762,25 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
             )
             duration = end - start
 
-        entry = catalog[shot.asset_id]
-        media_duration = entry.get("duration_seconds")
-        media_type = str(entry.get("media_type") or "").lower()
-        is_video = media_type in {"video"} or (
-            media_type not in {"photo", "image"}
-            and media_duration is not None
-            and float(media_duration) > 0
-            and not is_image_media(Path(str(entry.get("path") or "")))
-        )
-
-        if media_duration is not None and media_duration < duration:
-            shortfall = float(duration) - float(media_duration)
-            if shortfall <= short_tolerance + 1e-6:
-                repairs.append(
-                    f"{shot.shot_id}: Asset {shot.asset_id} {shortfall:.2f}s zu kurz "
-                    f"— Toleranz {short_tolerance:.1f}s, Shot auf Mediendauer gekürzt."
-                )
-                end = _seconds_to_frame(start + float(media_duration), fps)
-                duration = end - start
-            else:
-                errors.append(
-                    f"Asset {shot.asset_id} ist kürzer als gewünschter Shot "
-                    f"({media_duration}s < {duration}s; Toleranz {short_tolerance:.1f}s)."
-                )
-                continue
-
-        if media_duration is None or media_duration <= 0:
-            # Stills / unknown duration: hold for shot length.
-            source_start = 0.0
-            source_end = duration
-        else:
-            usable_in = entry.get("usable_in_s")
-            trim = 0.0
-            if is_video:
-                trim = head_trim
-                if usable_in is not None:
-                    trim = max(trim, max(0.0, float(usable_in)))
-            if trim >= float(media_duration):
-                errors.append(
-                    f"Asset {shot.asset_id}: Head-Trim/usable_in ({trim}s) "
-                    f">= Mediendauer ({media_duration}s)."
-                )
-                continue
-            usable = float(media_duration) - trim
-            if duration > usable + 1e-6:
-                shortfall = duration - usable
-                if shortfall <= short_tolerance + 1e-6:
-                    repairs.append(
-                        f"{shot.shot_id}: nutzbare Dauer knapp "
-                        f"({shortfall:.2f}s) — Toleranz, Shot gekürzt."
-                    )
-                    end = _seconds_to_frame(start + usable, fps)
-                    duration = end - start
-                else:
-                    errors.append(
-                        f"Source-Range für {shot.asset_id} würde nutzbare "
-                        f"Mediendauer überschreiten "
-                        f"(shot {duration}s > usable {usable}s nach Head-Trim/"
-                        f"usable_in_s)."
-                    )
-                    continue
-            source_start = trim + max(0.0, (usable - duration) / 2.0)
-            source_end = source_start + duration
-            if source_end > float(media_duration) + 1e-6:
-                errors.append(
-                    f"Source-Range außerhalb der Mediendauer für {shot.asset_id}."
-                )
-                continue
-
-        resolved_shots.append(
-            ResolvedShot(
+        try:
+            resolved_shot = _resolve_shot_media(
+                project,
                 shot_id=shot.shot_id,
-                asset_id=shot.asset_id,
-                timeline_start_seconds=start,
-                timeline_end_seconds=end,
-                source_start_seconds=round(source_start, 6),
-                source_end_seconds=round(source_end, 6),
+                asset_id=str(entry.get("canonical_id") or shot.asset_id),
+                entry=entry,
+                timeline_start=start,
+                timeline_end=end,
+                fps=fps,
+                head_trim=head_trim,
+                short_tolerance=short_tolerance,
                 editorial_function=shot.editorial_function,
                 may_overlap_pause=shot.may_overlap_pause,
+                repairs=repairs,
             )
-        )
+        except TimelineResolveError as exc:
+            errors.append(str(exc))
+            continue
+        resolved_shots.append(resolved_shot)
 
     # Overlap / gap checks (deterministic, non-silent).
     ordered = sorted(resolved_shots, key=lambda s: (s.timeline_start_seconds, s.shot_id))
@@ -501,31 +825,27 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
             first.timeline_start_seconds = round(
                 max(0.0, first.timeline_start_seconds - preroll), 6
             )
-            hold_duration = first.timeline_end_seconds - first.timeline_start_seconds
-            media_duration = catalog.get(first.asset_id, {}).get("duration_seconds")
-            if media_duration is None or float(media_duration or 0) <= 0:
-                first.source_end_seconds = round(
-                    first.source_start_seconds + hold_duration, 6
+            # Source-Range nicht über Mediendauer dehnen — Hold bei Bedarf neu bauen.
+            try:
+                _reapply_hold_for_timeline_span(
+                    project, first, fps=fps, repairs=repairs, label="Vorlauf"
                 )
+            except TimelineResolveError as exc:
+                errors.append(str(exc))
         repairs.append(
             f"Voice-over-Vorlauf {preroll:.2f}s angewendet (Intro unverschoben)."
         )
 
-    # Nachlauf: letzten Shot verlängern (Hold).
+    # Nachlauf: letzten Shot verlängern (Hold ohne Source-Overflow).
     if postroll > 0 and ordered:
         last = ordered[-1]
         last.timeline_end_seconds = round(last.timeline_end_seconds + postroll, 6)
-        hold_duration = last.timeline_end_seconds - last.timeline_start_seconds
-        media_duration = catalog.get(last.asset_id, {}).get("duration_seconds")
-        if media_duration is None or float(media_duration or 0) <= 0:
-            last.source_end_seconds = round(
-                last.source_start_seconds + hold_duration, 6
+        try:
+            _reapply_hold_for_timeline_span(
+                project, last, fps=fps, repairs=repairs, label="Nachlauf"
             )
-        else:
-            # Video: so weit wie möglich in der Source mitgehen, Rest als Hold-Ende.
-            max_end = float(media_duration)
-            desired_end = last.source_start_seconds + hold_duration
-            last.source_end_seconds = round(min(max_end, desired_end), 6)
+        except TimelineResolveError as exc:
+            errors.append(str(exc))
         repairs.append(f"Voice-over-Nachlauf {postroll:.2f}s am letzten Shot.")
     for prev, curr in zip(ordered, ordered[1:]):
         if curr.timeline_start_seconds < prev.timeline_end_seconds - 1e-6:
@@ -547,7 +867,7 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
     # Max asset usage (Intro zählt nicht).
     usage_counts = Counter(shot.asset_id for shot in ordered)
     for asset_id, count in sorted(usage_counts.items()):
-        folder = str((catalog.get(asset_id) or {}).get("folder") or "")
+        folder = str((catalog.by_id.get(asset_id) or {}).get("folder") or "")
         if _is_intro_folder(folder):
             continue
         if count > int(options.max_asset_usage):
@@ -561,7 +881,11 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
     if reuse_distance > 0:
         last_index: dict[str, int] = {}
         for index, shot in enumerate(ordered):
-            folder = str((catalog.get(shot.asset_id) or {}).get("folder") or "")
+            folder = str(
+                shot.folder_name
+                or (catalog.by_id.get(shot.asset_id) or {}).get("folder")
+                or ""
+            )
             if _is_intro_folder(folder):
                 continue
             prev_index = last_index.get(shot.asset_id)

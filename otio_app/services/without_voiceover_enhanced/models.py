@@ -467,6 +467,14 @@ class ResolvedShot(BaseModel):
     source_end_seconds: float
     editorial_function: str = ""
     may_overlap_pause: bool = False
+    # Exakter lokaler Medienpfad — OTIO-Export darf nicht erneut nach ID suchen.
+    resolved_media_path: str = ""
+    resolved_media_kind: str = ""  # video | image
+    resolved_media_duration_seconds: Optional[float] = None
+    resolved_available_start_seconds: float = 0.0
+    folder_name: str = ""
+    # still_available_range | freeze_video | none
+    hold_mode: str = ""
 
 
 class ResolvedAudioSegment(BaseModel):

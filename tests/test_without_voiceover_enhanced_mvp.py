@@ -783,16 +783,26 @@ def test_otio_from_resolved_only(tmp_path: Path) -> None:
                     "timeline_end_seconds": 0.8,
                     "source_start_seconds": 0.0,
                     "source_end_seconds": 0.8,
+                    "resolved_media_path": "",
+                    "resolved_media_kind": "image",
+                    "resolved_available_start_seconds": 0.0,
+                    "hold_mode": "",
                 },
                 {
                     "shot_id": "shot_002",
                     "asset_id": "asset_local_1",
                     "timeline_start_seconds": 0.8,
                     "timeline_end_seconds": 1.35,
-                    "source_start_seconds": 1.0,
-                    "source_end_seconds": 1.55,
+                    "source_start_seconds": 0.0,
+                    "source_end_seconds": 0.55,
+                    "resolved_media_path": "",
+                    "resolved_media_kind": "image",
+                    "resolved_available_start_seconds": 0.0,
+                    "hold_mode": "",
                 },
             ],
+            "voiceover_preroll_sec": 0.0,
+            "voiceover_postroll_sec": 0.0,
             "repairs": [],
             "errors": [],
         },
@@ -801,6 +811,18 @@ def test_otio_from_resolved_only(tmp_path: Path) -> None:
 
     media_file = project.work_dir_path / "local_clip.jpg"
     Image.new("RGB", (16, 16), color=(10, 20, 30)).save(media_file, format="JPEG")
+    # Pfade nachträglich setzen (exakter Resolved-Pfad).
+    from otio_app.services.without_voiceover_enhanced.io_utils import load_model
+    from otio_app.services.without_voiceover_enhanced.models import (
+        ResolvedTimelineDocument as _RTD,
+    )
+
+    doc = load_model(resolved_timeline_path(project), _RTD)
+    assert doc is not None
+    for shot in doc.shots:
+        shot.resolved_media_path = str(media_file)
+        shot.resolved_media_kind = "image"
+    write_json(resolved_timeline_path(project), doc)
     write_json(
         accepted_supplements_path(project),
         {
@@ -821,6 +843,19 @@ def test_otio_from_resolved_only(tmp_path: Path) -> None:
             ],
         },
     )
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        CutPlanOptions,
+        save_cut_plan_options,
+    )
+
+    save_cut_plan_options(
+        project,
+        CutPlanOptions(
+            voiceover_preroll_sec=0.0,
+            voiceover_postroll_sec=0.0,
+            still_image_style_enabled=False,
+        ),
+    )
     out = export_otio_from_resolved_timeline(project, basename="test_enhanced")
     assert out.is_file()
     payload = out.read_text(encoding="utf-8")
@@ -829,7 +864,8 @@ def test_otio_from_resolved_only(tmp_path: Path) -> None:
     assert "shot_002" in payload
     assert "https://" not in payload
     assert "http://" not in payload
-    assert str(media_file) in payload
+    # Still wird als Hold-Video exportiert (Resolve-sicher).
+    assert "still_hold_" in payload or str(media_file) in payload
 
 
 def test_coverage_gap_has_search_queries_and_links() -> None:
