@@ -197,12 +197,12 @@ def validate_resolved_timeline_for_production(
     project: Project,
     resolved: ResolvedTimelineDocument,
 ) -> list[str]:
-    """Unabhängig von resolved.errors — reale Medien-/Range-Prüfung."""
+    """Unabhängig von resolved.errors — reale Medien-/Range-/Kapitel-Prüfung."""
     errors: list[str] = []
     fps = float(resolved.fps or project.fps or 25.0)
-    options = load_cut_plan_options(project)
     preroll = float(resolved.voiceover_preroll_sec or 0.0)
     postroll = float(resolved.voiceover_postroll_sec or 0.0)
+    frame = 1.0 / fps if fps > 0 else 0.04
 
     # Narration erwartet?
     locked = load_locked_script(project)
@@ -217,36 +217,106 @@ def validate_resolved_timeline_for_production(
             "Produktions-OTIO erwartet Narrationsclips, audio_segments ist leer."
         )
 
-    if resolved.audio_segments:
-        first_audio = min(
-            resolved.audio_segments, key=lambda a: a.timeline_start_seconds
-        )
-        # Intro kann bei 0 starten; non-intro sollte preroll haben.
-        # Prüfe: wenn preroll > 0, muss mindestens ein Audio bei >= preroll starten
-        # und die Timeline bei 0 mit Video beginnen.
-        if preroll > 0:
-            non_zero = [
-                a
-                for a in resolved.audio_segments
-                if a.timeline_start_seconds + 1e-6 >= preroll
-            ]
-            if not non_zero and all(
-                a.timeline_start_seconds < 1e-6 for a in resolved.audio_segments
-            ):
+    if resolved.chapters:
+        for chapter in resolved.chapters:
+            if abs(
+                chapter.chapter_audio_start
+                - (chapter.chapter_video_start + chapter.preroll_seconds)
+            ) > 1e-3:
                 errors.append(
-                    f"Voice-over-Vorlauf {preroll:.2f}s ist gesetzt, aber alle "
-                    "Narrationsclips starten bei 0.0s."
+                    f"Kapitel {chapter.chapter_id}: Audio-Start "
+                    f"{chapter.chapter_audio_start:.3f}s entspricht nicht "
+                    f"Video-Start+Vorlauf."
                 )
-        for audio in resolved.audio_segments:
-            try:
-                _assert_local_file(
-                    audio.audio_path, label=f"Audio {audio.segment_id}"
+            if abs(
+                chapter.chapter_video_end
+                - (chapter.chapter_audio_end + chapter.postroll_seconds)
+            ) > 1e-3:
+                errors.append(
+                    f"Kapitel {chapter.chapter_id}: Video-Ende "
+                    f"{chapter.chapter_video_end:.3f}s entspricht nicht "
+                    f"Audio-Ende+Nachlauf."
                 )
-            except EnhancedOtioExportError as exc:
-                errors.append(str(exc))
+            if chapter.visual_gap_count > 0:
+                errors.append(
+                    f"Kapitel {chapter.chapter_id}: {chapter.visual_gap_count} "
+                    "visuelle Lücke(n) größer als ein Frame."
+                )
+            if chapter.visual_overlap_count > 0:
+                errors.append(
+                    f"Kapitel {chapter.chapter_id}: "
+                    f"{chapter.visual_overlap_count} visuelle Überlappung(en) "
+                    "größer als ein Frame."
+                )
+            chapter_shots = [
+                s
+                for s in resolved.shots
+                if (s.chapter_id or s.folder_name) == chapter.chapter_id
+            ]
+            if not chapter_shots:
+                errors.append(
+                    f"Kapitel {chapter.chapter_id}: kein visueller Shot."
+                )
+                continue
+            first = min(chapter_shots, key=lambda s: s.timeline_start_seconds)
+            last = max(chapter_shots, key=lambda s: s.timeline_end_seconds)
+            if first.timeline_start_seconds > chapter.chapter_video_start + 1e-3:
+                errors.append(
+                    f"Kapitel {chapter.chapter_id}: erster Shot "
+                    f"{first.shot_id} deckt Vorlauf nicht ab."
+                )
+            if last.timeline_end_seconds + 1e-3 < chapter.chapter_video_end:
+                errors.append(
+                    f"Kapitel {chapter.chapter_id}: letzter Shot "
+                    f"{last.shot_id} deckt Nachlauf nicht ab."
+                )
+    elif resolved.audio_segments and preroll > 0:
+        non_zero = [
+            a
+            for a in resolved.audio_segments
+            if a.timeline_start_seconds + 1e-6 >= preroll
+        ]
+        if not non_zero and all(
+            a.timeline_start_seconds < 1e-6 for a in resolved.audio_segments
+        ):
+            errors.append(
+                f"Voice-over-Vorlauf {preroll:.2f}s ist gesetzt, aber alle "
+                "Narrationsclips starten bei 0.0s."
+            )
+
+    for audio in resolved.audio_segments:
+        try:
+            _assert_local_file(
+                audio.audio_path, label=f"Audio {audio.segment_id}"
+            )
+        except EnhancedOtioExportError as exc:
+            errors.append(str(exc))
 
     if not resolved.shots:
         errors.append("Keine Video-Shots in der aufgelösten Timeline.")
+
+    ordered = sorted(
+        resolved.shots, key=lambda s: (s.timeline_start_seconds, s.shot_id)
+    )
+    for prev, curr in zip(ordered, ordered[1:]):
+        delta = curr.timeline_start_seconds - prev.timeline_end_seconds
+        chapter = curr.chapter_id or prev.chapter_id or prev.folder_name or "?"
+        if delta > frame + 1e-9:
+            errors.append(
+                f"Visuelle Lücke in Kapitel {chapter}: "
+                f"{prev.timeline_end_seconds:.3f}s–{curr.timeline_start_seconds:.3f}s "
+                f"({delta:.3f}s) zwischen {prev.shot_id} ({prev.asset_id}) und "
+                f"{curr.shot_id} ({curr.asset_id})."
+            )
+        elif delta < -(frame + 1e-9) and not (
+            prev.may_overlap_pause or curr.may_overlap_pause
+        ):
+            errors.append(
+                f"Visuelle Überlappung in Kapitel {chapter}: "
+                f"{curr.timeline_start_seconds:.3f}s–{prev.timeline_end_seconds:.3f}s "
+                f"({abs(delta):.3f}s) zwischen {prev.shot_id} ({prev.asset_id}) und "
+                f"{curr.shot_id} ({curr.asset_id})."
+            )
 
     for shot in resolved.shots:
         try:
@@ -274,10 +344,14 @@ def validate_resolved_timeline_for_production(
                 f"Asset {shot.asset_id} · {path}"
             )
 
-    if postroll > 0 and resolved.shots and resolved.audio_segments:
+    if (
+        not resolved.chapters
+        and postroll > 0
+        and resolved.shots
+        and resolved.audio_segments
+    ):
         last_audio_end = max(
-            a.timeline_end_seconds + a.pause_after_seconds
-            for a in resolved.audio_segments
+            a.timeline_end_seconds for a in resolved.audio_segments
         )
         last_shot_end = max(s.timeline_end_seconds for s in resolved.shots)
         if last_shot_end + 1e-3 < last_audio_end + postroll:

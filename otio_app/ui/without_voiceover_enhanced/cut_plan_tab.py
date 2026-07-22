@@ -538,7 +538,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 key=f"enh_opt_funnel_dl_{project.id}",
             )
 
-        st.markdown("##### Voice-over Vorlauf / Nachlauf")
+        st.markdown("##### Voice-over Vorlauf / Nachlauf (pro Kapitel)")
         mode_labels = {
             TIMING_MODE_FIXED: "Fest",
             TIMING_MODE_LLM: "LLM entscheidet (0…Max)",
@@ -552,7 +552,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 value=float(current.voiceover_preroll_sec),
                 step=0.5,
                 key=f"enh_opt_preroll_{project.id}",
-                help="Bild vor non-Intro-Voice-over. Intro bleibt unverschoben.",
+                help="Bild vor Voice-over — gilt für jedes Kapitel/Folder erneut.",
             )
         with v2:
             preroll_modes = list(TIMING_MODE_CHOICES)
@@ -573,6 +573,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 value=float(current.voiceover_postroll_sec),
                 step=0.5,
                 key=f"enh_opt_postroll_{project.id}",
+                help="Bild nach letztem Narrationsclip — gilt für jedes Kapitel/Folder erneut.",
             )
         with v4:
             postroll_modes = list(TIMING_MODE_CHOICES)

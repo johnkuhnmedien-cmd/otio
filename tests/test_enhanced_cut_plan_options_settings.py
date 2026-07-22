@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis
@@ -249,12 +250,16 @@ def test_resolver_clamps_to_shot_max(tmp_path: Path) -> None:
 
     resolved = resolve_final_timeline(project)
     assert len(resolved.shots) == 1
+    # Editorial shot_max clamp still recorded; chapter envelope then extends the
+    # last (only) shot to cover the full chapter audio span (postroll=0 → 20s).
+    assert any("shot_max" in r for r in resolved.repairs)
     duration = (
         resolved.shots[0].timeline_end_seconds
         - resolved.shots[0].timeline_start_seconds
     )
-    assert duration == 5.0
-    assert any("shot_max" in r for r in resolved.repairs)
+    assert duration == pytest.approx(20.0, abs=1e-3)
+    assert resolved.chapters
+    assert resolved.chapters[0].chapter_video_end == pytest.approx(20.0, abs=1e-3)
 
 
 def test_ui_settings_markers() -> None:

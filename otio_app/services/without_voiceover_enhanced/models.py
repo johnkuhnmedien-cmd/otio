@@ -473,6 +473,7 @@ class ResolvedShot(BaseModel):
     resolved_media_duration_seconds: Optional[float] = None
     resolved_available_start_seconds: float = 0.0
     folder_name: str = ""
+    chapter_id: str = ""
     # still_available_range | freeze_video | none
     hold_mode: str = ""
 
@@ -487,6 +488,25 @@ class ResolvedAudioSegment(BaseModel):
     source_start_seconds: float = 0.0
     source_end_seconds: Optional[float] = None
     split_label: str = ""
+    chapter_id: str = ""
+
+
+class ResolvedChapterEnvelope(BaseModel):
+    """Pro-Kapitel-Hülle: Vorlauf → Narration → Nachlauf."""
+
+    chapter_id: str
+    folder_name: str = ""
+    chapter_video_start: float
+    chapter_audio_start: float
+    chapter_audio_end: float
+    chapter_video_end: float
+    preroll_seconds: float = 0.0
+    postroll_seconds: float = 0.0
+    first_shot_id: str = ""
+    last_shot_id: str = ""
+    segment_ids: list[str] = Field(default_factory=list)
+    visual_gap_count: int = 0
+    visual_overlap_count: int = 0
 
 
 class ResolvedTimelineDocument(BaseModel):
@@ -496,6 +516,7 @@ class ResolvedTimelineDocument(BaseModel):
     total_duration_seconds: float
     audio_segments: list[ResolvedAudioSegment] = Field(default_factory=list)
     shots: list[ResolvedShot] = Field(default_factory=list)
+    chapters: list[ResolvedChapterEnvelope] = Field(default_factory=list)
     voiceover_preroll_sec: float = 0.0
     voiceover_postroll_sec: float = 0.0
     repairs: list[str] = Field(default_factory=list)

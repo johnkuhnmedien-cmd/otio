@@ -21,8 +21,8 @@ def render_enhanced_final_output_page() -> None:
     st.caption(
         "Keine neue redaktionelle Planung. Lädt freigegebenen finalen Cut Plan / "
         "technisch aufgelöste Timeline und erzeugt OTIO. "
-        "Produktions-Export prüft reale Medien und Source-Ranges fail-closed "
-        "und erzeugt ein portables Medienpaket mit eindeutigen Dateinamen."
+        "Standard ist der lokale Produktions-Export (Originalpfade, ohne Medienkopien). "
+        "Portables Paket optional für Transfer/Archiv."
     )
     project = get_enhanced_project()
     if project is None:
@@ -42,8 +42,9 @@ def render_enhanced_final_output_page() -> None:
         f"Skript `{resolved.script_version}` · "
         f"{resolved.total_duration_seconds:.2f}s · "
         f"{len(resolved.shots)} Shots · {len(resolved.audio_segments)} Audio-Segmente · "
-        f"Vorlauf {resolved.voiceover_preroll_sec:.2f}s · "
-        f"Nachlauf {resolved.voiceover_postroll_sec:.2f}s"
+        f"{len(resolved.chapters)} Kapitel · "
+        f"Vorlauf {resolved.voiceover_preroll_sec:.2f}s/Kapitel · "
+        f"Nachlauf {resolved.voiceover_postroll_sec:.2f}s/Kapitel"
     )
     if has_errors:
         st.error(
@@ -54,6 +55,20 @@ def render_enhanced_final_output_page() -> None:
         with st.expander("Fehlerliste anzeigen", expanded=True):
             for err in list(resolved.errors) + list(gate_errors):
                 st.write(f"- {err}")
+
+    if resolved.chapters:
+        with st.expander("Kapitelhüllen", expanded=False):
+            for chapter in resolved.chapters:
+                st.caption(
+                    f"{chapter.chapter_id}: video "
+                    f"{chapter.chapter_video_start:.2f}–{chapter.chapter_video_end:.2f}s · "
+                    f"audio {chapter.chapter_audio_start:.2f}–"
+                    f"{chapter.chapter_audio_end:.2f}s · "
+                    f"preroll {chapter.preroll_seconds:.1f}s · "
+                    f"postroll {chapter.postroll_seconds:.1f}s · "
+                    f"gaps {chapter.visual_gap_count} · "
+                    f"overlaps {chapter.visual_overlap_count}"
+                )
 
     show_detail_key = f"enh_otio_show_detail_{project.id}"
     st.checkbox("Shot-/Audio-Details laden", key=show_detail_key)
@@ -75,19 +90,48 @@ def render_enhanced_final_output_page() -> None:
             )
 
     basename = st.text_input(
-        "Export-Basename (Paketordner)",
+        "Export-Basename",
         value=f"{project.name}_enhanced",
         key=f"enh_otio_name_{project.id}",
     )
+
+    st.markdown("##### Lokaler Produktions-Export")
     if st.button(
-        "Portablen Produktions-Export erzeugen",
+        "Lokale Produktions-OTIO erzeugen",
         type="primary",
+        key=f"enh_otio_export_{project.id}",
+        disabled=has_errors,
+        help=(
+            "Verwendet die validierten Originaldateien. "
+            "Vorhandene Videos werden nicht kopiert. "
+            "Geeignet für den Schnitt auf demselben Rechner."
+        ),
+    ):
+        try:
+            path = export_otio_from_resolved_timeline(
+                project,
+                basename=basename.strip() or "enhanced",
+                allow_errors=False,
+            )
+            st.success(f"Lokale Produktions-OTIO geschrieben: `{path}`")
+        except EnhancedOtioExportError as exc:
+            st.error(str(exc))
+
+    st.markdown("##### Portables Paket (optional)")
+    st.caption(
+        "Für Transfer oder Archivierung. "
+        "Kann Hardlinks oder vollständige Kopien der verwendeten Medien erzeugen "
+        "und erheblichen Speicherplatz benötigen."
+    )
+    if st.button(
+        "Portables Paket erzeugen",
         key=f"enh_otio_export_portable_{project.id}",
         disabled=has_errors,
         help=(
-            "Fail-closed: blockiert bei Resolve-/Medienfehlern."
-            if has_errors
-            else "Portables Paket (timeline.otio + media/ + Manifest), allow_errors=False."
+            "Speicherintensiv: Hardlinks oder Kopien nach media/. "
+            "Nicht automatisch mit dem lokalen Export."
+            if not has_errors
+            else "Fail-closed: blockiert bei Resolve-/Medienfehlern."
         ),
     ):
         try:
@@ -98,32 +142,14 @@ def render_enhanced_final_output_page() -> None:
             )
             media_dir = package_dir / "media"
             media_files = sorted(p.name for p in media_dir.glob("*") if p.is_file())
-            st.success(
-                f"Portables Produktionspaket geschrieben: `{package_dir}` "
-                f"({len(media_files)} Medien, allow_errors=False)."
+            st.warning(
+                f"Portables Paket geschrieben: `{package_dir}` "
+                f"({len(media_files)} Medien). Speicherplatz prüfen."
             )
-            st.caption(f"`timeline.otio` · `media_manifest.json` · `media/`")
-            with st.expander("Paketmedien anzeigen", expanded=True):
+            st.caption("`timeline.otio` · `media_manifest.json` · `media/`")
+            with st.expander("Paketmedien anzeigen", expanded=False):
                 for name in media_files:
                     st.write(f"- `{name}`")
-        except EnhancedOtioExportError as exc:
-            st.error(str(exc))
-
-    st.markdown("**Lokale Einzel-OTIO (nicht portabel)**")
-    st.caption(
-        "Schreibt nur eine `.otio` mit absoluten Quellpfaden — nicht für "
-        "Transfer auf einen anderen Rechner. Für Resolve-Import das portable Paket nutzen."
-    )
-    if st.button(
-        "Lokale Produktions-OTIO erzeugen",
-        key=f"enh_otio_export_{project.id}",
-        disabled=has_errors,
-    ):
-        try:
-            path = export_otio_from_resolved_timeline(
-                project, basename=basename.strip() or "enhanced", allow_errors=False
-            )
-            st.success(f"Lokale Produktions-OTIO geschrieben: `{path}`")
         except EnhancedOtioExportError as exc:
             st.error(str(exc))
 

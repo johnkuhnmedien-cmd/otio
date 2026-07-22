@@ -76,12 +76,12 @@ class CutPlanOptions(BaseModel):
         default=ENHANCED_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS, ge=0, le=100
     )
 
-    # Vorlauf: Bild vor Voice-over (Intro ausgenommen).
+    # Vorlauf: Bild vor Voice-over — gilt pro Kapitel/Folder.
     voiceover_preroll_sec: float = Field(
         default=ENHANCED_DEFAULT_VOICEOVER_PREROLL_SEC, ge=0.0, le=30.0
     )
     voiceover_preroll_mode: TimingMode = TIMING_MODE_FIXED
-    # Nachlauf: letzter Shot nach Voice-over-Ende.
+    # Nachlauf: letzter Shot nach Voice-over-Ende — gilt pro Kapitel/Folder.
     voiceover_postroll_sec: float = Field(
         default=ENHANCED_DEFAULT_VOICEOVER_POSTROLL_SEC, ge=0.0, le=60.0
     )

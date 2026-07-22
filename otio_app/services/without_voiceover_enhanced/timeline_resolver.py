@@ -46,6 +46,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
     NarrationTimelineDocument,
     NarrationTimelineEntry,
     ResolvedAudioSegment,
+    ResolvedChapterEnvelope,
     ResolvedShot,
     ResolvedTimelineDocument,
     SentenceTiming,
@@ -417,6 +418,321 @@ def _seconds_to_frame(seconds: float, fps: float) -> float:
     return round(frame / fps, 6)
 
 
+def _frame_duration(fps: float) -> float:
+    rate = float(fps) if float(fps) > 0 else 25.0
+    return 1.0 / rate
+
+
+def _chapters_from_locked(locked) -> list[tuple[str, list[str]]]:
+    """Kapitel in Skriptreihenfolge: aufeinanderfolgende Segmente mit gleichem Ordner."""
+    chapters: list[tuple[str, list[str]]] = []
+    for segment in sorted(locked.segments, key=lambda s: int(s.sequence_index)):
+        folder = (segment.folder_name or "").strip()
+        chapter_id = folder or f"chapter_{int(segment.sequence_index)}"
+        if not chapters or chapters[-1][0] != chapter_id:
+            chapters.append((chapter_id, [segment.segment_id]))
+        else:
+            chapters[-1][1].append(segment.segment_id)
+    return chapters
+
+
+def build_shot_continuity_table(
+    shots: list[ResolvedShot],
+    *,
+    fps: float,
+) -> list[dict]:
+    """Diagnosetabelle für visuelle Gaps/Overlaps zwischen benachbarten Shots."""
+    ordered = sorted(shots, key=lambda s: (s.timeline_start_seconds, s.shot_id))
+    frame = _frame_duration(fps)
+    rows: list[dict] = []
+    for index, shot in enumerate(ordered):
+        next_start = (
+            ordered[index + 1].timeline_start_seconds
+            if index + 1 < len(ordered)
+            else None
+        )
+        gap = (
+            None
+            if next_start is None
+            else round(next_start - shot.timeline_end_seconds, 6)
+        )
+        status = "ok"
+        if gap is not None:
+            if gap > frame + 1e-9:
+                status = "gap_error"
+            elif gap < -(frame + 1e-9):
+                status = "overlap_error"
+            elif abs(gap) > 1e-9:
+                status = "frame_snap_candidate"
+        rows.append(
+            {
+                "chapter_id": shot.chapter_id or shot.folder_name,
+                "shot_id": shot.shot_id,
+                "timeline_start": shot.timeline_start_seconds,
+                "timeline_end": shot.timeline_end_seconds,
+                "next_shot_start": next_start,
+                "gap_or_overlap_seconds": gap,
+                "asset_id": shot.asset_id,
+                "resolved_media_path": shot.resolved_media_path,
+                "source_start": shot.source_start_seconds,
+                "source_end": shot.source_end_seconds,
+                "repair_or_error": status,
+            }
+        )
+    return rows
+
+
+def _apply_visual_continuity_rules(
+    ordered: list[ResolvedShot],
+    *,
+    project: Project,
+    fps: float,
+    repairs: list[str],
+    errors: list[str],
+) -> None:
+    """Ein-Frame-Snap reparieren; größere Gaps/Overlaps blockieren."""
+    if len(ordered) < 2:
+        return
+    frame = _frame_duration(fps)
+    for prev, curr in zip(ordered, ordered[1:]):
+        delta = curr.timeline_start_seconds - prev.timeline_end_seconds
+        chapter = curr.chapter_id or prev.chapter_id or prev.folder_name or "?"
+        if abs(delta) <= 1e-9:
+            continue
+        if 0.0 < delta <= frame + 1e-9:
+            prev.timeline_end_seconds = round(curr.timeline_start_seconds, 6)
+            repairs.append(
+                f"Ein-Frame-Gap {delta:.6f}s zwischen {prev.shot_id} und "
+                f"{curr.shot_id} (Kapitel {chapter}) — Snap auf Anschluss."
+            )
+            try:
+                _reapply_hold_for_timeline_span(
+                    project,
+                    prev,
+                    fps=fps,
+                    repairs=repairs,
+                    label="Ein-Frame-Gap",
+                )
+            except TimelineResolveError as exc:
+                errors.append(str(exc))
+            continue
+        if -frame - 1e-9 <= delta < 0.0:
+            curr.timeline_start_seconds = round(prev.timeline_end_seconds, 6)
+            repairs.append(
+                f"Ein-Frame-Overlap {delta:.6f}s zwischen {prev.shot_id} und "
+                f"{curr.shot_id} (Kapitel {chapter}) — Snap auf Anschluss."
+            )
+            continue
+        if delta > frame + 1e-9:
+            errors.append(
+                f"Visuelle Lücke in Kapitel {chapter}: "
+                f"{prev.timeline_end_seconds:.3f}s–{curr.timeline_start_seconds:.3f}s "
+                f"({delta:.3f}s) zwischen {prev.shot_id} ({prev.asset_id}) und "
+                f"{curr.shot_id} ({curr.asset_id})."
+            )
+            continue
+        if delta < -(frame + 1e-9):
+            if prev.may_overlap_pause or curr.may_overlap_pause:
+                repairs.append(
+                    f"Überlappung {prev.shot_id}/{curr.shot_id} wegen "
+                    "may_overlap_pause belassen."
+                )
+            else:
+                errors.append(
+                    f"Visuelle Überlappung in Kapitel {chapter}: "
+                    f"{curr.timeline_start_seconds:.3f}s–{prev.timeline_end_seconds:.3f}s "
+                    f"({abs(delta):.3f}s) zwischen {prev.shot_id} ({prev.asset_id}) und "
+                    f"{curr.shot_id} ({curr.asset_id})."
+                )
+
+
+def _apply_chapter_envelopes(
+    project: Project,
+    *,
+    locked,
+    final: FinalCutPlanDocument,
+    ordered: list[ResolvedShot],
+    audio_segments: list[ResolvedAudioSegment],
+    preroll: float,
+    postroll: float,
+    fps: float,
+    repairs: list[str],
+    errors: list[str],
+) -> list[ResolvedChapterEnvelope]:
+    """Setzt Vor-/Nachlauf pro Kapitel und verschiebt Folgekapitel hinter die Hülle."""
+    chapters = _chapters_from_locked(locked)
+    if not chapters:
+        return []
+
+    segment_to_chapter: dict[str, str] = {}
+    for chapter_id, segment_ids in chapters:
+        for segment_id in segment_ids:
+            segment_to_chapter[segment_id] = chapter_id
+
+    shot_start_segment = {
+        shot.shot_id: next(
+            (
+                plan.narration_start_anchor.segment_id
+                for plan in final.shots
+                if plan.shot_id == shot.shot_id
+            ),
+            "",
+        )
+        for shot in ordered
+    }
+    raw_shot_times = {
+        shot.shot_id: (shot.timeline_start_seconds, shot.timeline_end_seconds)
+        for shot in ordered
+    }
+
+    narration_expected = bool(locked.segments)
+    cursor = 0.0
+    envelopes: list[ResolvedChapterEnvelope] = []
+
+    for chapter_id, segment_ids in chapters:
+        seg_set = set(segment_ids)
+        ch_audios = [a for a in audio_segments if a.segment_id in seg_set]
+        ch_shots = [
+            shot
+            for shot in ordered
+            if shot_start_segment.get(shot.shot_id, "") in seg_set
+        ]
+
+        if narration_expected and not ch_audios:
+            errors.append(
+                f"Kapitel {chapter_id}: Narration erwartet, aber keine "
+                "Audio-Segmente vorhanden."
+            )
+            continue
+        if not ch_shots:
+            errors.append(
+                f"Kapitel {chapter_id}: kein visueller Shot für die Kapitelhülle."
+            )
+            continue
+
+        for audio in ch_audios:
+            audio.chapter_id = chapter_id
+        for shot in ch_shots:
+            shot.chapter_id = chapter_id
+            if not shot.folder_name:
+                shot.folder_name = chapter_id
+
+        if ch_audios:
+            raw_audio_start = min(a.timeline_start_seconds for a in ch_audios)
+            raw_audio_end = max(a.timeline_end_seconds for a in ch_audios)
+        else:
+            raw_audio_start = min(s.timeline_start_seconds for s in ch_shots)
+            raw_audio_end = max(s.timeline_end_seconds for s in ch_shots)
+        raw_span = max(0.0, raw_audio_end - raw_audio_start)
+
+        chapter_video_start = _seconds_to_frame(cursor, fps)
+        chapter_audio_start = _seconds_to_frame(chapter_video_start + preroll, fps)
+        chapter_audio_end = _seconds_to_frame(chapter_audio_start + raw_span, fps)
+        chapter_video_end = _seconds_to_frame(chapter_audio_end + postroll, fps)
+
+        for audio in ch_audios:
+            delta_start = audio.timeline_start_seconds - raw_audio_start
+            delta_end = audio.timeline_end_seconds - raw_audio_start
+            audio.timeline_start_seconds = round(chapter_audio_start + delta_start, 6)
+            audio.timeline_end_seconds = round(chapter_audio_start + delta_end, 6)
+
+        for shot in ch_shots:
+            old_start, old_end = raw_shot_times[shot.shot_id]
+            shot.timeline_start_seconds = round(
+                chapter_audio_start + (old_start - raw_audio_start), 6
+            )
+            shot.timeline_end_seconds = round(
+                chapter_audio_start + (old_end - raw_audio_start), 6
+            )
+
+        first = min(ch_shots, key=lambda s: (s.timeline_start_seconds, s.shot_id))
+        last = max(ch_shots, key=lambda s: (s.timeline_end_seconds, s.shot_id))
+        first.timeline_start_seconds = round(chapter_video_start, 6)
+        last.timeline_end_seconds = round(chapter_video_end, 6)
+        if first.timeline_end_seconds < first.timeline_start_seconds:
+            first.timeline_end_seconds = first.timeline_start_seconds
+        if last.timeline_end_seconds < last.timeline_start_seconds:
+            last.timeline_end_seconds = last.timeline_start_seconds
+
+        try:
+            _reapply_hold_for_timeline_span(
+                project,
+                first,
+                fps=fps,
+                repairs=repairs,
+                label=(
+                    f"Kapitel-{chapter_id}-Hülle"
+                    if first.shot_id == last.shot_id
+                    else f"Kapitel-{chapter_id}-Vorlauf"
+                ),
+            )
+        except TimelineResolveError as exc:
+            errors.append(str(exc))
+        if last.shot_id != first.shot_id:
+            try:
+                _reapply_hold_for_timeline_span(
+                    project,
+                    last,
+                    fps=fps,
+                    repairs=repairs,
+                    label=f"Kapitel-{chapter_id}-Nachlauf",
+                )
+            except TimelineResolveError as exc:
+                errors.append(str(exc))
+
+        envelopes.append(
+            ResolvedChapterEnvelope(
+                chapter_id=chapter_id,
+                folder_name=chapter_id,
+                chapter_video_start=round(chapter_video_start, 6),
+                chapter_audio_start=round(chapter_audio_start, 6),
+                chapter_audio_end=round(chapter_audio_end, 6),
+                chapter_video_end=round(chapter_video_end, 6),
+                preroll_seconds=round(preroll, 6),
+                postroll_seconds=round(postroll, 6),
+                first_shot_id=first.shot_id,
+                last_shot_id=last.shot_id,
+                segment_ids=list(segment_ids),
+            )
+        )
+        cursor = chapter_video_end
+
+    if envelopes:
+        repairs.append(
+            f"Kapitelhüllen: {len(envelopes)} Kapitel mit Vorlauf {preroll:.2f}s "
+            f"und Nachlauf {postroll:.2f}s pro Kapitel."
+        )
+    return envelopes
+
+
+def _count_chapter_continuity(
+    envelopes: list[ResolvedChapterEnvelope],
+    ordered: list[ResolvedShot],
+    *,
+    fps: float,
+) -> None:
+    frame = _frame_duration(fps)
+    by_chapter: dict[str, list[ResolvedShot]] = defaultdict(list)
+    for shot in ordered:
+        key = shot.chapter_id or shot.folder_name or ""
+        by_chapter[key].append(shot)
+    for envelope in envelopes:
+        shots = sorted(
+            by_chapter.get(envelope.chapter_id, []),
+            key=lambda s: (s.timeline_start_seconds, s.shot_id),
+        )
+        gaps = 0
+        overlaps = 0
+        for prev, curr in zip(shots, shots[1:]):
+            delta = curr.timeline_start_seconds - prev.timeline_end_seconds
+            if delta > frame + 1e-9:
+                gaps += 1
+            elif delta < -(frame + 1e-9):
+                overlaps += 1
+        envelope.visual_gap_count = gaps
+        envelope.visual_overlap_count = overlaps
+
+
 def _reapply_hold_for_timeline_span(
     project: Project,
     shot: ResolvedShot,
@@ -659,11 +975,6 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
     head_trim = max(0.0, float(options.video_head_trim_sec))
     short_tolerance = max(0.0, float(options.short_asset_tolerance_sec))
     known_segments = {s.segment_id for s in locked.segments}
-    intro_segment_ids = {
-        s.segment_id
-        for s in locked.segments
-        if _is_intro_folder(s.folder_name)
-    }
     preroll = resolve_timing_seconds(
         mode=options.voiceover_preroll_mode,
         setting_max=options.voiceover_preroll_sec,
@@ -782,87 +1093,31 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
             continue
         resolved_shots.append(resolved_shot)
 
-    # Overlap / gap checks (deterministic, non-silent).
     ordered = sorted(resolved_shots, key=lambda s: (s.timeline_start_seconds, s.shot_id))
 
-    # Vorlauf: non-Intro-VO später; erster non-Intro-Shot beginnt früher (Bild vor Ton).
-    if preroll > 0 and ordered:
-        shot_start_segments = {
-            shot.shot_id: next(
-                (
-                    s.narration_start_anchor.segment_id
-                    for s in final.shots
-                    if s.shot_id == shot.shot_id
-                ),
-                "",
-            )
-            for shot in ordered
-        }
-        for audio in audio_segments:
-            if audio.segment_id in intro_segment_ids:
-                continue
-            audio.timeline_start_seconds = round(
-                audio.timeline_start_seconds + preroll, 6
-            )
-            audio.timeline_end_seconds = round(
-                audio.timeline_end_seconds + preroll, 6
-            )
-        first_main_index: int | None = None
-        for index, shot in enumerate(ordered):
-            seg_id = shot_start_segments.get(shot.shot_id, "")
-            if seg_id in intro_segment_ids:
-                continue
-            shot.timeline_start_seconds = round(
-                shot.timeline_start_seconds + preroll, 6
-            )
-            shot.timeline_end_seconds = round(
-                shot.timeline_end_seconds + preroll, 6
-            )
-            if first_main_index is None:
-                first_main_index = index
-        if first_main_index is not None:
-            first = ordered[first_main_index]
-            first.timeline_start_seconds = round(
-                max(0.0, first.timeline_start_seconds - preroll), 6
-            )
-            # Source-Range nicht über Mediendauer dehnen — Hold bei Bedarf neu bauen.
-            try:
-                _reapply_hold_for_timeline_span(
-                    project, first, fps=fps, repairs=repairs, label="Vorlauf"
-                )
-            except TimelineResolveError as exc:
-                errors.append(str(exc))
-        repairs.append(
-            f"Voice-over-Vorlauf {preroll:.2f}s angewendet (Intro unverschoben)."
-        )
-
-    # Nachlauf: letzten Shot verlängern (Hold ohne Source-Overflow).
-    if postroll > 0 and ordered:
-        last = ordered[-1]
-        last.timeline_end_seconds = round(last.timeline_end_seconds + postroll, 6)
-        try:
-            _reapply_hold_for_timeline_span(
-                project, last, fps=fps, repairs=repairs, label="Nachlauf"
-            )
-        except TimelineResolveError as exc:
-            errors.append(str(exc))
-        repairs.append(f"Voice-over-Nachlauf {postroll:.2f}s am letzten Shot.")
-    for prev, curr in zip(ordered, ordered[1:]):
-        if curr.timeline_start_seconds < prev.timeline_end_seconds - 1e-6:
-            if not (prev.may_overlap_pause or curr.may_overlap_pause):
-                errors.append(
-                    f"Shotüberlappung: {prev.shot_id} und {curr.shot_id}"
-                )
-            else:
-                repairs.append(
-                    f"Überlappung {prev.shot_id}/{curr.shot_id} wegen may_overlap_pause belassen."
-                )
-        gap = curr.timeline_start_seconds - prev.timeline_end_seconds
-        if gap > 0.05:
-            # Unintended visual gap (audio pauses are separate).
-            repairs.append(
-                f"Visuelle Lücke {gap:.3f}s zwischen {prev.shot_id} und {curr.shot_id} erkannt."
-            )
+    # Vor-/Nachlauf pro Kapitel (Hülle), nicht einmal global.
+    chapter_envelopes = _apply_chapter_envelopes(
+        project,
+        locked=locked,
+        final=final,
+        ordered=ordered,
+        audio_segments=audio_segments,
+        preroll=preroll,
+        postroll=postroll,
+        fps=fps,
+        repairs=repairs,
+        errors=errors,
+    )
+    ordered = sorted(ordered, key=lambda s: (s.timeline_start_seconds, s.shot_id))
+    _apply_visual_continuity_rules(
+        ordered,
+        project=project,
+        fps=fps,
+        repairs=repairs,
+        errors=errors,
+    )
+    ordered = sorted(ordered, key=lambda s: (s.timeline_start_seconds, s.shot_id))
+    _count_chapter_continuity(chapter_envelopes, ordered, fps=fps)
 
     # Max asset usage (Intro zählt nicht).
     usage_counts = Counter(shot.asset_id for shot in ordered)
@@ -900,7 +1155,8 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
 
     repairs.extend(assess_cut_rhythm(final, ordered))
 
-    total = timeline.total_duration_seconds + preroll + postroll
+    chapter_count = max(1, len(chapter_envelopes))
+    total = timeline.total_duration_seconds + (preroll + postroll) * chapter_count
     if ordered:
         total = max(total, ordered[-1].timeline_end_seconds)
     if audio_segments:
@@ -908,6 +1164,8 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
             total,
             max(a.timeline_end_seconds + a.pause_after_seconds for a in audio_segments),
         )
+    if chapter_envelopes:
+        total = max(total, chapter_envelopes[-1].chapter_video_end)
 
     document = ResolvedTimelineDocument(
         script_version=locked.script_version,
@@ -915,6 +1173,7 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
         total_duration_seconds=round(total, 6),
         audio_segments=audio_segments,
         shots=ordered,
+        chapters=chapter_envelopes,
         voiceover_preroll_sec=round(preroll, 6),
         voiceover_postroll_sec=round(postroll, 6),
         repairs=repairs,
