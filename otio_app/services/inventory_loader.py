@@ -242,6 +242,8 @@ def materialize_folder_inventory_from_cache(
     migrate_legacy_per_asset_cache_folder(project, folder_name)
     indexed_cache = _cached_assets_by_filename(project, folder_name)
 
+    from otio_app.services.inventory_prepare_service import enrich_asset_with_media_timing
+
     assets: list[AssetMediaAnalysis] = []
     missing: list[str] = []
     for media_path in media_paths:
@@ -249,7 +251,8 @@ def materialize_folder_inventory_from_cache(
         if cached is None or not is_successfully_analyzed(cached):
             missing.append(media_path.name)
             continue
-        assets.append(cached)
+        # Dauer/Lead-In gehören ins kanonische Inventar, nicht erst in den Cut-Plan-Schritt.
+        assets.append(enrich_asset_with_media_timing(cached))
 
     if missing and not allow_partial:
         return (

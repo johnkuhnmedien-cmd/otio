@@ -56,6 +56,14 @@ def test_analyze_asset_folders_processes_every_media_file(
         "otio_app.services.asset_analyzer.analyze_media_from_frames",
         fake_describe,
     )
+    monkeypatch.setattr(
+        "otio_app.services.inventory_prepare_service.probe_duration_seconds",
+        lambda path: 12.5,
+    )
+    monkeypatch.setattr(
+        "otio_app.services.inventory_prepare_service.probe_leading_black_seconds",
+        lambda path: 0.08,
+    )
 
     project = _sample_project(temp_project_layout)
     document, report = analyze_asset_folders(project, ["Grand Canyon"], use_api=True)
@@ -66,10 +74,18 @@ def test_analyze_asset_folders_processes_every_media_file(
     assert all(asset.description.startswith("Beschreibung für") for asset in item.assets)
     assert "clip.mp4:" in item.description
     assert "clip2.mp4:" in item.description
+    assert all(asset.duration_seconds == 12.5 for asset in item.assets)
+    assert all(asset.usable_in_s == 0.08 for asset in item.assets)
 
     inventory_file = project.folder_inventory_path("Grand Canyon")
     assert inventory_file.is_file()
     assert inventory_file.parent.name == "inventory"
+    slim_file = inventory_file.with_name(f"{inventory_file.stem}.slim.json")
+    assert slim_file.is_file()
+    import json
+
+    slim = json.loads(slim_file.read_text(encoding="utf-8"))
+    assert all(a.get("dauer_s") == 12.5 for a in slim["assets"])
 
 
 def test_analyze_asset_folders_skips_completed_cache(

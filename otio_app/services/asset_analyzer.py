@@ -38,6 +38,7 @@ from otio_app.services.media_inventory_cache import (
     resolve_media_for_analysis,
     _save_cached_media_safe,
 )
+from otio_app.services.inventory_prepare_service import enrich_asset_with_media_timing
 from otio_app.services.media_utils import (
     NO_ANALYZABLE_MEDIA_DESCRIPTION,
     is_image_media,
@@ -178,6 +179,7 @@ def _analyze_single_media(
             entry.description_prompt_version = ASSET_DESCRIPTION_PROMPT_VERSION
             entry.description_generated_at = datetime.now(timezone.utc)
             entry.error = None
+            entry = enrich_asset_with_media_timing(entry)
             entry = _save_cached_media_safe(cache_file, entry)
             if entry.error and "Cache konnte nicht geschrieben werden" in entry.error:
                 _log(project, f"FAIL (Cache-Schreibfehler) {folder_name}/{resolved_path.name}: {entry.error}")

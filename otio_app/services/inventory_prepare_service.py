@@ -1,8 +1,8 @@
-"""Inventar vor Cut Plan vorbereiten: Asset-Dauern messen + Slim schreiben.
+"""Inventar-Timing + Vorbereitung: Asset-Dauern / Lead-In + Slim.
 
-Läuft bewusst als eigener Schritt vor LLM-Lauf 2, damit Dauern persistent in
-``inventory/{folder}.json`` und ``{folder}.slim.json`` liegen — nicht nur
-ephemeral beim Prompt-Bau.
+Neu: Dauern werden bereits bei der Asset-Analyse / beim Materialisieren des
+Inventars geschrieben. ``prepare_inventories_for_cut_plan`` bleibt als
+Backfill/Force-Remeasure vor LLM-Lauf 2.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from otio_app.analysis_models import AssetMediaAnalysis
 from otio_app.models import Project
 from otio_app.project_layout import get_folder_inventory_path
 from otio_app.services.inventory_loader import load_folder_inventory, save_folder_inventory
@@ -22,6 +23,7 @@ from otio_app.services.media_utils import (
 
 __all__ = [
     "InventoryPrepareReport",
+    "enrich_asset_with_media_timing",
     "prepare_inventories_for_cut_plan",
     "inventory_duration_coverage",
 ]
@@ -38,6 +40,35 @@ class InventoryPrepareReport:
     usable_in_newly_measured: int = 0
     slim_files_written: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+
+
+def enrich_asset_with_media_timing(asset: AssetMediaAnalysis) -> AssetMediaAnalysis:
+    """ffprobe-Dauer + blackdetect Lead-In auf ein Asset schreiben (wenn fehlt)."""
+    path = str(asset.path or "").strip()
+    if not path or not _is_video_asset(path, asset.media_type):
+        return asset
+    media_path = Path(path)
+    if not media_path.is_file():
+        return asset
+    updates: dict = {}
+    existing_dur = asset.duration_seconds
+    if existing_dur is None or float(existing_dur) <= 0:
+        try:
+            probed = probe_duration_seconds(media_path)
+        except Exception:  # noqa: BLE001
+            probed = None
+        if probed is not None and float(probed) > 0:
+            updates["duration_seconds"] = round(float(probed), 3)
+    if asset.usable_in_s is None:
+        try:
+            leading = probe_leading_black_seconds(media_path)
+        except Exception:  # noqa: BLE001
+            leading = None
+        if leading is not None:
+            updates["usable_in_s"] = round(float(leading), 3)
+    if not updates:
+        return asset
+    return asset.model_copy(update=updates)
 
 
 def _is_video_asset(path: str, media_type: str | None) -> bool:
