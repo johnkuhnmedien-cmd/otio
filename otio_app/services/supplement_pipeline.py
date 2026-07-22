@@ -57,7 +57,8 @@ from otio_app.services.edit_plan_builder import load_edit_plan, save_edit_plan
 from otio_app.services.frame_extract import extract_frames
 from otio_app.services.gemini_client import (
     GeminiNotConfiguredError,
-    describe_media_from_frames,
+    ASSET_DESCRIPTION_PROMPT_VERSION,
+    analyze_media_from_frames,
     get_default_gemini_model,
     is_gemini_configured,
     validate_supplement_asset_match,
@@ -843,14 +844,27 @@ def analyze_supplement_asset(
     frames = extract_frames(analysis_path, frames_dir, frame_count)
     gemini_model = get_default_gemini_model()
     description = ""
+    motion = ""
+    framing = ""
+    people: bool | None = None
+    people_action: str | None = None
+    defects: str | None = None
+    prompt_version = "supplement_v1"
     if frames and is_gemini_configured():
-        description = describe_media_from_frames(
+        analysis = analyze_media_from_frames(
             local_path.name,
             folder_name,
             frames,
             language,
             model=gemini_model,
         )
+        description = analysis.description
+        motion = analysis.motion
+        framing = analysis.framing
+        people = analysis.people
+        people_action = analysis.people_action
+        defects = analysis.defects
+        prompt_version = ASSET_DESCRIPTION_PROMPT_VERSION
     elif frames:
         description = f"Supplement-Asset {local_path.name}"
 
@@ -883,6 +897,11 @@ def analyze_supplement_asset(
         source_url=sidecar.source_url,
         provider=sidecar.provider,
         media_type=sidecar.media_type,
+        motion=motion,
+        framing=framing,
+        people=people,
+        people_action=people_action,
+        defects=defects,
         aspect_ratio=sidecar.aspect_ratio,
         aspect_ratio_policy=sidecar.aspect_ratio_policy,
         is_16_9=sidecar.is_16_9,
@@ -893,7 +912,7 @@ def analyze_supplement_asset(
         search_query=sidecar.search_query,
         analysis_status="complete" if description and frames else "failed",
         description_model=gemini_model if is_gemini_configured() else "",
-        description_prompt_version="supplement_v1",
+        description_prompt_version=prompt_version,
         description_generated_at=datetime.now(timezone.utc),
     )
     cache_file = (

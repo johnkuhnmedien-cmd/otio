@@ -204,25 +204,37 @@ def _build_asset_from_accepted(
 
     prompt_version = "cut_plan_import_v1"
     description_model = ""
+    motion = ""
+    framing = ""
+    people = None
+    people_action = None
+    defects = None
     needs_describe = not description or description.startswith("Cut-Plan-Supplement ")
     if analyze_if_needed and needs_describe:
         from otio_app.services.gemini_client import (
-            describe_media_from_frames,
+            ASSET_DESCRIPTION_PROMPT_VERSION,
+            analyze_media_from_frames,
             get_default_gemini_model,
             is_gemini_configured,
         )
 
         model = gemini_model or get_default_gemini_model()
         if is_gemini_configured():
-            description = describe_media_from_frames(
+            analysis = analyze_media_from_frames(
                 local_path.name,
                 folder_name,
                 frames,
                 "de",
                 model=model,
-            ).strip()
+            )
+            description = analysis.description.strip()
+            motion = analysis.motion
+            framing = analysis.framing
+            people = analysis.people
+            people_action = analysis.people_action
+            defects = analysis.defects
             description_model = model
-            prompt_version = "cut_plan_analyze_v1"
+            prompt_version = ASSET_DESCRIPTION_PROMPT_VERSION
         if not description:
             description = f"Cut-Plan-Supplement {local_path.name}"
     elif not description:
@@ -238,6 +250,11 @@ def _build_asset_from_accepted(
         source_url=source_url,
         provider=provider,
         media_type=media_type,
+        motion=motion,
+        framing=framing,
+        people=people,
+        people_action=people_action,
+        defects=defects,
         supplement_validation_status=validation_status or "PASS",
         supplement_validation_score=validation_score,
         approved_for_cut_plan=approved,

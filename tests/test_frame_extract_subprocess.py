@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from otio_app.services.gemini_client import MediaFrameAnalysis
+
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -74,11 +76,10 @@ def test_analyze_asset15_with_binary_ffmpeg_stderr(
         language: str,
         *,
         model: str | None = None,
-    ) -> str:
-        return f"Beschreibung für {media_name}"
-
+    ) -> MediaFrameAnalysis:
+        return MediaFrameAnalysis(description=f"Beschreibung für {media_name}")
     monkeypatch.setattr(
-        "otio_app.services.asset_analyzer.describe_media_from_frames",
+        "otio_app.services.asset_analyzer.analyze_media_from_frames",
         fake_describe,
     )
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from otio_app.services.gemini_client import MediaFrameAnalysis
+
 from pathlib import Path
 
 import pytest
@@ -93,12 +95,11 @@ def test_placeholder_cache_is_retried_on_reanalysis(
         language: str,
         *,
         model: str | None = None,
-    ) -> str:
-        return f"Neu analysiert: {media_name}"
-
+    ) -> MediaFrameAnalysis:
+        return MediaFrameAnalysis(description=f"Neu analysiert: {media_name}")
     monkeypatch.setattr("otio_app.services.asset_analyzer.extract_frames", fake_extract)
     monkeypatch.setattr(
-        "otio_app.services.asset_analyzer.describe_media_from_frames",
+        "otio_app.services.asset_analyzer.analyze_media_from_frames",
         fake_describe,
     )
 

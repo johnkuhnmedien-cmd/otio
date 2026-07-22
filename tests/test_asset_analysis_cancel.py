@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from otio_app.services.gemini_client import MediaFrameAnalysis
+
 from pathlib import Path
 
 import pytest
@@ -45,11 +47,10 @@ def test_analyze_asset_folders_can_be_cancelled(
         language: str,
         *,
         model: str | None = None,
-    ) -> str:
+    ) -> MediaFrameAnalysis:
         calls.append(media_name)
         cancel_after["count"] += 1
-        return f"Beschreibung für {media_name}"
-
+        return MediaFrameAnalysis(description=f"Beschreibung für {media_name}")
     def should_cancel() -> bool:
         return cancel_after["count"] >= 1
 
@@ -58,7 +59,7 @@ def test_analyze_asset_folders_can_be_cancelled(
         fake_extract,
     )
     monkeypatch.setattr(
-        "otio_app.services.asset_analyzer.describe_media_from_frames",
+        "otio_app.services.asset_analyzer.analyze_media_from_frames",
         fake_describe,
     )
 
@@ -106,18 +107,17 @@ def test_asset_analysis_job_manager_cancel(
         language: str,
         *,
         model: str | None = None,
-    ) -> str:
+    ) -> MediaFrameAnalysis:
         describe_calls["count"] += 1
         if describe_calls["count"] >= 1:
             get_asset_analysis_job_manager().request_cancel("test-project")
-        return f"Beschreibung für {media_name}"
-
+        return MediaFrameAnalysis(description=f"Beschreibung für {media_name}")
     monkeypatch.setattr(
         "otio_app.services.asset_analyzer.extract_frames",
         fake_extract,
     )
     monkeypatch.setattr(
-        "otio_app.services.asset_analyzer.describe_media_from_frames",
+        "otio_app.services.asset_analyzer.analyze_media_from_frames",
         fake_describe,
     )
     project = _sample_project(temp_project_layout)

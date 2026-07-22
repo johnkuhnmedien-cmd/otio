@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -19,6 +20,12 @@ from otio_app.defaults import (
     MATCH_QUALITY_SEHR_GUT,
     MATCH_QUALITY_UNPASSEND,
 )
+
+ASSET_DESCRIPTION_PROMPT_VERSION = "asset_v2_structured"
+_ALLOWED_MOTION = frozenset(
+    {"static", "pan", "tilt", "tracking", "drone", "handheld", "zoom", "unknown"}
+)
+_ALLOWED_FRAMING = frozenset({"close", "medium", "wide", "aerial", "pov"})
 
 
 class GeminiNotConfiguredError(RuntimeError):
@@ -62,30 +69,143 @@ def _extract_json(text: str) -> Any:
     return json.loads(cleaned)
 
 
-def describe_media_from_frames(
+@dataclass(frozen=True)
+class MediaFrameAnalysis:
+    """Strukturierte Asset-Frame-Analyse (asset_v2_structured)."""
+
+    description: str
+    motion: str = "unknown"
+    framing: str = "medium"
+    people: bool = False
+    people_action: Optional[str] = None
+    defects: Optional[str] = None
+    parse_ok: bool = True
+    raw_response: str = ""
+
+
+def build_asset_frame_analysis_prompt(
+    media_name: str, folder_name: str, language: str
+) -> str:
+    return (
+        f"Du analysierst die Mediendatei '{media_name}' aus dem Ordner '{folder_name}' "
+        f"anhand der bereitgestellten Frames. Sprache für Freitext: {language}.\n\n"
+        "Antworte NUR mit einem JSON-Objekt in exakt dieser Struktur:\n\n"
+        "{\n"
+        '  "description": "...",\n'
+        '  "motion": "...",\n'
+        '  "framing": "...",\n'
+        '  "people": false,\n'
+        '  "people_action": null,\n'
+        '  "defects": null\n'
+        "}\n\n"
+        "Feldregeln:\n"
+        "- description: 2 bis 4 Sätze, sachlich. Inhalt: Ort/Motiv, was passiert, "
+        "Licht und Farben, Stimmung. KEINE Angaben zu Kamera, Perspektive oder "
+        "Bewegung — dafür sind die Felder motion und framing da.\n"
+        '- motion: genau einer dieser Werte: "static", "pan", "tilt", "tracking", '
+        '"drone", "handheld", "zoom", "unknown". Aus den Unterschieden zwischen '
+        'den Frames ableiten; wenn nicht eindeutig erkennbar: "unknown".\n'
+        '- framing: genau einer dieser Werte: "close", "medium", "wide", "aerial", "pov".\n'
+        "- people: true, wenn Personen erkennbar sind.\n"
+        "- people_action: falls people true — in maximal einem Halbsatz, was die "
+        "Person(en) tun. Sonst null.\n"
+        "- defects: Wasserzeichen, Logos, starke Unschärfe oder Verwacklung, "
+        "Schwarzbilder — kurz benennen. Sonst null.\n"
+        "- Ortsnamen nur nennen, wenn eindeutig erkennbar oder durch den "
+        "Ordnernamen naheliegend. Nichts erfinden."
+    )
+
+
+def parse_media_frame_analysis(text: str) -> MediaFrameAnalysis:
+    """Parst Gemini-Antwort; Fallback: gesamter Text als description."""
+    raw = (text or "").strip()
+    if not raw:
+        return MediaFrameAnalysis(description="", parse_ok=False, raw_response="")
+
+    try:
+        payload = _extract_json(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        # Manchmal kommt JSON mit Leading/Trailing-Text — Objekt extrahieren.
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not match:
+            return MediaFrameAnalysis(
+                description=raw, parse_ok=False, raw_response=raw
+            )
+        try:
+            payload = json.loads(match.group(0))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return MediaFrameAnalysis(
+                description=raw, parse_ok=False, raw_response=raw
+            )
+
+    if not isinstance(payload, dict):
+        return MediaFrameAnalysis(description=raw, parse_ok=False, raw_response=raw)
+
+    description = str(payload.get("description") or "").strip()
+    if not description:
+        return MediaFrameAnalysis(description=raw, parse_ok=False, raw_response=raw)
+
+    motion = str(payload.get("motion") or "unknown").strip().lower()
+    if motion not in _ALLOWED_MOTION:
+        motion = "unknown"
+    framing = str(payload.get("framing") or "medium").strip().lower()
+    if framing not in _ALLOWED_FRAMING:
+        framing = "medium"
+
+    people_raw = payload.get("people")
+    if isinstance(people_raw, bool):
+        people = people_raw
+    elif isinstance(people_raw, str):
+        people = people_raw.strip().lower() in {"true", "1", "yes", "ja"}
+    else:
+        people = bool(people_raw)
+
+    people_action_raw = payload.get("people_action")
+    if people:
+        people_action = (
+            str(people_action_raw).strip() if people_action_raw not in (None, "") else None
+        )
+    else:
+        people_action = None
+
+    defects_raw = payload.get("defects")
+    defects = (
+        str(defects_raw).strip() if defects_raw not in (None, "") else None
+    ) or None
+
+    return MediaFrameAnalysis(
+        description=description,
+        motion=motion,
+        framing=framing,
+        people=people,
+        people_action=people_action,
+        defects=defects,
+        parse_ok=True,
+        raw_response=raw,
+    )
+
+
+def analyze_media_from_frames(
     media_name: str,
     folder_name: str,
     frame_paths: list[Path],
     language: str,
     *,
     model: Optional[str] = None,
-) -> str:
-    """Sendet Frames eines einzelnen Assets an Gemini und liefert eine Beschreibung."""
+) -> MediaFrameAnalysis:
+    """Frame-Analyse → strukturierte Felder inkl. Freitext-description."""
     if not frame_paths:
-        return "Keine Frames verfügbar."
+        return MediaFrameAnalysis(
+            description="Keine Frames verfügbar.",
+            parse_ok=False,
+        )
 
     client = _get_client()
     from google.genai import types
 
     parts: list[types.Part] = [
         types.Part.from_text(
-            text=(
-                f"Du analysierst die Mediendatei '{media_name}' aus dem Ordner "
-                f"'{folder_name}'. "
-                f"Sprache der Antwort: {language}. "
-                "Beschreibe kurz und sachlich, was zu sehen ist (Ort, Motiv, Stimmung, "
-                "Kameraperspektive). Maximal 6 Sätze."
-            )
+            text=build_asset_frame_analysis_prompt(media_name, folder_name, language)
         )
     ]
     for frame_path in frame_paths:
@@ -100,7 +220,25 @@ def describe_media_from_frames(
         model=resolve_gemini_model(model),
         contents=[types.Content(role="user", parts=parts)],
     )
-    return (response.text or "").strip()
+    return parse_media_frame_analysis((response.text or "").strip())
+
+
+def describe_media_from_frames(
+    media_name: str,
+    folder_name: str,
+    frame_paths: list[Path],
+    language: str,
+    *,
+    model: Optional[str] = None,
+) -> str:
+    """Kompatibel: liefert nur den Freitext ``description``."""
+    return analyze_media_from_frames(
+        media_name,
+        folder_name,
+        frame_paths,
+        language,
+        model=model,
+    ).description
 
 
 SUPPLEMENT_VALIDATION_STATUSES = ("PASS", "WEAK_PASS", "NEEDS_USER_REVIEW", "FAIL")

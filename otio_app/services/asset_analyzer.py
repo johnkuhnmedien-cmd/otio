@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -18,8 +19,9 @@ from otio_app.services.analysis_log import append_analysis_log
 from otio_app.services.analysis_progress import AnalysisRunReport, ProgressCallback, noop_progress
 from otio_app.services.frame_extract import extract_frames, list_existing_frame_jpegs
 from otio_app.services.gemini_client import (
+    ASSET_DESCRIPTION_PROMPT_VERSION,
     GeminiNotConfiguredError,
-    describe_media_from_frames,
+    analyze_media_from_frames,
 )
 from otio_app.services.inventory_loader import (
     should_skip_folder_analysis,
@@ -159,13 +161,22 @@ def _analyze_single_media(
         raise AnalysisCancelledError()
     if use_api:
         try:
-            entry.description = describe_media_from_frames(
+            analysis = analyze_media_from_frames(
                 resolved_path.name,
                 folder_name,
                 frames,
                 project.language,
                 model=model,
             )
+            entry.description = analysis.description
+            entry.motion = analysis.motion
+            entry.framing = analysis.framing
+            entry.people = analysis.people
+            entry.people_action = analysis.people_action
+            entry.defects = analysis.defects
+            entry.description_model = model or ""
+            entry.description_prompt_version = ASSET_DESCRIPTION_PROMPT_VERSION
+            entry.description_generated_at = datetime.now(timezone.utc)
             entry.error = None
             entry = _save_cached_media_safe(cache_file, entry)
             if entry.error and "Cache konnte nicht geschrieben werden" in entry.error:

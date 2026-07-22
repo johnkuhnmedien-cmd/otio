@@ -139,15 +139,29 @@ def build_slim_folder_inventory(
         dauer = _dauer_s_for_asset(
             asset, type_label=type_label, probe_duration=probe_duration
         )
-        assets_out.append(
-            {
-                "id": asset_id,
-                "file": Path(path).name,
-                "type": type_label,
-                "dauer_s": dauer,
-                "beschreibung": str(asset.description or "").strip(),
-            }
-        )
+        entry: dict[str, Any] = {
+            "id": asset_id,
+            "file": Path(path).name,
+            "type": type_label,
+            "dauer_s": dauer,
+            "beschreibung": str(asset.description or "").strip(),
+        }
+        motion = str(getattr(asset, "motion", "") or "").strip()
+        framing = str(getattr(asset, "framing", "") or "").strip()
+        if motion:
+            entry["motion"] = motion
+        if framing:
+            entry["framing"] = framing
+        people = getattr(asset, "people", None)
+        if people is not None:
+            entry["people"] = bool(people)
+        people_action = getattr(asset, "people_action", None)
+        if people_action:
+            entry["people_action"] = str(people_action)
+        defects = getattr(asset, "defects", None)
+        if defects:
+            entry["defects"] = str(defects)
+        assets_out.append(entry)
 
     return {
         "kapitel": folder_inventory.folder,
@@ -194,15 +208,17 @@ def slim_assets_for_cut_plan_prompt(
     for item in slim["assets"]:
         media = str(item.get("type") or "")
         media_type = "image" if media == "photo" else media
-        out.append(
-            {
-                "local_asset_id": item["id"],
-                "asset_id": item["id"],
-                "folder": folder_name,
-                "file": item["file"],
-                "duration_seconds": item.get("dauer_s"),
-                "media_type": media_type,
-                "description": item.get("beschreibung") or "",
-            }
-        )
+        row: dict[str, Any] = {
+            "local_asset_id": item["id"],
+            "asset_id": item["id"],
+            "folder": folder_name,
+            "file": item["file"],
+            "duration_seconds": item.get("dauer_s"),
+            "media_type": media_type,
+            "description": item.get("beschreibung") or "",
+        }
+        for key in ("motion", "framing", "people", "people_action", "defects"):
+            if key in item:
+                row[key] = item[key]
+        out.append(row)
     return out

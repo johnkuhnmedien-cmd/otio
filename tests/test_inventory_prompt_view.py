@@ -25,12 +25,18 @@ def _folder() -> AssetFolderAnalysis:
                 description="Wellenförmige Sandsteinwände.",
                 asset_id="asset_antelope_canyon_asset01",
                 media_type="video",
+                motion="static",
+                framing="wide",
+                people=False,
             ),
             AssetMediaAnalysis(
                 path="/media/Antelope_Canyon_Asset01_3840x2160.mp4",
                 description="Wellenförmige Sandsteinwände in höherer Auflösung.",
                 asset_id="asset_antelope_canyon_asset01_3840x2160",
                 media_type="video",
+                motion="tilt",
+                framing="wide",
+                people=False,
             ),
             AssetMediaAnalysis(
                 path="/media/no_desc.mp4",
@@ -65,6 +71,9 @@ def test_build_slim_filters_and_dedupes(monkeypatch) -> None:
     assert slim["assets"][0]["type"] == "video"
     assert slim["assets"][0]["dauer_s"] == 12.5
     assert slim["assets"][0]["beschreibung"].startswith("Wellenförmige")
+    assert slim["assets"][0]["motion"] == "tilt"
+    assert slim["assets"][0]["framing"] == "wide"
+    assert slim["assets"][0]["people"] is False
     assert slim["assets"][1]["type"] == "photo"
     assert slim["assets"][1]["dauer_s"] is None
 

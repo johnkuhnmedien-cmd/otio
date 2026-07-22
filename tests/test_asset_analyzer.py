@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from otio_app.services.gemini_client import MediaFrameAnalysis
+
 from pathlib import Path
 
 import pytest
@@ -43,16 +45,15 @@ def test_analyze_asset_folders_processes_every_media_file(
         language: str,
         *,
         model: str | None = None,
-    ) -> str:
+    ) -> MediaFrameAnalysis:
         calls.append(media_name)
-        return f"Beschreibung für {media_name}"
-
+        return MediaFrameAnalysis(description=f"Beschreibung für {media_name}")
     monkeypatch.setattr(
         "otio_app.services.asset_analyzer.extract_frames",
         fake_extract,
     )
     monkeypatch.setattr(
-        "otio_app.services.asset_analyzer.describe_media_from_frames",
+        "otio_app.services.asset_analyzer.analyze_media_from_frames",
         fake_describe,
     )
 
@@ -90,16 +91,15 @@ def test_analyze_asset_folders_skips_completed_cache(
         language: str,
         *,
         model: str | None = None,
-    ) -> str:
+    ) -> MediaFrameAnalysis:
         calls.append(media_name)
-        return f"Beschreibung für {media_name}"
-
+        return MediaFrameAnalysis(description=f"Beschreibung für {media_name}")
     monkeypatch.setattr(
         "otio_app.services.asset_analyzer.extract_frames",
         fake_extract,
     )
     monkeypatch.setattr(
-        "otio_app.services.asset_analyzer.describe_media_from_frames",
+        "otio_app.services.asset_analyzer.analyze_media_from_frames",
         fake_describe,
     )
 
@@ -141,16 +141,15 @@ def test_analyze_asset_folders_recovers_from_corrupt_cache(
         language: str,
         *,
         model: str | None = None,
-    ) -> str:
+    ) -> MediaFrameAnalysis:
         calls.append(media_name)
-        return f"Beschreibung für {media_name}"
-
+        return MediaFrameAnalysis(description=f"Beschreibung für {media_name}")
     monkeypatch.setattr(
         "otio_app.services.asset_analyzer.extract_frames",
         fake_extract,
     )
     monkeypatch.setattr(
-        "otio_app.services.asset_analyzer.describe_media_from_frames",
+        "otio_app.services.asset_analyzer.analyze_media_from_frames",
         fake_describe,
     )
 
@@ -180,16 +179,15 @@ def test_analyze_asset_folders_skips_completed_folder_json(
         language: str,
         *,
         model: str | None = None,
-    ) -> str:
+    ) -> MediaFrameAnalysis:
         calls.append(f"{folder_name}:{media_name}")
-        return f"Beschreibung für {media_name}"
-
+        return MediaFrameAnalysis(description=f"Beschreibung für {media_name}")
     monkeypatch.setattr(
         "otio_app.services.asset_analyzer.extract_frames",
         fake_extract,
     )
     monkeypatch.setattr(
-        "otio_app.services.asset_analyzer.describe_media_from_frames",
+        "otio_app.services.asset_analyzer.analyze_media_from_frames",
         fake_describe,
     )
 

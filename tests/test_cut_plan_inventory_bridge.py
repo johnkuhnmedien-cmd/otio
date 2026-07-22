@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from otio_app.services.gemini_client import MediaFrameAnalysis
+
 from pathlib import Path
 from unittest.mock import patch
 
@@ -245,8 +247,8 @@ def test_analyze_missing_supplements_from_disk(tmp_path: Path) -> None:
             return_value=[fake_frame],
         ),
         patch(
-            "otio_app.services.gemini_client.describe_media_from_frames",
-            return_value="Orphan canyon shot at golden hour",
+            "otio_app.services.gemini_client.analyze_media_from_frames",
+            return_value=MediaFrameAnalysis(description="Orphan canyon shot at golden hour"),
         ),
         patch(
             "otio_app.services.gemini_client.is_gemini_configured",

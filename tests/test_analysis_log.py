@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from otio_app.services.gemini_client import MediaFrameAnalysis
+
 from pathlib import Path
 
 import pytest
@@ -40,12 +42,11 @@ def test_analysis_log_records_missing_asset_run(
         language: str,
         *,
         model: str | None = None,
-    ) -> str:
-        return f"Beschreibung für {media_name}"
-
+    ) -> MediaFrameAnalysis:
+        return MediaFrameAnalysis(description=f"Beschreibung für {media_name}")
     monkeypatch.setattr("otio_app.services.asset_analyzer.extract_frames", fake_extract)
     monkeypatch.setattr(
-        "otio_app.services.asset_analyzer.describe_media_from_frames",
+        "otio_app.services.asset_analyzer.analyze_media_from_frames",
         fake_describe,
     )
 
