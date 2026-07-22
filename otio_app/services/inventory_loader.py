@@ -50,6 +50,14 @@ def load_folder_inventory_file(path: Path) -> AssetFolderAnalysis | None:
 def save_folder_inventory(path: Path, item: AssetFolderAnalysis) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(item.model_dump_json(indent=2), encoding="utf-8")
+    # Abgeleitete Slim-Sicht für LLM/externe Nutzung — bricht keine Konsumenten.
+    try:
+        from otio_app.services.inventory_prompt_view import write_slim_folder_inventory
+
+        write_slim_folder_inventory(path, item, probe_duration=True)
+    except Exception:  # noqa: BLE001
+        # Slim ist Best-Effort; kanonisches Inventar bleibt geschrieben.
+        pass
 
 
 def folder_inventory_matches_media(
@@ -89,6 +97,12 @@ def delete_folder_inventory(project: Project, folder_name: str) -> None:
     path = get_folder_inventory_path(project.work_dir_path, folder_name)
     try:
         path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        from otio_app.services.inventory_prompt_view import slim_inventory_path_for
+
+        slim_inventory_path_for(path).unlink(missing_ok=True)
     except OSError:
         pass
 

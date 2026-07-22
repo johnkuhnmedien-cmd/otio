@@ -22,7 +22,7 @@ from otio_app.project_layout import get_folder_inventory_path, safe_folder_slug
 from otio_app.services.api_keys import get_api_key, is_api_key_set
 from otio_app.services.frame_extract import extract_frames
 from otio_app.services.gemini_client import describe_and_validate_supplement_asset
-from otio_app.services.inventory_loader import load_folder_inventory
+from otio_app.services.inventory_loader import load_folder_inventory, save_folder_inventory
 from otio_app.services.media_utils import is_image_media
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     load_cut_plan_options,
@@ -325,7 +325,9 @@ def _import_into_inventory(
                 "frames_used": frames_used,
             }
         )
-    write_json(get_folder_inventory_path(project.work_dir_path, folder_name), folder_doc)
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, folder_name), folder_doc
+    )
     return folder_name
 
 

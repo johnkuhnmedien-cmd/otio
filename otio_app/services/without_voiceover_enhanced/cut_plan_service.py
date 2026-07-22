@@ -127,6 +127,14 @@ def _local_assets_payload(
     folder_name: str | None = None,
     include_middle_frames: bool = False,
 ) -> list[dict[str, Any]]:
+    """Schlanke Asset-Liste für LLM-Lauf 2/3 (kein voller Inventory-Dump).
+
+    Nutzt die Slim-Projektion (nur beschriebene Assets, Duplikate gemerged,
+    Basename statt Absolutpfad). Middle-Frames kommen weiter aus dem
+    kanonischen Inventar und werden nur bei Vision angehängt.
+    """
+    from otio_app.services.inventory_prompt_view import slim_assets_for_cut_plan_prompt
+
     assets: list[dict[str, Any]] = []
     folders = (
         [folder_name]
@@ -139,34 +147,27 @@ def _local_assets_payload(
         inventory = load_folder_inventory(project, folder)
         if inventory is None:
             continue
+        slim_entries = slim_assets_for_cut_plan_prompt(
+            inventory, folder_name=folder, probe_duration=True
+        )
+        if not include_middle_frames:
+            assets.extend(slim_entries)
+            continue
+
+        # Middle-Frames: Lookup über stabile asset_id im kanonischen Inventar.
+        by_id: dict[str, Any] = {}
         for asset in getattr(inventory, "assets", []) or []:
             path = getattr(asset, "path", None) or getattr(asset, "source_path", None)
             if path is None:
                 continue
             asset_id = getattr(asset, "asset_id", None) or asset_id_for_path(str(path))
-            duration = getattr(asset, "duration_sec", None)
-            if duration is None:
-                duration = getattr(asset, "duration_seconds", None)
-            if duration is None:
-                try:
-                    duration = probe_duration_seconds(path)
-                except Exception:  # noqa: BLE001
-                    duration = None
-            description = str(getattr(asset, "description", "") or "").strip()
-            entry: dict[str, Any] = {
-                "local_asset_id": asset_id,
-                "asset_id": asset_id,
-                "folder": folder,
-                "path": str(path),
-                "duration_seconds": duration,
-                "media_type": getattr(asset, "media_type", None),
-                "description": description,
-            }
-            if include_middle_frames:
-                frames_used = list(getattr(asset, "frames_used", None) or [])
-                middle = select_middle_frame_path(frames_used)
-                entry["middle_frame_path"] = str(middle) if middle is not None else None
-                entry["has_middle_frame"] = middle is not None
+            by_id[str(asset_id)] = asset
+        for entry in slim_entries:
+            asset = by_id.get(str(entry.get("local_asset_id") or ""))
+            frames_used = list(getattr(asset, "frames_used", None) or []) if asset else []
+            middle = select_middle_frame_path(frames_used)
+            entry["middle_frame_path"] = str(middle) if middle is not None else None
+            entry["has_middle_frame"] = middle is not None
             assets.append(entry)
     return assets
 
