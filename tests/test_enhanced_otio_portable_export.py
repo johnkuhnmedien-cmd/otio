@@ -24,7 +24,7 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     CutPlanOptions,
     save_cut_plan_options,
 )
-from otio_app.services.without_voiceover_enhanced.io_utils import write_json
+from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.models import (
     EnhancedScriptDocument,
     FinalCutPlanDocument,
@@ -32,6 +32,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
     NarrationAnchor,
     NarrationTimelineDocument,
     NarrationTimelineEntry,
+    ResolvedTimelineDocument,
     ScriptSegment,
     SegmentTiming,
     SegmentTimingsDocument,
@@ -43,6 +44,7 @@ from otio_app.services.without_voiceover_enhanced.otio_export_service import (
 from otio_app.services.without_voiceover_enhanced.paths import (
     final_cut_plan_path,
     narration_timeline_path,
+    resolved_timeline_path,
     segment_timings_path,
 )
 from otio_app.services.without_voiceover_enhanced.portable_export import (
@@ -380,10 +382,55 @@ def test_portable_preserves_r1_timing_and_holds(tmp_path: Path) -> None:
         assert src_end <= avail_end + 0.05
 
 
-def test_portable_rejects_allow_errors(tmp_path: Path) -> None:
+def test_portable_allow_errors_risk_ack_exports_with_gaps(tmp_path: Path) -> None:
+    """Risiko-Override: portables Paket trotz Resolve-Fehler, ungültige Clips → Gaps."""
     project, *_ = _build_full_project(tmp_path)
-    with pytest.raises(EnhancedOtioExportError, match="allow_errors"):
-        export_portable_otio_package(project, basename="bad", allow_errors=True)
+    resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
+    assert resolved is not None
+    bad_shot = resolved.shots[0].model_copy(
+        update={
+            "shot_id": "shot_missing_media",
+            "asset_id": "missing_asset",
+            "timeline_start_seconds": resolved.total_duration_seconds,
+            "timeline_end_seconds": resolved.total_duration_seconds + 2.0,
+            "source_start_seconds": 0.0,
+            "source_end_seconds": 2.0,
+            "resolved_media_path": str(tmp_path / "does_not_exist.mov"),
+            "resolved_media_kind": "video",
+            "hold_mode": "",
+        }
+    )
+    write_json(
+        resolved_timeline_path(project),
+        resolved.model_copy(
+            update={
+                "shots": list(resolved.shots) + [bad_shot],
+                "total_duration_seconds": resolved.total_duration_seconds + 2.0,
+                "errors": [
+                    "shot_missing_media: Asset missing_asset fehlt lokal."
+                ],
+            }
+        ),
+    )
+
+    with pytest.raises(EnhancedOtioExportError, match="blockiert"):
+        export_portable_otio_package(project, basename="blocked", allow_errors=False)
+
+    package = export_portable_otio_package(
+        project, basename="risk_ack", allow_errors=True
+    )
+    assert (package / "timeline.otio").is_file()
+    assert (package / "README.md").is_file()
+    readme = (package / "README.md").read_text(encoding="utf-8")
+    assert "Risiko-Override" in readme
+    timeline = otio.adapters.read_from_file(str(package / "timeline.otio"))
+    assert timeline.metadata.get("enhanced_export_mode") == "portable_risk_ack"
+    video = next(
+        t for t in timeline.tracks if t.kind == otio.schema.TrackKind.Video
+    )
+    assert any(isinstance(item, otio.schema.Gap) for item in video)
+    media_files = list((package / "media").glob("*"))
+    assert media_files, "gültige Medien müssen trotzdem paketiert werden"
 
 
 def test_package_filename_collision_blocks(tmp_path: Path) -> None:

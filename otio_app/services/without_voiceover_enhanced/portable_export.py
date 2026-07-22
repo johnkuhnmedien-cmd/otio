@@ -296,10 +296,30 @@ def write_media_manifest(path: Path, entries: list[PackagedMediaEntry]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def write_package_readme(path: Path, *, basename: str) -> None:
+def write_package_readme(
+    path: Path,
+    *,
+    basename: str,
+    risk_acknowledged: bool = False,
+) -> None:
+    mode_line = (
+        "`timeline.otio` — Risiko-Override: Export trotz Fehlerliste "
+        "(ungültige Clips können Gaps sein)"
+        if risk_acknowledged
+        else "`timeline.otio` — Produktions-Timeline (`allow_errors=False`)"
+    )
+    risk_banner = ""
+    if risk_acknowledged:
+        risk_banner = """
+## ⚠️ Risiko-Override aktiv
+
+Dieses Paket wurde trotz bekannter Resolve-/Medienfehler erzeugt.
+Fehlende oder ungültige Shots können als Gaps in der Timeline stehen.
+Vor Produktionsnutzung in DaVinci Resolve prüfen.
+"""
     path.write_text(
         f"""# {basename} — portables Enhanced-OTIO-Paket
-
+{risk_banner}
 ## Import in DaVinci Resolve
 
 1. Neues leeres Resolve-Projekt öffnen.
@@ -310,7 +330,7 @@ def write_package_readme(path: Path, *, basename: str) -> None:
 
 ## Inhalt
 
-- `timeline.otio` — Produktions-Timeline (`allow_errors=False`)
+- {mode_line}
 - `media/` — eindeutig benannte Medien (Hardlink oder Kopie)
 - `media_manifest.json` — Originalpfad ↔ Paketdatei
 

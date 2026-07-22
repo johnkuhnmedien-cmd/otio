@@ -80,6 +80,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
 from otio_app.ui.without_voiceover_enhanced.timeline_view import render_realtime_timeline
 from otio_app.services.without_voiceover_enhanced.otio_export_service import (
     EnhancedOtioExportError,
+    collect_export_blockers,
     export_otio_from_resolved_timeline,
     export_portable_otio_package,
 )
@@ -1505,7 +1506,8 @@ def _render_section_final(project) -> None:
             if resolved.errors:
                 st.warning(
                     f"{len(resolved.errors)} Resolve-Fehler — "
-                    "Produktions-OTIO bleibt gesperrt, bis sie behoben sind."
+                    "Produktions-Export ist gesperrt, bis du die Fehlerliste "
+                    "gelesen und die Risiken bestätigt hast."
                 )
             st.rerun()
         except TimelineResolveError as exc:
@@ -1531,21 +1533,30 @@ def _render_section_final(project) -> None:
 
     resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
     if resolved is not None:
+        export_blockers = collect_export_blockers(project, resolved)
         st.caption(
             f"Aufgelöste Timeline: {len(resolved.shots)} Shots · "
             f"{resolved.total_duration_seconds:.1f}s · "
-            f"Fehler: {len(resolved.errors)}"
+            f"Export-Blocker: {len(export_blockers)} "
+            f"(Resolve {len(resolved.errors)})"
         )
-        if resolved.errors:
+        risk_ack = False
+        if export_blockers:
             st.warning(
-                f"{len(resolved.errors)} Resolve-Fehler — "
-                "Produktions-OTIO gesperrt. Test-Export mit Lücken möglich."
+                f"{len(export_blockers)} Export-Blocker — "
+                "Produktions-Export ist gesperrt, bis du die Risiken bestätigst."
             )
-            with st.expander("Resolve-Fehler", expanded=False):
-                for err in resolved.errors[:40]:
-                    st.write(f"- {err}")
-                if len(resolved.errors) > 40:
-                    st.caption(f"… +{len(resolved.errors) - 40} weitere")
+            with st.expander(
+                f"Alle Export-Fehler ({len(export_blockers)})",
+                expanded=True,
+            ):
+                for idx, err in enumerate(export_blockers, start=1):
+                    st.write(f"{idx}. {err}")
+            risk_ack = st.checkbox(
+                "Ich habe die Fehler gelesen und bin mir der Risiken bewusst "
+                "(Export trotzdem — ungültige Clips können Gaps sein).",
+                key=f"enh_final_otio_risk_ack_{project.id}",
+            )
 
         st.markdown("##### OTIO exportieren")
         default_otio_name = (project.name or "enhanced").strip() or "enhanced"
@@ -1558,16 +1569,25 @@ def _render_section_final(project) -> None:
                 "`<Name>_package/timeline.otio` + `media/`."
             ),
         )
-        export_disabled = bool(resolved.errors)
+        export_disabled = bool(export_blockers) and not risk_ack
+        force_export = bool(export_blockers) and risk_ack
         if st.button(
-            "OTIO exportieren",
+            "OTIO exportieren trotz Fehler"
+            if force_export
+            else "OTIO exportieren",
             type="primary",
             key=f"enh_final_otio_export_{project.id}",
             disabled=export_disabled,
             help=(
-                "Produktions-Export gesperrt wegen Resolve-Fehlern."
+                "Produktions-Export gesperrt — Fehlerliste lesen und "
+                "Risiko-Checkbox setzen."
                 if export_disabled
-                else "Portables Produktionspaket (fail-closed, allow_errors=False)."
+                else (
+                    "Risiko-Override: portables Paket trotz Fehler "
+                    "(ungültige Clips → Gaps)."
+                    if force_export
+                    else "Portables Produktionspaket (fail-closed)."
+                )
             ),
         ):
             try:
@@ -1575,21 +1595,28 @@ def _render_section_final(project) -> None:
                     project,
                     basename=(otio_basename or default_otio_name).strip()
                     or default_otio_name,
-                    allow_errors=False,
+                    allow_errors=force_export,
                 )
                 media_count = len(list((package_dir / "media").glob("*")))
-                st.success(
-                    f"Portables OTIO-Paket: `{package_dir}` · "
-                    f"{media_count} Medien · `timeline.otio`"
-                )
+                if force_export:
+                    st.warning(
+                        f"Risiko-Override-Paket: `{package_dir}` · "
+                        f"{media_count} Medien · {len(export_blockers)} bekannte "
+                        "Blocker — in Resolve prüfen."
+                    )
+                else:
+                    st.success(
+                        f"Portables OTIO-Paket: `{package_dir}` · "
+                        f"{media_count} Medien · `timeline.otio`"
+                    )
             except EnhancedOtioExportError as exc:
                 st.error(str(exc))
 
-        if resolved.errors and st.button(
-            "Test-OTIO mit Lücken erzeugen",
+        if export_blockers and st.button(
+            "Nur lokale Test-OTIO mit Lücken (nicht portabel)",
             key=f"enh_final_test_otio_gaps_{project.id}",
             help=(
-                "Exportiert bereits aufgelöste Shots; fehlende bleiben Gaps. "
+                "Lokale Diagnose-OTIO mit Gaps; kein portables Medienpaket. "
                 "Auch unter ⑧ Final Output."
             ),
         ):

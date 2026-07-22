@@ -193,6 +193,23 @@ def _ensure_shot_media_for_export(
     return path, avail_start, source_start, source_end, rate
 
 
+def collect_export_blockers(
+    project: Project,
+    resolved: ResolvedTimelineDocument,
+) -> list[str]:
+    """Alle Export-Blocker: Resolve-Fehler + Produktions-Gate (Medien/Range)."""
+    blockers: list[str] = []
+    for err in resolved.errors:
+        text = str(err).strip()
+        if text:
+            blockers.append(text)
+    for err in validate_resolved_timeline_for_production(project, resolved):
+        text = str(err).strip()
+        if text and text not in blockers:
+            blockers.append(text)
+    return blockers
+
+
 def validate_resolved_timeline_for_production(
     project: Project,
     resolved: ResolvedTimelineDocument,
@@ -322,15 +339,10 @@ def export_otio_from_resolved_timeline(
     fps = float(resolved.fps or project.fps or 25.0)
 
     if not allow_errors:
-        if resolved.errors:
+        blockers = collect_export_blockers(project, resolved)
+        if blockers:
             raise EnhancedOtioExportError(
-                "Aufgelöste Timeline enthält Fehler: " + "; ".join(resolved.errors)
-            )
-        gate_errors = validate_resolved_timeline_for_production(project, resolved)
-        if gate_errors:
-            raise EnhancedOtioExportError(
-                "Produktions-Export blockiert (Medien/Range-Gate): "
-                + "; ".join(gate_errors)
+                "Produktions-Export blockiert: " + "; ".join(blockers)
             )
 
     timeline = otio.schema.Timeline(name=f"{project.name} enhanced")
@@ -477,32 +489,22 @@ def export_portable_otio_package(
             media_manifest.json
             README.md
 
-    ``allow_errors=True`` ist nur für Diagnose gedacht und schreibt trotzdem
-    kein Paket mit Lücken-Medien — bei Fehlern wird blockiert, außer wenn
-    explizit Gaps-Export über ``export_otio_from_resolved_timeline`` genutzt wird.
+    ``allow_errors=False`` ist fail-closed (Resolve-Fehler + Medien-Gate).
+    ``allow_errors=True`` ist ein bewusster Risiko-Override: ungültige Clips
+    werden als Gaps geschrieben, gültige Medien trotzdem portabel paketiert.
     """
-    if allow_errors:
-        raise EnhancedOtioExportError(
-            "Portabler Produktions-Export erlaubt keine allow_errors=True. "
-            "Für Diagnose den Test-OTIO-Export mit Lücken verwenden."
-        )
-
     assert_enhanced_work_root(project)
     resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
     if resolved is None:
         raise EnhancedOtioExportError("Aufgelöste Timeline fehlt — kein OTIO-Export.")
 
     fps = float(resolved.fps or project.fps or 25.0)
-    if resolved.errors:
-        raise EnhancedOtioExportError(
-            "Aufgelöste Timeline enthält Fehler: " + "; ".join(resolved.errors)
-        )
-    gate_errors = validate_resolved_timeline_for_production(project, resolved)
-    if gate_errors:
-        raise EnhancedOtioExportError(
-            "Produktions-Export blockiert (Medien/Range-Gate): "
-            + "; ".join(gate_errors)
-        )
+    if not allow_errors:
+        blockers = collect_export_blockers(project, resolved)
+        if blockers:
+            raise EnhancedOtioExportError(
+                "Portabler Produktions-Export blockiert: " + "; ".join(blockers)
+            )
 
     package_root = package_dir_for_export(project, basename)
     if package_root.exists():
@@ -530,19 +532,31 @@ def export_portable_otio_package(
     # Clip → original media path for rewrite after staging
     pending_video: list[tuple[otio.schema.Clip, Path, str]] = []
     pending_audio: list[tuple[otio.schema.Clip, Path, str]] = []
+    skipped_clips = 0
 
     cursor = 0.0
     for shot in sorted(resolved.shots, key=lambda s: s.timeline_start_seconds):
         if shot.timeline_start_seconds > cursor + 1e-6:
             gap = shot.timeline_start_seconds - cursor
             video_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
-        media_path, avail_start, source_start, source_end, rate = (
-            _ensure_shot_media_for_export(project, shot, fps=fps)
-        )
-        source_duration = source_end - source_start
-        file_avail_start, file_dur, file_rate = _validate_video_file(
-            media_path, label=f"{shot.shot_id}", fps=fps
-        )
+        try:
+            media_path, avail_start, source_start, source_end, rate = (
+                _ensure_shot_media_for_export(project, shot, fps=fps)
+            )
+            source_duration = source_end - source_start
+            file_avail_start, file_dur, file_rate = _validate_video_file(
+                media_path, label=f"{shot.shot_id}", fps=fps
+            )
+        except EnhancedOtioExportError:
+            if not allow_errors:
+                raise
+            skipped_clips += 1
+            gap = max(
+                0.01, shot.timeline_end_seconds - shot.timeline_start_seconds
+            )
+            video_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
+            cursor = shot.timeline_end_seconds
+            continue
         kind = "still_hold" if (shot.hold_mode or "").startswith(
             ("freeze_video", "still_hold")
         ) or "hold_cache" in media_path.parts else "video"
@@ -574,9 +588,21 @@ def export_portable_otio_package(
         if segment.timeline_start_seconds > audio_cursor + 1e-6:
             gap = segment.timeline_start_seconds - audio_cursor
             audio_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
-        audio_path = _assert_local_file(
-            segment.audio_path, label=f"Audio {segment.segment_id}"
-        )
+        try:
+            audio_path = _assert_local_file(
+                segment.audio_path, label=f"Audio {segment.segment_id}"
+            )
+        except EnhancedOtioExportError:
+            if not allow_errors:
+                raise
+            skipped_clips += 1
+            gap = max(
+                0.01,
+                segment.timeline_end_seconds - segment.timeline_start_seconds,
+            )
+            audio_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
+            audio_cursor = segment.timeline_end_seconds
+            continue
         stage_items.append((audio_path, segment.segment_id, "audio"))
         duration = segment.timeline_end_seconds - segment.timeline_start_seconds
         source_start = float(getattr(segment, "source_start_seconds", 0.0) or 0.0)
@@ -606,9 +632,22 @@ def export_portable_otio_package(
             )
             audio_cursor += segment.pause_after_seconds
 
+    if not stage_items and allow_errors:
+        raise EnhancedOtioExportError(
+            "Risiko-Override: kein einziges gültiges Medium zum Paketieren — "
+            "Export abgebrochen."
+        )
+
     timeline.tracks.append(video_track)
     timeline.tracks.append(audio_track)
-    timeline.metadata["enhanced_export_mode"] = "production_portable"
+    if allow_errors:
+        timeline.metadata["enhanced_export_mode"] = "portable_risk_ack"
+        timeline.metadata["enhanced_export_skipped_clips"] = skipped_clips
+        timeline.metadata["enhanced_export_blockers"] = collect_export_blockers(
+            project, resolved
+        )
+    else:
+        timeline.metadata["enhanced_export_mode"] = "production_portable"
 
     try:
         entries = stage_media_into_package(project, package_root, stage_items)
@@ -647,7 +686,11 @@ def export_portable_otio_package(
 
     safe_basename = package_root.name.removesuffix("_package")
     write_media_manifest(package_root / "media_manifest.json", entries)
-    write_package_readme(package_root / "README.md", basename=safe_basename)
+    write_package_readme(
+        package_root / "README.md",
+        basename=safe_basename,
+        risk_acknowledged=allow_errors,
+    )
 
     out_otio = package_root / "timeline.otio"
     otio.adapters.write_to_file(timeline, str(out_otio))

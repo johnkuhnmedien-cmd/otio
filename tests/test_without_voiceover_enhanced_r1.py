@@ -605,7 +605,7 @@ def test_otio_allow_errors_exports_partial_timeline_with_gaps(tmp_path: Path) ->
         ),
     )
 
-    with pytest.raises(EnhancedOtioExportError, match="enthält Fehler"):
+    with pytest.raises(EnhancedOtioExportError, match="blockiert"):
         export_otio_from_resolved_timeline(project, basename="prod_blocked")
 
     out = export_otio_from_resolved_timeline(
@@ -628,8 +628,12 @@ def test_ui_test_otio_with_gaps_markers() -> None:
     final_src = Path(
         "otio_app/ui/without_voiceover_enhanced/final_output_tab.py"
     ).read_text(encoding="utf-8")
-    assert "Test-OTIO mit Lücken erzeugen" in cut_src
-    assert "allow_errors=True" in cut_src
+    assert "Test-OTIO mit Lücken" in cut_src
+    assert "allow_errors=True" in cut_src or "allow_errors=force_export" in cut_src
     assert "Test-OTIO mit Lücken erzeugen" in final_src
-    assert "allow_errors=True" in final_src
-    assert "disabled=has_errors" in final_src
+    assert "allow_errors=True" in final_src or "allow_errors=force_export" in final_src
+    assert "bin mir der Risiken bewusst" in cut_src
+    assert "bin mir der Risiken bewusst" in final_src
+    assert "collect_export_blockers" in cut_src
+    assert "collect_export_blockers" in final_src
+    assert "export_disabled" in final_src
