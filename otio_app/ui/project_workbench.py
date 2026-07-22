@@ -633,12 +633,23 @@ def render_project_workbench() -> None:
         else:
             st.caption("Voice-over-Analyse noch nicht erstellt.")
         if project.inventory_dir.is_dir():
-            inventory_files = sorted(project.inventory_dir.glob("*.json"))
+            from otio_app.services.inventory_loader import (
+                is_canonical_folder_inventory_path,
+            )
+
+            inventory_files = sorted(
+                path
+                for path in project.inventory_dir.glob("*.json")
+                if is_canonical_folder_inventory_path(path)
+            )
             if inventory_files:
                 st.markdown("**Inventar (pro Ordner)**")
                 for inv_file in inventory_files:
                     st.caption(str(inv_file.name))
                     st.code(inv_file.read_text(encoding="utf-8")[:2000])
+                    slim = inv_file.with_name(f"{inv_file.stem}.slim.json")
+                    if slim.is_file():
+                        st.caption(f"Slim: {slim.name}")
             else:
                 st.caption("Inventar noch nicht erstellt.")
         else:
