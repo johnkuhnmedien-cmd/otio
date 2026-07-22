@@ -7,8 +7,10 @@ geschrieben werden. Dieses Modul schreibt niemals EditPlanDocuments.
 from __future__ import annotations
 
 import json
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from difflib import get_close_matches
 
 from otio_app.defaults import (
     DRAMATURGY_PLANNING_MODE_VARIETY,
@@ -325,6 +327,102 @@ def _normalize_recommended_word_targets(
     return target, min_words, max_words
 
 
+def _normalize_folder_key(name: str) -> str:
+    """Vergleichsschlüssel: Unicode-NFC + casefold (macOS NFD vs. LLM-NFC)."""
+    return unicodedata.normalize("NFC", (name or "").strip()).casefold()
+
+
+def _resolve_canonical_folder_name(
+    raw_name: str,
+    *,
+    valid_folder_names: set[str],
+    used_canonical: set[str],
+) -> str | None:
+    """Mappt LLM-Ordnernamen auf den echten Projektordner.
+
+    1) exakter Match
+    2) NFC/casefold-Match (Albarracín vs. Albarracín)
+    3) Fuzzy-Match bei Tippfehlern (Cutoff hoch, damit keine Verwechslung)
+    """
+    raw = (raw_name or "").strip()
+    if not raw:
+        return None
+    if raw in valid_folder_names and raw not in used_canonical:
+        return raw
+
+    key = _normalize_folder_key(raw)
+    by_key = {_normalize_folder_key(name): name for name in valid_folder_names}
+    canonical = by_key.get(key)
+    if canonical and canonical not in used_canonical:
+        return canonical
+
+    candidates = [
+        name for name in valid_folder_names if name not in used_canonical
+    ]
+    if not candidates:
+        return None
+    matches = get_close_matches(
+        _normalize_folder_key(raw),
+        [_normalize_folder_key(name) for name in candidates],
+        n=1,
+        cutoff=0.88,
+    )
+    if not matches:
+        return None
+    match_key = matches[0]
+    for name in candidates:
+        if _normalize_folder_key(name) == match_key:
+            return name
+    return None
+
+
+def _align_entries_to_project_folders(
+    entries: list[DramaturgyFolderEntry],
+    *,
+    valid_folder_names: list[str],
+) -> list[DramaturgyFolderEntry]:
+    """Nur echte Projektordner; fehlende ergänzen; order_index 1..N."""
+    valid_set = set(valid_folder_names)
+    aligned: list[DramaturgyFolderEntry] = []
+    used: set[str] = set()
+
+    for entry in entries:
+        canonical = _resolve_canonical_folder_name(
+            entry.folder_name,
+            valid_folder_names=valid_set,
+            used_canonical=used,
+        )
+        if canonical is None:
+            continue
+        used.add(canonical)
+        aligned.append(entry.model_copy(update={"folder_name": canonical}))
+
+    # LLM hat einen Ordner ausgelassen / falsch geschrieben → trotzdem einplanen.
+    for folder_name in valid_folder_names:
+        if folder_name in used:
+            continue
+        aligned.append(
+            DramaturgyFolderEntry(
+                folder_name=folder_name,
+                order_index=len(aligned) + 1,
+                enabled=True,
+                dramaturgy_role="development",
+                reason=(
+                    "Automatisch ergänzt — Ordner war im LLM-JSON nicht "
+                    "zuordenbar (Name/Unicode), gehört aber zum Projekt."
+                ),
+            )
+        )
+        used.add(folder_name)
+
+    # Stabil nach LLM-order_index, fehlende ans Ende; dann 1..N neu nummerieren.
+    aligned.sort(key=lambda item: (int(item.order_index or 10_000), item.folder_name))
+    return [
+        entry.model_copy(update={"order_index": index})
+        for index, entry in enumerate(aligned, start=1)
+    ]
+
+
 def _folder_entry_from_payload(entry: dict, *, default_order: int) -> DramaturgyFolderEntry | None:
     folder_name = str(entry.get("folder_name", "")).strip()
     if not folder_name:
@@ -485,10 +583,13 @@ def build_dramaturgy_plan(
             if parsed_entry is not None:
                 entries.append(parsed_entry)
 
-    # Nur Ordner behalten, die tatsächlich im Projekt existieren — schützt vor
-    # LLM-Halluzinationen (erfundene Ordnernamen).
-    valid_folder_names = {summary.folder_name for summary in folder_summaries}
-    entries = [entry for entry in entries if entry.folder_name in valid_folder_names]
+    # Ordner robust zuordnen (Unicode/Tippfehler) und fehlende Projektordner ergänzen.
+    # Strikter Exact-Match hat z.B. „Albarracín“ (NFC) vs. macOS-NFD verworfen —
+    # Tabelle startete dann bei order_index 2.
+    valid_folder_names = [summary.folder_name for summary in folder_summaries]
+    entries = _align_entries_to_project_folders(
+        entries, valid_folder_names=valid_folder_names
+    )
 
     plan = DramaturgyPlan(
         project_id=project.id,

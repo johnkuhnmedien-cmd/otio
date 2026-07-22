@@ -255,6 +255,87 @@ def test_build_dramaturgy_plan_filters_hallucinated_folder_names(tmp_path: Path)
     assert folder_names == {"Grand Canyon"}
 
 
+def test_build_dramaturgy_plan_matches_unicode_nfd_folder_names(tmp_path: Path) -> None:
+    """macOS speichert oft NFD (Albarracín); LLM liefert NFC (Albarracín)."""
+    import unicodedata
+
+    folder_nfd = unicodedata.normalize("NFD", "Albarracín")
+    folder_nfc = unicodedata.normalize("NFC", "Albarracín")
+    assert folder_nfd != folder_nfc
+
+    project = _make_project(tmp_path, [folder_nfd, "Rocamadour", "Castle Combe"])
+    response = json.dumps(
+        {
+            "project_title": "Test",
+            "core_promise": "Drei Orte.",
+            "recommended_folder_order": [
+                {
+                    "folder_name": folder_nfc,
+                    "order_index": 1,
+                    "dramaturgy_role": "opener",
+                    "reason": "Start",
+                },
+                {
+                    "folder_name": "Rocamadour",
+                    "order_index": 2,
+                    "dramaturgy_role": "climax",
+                    "reason": "Höhepunkt",
+                },
+                {
+                    "folder_name": "Castle Combe",
+                    "order_index": 3,
+                    "dramaturgy_role": "resolution",
+                    "reason": "Abschluss",
+                },
+            ],
+        }
+    )
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(response),
+    ):
+        result = build_dramaturgy_plan(project, provider="anthropic", model="claude-sonnet-5")
+
+    assert result.status == STATUS_PASS
+    assert result.plan is not None
+    names = [entry.folder_name for entry in result.plan.recommended_folder_order]
+    assert names == [folder_nfd, "Rocamadour", "Castle Combe"]
+    assert [entry.order_index for entry in result.plan.recommended_folder_order] == [1, 2, 3]
+
+
+def test_build_dramaturgy_plan_appends_missing_project_folder(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Albarracín", "Rocamadour", "Castle Combe"])
+    response = json.dumps(
+        {
+            "project_title": "Test",
+            "recommended_folder_order": [
+                {
+                    "folder_name": "Rocamadour",
+                    "order_index": 2,
+                    "dramaturgy_role": "climax",
+                },
+                {
+                    "folder_name": "Castle Combe",
+                    "order_index": 3,
+                    "dramaturgy_role": "resolution",
+                },
+            ],
+        }
+    )
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(response),
+    ):
+        result = build_dramaturgy_plan(project, provider="anthropic", model="claude-sonnet-5")
+
+    assert result.status == STATUS_PASS
+    assert result.plan is not None
+    by_name = {e.folder_name: e for e in result.plan.recommended_folder_order}
+    assert set(by_name) == {"Albarracín", "Rocamadour", "Castle Combe"}
+    assert [e.order_index for e in result.plan.recommended_folder_order] == [1, 2, 3]
+    assert "Automatisch ergänzt" in by_name["Albarracín"].reason
+
+
 def test_build_dramaturgy_plan_invalid_json_does_not_overwrite_existing_draft(
     tmp_path: Path,
 ) -> None:
