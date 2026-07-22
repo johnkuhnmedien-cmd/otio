@@ -1427,14 +1427,34 @@ def _render_section_final(project) -> None:
         chapter_count=final_chapters,
     )
     st.caption(
-        f"Lauf 3 läuft sequenziell: **ein LLM-Call pro Kapitel** "
-        f"({final_chapters} Kapitel), danach Python-Auflösung."
+        f"Lauf 3 und Python-Auflösung sind getrennt: "
+        f"LLM-Lauf 3 = **ein Call pro Kapitel** ({final_chapters} Kapitel) → "
+        f"`final_cut_plan.json`. Python-Finalisierung liest diesen Plan und "
+        f"schreibt `resolved_timeline.json`."
     )
-    if st.button(
-        "LLM-Lauf 3 + Python-Finalisierung",
-        type="primary",
-        key="enh_final_cut",
-    ):
+
+    col_llm, col_py = st.columns(2)
+    with col_llm:
+        run_llm3 = st.button(
+            "LLM-Lauf 3 starten",
+            type="primary",
+            key="enh_final_cut_llm",
+            help="Nur Final Cut Plan erzeugen/überschreiben. Keine Timeline-Auflösung.",
+        )
+    with col_py:
+        existing_final = load_model(final_cut_plan_path(project), FinalCutPlanDocument)
+        run_python = st.button(
+            "Python-Finalisierung starten",
+            key="enh_final_cut_python",
+            disabled=existing_final is None,
+            help=(
+                "Technische Auflösung aus vorhandenem final_cut_plan.json."
+                if existing_final is not None
+                else "Zuerst LLM-Lauf 3 ausführen (final_cut_plan.json fehlt)."
+            ),
+        )
+
+    if run_llm3:
         try:
             progress = st.empty()
 
@@ -1456,21 +1476,38 @@ def _render_section_final(project) -> None:
             ok = [r for r in results if r.status == "PASS"]
             fail = [r for r in results if r.status != "PASS"]
             st.success(
-                f"{len(ok)}/{len(results)} Kapitel · {len(final.shots)} finale Shots."
+                f"LLM-Lauf 3 fertig: {len(ok)}/{len(results)} Kapitel · "
+                f"{len(final.shots)} finale Shots. "
+                "Als Nächstes „Python-Finalisierung starten“."
             )
             for result in fail:
                 st.error(f"„{result.folder_name}“: {result.error}")
-            with st.spinner("Technische Auflösung…"):
+            st.rerun()
+        except CutPlanError as exc:
+            st.error(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Fehler: {exc}")
+
+    if run_python:
+        try:
+            with st.spinner("Technische Auflösung (Python)…"):
                 resolved = resolve_final_timeline(project)
             st.success(
-                f"Timeline {resolved.total_duration_seconds:.2f}s · "
-                f"{len(resolved.shots)} Shots · Reparaturen: {len(resolved.repairs)}"
+                f"Python-Finalisierung: Timeline {resolved.total_duration_seconds:.2f}s · "
+                f"{len(resolved.shots)} Shots · Reparaturen: {len(resolved.repairs)} · "
+                f"Fehler: {len(resolved.errors)}"
             )
             if resolved.repairs:
-                for repair in resolved.repairs:
-                    st.caption(repair)
+                with st.expander("Reparaturen", expanded=False):
+                    for repair in resolved.repairs:
+                        st.caption(repair)
+            if resolved.errors:
+                st.warning(
+                    f"{len(resolved.errors)} Resolve-Fehler — "
+                    "Produktions-OTIO bleibt gesperrt, bis sie behoben sind."
+                )
             st.rerun()
-        except (CutPlanError, TimelineResolveError) as exc:
+        except TimelineResolveError as exc:
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
             st.error(f"Fehler: {exc}")
