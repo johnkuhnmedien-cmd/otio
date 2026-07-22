@@ -479,6 +479,16 @@ def _persist_export_ready(
         gap = next((g for g in coverage.gaps if g.gap_id == gap_id), None)
     if gap is not None:
         folder = _folder_for_gap(project, gap, locked)
+        from otio_app.services.without_voiceover_enhanced.supplement_clean_media import (
+            ensure_new_supplement_clean_media,
+        )
+
+        cleaned = ensure_new_supplement_clean_media(
+            project, folder_name=folder, media_path=media_path
+        )
+        media_path = cleaned
+        record.local_media_path = str(media_path)
+        candidate.local_media_path = str(media_path)
         # Keine Validierungsframes im Auto-Funnel — Inventar ohne Framepfade.
         _import_into_inventory(
             project,

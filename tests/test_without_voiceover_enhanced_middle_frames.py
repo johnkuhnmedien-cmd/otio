@@ -113,7 +113,8 @@ def test_local_assets_payload_includes_middle_frame_when_enabled(
     write_json(get_folder_inventory_path(project.work_dir_path, "Canyon"), inventory)
 
     plain = _local_assets_payload(project, folder_name="Canyon")
-    assert "description" not in plain[0]
+    # Beschreibungen immer (für Shot-Länge/Passung); Mittel-Frames nur bei Vision.
+    assert plain[0].get("description") == "Red canyon walls, wide shot"
     assert "middle_frame_path" not in plain[0]
 
     rich = _local_assets_payload(

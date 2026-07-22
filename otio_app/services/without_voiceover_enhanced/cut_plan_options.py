@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -12,7 +12,6 @@ from otio_app.defaults import (
     CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT,
     CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT_SIZE,
     CUT_PLAN_DEFAULT_MAX_ASSET_USAGE,
-    CUT_PLAN_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS,
     CUT_PLAN_DEFAULT_SHOT_MAX_SEC,
     CUT_PLAN_DEFAULT_SHOT_MIN_SEC,
     CUT_PLAN_DEFAULT_VIDEO_HEAD_TRIM_SEC,
@@ -28,10 +27,19 @@ from otio_app.services.without_voiceover_enhanced.paths import cut_plan_options_
 
 # Soft cap: zu viele JPEGs pro Kapitel-Call sprengen Kontext/Kosten.
 DEFAULT_MAX_MIDDLE_FRAMES_PER_CHAPTER = 40
-
-
 DEFAULT_MAX_CANDIDATES_PER_GAP = 20
 DEFAULT_MAX_FULL_DOWNLOAD_ATTEMPTS_PER_GAP = 3
+
+# Enhanced-spezifische Defaults (Reuse-Gap bewusst 4, nicht Classic-0).
+ENHANCED_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS = 4
+ENHANCED_DEFAULT_VOICEOVER_PREROLL_SEC = 1.0
+ENHANCED_DEFAULT_VOICEOVER_POSTROLL_SEC = 5.0
+ENHANCED_DEFAULT_SHORT_ASSET_TOLERANCE_SEC = 1.0
+
+TIMING_MODE_FIXED = "fixed"
+TIMING_MODE_LLM = "llm"
+TimingMode = Literal["fixed", "llm"]
+TIMING_MODE_CHOICES: tuple[str, ...] = (TIMING_MODE_FIXED, TIMING_MODE_LLM)
 
 STILL_BACKGROUND_CHOICES = (
     STILL_BACKGROUND_VINTAGE,
@@ -40,15 +48,13 @@ STILL_BACKGROUND_CHOICES = (
 
 
 class CutPlanOptions(BaseModel):
-    schema_version: str = "1.1"
-    # Default aus: bisheriges Text-only Verhalten von LLM-Lauf 2.
+    schema_version: str = "1.2"
     include_middle_frames: bool = False
     max_middle_frames_per_chapter: int = Field(
         default=DEFAULT_MAX_MIDDLE_FRAMES_PER_CHAPTER,
         ge=1,
         le=200,
     )
-    # Supplement-Funnel: Top-N Kandidaten pro Gap (Text + Thumbnail).
     max_candidates_per_gap: int = Field(
         default=DEFAULT_MAX_CANDIDATES_PER_GAP,
         ge=1,
@@ -60,7 +66,6 @@ class CutPlanOptions(BaseModel):
         le=3,
     )
 
-    # Shot / Asset (LLM 2+3 + Python-Resolver)
     shot_min_sec: float = Field(default=CUT_PLAN_DEFAULT_SHOT_MIN_SEC, ge=0.4, le=60.0)
     shot_max_sec: float = Field(default=CUT_PLAN_DEFAULT_SHOT_MAX_SEC, ge=0.4, le=120.0)
     video_head_trim_sec: float = Field(
@@ -68,10 +73,24 @@ class CutPlanOptions(BaseModel):
     )
     max_asset_usage: int = Field(default=CUT_PLAN_DEFAULT_MAX_ASSET_USAGE, ge=1, le=50)
     min_asset_reuse_distance_shots: int = Field(
-        default=CUT_PLAN_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS, ge=0, le=100
+        default=ENHANCED_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS, ge=0, le=100
     )
 
-    # Ordner-Titel (nur Python/OTIO — LLM ignoriert)
+    # Vorlauf: Bild vor Voice-over (Intro ausgenommen).
+    voiceover_preroll_sec: float = Field(
+        default=ENHANCED_DEFAULT_VOICEOVER_PREROLL_SEC, ge=0.0, le=30.0
+    )
+    voiceover_preroll_mode: TimingMode = TIMING_MODE_FIXED
+    # Nachlauf: letzter Shot nach Voice-over-Ende.
+    voiceover_postroll_sec: float = Field(
+        default=ENHANCED_DEFAULT_VOICEOVER_POSTROLL_SEC, ge=0.0, le=60.0
+    )
+    voiceover_postroll_mode: TimingMode = TIMING_MODE_FIXED
+    # Asset darf bis zu dieser Unterlänge trotzdem genutzt werden.
+    short_asset_tolerance_sec: float = Field(
+        default=ENHANCED_DEFAULT_SHORT_ASSET_TOLERANCE_SEC, ge=0.0, le=30.0
+    )
+
     folder_title_enabled: bool = CUT_PLAN_DEFAULT_FOLDER_TITLE_ENABLED
     folder_title_font: str = CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT
     folder_title_duration_sec: float = Field(
@@ -81,7 +100,6 @@ class CutPlanOptions(BaseModel):
         default=CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT_SIZE, ge=0.0, le=400.0
     )
 
-    # Still-Bilder beim OTIO-Export (nur Python)
     still_image_style_enabled: bool = True
     still_image_zoom: float = Field(default=DEFAULT_STILL_IMAGE_ZOOM, ge=0.05, le=1.0)
     still_image_background_style: str = STILL_BACKGROUND_VINTAGE
@@ -105,6 +123,11 @@ def _clamp_int(value: Any, *, default: int, lo: int, hi: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(lo, min(hi, number))
+
+
+def _normalize_mode(value: Any, *, default: str) -> str:
+    text = str(value or default).strip().lower()
+    return text if text in TIMING_MODE_CHOICES else default
 
 
 def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
@@ -186,6 +209,32 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
             lo=0,
             hi=100,
         ),
+        voiceover_preroll_sec=_clamp_float(
+            raw.get("voiceover_preroll_sec", defaults.voiceover_preroll_sec),
+            default=defaults.voiceover_preroll_sec,
+            lo=0.0,
+            hi=30.0,
+        ),
+        voiceover_preroll_mode=_normalize_mode(  # type: ignore[arg-type]
+            raw.get("voiceover_preroll_mode", defaults.voiceover_preroll_mode),
+            default=defaults.voiceover_preroll_mode,
+        ),
+        voiceover_postroll_sec=_clamp_float(
+            raw.get("voiceover_postroll_sec", defaults.voiceover_postroll_sec),
+            default=defaults.voiceover_postroll_sec,
+            lo=0.0,
+            hi=60.0,
+        ),
+        voiceover_postroll_mode=_normalize_mode(  # type: ignore[arg-type]
+            raw.get("voiceover_postroll_mode", defaults.voiceover_postroll_mode),
+            default=defaults.voiceover_postroll_mode,
+        ),
+        short_asset_tolerance_sec=_clamp_float(
+            raw.get("short_asset_tolerance_sec", defaults.short_asset_tolerance_sec),
+            default=defaults.short_asset_tolerance_sec,
+            lo=0.0,
+            hi=30.0,
+        ),
         folder_title_enabled=bool(
             raw.get("folder_title_enabled", defaults.folder_title_enabled)
         ),
@@ -234,7 +283,6 @@ def load_cut_plan_options(project: Project) -> CutPlanOptions:
         except (OSError, UnicodeError, json.JSONDecodeError):
             pass
         return default_cut_plan_options()
-    # Normalize edge cases (max < min) even for valid pydantic loads.
     if loaded.shot_max_sec < loaded.shot_min_sec:
         return loaded.model_copy(update={"shot_max_sec": loaded.shot_min_sec})
     return loaded
@@ -249,14 +297,54 @@ def save_cut_plan_options(project: Project, options: CutPlanOptions) -> CutPlanO
 
 def format_shot_constraints_for_prompt(options: CutPlanOptions) -> str:
     """Gemeinsamer Prompt-Block für LLM-Lauf 2 und 3."""
+    preroll_rule = (
+        f"- Voice-over preroll mode=llm: choose voiceover_preroll_sec in "
+        f"[0, {options.voiceover_preroll_sec:.1f}] (picture before non-intro VO)."
+        if options.voiceover_preroll_mode == TIMING_MODE_LLM
+        else (
+            f"- Voice-over preroll is fixed at {options.voiceover_preroll_sec:.1f}s "
+            "(Python applies; do not exceed asset length)."
+        )
+    )
+    postroll_rule = (
+        f"- Voice-over postroll mode=llm: choose voiceover_postroll_sec in "
+        f"[0, {options.voiceover_postroll_sec:.1f}] (last shot may continue after VO)."
+        if options.voiceover_postroll_mode == TIMING_MODE_LLM
+        else (
+            f"- Voice-over postroll is fixed at {options.voiceover_postroll_sec:.1f}s "
+            "(Python applies to the last shot)."
+        )
+    )
     return f"""
 SHOT / ASSET CONSTRAINTS (PROJECT SETTINGS — BINDING):
 
 - Aim for each visual shot to cover roughly {options.shot_min_sec:.1f}s–{options.shot_max_sec:.1f}s of narration time.
 - Do not plan a single shot longer than {options.shot_max_sec:.1f}s; split long spans into multiple shots.
+- Each LOCAL ASSET / SUPPLEMENT entry includes duration_seconds and description — use both.
 - Prefer assets whose duration_seconds (when known) is >= the intended shot span.
-- If no suitable asset is long enough or fits editorially, create a coverage_gap (rough cut) or choose a shorter span / different asset (final cut).
+- Short-asset tolerance: an asset may be up to {options.short_asset_tolerance_sec:.1f}s shorter than the planned shot. Within that tolerance you may keep the asset; beyond it choose another asset or shorten the span / emit a coverage_gap (rough).
+{preroll_rule}
+{postroll_rule}
 - Do not use the same non-intro asset more than {options.max_asset_usage} times across the whole film.
 - Intro assets do not count toward max asset usage.
-- When reusing a non-intro asset, prefer at least {options.min_asset_reuse_distance_shots} other shots in between.
+- Asset reuse gap: when reusing a non-intro asset, leave at least {options.min_asset_reuse_distance_shots} other shots in between (default target: 4).
+- Keep Intro chapter coverage complete — do not drop Intro visuals/audio.
 """
+
+
+def resolve_timing_seconds(
+    *,
+    mode: str,
+    setting_max: float,
+    llm_value: float | None,
+) -> float:
+    """Fester Wert oder LLM-Wert (auf Setting-Max geklemmt)."""
+    ceiling = max(0.0, float(setting_max))
+    if mode == TIMING_MODE_LLM:
+        if llm_value is None:
+            return ceiling
+        try:
+            return max(0.0, min(ceiling, float(llm_value)))
+        except (TypeError, ValueError):
+            return ceiling
+    return ceiling

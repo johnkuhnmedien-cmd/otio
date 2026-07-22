@@ -152,6 +152,7 @@ def _local_assets_payload(
                     duration = probe_duration_seconds(path)
                 except Exception:  # noqa: BLE001
                     duration = None
+            description = str(getattr(asset, "description", "") or "").strip()
             entry: dict[str, Any] = {
                 "local_asset_id": asset_id,
                 "asset_id": asset_id,
@@ -159,12 +160,11 @@ def _local_assets_payload(
                 "path": str(path),
                 "duration_seconds": duration,
                 "media_type": getattr(asset, "media_type", None),
+                "description": description,
             }
             if include_middle_frames:
-                description = str(getattr(asset, "description", "") or "").strip()
                 frames_used = list(getattr(asset, "frames_used", None) or [])
                 middle = select_middle_frame_path(frames_used)
-                entry["description"] = description
                 entry["middle_frame_path"] = str(middle) if middle is not None else None
                 entry["has_middle_frame"] = middle is not None
             assets.append(entry)
@@ -244,10 +244,26 @@ def list_cut_plan_chapter_names(
             for entry in entries
             if segments_for_folder(locked, entry.folder_name)
         ]
-        if names:
-            return names
-    grouped = group_segments_by_folder(locked)
-    names = [name for name, segs in grouped if name and segs]
+    else:
+        names = []
+    if not names:
+        grouped = group_segments_by_folder(locked)
+        names = [name for name, segs in grouped if name and segs]
+    # Intro mit Segmenten immer vorne einplanen (auch wenn Dramaturgie es ausließ).
+    def _is_intro_name(name: str) -> bool:
+        slug = (name or "").strip().lower()
+        return slug in {"intro", "introduction"} or slug.startswith("intro_")
+
+    intro_names = [
+        name
+        for name, segs in group_segments_by_folder(locked)
+        if name and segs and _is_intro_name(name)
+    ]
+    for intro_name in reversed(intro_names):
+        if intro_name in names:
+            names = [intro_name] + [n for n in names if n != intro_name]
+        else:
+            names = [intro_name] + names
     if names:
         return names
     # Legacy: Skript ohne Ordner-Zuordnung → ein Gesamtlauf.
@@ -1233,7 +1249,21 @@ def parse_final_cut_response(raw: str | dict[str, Any], script_version: str) -> 
         )
     if not shots:
         raise CutPlanError("Finaler Plan enthält keine Shots.")
-    return FinalCutPlanDocument(script_version=script_version, shots=shots)
+
+    def _optional_float(key: str) -> float | None:
+        if key not in payload or payload.get(key) is None:
+            return None
+        try:
+            return float(payload.get(key))
+        except (TypeError, ValueError):
+            return None
+
+    return FinalCutPlanDocument(
+        script_version=script_version,
+        shots=shots,
+        voiceover_preroll_sec=_optional_float("voiceover_preroll_sec"),
+        voiceover_postroll_sec=_optional_float("voiceover_postroll_sec"),
+    )
 
 
 def generate_final_cut_for_folder(
@@ -1291,11 +1321,27 @@ def generate_final_cut_for_folder(
             local_assets = _local_assets_payload(project, folder_name=assets_folder)
 
         export_ready = list_export_ready_supplements(project)
+        supplement_rows = []
+        for supplement in export_ready:
+            row = supplement.model_dump(mode="json")
+            row["description"] = (
+                (supplement.title or "").strip()
+                or (supplement.attribution or "").strip()
+                or supplement.candidate_id
+            )
+            if supplement.duration_seconds is None and supplement.local_media_path:
+                try:
+                    row["duration_seconds"] = probe_duration_seconds(
+                        Path(supplement.local_media_path)
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            supplement_rows.append(row)
         accepted_json = json.dumps(
             {
                 "schema_version": "enhanced-accepted-supplements-v1",
                 "script_version": locked.script_version,
-                "supplements": [s.model_dump(mode="json") for s in export_ready],
+                "supplements": supplement_rows,
             },
             ensure_ascii=False,
             indent=2,
@@ -1398,10 +1444,21 @@ def merge_and_persist_final_cuts(
         details = "; ".join(f"{r.folder_name}: {r.error}" for r in fail) or "unbekannt"
         raise CutPlanError(f"LLM-Lauf 3 fehlgeschlagen für alle Kapitel. {details}")
     shots: list[FinalShot] = []
+    preroll: float | None = None
+    postroll: float | None = None
     for result in ok:
         assert result.final is not None
         shots.extend(result.final.shots)
-    final = FinalCutPlanDocument(script_version=locked.script_version, shots=shots)
+        if preroll is None and result.final.voiceover_preroll_sec is not None:
+            preroll = result.final.voiceover_preroll_sec
+        if result.final.voiceover_postroll_sec is not None:
+            postroll = result.final.voiceover_postroll_sec
+    final = FinalCutPlanDocument(
+        script_version=locked.script_version,
+        shots=shots,
+        voiceover_preroll_sec=preroll,
+        voiceover_postroll_sec=postroll,
+    )
     write_json(final_cut_plan_path(project), final)
     return final
 

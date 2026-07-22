@@ -587,6 +587,8 @@ one-sentence-one-asset grid for the whole film.
 
 OUTPUT JSON:
 {{
+  "voiceover_preroll_sec": 1.0,
+  "voiceover_postroll_sec": 3.0,
   "shots": [
     {{
       "shot_id": "shot_019",
@@ -601,6 +603,10 @@ OUTPUT JSON:
     }}
   ]
 }}
+
+Include voiceover_preroll_sec / voiceover_postroll_sec when the project settings
+ask the LLM to decide (see SHOT / ASSET CONSTRAINTS). Otherwise omit them or
+mirror the fixed setting values. Always keep Intro coverage complete.
 
 LOCKED SCRIPT:
 {locked_script_json}

@@ -243,14 +243,21 @@ def assign_local_file_to_open_gap(
         funnel_managed=True,
         license_metadata_status="missing",
     )
-    _upsert_accepted(project, candidate)
-
     folder = _folder_for_gap(project, gap, locked)
+    from otio_app.services.without_voiceover_enhanced.supplement_clean_media import (
+        ensure_new_supplement_clean_media,
+    )
+
+    cleaned = ensure_new_supplement_clean_media(
+        project, folder_name=folder, media_path=target
+    )
+    candidate.local_media_path = str(cleaned)
+    _upsert_accepted(project, candidate)
     _import_into_inventory(
         project,
         folder_name=folder,
         candidate=candidate,
-        media_path=target,
+        media_path=cleaned,
         frames=[],
         description=description,
         validation_status="PASS",

@@ -393,6 +393,9 @@ class FinalCutPlanDocument(BaseModel):
     schema_version: str = "enhanced-final-cut-v1"
     script_version: str
     shots: list[FinalShot] = Field(default_factory=list)
+    # Optional LLM choices (only used when settings mode=llm).
+    voiceover_preroll_sec: Optional[float] = None
+    voiceover_postroll_sec: Optional[float] = None
 
 
 class ResolvedShot(BaseModel):
@@ -421,6 +424,8 @@ class ResolvedTimelineDocument(BaseModel):
     total_duration_seconds: float
     audio_segments: list[ResolvedAudioSegment] = Field(default_factory=list)
     shots: list[ResolvedShot] = Field(default_factory=list)
+    voiceover_preroll_sec: float = 0.0
+    voiceover_postroll_sec: float = 0.0
     repairs: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
 

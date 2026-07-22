@@ -9,6 +9,7 @@ import opentimelineio as otio
 from otio_app.models import Project
 from otio_app.services.generic_outro_selector import asset_id_for_path
 from otio_app.services.inventory_loader import load_folder_inventory
+from otio_app.services.clean_media import resolve_effective_media_path
 from otio_app.services.still_image_export_style import ensure_styled_still_for_export
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     load_cut_plan_options,
@@ -65,10 +66,37 @@ def _media_ref_for_asset(project: Project, asset_id: str) -> tuple[str, str]:
                 continue
             current_id = getattr(asset, "asset_id", None) or asset_id_for_path(str(path))
             if str(current_id) == asset_id:
+                effective = resolve_effective_media_path(
+                    project, folder, Path(str(path))
+                )
                 local = _assert_local_media_reference(
-                    str(path), label=f"Asset {asset_id}"
+                    str(effective), label=f"Asset {asset_id}"
                 )
                 return local, folder
+
+    def _supplement_ref(local_path: str) -> tuple[str, str]:
+        source = Path(local_path)
+        folder = (
+            project.selected_asset_subdirs[0]
+            if project.selected_asset_subdirs
+            else "_supplemental"
+        )
+        for candidate_folder in list(project.selected_asset_subdirs) or [folder]:
+            try:
+                effective = resolve_effective_media_path(
+                    project, candidate_folder, source
+                )
+            except Exception:  # noqa: BLE001
+                effective = source
+            if effective.is_file():
+                local = _assert_local_media_reference(
+                    str(effective), label=f"Supplement {asset_id}"
+                )
+                return local, candidate_folder
+        local = _assert_local_media_reference(
+            local_path, label=f"Supplement {asset_id}"
+        )
+        return local, folder
 
     accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     if accepted is not None:
@@ -79,18 +107,11 @@ def _media_ref_for_asset(project: Project, asset_id: str) -> tuple[str, str]:
                 local_path = require_export_ready_local_path(supplement)
             except Exception as exc:  # LocalMediaError
                 raise EnhancedOtioExportError(str(exc)) from exc
-            local = _assert_local_media_reference(
-                local_path, label=f"Supplement {asset_id}"
-            )
-            return local, "_supplemental"
+            return _supplement_ref(local_path)
 
     for supplement in list_export_ready_supplements(project):
         if supplement.candidate_id == asset_id:
-            local = _assert_local_media_reference(
-                str(supplement.local_media_path),
-                label=f"Supplement {asset_id}",
-            )
-            return local, "_supplemental"
+            return _supplement_ref(str(supplement.local_media_path))
 
     raise EnhancedOtioExportError(
         f"Supplement {asset_id} besitzt keine validierte lokale Mediendatei. "

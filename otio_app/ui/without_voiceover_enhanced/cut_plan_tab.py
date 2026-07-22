@@ -27,10 +27,13 @@ from otio_app.services.voiceover_generation.model_settings_service import (
 from otio_app.services.voiceover_generation.models import LlmRoleSettings
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     STILL_BACKGROUND_CHOICES,
+    TIMING_MODE_CHOICES,
+    TIMING_MODE_FIXED,
+    TIMING_MODE_LLM,
     CutPlanOptions,
     load_cut_plan_options,
     save_cut_plan_options,
-)
+)  # TIMING_MODE_* used in settings UI labels/defaults
 from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     CutPlanError,
     accept_supplement_candidates,
@@ -445,9 +448,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
     current = load_cut_plan_options(project)
     with st.expander("Cut Plan Settings", expanded=False):
         st.caption(
-            "Shot/Usage → LLM 2+3 und Python-Resolver. "
-            "Head-Trim → nur Python. "
-            "Titel + Still-Look → nur OTIO-Export (Titel-Einblendung folgt)."
+            "Shot/Usage/Reuse/Vorlauf/Nachlauf/Toleranz → LLM 2+3 + Python. "
+            "Head-Trim → nur Python. Titel + Still → OTIO (Titel-Einblendung folgt)."
         )
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -477,6 +479,15 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 key=f"enh_opt_head_trim_{project.id}",
                 help="Nur Video — Anfang der Source-Range wird übersprungen.",
             )
+            short_asset_tolerance_sec = st.number_input(
+                "Toleranz Asset zu kurz (s)",
+                min_value=0.0,
+                max_value=30.0,
+                value=float(current.short_asset_tolerance_sec),
+                step=0.5,
+                key=f"enh_opt_short_tol_{project.id}",
+                help="Innerhalb dieser Unterlänge: Shot kürzen statt hart failen.",
+            )
         with col2:
             max_asset_usage = st.number_input(
                 "Max Asset Usage (Intro zählt nicht)",
@@ -487,13 +498,13 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 key=f"enh_opt_max_usage_{project.id}",
             )
             min_asset_reuse_distance_shots = st.number_input(
-                "Min. Wiederverwendungsabstand (Shots)",
+                "Asset-Reuse-Abstand (Shots)",
                 min_value=0,
                 max_value=100,
                 value=int(current.min_asset_reuse_distance_shots),
                 step=1,
                 key=f"enh_opt_reuse_distance_{project.id}",
-                help="Unterschreitung → Hinweis im Resolve (kein harter Block).",
+                help="Standard 4. Geht an LLM; Unterschreitung → Resolve-Hinweis.",
             )
             include_middle_frames = st.checkbox(
                 "Mittel-Frames an LLM 2 (Vision)",
@@ -525,6 +536,54 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 value=int(current.max_full_download_attempts_per_gap),
                 step=1,
                 key=f"enh_opt_funnel_dl_{project.id}",
+            )
+
+        st.markdown("##### Voice-over Vorlauf / Nachlauf")
+        mode_labels = {
+            TIMING_MODE_FIXED: "Fest",
+            TIMING_MODE_LLM: "LLM entscheidet (0…Max)",
+        }
+        v1, v2, v3, v4 = st.columns(4)
+        with v1:
+            voiceover_preroll_sec = st.number_input(
+                "Vorlauf Max/Fest (s)",
+                min_value=0.0,
+                max_value=30.0,
+                value=float(current.voiceover_preroll_sec),
+                step=0.5,
+                key=f"enh_opt_preroll_{project.id}",
+                help="Bild vor non-Intro-Voice-over. Intro bleibt unverschoben.",
+            )
+        with v2:
+            preroll_modes = list(TIMING_MODE_CHOICES)
+            voiceover_preroll_mode = st.selectbox(
+                "Vorlauf-Modus",
+                options=preroll_modes,
+                index=preroll_modes.index(current.voiceover_preroll_mode)
+                if current.voiceover_preroll_mode in preroll_modes
+                else 0,
+                format_func=lambda m: mode_labels.get(m, m),
+                key=f"enh_opt_preroll_mode_{project.id}",
+            )
+        with v3:
+            voiceover_postroll_sec = st.number_input(
+                "Nachlauf Max/Fest (s)",
+                min_value=0.0,
+                max_value=60.0,
+                value=float(current.voiceover_postroll_sec),
+                step=0.5,
+                key=f"enh_opt_postroll_{project.id}",
+            )
+        with v4:
+            postroll_modes = list(TIMING_MODE_CHOICES)
+            voiceover_postroll_mode = st.selectbox(
+                "Nachlauf-Modus",
+                options=postroll_modes,
+                index=postroll_modes.index(current.voiceover_postroll_mode)
+                if current.voiceover_postroll_mode in postroll_modes
+                else 0,
+                format_func=lambda m: mode_labels.get(m, m),
+                key=f"enh_opt_postroll_mode_{project.id}",
             )
 
         st.markdown("##### Ordner-Titel (OTIO)")
@@ -608,6 +667,11 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             video_head_trim_sec=float(video_head_trim_sec),
             max_asset_usage=int(max_asset_usage),
             min_asset_reuse_distance_shots=int(min_asset_reuse_distance_shots),
+            voiceover_preroll_sec=float(voiceover_preroll_sec),
+            voiceover_preroll_mode=str(voiceover_preroll_mode),  # type: ignore[arg-type]
+            voiceover_postroll_sec=float(voiceover_postroll_sec),
+            voiceover_postroll_mode=str(voiceover_postroll_mode),  # type: ignore[arg-type]
+            short_asset_tolerance_sec=float(short_asset_tolerance_sec),
             folder_title_enabled=bool(folder_title_enabled),
             folder_title_font=str(folder_title_font or current.folder_title_font),
             folder_title_duration_sec=float(folder_title_duration_sec),
@@ -624,7 +688,9 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             saved = save_cut_plan_options(project, draft)
             st.success(
                 f"Gespeichert: shot {saved.shot_min_sec}–{saved.shot_max_sec}s · "
-                f"usage≤{saved.max_asset_usage} · head-trim {saved.video_head_trim_sec}s"
+                f"reuse≥{saved.min_asset_reuse_distance_shots} · "
+                f"preroll {saved.voiceover_preroll_sec}s/{saved.voiceover_preroll_mode} · "
+                f"postroll {saved.voiceover_postroll_sec}s/{saved.voiceover_postroll_mode}"
             )
             st.rerun()
         return current

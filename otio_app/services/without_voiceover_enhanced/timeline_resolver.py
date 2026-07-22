@@ -14,6 +14,7 @@ from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
 )
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     load_cut_plan_options,
+    resolve_timing_seconds,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
@@ -170,8 +171,24 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
         max(editorial_min, float(options.shot_max_sec)),
     )
     head_trim = max(0.0, float(options.video_head_trim_sec))
+    short_tolerance = max(0.0, float(options.short_asset_tolerance_sec))
     known_segments = {s.segment_id for s in locked.segments}
+    intro_segment_ids = {
+        s.segment_id
+        for s in locked.segments
+        if _is_intro_folder(s.folder_name)
+    }
     fps = float(project.fps)
+    preroll = resolve_timing_seconds(
+        mode=options.voiceover_preroll_mode,
+        setting_max=options.voiceover_preroll_sec,
+        llm_value=final.voiceover_preroll_sec,
+    )
+    postroll = resolve_timing_seconds(
+        mode=options.voiceover_postroll_mode,
+        setting_max=options.voiceover_postroll_sec,
+        llm_value=final.voiceover_postroll_sec,
+    )
 
     # One-sentence-one-asset is allowed when editorial; no hard reject.
     # Kept as an optional note for debugging / transparency only.
@@ -265,11 +282,20 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
         )
 
         if media_duration is not None and media_duration < duration:
-            errors.append(
-                f"Asset {shot.asset_id} ist kürzer als gewünschter Shot "
-                f"({media_duration}s < {duration}s)."
-            )
-            continue
+            shortfall = float(duration) - float(media_duration)
+            if shortfall <= short_tolerance + 1e-6:
+                repairs.append(
+                    f"{shot.shot_id}: Asset {shot.asset_id} {shortfall:.2f}s zu kurz "
+                    f"— Toleranz {short_tolerance:.1f}s, Shot auf Mediendauer gekürzt."
+                )
+                end = _seconds_to_frame(start + float(media_duration), fps)
+                duration = end - start
+            else:
+                errors.append(
+                    f"Asset {shot.asset_id} ist kürzer als gewünschter Shot "
+                    f"({media_duration}s < {duration}s; Toleranz {short_tolerance:.1f}s)."
+                )
+                continue
 
         if media_duration is None or media_duration <= 0:
             # Stills / unknown duration: hold for shot length.
@@ -285,12 +311,21 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
                 continue
             usable = float(media_duration) - trim
             if duration > usable + 1e-6:
-                errors.append(
-                    f"Source-Range für {shot.asset_id} würde nutzbare "
-                    f"Mediendauer überschreiten "
-                    f"(shot {duration}s > usable {usable}s nach Head-Trim)."
-                )
-                continue
+                shortfall = duration - usable
+                if shortfall <= short_tolerance + 1e-6:
+                    repairs.append(
+                        f"{shot.shot_id}: nutzbare Dauer knapp "
+                        f"({shortfall:.2f}s) — Toleranz, Shot gekürzt."
+                    )
+                    end = _seconds_to_frame(start + usable, fps)
+                    duration = end - start
+                else:
+                    errors.append(
+                        f"Source-Range für {shot.asset_id} würde nutzbare "
+                        f"Mediendauer überschreiten "
+                        f"(shot {duration}s > usable {usable}s nach Head-Trim)."
+                    )
+                    continue
             source_start = trim + max(0.0, (usable - duration) / 2.0)
             source_end = source_start + duration
             if source_end > float(media_duration) + 1e-6:
@@ -314,6 +349,73 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
 
     # Overlap / gap checks (deterministic, non-silent).
     ordered = sorted(resolved_shots, key=lambda s: (s.timeline_start_seconds, s.shot_id))
+
+    # Vorlauf: non-Intro-VO später; erster non-Intro-Shot beginnt früher (Bild vor Ton).
+    if preroll > 0 and ordered:
+        shot_start_segments = {
+            shot.shot_id: next(
+                (
+                    s.narration_start_anchor.segment_id
+                    for s in final.shots
+                    if s.shot_id == shot.shot_id
+                ),
+                "",
+            )
+            for shot in ordered
+        }
+        for audio in audio_segments:
+            if audio.segment_id in intro_segment_ids:
+                continue
+            audio.timeline_start_seconds = round(
+                audio.timeline_start_seconds + preroll, 6
+            )
+            audio.timeline_end_seconds = round(
+                audio.timeline_end_seconds + preroll, 6
+            )
+        first_main_index: int | None = None
+        for index, shot in enumerate(ordered):
+            seg_id = shot_start_segments.get(shot.shot_id, "")
+            if seg_id in intro_segment_ids:
+                continue
+            shot.timeline_start_seconds = round(
+                shot.timeline_start_seconds + preroll, 6
+            )
+            shot.timeline_end_seconds = round(
+                shot.timeline_end_seconds + preroll, 6
+            )
+            if first_main_index is None:
+                first_main_index = index
+        if first_main_index is not None:
+            first = ordered[first_main_index]
+            first.timeline_start_seconds = round(
+                max(0.0, first.timeline_start_seconds - preroll), 6
+            )
+            hold_duration = first.timeline_end_seconds - first.timeline_start_seconds
+            media_duration = catalog.get(first.asset_id, {}).get("duration_seconds")
+            if media_duration is None or float(media_duration or 0) <= 0:
+                first.source_end_seconds = round(
+                    first.source_start_seconds + hold_duration, 6
+                )
+        repairs.append(
+            f"Voice-over-Vorlauf {preroll:.2f}s angewendet (Intro unverschoben)."
+        )
+
+    # Nachlauf: letzten Shot verlängern (Hold).
+    if postroll > 0 and ordered:
+        last = ordered[-1]
+        last.timeline_end_seconds = round(last.timeline_end_seconds + postroll, 6)
+        hold_duration = last.timeline_end_seconds - last.timeline_start_seconds
+        media_duration = catalog.get(last.asset_id, {}).get("duration_seconds")
+        if media_duration is None or float(media_duration or 0) <= 0:
+            last.source_end_seconds = round(
+                last.source_start_seconds + hold_duration, 6
+            )
+        else:
+            # Video: so weit wie möglich in der Source mitgehen, Rest als Hold-Ende.
+            max_end = float(media_duration)
+            desired_end = last.source_start_seconds + hold_duration
+            last.source_end_seconds = round(min(max_end, desired_end), 6)
+        repairs.append(f"Voice-over-Nachlauf {postroll:.2f}s am letzten Shot.")
     for prev, curr in zip(ordered, ordered[1:]):
         if curr.timeline_start_seconds < prev.timeline_end_seconds - 1e-6:
             if not (prev.may_overlap_pause or curr.may_overlap_pause):
@@ -361,9 +463,14 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
                     )
             last_index[shot.asset_id] = index
 
-    total = timeline.total_duration_seconds
+    total = timeline.total_duration_seconds + preroll + postroll
     if ordered:
         total = max(total, ordered[-1].timeline_end_seconds)
+    if audio_segments:
+        total = max(
+            total,
+            max(a.timeline_end_seconds + a.pause_after_seconds for a in audio_segments),
+        )
 
     document = ResolvedTimelineDocument(
         script_version=locked.script_version,
@@ -371,6 +478,8 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
         total_duration_seconds=round(total, 6),
         audio_segments=audio_segments,
         shots=ordered,
+        voiceover_preroll_sec=round(preroll, 6),
+        voiceover_postroll_sec=round(postroll, 6),
         repairs=repairs,
         errors=errors,
     )
