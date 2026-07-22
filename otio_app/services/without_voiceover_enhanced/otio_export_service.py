@@ -106,12 +106,19 @@ def export_otio_from_resolved_timeline(
     project: Project,
     *,
     basename: str = "enhanced_timeline",
+    allow_errors: bool = False,
 ) -> Path:
+    """Exportiert die aufgelöste Timeline als OTIO.
+
+    ``allow_errors=True`` ist ein Test-/Preview-Modus: vorhandene Resolve-Fehler
+    blockieren nicht. Fehlende/ungültige Shots bleiben als OTIO-Gaps sichtbar.
+    Produktions-Export bleibt fail-closed (``allow_errors=False``).
+    """
     assert_enhanced_work_root(project)
     resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
     if resolved is None:
         raise EnhancedOtioExportError("Aufgelöste Timeline fehlt — kein OTIO-Export.")
-    if resolved.errors:
+    if resolved.errors and not allow_errors:
         raise EnhancedOtioExportError(
             "Aufgelöste Timeline enthält Fehler: " + "; ".join(resolved.errors)
         )

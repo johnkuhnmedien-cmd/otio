@@ -505,3 +505,95 @@ def test_invalid_config_falls_back_to_defaults(tmp_path: Path) -> None:
     path.write_text("{not-json", encoding="utf-8")
     config = load_stock_providers_config(project)
     assert all(config.providers[n].enabled for n in SUPPORTED_STOCK_PROVIDERS)
+
+
+def test_otio_allow_errors_exports_partial_timeline_with_gaps(tmp_path: Path) -> None:
+    """Test-Export trotz Resolve-Fehler: aufgelöste Shots bleiben, Lücken als Gaps."""
+    from PIL import Image
+
+    project = _enhanced_project(tmp_path)
+    _lock_minimal(project)
+    local = project.work_dir_path / "clip.jpg"
+    Image.new("RGB", (16, 16), color=(10, 20, 30)).save(local, format="JPEG")
+    write_json(
+        accepted_supplements_path(project),
+        {
+            "schema_version": "enhanced-accepted-supplements-v1",
+            "script_version": "script-v1",
+            "supplements": [
+                {
+                    "candidate_id": "stock_ok",
+                    "provider": "manual",
+                    "media_type": "photo",
+                    "selected": True,
+                    "gap_id": "gap_1",
+                    "local_media_path": str(local),
+                    "media_validation_status": "export_ready",
+                    "funnel_managed": True,
+                    "license": "manual_local",
+                    "source_page": str(local),
+                }
+            ],
+        },
+    )
+    write_json(
+        resolved_timeline_path(project),
+        ResolvedTimelineDocument(
+            script_version="script-v1",
+            fps=25.0,
+            total_duration_seconds=10.0,
+            audio_segments=[],
+            shots=[
+                {
+                    "shot_id": "shot_a",
+                    "asset_id": "stock_ok",
+                    "timeline_start_seconds": 0.0,
+                    "timeline_end_seconds": 2.0,
+                    "source_start_seconds": 0.0,
+                    "source_end_seconds": 2.0,
+                },
+                {
+                    "shot_id": "shot_c",
+                    "asset_id": "stock_ok",
+                    "timeline_start_seconds": 6.0,
+                    "timeline_end_seconds": 8.0,
+                    "source_start_seconds": 0.0,
+                    "source_end_seconds": 2.0,
+                },
+            ],
+            repairs=[],
+            errors=[
+                "Asset short_clip ist kürzer als gewünschter Shot (5.0s < 12.0s)."
+            ],
+        ),
+    )
+
+    with pytest.raises(EnhancedOtioExportError, match="enthält Fehler"):
+        export_otio_from_resolved_timeline(project, basename="prod_blocked")
+
+    out = export_otio_from_resolved_timeline(
+        project,
+        basename="preview_gaps",
+        allow_errors=True,
+    )
+    assert out.is_file()
+    payload = out.read_text(encoding="utf-8")
+    assert "shot_a" in payload
+    assert "shot_c" in payload
+    assert "Gap" in payload or "gap" in payload.lower()
+    assert str(local) in payload
+    assert "http://" not in payload
+
+
+def test_ui_test_otio_with_gaps_markers() -> None:
+    cut_src = Path(
+        "otio_app/ui/without_voiceover_enhanced/cut_plan_tab.py"
+    ).read_text(encoding="utf-8")
+    final_src = Path(
+        "otio_app/ui/without_voiceover_enhanced/final_output_tab.py"
+    ).read_text(encoding="utf-8")
+    assert "Test-OTIO mit Lücken erzeugen" in cut_src
+    assert "allow_errors=True" in cut_src
+    assert "Test-OTIO mit Lücken erzeugen" in final_src
+    assert "allow_errors=True" in final_src
+    assert "disabled=has_errors" in final_src

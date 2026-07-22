@@ -74,6 +74,10 @@ from otio_app.services.without_voiceover_enhanced.models import (
     SupplementFunnelReport,
 )
 from otio_app.ui.without_voiceover_enhanced.timeline_view import render_realtime_timeline
+from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+    EnhancedOtioExportError,
+    export_otio_from_resolved_timeline,
+)
 from otio_app.services.without_voiceover_enhanced.paths import (
     accepted_supplements_path,
     coverage_gaps_path,
@@ -1186,6 +1190,41 @@ def _render_section_final(project) -> None:
                     f"{shot.narration_end_anchor.segment_id}"
                 )
 
+    resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
+    if resolved is not None:
+        st.caption(
+            f"Aufgelöste Timeline: {len(resolved.shots)} Shots · "
+            f"{resolved.total_duration_seconds:.1f}s · "
+            f"Fehler: {len(resolved.errors)}"
+        )
+        if resolved.errors:
+            st.warning(
+                f"{len(resolved.errors)} Resolve-Fehler — "
+                "Produktions-OTIO gesperrt. Test-Export mit Lücken möglich."
+            )
+            with st.expander("Resolve-Fehler", expanded=False):
+                for err in resolved.errors[:40]:
+                    st.write(f"- {err}")
+                if len(resolved.errors) > 40:
+                    st.caption(f"… +{len(resolved.errors) - 40} weitere")
+            if st.button(
+                "Test-OTIO mit Lücken erzeugen",
+                key=f"enh_final_test_otio_gaps_{project.id}",
+                help=(
+                    "Exportiert bereits aufgelöste Shots; fehlende bleiben Gaps. "
+                    "Auch unter ⑧ Final Output."
+                ),
+            ):
+                try:
+                    path = export_otio_from_resolved_timeline(
+                        project,
+                        basename=f"{project.name}_enhanced_preview_gaps",
+                        allow_errors=True,
+                    )
+                    st.success(f"Test-OTIO: `{path}`")
+                except EnhancedOtioExportError as exc:
+                    st.error(str(exc))
+
     show_timeline_key = f"enh_show_timeline_final_{project.id}"
     st.checkbox(
         "Echtzeit-Timeline laden",
@@ -1195,9 +1234,6 @@ def _render_section_final(project) -> None:
         rough = load_model(rough_cut_plan_path(project), RoughCutPlanDocument)
         timeline = load_model(
             narration_timeline_path(project), NarrationTimelineDocument
-        )
-        resolved = load_model(
-            resolved_timeline_path(project), ResolvedTimelineDocument
         )
         render_realtime_timeline(
             narration_timeline=timeline,
