@@ -25,10 +25,8 @@ CUT RHYTHM TARGETS (BINDING STYLE TARGETS — aim for this distribution):
   - ~65% mid_sentence (cut during a spoken sentence, not at its edge)
   - ~25% sentence_boundary (cut at a sentence start/end)
   - ~10% in_pause (cut during an explicit pause)
-- Intra-sentence / between-sentence pauses are usually short (0.3–0.8s class).
-  Occasional longer pauses (1.5–2.5s class) are allowed for emphasis/reveal.
-- Chapter endings: prefer a longer music-only / breath pause (3–8s class) when
-  using pause_function chapter_transition after the last segment.
+- Voice-over pauses are currently DISABLED — keep narration continuous
+  (no extra silence gaps between segments/sentences).
 - Do NOT invent sentence boundaries that are not in SENTENCE TIMINGS.
 """
 
