@@ -696,8 +696,72 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
         return current
 
 
+def _render_inventory_prepare(project) -> None:
+    """Vor Lauf 2: Asset-Dauern messen + Slim-Inventory schreiben."""
+    from otio_app.services.inventory_prepare_service import (
+        inventory_duration_coverage,
+        prepare_inventories_for_cut_plan,
+    )
+
+    st.markdown("##### Inventar für Cut Plan vorbereiten")
+    with_dur, total_video, folders_ok = inventory_duration_coverage(project)
+    if total_video == 0:
+        st.caption(
+            "Noch keine Video-Assets im Inventar — zuerst Ordner analysieren."
+        )
+    elif with_dur >= total_video:
+        st.success(
+            f"Asset-Dauern bereit: {with_dur}/{total_video} Videos in "
+            f"{folders_ok} Kapitel-Inventar(en) · Slim-JSON wird mitgeschrieben."
+        )
+    else:
+        st.warning(
+            f"Asset-Dauern unvollständig: {with_dur}/{total_video} Videos. "
+            "Vor LLM-Lauf 2 bitte Inventar vorbereiten (ffprobe → "
+            "`duration_seconds` + `{folder}.slim.json`)."
+        )
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        prepare = st.button(
+            "Inventar vorbereiten (Dauern + Slim)",
+            key=f"enh_prepare_inventory_{project.id}",
+            help=(
+                "Misst fehlende Video-Dauern per ffprobe, schreibt sie in die "
+                "kanonische inventory/{folder}.json und erzeugt {folder}.slim.json "
+                "für den LLM-Kontext."
+            ),
+        )
+    with col_b:
+        force = st.button(
+            "Dauern neu messen (force)",
+            key=f"enh_prepare_inventory_force_{project.id}",
+            help="Alle Video-Dauern erneut per ffprobe messen und Slim neu schreiben.",
+        )
+    if prepare or force:
+        try:
+            with st.spinner("Inventare: Dauern messen + Slim schreiben…"):
+                report = prepare_inventories_for_cut_plan(
+                    project, force_reprobe=bool(force)
+                )
+            st.success(
+                f"{report.folders_touched} Inventar(e) · "
+                f"{report.durations_newly_measured} neu gemessen · "
+                f"{report.assets_with_duration} Videos mit Dauer · "
+                f"{len(report.slim_files_written)} Slim-Datei(en)."
+            )
+            for err in report.errors[:12]:
+                st.warning(err)
+            if len(report.errors) > 12:
+                st.caption(f"… und {len(report.errors) - 12} weitere Hinweise.")
+            st.rerun()
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Inventar-Vorbereitung fehlgeschlagen: {exc}")
+
+
 def _render_section_rough(project) -> None:
     st.subheader("1. Groben Cut Plan und Pausen erzeugen")
+    _render_inventory_prepare(project)
     rough_tokens, rough_chapters = _estimate_rough_cut_input_tokens(project)
     rough_provider, rough_model, _rough_max = _render_enhanced_cut_model(
         project,

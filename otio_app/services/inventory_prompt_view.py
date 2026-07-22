@@ -25,7 +25,8 @@ __all__ = [
 
 _HINT_DEFAULT = (
     "Nur Assets MIT Beschreibung; Roh/Clean- und Auflösungs-Duplikate "
-    "zusammengeführt. 'dauer_s' wird per ffprobe ergänzt (Bilder: null)."
+    "zusammengeführt. 'dauer_s' kommt aus inventory.duration_seconds "
+    "(ffprobe); Bilder: null."
 )
 
 # z. B. _3840x2160, _1920x1080
@@ -64,9 +65,20 @@ def _media_type_label(path: str, media_type: str | None) -> str:
     return "video"
 
 
-def _probe_dauer_s(path: str, type_label: str) -> float | None:
+def _dauer_s_for_asset(
+    asset: AssetMediaAnalysis,
+    *,
+    type_label: str,
+    probe_duration: bool,
+) -> float | None:
     if type_label != "video":
         return None
+    stored = getattr(asset, "duration_seconds", None)
+    if stored is not None and float(stored) > 0:
+        return round(float(stored), 3)
+    if not probe_duration:
+        return None
+    path = str(asset.path or "")
     try:
         duration = probe_duration_seconds(Path(path))
     except Exception:  # noqa: BLE001
@@ -124,7 +136,9 @@ def build_slim_folder_inventory(
         path = str(asset.path)
         asset_id = (asset.asset_id or "").strip() or asset_id_for_path(path)
         type_label = _media_type_label(path, getattr(asset, "media_type", None))
-        dauer = _probe_dauer_s(path, type_label) if probe_duration else None
+        dauer = _dauer_s_for_asset(
+            asset, type_label=type_label, probe_duration=probe_duration
+        )
         assets_out.append(
             {
                 "id": asset_id,

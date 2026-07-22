@@ -32,9 +32,25 @@ class FolderInventorySyncStatus:
     media_files: int = 0
 
 
+def is_canonical_folder_inventory_path(path: Path) -> bool:
+    """True nur für ``{folder}.json`` — nicht Slim/Delta/Nebenartefakte."""
+    name = path.name
+    if not name.endswith(".json"):
+        return False
+    if name.endswith(".slim.json"):
+        return False
+    if name.endswith(".inventory_delta.json"):
+        return False
+    return True
+
+
 def load_folder_inventory_file(path: Path) -> AssetFolderAnalysis | None:
     """Lädt eine pro-Ordner-Inventar-JSON oder None bei Fehler."""
     if not path.is_file():
+        return None
+    # Slim/Delta niemals als kanonisches Inventar parsen (sonst Validierungs-
+    # fehler → unlink und die Ableitung ist weg).
+    if not is_canonical_folder_inventory_path(path):
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -447,6 +463,8 @@ def load_inventory_document(project: Project) -> InventoryDocument | None:
     inventory_dir = get_inventory_dir(project.work_dir_path)
     if inventory_dir.is_dir():
         for json_path in sorted(inventory_dir.glob("*.json")):
+            if not is_canonical_folder_inventory_path(json_path):
+                continue
             item = load_folder_inventory_file(json_path)
             if item is not None:
                 items.append(item)
@@ -469,7 +487,11 @@ def list_folder_inventory_paths(project: Project) -> list[Path]:
     inventory_dir = get_inventory_dir(project.work_dir_path)
     if not inventory_dir.is_dir():
         return []
-    return sorted(inventory_dir.glob("*.json"))
+    return sorted(
+        path
+        for path in inventory_dir.glob("*.json")
+        if is_canonical_folder_inventory_path(path)
+    )
 
 
 def selected_folders_have_inventory(project: Project) -> bool:
