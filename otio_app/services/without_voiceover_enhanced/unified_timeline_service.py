@@ -79,6 +79,10 @@ from collections import Counter
 class UnifiedTimelineError(RuntimeError):
     """Fehler beim Unified-Timing-Resolver."""
 
+    def __init__(self, message: str, *, errors: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.errors = list(errors or [])
+
 
 POSITION_FRACTION = {
     "start": 0.0,
@@ -411,6 +415,27 @@ def _placeholder_resolved_shot(timed: TimedSlot) -> ResolvedShot:
     )
 
 
+def _mark_slot_as_duration_gap(
+    plan: UnifiedCutPlanDocument,
+    slot_id: str,
+    *,
+    reason: str,
+) -> None:
+    """Slot für Funnel als weak/Gap nachziehen (Coverage-Schatten beim Persist)."""
+    for slot in plan.slots:
+        if slot.slot_id != slot_id:
+            continue
+        if not slot.coverage_gap_id:
+            slot.coverage_gap_id = f"gap_{slot_id}"
+        if str(slot.asset_fit or "") in {"", "strong", "acceptable"}:
+            slot.asset_fit = "weak"
+        note = (reason or "").strip()
+        if note and note not in str(slot.asset_fit_reason or ""):
+            prev = str(slot.asset_fit_reason or "").strip()
+            slot.asset_fit_reason = f"{prev} | {note}".strip(" |")
+        return
+
+
 def resolve_unified_timeline(
     project: Project,
     plan: UnifiedCutPlanDocument | None = None,
@@ -496,7 +521,22 @@ def resolve_unified_timeline(
             continue
         start_chapter = segment_to_chapter.get(timed.start_segment_id, "")
         end_chapter = segment_to_chapter.get(timed.end_segment_id, "")
+        is_bridge = (
+            str(timed.slot_id).startswith("bridge_")
+            or str(timed.narrative_function or "") == "chapter_transition"
+        )
         if start_chapter and end_chapter and start_chapter != end_chapter:
+            if allow_open_gaps and is_bridge:
+                placeholder = _placeholder_resolved_shot(timed)
+                if not placeholder.coverage_gap_id:
+                    placeholder.coverage_gap_id = f"gap_{timed.slot_id}"
+                resolved_shots.append(placeholder)
+                repairs.append(
+                    f"{timed.slot_id}: Kapitelübergang "
+                    f"({start_chapter} → {end_chapter}) — Platzhalter."
+                )
+                _mark_slot_as_duration_gap(plan, timed.slot_id, reason="Kapitelübergang")
+                continue
             errors.append(
                 f"{timed.slot_id}: Start-/Endanker in unterschiedlichen Kapiteln "
                 f"({start_chapter} vs {end_chapter})."
@@ -564,13 +604,33 @@ def resolve_unified_timeline(
                 repairs=repairs,
             )
         except TimelineResolveError as exc:
-            if allow_open_gaps and timed.asset_fit in {"weak", "none"}:
+            msg = str(exc)
+            is_short = "zu kurz" in msg.lower()
+            # Unified Preview: zu kurze strong/acceptable-Assets nicht hart
+            # verwerfen (das erzeugt Folgelücken), sondern als Gap markieren.
+            if allow_open_gaps and (
+                timed.asset_fit in {"weak", "none"} or is_short
+            ):
                 placeholder = _placeholder_resolved_shot(timed)
                 placeholder.asset_id = asset_id
+                if not placeholder.coverage_gap_id:
+                    placeholder.coverage_gap_id = f"gap_{timed.slot_id}"
+                if is_short:
+                    placeholder.asset_fit = "weak"
+                    placeholder.asset_fit_reason = (
+                        "Asset zu kurz für berechnete Narrationsdauer"
+                    )
+                    _mark_slot_as_duration_gap(
+                        plan,
+                        timed.slot_id,
+                        reason="Asset zu kurz für berechnete Narrationsdauer",
+                    )
                 resolved_shots.append(placeholder)
-                repairs.append(str(exc))
+                repairs.append(
+                    f"{timed.slot_id}: als Gap markiert — {msg}"
+                )
                 continue
-            errors.append(str(exc))
+            errors.append(msg)
             continue
 
         resolved.asset_fit = timed.asset_fit
@@ -729,5 +789,5 @@ def resolve_unified_timeline(
         write_json(repair_log_path(project), {"repairs": repairs, "errors": errors})
 
     if errors:
-        raise UnifiedTimelineError("; ".join(errors))
+        raise UnifiedTimelineError("\n".join(errors), errors=errors)
     return document
