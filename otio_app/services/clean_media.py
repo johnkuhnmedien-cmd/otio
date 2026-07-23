@@ -439,6 +439,10 @@ def transcode_to_clean(
             "+genpts",
             "-avoid_negative_ts",
             "make_zero",
+            # Expliziter Start-TC: sonst setzt Resolve manchmal 00:00:00:01
+            # und der erste OTIO-Frame (bei 00:00:00:00) wird schwarz.
+            "-timecode",
+            "00:00:00:00",
             *video_flags,
             str(output_path),
         ])
@@ -486,11 +490,99 @@ def transcode_to_clean(
             )
 
 
-def _trim_tiny_leading_black(path: Path, *, max_trim_seconds: float = 0.12) -> None:
-    """Schneidet sehr kurzes führendes Schwarz nach dem Clean-Encode ab."""
-    leading = probe_leading_black_seconds(path)
-    if leading is None or leading <= 0 or leading > max_trim_seconds:
+def _probe_video_fps(path: Path) -> float | None:
+    try:
+        result = _run_command(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=r_frame_rate",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            timeout_sec=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    raw = (result.stdout or "").strip()
+    if not raw or raw in {"0/0", "N/A"}:
+        return None
+    try:
+        if "/" in raw:
+            num_s, den_s = raw.split("/", 1)
+            num, den = float(num_s), float(den_s)
+            if den <= 0:
+                return None
+            return num / den
+        return float(raw)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+_PBLACK_RE = re.compile(r"pblack:\s*(\d+)", re.IGNORECASE)
+
+
+def _first_frame_is_black(path: Path, *, min_pblack: int = 90) -> bool:
+    """True wenn Frame 0 praktisch schwarz ist (x264-Priming / Clean-Lead-In)."""
+    try:
+        result = _run_command(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-nostdin",
+                "-i",
+                str(path),
+                "-vf",
+                "select=eq(n\\,0),blackframe=amount=90:threshold=24",
+                "-frames:v",
+                "1",
+                "-f",
+                "null",
+                "-",
+            ],
+            timeout_sec=60,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+    text = f"{result.stderr or ''}\n{result.stdout or ''}"
+    match = _PBLACK_RE.search(text)
+    if match is None:
+        return False
+    try:
+        return int(match.group(1)) >= int(min_pblack)
+    except ValueError:
+        return False
+
+
+def _trim_tiny_leading_black(path: Path, *, max_trim_seconds: float = 0.15) -> None:
+    """Schneidet sehr kurzes führendes Schwarz nach dem Clean-Encode ab.
+
+    libx264 erzeugt oft 1 Schwarzframe am Anfang. ``blackdetect`` mit d=0.04
+    verpasst das bei 24fps leicht; daher zusätzlich First-Frame-Check und
+    Re-Encode-Trim (nicht ``-c copy``), damit der Schnitt framegenau ist.
+    """
+    fps = _probe_video_fps(path) or 24.0
+    one_frame = 1.0 / max(1.0, fps)
+    leading = probe_leading_black_seconds(
+        path,
+        min_black_duration=min(0.02, one_frame * 0.5),
+        pixel_threshold=0.12,
+    )
+    if leading is None:
+        leading = 0.0
+    if leading <= 0 and _first_frame_is_black(path):
+        leading = one_frame
+    if leading <= 0 or leading > max_trim_seconds:
         return
+    # Mindestens ein volles Frame trimmen.
+    leading = max(leading, one_frame)
     tmp_path = path.with_suffix(path.suffix + ".trimtmp")
     command = [
         "ffmpeg",
@@ -500,17 +592,35 @@ def _trim_tiny_leading_black(path: Path, *, max_trim_seconds: float = 0.12) -> N
         "-loglevel",
         "warning",
         "-ss",
-        f"{leading:.3f}",
+        f"{leading:.4f}",
         "-i",
         str(path),
-        "-c",
-        "copy",
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-timecode",
+        "00:00:00:00",
+        "-movflags",
+        "+faststart",
         "-avoid_negative_ts",
         "make_zero",
         str(tmp_path),
     ]
     try:
-        result = _run_command(command, timeout_sec=120)
+        result = _run_command(command, timeout_sec=600)
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         tmp_path.unlink(missing_ok=True)
         return

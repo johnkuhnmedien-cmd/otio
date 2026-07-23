@@ -20,6 +20,8 @@ from otio_app.models import Project
 from otio_app.services.clean_media import (
     CLEAN_STATUS_CLEAN,
     CLEAN_STATUS_OK,
+    _first_frame_is_black,
+    _trim_tiny_leading_black,
     find_clean_file_for_media,
     folder_clean_media_ready,
     load_clean_media_manifest,
@@ -570,6 +572,7 @@ def test_ensure_zoomed_media_for_export_returns_rezoomed_clean(
     assert any("3840" in note for note in notes)
 
 
+@patch("otio_app.services.clean_media._trim_tiny_leading_black")
 @patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
 @patch("otio_app.services.clean_media.path_is_readable_file", return_value=True)
 @patch("otio_app.services.clean_media._run_command")
@@ -579,6 +582,7 @@ def test_transcode_to_clean_strips_all_metadata(
     mock_run_command,
     _mock_readable,
     _mock_validate,
+    _mock_trim,
     tmp_path: Path,
 ) -> None:
     """Regression: Der Clean-Media-Transcode mappt bewusst nur Video-/
@@ -613,8 +617,12 @@ def test_transcode_to_clean_strips_all_metadata(
     assert "-map_metadata" in command, f"'-map_metadata -1' fehlt im ffmpeg-Kommando: {command}"
     idx = command.index("-map_metadata")
     assert command[idx + 1] == "-1"
+    assert "-timecode" in command
+    tc_idx = command.index("-timecode")
+    assert command[tc_idx + 1] == "00:00:00:00"
 
 
+@patch("otio_app.services.clean_media._trim_tiny_leading_black")
 @patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
 @patch("otio_app.services.clean_media.path_is_readable_file", return_value=True)
 @patch("otio_app.services.clean_media._run_command")
@@ -624,6 +632,7 @@ def test_transcode_to_clean_hides_banner_so_real_errors_surface(
     mock_run_command,
     _mock_readable,
     _mock_validate,
+    _mock_trim,
     tmp_path: Path,
 ) -> None:
     """Regression: Ohne '-hide_banner'/'-loglevel' beginnt ffmpegs stderr bei
@@ -651,6 +660,69 @@ def test_transcode_to_clean_hides_banner_so_real_errors_surface(
     command = mock_run_command.call_args[0][0]
     assert "-hide_banner" in command
     assert "-loglevel" in command
+
+
+def test_first_frame_is_black_reads_pblack_percent() -> None:
+    with patch(
+        "otio_app.services.clean_media._run_command",
+        return_value=type(
+            "R",
+            (),
+            {
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "frame:0 pblack:98 pts:0 t:0.000000\n",
+            },
+        )(),
+    ):
+        assert _first_frame_is_black(Path("/tmp/x.mp4")) is True
+    with patch(
+        "otio_app.services.clean_media._run_command",
+        return_value=type(
+            "R",
+            (),
+            {
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "frame:0 pblack:12 pts:0 t:0.000000\n",
+            },
+        )(),
+    ):
+        assert _first_frame_is_black(Path("/tmp/x.mp4")) is False
+
+
+@patch("otio_app.services.clean_media.path_is_readable_file", return_value=True)
+@patch("otio_app.services.clean_media.probe_leading_black_seconds", return_value=0.0)
+@patch("otio_app.services.clean_media._first_frame_is_black", return_value=True)
+@patch("otio_app.services.clean_media._probe_video_fps", return_value=24.0)
+@patch("otio_app.services.clean_media._run_command")
+def test_trim_tiny_leading_black_reencodes_one_frame(
+    mock_run_command,
+    _mock_fps,
+    _mock_black,
+    _mock_leading,
+    _mock_readable,
+    tmp_path: Path,
+) -> None:
+    """Asset14-Regression: 1 Clean-Schwarzframe muss framegenau weg (Re-Encode)."""
+    path = tmp_path / "Yosemite_Asset14.mp4"
+    path.write_bytes(b"x" * 2000)
+
+    def _fake_run(command, **kwargs):
+        out = Path(command[-1])
+        out.write_bytes(b"y" * 2000)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    mock_run_command.side_effect = _fake_run
+    _trim_tiny_leading_black(path)
+    assert mock_run_command.called
+    command = mock_run_command.call_args[0][0]
+    assert "-ss" in command
+    ss = command[command.index("-ss") + 1]
+    assert abs(float(ss) - (1.0 / 24.0)) < 1e-3
+    assert "-c:v" in command and "libx264" in command
+    assert "copy" not in command
+    assert path.read_bytes().startswith(b"y")
 
 
 @patch("otio_app.services.clean_media.validate_clean_output", return_value=(True, None))
