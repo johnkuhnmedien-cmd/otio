@@ -426,10 +426,12 @@ def test_single_chapter_compatible(tmp_path: Path) -> None:
     )
     assert max(s.timeline_end_seconds for s in resolved.shots) + 1e-3 >= 4.0 + 1.0 + 5.0
     editorial = next(s for s in resolved.shots if s.shot_id == "main_shot")
-    assert editorial.timeline_start_seconds == pytest.approx(1.0, abs=1e-3)
-    assert editorial.timeline_end_seconds == pytest.approx(5.0, abs=1e-3)
-    assert any(
-        s.editorial_function == "technical_chapter_postroll_hold" for s in resolved.shots
+    # Einziger Shot trägt Vorlauf (0–1) und Nachlauf (5–10) selbst.
+    assert editorial.timeline_start_seconds == pytest.approx(0.0, abs=1e-3)
+    assert editorial.timeline_end_seconds == pytest.approx(10.0, abs=1e-3)
+    assert not any(
+        str(s.editorial_function or "").startswith("technical_chapter_")
+        for s in resolved.shots
     )
 
 
@@ -504,29 +506,47 @@ def test_trailing_narration_gap_blocks(tmp_path: Path) -> None:
         resolve_final_timeline(project)
 
 
-def test_postroll_uses_technical_hold_not_editorial_stretch(tmp_path: Path) -> None:
+def test_postroll_extends_closing_shot_not_separate_hold(tmp_path: Path) -> None:
     project, _ = _build_three_chapter_project(tmp_path)
     resolved = resolve_final_timeline(project)
     for chapter in resolved.chapters:
-        assert chapter.postroll_hold_shot_id
-        hold = next(s for s in resolved.shots if s.shot_id == chapter.postroll_hold_shot_id)
-        assert hold.editorial_function == "technical_chapter_postroll_hold"
-        assert hold.hold_mode == "freeze_video"
-        assert hold.timeline_start_seconds == pytest.approx(
-            chapter.chapter_audio_end, abs=1e-3
+        assert not chapter.postroll_hold_shot_id
+        assert not chapter.preroll_hold_shot_id
+        closing = next(s for s in resolved.shots if s.shot_id == chapter.last_shot_id)
+        opening = next(s for s in resolved.shots if s.shot_id == chapter.first_shot_id)
+        assert opening.timeline_start_seconds == pytest.approx(
+            chapter.chapter_video_start, abs=1e-3
         )
-        assert hold.timeline_end_seconds == pytest.approx(
+        assert closing.timeline_end_seconds == pytest.approx(
             chapter.chapter_video_end, abs=1e-3
         )
         editorial = [
             s
             for s in resolved.shots
             if s.chapter_id == chapter.chapter_id
-            and not s.editorial_function.startswith("technical_chapter_")
+            and not str(s.editorial_function or "").startswith("technical_chapter_")
         ]
         for shot in editorial:
+            if shot.shot_id in {chapter.first_shot_id, chapter.last_shot_id}:
+                continue
             dur = shot.timeline_end_seconds - shot.timeline_start_seconds
             assert dur <= SEG_DUR + 1e-3
+    assert not any(
+        str(s.editorial_function or "").startswith("technical_chapter_")
+        for s in resolved.shots
+    )
+
+
+def test_adjacent_same_asset_blocks_including_opening_closing(tmp_path: Path) -> None:
+    project, ids = _build_three_chapter_project(tmp_path)
+    plan = FinalCutPlanDocument.model_validate(
+        json.loads(final_cut_plan_path(project).read_text(encoding="utf-8"))
+    )
+    # Opening und nächster Shot dasselbe Asset → fail-closed.
+    plan.shots[1].asset_id = plan.shots[0].asset_id
+    write_json(final_cut_plan_path(project), plan)
+    with pytest.raises(TimelineResolveError, match="Benachbarte Shots nutzen dasselbe Asset"):
+        resolve_final_timeline(project)
 
 
 def test_may_overlap_pause_still_blocks_video_overlap(tmp_path: Path) -> None:

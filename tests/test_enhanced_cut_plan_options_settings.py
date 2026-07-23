@@ -165,6 +165,10 @@ def test_prompt_constraints_in_rough_and_final() -> None:
     assert "OPENING SHOT" in final and "CLOSING SHOT" in final
     assert "Vorlauf" in final and "Nachlauf" in final
     assert "leading or trailing narration" in final.lower()
+    assert "MUST differ from the immediately following shot" in text
+    assert "COUNT toward max asset usage" in text
+    assert "Never place the same non-intro asset on two consecutive shots" in text
+    assert "No two consecutive shots share the same non-intro asset_id" in final
 
 
 def test_resolver_clamps_to_shot_max(tmp_path: Path) -> None:
@@ -385,21 +389,11 @@ def test_resolver_applies_preroll_and_tolerance(tmp_path: Path) -> None:
     assert resolved.voiceover_postroll_sec == 2.0
     assert resolved.audio_segments[0].timeline_start_seconds == 1.0
     editorial = next(s for s in resolved.shots if s.shot_id == "Canyon_shot_001")
-    # Redaktioneller Shot bleibt im Narrationsfenster (1–7), ohne shot_max-Stretch.
-    assert editorial.timeline_start_seconds == pytest.approx(1.0, abs=1e-3)
-    assert editorial.timeline_end_seconds == pytest.approx(7.0, abs=1e-3)
-    preroll_hold = next(
-        s
+    # Opening/Closing = derselbe Shot: Vorlauf + Nachlauf verlängern ihn in-place.
+    assert editorial.timeline_start_seconds == pytest.approx(0.0, abs=1e-3)
+    assert editorial.timeline_end_seconds == pytest.approx(9.0, abs=1e-3)
+    assert not any(
+        str(s.editorial_function or "").startswith("technical_chapter_")
         for s in resolved.shots
-        if s.editorial_function == "technical_chapter_preroll_hold"
     )
-    postroll_hold = next(
-        s
-        for s in resolved.shots
-        if s.editorial_function == "technical_chapter_postroll_hold"
-    )
-    assert preroll_hold.timeline_start_seconds == pytest.approx(0.0, abs=1e-3)
-    assert preroll_hold.timeline_end_seconds == pytest.approx(1.0, abs=1e-3)
-    assert postroll_hold.timeline_start_seconds == pytest.approx(7.0, abs=1e-3)
-    assert postroll_hold.timeline_end_seconds == pytest.approx(9.0, abs=1e-3)
-    assert postroll_hold.hold_mode == "freeze_video"
+    assert any("Opening-/Closing-Shot verlängert" in r for r in resolved.repairs)

@@ -481,6 +481,8 @@ SHOT RULES:
 - Per chapter: include an OPENING shot at the first narration start that covers
   the configured Vorlauf/preroll, and a CLOSING shot at the last narration end
   that continues for the configured Nachlauf/postroll (see SHOT / ASSET CONSTRAINTS).
+- Opening asset ≠ next shot; closing asset ≠ previous shot. Max usage and reuse
+  distance apply to opening/closing with no exemption.
 
 COVERAGE-GAP RULES:
 
@@ -718,7 +720,11 @@ Per chapter you MUST include:
   covers the first narration start;
 - a CLOSING SHOT: dedicated last shot that covers the last narration end and
   continues for the configured Nachlauf/postroll seconds after the VO.
+Opening asset_id must differ from the next shot; closing asset_id must differ
+from the previous shot (and from the next chapter's opening). Max asset usage
+and reuse distance apply to these shots with no exemption.
 Do not leave leading or trailing narration seconds without a planned shot.
+Do not skip chapters that have narration.
 
 FINAL VALIDATION BEFORE RETURNING JSON:
 - All shot_ids unique; all segment_ids / sentence_ids exist in inputs.
@@ -728,6 +734,7 @@ FINAL VALIDATION BEFORE RETURNING JSON:
 - Asset usable length covers each shot (duration_seconds - usable_in_s).
 - Every chapter has opening coverage at narration start and closing coverage at
   narration end, including the configured preroll/postroll intent.
+- No two consecutive shots share the same non-intro asset_id.
 
 LOCKED SCRIPT:
 {locked_script_json}
