@@ -166,7 +166,12 @@ def synthesize_locked_script_audio(
     *,
     progress_callback: TtsProgressCallback | None = None,
 ) -> SegmentTimingsDocument:
-    """Erzeugt Audiodateien sequenziell: Kapitel für Kapitel, Segment für Segment."""
+    """Erzeugt Audiodateien sequenziell: Intro (falls bestätigt), dann Kapitel."""
+    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+        ensure_confirmed_intro_in_locked_script,
+    )
+
+    ensure_confirmed_intro_in_locked_script(project)
     locked = require_locked_script(project)
     folder_order = [
         entry.folder_name for entry in list_enabled_dramaturgy_folders(project)
@@ -198,6 +203,15 @@ def synthesize_folder_script_audio(
     progress_callback: TtsProgressCallback | None = None,
 ) -> SegmentTimingsDocument:
     """Vertont nur die Segmente eines Dramaturgie-Kapitels (wie klassisch pro Ordner)."""
+    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+        ENHANCED_INTRO_FOLDER_NAME,
+        ensure_confirmed_intro_in_locked_script,
+        is_intro_folder_name,
+    )
+
+    if is_intro_folder_name(folder_name):
+        ensure_confirmed_intro_in_locked_script(project)
+        folder_name = ENHANCED_INTRO_FOLDER_NAME
     locked = require_locked_script(project)
     folder_segments = [
         seg for seg in locked.segments if seg.folder_name == folder_name
@@ -214,6 +228,30 @@ def synthesize_folder_script_audio(
         chapter_index=1,
         chapter_total=1,
         folder_name=folder_name,
+        progress_callback=progress_callback,
+    )
+
+
+def synthesize_intro_script_audio(
+    project: Project,
+    *,
+    progress_callback: TtsProgressCallback | None = None,
+) -> SegmentTimingsDocument:
+    """Vertont das bestätigte Intro als Enhanced-Segment (Intro_segment_001)."""
+    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+        ENHANCED_INTRO_FOLDER_NAME,
+        confirmed_intro_text,
+        ensure_confirmed_intro_in_locked_script,
+    )
+
+    if confirmed_intro_text(project) is None:
+        raise AudioTimingError(
+            "Kein bestätigter Intro-Hook vorhanden (intro_hook.confirmed.json)."
+        )
+    ensure_confirmed_intro_in_locked_script(project)
+    return synthesize_folder_script_audio(
+        project,
+        ENHANCED_INTRO_FOLDER_NAME,
         progress_callback=progress_callback,
     )
 
