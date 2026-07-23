@@ -756,72 +756,50 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
         return draft
 
 
-def _render_inventory_prepare(project) -> None:
-    """Vor Lauf 2: Asset-Dauern messen + Slim-Inventory schreiben."""
-    from otio_app.services.inventory_prepare_service import (
-        inventory_duration_coverage,
-        prepare_inventories_for_cut_plan,
+def _render_slim_status(project) -> None:
+    """Zeigt, ob vorhandene ``{folder}.slim.json`` für den LLM-Prompt bereitliegen."""
+    from otio_app.project_layout import get_folder_inventory_path
+    from otio_app.services.inventory_prompt_view import (
+        load_slim_folder_inventory_file,
+        slim_inventory_path_for,
     )
 
-    st.markdown("##### Inventar für Cut Plan vorbereiten")
-    with_dur, total_video, folders_ok = inventory_duration_coverage(project)
-    if total_video == 0:
-        st.caption(
-            "Noch keine Video-Assets im Inventar — zuerst Ordner analysieren."
+    folders = [f for f in (project.selected_asset_subdirs or []) if f]
+    if not folders:
+        st.caption("Keine Kapitel-Ordner ausgewählt.")
+        return
+
+    ready = 0
+    total_assets = 0
+    missing: list[str] = []
+    for folder in folders:
+        slim_path = slim_inventory_path_for(
+            get_folder_inventory_path(project.work_dir_path, folder)
         )
-    elif with_dur >= total_video:
-        st.success(
-            f"Asset-Dauern bereit: {with_dur}/{total_video} Videos in "
-            f"{folders_ok} Kapitel-Inventar(en) · Slim-JSON wird mitgeschrieben."
+        doc = load_slim_folder_inventory_file(slim_path)
+        if doc is None:
+            missing.append(folder)
+            continue
+        ready += 1
+        total_assets += len(doc.get("assets") or [])
+
+    if missing:
+        shown = ", ".join(missing[:8])
+        more = "…" if len(missing) > 8 else ""
+        st.warning(
+            f"Slim-Inventar fehlt für {len(missing)} Kapitel: {shown}{more}. "
+            "Erwartet: `inventory/{folder}.slim.json` (wird vom LLM-Prompt geladen)."
         )
     else:
-        st.warning(
-            f"Asset-Dauern unvollständig: {with_dur}/{total_video} Videos. "
-            "Vor LLM-Lauf 2 bitte Inventar vorbereiten (ffprobe → "
-            "`duration_seconds` + `{folder}.slim.json`)."
+        st.caption(
+            f"Slim-Inventar bereit: {ready}/{len(folders)} Kapitel · "
+            f"{total_assets} Assets für den LLM-Prompt."
         )
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        prepare = st.button(
-            "Inventar vorbereiten (Dauern + Slim)",
-            key=f"enh_prepare_inventory_{project.id}",
-            help=(
-                "Misst fehlende Video-Dauern per ffprobe, schreibt sie in die "
-                "kanonische inventory/{folder}.json und erzeugt {folder}.slim.json "
-                "für den LLM-Kontext."
-            ),
-        )
-    with col_b:
-        force = st.button(
-            "Dauern neu messen (force)",
-            key=f"enh_prepare_inventory_force_{project.id}",
-            help="Alle Video-Dauern erneut per ffprobe messen und Slim neu schreiben.",
-        )
-    if prepare or force:
-        try:
-            with st.spinner("Inventare: Dauern messen + Slim schreiben…"):
-                report = prepare_inventories_for_cut_plan(
-                    project, force_reprobe=bool(force)
-                )
-            st.success(
-                f"{report.folders_touched} Inventar(e) · "
-                f"{report.durations_newly_measured} neu gemessen · "
-                f"{report.assets_with_duration} Videos mit Dauer · "
-                f"{len(report.slim_files_written)} Slim-Datei(en)."
-            )
-            for err in report.errors[:12]:
-                st.warning(err)
-            if len(report.errors) > 12:
-                st.caption(f"… und {len(report.errors) - 12} weitere Hinweise.")
-            st.rerun()
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Inventar-Vorbereitung fehlgeschlagen: {exc}")
 
 
 def _render_section_unified(project) -> None:
     st.subheader("1. Unified Cut Plan (1 LLM-Lauf + Python-Timing)")
-    _render_inventory_prepare(project)
+    _render_slim_status(project)
     chapters = list_cut_plan_chapter_names(project)
     chapter_count = max(1, len(chapters))
     rough_provider, rough_model, _rough_max = _render_enhanced_cut_model(
@@ -922,7 +900,7 @@ def _render_section_unified(project) -> None:
 
 def _render_section_rough(project) -> None:
     st.subheader("1. Groben Cut Plan und Pausen erzeugen")
-    _render_inventory_prepare(project)
+    _render_slim_status(project)
     rough_tokens, rough_chapters = _estimate_rough_cut_input_tokens(project)
     rough_provider, rough_model, _rough_max = _render_enhanced_cut_model(
         project,

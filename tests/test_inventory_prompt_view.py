@@ -9,6 +9,7 @@ from otio_app.analysis_models import AssetFolderAnalysis, AssetMediaAnalysis
 from otio_app.services.inventory_loader import save_folder_inventory
 from otio_app.services.inventory_prompt_view import (
     build_slim_folder_inventory,
+    load_slim_folder_inventory_file,
     slim_assets_for_cut_plan_prompt,
     slim_inventory_path_for,
 )
@@ -106,3 +107,51 @@ def test_save_folder_inventory_writes_slim_sibling(tmp_path: Path, monkeypatch) 
     payload = json.loads(slim_path.read_text(encoding="utf-8"))
     assert payload["kapitel"] == "Antelope Canyon"
     assert len(payload["assets"]) == 2
+
+
+def test_slim_cut_plan_prefers_existing_slim_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Vorhandene Slim-Datei gewinnt — kein Neubau / kein ffprobe."""
+    called = {"probe": 0}
+
+    def _probe(_path):
+        called["probe"] += 1
+        return 99.0
+
+    monkeypatch.setattr(
+        "otio_app.services.inventory_prompt_view.probe_duration_seconds",
+        _probe,
+    )
+    slim_path = tmp_path / "Antelope_Canyon.slim.json"
+    slim_path.write_text(
+        json.dumps(
+            {
+                "kapitel": "Antelope Canyon",
+                "assets": [
+                    {
+                        "id": "asset_from_disk",
+                        "file": "from_disk.mp4",
+                        "type": "video",
+                        "dauer_s": 42.0,
+                        "beschreibung": "Aus vorhandener Slim-Datei.",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    loaded = load_slim_folder_inventory_file(slim_path)
+    assert loaded is not None
+    rows = slim_assets_for_cut_plan_prompt(
+        _folder(),
+        folder_name="Antelope Canyon",
+        probe_duration=True,
+        existing_slim_path=slim_path,
+    )
+    assert called["probe"] == 0
+    assert len(rows) == 1
+    assert rows[0]["local_asset_id"] == "asset_from_disk"
+    assert rows[0]["duration_seconds"] == 42.0
+    assert rows[0]["file"] == "from_disk.mp4"

@@ -19,6 +19,9 @@ from otio_app.services.media_utils import is_image_media, probe_duration_seconds
 
 __all__ = [
     "build_slim_folder_inventory",
+    "load_slim_folder_inventory_file",
+    "slim_assets_for_cut_plan_prompt",
+    "slim_assets_from_slim_document",
     "slim_inventory_path_for",
     "write_slim_folder_inventory",
 ]
@@ -39,6 +42,56 @@ def slim_inventory_path_for(canonical_inventory_path: Path) -> Path:
     return canonical_inventory_path.with_name(
         f"{canonical_inventory_path.stem}.slim.json"
     )
+
+
+def load_slim_folder_inventory_file(path: Path) -> dict[str, Any] | None:
+    """Lädt vorhandene ``{folder}.slim.json`` oder None."""
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    assets = payload.get("assets")
+    if not isinstance(assets, list):
+        return None
+    return payload
+
+
+def slim_assets_from_slim_document(
+    slim: dict[str, Any],
+    *,
+    folder_name: str,
+) -> list[dict[str, Any]]:
+    """Slim-Disk-Dokument → Cut-Plan-Prompt-Rows (EN-Keys)."""
+    out: list[dict[str, Any]] = []
+    for item in slim.get("assets") or []:
+        if not isinstance(item, dict):
+            continue
+        asset_id = str(item.get("id") or "").strip()
+        file_name = str(item.get("file") or "").strip()
+        if not asset_id or not file_name:
+            continue
+        media = str(item.get("type") or "").strip().lower()
+        media_type = "image" if media == "photo" else (media or "video")
+        row: dict[str, Any] = {
+            "local_asset_id": asset_id,
+            "asset_id": asset_id,
+            "folder": folder_name,
+            "file": file_name,
+            "duration_seconds": item.get("dauer_s"),
+            "media_type": media_type,
+            "description": item.get("beschreibung") or "",
+        }
+        if "usable_in_s" in item:
+            row["usable_in_s"] = item["usable_in_s"]
+        for key in ("motion", "framing", "people", "people_action", "defects"):
+            if key in item:
+                row[key] = item[key]
+        out.append(row)
+    return out
 
 
 def _dedupe_key(filename: str) -> str:
@@ -197,33 +250,21 @@ def slim_assets_for_cut_plan_prompt(
     *,
     folder_name: str,
     probe_duration: bool = True,
+    existing_slim_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     """LLM-Payload für Enhanced Cut Plan: schlank, stabile IDs, EN-Keys.
 
-    Behält ``local_asset_id`` / ``description`` / ``duration_seconds`` für
-    bestehende Prompt-Verträge; ersetzt den vollen ``path`` durch ``file``.
+    Bevorzugt vorhandene ``{folder}.slim.json`` (keine Neubau-/ffprobe-Runde).
+    Fallback: Slim-Projektion aus kanonischem Inventar.
     """
+    if existing_slim_path is not None:
+        loaded = load_slim_folder_inventory_file(existing_slim_path)
+        if loaded is not None:
+            rows = slim_assets_from_slim_document(loaded, folder_name=folder_name)
+            if rows:
+                return rows
+
     slim = build_slim_folder_inventory(
         folder_inventory, probe_duration=probe_duration
     )
-    # Map id → dauer/beschreibung already in slim; rebuild EN keys.
-    out: list[dict[str, Any]] = []
-    for item in slim["assets"]:
-        media = str(item.get("type") or "")
-        media_type = "image" if media == "photo" else media
-        row: dict[str, Any] = {
-            "local_asset_id": item["id"],
-            "asset_id": item["id"],
-            "folder": folder_name,
-            "file": item["file"],
-            "duration_seconds": item.get("dauer_s"),
-            "media_type": media_type,
-            "description": item.get("beschreibung") or "",
-        }
-        if "usable_in_s" in item:
-            row["usable_in_s"] = item["usable_in_s"]
-        for key in ("motion", "framing", "people", "people_action", "defects"):
-            if key in item:
-                row[key] = item[key]
-        out.append(row)
-    return out
+    return slim_assets_from_slim_document(slim, folder_name=folder_name)

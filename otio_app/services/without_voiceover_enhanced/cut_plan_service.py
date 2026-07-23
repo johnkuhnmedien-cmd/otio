@@ -137,11 +137,16 @@ def _local_assets_payload(
 ) -> list[dict[str, Any]]:
     """Schlanke Asset-Liste für LLM-Lauf 2/3 (kein voller Inventory-Dump).
 
-    Nutzt die Slim-Projektion (nur beschriebene Assets, Duplikate gemerged,
-    Basename statt Absolutpfad). Middle-Frames kommen weiter aus dem
-    kanonischen Inventar und werden nur bei Vision angehängt.
+    Bevorzugt vorhandene ``inventory/{folder}.slim.json``. Fallback: Slim aus
+    kanonischem Inventar. Middle-Frames nur bei Vision aus dem Vollinventar.
     """
-    from otio_app.services.inventory_prompt_view import slim_assets_for_cut_plan_prompt
+    from otio_app.project_layout import get_folder_inventory_path
+    from otio_app.services.inventory_prompt_view import (
+        slim_assets_for_cut_plan_prompt,
+        slim_assets_from_slim_document,
+        load_slim_folder_inventory_file,
+        slim_inventory_path_for,
+    )
 
     assets: list[dict[str, Any]] = []
     folders = (
@@ -152,17 +157,32 @@ def _local_assets_payload(
     for folder in folders:
         if not folder:
             continue
-        inventory = load_folder_inventory(project, folder)
-        if inventory is None:
-            continue
-        slim_entries = slim_assets_for_cut_plan_prompt(
-            inventory, folder_name=folder, probe_duration=True
+        slim_path = slim_inventory_path_for(
+            get_folder_inventory_path(project.work_dir_path, folder)
         )
+        slim_doc = load_slim_folder_inventory_file(slim_path)
+        if slim_doc is not None:
+            slim_entries = slim_assets_from_slim_document(
+                slim_doc, folder_name=folder
+            )
+        else:
+            inventory = load_folder_inventory(project, folder)
+            if inventory is None:
+                continue
+            slim_entries = slim_assets_for_cut_plan_prompt(
+                inventory,
+                folder_name=folder,
+                probe_duration=False,
+                existing_slim_path=None,
+            )
+        if not slim_entries:
+            continue
         if not include_middle_frames:
             assets.extend(slim_entries)
             continue
 
         # Middle-Frames: Lookup über stabile asset_id im kanonischen Inventar.
+        inventory = load_folder_inventory(project, folder)
         by_id: dict[str, Any] = {}
         for asset in getattr(inventory, "assets", []) or []:
             path = getattr(asset, "path", None) or getattr(asset, "source_path", None)
