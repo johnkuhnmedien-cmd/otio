@@ -741,9 +741,14 @@ def _apply_chapter_envelopes(
         raw_first_shot_start = min(raw_shot_times[s.shot_id][0] for s in ch_shots)
         raw_last_shot_end = max(raw_shot_times[s.shot_id][1] for s in ch_shots)
 
-        # E2E-4: kleiner Ausklang (Satzende → Audio-Datei-Ende, typ. ≤0.25s)
-        # wird auf Audio-Ende gezogen; echte Narrationslücken bleiben Fehler.
+        # E2E-4: Ausklang / Nachlauf-Toleranz — kein Hard-Blocker innerhalb Band.
+        # Überlänge bis postroll (+ Slack) = Closing-Hold, auf Audio-Ende klemmen;
+        # Envelope hängt den Nachlauf danach an.
         ausklang_tol = max(frame * 3.0, 0.25)
+        # Slack ~1.5s: Frame-Rundung / Satz→Audio-Drift / leichte Editorial-Überhänge.
+        overhang_tol = max(0.0, float(postroll)) + max(ausklang_tol, 1.5)
+        lead_tol = max(0.0, float(preroll)) + max(ausklang_tol, 1.5)
+
         if raw_last_shot_end < raw_audio_end - ausklang_tol - 1e-9:
             errors.append(
                 f"Abschließende visuelle Lücke während der Narration in Kapitel "
@@ -763,19 +768,34 @@ def _apply_chapter_envelopes(
                 f"Ende {old_end:.6f}s → Audio-Ende {raw_audio_end:.6f}s."
             )
             raw_last_shot_end = raw_audio_end
-        elif raw_last_shot_end > raw_audio_end + frame + 1e-9:
+        elif raw_last_shot_end > raw_audio_end + overhang_tol + 1e-9:
             errors.append(
                 f"Abschließende visuelle Überlänge in Kapitel {chapter_id}: "
                 f"letzter Shot endet bei {raw_last_shot_end:.3f}s, "
-                f"Audio bei {raw_audio_end:.3f}s."
+                f"Audio bei {raw_audio_end:.3f}s "
+                f"(>{overhang_tol:.3f}s Nachlauf-Toleranz)."
             )
+        elif raw_last_shot_end > raw_audio_end + 1e-9:
+            last_raw = max(
+                ch_shots,
+                key=lambda s: (raw_shot_times[s.shot_id][1], s.shot_id),
+            )
+            old_start, old_end = raw_shot_times[last_raw.shot_id]
+            raw_shot_times[last_raw.shot_id] = (old_start, raw_audio_end)
+            repairs.append(
+                f"Kapitel {chapter_id}: Closing-Überlänge innerhalb Nachlauf "
+                f"({old_end - raw_audio_end:.3f}s ≤ {overhang_tol:.3f}s) — "
+                f"{last_raw.shot_id} Ende {old_end:.6f}s → Audio-Ende "
+                f"{raw_audio_end:.6f}s."
+            )
+            raw_last_shot_end = raw_audio_end
 
-        if raw_first_shot_start > raw_audio_start + frame + 1e-9:
+        if raw_first_shot_start > raw_audio_start + lead_tol + 1e-9:
             errors.append(
                 f"Führende visuelle Lücke in Kapitel {chapter_id}: "
                 f"erster Shot startet bei {raw_first_shot_start:.3f}s, "
                 f"Audio bei {raw_audio_start:.3f}s "
-                f"(>{frame:.4f}s Frame-Toleranz)."
+                f"(>{lead_tol:.3f}s Vorlauf-Toleranz)."
             )
         elif raw_first_shot_start > raw_audio_start + 1e-9:
             first_raw = min(
@@ -785,7 +805,7 @@ def _apply_chapter_envelopes(
             _old_start, old_end = raw_shot_times[first_raw.shot_id]
             raw_shot_times[first_raw.shot_id] = (raw_audio_start, old_end)
             repairs.append(
-                f"Ein-Frame-Randabweichung führend in Kapitel {chapter_id}: "
+                f"Kapitel {chapter_id}: führende Lücke innerhalb Vorlauf — "
                 f"{first_raw.shot_id} Start {raw_first_shot_start:.6f}s → "
                 f"{raw_audio_start:.6f}s."
             )

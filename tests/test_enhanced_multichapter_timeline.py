@@ -486,10 +486,23 @@ def test_leading_editorial_gap_blocks(tmp_path: Path) -> None:
     plan = FinalCutPlanDocument.model_validate(
         json.loads(final_cut_plan_path(project).read_text(encoding="utf-8"))
     )
-    plan.shots[0].narration_start_anchor.offset_seconds = 2.0
+    # Über Vorlauf-Toleranz hinaus (PREROLL + Ausklang) → Hard-Error.
+    plan.shots[0].narration_start_anchor.offset_seconds = PREROLL + 2.0
     write_json(final_cut_plan_path(project), plan)
     with pytest.raises(TimelineResolveError, match="Führende visuelle Lücke"):
         resolve_final_timeline(project)
+
+
+def test_leading_gap_within_preroll_is_repaired(tmp_path: Path) -> None:
+    project, _ = _build_three_chapter_project(tmp_path)
+    plan = FinalCutPlanDocument.model_validate(
+        json.loads(final_cut_plan_path(project).read_text(encoding="utf-8"))
+    )
+    plan.shots[0].narration_start_anchor.offset_seconds = 0.5  # < PREROLL (1.0)
+    write_json(final_cut_plan_path(project), plan)
+    resolved = resolve_final_timeline(project)
+    assert not any("Führende visuelle Lücke" in e for e in resolved.errors)
+    assert any("innerhalb Vorlauf" in r for r in resolved.repairs)
 
 
 def test_trailing_narration_gap_blocks(tmp_path: Path) -> None:

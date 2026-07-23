@@ -2172,12 +2172,15 @@ def resolve_unified_cut_plan_timeline(
         merge_export_ready_gaps_into_timeline,
     )
     from otio_app.services.without_voiceover_enhanced.models import (
+        ResolvedTimelineDocument,
         UnifiedCutPlanDocument,
     )
     from otio_app.services.without_voiceover_enhanced.paths import (
+        resolved_timeline_path,
         unified_cut_plan_path,
     )
     from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        UnifiedTimelineError,
         resolve_unified_timeline,
     )
 
@@ -2188,12 +2191,21 @@ def resolve_unified_cut_plan_timeline(
             "Unified Cut Plan fehlt — zuerst „Unified Cut Plan erzeugen (LLM)“."
         )
 
-    resolved = resolve_unified_timeline(
-        project, plan, allow_open_gaps=True, persist=True
-    )
+    # Timing persistiert die Timeline auch bei Envelope-Fehlern; Merge muss
+    # trotzdem laufen (sonst bleiben Funnel-Accepted als Placeholder).
+    timing_error: UnifiedTimelineError | None = None
+    try:
+        resolved = resolve_unified_timeline(
+            project, plan, allow_open_gaps=True, persist=True
+        )
+    except UnifiedTimelineError as exc:
+        timing_error = exc
+        resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
+        if resolved is None:
+            raise
 
     merge_report = None
-    if run_gap_merge:
+    if run_gap_merge and resolved is not None:
         try:
             resolved, merge_report = merge_export_ready_gaps_into_timeline(
                 project,
@@ -2206,7 +2218,8 @@ def resolve_unified_cut_plan_timeline(
 
     options = load_cut_plan_options(project)
     if (
-        merge_report is not None
+        timing_error is None
+        and merge_report is not None
         and should_run_unified_mini_repair(
             merge_report,
             total_slots=len(plan.slots),
@@ -2224,15 +2237,25 @@ def resolve_unified_cut_plan_timeline(
         )
         write_json(unified_cut_plan_path(project), repaired)
         plan = repaired
-        resolved = resolve_unified_timeline(
-            project, plan, allow_open_gaps=True, persist=True
-        )
-        resolved, merge_report = merge_export_ready_gaps_into_timeline(
-            project,
-            timeline=resolved,
-            require_closed_none=False,
-            persist=True,
-        )
+        try:
+            resolved = resolve_unified_timeline(
+                project, plan, allow_open_gaps=True, persist=True
+            )
+        except UnifiedTimelineError as exc:
+            timing_error = exc
+            resolved = load_model(
+                resolved_timeline_path(project), ResolvedTimelineDocument
+            )
+        if resolved is not None:
+            resolved, merge_report = merge_export_ready_gaps_into_timeline(
+                project,
+                timeline=resolved,
+                require_closed_none=False,
+                persist=True,
+            )
+
+    # Timing-Fehler bleiben in resolved.errors; Merge ist trotzdem gelaufen.
+    # Kein Re-Raise — sonst sieht die UI den Merge-Erfolg nicht.
     return plan, resolved, merge_report
 
 

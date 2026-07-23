@@ -52,13 +52,26 @@ class GapStatusSummary:
 
 
 def compute_cut_plan_run_id(plan: UnifiedCutPlanDocument | dict | None) -> str:
-    """Stabiler Hash über den Unified Cut Plan (Inhalt, nicht mtime)."""
+    """Stabiler Hash über den Unified Cut Plan (Inhalt, nicht mtime).
+
+    ``target_duration_seconds`` wird ignoriert — Timing schreibt diese Felder
+    nach; sonst invalidiert jeder Timing-Lauf Funnel/Accepted (Run-ID-Drift).
+    """
     if plan is None:
         return ""
     if isinstance(plan, UnifiedCutPlanDocument):
         payload = plan.model_dump(mode="json")
     else:
-        payload = plan
+        payload = dict(plan)
+    slots = payload.get("slots")
+    if isinstance(slots, list):
+        cleaned_slots = []
+        for slot in slots:
+            if isinstance(slot, dict):
+                slot = dict(slot)
+                slot.pop("target_duration_seconds", None)
+            cleaned_slots.append(slot)
+        payload["slots"] = cleaned_slots
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
