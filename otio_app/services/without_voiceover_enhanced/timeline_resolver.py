@@ -946,25 +946,33 @@ def _resolve_shot_media(
             )
         usable = media_duration_f - trim
         need = duration
+        # Fix 1: timeline_end darf hier NIE gekürzt werden.
+        # Innerhalb-Toleranz → Grenzen-Klemme (unified resolve_timed_slots).
+        # Über Toleranz → harter Fehler (is_short / Gap-Pfad).
         if need > usable + 1e-6:
             shortfall = need - usable
             if shortfall <= short_tolerance + 1e-6:
-                need = usable
-                timeline_end = _seconds_to_frame(timeline_start + need, fps)
-                duration = need
-                repairs.append(
-                    f"{shot_id}: nutzbare Dauer knapp ({shortfall:.2f}s) — "
-                    "Toleranz, Shot gekürzt."
-                )
-            else:
-                # Kein tpad/Freeze für Motion-Video — Planung muss passen.
                 raise TimelineResolveError(
-                    f"{shot_id}: Asset {asset_id} zu kurz "
-                    f"(nutzbar {usable:.2f}s < nötig {need:.2f}s; Toleranz "
-                    f"{short_tolerance:.1f}s). Kein Video-Hold: kürzeren Shot "
-                    f"planen, anderes Asset wählen oder coverage_gap. "
-                    f"Pfad {media_path}."
+                    f"{shot_id}: Asset {asset_id} knapp über usable "
+                    f"(nutzbar {usable:.2f}s < nötig {need:.2f}s; shortfall "
+                    f"{shortfall:.2f}s ≤ Toleranz {short_tolerance:.1f}s) — "
+                    "muss in der Grenzen-Klemme gekürzt werden, nicht in der "
+                    f"Media-Auflösung. Pfad {media_path}."
                 )
+            raise TimelineResolveError(
+                f"{shot_id}: Asset {asset_id} zu kurz "
+                f"(nutzbar {usable:.2f}s < nötig {need:.2f}s; Toleranz "
+                f"{short_tolerance:.1f}s). Kein Video-Hold: kürzeren Shot "
+                f"planen, anderes Asset wählen oder coverage_gap. "
+                f"Pfad {media_path}."
+            )
+
+        boundary_span = max(0.0, float(timeline_end) - float(timeline_start))
+        if abs(boundary_span - need) > 1e-6:
+            raise TimelineResolveError(
+                f"{shot_id}: Interner Fehler — resolved duration {need:.6f}s "
+                f"≠ boundary span {boundary_span:.6f}s."
+            )
 
         # Mitte der nutzbaren Zone; Source im Embedded-TC-Raum.
         content_start = trim + max(0.0, (usable - need) / 2.0)

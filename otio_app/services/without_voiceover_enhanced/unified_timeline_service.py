@@ -55,6 +55,7 @@ from otio_app.services.without_voiceover_enhanced.sentence_timing_prompt import 
 from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
     TECH_MAX_SHOT_SECONDS,
     TECH_MIN_SHOT_SECONDS,
+    AssetCatalog,
     TimelineResolveError,
     _apply_chapter_envelopes,
     _apply_visual_continuity_rules,
@@ -213,43 +214,182 @@ def boundary_to_narration_anchor(
     )
 
 
+def usable_media_duration_seconds(
+    entry: dict,
+    *,
+    head_trim: float = 0.0,
+) -> float | None:
+    """Nutzbare Motion-Video-Dauer; ``None`` = kein Media-Constraint (Still/unbekannt)."""
+    media_kind = str(entry.get("media_kind") or entry.get("media_type") or "").lower()
+    if media_kind in {"image", "photo"}:
+        return None
+    media_duration = entry.get("duration_seconds")
+    if media_duration is None or float(media_duration or 0.0) <= 0.0:
+        return None
+    trim = max(0.0, float(head_trim))
+    usable_in = entry.get("usable_in_s")
+    if usable_in is not None:
+        trim = max(trim, max(0.0, float(usable_in)))
+    return max(0.0, float(media_duration) - trim)
+
+
+def _slot_usable_max_from_catalog(
+    plan: UnifiedCutPlanDocument,
+    catalog: AssetCatalog | None,
+    *,
+    head_trim: float,
+) -> list[float | None]:
+    if catalog is None:
+        return [None] * len(plan.slots)
+    out: list[float | None] = []
+    for slot in plan.slots:
+        fit = str(slot.asset_fit or "").strip().lower()
+        asset_id = slot.local_asset_id
+        if fit == "none" or not asset_id:
+            out.append(None)
+            continue
+        entry, _err = lookup_catalog_entry(catalog, str(asset_id))
+        if entry is None:
+            out.append(None)
+            continue
+        out.append(usable_media_duration_seconds(entry, head_trim=head_trim))
+    return out
+
+
 def _clamp_boundary_times(
     times: list[float],
     *,
     editorial_min: float,
     editorial_max: float,
     repairs: list[str],
+    slot_usable_max: list[float | None] | None = None,
+    short_tolerance: float = 0.0,
+    max_media_iterations: int = 2,
 ) -> list[float]:
-    """Shot min/max durch Verschieben gemeinsamer Grenzen (Kette bleibt dicht)."""
+    """Shot min/max + nutzbare Asset-Dauer; gemeinsame Grenzen, Kette bleibt dicht.
+
+    Media-Regel (pro Slot mit usable):
+    - span > usable + tolerance → nicht klemmen (später is_short/Gap)
+    - usable < span <= usable + tolerance → Endgrenze nach vorne (Folge-Slot länger)
+    Max. ``max_media_iterations`` Links-nach-rechts-Pässe; danach noch
+    innerhalb-Toleranz verletzt → Fehler.
+    """
     if len(times) < 2:
         return times
     out = [float(t) for t in times]
     n_slots = len(out) - 1
+    usables = list(slot_usable_max or [None] * n_slots)
+    if len(usables) < n_slots:
+        usables.extend([None] * (n_slots - len(usables)))
 
-    # Zu lang: Ende nach vorne (spätere Slots werden länger).
-    for index in range(n_slots):
-        duration = out[index + 1] - out[index]
-        if duration > editorial_max + 1e-9:
-            out[index + 1] = out[index] + editorial_max
+    def _editorial_pass() -> None:
+        # Zu lang: Ende nach vorne (spätere Slots werden länger).
+        for index in range(n_slots):
+            duration = out[index + 1] - out[index]
+            if duration > editorial_max + 1e-9:
+                out[index + 1] = out[index] + editorial_max
+                repairs.append(
+                    f"slot[{index}]: über shot_max ({editorial_max:.2f}s) — "
+                    "Endgrenze nach vorne verschoben."
+                )
+
+        # Zu kurz: Ende nach hinten + Cascade (spätere Dauern bleiben gleich).
+        for index in range(n_slots):
+            duration = out[index + 1] - out[index]
+            if duration + 1e-9 >= editorial_min:
+                continue
+            need = editorial_min - duration
+            out[index + 1] += need
+            for later in range(index + 2, len(out)):
+                out[later] += need
             repairs.append(
-                f"slot[{index}]: über shot_max ({editorial_max:.2f}s) — "
-                "Endgrenze nach vorne verschoben."
+                f"slot[{index}]: unter shot_min ({editorial_min:.2f}s) — "
+                f"Endgrenze +{need:.2f}s (Cascade)."
             )
 
-    # Zu kurz: Ende nach hinten + Cascade (spätere Dauern bleiben gleich).
+    _editorial_pass()
+
+    tol = max(0.0, float(short_tolerance))
+    for _iteration in range(max(1, int(max_media_iterations))):
+        changed = False
+        for index in range(n_slots):
+            usable = usables[index]
+            if usable is None:
+                continue
+            duration = out[index + 1] - out[index]
+            if duration <= float(usable) + 1e-9:
+                continue
+            shortfall = duration - float(usable)
+            if shortfall > tol + 1e-9:
+                # Über Toleranz: Grenzen unverändert → is_short/Gap-Pfad.
+                continue
+            # Innerhalb Toleranz: gemeinsame Endgrenze nach vorne.
+            out[index + 1] = out[index] + float(usable)
+            repairs.append(
+                f"slot[{index}]: nutzbare Dauer knapp "
+                f"(span {duration:.2f}s → usable {float(usable):.2f}s, "
+                f"shortfall {shortfall:.2f}s ≤ Toleranz {tol:.1f}s) — "
+                "Endgrenze nach vorne (Folge-Slot länger)."
+            )
+            changed = True
+        if changed:
+            # Folge-Slot kann editorial_max überschreiten.
+            _editorial_pass()
+        if not changed:
+            break
+
+    remaining_tol_violations: list[str] = []
     for index in range(n_slots):
-        duration = out[index + 1] - out[index]
-        if duration + 1e-9 >= editorial_min:
+        usable = usables[index]
+        if usable is None:
             continue
-        need = editorial_min - duration
-        out[index + 1] += need
-        for later in range(index + 2, len(out)):
-            out[later] += need
-        repairs.append(
-            f"slot[{index}]: unter shot_min ({editorial_min:.2f}s) — "
-            f"Endgrenze +{need:.2f}s (Cascade)."
+        duration = out[index + 1] - out[index]
+        if duration <= float(usable) + 1e-9:
+            continue
+        shortfall = duration - float(usable)
+        if shortfall <= tol + 1e-9:
+            remaining_tol_violations.append(
+                f"slot[{index}]: span {duration:.2f}s > usable {float(usable):.2f}s "
+                f"(shortfall {shortfall:.2f}s innerhalb Toleranz {tol:.1f}s) "
+                "nach Grenzen-Klemme nicht stabil."
+            )
+    if remaining_tol_violations:
+        raise UnifiedTimelineError(
+            "\n".join(remaining_tol_violations),
+            errors=remaining_tol_violations,
         )
     return out
+
+
+def assert_timed_slots_contiguous(
+    timed_slots: list[TimedSlot],
+    *,
+    fps: float = 25.0,
+) -> None:
+    """Invariante Fix 1.3: Summe Clip-Dauern == Spanne; keine Lücke > 1 Frame."""
+    if len(timed_slots) < 1:
+        return
+    frame = 1.0 / max(1.0, float(fps))
+    total = sum(slot.duration_seconds for slot in timed_slots)
+    span = float(timed_slots[-1].end_seconds) - float(timed_slots[0].start_seconds)
+    if abs(total - span) > frame + 1e-9:
+        raise UnifiedTimelineError(
+            f"Grenzen-Kette inkonsistent: Summe Dauern {total:.6f}s ≠ "
+            f"Spanne {span:.6f}s (Frame-Toleranz {frame:.4f}s)."
+        )
+    for prev, curr in zip(timed_slots, timed_slots[1:]):
+        gap = float(curr.start_seconds) - float(prev.end_seconds)
+        if gap > frame + 1e-9:
+            raise UnifiedTimelineError(
+                f"Timeline-Lücke {prev.slot_id}→{curr.slot_id}: "
+                f"{prev.end_seconds:.3f}s–{curr.start_seconds:.3f}s "
+                f"({gap:.3f}s > 1 Frame)."
+            )
+        if gap < -(frame + 1e-9):
+            raise UnifiedTimelineError(
+                f"Timeline-Overlap {prev.slot_id}→{curr.slot_id}: "
+                f"{gap:.3f}s."
+            )
 
 
 def resolve_timed_slots(
@@ -260,6 +400,8 @@ def resolve_timed_slots(
     options: CutPlanOptions,
     fps: float = 25.0,
     repairs: list[str] | None = None,
+    catalog: AssetCatalog | None = None,
+    slot_usable_max: list[float | None] | None = None,
 ) -> list[TimedSlot]:
     """Grenzen-Kette → TimedSlots (VO-absolut, vor Kapitel-Hülle)."""
     notes = repairs if repairs is not None else []
@@ -291,11 +433,21 @@ def resolve_timed_slots(
         TECH_MAX_SHOT_SECONDS,
         max(editorial_min, float(options.shot_max_sec)),
     )
+    head_trim = max(0.0, float(options.video_head_trim_sec))
+    short_tolerance = max(0.0, float(options.short_asset_tolerance_sec))
+    usables = (
+        list(slot_usable_max)
+        if slot_usable_max is not None
+        else _slot_usable_max_from_catalog(plan, catalog, head_trim=head_trim)
+    )
     times = _clamp_boundary_times(
         raw_times,
         editorial_min=editorial_min,
         editorial_max=editorial_max,
         repairs=notes,
+        slot_usable_max=usables,
+        short_tolerance=short_tolerance,
+        max_media_iterations=2,
     )
     times = [_seconds_to_frame(t, fps) for t in times]
 
@@ -481,7 +633,9 @@ def resolve_unified_timeline(
         options=options,
         fps=fps,
         repairs=repairs,
+        catalog=catalog,
     )
+    assert_timed_slots_contiguous(timed_slots, fps=fps)
     for slot, timed in zip(plan.slots, timed_slots):
         slot.target_duration_seconds = round(timed.duration_seconds, 6)
 

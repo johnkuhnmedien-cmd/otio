@@ -21,6 +21,7 @@ from otio_app.services.without_voiceover_enhanced.pause_resolver import (
 from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
     EDGE_MARGIN_SECONDS,
     POSITION_FRACTION,
+    assert_timed_slots_contiguous,
     boundary_source_offset_seconds,
     boundary_to_absolute_seconds,
     boundary_to_narration_anchor,
@@ -251,6 +252,167 @@ def test_clamp_shortens_overlong_slot_by_nudging_shared_boundary() -> None:
     # Kette bleibt dicht
     assert timed[0].end_seconds == timed[1].start_seconds
     assert any("shot_max" in note for note in repairs)
+
+
+def test_usable_tolerance_pulls_shared_end_boundary_not_local_cut() -> None:
+    """Fix 1: shortfall ≤ Toleranz → Endgrenze nach vorne; Kette dicht."""
+    timeline = NarrationTimelineDocument(
+        script_version="v1",
+        total_duration_seconds=40.0,
+        entries=[
+            NarrationTimelineEntry(
+                segment_id="seg_001",
+                start_seconds=0.0,
+                end_seconds=40.0,
+                audio_duration_seconds=40.0,
+            )
+        ],
+    )
+    sentences = {
+        "seg_001__s001": _sentence("seg_001__s001", start=0.0, end=1.0),
+        "seg_001__s002": _sentence("seg_001__s002", start=10.0, end=11.0),
+        "seg_001__s003": _sentence("seg_001__s003", start=20.0, end=21.0),
+    }
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            CutBoundary(cut_id="b0", sentence_id="seg_001__s001", position="start"),
+            CutBoundary(cut_id="b1", sentence_id="seg_001__s002", position="start"),
+            CutBoundary(cut_id="b2", sentence_id="seg_001__s003", position="start"),
+        ],
+        slots=[
+            CutSlot(slot_id="slot_a", local_asset_id="asset_a", asset_fit="strong"),
+            CutSlot(slot_id="slot_b", local_asset_id="asset_b", asset_fit="strong"),
+        ],
+    )
+    # Roh: Slot A = 10s, Slot B = 10s. A usable 9.0, Toleranz 1.0 → clamp A auf 9s.
+    options = CutPlanOptions(
+        shot_min_sec=0.4,
+        shot_max_sec=120.0,
+        short_asset_tolerance_sec=1.0,
+        video_head_trim_sec=0.0,
+    )
+    repairs: list[str] = []
+    timed = resolve_timed_slots(
+        plan,
+        timeline,
+        sentence_index=sentences,
+        options=options,
+        fps=25.0,
+        repairs=repairs,
+        slot_usable_max=[9.0, None],
+    )
+    assert timed[0].duration_seconds == pytest.approx(9.0)
+    assert timed[0].end_seconds == timed[1].start_seconds
+    assert timed[1].duration_seconds == pytest.approx(11.0)
+    assert_timed_slots_contiguous(timed, fps=25.0)
+    total = sum(s.duration_seconds for s in timed)
+    span = timed[-1].end_seconds - timed[0].start_seconds
+    assert total == pytest.approx(span)
+    assert any("nutzbare Dauer knapp" in note for note in repairs)
+
+
+def test_over_tolerance_does_not_clamp_leaves_span_for_gap_path() -> None:
+    """Fix 1: span > usable + tolerance → Grenzen unverändert (Gap später)."""
+    timeline = NarrationTimelineDocument(
+        script_version="v1",
+        total_duration_seconds=40.0,
+        entries=[
+            NarrationTimelineEntry(
+                segment_id="seg_001",
+                start_seconds=0.0,
+                end_seconds=40.0,
+                audio_duration_seconds=40.0,
+            )
+        ],
+    )
+    sentences = {
+        "seg_001__s001": _sentence("seg_001__s001", start=0.0, end=1.0),
+        "seg_001__s002": _sentence("seg_001__s002", start=10.0, end=11.0),
+        "seg_001__s003": _sentence("seg_001__s003", start=20.0, end=21.0),
+    }
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            CutBoundary(cut_id="b0", sentence_id="seg_001__s001", position="start"),
+            CutBoundary(cut_id="b1", sentence_id="seg_001__s002", position="start"),
+            CutBoundary(cut_id="b2", sentence_id="seg_001__s003", position="start"),
+        ],
+        slots=[
+            CutSlot(slot_id="slot_a", local_asset_id="asset_a", asset_fit="strong"),
+            CutSlot(slot_id="slot_b", local_asset_id="asset_b", asset_fit="strong"),
+        ],
+    )
+    options = CutPlanOptions(
+        shot_min_sec=0.4,
+        shot_max_sec=120.0,
+        short_asset_tolerance_sec=1.0,
+    )
+    repairs: list[str] = []
+    timed = resolve_timed_slots(
+        plan,
+        timeline,
+        sentence_index=sentences,
+        options=options,
+        fps=25.0,
+        repairs=repairs,
+        slot_usable_max=[8.0, None],  # shortfall 2.0 > tol 1.0
+    )
+    assert timed[0].duration_seconds == pytest.approx(10.0)
+    assert timed[0].end_seconds == timed[1].start_seconds
+    assert not any("nutzbare Dauer knapp" in note for note in repairs)
+
+
+def test_resolve_shot_media_never_shortens_timeline_end(tmp_path) -> None:
+    """Fix 1.2: Media-Auflösung ändert timeline_end nicht (auch innerhalb Toleranz)."""
+    from otio_app.models import Project, ProjectMode
+    from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        TimelineResolveError,
+        _resolve_shot_media,
+    )
+
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"x")
+    work = tmp_path / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir()
+    project = Project(
+        id="p",
+        name="p",
+        project_root=str(tmp_path),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        asset_subdir_names=["A"],
+        selected_asset_subdirs=["A"],
+    )
+    entry = {
+        "path": str(media),
+        "duration_seconds": 5.0,
+        "usable_in_s": 0.0,
+        "media_kind": "video",
+        "media_type": "video",
+        "available_start_seconds": 0.0,
+        "folder": "A",
+        "canonical_id": "asset_a",
+    }
+    repairs: list[str] = []
+    # need 5.5, usable 5.0, tol 1.0 → früher lokal gekürzt; jetzt Fehler.
+    with pytest.raises(TimelineResolveError, match="Grenzen-Klemme|zu kurz|knapp über"):
+        _resolve_shot_media(
+            project,
+            shot_id="slot_x",
+            asset_id="asset_a",
+            entry=entry,
+            timeline_start=0.0,
+            timeline_end=5.5,
+            fps=25.0,
+            head_trim=0.0,
+            short_tolerance=1.0,
+            editorial_function="evidence",
+            may_overlap_pause=False,
+            repairs=repairs,
+        )
+    assert not any("Shot gekürzt" in note for note in repairs)
 
 
 def test_final_shadow_uses_real_sentence_offsets() -> None:
