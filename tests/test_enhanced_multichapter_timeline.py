@@ -674,6 +674,20 @@ def test_ui_local_export_is_primary() -> None:
     assert "zoom" not in src.lower() or "Zoom" not in src
 
 
+def test_ui_cut_plan_decouples_llm3_and_has_named_otio_export() -> None:
+    src = Path("otio_app/ui/without_voiceover_enhanced/cut_plan_tab.py").read_text(
+        encoding="utf-8"
+    )
+    assert "LLM-Lauf 3 + Python-Finalisierung" not in src
+    assert "LLM-Lauf 3 starten" in src
+    assert "Python-Finalisierung starten" in src
+    assert "Dateiname / Export-Basename" in src
+    assert "Lokale Produktions-OTIO erzeugen" in src
+    assert "Portables Paket erzeugen" in src
+    assert 'key="enh_final_cut_llm"' in src
+    assert 'key="enh_final_cut_python"' in src
+
+
 def test_albarracin_gap_root_cause_classification(tmp_path: Path) -> None:
     """Reproduziert Kapitel-interne Lücke und klassifiziert sie als Resolve-Gap."""
     project, _ = _build_three_chapter_project(tmp_path)

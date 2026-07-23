@@ -81,6 +81,8 @@ from otio_app.ui.without_voiceover_enhanced.timeline_view import render_realtime
 from otio_app.services.without_voiceover_enhanced.otio_export_service import (
     EnhancedOtioExportError,
     export_otio_from_resolved_timeline,
+    export_portable_otio_package,
+    validate_resolved_timeline_for_production,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
     accepted_supplements_path,
@@ -1428,14 +1430,34 @@ def _render_section_final(project) -> None:
         chapter_count=final_chapters,
     )
     st.caption(
-        f"Lauf 3 läuft sequenziell: **ein LLM-Call pro Kapitel** "
-        f"({final_chapters} Kapitel), danach Python-Auflösung."
+        f"Lauf 3 und Python-Auflösung sind getrennt: "
+        f"LLM-Lauf 3 = **ein Call pro Kapitel** ({final_chapters} Kapitel) → "
+        f"`final_cut_plan.json`. Python-Finalisierung liest diesen Plan und "
+        f"schreibt `resolved_timeline.json`."
     )
-    if st.button(
-        "LLM-Lauf 3 + Python-Finalisierung",
-        type="primary",
-        key="enh_final_cut",
-    ):
+
+    col_llm, col_py = st.columns(2)
+    with col_llm:
+        run_llm3 = st.button(
+            "LLM-Lauf 3 starten",
+            type="primary",
+            key="enh_final_cut_llm",
+            help="Nur Final Cut Plan erzeugen/überschreiben. Keine Timeline-Auflösung.",
+        )
+    with col_py:
+        existing_final = load_model(final_cut_plan_path(project), FinalCutPlanDocument)
+        run_python = st.button(
+            "Python-Finalisierung starten",
+            key="enh_final_cut_python",
+            disabled=existing_final is None,
+            help=(
+                "Technische Auflösung aus vorhandenem final_cut_plan.json."
+                if existing_final is not None
+                else "Zuerst LLM-Lauf 3 ausführen (final_cut_plan.json fehlt)."
+            ),
+        )
+
+    if run_llm3:
         try:
             progress = st.empty()
 
@@ -1457,21 +1479,38 @@ def _render_section_final(project) -> None:
             ok = [r for r in results if r.status == "PASS"]
             fail = [r for r in results if r.status != "PASS"]
             st.success(
-                f"{len(ok)}/{len(results)} Kapitel · {len(final.shots)} finale Shots."
+                f"LLM-Lauf 3 fertig: {len(ok)}/{len(results)} Kapitel · "
+                f"{len(final.shots)} finale Shots. "
+                "Als Nächstes „Python-Finalisierung starten“."
             )
             for result in fail:
                 st.error(f"„{result.folder_name}“: {result.error}")
-            with st.spinner("Technische Auflösung…"):
+            st.rerun()
+        except CutPlanError as exc:
+            st.error(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Fehler: {exc}")
+
+    if run_python:
+        try:
+            with st.spinner("Technische Auflösung (Python)…"):
                 resolved = resolve_final_timeline(project)
             st.success(
-                f"Timeline {resolved.total_duration_seconds:.2f}s · "
-                f"{len(resolved.shots)} Shots · Reparaturen: {len(resolved.repairs)}"
+                f"Python-Finalisierung: Timeline {resolved.total_duration_seconds:.2f}s · "
+                f"{len(resolved.shots)} Shots · Reparaturen: {len(resolved.repairs)} · "
+                f"Fehler: {len(resolved.errors)}"
             )
             if resolved.repairs:
-                for repair in resolved.repairs:
-                    st.caption(repair)
+                with st.expander("Reparaturen", expanded=False):
+                    for repair in resolved.repairs:
+                        st.caption(repair)
+            if resolved.errors:
+                st.warning(
+                    f"{len(resolved.errors)} Resolve-Fehler — "
+                    "Produktions-OTIO bleibt gesperrt, bis sie behoben sind."
+                )
             st.rerun()
-        except (CutPlanError, TimelineResolveError) as exc:
+        except TimelineResolveError as exc:
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
             st.error(f"Fehler: {exc}")
@@ -1494,38 +1533,106 @@ def _render_section_final(project) -> None:
 
     resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
     if resolved is not None:
+        gate_errors = validate_resolved_timeline_for_production(project, resolved)
+        has_errors = bool(resolved.errors) or bool(gate_errors)
         st.caption(
             f"Aufgelöste Timeline: {len(resolved.shots)} Shots · "
             f"{resolved.total_duration_seconds:.1f}s · "
-            f"Fehler: {len(resolved.errors)}"
+            f"Fehler: {len(resolved.errors) + len(gate_errors)}"
         )
-        if resolved.errors:
+        if has_errors:
             st.warning(
-                f"{len(resolved.errors)} Resolve-Fehler — "
+                f"{len(resolved.errors) + len(gate_errors)} Resolve-/Export-Fehler — "
                 "Produktions-OTIO gesperrt. Test-Export mit Lücken möglich."
             )
-            with st.expander("Resolve-Fehler", expanded=False):
-                for err in resolved.errors[:40]:
+            with st.expander("Resolve-/Export-Fehler", expanded=False):
+                for err in (list(resolved.errors) + list(gate_errors))[:40]:
                     st.write(f"- {err}")
-                if len(resolved.errors) > 40:
-                    st.caption(f"… +{len(resolved.errors) - 40} weitere")
-            if st.button(
-                "Test-OTIO mit Lücken erzeugen",
-                key=f"enh_final_test_otio_gaps_{project.id}",
-                help=(
-                    "Exportiert bereits aufgelöste Shots; fehlende bleiben Gaps. "
-                    "Auch unter ⑧ Final Output."
-                ),
-            ):
-                try:
-                    path = export_otio_from_resolved_timeline(
-                        project,
-                        basename=f"{project.name}_enhanced_preview_gaps",
-                        allow_errors=True,
-                    )
-                    st.success(f"Test-OTIO: `{path}`")
-                except EnhancedOtioExportError as exc:
-                    st.error(str(exc))
+                remaining = len(resolved.errors) + len(gate_errors) - 40
+                if remaining > 0:
+                    st.caption(f"… +{remaining} weitere")
+
+        st.markdown("##### OTIO exportieren")
+        default_otio_name = f"{(project.name or 'enhanced').strip() or 'enhanced'}_enhanced"
+        otio_basename = st.text_input(
+            "Dateiname / Export-Basename",
+            value=default_otio_name,
+            key=f"enh_final_otio_basename_{project.id}",
+            help="Ohne Endung. Lokaler Export schreibt `<Name>.otio` ohne Medienkopien.",
+        )
+        basename = (otio_basename or default_otio_name).strip() or default_otio_name
+
+        st.markdown("###### Lokaler Produktions-Export")
+        if st.button(
+            "Lokale Produktions-OTIO erzeugen",
+            type="primary",
+            key=f"enh_final_otio_export_local_{project.id}",
+            disabled=has_errors,
+            help=(
+                "Fail-closed: blockiert bei Resolve-/Medienfehlern."
+                if has_errors
+                else (
+                    "Verwendet die validierten Originaldateien. "
+                    "Vorhandene Videos werden nicht kopiert."
+                )
+            ),
+        ):
+            try:
+                path = export_otio_from_resolved_timeline(
+                    project,
+                    basename=basename,
+                    allow_errors=False,
+                )
+                st.success(f"Lokale Produktions-OTIO geschrieben: `{path}`")
+            except EnhancedOtioExportError as exc:
+                st.error(str(exc))
+
+        st.markdown("###### Portables Paket (optional)")
+        st.caption(
+            "Für Transfer oder Archivierung. Kann Hardlinks oder Kopien nach "
+            "`media/` erzeugen und erheblichen Speicherplatz benötigen."
+        )
+        if st.button(
+            "Portables Paket erzeugen",
+            key=f"enh_final_otio_export_portable_{project.id}",
+            disabled=has_errors,
+            help=(
+                "Fail-closed: blockiert bei Resolve-/Medienfehlern."
+                if has_errors
+                else "Speicherintensiv: Hardlinks oder Kopien nach media/."
+            ),
+        ):
+            try:
+                package_dir = export_portable_otio_package(
+                    project,
+                    basename=basename,
+                    allow_errors=False,
+                )
+                media_count = len(list((package_dir / "media").glob("*")))
+                st.warning(
+                    f"Portables Paket geschrieben: `{package_dir}` "
+                    f"({media_count} Medien). Speicherplatz prüfen."
+                )
+            except EnhancedOtioExportError as exc:
+                st.error(str(exc))
+
+        if has_errors and st.button(
+            "Test-OTIO mit Lücken erzeugen",
+            key=f"enh_final_test_otio_gaps_{project.id}",
+            help=(
+                "Exportiert bereits aufgelöste Shots; fehlende bleiben Gaps. "
+                "Auch unter ⑧ Final Output."
+            ),
+        ):
+            try:
+                path = export_otio_from_resolved_timeline(
+                    project,
+                    basename=f"{basename}_preview_gaps",
+                    allow_errors=True,
+                )
+                st.success(f"Test-OTIO: `{path}`")
+            except EnhancedOtioExportError as exc:
+                st.error(str(exc))
 
     show_timeline_key = f"enh_show_timeline_final_{project.id}"
     st.checkbox(
