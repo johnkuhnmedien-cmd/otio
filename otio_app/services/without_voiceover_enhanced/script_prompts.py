@@ -471,6 +471,8 @@ SHOT RULES:
 
 - Shots must be ordered chronologically.
 - Shot anchors must not run backwards.
+- For every shot, start_anchor must be chronologically before end_anchor
+  (e.g. never start=end with end=middle on the same span).
 - Do not create overlapping shots.
 - Do not leave uncovered narration spans between consecutive shots (no visual
   holes on the time carpet). Every part of the chapter narration must be

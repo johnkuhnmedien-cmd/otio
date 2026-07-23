@@ -82,3 +82,35 @@ def test_rough_coverage_rejects_mid_chapter_hole() -> None:
             ordered_segment_ids=["A_segment_001"],
             folder_name="A",
         )
+
+
+def test_rough_coverage_repairs_inverted_anchors() -> None:
+    # Wie im UI-Fehler: start=end (~10s), end=middle (~5s) → tauschen statt fail.
+    rough = RoughCutPlanDocument(
+        script_version="v1",
+        shots=[
+            _shot("s1", "start", "middle"),
+            _shot("s2", "end", "middle"),
+            _shot("s3", "middle", "end"),
+        ],
+    )
+    timings = SegmentTimingsDocument(
+        script_version="v1",
+        segments=[
+            SegmentTiming(
+                segment_id="A_segment_001",
+                script_version="v1",
+                audio_path="/tmp/a.wav",
+                duration_seconds=10.0,
+            )
+        ],
+    )
+    repairs = _validate_rough_continuous_coverage(
+        rough,
+        timings=timings,
+        ordered_segment_ids=["A_segment_001"],
+        folder_name="A",
+    )
+    assert any("vertauscht repariert" in note for note in repairs)
+    assert rough.shots[1].start_anchor.position == "middle"
+    assert rough.shots[1].end_anchor.position == "end"

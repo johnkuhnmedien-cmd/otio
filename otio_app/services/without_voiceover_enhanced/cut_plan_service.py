@@ -500,13 +500,16 @@ def _validate_rough_continuous_coverage(
     ordered_segment_ids: list[str],
     folder_name: str,
     gap_tolerance_sec: float = 0.05,
-) -> None:
+) -> list[str]:
     """Fail-closed: Rough-Shots müssen den Kapitel-Teppich ohne Löcher abdecken.
 
     Nutzt nur Soft-Anker × Segmentdauern — keine finalen Timeline-Sekunden.
+    Vertauschte Start/Ende-Anker werden repariert (häufiger LLM-Fehler).
+    Returns repair notes.
     """
+    repairs: list[str] = []
     if not ordered_segment_ids or not rough.shots:
-        return
+        return repairs
     dur_by_id = {
         str(seg.segment_id): max(0.0, float(seg.duration_seconds or 0.0))
         for seg in timings.segments
@@ -519,7 +522,7 @@ def _validate_rough_continuous_coverage(
         cursor += dur_by_id.get(sid, 0.0)
     total = cursor
     if total <= 1e-9:
-        return
+        return repairs
 
     spans: list[tuple[float, float, str]] = []
     for shot in rough.shots:
@@ -535,9 +538,19 @@ def _validate_rough_continuous_coverage(
                 "Anker für die Abdeckungsprüfung."
             )
         if end + 1e-9 < start:
-            raise CutPlanError(
-                f"Kapitel „{folder_name}“: Shot {shot.shot_id} endet vor dem Start "
-                f"(~{start:.2f}s → ~{end:.2f}s)."
+            # LLM vertauscht häufig Soft-Positionen (z.B. start=end, end=middle).
+            old_start, old_end = start, end
+            shot.start_anchor, shot.end_anchor = shot.end_anchor, shot.start_anchor
+            shot.narration_start_anchor = _editorial_to_narration_anchor(
+                shot.start_anchor
+            )
+            shot.narration_end_anchor = _editorial_to_narration_anchor(
+                shot.end_anchor
+            )
+            start, end = end, start
+            repairs.append(
+                f"{shot.shot_id}: Start-/Ende-Anker vertauscht repariert "
+                f"(waren ~{old_start:.2f}s → ~{old_end:.2f}s)."
             )
         spans.append((start, max(start, end), shot.shot_id))
 
@@ -564,6 +577,7 @@ def _validate_rough_continuous_coverage(
                 f"~{gap:.2f}s zwischen {prev[2]} und {curr[2]}. "
                 "Shot dazwischen planen oder coverage_gap — kein Video-Hold."
             )
+    return repairs
 
 
 def _validate_final_chapter_scope(
