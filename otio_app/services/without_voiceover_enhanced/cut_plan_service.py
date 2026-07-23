@@ -2102,21 +2102,50 @@ def mini_repair_unified_plan(
     )
 
 
-def generate_unified_cut_plan_and_timeline(
+def generate_unified_cut_plan(
     project: Project,
     *,
     provider: str = "openai",
     model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+) -> Any:
+    """Nur LLM: Unified Cut Plan erzeugen und als ``unified_cut_plan.json`` speichern.
+
+    Kein Python-Timing, kein Gap-Merge — bewusst entkoppelt vom Resolver.
+    """
+    results = generate_all_unified_cuts(
+        project,
+        provider=provider,
+        model=model,
+        llm_callable=llm_callable,
+        progress_callback=progress_callback,
+    )
+    return merge_and_persist_unified_cuts(project, results)
+
+
+def resolve_unified_cut_plan_timeline(
+    project: Project,
+    *,
+    plan: Any | None = None,
     run_gap_merge: bool = True,
+    provider: str = "openai",
+    model: str = "gpt-5.6-terra",
+    llm_callable: Callable[..., Any] | None = None,
 ) -> tuple[Any, Any, Any | None]:
-    """Ein-Knopf-Orchestrierung: Unified LLM → Timing → optional Gap-Merge."""
+    """Python-Timing (+ optional Gap-Merge / Mini-Repair) aus gespeichertem Plan.
+
+    Erwartet einen Unified Cut Plan (Argument oder Disk). Kein neuer LLM-Lauf,
+    außer optionalem Mini-Repair wenn explizit aktiviert.
+    """
     from otio_app.services.without_voiceover_enhanced.cut_rhythm_validator import (
         should_run_unified_mini_repair,
     )
     from otio_app.services.without_voiceover_enhanced.gap_merge_service import (
         merge_export_ready_gaps_into_timeline,
+    )
+    from otio_app.services.without_voiceover_enhanced.models import (
+        UnifiedCutPlanDocument,
     )
     from otio_app.services.without_voiceover_enhanced.paths import (
         unified_cut_plan_path,
@@ -2125,15 +2154,16 @@ def generate_unified_cut_plan_and_timeline(
         resolve_unified_timeline,
     )
 
-    results = generate_all_unified_cuts(
-        project,
-        provider=provider,
-        model=model,
-        llm_callable=llm_callable,
-        progress_callback=progress_callback,
+    if plan is None:
+        plan = load_model(unified_cut_plan_path(project), UnifiedCutPlanDocument)
+    if plan is None:
+        raise CutPlanError(
+            "Unified Cut Plan fehlt — zuerst „Unified Cut Plan erzeugen (LLM)“."
+        )
+
+    resolved = resolve_unified_timeline(
+        project, plan, allow_open_gaps=True, persist=True
     )
-    plan = merge_and_persist_unified_cuts(project, results)
-    resolved = resolve_unified_timeline(project, plan, allow_open_gaps=True, persist=True)
 
     merge_report = None
     if run_gap_merge:
@@ -2177,3 +2207,34 @@ def generate_unified_cut_plan_and_timeline(
             persist=True,
         )
     return plan, resolved, merge_report
+
+
+def generate_unified_cut_plan_and_timeline(
+    project: Project,
+    *,
+    provider: str = "openai",
+    model: str = "gpt-5.6-terra",
+    llm_callable: Callable[..., Any] | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+    run_gap_merge: bool = True,
+) -> tuple[Any, Any, Any | None]:
+    """Kombi-Orchestrierung: Unified LLM → Timing → optional Gap-Merge.
+
+    Für Tests/Automation. Die UI nutzt die entkoppelten Schritte
+    ``generate_unified_cut_plan`` und ``resolve_unified_cut_plan_timeline``.
+    """
+    plan = generate_unified_cut_plan(
+        project,
+        provider=provider,
+        model=model,
+        llm_callable=llm_callable,
+        progress_callback=progress_callback,
+    )
+    return resolve_unified_cut_plan_timeline(
+        project,
+        plan=plan,
+        run_gap_merge=run_gap_merge,
+        provider=provider,
+        model=model,
+        llm_callable=llm_callable,
+    )

@@ -42,11 +42,15 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     accept_supplement_candidates,
     generate_all_final_cuts,
     generate_all_rough_cuts,
-    generate_unified_cut_plan_and_timeline,
+    generate_unified_cut_plan,
     list_cut_plan_chapter_names,
     merge_and_persist_final_cuts,
     merge_and_persist_rough_cuts,
+    resolve_unified_cut_plan_timeline,
     search_supplements_for_gaps,
+)
+from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+    UnifiedTimelineError,
 )
 from otio_app.services.without_voiceover_enhanced.supplement_funnel_job import (
     JobStatus as FunnelJobStatus,
@@ -799,7 +803,7 @@ def _render_slim_status(project) -> None:
 
 
 def _render_section_unified(project) -> None:
-    st.subheader("1. Unified Cut Plan (1 LLM-Lauf + Python-Timing)")
+    st.subheader("1. Unified Cut Plan (LLM) → 2. Python Timing")
     _render_slim_status(project)
     chapters = list_cut_plan_chapter_names(project)
     chapter_count = max(1, len(chapters))
@@ -814,8 +818,9 @@ def _render_section_unified(project) -> None:
         chapter_count=chapter_count,
     )
     st.caption(
-        f"Unified: **ein LLM-Call pro Kapitel** ({chapter_count} Kapitel) — "
-        "danach Python-Timing. Legacy bräuchte 2 Calls/Kapitel (Rough+Final)."
+        f"Schritt 1: **ein LLM-Call pro Kapitel** ({chapter_count} Kapitel) → "
+        "`unified_cut_plan.json`. Schritt 2: Python-Timing getrennt starten "
+        "(kein erneuter LLM-Call)."
     )
     cut_options = load_cut_plan_options(project)
     if cut_options.include_middle_frames:
@@ -824,38 +829,78 @@ def _render_section_unified(project) -> None:
             f"(max. {cut_options.max_middle_frames_per_chapter}/Kapitel)."
         )
 
-    if st.button(
-        "Unified Cut + Timing starten",
-        type="primary",
-        key="enh_unified_cut",
-    ):
+    col_llm, col_timing = st.columns(2)
+    with col_llm:
+        run_llm = st.button(
+            "1 · Unified Cut Plan erzeugen (LLM)",
+            type="primary",
+            key="enh_unified_cut_llm",
+            use_container_width=True,
+        )
+    with col_timing:
+        run_timing = st.button(
+            "2 · Python Timing auflösen",
+            key="enh_unified_cut_timing",
+            use_container_width=True,
+            help=(
+                "Liest den gespeicherten Unified Cut Plan und erzeugt die "
+                "aufgelöste Timeline. Kein LLM-Call."
+            ),
+        )
+
+    if run_llm:
         try:
             progress = st.empty()
 
             def _unified_progress(folder_name: str, index: int, total: int) -> None:
                 progress.info(
-                    f"Unified · Kapitel {index}/{total}: „{folder_name}“ "
+                    f"Unified LLM · Kapitel {index}/{total}: „{folder_name}“ "
                     f"({resolve_llm_model_id(rough_provider, rough_model)})…"
                 )
 
-            with st.spinner("Unified Cut Plan + Timing…"):
-                plan, resolved, merge_report = generate_unified_cut_plan_and_timeline(
+            with st.spinner("Unified Cut Plan (nur LLM)…"):
+                plan = generate_unified_cut_plan(
                     project,
                     provider=rough_provider,
                     model=rough_model,
                     progress_callback=_unified_progress,
-                    run_gap_merge=True,
                 )
             progress.empty()
             gaps = sum(
                 1 for s in plan.slots if str(s.asset_fit) in {"weak", "none"}
             )
             st.success(
-                f"Unified: {len(plan.slots)} Slots · "
+                f"LLM-Plan gespeichert: {len(plan.slots)} Slots · "
                 f"{len(plan.boundaries)} Grenzen · "
-                f"{gaps} weak/none Gaps · "
-                f"{len(resolved.shots)} resolved Shots."
+                f"{gaps} weak/none Gaps. "
+                "Als Nächstes „Python Timing auflösen“."
             )
+            st.rerun()
+        except CutPlanError as exc:
+            st.error(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"LLM-Fehler: {exc}")
+
+    if run_timing:
+        try:
+            with st.spinner("Python Timing…"):
+                plan, resolved, merge_report = resolve_unified_cut_plan_timeline(
+                    project,
+                    run_gap_merge=True,
+                    provider=rough_provider,
+                    model=rough_model,
+                )
+            st.success(
+                f"Timing ok: {len(resolved.shots)} Shots · "
+                f"{resolved.total_duration_seconds:.1f}s · "
+                f"{len(plan.slots)} Slots im Plan."
+            )
+            if resolved.repairs:
+                with st.expander(
+                    f"Repairs / Hinweise ({len(resolved.repairs)})", expanded=False
+                ):
+                    for note in resolved.repairs[:40]:
+                        st.caption(note)
             if merge_report is not None:
                 st.info(merge_report.message or "Gap-Merge ausgeführt.")
                 if merge_report.open_none_gap_ids:
@@ -866,8 +911,14 @@ def _render_section_unified(project) -> None:
             st.rerun()
         except CutPlanError as exc:
             st.error(str(exc))
+        except UnifiedTimelineError as exc:
+            st.error(
+                "Python-Timing meldet Fehler (LLM-Plan bleibt erhalten — "
+                "kannst Timing erneut starten oder Gaps im Funnel füllen):\n\n"
+                f"{exc}"
+            )
         except Exception as exc:  # noqa: BLE001
-            st.error(f"Fehler: {exc}")
+            st.error(f"Timing-Fehler: {exc}")
 
     plan = load_model(unified_cut_plan_path(project), UnifiedCutPlanDocument)
     if plan is not None:
@@ -883,6 +934,22 @@ def _render_section_unified(project) -> None:
             )
         if len(plan.slots) > 40:
             st.caption(f"… +{len(plan.slots) - 40} weitere Slots")
+    else:
+        st.caption("Noch kein Unified Cut Plan — zuerst Schritt 1 (LLM).")
+
+    resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
+    if resolved is not None:
+        st.caption(
+            f"Aufgelöste Timeline: {len(resolved.shots)} Shots · "
+            f"{resolved.total_duration_seconds:.1f}s · "
+            f"{len(resolved.errors)} Fehler · {len(resolved.repairs)} Repairs."
+        )
+        if resolved.errors:
+            with st.expander(
+                f"Timing-Fehler ({len(resolved.errors)})", expanded=False
+            ):
+                for err in resolved.errors[:30]:
+                    st.caption(err)
 
     merge_report = load_model(gap_merge_report_path(project), GapMergeReport)
     if merge_report is not None:

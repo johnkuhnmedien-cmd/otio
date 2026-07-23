@@ -191,3 +191,60 @@ def test_merge_report_slot_result_shape() -> None:
     assert should_run_unified_mini_repair(
         report, total_slots=4, enabled=True, threshold=0.20
     ) is True
+
+
+def test_generate_unified_cut_plan_does_not_resolve_timeline(monkeypatch) -> None:
+    """LLM-Schritt persistiert nur den Plan — kein Python-Timing."""
+    from otio_app.services.without_voiceover_enhanced import cut_plan_service as svc
+
+    plan = UnifiedCutPlanDocument(script_version="v1", slots=[], boundaries=[])
+    calls = {"resolve": 0}
+
+    monkeypatch.setattr(
+        svc,
+        "generate_all_unified_cuts",
+        lambda *a, **k: ["ok"],
+    )
+    monkeypatch.setattr(
+        svc,
+        "merge_and_persist_unified_cuts",
+        lambda project, results: plan,
+    )
+
+    def _boom(*_a, **_k):
+        calls["resolve"] += 1
+        raise AssertionError("resolve must not run in LLM-only step")
+
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.unified_timeline_service."
+        "resolve_unified_timeline",
+        _boom,
+    )
+
+    out = svc.generate_unified_cut_plan(project=None)  # type: ignore[arg-type]
+    assert out is plan
+    assert calls["resolve"] == 0
+
+
+def test_resolve_unified_cut_plan_timeline_requires_saved_plan(tmp_path) -> None:
+    from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
+        CutPlanError,
+        resolve_unified_cut_plan_timeline,
+    )
+
+    work = tmp_path / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    project = Project(
+        id="p",
+        name="p",
+        project_root=str(tmp_path),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        asset_subdir_names=["A"],
+        selected_asset_subdirs=["A"],
+    )
+    try:
+        resolve_unified_cut_plan_timeline(project)
+        raise AssertionError("expected CutPlanError")
+    except CutPlanError as exc:
+        assert "fehlt" in str(exc).lower()
