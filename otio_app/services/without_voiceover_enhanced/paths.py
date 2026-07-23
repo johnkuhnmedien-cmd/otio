@@ -28,6 +28,7 @@ SEGMENT_SENTENCE_ALIGNMENT_FILENAME = "sentence_alignment.json"
 PAUSE_DIRECTIVES_FILENAME = "pause_directives.json"
 NARRATION_TIMELINE_FILENAME = "narration_timeline.json"
 ROUGH_CUT_PLAN_FILENAME = "rough_cut_plan.json"
+UNIFIED_CUT_PLAN_FILENAME = "unified_cut_plan.json"
 COVERAGE_GAPS_FILENAME = "coverage_gaps.json"
 STOCK_SEARCH_RESULTS_FILENAME = "search_results.json"
 ACCEPTED_SUPPLEMENTS_FILENAME = "accepted_supplements.json"
@@ -152,6 +153,10 @@ def narration_timeline_path(project: Project) -> Path:
 
 def rough_cut_plan_path(project: Project) -> Path:
     return cut_dir(project) / ROUGH_CUT_PLAN_FILENAME
+
+
+def unified_cut_plan_path(project: Project) -> Path:
+    return cut_dir(project) / UNIFIED_CUT_PLAN_FILENAME
 
 
 def coverage_gaps_path(project: Project) -> Path:

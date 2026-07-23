@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class NarrationAnchor(BaseModel):
@@ -208,6 +208,117 @@ class RoughCutPlanDocument(BaseModel):
     script_version: str
     pause_directives: list[PauseDirective] = Field(default_factory=list)
     shots: list[RoughShot] = Field(default_factory=list)
+
+
+# --- Unified Cut Plan (1 LLM-Lauf) -------------------------------------------------
+
+ASSET_FIT_VALUES = ("strong", "acceptable", "weak", "none")
+AssetFit = Literal["strong", "acceptable", "weak", "none"]
+BOUNDARY_POSITIONS = ("start", "early", "middle", "late", "end")
+BoundaryPosition = Literal["start", "early", "middle", "late", "end"]
+CUT_ALIGNMENTS = ("mid_sentence", "sentence_boundary", "in_pause")
+CutAlignment = Literal["mid_sentence", "sentence_boundary", "in_pause"]
+GAP_FIT_VALUES = frozenset({"weak", "none"})
+
+
+class CutBoundary(BaseModel):
+    """Eine Cut-Grenze auf dem VO-Teppich (Satz-Anker, keine absoluten Sekunden)."""
+
+    cut_id: str
+    sentence_id: str
+    position: Optional[BoundaryPosition] = None
+    # Satzrelativ; gewinnt gegenüber position, wenn gesetzt.
+    offset_seconds: Optional[float] = None
+    alignment: CutAlignment = "sentence_boundary"
+
+    @field_validator("position", mode="before")
+    @classmethod
+    def _normalize_position(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return None
+        text = str(value).strip().lower()
+        return text if text in BOUNDARY_POSITIONS else value
+
+    @field_validator("alignment", mode="before")
+    @classmethod
+    def _normalize_alignment(cls, value: Any) -> str:
+        text = str(value or "sentence_boundary").strip().lower()
+        return text if text in CUT_ALIGNMENTS else "sentence_boundary"
+
+    @model_validator(mode="after")
+    def _require_position_or_offset(self) -> "CutBoundary":
+        if self.position is None and self.offset_seconds is None:
+            raise ValueError(
+                f"{self.cut_id}: CutBoundary braucht position oder offset_seconds."
+            )
+        return self
+
+
+class CutSlot(BaseModel):
+    """Shot-Slot zwischen zwei aufeinanderfolgenden CutBoundaries."""
+
+    slot_id: str
+    local_asset_id: Optional[str] = None
+    asset_fit: AssetFit = "none"
+    asset_fit_reason: str = ""
+    visual_intent: str = ""
+    narrative_function: str = "orientation"
+    coverage_gap_id: Optional[str] = None
+    source_range_intent: str = "representative_middle_section"
+    # Inline-Gap-Spezifikation (für fit in {weak, none}):
+    needed_visual: str = ""
+    search_concepts: list[str] = Field(default_factory=list)
+    must_include: list[str] = Field(default_factory=list)
+    must_avoid: list[str] = Field(default_factory=list)
+    desired_motion: str = ""
+    desired_framing: str = ""
+    preferred_media_type: str = "video"
+    fact_check_required: bool = False
+    covered_sentence_ids: list[str] = Field(default_factory=list)
+    # Optional: Ziel-Dauer für Funnel-Dauerfilter (sobald Timing bekannt).
+    target_duration_seconds: Optional[float] = None
+
+    @field_validator("asset_fit", mode="before")
+    @classmethod
+    def _normalize_asset_fit(cls, value: Any) -> str:
+        text = str(value or "none").strip().lower()
+        return text if text in ASSET_FIT_VALUES else "none"
+
+
+class UnifiedCutPlanDocument(BaseModel):
+    """Ergebnis des Unified-LLM-Laufs: Grenzen-Kette + Slots (nur VO-Zeitraum)."""
+
+    schema_version: str = "unified-cut-v1"
+    script_version: str
+    pause_directives: list[PauseDirective] = Field(default_factory=list)
+    boundaries: list[CutBoundary] = Field(default_factory=list)
+    slots: list[CutSlot] = Field(default_factory=list)
+    # Optional LLM-Vorschlag wenn Settings-Modus=llm (Umsetzung im Resolver).
+    voiceover_preroll_sec: Optional[float] = None
+    voiceover_postroll_sec: Optional[float] = None
+
+    @model_validator(mode="after")
+    def _validate_boundary_slot_chain(self) -> "UnifiedCutPlanDocument":
+        n_bounds = len(self.boundaries)
+        n_slots = len(self.slots)
+        if n_bounds == 0 and n_slots == 0:
+            return self
+        if n_bounds < 2:
+            raise ValueError(
+                "UnifiedCutPlan braucht mindestens 2 Grenzen (VO-Start und VO-Ende)."
+            )
+        if n_slots != n_bounds - 1:
+            raise ValueError(
+                f"Invariante verletzt: len(slots)={n_slots} muss "
+                f"len(boundaries)-1={n_bounds - 1} sein."
+            )
+        cut_ids = [b.cut_id for b in self.boundaries]
+        if len(set(cut_ids)) != len(cut_ids):
+            raise ValueError("cut_id-Werte in boundaries müssen eindeutig sein.")
+        slot_ids = [s.slot_id for s in self.slots]
+        if len(set(slot_ids)) != len(slot_ids):
+            raise ValueError("slot_id-Werte müssen eindeutig sein.")
+        return self
 
 
 class CoverageGap(BaseModel):
