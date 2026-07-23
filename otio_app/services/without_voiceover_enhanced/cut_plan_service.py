@@ -1390,6 +1390,17 @@ def accept_supplement_candidates(
     results = load_model(stock_search_results_path(project), StockSearchResultsDocument)
     if results is None:
         raise CutPlanError("Keine Stockergebnisse vorhanden.")
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        compute_cut_plan_run_id_from_path,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        unified_cut_plan_path,
+    )
+
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    run_id = str(getattr(coverage, "cut_plan_run_id", "") or "").strip()
+    if not run_id:
+        run_id = compute_cut_plan_run_id_from_path(unified_cut_plan_path(project))
     selected: list[StockCandidate] = []
     for candidate in results.candidates:
         if candidate.candidate_id in candidate_ids:
@@ -1398,6 +1409,8 @@ def accept_supplement_candidates(
                 # still allow manual accept but flag in attribution note.
                 candidate.license = candidate.license or None
             candidate.selected = True
+            if run_id:
+                candidate.cut_plan_run_id = run_id
             if candidate.local_media_path:
                 candidate = refresh_supplement_validation(candidate)
             else:
@@ -1950,7 +1963,6 @@ def merge_and_persist_unified_cuts(
     seen_pause: set[str] = set()
     preroll: float | None = None
     postroll: float | None = None
-    chapter_join = 0
 
     for result in ok:
         plan = result.plan
@@ -1960,6 +1972,9 @@ def merge_and_persist_unified_cuts(
         if plan.voiceover_postroll_sec is not None and postroll is None:
             postroll = plan.voiceover_postroll_sec
         for pause in plan.pause_directives:
+            # E2E-4: chapter_transition wird durch Kapitelhülle abgedeckt.
+            if str(pause.pause_function or "").strip().lower() == "chapter_transition":
+                continue
             sentence_id = str(pause.after_sentence_id or "").strip()
             key = (
                 f"sentence:{sentence_id}"
@@ -1970,32 +1985,24 @@ def merge_and_persist_unified_cuts(
                 continue
             seen_pause.add(key)
             pauses.append(pause)
-        # Kapitel-Ketten aneinanderhängen. Zwischen Kapiteln: Bridge-Slot
-        # (Ende Kap. N → Start Kap. N+1), damit len(slots)==len(boundaries)-1.
+        # E2E-4: keine bridge_*-Slots. Kapitel N+1 teilt die letzte Grenze von N
+        # (VO-Ende ≈ VO-Start bei ignorierter chapter_transition-Pause).
         if not boundaries:
             boundaries.extend(plan.boundaries)
             slots.extend(plan.slots)
             continue
-        chapter_join += 1
-        bridge_id = f"bridge_{chapter_join:03d}"
-        slots.append(
-            CutSlot(
-                slot_id=bridge_id,
-                local_asset_id=None,
-                asset_fit="none",
-                asset_fit_reason="Kapitelübergang (Bridge zwischen Unified-Kapitelplänen)",
-                visual_intent="chapter transition",
-                narrative_function="chapter_transition",
-                # Nie Funnel — Fill läuft deterministisch in gap_merge (Fix 3).
-                coverage_gap_id=None,
-                needed_visual="chapter transition / hold",
-                search_concepts=["chapter transition"],
-                preferred_media_type="video",
-                bridge_candidate_asset_ids=[],
-            )
+        if not plan.boundaries or not plan.slots:
+            continue
+        next_first = plan.boundaries[0]
+        next_slots = list(plan.slots)
+        first_slot = next_slots[0].model_copy(
+            update={
+                "start_sentence_id": str(next_first.sentence_id or "").strip() or None
+            }
         )
-        boundaries.extend(plan.boundaries)
-        slots.extend(plan.slots)
+        next_slots[0] = first_slot
+        boundaries.extend(plan.boundaries[1:])
+        slots.extend(next_slots)
 
     merged = UnifiedCutPlanDocument(
         script_version=locked.script_version,

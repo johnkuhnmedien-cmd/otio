@@ -348,6 +348,21 @@ def _persist_accepted(
             f"{candidate.candidate_id}: technische Validierung fehlgeschlagen ({error})"
         )
     candidate = refresh_supplement_validation(candidate)
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        compute_cut_plan_run_id_from_path,
+    )
+    from otio_app.services.without_voiceover_enhanced.models import CoverageGapsDocument
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        coverage_gaps_path,
+        unified_cut_plan_path,
+    )
+
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    run_id = str(getattr(coverage, "cut_plan_run_id", "") or "").strip()
+    if not run_id:
+        run_id = compute_cut_plan_run_id_from_path(unified_cut_plan_path(project))
+    if run_id:
+        candidate.cut_plan_run_id = run_id
 
     existing = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     locked = require_locked_script(project)

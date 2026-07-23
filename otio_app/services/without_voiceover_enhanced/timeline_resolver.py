@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -474,6 +475,16 @@ def _seconds_to_frame(seconds: float, fps: float) -> float:
     return round(frame / fps, 6)
 
 
+def _seconds_floor_to_frame(seconds: float, fps: float) -> float:
+    rate = float(fps) if float(fps) > 0 else 25.0
+    return round(math.floor(float(seconds) * rate + 1e-9) / rate, 6)
+
+
+def _seconds_ceil_to_frame(seconds: float, fps: float) -> float:
+    rate = float(fps) if float(fps) > 0 else 25.0
+    return round(math.ceil(float(seconds) * rate - 1e-9) / rate, 6)
+
+
 def _frame_duration(fps: float) -> float:
     rate = float(fps) if float(fps) > 0 else 25.0
     return 1.0 / rate
@@ -631,13 +642,13 @@ def _apply_chapter_envelopes(
     errors: list[str],
     narration_timeline: NarrationTimelineDocument | None = None,
 ) -> list[ResolvedChapterEnvelope]:
-    """Kapitelhüllen: Vor-/Nachlauf am Opening/Closing-INHALTS-Shot (nie Bridge).
+    """Kapitelhüllen: Vor-/Nachlauf am Opening/Closing-CONTENT-Shot.
 
-    E2E-3:
+    E2E-4:
     - ``chapter_video_end = chapter_audio_end + postroll`` am chapter_close
-    - Bridge nur Übergangspause: ``next_video_start - chapter_video_end``
-    - ``last_shot_id`` / ``postroll_hold_shot_id`` nie ``bridge_*``
-    - ``chapter_audio_end`` aus letztem realen Segment-Ende (kein Stub-Clip)
+    - ``chapter_video_start(N+1) = chapter_video_end(N)`` (kein Bridge-Slot)
+    - ``last_shot_id`` / ``postroll_hold_shot_id`` = letzter CONTENT-Shot
+    - ``chapter_audio_end`` aus Audio-Segment-Ende (ceil), Start floor
     """
     chapters = _chapters_from_locked(locked)
     if not chapters:
@@ -667,9 +678,8 @@ def _apply_chapter_envelopes(
     cursor = 0.0
     envelopes: list[ResolvedChapterEnvelope] = []
     frame = _frame_duration(fps)
-    placed_bridges: list[ResolvedShot] = []
 
-    for chapter_index, (chapter_id, segment_ids) in enumerate(chapters):
+    for _chapter_index, (chapter_id, segment_ids) in enumerate(chapters):
         seg_set = set(segment_ids)
         ch_audios = [a for a in audio_segments if a.segment_id in seg_set]
         assigned = [
@@ -677,7 +687,7 @@ def _apply_chapter_envelopes(
             for shot in ordered
             if shot_start_segment.get(shot.shot_id, "") in seg_set
         ]
-        ch_bridges = [s for s in assigned if _is_bridge_resolved_shot(s)]
+        # E2E-4: Bridge-Slots werden nicht mehr erzeugt; Legacy herausfiltern.
         ch_shots = [s for s in assigned if not _is_bridge_resolved_shot(s)]
 
         if narration_expected and not ch_audios:
@@ -714,17 +724,51 @@ def _apply_chapter_envelopes(
         entry = timeline_by_seg.get(last_seg)
         first_entry = timeline_by_seg.get(first_seg)
         if first_entry is not None and entry is not None:
-            raw_audio_start = float(first_entry.start_seconds)
-            raw_audio_end = float(entry.end_seconds)
+            # E2E-4: Audio-Segment-Ränder floor/ceil — nicht Satzende.
+            raw_audio_start = _seconds_floor_to_frame(float(first_entry.start_seconds), fps)
+            raw_audio_end = _seconds_ceil_to_frame(float(entry.end_seconds), fps)
         elif real_audios:
-            raw_audio_start = min(a.timeline_start_seconds for a in real_audios)
-            raw_audio_end = max(a.timeline_end_seconds for a in real_audios)
+            raw_audio_start = _seconds_floor_to_frame(
+                min(a.timeline_start_seconds for a in real_audios), fps
+            )
+            raw_audio_end = _seconds_ceil_to_frame(
+                max(a.timeline_end_seconds for a in real_audios), fps
+            )
         else:
             raw_audio_start = min(s.timeline_start_seconds for s in ch_shots)
             raw_audio_end = max(s.timeline_end_seconds for s in ch_shots)
 
         raw_first_shot_start = min(raw_shot_times[s.shot_id][0] for s in ch_shots)
         raw_last_shot_end = max(raw_shot_times[s.shot_id][1] for s in ch_shots)
+
+        # E2E-4: kleiner Ausklang (Satzende → Audio-Datei-Ende, typ. ≤0.25s)
+        # wird auf Audio-Ende gezogen; echte Narrationslücken bleiben Fehler.
+        ausklang_tol = max(frame * 3.0, 0.25)
+        if raw_last_shot_end < raw_audio_end - ausklang_tol - 1e-9:
+            errors.append(
+                f"Abschließende visuelle Lücke während der Narration in Kapitel "
+                f"{chapter_id}: letzter Shot endet bei {raw_last_shot_end:.3f}s, "
+                f"Audio bei {raw_audio_end:.3f}s "
+                f"(>{ausklang_tol:.3f}s Ausklang-Toleranz)."
+            )
+        elif raw_last_shot_end + 1e-9 < raw_audio_end:
+            last_raw = max(
+                ch_shots,
+                key=lambda s: (raw_shot_times[s.shot_id][1], s.shot_id),
+            )
+            old_start, old_end = raw_shot_times[last_raw.shot_id]
+            raw_shot_times[last_raw.shot_id] = (old_start, raw_audio_end)
+            repairs.append(
+                f"Kapitel {chapter_id}: Closing-Shot {last_raw.shot_id} "
+                f"Ende {old_end:.6f}s → Audio-Ende {raw_audio_end:.6f}s."
+            )
+            raw_last_shot_end = raw_audio_end
+        elif raw_last_shot_end > raw_audio_end + frame + 1e-9:
+            errors.append(
+                f"Abschließende visuelle Überlänge in Kapitel {chapter_id}: "
+                f"letzter Shot endet bei {raw_last_shot_end:.3f}s, "
+                f"Audio bei {raw_audio_end:.3f}s."
+            )
 
         if raw_first_shot_start > raw_audio_start + frame + 1e-9:
             errors.append(
@@ -746,27 +790,6 @@ def _apply_chapter_envelopes(
                 f"{raw_audio_start:.6f}s."
             )
             raw_first_shot_start = raw_audio_start
-
-        if raw_last_shot_end < raw_audio_end - frame - 1e-9:
-            errors.append(
-                f"Abschließende visuelle Lücke während der Narration in Kapitel "
-                f"{chapter_id}: letzter Shot endet bei {raw_last_shot_end:.3f}s, "
-                f"Audio bei {raw_audio_end:.3f}s "
-                f"(>{frame:.4f}s Frame-Toleranz)."
-            )
-        elif raw_last_shot_end < raw_audio_end - 1e-9:
-            last_raw = max(
-                ch_shots,
-                key=lambda s: (raw_shot_times[s.shot_id][1], s.shot_id),
-            )
-            old_start, _old_end = raw_shot_times[last_raw.shot_id]
-            raw_shot_times[last_raw.shot_id] = (old_start, raw_audio_end)
-            repairs.append(
-                f"Ein-Frame-Randabweichung abschließend in Kapitel {chapter_id}: "
-                f"{last_raw.shot_id} Ende {raw_last_shot_end:.6f}s → "
-                f"{raw_audio_end:.6f}s."
-            )
-            raw_last_shot_end = raw_audio_end
 
         raw_span = max(0.0, raw_audio_end - raw_audio_start)
 
@@ -853,31 +876,8 @@ def _apply_chapter_envelopes(
             )
         )
 
-        # Bridge nur Übergangspause nach chapter_video_end.
-        bridge_dur = 0.0
-        if ch_bridges:
-            for bridge in sorted(
-                ch_bridges, key=lambda s: (raw_shot_times[s.shot_id][0], s.shot_id)
-            ):
-                raw_b0, raw_b1 = raw_shot_times[bridge.shot_id]
-                dur = max(0.0, float(raw_b1) - float(raw_b0))
-                bridge_dur += dur
-            bridge_start = chapter_video_end
-            for bridge in sorted(
-                ch_bridges, key=lambda s: (raw_shot_times[s.shot_id][0], s.shot_id)
-            ):
-                raw_b0, raw_b1 = raw_shot_times[bridge.shot_id]
-                dur = max(0.0, float(raw_b1) - float(raw_b0))
-                bridge.timeline_start_seconds = round(bridge_start, 6)
-                bridge.timeline_end_seconds = round(bridge_start + dur, 6)
-                bridge.chapter_id = ""
-                bridge.folder_name = bridge.folder_name or chapter_id
-                placed_bridges.append(bridge)
-                bridge_start = bridge.timeline_end_seconds
-        elif chapter_index < len(chapters) - 1 and entry is not None:
-            bridge_dur = max(0.0, float(entry.pause_after_seconds or 0.0))
-
-        cursor = _seconds_to_frame(chapter_video_end + bridge_dur, fps)
+        # E2E-4: nächstes Kapitel beginnt exakt am Video-Ende (Nachlauf→Vorlauf).
+        cursor = chapter_video_end
 
     # Envelope-Validierung: preroll/postroll je Kapitel == Settings.
     for env in envelopes:
@@ -904,11 +904,21 @@ def _apply_chapter_envelopes(
                 f"({env.postroll_hold_shot_id})."
             )
 
+    for index in range(1, len(envelopes)):
+        prev = envelopes[index - 1]
+        cur = envelopes[index]
+        if abs(cur.chapter_video_start - prev.chapter_video_end) > 1e-3:
+            errors.append(
+                f"Kapitelwechsel {prev.chapter_id}→{cur.chapter_id}: "
+                f"video_start {cur.chapter_video_start:.3f}s ≠ "
+                f"prev video_end {prev.chapter_video_end:.3f}s."
+            )
+
     if envelopes:
         repairs.append(
             f"Kapitelhüllen: {len(envelopes)} Kapitel mit Vorlauf {preroll:.2f}s "
             f"und Nachlauf {postroll:.2f}s pro Kapitel "
-            f"(Nachlauf am Inhalts-Closing-Shot; Bridges nur Übergangspause)."
+            f"(Nachlauf am Inhalts-Closing-Shot; kein Bridge-Slot)."
         )
     return envelopes
 

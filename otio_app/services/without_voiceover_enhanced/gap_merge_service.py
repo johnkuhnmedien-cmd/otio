@@ -28,6 +28,7 @@ from otio_app.services.without_voiceover_enhanced.media_hold import (
     ensure_video_padded_hold,
 )
 from otio_app.services.without_voiceover_enhanced.models import (
+    AcceptedSupplementsDocument,
     CoverageGapsDocument,
     CutSlot,
     FunnelCandidateRecord,
@@ -36,10 +37,12 @@ from otio_app.services.without_voiceover_enhanced.models import (
     ResolvedShot,
     ResolvedTimelineDocument,
     StockCandidate,
+    SupplementFunnelGapReport,
     SupplementFunnelReport,
     UnifiedCutPlanDocument,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
+    accepted_supplements_path,
     coverage_gaps_path,
     gap_merge_report_path,
     resolved_timeline_path,
@@ -417,111 +420,13 @@ def fill_chapter_bridges(
     repairs: list[str],
     report: GapMergeReport,
 ) -> list[ResolvedShot]:
-    """Fix 3: Bridges füllen — Closing verlängern → Kandidaten → bestes Asset."""
-    fps = float(timeline.fps or project.fps or 25.0)
-    head_trim = max(0.0, float(options.video_head_trim_sec))
-    short_tolerance = max(0.0, float(options.short_asset_tolerance_sec))
+    """E2E-4: Bridge-Fill entfernt — Legacy-``bridge_*``-Slots werden verworfen."""
+    del project, catalog, options, repairs, report
     ordered = sorted(
         list(timeline.shots),
         key=lambda s: (s.timeline_start_seconds, s.shot_id),
     )
-    used = {
-        str(s.asset_id)
-        for s in ordered
-        if s.asset_id and not s.open_gap and not s.is_placeholder
-    }
-    out: list[ResolvedShot] = []
-    for shot in ordered:
-        if not is_bridge_shot(shot, unified=unified):
-            out.append(shot)
-            if shot.asset_id and not shot.open_gap and not shot.is_placeholder:
-                used.add(str(shot.asset_id))
-            continue
-
-        prev = out[-1] if out else None
-        if prev is not None:
-            extended = _try_extend_previous_over_bridge(
-                project,
-                prev,
-                shot,
-                catalog=catalog,
-                head_trim=head_trim,
-                short_tolerance=short_tolerance,
-                fps=fps,
-                repairs=repairs,
-            )
-            if extended is not None:
-                out[-1] = extended
-                report.slots.append(
-                    GapMergeSlotResult(
-                        shot_id=shot.shot_id,
-                        coverage_gap_id="",
-                        status="bridge_extended",
-                        previous_asset_id=prev.asset_id or "",
-                        new_asset_id=extended.asset_id or "",
-                        local_fit="none",
-                        message=f"von {extended.shot_id} über Bridge verlängert",
-                    )
-                )
-                report.merged_shot_ids.append(shot.shot_id)
-                continue
-
-        need = max(
-            0.0,
-            float(shot.timeline_end_seconds) - float(shot.timeline_start_seconds),
-        )
-        folder_hint = ""
-        if prev is not None:
-            folder_hint = prev.folder_name or prev.chapter_id or ""
-        asset_id = _pick_bridge_asset_id(
-            shot,
-            unified=unified,
-            catalog=catalog,
-            used_asset_ids=used,
-            folder_hint=folder_hint,
-            min_duration=need,
-        )
-        if asset_id:
-            filled = _resolve_bridge_with_asset(
-                project,
-                shot,
-                asset_id,
-                catalog=catalog,
-                fps=fps,
-                head_trim=head_trim,
-                short_tolerance=short_tolerance,
-                repairs=repairs,
-            )
-            if filled is not None:
-                out.append(filled)
-                used.add(str(filled.asset_id))
-                report.slots.append(
-                    GapMergeSlotResult(
-                        shot_id=shot.shot_id,
-                        coverage_gap_id="",
-                        status="bridge_filled",
-                        previous_asset_id=shot.asset_id or "",
-                        new_asset_id=filled.asset_id,
-                        local_fit="none",
-                        message=f"Bridge-Asset {filled.asset_id}",
-                    )
-                )
-                report.merged_shot_ids.append(shot.shot_id)
-                continue
-
-        report.slots.append(
-            GapMergeSlotResult(
-                shot_id=shot.shot_id,
-                coverage_gap_id="",
-                status="bridge_open",
-                previous_asset_id=shot.asset_id or "",
-                local_fit="none",
-                message="Bridge konnte nicht gefüllt werden.",
-            )
-        )
-        report.errors.append(f"{shot.shot_id}: Bridge offen.")
-        out.append(shot)
-    return out
+    return [shot for shot in ordered if not is_bridge_shot(shot, unified=unified)]
 
 
 def _funnel_records_by_gap(
@@ -592,6 +497,78 @@ def _candidates_for_gap(
 ) -> list[StockCandidate]:
     gid = (gap_id or "").strip()
     return [c for c in ready if (c.gap_id or "").strip() == gid]
+
+
+def _write_merge_rejection_to_funnel(
+    project: Project,
+    *,
+    gap_id: str,
+    rejected_candidate_ids: list[str],
+    cut_plan_run_id: str,
+    message: str,
+) -> None:
+    """E2E-4: Merge lehnt Gap ab → Funnel-Report öffnen für Re-Ranking."""
+    report = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
+    if report is None:
+        return
+    funnel_run = str(getattr(report, "cut_plan_run_id", "") or "").strip()
+    if cut_plan_run_id and funnel_run and funnel_run != cut_plan_run_id:
+        return
+    rejected = [str(x).strip() for x in rejected_candidate_ids if str(x).strip()]
+    found = False
+    for index, gap_rep in enumerate(report.gaps):
+        if gap_rep.gap_id != gap_id:
+            continue
+        existing = {
+            str(x).strip()
+            for x in (gap_rep.rejected_candidate_ids or [])
+            if str(x).strip()
+        }
+        existing.update(rejected)
+        gap_rep.filled = False
+        gap_rep.export_ready_candidate_id = None
+        gap_rep.review_ready_candidate_id = None
+        gap_rep.rejected_candidate_ids = sorted(existing)
+        gap_rep.message = message or "Merge: kein geeigneter Kandidat."
+        report.gaps[index] = gap_rep
+        found = True
+        break
+    if not found:
+        report.gaps.append(
+            SupplementFunnelGapReport(
+                gap_id=gap_id,
+                filled=False,
+                rejected_candidate_ids=sorted(set(rejected)),
+                message=message or "Merge: kein geeigneter Kandidat.",
+            )
+        )
+    report.filled_gap_ids = [g for g in report.filled_gap_ids if g != gap_id]
+    if gap_id not in report.open_gap_ids:
+        report.open_gap_ids.append(gap_id)
+    write_json(supplement_funnel_report_path(project), report)
+
+    # Rejected Accepted-Einträge entfernen, damit Funnel neu rankt.
+    if rejected:
+        accepted = load_model(
+            accepted_supplements_path(project), AcceptedSupplementsDocument
+        )
+        if accepted is not None:
+            reject_set = set(rejected)
+            kept = [
+                s
+                for s in accepted.supplements
+                if s.candidate_id not in reject_set
+                or (s.gap_id or "").strip() != gap_id
+            ]
+            if len(kept) != len(accepted.supplements):
+                write_json(
+                    accepted_supplements_path(project),
+                    AcceptedSupplementsDocument(
+                        schema_version=accepted.schema_version,
+                        script_version=accepted.script_version,
+                        supplements=kept,
+                    ),
+                )
 
 
 def _pick_supplement(
@@ -682,25 +659,14 @@ def merge_export_ready_gaps_into_timeline(
     short_tolerance = max(0.0, float(options.short_asset_tolerance_sec))
     repairs = list(timeline.repairs or [])
 
-    # Fix 3: Bridges zuerst (nie Funnel).
-    bridge_filled = fill_chapter_bridges(
-        project,
-        timeline,
-        unified=unified,
-        catalog=catalog,
-        options=options,
-        repairs=repairs,
-        report=report,
-    )
+    # E2E-4: keine Bridge-Slots mehr — Kapitelwechsel = Nachlauf→Vorlauf.
     working = timeline.model_copy(deep=True)
-    working.shots = bridge_filled
+    working.shots = [
+        s for s in timeline.shots if not is_bridge_shot(s, unified=unified)
+    ]
 
     updated_shots: list[ResolvedShot] = []
     for shot in working.shots:
-        if is_bridge_shot(shot, unified=unified):
-            # Bereits in fill_chapter_bridges behandelt (oder offen geblieben).
-            updated_shots.append(shot)
-            continue
         gap_id = (shot.coverage_gap_id or "").strip()
         if not gap_id and not shot.open_gap:
             updated_shots.append(shot)
@@ -760,6 +726,16 @@ def merge_export_ready_gaps_into_timeline(
             report.slots.append(result)
             if local_fit == "none":
                 report.open_none_gap_ids.append(gap_id)
+                # E2E-4: Funnel neu öffnen — sonst Deadlock (Funnel skip / Merge leer).
+                _write_merge_rejection_to_funnel(
+                    project,
+                    gap_id=gap_id,
+                    rejected_candidate_ids=[
+                        c.candidate_id for c in candidates if c.candidate_id
+                    ],
+                    cut_plan_run_id=cut_plan_run_id,
+                    message=pick_msg,
+                )
             else:
                 report.errors.append(f"{shot.shot_id}: {pick_msg}")
             updated_shots.append(shot)

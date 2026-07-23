@@ -102,8 +102,24 @@ def _candidate_id_for_file(gap_id: str, source: Path) -> str:
     return f"manual_{stem}_{digest}"
 
 
+def _current_cut_plan_run_id(project: Project) -> str:
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        compute_cut_plan_run_id_from_path,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import unified_cut_plan_path
+
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    run_id = str(getattr(coverage, "cut_plan_run_id", "") or "").strip()
+    if run_id:
+        return run_id
+    return compute_cut_plan_run_id_from_path(unified_cut_plan_path(project))
+
+
 def _upsert_accepted(project: Project, candidate: StockCandidate) -> None:
     locked = require_locked_script(project)
+    run_id = _current_cut_plan_run_id(project)
+    if run_id:
+        candidate.cut_plan_run_id = run_id
     existing = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     supplements = list(existing.supplements) if existing else []
     # Pro Gap nur ein Accepted-Eintrag (manuelle Neuzuordnung ersetzt).
@@ -242,6 +258,7 @@ def assign_local_file_to_open_gap(
         media_validation_error=None,
         funnel_managed=True,
         license_metadata_status="missing",
+        cut_plan_run_id=_current_cut_plan_run_id(project),
     )
     folder = _folder_for_gap(project, gap, locked)
     from otio_app.services.without_voiceover_enhanced.supplement_clean_media import (

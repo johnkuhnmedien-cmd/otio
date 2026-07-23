@@ -277,7 +277,10 @@ class CutSlot(BaseModel):
     covered_sentence_ids: list[str] = Field(default_factory=list)
     # Optional: Ziel-Dauer für Funnel-Dauerfilter (sobald Timing bekannt).
     target_duration_seconds: Optional[float] = None
-    # Fix 3 / Entscheidung 13: Kandidaten nur für Kapitel-Bridge (nie Funnel).
+    # E2E-4: optionaler Start-Satz wenn Kapitel ohne Bridge-Slot verbunden werden
+    # (gemeinsame Grenze trägt sonst die End-Sentence-ID des vorherigen Kapitels).
+    start_sentence_id: Optional[str] = None
+    # Legacy (E2E-3): Bridge-Kandidaten — wird nicht mehr befüllt.
     bridge_candidate_asset_ids: list[str] = Field(default_factory=list)
 
     @field_validator("asset_fit", mode="before")
@@ -387,6 +390,8 @@ class StockCandidate(BaseModel):
     funnel_managed: bool = False
     # Informativ: complete | partial | missing (blockiert export_ready nicht).
     license_metadata_status: str = ""
+    # E2E-4: muss zur coverage_gaps.cut_plan_run_id passen (sonst stale).
+    cut_plan_run_id: str = ""
 
 
 class StockSearchResultsDocument(BaseModel):
@@ -525,6 +530,8 @@ class SupplementFunnelGapReport(BaseModel):
     candidate_pool_limit: int = 20
     eligible_providers: list[str] = Field(default_factory=list)
     provider_candidate_counts: dict[str, int] = Field(default_factory=dict)
+    # E2E-4: Merge hat Kandidaten abgelehnt → nächster Funnel-Lauf rankt neu.
+    rejected_candidate_ids: list[str] = Field(default_factory=list)
 
 
 class SupplementFunnelReport(BaseModel):

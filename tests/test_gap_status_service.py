@@ -215,7 +215,7 @@ def test_missing_funnel_run_id_treated_as_stale_when_coverage_has_run(
 
 
 def test_legacy_coverage_without_run_id_still_lists_open_gaps(tmp_path: Path) -> None:
-    """Legacy-Projekte ohne Run-ID: Funnel-Idempotenz bleibt nutzbar."""
+    """E2E-4: Funnel-filled allein reicht nicht — ohne merge-fähiges Accepted offen."""
     project = _project(tmp_path)
     write_json(
         coverage_gaps_path(project),
@@ -244,8 +244,9 @@ def test_legacy_coverage_without_run_id_still_lists_open_gaps(tmp_path: Path) ->
             ],
         ),
     )
-    assert list_open_funnel_gap_ids(project) == ["gap_2"]
+    # Kein Accepted mit lokaler Datei → Gap bleibt für Funnel offen.
+    assert list_open_funnel_gap_ids(project) == ["gap_1", "gap_2"]
     status = summarize_gap_status(project)
-    # Ohne expected run_id: Funnel zählt für none; weak bleibt offen.
+    # summarize_gap_status: Funnel-filled zählt für UI none weiterhin.
     assert "gap_1" in status.filled_gap_ids
     assert "gap_2" in status.open_gap_ids

@@ -1,4 +1,4 @@
-"""E2E-3: Nachlauf am Inhalts-Shot; Bridge = Übergangspause; Audio-Split-Guard."""
+"""E2E-3/E2E-4: Nachlauf am Inhalts-Shot; kein Bridge; Audio-Split-Guard."""
 
 from __future__ import annotations
 
@@ -61,15 +61,14 @@ def _project(tmp_path: Path) -> Project:
     )
 
 
-def test_postroll_on_content_shot_bridge_is_pause_only(
+def test_postroll_on_content_shot_no_bridge_chapter_abut(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Yosemite+Caddo-Fixture: slot_014 = VO_ende+5; bridge = next_start - video_end."""
+    """E2E-4: slot_014 = VO_ende+5; chapter_video_start(N+1)=chapter_video_end(N)."""
     project = _project(tmp_path)
     preroll = 5.0
     postroll = 5.0
-    pause = 5.0
-    yos_vo = 40.0  # VO-Länge Yosemite
+    yos_vo = 40.0
     cad_vo = 20.0
 
     monkeypatch.setattr(
@@ -78,7 +77,7 @@ def test_postroll_on_content_shot_bridge_is_pause_only(
         lambda *args, **kwargs: None,
     )
 
-    # Roh-Timeline (vor Hülle): Yosemite 0–40, Bridge 40–45, Caddo 45–65
+    # Roh-Timeline (vor Hülle): Yosemite 0–40, Caddo 40–60 (kein Bridge-Slot)
     shots = [
         ResolvedShot(
             shot_id="Yosemite_slot_001",
@@ -107,23 +106,12 @@ def test_postroll_on_content_shot_bridge_is_pause_only(
             folder_name="Yosemite",
         ),
         ResolvedShot(
-            shot_id="bridge_001",
-            asset_id="",
-            timeline_start_seconds=yos_vo,
-            timeline_end_seconds=yos_vo + pause,
-            source_start_seconds=0.0,
-            source_end_seconds=pause,
-            editorial_function="chapter_transition",
-            open_gap=True,
-            is_placeholder=True,
-        ),
-        ResolvedShot(
             shot_id="Caddo_slot_001",
             asset_id="c1",
-            timeline_start_seconds=yos_vo + pause,
-            timeline_end_seconds=yos_vo + pause + cad_vo,
+            timeline_start_seconds=yos_vo,
+            timeline_end_seconds=yos_vo + cad_vo,
             source_start_seconds=0.0,
-            source_end_seconds=cad_vo,
+            source_end_seconds=20.0,
             resolved_media_path="/tmp/c.mp4",
             resolved_media_kind="video",
             resolved_media_duration_seconds=30.0,
@@ -134,38 +122,38 @@ def test_postroll_on_content_shot_bridge_is_pause_only(
     audio = [
         ResolvedAudioSegment(
             segment_id="Yosemite_segment_001",
-            audio_path="/tmp/y.wav",
+            audio_path="/tmp/y.mp3",
             timeline_start_seconds=0.0,
             timeline_end_seconds=yos_vo,
-            pause_after_seconds=pause,
             source_start_seconds=0.0,
             source_end_seconds=yos_vo,
+            pause_after_seconds=0.0,
         ),
         ResolvedAudioSegment(
             segment_id="Caddo_segment_001",
-            audio_path="/tmp/c.wav",
-            timeline_start_seconds=yos_vo + pause,
-            timeline_end_seconds=yos_vo + pause + cad_vo,
-            pause_after_seconds=0.0,
+            audio_path="/tmp/c.mp3",
+            timeline_start_seconds=yos_vo,
+            timeline_end_seconds=yos_vo + cad_vo,
             source_start_seconds=0.0,
             source_end_seconds=cad_vo,
+            pause_after_seconds=0.0,
         ),
     ]
     narration = NarrationTimelineDocument(
         script_version="v1",
-        total_duration_seconds=yos_vo + pause + cad_vo,
+        total_duration_seconds=yos_vo + cad_vo,
         entries=[
             NarrationTimelineEntry(
                 segment_id="Yosemite_segment_001",
                 start_seconds=0.0,
                 end_seconds=yos_vo,
-                pause_after_seconds=pause,
+                pause_after_seconds=0.0,
                 audio_duration_seconds=yos_vo,
             ),
             NarrationTimelineEntry(
                 segment_id="Caddo_segment_001",
-                start_seconds=yos_vo + pause,
-                end_seconds=yos_vo + pause + cad_vo,
+                start_seconds=yos_vo,
+                end_seconds=yos_vo + cad_vo,
                 pause_after_seconds=0.0,
                 audio_duration_seconds=cad_vo,
             ),
@@ -193,17 +181,6 @@ def test_postroll_on_content_shot_bridge_is_pause_only(
                     segment_id="Yosemite_segment_001", offset_seconds=yos_vo
                 ),
                 asset_id="a2",
-            ),
-            FinalShot(
-                shot_id="bridge_001",
-                narration_start_anchor=NarrationAnchor(
-                    segment_id="Yosemite_segment_001", offset_seconds=yos_vo
-                ),
-                narration_end_anchor=NarrationAnchor(
-                    segment_id="Caddo_segment_001", offset_seconds=0.0
-                ),
-                asset_id="",
-                editorial_function="chapter_transition",
             ),
             FinalShot(
                 shot_id="Caddo_slot_001",
@@ -248,26 +225,23 @@ def test_postroll_on_content_shot_bridge_is_pause_only(
     assert yos.last_shot_id == "Yosemite_slot_014"
     assert yos.postroll_hold_shot_id == "Yosemite_slot_014"
     assert not str(yos.last_shot_id).startswith("bridge_")
+    assert not any(s.shot_id.startswith("bridge_") for s in shots)
 
     slot014 = next(s for s in shots if s.shot_id == "Yosemite_slot_014")
-    # VO_ende (chapter_audio_end) + 5.00 Nachlauf
     assert slot014.timeline_end_seconds == pytest.approx(
         yos.chapter_audio_end + 5.0, abs=1e-3
     )
     assert slot014.timeline_end_seconds == pytest.approx(yos.chapter_video_end, abs=1e-3)
 
-    bridge = next(s for s in shots if s.shot_id == "bridge_001")
-    assert bridge.timeline_start_seconds == pytest.approx(yos.chapter_video_end, abs=1e-3)
-    assert bridge.timeline_end_seconds == pytest.approx(cad.chapter_video_start, abs=1e-3)
-    bridge_dur = bridge.timeline_end_seconds - bridge.timeline_start_seconds
-    assert bridge_dur == pytest.approx(pause, abs=1e-3)
-    assert bridge_dur < postroll + pause - 1e-3  # nicht Pause+Nachlauf (~10s)
-
+    # Kapitelwechsel = 10.00s ohne Narration (5 Nachlauf + 5 Vorlauf)
+    assert cad.chapter_video_start == pytest.approx(yos.chapter_video_end, abs=1e-3)
+    gap = cad.chapter_audio_start - yos.chapter_audio_end
+    assert gap == pytest.approx(postroll + preroll, abs=1e-3)
     assert cad.chapter_audio_start - cad.chapter_video_start == pytest.approx(5.0)
-    assert cad.preroll_seconds == pytest.approx(5.0)
 
 
-def test_last_sentence_pause_becomes_segment_pause_not_split() -> None:
+def test_chapter_transition_ignored_no_narration_pause() -> None:
+    """E2E-4: chapter_transition-Direktive wird ignoriert (Hülle deckt ab)."""
     sentences = {
         "seg_001__s001": SentenceTiming(
             sentence_id="seg_001__s001",
@@ -305,7 +279,7 @@ def test_last_sentence_pause_becomes_segment_pause_not_split() -> None:
         pause_directives=[
             PauseDirective(
                 after_segment_id="seg_001",
-                after_sentence_id="seg_001__s002",  # LETZTER Satz
+                after_sentence_id="seg_001__s002",
                 pause_function="chapter_transition",
                 duration_class="long",
             )
@@ -314,31 +288,9 @@ def test_last_sentence_pause_becomes_segment_pause_not_split() -> None:
     )
     entry = timeline.entries[0]
     assert entry.intra_pauses == []
-    assert entry.pause_after_seconds > 0
-    pieces = _build_resolved_audio_segments(
-        timeline=timeline,
-        timing_map={
-            "seg_001": SegmentTiming(
-                segment_id="seg_001",
-                script_version="v1",
-                audio_path="/tmp/a.mp3",
-                duration_seconds=3.0,
-            ),
-            "seg_002": SegmentTiming(
-                segment_id="seg_002",
-                script_version="v1",
-                audio_path="/tmp/b.mp3",
-                duration_seconds=2.0,
-            ),
-        },
-        fps=25.0,
-    )
-    seg1 = [p for p in pieces if p.segment_id == "seg_001"]
-    assert len(seg1) == 1
-    assert seg1[0].source_end_seconds == pytest.approx(3.0)
-    assert (seg1[0].timeline_end_seconds - seg1[0].timeline_start_seconds) >= (
-        MIN_AUDIO_CLIP_SECONDS - 1e-9
-    )
+    assert entry.pause_after_seconds == pytest.approx(0.0)
+    # Segmente liegen direkt aneinander (kein Bridge-Gap in der Narration).
+    assert timeline.entries[1].start_seconds == pytest.approx(entry.end_seconds)
 
 
 def test_tiny_remainder_split_is_merged_away() -> None:
@@ -356,7 +308,7 @@ def test_tiny_remainder_split_is_merged_away() -> None:
                 intra_pauses=[
                     IntraPauseMarker(
                         after_sentence_id="seg_001__s001",
-                        source_split_seconds=2.96,  # Rest 0.04s
+                        source_split_seconds=2.96,
                         pause_seconds=2.0,
                     )
                 ],
@@ -381,7 +333,6 @@ def test_tiny_remainder_split_is_merged_away() -> None:
         assert dur + 1e-9 >= MIN_AUDIO_CLIP_SECONDS
         src = (piece.source_end_seconds or 0) - piece.source_start_seconds
         assert src + 1e-9 >= MIN_AUDIO_CLIP_SECONDS or src == pytest.approx(3.0)
-    # Kein Stub mit 0.04s Source.
     assert not any(
         abs((p.source_end_seconds or 0) - p.source_start_seconds - 0.04) < 1e-6
         for p in pieces

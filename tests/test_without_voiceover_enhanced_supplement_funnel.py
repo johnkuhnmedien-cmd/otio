@@ -1200,11 +1200,35 @@ def test_idempotent_skip_export_ready_gaps(tmp_path: Path) -> None:
             "archive_org": False,
         },
     )
+    from otio_app.services.without_voiceover_enhanced.local_media_service import (
+        STATUS_EXPORT_READY,
+    )
+    from otio_app.services.without_voiceover_enhanced.models import (
+        AcceptedSupplementsDocument,
+        FunnelCandidateRecord,
+        StockCandidate,
+        SupplementFunnelGapReport,
+        SupplementFunnelReport,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        accepted_supplements_path,
+    )
+    from PIL import Image
+
+    media = project.work_dir_path / "local.jpg"
+    Image.new("RGB", (16, 16), color=(10, 20, 30)).save(media, format="JPEG")
     write_json(
         coverage_gaps_path(project),
         CoverageGapsDocument(
             script_version="script-v1",
-            gaps=[CoverageGap(gap_id="gap_1", needed_visual="road", preferred_media_type="photo")],
+            cut_plan_run_id="run_skip",
+            gaps=[
+                CoverageGap(
+                    gap_id="gap_1",
+                    needed_visual="road",
+                    preferred_media_type="photo",
+                )
+            ],
         ),
     )
     write_json(
@@ -1213,17 +1237,30 @@ def test_idempotent_skip_export_ready_gaps(tmp_path: Path) -> None:
             script_version="script-v1", candidates=_make_candidates(5)
         ),
     )
-    from otio_app.services.without_voiceover_enhanced.models import (
-        FunnelCandidateRecord,
-        SupplementFunnelGapReport,
-        SupplementFunnelReport,
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version="script-v1",
+            supplements=[
+                StockCandidate(
+                    candidate_id="pexels_photo_001",
+                    provider="pexels",
+                    media_type="photo",
+                    gap_id="gap_1",
+                    local_media_path=str(media),
+                    media_validation_status=STATUS_EXPORT_READY,
+                    cut_plan_run_id="run_skip",
+                    funnel_managed=True,
+                )
+            ],
+        ),
     )
-
     write_json(
         supplement_funnel_report_path(project),
         SupplementFunnelReport(
             run_id="prev",
             script_version="script-v1",
+            cut_plan_run_id="run_skip",
             gaps=[
                 SupplementFunnelGapReport(
                     gap_id="gap_1",
@@ -1234,7 +1271,7 @@ def test_idempotent_skip_export_ready_gaps(tmp_path: Path) -> None:
                         FunnelCandidateRecord(
                             candidate_id="pexels_photo_001",
                             funnel_status="export_ready",
-                            local_media_path="/tmp/local.jpg",
+                            local_media_path=str(media),
                         )
                     ],
                 )

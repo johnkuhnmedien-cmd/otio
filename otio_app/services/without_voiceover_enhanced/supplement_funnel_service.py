@@ -20,12 +20,14 @@ from otio_app.models import Project
 from otio_app.services.api_keys import get_api_key, is_api_key_set
 from otio_app.services.gemini_client import describe_and_validate_supplement_asset
 from otio_app.services.inventory_loader import load_folder_inventory
-from otio_app.services.media_utils import file_sha256
+from otio_app.services.media_utils import file_sha256, probe_duration_seconds
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     load_cut_plan_options,
 )
 from otio_app.services.without_voiceover_enhanced.fit_bridge import (
     filter_candidates_by_duration,
+    fit_bucket_from_final_score,
+    passes_duration_prefilter,
     required_candidate_duration_seconds,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
@@ -180,30 +182,108 @@ def _funnel_report_matches_cut_plan(
     return funnel_run == expected_run_id
 
 
+def _candidate_meets_merge_criteria(
+    project: Project,
+    candidate: StockCandidate,
+    *,
+    gap: CoverageGap | None,
+    funnel_records: list[FunnelCandidateRecord] | None = None,
+) -> bool:
+    """E2E-4: Gap gilt nur erfüllt, wenn Merge den Kandidaten nehmen könnte."""
+    path = Path(str(candidate.local_media_path or "").strip())
+    if not path.is_file():
+        return False
+    options = load_cut_plan_options(project)
+    target = None
+    if gap is not None and gap.target_duration_seconds is not None:
+        target = float(gap.target_duration_seconds)
+    min_duration = required_candidate_duration_seconds(
+        target,
+        head_trim=float(options.video_head_trim_sec or 0.0),
+        short_tolerance=float(options.short_asset_tolerance_sec or 0.0),
+    )
+    ok, _reason = passes_duration_prefilter(candidate, min_duration=min_duration)
+    if not ok and min_duration is not None:
+        try:
+            probed = probe_duration_seconds(path)
+        except Exception:  # noqa: BLE001
+            probed = None
+        if probed is None or float(probed) + 1e-9 < float(min_duration):
+            return False
+    bucket = ""
+    for record in funnel_records or []:
+        if record.candidate_id != candidate.candidate_id:
+            continue
+        bucket = (record.fit_bucket or "").strip().lower()
+        if not bucket and record.final_score is not None:
+            bucket = fit_bucket_from_final_score(record.final_score)
+        break
+    if bucket == "reject":
+        return False
+    return True
+
+
 def _gap_already_export_ready(
     previous: SupplementFunnelReport | None,
     *,
     gap_id: str,
     project: Project,
     trust_accepted: bool = True,
+    gap: CoverageGap | None = None,
+    expected_run_id: str = "",
 ) -> bool:
-    """Idempotenz: bereits export_ready Gaps nicht erneut laden.
+    """Idempotenz: Gap erfüllt nur bei merge-fähigem Kandidaten (E2E-4).
 
-    Bei stale Funnel-Report (andere Cut-Plan-Run-ID) weder Report noch
-    Accepted-Supplements als erfüllt werten.
+    Funnel-``filled`` allein reicht nicht — Datei, Dauer-Prefilter und
+    Bucket müssen passen. Accepted ohne/fremde ``cut_plan_run_id`` zählen nicht.
     """
+    records: list[FunnelCandidateRecord] = []
+    rejected: set[str] = set()
+    candidate_id = ""
     if previous is not None:
         for gap_rep in previous.gaps:
             if gap_rep.gap_id != gap_id:
                 continue
+            records = list(gap_rep.candidates or [])
+            rejected = {
+                str(x).strip()
+                for x in (gap_rep.rejected_candidate_ids or [])
+                if str(x).strip()
+            }
             if gap_rep.filled or gap_rep.export_ready_candidate_id:
-                return True
-            if any(c.funnel_status == "export_ready" for c in gap_rep.candidates):
-                return True
+                candidate_id = str(gap_rep.export_ready_candidate_id or "").strip()
+            elif any(c.funnel_status == "export_ready" for c in gap_rep.candidates):
+                ready_rec = next(
+                    c
+                    for c in gap_rep.candidates
+                    if c.funnel_status == "export_ready"
+                )
+                candidate_id = ready_rec.candidate_id
+            break
+
+    if candidate_id and candidate_id in rejected:
+        return False
+
     if trust_accepted:
         for supplement in list_export_ready_supplements(project):
-            if (supplement.gap_id or "") == gap_id:
+            if (supplement.gap_id or "") != gap_id:
+                continue
+            if expected_run_id:
+                cand_run = str(getattr(supplement, "cut_plan_run_id", "") or "").strip()
+                if cand_run != expected_run_id:
+                    continue
+            if supplement.candidate_id in rejected:
+                continue
+            if _candidate_meets_merge_criteria(
+                project, supplement, gap=gap, funnel_records=records
+            ):
                 return True
+        # Funnel meldet filled, aber kein merge-fähiges Accepted → nicht erfüllt.
+        return False
+
+    if candidate_id:
+        # Ohne Accepted nur Funnel-Pfad — ohne lokale Datei nicht merge-fähig.
+        return False
     return False
 
 
@@ -486,6 +566,9 @@ def _persist_export_ready(
     candidate.media_validation_error = None
     candidate.license_metadata_status = license_status
     candidate.gap_id = gap_id
+    run_id = str(getattr(report, "cut_plan_run_id", "") or "").strip()
+    if run_id:
+        candidate.cut_plan_run_id = run_id
 
     locked = require_locked_script(project)
     existing = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
@@ -657,7 +740,9 @@ def list_open_funnel_gap_ids(project: Project) -> list[str]:
             active_previous,
             gap_id=gap.gap_id,
             project=project,
-            trust_accepted=funnel_ok,
+            trust_accepted=True,
+            gap=gap,
+            expected_run_id=expected_run_id,
         ):
             open_ids.append(gap.gap_id)
     return open_ids
@@ -791,7 +876,9 @@ def run_supplement_funnel_for_gaps(
                 active_previous,
                 gap_id=gap.gap_id,
                 project=project,
-                trust_accepted=funnel_ok,
+                trust_accepted=True,
+                gap=gap,
+                expected_run_id=cut_plan_run_id,
             )
         ):
             report.skipped_gap_ids.append(gap.gap_id)
@@ -824,10 +911,26 @@ def run_supplement_funnel_for_gaps(
         )
 
         gap_report = SupplementFunnelGapReport(gap_id=gap.gap_id, run_id=run_id)
+        rejected_ids: set[str] = set()
+        if active_previous is not None:
+            for prev_gap in active_previous.gaps:
+                if prev_gap.gap_id != gap.gap_id:
+                    continue
+                rejected_ids = {
+                    str(x).strip()
+                    for x in (prev_gap.rejected_candidate_ids or [])
+                    if str(x).strip()
+                }
+                break
+        gap_report.rejected_candidate_ids = sorted(rejected_ids)
         gap_report.inventory_reuse_ids = _inventory_reuse_ids(project, gap)
         context = _gap_context(project, gap, locked)
 
-        raw_candidates = _candidates_for_gap(results, gap.gap_id)
+        raw_candidates = [
+            c
+            for c in _candidates_for_gap(results, gap.gap_id)
+            if c.candidate_id not in rejected_ids
+        ]
         ranked_meta = rank_candidates_for_gap(raw_candidates, gap)
         # Phase 4: harter Dauer-Vorfilter VOR Text-/Thumbnail-Scoring.
         min_duration = required_candidate_duration_seconds(

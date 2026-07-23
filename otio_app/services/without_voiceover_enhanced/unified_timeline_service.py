@@ -162,6 +162,16 @@ def boundary_source_offset_seconds(
     return max(0.0, min(offset, span))
 
 
+def _seconds_floor_to_frame(seconds: float, fps: float) -> float:
+    rate = float(fps) if float(fps) > 0 else 25.0
+    return round(math.floor(float(seconds) * rate + 1e-9) / rate, 6)
+
+
+def _seconds_ceil_to_frame(seconds: float, fps: float) -> float:
+    rate = float(fps) if float(fps) > 0 else 25.0
+    return round(math.ceil(float(seconds) * rate - 1e-9) / rate, 6)
+
+
 def boundary_to_absolute_seconds(
     boundary,
     timeline: NarrationTimelineDocument,
@@ -190,6 +200,67 @@ def boundary_to_absolute_seconds(
     )
     absolute = source_seconds_to_timeline(entry, source)
     return _seconds_to_frame(absolute, fps)
+
+
+def _snap_chapter_edge_boundary_times(
+    raw_times: list[float],
+    plan: UnifiedCutPlanDocument,
+    timeline: NarrationTimelineDocument,
+    *,
+    sentence_index: dict[str, SentenceTiming],
+    segment_to_chapter: dict[str, str],
+    fps: float,
+    repairs: list[str],
+) -> list[float]:
+    """E2E-4: Kapitel-Erste Grenze → Audio-Start (floor); letzte → Audio-Ende (ceil)."""
+    if len(raw_times) != len(plan.boundaries):
+        return raw_times
+    entry_map = {entry.segment_id: entry for entry in timeline.entries}
+    out = list(raw_times)
+    chapters: list[str] = []
+    for boundary in plan.boundaries:
+        sid = str(boundary.sentence_id or "").strip()
+        seg = segment_id_from_sentence_id(sid)
+        sentence = sentence_index.get(sid)
+        if sentence is not None and not seg:
+            seg = sentence.segment_id
+        chapters.append(segment_to_chapter.get(seg, seg or ""))
+
+    for index, boundary in enumerate(plan.boundaries):
+        sid = str(boundary.sentence_id or "").strip()
+        seg = segment_id_from_sentence_id(sid)
+        sentence = sentence_index.get(sid)
+        if sentence is not None and not seg:
+            seg = sentence.segment_id
+        entry = entry_map.get(seg)
+        if entry is None:
+            continue
+        is_first = index == 0 or (
+            chapters[index] and chapters[index] != chapters[index - 1]
+        )
+        is_last = index == len(plan.boundaries) - 1 or (
+            chapters[index] and chapters[index] != chapters[index + 1]
+        )
+        if is_first:
+            snapped = _seconds_floor_to_frame(float(entry.start_seconds), fps)
+            if abs(snapped - out[index]) > 1e-9:
+                repairs.append(
+                    f"{boundary.cut_id}: Kapitel-Start an Audio-Start "
+                    f"{out[index]:.3f}s → {snapped:.3f}s (floor)."
+                )
+            out[index] = snapped
+        if is_last:
+            snapped = _seconds_ceil_to_frame(float(entry.end_seconds), fps)
+            if abs(snapped - out[index]) > 1e-9:
+                repairs.append(
+                    f"{boundary.cut_id}: Kapitel-Ende an Audio-Ende "
+                    f"{out[index]:.3f}s → {snapped:.3f}s (ceil)."
+                )
+            out[index] = snapped
+    for index in range(1, len(out)):
+        if out[index] + 1e-9 < out[index - 1]:
+            out[index] = out[index - 1]
+    return out
 
 
 def boundary_to_narration_anchor(
@@ -452,6 +523,7 @@ def resolve_timed_slots(
     repairs: list[str] | None = None,
     catalog: AssetCatalog | None = None,
     slot_usable_max: list[float | None] | None = None,
+    segment_to_chapter: dict[str, str] | None = None,
 ) -> list[TimedSlot]:
     """Grenzen-Kette → TimedSlots (VO-absolut, vor Kapitel-Hülle)."""
     notes = repairs if repairs is not None else []
@@ -477,6 +549,17 @@ def resolve_timed_slots(
                 f"{raw_times[index]:.3f}s → {raw_times[index - 1]:.3f}s."
             )
             raw_times[index] = raw_times[index - 1]
+
+    if segment_to_chapter:
+        raw_times = _snap_chapter_edge_boundary_times(
+            raw_times,
+            plan,
+            timeline,
+            sentence_index=sentence_index,
+            segment_to_chapter=segment_to_chapter,
+            fps=fps,
+            repairs=notes,
+        )
 
     editorial_min = max(TECH_MIN_SHOT_SECONDS, float(options.shot_min_sec))
     editorial_max = min(
@@ -505,7 +588,9 @@ def resolve_timed_slots(
     for index, slot in enumerate(plan.slots):
         start_b = plan.boundaries[index]
         end_b = plan.boundaries[index + 1]
-        start_sid = str(start_b.sentence_id or "").strip()
+        # E2E-4: Kapitel-Join ohne Bridge — Start-Sentence vom Slot überschreiben.
+        override_start = str(getattr(slot, "start_sentence_id", None) or "").strip()
+        start_sid = override_start or str(start_b.sentence_id or "").strip()
         end_sid = str(end_b.sentence_id or "").strip()
         fit = str(slot.asset_fit or "none").strip().lower()
         asset_id = slot.local_asset_id
@@ -554,12 +639,28 @@ def unified_plan_to_final_shadow(
             asset_id = timed.asset_id
         elif slot.local_asset_id and str(slot.asset_fit) != "none":
             asset_id = str(slot.local_asset_id)
+        override_start = str(getattr(slot, "start_sentence_id", None) or "").strip()
+        if override_start:
+            # Kapitel-Join: gemeinsame Grenze trägt End-Position von Kap. N;
+            # Start von Kap. N+1 ist Satzanfang der überschriebenen Sentence.
+            start_anchor = boundary_to_narration_anchor(
+                start_b.model_copy(
+                    update={
+                        "sentence_id": override_start,
+                        "position": "start",
+                        "offset_seconds": None,
+                    }
+                ),
+                sentence_index=sentence_index,
+            )
+        else:
+            start_anchor = boundary_to_narration_anchor(
+                start_b, sentence_index=sentence_index
+            )
         shots.append(
             FinalShot(
                 shot_id=slot.slot_id,
-                narration_start_anchor=boundary_to_narration_anchor(
-                    start_b, sentence_index=sentence_index
-                ),
+                narration_start_anchor=start_anchor,
                 narration_end_anchor=boundary_to_narration_anchor(
                     end_b, sentence_index=sentence_index
                 ),
@@ -719,6 +820,7 @@ def resolve_unified_timeline(
         pause_directives=list(plan.pause_directives),
         sentence_index=sentence_index,
     )
+    segment_to_chapter = _segment_to_chapter_map(locked)
 
     # Ziel-Dauer in Slots nachziehen (Funnel-Dauerfilter, Phase 4).
     timed_slots = resolve_timed_slots(
@@ -729,6 +831,7 @@ def resolve_unified_timeline(
         fps=fps,
         repairs=repairs,
         catalog=catalog,
+        segment_to_chapter=segment_to_chapter,
     )
     assert_timed_slots_contiguous(timed_slots, fps=fps)
     for slot, timed in zip(plan.slots, timed_slots):
@@ -756,13 +859,21 @@ def resolve_unified_timeline(
         timing_map=timing_map,
         fps=fps,
     )
-    segment_to_chapter = _segment_to_chapter_map(locked)
     known_segments = {s.segment_id for s in locked.segments}
     head_trim = max(0.0, float(options.video_head_trim_sec))
     short_tolerance = max(0.0, float(options.short_asset_tolerance_sec))
 
     resolved_shots: list[ResolvedShot] = []
     for timed in timed_slots:
+        # E2E-4: Legacy-Bridge-Slots aus alten Plänen überspringen.
+        if (
+            str(timed.slot_id).startswith("bridge_")
+            or str(timed.narrative_function or "") == "chapter_transition"
+        ):
+            repairs.append(
+                f"{timed.slot_id}: Bridge-Slot ignoriert (E2E-4: kein Bridge)."
+            )
+            continue
         if timed.start_segment_id not in known_segments:
             errors.append(f"{timed.slot_id}: unbekannte Start-Segment-ID.")
             continue
@@ -771,26 +882,7 @@ def resolve_unified_timeline(
             continue
         start_chapter = segment_to_chapter.get(timed.start_segment_id, "")
         end_chapter = segment_to_chapter.get(timed.end_segment_id, "")
-        is_bridge = (
-            str(timed.slot_id).startswith("bridge_")
-            or str(timed.narrative_function or "") == "chapter_transition"
-        )
         if start_chapter and end_chapter and start_chapter != end_chapter:
-            if allow_open_gaps and is_bridge:
-                resolved_shots.append(
-                    _placeholder_resolved_shot(
-                        project,
-                        timed,
-                        fps=fps,
-                        coverage_gap_id="",  # nie Funnel
-                    )
-                )
-                repairs.append(
-                    f"{timed.slot_id}: Kapitelübergang "
-                    f"({start_chapter} → {end_chapter}) — Platzhalter "
-                    "(Bridge-Fill im Gap-Merge, kein Funnel)."
-                )
-                continue
             errors.append(
                 f"{timed.slot_id}: Start-/Endanker in unterschiedlichen Kapiteln "
                 f"({start_chapter} vs {end_chapter})."

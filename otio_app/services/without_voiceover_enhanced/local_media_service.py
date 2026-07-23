@@ -412,21 +412,98 @@ def assign_local_media_path(
     return updated
 
 
+def _expected_cut_plan_run_id(project: Project) -> str:
+    """Aktuelle Cut-Plan-Run-ID aus coverage_gaps / unified_cut_plan."""
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        compute_cut_plan_run_id_from_path,
+    )
+    from otio_app.services.without_voiceover_enhanced.models import CoverageGapsDocument
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        coverage_gaps_path,
+        unified_cut_plan_path,
+    )
+
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    run_id = str(getattr(coverage, "cut_plan_run_id", "") or "").strip()
+    if run_id:
+        return run_id
+    return compute_cut_plan_run_id_from_path(unified_cut_plan_path(project))
+
+
+def _is_stale_accepted_supplement(
+    candidate: StockCandidate, *, expected_run_id: str
+) -> bool:
+    """E2E-4: ohne/fremde run_id oder Legacy-Bridge-Gap → stale.
+
+    Migration ohne run_id nur wenn ein aktueller Cut-Plan-Lauf bekannt ist.
+    """
+    gap_id = str(candidate.gap_id or "").strip()
+    if gap_id.startswith("gap_bridge_") or gap_id == "gap_bridge_001":
+        return True
+    if not expected_run_id:
+        return False
+    cand_run = str(getattr(candidate, "cut_plan_run_id", "") or "").strip()
+    if not cand_run:
+        return True
+    return cand_run != expected_run_id
+
+
+def migrate_accepted_supplements(project: Project) -> AcceptedSupplementsDocument | None:
+    """Verwirft stale Accepted-Einträge (ohne/fremde run_id, Bridge-Gaps)."""
+    path = accepted_supplements_path(project)
+    accepted = load_model(path, AcceptedSupplementsDocument)
+    if accepted is None:
+        return None
+    expected_run_id = _expected_cut_plan_run_id(project)
+    kept: list[StockCandidate] = []
+    changed = False
+    for candidate in accepted.supplements:
+        if _is_stale_accepted_supplement(candidate, expected_run_id=expected_run_id):
+            changed = True
+            continue
+        kept.append(candidate)
+    if changed:
+        accepted = AcceptedSupplementsDocument(
+            schema_version=accepted.schema_version,
+            script_version=accepted.script_version,
+            supplements=kept,
+        )
+        write_json(path, accepted)
+    return accepted
+
+
 def list_export_ready_supplements(project: Project) -> list[StockCandidate]:
-    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
+    """export_ready Supplements der aktuellen Cut-Plan-Run-ID.
+
+    E2E-4: Einträge ohne/mit fremder ``cut_plan_run_id`` sowie Legacy-
+    ``gap_bridge_*`` zählen nirgends — Migration verwirft sie einmalig.
+    """
+    accepted = migrate_accepted_supplements(project)
     if accepted is None:
         return []
+    expected_run_id = _expected_cut_plan_run_id(project)
     ready: list[StockCandidate] = []
+    refreshed_list: list[StockCandidate] = []
     changed = False
-    for index, candidate in enumerate(accepted.supplements):
+    for candidate in accepted.supplements:
+        if _is_stale_accepted_supplement(candidate, expected_run_id=expected_run_id):
+            changed = True
+            continue
         refreshed = refresh_supplement_validation(candidate)
         if refreshed.model_dump() != candidate.model_dump():
-            accepted.supplements[index] = refreshed
             changed = True
+        refreshed_list.append(refreshed)
         if refreshed.media_validation_status == STATUS_EXPORT_READY:
             ready.append(refreshed)
     if changed:
-        write_json(accepted_supplements_path(project), accepted)
+        write_json(
+            accepted_supplements_path(project),
+            AcceptedSupplementsDocument(
+                schema_version=accepted.schema_version,
+                script_version=accepted.script_version,
+                supplements=refreshed_list,
+            ),
+        )
     return ready
 
 

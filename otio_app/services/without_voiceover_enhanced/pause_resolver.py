@@ -153,6 +153,10 @@ def build_narration_timeline(
     for directive in pause_directives:
         if directive.pause_function == "no_pause":
             continue
+        # E2E-4: chapter_transition = Nachlauf+Vorlauf der Kapitelhülle, keine
+        # Narrationspause / kein visueller Bridge-Slot.
+        if str(directive.pause_function or "").strip().lower() == "chapter_transition":
+            continue
         # Validate duration class early (deterministic failure).
         resolve_pause_duration_seconds(
             directive.duration_class,
