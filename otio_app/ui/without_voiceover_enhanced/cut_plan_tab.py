@@ -60,6 +60,9 @@ from otio_app.services.without_voiceover_enhanced.supplement_funnel_job import (
     JobStatus as FunnelJobStatus,
     get_supplement_funnel_job_manager,
 )
+from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+    summarize_gap_status,
+)
 from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
     list_open_funnel_gap_ids,
 )
@@ -443,17 +446,6 @@ def _funnel_report_top_summary(project) -> dict | None:
     }
     st.session_state[cache_key] = (mtime, summary)
     return summary
-
-
-def _filled_gap_ids_from_accepted(project) -> set[str]:
-    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
-    if accepted is None:
-        return set()
-    return {
-        (s.gap_id or "").strip()
-        for s in accepted.supplements
-        if (s.gap_id or "").strip()
-    }
 
 
 def _default_cut_section(project) -> str:
@@ -1114,18 +1106,18 @@ def _render_section_rough(project) -> None:
 
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
     if coverage is not None and coverage.gaps:
-        filled_ids = _filled_gap_ids_from_accepted(project)
-        total_gaps = len(coverage.gaps)
-        open_n = sum(1 for g in coverage.gaps if g.gap_id not in filled_ids)
-        filled_n = max(0, total_gaps - open_n)
+        gap_status = summarize_gap_status(project)
+        filled_ids = set(gap_status.filled_gap_ids)
         st.info(
-            f"Gaps: **offen {open_n}** · "
-            f"**erfüllt {filled_n}** · "
-            f"**gesamt {total_gaps}**"
+            f"Gaps: **offen {gap_status.open_count}** · "
+            f"**erfüllt {gap_status.filled_count}** · "
+            f"**gesamt {gap_status.total}**"
         )
+        if gap_status.message:
+            st.caption(gap_status.message)
         show_gaps_key = f"enh_show_coverage_gaps_{project.id}"
         st.checkbox(
-            f"Coverage-Gap-Liste laden ({total_gaps})",
+            f"Coverage-Gap-Liste laden ({gap_status.total})",
             key=show_gaps_key,
         )
         if st.session_state.get(show_gaps_key):
@@ -1219,16 +1211,12 @@ def _render_section_funnel(project) -> None:
         )
 
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
-    # UI-Zähler leicht: Coverage + Accepted (kein 2MB-Funnel-Report pro Rerun).
-    filled_ids = _filled_gap_ids_from_accepted(project)
-    total_gaps = len(coverage.gaps) if coverage is not None else 0
-    open_gap_ids = [
-        g.gap_id
-        for g in (coverage.gaps if coverage else [])
-        if g.gap_id not in filled_ids
-    ]
-    open_gaps_count = len(open_gap_ids)
-    filled_gaps_count = max(0, total_gaps - open_gaps_count)
+    # Fix 4: Run-ID-aware Zähler (weak offen bis Merge; stale Funnel ignorieren).
+    gap_status = summarize_gap_status(project)
+    open_gap_ids = list(gap_status.open_gap_ids)
+    open_gaps_count = gap_status.open_count
+    filled_gaps_count = gap_status.filled_count
+    total_gaps = gap_status.total if coverage is not None else 0
 
     st.markdown("**Coverage Gaps automatisch auflösen**")
     st.caption(
@@ -1236,6 +1224,8 @@ def _render_section_funnel(project) -> None:
         f"erfüllt **{filled_gaps_count}** · "
         f"gesamt **{total_gaps}**"
     )
+    if gap_status.message:
+        st.caption(gap_status.message)
 
     funnel_settings = load_model_settings(project)
     funnel_role = funnel_settings.enhanced_supplement_funnel
@@ -1770,21 +1760,23 @@ def _render_section_final(project) -> None:
     resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
     if resolved is not None:
         gate_errors = validate_resolved_timeline_for_production(project, resolved)
-        has_errors = bool(resolved.errors) or bool(gate_errors)
+        # Fix 5: gleiche Meldung in resolved.errors + Gate nicht doppelt zählen.
+        all_errors = list(dict.fromkeys(list(resolved.errors) + list(gate_errors)))
+        has_errors = bool(all_errors)
         st.caption(
             f"Aufgelöste Timeline: {len(resolved.shots)} Shots · "
             f"{resolved.total_duration_seconds:.1f}s · "
-            f"Fehler: {len(resolved.errors) + len(gate_errors)}"
+            f"Fehler: {len(all_errors)}"
         )
         if has_errors:
             st.warning(
-                f"{len(resolved.errors) + len(gate_errors)} Resolve-/Export-Fehler — "
+                f"{len(all_errors)} Resolve-/Export-Fehler — "
                 "Produktions-OTIO gesperrt. Test-Export mit Lücken möglich."
             )
             with st.expander("Resolve-/Export-Fehler", expanded=False):
-                for err in (list(resolved.errors) + list(gate_errors))[:40]:
+                for err in all_errors[:40]:
                     st.write(f"- {err}")
-                remaining = len(resolved.errors) + len(gate_errors) - 40
+                remaining = len(all_errors) - 40
                 if remaining > 0:
                     st.caption(f"… +{remaining} weitere")
 

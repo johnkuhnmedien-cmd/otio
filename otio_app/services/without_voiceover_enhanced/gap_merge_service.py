@@ -604,7 +604,17 @@ def merge_export_ready_gaps_into_timeline(
     records_by_gap = _funnel_records_by_gap(funnel)
     catalog = build_asset_catalog(project, fps=float(timeline.fps or project.fps))
 
-    report = GapMergeReport(script_version=locked.script_version)
+    cut_plan_run_id = str(getattr(coverage, "cut_plan_run_id", "") or "").strip()
+    if not cut_plan_run_id and unified is not None:
+        from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+            compute_cut_plan_run_id,
+        )
+
+        cut_plan_run_id = compute_cut_plan_run_id(unified)
+    report = GapMergeReport(
+        script_version=locked.script_version,
+        cut_plan_run_id=cut_plan_run_id,
+    )
     fps = float(timeline.fps or project.fps)
     head_trim = max(0.0, float(options.video_head_trim_sec))
     short_tolerance = max(0.0, float(options.short_asset_tolerance_sec))

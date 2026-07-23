@@ -37,7 +37,9 @@ def render_enhanced_final_output_page() -> None:
         return
 
     gate_errors = validate_resolved_timeline_for_production(project, resolved)
-    has_errors = bool(resolved.errors) or bool(gate_errors)
+    # Fix 5: Deduplizieren (gleiche Meldung oft in resolved.errors und Gate).
+    all_errors = list(dict.fromkeys(list(resolved.errors) + list(gate_errors)))
+    has_errors = bool(all_errors)
     st.success(
         f"Skript `{resolved.script_version}` · "
         f"{resolved.total_duration_seconds:.2f}s · "
@@ -48,12 +50,12 @@ def render_enhanced_final_output_page() -> None:
     )
     if has_errors:
         st.error(
-            f"Export-Gate: {len(resolved.errors) + len(gate_errors)} Fehler — "
+            f"Export-Gate: {len(all_errors)} Fehler — "
             "Produktions-OTIO ist gesperrt. Der Test-Export unten ist nur zur "
             "Diagnose (Lücken/Gaps) und nicht für Resolve-Produktion."
         )
         with st.expander("Fehlerliste anzeigen", expanded=True):
-            for err in list(resolved.errors) + list(gate_errors):
+            for err in all_errors:
                 st.write(f"- {err}")
 
     if resolved.chapters:

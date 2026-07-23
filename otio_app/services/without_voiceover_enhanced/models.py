@@ -354,6 +354,8 @@ class CoverageGap(BaseModel):
 class CoverageGapsDocument(BaseModel):
     schema_version: str = "enhanced-coverage-gaps-v2"
     script_version: str
+    # Hash des zugehörigen Unified Cut Plans (Fix 4: Stale-UI vermeiden).
+    cut_plan_run_id: str = ""
     gaps: list[CoverageGap] = Field(default_factory=list)
 
 
@@ -529,6 +531,8 @@ class SupplementFunnelReport(BaseModel):
     schema_version: str = "enhanced-supplement-funnel-v4"
     run_id: str = ""
     script_version: str = ""
+    # Muss zur coverage_gaps.cut_plan_run_id passen (sonst stale).
+    cut_plan_run_id: str = ""
     max_candidates_per_gap: int = 20
     max_full_download_attempts_per_gap: int = 3
     # Gemini-Modell für Text- + Thumbnail-Ranking (historische Reports: leer).
@@ -568,6 +572,8 @@ class GapMergeSlotResult(BaseModel):
 class GapMergeReport(BaseModel):
     schema_version: str = "enhanced-gap-merge-v1"
     script_version: str = ""
+    # Muss zur coverage_gaps.cut_plan_run_id passen (sonst stale).
+    cut_plan_run_id: str = ""
     merged_shot_ids: list[str] = Field(default_factory=list)
     kept_local_shot_ids: list[str] = Field(default_factory=list)
     open_none_gap_ids: list[str] = Field(default_factory=list)

@@ -164,13 +164,34 @@ def _inventory_reuse_ids(project: Project, gap: CoverageGap) -> list[str]:
     return ids
 
 
+def _funnel_report_matches_cut_plan(
+    previous: SupplementFunnelReport | None,
+    *,
+    expected_run_id: str,
+) -> bool:
+    """False wenn Funnel-Report zu einem anderen/älteren Cut-Plan gehört."""
+    if previous is None:
+        return False
+    if not expected_run_id:
+        return True
+    funnel_run = str(getattr(previous, "cut_plan_run_id", "") or "").strip()
+    if not funnel_run:
+        return False
+    return funnel_run == expected_run_id
+
+
 def _gap_already_export_ready(
     previous: SupplementFunnelReport | None,
     *,
     gap_id: str,
     project: Project,
+    trust_accepted: bool = True,
 ) -> bool:
-    """Idempotenz: bereits export_ready Gaps nicht erneut laden."""
+    """Idempotenz: bereits export_ready Gaps nicht erneut laden.
+
+    Bei stale Funnel-Report (andere Cut-Plan-Run-ID) weder Report noch
+    Accepted-Supplements als erfüllt werten.
+    """
     if previous is not None:
         for gap_rep in previous.gaps:
             if gap_rep.gap_id != gap_id:
@@ -179,9 +200,10 @@ def _gap_already_export_ready(
                 return True
             if any(c.funnel_status == "export_ready" for c in gap_rep.candidates):
                 return True
-    for supplement in list_export_ready_supplements(project):
-        if (supplement.gap_id or "") == gap_id:
-            return True
+    if trust_accepted:
+        for supplement in list_export_ready_supplements(project):
+            if (supplement.gap_id or "") == gap_id:
+                return True
     return False
 
 
@@ -604,15 +626,38 @@ def _try_auto_accept_candidate(
 
 
 def list_open_funnel_gap_ids(project: Project) -> list[str]:
-    """Offene Coverage-Gap-IDs in Coverage-Dokument-Reihenfolge."""
+    """Offene Coverage-Gap-IDs in Coverage-Dokument-Reihenfolge.
+
+    Stale Funnel-/Accepted-Daten (andere oder fehlende cut_plan_run_id)
+    zählen nicht als erfüllt.
+    """
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        compute_cut_plan_run_id_from_path,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        unified_cut_plan_path,
+    )
+
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
     if coverage is None or not coverage.gaps:
         return []
+    expected_run_id = str(getattr(coverage, "cut_plan_run_id", "") or "").strip()
+    if not expected_run_id:
+        expected_run_id = compute_cut_plan_run_id_from_path(
+            unified_cut_plan_path(project)
+        )
     previous = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
+    funnel_ok = _funnel_report_matches_cut_plan(
+        previous, expected_run_id=expected_run_id
+    )
+    active_previous = previous if funnel_ok else None
     open_ids: list[str] = []
     for gap in coverage.gaps:
         if not _gap_already_export_ready(
-            previous, gap_id=gap.gap_id, project=project
+            active_previous,
+            gap_id=gap.gap_id,
+            project=project,
+            trust_accepted=funnel_ok,
         ):
             open_ids.append(gap.gap_id)
     return open_ids
@@ -705,10 +750,23 @@ def run_supplement_funnel_for_gaps(
     gaps = _resolve_requested_gaps(
         coverage, gap_ids=gap_ids, only_gap_ids=only_gap_ids
     )
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        compute_cut_plan_run_id_from_path,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        unified_cut_plan_path,
+    )
+
+    cut_plan_run_id = str(getattr(coverage, "cut_plan_run_id", "") or "").strip()
+    if not cut_plan_run_id:
+        cut_plan_run_id = compute_cut_plan_run_id_from_path(
+            unified_cut_plan_path(project)
+        )
     run_id = f"funnel_{uuid.uuid4().hex[:12]}"
     report = SupplementFunnelReport(
         run_id=run_id,
         script_version=locked.script_version,
+        cut_plan_run_id=cut_plan_run_id,
         max_candidates_per_gap=top_n,
         max_full_download_attempts_per_gap=max_downloads,
         llm_model=funnel_model,
@@ -716,14 +774,25 @@ def run_supplement_funnel_for_gaps(
     )
 
     previous = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
+    funnel_ok = _funnel_report_matches_cut_plan(
+        previous, expected_run_id=cut_plan_run_id
+    )
+    active_previous = previous if funnel_ok else None
 
     total = len(gaps)
     for gap_index, gap in enumerate(gaps, start=1):
         if should_stop and should_stop():
             report.stopped = True
             break
-        if skip_filled and not force_restart and _gap_already_export_ready(
-            previous, gap_id=gap.gap_id, project=project
+        if (
+            skip_filled
+            and not force_restart
+            and _gap_already_export_ready(
+                active_previous,
+                gap_id=gap.gap_id,
+                project=project,
+                trust_accepted=funnel_ok,
+            )
         ):
             report.skipped_gap_ids.append(gap.gap_id)
             _emit(

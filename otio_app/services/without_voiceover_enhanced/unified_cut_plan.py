@@ -377,6 +377,10 @@ def unified_to_rough(
             )
         )
 
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        compute_cut_plan_run_id,
+    )
+
     rough = RoughCutPlanDocument(
         script_version=plan.script_version,
         pause_directives=list(plan.pause_directives),
@@ -384,6 +388,7 @@ def unified_to_rough(
     )
     coverage = CoverageGapsDocument(
         script_version=plan.script_version,
+        cut_plan_run_id=compute_cut_plan_run_id(plan),
         gaps=gaps,
     )
     return rough, coverage
