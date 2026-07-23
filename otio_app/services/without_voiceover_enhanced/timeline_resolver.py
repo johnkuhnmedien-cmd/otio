@@ -424,11 +424,16 @@ def _frame_duration(fps: float) -> float:
 
 
 def _chapters_from_locked(locked) -> list[tuple[str, list[str]]]:
-    """Kapitel in Skriptreihenfolge: aufeinanderfolgende Segmente mit gleichem Ordner."""
+    """Kapitel in Skriptreihenfolge: aufeinanderfolgende Segmente mit gleichem Ordner.
+
+    Segmente ohne folder_name bilden ein gemeinsames Default-Kapitel — nicht
+    je Segment ein Pseudo-Kapitel — damit kapitelübergreifende Ankerprüfung
+    echte Ordnergrenzen meint.
+    """
     chapters: list[tuple[str, list[str]]] = []
     for segment in sorted(locked.segments, key=lambda s: int(s.sequence_index)):
         folder = (segment.folder_name or "").strip()
-        chapter_id = folder or f"chapter_{int(segment.sequence_index)}"
+        chapter_id = folder or "_default"
         if not chapters or chapters[-1][0] != chapter_id:
             chapters.append((chapter_id, [segment.segment_id]))
         else:
@@ -532,18 +537,96 @@ def _apply_visual_continuity_rules(
             )
             continue
         if delta < -(frame + 1e-9):
-            if prev.may_overlap_pause or curr.may_overlap_pause:
-                repairs.append(
-                    f"Überlappung {prev.shot_id}/{curr.shot_id} wegen "
-                    "may_overlap_pause belassen."
-                )
-            else:
-                errors.append(
-                    f"Visuelle Überlappung in Kapitel {chapter}: "
-                    f"{curr.timeline_start_seconds:.3f}s–{prev.timeline_end_seconds:.3f}s "
-                    f"({abs(delta):.3f}s) zwischen {prev.shot_id} ({prev.asset_id}) und "
-                    f"{curr.shot_id} ({curr.asset_id})."
-                )
+            # may_overlap_pause darf keine Video-Clip-Überlappung erlauben.
+            errors.append(
+                f"Visuelle Überlappung in Kapitel {chapter}: "
+                f"{curr.timeline_start_seconds:.3f}s–{prev.timeline_end_seconds:.3f}s "
+                f"({abs(delta):.3f}s) zwischen {prev.shot_id} ({prev.asset_id}) und "
+                f"{curr.shot_id} ({curr.asset_id})."
+            )
+
+
+def _chapter_id_slug(chapter_id: str) -> str:
+    return (
+        chapter_id.replace(" ", "_")
+        .replace("í", "i")
+        .replace("á", "a")
+        .replace("ó", "o")
+        .replace("é", "e")
+        .replace("ú", "u")
+        .replace("ñ", "n")
+    )
+
+
+def _segment_to_chapter_map(locked) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for chapter_id, segment_ids in _chapters_from_locked(locked):
+        for segment_id in segment_ids:
+            mapping[segment_id] = chapter_id
+    return mapping
+
+
+def _make_chapter_edge_hold(
+    project: Project,
+    *,
+    template: ResolvedShot,
+    shot_id: str,
+    timeline_start: float,
+    timeline_end: float,
+    chapter_id: str,
+    editorial_function: str,
+    fps: float,
+    repairs: list[str],
+    label: str,
+) -> ResolvedShot:
+    """Technischer Kapitel-Hold — eigene Hold-Datei, getrennt vom redaktionellen Shot."""
+    need = max(0.0, float(timeline_end) - float(timeline_start))
+    if need <= 1e-9:
+        raise TimelineResolveError(
+            f"{shot_id}: {label} hat keine positive Dauer."
+        )
+    path = Path(template.resolved_media_path or "")
+    if not path.is_file():
+        raise TimelineResolveError(
+            f"{shot_id}: {label} unmöglich — Medienpfad fehlt "
+            f"({template.resolved_media_path})."
+        )
+    try:
+        if is_image_media(path):
+            hold_path = ensure_still_hold_video(
+                project, path, duration_seconds=need, fps=fps
+            )
+        else:
+            hold_path = ensure_video_padded_hold(
+                project, path, target_duration_seconds=need, fps=fps
+            )
+    except MediaHoldError as exc:
+        raise TimelineResolveError(
+            f"{shot_id}: {label} fehlgeschlagen: {exc}"
+        ) from exc
+
+    repairs.append(
+        f"{shot_id}: {label}-Hold-Video {need:.2f}s ({hold_path.name})."
+    )
+    # Eigene Asset-ID, damit Portable-Manifest redaktionelle Originalclips
+    # nicht mit technischen Holds überschreibt.
+    return ResolvedShot(
+        shot_id=shot_id,
+        asset_id=f"techhold__{shot_id}",
+        timeline_start_seconds=round(timeline_start, 6),
+        timeline_end_seconds=round(timeline_end, 6),
+        source_start_seconds=0.0,
+        source_end_seconds=round(need, 6),
+        editorial_function=editorial_function,
+        may_overlap_pause=False,
+        resolved_media_path=str(hold_path),
+        resolved_media_kind="video",
+        resolved_media_duration_seconds=round(need, 6),
+        resolved_available_start_seconds=0.0,
+        folder_name=template.folder_name or chapter_id,
+        chapter_id=chapter_id,
+        hold_mode="freeze_video",
+    )
 
 
 def _apply_chapter_envelopes(
@@ -559,15 +642,10 @@ def _apply_chapter_envelopes(
     repairs: list[str],
     errors: list[str],
 ) -> list[ResolvedChapterEnvelope]:
-    """Setzt Vor-/Nachlauf pro Kapitel und verschiebt Folgekapitel hinter die Hülle."""
+    """Kapitelhüllen: Rohabdeckung prüfen, dann Vor-/Nachlauf über technische Holds."""
     chapters = _chapters_from_locked(locked)
     if not chapters:
         return []
-
-    segment_to_chapter: dict[str, str] = {}
-    for chapter_id, segment_ids in chapters:
-        for segment_id in segment_ids:
-            segment_to_chapter[segment_id] = chapter_id
 
     shot_start_segment = {
         shot.shot_id: next(
@@ -588,6 +666,8 @@ def _apply_chapter_envelopes(
     narration_expected = bool(locked.segments)
     cursor = 0.0
     envelopes: list[ResolvedChapterEnvelope] = []
+    frame = _frame_duration(fps)
+    hold_shots: list[ResolvedShot] = []
 
     for chapter_id, segment_ids in chapters:
         seg_set = set(segment_ids)
@@ -623,6 +703,53 @@ def _apply_chapter_envelopes(
         else:
             raw_audio_start = min(s.timeline_start_seconds for s in ch_shots)
             raw_audio_end = max(s.timeline_end_seconds for s in ch_shots)
+
+        raw_first_shot_start = min(raw_shot_times[s.shot_id][0] for s in ch_shots)
+        raw_last_shot_end = max(raw_shot_times[s.shot_id][1] for s in ch_shots)
+
+        # Rohabdeckung vor jeder Hüllen-Verlängerung / jedem Hold.
+        if raw_first_shot_start > raw_audio_start + frame + 1e-9:
+            errors.append(
+                f"Führende visuelle Lücke in Kapitel {chapter_id}: "
+                f"erster Shot startet bei {raw_first_shot_start:.3f}s, "
+                f"Audio bei {raw_audio_start:.3f}s "
+                f"(>{frame:.4f}s Frame-Toleranz)."
+            )
+        elif raw_first_shot_start > raw_audio_start + 1e-9:
+            first_raw = min(
+                ch_shots,
+                key=lambda s: (raw_shot_times[s.shot_id][0], s.shot_id),
+            )
+            _old_start, old_end = raw_shot_times[first_raw.shot_id]
+            raw_shot_times[first_raw.shot_id] = (raw_audio_start, old_end)
+            repairs.append(
+                f"Ein-Frame-Randabweichung führend in Kapitel {chapter_id}: "
+                f"{first_raw.shot_id} Start {raw_first_shot_start:.6f}s → "
+                f"{raw_audio_start:.6f}s."
+            )
+            raw_first_shot_start = raw_audio_start
+
+        if raw_last_shot_end < raw_audio_end - frame - 1e-9:
+            errors.append(
+                f"Abschließende visuelle Lücke während der Narration in Kapitel "
+                f"{chapter_id}: letzter Shot endet bei {raw_last_shot_end:.3f}s, "
+                f"Audio bei {raw_audio_end:.3f}s "
+                f"(>{frame:.4f}s Frame-Toleranz)."
+            )
+        elif raw_last_shot_end < raw_audio_end - 1e-9:
+            last_raw = max(
+                ch_shots,
+                key=lambda s: (raw_shot_times[s.shot_id][1], s.shot_id),
+            )
+            old_start, _old_end = raw_shot_times[last_raw.shot_id]
+            raw_shot_times[last_raw.shot_id] = (old_start, raw_audio_end)
+            repairs.append(
+                f"Ein-Frame-Randabweichung abschließend in Kapitel {chapter_id}: "
+                f"{last_raw.shot_id} Ende {raw_last_shot_end:.6f}s → "
+                f"{raw_audio_end:.6f}s."
+            )
+            raw_last_shot_end = raw_audio_end
+
         raw_span = max(0.0, raw_audio_end - raw_audio_start)
 
         chapter_video_start = _seconds_to_frame(cursor, fps)
@@ -644,42 +771,67 @@ def _apply_chapter_envelopes(
             shot.timeline_end_seconds = round(
                 chapter_audio_start + (old_end - raw_audio_start), 6
             )
+            if shot.timeline_end_seconds < shot.timeline_start_seconds:
+                shot.timeline_end_seconds = shot.timeline_start_seconds
 
         first = min(ch_shots, key=lambda s: (s.timeline_start_seconds, s.shot_id))
         last = max(ch_shots, key=lambda s: (s.timeline_end_seconds, s.shot_id))
-        first.timeline_start_seconds = round(chapter_video_start, 6)
-        last.timeline_end_seconds = round(chapter_video_end, 6)
-        if first.timeline_end_seconds < first.timeline_start_seconds:
-            first.timeline_end_seconds = first.timeline_start_seconds
-        if last.timeline_end_seconds < last.timeline_start_seconds:
-            last.timeline_end_seconds = last.timeline_start_seconds
+        slug = _chapter_id_slug(chapter_id)
+        preroll_hold_shot_id = ""
+        postroll_hold_shot_id = ""
 
-        try:
-            _reapply_hold_for_timeline_span(
-                project,
-                first,
-                fps=fps,
-                repairs=repairs,
-                label=(
-                    f"Kapitel-{chapter_id}-Hülle"
-                    if first.shot_id == last.shot_id
-                    else f"Kapitel-{chapter_id}-Vorlauf"
-                ),
+        if preroll > 1e-9:
+            hold_start = round(chapter_video_start, 6)
+            # Nicht in den ersten redaktionellen Shot hineinragen.
+            hold_end = round(
+                min(chapter_audio_start, first.timeline_start_seconds), 6
             )
-        except TimelineResolveError as exc:
-            errors.append(str(exc))
-        if last.shot_id != first.shot_id:
-            try:
-                _reapply_hold_for_timeline_span(
-                    project,
-                    last,
-                    fps=fps,
-                    repairs=repairs,
-                    label=f"Kapitel-{chapter_id}-Nachlauf",
-                )
-            except TimelineResolveError as exc:
-                errors.append(str(exc))
+            if hold_end > hold_start + 1e-9:
+                try:
+                    hold = _make_chapter_edge_hold(
+                        project,
+                        template=first,
+                        shot_id=f"{slug}__chapter_preroll_hold",
+                        timeline_start=hold_start,
+                        timeline_end=hold_end,
+                        chapter_id=chapter_id,
+                        editorial_function="technical_chapter_preroll_hold",
+                        fps=fps,
+                        repairs=repairs,
+                        label=f"Kapitel-{chapter_id}-Vorlauf-Hold",
+                    )
+                    hold_shots.append(hold)
+                    preroll_hold_shot_id = hold.shot_id
+                except TimelineResolveError as exc:
+                    errors.append(str(exc))
 
+        if postroll > 1e-9:
+            # Nachlauf erst nach Audioende; nicht über redaktionelles Shot-Ende.
+            hold_start = round(
+                max(chapter_audio_end, last.timeline_end_seconds), 6
+            )
+            hold_end = round(chapter_video_end, 6)
+            if hold_end > hold_start + 1e-9:
+                try:
+                    hold = _make_chapter_edge_hold(
+                        project,
+                        template=last,
+                        shot_id=f"{slug}__chapter_postroll_hold",
+                        timeline_start=hold_start,
+                        timeline_end=hold_end,
+                        chapter_id=chapter_id,
+                        editorial_function="technical_chapter_postroll_hold",
+                        fps=fps,
+                        repairs=repairs,
+                        label=f"Kapitel-{chapter_id}-Nachlauf-Hold",
+                    )
+                    hold_shots.append(hold)
+                    postroll_hold_shot_id = hold.shot_id
+                except TimelineResolveError as exc:
+                    errors.append(str(exc))
+
+        envelope_first_id = preroll_hold_shot_id or first.shot_id
+        envelope_last_id = postroll_hold_shot_id or last.shot_id
         envelopes.append(
             ResolvedChapterEnvelope(
                 chapter_id=chapter_id,
@@ -690,17 +842,22 @@ def _apply_chapter_envelopes(
                 chapter_video_end=round(chapter_video_end, 6),
                 preroll_seconds=round(preroll, 6),
                 postroll_seconds=round(postroll, 6),
-                first_shot_id=first.shot_id,
-                last_shot_id=last.shot_id,
+                first_shot_id=envelope_first_id,
+                last_shot_id=envelope_last_id,
+                preroll_hold_shot_id=preroll_hold_shot_id,
+                postroll_hold_shot_id=postroll_hold_shot_id,
                 segment_ids=list(segment_ids),
             )
         )
         cursor = chapter_video_end
 
+    ordered.extend(hold_shots)
+
     if envelopes:
         repairs.append(
             f"Kapitelhüllen: {len(envelopes)} Kapitel mit Vorlauf {preroll:.2f}s "
-            f"und Nachlauf {postroll:.2f}s pro Kapitel."
+            f"und Nachlauf {postroll:.2f}s pro Kapitel "
+            f"(Nachlauf/Vorlauf als technische Holds, nicht als shot_max-Stretch)."
         )
     return envelopes
 
@@ -1000,6 +1157,7 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
         timeline=timeline,
         timing_map=timing_map,
     )
+    segment_to_chapter = _segment_to_chapter_map(locked)
 
     resolved_shots: list[ResolvedShot] = []
     for shot in final.shots:
@@ -1008,6 +1166,17 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
             continue
         if shot.narration_end_anchor.segment_id not in known_segments:
             errors.append(f"Unbekannte Segment-ID: {shot.narration_end_anchor.segment_id}")
+            continue
+        start_seg = shot.narration_start_anchor.segment_id
+        end_seg = shot.narration_end_anchor.segment_id
+        start_chapter = segment_to_chapter.get(start_seg, "")
+        end_chapter = segment_to_chapter.get(end_seg, "")
+        if start_chapter and end_chapter and start_chapter != end_chapter:
+            errors.append(
+                f"{shot.shot_id}: Start- und Endanker in unterschiedlichen Kapiteln "
+                f"(Startanker {start_seg} → Kapitel {start_chapter}, "
+                f"Endanker {end_seg} → Kapitel {end_chapter})."
+            )
             continue
         entry, lookup_error = lookup_catalog_entry(catalog, shot.asset_id)
         if entry is None:
@@ -1119,8 +1288,13 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
     ordered = sorted(ordered, key=lambda s: (s.timeline_start_seconds, s.shot_id))
     _count_chapter_continuity(chapter_envelopes, ordered, fps=fps)
 
-    # Max asset usage (Intro zählt nicht).
-    usage_counts = Counter(shot.asset_id for shot in ordered)
+    def _is_technical_hold(shot: ResolvedShot) -> bool:
+        return str(shot.editorial_function or "").startswith("technical_chapter_")
+
+    # Max asset usage (Intro und technische Kapitel-Holds zählen nicht).
+    usage_counts = Counter(
+        shot.asset_id for shot in ordered if not _is_technical_hold(shot)
+    )
     for asset_id, count in sorted(usage_counts.items()):
         folder = str((catalog.by_id.get(asset_id) or {}).get("folder") or "")
         if _is_intro_folder(folder):
@@ -1136,6 +1310,8 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
     if reuse_distance > 0:
         last_index: dict[str, int] = {}
         for index, shot in enumerate(ordered):
+            if _is_technical_hold(shot):
+                continue
             folder = str(
                 shot.folder_name
                 or (catalog.by_id.get(shot.asset_id) or {}).get("folder")

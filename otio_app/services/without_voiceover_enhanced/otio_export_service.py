@@ -308,9 +308,8 @@ def validate_resolved_timeline_for_production(
                 f"({delta:.3f}s) zwischen {prev.shot_id} ({prev.asset_id}) und "
                 f"{curr.shot_id} ({curr.asset_id})."
             )
-        elif delta < -(frame + 1e-9) and not (
-            prev.may_overlap_pause or curr.may_overlap_pause
-        ):
+        elif delta < -(frame + 1e-9):
+            # may_overlap_pause erlaubt keine Video-Clip-Überlappung ohne Transition.
             errors.append(
                 f"Visuelle Überlappung in Kapitel {chapter}: "
                 f"{curr.timeline_start_seconds:.3f}s–{prev.timeline_end_seconds:.3f}s "

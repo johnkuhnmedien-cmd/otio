@@ -45,6 +45,7 @@ from otio_app.services.without_voiceover_enhanced.script_prompts import (
     build_rough_cut_prompt,
 )
 from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+    TimelineResolveError,
     resolve_final_timeline,
 )
 
@@ -248,18 +249,10 @@ def test_resolver_clamps_to_shot_max(tmp_path: Path) -> None:
         ),
     )
 
-    resolved = resolve_final_timeline(project)
-    assert len(resolved.shots) == 1
-    # Editorial shot_max clamp still recorded; chapter envelope then extends the
-    # last (only) shot to cover the full chapter audio span (postroll=0 → 20s).
-    assert any("shot_max" in r for r in resolved.repairs)
-    duration = (
-        resolved.shots[0].timeline_end_seconds
-        - resolved.shots[0].timeline_start_seconds
-    )
-    assert duration == pytest.approx(20.0, abs=1e-3)
-    assert resolved.chapters
-    assert resolved.chapters[0].chapter_video_end == pytest.approx(20.0, abs=1e-3)
+    # shot_max kürzt auf 5s; die verbleibende Narration (15s) darf nicht durch
+    # Kapitelhüllen-Stretch verdeckt werden → fail-closed Rohabdeckung.
+    with pytest.raises(TimelineResolveError, match="Abschließende visuelle Lücke"):
+        resolve_final_timeline(project)
 
 
 def test_ui_settings_markers() -> None:
@@ -377,6 +370,22 @@ def test_resolver_applies_preroll_and_tolerance(tmp_path: Path) -> None:
     assert resolved.voiceover_preroll_sec == 1.0
     assert resolved.voiceover_postroll_sec == 2.0
     assert resolved.audio_segments[0].timeline_start_seconds == 1.0
-    assert resolved.shots[0].timeline_start_seconds == 0.0
-    # 0–6 → +preroll shift end 7, first start back to 0, +postroll → 9
-    assert resolved.shots[0].timeline_end_seconds == 9.0
+    editorial = next(s for s in resolved.shots if s.shot_id == "Canyon_shot_001")
+    # Redaktioneller Shot bleibt im Narrationsfenster (1–7), ohne shot_max-Stretch.
+    assert editorial.timeline_start_seconds == pytest.approx(1.0, abs=1e-3)
+    assert editorial.timeline_end_seconds == pytest.approx(7.0, abs=1e-3)
+    preroll_hold = next(
+        s
+        for s in resolved.shots
+        if s.editorial_function == "technical_chapter_preroll_hold"
+    )
+    postroll_hold = next(
+        s
+        for s in resolved.shots
+        if s.editorial_function == "technical_chapter_postroll_hold"
+    )
+    assert preroll_hold.timeline_start_seconds == pytest.approx(0.0, abs=1e-3)
+    assert preroll_hold.timeline_end_seconds == pytest.approx(1.0, abs=1e-3)
+    assert postroll_hold.timeline_start_seconds == pytest.approx(7.0, abs=1e-3)
+    assert postroll_hold.timeline_end_seconds == pytest.approx(9.0, abs=1e-3)
+    assert postroll_hold.hold_mode == "freeze_video"

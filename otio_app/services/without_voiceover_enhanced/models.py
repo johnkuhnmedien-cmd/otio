@@ -504,6 +504,8 @@ class ResolvedChapterEnvelope(BaseModel):
     postroll_seconds: float = 0.0
     first_shot_id: str = ""
     last_shot_id: str = ""
+    preroll_hold_shot_id: str = ""
+    postroll_hold_shot_id: str = ""
     segment_ids: list[str] = Field(default_factory=list)
     visual_gap_count: int = 0
     visual_overlap_count: int = 0

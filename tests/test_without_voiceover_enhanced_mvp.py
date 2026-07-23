@@ -593,6 +593,8 @@ def test_final_plan_rejects_unknown_ids_and_resolves_deterministically(tmp_path:
             ],
         ),
     )
+    # R1B: Video-Überlappungen sind fail-closed (auch mit may_overlap_pause).
+    # Determinismus-Test ohne Pause/Overlap-Abhängigkeit.
     timeline = build_narration_timeline(
         script_version="script-v1",
         segment_timings=[
@@ -609,16 +611,25 @@ def test_final_plan_rejects_unknown_ids_and_resolves_deterministically(tmp_path:
                 duration_seconds=1.0,
             ),
         ],
-        pause_directives=[
-            PauseDirective(
-                after_segment_id="segment_001",
-                pause_function="breath",
-                duration_class="short",
-                visual_behavior="hold_current_shot",
-            )
-        ],
+        pause_directives=[],
     )
     write_json(narration_timeline_path(project), timeline)
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        CutPlanOptions,
+        save_cut_plan_options,
+    )
+
+    save_cut_plan_options(
+        project,
+        CutPlanOptions(
+            shot_min_sec=0.4,
+            shot_max_sec=60.0,
+            voiceover_preroll_sec=0.0,
+            voiceover_postroll_sec=0.0,
+            max_asset_usage=10,
+            short_asset_tolerance_sec=0.0,
+        ),
+    )
 
     # Create local asset catalog via accepted supplement (avoid inventory dependency).
     # R2: echte kleine Videodatei (ffprobe muss Videospur erkennen).
@@ -676,17 +687,17 @@ def test_final_plan_rejects_unknown_ids_and_resolves_deterministically(tmp_path:
                 narration_start_anchor=NarrationAnchor(
                     segment_id="segment_001", offset_seconds=0.0
                 ),
+                # Endet am Anfang von Segment 2 — spannt zwei Segmente, ohne Overlap.
                 narration_end_anchor=NarrationAnchor(
-                    segment_id="segment_002", offset_seconds=0.5
+                    segment_id="segment_002", offset_seconds=0.0
                 ),
                 asset_id="asset_local_1",
                 editorial_function="orientation",
-                may_overlap_pause=True,
             ),
             FinalShot(
                 shot_id="shot_002",
                 narration_start_anchor=NarrationAnchor(
-                    segment_id="segment_002", offset_seconds=0.5
+                    segment_id="segment_002", offset_seconds=0.0
                 ),
                 narration_end_anchor=NarrationAnchor(
                     segment_id="segment_002", offset_seconds=1.0

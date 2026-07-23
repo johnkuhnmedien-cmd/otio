@@ -421,8 +421,16 @@ def test_single_chapter_compatible(tmp_path: Path) -> None:
     resolved = resolve_final_timeline(project)
     assert len(resolved.chapters) == 1
     assert abs(resolved.audio_segments[0].timeline_start_seconds - 1.0) < 1e-3
-    assert abs(resolved.shots[0].timeline_start_seconds - 0.0) < 1e-3
-    assert resolved.shots[0].timeline_end_seconds + 1e-3 >= 4.0 + 1.0 + 5.0
+    assert min(s.timeline_start_seconds for s in resolved.shots) == pytest.approx(
+        0.0, abs=1e-3
+    )
+    assert max(s.timeline_end_seconds for s in resolved.shots) + 1e-3 >= 4.0 + 1.0 + 5.0
+    editorial = next(s for s in resolved.shots if s.shot_id == "main_shot")
+    assert editorial.timeline_start_seconds == pytest.approx(1.0, abs=1e-3)
+    assert editorial.timeline_end_seconds == pytest.approx(5.0, abs=1e-3)
+    assert any(
+        s.editorial_function == "technical_chapter_postroll_hold" for s in resolved.shots
+    )
 
 
 def test_large_gap_blocks_and_one_frame_snaps(tmp_path: Path) -> None:
@@ -469,6 +477,106 @@ def test_overlap_blocks_production(tmp_path: Path) -> None:
     write_json(final_cut_plan_path(project), plan)
     with pytest.raises(TimelineResolveError, match="Überlappung"):
         resolve_final_timeline(project)
+
+
+def test_leading_editorial_gap_blocks(tmp_path: Path) -> None:
+    project, _ = _build_three_chapter_project(tmp_path)
+    plan = FinalCutPlanDocument.model_validate(
+        json.loads(final_cut_plan_path(project).read_text(encoding="utf-8"))
+    )
+    plan.shots[0].narration_start_anchor.offset_seconds = 2.0
+    write_json(final_cut_plan_path(project), plan)
+    with pytest.raises(TimelineResolveError, match="Führende visuelle Lücke"):
+        resolve_final_timeline(project)
+
+
+def test_trailing_narration_gap_blocks(tmp_path: Path) -> None:
+    project, _ = _build_three_chapter_project(tmp_path)
+    # Kapitel-Audio 8s; nur der erste Shot (0–4s) bleibt — 4s Narration ungedeckt.
+    plan = FinalCutPlanDocument.model_validate(
+        json.loads(final_cut_plan_path(project).read_text(encoding="utf-8"))
+    )
+    plan.shots = [plan.shots[0], *plan.shots[2:]]
+    write_json(final_cut_plan_path(project), plan)
+    with pytest.raises(
+        TimelineResolveError, match="Abschließende visuelle Lücke während der Narration"
+    ):
+        resolve_final_timeline(project)
+
+
+def test_postroll_uses_technical_hold_not_editorial_stretch(tmp_path: Path) -> None:
+    project, _ = _build_three_chapter_project(tmp_path)
+    resolved = resolve_final_timeline(project)
+    for chapter in resolved.chapters:
+        assert chapter.postroll_hold_shot_id
+        hold = next(s for s in resolved.shots if s.shot_id == chapter.postroll_hold_shot_id)
+        assert hold.editorial_function == "technical_chapter_postroll_hold"
+        assert hold.hold_mode == "freeze_video"
+        assert hold.timeline_start_seconds == pytest.approx(
+            chapter.chapter_audio_end, abs=1e-3
+        )
+        assert hold.timeline_end_seconds == pytest.approx(
+            chapter.chapter_video_end, abs=1e-3
+        )
+        editorial = [
+            s
+            for s in resolved.shots
+            if s.chapter_id == chapter.chapter_id
+            and not s.editorial_function.startswith("technical_chapter_")
+        ]
+        for shot in editorial:
+            dur = shot.timeline_end_seconds - shot.timeline_start_seconds
+            assert dur <= SEG_DUR + 1e-3
+
+
+def test_may_overlap_pause_still_blocks_video_overlap(tmp_path: Path) -> None:
+    project, _ = _build_three_chapter_project(tmp_path)
+    plan = FinalCutPlanDocument.model_validate(
+        json.loads(final_cut_plan_path(project).read_text(encoding="utf-8"))
+    )
+    plan.shots[0].may_overlap_pause = True
+    plan.shots[1].may_overlap_pause = True
+    plan.shots[1].narration_start_anchor = NarrationAnchor(
+        segment_id=plan.shots[0].narration_start_anchor.segment_id,
+        offset_seconds=2.0,
+    )
+    plan.shots[1].narration_end_anchor = NarrationAnchor(
+        segment_id=plan.shots[0].narration_end_anchor.segment_id,
+        offset_seconds=4.0,
+    )
+    write_json(final_cut_plan_path(project), plan)
+    with pytest.raises(TimelineResolveError, match="Überlappung"):
+        resolve_final_timeline(project)
+
+
+def test_cross_chapter_shot_anchors_block(tmp_path: Path) -> None:
+    project, _ = _build_three_chapter_project(tmp_path)
+    plan = FinalCutPlanDocument.model_validate(
+        json.loads(final_cut_plan_path(project).read_text(encoding="utf-8"))
+    )
+    # Start in Castle Combe, Ende in Albarracín.
+    plan.shots[0].narration_end_anchor = NarrationAnchor(
+        segment_id=plan.shots[2].narration_start_anchor.segment_id,
+        offset_seconds=1.0,
+    )
+    write_json(final_cut_plan_path(project), plan)
+    with pytest.raises(
+        TimelineResolveError, match="unterschiedlichen Kapiteln"
+    ):
+        resolve_final_timeline(project)
+
+
+def test_one_frame_edge_deviation_is_repaired(tmp_path: Path) -> None:
+    project, _ = _build_three_chapter_project(tmp_path)
+    plan = FinalCutPlanDocument.model_validate(
+        json.loads(final_cut_plan_path(project).read_text(encoding="utf-8"))
+    )
+    # 1 Frame = 0.04s bei 25fps — führend knapp nach Audioanfang.
+    plan.shots[0].narration_start_anchor.offset_seconds = 0.04
+    write_json(final_cut_plan_path(project), plan)
+    resolved = resolve_final_timeline(project)
+    assert any("Ein-Frame-Randabweichung führend" in r for r in resolved.repairs)
+    assert not any("Führende visuelle Lücke" in e for e in resolved.errors)
 
 
 def test_local_export_no_original_video_copies_and_no_zoom(tmp_path: Path) -> None:
