@@ -312,6 +312,180 @@ def test_usable_tolerance_pulls_shared_end_boundary_not_local_cut() -> None:
     assert any("nutzbare Dauer knapp" in note for note in repairs)
 
 
+def test_frame_snap_usable_floor_avoids_post_round_overshoot(tmp_path) -> None:
+    """Fix 1b: usable nicht framerein — Klemme mit floor, kein Round-Overshoot.
+
+    usable=10.983s, span=11.5s, tol=1s @25fps → Span == 10.96s (274 Frames);
+    ``_resolve_shot_media`` wirft keinen Grenzen-Klemme-Fehler; Summen-Assert grün.
+    """
+    import math
+
+    from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+    from otio_app.models import Project, ProjectMode
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        _resolve_shot_media,
+    )
+
+    fps = 25.0
+    usable = 10.983
+    expected_span = math.floor(usable * fps) / fps  # 274/25 = 10.96
+    assert expected_span == pytest.approx(10.96)
+
+    timeline = NarrationTimelineDocument(
+        script_version="v1",
+        total_duration_seconds=40.0,
+        entries=[
+            NarrationTimelineEntry(
+                segment_id="seg_001",
+                start_seconds=0.0,
+                end_seconds=40.0,
+                audio_duration_seconds=40.0,
+            )
+        ],
+    )
+    sentences = {
+        "seg_001__s001": _sentence("seg_001__s001", start=0.0, end=1.0),
+        "seg_001__s002": _sentence("seg_001__s002", start=11.5, end=12.5),
+        "seg_001__s003": _sentence("seg_001__s003", start=22.0, end=23.0),
+    }
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            CutBoundary(cut_id="b0", sentence_id="seg_001__s001", position="start"),
+            CutBoundary(cut_id="b1", sentence_id="seg_001__s002", position="start"),
+            CutBoundary(cut_id="b2", sentence_id="seg_001__s003", position="start"),
+        ],
+        slots=[
+            CutSlot(slot_id="slot_a", local_asset_id="asset_a", asset_fit="strong"),
+            CutSlot(slot_id="slot_b", local_asset_id="asset_b", asset_fit="strong"),
+        ],
+    )
+    options = CutPlanOptions(
+        shot_min_sec=0.4,
+        shot_max_sec=120.0,
+        short_asset_tolerance_sec=1.0,
+        video_head_trim_sec=0.0,
+    )
+    repairs: list[str] = []
+    timed = resolve_timed_slots(
+        plan,
+        timeline,
+        sentence_index=sentences,
+        options=options,
+        fps=fps,
+        repairs=repairs,
+        slot_usable_max=[usable, None],
+    )
+    assert timed[0].duration_seconds == pytest.approx(expected_span)
+    assert timed[0].end_seconds == timed[1].start_seconds
+    assert_timed_slots_contiguous(timed, fps=fps)
+    total = sum(s.duration_seconds for s in timed)
+    span = timed[-1].end_seconds - timed[0].start_seconds
+    assert total == pytest.approx(span)
+    assert any("nutzbare Dauer knapp" in note for note in repairs)
+
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"x")
+    work = tmp_path / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir()
+    project = Project(
+        id="p",
+        name="p",
+        project_root=str(tmp_path),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        asset_subdir_names=["A"],
+        selected_asset_subdirs=["A"],
+    )
+    # duration = head_trim(0) + usable → media_duration = usable
+    entry = {
+        "path": str(media),
+        "duration_seconds": usable,
+        "usable_in_s": 0.0,
+        "media_kind": "video",
+        "media_type": "video",
+        "available_start_seconds": 0.0,
+        "folder": "A",
+        "canonical_id": "asset_a",
+    }
+    media_repairs: list[str] = []
+    resolved = _resolve_shot_media(
+        project,
+        shot_id="slot_a",
+        asset_id="asset_a",
+        entry=entry,
+        timeline_start=timed[0].start_seconds,
+        timeline_end=timed[0].end_seconds,
+        fps=fps,
+        head_trim=0.0,
+        short_tolerance=1.0,
+        editorial_function="evidence",
+        may_overlap_pause=False,
+        repairs=media_repairs,
+    )
+    assert resolved.timeline_end_seconds == pytest.approx(timed[0].end_seconds)
+    need = resolved.timeline_end_seconds - resolved.timeline_start_seconds
+    assert need <= usable + 1e-6
+    assert need == pytest.approx(expected_span)
+
+
+def test_usable_floor_below_shot_min_skips_editorial_raise() -> None:
+    """Fix 1b.5: floor(usable) < shot_min → kein editorial-Hochschieben (kein Pingpong)."""
+    import math
+
+    fps = 25.0
+    usable = 4.5
+    floor_span = math.floor(usable * fps) / fps  # 4.48
+    timeline = NarrationTimelineDocument(
+        script_version="v1",
+        total_duration_seconds=40.0,
+        entries=[
+            NarrationTimelineEntry(
+                segment_id="seg_001",
+                start_seconds=0.0,
+                end_seconds=40.0,
+                audio_duration_seconds=40.0,
+            )
+        ],
+    )
+    sentences = {
+        "seg_001__s001": _sentence("seg_001__s001", start=0.0, end=1.0),
+        "seg_001__s002": _sentence("seg_001__s002", start=5.2, end=6.0),
+        "seg_001__s003": _sentence("seg_001__s003", start=20.0, end=21.0),
+    }
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            CutBoundary(cut_id="b0", sentence_id="seg_001__s001", position="start"),
+            CutBoundary(cut_id="b1", sentence_id="seg_001__s002", position="start"),
+            CutBoundary(cut_id="b2", sentence_id="seg_001__s003", position="start"),
+        ],
+        slots=[
+            CutSlot(slot_id="slot_a", local_asset_id="asset_a", asset_fit="strong"),
+            CutSlot(slot_id="slot_b", local_asset_id="asset_b", asset_fit="strong"),
+        ],
+    )
+    options = CutPlanOptions(
+        shot_min_sec=5.0,
+        shot_max_sec=120.0,
+        short_asset_tolerance_sec=1.0,
+    )
+    repairs: list[str] = []
+    timed = resolve_timed_slots(
+        plan,
+        timeline,
+        sentence_index=sentences,
+        options=options,
+        fps=fps,
+        repairs=repairs,
+        slot_usable_max=[usable, None],
+    )
+    assert timed[0].duration_seconds == pytest.approx(floor_span)
+    assert timed[0].duration_seconds < 5.0
+    assert not any("unter shot_min" in note and "slot[0]" in note for note in repairs)
+    assert_timed_slots_contiguous(timed, fps=fps)
+
+
 def test_over_tolerance_does_not_clamp_leaves_span_for_gap_path() -> None:
     """Fix 1: span > usable + tolerance → Grenzen unverändert (Gap später)."""
     timeline = NarrationTimelineDocument(

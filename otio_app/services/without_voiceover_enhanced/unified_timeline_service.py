@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -266,43 +267,88 @@ def _clamp_boundary_times(
     slot_usable_max: list[float | None] | None = None,
     short_tolerance: float = 0.0,
     max_media_iterations: int = 2,
+    fps: float = 25.0,
 ) -> list[float]:
     """Shot min/max + nutzbare Asset-Dauer; gemeinsame Grenzen, Kette bleibt dicht.
 
+    Fix 1b: gesamte Klemme arbeitet nur auf Framegrenzen (Input vorher snappen).
     Media-Regel (pro Slot mit usable):
     - span > usable + tolerance → nicht klemmen (später is_short/Gap)
-    - usable < span <= usable + tolerance → Endgrenze nach vorne (Folge-Slot länger)
+    - usable < span <= usable + tolerance → Endgrenze auf
+      ``floor(usable * fps) / fps`` (Span garantiert ≤ usable)
+    Wenn ``floor(usable) < shot_min``: kein editorial-Hochschieben
+    (sonst Pingpong mit usable-Klemme) → Gap-Pfad.
     Max. ``max_media_iterations`` Links-nach-rechts-Pässe; danach noch
     innerhalb-Toleranz verletzt → Fehler.
     """
     if len(times) < 2:
         return times
-    out = [float(t) for t in times]
+    rate = float(fps) if float(fps) > 0 else 25.0
+
+    def _to_frames(seconds: float) -> int:
+        return int(round(float(seconds) * rate))
+
+    def _floor_frames(seconds: float) -> int:
+        return int(math.floor(float(seconds) * rate + 1e-9))
+
+    def _ceil_frames(seconds: float) -> int:
+        return int(math.ceil(float(seconds) * rate - 1e-9))
+
+    def _from_frames(frames: int) -> float:
+        return round(int(frames) / rate, 6)
+
+    # 1) raw_times VOR der Klemme frame-snappen; danach nur Framegrenzen.
+    out = [_seconds_to_frame(t, rate) for t in times]
+    for index in range(1, len(out)):
+        if out[index] + 1e-9 < out[index - 1]:
+            out[index] = out[index - 1]
+
     n_slots = len(out) - 1
     usables = list(slot_usable_max or [None] * n_slots)
     if len(usables) < n_slots:
         usables.extend([None] * (n_slots - len(usables)))
 
+    min_frames = max(1, _ceil_frames(editorial_min))
+    max_frames = max(min_frames, _floor_frames(editorial_max))
+    editorial_min_f = _from_frames(min_frames)
+    editorial_max_f = _from_frames(max_frames)
+
+    usable_frames: list[int | None] = []
+    for usable in usables:
+        if usable is None:
+            usable_frames.append(None)
+        else:
+            usable_frames.append(max(0, _floor_frames(float(usable))))
+
+    def _skip_editorial_min(index: int) -> bool:
+        """Fix 1b.5: usable (floor) < shot_min → nicht hochschieben (Gap-Pfad)."""
+        uf = usable_frames[index]
+        return uf is not None and uf < min_frames
+
     def _editorial_pass() -> None:
         # Zu lang: Ende nach vorne (spätere Slots werden länger).
         for index in range(n_slots):
-            duration = out[index + 1] - out[index]
-            if duration > editorial_max + 1e-9:
-                out[index + 1] = out[index] + editorial_max
-                repairs.append(
-                    f"slot[{index}]: über shot_max ({editorial_max:.2f}s) — "
-                    "Endgrenze nach vorne verschoben."
-                )
+            duration_frames = _to_frames(out[index + 1] - out[index])
+            if duration_frames <= max_frames:
+                continue
+            out[index + 1] = _seconds_to_frame(out[index] + editorial_max_f, rate)
+            repairs.append(
+                f"slot[{index}]: über shot_max ({editorial_max:.2f}s) — "
+                "Endgrenze nach vorne verschoben."
+            )
 
         # Zu kurz: Ende nach hinten + Cascade (spätere Dauern bleiben gleich).
         for index in range(n_slots):
-            duration = out[index + 1] - out[index]
-            if duration + 1e-9 >= editorial_min:
+            if _skip_editorial_min(index):
                 continue
-            need = editorial_min - duration
-            out[index + 1] += need
+            duration_frames = _to_frames(out[index + 1] - out[index])
+            if duration_frames >= min_frames:
+                continue
+            need_frames = min_frames - duration_frames
+            need = _from_frames(need_frames)
+            out[index + 1] = _seconds_to_frame(out[index + 1] + need, rate)
             for later in range(index + 2, len(out)):
-                out[later] += need
+                out[later] = _seconds_to_frame(out[later] + need, rate)
             repairs.append(
                 f"slot[{index}]: unter shot_min ({editorial_min:.2f}s) — "
                 f"Endgrenze +{need:.2f}s (Cascade)."
@@ -315,7 +361,8 @@ def _clamp_boundary_times(
         changed = False
         for index in range(n_slots):
             usable = usables[index]
-            if usable is None:
+            uf = usable_frames[index]
+            if usable is None or uf is None:
                 continue
             duration = out[index + 1] - out[index]
             if duration <= float(usable) + 1e-9:
@@ -324,11 +371,13 @@ def _clamp_boundary_times(
             if shortfall > tol + 1e-9:
                 # Über Toleranz: Grenzen unverändert → is_short/Gap-Pfad.
                 continue
-            # Innerhalb Toleranz: gemeinsame Endgrenze nach vorne.
-            out[index + 1] = out[index] + float(usable)
+            # Innerhalb Toleranz: Endgrenze auf floor(usable)-Frames (≤ usable).
+            clamped = _from_frames(uf)
+            out[index + 1] = _seconds_to_frame(out[index] + clamped, rate)
             repairs.append(
                 f"slot[{index}]: nutzbare Dauer knapp "
-                f"(span {duration:.2f}s → usable {float(usable):.2f}s, "
+                f"(span {duration:.2f}s → usable {float(usable):.2f}s / "
+                f"frame {clamped:.2f}s, "
                 f"shortfall {shortfall:.2f}s ≤ Toleranz {tol:.1f}s) — "
                 "Endgrenze nach vorne (Folge-Slot länger)."
             )
@@ -449,8 +498,8 @@ def resolve_timed_slots(
         slot_usable_max=usables,
         short_tolerance=short_tolerance,
         max_media_iterations=2,
+        fps=fps,
     )
-    times = [_seconds_to_frame(t, fps) for t in times]
 
     slots: list[TimedSlot] = []
     for index, slot in enumerate(plan.slots):
