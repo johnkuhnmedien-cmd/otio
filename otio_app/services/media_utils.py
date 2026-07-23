@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -22,7 +23,7 @@ MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS | AUDIO_EXTENSIONS
 NO_ANALYZABLE_MEDIA_DESCRIPTION = "Keine analysierbaren Medien gefunden."
 
 _TIMECODE_RE = re.compile(
-    r"^(?P<h>\d{2}):(?P<m>\d{2}):(?P<s>\d{2})[:;](?P<f>\d{2})$"
+    r"^(?P<h>\d{2}):(?P<m>\d{2}):(?P<s>\d{2})(?P<sep>[:;])(?P<f>\d{2})$"
 )
 
 
@@ -46,8 +47,43 @@ def parse_r_frame_rate(value: str | None) -> float | None:
         return None
 
 
+def smpte_nominal_fps(rate: float) -> int:
+    """Nominal-FPS für SMPTE-Adressen (23.976→24, 29.97→30, 25→25)."""
+    return max(1, int(math.floor(float(rate) + 0.5)))
+
+
+def smpte_ndf_frames(hours: int, minutes: int, seconds: int, frames: int, *, nominal: int) -> int:
+    """Non-drop-frame: Timecode-Adresse → absolute Frame-Nummer."""
+    return ((hours * 60 + minutes) * 60 + seconds) * nominal + frames
+
+
+def smpte_df_frames(hours: int, minutes: int, seconds: int, frames: int, *, nominal: int) -> int:
+    """Drop-frame (29.97/59.94): Timecode-Adresse → absolute Frame-Nummer."""
+    # SMPTE DF lässt zu Beginn jeder Minute außer jeder 10. Minute Frames weg.
+    drop = 2 if nominal == 30 else 4 if nominal == 60 else 0
+    if drop <= 0:
+        return smpte_ndf_frames(hours, minutes, seconds, frames, nominal=nominal)
+    total_minutes = hours * 60 + minutes
+    return (
+        hours * (nominal * 3600)
+        + minutes * (nominal * 60)
+        + seconds * nominal
+        + frames
+        - drop * (total_minutes - total_minutes // 10)
+    )
+
+
 def parse_smpte_timecode(value: str, rate: float) -> float | None:
-    match = _TIMECODE_RE.match(value.strip())
+    """SMPTE-TC → reale Sekunden im Media-Rate-Raum (Resolve/OTIO).
+
+    Wichtig für NTSC (23.976 / 29.97): Die TC-Felder zählen mit nominaler
+    Ganzzahl-FPS (24 / 30), nicht mit der echten Rate. Wall-Clock-Umrechnung
+    ``h*3600 + f/rate`` erzeugt bei ``01:00:00:00`` @23.976 fälschlich 3600s
+    statt Frame 86400 → ~3603.6s. Resolve mappt die Datei auf Frame 86400;
+    unser Source-Start lag ~59 Frames (~2.5s) davor → Media Offline am Clip-Kopf.
+    """
+    raw = value.strip()
+    match = _TIMECODE_RE.match(raw)
     if not match:
         return None
     hours = int(match.group("h"))
@@ -56,7 +92,17 @@ def parse_smpte_timecode(value: str, rate: float) -> float | None:
     frames = int(match.group("f"))
     if rate <= 0:
         return None
-    return hours * 3600 + minutes * 60 + seconds + frames / rate
+    nominal = smpte_nominal_fps(rate)
+    drop_frame = match.group("sep") == ";"
+    if drop_frame:
+        total_frames = smpte_df_frames(
+            hours, minutes, seconds, frames, nominal=nominal
+        )
+    else:
+        total_frames = smpte_ndf_frames(
+            hours, minutes, seconds, frames, nominal=nominal
+        )
+    return float(total_frames) / float(rate)
 
 
 def probe_media_timing(path: Path, *, default_rate: float = 25.0) -> MediaTiming:
@@ -152,12 +198,12 @@ def probe_media_timing(path: Path, *, default_rate: float = 25.0) -> MediaTiming
             tmcd_tc = str(tag_value)
         elif other_stream_tc is None:
             other_stream_tc = str(tag_value)
-    if tmcd_tc or other_stream_tc:
-        embedded_tc = tmcd_tc or other_stream_tc
-
+    # Priorität: tmcd (kanonisch) > andere Stream-Tags > format-tags.
+    # format-tags dürfen tmcd NICHT überschreiben — manche Dateien tragen
+    # dort einen abweichenden/gerundeten Wert.
     format_tags = format_info.get("tags") or {}
-    if format_tags.get("timecode"):
-        embedded_tc = str(format_tags["timecode"])
+    format_tc = str(format_tags["timecode"]) if format_tags.get("timecode") else None
+    embedded_tc = tmcd_tc or other_stream_tc or format_tc
 
     if embedded_tc:
         parsed = parse_smpte_timecode(embedded_tc, rate)
