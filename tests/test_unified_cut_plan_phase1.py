@@ -151,6 +151,7 @@ def test_unified_to_rough_emits_gaps_only_for_weak_and_none() -> None:
     assert "gap_A_slot_003" in by_id
     assert by_id["A_gap_weak"].priority == "medium"
     assert "8.00s" in by_id["A_gap_weak"].reason
+    assert by_id["A_gap_weak"].target_duration_seconds == pytest.approx(8.0)
     assert by_id["A_gap_weak"].desired_motion == "drone"
     assert by_id["gap_A_slot_003"].priority == "high"
     assert by_id["gap_A_slot_003"].related_shot_ids == ["A_slot_003"]

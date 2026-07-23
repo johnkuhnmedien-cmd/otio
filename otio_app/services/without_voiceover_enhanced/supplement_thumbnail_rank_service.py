@@ -588,6 +588,10 @@ def order_by_final_scores(
     records: Sequence[FunnelCandidateRecord],
     finalist_payload: Sequence[dict[str, Any]],
 ) -> list[FunnelCandidateRecord]:
+    from otio_app.services.without_voiceover_enhanced.fit_bridge import (
+        fit_bucket_from_final_score,
+    )
+
     by_id = {r.candidate_id: r for r in records}
     updated: list[FunnelCandidateRecord] = []
     for item in finalist_payload:
@@ -596,6 +600,18 @@ def order_by_final_scores(
         record.rank = int(item["rank"])
         record.decision = str(item["decision"])
         record.reason = str(item["reason"])
+        record.fit_bucket = fit_bucket_from_final_score(record.final_score)
+        # Reject <40: kein Download/export_ready (vor Winner-Logik markieren).
+        if record.fit_bucket == "reject":
+            record.excluded = True
+            record.exclude_reason = (
+                f"final_score {record.final_score} < 40 (reject)"
+            )
+            record.decision = "manual_review"
+            suffix = "reject(<40)"
+            record.reason = (
+                f"{record.reason} · {suffix}" if record.reason else suffix
+            )
         try:
             record.funnel_status = transition(record.funnel_status, "finalist")
         except Exception:  # noqa: BLE001 — Ranking-Helper darf Status setzen
@@ -605,10 +621,15 @@ def order_by_final_scores(
     updated.sort(key=deterministic_tiebreak_key)
     for index, record in enumerate(updated, start=1):
         record.rank = index
+        if record.fit_bucket == "reject":
+            record.decision = "manual_review"
+            continue
         if index == 1 and record.decision != "manual_review":
             # Genau ein Gewinner wenn geeignet.
             if any(r.decision == "winner" for r in updated):
-                record.decision = "winner" if record.decision == "winner" else record.decision
+                record.decision = (
+                    "winner" if record.decision == "winner" else record.decision
+                )
             elif record.decision != "manual_review":
                 record.decision = "winner"
         elif record.decision == "winner" and index != 1:
@@ -618,7 +639,15 @@ def order_by_final_scores(
         for record in updated:
             record.decision = "manual_review"
     elif not any(r.decision == "winner" for r in updated):
-        updated[0].decision = "winner"
+        # Ersten nicht-reject als Winner setzen.
+        for record in updated:
+            if record.fit_bucket != "reject":
+                record.decision = "winner"
+                break
+    # Rejects dürfen nie winner/fallback bleiben.
+    for record in updated:
+        if record.fit_bucket == "reject":
+            record.decision = "manual_review"
     return updated
 
 

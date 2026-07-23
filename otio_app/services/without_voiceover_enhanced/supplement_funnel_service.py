@@ -24,6 +24,10 @@ from otio_app.services.media_utils import file_sha256
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     load_cut_plan_options,
 )
+from otio_app.services.without_voiceover_enhanced.fit_bridge import (
+    filter_candidates_by_duration,
+    required_candidate_duration_seconds,
+)
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
     STATUS_EXPORT_READY,
@@ -756,6 +760,25 @@ def run_supplement_funnel_for_gaps(
 
         raw_candidates = _candidates_for_gap(results, gap.gap_id)
         ranked_meta = rank_candidates_for_gap(raw_candidates, gap)
+        # Phase 4: harter Dauer-Vorfilter VOR Text-/Thumbnail-Scoring.
+        min_duration = required_candidate_duration_seconds(
+            gap.target_duration_seconds,
+            head_trim=float(options.video_head_trim_sec or 0.0),
+            short_tolerance=float(options.short_asset_tolerance_sec or 0.0),
+        )
+        ranked_meta, duration_excluded = filter_candidates_by_duration(
+            ranked_meta, min_duration=min_duration
+        )
+        if duration_excluded:
+            gap_report.message = (
+                f"Dauer-Vorfilter: {len(duration_excluded)} Kandidat(en) "
+                f"ausgeschlossen"
+                + (
+                    f" (min {min_duration:.2f}s)."
+                    if min_duration is not None
+                    else "."
+                )
+            )
         pool = select_provider_balanced_candidates(
             ranked_meta,
             enabled_providers=enabled,
@@ -1081,7 +1104,9 @@ def run_supplement_funnel_for_gaps(
         preview_bytes.clear()
 
         download_order = [
-            r for r in ordered_finalists if r.decision in {"winner", "fallback"}
+            r
+            for r in ordered_finalists
+            if r.decision in {"winner", "fallback"} and r.fit_bucket != "reject"
         ]
         if not download_order:
             gap_report.candidates = records

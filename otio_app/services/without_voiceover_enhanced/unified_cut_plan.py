@@ -367,6 +367,7 @@ def unified_to_rough(
                 editorial_function=slot.narrative_function or "orientation",
                 priority=priority,
                 reason=reason,
+                target_duration_seconds=slot.target_duration_seconds,
             )
         )
 

@@ -345,6 +345,8 @@ class CoverageGap(BaseModel):
     priority: str = "high"
     reason: str = ""
     search_queries: list[str] = Field(default_factory=list)
+    # Ziel-Dauer des zugehörigen Slots (Funnel-Dauerfilter, Phase 4).
+    target_duration_seconds: Optional[float] = None
 
 
 class CoverageGapsDocument(BaseModel):
@@ -494,6 +496,8 @@ class FunnelCandidateRecord(BaseModel):
     license_metadata_status: str = ""
     excluded: bool = False
     exclude_reason: str = ""
+    # Fit-Brücke aus final_score (strong|acceptable|weak|reject|manual).
+    fit_bucket: str = ""
 
 
 class SupplementFunnelGapReport(BaseModel):
@@ -545,6 +549,31 @@ class AcceptedSupplementsDocument(BaseModel):
     schema_version: str = "enhanced-accepted-supplements-v1"
     script_version: str
     supplements: list[StockCandidate] = Field(default_factory=list)
+
+
+class GapMergeSlotResult(BaseModel):
+    shot_id: str
+    coverage_gap_id: str
+    status: str = ""  # merged | kept_local_weak | open_none | failed | skipped
+    previous_asset_id: str = ""
+    new_asset_id: str = ""
+    local_fit: str = ""
+    supplement_fit_bucket: str = ""
+    review_flag: bool = False
+    message: str = ""
+
+
+class GapMergeReport(BaseModel):
+    schema_version: str = "enhanced-gap-merge-v1"
+    script_version: str = ""
+    merged_shot_ids: list[str] = Field(default_factory=list)
+    kept_local_shot_ids: list[str] = Field(default_factory=list)
+    open_none_gap_ids: list[str] = Field(default_factory=list)
+    review_shot_ids: list[str] = Field(default_factory=list)
+    slots: list[GapMergeSlotResult] = Field(default_factory=list)
+    repairs: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    message: str = ""
 
 
 class FinalShot(BaseModel):

@@ -38,6 +38,7 @@ STOCK_DOWNLOADS_SUBDIR = "downloads"
 FINAL_CUT_PLAN_FILENAME = "final_cut_plan.json"
 RESOLVED_TIMELINE_FILENAME = "resolved_timeline.json"
 REPAIR_LOG_FILENAME = "timeline_repair_log.json"
+GAP_MERGE_REPORT_FILENAME = "gap_merge_report.json"
 
 
 def assert_enhanced_work_root(project: Project) -> Path:
@@ -208,3 +209,7 @@ def resolved_timeline_path(project: Project) -> Path:
 
 def repair_log_path(project: Project) -> Path:
     return cut_dir(project) / REPAIR_LOG_FILENAME
+
+
+def gap_merge_report_path(project: Project) -> Path:
+    return cut_dir(project) / GAP_MERGE_REPORT_FILENAME
