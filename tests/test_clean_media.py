@@ -621,6 +621,8 @@ def test_transcode_to_clean_strips_all_metadata(
     assert "-timecode" in command
     tc_idx = command.index("-timecode")
     assert command[tc_idx + 1] == "00:00:00:00"
+    assert "-bf" in command
+    assert command[command.index("-bf") + 1] == "0"
 
 
 @patch("otio_app.services.clean_media._trim_tiny_leading_black")
@@ -708,32 +710,22 @@ def test_count_leading_black_frames_stops_at_first_non_black() -> None:
 
 @patch("otio_app.services.clean_media.path_is_readable_file", return_value=True)
 @patch("otio_app.services.clean_media.probe_leading_black_seconds", return_value=0.0)
+@patch("otio_app.services.clean_media._count_leading_black_frames", return_value=0)
 @patch("otio_app.services.clean_media._probe_video_fps", return_value=24.0)
 @patch("otio_app.services.clean_media._run_command")
-def test_trim_tiny_leading_black_drops_three_frames(
+def test_trim_tiny_leading_black_force_drops_three_frames(
     mock_run_command,
     _mock_fps,
+    _mock_count,
     _mock_leading,
     _mock_readable,
     tmp_path: Path,
 ) -> None:
-    """Asset14: 3 Clean-Schwarzframes → einmal select=gte(n,3), danach clean."""
+    """Asset14: auch ohne Detection immer 3 Leading-Frames droppen."""
     path = tmp_path / "Yosemite_Asset14.mp4"
     path.write_bytes(b"x" * 2000)
-    calls = {"n": 0}
 
     def _fake_run(command, **kwargs):
-        calls["n"] += 1
-        # 1) count → 3 black frames; 2) reencode drop; 3) recount → 0
-        if any(str(c).startswith("blackframe=") for c in command):
-            if calls["n"] == 1:
-                stderr = (
-                    "frame:0 pblack:99\nframe:1 pblack:98\n"
-                    "frame:2 pblack:97\nframe:3 pblack:5\n"
-                )
-            else:
-                stderr = "frame:0 pblack:5\n"
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": stderr})()
         out = Path(command[-1])
         out.write_bytes(b"y" * 2000)
         return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
@@ -748,6 +740,7 @@ def test_trim_tiny_leading_black_drops_three_frames(
     assert drop_cmds, "kein select-Drop-Kommando"
     joined = " ".join(str(x) for x in drop_cmds[0])
     assert "select=gte(n\\,3)" in joined or "select=gte(n,3)" in joined
+    assert "-bf" in drop_cmds[0]
     assert path.read_bytes().startswith(b"y")
 
 

@@ -41,6 +41,10 @@ CLEAN_STATUS_FAILED = "failed"
 CLEAN_STATUS_PENDING = "pending"
 CLEAN_STATUS_NEEDS_TRANSCODE = "needs_transcode"
 
+# ProRes→H.264 / Resolve zeigt oft 1–3 Schwarzframes am Clean-Anfang.
+# blackframe-Detection greift nicht zuverlässig → festen Drop + bf=0.
+CLEAN_FORCE_DROP_LEADING_FRAMES = 3
+
 _ASSET_NUMBER_RE = re.compile(r"asset[_\s-]*(\d+)", re.IGNORECASE)
 
 _RESOLVE_FRIENDLY_VIDEO_CODECS = frozenset(
@@ -385,6 +389,9 @@ def transcode_to_clean(
         "medium",
         "-crf",
         "18",
+        # Keine B-Frames: Resolve zeigt sonst oft schwarze Startframes (GOP/Priming).
+        "-bf",
+        "0",
         "-pix_fmt",
         "yuv420p",
         "-movflags",
@@ -610,6 +617,8 @@ def _reencode_drop_leading_frames(path: Path, frames: int) -> bool:
         "veryfast",
         "-crf",
         "18",
+        "-bf",
+        "0",
         "-pix_fmt",
         "yuv420p",
         "-c:a",
@@ -643,44 +652,52 @@ def _reencode_drop_leading_frames(path: Path, frames: int) -> bool:
 def _trim_tiny_leading_black(
     path: Path,
     *,
-    max_trim_seconds: float = 0.25,
-    max_frames: int = 6,
+    max_trim_seconds: float = 0.35,
+    max_frames: int = 8,
+    force_drop_frames: int = CLEAN_FORCE_DROP_LEADING_FRAMES,
 ) -> None:
-    """Schneidet führendes Schwarz nach dem Clean-Encode ab (1–N Frames).
+    """Schneidet führendes Schwarz nach dem Clean-Encode ab.
 
-    ProRes→H.264 erzeugt oft mehrere Schwarzframes am Anfang. Ein einzelner
-    First-Frame-Trim reicht nicht; ein Re-Encode kann erneut 1 Priming-Frame
-    erzeugen — daher zählen, alle führenden Frames droppen, verifizieren/loopen.
+    Resolve/Asset14: oft genau 3 schwarze Startframes; ``blackframe`` liefert
+    trotzdem 0. Deshalb zuerst **festen Drop** (Default 3 Frames), danach
+    Detection-Loop für Reste (inkl. Re-Encode-Priming).
     """
     fps = _probe_video_fps(path) or 24.0
     one_frame = 1.0 / max(1.0, fps)
     max_by_time = max(1, int(max_trim_seconds / one_frame + 0.5))
     frame_budget = max(1, min(int(max_frames), max_by_time))
+    force_drop = max(0, min(int(force_drop_frames), frame_budget))
 
-    # blackdetect als zusätzliche Untergrenze (manchmal robuster als blackframe).
+    trimmed_total = 0
+    if force_drop > 0:
+        if not _reencode_drop_leading_frames(path, force_drop):
+            return
+        trimmed_total += force_drop
+
     detected_sec = probe_leading_black_seconds(
         path,
         min_black_duration=min(0.02, one_frame * 0.5),
-        pixel_threshold=0.12,
+        pixel_threshold=0.15,
     )
     if detected_sec is None:
         detected_sec = 0.0
     detected_frames = int(detected_sec / one_frame + 0.5) if detected_sec > 0 else 0
 
-    trimmed_total = 0
-    for _ in range(frame_budget):
+    for _ in range(frame_budget - trimmed_total):
         leading = _count_leading_black_frames(
-            path, max_frames=frame_budget - trimmed_total, min_pblack=90
+            path,
+            max_frames=frame_budget - trimmed_total,
+            min_pblack=80,
         )
-        if leading <= 0 and trimmed_total == 0 and detected_frames > 0:
-            leading = min(detected_frames, frame_budget)
+        if leading <= 0 and detected_frames > 0 and trimmed_total == force_drop:
+            leading = min(detected_frames, frame_budget - trimmed_total)
         if leading <= 0:
             break
         leading = min(leading, frame_budget - trimmed_total)
         if not _reencode_drop_leading_frames(path, leading):
             break
         trimmed_total += leading
-        # Re-Encode kann 1 neuen Priming-Frame erzeugen → nochmal prüfen.
+        detected_frames = 0
         if trimmed_total >= frame_budget:
             break
 
