@@ -70,6 +70,12 @@ def lock_script(project: Project, document: EnhancedScriptDocument | None = None
     draft = document or load_script_draft(project)
     if draft is None:
         raise ScriptLockError("Kein Skript-Draft zum Sperren vorhanden.")
+    # Bestätigtes Intro (Schritt ⑤) in das Locked-Script übernehmen, falls vorhanden.
+    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+        ensure_confirmed_intro_in_document,
+    )
+
+    ensure_confirmed_intro_in_document(project, draft)
     if not draft.segments:
         raise ScriptLockError("Skript enthält keine Segmente.")
     forbidden = detect_forbidden_phrases(draft.narration_full)

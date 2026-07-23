@@ -416,9 +416,13 @@ def group_segments_by_folder(
     *,
     folder_order: list[str] | None = None,
 ) -> list[tuple[str, list[ScriptSegment]]]:
-    """Kapitel-Gruppen in Dramaturgie-Reihenfolge; unzugeordnete Segmente zuletzt."""
+    """Kapitel-Gruppen in Dramaturgie-Reihenfolge; Intro immer zuerst."""
     if document is None or not document.segments:
         return []
+    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+        is_intro_folder_name,
+    )
+
     buckets: dict[str, list[ScriptSegment]] = {}
     for segment in document.segments:
         key = segment.folder_name or ""
@@ -433,7 +437,12 @@ def group_segments_by_folder(
     for name, segs in buckets.items():
         if name not in seen:
             ordered.append((name, segs))
-    return ordered
+
+    intro_groups = [(name, segs) for name, segs in ordered if is_intro_folder_name(name)]
+    other_groups = [
+        (name, segs) for name, segs in ordered if not is_intro_folder_name(name)
+    ]
+    return intro_groups + other_groups
 
 
 def _strip_plain_narration_response(raw_text: str) -> str:
