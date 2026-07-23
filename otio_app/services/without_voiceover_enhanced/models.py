@@ -277,6 +277,8 @@ class CutSlot(BaseModel):
     covered_sentence_ids: list[str] = Field(default_factory=list)
     # Optional: Ziel-Dauer für Funnel-Dauerfilter (sobald Timing bekannt).
     target_duration_seconds: Optional[float] = None
+    # Fix 3 / Entscheidung 13: Kandidaten nur für Kapitel-Bridge (nie Funnel).
+    bridge_candidate_asset_ids: list[str] = Field(default_factory=list)
 
     @field_validator("asset_fit", mode="before")
     @classmethod

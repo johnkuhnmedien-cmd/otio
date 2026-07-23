@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from otio_app.models import Project
-from otio_app.services.media_utils import probe_duration_seconds
+from otio_app.services.media_utils import is_image_media, probe_duration_seconds
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     load_cut_plan_options,
 )
@@ -22,8 +22,14 @@ from otio_app.services.without_voiceover_enhanced.io_utils import load_model, wr
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
     list_export_ready_supplements,
 )
+from otio_app.services.without_voiceover_enhanced.media_hold import (
+    MediaHoldError,
+    ensure_still_hold_video,
+    ensure_video_padded_hold,
+)
 from otio_app.services.without_voiceover_enhanced.models import (
     CoverageGapsDocument,
+    CutSlot,
     FunnelCandidateRecord,
     GapMergeReport,
     GapMergeSlotResult,
@@ -53,6 +59,407 @@ from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
 
 class GapMergeError(RuntimeError):
     """Fehler beim Gap-Merge."""
+
+
+def is_bridge_shot(
+    shot: ResolvedShot,
+    *,
+    unified: UnifiedCutPlanDocument | None = None,
+) -> bool:
+    """Kapitel-Bridge (nie Funnel)."""
+    if str(shot.shot_id).startswith("bridge_"):
+        return True
+    if str(shot.editorial_function or "").strip().lower() == "chapter_transition":
+        return True
+    if unified is not None:
+        for slot in unified.slots:
+            if slot.slot_id != shot.shot_id:
+                continue
+            return (
+                str(slot.narrative_function or "").strip().lower()
+                == "chapter_transition"
+            )
+    return False
+
+
+def _slot_for_shot(
+    shot: ResolvedShot,
+    unified: UnifiedCutPlanDocument | None,
+) -> CutSlot | None:
+    if unified is None:
+        return None
+    for slot in unified.slots:
+        if slot.slot_id == shot.shot_id:
+            return slot
+    return None
+
+
+def _usable_remaining_seconds(
+    shot: ResolvedShot,
+    entry: dict,
+    *,
+    head_trim: float,
+) -> float | None:
+    """Nutzbare Restdauer nach aktuellem source_end; None = Still/unbegrenzt."""
+    path = Path(str(entry.get("path") or shot.resolved_media_path or ""))
+    media_kind = str(entry.get("media_kind") or entry.get("media_type") or "").lower()
+    if media_kind in {"image", "photo"} or (path.suffix and is_image_media(path)):
+        return None
+    media_dur = entry.get("duration_seconds")
+    if media_dur is None:
+        media_dur = shot.resolved_media_duration_seconds
+    if media_dur is None or float(media_dur) <= 0:
+        return 0.0
+    available_start = float(
+        entry.get("available_start_seconds")
+        if entry.get("available_start_seconds") is not None
+        else (shot.resolved_available_start_seconds or 0.0)
+    )
+    usable_end = available_start + float(media_dur)
+    return max(0.0, usable_end - float(shot.source_end_seconds))
+
+
+def _try_extend_previous_over_bridge(
+    project: Project,
+    prev: ResolvedShot,
+    bridge: ResolvedShot,
+    *,
+    catalog,
+    head_trim: float,
+    short_tolerance: float,
+    fps: float,
+    repairs: list[str],
+) -> ResolvedShot | None:
+    """Closing-Shot über Bridge verlängern, wenn nutzbare Restdauer reicht."""
+    if prev.is_placeholder or prev.open_gap or not prev.asset_id:
+        return None
+    if not prev.resolved_media_path:
+        return None
+    entry, _err = lookup_catalog_entry(catalog, prev.asset_id)
+    if entry is None:
+        entry = {
+            "path": prev.resolved_media_path,
+            "duration_seconds": prev.resolved_media_duration_seconds,
+            "available_start_seconds": prev.resolved_available_start_seconds,
+            "media_kind": prev.resolved_media_kind or "video",
+            "usable_in_s": None,
+            "canonical_id": prev.asset_id,
+        }
+    need = max(
+        0.0,
+        float(bridge.timeline_end_seconds) - float(bridge.timeline_start_seconds),
+    )
+    if need <= 1e-9:
+        return None
+
+    remaining = _usable_remaining_seconds(prev, entry, head_trim=head_trim)
+    extended = prev.model_copy(deep=True)
+    new_end = float(bridge.timeline_end_seconds)
+    new_span = max(0.0, new_end - float(extended.timeline_start_seconds))
+
+    # Still: immer per Hold über die Bridge tragbar.
+    path = Path(str(entry.get("path") or extended.resolved_media_path))
+    if remaining is None or is_image_media(path) or extended.hold_mode == "freeze_video":
+        try:
+            if is_image_media(path) and extended.hold_mode != "freeze_video":
+                hold = ensure_still_hold_video(
+                    project, path, duration_seconds=new_span, fps=fps
+                )
+            else:
+                hold = ensure_video_padded_hold(
+                    project,
+                    Path(extended.resolved_media_path),
+                    target_duration_seconds=new_span,
+                    fps=fps,
+                )
+        except MediaHoldError:
+            return None
+        extended.timeline_end_seconds = round(new_end, 6)
+        extended.resolved_media_path = str(hold)
+        extended.resolved_media_kind = "video"
+        extended.resolved_available_start_seconds = 0.0
+        extended.resolved_media_duration_seconds = round(new_span, 6)
+        extended.source_start_seconds = 0.0
+        extended.source_end_seconds = round(new_span, 6)
+        extended.hold_mode = "freeze_video"
+        extended.open_gap = False
+        extended.is_placeholder = False
+        repairs.append(
+            f"{bridge.shot_id}: Bridge von {extended.shot_id} getragen "
+            f"(Still/Hold, +{need:.2f}s)."
+        )
+        return extended
+
+    if remaining + short_tolerance + 1e-9 < need:
+        return None
+
+    # Motion: Source erweitern; knappe Toleranz → optional kurzes tpad nur für Bridge.
+    extended.timeline_end_seconds = round(new_end, 6)
+    new_source_end = float(extended.source_end_seconds) + need
+    available_start = float(entry.get("available_start_seconds") or 0.0)
+    media_dur = float(entry.get("duration_seconds") or 0.0)
+    usable_end = available_start + media_dur
+    if new_source_end <= usable_end + 1e-6:
+        extended.source_end_seconds = round(new_source_end, 6)
+        extended.open_gap = False
+        extended.is_placeholder = False
+        repairs.append(
+            f"{bridge.shot_id}: Bridge von {extended.shot_id} getragen "
+            f"(Source +{need:.2f}s, Rest {remaining:.2f}s)."
+        )
+        return extended
+
+    # Innerhalb Toleranz: Hold-Pad für den Überstand (nur Bridge-Ausnahme).
+    shortfall = new_source_end - usable_end
+    if shortfall > short_tolerance + 1e-9:
+        return None
+    try:
+        hold = ensure_video_padded_hold(
+            project,
+            Path(extended.resolved_media_path),
+            target_duration_seconds=new_span,
+            fps=fps,
+        )
+    except MediaHoldError:
+        return None
+    extended.resolved_media_path = str(hold)
+    extended.resolved_media_kind = "video"
+    extended.resolved_available_start_seconds = 0.0
+    extended.resolved_media_duration_seconds = round(new_span, 6)
+    extended.source_start_seconds = 0.0
+    extended.source_end_seconds = round(new_span, 6)
+    extended.hold_mode = "bridge_hold"
+    extended.open_gap = False
+    extended.is_placeholder = False
+    repairs.append(
+        f"{bridge.shot_id}: Bridge von {extended.shot_id} getragen "
+        f"(Hold +{shortfall:.2f}s innerhalb Toleranz)."
+    )
+    return extended
+
+
+def _pick_bridge_asset_id(
+    bridge: ResolvedShot,
+    *,
+    unified: UnifiedCutPlanDocument | None,
+    catalog,
+    used_asset_ids: set[str],
+    folder_hint: str,
+    min_duration: float,
+) -> str | None:
+    """Kandidaten aus Plan, sonst bestes ungenutztes Kapitel-Asset."""
+    slot = _slot_for_shot(bridge, unified)
+    ordered_ids: list[str] = []
+    if slot is not None:
+        ordered_ids.extend(
+            str(a).strip() for a in (slot.bridge_candidate_asset_ids or []) if str(a).strip()
+        )
+
+    def _usable(entry: dict) -> float:
+        dur = entry.get("duration_seconds")
+        if dur is None:
+            return 0.0
+        trim = 0.0
+        if entry.get("usable_in_s") is not None:
+            trim = max(0.0, float(entry["usable_in_s"]))
+        kind = str(entry.get("media_kind") or "").lower()
+        if kind in {"image", "photo"}:
+            return 1e9
+        return max(0.0, float(dur) - trim)
+
+    # Plan-Kandidaten zuerst (auch wenn schon used — explizit gewünscht).
+    for asset_id in ordered_ids:
+        entry, _err = lookup_catalog_entry(catalog, asset_id)
+        if entry is None:
+            continue
+        if _usable(entry) + 1e-9 >= min_duration:
+            return str(entry.get("canonical_id") or asset_id)
+
+    # Bestes ungenutztes Asset des endenden Kapitels.
+    folder = (folder_hint or "").strip().lower()
+    ranked: list[tuple[float, str, str]] = []
+    for asset_id, entry in (catalog.by_id or {}).items():
+        if asset_id in used_asset_ids:
+            continue
+        entry_folder = str(entry.get("folder") or "").strip().lower()
+        if folder and entry_folder and entry_folder != folder:
+            continue
+        usable = _usable(entry)
+        if usable + 1e-9 < min_duration:
+            continue
+        # Framing-Hinweis nur als Tie-Break-Textlänge; Dauer primär.
+        ranked.append((-usable, str(asset_id), str(asset_id)))
+    if not ranked:
+        return None
+    ranked.sort()
+    return ranked[0][1]
+
+
+def _resolve_bridge_with_asset(
+    project: Project,
+    bridge: ResolvedShot,
+    asset_id: str,
+    *,
+    catalog,
+    fps: float,
+    head_trim: float,
+    short_tolerance: float,
+    repairs: list[str],
+) -> ResolvedShot | None:
+    entry, lookup_error = lookup_catalog_entry(catalog, asset_id)
+    if entry is None:
+        repairs.append(
+            f"{bridge.shot_id}: Bridge-Asset {asset_id} nicht im Katalog "
+            f"({lookup_error})."
+        )
+        return None
+    try:
+        resolved = _resolve_shot_media(
+            project,
+            shot_id=bridge.shot_id,
+            asset_id=str(entry.get("canonical_id") or asset_id),
+            entry=entry,
+            timeline_start=float(bridge.timeline_start_seconds),
+            timeline_end=float(bridge.timeline_end_seconds),
+            fps=fps,
+            head_trim=head_trim,
+            short_tolerance=short_tolerance,
+            editorial_function="chapter_transition",
+            may_overlap_pause=True,
+            repairs=repairs,
+        )
+    except TimelineResolveError as exc:
+        repairs.append(f"{bridge.shot_id}: Bridge-Asset fehlgeschlagen — {exc}")
+        return None
+    resolved.timeline_start_seconds = float(bridge.timeline_start_seconds)
+    resolved.timeline_end_seconds = float(bridge.timeline_end_seconds)
+    resolved.chapter_id = bridge.chapter_id
+    resolved.folder_name = bridge.folder_name or str(entry.get("folder") or "")
+    resolved.asset_fit = "acceptable"
+    resolved.asset_fit_reason = "bridge_fill"
+    resolved.cut_alignment = bridge.cut_alignment
+    resolved.coverage_gap_id = None
+    resolved.open_gap = False
+    resolved.is_placeholder = False
+    resolved.editorial_function = "chapter_transition"
+    return resolved
+
+
+def fill_chapter_bridges(
+    project: Project,
+    timeline: ResolvedTimelineDocument,
+    *,
+    unified: UnifiedCutPlanDocument | None,
+    catalog,
+    options,
+    repairs: list[str],
+    report: GapMergeReport,
+) -> list[ResolvedShot]:
+    """Fix 3: Bridges füllen — Closing verlängern → Kandidaten → bestes Asset."""
+    fps = float(timeline.fps or project.fps or 25.0)
+    head_trim = max(0.0, float(options.video_head_trim_sec))
+    short_tolerance = max(0.0, float(options.short_asset_tolerance_sec))
+    ordered = sorted(
+        list(timeline.shots),
+        key=lambda s: (s.timeline_start_seconds, s.shot_id),
+    )
+    used = {
+        str(s.asset_id)
+        for s in ordered
+        if s.asset_id and not s.open_gap and not s.is_placeholder
+    }
+    out: list[ResolvedShot] = []
+    for shot in ordered:
+        if not is_bridge_shot(shot, unified=unified):
+            out.append(shot)
+            if shot.asset_id and not shot.open_gap and not shot.is_placeholder:
+                used.add(str(shot.asset_id))
+            continue
+
+        prev = out[-1] if out else None
+        if prev is not None:
+            extended = _try_extend_previous_over_bridge(
+                project,
+                prev,
+                shot,
+                catalog=catalog,
+                head_trim=head_trim,
+                short_tolerance=short_tolerance,
+                fps=fps,
+                repairs=repairs,
+            )
+            if extended is not None:
+                out[-1] = extended
+                report.slots.append(
+                    GapMergeSlotResult(
+                        shot_id=shot.shot_id,
+                        coverage_gap_id="",
+                        status="bridge_extended",
+                        previous_asset_id=prev.asset_id or "",
+                        new_asset_id=extended.asset_id or "",
+                        local_fit="none",
+                        message=f"von {extended.shot_id} über Bridge verlängert",
+                    )
+                )
+                report.merged_shot_ids.append(shot.shot_id)
+                continue
+
+        need = max(
+            0.0,
+            float(shot.timeline_end_seconds) - float(shot.timeline_start_seconds),
+        )
+        folder_hint = ""
+        if prev is not None:
+            folder_hint = prev.folder_name or prev.chapter_id or ""
+        asset_id = _pick_bridge_asset_id(
+            shot,
+            unified=unified,
+            catalog=catalog,
+            used_asset_ids=used,
+            folder_hint=folder_hint,
+            min_duration=need,
+        )
+        if asset_id:
+            filled = _resolve_bridge_with_asset(
+                project,
+                shot,
+                asset_id,
+                catalog=catalog,
+                fps=fps,
+                head_trim=head_trim,
+                short_tolerance=short_tolerance,
+                repairs=repairs,
+            )
+            if filled is not None:
+                out.append(filled)
+                used.add(str(filled.asset_id))
+                report.slots.append(
+                    GapMergeSlotResult(
+                        shot_id=shot.shot_id,
+                        coverage_gap_id="",
+                        status="bridge_filled",
+                        previous_asset_id=shot.asset_id or "",
+                        new_asset_id=filled.asset_id,
+                        local_fit="none",
+                        message=f"Bridge-Asset {filled.asset_id}",
+                    )
+                )
+                report.merged_shot_ids.append(shot.shot_id)
+                continue
+
+        report.slots.append(
+            GapMergeSlotResult(
+                shot_id=shot.shot_id,
+                coverage_gap_id="",
+                status="bridge_open",
+                previous_asset_id=shot.asset_id or "",
+                local_fit="none",
+                message="Bridge konnte nicht gefüllt werden.",
+            )
+        )
+        report.errors.append(f"{shot.shot_id}: Bridge offen.")
+        out.append(shot)
+    return out
 
 
 def _funnel_records_by_gap(
@@ -203,8 +610,25 @@ def merge_export_ready_gaps_into_timeline(
     short_tolerance = max(0.0, float(options.short_asset_tolerance_sec))
     repairs = list(timeline.repairs or [])
 
+    # Fix 3: Bridges zuerst (nie Funnel).
+    bridge_filled = fill_chapter_bridges(
+        project,
+        timeline,
+        unified=unified,
+        catalog=catalog,
+        options=options,
+        repairs=repairs,
+        report=report,
+    )
+    working = timeline.model_copy(deep=True)
+    working.shots = bridge_filled
+
     updated_shots: list[ResolvedShot] = []
-    for shot in timeline.shots:
+    for shot in working.shots:
+        if is_bridge_shot(shot, unified=unified):
+            # Bereits in fill_chapter_bridges behandelt (oder offen geblieben).
+            updated_shots.append(shot)
+            continue
         gap_id = (shot.coverage_gap_id or "").strip()
         if not gap_id and not shot.open_gap:
             updated_shots.append(shot)

@@ -1973,10 +1973,12 @@ def merge_and_persist_unified_cuts(
                 asset_fit_reason="Kapitelübergang (Bridge zwischen Unified-Kapitelplänen)",
                 visual_intent="chapter transition",
                 narrative_function="chapter_transition",
-                coverage_gap_id=f"gap_{bridge_id}",
+                # Nie Funnel — Fill läuft deterministisch in gap_merge (Fix 3).
+                coverage_gap_id=None,
                 needed_visual="chapter transition / hold",
                 search_concepts=["chapter transition"],
                 preferred_media_type="video",
+                bridge_candidate_asset_ids=[],
             )
         )
         boundaries.extend(plan.boundaries)

@@ -565,17 +565,17 @@ def _placeholder_resolved_shot(
     )
 
     duration = max(TECH_MIN_SHOT_SECONDS, timed.duration_seconds)
-    gap_id = (
-        coverage_gap_id
-        or timed.coverage_gap_id
-        or f"gap_{timed.slot_id}"
-    )
+    if coverage_gap_id is not None:
+        gap_meta = str(coverage_gap_id).strip() or None
+    else:
+        gap_meta = (timed.coverage_gap_id or "").strip() or f"gap_{timed.slot_id}"
+    gap_slate = gap_meta or f"bridge_{timed.slot_id}"
     needed = (timed.needed_visual or timed.visual_intent or "").strip()
     try:
         slate = ensure_gap_placeholder_slate(
             project,
             shot_id=timed.slot_id,
-            gap_id=str(gap_id),
+            gap_id=str(gap_slate),
             needed_visual=needed,
             start_seconds=float(timed.start_seconds),
             end_seconds=float(timed.end_seconds),
@@ -607,7 +607,7 @@ def _placeholder_resolved_shot(
             else timed.asset_fit_reason
         ),
         cut_alignment=timed.cut_alignment,
-        coverage_gap_id=str(gap_id),
+        coverage_gap_id=gap_meta,
         open_gap=True,
         is_placeholder=True,
     )
@@ -732,15 +732,14 @@ def resolve_unified_timeline(
                         project,
                         timed,
                         fps=fps,
-                        coverage_gap_id=timed.coverage_gap_id
-                        or f"gap_{timed.slot_id}",
+                        coverage_gap_id="",  # nie Funnel
                     )
                 )
                 repairs.append(
                     f"{timed.slot_id}: Kapitelübergang "
-                    f"({start_chapter} → {end_chapter}) — Platzhalter."
+                    f"({start_chapter} → {end_chapter}) — Platzhalter "
+                    "(Bridge-Fill im Gap-Merge, kein Funnel)."
                 )
-                _mark_slot_as_duration_gap(plan, timed.slot_id, reason="Kapitelübergang")
                 continue
             errors.append(
                 f"{timed.slot_id}: Start-/Endanker in unterschiedlichen Kapiteln "

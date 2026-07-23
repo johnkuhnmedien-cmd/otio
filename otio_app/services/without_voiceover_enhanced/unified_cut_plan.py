@@ -302,7 +302,13 @@ def unified_to_rough(
         start_anchor = _boundary_to_editorial_anchor(start_b)
         end_anchor = _boundary_to_editorial_anchor(end_b)
         fit = str(slot.asset_fit or "none").strip().lower()
-        needs_gap = fit in GAP_FIT_VALUES
+        is_bridge = (
+            str(slot.slot_id).startswith("bridge_")
+            or str(slot.narrative_function or "").strip().lower()
+            == "chapter_transition"
+        )
+        # Bridges nie in den Funnel (Entscheidung 13 / Fix 3).
+        needs_gap = (fit in GAP_FIT_VALUES) and not is_bridge
         gap_id = None
         if needs_gap:
             gap_id = (slot.coverage_gap_id or "").strip() or _default_gap_id(slot.slot_id)
