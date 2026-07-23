@@ -169,6 +169,11 @@ def test_prompt_constraints_in_rough_and_final() -> None:
     assert "COUNT toward max asset usage" in text
     assert "Never place the same non-intro asset on two consecutive shots" in text
     assert "No two consecutive shots share the same non-intro asset_id" in final
+    assert "will NOT freeze-pad" in text
+    assert "There is no video hold" in text
+    assert "uncovered narration spans" in rough.lower()
+    assert "freeze-frame / tpad / video-hold" in rough.lower()
+    assert "Never assume freeze/tpad video-hold" in final
 
 
 def test_resolver_clamps_to_shot_max(tmp_path: Path) -> None:

@@ -793,7 +793,11 @@ def _reapply_hold_for_timeline_span(
     repairs: list[str],
     label: str,
 ) -> None:
-    """Passt Source an Timeline-Span an; bei Overflow Hold-Video, nie Source>Datei."""
+    """Passt Source an Timeline-Span an.
+
+    Stills dürfen zu Resolve-tauglichem Hold-Video werden.
+    Motion-Video wird nie per tpad/Freeze verlängert — fail-closed.
+    """
     need = max(0.0, shot.timeline_end_seconds - shot.timeline_start_seconds)
     source_span = max(0.0, shot.source_end_seconds - shot.source_start_seconds)
     if need <= source_span + 1e-6:
@@ -801,7 +805,7 @@ def _reapply_hold_for_timeline_span(
     path = Path(shot.resolved_media_path or "")
     if not path.is_file():
         raise TimelineResolveError(
-            f"{shot.shot_id}: {label}-Hold unmöglich — Medienpfad fehlt "
+            f"{shot.shot_id}: {label} unmöglich — Medienpfad fehlt "
             f"({shot.resolved_media_path})."
         )
     available_start = float(shot.resolved_available_start_seconds or 0.0)
@@ -817,26 +821,58 @@ def _reapply_hold_for_timeline_span(
                     f"{shot.shot_id}: {label} — Source auf Dateianfang geschoben."
                 )
                 return
-    # Hold-Video erzeugen (Still → Loop-Video, Video → tpad clone).
-    try:
-        if is_image_media(path):
+
+    # Still → Hold-Video (Foto braucht Dauer in Resolve).
+    if is_image_media(path):
+        try:
             hold = ensure_still_hold_video(
                 project, path, duration_seconds=need, fps=fps
             )
-        else:
+        except MediaHoldError as exc:
+            raise TimelineResolveError(
+                f"{shot.shot_id}: {label}-Still-Hold fehlgeschlagen: {exc}"
+            ) from exc
+        shot.resolved_media_path = str(hold)
+        shot.resolved_media_kind = "video"
+        shot.resolved_available_start_seconds = 0.0
+        shot.resolved_media_duration_seconds = need
+        shot.source_start_seconds = 0.0
+        shot.source_end_seconds = round(need, 6)
+        shot.hold_mode = "freeze_video"
+        repairs.append(
+            f"{shot.shot_id}: {label}-Still-Hold-Video {need:.2f}s ({hold.name})."
+        )
+        return
+
+    # Bereits ein Still-Hold darf verlängert werden (weiterhin Foto-Freeze).
+    if str(shot.hold_mode or "") == "freeze_video":
+        try:
             hold = ensure_video_padded_hold(
                 project, path, target_duration_seconds=need, fps=fps
             )
-    except MediaHoldError as exc:
-        raise TimelineResolveError(f"{shot.shot_id}: {label}-Hold fehlgeschlagen: {exc}") from exc
-    shot.resolved_media_path = str(hold)
-    shot.resolved_media_kind = "video"
-    shot.resolved_available_start_seconds = 0.0
-    shot.resolved_media_duration_seconds = need
-    shot.source_start_seconds = 0.0
-    shot.source_end_seconds = round(need, 6)
-    shot.hold_mode = "freeze_video"
-    repairs.append(f"{shot.shot_id}: {label}-Hold-Video {need:.2f}s ({hold.name}).")
+        except MediaHoldError as exc:
+            raise TimelineResolveError(
+                f"{shot.shot_id}: {label}-Still-Hold-Verlängerung fehlgeschlagen: {exc}"
+            ) from exc
+        shot.resolved_media_path = str(hold)
+        shot.resolved_media_kind = "video"
+        shot.resolved_available_start_seconds = 0.0
+        shot.resolved_media_duration_seconds = need
+        shot.source_start_seconds = 0.0
+        shot.source_end_seconds = round(need, 6)
+        repairs.append(
+            f"{shot.shot_id}: {label}-Still-Hold verlängert auf {need:.2f}s "
+            f"({hold.name})."
+        )
+        return
+
+    usable = float(media_dur) if media_dur is not None else source_span
+    raise TimelineResolveError(
+        f"{shot.shot_id}: {label} — Motion-Video zu kurz für Timeline-Span "
+        f"({usable:.2f}s nutzbar < {need:.2f}s nötig). "
+        "Kein Video-Hold/tpad: kürzeren Shot planen, längeres Asset wählen "
+        "oder coverage_gap setzen."
+    )
 
 
 def detect_one_to_one_sentence_asset(final: FinalCutPlanDocument, segment_count: int) -> bool:
@@ -921,46 +957,13 @@ def _resolve_shot_media(
                     "Toleranz, Shot gekürzt."
                 )
             else:
-                # Anderen gültigen Source-Start wählen hilft nicht, wenn need > usable.
-                # Hold-Video mit tpad (letztes Frame klonen).
-                try:
-                    hold_path = ensure_video_padded_hold(
-                        project,
-                        media_path,
-                        target_duration_seconds=need,
-                        fps=fps,
-                    )
-                except MediaHoldError as exc:
-                    raise TimelineResolveError(
-                        f"{shot_id}: Asset {asset_id} zu kurz "
-                        f"({media_duration_f}s < {need}s; Toleranz "
-                        f"{short_tolerance:.1f}s) und Hold fehlgeschlagen: {exc} "
-                        f"· Pfad {media_path}."
-                    ) from exc
-                resolved_path = hold_path
-                hold_mode = "freeze_video"
-                available_start = 0.0
-                media_duration_f = need
-                source_start = 0.0
-                source_end = need
-                repairs.append(
-                    f"{shot_id}: Video-Hold {need:.2f}s via tpad ({hold_path.name})."
-                )
-                return ResolvedShot(
-                    shot_id=shot_id,
-                    asset_id=asset_id,
-                    timeline_start_seconds=timeline_start,
-                    timeline_end_seconds=timeline_end,
-                    source_start_seconds=round(source_start, 6),
-                    source_end_seconds=round(source_end, 6),
-                    editorial_function=editorial_function,
-                    may_overlap_pause=may_overlap_pause,
-                    resolved_media_path=str(resolved_path),
-                    resolved_media_kind=media_kind,
-                    resolved_media_duration_seconds=round(media_duration_f, 6),
-                    resolved_available_start_seconds=round(available_start, 6),
-                    folder_name=str(entry.get("folder") or ""),
-                    hold_mode=hold_mode,
+                # Kein tpad/Freeze für Motion-Video — Planung muss passen.
+                raise TimelineResolveError(
+                    f"{shot_id}: Asset {asset_id} zu kurz "
+                    f"(nutzbar {usable:.2f}s < nötig {need:.2f}s; Toleranz "
+                    f"{short_tolerance:.1f}s). Kein Video-Hold: kürzeren Shot "
+                    f"planen, anderes Asset wählen oder coverage_gap. "
+                    f"Pfad {media_path}."
                 )
 
         # Mitte der nutzbaren Zone; Source im Embedded-TC-Raum.

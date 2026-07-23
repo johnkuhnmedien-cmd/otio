@@ -472,12 +472,19 @@ SHOT RULES:
 - Shots must be ordered chronologically.
 - Shot anchors must not run backwards.
 - Do not create overlapping shots.
+- Do not leave uncovered narration spans between consecutive shots (no visual
+  holes on the time carpet). Every part of the chapter narration must be
+  covered by some shot — either with a local asset or with a shot linked to a
+  coverage_gap.
 - A shot may start or end inside a segment.
 - A shot may span several segments.
 - Multiple shots may use the same local asset when editorially justified.
 - Do not change pictures merely because a sentence or segment ends.
 - visual_intent describes what the image should communicate.
 - It must not fabricate details about an unseen asset.
+- Never rely on freeze-frame / tpad / video-hold padding. If a motion video is
+  too short for the intended span, shorten the shot, pick a longer asset, or
+  emit a coverage_gap shot for the uncovered beat.
 - Per chapter: include an OPENING shot at the first narration start that covers
   the configured Vorlauf/preroll, and a CLOSING shot at the last narration end
   that continues for the configured Nachlauf/postroll (see SHOT / ASSET CONSTRAINTS).
@@ -486,7 +493,9 @@ SHOT RULES:
 
 COVERAGE-GAP RULES:
 
-- Create a coverage gap only for a concrete shot that lacks a suitable local asset.
+- Create a coverage gap for every concrete shot that lacks a suitable local asset
+  OR whose best local asset is too short for the intended span.
+- Do not silently skip a narration beat — that becomes a black gap later.
 - Each gap must describe the missing visual need precisely enough for later stock search or media generation.
 - Do not select a stock provider.
 - Do not invent search results.
@@ -570,8 +579,12 @@ FINAL VALIDATION BEFORE RETURNING JSON:
 - All referenced segment IDs exist.
 - All referenced local asset IDs exist.
 - Shots are chronological and non-overlapping.
+- Consecutive shots abut on the narration carpet — no uncovered spans between them.
+- The first shot starts at chapter narration start; the last shot ends at chapter
+  narration end (plus opening/closing Vorlauf/Nachlauf intent).
 - No seconds, milliseconds, timecodes or frames are present.
 - Every shot without a suitable asset has exactly one linked coverage gap.
+- No shot assumes video freeze/hold padding.
 - No shot is created merely because a sentence or segment ends.
 - The locked narration has not been changed.
 
@@ -731,7 +744,9 @@ FINAL VALIDATION BEFORE RETURNING JSON:
 - Offsets are non-negative; sentence-relative offsets stay within that sentence.
 - start_cut_alignment set on every shot.
 - Shots chronological and non-overlapping on the narration carpet.
+- No uncovered narration spans between consecutive shots.
 - Asset usable length covers each shot (duration_seconds - usable_in_s).
+  Never assume freeze/tpad video-hold padding for short motion video.
 - Every chapter has opening coverage at narration start and closing coverage at
   narration end, including the configured preroll/postroll intent.
 - No two consecutive shots share the same non-intro asset_id.

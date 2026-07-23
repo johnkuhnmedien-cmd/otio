@@ -549,6 +549,93 @@ def test_adjacent_same_asset_blocks_including_opening_closing(tmp_path: Path) ->
         resolve_final_timeline(project)
 
 
+def test_short_motion_video_does_not_use_tpad_hold(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    video = Path(project.project_root) / "Castle Combe" / "short.mov"
+    _ffmpeg_color_video(video, duration=2.0, color="orange")
+    asset_id = _save_inventory(project, "Castle Combe", [video])[0]
+    wav = project.work_dir_path / "short.wav"
+    _write_silent_wav(wav, 6.0)
+    save_script_draft(
+        project,
+        EnhancedScriptDocument(
+            narration_full="Short video cannot cover this narration span.",
+            segments=[
+                ScriptSegment(
+                    segment_id="Castle_Combe_segment_001",
+                    text="Short video cannot cover this narration span.",
+                    sequence_index=1,
+                    folder_name="Castle Combe",
+                )
+            ],
+        ),
+    )
+    lock_script(project)
+    write_json(
+        segment_timings_path(project),
+        SegmentTimingsDocument(
+            script_version="script-v1",
+            segments=[
+                SegmentTiming(
+                    segment_id="Castle_Combe_segment_001",
+                    script_version="script-v1",
+                    audio_path=str(wav),
+                    duration_seconds=6.0,
+                    audio_status="valid",
+                )
+            ],
+        ),
+    )
+    write_json(
+        narration_timeline_path(project),
+        NarrationTimelineDocument(
+            script_version="script-v1",
+            total_duration_seconds=6.0,
+            entries=[
+                NarrationTimelineEntry(
+                    segment_id="Castle_Combe_segment_001",
+                    start_seconds=0.0,
+                    end_seconds=6.0,
+                    pause_after_seconds=0.0,
+                    audio_duration_seconds=6.0,
+                )
+            ],
+        ),
+    )
+    write_json(
+        final_cut_plan_path(project),
+        FinalCutPlanDocument(
+            script_version="script-v1",
+            shots=[
+                FinalShot(
+                    shot_id="short_shot",
+                    narration_start_anchor=NarrationAnchor(
+                        segment_id="Castle_Combe_segment_001", offset_seconds=0.0
+                    ),
+                    narration_end_anchor=NarrationAnchor(
+                        segment_id="Castle_Combe_segment_001", offset_seconds=6.0
+                    ),
+                    asset_id=asset_id,
+                )
+            ],
+        ),
+    )
+    save_cut_plan_options(
+        project,
+        CutPlanOptions(
+            voiceover_preroll_sec=0.0,
+            voiceover_postroll_sec=0.0,
+            video_head_trim_sec=0.0,
+            short_asset_tolerance_sec=0.0,
+            shot_min_sec=1.0,
+            shot_max_sec=30.0,
+            still_image_style_enabled=False,
+        ),
+    )
+    with pytest.raises(TimelineResolveError, match="Kein Video-Hold"):
+        resolve_final_timeline(project)
+
+
 def test_may_overlap_pause_still_blocks_video_overlap(tmp_path: Path) -> None:
     project, _ = _build_three_chapter_project(tmp_path)
     plan = FinalCutPlanDocument.model_validate(

@@ -474,6 +474,98 @@ def _validate_rough_chapter_scope(
             )
 
 
+def _approx_editorial_anchor_seconds(
+    anchor: EditorialAnchor,
+    *,
+    segment_starts: dict[str, float],
+    segment_durs: dict[str, float],
+) -> float | None:
+    """Grobe Sekundenposition aus Soft-Anker (nur Validierung, nicht Timeline)."""
+    if anchor.type == "pause":
+        sid = (anchor.after_segment_id or anchor.segment_id or "").strip()
+        if not sid or sid not in segment_starts:
+            return None
+        return segment_starts[sid] + segment_durs.get(sid, 0.0)
+    sid = (anchor.segment_id or "").strip()
+    if not sid or sid not in segment_starts:
+        return None
+    frac = _POSITION_FRACTION.get(str(anchor.position or "start"), 0.0)
+    return segment_starts[sid] + segment_durs.get(sid, 0.0) * frac
+
+
+def _validate_rough_continuous_coverage(
+    rough: RoughCutPlanDocument,
+    *,
+    timings: SegmentTimingsDocument,
+    ordered_segment_ids: list[str],
+    folder_name: str,
+    gap_tolerance_sec: float = 0.05,
+) -> None:
+    """Fail-closed: Rough-Shots müssen den Kapitel-Teppich ohne Löcher abdecken.
+
+    Nutzt nur Soft-Anker × Segmentdauern — keine finalen Timeline-Sekunden.
+    """
+    if not ordered_segment_ids or not rough.shots:
+        return
+    dur_by_id = {
+        str(seg.segment_id): max(0.0, float(seg.duration_seconds or 0.0))
+        for seg in timings.segments
+        if seg.segment_id in ordered_segment_ids
+    }
+    cursor = 0.0
+    starts: dict[str, float] = {}
+    for sid in ordered_segment_ids:
+        starts[sid] = cursor
+        cursor += dur_by_id.get(sid, 0.0)
+    total = cursor
+    if total <= 1e-9:
+        return
+
+    spans: list[tuple[float, float, str]] = []
+    for shot in rough.shots:
+        start = _approx_editorial_anchor_seconds(
+            shot.start_anchor, segment_starts=starts, segment_durs=dur_by_id
+        )
+        end = _approx_editorial_anchor_seconds(
+            shot.end_anchor, segment_starts=starts, segment_durs=dur_by_id
+        )
+        if start is None or end is None:
+            raise CutPlanError(
+                f"Kapitel „{folder_name}“: Shot {shot.shot_id} hat unauflösbare "
+                "Anker für die Abdeckungsprüfung."
+            )
+        if end + 1e-9 < start:
+            raise CutPlanError(
+                f"Kapitel „{folder_name}“: Shot {shot.shot_id} endet vor dem Start "
+                f"(~{start:.2f}s → ~{end:.2f}s)."
+            )
+        spans.append((start, max(start, end), shot.shot_id))
+
+    spans.sort(key=lambda item: (item[0], item[1], item[2]))
+    tol = max(0.0, float(gap_tolerance_sec))
+    if spans[0][0] > tol + 1e-9:
+        raise CutPlanError(
+            f"Kapitel „{folder_name}“: Rough-Cut lässt ~{spans[0][0]:.2f}s am "
+            f"Kapitelanfang ungedeckt (vor {spans[0][2]}). "
+            "Opening-Shot an Narrationsstart setzen oder coverage_gap."
+        )
+    if spans[-1][1] < total - tol - 1e-9:
+        hole = total - spans[-1][1]
+        raise CutPlanError(
+            f"Kapitel „{folder_name}“: Rough-Cut lässt ~{hole:.2f}s am "
+            f"Kapitelende ungedeckt (nach {spans[-1][2]}). "
+            "Closing-Shot bis Narrationsende oder coverage_gap."
+        )
+    for prev, curr in zip(spans, spans[1:]):
+        gap = curr[0] - prev[1]
+        if gap > tol + 1e-9:
+            raise CutPlanError(
+                f"Kapitel „{folder_name}“: Rough-Cut hat visuelle Lücke "
+                f"~{gap:.2f}s zwischen {prev[2]} und {curr[2]}. "
+                "Shot dazwischen planen oder coverage_gap — kein Video-Hold."
+            )
+
+
 def _validate_final_chapter_scope(
     final: FinalCutPlanDocument,
     segment_ids: set[str],
@@ -948,6 +1040,14 @@ def generate_rough_cut_for_folder(
             ).raw_text
         rough, coverage = parse_rough_cut_response(raw_text, locked.script_version)
         _validate_rough_chapter_scope(rough, context.segment_ids, folder_name)
+        _validate_rough_continuous_coverage(
+            rough,
+            timings=context.timings_slice,
+            ordered_segment_ids=[
+                seg.segment_id for seg in context.script_slice.segments
+            ],
+            folder_name=display_name,
+        )
         rough, coverage = _prefix_rough_ids(rough, coverage, context.folder_slug)
         if not rough.shots:
             raise CutPlanError("LLM-Antwort enthielt keine Shots.")
