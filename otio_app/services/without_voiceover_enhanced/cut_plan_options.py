@@ -297,24 +297,58 @@ def save_cut_plan_options(project: Project, options: CutPlanOptions) -> CutPlanO
 
 def format_shot_constraints_for_prompt(options: CutPlanOptions) -> str:
     """Gemeinsamer Prompt-Block für LLM-Lauf 2 und 3."""
-    preroll_rule = (
-        f"- Voice-over preroll mode=llm: choose voiceover_preroll_sec in "
-        f"[0, {options.voiceover_preroll_sec:.1f}] (picture before non-intro VO)."
-        if options.voiceover_preroll_mode == TIMING_MODE_LLM
-        else (
-            f"- Voice-over preroll is fixed at {options.voiceover_preroll_sec:.1f}s "
-            "(Python applies; do not exceed asset length)."
+    preroll = float(options.voiceover_preroll_sec)
+    postroll = float(options.voiceover_postroll_sec)
+    if options.voiceover_preroll_mode == TIMING_MODE_LLM:
+        preroll_rule = (
+            f"- Voice-over preroll (Vorlauf) mode=llm: choose voiceover_preroll_sec in "
+            f"[0, {preroll:.1f}]s. Whatever value you choose, every chapter still needs "
+            f"an OPENING SHOT that covers that many seconds of picture before VO starts."
         )
-    )
-    postroll_rule = (
-        f"- Voice-over postroll mode=llm: choose voiceover_postroll_sec in "
-        f"[0, {options.voiceover_postroll_sec:.1f}] (last shot may continue after VO)."
-        if options.voiceover_postroll_mode == TIMING_MODE_LLM
-        else (
-            f"- Voice-over postroll is fixed at {options.voiceover_postroll_sec:.1f}s "
-            "(Python applies to the last shot)."
+    else:
+        preroll_rule = (
+            f"- Voice-over preroll (Vorlauf) is fixed at {preroll:.1f}s per chapter."
         )
-    )
+    if options.voiceover_postroll_mode == TIMING_MODE_LLM:
+        postroll_rule = (
+            f"- Voice-over postroll (Nachlauf) mode=llm: choose voiceover_postroll_sec in "
+            f"[0, {postroll:.1f}]s. Whatever value you choose, every chapter still needs "
+            f"a CLOSING SHOT that continues that many seconds after VO ends."
+        )
+    else:
+        postroll_rule = (
+            f"- Voice-over postroll (Nachlauf) is fixed at {postroll:.1f}s per chapter."
+        )
+
+    opening_closing_rules = f"""
+OPENING / CLOSING SHOTS PER CHAPTER (BINDING — closes edge gaps):
+
+- For EVERY chapter/folder, plan an OPENING SHOT at the chapter start:
+  - It is a dedicated first shot that runs for the preroll/Vorlauf of
+    {preroll:.1f}s (or your chosen llm preroll) at the beginning of the
+    chapter — picture before / into the voice-over.
+  - It must also cover the chapter's first narration start (no leading visual
+    gap while narration is already running).
+  - Prefer an establishing / orientation / atmosphere asset with enough usable
+    duration for that opening beat.
+  - Mark it with editorial_function like "opening", "establishing", or
+    "chapter_open" when the schema allows free editorial_function text.
+- For EVERY chapter/folder, plan a CLOSING SHOT at the chapter end:
+  - It is a dedicated last shot that continues for the postroll/Nachlauf of
+    {postroll:.1f}s (or your chosen llm postroll) AFTER the voice-over ends.
+  - It must also end at the chapter's last narration end (no trailing visual
+    gap while narration is still running).
+  - Choose an asset with enough usable duration (or an intentional hold/still)
+    for that tail.
+  - Mark it with editorial_function like "closing", "chapter_close", or
+    "outro" when the schema allows free editorial_function text.
+- Do NOT leave the first or last spoken seconds of a chapter without a planned
+  shot. Python will fail closed on leading/trailing narration gaps; opening and
+  closing shots are how you prevent those gaps.
+- Opening/closing shots still obey shot_min/shot_max for the narration-covered
+  portion; do not invent one giant shot for the whole chapter.
+"""
+
     return f"""
 SHOT / ASSET CONSTRAINTS (PROJECT SETTINGS — BINDING):
 
@@ -325,6 +359,7 @@ SHOT / ASSET CONSTRAINTS (PROJECT SETTINGS — BINDING):
 - Short-asset tolerance: an asset may be up to {options.short_asset_tolerance_sec:.1f}s shorter than the planned shot. Within that tolerance you may keep the asset; beyond it choose another asset or shorten the span / emit a coverage_gap (rough).
 {preroll_rule}
 {postroll_rule}
+{opening_closing_rules}
 - Do not use the same non-intro asset more than {options.max_asset_usage} times across the whole film.
 - Intro assets do not count toward max asset usage.
 - Asset reuse gap: when reusing a non-intro asset, leave at least {options.min_asset_reuse_distance_shots} other shots in between (default target: 4).

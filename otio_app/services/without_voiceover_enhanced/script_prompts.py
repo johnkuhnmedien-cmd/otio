@@ -478,6 +478,9 @@ SHOT RULES:
 - Do not change pictures merely because a sentence or segment ends.
 - visual_intent describes what the image should communicate.
 - It must not fabricate details about an unseen asset.
+- Per chapter: include an OPENING shot at the first narration start that covers
+  the configured Vorlauf/preroll, and a CLOSING shot at the last narration end
+  that continues for the configured Nachlauf/postroll (see SHOT / ASSET CONSTRAINTS).
 
 COVERAGE-GAP RULES:
 
@@ -709,12 +712,22 @@ Include voiceover_preroll_sec / voiceover_postroll_sec when the project settings
 ask the LLM to decide (see SHOT / ASSET CONSTRAINTS). Otherwise omit them or
 mirror the fixed setting values. Always keep Intro coverage complete.
 
+Per chapter you MUST include:
+- an OPENING SHOT: dedicated first shot that runs for the configured
+  Vorlauf/preroll seconds at chapter start (picture before/into the VO) and
+  covers the first narration start;
+- a CLOSING SHOT: dedicated last shot that covers the last narration end and
+  continues for the configured Nachlauf/postroll seconds after the VO.
+Do not leave leading or trailing narration seconds without a planned shot.
+
 FINAL VALIDATION BEFORE RETURNING JSON:
 - All shot_ids unique; all segment_ids / sentence_ids exist in inputs.
 - Offsets are non-negative; sentence-relative offsets stay within that sentence.
 - start_cut_alignment set on every shot.
 - Shots chronological and non-overlapping on the narration carpet.
 - Asset usable length covers each shot (duration_seconds - usable_in_s).
+- Every chapter has opening coverage at narration start and closing coverage at
+  narration end, including the configured preroll/postroll intent.
 
 LOCKED SCRIPT:
 {locked_script_json}

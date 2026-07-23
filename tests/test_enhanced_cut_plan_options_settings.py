@@ -127,7 +127,15 @@ def test_legacy_options_json_still_loads(tmp_path: Path) -> None:
 
 def test_prompt_constraints_in_rough_and_final() -> None:
     text = format_shot_constraints_for_prompt(
-        CutPlanOptions(shot_min_sec=3.0, shot_max_sec=7.0, max_asset_usage=2)
+        CutPlanOptions(
+            shot_min_sec=3.0,
+            shot_max_sec=7.0,
+            max_asset_usage=2,
+            voiceover_preroll_sec=1.0,
+            voiceover_preroll_mode="fixed",
+            voiceover_postroll_sec=5.0,
+            voiceover_postroll_mode="fixed",
+        )
     )
     rough = build_rough_cut_prompt(
         locked_script_json="{}",
@@ -151,6 +159,12 @@ def test_prompt_constraints_in_rough_and_final() -> None:
     assert "reuse gap" in rough.lower() or "4" in rough
     assert "7.0s" in final and "duration_seconds" in final
     assert "short-asset tolerance" in final.lower()
+    assert "OPENING SHOT" in text and "CLOSING SHOT" in text
+    assert "1.0s" in text and "5.0s" in text
+    assert "OPENING SHOT" in rough and "CLOSING SHOT" in rough
+    assert "OPENING SHOT" in final and "CLOSING SHOT" in final
+    assert "Vorlauf" in final and "Nachlauf" in final
+    assert "leading or trailing narration" in final.lower()
 
 
 def test_resolver_clamps_to_shot_max(tmp_path: Path) -> None:
