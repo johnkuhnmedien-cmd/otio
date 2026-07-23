@@ -337,9 +337,13 @@ def unified_to_rough(
             continue
 
         needed = (slot.needed_visual or slot.visual_intent or slot.slot_id).strip()
-        concepts = list(slot.search_concepts) if slot.search_concepts else []
-        if not concepts and needed:
-            concepts = [needed]
+        # needed_visual bleibt Prosa; search_concepts nur Keywords (E2E-2.1).
+        # Prosa/leere Listen werden beim Persist via cut_plan_supplement_query gefüllt.
+        from otio_app.services.without_voiceover_enhanced.gap_search_concepts import (
+            filter_keyword_concepts,
+        )
+
+        concepts = filter_keyword_concepts(list(slot.search_concepts or []))
         covered = _covered_sentence_ids(
             start_b, end_b, list(slot.covered_sentence_ids or [])
         )

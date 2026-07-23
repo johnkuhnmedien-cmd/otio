@@ -1255,6 +1255,16 @@ def search_supplements_for_gaps(
     if coverage is None or not coverage.gaps:
         raise CutPlanError("Keine Coverage Gaps vorhanden.")
 
+    from otio_app.services.without_voiceover_enhanced.gap_search_concepts import (
+        enrich_coverage_search_concepts,
+        filter_keyword_concepts,
+        heuristic_stock_concepts,
+    )
+
+    # E2E-2.1: Prosa in search_concepts vor der Stocksuche ersetzen.
+    coverage = enrich_coverage_search_concepts(project, coverage)
+    write_json(coverage_gaps_path(project), coverage)
+
     enabled = enabled_provider_names(project)
     if not enabled:
         # Preserve any previous search results; do not error.
@@ -1283,11 +1293,14 @@ def search_supplements_for_gaps(
     planned_queries = 0
     gap_queries: list[tuple[Any, list[str]]] = []
     for gap in gaps:
-        raw_queries = (
-            gap.search_concepts
-            or gap.search_queries
-            or [gap.needed_visual or gap.subject or gap.action or gap.gap_id]
+        raw_queries = filter_keyword_concepts(
+            list(gap.search_concepts or []) + list(gap.search_queries or [])
         )
+        if not raw_queries:
+            raw_queries = heuristic_stock_concepts(
+                needed_visual=gap.needed_visual or gap.subject or gap.gap_id,
+                folder_name="",
+            )
         queries = [q for q in raw_queries if str(q).strip()][:_MAX_QUERIES_PER_GAP]
         if not queries:
             queries = [gap.gap_id]
@@ -1993,6 +2006,11 @@ def merge_and_persist_unified_cuts(
         voiceover_postroll_sec=postroll,
     )
     rough, coverage = unified_to_rough(merged)
+    from otio_app.services.without_voiceover_enhanced.gap_search_concepts import (
+        enrich_coverage_search_concepts,
+    )
+
+    coverage = enrich_coverage_search_concepts(project, coverage, plan=merged)
     write_json(unified_cut_plan_path(project), merged)
     write_json(rough_cut_plan_path(project), rough)
     write_json(coverage_gaps_path(project), coverage)

@@ -131,9 +131,16 @@ def _try_extend_previous_over_bridge(
     repairs: list[str],
 ) -> ResolvedShot | None:
     """Closing-Shot über Bridge verlängern, wenn nutzbare Restdauer reicht."""
+    bid = bridge.shot_id
+
+    def _skip(reason: str) -> None:
+        repairs.append(f"{bid}: Extend nicht möglich — {reason}")
+
     if prev.is_placeholder or prev.open_gap or not prev.asset_id:
+        _skip("Vorgänger ist Placeholder/open_gap oder ohne asset_id")
         return None
     if not prev.resolved_media_path:
+        _skip("Vorgänger ohne resolved_media_path")
         return None
     entry, _err = lookup_catalog_entry(catalog, prev.asset_id)
     if entry is None:
@@ -150,6 +157,7 @@ def _try_extend_previous_over_bridge(
         float(bridge.timeline_end_seconds) - float(bridge.timeline_start_seconds),
     )
     if need <= 1e-9:
+        _skip("Bridge-Dauer ≈ 0")
         return None
 
     remaining = _usable_remaining_seconds(prev, entry, head_trim=head_trim)
@@ -172,7 +180,8 @@ def _try_extend_previous_over_bridge(
                     target_duration_seconds=new_span,
                     fps=fps,
                 )
-        except MediaHoldError:
+        except MediaHoldError as exc:
+            _skip(f"Still/Hold fehlgeschlagen ({exc})")
             return None
         extended.timeline_end_seconds = round(new_end, 6)
         extended.resolved_media_path = str(hold)
@@ -191,6 +200,10 @@ def _try_extend_previous_over_bridge(
         return extended
 
     if remaining + short_tolerance + 1e-9 < need:
+        _skip(
+            f"Rest {remaining:.2f}s + Toleranz {short_tolerance:.1f}s "
+            f"< Bridge {need:.2f}s"
+        )
         return None
 
     # Motion: Source erweitern; knappe Toleranz → optional kurzes tpad nur für Bridge.
@@ -212,6 +225,9 @@ def _try_extend_previous_over_bridge(
     # Innerhalb Toleranz: Hold-Pad für den Überstand (nur Bridge-Ausnahme).
     shortfall = new_source_end - usable_end
     if shortfall > short_tolerance + 1e-9:
+        _skip(
+            f"Source-Überstand {shortfall:.2f}s > Toleranz {short_tolerance:.1f}s"
+        )
         return None
     try:
         hold = ensure_video_padded_hold(
@@ -220,7 +236,8 @@ def _try_extend_previous_over_bridge(
             target_duration_seconds=new_span,
             fps=fps,
         )
-    except MediaHoldError:
+    except MediaHoldError as exc:
+        _skip(f"Video-Hold fehlgeschlagen ({exc})")
         return None
     extended.resolved_media_path = str(hold)
     extended.resolved_media_kind = "video"
@@ -238,6 +255,37 @@ def _try_extend_previous_over_bridge(
     return extended
 
 
+def _entry_is_photo(entry: dict) -> bool:
+    kind = str(entry.get("media_kind") or entry.get("media_type") or "").lower()
+    if kind in {"image", "photo"}:
+        return True
+    path = Path(str(entry.get("path") or ""))
+    return bool(path.suffix) and is_image_media(path)
+
+
+def _entry_aspect_ratio(entry: dict) -> float | None:
+    w = entry.get("width")
+    h = entry.get("height")
+    try:
+        if w is not None and h is not None and float(h) > 0:
+            return float(w) / float(h)
+    except (TypeError, ValueError):
+        pass
+    path = Path(str(entry.get("path") or ""))
+    if not path.is_file() or not is_image_media(path):
+        return None
+    try:
+        from PIL import Image
+
+        with Image.open(path) as image:
+            iw, ih = image.size
+        if ih > 0:
+            return float(iw) / float(ih)
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 def _pick_bridge_asset_id(
     bridge: ResolvedShot,
     *,
@@ -247,7 +295,10 @@ def _pick_bridge_asset_id(
     folder_hint: str,
     min_duration: float,
 ) -> str | None:
-    """Kandidaten aus Plan, sonst bestes ungenutztes Kapitel-Asset."""
+    """Kandidaten aus Plan, sonst bestes ungenutztes Kapitel-Asset.
+
+    Ranking: Videos vor Fotos; Hochkant-Fotos (aspect < 1) zuletzt.
+    """
     slot = _slot_for_shot(bridge, unified)
     ordered_ids: list[str] = []
     if slot is not None:
@@ -256,28 +307,40 @@ def _pick_bridge_asset_id(
         )
 
     def _usable(entry: dict) -> float:
+        # Stills sind dauer-unbegrenzt (Hold); vor duration-None-Check.
+        if _entry_is_photo(entry):
+            return 1e9
         dur = entry.get("duration_seconds")
         if dur is None:
             return 0.0
         trim = 0.0
         if entry.get("usable_in_s") is not None:
             trim = max(0.0, float(entry["usable_in_s"]))
-        kind = str(entry.get("media_kind") or "").lower()
-        if kind in {"image", "photo"}:
-            return 1e9
         return max(0.0, float(dur) - trim)
 
-    # Plan-Kandidaten zuerst (auch wenn schon used — explizit gewünscht).
+    def _rank_key(asset_id: str, entry: dict) -> tuple:
+        is_photo = 1 if _entry_is_photo(entry) else 0
+        aspect = _entry_aspect_ratio(entry)
+        portrait = 1 if (is_photo and aspect is not None and aspect < 1.0) else 0
+        usable = _usable(entry)
+        return (is_photo, portrait, -usable, str(asset_id))
+
+    # Plan-Kandidaten: unter den gültigen Videos vor Fotos / Hochkant zuletzt.
+    plan_ranked: list[tuple] = []
     for asset_id in ordered_ids:
         entry, _err = lookup_catalog_entry(catalog, asset_id)
         if entry is None:
             continue
-        if _usable(entry) + 1e-9 >= min_duration:
-            return str(entry.get("canonical_id") or asset_id)
+        if _usable(entry) + 1e-9 < min_duration:
+            continue
+        plan_ranked.append((_rank_key(asset_id, entry), str(entry.get("canonical_id") or asset_id)))
+    if plan_ranked:
+        plan_ranked.sort()
+        return plan_ranked[0][1]
 
     # Bestes ungenutztes Asset des endenden Kapitels.
     folder = (folder_hint or "").strip().lower()
-    ranked: list[tuple[float, str, str]] = []
+    ranked: list[tuple] = []
     for asset_id, entry in (catalog.by_id or {}).items():
         if asset_id in used_asset_ids:
             continue
@@ -287,8 +350,7 @@ def _pick_bridge_asset_id(
         usable = _usable(entry)
         if usable + 1e-9 < min_duration:
             continue
-        # Framing-Hinweis nur als Tie-Break-Textlänge; Dauer primär.
-        ranked.append((-usable, str(asset_id), str(asset_id)))
+        ranked.append((_rank_key(str(asset_id), entry), str(asset_id)))
     if not ranked:
         return None
     ranked.sort()

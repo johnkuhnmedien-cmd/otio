@@ -1045,6 +1045,13 @@ def resolve_unified_timeline(
     repairs = document.repairs
 
     if persist:
+        from otio_app.services.without_voiceover_enhanced.gap_search_concepts import (
+            enrich_coverage_search_concepts,
+        )
+
+        coverage_shadow = enrich_coverage_search_concepts(
+            project, coverage_shadow, plan=plan
+        )
         write_json(unified_cut_plan_path(project), plan)
         write_json(narration_timeline_path(project), timeline)
         write_json(final_cut_plan_path(project), final_shadow)

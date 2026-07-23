@@ -794,8 +794,11 @@ OUTPUT SCHEMA:
       "narrative_function": "chapter_open|orientation|context|evidence|atmosphere|transition|contrast|reveal|reflection|chapter_close",
       "coverage_gap_id": "gap_001_or_null",
       "source_range_intent": "representative_middle_section",
-      "needed_visual": "required when fit is weak or none",
-      "search_concepts": ["..."],
+      "needed_visual": "prose description of the missing visual (context only)",
+      "search_concepts": [
+        "2-4 English stock search phrases",
+        "each 2-5 words, no full sentences"
+      ],
       "must_include": ["..."],
       "must_avoid": ["..."],
       "desired_motion": "static|pan|tilt|tracking|drone|handheld|zoom|unknown",
@@ -810,6 +813,14 @@ OUTPUT SCHEMA:
 Include voiceover_preroll_sec / voiceover_postroll_sec only when SHOT/ASSET
 CONSTRAINTS ask the LLM to decide; otherwise null/omit.
 
+GAP / SEARCH CONCEPT RULES (CRITICAL):
+
+- When coverage_gap_id is set (weak or none), search_concepts is REQUIRED.
+- search_concepts = 2–4 stock-search phrases in ENGLISH.
+- Each phrase: 2–5 words, keywords only — never prose or full sentences.
+- No German, no punctuation-heavy clauses, no "a shot of …" sentence stems.
+- needed_visual stays free-form prose context; search_concepts are the queries.
+
 FINAL VALIDATION BEFORE RETURNING JSON:
 
 - len(slots) == len(boundaries) - 1
@@ -818,6 +829,7 @@ FINAL VALIDATION BEFORE RETURNING JSON:
 - All local_asset_id values exist in LOCAL ASSETS (or null)
 - Boundaries chronological; first=VO start; last=VO end
 - weak/none slots have coverage_gap_id + needed_visual + search_concepts
+  (2–4 English keyword phrases, 2–5 words each — not prose)
 - strong/acceptable slots have coverage_gap_id null
 - No absolute timeline seconds / frames
 - No video-hold assumptions

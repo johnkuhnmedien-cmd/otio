@@ -287,3 +287,144 @@ def test_fill_bridge_uses_candidate_when_extend_impossible(
     assert out[1].asset_id == "asset_alt"
     assert out[1].open_gap is False
     assert any(s.status == "bridge_filled" for s in report.slots)
+
+
+def test_extend_logs_reason_when_remaining_too_small(tmp_path: Path) -> None:
+    close = tmp_path / "close.mp4"
+    close.write_bytes(b"a")
+    work = tmp_path / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir()
+    project = Project(
+        id="p",
+        name="p",
+        project_root=str(tmp_path),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        asset_subdir_names=["Yosemite"],
+        selected_asset_subdirs=["Yosemite"],
+    )
+    catalog = AssetCatalog()
+    catalog.by_id["asset_close"] = {
+        "path": str(close),
+        "duration_seconds": 8.0,
+        "usable_in_s": 0.0,
+        "available_start_seconds": 0.0,
+        "media_kind": "video",
+        "folder": "Yosemite",
+        "canonical_id": "asset_close",
+    }
+    timeline = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=12.0,
+        shots=[
+            ResolvedShot(
+                shot_id="Yosemite_slot_close",
+                asset_id="asset_close",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=8.0,
+                source_start_seconds=0.0,
+                source_end_seconds=8.0,
+                resolved_media_path=str(close),
+                resolved_media_kind="video",
+                resolved_media_duration_seconds=8.0,
+                folder_name="Yosemite",
+                editorial_function="chapter_close",
+            ),
+            ResolvedShot(
+                shot_id="bridge_001",
+                asset_id="",
+                timeline_start_seconds=8.0,
+                timeline_end_seconds=11.0,
+                source_start_seconds=0.0,
+                source_end_seconds=3.0,
+                editorial_function="chapter_transition",
+                open_gap=True,
+                is_placeholder=True,
+            ),
+        ],
+    )
+    repairs: list[str] = []
+    fill_chapter_bridges(
+        project,
+        timeline,
+        unified=None,
+        catalog=catalog,
+        options=CutPlanOptions(short_asset_tolerance_sec=0.0, video_head_trim_sec=0.0),
+        repairs=repairs,
+        report=GapMergeReport(script_version="v1"),
+    )
+    assert any("Extend nicht möglich" in note and "Rest" in note for note in repairs)
+
+
+def test_pick_bridge_prefers_video_over_portrait_photo() -> None:
+    from otio_app.services.without_voiceover_enhanced.gap_merge_service import (
+        _pick_bridge_asset_id,
+    )
+
+    catalog = AssetCatalog()
+    catalog.by_id["photo_portrait"] = {
+        "path": "/tmp/portrait.jpg",
+        "duration_seconds": None,
+        "media_kind": "photo",
+        "width": 492,
+        "height": 623,
+        "folder": "Yosemite",
+        "canonical_id": "photo_portrait",
+    }
+    catalog.by_id["video_wide"] = {
+        "path": "/tmp/wide.mp4",
+        "duration_seconds": 12.0,
+        "usable_in_s": 0.0,
+        "media_kind": "video",
+        "width": 1920,
+        "height": 1080,
+        "folder": "Yosemite",
+        "canonical_id": "video_wide",
+    }
+    catalog.by_id["photo_landscape"] = {
+        "path": "/tmp/land.jpg",
+        "duration_seconds": None,
+        "media_kind": "photo",
+        "width": 1600,
+        "height": 900,
+        "folder": "Yosemite",
+        "canonical_id": "photo_landscape",
+    }
+    picked = _pick_bridge_asset_id(
+        ResolvedShot(
+            shot_id="bridge_001",
+            asset_id="",
+            timeline_start_seconds=0,
+            timeline_end_seconds=2,
+            source_start_seconds=0,
+            source_end_seconds=2,
+            editorial_function="chapter_transition",
+        ),
+        unified=None,
+        catalog=catalog,
+        used_asset_ids=set(),
+        folder_hint="Yosemite",
+        min_duration=2.0,
+    )
+    assert picked == "video_wide"
+
+    # Ohne Video: Landscape-Foto vor Hochkant.
+    del catalog.by_id["video_wide"]
+    picked2 = _pick_bridge_asset_id(
+        ResolvedShot(
+            shot_id="bridge_001",
+            asset_id="",
+            timeline_start_seconds=0,
+            timeline_end_seconds=2,
+            source_start_seconds=0,
+            source_end_seconds=2,
+            editorial_function="chapter_transition",
+        ),
+        unified=None,
+        catalog=catalog,
+        used_asset_ids=set(),
+        folder_hint="Yosemite",
+        min_duration=2.0,
+    )
+    assert picked2 == "photo_landscape"

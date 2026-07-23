@@ -134,12 +134,36 @@ def ensure_gap_placeholder_slate(
     return out
 
 
+def still_hold_video_filter(
+    *,
+    width: int | None = None,
+    height: int | None = None,
+) -> str:
+    """libx264-sichere Scale/Pad-Kette (gerade Maße, Letterbox auf Projektauflösung).
+
+    Mit Zielauflösung: scale+pad (Letterbox). Sonst mindestens
+    ``scale=ceil(iw/2)*2:ceil(ih/2)*2``.
+    """
+    if width and height and int(width) > 0 and int(height) > 0:
+        tw = max(2, (int(width) // 2) * 2)
+        th = max(2, (int(height) // 2) * 2)
+        return (
+            f"scale={tw}:{th}:force_original_aspect_ratio=decrease,"
+            f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2:black,"
+            "setsar=1,"
+            "scale=ceil(iw/2)*2:ceil(ih/2)*2"
+        )
+    return "scale=ceil(iw/2)*2:ceil(ih/2)*2"
+
+
 def ensure_still_hold_video(
     project: Project,
     image_path: Path,
     *,
     duration_seconds: float,
     fps: float,
+    width: int | None = None,
+    height: int | None = None,
 ) -> Path:
     """JPEG/PNG → kurzes H.264-Video der geplanten Haltedauer (Resolve-sicher)."""
     if duration_seconds <= 0:
@@ -148,7 +172,17 @@ def ensure_still_hold_video(
     if not source.is_file():
         raise MediaHoldError(f"Still fehlt: {source}")
     rate = max(1.0, float(fps) or 25.0)
-    key = _cache_key(str(source), f"{duration_seconds:.3f}", f"{rate:.3f}", "still")
+    tw = int(width) if width is not None else int(getattr(project, "width", 0) or 0)
+    th = int(height) if height is not None else int(getattr(project, "height", 0) or 0)
+    vf = still_hold_video_filter(width=tw or None, height=th or None)
+    key = _cache_key(
+        str(source),
+        f"{duration_seconds:.3f}",
+        f"{rate:.3f}",
+        f"{tw}x{th}",
+        vf,
+        "still_v2",
+    )
     out = _hold_cache_dir(project) / f"still_hold_{key}.mp4"
     if out.is_file() and out.stat().st_size > 0:
         return out
@@ -162,6 +196,8 @@ def ensure_still_hold_video(
         "1",
         "-i",
         str(source),
+        "-vf",
+        vf,
         "-t",
         f"{duration_seconds:.3f}",
         "-r",
