@@ -527,10 +527,25 @@ def _probe_video_fps(path: Path) -> float | None:
 
 
 _PBLACK_RE = re.compile(r"pblack:\s*(\d+)", re.IGNORECASE)
+_BLACKFRAME_LINE_RE = re.compile(
+    r"frame:\s*(?P<frame>\d+)\s+pblack:\s*(?P<pblack>\d+)",
+    re.IGNORECASE,
+)
 
 
 def _first_frame_is_black(path: Path, *, min_pblack: int = 90) -> bool:
     """True wenn Frame 0 praktisch schwarz ist (x264-Priming / Clean-Lead-In)."""
+    return _count_leading_black_frames(path, max_frames=1, min_pblack=min_pblack) >= 1
+
+
+def _count_leading_black_frames(
+    path: Path,
+    *,
+    max_frames: int = 8,
+    min_pblack: int = 90,
+) -> int:
+    """Zählt aufeinanderfolgende Schwarzframes ab Frame 0."""
+    frames = max(1, int(max_frames))
     try:
         result = _run_command(
             [
@@ -540,9 +555,10 @@ def _first_frame_is_black(path: Path, *, min_pblack: int = 90) -> bool:
                 "-i",
                 str(path),
                 "-vf",
-                "select=eq(n\\,0),blackframe=amount=90:threshold=24",
+                "blackframe=amount=90:threshold=24",
                 "-frames:v",
-                "1",
+                str(frames),
+                "-an",
                 "-f",
                 "null",
                 "-",
@@ -550,39 +566,28 @@ def _first_frame_is_black(path: Path, *, min_pblack: int = 90) -> bool:
             timeout_sec=60,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return False
+        return 0
     text = f"{result.stderr or ''}\n{result.stdout or ''}"
-    match = _PBLACK_RE.search(text)
-    if match is None:
-        return False
-    try:
-        return int(match.group(1)) >= int(min_pblack)
-    except ValueError:
-        return False
+    by_index: dict[int, int] = {}
+    for match in _BLACKFRAME_LINE_RE.finditer(text):
+        try:
+            by_index[int(match.group("frame"))] = int(match.group("pblack"))
+        except ValueError:
+            continue
+    count = 0
+    for index in range(frames):
+        pblack = by_index.get(index)
+        if pblack is None or pblack < int(min_pblack):
+            break
+        count += 1
+    return count
 
 
-def _trim_tiny_leading_black(path: Path, *, max_trim_seconds: float = 0.15) -> None:
-    """Schneidet sehr kurzes führendes Schwarz nach dem Clean-Encode ab.
-
-    libx264 erzeugt oft 1 Schwarzframe am Anfang. ``blackdetect`` mit d=0.04
-    verpasst das bei 24fps leicht; daher zusätzlich First-Frame-Check und
-    Re-Encode-Trim (nicht ``-c copy``), damit der Schnitt framegenau ist.
-    """
-    fps = _probe_video_fps(path) or 24.0
-    one_frame = 1.0 / max(1.0, fps)
-    leading = probe_leading_black_seconds(
-        path,
-        min_black_duration=min(0.02, one_frame * 0.5),
-        pixel_threshold=0.12,
-    )
-    if leading is None:
-        leading = 0.0
-    if leading <= 0 and _first_frame_is_black(path):
-        leading = one_frame
-    if leading <= 0 or leading > max_trim_seconds:
-        return
-    # Mindestens ein volles Frame trimmen.
-    leading = max(leading, one_frame)
+def _reencode_drop_leading_frames(path: Path, frames: int) -> bool:
+    """Entfernt die ersten ``frames`` Frames per select-Filter (Re-Encode)."""
+    drop = max(0, int(frames))
+    if drop <= 0:
+        return True
     tmp_path = path.with_suffix(path.suffix + ".trimtmp")
     command = [
         "ffmpeg",
@@ -591,10 +596,10 @@ def _trim_tiny_leading_black(path: Path, *, max_trim_seconds: float = 0.15) -> N
         "-hide_banner",
         "-loglevel",
         "warning",
-        "-ss",
-        f"{leading:.4f}",
         "-i",
         str(path),
+        "-vf",
+        f"select=gte(n\\,{drop}),setpts=PTS-STARTPTS",
         "-map",
         "0:v:0",
         "-map",
@@ -623,14 +628,61 @@ def _trim_tiny_leading_black(path: Path, *, max_trim_seconds: float = 0.15) -> N
         result = _run_command(command, timeout_sec=600)
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         tmp_path.unlink(missing_ok=True)
-        return
+        return False
     if result.returncode != 0 or not path_is_readable_file(tmp_path):
         tmp_path.unlink(missing_ok=True)
-        return
+        return False
     try:
         tmp_path.replace(path)
     except OSError:
         tmp_path.unlink(missing_ok=True)
+        return False
+    return True
+
+
+def _trim_tiny_leading_black(
+    path: Path,
+    *,
+    max_trim_seconds: float = 0.25,
+    max_frames: int = 6,
+) -> None:
+    """Schneidet führendes Schwarz nach dem Clean-Encode ab (1–N Frames).
+
+    ProRes→H.264 erzeugt oft mehrere Schwarzframes am Anfang. Ein einzelner
+    First-Frame-Trim reicht nicht; ein Re-Encode kann erneut 1 Priming-Frame
+    erzeugen — daher zählen, alle führenden Frames droppen, verifizieren/loopen.
+    """
+    fps = _probe_video_fps(path) or 24.0
+    one_frame = 1.0 / max(1.0, fps)
+    max_by_time = max(1, int(max_trim_seconds / one_frame + 0.5))
+    frame_budget = max(1, min(int(max_frames), max_by_time))
+
+    # blackdetect als zusätzliche Untergrenze (manchmal robuster als blackframe).
+    detected_sec = probe_leading_black_seconds(
+        path,
+        min_black_duration=min(0.02, one_frame * 0.5),
+        pixel_threshold=0.12,
+    )
+    if detected_sec is None:
+        detected_sec = 0.0
+    detected_frames = int(detected_sec / one_frame + 0.5) if detected_sec > 0 else 0
+
+    trimmed_total = 0
+    for _ in range(frame_budget):
+        leading = _count_leading_black_frames(
+            path, max_frames=frame_budget - trimmed_total, min_pblack=90
+        )
+        if leading <= 0 and trimmed_total == 0 and detected_frames > 0:
+            leading = min(detected_frames, frame_budget)
+        if leading <= 0:
+            break
+        leading = min(leading, frame_budget - trimmed_total)
+        if not _reencode_drop_leading_frames(path, leading):
+            break
+        trimmed_total += leading
+        # Re-Encode kann 1 neuen Priming-Frame erzeugen → nochmal prüfen.
+        if trimmed_total >= frame_budget:
+            break
 
 
 def validate_media_file(path: Path) -> CleanMediaEntry:

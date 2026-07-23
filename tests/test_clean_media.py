@@ -20,6 +20,7 @@ from otio_app.models import Project
 from otio_app.services.clean_media import (
     CLEAN_STATUS_CLEAN,
     CLEAN_STATUS_OK,
+    _count_leading_black_frames,
     _first_frame_is_black,
     _trim_tiny_leading_black,
     find_clean_file_for_media,
@@ -691,37 +692,62 @@ def test_first_frame_is_black_reads_pblack_percent() -> None:
         assert _first_frame_is_black(Path("/tmp/x.mp4")) is False
 
 
+def test_count_leading_black_frames_stops_at_first_non_black() -> None:
+    stderr = (
+        "frame:0 pblack:99 pts:0 t:0.000000\n"
+        "frame:1 pblack:97 pts:1 t:0.041667\n"
+        "frame:2 pblack:96 pts:2 t:0.083333\n"
+        "frame:3 pblack:10 pts:3 t:0.125000\n"
+    )
+    with patch(
+        "otio_app.services.clean_media._run_command",
+        return_value=type("R", (), {"returncode": 0, "stdout": "", "stderr": stderr})(),
+    ):
+        assert _count_leading_black_frames(Path("/tmp/x.mp4"), max_frames=8) == 3
+
+
 @patch("otio_app.services.clean_media.path_is_readable_file", return_value=True)
 @patch("otio_app.services.clean_media.probe_leading_black_seconds", return_value=0.0)
-@patch("otio_app.services.clean_media._first_frame_is_black", return_value=True)
 @patch("otio_app.services.clean_media._probe_video_fps", return_value=24.0)
 @patch("otio_app.services.clean_media._run_command")
-def test_trim_tiny_leading_black_reencodes_one_frame(
+def test_trim_tiny_leading_black_drops_three_frames(
     mock_run_command,
     _mock_fps,
-    _mock_black,
     _mock_leading,
     _mock_readable,
     tmp_path: Path,
 ) -> None:
-    """Asset14-Regression: 1 Clean-Schwarzframe muss framegenau weg (Re-Encode)."""
+    """Asset14: 3 Clean-Schwarzframes → einmal select=gte(n,3), danach clean."""
     path = tmp_path / "Yosemite_Asset14.mp4"
     path.write_bytes(b"x" * 2000)
+    calls = {"n": 0}
 
     def _fake_run(command, **kwargs):
+        calls["n"] += 1
+        # 1) count → 3 black frames; 2) reencode drop; 3) recount → 0
+        if any(str(c).startswith("blackframe=") for c in command):
+            if calls["n"] == 1:
+                stderr = (
+                    "frame:0 pblack:99\nframe:1 pblack:98\n"
+                    "frame:2 pblack:97\nframe:3 pblack:5\n"
+                )
+            else:
+                stderr = "frame:0 pblack:5\n"
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": stderr})()
         out = Path(command[-1])
         out.write_bytes(b"y" * 2000)
         return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
     mock_run_command.side_effect = _fake_run
     _trim_tiny_leading_black(path)
-    assert mock_run_command.called
-    command = mock_run_command.call_args[0][0]
-    assert "-ss" in command
-    ss = command[command.index("-ss") + 1]
-    assert abs(float(ss) - (1.0 / 24.0)) < 1e-3
-    assert "-c:v" in command and "libx264" in command
-    assert "copy" not in command
+    drop_cmds = [
+        c[0][0]
+        for c in mock_run_command.call_args_list
+        if any("select=gte(n" in str(part) for part in c[0][0])
+    ]
+    assert drop_cmds, "kein select-Drop-Kommando"
+    joined = " ".join(str(x) for x in drop_cmds[0])
+    assert "select=gte(n\\,3)" in joined or "select=gte(n,3)" in joined
     assert path.read_bytes().startswith(b"y")
 
 
