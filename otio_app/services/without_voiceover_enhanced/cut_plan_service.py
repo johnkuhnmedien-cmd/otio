@@ -975,6 +975,12 @@ def merge_and_persist_rough_cuts(
         script_version=locked.script_version,
         gaps=merged_gaps,
     )
+    # Intro-Gaps (intro_*) aus dem separaten Intro-Cut nicht überschreiben.
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        preserve_intro_gaps_in_coverage,
+    )
+
+    coverage = preserve_intro_gaps_in_coverage(project, coverage)
     timeline = build_narration_timeline(
         script_version=locked.script_version,
         segment_timings=timings.segments,

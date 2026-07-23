@@ -31,6 +31,13 @@ STOCK_DOWNLOADS_SUBDIR = "downloads"
 FINAL_CUT_PLAN_FILENAME = "final_cut_plan.json"
 RESOLVED_TIMELINE_FILENAME = "resolved_timeline.json"
 REPAIR_LOG_FILENAME = "timeline_repair_log.json"
+INTRO_CUT_PLAN_FILENAME = "intro_cut_plan.json"
+INTRO_COVERAGE_GAPS_FILENAME = "intro_coverage_gaps.json"
+INTRO_BUNDLED_INVENTORY_FILENAME = "intro_bundled_inventory.json"
+INTRO_RESOLVED_TIMELINE_FILENAME = "intro_resolved_timeline.json"
+INTRO_REPAIR_LOG_FILENAME = "intro_timeline_repair_log.json"
+INTRO_NARRATION_TIMELINE_FILENAME = "intro_narration_timeline.json"
+INTRO_CUT_META_FILENAME = "intro_cut_meta.json"
 
 
 def assert_enhanced_work_root(project: Project) -> Path:
@@ -165,3 +172,31 @@ def resolved_timeline_path(project: Project) -> Path:
 
 def repair_log_path(project: Project) -> Path:
     return cut_dir(project) / REPAIR_LOG_FILENAME
+
+
+def intro_cut_plan_path(project: Project) -> Path:
+    return cut_dir(project) / INTRO_CUT_PLAN_FILENAME
+
+
+def intro_coverage_gaps_path(project: Project) -> Path:
+    return coverage_dir(project) / INTRO_COVERAGE_GAPS_FILENAME
+
+
+def intro_bundled_inventory_path(project: Project) -> Path:
+    return cut_dir(project) / INTRO_BUNDLED_INVENTORY_FILENAME
+
+
+def intro_resolved_timeline_path(project: Project) -> Path:
+    return cut_dir(project) / INTRO_RESOLVED_TIMELINE_FILENAME
+
+
+def intro_repair_log_path(project: Project) -> Path:
+    return cut_dir(project) / INTRO_REPAIR_LOG_FILENAME
+
+
+def intro_narration_timeline_path(project: Project) -> Path:
+    return cut_dir(project) / INTRO_NARRATION_TIMELINE_FILENAME
+
+
+def intro_cut_meta_path(project: Project) -> Path:
+    return cut_dir(project) / INTRO_CUT_META_FILENAME

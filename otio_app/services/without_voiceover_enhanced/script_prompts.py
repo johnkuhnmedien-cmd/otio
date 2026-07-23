@@ -615,3 +615,125 @@ ACCEPTED SUPPLEMENTS ONLY:
 STYLE:
 {style_profile_text}
 """
+
+
+def build_intro_cut_prompt(
+    *,
+    intro_hook_json: str,
+    bundled_inventory_json: str,
+    intro_audio_duration_seconds: float,
+    style_profile_text: str,
+    dramaturgy_text: str,
+) -> str:
+    """Separater Intro-Schnitt-Prompt (nicht für normale Kapitel)."""
+    duration = max(0.1, float(intro_audio_duration_seconds))
+    return f"""\
+You are the Intro cut planner for a documentary pipeline.
+
+Plan ONLY the Intro (hook VO). Do not plan chapter body cuts.
+
+INTRO-SPECIFIC RULES (CRITICAL — differ from chapter cuts):
+
+- You receive ALL chapter inventories in ONE bundled JSON (by folder).
+- Prefer precise, tight cuts. Shots around ~1 second are allowed and often desirable.
+- Normal chapter shot min/max settings do NOT apply here.
+- Lists, enumerations and rapid visual punctuation in the hook should become
+  precise picture cuts — not one long hold.
+- Every assigned local asset MUST have asset_fit \"strong\".
+- Never use asset_fit \"acceptable\" or \"weak\". If the best local asset is only
+  acceptable/weak, set local_asset_id to null and create a coverage_gap.
+- Opening shot: hold picture for 4 seconds BEFORE the Intro VO starts
+  (shot_role \"opening\"). The opening picture may continue briefly into the VO.
+- Closing shot: hold picture for 5–8 seconds AFTER the Intro VO ends
+  (shot_role \"closing\"). Prefer ~6–7 seconds unless editorial reason says otherwise.
+- Opening and closing must not use the same local_asset_id.
+- Use only local_asset_id values that exist in BUNDLED INVENTORY.
+- Never invent asset IDs, paths, URLs or media descriptions.
+- Do not output absolute timeline seconds/frames for body timing — use positions
+  on the Intro VO carpet (start|early|middle|late|end) with segment_id
+  \"intro_segment_001\".
+- Prefix every shot_id and coverage_gap_id with \"intro_\"
+  (e.g. intro_shot_001, intro_gap_001).
+
+INTRO VO:
+- Measured Intro audio duration: {duration:.3f} seconds (authoritative).
+- Synthetic narration segment id: intro_segment_001
+- Do not rewrite the hook text.
+
+NON-NEGOTIABLE:
+
+- A sentence is not automatically a shot — but Intro may cut more often than chapters.
+- Prefer strong visual matches to hook beats / enumeration items.
+- Every shot with local_asset_id null must reference exactly one coverage_gap_id.
+- A shot with a strong local asset must have coverage_gap_id null.
+
+RETURN STRICT JSON ONLY. No Markdown. No comments. No trailing commas.
+
+OUTPUT SCHEMA:
+
+{{
+  "shots": [
+    {{
+      "shot_id": "intro_shot_001",
+      "shot_role": "opening|body|closing",
+      "start_anchor": {{
+        "type": "segment",
+        "segment_id": "intro_segment_001",
+        "position": "start|early|middle|late|end"
+      }},
+      "end_anchor": {{
+        "type": "segment",
+        "segment_id": "intro_segment_001",
+        "position": "start|early|middle|late|end"
+      }},
+      "narrative_function": "orientation|context|evidence|atmosphere|transition|contrast|reveal|reflection",
+      "visual_intent": "What the shot should communicate.",
+      "local_asset_id": "existing_asset_id_or_null",
+      "asset_fit": "strong|none",
+      "asset_fit_reason": "Why strong — or why no suitable strong asset exists.",
+      "continuity_notes": "Optional movement/composition notes.",
+      "coverage_gap_id": "intro_gap_001_or_null",
+      "closing_hold_seconds": null
+    }}
+  ],
+  "coverage_gaps": [
+    {{
+      "coverage_gap_id": "intro_gap_001",
+      "shot_id": "intro_shot_001",
+      "needed_visual": "Concrete missing visual.",
+      "editorial_purpose": "Why needed in the Intro.",
+      "preferred_media_type": "photo|video|map|archive|illustration|either",
+      "search_concepts": ["concise search concept"],
+      "must_include": ["required visible element"],
+      "must_avoid": ["misleading element"],
+      "fact_check_required": false
+    }}
+  ]
+}}
+
+Notes on closing_hold_seconds:
+- Only for shot_role \"closing\". Integer/float between 5 and 8, or null
+  (Python default ~6.5s).
+
+FINAL VALIDATION:
+
+- First shot has shot_role \"opening\".
+- Last shot has shot_role \"closing\".
+- At least one body shot unless the hook is extremely short.
+- asset_fit is only \"strong\" or \"none\".
+- No acceptable/weak fits.
+- All referenced local asset IDs exist in the bundled inventory.
+- Opening and closing assets differ when both are assigned.
+
+CONFIRMED INTRO HOOK:
+{intro_hook_json}
+
+BUNDLED INVENTORY (all chapters, one JSON):
+{bundled_inventory_json}
+
+STYLE PROFILE:
+{style_profile_text}
+
+DRAMATURGY:
+{dramaturgy_text}
+"""

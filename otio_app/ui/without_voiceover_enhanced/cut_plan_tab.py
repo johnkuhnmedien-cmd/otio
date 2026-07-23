@@ -34,6 +34,15 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     merge_and_persist_rough_cuts,
     search_supplements_for_gaps,
 )
+from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+    IntroCutError,
+    export_intro_otio,
+    generate_intro_cut,
+    resolve_intro_timeline,
+)
+from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+    EnhancedOtioExportError,
+)
 from otio_app.services.without_voiceover_enhanced.supplement_resolve_service import (
     SupplementResolveError,
     SupplementResolveProgressEvent,
@@ -64,6 +73,10 @@ from otio_app.services.without_voiceover_enhanced.paths import (
     accepted_supplements_path,
     coverage_gaps_path,
     final_cut_plan_path,
+    intro_bundled_inventory_path,
+    intro_coverage_gaps_path,
+    intro_cut_plan_path,
+    intro_resolved_timeline_path,
     narration_timeline_path,
     resolved_timeline_path,
     rough_cut_plan_path,
@@ -269,16 +282,139 @@ def _render_enhanced_cut_model(
     return updated.provider, updated.model, int(max_tokens)
 
 
+def _render_intro_cut_section(project) -> None:
+    """Separater Intro-Pfad: LLM → Python Timing → OTIO (nur Intro)."""
+    st.subheader("0. Intro Cut (separat)")
+    st.caption(
+        "Nur Intro: alle Kapitel-Inventare gebündelt · nur asset_fit=strong · "
+        "Opening 4s vor VO · Closing 5–8s nach VO · eigene OTIO-Datei. "
+        "Normale Kapitel-Cuts bleiben unverändert."
+    )
+    intro_tokens = _estimate_path_tokens(intro_bundled_inventory_path(project))
+    if intro_tokens <= 0:
+        # Grobe Schätzung: Inventare + Hook, bevor gebündelte Datei existiert.
+        intro_tokens = max(
+            _estimate_path_tokens(script_locked_path(project)) // 4,
+            2_000,
+        )
+    intro_provider, intro_model, _intro_max = _render_enhanced_cut_model(
+        project,
+        role_attr="enhanced_rough_cut",
+        label="Modell (Intro-LLM)",
+        key_prefix="enh_intro",
+        input_info=(
+            "Intro-Cut: bestätigter Hook + gebündeltes Inventar aller Kapitel "
+            "(eine JSON). Keine Kapitel-Segment-Timings."
+        ),
+        input_tokens=intro_tokens,
+        default_output_tokens=_ROUGH_CUT_OUTPUT_DEFAULT,
+        chapter_count=1,
+    )
+
+    intro_basename = st.text_input(
+        "Intro-OTIO Dateiname",
+        value=f"{project.name}_intro",
+        key=f"enh_intro_otio_name_{project.id}",
+    )
+
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        run_intro_llm = st.button(
+            "Intro: LLM Schnitt",
+            type="primary",
+            key=f"enh_intro_cut_llm_{project.id}",
+        )
+    with col_b:
+        run_intro_timing = st.button(
+            "Intro: Python Timing",
+            key=f"enh_intro_cut_resolve_{project.id}",
+        )
+    with col_c:
+        run_intro_otio = st.button(
+            "Intro: OTIO exportieren",
+            key=f"enh_intro_cut_otio_{project.id}",
+        )
+
+    if run_intro_llm:
+        try:
+            with st.spinner("Intro-LLM Schnitt…"):
+                result = generate_intro_cut(
+                    project,
+                    provider=intro_provider,
+                    model=intro_model,
+                )
+            st.success(
+                f"Intro-Cut: {result.shot_count} Shots · "
+                f"{result.gap_count} Coverage-Gaps (strong-only). "
+                f"Inventar: {result.bundled_inventory.get('asset_count', 0)} Assets / "
+                f"{result.bundled_inventory.get('chapter_count', 0)} Kapitel."
+            )
+            if result.gap_count:
+                st.warning(
+                    "Intro-Gaps → Supplement-Funnel (Abschnitt 2). "
+                    "Danach Intro-LLM oder Timing erneut."
+                )
+        except IntroCutError as exc:
+            st.error(str(exc))
+
+    if run_intro_timing:
+        try:
+            with st.spinner("Intro Python-Timing…"):
+                resolved = resolve_intro_timeline(project)
+            st.success(
+                f"Intro-Timeline: {resolved.total_duration_seconds:.2f}s · "
+                f"{len(resolved.shots)} Shots · "
+                f"{len(resolved.audio_segments)} Audio "
+                f"(Opening 4s + Closing-Hold)."
+            )
+            if resolved.repairs:
+                with st.expander("Intro Repair-Log", expanded=False):
+                    for note in resolved.repairs:
+                        st.caption(f"• {note}")
+        except TimelineResolveError as exc:
+            st.error(str(exc))
+        except IntroCutError as exc:
+            st.error(str(exc))
+
+    if run_intro_otio:
+        try:
+            with st.spinner("Intro-OTIO wird geschrieben…"):
+                path = export_intro_otio(
+                    project,
+                    basename=(intro_basename or "").strip() or "enhanced_intro",
+                )
+            st.success(f"Intro-OTIO geschrieben: `{path}`")
+        except EnhancedOtioExportError as exc:
+            st.error(str(exc))
+
+    intro_cut = load_model(intro_cut_plan_path(project), RoughCutPlanDocument)
+    intro_gaps = load_model(intro_coverage_gaps_path(project), CoverageGapsDocument)
+    intro_resolved = load_model(
+        intro_resolved_timeline_path(project), ResolvedTimelineDocument
+    )
+    if intro_cut is not None:
+        st.caption(
+            f"Intro-Cut geladen: {len(intro_cut.shots)} Shots · "
+            f"Gaps: {len(intro_gaps.gaps) if intro_gaps else 0} · "
+            f"Resolved: "
+            f"{'ja' if intro_resolved is not None else 'nein'}"
+        )
+    st.divider()
+
+
 def render_enhanced_cut_plan_page() -> None:
     st.header("⑦ Cut Plan (Enhanced MVP)")
     st.caption(
-        "1) Grober Cut Plan + Pausen · 2) Supplements suchen/auswählen · "
+        "0) Intro separat · 1) Grober Cut Plan + Pausen · "
+        "2) Supplements suchen/auswählen · "
         "3) Finaler Cut Plan + technische Auflösung. "
         "Kein Satz = ein Asset."
     )
     project = get_enhanced_project()
     if project is None:
         return
+
+    _render_intro_cut_section(project)
 
     st.subheader("1. Groben Cut Plan und Pausen erzeugen")
     rough_tokens, rough_chapters = _estimate_rough_cut_input_tokens(project)
