@@ -176,10 +176,14 @@ def test_assign_local_file_copies_accepts_and_inventories(tmp_path: Path) -> Non
     source = tmp_path / "manual_source.jpg"
     source.write_bytes(_jpeg_bytes(color=(40, 50, 60)))
 
-    assigned = assign_local_file_to_open_gap(
+    result = assign_local_file_to_open_gap(
         project, gap_id=gap.gap_id, source_path=str(source)
     )
+    assigned = result.candidate
+    assert result.superseded_candidate_id is None
+    assert result.hint is None
     assert assigned.provider == "manual"
+    assert assigned.assign_status == "manual"
     assert assigned.gap_id == gap.gap_id
     assert assigned.media_validation_status == "export_ready"
     assert assigned.funnel_managed is True
@@ -227,7 +231,8 @@ def test_assign_rejects_url_and_missing_file(tmp_path: Path) -> None:
         )
 
 
-def test_assign_rejects_already_export_ready(tmp_path: Path) -> None:
+def test_assign_supersedes_existing_export_ready(tmp_path: Path) -> None:
+    """E2E-4 Nachtrag: Manual-Assign ersetzt vorhandenen Kandidaten (Override)."""
     project = _project(tmp_path)
     _lock(project)
     media = Path(project.work_dir) / "ready.jpg"
@@ -236,7 +241,24 @@ def test_assign_rejects_already_export_ready(tmp_path: Path) -> None:
         coverage_gaps_path(project),
         CoverageGapsDocument(
             script_version="script-v1",
+            cut_plan_run_id="run_override",
             gaps=[CoverageGap(gap_id="gap_filled", needed_visual="filled")],
+        ),
+    )
+    write_json(
+        supplement_funnel_report_path(project),
+        SupplementFunnelReport(
+            schema_version="enhanced-supplement-funnel-v4",
+            script_version="script-v1",
+            cut_plan_run_id="run_override",
+            filled_gap_ids=["gap_filled"],
+            gaps=[
+                SupplementFunnelGapReport(
+                    gap_id="gap_filled",
+                    filled=True,
+                    export_ready_candidate_id="pexels_1",
+                )
+            ],
         ),
     )
     write_json(
@@ -255,16 +277,32 @@ def test_assign_rejects_already_export_ready(tmp_path: Path) -> None:
                     funnel_managed=True,
                     license="Pexels License",
                     source_page="https://www.pexels.com/photo/1/",
+                    cut_plan_run_id="run_override",
                 )
             ],
         ),
     )
     other = tmp_path / "other.jpg"
     other.write_bytes(_jpeg_bytes(color=(1, 2, 3)))
-    with pytest.raises(ManualGapAssignError, match="bereits export_ready"):
-        assign_local_file_to_open_gap(
-            project, gap_id="gap_filled", source_path=str(other)
-        )
+    result = assign_local_file_to_open_gap(
+        project, gap_id="gap_filled", source_path=str(other)
+    )
+    assert result.superseded_candidate_id == "pexels_1"
+    assert result.hint == "Ersetzt vorhandenen Kandidaten pexels_1."
+    assert result.candidate.assign_status == "manual"
+    assert result.candidate.cut_plan_run_id == "run_override"
+    assert result.candidate.candidate_id != "pexels_1"
+
+    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
+    assert accepted is not None
+    assert len(accepted.supplements) == 1
+    assert accepted.supplements[0].candidate_id == result.candidate.candidate_id
+
+    report = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
+    assert report is not None
+    gap_rep = next(g for g in report.gaps if g.gap_id == "gap_filled")
+    assert gap_rep.export_ready_candidate_id == result.candidate.candidate_id
+    assert "pexels_1" in gap_rep.rejected_candidate_ids
 
 
 def test_ui_manual_gap_assign_markers() -> None:
@@ -276,3 +314,6 @@ def test_ui_manual_gap_assign_markers() -> None:
     assert "Search Queries (kopieren)" in source
     assert "Zuordnen & inventarisieren" in source
     assert "assign_local_file_to_open_gap" in source
+    assert "enh_manual_gap_flash_" in source
+    assert "result.hint" in source
+    assert "st.info" in source

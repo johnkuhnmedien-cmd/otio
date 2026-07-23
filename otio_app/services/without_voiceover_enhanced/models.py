@@ -392,6 +392,8 @@ class StockCandidate(BaseModel):
     license_metadata_status: str = ""
     # E2E-4: muss zur coverage_gaps.cut_plan_run_id passen (sonst stale).
     cut_plan_run_id: str = ""
+    # E2E-4 Nachtrag: "manual" bei bewusster Manual-Assign-Zuordnung.
+    assign_status: str = ""
 
 
 class StockSearchResultsDocument(BaseModel):

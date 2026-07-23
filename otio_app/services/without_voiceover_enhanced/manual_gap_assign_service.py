@@ -1,13 +1,17 @@
-"""Manuelle Zuordnung lokaler Dateien zu offenen Coverage Gaps.
+"""Manuelle Zuordnung lokaler Dateien zu Coverage Gaps.
 
 Kopiert die Datei nach ``stock/downloads/<gap>/<candidate>/``, setzt
 ``export_ready`` in Accepted Supplements und inventarisiert mit Gap-Beschreibung.
+
+E2E-4 Nachtrag: Manual-Assign ist ein Override — ersetzt vorhandene Accepted-
+Kandidaten desselben Gaps (kein Fehler bei bereits export_ready).
 """
 
 from __future__ import annotations
 
 import hashlib
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 from otio_app.models import Project
@@ -47,6 +51,20 @@ _VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".m4v", ".mkv"}
 
 class ManualGapAssignError(RuntimeError):
     pass
+
+
+@dataclass
+class ManualGapAssignResult:
+    """Ergebnis einer manuellen Gap-Zuordnung (ggf. mit Supersede-Hinweis)."""
+
+    candidate: StockCandidate
+    superseded_candidate_id: str | None = None
+
+    @property
+    def hint(self) -> str | None:
+        if not self.superseded_candidate_id:
+            return None
+        return f"Ersetzt vorhandenen Kandidaten {self.superseded_candidate_id}."
 
 
 def gap_search_queries(gap: CoverageGap) -> list[str]:
@@ -115,6 +133,16 @@ def _current_cut_plan_run_id(project: Project) -> str:
     return compute_cut_plan_run_id_from_path(unified_cut_plan_path(project))
 
 
+def _existing_accepted_for_gap(
+    project: Project, gap_id: str
+) -> list[StockCandidate]:
+    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
+    if accepted is None:
+        return []
+    gid = (gap_id or "").strip()
+    return [s for s in accepted.supplements if (s.gap_id or "").strip() == gid]
+
+
 def _upsert_accepted(project: Project, candidate: StockCandidate) -> None:
     locked = require_locked_script(project)
     run_id = _current_cut_plan_run_id(project)
@@ -141,17 +169,33 @@ def _upsert_accepted(project: Project, candidate: StockCandidate) -> None:
 
 
 def _mark_gap_filled_in_funnel_report(
-    project: Project, *, gap_id: str, candidate_id: str
+    project: Project,
+    *,
+    gap_id: str,
+    candidate_id: str,
+    rejected_candidate_ids: list[str] | None = None,
 ) -> None:
     report = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
     if report is None:
         return
+    rejected = {
+        str(x).strip()
+        for x in (rejected_candidate_ids or [])
+        if str(x).strip() and str(x).strip() != candidate_id
+    }
     found = False
     for index, gap_rep in enumerate(report.gaps):
         if gap_rep.gap_id != gap_id:
             continue
+        existing_rejected = {
+            str(x).strip()
+            for x in (gap_rep.rejected_candidate_ids or [])
+            if str(x).strip()
+        }
+        existing_rejected.update(rejected)
         gap_rep.filled = True
         gap_rep.export_ready_candidate_id = candidate_id
+        gap_rep.rejected_candidate_ids = sorted(existing_rejected)
         gap_rep.message = f"export_ready: {candidate_id} (manuell zugeordnet)"
         report.gaps[index] = gap_rep
         found = True
@@ -162,6 +206,7 @@ def _mark_gap_filled_in_funnel_report(
                 gap_id=gap_id,
                 filled=True,
                 export_ready_candidate_id=candidate_id,
+                rejected_candidate_ids=sorted(rejected),
                 message=f"export_ready: {candidate_id} (manuell zugeordnet)",
             )
         )
@@ -176,8 +221,12 @@ def assign_local_file_to_open_gap(
     *,
     gap_id: str,
     source_path: str,
-) -> StockCandidate:
-    """Kopiert lokale Datei, validiert, Accepted + Inventar für offene Gap."""
+) -> ManualGapAssignResult:
+    """Kopiert lokale Datei, validiert, Accepted + Inventar.
+
+    E2E-4 Nachtrag: bewusste Redaktionsentscheidung — ersetzt vorhandene
+    Accepted-Kandidaten desselben Gaps (kein Fehler bei export_ready).
+    """
     gap_id = (gap_id or "").strip()
     if not gap_id:
         raise ManualGapAssignError("Gap-ID fehlt.")
@@ -189,15 +238,22 @@ def assign_local_file_to_open_gap(
     if gap is None:
         raise ManualGapAssignError(f"Unbekannte Gap-ID: {gap_id}")
 
-    ready_ids = {
-        (supplement.gap_id or "").strip()
-        for supplement in list_export_ready_supplements(project)
-        if (supplement.gap_id or "").strip()
-    }
-    if gap_id in ready_ids:
-        raise ManualGapAssignError(
-            f"Gap `{gap_id}` ist bereits export_ready — zuerst nicht nötig."
-        )
+    previous = _existing_accepted_for_gap(project, gap_id)
+    superseded_ids = [
+        str(s.candidate_id).strip()
+        for s in previous
+        if str(s.candidate_id or "").strip()
+    ]
+    # Primärer Hinweis: zuletzt vorhandener / export_ready Kandidat.
+    superseded_hint_id = next(
+        (
+            str(s.candidate_id).strip()
+            for s in previous
+            if (s.media_validation_status or "") == STATUS_EXPORT_READY
+            and str(s.candidate_id or "").strip()
+        ),
+        superseded_ids[0] if superseded_ids else None,
+    )
 
     raw = (source_path or "").strip().strip('"').strip("'")
     if not raw:
@@ -217,6 +273,12 @@ def assign_local_file_to_open_gap(
 
     locked = require_locked_script(project)
     candidate_id = _candidate_id_for_file(gap_id, source)
+    # Gleicher Datei-Hash → gleiche ID; nicht als „ersetzt“ werten.
+    if candidate_id in superseded_ids:
+        superseded_ids = [cid for cid in superseded_ids if cid != candidate_id]
+        if superseded_hint_id == candidate_id:
+            superseded_hint_id = superseded_ids[0] if superseded_ids else None
+
     target_dir = stock_candidate_download_dir(
         project, gap_id=gap_id, candidate_id=candidate_id
     )
@@ -259,6 +321,7 @@ def assign_local_file_to_open_gap(
         funnel_managed=True,
         license_metadata_status="missing",
         cut_plan_run_id=_current_cut_plan_run_id(project),
+        assign_status="manual",
     )
     folder = _folder_for_gap(project, gap, locked)
     from otio_app.services.without_voiceover_enhanced.supplement_clean_media import (
@@ -281,6 +344,12 @@ def assign_local_file_to_open_gap(
         validation_score=1.0,
     )
     _mark_gap_filled_in_funnel_report(
-        project, gap_id=gap_id, candidate_id=candidate_id
+        project,
+        gap_id=gap_id,
+        candidate_id=candidate_id,
+        rejected_candidate_ids=superseded_ids,
     )
-    return candidate
+    return ManualGapAssignResult(
+        candidate=candidate,
+        superseded_candidate_id=superseded_hint_id,
+    )

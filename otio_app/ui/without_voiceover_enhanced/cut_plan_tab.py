@@ -1486,18 +1486,26 @@ def _render_section_funnel(project) -> None:
                     key=f"enh_manual_gap_assign_{project.id}_{gap.gap_id}",
                 ):
                     try:
-                        assigned = assign_local_file_to_open_gap(
+                        result = assign_local_file_to_open_gap(
                             project,
                             gap_id=gap.gap_id,
                             source_path=path_value,
                         )
+                        assigned = result.candidate
                         st.session_state[
                             f"enh_funnel_pending_deselect_{project.id}"
                         ] = [gap.gap_id]
-                        st.success(
-                            f"`{gap.gap_id}` → `{assigned.candidate_id}` "
-                            f"({assigned.media_validation_status})"
-                        )
+                        flash_key = f"enh_manual_gap_flash_{project.id}"
+                        flash = [
+                            (
+                                "success",
+                                f"`{gap.gap_id}` → `{assigned.candidate_id}` "
+                                f"({assigned.media_validation_status})",
+                            )
+                        ]
+                        if result.hint:
+                            flash.append(("info", result.hint))
+                        st.session_state[flash_key] = flash
                         st.rerun()
                     except ManualGapAssignError as exc:
                         st.error(str(exc))
@@ -1508,6 +1516,13 @@ def _render_section_funnel(project) -> None:
             f"Manuelle Gap-Zuordnung ausgeblendet ({open_gaps_count} offen). "
             "Checkbox aktivieren zum Bearbeiten."
         )
+
+    flash_key = f"enh_manual_gap_flash_{project.id}"
+    for level, message in st.session_state.pop(flash_key, []) or []:
+        if level == "info":
+            st.info(message)
+        else:
+            st.success(message)
 
     # Schwere Stock-JSON nur bei Opt-in laden (nicht nur Checkboxen).
     show_manual_key = f"enh_show_manual_candidates_{project.id}"
