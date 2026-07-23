@@ -38,6 +38,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
 )
 from otio_app.services.without_voiceover_enhanced.otio_export_service import (
     EnhancedOtioExportError,
+    _time_range,
     export_otio_from_resolved_timeline,
     validate_resolved_timeline_for_production,
 )
@@ -528,3 +529,16 @@ def test_http_media_blocked(tmp_path: Path) -> None:
     )
     with pytest.raises(EnhancedOtioExportError, match="Web-URL|HTTP"):
         export_otio_from_resolved_timeline(project, basename="http_blocked")
+
+
+def test_time_range_snaps_to_integer_frames_asset14_regression() -> None:
+    """Yosemite_Asset14: fractional start ~1.992 @24fps → 1 schwarzer Frame in Resolve."""
+    # Alter OTIO-Wert: available/source start 0.083008s @24
+    tr = _time_range(11.96, 24.0, start_sec=0.083008)
+    assert tr.start_time.value == 2
+    assert tr.start_time.value == int(tr.start_time.value)
+    assert tr.duration.value == int(tr.duration.value)
+    assert tr.duration.value >= 1
+    # Source und Available mit gleichem Snap → kein Off-by-one dazwischen
+    avail = _time_range(22.791667, 24.0, start_sec=0.083008)
+    assert tr.start_time.value >= avail.start_time.value

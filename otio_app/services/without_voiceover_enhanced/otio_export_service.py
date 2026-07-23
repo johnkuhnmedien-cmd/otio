@@ -53,9 +53,24 @@ class EnhancedOtioExportError(RuntimeError):
 
 
 def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> otio.opentime.TimeRange:
+    """Sekunden → OTIO-TimeRange auf **ganzzahligen** Frames (Resolve-sicher).
+
+    Fractional RationalTimes (z.B. start value 1.992 @24fps) führen in Resolve
+    leicht zu einem Off-by-one: available wird auf Frame 2 gerundet, source auf
+    Frame 1 → ein schwarzer/offline erster Frame, obwohl die Quelldatei ok ist.
+    """
+    media_rate = float(rate) if float(rate) > 0 else 25.0
+    start_rt = otio.opentime.RationalTime.from_seconds(float(start_sec), media_rate)
+    end_rt = otio.opentime.RationalTime.from_seconds(
+        float(start_sec) + float(duration_sec), media_rate
+    )
+    start_frames = int(round(start_rt.value))
+    end_frames = int(round(end_rt.value))
+    if end_frames <= start_frames:
+        end_frames = start_frames + 1
     return otio.opentime.TimeRange(
-        start_time=otio.opentime.RationalTime.from_seconds(start_sec, rate),
-        duration=otio.opentime.RationalTime.from_seconds(duration_sec, rate),
+        start_time=otio.opentime.RationalTime(start_frames, media_rate),
+        duration=otio.opentime.RationalTime(end_frames - start_frames, media_rate),
     )
 
 
@@ -177,12 +192,18 @@ def _ensure_shot_media_for_export(
             f"{label}: source_end ({source_end}) muss > source_start "
             f"({source_start}) sein."
         )
-    # Falls ResolvedShot Source relativ (ohne Embedded) gespeichert hat, aber
-    # Datei Embedded-TC hat: angleichen, wenn source_start < avail_start.
-    if source_start + 1e-6 < avail_start:
-        shift = avail_start - source_start
-        source_start += shift
-        source_end += shift
+    source_span = source_end - source_start
+    # Content-Offset relativ zur beim Resolve gespeicherten Available-Start
+    # beibehalten, wenn die Datei einen anderen Embedded-TC/PTS-Start hat.
+    # (Früher: source auf avail_start schieben → Head-Trim/Offset verloren.)
+    shot_avail = float(getattr(shot, "resolved_available_start_seconds", 0.0) or 0.0)
+    content_offset = max(0.0, source_start - shot_avail)
+    if abs(avail_start - shot_avail) > 1e-6:
+        source_start = avail_start + content_offset
+        source_end = source_start + source_span
+    elif source_start + 1e-6 < avail_start:
+        source_start = avail_start + content_offset
+        source_end = source_start + source_span
     avail_end = avail_start + media_dur
     if source_start < avail_start - 1e-6 or source_end > avail_end + 1e-6:
         raise EnhancedOtioExportError(
