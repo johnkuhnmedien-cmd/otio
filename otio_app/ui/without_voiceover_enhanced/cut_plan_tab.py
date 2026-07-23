@@ -367,7 +367,8 @@ _SECTION_UNIFIED = "1 · Unified Cut (1 LLM)"
 _SECTION_FUNNEL = "2 · Supplements / Funnel"
 _SECTION_FINAL = "3 · Final Cut (LLM 3)"
 _SECTION_OPTIONS_LEGACY = (_SECTION_ROUGH, _SECTION_FUNNEL, _SECTION_FINAL)
-_SECTION_OPTIONS_UNIFIED = (_SECTION_UNIFIED, _SECTION_FUNNEL, _SECTION_FINAL)
+# Unified: kein LLM-3-Final — Timing/Merge laufen in Schritt 1 (Python).
+_SECTION_OPTIONS_UNIFIED = (_SECTION_UNIFIED, _SECTION_FUNNEL)
 
 
 def _json_mtime_count_cache(
