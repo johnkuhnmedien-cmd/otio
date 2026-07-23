@@ -1671,3 +1671,489 @@ def generate_final_cut_plan(
         progress_callback=progress_callback,
     )
     return merge_and_persist_final_cuts(project, results)
+
+
+# --- Unified Cut Plan (Phase 7) -------------------------------------------------
+
+@dataclass
+class FolderUnifiedCutResult:
+    folder_name: str
+    status: str  # PASS | FAIL
+    plan: "UnifiedCutPlanDocument | None" = None
+    error: str | None = None
+    slot_count: int = 0
+    pause_count: int = 0
+    gap_count: int = 0
+
+
+def _used_in_ledger_text(plans: list[Any]) -> str:
+    """Filmweite Asset-Nutzung bisheriger Kapitel für den Prompt."""
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    for plan in plans:
+        if plan is None:
+            continue
+        for slot in getattr(plan, "slots", []) or []:
+            asset_id = getattr(slot, "local_asset_id", None)
+            if asset_id:
+                counts[str(asset_id)] += 1
+    if not counts:
+        return ""
+    lines = ["asset_id\tuses"]
+    for asset_id, count in sorted(counts.items()):
+        lines.append(f"{asset_id}\t{count}")
+    return "\n".join(lines)
+
+
+def generate_unified_cut_for_folder(
+    project: Project,
+    folder_name: str,
+    *,
+    provider: str = "openai",
+    model: str = "gpt-5.6-terra",
+    llm_callable: Callable[..., Any] | None = None,
+    context: _ChapterCutContext | None = None,
+    used_in_ledger_text: str = "",
+) -> FolderUnifiedCutResult:
+    """Ein Unified-LLM-Call für genau ein Kapitel."""
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        resolve_llm_model_id,
+    )
+    from otio_app.services.without_voiceover_enhanced.models import (
+        UnifiedCutPlanDocument,
+    )
+    from otio_app.services.without_voiceover_enhanced.script_prompts import (
+        build_unified_cut_prompt,
+    )
+    from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
+        parse_unified_cut_response,
+        unified_to_rough,
+    )
+
+    display_name = folder_name or "(gesamtes Skript)"
+    try:
+        locked = require_locked_script(project)
+        timings = load_segment_timings(project)
+        if timings is None:
+            raise CutPlanError("Segment-Timings fehlen.")
+        if context is None:
+            contexts = _build_chapter_contexts(project, locked, timings)
+            context = next(
+                (c for c in contexts if c.folder_name == folder_name),
+                None,
+            )
+            if context is None:
+                raise CutPlanError(f"Kein Kapitel-Kontext für „{display_name}“.")
+        if not context.timings_slice.segments:
+            raise CutPlanError(
+                f"Kapitel „{display_name}“: keine Segment-Timings."
+            )
+
+        options = load_cut_plan_options(project)
+        include_frames = bool(options.include_middle_frames)
+        assets_folder = folder_name or None
+        if assets_folder and assets_folder not in project.selected_asset_subdirs:
+            local_assets = _local_assets_payload(
+                project,
+                folder_name=assets_folder,
+                include_middle_frames=include_frames,
+            )
+            if not local_assets:
+                local_assets = _local_assets_payload(
+                    project, include_middle_frames=include_frames
+                )
+        else:
+            local_assets = _local_assets_payload(
+                project,
+                folder_name=assets_folder,
+                include_middle_frames=include_frames,
+            )
+
+        dramaturgy_text = (
+            _chapter_dramaturgy_text_for_folder(project, folder_name)
+            if folder_name
+            else _dramaturgy_text(project)
+        )
+        segment_ids = [seg.segment_id for seg in context.script_slice.segments]
+        sentence_timings_json = build_sentence_timings_json_for_segments(
+            project, segment_ids=segment_ids
+        )
+        prompt = build_unified_cut_prompt(
+            locked_script_json=context.script_slice.model_dump_json(indent=2),
+            segment_timings_json=context.timings_slice.model_dump_json(indent=2),
+            local_assets_json=json.dumps(
+                local_assets, ensure_ascii=False, indent=2
+            ),
+            style_profile_text=_style_text(project),
+            dramaturgy_text=dramaturgy_text,
+            folder_name=folder_name,
+            folder_slug=context.folder_slug,
+            previous_folder_name=context.previous_folder_name,
+            next_folder_name=context.next_folder_name,
+            include_middle_frames=include_frames,
+            shot_constraints_text=format_shot_constraints_for_prompt(options),
+            sentence_timings_json=sentence_timings_json,
+            cut_rhythm_targets_text=DEFAULT_CUT_RHYTHM_TARGETS,
+            used_in_ledger_text=used_in_ledger_text,
+        )
+        images = (
+            middle_frame_attachments_from_payload(
+                local_assets,
+                max_images=int(options.max_middle_frames_per_chapter),
+            )
+            if include_frames
+            else []
+        )
+        model_id = resolve_llm_model_id(provider, model)
+        if llm_callable is not None:
+            try:
+                raw = llm_callable(prompt=prompt, model=model_id, images=images)
+            except TypeError:
+                raw = llm_callable(prompt=prompt, model=model_id)
+            raw_text = (
+                raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
+            )
+        else:
+            raw_text = generate_plan_text_with_metadata(
+                prompt=prompt,
+                model=model_id,
+                images=images or None,
+            ).raw_text
+
+        plan = parse_unified_cut_response(
+            raw_text,
+            locked.script_version,
+            folder_slug=context.folder_slug,
+        )
+        if not plan.slots:
+            raise CutPlanError("LLM-Antwort enthielt keine Slots.")
+        _rough, coverage = unified_to_rough(plan)
+        return FolderUnifiedCutResult(
+            folder_name=display_name,
+            status="PASS",
+            plan=plan,
+            slot_count=len(plan.slots),
+            pause_count=len(plan.pause_directives),
+            gap_count=len(coverage.gaps),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return FolderUnifiedCutResult(
+            folder_name=display_name,
+            status="FAIL",
+            error=str(exc),
+        )
+
+
+def generate_all_unified_cuts(
+    project: Project,
+    *,
+    provider: str = "openai",
+    model: str = "gpt-5.6-terra",
+    llm_callable: Callable[..., Any] | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+) -> list[FolderUnifiedCutResult]:
+    """Unified-LLM sequenziell pro Kapitel inkl. used_in-Ledger."""
+    locked = require_locked_script(project)
+    errors = validate_timings_against_script(project)
+    if errors:
+        raise CutPlanError("; ".join(errors))
+    timings = load_segment_timings(project)
+    assert timings is not None
+    contexts = _build_chapter_contexts(project, locked, timings)
+    if not contexts:
+        raise CutPlanError("Keine Kapitel mit Segmenten für den Unified Cut.")
+
+    results: list[FolderUnifiedCutResult] = []
+    prior_plans: list[Any] = []
+    total = len(contexts)
+    for index, context in enumerate(contexts, start=1):
+        label = context.folder_name or "(gesamtes Skript)"
+        if progress_callback is not None:
+            progress_callback(label, index, total)
+        ledger = _used_in_ledger_text(prior_plans)
+        result = generate_unified_cut_for_folder(
+            project,
+            context.folder_name,
+            provider=provider,
+            model=model,
+            llm_callable=llm_callable,
+            context=context,
+            used_in_ledger_text=ledger,
+        )
+        results.append(result)
+        if result.status == "PASS" and result.plan is not None:
+            prior_plans.append(result.plan)
+    return results
+
+
+def merge_and_persist_unified_cuts(
+    project: Project,
+    results: list[FolderUnifiedCutResult],
+) -> Any:
+    """Merged Kapitel-Unified-Pläne → ``unified_cut_plan.json`` (+ Rough/Gaps-Schatten)."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        CutBoundary,
+        CutSlot,
+        UnifiedCutPlanDocument,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        unified_cut_plan_path,
+    )
+    from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
+        unified_to_rough,
+    )
+
+    locked = require_locked_script(project)
+    ok = [r for r in results if r.status == "PASS" and r.plan is not None]
+    fail = [r for r in results if r.status != "PASS"]
+    if not ok:
+        details = "; ".join(f"{r.folder_name}: {r.error}" for r in fail) or "unbekannt"
+        raise CutPlanError(f"Unified Cut fehlgeschlagen für alle Kapitel. {details}")
+
+    boundaries: list[CutBoundary] = []
+    slots: list[CutSlot] = []
+    pauses: list[PauseDirective] = []
+    seen_pause: set[str] = set()
+    preroll: float | None = None
+    postroll: float | None = None
+    chapter_join = 0
+
+    for result in ok:
+        plan = result.plan
+        assert plan is not None
+        if plan.voiceover_preroll_sec is not None and preroll is None:
+            preroll = plan.voiceover_preroll_sec
+        if plan.voiceover_postroll_sec is not None and postroll is None:
+            postroll = plan.voiceover_postroll_sec
+        for pause in plan.pause_directives:
+            sentence_id = str(pause.after_sentence_id or "").strip()
+            key = (
+                f"sentence:{sentence_id}"
+                if sentence_id
+                else f"segment:{pause.after_segment_id}"
+            )
+            if key in seen_pause:
+                continue
+            seen_pause.add(key)
+            pauses.append(pause)
+        # Kapitel-Ketten aneinanderhängen. Zwischen Kapiteln: Bridge-Slot
+        # (Ende Kap. N → Start Kap. N+1), damit len(slots)==len(boundaries)-1.
+        if not boundaries:
+            boundaries.extend(plan.boundaries)
+            slots.extend(plan.slots)
+            continue
+        chapter_join += 1
+        bridge_id = f"bridge_{chapter_join:03d}"
+        slots.append(
+            CutSlot(
+                slot_id=bridge_id,
+                local_asset_id=None,
+                asset_fit="none",
+                asset_fit_reason="Kapitelübergang (Bridge zwischen Unified-Kapitelplänen)",
+                visual_intent="chapter transition",
+                narrative_function="chapter_transition",
+                coverage_gap_id=f"gap_{bridge_id}",
+                needed_visual="chapter transition / hold",
+                search_concepts=["chapter transition"],
+                preferred_media_type="video",
+            )
+        )
+        boundaries.extend(plan.boundaries)
+        slots.extend(plan.slots)
+
+    merged = UnifiedCutPlanDocument(
+        script_version=locked.script_version,
+        pause_directives=pauses,
+        boundaries=boundaries,
+        slots=slots,
+        voiceover_preroll_sec=preroll,
+        voiceover_postroll_sec=postroll,
+    )
+    rough, coverage = unified_to_rough(merged)
+    write_json(unified_cut_plan_path(project), merged)
+    write_json(rough_cut_plan_path(project), rough)
+    write_json(coverage_gaps_path(project), coverage)
+    write_json(
+        pause_directives_path(project),
+        {"directives": [d.model_dump(mode="json") for d in pauses]},
+    )
+    return merged
+
+
+def mini_repair_unified_plan(
+    project: Project,
+    plan: Any,
+    report: Any,
+    *,
+    provider: str = "openai",
+    model: str = "gpt-5.6-terra",
+    llm_callable: Callable[..., Any] | None = None,
+) -> Any:
+    """Optionaler Mini-Repair: nur betroffene Slots ± Nachbarn, gleiches Format.
+
+    Default-Pfad ruft dies nur bei ``enable_unified_mini_repair`` und Schwellwert.
+    """
+    from otio_app.services.voiceover_generation.model_settings_service import (
+        resolve_llm_model_id,
+    )
+    from otio_app.services.without_voiceover_enhanced.models import (
+        GapMergeReport,
+        UnifiedCutPlanDocument,
+    )
+    from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
+        parse_unified_cut_response,
+    )
+
+    if not isinstance(plan, UnifiedCutPlanDocument):
+        raise CutPlanError("mini_repair erwartet UnifiedCutPlanDocument.")
+    if not isinstance(report, GapMergeReport):
+        raise CutPlanError("mini_repair erwartet GapMergeReport.")
+
+    affected_ids: set[str] = set(report.review_shot_ids or [])
+    for slot_result in report.slots or []:
+        if slot_result.status in {"open_none", "failed"}:
+            affected_ids.add(slot_result.shot_id)
+    if not affected_ids:
+        return plan
+
+    index_by_id = {slot.slot_id: i for i, slot in enumerate(plan.slots)}
+    windows: set[int] = set()
+    for shot_id in affected_ids:
+        index = index_by_id.get(shot_id)
+        if index is None:
+            continue
+        for neighbor in (index - 1, index, index + 1):
+            if 0 <= neighbor < len(plan.slots):
+                windows.add(neighbor)
+    if not windows:
+        return plan
+
+    ordered_idx = sorted(windows)
+    lo, hi = ordered_idx[0], ordered_idx[-1]
+    # Grenzen für [lo..hi] Slots = boundaries[lo .. hi+1]
+    patch_boundaries = plan.boundaries[lo : hi + 2]
+    patch_slots = plan.slots[lo : hi + 1]
+    patch_doc = {
+        "pause_directives": [],
+        "boundaries": [b.model_dump(mode="json") for b in patch_boundaries],
+        "slots": [s.model_dump(mode="json") for s in patch_slots],
+    }
+    prompt = (
+        "You are repairing a UNIFIED cut-plan fragment. Return STRICT JSON only "
+        "with the same schema (boundaries + slots). Keep len(slots)==len(boundaries)-1. "
+        "Only improve asset_fit / local_asset_id / gap fields for weak/none slots; "
+        "do not invent sentence_ids. Keep cut_ids/slot_ids stable when possible.\n\n"
+        f"FRAGMENT:\n{json.dumps(patch_doc, ensure_ascii=False, indent=2)}"
+    )
+    model_id = resolve_llm_model_id(provider, model)
+    if llm_callable is not None:
+        try:
+            raw = llm_callable(prompt=prompt, model=model_id, images=[])
+        except TypeError:
+            raw = llm_callable(prompt=prompt, model=model_id)
+        raw_text = raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
+    else:
+        raw_text = generate_plan_text_with_metadata(
+            prompt=prompt, model=model_id, images=None
+        ).raw_text
+
+    repaired_fragment = parse_unified_cut_response(raw_text, plan.script_version)
+    if len(repaired_fragment.slots) != len(patch_slots):
+        raise CutPlanError(
+            "Mini-Repair: Slot-Anzahl der Patch-Antwort stimmt nicht."
+        )
+    if len(repaired_fragment.boundaries) != len(patch_boundaries):
+        raise CutPlanError(
+            "Mini-Repair: Boundary-Anzahl der Patch-Antwort stimmt nicht."
+        )
+
+    new_boundaries = list(plan.boundaries)
+    new_slots = list(plan.slots)
+    new_boundaries[lo : hi + 2] = list(repaired_fragment.boundaries)
+    new_slots[lo : hi + 1] = list(repaired_fragment.slots)
+    return UnifiedCutPlanDocument(
+        script_version=plan.script_version,
+        pause_directives=list(plan.pause_directives),
+        boundaries=new_boundaries,
+        slots=new_slots,
+        voiceover_preroll_sec=plan.voiceover_preroll_sec,
+        voiceover_postroll_sec=plan.voiceover_postroll_sec,
+    )
+
+
+def generate_unified_cut_plan_and_timeline(
+    project: Project,
+    *,
+    provider: str = "openai",
+    model: str = "gpt-5.6-terra",
+    llm_callable: Callable[..., Any] | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+    run_gap_merge: bool = True,
+) -> tuple[Any, Any, Any | None]:
+    """Ein-Knopf-Orchestrierung: Unified LLM → Timing → optional Gap-Merge."""
+    from otio_app.services.without_voiceover_enhanced.cut_rhythm_validator import (
+        should_run_unified_mini_repair,
+    )
+    from otio_app.services.without_voiceover_enhanced.gap_merge_service import (
+        merge_export_ready_gaps_into_timeline,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        unified_cut_plan_path,
+    )
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        resolve_unified_timeline,
+    )
+
+    results = generate_all_unified_cuts(
+        project,
+        provider=provider,
+        model=model,
+        llm_callable=llm_callable,
+        progress_callback=progress_callback,
+    )
+    plan = merge_and_persist_unified_cuts(project, results)
+    resolved = resolve_unified_timeline(project, plan, allow_open_gaps=True, persist=True)
+
+    merge_report = None
+    if run_gap_merge:
+        try:
+            resolved, merge_report = merge_export_ready_gaps_into_timeline(
+                project,
+                timeline=resolved,
+                require_closed_none=False,
+                persist=True,
+            )
+        except Exception:  # noqa: BLE001 — Merge optional wenn noch keine Supplements
+            merge_report = None
+
+    options = load_cut_plan_options(project)
+    if (
+        merge_report is not None
+        and should_run_unified_mini_repair(
+            merge_report,
+            total_slots=len(plan.slots),
+            enabled=bool(options.enable_unified_mini_repair),
+            threshold=float(options.unified_mini_repair_threshold),
+        )
+    ):
+        repaired = mini_repair_unified_plan(
+            project,
+            plan,
+            merge_report,
+            provider=provider,
+            model=model,
+            llm_callable=llm_callable,
+        )
+        write_json(unified_cut_plan_path(project), repaired)
+        plan = repaired
+        resolved = resolve_unified_timeline(
+            project, plan, allow_open_gaps=True, persist=True
+        )
+        resolved, merge_report = merge_export_ready_gaps_into_timeline(
+            project,
+            timeline=resolved,
+            require_closed_none=False,
+            persist=True,
+        )
+    return plan, resolved, merge_report

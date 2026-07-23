@@ -41,6 +41,11 @@ TIMING_MODE_LLM = "llm"
 TimingMode = Literal["fixed", "llm"]
 TIMING_MODE_CHOICES: tuple[str, ...] = (TIMING_MODE_FIXED, TIMING_MODE_LLM)
 
+CUT_PLAN_MODE_LEGACY = "legacy"
+CUT_PLAN_MODE_UNIFIED = "unified"
+CutPlanMode = Literal["legacy", "unified"]
+CUT_PLAN_MODE_CHOICES: tuple[str, ...] = (CUT_PLAN_MODE_LEGACY, CUT_PLAN_MODE_UNIFIED)
+
 STILL_BACKGROUND_CHOICES = (
     STILL_BACKGROUND_VINTAGE,
     STILL_BACKGROUND_NONE,
@@ -48,7 +53,12 @@ STILL_BACKGROUND_CHOICES = (
 
 
 class CutPlanOptions(BaseModel):
-    schema_version: str = "1.2"
+    schema_version: str = "1.3"
+    # Phase 7: Unified (1 LLM) vs Legacy (Rough + Final).
+    cut_plan_mode: CutPlanMode = CUT_PLAN_MODE_LEGACY
+    # Phase 6: optionaler Mini-Repair nach Gap-Merge (Default aus).
+    enable_unified_mini_repair: bool = False
+    unified_mini_repair_threshold: float = Field(default=0.20, ge=0.0, le=1.0)
     include_middle_frames: bool = False
     max_middle_frames_per_chapter: int = Field(
         default=DEFAULT_MAX_MIDDLE_FRAMES_PER_CHAPTER,
@@ -130,6 +140,11 @@ def _normalize_mode(value: Any, *, default: str) -> str:
     return text if text in TIMING_MODE_CHOICES else default
 
 
+def _normalize_cut_plan_mode(value: Any, *, default: str) -> str:
+    text = str(value or default).strip().lower()
+    return text if text in CUT_PLAN_MODE_CHOICES else default
+
+
 def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
     defaults = default_cut_plan_options()
     background = str(
@@ -159,6 +174,25 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
 
     return CutPlanOptions(
         schema_version=str(raw.get("schema_version") or defaults.schema_version),
+        cut_plan_mode=_normalize_cut_plan_mode(  # type: ignore[arg-type]
+            raw.get("cut_plan_mode", defaults.cut_plan_mode),
+            default=defaults.cut_plan_mode,
+        ),
+        enable_unified_mini_repair=bool(
+            raw.get(
+                "enable_unified_mini_repair",
+                defaults.enable_unified_mini_repair,
+            )
+        ),
+        unified_mini_repair_threshold=_clamp_float(
+            raw.get(
+                "unified_mini_repair_threshold",
+                defaults.unified_mini_repair_threshold,
+            ),
+            default=defaults.unified_mini_repair_threshold,
+            lo=0.0,
+            hi=1.0,
+        ),
         include_middle_frames=bool(
             raw.get("include_middle_frames", defaults.include_middle_frames)
         ),

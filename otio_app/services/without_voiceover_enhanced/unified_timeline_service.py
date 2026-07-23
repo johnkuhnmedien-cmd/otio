@@ -16,6 +16,7 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
 )
 from otio_app.services.without_voiceover_enhanced.cut_rhythm_validator import (
     assess_cut_rhythm,
+    assess_unified_cut_quality,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.models import (
@@ -710,6 +711,13 @@ def resolve_unified_timeline(
         repairs=repairs,
         errors=errors,
     )
+    quality = assess_unified_cut_quality(
+        plan=plan, resolved=document, options=options
+    )
+    for note in quality.all_notes():
+        if note not in document.repairs:
+            document.repairs.append(note)
+    repairs = document.repairs
 
     if persist:
         write_json(unified_cut_plan_path(project), plan)

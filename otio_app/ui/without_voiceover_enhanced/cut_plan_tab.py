@@ -26,6 +26,9 @@ from otio_app.services.voiceover_generation.model_settings_service import (
 )
 from otio_app.services.voiceover_generation.models import LlmRoleSettings
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    CUT_PLAN_MODE_CHOICES,
+    CUT_PLAN_MODE_LEGACY,
+    CUT_PLAN_MODE_UNIFIED,
     STILL_BACKGROUND_CHOICES,
     TIMING_MODE_CHOICES,
     TIMING_MODE_FIXED,
@@ -39,6 +42,7 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     accept_supplement_candidates,
     generate_all_final_cuts,
     generate_all_rough_cuts,
+    generate_unified_cut_plan_and_timeline,
     list_cut_plan_chapter_names,
     merge_and_persist_final_cuts,
     merge_and_persist_rough_cuts,
@@ -70,12 +74,14 @@ from otio_app.services.without_voiceover_enhanced.models import (
     AcceptedSupplementsDocument,
     CoverageGapsDocument,
     FinalCutPlanDocument,
+    GapMergeReport,
     NarrationTimelineDocument,
     ResolvedTimelineDocument,
     RoughCutPlanDocument,
     StockCandidate,
     StockSearchResultsDocument,
     SupplementFunnelReport,
+    UnifiedCutPlanDocument,
 )
 from otio_app.ui.without_voiceover_enhanced.timeline_view import render_realtime_timeline
 from otio_app.services.without_voiceover_enhanced.otio_export_service import (
@@ -88,6 +94,7 @@ from otio_app.services.without_voiceover_enhanced.paths import (
     accepted_supplements_path,
     coverage_gaps_path,
     final_cut_plan_path,
+    gap_merge_report_path,
     narration_timeline_path,
     resolved_timeline_path,
     rough_cut_plan_path,
@@ -95,6 +102,7 @@ from otio_app.services.without_voiceover_enhanced.paths import (
     segment_timings_path,
     stock_search_results_path,
     supplement_funnel_report_path,
+    unified_cut_plan_path,
 )
 from otio_app.services.without_voiceover_enhanced.stock_provider_config import (
     PROVIDER_UI_LABELS,
@@ -355,9 +363,11 @@ def _render_lightweight_funnel_monitor(project) -> None:
 
 
 _SECTION_ROUGH = "1 · Rough Cut (LLM 2)"
+_SECTION_UNIFIED = "1 · Unified Cut (1 LLM)"
 _SECTION_FUNNEL = "2 · Supplements / Funnel"
 _SECTION_FINAL = "3 · Final Cut (LLM 3)"
-_SECTION_OPTIONS = (_SECTION_ROUGH, _SECTION_FUNNEL, _SECTION_FINAL)
+_SECTION_OPTIONS_LEGACY = (_SECTION_ROUGH, _SECTION_FUNNEL, _SECTION_FINAL)
+_SECTION_OPTIONS_UNIFIED = (_SECTION_UNIFIED, _SECTION_FUNNEL, _SECTION_FINAL)
 
 
 def _json_mtime_count_cache(
@@ -452,6 +462,48 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
         st.caption(
             "Shot/Usage/Reuse/Vorlauf/Nachlauf/Toleranz → LLM 2+3 + Python. "
             "Head-Trim → nur Python. Titel + Still → OTIO (Titel-Einblendung folgt)."
+        )
+        cut_mode_labels = {
+            CUT_PLAN_MODE_LEGACY: "Legacy (Rough + Final, 2 LLM-Läufe)",
+            CUT_PLAN_MODE_UNIFIED: "Unified (1 LLM-Lauf + Python-Timing)",
+        }
+        mode_options = list(CUT_PLAN_MODE_CHOICES)
+        mode_index = (
+            mode_options.index(current.cut_plan_mode)
+            if current.cut_plan_mode in mode_options
+            else 0
+        )
+        cut_plan_mode = st.radio(
+            "Cut-Plan-Modus",
+            options=mode_options,
+            format_func=lambda m: cut_mode_labels.get(m, m),
+            index=mode_index,
+            key=f"enh_opt_cut_mode_{project.id}",
+            horizontal=True,
+            help=(
+                "Unified: ein Call/Kapitel → Timing sofort. "
+                "Legacy: LLM 2 (Rough) + LLM 3 (Final)."
+            ),
+        )
+        enable_unified_mini_repair = st.checkbox(
+            "Unified Mini-Repair nach Gap-Merge (optional, Default aus)",
+            value=bool(current.enable_unified_mini_repair),
+            key=f"enh_opt_mini_repair_{project.id}",
+            help=(
+                "Nur wenn (offene none + Review) / Slots > Schwellwert. "
+                "Repariert betroffene Slots ± Nachbarn."
+            ),
+            disabled=cut_plan_mode != CUT_PLAN_MODE_UNIFIED,
+        )
+        unified_mini_repair_threshold = st.number_input(
+            "Mini-Repair-Schwellwert",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(current.unified_mini_repair_threshold),
+            step=0.05,
+            key=f"enh_opt_mini_repair_thr_{project.id}",
+            disabled=cut_plan_mode != CUT_PLAN_MODE_UNIFIED
+            or not enable_unified_mini_repair,
         )
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -658,7 +710,10 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             )
 
         draft = CutPlanOptions(
-            schema_version=current.schema_version,
+            schema_version="1.3",
+            cut_plan_mode=str(cut_plan_mode),  # type: ignore[arg-type]
+            enable_unified_mini_repair=bool(enable_unified_mini_repair),
+            unified_mini_repair_threshold=float(unified_mini_repair_threshold),
             include_middle_frames=bool(include_middle_frames),
             max_middle_frames_per_chapter=int(max_middle_frames_per_chapter),
             max_candidates_per_gap=int(max_candidates_per_gap),
@@ -690,13 +745,15 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
         ):
             saved = save_cut_plan_options(project, draft)
             st.success(
-                f"Gespeichert: shot {saved.shot_min_sec}–{saved.shot_max_sec}s · "
+                f"Gespeichert: mode={saved.cut_plan_mode} · "
+                f"shot {saved.shot_min_sec}–{saved.shot_max_sec}s · "
                 f"reuse≥{saved.min_asset_reuse_distance_shots} · "
                 f"preroll {saved.voiceover_preroll_sec}s/{saved.voiceover_preroll_mode} · "
                 f"postroll {saved.voiceover_postroll_sec}s/{saved.voiceover_postroll_mode}"
             )
             st.rerun()
-        return current
+        # Live-Modus sofort für Bereichs-Radio nutzen (Persistenz erst beim Speichern).
+        return draft
 
 
 def _render_inventory_prepare(project) -> None:
@@ -760,6 +817,107 @@ def _render_inventory_prepare(project) -> None:
             st.rerun()
         except Exception as exc:  # noqa: BLE001
             st.error(f"Inventar-Vorbereitung fehlgeschlagen: {exc}")
+
+
+def _render_section_unified(project) -> None:
+    st.subheader("1. Unified Cut Plan (1 LLM-Lauf + Python-Timing)")
+    _render_inventory_prepare(project)
+    chapters = list_cut_plan_chapter_names(project)
+    chapter_count = max(1, len(chapters))
+    rough_provider, rough_model, _rough_max = _render_enhanced_cut_model(
+        project,
+        role_attr="enhanced_rough_cut",
+        label="Modell (Unified Cut)",
+        key_prefix="enh_unified",
+        input_info=LLM_INPUT_INFO.get("enhanced_rough_cut", ""),
+        input_tokens=_estimate_rough_cut_input_tokens(project)[0],
+        default_output_tokens=_ROUGH_CUT_OUTPUT_DEFAULT,
+        chapter_count=chapter_count,
+    )
+    st.caption(
+        f"Unified: **ein LLM-Call pro Kapitel** ({chapter_count} Kapitel) — "
+        "danach Python-Timing. Legacy bräuchte 2 Calls/Kapitel (Rough+Final)."
+    )
+    cut_options = load_cut_plan_options(project)
+    if cut_options.include_middle_frames:
+        st.caption(
+            "Vision aktiv: Mittel-Frames "
+            f"(max. {cut_options.max_middle_frames_per_chapter}/Kapitel)."
+        )
+
+    if st.button(
+        "Unified Cut + Timing starten",
+        type="primary",
+        key="enh_unified_cut",
+    ):
+        try:
+            progress = st.empty()
+
+            def _unified_progress(folder_name: str, index: int, total: int) -> None:
+                progress.info(
+                    f"Unified · Kapitel {index}/{total}: „{folder_name}“ "
+                    f"({resolve_llm_model_id(rough_provider, rough_model)})…"
+                )
+
+            with st.spinner("Unified Cut Plan + Timing…"):
+                plan, resolved, merge_report = generate_unified_cut_plan_and_timeline(
+                    project,
+                    provider=rough_provider,
+                    model=rough_model,
+                    progress_callback=_unified_progress,
+                    run_gap_merge=True,
+                )
+            progress.empty()
+            gaps = sum(
+                1 for s in plan.slots if str(s.asset_fit) in {"weak", "none"}
+            )
+            st.success(
+                f"Unified: {len(plan.slots)} Slots · "
+                f"{len(plan.boundaries)} Grenzen · "
+                f"{gaps} weak/none Gaps · "
+                f"{len(resolved.shots)} resolved Shots."
+            )
+            if merge_report is not None:
+                st.info(merge_report.message or "Gap-Merge ausgeführt.")
+                if merge_report.open_none_gap_ids:
+                    st.warning(
+                        "Offene none-Gaps: "
+                        + ", ".join(merge_report.open_none_gap_ids)
+                    )
+            st.rerun()
+        except CutPlanError as exc:
+            st.error(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Fehler: {exc}")
+
+    plan = load_model(unified_cut_plan_path(project), UnifiedCutPlanDocument)
+    if plan is not None:
+        st.caption(
+            f"Gespeicherter Unified Plan: {len(plan.slots)} Slots · "
+            f"{len(plan.pause_directives)} Pausen."
+        )
+        for slot in plan.slots[:40]:
+            st.caption(
+                f"{slot.slot_id}: fit={slot.asset_fit} · "
+                f"asset={slot.local_asset_id or '—'} · "
+                f"gap={slot.coverage_gap_id or '—'}"
+            )
+        if len(plan.slots) > 40:
+            st.caption(f"… +{len(plan.slots) - 40} weitere Slots")
+
+    merge_report = load_model(gap_merge_report_path(project), GapMergeReport)
+    if merge_report is not None:
+        st.markdown("##### Gap-Merge Status")
+        st.caption(merge_report.message or "")
+        cols = st.columns(4)
+        cols[0].metric("Merged", len(merge_report.merged_shot_ids))
+        cols[1].metric("Weak behalten", len(merge_report.kept_local_shot_ids))
+        cols[2].metric("none offen", len(merge_report.open_none_gap_ids))
+        cols[3].metric("Review", len(merge_report.review_shot_ids))
+
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    if coverage is not None and coverage.gaps:
+        st.caption(f"Coverage Gaps (Funnel): {len(coverage.gaps)}")
 
 
 def _render_section_rough(project) -> None:
@@ -1667,15 +1825,23 @@ def render_enhanced_cut_plan_page() -> None:
         _render_lightweight_funnel_monitor(project)
         return
 
-    _render_cut_plan_settings(project)
+    options = _render_cut_plan_settings(project)
+    unified_mode = options.cut_plan_mode == CUT_PLAN_MODE_UNIFIED
+    section_options = (
+        list(_SECTION_OPTIONS_UNIFIED)
+        if unified_mode
+        else list(_SECTION_OPTIONS_LEGACY)
+    )
 
     # Wichtig: st.tabs führt ALLE Tabs aus — daher Radio + nur ein Renderer.
     section_key = f"enh_cut_section_{project.id}"
-    if section_key not in st.session_state:
-        st.session_state[section_key] = _default_cut_section(project)
+    if section_key not in st.session_state or st.session_state[section_key] not in section_options:
+        st.session_state[section_key] = (
+            _SECTION_UNIFIED if unified_mode else _default_cut_section(project)
+        )
     section = st.radio(
         "Bereich",
-        options=list(_SECTION_OPTIONS),
+        options=section_options,
         key=section_key,
         horizontal=True,
         help=(
@@ -1683,7 +1849,9 @@ def render_enhanced_cut_plan_page() -> None:
             "So bleiben Modellwechsel und Funnel-Klicks schnell."
         ),
     )
-    if section == _SECTION_ROUGH:
+    if section == _SECTION_UNIFIED:
+        _render_section_unified(project)
+    elif section == _SECTION_ROUGH:
         _render_section_rough(project)
     elif section == _SECTION_FUNNEL:
         _render_section_funnel(project)
