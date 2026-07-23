@@ -95,7 +95,10 @@ def _build_intra_pauses(
             if candidate.start_seconds > sentence.end_seconds + 1e-9:
                 next_sentence = candidate
                 break
-        pause_seconds = resolve_pause_duration_seconds(directive.duration_class)
+        pause_seconds = resolve_pause_duration_seconds(
+            directive.duration_class,
+            pause_function=directive.pause_function,
+        )
         if pause_seconds <= 0:
             continue
         split = mid_silence_split_seconds(
@@ -140,7 +143,10 @@ def build_narration_timeline(
         if directive.pause_function == "no_pause":
             continue
         # Validate duration class early (deterministic failure).
-        resolve_pause_duration_seconds(directive.duration_class)
+        resolve_pause_duration_seconds(
+            directive.duration_class,
+            pause_function=directive.pause_function,
+        )
         sentence_id = str(directive.after_sentence_id or "").strip()
         if sentence_id:
             sentence = sentences.get(sentence_id)
@@ -185,7 +191,10 @@ def build_narration_timeline(
         pause_seconds = 0.0
         directive = pause_by_segment.get(timing.segment_id)
         if directive is not None:
-            pause_seconds = resolve_pause_duration_seconds(directive.duration_class)
+            pause_seconds = resolve_pause_duration_seconds(
+                directive.duration_class,
+                pause_function=directive.pause_function,
+            )
         next_start = end + pause_seconds
         entries.append(
             NarrationTimelineEntry(

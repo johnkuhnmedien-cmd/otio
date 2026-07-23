@@ -94,14 +94,14 @@ def test_intra_sentence_pause_expands_timeline_without_stretching_audio() -> Non
     assert entry.audio_duration_seconds == 3.0
     assert len(entry.intra_pauses) == 1
     assert entry.intra_pauses[0].source_split_seconds == 1.2
-    assert entry.intra_pauses[0].pause_seconds == 0.80
+    assert entry.intra_pauses[0].pause_seconds == 2.50
     # Wanduhr = Audio + Intra-Pause; Segment 2 startet später.
-    assert entry.end_seconds == 3.8
-    assert timeline.entries[1].start_seconds == 3.8
+    assert entry.end_seconds == 5.5
+    assert timeline.entries[1].start_seconds == 5.5
 
     # Source-Zeit nach dem Split liegt hinter der Gap.
     assert source_seconds_to_timeline(entry, 1.0) == 1.0
-    assert source_seconds_to_timeline(entry, 1.4) == 2.2
+    assert source_seconds_to_timeline(entry, 1.4) == 3.9
 
 
 def test_resolved_audio_splits_at_silence_midpoint() -> None:
@@ -133,7 +133,7 @@ def test_resolved_audio_splits_at_silence_midpoint() -> None:
     assert len(pieces) == 2
     assert pieces[0].source_start_seconds == 0.0
     assert pieces[0].source_end_seconds == 1.2
-    assert pieces[0].pause_after_seconds == 0.35
+    assert pieces[0].pause_after_seconds == 0.50
     assert pieces[1].source_start_seconds == 1.2
     assert pieces[1].source_end_seconds == 3.0
     # Kein Time-Stretch: Summe der Source-Längen = Audio-Dauer.

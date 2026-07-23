@@ -291,12 +291,13 @@ def test_script_lock_version_and_text_change_invalidates(tmp_path: Path) -> None
 
 
 def test_pause_duration_classes_central_and_deterministic() -> None:
-    assert PAUSE_DURATION_SECONDS["short"] == 0.35
-    assert PAUSE_DURATION_SECONDS["medium"] == 0.80
-    assert PAUSE_DURATION_SECONDS["long"] == 1.50
-    assert resolve_pause_duration_seconds("short") == 0.35
-    assert resolve_pause_duration_seconds("medium") == 0.80
-    assert resolve_pause_duration_seconds("long") == 1.50
+    assert PAUSE_DURATION_SECONDS["short"] == 0.50
+    assert PAUSE_DURATION_SECONDS["medium"] == 2.50
+    assert PAUSE_DURATION_SECONDS["long"] == 4.00
+    assert resolve_pause_duration_seconds("short") == 0.50
+    assert resolve_pause_duration_seconds("medium") == 2.50
+    assert resolve_pause_duration_seconds("long") == 4.00
+    assert resolve_pause_duration_seconds("long", pause_function="chapter_transition") == 5.00
     with pytest.raises(ValueError):
         resolve_pause_duration_seconds("huge")
 
@@ -335,8 +336,8 @@ def test_pause_resolver_identical_inputs_identical_outputs_and_pause_without_cut
         pause_directives=directives,
     )
     assert first.model_dump() == second.model_dump()
-    assert first.entries[0].pause_after_seconds == 0.80
-    assert first.entries[1].start_seconds == pytest.approx(2.80)
+    assert first.entries[0].pause_after_seconds == 2.50
+    assert first.entries[1].start_seconds == pytest.approx(4.50)
     # Pause without picture cut is representable: directive has visual_behavior hold.
     hold = PauseDirective(
         after_segment_id="segment_001",
@@ -349,7 +350,7 @@ def test_pause_resolver_identical_inputs_identical_outputs_and_pause_without_cut
         segment_timings=timings,
         pause_directives=[hold],
     )
-    assert timeline.entries[0].pause_after_seconds == 0.35
+    assert timeline.entries[0].pause_after_seconds == 0.50
 
 
 def test_audio_duration_measured_from_file(tmp_path: Path) -> None:
@@ -636,27 +637,29 @@ def test_final_plan_rejects_unknown_ids_and_resolves_deterministically(tmp_path:
     import subprocess
 
     media_file = project.work_dir_path / "local_media.mp4"
-    created = subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            "color=c=blue:s=16x16:d=1",
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-t",
-            "1",
-            str(media_file),
-        ],
-        capture_output=True,
-        check=False,
-    )
-    if created.returncode != 0 or not media_file.is_file():
-        pytest.skip("ffmpeg konnte keine Test-Videodatei erzeugen")
+    media_file_b = project.work_dir_path / "local_media_b.mp4"
+    for path, color in ((media_file, "blue"), (media_file_b, "red")):
+        created = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c={color}:s=16x16:d=1",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-t",
+                "1",
+                str(path),
+            ],
+            capture_output=True,
+            check=False,
+        )
+        if created.returncode != 0 or not path.is_file():
+            pytest.skip("ffmpeg konnte keine Test-Videodatei erzeugen")
     write_json(
         accepted_supplements_path(project),
         {
@@ -675,7 +678,20 @@ def test_final_plan_rejects_unknown_ids_and_resolves_deterministically(tmp_path:
                     "duration_seconds": 10.0,
                     "license": "CC0",
                     "selected": True,
-                }
+                },
+                {
+                    "candidate_id": "asset_local_2",
+                    "provider": "mock",
+                    "title": "detail",
+                    "media_type": "video",
+                    "preview_url": "https://example.com/preview2.jpg",
+                    "source_page": "https://example.com/source2",
+                    "local_media_path": str(media_file_b),
+                    "media_validation_status": "export_ready",
+                    "duration_seconds": 10.0,
+                    "license": "CC0",
+                    "selected": True,
+                },
             ],
         },
     )
@@ -702,7 +718,7 @@ def test_final_plan_rejects_unknown_ids_and_resolves_deterministically(tmp_path:
                 narration_end_anchor=NarrationAnchor(
                     segment_id="segment_002", offset_seconds=1.0
                 ),
-                asset_id="asset_local_1",
+                asset_id="asset_local_2",
                 editorial_function="detail",
             ),
         ],

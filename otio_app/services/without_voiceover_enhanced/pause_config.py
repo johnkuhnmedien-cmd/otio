@@ -5,11 +5,16 @@ Einzige Stelle, an der short/medium/long in Sekunden übersetzt werden.
 
 from __future__ import annotations
 
+# Stilziel (Projekt): short ≈ Original-Stille, medium/long aufgezogen,
+# chapter_transition etwas länger. Werte = deterministische Mittelpunkte.
 PAUSE_DURATION_SECONDS: dict[str, float] = {
-    "short": 0.35,
-    "medium": 0.80,
-    "long": 1.50,
+    "short": 0.50,   # Band 0.3–0.8s
+    "medium": 2.50,  # Band 2–3s
+    "long": 4.00,    # Band 3–5s
 }
+
+# Wenn pause_function=chapter_transition: Band 3–8s (Mittelpunkt).
+CHAPTER_TRANSITION_SECONDS: float = 5.00
 
 PAUSE_FUNCTIONS = (
     "breath",
@@ -32,8 +37,17 @@ VISUAL_BEHAVIORS = (
 )
 
 
-def resolve_pause_duration_seconds(duration_class: str) -> float:
+def resolve_pause_duration_seconds(
+    duration_class: str,
+    *,
+    pause_function: str = "",
+) -> float:
     """Deterministische Auflösung einer Dauerklasse in Sekunden."""
+    function = (pause_function or "").strip().lower()
+    if function == "no_pause":
+        return 0.0
+    if function == "chapter_transition":
+        return float(CHAPTER_TRANSITION_SECONDS)
     key = (duration_class or "").strip().lower()
     if key == "no_pause":
         return 0.0

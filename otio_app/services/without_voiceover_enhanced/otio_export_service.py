@@ -465,6 +465,16 @@ def export_otio_from_resolved_timeline(
         clip.metadata["resolved_media_path"] = str(media_path)
         if shot.hold_mode:
             clip.metadata["hold_mode"] = shot.hold_mode
+        if shot.asset_fit:
+            clip.metadata["asset_fit"] = shot.asset_fit
+        if shot.asset_fit_reason:
+            clip.metadata["begruendung"] = shot.asset_fit_reason
+        if shot.cut_alignment:
+            clip.metadata["cut_alignment"] = shot.cut_alignment
+        if shot.coverage_gap_id:
+            clip.metadata["coverage_gap_id"] = shot.coverage_gap_id
+        if shot.open_gap:
+            clip.metadata["open_gap"] = True
         video_track.append(clip)
         cursor = shot.timeline_end_seconds
 
@@ -638,6 +648,16 @@ def export_portable_otio_package(
         clip.metadata["original_media_path"] = str(media_path)
         if shot.hold_mode:
             clip.metadata["hold_mode"] = shot.hold_mode
+        if shot.asset_fit:
+            clip.metadata["asset_fit"] = shot.asset_fit
+        if shot.asset_fit_reason:
+            clip.metadata["begruendung"] = shot.asset_fit_reason
+        if shot.cut_alignment:
+            clip.metadata["cut_alignment"] = shot.cut_alignment
+        if shot.coverage_gap_id:
+            clip.metadata["coverage_gap_id"] = shot.coverage_gap_id
+        if shot.open_gap:
+            clip.metadata["open_gap"] = True
         video_track.append(clip)
         pending_video.append((clip, media_path, shot.asset_id))
         cursor = shot.timeline_end_seconds

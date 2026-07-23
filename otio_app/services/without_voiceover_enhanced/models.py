@@ -587,6 +587,12 @@ class ResolvedShot(BaseModel):
     chapter_id: str = ""
     # still_available_range | freeze_video | none
     hold_mode: str = ""
+    # Unified-Cut-Metadaten (optional; Legacy lässt Defaults).
+    asset_fit: str = ""
+    asset_fit_reason: str = ""
+    cut_alignment: str = ""
+    coverage_gap_id: Optional[str] = None
+    open_gap: bool = False
 
 
 class ResolvedAudioSegment(BaseModel):
