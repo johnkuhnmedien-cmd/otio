@@ -348,12 +348,28 @@ def _anchor_to_seconds(
     return source_seconds_to_timeline(entry, offset)
 
 
+# E2E-3: kein Audio-Waisenclip; Split verwerfen wenn Rest zu kurz.
+MIN_AUDIO_CLIP_SECONDS = 0.5
+
+
+def _min_audio_clip_seconds(fps: float = 25.0) -> float:
+    rate = float(fps) if float(fps) > 0 else 25.0
+    frame = 1.0 / rate
+    return max(MIN_AUDIO_CLIP_SECONDS, 2.0 * frame)
+
+
 def _build_resolved_audio_segments(
     *,
     timeline: NarrationTimelineDocument,
     timing_map: dict,
+    fps: float = 25.0,
 ) -> list[ResolvedAudioSegment]:
-    """Segment-MP3s; Intra-Pausen → Silence-Mid-Split + Gap (kein Time-Stretch)."""
+    """Segment-MP3s; Intra-Pausen → Silence-Mid-Split + Gap (kein Time-Stretch).
+
+    E2E-3 Guard: Split verwerfen bzw. an vorige Grenze mergen, wenn der Rest
+    nach dem Splitpunkt < 0.5s (oder < 2 Frames) wäre — kein 0.04s-Waisenclip.
+    """
+    min_clip = _min_audio_clip_seconds(fps)
     audio_segments: list[ResolvedAudioSegment] = []
     for entry in timeline.entries:
         timing = timing_map.get(entry.segment_id)
@@ -378,9 +394,19 @@ def _build_resolved_audio_segments(
 
         source_cursor = 0.0
         timeline_cursor = float(entry.start_seconds)
+        folded_trailing_pause = 0.0
         for pause in intra:
             split = max(source_cursor, min(float(pause.source_split_seconds), audio_dur))
             piece_dur = max(0.0, split - source_cursor)
+            remainder_after = max(0.0, audio_dur - split)
+            # Zu kurzer Rest → Split verwerfen, Pause ans Segmentende falten.
+            if remainder_after + 1e-9 < min_clip:
+                folded_trailing_pause += float(pause.pause_seconds)
+                continue
+            # Zu kurzes Vorderstück → Split verwerfen (an vorige Grenze mergen).
+            if piece_dur + 1e-9 < min_clip:
+                folded_trailing_pause += float(pause.pause_seconds)
+                continue
             audio_segments.append(
                 ResolvedAudioSegment(
                     segment_id=entry.segment_id,
@@ -397,16 +423,46 @@ def _build_resolved_audio_segments(
             source_cursor = split
 
         remainder = max(0.0, audio_dur - source_cursor)
+        pause_after = float(entry.pause_after_seconds) + folded_trailing_pause
+        if remainder + 1e-9 < min_clip and source_cursor > 1e-9:
+            # Rest an letzte Piece-Grenze mergen statt Waisenclip.
+            if audio_segments and audio_segments[-1].segment_id == entry.segment_id:
+                prev = audio_segments[-1]
+                prev.source_end_seconds = round(audio_dur, 6)
+                prev.timeline_end_seconds = round(
+                    prev.timeline_end_seconds + remainder, 6
+                )
+                prev.pause_after_seconds = round(
+                    float(prev.pause_after_seconds) + pause_after, 6
+                )
+                if prev.split_label == "tail" or not prev.split_label:
+                    prev.split_label = prev.split_label or "merged_tail"
+            else:
+                audio_segments.append(
+                    ResolvedAudioSegment(
+                        segment_id=entry.segment_id,
+                        audio_path=audio_path,
+                        timeline_start_seconds=round(timeline_cursor, 6),
+                        timeline_end_seconds=round(
+                            timeline_cursor + max(remainder, audio_dur), 6
+                        ),
+                        pause_after_seconds=round(pause_after, 6),
+                        source_start_seconds=0.0,
+                        source_end_seconds=round(audio_dur, 6),
+                    )
+                )
+            continue
+
         audio_segments.append(
             ResolvedAudioSegment(
                 segment_id=entry.segment_id,
                 audio_path=audio_path,
                 timeline_start_seconds=round(timeline_cursor, 6),
                 timeline_end_seconds=round(timeline_cursor + remainder, 6),
-                pause_after_seconds=entry.pause_after_seconds,
+                pause_after_seconds=round(pause_after, 6),
                 source_start_seconds=round(source_cursor, 6),
                 source_end_seconds=round(audio_dur, 6),
-                split_label="tail",
+                split_label="tail" if source_cursor > 1e-9 else "",
             )
         )
     return audio_segments
@@ -554,6 +610,13 @@ def _segment_to_chapter_map(locked) -> dict[str, str]:
     return mapping
 
 
+def _is_bridge_resolved_shot(shot: ResolvedShot) -> bool:
+    return (
+        str(shot.shot_id).startswith("bridge_")
+        or str(shot.editorial_function or "").strip().lower() == "chapter_transition"
+    )
+
+
 def _apply_chapter_envelopes(
     project: Project,
     *,
@@ -566,8 +629,16 @@ def _apply_chapter_envelopes(
     fps: float,
     repairs: list[str],
     errors: list[str],
+    narration_timeline: NarrationTimelineDocument | None = None,
 ) -> list[ResolvedChapterEnvelope]:
-    """Kapitelhüllen: Rohabdeckung prüfen, dann Vor-/Nachlauf am Opening/Closing-Shot."""
+    """Kapitelhüllen: Vor-/Nachlauf am Opening/Closing-INHALTS-Shot (nie Bridge).
+
+    E2E-3:
+    - ``chapter_video_end = chapter_audio_end + postroll`` am chapter_close
+    - Bridge nur Übergangspause: ``next_video_start - chapter_video_end``
+    - ``last_shot_id`` / ``postroll_hold_shot_id`` nie ``bridge_*``
+    - ``chapter_audio_end`` aus letztem realen Segment-Ende (kein Stub-Clip)
+    """
     chapters = _chapters_from_locked(locked)
     if not chapters:
         return []
@@ -587,20 +658,27 @@ def _apply_chapter_envelopes(
         shot.shot_id: (shot.timeline_start_seconds, shot.timeline_end_seconds)
         for shot in ordered
     }
+    timeline_by_seg = {
+        e.segment_id: e for e in (narration_timeline.entries if narration_timeline else [])
+    }
+    min_clip = _min_audio_clip_seconds(fps)
 
     narration_expected = bool(locked.segments)
     cursor = 0.0
     envelopes: list[ResolvedChapterEnvelope] = []
     frame = _frame_duration(fps)
+    placed_bridges: list[ResolvedShot] = []
 
-    for chapter_id, segment_ids in chapters:
+    for chapter_index, (chapter_id, segment_ids) in enumerate(chapters):
         seg_set = set(segment_ids)
         ch_audios = [a for a in audio_segments if a.segment_id in seg_set]
-        ch_shots = [
+        assigned = [
             shot
             for shot in ordered
             if shot_start_segment.get(shot.shot_id, "") in seg_set
         ]
+        ch_bridges = [s for s in assigned if _is_bridge_resolved_shot(s)]
+        ch_shots = [s for s in assigned if not _is_bridge_resolved_shot(s)]
 
         if narration_expected and not ch_audios:
             errors.append(
@@ -610,7 +688,7 @@ def _apply_chapter_envelopes(
             continue
         if not ch_shots:
             errors.append(
-                f"Kapitel {chapter_id}: kein visueller Shot für die Kapitelhülle."
+                f"Kapitel {chapter_id}: kein visueller Inhalts-Shot für die Kapitelhülle."
             )
             continue
 
@@ -621,9 +699,26 @@ def _apply_chapter_envelopes(
             if not shot.folder_name:
                 shot.folder_name = chapter_id
 
-        if ch_audios:
-            raw_audio_start = min(a.timeline_start_seconds for a in ch_audios)
-            raw_audio_end = max(a.timeline_end_seconds for a in ch_audios)
+        # chapter_audio aus realen Clips / Segment-Ende (keine Stub-Clips < min).
+        real_audios = [
+            a
+            for a in ch_audios
+            if (a.timeline_end_seconds - a.timeline_start_seconds) + 1e-9 >= min_clip
+        ]
+        if not real_audios:
+            real_audios = list(ch_audios)
+
+        # chapter_audio aus Narration-Segmentenden (defensiv gegen Stub-Clips).
+        last_seg = segment_ids[-1] if segment_ids else ""
+        first_seg = segment_ids[0] if segment_ids else ""
+        entry = timeline_by_seg.get(last_seg)
+        first_entry = timeline_by_seg.get(first_seg)
+        if first_entry is not None and entry is not None:
+            raw_audio_start = float(first_entry.start_seconds)
+            raw_audio_end = float(entry.end_seconds)
+        elif real_audios:
+            raw_audio_start = min(a.timeline_start_seconds for a in real_audios)
+            raw_audio_end = max(a.timeline_end_seconds for a in real_audios)
         else:
             raw_audio_start = min(s.timeline_start_seconds for s in ch_shots)
             raw_audio_end = max(s.timeline_end_seconds for s in ch_shots)
@@ -631,7 +726,6 @@ def _apply_chapter_envelopes(
         raw_first_shot_start = min(raw_shot_times[s.shot_id][0] for s in ch_shots)
         raw_last_shot_end = max(raw_shot_times[s.shot_id][1] for s in ch_shots)
 
-        # Rohabdeckung vor jeder Hüllen-Verlängerung / jedem Hold.
         if raw_first_shot_start > raw_audio_start + frame + 1e-9:
             errors.append(
                 f"Führende visuelle Lücke in Kapitel {chapter_id}: "
@@ -701,10 +795,11 @@ def _apply_chapter_envelopes(
         first = min(ch_shots, key=lambda s: (s.timeline_start_seconds, s.shot_id))
         last = max(ch_shots, key=lambda s: (s.timeline_end_seconds, s.shot_id))
 
-        # Vorlauf/Nachlauf am Opening-/Closing-Shot verlängern — kein zweiter
-        # benachbarter Hold-Clip mit demselben Bild (Reuse-Verletzung in Resolve).
+        preroll_hold_id = ""
+        postroll_hold_id = ""
         if preroll > 1e-9 and first.timeline_start_seconds > chapter_video_start + 1e-9:
             first.timeline_start_seconds = round(chapter_video_start, 6)
+            preroll_hold_id = first.shot_id
             try:
                 _reapply_hold_for_timeline_span(
                     project,
@@ -715,9 +810,12 @@ def _apply_chapter_envelopes(
                 )
             except TimelineResolveError as exc:
                 errors.append(str(exc))
+        elif preroll > 1e-9:
+            preroll_hold_id = first.shot_id
 
         if postroll > 1e-9 and last.timeline_end_seconds < chapter_video_end - 1e-9:
             last.timeline_end_seconds = round(chapter_video_end, 6)
+            postroll_hold_id = last.shot_id
             try:
                 _reapply_hold_for_timeline_span(
                     project,
@@ -728,6 +826,14 @@ def _apply_chapter_envelopes(
                 )
             except TimelineResolveError as exc:
                 errors.append(str(exc))
+        elif postroll > 1e-9:
+            postroll_hold_id = last.shot_id
+
+        if _is_bridge_resolved_shot(last) or str(last.shot_id).startswith("bridge_"):
+            errors.append(
+                f"Kapitel {chapter_id}: last_shot_id darf keine Bridge sein "
+                f"({last.shot_id})."
+            )
 
         envelopes.append(
             ResolvedChapterEnvelope(
@@ -741,18 +847,68 @@ def _apply_chapter_envelopes(
                 postroll_seconds=round(postroll, 6),
                 first_shot_id=first.shot_id,
                 last_shot_id=last.shot_id,
-                preroll_hold_shot_id="",
-                postroll_hold_shot_id="",
+                preroll_hold_shot_id=preroll_hold_id,
+                postroll_hold_shot_id=postroll_hold_id,
                 segment_ids=list(segment_ids),
             )
         )
-        cursor = chapter_video_end
+
+        # Bridge nur Übergangspause nach chapter_video_end.
+        bridge_dur = 0.0
+        if ch_bridges:
+            for bridge in sorted(
+                ch_bridges, key=lambda s: (raw_shot_times[s.shot_id][0], s.shot_id)
+            ):
+                raw_b0, raw_b1 = raw_shot_times[bridge.shot_id]
+                dur = max(0.0, float(raw_b1) - float(raw_b0))
+                bridge_dur += dur
+            bridge_start = chapter_video_end
+            for bridge in sorted(
+                ch_bridges, key=lambda s: (raw_shot_times[s.shot_id][0], s.shot_id)
+            ):
+                raw_b0, raw_b1 = raw_shot_times[bridge.shot_id]
+                dur = max(0.0, float(raw_b1) - float(raw_b0))
+                bridge.timeline_start_seconds = round(bridge_start, 6)
+                bridge.timeline_end_seconds = round(bridge_start + dur, 6)
+                bridge.chapter_id = ""
+                bridge.folder_name = bridge.folder_name or chapter_id
+                placed_bridges.append(bridge)
+                bridge_start = bridge.timeline_end_seconds
+        elif chapter_index < len(chapters) - 1 and entry is not None:
+            bridge_dur = max(0.0, float(entry.pause_after_seconds or 0.0))
+
+        cursor = _seconds_to_frame(chapter_video_end + bridge_dur, fps)
+
+    # Envelope-Validierung: preroll/postroll je Kapitel == Settings.
+    for env in envelopes:
+        if abs(env.preroll_seconds - float(preroll)) > 1e-3:
+            errors.append(
+                f"Kapitel {env.chapter_id}: preroll {env.preroll_seconds:.2f}s "
+                f"≠ Settings {preroll:.2f}s."
+            )
+        if abs(env.postroll_seconds - float(postroll)) > 1e-3:
+            errors.append(
+                f"Kapitel {env.chapter_id}: postroll {env.postroll_seconds:.2f}s "
+                f"≠ Settings {postroll:.2f}s."
+            )
+        if str(env.last_shot_id).startswith("bridge_"):
+            errors.append(
+                f"Kapitel {env.chapter_id}: last_shot_id ist Bridge "
+                f"({env.last_shot_id})."
+            )
+        if env.postroll_hold_shot_id and str(env.postroll_hold_shot_id).startswith(
+            "bridge_"
+        ):
+            errors.append(
+                f"Kapitel {env.chapter_id}: postroll_hold_shot_id ist Bridge "
+                f"({env.postroll_hold_shot_id})."
+            )
 
     if envelopes:
         repairs.append(
             f"Kapitelhüllen: {len(envelopes)} Kapitel mit Vorlauf {preroll:.2f}s "
             f"und Nachlauf {postroll:.2f}s pro Kapitel "
-            f"(am Opening-/Closing-Shot verlängert, kein separater Hold-Clip)."
+            f"(Nachlauf am Inhalts-Closing-Shot; Bridges nur Übergangspause)."
         )
     return envelopes
 
@@ -1062,6 +1218,7 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
     audio_segments = _build_resolved_audio_segments(
         timeline=timeline,
         timing_map=timing_map,
+        fps=fps,
     )
     segment_to_chapter = _segment_to_chapter_map(locked)
 
@@ -1182,6 +1339,7 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
         fps=fps,
         repairs=repairs,
         errors=errors,
+        narration_timeline=timeline,
     )
     ordered = sorted(ordered, key=lambda s: (s.timeline_start_seconds, s.shot_id))
     _apply_visual_continuity_rules(

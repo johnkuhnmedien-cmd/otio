@@ -754,6 +754,7 @@ def resolve_unified_timeline(
     audio_segments = _build_resolved_audio_segments(
         timeline=timeline,
         timing_map=timing_map,
+        fps=fps,
     )
     segment_to_chapter = _segment_to_chapter_map(locked)
     known_segments = {s.segment_id for s in locked.segments}
@@ -920,6 +921,7 @@ def resolve_unified_timeline(
         fps=fps,
         repairs=repairs,
         errors=errors,
+        narration_timeline=timeline,
     )
     # Platzhalter ohne Medien: Vor-/Nachlauf-Hold-Fehler sind soft bei open gaps.
     if allow_open_gaps:

@@ -73,12 +73,19 @@ def _build_intra_pauses(
     audio_duration_seconds: float,
     sentence_directives: list[PauseDirective],
     sentence_index: dict[str, SentenceTiming],
-) -> list[IntraPauseMarker]:
+) -> tuple[list[IntraPauseMarker], float]:
+    """Intra-Pausen + trailing Pause nach dem letzten Satz (kein Split).
+
+    Returns:
+        (markers, trailing_pause_seconds) — trailing wird als Segment-
+        ``pause_after`` behandelt (E2E-3: Pause nach letztem Satz ≠ Split).
+    """
     if not sentence_directives:
-        return []
+        return [], 0.0
     sentences = _sentences_for_segment(sentence_index, segment_id)
     by_id = {item.sentence_id: item for item in sentences}
     markers: list[IntraPauseMarker] = []
+    trailing_pause = 0.0
     seen: set[str] = set()
     for directive in sentence_directives:
         sentence_id = str(directive.after_sentence_id or "").strip()
@@ -101,6 +108,11 @@ def _build_intra_pauses(
         )
         if pause_seconds <= 0:
             continue
+        seen.add(sentence_id)
+        # E2E-3: Pause nach LETZTEM Satz → Gap nach Segmentende, kein Split.
+        if next_sentence is None:
+            trailing_pause = max(trailing_pause, float(pause_seconds))
+            continue
         split = mid_silence_split_seconds(
             sentence=sentence,
             next_sentence=next_sentence,
@@ -113,9 +125,8 @@ def _build_intra_pauses(
                 pause_seconds=round(pause_seconds, 6),
             )
         )
-        seen.add(sentence_id)
     markers.sort(key=lambda item: item.source_split_seconds)
-    return markers
+    return markers, round(trailing_pause, 6)
 
 
 def build_narration_timeline(
@@ -179,7 +190,7 @@ def build_narration_timeline(
                 f"{timing.script_version} != {script_version}"
             )
         audio_duration = float(timing.duration_seconds)
-        intra = _build_intra_pauses(
+        intra, trailing_pause = _build_intra_pauses(
             segment_id=timing.segment_id,
             audio_duration_seconds=audio_duration,
             sentence_directives=pauses_by_sentence_segment.get(timing.segment_id, []),
@@ -195,6 +206,8 @@ def build_narration_timeline(
                 directive.duration_class,
                 pause_function=directive.pause_function,
             )
+        # Trailing (letzter Satz) und Segment-Pause: nicht doppelt zählen.
+        pause_seconds = max(float(pause_seconds), float(trailing_pause))
         next_start = end + pause_seconds
         entries.append(
             NarrationTimelineEntry(

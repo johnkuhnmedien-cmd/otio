@@ -270,6 +270,28 @@ def validate_resolved_timeline_for_production(
                     f"Kapitel {chapter.chapter_id}: letzter Shot "
                     f"{last.shot_id} deckt Nachlauf nicht ab."
                 )
+            if str(chapter.last_shot_id or "").startswith("bridge_"):
+                errors.append(
+                    f"Kapitel {chapter.chapter_id}: last_shot_id ist Bridge "
+                    f"({chapter.last_shot_id}) — Nachlauf muss am Inhalts-Shot hängen."
+                )
+            if chapter.postroll_hold_shot_id and str(
+                chapter.postroll_hold_shot_id
+            ).startswith("bridge_"):
+                errors.append(
+                    f"Kapitel {chapter.chapter_id}: postroll_hold_shot_id ist Bridge "
+                    f"({chapter.postroll_hold_shot_id})."
+                )
+            if abs(chapter.preroll_seconds - preroll) > 1e-3:
+                errors.append(
+                    f"Kapitel {chapter.chapter_id}: preroll "
+                    f"{chapter.preroll_seconds:.2f}s ≠ Settings {preroll:.2f}s."
+                )
+            if abs(chapter.postroll_seconds - postroll) > 1e-3:
+                errors.append(
+                    f"Kapitel {chapter.chapter_id}: postroll "
+                    f"{chapter.postroll_seconds:.2f}s ≠ Settings {postroll:.2f}s."
+                )
     elif resolved.audio_segments and preroll > 0:
         non_zero = [
             a

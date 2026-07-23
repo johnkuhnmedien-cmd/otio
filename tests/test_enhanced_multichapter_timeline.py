@@ -510,8 +510,10 @@ def test_postroll_extends_closing_shot_not_separate_hold(tmp_path: Path) -> None
     project, _ = _build_three_chapter_project(tmp_path)
     resolved = resolve_final_timeline(project)
     for chapter in resolved.chapters:
-        assert not chapter.postroll_hold_shot_id
-        assert not chapter.preroll_hold_shot_id
+        # E2E-3: Hold-IDs zeigen auf Inhalts-Opening/Closing (nie Bridge).
+        assert chapter.postroll_hold_shot_id == chapter.last_shot_id
+        assert chapter.preroll_hold_shot_id == chapter.first_shot_id
+        assert not str(chapter.last_shot_id).startswith("bridge_")
         closing = next(s for s in resolved.shots if s.shot_id == chapter.last_shot_id)
         opening = next(s for s in resolved.shots if s.shot_id == chapter.first_shot_id)
         assert opening.timeline_start_seconds == pytest.approx(
