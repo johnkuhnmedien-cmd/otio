@@ -14,6 +14,7 @@ COVERAGE_SUBDIR = "coverage"
 STOCK_SUBDIR = "stock"
 CONFIG_SUBDIR = "config"
 EXPORTS_SUBDIR = "exports"
+PLACEHOLDERS_SUBDIR = "placeholders"
 STOCK_PROVIDERS_CONFIG_FILENAME = "stock_providers.json"
 CUT_PLAN_OPTIONS_FILENAME = "cut_plan_options.json"
 
@@ -102,6 +103,13 @@ def cut_plan_options_path(project: Project) -> Path:
 
 def exports_dir(project: Project) -> Path:
     return project.language_work_dir_path / EXPORTS_SUBDIR
+
+
+def placeholders_dir(project: Project) -> Path:
+    """``_otio_enhanced/placeholders`` — Gap-/Bridge-Slates für Preview-Export."""
+    path = assert_enhanced_work_root(project) / PLACEHOLDERS_SUBDIR
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def script_locked_path(project: Project) -> Path:

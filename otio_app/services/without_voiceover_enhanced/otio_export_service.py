@@ -318,6 +318,12 @@ def validate_resolved_timeline_for_production(
             )
 
     for shot in resolved.shots:
+        if bool(getattr(shot, "is_placeholder", False)) or bool(shot.open_gap):
+            errors.append(
+                f"{shot.shot_id}: Placeholder/offener Gap "
+                f"({shot.coverage_gap_id or '—'}) — Produktions-Export gesperrt."
+            )
+            continue
         try:
             path, avail_start, source_start, source_end, _rate = (
                 _ensure_shot_media_for_export(project, shot, fps=fps)
@@ -333,7 +339,7 @@ def validate_resolved_timeline_for_production(
             )
         # Hold-Videos decken Timeline ab; sonst Source <= Timeline ok.
         if (
-            shot.hold_mode != "freeze_video"
+            shot.hold_mode not in {"freeze_video", "placeholder_slate"}
             and "hold_cache" not in str(path)
             and timeline_dur > source_dur + 1e-3
         ):
@@ -475,6 +481,8 @@ def export_otio_from_resolved_timeline(
             clip.metadata["coverage_gap_id"] = shot.coverage_gap_id
         if shot.open_gap:
             clip.metadata["open_gap"] = True
+        if bool(getattr(shot, "is_placeholder", False)) or shot.open_gap:
+            clip.metadata["placeholder"] = True
         video_track.append(clip)
         cursor = shot.timeline_end_seconds
 
@@ -658,6 +666,8 @@ def export_portable_otio_package(
             clip.metadata["coverage_gap_id"] = shot.coverage_gap_id
         if shot.open_gap:
             clip.metadata["open_gap"] = True
+        if bool(getattr(shot, "is_placeholder", False)) or shot.open_gap:
+            clip.metadata["placeholder"] = True
         video_track.append(clip)
         pending_video.append((clip, media_path, shot.asset_id))
         cursor = shot.timeline_end_seconds

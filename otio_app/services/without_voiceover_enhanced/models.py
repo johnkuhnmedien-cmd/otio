@@ -622,6 +622,8 @@ class ResolvedShot(BaseModel):
     cut_alignment: str = ""
     coverage_gap_id: Optional[str] = None
     open_gap: bool = False
+    # Fix 2 / Entscheidung 11: ffmpeg-Slate statt leerem Pfad; Produktion sperrt darüber.
+    is_placeholder: bool = False
 
 
 class ResolvedAudioSegment(BaseModel):

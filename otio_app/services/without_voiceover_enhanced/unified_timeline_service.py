@@ -114,10 +114,11 @@ class TimedSlot:
     narrative_function: str
     source_range_intent: str
     visual_intent: str
-    start_sentence_id: str
-    end_sentence_id: str
-    start_segment_id: str
-    end_segment_id: str
+    needed_visual: str = ""
+    start_sentence_id: str = ""
+    end_sentence_id: str = ""
+    start_segment_id: str = ""
+    end_segment_id: str = ""
 
     @property
     def duration_seconds(self) -> float:
@@ -477,6 +478,7 @@ def resolve_timed_slots(
                 source_range_intent=slot.source_range_intent
                 or "representative_middle_section",
                 visual_intent=slot.visual_intent or "",
+                needed_visual=slot.needed_visual or "",
                 start_sentence_id=start_sid,
                 end_sentence_id=end_sid,
                 start_segment_id=segment_id_from_sentence_id(start_sid),
@@ -546,24 +548,68 @@ def build_narration_timeline_from_unified(
     )
 
 
-def _placeholder_resolved_shot(timed: TimedSlot) -> ResolvedShot:
+def _placeholder_resolved_shot(
+    project: Project,
+    timed: TimedSlot,
+    *,
+    fps: float,
+    asset_id: str | None = None,
+    coverage_gap_id: str | None = None,
+    asset_fit: str | None = None,
+    asset_fit_reason: str | None = None,
+) -> ResolvedShot:
+    """Open-Gap-/Bridge-Shot mit ffmpeg-Slate (Preview); Produktion sperrt via Flag."""
+    from otio_app.services.without_voiceover_enhanced.media_hold import (
+        MediaHoldError,
+        ensure_gap_placeholder_slate,
+    )
+
     duration = max(TECH_MIN_SHOT_SECONDS, timed.duration_seconds)
+    gap_id = (
+        coverage_gap_id
+        or timed.coverage_gap_id
+        or f"gap_{timed.slot_id}"
+    )
+    needed = (timed.needed_visual or timed.visual_intent or "").strip()
+    try:
+        slate = ensure_gap_placeholder_slate(
+            project,
+            shot_id=timed.slot_id,
+            gap_id=str(gap_id),
+            needed_visual=needed,
+            start_seconds=float(timed.start_seconds),
+            end_seconds=float(timed.end_seconds),
+            fps=float(fps),
+        )
+        media_path = str(slate)
+    except MediaHoldError as exc:
+        raise UnifiedTimelineError(
+            f"{timed.slot_id}: Placeholder-Slate fehlgeschlagen: {exc}"
+        ) from exc
+
     return ResolvedShot(
         shot_id=timed.slot_id,
-        asset_id="",
+        asset_id=str(asset_id or timed.asset_id or ""),
         timeline_start_seconds=timed.start_seconds,
         timeline_end_seconds=timed.end_seconds,
         source_start_seconds=0.0,
         source_end_seconds=round(duration, 6),
         editorial_function=timed.narrative_function,
-        resolved_media_path="",
-        resolved_media_kind="placeholder",
+        resolved_media_path=media_path,
+        resolved_media_kind="video",
+        resolved_media_duration_seconds=round(duration, 6),
         folder_name="",
-        asset_fit=timed.asset_fit,
-        asset_fit_reason=timed.asset_fit_reason,
+        hold_mode="placeholder_slate",
+        asset_fit=str(asset_fit if asset_fit is not None else timed.asset_fit),
+        asset_fit_reason=str(
+            asset_fit_reason
+            if asset_fit_reason is not None
+            else timed.asset_fit_reason
+        ),
         cut_alignment=timed.cut_alignment,
-        coverage_gap_id=timed.coverage_gap_id,
+        coverage_gap_id=str(gap_id),
         open_gap=True,
+        is_placeholder=True,
     )
 
 
@@ -681,10 +727,15 @@ def resolve_unified_timeline(
         )
         if start_chapter and end_chapter and start_chapter != end_chapter:
             if allow_open_gaps and is_bridge:
-                placeholder = _placeholder_resolved_shot(timed)
-                if not placeholder.coverage_gap_id:
-                    placeholder.coverage_gap_id = f"gap_{timed.slot_id}"
-                resolved_shots.append(placeholder)
+                resolved_shots.append(
+                    _placeholder_resolved_shot(
+                        project,
+                        timed,
+                        fps=fps,
+                        coverage_gap_id=timed.coverage_gap_id
+                        or f"gap_{timed.slot_id}",
+                    )
+                )
                 repairs.append(
                     f"{timed.slot_id}: Kapitelübergang "
                     f"({start_chapter} → {end_chapter}) — Platzhalter."
@@ -699,7 +750,9 @@ def resolve_unified_timeline(
 
         if timed.is_open_gap and not timed.asset_id:
             if allow_open_gaps:
-                resolved_shots.append(_placeholder_resolved_shot(timed))
+                resolved_shots.append(
+                    _placeholder_resolved_shot(project, timed, fps=fps)
+                )
                 repairs.append(
                     f"{timed.slot_id}: offener Gap ({timed.asset_fit}) — "
                     "Platzhalter bis Funnel/Merge."
@@ -715,10 +768,11 @@ def resolve_unified_timeline(
         entry, lookup_error = lookup_catalog_entry(catalog, asset_id)
         if entry is None:
             if allow_open_gaps and timed.asset_fit in {"weak", "none"}:
-                placeholder = _placeholder_resolved_shot(timed)
-                # weak behält die Asset-ID als Hinweis, Medienpfad leer.
-                placeholder.asset_id = asset_id
-                resolved_shots.append(placeholder)
+                resolved_shots.append(
+                    _placeholder_resolved_shot(
+                        project, timed, fps=fps, asset_id=asset_id
+                    )
+                )
                 repairs.append(
                     f"{timed.slot_id}: Asset {asset_id} nicht auflösbar — "
                     f"Platzhalter ({lookup_error})."
@@ -734,9 +788,11 @@ def resolve_unified_timeline(
                 f"{media_path}"
             )
             if allow_open_gaps and timed.asset_fit in {"weak", "none"}:
-                placeholder = _placeholder_resolved_shot(timed)
-                placeholder.asset_id = asset_id
-                resolved_shots.append(placeholder)
+                resolved_shots.append(
+                    _placeholder_resolved_shot(
+                        project, timed, fps=fps, asset_id=asset_id
+                    )
+                )
                 repairs.append(msg)
                 continue
             errors.append(msg)
@@ -765,21 +821,28 @@ def resolve_unified_timeline(
             if allow_open_gaps and (
                 timed.asset_fit in {"weak", "none"} or is_short
             ):
-                placeholder = _placeholder_resolved_shot(timed)
-                placeholder.asset_id = asset_id
-                if not placeholder.coverage_gap_id:
-                    placeholder.coverage_gap_id = f"gap_{timed.slot_id}"
                 if is_short:
-                    placeholder.asset_fit = "weak"
-                    placeholder.asset_fit_reason = (
-                        "Asset zu kurz für berechnete Narrationsdauer"
-                    )
                     _mark_slot_as_duration_gap(
                         plan,
                         timed.slot_id,
                         reason="Asset zu kurz für berechnete Narrationsdauer",
                     )
-                resolved_shots.append(placeholder)
+                resolved_shots.append(
+                    _placeholder_resolved_shot(
+                        project,
+                        timed,
+                        fps=fps,
+                        asset_id=asset_id,
+                        coverage_gap_id=timed.coverage_gap_id
+                        or f"gap_{timed.slot_id}",
+                        asset_fit="weak" if is_short else None,
+                        asset_fit_reason=(
+                            "Asset zu kurz für berechnete Narrationsdauer"
+                            if is_short
+                            else None
+                        ),
+                    )
+                )
                 repairs.append(
                     f"{timed.slot_id}: als Gap markiert — {msg}"
                 )
