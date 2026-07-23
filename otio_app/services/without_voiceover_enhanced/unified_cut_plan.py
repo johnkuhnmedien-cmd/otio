@@ -1,19 +1,30 @@
-"""Unified Cut Plan — Kompat-Ableitungen für Funnel/UI (Phase 1)."""
+"""Unified Cut Plan — Parse + Kompat-Ableitungen (Phase 1–2)."""
 
 from __future__ import annotations
 
+from typing import Any
+
+from otio_app.services.gemini_client import _extract_json
 from otio_app.services.without_voiceover_enhanced.models import (
     BOUNDARY_POSITIONS,
+    CUT_ALIGNMENTS,
     GAP_FIT_VALUES,
     CoverageGap,
     CoverageGapsDocument,
     CutBoundary,
+    CutSlot,
     EditorialAnchor,
     NarrationAnchor,
+    PauseDirective,
     RoughCutPlanDocument,
     RoughShot,
     UnifiedCutPlanDocument,
 )
+
+
+class UnifiedCutPlanError(ValueError):
+    """Ungültige Unified-Cut-Plan-Antwort."""
+
 
 _POSITION_FRACTION = {
     "start": 0.0,
@@ -83,6 +94,196 @@ def _covered_sentence_ids(
         if text and text not in ordered:
             ordered.append(text)
     return ordered
+
+
+def _nullish(value: Any) -> bool:
+    return value in (None, "", "null")
+
+
+def _optional_float(value: Any) -> float | None:
+    if _nullish(value):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _with_folder_prefix(raw_id: str, folder_slug: str, kind: str, index: int) -> str:
+    text = (raw_id or "").strip() or f"{kind}_{index:03d}"
+    slug = (folder_slug or "").strip()
+    if not slug:
+        return text
+    prefix = f"{slug}_"
+    if text.startswith(prefix):
+        return text
+    if text.startswith(slug):
+        return text
+    return f"{prefix}{text}"
+
+
+def _parse_boundary(item: dict[str, Any], *, index: int) -> CutBoundary:
+    cut_id = str(item.get("cut_id") or f"cut_{index:03d}")
+    sentence_id = str(item.get("sentence_id") or "").strip()
+    if not sentence_id:
+        raise UnifiedCutPlanError(f"{cut_id}: sentence_id fehlt.")
+    position_raw = item.get("position")
+    position = None if _nullish(position_raw) else str(position_raw).strip().lower()
+    if position is not None and position not in BOUNDARY_POSITIONS:
+        raise UnifiedCutPlanError(
+            f"{cut_id}: ungültige position {position_raw!r}."
+        )
+    offset = _optional_float(item.get("offset_seconds"))
+    alignment = str(item.get("alignment") or "sentence_boundary").strip().lower()
+    if alignment not in CUT_ALIGNMENTS:
+        alignment = "sentence_boundary"
+    try:
+        return CutBoundary(
+            cut_id=cut_id,
+            sentence_id=sentence_id,
+            position=position,  # type: ignore[arg-type]
+            offset_seconds=offset,
+            alignment=alignment,  # type: ignore[arg-type]
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise UnifiedCutPlanError(f"{cut_id}: {exc}") from exc
+
+
+def _parse_slot(item: dict[str, Any], *, index: int) -> CutSlot:
+    slot_id = str(item.get("slot_id") or f"slot_{index:03d}")
+    local_raw = item.get("local_asset_id", item.get("asset_id"))
+    local_asset_id = None if _nullish(local_raw) else str(local_raw)
+    fit = str(item.get("asset_fit") or ("none" if local_asset_id is None else "acceptable"))
+    fit = fit.strip().lower()
+    gap_raw = item.get("coverage_gap_id")
+    coverage_gap_id = None if _nullish(gap_raw) else str(gap_raw)
+    concepts = item.get("search_concepts") or []
+    if not isinstance(concepts, list):
+        concepts = [str(concepts)]
+    must_include = item.get("must_include") or []
+    must_avoid = item.get("must_avoid") or []
+    covered = item.get("covered_sentence_ids") or []
+    try:
+        return CutSlot(
+            slot_id=slot_id,
+            local_asset_id=local_asset_id,
+            asset_fit=fit,  # type: ignore[arg-type]
+            asset_fit_reason=str(
+                item.get("asset_fit_reason") or item.get("editorial_reason") or ""
+            ),
+            visual_intent=str(item.get("visual_intent") or ""),
+            narrative_function=str(
+                item.get("narrative_function")
+                or item.get("editorial_function")
+                or "orientation"
+            ),
+            coverage_gap_id=coverage_gap_id,
+            source_range_intent=str(
+                item.get("source_range_intent") or "representative_middle_section"
+            ),
+            needed_visual=str(item.get("needed_visual") or ""),
+            search_concepts=[str(c) for c in concepts if not _nullish(c)],
+            must_include=[str(c) for c in must_include if not _nullish(c)],
+            must_avoid=[str(c) for c in must_avoid if not _nullish(c)],
+            desired_motion=str(item.get("desired_motion") or ""),
+            desired_framing=str(item.get("desired_framing") or ""),
+            preferred_media_type=str(item.get("preferred_media_type") or "video"),
+            fact_check_required=bool(item.get("fact_check_required") or False),
+            covered_sentence_ids=[str(c) for c in covered if not _nullish(c)],
+            target_duration_seconds=_optional_float(item.get("target_duration_seconds")),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise UnifiedCutPlanError(f"{slot_id}: {exc}") from exc
+
+
+def parse_unified_cut_response(
+    raw: str | dict[str, Any],
+    script_version: str,
+    *,
+    folder_slug: str = "",
+) -> UnifiedCutPlanDocument:
+    """Parst LLM-JSON → UnifiedCutPlanDocument (inkl. optionaler ID-Prefix)."""
+    payload = _extract_json(raw) if isinstance(raw, str) else raw
+    if not isinstance(payload, dict):
+        raise UnifiedCutPlanError("Unified Cut Plan ist kein JSON-Objekt.")
+
+    directives: list[PauseDirective] = []
+    for item in payload.get("pause_directives") or []:
+        if not isinstance(item, dict):
+            continue
+        after_segment = str(item.get("after_segment_id") or "")
+        after_sentence_raw = item.get("after_sentence_id")
+        after_sentence = (
+            None if _nullish(after_sentence_raw) else str(after_sentence_raw)
+        )
+        if not after_segment and not after_sentence:
+            continue
+        directives.append(
+            PauseDirective(
+                after_segment_id=after_segment,
+                after_sentence_id=after_sentence,
+                pause_function=str(item.get("pause_function") or "breath"),
+                duration_class=str(item.get("duration_class") or "medium"),
+                visual_behavior=str(
+                    item.get("visual_behavior") or "editorial_choice"
+                ),
+                editorial_reason=str(item.get("editorial_reason") or ""),
+            )
+        )
+
+    boundaries_raw = payload.get("boundaries") or []
+    slots_raw = payload.get("slots") or []
+    if not isinstance(boundaries_raw, list) or not isinstance(slots_raw, list):
+        raise UnifiedCutPlanError("boundaries/slots müssen Arrays sein.")
+
+    boundaries = [
+        _parse_boundary(item, index=i)
+        for i, item in enumerate(boundaries_raw, start=0)
+        if isinstance(item, dict)
+    ]
+    slots = [
+        _parse_slot(item, index=i)
+        for i, item in enumerate(slots_raw, start=1)
+        if isinstance(item, dict)
+    ]
+
+    if folder_slug:
+        for index, boundary in enumerate(boundaries):
+            boundary.cut_id = _with_folder_prefix(
+                boundary.cut_id, folder_slug, "cut", index
+            )
+        for index, slot in enumerate(slots, start=1):
+            slot.slot_id = _with_folder_prefix(
+                slot.slot_id, folder_slug, "slot", index
+            )
+            if slot.coverage_gap_id:
+                slot.coverage_gap_id = _with_folder_prefix(
+                    slot.coverage_gap_id, folder_slug, "gap", index
+                )
+
+    # Gap-IDs für weak/none nachziehen, falls Modell sie wegließ.
+    for slot in slots:
+        fit = str(slot.asset_fit or "none")
+        if fit in GAP_FIT_VALUES and not slot.coverage_gap_id:
+            slot.coverage_gap_id = _default_gap_id(slot.slot_id)
+        if fit in {"strong", "acceptable"}:
+            slot.coverage_gap_id = None
+        if fit == "none":
+            slot.local_asset_id = None
+
+    try:
+        return UnifiedCutPlanDocument(
+            script_version=script_version,
+            pause_directives=directives,
+            boundaries=boundaries,
+            slots=slots,
+            voiceover_preroll_sec=_optional_float(payload.get("voiceover_preroll_sec")),
+            voiceover_postroll_sec=_optional_float(
+                payload.get("voiceover_postroll_sec")
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise UnifiedCutPlanError(str(exc)) from exc
 
 
 def unified_to_rough(

@@ -21,15 +21,19 @@ CUT RHYTHM TARGETS (BINDING STYLE TARGETS — aim for this distribution):
 
 - Shot length: typically 10–17 seconds of narration time (median around 13.5s).
   Prefer this band unless a deliberate hold or micro-cut is editorially justified.
-- Cut placement mix (self-classify each shot via start_cut_alignment):
+- Cut placement mix (self-classify each boundary via alignment):
   - ~65% mid_sentence (cut during a spoken sentence, not at its edge)
   - ~25% sentence_boundary (cut at a sentence start/end)
   - ~10% in_pause (cut during an explicit pause)
-- Intra-sentence / between-sentence pauses are usually short (0.3–0.8s class).
-  Occasional longer pauses (1.5–2.5s class) are allowed for emphasis/reveal.
-- Chapter endings: prefer a longer music-only / breath pause (3–8s class) when
-  using pause_function chapter_transition after the last segment.
-- Do NOT invent sentence boundaries that are not in SENTENCE TIMINGS.
+- Pause style: prefer more frequent pulled pauses — roughly every 4th–6th
+  sentence boundary when editorially justified (esp. paragraph ends / reveals).
+  duration_class mapping (Python applies seconds later):
+  - short: keep original silence (~0.3–0.8s)
+  - medium: ~2–3s pulled pause
+  - long: ~3–5s pulled pause
+  - chapter_transition: ~3–8s after the chapter's last segment
+- Shots often continue across pauses (visual_behavior hold_current_shot /
+  cut_at_pause_*). Do not invent sentence boundaries missing from SENTENCE TIMINGS.
 """
 
 
@@ -597,6 +601,234 @@ SEGMENT TIMINGS:
 {segment_timings_json}
 {sentence_block}
 LOCAL ASSETS:
+{local_assets_json}
+
+STYLE PROFILE:
+{style_profile_text}
+
+DRAMATURGY:
+{dramaturgy_text}
+"""
+
+
+def build_unified_cut_prompt(
+    *,
+    locked_script_json: str,
+    segment_timings_json: str,
+    local_assets_json: str,
+    style_profile_text: str,
+    dramaturgy_text: str,
+    folder_name: str = "",
+    folder_slug: str = "",
+    previous_folder_name: str | None = None,
+    next_folder_name: str | None = None,
+    include_middle_frames: bool = False,
+    shot_constraints_text: str = "",
+    sentence_timings_json: str = "",
+    cut_rhythm_targets_text: str = "",
+    used_in_ledger_text: str = "",
+) -> str:
+    """Ein LLM-Lauf: Grenzen-Kette + Slots (+ Pausen + Gap-Specs)."""
+    chapter_scope = ""
+    if folder_name:
+        slug = folder_slug or folder_name
+        prev = previous_folder_name or "(none — this is the first chapter)"
+        nxt = next_folder_name or "(none — this is the last chapter)"
+        chapter_scope = f"""
+CHAPTER SCOPE (CRITICAL):
+
+- Plan ONLY the chapter "{folder_name}" (id prefix: {slug}_).
+- Inputs below contain only this chapter.
+- Use only segment_ids / sentence_ids from this chapter.
+- Prefix every cut_id, slot_id and coverage_gap_id with "{slug}_"
+  (e.g. {slug}_cut_000, {slug}_slot_001, {slug}_gap_001).
+- Do not invent material for previous or next chapters.
+- Previous chapter: {prev}
+- Next chapter: {nxt}
+- If a next chapter exists, prefer pause_function "chapter_transition" after
+  this chapter's last VO sentence when editorially justified.
+"""
+
+    vision_rules = ""
+    if include_middle_frames:
+        vision_rules = """
+MIDDLE-FRAME VISION (OPTIONAL INPUT):
+
+- After the text prompt you may receive JPEG stills labeled
+  "IMAGE for local_asset_id=<id>".
+- Use images together with LOCAL ASSETS metadata to choose assets.
+- Consecutive slots should not look nearly identical unless justified.
+- Never invent an asset ID that is not listed in LOCAL ASSETS.
+"""
+
+    sentence_block = ""
+    if sentence_timings_json.strip():
+        sentence_block = f"""
+SENTENCE TIMINGS (authoritative, relative to each segment's audio):
+{sentence_timings_json}
+"""
+
+    rhythm_block = ""
+    if cut_rhythm_targets_text.strip():
+        rhythm_block = f"""
+{cut_rhythm_targets_text.strip()}
+"""
+
+    ledger_block = ""
+    if used_in_ledger_text.strip():
+        ledger_block = f"""
+USED-IN LEDGER (filmwide so far — respect max usage / reuse distance):
+{used_in_ledger_text.strip()}
+"""
+
+    return f"""\
+You are the UNIFIED cut planner for a documentary pipeline (single LLM pass).
+
+Your task is to create ONE complete chapter plan:
+
+1. editorial pause decisions,
+2. a continuous cut-boundary chain across the VO (voice-over) time carpet,
+3. one slot between every consecutive pair of boundaries,
+4. honest local asset_fit ratings; for weak/none include inline gap specs.
+
+FORMAT PRINCIPLE (CRITICAL):
+
+- Output N slots and exactly N+1 boundaries.
+- Boundary i is the end of slot i and the start of slot i+1.
+- Gaps/overlaps between slots are impossible by format — do not emit per-shot
+  start/end ranges that can drift apart.
+- Boundaries cover ONLY the VO window:
+  first boundary = VO start (first sentence start),
+  last boundary = VO end (last sentence end).
+- Vorlauf/Nachlauf are applied later by Python on the first/last slot —
+  do NOT invent sentence anchors before s001 or after the last sentence.
+{chapter_scope}{vision_rules}{rhythm_block}{ledger_block}
+NON-NEGOTIABLE EDITORIAL RULES:
+
+- A sentence is not a slot.
+- A sentence is not an asset.
+- Prefer meaningful editorial spans over one-sentence-one-asset grids.
+- Do not rewrite the locked narration.
+
+TIMING RULES:
+
+- Use SEGMENT TIMINGS + SENTENCE TIMINGS only to judge pacing.
+- Do NOT output absolute timeline seconds, timecodes, or frames.
+- Boundaries use sentence_id + position (start|early|middle|late|end)
+  and/or a small sentence-relative offset_seconds.
+- When both are present, offset_seconds wins.
+- Keep mid_sentence cuts ≥ ~0.4s from sentence edges unless alignment is
+  sentence_boundary.
+{shot_constraints_text}
+BOUNDARY RULES:
+
+- Every boundary MUST set alignment to exactly one of:
+  mid_sentence | sentence_boundary | in_pause
+- Boundaries must be chronologically non-decreasing on the VO carpet.
+- First boundary: first chapter sentence at position start (or offset 0).
+- Last boundary: last chapter sentence at position end (or end offset).
+
+SLOT / ASSET RULES:
+
+- Every slot MUST get the best available local_asset_id OR null.
+- asset_fit must be exactly one of: strong | acceptable | weak | none
+- strong/acceptable: coverage_gap_id null; no gap spec required.
+- weak: keep best local asset AND set coverage_gap_id + inline gap fields
+  (upgrade gap).
+- none: local_asset_id null AND coverage_gap_id + inline gap fields
+  (required gap).
+- Prefer assets whose usable length (duration_seconds - usable_in_s) covers
+  the intended span. Never assume freeze/tpad video-hold padding.
+- Opening slot (first) and closing slot (last): different assets from their
+  immediate neighbor; max usage + reuse distance apply with no exemption.
+- narrative_function for first/last may be chapter_open / chapter_close.
+
+PAUSE RULES:
+
+Allowed pause_function:
+breath | emphasis | anticipation | reveal |
+chapter_transition | reflection | no_pause
+
+Allowed duration_class: short | medium | long
+
+Allowed visual_behavior:
+hold_current_shot | next_shot_may_start_during_pause |
+cut_at_pause_start | cut_at_pause_end | editorial_choice
+
+- Prefer after_sentence_id for pauses inside a segment.
+- Do not output pause durations in seconds.
+
+RETURN STRICT JSON ONLY. No Markdown. No comments. No trailing commas.
+
+OUTPUT SCHEMA:
+
+{{
+  "voiceover_preroll_sec": null,
+  "voiceover_postroll_sec": null,
+  "pause_directives": [
+    {{
+      "after_segment_id": "segment_001",
+      "after_sentence_id": "segment_001__s004_or_null",
+      "pause_function": "breath|emphasis|anticipation|reveal|chapter_transition|reflection|no_pause",
+      "duration_class": "short|medium|long",
+      "visual_behavior": "hold_current_shot|next_shot_may_start_during_pause|cut_at_pause_start|cut_at_pause_end|editorial_choice",
+      "editorial_reason": "..."
+    }}
+  ],
+  "boundaries": [
+    {{
+      "cut_id": "cut_000",
+      "sentence_id": "segment_001__s001",
+      "position": "start|early|middle|late|end",
+      "offset_seconds": null,
+      "alignment": "mid_sentence|sentence_boundary|in_pause"
+    }}
+  ],
+  "slots": [
+    {{
+      "slot_id": "slot_001",
+      "local_asset_id": "existing_asset_id_or_null",
+      "asset_fit": "strong|acceptable|weak|none",
+      "asset_fit_reason": "...",
+      "visual_intent": "...",
+      "narrative_function": "chapter_open|orientation|context|evidence|atmosphere|transition|contrast|reveal|reflection|chapter_close",
+      "coverage_gap_id": "gap_001_or_null",
+      "source_range_intent": "representative_middle_section",
+      "needed_visual": "required when fit is weak or none",
+      "search_concepts": ["..."],
+      "must_include": ["..."],
+      "must_avoid": ["..."],
+      "desired_motion": "static|pan|tilt|tracking|drone|handheld|zoom|unknown",
+      "desired_framing": "close|medium|wide|aerial|pov",
+      "preferred_media_type": "video|photo|either",
+      "fact_check_required": false,
+      "covered_sentence_ids": ["segment_001__s001"]
+    }}
+  ]
+}}
+
+Include voiceover_preroll_sec / voiceover_postroll_sec only when SHOT/ASSET
+CONSTRAINTS ask the LLM to decide; otherwise null/omit.
+
+FINAL VALIDATION BEFORE RETURNING JSON:
+
+- len(slots) == len(boundaries) - 1
+- All cut_id / slot_id / coverage_gap_id unique where present
+- All sentence_ids exist in SENTENCE TIMINGS
+- All local_asset_id values exist in LOCAL ASSETS (or null)
+- Boundaries chronological; first=VO start; last=VO end
+- weak/none slots have coverage_gap_id + needed_visual + search_concepts
+- strong/acceptable slots have coverage_gap_id null
+- No absolute timeline seconds / frames
+- No video-hold assumptions
+
+LOCKED SCRIPT:
+{locked_script_json}
+
+SEGMENT TIMINGS:
+{segment_timings_json}
+{sentence_block}
+LOCAL ASSETS (slim; use duration_seconds / usable_in_s / motion / framing / people):
 {local_assets_json}
 
 STYLE PROFILE:
