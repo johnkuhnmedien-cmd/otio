@@ -9,8 +9,15 @@ from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
     AudioTimingError,
     load_segment_timings,
     synthesize_folder_script_audio,
+    synthesize_intro_script_audio,
     synthesize_locked_script_audio,
     validate_timings_against_script,
+)
+from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+    ENHANCED_INTRO_FOLDER_NAME,
+    confirmed_intro_text,
+    ensure_confirmed_intro_in_locked_script,
+    is_intro_folder_name,
 )
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
     chapter_narration_text,
@@ -45,9 +52,9 @@ def _format_tts_progress(
 def render_enhanced_audio_page() -> None:
     st.header("⑥ Audio / ElevenLabs (Enhanced)")
     st.caption(
-        "Nur gesperrte Skripte. Vertonung **pro Dramaturgie-Kapitel sequenziell** "
-        "(wie die Skripterzeugung) — jedes Segment ein eigener ElevenLabs-Call, "
-        "gruppiert nach Kapitel. Pro Segment werden ElevenLabs-Timestamps und "
+        "Nur gesperrte Skripte. Vertonung **pro Kapitel sequenziell** "
+        "(Intro zuerst, dann Dramaturgie-Kapitel) — jedes Segment ein eigener "
+        "ElevenLabs-Call. Pro Segment werden ElevenLabs-Timestamps und "
         "abgeleitete Satzzeiten unter `audio/alignments/` gespeichert."
     )
     project = get_enhanced_project()
@@ -76,7 +83,21 @@ def render_enhanced_audio_page() -> None:
         st.error("Kein gesperrtes Skript vorhanden — zuerst Script Lock in Schritt 4.")
         return
 
+    # Bestätigtes Intro aus Schritt ⑤ in Locked-Script spiegeln (falls vorhanden).
+    locked = ensure_confirmed_intro_in_locked_script(project) or locked
+
     st.info(f"Skriptversion: `{locked.script_version}`")
+    intro_text = confirmed_intro_text(project)
+    if intro_text:
+        st.success(
+            f"Bestätigtes Intro vorhanden → Kapitel „{ENHANCED_INTRO_FOLDER_NAME}“ "
+            "wird standardmäßig mit an ElevenLabs gesendet (zuerst)."
+        )
+    else:
+        st.caption(
+            "Kein bestätigter Intro-Hook (`intro_hook.confirmed.json`). "
+            "Optional in Schritt ⑤ bestätigen — sonst starten Kapitel ohne Intro."
+        )
 
     entries = list_enabled_dramaturgy_folders(project)
     folder_order = [entry.folder_name for entry in entries]
@@ -86,12 +107,23 @@ def render_enhanced_audio_page() -> None:
         item.segment_id: item for item in (timings.segments if timings else [])
     }
 
-    if st.button(
-        "Alle Kapitel sequenziell vertonen",
-        type="primary",
-        key="enh_audio_all",
-        disabled=not can_tts,
-    ):
+    col_all, col_intro = st.columns(2)
+    with col_all:
+        run_all = st.button(
+            "Alle Kapitel sequenziell vertonen",
+            type="primary",
+            key="enh_audio_all",
+            disabled=not can_tts,
+        )
+    with col_intro:
+        run_intro = st.button(
+            "Intro vertonen",
+            key="enh_audio_intro",
+            disabled=not can_tts or intro_text is None,
+            help="Nur das bestätigte Intro (Enhanced-Segment).",
+        )
+
+    if run_all:
         progress = st.empty()
 
         def _progress(
@@ -128,9 +160,44 @@ def render_enhanced_audio_page() -> None:
             progress.empty()
             st.error(str(exc))
 
+    if run_intro:
+        progress = st.empty()
+
+        def _intro_progress(
+            folder_name: str,
+            chapter_index: int,
+            chapter_total: int,
+            segment_index: int,
+            segment_total: int,
+        ) -> None:
+            progress.info(
+                _format_tts_progress(
+                    folder_name or ENHANCED_INTRO_FOLDER_NAME,
+                    chapter_index,
+                    chapter_total,
+                    segment_index,
+                    segment_total,
+                )
+            )
+
+        try:
+            with st.spinner("Intro wird an ElevenLabs gesendet…"):
+                synthesize_intro_script_audio(
+                    project,
+                    progress_callback=_intro_progress,
+                )
+            progress.empty()
+            st.success("Intro vertont.")
+            st.rerun()
+        except (AudioTimingError, ScriptLockError) as exc:
+            progress.empty()
+            st.error(str(exc))
+
     st.subheader("Kapitel")
     for folder_name, segments in groups:
         label = folder_name or "(ohne Kapitelzuordnung)"
+        if is_intro_folder_name(folder_name):
+            label = f"{ENHANCED_INTRO_FOLDER_NAME} (Hook)"
         narration = (
             chapter_narration_text(locked, folder_name)
             if folder_name
@@ -149,8 +216,13 @@ def render_enhanced_audio_page() -> None:
         ):
             st.write(narration[:500] + ("…" if len(narration) > 500 else ""))
             if folder_name:
+                button_label = (
+                    "Intro vertonen"
+                    if is_intro_folder_name(folder_name)
+                    else f"Kapitel „{folder_name}“ vertonen"
+                )
                 if st.button(
-                    f"Kapitel „{folder_name}“ vertonen",
+                    button_label,
                     key=f"enh_audio_folder_{project.id}_{folder_name}",
                     disabled=not can_tts,
                 ):
@@ -177,13 +249,19 @@ def render_enhanced_audio_page() -> None:
 
                     try:
                         with st.spinner(
-                            f"Kapitel „{folder_name}“ wird an ElevenLabs gesendet…"
+                            f"„{folder_name}“ wird an ElevenLabs gesendet…"
                         ):
-                            synthesize_folder_script_audio(
-                                project,
-                                folder_name,
-                                progress_callback=_folder_progress,
-                            )
+                            if is_intro_folder_name(folder_name):
+                                synthesize_intro_script_audio(
+                                    project,
+                                    progress_callback=_folder_progress,
+                                )
+                            else:
+                                synthesize_folder_script_audio(
+                                    project,
+                                    folder_name,
+                                    progress_callback=_folder_progress,
+                                )
                         progress.empty()
                         st.success(f"„{folder_name}“ vertont.")
                         st.rerun()
