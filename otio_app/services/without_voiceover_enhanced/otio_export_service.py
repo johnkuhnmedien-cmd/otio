@@ -6,6 +6,7 @@ from pathlib import Path
 
 import opentimelineio as otio
 
+from otio_app.analysis_models import TimelineItem
 from otio_app.models import Project
 from otio_app.services.media_utils import (
     is_image_media,
@@ -13,8 +14,14 @@ from otio_app.services.media_utils import (
     probe_duration_seconds,
     probe_media_timing,
 )
+from otio_app.services.opening_title_renderer import (
+    build_opening_title_item,
+    ensure_opening_titles_rendered,
+)
+from otio_app.services.otio_exporter import _build_v2_title_track
 from otio_app.services.still_image_export_style import ensure_styled_still_for_export
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    CutPlanOptions,
     load_cut_plan_options,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model
@@ -45,6 +52,9 @@ from otio_app.services.without_voiceover_enhanced.portable_export import (
 )
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_locked_script,
+)
+from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+    _is_intro_folder,
 )
 
 
@@ -430,6 +440,102 @@ def _collect_target_urls(timeline: otio.schema.Timeline) -> list[str]:
     return urls
 
 
+def build_enhanced_folder_title_items(
+    project: Project,
+    resolved: ResolvedTimelineDocument,
+    options: CutPlanOptions | None = None,
+) -> list[TimelineItem]:
+    """Opening-Title-Items pro Nicht-Intro-Kapitel (absolute Timeline-Position)."""
+    opts = options if options is not None else load_cut_plan_options(project)
+    if not opts.folder_title_enabled:
+        return []
+    chapters = list(resolved.chapters or [])
+    if not chapters:
+        return []
+
+    font_size = (
+        float(opts.folder_title_font_size)
+        if opts.folder_title_font_size and opts.folder_title_font_size > 0
+        else None
+    )
+    items: list[TimelineItem] = []
+    for chapter in chapters:
+        chapter_id = str(chapter.chapter_id or chapter.folder_name or "").strip()
+        folder_name = str(chapter.folder_name or chapter.chapter_id or "").strip()
+        if not chapter_id and not folder_name:
+            continue
+        if _is_intro_folder(chapter_id) or _is_intro_folder(folder_name):
+            continue
+        section_id = chapter_id or folder_name
+        item = build_opening_title_item(
+            folder_name=folder_name or section_id,
+            voice_file="",
+            section_id=section_id,
+            work_dir=project.language_work_dir_path,
+            project=project,
+            requested_font_family=str(opts.folder_title_font or "Phosphate"),
+            duration_sec=float(opts.folder_title_duration_sec),
+            font_size_px=font_size,
+        )
+        start = max(0.0, float(chapter.chapter_video_start))
+        duration = max(0.1, float(item.duration_sec))
+        items.append(
+            item.model_copy(
+                update={
+                    "timeline_in_sec": start,
+                    "timeline_out_sec": start + duration,
+                    "duration_sec": duration,
+                    "final_duration_sec": duration,
+                }
+            )
+        )
+    return items
+
+
+def _render_folder_title_items(
+    project: Project,
+    resolved: ResolvedTimelineDocument,
+    *,
+    fail_closed: bool,
+) -> tuple[list[TimelineItem], list[str]]:
+    """Baut und rendert Ordner-Titel; fail-closed wenn aktiviert und Render fehlt."""
+    options = load_cut_plan_options(project)
+    items = build_enhanced_folder_title_items(project, resolved, options)
+    if not items:
+        return [], []
+    rendered, notes = ensure_opening_titles_rendered(project, items)
+    titles = [item for item in rendered if item.type == "opening_title"]
+    ready: list[TimelineItem] = []
+    for item in titles:
+        media = str(item.rendered_media_path or item.resolved_media_path or "").strip()
+        if media and Path(media).is_file():
+            ready.append(item)
+            continue
+        message = (
+            f"Ordner-Titel für {item.folder_name or item.section_id}: "
+            "gerenderte Mediendatei fehlt."
+        )
+        if fail_closed:
+            raise EnhancedOtioExportError(message)
+        notes.append(message)
+    return ready, notes
+
+
+def _folder_title_media_paths(items: list[TimelineItem]) -> list[tuple[Path, str, str]]:
+    """Staging-Tupel (path, asset_id, kind) für portable Exports."""
+    out: list[tuple[Path, str, str]] = []
+    for item in items:
+        media = str(item.rendered_media_path or item.resolved_media_path or "").strip()
+        if not media:
+            continue
+        path = Path(media)
+        if not path.is_file():
+            continue
+        asset_id = f"title_{item.section_id or item.folder_name}"
+        out.append((path.resolve(), asset_id, "opening_title"))
+    return out
+
+
 def export_otio_from_resolved_timeline(
     project: Project,
     *,
@@ -589,8 +695,20 @@ def export_otio_from_resolved_timeline(
             )
             audio_cursor += segment.pause_after_seconds
 
+    title_items, title_notes = _render_folder_title_items(
+        project,
+        resolved,
+        fail_closed=not allow_errors,
+    )
+    title_track = _build_v2_title_track(title_items, rate=fps) if title_items else None
+
     timeline.tracks.append(video_track)
+    if title_track is not None:
+        timeline.tracks.append(title_track)
+        timeline.metadata["opening_title_count"] = len(title_items)
     timeline.tracks.append(audio_track)
+    if title_notes:
+        timeline.metadata["folder_title_notes"] = list(title_notes)
     if allow_errors:
         timeline.metadata["enhanced_export_mode"] = "test_gaps"
     else:
@@ -766,8 +884,42 @@ def export_portable_otio_package(
             )
             audio_cursor += segment.pause_after_seconds
 
+    title_items, title_notes = _render_folder_title_items(
+        project,
+        resolved,
+        fail_closed=True,
+    )
+    title_track = _build_v2_title_track(title_items, rate=fps) if title_items else None
+    pending_titles: list[tuple[otio.schema.Clip, Path, str]] = []
+    if title_track is not None:
+        for stage_path, asset_id, kind in _folder_title_media_paths(title_items):
+            stage_items.append((stage_path, asset_id, kind))
+        for child in title_track:
+            media = getattr(child, "media_reference", None)
+            if media is None:
+                continue
+            target = str(getattr(media, "target_url", "") or "").strip()
+            if not target:
+                continue
+            media_path = Path(target)
+            if not media_path.is_file():
+                raise EnhancedOtioExportError(
+                    f"Ordner-Titel-Medien fehlen für Staging: {media_path}"
+                )
+            asset_id = str(
+                (getattr(child, "metadata", None) or {}).get("timeline_item_id")
+                or media_path.stem
+            )
+            child.metadata["original_media_path"] = str(media_path.resolve())
+            pending_titles.append((child, media_path.resolve(), asset_id))
+
     timeline.tracks.append(video_track)
+    if title_track is not None:
+        timeline.tracks.append(title_track)
+        timeline.metadata["opening_title_count"] = len(title_items)
     timeline.tracks.append(audio_track)
+    if title_notes:
+        timeline.metadata["folder_title_notes"] = list(title_notes)
     timeline.metadata["enhanced_export_mode"] = "production_portable"
 
     try:
@@ -776,7 +928,7 @@ def export_portable_otio_package(
         raise EnhancedOtioExportError(str(exc)) from exc
 
     # Rewrite target_urls → relative media/<unique>
-    for clip, original, _asset_id in pending_video + pending_audio:
+    for clip, original, _asset_id in pending_video + pending_audio + pending_titles:
         try:
             entry = lookup_packaged_path(entries, original)
         except PortableExportError as exc:

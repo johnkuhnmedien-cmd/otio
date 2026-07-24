@@ -655,13 +655,24 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             "Ordner-Titel einblenden",
             value=bool(current.folder_title_enabled),
             key=f"enh_opt_folder_title_{project.id}",
-            help="Gespeichert für den OTIO-Export; Einblendung wird noch verdrahtet.",
+            help=(
+                "Pro Kapitel (ohne Intro) als transparente Overlay-Spur V2 im OTIO-Export. "
+                "Start am Kapitel-Video-Anfang. Nach Änderungen Settings speichern, "
+                "dann OTIO erneut exportieren."
+            ),
         )
         t1, t2, t3 = st.columns(3)
         with t1:
-            folder_title_font = st.text_input(
+            from otio_app.services.font_utils import FOLDER_TITLE_FONT_OPTIONS
+
+            font_options = list(FOLDER_TITLE_FONT_OPTIONS)
+            current_font = str(current.folder_title_font or font_options[0])
+            if current_font not in font_options:
+                font_options = [current_font, *font_options]
+            folder_title_font = st.selectbox(
                 "Titel-Font",
-                value=current.folder_title_font,
+                options=font_options,
+                index=font_options.index(current_font),
                 key=f"enh_opt_title_font_{project.id}",
                 disabled=not folder_title_enabled,
             )
