@@ -8,6 +8,7 @@ import pytest
 
 from otio_app.services.without_voiceover_enhanced.script_prompts import (
     DEFAULT_CUT_RHYTHM_TARGETS,
+    build_keyword_sync_unified_cut_prompt,
     build_unified_cut_prompt,
 )
 from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
@@ -60,6 +61,37 @@ def test_build_unified_cut_prompt_optional_blocks_omitted_when_empty() -> None:
     assert "SENTENCE TIMINGS (authoritative" not in prompt
     assert "USED-IN LEDGER" not in prompt
     assert "MIDDLE-FRAME VISION" not in prompt
+
+
+def test_build_keyword_sync_unified_cut_prompt_contract() -> None:
+    prompt = build_keyword_sync_unified_cut_prompt(
+        locked_script_json='{"segments":[]}',
+        segment_timings_json="[]",
+        local_assets_json="[]",
+        style_profile_text="style",
+        dramaturgy_text="drama",
+        folder_name="Yosemite",
+        folder_slug="Yosemite",
+        previous_folder_name="Intro",
+        next_folder_name="Caddo",
+        sentence_timings_json='[{"sentence_id":"Yosemite_segment_001__s001"}]',
+        used_in_ledger_text="asset_x\t1",
+    )
+    assert "KEYWORD-SYNC cut planner" in prompt
+    assert "KEYWORD / BUZZWORD SYNC" in prompt
+    assert "shot_min / shot_max are NOT used" in prompt
+    assert "waterfall" in prompt
+    assert "offset_seconds" in prompt
+    assert "mid_sentence" in prompt
+    assert "Plan ONLY the chapter \"Yosemite\"" in prompt
+    assert "Yosemite_cut_000" in prompt
+    assert "strong | acceptable | weak | none" in prompt
+    assert "USED-IN LEDGER" in prompt
+    assert "SENTENCE TIMINGS" in prompt
+    # Rhythmus-Modus-Ziele bewusst nicht enthalten.
+    assert "CUT RHYTHM TARGETS" not in prompt
+    assert "10–17 seconds" not in prompt and "10-17 seconds" not in prompt
+    assert "SHOT/ASSET CONSTRAINTS" not in prompt
 
 
 def _sample_payload(*, folder_prefix: str = "") -> dict:

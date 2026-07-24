@@ -851,6 +851,325 @@ DRAMATURGY:
 """
 
 
+def build_keyword_sync_unified_cut_prompt(
+    *,
+    locked_script_json: str,
+    segment_timings_json: str,
+    local_assets_json: str,
+    style_profile_text: str,
+    dramaturgy_text: str,
+    folder_name: str = "",
+    folder_slug: str = "",
+    previous_folder_name: str | None = None,
+    next_folder_name: str | None = None,
+    include_middle_frames: bool = False,
+    sentence_timings_json: str = "",
+    used_in_ledger_text: str = "",
+) -> str:
+    """Kapitel-Unified-Cut: Wort↔Bild-Sync (ohne shot_min/shot_max).
+
+    Separater Modus zum Rhythmus-Prompt: Buzzwords/konkrete Motive sollen
+    mit passendem Asset und möglichst exaktem Keyword-Onset geschnitten
+    werden — analog zur Intro KEYWORD SYNC-Logik, aber mit Kapitel-Inventar
+    und normalem asset_fit (strong|acceptable|weak|none).
+    """
+    chapter_scope = ""
+    if folder_name:
+        slug = folder_slug or folder_name
+        prev = previous_folder_name or "(none — this is the first chapter)"
+        nxt = next_folder_name or "(none — this is the last chapter)"
+        chapter_scope = f"""
+CHAPTER SCOPE (CRITICAL):
+
+- Plan ONLY the chapter "{folder_name}" (id prefix: {slug}_).
+- Inputs below contain only this chapter.
+- Use only segment_ids / sentence_ids from this chapter.
+- Prefix every cut_id, slot_id and coverage_gap_id with "{slug}_"
+  (e.g. {slug}_cut_000, {slug}_slot_001, {slug}_gap_001).
+- Do not invent material for previous or next chapters.
+- Previous chapter: {prev}
+- Next chapter: {nxt}
+- If a next chapter exists, prefer pause_function "chapter_transition" after
+  this chapter's last VO sentence when editorially justified.
+"""
+
+    vision_rules = ""
+    if include_middle_frames:
+        vision_rules = """
+MIDDLE-FRAME VISION (OPTIONAL INPUT):
+
+- After the text prompt you may receive JPEG stills labeled
+  "IMAGE for local_asset_id=<id>".
+- Use images together with LOCAL ASSETS metadata to choose assets.
+- Consecutive slots should not look nearly identical unless justified.
+- Never invent an asset ID that is not listed in LOCAL ASSETS.
+"""
+
+    sentence_block = ""
+    if sentence_timings_json.strip():
+        sentence_block = f"""
+SENTENCE TIMINGS (authoritative; from ElevenLabs character timestamps,
+aggregated to sentence start/end, relative to each segment's audio):
+{sentence_timings_json}
+"""
+
+    ledger_block = ""
+    if used_in_ledger_text.strip():
+        ledger_block = f"""
+USED-IN LEDGER (filmwide so far — respect max usage / reuse distance):
+{used_in_ledger_text.strip()}
+"""
+
+    slug = folder_slug or folder_name or "chapter"
+
+    return f"""\
+You are the KEYWORD-SYNC cut planner for a documentary pipeline (unified format).
+
+This is a SEPARATE mode from the rhythm/style unified cut:
+picture cuts follow spoken buzzwords and concrete visual nouns as closely
+as possible — like Intro keyword sync — instead of targeting long 10–17s
+rhythm shots.
+
+Your task is to create ONE complete chapter plan:
+
+1. editorial pause decisions,
+2. a continuous cut-boundary chain across the VO (voice-over) time carpet,
+3. one slot between every consecutive pair of boundaries,
+4. honest local asset_fit ratings; for weak/none include inline gap specs.
+
+MODE RULES (CRITICAL — differ from rhythm chapter cuts):
+
+- Cut-Plan shot_min / shot_max are NOT used in this mode (LLM and Python).
+  Short keyword cuts around ~1s are allowed and often desirable.
+- Do NOT pad shots just to reach a minimum length.
+- Do NOT avoid a precise keyword cut because the resulting shot would be short.
+- Other chapter settings (preroll/postroll, head-trim, reuse ledger, vision)
+  may still apply later in Python — only shot length min/max are disabled.
+- Prefer precise word↔picture matches over long atmospheric holds when the VO
+  names a concrete visual subject.
+{chapter_scope}{vision_rules}{ledger_block}
+KEYWORD / BUZZWORD SYNC (CRITICAL — do not show subjects early):
+
+- When the VO names a concrete visual subject — place, landmark, animal,
+  object, action, or list item (e.g. \"waterfall\", \"bridge\", \"eagle\",
+  \"Antelope Canyon\") — choose an asset that actually shows that subject
+  and start that picture at the spoken keyword onset.
+- Bad: show a waterfall while the VO is still on a previous topic / still
+  leading into the word \"waterfall\".
+- Good: cut to the waterfall asset exactly as \"waterfall\" (or the local
+  language equivalent in the locked script) begins.
+- Lists / enumerations: one short picture cut per list item, each starting
+  at that item's keyword onset.
+- Do NOT pre-roll the next keyword picture during filler / connective speech
+  before its keyword.
+- Between keyword moments, prefer the best matching local asset for the
+  current spoken content; do not invent absolute seconds.
+- After the LAST keyword cut in a span: that picture may continue through
+  remaining connective VO until the next keyword boundary or the true VO end.
+- Estimate keyword onset from SENTENCE TIMINGS + sentence text: place the
+  boundary with alignment \"mid_sentence\" and a sentence-relative
+  offset_seconds (seconds from that sentence's start_seconds). Prefer
+  offset_seconds over coarse position for keyword cuts.
+- Example (interior keyword cut — NOT the final boundary):
+  sentence text \"… a roaring waterfall behind the pines …\",
+  sentence start_seconds=3.0, \"waterfall\" begins ~1.2s into the sentence →
+  boundary at that sentence_id with offset_seconds=1.2, position=\"middle\",
+  alignment=\"mid_sentence\", and the following slot's asset shows a waterfall.
+
+FORMAT PRINCIPLE (CRITICAL):
+
+- Output N slots and exactly N+1 boundaries.
+- Boundary i is the end of slot i and the start of slot i+1.
+- Gaps/overlaps between slots are impossible by format — do not emit per-shot
+  start/end ranges that can drift apart.
+- Boundaries cover ONLY the VO window:
+  first boundary = VO start (first sentence start),
+  last boundary = VO end (last sentence end).
+- Vorlauf/Nachlauf are applied later by Python on the first/last slot —
+  do NOT invent sentence anchors before s001 or after the last sentence.
+- CRITICAL: preroll/postroll do NOT fill gaps inside the VO. Your boundaries
+  must already cover the full VO carpet (start→end).
+
+NON-NEGOTIABLE EDITORIAL RULES:
+
+- A sentence is not a slot.
+- A sentence is not an asset.
+- Prefer keyword-true spans over one-sentence-one-asset grids when a sentence
+  contains multiple concrete visual nouns.
+- Do not rewrite the locked narration.
+
+TIMING / BOUNDARY RULES:
+
+- Use SEGMENT TIMINGS + SENTENCE TIMINGS to place cuts. Sentence times are
+  precise (ElevenLabs-derived); word times are not listed — compute
+  offset_seconds inside the sentence from text proportion / spoken pacing.
+- Do NOT output absolute timeline seconds, timecodes, or frames.
+- TWO DIFFERENT FIELDS — do not mix them:
+  - position = ONLY start|early|middle|late|end (coarse place in the sentence)
+  - alignment = ONLY mid_sentence|sentence_boundary|in_pause (cut type)
+  - NEVER put mid_sentence / sentence_boundary / in_pause into position.
+- Boundaries use sentence_id + position and/or offset_seconds (seconds from
+  that sentence start). When both are present, offset_seconds wins.
+- For keyword cuts (interior boundaries): set offset_seconds explicitly AND
+  alignment=\"mid_sentence\". Example:
+  {{\"sentence_id\":\"…\",\"position\":\"middle\",\"offset_seconds\":1.2,
+  \"alignment\":\"mid_sentence\"}}
+- First boundary: first chapter sentence, position \"start\", offset_seconds 0
+  or null, alignment \"sentence_boundary\".
+- Last boundary: last chapter sentence, position \"end\", offset_seconds null
+  (or end-of-sentence), alignment \"sentence_boundary\". Never end the plan
+  on a mid_sentence keyword offset.
+- Keep mid_sentence cuts ≥ ~0.4s from sentence edges unless alignment is
+  sentence_boundary.
+- Boundaries must be chronologically non-decreasing on the VO carpet.
+
+SLOT / ASSET RULES:
+
+- Every slot MUST get the best available local_asset_id OR null.
+- For keyword slots: the asset MUST depict the spoken subject when a matching
+  local asset exists. If none matches, use asset_fit \"none\" (or \"weak\" with
+  best near-miss) and write a gap — do not pretend a wrong subject is strong.
+- asset_fit must be exactly one of: strong | acceptable | weak | none
+- strong/acceptable: coverage_gap_id null; no gap spec required.
+- weak: keep best local asset AND set coverage_gap_id + inline gap fields
+  (upgrade gap).
+- none: local_asset_id null AND coverage_gap_id + inline gap fields
+  (required gap).
+- Prefer assets whose usable length covers the intended span when possible,
+  but NEVER skip a correct keyword match only because the clip is short.
+  Never assume freeze/tpad video-hold padding.
+- Opening slot (first) and closing slot (last): different assets from their
+  immediate neighbor when both assigned; max usage + reuse distance apply.
+- narrative_function for first/last may be chapter_open / chapter_close.
+- The last slot must span from its start boundary through the full remaining
+  VO to the last boundary (VO end).
+
+PAUSE RULES:
+
+Allowed pause_function:
+breath | emphasis | anticipation | reveal |
+chapter_transition | reflection | no_pause
+
+Allowed duration_class: short | medium | long
+
+Allowed visual_behavior:
+hold_current_shot | next_shot_may_start_during_pause |
+cut_at_pause_start | cut_at_pause_end | editorial_choice
+
+- Prefer after_sentence_id for pauses inside a segment.
+- Do not output pause durations in seconds.
+
+RETURN STRICT JSON ONLY. No Markdown. No comments. No trailing commas.
+
+OUTPUT SCHEMA:
+
+{{
+  "voiceover_preroll_sec": null,
+  "voiceover_postroll_sec": null,
+  "pause_directives": [
+    {{
+      "after_segment_id": "segment_001",
+      "after_sentence_id": "segment_001__s004_or_null",
+      "pause_function": "breath|emphasis|anticipation|reveal|chapter_transition|reflection|no_pause",
+      "duration_class": "short|medium|long",
+      "visual_behavior": "hold_current_shot|next_shot_may_start_during_pause|cut_at_pause_start|cut_at_pause_end|editorial_choice",
+      "editorial_reason": "..."
+    }}
+  ],
+  "boundaries": [
+    {{
+      "cut_id": "{slug}_cut_000",
+      "sentence_id": "segment_001__s001",
+      "position": "start",
+      "offset_seconds": 0,
+      "alignment": "sentence_boundary"
+    }},
+    {{
+      "cut_id": "{slug}_cut_001",
+      "sentence_id": "segment_001__s002",
+      "position": "middle",
+      "offset_seconds": 1.2,
+      "alignment": "mid_sentence"
+    }},
+    {{
+      "cut_id": "{slug}_cut_00N",
+      "sentence_id": "segment_00N__s00N",
+      "position": "end",
+      "offset_seconds": null,
+      "alignment": "sentence_boundary"
+    }}
+  ],
+  "slots": [
+    {{
+      "slot_id": "{slug}_slot_001",
+      "local_asset_id": "existing_asset_id_or_null",
+      "asset_fit": "strong|acceptable|weak|none",
+      "asset_fit_reason": "Why this asset matches the spoken keyword/subject — or why not.",
+      "visual_intent": "...",
+      "narrative_function": "chapter_open|orientation|context|evidence|atmosphere|transition|contrast|reveal|reflection|chapter_close",
+      "coverage_gap_id": "{slug}_gap_001_or_null",
+      "source_range_intent": "representative_middle_section",
+      "needed_visual": "prose description of the missing visual (context only)",
+      "search_concepts": [
+        "2-4 English stock search phrases",
+        "each 2-5 words, no full sentences"
+      ],
+      "must_include": ["..."],
+      "must_avoid": ["..."],
+      "desired_motion": "static|pan|tilt|tracking|drone|handheld|zoom|unknown",
+      "desired_framing": "close|medium|wide|aerial|pov",
+      "preferred_media_type": "video|photo|either",
+      "fact_check_required": false,
+      "covered_sentence_ids": ["segment_001__s001"]
+    }}
+  ]
+}}
+
+Omit voiceover_preroll_sec / voiceover_postroll_sec (or set null) — Python
+applies chapter envelope settings later. Do not invent holds inside the VO.
+
+GAP / SEARCH CONCEPT RULES (CRITICAL):
+
+- When coverage_gap_id is set (weak or none), search_concepts is REQUIRED.
+- search_concepts = 2–4 stock-search phrases in ENGLISH.
+- Each phrase: 2–5 words, keywords only — never prose or full sentences.
+- Prefer phrases that name the missing spoken subject (e.g. \"waterfall mist\",
+  \"stone arch bridge\").
+- needed_visual stays free-form prose context; search_concepts are the queries.
+
+FINAL VALIDATION BEFORE RETURNING JSON:
+
+- len(slots) == len(boundaries) - 1
+- All cut_id / slot_id / coverage_gap_id unique where present
+- All sentence_ids exist in SENTENCE TIMINGS
+- All local_asset_id values exist in LOCAL ASSETS (or null)
+- Boundaries chronological; first=VO start; last=VO end
+- Last boundary is sentence end (not a keyword mid_sentence)
+- Keyword picture cuts use mid_sentence + explicit offset_seconds at onset
+- No keyword picture starts before its spoken keyword
+- weak/none slots have coverage_gap_id + needed_visual + search_concepts
+- strong/acceptable slots have coverage_gap_id null
+- No absolute timeline seconds / frames
+- No video-hold assumptions
+- No shot_min / shot_max padding
+
+LOCKED SCRIPT:
+{locked_script_json}
+
+SEGMENT TIMINGS:
+{segment_timings_json}
+{sentence_block}
+LOCAL ASSETS (slim; use description / duration_seconds / usable_in_s / motion / framing / people):
+{local_assets_json}
+
+STYLE PROFILE:
+{style_profile_text}
+
+DRAMATURGY:
+{dramaturgy_text}
+"""
+
+
 def build_intro_unified_cut_prompt(
     *,
     locked_script_json: str,
