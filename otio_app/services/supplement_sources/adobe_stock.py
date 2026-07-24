@@ -48,6 +48,7 @@ from otio_app.defaults import (
     RIGHTS_STATUS_NEEDS_LICENSE_REVIEW,
     SUPPLEMENT_SOURCE_ADOBE,
 )
+from otio_app.services.adobe_stock_oauth import get_adobe_access_token
 from otio_app.services.api_keys import get_api_key
 from otio_app.services.media_utils import probe_duration_seconds
 from otio_app.services.supplement_search import (
@@ -148,14 +149,14 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                 search_enabled=True,
                 acquire_enabled=False,
             )
-        if not get_api_key("ADOBE_STOCK_ACCESS_TOKEN"):
+        if not get_adobe_access_token():
             return ProviderReadiness(
                 provider=self.provider,
                 status=PROVIDER_STATUS_READY,
                 message=(
                     "Adobe Stock API-Key vorhanden — Suche ist aktiv. "
-                    "ADOBE_STOCK_ACCESS_TOKEN fehlt, Lizenzierung/Download ist daher "
-                    "noch nicht möglich."
+                    "Für Lizenzierung/Download bitte OAuth-Login (Adobe Stock Import / "
+                    "API-Schlüssel) oder manuelles ADOBE_STOCK_ACCESS_TOKEN."
                 ),
                 search_enabled=True,
                 acquire_enabled=False,
@@ -178,7 +179,7 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             "Accept": "application/json",
             "User-Agent": ADOBE_STOCK_REQUEST_USER_AGENT,
         }
-        access_token = get_api_key("ADOBE_STOCK_ACCESS_TOKEN")
+        access_token = get_adobe_access_token()
         if access_token:
             # Optional für die reine Suche — nur mit gültigem Token liefert
             # Adobe zusätzlich den Lizenzstatus (is_licensed) mit.
@@ -816,11 +817,11 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         api_key = get_api_key("ADOBE_STOCK_API_KEY")
         if not api_key:
             raise PermissionError("ADOBE_STOCK_API_KEY fehlt — Adobe-Stock-Download ist deaktiviert.")
-        access_token = get_api_key("ADOBE_STOCK_ACCESS_TOKEN")
+        access_token = get_adobe_access_token()
         if not access_token:
             raise PermissionError(
-                "ADOBE_STOCK_ACCESS_TOKEN fehlt — für Lizenzierung/Download ist ein Adobe-IMS-"
-                "Access-Token erforderlich (die reine Suche funktioniert auch ohne)."
+                "Kein Adobe Access-Token — bitte OAuth-Login nutzen oder "
+                "ADOBE_STOCK_ACCESS_TOKEN setzen (die reine Suche funktioniert auch ohne)."
             )
         if candidate.is_mock or not candidate.download_enabled:
             raise PermissionError("Mock-/Demo-Kandidaten dürfen nicht heruntergeladen werden.")

@@ -12,6 +12,7 @@ from otio_app.services.adobe_research_import import (
     parse_research_excel,
 )
 from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
+from otio_app.ui.adobe_oauth_panel import render_adobe_oauth_panel
 
 
 def render_adobe_research_import_page() -> None:
@@ -20,6 +21,9 @@ def render_adobe_research_import_page() -> None:
         "Vor der Projektanlage: Research-Template hochladen, Zielordner wählen, "
         "Kapitelordner anlegen und Assets als `{Kapitel}_Asset_01` lizenzieren/herunterladen."
     )
+
+    render_adobe_oauth_panel(key_prefix="adobe_import_oauth")
+    st.divider()
 
     readiness = AdobeStockAdapter().readiness()
     if readiness.acquire_enabled:

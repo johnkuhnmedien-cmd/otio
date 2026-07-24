@@ -22,6 +22,7 @@ from otio_app.defaults import (
     ADOBE_STOCK_MIN_DOWNLOAD_BYTES,
     ADOBE_STOCK_VIDEO_4K_MAX_BYTES,
 )
+from otio_app.services.adobe_stock_oauth import get_adobe_access_token
 from otio_app.services.api_keys import get_api_key
 from otio_app.services.supplement_sources.adobe_stock import (
     AdobeAssetTooLargeError,
@@ -290,7 +291,7 @@ def _infer_media_type(adapter: AdobeStockAdapter, asset: AdobeResearchAsset) -> 
         return asset.media_hint
     # Fallback: Content/Info mit Video_HD — wenn möglich → video, sonst image.
     api_key = get_api_key("ADOBE_STOCK_API_KEY") or ""
-    access_token = get_api_key("ADOBE_STOCK_ACCESS_TOKEN") or ""
+    access_token = get_adobe_access_token() or ""
     if not api_key or not access_token:
         return "video"
     from otio_app.defaults import ADOBE_STOCK_CONTENT_INFO_ENDPOINT
@@ -319,11 +320,14 @@ def _license_and_download_to_path(
 ) -> tuple[Path, str]:
     """Lizenziert eine Content-ID und schreibt die Datei nach destination."""
     api_key = get_api_key("ADOBE_STOCK_API_KEY")
-    access_token = get_api_key("ADOBE_STOCK_ACCESS_TOKEN")
+    access_token = get_adobe_access_token()
     if not api_key:
         raise PermissionError("ADOBE_STOCK_API_KEY fehlt.")
     if not access_token:
-        raise PermissionError("ADOBE_STOCK_ACCESS_TOKEN fehlt.")
+        raise PermissionError(
+            "Kein Adobe Access-Token — bitte OAuth-Login nutzen oder "
+            "ADOBE_STOCK_ACCESS_TOKEN setzen."
+        )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
 

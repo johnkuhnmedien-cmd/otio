@@ -123,8 +123,11 @@ def test_readiness_config_missing_without_key(monkeypatch: pytest.MonkeyPatch) -
 def test_readiness_ready_with_key_but_without_token_disables_acquire(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from otio_app.services import adobe_stock_oauth as oauth
+
     monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
     monkeypatch.delenv("ADOBE_STOCK_ACCESS_TOKEN", raising=False)
+    monkeypatch.setattr(oauth, "load_token_store", lambda: None)
     readiness = AdobeStockAdapter().readiness()
     assert readiness.status == PROVIDER_STATUS_READY
     assert readiness.search_enabled is True
@@ -699,9 +702,12 @@ def test_acquire_without_api_key_raises_permission_error(monkeypatch: pytest.Mon
 
 
 def test_acquire_without_access_token_raises_permission_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from otio_app.services import adobe_stock_oauth as oauth
+
     monkeypatch.setenv("ADOBE_STOCK_API_KEY", "test-key")
     monkeypatch.delenv("ADOBE_STOCK_ACCESS_TOKEN", raising=False)
-    with pytest.raises(PermissionError, match="ADOBE_STOCK_ACCESS_TOKEN"):
+    monkeypatch.setattr(oauth, "load_token_store", lambda: None)
+    with pytest.raises(PermissionError, match="Access-Token|OAuth"):
         AdobeStockAdapter().acquire(_photo_candidate(), Path("/tmp/does-not-matter"))
 
 

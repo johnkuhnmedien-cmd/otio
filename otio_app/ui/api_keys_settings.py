@@ -13,6 +13,7 @@ from otio_app.services.api_keys import (
     write_user_secrets,
 )
 from otio_app.services.gemini_client import is_gemini_configured
+from otio_app.ui.adobe_oauth_panel import render_adobe_oauth_panel
 
 
 def _session_draft_key(env_key: str) -> str:
@@ -97,3 +98,6 @@ def render_api_keys_settings() -> None:
             "Gemini-Key fehlt — Asset-Analysen und Gemini-Modelle im Schnittplan nicht verfügbar. "
             "OpenAI/Claude-Keys ermöglichen alternative Planungsmodelle im Tab **Vorschlag**."
         )
+
+    st.divider()
+    render_adobe_oauth_panel(key_prefix="adobe_api_keys_oauth")
