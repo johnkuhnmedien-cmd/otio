@@ -40,6 +40,8 @@ from otio_app.ui.without_voiceover_enhanced.folder_voiceovers_tab import (
 
 
 _CURRENT_PAGE_KEY = "_otio_current_page"
+# app.py „Projekt bearbeiten“ → nach st.navigation zum Page-Objekt springen
+PENDING_SWITCH_URL_PATH_KEY = "_otio_pending_switch_url_path"
 
 
 def _active_project_mode() -> ProjectMode:
@@ -329,6 +331,15 @@ def run_app_navigation(
         render_activity_panel()
 
     navigation = st.navigation(pages, position="sidebar")
+    pending_url = st.session_state.pop(PENDING_SWITCH_URL_PATH_KEY, None)
+    if pending_url:
+        target = str(pending_url).strip().strip("/")
+        for page in pages:
+            page_url = str(getattr(page, "url_path", "") or "").strip().strip("/")
+            if page_url == target:
+                # st.navigation: switch_page braucht das Page-Objekt, keinen String.
+                st.switch_page(page)
+                return
     navigation.run()
 
 

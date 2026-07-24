@@ -256,3 +256,32 @@ def test_run_app_navigation_dispatches_enhanced(monkeypatch: pytest.MonkeyPatch)
     assert "⑧ Final Output" in titles
     assert titles.index("⑦ Cut Plan") < titles.index("⑧ Final Output")
     assert "② Zuordnung" not in titles
+
+
+def test_pending_switch_uses_page_object_not_url_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: st.switch_page('analysen') scheitert mit st.navigation."""
+    import contextlib
+
+    switched: list = []
+
+    def _fake_navigation(pages, position="sidebar"):
+        return _FakeNavigation(pages)
+
+    monkeypatch.setattr(routing.st, "navigation", _fake_navigation)
+    monkeypatch.setattr(routing.st, "sidebar", contextlib.nullcontext())
+    monkeypatch.setattr(routing.st, "caption", lambda *_a, **_k: None)
+    monkeypatch.setattr(routing.st, "switch_page", lambda page: switched.append(page))
+    monkeypatch.setattr(routing, "render_activity_panel", lambda: None)
+    monkeypatch.setattr(routing, "format_build_label", lambda: "test-build")
+    monkeypatch.setattr(
+        routing.st,
+        "session_state",
+        {routing.PENDING_SWITCH_URL_PATH_KEY: "analysen"},
+    )
+
+    routing.run_app_navigation(render_new_project=_noop, render_project_list=_noop)
+    assert len(switched) == 1
+    assert switched[0].url_path == "analysen"
+    assert routing.PENDING_SWITCH_URL_PATH_KEY not in routing.st.session_state
