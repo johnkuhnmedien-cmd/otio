@@ -486,6 +486,107 @@ def test_usable_floor_below_shot_min_skips_editorial_raise() -> None:
     assert_timed_slots_contiguous(timed, fps=fps)
 
 
+def test_intro_slots_bypass_cut_plan_shot_min() -> None:
+    """Intro: Settings shot_min (5s) gilt nicht — LLM-Kurzschnitte bleiben erhalten."""
+    timeline = NarrationTimelineDocument(
+        script_version="v1",
+        total_duration_seconds=20.0,
+        entries=[
+            NarrationTimelineEntry(
+                segment_id="Intro_segment_001",
+                start_seconds=0.0,
+                end_seconds=20.0,
+                audio_duration_seconds=20.0,
+            )
+        ],
+    )
+    sentences = {
+        "Intro_segment_001__s001": _sentence(
+            "Intro_segment_001__s001",
+            start=0.0,
+            end=1.0,
+            segment_id="Intro_segment_001",
+        ),
+        "Intro_segment_001__s002": _sentence(
+            "Intro_segment_001__s002",
+            start=1.2,
+            end=2.0,
+            segment_id="Intro_segment_001",
+        ),
+        "Intro_segment_001__s003": _sentence(
+            "Intro_segment_001__s003",
+            start=2.5,
+            end=3.5,
+            segment_id="Intro_segment_001",
+        ),
+        "Intro_segment_001__s004": _sentence(
+            "Intro_segment_001__s004",
+            start=10.0,
+            end=12.0,
+            segment_id="Intro_segment_001",
+        ),
+    }
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            CutBoundary(
+                cut_id="Intro_cut_000",
+                sentence_id="Intro_segment_001__s001",
+                position="start",
+            ),
+            CutBoundary(
+                cut_id="Intro_cut_001",
+                sentence_id="Intro_segment_001__s002",
+                position="start",
+            ),
+            CutBoundary(
+                cut_id="Intro_cut_002",
+                sentence_id="Intro_segment_001__s003",
+                position="start",
+            ),
+            CutBoundary(
+                cut_id="Intro_cut_003",
+                sentence_id="Intro_segment_001__s004",
+                position="end",
+            ),
+        ],
+        slots=[
+            CutSlot(
+                slot_id="Intro_slot_001",
+                local_asset_id="a",
+                asset_fit="strong",
+            ),
+            CutSlot(
+                slot_id="Intro_slot_002",
+                local_asset_id="b",
+                asset_fit="strong",
+            ),
+            CutSlot(
+                slot_id="Intro_slot_003",
+                local_asset_id="c",
+                asset_fit="strong",
+            ),
+        ],
+    )
+    options = CutPlanOptions(shot_min_sec=5.0, shot_max_sec=120.0)
+    repairs: list[str] = []
+    timed = resolve_timed_slots(
+        plan,
+        timeline,
+        sentence_index=sentences,
+        options=options,
+        fps=25.0,
+        repairs=repairs,
+    )
+    # Ohne Intro-Ausnahme würde Cascade jede Lücke auf ≥5s ziehen.
+    assert timed[0].duration_seconds < 5.0
+    assert timed[1].duration_seconds < 5.0
+    assert timed[0].duration_seconds == pytest.approx(1.2, abs=0.05)
+    assert timed[1].duration_seconds == pytest.approx(1.3, abs=0.05)
+    assert not any("unter shot_min" in note for note in repairs)
+    assert_timed_slots_contiguous(timed, fps=25.0)
+
+
 def test_over_tolerance_does_not_clamp_leaves_span_for_gap_path() -> None:
     """Fix 1: span > usable + tolerance → Grenzen unverändert (Gap später)."""
     timeline = NarrationTimelineDocument(

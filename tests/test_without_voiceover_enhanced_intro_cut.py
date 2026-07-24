@@ -62,6 +62,8 @@ def test_intro_prompt_rules() -> None:
     assert "acceptable" in prompt
     assert "4.0" in prompt
     assert "9.500" in prompt
+    assert "shot_min" in prompt
+    assert "NOT enforced" in prompt
 
 
 def test_enforce_intro_strong_only_rejects_acceptable() -> None:

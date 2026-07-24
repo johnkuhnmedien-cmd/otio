@@ -329,6 +329,29 @@ def _slot_usable_max_from_catalog(
     return out
 
 
+def _is_intro_plan_slot(
+    plan: UnifiedCutPlanDocument,
+    index: int,
+    segment_to_chapter: dict[str, str] | None,
+) -> bool:
+    """Intro-Slots: Cut-Plan shot_min gilt nicht (nur technischer Floor)."""
+    if index < 0 or index >= len(plan.slots):
+        return False
+    slot = plan.slots[index]
+    if _is_intro_folder(str(slot.slot_id or "")):
+        return True
+    if index < len(plan.boundaries):
+        start_sid = str(plan.boundaries[index].sentence_id or "").strip()
+        seg_id = segment_id_from_sentence_id(start_sid)
+        if _is_intro_folder(seg_id):
+            return True
+        if segment_to_chapter:
+            chapter = str(segment_to_chapter.get(seg_id) or "")
+            if _is_intro_folder(chapter):
+                return True
+    return False
+
+
 def _clamp_boundary_times(
     times: list[float],
     *,
@@ -336,6 +359,7 @@ def _clamp_boundary_times(
     editorial_max: float,
     repairs: list[str],
     slot_usable_max: list[float | None] | None = None,
+    slot_editorial_mins: list[float] | None = None,
     short_tolerance: float = 0.0,
     max_media_iterations: int = 2,
     fps: float = 25.0,
@@ -351,6 +375,9 @@ def _clamp_boundary_times(
     (sonst Pingpong mit usable-Klemme) → Gap-Pfad.
     Max. ``max_media_iterations`` Links-nach-rechts-Pässe; danach noch
     innerhalb-Toleranz verletzt → Fehler.
+
+    ``slot_editorial_mins``: optional pro Slot (Intro nutzt TECH_MIN statt
+    Cut-Plan-Settings shot_min).
     """
     if len(times) < 2:
         return times
@@ -379,9 +406,15 @@ def _clamp_boundary_times(
     if len(usables) < n_slots:
         usables.extend([None] * (n_slots - len(usables)))
 
+    slot_mins = list(slot_editorial_mins or [])
+    while len(slot_mins) < n_slots:
+        slot_mins.append(editorial_min)
+    min_frames_by_slot = [
+        max(1, _ceil_frames(float(slot_mins[index]))) for index in range(n_slots)
+    ]
+    # shot_max bleibt global; Floor für Max nutzt Settings-Min.
     min_frames = max(1, _ceil_frames(editorial_min))
     max_frames = max(min_frames, _floor_frames(editorial_max))
-    editorial_min_f = _from_frames(min_frames)
     editorial_max_f = _from_frames(max_frames)
 
     usable_frames: list[int | None] = []
@@ -394,7 +427,7 @@ def _clamp_boundary_times(
     def _skip_editorial_min(index: int) -> bool:
         """Fix 1b.5: usable (floor) < shot_min → nicht hochschieben (Gap-Pfad)."""
         uf = usable_frames[index]
-        return uf is not None and uf < min_frames
+        return uf is not None and uf < min_frames_by_slot[index]
 
     def _editorial_pass() -> None:
         # Zu lang: Ende nach vorne (spätere Slots werden länger).
@@ -412,16 +445,18 @@ def _clamp_boundary_times(
         for index in range(n_slots):
             if _skip_editorial_min(index):
                 continue
+            slot_min_frames = min_frames_by_slot[index]
             duration_frames = _to_frames(out[index + 1] - out[index])
-            if duration_frames >= min_frames:
+            if duration_frames >= slot_min_frames:
                 continue
-            need_frames = min_frames - duration_frames
+            need_frames = slot_min_frames - duration_frames
             need = _from_frames(need_frames)
+            slot_min_sec = _from_frames(slot_min_frames)
             out[index + 1] = _seconds_to_frame(out[index + 1] + need, rate)
             for later in range(index + 2, len(out)):
                 out[later] = _seconds_to_frame(out[later] + need, rate)
             repairs.append(
-                f"slot[{index}]: unter shot_min ({editorial_min:.2f}s) — "
+                f"slot[{index}]: unter shot_min ({slot_min_sec:.2f}s) — "
                 f"Endgrenze +{need:.2f}s (Cascade)."
             )
 
@@ -566,6 +601,15 @@ def resolve_timed_slots(
         TECH_MAX_SHOT_SECONDS,
         max(editorial_min, float(options.shot_max_sec)),
     )
+    # Intro only: Cut-Plan shot_min (z. B. 5s) aushebeln — LLM darf präzise
+    # Kurzschnitte (~1s) behalten; technischer Floor bleibt TECH_MIN.
+    intro_editorial_min = TECH_MIN_SHOT_SECONDS
+    slot_editorial_mins = [
+        intro_editorial_min
+        if _is_intro_plan_slot(plan, index, segment_to_chapter)
+        else editorial_min
+        for index in range(len(plan.slots))
+    ]
     head_trim = max(0.0, float(options.video_head_trim_sec))
     short_tolerance = max(0.0, float(options.short_asset_tolerance_sec))
     usables = (
@@ -579,6 +623,7 @@ def resolve_timed_slots(
         editorial_max=editorial_max,
         repairs=notes,
         slot_usable_max=usables,
+        slot_editorial_mins=slot_editorial_mins,
         short_tolerance=short_tolerance,
         max_media_iterations=2,
         fps=fps,
