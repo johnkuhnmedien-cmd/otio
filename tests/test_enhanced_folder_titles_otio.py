@@ -146,14 +146,42 @@ def test_build_folder_title_items_skips_intro_and_uses_chapter_start(
             folder_title_font="Phosphate",
             folder_title_duration_sec=5.0,
             folder_title_font_size=120.0,
+            folder_title_fade_in_sec=0.5,
+            folder_title_fade_out_sec=0.75,
         ),
     )
     items = build_enhanced_folder_title_items(project, _resolved(with_intro=True))
     assert len(items) == 1
     assert items[0].folder_name == "Yosemite"
-    assert items[0].timeline_in_sec == 16.5
+    assert items[0].timeline_in_sec == 16.5  # Opening-Shot / first_shot
     assert items[0].duration_sec == 5.0
     assert items[0].track == "V2"
+    assert items[0].title_style is not None
+    assert items[0].title_style.fade_in_sec == 0.5
+    assert items[0].title_style.fade_out_sec == 0.75
+
+
+def test_alpha_fade_filter_and_clamp() -> None:
+    from otio_app.analysis_models import TitleStyle
+    from otio_app.services.opening_title_renderer import alpha_fade_filter
+    from otio_app.services.title_style import clamp_title_fades
+
+    assert clamp_title_fades(5.0, 0.5, 0.5) == (0.5, 0.5)
+    fi, fo = clamp_title_fades(1.0, 0.8, 0.8)
+    assert abs((fi + fo) - 1.0) < 1e-6
+
+    style = TitleStyle(
+        text="Yosemite",
+        timeline_width=1920,
+        timeline_height=1080,
+        duration_sec=5.0,
+        fps=25.0,
+        fade_in_sec=0.5,
+        fade_out_sec=0.75,
+    )
+    filt = alpha_fade_filter(style)
+    assert "fade=t=in:st=0:d=0.500:alpha=1" in filt
+    assert "fade=t=out:st=4.250:d=0.750:alpha=1" in filt
 
 
 def test_build_folder_title_items_disabled(tmp_path: Path) -> None:

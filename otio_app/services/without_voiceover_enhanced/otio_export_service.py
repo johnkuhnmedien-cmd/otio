@@ -476,8 +476,17 @@ def build_enhanced_folder_title_items(
             requested_font_family=str(opts.folder_title_font or "Phosphate"),
             duration_sec=float(opts.folder_title_duration_sec),
             font_size_px=font_size,
+            fade_in_sec=float(opts.folder_title_fade_in_sec),
+            fade_out_sec=float(opts.folder_title_fade_out_sec),
         )
+        # Am Opening-Shot: first_shot Start, sonst Kapitel-Videoanfang (inkl. Vorlauf).
         start = max(0.0, float(chapter.chapter_video_start))
+        first_id = str(chapter.first_shot_id or "").strip()
+        if first_id:
+            for shot in resolved.shots:
+                if shot.shot_id == first_id:
+                    start = max(0.0, float(shot.timeline_start_seconds))
+                    break
         duration = max(0.1, float(item.duration_sec))
         items.append(
             item.model_copy(

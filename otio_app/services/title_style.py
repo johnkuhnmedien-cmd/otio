@@ -154,6 +154,23 @@ def opening_title_output_paths(work_dir: Path, section_id: str, render_hash: str
     )
 
 
+def clamp_title_fades(
+    duration_sec: float,
+    fade_in_sec: float,
+    fade_out_sec: float,
+) -> tuple[float, float]:
+    """Fade-In/Out auf Titel-Dauer begrenzen (Summe ≤ Dauer)."""
+    duration = max(0.1, float(duration_sec))
+    fade_in = max(0.0, float(fade_in_sec))
+    fade_out = max(0.0, float(fade_out_sec))
+    total = fade_in + fade_out
+    if total > duration + 1e-9:
+        scale = duration / total if total > 0 else 1.0
+        fade_in *= scale
+        fade_out *= scale
+    return round(fade_in, 4), round(fade_out, 4)
+
+
 def build_title_style_for_plan(
     *,
     text: str,
@@ -173,11 +190,13 @@ def build_title_style_for_plan(
     font_res = resolve_title_font(requested_font_family)
     margin_x, margin_y = lower_third_margins(project.width, project.height)
     resolved_px = resolve_font_size_px(font_size_px, project.height)
+    duration = round(max(0.1, float(duration_sec)), 4)
+    fade_in, fade_out = clamp_title_fades(duration, fade_in_sec, fade_out_sec)
     style = TitleStyle(
         text=text,
         timeline_width=int(project.width),
         timeline_height=int(project.height),
-        duration_sec=round(max(0.1, float(duration_sec)), 4),
+        duration_sec=duration,
         fps=float(project.fps),
         requested_font_family=font_res.requested_font_family,
         resolved_font_family=font_res.resolved_font_family,
@@ -192,8 +211,8 @@ def build_title_style_for_plan(
         position=position,
         margin_x=margin_x,
         margin_y=margin_y,
-        fade_in_sec=fade_in_sec,
-        fade_out_sec=fade_out_sec,
+        fade_in_sec=fade_in,
+        fade_out_sec=fade_out,
     )
     render_hash = compute_render_hash(style)
     return style.model_copy(update={"render_hash": render_hash})

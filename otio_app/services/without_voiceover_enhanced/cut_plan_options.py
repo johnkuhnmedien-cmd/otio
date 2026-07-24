@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 from otio_app.defaults import (
     CUT_PLAN_DEFAULT_FOLDER_TITLE_DURATION_SEC,
     CUT_PLAN_DEFAULT_FOLDER_TITLE_ENABLED,
+    CUT_PLAN_DEFAULT_FOLDER_TITLE_FADE_IN_SEC,
+    CUT_PLAN_DEFAULT_FOLDER_TITLE_FADE_OUT_SEC,
     CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT,
     CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT_SIZE,
     CUT_PLAN_DEFAULT_MAX_ASSET_USAGE,
@@ -108,6 +110,12 @@ class CutPlanOptions(BaseModel):
     )
     folder_title_font_size: float = Field(
         default=CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT_SIZE, ge=0.0, le=400.0
+    )
+    folder_title_fade_in_sec: float = Field(
+        default=CUT_PLAN_DEFAULT_FOLDER_TITLE_FADE_IN_SEC, ge=0.0, le=10.0
+    )
+    folder_title_fade_out_sec: float = Field(
+        default=CUT_PLAN_DEFAULT_FOLDER_TITLE_FADE_OUT_SEC, ge=0.0, le=10.0
     )
 
     still_image_style_enabled: bool = True
@@ -288,6 +296,18 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
             default=defaults.folder_title_font_size,
             lo=0.0,
             hi=400.0,
+        ),
+        folder_title_fade_in_sec=_clamp_float(
+            raw.get("folder_title_fade_in_sec", defaults.folder_title_fade_in_sec),
+            default=defaults.folder_title_fade_in_sec,
+            lo=0.0,
+            hi=10.0,
+        ),
+        folder_title_fade_out_sec=_clamp_float(
+            raw.get("folder_title_fade_out_sec", defaults.folder_title_fade_out_sec),
+            default=defaults.folder_title_fade_out_sec,
+            lo=0.0,
+            hi=10.0,
         ),
         still_image_style_enabled=bool(
             raw.get("still_image_style_enabled", defaults.still_image_style_enabled)

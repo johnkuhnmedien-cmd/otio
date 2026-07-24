@@ -21,6 +21,7 @@ from otio_app.services.title_style import (
     attach_output_paths,
     build_render_manifest,
     build_title_style_for_plan,
+    clamp_title_fades,
     compute_render_hash,
     extract_title_style,
     measure_text_bbox,
@@ -102,6 +103,8 @@ def build_opening_title_item(
     duration_sec: float = DEFAULT_OPENING_TITLE_DURATION_SEC,
     font_size_px: float | None = None,
     text: str | None = None,
+    fade_in_sec: float = 0.35,
+    fade_out_sec: float = 0.35,
 ) -> TimelineItem:
     """Erzeugt opening_title beim Schnittplan-Vorschlag (Regeln → Plan, noch kein Render).
 
@@ -114,6 +117,8 @@ def build_opening_title_item(
         requested_font_family=requested_font_family,
         duration_sec=duration_sec,
         font_size_px=font_size_px,
+        fade_in_sec=fade_in_sec,
+        fade_out_sec=fade_out_sec,
     )
     style = attach_output_paths(style, work_dir=work_dir, section_id=section_id)
     warnings: list[str] = []
@@ -227,7 +232,22 @@ def _render_png_pillow(style: TitleStyle, font_path: Path, output_png: Path) -> 
     return measure_text_bbox(output_png)
 
 
+def alpha_fade_filter(style: TitleStyle) -> str:
+    """ffmpeg fade=…:alpha=1 Kette für transparente Titel-Overlays."""
+    fade_in, fade_out = clamp_title_fades(
+        style.duration_sec, style.fade_in_sec, style.fade_out_sec
+    )
+    parts: list[str] = []
+    if fade_in > 1e-6:
+        parts.append(f"fade=t=in:st=0:d={fade_in:.3f}:alpha=1")
+    if fade_out > 1e-6:
+        start = max(0.0, float(style.duration_sec) - fade_out)
+        parts.append(f"fade=t=out:st={start:.3f}:d={fade_out:.3f}:alpha=1")
+    return ",".join(parts)
+
+
 def _encode_png_to_mov(png_path: Path, output_mov: Path, *, style: TitleStyle) -> bool:
+    fade = alpha_fade_filter(style)
     cmd = [
         "ffmpeg",
         "-y",
@@ -242,14 +262,20 @@ def _encode_png_to_mov(png_path: Path, output_mov: Path, *, style: TitleStyle) -
         f"{style.duration_sec:.3f}",
         "-r",
         str(max(1, int(round(style.fps)))),
-        "-c:v",
-        "prores_ks",
-        "-profile:v",
-        "4444",
-        "-pix_fmt",
-        "yuva444p10le",
-        str(output_mov),
     ]
+    if fade:
+        cmd.extend(["-vf", f"format=rgba,{fade}"])
+    cmd.extend(
+        [
+            "-c:v",
+            "prores_ks",
+            "-profile:v",
+            "4444",
+            "-pix_fmt",
+            "yuva444p10le",
+            str(output_mov),
+        ]
+    )
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     return result.returncode == 0 and output_mov.is_file()
 
@@ -259,6 +285,10 @@ def _render_with_ffmpeg_drawtext(style: TitleStyle, font_path: Path, output_mov:
     height = max(320, int(style.timeline_height))
     fps = max(1, int(round(style.fps)))
     vf = _ffmpeg_filter(style, font_path)
+    fade = alpha_fade_filter(style)
+    vf_chain = f"format=rgba,{vf}"
+    if fade:
+        vf_chain = f"{vf_chain},{fade}"
     cmd = [
         "ffmpeg",
         "-y",
@@ -270,7 +300,7 @@ def _render_with_ffmpeg_drawtext(style: TitleStyle, font_path: Path, output_mov:
         "-i",
         f"color=c=black@0.0:s={width}x{height}:d={style.duration_sec:.3f}:r={fps}",
         "-vf",
-        f"format=rgba,{vf}",
+        vf_chain,
         "-c:v",
         "prores_ks",
         "-profile:v",

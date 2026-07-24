@@ -657,8 +657,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             key=f"enh_opt_folder_title_{project.id}",
             help=(
                 "Pro Kapitel (ohne Intro) als transparente Overlay-Spur V2 im OTIO-Export. "
-                "Start am Kapitel-Video-Anfang. Nach Änderungen Settings speichern, "
-                "dann OTIO erneut exportieren."
+                "Liegt direkt auf dem Opening-Shot (Kapitel-Videoanfang). "
+                "Nach Änderungen Settings speichern, dann OTIO erneut exportieren."
             ),
         )
         t1, t2, t3 = st.columns(3)
@@ -695,6 +695,29 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 step=1.0,
                 key=f"enh_opt_title_size_{project.id}",
                 disabled=not folder_title_enabled,
+            )
+        f1, f2 = st.columns(2)
+        with f1:
+            folder_title_fade_in_sec = st.number_input(
+                "Fade-In (s)",
+                min_value=0.0,
+                max_value=10.0,
+                value=float(current.folder_title_fade_in_sec),
+                step=0.05,
+                key=f"enh_opt_title_fade_in_{project.id}",
+                disabled=not folder_title_enabled,
+                help="0 = hart einblenden. Alpha-Fade im gerenderten Overlay.",
+            )
+        with f2:
+            folder_title_fade_out_sec = st.number_input(
+                "Fade-Out (s)",
+                min_value=0.0,
+                max_value=10.0,
+                value=float(current.folder_title_fade_out_sec),
+                step=0.05,
+                key=f"enh_opt_title_fade_out_{project.id}",
+                disabled=not folder_title_enabled,
+                help="0 = hart ausblenden. Summe Fade ≤ Titel-Dauer.",
             )
 
         st.markdown("##### Still-Bilder (OTIO-Export)")
@@ -754,6 +777,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             folder_title_font=str(folder_title_font or current.folder_title_font),
             folder_title_duration_sec=float(folder_title_duration_sec),
             folder_title_font_size=float(folder_title_font_size),
+            folder_title_fade_in_sec=float(folder_title_fade_in_sec),
+            folder_title_fade_out_sec=float(folder_title_fade_out_sec),
             still_image_style_enabled=bool(still_image_style_enabled),
             still_image_zoom=float(still_image_zoom),
             still_image_background_style=str(still_image_background_style),
