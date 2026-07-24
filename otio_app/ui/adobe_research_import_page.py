@@ -191,7 +191,8 @@ def render_adobe_research_import_page() -> None:
     )
     st.caption(
         "Videos: bevorzugt **Video_4K**; wenn die Datei über **600 MB** liegt, "
-        "Fallback auf **Video_HD**. Lizenz in der `.adobe.json`-Sidecar-Datei."
+        "Fallback auf **Video_HD**. Ablauf strikt nacheinander: Pause → ein Asset "
+        "lizenzieren/downloaden (`.part`) → umbenennen → Pause. Kein Parallel-Download."
     )
 
     render_adobe_oauth_panel(key_prefix="adobe_import_oauth")

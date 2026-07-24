@@ -23,6 +23,18 @@ IRELAND_XLSX = (
 )
 
 
+def _disable_import_pauses(monkeypatch: pytest.MonkeyPatch, mod) -> None:
+    """Unit-Tests sollen nicht real schlafen."""
+    for name in (
+        "_ASSET_PAUSE_SECONDS",
+        "_API_CALL_PAUSE_SECONDS",
+        "_LICENSE_RETRY_PAUSE_SECONDS",
+        "_DOWNLOAD_START_PAUSE_SECONDS",
+        "_POST_ASSET_PAUSE_SECONDS",
+    ):
+        monkeypatch.setattr(mod, name, 0)
+
+
 def test_sanitize_folder_name_keeps_readable_title() -> None:
     assert sanitize_folder_name("Dublin") == "Dublin"
     assert "Giant" in sanitize_folder_name("Giant’s Causeway & Causeway Coast")
@@ -157,8 +169,7 @@ def test_video_license_path_uses_files_meta_and_video_licenses(
     """Videos: Files-API → Video_4K/HD; Comp/cancelled zählt nicht als Erfolg."""
     from otio_app.services import adobe_research_import as mod
 
-    monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
-    monkeypatch.setattr(mod, "_LICENSE_RETRY_PAUSE_SECONDS", 0)
+    _disable_import_pauses(monkeypatch, mod)
 
     calls: list[str] = []
 
@@ -198,8 +209,7 @@ def test_video_license_path_uses_files_meta_and_video_licenses(
 def test_photo_uses_standard_license(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from otio_app.services import adobe_research_import as mod
 
-    monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
-    monkeypatch.setattr(mod, "_LICENSE_RETRY_PAUSE_SECONDS", 0)
+    _disable_import_pauses(monkeypatch, mod)
     calls: list[str] = []
 
     class _Adapter:
@@ -245,8 +255,7 @@ def test_4k_over_600mb_falls_back_to_hd(
     from otio_app.services import adobe_research_import as mod
     from otio_app.services.supplement_sources.adobe_stock import AdobeAssetTooLargeError
 
-    monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
-    monkeypatch.setattr(mod, "_LICENSE_RETRY_PAUSE_SECONDS", 0)
+    _disable_import_pauses(monkeypatch, mod)
     downloads: list[tuple[int | None, int | None]] = []
 
     class _Adapter:
@@ -297,8 +306,7 @@ def test_content_info_4k_over_600mb_continues_to_hd(
     from otio_app.services import adobe_research_import as mod
     from otio_app.services.supplement_sources.adobe_stock import AdobeAssetTooLargeError
 
-    monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
-    monkeypatch.setattr(mod, "_LICENSE_RETRY_PAUSE_SECONDS", 0)
+    _disable_import_pauses(monkeypatch, mod)
     license_calls: list[str] = []
 
     class _Adapter:
@@ -353,8 +361,7 @@ def test_post_download_size_guard_rejects_oversized_4k(
     """Wenn der Stream die Grenze verfehlt, greift der Dateigrößen-Check."""
     from otio_app.services import adobe_research_import as mod
 
-    monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
-    monkeypatch.setattr(mod, "_LICENSE_RETRY_PAUSE_SECONDS", 0)
+    _disable_import_pauses(monkeypatch, mod)
     # Kleine Grenze (über MIN_DOWNLOAD), damit der Test keine 600-MB-Datei schreibt.
     monkeypatch.setattr(mod, "ADOBE_STOCK_VIDEO_4K_MAX_BYTES", 150_000)
 
@@ -402,8 +409,7 @@ def test_already_licensed_uses_content_info_url(
 ) -> None:
     from otio_app.services import adobe_research_import as mod
 
-    monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
-    monkeypatch.setattr(mod, "_LICENSE_RETRY_PAUSE_SECONDS", 0)
+    _disable_import_pauses(monkeypatch, mod)
 
     class _Adapter:
         def lookup_file_metadata(self, content_id, api_key):
@@ -443,17 +449,70 @@ def test_already_licensed_uses_content_info_url(
     assert path.suffix == ".mp4"
 
 
+def test_download_writes_part_then_renames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services import adobe_research_import as mod
+
+    _disable_import_pauses(monkeypatch, mod)
+    seen_paths: list[str] = []
+    phases: list[str] = []
+
+    class _Adapter:
+        def lookup_file_metadata(self, content_id, api_key):
+            return {"media_type_id": 4, "content_type": "video/mp4"}
+
+        def content_info_purchase(self, *_a, **_k):
+            return {"state": "not_purchased"}
+
+        def find_license_history_download(self, *_a, **_k):
+            return None
+
+        def _license_asset(self, content_id, license_type, api_key, access_token, *, diagnose=True):
+            return {
+                "state": "just_purchased",
+                "license": license_type,
+                "url": f"https://stock.adobe.com/Rest/Libraries/Download/{content_id}/4",
+                "content_type": "video/mp4",
+            }
+
+        def _stream_download_to_file(self, url, local_path, *, api_key, access_token, size, max_bytes):
+            seen_paths.append(str(local_path))
+            assert str(local_path).endswith(".part")
+            local_path.write_bytes(b"x" * 200_000)
+
+    monkeypatch.setattr(mod, "get_api_key", lambda key: "x")
+    monkeypatch.setattr(mod, "get_adobe_access_token", lambda: "tok")
+
+    dest = tmp_path / "Skellig Michael_Asset_01"
+    path, license_type = mod._license_and_download_to_path(
+        _Adapter(),
+        content_id="398509383",
+        media_type="video",
+        destination=dest,
+        media_hint="video",
+        phase_callback=phases.append,
+    )
+    assert path.name == "Skellig Michael_Asset_01.mp4"
+    assert path.is_file()
+    assert not path.with_name(path.name + ".part").exists()
+    assert any(p.endswith(".part") for p in seen_paths)
+    assert any("umbenennen" in p for p in phases)
+    assert license_type.startswith("Video_4K")
+
+
 def test_download_respects_should_stop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from otio_app.services import adobe_research_import as mod
 
-    monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
-    monkeypatch.setattr(mod, "_LICENSE_RETRY_PAUSE_SECONDS", 0)
+    _disable_import_pauses(monkeypatch, mod)
 
     plan = _minimal_plan(tmp_path)
     target = tmp_path / "dl"
     calls = {"n": 0}
 
-    def fake_license_and_download(adapter, *, content_id, media_type, destination, media_hint=""):
+    def fake_license_and_download(
+        adapter, *, content_id, media_type, destination, media_hint="", phase_callback=None
+    ):
         calls["n"] += 1
         path = destination.with_suffix(".mp4")
         path.write_bytes(b"x" * 200_000)

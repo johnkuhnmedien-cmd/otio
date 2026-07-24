@@ -54,9 +54,18 @@ _INVALID_FS_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WHITESPACE = re.compile(r"\s+")
 _MANIFEST_NAME = "adobe_research_import_manifest.json"
 _BOARD_NAME = "adobe_research_import_board.json"
-# Bulk-Lizenzierung: Pause zwischen Assets / Lizenzversuchen gegen Rate-Limits.
-_ASSET_PAUSE_SECONDS = 0.8
-_LICENSE_RETRY_PAUSE_SECONDS = 0.45
+# Bewusst langsam / strikt sequenziell — ein Asset nach dem anderen.
+# Zu schnelle API-/Download-Ketten führen bei Adobe oft zu Comp/cancelled.
+_ASSET_PAUSE_SECONDS = 2.5  # vor Start jedes Assets (Files/Info/License)
+_API_CALL_PAUSE_SECONDS = 1.0  # vor jedem Adobe-API-Call
+_LICENSE_RETRY_PAUSE_SECONDS = 1.2  # zwischen Lizenzvarianten (4K → HD)
+_DOWNLOAD_START_PAUSE_SECONDS = 1.0  # nach Lizenz-URL, vor Stream-Start
+_POST_ASSET_PAUSE_SECONDS = 2.0  # nach Umbenennen, bevor das nächste Asset startet
+
+
+def _sleep(seconds: float) -> None:
+    if seconds and seconds > 0:
+        time.sleep(seconds)
 
 STATUS_DOWNLOADED = "downloaded"
 STATUS_OPEN = "open"
@@ -557,6 +566,9 @@ def _next_asset_index(folder: Path) -> int:
         for path in folder.iterdir():
             if not path.is_file():
                 continue
+            # Unfertige Downloads (.part) nicht als fertige Assets zählen.
+            if path.name.endswith(".part"):
+                continue
             match = pattern.search(path.name)
             if match:
                 highest = max(highest, int(match.group(1)))
@@ -615,31 +627,49 @@ def _download_purchase_to_path(
     media_type: str,
     size: int | None,
     max_bytes: int | None,
+    phase_callback: Callable[[str], None] | None = None,
 ) -> Path:
+    """Download zuerst als `.part`, danach atomar auf den Zielnamen umbenennen."""
     url = str(purchase.get("url") or "")
     if not is_full_adobe_download_url(url):
         raise RuntimeError(f"Keine Voll-Download-URL (Comp/Wasserzeichen): {url[:160]}")
-    local_path = destination.with_suffix(_extension_for_purchase(purchase, media_type))
-    adapter._stream_download_to_file(
-        url,
-        local_path,
-        api_key=api_key,
-        access_token=access_token,
-        size=size,
-        max_bytes=max_bytes,
-    )
-    if not local_path.is_file() or local_path.stat().st_size < ADOBE_STOCK_MIN_DOWNLOAD_BYTES:
-        local_path.unlink(missing_ok=True)
-        raise RuntimeError("Download zu klein / ungültig.")
-    # Sicherheitsnetz: auch wenn Content-Length fehlte / Stream-Abbruch
-    # nicht greift, darf 4K die 600-MB-Grenze nicht behalten.
-    if max_bytes is not None and local_path.stat().st_size > max_bytes:
-        local_path.unlink(missing_ok=True)
-        raise AdobeAssetTooLargeError(
-            f"Download {local_path.name} überschreitet "
-            f"{max_bytes / (1024 * 1024):.0f} MB-Grenze."
+    final_path = destination.with_suffix(_extension_for_purchase(purchase, media_type))
+    part_path = final_path.with_name(final_path.name + ".part")
+    part_path.unlink(missing_ok=True)
+    final_path.unlink(missing_ok=True)
+
+    if phase_callback is not None:
+        phase_callback("warte vor Download…")
+    _sleep(_DOWNLOAD_START_PAUSE_SECONDS)
+    if phase_callback is not None:
+        phase_callback("Download läuft…")
+    try:
+        adapter._stream_download_to_file(
+            url,
+            part_path,
+            api_key=api_key,
+            access_token=access_token,
+            size=size,
+            max_bytes=max_bytes,
         )
-    return local_path
+        if not part_path.is_file() or part_path.stat().st_size < ADOBE_STOCK_MIN_DOWNLOAD_BYTES:
+            part_path.unlink(missing_ok=True)
+            raise RuntimeError("Download zu klein / ungültig.")
+        # Sicherheitsnetz: auch wenn Content-Length fehlte / Stream-Abbruch
+        # nicht greift, darf 4K die 600-MB-Grenze nicht behalten.
+        if max_bytes is not None and part_path.stat().st_size > max_bytes:
+            part_path.unlink(missing_ok=True)
+            raise AdobeAssetTooLargeError(
+                f"Download {final_path.name} überschreitet "
+                f"{max_bytes / (1024 * 1024):.0f} MB-Grenze."
+            )
+        if phase_callback is not None:
+            phase_callback(f"umbenennen → {final_path.name}")
+        part_path.replace(final_path)
+        return final_path
+    except Exception:
+        part_path.unlink(missing_ok=True)
+        raise
 
 
 def _license_and_download_to_path(
@@ -649,15 +679,21 @@ def _license_and_download_to_path(
     media_type: str,
     destination: Path,
     media_hint: str = "",
+    phase_callback: Callable[[str], None] | None = None,
 ) -> tuple[Path, str]:
     """Lizenziert/lädt eine Content-ID — Foto + Video, inkl. bereits lizenziert.
 
+    Strikt ein Asset: API-Pausen → Lizenz → Download als `.part` → Umbenennen.
     Reihenfolge:
     1) Files-API → echter Medientyp (Foto/Video), 404 → unavailable
     2) Content/Info: wenn bereits purchased + Voll-URL → Download
     3) Content/License (ohne Diagnose-Spam)
     4) LicenseHistory-Fallback für schon lizenzierte Assets
     """
+    def _phase(message: str) -> None:
+        if phase_callback is not None:
+            phase_callback(message)
+
     api_key = get_api_key("ADOBE_STOCK_API_KEY")
     access_token = get_adobe_access_token()
     if not api_key:
@@ -670,6 +706,9 @@ def _license_and_download_to_path(
 
     destination.parent.mkdir(parents=True, exist_ok=True)
 
+    _phase("warte vor Files-API…")
+    _sleep(_API_CALL_PAUSE_SECONDS)
+    _phase("Files-API (Medientyp)…")
     try:
         meta = adapter.lookup_file_metadata(content_id, api_key)
         resolved_type = _media_type_from_file_meta(meta, hint=media_hint or media_type)
@@ -695,17 +734,16 @@ def _license_and_download_to_path(
 
     attempt_errors: list[str] = []
     tried: set[str] = set()
-    first = True
     while pending:
         license_type, size, max_bytes = pending.pop(0)
         if license_type in tried:
             continue
         tried.add(license_type)
-        if not first:
-            time.sleep(_LICENSE_RETRY_PAUSE_SECONDS)
-        first = False
+        _phase(f"warte vor {license_type}…")
+        _sleep(_LICENSE_RETRY_PAUSE_SECONDS if len(tried) > 1 else _API_CALL_PAUSE_SECONDS)
 
         # Bereits lizenziert? Content/Info zuerst (kein neuer Kauf nötig).
+        _phase(f"Content/Info ({license_type})…")
         info = adapter.content_info_purchase(
             content_id, license_type, api_key, access_token
         )
@@ -722,6 +760,7 @@ def _license_and_download_to_path(
                     media_type=resolved_type,
                     size=size,
                     max_bytes=max_bytes,
+                    phase_callback=phase_callback,
                 )
                 used = str(info.get("license") or license_type)
                 if max_bytes is not None and any(">600MB" in e for e in attempt_errors):
@@ -733,6 +772,9 @@ def _license_and_download_to_path(
             except Exception as exc:  # noqa: BLE001
                 attempt_errors.append(f"{license_type}: Info-Download {exc}")
 
+        _phase(f"warte vor License ({license_type})…")
+        _sleep(_API_CALL_PAUSE_SECONDS)
+        _phase(f"License ({license_type})…")
         try:
             purchase = adapter._license_asset(
                 content_id,
@@ -773,6 +815,7 @@ def _license_and_download_to_path(
                 media_type=resolved_type,
                 size=size,
                 max_bytes=max_bytes,
+                phase_callback=phase_callback,
             )
             used = license_type
             if license_type == ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD and any(
@@ -788,6 +831,9 @@ def _license_and_download_to_path(
             continue
 
     # Bereits früher lizenziert, aber Content/License liefert nur Comp/cancelled?
+    _phase("warte vor LicenseHistory…")
+    _sleep(_API_CALL_PAUSE_SECONDS)
+    _phase("LicenseHistory…")
     history = adapter.find_license_history_download(content_id, api_key, access_token)
     if history:
         try:
@@ -813,11 +859,14 @@ def _license_and_download_to_path(
                 media_type=hist_type,
                 size=size,
                 max_bytes=max_bytes,
+                phase_callback=phase_callback,
             )
             return path, _format_license_with_size(hist_license or "history", path)
         except AdobeAssetTooLargeError:
             attempt_errors.append("LicenseHistory: 4K>600MB → versuche Video_HD")
             try:
+                _phase("warte vor License (Video_HD nach History)…")
+                _sleep(_API_CALL_PAUSE_SECONDS)
                 purchase = adapter._license_asset(
                     content_id,
                     ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD,
@@ -834,6 +883,7 @@ def _license_and_download_to_path(
                     media_type=resolved_type,
                     size=1080,
                     max_bytes=None,
+                    phase_callback=phase_callback,
                 )
                 return path, _format_license_with_size("Video_HD (4K>600MB)", path)
             except Exception as exc2:  # noqa: BLE001
@@ -868,9 +918,10 @@ def download_research_import(
 ) -> AdobeResearchImportResult:
     """Lizenzieren + Download in Zielordner/{Kapitel}/{Kapitel}_Asset_NN.ext.
 
-    Fortschritt/Manifest landen in `state_dir` (Download-Projekt unter data/),
-    nicht als JSON neben den Medien. `should_stop` bricht kooperativ zwischen
-    Assets ab.
+    Strikt sequenziell pro Asset: Pause → API → Download als `.part` →
+    Umbenennen auf Endnamen → Pause. Fortschritt/Manifest landen in
+    `state_dir` (Download-Projekt unter data/), nicht als JSON neben den
+    Medien. `should_stop` bricht kooperativ zwischen Assets ab.
     """
     root = Path(target_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -1007,25 +1058,28 @@ def download_research_import(
                 )
                 continue
 
-            # Pause vor echten License/Download-Calls (Rate-Limits).
-            time.sleep(_ASSET_PAUSE_SECONDS)
-            live_statuses[asset.asset_id] = {
-                "status": STATUS_DOWNLOADING,
-                "message": "läuft…",
-                "local_path": "",
-                "license": "",
-            }
-            _publish_live()
-            _emit(
-                folder_name=chapter.folder_name,
-                asset_id=asset.asset_id,
-                chapter_title=chapter.title,
-                status=STATUS_DOWNLOADING,
-                message="Lizenzieren & Download…",
-            )
+            # Ein Asset nach dem anderen: Pause → API → Download(.part) → Rename → Pause.
+            def _phase(message: str) -> None:
+                live_statuses[asset.asset_id] = {
+                    "status": STATUS_DOWNLOADING,
+                    "message": message,
+                    "local_path": "",
+                    "license": "",
+                }
+                _publish_live()
+                _emit(
+                    folder_name=chapter.folder_name,
+                    asset_id=asset.asset_id,
+                    chapter_title=chapter.title,
+                    status=STATUS_DOWNLOADING,
+                    message=message,
+                )
+
+            _phase("warte vor nächstem Asset…")
+            _sleep(_ASSET_PAUSE_SECONDS)
 
             stem = format_asset_stem(chapter.folder_name, next_index)
-            dest = folder / stem  # Suffix setzt Download
+            dest = folder / stem  # Suffix setzt Download/Rename
             try:
                 local_path, used_license = _license_and_download_to_path(
                     adapter,
@@ -1033,10 +1087,11 @@ def download_research_import(
                     media_type=asset.media_hint or "video",
                     destination=dest,
                     media_hint=asset.media_hint,
+                    phase_callback=_phase,
                 )
                 live_statuses[asset.asset_id] = {
                     "status": STATUS_DOWNLOADED,
-                    "message": "",
+                    "message": local_path.name,
                     "local_path": str(local_path),
                     "license": used_license,
                 }
@@ -1048,6 +1103,7 @@ def download_research_import(
                         status=STATUS_DOWNLOADED,
                         local_path=str(local_path),
                         license=used_license,
+                        message=local_path.name,
                     )
                 )
                 already.add(asset.asset_id)
@@ -1059,8 +1115,9 @@ def download_research_import(
                     asset_id=asset.asset_id,
                     chapter_title=chapter.title,
                     status=STATUS_DOWNLOADED,
-                    message=used_license,
+                    message=f"{used_license} → {local_path.name}",
                 )
+                _sleep(_POST_ASSET_PAUSE_SECONDS)
             except AdobeContentUnavailableError as exc:
                 live_statuses[asset.asset_id] = {
                     "status": STATUS_UNAVAILABLE,
