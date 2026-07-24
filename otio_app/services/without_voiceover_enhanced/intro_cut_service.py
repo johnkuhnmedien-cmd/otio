@@ -11,7 +11,6 @@ from otio_app.models import Project
 from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     _local_assets_payload,
     generate_unified_cut_for_folder,
-    resolve_unified_cut_plan_timeline,
 )
 from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
     ENHANCED_INTRO_FOLDER_NAME,
@@ -372,6 +371,22 @@ def generate_intro_unified_cut(
     )
 
 
+def _is_intro_shot(shot: ResolvedShot) -> bool:
+    if is_intro_folder_name(shot.folder_name) or is_intro_folder_name(shot.chapter_id):
+        return True
+    sid = str(shot.shot_id or "").lower()
+    return sid.startswith("intro_") or sid.startswith("intro/")
+
+
+def _is_intro_audio(segment: ResolvedAudioSegment) -> bool:
+    sid = str(segment.segment_id or "").lower()
+    return (
+        sid.startswith("intro")
+        or "intro_segment" in sid
+        or sid.startswith("intro_")
+    )
+
+
 def resolve_intro_timeline(
     project: Project,
     *,
@@ -379,106 +394,124 @@ def resolve_intro_timeline(
     model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
 ) -> ResolvedTimelineDocument:
-    """Python-Timing (Film) und gefilterte Intro-Timeline persistieren."""
+    """Filtert Intro aus der bestehenden resolved Timeline — ohne Film neu aufzulösen.
+
+    Die Gesamt-Timeline (``resolved_timeline.json``) bleibt unverändert.
+    """
+    del provider, model, llm_callable  # API-Kompatibilität zur UI; kein Re-Resolve.
     assert_enhanced_work_root(project)
-    intro_plan = load_model(intro_unified_cut_plan_path(project), UnifiedCutPlanDocument)
-    if intro_plan is None:
-        # Fallback: Intro-Fragment aus globalem Plan.
-        full = load_model(unified_cut_plan_path(project), UnifiedCutPlanDocument)
-        if full is not None:
-            intro_plan, _ = split_intro_from_unified(full)
-        if intro_plan is None:
-            raise IntroCutError(
-                "Intro-Cut-Plan fehlt — zuerst „Intro: LLM Schnitt“."
-            )
-
-    # Full resolve (Kapitel bleiben erhalten wenn im Unified Plan).
-    _plan, resolved, _merge = resolve_unified_cut_plan_timeline(
-        project,
-        run_gap_merge=True,
-        provider=provider,
-        model=model,
-        llm_callable=llm_callable,
-    )
-    intro_resolved = filter_resolved_timeline_to_intro(resolved)
+    full = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
+    if full is None:
+        raise IntroCutError(
+            "Gesamt-Timeline fehlt — zuerst Kapitel „Python Timing auflösen“, "
+            "dann Intro-OTIO (oder Intro-Filter) nutzen."
+        )
+    intro_resolved = filter_resolved_timeline_to_intro(full)
+    if not intro_resolved.shots and not intro_resolved.audio_segments:
+        raise IntroCutError(
+            "Kein Intro in der aufgelösten Timeline gefunden "
+            "(weder Kapitel „Intro“ noch Intro_*-Shots/Audio)."
+        )
     write_json(intro_resolved_timeline_path(project), intro_resolved)
-    if intro_resolved.errors:
-        from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
-            UnifiedTimelineError,
-        )
-
-        raise UnifiedTimelineError(
-            "; ".join(intro_resolved.errors),
-            errors=list(intro_resolved.errors),
-        )
     return intro_resolved
 
 
 def filter_resolved_timeline_to_intro(
     resolved: ResolvedTimelineDocument,
 ) -> ResolvedTimelineDocument:
-    """Schneidet Resolved Timeline auf Intro-Kapitelhülle zu und nullt den Cursor."""
+    """Schneidet Resolved Timeline auf Intro zu und nullt den Cursor auf 0."""
     intro_envs = [
         ch
         for ch in resolved.chapters
         if is_intro_folder_name(ch.folder_name or ch.chapter_id)
     ]
-    if not intro_envs:
+
+    if intro_envs:
+        env = intro_envs[0]
+        origin = float(env.chapter_video_start)
+        end = float(env.chapter_video_end)
+        segment_ids = {str(s) for s in (env.segment_ids or []) if s}
         shots = [
             s
             for s in resolved.shots
-            if is_intro_folder_name(s.folder_name)
-            or str(s.shot_id).lower().startswith("intro_")
+            if _is_intro_shot(s)
+            or (
+                s.timeline_start_seconds >= origin - 1e-3
+                and s.timeline_start_seconds < end - 1e-3
+                and (
+                    is_intro_folder_name(s.folder_name)
+                    or is_intro_folder_name(s.chapter_id)
+                    or str(s.shot_id).lower().startswith("intro_")
+                )
+            )
         ]
+        # Fallback: alles im Intro-Video-Fenster, wenn IDs fehlen.
+        if not shots:
+            shots = [
+                s
+                for s in resolved.shots
+                if s.timeline_start_seconds >= origin - 1e-3
+                and s.timeline_end_seconds <= end + 1e-3
+            ]
         audios = [
             a
             for a in resolved.audio_segments
-            if str(a.segment_id).lower().startswith("intro")
-        ]
-        if not shots and not audios:
-            return resolved.model_copy(
-                update={
-                    "shots": [],
-                    "audio_segments": [],
-                    "chapters": [],
-                    "total_duration_seconds": 0.0,
-                    "errors": [
-                        *(resolved.errors or []),
-                        "Kein Intro-Kapitel in der aufgelösten Timeline.",
-                    ],
-                }
+            if _is_intro_audio(a)
+            or (segment_ids and str(a.segment_id) in segment_ids)
+            or (
+                a.timeline_start_seconds >= env.chapter_audio_start - 1e-3
+                and a.timeline_end_seconds <= env.chapter_audio_end + 1e-3
             )
-        origin = 0.0
-        if shots:
-            origin = min(s.timeline_start_seconds for s in shots)
-        elif audios:
-            origin = min(a.timeline_start_seconds for a in audios)
-        return _shift_resolved(resolved, shots, audios, [], origin)
+        ]
+        # Nur Intro-Audio behalten (keine Kapitel-Clips durch Zeitfenster).
+        audios = [a for a in audios if _is_intro_audio(a) or (
+            segment_ids and str(a.segment_id) in segment_ids
+        )]
+        if not audios:
+            audios = [
+                a
+                for a in resolved.audio_segments
+                if a.timeline_start_seconds >= env.chapter_audio_start - 1e-3
+                and a.timeline_end_seconds <= env.chapter_audio_end + 1e-3
+            ]
+        shifted_env = env.model_copy(
+            update={
+                "chapter_video_start": 0.0,
+                "chapter_audio_start": round(env.chapter_audio_start - origin, 6),
+                "chapter_audio_end": round(env.chapter_audio_end - origin, 6),
+                "chapter_video_end": round(env.chapter_video_end - origin, 6),
+            }
+        )
+        return _shift_resolved(resolved, shots, audios, [shifted_env], origin)
 
-    env = intro_envs[0]
-    origin = float(env.chapter_video_start)
-    end = float(env.chapter_video_end)
-    shots = [
-        s
-        for s in resolved.shots
-        if s.timeline_start_seconds >= origin - 1e-3
-        and s.timeline_start_seconds < end - 1e-3
-    ]
-    audios = [
-        a
-        for a in resolved.audio_segments
-        if a.timeline_start_seconds >= env.chapter_audio_start - 1e-3
-        and a.timeline_start_seconds < env.chapter_audio_end + 1e-3
-    ]
-    shifted_env = env.model_copy(
-        update={
-            "chapter_video_start": 0.0,
-            "chapter_audio_start": round(env.chapter_audio_start - origin, 6),
-            "chapter_audio_end": round(env.chapter_audio_end - origin, 6),
-            "chapter_video_end": round(env.chapter_video_end - origin, 6),
-        }
-    )
-    return _shift_resolved(resolved, shots, audios, [shifted_env], origin)
+    shots = [s for s in resolved.shots if _is_intro_shot(s)]
+    audios = [a for a in resolved.audio_segments if _is_intro_audio(a)]
+    if not shots and not audios:
+        return ResolvedTimelineDocument(
+            schema_version=resolved.schema_version,
+            script_version=resolved.script_version,
+            fps=resolved.fps,
+            total_duration_seconds=0.0,
+            audio_segments=[],
+            shots=[],
+            chapters=[],
+            voiceover_preroll_sec=INTRO_OPENING_HOLD_SEC,
+            voiceover_postroll_sec=INTRO_CLOSING_HOLD_DEFAULT_SEC,
+            repairs=[],
+            errors=["Kein Intro-Kapitel in der aufgelösten Timeline."],
+        )
+    origin = 0.0
+    if shots:
+        origin = min(s.timeline_start_seconds for s in shots)
+    elif audios:
+        origin = min(a.timeline_start_seconds for a in audios)
+    # Audio-Start als 0-Referenz bevorzugen, wenn Video früher beginnt (Vorlauf).
+    if shots and audios:
+        origin = min(
+            min(s.timeline_start_seconds for s in shots),
+            min(a.timeline_start_seconds for a in audios),
+        )
+    return _shift_resolved(resolved, shots, audios, [], origin)
 
 
 def _shift_resolved(
@@ -543,32 +576,69 @@ def export_intro_otio(
     project: Project,
     *,
     basename: str = "enhanced_intro",
-    allow_errors: bool = False,
+    allow_errors: bool = True,
 ) -> Path:
-    """Separater OTIO-Export nur für die Intro-Timeline."""
-    assert_enhanced_work_root(project)
-    intro_resolved = load_model(
-        intro_resolved_timeline_path(project), ResolvedTimelineDocument
-    )
-    if intro_resolved is None:
-        # On-the-fly aus Gesamt-Timeline filtern.
-        full = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
-        if full is None:
-            raise EnhancedOtioExportError(
-                "Intro-Timeline fehlt — zuerst „Intro: Python Timing“."
-            )
-        intro_resolved = filter_resolved_timeline_to_intro(full)
-        write_json(intro_resolved_timeline_path(project), intro_resolved)
+    """Separater OTIO-Export nur für Intro — lässt die Gesamt-Timeline unangetastet.
 
-    # Temporär Intro-Timeline als resolved schreiben, exportieren, restore.
-    full_backup = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
-    write_json(resolved_timeline_path(project), intro_resolved)
-    try:
-        return export_otio_from_resolved_timeline(
-            project,
-            basename=basename,
-            allow_errors=allow_errors,
+    Standard ``allow_errors=True``: Lücken/Placeholders im Intro sind ok.
+    """
+    assert_enhanced_work_root(project)
+    # Immer frisch aus der aktuellen Gesamt-Timeline filtern (nie Film-Datei überschreiben).
+    full = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
+    if full is None:
+        raise EnhancedOtioExportError(
+            "Gesamt-Timeline fehlt — zuerst „Python Timing auflösen“."
         )
-    finally:
-        if full_backup is not None:
-            write_json(resolved_timeline_path(project), full_backup)
+    intro_resolved = filter_resolved_timeline_to_intro(full)
+    if not intro_resolved.shots and not intro_resolved.audio_segments:
+        raise EnhancedOtioExportError(
+            "Kein Intro in der Timeline — weder Kapitel „Intro“ noch "
+            "Intro_*-Shots/Audio gefunden."
+        )
+    write_json(intro_resolved_timeline_path(project), intro_resolved)
+
+    shot_ids = {s.shot_id for s in intro_resolved.shots}
+    audio_ids = {a.segment_id for a in intro_resolved.audio_segments}
+    # Defense: niemals Kapitel-Clips mitexportieren.
+    leaked = [
+        s.shot_id
+        for s in intro_resolved.shots
+        if not _is_intro_shot(s)
+        and not any(
+            is_intro_folder_name(ch.folder_name or ch.chapter_id)
+            for ch in intro_resolved.chapters
+        )
+    ]
+    if any(
+        not _is_intro_audio(a)
+        and not str(a.segment_id).lower().startswith("intro")
+        for a in intro_resolved.audio_segments
+    ):
+        intro_resolved = intro_resolved.model_copy(
+            update={
+                "audio_segments": [
+                    a for a in intro_resolved.audio_segments if _is_intro_audio(a)
+                ]
+            }
+        )
+        audio_ids = {a.segment_id for a in intro_resolved.audio_segments}
+
+    if leaked:
+        # Zu aggressives Zeitfenster — nur explizite Intro-Shots behalten.
+        intro_resolved = intro_resolved.model_copy(
+            update={"shots": [s for s in intro_resolved.shots if _is_intro_shot(s)]}
+        )
+        shot_ids = {s.shot_id for s in intro_resolved.shots}
+
+    if not shot_ids and not audio_ids:
+        raise EnhancedOtioExportError(
+            "Intro-Filter lieferte keine Clips — Export abgebrochen."
+        )
+
+    return export_otio_from_resolved_timeline(
+        project,
+        basename=basename.strip() or "enhanced_intro",
+        allow_errors=allow_errors,
+        resolved=intro_resolved,
+        timeline_name=f"{project.name} intro",
+    )

@@ -837,9 +837,9 @@ def _render_intro_cut_section(project, *, provider: str, model: str) -> None:
     """Separater Intro-Pfad vor den Kapitel-Unified-Buttons."""
     st.markdown("##### 0. Intro Cut (separat)")
     st.caption(
-        "Nur Intro: alle Kapitel-Inventare gebündelt · nur asset_fit=strong · "
-        "Opening 4s vor VO · Closing 5–8s nach VO · eigene OTIO. "
-        "Kapitel-Unified-Buttons lassen Intro unverändert."
+        "Nur Intro: gebündelte Inventare · strong-only · Opening 4s / Closing 5–8s. "
+        "**Intro-OTIO exportiert ausschließlich Intro** (auch mit Lücken) — "
+        "nicht die Gesamt-Timeline. Gesamt-OTIO weiter unten unter „OTIO exportieren“."
     )
     intro_basename = st.text_input(
         "Intro-OTIO Dateiname",
@@ -856,15 +856,23 @@ def _render_intro_cut_section(project, *, provider: str, model: str) -> None:
         )
     with col_b:
         run_intro_timing = st.button(
-            "Intro: Python Timing",
+            "Intro: aus Timeline filtern",
             key=f"enh_intro_cut_resolve_{project.id}",
             use_container_width=True,
+            help=(
+                "Schneidet Intro aus der bestehenden resolved Timeline "
+                "(ändert die Gesamt-Timeline nicht)."
+            ),
         )
     with col_c:
         run_intro_otio = st.button(
             "Intro: OTIO exportieren",
             key=f"enh_intro_cut_otio_{project.id}",
             use_container_width=True,
+            help=(
+                "Nur Intro-Clips → eigene .otio-Datei. Lücken erlaubt. "
+                "Gesamt-Timeline bleibt unangetastet."
+            ),
         )
 
     if run_intro_llm:
@@ -893,36 +901,47 @@ def _render_intro_cut_section(project, *, provider: str, model: str) -> None:
 
     if run_intro_timing:
         try:
-            with st.spinner("Intro Python-Timing…"):
-                resolved = resolve_intro_timeline(
-                    project, provider=provider, model=model
-                )
+            with st.spinner("Intro aus Timeline filtern…"):
+                resolved = resolve_intro_timeline(project)
             st.success(
-                f"Intro-Timeline: {resolved.total_duration_seconds:.2f}s · "
+                f"Intro-Filter: {resolved.total_duration_seconds:.2f}s · "
                 f"{len(resolved.shots)} Shots · "
                 f"{len(resolved.audio_segments)} Audio "
-                "(Opening 4s + Closing-Hold)."
+                "(Gesamt-Timeline unverändert)."
             )
-            if resolved.repairs:
-                with st.expander("Intro Repair-Log", expanded=False):
-                    for note in resolved.repairs[:40]:
-                        st.caption(note)
-            st.rerun()
+            for shot in resolved.shots[:12]:
+                st.caption(
+                    f"Intro-Video {shot.shot_id}: "
+                    f"{shot.timeline_start_seconds:.2f}–{shot.timeline_end_seconds:.2f}"
+                )
+            for audio in resolved.audio_segments[:6]:
+                st.caption(
+                    f"Intro-Audio {audio.segment_id}: "
+                    f"{audio.timeline_start_seconds:.2f}–{audio.timeline_end_seconds:.2f}"
+                )
         except IntroCutError as exc:
             st.error(str(exc))
-        except UnifiedTimelineError as exc:
-            _render_timing_error_summary(exc.errors or exc)
         except Exception as exc:  # noqa: BLE001
-            st.error(f"Intro-Timing-Fehler: {exc}")
+            st.error(f"Intro-Filter-Fehler: {exc}")
 
     if run_intro_otio:
         try:
-            with st.spinner("Intro-OTIO…"):
+            with st.spinner("Nur Intro-OTIO…"):
                 path = export_intro_otio(
                     project,
                     basename=(intro_basename or "").strip() or "enhanced_intro",
+                    allow_errors=True,
                 )
-            st.success(f"Intro-OTIO geschrieben: `{path}`")
+            intro_resolved = load_model(
+                intro_resolved_timeline_path(project), ResolvedTimelineDocument
+            )
+            n_shots = len(intro_resolved.shots) if intro_resolved else 0
+            n_audio = len(intro_resolved.audio_segments) if intro_resolved else 0
+            st.success(
+                f"Intro-OTIO geschrieben: `{path}` · "
+                f"{n_shots} Video-Clips · {n_audio} Audio "
+                "(keine Yosemite/Caddo-Kapitel)."
+            )
         except EnhancedOtioExportError as exc:
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001

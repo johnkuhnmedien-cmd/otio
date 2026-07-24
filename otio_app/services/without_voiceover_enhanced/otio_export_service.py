@@ -435,15 +435,21 @@ def export_otio_from_resolved_timeline(
     *,
     basename: str = "enhanced_timeline",
     allow_errors: bool = False,
+    resolved: ResolvedTimelineDocument | None = None,
+    timeline_name: str | None = None,
 ) -> Path:
     """Exportiert die aufgelöste Timeline als OTIO.
 
     ``allow_errors=True`` ist ein Test-/Diagnose-Modus (Lücken erlaubt).
     Produktions-Export (`allow_errors=False`) ist fail-closed inkl. realer
     Medien-/Source-Range-Prüfung — unabhängig von ``resolved.errors``.
+
+    Optional ``resolved``: In-Memory-Dokument (z. B. gefiltertes Intro) —
+    die Datei ``resolved_timeline.json`` wird dann nicht angefasst.
     """
     assert_enhanced_work_root(project)
-    resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
+    if resolved is None:
+        resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
     if resolved is None:
         raise EnhancedOtioExportError("Aufgelöste Timeline fehlt — kein OTIO-Export.")
 
@@ -461,7 +467,9 @@ def export_otio_from_resolved_timeline(
                 + "; ".join(gate_errors)
             )
 
-    timeline = otio.schema.Timeline(name=f"{project.name} enhanced")
+    timeline = otio.schema.Timeline(
+        name=timeline_name or f"{project.name} enhanced"
+    )
     video_track = otio.schema.Track(name="Video", kind=otio.schema.TrackKind.Video)
     audio_track = otio.schema.Track(name="Narration", kind=otio.schema.TrackKind.Audio)
 

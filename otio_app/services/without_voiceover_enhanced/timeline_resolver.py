@@ -813,17 +813,8 @@ def _apply_chapter_envelopes(
 
         raw_span = max(0.0, raw_audio_end - raw_audio_start)
 
-        # Intro: feste Hüllen 4s Vorlauf / 5–8s Nachlauf (unabhängig von Kapitel-Settings).
         chapter_preroll = float(preroll)
         chapter_postroll = float(postroll)
-        if _is_intro_folder(chapter_id):
-            from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
-                INTRO_OPENING_HOLD_SEC,
-                clamp_intro_closing_hold,
-            )
-
-            chapter_preroll = INTRO_OPENING_HOLD_SEC
-            chapter_postroll = clamp_intro_closing_hold(postroll)
 
         chapter_video_start = _seconds_to_frame(cursor, fps)
         chapter_audio_start = _seconds_to_frame(

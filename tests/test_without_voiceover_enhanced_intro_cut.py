@@ -128,6 +128,117 @@ def test_split_and_merge_intro_body() -> None:
     assert len(split_body.slots) == 1
 
 
+def test_export_intro_otio_does_not_rewrite_full_timeline(tmp_path) -> None:
+    """Regression: Intro-Export darf resolved_timeline.json nicht überschreiben."""
+    from pathlib import Path
+    from unittest.mock import patch
+
+    from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+    from otio_app.models import Project, ProjectMode
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        export_intro_otio,
+    )
+    from otio_app.services.without_voiceover_enhanced.io_utils import write_json
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        resolved_timeline_path,
+    )
+
+    root = tmp_path / "proj"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    project = Project(
+        name="IntroExport",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="de",
+        asset_subdir_names=["Yosemite"],
+        selected_asset_subdirs=["Yosemite"],
+        fps=25.0,
+    )
+    full = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=30.0,
+        audio_segments=[
+            ResolvedAudioSegment(
+                segment_id="Intro_segment_001",
+                audio_path="/tmp/intro.wav",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=5.0,
+            ),
+            ResolvedAudioSegment(
+                segment_id="Yosemite_segment_001",
+                audio_path="/tmp/y.wav",
+                timeline_start_seconds=10.0,
+                timeline_end_seconds=20.0,
+            ),
+        ],
+        shots=[
+            ResolvedShot(
+                shot_id="Intro_slot_001",
+                asset_id="yo_01",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=5.0,
+                source_start_seconds=0.0,
+                source_end_seconds=1.0,
+                folder_name="Intro",
+            ),
+            ResolvedShot(
+                shot_id="Yosemite_slot_001",
+                asset_id="yo_02",
+                timeline_start_seconds=10.0,
+                timeline_end_seconds=20.0,
+                source_start_seconds=0.0,
+                source_end_seconds=1.0,
+                folder_name="Yosemite",
+            ),
+        ],
+        chapters=[
+            ResolvedChapterEnvelope(
+                chapter_id="Intro",
+                folder_name="Intro",
+                chapter_video_start=0.0,
+                chapter_audio_start=0.0,
+                chapter_audio_end=5.0,
+                chapter_video_end=5.0,
+                first_shot_id="Intro_slot_001",
+                last_shot_id="Intro_slot_001",
+                segment_ids=["Intro_segment_001"],
+            )
+        ],
+    )
+    write_json(resolved_timeline_path(project), full)
+    before = resolved_timeline_path(project).read_text(encoding="utf-8")
+
+    captured: dict = {}
+
+    def _fake_export(project, *, basename, allow_errors=False, resolved=None, timeline_name=None):
+        captured["resolved"] = resolved
+        captured["basename"] = basename
+        captured["allow_errors"] = allow_errors
+        out = Path(project.language_work_dir_path) / "exports" / f"{basename}.otio"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("otio", encoding="utf-8")
+        return out
+
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.intro_cut_service.export_otio_from_resolved_timeline",
+        _fake_export,
+    ):
+        path = export_intro_otio(project, basename="only_intro", allow_errors=True)
+
+    assert path.name == "only_intro.otio"
+    assert captured["allow_errors"] is True
+    assert captured["resolved"] is not None
+    assert {s.shot_id for s in captured["resolved"].shots} == {"Intro_slot_001"}
+    assert {a.segment_id for a in captured["resolved"].audio_segments} == {
+        "Intro_segment_001"
+    }
+    after = resolved_timeline_path(project).read_text(encoding="utf-8")
+    assert before == after  # Gesamt-Timeline unverändert
+
+
 def test_filter_resolved_timeline_to_intro() -> None:
     resolved = ResolvedTimelineDocument(
         script_version="v1",
