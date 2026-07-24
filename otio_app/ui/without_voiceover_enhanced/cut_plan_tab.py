@@ -37,12 +37,23 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     load_cut_plan_options,
     save_cut_plan_options,
 )  # TIMING_MODE_* used in settings UI labels/defaults
+from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+    ChapterCutError,
+    export_all_chapters_otio,
+    export_chapter_otio,
+    generate_all_chapter_unified_cuts,
+    generate_chapter_unified_cut,
+    list_body_chapter_names,
+    list_chapter_cut_statuses,
+    load_chapter_unified_plan,
+    resolve_all_chapter_timelines,
+    resolve_chapter_timeline,
+)
 from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     CutPlanError,
     accept_supplement_candidates,
     generate_all_final_cuts,
     generate_all_rough_cuts,
-    generate_unified_cut_plan,
     list_cut_plan_chapter_names,
     merge_and_persist_final_cuts,
     merge_and_persist_rough_cuts,
@@ -1081,15 +1092,185 @@ def _render_intro_cut_section(
     st.divider()
 
 
+def _inject_chapter_done_button_css(done_keys: list[str]) -> None:
+    """Färbt fertige Kapitel-Buttons grün — stabile Keys, CSS nur für Done."""
+    if not done_keys:
+        return
+    rules: list[str] = []
+    for key in done_keys:
+        rules.append(
+            f'[class*="st-key-{key}"] button {{'
+            "background-color: #1e7e34 !important;"
+            "color: #ffffff !important;"
+            "border-color: #1c7430 !important;"
+            "}"
+            f'[class*="st-key-{key}"] button:hover {{'
+            "background-color: #218838 !important;"
+            "border-color: #1c7430 !important;"
+            "color: #ffffff !important;"
+            "}"
+        )
+    st.markdown(f"<style>{''.join(rules)}</style>", unsafe_allow_html=True)
+
+
+def _render_chapter_cut_rows(
+    project,
+    *,
+    provider: str,
+    model: str,
+) -> None:
+    """Pro Körper-Kapitel: Name | LLM Cut | Python Timing | OTIO."""
+    statuses = list_chapter_cut_statuses(project)
+    if not statuses:
+        st.caption("Keine Körper-Kapitel — Dramaturgie / Locked Script prüfen.")
+        return
+
+    done_keys: list[str] = []
+    for status in statuses:
+        if not status.matches:
+            continue
+        key_base = f"{status.folder_slug}_{project.id}"
+        done_keys.extend(
+            [
+                f"enh_ch_llm_{key_base}",
+                f"enh_ch_timing_{key_base}",
+                f"enh_ch_otio_{key_base}",
+            ]
+        )
+    _inject_chapter_done_button_css(done_keys)
+
+    done_count = sum(1 for s in statuses if s.matches)
+    st.caption(
+        f"Körper-Kapitel: {done_count}/{len(statuses)} fertig "
+        "(Plan + passendes Resolved) · Artefakte unter "
+        "`cut/chapters/{slug}/`."
+    )
+
+    for status in statuses:
+        folder = status.folder_name
+        slug = status.folder_slug
+        key_base = f"{slug}_{project.id}"
+        label = f"{'✅ ' if status.matches else ''}{folder}"
+        name_col, llm_col, timing_col, otio_col = st.columns([2.2, 1, 1, 1])
+        with name_col:
+            st.markdown(f"**{label}**")
+            detail = (
+                f"{status.plan_slots} Slots"
+                if status.has_plan
+                else "kein Plan"
+            )
+            if status.has_resolved:
+                detail += f" · {status.resolved_shots} Shots"
+            elif status.has_plan:
+                detail += " · Timing fehlt"
+            st.caption(detail)
+        with llm_col:
+            run_llm = st.button(
+                "LLM Cut",
+                key=f"enh_ch_llm_{key_base}",
+                use_container_width=True,
+            )
+        with timing_col:
+            run_timing = st.button(
+                "Python Timing",
+                key=f"enh_ch_timing_{key_base}",
+                use_container_width=True,
+                disabled=not status.has_plan,
+            )
+        with otio_col:
+            run_otio = st.button(
+                "OTIO",
+                key=f"enh_ch_otio_{key_base}",
+                use_container_width=True,
+                disabled=not status.has_plan,
+            )
+
+        if run_llm:
+            try:
+                with st.spinner(f"LLM Cut · „{folder}“…"):
+                    result = generate_chapter_unified_cut(
+                        project,
+                        folder,
+                        provider=provider,
+                        model=model,
+                    )
+                st.success(
+                    f"„{folder}“: {result.slot_count} Slots · "
+                    f"{result.gap_count} weak/none → "
+                    f"`cut/chapters/{slug}/unified_cut_plan.json`."
+                )
+                st.rerun()
+            except ChapterCutError as exc:
+                st.error(str(exc))
+            except CutPlanError as exc:
+                st.error(str(exc))
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"LLM-Fehler ({folder}): {exc}")
+
+        if run_timing:
+            try:
+                with st.spinner(f"Python Timing · „{folder}“…"):
+                    resolved = resolve_chapter_timeline(project, folder)
+                st.success(
+                    f"„{folder}“: {len(resolved.shots)} Shots · "
+                    f"{resolved.total_duration_seconds:.1f}s."
+                )
+                if resolved.errors:
+                    with st.expander(
+                        f"Fehler „{folder}“ ({len(resolved.errors)})",
+                        expanded=False,
+                    ):
+                        _render_timing_error_summary(resolved.errors)
+                st.rerun()
+            except ChapterCutError as exc:
+                st.error(str(exc))
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Timing-Fehler ({folder}): {exc}")
+
+        if run_otio:
+            try:
+                with st.spinner(f"OTIO · „{folder}“…"):
+                    path = export_chapter_otio(
+                        project,
+                        folder,
+                        basename=f"{project.name}_{slug}",
+                        allow_errors=True,
+                    )
+                st.success(f"Kapitel-OTIO: `{path}`")
+            except EnhancedOtioExportError as exc:
+                st.error(str(exc))
+            except ChapterCutError as exc:
+                st.error(str(exc))
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"OTIO-Fehler ({folder}): {exc}")
+
+        plan = load_chapter_unified_plan(project, folder)
+        if plan is not None and plan.slots:
+            with st.expander(f"Cut Plan · {folder}", expanded=False):
+                for slot in plan.slots[:40]:
+                    st.caption(
+                        f"{slot.slot_id}: fit={slot.asset_fit} · "
+                        f"asset={slot.local_asset_id or '—'} · "
+                        f"gap={slot.coverage_gap_id or '—'}"
+                    )
+                if len(plan.slots) > 40:
+                    st.caption(f"… +{len(plan.slots) - 40} weitere Slots")
+        if status.errors or status.repairs:
+            with st.expander(
+                f"Hinweise · {folder} "
+                f"({len(status.errors)} Fehler / {len(status.repairs)} Repairs)",
+                expanded=False,
+            ):
+                if status.errors:
+                    _render_timing_error_summary(status.errors)
+                for note in status.repairs[:30]:
+                    st.caption(note)
+
+
 def _render_section_unified(project) -> None:
     st.subheader("1. Unified Cut Plan (LLM) → 2. Python Timing")
     _render_slim_status(project)
-    chapters = list_cut_plan_chapter_names(project)
-    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
-        is_intro_folder_name,
-    )
-
-    body_chapters = [c for c in chapters if not is_intro_folder_name(c)]
+    body_chapters = list_body_chapter_names(project)
     chapter_count = max(1, len(body_chapters))
     rough_provider, rough_model, rough_max = _render_enhanced_cut_model(
         project,
@@ -1100,7 +1281,7 @@ def _render_section_unified(project) -> None:
         input_tokens=_estimate_rough_cut_input_tokens(project)[0],
         default_output_tokens=_ROUGH_CUT_OUTPUT_DEFAULT,
         chapter_count=chapter_count,
-        cost_scope_label="Körper-Kapitel (Button unten, ohne Intro)",
+        cost_scope_label="Körper-Kapitel (Batch/Zeilen, ohne Intro)",
         cost_note=(
             "Ceiling für alle Körper-Kapitel-Calls — nicht der Intro-Call. "
             "Intro hat eine eigene Schätzung darunter."
@@ -1112,11 +1293,13 @@ def _render_section_unified(project) -> None:
         model=rough_model,
         output_ceiling=rough_max,
     )
+
+    st.markdown("##### 1. Körper-Kapitel (pro Ordner)")
     st.caption(
-        f"Kapitel Schritt 1: **ein LLM-Call pro Kapitel** "
-        f"({chapter_count} Kapitel, ohne Intro) → "
-        "`unified_cut_plan.json`. Schritt 2: Python-Timing getrennt starten "
-        "(kein erneuter LLM-Call)."
+        f"**ein LLM-Call pro Kapitel** ({chapter_count}, ohne Intro) → "
+        "`cut/chapters/{slug}/unified_cut_plan.json`. "
+        "Batch oben = gleiche Schleife wie die Zeilen-Buttons. "
+        "**Alle OTIO** merged Intro + Kapitel in Dramaturgie-Reihenfolge."
     )
     cut_options = load_cut_plan_options(project)
     if cut_options.include_middle_frames:
@@ -1125,26 +1308,33 @@ def _render_section_unified(project) -> None:
             f"(max. {cut_options.max_middle_frames_per_chapter}/Kapitel)."
         )
 
-    col_llm, col_timing = st.columns(2)
+    col_llm, col_timing, col_otio = st.columns(3)
     with col_llm:
-        run_llm = st.button(
-            "1 · Unified Cut Plan erzeugen (LLM)",
+        run_all_llm = st.button(
+            "Alle LLM Cuts",
             type="primary",
-            key="enh_unified_cut_llm",
+            key="enh_unified_cut_llm_all",
             use_container_width=True,
         )
     with col_timing:
-        run_timing = st.button(
-            "2 · Python Timing auflösen",
-            key="enh_unified_cut_timing",
+        run_all_timing = st.button(
+            "Alle Python Timings",
+            key="enh_unified_cut_timing_all",
+            use_container_width=True,
+            help="Pro Kapitel Resolved unter cut/chapters/{slug}/ — kein LLM.",
+        )
+    with col_otio:
+        run_all_otio = st.button(
+            "Alle OTIO",
+            key="enh_unified_cut_otio_all",
             use_container_width=True,
             help=(
-                "Liest den gespeicherten Unified Cut Plan und erzeugt die "
-                "aufgelöste Timeline. Kein LLM-Call."
+                "Intro + alle Kapitel-Timelines mergen → eine OTIO und "
+                "globale resolved_timeline.json."
             ),
         )
 
-    if run_llm:
+    if run_all_llm:
         try:
             progress = st.empty()
 
@@ -1154,99 +1344,107 @@ def _render_section_unified(project) -> None:
                     f"({resolve_llm_model_id(rough_provider, rough_model)})…"
                 )
 
-            with st.spinner("Unified Cut Plan (nur LLM)…"):
-                plan = generate_unified_cut_plan(
+            with st.spinner("Alle Kapitel-LLM-Cuts…"):
+                results = generate_all_chapter_unified_cuts(
                     project,
                     provider=rough_provider,
                     model=rough_model,
                     progress_callback=_unified_progress,
                 )
             progress.empty()
-            gaps = sum(
-                1 for s in plan.slots if str(s.asset_fit) in {"weak", "none"}
-            )
+            total_slots = sum(r.slot_count for r in results)
+            total_gaps = sum(r.gap_count for r in results)
             st.success(
-                f"LLM-Plan gespeichert: {len(plan.slots)} Slots · "
-                f"{len(plan.boundaries)} Grenzen · "
-                f"{gaps} weak/none Gaps. "
-                "Als Nächstes „Python Timing auflösen“."
+                f"{len(results)} Kapitel gespeichert · {total_slots} Slots · "
+                f"{total_gaps} weak/none Gaps. Als Nächstes Timing."
             )
             st.rerun()
+        except ChapterCutError as exc:
+            st.error(str(exc))
         except CutPlanError as exc:
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
             st.error(f"LLM-Fehler: {exc}")
 
-    if run_timing:
+    if run_all_timing:
         try:
-            with st.spinner("Python Timing…"):
-                plan, resolved, merge_report = resolve_unified_cut_plan_timeline(
-                    project,
-                    run_gap_merge=True,
-                    provider=rough_provider,
-                    model=rough_model,
+            progress = st.empty()
+
+            def _timing_progress(folder_name: str, index: int, total: int) -> None:
+                progress.info(
+                    f"Python Timing · Kapitel {index}/{total}: „{folder_name}“…"
                 )
+
+            with st.spinner("Alle Kapitel-Timings…"):
+                timed = resolve_all_chapter_timelines(
+                    project, progress_callback=_timing_progress
+                )
+            progress.empty()
+            shots = sum(len(r.shots) for _, r in timed)
             st.success(
-                f"Timing ok: {len(resolved.shots)} Shots · "
-                f"{resolved.total_duration_seconds:.1f}s · "
-                f"{len(plan.slots)} Slots im Plan."
+                f"{len(timed)} Kapitel aufgelöst · {shots} Shots gesamt."
             )
-            if resolved.repairs:
-                with st.expander(
-                    f"Repairs / Hinweise ({len(resolved.repairs)})", expanded=False
-                ):
-                    for note in resolved.repairs[:40]:
-                        st.caption(note)
-            if merge_report is not None:
-                st.info(merge_report.message or "Gap-Merge ausgeführt.")
-                if merge_report.open_none_gap_ids:
-                    st.warning(
-                        "Offene none-Gaps: "
-                        + ", ".join(merge_report.open_none_gap_ids)
-                    )
             st.rerun()
-        except CutPlanError as exc:
+        except ChapterCutError as exc:
             st.error(str(exc))
-        except UnifiedTimelineError as exc:
-            _render_timing_error_summary(exc.errors or exc)
         except Exception as exc:  # noqa: BLE001
             st.error(f"Timing-Fehler: {exc}")
 
+    if run_all_otio:
+        try:
+            with st.spinner("Intro + Kapitel → OTIO…"):
+                path = export_all_chapters_otio(
+                    project,
+                    basename=f"{project.name}_enhanced",
+                    allow_errors=True,
+                    include_intro=True,
+                )
+            merged = load_model(
+                resolved_timeline_path(project), ResolvedTimelineDocument
+            )
+            n_shots = len(merged.shots) if merged else 0
+            st.success(
+                f"Gesamt-OTIO: `{path}` · {n_shots} Shots "
+                "(Intro + Kapitel gemerged)."
+            )
+            st.rerun()
+        except ChapterCutError as exc:
+            st.error(str(exc))
+        except EnhancedOtioExportError as exc:
+            st.error(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"OTIO-Fehler: {exc}")
+
+    _render_chapter_cut_rows(
+        project,
+        provider=rough_provider,
+        model=rough_model,
+    )
+
+    st.divider()
+    st.markdown("##### Gesamt (Merge / Funnel)")
     plan = load_model(unified_cut_plan_path(project), UnifiedCutPlanDocument)
     if plan is not None:
         st.caption(
-            f"Gespeicherter Unified Plan: {len(plan.slots)} Slots · "
-            f"{len(plan.pause_directives)} Pausen."
+            f"Globaler Unified Plan: {len(plan.slots)} Slots · "
+            f"{len(plan.pause_directives)} Pausen "
+            "(Intro + Kapitel gemerged)."
         )
-        for slot in plan.slots[:40]:
-            st.caption(
-                f"{slot.slot_id}: fit={slot.asset_fit} · "
-                f"asset={slot.local_asset_id or '—'} · "
-                f"gap={slot.coverage_gap_id or '—'}"
-            )
-        if len(plan.slots) > 40:
-            st.caption(f"… +{len(plan.slots) - 40} weitere Slots")
     else:
-        st.caption("Noch kein Unified Cut Plan — zuerst Schritt 1 (LLM).")
+        st.caption("Noch kein globaler Unified Plan — Kapitel-LLM zuerst.")
 
     resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
     if resolved is not None:
         st.caption(
-            f"Aufgelöste Timeline: {len(resolved.shots)} Shots · "
+            f"Globale Timeline: {len(resolved.shots)} Shots · "
             f"{resolved.total_duration_seconds:.1f}s · "
             f"{len(resolved.errors)} Fehler · {len(resolved.repairs)} Repairs."
         )
         if resolved.errors:
-            _render_timing_error_summary(resolved.errors)
-        elif resolved.repairs:
-            short_repairs = [
-                r for r in resolved.repairs if "zu kurz" in r.lower() or "als Gap" in r
-            ]
-            if short_repairs:
-                st.info(
-                    f"{len(short_repairs)} Slot(s) als Gap markiert "
-                    "(Asset zu kurz für Narrationsdauer) — im Funnel ersetzen."
-                )
+            with st.expander(
+                f"Globale Timing-Fehler ({len(resolved.errors)})", expanded=False
+            ):
+                _render_timing_error_summary(resolved.errors)
 
     merge_report = load_model(gap_merge_report_path(project), GapMergeReport)
     if merge_report is not None:

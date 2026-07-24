@@ -2007,14 +2007,27 @@ def generate_all_unified_cuts(
 def merge_and_persist_unified_cuts(
     project: Project,
     results: list[FolderUnifiedCutResult],
+    *,
+    write_chapter_artifacts: bool = True,
 ) -> Any:
-    """Merged Kapitel-Unified-Pläne → ``unified_cut_plan.json`` (+ Rough/Gaps-Schatten)."""
+    """Merged Kapitel-Unified-Pläne → ``unified_cut_plan.json`` (+ Rough/Gaps-Schatten).
+
+    Bei ``write_chapter_artifacts=True`` zusätzlich pro Körper-Kapitel nach
+    ``cut/chapters/{slug}/unified_cut_plan.json`` (Resolved dort invalidieren).
+    ``False`` nur für Merge-Refresh aus bereits persistierten Kapitel-Plänen —
+    sonst würden fertige Kapitel-Timings mitgelöscht.
+    """
+    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+        is_intro_folder_name,
+    )
     from otio_app.services.without_voiceover_enhanced.models import (
         CutBoundary,
         CutSlot,
         UnifiedCutPlanDocument,
     )
     from otio_app.services.without_voiceover_enhanced.paths import (
+        chapter_resolved_timeline_path,
+        chapter_unified_cut_plan_path,
         unified_cut_plan_path,
     )
     from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
@@ -2027,6 +2040,20 @@ def merge_and_persist_unified_cuts(
     if not ok:
         details = "; ".join(f"{r.folder_name}: {r.error}" for r in fail) or "unbekannt"
         raise CutPlanError(f"Unified Cut fehlgeschlagen für alle Kapitel. {details}")
+
+    # Per-Kapitel Artefakte (Körper) — Intro bleibt in intro_unified_cut_plan.json.
+    if write_chapter_artifacts:
+        for result in ok:
+            name = str(result.folder_name or "").strip()
+            if not name or is_intro_folder_name(name) or result.plan is None:
+                continue
+            write_json(chapter_unified_cut_plan_path(project, name), result.plan)
+            resolved_path = chapter_resolved_timeline_path(project, name)
+            if resolved_path.is_file():
+                try:
+                    resolved_path.unlink()
+                except OSError:
+                    pass
 
     boundaries: list[CutBoundary] = []
     slots: list[CutSlot] = []
