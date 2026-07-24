@@ -56,6 +56,7 @@ def test_intro_prompt_rules() -> None:
         style_profile_text="s",
         dramaturgy_text="d",
         intro_audio_duration_seconds=9.5,
+        sentence_timings_json='[{"sentence_id":"Intro_segment_001__s001"}]',
     )
     assert "BUNDLED INVENTORY" in prompt
     assert "strong" in prompt
@@ -64,6 +65,13 @@ def test_intro_prompt_rules() -> None:
     assert "9.500" in prompt
     assert "shot_min" in prompt
     assert "NOT enforced" in prompt
+    assert "KEYWORD / ENUMERATION SYNC" in prompt
+    assert "keyword onset" in prompt
+    assert "offset_seconds" in prompt
+    assert "mid_sentence" in prompt
+    assert "ElevenLabs" in prompt
+    assert "When both are present, offset_seconds wins." in prompt
+    assert "Do NOT pre-roll list-item pictures" in prompt
 
 
 def test_enforce_intro_strong_only_rejects_acceptable() -> None:

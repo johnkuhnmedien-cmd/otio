@@ -869,7 +869,8 @@ def build_intro_unified_cut_prompt(
     sentence_block = ""
     if sentence_timings_json.strip():
         sentence_block = f"""
-SENTENCE TIMINGS (authoritative, relative to each segment's audio):
+SENTENCE TIMINGS (authoritative; from ElevenLabs character timestamps,
+aggregated to sentence start/end, relative to each segment's audio):
 {sentence_timings_json}
 """
     return f"""\
@@ -884,7 +885,6 @@ INTRO-SPECIFIC RULES (CRITICAL — differ from chapter cuts):
 - Prefer precise, tight cuts. Shots around ~1 second are allowed and desirable.
 - Chapter Cut-Plan shot_min (e.g. 5s) is NOT enforced by Python on Intro slots;
   only a technical floor (~0.4s) applies. Cut freely for lists / reveals.
-- Lists / enumerations in the hook should become precise picture cuts.
 - Every assigned local asset MUST have asset_fit \"strong\".
 - Never use asset_fit \"acceptable\" or \"weak\". If the best local asset is only
   acceptable/weak, set local_asset_id to null, asset_fit \"none\", and create a
@@ -899,13 +899,54 @@ INTRO-SPECIFIC RULES (CRITICAL — differ from chapter cuts):
 - Use only segment_ids / sentence_ids from the Intro inputs.
 - Use only local_asset_id values that exist in BUNDLED INVENTORY.
 
+KEYWORD / ENUMERATION SYNC (CRITICAL — do not show places early):
+
+- When the VO names a concrete place, landmark, chapter topic, or list item,
+  the picture for that item MUST start at the spoken keyword onset — not
+  earlier in the same sentence or list.
+- Bad: show Antelope Canyon while the VO is still on a previous place / still
+  leading into the list.
+- Good: cut to Antelope Canyon exactly as \"Antelope\" / the place keyword begins.
+- Lists / enumerations in the hook: one short picture cut per list item, each
+  starting at that item's keyword onset.
+- Do NOT pre-roll list-item pictures during filler / connective speech before
+  their keyword.
+- Opening hold is separate: slot 1 may begin 4.0s before VO (Python preroll).
+  From VO start onward, keyword-onset sync applies to every place/list cut.
+- Estimate keyword onset from SENTENCE TIMINGS + sentence text: place the
+  boundary with alignment \"mid_sentence\" and a sentence-relative
+  offset_seconds (seconds from that sentence's start_seconds). Prefer
+  offset_seconds over coarse position for list/keyword cuts.
+- Example: sentence text \"… Antelope Canyon, Badlands …\", sentence
+  start_seconds=2.0, \"Antelope\" begins ~1.4s into the sentence → boundary at
+  that sentence_id with offset_seconds=1.4, alignment=\"mid_sentence\".
+
 INTRO VO duration (measured): {duration:.3f}s.
 
 FORMAT (same as unified chapter plans):
 
 - Output N slots and exactly N+1 boundaries.
+- Boundary i is the end of slot i and the start of slot i+1.
 - Boundaries cover ONLY the VO window (first=VO start, last=VO end).
 - Do NOT invent absolute timeline seconds/frames for body timing.
+
+TIMING / BOUNDARY RULES:
+
+- Use SEGMENT TIMINGS + SENTENCE TIMINGS to place cuts. Sentence times are
+  precise (ElevenLabs-derived); word times are not listed — compute
+  offset_seconds inside the sentence from text proportion / spoken pacing.
+- Boundaries use sentence_id + position (start|early|middle|late|end)
+  and/or offset_seconds (seconds from that sentence start).
+- When both are present, offset_seconds wins.
+- For keyword/list cuts: set offset_seconds explicitly; do not rely on
+  start|early|middle|late|end alone.
+- Keep mid_sentence cuts ≥ ~0.4s from sentence edges unless alignment is
+  sentence_boundary.
+- Every boundary MUST set alignment to exactly one of:
+  mid_sentence | sentence_boundary | in_pause
+- Boundaries must be chronologically non-decreasing on the VO carpet.
+- First boundary: first Intro sentence at position start (or offset 0).
+- Last boundary: last Intro sentence at position end (or end offset).
 
 SLOT / ASSET RULES:
 
@@ -927,7 +968,7 @@ OUTPUT SCHEMA:
       "cut_id": "{slug}_cut_000",
       "sentence_id": "Intro_segment_001__s001",
       "position": "start|early|middle|late|end",
-      "offset_seconds": null,
+      "offset_seconds": 1.4,
       "alignment": "mid_sentence|sentence_boundary|in_pause"
     }}
   ],
@@ -965,6 +1006,8 @@ FINAL VALIDATION:
 - asset_fit is only strong or none
 - Opening/closing assets differ when both assigned
 - All local_asset_id values exist in BUNDLED INVENTORY (or null)
+- Keyword/list picture cuts use mid_sentence + explicit offset_seconds at onset
+- No place/list picture starts before its spoken keyword (except slot-1 preroll)
 
 LOCKED SCRIPT (Intro only):
 {locked_script_json}
