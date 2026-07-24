@@ -315,6 +315,209 @@ def test_resolve_intro_timeline_calls_unified_without_persist(tmp_path) -> None:
     assert not resolved_timeline_path(project).exists()
 
 
+def test_persist_intro_plan_invalidates_stale_resolved(tmp_path) -> None:
+    from unittest.mock import patch
+
+    from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+    from otio_app.models import Project, ProjectMode
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        intro_resolved_timeline_path,
+        persist_intro_unified_plan,
+    )
+    from otio_app.services.without_voiceover_enhanced.io_utils import write_json
+    from otio_app.services.without_voiceover_enhanced.models import (
+        EnhancedScriptDocument,
+    )
+
+    root = tmp_path / "proj"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    project = Project(
+        name="Invalidate",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="de",
+        asset_subdir_names=["Yosemite"],
+        selected_asset_subdirs=["Yosemite"],
+        fps=25.0,
+    )
+    write_json(
+        intro_resolved_timeline_path(project),
+        ResolvedTimelineDocument(
+            script_version="v1",
+            fps=25.0,
+            total_duration_seconds=10.0,
+            shots=[
+                ResolvedShot(
+                    shot_id=f"Intro_slot_{i:03d}",
+                    asset_id="yo_01",
+                    timeline_start_seconds=float(i),
+                    timeline_end_seconds=float(i + 1),
+                    source_start_seconds=0.0,
+                    source_end_seconds=1.0,
+                    folder_name="Intro",
+                )
+                for i in range(10)
+            ],
+        ),
+    )
+    assert intro_resolved_timeline_path(project).is_file()
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            _bound("Intro_cut_000", "Intro_segment_001__s001", "start"),
+            _bound("Intro_cut_001", "Intro_segment_001__s001", "end"),
+        ],
+        slots=[_slot("Intro_slot_001", "strong", "yo_01")],
+        voiceover_preroll_sec=4.0,
+        voiceover_postroll_sec=6.5,
+    )
+    locked = EnhancedScriptDocument(script_version="v1", script_status="locked")
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.intro_cut_service.require_locked_script",
+        return_value=locked,
+    ):
+        persist_intro_unified_plan(project, plan)
+    assert not intro_resolved_timeline_path(project).exists()
+
+
+def test_export_intro_otio_reresolves_when_plan_and_resolved_mismatch(
+    tmp_path,
+) -> None:
+    from pathlib import Path
+    from unittest.mock import patch
+
+    from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+    from otio_app.models import Project, ProjectMode
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        export_intro_otio,
+        intro_resolved_timeline_path,
+        intro_unified_cut_plan_path,
+    )
+    from otio_app.services.without_voiceover_enhanced.io_utils import write_json
+
+    root = tmp_path / "proj"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    project = Project(
+        name="StaleExport",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="de",
+        asset_subdir_names=["Yosemite"],
+        selected_asset_subdirs=["Yosemite"],
+        fps=25.0,
+    )
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            _bound("Intro_cut_000", "Intro_segment_001__s001", "start"),
+            _bound("Intro_cut_001", "Intro_segment_001__s001", "middle"),
+            _bound("Intro_cut_002", "Intro_segment_001__s001", "end"),
+        ],
+        slots=[
+            _slot("Intro_slot_001", "strong", "yo_01"),
+            _slot("Intro_slot_002", "strong", "yo_02"),
+        ],
+        voiceover_preroll_sec=4.0,
+        voiceover_postroll_sec=6.5,
+    )
+    write_json(intro_unified_cut_plan_path(project), plan)
+    # Altes Timing mit 10 Shots (wie vor Prompt-Änderung).
+    write_json(
+        intro_resolved_timeline_path(project),
+        ResolvedTimelineDocument(
+            script_version="v1",
+            fps=25.0,
+            total_duration_seconds=40.0,
+            shots=[
+                ResolvedShot(
+                    shot_id=f"Intro_slot_{i:03d}",
+                    asset_id="yo_01",
+                    timeline_start_seconds=float(i),
+                    timeline_end_seconds=float(i + 1),
+                    source_start_seconds=0.0,
+                    source_end_seconds=1.0,
+                    folder_name="Intro",
+                    chapter_id="Intro",
+                )
+                for i in range(1, 11)
+            ],
+            audio_segments=[
+                ResolvedAudioSegment(
+                    segment_id="Intro_segment_001",
+                    audio_path="/tmp/intro.wav",
+                    timeline_start_seconds=4.0,
+                    timeline_end_seconds=20.0,
+                )
+            ],
+        ),
+    )
+    fresh = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=12.0,
+        shots=[
+            ResolvedShot(
+                shot_id="Intro_slot_001",
+                asset_id="yo_01",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=6.0,
+                source_start_seconds=0.0,
+                source_end_seconds=1.0,
+                folder_name="Intro",
+                chapter_id="Intro",
+            ),
+            ResolvedShot(
+                shot_id="Intro_slot_002",
+                asset_id="yo_02",
+                timeline_start_seconds=6.0,
+                timeline_end_seconds=12.0,
+                source_start_seconds=0.0,
+                source_end_seconds=1.0,
+                folder_name="Intro",
+                chapter_id="Intro",
+            ),
+        ],
+        audio_segments=[
+            ResolvedAudioSegment(
+                segment_id="Intro_segment_001",
+                audio_path="/tmp/intro.wav",
+                timeline_start_seconds=4.0,
+                timeline_end_seconds=10.0,
+            )
+        ],
+    )
+    captured: dict = {}
+
+    def _fake_resolve(project, **_kwargs):
+        write_json(intro_resolved_timeline_path(project), fresh)
+        return fresh
+
+    def _fake_export(project, *, basename, allow_errors=False, resolved=None, timeline_name=None):
+        captured["n_shots"] = len(resolved.shots) if resolved else 0
+        out = Path(project.language_work_dir_path) / "exports" / f"{basename}.otio"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("otio", encoding="utf-8")
+        return out
+
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.intro_cut_service.resolve_intro_timeline",
+            _fake_resolve,
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.intro_cut_service.export_otio_from_resolved_timeline",
+            _fake_export,
+        ),
+    ):
+        export_intro_otio(project, basename="stale_intro", allow_errors=True)
+
+    assert captured["n_shots"] == 2
+
+
 def test_export_intro_otio_does_not_rewrite_full_timeline(tmp_path) -> None:
     """Regression: Intro-Export darf resolved_timeline.json nicht überschreiben."""
     from pathlib import Path

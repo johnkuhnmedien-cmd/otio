@@ -1059,10 +1059,25 @@ def _render_intro_cut_section(
         intro_resolved_timeline_path(project), ResolvedTimelineDocument
     )
     if intro_plan is not None:
-        st.caption(
-            f"Intro-Plan: {len(intro_plan.slots)} Slots · "
-            f"Resolved: {'ja' if intro_resolved is not None else 'nein'}"
+        from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+            intro_resolved_matches_plan,
         )
+
+        n_plan = len(intro_plan.slots)
+        n_res = len(intro_resolved.shots) if intro_resolved is not None else 0
+        st.caption(
+            f"Intro-Plan: {n_plan} Slots · "
+            f"Resolved: {n_res} Shots"
+            + ("" if intro_resolved is not None else " (fehlt)")
+        )
+        if intro_resolved is not None and not intro_resolved_matches_plan(
+            intro_plan, intro_resolved
+        ):
+            st.warning(
+                f"Plan ({n_plan} Slots) und Resolved ({n_res} Shots) passen nicht — "
+                "altes Timing. Bitte **Intro: Python Timing** erneut, sonst "
+                "exportiert OTIO den alten Stand."
+            )
     st.divider()
 
 

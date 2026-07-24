@@ -339,6 +339,32 @@ def merge_intro_and_body_plans(
     )
 
 
+def invalidate_intro_resolved_timeline(project: Project) -> bool:
+    """Löscht veraltetes Intro-Timing nach neuem LLM-Plan.
+
+    Sonst exportiert „Intro: OTIO“ weiter die alte ``intro_resolved_timeline.json``
+    (z. B. 10 Shots), obwohl der Plan schon 7 Slots hat.
+    """
+    path = intro_resolved_timeline_path(project)
+    if not path.is_file():
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def intro_resolved_matches_plan(
+    plan: UnifiedCutPlanDocument | None,
+    resolved: ResolvedTimelineDocument | None,
+) -> bool:
+    """True wenn Resolved zur aktuellen Slot-Anzahl des Intro-Plans passt."""
+    if plan is None or resolved is None:
+        return False
+    return len(resolved.shots) == len(plan.slots)
+
+
 def persist_intro_unified_plan(
     project: Project,
     intro_plan: UnifiedCutPlanDocument,
@@ -358,6 +384,8 @@ def persist_intro_unified_plan(
     locked = require_locked_script(project)
     intro_plan = enforce_intro_strong_only(intro_plan)
     write_json(intro_unified_cut_plan_path(project), intro_plan)
+    # Alter Resolved-Stand darf OTIO nicht mehr antreiben.
+    invalidate_intro_resolved_timeline(project)
 
     existing = load_model(unified_cut_plan_path(project), UnifiedCutPlanDocument)
     body = None
@@ -676,25 +704,38 @@ def export_intro_otio(
     """Separater OTIO-Export nur für Intro — lässt die Gesamt-Timeline unangetastet.
 
     Standard ``allow_errors=True``: Lücken/Placeholders im Intro sind ok.
-    Bevorzugt ``intro_resolved_timeline.json`` (Intro Python Timing); fällt sonst
-    auf Filter aus der Gesamt-Timeline zurück.
+    Nutzt ``intro_resolved_timeline.json`` nur wenn sie zum aktuellen
+    ``intro_unified_cut_plan.json`` passt (gleiche Shot-/Slot-Anzahl).
+    Sonst: frisch aus dem Plan resolven — verhindert OTIO mit altem 10-Shot-
+    Timing nach neuem 7-Slot-LLM-Plan.
     """
     assert_enhanced_work_root(project)
+    plan = load_model(intro_unified_cut_plan_path(project), UnifiedCutPlanDocument)
     intro_resolved = load_model(
         intro_resolved_timeline_path(project), ResolvedTimelineDocument
     )
-    if intro_resolved is None or (
-        not intro_resolved.shots and not intro_resolved.audio_segments
-    ):
-        # Frisches Intro-Timing, wenn Plan vorhanden.
+    needs_resolve = (
+        intro_resolved is None
+        or (not intro_resolved.shots and not intro_resolved.audio_segments)
+        or not intro_resolved_matches_plan(plan, intro_resolved)
+    )
+    if needs_resolve:
+        # Frisches Intro-Timing aus dem aktuellen Plan.
         try:
             intro_resolved = resolve_intro_timeline(project)
         except IntroCutError:
+            if plan is not None:
+                raise EnhancedOtioExportError(
+                    "Intro-Plan und Resolved passen nicht zusammen / Timing "
+                    "fehlgeschlagen — bitte „Intro: Python Timing“ erneut. "
+                    f"(Plan: {len(plan.slots)} Slots, Resolved: "
+                    f"{len(intro_resolved.shots) if intro_resolved else 0} Shots)."
+                ) from None
             full = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
             if full is None:
                 raise EnhancedOtioExportError(
-                    "Intro-Timeline fehlt — zuerst „Intro: Python Timing“ "
-                    "(oder Gesamt-„Python Timing auflösen“)."
+                    "Intro-Timeline fehlt — zuerst „Intro: LLM Schnitt“ und "
+                    "„Intro: Python Timing“."
                 ) from None
             intro_resolved = filter_resolved_timeline_to_intro(full)
             write_json(intro_resolved_timeline_path(project), intro_resolved)
