@@ -22,6 +22,7 @@ from otio_app.models import Project
 from otio_app.services.still_image_export_style import (
     DEFAULT_STILL_IMAGE_ZOOM,
     STILL_BACKGROUND_NONE,
+    STILL_BACKGROUND_PAPER_EDGE,
     STILL_BACKGROUND_VINTAGE,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
@@ -50,6 +51,7 @@ CUT_PLAN_MODE_CHOICES: tuple[str, ...] = (CUT_PLAN_MODE_LEGACY, CUT_PLAN_MODE_UN
 
 STILL_BACKGROUND_CHOICES = (
     STILL_BACKGROUND_VINTAGE,
+    STILL_BACKGROUND_PAPER_EDGE,
     STILL_BACKGROUND_NONE,
 )
 

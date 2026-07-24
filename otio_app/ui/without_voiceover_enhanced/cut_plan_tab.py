@@ -725,6 +725,10 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             "Still-Style aktiv (Background + Skalierung)",
             value=bool(current.still_image_style_enabled),
             key=f"enh_opt_still_style_{project.id}",
+            help=(
+                "Beim OTIO-Export werden JPEG/PNG-Stills auf die Projektauflösung "
+                "komponiert (Zoom + Hintergrund). Videos bleiben unverändert."
+            ),
         )
         s1, s2 = st.columns(2)
         with s1:
@@ -736,9 +740,18 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 step=0.05,
                 key=f"enh_opt_still_zoom_{project.id}",
                 disabled=not still_image_style_enabled,
+                help=(
+                    "Anteil des Frames, in den das Foto eingepasst wird "
+                    "(0.8 = ~80 % Fläche, Hintergrund bleibt sichtbar)."
+                ),
             )
         with s2:
             bg_options = list(STILL_BACKGROUND_CHOICES)
+            bg_labels = {
+                "vintage": "vintage — Pergament + Vignette",
+                "paper_edge": "paper_edge — Pergament + Papierrand",
+                "none": "none — schwarzer Hintergrund",
+            }
             bg_index = (
                 bg_options.index(current.still_image_background_style)
                 if current.still_image_background_style in bg_options
@@ -748,8 +761,14 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 "Still Background",
                 options=bg_options,
                 index=bg_index,
+                format_func=lambda v: bg_labels.get(v, v),
                 key=f"enh_opt_still_bg_{project.id}",
                 disabled=not still_image_style_enabled,
+                help=(
+                    "vintage: warmes Pergament. "
+                    "paper_edge: Foto mit unregelmäßigem Papierrand + Schatten. "
+                    "none: nur Zoom auf Schwarz."
+                ),
             )
 
         draft = CutPlanOptions(

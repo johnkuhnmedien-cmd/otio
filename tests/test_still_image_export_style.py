@@ -15,6 +15,7 @@ from otio_app.services.edit_plan_rules import ExportRuleOptions
 from otio_app.services.media_utils import MediaTiming
 from otio_app.services.otio_exporter import _append_timeline_item_clip
 from otio_app.services.still_image_export_style import (
+    STILL_BACKGROUND_PAPER_EDGE,
     STILL_BACKGROUND_VINTAGE,
     VINTAGE_BACKGROUND_RGB,
     ensure_styled_still_for_export,
@@ -51,6 +52,7 @@ def _write_photo(path: Path, *, size: tuple[int, int] = (800, 600), color=(40, 1
 
 def test_still_style_needed_defaults() -> None:
     assert still_style_needed(enabled=True, zoom=0.8, background_style="vintage") is True
+    assert still_style_needed(enabled=True, zoom=1.0, background_style="paper_edge") is True
     assert still_style_needed(enabled=False, zoom=0.8, background_style="vintage") is False
     assert still_style_needed(enabled=True, zoom=1.0, background_style="none") is False
     assert still_style_needed(enabled=True, zoom=0.8, background_style="none") is True
@@ -74,6 +76,29 @@ def test_render_styled_still_image_vintage_zoom(tmp_path: Path) -> None:
         corner = img.getpixel((10, 10))
         assert abs(corner[0] - VINTAGE_BACKGROUND_RGB[0]) < 80
         assert abs(corner[1] - VINTAGE_BACKGROUND_RGB[1]) < 80
+
+
+def test_render_styled_still_image_paper_edge(tmp_path: Path) -> None:
+    source = _write_photo(tmp_path / "photo.jpg", size=(1000, 500), color=(10, 20, 200))
+    output = tmp_path / "paper.jpg"
+    render_styled_still_image(
+        source,
+        output,
+        width=1920,
+        height=1080,
+        zoom=0.8,
+        background_style=STILL_BACKGROUND_PAPER_EDGE,
+    )
+    assert output.is_file()
+    with Image.open(output) as img:
+        assert img.size == (1920, 1080)
+        # Ecken: Pergament-Hintergrund (Foto sitzt innen mit Zackenrand)
+        corner = img.getpixel((8, 8))
+        assert abs(corner[0] - VINTAGE_BACKGROUND_RGB[0]) < 90
+        assert abs(corner[1] - VINTAGE_BACKGROUND_RGB[1]) < 90
+        # Bildmitte sollte Foto-Blau tragen
+        center = img.getpixel((960, 540))
+        assert center[2] > center[0]  # bläulich
 
 
 def test_ensure_styled_still_caches(tmp_path: Path) -> None:
