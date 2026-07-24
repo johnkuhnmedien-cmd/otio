@@ -95,6 +95,14 @@ from otio_app.services.without_voiceover_enhanced.models import (
     UnifiedCutPlanDocument,
 )
 from otio_app.ui.without_voiceover_enhanced.timeline_view import render_realtime_timeline
+from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+    IntroCutError,
+    export_intro_otio,
+    generate_intro_unified_cut,
+    intro_resolved_timeline_path,
+    intro_unified_cut_plan_path,
+    resolve_intro_timeline,
+)
 from otio_app.services.without_voiceover_enhanced.otio_export_service import (
     EnhancedOtioExportError,
     export_otio_from_resolved_timeline,
@@ -825,11 +833,123 @@ def _render_slim_status(project) -> None:
         )
 
 
+def _render_intro_cut_section(project, *, provider: str, model: str) -> None:
+    """Separater Intro-Pfad vor den Kapitel-Unified-Buttons."""
+    st.markdown("##### 0. Intro Cut (separat)")
+    st.caption(
+        "Nur Intro: alle Kapitel-Inventare gebündelt · nur asset_fit=strong · "
+        "Opening 4s vor VO · Closing 5–8s nach VO · eigene OTIO. "
+        "Kapitel-Unified-Buttons lassen Intro unverändert."
+    )
+    intro_basename = st.text_input(
+        "Intro-OTIO Dateiname",
+        value=f"{project.name}_intro",
+        key=f"enh_intro_otio_basename_{project.id}",
+    )
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        run_intro_llm = st.button(
+            "Intro: LLM Schnitt",
+            type="primary",
+            key=f"enh_intro_cut_llm_{project.id}",
+            use_container_width=True,
+        )
+    with col_b:
+        run_intro_timing = st.button(
+            "Intro: Python Timing",
+            key=f"enh_intro_cut_resolve_{project.id}",
+            use_container_width=True,
+        )
+    with col_c:
+        run_intro_otio = st.button(
+            "Intro: OTIO exportieren",
+            key=f"enh_intro_cut_otio_{project.id}",
+            use_container_width=True,
+        )
+
+    if run_intro_llm:
+        try:
+            with st.spinner("Intro Unified-LLM…"):
+                result = generate_intro_unified_cut(
+                    project, provider=provider, model=model
+                )
+            st.success(
+                f"Intro-Cut: {result.slot_count} Slots · "
+                f"{result.gap_count} none-Gaps (strong-only) · "
+                f"Inventar {result.bundled_inventory.get('asset_count', 0)} Assets / "
+                f"{result.bundled_inventory.get('chapter_count', 0)} Kapitel."
+            )
+            if result.gap_count:
+                st.warning(
+                    "Intro-Gaps → Supplement-Funnel. Danach Intro-LLM/Timing erneut."
+                )
+            st.rerun()
+        except IntroCutError as exc:
+            st.error(str(exc))
+        except CutPlanError as exc:
+            st.error(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Intro-LLM-Fehler: {exc}")
+
+    if run_intro_timing:
+        try:
+            with st.spinner("Intro Python-Timing…"):
+                resolved = resolve_intro_timeline(
+                    project, provider=provider, model=model
+                )
+            st.success(
+                f"Intro-Timeline: {resolved.total_duration_seconds:.2f}s · "
+                f"{len(resolved.shots)} Shots · "
+                f"{len(resolved.audio_segments)} Audio "
+                "(Opening 4s + Closing-Hold)."
+            )
+            if resolved.repairs:
+                with st.expander("Intro Repair-Log", expanded=False):
+                    for note in resolved.repairs[:40]:
+                        st.caption(note)
+            st.rerun()
+        except IntroCutError as exc:
+            st.error(str(exc))
+        except UnifiedTimelineError as exc:
+            _render_timing_error_summary(exc.errors or exc)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Intro-Timing-Fehler: {exc}")
+
+    if run_intro_otio:
+        try:
+            with st.spinner("Intro-OTIO…"):
+                path = export_intro_otio(
+                    project,
+                    basename=(intro_basename or "").strip() or "enhanced_intro",
+                )
+            st.success(f"Intro-OTIO geschrieben: `{path}`")
+        except EnhancedOtioExportError as exc:
+            st.error(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Intro-OTIO-Fehler: {exc}")
+
+    intro_plan = load_model(intro_unified_cut_plan_path(project), UnifiedCutPlanDocument)
+    intro_resolved = load_model(
+        intro_resolved_timeline_path(project), ResolvedTimelineDocument
+    )
+    if intro_plan is not None:
+        st.caption(
+            f"Intro-Plan: {len(intro_plan.slots)} Slots · "
+            f"Resolved: {'ja' if intro_resolved is not None else 'nein'}"
+        )
+    st.divider()
+
+
 def _render_section_unified(project) -> None:
     st.subheader("1. Unified Cut Plan (LLM) → 2. Python Timing")
     _render_slim_status(project)
     chapters = list_cut_plan_chapter_names(project)
-    chapter_count = max(1, len(chapters))
+    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+        is_intro_folder_name,
+    )
+
+    body_chapters = [c for c in chapters if not is_intro_folder_name(c)]
+    chapter_count = max(1, len(body_chapters))
     rough_provider, rough_model, _rough_max = _render_enhanced_cut_model(
         project,
         role_attr="enhanced_rough_cut",
@@ -840,8 +960,12 @@ def _render_section_unified(project) -> None:
         default_output_tokens=_ROUGH_CUT_OUTPUT_DEFAULT,
         chapter_count=chapter_count,
     )
+    _render_intro_cut_section(
+        project, provider=rough_provider, model=rough_model
+    )
     st.caption(
-        f"Schritt 1: **ein LLM-Call pro Kapitel** ({chapter_count} Kapitel) → "
+        f"Kapitel Schritt 1: **ein LLM-Call pro Kapitel** "
+        f"({chapter_count} Kapitel, ohne Intro) → "
         "`unified_cut_plan.json`. Schritt 2: Python-Timing getrennt starten "
         "(kein erneuter LLM-Call)."
     )

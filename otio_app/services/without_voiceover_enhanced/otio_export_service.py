@@ -303,16 +303,22 @@ def validate_resolved_timeline_for_production(
                     f"Kapitel {chapter.chapter_id}: postroll_hold_shot_id ist Bridge "
                     f"({chapter.postroll_hold_shot_id})."
                 )
-            if abs(chapter.preroll_seconds - preroll) > 1e-3:
-                errors.append(
-                    f"Kapitel {chapter.chapter_id}: preroll "
-                    f"{chapter.preroll_seconds:.2f}s ≠ Settings {preroll:.2f}s."
-                )
-            if abs(chapter.postroll_seconds - postroll) > 1e-3:
-                errors.append(
-                    f"Kapitel {chapter.chapter_id}: postroll "
-                    f"{chapter.postroll_seconds:.2f}s ≠ Settings {postroll:.2f}s."
-                )
+            from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+                _is_intro_folder,
+            )
+
+            # Intro: feste 4s / 5–8s Hüllen — nicht gegen Kapitel-Settings prüfen.
+            if not _is_intro_folder(chapter.chapter_id):
+                if abs(chapter.preroll_seconds - preroll) > 1e-3:
+                    errors.append(
+                        f"Kapitel {chapter.chapter_id}: preroll "
+                        f"{chapter.preroll_seconds:.2f}s ≠ Settings {preroll:.2f}s."
+                    )
+                if abs(chapter.postroll_seconds - postroll) > 1e-3:
+                    errors.append(
+                        f"Kapitel {chapter.chapter_id}: postroll "
+                        f"{chapter.postroll_seconds:.2f}s ≠ Settings {postroll:.2f}s."
+                    )
     elif resolved.audio_segments and preroll > 0:
         non_zero = [
             a

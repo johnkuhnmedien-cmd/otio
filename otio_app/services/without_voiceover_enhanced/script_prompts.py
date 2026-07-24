@@ -851,6 +851,137 @@ DRAMATURGY:
 """
 
 
+def build_intro_unified_cut_prompt(
+    *,
+    locked_script_json: str,
+    segment_timings_json: str,
+    bundled_inventory_json: str,
+    style_profile_text: str,
+    dramaturgy_text: str,
+    folder_name: str = "Intro",
+    folder_slug: str = "Intro",
+    sentence_timings_json: str = "",
+    intro_audio_duration_seconds: float = 0.0,
+) -> str:
+    """Unified-Schema, aber Intro-Sonderregeln (strong-only, bundeltes Inventar)."""
+    slug = folder_slug or folder_name or "Intro"
+    duration = max(0.1, float(intro_audio_duration_seconds or 0.0))
+    sentence_block = ""
+    if sentence_timings_json.strip():
+        sentence_block = f"""
+SENTENCE TIMINGS (authoritative, relative to each segment's audio):
+{sentence_timings_json}
+"""
+    return f"""\
+You are the INTRO cut planner (unified format) for a documentary pipeline.
+
+Plan ONLY the Intro chapter "{folder_name}" (id prefix: {slug}_).
+Do not plan body chapters.
+
+INTRO-SPECIFIC RULES (CRITICAL — differ from chapter cuts):
+
+- You receive ALL chapter inventories in ONE bundled JSON (by folder).
+- Prefer precise, tight cuts. Shots around ~1 second are allowed and desirable.
+- Normal chapter shot min/max settings do NOT apply strictly here.
+- Lists / enumerations in the hook should become precise picture cuts.
+- Every assigned local asset MUST have asset_fit \"strong\".
+- Never use asset_fit \"acceptable\" or \"weak\". If the best local asset is only
+  acceptable/weak, set local_asset_id to null, asset_fit \"none\", and create a
+  coverage_gap (inline gap fields + search_concepts).
+- Opening: Python will hold the first slot for 4.0s BEFORE Intro VO starts.
+  Set voiceover_preroll_sec to 4.0.
+- Closing: Python will hold the last slot for 5–8s AFTER Intro VO ends.
+  Set voiceover_postroll_sec between 5 and 8 (prefer ~6.5 unless justified).
+- Opening and closing slots must use different local_asset_id values when both
+  have strong assets.
+- Prefix every cut_id, slot_id and coverage_gap_id with \"{slug}_\".
+- Use only segment_ids / sentence_ids from the Intro inputs.
+- Use only local_asset_id values that exist in BUNDLED INVENTORY.
+
+INTRO VO duration (measured): {duration:.3f}s.
+
+FORMAT (same as unified chapter plans):
+
+- Output N slots and exactly N+1 boundaries.
+- Boundaries cover ONLY the VO window (first=VO start, last=VO end).
+- Do NOT invent absolute timeline seconds/frames for body timing.
+
+SLOT / ASSET RULES:
+
+- asset_fit must be exactly: strong | none
+- strong: coverage_gap_id null
+- none: local_asset_id null AND coverage_gap_id + needed_visual + search_concepts
+- narrative_function for first/last may be chapter_open / chapter_close
+
+RETURN STRICT JSON ONLY. No Markdown. No comments. No trailing commas.
+
+OUTPUT SCHEMA:
+
+{{
+  "voiceover_preroll_sec": 4.0,
+  "voiceover_postroll_sec": 6.5,
+  "pause_directives": [],
+  "boundaries": [
+    {{
+      "cut_id": "{slug}_cut_000",
+      "sentence_id": "Intro_segment_001__s001",
+      "position": "start|early|middle|late|end",
+      "offset_seconds": null,
+      "alignment": "mid_sentence|sentence_boundary|in_pause"
+    }}
+  ],
+  "slots": [
+    {{
+      "slot_id": "{slug}_slot_001",
+      "local_asset_id": "existing_asset_id_or_null",
+      "asset_fit": "strong|none",
+      "asset_fit_reason": "Why strong — or why no strong asset exists.",
+      "visual_intent": "...",
+      "narrative_function": "chapter_open|orientation|context|evidence|atmosphere|transition|contrast|reveal|reflection|chapter_close",
+      "coverage_gap_id": "{slug}_gap_001_or_null",
+      "source_range_intent": "representative_middle_section",
+      "needed_visual": "prose description of the missing visual",
+      "search_concepts": ["2-4 English stock search phrases"],
+      "must_include": ["..."],
+      "must_avoid": ["..."],
+      "desired_motion": "static|pan|tilt|tracking|drone|handheld|zoom|unknown",
+      "desired_framing": "close|medium|wide|aerial|pov",
+      "preferred_media_type": "video|photo|either",
+      "fact_check_required": false,
+      "covered_sentence_ids": ["Intro_segment_001__s001"]
+    }}
+  ]
+}}
+
+GAP / SEARCH CONCEPT RULES:
+
+- When coverage_gap_id is set, search_concepts is REQUIRED (2–4 English
+  keyword phrases, 2–5 words each).
+
+FINAL VALIDATION:
+
+- len(slots) == len(boundaries) - 1
+- asset_fit is only strong or none
+- Opening/closing assets differ when both assigned
+- All local_asset_id values exist in BUNDLED INVENTORY (or null)
+
+LOCKED SCRIPT (Intro only):
+{locked_script_json}
+
+SEGMENT TIMINGS:
+{segment_timings_json}
+{sentence_block}
+BUNDLED INVENTORY (all chapters, one JSON):
+{bundled_inventory_json}
+
+STYLE PROFILE:
+{style_profile_text}
+
+DRAMATURGY:
+{dramaturgy_text}
+"""
+
+
 def build_final_cut_prompt(
     *,
     locked_script_json: str,

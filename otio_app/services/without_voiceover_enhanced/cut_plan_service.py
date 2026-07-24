@@ -1798,8 +1798,30 @@ def generate_unified_cut_for_folder(
 
         options = load_cut_plan_options(project)
         include_frames = bool(options.include_middle_frames)
+        from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+            is_intro_folder_name,
+        )
+
+        is_intro = is_intro_folder_name(folder_name)
         assets_folder = folder_name or None
-        if assets_folder and assets_folder not in project.selected_asset_subdirs:
+        bundled_inventory: dict[str, Any] | None = None
+        if is_intro:
+            from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+                build_bundled_inventory_for_intro,
+                intro_bundled_inventory_path,
+            )
+
+            bundled_inventory = build_bundled_inventory_for_intro(
+                project, include_middle_frames=include_frames
+            )
+            write_json(intro_bundled_inventory_path(project), bundled_inventory)
+            local_assets = list(bundled_inventory.get("all_assets") or [])
+            if not local_assets:
+                raise CutPlanError(
+                    "Intro: gebündeltes Inventar ist leer — "
+                    "Slim-Inventare der Kapitel aufbauen."
+                )
+        elif assets_folder and assets_folder not in project.selected_asset_subdirs:
             local_assets = _local_assets_payload(
                 project,
                 folder_name=assets_folder,
@@ -1825,24 +1847,47 @@ def generate_unified_cut_for_folder(
         sentence_timings_json = build_sentence_timings_json_for_segments(
             project, segment_ids=segment_ids
         )
-        prompt = build_unified_cut_prompt(
-            locked_script_json=context.script_slice.model_dump_json(indent=2),
-            segment_timings_json=context.timings_slice.model_dump_json(indent=2),
-            local_assets_json=json.dumps(
-                local_assets, ensure_ascii=False, indent=2
-            ),
-            style_profile_text=_style_text(project),
-            dramaturgy_text=dramaturgy_text,
-            folder_name=folder_name,
-            folder_slug=context.folder_slug,
-            previous_folder_name=context.previous_folder_name,
-            next_folder_name=context.next_folder_name,
-            include_middle_frames=include_frames,
-            shot_constraints_text=format_shot_constraints_for_prompt(options),
-            sentence_timings_json=sentence_timings_json,
-            cut_rhythm_targets_text=DEFAULT_CUT_RHYTHM_TARGETS,
-            used_in_ledger_text=used_in_ledger_text,
-        )
+        if is_intro:
+            from otio_app.services.without_voiceover_enhanced.script_prompts import (
+                build_intro_unified_cut_prompt,
+            )
+
+            intro_duration = sum(
+                float(seg.duration_seconds or 0.0)
+                for seg in context.timings_slice.segments
+            )
+            prompt = build_intro_unified_cut_prompt(
+                locked_script_json=context.script_slice.model_dump_json(indent=2),
+                segment_timings_json=context.timings_slice.model_dump_json(indent=2),
+                bundled_inventory_json=json.dumps(
+                    bundled_inventory or {}, ensure_ascii=False, indent=2
+                ),
+                style_profile_text=_style_text(project),
+                dramaturgy_text=dramaturgy_text,
+                folder_name=folder_name,
+                folder_slug=context.folder_slug,
+                sentence_timings_json=sentence_timings_json,
+                intro_audio_duration_seconds=intro_duration,
+            )
+        else:
+            prompt = build_unified_cut_prompt(
+                locked_script_json=context.script_slice.model_dump_json(indent=2),
+                segment_timings_json=context.timings_slice.model_dump_json(indent=2),
+                local_assets_json=json.dumps(
+                    local_assets, ensure_ascii=False, indent=2
+                ),
+                style_profile_text=_style_text(project),
+                dramaturgy_text=dramaturgy_text,
+                folder_name=folder_name,
+                folder_slug=context.folder_slug,
+                previous_folder_name=context.previous_folder_name,
+                next_folder_name=context.next_folder_name,
+                include_middle_frames=include_frames,
+                shot_constraints_text=format_shot_constraints_for_prompt(options),
+                sentence_timings_json=sentence_timings_json,
+                cut_rhythm_targets_text=DEFAULT_CUT_RHYTHM_TARGETS,
+                used_in_ledger_text=used_in_ledger_text,
+            )
         images = (
             middle_frame_attachments_from_payload(
                 local_assets,
@@ -1874,6 +1919,12 @@ def generate_unified_cut_for_folder(
         )
         if not plan.slots:
             raise CutPlanError("LLM-Antwort enthielt keine Slots.")
+        if is_intro:
+            from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+                enforce_intro_strong_only,
+            )
+
+            plan = enforce_intro_strong_only(plan)
         _rough, coverage = unified_to_rough(plan)
         return FolderUnifiedCutResult(
             folder_name=display_name,
@@ -1906,9 +1957,18 @@ def generate_all_unified_cuts(
         raise CutPlanError("; ".join(errors))
     timings = load_segment_timings(project)
     assert timings is not None
+    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+        is_intro_folder_name,
+    )
+
     contexts = _build_chapter_contexts(project, locked, timings)
+    # Intro hat eigene Buttons — Kapitel-Lauf überspringt Intro.
+    contexts = [c for c in contexts if not is_intro_folder_name(c.folder_name)]
     if not contexts:
-        raise CutPlanError("Keine Kapitel mit Segmenten für den Unified Cut.")
+        raise CutPlanError(
+            "Keine Kapitel mit Segmenten für den Unified Cut "
+            "(Intro separat über Intro-Buttons)."
+        )
 
     results: list[FolderUnifiedCutResult] = []
     prior_plans: list[Any] = []
@@ -2018,6 +2078,28 @@ def merge_and_persist_unified_cuts(
     )
 
     coverage = enrich_coverage_search_concepts(project, coverage, plan=merged)
+
+    # Vorhandenes Intro-Fragment nach Kapitel-Merge wieder vorne einhängen.
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        intro_unified_cut_plan_path,
+        merge_intro_and_body_plans,
+        split_intro_from_unified,
+    )
+
+    existing = load_model(unified_cut_plan_path(project), UnifiedCutPlanDocument)
+    intro_plan = load_model(intro_unified_cut_plan_path(project), UnifiedCutPlanDocument)
+    if intro_plan is None and existing is not None:
+        intro_plan, _ = split_intro_from_unified(existing)
+    if intro_plan is not None:
+        merged = merge_intro_and_body_plans(
+            intro=intro_plan,
+            body=merged,
+            script_version=locked.script_version,
+        )
+        rough, coverage = unified_to_rough(merged)
+        coverage = enrich_coverage_search_concepts(project, coverage, plan=merged)
+        pauses = list(merged.pause_directives)
+
     write_json(unified_cut_plan_path(project), merged)
     write_json(rough_cut_plan_path(project), rough)
     write_json(coverage_gaps_path(project), coverage)
