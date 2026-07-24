@@ -45,7 +45,13 @@ def _try_handle_oauth_callback(key_prefix: str) -> bool:
 
     if error:
         desc = st.query_params.get("error_description") or ""
-        st.error(f"Adobe-Login abgebrochen: {error} {desc}".strip())
+        hint = ""
+        if str(error) == "invalid_scope":
+            hint = (
+                " — Scope wird von diesem Credential nicht akzeptiert. "
+                "App-Version pullen/neu starten; Login erneut versuchen."
+            )
+        st.error(f"Adobe-Login abgebrochen: {error} {desc}".strip() + hint)
         _clear_oauth_query_params()
         return True
 
@@ -90,9 +96,15 @@ def render_adobe_oauth_panel(*, key_prefix: str = "adobe_oauth") -> None:
 
     redirect = get_adobe_redirect_uri()
     st.caption(
-        f"Redirect-URI (in der Adobe Developer Console eintragen): `{redirect}` "
-        "— Umgebungsvariable `ADOBE_STOCK_REDIRECT_URI` zum Anpassen."
+        f"Redirect-URI (exakt wie in der Adobe Developer Console): `{redirect}`"
     )
+    if redirect.lower().startswith("https://"):
+        st.info(
+            "Adobe verlangt oft HTTPS als Redirect, Streamlit läuft lokal aber auf HTTP. "
+            "Nach dem Adobe-Login erscheint ggf. ein SSL-Fehler: in der Adresszeile "
+            "`https://` → `http://` ändern und Enter — der `?code=…`-Teil bleibt wichtig. "
+            "Alternativ die komplette URL unter „Callback-URL manuell einfügen“ pasten."
+        )
 
     if not has_oauth_client_credentials():
         st.error(

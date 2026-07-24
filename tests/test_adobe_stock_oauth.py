@@ -33,9 +33,7 @@ def test_build_authorize_url_contains_required_params(oauth_data_dir: Path) -> N
     assert qs["client_id"] == ["client-id-123"]
     assert qs["response_type"] == ["code"]
     assert qs["state"][0]
-    assert "openid" in qs["scope"][0]
-    assert "AdobeID" in qs["scope"][0]
-    assert "offline_access" not in qs["scope"][0]
+    assert qs["scope"] == ["openid,AdobeID"]
     assert qs["redirect_uri"] == ["https://localhost:8501/adobe-stock-import"]
     assert (oauth_data_dir / oauth.ADOBE_STOCK_OAUTH_STATE_FILENAME).is_file()
 
