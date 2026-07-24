@@ -234,9 +234,167 @@ def test_photo_uses_standard_license(tmp_path: Path, monkeypatch: pytest.MonkeyP
         destination=tmp_path / "photo",
         media_hint="image",
     )
-    assert license_type == "Standard"
+    assert license_type.startswith("Standard")
     assert calls == ["Standard"]
     assert path.is_file()
+
+
+def test_4k_over_600mb_falls_back_to_hd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services import adobe_research_import as mod
+    from otio_app.services.supplement_sources.adobe_stock import AdobeAssetTooLargeError
+
+    monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
+    monkeypatch.setattr(mod, "_LICENSE_RETRY_PAUSE_SECONDS", 0)
+    downloads: list[tuple[int | None, int | None]] = []
+
+    class _Adapter:
+        def lookup_file_metadata(self, content_id, api_key):
+            return {"media_type_id": 4, "content_type": "video/mp4"}
+
+        def content_info_purchase(self, *_a, **_k):
+            return {"state": "not_purchased"}
+
+        def find_license_history_download(self, *_a, **_k):
+            return None
+
+        def _license_asset(self, content_id, license_type, api_key, access_token, *, diagnose=True):
+            return {
+                "state": "just_purchased",
+                "license": license_type,
+                "url": f"https://stock.adobe.com/Rest/Libraries/Download/{content_id}/4",
+                "content_type": "video/mp4",
+            }
+
+        def _stream_download_to_file(self, url, local_path, *, api_key, access_token, size, max_bytes):
+            downloads.append((size, max_bytes))
+            if max_bytes is not None:
+                raise AdobeAssetTooLargeError()
+            local_path.write_bytes(b"x" * 200_000)
+
+    monkeypatch.setattr(mod, "get_api_key", lambda key: "x")
+    monkeypatch.setattr(mod, "get_adobe_access_token", lambda: "tok")
+
+    path, license_type = mod._license_and_download_to_path(
+        _Adapter(),
+        content_id="999",
+        media_type="video",
+        destination=tmp_path / "big",
+        media_hint="video",
+    )
+    assert license_type.startswith("Video_HD (4K>600MB)")
+    assert "MB" in license_type
+    assert downloads[0][0] == 2160 and downloads[0][1] == mod.ADOBE_STOCK_VIDEO_4K_MAX_BYTES
+    assert downloads[1][0] == 1080 and downloads[1][1] is None
+    assert path.is_file()
+
+
+def test_content_info_4k_over_600mb_continues_to_hd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bereits gekauftes 4K >600MB darf nicht als Erfolg enden — Fallback HD."""
+    from otio_app.services import adobe_research_import as mod
+    from otio_app.services.supplement_sources.adobe_stock import AdobeAssetTooLargeError
+
+    monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
+    monkeypatch.setattr(mod, "_LICENSE_RETRY_PAUSE_SECONDS", 0)
+    license_calls: list[str] = []
+
+    class _Adapter:
+        def lookup_file_metadata(self, content_id, api_key):
+            return {"media_type_id": 4, "content_type": "video/mp4"}
+
+        def content_info_purchase(self, content_id, license_type, api_key, access_token):
+            if license_type == "Video_4K":
+                return {
+                    "state": "purchased",
+                    "license": "Video_4K",
+                    "url": f"https://stock.adobe.com/Rest/Libraries/Download/{content_id}/4",
+                    "content_type": "video/mp4",
+                }
+            return {"state": "not_purchased"}
+
+        def find_license_history_download(self, *_a, **_k):
+            return None
+
+        def _license_asset(self, content_id, license_type, api_key, access_token, *, diagnose=True):
+            license_calls.append(license_type)
+            return {
+                "state": "just_purchased",
+                "license": license_type,
+                "url": f"https://stock.adobe.com/Rest/Libraries/Download/{content_id}/hd",
+                "content_type": "video/mp4",
+            }
+
+        def _stream_download_to_file(self, url, local_path, *, api_key, access_token, size, max_bytes):
+            if max_bytes is not None:
+                raise AdobeAssetTooLargeError()
+            local_path.write_bytes(b"x" * 200_000)
+
+    monkeypatch.setattr(mod, "get_api_key", lambda key: "x")
+    monkeypatch.setattr(mod, "get_adobe_access_token", lambda: "tok")
+
+    path, license_type = mod._license_and_download_to_path(
+        _Adapter(),
+        content_id="777",
+        media_type="video",
+        destination=tmp_path / "from-info",
+        media_hint="video",
+    )
+    assert license_type.startswith("Video_HD (4K>600MB)")
+    assert license_calls == ["Video_HD"]
+    assert path.is_file()
+
+
+def test_post_download_size_guard_rejects_oversized_4k(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wenn der Stream die Grenze verfehlt, greift der Dateigrößen-Check."""
+    from otio_app.services import adobe_research_import as mod
+
+    monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
+    monkeypatch.setattr(mod, "_LICENSE_RETRY_PAUSE_SECONDS", 0)
+    # Kleine Grenze (über MIN_DOWNLOAD), damit der Test keine 600-MB-Datei schreibt.
+    monkeypatch.setattr(mod, "ADOBE_STOCK_VIDEO_4K_MAX_BYTES", 150_000)
+
+    class _Adapter:
+        def lookup_file_metadata(self, content_id, api_key):
+            return {"media_type_id": 4, "content_type": "video/mp4"}
+
+        def content_info_purchase(self, *_a, **_k):
+            return {"state": "not_purchased"}
+
+        def find_license_history_download(self, *_a, **_k):
+            return None
+
+        def _license_asset(self, content_id, license_type, api_key, access_token, *, diagnose=True):
+            return {
+                "state": "just_purchased",
+                "license": license_type,
+                "url": f"https://stock.adobe.com/Rest/Libraries/Download/{content_id}/4",
+                "content_type": "video/mp4",
+            }
+
+        def _stream_download_to_file(self, url, local_path, *, api_key, access_token, size, max_bytes):
+            # Simuliert: Stream-Limit greift nicht, Datei ist trotzdem zu groß.
+            if max_bytes is not None:
+                local_path.write_bytes(b"x" * (max_bytes + 1024))
+            else:
+                local_path.write_bytes(b"x" * 200_000)
+
+    monkeypatch.setattr(mod, "get_api_key", lambda key: "x")
+    monkeypatch.setattr(mod, "get_adobe_access_token", lambda: "tok")
+
+    path, license_type = mod._license_and_download_to_path(
+        _Adapter(),
+        content_id="888",
+        media_type="video",
+        destination=tmp_path / "guard",
+        media_hint="video",
+    )
+    assert license_type.startswith("Video_HD (4K>600MB)")
+    assert path.stat().st_size == 200_000
 
 
 def test_already_licensed_uses_content_info_url(
@@ -281,7 +439,7 @@ def test_already_licensed_uses_content_info_url(
         destination=tmp_path / "vid",
         media_hint="video",
     )
-    assert license_type == "Video_HD"
+    assert license_type.startswith("Video_HD")
     assert path.suffix == ".mp4"
 
 

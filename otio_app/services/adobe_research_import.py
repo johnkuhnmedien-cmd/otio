@@ -596,6 +596,15 @@ def _extension_for_purchase(purchase: dict, media_type: str) -> str:
     return ".jpg" if media_type == "image" else ".mp4"
 
 
+def _format_license_with_size(license_type: str, local_path: Path) -> str:
+    """Lizenzlabel inkl. Dateigröße für Live-Log / Board."""
+    try:
+        mb = local_path.stat().st_size / (1024 * 1024)
+    except OSError:
+        return license_type
+    return f"{license_type} · {mb:.0f} MB"
+
+
 def _download_purchase_to_path(
     adapter: AdobeStockAdapter,
     purchase: dict,
@@ -622,6 +631,14 @@ def _download_purchase_to_path(
     if not local_path.is_file() or local_path.stat().st_size < ADOBE_STOCK_MIN_DOWNLOAD_BYTES:
         local_path.unlink(missing_ok=True)
         raise RuntimeError("Download zu klein / ungültig.")
+    # Sicherheitsnetz: auch wenn Content-Length fehlte / Stream-Abbruch
+    # nicht greift, darf 4K die 600-MB-Grenze nicht behalten.
+    if max_bytes is not None and local_path.stat().st_size > max_bytes:
+        local_path.unlink(missing_ok=True)
+        raise AdobeAssetTooLargeError(
+            f"Download {local_path.name} überschreitet "
+            f"{max_bytes / (1024 * 1024):.0f} MB-Grenze."
+        )
     return local_path
 
 
@@ -706,9 +723,13 @@ def _license_and_download_to_path(
                     size=size,
                     max_bytes=max_bytes,
                 )
-                return path, str(info.get("license") or license_type)
+                used = str(info.get("license") or license_type)
+                if max_bytes is not None and any(">600MB" in e for e in attempt_errors):
+                    used = f"{used} (nach 4K>600MB)"
+                return path, _format_license_with_size(used, path)
             except AdobeAssetTooLargeError:
-                attempt_errors.append(f"{license_type}: bereits lizenziert, aber >600MB")
+                attempt_errors.append(f"{license_type}: >600MB → Fallback HD")
+                continue
             except Exception as exc:  # noqa: BLE001
                 attempt_errors.append(f"{license_type}: Info-Download {exc}")
 
@@ -753,9 +774,14 @@ def _license_and_download_to_path(
                 size=size,
                 max_bytes=max_bytes,
             )
-            return path, license_type
+            used = license_type
+            if license_type == ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD and any(
+                ">600MB" in e for e in attempt_errors
+            ):
+                used = "Video_HD (4K>600MB)"
+            return path, _format_license_with_size(used, path)
         except AdobeAssetTooLargeError:
-            attempt_errors.append(f"{license_type}: Datei > 600MB → nächste Qualität")
+            attempt_errors.append(f"{license_type}: >600MB → Fallback HD")
             continue
         except Exception as exc:  # noqa: BLE001
             attempt_errors.append(f"{license_type}: Download {exc}")
@@ -765,10 +791,19 @@ def _license_and_download_to_path(
     history = adapter.find_license_history_download(content_id, api_key, access_token)
     if history:
         try:
-            hist_type = "image" if "image" in str(history.get("content_type") or "").lower() else resolved_type
-            size = 2160 if history.get("license") == ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K else (
-                1080 if history.get("license") == ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD else None
+            hist_type = (
+                "image"
+                if "image" in str(history.get("content_type") or "").lower()
+                else resolved_type
             )
+            hist_license = str(history.get("license") or "")
+            if hist_license == ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD:
+                size, max_bytes = 1080, None
+            elif hist_type == "video":
+                # Auch ohne klares Video_4K-Label: History-Videos >600MB → HD.
+                size, max_bytes = 2160, ADOBE_STOCK_VIDEO_4K_MAX_BYTES
+            else:
+                size, max_bytes = None, None
             path = _download_purchase_to_path(
                 adapter,
                 history,
@@ -777,9 +812,32 @@ def _license_and_download_to_path(
                 access_token=access_token,
                 media_type=hist_type,
                 size=size,
-                max_bytes=ADOBE_STOCK_VIDEO_4K_MAX_BYTES if size == 2160 else None,
+                max_bytes=max_bytes,
             )
-            return path, str(history.get("license") or "history")
+            return path, _format_license_with_size(hist_license or "history", path)
+        except AdobeAssetTooLargeError:
+            attempt_errors.append("LicenseHistory: 4K>600MB → versuche Video_HD")
+            try:
+                purchase = adapter._license_asset(
+                    content_id,
+                    ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD,
+                    api_key,
+                    access_token,
+                    diagnose=False,
+                )
+                path = _download_purchase_to_path(
+                    adapter,
+                    purchase,
+                    destination,
+                    api_key=api_key,
+                    access_token=access_token,
+                    media_type=resolved_type,
+                    size=1080,
+                    max_bytes=None,
+                )
+                return path, _format_license_with_size("Video_HD (4K>600MB)", path)
+            except Exception as exc2:  # noqa: BLE001
+                attempt_errors.append(f"Video_HD after history: {exc2}")
         except Exception as exc:  # noqa: BLE001
             attempt_errors.append(f"LicenseHistory: {exc}")
 
