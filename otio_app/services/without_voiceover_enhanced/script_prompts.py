@@ -935,15 +935,18 @@ TIMING / BOUNDARY RULES:
 - Use SEGMENT TIMINGS + SENTENCE TIMINGS to place cuts. Sentence times are
   precise (ElevenLabs-derived); word times are not listed — compute
   offset_seconds inside the sentence from text proportion / spoken pacing.
-- Boundaries use sentence_id + position (start|early|middle|late|end)
-  and/or offset_seconds (seconds from that sentence start).
-- When both are present, offset_seconds wins.
-- For keyword/list cuts: set offset_seconds explicitly; do not rely on
-  start|early|middle|late|end alone.
+- TWO DIFFERENT FIELDS — do not mix them:
+  - position = ONLY start|early|middle|late|end (coarse place in the sentence)
+  - alignment = ONLY mid_sentence|sentence_boundary|in_pause (cut type)
+  - NEVER put mid_sentence / sentence_boundary / in_pause into position.
+- Boundaries use sentence_id + position and/or offset_seconds (seconds from
+  that sentence start). When both are present, offset_seconds wins.
+- For keyword/list cuts: set offset_seconds explicitly AND
+  alignment=\"mid_sentence\". Example:
+  {{\"sentence_id\":\"…\",\"position\":\"middle\",\"offset_seconds\":1.4,
+  \"alignment\":\"mid_sentence\"}}
 - Keep mid_sentence cuts ≥ ~0.4s from sentence edges unless alignment is
   sentence_boundary.
-- Every boundary MUST set alignment to exactly one of:
-  mid_sentence | sentence_boundary | in_pause
 - Boundaries must be chronologically non-decreasing on the VO carpet.
 - First boundary: first Intro sentence at position start (or offset 0).
 - Last boundary: last Intro sentence at position end (or end offset).

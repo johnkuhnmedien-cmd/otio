@@ -180,6 +180,33 @@ def test_parse_rejects_invalid_position() -> None:
         parse_unified_cut_response(payload, "v1")
 
 
+def test_parse_coerces_alignment_value_misplaced_in_position() -> None:
+    """Sonnet setzt oft position=mid_sentence — gehört nach alignment."""
+    payload = _sample_payload()
+    payload["boundaries"][1]["position"] = "mid_sentence"
+    payload["boundaries"][1]["alignment"] = "sentence_boundary"
+    payload["boundaries"][1]["offset_seconds"] = 1.4
+    plan = parse_unified_cut_response(payload, "v1")
+    mid = plan.boundaries[1]
+    assert mid.position is None  # offset gesetzt → position entbehrlich
+    assert mid.alignment == "mid_sentence"
+    assert mid.offset_seconds == 1.4
+
+
+def test_cut_boundary_model_repairs_mid_sentence_position() -> None:
+    from otio_app.services.without_voiceover_enhanced.models import CutBoundary
+
+    boundary = CutBoundary(
+        cut_id="Intro_cut_002",
+        sentence_id="Intro_segment_001__s001",
+        position="mid_sentence",  # type: ignore[arg-type]
+        offset_seconds=None,
+        alignment="sentence_boundary",
+    )
+    assert boundary.alignment == "mid_sentence"
+    assert boundary.position == "middle"
+
+
 def test_parse_rejects_broken_boundary_slot_invariant() -> None:
     payload = _sample_payload()
     payload["slots"] = payload["slots"][:1]

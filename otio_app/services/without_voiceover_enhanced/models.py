@@ -231,6 +231,27 @@ class CutBoundary(BaseModel):
     offset_seconds: Optional[float] = None
     alignment: CutAlignment = "sentence_boundary"
 
+    @model_validator(mode="before")
+    @classmethod
+    def _repair_misplaced_alignment_in_position(cls, data: Any) -> Any:
+        """LLM-/Disk-Repair bevor Literal greift: position=mid_sentence → alignment."""
+        if not isinstance(data, dict):
+            return data
+        pos = data.get("position")
+        if pos is None or pos == "":
+            return data
+        pos_text = str(pos).strip().lower()
+        if pos_text not in CUT_ALIGNMENTS:
+            return data
+        align = str(data.get("alignment") or "sentence_boundary").strip().lower()
+        if align == "sentence_boundary" or align not in CUT_ALIGNMENTS:
+            data["alignment"] = pos_text
+        if data.get("offset_seconds") is not None:
+            data["position"] = None
+        else:
+            data["position"] = "middle"
+        return data
+
     @field_validator("position", mode="before")
     @classmethod
     def _normalize_position(cls, value: Any) -> Any:
@@ -250,6 +271,10 @@ class CutBoundary(BaseModel):
         if self.position is None and self.offset_seconds is None:
             raise ValueError(
                 f"{self.cut_id}: CutBoundary braucht position oder offset_seconds."
+            )
+        if self.position is not None and str(self.position) not in BOUNDARY_POSITIONS:
+            raise ValueError(
+                f"{self.cut_id}: ungültige position {self.position!r}."
             )
         return self
 

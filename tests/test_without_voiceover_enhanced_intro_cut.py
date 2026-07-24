@@ -108,6 +108,8 @@ def test_intro_prompt_rules() -> None:
     assert "ElevenLabs" in prompt
     assert "When both are present, offset_seconds wins." in prompt
     assert "Do NOT pre-roll list-item pictures" in prompt
+    assert "NEVER put mid_sentence" in prompt
+    assert "TWO DIFFERENT FIELDS" in prompt
 
 
 def test_enforce_intro_strong_only_rejects_acceptable() -> None:
