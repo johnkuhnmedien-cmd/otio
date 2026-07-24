@@ -92,7 +92,10 @@ def test_intro_prompt_rules() -> None:
         style_profile_text="s",
         dramaturgy_text="d",
         intro_audio_duration_seconds=9.5,
-        sentence_timings_json='[{"sentence_id":"Intro_segment_001__s001"}]',
+        sentence_timings_json=(
+            '[{"sentence_id":"Intro_segment_001__s001",'
+            '"words":[{"text":"Antelope","offset_seconds":1.4}]}]'
+        ),
     )
     assert "BUNDLED INVENTORY" in prompt
     assert "strong" in prompt
@@ -103,6 +106,9 @@ def test_intro_prompt_rules() -> None:
     assert "NOT enforced" in prompt
     assert "KEYWORD / ENUMERATION SYNC" in prompt
     assert "keyword onset" in prompt
+    assert "words[]" in prompt
+    assert "Prefer WORD TIMINGS" in prompt
+    assert "word times are not listed" not in prompt
     assert "offset_seconds" in prompt
     assert "mid_sentence" in prompt
     assert "ElevenLabs" in prompt
@@ -114,6 +120,7 @@ def test_intro_prompt_rules() -> None:
     assert "After the LAST list/keyword cut" in prompt
     assert "Last boundary: last Intro sentence, position end" in prompt
     assert "first = VO start; last = VO end" in prompt
+    assert "Antelope" in prompt
 
 
 def test_enforce_intro_strong_only_rejects_acceptable() -> None:

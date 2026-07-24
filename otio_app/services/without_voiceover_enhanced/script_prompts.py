@@ -1192,7 +1192,10 @@ def build_intro_unified_cut_prompt(
     if sentence_timings_json.strip():
         sentence_block = f"""
 SENTENCE TIMINGS (authoritative; from ElevenLabs character timestamps,
-aggregated to sentence start/end, relative to each segment's audio):
+relative to each segment's audio). Each sentence may include words[] with
+text / start_seconds / end_seconds / offset_seconds (offset_seconds =
+seconds from that sentence's start_seconds). Prefer words[].offset_seconds
+for keyword/list onset cuts when present.
 {sentence_timings_json}
 """
     return f"""\
@@ -1242,14 +1245,14 @@ KEYWORD / ENUMERATION SYNC (CRITICAL — do not show places early):
   the final boundary at the last keyword — place it at the last sentence end.
 - Opening hold is separate: slot 1 may begin 4.0s before VO (Python preroll).
   From VO start onward, keyword-onset sync applies to every place/list cut.
-- Estimate keyword onset from SENTENCE TIMINGS + sentence text: place the
-  boundary with alignment \"mid_sentence\" and a sentence-relative
-  offset_seconds (seconds from that sentence's start_seconds). Prefer
-  offset_seconds over coarse position for list/keyword cuts.
+- Prefer WORD TIMINGS: for keyword/list cuts, set alignment \"mid_sentence\"
+  and offset_seconds from words[].offset_seconds of the spoken keyword (or
+  the first word of a multi-word place name). Fall back to text proportion
+  only when words[] is missing for that sentence.
 - Example (mid-list cut only — NOT the final boundary):
-  sentence text \"… Antelope Canyon, Badlands …\", sentence start_seconds=2.0,
-  \"Antelope\" begins ~1.4s into the sentence → boundary at that sentence_id
-  with offset_seconds=1.4, position=\"middle\", alignment=\"mid_sentence\".
+  words[] contains {{\"text\":\"Antelope\",\"offset_seconds\":1.4}} →
+  boundary at that sentence_id with offset_seconds=1.4, position=\"middle\",
+  alignment=\"mid_sentence\".
 
 INTRO VO duration (measured): {duration:.3f}s.
 
@@ -1265,9 +1268,9 @@ FORMAT (same as unified chapter plans):
 
 TIMING / BOUNDARY RULES:
 
-- Use SEGMENT TIMINGS + SENTENCE TIMINGS to place cuts. Sentence times are
-  precise (ElevenLabs-derived); word times are not listed — compute
-  offset_seconds inside the sentence from text proportion / spoken pacing.
+- Use SEGMENT TIMINGS + SENTENCE TIMINGS (with words[] when present).
+- Prefer words[].offset_seconds for keyword/list onset; fall back to text
+  proportion only when words[] is missing for that sentence.
 - TWO DIFFERENT FIELDS — do not mix them:
   - position = ONLY start|early|middle|late|end (coarse place in the sentence)
   - alignment = ONLY mid_sentence|sentence_boundary|in_pause (cut type)
@@ -1365,7 +1368,8 @@ FINAL VALIDATION:
 - asset_fit is only strong or none
 - Opening/closing assets differ when both assigned
 - All local_asset_id values exist in BUNDLED INVENTORY (or null)
-- Keyword/list picture cuts use mid_sentence + explicit offset_seconds at onset
+- Keyword/list picture cuts use mid_sentence + words[].offset_seconds when
+  words[] is present (else text-proportion offset_seconds)
 - No place/list picture starts before its spoken keyword (except slot-1 preroll)
 - Preroll/postroll are outside the VO window — do not leave narration uncovered
 
