@@ -12,8 +12,11 @@ from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
 from otio_app.models import Project, ProjectMode
 from otio_app.project_layout import get_folder_inventory_path
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    UNIFIED_CUT_STYLE_KEYWORD_SYNC,
+    UNIFIED_CUT_STYLE_RHYTHM,
     CutPlanOptions,
     format_shot_constraints_for_prompt,
+    is_keyword_sync_unified_style,
     load_cut_plan_options,
     save_cut_plan_options,
 )
@@ -77,9 +80,12 @@ def test_options_roundtrip_new_fields(tmp_path: Path) -> None:
     assert defaults.voiceover_preroll_sec == 1.0
     assert defaults.voiceover_postroll_sec == 5.0
     assert defaults.short_asset_tolerance_sec == 1.0
+    assert defaults.unified_cut_style == UNIFIED_CUT_STYLE_RHYTHM
+    assert not is_keyword_sync_unified_style(defaults)
     saved = save_cut_plan_options(
         project,
         CutPlanOptions(
+            unified_cut_style=UNIFIED_CUT_STYLE_KEYWORD_SYNC,
             shot_min_sec=2.5,
             shot_max_sec=6.0,
             video_head_trim_sec=0.5,
@@ -96,6 +102,8 @@ def test_options_roundtrip_new_fields(tmp_path: Path) -> None:
         ),
     )
     loaded = load_cut_plan_options(project)
+    assert loaded.unified_cut_style == UNIFIED_CUT_STYLE_KEYWORD_SYNC
+    assert is_keyword_sync_unified_style(loaded)
     assert loaded.shot_min_sec == saved.shot_min_sec == 2.5
     assert loaded.shot_max_sec == 6.0
     assert loaded.video_head_trim_sec == 0.5
@@ -107,6 +115,19 @@ def test_options_roundtrip_new_fields(tmp_path: Path) -> None:
     assert loaded.folder_title_enabled is True
     assert loaded.still_image_zoom == 0.75
     assert loaded.still_image_background_style == "none"
+
+
+def test_legacy_options_default_to_rhythm_style(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    path = cut_plan_options_path(project)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '{"schema_version":"1.3","cut_plan_mode":"unified","shot_min_sec":5.0}',
+        encoding="utf-8",
+    )
+    loaded = load_cut_plan_options(project)
+    assert loaded.unified_cut_style == UNIFIED_CUT_STYLE_RHYTHM
+    assert not is_keyword_sync_unified_style(loaded)
 
 
 def test_legacy_options_json_still_loads(tmp_path: Path) -> None:
@@ -401,4 +422,7 @@ def test_resolver_applies_preroll_and_tolerance(tmp_path: Path) -> None:
         str(s.editorial_function or "").startswith("technical_chapter_")
         for s in resolved.shots
     )
-    assert any("Opening-/Closing-Shot verlängert" in r for r in resolved.repairs)
+    assert any(
+        "Still-Hold verlängert" in r or "Opening-/Closing-Shot verlängert" in r
+        for r in resolved.repairs
+    )

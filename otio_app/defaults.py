@@ -193,6 +193,8 @@ ENHANCED_CUT_LLM_MODEL_CHOICES: tuple[str, ...] = (
     "openai:gpt-5.6-sol",
     "openai:gpt-5.4-mini",
     "anthropic:claude-fable-5",
+    "anthropic:claude-sonnet-5",
+    "anthropic:claude-opus-4-8",
     "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
 )
@@ -201,6 +203,8 @@ ENHANCED_CUT_LLM_MODEL_LABELS: dict[str, str] = {
     "openai:gpt-5.6-sol": "GPT-5.6 Sol — Flagship",
     "openai:gpt-5.4-mini": "GPT-5.4 mini — günstig, schnell",
     "anthropic:claude-fable-5": "Claude Fable 5 — stark für Cut-Prompts",
+    "anthropic:claude-sonnet-5": "Claude Sonnet 5 — ausgewogen",
+    "anthropic:claude-opus-4-8": "Claude Opus 4.8 — Flagship",
     "gemini-3.5-flash": "Gemini 3.5 Flash — schnell",
     "gemini-3.1-flash-lite": "Gemini 3.1 Flash Lite — günstig",
 }
@@ -1032,6 +1036,8 @@ CUT_PLAN_DEFAULT_FOLDER_TITLE_ENABLED = False
 CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT = "Phosphate"
 CUT_PLAN_DEFAULT_FOLDER_TITLE_DURATION_SEC = 5.0
 CUT_PLAN_DEFAULT_FOLDER_TITLE_FONT_SIZE = 0.0  # 0 = auto aus Video-Höhe
+CUT_PLAN_DEFAULT_FOLDER_TITLE_FADE_IN_SEC = 0.35
+CUT_PLAN_DEFAULT_FOLDER_TITLE_FADE_OUT_SEC = 0.35
 
 
 # CutPlanDocument.status

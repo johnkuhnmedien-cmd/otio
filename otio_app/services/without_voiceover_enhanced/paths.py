@@ -10,6 +10,7 @@ from otio_app.models import Project
 SCRIPT_SUBDIR = "script"
 AUDIO_SUBDIR = "audio"
 CUT_SUBDIR = "cut"
+CHAPTERS_CUT_SUBDIR = "chapters"
 COVERAGE_SUBDIR = "coverage"
 STOCK_SUBDIR = "stock"
 CONFIG_SUBDIR = "config"
@@ -77,6 +78,27 @@ def audio_dir(project: Project) -> Path:
 
 def cut_dir(project: Project) -> Path:
     return enhanced_generation_root(project) / CUT_SUBDIR
+
+
+def chapters_cut_dir(project: Project) -> Path:
+    """``cut/chapters/`` — pro-Kapitel Unified-Pläne und Resolved-Timelines."""
+    return cut_dir(project) / CHAPTERS_CUT_SUBDIR
+
+
+def chapter_cut_dir(project: Project, folder_name: str) -> Path:
+    """``cut/chapters/{slug}/`` für ein Körper-Kapitel (ohne mkdir)."""
+    from otio_app.project_layout import safe_folder_slug
+
+    slug = safe_folder_slug((folder_name or "").strip() or "chapter")
+    return chapters_cut_dir(project) / slug
+
+
+def chapter_unified_cut_plan_path(project: Project, folder_name: str) -> Path:
+    return chapter_cut_dir(project, folder_name) / UNIFIED_CUT_PLAN_FILENAME
+
+
+def chapter_resolved_timeline_path(project: Project, folder_name: str) -> Path:
+    return chapter_cut_dir(project, folder_name) / RESOLVED_TIMELINE_FILENAME
 
 
 def coverage_dir(project: Project) -> Path:

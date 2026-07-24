@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -641,6 +642,7 @@ def _apply_chapter_envelopes(
     repairs: list[str],
     errors: list[str],
     narration_timeline: NarrationTimelineDocument | None = None,
+    include_chapter: Callable[[str], bool] | None = None,
 ) -> list[ResolvedChapterEnvelope]:
     """Kapitelhüllen: Vor-/Nachlauf am Opening/Closing-CONTENT-Shot.
 
@@ -649,8 +651,16 @@ def _apply_chapter_envelopes(
     - ``chapter_video_start(N+1) = chapter_video_end(N)`` (kein Bridge-Slot)
     - ``last_shot_id`` / ``postroll_hold_shot_id`` = letzter CONTENT-Shot
     - ``chapter_audio_end`` aus Audio-Segment-Ende (ceil), Start floor
+
+    ``include_chapter``: optional nur bestimmte Kapitel (z. B. Intro-only Resolve).
     """
     chapters = _chapters_from_locked(locked)
+    if include_chapter is not None:
+        chapters = [
+            (chapter_id, segment_ids)
+            for chapter_id, segment_ids in chapters
+            if include_chapter(chapter_id)
+        ]
     if not chapters:
         return []
 
@@ -813,10 +823,17 @@ def _apply_chapter_envelopes(
 
         raw_span = max(0.0, raw_audio_end - raw_audio_start)
 
+        chapter_preroll = float(preroll)
+        chapter_postroll = float(postroll)
+
         chapter_video_start = _seconds_to_frame(cursor, fps)
-        chapter_audio_start = _seconds_to_frame(chapter_video_start + preroll, fps)
+        chapter_audio_start = _seconds_to_frame(
+            chapter_video_start + chapter_preroll, fps
+        )
         chapter_audio_end = _seconds_to_frame(chapter_audio_start + raw_span, fps)
-        chapter_video_end = _seconds_to_frame(chapter_audio_end + postroll, fps)
+        chapter_video_end = _seconds_to_frame(
+            chapter_audio_end + chapter_postroll, fps
+        )
 
         for audio in ch_audios:
             delta_start = audio.timeline_start_seconds - raw_audio_start
@@ -840,7 +857,10 @@ def _apply_chapter_envelopes(
 
         preroll_hold_id = ""
         postroll_hold_id = ""
-        if preroll > 1e-9 and first.timeline_start_seconds > chapter_video_start + 1e-9:
+        if (
+            chapter_preroll > 1e-9
+            and first.timeline_start_seconds > chapter_video_start + 1e-9
+        ):
             first.timeline_start_seconds = round(chapter_video_start, 6)
             preroll_hold_id = first.shot_id
             try:
@@ -853,10 +873,13 @@ def _apply_chapter_envelopes(
                 )
             except TimelineResolveError as exc:
                 errors.append(str(exc))
-        elif preroll > 1e-9:
+        elif chapter_preroll > 1e-9:
             preroll_hold_id = first.shot_id
 
-        if postroll > 1e-9 and last.timeline_end_seconds < chapter_video_end - 1e-9:
+        if (
+            chapter_postroll > 1e-9
+            and last.timeline_end_seconds < chapter_video_end - 1e-9
+        ):
             last.timeline_end_seconds = round(chapter_video_end, 6)
             postroll_hold_id = last.shot_id
             try:
@@ -869,7 +892,7 @@ def _apply_chapter_envelopes(
                 )
             except TimelineResolveError as exc:
                 errors.append(str(exc))
-        elif postroll > 1e-9:
+        elif chapter_postroll > 1e-9:
             postroll_hold_id = last.shot_id
 
         if _is_bridge_resolved_shot(last) or str(last.shot_id).startswith("bridge_"):
@@ -886,8 +909,8 @@ def _apply_chapter_envelopes(
                 chapter_audio_start=round(chapter_audio_start, 6),
                 chapter_audio_end=round(chapter_audio_end, 6),
                 chapter_video_end=round(chapter_video_end, 6),
-                preroll_seconds=round(preroll, 6),
-                postroll_seconds=round(postroll, 6),
+                preroll_seconds=round(chapter_preroll, 6),
+                postroll_seconds=round(chapter_postroll, 6),
                 first_shot_id=first.shot_id,
                 last_shot_id=last.shot_id,
                 preroll_hold_shot_id=preroll_hold_id,
@@ -899,8 +922,10 @@ def _apply_chapter_envelopes(
         # E2E-4: nächstes Kapitel beginnt exakt am Video-Ende (Nachlauf→Vorlauf).
         cursor = chapter_video_end
 
-    # Envelope-Validierung: preroll/postroll je Kapitel == Settings.
+    # Envelope-Validierung: preroll/postroll je Kapitel == Settings (Intro ausgenommen).
     for env in envelopes:
+        if _is_intro_folder(env.chapter_id):
+            continue
         if abs(env.preroll_seconds - float(preroll)) > 1e-3:
             errors.append(
                 f"Kapitel {env.chapter_id}: preroll {env.preroll_seconds:.2f}s "

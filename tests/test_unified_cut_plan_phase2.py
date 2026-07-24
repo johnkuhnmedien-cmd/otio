@@ -8,6 +8,7 @@ import pytest
 
 from otio_app.services.without_voiceover_enhanced.script_prompts import (
     DEFAULT_CUT_RHYTHM_TARGETS,
+    build_keyword_sync_unified_cut_prompt,
     build_unified_cut_prompt,
 )
 from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
@@ -39,6 +40,7 @@ def test_build_unified_cut_prompt_contains_core_contract() -> None:
     assert "Plan ONLY the chapter \"Rocamadour\"" in prompt
     assert "Rocamadour_cut_000" in prompt
     assert "SENTENCE TIMINGS" in prompt
+    assert "words[]" in prompt
     assert "USED-IN LEDGER" in prompt
     assert "every 4th–6th" in prompt or "every 4th-6th" in prompt
     assert "medium: ~2–3s" in prompt or "medium: ~2-3s" in prompt
@@ -60,6 +62,47 @@ def test_build_unified_cut_prompt_optional_blocks_omitted_when_empty() -> None:
     assert "SENTENCE TIMINGS (authoritative" not in prompt
     assert "USED-IN LEDGER" not in prompt
     assert "MIDDLE-FRAME VISION" not in prompt
+
+
+def test_build_keyword_sync_unified_cut_prompt_contract() -> None:
+    prompt = build_keyword_sync_unified_cut_prompt(
+        locked_script_json='{"segments":[]}',
+        segment_timings_json="[]",
+        local_assets_json="[]",
+        style_profile_text="style",
+        dramaturgy_text="drama",
+        folder_name="Yosemite",
+        folder_slug="Yosemite",
+        previous_folder_name="Intro",
+        next_folder_name="Caddo",
+        sentence_timings_json=(
+            '[{"sentence_id":"Yosemite_segment_001__s001",'
+            '"words":[{"text":"waterfall","offset_seconds":1.2}]}]'
+        ),
+        shot_constraints_text=(
+            "SHOT / ASSET CONSTRAINTS:\n"
+            "- Aim for each visual shot to cover roughly 5.0s–8.0s\n"
+        ),
+        used_in_ledger_text="asset_x\t1",
+    )
+    assert "KEYWORD-SYNC cut planner" in prompt
+    assert "KEYWORD / BUZZWORD SYNC" in prompt
+    assert "Obey SHOT / ASSET CONSTRAINTS" in prompt
+    assert "shot_min / shot_max are NOT used" not in prompt
+    assert "SHOT / ASSET CONSTRAINTS" in prompt
+    assert "5.0s–8.0s" in prompt or "5.0s-8.0s" in prompt
+    assert "waterfall" in prompt
+    assert "words[]" in prompt
+    assert "offset_seconds" in prompt
+    assert "mid_sentence" in prompt
+    assert "Plan ONLY the chapter \"Yosemite\"" in prompt
+    assert "Yosemite_cut_000" in prompt
+    assert "strong | acceptable | weak | none" in prompt
+    assert "USED-IN LEDGER" in prompt
+    assert "SENTENCE TIMINGS" in prompt
+    # Rhythmus-Modus-Ziele bewusst nicht enthalten.
+    assert "CUT RHYTHM TARGETS" not in prompt
+    assert "10–17 seconds" not in prompt and "10-17 seconds" not in prompt
 
 
 def _sample_payload(*, folder_prefix: str = "") -> dict:
@@ -178,6 +221,33 @@ def test_parse_rejects_invalid_position() -> None:
     payload["boundaries"][1]["position"] = "halfway"
     with pytest.raises(UnifiedCutPlanError, match="ungültige position"):
         parse_unified_cut_response(payload, "v1")
+
+
+def test_parse_coerces_alignment_value_misplaced_in_position() -> None:
+    """Sonnet setzt oft position=mid_sentence — gehört nach alignment."""
+    payload = _sample_payload()
+    payload["boundaries"][1]["position"] = "mid_sentence"
+    payload["boundaries"][1]["alignment"] = "sentence_boundary"
+    payload["boundaries"][1]["offset_seconds"] = 1.4
+    plan = parse_unified_cut_response(payload, "v1")
+    mid = plan.boundaries[1]
+    assert mid.position is None  # offset gesetzt → position entbehrlich
+    assert mid.alignment == "mid_sentence"
+    assert mid.offset_seconds == 1.4
+
+
+def test_cut_boundary_model_repairs_mid_sentence_position() -> None:
+    from otio_app.services.without_voiceover_enhanced.models import CutBoundary
+
+    boundary = CutBoundary(
+        cut_id="Intro_cut_002",
+        sentence_id="Intro_segment_001__s001",
+        position="mid_sentence",  # type: ignore[arg-type]
+        offset_seconds=None,
+        alignment="sentence_boundary",
+    )
+    assert boundary.alignment == "mid_sentence"
+    assert boundary.position == "middle"
 
 
 def test_parse_rejects_broken_boundary_slot_invariant() -> None:

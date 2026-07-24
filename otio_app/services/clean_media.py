@@ -41,6 +41,10 @@ CLEAN_STATUS_FAILED = "failed"
 CLEAN_STATUS_PENDING = "pending"
 CLEAN_STATUS_NEEDS_TRANSCODE = "needs_transcode"
 
+# ProRes→H.264 / Resolve zeigt oft 1–3 Schwarzframes am Clean-Anfang.
+# blackframe-Detection greift nicht zuverlässig → festen Drop + bf=0.
+CLEAN_FORCE_DROP_LEADING_FRAMES = 3
+
 _ASSET_NUMBER_RE = re.compile(r"asset[_\s-]*(\d+)", re.IGNORECASE)
 
 _RESOLVE_FRIENDLY_VIDEO_CODECS = frozenset(
@@ -385,6 +389,9 @@ def transcode_to_clean(
         "medium",
         "-crf",
         "18",
+        # Keine B-Frames: Resolve zeigt sonst oft schwarze Startframes (GOP/Priming).
+        "-bf",
+        "0",
         "-pix_fmt",
         "yuv420p",
         "-movflags",
@@ -439,6 +446,10 @@ def transcode_to_clean(
             "+genpts",
             "-avoid_negative_ts",
             "make_zero",
+            # Expliziter Start-TC: sonst setzt Resolve manchmal 00:00:00:01
+            # und der erste OTIO-Frame (bei 00:00:00:00) wird schwarz.
+            "-timecode",
+            "00:00:00:00",
             *video_flags,
             str(output_path),
         ])
@@ -486,11 +497,104 @@ def transcode_to_clean(
             )
 
 
-def _trim_tiny_leading_black(path: Path, *, max_trim_seconds: float = 0.12) -> None:
-    """Schneidet sehr kurzes führendes Schwarz nach dem Clean-Encode ab."""
-    leading = probe_leading_black_seconds(path)
-    if leading is None or leading <= 0 or leading > max_trim_seconds:
-        return
+def _probe_video_fps(path: Path) -> float | None:
+    try:
+        result = _run_command(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=r_frame_rate",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            timeout_sec=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    raw = (result.stdout or "").strip()
+    if not raw or raw in {"0/0", "N/A"}:
+        return None
+    try:
+        if "/" in raw:
+            num_s, den_s = raw.split("/", 1)
+            num, den = float(num_s), float(den_s)
+            if den <= 0:
+                return None
+            return num / den
+        return float(raw)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+_PBLACK_RE = re.compile(r"pblack:\s*(\d+)", re.IGNORECASE)
+_BLACKFRAME_LINE_RE = re.compile(
+    r"frame:\s*(?P<frame>\d+)\s+pblack:\s*(?P<pblack>\d+)",
+    re.IGNORECASE,
+)
+
+
+def _first_frame_is_black(path: Path, *, min_pblack: int = 90) -> bool:
+    """True wenn Frame 0 praktisch schwarz ist (x264-Priming / Clean-Lead-In)."""
+    return _count_leading_black_frames(path, max_frames=1, min_pblack=min_pblack) >= 1
+
+
+def _count_leading_black_frames(
+    path: Path,
+    *,
+    max_frames: int = 8,
+    min_pblack: int = 90,
+) -> int:
+    """Zählt aufeinanderfolgende Schwarzframes ab Frame 0."""
+    frames = max(1, int(max_frames))
+    try:
+        result = _run_command(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-nostdin",
+                "-i",
+                str(path),
+                "-vf",
+                "blackframe=amount=90:threshold=24",
+                "-frames:v",
+                str(frames),
+                "-an",
+                "-f",
+                "null",
+                "-",
+            ],
+            timeout_sec=60,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return 0
+    text = f"{result.stderr or ''}\n{result.stdout or ''}"
+    by_index: dict[int, int] = {}
+    for match in _BLACKFRAME_LINE_RE.finditer(text):
+        try:
+            by_index[int(match.group("frame"))] = int(match.group("pblack"))
+        except ValueError:
+            continue
+    count = 0
+    for index in range(frames):
+        pblack = by_index.get(index)
+        if pblack is None or pblack < int(min_pblack):
+            break
+        count += 1
+    return count
+
+
+def _reencode_drop_leading_frames(path: Path, frames: int) -> bool:
+    """Entfernt die ersten ``frames`` Frames per select-Filter (Re-Encode)."""
+    drop = max(0, int(frames))
+    if drop <= 0:
+        return True
     tmp_path = path.with_suffix(path.suffix + ".trimtmp")
     command = [
         "ffmpeg",
@@ -499,28 +603,103 @@ def _trim_tiny_leading_black(path: Path, *, max_trim_seconds: float = 0.12) -> N
         "-hide_banner",
         "-loglevel",
         "warning",
-        "-ss",
-        f"{leading:.3f}",
         "-i",
         str(path),
-        "-c",
-        "copy",
+        "-vf",
+        f"select=gte(n\\,{drop}),setpts=PTS-STARTPTS",
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "18",
+        "-bf",
+        "0",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-timecode",
+        "00:00:00:00",
+        "-movflags",
+        "+faststart",
         "-avoid_negative_ts",
         "make_zero",
         str(tmp_path),
     ]
     try:
-        result = _run_command(command, timeout_sec=120)
+        result = _run_command(command, timeout_sec=600)
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         tmp_path.unlink(missing_ok=True)
-        return
+        return False
     if result.returncode != 0 or not path_is_readable_file(tmp_path):
         tmp_path.unlink(missing_ok=True)
-        return
+        return False
     try:
         tmp_path.replace(path)
     except OSError:
         tmp_path.unlink(missing_ok=True)
+        return False
+    return True
+
+
+def _trim_tiny_leading_black(
+    path: Path,
+    *,
+    max_trim_seconds: float = 0.35,
+    max_frames: int = 8,
+    force_drop_frames: int = CLEAN_FORCE_DROP_LEADING_FRAMES,
+) -> None:
+    """Schneidet führendes Schwarz nach dem Clean-Encode ab.
+
+    Resolve/Asset14: oft genau 3 schwarze Startframes; ``blackframe`` liefert
+    trotzdem 0. Deshalb zuerst **festen Drop** (Default 3 Frames), danach
+    Detection-Loop für Reste (inkl. Re-Encode-Priming).
+    """
+    fps = _probe_video_fps(path) or 24.0
+    one_frame = 1.0 / max(1.0, fps)
+    max_by_time = max(1, int(max_trim_seconds / one_frame + 0.5))
+    frame_budget = max(1, min(int(max_frames), max_by_time))
+    force_drop = max(0, min(int(force_drop_frames), frame_budget))
+
+    trimmed_total = 0
+    if force_drop > 0:
+        if not _reencode_drop_leading_frames(path, force_drop):
+            return
+        trimmed_total += force_drop
+
+    detected_sec = probe_leading_black_seconds(
+        path,
+        min_black_duration=min(0.02, one_frame * 0.5),
+        pixel_threshold=0.15,
+    )
+    if detected_sec is None:
+        detected_sec = 0.0
+    detected_frames = int(detected_sec / one_frame + 0.5) if detected_sec > 0 else 0
+
+    for _ in range(frame_budget - trimmed_total):
+        leading = _count_leading_black_frames(
+            path,
+            max_frames=frame_budget - trimmed_total,
+            min_pblack=80,
+        )
+        if leading <= 0 and detected_frames > 0 and trimmed_total == force_drop:
+            leading = min(detected_frames, frame_budget - trimmed_total)
+        if leading <= 0:
+            break
+        leading = min(leading, frame_budget - trimmed_total)
+        if not _reencode_drop_leading_frames(path, leading):
+            break
+        trimmed_total += leading
+        detected_frames = 0
+        if trimmed_total >= frame_budget:
+            break
 
 
 def validate_media_file(path: Path) -> CleanMediaEntry:

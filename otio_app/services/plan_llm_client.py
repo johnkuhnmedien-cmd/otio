@@ -46,6 +46,10 @@ class PlanLlmTruncatedResponseError(RuntimeError):
     Ordner), obwohl in Wahrheit gar keine brauchbare Antwort vorlag."""
 
 
+class PlanLlmConnectionError(RuntimeError):
+    """Transport-/Netzwerkfehler zum LLM-Provider (kein HTTP-Status vom Modell)."""
+
+
 # Höher als der ursprüngliche Default (8192) — bei umfangreichen Prompts (z. B.
 # Dramaturgie-Planung über viele Ordner) reichte das nicht aus und die Antwort
 # wurde exakt bei max_tokens abgeschnitten (stop_reason="max_tokens"), was durch
@@ -697,6 +701,95 @@ def _anthropic_final_message(client, create_kwargs: dict, *, use_temperature: bo
     return client.messages.create(**kwargs)
 
 
+def _build_anthropic_client(api_key: str, *, trust_env: bool):
+    """Anthropic-Client mit explizitem httpx-Transport.
+
+    ``trust_env=False`` ignoriert kaputte System-/Env-Proxys (häufige Ursache
+    für bloßes „Connection error.“ nur bei Claude, während OpenAI/Gemini noch
+    gehen).
+    """
+    import httpx
+    from anthropic import Anthropic
+
+    try:
+        from anthropic import DefaultHttpxClient as HttpClient
+    except ImportError:  # pragma: no cover - ältere SDKs
+        HttpClient = httpx.Client
+
+    http_client = HttpClient(
+        timeout=_LLM_REQUEST_TIMEOUT_SEC,
+        trust_env=trust_env,
+    )
+    return Anthropic(
+        api_key=api_key,
+        http_client=http_client,
+        timeout=_LLM_REQUEST_TIMEOUT_SEC,
+    )
+
+
+def _anthropic_error_text(exc: BaseException) -> str:
+    parts = [str(exc)]
+    cause = exc.__cause__ or exc.__context__
+    if cause is not None:
+        parts.append(f"{type(cause).__name__}: {cause}")
+    return " ".join(parts).lower()
+
+
+def _is_anthropic_billed_disconnect(exc: BaseException) -> bool:
+    """Server hat Request angenommen und dann die Verbindung gekappt.
+
+    Typisch nach großen Prompts. Input-Tokens können bereits berechnet sein —
+    automatische Retries würden die Kosten multiplizieren.
+    """
+    text = _anthropic_error_text(exc)
+    return (
+        "disconnected without sending" in text
+        or "server disconnected" in text
+        or "remoteprotocolerror" in text
+    )
+
+
+def _format_anthropic_connection_error(exc: BaseException) -> str:
+    cause = exc.__cause__ or exc.__context__
+    detail = ""
+    if cause is not None and str(cause).strip():
+        detail = f" Ursache: {type(cause).__name__}: {cause}."
+    elif str(exc).strip() and str(exc).strip().lower() != "connection error.":
+        detail = f" Details: {exc}."
+    size_hint = ""
+    if _is_anthropic_billed_disconnect(exc):
+        size_hint = (
+            " Der Request wurde sehr wahrscheinlich schon auf Anthropic-Seite "
+            "angenommen — Input-Tokens können trotzdem berechnet werden, auch "
+            "ohne Antwort. Deshalb kein automatischer Retry (vermeidet "
+            "Mehrfach-Kosten). Intro-Prompt ggf. verkleinern / erneut mit "
+            "kompakterem Inventar versuchen."
+        )
+    return (
+        "Anthropic-Verbindung fehlgeschlagen (api.anthropic.com)."
+        f"{detail}{size_hint} "
+        "Bitte prüfen: ANTHROPIC_API_KEY unter 🔑 API-Schlüssel, VPN/Proxy/"
+        "Firewall, und ob https://api.anthropic.com vom gleichen Python "
+        "erreichbar ist."
+    )
+
+
+def _call_anthropic_messages(client, create_kwargs: dict):
+    """Ein Anthropic-Call inkl. temperature-Retry für Reasoning-Modelle."""
+    from anthropic import BadRequestError
+
+    try:
+        return _anthropic_final_message(client, create_kwargs, use_temperature=True)
+    except BadRequestError as exc:
+        if not _is_temperature_rejected_error(exc):
+            raise
+        # Neuere/Reasoning-Modelle lehnen eine explizite temperature ab und
+        # verlangen den API-Standardwert — ohne temperature erneut versuchen,
+        # statt die Erzeugung komplett fehlschlagen zu lassen (siehe z. B.
+        # "temperature is deprecated for this model.").
+        return _anthropic_final_message(client, create_kwargs, use_temperature=False)
+
+
 def _generate_anthropic_text_with_usage(
     *,
     prompt: str,
@@ -711,7 +804,7 @@ def _generate_anthropic_text_with_usage(
             "Bitte unter 🔑 API-Schlüssel oder in .env eintragen."
         )
     _require_sdk_module("anthropic")
-    from anthropic import Anthropic, BadRequestError
+    from anthropic import APIConnectionError
 
     effective_max_tokens = max_output_tokens or DEFAULT_MAX_OUTPUT_TOKENS
     create_kwargs: dict = {
@@ -725,17 +818,32 @@ def _generate_anthropic_text_with_usage(
         # Verfügung (siehe generate_plan_text_with_metadata()-Docstring).
         create_kwargs["thinking"] = {"type": "disabled"}
 
-    client = Anthropic(api_key=api_key, timeout=_LLM_REQUEST_TIMEOUT_SEC)
-    try:
-        response = _anthropic_final_message(client, create_kwargs, use_temperature=True)
-    except BadRequestError as exc:
-        if not _is_temperature_rejected_error(exc):
-            raise
-        # Neuere/Reasoning-Modelle lehnen eine explizite temperature ab und
-        # verlangen den API-Standardwert — ohne temperature erneut versuchen,
-        # statt die Erzeugung komplett fehlschlagen zu lassen (siehe z. B.
-        # "temperature is deprecated for this model.").
-        response = _anthropic_final_message(client, create_kwargs, use_temperature=False)
+    # Connection-Handling:
+    # 1) Normal mit Env-Proxy
+    # 2) Nur bei frühem Proxy-/Connect-Fail: einmal ohne System-Proxy
+    # 3) Bei "Server disconnected without sending a response" KEIN Retry —
+    #    Request war oft schon angenommen; Retry = erneute Input-Rechnung.
+    last_connection_error: BaseException | None = None
+    response = None
+    for trust_env in (True, False):
+        client = _build_anthropic_client(api_key, trust_env=trust_env)
+        try:
+            response = _call_anthropic_messages(client, create_kwargs)
+            break
+        except APIConnectionError as exc:
+            last_connection_error = exc
+            if _is_anthropic_billed_disconnect(exc):
+                break
+            # Früher Connect-/Proxy-Fehler → ein zweiter Versuch ohne Env-Proxy.
+            if trust_env is False:
+                break
+            continue
+    if response is None:
+        assert last_connection_error is not None
+        raise PlanLlmConnectionError(
+            _format_anthropic_connection_error(last_connection_error)
+        ) from last_connection_error
+
     usage = getattr(response, "usage", None)
     token_usage = _token_usage_dict(
         input_tokens=getattr(usage, "input_tokens", None),

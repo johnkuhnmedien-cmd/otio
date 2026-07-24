@@ -6,6 +6,9 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import CutPlanOptions
+from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+    is_intro_folder_name,
+)
 from otio_app.services.without_voiceover_enhanced.models import (
     FinalCutPlanDocument,
     GapMergeReport,
@@ -160,15 +163,27 @@ def assess_unified_cut_quality(
     assessment.shot_lengths = lengths
     assessment.notes.extend(_shot_length_notes(lengths))
 
-    # Settings-Band zusätzlich soft markieren.
+    # Settings-Band soft markieren (Intro ausnehmen; gilt Rhythmus + Keyword-Sync).
     lo = float(options.shot_min_sec)
     hi = float(options.shot_max_sec)
-    if lengths and hi >= lo:
-        outside_settings = sum(1 for length in lengths if length + 1e-9 < lo or length > hi + 1e-9)
+    body_lengths = [
+        max(0.0, float(s.timeline_end_seconds) - float(s.timeline_start_seconds))
+        for s in editorial
+        if not s.open_gap
+        and not is_intro_folder_name(s.folder_name)
+        and not is_intro_folder_name(s.chapter_id)
+        and not is_intro_folder_name(s.shot_id)
+    ]
+    if body_lengths and hi >= lo:
+        outside_settings = sum(
+            1
+            for length in body_lengths
+            if length + 1e-9 < lo or length > hi + 1e-9
+        )
         if outside_settings:
             assessment.notes.append(
-                f"Cut-Rhythmus: {outside_settings}/{len(lengths)} Shots außerhalb "
-                f"Settings shot_min/max ({lo:.1f}–{hi:.1f}s)."
+                f"Cut-Rhythmus: {outside_settings}/{len(body_lengths)} Shots "
+                f"außerhalb Settings shot_min/max ({lo:.1f}–{hi:.1f}s)."
             )
 
     # Visuelle Coverage (nicht-open Shots) innerhalb Kapitel / global.

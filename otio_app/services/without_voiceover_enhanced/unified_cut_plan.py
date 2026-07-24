@@ -122,6 +122,32 @@ def _with_folder_prefix(raw_id: str, folder_slug: str, kind: str, index: int) ->
     return f"{prefix}{text}"
 
 
+def _coerce_boundary_position_alignment(
+    *,
+    position: str | None,
+    alignment: str,
+    offset: float | None,
+) -> tuple[str | None, str]:
+    """Repariert LLM-Verwechslung: alignment-Werte in ``position``.
+
+    Modelle setzen oft ``position: "mid_sentence"`` statt
+    ``alignment: "mid_sentence"`` + ``offset_seconds`` / ``position: middle``.
+    """
+    align = alignment if alignment in CUT_ALIGNMENTS else "sentence_boundary"
+    pos = position
+    if pos in CUT_ALIGNMENTS:
+        # alignment aus dem falschen Feld übernehmen, wenn sinnvoll
+        if align == "sentence_boundary" or align not in CUT_ALIGNMENTS:
+            align = str(pos)
+        # position ist dann kein start|early|… mehr
+        pos = None if offset is not None else "middle"
+    if pos is not None and pos not in BOUNDARY_POSITIONS:
+        raise UnifiedCutPlanError(f"ungültige position {pos!r}.")
+    if align not in CUT_ALIGNMENTS:
+        align = "sentence_boundary"
+    return pos, align
+
+
 def _parse_boundary(item: dict[str, Any], *, index: int) -> CutBoundary:
     cut_id = str(item.get("cut_id") or f"cut_{index:03d}")
     sentence_id = str(item.get("sentence_id") or "").strip()
@@ -129,14 +155,16 @@ def _parse_boundary(item: dict[str, Any], *, index: int) -> CutBoundary:
         raise UnifiedCutPlanError(f"{cut_id}: sentence_id fehlt.")
     position_raw = item.get("position")
     position = None if _nullish(position_raw) else str(position_raw).strip().lower()
-    if position is not None and position not in BOUNDARY_POSITIONS:
-        raise UnifiedCutPlanError(
-            f"{cut_id}: ungültige position {position_raw!r}."
-        )
     offset = _optional_float(item.get("offset_seconds"))
     alignment = str(item.get("alignment") or "sentence_boundary").strip().lower()
-    if alignment not in CUT_ALIGNMENTS:
-        alignment = "sentence_boundary"
+    try:
+        position, alignment = _coerce_boundary_position_alignment(
+            position=position,
+            alignment=alignment,
+            offset=offset,
+        )
+    except UnifiedCutPlanError as exc:
+        raise UnifiedCutPlanError(f"{cut_id}: {exc}") from exc
     try:
         return CutBoundary(
             cut_id=cut_id,

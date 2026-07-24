@@ -36,8 +36,8 @@ from otio_app.project_repository import (
     find_projects_by_root,
     list_projects,
 )
-from otio_app.ui.navigation import PAGE_ANALYSIS, PAGE_NEW
-from otio_app.ui.routing import run_app_navigation
+from otio_app.ui.navigation import ACTIVE_PROJECT_KEY, PAGE_ANALYSIS, PAGE_NEW
+from otio_app.ui.routing import PENDING_SWITCH_URL_PATH_KEY, run_app_navigation
 
 st.set_page_config(
     page_title="OTIO Schnittplaner",
@@ -638,9 +638,16 @@ def render_project_list_page() -> None:
                         else "—"
                     )
                 )
+                try:
+                    voice_analysis_display = str(project.voice_analysis_path)
+                except OSError as exc:
+                    # z. B. externe SSD nicht gemountet / Permission denied
+                    voice_analysis_display = (
+                        f"(Pfad nicht erreichbar: {project.work_dir} — {exc})"
+                    )
                 st.write(
                     f"**Geplante Ausgaben:** `{project.inventory_dir}/<Ordner>.json`, "
-                    f"`{project.voice_analysis_path}`"
+                    f"`{voice_analysis_display}`"
                 )
                 st.write(
                     f"**Vorgaben:** {project.language}, {project.frames_per_shot} Frames/Shot, "
@@ -654,9 +661,14 @@ def render_project_list_page() -> None:
                     f"Aktualisiert: {project.updated_at.isoformat()}"
                 )
                 if st.button("Projekt bearbeiten", key=f"open_{project.id}"):
+                    # Aktives Projekt setzen (Navigation/Modus hängen daran).
+                    st.session_state[ACTIVE_PROJECT_KEY] = project.id
                     st.session_state["workbench_project_id"] = project.id
-                    if hasattr(st, "switch_page"):
-                        st.switch_page("analysen")
+                    if hasattr(st, "navigation") and hasattr(st, "switch_page"):
+                        # String-"analysen" scheitert mit st.navigation — Page-Objekt
+                        # wird in run_app_navigation aufgelöst.
+                        st.session_state[PENDING_SWITCH_URL_PATH_KEY] = "analysen"
+                        st.rerun()
                     else:
                         st.session_state["sidebar_nav"] = PAGE_WORK
                         st.rerun()

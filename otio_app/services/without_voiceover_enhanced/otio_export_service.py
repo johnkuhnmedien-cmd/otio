@@ -6,6 +6,7 @@ from pathlib import Path
 
 import opentimelineio as otio
 
+from otio_app.analysis_models import TimelineItem
 from otio_app.models import Project
 from otio_app.services.media_utils import (
     is_image_media,
@@ -13,8 +14,14 @@ from otio_app.services.media_utils import (
     probe_duration_seconds,
     probe_media_timing,
 )
+from otio_app.services.opening_title_renderer import (
+    build_opening_title_item,
+    ensure_opening_titles_rendered,
+)
+from otio_app.services.otio_exporter import _build_v2_title_track
 from otio_app.services.still_image_export_style import ensure_styled_still_for_export
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    CutPlanOptions,
     load_cut_plan_options,
 )
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model
@@ -46,6 +53,12 @@ from otio_app.services.without_voiceover_enhanced.portable_export import (
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_locked_script,
 )
+from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+    AssetCatalog,
+    _is_intro_folder,
+    build_asset_catalog,
+    lookup_catalog_entry,
+)
 
 
 class EnhancedOtioExportError(RuntimeError):
@@ -53,9 +66,24 @@ class EnhancedOtioExportError(RuntimeError):
 
 
 def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> otio.opentime.TimeRange:
+    """Sekunden → OTIO-TimeRange auf **ganzzahligen** Frames (Resolve-sicher).
+
+    Fractional RationalTimes (z.B. start value 1.992 @24fps) führen in Resolve
+    leicht zu einem Off-by-one: available wird auf Frame 2 gerundet, source auf
+    Frame 1 → ein schwarzer/offline erster Frame, obwohl die Quelldatei ok ist.
+    """
+    media_rate = float(rate) if float(rate) > 0 else 25.0
+    start_rt = otio.opentime.RationalTime.from_seconds(float(start_sec), media_rate)
+    end_rt = otio.opentime.RationalTime.from_seconds(
+        float(start_sec) + float(duration_sec), media_rate
+    )
+    start_frames = int(round(start_rt.value))
+    end_frames = int(round(end_rt.value))
+    if end_frames <= start_frames:
+        end_frames = start_frames + 1
     return otio.opentime.TimeRange(
-        start_time=otio.opentime.RationalTime.from_seconds(start_sec, rate),
-        duration=otio.opentime.RationalTime.from_seconds(duration_sec, rate),
+        start_time=otio.opentime.RationalTime(start_frames, media_rate),
+        duration=otio.opentime.RationalTime(end_frames - start_frames, media_rate),
     )
 
 
@@ -126,11 +154,79 @@ def _validate_video_file(path: Path, *, label: str, fps: float) -> tuple[float, 
     return float(timing.start_sec or 0.0), float(duration), float(timing.rate or fps)
 
 
+def _is_still_hold_shot(shot: ResolvedShot, path: Path) -> bool:
+    """True wenn Resolve das Foto bereits zu still_hold_*.mp4 gemacht hat."""
+    hold = str(shot.hold_mode or "").strip().lower()
+    if hold in {"freeze_video", "still_hold"}:
+        return True
+    name = path.name.lower()
+    return name.startswith("still_hold_") or "hold_cache" in path.parts
+
+
+def _original_still_path_for_export(
+    project: Project,
+    shot: ResolvedShot,
+    *,
+    path: Path,
+    catalog: AssetCatalog | None,
+    fps: float,
+) -> Path | None:
+    """Original-JPEG/PNG für Stil — auch wenn resolved_media_path schon Hold-MP4 ist."""
+    if is_image_media(path):
+        return path
+    if not _is_still_hold_shot(shot, path):
+        return None
+    cat = catalog if catalog is not None else build_asset_catalog(project, fps=fps)
+    entry, _err = lookup_catalog_entry(cat, str(shot.asset_id or ""))
+    if entry is None:
+        return None
+    original = Path(str(entry.get("path") or "")).expanduser()
+    try:
+        original = original.resolve()
+    except OSError:
+        pass
+    if original.is_file() and is_image_media(original):
+        return original
+    return None
+
+
+def _export_styled_still_hold(
+    project: Project,
+    shot: ResolvedShot,
+    *,
+    image_path: Path,
+    fps: float,
+    label: str,
+) -> Path:
+    """Still-Style → Hold-MP4 (Resolve braucht Video mit Dauer)."""
+    options = load_cut_plan_options(project)
+    styled = ensure_styled_still_for_export(
+        project,
+        shot.folder_name or "_enhanced",
+        image_path,
+        enabled=bool(options.still_image_style_enabled),
+        zoom=float(options.still_image_zoom),
+        background_style=str(options.still_image_background_style),
+    )
+    styled_path = _assert_local_file(str(styled), label=f"{label} (styled still)")
+    timeline_dur = max(
+        0.01, float(shot.timeline_end_seconds - shot.timeline_start_seconds)
+    )
+    try:
+        hold = ensure_still_hold_video(
+            project, styled_path, duration_seconds=timeline_dur, fps=fps
+        )
+    except MediaHoldError as exc:
+        raise EnhancedOtioExportError(f"{label}: {exc}") from exc
+    return _assert_local_file(str(hold), label=f"{label} (still hold)")
+
+
 def _ensure_shot_media_for_export(
     project: Project,
     shot: ResolvedShot,
     *,
     fps: float,
+    catalog: AssetCatalog | None = None,
 ) -> tuple[Path, float, float, float, float]:
     """Validiert Shot-Medien; liefert path, avail_start, source_start, source_end, rate."""
     label = f"{shot.shot_id} / {shot.asset_id}"
@@ -140,18 +236,27 @@ def _ensure_shot_media_for_export(
         )
     path = _assert_local_file(shot.resolved_media_path, label=label)
 
-    # Optionales Still-Styling nur wenn Original noch Bild ist.
+    # Still-Style: Originalbild nutzen — auch wenn Resolve schon still_hold.mp4
+    # geschrieben hat (sonst würde Zoom/Background/Paper-Edge nie greifen).
     options = load_cut_plan_options(project)
-    if is_image_media(path):
-        styled = ensure_styled_still_for_export(
+    original_still = _original_still_path_for_export(
+        project, shot, path=path, catalog=catalog, fps=fps
+    )
+    if original_still is not None and bool(options.still_image_style_enabled):
+        hold_path = _export_styled_still_hold(
             project,
-            shot.folder_name or "_enhanced",
-            path,
-            enabled=bool(options.still_image_style_enabled),
-            zoom=float(options.still_image_zoom),
-            background_style=str(options.still_image_background_style),
+            shot,
+            image_path=original_still,
+            fps=fps,
+            label=label,
         )
-        path = _assert_local_file(str(styled), label=f"{label} (styled still)")
+        timeline_dur = max(
+            0.01, float(shot.timeline_end_seconds - shot.timeline_start_seconds)
+        )
+        return hold_path, 0.0, 0.0, timeline_dur, fps
+
+    # Ohne Stil: Bild → Hold (oder bereits vorhandenes Hold-MP4 behalten).
+    if is_image_media(path):
         timeline_dur = max(
             0.01, float(shot.timeline_end_seconds - shot.timeline_start_seconds)
         )
@@ -177,12 +282,18 @@ def _ensure_shot_media_for_export(
             f"{label}: source_end ({source_end}) muss > source_start "
             f"({source_start}) sein."
         )
-    # Falls ResolvedShot Source relativ (ohne Embedded) gespeichert hat, aber
-    # Datei Embedded-TC hat: angleichen, wenn source_start < avail_start.
-    if source_start + 1e-6 < avail_start:
-        shift = avail_start - source_start
-        source_start += shift
-        source_end += shift
+    source_span = source_end - source_start
+    # Content-Offset relativ zur beim Resolve gespeicherten Available-Start
+    # beibehalten, wenn die Datei einen anderen Embedded-TC/PTS-Start hat.
+    # (Früher: source auf avail_start schieben → Head-Trim/Offset verloren.)
+    shot_avail = float(getattr(shot, "resolved_available_start_seconds", 0.0) or 0.0)
+    content_offset = max(0.0, source_start - shot_avail)
+    if abs(avail_start - shot_avail) > 1e-6:
+        source_start = avail_start + content_offset
+        source_end = source_start + source_span
+    elif source_start + 1e-6 < avail_start:
+        source_start = avail_start + content_offset
+        source_end = source_start + source_span
     avail_end = avail_start + media_dur
     if source_start < avail_start - 1e-6 or source_end > avail_end + 1e-6:
         raise EnhancedOtioExportError(
@@ -282,16 +393,22 @@ def validate_resolved_timeline_for_production(
                     f"Kapitel {chapter.chapter_id}: postroll_hold_shot_id ist Bridge "
                     f"({chapter.postroll_hold_shot_id})."
                 )
-            if abs(chapter.preroll_seconds - preroll) > 1e-3:
-                errors.append(
-                    f"Kapitel {chapter.chapter_id}: preroll "
-                    f"{chapter.preroll_seconds:.2f}s ≠ Settings {preroll:.2f}s."
-                )
-            if abs(chapter.postroll_seconds - postroll) > 1e-3:
-                errors.append(
-                    f"Kapitel {chapter.chapter_id}: postroll "
-                    f"{chapter.postroll_seconds:.2f}s ≠ Settings {postroll:.2f}s."
-                )
+            from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+                _is_intro_folder,
+            )
+
+            # Intro: feste 4s / 5–8s Hüllen — nicht gegen Kapitel-Settings prüfen.
+            if not _is_intro_folder(chapter.chapter_id):
+                if abs(chapter.preroll_seconds - preroll) > 1e-3:
+                    errors.append(
+                        f"Kapitel {chapter.chapter_id}: preroll "
+                        f"{chapter.preroll_seconds:.2f}s ≠ Settings {preroll:.2f}s."
+                    )
+                if abs(chapter.postroll_seconds - postroll) > 1e-3:
+                    errors.append(
+                        f"Kapitel {chapter.chapter_id}: postroll "
+                        f"{chapter.postroll_seconds:.2f}s ≠ Settings {postroll:.2f}s."
+                    )
     elif resolved.audio_segments and preroll > 0:
         non_zero = [
             a
@@ -339,6 +456,7 @@ def validate_resolved_timeline_for_production(
                 f"{curr.shot_id} ({curr.asset_id})."
             )
 
+    catalog = build_asset_catalog(project, fps=fps)
     for shot in resolved.shots:
         if bool(getattr(shot, "is_placeholder", False)) or bool(shot.open_gap):
             errors.append(
@@ -348,7 +466,9 @@ def validate_resolved_timeline_for_production(
             continue
         try:
             path, avail_start, source_start, source_end, _rate = (
-                _ensure_shot_media_for_export(project, shot, fps=fps)
+                _ensure_shot_media_for_export(
+                    project, shot, fps=fps, catalog=catalog
+                )
             )
         except EnhancedOtioExportError as exc:
             errors.append(str(exc))
@@ -403,20 +523,131 @@ def _collect_target_urls(timeline: otio.schema.Timeline) -> list[str]:
     return urls
 
 
+def build_enhanced_folder_title_items(
+    project: Project,
+    resolved: ResolvedTimelineDocument,
+    options: CutPlanOptions | None = None,
+) -> list[TimelineItem]:
+    """Opening-Title-Items pro Nicht-Intro-Kapitel (absolute Timeline-Position)."""
+    opts = options if options is not None else load_cut_plan_options(project)
+    if not opts.folder_title_enabled:
+        return []
+    chapters = list(resolved.chapters or [])
+    if not chapters:
+        return []
+
+    font_size = (
+        float(opts.folder_title_font_size)
+        if opts.folder_title_font_size and opts.folder_title_font_size > 0
+        else None
+    )
+    items: list[TimelineItem] = []
+    for chapter in chapters:
+        chapter_id = str(chapter.chapter_id or chapter.folder_name or "").strip()
+        folder_name = str(chapter.folder_name or chapter.chapter_id or "").strip()
+        if not chapter_id and not folder_name:
+            continue
+        if _is_intro_folder(chapter_id) or _is_intro_folder(folder_name):
+            continue
+        section_id = chapter_id or folder_name
+        item = build_opening_title_item(
+            folder_name=folder_name or section_id,
+            voice_file="",
+            section_id=section_id,
+            work_dir=project.language_work_dir_path,
+            project=project,
+            requested_font_family=str(opts.folder_title_font or "Phosphate"),
+            duration_sec=float(opts.folder_title_duration_sec),
+            font_size_px=font_size,
+            fade_in_sec=float(opts.folder_title_fade_in_sec),
+            fade_out_sec=float(opts.folder_title_fade_out_sec),
+        )
+        # Am Opening-Shot: first_shot Start, sonst Kapitel-Videoanfang (inkl. Vorlauf).
+        start = max(0.0, float(chapter.chapter_video_start))
+        first_id = str(chapter.first_shot_id or "").strip()
+        if first_id:
+            for shot in resolved.shots:
+                if shot.shot_id == first_id:
+                    start = max(0.0, float(shot.timeline_start_seconds))
+                    break
+        duration = max(0.1, float(item.duration_sec))
+        items.append(
+            item.model_copy(
+                update={
+                    "timeline_in_sec": start,
+                    "timeline_out_sec": start + duration,
+                    "duration_sec": duration,
+                    "final_duration_sec": duration,
+                }
+            )
+        )
+    return items
+
+
+def _render_folder_title_items(
+    project: Project,
+    resolved: ResolvedTimelineDocument,
+    *,
+    fail_closed: bool,
+) -> tuple[list[TimelineItem], list[str]]:
+    """Baut und rendert Ordner-Titel; fail-closed wenn aktiviert und Render fehlt."""
+    options = load_cut_plan_options(project)
+    items = build_enhanced_folder_title_items(project, resolved, options)
+    if not items:
+        return [], []
+    rendered, notes = ensure_opening_titles_rendered(project, items)
+    titles = [item for item in rendered if item.type == "opening_title"]
+    ready: list[TimelineItem] = []
+    for item in titles:
+        media = str(item.rendered_media_path or item.resolved_media_path or "").strip()
+        if media and Path(media).is_file():
+            ready.append(item)
+            continue
+        message = (
+            f"Ordner-Titel für {item.folder_name or item.section_id}: "
+            "gerenderte Mediendatei fehlt."
+        )
+        if fail_closed:
+            raise EnhancedOtioExportError(message)
+        notes.append(message)
+    return ready, notes
+
+
+def _folder_title_media_paths(items: list[TimelineItem]) -> list[tuple[Path, str, str]]:
+    """Staging-Tupel (path, asset_id, kind) für portable Exports."""
+    out: list[tuple[Path, str, str]] = []
+    for item in items:
+        media = str(item.rendered_media_path or item.resolved_media_path or "").strip()
+        if not media:
+            continue
+        path = Path(media)
+        if not path.is_file():
+            continue
+        asset_id = f"title_{item.section_id or item.folder_name}"
+        out.append((path.resolve(), asset_id, "opening_title"))
+    return out
+
+
 def export_otio_from_resolved_timeline(
     project: Project,
     *,
     basename: str = "enhanced_timeline",
     allow_errors: bool = False,
+    resolved: ResolvedTimelineDocument | None = None,
+    timeline_name: str | None = None,
 ) -> Path:
     """Exportiert die aufgelöste Timeline als OTIO.
 
     ``allow_errors=True`` ist ein Test-/Diagnose-Modus (Lücken erlaubt).
     Produktions-Export (`allow_errors=False`) ist fail-closed inkl. realer
     Medien-/Source-Range-Prüfung — unabhängig von ``resolved.errors``.
+
+    Optional ``resolved``: In-Memory-Dokument (z. B. gefiltertes Intro) —
+    die Datei ``resolved_timeline.json`` wird dann nicht angefasst.
     """
     assert_enhanced_work_root(project)
-    resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
+    if resolved is None:
+        resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
     if resolved is None:
         raise EnhancedOtioExportError("Aufgelöste Timeline fehlt — kein OTIO-Export.")
 
@@ -434,9 +665,12 @@ def export_otio_from_resolved_timeline(
                 + "; ".join(gate_errors)
             )
 
-    timeline = otio.schema.Timeline(name=f"{project.name} enhanced")
+    timeline = otio.schema.Timeline(
+        name=timeline_name or f"{project.name} enhanced"
+    )
     video_track = otio.schema.Track(name="Video", kind=otio.schema.TrackKind.Video)
     audio_track = otio.schema.Track(name="Narration", kind=otio.schema.TrackKind.Audio)
+    catalog = build_asset_catalog(project, fps=fps)
 
     cursor = 0.0
     for shot in sorted(resolved.shots, key=lambda s: s.timeline_start_seconds):
@@ -447,7 +681,9 @@ def export_otio_from_resolved_timeline(
             )
         try:
             media_path, avail_start, source_start, source_end, rate = (
-                _ensure_shot_media_for_export(project, shot, fps=fps)
+                _ensure_shot_media_for_export(
+                    project, shot, fps=fps, catalog=catalog
+                )
             )
         except EnhancedOtioExportError:
             if not allow_errors:
@@ -554,8 +790,20 @@ def export_otio_from_resolved_timeline(
             )
             audio_cursor += segment.pause_after_seconds
 
+    title_items, title_notes = _render_folder_title_items(
+        project,
+        resolved,
+        fail_closed=not allow_errors,
+    )
+    title_track = _build_v2_title_track(title_items, rate=fps) if title_items else None
+
     timeline.tracks.append(video_track)
+    if title_track is not None:
+        timeline.tracks.append(title_track)
+        timeline.metadata["opening_title_count"] = len(title_items)
     timeline.tracks.append(audio_track)
+    if title_notes:
+        timeline.metadata["folder_title_notes"] = list(title_notes)
     if allow_errors:
         timeline.metadata["enhanced_export_mode"] = "test_gaps"
     else:
@@ -643,6 +891,7 @@ def export_portable_otio_package(
     # Clip → original media path for rewrite after staging
     pending_video: list[tuple[otio.schema.Clip, Path, str]] = []
     pending_audio: list[tuple[otio.schema.Clip, Path, str]] = []
+    catalog = build_asset_catalog(project, fps=fps)
 
     cursor = 0.0
     for shot in sorted(resolved.shots, key=lambda s: s.timeline_start_seconds):
@@ -650,7 +899,9 @@ def export_portable_otio_package(
             gap = shot.timeline_start_seconds - cursor
             video_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
         media_path, avail_start, source_start, source_end, rate = (
-            _ensure_shot_media_for_export(project, shot, fps=fps)
+            _ensure_shot_media_for_export(
+                project, shot, fps=fps, catalog=catalog
+            )
         )
         source_duration = source_end - source_start
         file_avail_start, file_dur, file_rate = _validate_video_file(
@@ -731,8 +982,42 @@ def export_portable_otio_package(
             )
             audio_cursor += segment.pause_after_seconds
 
+    title_items, title_notes = _render_folder_title_items(
+        project,
+        resolved,
+        fail_closed=True,
+    )
+    title_track = _build_v2_title_track(title_items, rate=fps) if title_items else None
+    pending_titles: list[tuple[otio.schema.Clip, Path, str]] = []
+    if title_track is not None:
+        for stage_path, asset_id, kind in _folder_title_media_paths(title_items):
+            stage_items.append((stage_path, asset_id, kind))
+        for child in title_track:
+            media = getattr(child, "media_reference", None)
+            if media is None:
+                continue
+            target = str(getattr(media, "target_url", "") or "").strip()
+            if not target:
+                continue
+            media_path = Path(target)
+            if not media_path.is_file():
+                raise EnhancedOtioExportError(
+                    f"Ordner-Titel-Medien fehlen für Staging: {media_path}"
+                )
+            asset_id = str(
+                (getattr(child, "metadata", None) or {}).get("timeline_item_id")
+                or media_path.stem
+            )
+            child.metadata["original_media_path"] = str(media_path.resolve())
+            pending_titles.append((child, media_path.resolve(), asset_id))
+
     timeline.tracks.append(video_track)
+    if title_track is not None:
+        timeline.tracks.append(title_track)
+        timeline.metadata["opening_title_count"] = len(title_items)
     timeline.tracks.append(audio_track)
+    if title_notes:
+        timeline.metadata["folder_title_notes"] = list(title_notes)
     timeline.metadata["enhanced_export_mode"] = "production_portable"
 
     try:
@@ -741,7 +1026,7 @@ def export_portable_otio_package(
         raise EnhancedOtioExportError(str(exc)) from exc
 
     # Rewrite target_urls → relative media/<unique>
-    for clip, original, _asset_id in pending_video + pending_audio:
+    for clip, original, _asset_id in pending_video + pending_audio + pending_titles:
         try:
             entry = lookup_packaged_path(entries, original)
         except PortableExportError as exc:
