@@ -78,15 +78,15 @@ class AdobeVideoEntitlementError(Exception):
 
 
 VIDEO_ENTITLEMENT_HINT = (
-    "Die Stock-API meldet für dieses OAuth-Token keine Video-Lizenz "
-    "(full_entitlement nur cct_pro_unlimited_images, Video-quota=0) — "
-    "Content/License antwortet deshalb mit state=cancelled + Comp. "
-    "Browser-„Video Unlimited“ (z. B. Creative Cloud Pro/Plus) gilt oft "
-    "nicht für die API; Adobe schaltet API-Nutzung für Pro/Plus nur "
-    "nach Freigabe frei (stockapis@adobe.com). "
-    "Prüfen: richtiges Adobe-ID beim OAuth? Team- vs. Privatkonto? "
-    "Bereits im Browser lizenzierte Clips können über LicenseHistory "
-    "trotzdem ladbar sein."
+    "Hinweis: Dein Browser-Unlimited funktioniert — die Stock-API meldet "
+    "für dieses OAuth-Token bei Video aber nur cct_pro_unlimited_images "
+    "(Video-quota=0) und Content/License antwortet mit state=cancelled + Comp. "
+    "Das ist ein API-/Token-Problem, kein fehlendes Abo. "
+    "Prüfen: OAuth mit derselben Adobe-ID wie stock.adobe.com? "
+    "stock_id im Diagnose-Panel vergleichen. "
+    "Im Browser frisch lizenzierte Clips erneut importieren "
+    "(LicenseHistory/Content/Info). "
+    "Bei CC Pro/Plus ggf. API-Freigabe: stockapis@adobe.com."
 )
 
 

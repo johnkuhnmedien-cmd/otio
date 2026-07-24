@@ -312,6 +312,24 @@ def get_adobe_access_token(*, force_refresh: bool = False) -> str | None:
     return manual.strip() if manual else None
 
 
+def decode_access_token_claims(access_token: str | None = None) -> dict[str, Any]:
+    """Liest unverifizierte JWT-Claims aus dem Access-Token (nur Anzeige)."""
+    token = access_token or get_adobe_access_token()
+    if not token or token.count(".") < 2:
+        return {}
+    try:
+        payload_b64 = token.split(".")[1]
+        padding = "=" * (-len(payload_b64) % 4)
+        raw = base64.urlsafe_b64decode(payload_b64 + padding)
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    keep = ("sub", "email", "email_verified", "created_at", "expires_in", "scope", "client_id")
+    return {key: data[key] for key in keep if key in data}
+
+
 def adobe_oauth_status() -> AdobeOAuthStatus:
     store = load_token_store()
     if store and store.get("access_token"):

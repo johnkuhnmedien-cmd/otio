@@ -11,11 +11,15 @@ from otio_app.services.adobe_stock_oauth import (
     adobe_oauth_status,
     build_authorize_url,
     clear_token_store,
+    decode_access_token_claims,
     exchange_authorization_code,
     extract_code_from_callback,
+    get_adobe_access_token,
     get_adobe_redirect_uri,
     has_oauth_client_credentials,
 )
+from otio_app.services.api_keys import get_api_key
+from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
 
 
 def _clear_oauth_query_params() -> None:
@@ -89,10 +93,72 @@ def render_adobe_oauth_panel(*, key_prefix: str = "adobe_oauth") -> None:
         if status.expires_at:
             expires = datetime.fromtimestamp(status.expires_at, tz=timezone.utc)
             st.caption(f"Access-Token gültig bis (UTC): `{expires.isoformat(timespec='seconds')}`")
+        claims = decode_access_token_claims()
+        if claims:
+            email = claims.get("email") or "—"
+            sub = claims.get("sub") or "—"
+            st.caption(f"OAuth-Konto: `{email}` · sub=`{sub}` — muss mit stock.adobe.com übereinstimmen.")
     elif status.source == "env":
         st.info(status.message)
     else:
         st.warning(status.message)
+
+    with st.expander("API-Konto / Entitlement prüfen (wenn Browser-Unlimited geht, API aber nicht)"):
+        st.caption(
+            "Browser-Lizenzierung und Stock-API können verschiedene Konten/Rechte sehen. "
+            "Hier die Werte, die **dieses OAuth-Token** bei Adobe bekommt."
+        )
+        test_id = st.text_input(
+            "Optionale Content-ID (z. B. gerade im Browser lizenziertes Video)",
+            key=f"{key_prefix}_diag_content_id",
+            placeholder="644202290",
+        )
+        if st.button("Member/Profile + License-Status abfragen", key=f"{key_prefix}_diag_run"):
+            api_key = get_api_key("ADOBE_STOCK_API_KEY") or ""
+            token = get_adobe_access_token() or ""
+            if not api_key or not token:
+                st.error("API-Key oder Access-Token fehlt.")
+            else:
+                from otio_app.defaults import (
+                    ADOBE_STOCK_LICENSE_TYPE_STANDARD,
+                    ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD,
+                    ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT,
+                )
+
+                adapter = AdobeStockAdapter()
+                cid = (test_id or "").strip() or None
+
+                def _profile(license_type: str) -> dict:
+                    params: dict = {"license": license_type, "locale": "en_US"}
+                    if cid:
+                        params["content_id"] = cid
+                    payload = adapter._request_licensing_json_safe(
+                        ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT,
+                        params,
+                        api_key,
+                        token,
+                    )
+                    return adapter._summarize_member_profile(payload)
+
+                st.write("**Member/Profile Standard**")
+                st.json(_profile(ADOBE_STOCK_LICENSE_TYPE_STANDARD))
+                st.write("**Member/Profile Video_HD**")
+                st.json(_profile(ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD))
+                if cid:
+                    info4k = adapter.content_info_purchase(cid, "Video_4K", api_key, token)
+                    info_hd = adapter.content_info_purchase(cid, "Video_HD", api_key, token)
+                    history = adapter.find_license_history_download(cid, api_key, token)
+                    st.write("**Content/Info Video_4K**")
+                    st.json(info4k)
+                    st.write("**Content/Info Video_HD**")
+                    st.json(info_hd)
+                    st.write("**LicenseHistory-Treffer**")
+                    st.json(history or {"found": False})
+                    st.caption(
+                        "Erwartung nach Browser-Lizenz: Content/Info `state=purchased` "
+                        "oder LicenseHistory mit `/Rest/Libraries/Download/`-URL "
+                        "(nicht `/Watermarked/`)."
+                    )
 
     redirect = get_adobe_redirect_uri()
     st.caption(

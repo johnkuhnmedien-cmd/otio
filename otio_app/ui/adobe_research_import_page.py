@@ -219,13 +219,13 @@ def render_adobe_research_import_page() -> None:
                     st.caption(f"API-Entitlements (Video_HD): `{ent}` · quota={quota}")
                 if probe.get("lacks_video"):
                     st.warning(
-                        "Die **Stock-API** sieht für dieses OAuth-Token **kein Video-Unlimited** "
-                        "(nur `cct_pro_unlimited_images`, Video-quota=0) — obwohl im Browser "
-                        "Video Unlimited greifen kann. Creative Cloud Pro/Plus ist für die API "
-                        "oft gesperrt (Adobe: Freigabe nötig, `stockapis@adobe.com`). "
-                        "Import versucht trotzdem zuerst **LicenseHistory** (bereits im Browser "
-                        "lizenzierte Clips). Neue Video-Lizenzen über die API schlagen sonst "
-                        "mit `cancelled`/`Comp` fehl. Prüfe auch: richtige Adobe-ID / Teamkonto?"
+                        "Du hast Unlimited im Browser — die **API** meldet für dieses OAuth-Token "
+                        "bei Videos trotzdem nur `cct_pro_unlimited_images` (quota=0). "
+                        "Das ist kein fehlendes Abo, sondern ein API-/Token-Mismatch. "
+                        "Unten unter **API-Konto / Entitlement prüfen**: OAuth-E-Mail/`stock_id` "
+                        "mit stock.adobe.com vergleichen. Frisch im Browser lizenzierte Clips "
+                        "nochmal importieren (History). Neue API-Lizenzen können weiter "
+                        "`cancelled`/`Comp` liefern, bis Adobe die API für den Plan freigibt."
                     )
         except Exception as exc:  # noqa: BLE001
             st.caption(f"Entitlement-Check übersprungen: {exc}")
