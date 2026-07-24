@@ -26,9 +26,11 @@ from otio_app.defaults import (
 from otio_app.services.adobe_stock_oauth import get_adobe_access_token
 from otio_app.services.api_keys import get_api_key
 from otio_app.services.supplement_sources.adobe_stock import (
+    VIDEO_ENTITLEMENT_HINT,
     AdobeAssetTooLargeError,
     AdobeContentUnavailableError,
     AdobeStockAdapter,
+    AdobeVideoEntitlementError,
     is_full_adobe_download_url,
 )
 
@@ -785,6 +787,8 @@ def _license_and_download_to_path(
             )
         except AdobeContentUnavailableError:
             raise
+        except AdobeVideoEntitlementError:
+            raise
         except Exception as exc:  # noqa: BLE001
             msg = str(exc)
             # Falscher Medientyp → andere Lizenzfamilie nachziehen
@@ -863,7 +867,24 @@ def _license_and_download_to_path(
             )
             return path, _format_license_with_size(hist_license or "history", path)
         except AdobeAssetTooLargeError:
-            attempt_errors.append("LicenseHistory: 4K>600MB → versuche Video_HD")
+            # Zuerst dieselbe History-URL als HD (size=1080) — kein neuer Kauf nötig.
+            attempt_errors.append("LicenseHistory: 4K>600MB → History size=1080")
+            try:
+                _phase("History-Download als HD (size=1080)…")
+                path = _download_purchase_to_path(
+                    adapter,
+                    history,
+                    destination,
+                    api_key=api_key,
+                    access_token=access_token,
+                    media_type=resolved_type,
+                    size=1080,
+                    max_bytes=None,
+                    phase_callback=phase_callback,
+                )
+                return path, _format_license_with_size("Video_HD (4K>600MB history)", path)
+            except Exception as hist_hd_exc:  # noqa: BLE001
+                attempt_errors.append(f"History HD: {hist_hd_exc}")
             try:
                 _phase("warte vor License (Video_HD nach History)…")
                 _sleep(_API_CALL_PAUSE_SECONDS)
@@ -886,18 +907,21 @@ def _license_and_download_to_path(
                     phase_callback=phase_callback,
                 )
                 return path, _format_license_with_size("Video_HD (4K>600MB)", path)
+            except AdobeVideoEntitlementError:
+                raise
             except Exception as exc2:  # noqa: BLE001
                 attempt_errors.append(f"Video_HD after history: {exc2}")
+        except AdobeVideoEntitlementError:
+            raise
         except Exception as exc:  # noqa: BLE001
             attempt_errors.append(f"LicenseHistory: {exc}")
 
+    if any(isinstance(e, str) and "cct_pro_unlimited_images" in e for e in attempt_errors):
+        raise AdobeVideoEntitlementError(VIDEO_ENTITLEMENT_HINT)
     detail = " | ".join(attempt_errors) if attempt_errors else "unbekannter Fehler"
     hint = ""
     if any("cancelled" in e for e in attempt_errors) or any("Comp" in e for e in attempt_errors):
-        hint = (
-            " Hinweis: API meldet oft nur cct_pro_unlimited_images — "
-            "Videos brauchen Video-Entitlement; OAuth ggf. mit dem Unlimited-Konto erneut."
-        )
+        hint = f" {VIDEO_ENTITLEMENT_HINT}"
     raise RuntimeError(
         f"Adobe-Download fehlgeschlagen für Content-ID {content_id} "
         f"(media_type={resolved_type}, meta_content_type={meta.get('content_type') or '—'}). "
@@ -951,6 +975,32 @@ def download_research_import(
     done = 0
     live_statuses: dict[str, dict] = {}
     stopped = False
+    video_entitlement_blocked = False
+    video_entitlement_message = VIDEO_ENTITLEMENT_HINT
+
+    # Frühwarnung: Member/Profile mit erstem Video-Asset.
+    first_video_id = next(
+        (
+            a.asset_id
+            for ch in chapters
+            for a in ch.assets
+            if (a.media_hint or "video") == "video"
+        ),
+        None,
+    )
+    if first_video_id:
+        try:
+            api_key = get_api_key("ADOBE_STOCK_API_KEY") or ""
+            access_token = get_adobe_access_token() or ""
+            if api_key and access_token:
+                probe = adapter.probe_video_entitlement(
+                    api_key, access_token, content_id=first_video_id
+                )
+                if probe.get("lacks_video"):
+                    video_entitlement_blocked = True
+                    video_entitlement_message = VIDEO_ENTITLEMENT_HINT
+        except Exception:
+            pass
 
     prior_records: dict[str, dict] = {}
     if state_path is not None:
@@ -1058,6 +1108,33 @@ def download_research_import(
                 )
                 continue
 
+            media_kind = asset.media_hint or "video"
+            if video_entitlement_blocked and media_kind == "video":
+                live_statuses[asset.asset_id] = {
+                    "status": STATUS_ERROR,
+                    "message": video_entitlement_message,
+                    "local_path": "",
+                    "license": "",
+                }
+                result.items.append(
+                    AdobeResearchImportItemResult(
+                        chapter_title=chapter.title,
+                        folder_name=chapter.folder_name,
+                        asset_id=asset.asset_id,
+                        status=STATUS_ERROR,
+                        message=video_entitlement_message,
+                    )
+                )
+                _publish_live()
+                _emit(
+                    folder_name=chapter.folder_name,
+                    asset_id=asset.asset_id,
+                    chapter_title=chapter.title,
+                    status=STATUS_ERROR,
+                    message=video_entitlement_message,
+                )
+                continue
+
             # Ein Asset nach dem anderen: Pause → API → Download(.part) → Rename → Pause.
             def _phase(message: str) -> None:
                 live_statuses[asset.asset_id] = {
@@ -1118,6 +1195,32 @@ def download_research_import(
                     message=f"{used_license} → {local_path.name}",
                 )
                 _sleep(_POST_ASSET_PAUSE_SECONDS)
+            except AdobeVideoEntitlementError as exc:
+                video_entitlement_blocked = True
+                video_entitlement_message = str(exc) or VIDEO_ENTITLEMENT_HINT
+                live_statuses[asset.asset_id] = {
+                    "status": STATUS_ERROR,
+                    "message": video_entitlement_message,
+                    "local_path": "",
+                    "license": "",
+                }
+                result.items.append(
+                    AdobeResearchImportItemResult(
+                        chapter_title=chapter.title,
+                        folder_name=chapter.folder_name,
+                        asset_id=asset.asset_id,
+                        status=STATUS_ERROR,
+                        message=video_entitlement_message,
+                    )
+                )
+                _publish_live()
+                _emit(
+                    folder_name=chapter.folder_name,
+                    asset_id=asset.asset_id,
+                    chapter_title=chapter.title,
+                    status=STATUS_ERROR,
+                    message=video_entitlement_message,
+                )
             except AdobeContentUnavailableError as exc:
                 live_statuses[asset.asset_id] = {
                     "status": STATUS_UNAVAILABLE,

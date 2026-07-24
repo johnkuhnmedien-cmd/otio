@@ -73,6 +73,20 @@ class AdobeContentUnavailableError(Exception):
     """Asset ist bei Adobe nicht mehr verfügbar (HTTP 404 / code 300)."""
 
 
+class AdobeVideoEntitlementError(Exception):
+    """OAuth-/Stock-Konto hat keine Video-Lizenzrechte (nur Bild-Unlimited o. ä.)."""
+
+
+VIDEO_ENTITLEMENT_HINT = (
+    "Dieses Adobe-Konto hat laut API keine Video-Lizenzrechte "
+    "(nur cct_pro_unlimited_images / quota=0 für Video). "
+    "Content/License liefert deshalb state=cancelled + Comp/Wasserzeichen. "
+    "Bitte abmelden und mit dem Stock-Konto erneut OAuth-Login, "
+    "das Videos (Unlimited oder Credits) herunterladen darf — "
+    "Pausen/Tempo ändern daran nichts."
+)
+
+
 def is_full_adobe_download_url(url: str) -> bool:
     """Echte Lizenz-Download-URL — keine Wasserzeichen-/Comp-URL."""
     text = (url or "").strip()
@@ -188,6 +202,46 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             search_enabled=True,
             acquire_enabled=True,
         )
+
+    @staticmethod
+    def entitlement_lacks_video(entitlement_summary: dict) -> bool:
+        """True, wenn Member/Profile bzw. License-Antwort nur Bild-Unlimited zeigt."""
+        entitlement = entitlement_summary.get("available_entitlement") or entitlement_summary
+        if not isinstance(entitlement, dict):
+            return False
+        full = entitlement.get("full_entitlement_quota") or {}
+        if not isinstance(full, dict) or not full:
+            return False
+        keys = {str(k).lower() for k in full}
+        has_image_unlimited = any("image" in k and "unlimited" in k for k in keys)
+        has_video_key = any("video" in k for k in keys)
+        quota = entitlement.get("quota")
+        try:
+            quota_i = int(quota) if quota is not None else None
+        except (TypeError, ValueError):
+            quota_i = None
+        return has_image_unlimited and not has_video_key and quota_i == 0
+
+    def probe_video_entitlement(
+        self,
+        api_key: str,
+        access_token: str,
+        *,
+        content_id: str | None = None,
+    ) -> dict:
+        """Member/Profile mit Video_HD — zeigt, ob das Konto Videos lizenzieren kann."""
+        params: dict = {"license": ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD, "locale": "en_US"}
+        if content_id:
+            params["content_id"] = str(content_id)
+        payload = self._request_licensing_json_safe(
+            ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT,
+            params,
+            api_key,
+            access_token,
+        )
+        summary = self._summarize_member_profile(payload)
+        summary["lacks_video"] = self.entitlement_lacks_video(summary)
+        return summary
 
     def _product_name(self) -> str:
         return get_api_key("ADOBE_STOCK_PRODUCT_NAME") or ADOBE_STOCK_DEFAULT_PRODUCT_NAME
@@ -852,6 +906,13 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         response_url = str(purchase_details.get("url") or "")
         response_size = str(entry.get("size") or "")
         if state not in {"just_purchased", "purchased"}:
+            license_summary = self.last_license_diagnostic.get("license_response") or {}
+            if (
+                license_type in {ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K, ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD}
+                and state == "cancelled"
+                and self.entitlement_lacks_video(license_summary)
+            ):
+                raise AdobeVideoEntitlementError(VIDEO_ENTITLEMENT_HINT)
             raise RuntimeError(
                 "Adobe-Lizenzierung nicht bestätigt: "
                 f"Content-ID {content_id}, angefragt license={license_type}, "

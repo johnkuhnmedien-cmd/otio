@@ -449,6 +449,91 @@ def test_already_licensed_uses_content_info_url(
     assert path.suffix == ".mp4"
 
 
+def test_history_4k_too_large_retries_same_url_as_hd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services import adobe_research_import as mod
+    from otio_app.services.supplement_sources.adobe_stock import AdobeAssetTooLargeError
+
+    _disable_import_pauses(monkeypatch, mod)
+    sizes: list[int | None] = []
+
+    class _Adapter:
+        def lookup_file_metadata(self, content_id, api_key):
+            return {"media_type_id": 4, "content_type": "video/mp4"}
+
+        def content_info_purchase(self, *_a, **_k):
+            return {"state": "not_purchased"}
+
+        def find_license_history_download(self, *_a, **_k):
+            return {
+                "state": "purchased",
+                "license": "Video_4K",
+                "url": "https://stock.adobe.com/Rest/Libraries/Download/1/4",
+                "content_type": "video/mp4",
+            }
+
+        def _license_asset(self, *_a, **_k):
+            raise RuntimeError("cancelled Comp — History soll greifen")
+
+        def _stream_download_to_file(self, url, local_path, *, api_key, access_token, size, max_bytes):
+            sizes.append(size)
+            if size == 2160:
+                raise AdobeAssetTooLargeError()
+            local_path.write_bytes(b"x" * 200_000)
+
+    monkeypatch.setattr(mod, "get_api_key", lambda key: "x")
+    monkeypatch.setattr(mod, "get_adobe_access_token", lambda: "tok")
+
+    path, license_type = mod._license_and_download_to_path(
+        _Adapter(),
+        content_id="1",
+        media_type="video",
+        destination=tmp_path / "hist",
+        media_hint="video",
+    )
+    assert sizes[:2] == [2160, 1080] or (2160 in sizes and 1080 in sizes)
+    assert "history" in license_type.lower() or "4K>600MB" in license_type
+    assert path.is_file()
+
+
+def test_video_entitlement_error_is_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services import adobe_research_import as mod
+    from otio_app.services.supplement_sources.adobe_stock import AdobeVideoEntitlementError
+
+    _disable_import_pauses(monkeypatch, mod)
+
+    class _Adapter:
+        def lookup_file_metadata(self, content_id, api_key):
+            return {"media_type_id": 4, "content_type": "video/mp4"}
+
+        def content_info_purchase(self, *_a, **_k):
+            return {"state": "not_purchased"}
+
+        def find_license_history_download(self, *_a, **_k):
+            return None
+
+        def _license_asset(self, *_a, **_k):
+            raise AdobeVideoEntitlementError("kein Video-Entitlement")
+
+        def _stream_download_to_file(self, *args, **kwargs):
+            raise AssertionError("kein Download")
+
+    monkeypatch.setattr(mod, "get_api_key", lambda key: "x")
+    monkeypatch.setattr(mod, "get_adobe_access_token", lambda: "tok")
+
+    with pytest.raises(AdobeVideoEntitlementError, match="Video-Entitlement"):
+        mod._license_and_download_to_path(
+            _Adapter(),
+            content_id="9",
+            media_type="video",
+            destination=tmp_path / "x",
+            media_hint="video",
+        )
+
+
 def test_download_writes_part_then_renames(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

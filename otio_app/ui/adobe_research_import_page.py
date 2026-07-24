@@ -198,9 +198,34 @@ def render_adobe_research_import_page() -> None:
     render_adobe_oauth_panel(key_prefix="adobe_import_oauth")
     st.divider()
 
-    readiness = AdobeStockAdapter().readiness()
+    adapter = AdobeStockAdapter()
+    readiness = adapter.readiness()
     if readiness.acquire_enabled:
         st.success(readiness.message)
+        # Video-Entitlement prüfen — sonst endet jeder Video-Download als Comp/cancelled.
+        try:
+            from otio_app.services.adobe_stock_oauth import get_adobe_access_token
+            from otio_app.services.api_keys import get_api_key
+
+            api_key = get_api_key("ADOBE_STOCK_API_KEY") or ""
+            token = get_adobe_access_token() or ""
+            if api_key and token:
+                probe = adapter.probe_video_entitlement(api_key, token)
+                if probe.get("lacks_video"):
+                    st.error(
+                        "Dieses Adobe-Konto kann **keine Videos** über die API lizenzieren "
+                        "(nur `cct_pro_unlimited_images`, Video-quota=0). "
+                        "Bitte **Abmelden** und mit dem Stock-Konto erneut anmelden, "
+                        "das Videos (Unlimited/Credits) darf. Tempo/Pausen ändern das nicht."
+                    )
+                else:
+                    ent = (probe.get("available_entitlement") or {}).get(
+                        "full_entitlement_quota"
+                    ) or {}
+                    if ent:
+                        st.caption(f"Entitlements: `{ent}` · Video-quota={ (probe.get('available_entitlement') or {}).get('quota') }")
+        except Exception as exc:  # noqa: BLE001
+            st.caption(f"Entitlement-Check übersprungen: {exc}")
     elif readiness.search_enabled:
         st.warning(readiness.message)
     else:
