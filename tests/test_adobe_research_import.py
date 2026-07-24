@@ -151,7 +151,45 @@ def test_cleanup_media_folder_json_removes_sidecars_and_root_json(tmp_path: Path
     assert not list(target.rglob("*.json"))
 
 
+def test_video_license_never_falls_back_to_standard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: Standard auf Videos → Adobe HTTP 400 „does not match type“."""
+    from otio_app.services import adobe_research_import as mod
+
+    monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
+    monkeypatch.setattr(mod, "_LICENSE_RETRY_PAUSE_SECONDS", 0)
+
+    calls: list[str] = []
+
+    class _Adapter:
+        def _license_asset(self, content_id, license_type, api_key, access_token, *, diagnose=True):
+            calls.append(license_type)
+            raise RuntimeError(f"fail {license_type}")
+
+        def _stream_download_to_file(self, *args, **kwargs):
+            raise AssertionError("kein Download erwartet")
+
+    monkeypatch.setattr(mod, "get_api_key", lambda key: "x")
+    monkeypatch.setattr(mod, "get_adobe_access_token", lambda: "tok")
+
+    with pytest.raises(RuntimeError, match="Video_4K|Video_HD"):
+        mod._license_and_download_to_path(
+            _Adapter(),
+            content_id="644202290",
+            media_type="video",
+            destination=tmp_path / "x",
+        )
+    assert "Standard" not in calls
+    assert calls == ["Video_4K", "Video_HD"]
+
+
 def test_download_respects_should_stop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from otio_app.services import adobe_research_import as mod
+
+    monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
+    monkeypatch.setattr(mod, "_LICENSE_RETRY_PAUSE_SECONDS", 0)
+
     plan = _minimal_plan(tmp_path)
     target = tmp_path / "dl"
     calls = {"n": 0}

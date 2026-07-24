@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,6 +52,9 @@ _INVALID_FS_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WHITESPACE = re.compile(r"\s+")
 _MANIFEST_NAME = "adobe_research_import_manifest.json"
 _BOARD_NAME = "adobe_research_import_board.json"
+# Bulk-Lizenzierung: Pause zwischen Assets / Lizenzversuchen gegen Rate-Limits.
+_ASSET_PAUSE_SECONDS = 0.8
+_LICENSE_RETRY_PAUSE_SECONDS = 0.45
 
 STATUS_DOWNLOADED = "downloaded"
 STATUS_OPEN = "open"
@@ -553,27 +557,14 @@ def _next_asset_index(folder: Path) -> int:
 
 
 def _infer_media_type(adapter: AdobeStockAdapter, asset: AdobeResearchAsset) -> str:
+    """Media-Typ für Lizenzwahl.
+
+    Research-Templates sind überwiegend Video. Bei unsicherem Hinweis daher
+    **video** (nie still auf image/Standard fallen — das erzeugt HTTP 400
+    „license Standard does not match type of content“).
+    """
     if asset.media_hint in {"video", "image"}:
         return asset.media_hint
-    # Fallback: Content/Info mit Video_HD — wenn möglich → video, sonst image.
-    api_key = get_api_key("ADOBE_STOCK_API_KEY") or ""
-    access_token = get_adobe_access_token() or ""
-    if not api_key or not access_token:
-        return "video"
-    from otio_app.defaults import ADOBE_STOCK_CONTENT_INFO_ENDPOINT
-
-    payload = adapter._request_licensing_json_safe(
-        ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
-        {
-            "content_id": asset.asset_id,
-            "license": ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD,
-            "locale": "en_US",
-        },
-        api_key,
-        access_token,
-    )
-    if payload.get("_error"):
-        return "image"
     return "video"
 
 
@@ -584,7 +575,11 @@ def _license_and_download_to_path(
     media_type: str,
     destination: Path,
 ) -> tuple[Path, str]:
-    """Lizenziert eine Content-ID und schreibt die Datei nach destination."""
+    """Lizenziert eine Content-ID und schreibt die Datei nach destination.
+
+    Videos: nur Video_4K → Video_HD (kein Standard-Fallback).
+    Bulk: Content/License ohne Member/Profile+Content/Info-Vorabcalls.
+    """
     api_key = get_api_key("ADOBE_STOCK_API_KEY")
     access_token = get_adobe_access_token()
     if not api_key:
@@ -600,6 +595,7 @@ def _license_and_download_to_path(
     if media_type == "image":
         licenses = [(ADOBE_STOCK_LICENSE_TYPE_STANDARD, None, None)]
     else:
+        # Laut Adobe Stock License API: Videos NUR Video_HD / Video_4K.
         licenses = [
             (
                 ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K,
@@ -609,31 +605,21 @@ def _license_and_download_to_path(
             (ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD, 1080, None),
         ]
 
-    last_error: Exception | None = None
+    attempt_errors: list[str] = []
     for index, (license_type, size, max_bytes) in enumerate(licenses):
+        if index > 0:
+            time.sleep(_LICENSE_RETRY_PAUSE_SECONDS)
         try:
             purchase = adapter._license_asset(
-                content_id, license_type, api_key, access_token
+                content_id,
+                license_type,
+                api_key,
+                access_token,
+                diagnose=False,
             )
         except Exception as exc:  # noqa: BLE001
-            last_error = exc
-            # Foto-Fallback, falls Video-Lizenz fehlschlägt
-            if media_type == "video" and index == len(licenses) - 1:
-                try:
-                    purchase = adapter._license_asset(
-                        content_id,
-                        ADOBE_STOCK_LICENSE_TYPE_STANDARD,
-                        api_key,
-                        access_token,
-                    )
-                    license_type = ADOBE_STOCK_LICENSE_TYPE_STANDARD
-                    size = None
-                    max_bytes = None
-                except Exception as exc2:  # noqa: BLE001
-                    last_error = exc2
-                    continue
-            else:
-                continue
+            attempt_errors.append(f"{license_type}: {exc}")
+            continue
 
         content_type = str(purchase.get("content_type") or "").lower()
         if "video" in content_type:
@@ -658,22 +644,24 @@ def _license_and_download_to_path(
                 max_bytes=max_bytes,
             )
         except AdobeAssetTooLargeError as exc:
-            last_error = exc
+            attempt_errors.append(f"{license_type}: Datei > 600MB → nächste Qualität")
             local_path.unlink(missing_ok=True)
             continue
         except Exception as exc:  # noqa: BLE001
-            last_error = exc
+            attempt_errors.append(f"{license_type}: Download {exc}")
             local_path.unlink(missing_ok=True)
             continue
 
         if not local_path.is_file() or local_path.stat().st_size < ADOBE_STOCK_MIN_DOWNLOAD_BYTES:
             local_path.unlink(missing_ok=True)
-            last_error = RuntimeError("Download zu klein / ungültig.")
+            attempt_errors.append(f"{license_type}: Download zu klein / ungültig")
             continue
         return local_path, license_type
 
+    detail = " | ".join(attempt_errors) if attempt_errors else "unbekannter Fehler"
     raise RuntimeError(
-        f"Adobe-Download fehlgeschlagen für Content-ID {content_id}: {last_error}"
+        f"Adobe-Download fehlgeschlagen für Content-ID {content_id} "
+        f"(media_type={media_type}). Versuche: {detail}"
     )
 
 
@@ -803,21 +791,6 @@ def download_research_import(
                 break
 
             done += 1
-            live_statuses[asset.asset_id] = {
-                "status": STATUS_DOWNLOADING,
-                "message": "läuft…",
-                "local_path": "",
-                "license": "",
-            }
-            _publish_live()
-            _emit(
-                folder_name=chapter.folder_name,
-                asset_id=asset.asset_id,
-                chapter_title=chapter.title,
-                status=STATUS_DOWNLOADING,
-                message="Lizenzieren & Download…",
-            )
-
             if asset.asset_id in already:
                 live_statuses[asset.asset_id] = {
                     "status": STATUS_DOWNLOADED,
@@ -843,6 +816,23 @@ def download_research_import(
                     message="bereits vorhanden",
                 )
                 continue
+
+            # Pause vor echten License/Download-Calls (Rate-Limits).
+            time.sleep(_ASSET_PAUSE_SECONDS)
+            live_statuses[asset.asset_id] = {
+                "status": STATUS_DOWNLOADING,
+                "message": "läuft…",
+                "local_path": "",
+                "license": "",
+            }
+            _publish_live()
+            _emit(
+                folder_name=chapter.folder_name,
+                asset_id=asset.asset_id,
+                chapter_title=chapter.title,
+                status=STATUS_DOWNLOADING,
+                message="Lizenzieren & Download…",
+            )
 
             stem = format_asset_stem(chapter.folder_name, next_index)
             dest = folder / stem  # Suffix setzt Download

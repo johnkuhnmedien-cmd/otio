@@ -640,7 +640,13 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         return " | ".join(parts)
 
     def _license_asset(
-        self, content_id: str, license_type: str, api_key: str, access_token: str
+        self,
+        content_id: str,
+        license_type: str,
+        api_key: str,
+        access_token: str,
+        *,
+        diagnose: bool = True,
     ) -> dict:
         """Ruft Content/License auf und liefert das purchase_details-Objekt
         der Antwort (enthält u. a. url/content_type/width/height). Löst bei
@@ -648,10 +654,10 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         Antwort ein RuntimeError aus — acquire() darf hier nie stillschweigend
         weitermachen.
 
-        Phase 12.12: Vor Content/License werden Member/Profile und Content/Info
-        abgefragt; bei Fehlern landen die kompakten Antworten in
-        last_license_diagnostic und in der RuntimeError-Meldung (sichtbar im
-        Auto-Resolve-Live-Trace als validation_reason)."""
+        Phase 12.12: Optional vor Content/License Member/Profile und Content/Info
+        abfragen (`diagnose=True`). Für Bulk-Downloads (Research-Import) bitte
+        `diagnose=False` — sonst 3 API-Calls pro Lizenzversuch und Rate-Limits.
+        """
         self.last_license_diagnostic = {
             "content_id": content_id,
             "requested_license": license_type,
@@ -659,23 +665,30 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             "content_info": {},
             "license_response": {},
         }
-        diag_params = {"content_id": content_id, "license": license_type, "locale": "en_US"}
-        member_payload = self._request_licensing_json_safe(
-            ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT,
-            diag_params,
-            api_key,
-            access_token,
-        )
-        self.last_license_diagnostic["member_profile"] = self._summarize_member_profile(member_payload)
-        content_info_payload = self._request_licensing_json_safe(
-            ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
-            diag_params,
-            api_key,
-            access_token,
-        )
-        self.last_license_diagnostic["content_info"] = self._summarize_content_info(
-            content_info_payload, content_id
-        )
+        if diagnose:
+            diag_params = {
+                "content_id": content_id,
+                "license": license_type,
+                "locale": "en_US",
+            }
+            member_payload = self._request_licensing_json_safe(
+                ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT,
+                diag_params,
+                api_key,
+                access_token,
+            )
+            self.last_license_diagnostic["member_profile"] = self._summarize_member_profile(
+                member_payload
+            )
+            content_info_payload = self._request_licensing_json_safe(
+                ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
+                diag_params,
+                api_key,
+                access_token,
+            )
+            self.last_license_diagnostic["content_info"] = self._summarize_content_info(
+                content_info_payload, content_id
+            )
 
         params = {"content_id": content_id, "license": license_type, "locale": "en_US"}
         try:
@@ -719,7 +732,7 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                 f"state={state}, response_license={response_license or '—'}, size={response_size or '—'}. "
                 f"Diagnose: {diagnostic_suffix}"
             )
-        if response_license != license_type:
+        if response_license and response_license != license_type:
             raise RuntimeError(
                 "Adobe-Lizenzierung lieferte unerwarteten Lizenztyp: "
                 f"Content-ID {content_id}, angefragt license={license_type}, "
