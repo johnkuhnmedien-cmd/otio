@@ -9,6 +9,7 @@ import pytest
 
 from otio_app.services.plan_llm_client import (
     DEFAULT_MAX_OUTPUT_TOKENS,
+    PlanLlmConnectionError,
     PlanLlmNotConfiguredError,
     PlanLlmTruncatedResponseError,
     format_plan_model_label,
@@ -164,6 +165,57 @@ def test_require_sdk_module_returns_module_when_installed() -> None:
 
     module = _require_sdk_module("json")
     assert module.__name__ == "json"
+
+
+def test_generate_plan_text_anthropic_retries_without_proxy_on_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """„Connection error.“ oft durch kaputten System-Proxy — zweiter Versuch
+    mit trust_env=False muss durchkommen."""
+    import anthropic
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    block = MagicMock(type="text", text='{"beats":[]}')
+    success = MagicMock(content=[block], stop_reason="end_turn")
+    connection_error = anthropic.APIConnectionError(request=None)
+
+    clients: list[MagicMock] = []
+
+    def _factory(*_args, **_kwargs):
+        client = MagicMock()
+        clients.append(client)
+        if len(clients) == 1:
+            client.messages.create.side_effect = connection_error
+        else:
+            client.messages.create.return_value = success
+        return client
+
+    with patch("anthropic.Anthropic", side_effect=_factory):
+        text = generate_plan_text(
+            prompt="Plan this folder",
+            model="anthropic:claude-sonnet-5",
+        )
+
+    assert text == '{"beats":[]}'
+    assert len(clients) == 2
+
+
+def test_generate_plan_text_anthropic_connection_error_is_actionable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import anthropic
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    connection_error = anthropic.APIConnectionError(request=None)
+    connection_error.__cause__ = OSError("Network is unreachable")
+
+    with patch("anthropic.Anthropic") as mock_anthropic:
+        mock_anthropic.return_value.messages.create.side_effect = connection_error
+        with pytest.raises(PlanLlmConnectionError, match="Anthropic-Verbindung") as exc_info:
+            generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
+
+    assert "Network is unreachable" in str(exc_info.value)
+    assert mock_anthropic.call_count == 2  # trust_env True, then False
 
 
 def test_generate_plan_text_anthropic_retries_without_temperature_when_deprecated(
