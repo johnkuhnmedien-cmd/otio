@@ -38,6 +38,7 @@ UI später: Projekt-Default + Override pro Kapitel.
 - `otio_app/services/without_voiceover_enhanced/script_prompts.py`
   - `build_unified_cut_prompt` → **Rhythmus**
   - `build_keyword_sync_unified_cut_prompt` → **Keyword-Sync**
+  - `build_intro_unified_cut_prompt` → **Intro** (auch mit `words[]`)
   - `DEFAULT_CUT_RHYTHM_TARGETS` (nur Rhythmus)
 - `otio_app/services/without_voiceover_enhanced/cut_plan_service.py`
   - `generate_unified_cut_for_folder` wählt Prompt nach `options.unified_cut_style`
@@ -49,6 +50,7 @@ UI später: Projekt-Default + Override pro Kapitel.
 **Ja.**
 - Rhythmus: `build_unified_cut_prompt` + `DEFAULT_CUT_RHYTHM_TARGETS` + `format_shot_constraints_for_prompt` + Word-Timestamps
 - Keyword: `build_keyword_sync_unified_cut_prompt` (ohne Rhythm-Block) + `format_shot_constraints_for_prompt` + Word-Timestamps
+- Intro: `build_intro_unified_cut_prompt` + Word-Timestamps (Keyword/List-Onset via `words[].offset_seconds`)
 
 ### Reihenfolge im Prompt (beide)
 1. Rolle / Modusregeln / Kapitel-Scope  
