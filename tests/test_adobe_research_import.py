@@ -24,7 +24,7 @@ IRELAND_XLSX = (
 
 
 def _disable_import_pauses(monkeypatch: pytest.MonkeyPatch, mod) -> None:
-    """Unit-Tests sollen nicht real schlafen."""
+    """Unit-Tests sollen nicht real schlafen / nicht echte Videos brauchen."""
     for name in (
         "_ASSET_PAUSE_SECONDS",
         "_API_CALL_PAUSE_SECONDS",
@@ -33,6 +33,7 @@ def _disable_import_pauses(monkeypatch: pytest.MonkeyPatch, mod) -> None:
         "_POST_ASSET_PAUSE_SECONDS",
     ):
         monkeypatch.setattr(mod, name, 0)
+    monkeypatch.setattr(mod, "probe_duration_seconds", lambda _path: 8.0)
 
 
 def test_sanitize_folder_name_keeps_readable_title() -> None:
@@ -449,10 +450,10 @@ def test_already_licensed_uses_content_info_url(
     assert path.suffix == ".mp4"
 
 
-def test_license_history_tried_before_content_license(
+def test_import_hot_path_does_not_call_license_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Bei Videos zuerst LicenseHistory — nötig wenn Content/License nur Comp liefert."""
+    """DIAG-002: normaler Import paginiert Member/LicenseHistory nicht."""
     from otio_app.services import adobe_research_import as mod
 
     _disable_import_pauses(monkeypatch, mod)
@@ -468,16 +469,16 @@ def test_license_history_tried_before_content_license(
 
         def find_license_history_download(self, *_a, **_k):
             order.append("history")
+            raise AssertionError("LicenseHistory darf nicht im Import-Hot-Path liegen")
+
+        def _license_asset(self, content_id, license_type, api_key, access_token, *, diagnose=True):
+            order.append(f"license:{license_type}")
             return {
-                "state": "purchased",
-                "license": "Video_HD",
-                "url": "https://stock.adobe.com/Rest/Libraries/Download/1/3",
+                "state": "just_purchased",
+                "license": license_type,
+                "url": f"https://stock.adobe.com/Rest/Libraries/Download/{content_id}/4",
                 "content_type": "video/mp4",
             }
-
-        def _license_asset(self, *_a, **_k):
-            order.append("license")
-            raise AssertionError("License nicht nötig wenn History greift")
 
         def _stream_download_to_file(self, url, local_path, *, api_key, access_token, size, max_bytes):
             local_path.write_bytes(b"x" * 200_000)
@@ -489,23 +490,26 @@ def test_license_history_tried_before_content_license(
         _Adapter(),
         content_id="1",
         media_type="video",
-        destination=tmp_path / "hist-first",
+        destination=tmp_path / "no-hist",
         media_hint="video",
     )
-    assert order[0] == "history"
-    assert "license" not in order
-    assert license_type.startswith("Video_HD")
+    assert "history" not in order
+    assert order[0] == "info"
+    assert any(x.startswith("license:") for x in order)
+    assert license_type.startswith("Video_4K")
     assert path.is_file()
 
 
-def test_history_4k_too_large_retries_same_url_as_hd(
+def test_4k_too_large_falls_back_via_content_license(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """4K>600MB → Video_HD über Content/License (ohne History)."""
     from otio_app.services import adobe_research_import as mod
     from otio_app.services.supplement_sources.adobe_stock import AdobeAssetTooLargeError
 
     _disable_import_pauses(monkeypatch, mod)
     sizes: list[int | None] = []
+    licenses: list[str] = []
 
     class _Adapter:
         def lookup_file_metadata(self, content_id, api_key):
@@ -515,15 +519,16 @@ def test_history_4k_too_large_retries_same_url_as_hd(
             return {"state": "not_purchased"}
 
         def find_license_history_download(self, *_a, **_k):
+            raise AssertionError("kein History im Hot-Path")
+
+        def _license_asset(self, content_id, license_type, api_key, access_token, *, diagnose=True):
+            licenses.append(license_type)
             return {
-                "state": "purchased",
-                "license": "Video_4K",
-                "url": "https://stock.adobe.com/Rest/Libraries/Download/1/4",
+                "state": "just_purchased",
+                "license": license_type,
+                "url": f"https://stock.adobe.com/Rest/Libraries/Download/{content_id}/4",
                 "content_type": "video/mp4",
             }
-
-        def _license_asset(self, *_a, **_k):
-            raise RuntimeError("cancelled Comp — History soll greifen")
 
         def _stream_download_to_file(self, url, local_path, *, api_key, access_token, size, max_bytes):
             sizes.append(size)
@@ -538,11 +543,12 @@ def test_history_4k_too_large_retries_same_url_as_hd(
         _Adapter(),
         content_id="1",
         media_type="video",
-        destination=tmp_path / "hist",
+        destination=tmp_path / "fallback",
         media_hint="video",
     )
+    assert licenses == ["Video_4K", "Video_HD"]
     assert sizes[:2] == [2160, 1080] or (2160 in sizes and 1080 in sizes)
-    assert "history" in license_type.lower() or "4K>600MB" in license_type
+    assert "4K>600MB" in license_type
     assert path.is_file()
 
 

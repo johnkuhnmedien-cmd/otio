@@ -95,9 +95,20 @@ def render_adobe_oauth_panel(*, key_prefix: str = "adobe_oauth") -> None:
             st.caption(f"Access-Token gültig bis (UTC): `{expires.isoformat(timespec='seconds')}`")
         claims = decode_access_token_claims()
         if claims:
-            email = claims.get("email") or "—"
+            from otio_app.services.supplement_sources.adobe_stock import token_fingerprint
+
+            raw_email = str(claims.get("email") or "")
+            if "@" in raw_email:
+                local, _, domain = raw_email.partition("@")
+                email = f"{local[:2]}…@{domain}" if local else f"…@{domain}"
+            else:
+                email = raw_email or "—"
             sub = claims.get("sub") or "—"
-            st.caption(f"OAuth-Konto: `{email}` · sub=`{sub}` — muss mit stock.adobe.com übereinstimmen.")
+            fp = token_fingerprint(get_adobe_access_token())
+            st.caption(
+                f"OAuth-Konto: `{email}` · sub=`{sub}` · token_fp=`{fp or '—'}` "
+                "— muss mit stock.adobe.com übereinstimmen."
+            )
     elif status.source == "env":
         st.info(status.message)
     else:
@@ -145,20 +156,34 @@ def render_adobe_oauth_panel(*, key_prefix: str = "adobe_oauth") -> None:
                 st.write("**Member/Profile Video_HD**")
                 st.json(_profile(ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD))
                 if cid:
+                    from otio_app.services.supplement_sources.adobe_stock import (
+                        classify_adobe_url,
+                    )
+
+                    def _redact_purchase(details: dict) -> dict:
+                        out = dict(details or {})
+                        url = str(out.pop("url", "") or "")
+                        if url:
+                            out["url_class"] = classify_adobe_url(url)
+                            out["has_download_url"] = bool(url)
+                        return out
+
                     info4k = adapter.content_info_purchase(cid, "Video_4K", api_key, token)
                     info_hd = adapter.content_info_purchase(cid, "Video_HD", api_key, token)
                     history = adapter.find_license_history_download(cid, api_key, token)
-                    st.write("**Content/Info Video_4K**")
-                    st.json(info4k)
-                    st.write("**Content/Info Video_HD**")
-                    st.json(info_hd)
-                    st.write("**LicenseHistory-Treffer**")
-                    st.json(history or {"found": False})
+                    st.write("**Content/Info Video_4K** (URL redigiert)")
+                    st.json(_redact_purchase(info4k))
+                    st.write("**Content/Info Video_HD** (URL redigiert)")
+                    st.json(_redact_purchase(info_hd))
+                    st.write("**LicenseHistory-Treffer** (nur Diagnose, nicht Import-Hot-Path)")
+                    st.json(_redact_purchase(history) if history else {"found": False})
                     st.caption(
                         "Erwartung nach Browser-Lizenz: Content/Info `state=purchased` "
-                        "oder LicenseHistory mit `/Rest/Libraries/Download/`-URL "
-                        "(nicht `/Watermarked/`)."
+                        "und `url_class=download` (nicht `watermarked`). "
+                        "LicenseHistory nur manuell hier — nicht pro Asset im Import."
                     )
+                    st.write("**Request-Zähler (diese Diagnose)**")
+                    st.json(adapter.request_counters.as_dict())
 
     redirect = get_adobe_redirect_uri()
     st.caption(

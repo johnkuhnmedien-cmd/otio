@@ -423,15 +423,37 @@ def render_adobe_research_import_page() -> None:
             st.success(job.message or "Import fertig.")
         if job.result and job.result.manifest_path:
             st.caption(f"Manifest: `{job.result.manifest_path}`")
+        if job.result and getattr(job.result, "diagnostics", None):
+            with st.expander("Request-Diagnose (redigiert)", expanded=bool(job.result.errors)):
+                diag = job.result.diagnostics
+                counters = diag.get("request_counters") or {}
+                st.caption(
+                    f"Batch `{diag.get('batch_id') or '—'}` · "
+                    f"OAuth sub=`{diag.get('oauth_sub') or '—'}` · "
+                    f"E-Mail=`{diag.get('oauth_email_redacted') or '—'}` · "
+                    f"Token-FP=`{diag.get('token_fingerprint') or '—'}` · "
+                    f"Stop=`{diag.get('batch_stop_reason') or '—'}`"
+                )
+                st.json(counters)
+                st.caption(
+                    "Zähler: Content/Info, Content/License, Member/Profile, "
+                    "LicenseHistory(+Seiten), HTTP-429, Retries, Erfolge, "
+                    "bereits lizenziert, cancelled, Watermarked, lokale Fehler."
+                )
+                recent = diag.get("recent_requests") or []
+                if recent:
+                    st.write("Letzte Adobe-Requests (ohne Tokens/URLs)")
+                    st.dataframe(recent, use_container_width=True, hide_index=True)
         if job.result and (job.result.errors or job.result.unavailable):
             st.subheader("Fehler / Nicht verfügbar")
             st.caption(
-                "Typische Ursachen laut Adobe-Antwort: "
-                "`Content is no longer available` (Asset entfernt), "
-                "`state=cancelled` + nur `cct_pro_unlimited_images` (Videos nicht im "
-                "aktuellen API-Entitlement — OAuth mit dem Unlimited-/Video-Konto), "
-                "Fotos brauchen `Standard`, Videos `Video_4K`/`Video_HD`. "
-                "Bereits Lizenzierte werden über Content/Info + LicenseHistory geladen."
+                "Fehlerklassen u. a.: `adobe_rate_limited` (HTTP 429), "
+                "`adobe_license_transaction_cancelled` (HTTP 200 + state=cancelled), "
+                "`adobe_license_not_possible`, `adobe_watermarked_preview_only`, "
+                "`local_storage_error`, `downloaded_media_invalid`, "
+                "`adobe_authentication_expired`, `adobe_identity_changed`. "
+                "Bereits Lizenzierte: Content/Info → Download (kein license_again, "
+                "kein History-Vollscan im Hot-Path). size=Comp allein ist kein Fehler."
             )
             err_rows = [
                 {

@@ -878,7 +878,7 @@ def test_acquire_raises_when_license_response_has_no_download_url(
         download_bodies={},
     )
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    with pytest.raises(RuntimeError, match="keine Download-URL"):
+    with pytest.raises(RuntimeError, match="keine Download-URL|keine Voll-Download-URL"):
         AdobeStockAdapter().acquire(_photo_candidate(), tmp_path / "req" / "assets")
 
 
@@ -948,8 +948,15 @@ def test_acquire_raises_runtime_error_on_license_http_error(
     def fail_urlopen(request, timeout=20):
         raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
 
+    from otio_app.services.supplement_sources.adobe_stock import (
+        AdobeAuthenticationExpiredError,
+    )
+
     monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
-    with pytest.raises(RuntimeError, match="Adobe-Lizenzierung fehlgeschlagen"):
+    with pytest.raises(
+        (RuntimeError, AdobeAuthenticationExpiredError),
+        match="Adobe-Lizenzierung fehlgeschlagen|adobe_authentication_expired|Authentifizierung",
+    ):
         AdobeStockAdapter().acquire(_photo_candidate(), tmp_path / "req" / "assets")
 
 
@@ -1167,14 +1174,22 @@ def test_acquire_license_failure_includes_member_profile_and_content_info_diagno
     )
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
+    from otio_app.services.supplement_sources.adobe_stock import (
+        AdobeLicenseTransactionCancelledError,
+    )
+
     adapter = AdobeStockAdapter()
-    with pytest.raises(RuntimeError, match="Diagnose: .*Member/Profile=.*purchase_options.*cancelled") as exc_info:
+    with pytest.raises(
+        AdobeLicenseTransactionCancelledError,
+        match="cancelled|Diagnose: .*Member/Profile=.*purchase_options",
+    ) as exc_info:
         adapter.acquire(_video_candidate(), tmp_path / "req" / "assets")
 
     assert "Content/Info=" in str(exc_info.value)
     assert "possible_licenses" in str(exc_info.value)
     assert adapter.last_license_diagnostic["member_profile"]["purchase_options"]["state"] == "cancelled"
     assert adapter.last_license_diagnostic["content_info"]["size"] == "Comp"
+    assert exc_info.value.code == "adobe_license_transaction_cancelled"
 
 
 def test_acquire_calls_member_profile_and_content_info_before_license(

@@ -23,15 +23,27 @@ from otio_app.defaults import (
     ADOBE_STOCK_MIN_DOWNLOAD_BYTES,
     ADOBE_STOCK_VIDEO_4K_MAX_BYTES,
 )
-from otio_app.services.adobe_stock_oauth import get_adobe_access_token
+from otio_app.services.adobe_stock_oauth import decode_access_token_claims, get_adobe_access_token
 from otio_app.services.api_keys import get_api_key
+from otio_app.services.media_utils import probe_duration_seconds
 from otio_app.services.supplement_sources.adobe_stock import (
     VIDEO_ENTITLEMENT_HINT,
     AdobeAssetTooLargeError,
+    AdobeAuthenticationExpiredError,
     AdobeContentUnavailableError,
+    AdobeIdentityChangedError,
+    AdobeImportError,
+    AdobeLicenseNotPossibleError,
+    AdobeLicenseTransactionCancelledError,
+    AdobeRateLimitedError,
     AdobeStockAdapter,
     AdobeVideoEntitlementError,
+    AdobeWatermarkedPreviewError,
+    DownloadedMediaInvalidError,
+    LocalStorageError,
+    classify_adobe_url,
     is_full_adobe_download_url,
+    token_fingerprint,
 )
 
 __all__ = [
@@ -68,6 +80,15 @@ _POST_ASSET_PAUSE_SECONDS = 2.0  # nach Umbenennen, bevor das nächste Asset sta
 def _sleep(seconds: float) -> None:
     if seconds and seconds > 0:
         time.sleep(seconds)
+
+
+def _redact_email(email: str) -> str:
+    text = (email or "").strip()
+    if not text or "@" not in text:
+        return text[:3] + "…" if text else ""
+    local, _, domain = text.partition("@")
+    keep = local[:2] if len(local) > 2 else local[:1]
+    return f"{keep}…@{domain}"
 
 STATUS_DOWNLOADED = "downloaded"
 STATUS_OPEN = "open"
@@ -130,6 +151,7 @@ class AdobeResearchImportResult:
     items: list[AdobeResearchImportItemResult] = field(default_factory=list)
     manifest_path: str = ""
     cancelled: bool = False
+    diagnostics: dict = field(default_factory=dict)
 
     @property
     def downloaded(self) -> int:
@@ -633,8 +655,18 @@ def _download_purchase_to_path(
 ) -> Path:
     """Download zuerst als `.part`, danach atomar auf den Zielnamen umbenennen."""
     url = str(purchase.get("url") or "")
-    if not is_full_adobe_download_url(url):
-        raise RuntimeError(f"Keine Voll-Download-URL (Comp/Wasserzeichen): {url[:160]}")
+    url_class = classify_adobe_url(url)
+    if url_class == "watermarked":
+        adapter.request_counters.watermarked += 1
+        raise AdobeWatermarkedPreviewError(
+            "Watermarked-URL wird nicht als Vollversion gespeichert "
+            f"(url_class={url_class})."
+        )
+    if url_class != "download" or not is_full_adobe_download_url(url):
+        raise RuntimeError(
+            f"Keine Voll-Download-URL (url_class={url_class}). "
+            "Vollständige Download-URLs werden nicht protokolliert."
+        )
     final_path = destination.with_suffix(_extension_for_purchase(purchase, media_type))
     part_path = final_path.with_name(final_path.name + ".part")
     part_path.unlink(missing_ok=True)
@@ -656,7 +688,11 @@ def _download_purchase_to_path(
         )
         if not part_path.is_file() or part_path.stat().st_size < ADOBE_STOCK_MIN_DOWNLOAD_BYTES:
             part_path.unlink(missing_ok=True)
-            raise RuntimeError("Download zu klein / ungültig.")
+            adapter.request_counters.invalid_media += 1
+            raise DownloadedMediaInvalidError(
+                f"Download zu klein / ungültig: {final_path.name}",
+                details={"path": str(final_path)},
+            )
         # Sicherheitsnetz: auch wenn Content-Length fehlte / Stream-Abbruch
         # nicht greift, darf 4K die 600-MB-Grenze nicht behalten.
         if max_bytes is not None and part_path.stat().st_size > max_bytes:
@@ -665,10 +701,30 @@ def _download_purchase_to_path(
                 f"Download {final_path.name} überschreitet "
                 f"{max_bytes / (1024 * 1024):.0f} MB-Grenze."
             )
+        if media_type == "video":
+            duration = probe_duration_seconds(part_path)
+            if duration is None:
+                part_path.unlink(missing_ok=True)
+                adapter.request_counters.invalid_media += 1
+                raise DownloadedMediaInvalidError(
+                    f"Lokale Videodatei technisch ungültig: {final_path.name}",
+                    details={"path": str(final_path)},
+                )
         if phase_callback is not None:
             phase_callback(f"umbenennen → {final_path.name}")
-        part_path.replace(final_path)
+        try:
+            part_path.replace(final_path)
+        except OSError as exc:
+            part_path.unlink(missing_ok=True)
+            adapter.request_counters.local_storage_errors += 1
+            raise LocalStorageError(
+                f"Umbenennen fehlgeschlagen: {exc}",
+                details={"path": str(final_path)},
+            ) from exc
         return final_path
+    except AdobeImportError:
+        part_path.unlink(missing_ok=True)
+        raise
     except Exception:
         part_path.unlink(missing_ok=True)
         raise
@@ -683,14 +739,13 @@ def _license_and_download_to_path(
     media_hint: str = "",
     phase_callback: Callable[[str], None] | None = None,
 ) -> tuple[Path, str]:
-    """Lizenziert/lädt eine Content-ID — Foto + Video, inkl. bereits lizenziert.
+    """Lizenziert/lädt eine Content-ID — Hot-Path ohne LicenseHistory-Vollscan.
 
-    Strikt ein Asset: API-Pausen → Lizenz → Download als `.part` → Umbenennen.
     Reihenfolge:
-    1) Files-API → echter Medientyp (Foto/Video), 404 → unavailable
-    2) Content/Info: wenn bereits purchased + Voll-URL → Download
-    3) Content/License (ohne Diagnose-Spam)
-    4) LicenseHistory-Fallback für schon lizenzierte Assets
+    1) Files-API → Medientyp
+    2) Content/Info (bereits purchased + Voll-URL)
+    3) Content/License (license_again nie true)
+    4) Video_4K → bei TooLarge oder cancelled: begrenzter Video_HD-Fallback
     """
     def _phase(message: str) -> None:
         if phase_callback is not None:
@@ -735,71 +790,7 @@ def _license_and_download_to_path(
         ]
 
     attempt_errors: list[str] = []
-    entitlement_blocked: AdobeVideoEntitlementError | None = None
-
-    def _try_history_download(*, label_prefix: str) -> tuple[Path, str] | None:
-        """Bereits im Browser/Konto lizenzierte Clips — oft der einzige Weg bei CC Pro."""
-        _phase(f"warte vor LicenseHistory ({label_prefix})…")
-        _sleep(_API_CALL_PAUSE_SECONDS)
-        _phase(f"LicenseHistory ({label_prefix})…")
-        history = adapter.find_license_history_download(content_id, api_key, access_token)
-        if not history:
-            attempt_errors.append(f"LicenseHistory ({label_prefix}): kein Eintrag")
-            return None
-        hist_type = (
-            "image"
-            if "image" in str(history.get("content_type") or "").lower()
-            else resolved_type
-        )
-        hist_license = str(history.get("license") or "")
-        if hist_license == ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD:
-            size, max_bytes = 1080, None
-        elif hist_type == "video":
-            size, max_bytes = 2160, ADOBE_STOCK_VIDEO_4K_MAX_BYTES
-        else:
-            size, max_bytes = None, None
-        try:
-            path = _download_purchase_to_path(
-                adapter,
-                history,
-                destination,
-                api_key=api_key,
-                access_token=access_token,
-                media_type=hist_type,
-                size=size,
-                max_bytes=max_bytes,
-                phase_callback=phase_callback,
-            )
-            return path, _format_license_with_size(hist_license or "history", path)
-        except AdobeAssetTooLargeError:
-            attempt_errors.append(f"LicenseHistory ({label_prefix}): 4K>600MB → size=1080")
-            try:
-                _phase("History-Download als HD (size=1080)…")
-                path = _download_purchase_to_path(
-                    adapter,
-                    history,
-                    destination,
-                    api_key=api_key,
-                    access_token=access_token,
-                    media_type=resolved_type,
-                    size=1080,
-                    max_bytes=None,
-                    phase_callback=phase_callback,
-                )
-                return path, _format_license_with_size("Video_HD (4K>600MB history)", path)
-            except Exception as hist_hd_exc:  # noqa: BLE001
-                attempt_errors.append(f"History HD: {hist_hd_exc}")
-                return None
-        except Exception as exc:  # noqa: BLE001
-            attempt_errors.append(f"LicenseHistory ({label_prefix}): {exc}")
-            return None
-
-    # Videos: zuerst History — Content/License scheitert bei CC-Pro-Unlimited oft mit Comp.
-    if resolved_type == "video":
-        early = _try_history_download(label_prefix="zuerst")
-        if early is not None:
-            return early
-
+    cancelled_licenses: set[str] = set()
     tried: set[str] = set()
     while pending:
         license_type, size, max_bytes = pending.pop(0)
@@ -809,7 +800,7 @@ def _license_and_download_to_path(
         _phase(f"warte vor {license_type}…")
         _sleep(_LICENSE_RETRY_PAUSE_SECONDS if len(tried) > 1 else _API_CALL_PAUSE_SECONDS)
 
-        # Bereits lizenziert? Content/Info zuerst (kein neuer Kauf nötig).
+        # Bereits lizenziert? Content/Info zuerst (kein neuer Kauf / kein license_again).
         _phase(f"Content/Info ({license_type})…")
         info = adapter.content_info_purchase(
             content_id, license_type, api_key, access_token
@@ -836,6 +827,10 @@ def _license_and_download_to_path(
             except AdobeAssetTooLargeError:
                 attempt_errors.append(f"{license_type}: >600MB → Fallback HD")
                 continue
+            except (LocalStorageError, DownloadedMediaInvalidError, AdobeRateLimitedError):
+                raise
+            except AdobeImportError as exc:
+                attempt_errors.append(f"{license_type}: Info-Download [{exc.code}] {exc}")
             except Exception as exc:  # noqa: BLE001
                 attempt_errors.append(f"{license_type}: Info-Download {exc}")
 
@@ -852,14 +847,40 @@ def _license_and_download_to_path(
             )
         except AdobeContentUnavailableError:
             raise
-        except AdobeVideoEntitlementError as exc:
-            # Nicht sofort abbrechen — History kann trotz API-Block noch laden.
-            entitlement_blocked = exc
-            attempt_errors.append(f"{license_type}: {exc}")
+        except AdobeRateLimitedError:
+            raise
+        except AdobeVideoEntitlementError:
+            raise
+        except AdobeAuthenticationExpiredError:
+            # Ein Refresh-Versuch, dann erneut — sonst stoppen.
+            try:
+                access_token = get_adobe_access_token(force_refresh=True) or access_token
+                purchase = adapter._license_asset(
+                    content_id,
+                    license_type,
+                    api_key,
+                    access_token,
+                    diagnose=False,
+                )
+            except AdobeAuthenticationExpiredError:
+                raise
+            except AdobeVideoEntitlementError:
+                raise
+            except AdobeImportError as exc:
+                attempt_errors.append(f"{license_type}: [{exc.code}] {exc}")
+                if isinstance(exc, AdobeLicenseTransactionCancelledError):
+                    cancelled_licenses.add(license_type)
+                continue
+        except AdobeLicenseTransactionCancelledError as exc:
+            cancelled_licenses.add(license_type)
+            attempt_errors.append(f"{license_type}: [{exc.code}] {exc}")
+            # 4K cancelled → HD versuchen (bestehendes begrenztes Fallback)
+            continue
+        except (AdobeLicenseNotPossibleError, AdobeWatermarkedPreviewError, AdobeImportError) as exc:
+            attempt_errors.append(f"{license_type}: [{getattr(exc, 'code', 'error')}] {exc}")
             continue
         except Exception as exc:  # noqa: BLE001
             msg = str(exc)
-            # Falscher Medientyp → andere Lizenzfamilie nachziehen
             if "does not match type of content" in msg:
                 if resolved_type == "video" and ADOBE_STOCK_LICENSE_TYPE_STANDARD not in tried:
                     pending.append((ADOBE_STOCK_LICENSE_TYPE_STANDARD, None, None))
@@ -898,28 +919,30 @@ def _license_and_download_to_path(
         except AdobeAssetTooLargeError:
             attempt_errors.append(f"{license_type}: >600MB → Fallback HD")
             continue
+        except (LocalStorageError, DownloadedMediaInvalidError, AdobeRateLimitedError):
+            raise
+        except AdobeImportError as exc:
+            attempt_errors.append(f"{license_type}: Download [{exc.code}] {exc}")
+            continue
         except Exception as exc:  # noqa: BLE001
             attempt_errors.append(f"{license_type}: Download {exc}")
             continue
 
-    # Nochmal History (falls erst nach License-Versuchen sichtbar / zweiter Pfad).
-    if resolved_type == "video":
-        late = _try_history_download(label_prefix="danach")
-        if late is not None:
-            return late
+    # Beide Video-Lizenzen cancelled → Batch soll stoppen (Caller wertet Code aus).
+    if (
+        ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K in cancelled_licenses
+        and ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD in cancelled_licenses
+    ):
+        raise AdobeLicenseTransactionCancelledError(
+            f"Video_4K und Video_HD cancelled für Content-ID {content_id}. "
+            f"Batch wird kontrolliert gestoppt. Versuche: {' | '.join(attempt_errors)}"
+        )
 
-    if entitlement_blocked is not None:
-        raise AdobeVideoEntitlementError(str(entitlement_blocked) or VIDEO_ENTITLEMENT_HINT)
-    if any(isinstance(e, str) and "cct_pro_unlimited_images" in e for e in attempt_errors):
-        raise AdobeVideoEntitlementError(VIDEO_ENTITLEMENT_HINT)
     detail = " | ".join(attempt_errors) if attempt_errors else "unbekannter Fehler"
-    hint = ""
-    if any("cancelled" in e for e in attempt_errors) or any("Comp" in e for e in attempt_errors):
-        hint = f" {VIDEO_ENTITLEMENT_HINT}"
     raise RuntimeError(
         f"Adobe-Download fehlgeschlagen für Content-ID {content_id} "
         f"(media_type={resolved_type}, meta_content_type={meta.get('content_type') or '—'}). "
-        f"Versuche: {detail}.{hint}"
+        f"Versuche: {detail}. {VIDEO_ENTITLEMENT_HINT}"
     )
 
 
@@ -952,6 +975,7 @@ def download_research_import(
         selected = {str(t).strip() for t in chapter_titles if str(t).strip()}
 
     adapter = AdobeStockAdapter()
+    adapter.reset_request_diagnostics()
     readiness = adapter.readiness()
     if not readiness.acquire_enabled:
         raise PermissionError(
@@ -969,8 +993,20 @@ def download_research_import(
     done = 0
     live_statuses: dict[str, dict] = {}
     stopped = False
-    # Nur Merker für Live-Meldung — Assets werden weiter versucht (History zuerst).
-    video_entitlement_message = VIDEO_ENTITLEMENT_HINT
+    batch_stop_reason = ""
+
+    # OAuth-Identität am Batch-Start — Wechsel mittendrin stoppt den Batch.
+    start_claims = decode_access_token_claims()
+    start_sub = str(start_claims.get("sub") or "")
+    start_token = get_adobe_access_token() or ""
+    start_fp = token_fingerprint(start_token)
+    result.diagnostics = {
+        "batch_id": adapter.batch_id,
+        "oauth_sub": start_sub,
+        "oauth_email_redacted": _redact_email(str(start_claims.get("email") or "")),
+        "token_fingerprint": start_fp,
+        "request_counters": adapter.request_counters.as_dict(),
+    }
 
     prior_records: dict[str, dict] = {}
     if state_path is not None:
@@ -1023,6 +1059,34 @@ def download_research_import(
         next_index = _next_asset_index(folder)
 
         for asset in chapter.assets:
+            # Identitätswechsel während des Batches → sofort stoppen.
+            now_claims = decode_access_token_claims()
+            now_sub = str(now_claims.get("sub") or "")
+            if start_sub and now_sub and now_sub != start_sub:
+                stopped = True
+                batch_stop_reason = "adobe_identity_changed"
+                msg = (
+                    f"[{AdobeIdentityChangedError.code}] OAuth-sub wechselte "
+                    f"während des Batches ({start_sub[:8]}… → {now_sub[:8]}…)."
+                )
+                live_statuses[asset.asset_id] = {
+                    "status": STATUS_ERROR,
+                    "message": msg,
+                    "local_path": "",
+                    "license": "",
+                }
+                result.items.append(
+                    AdobeResearchImportItemResult(
+                        chapter_title=chapter.title,
+                        folder_name=chapter.folder_name,
+                        asset_id=asset.asset_id,
+                        status=STATUS_ERROR,
+                        message=msg,
+                    )
+                )
+                _publish_live()
+                break
+
             if should_stop is not None and should_stop():
                 stopped = True
                 result.cancelled = True
@@ -1100,6 +1164,7 @@ def download_research_import(
 
             stem = format_asset_stem(chapter.folder_name, next_index)
             dest = folder / stem  # Suffix setzt Download/Rename
+            adapter.asset_index = done
             try:
                 local_path, used_license = _license_and_download_to_path(
                     adapter,
@@ -1138,31 +1203,6 @@ def download_research_import(
                     message=f"{used_license} → {local_path.name}",
                 )
                 _sleep(_POST_ASSET_PAUSE_SECONDS)
-            except AdobeVideoEntitlementError as exc:
-                video_entitlement_message = str(exc) or VIDEO_ENTITLEMENT_HINT
-                live_statuses[asset.asset_id] = {
-                    "status": STATUS_ERROR,
-                    "message": video_entitlement_message,
-                    "local_path": "",
-                    "license": "",
-                }
-                result.items.append(
-                    AdobeResearchImportItemResult(
-                        chapter_title=chapter.title,
-                        folder_name=chapter.folder_name,
-                        asset_id=asset.asset_id,
-                        status=STATUS_ERROR,
-                        message=video_entitlement_message,
-                    )
-                )
-                _publish_live()
-                _emit(
-                    folder_name=chapter.folder_name,
-                    asset_id=asset.asset_id,
-                    chapter_title=chapter.title,
-                    status=STATUS_ERROR,
-                    message=video_entitlement_message,
-                )
             except AdobeContentUnavailableError as exc:
                 live_statuses[asset.asset_id] = {
                     "status": STATUS_UNAVAILABLE,
@@ -1187,6 +1227,50 @@ def download_research_import(
                     status=STATUS_UNAVAILABLE,
                     message=str(exc),
                 )
+            except AdobeImportError as exc:
+                code = getattr(exc, "code", "adobe_import_error")
+                details = getattr(exc, "details", {}) or {}
+                req_id = details.get("request_id") or ""
+                msg = f"[{code}] {exc}"
+                if req_id:
+                    msg = f"{msg} (X-Request-Id={req_id})"
+                live_statuses[asset.asset_id] = {
+                    "status": STATUS_ERROR,
+                    "message": msg,
+                    "local_path": "",
+                    "license": "",
+                }
+                result.items.append(
+                    AdobeResearchImportItemResult(
+                        chapter_title=chapter.title,
+                        folder_name=chapter.folder_name,
+                        asset_id=asset.asset_id,
+                        status=STATUS_ERROR,
+                        message=msg,
+                    )
+                )
+                _publish_live()
+                _emit(
+                    folder_name=chapter.folder_name,
+                    asset_id=asset.asset_id,
+                    chapter_title=chapter.title,
+                    status=STATUS_ERROR,
+                    message=msg,
+                )
+                # Rate-Limit erschöpft / 4K+HD cancelled / Identity → Batch stoppen
+                if code in {
+                    "adobe_rate_limited",
+                    "adobe_license_transaction_cancelled",
+                    "adobe_identity_changed",
+                    "adobe_authentication_expired",
+                }:
+                    # cancelled nur stoppen wenn beide Video-Lizenzen betroffen
+                    if code != "adobe_license_transaction_cancelled" or (
+                        "Video_4K und Video_HD cancelled" in str(exc)
+                    ):
+                        stopped = True
+                        batch_stop_reason = code
+                        break
             except Exception as exc:  # noqa: BLE001
                 live_statuses[asset.asset_id] = {
                     "status": STATUS_ERROR,
@@ -1248,4 +1332,25 @@ def download_research_import(
         result.manifest_path = str(manifest_path)
     else:
         result.manifest_path = ""
+
+    # Redigierte Request-Diagnose (keine Tokens/URLs)
+    recent_events = [
+        e.as_dict()
+        for e in adapter.request_diag_events[-40:]
+    ]
+    result.diagnostics = {
+        "batch_id": adapter.batch_id,
+        "oauth_sub": start_sub,
+        "oauth_email_redacted": _redact_email(str(start_claims.get("email") or "")),
+        "token_fingerprint": start_fp,
+        "batch_stop_reason": batch_stop_reason,
+        "request_counters": adapter.request_counters.as_dict(),
+        "recent_requests": recent_events,
+    }
+    if state_path is not None:
+        diag_path = state_path / "adobe_research_import_diagnostics.json"
+        diag_path.write_text(
+            json.dumps(result.diagnostics, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
     return result
