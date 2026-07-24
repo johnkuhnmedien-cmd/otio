@@ -14,6 +14,7 @@ from otio_app.ui.activity import record_script_run, render_activity_panel
 from otio_app.ui.analysis_jobs_ui import render_analysis_jobs_banner
 from otio_app.ui.clean_media import render_clean_media_page
 from otio_app.ui.edit_plan import render_edit_plan_page
+from otio_app.ui.adobe_research_import_page import render_adobe_research_import_page
 from otio_app.ui.navigation import ACTIVE_PROJECT_KEY, PAGE_ANALYSIS, PAGE_API_KEYS, PAGE_MAPPING, PAGE_SUPPLEMENT
 from otio_app.ui.page_state import clear_page_widget_state
 from otio_app.ui.project_workbench import render_project_workbench
@@ -91,6 +92,7 @@ def _build_with_voiceover_pages(
     render_project_list: Callable[[], None],
 ) -> list:
     from otio_app.ui.navigation import (
+        PAGE_ADOBE_IMPORT,
         PAGE_API_KEYS,
         PAGE_CLEAN_MEDIA,
         PAGE_EDIT_PLAN,
@@ -102,7 +104,17 @@ def _build_with_voiceover_pages(
     )
 
     return [
-        st.Page(render_new_project, title=PAGE_NEW, url_path="neues-projekt", default=True),
+        st.Page(
+            render_adobe_research_import_page,
+            title=PAGE_ADOBE_IMPORT,
+            url_path="adobe-stock-import",
+        ),
+        st.Page(
+            render_new_project,
+            title=PAGE_NEW,
+            url_path="neues-projekt",
+            default=True,
+        ),
         st.Page(render_project_list, title=PAGE_LIST, url_path="projekte"),
         st.Page(
             _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, show_jobs_banner=True),
@@ -144,6 +156,7 @@ def _build_without_voiceover_pages(
     render_project_list: Callable[[], None],
 ) -> list:
     from otio_app.ui.navigation import (
+        PAGE_ADOBE_IMPORT,
         PAGE_API_KEYS,
         PAGE_AUDIO,
         PAGE_CLEAN_MEDIA,
@@ -160,7 +173,17 @@ def _build_without_voiceover_pages(
     )
 
     return [
-        st.Page(render_new_project, title=PAGE_NEW, url_path="neues-projekt", default=True),
+        st.Page(
+            render_adobe_research_import_page,
+            title=PAGE_ADOBE_IMPORT,
+            url_path="adobe-stock-import",
+        ),
+        st.Page(
+            render_new_project,
+            title=PAGE_NEW,
+            url_path="neues-projekt",
+            default=True,
+        ),
         st.Page(render_project_list, title=PAGE_LIST, url_path="projekte"),
         st.Page(
             _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, show_jobs_banner=True),
@@ -223,6 +246,7 @@ def _build_without_voiceover_enhanced_pages(
 ) -> list:
     """Enhanced MVP: gleiche frühen Schritte, aber Audio → Cut Plan → Final Output."""
     from otio_app.ui.navigation import (
+        PAGE_ADOBE_IMPORT,
         PAGE_API_KEYS,
         PAGE_AUDIO,
         PAGE_CLEAN_MEDIA,
@@ -239,7 +263,17 @@ def _build_without_voiceover_enhanced_pages(
     )
 
     return [
-        st.Page(render_new_project, title=PAGE_NEW, url_path="neues-projekt", default=True),
+        st.Page(
+            render_adobe_research_import_page,
+            title=PAGE_ADOBE_IMPORT,
+            url_path="adobe-stock-import",
+        ),
+        st.Page(
+            render_new_project,
+            title=PAGE_NEW,
+            url_path="neues-projekt",
+            default=True,
+        ),
         st.Page(render_project_list, title=PAGE_LIST, url_path="projekte"),
         st.Page(
             _wrap_page(PAGE_CLEAN_MEDIA, render_clean_media_page, show_jobs_banner=True),
@@ -353,6 +387,7 @@ def _run_legacy_pages(
     from otio_app.ui.navigation import (
         LAST_NAV_PAGE_KEY,
         NAVIGATION_OPTIONS,
+        PAGE_ADOBE_IMPORT,
         PAGE_AUDIO,
         PAGE_CLEAN_MEDIA,
         PAGE_CUT_PLAN,
@@ -399,7 +434,9 @@ def _run_legacy_pages(
         if not is_shutting_down():
             st.rerun()
 
-    if page == PAGE_NEW:
+    if page == PAGE_ADOBE_IMPORT:
+        render_adobe_research_import_page()
+    elif page == PAGE_NEW:
         render_new_project()
     elif page == PAGE_LIST:
         render_project_list()
