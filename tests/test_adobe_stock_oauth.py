@@ -131,3 +131,14 @@ def test_clear_token_store(oauth_data_dir: Path) -> None:
     oauth.clear_token_store()
     assert oauth.load_token_store() is None
     assert not (oauth_data_dir / oauth.ADOBE_STOCK_OAUTH_STATE_FILENAME).is_file()
+
+
+def test_decode_access_token_claims() -> None:
+    def _b64(data: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(data).encode("utf-8")).decode("ascii").rstrip("=")
+
+    token = ".".join([_b64({"alg": "none"}), _b64({"email": "u@example.com", "sub": "abc"}), "sig"])
+    claims = oauth.decode_access_token_claims(token)
+    assert claims["email"] == "u@example.com"
+    assert claims["sub"] == "abc"
+    assert oauth.decode_access_token_claims("") == {}
