@@ -10,6 +10,7 @@ from pathlib import Path
 
 from otio_app.services.adobe_download_projects import (
     get_download_project,
+    project_dir,
     update_download_project,
 )
 from otio_app.services.adobe_research_import import (
@@ -199,6 +200,7 @@ class ResearchImportJobManager:
             result = download_research_import(
                 plan,
                 target,
+                state_dir=project_dir(project_id),
                 chapter_titles=titles,
                 skip_existing_ids=skip_existing,
                 progress_callback=on_progress,

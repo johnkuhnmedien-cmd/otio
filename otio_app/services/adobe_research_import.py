@@ -39,9 +39,11 @@ __all__ = [
     "AdobeResearchImportProgress",
     "AdobeResearchImportResult",
     "build_research_import_board",
+    "cleanup_media_folder_json",
     "download_research_import",
     "format_asset_stem",
     "parse_research_excel",
+    "persist_research_import_board",
     "sanitize_folder_name",
 ]
 
@@ -338,39 +340,11 @@ def parse_research_excel(
     return AdobeResearchImportPlan(sheet_name=name, chapters=tuple(chapters))
 
 
-def _existing_asset_ids_in_folder(folder: Path) -> set[str]:
-    """Liest bereits importierte Adobe-IDs aus Manifest oder Dateinamen-Sidecar."""
-    return set(_downloaded_records_in_folder(folder))
-
-
-def _downloaded_records_in_folder(folder: Path) -> dict[str, dict]:
-    """asset_id → {local_path, license, message} für einen Kapitelordner."""
-    found: dict[str, dict] = {}
-    if not folder.is_dir():
-        return found
-    for path in folder.glob("*.adobe.json"):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        aid = str(payload.get("asset_id") or "").strip()
-        if not aid:
-            continue
-        found[aid] = {
-            "local_path": str(payload.get("local_path") or ""),
-            "license": str(payload.get("license") or ""),
-            "message": "",
-            "status": STATUS_DOWNLOADED,
-        }
-    return found
-
-
-def _root_manifest_records(root: Path) -> dict[str, dict]:
-    path = root / _MANIFEST_NAME
-    if not path.is_file():
+def _manifest_records(manifest_path: Path) -> dict[str, dict]:
+    if not manifest_path.is_file():
         return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
     found: dict[str, dict] = {}
@@ -390,32 +364,107 @@ def _root_manifest_records(root: Path) -> dict[str, dict]:
     return found
 
 
+def _legacy_sidecar_records(target_root: Path) -> dict[str, dict]:
+    """Einmalige Migration: alte *.adobe.json neben Medien lesen."""
+    found: dict[str, dict] = {}
+    if not target_root.is_dir():
+        return found
+    for path in target_root.rglob("*.adobe.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        aid = str(payload.get("asset_id") or "").strip()
+        if not aid:
+            continue
+        found[aid] = {
+            "local_path": str(payload.get("local_path") or ""),
+            "license": str(payload.get("license") or ""),
+            "message": "",
+            "status": STATUS_DOWNLOADED,
+        }
+    return found
+
+
+def _downloaded_ids_from_records(records: dict[str, dict]) -> set[str]:
+    ids: set[str] = set()
+    for aid, record in records.items():
+        status = str(record.get("status") or "")
+        if status not in {STATUS_DOWNLOADED, STATUS_SKIPPED}:
+            continue
+        local = str(record.get("local_path") or "")
+        if local and not Path(local).is_file():
+            # Datei fehlt → als noch offen behandeln
+            continue
+        ids.add(aid)
+    return ids
+
+
+def cleanup_media_folder_json(target_root: str | Path) -> dict[str, int]:
+    """Löscht Board/Manifest/*.adobe.json aus dem Medien-Zielordner (nicht aus data/)."""
+    root = Path(target_root).expanduser().resolve()
+    removed = {"sidecar": 0, "board": 0, "manifest": 0}
+    if not root.is_dir():
+        return removed
+    board = root / _BOARD_NAME
+    if board.is_file():
+        board.unlink()
+        removed["board"] = 1
+    manifest = root / _MANIFEST_NAME
+    if manifest.is_file():
+        manifest.unlink()
+        removed["manifest"] = 1
+    for path in root.rglob("*.adobe.json"):
+        try:
+            path.unlink()
+            removed["sidecar"] += 1
+        except OSError:
+            continue
+    return removed
+
+
 def build_research_import_board(
     plan: AdobeResearchImportPlan,
     target_root: str | Path | None,
     *,
+    state_dir: str | Path | None = None,
     live_statuses: dict[str, dict] | None = None,
 ) -> AdobeResearchImportBoard:
-    """Excel-Spiegel: pro Asset Downloaded / Open / Error (+ Live-Overrides)."""
+    """Excel-Spiegel: pro Asset Downloaded / Open / Error (+ Live-Overrides).
+
+    Fortschritt wird aus `state_dir` gelesen (Download-Projekt unter data/),
+    nicht aus JSON neben den Mediendateien. Legacy-Sidecars im Zielordner
+    werden nur noch als Fallback gelesen.
+    """
     root = Path(target_root).expanduser().resolve() if target_root else Path()
-    root_records = _root_manifest_records(root) if target_root else {}
+    state = Path(state_dir).expanduser().resolve() if state_dir else None
+    state_records = _manifest_records(state / _MANIFEST_NAME) if state else {}
+    # Legacy: alte Dateien im Medienordner (Migration)
+    legacy_root = _manifest_records(root / _MANIFEST_NAME) if target_root else {}
+    legacy_sidecars = _legacy_sidecar_records(root) if target_root else {}
     live = live_statuses or {}
 
     chapters: list[AdobeResearchChapterStatus] = []
     for chapter in plan.chapters:
-        folder = root / chapter.folder_name if target_root else Path()
-        folder_records = _downloaded_records_in_folder(folder) if target_root else {}
         assets: list[AdobeResearchAssetStatus] = []
         for asset in chapter.assets:
             record = (
                 live.get(asset.asset_id)
-                or folder_records.get(asset.asset_id)
-                or root_records.get(asset.asset_id)
+                or state_records.get(asset.asset_id)
+                or legacy_sidecars.get(asset.asset_id)
+                or legacy_root.get(asset.asset_id)
             )
             if record:
                 status = str(record.get("status") or STATUS_DOWNLOADED)
                 if status == STATUS_SKIPPED:
                     status = STATUS_DOWNLOADED
+                local_path = str(record.get("local_path") or "")
+                if (
+                    status == STATUS_DOWNLOADED
+                    and local_path
+                    and not Path(local_path).is_file()
+                ):
+                    status = STATUS_OPEN
                 assets.append(
                     AdobeResearchAssetStatus(
                         chapter_title=chapter.title,
@@ -423,7 +472,7 @@ def build_research_import_board(
                         asset_id=asset.asset_id,
                         link=asset.link,
                         status=status,
-                        local_path=str(record.get("local_path") or ""),
+                        local_path=local_path if status == STATUS_DOWNLOADED else "",
                         license=str(record.get("license") or ""),
                         message=str(record.get("message") or ""),
                     )
@@ -452,10 +501,15 @@ def build_research_import_board(
     )
 
 
-def persist_research_import_board(board: AdobeResearchImportBoard) -> Path | None:
-    if not board.target_root:
+def persist_research_import_board(
+    board: AdobeResearchImportBoard,
+    *,
+    state_dir: str | Path | None = None,
+) -> Path | None:
+    """Schreibt Board-JSON nur in state_dir (nie in den Medienordner)."""
+    if state_dir is None:
         return None
-    root = Path(board.target_root)
+    root = Path(state_dir).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": "adobe-research-import-board-v1",
@@ -627,6 +681,7 @@ def download_research_import(
     plan: AdobeResearchImportPlan,
     target_root: str | Path,
     *,
+    state_dir: str | Path | None = None,
     chapter_titles: Iterable[str] | None = None,
     skip_existing_ids: bool = True,
     progress_callback: Callable[[AdobeResearchImportProgress], None] | None = None,
@@ -635,12 +690,15 @@ def download_research_import(
 ) -> AdobeResearchImportResult:
     """Lizenzieren + Download in Zielordner/{Kapitel}/{Kapitel}_Asset_NN.ext.
 
-    `should_stop`: kooperativer Abbruch zwischen Assets (aktueller Download
-    läuft noch zu Ende). `live_status_callback` erhält nach jedem Asset die
-    kumulierten Live-Statuses für das Excel-Spiegel-Board.
+    Fortschritt/Manifest landen in `state_dir` (Download-Projekt unter data/),
+    nicht als JSON neben den Medien. `should_stop` bricht kooperativ zwischen
+    Assets ab.
     """
     root = Path(target_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
+    state_path = Path(state_dir).expanduser().resolve() if state_dir else None
+    if state_path is not None:
+        state_path.mkdir(parents=True, exist_ok=True)
 
     selected = None
     if chapter_titles is not None:
@@ -664,6 +722,13 @@ def download_research_import(
     done = 0
     live_statuses: dict[str, dict] = {}
     stopped = False
+
+    prior_records: dict[str, dict] = {}
+    if state_path is not None:
+        prior_records.update(_manifest_records(state_path / _MANIFEST_NAME))
+    prior_records.update(_legacy_sidecar_records(root))
+    prior_records.update(_manifest_records(root / _MANIFEST_NAME))
+    already_global = _downloaded_ids_from_records(prior_records) if skip_existing_ids else set()
 
     def _emit(
         *,
@@ -692,15 +757,20 @@ def download_research_import(
     def _publish_live() -> None:
         if live_status_callback is not None:
             live_status_callback(dict(live_statuses))
-        board = build_research_import_board(plan, root, live_statuses=live_statuses)
-        persist_research_import_board(board)
+        board = build_research_import_board(
+            plan,
+            root,
+            state_dir=state_path,
+            live_statuses=live_statuses,
+        )
+        persist_research_import_board(board, state_dir=state_path)
 
     for chapter in chapters:
         if stopped:
             break
         folder = root / chapter.folder_name
         folder.mkdir(parents=True, exist_ok=True)
-        already = _existing_asset_ids_in_folder(folder) if skip_existing_ids else set()
+        already = set(already_global)
         next_index = _next_asset_index(folder)
 
         for asset in chapter.assets:
@@ -784,20 +854,7 @@ def download_research_import(
                     media_type=media_type,
                     destination=dest,
                 )
-                sidecar = {
-                    "asset_id": asset.asset_id,
-                    "link": asset.link,
-                    "license": used_license,
-                    "chapter_title": chapter.title,
-                    "folder_name": chapter.folder_name,
-                    "local_path": str(local_path),
-                    "downloaded_at": datetime.now(timezone.utc).isoformat(),
-                }
-                sidecar_path = folder / f"{local_path.stem}.adobe.json"
-                sidecar_path.write_text(
-                    json.dumps(sidecar, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
+                # Keine *.adobe.json neben Medien — Status nur in state_dir.
                 live_statuses[asset.asset_id] = {
                     "status": STATUS_DOWNLOADED,
                     "message": "",
@@ -815,6 +872,7 @@ def download_research_import(
                     )
                 )
                 already.add(asset.asset_id)
+                already_global.add(asset.asset_id)
                 next_index += 1
                 _publish_live()
                 _emit(
@@ -849,23 +907,40 @@ def download_research_import(
                     message=str(exc),
                 )
 
-    board = build_research_import_board(plan, root, live_statuses=live_statuses)
-    persist_research_import_board(board)
+    board = build_research_import_board(
+        plan,
+        root,
+        state_dir=state_path,
+        live_statuses=live_statuses,
+    )
+    persist_research_import_board(board, state_dir=state_path)
 
+    # Manifest mergen: vorherige Downloads behalten + aktuelle Run-Items
+    merged_by_id: dict[str, dict] = dict(prior_records)
+    for item in result.items:
+        merged_by_id[item.asset_id] = asdict(item)
+    manifest_items = list(merged_by_id.values())
     manifest = {
         "schema_version": "adobe-research-import-v1",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "target_root": str(root),
         "sheet_name": plan.sheet_name,
-        "downloaded": result.downloaded,
+        "downloaded": sum(
+            1
+            for item in manifest_items
+            if str(item.get("status")) in {STATUS_DOWNLOADED, STATUS_SKIPPED}
+        ),
         "skipped": result.skipped,
         "errors": result.errors,
         "cancelled": result.cancelled,
-        "items": [asdict(item) for item in result.items],
+        "items": manifest_items,
     }
-    manifest_path = root / _MANIFEST_NAME
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    result.manifest_path = str(manifest_path)
+    if state_path is not None:
+        manifest_path = state_path / _MANIFEST_NAME
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        result.manifest_path = str(manifest_path)
+    else:
+        result.manifest_path = ""
     return result

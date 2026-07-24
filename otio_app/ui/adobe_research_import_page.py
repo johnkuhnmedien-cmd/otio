@@ -14,6 +14,7 @@ from otio_app.services.adobe_download_projects import (
     get_download_project,
     list_download_projects,
     load_project_plan,
+    project_dir,
     update_download_project,
 )
 from otio_app.services.adobe_research_import import (
@@ -24,6 +25,7 @@ from otio_app.services.adobe_research_import import (
     STATUS_OPEN,
     AdobeResearchImportBoard,
     build_research_import_board,
+    cleanup_media_folder_json,
 )
 from otio_app.services.adobe_research_import_job import (
     JobStatus,
@@ -97,10 +99,6 @@ def _render_board(board: AdobeResearchImportBoard) -> None:
                 }
             )
     st.dataframe(asset_rows, use_container_width=True, hide_index=True, height=360)
-    if board.target_root:
-        st.caption(
-            f"Board-Datei: `{Path(board.target_root) / 'adobe_research_import_board.json'}`"
-        )
 
 
 def _render_project_switcher() -> str | None:
@@ -276,12 +274,29 @@ def render_adobe_research_import_page() -> None:
                     st.success("Download-Projekt gelöscht (Medien im Zielordner bleiben).")
                     st.rerun()
 
+    state_dir = project_dir(project.id)
     board = build_research_import_board(
         plan,
         project.target_root,
+        state_dir=state_dir,
         live_statuses=job.live_statuses if job.live_statuses else None,
     )
     _render_board(board)
+    st.caption(f"Fortschritt gespeichert unter: `{state_dir}` (nicht im Medienordner)")
+
+    with st.expander("JSON aus Medienordnern entfernen", expanded=False):
+        st.caption(
+            "Löscht `*.adobe.json`, `adobe_research_import_board.json` und "
+            "`adobe_research_import_manifest.json` im Zielordner. "
+            "Fortschritt bleibt im Download-Projekt unter data/."
+        )
+        if st.button("JSON jetzt löschen", key=f"adobe_dl_cleanup_json_{project.id}"):
+            removed = cleanup_media_folder_json(project.target_root)
+            st.success(
+                f"Entfernt: {removed['sidecar']} Sidecars · "
+                f"{removed['board']} Board · {removed['manifest']} Manifest"
+            )
+            st.rerun()
 
     st.subheader("Import steuern")
     chapter_labels = [ch.title for ch in plan.chapters]
@@ -369,9 +384,28 @@ def render_adobe_research_import_page() -> None:
         time.sleep(1.0)
         st.rerun()
     elif job.status == JobStatus.COMPLETED:
-        st.success(job.message or "Import fertig.")
+        if job.result and job.result.errors:
+            st.warning(job.message or "Import fertig (mit Fehlern).")
+        else:
+            st.success(job.message or "Import fertig.")
         if job.result and job.result.manifest_path:
             st.caption(f"Manifest: `{job.result.manifest_path}`")
+        if job.result and job.result.errors:
+            st.subheader("Fehlerdetails")
+            st.caption(
+                "Häufige Ursachen: Adobe-Lizenz/Quota, Netzwerk, oder voller "
+                "iCloud-/Festplattenspeicher beim Schreiben der Dateien."
+            )
+            err_rows = [
+                {
+                    "Kapitel": item.chapter_title,
+                    "Asset ID": item.asset_id,
+                    "Fehler": item.message,
+                }
+                for item in job.result.items
+                if item.status == STATUS_ERROR
+            ]
+            st.dataframe(err_rows, use_container_width=True, hide_index=True)
     elif job.status == JobStatus.CANCELLED:
         st.warning(job.message or "Import gestoppt.")
         if job.result and job.result.manifest_path:

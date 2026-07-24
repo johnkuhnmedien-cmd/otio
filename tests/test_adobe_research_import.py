@@ -11,6 +11,7 @@ from otio_app.services.adobe_research_import import (
     STATUS_DOWNLOADED,
     STATUS_OPEN,
     build_research_import_board,
+    cleanup_media_folder_json,
     download_research_import,
     format_asset_stem,
     parse_research_excel,
@@ -101,30 +102,53 @@ def _minimal_plan(tmp_path: Path):
     return parse_research_excel(path)
 
 
-def test_build_research_import_board_marks_downloaded_from_sidecar(tmp_path: Path) -> None:
+def test_build_research_import_board_marks_downloaded_from_state_manifest(
+    tmp_path: Path,
+) -> None:
     plan = _minimal_plan(tmp_path)
     target = tmp_path / "out"
-    chapter_dir = target / "Alpha"
-    chapter_dir.mkdir(parents=True)
-    sidecar = chapter_dir / "Alpha_Asset_01.adobe.json"
-    sidecar.write_text(
+    state = tmp_path / "state"
+    state.mkdir()
+    media = target / "Alpha" / "Alpha_Asset_01.mp4"
+    media.parent.mkdir(parents=True)
+    media.write_bytes(b"x" * 1000)
+    (state / "adobe_research_import_manifest.json").write_text(
         json.dumps(
             {
-                "asset_id": "111",
-                "license": "Video_HD",
-                "local_path": str(chapter_dir / "Alpha_Asset_01.mp4"),
+                "items": [
+                    {
+                        "asset_id": "111",
+                        "status": "downloaded",
+                        "license": "Video_HD",
+                        "local_path": str(media),
+                    }
+                ]
             }
         ),
         encoding="utf-8",
     )
 
-    board = build_research_import_board(plan, target)
+    board = build_research_import_board(plan, target, state_dir=state)
     assert board.total == 2
     assert board.downloaded == 1
     assert board.open_count == 1
     by_id = {a.asset_id: a for ch in board.chapters for a in ch.assets}
     assert by_id["111"].status == STATUS_DOWNLOADED
     assert by_id["222"].status == STATUS_OPEN
+
+
+def test_cleanup_media_folder_json_removes_sidecars_and_root_json(tmp_path: Path) -> None:
+    target = tmp_path / "media"
+    chapter = target / "Alpha"
+    chapter.mkdir(parents=True)
+    (chapter / "Alpha_Asset_01.adobe.json").write_text("{}", encoding="utf-8")
+    (target / "adobe_research_import_board.json").write_text("{}", encoding="utf-8")
+    (target / "adobe_research_import_manifest.json").write_text("{}", encoding="utf-8")
+    removed = cleanup_media_folder_json(target)
+    assert removed["sidecar"] == 1
+    assert removed["board"] == 1
+    assert removed["manifest"] == 1
+    assert not list(target.rglob("*.json"))
 
 
 def test_download_respects_should_stop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -168,9 +192,11 @@ def test_download_respects_should_stop(tmp_path: Path, monkeypatch: pytest.Monke
         if event.done >= 1 and event.status == "downloaded":
             stop_after_first["stop"] = True
 
+    state = tmp_path / "state"
     result = download_research_import(
         plan,
         target,
+        state_dir=state,
         skip_existing_ids=False,
         progress_callback=on_progress,
         should_stop=should_stop,
@@ -179,6 +205,8 @@ def test_download_respects_should_stop(tmp_path: Path, monkeypatch: pytest.Monke
     assert result.downloaded == 1
     assert calls["n"] == 1
     assert any(e.status == "cancelled" for e in progress_events)
-    board = build_research_import_board(plan, target)
+    assert not list(target.rglob("*.json"))
+    assert (state / "adobe_research_import_manifest.json").is_file()
+    board = build_research_import_board(plan, target, state_dir=state)
     assert board.downloaded == 1
     assert board.open_count >= 1
