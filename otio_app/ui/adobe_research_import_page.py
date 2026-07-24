@@ -8,6 +8,14 @@ from pathlib import Path
 import streamlit as st
 
 from otio_app.paths import clean_user_path_input
+from otio_app.services.adobe_download_projects import (
+    create_download_project,
+    delete_download_project,
+    get_download_project,
+    list_download_projects,
+    load_project_plan,
+    update_download_project,
+)
 from otio_app.services.adobe_research_import import (
     STATUS_CANCELLED,
     STATUS_DOWNLOADED,
@@ -15,9 +23,7 @@ from otio_app.services.adobe_research_import import (
     STATUS_ERROR,
     STATUS_OPEN,
     AdobeResearchImportBoard,
-    AdobeResearchImportPlan,
     build_research_import_board,
-    parse_research_excel,
 )
 from otio_app.services.adobe_research_import_job import (
     JobStatus,
@@ -26,8 +32,7 @@ from otio_app.services.adobe_research_import_job import (
 from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
 from otio_app.ui.adobe_oauth_panel import render_adobe_oauth_panel
 
-_PLAN_BYTES_KEY = "adobe_research_plan_bytes"
-_PLAN_NAME_KEY = "adobe_research_plan_name"
+_ACTIVE_PROJECT_KEY = "adobe_download_active_project_id"
 
 
 def _status_label(status: str) -> str:
@@ -38,18 +43,6 @@ def _status_label(status: str) -> str:
         STATUS_DOWNLOADING: "Läuft",
         STATUS_CANCELLED: "Open (gestoppt)",
     }.get(status, status)
-
-
-def _cache_plan_from_upload(uploaded) -> AdobeResearchImportPlan | None:
-    if uploaded is None:
-        raw = st.session_state.get(_PLAN_BYTES_KEY)
-        if not raw:
-            return None
-        return parse_research_excel(raw)
-    data = uploaded.getvalue()
-    st.session_state[_PLAN_BYTES_KEY] = data
-    st.session_state[_PLAN_NAME_KEY] = getattr(uploaded, "name", "") or "research.xlsx"
-    return parse_research_excel(data)
 
 
 def _render_board(board: AdobeResearchImportBoard) -> None:
@@ -110,16 +103,93 @@ def _render_board(board: AdobeResearchImportBoard) -> None:
         )
 
 
+def _render_project_switcher() -> str | None:
+    projects = list_download_projects()
+    st.subheader("Download-Projekte")
+    st.caption(
+        "Eigenständige Download-Aufträge (unabhängig von OTIO-Projekten). "
+        "Excel + Zielordner werden gespeichert — du kannst zwischen Aufträgen wechseln."
+    )
+
+    label_to_id = {
+        f"{p.name} ({p.chapter_count} Kap. / {p.asset_count} Assets)": p.id for p in projects
+    }
+    labels = list(label_to_id.keys())
+    active_id = st.session_state.get(_ACTIVE_PROJECT_KEY)
+    if active_id and active_id not in {p.id for p in projects}:
+        active_id = None
+        st.session_state.pop(_ACTIVE_PROJECT_KEY, None)
+
+    col_sel, col_new = st.columns([2, 1])
+    with col_sel:
+        if labels:
+            default_index = 0
+            if active_id:
+                for i, label in enumerate(labels):
+                    if label_to_id[label] == active_id:
+                        default_index = i
+                        break
+            chosen = st.selectbox(
+                "Aktives Download-Projekt",
+                options=labels,
+                index=default_index,
+                key="adobe_download_project_select",
+            )
+            active_id = label_to_id[chosen]
+            st.session_state[_ACTIVE_PROJECT_KEY] = active_id
+        else:
+            st.info("Noch kein Download-Projekt — unten eines anlegen.")
+            active_id = None
+
+    with col_new:
+        st.write("")
+        st.write("")
+        if st.button("＋ Neues anlegen", key="adobe_download_show_create", use_container_width=True):
+            st.session_state["adobe_download_show_create_form"] = True
+
+    if st.session_state.get("adobe_download_show_create_form") or not projects:
+        with st.expander("Neues Download-Projekt", expanded=True):
+            name = st.text_input("Name", key="adobe_dl_new_name", placeholder="Irland Research")
+            target_raw = st.text_input(
+                "Zielordner für Kapitel",
+                key="adobe_dl_new_target",
+                placeholder="/Pfad/zu/Ireland",
+            )
+            uploaded = st.file_uploader(
+                "Research-Excel (.xlsx)",
+                type=["xlsx"],
+                key="adobe_dl_new_xlsx",
+            )
+            if st.button("Download-Projekt speichern", type="primary", key="adobe_dl_create"):
+                try:
+                    if not uploaded:
+                        raise ValueError("Bitte Excel hochladen.")
+                    target = clean_user_path_input(target_raw) if target_raw.strip() else ""
+                    project = create_download_project(
+                        name=name,
+                        target_root=target,
+                        excel_bytes=uploaded.getvalue(),
+                        excel_filename=getattr(uploaded, "name", "") or "research.xlsx",
+                    )
+                    st.session_state[_ACTIVE_PROJECT_KEY] = project.id
+                    st.session_state["adobe_download_show_create_form"] = False
+                    st.success(f"Projekt „{project.name}“ gespeichert.")
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Anlegen fehlgeschlagen: {exc}")
+
+    return active_id
+
+
 def render_adobe_research_import_page() -> None:
     st.header("Adobe Stock Import (Research-Excel)")
     st.caption(
-        "Vor der Projektanlage: Research-Template hochladen, Zielordner wählen, "
-        "Kapitelordner anlegen und Assets als `{Kapitel}_Asset_01` lizenzieren/herunterladen."
+        "Vor der Projektanlage: Research-Template als Download-Projekt speichern, "
+        "zwischen Aufträgen wechseln, Kapitelordner füllen (`{Kapitel}_Asset_01`)."
     )
     st.caption(
-        "Videos: bevorzugt **Video_4K**; wenn die Datei über **600 MB** liegt "
-        "(Content-Length oder während des Downloads gemessen), Fallback auf **Video_HD**. "
-        "Gewählte Lizenz steht danach in der `.adobe.json`-Sidecar-Datei."
+        "Videos: bevorzugt **Video_4K**; wenn die Datei über **600 MB** liegt, "
+        "Fallback auf **Video_HD**. Lizenz in der `.adobe.json`-Sidecar-Datei."
     )
 
     render_adobe_oauth_panel(key_prefix="adobe_import_oauth")
@@ -133,78 +203,110 @@ def render_adobe_research_import_page() -> None:
     else:
         st.error(readiness.message)
 
-    uploaded = st.file_uploader(
-        "Research-Excel (.xlsx)",
-        type=["xlsx"],
-        key="adobe_research_xlsx",
-        help=(
-            "Layout: Zeile 1 Kapitel-Titel alle 3 Spalten, "
-            "Spalte 2 je Block = Adobe Asset ID, Spalte 3 = Link."
-        ),
-    )
-    target_raw = st.text_input(
-        "Zielordner für Kapitel",
-        key="adobe_research_target",
-        placeholder="/Pfad/zu/Ireland",
-        help="Hier werden Unterordner je Kapitel-Überschrift erstellt.",
-    )
+    active_id = _render_project_switcher()
+    if not active_id:
+        return
+
+    project = get_download_project(active_id)
+    if project is None:
+        st.error("Download-Projekt nicht gefunden.")
+        st.session_state.pop(_ACTIVE_PROJECT_KEY, None)
+        return
 
     try:
-        plan = _cache_plan_from_upload(uploaded)
+        plan = load_project_plan(project.id)
     except Exception as exc:  # noqa: BLE001
-        st.error(f"Excel konnte nicht gelesen werden: {exc}")
+        st.error(f"Excel des Projekts konnte nicht gelesen werden: {exc}")
         return
 
-    if plan is None:
-        st.info("Excel hochladen, um die Kapitelvorschau und den Fortschritts-Spiegel zu sehen.")
-        return
-
-    target = clean_user_path_input(target_raw) if target_raw.strip() else ""
     mgr = get_research_import_job_manager()
-    job = mgr.get_state()
-    board_root = target or (job.target_root if job.target_root else None)
-
-    st.write(
-        f"**{plan.chapter_count} Kapitel** · **{plan.asset_count} Assets** "
-        f"(Sheet `{plan.sheet_name}`)"
-        + (
-            f" · Datei `{st.session_state.get(_PLAN_NAME_KEY, '')}`"
-            if st.session_state.get(_PLAN_NAME_KEY)
-            else ""
+    job = mgr.get_state(project.id)
+    running_other = mgr.any_running()
+    if running_other and running_other != project.id:
+        other = get_download_project(running_other)
+        st.warning(
+            "Ein anderer Download läuft gerade: "
+            f"**{(other.name if other else running_other)}**. "
+            "Stoppe ihn oder warte, bevor du hier startest."
         )
+
+    st.divider()
+    st.markdown(f"### {project.name}")
+    st.caption(
+        f"Ziel: `{project.target_root}` · Excel: `{project.excel_filename}` · "
+        f"{project.chapter_count} Kapitel / {project.asset_count} Assets"
     )
+
+    with st.expander("Projekt bearbeiten", expanded=False):
+        new_name = st.text_input("Name", value=project.name, key=f"adobe_dl_edit_name_{project.id}")
+        new_target = st.text_input(
+            "Zielordner",
+            value=project.target_root,
+            key=f"adobe_dl_edit_target_{project.id}",
+        )
+        replace_xlsx = st.file_uploader(
+            "Excel ersetzen (optional)",
+            type=["xlsx"],
+            key=f"adobe_dl_replace_xlsx_{project.id}",
+        )
+        col_save, col_del = st.columns(2)
+        with col_save:
+            if st.button("Änderungen speichern", key=f"adobe_dl_save_{project.id}"):
+                try:
+                    update_download_project(
+                        project.id,
+                        name=new_name,
+                        target_root=clean_user_path_input(new_target) if new_target.strip() else project.target_root,
+                        excel_bytes=replace_xlsx.getvalue() if replace_xlsx else None,
+                        excel_filename=(
+                            getattr(replace_xlsx, "name", None) if replace_xlsx else None
+                        ),
+                    )
+                    st.success("Gespeichert.")
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(str(exc))
+        with col_del:
+            if st.button("Projekt löschen", key=f"adobe_dl_delete_{project.id}"):
+                if mgr.is_running(project.id):
+                    st.error("Laufenden Download zuerst stoppen.")
+                else:
+                    delete_download_project(project.id)
+                    st.session_state.pop(_ACTIVE_PROJECT_KEY, None)
+                    st.success("Download-Projekt gelöscht (Medien im Zielordner bleiben).")
+                    st.rerun()
 
     board = build_research_import_board(
         plan,
-        board_root,
+        project.target_root,
         live_statuses=job.live_statuses if job.live_statuses else None,
     )
     _render_board(board)
 
     st.subheader("Import steuern")
     chapter_labels = [ch.title for ch in plan.chapters]
+    default_selected = project.selected_chapters or chapter_labels
+    default_selected = [c for c in default_selected if c in chapter_labels] or chapter_labels
     selected = st.multiselect(
         "Kapitel zum Import",
         options=chapter_labels,
-        default=chapter_labels,
-        key="adobe_research_chapters",
+        default=default_selected,
+        key=f"adobe_research_chapters_{project.id}",
     )
     skip_existing = st.checkbox(
         "Bereits heruntergeladene Asset-IDs überspringen",
-        value=True,
-        key="adobe_research_skip_existing",
+        value=project.skip_existing_ids,
+        key=f"adobe_research_skip_existing_{project.id}",
     )
 
-    if target:
-        st.caption(f"Ziel: `{target}`")
-        example = plan.chapters[0] if plan.chapters else None
-        if example:
-            st.caption(
-                f"Beispiel: `{Path(target) / example.folder_name / (example.folder_name + '_Asset_01.mp4')}`"
-            )
-
     running = job.status == JobStatus.RUNNING
-    can_start = bool(target) and bool(selected) and readiness.acquire_enabled and not running
+    can_start = (
+        bool(project.target_root)
+        and bool(selected)
+        and readiness.acquire_enabled
+        and not running
+        and (running_other is None or running_other == project.id)
+    )
 
     col_start, col_stop, col_refresh = st.columns(3)
     with col_start:
@@ -212,35 +314,42 @@ def render_adobe_research_import_page() -> None:
             "▶ Lizenzieren & herunterladen",
             type="primary",
             disabled=not can_start,
-            key="adobe_research_run",
+            key=f"adobe_research_run_{project.id}",
             use_container_width=True,
         ):
-            if not target:
-                st.error("Bitte Zielordner angeben.")
-            else:
-                started = mgr.start(
-                    plan,
-                    target,
-                    chapter_titles=list(selected),
-                    skip_existing_ids=skip_existing,
-                )
-                if not started:
-                    st.warning("Import läuft bereits.")
-                st.rerun()
+            update_download_project(
+                project.id,
+                selected_chapters=list(selected),
+                skip_existing_ids=skip_existing,
+            )
+            started = mgr.start(
+                project.id,
+                plan,
+                project.target_root,
+                chapter_titles=list(selected),
+                skip_existing_ids=skip_existing,
+            )
+            if not started:
+                st.warning("Import läuft bereits (dieses oder ein anderes Projekt).")
+            st.rerun()
     with col_stop:
         if st.button(
             "⏹ Stop",
             disabled=not running,
-            key="adobe_research_stop",
+            key=f"adobe_research_stop_{project.id}",
             use_container_width=True,
         ):
-            mgr.request_cancel()
+            mgr.request_cancel(project.id)
             st.rerun()
     with col_refresh:
-        if st.button("🔄 Board aktualisieren", key="adobe_research_refresh", use_container_width=True):
+        if st.button(
+            "🔄 Board aktualisieren",
+            key=f"adobe_research_refresh_{project.id}",
+            use_container_width=True,
+        ):
             st.rerun()
 
-    job = mgr.get_state()
+    job = mgr.get_state(project.id)
     if job.status == JobStatus.RUNNING:
         st.progress(
             min(1.0, max(0.0, float(job.fraction))),
@@ -253,11 +362,10 @@ def render_adobe_research_import_page() -> None:
                 "danach bleibt der Rest auf Open."
             )
         else:
-            st.caption("Stop wirkt nach dem laufenden Asset-Download, nicht mitten in der Datei.")
+            st.caption("Stop wirkt nach dem laufenden Asset-Download.")
         if job.log_lines:
             with st.expander("Live-Log", expanded=False):
                 st.caption("\n".join(job.log_lines[-20:]))
-        # Auto-Refresh für Live-Fortschritt + Stop-Button
         time.sleep(1.0)
         st.rerun()
     elif job.status == JobStatus.COMPLETED:
