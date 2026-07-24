@@ -50,6 +50,94 @@ def _write_photo(path: Path, *, size: tuple[int, int] = (800, 600), color=(40, 1
     return path
 
 
+def test_export_recovers_original_still_from_hold_mp4(tmp_path: Path) -> None:
+    """Regression: Resolve schreibt still_hold.mp4 — Stil muss Original-JPEG finden."""
+    from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+    from otio_app.services.without_voiceover_enhanced.models import ResolvedShot
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        _export_styled_still_hold,
+        _original_still_path_for_export,
+    )
+
+    root = tmp_path / "proj"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    folder = root / "Yosemite"
+    folder.mkdir()
+    photo = _write_photo(folder / "cliff.jpg", size=(640, 360), color=(20, 40, 200))
+    hold = work / "hold_cache" / "still_hold_abc.mp4"
+    hold.parent.mkdir(parents=True)
+    hold.write_bytes(b"fake")
+
+    project = Project(
+        id="still-hold-style",
+        name="USA",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="de",
+        asset_subdir_names=["Yosemite"],
+        selected_asset_subdirs=["Yosemite"],
+        width=1280,
+        height=720,
+        fps=25.0,
+    )
+    shot = ResolvedShot(
+        shot_id="Yosemite_slot_001",
+        asset_id="yo_cliff",
+        timeline_start_seconds=0.0,
+        timeline_end_seconds=5.0,
+        source_start_seconds=0.0,
+        source_end_seconds=5.0,
+        folder_name="Yosemite",
+        resolved_media_path=str(hold),
+        resolved_media_kind="video",
+        hold_mode="freeze_video",
+    )
+
+    class _Entry(dict):
+        pass
+
+    class _Cat:
+        by_id = {
+            "yo_cliff": {
+                "path": str(photo),
+                "canonical_id": "yo_cliff",
+                "folder": "Yosemite",
+                "media_kind": "image",
+            }
+        }
+        collisions: list[str] = []
+
+    found = _original_still_path_for_export(
+        project, shot, path=hold, catalog=_Cat(), fps=25.0  # type: ignore[arg-type]
+    )
+    assert found == photo.resolve()
+
+    styled_hold = work / "hold_cache" / "still_hold_styled.mp4"
+
+    def _fake_hold(project, image_path, *, duration_seconds, fps, width=None, height=None):
+        del project, duration_seconds, fps, width, height
+        # Styled JPEG sollte existieren (nicht das ungestylte Hold).
+        assert Path(image_path).suffix.lower() in {".jpg", ".jpeg", ".png"}
+        styled_hold.parent.mkdir(parents=True, exist_ok=True)
+        styled_hold.write_bytes(b"styled-hold")
+        return styled_hold
+
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.otio_export_service.ensure_still_hold_video",
+        _fake_hold,
+    ):
+        out = _export_styled_still_hold(
+            project,
+            shot,
+            image_path=photo,
+            fps=25.0,
+            label="test",
+        )
+    assert out == styled_hold.resolve()
+
+
 def test_still_style_needed_defaults() -> None:
     assert still_style_needed(enabled=True, zoom=0.8, background_style="vintage") is True
     assert still_style_needed(enabled=True, zoom=1.0, background_style="paper_edge") is True

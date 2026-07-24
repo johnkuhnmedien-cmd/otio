@@ -54,7 +54,10 @@ from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_locked_script,
 )
 from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+    AssetCatalog,
     _is_intro_folder,
+    build_asset_catalog,
+    lookup_catalog_entry,
 )
 
 
@@ -151,11 +154,79 @@ def _validate_video_file(path: Path, *, label: str, fps: float) -> tuple[float, 
     return float(timing.start_sec or 0.0), float(duration), float(timing.rate or fps)
 
 
+def _is_still_hold_shot(shot: ResolvedShot, path: Path) -> bool:
+    """True wenn Resolve das Foto bereits zu still_hold_*.mp4 gemacht hat."""
+    hold = str(shot.hold_mode or "").strip().lower()
+    if hold in {"freeze_video", "still_hold"}:
+        return True
+    name = path.name.lower()
+    return name.startswith("still_hold_") or "hold_cache" in path.parts
+
+
+def _original_still_path_for_export(
+    project: Project,
+    shot: ResolvedShot,
+    *,
+    path: Path,
+    catalog: AssetCatalog | None,
+    fps: float,
+) -> Path | None:
+    """Original-JPEG/PNG für Stil — auch wenn resolved_media_path schon Hold-MP4 ist."""
+    if is_image_media(path):
+        return path
+    if not _is_still_hold_shot(shot, path):
+        return None
+    cat = catalog if catalog is not None else build_asset_catalog(project, fps=fps)
+    entry, _err = lookup_catalog_entry(cat, str(shot.asset_id or ""))
+    if entry is None:
+        return None
+    original = Path(str(entry.get("path") or "")).expanduser()
+    try:
+        original = original.resolve()
+    except OSError:
+        pass
+    if original.is_file() and is_image_media(original):
+        return original
+    return None
+
+
+def _export_styled_still_hold(
+    project: Project,
+    shot: ResolvedShot,
+    *,
+    image_path: Path,
+    fps: float,
+    label: str,
+) -> Path:
+    """Still-Style → Hold-MP4 (Resolve braucht Video mit Dauer)."""
+    options = load_cut_plan_options(project)
+    styled = ensure_styled_still_for_export(
+        project,
+        shot.folder_name or "_enhanced",
+        image_path,
+        enabled=bool(options.still_image_style_enabled),
+        zoom=float(options.still_image_zoom),
+        background_style=str(options.still_image_background_style),
+    )
+    styled_path = _assert_local_file(str(styled), label=f"{label} (styled still)")
+    timeline_dur = max(
+        0.01, float(shot.timeline_end_seconds - shot.timeline_start_seconds)
+    )
+    try:
+        hold = ensure_still_hold_video(
+            project, styled_path, duration_seconds=timeline_dur, fps=fps
+        )
+    except MediaHoldError as exc:
+        raise EnhancedOtioExportError(f"{label}: {exc}") from exc
+    return _assert_local_file(str(hold), label=f"{label} (still hold)")
+
+
 def _ensure_shot_media_for_export(
     project: Project,
     shot: ResolvedShot,
     *,
     fps: float,
+    catalog: AssetCatalog | None = None,
 ) -> tuple[Path, float, float, float, float]:
     """Validiert Shot-Medien; liefert path, avail_start, source_start, source_end, rate."""
     label = f"{shot.shot_id} / {shot.asset_id}"
@@ -165,18 +236,27 @@ def _ensure_shot_media_for_export(
         )
     path = _assert_local_file(shot.resolved_media_path, label=label)
 
-    # Optionales Still-Styling nur wenn Original noch Bild ist.
+    # Still-Style: Originalbild nutzen — auch wenn Resolve schon still_hold.mp4
+    # geschrieben hat (sonst würde Zoom/Background/Paper-Edge nie greifen).
     options = load_cut_plan_options(project)
-    if is_image_media(path):
-        styled = ensure_styled_still_for_export(
+    original_still = _original_still_path_for_export(
+        project, shot, path=path, catalog=catalog, fps=fps
+    )
+    if original_still is not None and bool(options.still_image_style_enabled):
+        hold_path = _export_styled_still_hold(
             project,
-            shot.folder_name or "_enhanced",
-            path,
-            enabled=bool(options.still_image_style_enabled),
-            zoom=float(options.still_image_zoom),
-            background_style=str(options.still_image_background_style),
+            shot,
+            image_path=original_still,
+            fps=fps,
+            label=label,
         )
-        path = _assert_local_file(str(styled), label=f"{label} (styled still)")
+        timeline_dur = max(
+            0.01, float(shot.timeline_end_seconds - shot.timeline_start_seconds)
+        )
+        return hold_path, 0.0, 0.0, timeline_dur, fps
+
+    # Ohne Stil: Bild → Hold (oder bereits vorhandenes Hold-MP4 behalten).
+    if is_image_media(path):
         timeline_dur = max(
             0.01, float(shot.timeline_end_seconds - shot.timeline_start_seconds)
         )
@@ -376,6 +456,7 @@ def validate_resolved_timeline_for_production(
                 f"{curr.shot_id} ({curr.asset_id})."
             )
 
+    catalog = build_asset_catalog(project, fps=fps)
     for shot in resolved.shots:
         if bool(getattr(shot, "is_placeholder", False)) or bool(shot.open_gap):
             errors.append(
@@ -385,7 +466,9 @@ def validate_resolved_timeline_for_production(
             continue
         try:
             path, avail_start, source_start, source_end, _rate = (
-                _ensure_shot_media_for_export(project, shot, fps=fps)
+                _ensure_shot_media_for_export(
+                    project, shot, fps=fps, catalog=catalog
+                )
             )
         except EnhancedOtioExportError as exc:
             errors.append(str(exc))
@@ -587,6 +670,7 @@ def export_otio_from_resolved_timeline(
     )
     video_track = otio.schema.Track(name="Video", kind=otio.schema.TrackKind.Video)
     audio_track = otio.schema.Track(name="Narration", kind=otio.schema.TrackKind.Audio)
+    catalog = build_asset_catalog(project, fps=fps)
 
     cursor = 0.0
     for shot in sorted(resolved.shots, key=lambda s: s.timeline_start_seconds):
@@ -597,7 +681,9 @@ def export_otio_from_resolved_timeline(
             )
         try:
             media_path, avail_start, source_start, source_end, rate = (
-                _ensure_shot_media_for_export(project, shot, fps=fps)
+                _ensure_shot_media_for_export(
+                    project, shot, fps=fps, catalog=catalog
+                )
             )
         except EnhancedOtioExportError:
             if not allow_errors:
@@ -805,6 +891,7 @@ def export_portable_otio_package(
     # Clip → original media path for rewrite after staging
     pending_video: list[tuple[otio.schema.Clip, Path, str]] = []
     pending_audio: list[tuple[otio.schema.Clip, Path, str]] = []
+    catalog = build_asset_catalog(project, fps=fps)
 
     cursor = 0.0
     for shot in sorted(resolved.shots, key=lambda s: s.timeline_start_seconds):
@@ -812,7 +899,9 @@ def export_portable_otio_package(
             gap = shot.timeline_start_seconds - cursor
             video_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
         media_path, avail_start, source_start, source_end, rate = (
-            _ensure_shot_media_for_export(project, shot, fps=fps)
+            _ensure_shot_media_for_export(
+                project, shot, fps=fps, catalog=catalog
+            )
         )
         source_duration = source_end - source_start
         file_avail_start, file_dur, file_rate = _validate_video_file(
