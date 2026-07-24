@@ -925,11 +925,6 @@ USED-IN LEDGER (filmwide so far — respect max usage / reuse distance):
     return f"""\
 You are the KEYWORD-SYNC cut planner for a documentary pipeline (unified format).
 
-This is a SEPARATE mode from the rhythm/style unified cut:
-picture cuts follow spoken buzzwords and concrete visual nouns as closely
-as possible — like Intro keyword sync — instead of targeting long 10–17s
-rhythm shots.
-
 Your task is to create ONE complete chapter plan:
 
 1. editorial pause decisions,
