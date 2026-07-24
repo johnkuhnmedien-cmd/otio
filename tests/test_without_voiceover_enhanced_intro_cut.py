@@ -110,6 +110,10 @@ def test_intro_prompt_rules() -> None:
     assert "Do NOT pre-roll list-item pictures" in prompt
     assert "NEVER put mid_sentence" in prompt
     assert "TWO DIFFERENT FIELDS" in prompt
+    assert "do NOT fill gaps inside the VO" in prompt
+    assert "After the LAST list/keyword cut" in prompt
+    assert "Last boundary: last Intro sentence, position end" in prompt
+    assert "first = VO start; last = VO end" in prompt
 
 
 def test_enforce_intro_strong_only_rejects_acceptable() -> None:

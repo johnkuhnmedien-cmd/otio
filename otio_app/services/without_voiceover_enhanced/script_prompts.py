@@ -893,6 +893,10 @@ INTRO-SPECIFIC RULES (CRITICAL — differ from chapter cuts):
   Set voiceover_preroll_sec to 4.0.
 - Closing: Python will hold the last slot for 5–8s AFTER Intro VO ends.
   Set voiceover_postroll_sec between 5 and 8 (prefer ~6.5 unless justified).
+- CRITICAL: preroll/postroll do NOT fill gaps inside the VO. Your boundaries
+  must already cover the full VO carpet (start→end). Python only adds hold
+  before first VO and after last VO — it will NOT extend a last shot that
+  ends early during narration.
 - Opening and closing slots must use different local_asset_id values when both
   have strong assets.
 - Prefix every cut_id, slot_id and coverage_gap_id with \"{slug}_\".
@@ -911,15 +915,19 @@ KEYWORD / ENUMERATION SYNC (CRITICAL — do not show places early):
   starting at that item's keyword onset.
 - Do NOT pre-roll list-item pictures during filler / connective speech before
   their keyword.
+- After the LAST list/keyword cut: that closing picture continues through any
+  remaining VO (outro line, tag, breath) until the true VO end. Do NOT place
+  the final boundary at the last keyword — place it at the last sentence end.
 - Opening hold is separate: slot 1 may begin 4.0s before VO (Python preroll).
   From VO start onward, keyword-onset sync applies to every place/list cut.
 - Estimate keyword onset from SENTENCE TIMINGS + sentence text: place the
   boundary with alignment \"mid_sentence\" and a sentence-relative
   offset_seconds (seconds from that sentence's start_seconds). Prefer
   offset_seconds over coarse position for list/keyword cuts.
-- Example: sentence text \"… Antelope Canyon, Badlands …\", sentence
-  start_seconds=2.0, \"Antelope\" begins ~1.4s into the sentence → boundary at
-  that sentence_id with offset_seconds=1.4, alignment=\"mid_sentence\".
+- Example (mid-list cut only — NOT the final boundary):
+  sentence text \"… Antelope Canyon, Badlands …\", sentence start_seconds=2.0,
+  \"Antelope\" begins ~1.4s into the sentence → boundary at that sentence_id
+  with offset_seconds=1.4, position=\"middle\", alignment=\"mid_sentence\".
 
 INTRO VO duration (measured): {duration:.3f}s.
 
@@ -927,7 +935,10 @@ FORMAT (same as unified chapter plans):
 
 - Output N slots and exactly N+1 boundaries.
 - Boundary i is the end of slot i and the start of slot i+1.
-- Boundaries cover ONLY the VO window (first=VO start, last=VO end).
+- Boundaries cover ONLY the VO window:
+  first boundary = VO start (first Intro sentence, position start / offset 0),
+  last boundary = VO end (last Intro sentence, position end — no mid-keyword
+  offset on the final boundary).
 - Do NOT invent absolute timeline seconds/frames for body timing.
 
 TIMING / BOUNDARY RULES:
@@ -941,15 +952,18 @@ TIMING / BOUNDARY RULES:
   - NEVER put mid_sentence / sentence_boundary / in_pause into position.
 - Boundaries use sentence_id + position and/or offset_seconds (seconds from
   that sentence start). When both are present, offset_seconds wins.
-- For keyword/list cuts: set offset_seconds explicitly AND
-  alignment=\"mid_sentence\". Example:
+- For keyword/list cuts (interior boundaries only): set offset_seconds
+  explicitly AND alignment=\"mid_sentence\". Example interior cut:
   {{\"sentence_id\":\"…\",\"position\":\"middle\",\"offset_seconds\":1.4,
   \"alignment\":\"mid_sentence\"}}
+- First boundary: first Intro sentence, position \"start\", offset_seconds 0
+  or null, alignment \"sentence_boundary\".
+- Last boundary: last Intro sentence, position \"end\", offset_seconds null
+  (or end-of-sentence), alignment \"sentence_boundary\". Never end the plan
+  on a mid_sentence keyword offset.
 - Keep mid_sentence cuts ≥ ~0.4s from sentence edges unless alignment is
   sentence_boundary.
 - Boundaries must be chronologically non-decreasing on the VO carpet.
-- First boundary: first Intro sentence at position start (or offset 0).
-- Last boundary: last Intro sentence at position end (or end offset).
 
 SLOT / ASSET RULES:
 
@@ -957,6 +971,8 @@ SLOT / ASSET RULES:
 - strong: coverage_gap_id null
 - none: local_asset_id null AND coverage_gap_id + needed_visual + search_concepts
 - narrative_function for first/last may be chapter_open / chapter_close
+- The last slot is the closing picture: it must span from its start boundary
+  through the full remaining VO to the last boundary (VO end).
 
 RETURN STRICT JSON ONLY. No Markdown. No comments. No trailing commas.
 
@@ -970,9 +986,23 @@ OUTPUT SCHEMA:
     {{
       "cut_id": "{slug}_cut_000",
       "sentence_id": "Intro_segment_001__s001",
-      "position": "start|early|middle|late|end",
+      "position": "start",
+      "offset_seconds": 0,
+      "alignment": "sentence_boundary"
+    }},
+    {{
+      "cut_id": "{slug}_cut_001",
+      "sentence_id": "Intro_segment_001__s001",
+      "position": "middle",
       "offset_seconds": 1.4,
-      "alignment": "mid_sentence|sentence_boundary|in_pause"
+      "alignment": "mid_sentence"
+    }},
+    {{
+      "cut_id": "{slug}_cut_00N",
+      "sentence_id": "Intro_segment_001__s00N",
+      "position": "end",
+      "offset_seconds": null,
+      "alignment": "sentence_boundary"
     }}
   ],
   "slots": [
@@ -1006,11 +1036,16 @@ GAP / SEARCH CONCEPT RULES:
 FINAL VALIDATION:
 
 - len(slots) == len(boundaries) - 1
+- Boundaries chronological; first = VO start; last = VO end
+- First boundary: first Intro sentence, position start (offset 0/null)
+- Last boundary: last Intro sentence, position end (not a keyword mid_sentence)
+- Last slot covers through remaining VO after the last keyword cut
 - asset_fit is only strong or none
 - Opening/closing assets differ when both assigned
 - All local_asset_id values exist in BUNDLED INVENTORY (or null)
 - Keyword/list picture cuts use mid_sentence + explicit offset_seconds at onset
 - No place/list picture starts before its spoken keyword (except slot-1 preroll)
+- Preroll/postroll are outside the VO window — do not leave narration uncovered
 
 LOCKED SCRIPT (Intro only):
 {locked_script_json}
