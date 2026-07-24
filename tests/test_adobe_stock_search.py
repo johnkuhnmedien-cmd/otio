@@ -935,7 +935,7 @@ def test_acquire_rejects_preview_url_from_license_response(
         download_bodies={},
     )
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    with pytest.raises(RuntimeError, match="keine Libraries/Download-URL"):
+    with pytest.raises(RuntimeError, match="Voll-Download-URL|Libraries/Download"):
         AdobeStockAdapter().acquire(_video_candidate(), tmp_path / "req" / "assets")
 
 

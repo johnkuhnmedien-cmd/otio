@@ -27,7 +27,9 @@ from otio_app.services.adobe_stock_oauth import get_adobe_access_token
 from otio_app.services.api_keys import get_api_key
 from otio_app.services.supplement_sources.adobe_stock import (
     AdobeAssetTooLargeError,
+    AdobeContentUnavailableError,
     AdobeStockAdapter,
+    is_full_adobe_download_url,
 )
 
 __all__ = [
@@ -62,6 +64,7 @@ STATUS_ERROR = "error"
 STATUS_DOWNLOADING = "downloading"
 STATUS_CANCELLED = "cancelled"
 STATUS_SKIPPED = "skipped"
+STATUS_UNAVAILABLE = "unavailable"
 
 
 @dataclass(frozen=True)
@@ -128,6 +131,10 @@ class AdobeResearchImportResult:
     @property
     def errors(self) -> int:
         return sum(1 for item in self.items if item.status == STATUS_ERROR)
+
+    @property
+    def unavailable(self) -> int:
+        return sum(1 for item in self.items if item.status == STATUS_UNAVAILABLE)
 
     @property
     def cancelled_count(self) -> int:
@@ -556,16 +563,66 @@ def _next_asset_index(folder: Path) -> int:
     return highest + 1
 
 
-def _infer_media_type(adapter: AdobeStockAdapter, asset: AdobeResearchAsset) -> str:
-    """Media-Typ für Lizenzwahl.
+def _media_type_from_file_meta(meta: dict, *, hint: str = "") -> str:
+    if hint in {"video", "image"}:
+        return hint
+    media_type_id = meta.get("media_type_id")
+    try:
+        media_type_id_i = int(media_type_id) if media_type_id is not None else 0
+    except (TypeError, ValueError):
+        media_type_id_i = 0
+    from otio_app.defaults import ADOBE_STOCK_MEDIA_TYPE_ID_PHOTO, ADOBE_STOCK_MEDIA_TYPE_ID_VIDEO
 
-    Research-Templates sind überwiegend Video. Bei unsicherem Hinweis daher
-    **video** (nie still auf image/Standard fallen — das erzeugt HTTP 400
-    „license Standard does not match type of content“).
-    """
-    if asset.media_hint in {"video", "image"}:
-        return asset.media_hint
+    if media_type_id_i == ADOBE_STOCK_MEDIA_TYPE_ID_VIDEO:
+        return "video"
+    if media_type_id_i == ADOBE_STOCK_MEDIA_TYPE_ID_PHOTO:
+        return "image"
+    content_type = str(meta.get("content_type") or "").lower()
+    if content_type.startswith("video/"):
+        return "video"
+    if content_type.startswith("image/"):
+        return "image"
     return "video"
+
+
+def _extension_for_purchase(purchase: dict, media_type: str) -> str:
+    content_type = str(purchase.get("content_type") or "").lower()
+    if "video" in content_type:
+        return ".mp4"
+    if "png" in content_type:
+        return ".png"
+    if "jpeg" in content_type or "jpg" in content_type:
+        return ".jpg"
+    return ".jpg" if media_type == "image" else ".mp4"
+
+
+def _download_purchase_to_path(
+    adapter: AdobeStockAdapter,
+    purchase: dict,
+    destination: Path,
+    *,
+    api_key: str,
+    access_token: str,
+    media_type: str,
+    size: int | None,
+    max_bytes: int | None,
+) -> Path:
+    url = str(purchase.get("url") or "")
+    if not is_full_adobe_download_url(url):
+        raise RuntimeError(f"Keine Voll-Download-URL (Comp/Wasserzeichen): {url[:160]}")
+    local_path = destination.with_suffix(_extension_for_purchase(purchase, media_type))
+    adapter._stream_download_to_file(
+        url,
+        local_path,
+        api_key=api_key,
+        access_token=access_token,
+        size=size,
+        max_bytes=max_bytes,
+    )
+    if not local_path.is_file() or local_path.stat().st_size < ADOBE_STOCK_MIN_DOWNLOAD_BYTES:
+        local_path.unlink(missing_ok=True)
+        raise RuntimeError("Download zu klein / ungültig.")
+    return local_path
 
 
 def _license_and_download_to_path(
@@ -574,11 +631,15 @@ def _license_and_download_to_path(
     content_id: str,
     media_type: str,
     destination: Path,
+    media_hint: str = "",
 ) -> tuple[Path, str]:
-    """Lizenziert eine Content-ID und schreibt die Datei nach destination.
+    """Lizenziert/lädt eine Content-ID — Foto + Video, inkl. bereits lizenziert.
 
-    Videos: nur Video_4K → Video_HD (kein Standard-Fallback).
-    Bulk: Content/License ohne Member/Profile+Content/Info-Vorabcalls.
+    Reihenfolge:
+    1) Files-API → echter Medientyp (Foto/Video), 404 → unavailable
+    2) Content/Info: wenn bereits purchased + Voll-URL → Download
+    3) Content/License (ohne Diagnose-Spam)
+    4) LicenseHistory-Fallback für schon lizenzierte Assets
     """
     api_key = get_api_key("ADOBE_STOCK_API_KEY")
     access_token = get_adobe_access_token()
@@ -592,11 +653,21 @@ def _license_and_download_to_path(
 
     destination.parent.mkdir(parents=True, exist_ok=True)
 
-    if media_type == "image":
-        licenses = [(ADOBE_STOCK_LICENSE_TYPE_STANDARD, None, None)]
+    try:
+        meta = adapter.lookup_file_metadata(content_id, api_key)
+        resolved_type = _media_type_from_file_meta(meta, hint=media_hint or media_type)
+    except AdobeContentUnavailableError:
+        raise
+    except Exception:
+        resolved_type = media_hint if media_hint in {"video", "image"} else media_type
+        meta = {}
+
+    if resolved_type == "image":
+        pending: list[tuple[str, int | None, int | None]] = [
+            (ADOBE_STOCK_LICENSE_TYPE_STANDARD, None, None)
+        ]
     else:
-        # Laut Adobe Stock License API: Videos NUR Video_HD / Video_4K.
-        licenses = [
+        pending = [
             (
                 ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K,
                 2160,
@@ -606,9 +677,41 @@ def _license_and_download_to_path(
         ]
 
     attempt_errors: list[str] = []
-    for index, (license_type, size, max_bytes) in enumerate(licenses):
-        if index > 0:
+    tried: set[str] = set()
+    first = True
+    while pending:
+        license_type, size, max_bytes = pending.pop(0)
+        if license_type in tried:
+            continue
+        tried.add(license_type)
+        if not first:
             time.sleep(_LICENSE_RETRY_PAUSE_SECONDS)
+        first = False
+
+        # Bereits lizenziert? Content/Info zuerst (kein neuer Kauf nötig).
+        info = adapter.content_info_purchase(
+            content_id, license_type, api_key, access_token
+        )
+        info_state = str(info.get("state") or "")
+        info_url = str(info.get("url") or "")
+        if info_state in {"purchased", "just_purchased"} and is_full_adobe_download_url(info_url):
+            try:
+                path = _download_purchase_to_path(
+                    adapter,
+                    info,
+                    destination,
+                    api_key=api_key,
+                    access_token=access_token,
+                    media_type=resolved_type,
+                    size=size,
+                    max_bytes=max_bytes,
+                )
+                return path, str(info.get("license") or license_type)
+            except AdobeAssetTooLargeError:
+                attempt_errors.append(f"{license_type}: bereits lizenziert, aber >600MB")
+            except Exception as exc:  # noqa: BLE001
+                attempt_errors.append(f"{license_type}: Info-Download {exc}")
+
         try:
             purchase = adapter._license_asset(
                 content_id,
@@ -617,51 +720,80 @@ def _license_and_download_to_path(
                 access_token,
                 diagnose=False,
             )
+        except AdobeContentUnavailableError:
+            raise
         except Exception as exc:  # noqa: BLE001
+            msg = str(exc)
+            # Falscher Medientyp → andere Lizenzfamilie nachziehen
+            if "does not match type of content" in msg:
+                if resolved_type == "video" and ADOBE_STOCK_LICENSE_TYPE_STANDARD not in tried:
+                    pending.append((ADOBE_STOCK_LICENSE_TYPE_STANDARD, None, None))
+                if resolved_type == "image":
+                    if ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K not in tried:
+                        pending.append(
+                            (
+                                ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K,
+                                2160,
+                                ADOBE_STOCK_VIDEO_4K_MAX_BYTES,
+                            )
+                        )
+                    if ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD not in tried:
+                        pending.append((ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD, 1080, None))
             attempt_errors.append(f"{license_type}: {exc}")
             continue
 
-        content_type = str(purchase.get("content_type") or "").lower()
-        if "video" in content_type:
-            ext = ".mp4"
-        elif "png" in content_type:
-            ext = ".png"
-        elif "jpeg" in content_type or "jpg" in content_type:
-            ext = ".jpg"
-        elif media_type == "image":
-            ext = ".jpg"
-        else:
-            ext = ".mp4"
-
-        local_path = destination.with_suffix(ext)
         try:
-            adapter._stream_download_to_file(
-                str(purchase.get("url") or ""),
-                local_path,
+            path = _download_purchase_to_path(
+                adapter,
+                purchase,
+                destination,
                 api_key=api_key,
                 access_token=access_token,
+                media_type=resolved_type,
                 size=size,
                 max_bytes=max_bytes,
             )
-        except AdobeAssetTooLargeError as exc:
+            return path, license_type
+        except AdobeAssetTooLargeError:
             attempt_errors.append(f"{license_type}: Datei > 600MB → nächste Qualität")
-            local_path.unlink(missing_ok=True)
             continue
         except Exception as exc:  # noqa: BLE001
             attempt_errors.append(f"{license_type}: Download {exc}")
-            local_path.unlink(missing_ok=True)
             continue
 
-        if not local_path.is_file() or local_path.stat().st_size < ADOBE_STOCK_MIN_DOWNLOAD_BYTES:
-            local_path.unlink(missing_ok=True)
-            attempt_errors.append(f"{license_type}: Download zu klein / ungültig")
-            continue
-        return local_path, license_type
+    # Bereits früher lizenziert, aber Content/License liefert nur Comp/cancelled?
+    history = adapter.find_license_history_download(content_id, api_key, access_token)
+    if history:
+        try:
+            hist_type = "image" if "image" in str(history.get("content_type") or "").lower() else resolved_type
+            size = 2160 if history.get("license") == ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K else (
+                1080 if history.get("license") == ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD else None
+            )
+            path = _download_purchase_to_path(
+                adapter,
+                history,
+                destination,
+                api_key=api_key,
+                access_token=access_token,
+                media_type=hist_type,
+                size=size,
+                max_bytes=ADOBE_STOCK_VIDEO_4K_MAX_BYTES if size == 2160 else None,
+            )
+            return path, str(history.get("license") or "history")
+        except Exception as exc:  # noqa: BLE001
+            attempt_errors.append(f"LicenseHistory: {exc}")
 
     detail = " | ".join(attempt_errors) if attempt_errors else "unbekannter Fehler"
+    hint = ""
+    if any("cancelled" in e for e in attempt_errors) or any("Comp" in e for e in attempt_errors):
+        hint = (
+            " Hinweis: API meldet oft nur cct_pro_unlimited_images — "
+            "Videos brauchen Video-Entitlement; OAuth ggf. mit dem Unlimited-Konto erneut."
+        )
     raise RuntimeError(
         f"Adobe-Download fehlgeschlagen für Content-ID {content_id} "
-        f"(media_type={media_type}). Versuche: {detail}"
+        f"(media_type={resolved_type}, meta_content_type={meta.get('content_type') or '—'}). "
+        f"Versuche: {detail}.{hint}"
     )
 
 
@@ -837,14 +969,13 @@ def download_research_import(
             stem = format_asset_stem(chapter.folder_name, next_index)
             dest = folder / stem  # Suffix setzt Download
             try:
-                media_type = _infer_media_type(adapter, asset)
                 local_path, used_license = _license_and_download_to_path(
                     adapter,
                     content_id=asset.asset_id,
-                    media_type=media_type,
+                    media_type=asset.media_hint or "video",
                     destination=dest,
+                    media_hint=asset.media_hint,
                 )
-                # Keine *.adobe.json neben Medien — Status nur in state_dir.
                 live_statuses[asset.asset_id] = {
                     "status": STATUS_DOWNLOADED,
                     "message": "",
@@ -871,6 +1002,30 @@ def download_research_import(
                     chapter_title=chapter.title,
                     status=STATUS_DOWNLOADED,
                     message=used_license,
+                )
+            except AdobeContentUnavailableError as exc:
+                live_statuses[asset.asset_id] = {
+                    "status": STATUS_UNAVAILABLE,
+                    "message": str(exc),
+                    "local_path": "",
+                    "license": "",
+                }
+                result.items.append(
+                    AdobeResearchImportItemResult(
+                        chapter_title=chapter.title,
+                        folder_name=chapter.folder_name,
+                        asset_id=asset.asset_id,
+                        status=STATUS_UNAVAILABLE,
+                        message=str(exc),
+                    )
+                )
+                _publish_live()
+                _emit(
+                    folder_name=chapter.folder_name,
+                    asset_id=asset.asset_id,
+                    chapter_title=chapter.title,
+                    status=STATUS_UNAVAILABLE,
+                    message=str(exc),
                 )
             except Exception as exc:  # noqa: BLE001
                 live_statuses[asset.asset_id] = {

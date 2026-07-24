@@ -29,7 +29,9 @@ from otio_app.analysis_models import SupplementAssetSidecar, SupplementCandidate
 from otio_app.defaults import (
     ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
     ADOBE_STOCK_DEFAULT_PRODUCT_NAME,
+    ADOBE_STOCK_FILES_ENDPOINT,
     ADOBE_STOCK_LICENSE_ENDPOINT,
+    ADOBE_STOCK_LICENSE_HISTORY_ENDPOINT,
     ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT,
     ADOBE_STOCK_LICENSE_TYPE_STANDARD,
     ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K,
@@ -65,6 +67,24 @@ class AdobeAssetTooLargeError(Exception):
     die aktuell lizenzierte Qualität (Content-Length-Header ODER während
     des Streamings gemessen) überschritten hat — löst in acquire() den
     Wechsel auf die nächstkleinere Lizenzvariante (Video_HD) aus."""
+
+
+class AdobeContentUnavailableError(Exception):
+    """Asset ist bei Adobe nicht mehr verfügbar (HTTP 404 / code 300)."""
+
+
+def is_full_adobe_download_url(url: str) -> bool:
+    """Echte Lizenz-Download-URL — keine Wasserzeichen-/Comp-URL."""
+    text = (url or "").strip()
+    if not text:
+        return False
+    if "/Watermarked/" in text:
+        return False
+    return (
+        "/Rest/Libraries/Download/" in text
+        or "/Download/DownloadFileDirectly/" in text
+        or "/DownloadFileDirectly/" in text
+    )
 
 # Pro Szene/Request soll die UI höchstens diese Anzahl an Kandidaten zur
 # Auswahl anbieten, falls request.max_candidates nicht explizit gesetzt ist
@@ -639,6 +659,108 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             parts.append(f"Content/License={_compact_json(license_response)}")
         return " | ".join(parts)
 
+    def lookup_file_metadata(self, content_id: str, api_key: str) -> dict:
+        """Files-API: media_type_id / content_type für eine Content-ID."""
+        params = {
+            "ids": str(content_id),
+            "locale": "en_US",
+            "result_columns[]": [
+                "id",
+                "title",
+                "content_type",
+                "media_type_id",
+                "width",
+                "height",
+                "duration",
+            ],
+        }
+        url = f"{ADOBE_STOCK_FILES_ENDPOINT}?{urllib.parse.urlencode(params, doseq=True)}"
+        req = urllib.request.Request(url, headers=self._headers(api_key), method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise AdobeContentUnavailableError(
+                    f"Content-ID {content_id} ist bei Adobe nicht (mehr) verfügbar."
+                ) from exc
+            raise
+        files = payload.get("files") or []
+        if not files:
+            raise AdobeContentUnavailableError(
+                f"Content-ID {content_id} liefert keine Files-Metadaten (entfernt/ungültig)."
+            )
+        return files[0] if isinstance(files[0], dict) else {}
+
+    def find_license_history_download(
+        self,
+        content_id: str,
+        api_key: str,
+        access_token: str,
+        *,
+        pages: int = 5,
+    ) -> dict | None:
+        """Sucht in Member/LicenseHistory nach einer bestehenden Lizenz + Download-URL."""
+        target = str(content_id)
+        for page in range(pages):
+            params = {
+                "locale": "en_US",
+                "all": "true",
+                "search_parameters[limit]": 100,
+                "search_parameters[offset]": page * 100,
+            }
+            payload = self._request_licensing_json_safe(
+                ADOBE_STOCK_LICENSE_HISTORY_ENDPOINT,
+                params,
+                api_key,
+                access_token,
+            )
+            if payload.get("_error"):
+                return None
+            for entry in payload.get("files") or []:
+                if str(entry.get("id") or "") != target:
+                    continue
+                url = str(entry.get("download_url") or "")
+                if not is_full_adobe_download_url(url):
+                    continue
+                return {
+                    "url": url,
+                    "license": str(entry.get("license") or ""),
+                    "content_type": str(entry.get("content_type") or ""),
+                    "width": entry.get("width"),
+                    "height": entry.get("height"),
+                    "state": "purchased",
+                }
+            nb = int(payload.get("nb_results") or 0)
+            if (page + 1) * 100 >= nb:
+                break
+        return None
+
+    def content_info_purchase(
+        self,
+        content_id: str,
+        license_type: str,
+        api_key: str,
+        access_token: str,
+    ) -> dict:
+        """Content/Info → purchase_details (oder leer bei Fehler)."""
+        payload = self._request_licensing_json_safe(
+            ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
+            {
+                "content_id": content_id,
+                "license": license_type,
+                "locale": "en_US",
+            },
+            api_key,
+            access_token,
+        )
+        if payload.get("_error"):
+            return {"_error": payload.get("_error"), "_message": payload.get("_message")}
+        entry = _license_content_entry(payload, content_id)
+        details = dict(entry.get("purchase_details") or {})
+        details["size"] = entry.get("size")
+        return details
+
     def _license_asset(
         self,
         content_id: str,
@@ -700,6 +822,10 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                 body = exc.read().decode("utf-8", errors="replace")[:500]
             except Exception:
                 body = ""
+            if exc.code == 404 or "no longer available" in body.lower() or '"code":"300"' in body:
+                raise AdobeContentUnavailableError(
+                    f"Content-ID {content_id} ist bei Adobe nicht mehr verfügbar ({body[:180]})."
+                ) from exc
             diagnostic_suffix = self._format_license_diagnostic(self.last_license_diagnostic)
             detail = f"{body or exc.reason}"
             if diagnostic_suffix:
@@ -745,10 +871,11 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                 f"(license={license_type}, state={state}, size={response_size or '—'}). "
                 f"Diagnose: {diagnostic_suffix}"
             )
-        if "/Rest/Libraries/Download/" not in response_url:
+        if not is_full_adobe_download_url(response_url):
             raise RuntimeError(
-                "Adobe-Lizenzierung lieferte keine Libraries/Download-URL: "
-                f"Content-ID {content_id}, license={license_type}, state={state}, "
+                "Adobe-Lizenzierung lieferte keine Voll-Download-URL "
+                f"(Comp/Wasserzeichen verworfen): Content-ID {content_id}, "
+                f"license={license_type}, state={state}, size={response_size or '—'}, "
                 f"url={response_url[:180]}. Diagnose: {diagnostic_suffix}"
             )
         return purchase_details

@@ -1416,6 +1416,11 @@ ADOBE_STOCK_LICENSE_ENDPOINT = "https://stock.adobe.io/Rest/Libraries/1/Content/
 # Assets (hilfreich bei CC-Pro-/Unlimited-Plänen und manueller API-Freigabe).
 ADOBE_STOCK_CONTENT_INFO_ENDPOINT = "https://stock.adobe.io/Rest/Libraries/1/Content/Info"
 ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT = "https://stock.adobe.io/Rest/Libraries/1/Member/Profile"
+ADOBE_STOCK_LICENSE_HISTORY_ENDPOINT = (
+    "https://stock.adobe.io/Rest/Libraries/1/Member/LicenseHistory"
+)
+# Metadaten für bekannte Content-IDs (media_type_id, content_type, …).
+ADOBE_STOCK_FILES_ENDPOINT = "https://stock.adobe.io/Rest/Media/1/Files"
 # Gültige license-Parameterwerte für Content/License — Fotos/3D/Templates
 # nutzen "Standard", Videos ausschließlich "Video_HD" oder "Video_4K"
 # (siehe Adobe-Stock-Lizenzierungs-Referenz).

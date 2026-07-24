@@ -151,10 +151,10 @@ def test_cleanup_media_folder_json_removes_sidecars_and_root_json(tmp_path: Path
     assert not list(target.rglob("*.json"))
 
 
-def test_video_license_never_falls_back_to_standard(
+def test_video_license_path_uses_files_meta_and_video_licenses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Regression: Standard auf Videos → Adobe HTTP 400 „does not match type“."""
+    """Videos: Files-API → Video_4K/HD; Comp/cancelled zählt nicht als Erfolg."""
     from otio_app.services import adobe_research_import as mod
 
     monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
@@ -163,9 +163,20 @@ def test_video_license_never_falls_back_to_standard(
     calls: list[str] = []
 
     class _Adapter:
+        def lookup_file_metadata(self, content_id, api_key):
+            return {"media_type_id": 4, "content_type": "video/mp4"}
+
+        def content_info_purchase(self, content_id, license_type, api_key, access_token):
+            return {"state": "not_purchased"}
+
+        def find_license_history_download(self, content_id, api_key, access_token, *, pages=5):
+            return None
+
         def _license_asset(self, content_id, license_type, api_key, access_token, *, diagnose=True):
             calls.append(license_type)
-            raise RuntimeError(f"fail {license_type}")
+            raise RuntimeError(
+                f"Adobe-Lizenzierung nicht bestätigt: state=cancelled size=Comp license={license_type}"
+            )
 
         def _stream_download_to_file(self, *args, **kwargs):
             raise AssertionError("kein Download erwartet")
@@ -173,15 +184,105 @@ def test_video_license_never_falls_back_to_standard(
     monkeypatch.setattr(mod, "get_api_key", lambda key: "x")
     monkeypatch.setattr(mod, "get_adobe_access_token", lambda: "tok")
 
-    with pytest.raises(RuntimeError, match="Video_4K|Video_HD"):
+    with pytest.raises(RuntimeError, match="cct_pro_unlimited_images|Video_4K|cancelled"):
         mod._license_and_download_to_path(
             _Adapter(),
             content_id="644202290",
             media_type="video",
             destination=tmp_path / "x",
+            media_hint="video",
         )
-    assert "Standard" not in calls
     assert calls == ["Video_4K", "Video_HD"]
+
+
+def test_photo_uses_standard_license(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from otio_app.services import adobe_research_import as mod
+
+    monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
+    monkeypatch.setattr(mod, "_LICENSE_RETRY_PAUSE_SECONDS", 0)
+    calls: list[str] = []
+
+    class _Adapter:
+        def lookup_file_metadata(self, content_id, api_key):
+            return {"media_type_id": 1, "content_type": "image/jpeg"}
+
+        def content_info_purchase(self, *_a, **_k):
+            return {"state": "not_purchased"}
+
+        def find_license_history_download(self, *_a, **_k):
+            return None
+
+        def _license_asset(self, content_id, license_type, api_key, access_token, *, diagnose=True):
+            calls.append(license_type)
+            return {
+                "state": "just_purchased",
+                "license": license_type,
+                "url": f"https://stock.adobe.com/Rest/Libraries/Download/{content_id}/1",
+                "content_type": "image/jpeg",
+            }
+
+        def _stream_download_to_file(self, url, local_path, *, api_key, access_token, size, max_bytes):
+            local_path.write_bytes(b"x" * 200_000)
+
+    monkeypatch.setattr(mod, "get_api_key", lambda key: "x")
+    monkeypatch.setattr(mod, "get_adobe_access_token", lambda: "tok")
+
+    path, license_type = mod._license_and_download_to_path(
+        _Adapter(),
+        content_id="111",
+        media_type="image",
+        destination=tmp_path / "photo",
+        media_hint="image",
+    )
+    assert license_type == "Standard"
+    assert calls == ["Standard"]
+    assert path.is_file()
+
+
+def test_already_licensed_uses_content_info_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services import adobe_research_import as mod
+
+    monkeypatch.setattr(mod, "_ASSET_PAUSE_SECONDS", 0)
+    monkeypatch.setattr(mod, "_LICENSE_RETRY_PAUSE_SECONDS", 0)
+
+    class _Adapter:
+        def lookup_file_metadata(self, content_id, api_key):
+            return {"media_type_id": 4, "content_type": "video/mp4"}
+
+        def content_info_purchase(self, content_id, license_type, api_key, access_token):
+            if license_type == "Video_HD":
+                return {
+                    "state": "purchased",
+                    "license": "Video_HD",
+                    "url": f"https://stock.adobe.com/Rest/Libraries/Download/{content_id}/4",
+                    "content_type": "video/mp4",
+                }
+            return {"state": "not_purchased"}
+
+        def find_license_history_download(self, *_a, **_k):
+            return None
+
+        def _license_asset(self, content_id, license_type, api_key, access_token, *, diagnose=True):
+            # 4K nicht lizenziert / nicht vorhanden — HD kommt aus Content/Info.
+            raise RuntimeError(f"cancelled {license_type}")
+
+        def _stream_download_to_file(self, url, local_path, *, api_key, access_token, size, max_bytes):
+            local_path.write_bytes(b"x" * 200_000)
+
+    monkeypatch.setattr(mod, "get_api_key", lambda key: "x")
+    monkeypatch.setattr(mod, "get_adobe_access_token", lambda: "tok")
+
+    path, license_type = mod._license_and_download_to_path(
+        _Adapter(),
+        content_id="222",
+        media_type="video",
+        destination=tmp_path / "vid",
+        media_hint="video",
+    )
+    assert license_type == "Video_HD"
+    assert path.suffix == ".mp4"
 
 
 def test_download_respects_should_stop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -194,7 +295,7 @@ def test_download_respects_should_stop(tmp_path: Path, monkeypatch: pytest.Monke
     target = tmp_path / "dl"
     calls = {"n": 0}
 
-    def fake_license_and_download(adapter, *, content_id, media_type, destination):
+    def fake_license_and_download(adapter, *, content_id, media_type, destination, media_hint=""):
         calls["n"] += 1
         path = destination.with_suffix(".mp4")
         path.write_bytes(b"x" * 200_000)
@@ -203,10 +304,6 @@ def test_download_respects_should_stop(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.setattr(
         "otio_app.services.adobe_research_import._license_and_download_to_path",
         fake_license_and_download,
-    )
-    monkeypatch.setattr(
-        "otio_app.services.adobe_research_import._infer_media_type",
-        lambda *_a, **_k: "video",
     )
 
     class _Ready:

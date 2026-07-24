@@ -23,6 +23,7 @@ from otio_app.services.adobe_research_import import (
     STATUS_DOWNLOADING,
     STATUS_ERROR,
     STATUS_OPEN,
+    STATUS_UNAVAILABLE,
     AdobeResearchImportBoard,
     build_research_import_board,
     cleanup_media_folder_json,
@@ -44,6 +45,7 @@ def _status_label(status: str) -> str:
         STATUS_ERROR: "Fehler",
         STATUS_DOWNLOADING: "Läuft",
         STATUS_CANCELLED: "Open (gestoppt)",
+        STATUS_UNAVAILABLE: "Nicht verfügbar",
     }.get(status, status)
 
 
@@ -71,7 +73,7 @@ def _render_board(board: AdobeResearchImportBoard) -> None:
 
     filter_mode = st.radio(
         "Asset-Ansicht",
-        options=["Alle", "Nur Open", "Nur Downloaded", "Nur Fehler"],
+        options=["Alle", "Nur Open", "Nur Downloaded", "Nur Fehler", "Nicht verfügbar"],
         horizontal=True,
         key="adobe_research_board_filter",
     )
@@ -86,6 +88,8 @@ def _render_board(board: AdobeResearchImportBoard) -> None:
             if filter_mode == "Nur Downloaded" and asset.status != STATUS_DOWNLOADED:
                 continue
             if filter_mode == "Nur Fehler" and asset.status != STATUS_ERROR:
+                continue
+            if filter_mode == "Nicht verfügbar" and asset.status != STATUS_UNAVAILABLE:
                 continue
             asset_rows.append(
                 {
@@ -390,20 +394,25 @@ def render_adobe_research_import_page() -> None:
             st.success(job.message or "Import fertig.")
         if job.result and job.result.manifest_path:
             st.caption(f"Manifest: `{job.result.manifest_path}`")
-        if job.result and job.result.errors:
-            st.subheader("Fehlerdetails")
+        if job.result and (job.result.errors or job.result.unavailable):
+            st.subheader("Fehler / Nicht verfügbar")
             st.caption(
-                "Häufige Ursachen: Adobe-Lizenz/Quota, Netzwerk, oder voller "
-                "iCloud-/Festplattenspeicher beim Schreiben der Dateien."
+                "Typische Ursachen laut Adobe-Antwort: "
+                "`Content is no longer available` (Asset entfernt), "
+                "`state=cancelled` + nur `cct_pro_unlimited_images` (Videos nicht im "
+                "aktuellen API-Entitlement — OAuth mit dem Unlimited-/Video-Konto), "
+                "Fotos brauchen `Standard`, Videos `Video_4K`/`Video_HD`. "
+                "Bereits Lizenzierte werden über Content/Info + LicenseHistory geladen."
             )
             err_rows = [
                 {
                     "Kapitel": item.chapter_title,
                     "Asset ID": item.asset_id,
+                    "Status": _status_label(item.status),
                     "Fehler": item.message,
                 }
                 for item in job.result.items
-                if item.status == STATUS_ERROR
+                if item.status in {STATUS_ERROR, STATUS_UNAVAILABLE}
             ]
             st.dataframe(err_rows, use_container_width=True, hide_index=True)
     elif job.status == JobStatus.CANCELLED:
