@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from otio_app.services.without_voiceover_enhanced.cut_plan_options import CutPlanOptions
+from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    UNIFIED_CUT_STYLE_KEYWORD_SYNC,
+    CutPlanOptions,
+)
 from otio_app.services.without_voiceover_enhanced.models import (
     CutBoundary,
     CutSlot,
@@ -252,6 +255,70 @@ def test_clamp_shortens_overlong_slot_by_nudging_shared_boundary() -> None:
     # Kette bleibt dicht
     assert timed[0].end_seconds == timed[1].start_seconds
     assert any("shot_max" in note for note in repairs)
+
+
+def test_keyword_sync_skips_shot_min_max_clamp() -> None:
+    """Keyword-Sync: kurze Buzzword-Cuts bleiben; shot_min/max greifen nicht."""
+    timeline = NarrationTimelineDocument(
+        script_version="v1",
+        total_duration_seconds=30.0,
+        entries=[
+            NarrationTimelineEntry(
+                segment_id="seg_001",
+                start_seconds=0.0,
+                end_seconds=30.0,
+                audio_duration_seconds=30.0,
+            )
+        ],
+    )
+    sentences = {
+        "seg_001__s001": _sentence("seg_001__s001", start=0.0, end=1.0),
+        "seg_001__s002": _sentence("seg_001__s002", start=1.2, end=2.2),
+        "seg_001__s003": _sentence("seg_001__s003", start=29.0, end=30.0),
+    }
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            CutBoundary(
+                cut_id="b0",
+                sentence_id="seg_001__s001",
+                position="start",
+            ),
+            CutBoundary(
+                cut_id="b1",
+                sentence_id="seg_001__s002",
+                position="start",
+            ),
+            CutBoundary(
+                cut_id="b2",
+                sentence_id="seg_001__s003",
+                position="end",
+            ),
+        ],
+        slots=[
+            CutSlot(slot_id="kw", local_asset_id="waterfall", asset_fit="strong"),
+            CutSlot(slot_id="rest", local_asset_id="valley", asset_fit="strong"),
+        ],
+    )
+    options = CutPlanOptions(
+        unified_cut_style=UNIFIED_CUT_STYLE_KEYWORD_SYNC,
+        shot_min_sec=5.0,
+        shot_max_sec=8.0,
+    )
+    repairs: list[str] = []
+    timed = resolve_timed_slots(
+        plan,
+        timeline,
+        sentence_index=sentences,
+        options=options,
+        fps=25.0,
+        repairs=repairs,
+    )
+    # ~1.2s Keyword-Cut — nicht auf shot_min 5s hochgeschoben.
+    assert timed[0].duration_seconds == pytest.approx(1.2, abs=0.05)
+    # Langer Rest — nicht auf shot_max 8s gekürzt.
+    assert timed[1].duration_seconds > 20.0
+    assert not any("shot_min" in note or "shot_max" in note for note in repairs)
 
 
 def test_usable_tolerance_pulls_shared_end_boundary_not_local_cut() -> None:

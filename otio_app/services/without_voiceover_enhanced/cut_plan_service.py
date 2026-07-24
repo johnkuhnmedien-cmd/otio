@@ -1875,24 +1875,60 @@ def generate_unified_cut_for_folder(
                 intro_audio_duration_seconds=intro_duration,
             )
         else:
-            prompt = build_unified_cut_prompt(
-                locked_script_json=context.script_slice.model_dump_json(indent=2),
-                segment_timings_json=context.timings_slice.model_dump_json(indent=2),
-                local_assets_json=json.dumps(
-                    local_assets, ensure_ascii=False, indent=2
-                ),
-                style_profile_text=_style_text(project),
-                dramaturgy_text=dramaturgy_text,
-                folder_name=folder_name,
-                folder_slug=context.folder_slug,
-                previous_folder_name=context.previous_folder_name,
-                next_folder_name=context.next_folder_name,
-                include_middle_frames=include_frames,
-                shot_constraints_text=format_shot_constraints_for_prompt(options),
-                sentence_timings_json=sentence_timings_json,
-                cut_rhythm_targets_text=DEFAULT_CUT_RHYTHM_TARGETS,
-                used_in_ledger_text=used_in_ledger_text,
+            from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+                is_keyword_sync_unified_style,
             )
+
+            if is_keyword_sync_unified_style(options):
+                from otio_app.services.without_voiceover_enhanced.script_prompts import (
+                    build_keyword_sync_unified_cut_prompt,
+                )
+
+                prompt = build_keyword_sync_unified_cut_prompt(
+                    locked_script_json=context.script_slice.model_dump_json(
+                        indent=2
+                    ),
+                    segment_timings_json=context.timings_slice.model_dump_json(
+                        indent=2
+                    ),
+                    local_assets_json=json.dumps(
+                        local_assets, ensure_ascii=False, indent=2
+                    ),
+                    style_profile_text=_style_text(project),
+                    dramaturgy_text=dramaturgy_text,
+                    folder_name=folder_name,
+                    folder_slug=context.folder_slug,
+                    previous_folder_name=context.previous_folder_name,
+                    next_folder_name=context.next_folder_name,
+                    include_middle_frames=include_frames,
+                    sentence_timings_json=sentence_timings_json,
+                    used_in_ledger_text=used_in_ledger_text,
+                )
+            else:
+                prompt = build_unified_cut_prompt(
+                    locked_script_json=context.script_slice.model_dump_json(
+                        indent=2
+                    ),
+                    segment_timings_json=context.timings_slice.model_dump_json(
+                        indent=2
+                    ),
+                    local_assets_json=json.dumps(
+                        local_assets, ensure_ascii=False, indent=2
+                    ),
+                    style_profile_text=_style_text(project),
+                    dramaturgy_text=dramaturgy_text,
+                    folder_name=folder_name,
+                    folder_slug=context.folder_slug,
+                    previous_folder_name=context.previous_folder_name,
+                    next_folder_name=context.next_folder_name,
+                    include_middle_frames=include_frames,
+                    shot_constraints_text=format_shot_constraints_for_prompt(
+                        options
+                    ),
+                    sentence_timings_json=sentence_timings_json,
+                    cut_rhythm_targets_text=DEFAULT_CUT_RHYTHM_TARGETS,
+                    used_in_ledger_text=used_in_ledger_text,
+                )
         images = (
             middle_frame_attachments_from_payload(
                 local_assets,

@@ -33,7 +33,11 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     TIMING_MODE_CHOICES,
     TIMING_MODE_FIXED,
     TIMING_MODE_LLM,
+    UNIFIED_CUT_STYLE_CHOICES,
+    UNIFIED_CUT_STYLE_KEYWORD_SYNC,
+    UNIFIED_CUT_STYLE_RHYTHM,
     CutPlanOptions,
+    is_keyword_sync_unified_style,
     load_cut_plan_options,
     save_cut_plan_options,
 )  # TIMING_MODE_* used in settings UI labels/defaults
@@ -536,6 +540,34 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 "Legacy: LLM 2 (Rough) + LLM 3 (Final)."
             ),
         )
+        style_labels = {
+            UNIFIED_CUT_STYLE_RHYTHM: "Rhythmus (shot_min/max)",
+            UNIFIED_CUT_STYLE_KEYWORD_SYNC: "Keyword-Sync (Wort↔Bild)",
+        }
+        style_options = list(UNIFIED_CUT_STYLE_CHOICES)
+        style_index = (
+            style_options.index(current.unified_cut_style)
+            if current.unified_cut_style in style_options
+            else 0
+        )
+        unified_cut_style = st.radio(
+            "Unified-Stil",
+            options=style_options,
+            format_func=lambda s: style_labels.get(s, s),
+            index=style_index,
+            key=f"enh_opt_unified_style_{project.id}",
+            horizontal=True,
+            disabled=cut_plan_mode != CUT_PLAN_MODE_UNIFIED,
+            help=(
+                "Rhythmus: bisheriger Prompt + shot_min/max. "
+                "Keyword-Sync: eigener Prompt, Buzzword-Onset; "
+                "shot_min/max gelten weder für LLM noch Python."
+            ),
+        )
+        keyword_sync_active = (
+            cut_plan_mode == CUT_PLAN_MODE_UNIFIED
+            and unified_cut_style == UNIFIED_CUT_STYLE_KEYWORD_SYNC
+        )
         enable_unified_mini_repair = st.checkbox(
             "Unified Mini-Repair nach Gap-Merge (optional, Default aus)",
             value=bool(current.enable_unified_mini_repair),
@@ -558,23 +590,31 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
         )
         col1, col2, col3 = st.columns(3)
         with col1:
-            shot_min_sec = st.number_input(
-                "Shot Min (s)",
-                min_value=0.4,
-                max_value=60.0,
-                value=float(current.shot_min_sec),
-                step=0.5,
-                key=f"enh_opt_shot_min_{project.id}",
-            )
-            shot_max_sec = st.number_input(
-                "Shot Max (s)",
-                min_value=0.4,
-                max_value=120.0,
-                value=float(current.shot_max_sec),
-                step=0.5,
-                key=f"enh_opt_shot_max_{project.id}",
-                help="Python kürzt längere Shots hart auf diesen Wert.",
-            )
+            if keyword_sync_active:
+                st.caption(
+                    "Shot Min/Max ausgeblendet (Keyword-Sync) — "
+                    "gespeicherte Werte bleiben für Rhythmus-Modus."
+                )
+                shot_min_sec = float(current.shot_min_sec)
+                shot_max_sec = float(current.shot_max_sec)
+            else:
+                shot_min_sec = st.number_input(
+                    "Shot Min (s)",
+                    min_value=0.4,
+                    max_value=60.0,
+                    value=float(current.shot_min_sec),
+                    step=0.5,
+                    key=f"enh_opt_shot_min_{project.id}",
+                )
+                shot_max_sec = st.number_input(
+                    "Shot Max (s)",
+                    min_value=0.4,
+                    max_value=120.0,
+                    value=float(current.shot_max_sec),
+                    step=0.5,
+                    key=f"enh_opt_shot_max_{project.id}",
+                    help="Python kürzt längere Shots hart auf diesen Wert.",
+                )
             video_head_trim_sec = st.number_input(
                 "Video Head Trim (s)",
                 min_value=0.0,
@@ -814,8 +854,9 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             )
 
         draft = CutPlanOptions(
-            schema_version="1.3",
+            schema_version="1.4",
             cut_plan_mode=str(cut_plan_mode),  # type: ignore[arg-type]
+            unified_cut_style=str(unified_cut_style),  # type: ignore[arg-type]
             enable_unified_mini_repair=bool(enable_unified_mini_repair),
             unified_mini_repair_threshold=float(unified_mini_repair_threshold),
             include_middle_frames=bool(include_middle_frames),
@@ -850,9 +891,14 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             type="primary",
         ):
             saved = save_cut_plan_options(project, draft)
+            style_note = (
+                " · Keyword-Sync (ohne shot_min/max)"
+                if is_keyword_sync_unified_style(saved)
+                else f" · shot {saved.shot_min_sec}–{saved.shot_max_sec}s"
+            )
             st.success(
                 f"Gespeichert: mode={saved.cut_plan_mode} · "
-                f"shot {saved.shot_min_sec}–{saved.shot_max_sec}s · "
+                f"style={saved.unified_cut_style}{style_note} · "
                 f"reuse≥{saved.min_asset_reuse_distance_shots} · "
                 f"preroll {saved.voiceover_preroll_sec}s/{saved.voiceover_preroll_mode} · "
                 f"postroll {saved.voiceover_postroll_sec}s/{saved.voiceover_postroll_mode}"
@@ -1267,7 +1313,7 @@ def _render_chapter_cut_rows(
                     st.caption(note)
 
 
-def _render_section_unified(project) -> None:
+def _render_section_unified(project, options: CutPlanOptions | None = None) -> None:
     st.subheader("1. Unified Cut Plan (LLM) → 2. Python Timing")
     _render_slim_status(project)
     body_chapters = list_body_chapter_names(project)
@@ -1294,14 +1340,39 @@ def _render_section_unified(project) -> None:
         output_ceiling=rough_max,
     )
 
+    cut_options = options or load_cut_plan_options(project)
+    # Stil sofort persistieren (LLM/Python lesen von Disk).
+    persisted = load_cut_plan_options(project)
+    if cut_options.unified_cut_style != persisted.unified_cut_style:
+        persisted = save_cut_plan_options(
+            project,
+            persisted.model_copy(
+                update={"unified_cut_style": cut_options.unified_cut_style}
+            ),
+        )
+        cut_options = cut_options.model_copy(
+            update={"unified_cut_style": persisted.unified_cut_style}
+        )
+
     st.markdown("##### 1. Körper-Kapitel (pro Ordner)")
+    if is_keyword_sync_unified_style(cut_options):
+        st.info(
+            "**Unified-Stil: Keyword-Sync** — eigener Prompt (Wort↔Bild / "
+            "Buzzword-Onset). Shot Min/Max gelten weder für LLM noch für "
+            "Python Timing. Stil in Cut Plan Settings umschalten."
+        )
+    else:
+        st.caption(
+            "**Unified-Stil: Rhythmus** — Prompt mit shot_min/max und "
+            "Cut-Rhythmus-Zielen. Für Keyword-Sync: Cut Plan Settings → "
+            "Unified-Stil."
+        )
     st.caption(
         f"**ein LLM-Call pro Kapitel** ({chapter_count}, ohne Intro) → "
         "`cut/chapters/{slug}/unified_cut_plan.json`. "
         "Batch oben = gleiche Schleife wie die Zeilen-Buttons. "
         "**Alle OTIO** merged Intro + Kapitel in Dramaturgie-Reihenfolge."
     )
-    cut_options = load_cut_plan_options(project)
     if cut_options.include_middle_frames:
         st.caption(
             "Vision aktiv: Mittel-Frames "
@@ -2406,7 +2477,7 @@ def render_enhanced_cut_plan_page() -> None:
         ),
     )
     if section == _SECTION_UNIFIED:
-        _render_section_unified(project)
+        _render_section_unified(project, options)
     elif section == _SECTION_ROUGH:
         _render_section_rough(project)
     elif section == _SECTION_FUNNEL:

@@ -163,26 +163,33 @@ def assess_unified_cut_quality(
     assessment.shot_lengths = lengths
     assessment.notes.extend(_shot_length_notes(lengths))
 
-    # Settings-Band zusätzlich soft markieren (Intro ausnehmen: shot_min gilt dort nicht).
-    lo = float(options.shot_min_sec)
-    hi = float(options.shot_max_sec)
-    body_lengths = [
-        max(0.0, float(s.timeline_end_seconds) - float(s.timeline_start_seconds))
-        for s in editorial
-        if not s.open_gap
-        and not is_intro_folder_name(s.folder_name)
-        and not is_intro_folder_name(s.chapter_id)
-        and not is_intro_folder_name(s.shot_id)
-    ]
-    if body_lengths and hi >= lo:
-        outside_settings = sum(
-            1 for length in body_lengths if length + 1e-9 < lo or length > hi + 1e-9
-        )
-        if outside_settings:
-            assessment.notes.append(
-                f"Cut-Rhythmus: {outside_settings}/{len(body_lengths)} Shots außerhalb "
-                f"Settings shot_min/max ({lo:.1f}–{hi:.1f}s)."
+    # Settings-Band soft markieren (Intro ausnehmen; Keyword-Sync: Band gilt nicht).
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        is_keyword_sync_unified_style,
+    )
+
+    if not is_keyword_sync_unified_style(options):
+        lo = float(options.shot_min_sec)
+        hi = float(options.shot_max_sec)
+        body_lengths = [
+            max(0.0, float(s.timeline_end_seconds) - float(s.timeline_start_seconds))
+            for s in editorial
+            if not s.open_gap
+            and not is_intro_folder_name(s.folder_name)
+            and not is_intro_folder_name(s.chapter_id)
+            and not is_intro_folder_name(s.shot_id)
+        ]
+        if body_lengths and hi >= lo:
+            outside_settings = sum(
+                1
+                for length in body_lengths
+                if length + 1e-9 < lo or length > hi + 1e-9
             )
+            if outside_settings:
+                assessment.notes.append(
+                    f"Cut-Rhythmus: {outside_settings}/{len(body_lengths)} Shots "
+                    f"außerhalb Settings shot_min/max ({lo:.1f}–{hi:.1f}s)."
+                )
 
     # Visuelle Coverage (nicht-open Shots) innerhalb Kapitel / global.
     frame = 1.0 / max(1.0, float(resolved.fps or 25.0))

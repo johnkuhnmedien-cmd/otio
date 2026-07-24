@@ -597,20 +597,31 @@ def resolve_timed_slots(
             repairs=notes,
         )
 
-    editorial_min = max(TECH_MIN_SHOT_SECONDS, float(options.shot_min_sec))
-    editorial_max = min(
-        TECH_MAX_SHOT_SECONDS,
-        max(editorial_min, float(options.shot_max_sec)),
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        is_keyword_sync_unified_style,
     )
-    # Intro only: Cut-Plan shot_min (z. B. 5s) aushebeln — LLM darf präzise
-    # Kurzschnitte (~1s) behalten; technischer Floor bleibt TECH_MIN.
-    intro_editorial_min = TECH_MIN_SHOT_SECONDS
-    slot_editorial_mins = [
-        intro_editorial_min
-        if _is_intro_plan_slot(plan, index, segment_to_chapter)
-        else editorial_min
-        for index in range(len(plan.slots))
-    ]
+
+    # Keyword-Sync: shot_min/max aus Settings gelten nicht (wie Intro-Min),
+    # nur technischer Floor / Ceiling — sonst widerspricht Python dem LLM.
+    if is_keyword_sync_unified_style(options):
+        editorial_min = TECH_MIN_SHOT_SECONDS
+        editorial_max = TECH_MAX_SHOT_SECONDS
+        slot_editorial_mins = [TECH_MIN_SHOT_SECONDS] * len(plan.slots)
+    else:
+        editorial_min = max(TECH_MIN_SHOT_SECONDS, float(options.shot_min_sec))
+        editorial_max = min(
+            TECH_MAX_SHOT_SECONDS,
+            max(editorial_min, float(options.shot_max_sec)),
+        )
+        # Intro only: Cut-Plan shot_min (z. B. 5s) aushebeln — LLM darf präzise
+        # Kurzschnitte (~1s) behalten; technischer Floor bleibt TECH_MIN.
+        intro_editorial_min = TECH_MIN_SHOT_SECONDS
+        slot_editorial_mins = [
+            intro_editorial_min
+            if _is_intro_plan_slot(plan, index, segment_to_chapter)
+            else editorial_min
+            for index in range(len(plan.slots))
+        ]
     head_trim = max(0.0, float(options.video_head_trim_sec))
     short_tolerance = max(0.0, float(options.short_asset_tolerance_sec))
     usables = (

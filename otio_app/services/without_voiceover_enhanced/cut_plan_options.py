@@ -49,6 +49,15 @@ CUT_PLAN_MODE_UNIFIED = "unified"
 CutPlanMode = Literal["legacy", "unified"]
 CUT_PLAN_MODE_CHOICES: tuple[str, ...] = (CUT_PLAN_MODE_LEGACY, CUT_PLAN_MODE_UNIFIED)
 
+# Unified-Stil: Rhythmus (shot_min/max) vs Keyword-Sync (Wort↔Bild, ohne shot_min/max).
+UNIFIED_CUT_STYLE_RHYTHM = "rhythm"
+UNIFIED_CUT_STYLE_KEYWORD_SYNC = "keyword_sync"
+UnifiedCutStyle = Literal["rhythm", "keyword_sync"]
+UNIFIED_CUT_STYLE_CHOICES: tuple[str, ...] = (
+    UNIFIED_CUT_STYLE_RHYTHM,
+    UNIFIED_CUT_STYLE_KEYWORD_SYNC,
+)
+
 STILL_BACKGROUND_CHOICES = (
     STILL_BACKGROUND_VINTAGE,
     STILL_BACKGROUND_PAPER_EDGE,
@@ -57,9 +66,11 @@ STILL_BACKGROUND_CHOICES = (
 
 
 class CutPlanOptions(BaseModel):
-    schema_version: str = "1.3"
+    schema_version: str = "1.4"
     # Phase 7: Unified (1 LLM) vs Legacy (Rough + Final).
     cut_plan_mode: CutPlanMode = CUT_PLAN_MODE_LEGACY
+    # Unified Stil: Rhythmus (Default) oder Keyword-Sync (ohne shot_min/max).
+    unified_cut_style: UnifiedCutStyle = UNIFIED_CUT_STYLE_RHYTHM
     # Phase 6: optionaler Mini-Repair nach Gap-Merge (Default aus).
     enable_unified_mini_repair: bool = False
     unified_mini_repair_threshold: float = Field(default=0.20, ge=0.0, le=1.0)
@@ -155,6 +166,27 @@ def _normalize_cut_plan_mode(value: Any, *, default: str) -> str:
     return text if text in CUT_PLAN_MODE_CHOICES else default
 
 
+def _normalize_unified_cut_style(value: Any, *, default: str) -> str:
+    text = str(value or default).strip().lower().replace("-", "_")
+    aliases = {
+        "keyword": UNIFIED_CUT_STYLE_KEYWORD_SYNC,
+        "keywordsync": UNIFIED_CUT_STYLE_KEYWORD_SYNC,
+        "buzzword": UNIFIED_CUT_STYLE_KEYWORD_SYNC,
+    }
+    text = aliases.get(text, text)
+    return text if text in UNIFIED_CUT_STYLE_CHOICES else default
+
+
+def is_keyword_sync_unified_style(options: CutPlanOptions | None) -> bool:
+    """True wenn Unified Keyword-Sync aktiv (shot_min/max aus LLM + Python)."""
+    if options is None:
+        return False
+    return (
+        str(options.unified_cut_style or "").strip().lower()
+        == UNIFIED_CUT_STYLE_KEYWORD_SYNC
+    )
+
+
 def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
     defaults = default_cut_plan_options()
     background = str(
@@ -187,6 +219,10 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
         cut_plan_mode=_normalize_cut_plan_mode(  # type: ignore[arg-type]
             raw.get("cut_plan_mode", defaults.cut_plan_mode),
             default=defaults.cut_plan_mode,
+        ),
+        unified_cut_style=_normalize_unified_cut_style(  # type: ignore[arg-type]
+            raw.get("unified_cut_style", defaults.unified_cut_style),
+            default=defaults.unified_cut_style,
         ),
         enable_unified_mini_repair=bool(
             raw.get(
