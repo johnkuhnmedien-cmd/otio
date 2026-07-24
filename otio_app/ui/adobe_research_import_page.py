@@ -211,19 +211,22 @@ def render_adobe_research_import_page() -> None:
             token = get_adobe_access_token() or ""
             if api_key and token:
                 probe = adapter.probe_video_entitlement(api_key, token)
+                ent = (probe.get("available_entitlement") or {}).get(
+                    "full_entitlement_quota"
+                ) or {}
+                quota = (probe.get("available_entitlement") or {}).get("quota")
+                if ent or quota is not None:
+                    st.caption(f"API-Entitlements (Video_HD): `{ent}` · quota={quota}")
                 if probe.get("lacks_video"):
-                    st.error(
-                        "Dieses Adobe-Konto kann **keine Videos** über die API lizenzieren "
-                        "(nur `cct_pro_unlimited_images`, Video-quota=0). "
-                        "Bitte **Abmelden** und mit dem Stock-Konto erneut anmelden, "
-                        "das Videos (Unlimited/Credits) darf. Tempo/Pausen ändern das nicht."
+                    st.warning(
+                        "Die **Stock-API** sieht für dieses OAuth-Token **kein Video-Unlimited** "
+                        "(nur `cct_pro_unlimited_images`, Video-quota=0) — obwohl im Browser "
+                        "Video Unlimited greifen kann. Creative Cloud Pro/Plus ist für die API "
+                        "oft gesperrt (Adobe: Freigabe nötig, `stockapis@adobe.com`). "
+                        "Import versucht trotzdem zuerst **LicenseHistory** (bereits im Browser "
+                        "lizenzierte Clips). Neue Video-Lizenzen über die API schlagen sonst "
+                        "mit `cancelled`/`Comp` fehl. Prüfe auch: richtige Adobe-ID / Teamkonto?"
                     )
-                else:
-                    ent = (probe.get("available_entitlement") or {}).get(
-                        "full_entitlement_quota"
-                    ) or {}
-                    if ent:
-                        st.caption(f"Entitlements: `{ent}` · Video-quota={ (probe.get('available_entitlement') or {}).get('quota') }")
         except Exception as exc:  # noqa: BLE001
             st.caption(f"Entitlement-Check übersprungen: {exc}")
     elif readiness.search_enabled:

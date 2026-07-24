@@ -78,12 +78,15 @@ class AdobeVideoEntitlementError(Exception):
 
 
 VIDEO_ENTITLEMENT_HINT = (
-    "Dieses Adobe-Konto hat laut API keine Video-Lizenzrechte "
-    "(nur cct_pro_unlimited_images / quota=0 für Video). "
-    "Content/License liefert deshalb state=cancelled + Comp/Wasserzeichen. "
-    "Bitte abmelden und mit dem Stock-Konto erneut OAuth-Login, "
-    "das Videos (Unlimited oder Credits) herunterladen darf — "
-    "Pausen/Tempo ändern daran nichts."
+    "Die Stock-API meldet für dieses OAuth-Token keine Video-Lizenz "
+    "(full_entitlement nur cct_pro_unlimited_images, Video-quota=0) — "
+    "Content/License antwortet deshalb mit state=cancelled + Comp. "
+    "Browser-„Video Unlimited“ (z. B. Creative Cloud Pro/Plus) gilt oft "
+    "nicht für die API; Adobe schaltet API-Nutzung für Pro/Plus nur "
+    "nach Freigabe frei (stockapis@adobe.com). "
+    "Prüfen: richtiges Adobe-ID beim OAuth? Team- vs. Privatkonto? "
+    "Bereits im Browser lizenzierte Clips können über LicenseHistory "
+    "trotzdem ladbar sein."
 )
 
 

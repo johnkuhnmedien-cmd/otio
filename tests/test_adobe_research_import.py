@@ -449,6 +449,55 @@ def test_already_licensed_uses_content_info_url(
     assert path.suffix == ".mp4"
 
 
+def test_license_history_tried_before_content_license(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bei Videos zuerst LicenseHistory — nötig wenn Content/License nur Comp liefert."""
+    from otio_app.services import adobe_research_import as mod
+
+    _disable_import_pauses(monkeypatch, mod)
+    order: list[str] = []
+
+    class _Adapter:
+        def lookup_file_metadata(self, content_id, api_key):
+            return {"media_type_id": 4, "content_type": "video/mp4"}
+
+        def content_info_purchase(self, *_a, **_k):
+            order.append("info")
+            return {"state": "not_purchased"}
+
+        def find_license_history_download(self, *_a, **_k):
+            order.append("history")
+            return {
+                "state": "purchased",
+                "license": "Video_HD",
+                "url": "https://stock.adobe.com/Rest/Libraries/Download/1/3",
+                "content_type": "video/mp4",
+            }
+
+        def _license_asset(self, *_a, **_k):
+            order.append("license")
+            raise AssertionError("License nicht nötig wenn History greift")
+
+        def _stream_download_to_file(self, url, local_path, *, api_key, access_token, size, max_bytes):
+            local_path.write_bytes(b"x" * 200_000)
+
+    monkeypatch.setattr(mod, "get_api_key", lambda key: "x")
+    monkeypatch.setattr(mod, "get_adobe_access_token", lambda: "tok")
+
+    path, license_type = mod._license_and_download_to_path(
+        _Adapter(),
+        content_id="1",
+        media_type="video",
+        destination=tmp_path / "hist-first",
+        media_hint="video",
+    )
+    assert order[0] == "history"
+    assert "license" not in order
+    assert license_type.startswith("Video_HD")
+    assert path.is_file()
+
+
 def test_history_4k_too_large_retries_same_url_as_hd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
