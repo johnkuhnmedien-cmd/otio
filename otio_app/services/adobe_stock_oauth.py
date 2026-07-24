@@ -30,7 +30,9 @@ from otio_app.services.api_keys import get_api_key
 
 ADOBE_IMS_AUTHORIZE_URL = "https://ims-na1.adobelogin.com/ims/authorize/v2"
 ADOBE_IMS_TOKEN_URL = "https://ims-na1.adobelogin.com/ims/token/v3"
-ADOBE_STOCK_OAUTH_DEFAULT_SCOPES = "openid,AdobeID,offline_access"
+# Scopes wie in der Adobe Developer Console für Stock OAuth Web App.
+# (offline_access ist dort oft nicht freigeschaltet — Access-Token ~24h gültig.)
+ADOBE_STOCK_OAUTH_DEFAULT_SCOPES = "openid,AdobeID,creative_sdk,profile,email,address"
 ADOBE_STOCK_OAUTH_TOKEN_FILENAME = "adobe_stock_oauth.json"
 ADOBE_STOCK_OAUTH_STATE_FILENAME = "adobe_stock_oauth_state.json"
 # Access-Token etwas vor Ablauf refreshen.

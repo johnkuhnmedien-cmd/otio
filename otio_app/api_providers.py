@@ -99,9 +99,10 @@ API_PROVIDERS: tuple[ApiProvider, ...] = (
         label="Adobe Stock — OAuth Redirect URI",
         description=(
             "Muss exakt in der Adobe Developer Console hinterlegt sein. "
-            "Default: http://127.0.0.1:8501/adobe-stock-import"
+            "Default: https://localhost:8501/adobe-stock-import "
+            "(muss exakt der Adobe Console entsprechen; Adobe verlangt HTTPS)."
         ),
-        placeholder="http://127.0.0.1:8501/adobe-stock-import",
+        placeholder="https://localhost:8501/adobe-stock-import",
         docs_url="https://developer.adobe.com/developer-console/docs/guides/authentication/UserAuthentication/",
         implemented=True,
     ),

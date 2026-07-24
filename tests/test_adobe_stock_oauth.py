@@ -18,7 +18,7 @@ def oauth_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(oauth, "get_api_key", lambda key: {
         "ADOBE_STOCK_API_KEY": "client-id-123",
         "ADOBE_STOCK_CLIENT_SECRET": "client-secret-xyz",
-        "ADOBE_STOCK_REDIRECT_URI": "http://127.0.0.1:8501/adobe-stock-import",
+        "ADOBE_STOCK_REDIRECT_URI": "https://localhost:8501/adobe-stock-import",
         "ADOBE_STOCK_ACCESS_TOKEN": None,
     }.get(key))
     return tmp_path
@@ -34,14 +34,15 @@ def test_build_authorize_url_contains_required_params(oauth_data_dir: Path) -> N
     assert qs["response_type"] == ["code"]
     assert qs["state"][0]
     assert "openid" in qs["scope"][0]
-    assert "offline_access" in qs["scope"][0]
-    assert qs["redirect_uri"] == ["http://127.0.0.1:8501/adobe-stock-import"]
+    assert "AdobeID" in qs["scope"][0]
+    assert "offline_access" not in qs["scope"][0]
+    assert qs["redirect_uri"] == ["https://localhost:8501/adobe-stock-import"]
     assert (oauth_data_dir / oauth.ADOBE_STOCK_OAUTH_STATE_FILENAME).is_file()
 
 
 def test_extract_code_from_callback_url() -> None:
     code, state = oauth.extract_code_from_callback(
-        "http://127.0.0.1:8501/adobe-stock-import?code=AUTHCODE&state=s1"
+        "https://localhost:8501/adobe-stock-import?code=AUTHCODE&state=s1"
     )
     assert code == "AUTHCODE"
     assert state == "s1"

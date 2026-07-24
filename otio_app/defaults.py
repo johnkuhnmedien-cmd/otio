@@ -1393,7 +1393,7 @@ RIGHTS_STATUS_NEEDS_REVIEW = "NEEDS_REVIEW"
 ADOBE_STOCK_DEFAULT_PRODUCT_NAME = "OTIO-App/1.0"
 # IMS OAuth (Authorization Code) — Client ID = ADOBE_STOCK_API_KEY,
 # Secret = ADOBE_STOCK_CLIENT_SECRET, Redirect = ADOBE_STOCK_REDIRECT_URI.
-ADOBE_STOCK_OAUTH_DEFAULT_REDIRECT_URI = "http://127.0.0.1:8501/adobe-stock-import"
+ADOBE_STOCK_OAUTH_DEFAULT_REDIRECT_URI = "https://localhost:8501/adobe-stock-import"
 ADOBE_STOCK_SEARCH_ENDPOINT = "https://stock.adobe.io/Rest/Media/1/Search/Files"
 # Adobe media_type_id-Codes (siehe Search-API-Referenz) — nur die für die
 # Supplement-Suche relevanten Typen (Foto/Video), alles andere (Illustration,
