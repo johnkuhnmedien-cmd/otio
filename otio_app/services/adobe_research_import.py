@@ -13,7 +13,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import BinaryIO, Iterable
+from typing import BinaryIO, Callable, Iterable
 
 from otio_app.defaults import (
     ADOBE_STOCK_LICENSE_TYPE_STANDARD,
@@ -31,9 +31,14 @@ from otio_app.services.supplement_sources.adobe_stock import (
 
 __all__ = [
     "AdobeResearchAsset",
+    "AdobeResearchAssetStatus",
     "AdobeResearchChapter",
+    "AdobeResearchChapterStatus",
+    "AdobeResearchImportBoard",
     "AdobeResearchImportPlan",
+    "AdobeResearchImportProgress",
     "AdobeResearchImportResult",
+    "build_research_import_board",
     "download_research_import",
     "format_asset_stem",
     "parse_research_excel",
@@ -43,6 +48,14 @@ __all__ = [
 _INVALID_FS_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WHITESPACE = re.compile(r"\s+")
 _MANIFEST_NAME = "adobe_research_import_manifest.json"
+_BOARD_NAME = "adobe_research_import_board.json"
+
+STATUS_DOWNLOADED = "downloaded"
+STATUS_OPEN = "open"
+STATUS_ERROR = "error"
+STATUS_DOWNLOADING = "downloading"
+STATUS_CANCELLED = "cancelled"
+STATUS_SKIPPED = "skipped"
 
 
 @dataclass(frozen=True)
@@ -85,7 +98,7 @@ class AdobeResearchImportItemResult:
     chapter_title: str
     folder_name: str
     asset_id: str
-    status: str  # downloaded | skipped | error
+    status: str  # downloaded | skipped | error | cancelled
     local_path: str = ""
     message: str = ""
     license: str = ""
@@ -96,18 +109,97 @@ class AdobeResearchImportResult:
     target_root: str
     items: list[AdobeResearchImportItemResult] = field(default_factory=list)
     manifest_path: str = ""
+    cancelled: bool = False
 
     @property
     def downloaded(self) -> int:
-        return sum(1 for item in self.items if item.status == "downloaded")
+        return sum(1 for item in self.items if item.status == STATUS_DOWNLOADED)
 
     @property
     def skipped(self) -> int:
-        return sum(1 for item in self.items if item.status == "skipped")
+        return sum(1 for item in self.items if item.status == STATUS_SKIPPED)
 
     @property
     def errors(self) -> int:
-        return sum(1 for item in self.items if item.status == "error")
+        return sum(1 for item in self.items if item.status == STATUS_ERROR)
+
+    @property
+    def cancelled_count(self) -> int:
+        return sum(1 for item in self.items if item.status == STATUS_CANCELLED)
+
+
+@dataclass(frozen=True)
+class AdobeResearchAssetStatus:
+    chapter_title: str
+    folder_name: str
+    asset_id: str
+    link: str = ""
+    status: str = STATUS_OPEN
+    local_path: str = ""
+    license: str = ""
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class AdobeResearchChapterStatus:
+    title: str
+    folder_name: str
+    assets: tuple[AdobeResearchAssetStatus, ...] = ()
+
+    @property
+    def total(self) -> int:
+        return len(self.assets)
+
+    @property
+    def downloaded(self) -> int:
+        return sum(1 for a in self.assets if a.status == STATUS_DOWNLOADED)
+
+    @property
+    def open_count(self) -> int:
+        return sum(1 for a in self.assets if a.status in {STATUS_OPEN, STATUS_CANCELLED})
+
+    @property
+    def error_count(self) -> int:
+        return sum(1 for a in self.assets if a.status == STATUS_ERROR)
+
+    @property
+    def downloading_count(self) -> int:
+        return sum(1 for a in self.assets if a.status == STATUS_DOWNLOADING)
+
+
+@dataclass(frozen=True)
+class AdobeResearchImportBoard:
+    sheet_name: str
+    target_root: str
+    chapters: tuple[AdobeResearchChapterStatus, ...] = ()
+
+    @property
+    def total(self) -> int:
+        return sum(ch.total for ch in self.chapters)
+
+    @property
+    def downloaded(self) -> int:
+        return sum(ch.downloaded for ch in self.chapters)
+
+    @property
+    def open_count(self) -> int:
+        return sum(ch.open_count for ch in self.chapters)
+
+    @property
+    def error_count(self) -> int:
+        return sum(ch.error_count for ch in self.chapters)
+
+
+@dataclass(frozen=True)
+class AdobeResearchImportProgress:
+    done: int
+    total: int
+    folder_name: str
+    asset_id: str
+    chapter_title: str = ""
+    status: str = STATUS_DOWNLOADING
+    message: str = ""
+    fraction: float = 0.0
 
 
 def sanitize_folder_name(title: str) -> str:
@@ -248,28 +340,148 @@ def parse_research_excel(
 
 def _existing_asset_ids_in_folder(folder: Path) -> set[str]:
     """Liest bereits importierte Adobe-IDs aus Manifest oder Dateinamen-Sidecar."""
-    found: set[str] = set()
-    manifest = folder / _MANIFEST_NAME
-    if manifest.is_file():
-        try:
-            payload = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            payload = {}
-        for item in payload.get("items") or []:
-            aid = str(item.get("asset_id") or "").strip()
-            status = str(item.get("status") or "")
-            if aid and status == "downloaded":
-                found.add(aid)
-    # Sidecar JSON neben Dateien
+    return set(_downloaded_records_in_folder(folder))
+
+
+def _downloaded_records_in_folder(folder: Path) -> dict[str, dict]:
+    """asset_id → {local_path, license, message} für einen Kapitelordner."""
+    found: dict[str, dict] = {}
+    if not folder.is_dir():
+        return found
     for path in folder.glob("*.adobe.json"):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
         aid = str(payload.get("asset_id") or "").strip()
-        if aid:
-            found.add(aid)
+        if not aid:
+            continue
+        found[aid] = {
+            "local_path": str(payload.get("local_path") or ""),
+            "license": str(payload.get("license") or ""),
+            "message": "",
+            "status": STATUS_DOWNLOADED,
+        }
     return found
+
+
+def _root_manifest_records(root: Path) -> dict[str, dict]:
+    path = root / _MANIFEST_NAME
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    found: dict[str, dict] = {}
+    for item in payload.get("items") or []:
+        aid = str(item.get("asset_id") or "").strip()
+        if not aid:
+            continue
+        status = str(item.get("status") or STATUS_OPEN)
+        if status == STATUS_SKIPPED:
+            status = STATUS_DOWNLOADED
+        found[aid] = {
+            "local_path": str(item.get("local_path") or ""),
+            "license": str(item.get("license") or ""),
+            "message": str(item.get("message") or ""),
+            "status": status,
+        }
+    return found
+
+
+def build_research_import_board(
+    plan: AdobeResearchImportPlan,
+    target_root: str | Path | None,
+    *,
+    live_statuses: dict[str, dict] | None = None,
+) -> AdobeResearchImportBoard:
+    """Excel-Spiegel: pro Asset Downloaded / Open / Error (+ Live-Overrides)."""
+    root = Path(target_root).expanduser().resolve() if target_root else Path()
+    root_records = _root_manifest_records(root) if target_root else {}
+    live = live_statuses or {}
+
+    chapters: list[AdobeResearchChapterStatus] = []
+    for chapter in plan.chapters:
+        folder = root / chapter.folder_name if target_root else Path()
+        folder_records = _downloaded_records_in_folder(folder) if target_root else {}
+        assets: list[AdobeResearchAssetStatus] = []
+        for asset in chapter.assets:
+            record = (
+                live.get(asset.asset_id)
+                or folder_records.get(asset.asset_id)
+                or root_records.get(asset.asset_id)
+            )
+            if record:
+                status = str(record.get("status") or STATUS_DOWNLOADED)
+                if status == STATUS_SKIPPED:
+                    status = STATUS_DOWNLOADED
+                assets.append(
+                    AdobeResearchAssetStatus(
+                        chapter_title=chapter.title,
+                        folder_name=chapter.folder_name,
+                        asset_id=asset.asset_id,
+                        link=asset.link,
+                        status=status,
+                        local_path=str(record.get("local_path") or ""),
+                        license=str(record.get("license") or ""),
+                        message=str(record.get("message") or ""),
+                    )
+                )
+            else:
+                assets.append(
+                    AdobeResearchAssetStatus(
+                        chapter_title=chapter.title,
+                        folder_name=chapter.folder_name,
+                        asset_id=asset.asset_id,
+                        link=asset.link,
+                        status=STATUS_OPEN,
+                    )
+                )
+        chapters.append(
+            AdobeResearchChapterStatus(
+                title=chapter.title,
+                folder_name=chapter.folder_name,
+                assets=tuple(assets),
+            )
+        )
+    return AdobeResearchImportBoard(
+        sheet_name=plan.sheet_name,
+        target_root=str(root) if target_root else "",
+        chapters=tuple(chapters),
+    )
+
+
+def persist_research_import_board(board: AdobeResearchImportBoard) -> Path | None:
+    if not board.target_root:
+        return None
+    root = Path(board.target_root)
+    root.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": "adobe-research-import-board-v1",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "sheet_name": board.sheet_name,
+        "target_root": board.target_root,
+        "downloaded": board.downloaded,
+        "open": board.open_count,
+        "errors": board.error_count,
+        "total": board.total,
+        "chapters": [
+            {
+                "title": ch.title,
+                "folder_name": ch.folder_name,
+                "downloaded": ch.downloaded,
+                "open": ch.open_count,
+                "errors": ch.error_count,
+                "total": ch.total,
+                "assets": [asdict(a) for a in ch.assets],
+            }
+            for ch in board.chapters
+        ],
+    }
+    path = root / _BOARD_NAME
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
 
 
 def _next_asset_index(folder: Path) -> int:
@@ -417,9 +629,16 @@ def download_research_import(
     *,
     chapter_titles: Iterable[str] | None = None,
     skip_existing_ids: bool = True,
-    progress_callback=None,
+    progress_callback: Callable[[AdobeResearchImportProgress], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    live_status_callback: Callable[[dict[str, dict]], None] | None = None,
 ) -> AdobeResearchImportResult:
-    """Lizenzieren + Download in Zielordner/{Kapitel}/{Kapitel}_Asset_NN.ext."""
+    """Lizenzieren + Download in Zielordner/{Kapitel}/{Kapitel}_Asset_NN.ext.
+
+    `should_stop`: kooperativer Abbruch zwischen Assets (aktueller Download
+    läuft noch zu Ende). `live_status_callback` erhält nach jedem Asset die
+    kumulierten Live-Statuses für das Excel-Spiegel-Board.
+    """
     root = Path(target_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
 
@@ -443,31 +662,115 @@ def download_research_import(
     ]
     total = sum(ch.asset_count for ch in chapters)
     done = 0
+    live_statuses: dict[str, dict] = {}
+    stopped = False
+
+    def _emit(
+        *,
+        folder_name: str,
+        asset_id: str,
+        chapter_title: str,
+        status: str,
+        message: str = "",
+    ) -> None:
+        if progress_callback is None:
+            return
+        fraction = (done / total) if total else 1.0
+        progress_callback(
+            AdobeResearchImportProgress(
+                done=done,
+                total=total,
+                folder_name=folder_name,
+                asset_id=asset_id,
+                chapter_title=chapter_title,
+                status=status,
+                message=message,
+                fraction=min(1.0, max(0.0, fraction)),
+            )
+        )
+
+    def _publish_live() -> None:
+        if live_status_callback is not None:
+            live_status_callback(dict(live_statuses))
+        board = build_research_import_board(plan, root, live_statuses=live_statuses)
+        persist_research_import_board(board)
 
     for chapter in chapters:
+        if stopped:
+            break
         folder = root / chapter.folder_name
         folder.mkdir(parents=True, exist_ok=True)
         already = _existing_asset_ids_in_folder(folder) if skip_existing_ids else set()
         next_index = _next_asset_index(folder)
 
         for asset in chapter.assets:
-            done += 1
-            if progress_callback is not None:
-                progress_callback(
-                    done,
-                    total,
-                    chapter.folder_name,
-                    asset.asset_id,
-                )
-            if asset.asset_id in already:
+            if should_stop is not None and should_stop():
+                stopped = True
+                result.cancelled = True
+                live_statuses[asset.asset_id] = {
+                    "status": STATUS_CANCELLED,
+                    "message": "Import gestoppt — noch offen",
+                    "local_path": "",
+                    "license": "",
+                }
                 result.items.append(
                     AdobeResearchImportItemResult(
                         chapter_title=chapter.title,
                         folder_name=chapter.folder_name,
                         asset_id=asset.asset_id,
-                        status="skipped",
+                        status=STATUS_CANCELLED,
+                        message="Import gestoppt — noch offen",
+                    )
+                )
+                _publish_live()
+                _emit(
+                    folder_name=chapter.folder_name,
+                    asset_id=asset.asset_id,
+                    chapter_title=chapter.title,
+                    status=STATUS_CANCELLED,
+                    message="Import gestoppt",
+                )
+                break
+
+            done += 1
+            live_statuses[asset.asset_id] = {
+                "status": STATUS_DOWNLOADING,
+                "message": "läuft…",
+                "local_path": "",
+                "license": "",
+            }
+            _publish_live()
+            _emit(
+                folder_name=chapter.folder_name,
+                asset_id=asset.asset_id,
+                chapter_title=chapter.title,
+                status=STATUS_DOWNLOADING,
+                message="Lizenzieren & Download…",
+            )
+
+            if asset.asset_id in already:
+                live_statuses[asset.asset_id] = {
+                    "status": STATUS_DOWNLOADED,
+                    "message": "bereits vorhanden",
+                    "local_path": "",
+                    "license": "",
+                }
+                result.items.append(
+                    AdobeResearchImportItemResult(
+                        chapter_title=chapter.title,
+                        folder_name=chapter.folder_name,
+                        asset_id=asset.asset_id,
+                        status=STATUS_SKIPPED,
                         message="bereits vorhanden",
                     )
+                )
+                _publish_live()
+                _emit(
+                    folder_name=chapter.folder_name,
+                    asset_id=asset.asset_id,
+                    chapter_title=chapter.title,
+                    status=STATUS_SKIPPED,
+                    message="bereits vorhanden",
                 )
                 continue
 
@@ -490,35 +793,64 @@ def download_research_import(
                     "local_path": str(local_path),
                     "downloaded_at": datetime.now(timezone.utc).isoformat(),
                 }
-                sidecar_path = local_path.with_suffix(local_path.suffix + ".adobe.json")
-                # Prefer sibling: Dublin_Asset_01.mp4.adobe.json → cleaner: .adobe.json next to stem
                 sidecar_path = folder / f"{local_path.stem}.adobe.json"
                 sidecar_path.write_text(
                     json.dumps(sidecar, ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
+                live_statuses[asset.asset_id] = {
+                    "status": STATUS_DOWNLOADED,
+                    "message": "",
+                    "local_path": str(local_path),
+                    "license": used_license,
+                }
                 result.items.append(
                     AdobeResearchImportItemResult(
                         chapter_title=chapter.title,
                         folder_name=chapter.folder_name,
                         asset_id=asset.asset_id,
-                        status="downloaded",
+                        status=STATUS_DOWNLOADED,
                         local_path=str(local_path),
                         license=used_license,
                     )
                 )
                 already.add(asset.asset_id)
                 next_index += 1
+                _publish_live()
+                _emit(
+                    folder_name=chapter.folder_name,
+                    asset_id=asset.asset_id,
+                    chapter_title=chapter.title,
+                    status=STATUS_DOWNLOADED,
+                    message=used_license,
+                )
             except Exception as exc:  # noqa: BLE001
+                live_statuses[asset.asset_id] = {
+                    "status": STATUS_ERROR,
+                    "message": str(exc),
+                    "local_path": "",
+                    "license": "",
+                }
                 result.items.append(
                     AdobeResearchImportItemResult(
                         chapter_title=chapter.title,
                         folder_name=chapter.folder_name,
                         asset_id=asset.asset_id,
-                        status="error",
+                        status=STATUS_ERROR,
                         message=str(exc),
                     )
                 )
+                _publish_live()
+                _emit(
+                    folder_name=chapter.folder_name,
+                    asset_id=asset.asset_id,
+                    chapter_title=chapter.title,
+                    status=STATUS_ERROR,
+                    message=str(exc),
+                )
+
+    board = build_research_import_board(plan, root, live_statuses=live_statuses)
+    persist_research_import_board(board)
 
     manifest = {
         "schema_version": "adobe-research-import-v1",
@@ -528,6 +860,7 @@ def download_research_import(
         "downloaded": result.downloaded,
         "skipped": result.skipped,
         "errors": result.errors,
+        "cancelled": result.cancelled,
         "items": [asdict(item) for item in result.items],
     }
     manifest_path = root / _MANIFEST_NAME
