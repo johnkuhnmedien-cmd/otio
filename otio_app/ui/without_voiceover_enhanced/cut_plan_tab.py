@@ -559,15 +559,20 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             horizontal=True,
             disabled=cut_plan_mode != CUT_PLAN_MODE_UNIFIED,
             help=(
-                "Rhythmus: bisheriger Prompt + shot_min/max. "
-                "Keyword-Sync: eigener Prompt, Buzzword-Onset; "
-                "shot_min/max gelten weder für LLM noch Python."
+                "Rhythmus: bisheriger Prompt + shot_min/max + Word-Timestamps. "
+                "Keyword-Sync: eigener Prompt (Buzzword-Onset) mit denselben "
+                "Cut-Settings und Word-Timestamps."
             ),
         )
-        keyword_sync_active = (
+        if (
             cut_plan_mode == CUT_PLAN_MODE_UNIFIED
             and unified_cut_style == UNIFIED_CUT_STYLE_KEYWORD_SYNC
-        )
+        ):
+            st.caption(
+                "Keyword-Sync: Schnitte folgen Keyword-/Themen-Onsets "
+                "(Wort-Timestamps). Shot-Min/Max und die übrigen Cut-Settings "
+                "werden mitgegeben und gelten für LLM + Python."
+            )
         enable_unified_mini_repair = st.checkbox(
             "Unified Mini-Repair nach Gap-Merge (optional, Default aus)",
             value=bool(current.enable_unified_mini_repair),
@@ -590,31 +595,23 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
         )
         col1, col2, col3 = st.columns(3)
         with col1:
-            if keyword_sync_active:
-                st.caption(
-                    "Shot Min/Max ausgeblendet (Keyword-Sync) — "
-                    "gespeicherte Werte bleiben für Rhythmus-Modus."
-                )
-                shot_min_sec = float(current.shot_min_sec)
-                shot_max_sec = float(current.shot_max_sec)
-            else:
-                shot_min_sec = st.number_input(
-                    "Shot Min (s)",
-                    min_value=0.4,
-                    max_value=60.0,
-                    value=float(current.shot_min_sec),
-                    step=0.5,
-                    key=f"enh_opt_shot_min_{project.id}",
-                )
-                shot_max_sec = st.number_input(
-                    "Shot Max (s)",
-                    min_value=0.4,
-                    max_value=120.0,
-                    value=float(current.shot_max_sec),
-                    step=0.5,
-                    key=f"enh_opt_shot_max_{project.id}",
-                    help="Python kürzt längere Shots hart auf diesen Wert.",
-                )
+            shot_min_sec = st.number_input(
+                "Shot Min (s)",
+                min_value=0.4,
+                max_value=60.0,
+                value=float(current.shot_min_sec),
+                step=0.5,
+                key=f"enh_opt_shot_min_{project.id}",
+            )
+            shot_max_sec = st.number_input(
+                "Shot Max (s)",
+                min_value=0.4,
+                max_value=120.0,
+                value=float(current.shot_max_sec),
+                step=0.5,
+                key=f"enh_opt_shot_max_{project.id}",
+                help="Python kürzt längere Shots hart auf diesen Wert.",
+            )
             video_head_trim_sec = st.number_input(
                 "Video Head Trim (s)",
                 min_value=0.0,
@@ -892,10 +889,11 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
         ):
             saved = save_cut_plan_options(project, draft)
             style_note = (
-                " · Keyword-Sync (ohne shot_min/max)"
+                " · Keyword-Sync"
                 if is_keyword_sync_unified_style(saved)
-                else f" · shot {saved.shot_min_sec}–{saved.shot_max_sec}s"
+                else " · Rhythmus"
             )
+            style_note += f" · shot {saved.shot_min_sec}–{saved.shot_max_sec}s"
             st.success(
                 f"Gespeichert: mode={saved.cut_plan_mode} · "
                 f"style={saved.unified_cut_style}{style_note} · "
@@ -1358,14 +1356,15 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
     if is_keyword_sync_unified_style(cut_options):
         st.info(
             "**Unified-Stil: Keyword-Sync** — eigener Prompt (Wort↔Bild / "
-            "Buzzword-Onset). Shot Min/Max gelten weder für LLM noch für "
-            "Python Timing. Stil in Cut Plan Settings umschalten."
+            "Buzzword-Onset) inkl. Word-Timestamps und Cut-Settings "
+            f"(shot {cut_options.shot_min_sec}–{cut_options.shot_max_sec}s). "
+            "Stil in Cut Plan Settings umschalten."
         )
     else:
         st.caption(
-            "**Unified-Stil: Rhythmus** — Prompt mit shot_min/max und "
-            "Cut-Rhythmus-Zielen. Für Keyword-Sync: Cut Plan Settings → "
-            "Unified-Stil."
+            "**Unified-Stil: Rhythmus** — Prompt mit shot_min/max, "
+            "Cut-Rhythmus-Zielen und Word-Timestamps. Für Keyword-Sync: "
+            "Cut Plan Settings → Unified-Stil."
         )
     st.caption(
         f"**ein LLM-Call pro Kapitel** ({chapter_count}, ohne Intro) → "

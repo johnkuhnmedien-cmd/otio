@@ -42,12 +42,13 @@ UI später: Projekt-Default + Override pro Kapitel.
 - `otio_app/services/without_voiceover_enhanced/cut_plan_service.py`
   - `generate_unified_cut_for_folder` wählt Prompt nach `options.unified_cut_style`
 - `otio_app/services/without_voiceover_enhanced/cut_plan_options.py`
-  - `format_shot_constraints_for_prompt(options)` → Settings-Block (heute **nur Rhythmus**)
+  - `format_shot_constraints_for_prompt(options)` → Settings-Block (Rhythmus **und** Keyword-Sync)
+  - `sentence_timing_prompt.build_sentence_timings_json_for_segments(..., include_words=True)` → Sentence + `words[]`
 
 ### Getrennte Promptfunktionen?
 **Ja.**
-- Rhythmus: `build_unified_cut_prompt` + `DEFAULT_CUT_RHYTHM_TARGETS` + `format_shot_constraints_for_prompt`
-- Keyword: `build_keyword_sync_unified_cut_prompt` (ohne Rhythm-Block; Settings-Block derzeit **nicht** angehängt — Produktziel künftig: Settings inkl. min/max mitgeben)
+- Rhythmus: `build_unified_cut_prompt` + `DEFAULT_CUT_RHYTHM_TARGETS` + `format_shot_constraints_for_prompt` + Word-Timestamps
+- Keyword: `build_keyword_sync_unified_cut_prompt` (ohne Rhythm-Block) + `format_shot_constraints_for_prompt` + Word-Timestamps
 
 ### Reihenfolge im Prompt (beide)
 1. Rolle / Modusregeln / Kapitel-Scope  
@@ -106,7 +107,7 @@ Enums:
 - wenn beide gesetzt: **`offset_seconds` gewinnt**
 - `offset_seconds` = Sekunden **ab Satzanfang** (`sentence.start_seconds`), nicht Segmentanfang
 - negative Offsets: nicht vorgesehen / nicht nutzen
-- **keine Word-Timestamps** im LLM-Input — Onset aus Satztext + Proportion schätzen
+- Word-Timestamps optional als `words[]` pro Sentence (ElevenLabs Character-Timestamps → Wörter mit `offset_seconds` relativ zum Satzanfang); Fallback: Text-Proportion
 
 ### Slot
 ```json
@@ -243,7 +244,7 @@ Quelle: `CutPlanOptions` in `cut_plan_options.py`
 
 | Feld | Bedeutung |
 |---|---|
-| `shot_min_sec` | Shot-Min (Rhythmus enforced in Python; Keyword aktuell relaxed — Ziel: wieder mitgeben) |
+| `shot_min_sec` | Shot-Min (Rhythmus + Keyword: LLM-Prompt + Python-Enforcement) |
 | `shot_max_sec` | Shot-Max |
 | `video_head_trim_sec` | Head-Trim (Python) |
 | `max_asset_usage` | max. Asset-Nutzung filmweit (Intro zählt nicht) |
@@ -258,26 +259,30 @@ Quelle: `CutPlanOptions` in `cut_plan_options.py`
 **Keine** Keyword-spezifischen Settings im Code (kein onset tolerance / max offset Feld).  
 Keyword-Onset-Regeln stehen heute nur im Prompt-Text.
 
-Rhythmus hängt Settings via `format_shot_constraints_for_prompt` ein.  
-Keyword-Prompt heute **ohne** diesen Block (Produktziel: künftig alle Settings inkl. min/max).
+Rhythmus **und** Keyword hängen Settings via `format_shot_constraints_for_prompt` ein.
 
 ---
 
 ## 6. Timing / Sentences
 
-LLM bekommt Sentence-Rows:
+LLM bekommt Sentence-Rows (inkl. Word-Onsets wenn Alignment vorhanden):
 ```json
 {
   "sentence_id": "Yosemite_segment_001__s001",
   "segment_id": "Yosemite_segment_001",
   "text": "A roaring waterfall behind the pines.",
   "start_seconds": 0.0,
-  "end_seconds": 4.2
+  "end_seconds": 4.2,
+  "words": [
+    {"text": "A", "start_seconds": 0.0, "end_seconds": 0.12, "offset_seconds": 0.0},
+    {"text": "roaring", "start_seconds": 0.12, "end_seconds": 0.55, "offset_seconds": 0.12},
+    {"text": "waterfall", "start_seconds": 0.55, "end_seconds": 1.1, "offset_seconds": 0.55}
+  ]
 }
 ```
-- Zeiten **relativ zur Segment-Audio**
-- **keine `words[]`** im Prompt
-- Keyword-Onset: `alignment=mid_sentence` + `offset_seconds` vom Satzanfang
+- Zeiten **relativ zur Segment-Audio**; `offset_seconds` = Wortstart − Satz-`start_seconds`
+- Quelle: `audio/alignments/{segment_id}/elevenlabs_timestamps.json` (Character-Timestamps)
+- Keyword-/Mid-Sentence-Onset: bevorzugt `words[].offset_seconds`; Fallback Text-Proportion
 - First boundary: erste Satz-`start`, `position=start`, `offset_seconds=0/null`, `alignment=sentence_boundary`
 - Last boundary: letzter Satz-`end`, `position=end`, kein Keyword-`mid_sentence`
 

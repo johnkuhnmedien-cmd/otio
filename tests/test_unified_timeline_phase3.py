@@ -257,8 +257,8 @@ def test_clamp_shortens_overlong_slot_by_nudging_shared_boundary() -> None:
     assert any("shot_max" in note for note in repairs)
 
 
-def test_keyword_sync_skips_shot_min_max_clamp() -> None:
-    """Keyword-Sync: kurze Buzzword-Cuts bleiben; shot_min/max greifen nicht."""
+def test_keyword_sync_applies_shot_min_max_clamp() -> None:
+    """Keyword-Sync: shot_min/max gelten wie im Rhythmus-Modus."""
     timeline = NarrationTimelineDocument(
         script_version="v1",
         total_duration_seconds=30.0,
@@ -314,11 +314,11 @@ def test_keyword_sync_skips_shot_min_max_clamp() -> None:
         fps=25.0,
         repairs=repairs,
     )
-    # ~1.2s Keyword-Cut — nicht auf shot_min 5s hochgeschoben.
-    assert timed[0].duration_seconds == pytest.approx(1.2, abs=0.05)
-    # Langer Rest — nicht auf shot_max 8s gekürzt.
-    assert timed[1].duration_seconds > 20.0
-    assert not any("shot_min" in note or "shot_max" in note for note in repairs)
+    # Kurzer Keyword-Cut wird auf shot_min angehoben.
+    assert timed[0].duration_seconds == pytest.approx(5.0, abs=0.05)
+    # Langer Rest wird auf shot_max gekürzt (ggf. mit Folge-Slots).
+    assert all(slot.duration_seconds <= 8.0 + 0.05 for slot in timed)
+    assert any("shot_min" in note or "shot_max" in note for note in repairs)
 
 
 def test_usable_tolerance_pulls_shared_end_boundary_not_local_cut() -> None:

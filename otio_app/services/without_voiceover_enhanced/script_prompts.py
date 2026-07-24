@@ -664,7 +664,10 @@ MIDDLE-FRAME VISION (OPTIONAL INPUT):
     sentence_block = ""
     if sentence_timings_json.strip():
         sentence_block = f"""
-SENTENCE TIMINGS (authoritative, relative to each segment's audio):
+SENTENCE TIMINGS (authoritative, relative to each segment's audio).
+Each sentence may include words[] from ElevenLabs character timestamps:
+text, start_seconds, end_seconds, offset_seconds (from that sentence start).
+Prefer words[].offset_seconds for precise mid_sentence cuts when present.
 {sentence_timings_json}
 """
 
@@ -712,7 +715,9 @@ NON-NEGOTIABLE EDITORIAL RULES:
 
 TIMING RULES:
 
-- Use SEGMENT TIMINGS + SENTENCE TIMINGS only to judge pacing.
+- Use SEGMENT TIMINGS + SENTENCE TIMINGS (with words[] when present).
+- When words[] exist, prefer word onset offset_seconds over text-proportion
+  guesses for mid_sentence cuts.
 - Do NOT output absolute timeline seconds, timecodes, or frames.
 - Boundaries use sentence_id + position (start|early|middle|late|end)
   and/or a small sentence-relative offset_seconds.
@@ -863,10 +868,11 @@ def build_keyword_sync_unified_cut_prompt(
     previous_folder_name: str | None = None,
     next_folder_name: str | None = None,
     include_middle_frames: bool = False,
+    shot_constraints_text: str = "",
     sentence_timings_json: str = "",
     used_in_ledger_text: str = "",
 ) -> str:
-    """Kapitel-Unified-Cut: Wort↔Bild-Sync (ohne shot_min/shot_max).
+    """Kapitel-Unified-Cut: Wort↔Bild-Sync mit Word-Timestamps + Cut Settings.
 
     Separater Modus zum Rhythmus-Prompt: Buzzwords/konkrete Motive sollen
     mit passendem Asset und möglichst exaktem Keyword-Onset geschnitten
@@ -908,8 +914,11 @@ MIDDLE-FRAME VISION (OPTIONAL INPUT):
     sentence_block = ""
     if sentence_timings_json.strip():
         sentence_block = f"""
-SENTENCE TIMINGS (authoritative; from ElevenLabs character timestamps,
-aggregated to sentence start/end, relative to each segment's audio):
+SENTENCE TIMINGS (authoritative; from ElevenLabs character timestamps).
+Times are relative to each segment's audio. Each sentence may include
+words[] with text / start_seconds / end_seconds / offset_seconds
+(offset_seconds = seconds from that sentence's start_seconds).
+Prefer words[].offset_seconds for keyword onset cuts when present.
 {sentence_timings_json}
 """
 
@@ -934,15 +943,14 @@ Your task is to create ONE complete chapter plan:
 
 MODE RULES (CRITICAL — differ from rhythm chapter cuts):
 
-- Cut-Plan shot_min / shot_max are NOT used in this mode (LLM and Python).
-  Short keyword cuts around ~1s are allowed and often desirable.
-- Do NOT pad shots just to reach a minimum length.
-- Do NOT avoid a precise keyword cut because the resulting shot would be short.
-- Other chapter settings (preroll/postroll, head-trim, reuse ledger, vision)
-  may still apply later in Python — only shot length min/max are disabled.
 - Prefer precise word↔picture matches over long atmospheric holds when the VO
   names a concrete visual subject.
-{chapter_scope}{vision_rules}{ledger_block}
+- Obey SHOT / ASSET CONSTRAINTS below (incl. shot_min / shot_max) — Python
+  enforces them too. Prefer a keyword-true cut inside the allowed band; if a
+  precise onset would violate shot_min, keep the onset and extend the shot
+  forward until the next justified cut or VO end rather than showing the
+  subject early.
+{chapter_scope}{vision_rules}{ledger_block}{shot_constraints_text}
 KEYWORD / BUZZWORD SYNC (CRITICAL — do not show subjects early):
 
 - When the VO names a concrete visual subject — place, landmark, animal,
@@ -961,13 +969,12 @@ KEYWORD / BUZZWORD SYNC (CRITICAL — do not show subjects early):
   current spoken content; do not invent absolute seconds.
 - After the LAST keyword cut in a span: that picture may continue through
   remaining connective VO until the next keyword boundary or the true VO end.
-- Estimate keyword onset from SENTENCE TIMINGS + sentence text: place the
-  boundary with alignment \"mid_sentence\" and a sentence-relative
-  offset_seconds (seconds from that sentence's start_seconds). Prefer
-  offset_seconds over coarse position for keyword cuts.
+- Prefer WORD TIMINGS: for keyword cuts, set alignment \"mid_sentence\" and
+  offset_seconds from words[].offset_seconds of the spoken keyword (or the
+  first word of a multi-word place name). Fall back to text proportion only
+  when words[] is missing.
 - Example (interior keyword cut — NOT the final boundary):
-  sentence text \"… a roaring waterfall behind the pines …\",
-  sentence start_seconds=3.0, \"waterfall\" begins ~1.2s into the sentence →
+  words[] contains {{\"text\":\"waterfall\",\"offset_seconds\":1.2}} →
   boundary at that sentence_id with offset_seconds=1.2, position=\"middle\",
   alignment=\"mid_sentence\", and the following slot's asset shows a waterfall.
 
@@ -995,9 +1002,9 @@ NON-NEGOTIABLE EDITORIAL RULES:
 
 TIMING / BOUNDARY RULES:
 
-- Use SEGMENT TIMINGS + SENTENCE TIMINGS to place cuts. Sentence times are
-  precise (ElevenLabs-derived); word times are not listed — compute
-  offset_seconds inside the sentence from text proportion / spoken pacing.
+- Use SEGMENT TIMINGS + SENTENCE TIMINGS (with words[] when present).
+- Prefer words[].offset_seconds for keyword onset; fall back to text
+  proportion only when words[] is missing for that sentence.
 - Do NOT output absolute timeline seconds, timecodes, or frames.
 - TWO DIFFERENT FIELDS — do not mix them:
   - position = ONLY start|early|middle|late|end (coarse place in the sentence)
@@ -1030,9 +1037,9 @@ SLOT / ASSET RULES:
   (upgrade gap).
 - none: local_asset_id null AND coverage_gap_id + inline gap fields
   (required gap).
-- Prefer assets whose usable length covers the intended span when possible,
-  but NEVER skip a correct keyword match only because the clip is short.
-  Never assume freeze/tpad video-hold padding.
+- Prefer assets whose usable length covers the intended span when possible.
+  Never assume freeze/tpad video-hold padding. Obey shot_min/shot_max from
+  SHOT / ASSET CONSTRAINTS.
 - Opening slot (first) and closing slot (last): different assets from their
   immediate neighbor when both assigned; max usage + reuse distance apply.
 - narrative_function for first/last may be chapter_open / chapter_close.
@@ -1141,12 +1148,13 @@ FINAL VALIDATION BEFORE RETURNING JSON:
 - Boundaries chronological; first=VO start; last=VO end
 - Last boundary is sentence end (not a keyword mid_sentence)
 - Keyword picture cuts use mid_sentence + explicit offset_seconds at onset
+- Prefer words[].offset_seconds when words[] is present
 - No keyword picture starts before its spoken keyword
 - weak/none slots have coverage_gap_id + needed_visual + search_concepts
 - strong/acceptable slots have coverage_gap_id null
 - No absolute timeline seconds / frames
 - No video-hold assumptions
-- No shot_min / shot_max padding
+- Respect shot_min / shot_max from SHOT / ASSET CONSTRAINTS
 
 LOCKED SCRIPT:
 {locked_script_json}

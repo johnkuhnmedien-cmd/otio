@@ -49,7 +49,8 @@ CUT_PLAN_MODE_UNIFIED = "unified"
 CutPlanMode = Literal["legacy", "unified"]
 CUT_PLAN_MODE_CHOICES: tuple[str, ...] = (CUT_PLAN_MODE_LEGACY, CUT_PLAN_MODE_UNIFIED)
 
-# Unified-Stil: Rhythmus (shot_min/max) vs Keyword-Sync (Wort↔Bild, ohne shot_min/max).
+# Unified-Stil: Rhythmus vs Keyword-Sync (Wort↔Bild).
+# Beide Modi erhalten Word-Timestamps + Cut-Settings (inkl. shot_min/max).
 UNIFIED_CUT_STYLE_RHYTHM = "rhythm"
 UNIFIED_CUT_STYLE_KEYWORD_SYNC = "keyword_sync"
 UnifiedCutStyle = Literal["rhythm", "keyword_sync"]
@@ -69,7 +70,7 @@ class CutPlanOptions(BaseModel):
     schema_version: str = "1.4"
     # Phase 7: Unified (1 LLM) vs Legacy (Rough + Final).
     cut_plan_mode: CutPlanMode = CUT_PLAN_MODE_LEGACY
-    # Unified Stil: Rhythmus (Default) oder Keyword-Sync (ohne shot_min/max).
+    # Unified Stil: Rhythmus (Default) oder Keyword-Sync (Wort↔Bild).
     unified_cut_style: UnifiedCutStyle = UNIFIED_CUT_STYLE_RHYTHM
     # Phase 6: optionaler Mini-Repair nach Gap-Merge (Default aus).
     enable_unified_mini_repair: bool = False
@@ -178,7 +179,7 @@ def _normalize_unified_cut_style(value: Any, *, default: str) -> str:
 
 
 def is_keyword_sync_unified_style(options: CutPlanOptions | None) -> bool:
-    """True wenn Unified Keyword-Sync aktiv (shot_min/max aus LLM + Python)."""
+    """True wenn Unified Keyword-Sync aktiv (separater Prompt; Settings gelten)."""
     if options is None:
         return False
     return (

@@ -40,6 +40,7 @@ def test_build_unified_cut_prompt_contains_core_contract() -> None:
     assert "Plan ONLY the chapter \"Rocamadour\"" in prompt
     assert "Rocamadour_cut_000" in prompt
     assert "SENTENCE TIMINGS" in prompt
+    assert "words[]" in prompt
     assert "USED-IN LEDGER" in prompt
     assert "every 4th–6th" in prompt or "every 4th-6th" in prompt
     assert "medium: ~2–3s" in prompt or "medium: ~2-3s" in prompt
@@ -74,13 +75,24 @@ def test_build_keyword_sync_unified_cut_prompt_contract() -> None:
         folder_slug="Yosemite",
         previous_folder_name="Intro",
         next_folder_name="Caddo",
-        sentence_timings_json='[{"sentence_id":"Yosemite_segment_001__s001"}]',
+        sentence_timings_json=(
+            '[{"sentence_id":"Yosemite_segment_001__s001",'
+            '"words":[{"text":"waterfall","offset_seconds":1.2}]}]'
+        ),
+        shot_constraints_text=(
+            "SHOT / ASSET CONSTRAINTS:\n"
+            "- Aim for each visual shot to cover roughly 5.0s–8.0s\n"
+        ),
         used_in_ledger_text="asset_x\t1",
     )
     assert "KEYWORD-SYNC cut planner" in prompt
     assert "KEYWORD / BUZZWORD SYNC" in prompt
-    assert "shot_min / shot_max are NOT used" in prompt
+    assert "Obey SHOT / ASSET CONSTRAINTS" in prompt
+    assert "shot_min / shot_max are NOT used" not in prompt
+    assert "SHOT / ASSET CONSTRAINTS" in prompt
+    assert "5.0s–8.0s" in prompt or "5.0s-8.0s" in prompt
     assert "waterfall" in prompt
+    assert "words[]" in prompt
     assert "offset_seconds" in prompt
     assert "mid_sentence" in prompt
     assert "Plan ONLY the chapter \"Yosemite\"" in prompt
@@ -91,7 +103,6 @@ def test_build_keyword_sync_unified_cut_prompt_contract() -> None:
     # Rhythmus-Modus-Ziele bewusst nicht enthalten.
     assert "CUT RHYTHM TARGETS" not in prompt
     assert "10–17 seconds" not in prompt and "10-17 seconds" not in prompt
-    assert "SHOT/ASSET CONSTRAINTS" not in prompt
 
 
 def _sample_payload(*, folder_prefix: str = "") -> dict:

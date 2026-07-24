@@ -1901,6 +1901,9 @@ def generate_unified_cut_for_folder(
                     previous_folder_name=context.previous_folder_name,
                     next_folder_name=context.next_folder_name,
                     include_middle_frames=include_frames,
+                    shot_constraints_text=format_shot_constraints_for_prompt(
+                        options
+                    ),
                     sentence_timings_json=sentence_timings_json,
                     used_in_ledger_text=used_in_ledger_text,
                 )
