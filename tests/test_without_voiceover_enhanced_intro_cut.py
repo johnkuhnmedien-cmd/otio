@@ -9,6 +9,7 @@ from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
     clamp_intro_closing_hold,
     enforce_intro_strong_only,
     filter_resolved_timeline_to_intro,
+    format_bundled_inventory_for_prompt,
     merge_intro_and_body_plans,
     split_intro_from_unified,
 )
@@ -46,6 +47,41 @@ def _bound(cut_id: str, sentence_id: str, position: str = "start") -> CutBoundar
         position=position,  # type: ignore[arg-type]
         alignment="sentence_boundary",
     )
+
+
+def test_format_bundled_inventory_for_prompt_drops_duplicate_and_trims() -> None:
+    long_desc = "x" * 500
+    bundled = {
+        "schema_version": "enhanced-intro-bundled-inventory-v1",
+        "chapter_count": 1,
+        "asset_count": 1,
+        "chapters": {
+            "Yosemite": [
+                {
+                    "local_asset_id": "yo_01",
+                    "asset_id": "yo_01",
+                    "folder": "Yosemite",
+                    "file": "a.mp4",
+                    "media_type": "video",
+                    "duration_seconds": 12.0,
+                    "description": long_desc,
+                    "motion": "pan",
+                }
+            ]
+        },
+        "all_assets": [
+            {
+                "local_asset_id": "yo_01",
+                "description": long_desc,
+            }
+        ],
+    }
+    text = format_bundled_inventory_for_prompt(bundled)
+    assert "all_assets" not in text
+    assert "yo_01" in text
+    assert long_desc not in text
+    assert "..." in text
+    assert text.count("yo_01") == 1
 
 
 def test_intro_prompt_rules() -> None:

@@ -110,8 +110,74 @@ def build_bundled_inventory_for_intro(
         "chapter_count": len(chapters),
         "asset_count": len(all_assets),
         "chapters": chapters,
+        # Persistenz/Debug: flache Liste. Für LLM-Prompts bitte
+        # format_bundled_inventory_for_prompt() nutzen (ohne Duplikat).
         "all_assets": all_assets,
     }
+
+
+_INTRO_DESC_MAX_CHARS = 280
+
+
+def _slim_intro_asset_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Minimale Asset-Zeile für Intro-LLM (Kosten-/Disconnect-Schutz)."""
+    asset_id = str(row.get("local_asset_id") or row.get("asset_id") or "").strip()
+    out: dict[str, Any] = {
+        "local_asset_id": asset_id,
+        "folder": row.get("folder") or "",
+        "file": row.get("file") or "",
+        "media_type": row.get("media_type") or "",
+    }
+    if row.get("duration_seconds") is not None:
+        out["duration_seconds"] = row.get("duration_seconds")
+    desc = " ".join(str(row.get("description") or "").split())
+    if len(desc) > _INTRO_DESC_MAX_CHARS:
+        desc = desc[: _INTRO_DESC_MAX_CHARS - 3].rstrip() + "..."
+    if desc:
+        out["description"] = desc
+    for key in ("motion", "framing", "people"):
+        value = row.get(key)
+        if value not in (None, "", [], {}):
+            out[key] = value
+    return out
+
+
+def format_bundled_inventory_for_prompt(bundled: dict[str, Any] | None) -> str:
+    """Kompaktes Intro-Inventar für den LLM-Prompt.
+
+    - nur ``chapters`` (kein ``all_assets``-Duplikat)
+    - gekürzte Beschreibungen
+    - ohne Pretty-Print
+
+    Früherer Dump (chapters + all_assets, indent=2) konnte bei ~37 Kapiteln
+    leicht in den mehrstelligen Dollar-Bereich pro fehlgeschlagenem Call laufen.
+    """
+    import json
+
+    src = bundled or {}
+    raw_chapters = src.get("chapters") or {}
+    if not isinstance(raw_chapters, dict):
+        raw_chapters = {}
+    chapters: dict[str, list[dict[str, Any]]] = {}
+    asset_count = 0
+    for folder, rows in raw_chapters.items():
+        if not isinstance(rows, list):
+            continue
+        slim_rows = [
+            _slim_intro_asset_row(row)
+            for row in rows
+            if isinstance(row, dict) and (row.get("local_asset_id") or row.get("asset_id"))
+        ]
+        chapters[str(folder)] = slim_rows
+        asset_count += len(slim_rows)
+    payload = {
+        "schema_version": src.get("schema_version")
+        or "enhanced-intro-bundled-inventory-v1",
+        "chapter_count": len(chapters),
+        "asset_count": asset_count,
+        "chapters": chapters,
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _is_intro_id(value: str, *, slug: str) -> bool:

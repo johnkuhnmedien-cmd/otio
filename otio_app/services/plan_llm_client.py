@@ -727,6 +727,28 @@ def _build_anthropic_client(api_key: str, *, trust_env: bool):
     )
 
 
+def _anthropic_error_text(exc: BaseException) -> str:
+    parts = [str(exc)]
+    cause = exc.__cause__ or exc.__context__
+    if cause is not None:
+        parts.append(f"{type(cause).__name__}: {cause}")
+    return " ".join(parts).lower()
+
+
+def _is_anthropic_billed_disconnect(exc: BaseException) -> bool:
+    """Server hat Request angenommen und dann die Verbindung gekappt.
+
+    Typisch nach großen Prompts. Input-Tokens können bereits berechnet sein —
+    automatische Retries würden die Kosten multiplizieren.
+    """
+    text = _anthropic_error_text(exc)
+    return (
+        "disconnected without sending" in text
+        or "server disconnected" in text
+        or "remoteprotocolerror" in text
+    )
+
+
 def _format_anthropic_connection_error(exc: BaseException) -> str:
     cause = exc.__cause__ or exc.__context__
     detail = ""
@@ -734,13 +756,21 @@ def _format_anthropic_connection_error(exc: BaseException) -> str:
         detail = f" Ursache: {type(cause).__name__}: {cause}."
     elif str(exc).strip() and str(exc).strip().lower() != "connection error.":
         detail = f" Details: {exc}."
+    size_hint = ""
+    if _is_anthropic_billed_disconnect(exc):
+        size_hint = (
+            " Der Request wurde sehr wahrscheinlich schon auf Anthropic-Seite "
+            "angenommen — Input-Tokens können trotzdem berechnet werden, auch "
+            "ohne Antwort. Deshalb kein automatischer Retry (vermeidet "
+            "Mehrfach-Kosten). Intro-Prompt ggf. verkleinern / erneut mit "
+            "kompakterem Inventar versuchen."
+        )
     return (
         "Anthropic-Verbindung fehlgeschlagen (api.anthropic.com)."
-        f"{detail} "
+        f"{detail}{size_hint} "
         "Bitte prüfen: ANTHROPIC_API_KEY unter 🔑 API-Schlüssel, VPN/Proxy/"
         "Firewall, und ob https://api.anthropic.com vom gleichen Python "
-        "erreichbar ist (oft hilft: Proxy-Env HTTP(S)_PROXY prüfen oder "
-        "Streamlit neu starten)."
+        "erreichbar ist."
     )
 
 
@@ -788,8 +818,11 @@ def _generate_anthropic_text_with_usage(
         # Verfügung (siehe generate_plan_text_with_metadata()-Docstring).
         create_kwargs["thinking"] = {"type": "disabled"}
 
-    # Zuerst mit Env-Proxy (Normalfall), bei Connection-Error einmal ohne
-    # System-Proxy erneut — typisches macOS-/VPN-Proxy-Problem.
+    # Connection-Handling:
+    # 1) Normal mit Env-Proxy
+    # 2) Nur bei frühem Proxy-/Connect-Fail: einmal ohne System-Proxy
+    # 3) Bei "Server disconnected without sending a response" KEIN Retry —
+    #    Request war oft schon angenommen; Retry = erneute Input-Rechnung.
     last_connection_error: BaseException | None = None
     response = None
     for trust_env in (True, False):
@@ -799,6 +832,11 @@ def _generate_anthropic_text_with_usage(
             break
         except APIConnectionError as exc:
             last_connection_error = exc
+            if _is_anthropic_billed_disconnect(exc):
+                break
+            # Früher Connect-/Proxy-Fehler → ein zweiter Versuch ohne Env-Proxy.
+            if trust_env is False:
+                break
             continue
     if response is None:
         assert last_connection_error is not None

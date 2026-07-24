@@ -170,14 +170,14 @@ def test_require_sdk_module_returns_module_when_installed() -> None:
 def test_generate_plan_text_anthropic_retries_without_proxy_on_connection_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """„Connection error.“ oft durch kaputten System-Proxy — zweiter Versuch
-    mit trust_env=False muss durchkommen."""
+    """Früher Connect-/Proxy-Fail → zweiter Versuch mit trust_env=False."""
     import anthropic
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     block = MagicMock(type="text", text='{"beats":[]}')
     success = MagicMock(content=[block], stop_reason="end_turn")
     connection_error = anthropic.APIConnectionError(request=None)
+    connection_error.__cause__ = OSError("Network is unreachable")
 
     clients: list[MagicMock] = []
 
@@ -198,6 +198,28 @@ def test_generate_plan_text_anthropic_retries_without_proxy_on_connection_error(
 
     assert text == '{"beats":[]}'
     assert len(clients) == 2
+
+
+def test_generate_plan_text_anthropic_does_not_retry_billed_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Server disconnected after accept → kein Retry (sonst Mehrfach-Input-Kosten)."""
+    import anthropic
+    import httpx
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    connection_error = anthropic.APIConnectionError(request=None)
+    connection_error.__cause__ = httpx.RemoteProtocolError(
+        "Server disconnected without sending a response."
+    )
+
+    with patch("anthropic.Anthropic") as mock_anthropic:
+        mock_anthropic.return_value.messages.create.side_effect = connection_error
+        with pytest.raises(PlanLlmConnectionError, match="kein automatischer Retry") as exc_info:
+            generate_plan_text(prompt="x", model="anthropic:claude-sonnet-5")
+
+    assert "disconnected" in str(exc_info.value).lower()
+    assert mock_anthropic.call_count == 1
 
 
 def test_generate_plan_text_anthropic_connection_error_is_actionable(

@@ -1856,11 +1856,16 @@ def generate_unified_cut_for_folder(
                 float(seg.duration_seconds or 0.0)
                 for seg in context.timings_slice.segments
             )
+            from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+                format_bundled_inventory_for_prompt,
+            )
+
             prompt = build_intro_unified_cut_prompt(
-                locked_script_json=context.script_slice.model_dump_json(indent=2),
-                segment_timings_json=context.timings_slice.model_dump_json(indent=2),
-                bundled_inventory_json=json.dumps(
-                    bundled_inventory or {}, ensure_ascii=False, indent=2
+                # Kompakt: Intro-Prompt ist durch gebündeltes Inventar schon groß.
+                locked_script_json=context.script_slice.model_dump_json(),
+                segment_timings_json=context.timings_slice.model_dump_json(),
+                bundled_inventory_json=format_bundled_inventory_for_prompt(
+                    bundled_inventory
                 ),
                 style_profile_text=_style_text(project),
                 dramaturgy_text=dramaturgy_text,
@@ -1906,10 +1911,16 @@ def generate_unified_cut_for_folder(
                 raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
             )
         else:
+            # Intro/Unified: Thinking aus — sonst frisst Sonnet/Opus das
+            # Output-Budget (und die Rechnung) für internes Reasoning.
+            # Intro-Output bewusst begrenzt; Körper-Kapitel behalten Default.
+            max_out = 8_192 if is_intro else None
             raw_text = generate_plan_text_with_metadata(
                 prompt=prompt,
                 model=model_id,
                 images=images or None,
+                disable_thinking=True,
+                max_output_tokens=max_out,
             ).raw_text
 
         plan = parse_unified_cut_response(

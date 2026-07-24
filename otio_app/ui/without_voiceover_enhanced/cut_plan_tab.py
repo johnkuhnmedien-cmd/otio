@@ -228,6 +228,29 @@ def _estimate_final_cut_input_tokens(project) -> tuple[int, int]:
     return per_chapter, chapters
 
 
+def _estimate_intro_input_tokens(project) -> int:
+    """Grobe Input-Tokens für den echten Intro-Prompt (kompaktes Inventar)."""
+    from otio_app.services.voiceover_generation.llm_pricing import (
+        estimate_tokens_from_text,
+    )
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        build_bundled_inventory_for_intro,
+        format_bundled_inventory_for_prompt,
+    )
+
+    try:
+        bundled = build_bundled_inventory_for_intro(project)
+        inventory_json = format_bundled_inventory_for_prompt(bundled)
+    except Exception:  # noqa: BLE001
+        inventory_json = ""
+    return max(
+        800,
+        estimate_tokens_from_text(inventory_json)
+        + _estimate_path_tokens(script_locked_path(project))
+        + 2_500,  # timings + style + dramaturgy + prompt rules
+    )
+
+
 def _render_cost_caption(
     *,
     provider: str,
@@ -235,6 +258,8 @@ def _render_cost_caption(
     input_tokens: int,
     output_ceiling: int,
     chapter_count: int = 1,
+    scope_label: str = "Kapitel-Call(s)",
+    note: str = "",
 ) -> None:
     estimate = estimate_call_cost_usd(
         provider=provider,
@@ -247,18 +272,20 @@ def _render_cost_caption(
     total = estimate.total_ceiling_usd * chapter_count
     st.caption(
         f"**Kostenschätzung** ({estimate.price.label}) · "
-        f"{chapter_count} Kapitel-Call(s): "
-        f"Input ≈ {estimate.input_tokens:,} Tok/Kap. → "
+        f"{scope_label} · {chapter_count}× Call(s): "
+        f"Input ≈ {estimate.input_tokens:,} Tok/Call → "
         f"{format_usd(estimate.input_cost_usd)} × {chapter_count} = "
         f"{format_usd(total_input)} · "
-        f"Output-Worst-Case {estimate.output_tokens_ceiling:,} Tok/Kap. → "
+        f"Output-Worst-Case {estimate.output_tokens_ceiling:,} Tok/Call → "
         f"{format_usd(total_output)} · "
         f"**Summe-Ceiling ≈ {format_usd(total)}**"
     )
     st.caption(
-        "Hinweis: Abgerechnet werden nur tatsächlich erzeugte Tokens — "
-        "nicht automatisch das volle Output-Limit. "
-        "Lauf 2/3: ein LLM-Call pro Dramaturgie-Kapitel."
+        note
+        or (
+            "Hinweis: Abgerechnet werden nur tatsächlich erzeugte Tokens — "
+            "nicht automatisch das volle Output-Limit."
+        )
     )
 
 
@@ -272,6 +299,8 @@ def _render_enhanced_cut_model(
     input_tokens: int,
     default_output_tokens: int,
     chapter_count: int = 1,
+    cost_scope_label: str = "Kapitel-Call(s)",
+    cost_note: str = "",
 ) -> tuple[str, str, int]:
     settings = load_model_settings(project)
     role_settings: LlmRoleSettings = getattr(settings, role_attr)
@@ -312,6 +341,8 @@ def _render_enhanced_cut_model(
             input_tokens=input_tokens,
             output_ceiling=int(max_tokens),
             chapter_count=chapter_count,
+            scope_label=cost_scope_label,
+            note=cost_note,
         )
     return updated.provider, updated.model, int(max_tokens)
 
@@ -888,7 +919,13 @@ def _render_slim_status(project) -> None:
         )
 
 
-def _render_intro_cut_section(project, *, provider: str, model: str) -> None:
+def _render_intro_cut_section(
+    project,
+    *,
+    provider: str,
+    model: str,
+    output_ceiling: int = 8_192,
+) -> None:
     """Separater Intro-Pfad vor den Kapitel-Unified-Buttons."""
     st.markdown("##### 0. Intro Cut (separat)")
     st.caption(
@@ -896,6 +933,20 @@ def _render_intro_cut_section(project, *, provider: str, model: str) -> None:
         "ohne Cut-Plan shot_min. "
         "**Intro: Python Timing** rechnet nur das Intro neu (Gesamt-Timeline bleibt). "
         "**Intro-OTIO** exportiert ausschließlich Intro (auch mit Lücken)."
+    )
+    intro_tokens = _estimate_intro_input_tokens(project)
+    _render_cost_caption(
+        provider=provider,
+        model=model,
+        input_tokens=intro_tokens,
+        output_ceiling=min(int(output_ceiling), 8_192),
+        chapter_count=1,
+        scope_label="Intro-Call (1×, alle Kapitel-Inventare gebündelt)",
+        note=(
+            "Das ist die reale Intro-Rechnung (1 Call). Bei Verbindungsabbruch "
+            "nach Request-Annahme können Input-Tokens trotzdem berechnet werden — "
+            "deshalb kein automatischer Retry mehr."
+        ),
     )
     intro_basename = st.text_input(
         "Intro-OTIO Dateiname",
@@ -1025,7 +1076,7 @@ def _render_section_unified(project) -> None:
 
     body_chapters = [c for c in chapters if not is_intro_folder_name(c)]
     chapter_count = max(1, len(body_chapters))
-    rough_provider, rough_model, _rough_max = _render_enhanced_cut_model(
+    rough_provider, rough_model, rough_max = _render_enhanced_cut_model(
         project,
         role_attr="enhanced_rough_cut",
         label="Modell (Unified Cut)",
@@ -1034,9 +1085,17 @@ def _render_section_unified(project) -> None:
         input_tokens=_estimate_rough_cut_input_tokens(project)[0],
         default_output_tokens=_ROUGH_CUT_OUTPUT_DEFAULT,
         chapter_count=chapter_count,
+        cost_scope_label="Körper-Kapitel (Button unten, ohne Intro)",
+        cost_note=(
+            "Ceiling für alle Körper-Kapitel-Calls — nicht der Intro-Call. "
+            "Intro hat eine eigene Schätzung darunter."
+        ),
     )
     _render_intro_cut_section(
-        project, provider=rough_provider, model=rough_model
+        project,
+        provider=rough_provider,
+        model=rough_model,
+        output_ceiling=rough_max,
     )
     st.caption(
         f"Kapitel Schritt 1: **ein LLM-Call pro Kapitel** "
