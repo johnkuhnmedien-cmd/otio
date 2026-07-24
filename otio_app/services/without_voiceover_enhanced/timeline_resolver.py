@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -641,6 +642,7 @@ def _apply_chapter_envelopes(
     repairs: list[str],
     errors: list[str],
     narration_timeline: NarrationTimelineDocument | None = None,
+    include_chapter: Callable[[str], bool] | None = None,
 ) -> list[ResolvedChapterEnvelope]:
     """Kapitelhüllen: Vor-/Nachlauf am Opening/Closing-CONTENT-Shot.
 
@@ -649,8 +651,16 @@ def _apply_chapter_envelopes(
     - ``chapter_video_start(N+1) = chapter_video_end(N)`` (kein Bridge-Slot)
     - ``last_shot_id`` / ``postroll_hold_shot_id`` = letzter CONTENT-Shot
     - ``chapter_audio_end`` aus Audio-Segment-Ende (ceil), Start floor
+
+    ``include_chapter``: optional nur bestimmte Kapitel (z. B. Intro-only Resolve).
     """
     chapters = _chapters_from_locked(locked)
+    if include_chapter is not None:
+        chapters = [
+            (chapter_id, segment_ids)
+            for chapter_id, segment_ids in chapters
+            if include_chapter(chapter_id)
+        ]
     if not chapters:
         return []
 

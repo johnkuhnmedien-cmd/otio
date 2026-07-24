@@ -837,9 +837,10 @@ def _render_intro_cut_section(project, *, provider: str, model: str) -> None:
     """Separater Intro-Pfad vor den Kapitel-Unified-Buttons."""
     st.markdown("##### 0. Intro Cut (separat)")
     st.caption(
-        "Nur Intro: gebündelte Inventare · strong-only · Opening 4s / Closing 5–8s. "
-        "**Intro-OTIO exportiert ausschließlich Intro** (auch mit Lücken) — "
-        "nicht die Gesamt-Timeline. Gesamt-OTIO weiter unten unter „OTIO exportieren“."
+        "Nur Intro: gebündelte Inventare · strong-only · Opening 4s / Closing 5–8s · "
+        "ohne Cut-Plan shot_min. "
+        "**Intro: Python Timing** rechnet nur das Intro neu (Gesamt-Timeline bleibt). "
+        "**Intro-OTIO** exportiert ausschließlich Intro (auch mit Lücken)."
     )
     intro_basename = st.text_input(
         "Intro-OTIO Dateiname",
@@ -856,12 +857,12 @@ def _render_intro_cut_section(project, *, provider: str, model: str) -> None:
         )
     with col_b:
         run_intro_timing = st.button(
-            "Intro: aus Timeline filtern",
+            "Intro: Python Timing",
             key=f"enh_intro_cut_resolve_{project.id}",
             use_container_width=True,
             help=(
-                "Schneidet Intro aus der bestehenden resolved Timeline "
-                "(ändert die Gesamt-Timeline nicht)."
+                "Rechnet Intro aus dem Intro-Cut-Plan neu (ohne shot_min, "
+                "Opening 4s / Closing 5–8s). Gesamt-Timeline bleibt unverändert."
             ),
         )
     with col_c:
@@ -901,13 +902,13 @@ def _render_intro_cut_section(project, *, provider: str, model: str) -> None:
 
     if run_intro_timing:
         try:
-            with st.spinner("Intro aus Timeline filtern…"):
+            with st.spinner("Intro Python Timing…"):
                 resolved = resolve_intro_timeline(project)
             st.success(
-                f"Intro-Filter: {resolved.total_duration_seconds:.2f}s · "
+                f"Intro-Timing: {resolved.total_duration_seconds:.2f}s · "
                 f"{len(resolved.shots)} Shots · "
                 f"{len(resolved.audio_segments)} Audio "
-                "(Gesamt-Timeline unverändert)."
+                "(ohne shot_min · Gesamt-Timeline unverändert)."
             )
             for shot in resolved.shots[:12]:
                 st.caption(
@@ -922,7 +923,7 @@ def _render_intro_cut_section(project, *, provider: str, model: str) -> None:
         except IntroCutError as exc:
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
-            st.error(f"Intro-Filter-Fehler: {exc}")
+            st.error(f"Intro-Timing-Fehler: {exc}")
 
     if run_intro_otio:
         try:

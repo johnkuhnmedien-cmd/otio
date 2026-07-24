@@ -394,24 +394,53 @@ def resolve_intro_timeline(
     model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
 ) -> ResolvedTimelineDocument:
-    """Filtert Intro aus der bestehenden resolved Timeline — ohne Film neu aufzulösen.
+    """Intro-only Python Timing aus ``intro_unified_cut_plan.json``.
 
-    Die Gesamt-Timeline (``resolved_timeline.json``) bleibt unverändert.
+    Nutzt den Intro-Plan (ohne Cut-Plan shot_min), Opening 4s / Closing 5–8s.
+    Schreibt nur ``intro_resolved_timeline.json`` — die Gesamt-Timeline bleibt
+    unverändert.
     """
-    del provider, model, llm_callable  # API-Kompatibilität zur UI; kein Re-Resolve.
+    del provider, model, llm_callable  # API-Kompatibilität zur UI.
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        UnifiedTimelineError,
+        resolve_unified_timeline,
+    )
+
     assert_enhanced_work_root(project)
-    full = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
-    if full is None:
+    plan = load_model(intro_unified_cut_plan_path(project), UnifiedCutPlanDocument)
+    if plan is None or not plan.slots:
         raise IntroCutError(
-            "Gesamt-Timeline fehlt — zuerst Kapitel „Python Timing auflösen“, "
-            "dann Intro-OTIO (oder Intro-Filter) nutzen."
+            "Intro-Cut-Plan fehlt — zuerst „Intro: LLM Schnitt“."
         )
-    intro_resolved = filter_resolved_timeline_to_intro(full)
+    plan = enforce_intro_strong_only(plan)
+    postroll = clamp_intro_closing_hold(plan.voiceover_postroll_sec)
+    try:
+        resolved = resolve_unified_timeline(
+            project,
+            plan=plan,
+            allow_open_gaps=True,
+            persist=False,
+            include_chapter=is_intro_folder_name,
+            preroll_override=INTRO_OPENING_HOLD_SEC,
+            postroll_override=postroll,
+        )
+    except UnifiedTimelineError as exc:
+        raise IntroCutError(str(exc)) from exc
+
+    intro_resolved = filter_resolved_timeline_to_intro(resolved)
     if not intro_resolved.shots and not intro_resolved.audio_segments:
         raise IntroCutError(
-            "Kein Intro in der aufgelösten Timeline gefunden "
-            "(weder Kapitel „Intro“ noch Intro_*-Shots/Audio)."
+            "Intro-Timing lieferte keine Shots/Audio — Plan und Segment-Timings prüfen."
         )
+    # Explizite Intro-Hüllen (nicht Kapitel-Settings).
+    intro_resolved = intro_resolved.model_copy(
+        update={
+            "voiceover_preroll_sec": INTRO_OPENING_HOLD_SEC,
+            "voiceover_postroll_sec": postroll,
+            "errors": list(resolved.errors or []),
+            "repairs": list(resolved.repairs or []),
+        }
+    )
     write_json(intro_resolved_timeline_path(project), intro_resolved)
     return intro_resolved
 
@@ -581,21 +610,33 @@ def export_intro_otio(
     """Separater OTIO-Export nur für Intro — lässt die Gesamt-Timeline unangetastet.
 
     Standard ``allow_errors=True``: Lücken/Placeholders im Intro sind ok.
+    Bevorzugt ``intro_resolved_timeline.json`` (Intro Python Timing); fällt sonst
+    auf Filter aus der Gesamt-Timeline zurück.
     """
     assert_enhanced_work_root(project)
-    # Immer frisch aus der aktuellen Gesamt-Timeline filtern (nie Film-Datei überschreiben).
-    full = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
-    if full is None:
-        raise EnhancedOtioExportError(
-            "Gesamt-Timeline fehlt — zuerst „Python Timing auflösen“."
-        )
-    intro_resolved = filter_resolved_timeline_to_intro(full)
+    intro_resolved = load_model(
+        intro_resolved_timeline_path(project), ResolvedTimelineDocument
+    )
+    if intro_resolved is None or (
+        not intro_resolved.shots and not intro_resolved.audio_segments
+    ):
+        # Frisches Intro-Timing, wenn Plan vorhanden.
+        try:
+            intro_resolved = resolve_intro_timeline(project)
+        except IntroCutError:
+            full = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
+            if full is None:
+                raise EnhancedOtioExportError(
+                    "Intro-Timeline fehlt — zuerst „Intro: Python Timing“ "
+                    "(oder Gesamt-„Python Timing auflösen“)."
+                ) from None
+            intro_resolved = filter_resolved_timeline_to_intro(full)
+            write_json(intro_resolved_timeline_path(project), intro_resolved)
     if not intro_resolved.shots and not intro_resolved.audio_segments:
         raise EnhancedOtioExportError(
             "Kein Intro in der Timeline — weder Kapitel „Intro“ noch "
             "Intro_*-Shots/Audio gefunden."
         )
-    write_json(intro_resolved_timeline_path(project), intro_resolved)
 
     shot_ids = {s.shot_id for s in intro_resolved.shots}
     audio_ids = {a.segment_id for a in intro_resolved.audio_segments}

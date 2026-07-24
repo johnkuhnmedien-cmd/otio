@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -835,11 +836,17 @@ def resolve_unified_timeline(
     *,
     allow_open_gaps: bool = True,
     persist: bool = True,
+    include_chapter: Callable[[str], bool] | None = None,
+    preroll_override: float | None = None,
+    postroll_override: float | None = None,
 ) -> ResolvedTimelineDocument:
     """UnifiedCutPlan → ResolvedTimelineDocument (+ Kompat-Schatten).
 
     ``allow_open_gaps=True`` (Phase 3→4): none-Slots ohne Asset bleiben als
     Platzhalter erhalten. ``False``: offene none-Slots sind Fehler (Produktion).
+
+    ``include_chapter`` / ``preroll_override`` / ``postroll_override``:
+    Intro-only Resolve ohne Gesamt-Timeline zu schreiben.
     """
     locked = require_locked_script(project)
     if plan is None:
@@ -859,13 +866,25 @@ def resolve_unified_timeline(
     errors.extend(catalog.collisions)
 
     sentence_index = sentence_index_by_id(load_segment_alignments(project))
+    segment_to_chapter = _segment_to_chapter_map(locked)
+    timing_segments = list(timings.segments)
+    if include_chapter is not None:
+        timing_segments = [
+            item
+            for item in timing_segments
+            if include_chapter(segment_to_chapter.get(item.segment_id, ""))
+            or include_chapter(item.segment_id)
+        ]
+        if not timing_segments:
+            raise UnifiedTimelineError(
+                "Keine Segment-Timings für den gewählten Kapitel-Filter."
+            )
     timeline = build_narration_timeline(
         script_version=locked.script_version,
-        segment_timings=list(timings.segments),
+        segment_timings=timing_segments,
         pause_directives=list(plan.pause_directives),
         sentence_index=sentence_index,
     )
-    segment_to_chapter = _segment_to_chapter_map(locked)
 
     # Ziel-Dauer in Slots nachziehen (Funnel-Dauerfilter, Phase 4).
     timed_slots = resolve_timed_slots(
@@ -887,16 +906,22 @@ def resolve_unified_timeline(
     )
     rough_shadow, coverage_shadow = unified_to_rough(plan)
 
-    preroll = resolve_timing_seconds(
-        mode=options.voiceover_preroll_mode,
-        setting_max=options.voiceover_preroll_sec,
-        llm_value=plan.voiceover_preroll_sec,
-    )
-    postroll = resolve_timing_seconds(
-        mode=options.voiceover_postroll_mode,
-        setting_max=options.voiceover_postroll_sec,
-        llm_value=plan.voiceover_postroll_sec,
-    )
+    if preroll_override is not None:
+        preroll = max(0.0, float(preroll_override))
+    else:
+        preroll = resolve_timing_seconds(
+            mode=options.voiceover_preroll_mode,
+            setting_max=options.voiceover_preroll_sec,
+            llm_value=plan.voiceover_preroll_sec,
+        )
+    if postroll_override is not None:
+        postroll = max(0.0, float(postroll_override))
+    else:
+        postroll = resolve_timing_seconds(
+            mode=options.voiceover_postroll_mode,
+            setting_max=options.voiceover_postroll_sec,
+            llm_value=plan.voiceover_postroll_sec,
+        )
 
     timing_map = {item.segment_id: item for item in timings.segments}
     audio_segments = _build_resolved_audio_segments(
@@ -1059,6 +1084,7 @@ def resolve_unified_timeline(
         repairs=repairs,
         errors=errors,
         narration_timeline=timeline,
+        include_chapter=include_chapter,
     )
     # Platzhalter ohne Medien: Vor-/Nachlauf-Hold-Fehler sind soft bei open gaps.
     if allow_open_gaps:

@@ -130,6 +130,145 @@ def test_split_and_merge_intro_body() -> None:
     assert len(split_body.slots) == 1
 
 
+def test_resolve_intro_timeline_requires_intro_plan(tmp_path) -> None:
+    from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+    from otio_app.models import Project, ProjectMode
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        IntroCutError,
+        resolve_intro_timeline,
+    )
+
+    root = tmp_path / "proj"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    project = Project(
+        name="IntroTiming",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="de",
+        asset_subdir_names=["Yosemite"],
+        selected_asset_subdirs=["Yosemite"],
+        fps=25.0,
+    )
+    try:
+        resolve_intro_timeline(project)
+        raise AssertionError("expected IntroCutError")
+    except IntroCutError as exc:
+        assert "Intro-Cut-Plan fehlt" in str(exc)
+
+
+def test_resolve_intro_timeline_calls_unified_without_persist(tmp_path) -> None:
+    from unittest.mock import patch
+
+    from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+    from otio_app.models import Project, ProjectMode
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        INTRO_OPENING_HOLD_SEC,
+        intro_resolved_timeline_path,
+        intro_unified_cut_plan_path,
+        resolve_intro_timeline,
+    )
+    from otio_app.services.without_voiceover_enhanced.io_utils import write_json
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        resolved_timeline_path,
+    )
+
+    root = tmp_path / "proj"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    project = Project(
+        name="IntroTiming",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="de",
+        asset_subdir_names=["Yosemite"],
+        selected_asset_subdirs=["Yosemite"],
+        fps=25.0,
+    )
+    intro_plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            _bound("Intro_cut_000", "Intro_segment_001__s001", "start"),
+            _bound("Intro_cut_001", "Intro_segment_001__s001", "end"),
+        ],
+        slots=[_slot("Intro_slot_001", "strong", "yo_01")],
+        voiceover_preroll_sec=4.0,
+        voiceover_postroll_sec=6.5,
+    )
+    write_json(intro_unified_cut_plan_path(project), intro_plan)
+
+    fake = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=12.0,
+        audio_segments=[
+            ResolvedAudioSegment(
+                segment_id="Intro_segment_001",
+                audio_path="/tmp/intro.wav",
+                timeline_start_seconds=4.0,
+                timeline_end_seconds=10.0,
+            )
+        ],
+        shots=[
+            ResolvedShot(
+                shot_id="Intro_slot_001",
+                asset_id="yo_01",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=12.0,
+                source_start_seconds=0.0,
+                source_end_seconds=1.0,
+                folder_name="Intro",
+                chapter_id="Intro",
+            )
+        ],
+        chapters=[
+            ResolvedChapterEnvelope(
+                chapter_id="Intro",
+                folder_name="Intro",
+                chapter_video_start=0.0,
+                chapter_audio_start=4.0,
+                chapter_audio_end=10.0,
+                chapter_video_end=12.0,
+                preroll_seconds=4.0,
+                postroll_seconds=6.5,
+                first_shot_id="Intro_slot_001",
+                last_shot_id="Intro_slot_001",
+                segment_ids=["Intro_segment_001"],
+            )
+        ],
+        voiceover_preroll_sec=4.0,
+        voiceover_postroll_sec=6.5,
+    )
+    captured: dict = {}
+
+    def _fake_resolve(project, plan=None, **kwargs):
+        captured["persist"] = kwargs.get("persist")
+        captured["preroll_override"] = kwargs.get("preroll_override")
+        captured["postroll_override"] = kwargs.get("postroll_override")
+        captured["include_chapter"] = kwargs.get("include_chapter")
+        captured["plan_slots"] = len(plan.slots) if plan else 0
+        return fake
+
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.unified_timeline_service.resolve_unified_timeline",
+        _fake_resolve,
+    ):
+        out = resolve_intro_timeline(project)
+
+    assert captured["persist"] is False
+    assert captured["preroll_override"] == INTRO_OPENING_HOLD_SEC
+    assert captured["postroll_override"] == 6.5
+    assert captured["include_chapter"] is not None
+    assert captured["include_chapter"]("Intro")
+    assert not captured["include_chapter"]("Yosemite")
+    assert captured["plan_slots"] == 1
+    assert out.total_duration_seconds == 12.0
+    assert intro_resolved_timeline_path(project).is_file()
+    assert not resolved_timeline_path(project).exists()
+
+
 def test_export_intro_otio_does_not_rewrite_full_timeline(tmp_path) -> None:
     """Regression: Intro-Export darf resolved_timeline.json nicht überschreiben."""
     from pathlib import Path
