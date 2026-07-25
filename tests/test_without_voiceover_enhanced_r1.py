@@ -219,6 +219,107 @@ def test_disabled_providers_never_called(tmp_path: Path) -> None:
     assert candidates
 
 
+def test_stock_search_only_queries_open_gaps(tmp_path: Path) -> None:
+    """„Stock suchen“ darf erfüllte Gaps nicht erneut abfragen."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        AcceptedSupplementsDocument,
+    )
+
+    project = _enhanced_project(tmp_path)
+    _lock_minimal(project)
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            cut_plan_run_id="run_open_only",
+            gaps=[
+                CoverageGap(
+                    gap_id="gap_filled",
+                    related_shot_ids=["shot_001"],
+                    subject="Filled place",
+                    search_queries=["already filled place"],
+                    search_concepts=["already filled place"],
+                ),
+                CoverageGap(
+                    gap_id="gap_open",
+                    related_shot_ids=["shot_002"],
+                    subject="Open place",
+                    search_queries=["still open place"],
+                    search_concepts=["still open place"],
+                ),
+            ],
+        ),
+    )
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version="script-v1",
+            supplements=[
+                StockCandidate(
+                    candidate_id="cand_filled",
+                    provider="wikimedia",
+                    gap_id="gap_filled",
+                    media_validation_status="export_ready",
+                    cut_plan_run_id="run_open_only",
+                    local_media_path="/tmp/filled.jpg",
+                )
+            ],
+        ),
+    )
+    write_json(
+        stock_search_results_path(project),
+        StockSearchResultsDocument(
+            script_version="script-v1",
+            candidates=[
+                StockCandidate(
+                    candidate_id="stock_old_filled",
+                    provider="wikimedia",
+                    gap_id="gap_filled",
+                    title="keep me",
+                )
+            ],
+        ),
+    )
+    save_stock_providers_config(
+        project,
+        {
+            "pexels": False,
+            "pixabay": False,
+            "wikimedia": True,
+            "openverse": False,
+            "archive_org": False,
+        },
+    )
+
+    searched_queries: list[str] = []
+
+    class TrackingWiki(MockStockProvider):
+        provider_name = "wikimedia"
+
+        def search(self, query: str, media_type: str | None = None):
+            searched_queries.append(query)
+            return [
+                StockCandidate(
+                    candidate_id=f"stock_new_{len(searched_queries)}",
+                    provider="wikimedia",
+                    title=f"Hit {query}",
+                    media_type=media_type or "photo",
+                )
+            ]
+
+    results = search_supplements_for_gaps(
+        project,
+        providers=[TrackingWiki()],
+        only_open=True,
+    )
+    assert searched_queries
+    assert not any("already filled" in q.lower() for q in searched_queries)
+    assert any("still open" in q.lower() for q in searched_queries)
+    assert any(c.gap_id == "gap_open" for c in results.candidates)
+    assert any(c.candidate_id == "stock_old_filled" for c in results.candidates)
+    assert "Nur offene Gaps gesucht (1)" in (results.message or "")
+
+
 def test_all_providers_disabled_no_error_preserves_history(tmp_path: Path) -> None:
     project = _enhanced_project(tmp_path)
     _lock_minimal(project)
