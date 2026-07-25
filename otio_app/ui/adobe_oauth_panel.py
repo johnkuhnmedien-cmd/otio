@@ -132,8 +132,13 @@ def render_adobe_oauth_panel(*, key_prefix: str = "adobe_oauth") -> None:
             else:
                 from otio_app.defaults import (
                     ADOBE_STOCK_LICENSE_TYPE_STANDARD,
+                    ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K,
                     ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD,
+                    ADOBE_STOCK_MEDIA_TYPE_ID_VIDEO,
                     ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT,
+                )
+                from otio_app.services.supplement_sources.adobe_stock import (
+                    classify_adobe_url,
                 )
 
                 adapter = AdobeStockAdapter()
@@ -151,40 +156,77 @@ def render_adobe_oauth_panel(*, key_prefix: str = "adobe_oauth") -> None:
                     )
                     return adapter._summarize_member_profile(payload)
 
-                st.write("**Member/Profile Standard**")
-                st.json(_profile(ADOBE_STOCK_LICENSE_TYPE_STANDARD))
+                def _redact_purchase(details: dict) -> dict:
+                    out = dict(details or {})
+                    url = str(out.pop("url", "") or "")
+                    if url:
+                        out["url_class"] = classify_adobe_url(url)
+                        out["has_download_url"] = bool(url)
+                    return out
+
+                media_kind = "unknown"
+                if cid:
+                    try:
+                        meta = adapter.lookup_file_metadata(cid, api_key)
+                        mid = int(meta.get("media_type_id") or 0)
+                        ctype = str(meta.get("content_type") or "").lower()
+                        if mid == ADOBE_STOCK_MEDIA_TYPE_ID_VIDEO or ctype.startswith("video/"):
+                            media_kind = "video"
+                        elif ctype.startswith("image/"):
+                            media_kind = "image"
+                        st.write("**Files-Metadaten**")
+                        st.json(
+                            {
+                                "media_type_id": meta.get("media_type_id"),
+                                "content_type": meta.get("content_type"),
+                                "duration": meta.get("duration"),
+                                "detected": media_kind,
+                            }
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        st.caption(f"Files-Metadaten: {exc}")
+
+                if media_kind != "video":
+                    st.write("**Member/Profile Standard**")
+                    st.json(_profile(ADOBE_STOCK_LICENSE_TYPE_STANDARD))
+                else:
+                    st.caption(
+                        "Video erkannt — Standard-Lizenz wird übersprungen "
+                        "(würde HTTP 400 „does not match type of content“ erzeugen)."
+                    )
                 st.write("**Member/Profile Video_HD**")
                 st.json(_profile(ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD))
+                if media_kind == "video":
+                    st.write("**Member/Profile Video_4K**")
+                    st.json(_profile(ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K))
                 if cid:
-                    from otio_app.services.supplement_sources.adobe_stock import (
-                        classify_adobe_url,
-                    )
-
-                    def _redact_purchase(details: dict) -> dict:
-                        out = dict(details or {})
-                        url = str(out.pop("url", "") or "")
-                        if url:
-                            out["url_class"] = classify_adobe_url(url)
-                            out["has_download_url"] = bool(url)
-                        return out
-
-                    info4k = adapter.content_info_purchase(
-                        cid, "Video_4K", api_key, token, soft=True
-                    )
-                    info_hd = adapter.content_info_purchase(
-                        cid, "Video_HD", api_key, token, soft=True
-                    )
+                    if media_kind != "image":
+                        info4k = adapter.content_info_purchase(
+                            cid, "Video_4K", api_key, token, soft=True
+                        )
+                        info_hd = adapter.content_info_purchase(
+                            cid, "Video_HD", api_key, token, soft=True
+                        )
+                        st.write("**Content/Info Video_4K** (URL redigiert)")
+                        st.json(_redact_purchase(info4k))
+                        st.write("**Content/Info Video_HD** (URL redigiert)")
+                        st.json(_redact_purchase(info_hd))
+                    if media_kind != "video":
+                        info_std = adapter.content_info_purchase(
+                            cid, "Standard", api_key, token, soft=True
+                        )
+                        st.write("**Content/Info Standard** (URL redigiert)")
+                        st.json(_redact_purchase(info_std))
                     history = adapter.find_license_history_download(cid, api_key, token)
-                    st.write("**Content/Info Video_4K** (URL redigiert)")
-                    st.json(_redact_purchase(info4k))
-                    st.write("**Content/Info Video_HD** (URL redigiert)")
-                    st.json(_redact_purchase(info_hd))
-                    st.write("**LicenseHistory-Treffer** (nur Diagnose, nicht Import-Hot-Path)")
+                    st.write(
+                        "**LicenseHistory-Treffer** "
+                        "(Import nutzt Batch-Index für Direkt-Download bei purchased)"
+                    )
                     st.json(_redact_purchase(history) if history else {"found": False})
                     st.caption(
-                        "Erwartung nach Browser-Lizenz: Content/Info `state=purchased` "
-                        "und `url_class=download` (nicht `watermarked`). "
-                        "LicenseHistory nur manuell hier — nicht pro Asset im Import."
+                        "Erwartung nach Browser-Lizenz: History oder Content/Info "
+                        "`state=purchased` und `url_class=download`. "
+                        "Import lädt dann direkt — ohne erneuten Content/License-Kauf."
                     )
                     st.write("**Request-Zähler (diese Diagnose)**")
                     st.json(adapter.request_counters.as_dict())

@@ -16,6 +16,7 @@ from otio_app.defaults import (
     ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
     ADOBE_STOCK_FILES_ENDPOINT,
     ADOBE_STOCK_LICENSE_ENDPOINT,
+    ADOBE_STOCK_LICENSE_HISTORY_ENDPOINT,
 )
 from otio_app.services.adobe_download_projects import AdobeDownloadProject
 from otio_app.services.adobe_research_import import (
@@ -220,6 +221,8 @@ def test_apptest_route_start_runs_real_job(tmp_path: Path, monkeypatch: pytest.M
                     }
                 ).encode()
             )
+        if ADOBE_STOCK_LICENSE_HISTORY_ENDPOINT in url:
+            return _FakeHTTPResponse(json.dumps({"nb_results": 0, "files": []}).encode())
         if host == "stock.adobe.io" and "/Download/" in url:
             raise _HTTPError(
                 302,
@@ -277,5 +280,5 @@ def test_apptest_route_start_runs_real_job(tmp_path: Path, monkeypatch: pytest.M
     assert final.status == JobStatus.COMPLETED, final.error or final.message
     assert final.result is not None
     assert final.result.downloaded >= 1
-    assert final.result.diagnostics["request_counters"]["license_history"] == 0
+    assert final.result.diagnostics["request_counters"]["license_history_pages"] <= 5
     assert list(media.rglob("*.mp4")), "keine lokale MP4 nach Job"

@@ -282,6 +282,8 @@ def test_batch_stops_on_content_info_429(
             )[0]
             assert cid != "1017"
             return _FakeHTTPResponse(_license_body(cid))
+        if ADOBE_STOCK_LICENSE_HISTORY_ENDPOINT in url:
+            return _FakeHTTPResponse(json.dumps({"nb_results": 0, "files": []}).encode())
         return _FakeHTTPResponse(fixture)
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
@@ -310,7 +312,8 @@ def test_batch_stops_on_content_info_429(
     )
     assert result.downloaded == 17
     assert result.diagnostics["batch_stop_reason"] == "adobe_rate_limited"
-    assert result.diagnostics["request_counters"]["license_history"] == 0
+    # Batch-History-Index (≤5 Seiten) ist erlaubt; kein per-Asset-Vollscan.
+    assert result.diagnostics["request_counters"]["license_history_pages"] <= 5
     # kein License für Asset 18
     assert all("1017" not in str(e.get("content_id", "")) for e in result.diagnostics.get("recent_requests", []) if e.get("endpoint") == "Content/License") or True
     err = " ".join(i.message for i in result.items if i.status == "error")

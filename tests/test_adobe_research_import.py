@@ -450,16 +450,18 @@ def test_already_licensed_uses_content_info_url(
     assert path.suffix == ".mp4"
 
 
-def test_import_hot_path_does_not_call_license_history(
+def test_import_hot_path_skips_per_asset_history_when_not_purchased(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """DIAG-002: normaler Import paginiert Member/LicenseHistory nicht."""
+    """Ohne History-Treffer und not_purchased: Info → License, kein per-Asset-History."""
     from otio_app.services import adobe_research_import as mod
 
     _disable_import_pauses(monkeypatch, mod)
     order: list[str] = []
 
     class _Adapter:
+        request_counters = type("C", (), {"already_licensed": 0})()
+
         def lookup_file_metadata(self, content_id, api_key):
             return {"media_type_id": 4, "content_type": "video/mp4"}
 
@@ -469,7 +471,7 @@ def test_import_hot_path_does_not_call_license_history(
 
         def find_license_history_download(self, *_a, **_k):
             order.append("history")
-            raise AssertionError("LicenseHistory darf nicht im Import-Hot-Path liegen")
+            raise AssertionError("per-Asset-History nur bei purchased ohne URL")
 
         def _license_asset(self, content_id, license_type, api_key, access_token, *, diagnose=True):
             order.append(f"license:{license_type}")
@@ -492,12 +494,114 @@ def test_import_hot_path_does_not_call_license_history(
         media_type="video",
         destination=tmp_path / "no-hist",
         media_hint="video",
+        history_purchase=None,
     )
     assert "history" not in order
     assert order[0] == "info"
     assert any(x.startswith("license:") for x in order)
     assert license_type.startswith("Video_4K")
     assert path.is_file()
+
+
+def test_already_licensed_history_skips_content_license(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Browser-Lizenz: History-URL → Direkt-Download, kein Content/License."""
+    from otio_app.services import adobe_research_import as mod
+    from otio_app.services.supplement_sources.adobe_stock import AdobeRequestCounters
+
+    _disable_import_pauses(monkeypatch, mod)
+    order: list[str] = []
+
+    class _Adapter:
+        def __init__(self):
+            self.request_counters = AdobeRequestCounters()
+
+        def lookup_file_metadata(self, content_id, api_key):
+            order.append("files")
+            return {"media_type_id": 4, "content_type": "video/quicktime", "duration": 38000}
+
+        def content_info_purchase(self, *_a, **_k):
+            order.append("info")
+            raise AssertionError("Content/Info nicht nötig bei History-Treffer")
+
+        def _license_asset(self, *_a, **_k):
+            order.append("license")
+            raise AssertionError("Content/License nicht bei bereits lizenziert")
+
+        def _stream_download_to_file(self, url, local_path, *, api_key, access_token, size, max_bytes):
+            order.append("download")
+            local_path.write_bytes(b"x" * 200_000)
+
+    monkeypatch.setattr(mod, "get_api_key", lambda key: "x")
+    monkeypatch.setattr(mod, "get_adobe_access_token", lambda: "tok")
+    hist = {
+        "state": "purchased",
+        "license": "Video_4K",
+        "url": "https://stock.adobe.com/Rest/Libraries/Download/644202290/4",
+        "content_type": "video/quicktime",
+    }
+    path, used = mod._license_and_download_to_path(
+        _Adapter(),
+        content_id="644202290",
+        media_type="image",  # falscher Hint — Files API korrigiert
+        destination=tmp_path / "already",
+        media_hint="image",
+        history_purchase=hist,
+    )
+    assert path.is_file()
+    assert "license" not in order
+    assert "info" not in order
+    assert "download" in order
+    assert used.startswith("Video_4K")
+
+
+def test_video_never_tries_standard_license(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services import adobe_research_import as mod
+
+    _disable_import_pauses(monkeypatch, mod)
+    licenses: list[str] = []
+
+    class _Adapter:
+        request_counters = type("C", (), {"already_licensed": 0})()
+
+        def lookup_file_metadata(self, content_id, api_key):
+            return {"media_type_id": 4, "content_type": "video/mp4"}
+
+        def content_info_purchase(self, content_id, license_type, *_a, **_k):
+            licenses.append(f"info:{license_type}")
+            return {"state": "not_purchased"}
+
+        def find_license_history_download(self, *_a, **_k):
+            return None
+
+        def _license_asset(self, content_id, license_type, api_key, access_token, *, diagnose=True):
+            licenses.append(f"license:{license_type}")
+            if license_type == "Video_4K":
+                raise RuntimeError('The license "Video_4K" does not match type of content')
+            return {
+                "state": "just_purchased",
+                "license": license_type,
+                "url": f"https://stock.adobe.com/Rest/Libraries/Download/{content_id}/4",
+                "content_type": "video/mp4",
+            }
+
+        def _stream_download_to_file(self, url, local_path, *, api_key, access_token, size, max_bytes):
+            local_path.write_bytes(b"x" * 200_000)
+
+    monkeypatch.setattr(mod, "get_api_key", lambda key: "x")
+    monkeypatch.setattr(mod, "get_adobe_access_token", lambda: "tok")
+    path, _ = mod._license_and_download_to_path(
+        _Adapter(),
+        content_id="644202290",
+        media_type="video",
+        destination=tmp_path / "nostd",
+        media_hint="video",
+    )
+    assert path.is_file()
+    assert not any("Standard" in x for x in licenses)
 
 
 def test_4k_too_large_falls_back_via_content_license(
@@ -651,7 +755,14 @@ def test_download_respects_should_stop(tmp_path: Path, monkeypatch: pytest.Monke
     calls = {"n": 0}
 
     def fake_license_and_download(
-        adapter, *, content_id, media_type, destination, media_hint="", phase_callback=None
+        adapter,
+        *,
+        content_id,
+        media_type,
+        destination,
+        media_hint="",
+        phase_callback=None,
+        history_purchase=None,
     ):
         calls["n"] += 1
         path = destination.with_suffix(".mp4")

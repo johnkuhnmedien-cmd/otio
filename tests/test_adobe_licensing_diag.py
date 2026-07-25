@@ -374,7 +374,7 @@ def test_seventeen_ok_then_429_classified(
                 raise _HTTPError(429, headers={"Retry-After": "0", "X-Request-Id": "burst"})
             return _FakeHTTPResponse(_license_body(cid))
         if ADOBE_STOCK_LICENSE_HISTORY_ENDPOINT in url:
-            raise AssertionError("History im Batch-Hot-Path")
+            return _FakeHTTPResponse(json.dumps({"nb_results": 0, "files": []}).encode())
         return _FakeHTTPResponse(b"x" * 200_000)
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
@@ -408,7 +408,8 @@ def test_seventeen_ok_then_429_classified(
     assert "Entitlement-Mismatch" not in err_msgs
     assert "cct_pro_unlimited_images" not in err_msgs or "adobe_rate_limited" in err_msgs
     counters = result.diagnostics["request_counters"]
-    assert counters["license_history"] == 0
+    # Batch-History-Index (≤5 Seiten) für Direkt-Download bereits Lizenzierter.
+    assert counters["license_history_pages"] <= 5
     assert counters["http_429"] >= 1
     assert counters["licensed_ok"] == 17
 
@@ -724,7 +725,16 @@ def test_oauth_refresh_same_sub_allowed(
         lambda self: _Ready(),
     )
 
-    def fake_license(adapter, *, content_id, media_type, destination, media_hint="", phase_callback=None):
+    def fake_license(
+        adapter,
+        *,
+        content_id,
+        media_type,
+        destination,
+        media_hint="",
+        phase_callback=None,
+        history_purchase=None,
+    ):
         # Simuliere einmal 401→Refresh-Pfad indirekt: nur Download
         path = destination.with_suffix(".mp4")
         path.write_bytes(b"x" * 200_000)

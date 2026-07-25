@@ -601,8 +601,7 @@ def _next_asset_index(folder: Path) -> int:
 
 
 def _media_type_from_file_meta(meta: dict, *, hint: str = "") -> str:
-    if hint in {"video", "image"}:
-        return hint
+    """Medientyp: Files-API hat Vorrang vor Excel-Hint (verhindert Standard-auf-Video)."""
     media_type_id = meta.get("media_type_id")
     try:
         media_type_id_i = int(media_type_id) if media_type_id is not None else 0
@@ -615,15 +614,37 @@ def _media_type_from_file_meta(meta: dict, *, hint: str = "") -> str:
     if media_type_id_i == ADOBE_STOCK_MEDIA_TYPE_ID_PHOTO:
         return "image"
     content_type = str(meta.get("content_type") or "").lower()
-    if content_type.startswith("video/"):
+    if content_type.startswith("video/") or "quicktime" in content_type:
         return "video"
     if content_type.startswith("image/"):
         return "image"
+    try:
+        duration = float(meta.get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    if duration > 0:
+        return "video"
+    if hint in {"video", "image"}:
+        return hint
     return "video"
+
+
+def _download_size_for_license(license_type: str, media_type: str) -> tuple[int | None, int | None]:
+    """(size Query-Param, max_bytes) für Download nach Lizenztyp."""
+    if media_type != "video":
+        return None, None
+    if license_type == ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K:
+        return 2160, ADOBE_STOCK_VIDEO_4K_MAX_BYTES
+    if license_type == ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD:
+        return 1080, None
+    # Unbekannte Video-Lizenz (History): HD-Rendition anfordern.
+    return 1080, None
 
 
 def _extension_for_purchase(purchase: dict, media_type: str) -> str:
     content_type = str(purchase.get("content_type") or "").lower()
+    if "quicktime" in content_type or content_type.endswith("/mov"):
+        return ".mov"
     if "video" in content_type:
         return ".mp4"
     if "png" in content_type:
@@ -740,14 +761,15 @@ def _license_and_download_to_path(
     destination: Path,
     media_hint: str = "",
     phase_callback: Callable[[str], None] | None = None,
+    history_purchase: dict | None = None,
 ) -> tuple[Path, str]:
-    """Lizenziert/lädt eine Content-ID — Hot-Path ohne LicenseHistory-Vollscan.
+    """Lädt eine Content-ID — bereits Lizenzierte zuerst per Direkt-Download.
 
     Reihenfolge:
-    1) Files-API → Medientyp
-    2) Content/Info (bereits purchased + Voll-URL)
-    3) Content/License (license_again nie true)
-    4) Video_4K → bei TooLarge oder cancelled: begrenzter Video_HD-Fallback
+    1) Files-API → Medientyp (Files vor Excel-Hint)
+    2) LicenseHistory-Treffer (Batch-Index) → direkter Download, kein Content/License
+    3) Content/Info mit passendem Lizenztyp (Video_4K/HD bzw. Standard)
+    4) Nur wenn nicht purchased: Content/License (license_again nie true)
     """
     def _phase(message: str) -> None:
         if phase_callback is not None:
@@ -777,11 +799,32 @@ def _license_and_download_to_path(
         resolved_type = media_hint if media_hint in {"video", "image"} else media_type
         meta = {}
 
+    # Bereits im Browser/Abo lizenziert: Download-URL aus History → sofort streamen.
+    if history_purchase and is_full_adobe_download_url(str(history_purchase.get("url") or "")):
+        hist_license = str(history_purchase.get("license") or "")
+        size, max_bytes = _download_size_for_license(hist_license, resolved_type)
+        _phase(f"bereits lizenziert → Direkt-Download ({hist_license or 'History'})…")
+        path = _download_purchase_to_path(
+            adapter,
+            history_purchase,
+            destination,
+            api_key=api_key,
+            access_token=access_token,
+            media_type=resolved_type,
+            size=size,
+            max_bytes=max_bytes,
+            phase_callback=phase_callback,
+        )
+        adapter.request_counters.already_licensed += 1
+        used = hist_license or "already_licensed"
+        return path, _format_license_with_size(used, path)
+
     if resolved_type == "image":
         pending: list[tuple[str, int | None, int | None]] = [
             (ADOBE_STOCK_LICENSE_TYPE_STANDARD, None, None)
         ]
     else:
+        # Videos: niemals Standard — Adobe liefert sonst HTTP 400 type mismatch.
         pending = [
             (
                 ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K,
@@ -802,8 +845,7 @@ def _license_and_download_to_path(
         _phase(f"warte vor {license_type}…")
         _sleep(_LICENSE_RETRY_PAUSE_SECONDS if len(tried) > 1 else _API_CALL_PAUSE_SECONDS)
 
-        # Bereits lizenziert? Content/Info zuerst (kein neuer Kauf / kein license_again).
-        # Hot-Path: Content/Info ist strikt — 429/401/403 werden nicht verschluckt.
+        # Content/Info: Status prüfen — bei purchased direkt downloaden (kein neuer Kauf).
         _phase(f"Content/Info ({license_type})…")
         try:
             info = adapter.content_info_purchase(
@@ -826,40 +868,71 @@ def _license_and_download_to_path(
             )
         info_state = str(info.get("state") or "")
         info_url = str(info.get("url") or "")
-        if info_state in {"purchased", "just_purchased"} and is_full_adobe_download_url(info_url):
-            try:
-                path = _download_purchase_to_path(
-                    adapter,
-                    info,
-                    destination,
-                    api_key=api_key,
-                    access_token=access_token,
-                    media_type=resolved_type,
-                    size=size,
-                    max_bytes=max_bytes,
-                    phase_callback=phase_callback,
+        if info_state in {"purchased", "just_purchased"}:
+            if is_full_adobe_download_url(info_url):
+                try:
+                    path = _download_purchase_to_path(
+                        adapter,
+                        info,
+                        destination,
+                        api_key=api_key,
+                        access_token=access_token,
+                        media_type=resolved_type,
+                        size=size,
+                        max_bytes=max_bytes,
+                        phase_callback=phase_callback,
+                    )
+                    used = str(info.get("license") or license_type)
+                    if max_bytes is not None and any(">600MB" in e for e in attempt_errors):
+                        used = f"{used} (nach 4K>600MB)"
+                    return path, _format_license_with_size(used, path)
+                except AdobeAssetTooLargeError:
+                    attempt_errors.append(f"{license_type}: >600MB → Fallback HD")
+                    continue
+                except (
+                    LocalStorageError,
+                    DownloadedMediaInvalidError,
+                    AdobeRateLimitedError,
+                    AdobeAuthenticationExpiredError,
+                    AdobePermissionOrIntegrationError,
+                    AdobeIdentityChangedError,
+                ):
+                    raise
+                except AdobeImportError as exc:
+                    attempt_errors.append(f"{license_type}: Info-Download [{exc.code}] {exc}")
+                except Exception as exc:  # noqa: BLE001
+                    attempt_errors.append(f"{license_type}: Info-Download {exc}")
+            else:
+                # Bereits lizenziert, aber Info ohne Voll-URL → History-Recovery,
+                # kein Content/License (würde ggf. cancelled/Comp liefern).
+                _phase("purchased ohne Download-URL → LicenseHistory…")
+                hist = adapter.find_license_history_download(
+                    content_id, api_key, access_token
                 )
-                used = str(info.get("license") or license_type)
-                if max_bytes is not None and any(">600MB" in e for e in attempt_errors):
-                    used = f"{used} (nach 4K>600MB)"
-                return path, _format_license_with_size(used, path)
-            except AdobeAssetTooLargeError:
-                attempt_errors.append(f"{license_type}: >600MB → Fallback HD")
+                if hist and is_full_adobe_download_url(str(hist.get("url") or "")):
+                    h_lic = str(hist.get("license") or license_type)
+                    h_size, h_max = _download_size_for_license(h_lic, resolved_type)
+                    path = _download_purchase_to_path(
+                        adapter,
+                        hist,
+                        destination,
+                        api_key=api_key,
+                        access_token=access_token,
+                        media_type=resolved_type,
+                        size=h_size,
+                        max_bytes=h_max,
+                        phase_callback=phase_callback,
+                    )
+                    adapter.request_counters.already_licensed += 1
+                    return path, _format_license_with_size(h_lic or license_type, path)
+                attempt_errors.append(
+                    f"{license_type}: purchased aber keine Voll-Download-URL "
+                    f"(url_class={classify_adobe_url(info_url)})"
+                )
+                # Nächste Lizenzvariante (z. B. HD) prüfen — kein License-Kauf.
                 continue
-            except (
-                LocalStorageError,
-                DownloadedMediaInvalidError,
-                AdobeRateLimitedError,
-                AdobeAuthenticationExpiredError,
-                AdobePermissionOrIntegrationError,
-                AdobeIdentityChangedError,
-            ):
-                raise
-            except AdobeImportError as exc:
-                attempt_errors.append(f"{license_type}: Info-Download [{exc.code}] {exc}")
-            except Exception as exc:  # noqa: BLE001
-                attempt_errors.append(f"{license_type}: Info-Download {exc}")
 
+        # Nur wenn noch nicht purchased: Content/License (kein license_again).
         _phase(f"warte vor License ({license_type})…")
         _sleep(_API_CALL_PAUSE_SECONDS)
         _phase(f"License ({license_type})…")
@@ -882,7 +955,6 @@ def _license_and_download_to_path(
         except AdobeVideoEntitlementError:
             raise
         except AdobeAuthenticationExpiredError:
-            # Ein Refresh-Versuch, dann erneut — sonst stoppen.
             prior_sub = str(decode_access_token_claims(access_token).get("sub") or "")
             try:
                 access_token = get_adobe_access_token(force_refresh=True) or access_token
@@ -913,27 +985,24 @@ def _license_and_download_to_path(
         except AdobeLicenseTransactionCancelledError as exc:
             cancelled_licenses.add(license_type)
             attempt_errors.append(f"{license_type}: [{exc.code}] {exc}")
-            # 4K cancelled → HD versuchen (bestehendes begrenztes Fallback)
             continue
         except (AdobeLicenseNotPossibleError, AdobeWatermarkedPreviewError, AdobeImportError) as exc:
             attempt_errors.append(f"{license_type}: [{getattr(exc, 'code', 'error')}] {exc}")
             continue
         except Exception as exc:  # noqa: BLE001
             msg = str(exc)
-            if "does not match type of content" in msg:
-                if resolved_type == "video" and ADOBE_STOCK_LICENSE_TYPE_STANDARD not in tried:
-                    pending.append((ADOBE_STOCK_LICENSE_TYPE_STANDARD, None, None))
-                if resolved_type == "image":
-                    if ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K not in tried:
-                        pending.append(
-                            (
-                                ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K,
-                                2160,
-                                ADOBE_STOCK_VIDEO_4K_MAX_BYTES,
-                            )
+            # Video↔Foto-Mismatch: nur sinnvolle Gegenrichtung, nie Standard auf Video.
+            if "does not match type of content" in msg and resolved_type == "image":
+                if ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K not in tried:
+                    pending.append(
+                        (
+                            ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K,
+                            2160,
+                            ADOBE_STOCK_VIDEO_4K_MAX_BYTES,
                         )
-                    if ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD not in tried:
-                        pending.append((ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD, 1080, None))
+                    )
+                if ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD not in tried:
+                    pending.append((ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD, 1080, None))
             attempt_errors.append(f"{license_type}: {exc}")
             continue
 
@@ -967,7 +1036,6 @@ def _license_and_download_to_path(
             attempt_errors.append(f"{license_type}: Download {exc}")
             continue
 
-    # Beide Video-Lizenzen cancelled → Batch soll stoppen (Caller wertet Code aus).
     if (
         ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K in cancelled_licenses
         and ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD in cancelled_licenses
@@ -1053,6 +1121,28 @@ def download_research_import(
     prior_records.update(_legacy_sidecar_records(root))
     prior_records.update(_manifest_records(root / _MANIFEST_NAME))
     already_global = _downloaded_ids_from_records(prior_records) if skip_existing_ids else set()
+
+    # Einmaliger History-Index (max. 5 Seiten): bereits lizenzierte Assets
+    # (Browser „Kostenlos erneut herunterladen“) → Direkt-Download ohne Content/License.
+    wanted_ids = {
+        asset.asset_id
+        for ch in chapters
+        for asset in ch.assets
+        if asset.asset_id not in already_global
+    }
+    history_index: dict[str, dict] = {}
+    api_key_for_history = get_api_key("ADOBE_STOCK_API_KEY") or ""
+    token_for_history = get_adobe_access_token() or ""
+    if wanted_ids and api_key_for_history and token_for_history:
+        try:
+            history_index = adapter.build_license_history_index(
+                api_key_for_history,
+                token_for_history,
+                wanted_ids=wanted_ids,
+            )
+        except Exception:  # noqa: BLE001
+            history_index = {}
+    result.diagnostics["license_history_index_hits"] = len(history_index)
 
     def _emit(
         *,
@@ -1212,6 +1302,7 @@ def download_research_import(
                     destination=dest,
                     media_hint=asset.media_hint,
                     phase_callback=_phase,
+                    history_purchase=history_index.get(asset.asset_id),
                 )
                 live_statuses[asset.asset_id] = {
                     "status": STATUS_DOWNLOADED,

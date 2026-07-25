@@ -15,6 +15,7 @@ from otio_app.defaults import (
     ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
     ADOBE_STOCK_FILES_ENDPOINT,
     ADOBE_STOCK_LICENSE_ENDPOINT,
+    ADOBE_STOCK_LICENSE_HISTORY_ENDPOINT,
 )
 from otio_app.services.adobe_research_import import (
     AdobeResearchAsset,
@@ -442,6 +443,8 @@ def test_job_manager_start_runs_download_research_import(
                     url="https://stock.adobe.io/Rest/Libraries/Download/8001/4",
                 )
             )
+        if ADOBE_STOCK_LICENSE_HISTORY_ENDPOINT in url:
+            return _FakeHTTPResponse(json.dumps({"nb_results": 0, "files": []}).encode())
         return _FakeHTTPResponse(body)
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
@@ -511,6 +514,6 @@ def test_job_manager_start_runs_download_research_import(
     assert state.result is not None
     assert state.result.downloaded == 1
     assert license_n["n"] == 1
-    assert state.result.diagnostics["request_counters"]["license_history"] == 0
+    assert state.result.diagnostics["request_counters"]["license_history_pages"] <= 5
     # Result entstand aus dem Job-Lauf, nicht aus vorherigem Seed.
     assert any((tmp_path / "media").rglob("*.mp4"))

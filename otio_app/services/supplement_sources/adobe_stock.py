@@ -1181,25 +1181,46 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             )
         return files[0] if isinstance(files[0], dict) else {}
 
-    def find_license_history_download(
+    def _license_history_entry_to_purchase(self, entry: dict) -> dict | None:
+        """Mappt einen LicenseHistory-Eintrag auf purchase_details für den Download."""
+        url = str(entry.get("download_url") or "")
+        url_class = classify_adobe_url(url)
+        if url_class == "watermarked":
+            self.request_counters.watermarked += 1
+            return None
+        if url_class != "download":
+            return None
+        return {
+            "url": url,
+            "license": str(entry.get("license") or ""),
+            "content_type": str(entry.get("content_type") or ""),
+            "width": entry.get("width"),
+            "height": entry.get("height"),
+            "state": "purchased",
+        }
+
+    def build_license_history_index(
         self,
-        content_id: str,
         api_key: str,
         access_token: str,
         *,
         pages: int = MAX_LICENSE_HISTORY_PAGES,
-    ) -> dict | None:
-        """Sucht in Member/LicenseHistory — nur Diagnose/Recovery, nicht Import-Hot-Path.
+        wanted_ids: set[str] | None = None,
+    ) -> dict[str, dict]:
+        """Einmaliger LicenseHistory-Scan (max. MAX_LICENSE_HISTORY_PAGES).
 
-        `pages` wird hart auf 1..MAX_LICENSE_HISTORY_PAGES begrenzt.
+        Liefert content_id → purchase_details für bereits lizenzierte Assets.
+        Damit kann der Import bei Browser-/Abo-Lizenzen direkt downloaden,
+        ohne Content/License erneut anzustossen.
         """
         try:
             pages_i = int(pages)
         except (TypeError, ValueError):
             pages_i = MAX_LICENSE_HISTORY_PAGES
         pages_i = max(1, min(pages_i, MAX_LICENSE_HISTORY_PAGES))
-        target = str(content_id)
-        self._diag_content_id = target
+        wanted = {str(i) for i in wanted_ids} if wanted_ids else None
+        index: dict[str, dict] = {}
+        self._diag_content_id = ""
         self._diag_license_type = "history"
         for page in range(pages_i):
             params = {
@@ -1208,7 +1229,6 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                 "search_parameters[limit]": 100,
                 "search_parameters[offset]": page * 100,
             }
-            # Seiten-Zähler: _request zählt History+1 Call; pages separat
             payload = self._request_licensing_json_safe(
                 ADOBE_STOCK_LICENSE_HISTORY_ENDPOINT,
                 params,
@@ -1216,29 +1236,44 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                 access_token,
             )
             if payload.get("_error"):
-                return None
+                break
             for entry in payload.get("files") or []:
-                if str(entry.get("id") or "") != target:
+                if not isinstance(entry, dict):
                     continue
-                url = str(entry.get("download_url") or "")
-                url_class = classify_adobe_url(url)
-                if url_class == "watermarked":
-                    self.request_counters.watermarked += 1
+                cid = str(entry.get("id") or "")
+                if not cid:
                     continue
-                if url_class != "download":
+                if wanted is not None and cid not in wanted:
                     continue
-                return {
-                    "url": url,
-                    "license": str(entry.get("license") or ""),
-                    "content_type": str(entry.get("content_type") or ""),
-                    "width": entry.get("width"),
-                    "height": entry.get("height"),
-                    "state": "purchased",
-                }
+                if cid in index:
+                    continue
+                purchase = self._license_history_entry_to_purchase(entry)
+                if purchase is not None:
+                    index[cid] = purchase
             nb = int(payload.get("nb_results") or 0)
             if (page + 1) * 100 >= nb:
                 break
-        return None
+            # Frühzeitiger Abbruch, wenn alle gewünschten IDs gefunden.
+            if wanted is not None and wanted.issubset(index.keys()):
+                break
+        return index
+
+    def find_license_history_download(
+        self,
+        content_id: str,
+        api_key: str,
+        access_token: str,
+        *,
+        pages: int = MAX_LICENSE_HISTORY_PAGES,
+    ) -> dict | None:
+        """Sucht eine Content-ID in Member/LicenseHistory (max. 5 Seiten)."""
+        index = self.build_license_history_index(
+            api_key,
+            access_token,
+            pages=pages,
+            wanted_ids={str(content_id)},
+        )
+        return index.get(str(content_id))
 
     def content_info_purchase(
         self,
