@@ -348,6 +348,80 @@ def test_list_body_chapter_names_skips_intro() -> None:
         assert list_body_chapter_names(object()) == ["Yosemite", "Caddo"]  # type: ignore[arg-type]
 
 
+def test_open_batch_helpers_skip_finished_chapters(tmp_path) -> None:
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        ChapterCutStatus,
+        list_chapters_needing_python_timing,
+        list_chapters_needing_unified_cut,
+    )
+
+    statuses = [
+        ChapterCutStatus(
+            folder_name="Done",
+            folder_slug="done",
+            has_plan=True,
+            plan_slots=3,
+            has_resolved=True,
+            resolved_shots=3,
+            matches=True,
+        ),
+        ChapterCutStatus(
+            folder_name="NeedLLM",
+            folder_slug="needllm",
+            has_plan=False,
+        ),
+        ChapterCutStatus(
+            folder_name="NeedTiming",
+            folder_slug="needtiming",
+            has_plan=True,
+            plan_slots=2,
+            has_resolved=False,
+            matches=False,
+        ),
+    ]
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.list_chapter_cut_statuses",
+        return_value=statuses,
+    ):
+        assert list_chapters_needing_unified_cut(object()) == ["NeedLLM"]  # type: ignore[arg-type]
+        assert list_chapters_needing_python_timing(object()) == ["NeedTiming"]  # type: ignore[arg-type]
+
+
+def test_generate_all_only_open_filters_names(tmp_path) -> None:
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        ChapterCutGenerateResult,
+        generate_all_chapter_unified_cuts,
+    )
+
+    project = _project(tmp_path)
+    called: list[str] = []
+
+    def fake_generate(project, folder_name, **kwargs):
+        called.append(folder_name)
+        plan = _plan(folder_name.lower(), slots=1)
+        return ChapterCutGenerateResult(
+            folder_name=folder_name,
+            plan=plan,
+            slot_count=1,
+            gap_count=0,
+        )
+
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.list_chapters_needing_unified_cut",
+        return_value=["OpenA", "OpenB"],
+    ), patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.generate_chapter_unified_cut",
+        side_effect=fake_generate,
+    ), patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.refresh_merged_unified_cut_plan",
+        return_value=None,
+    ):
+        results = generate_all_chapter_unified_cuts(project, only_open=True)
+
+    assert called == ["OpenA", "OpenB"]
+    assert len(results) == 2
+
+
 def test_resolve_chapter_requires_plan(tmp_path) -> None:
     from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
         resolve_chapter_timeline,

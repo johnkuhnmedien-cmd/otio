@@ -49,6 +49,8 @@ from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
     generate_chapter_unified_cut,
     list_body_chapter_names,
     list_chapter_cut_statuses,
+    list_chapters_needing_python_timing,
+    list_chapters_needing_unified_cut,
     load_chapter_unified_plan,
     resolve_all_chapter_timelines,
     resolve_chapter_timeline,
@@ -1366,11 +1368,17 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             "Cut-Rhythmus-Zielen und Word-Timestamps. Für Keyword-Sync: "
             "Cut Plan Settings → Unified-Stil."
         )
+    open_llm_names = list_chapters_needing_unified_cut(project)
+    open_timing_names = list_chapters_needing_python_timing(project)
     st.caption(
         f"**ein LLM-Call pro Kapitel** ({chapter_count}, ohne Intro) → "
         "`cut/chapters/{slug}/unified_cut_plan.json`. "
-        "Batch oben = gleiche Schleife wie die Zeilen-Buttons. "
+        "**Alle** = jedes Kapitel erneut; **Offene** = nur fehlende. "
         "**Alle OTIO** merged Intro + Kapitel in Dramaturgie-Reihenfolge."
+    )
+    st.caption(
+        f"Offen: {len(open_llm_names)} ohne LLM-Plan · "
+        f"{len(open_timing_names)} ohne passendes Python-Timing."
     )
     if cut_options.include_middle_frames:
         st.caption(
@@ -1385,13 +1393,14 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             type="primary",
             key="enh_unified_cut_llm_all",
             use_container_width=True,
+            help="Alle Körper-Kapitel erneut (auch bereits fertige).",
         )
     with col_timing:
         run_all_timing = st.button(
             "Alle Python Timings",
             key="enh_unified_cut_timing_all",
             use_container_width=True,
-            help="Pro Kapitel Resolved unter cut/chapters/{slug}/ — kein LLM.",
+            help="Alle Kapitel mit Plan erneut timen — auch bereits passende.",
         )
     with col_otio:
         run_all_otio = st.button(
@@ -1404,22 +1413,45 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             ),
         )
 
-    if run_all_llm:
+    col_open_llm, col_open_timing, _col_open_spacer = st.columns(3)
+    with col_open_llm:
+        run_open_llm = st.button(
+            f"Offene LLM Cuts ({len(open_llm_names)})",
+            key="enh_unified_cut_llm_open",
+            use_container_width=True,
+            disabled=not open_llm_names,
+            help="Nur Kapitel ohne unified_cut_plan.json — fertige/grüne werden übersprungen.",
+        )
+    with col_open_timing:
+        run_open_timing = st.button(
+            f"Offene Python Timings ({len(open_timing_names)})",
+            key="enh_unified_cut_timing_open",
+            use_container_width=True,
+            disabled=not open_timing_names,
+            help=(
+                "Nur Kapitel mit Plan, aber ohne passendes Resolved — "
+                "grüne (Plan+Timing) werden übersprungen."
+            ),
+        )
+
+    def _run_llm_batch(*, only_open: bool) -> None:
         try:
             progress = st.empty()
+            label = "Offene" if only_open else "Alle"
 
             def _unified_progress(folder_name: str, index: int, total: int) -> None:
                 progress.info(
-                    f"Unified LLM · Kapitel {index}/{total}: „{folder_name}“ "
+                    f"Unified LLM ({label}) · Kapitel {index}/{total}: „{folder_name}“ "
                     f"({resolve_llm_model_id(rough_provider, rough_model)})…"
                 )
 
-            with st.spinner("Alle Kapitel-LLM-Cuts…"):
+            with st.spinner(f"{label} Kapitel-LLM-Cuts…"):
                 results = generate_all_chapter_unified_cuts(
                     project,
                     provider=rough_provider,
                     model=rough_model,
                     progress_callback=_unified_progress,
+                    only_open=only_open,
                 )
             progress.empty()
             total_slots = sum(r.slot_count for r in results)
@@ -1436,18 +1468,21 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         except Exception as exc:  # noqa: BLE001
             st.error(f"LLM-Fehler: {exc}")
 
-    if run_all_timing:
+    def _run_timing_batch(*, only_open: bool) -> None:
         try:
             progress = st.empty()
+            label = "Offene" if only_open else "Alle"
 
             def _timing_progress(folder_name: str, index: int, total: int) -> None:
                 progress.info(
-                    f"Python Timing · Kapitel {index}/{total}: „{folder_name}“…"
+                    f"Python Timing ({label}) · Kapitel {index}/{total}: „{folder_name}“…"
                 )
 
-            with st.spinner("Alle Kapitel-Timings…"):
+            with st.spinner(f"{label} Kapitel-Timings…"):
                 timed = resolve_all_chapter_timelines(
-                    project, progress_callback=_timing_progress
+                    project,
+                    progress_callback=_timing_progress,
+                    only_open=only_open,
                 )
             progress.empty()
             shots = sum(len(r.shots) for _, r in timed)
@@ -1459,6 +1494,15 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
             st.error(f"Timing-Fehler: {exc}")
+
+    if run_all_llm:
+        _run_llm_batch(only_open=False)
+    if run_open_llm:
+        _run_llm_batch(only_open=True)
+    if run_all_timing:
+        _run_timing_batch(only_open=False)
+    if run_open_timing:
+        _run_timing_batch(only_open=True)
 
     if run_all_otio:
         try:
