@@ -654,6 +654,99 @@ def test_intro_slots_bypass_cut_plan_shot_min() -> None:
     assert_timed_slots_contiguous(timed, fps=25.0)
 
 
+def test_intro_slots_bypass_shot_max_and_cover_vo_end() -> None:
+    """Intro: shot_max darf Keyword-Onsets und VO-Ende nicht kürzen."""
+    timeline = NarrationTimelineDocument(
+        script_version="v1",
+        total_duration_seconds=42.0,
+        entries=[
+            NarrationTimelineEntry(
+                segment_id="Intro_segment_001",
+                start_seconds=0.0,
+                end_seconds=42.0,
+                audio_duration_seconds=42.0,
+            )
+        ],
+    )
+    sentences = {
+        "Intro_segment_001__s001": _sentence(
+            "Intro_segment_001__s001",
+            start=0.0,
+            end=8.0,
+            segment_id="Intro_segment_001",
+        ),
+        "Intro_segment_001__s002": _sentence(
+            "Intro_segment_001__s002",
+            start=8.0,
+            end=20.0,
+            segment_id="Intro_segment_001",
+        ),
+        "Intro_segment_001__s003": _sentence(
+            "Intro_segment_001__s003",
+            start=20.0,
+            end=42.0,
+            segment_id="Intro_segment_001",
+        ),
+    }
+    # Keyword-Onset bei 10.0s (offset 2.0 in s002); Closing hält Rest-VO (>8s).
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            CutBoundary(
+                cut_id="Intro_cut_000",
+                sentence_id="Intro_segment_001__s001",
+                position="start",
+                offset_seconds=0.0,
+                alignment="sentence_boundary",
+            ),
+            CutBoundary(
+                cut_id="Intro_cut_001",
+                sentence_id="Intro_segment_001__s002",
+                position="middle",
+                offset_seconds=2.0,
+                alignment="mid_sentence",
+            ),
+            CutBoundary(
+                cut_id="Intro_cut_002",
+                sentence_id="Intro_segment_001__s003",
+                position="end",
+                offset_seconds=None,
+                alignment="sentence_boundary",
+            ),
+        ],
+        slots=[
+            CutSlot(
+                slot_id="Intro_slot_001",
+                local_asset_id="a",
+                asset_fit="strong",
+            ),
+            CutSlot(
+                slot_id="Intro_slot_002",
+                local_asset_id="b",
+                asset_fit="strong",
+            ),
+        ],
+    )
+    options = CutPlanOptions(shot_min_sec=5.0, shot_max_sec=8.0)
+    repairs: list[str] = []
+    timed = resolve_timed_slots(
+        plan,
+        timeline,
+        sentence_index=sentences,
+        options=options,
+        fps=25.0,
+        repairs=repairs,
+        segment_to_chapter={"Intro_segment_001": "Intro"},
+    )
+    # Keyword-Onset bleibt bei 10.0s — nicht durch shot_max nach vorne gezogen.
+    assert timed[1].start_seconds == pytest.approx(10.0, abs=0.05)
+    # Letztes Bild deckt VO-Ende (42s) ab — kein schwarzes Bild bei laufendem Audio.
+    assert timed[-1].end_seconds == pytest.approx(42.0, abs=0.05)
+    assert timed[-1].duration_seconds > 8.0
+    assert not any("über shot_max" in note for note in repairs)
+    assert_timed_slots_contiguous(timed, fps=25.0)
+
+
 def test_over_tolerance_does_not_clamp_leaves_span_for_gap_path() -> None:
     """Fix 1: span > usable + tolerance → Grenzen unverändert (Gap später)."""
     timeline = NarrationTimelineDocument(

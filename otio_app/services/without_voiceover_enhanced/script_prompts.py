@@ -1208,8 +1208,9 @@ INTRO-SPECIFIC RULES (CRITICAL — differ from chapter cuts):
 
 - You receive ALL chapter inventories in ONE bundled JSON (by folder).
 - Prefer precise, tight cuts. Shots around ~1 second are allowed and desirable.
-- Chapter Cut-Plan shot_min (e.g. 5s) is NOT enforced by Python on Intro slots;
-  only a technical floor (~0.4s) applies. Cut freely for lists / reveals.
+- Chapter Cut-Plan shot_min/shot_max (e.g. 5–8s) are NOT enforced by Python on
+  Intro slots; only technical floor/ceiling (~0.4s / ~120s) apply. Cut freely
+  for lists / reveals, and keep the last picture through remaining VO.
 - Every assigned local asset MUST have asset_fit \"strong\".
 - Never use asset_fit \"acceptable\" or \"weak\". If the best local asset is only
   acceptable/weak, set local_asset_id to null, asset_fit \"none\", and create a

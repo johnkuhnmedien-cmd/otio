@@ -335,7 +335,7 @@ def _is_intro_plan_slot(
     index: int,
     segment_to_chapter: dict[str, str] | None,
 ) -> bool:
-    """Intro-Slots: Cut-Plan shot_min gilt nicht (nur technischer Floor)."""
+    """Intro-Slots: Cut-Plan shot_min/max gelten nicht (nur technische Limits)."""
     if index < 0 or index >= len(plan.slots):
         return False
     slot = plan.slots[index]
@@ -353,6 +353,16 @@ def _is_intro_plan_slot(
     return False
 
 
+def _plan_has_intro_slots(
+    plan: UnifiedCutPlanDocument,
+    segment_to_chapter: dict[str, str] | None,
+) -> bool:
+    return any(
+        _is_intro_plan_slot(plan, index, segment_to_chapter)
+        for index in range(len(plan.slots))
+    )
+
+
 def _clamp_boundary_times(
     times: list[float],
     *,
@@ -361,6 +371,7 @@ def _clamp_boundary_times(
     repairs: list[str],
     slot_usable_max: list[float | None] | None = None,
     slot_editorial_mins: list[float] | None = None,
+    slot_editorial_maxes: list[float] | None = None,
     short_tolerance: float = 0.0,
     max_media_iterations: int = 2,
     fps: float = 25.0,
@@ -377,8 +388,10 @@ def _clamp_boundary_times(
     Max. ``max_media_iterations`` Links-nach-rechts-Pässe; danach noch
     innerhalb-Toleranz verletzt → Fehler.
 
-    ``slot_editorial_mins``: optional pro Slot (Intro nutzt TECH_MIN statt
-    Cut-Plan-Settings shot_min).
+    ``slot_editorial_mins`` / ``slot_editorial_maxes``: optional pro Slot
+    (Intro nutzt TECH_MIN/TECH_MAX statt Cut-Plan shot_min/max — sonst
+    verschiebt shot_max Keyword-Onsets und lässt das letzte Intro-Bild vor
+    dem VO-Ende enden).
     """
     if len(times) < 2:
         return times
@@ -413,10 +426,19 @@ def _clamp_boundary_times(
     min_frames_by_slot = [
         max(1, _ceil_frames(float(slot_mins[index]))) for index in range(n_slots)
     ]
-    # shot_max bleibt global; Floor für Max nutzt Settings-Min.
+    slot_maxes = list(slot_editorial_maxes or [])
+    while len(slot_maxes) < n_slots:
+        slot_maxes.append(editorial_max)
+    max_frames_by_slot = [
+        max(
+            min_frames_by_slot[index],
+            _floor_frames(float(slot_maxes[index])),
+        )
+        for index in range(n_slots)
+    ]
+    # Fallback-Frames für globale Labels in Repair-Texten.
     min_frames = max(1, _ceil_frames(editorial_min))
     max_frames = max(min_frames, _floor_frames(editorial_max))
-    editorial_max_f = _from_frames(max_frames)
 
     usable_frames: list[int | None] = []
     for usable in usables:
@@ -433,12 +455,14 @@ def _clamp_boundary_times(
     def _editorial_pass() -> None:
         # Zu lang: Ende nach vorne (spätere Slots werden länger).
         for index in range(n_slots):
+            slot_max_frames = max_frames_by_slot[index]
             duration_frames = _to_frames(out[index + 1] - out[index])
-            if duration_frames <= max_frames:
+            if duration_frames <= slot_max_frames:
                 continue
-            out[index + 1] = _seconds_to_frame(out[index] + editorial_max_f, rate)
+            slot_max_sec = _from_frames(slot_max_frames)
+            out[index + 1] = _seconds_to_frame(out[index] + slot_max_sec, rate)
             repairs.append(
-                f"slot[{index}]: über shot_max ({editorial_max:.2f}s) — "
+                f"slot[{index}]: über shot_max ({slot_max_sec:.2f}s) — "
                 "Endgrenze nach vorne verschoben."
             )
 
@@ -602,14 +626,22 @@ def resolve_timed_slots(
         TECH_MAX_SHOT_SECONDS,
         max(editorial_min, float(options.shot_max_sec)),
     )
-    # Intro only: Cut-Plan shot_min (z. B. 5s) aushebeln — LLM darf präzise
-    # Kurzschnitte (~1s) behalten; technischer Floor bleibt TECH_MIN.
-    # Keyword-Sync: shot_min/max gelten wieder (Settings gehen an den LLM).
+    # Intro only: Cut-Plan shot_min/max aushebeln — LLM darf präzise
+    # Keyword-Kurzschnitte (~1s) und lange Closing-Holds über Rest-VO behalten.
+    # Technischer Floor/Ceiling bleiben TECH_MIN/TECH_MAX.
+    # Keyword-Sync (Körper): shot_min/max gelten weiter (Settings → LLM + Clamp).
     intro_editorial_min = TECH_MIN_SHOT_SECONDS
+    intro_editorial_max = TECH_MAX_SHOT_SECONDS
     slot_editorial_mins = [
         intro_editorial_min
         if _is_intro_plan_slot(plan, index, segment_to_chapter)
         else editorial_min
+        for index in range(len(plan.slots))
+    ]
+    slot_editorial_maxes = [
+        intro_editorial_max
+        if _is_intro_plan_slot(plan, index, segment_to_chapter)
+        else editorial_max
         for index in range(len(plan.slots))
     ]
     head_trim = max(0.0, float(options.video_head_trim_sec))
@@ -626,10 +658,24 @@ def resolve_timed_slots(
         repairs=notes,
         slot_usable_max=usables,
         slot_editorial_mins=slot_editorial_mins,
+        slot_editorial_maxes=slot_editorial_maxes,
         short_tolerance=short_tolerance,
         max_media_iterations=2,
         fps=fps,
     )
+    # Nach Clamp: Intro-VO-Teppich erneut an Audio-Start/Ende pinnen.
+    # Sonst kann usable-Toleranz-Klemme die letzte Grenze vor das VO-Ende ziehen
+    # → schwarzes Bild bei laufendem Intro-Audio.
+    if segment_to_chapter and _plan_has_intro_slots(plan, segment_to_chapter):
+        times = _snap_chapter_edge_boundary_times(
+            times,
+            plan,
+            timeline,
+            sentence_index=sentence_index,
+            segment_to_chapter=segment_to_chapter,
+            fps=fps,
+            repairs=notes,
+        )
 
     slots: list[TimedSlot] = []
     for index, slot in enumerate(plan.slots):
