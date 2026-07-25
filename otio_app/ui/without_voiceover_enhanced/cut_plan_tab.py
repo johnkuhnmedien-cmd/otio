@@ -1055,7 +1055,8 @@ def _render_intro_cut_section(
             )
             if result.gap_count:
                 st.warning(
-                    "Intro-Gaps → Supplement-Funnel. Danach Intro-LLM/Timing erneut."
+                    "Intro-Gaps → Funnel/Manual zuordnen, danach "
+                    "**Intro: Python Timing** erneut (Gap-Merge übernimmt Accepted)."
                 )
             st.rerun()
         except IntroCutError as exc:
@@ -2062,7 +2063,9 @@ def _render_section_funnel(project) -> None:
     st.caption(
         "Links Gap · Mitte Search-Queries (kopierbar) · "
         "Rechts lokaler Dateipfad → wird nach stock/downloads kopiert, "
-        "export_ready gesetzt und inventarisiert."
+        "export_ready gesetzt und inventarisiert. Danach **Python Timing** "
+        "des betroffenen Kapitels erneut (Gap-Merge übernimmt das Asset in "
+        "die Timeline/OTIO)."
     )
     show_manual_gaps_key = f"enh_show_manual_gap_assign_{project.id}"
     st.checkbox(
@@ -2131,7 +2134,13 @@ def _render_section_funnel(project) -> None:
                                 "success",
                                 f"`{gap.gap_id}` → `{assigned.candidate_id}` "
                                 f"({assigned.media_validation_status})",
-                            )
+                            ),
+                            (
+                                "info",
+                                "Als nächstes **Python Timing** des Kapitels "
+                                "(oder Intro) erneut — erst dann landet das "
+                                "Asset in Timeline/OTIO.",
+                            ),
                         ]
                         if result.hint:
                             flash.append(("info", result.hint))

@@ -521,6 +521,23 @@ def resolve_intro_timeline(
     except UnifiedTimelineError as exc:
         raise IntroCutError(str(exc)) from exc
 
+    # Manual/Funnel Accepted in Intro-Placeholders mergen (Zeiten bleiben).
+    from otio_app.services.without_voiceover_enhanced.gap_merge_service import (
+        merge_export_ready_gaps_into_timeline,
+    )
+
+    try:
+        resolved, _merge_report = merge_export_ready_gaps_into_timeline(
+            project,
+            timeline=resolved,
+            unified=plan,
+            require_closed_none=False,
+            persist=False,
+            persist_report=True,
+        )
+    except Exception:  # noqa: BLE001 — Merge soft
+        pass
+
     intro_resolved = filter_resolved_timeline_to_intro(resolved)
     if not intro_resolved.shots and not intro_resolved.audio_segments:
         raise IntroCutError(

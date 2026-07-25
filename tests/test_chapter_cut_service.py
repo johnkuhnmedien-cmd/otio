@@ -467,3 +467,70 @@ def test_resolve_chapter_blocked_when_gaps_open(tmp_path) -> None:
             raise AssertionError("expected ChapterCutError")
         except ChapterCutError as exc:
             assert "offene Coverage Gap" in str(exc)
+
+
+def test_resolve_chapter_timeline_merges_export_ready_gaps(tmp_path) -> None:
+    """Python Timing muss Gap-Merge laufen — sonst bleiben Manuals als Placeholder."""
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        resolve_chapter_timeline,
+    )
+    from otio_app.services.without_voiceover_enhanced.models import GapMergeReport
+
+    project = _project(tmp_path)
+    plan = _plan("yosemite", slots=1)
+    write_json(chapter_unified_cut_plan_path(project, "Yosemite"), plan)
+
+    timed = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=4.0,
+        shots=[
+            ResolvedShot(
+                shot_id="yosemite_slot_001",
+                asset_id="",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=4.0,
+                source_start_seconds=0.0,
+                source_end_seconds=4.0,
+                editorial_function="evidence",
+                asset_fit="none",
+                coverage_gap_id="gap_yosemite_slot_001",
+                open_gap=True,
+                is_placeholder=True,
+                folder_name="Yosemite",
+            )
+        ],
+    )
+    merged = timed.model_copy(deep=True)
+    merged.shots[0] = merged.shots[0].model_copy(
+        update={
+            "asset_id": "manual_supp_1",
+            "open_gap": False,
+            "is_placeholder": False,
+            "resolved_media_path": "/tmp/manual.jpg",
+        }
+    )
+    merge_calls: list[dict] = []
+
+    def _fake_merge(project, **kwargs):
+        merge_calls.append(kwargs)
+        return merged, GapMergeReport(script_version="v1", merged_shot_ids=["yosemite_slot_001"])
+
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.chapter_open_gap_ids",
+        return_value=[],
+    ), patch(
+        "otio_app.services.without_voiceover_enhanced.unified_timeline_service.resolve_unified_timeline",
+        return_value=timed,
+    ), patch(
+        "otio_app.services.without_voiceover_enhanced.gap_merge_service.merge_export_ready_gaps_into_timeline",
+        side_effect=_fake_merge,
+    ):
+        out = resolve_chapter_timeline(project, "Yosemite")
+
+    assert merge_calls, "Gap-Merge wurde nicht aufgerufen"
+    assert merge_calls[0].get("persist") is False
+    assert merge_calls[0].get("unified") is plan or merge_calls[0].get("unified") is not None
+    assert out.shots[0].asset_id == "manual_supp_1"
+    assert out.shots[0].open_gap is False
+    assert chapter_resolved_timeline_path(project, "Yosemite").is_file()

@@ -426,6 +426,73 @@ def test_gap_merge_keeps_weak_without_better_supplement(tmp_path: Path) -> None:
     assert merged.shots[0].asset_id == "local_weak"
 
 
+def test_merge_rejection_keeps_manual_accepted(tmp_path: Path) -> None:
+    """Merge-Reject darf Manual-Assign nicht aus Accepted löschen."""
+    from otio_app.services.without_voiceover_enhanced.gap_merge_service import (
+        _write_merge_rejection_to_funnel,
+    )
+    from otio_app.services.without_voiceover_enhanced.io_utils import load_model
+    from otio_app.services.without_voiceover_enhanced.models import (
+        SupplementFunnelGapReport,
+        SupplementFunnelReport,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        supplement_funnel_report_path,
+    )
+
+    project = _project(tmp_path)
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version="script-v1",
+            supplements=[
+                StockCandidate(
+                    candidate_id="manual_keep",
+                    provider="manual",
+                    assign_status="manual",
+                    gap_id="gap_m",
+                    media_validation_status="export_ready",
+                    local_media_path="/tmp/m.jpg",
+                ),
+                StockCandidate(
+                    candidate_id="stock_drop",
+                    provider="pexels",
+                    gap_id="gap_m",
+                    media_validation_status="export_ready",
+                    local_media_path="/tmp/s.mp4",
+                ),
+            ],
+        ),
+    )
+    write_json(
+        supplement_funnel_report_path(project),
+        SupplementFunnelReport(
+            script_version="script-v1",
+            cut_plan_run_id="run1",
+            filled_gap_ids=["gap_m"],
+            gaps=[
+                SupplementFunnelGapReport(
+                    gap_id="gap_m",
+                    filled=True,
+                    export_ready_candidate_id="manual_keep",
+                )
+            ],
+        ),
+    )
+    _write_merge_rejection_to_funnel(
+        project,
+        gap_id="gap_m",
+        rejected_candidate_ids=["manual_keep", "stock_drop"],
+        cut_plan_run_id="run1",
+        message="test reject",
+    )
+    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
+    assert accepted is not None
+    ids = {s.candidate_id for s in accepted.supplements}
+    assert "manual_keep" in ids
+    assert "stock_drop" not in ids
+
+
 def test_gap_merge_fail_closed_open_none(tmp_path: Path) -> None:
     project = _project(tmp_path)
     write_json(

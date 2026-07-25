@@ -433,6 +433,24 @@ def resolve_chapter_timeline(
     except UnifiedTimelineError as exc:
         raise ChapterCutError(str(exc)) from exc
 
+    # Accepted/Funnel/Manual → Placeholder-Shots ersetzen (Timing-Zeiten bleiben).
+    # Ohne Merge landen manuelle Pfad-Zuweisungen nie im Kapitel-OTIO.
+    from otio_app.services.without_voiceover_enhanced.gap_merge_service import (
+        merge_export_ready_gaps_into_timeline,
+    )
+
+    try:
+        resolved, _merge_report = merge_export_ready_gaps_into_timeline(
+            project,
+            timeline=resolved,
+            unified=plan,
+            require_closed_none=False,
+            persist=False,
+            persist_report=True,
+        )
+    except Exception:  # noqa: BLE001 — Merge soft; Timing-Ergebnis behalten
+        pass
+
     # Auf Kapitel-Ursprung 0 normalisieren (falls Resolver mit Offsets startet).
     origin = 0.0
     if resolved.chapters:
