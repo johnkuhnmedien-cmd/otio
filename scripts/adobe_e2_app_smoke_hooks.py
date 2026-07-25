@@ -149,7 +149,7 @@ def install_before_navigation() -> None:
         "_POST_ASSET_PAUSE_SECONDS",
     ):
         setattr(import_mod, name, 0)
-    adobe_mod.time.sleep = lambda *_a, **_k: None  # type: ignore[method-assign]
+    # Nicht time.sleep global patchen (bricht Streamlit-Runner/AppTest).
 
     fixture = TINY.read_bytes() if TINY.is_file() else (b"\x00" * 200_000)
 
@@ -210,4 +210,9 @@ def install_before_navigation() -> None:
         "sub": "e2-app-sub",
         "email": "e2app@example.com",
     }
+    import otio_app.services.adobe_stock_oauth as oauth_svc
+    import otio_app.services.api_keys as api_keys_mod
+
+    oauth_svc.get_adobe_access_token = lambda **_k: "t"  # type: ignore[assignment]
+    api_keys_mod.get_api_key = lambda key: "k"  # type: ignore[assignment]
     (ROOT / "app_smoke_mocks.ok").write_text("installed\n", encoding="utf-8")

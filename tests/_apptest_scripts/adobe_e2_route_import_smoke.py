@@ -73,7 +73,6 @@ def _install_mocks() -> None:
     from otio_app.ui import adobe_research_import_page as page_mod
     import otio_app.services.adobe_research_import as import_mod
     import otio_app.services.adobe_research_import_job as job_mod
-    import otio_app.services.supplement_sources.adobe_stock as adobe_mod
     import urllib.request
 
     media = ROOT / "media"
@@ -152,12 +151,24 @@ def _install_mocks() -> None:
         "_POST_ASSET_PAUSE_SECONDS",
     ):
         setattr(import_mod, name, 0)
-    adobe_mod.time.sleep = lambda *_a, **_k: None  # type: ignore[method-assign]
+    # WICHTIG: nicht time.sleep global patchen — AppTest/Streamlit nutzen es
+    # für Runner-Waits. Pausen sind oben auf 0; 429-Retries im Smoke unwahrscheinlich.
 
     fixture = TINY.read_bytes() if TINY.is_file() else (b"\x00" * 200_000)
+    _real_urlopen = urllib.request.urlopen
 
     def fake_urlopen(request, timeout=20):
-        url = request.full_url
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        host = urllib.parse.urlparse(url).hostname or ""
+        adobe_ish = (
+            "adobe" in host
+            or host.endswith("example-adobe-test.test")
+            or ADOBE_STOCK_FILES_ENDPOINT in url
+            or ADOBE_STOCK_CONTENT_INFO_ENDPOINT in url
+            or ADOBE_STOCK_LICENSE_ENDPOINT in url
+        )
+        if not adobe_ish:
+            return _real_urlopen(request, timeout=timeout)
         if ADOBE_STOCK_FILES_ENDPOINT in url:
             return _FakeHTTPResponse(
                 json.dumps(
@@ -198,7 +209,6 @@ def _install_mocks() -> None:
                 ).encode()
             )
         # Download (+ optionale Redirect-Kette)
-        host = urllib.parse.urlparse(url).hostname or ""
         if host == "stock.adobe.io" and "/Download/" in url:
             raise _HTTPError(
                 302,
@@ -207,7 +217,7 @@ def _install_mocks() -> None:
                 },
                 url=url,
             )
-        if host == "cdn.example-adobe-test.test":
+        if host.endswith("example-adobe-test.test"):
             return _FakeHTTPResponse(fixture)
         return _FakeHTTPResponse(fixture)
 
@@ -218,6 +228,13 @@ def _install_mocks() -> None:
         "sub": "e2-smoke-sub",
         "email": "e2@example.com",
     }
+
+    # Seite importiert OAuth/Keys lokal — ebenfalls mocken (sonst Hang/Timeout).
+    import otio_app.services.adobe_stock_oauth as oauth_svc
+    import otio_app.services.api_keys as api_keys_mod
+
+    oauth_svc.get_adobe_access_token = lambda **_k: "t"  # type: ignore[assignment]
+    api_keys_mod.get_api_key = lambda key: "k"  # type: ignore[assignment]
 
     # Kein Seed von fertigen Results in JobManager._jobs.
     marker = ROOT / "mocks_installed.ok"
@@ -230,6 +247,20 @@ st.caption(
     "E2 Route Smoke · echte `render_adobe_research_import_page` · "
     "Start → JobManager.start → download_research_import (gemocktes Adobe-Netz)"
 )
+
+# AppTest: die Seite pollt im RUNNING-Zustand mit st.rerun() — begrenzen.
+_rerun_calls = {"n": 0}
+_orig_rerun = st.rerun
+
+
+def _limited_rerun(*_a, **_k):
+    _rerun_calls["n"] += 1
+    if _rerun_calls["n"] > 4:
+        return None
+    return _orig_rerun()
+
+
+st.rerun = _limited_rerun  # type: ignore[assignment]
 
 from otio_app.ui.adobe_research_import_page import render_adobe_research_import_page
 

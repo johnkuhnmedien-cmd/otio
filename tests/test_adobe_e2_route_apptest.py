@@ -26,11 +26,10 @@ def test_apptest_route_start_runs_real_job(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(job_mod, "project_dir", lambda pid: state_dir)
     job_mod._MANAGER = job_mod.ResearchImportJobManager()  # noqa: SLF001
 
-    at = AppTest.from_file(str(SCRIPT), default_timeout=30)
+    at = AppTest.from_file(str(SCRIPT), default_timeout=20)
     at.run()
     assert not at.exception, at.exception
 
-    # Sicherstellen: kein vorab gesetztes Completed-Result ohne Start.
     from otio_app.services.adobe_research_import_job import (
         JobStatus,
         get_research_import_job_manager,
@@ -38,7 +37,8 @@ def test_apptest_route_start_runs_real_job(tmp_path: Path, monkeypatch: pytest.M
 
     mgr = get_research_import_job_manager()
     before = mgr.get_state("e2-route-smoke")
-    assert before.result is None or before.status == JobStatus.IDLE
+    assert before.result is None
+    assert before.status == JobStatus.IDLE
 
     start_buttons = [
         b
@@ -46,18 +46,18 @@ def test_apptest_route_start_runs_real_job(tmp_path: Path, monkeypatch: pytest.M
         if "Lizenzieren" in (b.label or "") or "herunterladen" in (b.label or "")
     ]
     assert start_buttons, f"Start-Button fehlt: {[b.label for b in at.button]}"
-    at = start_buttons[0].click().run()
+    # Klick startet mgr.start → Worker-Thread mit download_research_import.
+    # Kein erneutes at.run() während RUNNING: die Seite pollt mit time.sleep+rerun.
+    start_buttons[0].click().run(timeout=20)
     assert not at.exception, at.exception
 
     deadline = time.time() + 30
     final = None
     while time.time() < deadline:
-        # AppTest re-runs may be needed while job thread progresses.
-        at.run()
         final = mgr.get_state("e2-route-smoke")
         if final.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
             break
-        time.sleep(0.1)
+        time.sleep(0.05)
 
     assert final is not None
     assert final.status == JobStatus.COMPLETED, final.error or final.message
