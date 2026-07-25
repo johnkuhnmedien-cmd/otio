@@ -125,6 +125,12 @@ class DownloadedMediaInvalidError(AdobeImportError):
     code = "downloaded_media_invalid"
 
 
+class AdobeUnsafeRedirectError(AdobeImportError):
+    """Redirect-Ziel oder Redirect-Kette verletzt Download-Sicherheitsregeln."""
+
+    code = "adobe_unsafe_redirect"
+
+
 class AdobeVideoEntitlementError(AdobeImportError):
     """Legacy/Diagnose: API meldet oft nur Bild-Unlimited — nicht pauschal als Ursache."""
 
@@ -139,6 +145,15 @@ VIDEO_ENTITLEMENT_HINT = (
 )
 
 _MAX_LICENSE_ATTEMPTS = 3  # inkl. Erstversuch; HTTP 429
+# Manuelle Redirect-Folge im Downloadpfad (kein urllib Auto-Follow).
+MAX_DOWNLOAD_REDIRECTS = 5
+_REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+_SENSITIVE_DOWNLOAD_HEADER_NAMES = frozenset(
+    {"authorization", "x-api-key", "x-product"}
+)
+# Snapshot: Unit-Tests patchen oft urllib.request.urlopen — dann übernimmt
+# _urlopen_download diesen Patch. Produktion nutzt den No-Redirect-Opener.
+_ORIG_URLOPEN = urllib.request.urlopen
 # Manuelle Diagnose/Recovery: hart begrenzt — nie unkontrolliert paginieren.
 MAX_LICENSE_HISTORY_PAGES = 5
 # Hosts aus Content/License- und LicenseHistory-Antworten (Tests/Produktion).
@@ -154,6 +169,75 @@ _ADOBE_DOWNLOAD_PATH_MARKERS = (
     "/Download/DownloadFileDirectly/",
     "/DownloadFileDirectly/",
 )
+
+
+class _NoFollowRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Unterdrückt Auto-Redirects — Location wird manuell geprüft."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+def safe_download_url_label(url: str) -> str:
+    """Host + Pfadklasse ohne Query/Signatur — für Logs, Diagnose, Exceptions."""
+    text = (url or "").strip()
+    if not text:
+        return "missing-url"
+    try:
+        parsed = urllib.parse.urlparse(text)
+    except ValueError:
+        return "invalid-url"
+    host = (parsed.hostname or "").lower() or "unknown-host"
+    scheme = parsed.scheme or "unknown"
+    path = parsed.path or "/"
+    if "/Watermarked/" in path or path.rstrip("/").endswith("/Watermarked"):
+        path_class = "watermarked"
+    elif any(marker in path for marker in _ADOBE_DOWNLOAD_PATH_MARKERS):
+        path_class = "adobe-download"
+    else:
+        path_class = "other"
+    return f"{scheme}://{host}/… ({path_class})"
+
+
+def is_safe_download_redirect_url(url: str) -> bool:
+    """Redirect-Ziel: HTTPS, kein Userinfo, Port 443/default, nie Watermarked.
+
+    Fremde CDN-Hosts sind erlaubt — sensible Header werden dort nicht
+    weitergereicht (siehe `_download_headers_for_url`).
+    """
+    text = (url or "").strip()
+    if not text:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(text)
+    except ValueError:
+        return False
+    if parsed.scheme != "https":
+        return False
+    if not parsed.netloc or not parsed.path:
+        return False
+    if "@" in parsed.netloc or parsed.username or parsed.password:
+        return False
+    if not (parsed.hostname or "").strip():
+        return False
+    if parsed.port not in (None, 443):
+        return False
+    path = parsed.path
+    if "/Watermarked/" in path or path.rstrip("/").endswith("/Watermarked"):
+        return False
+    return True
+
+
+def _urlopen_download(req: urllib.request.Request, timeout: float = 180):
+    """Download-HTTP ohne Auto-Redirect.
+
+    Wenn Tests `urllib.request.urlopen` monkeypatchen, wird dieser Patch
+    genutzt (bestehende Suite). Sonst: dedizierter No-Redirect-Opener.
+    """
+    if urllib.request.urlopen is not _ORIG_URLOPEN:
+        return urllib.request.urlopen(req, timeout=timeout)
+    opener = urllib.request.build_opener(_NoFollowRedirectHandler)
+    return opener.open(req, timeout=timeout)
 
 
 @dataclass
@@ -438,6 +522,26 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             "x-product": self._product_name(),
             "User-Agent": ADOBE_STOCK_REQUEST_USER_AGENT,
         }
+
+    def _download_headers_for_url(self, url: str, api_key: str) -> dict:
+        """Adobe-Hosts: x-api-key/x-product. Fremde Redirect-Hosts: nur UA.
+
+        Authorization wird im Downloadpfad ohnehin nicht gesetzt; zusätzlich
+        werden sensible Header-Namen explizit von Nicht-Adobe-Hosts ferngehalten.
+        """
+        try:
+            host = (urllib.parse.urlparse(url).hostname or "").lower()
+        except ValueError:
+            host = ""
+        headers = {"User-Agent": ADOBE_STOCK_REQUEST_USER_AGENT}
+        if host in ADOBE_DOWNLOAD_ALLOWED_HOSTS:
+            headers["x-api-key"] = api_key
+            headers["x-product"] = self._product_name()
+        # Defense-in-depth: niemals sensible Keys an Nicht-Allowlist-Hosts.
+        for key in list(headers):
+            if key.lower() in _SENSITIVE_DOWNLOAD_HEADER_NAMES and host not in ADOBE_DOWNLOAD_ALLOWED_HOSTS:
+                headers.pop(key, None)
+        return headers
 
     @staticmethod
     def _prepare_download_url(url: str, access_token: str, *, size: int | None = None) -> str:
@@ -1364,6 +1468,100 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             self.request_counters.licensed_ok += 1
         return purchase_details
 
+    def _validate_redirect_target(self, target: str, *, hop: int) -> None:
+        if not is_safe_download_redirect_url(target):
+            raise AdobeUnsafeRedirectError(
+                f"Unsicheres Download-Redirect-Ziel bei Hop {hop}: "
+                f"{safe_download_url_label(target)}.",
+                details={"hop": hop, "url_label": safe_download_url_label(target)},
+            )
+
+    def _open_download_following_redirects(
+        self,
+        start_url: str,
+        *,
+        api_key: str,
+    ):
+        """Öffnet start_url und folgt max. MAX_DOWNLOAD_REDIRECTS sicheren Hops.
+
+        Jedes Ziel: HTTPS, kein Userinfo, kein Watermarked. Schleifen abbrechen.
+        Sensible Header nur an Adobe-Allowlist-Hosts.
+        """
+        current = start_url
+        seen: set[str] = set()
+        for hop in range(0, MAX_DOWNLOAD_REDIRECTS + 1):
+            # Hop 0: Start-URL wurde vom Caller als Adobe-Download geprüft.
+            # Folgehops: HTTPS/Userinfo/Watermarked-Regeln.
+            if hop > 0:
+                self._validate_redirect_target(current, hop=hop)
+
+            norm = urllib.parse.urldefrag(current)[0]
+            if norm in seen:
+                raise AdobeUnsafeRedirectError(
+                    f"Download-Redirect-Schleife erkannt bei Hop {hop} "
+                    f"({safe_download_url_label(current)}).",
+                    details={"hop": hop, "url_label": safe_download_url_label(current)},
+                )
+            seen.add(norm)
+
+            headers = self._download_headers_for_url(current, api_key)
+            req = urllib.request.Request(current, headers=headers)
+            try:
+                response = _urlopen_download(req, timeout=180)
+            except urllib.error.HTTPError as exc:
+                if exc.code in _REDIRECT_STATUS_CODES:
+                    location = ""
+                    if exc.headers:
+                        location = str(exc.headers.get("Location") or "").strip()
+                    try:
+                        exc.read()
+                    except Exception:
+                        pass
+                    if not location:
+                        raise AdobeUnsafeRedirectError(
+                            f"Redirect HTTP {exc.code} ohne Location "
+                            f"({safe_download_url_label(current)}).",
+                            details={"http_status": exc.code, "hop": hop},
+                        ) from exc
+                    if hop >= MAX_DOWNLOAD_REDIRECTS:
+                        raise AdobeUnsafeRedirectError(
+                            f"Download-Redirect-Limit ({MAX_DOWNLOAD_REDIRECTS}) überschritten "
+                            f"bei {safe_download_url_label(current)}.",
+                            details={"hop": hop, "limit": MAX_DOWNLOAD_REDIRECTS},
+                        ) from exc
+                    current = urllib.parse.urljoin(current, location)
+                    continue
+                raise
+            status = int(getattr(response, "status", 200) or 200)
+            if status in _REDIRECT_STATUS_CODES:
+                # Manche Mocks/Server liefern Redirect ohne HTTPError.
+                location = str(response.headers.get("Location") or "").strip()
+                try:
+                    response.close()
+                except Exception:
+                    pass
+                if not location:
+                    raise AdobeUnsafeRedirectError(
+                        f"Redirect-Status {status} ohne Location "
+                        f"({safe_download_url_label(current)}).",
+                        details={"http_status": status, "hop": hop},
+                    )
+                if hop >= MAX_DOWNLOAD_REDIRECTS:
+                    raise AdobeUnsafeRedirectError(
+                        f"Download-Redirect-Limit ({MAX_DOWNLOAD_REDIRECTS}) überschritten "
+                        f"bei {safe_download_url_label(current)}.",
+                        details={"hop": hop, "limit": MAX_DOWNLOAD_REDIRECTS},
+                    )
+                current = urllib.parse.urljoin(current, location)
+                continue
+            return response
+
+        raise AdobeUnsafeRedirectError(
+            f"Download-Redirect-Limit ({MAX_DOWNLOAD_REDIRECTS}) erschöpft "
+            f"({safe_download_url_label(start_url)}).",
+            details={"limit": MAX_DOWNLOAD_REDIRECTS},
+        )
+
     def _stream_download_to_file(
         self,
         url: str,
@@ -1376,8 +1574,9 @@ class AdobeStockAdapter(SupplementSourceAdapter):
     ) -> None:
         """Lädt url chunked auf local_path herunter.
 
-        HTTP 429: dieselbe Download-URL erneut (max 3 Versuche), kein neuer
-        Content/License-Call. Teildatei (.part) wird zwischen Versuchen entfernt.
+        HTTP 429: dieselbe vorbereitete Start-URL erneut (max 3 Versuche), kein
+        neuer Content/License-Call. Redirects werden manuell und begrenzt
+        verfolgt. Teildatei (.part) wird bei jedem Fehler entfernt.
         """
         if classify_adobe_url(url) != "download" or not is_full_adobe_download_url(url):
             if classify_adobe_url(url) == "watermarked":
@@ -1386,21 +1585,24 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                     "Watermarked-URL wird nicht als Vollversion heruntergeladen."
                 )
             raise RuntimeError(
-                f"Download-URL abgelehnt (url_class={classify_adobe_url(url)})."
+                f"Download-URL abgelehnt (url_class={classify_adobe_url(url)}, "
+                f"label={safe_download_url_label(url)})."
             )
         download_url = self._prepare_download_url(url, access_token, size=size)
         last_retry_after = ""
         last_request_id = ""
         for attempt in range(1, _MAX_LICENSE_ATTEMPTS + 1):
             local_path.unlink(missing_ok=True)
-            req = urllib.request.Request(
-                download_url, headers=self._download_headers(api_key)
-            )
             try:
-                with urllib.request.urlopen(req, timeout=180) as response:
+                with self._open_download_following_redirects(
+                    download_url, api_key=api_key
+                ) as response:
                     status = int(getattr(response, "status", 200) or 200)
                     if status != 200:
-                        raise RuntimeError(f"Adobe-Download HTTP-Status {status}.")
+                        raise RuntimeError(
+                            f"Adobe-Download HTTP-Status {status} "
+                            f"({safe_download_url_label(download_url)})."
+                        )
                     content_length = response.headers.get("Content-Length")
                     if max_bytes is not None and content_length:
                         try:
@@ -1449,12 +1651,14 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                         raise AdobeRateLimitedError(
                             f"Adobe-Download rate-limited (HTTP 429) nach "
                             f"{_MAX_LICENSE_ATTEMPTS} Versuchen "
-                            f"(request_id={request_id or '—'}).",
+                            f"(request_id={request_id or '—'}, "
+                            f"url={safe_download_url_label(download_url)}).",
                             details={
                                 "http_status": 429,
                                 "request_id": request_id,
                                 "retry_after": retry_after,
                                 "attempts": attempt,
+                                "url_label": safe_download_url_label(download_url),
                             },
                         ) from exc
                     self.request_counters.retries += 1
@@ -1465,12 +1669,18 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                     wait_s = max(0.5, min(60.0, wait_s)) + random.uniform(0.05, 0.35)
                     time.sleep(wait_s)
                     continue
+                # Keine vollständige/signierte URL in die Exception.
                 raise RuntimeError(
-                    f"Adobe-Download fehlgeschlagen (HTTP {exc.code}): {body or exc.reason}"
+                    f"Adobe-Download fehlgeschlagen (HTTP {exc.code}) "
+                    f"für {safe_download_url_label(download_url)}: "
+                    f"{body or exc.reason}"
                 ) from exc
             except urllib.error.URLError as exc:
                 local_path.unlink(missing_ok=True)
-                raise RuntimeError(f"Adobe-Download fehlgeschlagen: {exc}") from exc
+                raise RuntimeError(
+                    f"Adobe-Download fehlgeschlagen "
+                    f"({safe_download_url_label(download_url)}): {exc.reason}"
+                ) from exc
             except OSError as exc:
                 local_path.unlink(missing_ok=True)
                 self.request_counters.local_storage_errors += 1
@@ -1483,6 +1693,7 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             details={
                 "retry_after": last_retry_after,
                 "request_id": last_request_id,
+                "url_label": safe_download_url_label(download_url),
             },
         )
 

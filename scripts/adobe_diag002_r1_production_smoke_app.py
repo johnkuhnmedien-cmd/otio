@@ -1,13 +1,14 @@
-"""DIAG-002-R1 Produktions-Smoke: echte Route-Funktion, kein UI-Nachbau.
+"""DIAG-002-R1 Display-Smoke (NICHT alleiniger Abnahmenachweis).
 
-Ruft `render_adobe_research_import_page` auf — dieselbe Funktion, die
-`otio_app/ui/routing.py` für `url_path=\"adobe-stock-import\"` registriert.
+Ruft `render_adobe_research_import_page` auf. Für Endzustand-Szenarien wird
+ein fertiges Result in JobManager._jobs gesetzt — das zeigt nur die UI.
 
-Szenarien über Umgebungsvariable ADOBE_R1_SMOKE_SCENARIO:
-  route | info429 | cancelled | watermarked | download429
+Für EVIDENCE-02 bitte zusätzlich nutzen:
+  - tests/test_adobe_e2_route_apptest.py (Button → JobManager.start → Import)
+  - tests/test_adobe_licensing_diag_e2.py (Redirect + Job-Pfad)
+  - ADOBE_E2_APP_SMOKE=1 streamlit run app.py
 
-Service-Grenzen werden gemockt (Job-Manager / Readiness / OAuth-Status).
-Keine echten Tokens und keine signierten Download-URLs.
+Szenarien: ADOBE_R1_SMOKE_SCENARIO=route|info429|cancelled|watermarked|download429
 """
 
 from __future__ import annotations

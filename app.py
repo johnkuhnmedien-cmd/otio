@@ -674,6 +674,22 @@ def render_project_list_page() -> None:
                         st.rerun()
 
 
+# Evidence-only (ADOBE-STOCK-LICENSING-DIAG-002-R1-EVIDENCE-02):
+# Mit ADOBE_E2_APP_SMOKE=1 wird die Adobe-HTTP-Grenze gemockt und zur
+# Route adobe-stock-import navigiert — kein Seed fertiger Import-Results.
+import os as _os_adobe_e2
+
+if _os_adobe_e2.environ.get("ADOBE_E2_APP_SMOKE") == "1":
+    import importlib.util
+    from pathlib import Path as _Path_adobe_e2
+
+    _hooks = _Path_adobe_e2(__file__).resolve().parent / "scripts" / "adobe_e2_app_smoke_hooks.py"
+    _spec = importlib.util.spec_from_file_location("adobe_e2_app_smoke_hooks", _hooks)
+    if _spec and _spec.loader:
+        _mod = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _mod.install_before_navigation()
+
 run_app_navigation(
     render_new_project=render_new_project_page,
     render_project_list=render_project_list_page,
