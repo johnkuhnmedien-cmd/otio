@@ -448,18 +448,73 @@ def _is_stale_accepted_supplement(
     return cand_run != expected_run_id
 
 
+def find_clean_media_for_candidate(
+    project: Project, *, candidate_id: str
+) -> Path | None:
+    """Sucht ``clean/**/{candidate_id}*`` — kanonische Kopie nach Clean Media."""
+    cid = (candidate_id or "").strip()
+    if not cid:
+        return None
+    root = Path(project.project_root).expanduser()
+    clean_root = root / "clean"
+    if not clean_root.is_dir():
+        return None
+    matches = [p for p in clean_root.rglob(f"{cid}*") if p.is_file()]
+    if not matches:
+        return None
+    # Bevorzuge mp4 / längeren Namen (oft mit Auflösungssuffix).
+    matches.sort(key=lambda p: (p.suffix.lower() != ".mp4", -len(p.name), str(p)))
+    return matches[0]
+
+
+def reconcile_accepted_supplement_paths(project: Project) -> int:
+    """Accepted ``stock/downloads`` → vorhandene Clean-Kopie umbiegen.
+
+    Behebt Altbestand, bei dem Funnel Accepted vor Clean geschrieben hat.
+    """
+    path = accepted_supplements_path(project)
+    accepted = load_model(path, AcceptedSupplementsDocument)
+    if accepted is None or not accepted.supplements:
+        return 0
+    updated: list[StockCandidate] = []
+    changed_n = 0
+    for candidate in accepted.supplements:
+        local = str(candidate.local_media_path or "").replace("\\", "/")
+        if "/stock/downloads/" not in local.lower():
+            updated.append(candidate)
+            continue
+        clean = find_clean_media_for_candidate(
+            project, candidate_id=str(candidate.candidate_id or "")
+        )
+        if clean is None or not clean.is_file():
+            updated.append(candidate)
+            continue
+        updated.append(
+            candidate.model_copy(update={"local_media_path": str(clean.resolve())})
+        )
+        changed_n += 1
+    if changed_n:
+        write_json(
+            path,
+            accepted.model_copy(update={"supplements": updated}),
+        )
+    return changed_n
+
+
 def migrate_accepted_supplements(project: Project) -> AcceptedSupplementsDocument | None:
     """Bereinigt Bridge-Gaps; Run-ID-Drift wird rebound statt gelöscht.
 
     Früher: fremde/fehlende ``cut_plan_run_id`` → Eintrag weg. Das hat nach
     LLM-Recuts alle manuellen/Funnel-Fills vernichtet. Jetzt: Rebind auf den
     aktuellen Lauf (gleiche Gap-ID), nur Legacy-``gap_bridge_*`` fliegt raus.
+    Zusätzlich: Accepted-Pfade von stock/downloads auf clean umbiegen.
     """
     from otio_app.services.without_voiceover_enhanced.gap_status_service import (
         rebind_gap_fills_to_current_run,
     )
 
     rebind_gap_fills_to_current_run(project)
+    reconcile_accepted_supplement_paths(project)
 
     path = accepted_supplements_path(project)
     accepted = load_model(path, AcceptedSupplementsDocument)

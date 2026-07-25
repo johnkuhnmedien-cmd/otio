@@ -341,6 +341,16 @@ def rebind_gap_fills_to_current_run(project: Project) -> dict[str, int]:
             )
             if media is None:
                 continue
+            # Clean-Kopie bevorzugen, falls vorhanden.
+            from otio_app.services.without_voiceover_enhanced.local_media_service import (
+                find_clean_media_for_candidate,
+            )
+
+            clean = find_clean_media_for_candidate(
+                project, candidate_id=candidate_id
+            )
+            if clean is not None and clean.is_file():
+                media = clean
             gap = gap_by_id.get(gid)
             description = (
                 (gap.needed_visual if gap else "")
