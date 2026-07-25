@@ -105,15 +105,22 @@ def test_intro_prompt_rules() -> None:
     assert "shot_min" in prompt
     assert "NOT enforced" in prompt
     assert "KEYWORD / ENUMERATION SYNC" in prompt
+    assert "KEYWORD-DRIVEN" in prompt
     assert "keyword onset" in prompt
     assert "words[]" in prompt
-    assert "Prefer WORD TIMINGS" in prompt
+    assert "WORD TIMESTAMPS = PERFECT TIMING" in prompt
+    assert "Copy that entry's offset_seconds EXACTLY" in prompt
+    assert "ONLY" in prompt and "valid basis for keyword/list cut timing" in prompt
+    assert "copy offset_seconds VERBATIM" in prompt
     assert "word times are not listed" not in prompt
+    assert "Prefer WORD TIMINGS" not in prompt
     assert "offset_seconds" in prompt
     assert "mid_sentence" in prompt
     assert "ElevenLabs" in prompt
     assert "When both are present, offset_seconds wins." in prompt
     assert "Do NOT pre-roll list-item pictures" in prompt
+    assert "Do NOT merge two different named places" in prompt
+    assert "onset: <cue word>" in prompt or "onset: <word>" in prompt
     assert "NEVER put mid_sentence" in prompt
     assert "TWO DIFFERENT FIELDS" in prompt
     assert "do NOT fill gaps inside the VO" in prompt

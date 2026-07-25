@@ -1191,11 +1191,15 @@ def build_intro_unified_cut_prompt(
     sentence_block = ""
     if sentence_timings_json.strip():
         sentence_block = f"""
-SENTENCE TIMINGS (authoritative; from ElevenLabs character timestamps,
-relative to each segment's audio). Each sentence may include words[] with
-text / start_seconds / end_seconds / offset_seconds (offset_seconds =
-seconds from that sentence's start_seconds). Prefer words[].offset_seconds
-for keyword/list onset cuts when present.
+SENTENCE TIMINGS + WORD TIMESTAMPS (AUTHORITATIVE timing source):
+from ElevenLabs character timestamps, relative to each segment's audio.
+Each sentence may include words[] with:
+  text, start_seconds, end_seconds, offset_seconds
+(offset_seconds = seconds from that sentence's start_seconds).
+When words[] is non-empty for a sentence, those word onsets are the ONLY
+valid basis for keyword/list cut timing — copy offset_seconds VERBATIM.
+Do not invent, round creatively, or estimate from text proportion while
+words[] exists.
 {sentence_timings_json}
 """
     return f"""\
@@ -1228,31 +1232,49 @@ INTRO-SPECIFIC RULES (CRITICAL — differ from chapter cuts):
 - Use only segment_ids / sentence_ids from the Intro inputs.
 - Use only local_asset_id values that exist in BUNDLED INVENTORY.
 
-KEYWORD / ENUMERATION SYNC (CRITICAL — do not show places early):
+KEYWORD / ENUMERATION SYNC (HARD RULE — highest priority after strong-only):
 
-- When the VO names a concrete place, landmark, chapter topic, or list item,
-  the picture for that item MUST start at the spoken keyword onset — not
-  earlier in the same sentence or list.
+- Intro editing is KEYWORD-DRIVEN. Scan the locked Intro VO for every concrete
+  visual cue: place names, landmarks, chapter topics, list/enumeration items,
+  distinctive nouns that deserve their own picture.
+- For EACH such cue, there MUST be a picture cut whose start boundary lands
+  on that cue's spoken onset — never earlier in the same sentence/list, never
+  during filler/connective speech before the word.
 - Bad: show Antelope Canyon while the VO is still on a previous place / still
   leading into the list.
 - Good: cut to Antelope Canyon exactly as \"Antelope\" / the place keyword begins.
 - Lists / enumerations in the hook: one short picture cut per list item, each
-  starting at that item's keyword onset.
+  starting at that item's keyword onset (typically ~1s shots are fine).
 - Do NOT pre-roll list-item pictures during filler / connective speech before
   their keyword.
+- Do NOT merge two different named places/items into one hold that starts on
+  the first and \"covers\" the second — each named cue gets its own onset cut.
 - After the LAST list/keyword cut: that closing picture continues through any
   remaining VO (outro line, tag, breath) until the true VO end. Do NOT place
   the final boundary at the last keyword — place it at the last sentence end.
 - Opening hold is separate: slot 1 may begin 4.0s before VO (Python preroll).
   From VO start onward, keyword-onset sync applies to every place/list cut.
-- Prefer WORD TIMINGS: for keyword/list cuts, set alignment \"mid_sentence\"
-  and offset_seconds from words[].offset_seconds of the spoken keyword (or
-  the first word of a multi-word place name). Fall back to text proportion
-  only when words[] is missing for that sentence.
+
+WORD TIMESTAMPS = PERFECT TIMING (MANDATORY when words[] present):
+
+- words[] in SENTENCE TIMINGS is the authoritative clock for Intro cuts.
+- For every keyword/list interior boundary:
+  1. Find the cue word (or first word of a multi-word place name) in words[].
+  2. Copy that entry's offset_seconds EXACTLY into the boundary
+     (no ± guesses, no text-length proportion, no \"about middle\").
+  3. Set alignment=\"mid_sentence\" and position=\"middle\" (or early/late only
+     as a coarse label — offset_seconds still wins).
+  4. Name the cue word in the following slot's visual_intent AND
+     asset_fit_reason (e.g. \"onset: Antelope\").
+- If words[] is present but the exact token is missing (compound / punctuation),
+  use the closest words[] onset of the first content word of that name — still
+  a copied words[].offset_seconds, never a free estimate.
+- Fall back to text-proportion offset_seconds ONLY when that sentence's
+  words[] is missing or empty.
 - Example (mid-list cut only — NOT the final boundary):
   words[] contains {{\"text\":\"Antelope\",\"offset_seconds\":1.4}} →
-  boundary at that sentence_id with offset_seconds=1.4, position=\"middle\",
-  alignment=\"mid_sentence\".
+  boundary {{\"sentence_id\":\"…\",\"position\":\"middle\",\"offset_seconds\":1.4,
+  \"alignment\":\"mid_sentence\"}} and the next slot shows Antelope Canyon.
 
 INTRO VO duration (measured): {duration:.3f}s.
 
@@ -1268,17 +1290,16 @@ FORMAT (same as unified chapter plans):
 
 TIMING / BOUNDARY RULES:
 
-- Use SEGMENT TIMINGS + SENTENCE TIMINGS (with words[] when present).
-- Prefer words[].offset_seconds for keyword/list onset; fall back to text
-  proportion only when words[] is missing for that sentence.
+- Use SEGMENT TIMINGS + SENTENCE TIMINGS; when words[] is present it overrides
+  every other timing heuristic for keyword/list cuts.
 - TWO DIFFERENT FIELDS — do not mix them:
   - position = ONLY start|early|middle|late|end (coarse place in the sentence)
   - alignment = ONLY mid_sentence|sentence_boundary|in_pause (cut type)
   - NEVER put mid_sentence / sentence_boundary / in_pause into position.
 - Boundaries use sentence_id + position and/or offset_seconds (seconds from
   that sentence start). When both are present, offset_seconds wins.
-- For keyword/list cuts (interior boundaries only): set offset_seconds
-  explicitly AND alignment=\"mid_sentence\". Example interior cut:
+- For keyword/list cuts (interior boundaries only): offset_seconds MUST be set
+  (from words[] when available) AND alignment=\"mid_sentence\". Example:
   {{\"sentence_id\":\"…\",\"position\":\"middle\",\"offset_seconds\":1.4,
   \"alignment\":\"mid_sentence\"}}
 - First boundary: first Intro sentence, position \"start\", offset_seconds 0
@@ -1295,6 +1316,8 @@ SLOT / ASSET RULES:
 - asset_fit must be exactly: strong | none
 - strong: coverage_gap_id null
 - none: local_asset_id null AND coverage_gap_id + needed_visual + search_concepts
+- For keyword slots: the asset MUST depict the spoken cue; asset_fit_reason
+  must name that cue word (\"onset: <word>\").
 - narrative_function for first/last may be chapter_open / chapter_close
 - The last slot is the closing picture: it must span from its start boundary
   through the full remaining VO to the last boundary (VO end).
@@ -1335,8 +1358,8 @@ OUTPUT SCHEMA:
       "slot_id": "{slug}_slot_001",
       "local_asset_id": "existing_asset_id_or_null",
       "asset_fit": "strong|none",
-      "asset_fit_reason": "Why strong — or why no strong asset exists.",
-      "visual_intent": "...",
+      "asset_fit_reason": "onset: <cue word> — why this asset matches (or why none).",
+      "visual_intent": "Picture for spoken cue <word>…",
       "narrative_function": "chapter_open|orientation|context|evidence|atmosphere|transition|contrast|reveal|reflection|chapter_close",
       "coverage_gap_id": "{slug}_gap_001_or_null",
       "source_range_intent": "representative_middle_section",
@@ -1368,9 +1391,11 @@ FINAL VALIDATION:
 - asset_fit is only strong or none
 - Opening/closing assets differ when both assigned
 - All local_asset_id values exist in BUNDLED INVENTORY (or null)
-- Keyword/list picture cuts use mid_sentence + words[].offset_seconds when
-  words[] is present (else text-proportion offset_seconds)
+- Every named place/list cue has its own mid_sentence onset cut
+- Keyword/list cuts: alignment mid_sentence + offset_seconds copied from
+  words[] when words[] is present (else text-proportion only as fallback)
 - No place/list picture starts before its spoken keyword (except slot-1 preroll)
+- Keyword slots name the cue word in visual_intent / asset_fit_reason
 - Preroll/postroll are outside the VO window — do not leave narration uncovered
 
 LOCKED SCRIPT (Intro only):
