@@ -156,6 +156,24 @@ def list_chapter_cut_statuses(project: Project) -> list[ChapterCutStatus]:
     return [get_chapter_cut_status(project, name) for name in list_body_chapter_names(project)]
 
 
+def list_chapters_needing_unified_cut(project: Project) -> list[str]:
+    """Körper-Kapitel ohne Unified-Plan (offene LLM Cuts)."""
+    return [
+        status.folder_name
+        for status in list_chapter_cut_statuses(project)
+        if not status.has_plan
+    ]
+
+
+def list_chapters_needing_python_timing(project: Project) -> list[str]:
+    """Körper-Kapitel mit Plan, aber ohne passendes Resolved (offene Timings)."""
+    return [
+        status.folder_name
+        for status in list_chapter_cut_statuses(project)
+        if status.has_plan and not status.matches
+    ]
+
+
 def load_prior_chapter_plans(
     project: Project, folder_name: str
 ) -> list[UnifiedCutPlanDocument]:
@@ -266,11 +284,26 @@ def generate_all_chapter_unified_cuts(
     model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    chapter_names: list[str] | None = None,
+    only_open: bool = False,
 ) -> list[ChapterCutGenerateResult]:
-    """Alle Körper-Kapitel sequenziell; schreibt pro-Kapitel JSON + globalen Merge."""
-    names = list_body_chapter_names(project)
+    """Körper-Kapitel sequenziell; schreibt pro-Kapitel JSON + globalen Merge.
+
+    ``only_open=True``: nur Kapitel ohne bestehenden Unified-Plan.
+    ``chapter_names``: explizite Teilmenge (Dramaturgie-Filter bleibt außen).
+    """
+    if chapter_names is not None:
+        names = [str(n).strip() for n in chapter_names if str(n).strip()]
+    elif only_open:
+        names = list_chapters_needing_unified_cut(project)
+    else:
+        names = list_body_chapter_names(project)
     if not names:
-        raise ChapterCutError("Keine Körper-Kapitel für den Unified Cut.")
+        raise ChapterCutError(
+            "Keine offenen Körper-Kapitel für den Unified Cut."
+            if only_open
+            else "Keine Körper-Kapitel für den Unified Cut."
+        )
     out: list[ChapterCutGenerateResult] = []
     total = len(names)
     for index, name in enumerate(names, start=1):
@@ -347,10 +380,26 @@ def resolve_all_chapter_timelines(
     project: Project,
     *,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    chapter_names: list[str] | None = None,
+    only_open: bool = False,
 ) -> list[tuple[str, ResolvedTimelineDocument]]:
-    names = list_body_chapter_names(project)
+    """Python-Timing für Körper-Kapitel.
+
+    ``only_open=True``: nur Kapitel mit Plan, aber ohne passendes Resolved.
+    """
+    if chapter_names is not None:
+        names = [str(n).strip() for n in chapter_names if str(n).strip()]
+    elif only_open:
+        names = list_chapters_needing_python_timing(project)
+    else:
+        names = list_body_chapter_names(project)
     if not names:
-        raise ChapterCutError("Keine Körper-Kapitel für Python Timing.")
+        raise ChapterCutError(
+            "Keine offenen Körper-Kapitel für Python Timing "
+            "(alle mit Plan haben bereits passendes Resolved)."
+            if only_open
+            else "Keine Körper-Kapitel für Python Timing."
+        )
     out: list[tuple[str, ResolvedTimelineDocument]] = []
     total = len(names)
     for index, name in enumerate(names, start=1):
