@@ -1243,7 +1243,15 @@ def search_supplements_for_gaps(
     *,
     providers=None,
     progress_callback: Callable[[float, str], None] | None = None,
+    gap_ids: list[str] | None = None,
+    only_open: bool = True,
 ) -> StockSearchResultsDocument:
+    """Stocksuche für Coverage Gaps.
+
+    Standard: nur **offene** Gaps (Funnel/Accepted/Merge zählen als erfüllt).
+    Sonst würde „Stock suchen“ erneut alle historischen Gaps abfragen, auch
+    wenn die UI nur z. B. 4 offene anzeigt.
+    """
     import time
 
     def _progress(fraction: float, message: str) -> None:
@@ -1259,6 +1267,9 @@ def search_supplements_for_gaps(
         enrich_coverage_search_concepts,
         filter_keyword_concepts,
         heuristic_stock_concepts,
+    )
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        summarize_gap_status,
     )
 
     # E2E-2.1: Prosa in search_concepts vor der Stocksuche ersetzen.
@@ -1289,6 +1300,19 @@ def search_supplements_for_gaps(
     all_candidates: list[StockCandidate] = []
     provider_status: dict[str, str] = {}
     gaps = list(coverage.gaps)
+    if gap_ids is not None:
+        wanted = {str(gid) for gid in gap_ids if str(gid).strip()}
+        gaps = [gap for gap in gaps if str(gap.gap_id) in wanted]
+        if not gaps:
+            raise CutPlanError("Keine der ausgewählten Gaps gefunden.")
+    elif only_open:
+        open_ids = set(summarize_gap_status(project).open_gap_ids)
+        gaps = [gap for gap in gaps if str(gap.gap_id) in open_ids]
+        if not gaps:
+            raise CutPlanError(
+                "Keine offenen Coverage Gaps — Stocksuche übersprungen "
+                "(bereits erfüllte Gaps werden nicht erneut gesucht)."
+            )
     # Vorab Query-Anzahl schätzen für stabile Progress-Bar.
     planned_queries = 0
     gap_queries: list[tuple[Any, list[str]]] = []
@@ -1347,7 +1371,22 @@ def search_supplements_for_gaps(
         dedupe_stock_candidates,
     )
 
-    unique_candidates = dedupe_stock_candidates(all_candidates)
+    unique_new = dedupe_stock_candidates(all_candidates)
+    dropped = max(0, len(all_candidates) - len(unique_new))
+    searched_gap_ids = {str(gap.gap_id) for gap in gaps}
+    # Vorherige Treffer für nicht erneut gesuchte (z. B. erfüllte) Gaps behalten.
+    existing = load_model(stock_search_results_path(project), StockSearchResultsDocument)
+    unique_candidates = unique_new
+    if existing is not None and existing.candidates:
+        preserved = [
+            candidate
+            for candidate in existing.candidates
+            if str(candidate.gap_id or "") not in searched_gap_ids
+        ]
+        if preserved:
+            unique_candidates = dedupe_stock_candidates(
+                [*preserved, *unique_new]
+            )
 
     failed = [
         name
@@ -1355,7 +1394,7 @@ def search_supplements_for_gaps(
         if status == "failed"
     ]
     message = ""
-    if not unique_candidates and failed:
+    if not unique_new and failed:
         message = (
             "Keine Treffer — Anbieter fehlgeschlagen: "
             + ", ".join(failed)
@@ -1363,10 +1402,12 @@ def search_supplements_for_gaps(
         )
     elif failed:
         message = "Teilweise fehlgeschlagen: " + ", ".join(failed)
-    if len(unique_candidates) < len(all_candidates):
-        dropped = len(all_candidates) - len(unique_candidates)
+    if dropped:
         note = f"{dropped} Doppelte Treffer entfernt."
         message = f"{message} {note}".strip() if message else note
+    if only_open and gap_ids is None:
+        open_note = f"Nur offene Gaps gesucht ({len(gaps)})."
+        message = f"{message} {open_note}".strip() if message else open_note
 
     document = StockSearchResultsDocument(
         script_version=locked.script_version,
@@ -1377,7 +1418,7 @@ def search_supplements_for_gaps(
     write_json(stock_search_results_path(project), document)
     _progress(
         1.0,
-        f"Stocksuche fertig · {len(unique_candidates)} Kandidaten",
+        f"Stocksuche fertig · {len(gaps)} Gaps · {len(unique_candidates)} Kandidaten",
     )
     return document
 

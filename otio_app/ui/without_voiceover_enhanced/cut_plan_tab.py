@@ -1789,7 +1789,11 @@ def _render_section_funnel(project) -> None:
         )
         st.rerun()
 
-    if st.button("Stock suchen", key="enh_stock_search"):
+    if st.button(
+        "Stock suchen",
+        key="enh_stock_search",
+        help="Sucht nur für aktuell offene Coverage Gaps (erfüllte Gaps werden übersprungen).",
+    ):
         try:
             progress_bar = st.progress(0.0, text="Stocksuche startet…")
             status_box = st.empty()
@@ -1804,6 +1808,7 @@ def _render_section_funnel(project) -> None:
             results = search_supplements_for_gaps(
                 project,
                 progress_callback=_search_progress,
+                only_open=True,
             )
             # Count-/Status-Caches aktualisieren (ohne späteren Full-Parse).
             st.session_state[
