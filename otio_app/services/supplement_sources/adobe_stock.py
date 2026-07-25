@@ -139,6 +139,21 @@ VIDEO_ENTITLEMENT_HINT = (
 )
 
 _MAX_LICENSE_ATTEMPTS = 3  # inkl. Erstversuch; HTTP 429
+# Manuelle Diagnose/Recovery: hart begrenzt — nie unkontrolliert paginieren.
+MAX_LICENSE_HISTORY_PAGES = 5
+# Hosts aus Content/License- und LicenseHistory-Antworten (Tests/Produktion).
+# Keine Suffix-Tricks (evil.stock.adobe.io), kein HTTP, kein Userinfo.
+ADOBE_DOWNLOAD_ALLOWED_HOSTS = frozenset(
+    {
+        "stock.adobe.io",
+        "stock.adobe.com",
+    }
+)
+_ADOBE_DOWNLOAD_PATH_MARKERS = (
+    "/Rest/Libraries/Download/",
+    "/Download/DownloadFileDirectly/",
+    "/DownloadFileDirectly/",
+)
 
 
 @dataclass
@@ -188,7 +203,12 @@ def classify_adobe_url(url: str) -> str:
     text = (url or "").strip()
     if not text:
         return "missing"
-    if "/Watermarked/" in text:
+    try:
+        parsed = urllib.parse.urlparse(text)
+    except ValueError:
+        return "other"
+    path = parsed.path or ""
+    if "/Watermarked/" in path or path.rstrip("/").endswith("/Watermarked"):
         return "watermarked"
     if is_full_adobe_download_url(text):
         return "download"
@@ -196,21 +216,35 @@ def classify_adobe_url(url: str) -> str:
 
 
 def is_full_adobe_download_url(url: str) -> bool:
-    """Echte Lizenz-Download-URL — keine Wasserzeichen-URL.
+    """Echte Lizenz-Download-URL — Scheme/Host/Pfad strikt validiert.
 
     size=Comp allein ist kein Fehler: Adobe kann just_purchased + Comp +
-    /Rest/Libraries/Download/ liefern; entscheidend ist die URL-Klasse.
+    /Rest/Libraries/Download/ liefern; entscheidend sind Host-Allowlist und
+    Pfadklasse (nie /Watermarked/).
     """
     text = (url or "").strip()
     if not text:
         return False
-    if "/Watermarked/" in text:
+    try:
+        parsed = urllib.parse.urlparse(text)
+    except ValueError:
         return False
-    return (
-        "/Rest/Libraries/Download/" in text
-        or "/Download/DownloadFileDirectly/" in text
-        or "/DownloadFileDirectly/" in text
-    )
+    if parsed.scheme != "https":
+        return False
+    if not parsed.netloc or not parsed.path:
+        return False
+    # Absolute URL ohne Userinfo; Port nur Default/HTTPS.
+    if "@" in parsed.netloc or parsed.username or parsed.password:
+        return False
+    host = (parsed.hostname or "").lower()
+    if host not in ADOBE_DOWNLOAD_ALLOWED_HOSTS:
+        return False
+    if parsed.port not in (None, 443):
+        return False
+    path = parsed.path
+    if "/Watermarked/" in path:
+        return False
+    return any(marker in path for marker in _ADOBE_DOWNLOAD_PATH_MARKERS)
 
 
 def token_fingerprint(token: str | None, *, length: int = 10) -> str:
@@ -1049,13 +1083,21 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         api_key: str,
         access_token: str,
         *,
-        pages: int = 5,
+        pages: int = MAX_LICENSE_HISTORY_PAGES,
     ) -> dict | None:
-        """Sucht in Member/LicenseHistory — nur Diagnose/Recovery, nicht Import-Hot-Path."""
+        """Sucht in Member/LicenseHistory — nur Diagnose/Recovery, nicht Import-Hot-Path.
+
+        `pages` wird hart auf 1..MAX_LICENSE_HISTORY_PAGES begrenzt.
+        """
+        try:
+            pages_i = int(pages)
+        except (TypeError, ValueError):
+            pages_i = MAX_LICENSE_HISTORY_PAGES
+        pages_i = max(1, min(pages_i, MAX_LICENSE_HISTORY_PAGES))
         target = str(content_id)
         self._diag_content_id = target
         self._diag_license_type = "history"
-        for page in range(pages):
+        for page in range(pages_i):
             params = {
                 "locale": "en_US",
                 "all": "true",
@@ -1100,22 +1142,41 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         license_type: str,
         api_key: str,
         access_token: str,
+        *,
+        soft: bool = False,
     ) -> dict:
-        """Content/Info → purchase_details (oder leer bei Fehler)."""
+        """Content/Info → purchase_details.
+
+        Hot-Path (`soft=False`, Default): HTTP 429/401/403 und andere
+        AdobeImportError werden strikt weitergereicht — kein leeres Dict.
+        Nur nichtkritische Diagnose-UI darf `soft=True` nutzen.
+        """
         self._diag_content_id = str(content_id)
         self._diag_license_type = license_type
-        payload = self._request_licensing_json_safe(
-            ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
-            {
-                "content_id": content_id,
-                "license": license_type,
-                "locale": "en_US",
-            },
-            api_key,
-            access_token,
-        )
-        if payload.get("_error"):
-            return {"_error": payload.get("_error"), "_message": payload.get("_message")}
+        params = {
+            "content_id": content_id,
+            "license": license_type,
+            "locale": "en_US",
+        }
+        if soft:
+            payload = self._request_licensing_json_safe(
+                ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
+                params,
+                api_key,
+                access_token,
+            )
+            if payload.get("_error"):
+                return {
+                    "_error": payload.get("_error"),
+                    "_message": payload.get("_message"),
+                }
+        else:
+            payload = self._request_licensing_json(
+                ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
+                params,
+                api_key,
+                access_token,
+            )
         entry = _license_content_entry(payload, content_id)
         details = dict(entry.get("purchase_details") or {})
         details["size"] = entry.get("size")
@@ -1313,77 +1374,117 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         size: int | None,
         max_bytes: int | None,
     ) -> None:
-        """Lädt url chunked auf local_path herunter. Bricht ab (löscht die
-        Teildatei) und wirft AdobeAssetTooLargeError, sobald entweder der
-        Content-Length-Header ODER die Summe der bereits gestreamten Bytes
-        max_bytes überschreitet — max_bytes=None bedeutet keine Grenze
-        (Fotos, oder ein Video, für das ohnehin bereits die kleinste
-        Lizenzvariante läuft)."""
-        if classify_adobe_url(url) == "watermarked":
-            self.request_counters.watermarked += 1
-            raise AdobeWatermarkedPreviewError(
-                "Watermarked-URL wird nicht als Vollversion heruntergeladen."
+        """Lädt url chunked auf local_path herunter.
+
+        HTTP 429: dieselbe Download-URL erneut (max 3 Versuche), kein neuer
+        Content/License-Call. Teildatei (.part) wird zwischen Versuchen entfernt.
+        """
+        if classify_adobe_url(url) != "download" or not is_full_adobe_download_url(url):
+            if classify_adobe_url(url) == "watermarked":
+                self.request_counters.watermarked += 1
+                raise AdobeWatermarkedPreviewError(
+                    "Watermarked-URL wird nicht als Vollversion heruntergeladen."
+                )
+            raise RuntimeError(
+                f"Download-URL abgelehnt (url_class={classify_adobe_url(url)})."
             )
         download_url = self._prepare_download_url(url, access_token, size=size)
-        req = urllib.request.Request(download_url, headers=self._download_headers(api_key))
-        try:
-            with urllib.request.urlopen(req, timeout=180) as response:
-                status = int(getattr(response, "status", 200) or 200)
-                if status != 200:
-                    raise RuntimeError(f"Adobe-Download HTTP-Status {status}.")
-                content_length = response.headers.get("Content-Length")
-                if max_bytes is not None and content_length:
-                    try:
-                        if int(content_length) > max_bytes:
-                            raise AdobeAssetTooLargeError()
-                    except ValueError:
-                        pass
-                total = 0
-                try:
-                    with open(local_path, "wb") as handle:
-                        while True:
-                            chunk = response.read(1024 * 1024)
-                            if not chunk:
-                                break
-                            total += len(chunk)
-                            if max_bytes is not None and total > max_bytes:
-                                raise AdobeAssetTooLargeError()
-                            handle.write(chunk)
-                except OSError as exc:
-                    local_path.unlink(missing_ok=True)
-                    self.request_counters.local_storage_errors += 1
-                    raise LocalStorageError(
-                        f"Lokaler Schreibfehler für {local_path.name}: {exc}",
-                        details={"path": str(local_path), "errno": getattr(exc, "errno", None)},
-                    ) from exc
-        except (AdobeAssetTooLargeError, AdobeImportError):
+        last_retry_after = ""
+        last_request_id = ""
+        for attempt in range(1, _MAX_LICENSE_ATTEMPTS + 1):
             local_path.unlink(missing_ok=True)
-            raise
-        except urllib.error.HTTPError as exc:
+            req = urllib.request.Request(
+                download_url, headers=self._download_headers(api_key)
+            )
             try:
-                body = exc.read().decode("utf-8", errors="replace")[:500]
-            except Exception:
-                body = ""
-            local_path.unlink(missing_ok=True)
-            if exc.code == 429:
-                self.request_counters.http_429 += 1
-                raise AdobeRateLimitedError(
-                    f"Adobe-Download rate-limited (HTTP 429): {body or exc.reason}",
-                    details={"http_status": 429},
+                with urllib.request.urlopen(req, timeout=180) as response:
+                    status = int(getattr(response, "status", 200) or 200)
+                    if status != 200:
+                        raise RuntimeError(f"Adobe-Download HTTP-Status {status}.")
+                    content_length = response.headers.get("Content-Length")
+                    if max_bytes is not None and content_length:
+                        try:
+                            if int(content_length) > max_bytes:
+                                raise AdobeAssetTooLargeError()
+                        except ValueError:
+                            pass
+                    total = 0
+                    try:
+                        with open(local_path, "wb") as handle:
+                            while True:
+                                chunk = response.read(1024 * 1024)
+                                if not chunk:
+                                    break
+                                total += len(chunk)
+                                if max_bytes is not None and total > max_bytes:
+                                    raise AdobeAssetTooLargeError()
+                                handle.write(chunk)
+                    except OSError as exc:
+                        local_path.unlink(missing_ok=True)
+                        self.request_counters.local_storage_errors += 1
+                        raise LocalStorageError(
+                            f"Lokaler Schreibfehler für {local_path.name}: {exc}",
+                            details={
+                                "path": str(local_path),
+                                "errno": getattr(exc, "errno", None),
+                            },
+                        ) from exc
+                return
+            except (AdobeAssetTooLargeError, AdobeImportError):
+                local_path.unlink(missing_ok=True)
+                raise
+            except urllib.error.HTTPError as exc:
+                try:
+                    body = exc.read().decode("utf-8", errors="replace")[:500]
+                except Exception:
+                    body = ""
+                local_path.unlink(missing_ok=True)
+                request_id = str(exc.headers.get("X-Request-Id") if exc.headers else "") or ""
+                retry_after = str(exc.headers.get("Retry-After") if exc.headers else "") or ""
+                last_request_id = request_id
+                last_retry_after = retry_after
+                if exc.code == 429:
+                    self.request_counters.http_429 += 1
+                    if attempt >= _MAX_LICENSE_ATTEMPTS:
+                        raise AdobeRateLimitedError(
+                            f"Adobe-Download rate-limited (HTTP 429) nach "
+                            f"{_MAX_LICENSE_ATTEMPTS} Versuchen "
+                            f"(request_id={request_id or '—'}).",
+                            details={
+                                "http_status": 429,
+                                "request_id": request_id,
+                                "retry_after": retry_after,
+                                "attempts": attempt,
+                            },
+                        ) from exc
+                    self.request_counters.retries += 1
+                    try:
+                        wait_s = float(retry_after) if retry_after else (2 ** (attempt - 1))
+                    except ValueError:
+                        wait_s = float(2 ** (attempt - 1))
+                    wait_s = max(0.5, min(60.0, wait_s)) + random.uniform(0.05, 0.35)
+                    time.sleep(wait_s)
+                    continue
+                raise RuntimeError(
+                    f"Adobe-Download fehlgeschlagen (HTTP {exc.code}): {body or exc.reason}"
                 ) from exc
-            raise RuntimeError(
-                f"Adobe-Download fehlgeschlagen (HTTP {exc.code}): {body or exc.reason}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            local_path.unlink(missing_ok=True)
-            raise RuntimeError(f"Adobe-Download fehlgeschlagen: {exc}") from exc
-        except OSError as exc:
-            local_path.unlink(missing_ok=True)
-            self.request_counters.local_storage_errors += 1
-            raise LocalStorageError(
-                f"Lokaler Schreibfehler: {exc}",
-                details={"path": str(local_path)},
-            ) from exc
+            except urllib.error.URLError as exc:
+                local_path.unlink(missing_ok=True)
+                raise RuntimeError(f"Adobe-Download fehlgeschlagen: {exc}") from exc
+            except OSError as exc:
+                local_path.unlink(missing_ok=True)
+                self.request_counters.local_storage_errors += 1
+                raise LocalStorageError(
+                    f"Lokaler Schreibfehler: {exc}",
+                    details={"path": str(local_path)},
+                ) from exc
+        raise AdobeRateLimitedError(
+            "Adobe-Download rate-limited (HTTP 429) erschöpft.",
+            details={
+                "retry_after": last_retry_after,
+                "request_id": last_request_id,
+            },
+        )
 
     def _extension_for(self, purchase_details: dict, candidate: SupplementCandidate) -> str:
         content_type = str(purchase_details.get("content_type") or "").lower()
@@ -1498,9 +1599,11 @@ class AdobeStockAdapter(SupplementSourceAdapter):
 
         if candidate.media_type == "video":
             duration = probe_duration_seconds(local_path)
-            if duration is None:
+            if duration is None or duration <= 0:
                 local_path.unlink(missing_ok=True)
-                raise RuntimeError("ffprobe konnte Adobe-Download nicht lesen.")
+                raise RuntimeError(
+                    f"ffprobe konnte Adobe-Download nicht lesen (duration={duration!r})."
+                )
 
         sidecar = SupplementAssetSidecar(
             asset_id=f"asset_adobe_{candidate.provider_asset_id}",

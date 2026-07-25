@@ -300,9 +300,12 @@ def test_large_history_not_walked_for_single_import(
         media_hint="video",
     )
     assert history_pages["n"] == 0
-    # Manuelle Diagnose darf begrenzt paginieren — nie unendlich / nie im Hot-Path.
+    # Manuelle Diagnose: pages=150 wird hart auf MAX_LICENSE_HISTORY_PAGES begrenzt.
+    from otio_app.services.supplement_sources.adobe_stock import MAX_LICENSE_HISTORY_PAGES
+
     adapter.find_license_history_download("200", "k", "t", pages=150)
-    assert history_pages["n"] == 150
+    assert history_pages["n"] == MAX_LICENSE_HISTORY_PAGES
+    assert MAX_LICENSE_HISTORY_PAGES == 5
 
 
 def test_http_429_retries_then_success(monkeypatch: pytest.MonkeyPatch) -> None:

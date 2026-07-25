@@ -168,8 +168,12 @@ def render_adobe_oauth_panel(*, key_prefix: str = "adobe_oauth") -> None:
                             out["has_download_url"] = bool(url)
                         return out
 
-                    info4k = adapter.content_info_purchase(cid, "Video_4K", api_key, token)
-                    info_hd = adapter.content_info_purchase(cid, "Video_HD", api_key, token)
+                    info4k = adapter.content_info_purchase(
+                        cid, "Video_4K", api_key, token, soft=True
+                    )
+                    info_hd = adapter.content_info_purchase(
+                        cid, "Video_HD", api_key, token, soft=True
+                    )
                     history = adapter.find_license_history_download(cid, api_key, token)
                     st.write("**Content/Info Video_4K** (URL redigiert)")
                     st.json(_redact_purchase(info4k))

@@ -35,6 +35,7 @@ from otio_app.services.supplement_sources.adobe_stock import (
     AdobeImportError,
     AdobeLicenseNotPossibleError,
     AdobeLicenseTransactionCancelledError,
+    AdobePermissionOrIntegrationError,
     AdobeRateLimitedError,
     AdobeStockAdapter,
     AdobeVideoEntitlementError,
@@ -703,12 +704,13 @@ def _download_purchase_to_path(
             )
         if media_type == "video":
             duration = probe_duration_seconds(part_path)
-            if duration is None:
+            if duration is None or duration <= 0:
                 part_path.unlink(missing_ok=True)
                 adapter.request_counters.invalid_media += 1
                 raise DownloadedMediaInvalidError(
-                    f"Lokale Videodatei technisch ungültig: {final_path.name}",
-                    details={"path": str(final_path)},
+                    f"Lokale Videodatei technisch ungültig "
+                    f"(duration={duration!r}): {final_path.name}",
+                    details={"path": str(final_path), "duration": duration},
                 )
         if phase_callback is not None:
             phase_callback(f"umbenennen → {final_path.name}")
@@ -801,10 +803,27 @@ def _license_and_download_to_path(
         _sleep(_LICENSE_RETRY_PAUSE_SECONDS if len(tried) > 1 else _API_CALL_PAUSE_SECONDS)
 
         # Bereits lizenziert? Content/Info zuerst (kein neuer Kauf / kein license_again).
+        # Hot-Path: Content/Info ist strikt — 429/401/403 werden nicht verschluckt.
         _phase(f"Content/Info ({license_type})…")
-        info = adapter.content_info_purchase(
-            content_id, license_type, api_key, access_token
-        )
+        try:
+            info = adapter.content_info_purchase(
+                content_id, license_type, api_key, access_token, soft=False
+            )
+        except AdobeRateLimitedError:
+            raise
+        except AdobePermissionOrIntegrationError:
+            raise
+        except AdobeAuthenticationExpiredError:
+            prior_sub = str(decode_access_token_claims(access_token).get("sub") or "")
+            access_token = get_adobe_access_token(force_refresh=True) or access_token
+            new_sub = str(decode_access_token_claims(access_token).get("sub") or "")
+            if prior_sub and new_sub and prior_sub != new_sub:
+                raise AdobeIdentityChangedError(
+                    f"OAuth-sub wechselte nach Token-Refresh ({prior_sub[:8]}… → {new_sub[:8]}…)."
+                )
+            info = adapter.content_info_purchase(
+                content_id, license_type, api_key, access_token, soft=False
+            )
         info_state = str(info.get("state") or "")
         info_url = str(info.get("url") or "")
         if info_state in {"purchased", "just_purchased"} and is_full_adobe_download_url(info_url):
@@ -827,7 +846,14 @@ def _license_and_download_to_path(
             except AdobeAssetTooLargeError:
                 attempt_errors.append(f"{license_type}: >600MB → Fallback HD")
                 continue
-            except (LocalStorageError, DownloadedMediaInvalidError, AdobeRateLimitedError):
+            except (
+                LocalStorageError,
+                DownloadedMediaInvalidError,
+                AdobeRateLimitedError,
+                AdobeAuthenticationExpiredError,
+                AdobePermissionOrIntegrationError,
+                AdobeIdentityChangedError,
+            ):
                 raise
             except AdobeImportError as exc:
                 attempt_errors.append(f"{license_type}: Info-Download [{exc.code}] {exc}")
@@ -849,12 +875,23 @@ def _license_and_download_to_path(
             raise
         except AdobeRateLimitedError:
             raise
+        except AdobePermissionOrIntegrationError:
+            raise
+        except AdobeIdentityChangedError:
+            raise
         except AdobeVideoEntitlementError:
             raise
         except AdobeAuthenticationExpiredError:
             # Ein Refresh-Versuch, dann erneut — sonst stoppen.
+            prior_sub = str(decode_access_token_claims(access_token).get("sub") or "")
             try:
                 access_token = get_adobe_access_token(force_refresh=True) or access_token
+                new_sub = str(decode_access_token_claims(access_token).get("sub") or "")
+                if prior_sub and new_sub and prior_sub != new_sub:
+                    raise AdobeIdentityChangedError(
+                        f"OAuth-sub wechselte nach Token-Refresh "
+                        f"({prior_sub[:8]}… → {new_sub[:8]}…)."
+                    )
                 purchase = adapter._license_asset(
                     content_id,
                     license_type,
@@ -863,6 +900,8 @@ def _license_and_download_to_path(
                     diagnose=False,
                 )
             except AdobeAuthenticationExpiredError:
+                raise
+            except AdobeIdentityChangedError:
                 raise
             except AdobeVideoEntitlementError:
                 raise
@@ -1349,8 +1388,19 @@ def download_research_import(
     }
     if state_path is not None:
         diag_path = state_path / "adobe_research_import_diagnostics.json"
-        diag_path.write_text(
-            json.dumps(result.diagnostics, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        try:
+            diag_path.write_text(
+                json.dumps(result.diagnostics, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            # Best effort: Medienimporte bleiben gültig; Diagnosefehler separat.
+            result.diagnostics = {
+                **result.diagnostics,
+                "diagnostics_write_error": {
+                    "path": str(diag_path),
+                    "errno": getattr(exc, "errno", None),
+                    "message": str(exc),
+                },
+            }
     return result

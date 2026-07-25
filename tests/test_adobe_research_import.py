@@ -178,7 +178,7 @@ def test_video_license_path_uses_files_meta_and_video_licenses(
         def lookup_file_metadata(self, content_id, api_key):
             return {"media_type_id": 4, "content_type": "video/mp4"}
 
-        def content_info_purchase(self, content_id, license_type, api_key, access_token):
+        def content_info_purchase(self, content_id, license_type, api_key, access_token, *, soft=False):
             return {"state": "not_purchased"}
 
         def find_license_history_download(self, content_id, api_key, access_token, *, pages=5):
@@ -314,7 +314,7 @@ def test_content_info_4k_over_600mb_continues_to_hd(
         def lookup_file_metadata(self, content_id, api_key):
             return {"media_type_id": 4, "content_type": "video/mp4"}
 
-        def content_info_purchase(self, content_id, license_type, api_key, access_token):
+        def content_info_purchase(self, content_id, license_type, api_key, access_token, *, soft=False):
             if license_type == "Video_4K":
                 return {
                     "state": "purchased",
@@ -416,7 +416,7 @@ def test_already_licensed_uses_content_info_url(
         def lookup_file_metadata(self, content_id, api_key):
             return {"media_type_id": 4, "content_type": "video/mp4"}
 
-        def content_info_purchase(self, content_id, license_type, api_key, access_token):
+        def content_info_purchase(self, content_id, license_type, api_key, access_token, *, soft=False):
             if license_type == "Video_HD":
                 return {
                     "state": "purchased",
