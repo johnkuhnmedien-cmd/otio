@@ -378,6 +378,15 @@ def test_open_batch_helpers_skip_finished_chapters(tmp_path) -> None:
             has_resolved=False,
             matches=False,
         ),
+        ChapterCutStatus(
+            folder_name="OpenGaps",
+            folder_slug="opengaps",
+            has_plan=True,
+            plan_slots=2,
+            has_resolved=False,
+            matches=False,
+            open_gap_ids=["OpenGaps_gap_001"],
+        ),
     ]
     with patch(
         "otio_app.services.without_voiceover_enhanced.chapter_cut_service.list_chapter_cut_statuses",
@@ -385,6 +394,7 @@ def test_open_batch_helpers_skip_finished_chapters(tmp_path) -> None:
     ):
         assert list_chapters_needing_unified_cut(object()) == ["NeedLLM"]  # type: ignore[arg-type]
         assert list_chapters_needing_python_timing(object()) == ["NeedTiming"]  # type: ignore[arg-type]
+        assert "OpenGaps" not in list_chapters_needing_python_timing(object())  # type: ignore[arg-type]
 
 
 def test_generate_all_only_open_filters_names(tmp_path) -> None:
@@ -433,3 +443,27 @@ def test_resolve_chapter_requires_plan(tmp_path) -> None:
         raise AssertionError("expected ChapterCutError")
     except ChapterCutError as exc:
         assert "fehlt" in str(exc).lower() or "Plan" in str(exc)
+
+
+def test_resolve_chapter_blocked_when_gaps_open(tmp_path) -> None:
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        resolve_chapter_timeline,
+    )
+
+    project = _project(tmp_path)
+    plan = _plan("yosemite", slots=2)
+    # zweiter Slot mit offener Gap
+    slots = list(plan.slots)
+    slots[1] = _slot("yosemite_slot_002", fit="none", asset=None)
+    plan = plan.model_copy(update={"slots": slots})
+    write_json(chapter_unified_cut_plan_path(project, "Yosemite"), plan)
+
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.chapter_open_gap_ids",
+        return_value=["gap_yosemite_slot_002"],
+    ):
+        try:
+            resolve_chapter_timeline(project, "Yosemite")
+            raise AssertionError("expected ChapterCutError")
+        except ChapterCutError as exc:
+            assert "offene Coverage Gap" in str(exc)

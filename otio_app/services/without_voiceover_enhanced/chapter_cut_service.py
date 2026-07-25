@@ -64,6 +64,16 @@ class ChapterCutStatus:
     resolved_path: Path | None = None
     errors: list[str] = field(default_factory=list)
     repairs: list[str] = field(default_factory=list)
+    open_gap_ids: list[str] = field(default_factory=list)
+
+    @property
+    def open_gap_count(self) -> int:
+        return len(self.open_gap_ids)
+
+    @property
+    def timing_ready(self) -> bool:
+        """Python Timing nur mit Plan und ohne offene Coverage Gaps."""
+        return self.has_plan and self.open_gap_count == 0
 
 
 @dataclass
@@ -125,7 +135,39 @@ def invalidate_chapter_resolved_timeline(project: Project, folder_name: str) -> 
     return True
 
 
-def get_chapter_cut_status(project: Project, folder_name: str) -> ChapterCutStatus:
+def chapter_open_gap_ids(
+    project: Project,
+    folder_name: str,
+    *,
+    open_gap_id_set: set[str] | None = None,
+) -> list[str]:
+    """Offene Coverage-Gap-IDs eines Kapitel-Plans (Reihenfolge der Slots)."""
+    plan = load_chapter_unified_plan(project, folder_name)
+    if plan is None or not plan.slots:
+        return []
+    if open_gap_id_set is None:
+        from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+            summarize_gap_status,
+        )
+
+        open_gap_id_set = set(summarize_gap_status(project).open_gap_ids)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for slot in plan.slots:
+        gid = str(getattr(slot, "coverage_gap_id", "") or "").strip()
+        if not gid or gid not in open_gap_id_set or gid in seen:
+            continue
+        seen.add(gid)
+        ordered.append(gid)
+    return ordered
+
+
+def get_chapter_cut_status(
+    project: Project,
+    folder_name: str,
+    *,
+    open_gap_id_set: set[str] | None = None,
+) -> ChapterCutStatus:
     slug = chapter_folder_slug(folder_name)
     plan_path = chapter_unified_cut_plan_path(project, folder_name)
     resolved_path = chapter_resolved_timeline_path(project, folder_name)
@@ -136,6 +178,9 @@ def get_chapter_cut_status(project: Project, folder_name: str) -> ChapterCutStat
     if resolved is not None:
         errors = list(resolved.errors or [])
         repairs = list(resolved.repairs or [])
+    open_ids = chapter_open_gap_ids(
+        project, folder_name, open_gap_id_set=open_gap_id_set
+    )
     return ChapterCutStatus(
         folder_name=folder_name,
         folder_slug=slug,
@@ -149,11 +194,20 @@ def get_chapter_cut_status(project: Project, folder_name: str) -> ChapterCutStat
         resolved_path=resolved_path,
         errors=errors,
         repairs=repairs,
+        open_gap_ids=open_ids,
     )
 
 
 def list_chapter_cut_statuses(project: Project) -> list[ChapterCutStatus]:
-    return [get_chapter_cut_status(project, name) for name in list_body_chapter_names(project)]
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        summarize_gap_status,
+    )
+
+    open_set = set(summarize_gap_status(project).open_gap_ids)
+    return [
+        get_chapter_cut_status(project, name, open_gap_id_set=open_set)
+        for name in list_body_chapter_names(project)
+    ]
 
 
 def list_chapters_needing_unified_cut(project: Project) -> list[str]:
@@ -166,11 +220,20 @@ def list_chapters_needing_unified_cut(project: Project) -> list[str]:
 
 
 def list_chapters_needing_python_timing(project: Project) -> list[str]:
-    """Körper-Kapitel mit Plan, aber ohne passendes Resolved (offene Timings)."""
+    """Körper-Kapitel mit Plan, geschlossenen Gaps, ohne passendes Resolved."""
     return [
         status.folder_name
         for status in list_chapter_cut_statuses(project)
-        if status.has_plan and not status.matches
+        if status.timing_ready and not status.matches
+    ]
+
+
+def list_chapters_ready_for_python_timing(project: Project) -> list[str]:
+    """Körper-Kapitel mit Plan und ohne offene Gaps (auch bereits getimte)."""
+    return [
+        status.folder_name
+        for status in list_chapter_cut_statuses(project)
+        if status.timing_ready
     ]
 
 
@@ -343,6 +406,16 @@ def resolve_chapter_timeline(
             f"Kapitel-Plan fehlt für „{folder_name}“ — zuerst LLM Cut."
         )
 
+    open_gaps = chapter_open_gap_ids(project, folder_name)
+    if open_gaps:
+        preview = ", ".join(open_gaps[:5])
+        more = f" (+{len(open_gaps) - 5})" if len(open_gaps) > 5 else ""
+        raise ChapterCutError(
+            f"Python Timing für „{folder_name}“ blockiert: "
+            f"{len(open_gaps)} offene Coverage Gap(s) — zuerst Funnel/Manual "
+            f"schließen ({preview}{more})."
+        )
+
     target = (folder_name or "").strip()
 
     def _include(name: str) -> bool:
@@ -385,20 +458,23 @@ def resolve_all_chapter_timelines(
 ) -> list[tuple[str, ResolvedTimelineDocument]]:
     """Python-Timing für Körper-Kapitel.
 
-    ``only_open=True``: nur Kapitel mit Plan, aber ohne passendes Resolved.
+    ``only_open=True``: nur Kapitel mit Plan + geschlossenen Gaps, ohne Resolved.
+    Sonst: alle timing-bereiten Kapitel (Plan + Gaps zu). Kapitel mit offenen
+    Gaps werden übersprungen / nicht angeboten.
     """
     if chapter_names is not None:
         names = [str(n).strip() for n in chapter_names if str(n).strip()]
     elif only_open:
         names = list_chapters_needing_python_timing(project)
     else:
-        names = list_body_chapter_names(project)
+        names = list_chapters_ready_for_python_timing(project)
     if not names:
         raise ChapterCutError(
-            "Keine offenen Körper-Kapitel für Python Timing "
-            "(alle mit Plan haben bereits passendes Resolved)."
+            "Keine Kapitel für Python Timing "
+            "(offene Gaps schließen oder Plan fehlt / Timing schon fertig)."
             if only_open
-            else "Keine Körper-Kapitel für Python Timing."
+            else "Keine Kapitel für Python Timing "
+            "(Plan fehlt oder Coverage Gaps noch offen)."
         )
     out: list[tuple[str, ResolvedTimelineDocument]] = []
     total = len(names)
