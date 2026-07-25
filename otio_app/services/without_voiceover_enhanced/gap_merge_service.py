@@ -548,16 +548,28 @@ def _write_merge_rejection_to_funnel(
     write_json(supplement_funnel_report_path(project), report)
 
     # Rejected Accepted-Einträge entfernen, damit Funnel neu rankt.
+    # Manual-Assign nie löschen — Redaktionsentscheidung bleibt erhalten.
     if rejected:
         accepted = load_model(
             accepted_supplements_path(project), AcceptedSupplementsDocument
         )
         if accepted is not None:
             reject_set = set(rejected)
+
+            def _is_manual(item: StockCandidate) -> bool:
+                return (
+                    str(item.provider or "").strip().lower() == "manual"
+                    or str(getattr(item, "assign_status", "") or "")
+                    .strip()
+                    .lower()
+                    == "manual"
+                )
+
             kept = [
                 s
                 for s in accepted.supplements
-                if s.candidate_id not in reject_set
+                if _is_manual(s)
+                or s.candidate_id not in reject_set
                 or (s.gap_id or "").strip() != gap_id
             ]
             if len(kept) != len(accepted.supplements):
@@ -623,11 +635,16 @@ def merge_export_ready_gaps_into_timeline(
     timeline: ResolvedTimelineDocument | None = None,
     require_closed_none: bool = False,
     persist: bool = True,
+    unified: UnifiedCutPlanDocument | None = None,
+    persist_report: bool | None = None,
 ) -> tuple[ResolvedTimelineDocument, GapMergeReport]:
     """Ersetzt Gap-Assets deterministisch; Timeline-Zeiten bleiben fix.
 
     ``require_closed_none=False``: Preview/Merge-Zwischenstand erlaubt offene none.
     ``True``: offene none → ``GapMergeError`` (Produktions-Gate).
+    ``unified``: optional Kapitel-/Intro-Plan (sonst globaler Unified-Plan).
+    ``persist_report``: Default = ``persist``; bei Kapitel-Timing Report schreiben,
+    Timeline aber nur in chapter_resolved speichern.
     """
     locked = require_locked_script(project)
     if timeline is None:
@@ -636,7 +653,10 @@ def merge_export_ready_gaps_into_timeline(
         raise GapMergeError("Resolved Timeline fehlt.")
 
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
-    unified = load_model(unified_cut_plan_path(project), UnifiedCutPlanDocument)
+    if unified is None:
+        unified = load_model(unified_cut_plan_path(project), UnifiedCutPlanDocument)
+    if persist_report is None:
+        persist_report = persist
     funnel = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
     options = load_cut_plan_options(project)
     ready = list_export_ready_supplements(project)
@@ -860,6 +880,7 @@ def merge_export_ready_gaps_into_timeline(
 
     if persist:
         write_json(resolved_timeline_path(project), merged_timeline)
+    if persist_report:
         write_json(gap_merge_report_path(project), report)
 
     if require_closed_none and report.open_none_gap_ids:

@@ -301,6 +301,17 @@ def assign_local_file_to_open_gap(
         or (gap.editorial_purpose or "").strip()
         or gap_id
     )
+    duration_seconds: float | None = None
+    if media_type == "video":
+        try:
+            from otio_app.services.media_utils import probe_duration_seconds
+
+            probed = probe_duration_seconds(target)
+            if probed is not None and float(probed) > 0:
+                duration_seconds = float(probed)
+        except Exception:  # noqa: BLE001
+            duration_seconds = None
+
     candidate = StockCandidate(
         candidate_id=candidate_id,
         provider="manual",
@@ -316,6 +327,7 @@ def assign_local_file_to_open_gap(
         selected=True,
         gap_id=gap_id,
         local_media_path=str(target),
+        duration_seconds=duration_seconds,
         media_validation_status=STATUS_EXPORT_READY,
         media_validation_error=None,
         funnel_managed=True,

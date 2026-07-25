@@ -317,3 +317,5 @@ def test_ui_manual_gap_assign_markers() -> None:
     assert "enh_manual_gap_flash_" in source
     assert "result.hint" in source
     assert "st.info" in source
+    assert "Python Timing" in source
+    assert "Gap-Merge übernimmt" in source
