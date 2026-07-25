@@ -1280,6 +1280,7 @@ def test_idempotent_skip_export_ready_gaps(tmp_path: Path) -> None:
     )
     report = run_supplement_funnel_for_gaps(project, skip_filled=True, force_restart=False)
     assert "gap_1" in report.skipped_gap_ids
+    assert "gap_1" in report.filled_gap_ids
 
 
 def test_historical_review_ready_document_still_readable(tmp_path: Path) -> None:
@@ -1389,6 +1390,7 @@ def test_inventory_import_and_no_duplicate_on_rerun(tmp_path: Path) -> None:
         force_restart=False,
     )
     assert "gap_1" in report2.skipped_gap_ids
+    assert "gap_1" in report2.filled_gap_ids
     assert downloads == []
     accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     assert accepted is not None

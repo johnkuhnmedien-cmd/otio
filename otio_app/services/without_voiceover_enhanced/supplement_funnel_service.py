@@ -882,6 +882,9 @@ def run_supplement_funnel_for_gaps(
             )
         ):
             report.skipped_gap_ids.append(gap.gap_id)
+            # Bereits erfüllte Gaps weiter als erfüllt zählen (UI / Report).
+            if gap.gap_id not in report.filled_gap_ids:
+                report.filled_gap_ids.append(gap.gap_id)
             _emit(
                 progress_callback,
                 FunnelProgressEvent(

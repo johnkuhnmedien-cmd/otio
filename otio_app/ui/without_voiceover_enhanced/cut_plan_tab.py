@@ -2198,7 +2198,11 @@ def _render_section_funnel(project) -> None:
 
     accepted_n = _accepted_count(project)
     if accepted_n:
-        st.info(f"Akzeptiert: {accepted_n} Supplements")
+        st.info(
+            f"Akzeptiert: **{accepted_n}** Supplements in "
+            "`accepted_supplements.json` (kumulativ für diesen Cut-Plan-Lauf — "
+            "inkl. früherer Funnel-/Manual-Zuordnungen, nicht nur dieser Lauf)."
+        )
     show_local_key = f"enh_show_local_assign_{project.id}"
     st.checkbox(
         f"Lokale Dateizuordnung laden ({accepted_n})",

@@ -1,4 +1,4 @@
-"""Fix 4: Gap-Status — weak offen bis Merge; stale Run-IDs invalidieren."""
+"""Gap-Status — Funnel/Accepted schließt Gaps; stale Run-IDs invalidieren."""
 
 from __future__ import annotations
 
@@ -86,7 +86,8 @@ def test_unified_to_rough_writes_cut_plan_run_id() -> None:
     assert not is_weak_upgrade_gap(coverage.gaps[1])
 
 
-def test_weak_stays_open_despite_funnel_export_ready(tmp_path: Path) -> None:
+def test_weak_closes_when_funnel_export_ready(tmp_path: Path) -> None:
+    """Download/export_ready schließt weak sofort in der UI (nicht erst Merge)."""
     project = _project(tmp_path)
     plan = _plan()
     write_json(unified_cut_plan_path(project), plan)
@@ -116,10 +117,49 @@ def test_weak_stays_open_despite_funnel_export_ready(tmp_path: Path) -> None:
 
     status = summarize_gap_status(project)
     assert status.total == 2
-    assert "gap_weak" in status.open_gap_ids
-    assert "gap_none" in status.filled_gap_ids
-    assert status.open_count == 1
+    assert status.open_count == 0
+    assert set(status.filled_gap_ids) == {"gap_weak", "gap_none"}
+
+
+def test_accepted_export_ready_closes_gap_without_funnel_entry(
+    tmp_path: Path,
+) -> None:
+    """Bereits akzeptierte Downloads zählen als erfüllt, auch ohne Funnel-filled."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        AcceptedSupplementsDocument,
+        StockCandidate,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        accepted_supplements_path,
+    )
+
+    project = _project(tmp_path)
+    plan = _plan()
+    write_json(unified_cut_plan_path(project), plan)
+    _rough, coverage = unified_to_rough(plan)
+    write_json(coverage_gaps_path(project), coverage)
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version="script-v1",
+            supplements=[
+                StockCandidate(
+                    candidate_id="cand_prev",
+                    provider="pexels",
+                    gap_id="gap_weak",
+                    media_validation_status="export_ready",
+                    cut_plan_run_id=coverage.cut_plan_run_id,
+                    local_media_path="/tmp/prev.mp4",
+                )
+            ],
+        ),
+    )
+
+    status = summarize_gap_status(project)
+    assert "gap_weak" in status.filled_gap_ids
+    assert "gap_none" in status.open_gap_ids
     assert status.filled_count == 1
+    assert status.open_count == 1
 
 
 def test_weak_closes_only_after_merge_decision(tmp_path: Path) -> None:

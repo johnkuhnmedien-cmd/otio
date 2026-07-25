@@ -1,4 +1,4 @@
-"""Gap-Status pro Cut-Plan-Lauf (Fix 4): weak offen bis Merge; kein Stale-Zähler."""
+"""Gap-Status pro Cut-Plan-Lauf: Download/Accepted schließt Gaps in der UI."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from pathlib import Path
 from otio_app.models import Project
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model
 from otio_app.services.without_voiceover_enhanced.models import (
+    AcceptedSupplementsDocument,
     CoverageGap,
     CoverageGapsDocument,
     GapMergeReport,
@@ -17,6 +18,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
     UnifiedCutPlanDocument,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
+    accepted_supplements_path,
     coverage_gaps_path,
     gap_merge_report_path,
     supplement_funnel_report_path,
@@ -149,13 +151,49 @@ def _merge_closed_ids(
     return closed, False
 
 
+def _accepted_export_ready_gap_ids(
+    project: Project,
+    *,
+    expected_run_id: str,
+) -> set[str]:
+    """Gaps mit export_ready Accepted-Supplement der aktuellen Run-ID.
+
+    Deckt Funnel-Downloads und manuelle Zuordnung ab — auch wenn der aktuelle
+    Funnel-Report die Gap nicht mehr in ``filled_gap_ids`` führt (z. B. Skip /
+    neuer Lauf überschreibt den Report).
+    """
+    accepted = load_model(
+        accepted_supplements_path(project), AcceptedSupplementsDocument
+    )
+    if accepted is None or not accepted.supplements:
+        return set()
+    ready: set[str] = set()
+    for candidate in accepted.supplements:
+        gid = str(getattr(candidate, "gap_id", "") or "").strip()
+        if not gid:
+            continue
+        status = str(
+            getattr(candidate, "media_validation_status", "") or ""
+        ).strip()
+        if status != "export_ready":
+            continue
+        cand_run = str(getattr(candidate, "cut_plan_run_id", "") or "").strip()
+        if expected_run_id:
+            if not cand_run or cand_run != expected_run_id:
+                continue
+        ready.add(gid)
+    return ready
+
+
 def summarize_gap_status(project: Project) -> GapStatusSummary:
     """Aktueller Gap-Status relativ zum Unified-Cut-Plan-Lauf.
 
-    Regeln (Fix 4):
+    Regeln:
     - Gap-Liste kommt aus coverage_gaps.json (aktueller Plan).
-    - weak-Upgrade bleibt offen bis Merge (merged | kept_local_weak).
-    - none kann durch Funnel export_ready (gleiche Run-ID) als erfüllt gelten.
+    - Funnel export_ready / Download (gleiche Run-ID) schließt weak und none.
+    - Accepted export_ready (gleiche Run-ID) schließt ebenfalls — auch ohne
+      aktuellen Funnel-Eintrag.
+    - Merge (merged | kept_local_weak) schließt weiterhin.
     - Stale Funnel/Merge (andere/fehlende Run-ID) zählen nicht.
     """
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
@@ -172,6 +210,7 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
         funnel, expected_run_id=run_id
     )
     merge_closed, merge_stale = _merge_closed_ids(merge, expected_run_id=run_id)
+    accepted_ready = _accepted_export_ready_gap_ids(project, expected_run_id=run_id)
 
     # Zusätzlich: Coverage neuer als Funnel → Funnel-Zähler stale.
     cov_path = coverage_gaps_path(project)
@@ -193,15 +232,11 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
         gid = (gap.gap_id or "").strip()
         if not gid:
             continue
-        if gid in merge_closed:
-            filled_ids.append(gid)
-            continue
-        if is_weak_upgrade_gap(gap):
-            # Lokales Asset / alter Funnel zählt nicht.
-            open_ids.append(gid)
-            continue
-        # none / high: Funnel export_ready mit passender Run-ID reicht für UI „erfüllt“.
-        if gid in funnel_ready:
+        if (
+            gid in merge_closed
+            or gid in funnel_ready
+            or gid in accepted_ready
+        ):
             filled_ids.append(gid)
         else:
             open_ids.append(gid)
