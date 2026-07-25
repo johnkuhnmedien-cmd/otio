@@ -449,16 +449,27 @@ def _is_stale_accepted_supplement(
 
 
 def migrate_accepted_supplements(project: Project) -> AcceptedSupplementsDocument | None:
-    """Verwirft stale Accepted-Einträge (ohne/fremde run_id, Bridge-Gaps)."""
+    """Bereinigt Bridge-Gaps; Run-ID-Drift wird rebound statt gelöscht.
+
+    Früher: fremde/fehlende ``cut_plan_run_id`` → Eintrag weg. Das hat nach
+    LLM-Recuts alle manuellen/Funnel-Fills vernichtet. Jetzt: Rebind auf den
+    aktuellen Lauf (gleiche Gap-ID), nur Legacy-``gap_bridge_*`` fliegt raus.
+    """
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        rebind_gap_fills_to_current_run,
+    )
+
+    rebind_gap_fills_to_current_run(project)
+
     path = accepted_supplements_path(project)
     accepted = load_model(path, AcceptedSupplementsDocument)
     if accepted is None:
         return None
-    expected_run_id = _expected_cut_plan_run_id(project)
     kept: list[StockCandidate] = []
     changed = False
     for candidate in accepted.supplements:
-        if _is_stale_accepted_supplement(candidate, expected_run_id=expected_run_id):
+        gap_id = str(candidate.gap_id or "").strip()
+        if gap_id.startswith("gap_bridge_") or gap_id == "gap_bridge_001":
             changed = True
             continue
         kept.append(candidate)
@@ -475,8 +486,7 @@ def migrate_accepted_supplements(project: Project) -> AcceptedSupplementsDocumen
 def list_export_ready_supplements(project: Project) -> list[StockCandidate]:
     """export_ready Supplements der aktuellen Cut-Plan-Run-ID.
 
-    E2E-4: Einträge ohne/mit fremder ``cut_plan_run_id`` sowie Legacy-
-    ``gap_bridge_*`` zählen nirgends — Migration verwirft sie einmalig.
+    Migration reboundet Run-ID-Drift und entfernt nur Legacy-Bridge-Gaps.
     """
     accepted = migrate_accepted_supplements(project)
     if accepted is None:
@@ -486,8 +496,18 @@ def list_export_ready_supplements(project: Project) -> list[StockCandidate]:
     refreshed_list: list[StockCandidate] = []
     changed = False
     for candidate in accepted.supplements:
-        if _is_stale_accepted_supplement(candidate, expected_run_id=expected_run_id):
+        gap_id = str(candidate.gap_id or "").strip()
+        if gap_id.startswith("gap_bridge_") or gap_id == "gap_bridge_001":
             changed = True
+            continue
+        cand_run = str(getattr(candidate, "cut_plan_run_id", "") or "").strip()
+        if expected_run_id and cand_run and cand_run != expected_run_id:
+            # Noch nicht reboundbar (Gap fehlt im aktuellen Plan) — behalten,
+            # aber nicht als export_ready für diesen Lauf ausliefern.
+            refreshed_list.append(candidate)
+            continue
+        if expected_run_id and not cand_run:
+            refreshed_list.append(candidate)
             continue
         refreshed = refresh_supplement_validation(candidate)
         if refreshed.model_dump() != candidate.model_dump():

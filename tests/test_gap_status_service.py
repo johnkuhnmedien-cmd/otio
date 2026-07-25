@@ -226,6 +226,67 @@ def test_stale_funnel_without_accepted_does_not_count_as_filled(
     assert list_open_funnel_gap_ids(project) == ["gap_weak", "gap_none"]
 
 
+def test_restore_accepted_from_funnel_when_accepted_was_purged(
+    tmp_path: Path,
+) -> None:
+    """Alte Migration leerte Accepted — Fills aus Funnel + Datei wiederherstellen."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        AcceptedSupplementsDocument,
+        FunnelCandidateRecord,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        accepted_supplements_path,
+        stock_candidate_download_dir,
+    )
+
+    project = _project(tmp_path)
+    plan = _plan()
+    write_json(unified_cut_plan_path(project), plan)
+    _rough, coverage = unified_to_rough(plan)
+    write_json(coverage_gaps_path(project), coverage)
+
+    media_dir = stock_candidate_download_dir(
+        project, gap_id="gap_none", candidate_id="pexels_video_restore"
+    )
+    media_dir.mkdir(parents=True)
+    media = media_dir / "pexels_video_restore.mp4"
+    media.write_bytes(b"\x00" * 128)
+
+    write_json(
+        supplement_funnel_report_path(project),
+        SupplementFunnelReport(
+            run_id="funnel_old",
+            script_version="script-v1",
+            cut_plan_run_id="old_run",
+            filled_gap_ids=["gap_none"],
+            gaps=[
+                SupplementFunnelGapReport(
+                    gap_id="gap_none",
+                    filled=True,
+                    export_ready_candidate_id="pexels_video_restore",
+                    candidates=[
+                        FunnelCandidateRecord(
+                            candidate_id="pexels_video_restore",
+                            provider="pexels",
+                            funnel_status="export_ready",
+                            local_media_path=str(media),
+                        )
+                    ],
+                )
+            ],
+        ),
+    )
+
+    status = summarize_gap_status(project)
+    assert "gap_none" in status.filled_gap_ids
+    assert "wiederhergestellt" in (status.message or "").lower() or status.filled_count >= 1
+    accepted = load_model(
+        accepted_supplements_path(project), AcceptedSupplementsDocument
+    )
+    assert accepted is not None
+    assert any(s.candidate_id == "pexels_video_restore" for s in accepted.supplements)
+
+
 def test_accepted_with_old_run_id_rebinds_to_current_plan(tmp_path: Path) -> None:
     """Nach neuem Cut-Plan-Lauf: Accepted mit gleicher Gap-ID wieder erfüllt."""
     from otio_app.services.without_voiceover_enhanced.models import (

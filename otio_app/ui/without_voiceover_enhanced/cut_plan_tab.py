@@ -2123,9 +2123,14 @@ def _render_section_funnel(project) -> None:
                     except Exception as exc:  # noqa: BLE001
                         st.error(f"Fehler: {exc}")
     elif open_gap_ids:
+        st.info(
+            f"Manuelle Gap-Liste ist ausgeblendet ({open_gaps_count} offen). "
+            "Checkbox **„Offene Gaps manuell zuordnen laden“** aktivieren, "
+            "dann erscheinen die Gaps mit Suchqueries und Pfadfeld."
+        )
+    elif filled_gaps_count:
         st.caption(
-            f"Manuelle Gap-Zuordnung ausgeblendet ({open_gaps_count} offen). "
-            "Checkbox aktivieren zum Bearbeiten."
+            f"Keine offenen Gaps — {filled_gaps_count} bereits erfüllt."
         )
 
     flash_key = f"enh_manual_gap_flash_{project.id}"

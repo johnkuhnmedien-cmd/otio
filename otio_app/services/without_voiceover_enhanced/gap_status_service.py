@@ -14,6 +14,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
     CoverageGap,
     CoverageGapsDocument,
     GapMergeReport,
+    StockCandidate,
     SupplementFunnelReport,
     UnifiedCutPlanDocument,
 )
@@ -21,6 +22,7 @@ from otio_app.services.without_voiceover_enhanced.paths import (
     accepted_supplements_path,
     coverage_gaps_path,
     gap_merge_report_path,
+    stock_candidate_download_dir,
     supplement_funnel_report_path,
     unified_cut_plan_path,
 )
@@ -186,76 +188,207 @@ def _accepted_export_ready_gap_ids(
     return ready
 
 
+def _resolve_funnel_media_path(
+    project: Project,
+    *,
+    gap_id: str,
+    candidate_id: str,
+    local_media_path: str = "",
+) -> Path | None:
+    """Lokale Datei für Funnel-/Manual-Fill finden (Accepted war evtl. gelöscht)."""
+    raw = (local_media_path or "").strip()
+    if raw:
+        path = Path(raw).expanduser()
+        if path.is_file():
+            return path
+    download_dir = stock_candidate_download_dir(
+        project, gap_id=gap_id, candidate_id=candidate_id
+    )
+    if download_dir.is_dir():
+        for child in sorted(download_dir.iterdir()):
+            if child.is_file() and not child.name.startswith("."):
+                return child
+    # Clean-Kopie: oft ``{candidate_id}_*.mp4`` unter project clean/.
+    root = Path(project.project_root).expanduser()
+    clean_root = root / "clean"
+    if clean_root.is_dir():
+        matches = sorted(clean_root.rglob(f"{candidate_id}*"))
+        for match in matches:
+            if match.is_file():
+                return match
+    return None
+
+
 def rebind_gap_fills_to_current_run(project: Project) -> dict[str, int]:
-    """Übernimmt vorhandene Accepted-Fills auf die aktuelle ``cut_plan_run_id``.
+    """Übernimmt vorhandene Accepted-/Funnel-Fills auf die aktuelle Run-ID.
 
     Wenn ein neuer LLM-Cut die Run-ID wechselt, bleiben manuelle/Funnel-
     Downloads mit alter Run-ID sonst „offen“. Gaps mit gleicher Gap-ID und
     ``export_ready`` Accepted werden hier auf den aktuellen Lauf umgebogen —
     ohne erneutes Zuweisen/Downloaden.
 
-    Funnel-Report: Run-ID wird aktualisiert, ``filled_gap_ids`` auf Gaps
-    beschränkt, die im aktuellen Plan liegen und Accepted export_ready haben.
+    Wenn Accepted bereits geleert wurde (alte Migration), werden Fills aus dem
+    Funnel-Report + lokalen Dateien wiederhergestellt.
     """
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
     if coverage is None or not coverage.gaps:
-        return {"accepted": 0, "funnel": 0}
+        return {"accepted": 0, "funnel": 0, "restored": 0}
 
     run_id = str(getattr(coverage, "cut_plan_run_id", "") or "").strip()
     if not run_id:
         run_id = compute_cut_plan_run_id_from_path(unified_cut_plan_path(project))
     if not run_id:
-        return {"accepted": 0, "funnel": 0}
+        return {"accepted": 0, "funnel": 0, "restored": 0}
 
     current_gaps = {
         str(gap.gap_id or "").strip()
         for gap in coverage.gaps
         if str(gap.gap_id or "").strip()
     }
+    gap_by_id = {
+        str(gap.gap_id or "").strip(): gap
+        for gap in coverage.gaps
+        if str(gap.gap_id or "").strip()
+    }
 
     accepted_n = 0
+    restored_n = 0
     accepted_ready_ids: set[str] = set()
     accepted = load_model(
         accepted_supplements_path(project), AcceptedSupplementsDocument
     )
-    if accepted is not None and accepted.supplements:
-        updated: list = []
-        changed = False
-        for candidate in accepted.supplements:
-            gid = str(getattr(candidate, "gap_id", "") or "").strip()
-            status = str(
-                getattr(candidate, "media_validation_status", "") or ""
-            ).strip()
-            cand_run = str(getattr(candidate, "cut_plan_run_id", "") or "").strip()
-            if (
-                gid in current_gaps
-                and status == "export_ready"
-                and cand_run != run_id
-            ):
-                candidate = candidate.model_copy(update={"cut_plan_run_id": run_id})
-                accepted_n += 1
-                changed = True
-            if (
-                gid in current_gaps
-                and str(getattr(candidate, "media_validation_status", "") or "").strip()
-                == "export_ready"
-                and str(getattr(candidate, "cut_plan_run_id", "") or "").strip()
-                == run_id
-            ):
-                accepted_ready_ids.add(gid)
-            updated.append(candidate)
-        if changed:
-            write_json(
-                accepted_supplements_path(project),
-                accepted.model_copy(update={"supplements": updated}),
+    supplements: list[StockCandidate] = list(accepted.supplements) if accepted else []
+    script_version = (
+        accepted.script_version
+        if accepted is not None
+        else str(coverage.script_version or "")
+    )
+    schema_version = (
+        accepted.schema_version
+        if accepted is not None
+        else "enhanced-accepted-supplements-v1"
+    )
+
+    updated: list[StockCandidate] = []
+    changed = False
+    for candidate in supplements:
+        gid = str(getattr(candidate, "gap_id", "") or "").strip()
+        status = str(
+            getattr(candidate, "media_validation_status", "") or ""
+        ).strip()
+        cand_run = str(getattr(candidate, "cut_plan_run_id", "") or "").strip()
+        if (
+            gid in current_gaps
+            and status == "export_ready"
+            and cand_run != run_id
+        ):
+            candidate = candidate.model_copy(update={"cut_plan_run_id": run_id})
+            accepted_n += 1
+            changed = True
+        if (
+            gid in current_gaps
+            and str(getattr(candidate, "media_validation_status", "") or "").strip()
+            == "export_ready"
+            and str(getattr(candidate, "cut_plan_run_id", "") or "").strip()
+            == run_id
+        ):
+            accepted_ready_ids.add(gid)
+        updated.append(candidate)
+
+    # Recovery: Funnel meldet filled, Accepted fehlt (alte Purge-Migration).
+    funnel = load_model(
+        supplement_funnel_report_path(project), SupplementFunnelReport
+    )
+    if funnel is not None:
+        existing_ids = {
+            str(c.candidate_id or "").strip() for c in updated if c.candidate_id
+        }
+        for gap_rep in funnel.gaps or []:
+            gid = str(gap_rep.gap_id or "").strip()
+            if not gid or gid not in current_gaps or gid in accepted_ready_ids:
+                continue
+            if not (gap_rep.filled or gap_rep.export_ready_candidate_id):
+                continue
+            candidate_id = str(gap_rep.export_ready_candidate_id or "").strip()
+            if not candidate_id:
+                ready_rec = next(
+                    (
+                        c
+                        for c in (gap_rep.candidates or [])
+                        if str(c.funnel_status or "") == "export_ready"
+                    ),
+                    None,
+                )
+                if ready_rec is not None:
+                    candidate_id = str(ready_rec.candidate_id or "").strip()
+            if not candidate_id or candidate_id in existing_ids:
+                continue
+            record = next(
+                (
+                    c
+                    for c in (gap_rep.candidates or [])
+                    if str(c.candidate_id or "").strip() == candidate_id
+                ),
+                None,
             )
+            media = _resolve_funnel_media_path(
+                project,
+                gap_id=gid,
+                candidate_id=candidate_id,
+                local_media_path=str(
+                    getattr(record, "local_media_path", "") or ""
+                ),
+            )
+            if media is None:
+                continue
+            gap = gap_by_id.get(gid)
+            description = (
+                (gap.needed_visual if gap else "")
+                or (gap.subject if gap else "")
+                or gid
+            )
+            provider = str(getattr(record, "provider", "") or "manual")
+            media_type = "video"
+            suffix = media.suffix.lower()
+            if suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+                media_type = "photo"
+            restored = StockCandidate(
+                candidate_id=candidate_id,
+                provider=provider,
+                provider_asset_id=candidate_id,
+                title=str(description)[:120],
+                media_type=media_type,
+                creator=str(getattr(record, "creator", "") or provider),
+                source_page=str(getattr(record, "source_page", "") or ""),
+                license=str(getattr(record, "license_name", "") or ""),
+                attribution=str(getattr(record, "attribution", "") or ""),
+                selected=True,
+                gap_id=gid,
+                local_media_path=str(media),
+                media_validation_status="export_ready",
+                funnel_managed=True,
+                cut_plan_run_id=run_id,
+                assign_status="restored",
+            )
+            updated.append(restored)
+            existing_ids.add(candidate_id)
+            accepted_ready_ids.add(gid)
+            restored_n += 1
+            changed = True
+
+    if changed:
+        write_json(
+            accepted_supplements_path(project),
+            AcceptedSupplementsDocument(
+                schema_version=schema_version,
+                script_version=script_version,
+                supplements=updated,
+            ),
+        )
 
     funnel_n = 0
     # Funnel nur anpassen, wenn Accepted-Fills den neuen Lauf verankern —
     # sonst bliebe ein reiner Funnel-Report fälschlich „erfüllt“.
-    funnel = load_model(
-        supplement_funnel_report_path(project), SupplementFunnelReport
-    )
     if funnel is not None and accepted_ready_ids:
         funnel_run = str(getattr(funnel, "cut_plan_run_id", "") or "").strip()
         valid_filled = sorted(accepted_ready_ids)
@@ -304,7 +437,7 @@ def rebind_gap_fills_to_current_run(project: Project) -> dict[str, int]:
             )
             funnel_n = len(valid_filled)
 
-    return {"accepted": accepted_n, "funnel": funnel_n}
+    return {"accepted": accepted_n, "funnel": funnel_n, "restored": restored_n}
 
 
 def summarize_gap_status(project: Project) -> GapStatusSummary:
@@ -368,9 +501,14 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
 
     notes: list[str] = []
     rebound_accepted = int(rebound.get("accepted") or 0)
+    restored = int(rebound.get("restored") or 0)
     if rebound_accepted:
         notes.append(
             f"{rebound_accepted} Accepted-Fill(s) auf aktuellen Cut-Plan-Lauf übernommen"
+        )
+    if restored:
+        notes.append(
+            f"{restored} Fill(s) aus Funnel/Dateien wiederhergestellt"
         )
     if funnel_stale:
         notes.append("Funnel-Report gehört zu einem älteren Cut-Plan-Lauf")
