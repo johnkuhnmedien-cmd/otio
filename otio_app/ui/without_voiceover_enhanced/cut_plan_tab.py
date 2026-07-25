@@ -51,6 +51,7 @@ from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
     list_chapter_cut_statuses,
     list_chapters_needing_python_timing,
     list_chapters_needing_unified_cut,
+    load_chapter_resolved,
     load_chapter_unified_plan,
     resolve_all_chapter_timelines,
     resolve_chapter_timeline,
@@ -1292,7 +1293,7 @@ def _render_chapter_cut_rows(
 
         plan = load_chapter_unified_plan(project, folder)
         if plan is not None and plan.slots:
-            with st.expander(f"Cut Plan · {folder}", expanded=False):
+            with st.expander(f"LLM Cut · {folder}", expanded=False):
                 for slot in plan.slots[:40]:
                     st.caption(
                         f"{slot.slot_id}: fit={slot.asset_fit} · "
@@ -1301,6 +1302,31 @@ def _render_chapter_cut_rows(
                     )
                 if len(plan.slots) > 40:
                     st.caption(f"… +{len(plan.slots) - 40} weitere Slots")
+        resolved = load_chapter_resolved(project, folder)
+        if resolved is not None and resolved.shots:
+            stale = " · Plan geändert — Timing neu" if not status.matches else ""
+            with st.expander(
+                f"Python Timing · {folder} "
+                f"({len(resolved.shots)} Shots · "
+                f"{resolved.total_duration_seconds:.1f}s{stale})",
+                expanded=False,
+            ):
+                for shot in resolved.shots[:40]:
+                    start = float(shot.timeline_start_seconds)
+                    end = float(shot.timeline_end_seconds)
+                    dur = max(0.0, end - start)
+                    fit = (shot.asset_fit or "—").strip() or "—"
+                    gap = (shot.coverage_gap_id or "—").strip() or "—"
+                    st.caption(
+                        f"{shot.shot_id}: "
+                        f"{start:.2f}–{end:.2f}s ({dur:.2f}s) · "
+                        f"asset={shot.asset_id or '—'} · "
+                        f"fit={fit} · gap={gap}"
+                    )
+                if len(resolved.shots) > 40:
+                    st.caption(f"… +{len(resolved.shots) - 40} weitere Shots")
+        elif status.has_plan:
+            st.caption(f"Python Timing · {folder}: noch nicht berechnet.")
         if status.errors or status.repairs:
             with st.expander(
                 f"Hinweise · {folder} "
