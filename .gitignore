@@ -12,6 +12,9 @@ build/
 data/*.db
 data/cache/
 data/user_secrets.env
+data/adobe_stock_oauth.json
+data/adobe_stock_oauth_state.json
+data/adobe_download_projects/
 data/style_profile_library.json
 logs/
 *.log

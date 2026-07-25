@@ -74,21 +74,46 @@ API_PROVIDERS: tuple[ApiProvider, ...] = (
     ),
     ApiProvider(
         env_key="ADOBE_STOCK_API_KEY",
-        label="Adobe Stock — API Key",
+        label="Adobe Stock — API Key (Client ID)",
         description=(
-            "Für die Supplement-Suche im Cut Plan (Adobe wird vor Pexels durchsucht). "
-            "Generative-AI-Assets werden dabei standardmäßig ausgeschlossen."
+            "Client ID aus der Adobe Developer Console. Für Suche sowie OAuth-Login "
+            "(Adobe wird vor Pexels durchsucht). Generative-AI-Assets werden ausgeschlossen."
         ),
         placeholder="…",
         docs_url="https://developer.adobe.com/stock/docs/getting-started/",
         implemented=True,
     ),
     ApiProvider(
-        env_key="ADOBE_STOCK_ACCESS_TOKEN",
-        label="Adobe Stock — Access Token",
+        env_key="ADOBE_STOCK_CLIENT_SECRET",
+        label="Adobe Stock — Client Secret",
         description=(
-            "Nur für automatische Lizenzierung/Download nötig (sofortige Lizenzierung + "
-            "4K/HD-Download im Cut Plan). Ohne Token funktioniert die reine Suche trotzdem."
+            "Für den OAuth-Login (IMS Authorization Code). Zusammen mit der Client ID "
+            "unter API-Schlüssel speichern, dann auf der Seite Adobe Stock Import anmelden."
+        ),
+        placeholder="Client Secret …",
+        docs_url="https://developer.adobe.com/developer-console/docs/guides/authentication/UserAuthentication/",
+        implemented=True,
+    ),
+    ApiProvider(
+        env_key="ADOBE_STOCK_REDIRECT_URI",
+        label="Adobe Stock — OAuth Redirect URI",
+        description=(
+            "Muss exakt in der Adobe Developer Console hinterlegt sein. "
+            "Muss exakt der Adobe Console entsprechen. Typisch: "
+            "https://localhost:8501/adobe-stock-import — nach dem Login ggf. "
+            "in der Browserzeile auf http:// wechseln (Streamlit ohne TLS)."
+        ),
+        placeholder="https://localhost:8501/adobe-stock-import",
+        docs_url="https://developer.adobe.com/developer-console/docs/guides/authentication/UserAuthentication/",
+        implemented=True,
+    ),
+    ApiProvider(
+        env_key="ADOBE_STOCK_ACCESS_TOKEN",
+        label="Adobe Stock — Access Token (manuell, Fallback)",
+        description=(
+            "Optionaler Fallback, falls OAuth nicht genutzt wird. Empfohlen ist der "
+            "OAuth-Login (automatische Token-Erneuerung). Ohne Token funktioniert die "
+            "reine Suche trotzdem."
         ),
         placeholder="Bearer-Token …",
         docs_url="https://developer.adobe.com/stock/docs/getting-started/03-api-authentication/",

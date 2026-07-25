@@ -1391,6 +1391,9 @@ RIGHTS_STATUS_NEEDS_REVIEW = "NEEDS_REVIEW"
 # überschreibbar; bewusst KEIN eigenes UI-Feld dafür (kein Secret, ein
 # sinnvoller Default reicht für praktisch alle Nutzer).
 ADOBE_STOCK_DEFAULT_PRODUCT_NAME = "OTIO-App/1.0"
+# IMS OAuth (Authorization Code) — Client ID = ADOBE_STOCK_API_KEY,
+# Secret = ADOBE_STOCK_CLIENT_SECRET, Redirect = ADOBE_STOCK_REDIRECT_URI.
+ADOBE_STOCK_OAUTH_DEFAULT_REDIRECT_URI = "https://localhost:8501/adobe-stock-import"
 ADOBE_STOCK_SEARCH_ENDPOINT = "https://stock.adobe.io/Rest/Media/1/Search/Files"
 # Adobe media_type_id-Codes (siehe Search-API-Referenz) — nur die für die
 # Supplement-Suche relevanten Typen (Foto/Video), alles andere (Illustration,
@@ -1413,6 +1416,11 @@ ADOBE_STOCK_LICENSE_ENDPOINT = "https://stock.adobe.io/Rest/Libraries/1/Content/
 # Assets (hilfreich bei CC-Pro-/Unlimited-Plänen und manueller API-Freigabe).
 ADOBE_STOCK_CONTENT_INFO_ENDPOINT = "https://stock.adobe.io/Rest/Libraries/1/Content/Info"
 ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT = "https://stock.adobe.io/Rest/Libraries/1/Member/Profile"
+ADOBE_STOCK_LICENSE_HISTORY_ENDPOINT = (
+    "https://stock.adobe.io/Rest/Libraries/1/Member/LicenseHistory"
+)
+# Metadaten für bekannte Content-IDs (media_type_id, content_type, …).
+ADOBE_STOCK_FILES_ENDPOINT = "https://stock.adobe.io/Rest/Media/1/Files"
 # Gültige license-Parameterwerte für Content/License — Fotos/3D/Templates
 # nutzen "Standard", Videos ausschließlich "Video_HD" oder "Video_4K"
 # (siehe Adobe-Stock-Lizenzierungs-Referenz).

@@ -17,11 +17,15 @@ heruntergeladenen Original (siehe cut_plan_supplement_auto_resolve_service.py
 
 from __future__ import annotations
 
+import hashlib
 import json
+import random
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,7 +33,9 @@ from otio_app.analysis_models import SupplementAssetSidecar, SupplementCandidate
 from otio_app.defaults import (
     ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
     ADOBE_STOCK_DEFAULT_PRODUCT_NAME,
+    ADOBE_STOCK_FILES_ENDPOINT,
     ADOBE_STOCK_LICENSE_ENDPOINT,
+    ADOBE_STOCK_LICENSE_HISTORY_ENDPOINT,
     ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT,
     ADOBE_STOCK_LICENSE_TYPE_STANDARD,
     ADOBE_STOCK_LICENSE_TYPE_VIDEO_4K,
@@ -48,6 +54,7 @@ from otio_app.defaults import (
     RIGHTS_STATUS_NEEDS_LICENSE_REVIEW,
     SUPPLEMENT_SOURCE_ADOBE,
 )
+from otio_app.services.adobe_stock_oauth import get_adobe_access_token
 from otio_app.services.api_keys import get_api_key
 from otio_app.services.media_utils import probe_duration_seconds
 from otio_app.services.supplement_search import (
@@ -64,6 +71,271 @@ class AdobeAssetTooLargeError(Exception):
     die aktuell lizenzierte Qualität (Content-Length-Header ODER während
     des Streamings gemessen) überschritten hat — löst in acquire() den
     Wechsel auf die nächstkleinere Lizenzvariante (Video_HD) aus."""
+
+
+class AdobeContentUnavailableError(Exception):
+    """Asset ist bei Adobe nicht mehr verfügbar (HTTP 404 / code 300)."""
+
+
+class AdobeImportError(Exception):
+    """Klassifizierter Adobe-/Import-Fehler mit stabilem Fehlercode."""
+
+    code: str = "adobe_import_error"
+
+    def __init__(self, message: str, *, code: str | None = None, details: dict | None = None):
+        super().__init__(message)
+        if code:
+            self.code = code
+        self.details = details or {}
+
+
+class AdobeRateLimitedError(AdobeImportError):
+    code = "adobe_rate_limited"
+
+
+class AdobeAuthenticationExpiredError(AdobeImportError):
+    code = "adobe_authentication_expired"
+
+
+class AdobePermissionOrIntegrationError(AdobeImportError):
+    code = "adobe_permission_or_integration_error"
+
+
+class AdobeLicenseTransactionCancelledError(AdobeImportError):
+    code = "adobe_license_transaction_cancelled"
+
+
+class AdobeLicenseNotPossibleError(AdobeImportError):
+    code = "adobe_license_not_possible"
+
+
+class AdobeWatermarkedPreviewError(AdobeImportError):
+    code = "adobe_watermarked_preview_only"
+
+
+class AdobeIdentityChangedError(AdobeImportError):
+    code = "adobe_identity_changed"
+
+
+class LocalStorageError(AdobeImportError):
+    code = "local_storage_error"
+
+
+class DownloadedMediaInvalidError(AdobeImportError):
+    code = "downloaded_media_invalid"
+
+
+class AdobeUnsafeRedirectError(AdobeImportError):
+    """Redirect-Ziel oder Redirect-Kette verletzt Download-Sicherheitsregeln."""
+
+    code = "adobe_unsafe_redirect"
+
+
+class AdobeVideoEntitlementError(AdobeImportError):
+    """Legacy/Diagnose: API meldet oft nur Bild-Unlimited — nicht pauschal als Ursache."""
+
+    code = "adobe_video_entitlement_mismatch"
+
+
+VIDEO_ENTITLEMENT_HINT = (
+    "Hinweis: Nach mehreren erfolgreichen Video-Lizenzen können weitere Calls "
+    "mit state=cancelled scheitern — das ist nicht zwingend „kein Unlimited“. "
+    "Prüfen: HTTP 429/Throttling, OAuth-Identität, Content/License-Diagnose. "
+    "size=Comp allein ist kein Fehler; /Watermarked/-URLs sind nie Vollversion."
+)
+
+_MAX_LICENSE_ATTEMPTS = 3  # inkl. Erstversuch; HTTP 429
+# Manuelle Redirect-Folge im Downloadpfad (kein urllib Auto-Follow).
+MAX_DOWNLOAD_REDIRECTS = 5
+_REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+_SENSITIVE_DOWNLOAD_HEADER_NAMES = frozenset(
+    {"authorization", "x-api-key", "x-product"}
+)
+# Snapshot: Unit-Tests patchen oft urllib.request.urlopen — dann übernimmt
+# _urlopen_download diesen Patch. Produktion nutzt den No-Redirect-Opener.
+_ORIG_URLOPEN = urllib.request.urlopen
+# Manuelle Diagnose/Recovery: hart begrenzt — nie unkontrolliert paginieren.
+MAX_LICENSE_HISTORY_PAGES = 5
+# Hosts aus Content/License- und LicenseHistory-Antworten (Tests/Produktion).
+# Keine Suffix-Tricks (evil.stock.adobe.io), kein HTTP, kein Userinfo.
+ADOBE_DOWNLOAD_ALLOWED_HOSTS = frozenset(
+    {
+        "stock.adobe.io",
+        "stock.adobe.com",
+    }
+)
+_ADOBE_DOWNLOAD_PATH_MARKERS = (
+    "/Rest/Libraries/Download/",
+    "/Download/DownloadFileDirectly/",
+    "/DownloadFileDirectly/",
+)
+
+
+class _NoFollowRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Unterdrückt Auto-Redirects — Location wird manuell geprüft."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+def safe_download_url_label(url: str) -> str:
+    """Host + Pfadklasse ohne Query/Signatur — für Logs, Diagnose, Exceptions."""
+    text = (url or "").strip()
+    if not text:
+        return "missing-url"
+    try:
+        parsed = urllib.parse.urlparse(text)
+    except ValueError:
+        return "invalid-url"
+    host = (parsed.hostname or "").lower() or "unknown-host"
+    scheme = parsed.scheme or "unknown"
+    path = parsed.path or "/"
+    if "/Watermarked/" in path or path.rstrip("/").endswith("/Watermarked"):
+        path_class = "watermarked"
+    elif any(marker in path for marker in _ADOBE_DOWNLOAD_PATH_MARKERS):
+        path_class = "adobe-download"
+    else:
+        path_class = "other"
+    return f"{scheme}://{host}/… ({path_class})"
+
+
+def is_safe_download_redirect_url(url: str) -> bool:
+    """Redirect-Ziel: HTTPS, kein Userinfo, Port 443/default, nie Watermarked.
+
+    Fremde CDN-Hosts sind erlaubt — sensible Header werden dort nicht
+    weitergereicht (siehe `_download_headers_for_url`).
+    """
+    text = (url or "").strip()
+    if not text:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(text)
+    except ValueError:
+        return False
+    if parsed.scheme != "https":
+        return False
+    if not parsed.netloc or not parsed.path:
+        return False
+    if "@" in parsed.netloc or parsed.username or parsed.password:
+        return False
+    if not (parsed.hostname or "").strip():
+        return False
+    if parsed.port not in (None, 443):
+        return False
+    path = parsed.path
+    if "/Watermarked/" in path or path.rstrip("/").endswith("/Watermarked"):
+        return False
+    return True
+
+
+def _urlopen_download(req: urllib.request.Request, timeout: float = 180):
+    """Download-HTTP ohne Auto-Redirect.
+
+    Wenn Tests `urllib.request.urlopen` monkeypatchen, wird dieser Patch
+    genutzt (bestehende Suite). Sonst: dedizierter No-Redirect-Opener.
+    """
+    if urllib.request.urlopen is not _ORIG_URLOPEN:
+        return urllib.request.urlopen(req, timeout=timeout)
+    opener = urllib.request.build_opener(_NoFollowRedirectHandler)
+    return opener.open(req, timeout=timeout)
+
+
+@dataclass
+class AdobeRequestCounters:
+    content_info: int = 0
+    content_license: int = 0
+    member_profile: int = 0
+    license_history: int = 0
+    license_history_pages: int = 0
+    http_429: int = 0
+    retries: int = 0
+    licensed_ok: int = 0
+    already_licensed: int = 0
+    cancelled: int = 0
+    watermarked: int = 0
+    local_storage_errors: int = 0
+    invalid_media: int = 0
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class AdobeRequestDiagEvent:
+    timestamp: str
+    endpoint: str
+    content_id: str
+    license_type: str
+    attempt: int
+    batch_id: str
+    asset_index: int
+    http_status: int | None = None
+    request_id: str = ""
+    retry_after: str = ""
+    purchase_state: str = ""
+    purchase_options_state: str = ""
+    quota: object | None = None
+    has_download_url: bool = False
+    url_class: str = "missing"  # download | watermarked | missing | other
+    duration_ms: int = 0
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+def classify_adobe_url(url: str) -> str:
+    text = (url or "").strip()
+    if not text:
+        return "missing"
+    try:
+        parsed = urllib.parse.urlparse(text)
+    except ValueError:
+        return "other"
+    path = parsed.path or ""
+    if "/Watermarked/" in path or path.rstrip("/").endswith("/Watermarked"):
+        return "watermarked"
+    if is_full_adobe_download_url(text):
+        return "download"
+    return "other"
+
+
+def is_full_adobe_download_url(url: str) -> bool:
+    """Echte Lizenz-Download-URL — Scheme/Host/Pfad strikt validiert.
+
+    size=Comp allein ist kein Fehler: Adobe kann just_purchased + Comp +
+    /Rest/Libraries/Download/ liefern; entscheidend sind Host-Allowlist und
+    Pfadklasse (nie /Watermarked/).
+    """
+    text = (url or "").strip()
+    if not text:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(text)
+    except ValueError:
+        return False
+    if parsed.scheme != "https":
+        return False
+    if not parsed.netloc or not parsed.path:
+        return False
+    # Absolute URL ohne Userinfo; Port nur Default/HTTPS.
+    if "@" in parsed.netloc or parsed.username or parsed.password:
+        return False
+    host = (parsed.hostname or "").lower()
+    if host not in ADOBE_DOWNLOAD_ALLOWED_HOSTS:
+        return False
+    if parsed.port not in (None, 443):
+        return False
+    path = parsed.path
+    if "/Watermarked/" in path:
+        return False
+    return any(marker in path for marker in _ADOBE_DOWNLOAD_PATH_MARKERS)
+
+
+def token_fingerprint(token: str | None, *, length: int = 10) -> str:
+    if not token:
+        return ""
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    return digest[: max(8, min(12, length))]
 
 # Pro Szene/Request soll die UI höchstens diese Anzahl an Kandidaten zur
 # Auswahl anbieten, falls request.max_candidates nicht explizit gesetzt ist
@@ -139,6 +411,20 @@ class AdobeStockAdapter(SupplementSourceAdapter):
     last_debug_report: dict = {}
     last_license_diagnostic: dict = {}
 
+    def __init__(self) -> None:
+        self.request_counters = AdobeRequestCounters()
+        self.request_diag_events: list[AdobeRequestDiagEvent] = []
+        self.batch_id = ""
+        self.asset_index = 0
+        self._diag_content_id = ""
+        self._diag_license_type = ""
+
+    def reset_request_diagnostics(self, *, batch_id: str = "") -> None:
+        self.request_counters = AdobeRequestCounters()
+        self.request_diag_events = []
+        self.batch_id = batch_id or uuid.uuid4().hex[:12]
+        self.asset_index = 0
+
     def readiness(self) -> ProviderReadiness:
         if not get_api_key("ADOBE_STOCK_API_KEY"):
             return ProviderReadiness(
@@ -148,14 +434,14 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                 search_enabled=True,
                 acquire_enabled=False,
             )
-        if not get_api_key("ADOBE_STOCK_ACCESS_TOKEN"):
+        if not get_adobe_access_token():
             return ProviderReadiness(
                 provider=self.provider,
                 status=PROVIDER_STATUS_READY,
                 message=(
                     "Adobe Stock API-Key vorhanden — Suche ist aktiv. "
-                    "ADOBE_STOCK_ACCESS_TOKEN fehlt, Lizenzierung/Download ist daher "
-                    "noch nicht möglich."
+                    "Für Lizenzierung/Download bitte OAuth-Login (Adobe Stock Import / "
+                    "API-Schlüssel) oder manuelles ADOBE_STOCK_ACCESS_TOKEN."
                 ),
                 search_enabled=True,
                 acquire_enabled=False,
@@ -168,6 +454,46 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             acquire_enabled=True,
         )
 
+    @staticmethod
+    def entitlement_lacks_video(entitlement_summary: dict) -> bool:
+        """True, wenn Member/Profile bzw. License-Antwort nur Bild-Unlimited zeigt."""
+        entitlement = entitlement_summary.get("available_entitlement") or entitlement_summary
+        if not isinstance(entitlement, dict):
+            return False
+        full = entitlement.get("full_entitlement_quota") or {}
+        if not isinstance(full, dict) or not full:
+            return False
+        keys = {str(k).lower() for k in full}
+        has_image_unlimited = any("image" in k and "unlimited" in k for k in keys)
+        has_video_key = any("video" in k for k in keys)
+        quota = entitlement.get("quota")
+        try:
+            quota_i = int(quota) if quota is not None else None
+        except (TypeError, ValueError):
+            quota_i = None
+        return has_image_unlimited and not has_video_key and quota_i == 0
+
+    def probe_video_entitlement(
+        self,
+        api_key: str,
+        access_token: str,
+        *,
+        content_id: str | None = None,
+    ) -> dict:
+        """Member/Profile mit Video_HD — zeigt, ob das Konto Videos lizenzieren kann."""
+        params: dict = {"license": ADOBE_STOCK_LICENSE_TYPE_VIDEO_HD, "locale": "en_US"}
+        if content_id:
+            params["content_id"] = str(content_id)
+        payload = self._request_licensing_json_safe(
+            ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT,
+            params,
+            api_key,
+            access_token,
+        )
+        summary = self._summarize_member_profile(payload)
+        summary["lacks_video"] = self.entitlement_lacks_video(summary)
+        return summary
+
     def _product_name(self) -> str:
         return get_api_key("ADOBE_STOCK_PRODUCT_NAME") or ADOBE_STOCK_DEFAULT_PRODUCT_NAME
 
@@ -178,7 +504,7 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             "Accept": "application/json",
             "User-Agent": ADOBE_STOCK_REQUEST_USER_AGENT,
         }
-        access_token = get_api_key("ADOBE_STOCK_ACCESS_TOKEN")
+        access_token = get_adobe_access_token()
         if access_token:
             # Optional für die reine Suche — nur mit gültigem Token liefert
             # Adobe zusätzlich den Lizenzstatus (is_licensed) mit.
@@ -196,6 +522,26 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             "x-product": self._product_name(),
             "User-Agent": ADOBE_STOCK_REQUEST_USER_AGENT,
         }
+
+    def _download_headers_for_url(self, url: str, api_key: str) -> dict:
+        """Adobe-Hosts: x-api-key/x-product. Fremde Redirect-Hosts: nur UA.
+
+        Authorization wird im Downloadpfad ohnehin nicht gesetzt; zusätzlich
+        werden sensible Header-Namen explizit von Nicht-Adobe-Hosts ferngehalten.
+        """
+        try:
+            host = (urllib.parse.urlparse(url).hostname or "").lower()
+        except ValueError:
+            host = ""
+        headers = {"User-Agent": ADOBE_STOCK_REQUEST_USER_AGENT}
+        if host in ADOBE_DOWNLOAD_ALLOWED_HOSTS:
+            headers["x-api-key"] = api_key
+            headers["x-product"] = self._product_name()
+        # Defense-in-depth: niemals sensible Keys an Nicht-Allowlist-Hosts.
+        for key in list(headers):
+            if key.lower() in _SENSITIVE_DOWNLOAD_HEADER_NAMES and host not in ADOBE_DOWNLOAD_ALLOWED_HOSTS:
+                headers.pop(key, None)
+        return headers
 
     @staticmethod
     def _prepare_download_url(url: str, access_token: str, *, size: int | None = None) -> str:
@@ -507,6 +853,66 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             adobe_content_type=str(file_entry.get("content_type") or ""),
         )
 
+    def _endpoint_name(self, endpoint: str) -> str:
+        if "Content/Info" in endpoint:
+            return "Content/Info"
+        if "Content/License" in endpoint:
+            return "Content/License"
+        if "Member/Profile" in endpoint:
+            return "Member/Profile"
+        if "LicenseHistory" in endpoint:
+            return "Member/LicenseHistory"
+        if "/Files" in endpoint:
+            return "Media/Files"
+        return endpoint.rsplit("/", 1)[-1] or endpoint
+
+    def _bump_endpoint_counter(self, endpoint_name: str, *, pages: int = 0) -> None:
+        c = self.request_counters
+        if endpoint_name == "Content/Info":
+            c.content_info += 1
+        elif endpoint_name == "Content/License":
+            c.content_license += 1
+        elif endpoint_name == "Member/Profile":
+            c.member_profile += 1
+        elif endpoint_name == "Member/LicenseHistory":
+            c.license_history += 1
+            c.license_history_pages += max(1, pages)
+
+    def _record_diag(
+        self,
+        *,
+        endpoint: str,
+        attempt: int,
+        started: float,
+        http_status: int | None = None,
+        request_id: str = "",
+        retry_after: str = "",
+        purchase_state: str = "",
+        purchase_options_state: str = "",
+        quota: object | None = None,
+        has_download_url: bool = False,
+        url_class: str = "missing",
+    ) -> None:
+        event = AdobeRequestDiagEvent(
+            timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            endpoint=endpoint,
+            content_id=str(self._diag_content_id or ""),
+            license_type=str(self._diag_license_type or ""),
+            attempt=attempt,
+            batch_id=self.batch_id,
+            asset_index=self.asset_index,
+            http_status=http_status,
+            request_id=request_id,
+            retry_after=retry_after,
+            purchase_state=purchase_state,
+            purchase_options_state=purchase_options_state,
+            quota=quota,
+            has_download_url=has_download_url,
+            url_class=url_class,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+        self.request_diag_events.append(event)
+
     def _request_licensing_json(
         self,
         endpoint: str,
@@ -515,12 +921,107 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         access_token: str,
         *,
         timeout: int = 20,
+        allow_rate_limit_retry: bool = True,
     ) -> dict:
+        endpoint_name = self._endpoint_name(endpoint)
+        self._bump_endpoint_counter(endpoint_name)
+        # license_again niemals setzen
+        if "license_again" in params:
+            params = {k: v for k, v in params.items() if k != "license_again"}
+
         url = f"{endpoint}?{urllib.parse.urlencode(params)}"
-        req = urllib.request.Request(url, headers=self._headers(api_key), method="GET")
-        req.add_header("Authorization", f"Bearer {access_token}")
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+        last_retry_after = ""
+        for attempt in range(1, _MAX_LICENSE_ATTEMPTS + 1):
+            started = time.monotonic()
+            req = urllib.request.Request(url, headers=self._headers(api_key), method="GET")
+            req.add_header("Authorization", f"Bearer {access_token}")
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as response:
+                    raw = response.read().decode("utf-8")
+                    request_id = str(response.headers.get("X-Request-Id") or "")
+                    payload = json.loads(raw)
+                    purchase_state = ""
+                    purchase_options_state = ""
+                    quota = None
+                    has_url = False
+                    url_class = "missing"
+                    try:
+                        cid = str(params.get("content_id") or self._diag_content_id or "")
+                        entry = _license_content_entry(payload, cid) if cid else {}
+                        details = entry.get("purchase_details") or {}
+                        purchase_state = str(details.get("state") or "")
+                        url_val = str(details.get("url") or "")
+                        has_url = bool(url_val)
+                        url_class = classify_adobe_url(url_val)
+                        purchase_options_state = str(
+                            (payload.get("purchase_options") or {}).get("state") or ""
+                        )
+                        quota = (payload.get("available_entitlement") or {}).get("quota")
+                    except Exception:
+                        pass
+                    self._record_diag(
+                        endpoint=endpoint_name,
+                        attempt=attempt,
+                        started=started,
+                        http_status=int(getattr(response, "status", 200) or 200),
+                        request_id=request_id,
+                        purchase_state=purchase_state,
+                        purchase_options_state=purchase_options_state,
+                        quota=quota,
+                        has_download_url=has_url,
+                        url_class=url_class,
+                    )
+                    return payload
+            except urllib.error.HTTPError as exc:
+                request_id = str(exc.headers.get("X-Request-Id") if exc.headers else "") or ""
+                retry_after = str(exc.headers.get("Retry-After") if exc.headers else "") or ""
+                last_retry_after = retry_after
+                self._record_diag(
+                    endpoint=endpoint_name,
+                    attempt=attempt,
+                    started=started,
+                    http_status=exc.code,
+                    request_id=request_id,
+                    retry_after=retry_after,
+                )
+                if exc.code == 429 and allow_rate_limit_retry:
+                    self.request_counters.http_429 += 1
+                    if attempt >= _MAX_LICENSE_ATTEMPTS:
+                        raise AdobeRateLimitedError(
+                            f"Adobe rate-limited (HTTP 429) nach {_MAX_LICENSE_ATTEMPTS} Versuchen "
+                            f"({endpoint_name}, request_id={request_id or '—'}).",
+                            details={
+                                "endpoint": endpoint_name,
+                                "request_id": request_id,
+                                "retry_after": retry_after,
+                                "attempts": attempt,
+                            },
+                        ) from exc
+                    self.request_counters.retries += 1
+                    try:
+                        wait_s = float(retry_after) if retry_after else (2 ** (attempt - 1))
+                    except ValueError:
+                        wait_s = float(2 ** (attempt - 1))
+                    wait_s = max(0.5, min(60.0, wait_s)) + random.uniform(0.05, 0.35)
+                    time.sleep(wait_s)
+                    continue
+                if exc.code == 401:
+                    raise AdobeAuthenticationExpiredError(
+                        f"Adobe-Authentifizierung abgelaufen/ungültig (HTTP 401, "
+                        f"{endpoint_name}, request_id={request_id or '—'}).",
+                        details={"endpoint": endpoint_name, "request_id": request_id},
+                    ) from exc
+                if exc.code == 403:
+                    raise AdobePermissionOrIntegrationError(
+                        f"Adobe-Berechtigung/Integration verweigert (HTTP 403, "
+                        f"{endpoint_name}, request_id={request_id or '—'}).",
+                        details={"endpoint": endpoint_name, "request_id": request_id},
+                    ) from exc
+                raise
+        raise AdobeRateLimitedError(
+            f"Adobe rate-limited (HTTP 429) erschöpft ({endpoint_name}).",
+            details={"retry_after": last_retry_after},
+        )
 
     def _request_licensing_json_safe(
         self,
@@ -532,6 +1033,12 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         """Diagnose-Aufrufe dürfen Content/License nicht abbrechen."""
         try:
             return self._request_licensing_json(endpoint, params, api_key, access_token)
+        except AdobeImportError as exc:
+            return {
+                "_error": exc.code,
+                "_message": str(exc),
+                "_details": getattr(exc, "details", {}),
+            }
         except urllib.error.HTTPError as exc:
             try:
                 body = exc.read().decode("utf-8", errors="replace")[:500]
@@ -562,7 +1069,7 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                 "state": purchase_options.get("state"),
                 "requires_checkout": purchase_options.get("requires_checkout"),
                 "message": purchase_options.get("message"),
-                "url": purchase_options.get("url"),
+                "has_url": bool(purchase_options.get("url")),
             },
             "member": member,
             "possible_licenses": payload.get("possible_licenses"),
@@ -596,6 +1103,7 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         purchase_details = entry.get("purchase_details") or {}
         entitlement = payload.get("available_entitlement") or {}
         purchase_options = payload.get("purchase_options") or {}
+        raw_url = str(purchase_details.get("url") or "")
         return {
             "content_id": entry.get("content_id", content_id),
             "size": entry.get("size"),
@@ -603,7 +1111,9 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                 "state": purchase_details.get("state"),
                 "license": purchase_details.get("license"),
                 "date": purchase_details.get("date"),
-                "url": purchase_details.get("url"),
+                # Keine signierten Download-URLs in Diagnose/Logs.
+                "has_download_url": bool(raw_url),
+                "url_class": classify_adobe_url(raw_url),
                 "content_type": purchase_details.get("content_type"),
                 "width": purchase_details.get("width"),
                 "height": purchase_details.get("height"),
@@ -620,7 +1130,7 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                 "state": purchase_options.get("state"),
                 "requires_checkout": purchase_options.get("requires_checkout"),
                 "message": purchase_options.get("message"),
-                "url": purchase_options.get("url"),
+                "has_url": bool(purchase_options.get("url")),
             },
             "possible_licenses": payload.get("possible_licenses"),
         }
@@ -638,8 +1148,187 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             parts.append(f"Content/License={_compact_json(license_response)}")
         return " | ".join(parts)
 
+    def lookup_file_metadata(self, content_id: str, api_key: str) -> dict:
+        """Files-API: media_type_id / content_type für eine Content-ID."""
+        params = {
+            "ids": str(content_id),
+            "locale": "en_US",
+            "result_columns[]": [
+                "id",
+                "title",
+                "content_type",
+                "media_type_id",
+                "width",
+                "height",
+                "duration",
+            ],
+        }
+        url = f"{ADOBE_STOCK_FILES_ENDPOINT}?{urllib.parse.urlencode(params, doseq=True)}"
+        req = urllib.request.Request(url, headers=self._headers(api_key), method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise AdobeContentUnavailableError(
+                    f"Content-ID {content_id} ist bei Adobe nicht (mehr) verfügbar."
+                ) from exc
+            raise
+        files = payload.get("files") or []
+        if not files:
+            raise AdobeContentUnavailableError(
+                f"Content-ID {content_id} liefert keine Files-Metadaten (entfernt/ungültig)."
+            )
+        return files[0] if isinstance(files[0], dict) else {}
+
+    def _license_history_entry_to_purchase(self, entry: dict) -> dict | None:
+        """Mappt einen LicenseHistory-Eintrag auf purchase_details für den Download."""
+        url = str(entry.get("download_url") or "")
+        url_class = classify_adobe_url(url)
+        if url_class == "watermarked":
+            self.request_counters.watermarked += 1
+            return None
+        if url_class != "download":
+            return None
+        return {
+            "url": url,
+            "license": str(entry.get("license") or ""),
+            "content_type": str(entry.get("content_type") or ""),
+            "width": entry.get("width"),
+            "height": entry.get("height"),
+            "state": "purchased",
+        }
+
+    def build_license_history_index(
+        self,
+        api_key: str,
+        access_token: str,
+        *,
+        pages: int = MAX_LICENSE_HISTORY_PAGES,
+        wanted_ids: set[str] | None = None,
+    ) -> dict[str, dict]:
+        """Einmaliger LicenseHistory-Scan (max. MAX_LICENSE_HISTORY_PAGES).
+
+        Liefert content_id → purchase_details für bereits lizenzierte Assets.
+        Damit kann der Import bei Browser-/Abo-Lizenzen direkt downloaden,
+        ohne Content/License erneut anzustossen.
+        """
+        try:
+            pages_i = int(pages)
+        except (TypeError, ValueError):
+            pages_i = MAX_LICENSE_HISTORY_PAGES
+        pages_i = max(1, min(pages_i, MAX_LICENSE_HISTORY_PAGES))
+        wanted = {str(i) for i in wanted_ids} if wanted_ids else None
+        index: dict[str, dict] = {}
+        self._diag_content_id = ""
+        self._diag_license_type = "history"
+        for page in range(pages_i):
+            params = {
+                "locale": "en_US",
+                "all": "true",
+                "search_parameters[limit]": 100,
+                "search_parameters[offset]": page * 100,
+            }
+            payload = self._request_licensing_json_safe(
+                ADOBE_STOCK_LICENSE_HISTORY_ENDPOINT,
+                params,
+                api_key,
+                access_token,
+            )
+            if payload.get("_error"):
+                break
+            for entry in payload.get("files") or []:
+                if not isinstance(entry, dict):
+                    continue
+                cid = str(entry.get("id") or "")
+                if not cid:
+                    continue
+                if wanted is not None and cid not in wanted:
+                    continue
+                if cid in index:
+                    continue
+                purchase = self._license_history_entry_to_purchase(entry)
+                if purchase is not None:
+                    index[cid] = purchase
+            nb = int(payload.get("nb_results") or 0)
+            if (page + 1) * 100 >= nb:
+                break
+            # Frühzeitiger Abbruch, wenn alle gewünschten IDs gefunden.
+            if wanted is not None and wanted.issubset(index.keys()):
+                break
+        return index
+
+    def find_license_history_download(
+        self,
+        content_id: str,
+        api_key: str,
+        access_token: str,
+        *,
+        pages: int = MAX_LICENSE_HISTORY_PAGES,
+    ) -> dict | None:
+        """Sucht eine Content-ID in Member/LicenseHistory (max. 5 Seiten)."""
+        index = self.build_license_history_index(
+            api_key,
+            access_token,
+            pages=pages,
+            wanted_ids={str(content_id)},
+        )
+        return index.get(str(content_id))
+
+    def content_info_purchase(
+        self,
+        content_id: str,
+        license_type: str,
+        api_key: str,
+        access_token: str,
+        *,
+        soft: bool = False,
+    ) -> dict:
+        """Content/Info → purchase_details.
+
+        Hot-Path (`soft=False`, Default): HTTP 429/401/403 und andere
+        AdobeImportError werden strikt weitergereicht — kein leeres Dict.
+        Nur nichtkritische Diagnose-UI darf `soft=True` nutzen.
+        """
+        self._diag_content_id = str(content_id)
+        self._diag_license_type = license_type
+        params = {
+            "content_id": content_id,
+            "license": license_type,
+            "locale": "en_US",
+        }
+        if soft:
+            payload = self._request_licensing_json_safe(
+                ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
+                params,
+                api_key,
+                access_token,
+            )
+            if payload.get("_error"):
+                return {
+                    "_error": payload.get("_error"),
+                    "_message": payload.get("_message"),
+                }
+        else:
+            payload = self._request_licensing_json(
+                ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
+                params,
+                api_key,
+                access_token,
+            )
+        entry = _license_content_entry(payload, content_id)
+        details = dict(entry.get("purchase_details") or {})
+        details["size"] = entry.get("size")
+        return details
+
     def _license_asset(
-        self, content_id: str, license_type: str, api_key: str, access_token: str
+        self,
+        content_id: str,
+        license_type: str,
+        api_key: str,
+        access_token: str,
+        *,
+        diagnose: bool = True,
     ) -> dict:
         """Ruft Content/License auf und liefert das purchase_details-Objekt
         der Antwort (enthält u. a. url/content_type/width/height). Löst bei
@@ -647,10 +1336,12 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         Antwort ein RuntimeError aus — acquire() darf hier nie stillschweigend
         weitermachen.
 
-        Phase 12.12: Vor Content/License werden Member/Profile und Content/Info
-        abgefragt; bei Fehlern landen die kompakten Antworten in
-        last_license_diagnostic und in der RuntimeError-Meldung (sichtbar im
-        Auto-Resolve-Live-Trace als validation_reason)."""
+        Phase 12.12: Optional vor Content/License Member/Profile und Content/Info
+        abfragen (`diagnose=True`). Für Bulk-Downloads (Research-Import) bitte
+        `diagnose=False` — sonst 3 API-Calls pro Lizenzversuch und Rate-Limits.
+        """
+        self._diag_content_id = str(content_id)
+        self._diag_license_type = license_type
         self.last_license_diagnostic = {
             "content_id": content_id,
             "requested_license": license_type,
@@ -658,23 +1349,30 @@ class AdobeStockAdapter(SupplementSourceAdapter):
             "content_info": {},
             "license_response": {},
         }
-        diag_params = {"content_id": content_id, "license": license_type, "locale": "en_US"}
-        member_payload = self._request_licensing_json_safe(
-            ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT,
-            diag_params,
-            api_key,
-            access_token,
-        )
-        self.last_license_diagnostic["member_profile"] = self._summarize_member_profile(member_payload)
-        content_info_payload = self._request_licensing_json_safe(
-            ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
-            diag_params,
-            api_key,
-            access_token,
-        )
-        self.last_license_diagnostic["content_info"] = self._summarize_content_info(
-            content_info_payload, content_id
-        )
+        if diagnose:
+            diag_params = {
+                "content_id": content_id,
+                "license": license_type,
+                "locale": "en_US",
+            }
+            member_payload = self._request_licensing_json_safe(
+                ADOBE_STOCK_MEMBER_PROFILE_ENDPOINT,
+                diag_params,
+                api_key,
+                access_token,
+            )
+            self.last_license_diagnostic["member_profile"] = self._summarize_member_profile(
+                member_payload
+            )
+            content_info_payload = self._request_licensing_json_safe(
+                ADOBE_STOCK_CONTENT_INFO_ENDPOINT,
+                diag_params,
+                api_key,
+                access_token,
+            )
+            self.last_license_diagnostic["content_info"] = self._summarize_content_info(
+                content_info_payload, content_id
+            )
 
         params = {"content_id": content_id, "license": license_type, "locale": "en_US"}
         try:
@@ -686,6 +1384,10 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                 body = exc.read().decode("utf-8", errors="replace")[:500]
             except Exception:
                 body = ""
+            if exc.code == 404 or "no longer available" in body.lower() or '"code":"300"' in body:
+                raise AdobeContentUnavailableError(
+                    f"Content-ID {content_id} ist bei Adobe nicht mehr verfügbar ({body[:180]})."
+                ) from exc
             diagnostic_suffix = self._format_license_diagnostic(self.last_license_diagnostic)
             detail = f"{body or exc.reason}"
             if diagnostic_suffix:
@@ -707,37 +1409,193 @@ class AdobeStockAdapter(SupplementSourceAdapter):
 
         entry = _license_content_entry(payload, content_id)
         purchase_details = entry.get("purchase_details") or {}
+        purchase_options = payload.get("purchase_options") or {}
         state = str(purchase_details.get("state") or "unbekannt")
         response_license = str(purchase_details.get("license") or "")
         response_url = str(purchase_details.get("url") or "")
         response_size = str(entry.get("size") or "")
+        url_class = classify_adobe_url(response_url)
+        options_state = str(purchase_options.get("state") or "")
+        request_id = ""
+        if self.request_diag_events:
+            request_id = self.request_diag_events[-1].request_id
+
+        if options_state == "not_possible":
+            entitlement = payload.get("available_entitlement") or {}
+            detail = (
+                f"Adobe-Lizenz nicht möglich (purchase_options.state=not_possible) "
+                f"für Content-ID {content_id}, license={license_type}, "
+                f"quota={entitlement.get('quota')}, request_id={request_id or '—'}."
+            )
+            if diagnostic_suffix:
+                detail = f"{detail} | Diagnose: {diagnostic_suffix}"
+            raise AdobeLicenseNotPossibleError(
+                detail,
+                details={
+                    "content_id": content_id,
+                    "license": license_type,
+                    "quota": entitlement.get("quota"),
+                    "full_entitlement_quota": entitlement.get("full_entitlement_quota"),
+                    "request_id": request_id,
+                },
+            )
+
         if state not in {"just_purchased", "purchased"}:
+            if state == "cancelled":
+                self.request_counters.cancelled += 1
+                detail = (
+                    f"Adobe-Lizenztransaktion cancelled für Content-ID {content_id} "
+                    f"(license={license_type}, size={response_size or '—'}, "
+                    f"url_class={url_class}, request_id={request_id or '—'}). "
+                    f"Nicht als Rate-Limit werten."
+                )
+                if diagnostic_suffix:
+                    detail = f"{detail} | Diagnose: {diagnostic_suffix}"
+                raise AdobeLicenseTransactionCancelledError(
+                    detail,
+                    details={
+                        "content_id": content_id,
+                        "license": license_type,
+                        "state": state,
+                        "size": response_size,
+                        "url_class": url_class,
+                        "request_id": request_id,
+                        "quota": (payload.get("available_entitlement") or {}).get("quota"),
+                    },
+                )
             raise RuntimeError(
                 "Adobe-Lizenzierung nicht bestätigt: "
                 f"Content-ID {content_id}, angefragt license={license_type}, "
                 f"state={state}, response_license={response_license or '—'}, size={response_size or '—'}. "
                 f"Diagnose: {diagnostic_suffix}"
             )
-        if response_license != license_type:
+        # size=Comp allein ist KEIN Fehler — nur Watermarked-URL ist Preview.
+        if url_class == "watermarked":
+            self.request_counters.watermarked += 1
+            raise AdobeWatermarkedPreviewError(
+                f"Adobe lieferte nur Watermarked-Preview für Content-ID {content_id} "
+                f"(license={license_type}, state={state}, size={response_size or '—'}, "
+                f"request_id={request_id or '—'}).",
+                details={
+                    "content_id": content_id,
+                    "license": license_type,
+                    "state": state,
+                    "size": response_size,
+                    "request_id": request_id,
+                },
+            )
+        if response_license and response_license != license_type:
             raise RuntimeError(
                 "Adobe-Lizenzierung lieferte unerwarteten Lizenztyp: "
                 f"Content-ID {content_id}, angefragt license={license_type}, "
                 f"response_license={response_license or '—'}, state={state}, size={response_size or '—'}. "
                 f"Diagnose: {diagnostic_suffix}"
             )
-        if not response_url:
+        if not response_url or url_class != "download":
             raise RuntimeError(
-                f"Adobe-Lizenzierung lieferte keine Download-URL für Content-ID {content_id} "
-                f"(license={license_type}, state={state}, size={response_size or '—'}). "
-                f"Diagnose: {diagnostic_suffix}"
+                f"Adobe-Lizenzierung lieferte keine Voll-Download-URL für Content-ID {content_id} "
+                f"(license={license_type}, state={state}, size={response_size or '—'}, "
+                f"url_class={url_class}). Diagnose: {diagnostic_suffix}"
             )
-        if "/Rest/Libraries/Download/" not in response_url:
-            raise RuntimeError(
-                "Adobe-Lizenzierung lieferte keine Libraries/Download-URL: "
-                f"Content-ID {content_id}, license={license_type}, state={state}, "
-                f"url={response_url[:180]}. Diagnose: {diagnostic_suffix}"
-            )
+        if state == "purchased":
+            self.request_counters.already_licensed += 1
+        else:
+            self.request_counters.licensed_ok += 1
         return purchase_details
+
+    def _validate_redirect_target(self, target: str, *, hop: int) -> None:
+        if not is_safe_download_redirect_url(target):
+            raise AdobeUnsafeRedirectError(
+                f"Unsicheres Download-Redirect-Ziel bei Hop {hop}: "
+                f"{safe_download_url_label(target)}.",
+                details={"hop": hop, "url_label": safe_download_url_label(target)},
+            )
+
+    def _open_download_following_redirects(
+        self,
+        start_url: str,
+        *,
+        api_key: str,
+    ):
+        """Öffnet start_url und folgt max. MAX_DOWNLOAD_REDIRECTS sicheren Hops.
+
+        Jedes Ziel: HTTPS, kein Userinfo, kein Watermarked. Schleifen abbrechen.
+        Sensible Header nur an Adobe-Allowlist-Hosts.
+        """
+        current = start_url
+        seen: set[str] = set()
+        for hop in range(0, MAX_DOWNLOAD_REDIRECTS + 1):
+            # Hop 0: Start-URL wurde vom Caller als Adobe-Download geprüft.
+            # Folgehops: HTTPS/Userinfo/Watermarked-Regeln.
+            if hop > 0:
+                self._validate_redirect_target(current, hop=hop)
+
+            norm = urllib.parse.urldefrag(current)[0]
+            if norm in seen:
+                raise AdobeUnsafeRedirectError(
+                    f"Download-Redirect-Schleife erkannt bei Hop {hop} "
+                    f"({safe_download_url_label(current)}).",
+                    details={"hop": hop, "url_label": safe_download_url_label(current)},
+                )
+            seen.add(norm)
+
+            headers = self._download_headers_for_url(current, api_key)
+            req = urllib.request.Request(current, headers=headers)
+            try:
+                response = _urlopen_download(req, timeout=180)
+            except urllib.error.HTTPError as exc:
+                if exc.code in _REDIRECT_STATUS_CODES:
+                    location = ""
+                    if exc.headers:
+                        location = str(exc.headers.get("Location") or "").strip()
+                    try:
+                        exc.read()
+                    except Exception:
+                        pass
+                    if not location:
+                        raise AdobeUnsafeRedirectError(
+                            f"Redirect HTTP {exc.code} ohne Location "
+                            f"({safe_download_url_label(current)}).",
+                            details={"http_status": exc.code, "hop": hop},
+                        ) from exc
+                    if hop >= MAX_DOWNLOAD_REDIRECTS:
+                        raise AdobeUnsafeRedirectError(
+                            f"Download-Redirect-Limit ({MAX_DOWNLOAD_REDIRECTS}) überschritten "
+                            f"bei {safe_download_url_label(current)}.",
+                            details={"hop": hop, "limit": MAX_DOWNLOAD_REDIRECTS},
+                        ) from exc
+                    current = urllib.parse.urljoin(current, location)
+                    continue
+                raise
+            status = int(getattr(response, "status", 200) or 200)
+            if status in _REDIRECT_STATUS_CODES:
+                # Manche Mocks/Server liefern Redirect ohne HTTPError.
+                location = str(response.headers.get("Location") or "").strip()
+                try:
+                    response.close()
+                except Exception:
+                    pass
+                if not location:
+                    raise AdobeUnsafeRedirectError(
+                        f"Redirect-Status {status} ohne Location "
+                        f"({safe_download_url_label(current)}).",
+                        details={"http_status": status, "hop": hop},
+                    )
+                if hop >= MAX_DOWNLOAD_REDIRECTS:
+                    raise AdobeUnsafeRedirectError(
+                        f"Download-Redirect-Limit ({MAX_DOWNLOAD_REDIRECTS}) überschritten "
+                        f"bei {safe_download_url_label(current)}.",
+                        details={"hop": hop, "limit": MAX_DOWNLOAD_REDIRECTS},
+                    )
+                current = urllib.parse.urljoin(current, location)
+                continue
+            return response
+
+        raise AdobeUnsafeRedirectError(
+            f"Download-Redirect-Limit ({MAX_DOWNLOAD_REDIRECTS}) erschöpft "
+            f"({safe_download_url_label(start_url)}).",
+            details={"limit": MAX_DOWNLOAD_REDIRECTS},
+        )
 
     def _stream_download_to_file(
         self,
@@ -749,51 +1607,130 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         size: int | None,
         max_bytes: int | None,
     ) -> None:
-        """Lädt url chunked auf local_path herunter. Bricht ab (löscht die
-        Teildatei) und wirft AdobeAssetTooLargeError, sobald entweder der
-        Content-Length-Header ODER die Summe der bereits gestreamten Bytes
-        max_bytes überschreitet — max_bytes=None bedeutet keine Grenze
-        (Fotos, oder ein Video, für das ohnehin bereits die kleinste
-        Lizenzvariante läuft)."""
-        download_url = self._prepare_download_url(url, access_token, size=size)
-        req = urllib.request.Request(download_url, headers=self._download_headers(api_key))
-        try:
-            with urllib.request.urlopen(req, timeout=180) as response:
-                status = int(getattr(response, "status", 200) or 200)
-                if status != 200:
-                    raise RuntimeError(f"Adobe-Download HTTP-Status {status}.")
-                content_length = response.headers.get("Content-Length")
-                if max_bytes is not None and content_length:
-                    try:
-                        if int(content_length) > max_bytes:
-                            raise AdobeAssetTooLargeError()
-                    except ValueError:
-                        pass
-                total = 0
-                with open(local_path, "wb") as handle:
-                    while True:
-                        chunk = response.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        total += len(chunk)
-                        if max_bytes is not None and total > max_bytes:
-                            raise AdobeAssetTooLargeError()
-                        handle.write(chunk)
-        except AdobeAssetTooLargeError:
-            local_path.unlink(missing_ok=True)
-            raise
-        except urllib.error.HTTPError as exc:
-            try:
-                body = exc.read().decode("utf-8", errors="replace")[:500]
-            except Exception:
-                body = ""
-            local_path.unlink(missing_ok=True)
+        """Lädt url chunked auf local_path herunter.
+
+        HTTP 429: dieselbe vorbereitete Start-URL erneut (max 3 Versuche), kein
+        neuer Content/License-Call. Redirects werden manuell und begrenzt
+        verfolgt. Teildatei (.part) wird bei jedem Fehler entfernt.
+        """
+        if classify_adobe_url(url) != "download" or not is_full_adobe_download_url(url):
+            if classify_adobe_url(url) == "watermarked":
+                self.request_counters.watermarked += 1
+                raise AdobeWatermarkedPreviewError(
+                    "Watermarked-URL wird nicht als Vollversion heruntergeladen."
+                )
             raise RuntimeError(
-                f"Adobe-Download fehlgeschlagen (HTTP {exc.code}): {body or exc.reason}"
-            ) from exc
-        except (urllib.error.URLError, OSError) as exc:
+                f"Download-URL abgelehnt (url_class={classify_adobe_url(url)}, "
+                f"label={safe_download_url_label(url)})."
+            )
+        download_url = self._prepare_download_url(url, access_token, size=size)
+        last_retry_after = ""
+        last_request_id = ""
+        for attempt in range(1, _MAX_LICENSE_ATTEMPTS + 1):
             local_path.unlink(missing_ok=True)
-            raise RuntimeError(f"Adobe-Download fehlgeschlagen: {exc}") from exc
+            try:
+                with self._open_download_following_redirects(
+                    download_url, api_key=api_key
+                ) as response:
+                    status = int(getattr(response, "status", 200) or 200)
+                    if status != 200:
+                        raise RuntimeError(
+                            f"Adobe-Download HTTP-Status {status} "
+                            f"({safe_download_url_label(download_url)})."
+                        )
+                    content_length = response.headers.get("Content-Length")
+                    if max_bytes is not None and content_length:
+                        try:
+                            if int(content_length) > max_bytes:
+                                raise AdobeAssetTooLargeError()
+                        except ValueError:
+                            pass
+                    total = 0
+                    try:
+                        with open(local_path, "wb") as handle:
+                            while True:
+                                chunk = response.read(1024 * 1024)
+                                if not chunk:
+                                    break
+                                total += len(chunk)
+                                if max_bytes is not None and total > max_bytes:
+                                    raise AdobeAssetTooLargeError()
+                                handle.write(chunk)
+                    except OSError as exc:
+                        local_path.unlink(missing_ok=True)
+                        self.request_counters.local_storage_errors += 1
+                        raise LocalStorageError(
+                            f"Lokaler Schreibfehler für {local_path.name}: {exc}",
+                            details={
+                                "path": str(local_path),
+                                "errno": getattr(exc, "errno", None),
+                            },
+                        ) from exc
+                return
+            except (AdobeAssetTooLargeError, AdobeImportError):
+                local_path.unlink(missing_ok=True)
+                raise
+            except urllib.error.HTTPError as exc:
+                try:
+                    body = exc.read().decode("utf-8", errors="replace")[:500]
+                except Exception:
+                    body = ""
+                local_path.unlink(missing_ok=True)
+                request_id = str(exc.headers.get("X-Request-Id") if exc.headers else "") or ""
+                retry_after = str(exc.headers.get("Retry-After") if exc.headers else "") or ""
+                last_request_id = request_id
+                last_retry_after = retry_after
+                if exc.code == 429:
+                    self.request_counters.http_429 += 1
+                    if attempt >= _MAX_LICENSE_ATTEMPTS:
+                        raise AdobeRateLimitedError(
+                            f"Adobe-Download rate-limited (HTTP 429) nach "
+                            f"{_MAX_LICENSE_ATTEMPTS} Versuchen "
+                            f"(request_id={request_id or '—'}, "
+                            f"url={safe_download_url_label(download_url)}).",
+                            details={
+                                "http_status": 429,
+                                "request_id": request_id,
+                                "retry_after": retry_after,
+                                "attempts": attempt,
+                                "url_label": safe_download_url_label(download_url),
+                            },
+                        ) from exc
+                    self.request_counters.retries += 1
+                    try:
+                        wait_s = float(retry_after) if retry_after else (2 ** (attempt - 1))
+                    except ValueError:
+                        wait_s = float(2 ** (attempt - 1))
+                    wait_s = max(0.5, min(60.0, wait_s)) + random.uniform(0.05, 0.35)
+                    time.sleep(wait_s)
+                    continue
+                # Keine vollständige/signierte URL in die Exception.
+                raise RuntimeError(
+                    f"Adobe-Download fehlgeschlagen (HTTP {exc.code}): "
+                    f"{body or exc.reason} "
+                    f"[{safe_download_url_label(download_url)}]"
+                ) from exc
+            except urllib.error.URLError as exc:
+                local_path.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"Adobe-Download fehlgeschlagen: {exc.reason} "
+                    f"[{safe_download_url_label(download_url)}]"
+                ) from exc
+            except OSError as exc:
+                local_path.unlink(missing_ok=True)
+                self.request_counters.local_storage_errors += 1
+                raise LocalStorageError(
+                    f"Lokaler Schreibfehler: {exc}",
+                    details={"path": str(local_path)},
+                ) from exc
+        raise AdobeRateLimitedError(
+            "Adobe-Download rate-limited (HTTP 429) erschöpft.",
+            details={
+                "retry_after": last_retry_after,
+                "request_id": last_request_id,
+                "url_label": safe_download_url_label(download_url),
+            },
+        )
 
     def _extension_for(self, purchase_details: dict, candidate: SupplementCandidate) -> str:
         content_type = str(purchase_details.get("content_type") or "").lower()
@@ -816,11 +1753,11 @@ class AdobeStockAdapter(SupplementSourceAdapter):
         api_key = get_api_key("ADOBE_STOCK_API_KEY")
         if not api_key:
             raise PermissionError("ADOBE_STOCK_API_KEY fehlt — Adobe-Stock-Download ist deaktiviert.")
-        access_token = get_api_key("ADOBE_STOCK_ACCESS_TOKEN")
+        access_token = get_adobe_access_token()
         if not access_token:
             raise PermissionError(
-                "ADOBE_STOCK_ACCESS_TOKEN fehlt — für Lizenzierung/Download ist ein Adobe-IMS-"
-                "Access-Token erforderlich (die reine Suche funktioniert auch ohne)."
+                "Kein Adobe Access-Token — bitte OAuth-Login nutzen oder "
+                "ADOBE_STOCK_ACCESS_TOKEN setzen (die reine Suche funktioniert auch ohne)."
             )
         if candidate.is_mock or not candidate.download_enabled:
             raise PermissionError("Mock-/Demo-Kandidaten dürfen nicht heruntergeladen werden.")
@@ -908,9 +1845,11 @@ class AdobeStockAdapter(SupplementSourceAdapter):
 
         if candidate.media_type == "video":
             duration = probe_duration_seconds(local_path)
-            if duration is None:
+            if duration is None or duration <= 0:
                 local_path.unlink(missing_ok=True)
-                raise RuntimeError("ffprobe konnte Adobe-Download nicht lesen.")
+                raise RuntimeError(
+                    f"ffprobe konnte Adobe-Download nicht lesen (duration={duration!r})."
+                )
 
         sidecar = SupplementAssetSidecar(
             asset_id=f"asset_adobe_{candidate.provider_asset_id}",
