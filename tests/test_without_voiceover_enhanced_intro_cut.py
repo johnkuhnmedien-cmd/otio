@@ -103,6 +103,7 @@ def test_intro_prompt_rules() -> None:
     assert "4.0" in prompt
     assert "9.500" in prompt
     assert "shot_min" in prompt
+    assert "shot_max" in prompt
     assert "NOT enforced" in prompt
     assert "KEYWORD / ENUMERATION SYNC" in prompt
     assert "keyword onset" in prompt
