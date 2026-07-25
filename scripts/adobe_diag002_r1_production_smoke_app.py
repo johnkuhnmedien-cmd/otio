@@ -13,9 +13,7 @@ Keine echten Tokens und keine signierten Download-URLs.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 
 import streamlit as st
 
@@ -35,6 +33,7 @@ def _seed_mocks() -> None:
         get_research_import_job_manager,
     )
     from otio_app.services import adobe_download_projects as projects_mod
+    from otio_app.services.adobe_download_projects import AdobeDownloadProject
     from otio_app.services.supplement_sources.adobe_stock import AdobeStockAdapter
     from otio_app.ui import adobe_oauth_panel as oauth_mod
     from otio_app.ui import adobe_research_import_page as page_mod
@@ -43,18 +42,16 @@ def _seed_mocks() -> None:
     target = Path("/tmp/adobe-r1-smoke-media")
     target.mkdir(parents=True, exist_ok=True)
 
-    @dataclass
-    class _Proj:
-        id: str
-        name: str
-        target_root: str
-        sheet_name: str = "Sheet1"
-        excel_filename: str = "smoke.xlsx"
-
-    proj = _Proj(
+    proj = AdobeDownloadProject(
         id=project_id,
         name="R1 Smoke Project",
         target_root=str(target),
+        excel_filename="smoke.xlsx",
+        sheet_name="Sheet1",
+        selected_chapters=[],
+        skip_existing_ids=False,
+        chapter_count=1,
+        asset_count=18,
     )
 
     st.session_state[page_mod._ACTIVE_PROJECT_KEY] = project_id
