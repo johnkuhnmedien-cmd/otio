@@ -1671,15 +1671,15 @@ class AdobeStockAdapter(SupplementSourceAdapter):
                     continue
                 # Keine vollständige/signierte URL in die Exception.
                 raise RuntimeError(
-                    f"Adobe-Download fehlgeschlagen (HTTP {exc.code}) "
-                    f"für {safe_download_url_label(download_url)}: "
-                    f"{body or exc.reason}"
+                    f"Adobe-Download fehlgeschlagen (HTTP {exc.code}): "
+                    f"{body or exc.reason} "
+                    f"[{safe_download_url_label(download_url)}]"
                 ) from exc
             except urllib.error.URLError as exc:
                 local_path.unlink(missing_ok=True)
                 raise RuntimeError(
-                    f"Adobe-Download fehlgeschlagen "
-                    f"({safe_download_url_label(download_url)}): {exc.reason}"
+                    f"Adobe-Download fehlgeschlagen: {exc.reason} "
+                    f"[{safe_download_url_label(download_url)}]"
                 ) from exc
             except OSError as exc:
                 local_path.unlink(missing_ok=True)

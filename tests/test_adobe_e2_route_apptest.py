@@ -230,6 +230,20 @@ def test_apptest_route_start_runs_real_job(tmp_path: Path, monkeypatch: pytest.M
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
+    # RUNNING-Polling der Seite begrenzt (monkeypatch = auto-restore).
+    import streamlit as st
+
+    _rerun_calls = {"n": 0}
+    _orig_rerun = st.rerun
+
+    def _limited_rerun(*_a, **_k):
+        _rerun_calls["n"] += 1
+        if _rerun_calls["n"] > 4:
+            return None
+        return _orig_rerun()
+
+    monkeypatch.setattr(st, "rerun", _limited_rerun)
+
     # Frischer Job-Manager — kein Result-Seed.
     job_mod._MANAGER = ResearchImportJobManager()  # noqa: SLF001
 

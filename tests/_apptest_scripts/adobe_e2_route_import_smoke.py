@@ -24,19 +24,8 @@ from otio_app.ui import adobe_research_import_page as page_mod
 
 st.session_state[page_mod._ACTIVE_PROJECT_KEY] = PROJECT_ID
 
-# AppTest: RUNNING-Polling mit st.rerun begrenzen.
-_rerun_calls = {"n": 0}
-_orig_rerun = st.rerun
-
-
-def _limited_rerun(*_a, **_k):
-    _rerun_calls["n"] += 1
-    if _rerun_calls["n"] > 4:
-        return None
-    return _orig_rerun()
-
-
-st.rerun = _limited_rerun  # type: ignore[assignment]
+# st.rerun-Limit kommt aus dem Pytest-Harness (monkeypatch), nicht hier —
+# sonst leakt der Patch in spätere AppTests derselben Prozess-Session.
 
 st.caption(
     "E2 Route Smoke · echte `render_adobe_research_import_page` · "
