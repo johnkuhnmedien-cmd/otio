@@ -11,7 +11,7 @@ from otio_app.services.without_voiceover_enhanced.gap_status_service import (
     is_weak_upgrade_gap,
     summarize_gap_status,
 )
-from otio_app.services.without_voiceover_enhanced.io_utils import write_json
+from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.models import (
     CoverageGap,
     CoverageGapsDocument,
@@ -193,7 +193,10 @@ def test_weak_closes_only_after_merge_decision(tmp_path: Path) -> None:
     assert set(status.filled_gap_ids) == {"gap_weak", "gap_none"}
 
 
-def test_stale_funnel_does_not_count_as_filled(tmp_path: Path) -> None:
+def test_stale_funnel_without_accepted_does_not_count_as_filled(
+    tmp_path: Path,
+) -> None:
+    """Nur Funnel-Report ohne Accepted → kein Auto-Rebind, bleibt offen."""
     project = _project(tmp_path)
     plan = _plan()
     write_json(unified_cut_plan_path(project), plan)
@@ -221,6 +224,82 @@ def test_stale_funnel_does_not_count_as_filled(tmp_path: Path) -> None:
     assert "gap_none" in status.open_gap_ids
     assert status.filled_count == 0
     assert list_open_funnel_gap_ids(project) == ["gap_weak", "gap_none"]
+
+
+def test_accepted_with_old_run_id_rebinds_to_current_plan(tmp_path: Path) -> None:
+    """Nach neuem Cut-Plan-Lauf: Accepted mit gleicher Gap-ID wieder erfüllt."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        AcceptedSupplementsDocument,
+        StockCandidate,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        accepted_supplements_path,
+    )
+
+    project = _project(tmp_path)
+    plan = _plan()
+    write_json(unified_cut_plan_path(project), plan)
+    _rough, coverage = unified_to_rough(plan)
+    write_json(coverage_gaps_path(project), coverage)
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version="script-v1",
+            supplements=[
+                StockCandidate(
+                    candidate_id="cand_manual",
+                    provider="manual",
+                    gap_id="gap_none",
+                    media_validation_status="export_ready",
+                    cut_plan_run_id="old_run_before_llm_recut",
+                    local_media_path="/tmp/manual.mp4",
+                ),
+                StockCandidate(
+                    candidate_id="cand_weak",
+                    provider="pexels",
+                    gap_id="gap_weak",
+                    media_validation_status="export_ready",
+                    cut_plan_run_id="old_run_before_llm_recut",
+                    local_media_path="/tmp/weak.mp4",
+                ),
+            ],
+        ),
+    )
+    write_json(
+        supplement_funnel_report_path(project),
+        SupplementFunnelReport(
+            run_id="funnel_old",
+            script_version="script-v1",
+            cut_plan_run_id="old_run_before_llm_recut",
+            filled_gap_ids=["gap_none", "gap_weak"],
+            gaps=[
+                SupplementFunnelGapReport(
+                    gap_id="gap_none",
+                    filled=True,
+                    export_ready_candidate_id="cand_manual",
+                ),
+                SupplementFunnelGapReport(
+                    gap_id="gap_weak",
+                    filled=True,
+                    export_ready_candidate_id="cand_weak",
+                ),
+            ],
+        ),
+    )
+
+    status = summarize_gap_status(project)
+    assert status.open_count == 0
+    assert set(status.filled_gap_ids) == {"gap_weak", "gap_none"}
+    assert status.funnel_stale is False
+    assert "Accepted-Fill" in (status.message or "")
+
+    accepted = load_model(
+        accepted_supplements_path(project), AcceptedSupplementsDocument
+    )
+    assert accepted is not None
+    assert all(
+        s.cut_plan_run_id == coverage.cut_plan_run_id for s in accepted.supplements
+    )
 
 
 def test_missing_funnel_run_id_treated_as_stale_when_coverage_has_run(
