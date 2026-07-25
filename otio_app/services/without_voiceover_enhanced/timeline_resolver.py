@@ -129,16 +129,40 @@ def _probe_entry(
     }
 
 
+def _catalog_path_kind(path: str) -> str:
+    """stock_download | clean | other — für Supplement-Doppelpfade."""
+    text = str(path or "").replace("\\", "/").lower()
+    if "/stock/downloads/" in text:
+        return "stock_download"
+    if "/clean/" in text:
+        return "clean"
+    return "other"
+
+
 def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
-    """Baut eindeutigen Katalog; doppelte explizite IDs → collisions."""
+    """Baut eindeutigen Katalog; doppelte explizite IDs → collisions.
+
+    Ausnahme: dieselbe ID unter ``stock/downloads`` und ``clean/`` — Clean gewinnt
+    (Supplement-Download + Clean-Kopie), kein Hard-Collision.
+    """
     result = AssetCatalog()
     explicit_paths: dict[str, list[str]] = defaultdict(list)
 
     def _register(entry_id: str, entry: dict, *, raw_id: str) -> None:
         path = str(entry["path"])
         if entry_id in result.by_id and result.by_id[entry_id]["path"] != path:
+            existing_path = str(result.by_id[entry_id]["path"])
+            kinds = {
+                _catalog_path_kind(existing_path),
+                _catalog_path_kind(path),
+            }
+            if kinds == {"stock_download", "clean"}:
+                # Clean ist kanonisch; Download-Pfad stillschweigend verwerfen.
+                if _catalog_path_kind(path) == "clean":
+                    result.by_id[entry_id] = entry
+                return
             explicit_paths[entry_id].append(path)
-            explicit_paths[entry_id].append(result.by_id[entry_id]["path"])
+            explicit_paths[entry_id].append(existing_path)
             return
         if entry_id in result.by_id:
             return
@@ -154,6 +178,16 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
         )
         if stem_legacy and entry_id not in result.legacy_to_ids[stem_legacy]:
             result.legacy_to_ids[stem_legacy].append(entry_id)
+
+    # Altbestand: Accepted noch auf stock/downloads → auf clean umbiegen.
+    try:
+        from otio_app.services.without_voiceover_enhanced.local_media_service import (
+            reconcile_accepted_supplement_paths,
+        )
+
+        reconcile_accepted_supplement_paths(project)
+    except Exception:  # noqa: BLE001
+        pass
 
     for folder in project.selected_asset_subdirs:
         inventory = load_folder_inventory(project, folder)
@@ -178,10 +212,20 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
             if existing and not is_legacy_ambiguous_asset_id(existing):
                 # Explizite ID: Kollision prüfen (gleiche ID, anderer Pfad).
                 if existing in result.by_id and result.by_id[existing]["path"] != str(path):
-                    explicit_paths[existing].extend(
-                        [result.by_id[existing]["path"], str(path)]
-                    )
-                    continue
+                    existing_path = str(result.by_id[existing]["path"])
+                    kinds = {
+                        _catalog_path_kind(existing_path),
+                        _catalog_path_kind(str(path)),
+                    }
+                    if kinds == {"stock_download", "clean"}:
+                        if _catalog_path_kind(str(path)) != "clean":
+                            continue
+                        # Clean ersetzt stock — unten normal registrieren.
+                    else:
+                        explicit_paths[existing].extend(
+                            [existing_path, str(path)]
+                        )
+                        continue
             duration = getattr(asset, "duration_sec", None)
             if duration is None:
                 duration = getattr(asset, "duration_seconds", None)
@@ -215,6 +259,9 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
         for supplement in accepted.supplements:
             refreshed = refresh_supplement_validation(supplement)
             if refreshed.media_validation_status != STATUS_EXPORT_READY:
+                continue
+            # Inventar hat Vorrang — Accepted nicht nochmal mit stock/downloads registrieren.
+            if supplement.candidate_id in result.by_id:
                 continue
             local_path = str(refreshed.local_media_path or "").strip()
             if not local_path or is_http_url(local_path):

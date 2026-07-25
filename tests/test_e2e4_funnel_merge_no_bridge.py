@@ -8,7 +8,7 @@ import pytest
 
 from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
 from otio_app.models import Project, ProjectMode
-from otio_app.services.without_voiceover_enhanced.io_utils import write_json
+from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.local_media_service import (
     STATUS_EXPORT_READY,
     list_export_ready_supplements,
@@ -89,7 +89,8 @@ def _lock(project: Project) -> None:
     lock_script(project)
 
 
-def test_accepted_without_run_id_is_stale_and_purged(tmp_path: Path) -> None:
+def test_accepted_without_run_id_rebinds_bridge_purged(tmp_path: Path) -> None:
+    """Run-ID-Drift wird reboundet; nur Legacy-Bridge-Gaps werden gelöscht."""
     project = _project(tmp_path)
     _lock(project)
     write_json(
@@ -122,7 +123,7 @@ def test_accepted_without_run_id_is_stale_and_purged(tmp_path: Path) -> None:
                     local_media_path=str(media),
                     media_validation_status=STATUS_EXPORT_READY,
                     duration_seconds=12.0,
-                    cut_plan_run_id="",  # stale
+                    cut_plan_run_id="",  # stale → rebind
                 ),
                 StockCandidate(
                     candidate_id="bridge_junk",
@@ -138,9 +139,13 @@ def test_accepted_without_run_id_is_stale_and_purged(tmp_path: Path) -> None:
         ),
     )
     migrate_accepted_supplements(project)
-    ready = list_export_ready_supplements(project)
-    assert ready == []
-    assert list_open_funnel_gap_ids(project) == ["gap_Yosemite_slot_011"]
+    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
+    assert accepted is not None
+    ids = {s.candidate_id for s in accepted.supplements}
+    assert "pexels_video_1451126" in ids
+    assert "bridge_junk" not in ids
+    yos = next(s for s in accepted.supplements if s.candidate_id == "pexels_video_1451126")
+    assert yos.cut_plan_run_id == "run_abc"
 
 
 def test_gap_already_export_ready_requires_merge_criteria(

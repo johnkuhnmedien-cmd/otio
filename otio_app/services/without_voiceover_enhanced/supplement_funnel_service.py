@@ -571,17 +571,6 @@ def _persist_export_ready(
         candidate.cut_plan_run_id = run_id
 
     locked = require_locked_script(project)
-    existing = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
-    supplements = list(existing.supplements) if existing else []
-    supplements = [s for s in supplements if s.candidate_id != candidate.candidate_id]
-    supplements.append(candidate)
-    write_json(
-        accepted_supplements_path(project),
-        AcceptedSupplementsDocument(
-            script_version=locked.script_version, supplements=supplements
-        ),
-    )
-
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
     gap = None
     if coverage is not None:
@@ -609,6 +598,18 @@ def _persist_export_ready(
             validation_status="PASS",
             validation_score=float(record.final_score or 0) / 100.0,
         )
+
+    # Accepted erst nach Clean schreiben — sonst stock/downloads + clean kollidieren.
+    existing = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
+    supplements = list(existing.supplements) if existing else []
+    supplements = [s for s in supplements if s.candidate_id != candidate.candidate_id]
+    supplements.append(candidate)
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(
+            script_version=locked.script_version, supplements=supplements
+        ),
+    )
 
     gap_report.export_ready_candidate_id = candidate.candidate_id
     gap_report.filled = True
@@ -882,6 +883,9 @@ def run_supplement_funnel_for_gaps(
             )
         ):
             report.skipped_gap_ids.append(gap.gap_id)
+            # Bereits erfüllte Gaps weiter als erfüllt zählen (UI / Report).
+            if gap.gap_id not in report.filled_gap_ids:
+                report.filled_gap_ids.append(gap.gap_id)
             _emit(
                 progress_callback,
                 FunnelProgressEvent(

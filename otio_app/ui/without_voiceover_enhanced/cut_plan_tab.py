@@ -51,6 +51,8 @@ from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
     list_chapter_cut_statuses,
     list_chapters_needing_python_timing,
     list_chapters_needing_unified_cut,
+    list_chapters_ready_for_python_timing,
+    load_chapter_resolved,
     load_chapter_unified_plan,
     resolve_all_chapter_timelines,
     resolve_chapter_timeline,
@@ -1209,6 +1211,8 @@ def _render_chapter_cut_rows(
                 detail += f" · {status.resolved_shots} Shots"
             elif status.has_plan:
                 detail += " · Timing fehlt"
+            if status.open_gap_count:
+                detail += f" · {status.open_gap_count} Gaps offen"
             st.caption(detail)
         with llm_col:
             run_llm = st.button(
@@ -1221,7 +1225,16 @@ def _render_chapter_cut_rows(
                 "Python Timing",
                 key=f"enh_ch_timing_{key_base}",
                 use_container_width=True,
-                disabled=not status.has_plan,
+                disabled=not status.timing_ready,
+                help=(
+                    "Zuerst Coverage Gaps schließen (Funnel/Manual)."
+                    if status.has_plan and status.open_gap_count
+                    else (
+                        "Zuerst LLM Cut."
+                        if not status.has_plan
+                        else "Plan vorhanden, Gaps geschlossen."
+                    )
+                ),
             )
         with otio_col:
             run_otio = st.button(
@@ -1292,7 +1305,7 @@ def _render_chapter_cut_rows(
 
         plan = load_chapter_unified_plan(project, folder)
         if plan is not None and plan.slots:
-            with st.expander(f"Cut Plan · {folder}", expanded=False):
+            with st.expander(f"LLM Cut · {folder}", expanded=False):
                 for slot in plan.slots[:40]:
                     st.caption(
                         f"{slot.slot_id}: fit={slot.asset_fit} · "
@@ -1301,6 +1314,31 @@ def _render_chapter_cut_rows(
                     )
                 if len(plan.slots) > 40:
                     st.caption(f"… +{len(plan.slots) - 40} weitere Slots")
+        resolved = load_chapter_resolved(project, folder)
+        if resolved is not None and resolved.shots:
+            stale = " · Plan geändert — Timing neu" if not status.matches else ""
+            with st.expander(
+                f"Python Timing · {folder} "
+                f"({len(resolved.shots)} Shots · "
+                f"{resolved.total_duration_seconds:.1f}s{stale})",
+                expanded=False,
+            ):
+                for shot in resolved.shots[:40]:
+                    start = float(shot.timeline_start_seconds)
+                    end = float(shot.timeline_end_seconds)
+                    dur = max(0.0, end - start)
+                    fit = (shot.asset_fit or "—").strip() or "—"
+                    gap = (shot.coverage_gap_id or "—").strip() or "—"
+                    st.caption(
+                        f"{shot.shot_id}: "
+                        f"{start:.2f}–{end:.2f}s ({dur:.2f}s) · "
+                        f"asset={shot.asset_id or '—'} · "
+                        f"fit={fit} · gap={gap}"
+                    )
+                if len(resolved.shots) > 40:
+                    st.caption(f"… +{len(resolved.shots) - 40} weitere Shots")
+        elif status.has_plan:
+            st.caption(f"Python Timing · {folder}: noch nicht berechnet.")
         if status.errors or status.repairs:
             with st.expander(
                 f"Hinweise · {folder} "
@@ -1370,6 +1408,8 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         )
     open_llm_names = list_chapters_needing_unified_cut(project)
     open_timing_names = list_chapters_needing_python_timing(project)
+    ready_timing_names = list_chapters_ready_for_python_timing(project)
+    blocked_timing = max(0, chapter_count - len(ready_timing_names))
     st.caption(
         f"**ein LLM-Call pro Kapitel** ({chapter_count}, ohne Intro) → "
         "`cut/chapters/{slug}/unified_cut_plan.json`. "
@@ -1378,7 +1418,8 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
     )
     st.caption(
         f"Offen: {len(open_llm_names)} ohne LLM-Plan · "
-        f"{len(open_timing_names)} ohne passendes Python-Timing."
+        f"{len(open_timing_names)} ohne passendes Python-Timing · "
+        f"{blocked_timing} Timing blockiert (offene Gaps)."
     )
     if cut_options.include_middle_frames:
         st.caption(
@@ -1400,7 +1441,11 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             "Alle Python Timings",
             key="enh_unified_cut_timing_all",
             use_container_width=True,
-            help="Alle Kapitel mit Plan erneut timen — auch bereits passende.",
+            disabled=not ready_timing_names,
+            help=(
+                "Nur Kapitel mit Plan und geschlossenen Gaps. "
+                "Kapitel mit offenen Coverage Gaps werden übersprungen."
+            ),
         )
     with col_otio:
         run_all_otio = st.button(
@@ -1429,8 +1474,8 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             use_container_width=True,
             disabled=not open_timing_names,
             help=(
-                "Nur Kapitel mit Plan, aber ohne passendes Resolved — "
-                "grüne (Plan+Timing) werden übersprungen."
+                "Nur Kapitel mit Plan, geschlossenen Gaps und ohne passendes "
+                "Resolved — grüne oder Gap-blockierte Kapitel werden übersprungen."
             ),
         )
 
@@ -2097,9 +2142,14 @@ def _render_section_funnel(project) -> None:
                     except Exception as exc:  # noqa: BLE001
                         st.error(f"Fehler: {exc}")
     elif open_gap_ids:
+        st.info(
+            f"Manuelle Gap-Liste ist ausgeblendet ({open_gaps_count} offen). "
+            "Checkbox **„Offene Gaps manuell zuordnen laden“** aktivieren, "
+            "dann erscheinen die Gaps mit Suchqueries und Pfadfeld."
+        )
+    elif filled_gaps_count:
         st.caption(
-            f"Manuelle Gap-Zuordnung ausgeblendet ({open_gaps_count} offen). "
-            "Checkbox aktivieren zum Bearbeiten."
+            f"Keine offenen Gaps — {filled_gaps_count} bereits erfüllt."
         )
 
     flash_key = f"enh_manual_gap_flash_{project.id}"
@@ -2198,7 +2248,11 @@ def _render_section_funnel(project) -> None:
 
     accepted_n = _accepted_count(project)
     if accepted_n:
-        st.info(f"Akzeptiert: {accepted_n} Supplements")
+        st.info(
+            f"Akzeptiert: **{accepted_n}** Supplements in "
+            "`accepted_supplements.json` (kumulativ für diesen Cut-Plan-Lauf — "
+            "inkl. früherer Funnel-/Manual-Zuordnungen, nicht nur dieser Lauf)."
+        )
     show_local_key = f"enh_show_local_assign_{project.id}"
     st.checkbox(
         f"Lokale Dateizuordnung laden ({accepted_n})",

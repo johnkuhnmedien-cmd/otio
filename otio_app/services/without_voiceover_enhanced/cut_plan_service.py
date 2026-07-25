@@ -2184,6 +2184,12 @@ def merge_and_persist_unified_cuts(
         pause_directives_path(project),
         {"directives": [d.model_dump(mode="json") for d in pauses]},
     )
+    # Manuelle/Funnel-Fills mit gleicher Gap-ID auf neue Run-ID übernehmen.
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        rebind_gap_fills_to_current_run,
+    )
+
+    rebind_gap_fills_to_current_run(project)
     return merged
 
 
