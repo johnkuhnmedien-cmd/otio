@@ -13,7 +13,11 @@ from otio_app.services.folder_analysis_status import (
     list_open_folder_names,
 )
 from otio_app.services.inventory_loader import selected_folders_have_inventory
-from otio_app.services.manual_folder_completion import set_manually_complete
+from otio_app.services.manual_folder_completion import (
+    is_manually_complete,
+    set_manually_complete,
+    set_manually_complete_many,
+)
 from otio_app.services.media_inventory_cache import media_cache_path, save_cached_media
 
 
@@ -41,3 +45,34 @@ def test_manual_complete_marks_folder_green(temp_project_layout: dict[str, Path]
     assert project.folder_inventory_path("Grand Canyon").is_file()
     assert "Grand Canyon" not in list_open_folder_names(project, project.asset_subdir_names)
     assert selected_folders_have_inventory(project) is True
+
+
+def test_set_manually_complete_many_marks_all(
+    temp_project_layout: dict[str, Path],
+) -> None:
+    project = Project(
+        id="manual-many",
+        name="Test",
+        project_root=str(temp_project_layout["project_root"]),
+        work_dir=str(temp_project_layout["work_dir"]),
+        asset_subdir_names=["Grand Canyon", "Yellowstone"],
+        selected_asset_subdirs=["Grand Canyon", "Yellowstone"],
+    )
+    for folder_name in ("Grand Canyon", "Yellowstone"):
+        folder = temp_project_layout["project_root"] / folder_name
+        folder.mkdir(parents=True, exist_ok=True)
+        media = folder / "clip.mp4"
+        media.write_bytes(b"mp4")
+        save_cached_media(
+            media_cache_path(project, folder_name, media),
+            AssetMediaAnalysis(path=str(media), description="OK"),
+        )
+
+    changed = set_manually_complete_many(
+        project, ["Grand Canyon", "Yellowstone"], complete=True
+    )
+    assert set(changed) == {"Grand Canyon", "Yellowstone"}
+    assert is_manually_complete(project, "Grand Canyon")
+    assert is_manually_complete(project, "Yellowstone")
+    assert project.folder_inventory_path("Grand Canyon").is_file()
+    assert project.folder_inventory_path("Yellowstone").is_file()
