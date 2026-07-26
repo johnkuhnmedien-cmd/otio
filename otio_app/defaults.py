@@ -208,6 +208,10 @@ ENHANCED_CUT_LLM_MODEL_LABELS: dict[str, str] = {
     "gemini-3.5-flash": "Gemini 3.5 Flash — schnell",
     "gemini-3.1-flash-lite": "Gemini 3.1 Flash Lite — günstig",
 }
+# Batch „Alle/Offene LLM Cuts“ bzw. „Python Timings“: parallele Kapitel.
+# LLM bewusst begrenzt (Rate-Limits); Timing darf höher sein (lokal/CPU).
+ENHANCED_CHAPTER_LLM_MAX_WORKERS = 4
+ENHANCED_CHAPTER_TIMING_MAX_WORKERS = 8
 # Supplement-Funnel (Text + Thumbnail-Vision): nur Gemini — Vision-Pfad
 # nutzt google.genai mit Bild-Parts. Default bleibt 3.5 Flash; Flash Lite
 # ist die günstige Experimentier-Option.

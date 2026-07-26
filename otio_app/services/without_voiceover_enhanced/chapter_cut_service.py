@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from otio_app.defaults import (
+    ENHANCED_CHAPTER_LLM_MAX_WORKERS,
+    ENHANCED_CHAPTER_TIMING_MAX_WORKERS,
+)
 from otio_app.models import Project
 from otio_app.project_layout import safe_folder_slug
 from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
@@ -304,6 +309,7 @@ def generate_chapter_unified_cut(
     model: str = "gpt-5.6-terra",
     llm_callable: Callable[..., Any] | None = None,
     refresh_merged: bool = True,
+    prior_plans: list[UnifiedCutPlanDocument] | None = None,
 ) -> ChapterCutGenerateResult:
     """Ein Körper-Kapitel: Unified-LLM → ``cut/chapters/{slug}/unified_cut_plan.json``."""
     assert_enhanced_work_root(project)
@@ -311,7 +317,11 @@ def generate_chapter_unified_cut(
         raise ChapterCutError(
             "Intro läuft über die Intro-Buttons — kein Kapitel-Cut für Intro."
         )
-    prior = load_prior_chapter_plans(project, folder_name)
+    prior = (
+        list(prior_plans)
+        if prior_plans is not None
+        else load_prior_chapter_plans(project, folder_name)
+    )
     ledger = _used_in_ledger_text(prior)
     result = generate_unified_cut_for_folder(
         project,
@@ -340,6 +350,23 @@ def generate_chapter_unified_cut(
     )
 
 
+def _prior_plans_from_snapshot(
+    folder_name: str,
+    *,
+    body_order: list[str],
+    snapshot: dict[str, UnifiedCutPlanDocument],
+) -> list[UnifiedCutPlanDocument]:
+    """Prior-Pläne aus einem Disk-Snapshot (stabil für parallele Batches)."""
+    prior: list[UnifiedCutPlanDocument] = []
+    for name in body_order:
+        if name == folder_name:
+            break
+        plan = snapshot.get(name)
+        if plan is not None and plan.slots:
+            prior.append(plan)
+    return prior
+
+
 def generate_all_chapter_unified_cuts(
     project: Project,
     *,
@@ -349,11 +376,14 @@ def generate_all_chapter_unified_cuts(
     progress_callback: Callable[[str, int, int], None] | None = None,
     chapter_names: list[str] | None = None,
     only_open: bool = False,
+    max_workers: int | None = None,
 ) -> list[ChapterCutGenerateResult]:
-    """Körper-Kapitel sequenziell; schreibt pro-Kapitel JSON + globalen Merge.
+    """Körper-Kapitel parallel; schreibt pro-Kapitel JSON + globalen Merge.
 
     ``only_open=True``: nur Kapitel ohne bestehenden Unified-Plan.
     ``chapter_names``: explizite Teilmenge (Dramaturgie-Filter bleibt außen).
+    Prior-„used assets“-Ledger kommt aus einem Snapshot vor dem Batch
+    (nicht aus frisch geschriebenen Parallel-Ergebnissen).
     """
     if chapter_names is not None:
         names = [str(n).strip() for n in chapter_names if str(n).strip()]
@@ -367,23 +397,55 @@ def generate_all_chapter_unified_cuts(
             if only_open
             else "Keine Körper-Kapitel für den Unified Cut."
         )
-    out: list[ChapterCutGenerateResult] = []
+
+    body_order = list_body_chapter_names(project)
+    snapshot: dict[str, UnifiedCutPlanDocument] = {}
+    for name in body_order:
+        plan = load_chapter_unified_plan(project, name)
+        if plan is not None and plan.slots:
+            snapshot[name] = plan
+
+    workers = max(1, int(max_workers or ENHANCED_CHAPTER_LLM_MAX_WORKERS))
+    workers = min(workers, len(names))
     total = len(names)
-    for index, name in enumerate(names, start=1):
-        if progress_callback is not None:
-            progress_callback(name, index, total)
-        # Merge erst am Ende — sonst N× volle Merge-Kosten.
-        out.append(
-            generate_chapter_unified_cut(
-                project,
-                name,
-                provider=provider,
-                model=model,
-                llm_callable=llm_callable,
-                refresh_merged=False,
-            )
+    results_by_name: dict[str, ChapterCutGenerateResult] = {}
+    errors: list[str] = []
+
+    def _one(name: str) -> ChapterCutGenerateResult:
+        prior = _prior_plans_from_snapshot(
+            name, body_order=body_order, snapshot=snapshot
         )
-    refresh_merged_unified_cut_plan(project)
+        return generate_chapter_unified_cut(
+            project,
+            name,
+            provider=provider,
+            model=model,
+            llm_callable=llm_callable,
+            refresh_merged=False,
+            prior_plans=prior,
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_one, name): name for name in names}
+        done = 0
+        for future in as_completed(futures):
+            name = futures[future]
+            done += 1
+            if progress_callback is not None:
+                progress_callback(name, done, total)
+            try:
+                results_by_name[name] = future.result()
+            except Exception as exc:  # noqa: BLE001 — Batch sammelt Fehler
+                errors.append(f"{name}: {exc}")
+
+    out = [results_by_name[name] for name in names if name in results_by_name]
+    if out:
+        refresh_merged_unified_cut_plan(project)
+    if errors:
+        raise ChapterCutError(
+            f"{len(errors)}/{total} Kapitel-LLM-Cut(s) fehlgeschlagen "
+            f"({len(out)} ok):\n" + "\n".join(f"- {err}" for err in errors)
+        )
     return out
 
 
@@ -440,13 +502,14 @@ def resolve_chapter_timeline(
     )
 
     try:
+        # Kein globaler gap_merge_report — parallel-sicher (Kapitel-Dateien reichen).
         resolved, _merge_report = merge_export_ready_gaps_into_timeline(
             project,
             timeline=resolved,
             unified=plan,
             require_closed_none=False,
             persist=False,
-            persist_report=True,
+            persist_report=False,
         )
     except Exception:  # noqa: BLE001 — Merge soft; Timing-Ergebnis behalten
         pass
@@ -473,8 +536,9 @@ def resolve_all_chapter_timelines(
     progress_callback: Callable[[str, int, int], None] | None = None,
     chapter_names: list[str] | None = None,
     only_open: bool = False,
+    max_workers: int | None = None,
 ) -> list[tuple[str, ResolvedTimelineDocument]]:
-    """Python-Timing für Körper-Kapitel.
+    """Python-Timing für Körper-Kapitel (parallel).
 
     ``only_open=True``: nur Kapitel mit Plan + geschlossenen Gaps, ohne Resolved.
     Sonst: alle timing-bereiten Kapitel (Plan + Gaps zu). Kapitel mit offenen
@@ -494,13 +558,35 @@ def resolve_all_chapter_timelines(
             else "Keine Kapitel für Python Timing "
             "(Plan fehlt oder Coverage Gaps noch offen)."
         )
-    out: list[tuple[str, ResolvedTimelineDocument]] = []
+
+    workers = max(1, int(max_workers or ENHANCED_CHAPTER_TIMING_MAX_WORKERS))
+    workers = min(workers, len(names))
     total = len(names)
-    for index, name in enumerate(names, start=1):
-        if progress_callback is not None:
-            progress_callback(name, index, total)
-        out.append((name, resolve_chapter_timeline(project, name)))
-    return out
+    results_by_name: dict[str, ResolvedTimelineDocument] = {}
+    errors: list[str] = []
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(resolve_chapter_timeline, project, name): name for name in names
+        }
+        done = 0
+        for future in as_completed(futures):
+            name = futures[future]
+            done += 1
+            if progress_callback is not None:
+                progress_callback(name, done, total)
+            try:
+                results_by_name[name] = future.result()
+            except Exception as exc:  # noqa: BLE001 — Batch sammelt Fehler
+                errors.append(f"{name}: {exc}")
+
+    if errors:
+        raise ChapterCutError(
+            f"{len(errors)}/{total} Python-Timing(s) fehlgeschlagen:\n"
+            + "\n".join(f"- {err}" for err in errors)
+        )
+
+    return [(name, results_by_name[name]) for name in names if name in results_by_name]
 
 
 def _shift_timeline(
