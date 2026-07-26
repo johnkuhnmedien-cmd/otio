@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from otio_app.models import Project
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
+from otio_app.project_layout import language_folder_name
 from otio_app.services.voiceover_generation.intro_hook_service import (
+    REFERENCE_INTRO_HOOK_LANGUAGE,
     build_intro_hook_candidates,
     confirm_intro_hook,
     get_active_dramaturgy_folder_names,
@@ -12,6 +14,7 @@ from otio_app.services.voiceover_generation.intro_hook_service import (
     intro_source_ready,
     load_confirmed_intro_hook,
     load_intro_hook_candidates,
+    load_reference_intro_hook_text,
     missing_intro_source_folder_names,
     regenerate_intro_hook_candidates,
     unconfirm_intro_hook,
@@ -242,7 +245,13 @@ def _render_visual_beats_table(candidate: IntroHookCandidate) -> None:
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
 
-def _render_candidate(project: Project, candidate: IntroHookCandidate, *, is_confirmed: bool) -> None:
+def _render_candidate(
+    project: Project,
+    candidate: IntroHookCandidate,
+    *,
+    is_confirmed: bool,
+    reference_hook_text: str | None = None,
+) -> None:
     with st.expander(
         f"{candidate.hook_id} — {candidate.hook_type} (Score: {candidate.hook_potential_score:.2f})"
         + (" ✅ bestätigt" if is_confirmed else "")
@@ -261,6 +270,11 @@ def _render_candidate(project: Project, candidate: IntroHookCandidate, *, is_con
         if text_key not in st.session_state:
             st.session_state[text_key] = candidate.hook_text
         hook_text = st.text_area("Hook-Text", key=text_key, height=100)
+        if reference_hook_text:
+            st.caption(
+                f"{language_folder_name(REFERENCE_INTRO_HOOK_LANGUAGE)}-Referenz: "
+                f"{reference_hook_text}"
+            )
 
         if candidate.reason:
             st.write(f"**Begründung:** {candidate.reason}")
@@ -307,6 +321,8 @@ def render_intro_page() -> None:
 
     confirmed_hook = load_confirmed_intro_hook(project)
     candidates_document = load_intro_hook_candidates(project)
+    reference_hook_text = load_reference_intro_hook_text(project)
+    reference_label = language_folder_name(REFERENCE_INTRO_HOOK_LANGUAGE)
 
     st.subheader("Intro-Hooks generieren")
     if confirmed_hook is not None:
@@ -338,6 +354,18 @@ def render_intro_page() -> None:
             f"{last_result.get('error')}"
         )
 
+    if reference_hook_text:
+        st.info(
+            f"**{reference_label}-Referenz (bestätigter Hook)** — "
+            "nur zur Orientierung; du arbeitest weiter in der aktuellen Sprache.\n\n"
+            f"{reference_hook_text}"
+        )
+    elif language_folder_name(project.language) != reference_label:
+        st.caption(
+            f"Keine {reference_label}-Referenz: noch kein bestätigter "
+            f"{reference_label}-Intro-Hook unter demselben Projektroot."
+        )
+
     if candidates_document is None:
         st.info("Noch keine Intro-Hook-Kandidaten vorhanden.")
         return
@@ -348,7 +376,12 @@ def render_intro_page() -> None:
     st.subheader("Kandidaten")
     confirmed_hook_id = confirmed_hook.hook_id if confirmed_hook is not None else None
     for candidate in candidates_document.candidates:
-        _render_candidate(project, candidate, is_confirmed=candidate.hook_id == confirmed_hook_id)
+        _render_candidate(
+            project,
+            candidate,
+            is_confirmed=candidate.hook_id == confirmed_hook_id,
+            reference_hook_text=reference_hook_text,
+        )
 
     st.subheader("Bestätigter Hook")
     if confirmed_hook is None:
@@ -357,6 +390,8 @@ def render_intro_page() -> None:
 
     st.success(f"Bestätigt: `{confirmed_hook.hook_id}` ({confirmed_hook.confirmed_at.isoformat()})")
     st.write(confirmed_hook.hook_text)
+    if reference_hook_text:
+        st.caption(f"{reference_label}-Referenz: {reference_hook_text}")
     st.caption(f"Wortanzahl: {confirmed_hook.word_count} · Typ: {confirmed_hook.hook_type}")
     if confirmed_hook.visual_beats:
         st.markdown("**Visuelle Zuordnung**")

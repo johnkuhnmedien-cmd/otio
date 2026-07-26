@@ -28,7 +28,12 @@ from otio_app.defaults import (
     WEAK_ASSET_MATCH_CONFIDENCE_THRESHOLD,
 )
 from otio_app.models import Project
-from otio_app.project_layout import get_intro_hook_candidates_path, get_intro_hook_confirmed_path
+from otio_app.project_layout import (
+    get_intro_hook_candidates_path,
+    get_intro_hook_confirmed_path,
+    get_language_work_dir,
+    language_folder_name,
+)
 from otio_app.services.gemini_client import _extract_json
 from otio_app.services.plan_llm_client import (
     generate_plan_text_with_metadata,
@@ -87,11 +92,15 @@ __all__ = [
     "load_intro_hook_candidates",
     "save_intro_hook_candidates",
     "load_confirmed_intro_hook",
+    "load_reference_intro_hook_text",
     "save_confirmed_intro_hook",
     "confirm_intro_hook",
     "unconfirm_intro_hook",
     "update_intro_hook_candidate",
 ]
+
+# Referenzsprache für Hook-Info in anderen Sprachen (nur Anzeige, nie Schreibziel).
+REFERENCE_INTRO_HOOK_LANGUAGE = "de"
 
 
 def get_active_dramaturgy_folder_names(project: Project) -> list[str]:
@@ -439,6 +448,33 @@ def load_confirmed_intro_hook(project: Project) -> ConfirmedIntroHook | None:
         return ConfirmedIntroHook.model_validate(payload)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
         return None
+
+
+def load_reference_intro_hook_text(
+    project: Project,
+    *,
+    reference_language: str = REFERENCE_INTRO_HOOK_LANGUAGE,
+) -> str | None:
+    """Bestätigter Hook-Text einer Referenzsprache (z. B. DE) — nur Lesen.
+
+    Für FR/EN/…-Projekte: deutsche Formulierung als Verständnis-Hilfe anzeigen.
+    Schreibt nichts und ändert die aktuelle Arbeitssprache nicht.
+    """
+    current = language_folder_name(project.language)
+    reference = language_folder_name(reference_language)
+    if not reference or current == reference:
+        return None
+    ref_dir = get_language_work_dir(project.work_dir_path, reference_language)
+    path = get_intro_hook_confirmed_path(ref_dir)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        hook = ConfirmedIntroHook.model_validate(payload)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return None
+    text = str(hook.hook_text or "").strip()
+    return text or None
 
 
 def save_confirmed_intro_hook(project: Project, hook: ConfirmedIntroHook) -> ConfirmedIntroHook:
