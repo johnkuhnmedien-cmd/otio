@@ -50,7 +50,11 @@ from otio_app.services.folder_analysis_status import (
     format_folder_with_status,
     get_folder_analysis_state,
 )
-from otio_app.services.manual_folder_completion import is_manually_complete, set_manually_complete
+from otio_app.services.manual_folder_completion import (
+    is_manually_complete,
+    set_manually_complete,
+    set_manually_complete_many,
+)
 from otio_app.ui.analysis_jobs_ui import render_analysis_jobs_monitor
 from otio_app.ui.project_context import (
     get_workflow_status,
@@ -219,9 +223,44 @@ def _render_folder_status_overview(project) -> None:
         f"⚪ {counts[FolderAnalysisState.PENDING]} offen · "
         f"➖ {counts[FolderAnalysisState.EMPTY]} leer"
     )
-    if st.button("Status aktualisieren", key=f"refresh_folder_status_{project.id}"):
-        _invalidate_folder_status_cache(project.id)
-        st.rerun()
+    incomplete_names = [
+        name
+        for name in project.asset_subdir_names
+        if status_cache.get(name, get_folder_analysis_state(project, name))
+        in {FolderAnalysisState.PARTIAL, FolderAnalysisState.PENDING}
+    ]
+    col_refresh, col_mark_all = st.columns(2)
+    with col_refresh:
+        if st.button(
+            "Status aktualisieren",
+            key=f"refresh_folder_status_{project.id}",
+            use_container_width=True,
+        ):
+            _invalidate_folder_status_cache(project.id)
+            st.rerun()
+    with col_mark_all:
+        if st.button(
+            f"Alle unfertigen manuell fertig ({len(incomplete_names)})",
+            key=f"manual_complete_all_{project.id}",
+            use_container_width=True,
+            disabled=not incomplete_names,
+            help=(
+                "Markiert alle teilweise/offenen Ordner auf einmal als manuell fertig "
+                "und baut Inventory aus dem Cache (ohne Analyse nachzuholen)."
+            ),
+            type="primary",
+        ):
+            changed = set_manually_complete_many(
+                project, incomplete_names, complete=True
+            )
+            _invalidate_folder_status_cache(project.id)
+            if changed:
+                st.success(
+                    f"{len(changed)} Ordner manuell als fertig markiert."
+                )
+            else:
+                st.info("Keine Ordner geändert.")
+            st.rerun()
 
     for folder_name in project.asset_subdir_names:
         state = status_cache.get(
@@ -278,7 +317,10 @@ def _render_folder_status_overview(project) -> None:
                     _invalidate_folder_status_cache(project.id)
                     st.rerun()
 
-    st.caption("Rechts: ✓ = manuell als fertig markieren · ↩ = Markierung aufheben")
+    st.caption(
+        "Rechts: ✓ = manuell als fertig markieren · ↩ = Markierung aufheben · "
+        "Oben: alle unfertigen auf einmal."
+    )
 
 
 def _init_model_settings() -> tuple[str, str, str]:
