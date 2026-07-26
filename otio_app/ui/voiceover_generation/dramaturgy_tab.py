@@ -7,6 +7,7 @@ import streamlit as st
 from otio_app.defaults import (
     DRAMATURGY_PLANNING_MODE_GEOGRAPHY,
     DRAMATURGY_PLANNING_MODE_LABELS,
+    DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST,
     DRAMATURGY_PLANNING_MODE_VARIETY,
 )
 from otio_app.models import Project
@@ -315,7 +316,7 @@ def render_dramaturgy_page() -> None:
     max_output_tokens = _render_max_tokens_slider(
         project, provider=provider, model=model
     )
-    col_geo, col_variety = st.columns(2)
+    col_geo, col_variety, col_spectacle = st.columns(3)
     with col_geo:
         geo_clicked = st.button(
             DRAMATURGY_PLANNING_MODE_LABELS[DRAMATURGY_PLANNING_MODE_GEOGRAPHY],
@@ -336,6 +337,17 @@ def render_dramaturgy_page() -> None:
             "Reihenfolge für maximale Abwechslung und Kontraste zwischen Kapiteln. "
             f"Aktuelles Limit: max_tokens={max_output_tokens:,}."
         )
+    with col_spectacle:
+        spectacle_clicked = st.button(
+            DRAMATURGY_PLANNING_MODE_LABELS[DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST],
+            disabled=not can_plan,
+            key=f"vo_dramaturgy_plan_spectacle_{project.id}",
+        )
+        st.caption(
+            "Visuell schönste und spannendste Orte abwechslungsreich am Anfang; "
+            "bekanntere, weniger verblüffende Orte zum Ende. "
+            f"Aktuelles Limit: max_tokens={max_output_tokens:,}."
+        )
 
     build_kwargs: dict | None = None
     if geo_clicked:
@@ -346,6 +358,11 @@ def render_dramaturgy_page() -> None:
     elif variety_clicked:
         build_kwargs = {
             "planning_mode": DRAMATURGY_PLANNING_MODE_VARIETY,
+            "max_output_tokens": max_output_tokens,
+        }
+    elif spectacle_clicked:
+        build_kwargs = {
+            "planning_mode": DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST,
             "max_output_tokens": max_output_tokens,
         }
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 from otio_app.defaults import (
     BRIEF_NEGATIVE_RULE_INSTRUCTIONS,
     DRAMATURGY_PLANNING_MODE_GEOGRAPHY,
+    DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST,
     DRAMATURGY_PLANNING_MODE_VARIETY,
     PAUSE_AFTER_CHOICES,
     SEGMENT_ASSET_PLANNING_MODE_LLM_DISCRETION,
@@ -285,6 +286,26 @@ or after a short geographic setup.
 
 Do NOT simply sort alphabetically. Do NOT simply sort by asset count."""
 
+    if mode == DRAMATURGY_PLANNING_MODE_SPECTACLE_FIRST:
+        return """## Planning mode: SPECTACLE FIRST (visual wow early)
+Order the chapters so the MOST visually beautiful, surprising, and exciting \
+locations come EARLY — while still keeping that early stretch VARIED:
+- Use visual_strength_score, chapter_themes, and asset_diversity_score as strong \
+signals for "wow" potential; also judge uniqueness/surprise from names + themes.
+- Front-load chapters that feel rare, spectacular, or emotionally striking \
+(unusual geology, extreme nature, unexpected beauty).
+- Among the early slots, actively alternate mood / landscape type / scale so the \
+opening does not feel like one long similar spectacle.
+- Push more famous / widely known locations that are solid but less surprising \
+toward the END (iconic-but-expected places, familiar tourist landmarks).
+- Still assign dramaturgy roles (opener/contrast/climax/resolution) and \
+transitions; climax may sit mid-film if a later familiar place needs a quieter \
+landing — but do not bury the strongest visual surprises at the end.
+- Geography is secondary: travel logic may bend for wow + variety.
+
+Do NOT simply sort alphabetically. Do NOT simply sort by asset count. Do NOT \
+default to a pure map route. Do NOT put the blandest-famous chapters first."""
+
     return """## Planning mode: MAXIMUM VARIETY
 Order the chapters for MAXIMUM VARIETY and narrative interest:
 - Actively alternate mood, scale, landscape type, and visual character between \
@@ -314,8 +335,10 @@ def build_dramaturgy_prompt(
     Rollen, wird aber aktuell nicht in den Prompt-Text eingebettet — welches
     Modell aufgerufen wird, ist eine Aufrufer-Entscheidung, kein Prompt-Inhalt.
 
-    `planning_mode`: "geography" (Reise/Geographie zuerst) oder "variety"
-    (Abwechslung/Kontrast zuerst). Default: variety.
+    `planning_mode`: "geography" (Reise/Geographie zuerst), "variety"
+    (Abwechslung/Kontrast zuerst) oder "spectacle_first" (visuell stärkste /
+    überraschendste Orte früh, bekanntere weniger verblüffende Orte zum Ende).
+    Default: variety.
 
     `style_context_text`: optional vorformatierter Stilblock (z. B. Raw Text).
     """
