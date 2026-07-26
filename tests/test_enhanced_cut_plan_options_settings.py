@@ -99,6 +99,8 @@ def test_options_roundtrip_new_fields(tmp_path: Path) -> None:
             folder_title_enabled=True,
             still_image_zoom=0.75,
             still_image_background_style="none",
+            still_image_dynamic_zoom_enabled=True,
+            still_image_dynamic_zoom_factor=1.18,
         ),
     )
     loaded = load_cut_plan_options(project)
@@ -115,6 +117,8 @@ def test_options_roundtrip_new_fields(tmp_path: Path) -> None:
     assert loaded.folder_title_enabled is True
     assert loaded.still_image_zoom == 0.75
     assert loaded.still_image_background_style == "none"
+    assert loaded.still_image_dynamic_zoom_enabled is True
+    assert loaded.still_image_dynamic_zoom_factor == pytest.approx(1.18)
 
 
 def test_legacy_options_default_to_rhythm_style(tmp_path: Path) -> None:
@@ -310,6 +314,8 @@ def test_ui_settings_markers() -> None:
     assert "enh_opt_postroll_" in source
     assert "Asset-Reuse-Abstand" in source
     assert "Still-Style aktiv" in source
+    assert "Dynamischer Zoom (Ken Burns)" in source
+    assert "enh_opt_still_dyn_zoom_" in source
     assert "Ordner-Titel einblenden" in source
 
 

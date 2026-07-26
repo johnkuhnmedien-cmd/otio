@@ -853,9 +853,31 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                     "none: nur Zoom auf Schwarz."
                 ),
             )
+        still_image_dynamic_zoom_enabled = st.checkbox(
+            "Dynamischer Zoom (Ken Burns)",
+            value=bool(current.still_image_dynamic_zoom_enabled),
+            key=f"enh_opt_still_dyn_zoom_{project.id}",
+            help=(
+                "Beim OTIO-Export zoomen Still-Holds langsam über die Shot-Dauer "
+                "hinein (zentriert). Unabhängig vom Still-Style; Videos unverändert."
+            ),
+        )
+        still_image_dynamic_zoom_factor = st.number_input(
+            "Dynamischer Zoom-Faktor (Ende)",
+            min_value=1.02,
+            max_value=1.35,
+            value=float(current.still_image_dynamic_zoom_factor),
+            step=0.01,
+            key=f"enh_opt_still_dyn_zoom_factor_{project.id}",
+            disabled=not still_image_dynamic_zoom_enabled,
+            help=(
+                "End-Zoom relativ zum Start (1.12 = +12 % über die Shot-Dauer). "
+                "Wirkt erst beim nächsten OTIO-Export."
+            ),
+        )
 
         draft = CutPlanOptions(
-            schema_version="1.4",
+            schema_version="1.5",
             cut_plan_mode=str(cut_plan_mode),  # type: ignore[arg-type]
             unified_cut_style=str(unified_cut_style),  # type: ignore[arg-type]
             enable_unified_mini_repair=bool(enable_unified_mini_repair),
@@ -885,6 +907,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             still_image_style_enabled=bool(still_image_style_enabled),
             still_image_zoom=float(still_image_zoom),
             still_image_background_style=str(still_image_background_style),
+            still_image_dynamic_zoom_enabled=bool(still_image_dynamic_zoom_enabled),
+            still_image_dynamic_zoom_factor=float(still_image_dynamic_zoom_factor),
         )
         if st.button(
             "Cut Plan Settings speichern",

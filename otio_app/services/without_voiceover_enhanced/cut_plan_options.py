@@ -66,8 +66,14 @@ STILL_BACKGROUND_CHOICES = (
 )
 
 
+# Dynamischer Still-Zoom (Ken Burns): Endfaktor relativ zum Start (1.0 = aus).
+DEFAULT_STILL_DYNAMIC_ZOOM_FACTOR = 1.12
+STILL_DYNAMIC_ZOOM_FACTOR_MIN = 1.02
+STILL_DYNAMIC_ZOOM_FACTOR_MAX = 1.35
+
+
 class CutPlanOptions(BaseModel):
-    schema_version: str = "1.4"
+    schema_version: str = "1.5"
     # Phase 7: Unified (1 LLM) vs Legacy (Rough + Final).
     cut_plan_mode: CutPlanMode = CUT_PLAN_MODE_LEGACY
     # Unified Stil: Rhythmus (Default) oder Keyword-Sync (Wort↔Bild).
@@ -135,6 +141,13 @@ class CutPlanOptions(BaseModel):
     still_image_style_enabled: bool = True
     still_image_zoom: float = Field(default=DEFAULT_STILL_IMAGE_ZOOM, ge=0.05, le=1.0)
     still_image_background_style: str = STILL_BACKGROUND_VINTAGE
+    # Ken-Burns-Zoom über die Shot-Dauer (OTIO Still-Hold-Video).
+    still_image_dynamic_zoom_enabled: bool = False
+    still_image_dynamic_zoom_factor: float = Field(
+        default=DEFAULT_STILL_DYNAMIC_ZOOM_FACTOR,
+        ge=STILL_DYNAMIC_ZOOM_FACTOR_MIN,
+        le=STILL_DYNAMIC_ZOOM_FACTOR_MAX,
+    )
 
 
 def default_cut_plan_options() -> CutPlanOptions:
@@ -358,6 +371,21 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
             hi=1.0,
         ),
         still_image_background_style=background,
+        still_image_dynamic_zoom_enabled=bool(
+            raw.get(
+                "still_image_dynamic_zoom_enabled",
+                defaults.still_image_dynamic_zoom_enabled,
+            )
+        ),
+        still_image_dynamic_zoom_factor=_clamp_float(
+            raw.get(
+                "still_image_dynamic_zoom_factor",
+                defaults.still_image_dynamic_zoom_factor,
+            ),
+            default=defaults.still_image_dynamic_zoom_factor,
+            lo=STILL_DYNAMIC_ZOOM_FACTOR_MIN,
+            hi=STILL_DYNAMIC_ZOOM_FACTOR_MAX,
+        ),
     )
 
 
