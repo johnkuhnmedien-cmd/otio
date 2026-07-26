@@ -562,10 +562,7 @@ def render_project_workbench() -> None:
             st.write("Noch keine Asset-Ordner gescannt.")
         else:
             for status in sync_statuses:
-                label = (
-                    f"**{status.folder}** — {status.detail} "
-                    f"({status.cache_files} Cache / {status.media_files} Medien)"
-                )
+                label = f"**{status.folder}** — {status.detail}"
                 if status.state == "created":
                     st.success(label)
                 elif status.state == "exists":

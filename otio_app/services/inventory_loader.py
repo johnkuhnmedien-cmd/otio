@@ -321,51 +321,88 @@ def materialize_folder_inventory_from_cache(
     return item, None
 
 
+def _folder_inventory_sync_counts(
+    project: Project, folder_name: str
+) -> tuple[int, int, int]:
+    """(analysierte Top-Level-Medien, Top-Level-Medien gesamt, Cache-JSON-Dateien).
+
+    Medien = nur Dateien im Ordner-Top-Level (keine Supplements, keine Phantom-
+    Lücken aus Cache-Nummern). Analysiert = erfolgreicher Cache für diese Datei.
+    """
+    from otio_app.services.media_inventory_cache import (
+        has_successful_asset_cache,
+        list_cache_dirs_for_folder,
+    )
+    from otio_app.services.media_utils import list_media_files
+
+    folder_path = project.project_root_path / folder_name
+    try:
+        media_paths = list_media_files(folder_path) if folder_path.is_dir() else []
+    except OSError:
+        media_paths = []
+    analyzed = sum(
+        1
+        for media_path in media_paths
+        if has_successful_asset_cache(project, folder_name, media_path)
+    )
+    cache_jsons = 0
+    for cache_dir in list_cache_dirs_for_folder(project, folder_name):
+        if not cache_dir.is_dir():
+            continue
+        try:
+            cache_jsons += sum(1 for _ in cache_dir.glob("*.json"))
+        except OSError:
+            continue
+    return analyzed, len(media_paths), cache_jsons
+
+
+def _folder_inventory_sync_detail(
+    *,
+    out_name: str,
+    analyzed: int,
+    media_count: int,
+    present: bool,
+) -> str:
+    missing = max(0, media_count - analyzed)
+    base = (
+        f"Vorhanden: `{out_name}`"
+        if present
+        else "Kein Inventar — Button „aus Cache aufbauen“ nutzen"
+    )
+    return (
+        f"{base} · {analyzed}/{media_count} Top-Level-Medien analysiert"
+        + (f" · {missing} ohne Cache" if missing else "")
+        + " (Supplements zählen hier nicht)"
+    )
+
+
 def probe_folder_inventory_statuses(
     project: Project,
     folder_names: list[str] | None = None,
 ) -> list[FolderInventorySyncStatus]:
     """Read-only Inventar-Status für die UI — ohne Migrate/Sync/Schreiben."""
-    from otio_app.services.media_inventory_cache import list_cache_dirs_for_folder
-    from otio_app.services.media_utils import list_media_files
-
     targets = folder_names if folder_names is not None else project.asset_subdir_names
     statuses: list[FolderInventorySyncStatus] = []
     for folder_name in targets:
         out_path = get_folder_inventory_path(project.work_dir_path, folder_name)
-        folder_path = project.project_root_path / folder_name
-        try:
-            media_count = len(list_media_files(folder_path)) if folder_path.is_dir() else 0
-        except OSError:
-            media_count = 0
-        cache_count = 0
-        for cache_dir in list_cache_dirs_for_folder(project, folder_name):
-            if not cache_dir.is_dir():
-                continue
-            try:
-                cache_count += sum(1 for _ in cache_dir.glob("*.json"))
-            except OSError:
-                continue
-        if out_path.is_file():
-            statuses.append(
-                FolderInventorySyncStatus(
-                    folder=folder_name,
-                    state="exists",
-                    detail=f"Vorhanden: `{out_path.name}`",
-                    cache_files=cache_count,
-                    media_files=media_count,
-                )
+        analyzed, media_count, _cache_jsons = _folder_inventory_sync_counts(
+            project, folder_name
+        )
+        present = out_path.is_file()
+        statuses.append(
+            FolderInventorySyncStatus(
+                folder=folder_name,
+                state="exists" if present else "incomplete",
+                detail=_folder_inventory_sync_detail(
+                    out_name=out_path.name,
+                    analyzed=analyzed,
+                    media_count=media_count,
+                    present=present,
+                ),
+                cache_files=analyzed,
+                media_files=media_count,
             )
-        else:
-            statuses.append(
-                FolderInventorySyncStatus(
-                    folder=folder_name,
-                    state="incomplete",
-                    detail="Kein Inventar — Button „aus Cache aufbauen“ nutzen",
-                    cache_files=cache_count,
-                    media_files=media_count,
-                )
-            )
+        )
     return statuses
 
 
@@ -384,18 +421,24 @@ def sync_folder_inventories_from_cache(
         migrate_legacy_per_asset_cache_folder(project, folder_name)
         out_path = get_folder_inventory_path(project.work_dir_path, folder_name)
         existed_before = out_path.is_file()
-        media_count = len(discover_folder_media_paths(project, folder_name))
-        cache_count = len(scan_folder_cache_assets(project, folder_name))
 
         created_now = sync_folder_inventory_with_status(project, folder_name)
+        analyzed, media_count, _cache_jsons = _folder_inventory_sync_counts(
+            project, folder_name
+        )
         if out_path.is_file() and not existed_before:
             created.append(folder_name)
             statuses.append(
                 FolderInventorySyncStatus(
                     folder=folder_name,
                     state="created",
-                    detail=f"Neu erstellt (Ordner grün): `{out_path.name}`",
-                    cache_files=cache_count,
+                    detail=_folder_inventory_sync_detail(
+                        out_name=out_path.name,
+                        analyzed=analyzed,
+                        media_count=media_count,
+                        present=True,
+                    ),
+                    cache_files=analyzed,
                     media_files=media_count,
                 )
             )
@@ -404,21 +447,34 @@ def sync_folder_inventories_from_cache(
                 FolderInventorySyncStatus(
                     folder=folder_name,
                     state="exists",
-                    detail=f"Vorhanden (Ordner grün): `{out_path.name}`",
-                    cache_files=cache_count,
+                    detail=_folder_inventory_sync_detail(
+                        out_name=out_path.name,
+                        analyzed=analyzed,
+                        media_count=media_count,
+                        present=True,
+                    ),
+                    cache_files=analyzed,
                     media_files=media_count,
                 )
             )
         else:
-            detail = "Kein Inventar — Ordner noch nicht grün"
+            detail = _folder_inventory_sync_detail(
+                out_name=out_path.name,
+                analyzed=analyzed,
+                media_count=media_count,
+                present=False,
+            )
             if folder_is_green(project, folder_name):
-                detail = "Ordner grün, aber Inventar konnte nicht erstellt werden"
+                detail = (
+                    "Ordner grün, aber Inventar konnte nicht erstellt werden · "
+                    + detail
+                )
             statuses.append(
                 FolderInventorySyncStatus(
                     folder=folder_name,
                     state="incomplete",
                     detail=detail,
-                    cache_files=cache_count,
+                    cache_files=analyzed,
                     media_files=media_count,
                 )
             )
