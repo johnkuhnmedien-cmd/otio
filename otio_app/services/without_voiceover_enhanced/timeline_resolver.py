@@ -309,6 +309,39 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
             entry["duration_seconds"] = supplement.duration_seconds
         _register(supplement.candidate_id, entry, raw_id=supplement.candidate_id)
 
+    # Sibling-Sprachen: damit LLM-Cut-IDs aus Cross-Lang-Accepted auflösbar bleiben.
+    try:
+        from otio_app.services.without_voiceover_enhanced.cross_language_supplements import (
+            load_sibling_export_ready_supplements,
+        )
+
+        for _lang, supplement in load_sibling_export_ready_supplements(project):
+            if supplement.candidate_id in result.by_id:
+                continue
+            local_path = str(supplement.local_media_path or "").strip()
+            if not local_path or is_http_url(local_path):
+                continue
+            path = _resolve_local_path(project, local_path)
+            if not path.is_file():
+                continue
+            entry = _probe_entry(
+                project,
+                path=path,
+                folder="",
+                asset_id=supplement.candidate_id,
+                usable_in=None,
+                media_type_hint=(supplement.media_type or "photo").lower(),
+                fps=fps,
+            )
+            entry["supplement"] = True
+            entry["export_ready"] = True
+            entry["cross_language_accepted"] = True
+            if supplement.duration_seconds is not None:
+                entry["duration_seconds"] = supplement.duration_seconds
+            _register(supplement.candidate_id, entry, raw_id=supplement.candidate_id)
+    except Exception:  # noqa: BLE001 — Katalog bleibt nutzbar ohne Sibling-Scan
+        pass
+
     for asset_id, paths in sorted(explicit_paths.items()):
         unique_paths = sorted(set(paths))
         if len(unique_paths) < 2:

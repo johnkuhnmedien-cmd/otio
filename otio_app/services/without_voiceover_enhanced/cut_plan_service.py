@@ -197,6 +197,41 @@ def _local_assets_payload(
             entry["middle_frame_path"] = str(middle) if middle is not None else None
             entry["has_middle_frame"] = middle is not None
             assets.append(entry)
+
+    # Accepted Supplements anderer Sprachen → zuweisbare Local Assets.
+    from otio_app.services.without_voiceover_enhanced.cross_language_supplements import (
+        sibling_supplement_rows_for_cut_plan,
+    )
+
+    existing_ids = {
+        str(row.get("local_asset_id") or row.get("asset_id") or "").strip()
+        for row in assets
+        if str(row.get("local_asset_id") or row.get("asset_id") or "").strip()
+    }
+    existing_files = {
+        str(row.get("file") or "").strip().lower()
+        for row in assets
+        if str(row.get("file") or "").strip()
+    }
+    if folder_name:
+        assets.extend(
+            sibling_supplement_rows_for_cut_plan(
+                project,
+                folder_name=folder_name,
+                existing_asset_ids=existing_ids,
+                existing_files=existing_files,
+            )
+        )
+    else:
+        # Intro / filmweiter Bundle-Pfad: alle Sibling-Accepted.
+        assets.extend(
+            sibling_supplement_rows_for_cut_plan(
+                project,
+                folder_name=None,
+                existing_asset_ids=existing_ids,
+                existing_files=existing_files,
+            )
+        )
     return assets
 
 
