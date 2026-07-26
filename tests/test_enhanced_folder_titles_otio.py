@@ -24,6 +24,8 @@ from otio_app.services.without_voiceover_enhanced.otio_export_service import (
     EnhancedOtioExportError,
     build_enhanced_folder_title_items,
     export_otio_from_resolved_timeline,
+    format_numbered_folder_title,
+    reverse_body_chapter_number,
 )
 from otio_app.services.without_voiceover_enhanced.paths import resolved_timeline_path
 
@@ -135,6 +137,17 @@ def _resolved(*, with_intro: bool = True) -> ResolvedTimelineDocument:
     )
 
 
+def test_reverse_body_chapter_number_counts_down() -> None:
+    body = ["Antelope Canyon", "Yosemite", "Mount Rushmore"]
+    assert reverse_body_chapter_number("Antelope Canyon", ordered_body_chapters=body) == 3
+    assert reverse_body_chapter_number("Yosemite", ordered_body_chapters=body) == 2
+    assert reverse_body_chapter_number("Mount Rushmore", ordered_body_chapters=body) == 1
+    assert reverse_body_chapter_number("Missing", ordered_body_chapters=body) is None
+    assert format_numbered_folder_title("Antelope_Canyon", chapter_number=37) == (
+        "37. Antelope Canyon"
+    )
+
+
 def test_build_folder_title_items_skips_intro_and_uses_chapter_start(
     tmp_path: Path,
 ) -> None:
@@ -153,12 +166,87 @@ def test_build_folder_title_items_skips_intro_and_uses_chapter_start(
     items = build_enhanced_folder_title_items(project, _resolved(with_intro=True))
     assert len(items) == 1
     assert items[0].folder_name == "Yosemite"
+    assert items[0].title_style is not None
+    assert items[0].title_style.text == "1. Yosemite"
     assert items[0].timeline_in_sec == 16.5  # Opening-Shot / first_shot
     assert items[0].duration_sec == 5.0
     assert items[0].track == "V2"
-    assert items[0].title_style is not None
     assert items[0].title_style.fade_in_sec == 0.5
     assert items[0].title_style.fade_out_sec == 0.75
+
+
+def test_build_folder_title_items_uses_film_wide_reverse_numbers(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    save_cut_plan_options(project, CutPlanOptions(folder_title_enabled=True))
+    resolved = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=40.0,
+        audio_segments=[],
+        shots=[
+            ResolvedShot(
+                shot_id="Yosemite_slot_001",
+                asset_id="yo_01",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=20.0,
+                source_start_seconds=0.0,
+                source_end_seconds=1.0,
+                folder_name="Yosemite",
+                chapter_id="Yosemite",
+                resolved_media_path="/tmp/yo.mp4",
+                resolved_media_kind="video",
+                resolved_media_duration_seconds=40.0,
+            ),
+            ResolvedShot(
+                shot_id="Caddo_slot_001",
+                asset_id="ca_01",
+                timeline_start_seconds=20.0,
+                timeline_end_seconds=40.0,
+                source_start_seconds=0.0,
+                source_end_seconds=1.0,
+                folder_name="Caddo",
+                chapter_id="Caddo",
+                resolved_media_path="/tmp/ca.mp4",
+                resolved_media_kind="video",
+                resolved_media_duration_seconds=40.0,
+            ),
+        ],
+        chapters=[
+            ResolvedChapterEnvelope(
+                chapter_id="Yosemite",
+                folder_name="Yosemite",
+                chapter_video_start=0.0,
+                chapter_audio_start=0.0,
+                chapter_audio_end=18.0,
+                chapter_video_end=20.0,
+                first_shot_id="Yosemite_slot_001",
+                last_shot_id="Yosemite_slot_001",
+                segment_ids=[],
+            ),
+            ResolvedChapterEnvelope(
+                chapter_id="Caddo",
+                folder_name="Caddo",
+                chapter_video_start=20.0,
+                chapter_audio_start=20.0,
+                chapter_audio_end=38.0,
+                chapter_video_end=40.0,
+                first_shot_id="Caddo_slot_001",
+                last_shot_id="Caddo_slot_001",
+                segment_ids=[],
+            ),
+        ],
+        voiceover_preroll_sec=1.0,
+        voiceover_postroll_sec=5.0,
+    )
+    film_order = ["Antelope Canyon", "Yosemite", "Caddo", "Mount Rushmore"]
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.list_body_chapter_names",
+        return_value=film_order,
+    ):
+        items = build_enhanced_folder_title_items(project, resolved)
+    assert [i.title_style.text for i in items] == ["3. Yosemite", "2. Caddo"]
 
 
 def test_alpha_fade_filter_and_clamp() -> None:
