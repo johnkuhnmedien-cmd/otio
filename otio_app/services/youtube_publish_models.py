@@ -1,4 +1,4 @@
-"""YouTube Publish: Beschreibung, Hashtags, Kapitel, Quiz aus Timeline + Skript."""
+"""YouTube Publish: Beschreibung, Hashtags, Kapitel, Quiz aus Timeline-Kapiteln."""
 
 from __future__ import annotations
 

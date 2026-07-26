@@ -24,6 +24,8 @@ from otio_app.services.youtube_publish_service import (
     build_youtube_publish_context_from_resolved,
     generate_youtube_publish_metadata,
     generate_youtube_publish_metadata_from_context,
+    generate_youtube_quizzes,
+    generate_youtube_quizzes_from_context,
     load_youtube_metadata,
     youtube_metadata_path,
 )
@@ -143,9 +145,9 @@ def render_youtube_publish_block(
     st.markdown("---")
     st.markdown("**📺 YouTube Publish**")
     st.caption(
-        "Titel, Beschreibung (max. ~3500 Zeichen Text + Kapitel-Timestamps), Hashtags und "
-        "Quiz (1× pro 10 Min., 3 Antworten). Kapitelzeiten kommen aus dem Timeline-Merge; "
-        "Text/Hashtags/Quiz über LLM in der Projektsprache."
+        "Zwei getrennte Schritte: **Metadaten** (Titel/Beschreibung/Hashtags) und **Quiz**. "
+        "Das LLM erhält nur Kapitelüberschriften + Timestamps — keine Folder-Skripte. "
+        "Kapitelzeiten kommen aus dem Timeline-Merge."
     )
 
     settings = load_model_settings(project)
@@ -165,19 +167,29 @@ def render_youtube_publish_block(
     if existing is not None and existing.title:
         st.write(f"**Titel:** {existing.title}")
     else:
-        st.caption("Titel erscheint nach der Generierung (aus dem bestätigten Voice-over-Plan).")
+        st.caption("Titel erscheint nach der Metadaten-Generierung.")
 
-    generate_clicked = st.button(
-        "YouTube-Beschreibung & Quiz generieren",
-        key=f"{key_prefix}_yt_publish_generate_{project.id}",
-        type="primary",
-        use_container_width=True,
-        help="Merged die gewählten Orte, baut Kapitelzeiten und ruft das LLM auf.",
-    )
+    col_meta, col_quiz = st.columns(2)
+    with col_meta:
+        meta_clicked = st.button(
+            "YouTube-Metadaten generieren",
+            key=f"{key_prefix}_yt_publish_generate_{project.id}",
+            type="primary",
+            use_container_width=True,
+            help="Titel, Beschreibung und Hashtags aus Kapitelüberschriften.",
+        )
+    with col_quiz:
+        quiz_clicked = st.button(
+            "YouTube-Quiz generieren",
+            key=f"{key_prefix}_yt_quiz_generate_{project.id}",
+            use_container_width=True,
+            help="Nur Quizzes (1× pro 10 Min.) — Metadaten bleiben erhalten.",
+        )
 
-    if generate_clicked:
+    if meta_clicked or quiz_clicked:
         try:
-            with st.spinner("Timeline mergen und YouTube-Metadaten generieren …"):
+            kind = "Metadaten" if meta_clicked else "Quiz"
+            with st.spinner(f"Timeline mergen und YouTube-{kind} generieren …"):
                 merged = merge_confirmed_edit_plans(
                     project,
                     folder_names=list(folders) if folders else None,
@@ -188,18 +200,14 @@ def render_youtube_publish_block(
                         st.caption(f"• {warning}")
                 else:
                     context = build_youtube_publish_context(project, merged)
-                    if not any(
-                        (entry.get("voiceover_text") or "").strip()
-                        for entry in context.folder_scripts
-                    ) and not (context.intro_text or "").strip():
+                    if not context.chapters:
                         st.warning(
-                            "Kein bestätigtes Voice-over-Skript gefunden. "
-                            "Bitte zuerst **⑦ Final Output** / den Voice-over-Plan bestätigen."
+                            "Keine Kapitel im Timeline-Merge — "
+                            "bitte Schnittplan bestätigen und Orte wählen."
                         )
-                    else:
+                    elif meta_clicked:
                         log_heavy_operation(
-                            f"YouTube Publish ({context.quiz_count} Quiz, "
-                            f"{len(context.chapters)} Kapitel)",
+                            f"YouTube Metadaten ({len(context.chapters)} Kapitel)",
                             page=page,
                         )
                         result = generate_youtube_publish_metadata(
@@ -209,12 +217,32 @@ def render_youtube_publish_block(
                             model=role_settings.model,
                         )
                         if result.status != STATUS_PASS or result.document is None:
-                            st.error(result.error or "YouTube-Generierung fehlgeschlagen.")
+                            st.error(result.error or "YouTube-Metadaten fehlgeschlagen.")
                         else:
                             st.success(
                                 f"YouTube-Metadaten gespeichert "
-                                f"({len(result.document.quizzes)} Quiz, "
-                                f"{len(result.document.chapters)} Kapitel)."
+                                f"({len(result.document.chapters)} Kapitel; "
+                                f"{len(result.document.quizzes)} Quiz unverändert)."
+                            )
+                            st.rerun()
+                    else:
+                        log_heavy_operation(
+                            f"YouTube Quiz ({context.quiz_count} geplant, "
+                            f"{len(context.chapters)} Kapitel)",
+                            page=page,
+                        )
+                        result = generate_youtube_quizzes(
+                            project,
+                            merged,
+                            provider=role_settings.provider,
+                            model=role_settings.model,
+                        )
+                        if result.status != STATUS_PASS or result.document is None:
+                            st.error(result.error or "YouTube-Quiz fehlgeschlagen.")
+                        else:
+                            st.success(
+                                f"YouTube-Quiz gespeichert "
+                                f"({len(result.document.quizzes)} Quiz)."
                             )
                             st.rerun()
         except (OSError, ValueError) as exc:
@@ -239,12 +267,12 @@ def render_enhanced_youtube_publish_block(
     page: str,
     key_prefix: str = "enhanced_final",
 ) -> None:
-    """YouTube Publish für Enhanced: Kontext aus Resolved Timeline + Locked Script."""
+    """YouTube Publish für Enhanced: Kontext aus Resolved Timeline (Kapitelüberschriften)."""
     st.markdown("**📺 YouTube Publish**")
     st.caption(
-        "Titel, Beschreibung (max. ~3500 Zeichen Text + Kapitel-Timestamps), Hashtags und "
-        "Quiz (1× pro 10 Min., 3 Antworten). Kapitelzeiten kommen aus der aufgelösten "
-        "Timeline; Text/Hashtags/Quiz über LLM in der Projektsprache."
+        "Zwei getrennte Schritte: **Metadaten** (Titel/Beschreibung/Hashtags) und **Quiz**. "
+        "Das LLM erhält nur Kapitelüberschriften + Timestamps aus der aufgelösten Timeline — "
+        "keine Folder-Skripte."
     )
 
     settings = load_model_settings(project)
@@ -265,39 +293,40 @@ def render_enhanced_youtube_publish_block(
         st.write(f"**Titel:** {existing.title}")
     else:
         st.caption(
-            "Titel erscheint nach der Generierung "
-            "(aus Project Brief / Dramaturgie + Locked Script)."
+            "Titel erscheint nach der Metadaten-Generierung "
+            "(aus Project Brief / Dramaturgie + Kapitelüberschriften)."
         )
 
-    generate_clicked = st.button(
-        "YouTube-Beschreibung & Quiz generieren",
-        key=f"{key_prefix}_yt_publish_generate_{project.id}",
-        type="primary",
-        use_container_width=True,
-        help="Baut Kapitelzeiten aus der Resolved Timeline und ruft das LLM auf.",
-    )
+    col_meta, col_quiz = st.columns(2)
+    with col_meta:
+        meta_clicked = st.button(
+            "YouTube-Metadaten generieren",
+            key=f"{key_prefix}_yt_publish_generate_{project.id}",
+            type="primary",
+            use_container_width=True,
+            help="Titel, Beschreibung und Hashtags aus Kapitelüberschriften.",
+        )
+    with col_quiz:
+        quiz_clicked = st.button(
+            "YouTube-Quiz generieren",
+            key=f"{key_prefix}_yt_quiz_generate_{project.id}",
+            use_container_width=True,
+            help="Nur Quizzes (1× pro 10 Min.) — Metadaten bleiben erhalten.",
+        )
 
-    if generate_clicked:
+    if meta_clicked or quiz_clicked:
         try:
-            with st.spinner("YouTube-Metadaten aus Enhanced-Timeline generieren …"):
+            kind = "Metadaten" if meta_clicked else "Quiz"
+            with st.spinner(f"YouTube-{kind} aus Enhanced-Timeline generieren …"):
                 context = build_youtube_publish_context_from_resolved(project, resolved)
                 if not context.chapters:
                     st.warning(
                         "Keine Kapitel in der aufgelösten Timeline — "
                         "bitte zuerst Final Cut auflösen."
                     )
-                elif not any(
-                    (entry.get("voiceover_text") or "").strip()
-                    for entry in context.folder_scripts
-                ) and not (context.intro_text or "").strip():
-                    st.warning(
-                        "Kein Locked-Script / Intro-Text gefunden. "
-                        "Bitte Script Lock und Intro-Hook bestätigen."
-                    )
-                else:
+                elif meta_clicked:
                     log_heavy_operation(
-                        f"YouTube Publish Enhanced ({context.quiz_count} Quiz, "
-                        f"{len(context.chapters)} Kapitel)",
+                        f"YouTube Metadaten Enhanced ({len(context.chapters)} Kapitel)",
                         page=page,
                     )
                     result = generate_youtube_publish_metadata_from_context(
@@ -307,12 +336,32 @@ def render_enhanced_youtube_publish_block(
                         model=role_settings.model,
                     )
                     if result.status != STATUS_PASS or result.document is None:
-                        st.error(result.error or "YouTube-Generierung fehlgeschlagen.")
+                        st.error(result.error or "YouTube-Metadaten fehlgeschlagen.")
                     else:
                         st.success(
                             f"YouTube-Metadaten gespeichert "
-                            f"({len(result.document.quizzes)} Quiz, "
-                            f"{len(result.document.chapters)} Kapitel)."
+                            f"({len(result.document.chapters)} Kapitel; "
+                            f"{len(result.document.quizzes)} Quiz unverändert)."
+                        )
+                        st.rerun()
+                else:
+                    log_heavy_operation(
+                        f"YouTube Quiz Enhanced ({context.quiz_count} geplant, "
+                        f"{len(context.chapters)} Kapitel)",
+                        page=page,
+                    )
+                    result = generate_youtube_quizzes_from_context(
+                        project,
+                        context,
+                        provider=role_settings.provider,
+                        model=role_settings.model,
+                    )
+                    if result.status != STATUS_PASS or result.document is None:
+                        st.error(result.error or "YouTube-Quiz fehlgeschlagen.")
+                    else:
+                        st.success(
+                            f"YouTube-Quiz gespeichert "
+                            f"({len(result.document.quizzes)} Quiz)."
                         )
                         st.rerun()
         except (OSError, ValueError) as exc:

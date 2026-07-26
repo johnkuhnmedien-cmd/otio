@@ -28,6 +28,7 @@ from otio_app.services.voiceover_generation.final_plan_service import (
 )
 from otio_app.services.voiceover_generation.llm_trace_service import (
     STAGE_YOUTUBE_PUBLISH,
+    STAGE_YOUTUBE_QUIZ,
     STATUS_FAIL,
     STATUS_PASS,
     content_hash,
@@ -39,7 +40,10 @@ from otio_app.services.voiceover_generation.llm_trace_service import (
 )
 from otio_app.services.voiceover_generation.model_settings_service import resolve_llm_model_id
 from otio_app.services.voiceover_generation.models import LlmRunManifest
-from otio_app.services.voiceover_generation.prompts import build_youtube_publish_prompt
+from otio_app.services.voiceover_generation.prompts import (
+    build_youtube_publish_prompt,
+    build_youtube_quiz_prompt,
+)
 from otio_app.services.youtube_publish_models import (
     YouTubeChapter,
     YouTubeMetadataDocument,
@@ -55,6 +59,8 @@ __all__ = [
     "format_youtube_timestamp",
     "generate_youtube_publish_metadata",
     "generate_youtube_publish_metadata_from_context",
+    "generate_youtube_quizzes",
+    "generate_youtube_quizzes_from_context",
     "load_youtube_metadata",
     "quiz_count_for_duration",
     "save_youtube_metadata",
@@ -406,16 +412,25 @@ class _BuildInputs:
 
 
 def _prompt_from_context(context: YouTubePublishContext) -> str:
+    """Metadaten-Prompt: nur Kapitelüberschriften, keine Folder-Skripte."""
     return build_youtube_publish_prompt(
+        language=context.language,
+        title=context.title,
+        total_duration_sec=context.total_duration_sec,
+        chapters_block=_chapters_prompt_block(context.chapters),
+        description_max_chars=YOUTUBE_DESCRIPTION_BODY_MAX_CHARS,
+        hashtags_max_chars=YOUTUBE_HASHTAGS_MAX_CHARS,
+    )
+
+
+def _quiz_prompt_from_context(context: YouTubePublishContext) -> str:
+    """Quiz-Prompt: nur Kapitelüberschriften, keine Folder-Skripte."""
+    return build_youtube_quiz_prompt(
         language=context.language,
         title=context.title,
         total_duration_sec=context.total_duration_sec,
         quiz_count=context.quiz_count,
         chapters_block=_chapters_prompt_block(context.chapters),
-        intro_text=context.intro_text,
-        folder_scripts_block=_folder_scripts_prompt_block(context.folder_scripts),
-        description_max_chars=YOUTUBE_DESCRIPTION_BODY_MAX_CHARS,
-        hashtags_max_chars=YOUTUBE_HASHTAGS_MAX_CHARS,
         option_count=YOUTUBE_QUIZ_OPTION_COUNT,
     )
 
@@ -425,16 +440,45 @@ def _prepare_prompt(project: Project, merged: MergedEditPlanResult) -> _BuildInp
     return _BuildInputs(context=context, prompt=_prompt_from_context(context))
 
 
-def generate_youtube_publish_metadata_from_context(
-    project: Project,
-    context: YouTubePublishContext,
+def _fail_result(
     *,
+    run_id: str,
     provider: str,
     model: str,
+    error: str,
 ) -> YouTubePublishResult:
-    """Generiert YouTube-Metadaten aus einem fertigen Publish-Kontext."""
-    prompt = _prompt_from_context(context)
-    run_id, run_dir = create_llm_run_dir(project, STAGE_YOUTUBE_PUBLISH)
+    return YouTubePublishResult(
+        status=STATUS_FAIL,
+        document=None,
+        error=error,
+        llm_run_id=run_id,
+        provider=provider,
+        model=model,
+    )
+
+
+@dataclass(frozen=True)
+class _LlmCallOk:
+    run_id: str
+    run_dir: Path
+    prompt_hash: str
+    payload: dict
+    provider: str
+    model: str
+    latency_ms: int
+    token_usage: dict
+
+
+def _call_youtube_llm(
+    project: Project,
+    *,
+    stage: str,
+    prompt: str,
+    provider: str,
+    model: str,
+) -> tuple[_LlmCallOk | None, YouTubePublishResult | None]:
+    """Gemeinsamer LLM-Call + Trace. Bei Fehler: (None, fail_result)."""
+    run_id, run_dir = create_llm_run_dir(project, stage)
     prompt_hash = content_hash(prompt)
     write_llm_prompt(run_dir, prompt)
     model_id = resolve_llm_model_id(provider, model)
@@ -448,20 +492,15 @@ def generate_youtube_publish_metadata_from_context(
             run_dir,
             LlmRunManifest(
                 run_id=run_id,
-                stage=STAGE_YOUTUBE_PUBLISH,
+                stage=stage,
                 provider=provider,
                 model=model,
                 prompt_hash=prompt_hash,
                 status=STATUS_FAIL,
             ),
         )
-        return YouTubePublishResult(
-            status=STATUS_FAIL,
-            document=None,
-            error=str(exc),
-            llm_run_id=run_id,
-            provider=provider,
-            model=model,
+        return None, _fail_result(
+            run_id=run_id, provider=provider, model=model, error=str(exc)
         )
 
     write_llm_raw_response(
@@ -483,22 +522,70 @@ def generate_youtube_publish_metadata_from_context(
             run_dir,
             LlmRunManifest(
                 run_id=run_id,
-                stage=STAGE_YOUTUBE_PUBLISH,
+                stage=stage,
                 provider=llm_response.provider,
                 model=llm_response.model,
                 prompt_hash=prompt_hash,
                 status=STATUS_FAIL,
             ),
         )
+        return None, _fail_result(
+            run_id=run_id,
+            provider=llm_response.provider,
+            model=llm_response.model,
+            error=f"JSON-Parse fehlgeschlagen: {exc}",
+        )
+
+    return (
+        _LlmCallOk(
+            run_id=run_id,
+            run_dir=run_dir,
+            prompt_hash=prompt_hash,
+            payload=payload,
+            provider=llm_response.provider,
+            model=llm_response.model,
+            latency_ms=int(llm_response.latency_ms or 0),
+            token_usage=dict(llm_response.token_usage or {}),
+        ),
+        None,
+    )
+
+
+def generate_youtube_publish_metadata_from_context(
+    project: Project,
+    context: YouTubePublishContext,
+    *,
+    provider: str,
+    model: str,
+) -> YouTubePublishResult:
+    """Generiert nur Titel/Beschreibung/Hashtags. Bestehende Quizzes bleiben erhalten."""
+    if not context.chapters:
         return YouTubePublishResult(
             status=STATUS_FAIL,
             document=None,
-            error=f"JSON-Parse fehlgeschlagen: {exc}",
-            llm_run_id=run_id,
-            provider=llm_response.provider,
-            model=llm_response.model,
+            error="Keine Kapitel im Kontext – zuerst Timeline/Final Cut fertigstellen.",
+            provider=provider,
+            model=model,
         )
 
+    prompt = _prompt_from_context(context)
+    ok, fail = _call_youtube_llm(
+        project,
+        stage=STAGE_YOUTUBE_PUBLISH,
+        prompt=prompt,
+        provider=provider,
+        model=model,
+    )
+    if fail is not None or ok is None:
+        return fail or YouTubePublishResult(
+            status=STATUS_FAIL,
+            document=None,
+            error="LLM-Call fehlgeschlagen.",
+            provider=provider,
+            model=model,
+        )
+
+    payload = ok.payload
     title = str(payload.get("title") or context.title).strip() or context.title
     description_body = _clamp_text(
         str(payload.get("description_body") or ""),
@@ -506,11 +593,10 @@ def generate_youtube_publish_metadata_from_context(
     )
     description = _append_chapters_to_description(description_body, context.chapters)
     hashtags = _normalize_hashtags(str(payload.get("hashtags") or ""))
-    quizzes = _parse_quizzes(
-        payload,
-        quiz_count=context.quiz_count,
-        total_duration_sec=context.total_duration_sec,
-    )
+
+    # Metadata regenerate must not wipe separately generated quizzes.
+    existing = load_youtube_metadata(project)
+    quizzes = list(existing.quizzes) if existing is not None else []
 
     document = YouTubeMetadataDocument(
         project_id=project.id,
@@ -524,33 +610,157 @@ def generate_youtube_publish_metadata_from_context(
         total_duration_sec=context.total_duration_sec,
         quiz_count_target=context.quiz_count,
         folder_names=context.folder_names,
-        provider=llm_response.provider,
-        model=llm_response.model,
-        llm_run_id=run_id,
+        provider=ok.provider,
+        model=ok.model,
+        llm_run_id=ok.run_id,
         status=STATUS_PASS,
     )
     saved = save_youtube_metadata(project, document)
-    write_llm_parsed_response(run_dir, payload)
+    write_llm_parsed_response(ok.run_dir, payload)
     write_llm_manifest(
-        run_dir,
+        ok.run_dir,
         LlmRunManifest(
-            run_id=run_id,
+            run_id=ok.run_id,
             stage=STAGE_YOUTUBE_PUBLISH,
-            provider=llm_response.provider,
-            model=llm_response.model,
-            prompt_hash=prompt_hash,
+            provider=ok.provider,
+            model=ok.model,
+            prompt_hash=ok.prompt_hash,
             status=STATUS_PASS,
-            latency_ms=llm_response.latency_ms,
-            token_usage=dict(llm_response.token_usage or {}),
+            latency_ms=ok.latency_ms,
+            token_usage=ok.token_usage,
         ),
     )
     return YouTubePublishResult(
         status=STATUS_PASS,
         document=saved,
         error="",
-        llm_run_id=run_id,
-        provider=llm_response.provider,
-        model=llm_response.model,
+        llm_run_id=ok.run_id,
+        provider=ok.provider,
+        model=ok.model,
+    )
+
+
+def generate_youtube_quizzes_from_context(
+    project: Project,
+    context: YouTubePublishContext,
+    *,
+    provider: str,
+    model: str,
+) -> YouTubePublishResult:
+    """Generiert nur Quizzes. Bestehende YouTube-Metadaten bleiben erhalten."""
+    if not context.chapters:
+        return YouTubePublishResult(
+            status=STATUS_FAIL,
+            document=None,
+            error="Keine Kapitel im Kontext – zuerst Timeline/Final Cut fertigstellen.",
+            provider=provider,
+            model=model,
+        )
+
+    prompt = _quiz_prompt_from_context(context)
+    ok, fail = _call_youtube_llm(
+        project,
+        stage=STAGE_YOUTUBE_QUIZ,
+        prompt=prompt,
+        provider=provider,
+        model=model,
+    )
+    if fail is not None or ok is None:
+        return fail or YouTubePublishResult(
+            status=STATUS_FAIL,
+            document=None,
+            error="LLM-Call fehlgeschlagen.",
+            provider=provider,
+            model=model,
+        )
+
+    payload = ok.payload
+    if not isinstance(payload.get("quizzes"), list):
+        write_llm_parsed_response(ok.run_dir, {"parse_error": "missing quizzes array"})
+        write_llm_manifest(
+            ok.run_dir,
+            LlmRunManifest(
+                run_id=ok.run_id,
+                stage=STAGE_YOUTUBE_QUIZ,
+                provider=ok.provider,
+                model=ok.model,
+                prompt_hash=ok.prompt_hash,
+                status=STATUS_FAIL,
+            ),
+        )
+        return _fail_result(
+            run_id=ok.run_id,
+            provider=ok.provider,
+            model=ok.model,
+            error="LLM-Antwort enthält kein quizzes-Array.",
+        )
+
+    quizzes = _parse_quizzes(
+        payload,
+        quiz_count=context.quiz_count,
+        total_duration_sec=context.total_duration_sec,
+    )
+
+    existing = load_youtube_metadata(project)
+    if existing is not None:
+        document = existing.model_copy(
+            update={
+                "quizzes": quizzes,
+                "chapters": context.chapters,
+                "total_duration_sec": context.total_duration_sec,
+                "quiz_count_target": context.quiz_count,
+                "folder_names": context.folder_names,
+                "language": context.language,
+                "provider": ok.provider,
+                "model": ok.model,
+                "llm_run_id": ok.run_id,
+                "status": STATUS_PASS,
+                "error": "",
+            }
+        )
+        if not (document.title or "").strip():
+            document = document.model_copy(update={"title": context.title})
+    else:
+        document = YouTubeMetadataDocument(
+            project_id=project.id,
+            language=context.language,
+            title=context.title,
+            description=_append_chapters_to_description("", context.chapters),
+            description_body="",
+            hashtags="",
+            chapters=context.chapters,
+            quizzes=quizzes,
+            total_duration_sec=context.total_duration_sec,
+            quiz_count_target=context.quiz_count,
+            folder_names=context.folder_names,
+            provider=ok.provider,
+            model=ok.model,
+            llm_run_id=ok.run_id,
+            status=STATUS_PASS,
+        )
+
+    saved = save_youtube_metadata(project, document)
+    write_llm_parsed_response(ok.run_dir, payload)
+    write_llm_manifest(
+        ok.run_dir,
+        LlmRunManifest(
+            run_id=ok.run_id,
+            stage=STAGE_YOUTUBE_QUIZ,
+            provider=ok.provider,
+            model=ok.model,
+            prompt_hash=ok.prompt_hash,
+            status=STATUS_PASS,
+            latency_ms=ok.latency_ms,
+            token_usage=ok.token_usage,
+        ),
+    )
+    return YouTubePublishResult(
+        status=STATUS_PASS,
+        document=saved,
+        error="",
+        llm_run_id=ok.run_id,
+        provider=ok.provider,
+        model=ok.model,
     )
 
 
@@ -563,6 +773,22 @@ def generate_youtube_publish_metadata(
 ) -> YouTubePublishResult:
     context = build_youtube_publish_context(project, merged)
     return generate_youtube_publish_metadata_from_context(
+        project,
+        context,
+        provider=provider,
+        model=model,
+    )
+
+
+def generate_youtube_quizzes(
+    project: Project,
+    merged: MergedEditPlanResult,
+    *,
+    provider: str,
+    model: str,
+) -> YouTubePublishResult:
+    context = build_youtube_publish_context(project, merged)
+    return generate_youtube_quizzes_from_context(
         project,
         context,
         provider=provider,

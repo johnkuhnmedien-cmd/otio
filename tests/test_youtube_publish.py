@@ -13,20 +13,29 @@ from otio_app.services.voiceover_generation.models import (
     ConfirmedIntroPlanItem,
     ConfirmedVoiceoverProjectPlan,
 )
-from otio_app.services.voiceover_generation.prompts import build_youtube_publish_prompt
+from otio_app.services.voiceover_generation.prompts import (
+    build_youtube_publish_prompt,
+    build_youtube_quiz_prompt,
+)
 from otio_app.services.youtube_publish_models import YouTubeChapter
 from otio_app.services.youtube_publish_service import (
     _append_chapters_to_description,
     _normalize_hashtags,
     _parse_quizzes,
+    _prompt_from_context,
     build_youtube_publish_context,
     format_youtube_timestamp,
     generate_youtube_publish_metadata,
+    generate_youtube_quizzes,
     load_youtube_metadata,
     quiz_count_for_duration,
     save_youtube_metadata,
 )
-from otio_app.services.youtube_publish_models import YouTubeMetadataDocument
+from otio_app.services.youtube_publish_models import (
+    YouTubeMetadataDocument,
+    YouTubeQuizItem,
+    YouTubeQuizOption,
+)
 
 
 def _project(tmp_path: Path) -> Project:
@@ -162,8 +171,14 @@ def test_build_context_from_merged_timeline(tmp_path: Path) -> None:
     assert "Slot Canyons" in context.folder_scripts[0]["voiceover_text"]
     assert context.quiz_count == 1
 
+    # Prompt muss Kapitelüberschriften enthalten, aber keine Folder-Skripte.
+    prompt = _prompt_from_context(context)
+    assert "Antelope Canyon" in prompt
+    assert "Slot Canyons und Lichtstrahlen" not in prompt
+    assert "Der Südwesten wartet" not in prompt
 
-def test_parse_quizzes_and_generate_with_mock_llm(tmp_path: Path) -> None:
+
+def test_generate_metadata_preserves_existing_quizzes(tmp_path: Path) -> None:
     project = _project(tmp_path)
     plan = ConfirmedVoiceoverProjectPlan(
         project_id=project.id,
@@ -203,11 +218,116 @@ def test_parse_quizzes_and_generate_with_mock_llm(tmp_path: Path) -> None:
         included_folders=["Antelope Canyon"],
     )
 
+    save_youtube_metadata(
+        project,
+        YouTubeMetadataDocument(
+            project_id=project.id,
+            title="Alt",
+            quizzes=[
+                YouTubeQuizItem(
+                    order_index=1,
+                    question="Alte Frage?",
+                    options=[
+                        YouTubeQuizOption(label="A", text="1", is_correct=True),
+                        YouTubeQuizOption(label="B", text="2"),
+                        YouTubeQuizOption(label="C", text="3"),
+                    ],
+                    correct_option_label="A",
+                    insert_at_sec=100,
+                    insert_timestamp="01:40",
+                )
+            ],
+        ),
+    )
+
     class _Resp:
         raw_text = """{
           "title": "Antelope Canyon Guide",
           "description_body": "Ein Film über enge Schluchten und Licht.",
           "hashtags": "#AntelopeCanyon, #USA, #Travel",
+          "quizzes": [{"question": "soll ignoriert werden"}]
+        }"""
+        provider = "gemini"
+        model = "gemini-test"
+        latency_ms = 12
+        token_usage = {"input": 1, "output": 2}
+
+    with patch(
+        "otio_app.services.youtube_publish_service.generate_plan_text_with_metadata",
+        return_value=_Resp(),
+    ):
+        result = generate_youtube_publish_metadata(
+            project,
+            merged,
+            provider="gemini",
+            model="gemini-test",
+        )
+
+    assert result.status == "PASS"
+    assert result.document is not None
+    assert result.document.title == "Antelope Canyon Guide"
+    assert "Antelope Canyon - 00:00" in result.document.description
+    assert "AntelopeCanyon" in result.document.hashtags
+    assert "#" not in result.document.hashtags
+    assert len(result.document.quizzes) == 1
+    assert result.document.quizzes[0].question == "Alte Frage?"
+    loaded = load_youtube_metadata(project)
+    assert loaded is not None
+    assert loaded.llm_run_id == result.llm_run_id
+
+
+def test_generate_quizzes_separately(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    plan = ConfirmedVoiceoverProjectPlan(
+        project_id=project.id,
+        project_title="USA",
+        language="DE",
+        folders=[
+            ConfirmedFolderPlanItem(
+                folder_name="Antelope Canyon",
+                voiceover_text_full="Rote Felsen und enge Schluchten.",
+            )
+        ],
+    )
+    from otio_app.services.voiceover_generation.final_plan_service import (
+        save_confirmed_voiceover_project_plan,
+    )
+
+    save_confirmed_voiceover_project_plan(project, plan)
+    save_youtube_metadata(
+        project,
+        YouTubeMetadataDocument(
+            project_id=project.id,
+            title="Bestehender Titel",
+            description_body="Bestehende Beschreibung",
+            description="Bestehende Beschreibung\n\nAntelope Canyon - 00:00",
+            hashtags="usa, canyon",
+        ),
+    )
+
+    items = [
+        TimelineItem(
+            timeline_item_id="t1",
+            type="video_shot",
+            section_id="s1",
+            folder_name="Antelope Canyon",
+            voice_file="/vo/a.mp3",
+            resolved_media_path="/a.mp4",
+            timeline_in_sec=0.0,
+            timeline_out_sec=700.0,
+            duration_sec=700.0,
+        )
+    ]
+    merged = MergedEditPlanResult(
+        timeline_items=items,
+        shots=[],
+        settings=EditPlanSettings(),
+        voiceovers=[VoiceoverPlan(path="/vo/a.mp3", duration_sec=600.0)],
+        included_folders=["Antelope Canyon"],
+    )
+
+    class _Resp:
+        raw_text = """{
           "quizzes": [
             {
               "order_index": 1,
@@ -244,7 +364,7 @@ def test_parse_quizzes_and_generate_with_mock_llm(tmp_path: Path) -> None:
         "otio_app.services.youtube_publish_service.generate_plan_text_with_metadata",
         return_value=_Resp(),
     ):
-        result = generate_youtube_publish_metadata(
+        result = generate_youtube_quizzes(
             project,
             merged,
             provider="gemini",
@@ -253,34 +373,46 @@ def test_parse_quizzes_and_generate_with_mock_llm(tmp_path: Path) -> None:
 
     assert result.status == "PASS"
     assert result.document is not None
-    assert result.document.title == "Antelope Canyon Guide"
-    assert "Antelope Canyon - 00:00" in result.document.description
-    assert "AntelopeCanyon" in result.document.hashtags
-    assert "#" not in result.document.hashtags
-    assert ", " in result.document.hashtags
+    assert result.document.title == "Bestehender Titel"
+    assert result.document.hashtags == "usa, canyon"
     assert len(result.document.quizzes) == 2
     assert result.document.quizzes[0].insert_timestamp == "05:20"
     assert result.document.quizzes[0].correct_option_label == "B"
-    loaded = load_youtube_metadata(project)
-    assert loaded is not None
-    assert loaded.llm_run_id == result.llm_run_id
 
 
-def test_youtube_publish_prompt_includes_language_and_quiz_count() -> None:
+def test_youtube_publish_prompt_chapters_only_no_scripts() -> None:
     prompt = build_youtube_publish_prompt(
         language="DE",
         title="USA",
         total_duration_sec=1200,
         quiz_count=2,
         chapters_block="- Antelope Canyon — 00:00",
-        intro_text="Hook",
-        folder_scripts_block="Script text",
+        intro_text="Hook that must be ignored",
+        folder_scripts_block="Full script that must be ignored",
         description_max_chars=3500,
         hashtags_max_chars=500,
     )
     assert "Target language code: DE" in prompt
+    assert "Antelope Canyon" in prompt
+    assert "Hook that must be ignored" not in prompt
+    assert "Full script that must be ignored" not in prompt
+    assert "quiz" not in prompt.lower() or "Do NOT invent quizzes" in prompt
+    assert "EXACTLY 2 quiz" not in prompt
+
+
+def test_youtube_quiz_prompt_chapters_only() -> None:
+    prompt = build_youtube_quiz_prompt(
+        language="DE",
+        title="USA",
+        total_duration_sec=1200,
+        quiz_count=2,
+        chapters_block="- Antelope Canyon — 00:00",
+        option_count=3,
+    )
     assert "EXACTLY 2 quiz" in prompt
-    assert "Script text" in prompt
+    assert "Antelope Canyon" in prompt
+    assert "Target language code: DE" in prompt
+    assert "description_body" not in prompt
 
 
 def test_save_load_roundtrip(tmp_path: Path) -> None:

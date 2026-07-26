@@ -139,8 +139,8 @@ LLM_INPUT_INFO = {
         "Search-Hint → bis zu 3 englische Stock-Suchqueries."
     ),
     "youtube_publish": (
-        "Sprache · Titel · Dauer · feste Kapitel-Timestamps aus Timeline-Merge · "
-        "Intro-Skript · Folder-Skripte → Beschreibung, Hashtags, Quiz."
+        "Sprache · Titel · Dauer · Kapitelüberschriften + Timestamps "
+        "(keine Folder-Skripte) → getrennte Buttons: Metadaten bzw. Quiz."
     ),
     "analysis_assets": (
         "Frame-Bilder des jeweiligen Mediums + kurzer Kontext "

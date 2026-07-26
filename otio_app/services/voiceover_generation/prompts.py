@@ -1304,15 +1304,21 @@ def build_youtube_publish_prompt(
     language: str,
     title: str,
     total_duration_sec: float,
-    quiz_count: int,
     chapters_block: str,
-    intro_text: str,
-    folder_scripts_block: str,
     description_max_chars: int,
     hashtags_max_chars: int,
+    quiz_count: int = 0,
+    intro_text: str = "",
+    folder_scripts_block: str = "",
     option_count: int = 3,
 ) -> str:
-    """Prompt für YouTube-Beschreibung, Hashtags und Quiz (Kapitelzeiten sind fix)."""
+    """Prompt für YouTube-Titel/Beschreibung/Hashtags — nur Kapitelüberschriften.
+
+    Keine vollständigen Folder-Skripte. Quiz wird separat generiert.
+    Legacy-Parameter ``quiz_count`` / ``intro_text`` / ``folder_scripts_block`` /
+    ``option_count`` werden ignoriert (API-Kompatibilität).
+    """
+    del quiz_count, intro_text, folder_scripts_block, option_count
     display = _language_display_name(language)
     return f"""You prepare YouTube publish metadata for a travel/documentary video.
 
@@ -1323,29 +1329,19 @@ def build_youtube_publish_prompt(
   Do NOT include chapter timestamps in description_body — chapters are appended later by the system.
 - `hashtags`: comma-separated keywords WITHOUT leading `#` (e.g. USA, Travel, Nature),
   max ~{hashtags_max_chars} characters total. No newlines. No `#` symbols.
-- `quizzes`: EXACTLY {quiz_count} quiz items (one per ~10 minutes of video).
-  Each quiz has EXACTLY {option_count} answer options (A/B/C), exactly one correct.
-  Suggest `insert_at_sec` as a good moment to show the quiz (not during the very first seconds,
-  preferably after a beat is resolved, before the next chapter starts when possible).
-  `insert_at_sec` must be within 0 and {total_duration_sec:.1f}.
+- Do NOT invent quizzes here — quizzes are generated in a separate step.
 
 ## Video
 - Working title: {title or "(untitled)"}
 - Total duration seconds: {total_duration_sec:.1f}
 - Target language: {language} ({display})
 
-## Fixed chapters (timestamps are authoritative — do not invent different ones)
+## Chapters (titles + timestamps only — authoritative; do not invent different ones)
+Use ONLY these chapter headings as content signal. There are no full voice-over scripts.
 {chapters_block}
 
-## Intro voice-over script
-{intro_text.strip() or "(none)"}
-
-## Folder voice-over scripts (in timeline order)
-{folder_scripts_block}
-
 ## Output rules
-- Derive description and quizzes ONLY from the provided scripts and chapter list.
-- Questions must be answerable from the narration (not trivia outside the video).
+- Derive title, description and hashtags from the chapter titles / locations and working title.
 - Keep description SEO-friendly but natural — no keyword stuffing.
 - Return JSON ONLY, no markdown fences.
 
@@ -1353,7 +1349,49 @@ def build_youtube_publish_prompt(
 {{
   "title": "optional refined YouTube title in {display}",
   "description_body": "description without chapter list",
-  "hashtags": "tag1, tag2, tag3",
+  "hashtags": "tag1, tag2, tag3"
+}}
+"""
+
+
+def build_youtube_quiz_prompt(
+    *,
+    language: str,
+    title: str,
+    total_duration_sec: float,
+    quiz_count: int,
+    chapters_block: str,
+    option_count: int = 3,
+) -> str:
+    """Prompt nur für YouTube-Quiz — Kapitelüberschriften, keine Folder-Skripte."""
+    display = _language_display_name(language)
+    return f"""You create YouTube in-video quizzes for a travel/documentary video.
+
+{native_speaker_language_block(language)}
+
+## Hard limits
+- Return EXACTLY {quiz_count} quiz items (one per ~10 minutes of video).
+- Each quiz has EXACTLY {option_count} answer options (A/B/C), exactly one correct.
+- Suggest `insert_at_sec` as a good moment to show the quiz (not during the very first seconds,
+  preferably near chapter transitions when possible).
+- `insert_at_sec` must be within 0 and {total_duration_sec:.1f}.
+
+## Video
+- Working title: {title or "(untitled)"}
+- Total duration seconds: {total_duration_sec:.1f}
+- Target language: {language} ({display})
+
+## Chapters (titles + timestamps only — authoritative)
+Use ONLY these chapter headings. There are no full voice-over scripts.
+{chapters_block}
+
+## Output rules
+- Questions must fit the chapter locations / themes from the list (plausible travel/doc quiz).
+- Do not invent chapters or timestamps outside the list.
+- Return JSON ONLY, no markdown fences.
+
+## JSON schema
+{{
   "quizzes": [
     {{
       "order_index": 1,
