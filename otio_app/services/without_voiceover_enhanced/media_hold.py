@@ -156,6 +156,37 @@ def still_hold_video_filter(
     return "scale=ceil(iw/2)*2:ceil(ih/2)*2"
 
 
+def still_hold_dynamic_zoom_filter(
+    *,
+    duration_seconds: float,
+    fps: float,
+    zoom_factor: float = 1.12,
+    width: int,
+    height: int,
+) -> str:
+    """Ken-Burns Zoom-in über die Shot-Dauer (ffmpeg zoompan).
+
+    Start bei 1.0, Ende bei ``zoom_factor`` (z. B. 1.12 = +12 %), zentriert.
+    ``width``/``height`` müssen Projektauflösung (gerade) sein.
+    """
+    rate = max(1.0, float(fps) or 25.0)
+    frames = max(2, int(round(max(0.01, float(duration_seconds)) * rate)))
+    zf = max(1.02, min(1.35, float(zoom_factor)))
+    denom = max(1, frames - 1)
+    tw = max(2, (int(width) // 2) * 2)
+    th = max(2, (int(height) // 2) * 2)
+    # z wächst linear von 1 → zf; x/y halten die Bildmitte.
+    z_expr = f"1+({zf:.4f}-1)*on/{denom}"
+    return (
+        f"scale=iw*2:ih*2,"
+        f"zoompan=z='{z_expr}':"
+        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+        f"d=1:s={tw}x{th}:fps={rate:.3f},"
+        "setsar=1,"
+        "format=yuv420p"
+    )
+
+
 def ensure_still_hold_video(
     project: Project,
     image_path: Path,
@@ -164,6 +195,8 @@ def ensure_still_hold_video(
     fps: float,
     width: int | None = None,
     height: int | None = None,
+    dynamic_zoom: bool = False,
+    zoom_factor: float = 1.12,
 ) -> Path:
     """JPEG/PNG → kurzes H.264-Video der geplanten Haltedauer (Resolve-sicher)."""
     if duration_seconds <= 0:
@@ -174,14 +207,28 @@ def ensure_still_hold_video(
     rate = max(1.0, float(fps) or 25.0)
     tw = int(width) if width is not None else int(getattr(project, "width", 0) or 0)
     th = int(height) if height is not None else int(getattr(project, "height", 0) or 0)
-    vf = still_hold_video_filter(width=tw or None, height=th or None)
+    use_dynamic = (
+        bool(dynamic_zoom) and float(zoom_factor) > 1.001 and tw > 0 and th > 0
+    )
+    if use_dynamic:
+        vf = still_hold_dynamic_zoom_filter(
+            duration_seconds=duration_seconds,
+            fps=rate,
+            zoom_factor=float(zoom_factor),
+            width=tw,
+            height=th,
+        )
+        cache_tag = "still_dyn_v1"
+    else:
+        vf = still_hold_video_filter(width=tw or None, height=th or None)
+        cache_tag = "still_v2"
     key = _cache_key(
         str(source),
         f"{duration_seconds:.3f}",
         f"{rate:.3f}",
         f"{tw}x{th}",
         vf,
-        "still_v2",
+        f"{cache_tag}_{float(zoom_factor):.3f}" if use_dynamic else cache_tag,
     )
     out = _hold_cache_dir(project) / f"still_hold_{key}.mp4"
     if out.is_file() and out.stat().st_size > 0:

@@ -214,7 +214,12 @@ def _export_styled_still_hold(
     )
     try:
         hold = ensure_still_hold_video(
-            project, styled_path, duration_seconds=timeline_dur, fps=fps
+            project,
+            styled_path,
+            duration_seconds=timeline_dur,
+            fps=fps,
+            dynamic_zoom=bool(options.still_image_dynamic_zoom_enabled),
+            zoom_factor=float(options.still_image_dynamic_zoom_factor),
         )
     except MediaHoldError as exc:
         raise EnhancedOtioExportError(f"{label}: {exc}") from exc
@@ -236,13 +241,17 @@ def _ensure_shot_media_for_export(
         )
     path = _assert_local_file(shot.resolved_media_path, label=label)
 
-    # Still-Style: Originalbild nutzen — auch wenn Resolve schon still_hold.mp4
-    # geschrieben hat (sonst würde Zoom/Background/Paper-Edge nie greifen).
+    # Still-Style / dynamischer Zoom: Originalbild nutzen — auch wenn Resolve
+    # schon still_hold.mp4 geschrieben hat (sonst greifen Settings nicht).
     options = load_cut_plan_options(project)
     original_still = _original_still_path_for_export(
         project, shot, path=path, catalog=catalog, fps=fps
     )
-    if original_still is not None and bool(options.still_image_style_enabled):
+    restyle = original_still is not None and (
+        bool(options.still_image_style_enabled)
+        or bool(options.still_image_dynamic_zoom_enabled)
+    )
+    if restyle and original_still is not None:
         hold_path = _export_styled_still_hold(
             project,
             shot,
@@ -255,14 +264,19 @@ def _ensure_shot_media_for_export(
         )
         return hold_path, 0.0, 0.0, timeline_dur, fps
 
-    # Ohne Stil: Bild → Hold (oder bereits vorhandenes Hold-MP4 behalten).
+    # Ohne Stil/Dynamic: Bild → Hold (oder bereits vorhandenes Hold-MP4 behalten).
     if is_image_media(path):
         timeline_dur = max(
             0.01, float(shot.timeline_end_seconds - shot.timeline_start_seconds)
         )
         try:
             path = ensure_still_hold_video(
-                project, path, duration_seconds=timeline_dur, fps=fps
+                project,
+                path,
+                duration_seconds=timeline_dur,
+                fps=fps,
+                dynamic_zoom=bool(options.still_image_dynamic_zoom_enabled),
+                zoom_factor=float(options.still_image_dynamic_zoom_factor),
             )
         except MediaHoldError as exc:
             raise EnhancedOtioExportError(f"{label}: {exc}") from exc
