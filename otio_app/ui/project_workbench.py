@@ -507,7 +507,9 @@ def render_project_workbench() -> None:
         if project.inventory_path.is_file():
             st.caption(f"Legacy: `{project.inventory_path}` wird beim Sync aufgeteilt.")
         st.caption(
-            "Inventar-Sync läuft nicht mehr bei jedem Klick — nur auf Button-Druck."
+            "Inventar-Sync läuft nicht mehr bei jedem Klick — nur auf Button-Druck. "
+            "Bestehende `inventory/*.json` werden **nicht** gelöscht "
+            "(auch bei teilweise analysierten Ordnern)."
         )
         sync_statuses = st.session_state.get(diag_key)
         if sync_statuses is None:

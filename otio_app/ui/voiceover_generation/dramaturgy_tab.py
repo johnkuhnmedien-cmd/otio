@@ -59,11 +59,8 @@ def _inventory_counts(project: Project) -> tuple[int, int]:
     """(Anzahl Ordner, Anzahl Ordner mit Inventory).
 
     Nutzt folder_has_usable_inventory_data() statt einer reinen Datei-
-    Existenzprüfung — diese erkennt auch Ordner, deren flache Inventar-JSON
-    von sync_folder_inventory_with_status() wieder gelöscht wurde, weil nicht
-    ALLE Assets im Ordner als "grün" gelten, obwohl bereits erfolgreich
-    analysierte Daten im Cache vorliegen (genau das, was die Dramaturgie-
-    Planung selbst ohnehin verwendet)."""
+    Existenzprüfung — erkennt Cache-Fallback auch ohne flache Inventar-JSON
+    (Legacy: Sync löschte früher Partial-Inventare; Sync löscht sie nicht mehr)."""
     folders = project.selected_asset_subdirs
     with_inventory = sum(
         1 for name in folders if folder_has_usable_inventory_data(project, name)

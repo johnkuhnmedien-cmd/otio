@@ -134,26 +134,35 @@ def folder_is_green(project: Project, folder_name: str) -> bool:
 
 
 def sync_folder_inventory_with_status(project: Project, folder_name: str) -> bool:
-    """Grün → Inventory-JSON erstellen/aktualisieren. Nicht grün → JSON entfernen."""
+    """Inventory aus Cache materialisieren — löscht bestehende JSONs nie.
+
+    Früher: unvollständige Ordner → JSON löschen. Das hat shared Inventare
+    (und damit auch Supplement-Einträge) zerstört, sobald ein neues Sprach-
+    projekt Status-Checks ausgelöst hat. Jetzt: nur anlegen/aktualisieren;
+    bei Teilanalyse ``allow_partial`` + Preserve von Supplement-Assets.
+    """
+    inv_path = get_folder_inventory_path(project.work_dir_path, folder_name)
     media_paths = discover_folder_media_paths(project, folder_name)
     if not media_paths:
-        delete_folder_inventory(project, folder_name)
-        return False
+        # Kein Auto-Delete — leere Discovery kann transient sein (iCloud).
+        return inv_path.is_file()
 
     auto_complete = folder_is_fully_analyzed(project, folder_name)
     manual_complete = is_manually_complete(project, folder_name)
+    # Auch bei PARTIAL materialisieren, damit Cache/Supplements nicht verloren
+    # gehen und LLM-Cut weiter ein Slim-Inventar hat.
+    allow_partial = True
+    if auto_complete and not manual_complete:
+        allow_partial = False
 
-    if not auto_complete and not manual_complete:
-        delete_folder_inventory(project, folder_name)
-        return False
-
-    allow_partial = manual_complete and not auto_complete
     item, _error = materialize_folder_inventory_from_cache(
         project,
         folder_name,
         allow_partial=allow_partial,
     )
-    return item is not None
+    if item is not None:
+        return True
+    return inv_path.is_file()
 
 
 def remove_stale_folder_inventory(
@@ -161,10 +170,12 @@ def remove_stale_folder_inventory(
     folder_name: str,
     media_paths: list[Path] | None = None,
 ) -> None:
-    """Entfernt Inventory-JSON, wenn der Ordner nicht grün ist."""
-    if folder_is_green(project, folder_name):
-        return
-    delete_folder_inventory(project, folder_name)
+    """Früher: löschte Inventory wenn nicht grün. Jetzt No-Op (Schutz).
+
+    Explizites Löschen nur noch über ``delete_folder_inventory``.
+    """
+    del project, folder_name, media_paths
+    return
 
 
 def should_skip_folder_analysis(
@@ -495,14 +506,22 @@ def list_folder_inventory_paths(project: Project) -> list[Path]:
 
 
 def selected_folders_have_inventory(project: Project) -> bool:
-    """True, wenn alle ausgewählten Ordner grün sind und je eine Inventory-JSON haben."""
+    """True, wenn alle ausgewählten Ordner grün sind und je eine Inventory-JSON haben.
+
+    Read-only bzgl. Löschen: materialisiert höchstens fehlende JSONs aus dem
+    Cache, entfernt nichts.
+    """
     if not project.selected_asset_subdirs:
         return False
     for folder_name in project.selected_asset_subdirs:
         if not folder_is_green(project, folder_name):
             return False
+        path = get_folder_inventory_path(project.work_dir_path, folder_name)
+        if path.is_file():
+            continue
+        # Nur fehlende Dateien aufbauen — niemals bestehende löschen.
         sync_folder_inventory_with_status(project, folder_name)
-        if not get_folder_inventory_path(project.work_dir_path, folder_name).is_file():
+        if not path.is_file():
             return False
     return True
 
