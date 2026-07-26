@@ -420,15 +420,24 @@ def test_generate_all_only_open_filters_names(tmp_path) -> None:
         "otio_app.services.without_voiceover_enhanced.chapter_cut_service.list_chapters_needing_unified_cut",
         return_value=["OpenA", "OpenB"],
     ), patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.list_body_chapter_names",
+        return_value=["OpenA", "OpenB"],
+    ), patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.load_chapter_unified_plan",
+        return_value=None,
+    ), patch(
         "otio_app.services.without_voiceover_enhanced.chapter_cut_service.generate_chapter_unified_cut",
         side_effect=fake_generate,
     ), patch(
         "otio_app.services.without_voiceover_enhanced.chapter_cut_service.refresh_merged_unified_cut_plan",
         return_value=None,
     ):
-        results = generate_all_chapter_unified_cuts(project, only_open=True)
+        results = generate_all_chapter_unified_cuts(
+            project, only_open=True, max_workers=2
+        )
 
-    assert called == ["OpenA", "OpenB"]
+    assert set(called) == {"OpenA", "OpenB"}
+    assert [r.folder_name for r in results] == ["OpenA", "OpenB"]
     assert len(results) == 2
 
 
@@ -530,7 +539,38 @@ def test_resolve_chapter_timeline_merges_export_ready_gaps(tmp_path) -> None:
 
     assert merge_calls, "Gap-Merge wurde nicht aufgerufen"
     assert merge_calls[0].get("persist") is False
+    assert merge_calls[0].get("persist_report") is False
     assert merge_calls[0].get("unified") is plan or merge_calls[0].get("unified") is not None
     assert out.shots[0].asset_id == "manual_supp_1"
     assert out.shots[0].open_gap is False
     assert chapter_resolved_timeline_path(project, "Yosemite").is_file()
+
+
+def test_resolve_all_chapter_timelines_parallel_preserves_order(tmp_path) -> None:
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        resolve_all_chapter_timelines,
+    )
+
+    project = _project(tmp_path)
+    called: list[str] = []
+
+    def fake_resolve(project, folder_name):
+        called.append(folder_name)
+        return ResolvedTimelineDocument(
+            script_version="v1",
+            fps=25.0,
+            total_duration_seconds=1.0,
+            shots=[],
+        )
+
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.list_chapters_ready_for_python_timing",
+        return_value=["Alpha", "Beta", "Gamma"],
+    ), patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.resolve_chapter_timeline",
+        side_effect=fake_resolve,
+    ):
+        timed = resolve_all_chapter_timelines(project, max_workers=3)
+
+    assert set(called) == {"Alpha", "Beta", "Gamma"}
+    assert [name for name, _ in timed] == ["Alpha", "Beta", "Gamma"]

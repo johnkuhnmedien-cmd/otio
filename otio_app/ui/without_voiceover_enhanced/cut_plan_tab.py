@@ -9,6 +9,8 @@ import time
 import streamlit as st
 
 from otio_app.defaults import (
+    ENHANCED_CHAPTER_LLM_MAX_WORKERS,
+    ENHANCED_CHAPTER_TIMING_MAX_WORKERS,
     ENHANCED_CUT_LLM_MODEL_CHOICES,
     ENHANCED_CUT_LLM_MODEL_LABELS,
     ENHANCED_FUNNEL_LLM_MODEL_CHOICES,
@@ -1438,7 +1440,9 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
     st.caption(
         f"**ein LLM-Call pro Kapitel** ({chapter_count}, ohne Intro) → "
         "`cut/chapters/{slug}/unified_cut_plan.json`. "
-        "**Alle** = jedes Kapitel erneut; **Offene** = nur fehlende. "
+        "**Alle / Offene LLM Cuts** und **Python Timings** laufen **parallel** "
+        f"(LLM bis {ENHANCED_CHAPTER_LLM_MAX_WORKERS} Kapitel, "
+        f"Timing bis {ENHANCED_CHAPTER_TIMING_MAX_WORKERS}). "
         "**Alle OTIO** merged Intro + Kapitel in Dramaturgie-Reihenfolge."
     )
     st.caption(
@@ -1511,11 +1515,15 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
 
             def _unified_progress(folder_name: str, index: int, total: int) -> None:
                 progress.info(
-                    f"Unified LLM ({label}) · Kapitel {index}/{total}: „{folder_name}“ "
+                    f"Unified LLM ({label}, parallel) · fertig {index}/{total}: "
+                    f"„{folder_name}“ "
                     f"({resolve_llm_model_id(rough_provider, rough_model)})…"
                 )
 
-            with st.spinner(f"{label} Kapitel-LLM-Cuts…"):
+            with st.spinner(
+                f"{label} Kapitel-LLM-Cuts parallel "
+                f"(max. {ENHANCED_CHAPTER_LLM_MAX_WORKERS})…"
+            ):
                 results = generate_all_chapter_unified_cuts(
                     project,
                     provider=rough_provider,
@@ -1545,10 +1553,14 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
 
             def _timing_progress(folder_name: str, index: int, total: int) -> None:
                 progress.info(
-                    f"Python Timing ({label}) · Kapitel {index}/{total}: „{folder_name}“…"
+                    f"Python Timing ({label}, parallel) · fertig {index}/{total}: "
+                    f"„{folder_name}“…"
                 )
 
-            with st.spinner(f"{label} Kapitel-Timings…"):
+            with st.spinner(
+                f"{label} Kapitel-Timings parallel "
+                f"(max. {ENHANCED_CHAPTER_TIMING_MAX_WORKERS})…"
+            ):
                 timed = resolve_all_chapter_timelines(
                     project,
                     progress_callback=_timing_progress,
