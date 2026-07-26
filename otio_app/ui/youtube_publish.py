@@ -21,7 +21,9 @@ from otio_app.services.youtube_publish_models import YouTubeMetadataDocument
 from otio_app.services.youtube_publish_service import (
     _normalize_hashtags,
     build_youtube_publish_context,
+    build_youtube_publish_context_from_resolved,
     generate_youtube_publish_metadata,
+    generate_youtube_publish_metadata_from_context,
     load_youtube_metadata,
     youtube_metadata_path,
 )
@@ -215,6 +217,104 @@ def render_youtube_publish_block(
                                 f"{len(result.document.chapters)} Kapitel)."
                             )
                             st.rerun()
+        except (OSError, ValueError) as exc:
+            st.error(str(exc))
+
+    document = load_youtube_metadata(project)
+    if document is None:
+        return
+
+    _render_copyable_results(
+        document,
+        project_id=project.id,
+        key_prefix=key_prefix,
+    )
+    st.caption(f"Gespeichert: `{youtube_metadata_path(project)}`")
+
+
+def render_enhanced_youtube_publish_block(
+    project: Project,
+    resolved: object,
+    *,
+    page: str,
+    key_prefix: str = "enhanced_final",
+) -> None:
+    """YouTube Publish für Enhanced: Kontext aus Resolved Timeline + Locked Script."""
+    st.markdown("**📺 YouTube Publish**")
+    st.caption(
+        "Titel, Beschreibung (max. ~3500 Zeichen Text + Kapitel-Timestamps), Hashtags und "
+        "Quiz (1× pro 10 Min., 3 Antworten). Kapitelzeiten kommen aus der aufgelösten "
+        "Timeline; Text/Hashtags/Quiz über LLM in der Projektsprache."
+    )
+
+    settings = load_model_settings(project)
+    with st.expander("⚙️ Modell für YouTube Publish", expanded=False):
+        role_settings = render_llm_model_selectbox(
+            label="Modell",
+            role_settings=settings.youtube_publish,
+            key=f"{key_prefix}_yt_publish_model_{project.id}",
+            input_info=LLM_INPUT_INFO["youtube_publish"],
+        )
+        if st.button("Modell speichern", key=f"{key_prefix}_yt_publish_model_save_{project.id}"):
+            updated = settings.model_copy(update={"youtube_publish": role_settings})
+            save_model_settings(project, updated)
+            st.success("Modell für YouTube Publish gespeichert.")
+
+    existing = load_youtube_metadata(project)
+    if existing is not None and existing.title:
+        st.write(f"**Titel:** {existing.title}")
+    else:
+        st.caption(
+            "Titel erscheint nach der Generierung "
+            "(aus Project Brief / Dramaturgie + Locked Script)."
+        )
+
+    generate_clicked = st.button(
+        "YouTube-Beschreibung & Quiz generieren",
+        key=f"{key_prefix}_yt_publish_generate_{project.id}",
+        type="primary",
+        use_container_width=True,
+        help="Baut Kapitelzeiten aus der Resolved Timeline und ruft das LLM auf.",
+    )
+
+    if generate_clicked:
+        try:
+            with st.spinner("YouTube-Metadaten aus Enhanced-Timeline generieren …"):
+                context = build_youtube_publish_context_from_resolved(project, resolved)
+                if not context.chapters:
+                    st.warning(
+                        "Keine Kapitel in der aufgelösten Timeline — "
+                        "bitte zuerst Final Cut auflösen."
+                    )
+                elif not any(
+                    (entry.get("voiceover_text") or "").strip()
+                    for entry in context.folder_scripts
+                ) and not (context.intro_text or "").strip():
+                    st.warning(
+                        "Kein Locked-Script / Intro-Text gefunden. "
+                        "Bitte Script Lock und Intro-Hook bestätigen."
+                    )
+                else:
+                    log_heavy_operation(
+                        f"YouTube Publish Enhanced ({context.quiz_count} Quiz, "
+                        f"{len(context.chapters)} Kapitel)",
+                        page=page,
+                    )
+                    result = generate_youtube_publish_metadata_from_context(
+                        project,
+                        context,
+                        provider=role_settings.provider,
+                        model=role_settings.model,
+                    )
+                    if result.status != STATUS_PASS or result.document is None:
+                        st.error(result.error or "YouTube-Generierung fehlgeschlagen.")
+                    else:
+                        st.success(
+                            f"YouTube-Metadaten gespeichert "
+                            f"({len(result.document.quizzes)} Quiz, "
+                            f"{len(result.document.chapters)} Kapitel)."
+                        )
+                        st.rerun()
         except (OSError, ValueError) as exc:
             st.error(str(exc))
 

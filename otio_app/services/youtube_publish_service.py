@@ -51,8 +51,10 @@ from otio_app.services.youtube_publish_models import (
 
 __all__ = [
     "build_youtube_publish_context",
+    "build_youtube_publish_context_from_resolved",
     "format_youtube_timestamp",
     "generate_youtube_publish_metadata",
+    "generate_youtube_publish_metadata_from_context",
     "load_youtube_metadata",
     "quiz_count_for_duration",
     "save_youtube_metadata",
@@ -143,6 +145,114 @@ def build_youtube_publish_context(
     chapters = _chapters_from_sections(sections)
     total_duration = sum(chapter.video_duration_sec for chapter in chapters)
     title, language, intro_text, folder_scripts = _scripts_for_chapters(project, chapters)
+    return YouTubePublishContext(
+        title=title,
+        language=language,
+        total_duration_sec=total_duration,
+        quiz_count=quiz_count_for_duration(total_duration),
+        chapters=chapters,
+        intro_text=intro_text,
+        folder_scripts=folder_scripts,
+        folder_names=[chapter.folder_name for chapter in chapters],
+    )
+
+
+def _enhanced_title_and_language(project: Project) -> tuple[str, str]:
+    from otio_app.services.voiceover_generation.dramaturgy_service import (
+        load_confirmed_dramaturgy,
+    )
+    from otio_app.services.voiceover_generation.project_brief_service import (
+        load_project_brief,
+    )
+
+    title = (project.name or "").strip() or "Video"
+    language = project.language or "DE"
+    brief = load_project_brief(project)
+    if brief is not None:
+        title = (brief.video_title or "").strip() or title
+        language = brief.language or language
+    plan = load_confirmed_dramaturgy(project)
+    if plan is not None and (plan.project_title or "").strip():
+        title = plan.project_title.strip()
+    return title, language
+
+
+def _enhanced_folder_scripts(
+    project: Project,
+    chapters: list[YouTubeChapter],
+) -> tuple[str, list[dict[str, str]]]:
+    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+        confirmed_intro_text,
+    )
+    from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+        load_locked_script,
+    )
+
+    intro_text = (confirmed_intro_text(project) or "").strip()
+    by_folder: dict[str, list[str]] = {}
+    locked = load_locked_script(project)
+    if locked is not None:
+        for segment in locked.segments:
+            folder = (segment.folder_name or "").strip()
+            text = (segment.text or "").strip()
+            if not text:
+                continue
+            by_folder.setdefault(folder, []).append(text)
+            if folder.casefold() == "intro" and not intro_text:
+                intro_text = text
+
+    folder_scripts: list[dict[str, str]] = []
+    for chapter in chapters:
+        key = chapter.folder_name
+        if key.casefold() == "intro":
+            text = intro_text or "\n\n".join(by_folder.get(key, []))
+        else:
+            text = "\n\n".join(by_folder.get(key, []))
+            if not text:
+                # Fallback: case-insensitive folder match
+                for folder_key, parts in by_folder.items():
+                    if folder_key.casefold() == key.casefold():
+                        text = "\n\n".join(parts)
+                        break
+        folder_scripts.append(
+            {
+                "folder_name": chapter.folder_name,
+                "display_title": chapter.display_title,
+                "timestamp": chapter.timestamp,
+                "voiceover_text": text,
+            }
+        )
+    return intro_text, folder_scripts
+
+
+def build_youtube_publish_context_from_resolved(
+    project: Project,
+    resolved: object,
+) -> YouTubePublishContext:
+    """Kontext aus Enhanced Resolved Timeline + Locked Script (kein Edit-Plan-Merge)."""
+    chapters: list[YouTubeChapter] = []
+    for chapter in list(getattr(resolved, "chapters", None) or []):
+        folder = str(getattr(chapter, "folder_name", "") or "").strip()
+        if not folder:
+            continue
+        start = float(getattr(chapter, "chapter_video_start", 0.0) or 0.0)
+        end = float(getattr(chapter, "chapter_video_end", start) or start)
+        duration = max(0.0, end - start)
+        display = format_folder_display_name(folder)
+        chapters.append(
+            YouTubeChapter(
+                folder_name=folder,
+                display_title=display,
+                video_start_sec=start,
+                video_duration_sec=duration,
+                timestamp=format_youtube_timestamp(start),
+            )
+        )
+    total_duration = float(getattr(resolved, "total_duration_seconds", 0.0) or 0.0)
+    if total_duration <= 0:
+        total_duration = sum(chapter.video_duration_sec for chapter in chapters)
+    title, language = _enhanced_title_and_language(project)
+    intro_text, folder_scripts = _enhanced_folder_scripts(project, chapters)
     return YouTubePublishContext(
         title=title,
         language=language,
@@ -295,9 +405,8 @@ class _BuildInputs:
     prompt: str
 
 
-def _prepare_prompt(project: Project, merged: MergedEditPlanResult) -> _BuildInputs:
-    context = build_youtube_publish_context(project, merged)
-    prompt = build_youtube_publish_prompt(
+def _prompt_from_context(context: YouTubePublishContext) -> str:
+    return build_youtube_publish_prompt(
         language=context.language,
         title=context.title,
         total_duration_sec=context.total_duration_sec,
@@ -309,19 +418,22 @@ def _prepare_prompt(project: Project, merged: MergedEditPlanResult) -> _BuildInp
         hashtags_max_chars=YOUTUBE_HASHTAGS_MAX_CHARS,
         option_count=YOUTUBE_QUIZ_OPTION_COUNT,
     )
-    return _BuildInputs(context=context, prompt=prompt)
 
 
-def generate_youtube_publish_metadata(
+def _prepare_prompt(project: Project, merged: MergedEditPlanResult) -> _BuildInputs:
+    context = build_youtube_publish_context(project, merged)
+    return _BuildInputs(context=context, prompt=_prompt_from_context(context))
+
+
+def generate_youtube_publish_metadata_from_context(
     project: Project,
-    merged: MergedEditPlanResult,
+    context: YouTubePublishContext,
     *,
     provider: str,
     model: str,
 ) -> YouTubePublishResult:
-    prepared = _prepare_prompt(project, merged)
-    context = prepared.context
-    prompt = prepared.prompt
+    """Generiert YouTube-Metadaten aus einem fertigen Publish-Kontext."""
+    prompt = _prompt_from_context(context)
     run_id, run_dir = create_llm_run_dir(project, STAGE_YOUTUBE_PUBLISH)
     prompt_hash = content_hash(prompt)
     write_llm_prompt(run_dir, prompt)
@@ -439,6 +551,22 @@ def generate_youtube_publish_metadata(
         llm_run_id=run_id,
         provider=llm_response.provider,
         model=llm_response.model,
+    )
+
+
+def generate_youtube_publish_metadata(
+    project: Project,
+    merged: MergedEditPlanResult,
+    *,
+    provider: str,
+    model: str,
+) -> YouTubePublishResult:
+    context = build_youtube_publish_context(project, merged)
+    return generate_youtube_publish_metadata_from_context(
+        project,
+        context,
+        provider=provider,
+        model=model,
     )
 
 

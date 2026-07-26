@@ -1,9 +1,10 @@
-"""Schritt 8 Enhanced: Final Output — OTIO nur aus aufgelöster Timeline."""
+"""Schritt 8 Enhanced: Final Output — OTIO + YouTube Publish."""
 
 from __future__ import annotations
 
 import streamlit as st
 
+from otio_app.models import Project
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model
 from otio_app.services.without_voiceover_enhanced.models import ResolvedTimelineDocument
 from otio_app.services.without_voiceover_enhanced.otio_export_service import (
@@ -13,28 +14,25 @@ from otio_app.services.without_voiceover_enhanced.otio_export_service import (
     validate_resolved_timeline_for_production,
 )
 from otio_app.services.without_voiceover_enhanced.paths import resolved_timeline_path
+from otio_app.ui.navigation import PAGE_FINAL_OUTPUT_ENHANCED
 from otio_app.ui.without_voiceover_enhanced._shared import get_enhanced_project
+from otio_app.ui.youtube_publish import render_enhanced_youtube_publish_block
+
+_SECTION_OTIO = "OTIO Export"
+_SECTION_YOUTUBE = "YouTube Publish"
+_SECTION_OPTIONS = (_SECTION_OTIO, _SECTION_YOUTUBE)
 
 
-def render_enhanced_final_output_page() -> None:
-    st.header("⑧ Final Output (Enhanced)")
+def _render_otio_export_section(
+    project: Project,
+    resolved: ResolvedTimelineDocument,
+) -> None:
     st.caption(
         "Keine neue redaktionelle Planung. Lädt freigegebenen finalen Cut Plan / "
         "technisch aufgelöste Timeline und erzeugt OTIO. "
         "Standard ist der lokale Produktions-Export (Originalpfade, ohne Medienkopien). "
         "Portables Paket optional für Transfer/Archiv."
     )
-    project = get_enhanced_project()
-    if project is None:
-        return
-
-    resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
-    if resolved is None:
-        st.error(
-            "Keine aufgelöste Timeline vorhanden — zuerst Schritt 7 "
-            "(Finalen Cut Plan erzeugen und technisch auflösen)."
-        )
-        return
 
     gate_errors = validate_resolved_timeline_for_production(project, resolved)
     # Fix 5: Deduplizieren (gleiche Meldung oft in resolved.errors und Gate).
@@ -178,3 +176,37 @@ def render_enhanced_final_output_page() -> None:
             )
         except EnhancedOtioExportError as exc:
             st.error(str(exc))
+
+
+def render_enhanced_final_output_page() -> None:
+    st.header("⑧ Final Output (Enhanced)")
+    project = get_enhanced_project()
+    if project is None:
+        return
+
+    resolved = load_model(resolved_timeline_path(project), ResolvedTimelineDocument)
+    if resolved is None:
+        st.error(
+            "Keine aufgelöste Timeline vorhanden — zuerst Schritt 7 "
+            "(Finalen Cut Plan erzeugen und technisch auflösen)."
+        )
+        return
+
+    section_key = f"enh_final_section_{project.id}"
+    section = st.radio(
+        "Bereich",
+        list(_SECTION_OPTIONS),
+        horizontal=True,
+        key=section_key,
+    )
+
+    if section == _SECTION_YOUTUBE:
+        render_enhanced_youtube_publish_block(
+            project,
+            resolved,
+            page=PAGE_FINAL_OUTPUT_ENHANCED,
+            key_prefix="enhanced_final",
+        )
+        return
+
+    _render_otio_export_section(project, resolved)
