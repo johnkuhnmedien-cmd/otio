@@ -180,7 +180,10 @@ def _render_rule_card(
                 options=font_options,
                 index=font_options.index(current_font),
                 key=f"rule_folder_title_font_{project.id}_{rule.id}",
-                help="Phosphate muss auf dem System installiert sein (Mac: ~/Library/Fonts).",
+                help=(
+                    "Phosphate / Phosphate Solid müssen auf dem System installiert sein "
+                    "(Mac: Phosphate.ttc unter /System/Library/Fonts/Supplemental)."
+                ),
             )
             params["duration_sec"] = float(
                 st.number_input(

@@ -162,9 +162,24 @@ def _layout_from_style(style: TitleStyle) -> tuple[str, str, int]:
     return str(style.margin_x), f"h-th-{style.margin_y}", fontsize
 
 
+def _ffmpeg_font_selector(style: TitleStyle, font_path: Path) -> str:
+    """fontfile=… oder font=… (Fontconfig) für TTC-Faces wie Phosphate Solid."""
+    face_index = max(0, int(getattr(style, "resolved_font_face_index", 0) or 0))
+    if face_index > 0:
+        # drawtext/fontfile nutzt in TTC immer Face 0 — Fontconfig wählt Solid korrekt.
+        family = (
+            (style.requested_font_family or style.resolved_font_family or "").strip()
+        )
+        if family:
+            safe_family = escape_drawtext_value(family)
+            return f"font='{safe_family}'"
+    safe_font = escape_drawtext_value(str(font_path.resolve()))
+    return f"fontfile='{safe_font}'"
+
+
 def _ffmpeg_filter(style: TitleStyle, font_path: Path) -> str:
     safe_text = escape_drawtext_value(style.text)
-    safe_font = escape_drawtext_value(str(font_path.resolve()))
+    font_sel = _ffmpeg_font_selector(style, font_path)
     x_expr, y_expr, fontsize = _layout_from_style(style)
     shadow = ""
     if style.shadow_enabled:
@@ -174,7 +189,7 @@ def _ffmpeg_filter(style: TitleStyle, font_path: Path) -> str:
             f":shadowy={int(round(style.shadow_offset_y))}"
         )
     return (
-        f"drawtext=fontfile='{safe_font}':"
+        f"drawtext={font_sel}:"
         f"text='{safe_text}':"
         f"fontsize={fontsize}:"
         f"fontcolor=white:"
@@ -198,11 +213,13 @@ def _render_png_pillow(style: TitleStyle, font_path: Path, output_png: Path) -> 
     height = max(320, int(style.timeline_height))
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
+    face_index = max(0, int(getattr(style, "resolved_font_face_index", 0) or 0))
     try:
-        font = ImageFont.truetype(str(font_path), fontsize)
+        font = ImageFont.truetype(str(font_path), fontsize, index=face_index)
     except OSError as exc:
         raise RuntimeError(
-            f"Schriftdatei nicht lesbar: {font_path} (font_size_px={fontsize})"
+            f"Schriftdatei nicht lesbar: {font_path} "
+            f"(font_size_px={fontsize}, face_index={face_index})"
         ) from exc
 
     bbox = draw.textbbox((0, 0), style.text, font=font)
