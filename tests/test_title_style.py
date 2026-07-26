@@ -103,9 +103,14 @@ def test_pillow_truetype_uses_font_size_px(tmp_path: Path) -> None:
 
             return Image.new("L", (50, 72), 255).im
 
-    with patch("PIL.ImageFont.truetype", side_effect=lambda _p, size: captured.update(size=size) or FakeFont()):
+    with patch(
+        "PIL.ImageFont.truetype",
+        side_effect=lambda _p, size, index=0, **_kw: captured.update(size=size, index=index)
+        or FakeFont(),
+    ):
         bbox = _render_png_pillow(style, font_file, tmp_path / "out.png")
     assert captured["size"] == 72
+    assert captured["index"] == 0
     assert bbox[1] > 0
 
 

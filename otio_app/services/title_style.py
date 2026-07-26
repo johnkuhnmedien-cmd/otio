@@ -11,7 +11,11 @@ from typing import Any
 from otio_app.analysis_models import TimelineItem, TitleStyle
 from otio_app.models import Project
 from otio_app.services.clean_media import path_is_readable_file
-from otio_app.services.font_utils import OPENING_TITLE_FALLBACK_FONT, resolve_font_with_fallback
+from otio_app.services.font_utils import (
+    OPENING_TITLE_FALLBACK_FONT,
+    resolve_font_face_index,
+    resolve_font_with_fallback,
+)
 
 RENDERER_VERSION = "3.0.0"
 TITLE_FONT_SIZE_NOT_APPLIED = "TITLE_FONT_SIZE_NOT_APPLIED"
@@ -53,11 +57,16 @@ class FontResolution:
     resolved_font_file_path: str
     font_fallback_used: bool
     font_resolution_warning: str = ""
+    resolved_font_face_index: int = 0
 
 
 def resolve_title_font(requested_font_family: str) -> FontResolution:
     requested = requested_font_family.strip() or DEFAULT_OPENING_TITLE_FONT
     font_path, resolved_font, fallback_used = resolve_font_with_fallback(requested)
+    face_index = 0
+    if font_path is not None:
+        probe_name = resolved_font if fallback_used else requested
+        face_index = resolve_font_face_index(probe_name, font_path)
     warning = ""
     if font_path is None:
         warning = (
@@ -73,6 +82,7 @@ def resolve_title_font(requested_font_family: str) -> FontResolution:
         resolved_font_file_path=str(font_path.resolve()) if font_path else "",
         font_fallback_used=fallback_used,
         font_resolution_warning=warning,
+        resolved_font_face_index=max(0, int(face_index or 0)),
     )
 
 
@@ -89,6 +99,7 @@ def title_style_from_legacy_item(item: TimelineItem, project: Project) -> TitleS
         requested_font_family=font_res.requested_font_family,
         resolved_font_family=item.resolved_font_family or font_res.resolved_font_family,
         resolved_font_file_path=item.resolved_font_file_path or font_res.resolved_font_file_path,
+        resolved_font_face_index=int(font_res.resolved_font_face_index or 0),
         font_fallback_used=item.font_fallback_used or font_res.font_fallback_used,
         font_resolution_warning=font_res.font_resolution_warning,
         font_size_px=float(item.font_size_px or item.font_size or lower_third_font_size(project.height)),
@@ -122,6 +133,7 @@ def compute_render_hash(style: TitleStyle, *, renderer_version: str = RENDERER_V
         "requested_font_family": style.requested_font_family,
         "resolved_font_family": style.resolved_font_family,
         "resolved_font_file_path": style.resolved_font_file_path,
+        "resolved_font_face_index": int(style.resolved_font_face_index or 0),
         "font_size_px": round(style.font_size_px, 2),
         "font_color": style.font_color,
         "shadow_enabled": style.shadow_enabled,
@@ -201,6 +213,7 @@ def build_title_style_for_plan(
         requested_font_family=font_res.requested_font_family,
         resolved_font_family=font_res.resolved_font_family,
         resolved_font_file_path=font_res.resolved_font_file_path,
+        resolved_font_face_index=int(font_res.resolved_font_face_index or 0),
         font_fallback_used=font_res.font_fallback_used,
         font_resolution_warning=font_res.font_resolution_warning,
         font_size_px=resolved_px,
@@ -298,6 +311,7 @@ def build_render_manifest(
         "requested_font_family": style.requested_font_family,
         "resolved_font_family": style.resolved_font_family,
         "resolved_font_file_path": style.resolved_font_file_path,
+        "resolved_font_face_index": int(style.resolved_font_face_index or 0),
         "font_fallback_used": style.font_fallback_used,
         "font_resolution_warning": style.font_resolution_warning,
         "font_size_px": style.font_size_px,

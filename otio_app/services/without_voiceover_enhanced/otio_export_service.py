@@ -19,6 +19,7 @@ from otio_app.services.opening_title_renderer import (
     ensure_opening_titles_rendered,
 )
 from otio_app.services.otio_exporter import _build_v2_title_track
+from otio_app.services.otio_media_transform import format_folder_display_name
 from otio_app.services.still_image_export_style import ensure_styled_still_for_export
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     CutPlanOptions,
@@ -537,6 +538,34 @@ def _collect_target_urls(timeline: otio.schema.Timeline) -> list[str]:
     return urls
 
 
+def reverse_body_chapter_number(
+    folder_name: str,
+    *,
+    ordered_body_chapters: list[str],
+) -> int | None:
+    """Countdown-Nummer: erstes Körper-Kapitel = N, letztes = 1."""
+    target = (folder_name or "").strip()
+    if not target or not ordered_body_chapters:
+        return None
+    lowered = {str(name).strip().lower(): index for index, name in enumerate(ordered_body_chapters)}
+    index = lowered.get(target.lower())
+    if index is None:
+        return None
+    return len(ordered_body_chapters) - index
+
+
+def format_numbered_folder_title(
+    folder_name: str,
+    *,
+    chapter_number: int | None,
+) -> str:
+    """Anzeigetext für Ordner-Titel, optional mit Countdown-Nummer."""
+    display = format_folder_display_name(folder_name)
+    if chapter_number is None or int(chapter_number) <= 0:
+        return display
+    return f"{int(chapter_number)}. {display}"
+
+
 def build_enhanced_folder_title_items(
     project: Project,
     resolved: ResolvedTimelineDocument,
@@ -549,6 +578,27 @@ def build_enhanced_folder_title_items(
     chapters = list(resolved.chapters or [])
     if not chapters:
         return []
+
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        list_body_chapter_names,
+    )
+    from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+        ScriptLockError,
+    )
+
+    try:
+        ordered_body = list_body_chapter_names(project)
+    except ScriptLockError:
+        ordered_body = []
+    if not ordered_body:
+        # Fallback: nur Kapitel in dieser Timeline (ohne Intro), Filmreihenfolge.
+        ordered_body = [
+            str(ch.folder_name or ch.chapter_id or "").strip()
+            for ch in chapters
+            if str(ch.folder_name or ch.chapter_id or "").strip()
+            and not _is_intro_folder(str(ch.folder_name or ""))
+            and not _is_intro_folder(str(ch.chapter_id or ""))
+        ]
 
     font_size = (
         float(opts.folder_title_font_size)
@@ -564,6 +614,14 @@ def build_enhanced_folder_title_items(
         if _is_intro_folder(chapter_id) or _is_intro_folder(folder_name):
             continue
         section_id = chapter_id or folder_name
+        number = reverse_body_chapter_number(
+            folder_name or section_id,
+            ordered_body_chapters=ordered_body,
+        )
+        title_text = format_numbered_folder_title(
+            folder_name or section_id,
+            chapter_number=number,
+        )
         item = build_opening_title_item(
             folder_name=folder_name or section_id,
             voice_file="",
@@ -573,6 +631,7 @@ def build_enhanced_folder_title_items(
             requested_font_family=str(opts.folder_title_font or "Phosphate"),
             duration_sec=float(opts.folder_title_duration_sec),
             font_size_px=font_size,
+            text=title_text,
             fade_in_sec=float(opts.folder_title_fade_in_sec),
             fade_out_sec=float(opts.folder_title_fade_out_sec),
         )

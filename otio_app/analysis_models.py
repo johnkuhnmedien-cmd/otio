@@ -229,6 +229,7 @@ class TitleStyle(BaseModel):
     requested_font_family: str = ""
     resolved_font_family: str = ""
     resolved_font_file_path: str = ""
+    resolved_font_face_index: int = 0
     font_fallback_used: bool = False
     font_resolution_warning: str = ""
     font_size_px: float = 72.0
