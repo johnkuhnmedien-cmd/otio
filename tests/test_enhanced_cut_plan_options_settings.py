@@ -185,8 +185,6 @@ def test_prompt_constraints_in_rough_and_final() -> None:
     assert "7.0s" in final and "duration_seconds" in final
     assert "short-asset tolerance" in final.lower()
     assert "OPENING SHOT" in text and "CLOSING SHOT" in text
-    assert "Prefer LOCAL inventory for this opener" in text
-    assert "does NOT become gap_001" in text
     assert "1.0s" in text and "5.0s" in text
     assert "OPENING SHOT" in rough and "CLOSING SHOT" in rough
     assert "OPENING SHOT" in final and "CLOSING SHOT" in final

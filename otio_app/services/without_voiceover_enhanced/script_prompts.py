@@ -747,16 +747,6 @@ SLOT / ASSET RULES:
 - Opening slot (first) and closing slot (last): different assets from their
   immediate neighbor; max usage + reuse distance apply with no exemption.
 - narrative_function for first/last may be chapter_open / chapter_close.
-- OPENING SLOT / gap_001 BIAS (CRITICAL):
-  The first slot is often a generic establishing / atmosphere opener. Python
-  later holds this SAME first slot for preroll (picture before VO) — there is
-  NO separate pre-VO gap slot. Prefer a plausible LOCAL inventory clip for
-  chapter_open even if no spoken keyword has started yet and even if the
-  match is only establishing/orientation (not a perfect keyword hit). Rate
-  such a local opener ``acceptable`` (or ``strong``), set coverage_gap_id
-  null, and do NOT invent an idealized stock-only opener that forces
-  weak/none. Emit an opening coverage gap only when NO local asset is usable
-  for that establishing beat (wrong place, too short, or blocked by reuse).
 
 PAUSE RULES:
 
@@ -1053,13 +1043,6 @@ SLOT / ASSET RULES:
 - Opening slot (first) and closing slot (last): different assets from their
   immediate neighbor when both assigned; max usage + reuse distance apply.
 - narrative_function for first/last may be chapter_open / chapter_close.
-- OPENING SLOT / gap_001 BIAS (CRITICAL):
-  The first slot is often a generic establishing opener before/into VO.
-  Python holds this SAME first slot for preroll — no separate pre-VO gap.
-  Prefer a plausible LOCAL establishing/atmosphere clip even without a spoken
-  keyword yet; rate it ``acceptable`` (or ``strong``) with coverage_gap_id
-  null. Do NOT force weak/none just to chase an idealized stock opener.
-  Opening gap only if no usable local establishing asset exists.
 - The last slot must span from its start boundary through the full remaining
   VO to the last boundary (VO end).
 

@@ -48,8 +48,6 @@ def test_build_unified_cut_prompt_contains_core_contract() -> None:
     assert "No video-hold assumptions" in prompt
     assert "LOCKED SCRIPT:" in prompt
     assert "LOCAL ASSETS" in prompt
-    assert "OPENING SLOT / gap_001 BIAS" in prompt
-    assert "Prefer a plausible LOCAL inventory clip" in prompt
 
 
 def test_build_unified_cut_prompt_optional_blocks_omitted_when_empty() -> None:
@@ -102,7 +100,6 @@ def test_build_keyword_sync_unified_cut_prompt_contract() -> None:
     assert "strong | acceptable | weak | none" in prompt
     assert "USED-IN LEDGER" in prompt
     assert "SENTENCE TIMINGS" in prompt
-    assert "OPENING SLOT / gap_001 BIAS" in prompt
     # Rhythmus-Modus-Ziele bewusst nicht enthalten.
     assert "CUT RHYTHM TARGETS" not in prompt
     assert "10–17 seconds" not in prompt and "10-17 seconds" not in prompt

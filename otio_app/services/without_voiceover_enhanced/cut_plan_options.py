@@ -455,9 +455,6 @@ OPENING / CLOSING SHOTS PER CHAPTER (BINDING — closes edge gaps):
   - Its asset_id MUST differ from the immediately following shot.
   - Prefer an establishing / orientation / atmosphere asset with enough usable
     duration for that opening beat.
-  - Prefer LOCAL inventory for this opener (generic establishing is OK) and
-    rate it acceptable/strong so it does NOT become gap_001 / stock funnel.
-  - Only leave the opening as weak/none when no local establishing asset fits.
   - Mark it with editorial_function like "opening", "establishing", or
     "chapter_open" when the schema allows free editorial_function text.
 - For EVERY chapter/folder, plan a CLOSING SHOT at the chapter end:
