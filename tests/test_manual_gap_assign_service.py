@@ -311,7 +311,9 @@ def test_ui_manual_gap_assign_markers() -> None:
     ).read_text(encoding="utf-8")
     assert "Offene Gaps manuell zuordnen" in source
     assert "enh_show_manual_gap_assign_" in source
-    assert "Search Queries (kopieren)" in source
+    assert "Search Queries + Google Bilder" in source
+    assert "google_images_search_url" in source
+    assert "Google Bilder öffnen" in source
     assert "Zuordnen & inventarisieren" in source
     assert "assign_local_file_to_open_gap" in source
     assert "enh_manual_gap_flash_" in source
@@ -319,3 +321,14 @@ def test_ui_manual_gap_assign_markers() -> None:
     assert "st.info" in source
     assert "Python Timing" in source
     assert "Gap-Merge übernimmt" in source
+
+
+def test_google_images_search_url_encodes_query() -> None:
+    from otio_app.services.supplement_sources.google_search import (
+        google_images_search_url,
+    )
+
+    url = google_images_search_url("abstract sandstone fissure")
+    assert url.startswith("https://www.google.com/search?tbm=isch&q=")
+    assert "abstract+sandstone+fissure" in url
+    assert google_images_search_url("  ") == "https://www.google.com/search?tbm=isch"

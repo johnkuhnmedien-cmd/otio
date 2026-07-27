@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from urllib.parse import quote_plus
 
 from otio_app.analysis_models import SupplementCandidate, SupplementRequest
 from otio_app.defaults import (
@@ -12,6 +13,14 @@ from otio_app.defaults import (
 )
 from otio_app.services.supplement_search import preferred_search_query
 from otio_app.services.supplement_sources.base import ProviderReadiness, SupplementSourceAdapter
+
+
+def google_images_search_url(query: str) -> str:
+    """Browser-Link zur Google-Bildersuche (kein API-Download)."""
+    text = (query or "").strip()
+    if not text:
+        return "https://www.google.com/search?tbm=isch"
+    return f"https://www.google.com/search?tbm=isch&q={quote_plus(text)}"
 
 
 class GoogleSearchAdapter(SupplementSourceAdapter):
@@ -39,7 +48,7 @@ class GoogleSearchAdapter(SupplementSourceAdapter):
                 description=request.visual_requirement,
                 preview_url="",
                 download_url="",
-                source_page_url=f"https://www.google.com/search?q={query.replace(' ', '+')}",
+                source_page_url=google_images_search_url(query),
                 license="Unbekannt — manuelle Rechteprüfung erforderlich",
                 media_type="image",
                 width=1920,
