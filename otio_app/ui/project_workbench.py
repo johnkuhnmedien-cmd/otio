@@ -224,12 +224,18 @@ def _render_folder_status_overview(project) -> None:
         f"⚪ {counts[FolderAnalysisState.PENDING]} offen · "
         f"➖ {counts[FolderAnalysisState.EMPTY]} leer"
     )
+    incomplete_names = [
+        name
+        for name in project.asset_subdir_names
+        if status_cache.get(name, get_folder_analysis_state(project, name))
+        in {FolderAnalysisState.PARTIAL, FolderAnalysisState.PENDING}
+    ]
     manual_names = [
         name
         for name in list_manually_complete_folders(project)
         if name in set(project.asset_subdir_names)
     ]
-    col_refresh, col_clear_all = st.columns(2)
+    col_refresh, col_mark_all, col_clear_all = st.columns(3)
     with col_refresh:
         if st.button(
             "Status aktualisieren",
@@ -237,6 +243,27 @@ def _render_folder_status_overview(project) -> None:
             use_container_width=True,
         ):
             _invalidate_folder_status_cache(project.id)
+            st.rerun()
+    with col_mark_all:
+        if st.button(
+            f"Alle unfertigen manuell fertig ({len(incomplete_names)})",
+            key=f"manual_complete_all_{project.id}",
+            use_container_width=True,
+            disabled=not incomplete_names,
+            type="primary",
+            help=(
+                "Markiert alle teilweise/offenen Ordner auf einmal als manuell fertig "
+                "und baut Inventory aus dem Cache (ohne Analyse nachzuholen)."
+            ),
+        ):
+            changed = set_manually_complete_many(
+                project, incomplete_names, complete=True
+            )
+            _invalidate_folder_status_cache(project.id)
+            if changed:
+                st.success(f"{len(changed)} Ordner manuell als fertig markiert.")
+            else:
+                st.info("Keine Ordner geändert.")
             st.rerun()
     with col_clear_all:
         if st.button(
@@ -318,7 +345,7 @@ def _render_folder_status_overview(project) -> None:
 
     st.caption(
         "Rechts: ✓ = manuell als fertig markieren · ↩ = Markierung aufheben · "
-        "Oben: alle manuellen Markierungen auf einmal aufheben."
+        "Oben: alle unfertigen fertig markieren bzw. alle manuellen Markierungen aufheben."
     )
 
 
