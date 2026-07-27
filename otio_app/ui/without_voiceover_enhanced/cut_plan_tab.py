@@ -95,6 +95,7 @@ from otio_app.services.without_voiceover_enhanced.local_media_service import (
     assign_local_media_path,
     refresh_supplement_validation,
 )
+from otio_app.services.supplement_sources.google_search import google_images_search_url
 from otio_app.services.without_voiceover_enhanced.manual_gap_assign_service import (
     ManualGapAssignError,
     assign_local_file_to_open_gap,
@@ -2117,11 +2118,11 @@ def _render_section_funnel(project) -> None:
 
     st.markdown("**Offene Gaps manuell zuordnen**")
     st.caption(
-        "Links Gap · Mitte Search-Queries (kopierbar) · "
+        "Links Gap · Mitte Search-Queries (kopierbar) + Google-Bilder-Links · "
         "Rechts lokaler Dateipfad → wird nach stock/downloads kopiert, "
         "export_ready gesetzt und inventarisiert. Danach **Python Timing** "
         "des betroffenen Kapitels erneut (Gap-Merge übernimmt das Asset in "
-        "die Timeline/OTIO)."
+        "die Timeline/OTIO). Google lädt nichts herunter — nur Browser-Links."
     )
     show_manual_gaps_key = f"enh_show_manual_gap_assign_{project.id}"
     st.checkbox(
@@ -2138,7 +2139,7 @@ def _render_section_funnel(project) -> None:
         with head_l:
             st.caption("Offene Gap")
         with head_m:
-            st.caption("Search Queries (kopieren)")
+            st.caption("Search Queries + Google Bilder")
         with head_r:
             st.caption("Lokaler Dateipfad")
         for gap_id in open_gap_ids:
@@ -2158,6 +2159,8 @@ def _render_section_funnel(project) -> None:
                 if queries:
                     for query in queries:
                         st.code(query, language=None)
+                        google_url = google_images_search_url(query)
+                        st.markdown(f"[Google Bilder öffnen]({google_url})")
                 else:
                     st.caption("Keine Search-Queries hinterlegt.")
             with col_path:
