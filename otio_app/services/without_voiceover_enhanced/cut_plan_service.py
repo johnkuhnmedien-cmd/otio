@@ -1288,7 +1288,18 @@ def search_supplements_for_gaps(
     clear_rate_limit_circuit()
     all_candidates: list[StockCandidate] = []
     provider_status: dict[str, str] = {}
-    gaps = list(coverage.gaps)
+    # Nur offene Gaps suchen — erfüllte (Funnel/Accepted/Merge) überspringen.
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        summarize_gap_status,
+    )
+
+    open_gap_ids = set(summarize_gap_status(project).open_gap_ids)
+    gaps = [gap for gap in coverage.gaps if gap.gap_id in open_gap_ids]
+    if not gaps:
+        raise CutPlanError(
+            "Alle Coverage Gaps sind bereits erfüllt — keine offenen Gaps "
+            "für die Stocksuche."
+        )
     # Vorab Query-Anzahl schätzen für stabile Progress-Bar.
     planned_queries = 0
     gap_queries: list[tuple[Any, list[str]]] = []

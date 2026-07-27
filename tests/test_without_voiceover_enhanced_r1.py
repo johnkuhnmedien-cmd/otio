@@ -12,6 +12,7 @@ from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR, DEFAULT_WORK_SUBDIR
 from otio_app.models import Project, ProjectCreate, ProjectMode
 from otio_app.project_repository import create_project, find_project_by_root_and_language
 from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
+    CutPlanError,
     accept_supplement_candidates,
     search_supplements_for_gaps,
 )
@@ -257,6 +258,154 @@ def test_all_providers_disabled_no_error_preserves_history(tmp_path: Path) -> No
     assert results.message == "Keine Stockanbieter aktiviert."
     assert all(v == "disabled" for v in results.provider_status.values())
     assert any(c.candidate_id == "stock_hist" for c in results.candidates)
+
+
+def test_stock_search_skips_already_filled_gaps(tmp_path: Path) -> None:
+    """Stocksuche nur offene Gaps — erfüllte (Funnel export_ready) überspringen."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        SupplementFunnelGapReport,
+        SupplementFunnelReport,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        supplement_funnel_report_path,
+    )
+
+    project = _enhanced_project(tmp_path)
+    _lock_minimal(project)
+    run_id = "run_stock_open_only"
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            cut_plan_run_id=run_id,
+            gaps=[
+                CoverageGap(
+                    gap_id="gap_filled",
+                    related_shot_ids=["shot_001"],
+                    subject="Filled",
+                    search_queries=["already filled scene"],
+                    preferred_media_type="photo",
+                ),
+                CoverageGap(
+                    gap_id="gap_open",
+                    related_shot_ids=["shot_002"],
+                    subject="Open",
+                    search_queries=["still open scene"],
+                    preferred_media_type="photo",
+                ),
+            ],
+        ),
+    )
+    write_json(
+        supplement_funnel_report_path(project),
+        SupplementFunnelReport(
+            run_id="funnel_prev",
+            script_version="script-v1",
+            cut_plan_run_id=run_id,
+            gaps=[
+                SupplementFunnelGapReport(
+                    gap_id="gap_filled",
+                    filled=True,
+                    export_ready_candidate_id="cand_filled",
+                )
+            ],
+            filled_gap_ids=["gap_filled"],
+        ),
+    )
+    save_stock_providers_config(
+        project,
+        {name: (name == "wikimedia") for name in SUPPORTED_STOCK_PROVIDERS},
+    )
+
+    searched_queries: list[str] = []
+
+    def _fake_search(project, query, media_type=None):
+        searched_queries.append(str(query))
+        return (
+            [
+                StockCandidate(
+                    candidate_id=f"wikimedia_{len(searched_queries):03d}",
+                    provider="wikimedia",
+                    title=str(query),
+                    media_type="photo",
+                    preview_url="https://upload.wikimedia.org/wikipedia/commons/a.jpg",
+                    download_url="https://upload.wikimedia.org/wikipedia/commons/a.jpg",
+                    source_page="https://commons.wikimedia.org/wiki/File:a.jpg",
+                )
+            ],
+            {"wikimedia": "completed"},
+            ["wikimedia"],
+        )
+
+    from unittest.mock import patch
+
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.cut_plan_service.search_configured_providers",
+            side_effect=_fake_search,
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.gap_search_concepts.enrich_coverage_search_concepts",
+            side_effect=lambda project, coverage: coverage,
+        ),
+    ):
+        results = search_supplements_for_gaps(project)
+
+    assert not any("already filled" in q for q in searched_queries)
+    assert any("still open" in q for q in searched_queries)
+    assert results.candidates
+    assert all(c.gap_id == "gap_open" for c in results.candidates)
+
+
+def test_stock_search_errors_when_all_gaps_filled(tmp_path: Path) -> None:
+    from otio_app.services.without_voiceover_enhanced.models import (
+        SupplementFunnelGapReport,
+        SupplementFunnelReport,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        supplement_funnel_report_path,
+    )
+
+    project = _enhanced_project(tmp_path)
+    _lock_minimal(project)
+    run_id = "run_all_filled"
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            cut_plan_run_id=run_id,
+            gaps=[
+                CoverageGap(
+                    gap_id="gap_only",
+                    related_shot_ids=["shot_001"],
+                    subject="Done",
+                    search_queries=["done scene"],
+                )
+            ],
+        ),
+    )
+    write_json(
+        supplement_funnel_report_path(project),
+        SupplementFunnelReport(
+            run_id="funnel_prev",
+            script_version="script-v1",
+            cut_plan_run_id=run_id,
+            gaps=[
+                SupplementFunnelGapReport(
+                    gap_id="gap_only",
+                    filled=True,
+                    export_ready_candidate_id="cand",
+                )
+            ],
+            filled_gap_ids=["gap_only"],
+        ),
+    )
+    save_stock_providers_config(
+        project,
+        {name: (name == "wikimedia") for name in SUPPORTED_STOCK_PROVIDERS},
+    )
+    with pytest.raises(CutPlanError, match="bereits erfüllt"):
+        search_supplements_for_gaps(project)
 
 
 def test_unknown_provider_key_not_executed() -> None:

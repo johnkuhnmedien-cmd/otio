@@ -195,11 +195,16 @@ class BalancedCandidatePool:
 
 
 def media_type_fits_preferred(media_type: str, preferred_media_type: str) -> bool:
-    """Ob ein Kandidat für den gewünschten/zwingenden Medientyp zählt."""
+    """Ob ein Kandidat für den gewünschten Medientyp in den Pool darf.
+
+    Soft-Policy: Bei preferred=video bleiben Foto/Image als Still-Fallback
+    zulässig (Ranking bevorzugt weiterhin Video). Hart ausgeschlossen wird
+    nur unbrauchbarer Medientyp.
+    """
     preferred = (preferred_media_type or "").strip().lower()
     media = (media_type or "").strip().lower()
     if preferred in {"video"}:
-        return media == "video"
+        return media in {"video", "photo", "image"}
     if preferred in {"photo", "image"}:
         return media in {"photo", "image"}
     # either / leer / sonstige → photo/image/video zulässig
@@ -541,35 +546,93 @@ def split_thumbnail_batches(
     return [ids[i : i + size] for i in range(0, len(ids), size)]
 
 
+def _finalist_sort_key(record: FunnelCandidateRecord) -> tuple:
+    thumb_risk = (
+        record.thumbnail_scores.misrepresentation_risk
+        if record.thumbnail_scores is not None
+        else 100
+    )
+    text = record.text_scores
+    return (
+        -float(record.preliminary_score or 0.0),
+        int(thumb_risk),
+        -int(text.license_metadata_quality if text is not None else 0),
+        -int(text.metadata_quality if text is not None else 0),
+        record.candidate_id,
+    )
+
+
 def pick_finalists_from_batches(
     records: Sequence[FunnelCandidateRecord],
     *,
     batch_ids: Sequence[Sequence[str]],
     per_batch: int = FINALISTS_PER_BATCH,
 ) -> list[str]:
+    """Wählt Finalisten: zuerst mit Thumb-Score, dann Text-only-Backfill.
+
+    Assets ohne Preview/Thumbnail fallen nicht mehr automatisch raus — sie
+    füllen freie Finalisten-Plätze nach Preliminary-/Text-Score auf.
+    """
     by_id = {r.candidate_id: r for r in records}
     finalists: list[str] = []
+
     for batch in batch_ids:
         scored = [
             by_id[cid]
             for cid in batch
             if cid in by_id and by_id[cid].preview_status == "scored"
         ]
-        scored.sort(
-            key=lambda r: (
-                -r.preliminary_score,
-                r.thumbnail_scores.misrepresentation_risk,
-                -(r.text_scores.license_metadata_quality),
-                -(r.text_scores.metadata_quality),
-                r.candidate_id,
-            )
-        )
+        scored.sort(key=_finalist_sort_key)
         for record in scored[:per_batch]:
             if record.candidate_id not in finalists:
                 finalists.append(record.candidate_id)
             if len(finalists) >= MAX_FINALISTS:
                 return finalists
+
+    if len(finalists) >= MAX_FINALISTS:
+        return finalists
+
+    # Backfill: preview unavailable / text-only (bereits vorläufig gescored).
+    text_only = [
+        record
+        for record in records
+        if record.candidate_id not in finalists
+        and str(record.preview_status or "").strip().lower()
+        in {"unavailable", "preview_unavailable", "thumbnail_pending", ""}
+    ]
+    text_only.sort(key=_finalist_sort_key)
+    for record in text_only:
+        finalists.append(record.candidate_id)
+        if len(finalists) >= MAX_FINALISTS:
+            break
     return finalists
+
+
+def build_text_only_finalist_payload(
+    records: Sequence[FunnelCandidateRecord],
+) -> list[dict[str, Any]]:
+    """Finalisten-Payload ohne Vision — Score aus preliminary/text."""
+    ordered = sorted(records, key=_finalist_sort_key)
+    payload: list[dict[str, Any]] = []
+    for index, record in enumerate(ordered, start=1):
+        score = int(round(float(record.preliminary_score or 0.0)))
+        score = max(0, min(100, score))
+        if score >= 60:
+            decision = "winner" if index == 1 else "fallback"
+        elif score >= 40:
+            decision = "fallback"
+        else:
+            decision = "manual_review"
+        payload.append(
+            {
+                "candidate_id": record.candidate_id,
+                "final_score": score,
+                "rank": index,
+                "decision": decision,
+                "reason": "Text-only Finalist (kein Preview/Thumbnail).",
+            }
+        )
+    return payload
 
 
 def deterministic_tiebreak_key(record: FunnelCandidateRecord) -> tuple:
