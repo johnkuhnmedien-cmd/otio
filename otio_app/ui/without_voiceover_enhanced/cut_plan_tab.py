@@ -1504,18 +1504,37 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             ),
         )
 
+    batch_flash_key = f"_enh_llm_batch_flash_{project.id}"
+    flash = st.session_state.pop(batch_flash_key, None)
+    if isinstance(flash, dict):
+        level = str(flash.get("level") or "info")
+        text = str(flash.get("text") or "")
+        if text and level == "success":
+            st.success(text)
+        elif text and level == "warning":
+            st.warning(text)
+        elif text:
+            st.error(text)
+
     def _run_llm_batch(*, only_open: bool) -> None:
+        progress = st.empty()
+        label = "Offene" if only_open else "Alle"
+        model_id = resolve_llm_model_id(rough_provider, rough_model)
+
+        def _unified_progress(folder_name: str, index: int, total: int) -> None:
+            # Index = aktuell laufendes Kapitel (1-basiert). Bleibt stehen,
+            # bis dieser Call fertig ist — bei langen LLM-Antworten wirkt das
+            # wie „hängt bei 1“, ist aber erwartbar (Timeout bis 10 Min.).
+            progress.info(
+                f"Unified LLM ({label}) · Kapitel {index}/{total}: „{folder_name}“ "
+                f"({model_id}) — ein Kapitel nach dem anderen…"
+            )
+
         try:
-            progress = st.empty()
-            label = "Offene" if only_open else "Alle"
-
-            def _unified_progress(folder_name: str, index: int, total: int) -> None:
-                progress.info(
-                    f"Unified LLM ({label}) · Kapitel {index}/{total}: „{folder_name}“ "
-                    f"({resolve_llm_model_id(rough_provider, rough_model)})…"
-                )
-
-            with st.spinner(f"{label} Kapitel-LLM-Cuts…"):
+            with st.spinner(
+                f"{label} Kapitel-LLM-Cuts sequenziell "
+                f"(Anzeige aktualisiert erst nach jedem Kapitel)…"
+            ):
                 results = generate_all_chapter_unified_cuts(
                     project,
                     provider=rough_provider,
@@ -1523,20 +1542,31 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
                     progress_callback=_unified_progress,
                     only_open=only_open,
                 )
-            progress.empty()
             total_slots = sum(r.slot_count for r in results)
             total_gaps = sum(r.gap_count for r in results)
-            st.success(
-                f"{len(results)} Kapitel gespeichert · {total_slots} Slots · "
-                f"{total_gaps} weak/none Gaps. Als Nächstes Timing."
-            )
+            st.session_state[batch_flash_key] = {
+                "level": "success",
+                "text": (
+                    f"{len(results)} Kapitel gespeichert · {total_slots} Slots · "
+                    f"{total_gaps} weak/none Gaps. Als Nächstes Timing."
+                ),
+            }
             st.rerun()
         except ChapterCutError as exc:
-            st.error(str(exc))
+            # Teil-Erfolge möglich — Fehlertext enthält „(N ok)“.
+            message = str(exc)
+            partial = " ok)" in message
+            st.session_state[batch_flash_key] = {
+                "level": "warning" if partial else "error",
+                "text": message,
+            }
+            st.rerun()
         except CutPlanError as exc:
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
             st.error(f"LLM-Fehler: {exc}")
+        finally:
+            progress.empty()
 
     def _run_timing_batch(*, only_open: bool) -> None:
         try:

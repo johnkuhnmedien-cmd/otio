@@ -354,6 +354,10 @@ def generate_all_chapter_unified_cuts(
 
     ``only_open=True``: nur Kapitel ohne bestehenden Unified-Plan.
     ``chapter_names``: explizite Teilmenge (Dramaturgie-Filter bleibt außen).
+
+    Einzelne Kapitel-Fehler brechen den Batch nicht ab — erfolgreiche Kapitel
+    werden gespeichert; am Ende fliegt ``ChapterCutError`` nur wenn mindestens
+    ein Kapitel fehlgeschlagen ist (mit Zähler ok/fail).
     """
     if chapter_names is not None:
         names = [str(n).strip() for n in chapter_names if str(n).strip()]
@@ -368,22 +372,36 @@ def generate_all_chapter_unified_cuts(
             else "Keine Körper-Kapitel für den Unified Cut."
         )
     out: list[ChapterCutGenerateResult] = []
+    errors: list[str] = []
     total = len(names)
     for index, name in enumerate(names, start=1):
         if progress_callback is not None:
             progress_callback(name, index, total)
         # Merge erst am Ende — sonst N× volle Merge-Kosten.
-        out.append(
-            generate_chapter_unified_cut(
-                project,
-                name,
-                provider=provider,
-                model=model,
-                llm_callable=llm_callable,
-                refresh_merged=False,
+        try:
+            out.append(
+                generate_chapter_unified_cut(
+                    project,
+                    name,
+                    provider=provider,
+                    model=model,
+                    llm_callable=llm_callable,
+                    refresh_merged=False,
+                )
             )
+        except ChapterCutError as exc:
+            errors.append(f"{name}: {exc}")
+        except Exception as exc:  # noqa: BLE001 — Batch soll weiterlaufen
+            errors.append(f"{name}: {exc}")
+    if out:
+        refresh_merged_unified_cut_plan(project)
+    if errors:
+        preview = "\n".join(f"- {err}" for err in errors[:12])
+        more = f"\n- … +{len(errors) - 12} weitere" if len(errors) > 12 else ""
+        raise ChapterCutError(
+            f"{len(errors)}/{total} Kapitel-LLM-Cut(s) fehlgeschlagen "
+            f"({len(out)} ok):\n{preview}{more}"
         )
-    refresh_merged_unified_cut_plan(project)
     return out
 
 
