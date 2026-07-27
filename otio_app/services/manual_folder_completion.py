@@ -48,15 +48,48 @@ def set_manually_complete(
     *,
     complete: bool,
 ) -> None:
+    set_manually_complete_many(project, [folder_name], complete=complete)
+
+
+def list_manually_complete_folders(project: Project) -> list[str]:
+    """Manuell als fertig markierte Ordner (sortiert)."""
+    return list(load_manual_completion(project).folders)
+
+
+def set_manually_complete_many(
+    project: Project,
+    folder_names: list[str],
+    *,
+    complete: bool = True,
+) -> list[str]:
+    """Markiert mehrere Ordner manuell fertig (oder hebt auf); sync’t Inventory.
+
+    Gibt die tatsächlich geänderten Ordnernamen zurück.
+    """
+    names = [str(n).strip() for n in folder_names if str(n).strip()]
+    if not names:
+        return []
+
     document = load_manual_completion(project)
     folders = set(document.folders)
-    if complete:
-        folders.add(folder_name)
-    else:
-        folders.discard(folder_name)
+    changed: list[str] = []
+    for name in names:
+        if complete:
+            if name not in folders:
+                folders.add(name)
+                changed.append(name)
+        elif name in folders:
+            folders.discard(name)
+            changed.append(name)
+
+    if not changed:
+        return []
+
     document.folders = sorted(folders, key=str.casefold)
     save_manual_completion(project, document)
 
     from otio_app.services.inventory_loader import sync_folder_inventory_with_status
 
-    sync_folder_inventory_with_status(project, folder_name)
+    for name in changed:
+        sync_folder_inventory_with_status(project, name)
+    return changed

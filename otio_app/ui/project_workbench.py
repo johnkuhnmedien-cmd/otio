@@ -50,7 +50,12 @@ from otio_app.services.folder_analysis_status import (
     format_folder_with_status,
     get_folder_analysis_state,
 )
-from otio_app.services.manual_folder_completion import is_manually_complete, set_manually_complete
+from otio_app.services.manual_folder_completion import (
+    is_manually_complete,
+    list_manually_complete_folders,
+    set_manually_complete,
+    set_manually_complete_many,
+)
 from otio_app.ui.analysis_jobs_ui import render_analysis_jobs_monitor
 from otio_app.ui.project_context import (
     get_workflow_status,
@@ -219,9 +224,42 @@ def _render_folder_status_overview(project) -> None:
         f"⚪ {counts[FolderAnalysisState.PENDING]} offen · "
         f"➖ {counts[FolderAnalysisState.EMPTY]} leer"
     )
-    if st.button("Status aktualisieren", key=f"refresh_folder_status_{project.id}"):
-        _invalidate_folder_status_cache(project.id)
-        st.rerun()
+    manual_names = [
+        name
+        for name in list_manually_complete_folders(project)
+        if name in set(project.asset_subdir_names)
+    ]
+    col_refresh, col_clear_all = st.columns(2)
+    with col_refresh:
+        if st.button(
+            "Status aktualisieren",
+            key=f"refresh_folder_status_{project.id}",
+            use_container_width=True,
+        ):
+            _invalidate_folder_status_cache(project.id)
+            st.rerun()
+    with col_clear_all:
+        if st.button(
+            f"Alle manuellen Markierungen aufheben ({len(manual_names)})",
+            key=f"manual_clear_all_{project.id}",
+            use_container_width=True,
+            disabled=not manual_names,
+            help=(
+                "Hebt für alle Kapitel die manuelle Fertig-Markierung auf einmal auf. "
+                "Automatisch voll analysierte Ordner bleiben grün."
+            ),
+        ):
+            changed = set_manually_complete_many(
+                project, manual_names, complete=False
+            )
+            _invalidate_folder_status_cache(project.id)
+            if changed:
+                st.success(
+                    f"{len(changed)} manuelle Markierung(en) aufgehoben."
+                )
+            else:
+                st.info("Keine manuellen Markierungen vorhanden.")
+            st.rerun()
 
     for folder_name in project.asset_subdir_names:
         state = status_cache.get(
@@ -278,7 +316,10 @@ def _render_folder_status_overview(project) -> None:
                     _invalidate_folder_status_cache(project.id)
                     st.rerun()
 
-    st.caption("Rechts: ✓ = manuell als fertig markieren · ↩ = Markierung aufheben")
+    st.caption(
+        "Rechts: ✓ = manuell als fertig markieren · ↩ = Markierung aufheben · "
+        "Oben: alle manuellen Markierungen auf einmal aufheben."
+    )
 
 
 def _init_model_settings() -> tuple[str, str, str]:
