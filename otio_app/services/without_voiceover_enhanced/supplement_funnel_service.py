@@ -82,6 +82,7 @@ from otio_app.services.without_voiceover_enhanced.supplement_resolve_service imp
 )
 from otio_app.services.without_voiceover_enhanced.supplement_thumbnail_rank_service import (
     FunnelRankError,
+    build_text_only_finalist_payload,
     compute_preliminary_score,
     default_funnel_text_llm,
     default_funnel_vision_llm,
@@ -1239,11 +1240,21 @@ def run_supplement_funnel_for_gaps(
         finalist_ids = pick_finalists_from_batches(records, batch_ids=batches)
         if not finalist_ids:
             gap_report.candidates = records
-            gap_report.message = "Keine Thumbnail-Finalisten (Previews fehlen)."
+            gap_report.message = "Keine Finalisten verfügbar."
             report.gaps.append(gap_report)
             report.open_gap_ids.append(gap.gap_id)
             preview_bytes.clear()
             continue
+
+        vision_finalist_ids = [
+            cid
+            for cid in finalist_ids
+            if cid in preview_bytes
+            and record_by_id[cid].preview_status == "scored"
+        ]
+        text_finalist_ids = [
+            cid for cid in finalist_ids if cid not in vision_finalist_ids
+        ]
 
         _emit(
             progress_callback,
@@ -1252,18 +1263,35 @@ def run_supplement_funnel_for_gaps(
                 gap_id=gap.gap_id,
                 gap_index=gap_index,
                 gap_total=total,
-                message=f"Gap {gap_index}/{total} · Finalvergleich",
+                message=(
+                    f"Gap {gap_index}/{total} · Finalvergleich"
+                    + (
+                        f" ({len(text_finalist_ids)} text-only)"
+                        if text_finalist_ids
+                        else ""
+                    )
+                ),
                 fraction=(gap_index - 0.35) / max(1, total),
             ),
         )
         try:
-            final_payload = run_final_comparison(
-                gap=gap,
-                candidates=[by_id[cid] for cid in finalist_ids],
-                preview_bytes=preview_bytes,
-                context=context,
-                vision_llm=vision_llm,
-            )
+            final_payload: list[dict[str, Any]] = []
+            if vision_finalist_ids:
+                final_payload.extend(
+                    run_final_comparison(
+                        gap=gap,
+                        candidates=[by_id[cid] for cid in vision_finalist_ids],
+                        preview_bytes=preview_bytes,
+                        context=context,
+                        vision_llm=vision_llm,
+                    )
+                )
+            if text_finalist_ids:
+                final_payload.extend(
+                    build_text_only_finalist_payload(
+                        [record_by_id[cid] for cid in text_finalist_ids]
+                    )
+                )
             ordered_finalists = order_by_final_scores(
                 [record_by_id[cid] for cid in finalist_ids],
                 final_payload,

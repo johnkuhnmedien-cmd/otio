@@ -47,8 +47,10 @@ from otio_app.services.without_voiceover_enhanced.supplement_funnel_service impo
 )
 from otio_app.services.without_voiceover_enhanced.supplement_thumbnail_rank_service import (
     FunnelRankError,
+    build_text_only_finalist_payload,
     compute_preliminary_score,
     format_provider_distribution,
+    media_type_fits_preferred,
     order_by_final_scores,
     pick_finalists_from_batches,
     resolve_preview_url,
@@ -1901,7 +1903,12 @@ def test_provider_balance_disabled_and_failed_status() -> None:
     assert len(pool.candidates) == 9
 
 
-def test_provider_balance_video_gap_skips_photo_only() -> None:
+def test_provider_balance_video_gap_allows_photo_fallback() -> None:
+    """Video-preferred: Fotos bleiben im Pool (Soft), Videos werden bevorzugt."""
+    assert media_type_fits_preferred("photo", "video")
+    assert media_type_fits_preferred("video", "video")
+    assert not media_type_fits_preferred("audio", "video")
+
     cands = [_cand("pexels", i, media_type="photo") for i in range(1, 6)]
     cands += [
         _cand("pixabay", i, media_type="video", duration=8.0) for i in range(1, 8)
@@ -1912,9 +1919,75 @@ def test_provider_balance_video_gap_skips_photo_only() -> None:
         preferred_media_type="video",
         limit=20,
     )
-    assert pool.eligible_providers == ["pixabay"]
-    assert all(c.media_type == "video" for c in pool.candidates)
-    assert "pexels" not in pool.provider_candidate_counts
+    assert set(pool.eligible_providers) == {"pexels", "pixabay"}
+    assert "pexels" in pool.provider_candidate_counts
+    assert "pixabay" in pool.provider_candidate_counts
+    # Pixabay-Videos sollen vor Pexels-Fotos im Presort stehen → mehr Videos.
+    video_count = sum(1 for c in pool.candidates if c.media_type == "video")
+    photo_count = sum(1 for c in pool.candidates if c.media_type == "photo")
+    assert video_count >= photo_count
+    assert photo_count > 0
+
+
+def test_finalists_backfill_preview_unavailable() -> None:
+    """Ohne Preview: Text-only-Kandidaten füllen freie Finalistenplätze."""
+    records = []
+    for i in range(4):
+        records.append(
+            FunnelCandidateRecord(
+                candidate_id=f"scored_{i}",
+                preview_status="scored",
+                preliminary_score=float(90 - i),
+                text_scores=FunnelTextScores(
+                    license_metadata_quality=50, metadata_quality=50
+                ),
+                thumbnail_scores=FunnelThumbnailScores(misrepresentation_risk=10),
+            )
+        )
+    for i in range(5):
+        records.append(
+            FunnelCandidateRecord(
+                candidate_id=f"text_{i}",
+                preview_status="unavailable",
+                preliminary_score=float(80 - i),
+                text_scores=FunnelTextScores(
+                    license_metadata_quality=60, metadata_quality=55
+                ),
+            )
+        )
+    # Nur ein Batch mit 2 scored → max 3 scored-Finalisten, Rest Backfill.
+    batches = [["scored_0", "scored_1"]]
+    finalists = pick_finalists_from_batches(records, batch_ids=batches, per_batch=3)
+    assert "scored_0" in finalists and "scored_1" in finalists
+    assert any(fid.startswith("text_") for fid in finalists)
+    assert len(finalists) <= 6
+
+
+def test_build_text_only_finalist_payload() -> None:
+    records = [
+        FunnelCandidateRecord(
+            candidate_id="a",
+            preview_status="unavailable",
+            preliminary_score=72.0,
+            text_scores=FunnelTextScores(
+                license_metadata_quality=40, metadata_quality=40
+            ),
+        ),
+        FunnelCandidateRecord(
+            candidate_id="b",
+            preview_status="unavailable",
+            preliminary_score=55.0,
+            text_scores=FunnelTextScores(
+                license_metadata_quality=40, metadata_quality=40
+            ),
+        ),
+    ]
+    payload = build_text_only_finalist_payload(records)
+    assert [p["candidate_id"] for p in payload] == ["a", "b"]
+    assert payload[0]["final_score"] == 72
+    assert payload[0]["decision"] == "winner"
+    assert payload[1]["decision"] == "fallback"
+    assert "Text-only" in payload[0]["reason"]
 
 
 def test_provider_balance_ranking_remains_provider_neutral() -> None:
