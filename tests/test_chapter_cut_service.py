@@ -475,6 +475,37 @@ def test_generate_all_continues_after_one_chapter_fails(tmp_path) -> None:
     assert called == ["Good", "Bad", "AlsoGood"]
 
 
+def test_resolve_all_timelines_runs_parallel_and_keeps_order(tmp_path) -> None:
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        resolve_all_chapter_timelines,
+    )
+    from otio_app.services.without_voiceover_enhanced.models import (
+        ResolvedTimelineDocument,
+    )
+
+    project = _project(tmp_path)
+    called: list[str] = []
+
+    def fake_resolve(project, folder_name):
+        called.append(folder_name)
+        return ResolvedTimelineDocument(
+            script_version="v1",
+            total_duration_seconds=1.0,
+        )
+
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.list_chapters_ready_for_python_timing",
+        return_value=["A", "B", "C"],
+    ), patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.resolve_chapter_timeline",
+        side_effect=fake_resolve,
+    ):
+        results = resolve_all_chapter_timelines(project, max_workers=3)
+
+    assert [name for name, _ in results] == ["A", "B", "C"]
+    assert set(called) == {"A", "B", "C"}
+
+
 def test_resolve_chapter_requires_plan(tmp_path) -> None:
     from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
         resolve_chapter_timeline,

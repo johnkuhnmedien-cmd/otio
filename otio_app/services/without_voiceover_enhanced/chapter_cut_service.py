@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from otio_app.defaults import ENHANCED_CHAPTER_TIMING_MAX_WORKERS
 from otio_app.models import Project
 from otio_app.project_layout import safe_folder_slug
 from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
@@ -350,7 +352,10 @@ def generate_all_chapter_unified_cuts(
     chapter_names: list[str] | None = None,
     only_open: bool = False,
 ) -> list[ChapterCutGenerateResult]:
-    """Körper-Kapitel sequenziell; schreibt pro-Kapitel JSON + globalen Merge.
+    """Körper-Kapitel **strikt sequenziell** (immer genau 1 LLM-Call gleichzeitig).
+
+    Parallelität ist hier absichtlich aus — nur Python-Timing darf parallel
+    laufen (``resolve_all_chapter_timelines``).
 
     ``only_open=True``: nur Kapitel ohne bestehenden Unified-Plan.
     ``chapter_names``: explizite Teilmenge (Dramaturgie-Filter bleibt außen).
@@ -491,12 +496,15 @@ def resolve_all_chapter_timelines(
     progress_callback: Callable[[str, int, int], None] | None = None,
     chapter_names: list[str] | None = None,
     only_open: bool = False,
+    max_workers: int | None = None,
 ) -> list[tuple[str, ResolvedTimelineDocument]]:
-    """Python-Timing für Körper-Kapitel.
+    """Python-Timing für Körper-Kapitel — parallel (lokal/CPU).
 
     ``only_open=True``: nur Kapitel mit Plan + geschlossenen Gaps, ohne Resolved.
     Sonst: alle timing-bereiten Kapitel (Plan + Gaps zu). Kapitel mit offenen
     Gaps werden übersprungen / nicht angeboten.
+
+    LLM-Cuts bleiben bewusst sequenziell (``generate_all_chapter_unified_cuts``).
     """
     if chapter_names is not None:
         names = [str(n).strip() for n in chapter_names if str(n).strip()]
@@ -512,13 +520,37 @@ def resolve_all_chapter_timelines(
             else "Keine Kapitel für Python Timing "
             "(Plan fehlt oder Coverage Gaps noch offen)."
         )
-    out: list[tuple[str, ResolvedTimelineDocument]] = []
+
+    workers = max(1, int(max_workers or ENHANCED_CHAPTER_TIMING_MAX_WORKERS))
+    workers = min(workers, len(names))
     total = len(names)
-    for index, name in enumerate(names, start=1):
-        if progress_callback is not None:
-            progress_callback(name, index, total)
-        out.append((name, resolve_chapter_timeline(project, name)))
-    return out
+    results_by_name: dict[str, ResolvedTimelineDocument] = {}
+    errors: list[str] = []
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(resolve_chapter_timeline, project, name): name for name in names
+        }
+        done = 0
+        for future in as_completed(futures):
+            name = futures[future]
+            done += 1
+            if progress_callback is not None:
+                progress_callback(name, done, total)
+            try:
+                results_by_name[name] = future.result()
+            except Exception as exc:  # noqa: BLE001 — Batch sammelt Fehler
+                errors.append(f"{name}: {exc}")
+
+    if errors:
+        preview = "\n".join(f"- {err}" for err in errors[:12])
+        more = f"\n- … +{len(errors) - 12} weitere" if len(errors) > 12 else ""
+        raise ChapterCutError(
+            f"{len(errors)}/{total} Python-Timing(s) fehlgeschlagen "
+            f"({len(results_by_name)} ok):\n{preview}{more}"
+        )
+
+    return [(name, results_by_name[name]) for name in names if name in results_by_name]
 
 
 def _shift_timeline(

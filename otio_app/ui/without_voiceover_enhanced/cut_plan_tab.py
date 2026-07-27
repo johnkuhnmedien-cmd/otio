@@ -1436,10 +1436,11 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
     ready_timing_names = list_chapters_ready_for_python_timing(project)
     blocked_timing = max(0, chapter_count - len(ready_timing_names))
     st.caption(
-        f"**ein LLM-Call pro Kapitel** ({chapter_count}, ohne Intro) → "
+        f"**LLM Cuts strikt sequenziell** (immer nur 1 Call gleichzeitig, "
+        f"{chapter_count} Kapitel ohne Intro) → "
         "`cut/chapters/{slug}/unified_cut_plan.json`. "
-        "**Alle** = jedes Kapitel erneut; **Offene** = nur fehlende. "
-        "**Alle OTIO** merged Intro + Kapitel in Dramaturgie-Reihenfolge."
+        "**Python Timing parallel**. "
+        "**Alle** = jedes Kapitel erneut; **Offene** = nur fehlende."
     )
     st.caption(
         f"Offen: {len(open_llm_names)} ohne LLM-Plan · "
@@ -1522,18 +1523,17 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         model_id = resolve_llm_model_id(rough_provider, rough_model)
 
         def _unified_progress(folder_name: str, index: int, total: int) -> None:
-            # Index = aktuell laufendes Kapitel (1-basiert). Bleibt stehen,
-            # bis dieser Call fertig ist — bei langen LLM-Antworten wirkt das
-            # wie „hängt bei 1“, ist aber erwartbar (Timeout bis 10 Min.).
+            # Strikt 1 Call — Anzeige bleibt auf diesem Kapitel, bis der Call
+            # fertig ist (oft mehrere Minuten; Timeout bis 10 Min.).
             progress.info(
                 f"Unified LLM ({label}) · Kapitel {index}/{total}: „{folder_name}“ "
-                f"({model_id}) — ein Kapitel nach dem anderen…"
+                f"({model_id}) — SEQUENZIELL, nur dieser eine Call läuft…"
             )
 
         try:
             with st.spinner(
-                f"{label} Kapitel-LLM-Cuts sequenziell "
-                f"(Anzeige aktualisiert erst nach jedem Kapitel)…"
+                f"{label} Kapitel-LLM-Cuts SEQUENZIELL "
+                f"(nie parallel — wartet auf aktuellen Call)…"
             ):
                 results = generate_all_chapter_unified_cuts(
                     project,
@@ -1569,22 +1569,22 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             progress.empty()
 
     def _run_timing_batch(*, only_open: bool) -> None:
+        progress = st.empty()
+        label = "Offene" if only_open else "Alle"
+
+        def _timing_progress(folder_name: str, index: int, total: int) -> None:
+            progress.info(
+                f"Python Timing ({label}) · fertig {index}/{total}: „{folder_name}“ "
+                f"(parallel)…"
+            )
+
         try:
-            progress = st.empty()
-            label = "Offene" if only_open else "Alle"
-
-            def _timing_progress(folder_name: str, index: int, total: int) -> None:
-                progress.info(
-                    f"Python Timing ({label}) · Kapitel {index}/{total}: „{folder_name}“…"
-                )
-
-            with st.spinner(f"{label} Kapitel-Timings…"):
+            with st.spinner(f"{label} Kapitel-Timings parallel…"):
                 timed = resolve_all_chapter_timelines(
                     project,
                     progress_callback=_timing_progress,
                     only_open=only_open,
                 )
-            progress.empty()
             shots = sum(len(r.shots) for _, r in timed)
             st.success(
                 f"{len(timed)} Kapitel aufgelöst · {shots} Shots gesamt."
@@ -1594,6 +1594,8 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
             st.error(f"Timing-Fehler: {exc}")
+        finally:
+            progress.empty()
 
     if run_all_llm:
         _run_llm_batch(only_open=False)
