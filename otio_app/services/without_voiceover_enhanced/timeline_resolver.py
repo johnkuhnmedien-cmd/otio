@@ -232,6 +232,7 @@ def _recover_inventory_media_path(
     *,
     raw_path: str | Path,
     asset_id: str = "",
+    candidates: list[Path] | None = None,
 ) -> Path | None:
     """Wenn Inventory-Pfad fehlt (verwaistes Clean): Original/Clean per Stem/Nummer suchen."""
     from otio_app.services.clean_media import (
@@ -252,7 +253,12 @@ def _recover_inventory_media_path(
             name
         )
 
-    for candidate in _iter_folder_media_candidates(project, folder):
+    search_paths = (
+        candidates
+        if candidates is not None
+        else _iter_folder_media_candidates(project, folder)
+    )
+    for candidate in search_paths:
         try:
             if not candidate.is_file():
                 continue
@@ -287,23 +293,52 @@ def _probe_entry(
     usable_in: float | None,
     media_type_hint: str,
     fps: float,
+    known_duration: float | None = None,
+    probe_cache: dict[str, dict] | None = None,
 ) -> dict:
     kind = "image" if is_image_media(path) or media_type_hint in {"photo", "image"} else "video"
     try:
-        timing = probe_media_timing(path, default_rate=fps)
-        duration = timing.duration_sec
-        start_sec = float(timing.start_sec or 0.0)
-        rate = float(timing.rate or fps)
-    except Exception:  # noqa: BLE001 — Katalog darf an einem kaputten Clip nicht sterben
-        duration = None
-        start_sec = 0.0
-        rate = float(fps)
-    if duration is None:
+        cache_key = str(path.expanduser().resolve())
+    except OSError:
+        cache_key = str(path)
+
+    if probe_cache is not None and cache_key in probe_cache:
+        cached = dict(probe_cache[cache_key])
+        cached["folder"] = folder
+        cached["canonical_id"] = asset_id
+        cached["media_type"] = media_type_hint or cached.get("media_type") or kind
+        cached["media_kind"] = kind
+        if usable_in is not None:
+            cached["usable_in_s"] = float(usable_in)
+        return cached
+
+    # Clean-Dateien starten bei TC 00:00:00:00 — volles Timecode-ffprobe sparen,
+    # wenn die Dauer schon aus dem Inventar bekannt ist.
+    path_text = cache_key.replace("\\", "/").lower()
+    is_clean = "/clean/" in path_text
+    duration: float | None = float(known_duration) if known_duration is not None else None
+    start_sec = 0.0
+    rate = float(fps)
+
+    if duration is not None and is_clean:
+        pass
+    else:
         try:
-            duration = probe_duration_seconds(path)
-        except Exception:  # noqa: BLE001
-            duration = None
-    return {
+            timing = probe_media_timing(path, default_rate=fps)
+            if duration is None:
+                duration = timing.duration_sec
+            start_sec = float(timing.start_sec or 0.0)
+            rate = float(timing.rate or fps)
+        except Exception:  # noqa: BLE001 — Katalog darf an einem kaputten Clip nicht sterben
+            start_sec = 0.0
+            rate = float(fps)
+        if duration is None:
+            try:
+                duration = probe_duration_seconds(path)
+            except Exception:  # noqa: BLE001
+                duration = None
+
+    entry = {
         "path": str(path),
         "duration_seconds": float(duration) if duration else None,
         "usable_in_s": float(usable_in) if usable_in is not None else None,
@@ -314,6 +349,9 @@ def _probe_entry(
         "media_rate": rate,
         "canonical_id": asset_id,
     }
+    if probe_cache is not None:
+        probe_cache[cache_key] = dict(entry)
+    return entry
 
 
 def _catalog_path_kind(path: str) -> str:
@@ -326,14 +364,37 @@ def _catalog_path_kind(path: str) -> str:
     return "other"
 
 
-def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
+def build_asset_catalog(
+    project: Project,
+    *,
+    fps: float = 25.0,
+    folder_names: Iterable[str] | None = None,
+) -> AssetCatalog:
     """Baut eindeutigen Katalog; doppelte explizite IDs → collisions.
 
     Ausnahme: dieselbe ID unter ``stock/downloads`` und ``clean/`` — Clean gewinnt
     (Supplement-Download + Clean-Kopie), kein Hard-Collision.
+
+    ``folder_names``: optional nur diese Ordner indexieren (Kapitel-Timing).
+    Ohne Angabe: selected + asset_subdir_names + Körper-Kapitel.
     """
     result = AssetCatalog()
     explicit_paths: dict[str, list[str]] = defaultdict(list)
+    folder_media_cache: dict[str, list[Path]] = {}
+    probe_cache: dict[str, dict] = {}
+
+    def _folder_candidates(folder: str) -> list[Path]:
+        cached = folder_media_cache.get(folder)
+        if cached is None:
+            cached = _iter_folder_media_candidates(project, folder)
+            folder_media_cache[folder] = cached
+        return cached
+
+    def _stem_already_registered(path: Path | str) -> bool:
+        for stem_alias in _stem_legacy_asset_ids(path):
+            if stem_alias in result.by_id or (result.legacy_to_ids.get(stem_alias) or []):
+                return True
+        return False
 
     def _register(
         entry_id: str,
@@ -383,14 +444,24 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
     except Exception:  # noqa: BLE001
         pass
 
-    for folder in _catalog_folder_names(project):
+    if folder_names is None:
+        folders = _catalog_folder_names(project)
+    else:
+        folders = []
+        seen_folders: set[str] = set()
+        for raw in folder_names:
+            text = (raw or "").strip()
+            if text and text not in seen_folders:
+                seen_folders.add(text)
+                folders.append(text)
+
+    for folder in folders:
         inventory = load_folder_inventory(project, folder)
-        # load_folder_inventory liefert praktisch immer ein Objekt; Disk/Clean
-        # trotzdem immer nachindexieren (leere/verwaiste Inventar-Pfade).
         assets_iter: list[object] = (
             list(getattr(inventory, "assets", []) or []) if inventory is not None else []
         )
-        disk_fallback_paths = _iter_folder_media_candidates(project, folder)
+        registered_before = len(result.by_id)
+        missing_inventory_paths = 0
 
         for asset in assets_iter:
             raw_path = getattr(asset, "path", None) or getattr(asset, "source_path", None)
@@ -399,11 +470,13 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
             existing = str(getattr(asset, "asset_id", "") or "").strip()
             inventory_path = _resolve_local_path(project, raw_path)
             if not inventory_path.is_file():
+                missing_inventory_paths += 1
                 recovered = _recover_inventory_media_path(
                     project,
                     folder,
                     raw_path=raw_path,
                     asset_id=existing,
+                    candidates=_folder_candidates(folder),
                 )
                 if recovered is None:
                     continue
@@ -468,6 +541,8 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
                 usable_in=float(usable_in) if usable_in is not None else None,
                 media_type_hint=str(media_type or "video").lower(),
                 fps=fps,
+                known_duration=float(duration) if duration is not None else None,
+                probe_cache=probe_cache,
             )
             if duration is not None and entry["duration_seconds"] is None:
                 entry["duration_seconds"] = float(duration)
@@ -494,13 +569,25 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
                     alias_paths=alias_paths,
                 )
 
-        for media_path in disk_fallback_paths:
+        # Disk/Clean/Supplemental nur nachindexieren, wenn Inventar leer/lückenhaft
+        # ist — sonst kostet jeder Timing-Lauf unnötig ffprobe über alle Clips.
+        need_disk_fallback = (
+            not assets_iter
+            or missing_inventory_paths > 0
+            or len(result.by_id) == registered_before
+        )
+        if not need_disk_fallback:
+            continue
+
+        for media_path in _folder_candidates(folder):
             try:
                 if not media_path.is_file():
                     continue
             except OSError:
                 continue
             if is_http_url(str(media_path)):
+                continue
+            if _stem_already_registered(media_path):
                 continue
             path = media_path
             try:
@@ -513,30 +600,19 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
                 path = media_path
             if not path.is_file():
                 continue
+            if _stem_already_registered(path):
+                continue
             stem_legacy = (
                 _preferred_stem_legacy_id(media_path)
                 or _preferred_stem_legacy_id(path)
             )
-            # Schon über Inventory registriert?
-            already = False
-            if stem_legacy and (
-                stem_legacy in result.by_id
-                or (result.legacy_to_ids.get(stem_legacy) or [])
-            ):
-                already = True
-            for stem_alias in _stem_legacy_asset_ids(media_path):
-                if stem_alias in result.by_id or (
-                    result.legacy_to_ids.get(stem_alias) or []
-                ):
-                    already = True
-                    break
             canonical = canonicalize_inventory_asset_id(
                 project,
                 path=path,
                 folder_name=folder,
                 existing_id=stem_legacy,
             )
-            if already or canonical in result.by_id:
+            if canonical in result.by_id:
                 continue
             register_id = stem_legacy or canonical
             entry = _probe_entry(
@@ -549,6 +625,7 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
                     "photo" if is_image_media(path) else "video"
                 ),
                 fps=fps,
+                probe_cache=probe_cache,
             )
             entry["canonical_id"] = register_id
             _register(
@@ -589,6 +666,12 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
                 usable_in=None,
                 media_type_hint=media_type,
                 fps=fps,
+                known_duration=(
+                    float(refreshed.duration_seconds)
+                    if refreshed.duration_seconds is not None
+                    else None
+                ),
+                probe_cache=probe_cache,
             )
             entry["supplement"] = True
             entry["export_ready"] = True
@@ -613,6 +696,12 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
             usable_in=None,
             media_type_hint=(supplement.media_type or "photo").lower(),
             fps=fps,
+            known_duration=(
+                float(supplement.duration_seconds)
+                if supplement.duration_seconds is not None
+                else None
+            ),
+            probe_cache=probe_cache,
         )
         entry["supplement"] = True
         entry["export_ready"] = True

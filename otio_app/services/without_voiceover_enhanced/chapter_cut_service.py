@@ -452,6 +452,8 @@ def resolve_chapter_timeline(
             allow_open_gaps=True,
             persist=False,
             include_chapter=_include,
+            # Nur dieses Kapitel indexieren — sonst ffprobe über alle Ordner.
+            catalog_folders=[target],
         )
     except UnifiedTimelineError as exc:
         raise ChapterCutError(str(exc)) from exc

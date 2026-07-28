@@ -717,6 +717,31 @@ def test_catalog_includes_unselected_chapter_folder(tmp_path: Path) -> None:
     assert Path(entry["path"]).resolve() == original.resolve()
 
 
+def test_catalog_folder_names_scopes_index(tmp_path: Path) -> None:
+    """Kapitel-Timing darf nur den angefragten Ordner indexieren."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    caddo = "Caddo Lake"
+    (Path(project.project_root) / caddo).mkdir(parents=True)
+    project.asset_subdir_names = [caddo, "Castle Combe"]
+    project.selected_asset_subdirs = [caddo, "Castle Combe"]
+    caddo_media = Path(project.project_root) / caddo / "Caddo_Lake_Asset01.mp4"
+    castle = Path(project.project_root) / "Castle Combe" / "Castle_Asset01.mp4"
+    caddo_media.write_bytes(b"\x00" * 64)
+    castle.write_bytes(b"\x00" * 64)
+    _save_inventory(project, caddo, caddo_media)
+    _save_inventory(project, "Castle Combe", castle)
+    catalog = build_asset_catalog(project, fps=25.0, folder_names=[caddo])
+    ok, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset01")
+    assert err is None and ok is not None
+    missing, miss_err = lookup_catalog_entry(catalog, "asset_castle_asset01")
+    assert missing is None
+    assert miss_err and "Unbekannte Asset-ID" in miss_err
+
+
 def test_catalog_empty_asset_id_registers_stem_legacy(tmp_path: Path) -> None:
     """Kanonisches Inventar ohne asset_id → Slim/Cut-Plan-Stem-ID auflösbar."""
     from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
