@@ -55,12 +55,19 @@ def ensure_gap_placeholder_slate(
     fps: float,
     width: int = 1920,
     height: int = 1080,
+    color: str = "0x2b1d1d",
+    title: str = "PLACEHOLDER / OPEN GAP",
 ) -> Path:
-    """Rendert ein lesbares Gap-/Bridge-Slate unter ``_otio_enhanced/placeholders/``."""
+    """Rendert ein lesbares Gap-/Bridge-Slate unter ``_otio_enhanced/placeholders/``.
+
+    ``color``: ffmpeg lavfi color (z. B. ``0xCC0000`` für Shortfall-Rot).
+    """
     duration = max(0.04, float(end_seconds) - float(start_seconds))
     rate = max(1.0, float(fps) or 25.0)
     gap = (gap_id or f"gap_{shot_id}").strip() or f"gap_{shot_id}"
     visual = (needed_visual or "").strip() or "(keine needed_visual)"
+    color_key = str(color or "0x2b1d1d").strip() or "0x2b1d1d"
+    title_text = (title or "PLACEHOLDER / OPEN GAP").strip() or "PLACEHOLDER / OPEN GAP"
     key = _cache_key(
         shot_id,
         gap,
@@ -70,14 +77,16 @@ def ensure_gap_placeholder_slate(
         f"{duration:.3f}",
         f"{rate:.3f}",
         f"{width}x{height}",
-        "slate_v1",
+        color_key,
+        title_text,
+        "slate_v2",
     )
     out = placeholders_dir(project) / f"placeholder_{shot_id}_{key}.mp4"
     if out.is_file() and out.stat().st_size > 0:
         return out
 
     lines = [
-        "PLACEHOLDER / OPEN GAP",
+        title_text,
         f"slot: {shot_id}",
         f"gap: {gap}",
         f"t: {start_seconds:.2f}s – {end_seconds:.2f}s ({duration:.2f}s)",
@@ -108,7 +117,7 @@ def ensure_gap_placeholder_slate(
         "-f",
         "lavfi",
         "-i",
-        f"color=c=0x2b1d1d:s={width}x{height}:d={duration:.3f}:r={rate:.3f}",
+        f"color=c={color_key}:s={width}x{height}:d={duration:.3f}:r={rate:.3f}",
     ]
     if vf_parts:
         cmd.extend(["-vf", ",".join(vf_parts)])

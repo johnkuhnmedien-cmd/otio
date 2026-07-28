@@ -88,6 +88,67 @@ def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> 
     )
 
 
+def _shot_needs_manual_marker(shot: ResolvedShot) -> bool:
+    """Shortfall-Placeholder oder zu-kurz-Asset → Resolve-Marker."""
+    if bool(getattr(shot, "is_placeholder", False)) or bool(shot.open_gap):
+        return True
+    reason = str(getattr(shot, "asset_fit_reason", "") or "").lower()
+    if "zu kurz" in reason or "shortfall" in reason or "placeholder" in reason:
+        return True
+    shot_id = str(getattr(shot, "shot_id", "") or "")
+    return shot_id.endswith("__shortfall")
+
+
+def _attach_resolve_markers(
+    *,
+    clip: otio.schema.Clip,
+    video_track: otio.schema.Track,
+    shot: ResolvedShot,
+    fps: float,
+    source_duration: float,
+) -> None:
+    """Rote Marker an Clip + Track für manuelle Nacharbeit in DaVinci Resolve."""
+    if not _shot_needs_manual_marker(shot):
+        return
+    label = "SHORTFALL" if str(shot.shot_id).endswith("__shortfall") else "SHORT ASSET"
+    name = f"{label}: {shot.shot_id}"
+    if shot.coverage_gap_id:
+        name = f"{name} ({shot.coverage_gap_id})"
+    meta = {
+        "shot_id": shot.shot_id,
+        "asset_id": shot.asset_id or "",
+        "coverage_gap_id": shot.coverage_gap_id or "",
+        "asset_fit": shot.asset_fit or "",
+        "reason": shot.asset_fit_reason or "",
+        "placeholder": bool(shot.is_placeholder or shot.open_gap),
+    }
+    try:
+        color = otio.schema.MarkerColor.RED
+    except Exception:  # noqa: BLE001 — ältere OTIO-Varianten
+        color = "RED"
+    clip_marker = otio.schema.Marker(
+        name=name,
+        color=color,
+        marked_range=_time_range(max(0.04, source_duration), fps, start_sec=0.0),
+        metadata=meta,
+    )
+    clip.markers.append(clip_marker)
+    track_duration = max(
+        0.04, float(shot.timeline_end_seconds) - float(shot.timeline_start_seconds)
+    )
+    track_marker = otio.schema.Marker(
+        name=name,
+        color=color,
+        marked_range=_time_range(
+            track_duration,
+            fps,
+            start_sec=float(shot.timeline_start_seconds),
+        ),
+        metadata=meta,
+    )
+    video_track.markers.append(track_marker)
+
+
 def _assert_local_file(path: str, *, label: str) -> Path:
     text = str(path or "").strip()
     if not text:
@@ -814,6 +875,13 @@ def export_otio_from_resolved_timeline(
             clip.metadata["open_gap"] = True
         if bool(getattr(shot, "is_placeholder", False)) or shot.open_gap:
             clip.metadata["placeholder"] = True
+        _attach_resolve_markers(
+            clip=clip,
+            video_track=video_track,
+            shot=shot,
+            fps=fps,
+            source_duration=source_duration,
+        )
         video_track.append(clip)
         cursor = shot.timeline_end_seconds
 
@@ -1014,6 +1082,13 @@ def export_portable_otio_package(
             clip.metadata["open_gap"] = True
         if bool(getattr(shot, "is_placeholder", False)) or shot.open_gap:
             clip.metadata["placeholder"] = True
+        _attach_resolve_markers(
+            clip=clip,
+            video_track=video_track,
+            shot=shot,
+            fps=fps,
+            source_duration=source_duration,
+        )
         video_track.append(clip)
         pending_video.append((clip, media_path, shot.asset_id))
         cursor = shot.timeline_end_seconds

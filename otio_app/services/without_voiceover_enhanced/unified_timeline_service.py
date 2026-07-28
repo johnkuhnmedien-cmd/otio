@@ -848,6 +848,11 @@ def _placeholder_resolved_shot(
     coverage_gap_id: str | None = None,
     asset_fit: str | None = None,
     asset_fit_reason: str | None = None,
+    shot_id: str | None = None,
+    start_seconds: float | None = None,
+    end_seconds: float | None = None,
+    color: str = "0x2b1d1d",
+    title: str = "PLACEHOLDER / OPEN GAP",
 ) -> ResolvedShot:
     """Open-Gap-/Bridge-Shot mit ffmpeg-Slate (Preview); Produktion sperrt via Flag."""
     from otio_app.services.without_voiceover_enhanced.media_hold import (
@@ -855,7 +860,10 @@ def _placeholder_resolved_shot(
         ensure_gap_placeholder_slate,
     )
 
-    duration = max(TECH_MIN_SHOT_SECONDS, timed.duration_seconds)
+    t0 = float(timed.start_seconds if start_seconds is None else start_seconds)
+    t1 = float(timed.end_seconds if end_seconds is None else end_seconds)
+    duration = max(TECH_MIN_SHOT_SECONDS, t1 - t0)
+    resolved_shot_id = str(shot_id or timed.slot_id)
     if coverage_gap_id is not None:
         gap_meta = str(coverage_gap_id).strip() or None
     else:
@@ -865,24 +873,26 @@ def _placeholder_resolved_shot(
     try:
         slate = ensure_gap_placeholder_slate(
             project,
-            shot_id=timed.slot_id,
+            shot_id=resolved_shot_id,
             gap_id=str(gap_slate),
             needed_visual=needed,
-            start_seconds=float(timed.start_seconds),
-            end_seconds=float(timed.end_seconds),
+            start_seconds=t0,
+            end_seconds=t1,
             fps=float(fps),
+            color=color,
+            title=title,
         )
         media_path = str(slate)
     except MediaHoldError as exc:
         raise UnifiedTimelineError(
-            f"{timed.slot_id}: Placeholder-Slate fehlgeschlagen: {exc}"
+            f"{resolved_shot_id}: Placeholder-Slate fehlgeschlagen: {exc}"
         ) from exc
 
     return ResolvedShot(
-        shot_id=timed.slot_id,
+        shot_id=resolved_shot_id,
         asset_id=str(asset_id or timed.asset_id or ""),
-        timeline_start_seconds=timed.start_seconds,
-        timeline_end_seconds=timed.end_seconds,
+        timeline_start_seconds=t0,
+        timeline_end_seconds=t1,
         source_start_seconds=0.0,
         source_end_seconds=round(duration, 6),
         editorial_function=timed.narrative_function,
@@ -902,6 +912,142 @@ def _placeholder_resolved_shot(
         open_gap=True,
         is_placeholder=True,
     )
+
+
+def _short_asset_with_red_placeholder_tail(
+    project: Project,
+    timed: TimedSlot,
+    *,
+    entry: dict,
+    asset_id: str,
+    fps: float,
+    head_trim: float,
+    short_tolerance: float,
+    repairs: list[str],
+) -> list[ResolvedShot]:
+    """Zu kurzes Asset behalten + Restlücke als roter Placeholder.
+
+    Timeline: [Asset nutzbar][roter Shortfall-Placeholder].
+    """
+    usable = usable_media_duration_seconds(entry, head_trim=head_trim)
+    need = float(timed.duration_seconds)
+    rate = float(fps) if float(fps) > 0 else 25.0
+    gap_id = (timed.coverage_gap_id or "").strip() or f"gap_{timed.slot_id}"
+    reason = "Asset zu kurz für berechnete Narrationsdauer"
+
+    if usable is None or usable < TECH_MIN_SHOT_SECONDS:
+        return [
+            _placeholder_resolved_shot(
+                project,
+                timed,
+                fps=fps,
+                asset_id=asset_id,
+                coverage_gap_id=gap_id,
+                asset_fit="weak",
+                asset_fit_reason=reason,
+                color="0xCC0000",
+                title="SHORT ASSET / MANUAL FIX",
+            )
+        ]
+
+    usable_span = math.floor(float(usable) * rate + 1e-9) / rate
+    if usable_span < TECH_MIN_SHOT_SECONDS:
+        return [
+            _placeholder_resolved_shot(
+                project,
+                timed,
+                fps=fps,
+                asset_id=asset_id,
+                coverage_gap_id=gap_id,
+                asset_fit="weak",
+                asset_fit_reason=reason,
+                color="0xCC0000",
+                title="SHORT ASSET / MANUAL FIX",
+            )
+        ]
+
+    # Praktisch voll — kein sichtbarer Shortfall-Tail.
+    if usable_span + 1e-9 >= need:
+        head = _resolve_shot_media(
+            project,
+            shot_id=timed.slot_id,
+            asset_id=str(entry.get("canonical_id") or asset_id),
+            entry=entry,
+            timeline_start=timed.start_seconds,
+            timeline_end=timed.end_seconds,
+            fps=fps,
+            head_trim=head_trim,
+            short_tolerance=max(short_tolerance, need),
+            editorial_function=timed.narrative_function,
+            may_overlap_pause=False,
+            repairs=repairs,
+        )
+        head.asset_fit = timed.asset_fit
+        head.asset_fit_reason = timed.asset_fit_reason
+        head.cut_alignment = timed.cut_alignment
+        head.coverage_gap_id = timed.coverage_gap_id
+        head.open_gap = False
+        return [head]
+
+    asset_end = _seconds_to_frame(timed.start_seconds + usable_span, rate)
+    if asset_end <= timed.start_seconds + 1e-9:
+        return [
+            _placeholder_resolved_shot(
+                project,
+                timed,
+                fps=fps,
+                asset_id=asset_id,
+                coverage_gap_id=gap_id,
+                asset_fit="weak",
+                asset_fit_reason=reason,
+                color="0xCC0000",
+                title="SHORT ASSET / MANUAL FIX",
+            )
+        ]
+
+    head = _resolve_shot_media(
+        project,
+        shot_id=timed.slot_id,
+        asset_id=str(entry.get("canonical_id") or asset_id),
+        entry=entry,
+        timeline_start=timed.start_seconds,
+        timeline_end=asset_end,
+        fps=fps,
+        head_trim=head_trim,
+        short_tolerance=short_tolerance,
+        editorial_function=timed.narrative_function,
+        may_overlap_pause=False,
+        repairs=repairs,
+    )
+    head.asset_fit = timed.asset_fit or "weak"
+    head.asset_fit_reason = (
+        f"{reason} — nutzbar {usable_span:.2f}s von {need:.2f}s; "
+        "Rest als roter Placeholder."
+    )
+    head.cut_alignment = timed.cut_alignment
+    head.coverage_gap_id = gap_id
+    head.open_gap = False
+
+    shortfall = timed.end_seconds - asset_end
+    repairs.append(
+        f"{timed.slot_id}: Asset zu kurz — {usable_span:.2f}s Asset + "
+        f"{shortfall:.2f}s roter Placeholder (manuell verfeinern)."
+    )
+    tail = _placeholder_resolved_shot(
+        project,
+        timed,
+        fps=fps,
+        asset_id=asset_id,
+        coverage_gap_id=gap_id,
+        asset_fit="weak",
+        asset_fit_reason=reason,
+        shot_id=f"{timed.slot_id}__shortfall",
+        start_seconds=asset_end,
+        end_seconds=timed.end_seconds,
+        color="0xCC0000",
+        title="SHORTFALL / MANUAL FIX",
+    )
+    return [head, tail]
 
 
 def _mark_slot_as_duration_gap(
@@ -1122,8 +1268,8 @@ def resolve_unified_timeline(
         except TimelineResolveError as exc:
             msg = str(exc)
             is_short = "zu kurz" in msg.lower()
-            # Unified Preview: zu kurze strong/acceptable-Assets nicht hart
-            # verwerfen (das erzeugt Folgelücken), sondern als Gap markieren.
+            # Zu kurz: Asset behalten + roter Shortfall-Placeholder (statt
+            # komplettem Slate). Andere open-gap-Fälle: voller Placeholder.
             if allow_open_gaps and (
                 timed.asset_fit in {"weak", "none"} or is_short
             ):
@@ -1133,25 +1279,36 @@ def resolve_unified_timeline(
                         timed.slot_id,
                         reason="Asset zu kurz für berechnete Narrationsdauer",
                     )
-                resolved_shots.append(
-                    _placeholder_resolved_shot(
+                    short_parts = _short_asset_with_red_placeholder_tail(
                         project,
                         timed,
-                        fps=fps,
+                        entry=entry,
                         asset_id=asset_id,
-                        coverage_gap_id=timed.coverage_gap_id
-                        or f"gap_{timed.slot_id}",
-                        asset_fit="weak" if is_short else None,
-                        asset_fit_reason=(
-                            "Asset zu kurz für berechnete Narrationsdauer"
-                            if is_short
-                            else None
-                        ),
+                        fps=fps,
+                        head_trim=head_trim,
+                        short_tolerance=short_tolerance,
+                        repairs=repairs,
                     )
-                )
-                repairs.append(
-                    f"{timed.slot_id}: als Gap markiert — {msg}"
-                )
+                    for part in short_parts:
+                        if not part.folder_name:
+                            part.folder_name = start_chapter
+                    resolved_shots.extend(short_parts)
+                else:
+                    resolved_shots.append(
+                        _placeholder_resolved_shot(
+                            project,
+                            timed,
+                            fps=fps,
+                            asset_id=asset_id,
+                            coverage_gap_id=timed.coverage_gap_id
+                            or f"gap_{timed.slot_id}",
+                            asset_fit=None,
+                            asset_fit_reason=None,
+                        )
+                    )
+                    repairs.append(
+                        f"{timed.slot_id}: als Gap markiert — {msg}"
+                    )
                 continue
             errors.append(msg)
             continue

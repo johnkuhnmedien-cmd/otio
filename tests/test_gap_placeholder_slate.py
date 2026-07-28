@@ -10,6 +10,8 @@ from otio_app.services.without_voiceover_enhanced.media_hold import (
     ensure_gap_placeholder_slate,
 )
 from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+    _attach_resolve_markers,
+    _shot_needs_manual_marker,
     validate_resolved_timeline_for_production,
 )
 from otio_app.services.without_voiceover_enhanced.models import (
@@ -20,7 +22,10 @@ from otio_app.services.without_voiceover_enhanced.paths import placeholders_dir
 from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
     TimedSlot,
     _placeholder_resolved_shot,
+    _short_asset_with_red_placeholder_tail,
 )
+import opentimelineio as otio
+import pytest
 
 
 def _project(tmp_path: Path) -> Project:
@@ -88,6 +93,94 @@ def test_placeholder_resolved_shot_sets_path_and_flags(tmp_path: Path) -> None:
     assert shot.hold_mode == "placeholder_slate"
     assert shot.coverage_gap_id == "gap_bridge_001"
     assert Path(shot.resolved_media_path).is_file()
+
+
+def test_short_asset_keeps_media_and_red_placeholder_tail(tmp_path: Path) -> None:
+    """Zu kurz: nutzbares Asset + roter Shortfall-Placeholder statt Voll-Slate."""
+    project = _project(tmp_path)
+    media = tmp_path / "asset07.mp4"
+    media.write_bytes(b"fake-mp4")
+    timed = TimedSlot(
+        slot_id="The_Wave_slot_007",
+        start_seconds=10.0,
+        end_seconds=18.0,
+        start_boundary_id="b0",
+        end_boundary_id="b1",
+        cut_alignment="sentence_boundary",
+        asset_id="asset_the_wave_asset07",
+        asset_fit="strong",
+        asset_fit_reason="",
+        coverage_gap_id="gap_The_Wave_slot_007",
+        narrative_function="evidence",
+        source_range_intent="",
+        visual_intent="wave detail",
+        needed_visual="wave detail",
+    )
+    entry = {
+        "path": str(media),
+        "duration_seconds": 6.0,
+        "usable_in_s": 0.0,
+        "media_kind": "video",
+        "media_type": "video",
+        "available_start_seconds": 0.0,
+        "folder": "A",
+        "canonical_id": "asset_the_wave_asset07",
+    }
+    repairs: list[str] = []
+    parts = _short_asset_with_red_placeholder_tail(
+        project,
+        timed,
+        entry=entry,
+        asset_id="asset_the_wave_asset07",
+        fps=25.0,
+        head_trim=1.0,
+        short_tolerance=1.0,
+        repairs=repairs,
+    )
+    # usable = 6 - 1 = 5s → Asset 5s + Placeholder 3s
+    assert len(parts) == 2
+    head, tail = parts
+    assert head.is_placeholder is False
+    assert head.open_gap is False
+    assert head.resolved_media_path == str(media)
+    assert head.timeline_end_seconds - head.timeline_start_seconds == pytest.approx(5.0)
+    assert tail.is_placeholder is True
+    assert tail.shot_id.endswith("__shortfall")
+    assert Path(tail.resolved_media_path).is_file()
+    assert "CC0000" in Path(tail.resolved_media_path).name or Path(
+        tail.resolved_media_path
+    ).is_file()
+    assert head.timeline_end_seconds == pytest.approx(tail.timeline_start_seconds)
+    assert tail.timeline_end_seconds == pytest.approx(18.0)
+    assert any("roter Placeholder" in note for note in repairs)
+
+
+def test_resolve_markers_for_shortfall_shots() -> None:
+    shot = ResolvedShot(
+        shot_id="slot_x__shortfall",
+        asset_id="a",
+        timeline_start_seconds=5.0,
+        timeline_end_seconds=8.0,
+        source_start_seconds=0.0,
+        source_end_seconds=3.0,
+        is_placeholder=True,
+        open_gap=True,
+        coverage_gap_id="gap_x",
+        asset_fit_reason="Asset zu kurz",
+    )
+    assert _shot_needs_manual_marker(shot)
+    track = otio.schema.Track(name="Video", kind=otio.schema.TrackKind.Video)
+    clip = otio.schema.Clip(name=shot.shot_id)
+    _attach_resolve_markers(
+        clip=clip,
+        video_track=track,
+        shot=shot,
+        fps=25.0,
+        source_duration=3.0,
+    )
+    assert len(clip.markers) == 1
+    assert len(track.markers) == 1
+    assert "SHORTFALL" in clip.markers[0].name
 
 
 def test_production_gate_blocks_placeholder_even_with_path(tmp_path: Path) -> None:
