@@ -121,9 +121,19 @@ def chapter_resolved_matches_plan(
     plan: UnifiedCutPlanDocument | None,
     resolved: ResolvedTimelineDocument | None,
 ) -> bool:
+    """True wenn jedes Plan-Slot einen Parent-Shot hat.
+
+    ``__shortfall``-Tails zählen nicht extra — sonst wirken Kapitel mit
+    Dauer-Shortfall permanent „offen“ und fallen aus dem OTIO-Merge.
+    """
     if plan is None or resolved is None:
         return False
-    return len(resolved.shots) == len(plan.slots)
+    parent_shots = [
+        shot
+        for shot in resolved.shots
+        if not str(shot.shot_id or "").endswith("__shortfall")
+    ]
+    return len(parent_shots) == len(plan.slots)
 
 
 def invalidate_chapter_resolved_timeline(project: Project, folder_name: str) -> bool:
@@ -452,6 +462,8 @@ def resolve_chapter_timeline(
             allow_open_gaps=True,
             persist=False,
             include_chapter=_include,
+            # Nur dieses Kapitel indexieren — sonst ffprobe über alle Ordner.
+            catalog_folders=[target],
         )
     except UnifiedTimelineError as exc:
         raise ChapterCutError(str(exc)) from exc
@@ -755,12 +767,11 @@ def build_merged_resolved_timeline(
         if plan is None or not plan.slots:
             missing.append(f"{name} (kein Plan)")
             continue
+        # Kein stilles Python-Timing im OTIO-Merge — sonst dauert
+        # „Alle OTIO“ bei offenen Kapiteln wie ein voller Timing-Lauf.
         if resolved is None or not chapter_resolved_matches_plan(plan, resolved):
-            try:
-                resolved = resolve_chapter_timeline(project, name)
-            except ChapterCutError as exc:
-                missing.append(f"{name} ({exc})")
-                continue
+            missing.append(f"{name} (kein passendes Python-Timing)")
+            continue
         if resolved.shots or resolved.audio_segments:
             parts.append(resolved)
 

@@ -529,3 +529,92 @@ def test_gap_merge_fail_closed_open_none(tmp_path: Path) -> None:
         merge_export_ready_gaps_into_timeline(
             project, require_closed_none=True, persist=False
         )
+
+
+def test_gap_merge_shortfall_without_export_ready_is_repair_not_error(
+    tmp_path: Path,
+) -> None:
+    """Dauer-Shortfall ohne Supplement: Repair, kein „Kein geeigneter export_ready“-Fehler."""
+    project = _project(tmp_path)
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            gaps=[
+                CoverageGap(
+                    gap_id="gap_The_Wave_slot_007",
+                    related_shot_ids=["The_Wave_slot_007"],
+                    needed_visual="wave detail",
+                    target_duration_seconds=3.0,
+                    priority="medium",
+                )
+            ],
+        ),
+    )
+    write_json(
+        accepted_supplements_path(project),
+        AcceptedSupplementsDocument(script_version="script-v1", supplements=[]),
+    )
+    write_json(
+        resolved_timeline_path(project),
+        ResolvedTimelineDocument(
+            script_version="script-v1",
+            fps=25.0,
+            total_duration_seconds=18.0,
+            shots=[
+                ResolvedShot(
+                    shot_id="The_Wave_slot_007",
+                    asset_id="asset_the_wave_asset07",
+                    timeline_start_seconds=10.0,
+                    timeline_end_seconds=15.0,
+                    source_start_seconds=0.0,
+                    source_end_seconds=5.0,
+                    asset_fit="weak",
+                    coverage_gap_id=None,
+                    open_gap=False,
+                    resolved_media_path="/tmp/wave.mp4",
+                    resolved_media_kind="video",
+                ),
+                ResolvedShot(
+                    shot_id="The_Wave_slot_007__shortfall",
+                    asset_id="asset_the_wave_asset07",
+                    timeline_start_seconds=15.0,
+                    timeline_end_seconds=18.0,
+                    source_start_seconds=0.0,
+                    source_end_seconds=3.0,
+                    asset_fit="weak",
+                    coverage_gap_id="gap_The_Wave_slot_007",
+                    open_gap=True,
+                    is_placeholder=True,
+                    resolved_media_path="/tmp/shortfall.mp4",
+                    resolved_media_kind="video",
+                ),
+            ],
+            repairs=[
+                "The_Wave_slot_007: Asset zu kurz — 5.00s Asset + "
+                "3.00s roter Placeholder (manuell verfeinern)."
+            ],
+        ),
+    )
+
+    from otio_app.services.without_voiceover_enhanced import gap_merge_service as gms
+
+    original_list = gms.list_export_ready_supplements
+    gms.list_export_ready_supplements = lambda _p: []  # type: ignore[assignment]
+    try:
+        merged, report = merge_export_ready_gaps_into_timeline(
+            project, require_closed_none=False, persist=False
+        )
+    finally:
+        gms.list_export_ready_supplements = original_list  # type: ignore[assignment]
+
+    assert report.errors == []
+    assert not any("export_ready" in (e or "") for e in report.errors)
+    assert any(
+        "Shortfall offen" in note and "export_ready" in note
+        for note in (merged.repairs or [])
+    )
+    assert [s.shot_id for s in merged.shots] == [
+        "The_Wave_slot_007",
+        "The_Wave_slot_007__shortfall",
+    ]

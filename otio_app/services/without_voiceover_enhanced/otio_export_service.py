@@ -66,6 +66,35 @@ class EnhancedOtioExportError(RuntimeError):
     pass
 
 
+# PTS-Jitter liegt typisch unter 0.2s; Kamera-SMPTE-TC beginnt oft bei ≥1s
+# (häufig Stunden). Darüber: Clean mit -timecode 00:00:00:00 erzwingen.
+_CAMERA_TC_THRESHOLD_SEC = 1.0
+
+# Pfad+mtime+size → (avail_start, duration, rate) — doppeltes ffprobe vermeiden.
+_VIDEO_PROBE_CACHE: dict[str, tuple[float, float, float]] = {}
+
+
+def _cache_key_for_path(path: Path) -> str:
+    try:
+        resolved = path.expanduser().resolve()
+        stat = resolved.stat()
+        return f"{resolved}|{stat.st_mtime_ns}|{stat.st_size}"
+    except OSError:
+        return str(path)
+
+
+def _catalog_folders_for_resolved(resolved: ResolvedTimelineDocument) -> list[str]:
+    """Nur Ordner der Timeline-Shots — kein Full-Project-ffprobe beim Export."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for shot in resolved.shots or []:
+        folder = str(getattr(shot, "folder_name", "") or "").strip()
+        if folder and folder not in seen:
+            seen.add(folder)
+            names.append(folder)
+    return names
+
+
 def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> otio.opentime.TimeRange:
     """Sekunden → OTIO-TimeRange auf **ganzzahligen** Frames (Resolve-sicher).
 
@@ -165,6 +194,11 @@ def _assert_local_file(path: str, *, label: str) -> Path:
 
 def _validate_video_file(path: Path, *, label: str, fps: float) -> tuple[float, float, float]:
     """Returns (available_start, duration, rate)."""
+    cache_key = _cache_key_for_path(path)
+    cached = _VIDEO_PROBE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     timing = probe_media_timing(path, default_rate=fps)
     duration = timing.duration_sec
     if duration is None:
@@ -213,7 +247,13 @@ def _validate_video_file(path: Path, *, label: str, fps: float) -> tuple[float, 
         raise EnhancedOtioExportError(
             f"{label}: Videoprüfung fehlgeschlagen ({exc}) · {path}"
         ) from exc
-    return float(timing.start_sec or 0.0), float(duration), float(timing.rate or fps)
+    result_tuple = (
+        float(timing.start_sec or 0.0),
+        float(duration),
+        float(timing.rate or fps),
+    )
+    _VIDEO_PROBE_CACHE[cache_key] = result_tuple
+    return result_tuple
 
 
 def _is_still_hold_shot(shot: ResolvedShot, path: Path) -> bool:
@@ -295,7 +335,13 @@ def _ensure_shot_media_for_export(
     fps: float,
     catalog: AssetCatalog | None = None,
 ) -> tuple[Path, float, float, float, float]:
-    """Validiert Shot-Medien; liefert path, avail_start, source_start, source_end, rate."""
+    """Validiert Shot-Medien.
+
+    Liefert ``path, avail_start, source_start, source_end, rate``.
+
+    Führendes Schwarz gehört in Clean Media (``_trim_tiny_leading_black``),
+    nicht in den OTIO-Export.
+    """
     label = f"{shot.shot_id} / {shot.asset_id}"
     if not (shot.resolved_media_path or "").strip():
         raise EnhancedOtioExportError(
@@ -350,7 +396,22 @@ def _ensure_shot_media_for_export(
             f"{label}: Medientyp weder Video noch Bild · {path}"
         )
 
-    avail_start, media_dur, rate = _validate_video_file(path, label=label, fps=fps)
+    folder = str(shot.folder_name or "").strip()
+    # Vorhandenes Clean bevorzugen (TC bereits 00:00:00:00).
+    if folder:
+        try:
+            from otio_app.services.clean_media import (
+                path_is_readable_file,
+                resolve_effective_media_path,
+            )
+
+            preferred = resolve_effective_media_path(project, folder, path)
+            if path_is_readable_file(preferred):
+                path = preferred.resolve()
+        except Exception:  # noqa: BLE001
+            pass
+
+    probe_avail, media_dur, rate = _validate_video_file(path, label=label, fps=fps)
     source_start = float(shot.source_start_seconds)
     source_end = float(shot.source_end_seconds)
     if source_end <= source_start:
@@ -359,24 +420,37 @@ def _ensure_shot_media_for_export(
             f"({source_start}) sein."
         )
     source_span = source_end - source_start
-    # Content-Offset relativ zur beim Resolve gespeicherten Available-Start
-    # beibehalten, wenn die Datei einen anderen Embedded-TC/PTS-Start hat.
-    # (Früher: source auf avail_start schieben → Head-Trim/Offset verloren.)
     shot_avail = float(getattr(shot, "resolved_available_start_seconds", 0.0) or 0.0)
     content_offset = max(0.0, source_start - shot_avail)
-    if abs(avail_start - shot_avail) > 1e-6:
-        source_start = avail_start + content_offset
+
+    # Kein force_transcode im OTIO-Export — Clean gehört in Clean Media.
+    # Vorhandenes Clean wird oben bevorzugt; sonst Embedded-TC-Fallback.
+
+    if probe_avail <= _CAMERA_TC_THRESHOLD_SEC:
+        # Clean / kein Kamera-TC: Resolve-sicher file-relativ ab 0.
+        avail_start = 0.0
+        source_start = content_offset
+        source_end = content_offset + source_span
+        if source_end > media_dur + 1e-3:
+            raise EnhancedOtioExportError(
+                f"{label}: Source-Range außerhalb der Mediendauer "
+                f"(file-relative {source_start:.3f}–{source_end:.3f}, "
+                f"duration {media_dur:.3f}) · {path}"
+            )
+    else:
+        # Fallback: Clean fehlgeschlagen — OTIO im Embedded-TC-Raum belassen,
+        # damit Resolve Datei-TC und Clip-TC überlappen können.
+        avail_start = probe_avail
+        source_start = probe_avail + content_offset
         source_end = source_start + source_span
-    elif source_start + 1e-6 < avail_start:
-        source_start = avail_start + content_offset
-        source_end = source_start + source_span
-    avail_end = avail_start + media_dur
-    if source_start < avail_start - 1e-6 or source_end > avail_end + 1e-6:
-        raise EnhancedOtioExportError(
-            f"{label}: Source-Range außerhalb der realen verfügbaren Range "
-            f"(source {source_start:.3f}–{source_end:.3f}, "
-            f"available {avail_start:.3f}–{avail_end:.3f}) · {path}"
-        )
+        avail_end = probe_avail + media_dur
+        if source_start < probe_avail - 1e-6 or source_end > avail_end + 1e-6:
+            raise EnhancedOtioExportError(
+                f"{label}: Source-Range außerhalb der realen verfügbaren Range "
+                f"(source {source_start:.3f}–{source_end:.3f}, "
+                f"available {probe_avail:.3f}–{avail_end:.3f}) · {path}"
+            )
+
     return path, avail_start, source_start, source_end, rate
 
 
@@ -532,7 +606,11 @@ def validate_resolved_timeline_for_production(
                 f"{curr.shot_id} ({curr.asset_id})."
             )
 
-    catalog = build_asset_catalog(project, fps=fps)
+    catalog = build_asset_catalog(
+        project,
+        fps=fps,
+        folder_names=_catalog_folders_for_resolved(resolved) or None,
+    )
     for shot in resolved.shots:
         if bool(getattr(shot, "is_placeholder", False)) or bool(shot.open_gap):
             errors.append(
@@ -804,7 +882,12 @@ def export_otio_from_resolved_timeline(
     )
     video_track = otio.schema.Track(name="Video", kind=otio.schema.TrackKind.Video)
     audio_track = otio.schema.Track(name="Narration", kind=otio.schema.TrackKind.Audio)
-    catalog = build_asset_catalog(project, fps=fps)
+    catalog_folders = _catalog_folders_for_resolved(resolved)
+    catalog = build_asset_catalog(
+        project,
+        fps=fps,
+        folder_names=catalog_folders or None,
+    )
 
     from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
         _resolved_shot_sort_key,
@@ -835,25 +918,14 @@ def export_otio_from_resolved_timeline(
             continue
 
         source_duration = source_end - source_start
-        avail_duration = max(
-            source_duration,
-            float(shot.resolved_media_duration_seconds or source_duration),
-        )
-        # available_range muss die Source enthalten.
-        media_ref = otio.schema.ExternalReference(
-            target_url=str(media_path),
-            available_range=_time_range(
-                avail_duration, rate, start_sec=avail_start
-            ),
-        )
-        # Re-probe for accurate available_range on real file.
-        file_avail_start, file_dur, file_rate = _validate_video_file(
+        # Probe-Cache: _ensure_shot_media_for_export hat dieselbe Datei schon gelesen.
+        _file_avail_start, file_dur, file_rate = _validate_video_file(
             media_path, label=f"{shot.shot_id}", fps=fps
         )
         media_ref = otio.schema.ExternalReference(
             target_url=str(media_path),
             available_range=_time_range(
-                file_dur, file_rate, start_sec=file_avail_start
+                file_dur, file_rate, start_sec=float(avail_start)
             ),
         )
         clip = otio.schema.Clip(
@@ -865,6 +937,8 @@ def export_otio_from_resolved_timeline(
         )
         clip.metadata["asset_id"] = shot.asset_id
         clip.metadata["resolved_media_path"] = str(media_path)
+        if _file_avail_start > 1e-3:
+            clip.metadata["embedded_available_start_seconds"] = float(_file_avail_start)
         if shot.hold_mode:
             clip.metadata["hold_mode"] = shot.hold_mode
         if shot.asset_fit:
@@ -1036,7 +1110,11 @@ def export_portable_otio_package(
     # Clip → original media path for rewrite after staging
     pending_video: list[tuple[otio.schema.Clip, Path, str]] = []
     pending_audio: list[tuple[otio.schema.Clip, Path, str]] = []
-    catalog = build_asset_catalog(project, fps=fps)
+    catalog = build_asset_catalog(
+        project,
+        fps=fps,
+        folder_names=_catalog_folders_for_resolved(resolved) or None,
+    )
 
     cursor = 0.0
     from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
@@ -1053,18 +1131,18 @@ def export_portable_otio_package(
             )
         )
         source_duration = source_end - source_start
-        file_avail_start, file_dur, file_rate = _validate_video_file(
+        _file_avail_start, file_dur, file_rate = _validate_video_file(
             media_path, label=f"{shot.shot_id}", fps=fps
         )
         kind = "still_hold" if (shot.hold_mode or "").startswith(
             ("freeze_video", "still_hold")
         ) or "hold_cache" in media_path.parts else "video"
         stage_items.append((media_path, shot.asset_id, kind))
-        # Placeholder URL — nach Staging umgeschrieben
+        # Placeholder URL — nach Staging umgeschrieben; Ranges file-relativ.
         media_ref = otio.schema.ExternalReference(
             target_url=str(media_path),
             available_range=_time_range(
-                file_dur, file_rate, start_sec=file_avail_start
+                file_dur, file_rate, start_sec=float(avail_start)
             ),
         )
         clip = otio.schema.Clip(
@@ -1076,6 +1154,8 @@ def export_portable_otio_package(
         )
         clip.metadata["asset_id"] = shot.asset_id
         clip.metadata["original_media_path"] = str(media_path)
+        if _file_avail_start > 1e-3:
+            clip.metadata["embedded_available_start_seconds"] = float(_file_avail_start)
         if shot.hold_mode:
             clip.metadata["hold_mode"] = shot.hold_mode
         if shot.asset_fit:

@@ -372,6 +372,395 @@ def test_embedded_timecode_nonzero(tmp_path: Path) -> None:
         avail.start_time.to_seconds() + avail.duration.to_seconds() + 0.05
     )
     assert shot.source_start_seconds >= shot.resolved_available_start_seconds - 1e-6
+    # Resolve-sicher: OTIO Ranges file-relativ (nicht Kamera-TC ~3600s).
+    assert avail.start_time.to_seconds() == pytest.approx(0.0, abs=0.05)
+    assert src.start_time.to_seconds() < 60.0
+    content_offset = shot.source_start_seconds - shot.resolved_available_start_seconds
+    assert src.start_time.to_seconds() == pytest.approx(max(0.0, content_offset), abs=0.08)
+
+
+def test_otio_export_prefers_existing_clean_for_camera_timecode(
+    tmp_path: Path,
+) -> None:
+    """Vorhandenes Clean nutzen — kein force_transcode im OTIO-Export."""
+    from unittest.mock import patch
+
+    from otio_app.services.without_voiceover_enhanced.models import ResolvedShot
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        _ensure_shot_media_for_export,
+    )
+
+    project = _project(tmp_path)
+    folder = "Castle Combe"
+    video = Path(project.project_root) / folder / "Asset14.mp4"
+    video.write_bytes(b"fake-mp4")
+    clean = project.work_dir_path / "clean" / "Castle_Combe" / "Asset14_clean.mp4"
+    clean.parent.mkdir(parents=True)
+    clean.write_bytes(b"\x00" * 64)
+    shot = ResolvedShot(
+        shot_id="Bisti_slot_005",
+        asset_id="asset__bisti__asset14",
+        timeline_start_seconds=34.88,
+        timeline_end_seconds=41.92,
+        source_start_seconds=25377.337,
+        source_end_seconds=25384.377,
+        resolved_media_path=str(video),
+        resolved_media_kind="video",
+        resolved_media_duration_seconds=16.02,
+        resolved_available_start_seconds=25372.347,
+        folder_name=folder,
+    )
+
+    def _validate(path: Path, *, label: str, fps: float):
+        text = str(path).replace("\\", "/")
+        if "/clean/" in text:
+            return 0.0, 16.02, 29.97
+        return 25372.347, 16.02, 29.97
+
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.otio_export_service._validate_video_file",
+            side_effect=_validate,
+        ),
+        patch(
+            "otio_app.services.clean_media.resolve_effective_media_path",
+            return_value=clean.resolve(),
+        ),
+        patch(
+            "otio_app.services.clean_media.process_media_file",
+        ) as process_mock,
+        patch(
+            "otio_app.services.clean_media.path_is_readable_file",
+            side_effect=lambda p: Path(p).is_file(),
+        ),
+    ):
+        path, avail, src0, src1, rate = _ensure_shot_media_for_export(
+            project, shot, fps=25.0
+        )
+    process_mock.assert_not_called()
+    assert path == clean.resolve()
+    assert avail == 0.0
+    assert src0 == pytest.approx(4.99, abs=0.01)
+    assert src1 == pytest.approx(12.03, abs=0.01)
+    assert rate == pytest.approx(29.97, abs=0.01)
+
+
+def test_otio_export_keeps_embedded_tc_when_clean_fails(tmp_path: Path) -> None:
+    """Ohne Clean: OTIO im Kamera-TC-Raum belassen (Resolve-Overlap)."""
+    from unittest.mock import MagicMock, patch
+
+    from otio_app.services.without_voiceover_enhanced.models import ResolvedShot
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        _ensure_shot_media_for_export,
+    )
+
+    project = _project(tmp_path)
+    folder = "Castle Combe"
+    video = Path(project.project_root) / folder / "Asset07.mp4"
+    video.write_bytes(b"fake-mp4")
+    shot = ResolvedShot(
+        shot_id="Bisti_slot_012",
+        asset_id="asset07",
+        timeline_start_seconds=84.4,
+        timeline_end_seconds=91.68,
+        source_start_seconds=3602.964166,
+        source_end_seconds=3610.244167,
+        resolved_media_path=str(video),
+        resolved_media_kind="video",
+        resolved_media_duration_seconds=12.208333,
+        resolved_available_start_seconds=3600.0,
+        folder_name=folder,
+    )
+    entry = MagicMock()
+    entry.status = "failed"
+    entry.clean_path = None
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.otio_export_service._validate_video_file",
+            return_value=(3600.0, 12.208333, 25.0),
+        ),
+        patch(
+            "otio_app.services.clean_media.resolve_effective_media_path",
+            return_value=video.resolve(),
+        ),
+        patch(
+            "otio_app.services.clean_media.process_media_file",
+            return_value=entry,
+        ),
+        patch(
+            "otio_app.services.clean_media.path_is_readable_file",
+            side_effect=lambda p: Path(p).is_file(),
+        ),
+    ):
+        path, avail, src0, src1, _rate = _ensure_shot_media_for_export(
+            project, shot, fps=25.0
+        )
+    assert path == video.resolve()
+    assert avail == pytest.approx(3600.0)
+    assert src0 == pytest.approx(3602.964166, abs=0.01)
+    assert src1 == pytest.approx(3610.244167, abs=0.01)
+
+
+def test_catalog_prefers_clean_over_original_inventory_path(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    folder = "Castle Combe"
+    original = Path(project.project_root) / folder / "Castle_Asset04.mp4"
+    original.write_bytes(b"\x00" * 64)
+    clean = (
+        project.work_dir_path
+        / "clean"
+        / folder
+        / "Castle_Asset04_3840x2160.mp4"
+    )
+    clean.parent.mkdir(parents=True)
+    clean.write_bytes(b"\x00" * 128)
+    _save_inventory(project, folder, original)
+    catalog = build_asset_catalog(project, fps=25.0)
+    assert catalog.by_id
+    entry = next(iter(catalog.by_id.values()))
+    assert "clean" in entry["path"].replace("\\", "/")
+    assert Path(entry["path"]).name.startswith("Castle_Asset04")
+
+
+def test_catalog_legacy_id_matches_clean_with_resolution_suffix(tmp_path: Path) -> None:
+    """Cut-Plan ``asset_caddo_lake_asset10`` muss Clean ``…_3840x2160`` finden."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Caddo Lake"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    original = Path(project.project_root) / folder / "Caddo_Lake_Asset10.mp4"
+    original.write_bytes(b"\x00" * 64)
+    clean = (
+        project.work_dir_path
+        / "clean"
+        / "Caddo_Lake"
+        / "Caddo_Lake_Asset10_3840x2160.mp4"
+    )
+    clean.parent.mkdir(parents=True)
+    clean.write_bytes(b"\x00" * 128)
+    _save_inventory(project, folder, original)
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset10")
+    assert err is None
+    assert entry is not None
+    assert "clean" in entry["path"].replace("\\", "/")
+    assert Path(entry["path"]).name.endswith("_3840x2160.mp4")
+
+
+def test_catalog_keeps_original_when_clean_missing(tmp_path: Path) -> None:
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Caddo Lake"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    original = Path(project.project_root) / folder / "Caddo_Lake_Asset02.mp4"
+    original.write_bytes(b"\x00" * 64)
+    _save_inventory(project, folder, original)
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset02")
+    assert err is None
+    assert entry is not None
+    assert Path(entry["path"]).resolve() == original.resolve()
+
+
+def test_catalog_recovers_when_inventory_points_to_missing_clean(tmp_path: Path) -> None:
+    """Kanonisches Inventar zeigt auf fehlendes Clean → Original per Stem finden."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Caddo Lake"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    original = Path(project.project_root) / folder / "Caddo_Lake_Asset10.mp4"
+    original.write_bytes(b"\x00" * 64)
+    missing_clean = (
+        project.work_dir_path
+        / "clean"
+        / "Caddo_Lake"
+        / "Caddo_Lake_Asset10_3840x2160.mp4"
+    )
+    # Inventar verweist auf Clean-Pfad, Datei existiert nicht.
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, folder),
+        AssetFolderAnalysis(
+            folder=folder,
+            assets=[
+                AssetMediaAnalysis(
+                    path=str(missing_clean),
+                    description="lake",
+                    asset_id="asset_caddo_lake_asset10",
+                    media_type="video",
+                )
+            ],
+            media_files=[missing_clean.name],
+        ),
+    )
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset10")
+    assert err is None
+    assert entry is not None
+    assert Path(entry["path"]).resolve() == original.resolve()
+
+
+def test_catalog_indexes_disk_when_canonical_inventory_missing(tmp_path: Path) -> None:
+    """Nur Slim / kein Caddo_Lake.json → trotzdem Legacy-IDs aus Ordner-Medien."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Caddo Lake"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    original = Path(project.project_root) / folder / "Caddo_Lake_Asset08.mp4"
+    original.write_bytes(b"\x00" * 64)
+    # Kein inventory/Caddo_Lake.json
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset08")
+    assert err is None
+    assert entry is not None
+    assert Path(entry["path"]).resolve() == original.resolve()
+
+
+def test_catalog_includes_unselected_chapter_folder(tmp_path: Path) -> None:
+    """Kapitel außerhalb selected_asset_subdirs muss trotzdem im Katalog sein."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Caddo Lake"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder, "Castle Combe"]
+    project.selected_asset_subdirs = ["Castle Combe"]
+    original = Path(project.project_root) / folder / "Caddo_Lake_Asset10.mp4"
+    original.write_bytes(b"\x00" * 64)
+    _save_inventory(project, folder, original)
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset10")
+    assert err is None
+    assert entry is not None
+    assert Path(entry["path"]).resolve() == original.resolve()
+
+
+def test_catalog_folder_names_scopes_index(tmp_path: Path) -> None:
+    """Kapitel-Timing darf nur den angefragten Ordner indexieren."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    caddo = "Caddo Lake"
+    (Path(project.project_root) / caddo).mkdir(parents=True)
+    project.asset_subdir_names = [caddo, "Castle Combe"]
+    project.selected_asset_subdirs = [caddo, "Castle Combe"]
+    caddo_media = Path(project.project_root) / caddo / "Caddo_Lake_Asset01.mp4"
+    castle = Path(project.project_root) / "Castle Combe" / "Castle_Asset01.mp4"
+    caddo_media.write_bytes(b"\x00" * 64)
+    castle.write_bytes(b"\x00" * 64)
+    _save_inventory(project, caddo, caddo_media)
+    _save_inventory(project, "Castle Combe", castle)
+    catalog = build_asset_catalog(project, fps=25.0, folder_names=[caddo])
+    ok, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset01")
+    assert err is None and ok is not None
+    missing, miss_err = lookup_catalog_entry(catalog, "asset_castle_asset01")
+    assert missing is None
+    assert miss_err and "Unbekannte Asset-ID" in miss_err
+
+
+def test_catalog_empty_asset_id_registers_stem_legacy(tmp_path: Path) -> None:
+    """Kanonisches Inventar ohne asset_id → Slim/Cut-Plan-Stem-ID auflösbar."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Caddo Lake"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    original = Path(project.project_root) / folder / "Caddo_Lake_Asset02.mp4"
+    original.write_bytes(b"\x00" * 64)
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, folder),
+        AssetFolderAnalysis(
+            folder=folder,
+            assets=[
+                AssetMediaAnalysis(
+                    path=str(original),
+                    description="lake",
+                    asset_id="",
+                    media_type="video",
+                )
+            ],
+            media_files=[str(original)],
+        ),
+    )
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset02")
+    assert err is None
+    assert entry is not None
+    assert "asset_caddo_lake_asset02" in catalog.by_id or (
+        catalog.legacy_to_ids.get("asset_caddo_lake_asset02")
+    )
+
+
+def test_catalog_indexes_clean_when_inventory_paths_missing(tmp_path: Path) -> None:
+    """Inventar zeigt auf fehlende Clean-Namen; echte Clean-Dateien trotzdem indexieren."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Caddo Lake"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    missing = (
+        project.work_dir_path / "clean" / "Caddo_Lake" / "Caddo_Lake_Asset14.mp4"
+    )
+    clean = (
+        project.work_dir_path
+        / "clean"
+        / "Caddo_Lake"
+        / "Caddo_Lake_Asset14_3840x2160.mp4"
+    )
+    clean.parent.mkdir(parents=True)
+    clean.write_bytes(b"\x00" * 128)
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, folder),
+        AssetFolderAnalysis(
+            folder=folder,
+            assets=[
+                AssetMediaAnalysis(
+                    path=str(missing),
+                    description="lake",
+                    asset_id="",
+                    media_type="video",
+                )
+            ],
+            # media_files leer / ohne Top-Level → discover oft leer
+            media_files=[],
+        ),
+    )
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset14")
+    assert err is None
+    assert entry is not None
+    assert Path(entry["path"]).resolve() == clean.resolve()
 
 
 def test_still_jpeg_and_png_hold(tmp_path: Path) -> None:

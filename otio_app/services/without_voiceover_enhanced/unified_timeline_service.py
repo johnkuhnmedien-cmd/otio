@@ -1026,7 +1026,9 @@ def _short_asset_with_red_placeholder_tail(
         "Rest als roter Placeholder."
     )
     head.cut_alignment = timed.cut_alignment
-    head.coverage_gap_id = gap_id
+    # Gap nur am Shortfall-Tail — sonst meldet Gap-Merge am Asset-Kopf fälschlich
+    # „Kein geeigneter export_ready-Kandidat“ (Funnel bleibt über Plan/Tail).
+    head.coverage_gap_id = None
     head.open_gap = False
 
     shortfall = timed.end_seconds - asset_end
@@ -1081,6 +1083,7 @@ def resolve_unified_timeline(
     include_chapter: Callable[[str], bool] | None = None,
     preroll_override: float | None = None,
     postroll_override: float | None = None,
+    catalog_folders: list[str] | None = None,
 ) -> ResolvedTimelineDocument:
     """UnifiedCutPlan → ResolvedTimelineDocument (+ Kompat-Schatten).
 
@@ -1089,6 +1092,8 @@ def resolve_unified_timeline(
 
     ``include_chapter`` / ``preroll_override`` / ``postroll_override``:
     Intro-only Resolve ohne Gesamt-Timeline zu schreiben.
+
+    ``catalog_folders``: Asset-Katalog nur für diese Ordner bauen (Kapitel-Timing).
     """
     locked = require_locked_script(project)
     if plan is None:
@@ -1104,7 +1109,11 @@ def resolve_unified_timeline(
     repairs: list[str] = []
     fps = float(project.fps)
     options = load_cut_plan_options(project)
-    catalog = build_asset_catalog(project, fps=fps)
+    catalog = build_asset_catalog(
+        project,
+        fps=fps,
+        folder_names=catalog_folders,
+    )
     errors.extend(catalog.collisions)
 
     sentence_index = sentence_index_by_id(load_segment_alignments(project))
