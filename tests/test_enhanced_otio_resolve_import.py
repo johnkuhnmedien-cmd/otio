@@ -633,6 +633,69 @@ def test_catalog_keeps_original_when_clean_missing(tmp_path: Path) -> None:
     assert Path(entry["path"]).resolve() == original.resolve()
 
 
+def test_catalog_recovers_when_inventory_points_to_missing_clean(tmp_path: Path) -> None:
+    """Kanonisches Inventar zeigt auf fehlendes Clean → Original per Stem finden."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Caddo Lake"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    original = Path(project.project_root) / folder / "Caddo_Lake_Asset10.mp4"
+    original.write_bytes(b"\x00" * 64)
+    missing_clean = (
+        project.work_dir_path
+        / "clean"
+        / "Caddo_Lake"
+        / "Caddo_Lake_Asset10_3840x2160.mp4"
+    )
+    # Inventar verweist auf Clean-Pfad, Datei existiert nicht.
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, folder),
+        AssetFolderAnalysis(
+            folder=folder,
+            assets=[
+                AssetMediaAnalysis(
+                    path=str(missing_clean),
+                    description="lake",
+                    asset_id="asset_caddo_lake_asset10",
+                    media_type="video",
+                )
+            ],
+            media_files=[missing_clean.name],
+        ),
+    )
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset10")
+    assert err is None
+    assert entry is not None
+    assert Path(entry["path"]).resolve() == original.resolve()
+
+
+def test_catalog_indexes_disk_when_canonical_inventory_missing(tmp_path: Path) -> None:
+    """Nur Slim / kein Caddo_Lake.json → trotzdem Legacy-IDs aus Ordner-Medien."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Caddo Lake"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    original = Path(project.project_root) / folder / "Caddo_Lake_Asset08.mp4"
+    original.write_bytes(b"\x00" * 64)
+    # Kein inventory/Caddo_Lake.json
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset08")
+    assert err is None
+    assert entry is not None
+    assert Path(entry["path"]).resolve() == original.resolve()
+
+
 def test_still_jpeg_and_png_hold(tmp_path: Path) -> None:
     project = _project(tmp_path)
     jpg = Path(project.project_root) / "Castle Combe" / "still_test.jpg"
