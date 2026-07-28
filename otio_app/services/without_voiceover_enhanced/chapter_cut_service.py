@@ -757,12 +757,11 @@ def build_merged_resolved_timeline(
         if plan is None or not plan.slots:
             missing.append(f"{name} (kein Plan)")
             continue
+        # Kein stilles Python-Timing im OTIO-Merge — sonst dauert
+        # „Alle OTIO“ bei offenen Kapiteln wie ein voller Timing-Lauf.
         if resolved is None or not chapter_resolved_matches_plan(plan, resolved):
-            try:
-                resolved = resolve_chapter_timeline(project, name)
-            except ChapterCutError as exc:
-                missing.append(f"{name} ({exc})")
-                continue
+            missing.append(f"{name} (kein passendes Python-Timing)")
+            continue
         if resolved.shots or resolved.audio_segments:
             parts.append(resolved)
 

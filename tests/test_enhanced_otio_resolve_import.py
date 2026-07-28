@@ -379,11 +379,12 @@ def test_embedded_timecode_nonzero(tmp_path: Path) -> None:
     assert src.start_time.to_seconds() == pytest.approx(max(0.0, content_offset), abs=0.08)
 
 
-def test_otio_export_forces_clean_for_camera_timecode(tmp_path: Path) -> None:
-    """Kamera-TC-Originale → Clean erzwingen, dann file-relativ exportieren."""
-    from unittest.mock import MagicMock, patch
+def test_otio_export_prefers_existing_clean_for_camera_timecode(
+    tmp_path: Path,
+) -> None:
+    """Vorhandenes Clean nutzen — kein force_transcode im OTIO-Export."""
+    from unittest.mock import patch
 
-    from otio_app.services.clean_media import CLEAN_STATUS_CLEAN
     from otio_app.services.without_voiceover_enhanced.models import ResolvedShot
     from otio_app.services.without_voiceover_enhanced.otio_export_service import (
         _ensure_shot_media_for_export,
@@ -409,9 +410,6 @@ def test_otio_export_forces_clean_for_camera_timecode(tmp_path: Path) -> None:
         resolved_available_start_seconds=25372.347,
         folder_name=folder,
     )
-    entry = MagicMock()
-    entry.status = CLEAN_STATUS_CLEAN
-    entry.clean_path = str(clean)
 
     def _validate(path: Path, *, label: str, fps: float):
         text = str(path).replace("\\", "/")
@@ -426,11 +424,10 @@ def test_otio_export_forces_clean_for_camera_timecode(tmp_path: Path) -> None:
         ),
         patch(
             "otio_app.services.clean_media.resolve_effective_media_path",
-            return_value=video.resolve(),
+            return_value=clean.resolve(),
         ),
         patch(
             "otio_app.services.clean_media.process_media_file",
-            return_value=entry,
         ) as process_mock,
         patch(
             "otio_app.services.clean_media.path_is_readable_file",
@@ -440,8 +437,7 @@ def test_otio_export_forces_clean_for_camera_timecode(tmp_path: Path) -> None:
         path, avail, src0, src1, rate = _ensure_shot_media_for_export(
             project, shot, fps=25.0
         )
-    process_mock.assert_called_once()
-    assert process_mock.call_args.kwargs.get("force_transcode") is True
+    process_mock.assert_not_called()
     assert path == clean.resolve()
     assert avail == 0.0
     assert src0 == pytest.approx(4.99, abs=0.01)

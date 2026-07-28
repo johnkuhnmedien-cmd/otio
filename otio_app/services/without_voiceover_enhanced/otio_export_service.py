@@ -83,6 +83,18 @@ def _cache_key_for_path(path: Path) -> str:
         return str(path)
 
 
+def _catalog_folders_for_resolved(resolved: ResolvedTimelineDocument) -> list[str]:
+    """Nur Ordner der Timeline-Shots — kein Full-Project-ffprobe beim Export."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for shot in resolved.shots or []:
+        folder = str(getattr(shot, "folder_name", "") or "").strip()
+        if folder and folder not in seen:
+            seen.add(folder)
+            names.append(folder)
+    return names
+
+
 def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> otio.opentime.TimeRange:
     """Sekunden → OTIO-TimeRange auf **ganzzahligen** Frames (Resolve-sicher).
 
@@ -411,32 +423,8 @@ def _ensure_shot_media_for_export(
     shot_avail = float(getattr(shot, "resolved_available_start_seconds", 0.0) or 0.0)
     content_offset = max(0.0, source_start - shot_avail)
 
-    # Kamera-TC auf Originalen: Resolve matched OTIO-TC gegen Datei-TC.
-    # File-relativ (Start 0) bei Datei mit TC 01:00:00:00 / 07:xx → Offline
-    # (Bisti Asset07/04/14). Clean mit -timecode 00:00:00:00 erzwingen, dann
-    # file-relativ exportieren — wie die übrigen Clean-Clips, die online sind.
-    if probe_avail > _CAMERA_TC_THRESHOLD_SEC and folder:
-        try:
-            from otio_app.services.clean_media import (
-                CLEAN_STATUS_CLEAN,
-                path_is_readable_file,
-                process_media_file,
-            )
-
-            entry = process_media_file(
-                project, folder, path, force_transcode=True
-            )
-            clean_path = Path(str(entry.clean_path or "")).expanduser()
-            if (
-                entry.status == CLEAN_STATUS_CLEAN
-                and path_is_readable_file(clean_path)
-            ):
-                path = clean_path.resolve()
-                probe_avail, media_dur, rate = _validate_video_file(
-                    path, label=f"{label} (clean)", fps=fps
-                )
-        except Exception:  # noqa: BLE001
-            pass
+    # Kein force_transcode im OTIO-Export — Clean gehört in Clean Media.
+    # Vorhandenes Clean wird oben bevorzugt; sonst Embedded-TC-Fallback.
 
     if probe_avail <= _CAMERA_TC_THRESHOLD_SEC:
         # Clean / kein Kamera-TC: Resolve-sicher file-relativ ab 0.
@@ -618,7 +606,11 @@ def validate_resolved_timeline_for_production(
                 f"{curr.shot_id} ({curr.asset_id})."
             )
 
-    catalog = build_asset_catalog(project, fps=fps)
+    catalog = build_asset_catalog(
+        project,
+        fps=fps,
+        folder_names=_catalog_folders_for_resolved(resolved) or None,
+    )
     for shot in resolved.shots:
         if bool(getattr(shot, "is_placeholder", False)) or bool(shot.open_gap):
             errors.append(
@@ -890,7 +882,12 @@ def export_otio_from_resolved_timeline(
     )
     video_track = otio.schema.Track(name="Video", kind=otio.schema.TrackKind.Video)
     audio_track = otio.schema.Track(name="Narration", kind=otio.schema.TrackKind.Audio)
-    catalog = build_asset_catalog(project, fps=fps)
+    catalog_folders = _catalog_folders_for_resolved(resolved)
+    catalog = build_asset_catalog(
+        project,
+        fps=fps,
+        folder_names=catalog_folders or None,
+    )
 
     from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
         _resolved_shot_sort_key,
@@ -921,8 +918,7 @@ def export_otio_from_resolved_timeline(
             continue
 
         source_duration = source_end - source_start
-        # Dauer/Rate neu proben; available_range bewusst file-relativ (Start 0),
-        # nicht mit Embedded-Kamera-TC — sonst Media Offline in Resolve.
+        # Probe-Cache: _ensure_shot_media_for_export hat dieselbe Datei schon gelesen.
         _file_avail_start, file_dur, file_rate = _validate_video_file(
             media_path, label=f"{shot.shot_id}", fps=fps
         )
@@ -1114,7 +1110,11 @@ def export_portable_otio_package(
     # Clip → original media path for rewrite after staging
     pending_video: list[tuple[otio.schema.Clip, Path, str]] = []
     pending_audio: list[tuple[otio.schema.Clip, Path, str]] = []
-    catalog = build_asset_catalog(project, fps=fps)
+    catalog = build_asset_catalog(
+        project,
+        fps=fps,
+        folder_names=_catalog_folders_for_resolved(resolved) or None,
+    )
 
     cursor = 0.0
     from otio_app.services.without_voiceover_enhanced.timeline_resolver import (

@@ -1491,8 +1491,9 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
             key="enh_unified_cut_otio_all",
             use_container_width=True,
             help=(
-                "Intro + alle Kapitel-Timelines mergen → eine OTIO und "
-                "globale resolved_timeline.json."
+                "Intro + vorhandene Kapitel-Timelines mergen → eine OTIO und "
+                "globale resolved_timeline.json. Kapitel ohne passendes "
+                "Python-Timing werden übersprungen (kein stilles Nachrechnen)."
             ),
         )
 
