@@ -121,9 +121,19 @@ def chapter_resolved_matches_plan(
     plan: UnifiedCutPlanDocument | None,
     resolved: ResolvedTimelineDocument | None,
 ) -> bool:
+    """True wenn jedes Plan-Slot einen Parent-Shot hat.
+
+    ``__shortfall``-Tails zählen nicht extra — sonst wirken Kapitel mit
+    Dauer-Shortfall permanent „offen“ und fallen aus dem OTIO-Merge.
+    """
     if plan is None or resolved is None:
         return False
-    return len(resolved.shots) == len(plan.slots)
+    parent_shots = [
+        shot
+        for shot in resolved.shots
+        if not str(shot.shot_id or "").endswith("__shortfall")
+    ]
+    return len(parent_shots) == len(plan.slots)
 
 
 def invalidate_chapter_resolved_timeline(project: Project, folder_name: str) -> bool:

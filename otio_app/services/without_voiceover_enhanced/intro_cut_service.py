@@ -359,10 +359,18 @@ def intro_resolved_matches_plan(
     plan: UnifiedCutPlanDocument | None,
     resolved: ResolvedTimelineDocument | None,
 ) -> bool:
-    """True wenn Resolved zur aktuellen Slot-Anzahl des Intro-Plans passt."""
+    """True wenn Resolved zur aktuellen Slot-Anzahl des Intro-Plans passt.
+
+    ``__shortfall``-Tails zählen nicht als zusätzliche Plan-Slots.
+    """
     if plan is None or resolved is None:
         return False
-    return len(resolved.shots) == len(plan.slots)
+    parent_shots = [
+        shot
+        for shot in resolved.shots
+        if not str(shot.shot_id or "").endswith("__shortfall")
+    ]
+    return len(parent_shots) == len(plan.slots)
 
 
 def persist_intro_unified_plan(

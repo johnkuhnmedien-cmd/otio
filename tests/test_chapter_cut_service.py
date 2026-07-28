@@ -164,6 +164,37 @@ def test_chapter_status_matches() -> None:
     assert not chapter_resolved_matches_plan(plan, stale)
 
 
+def test_chapter_status_matches_ignores_shortfall_tails() -> None:
+    """Dauer-Shortfall darf Kapitel nicht als „Timing fehlt“ markieren."""
+    plan = _plan("Yo", slots=1)
+    resolved = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=8.0,
+        shots=[
+            ResolvedShot(
+                shot_id="Yo_slot_001",
+                asset_id="asset_a",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=5.0,
+                source_start_seconds=0.0,
+                source_end_seconds=5.0,
+            ),
+            ResolvedShot(
+                shot_id="Yo_slot_001__shortfall",
+                asset_id="asset_a",
+                timeline_start_seconds=5.0,
+                timeline_end_seconds=8.0,
+                source_start_seconds=0.0,
+                source_end_seconds=3.0,
+                is_placeholder=True,
+                open_gap=True,
+            ),
+        ],
+    )
+    assert chapter_resolved_matches_plan(plan, resolved)
+
+
 def test_build_merged_skips_chapters_without_matching_timing(tmp_path) -> None:
     """Alle-OTIO darf fehlendes Timing nicht still nachrechnen."""
     from otio_app.services.without_voiceover_enhanced.models import (
@@ -222,6 +253,71 @@ def test_build_merged_skips_chapters_without_matching_timing(tmp_path) -> None:
     assert len(merged.shots) == 1
     assert merged.shots[0].shot_id == "yo_1"
     assert any("Caddo" in err and "Python-Timing" in err for err in merged.errors)
+
+
+def test_build_merged_includes_chapters_with_shortfall_tails(tmp_path) -> None:
+    """Shortfall-Extra-Shots dürfen Kapitel nicht aus dem OTIO-Merge werfen."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        EnhancedScriptDocument,
+    )
+
+    project = _project(tmp_path)
+    write_json(chapter_unified_cut_plan_path(project, "The Wave"), _plan("The_Wave", slots=1))
+    write_json(
+        chapter_resolved_timeline_path(project, "The Wave"),
+        ResolvedTimelineDocument(
+            script_version="v1",
+            fps=25.0,
+            total_duration_seconds=8.0,
+            shots=[
+                ResolvedShot(
+                    shot_id="The_Wave_slot_001",
+                    asset_id="a",
+                    timeline_start_seconds=0.0,
+                    timeline_end_seconds=5.0,
+                    source_start_seconds=0.0,
+                    source_end_seconds=5.0,
+                    folder_name="The Wave",
+                ),
+                ResolvedShot(
+                    shot_id="The_Wave_slot_001__shortfall",
+                    asset_id="a",
+                    timeline_start_seconds=5.0,
+                    timeline_end_seconds=8.0,
+                    source_start_seconds=0.0,
+                    source_end_seconds=3.0,
+                    folder_name="The Wave",
+                    is_placeholder=True,
+                ),
+            ],
+        ),
+    )
+
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.chapter_cut_service.list_body_chapter_names",
+            return_value=["The Wave"],
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.chapter_cut_service.require_locked_script",
+            return_value=EnhancedScriptDocument(
+                script_version="v1", narration_full="x", segments=[]
+            ),
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.chapter_cut_service._ensure_intro_resolved",
+            return_value=None,
+        ),
+    ):
+        merged = build_merged_resolved_timeline(
+            project, include_intro=False, persist_global=False
+        )
+
+    assert [s.shot_id for s in merged.shots] == [
+        "The_Wave_slot_001",
+        "The_Wave_slot_001__shortfall",
+    ]
+    assert not any("Fehlende Kapitel" in err for err in (merged.errors or []))
 
 
 def test_concatenate_resolved_timelines_offsets() -> None:
