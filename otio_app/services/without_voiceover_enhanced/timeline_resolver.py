@@ -562,7 +562,7 @@ def build_shot_continuity_table(
     fps: float,
 ) -> list[dict]:
     """Diagnosetabelle für visuelle Gaps/Overlaps zwischen benachbarten Shots."""
-    ordered = sorted(shots, key=lambda s: (s.timeline_start_seconds, s.shot_id))
+    ordered = sorted(shots, key=_resolved_shot_sort_key)
     frame = _frame_duration(fps)
     rows: list[dict] = []
     for index, shot in enumerate(ordered):
@@ -676,6 +676,27 @@ def _is_bridge_resolved_shot(shot: ResolvedShot) -> bool:
     )
 
 
+def _canonical_plan_shot_id(shot_id: str) -> str:
+    """Parent-Slot für synthetische Teile (z. B. ``slot_007__shortfall``).
+
+    Shortfall-Placeholder müssen dieselbe Kapitel-/Segment-Zuordnung wie der
+    Asset-Kopf erhalten — sonst verschiebt die Kapitelhülle nur den Kopf und
+    erzeugt Überlappung + Lücke von Vorlauf-Länge.
+    """
+    text = str(shot_id or "").strip()
+    if text.endswith("__shortfall"):
+        return text[: -len("__shortfall")]
+    return text
+
+
+def _resolved_shot_sort_key(shot: ResolvedShot) -> tuple:
+    """Dichte Reihenfolge: Parent vor ``__shortfall`` bei gleichem Start."""
+    sid = str(shot.shot_id or "")
+    shortfall = 1 if sid.endswith("__shortfall") else 0
+    parent = _canonical_plan_shot_id(sid)
+    return (float(shot.timeline_start_seconds), parent, shortfall, sid)
+
+
 def _apply_chapter_envelopes(
     project: Project,
     *,
@@ -716,7 +737,7 @@ def _apply_chapter_envelopes(
             (
                 plan.narration_start_anchor.segment_id
                 for plan in final.shots
-                if plan.shot_id == shot.shot_id
+                if plan.shot_id == _canonical_plan_shot_id(shot.shot_id)
             ),
             "",
         )
@@ -1029,7 +1050,7 @@ def _count_chapter_continuity(
     for envelope in envelopes:
         shots = sorted(
             by_chapter.get(envelope.chapter_id, []),
-            key=lambda s: (s.timeline_start_seconds, s.shot_id),
+            key=_resolved_shot_sort_key,
         )
         gaps = 0
         overlaps = 0
@@ -1427,7 +1448,7 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
             continue
         resolved_shots.append(resolved_shot)
 
-    ordered = sorted(resolved_shots, key=lambda s: (s.timeline_start_seconds, s.shot_id))
+    ordered = sorted(resolved_shots, key=_resolved_shot_sort_key)
 
     # Vor-/Nachlauf pro Kapitel (Hülle), nicht einmal global.
     chapter_envelopes = _apply_chapter_envelopes(
@@ -1443,7 +1464,7 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
         errors=errors,
         narration_timeline=timeline,
     )
-    ordered = sorted(ordered, key=lambda s: (s.timeline_start_seconds, s.shot_id))
+    ordered = sorted(ordered, key=_resolved_shot_sort_key)
     _apply_visual_continuity_rules(
         ordered,
         project=project,
@@ -1451,7 +1472,7 @@ def resolve_final_timeline(project: Project) -> ResolvedTimelineDocument:
         repairs=repairs,
         errors=errors,
     )
-    ordered = sorted(ordered, key=lambda s: (s.timeline_start_seconds, s.shot_id))
+    ordered = sorted(ordered, key=_resolved_shot_sort_key)
     _count_chapter_continuity(chapter_envelopes, ordered, fps=fps)
 
     def _is_technical_hold(shot: ResolvedShot) -> bool:

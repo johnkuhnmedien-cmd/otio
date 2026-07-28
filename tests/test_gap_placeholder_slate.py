@@ -155,6 +155,158 @@ def test_short_asset_keeps_media_and_red_placeholder_tail(tmp_path: Path) -> Non
     assert any("roter Placeholder" in note for note in repairs)
 
 
+def test_shortfall_shot_follows_parent_in_chapter_envelope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Shortfall muss mit dem Asset-Kopf in der Kapitelhülle mitverschoben werden."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        FinalCutPlanDocument,
+        FinalShot,
+        NarrationAnchor,
+        NarrationTimelineDocument,
+        NarrationTimelineEntry,
+        ResolvedAudioSegment,
+    )
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        _apply_chapter_envelopes,
+        _apply_visual_continuity_rules,
+    )
+
+    project = _project(tmp_path)
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.timeline_resolver."
+        "_reapply_hold_for_timeline_span",
+        lambda *args, **kwargs: None,
+    )
+
+    class _Locked:
+        def __init__(self) -> None:
+            self.segments = [
+                type(
+                    "S",
+                    (),
+                    {
+                        "segment_id": "The_Wave_segment_001",
+                        "folder_name": "The Wave",
+                        "sequence_index": 1,
+                    },
+                )()
+            ]
+
+    shots = [
+        ResolvedShot(
+            shot_id="The_Wave_slot_007",
+            asset_id="asset07",
+            timeline_start_seconds=52.72,
+            timeline_end_seconds=57.72,
+            source_start_seconds=1.0,
+            source_end_seconds=6.0,
+            resolved_media_path="/tmp/a.mp4",
+            resolved_media_kind="video",
+            resolved_media_duration_seconds=10.0,
+            folder_name="The Wave",
+        ),
+        ResolvedShot(
+            shot_id="The_Wave_slot_007__shortfall",
+            asset_id="asset07",
+            timeline_start_seconds=57.72,
+            timeline_end_seconds=61.16,
+            source_start_seconds=0.0,
+            source_end_seconds=3.44,
+            resolved_media_path="/tmp/p.mp4",
+            resolved_media_kind="video",
+            resolved_media_duration_seconds=3.44,
+            folder_name="The Wave",
+            is_placeholder=True,
+            open_gap=True,
+            hold_mode="placeholder_slate",
+        ),
+        ResolvedShot(
+            shot_id="The_Wave_slot_008",
+            asset_id="asset08",
+            timeline_start_seconds=61.16,
+            timeline_end_seconds=70.16,
+            source_start_seconds=0.0,
+            source_end_seconds=9.0,
+            resolved_media_path="/tmp/b.mp4",
+            resolved_media_kind="video",
+            resolved_media_duration_seconds=12.0,
+            folder_name="The Wave",
+        ),
+    ]
+    final = FinalCutPlanDocument(
+        script_version="v1",
+        shots=[
+            FinalShot(
+                shot_id="The_Wave_slot_007",
+                asset_id="asset07",
+                narration_start_anchor=NarrationAnchor(
+                    segment_id="The_Wave_segment_001", offset_seconds=52.72
+                ),
+                narration_end_anchor=NarrationAnchor(
+                    segment_id="The_Wave_segment_001", offset_seconds=61.16
+                ),
+            ),
+            FinalShot(
+                shot_id="The_Wave_slot_008",
+                asset_id="asset08",
+                narration_start_anchor=NarrationAnchor(
+                    segment_id="The_Wave_segment_001", offset_seconds=61.16
+                ),
+                narration_end_anchor=NarrationAnchor(
+                    segment_id="The_Wave_segment_001", offset_seconds=70.16
+                ),
+            ),
+        ],
+    )
+    narration = NarrationTimelineDocument(
+        script_version="v1",
+        total_duration_seconds=80.0,
+        entries=[
+            NarrationTimelineEntry(
+                segment_id="The_Wave_segment_001",
+                start_seconds=0.0,
+                end_seconds=80.0,
+                audio_duration_seconds=80.0,
+            )
+        ],
+    )
+    audios = [
+        ResolvedAudioSegment(
+            segment_id="The_Wave_segment_001",
+            audio_path="/tmp/vo.mp3",
+            timeline_start_seconds=0.0,
+            timeline_end_seconds=80.0,
+        )
+    ]
+    repairs: list[str] = []
+    errors: list[str] = []
+    envelopes = _apply_chapter_envelopes(
+        project,
+        locked=_Locked(),
+        final=final,
+        ordered=shots,
+        audio_segments=audios,
+        preroll=4.0,
+        postroll=0.0,
+        fps=25.0,
+        repairs=repairs,
+        errors=errors,
+        narration_timeline=narration,
+    )
+    assert envelopes
+    assert all(s.chapter_id == "The Wave" for s in shots)
+    # Dichte Kette nach Vorlauf-Shift
+    ordered = sorted(shots, key=lambda s: (s.timeline_start_seconds, s.shot_id))
+    for prev, curr in zip(ordered, ordered[1:]):
+        assert curr.timeline_start_seconds == pytest.approx(prev.timeline_end_seconds)
+    cont_errors: list[str] = []
+    _apply_visual_continuity_rules(
+        ordered, project=project, fps=25.0, repairs=repairs, errors=cont_errors
+    )
+    assert not cont_errors
+
+
 def test_resolve_markers_for_shortfall_shots() -> None:
     shot = ResolvedShot(
         shot_id="slot_x__shortfall",

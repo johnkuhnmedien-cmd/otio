@@ -806,8 +806,12 @@ def export_otio_from_resolved_timeline(
     audio_track = otio.schema.Track(name="Narration", kind=otio.schema.TrackKind.Audio)
     catalog = build_asset_catalog(project, fps=fps)
 
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        _resolved_shot_sort_key,
+    )
+
     cursor = 0.0
-    for shot in sorted(resolved.shots, key=lambda s: s.timeline_start_seconds):
+    for shot in sorted(resolved.shots, key=_resolved_shot_sort_key):
         if shot.timeline_start_seconds > cursor + 1e-6:
             gap = shot.timeline_start_seconds - cursor
             video_track.append(
@@ -1035,7 +1039,11 @@ def export_portable_otio_package(
     catalog = build_asset_catalog(project, fps=fps)
 
     cursor = 0.0
-    for shot in sorted(resolved.shots, key=lambda s: s.timeline_start_seconds):
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        _resolved_shot_sort_key as _sort_shots,
+    )
+
+    for shot in sorted(resolved.shots, key=_sort_shots):
         if shot.timeline_start_seconds > cursor + 1e-6:
             gap = shot.timeline_start_seconds - cursor
             video_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))

@@ -65,6 +65,7 @@ from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
     _count_chapter_continuity,
     _is_intro_folder,
     _resolve_shot_media,
+    _resolved_shot_sort_key,
     _seconds_to_frame,
     _segment_to_chapter_map,
     build_asset_catalog,
@@ -1322,7 +1323,7 @@ def resolve_unified_timeline(
             resolved.folder_name = start_chapter
         resolved_shots.append(resolved)
 
-    ordered = sorted(resolved_shots, key=lambda s: (s.timeline_start_seconds, s.shot_id))
+    ordered = sorted(resolved_shots, key=_resolved_shot_sort_key)
 
     chapter_envelopes = _apply_chapter_envelopes(
         project,
@@ -1358,7 +1359,7 @@ def resolve_unified_timeline(
             repairs.extend(f"open-gap soft: {m}" for m in soft)
         errors = hard
 
-    ordered = sorted(ordered, key=lambda s: (s.timeline_start_seconds, s.shot_id))
+    ordered = sorted(ordered, key=_resolved_shot_sort_key)
     _apply_visual_continuity_rules(
         ordered,
         project=project,
@@ -1366,7 +1367,7 @@ def resolve_unified_timeline(
         repairs=repairs,
         errors=errors,
     )
-    ordered = sorted(ordered, key=lambda s: (s.timeline_start_seconds, s.shot_id))
+    ordered = sorted(ordered, key=_resolved_shot_sort_key)
     _count_chapter_continuity(chapter_envelopes, ordered, fps=fps)
 
     editorial_shots = [
