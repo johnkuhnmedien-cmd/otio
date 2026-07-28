@@ -381,8 +381,10 @@ def _clamp_boundary_times(
     Fix 1b: gesamte Klemme arbeitet nur auf Framegrenzen (Input vorher snappen).
     Media-Regel (pro Slot mit usable):
     - span > usable + tolerance → nicht klemmen (später is_short/Gap)
-    - usable < span <= usable + tolerance → Endgrenze auf
-      ``floor(usable * fps) / fps`` (Span garantiert ≤ usable)
+    - usable < span <= usable + tolerance → knappen Shortfall an Nachbar
+      abgeben (Folge-Slot länger und/oder Vorgänger länger), auch wenn
+      dadurch ``shot_max`` überschritten wird. Short-Slot selbst wird auf
+      ``floor(usable * fps) / fps`` geklemmt.
     Wenn ``floor(usable) < shot_min``: kein editorial-Hochschieben
     (sonst Pingpong mit usable-Klemme) → Gap-Pfad.
     Max. ``max_media_iterations`` Links-nach-rechts-Pässe; danach noch
@@ -447,24 +449,41 @@ def _clamp_boundary_times(
         else:
             usable_frames.append(max(0, _floor_frames(float(usable))))
 
+    # Slots, die Shortfall aus Toleranz-Absorb übernommen haben — dürfen
+    # shot_max überschreiten (sonst wird die Absorb-Korrektur wieder kassiert).
+    shot_max_exempt: set[int] = set()
+
     def _skip_editorial_min(index: int) -> bool:
         """Fix 1b.5: usable (floor) < shot_min → nicht hochschieben (Gap-Pfad)."""
         uf = usable_frames[index]
         return uf is not None and uf < min_frames_by_slot[index]
 
-    def _editorial_pass() -> None:
+    def _neighbor_can_absorb(neighbor: int, extra_sec: float) -> bool:
+        """Nachbar kann Extra aufnehmen, ohne selbst über usable+tol zu gehen."""
+        if neighbor < 0 or neighbor >= n_slots:
+            return False
+        neighbor_usable = usables[neighbor]
+        if neighbor_usable is None:
+            return True
+        neighbor_span = out[neighbor + 1] - out[neighbor]
+        return neighbor_span + float(extra_sec) <= float(neighbor_usable) + tol + 1e-9
+
+    def _editorial_pass(*, enforce_shot_max: bool = True) -> None:
         # Zu lang: Ende nach vorne (spätere Slots werden länger).
-        for index in range(n_slots):
-            slot_max_frames = max_frames_by_slot[index]
-            duration_frames = _to_frames(out[index + 1] - out[index])
-            if duration_frames <= slot_max_frames:
-                continue
-            slot_max_sec = _from_frames(slot_max_frames)
-            out[index + 1] = _seconds_to_frame(out[index] + slot_max_sec, rate)
-            repairs.append(
-                f"slot[{index}]: über shot_max ({slot_max_sec:.2f}s) — "
-                "Endgrenze nach vorne verschoben."
-            )
+        if enforce_shot_max:
+            for index in range(n_slots):
+                if index in shot_max_exempt:
+                    continue
+                slot_max_frames = max_frames_by_slot[index]
+                duration_frames = _to_frames(out[index + 1] - out[index])
+                if duration_frames <= slot_max_frames:
+                    continue
+                slot_max_sec = _from_frames(slot_max_frames)
+                out[index + 1] = _seconds_to_frame(out[index] + slot_max_sec, rate)
+                repairs.append(
+                    f"slot[{index}]: über shot_max ({slot_max_sec:.2f}s) — "
+                    "Endgrenze nach vorne verschoben."
+                )
 
         # Zu kurz: Ende nach hinten + Cascade (spätere Dauern bleiben gleich).
         for index in range(n_slots):
@@ -485,9 +504,9 @@ def _clamp_boundary_times(
                 f"Endgrenze +{need:.2f}s (Cascade)."
             )
 
-    _editorial_pass()
-
     tol = max(0.0, float(short_tolerance))
+    _editorial_pass(enforce_shot_max=True)
+
     for _iteration in range(max(1, int(max_media_iterations))):
         changed = False
         for index in range(n_slots):
@@ -502,20 +521,49 @@ def _clamp_boundary_times(
             if shortfall > tol + 1e-9:
                 # Über Toleranz: Grenzen unverändert → is_short/Gap-Pfad.
                 continue
-            # Innerhalb Toleranz: Endgrenze auf floor(usable)-Frames (≤ usable).
+            # Innerhalb Toleranz: Shortfall an Nachbar abgeben (shot_max ok).
             clamped = _from_frames(uf)
+            prefer_next = index < n_slots - 1 and _neighbor_can_absorb(
+                index + 1, shortfall
+            )
+            prefer_prev = index > 0 and _neighbor_can_absorb(index - 1, shortfall)
+            # Letzter Slot: nie Endgrenze nach vorne (sonst Timeline kürzer).
+            if index == n_slots - 1:
+                if not prefer_prev:
+                    continue
+                use_prev = True
+            else:
+                use_prev = prefer_prev and not prefer_next
+            if use_prev:
+                new_start = _seconds_to_frame(out[index + 1] - clamped, rate)
+                if new_start + 1e-9 < out[index - 1]:
+                    continue
+                out[index] = new_start
+                shot_max_exempt.add(index - 1)
+                repairs.append(
+                    f"slot[{index}]: nutzbare Dauer knapp "
+                    f"(span {duration:.2f}s → usable {float(usable):.2f}s / "
+                    f"frame {clamped:.2f}s, "
+                    f"shortfall {shortfall:.2f}s ≤ Toleranz {tol:.1f}s) — "
+                    "Startgrenze nach hinten (Vorgänger-Slot länger, "
+                    "shot_max-Überschreitung erlaubt)."
+                )
+                changed = True
+                continue
             out[index + 1] = _seconds_to_frame(out[index] + clamped, rate)
+            shot_max_exempt.add(index + 1)
             repairs.append(
                 f"slot[{index}]: nutzbare Dauer knapp "
                 f"(span {duration:.2f}s → usable {float(usable):.2f}s / "
                 f"frame {clamped:.2f}s, "
                 f"shortfall {shortfall:.2f}s ≤ Toleranz {tol:.1f}s) — "
-                "Endgrenze nach vorne (Folge-Slot länger)."
+                "Endgrenze nach vorne (Folge-Slot länger, "
+                "shot_max-Überschreitung erlaubt)."
             )
             changed = True
         if changed:
-            # Folge-Slot kann editorial_max überschreiten.
-            _editorial_pass()
+            # Nur shot_min nachziehen — shot_max für Absorb-Nachbarn bewusst aus.
+            _editorial_pass(enforce_shot_max=False)
         if not changed:
             break
 
