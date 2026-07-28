@@ -459,6 +459,8 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
     - Accepted export_ready (gleiche Run-ID) schließt ebenfalls — auch ohne
       aktuellen Funnel-Eintrag.
     - Merge (merged | kept_local_weak) schließt weiterhin.
+    - ``user_confirmed_weak`` (Redaktion behält lokales Weak) schließt Weak-
+      Upgrade-Gaps ohne besseres Supplement.
     - Stale Funnel/Merge (andere/fehlende Run-ID) zählen nicht — Accepted-
       Fills mit gleicher Gap-ID werden zuvor auf den aktuellen Lauf rebound.
     """
@@ -504,6 +506,7 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
             gid in merge_closed
             or gid in funnel_ready
             or gid in accepted_ready
+            or bool(getattr(gap, "user_confirmed_weak", False))
         ):
             filled_ids.append(gid)
         else:

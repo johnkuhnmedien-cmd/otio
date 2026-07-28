@@ -610,6 +610,13 @@ def _pick_supplement(
         score, bucket = _score_for_candidate(records, candidate.candidate_id)
         if bucket == "reject":
             continue
+        # Redaktion hat schwaches Supplement bewusst freigegeben.
+        if (
+            bucket == "weak"
+            and str(getattr(candidate, "assign_status", "") or "").strip().lower()
+            == "confirmed_weak"
+        ):
+            bucket = "manual"
         if not supplement_beats_local(supplement_bucket=bucket, local_fit=local_fit):
             continue
         review = local_fit == "none" and bucket == "weak"
@@ -721,7 +728,18 @@ def merge_export_ready_gaps_into_timeline(
         )
 
         if chosen is None:
-            if local_fit == "weak" and shot.asset_id and not shot.open_gap:
+            gap_confirmed_weak = False
+            if coverage is not None:
+                for cov_gap in coverage.gaps or []:
+                    if (cov_gap.gap_id or "").strip() != gap_id:
+                        continue
+                    gap_confirmed_weak = bool(
+                        getattr(cov_gap, "user_confirmed_weak", False)
+                    )
+                    break
+            if local_fit == "weak" and shot.asset_id and (
+                not shot.open_gap or gap_confirmed_weak
+            ):
                 result = GapMergeSlotResult(
                     shot_id=shot.shot_id,
                     coverage_gap_id=gap_id,
@@ -729,7 +747,11 @@ def merge_export_ready_gaps_into_timeline(
                     previous_asset_id=shot.asset_id,
                     new_asset_id=shot.asset_id,
                     local_fit=local_fit,
-                    message=f"Upgrade übersprungen — {pick_msg}",
+                    message=(
+                        "Weak-Asset redaktionell bestätigt — behalten."
+                        if gap_confirmed_weak
+                        else f"Upgrade übersprungen — {pick_msg}"
+                    ),
                 )
                 report.slots.append(result)
                 report.kept_local_shot_ids.append(shot.shot_id)

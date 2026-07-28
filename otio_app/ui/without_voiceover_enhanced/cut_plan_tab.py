@@ -101,6 +101,12 @@ from otio_app.services.without_voiceover_enhanced.manual_gap_assign_service impo
     assign_local_file_to_open_gap,
     gap_search_queries,
 )
+from otio_app.services.without_voiceover_enhanced.weak_gap_confirm_service import (
+    WeakGapConfirmError,
+    confirm_all_open_weak_local_assets,
+    confirm_weak_local_asset_for_gap,
+    list_confirmable_weak_gaps,
+)
 from otio_app.services.without_voiceover_enhanced.models import (
     AcceptedSupplementsDocument,
     CoverageGapsDocument,
@@ -2226,6 +2232,66 @@ def _render_section_funnel(project) -> None:
             st.info(message)
         else:
             st.success(message)
+
+    confirmable_weak = list_confirmable_weak_gaps(project) if open_gap_ids else []
+    if confirmable_weak:
+        st.markdown("**Weak-Asset trotzdem bestätigen**")
+        st.caption(
+            "Diese Gaps haben ein lokales Asset mit ``asset_fit=weak``, aber kein "
+            "besseres Supplement. Ohne Bestätigung bleiben sie offen und blockieren "
+            "Python Timing. Bestätigen = lokales Weak behalten und Gap schließen."
+        )
+        if st.button(
+            f"Alle Weak-Assets bestätigen ({len(confirmable_weak)})",
+            key=f"enh_confirm_weak_all_{project.id}",
+            help="Schließt alle bestätigbaren Weak-Upgrade-Gaps auf einmal.",
+        ):
+            try:
+                results = confirm_all_open_weak_local_assets(project)
+                st.session_state[f"enh_funnel_pending_deselect_{project.id}"] = [
+                    r.gap_id for r in results
+                ]
+                st.session_state[flash_key] = [
+                    (
+                        "success",
+                        f"{len(results)} Weak-Asset(s) bestätigt — Gaps geschlossen. "
+                        "Als Nächstes **Python Timing**.",
+                    )
+                ]
+                st.rerun()
+            except WeakGapConfirmError as exc:
+                st.error(str(exc))
+        for gap in confirmable_weak:
+            col_w, col_btn = st.columns([3, 1])
+            with col_w:
+                visual = (gap.needed_visual or gap.subject or "").strip()
+                label = f"`{gap.gap_id}`"
+                if visual:
+                    label += f" — {visual[:100]}"
+                st.markdown(label)
+            with col_btn:
+                if st.button(
+                    "Weak bestätigen",
+                    key=f"enh_confirm_weak_{project.id}_{gap.gap_id}",
+                ):
+                    try:
+                        confirmed = confirm_weak_local_asset_for_gap(
+                            project, gap.gap_id
+                        )
+                        st.session_state[
+                            f"enh_funnel_pending_deselect_{project.id}"
+                        ] = [gap.gap_id]
+                        st.session_state[flash_key] = [
+                            (
+                                "success",
+                                f"`{confirmed.gap_id}` → lokales Asset "
+                                f"`{confirmed.local_asset_id}` bestätigt. "
+                                "Als Nächstes **Python Timing**.",
+                            )
+                        ]
+                        st.rerun()
+                    except WeakGapConfirmError as exc:
+                        st.error(str(exc))
 
     # Schwere Stock-JSON nur bei Opt-in laden (nicht nur Checkboxen).
     show_manual_key = f"enh_show_manual_candidates_{project.id}"
