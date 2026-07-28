@@ -757,6 +757,14 @@ def merge_export_ready_gaps_into_timeline(
                 report.kept_local_shot_ids.append(shot.shot_id)
                 updated_shots.append(shot)
                 continue
+            # Roter Dauer-Shortfall ohne Supplement: erwarteter Zwischenstand,
+            # kein harter Timeline-Fehler (Repair reicht).
+            if str(shot.shot_id).endswith("__shortfall"):
+                repairs.append(
+                    f"{shot.shot_id}: Shortfall offen — {pick_msg}"
+                )
+                updated_shots.append(shot)
+                continue
             result = GapMergeSlotResult(
                 shot_id=shot.shot_id,
                 coverage_gap_id=gap_id,

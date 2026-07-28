@@ -1026,7 +1026,9 @@ def _short_asset_with_red_placeholder_tail(
         "Rest als roter Placeholder."
     )
     head.cut_alignment = timed.cut_alignment
-    head.coverage_gap_id = gap_id
+    # Gap nur am Shortfall-Tail — sonst meldet Gap-Merge am Asset-Kopf fälschlich
+    # „Kein geeigneter export_ready-Kandidat“ (Funnel bleibt über Plan/Tail).
+    head.coverage_gap_id = None
     head.open_gap = False
 
     shortfall = timed.end_seconds - asset_end

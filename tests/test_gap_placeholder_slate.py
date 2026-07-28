@@ -142,10 +142,13 @@ def test_short_asset_keeps_media_and_red_placeholder_tail(tmp_path: Path) -> Non
     head, tail = parts
     assert head.is_placeholder is False
     assert head.open_gap is False
+    # Gap-ID nur am Shortfall-Tail — sonst verlangt Gap-Merge export_ready auch für den Asset-Head.
+    assert head.coverage_gap_id is None
     assert head.resolved_media_path == str(media)
     assert head.timeline_end_seconds - head.timeline_start_seconds == pytest.approx(5.0)
     assert tail.is_placeholder is True
     assert tail.shot_id.endswith("__shortfall")
+    assert tail.coverage_gap_id == "gap_The_Wave_slot_007"
     assert Path(tail.resolved_media_path).is_file()
     assert "CC0000" in Path(tail.resolved_media_path).name or Path(
         tail.resolved_media_path
