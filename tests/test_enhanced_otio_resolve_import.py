@@ -583,6 +583,56 @@ def test_catalog_prefers_clean_over_original_inventory_path(tmp_path: Path) -> N
     assert Path(entry["path"]).name.startswith("Castle_Asset04")
 
 
+def test_catalog_legacy_id_matches_clean_with_resolution_suffix(tmp_path: Path) -> None:
+    """Cut-Plan ``asset_caddo_lake_asset10`` muss Clean ``…_3840x2160`` finden."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Caddo Lake"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    original = Path(project.project_root) / folder / "Caddo_Lake_Asset10.mp4"
+    original.write_bytes(b"\x00" * 64)
+    clean = (
+        project.work_dir_path
+        / "clean"
+        / "Caddo_Lake"
+        / "Caddo_Lake_Asset10_3840x2160.mp4"
+    )
+    clean.parent.mkdir(parents=True)
+    clean.write_bytes(b"\x00" * 128)
+    _save_inventory(project, folder, original)
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset10")
+    assert err is None
+    assert entry is not None
+    assert "clean" in entry["path"].replace("\\", "/")
+    assert Path(entry["path"]).name.endswith("_3840x2160.mp4")
+
+
+def test_catalog_keeps_original_when_clean_missing(tmp_path: Path) -> None:
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Caddo Lake"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    original = Path(project.project_root) / folder / "Caddo_Lake_Asset02.mp4"
+    original.write_bytes(b"\x00" * 64)
+    _save_inventory(project, folder, original)
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset02")
+    assert err is None
+    assert entry is not None
+    assert Path(entry["path"]).resolve() == original.resolve()
+
+
 def test_still_jpeg_and_png_hold(tmp_path: Path) -> None:
     project = _project(tmp_path)
     jpg = Path(project.project_root) / "Castle Combe" / "still_test.jpg"

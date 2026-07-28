@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter, defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -91,6 +92,9 @@ class AssetCatalog:
     legacy_to_ids: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
 
 
+_RESOLUTION_STEM_SUFFIX_RE = re.compile(r"_\d{3,5}x\d{3,5}$", re.IGNORECASE)
+
+
 def _resolve_local_path(project: Project, raw: str | Path) -> Path:
     path = Path(str(raw)).expanduser()
     if path.is_file():
@@ -99,6 +103,26 @@ def _resolve_local_path(project: Project, raw: str | Path) -> Path:
     if candidate.is_file():
         return candidate
     return path
+
+
+def _stem_legacy_asset_ids(path: Path | str) -> list[str]:
+    """Legacy-IDs aus Dateiname — inkl. ohne Clean-Suffix ``_3840x2160``."""
+    stem = Path(path).stem.strip()
+    slug = "".join(ch if ch.isalnum() else "_" for ch in stem).strip("_").lower()
+    if not slug:
+        return []
+    aliases = [f"asset_{slug}"]
+    stripped = _RESOLUTION_STEM_SUFFIX_RE.sub("", slug).strip("_")
+    if stripped and stripped != slug:
+        aliases.append(f"asset_{stripped}")
+    # stabil, ohne Duplikate
+    seen: set[str] = set()
+    out: list[str] = []
+    for alias in aliases:
+        if alias not in seen:
+            seen.add(alias)
+            out.append(alias)
+    return out
 
 
 def _probe_entry(
@@ -148,7 +172,13 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
     result = AssetCatalog()
     explicit_paths: dict[str, list[str]] = defaultdict(list)
 
-    def _register(entry_id: str, entry: dict, *, raw_id: str) -> None:
+    def _register(
+        entry_id: str,
+        entry: dict,
+        *,
+        raw_id: str,
+        alias_paths: Iterable[Path | str] | None = None,
+    ) -> None:
         path = str(entry["path"])
         if entry_id in result.by_id and result.by_id[entry_id]["path"] != path:
             existing_path = str(result.by_id[entry_id]["path"])
@@ -170,14 +200,15 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
         if is_legacy_ambiguous_asset_id(raw_id):
             if entry_id not in result.legacy_to_ids[raw_id]:
                 result.legacy_to_ids[raw_id].append(entry_id)
-        # Auch Stem-Legacy aus Dateiname indexieren (für alte Cut-Pläne).
-        stem_legacy = f"asset_{Path(path).stem}"
-        stem_legacy = (
-            "asset_"
-            + "".join(ch if ch.isalnum() else "_" for ch in Path(path).stem).strip("_").lower()
-        )
-        if stem_legacy and entry_id not in result.legacy_to_ids[stem_legacy]:
-            result.legacy_to_ids[stem_legacy].append(entry_id)
+        # Stem-Legacy aus Dateiname(n) — Clean ``…_3840x2160`` muss weiterhin
+        # Cut-Plan-IDs wie ``asset_caddo_lake_asset10`` treffen.
+        stem_sources = [path]
+        if alias_paths:
+            stem_sources.extend(str(p) for p in alias_paths if p)
+        for source in stem_sources:
+            for stem_legacy in _stem_legacy_asset_ids(source):
+                if entry_id not in result.legacy_to_ids[stem_legacy]:
+                    result.legacy_to_ids[stem_legacy].append(entry_id)
 
     # Altbestand: Accepted noch auf stock/downloads → auf clean umbiegen.
     try:
@@ -197,19 +228,23 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
             raw_path = getattr(asset, "path", None) or getattr(asset, "source_path", None)
             if raw_path is None:
                 continue
-            path = _resolve_local_path(project, raw_path)
-            if not path.is_file():
+            inventory_path = _resolve_local_path(project, raw_path)
+            if not inventory_path.is_file():
                 continue
-            if is_http_url(str(path)):
+            if is_http_url(str(inventory_path)):
                 continue
-            # Clean bevorzugen (TC 00:00:00:00). Originale mit Kamera-TC
-            # landen sonst im Katalog und erzeugen in Resolve Media Offline.
+            # Clean bevorzugen (TC 00:00:00:00), Original behalten wenn kein Clean.
+            path = inventory_path
             try:
                 from otio_app.services.clean_media import resolve_effective_media_path
 
-                path = resolve_effective_media_path(project, folder, path)
+                preferred = resolve_effective_media_path(
+                    project, folder, inventory_path
+                )
+                if preferred.is_file():
+                    path = preferred
             except Exception:  # noqa: BLE001
-                pass
+                path = inventory_path
             if not path.is_file():
                 continue
             existing = str(getattr(asset, "asset_id", "") or "").strip()
@@ -260,9 +295,20 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
                 else canonical
             )
             entry["canonical_id"] = register_id
-            _register(register_id, entry, raw_id=existing or canonical)
+            alias_paths = [inventory_path, path]
+            _register(
+                register_id,
+                entry,
+                raw_id=existing or canonical,
+                alias_paths=alias_paths,
+            )
             if register_id != canonical:
-                _register(canonical, entry, raw_id=existing or canonical)
+                _register(
+                    canonical,
+                    entry,
+                    raw_id=existing or canonical,
+                    alias_paths=alias_paths,
+                )
 
     accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     if accepted is not None:
