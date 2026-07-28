@@ -377,6 +377,9 @@ class CoverageGap(BaseModel):
     search_queries: list[str] = Field(default_factory=list)
     # Ziel-Dauer des zugehörigen Slots (Funnel-Dauerfilter, Phase 4).
     target_duration_seconds: Optional[float] = None
+    # Redaktion: lokales Weak-Asset bewusst behalten → Gap gilt als geschlossen
+    # (Python Timing / Merge: kept_local_weak), auch ohne besseres Supplement.
+    user_confirmed_weak: bool = False
 
 
 class CoverageGapsDocument(BaseModel):
