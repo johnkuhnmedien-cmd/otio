@@ -372,6 +372,94 @@ def test_embedded_timecode_nonzero(tmp_path: Path) -> None:
         avail.start_time.to_seconds() + avail.duration.to_seconds() + 0.05
     )
     assert shot.source_start_seconds >= shot.resolved_available_start_seconds - 1e-6
+    # Resolve-sicher: OTIO Ranges file-relativ (nicht Kamera-TC ~3600s).
+    assert avail.start_time.to_seconds() == pytest.approx(0.0, abs=0.05)
+    assert src.start_time.to_seconds() < 60.0
+    content_offset = shot.source_start_seconds - shot.resolved_available_start_seconds
+    assert src.start_time.to_seconds() == pytest.approx(max(0.0, content_offset), abs=0.08)
+
+
+def test_otio_export_file_relative_despite_embedded_camera_tc(tmp_path: Path) -> None:
+    """Regression Bisti_slot_005/008: Kamera-TC ~7h darf nicht in OTIO source."""
+    from unittest.mock import patch
+
+    from otio_app.services.media_utils import MediaTiming
+    from otio_app.services.without_voiceover_enhanced.models import ResolvedShot
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        _ensure_shot_media_for_export,
+    )
+
+    project = _project(tmp_path)
+    video = Path(project.project_root) / "Bisti" / "Bisti_De_Na_Zin_Wilderness_Asset14.mp4"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"fake-mp4")
+    shot = ResolvedShot(
+        shot_id="Bisti_slot_005",
+        asset_id="asset__bisti__asset14",
+        timeline_start_seconds=34.88,
+        timeline_end_seconds=41.92,
+        source_start_seconds=25377.337,
+        source_end_seconds=25384.377,
+        resolved_media_path=str(video),
+        resolved_media_kind="video",
+        resolved_media_duration_seconds=16.02,
+        resolved_available_start_seconds=25372.347,
+        folder_name="Bisti",
+    )
+    timing = MediaTiming(start_sec=25372.347, duration_sec=16.02, rate=29.97)
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.otio_export_service.probe_media_timing",
+            return_value=timing,
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.otio_export_service.probe_duration_seconds",
+            return_value=16.02,
+        ),
+        patch(
+            "otio_app.services.without_voiceover_enhanced.otio_export_service.subprocess.run",
+            return_value=type(
+                "R",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": json.dumps(
+                        {"streams": [{"width": 1920, "height": 1080, "codec_type": "video"}]}
+                    ).encode(),
+                },
+            )(),
+        ),
+    ):
+        path, avail, src0, src1, rate = _ensure_shot_media_for_export(
+            project, shot, fps=25.0
+        )
+    assert path == video.resolve()
+    assert avail == 0.0
+    assert src0 == pytest.approx(4.99, abs=0.01)
+    assert src1 == pytest.approx(12.03, abs=0.01)
+    assert src1 - src0 == pytest.approx(7.04, abs=0.01)
+    assert rate == pytest.approx(29.97, abs=0.01)
+
+
+def test_catalog_prefers_clean_over_original_inventory_path(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    folder = "Castle Combe"
+    original = Path(project.project_root) / folder / "Castle_Asset04.mp4"
+    original.write_bytes(b"\x00" * 64)
+    clean = (
+        project.work_dir_path
+        / "clean"
+        / folder
+        / "Castle_Asset04_3840x2160.mp4"
+    )
+    clean.parent.mkdir(parents=True)
+    clean.write_bytes(b"\x00" * 128)
+    _save_inventory(project, folder, original)
+    catalog = build_asset_catalog(project, fps=25.0)
+    assert catalog.by_id
+    entry = next(iter(catalog.by_id.values()))
+    assert "clean" in entry["path"].replace("\\", "/")
+    assert Path(entry["path"]).name.startswith("Castle_Asset04")
 
 
 def test_still_jpeg_and_png_hold(tmp_path: Path) -> None:

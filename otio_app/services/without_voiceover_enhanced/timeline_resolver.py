@@ -202,6 +202,16 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
                 continue
             if is_http_url(str(path)):
                 continue
+            # Clean bevorzugen (TC 00:00:00:00). Originale mit Kamera-TC
+            # landen sonst im Katalog und erzeugen in Resolve Media Offline.
+            try:
+                from otio_app.services.clean_media import resolve_effective_media_path
+
+                path = resolve_effective_media_path(project, folder, path)
+            except Exception:  # noqa: BLE001
+                pass
+            if not path.is_file():
+                continue
             existing = str(getattr(asset, "asset_id", "") or "").strip()
             canonical = canonicalize_inventory_asset_id(
                 project,

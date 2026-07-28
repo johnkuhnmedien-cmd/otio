@@ -350,7 +350,7 @@ def _ensure_shot_media_for_export(
             f"{label}: Medientyp weder Video noch Bild · {path}"
         )
 
-    avail_start, media_dur, rate = _validate_video_file(path, label=label, fps=fps)
+    _probe_avail, media_dur, rate = _validate_video_file(path, label=label, fps=fps)
     source_start = float(shot.source_start_seconds)
     source_end = float(shot.source_end_seconds)
     if source_end <= source_start:
@@ -359,25 +359,25 @@ def _ensure_shot_media_for_export(
             f"({source_start}) sein."
         )
     source_span = source_end - source_start
-    # Content-Offset relativ zur beim Resolve gespeicherten Available-Start
-    # beibehalten, wenn die Datei einen anderen Embedded-TC/PTS-Start hat.
-    # (Früher: source auf avail_start schieben → Head-Trim/Offset verloren.)
+    # Content-Offset = Trim/Mitte relativ zum Medienanfang — unabhängig davon,
+    # ob resolved_timeline noch im Embedded-TC-Raum speichert.
     shot_avail = float(getattr(shot, "resolved_available_start_seconds", 0.0) or 0.0)
     content_offset = max(0.0, source_start - shot_avail)
-    if abs(avail_start - shot_avail) > 1e-6:
-        source_start = avail_start + content_offset
-        source_end = source_start + source_span
-    elif source_start + 1e-6 < avail_start:
-        source_start = avail_start + content_offset
-        source_end = source_start + source_span
-    avail_end = avail_start + media_dur
-    if source_start < avail_start - 1e-6 or source_end > avail_end + 1e-6:
+    # DaVinci Resolve OTIO-Import mappt source_range auf die Datei ab 0.
+    # Kamera-TC als available/source-Start (oft Stunden) sucht hinter EOF →
+    # Media Offline (Bisti Asset04/14, The_Wave Asset08). Clean-Medien setzen
+    # bereits -timecode 00:00:00:00; Originale hier genauso file-relativ exportieren.
+    # (_probe_avail bleibt nur Diagnose; OTIO bekommt Start 0.)
+    source_start = content_offset
+    source_end = content_offset + source_span
+    if source_end > media_dur + 1e-3:
         raise EnhancedOtioExportError(
-            f"{label}: Source-Range außerhalb der realen verfügbaren Range "
-            f"(source {source_start:.3f}–{source_end:.3f}, "
-            f"available {avail_start:.3f}–{avail_end:.3f}) · {path}"
+            f"{label}: Source-Range außerhalb der Mediendauer "
+            f"(file-relative {source_start:.3f}–{source_end:.3f}, "
+            f"duration {media_dur:.3f}; probe_available_start={_probe_avail:.3f}) "
+            f"· {path}"
         )
-    return path, avail_start, source_start, source_end, rate
+    return path, 0.0, source_start, source_end, rate
 
 
 def validate_resolved_timeline_for_production(
@@ -835,25 +835,15 @@ def export_otio_from_resolved_timeline(
             continue
 
         source_duration = source_end - source_start
-        avail_duration = max(
-            source_duration,
-            float(shot.resolved_media_duration_seconds or source_duration),
-        )
-        # available_range muss die Source enthalten.
-        media_ref = otio.schema.ExternalReference(
-            target_url=str(media_path),
-            available_range=_time_range(
-                avail_duration, rate, start_sec=avail_start
-            ),
-        )
-        # Re-probe for accurate available_range on real file.
-        file_avail_start, file_dur, file_rate = _validate_video_file(
+        # Dauer/Rate neu proben; available_range bewusst file-relativ (Start 0),
+        # nicht mit Embedded-Kamera-TC — sonst Media Offline in Resolve.
+        _file_avail_start, file_dur, file_rate = _validate_video_file(
             media_path, label=f"{shot.shot_id}", fps=fps
         )
         media_ref = otio.schema.ExternalReference(
             target_url=str(media_path),
             available_range=_time_range(
-                file_dur, file_rate, start_sec=file_avail_start
+                file_dur, file_rate, start_sec=float(avail_start)
             ),
         )
         clip = otio.schema.Clip(
@@ -865,6 +855,8 @@ def export_otio_from_resolved_timeline(
         )
         clip.metadata["asset_id"] = shot.asset_id
         clip.metadata["resolved_media_path"] = str(media_path)
+        if _file_avail_start > 1e-3:
+            clip.metadata["embedded_available_start_seconds"] = float(_file_avail_start)
         if shot.hold_mode:
             clip.metadata["hold_mode"] = shot.hold_mode
         if shot.asset_fit:
@@ -1053,18 +1045,18 @@ def export_portable_otio_package(
             )
         )
         source_duration = source_end - source_start
-        file_avail_start, file_dur, file_rate = _validate_video_file(
+        _file_avail_start, file_dur, file_rate = _validate_video_file(
             media_path, label=f"{shot.shot_id}", fps=fps
         )
         kind = "still_hold" if (shot.hold_mode or "").startswith(
             ("freeze_video", "still_hold")
         ) or "hold_cache" in media_path.parts else "video"
         stage_items.append((media_path, shot.asset_id, kind))
-        # Placeholder URL — nach Staging umgeschrieben
+        # Placeholder URL — nach Staging umgeschrieben; Ranges file-relativ.
         media_ref = otio.schema.ExternalReference(
             target_url=str(media_path),
             available_range=_time_range(
-                file_dur, file_rate, start_sec=file_avail_start
+                file_dur, file_rate, start_sec=float(avail_start)
             ),
         )
         clip = otio.schema.Clip(
@@ -1076,6 +1068,8 @@ def export_portable_otio_package(
         )
         clip.metadata["asset_id"] = shot.asset_id
         clip.metadata["original_media_path"] = str(media_path)
+        if _file_avail_start > 1e-3:
+            clip.metadata["embedded_available_start_seconds"] = float(_file_avail_start)
         if shot.hold_mode:
             clip.metadata["hold_mode"] = shot.hold_mode
         if shot.asset_fit:
