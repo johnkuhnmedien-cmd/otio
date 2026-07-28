@@ -66,6 +66,11 @@ class EnhancedOtioExportError(RuntimeError):
     pass
 
 
+# PTS-Jitter liegt typisch unter 0.2s; Kamera-SMPTE-TC beginnt oft bei ≥1s
+# (häufig Stunden). Darüber: Clean mit -timecode 00:00:00:00 erzwingen.
+_CAMERA_TC_THRESHOLD_SEC = 1.0
+
+
 def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> otio.opentime.TimeRange:
     """Sekunden → OTIO-TimeRange auf **ganzzahligen** Frames (Resolve-sicher).
 
@@ -350,7 +355,22 @@ def _ensure_shot_media_for_export(
             f"{label}: Medientyp weder Video noch Bild · {path}"
         )
 
-    _probe_avail, media_dur, rate = _validate_video_file(path, label=label, fps=fps)
+    folder = str(shot.folder_name or "").strip()
+    # Vorhandenes Clean bevorzugen (TC bereits 00:00:00:00).
+    if folder:
+        try:
+            from otio_app.services.clean_media import (
+                path_is_readable_file,
+                resolve_effective_media_path,
+            )
+
+            preferred = resolve_effective_media_path(project, folder, path)
+            if path_is_readable_file(preferred):
+                path = preferred.resolve()
+        except Exception:  # noqa: BLE001
+            pass
+
+    probe_avail, media_dur, rate = _validate_video_file(path, label=label, fps=fps)
     source_start = float(shot.source_start_seconds)
     source_end = float(shot.source_end_seconds)
     if source_end <= source_start:
@@ -359,25 +379,60 @@ def _ensure_shot_media_for_export(
             f"({source_start}) sein."
         )
     source_span = source_end - source_start
-    # Content-Offset = Trim/Mitte relativ zum Medienanfang — unabhängig davon,
-    # ob resolved_timeline noch im Embedded-TC-Raum speichert.
     shot_avail = float(getattr(shot, "resolved_available_start_seconds", 0.0) or 0.0)
     content_offset = max(0.0, source_start - shot_avail)
-    # DaVinci Resolve OTIO-Import mappt source_range auf die Datei ab 0.
-    # Kamera-TC als available/source-Start (oft Stunden) sucht hinter EOF →
-    # Media Offline (Bisti Asset04/14, The_Wave Asset08). Clean-Medien setzen
-    # bereits -timecode 00:00:00:00; Originale hier genauso file-relativ exportieren.
-    # (_probe_avail bleibt nur Diagnose; OTIO bekommt Start 0.)
-    source_start = content_offset
-    source_end = content_offset + source_span
-    if source_end > media_dur + 1e-3:
+
+    # Kamera-TC auf Originalen: Resolve matched OTIO-TC gegen Datei-TC.
+    # File-relativ (Start 0) bei Datei mit TC 01:00:00:00 / 07:xx → Offline
+    # (Bisti Asset07/04/14). Clean mit -timecode 00:00:00:00 erzwingen, dann
+    # file-relativ exportieren — wie die übrigen Clean-Clips, die online sind.
+    if probe_avail > _CAMERA_TC_THRESHOLD_SEC and folder:
+        try:
+            from otio_app.services.clean_media import (
+                CLEAN_STATUS_CLEAN,
+                path_is_readable_file,
+                process_media_file,
+            )
+
+            entry = process_media_file(
+                project, folder, path, force_transcode=True
+            )
+            clean_path = Path(str(entry.clean_path or "")).expanduser()
+            if (
+                entry.status == CLEAN_STATUS_CLEAN
+                and path_is_readable_file(clean_path)
+            ):
+                path = clean_path.resolve()
+                probe_avail, media_dur, rate = _validate_video_file(
+                    path, label=f"{label} (clean)", fps=fps
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+    if probe_avail <= _CAMERA_TC_THRESHOLD_SEC:
+        # Clean / kein Kamera-TC: Resolve-sicher file-relativ ab 0.
+        source_start = content_offset
+        source_end = content_offset + source_span
+        if source_end > media_dur + 1e-3:
+            raise EnhancedOtioExportError(
+                f"{label}: Source-Range außerhalb der Mediendauer "
+                f"(file-relative {source_start:.3f}–{source_end:.3f}, "
+                f"duration {media_dur:.3f}) · {path}"
+            )
+        return path, 0.0, source_start, source_end, rate
+
+    # Fallback: Clean fehlgeschlagen — OTIO im Embedded-TC-Raum belassen,
+    # damit Resolve Datei-TC und Clip-TC überlappen können.
+    source_start = probe_avail + content_offset
+    source_end = source_start + source_span
+    avail_end = probe_avail + media_dur
+    if source_start < probe_avail - 1e-6 or source_end > avail_end + 1e-6:
         raise EnhancedOtioExportError(
-            f"{label}: Source-Range außerhalb der Mediendauer "
-            f"(file-relative {source_start:.3f}–{source_end:.3f}, "
-            f"duration {media_dur:.3f}; probe_available_start={_probe_avail:.3f}) "
-            f"· {path}"
+            f"{label}: Source-Range außerhalb der realen verfügbaren Range "
+            f"(source {source_start:.3f}–{source_end:.3f}, "
+            f"available {probe_avail:.3f}–{avail_end:.3f}) · {path}"
         )
-    return path, 0.0, source_start, source_end, rate
+    return path, probe_avail, source_start, source_end, rate
 
 
 def validate_resolved_timeline_for_production(

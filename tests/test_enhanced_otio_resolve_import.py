@@ -379,19 +379,23 @@ def test_embedded_timecode_nonzero(tmp_path: Path) -> None:
     assert src.start_time.to_seconds() == pytest.approx(max(0.0, content_offset), abs=0.08)
 
 
-def test_otio_export_file_relative_despite_embedded_camera_tc(tmp_path: Path) -> None:
-    """Regression Bisti_slot_005/008: Kamera-TC ~7h darf nicht in OTIO source."""
-    from unittest.mock import patch
+def test_otio_export_forces_clean_for_camera_timecode(tmp_path: Path) -> None:
+    """Kamera-TC-Originale → Clean erzwingen, dann file-relativ exportieren."""
+    from unittest.mock import MagicMock, patch
 
+    from otio_app.services.clean_media import CLEAN_STATUS_CLEAN
     from otio_app.services.without_voiceover_enhanced.models import ResolvedShot
     from otio_app.services.without_voiceover_enhanced.otio_export_service import (
         _ensure_shot_media_for_export,
     )
 
     project = _project(tmp_path)
-    video = Path(project.project_root) / "Bisti" / "Bisti_De_Na_Zin_Wilderness_Asset14.mp4"
-    video.parent.mkdir(parents=True)
+    folder = "Castle Combe"
+    video = Path(project.project_root) / folder / "Asset14.mp4"
     video.write_bytes(b"fake-mp4")
+    clean = project.work_dir_path / "clean" / "Castle_Combe" / "Asset14_clean.mp4"
+    clean.parent.mkdir(parents=True)
+    clean.write_bytes(b"\x00" * 64)
     shot = ResolvedShot(
         shot_id="Bisti_slot_005",
         asset_id="asset__bisti__asset14",
@@ -403,21 +407,102 @@ def test_otio_export_file_relative_despite_embedded_camera_tc(tmp_path: Path) ->
         resolved_media_kind="video",
         resolved_media_duration_seconds=16.02,
         resolved_available_start_seconds=25372.347,
-        folder_name="Bisti",
+        folder_name=folder,
     )
-    with patch(
-        "otio_app.services.without_voiceover_enhanced.otio_export_service._validate_video_file",
-        return_value=(25372.347, 16.02, 29.97),
+    entry = MagicMock()
+    entry.status = CLEAN_STATUS_CLEAN
+    entry.clean_path = str(clean)
+
+    def _validate(path: Path, *, label: str, fps: float):
+        text = str(path).replace("\\", "/")
+        if "/clean/" in text:
+            return 0.0, 16.02, 29.97
+        return 25372.347, 16.02, 29.97
+
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.otio_export_service._validate_video_file",
+            side_effect=_validate,
+        ),
+        patch(
+            "otio_app.services.clean_media.resolve_effective_media_path",
+            return_value=video.resolve(),
+        ),
+        patch(
+            "otio_app.services.clean_media.process_media_file",
+            return_value=entry,
+        ) as process_mock,
+        patch(
+            "otio_app.services.clean_media.path_is_readable_file",
+            side_effect=lambda p: Path(p).is_file(),
+        ),
     ):
         path, avail, src0, src1, rate = _ensure_shot_media_for_export(
             project, shot, fps=25.0
         )
-    assert path == video.resolve()
+    process_mock.assert_called_once()
+    assert process_mock.call_args.kwargs.get("force_transcode") is True
+    assert path == clean.resolve()
     assert avail == 0.0
     assert src0 == pytest.approx(4.99, abs=0.01)
     assert src1 == pytest.approx(12.03, abs=0.01)
-    assert src1 - src0 == pytest.approx(7.04, abs=0.01)
     assert rate == pytest.approx(29.97, abs=0.01)
+
+
+def test_otio_export_keeps_embedded_tc_when_clean_fails(tmp_path: Path) -> None:
+    """Ohne Clean: OTIO im Kamera-TC-Raum belassen (Resolve-Overlap)."""
+    from unittest.mock import MagicMock, patch
+
+    from otio_app.services.without_voiceover_enhanced.models import ResolvedShot
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        _ensure_shot_media_for_export,
+    )
+
+    project = _project(tmp_path)
+    folder = "Castle Combe"
+    video = Path(project.project_root) / folder / "Asset07.mp4"
+    video.write_bytes(b"fake-mp4")
+    shot = ResolvedShot(
+        shot_id="Bisti_slot_012",
+        asset_id="asset07",
+        timeline_start_seconds=84.4,
+        timeline_end_seconds=91.68,
+        source_start_seconds=3602.964166,
+        source_end_seconds=3610.244167,
+        resolved_media_path=str(video),
+        resolved_media_kind="video",
+        resolved_media_duration_seconds=12.208333,
+        resolved_available_start_seconds=3600.0,
+        folder_name=folder,
+    )
+    entry = MagicMock()
+    entry.status = "failed"
+    entry.clean_path = None
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.otio_export_service._validate_video_file",
+            return_value=(3600.0, 12.208333, 25.0),
+        ),
+        patch(
+            "otio_app.services.clean_media.resolve_effective_media_path",
+            return_value=video.resolve(),
+        ),
+        patch(
+            "otio_app.services.clean_media.process_media_file",
+            return_value=entry,
+        ),
+        patch(
+            "otio_app.services.clean_media.path_is_readable_file",
+            side_effect=lambda p: Path(p).is_file(),
+        ),
+    ):
+        path, avail, src0, src1, _rate = _ensure_shot_media_for_export(
+            project, shot, fps=25.0
+        )
+    assert path == video.resolve()
+    assert avail == pytest.approx(3600.0)
+    assert src0 == pytest.approx(3602.964166, abs=0.01)
+    assert src1 == pytest.approx(3610.244167, abs=0.01)
 
 
 def test_catalog_prefers_clean_over_original_inventory_path(tmp_path: Path) -> None:
