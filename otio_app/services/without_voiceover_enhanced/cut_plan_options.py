@@ -118,7 +118,8 @@ class CutPlanOptions(BaseModel):
         default=ENHANCED_DEFAULT_VOICEOVER_POSTROLL_SEC, ge=0.0, le=60.0
     )
     voiceover_postroll_mode: TimingMode = TIMING_MODE_FIXED
-    # Asset darf bis zu dieser Unterlänge trotzdem genutzt werden.
+    # Asset darf bis zu dieser Unterlänge trotzdem genutzt werden:
+    # Shortfall geht an Nachbar-Clips (shot_max darf dabei überschritten werden).
     short_asset_tolerance_sec: float = Field(
         default=ENHANCED_DEFAULT_SHORT_ASSET_TOLERANCE_SEC, ge=0.0, le=30.0
     )
