@@ -383,7 +383,6 @@ def test_otio_export_file_relative_despite_embedded_camera_tc(tmp_path: Path) ->
     """Regression Bisti_slot_005/008: Kamera-TC ~7h darf nicht in OTIO source."""
     from unittest.mock import patch
 
-    from otio_app.services.media_utils import MediaTiming
     from otio_app.services.without_voiceover_enhanced.models import ResolvedShot
     from otio_app.services.without_voiceover_enhanced.otio_export_service import (
         _ensure_shot_media_for_export,
@@ -406,29 +405,9 @@ def test_otio_export_file_relative_despite_embedded_camera_tc(tmp_path: Path) ->
         resolved_available_start_seconds=25372.347,
         folder_name="Bisti",
     )
-    timing = MediaTiming(start_sec=25372.347, duration_sec=16.02, rate=29.97)
-    with (
-        patch(
-            "otio_app.services.without_voiceover_enhanced.otio_export_service.probe_media_timing",
-            return_value=timing,
-        ),
-        patch(
-            "otio_app.services.without_voiceover_enhanced.otio_export_service.probe_duration_seconds",
-            return_value=16.02,
-        ),
-        patch(
-            "otio_app.services.without_voiceover_enhanced.otio_export_service.subprocess.run",
-            return_value=type(
-                "R",
-                (),
-                {
-                    "returncode": 0,
-                    "stdout": json.dumps(
-                        {"streams": [{"width": 1920, "height": 1080, "codec_type": "video"}]}
-                    ).encode(),
-                },
-            )(),
-        ),
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.otio_export_service._validate_video_file",
+        return_value=(25372.347, 16.02, 29.97),
     ):
         path, avail, src0, src1, rate = _ensure_shot_media_for_export(
             project, shot, fps=25.0
