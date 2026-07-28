@@ -696,6 +696,109 @@ def test_catalog_indexes_disk_when_canonical_inventory_missing(tmp_path: Path) -
     assert Path(entry["path"]).resolve() == original.resolve()
 
 
+def test_catalog_includes_unselected_chapter_folder(tmp_path: Path) -> None:
+    """Kapitel außerhalb selected_asset_subdirs muss trotzdem im Katalog sein."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Caddo Lake"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder, "Castle Combe"]
+    project.selected_asset_subdirs = ["Castle Combe"]
+    original = Path(project.project_root) / folder / "Caddo_Lake_Asset10.mp4"
+    original.write_bytes(b"\x00" * 64)
+    _save_inventory(project, folder, original)
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset10")
+    assert err is None
+    assert entry is not None
+    assert Path(entry["path"]).resolve() == original.resolve()
+
+
+def test_catalog_empty_asset_id_registers_stem_legacy(tmp_path: Path) -> None:
+    """Kanonisches Inventar ohne asset_id → Slim/Cut-Plan-Stem-ID auflösbar."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Caddo Lake"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    original = Path(project.project_root) / folder / "Caddo_Lake_Asset02.mp4"
+    original.write_bytes(b"\x00" * 64)
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, folder),
+        AssetFolderAnalysis(
+            folder=folder,
+            assets=[
+                AssetMediaAnalysis(
+                    path=str(original),
+                    description="lake",
+                    asset_id="",
+                    media_type="video",
+                )
+            ],
+            media_files=[str(original)],
+        ),
+    )
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset02")
+    assert err is None
+    assert entry is not None
+    assert "asset_caddo_lake_asset02" in catalog.by_id or (
+        catalog.legacy_to_ids.get("asset_caddo_lake_asset02")
+    )
+
+
+def test_catalog_indexes_clean_when_inventory_paths_missing(tmp_path: Path) -> None:
+    """Inventar zeigt auf fehlende Clean-Namen; echte Clean-Dateien trotzdem indexieren."""
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Caddo Lake"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    missing = (
+        project.work_dir_path / "clean" / "Caddo_Lake" / "Caddo_Lake_Asset14.mp4"
+    )
+    clean = (
+        project.work_dir_path
+        / "clean"
+        / "Caddo_Lake"
+        / "Caddo_Lake_Asset14_3840x2160.mp4"
+    )
+    clean.parent.mkdir(parents=True)
+    clean.write_bytes(b"\x00" * 128)
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, folder),
+        AssetFolderAnalysis(
+            folder=folder,
+            assets=[
+                AssetMediaAnalysis(
+                    path=str(missing),
+                    description="lake",
+                    asset_id="",
+                    media_type="video",
+                )
+            ],
+            # media_files leer / ohne Top-Level → discover oft leer
+            media_files=[],
+        ),
+    )
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, "asset_caddo_lake_asset14")
+    assert err is None
+    assert entry is not None
+    assert Path(entry["path"]).resolve() == clean.resolve()
+
+
 def test_still_jpeg_and_png_hold(tmp_path: Path) -> None:
     project = _project(tmp_path)
     jpg = Path(project.project_root) / "Castle Combe" / "still_test.jpg"

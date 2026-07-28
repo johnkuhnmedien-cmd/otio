@@ -125,6 +125,47 @@ def _stem_legacy_asset_ids(path: Path | str) -> list[str]:
     return out
 
 
+def _preferred_stem_legacy_id(path: Path | str) -> str:
+    """Cut-Plan-kompatible Stem-ID (ohne ``_3840x2160``), sonst erste Alias."""
+    aliases = _stem_legacy_asset_ids(path)
+    if not aliases:
+        return ""
+    # Letzte Alias ist die ohne Auflösungs-Suffix, sofern vorhanden.
+    return aliases[-1]
+
+
+def _catalog_folder_names(project: Project) -> list[str]:
+    """Ordner für den Asset-Katalog — nicht nur die UI-Auswahl.
+
+    LLM-Cuts laufen auch für Kapitel außerhalb von ``selected_asset_subdirs``;
+    Python Timing muss dieselben Inventare sehen, sonst „Unbekannte Asset-ID“.
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw: str) -> None:
+        text = (raw or "").strip()
+        if not text or text in seen:
+            return
+        seen.add(text)
+        names.append(text)
+
+    for raw in list(project.selected_asset_subdirs or []):
+        _add(str(raw))
+    for raw in list(project.asset_subdir_names or []):
+        _add(str(raw))
+    try:
+        from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+            list_body_chapter_names,
+        )
+
+        for raw in list_body_chapter_names(project):
+            _add(str(raw))
+    except Exception:  # noqa: BLE001
+        pass
+    return names
+
+
 def _asset_number_from_id_or_name(text: str) -> int | None:
     raw = (text or "").strip()
     if not raw:
@@ -144,6 +185,47 @@ def _asset_number_from_id_or_name(text: str) -> int | None:
         return None
 
 
+def _iter_folder_media_candidates(project: Project, folder: str) -> list[Path]:
+    """Top-Level + Clean + Supplemental — für Recovery und Disk-Index."""
+    from otio_app.services.clean_media import (
+        discover_supplemental_media_paths,
+        list_clean_files_in_folder,
+    )
+    from otio_app.services.media_inventory_cache import discover_folder_media_paths
+
+    found: list[Path] = []
+    seen: set[str] = set()
+
+    def _push(path: Path | None) -> None:
+        if path is None:
+            return
+        try:
+            key = str(path.expanduser().resolve())
+        except OSError:
+            key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        found.append(path)
+
+    try:
+        for path in discover_folder_media_paths(project, folder):
+            _push(path)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        for path in list_clean_files_in_folder(project, folder):
+            _push(path)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        for path in discover_supplemental_media_paths(project, folder):
+            _push(path)
+    except Exception:  # noqa: BLE001
+        pass
+    return found
+
+
 def _recover_inventory_media_path(
     project: Project,
     folder: str,
@@ -158,7 +240,6 @@ def _recover_inventory_media_path(
         media_asset_number,
         media_stem_key,
     )
-    from otio_app.services.media_inventory_cache import discover_folder_media_paths
 
     name = Path(str(raw_path)).name or Path(str(raw_path)).stem
     if not name:
@@ -171,7 +252,7 @@ def _recover_inventory_media_path(
             name
         )
 
-    for candidate in discover_folder_media_paths(project, folder):
+    for candidate in _iter_folder_media_candidates(project, folder):
         try:
             if not candidate.is_file():
                 continue
@@ -207,11 +288,21 @@ def _probe_entry(
     media_type_hint: str,
     fps: float,
 ) -> dict:
-    timing = probe_media_timing(path, default_rate=fps)
-    duration = timing.duration_sec
-    if duration is None:
-        duration = probe_duration_seconds(path)
     kind = "image" if is_image_media(path) or media_type_hint in {"photo", "image"} else "video"
+    try:
+        timing = probe_media_timing(path, default_rate=fps)
+        duration = timing.duration_sec
+        start_sec = float(timing.start_sec or 0.0)
+        rate = float(timing.rate or fps)
+    except Exception:  # noqa: BLE001 — Katalog darf an einem kaputten Clip nicht sterben
+        duration = None
+        start_sec = 0.0
+        rate = float(fps)
+    if duration is None:
+        try:
+            duration = probe_duration_seconds(path)
+        except Exception:  # noqa: BLE001
+            duration = None
     return {
         "path": str(path),
         "duration_seconds": float(duration) if duration else None,
@@ -219,8 +310,8 @@ def _probe_entry(
         "folder": folder,
         "media_type": media_type_hint or kind,
         "media_kind": kind,
-        "available_start_seconds": float(timing.start_sec or 0.0),
-        "media_rate": float(timing.rate or fps),
+        "available_start_seconds": start_sec,
+        "media_rate": rate,
         "canonical_id": asset_id,
     }
 
@@ -292,24 +383,14 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
     except Exception:  # noqa: BLE001
         pass
 
-    for folder in project.selected_asset_subdirs:
+    for folder in _catalog_folder_names(project):
         inventory = load_folder_inventory(project, folder)
-        disk_fallback_paths: list[Path] = []
-        if inventory is None:
-            # Nur Slim / kein kanonisches Inventar: Top-Level-Medien trotzdem
-            # indexieren, sonst sind Cut-Plan-Legacy-IDs „unbekannt“.
-            try:
-                from otio_app.services.media_inventory_cache import (
-                    discover_folder_media_paths,
-                )
-
-                disk_fallback_paths = list(discover_folder_media_paths(project, folder))
-            except Exception:  # noqa: BLE001
-                disk_fallback_paths = []
-            assets_iter: list[object] = []
-        else:
-            disk_fallback_paths = []
-            assets_iter = list(getattr(inventory, "assets", []) or [])
+        # load_folder_inventory liefert praktisch immer ein Objekt; Disk/Clean
+        # trotzdem immer nachindexieren (leere/verwaiste Inventar-Pfade).
+        assets_iter: list[object] = (
+            list(getattr(inventory, "assets", []) or []) if inventory is not None else []
+        )
+        disk_fallback_paths = _iter_folder_media_candidates(project, folder)
 
         for asset in assets_iter:
             raw_path = getattr(asset, "path", None) or getattr(asset, "source_path", None)
@@ -343,6 +424,12 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
                 path = inventory_path
             if not path.is_file():
                 continue
+            # Kanonisches Inventar oft ohne asset_id — Slim/LLM nutzt Stem-IDs.
+            if not existing:
+                existing = (
+                    _preferred_stem_legacy_id(inventory_path)
+                    or _preferred_stem_legacy_id(path)
+                )
             canonical = canonicalize_inventory_asset_id(
                 project,
                 path=path,
@@ -384,6 +471,8 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
             )
             if duration is not None and entry["duration_seconds"] is None:
                 entry["duration_seconds"] = float(duration)
+            # Nach Stem-Backfill ist ``canonical`` oft schon die Cut-Plan-Legacy-ID
+            # (canonicalize behält nichtleere existing_id).
             register_id = (
                 existing
                 if existing and not is_legacy_ambiguous_asset_id(existing)
@@ -424,39 +513,57 @@ def build_asset_catalog(project: Project, *, fps: float = 25.0) -> AssetCatalog:
                 path = media_path
             if not path.is_file():
                 continue
+            stem_legacy = (
+                _preferred_stem_legacy_id(media_path)
+                or _preferred_stem_legacy_id(path)
+            )
+            # Schon über Inventory registriert?
+            already = False
+            if stem_legacy and (
+                stem_legacy in result.by_id
+                or (result.legacy_to_ids.get(stem_legacy) or [])
+            ):
+                already = True
+            for stem_alias in _stem_legacy_asset_ids(media_path):
+                if stem_alias in result.by_id or (
+                    result.legacy_to_ids.get(stem_alias) or []
+                ):
+                    already = True
+                    break
             canonical = canonicalize_inventory_asset_id(
                 project,
                 path=path,
                 folder_name=folder,
-                existing_id="",
+                existing_id=stem_legacy,
             )
-            # Schon über Inventory registriert?
-            already = False
-            for stem_legacy in _stem_legacy_asset_ids(media_path):
-                aliases = result.legacy_to_ids.get(stem_legacy) or []
-                if aliases or canonical in result.by_id:
-                    already = True
-                    break
             if already or canonical in result.by_id:
                 continue
+            register_id = stem_legacy or canonical
             entry = _probe_entry(
                 project,
                 path=path,
                 folder=folder,
-                asset_id=canonical,
+                asset_id=register_id,
                 usable_in=None,
                 media_type_hint=(
                     "photo" if is_image_media(path) else "video"
                 ),
                 fps=fps,
             )
-            entry["canonical_id"] = canonical
+            entry["canonical_id"] = register_id
             _register(
-                canonical,
+                register_id,
                 entry,
-                raw_id=canonical,
+                raw_id=register_id,
                 alias_paths=[media_path, path],
             )
+            if register_id != canonical:
+                _register(
+                    canonical,
+                    entry,
+                    raw_id=register_id,
+                    alias_paths=[media_path, path],
+                )
 
     accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     if accepted is not None:
