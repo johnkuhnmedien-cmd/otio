@@ -702,56 +702,6 @@ def _trim_tiny_leading_black(
             break
 
 
-def measure_leading_black_skip_seconds(
-    path: Path,
-    *,
-    rate: float | None = None,
-    max_trim_seconds: float = 0.5,
-    max_frames: int = 12,
-) -> float:
-    """Führendes Schwarz ab Dateianfang in Sekunden — ohne Re-Encode.
-
-    Für OTIO-Export: Source-In hinter Clean-/x264-Priming-Schwarz schieben.
-    Kombiniert ``blackframe``-Zählung, ``blackdetect`` und den bekannten
-    1–3-Frame-Force-Drop, falls Detection Frame 0 als schwarz sieht aber
-    die Frame-Liste leer bleibt.
-    """
-    if not path_is_readable_file(path) or is_image_media(path):
-        return 0.0
-    fps = float(rate or 0.0)
-    if fps <= 1.0:
-        fps = float(_probe_video_fps(path) or 25.0)
-    one_frame = 1.0 / max(1.0, fps)
-    max_trim = max(0.0, float(max_trim_seconds))
-    if max_trim <= 0.0:
-        return 0.0
-    frame_budget = max(1, min(int(max_frames), int(max_trim / one_frame + 0.5)))
-
-    leading = _count_leading_black_frames(
-        path, max_frames=frame_budget, min_pblack=80
-    )
-    detected_sec = probe_leading_black_seconds(
-        path,
-        min_black_duration=min(0.02, one_frame * 0.5),
-        pixel_threshold=0.15,
-        max_probe_seconds=min(5.0, max_trim + 0.5),
-    )
-    if detected_sec is None:
-        detected_sec = 0.0
-    detected_frames = (
-        int(float(detected_sec) / one_frame + 0.5) if float(detected_sec) > 0 else 0
-    )
-    if leading <= 0 and detected_frames <= 0:
-        # x264-Priming: oft 1–3 Schwarzframes, Detection liefert 0.
-        if _first_frame_is_black(path, min_pblack=80):
-            leading = min(CLEAN_FORCE_DROP_LEADING_FRAMES, frame_budget)
-    else:
-        leading = max(leading, min(detected_frames, frame_budget))
-
-    skip = min(max_trim, float(leading) * one_frame)
-    return round(skip, 6) if skip > 1e-6 else 0.0
-
-
 def validate_media_file(path: Path) -> CleanMediaEntry:
     """Prüft eine Datei (Probe + Decode) ohne Transcode."""
     entry = CleanMediaEntry(original_path=str(path.resolve()))

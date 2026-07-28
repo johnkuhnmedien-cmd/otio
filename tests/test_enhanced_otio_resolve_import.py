@@ -437,7 +437,7 @@ def test_otio_export_forces_clean_for_camera_timecode(tmp_path: Path) -> None:
             side_effect=lambda p: Path(p).is_file(),
         ),
     ):
-        path, avail, src0, src1, rate, skip = _ensure_shot_media_for_export(
+        path, avail, src0, src1, rate = _ensure_shot_media_for_export(
             project, shot, fps=25.0
         )
     process_mock.assert_called_once()
@@ -447,7 +447,6 @@ def test_otio_export_forces_clean_for_camera_timecode(tmp_path: Path) -> None:
     assert src0 == pytest.approx(4.99, abs=0.01)
     assert src1 == pytest.approx(12.03, abs=0.01)
     assert rate == pytest.approx(29.97, abs=0.01)
-    assert skip == 0.0
 
 
 def test_otio_export_keeps_embedded_tc_when_clean_fails(tmp_path: Path) -> None:
@@ -497,123 +496,13 @@ def test_otio_export_keeps_embedded_tc_when_clean_fails(tmp_path: Path) -> None:
             side_effect=lambda p: Path(p).is_file(),
         ),
     ):
-        path, avail, src0, src1, _rate, skip = _ensure_shot_media_for_export(
+        path, avail, src0, src1, _rate = _ensure_shot_media_for_export(
             project, shot, fps=25.0
         )
     assert path == video.resolve()
     assert avail == pytest.approx(3600.0)
     assert src0 == pytest.approx(3602.964166, abs=0.01)
     assert src1 == pytest.approx(3610.244167, abs=0.01)
-    assert skip == 0.0
-
-
-def test_otio_export_skips_black_measure_when_source_not_at_head(
-    tmp_path: Path,
-) -> None:
-    """Mitten im Clip: kein ffmpeg-blackdetect (OTIO-Merge-Perf)."""
-    from unittest.mock import patch
-
-    from otio_app.services.without_voiceover_enhanced.models import ResolvedShot
-    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
-        _ensure_shot_media_for_export,
-    )
-
-    project = _project(tmp_path)
-    folder = "Castle Combe"
-    video = Path(project.project_root) / folder / "Asset03.mp4"
-    video.write_bytes(b"fake-mp4")
-    shot = ResolvedShot(
-        shot_id="mid_shot",
-        asset_id="asset03",
-        timeline_start_seconds=10.0,
-        timeline_end_seconds=18.0,
-        source_start_seconds=4.0,
-        source_end_seconds=12.0,
-        resolved_media_path=str(video),
-        resolved_media_kind="video",
-        resolved_media_duration_seconds=20.0,
-        resolved_available_start_seconds=0.0,
-        folder_name=folder,
-    )
-    with (
-        patch(
-            "otio_app.services.without_voiceover_enhanced.otio_export_service._validate_video_file",
-            return_value=(0.0, 20.0, 25.0),
-        ),
-        patch(
-            "otio_app.services.clean_media.resolve_effective_media_path",
-            return_value=video.resolve(),
-        ),
-        patch(
-            "otio_app.services.clean_media.path_is_readable_file",
-            side_effect=lambda p: Path(p).is_file(),
-        ),
-        patch(
-            "otio_app.services.clean_media.measure_leading_black_skip_seconds",
-        ) as measure,
-    ):
-        _path, _avail, src0, src1, _rate, skip = _ensure_shot_media_for_export(
-            project, shot, fps=25.0
-        )
-    measure.assert_not_called()
-    assert skip == 0.0
-    assert src0 == pytest.approx(4.0)
-    assert src1 == pytest.approx(12.0)
-
-
-def test_otio_export_skips_leading_black_on_clean_media(tmp_path: Path) -> None:
-    """Kapitel-Vorlauf auf Dateianfang + Clean-Priming → Source hinter Schwarz."""
-    from unittest.mock import patch
-
-    from otio_app.services.without_voiceover_enhanced.models import ResolvedShot
-    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
-        _ensure_shot_media_for_export,
-    )
-
-    project = _project(tmp_path)
-    folder = "Castle Combe"
-    video = Path(project.project_root) / folder / "Asset02_3840x2160.mp4"
-    video.write_bytes(b"fake-mp4")
-    shot = ResolvedShot(
-        shot_id="Bisti_slot_001",
-        asset_id="asset02",
-        timeline_start_seconds=0.0,
-        timeline_end_seconds=11.4,
-        source_start_seconds=0.066,
-        source_end_seconds=11.466,
-        resolved_media_path=str(video),
-        resolved_media_kind="video",
-        resolved_media_duration_seconds=14.381,
-        resolved_available_start_seconds=0.066,
-        folder_name=folder,
-    )
-    with (
-        patch(
-            "otio_app.services.without_voiceover_enhanced.otio_export_service._validate_video_file",
-            return_value=(0.066, 14.381, 25.0),
-        ),
-        patch(
-            "otio_app.services.clean_media.resolve_effective_media_path",
-            return_value=video.resolve(),
-        ),
-        patch(
-            "otio_app.services.clean_media.path_is_readable_file",
-            side_effect=lambda p: Path(p).is_file(),
-        ),
-        patch(
-            "otio_app.services.clean_media.measure_leading_black_skip_seconds",
-            return_value=0.12,
-        ),
-    ):
-        path, avail, src0, src1, _rate, skip = _ensure_shot_media_for_export(
-            project, shot, fps=25.0
-        )
-    assert path == video.resolve()
-    assert avail == 0.0
-    # content_offset was 0 → bumped past 0.12s black
-    assert skip == pytest.approx(0.12)
-    assert src0 == pytest.approx(0.12)
-    assert src1 == pytest.approx(11.52, abs=0.01)
 
 
 def test_catalog_prefers_clean_over_original_inventory_path(tmp_path: Path) -> None:
