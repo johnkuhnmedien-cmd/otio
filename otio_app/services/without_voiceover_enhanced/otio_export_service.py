@@ -293,14 +293,55 @@ def _export_styled_still_hold(
     return _assert_local_file(str(hold), label=f"{label} (still hold)")
 
 
+def _apply_leading_black_source_skip(
+    path: Path,
+    *,
+    avail_start: float,
+    source_start: float,
+    source_end: float,
+    media_dur: float,
+    rate: float,
+) -> tuple[float, float, float]:
+    """Schiebt Source hinter führendes Schwarz (Clean-/x264-Priming).
+
+    Liefert ``(source_start, source_end, skipped_seconds)``. Timeline-Dauer
+    bleibt gleich, solange genug Media hinter dem Schwarz liegt.
+    """
+    try:
+        from otio_app.services.clean_media import measure_leading_black_skip_seconds
+
+        skip = float(
+            measure_leading_black_skip_seconds(path, rate=rate) or 0.0
+        )
+    except Exception:  # noqa: BLE001
+        return source_start, source_end, 0.0
+    if skip <= 1e-6:
+        return source_start, source_end, 0.0
+    min_source = float(avail_start) + skip
+    if source_start + 1e-6 >= min_source:
+        return source_start, source_end, 0.0
+    span = max(0.01, float(source_end) - float(source_start))
+    new_start = min_source
+    new_end = new_start + span
+    avail_end = float(avail_start) + float(media_dur)
+    if new_end > avail_end + 1e-6:
+        new_end = avail_end
+        if new_end <= new_start + 1e-6:
+            return source_start, source_end, 0.0
+    return new_start, new_end, skip
+
+
 def _ensure_shot_media_for_export(
     project: Project,
     shot: ResolvedShot,
     *,
     fps: float,
     catalog: AssetCatalog | None = None,
-) -> tuple[Path, float, float, float, float]:
-    """Validiert Shot-Medien; liefert path, avail_start, source_start, source_end, rate."""
+) -> tuple[Path, float, float, float, float, float]:
+    """Validiert Shot-Medien.
+
+    Liefert ``path, avail_start, source_start, source_end, rate, leading_black_skip``.
+    """
     label = f"{shot.shot_id} / {shot.asset_id}"
     if not (shot.resolved_media_path or "").strip():
         raise EnhancedOtioExportError(
@@ -329,7 +370,7 @@ def _ensure_shot_media_for_export(
         timeline_dur = max(
             0.01, float(shot.timeline_end_seconds - shot.timeline_start_seconds)
         )
-        return hold_path, 0.0, 0.0, timeline_dur, fps
+        return hold_path, 0.0, 0.0, timeline_dur, fps, 0.0
 
     # Ohne Stil/Dynamic: Bild → Hold (oder bereits vorhandenes Hold-MP4 behalten).
     if is_image_media(path):
@@ -348,7 +389,7 @@ def _ensure_shot_media_for_export(
         except MediaHoldError as exc:
             raise EnhancedOtioExportError(f"{label}: {exc}") from exc
         path = _assert_local_file(str(path), label=f"{label} (still hold)")
-        return path, 0.0, 0.0, timeline_dur, fps
+        return path, 0.0, 0.0, timeline_dur, fps, 0.0
 
     if not is_video_media(path):
         raise EnhancedOtioExportError(
@@ -411,6 +452,7 @@ def _ensure_shot_media_for_export(
 
     if probe_avail <= _CAMERA_TC_THRESHOLD_SEC:
         # Clean / kein Kamera-TC: Resolve-sicher file-relativ ab 0.
+        avail_start = 0.0
         source_start = content_offset
         source_end = content_offset + source_span
         if source_end > media_dur + 1e-3:
@@ -419,20 +461,36 @@ def _ensure_shot_media_for_export(
                 f"(file-relative {source_start:.3f}–{source_end:.3f}, "
                 f"duration {media_dur:.3f}) · {path}"
             )
-        return path, 0.0, source_start, source_end, rate
+    else:
+        # Fallback: Clean fehlgeschlagen — OTIO im Embedded-TC-Raum belassen,
+        # damit Resolve Datei-TC und Clip-TC überlappen können.
+        avail_start = probe_avail
+        source_start = probe_avail + content_offset
+        source_end = source_start + source_span
+        avail_end = probe_avail + media_dur
+        if source_start < probe_avail - 1e-6 or source_end > avail_end + 1e-6:
+            raise EnhancedOtioExportError(
+                f"{label}: Source-Range außerhalb der realen verfügbaren Range "
+                f"(source {source_start:.3f}–{source_end:.3f}, "
+                f"available {probe_avail:.3f}–{avail_end:.3f}) · {path}"
+            )
 
-    # Fallback: Clean fehlgeschlagen — OTIO im Embedded-TC-Raum belassen,
-    # damit Resolve Datei-TC und Clip-TC überlappen können.
-    source_start = probe_avail + content_offset
-    source_end = source_start + source_span
-    avail_end = probe_avail + media_dur
-    if source_start < probe_avail - 1e-6 or source_end > avail_end + 1e-6:
-        raise EnhancedOtioExportError(
-            f"{label}: Source-Range außerhalb der realen verfügbaren Range "
-            f"(source {source_start:.3f}–{source_end:.3f}, "
-            f"available {probe_avail:.3f}–{avail_end:.3f}) · {path}"
+    # Bereits gecleante Assets können trotzdem 1–3 Schwarzframes am Anfang
+    # haben (x264-Priming). Kapitel-Vor-/Nachlauf schiebt Source oft auf
+    # Dateianfang → schwarzer Erstframe in Resolve. Hier nur Source-In bump.
+    hold = str(shot.hold_mode or "").strip().lower()
+    if hold not in {"freeze_video", "still_hold"} and "hold_cache" not in path.parts:
+        source_start, source_end, leading_skip = _apply_leading_black_source_skip(
+            path,
+            avail_start=avail_start,
+            source_start=source_start,
+            source_end=source_end,
+            media_dur=media_dur,
+            rate=rate,
         )
-    return path, probe_avail, source_start, source_end, rate
+    else:
+        leading_skip = 0.0
+    return path, avail_start, source_start, source_end, rate, leading_skip
 
 
 def validate_resolved_timeline_for_production(
@@ -596,7 +654,7 @@ def validate_resolved_timeline_for_production(
             )
             continue
         try:
-            path, avail_start, source_start, source_end, _rate = (
+            path, avail_start, source_start, source_end, _rate, _skip = (
                 _ensure_shot_media_for_export(
                     project, shot, fps=fps, catalog=catalog
                 )
@@ -873,7 +931,7 @@ def export_otio_from_resolved_timeline(
                 otio.schema.Gap(source_range=_time_range(gap, fps))
             )
         try:
-            media_path, avail_start, source_start, source_end, rate = (
+            media_path, avail_start, source_start, source_end, rate, leading_skip = (
                 _ensure_shot_media_for_export(
                     project, shot, fps=fps, catalog=catalog
                 )
@@ -912,6 +970,8 @@ def export_otio_from_resolved_timeline(
         clip.metadata["resolved_media_path"] = str(media_path)
         if _file_avail_start > 1e-3:
             clip.metadata["embedded_available_start_seconds"] = float(_file_avail_start)
+        if leading_skip > 1e-6:
+            clip.metadata["leading_black_skip_seconds"] = float(leading_skip)
         if shot.hold_mode:
             clip.metadata["hold_mode"] = shot.hold_mode
         if shot.asset_fit:
@@ -1094,7 +1154,7 @@ def export_portable_otio_package(
         if shot.timeline_start_seconds > cursor + 1e-6:
             gap = shot.timeline_start_seconds - cursor
             video_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
-        media_path, avail_start, source_start, source_end, rate = (
+        media_path, avail_start, source_start, source_end, rate, leading_skip = (
             _ensure_shot_media_for_export(
                 project, shot, fps=fps, catalog=catalog
             )
@@ -1125,6 +1185,8 @@ def export_portable_otio_package(
         clip.metadata["original_media_path"] = str(media_path)
         if _file_avail_start > 1e-3:
             clip.metadata["embedded_available_start_seconds"] = float(_file_avail_start)
+        if leading_skip > 1e-6:
+            clip.metadata["leading_black_skip_seconds"] = float(leading_skip)
         if shot.hold_mode:
             clip.metadata["hold_mode"] = shot.hold_mode
         if shot.asset_fit:
