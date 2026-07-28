@@ -507,6 +507,60 @@ def test_otio_export_keeps_embedded_tc_when_clean_fails(tmp_path: Path) -> None:
     assert skip == 0.0
 
 
+def test_otio_export_skips_black_measure_when_source_not_at_head(
+    tmp_path: Path,
+) -> None:
+    """Mitten im Clip: kein ffmpeg-blackdetect (OTIO-Merge-Perf)."""
+    from unittest.mock import patch
+
+    from otio_app.services.without_voiceover_enhanced.models import ResolvedShot
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        _ensure_shot_media_for_export,
+    )
+
+    project = _project(tmp_path)
+    folder = "Castle Combe"
+    video = Path(project.project_root) / folder / "Asset03.mp4"
+    video.write_bytes(b"fake-mp4")
+    shot = ResolvedShot(
+        shot_id="mid_shot",
+        asset_id="asset03",
+        timeline_start_seconds=10.0,
+        timeline_end_seconds=18.0,
+        source_start_seconds=4.0,
+        source_end_seconds=12.0,
+        resolved_media_path=str(video),
+        resolved_media_kind="video",
+        resolved_media_duration_seconds=20.0,
+        resolved_available_start_seconds=0.0,
+        folder_name=folder,
+    )
+    with (
+        patch(
+            "otio_app.services.without_voiceover_enhanced.otio_export_service._validate_video_file",
+            return_value=(0.0, 20.0, 25.0),
+        ),
+        patch(
+            "otio_app.services.clean_media.resolve_effective_media_path",
+            return_value=video.resolve(),
+        ),
+        patch(
+            "otio_app.services.clean_media.path_is_readable_file",
+            side_effect=lambda p: Path(p).is_file(),
+        ),
+        patch(
+            "otio_app.services.clean_media.measure_leading_black_skip_seconds",
+        ) as measure,
+    ):
+        _path, _avail, src0, src1, _rate, skip = _ensure_shot_media_for_export(
+            project, shot, fps=25.0
+        )
+    measure.assert_not_called()
+    assert skip == 0.0
+    assert src0 == pytest.approx(4.0)
+    assert src1 == pytest.approx(12.0)
+
+
 def test_otio_export_skips_leading_black_on_clean_media(tmp_path: Path) -> None:
     """Kapitel-Vorlauf auf Dateianfang + Clean-Priming → Source hinter Schwarz."""
     from unittest.mock import patch

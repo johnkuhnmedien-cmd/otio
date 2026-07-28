@@ -69,6 +69,23 @@ class EnhancedOtioExportError(RuntimeError):
 # PTS-Jitter liegt typisch unter 0.2s; Kamera-SMPTE-TC beginnt oft bei ≥1s
 # (häufig Stunden). Darüber: Clean mit -timecode 00:00:00:00 erzwingen.
 _CAMERA_TC_THRESHOLD_SEC = 1.0
+# Leading-Black nur relevant, wenn Source nahe Dateianfang liegt.
+_LEADING_BLACK_MEASURE_WINDOW_SEC = 0.5
+
+# Pfad → Skip-Sekunden (pro Prozess). OTIO-Merge mit Hunderten Shots sonst
+# mehrfach ffmpeg blackdetect/blackframe pro Datei.
+_LEADING_BLACK_SKIP_CACHE: dict[str, float] = {}
+# Pfad+mtime+size → (avail_start, duration, rate)
+_VIDEO_PROBE_CACHE: dict[str, tuple[float, float, float]] = {}
+
+
+def _cache_key_for_path(path: Path) -> str:
+    try:
+        resolved = path.expanduser().resolve()
+        stat = resolved.stat()
+        return f"{resolved}|{stat.st_mtime_ns}|{stat.st_size}"
+    except OSError:
+        return str(path)
 
 
 def _time_range(duration_sec: float, rate: float, *, start_sec: float = 0.0) -> otio.opentime.TimeRange:
@@ -170,6 +187,11 @@ def _assert_local_file(path: str, *, label: str) -> Path:
 
 def _validate_video_file(path: Path, *, label: str, fps: float) -> tuple[float, float, float]:
     """Returns (available_start, duration, rate)."""
+    cache_key = _cache_key_for_path(path)
+    cached = _VIDEO_PROBE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     timing = probe_media_timing(path, default_rate=fps)
     duration = timing.duration_sec
     if duration is None:
@@ -218,7 +240,13 @@ def _validate_video_file(path: Path, *, label: str, fps: float) -> tuple[float, 
         raise EnhancedOtioExportError(
             f"{label}: Videoprüfung fehlgeschlagen ({exc}) · {path}"
         ) from exc
-    return float(timing.start_sec or 0.0), float(duration), float(timing.rate or fps)
+    result_tuple = (
+        float(timing.start_sec or 0.0),
+        float(duration),
+        float(timing.rate or fps),
+    )
+    _VIDEO_PROBE_CACHE[cache_key] = result_tuple
+    return result_tuple
 
 
 def _is_still_hold_shot(shot: ResolvedShot, path: Path) -> bool:
@@ -307,14 +335,24 @@ def _apply_leading_black_source_skip(
     Liefert ``(source_start, source_end, skipped_seconds)``. Timeline-Dauer
     bleibt gleich, solange genug Media hinter dem Schwarz liegt.
     """
-    try:
-        from otio_app.services.clean_media import measure_leading_black_skip_seconds
-
-        skip = float(
-            measure_leading_black_skip_seconds(path, rate=rate) or 0.0
-        )
-    except Exception:  # noqa: BLE001
+    # Mitten im Clip starten → führendes Datei-Schwarz ist irrelevant.
+    if float(source_start) > float(avail_start) + _LEADING_BLACK_MEASURE_WINDOW_SEC:
         return source_start, source_end, 0.0
+
+    cache_key = _cache_key_for_path(path)
+    if cache_key in _LEADING_BLACK_SKIP_CACHE:
+        skip = float(_LEADING_BLACK_SKIP_CACHE[cache_key])
+    else:
+        try:
+            from otio_app.services.clean_media import measure_leading_black_skip_seconds
+
+            skip = float(
+                measure_leading_black_skip_seconds(path, rate=rate) or 0.0
+            )
+        except Exception:  # noqa: BLE001
+            skip = 0.0
+        _LEADING_BLACK_SKIP_CACHE[cache_key] = skip
+
     if skip <= 1e-6:
         return source_start, source_end, 0.0
     min_source = float(avail_start) + skip
