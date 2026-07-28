@@ -747,6 +747,119 @@ def test_intro_slots_bypass_shot_max_and_cover_vo_end() -> None:
     assert_timed_slots_contiguous(timed, fps=25.0)
 
 
+def test_usable_tolerance_allows_neighbor_past_shot_max() -> None:
+    """Shortfall ≤ Toleranz: Folge-Slot darf shot_max überschreiten (kein Placeholder)."""
+    timeline = NarrationTimelineDocument(
+        script_version="v1",
+        total_duration_seconds=40.0,
+        entries=[
+            NarrationTimelineEntry(
+                segment_id="seg_001",
+                start_seconds=0.0,
+                end_seconds=40.0,
+                audio_duration_seconds=40.0,
+            )
+        ],
+    )
+    # Roh: A=8s, B=8s → A usable 7.0, tol 1.0 → A=7s, B=9s > shot_max 8.
+    sentences = {
+        "seg_001__s001": _sentence("seg_001__s001", start=0.0, end=1.0),
+        "seg_001__s002": _sentence("seg_001__s002", start=8.0, end=9.0),
+        "seg_001__s003": _sentence("seg_001__s003", start=16.0, end=17.0),
+    }
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            CutBoundary(cut_id="b0", sentence_id="seg_001__s001", position="start"),
+            CutBoundary(cut_id="b1", sentence_id="seg_001__s002", position="start"),
+            CutBoundary(cut_id="b2", sentence_id="seg_001__s003", position="start"),
+        ],
+        slots=[
+            CutSlot(slot_id="slot_a", local_asset_id="asset_a", asset_fit="strong"),
+            CutSlot(slot_id="slot_b", local_asset_id="asset_b", asset_fit="strong"),
+        ],
+    )
+    options = CutPlanOptions(
+        shot_min_sec=0.4,
+        shot_max_sec=8.0,
+        short_asset_tolerance_sec=1.0,
+        video_head_trim_sec=0.0,
+    )
+    repairs: list[str] = []
+    timed = resolve_timed_slots(
+        plan,
+        timeline,
+        sentence_index=sentences,
+        options=options,
+        fps=25.0,
+        repairs=repairs,
+        slot_usable_max=[7.0, None],
+    )
+    assert timed[0].duration_seconds == pytest.approx(7.0)
+    assert timed[1].duration_seconds == pytest.approx(9.0)
+    assert timed[0].end_seconds == timed[1].start_seconds
+    assert any("shot_max-Überschreitung erlaubt" in note for note in repairs)
+    assert not any(
+        "über shot_max" in note and "Endgrenze nach vorne verschoben" in note
+        for note in repairs
+        if "slot[1]" in note
+    )
+
+
+def test_usable_tolerance_last_slot_extends_previous() -> None:
+    """Letzter Slot knapp → Vorgänger verlängern (Timeline-Ende bleibt)."""
+    timeline = NarrationTimelineDocument(
+        script_version="v1",
+        total_duration_seconds=40.0,
+        entries=[
+            NarrationTimelineEntry(
+                segment_id="seg_001",
+                start_seconds=0.0,
+                end_seconds=40.0,
+                audio_duration_seconds=40.0,
+            )
+        ],
+    )
+    sentences = {
+        "seg_001__s001": _sentence("seg_001__s001", start=0.0, end=1.0),
+        "seg_001__s002": _sentence("seg_001__s002", start=8.0, end=9.0),
+        "seg_001__s003": _sentence("seg_001__s003", start=16.0, end=17.0),
+    }
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            CutBoundary(cut_id="b0", sentence_id="seg_001__s001", position="start"),
+            CutBoundary(cut_id="b1", sentence_id="seg_001__s002", position="start"),
+            CutBoundary(cut_id="b2", sentence_id="seg_001__s003", position="start"),
+        ],
+        slots=[
+            CutSlot(slot_id="slot_a", local_asset_id="asset_a", asset_fit="strong"),
+            CutSlot(slot_id="slot_b", local_asset_id="asset_b", asset_fit="strong"),
+        ],
+    )
+    options = CutPlanOptions(
+        shot_min_sec=0.4,
+        shot_max_sec=8.0,
+        short_asset_tolerance_sec=1.0,
+        video_head_trim_sec=0.0,
+    )
+    repairs: list[str] = []
+    end_before = 16.0
+    timed = resolve_timed_slots(
+        plan,
+        timeline,
+        sentence_index=sentences,
+        options=options,
+        fps=25.0,
+        repairs=repairs,
+        slot_usable_max=[None, 7.0],
+    )
+    assert timed[1].duration_seconds == pytest.approx(7.0)
+    assert timed[0].duration_seconds == pytest.approx(9.0)
+    assert timed[-1].end_seconds == pytest.approx(end_before)
+    assert any("Vorgänger-Slot länger" in note for note in repairs)
+
+
 def test_over_tolerance_does_not_clamp_leaves_span_for_gap_path() -> None:
     """Fix 1: span > usable + tolerance → Grenzen unverändert (Gap später)."""
     timeline = NarrationTimelineDocument(

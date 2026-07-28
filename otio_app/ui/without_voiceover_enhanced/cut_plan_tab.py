@@ -639,7 +639,12 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 value=float(current.short_asset_tolerance_sec),
                 step=0.5,
                 key=f"enh_opt_short_tol_{project.id}",
-                help="Innerhalb dieser Unterlänge: Shot kürzen statt hart failen.",
+                help=(
+                    "Fehlt dem Asset höchstens so viel nutzbare Dauer: Python "
+                    "kürzt den Slot und verlängert Nachbar-Clips (davor/danach) "
+                    "statt Placeholder — auch wenn shot_max dabei überschritten "
+                    "wird. Darüber: Gap/Placeholder."
+                ),
             )
         with col2:
             max_asset_usage = st.number_input(

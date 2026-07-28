@@ -118,7 +118,8 @@ class CutPlanOptions(BaseModel):
         default=ENHANCED_DEFAULT_VOICEOVER_POSTROLL_SEC, ge=0.0, le=60.0
     )
     voiceover_postroll_mode: TimingMode = TIMING_MODE_FIXED
-    # Asset darf bis zu dieser Unterlänge trotzdem genutzt werden.
+    # Asset darf bis zu dieser Unterlänge trotzdem genutzt werden:
+    # Shortfall geht an Nachbar-Clips (shot_max darf dabei überschritten werden).
     short_asset_tolerance_sec: float = Field(
         default=ENHANCED_DEFAULT_SHORT_ASSET_TOLERANCE_SEC, ge=0.0, le=30.0
     )
@@ -485,7 +486,7 @@ SHOT / ASSET CONSTRAINTS (PROJECT SETTINGS — BINDING):
 - Do not plan a single shot longer than {options.shot_max_sec:.1f}s; split long spans into multiple shots.
 - Each LOCAL ASSET / SUPPLEMENT entry includes duration_seconds and description — use both.
 - Prefer assets whose duration_seconds (when known) is >= the intended shot span.
-- Short-asset tolerance: an asset may be up to {options.short_asset_tolerance_sec:.1f}s shorter than the planned shot. Within that tolerance you may keep the asset; beyond it choose another asset, shorten the span, or emit a coverage_gap (rough). Python will NOT freeze-pad / tpad motion video.
+- Short-asset tolerance: an asset may be up to {options.short_asset_tolerance_sec:.1f}s shorter than the planned shot. Within that tolerance you may keep the asset — Python will shorten that shot and lengthen a neighbor (even past shot_max). Beyond it choose another asset, shorten the span, or emit a coverage_gap. Python will NOT freeze-pad / tpad motion video.
 - Never plan a motion-video shot longer than the asset's usable length. There is no video hold.
 {preroll_rule}
 {postroll_rule}
