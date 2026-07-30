@@ -108,6 +108,9 @@ LLM_INPUT_INFO = {
     "enhanced_script": (
         "Project Brief · Film-Kontext (Titel, Promise, Arc) · "
         "Kapitel-Dramaturgie (Rolle, Reason, Wortziel) · "
+        "Kapitelliste (nur Überschriften, Filmreihenfolge) · "
+        "ab Kapitel 3: erster/letzter Satz der zwei Vorgänger (Opening-Varianz) · "
+        "Kontrast/Gemeinsamkeit/Übergänge nur bei Dramaturgie-Brief · "
         "Vorgänger-/Nachfolger-Kapitel · Style Profile · verifizierte "
         "Fakten/Metadaten · Regeln gegen Bildunterschriften & "
         "erfundene Fakten. Ein Call = nur dieses Kapitel — "

@@ -57,6 +57,14 @@ from otio_app.services.voiceover_generation.dramaturgy_service import (
 from otio_app.services.voiceover_generation.models import (
     DramaturgyFolderEntry,
     DramaturgyPlan,
+    FolderVoiceoverSetting,
+)
+from otio_app.services.without_voiceover_enhanced.script_neighbor_context import (
+    build_chapter_order_block,
+    build_editorial_neighbor_craft_block,
+    build_recent_neighbor_excerpts_block,
+    first_and_last_sentence,
+    recent_prior_chapter_excerpts,
 )
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
     chapter_narration_text,
@@ -1109,6 +1117,172 @@ def test_folder_script_prompt_binds_to_dramaturgy_chapter() -> None:
     assert "visual_intents" not in prompt
     for phrase in FORBIDDEN_PHRASES:
         assert phrase in prompt
+
+
+def test_first_and_last_sentence_extraction() -> None:
+    first, last = first_and_last_sentence(
+        "Am Rand der Schlucht liegt Stille. Die Felsen leuchten rot. "
+        "Nachts wird es kalt."
+    )
+    assert first == "Am Rand der Schlucht liegt Stille."
+    assert last == "Nachts wird es kalt."
+
+
+def test_chapter_order_block_marks_current_chapter() -> None:
+    block = build_chapter_order_block(
+        ["Canyon", "Desert", "Coast"],
+        current_folder_name="Desert",
+    )
+    assert "1. Canyon" in block
+    assert "2. Desert ← THIS CHAPTER" in block
+    assert "3. Coast" in block
+
+
+def test_recent_neighbor_excerpts_block_empty_when_no_prior_scripts() -> None:
+    assert build_recent_neighbor_excerpts_block([]) == ""
+
+
+def test_editorial_neighbor_craft_self_contained_without_hints() -> None:
+    entry = DramaturgyFolderEntry(folder_name="Desert", order_index=1)
+    block = build_editorial_neighbor_craft_block(
+        entry=entry,
+        setting=None,
+        previous_folder_name="Canyon",
+        next_folder_name="Coast",
+    )
+    assert "self-contained" in block.lower()
+    assert "do NOT force bridges" in block
+
+
+def test_editorial_neighbor_craft_includes_contrast_hint() -> None:
+    entry = DramaturgyFolderEntry(
+        folder_name="Desert",
+        order_index=1,
+        contrast_or_commonality_hint="Dry heat vs canyon shade.",
+    )
+    block = build_editorial_neighbor_craft_block(
+        entry=entry,
+        setting=FolderVoiceoverSetting(folder_name="Desert"),
+        previous_folder_name="Canyon",
+        next_folder_name="Coast",
+    )
+    assert "Dry heat vs canyon shade." in block
+    assert "only where" in block.lower()
+
+
+def test_folder_script_prompt_includes_chapter_order_and_neighbor_excerpts() -> None:
+    excerpts = build_recent_neighbor_excerpts_block(
+        [("Canyon", "Erster Satz Canyon.", "Letzter Satz Canyon.")]
+    )
+    prompt = build_enhanced_folder_script_prompt(
+        project_brief_text="Brief",
+        film_context_text="core_promise: promise",
+        chapter_dramaturgy_text="folder_name: Coast",
+        style_profile_text="Style",
+        verified_facts_text="Facts",
+        folder_name="Coast",
+        folder_slug="coast",
+        dramaturgy_role="payoff",
+        target_words=150,
+        min_words=120,
+        max_words=180,
+        previous_folder_name="Desert",
+        next_folder_name=None,
+        chapter_order_text="1. Canyon\n2. Desert\n3. Coast ← THIS CHAPTER",
+        recent_neighbor_excerpts_text=excerpts,
+        editorial_neighbor_craft_text="EDITORIAL NEIGHBOR LINKS:\n- self-contained",
+        language="de",
+    )
+    assert "FILM CHAPTER ORDER" in prompt
+    assert "3. Coast ← THIS CHAPTER" in prompt
+    assert "OPENING VARIETY" in prompt
+    assert "Erster Satz Canyon." in prompt
+    assert "EDITORIAL NEIGHBOR LINKS" in prompt
+
+
+def test_generate_third_chapter_includes_prior_opening_sentences(tmp_path: Path) -> None:
+    folders = ["Canyon", "Desert", "Coast"]
+    project = _project(tmp_path, folders=folders)
+    _confirm_dramaturgy(project, folders)
+
+    save_script_draft(
+        project,
+        EnhancedScriptDocument(
+            segments=[
+                ScriptSegment(
+                    segment_id="c_001",
+                    text="Erster Satz Canyon. Mittlerer Satz. Letzter Satz Canyon.",
+                    sequence_index=1,
+                    folder_name="Canyon",
+                    folder_order_index=0,
+                ),
+                ScriptSegment(
+                    segment_id="d_001",
+                    text="Erster Satz Desert. Letzter Satz Desert.",
+                    sequence_index=2,
+                    folder_name="Desert",
+                    folder_order_index=1,
+                ),
+            ]
+        ),
+    )
+
+    captured: list[str] = []
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del model, max_output_tokens
+        if 'folder_name (EXACT): Coast' in prompt:
+            captured.append(prompt)
+            return _fake_folder_llm_response("Coast")
+        raise AssertionError("unexpected prompt")
+
+    result = generate_enhanced_script_for_folder(
+        project, "Coast", llm_callable=fake_llm
+    )
+    assert result.status == "PASS"
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert "FILM CHAPTER ORDER" in prompt
+    assert "1. Canyon" in prompt
+    assert "OPENING VARIETY" in prompt
+    assert "Erster Satz Canyon." in prompt
+    assert "Letzter Satz Canyon." in prompt
+    assert "Erster Satz Desert." in prompt
+    assert "Letzter Satz Desert." in prompt
+
+
+def test_generate_first_chapter_has_order_but_no_neighbor_excerpts(tmp_path: Path) -> None:
+    folders = ["Canyon", "Desert"]
+    project = _project(tmp_path, folders=folders)
+    _confirm_dramaturgy(project, folders)
+
+    captured: list[str] = []
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del model, max_output_tokens
+        if 'folder_name (EXACT): Canyon' in prompt:
+            captured.append(prompt)
+            return _fake_folder_llm_response("Canyon")
+        raise AssertionError("unexpected prompt")
+
+    result = generate_enhanced_script_for_folder(
+        project, "Canyon", llm_callable=fake_llm
+    )
+    assert result.status == "PASS"
+    prompt = captured[0]
+    assert "FILM CHAPTER ORDER" in prompt
+    assert "OPENING VARIETY" not in prompt
+    assert "RECENT NEIGHBOR NARRATION" not in prompt
+
+
+def test_recent_prior_chapter_excerpts_skips_missing_draft() -> None:
+    excerpts = recent_prior_chapter_excerpts(
+        prior_folder_names=["A", "B"],
+        narration_for_folder={"A": "Only A first. Only A last."},
+    )
+    assert len(excerpts) == 1
+    assert excerpts[0][0] == "A"
+    assert excerpts[0][1] == "Only A first."
 
 
 def test_merge_folder_script_keeps_other_chapters() -> None:

@@ -187,6 +187,9 @@ def build_enhanced_folder_script_prompt(
     max_words: int,
     previous_folder_name: str | None,
     next_folder_name: str | None,
+    chapter_order_text: str = "",
+    recent_neighbor_excerpts_text: str = "",
+    editorial_neighbor_craft_text: str = "",
     language: str = "de",
 ) -> str:
     """Ein Dramaturgie-Kapitel / Ordner — nur gesprochene Narration (keine Assets)."""
@@ -194,6 +197,22 @@ def build_enhanced_folder_script_prompt(
     id_prefix = f"{folder_slug}_"
     prev = previous_folder_name or "(none — first enabled chapter)"
     nxt = next_folder_name or "(none — last enabled chapter)"
+    chapter_order_block = ""
+    if (chapter_order_text or "").strip():
+        chapter_order_block = f"""
+FILM CHAPTER ORDER (headings only — use for orientation; do not narrate the whole list):
+{chapter_order_text.strip()}
+"""
+    neighbor_excerpts_block = ""
+    if (recent_neighbor_excerpts_text or "").strip():
+        neighbor_excerpts_block = f"""
+{recent_neighbor_excerpts_text.strip()}
+"""
+    editorial_neighbor_block = ""
+    if (editorial_neighbor_craft_text or "").strip():
+        editorial_neighbor_block = f"""
+{editorial_neighbor_craft_text.strip()}
+"""
     return f"""\
 You are writing documentary narration for ONE chapter of a multi-location travel film.
 
@@ -215,7 +234,7 @@ THIS CHAPTER ONLY
 - Write ONLY the spoken narration for this chapter — not the whole film.
 - Every segment MUST set folder_name to exactly "{folder_name}".
 - Use ID prefixes starting with "{id_prefix}" (e.g. {id_prefix}segment_001).
-
+{chapter_order_block}{neighbor_excerpts_block}{editorial_neighbor_block}
 {_json_schema_block(id_prefix=id_prefix).replace("EXACT_FOLDER_NAME", folder_name)}
 
 PROJECT BRIEF:
