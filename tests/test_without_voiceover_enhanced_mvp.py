@@ -57,6 +57,24 @@ from otio_app.services.voiceover_generation.dramaturgy_service import (
 from otio_app.services.voiceover_generation.models import (
     DramaturgyFolderEntry,
     DramaturgyPlan,
+    FolderVoiceoverSetting,
+)
+from otio_app.services.without_voiceover_enhanced.script_neighbor_context import (
+    build_chapter_order_block,
+    build_editorial_neighbor_craft_block,
+    build_recent_neighbor_excerpts_block,
+    first_and_last_sentence,
+    recent_prior_chapter_excerpts,
+)
+from otio_app.services.without_voiceover_enhanced.script_rhetoric import (
+    RhetoricClaim,
+    RhetoricLedgerDocument,
+    RhetoricUsageItem,
+    build_rhetoric_ledger_prompt_block,
+    load_rhetoric_ledger,
+    parse_rhetoric_usage,
+    save_rhetoric_ledger,
+    validate_rhetoric_usage_against_ledger,
 )
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
     chapter_narration_text,
@@ -137,7 +155,7 @@ def _confirm_dramaturgy(project: Project, folders: list[str]) -> DramaturgyPlan:
     return save_confirmed_dramaturgy(project, plan)
 
 
-def _fake_folder_llm_response(folder_name: str) -> str:
+def _fake_folder_llm_response(folder_name: str, *, rhetoric_usage: str = "[]") -> str:
     slug = folder_name.lower().replace(" ", "_")
     return (
         "{"
@@ -151,6 +169,7 @@ def _fake_folder_llm_response(folder_name: str) -> str:
         f'"fact_check_required": false,'
         f'"folder_name": "{folder_name}"'
         "}],"
+        f'"rhetoric_usage": {rhetoric_usage},'
         f'"visual_intents": [{{'
         f'"intent_id": "{slug}_intent_001",'
         f'"description": "Wide establishing for {folder_name}",'
@@ -1109,6 +1128,374 @@ def test_folder_script_prompt_binds_to_dramaturgy_chapter() -> None:
     assert "visual_intents" not in prompt
     for phrase in FORBIDDEN_PHRASES:
         assert phrase in prompt
+
+
+def test_first_and_last_sentence_extraction() -> None:
+    first, last = first_and_last_sentence(
+        "Am Rand der Schlucht liegt Stille. Die Felsen leuchten rot. "
+        "Nachts wird es kalt."
+    )
+    assert first == "Am Rand der Schlucht liegt Stille."
+    assert last == "Nachts wird es kalt."
+
+
+def test_chapter_order_block_marks_current_chapter() -> None:
+    block = build_chapter_order_block(
+        ["Canyon", "Desert", "Coast"],
+        current_folder_name="Desert",
+    )
+    assert "FILM CHAPTER MAP" in block
+    assert "1. Canyon" in block or " 1. Canyon" in block
+    assert "Desert" in block and "THIS CHAPTER" in block
+    assert "Coast" in block
+
+
+def test_chapter_order_block_includes_role_and_reason() -> None:
+    entries = [
+        DramaturgyFolderEntry(
+            folder_name="Canyon",
+            order_index=0,
+            dramaturgy_role="hook",
+            reason="Opens with red rock drama.",
+        ),
+        DramaturgyFolderEntry(
+            folder_name="Desert",
+            order_index=1,
+            dramaturgy_role="development",
+            reason="Heat and silence.",
+        ),
+    ]
+    block = build_chapter_order_block(entries, current_folder_name="Desert")
+    assert "[hook]" in block
+    assert "CHAPTER EDITORIAL NOTES" in block
+    assert "Opens with red rock drama." in block
+
+
+def test_recent_neighbor_excerpts_block_empty_when_no_prior_scripts() -> None:
+    assert build_recent_neighbor_excerpts_block([]) == ""
+
+
+def test_editorial_neighbor_craft_self_contained_without_hints() -> None:
+    entry = DramaturgyFolderEntry(folder_name="Desert", order_index=1)
+    block = build_editorial_neighbor_craft_block(
+        entry=entry,
+        setting=None,
+        previous_folder_name="Canyon",
+        next_folder_name="Coast",
+    )
+    assert "self-contained" in block.lower()
+    assert "do NOT force bridges" in block
+
+
+def test_editorial_neighbor_craft_includes_contrast_hint() -> None:
+    entry = DramaturgyFolderEntry(
+        folder_name="Desert",
+        order_index=1,
+        contrast_or_commonality_hint="Dry heat vs canyon shade.",
+    )
+    block = build_editorial_neighbor_craft_block(
+        entry=entry,
+        setting=FolderVoiceoverSetting(folder_name="Desert"),
+        previous_folder_name="Canyon",
+        next_folder_name="Coast",
+    )
+    assert "Dry heat vs canyon shade." in block
+    assert "only where" in block.lower()
+
+
+def test_folder_script_prompt_includes_chapter_order_and_neighbor_excerpts() -> None:
+    excerpts = build_recent_neighbor_excerpts_block(
+        [("Canyon", "Erster Satz Canyon.", "Letzter Satz Canyon.")]
+    )
+    prompt = build_enhanced_folder_script_prompt(
+        project_brief_text="Brief",
+        film_context_text="core_promise: promise",
+        chapter_dramaturgy_text="folder_name: Coast",
+        style_profile_text="Style",
+        verified_facts_text="Facts",
+        folder_name="Coast",
+        folder_slug="coast",
+        dramaturgy_role="payoff",
+        target_words=150,
+        min_words=120,
+        max_words=180,
+        previous_folder_name="Desert",
+        next_folder_name=None,
+        chapter_order_text="1. Canyon\n2. Desert\n3. Coast ← THIS CHAPTER",
+        recent_neighbor_excerpts_text=excerpts,
+        editorial_neighbor_craft_text="EDITORIAL NEIGHBOR LINKS:\n- self-contained",
+        language="de",
+    )
+    assert "FILM CHAPTER MAP" in prompt or "1. Canyon" in prompt
+    assert "Coast" in prompt and "THIS CHAPTER" in prompt
+    assert "OPENING VARIETY" in prompt
+    assert "Erster Satz Canyon." in prompt
+    assert "EDITORIAL NEIGHBOR LINKS" in prompt
+    assert "rhetoric_usage" in prompt
+
+
+def test_generate_third_chapter_includes_prior_opening_sentences(tmp_path: Path) -> None:
+    folders = ["Canyon", "Desert", "Coast"]
+    project = _project(tmp_path, folders=folders)
+    _confirm_dramaturgy(project, folders)
+
+    save_script_draft(
+        project,
+        EnhancedScriptDocument(
+            segments=[
+                ScriptSegment(
+                    segment_id="c_001",
+                    text="Erster Satz Canyon. Mittlerer Satz. Letzter Satz Canyon.",
+                    sequence_index=1,
+                    folder_name="Canyon",
+                    folder_order_index=0,
+                ),
+                ScriptSegment(
+                    segment_id="d_001",
+                    text="Erster Satz Desert. Letzter Satz Desert.",
+                    sequence_index=2,
+                    folder_name="Desert",
+                    folder_order_index=1,
+                ),
+            ]
+        ),
+    )
+
+    captured: list[str] = []
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del model, max_output_tokens
+        if 'folder_name (EXACT): Coast' in prompt:
+            captured.append(prompt)
+            return _fake_folder_llm_response("Coast")
+        raise AssertionError("unexpected prompt")
+
+    result = generate_enhanced_script_for_folder(
+        project, "Coast", llm_callable=fake_llm
+    )
+    assert result.status == "PASS"
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert "FILM CHAPTER MAP" in prompt
+    assert "RHETORIC SLOT LEDGER" in prompt
+    assert "1. Canyon" in prompt or " 1. Canyon" in prompt
+    assert "OPENING VARIETY" in prompt
+    assert "Erster Satz Canyon." in prompt
+    assert "Letzter Satz Canyon." in prompt
+    assert "Erster Satz Desert." in prompt
+    assert "Letzter Satz Desert." in prompt
+
+
+def test_rhetoric_usage_parsed_and_stored_in_ledger(tmp_path: Path) -> None:
+    folders = ["Canyon", "Desert"]
+    project = _project(tmp_path, folders=folders)
+    _confirm_dramaturgy(project, folders)
+
+    quote = "Es lohnt sich, dranzubleiben — in Desert wartet Licht."
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del model, max_output_tokens
+        if 'folder_name (EXACT): Canyon' in prompt:
+            usage = (
+                '[{"slot_id":"stay_tuned_payoff","used":true,'
+                f'"evidence_quote":"{quote}",'
+                '"related_chapter_ref":"Desert"}]'
+            )
+            return (
+                "{"
+                f'"narration_full": "{quote} Mehr über Canyon.",'
+                '"segments": [{'
+                '"segment_id": "canyon_segment_001",'
+                f'"text": "{quote} Mehr über Canyon.",'
+                '"sequence_index": 1,'
+                '"semantic_function": "transition",'
+                '"fact_check_required": false,'
+                '"folder_name": "Canyon"'
+                "}],"
+                f'"rhetoric_usage": {usage}'
+                "}"
+            )
+        if 'folder_name (EXACT): Desert' in prompt:
+            assert "ALREADY USED" in prompt
+            assert "stay_tuned_payoff" in prompt
+            return _fake_folder_llm_response("Desert")
+        raise AssertionError("unexpected prompt")
+
+    first = generate_enhanced_script_for_folder(
+        project, "Canyon", llm_callable=fake_llm
+    )
+    assert first.status == "PASS", first.error
+    ledger = load_rhetoric_ledger(project)
+    assert len(ledger.claims) == 1
+    assert ledger.claims[0].slot_id == "stay_tuned_payoff"
+    assert ledger.claims[0].folder_name == "Canyon"
+
+    second = generate_enhanced_script_for_folder(
+        project, "Desert", llm_callable=fake_llm
+    )
+    assert second.status == "PASS", second.error
+
+
+def test_rhetoric_duplicate_slot_fails(tmp_path: Path) -> None:
+    folders = ["Canyon", "Desert"]
+    project = _project(tmp_path, folders=folders)
+    _confirm_dramaturgy(project, folders)
+    save_rhetoric_ledger(
+        project,
+        RhetoricLedgerDocument(
+            claims=[
+                RhetoricClaim(
+                    slot_id="stay_tuned_payoff",
+                    folder_name="Canyon",
+                    evidence_quote="old quote",
+                )
+            ]
+        ),
+    )
+
+    quote = "Es lohnt sich, dranzubleiben nochmal."
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del model, max_output_tokens, prompt
+        usage = (
+            '[{"slot_id":"stay_tuned_payoff","used":true,'
+            f'"evidence_quote":"{quote}"'
+            "}]"
+        )
+        return (
+            "{"
+            f'"narration_full": "{quote}",'
+            '"segments": [{'
+            '"segment_id": "desert_segment_001",'
+            f'"text": "{quote}",'
+            '"sequence_index": 1,'
+            '"semantic_function": "transition",'
+            '"fact_check_required": false,'
+            '"folder_name": "Desert"'
+            "}],"
+            f'"rhetoric_usage": {usage}'
+            "}"
+        )
+
+    result = generate_enhanced_script_for_folder(
+        project, "Desert", llm_callable=fake_llm
+    )
+    assert result.status == "FAIL"
+    assert "stay_tuned_payoff" in (result.error or "")
+
+
+def test_validate_rhetoric_rejects_missing_quote() -> None:
+    errors = validate_rhetoric_usage_against_ledger(
+        usage=[
+            RhetoricUsageItem(
+                slot_id="opener_wide_landscape",
+                evidence_quote="Weit breitet sich die Ebene.",
+            )
+        ],
+        ledger=RhetoricLedgerDocument(),
+        folder_name="Canyon",
+        narration_full="Etwas ganz anderes.",
+    )
+    assert any("narration_full" in err for err in errors)
+
+
+def test_parse_rhetoric_usage_skips_unused() -> None:
+    items = parse_rhetoric_usage(
+        {
+            "rhetoric_usage": [
+                {"slot_id": "stay_tuned_payoff", "used": False},
+                {
+                    "slot_id": "opener_time_of_day",
+                    "used": True,
+                    "evidence_quote": "Am Morgen.",
+                },
+            ]
+        }
+    )
+    assert [i.slot_id for i in items] == ["opener_time_of_day"]
+
+
+def test_rhetoric_ledger_prompt_lists_available_and_used() -> None:
+    block = build_rhetoric_ledger_prompt_block(
+        RhetoricLedgerDocument(
+            claims=[
+                RhetoricClaim(
+                    slot_id="opener_wide_landscape",
+                    folder_name="Canyon",
+                    evidence_quote="Weit.",
+                )
+            ]
+        )
+    )
+    assert "ALREADY USED" in block
+    assert "opener_wide_landscape" in block
+    assert "stay_tuned_payoff" in block
+    assert "AVAILABLE" in block
+
+
+def test_generate_all_clears_rhetoric_ledger(tmp_path: Path) -> None:
+    folders = ["Canyon", "Desert"]
+    project = _project(tmp_path, folders=folders)
+    _confirm_dramaturgy(project, folders)
+    save_rhetoric_ledger(
+        project,
+        RhetoricLedgerDocument(
+            claims=[
+                RhetoricClaim(
+                    slot_id="film_arc_echo",
+                    folder_name="Old",
+                    evidence_quote="x",
+                )
+            ]
+        ),
+    )
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del model, max_output_tokens
+        for folder in folders:
+            if f'folder_name (EXACT): {folder}' in prompt:
+                return _fake_folder_llm_response(folder)
+        raise AssertionError("unexpected")
+
+    results = generate_all_enhanced_scripts(project, llm_callable=fake_llm)
+    assert all(r.status == "PASS" for r in results)
+    ledger = load_rhetoric_ledger(project)
+    assert all(c.folder_name != "Old" for c in ledger.claims)
+
+
+def test_generate_first_chapter_has_order_but_no_neighbor_excerpts(tmp_path: Path) -> None:
+    folders = ["Canyon", "Desert"]
+    project = _project(tmp_path, folders=folders)
+    _confirm_dramaturgy(project, folders)
+
+    captured: list[str] = []
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del model, max_output_tokens
+        if 'folder_name (EXACT): Canyon' in prompt:
+            captured.append(prompt)
+            return _fake_folder_llm_response("Canyon")
+        raise AssertionError("unexpected prompt")
+
+    result = generate_enhanced_script_for_folder(
+        project, "Canyon", llm_callable=fake_llm
+    )
+    assert result.status == "PASS"
+    prompt = captured[0]
+    assert "FILM CHAPTER MAP" in prompt
+    assert "RHETORIC SLOT LEDGER" in prompt
+    assert "OPENING VARIETY" not in prompt
+    assert "RECENT NEIGHBOR NARRATION" not in prompt
+
+
+def test_recent_prior_chapter_excerpts_skips_missing_draft() -> None:
+    excerpts = recent_prior_chapter_excerpts(
+        prior_folder_names=["A", "B"],
+        narration_for_folder={"A": "Only A first. Only A last."},
+    )
+    assert len(excerpts) == 1
+    assert excerpts[0][0] == "A"
+    assert excerpts[0][1] == "Only A first."
 
 
 def test_merge_folder_script_keeps_other_chapters() -> None:
