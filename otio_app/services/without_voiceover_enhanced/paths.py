@@ -22,6 +22,7 @@ CUT_PLAN_OPTIONS_FILENAME = "cut_plan_options.json"
 SCRIPT_LOCKED_FILENAME = "script_locked.json"
 SCRIPT_DRAFT_FILENAME = "script_draft.json"
 SCRIPT_RHETORIC_LEDGER_FILENAME = "script_rhetoric_ledger.json"
+SCRIPT_OPENING_INVENTORY_FILENAME = "script_opening_inventory.json"
 SEGMENT_TIMINGS_FILENAME = "segment_timings.json"
 SEGMENT_ALIGNMENTS_FILENAME = "segment_alignments.json"
 ALIGNMENTS_SUBDIR = "alignments"
@@ -145,6 +146,10 @@ def script_draft_path(project: Project) -> Path:
 
 def script_rhetoric_ledger_path(project: Project) -> Path:
     return script_dir(project) / SCRIPT_RHETORIC_LEDGER_FILENAME
+
+
+def script_opening_inventory_path(project: Project) -> Path:
+    return script_dir(project) / SCRIPT_OPENING_INVENTORY_FILENAME
 
 
 def segment_timings_path(project: Project) -> Path:

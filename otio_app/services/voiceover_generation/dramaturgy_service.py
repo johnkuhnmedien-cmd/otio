@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 
 from otio_app.defaults import (
     DRAMATURGY_PLANNING_MODE_VARIETY,
+    DRAMATURGY_ROLE_CONTRAST,
+    DRAMATURGY_ROLE_SETUP,
     DRAMATURGY_ROLES,
     DRAMATURGY_STATUS_CONFIRMED,
     DRAMATURGY_STATUS_DRAFT,
@@ -185,6 +187,40 @@ def save_confirmed_dramaturgy(project: Project, plan: DramaturgyPlan) -> Dramatu
 def _normalize_role(value: str) -> str:
     normalized = (value or "").strip().lower()
     return normalized if normalized in DRAMATURGY_ROLES else "setup"
+
+
+def max_contrast_roles_for_chapter_count(chapter_count: int) -> int:
+    """Obergrenze für role=contrast — ca. 1 pro 6 Kapitel, mind. 0."""
+    n = max(0, int(chapter_count))
+    if n <= 0:
+        return 0
+    if n <= 3:
+        return 0
+    return max(1, (n + 5) // 6)
+
+
+def rebalance_contrast_roles(
+    entries: list[DramaturgyFolderEntry],
+) -> list[DramaturgyFolderEntry]:
+    """Begrenzt role=contrast; überschüssige Einträge → setup.
+
+    Behält die ersten erlaubten contrast-Rollen in Filmreihenfolge;
+    weitere werden zu setup (manuelle UI-Edits nach Confirm bleiben möglich).
+    """
+    max_contrast = max_contrast_roles_for_chapter_count(len(entries))
+    contrast_seen = 0
+    rebalanced: list[DramaturgyFolderEntry] = []
+    for entry in entries:
+        role = (entry.dramaturgy_role or "").strip().lower()
+        if role == DRAMATURGY_ROLE_CONTRAST:
+            contrast_seen += 1
+            if contrast_seen > max_contrast:
+                rebalanced.append(
+                    entry.model_copy(update={"dramaturgy_role": DRAMATURGY_ROLE_SETUP})
+                )
+                continue
+        rebalanced.append(entry)
+    return rebalanced
 
 
 def confirm_dramaturgy_plan(project: Project, edited_plan: DramaturgyPlan) -> DramaturgyPlan:
@@ -489,6 +525,7 @@ def build_dramaturgy_plan(
     # LLM-Halluzinationen (erfundene Ordnernamen).
     valid_folder_names = {summary.folder_name for summary in folder_summaries}
     entries = [entry for entry in entries if entry.folder_name in valid_folder_names]
+    entries = rebalance_contrast_roles(entries)
 
     plan = DramaturgyPlan(
         project_id=project.id,

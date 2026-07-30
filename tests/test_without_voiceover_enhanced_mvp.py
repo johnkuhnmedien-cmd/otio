@@ -66,6 +66,16 @@ from otio_app.services.without_voiceover_enhanced.script_neighbor_context import
     first_and_last_sentence,
     recent_prior_chapter_excerpts,
 )
+from otio_app.services.without_voiceover_enhanced.script_opening_inventory import (
+    OpeningInventoryDocument,
+    OpeningInventoryEntry,
+    build_opening_inventory_prompt_block,
+    extract_opening_keys,
+    load_opening_inventory,
+    merge_opening_for_folder,
+    save_opening_inventory,
+    validate_opening_against_inventory,
+)
 from otio_app.services.without_voiceover_enhanced.script_rhetoric import (
     RhetoricClaim,
     RhetoricLedgerDocument,
@@ -1433,6 +1443,87 @@ def test_rhetoric_ledger_prompt_lists_available_and_used() -> None:
     assert "AVAILABLE" in block
 
 
+def test_extract_opening_keys_collapses_after_previous_stem() -> None:
+    keys_a = extract_opening_keys("After the silence of Skellig Michael, rock rises.")
+    keys_b = extract_opening_keys("After Dublin's noise, the road west leads into stone.")
+    assert "stem:after_previous" in keys_a
+    assert "stem:after_previous" in keys_b
+    assert keys_a[0].startswith("phrase:")
+    assert keys_a[0] != keys_b[0]
+
+
+def test_opening_inventory_blocks_third_after_stem(tmp_path: Path) -> None:
+    folders = ["A", "B", "C"]
+    project = _project(tmp_path, folders=folders)
+    _confirm_dramaturgy(project, folders)
+
+    inv = OpeningInventoryDocument(
+        entries=[
+            OpeningInventoryEntry(
+                folder_name="A",
+                first_sentence="After the silence of Skellig, rock rises.",
+                keys=extract_opening_keys("After the silence of Skellig, rock rises."),
+            ),
+            OpeningInventoryEntry(
+                folder_name="B",
+                first_sentence="After Dublin's noise, stone begins.",
+                keys=extract_opening_keys("After Dublin's noise, stone begins."),
+            ),
+        ]
+    )
+    save_opening_inventory(project, inv)
+
+    errors = validate_opening_against_inventory(
+        narration_full="After the hush of the Burren, Galway arrives.",
+        inventory=load_opening_inventory(project),
+        folder_name="C",
+    )
+    assert errors
+    assert any("after_previous" in err for err in errors)
+
+
+def test_opening_inventory_prompt_lists_forbidden_stem() -> None:
+    inv = OpeningInventoryDocument(
+        entries=[
+            OpeningInventoryEntry(
+                folder_name="A",
+                first_sentence="After silence.",
+                keys=extract_opening_keys("After silence."),
+            ),
+            OpeningInventoryEntry(
+                folder_name="B",
+                first_sentence="After noise.",
+                keys=extract_opening_keys("After noise."),
+            ),
+        ]
+    )
+    block = build_opening_inventory_prompt_block(inv)
+    assert "FORBIDDEN" in block
+    assert "After/Nach" in block
+
+
+def test_generate_records_opening_in_inventory(tmp_path: Path) -> None:
+    folders = ["Canyon", "Desert"]
+    project = _project(tmp_path, folders=folders)
+    _confirm_dramaturgy(project, folders)
+
+    def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
+        del model, max_output_tokens
+        assert "SENTENCE OPENING INVENTORY" in prompt
+        if 'folder_name (EXACT): Canyon' in prompt:
+            return _fake_folder_llm_response("Canyon")
+        raise AssertionError("unexpected")
+
+    result = generate_enhanced_script_for_folder(
+        project, "Canyon", llm_callable=fake_llm
+    )
+    assert result.status == "PASS", result.error
+    inv = load_opening_inventory(project)
+    assert len(inv.entries) == 1
+    assert inv.entries[0].folder_name == "Canyon"
+    assert inv.entries[0].first_sentence
+
+
 def test_generate_all_clears_rhetoric_ledger(tmp_path: Path) -> None:
     folders = ["Canyon", "Desert"]
     project = _project(tmp_path, folders=folders)
@@ -1449,6 +1540,18 @@ def test_generate_all_clears_rhetoric_ledger(tmp_path: Path) -> None:
             ]
         ),
     )
+    save_opening_inventory(
+        project,
+        OpeningInventoryDocument(
+            entries=[
+                OpeningInventoryEntry(
+                    folder_name="Old",
+                    first_sentence="Old open.",
+                    keys=["phrase:old open"],
+                )
+            ]
+        ),
+    )
 
     def fake_llm(*, prompt: str, model: str, max_output_tokens: int | None = None) -> str:
         del model, max_output_tokens
@@ -1461,6 +1564,8 @@ def test_generate_all_clears_rhetoric_ledger(tmp_path: Path) -> None:
     assert all(r.status == "PASS" for r in results)
     ledger = load_rhetoric_ledger(project)
     assert all(c.folder_name != "Old" for c in ledger.claims)
+    openings = load_opening_inventory(project)
+    assert all(e.folder_name != "Old" for e in openings.entries)
 
 
 def test_generate_first_chapter_has_order_but_no_neighbor_excerpts(tmp_path: Path) -> None:
