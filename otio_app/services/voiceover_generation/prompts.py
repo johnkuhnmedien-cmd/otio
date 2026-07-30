@@ -286,14 +286,14 @@ or after a short geographic setup.
 Do NOT simply sort alphabetically. Do NOT simply sort by asset count."""
 
     return """## Planning mode: MAXIMUM VARIETY
-Order the chapters for MAXIMUM VARIETY and narrative contrast:
+Order the chapters for MAXIMUM VARIETY and narrative interest:
 - Actively alternate mood, scale, landscape type, and visual character between \
 neighboring chapters.
-- Prioritize hook potential, contrast, and overall tension arc over a strict \
+- Prioritize hook potential and overall tension arc over a strict \
 geographic travel sequence.
 - Geographic adjacency is allowed only when it also keeps the film interesting.
-- Avoid long runs of similar chapters (e.g. several deserts or cities in a row) \
-unless contrast is created another way.
+- Avoid long runs of similar chapters (e.g. several deserts or cities in a row).
+- Variety in ORDER does NOT mean labeling most chapters as role "contrast".
 
 Do NOT simply sort alphabetically. Do NOT simply sort by asset count. Do NOT \
 default to a pure map route if that makes the film monotonous."""
@@ -373,12 +373,21 @@ location identifiers. Do not invent assets or quote asset descriptions.
 ## Task
 Decide, for the whole set of chapters above:
 - Which chapter works best as the OPENER (hooks attention immediately)?
-- Where does a CONTRAST between chapters create interest?
 - Which chapter works as the CLIMAX / escalation point?
 - Which chapter works as a calm RESOLUTION / closer?
 - What is the most compelling overall narrative arc connecting them?
 - For EACH chapter: its role, a short reason, and a recommended voice-over \
 word count.
+
+### Role distribution (IMPORTANT — avoid overusing "contrast")
+Allowed roles: opener | setup | contrast | escalation | climax | resolution
+- Prefer setup / escalation for most middle chapters.
+- Use role "contrast" SPARINGLY — only for a few chapters where the place \
+truly flips mood/scale vs. its neighbors (rough guide: at most ~1 in 6 chapters, \
+never a long run of contrast roles).
+- Do NOT assign "contrast" just because neighboring chapters differ; order \
+already creates variety.
+- Exactly one opener when possible; climax/resolution reserved for true peaks/ends.
 
 ### Voice-over length per chapter (IMPORTANT — decide freely, do not copy a grid)
 Baseline orientation: about 150 words per chapter, with a hard band of \

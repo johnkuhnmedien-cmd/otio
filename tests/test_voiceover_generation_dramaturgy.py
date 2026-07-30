@@ -23,6 +23,8 @@ from otio_app.services.voiceover_generation.dramaturgy_service import (
     disable_dramaturgy_craft_flags,
     load_confirmed_dramaturgy,
     load_dramaturgy_draft,
+    max_contrast_roles_for_chapter_count,
+    rebalance_contrast_roles,
     save_dramaturgy_draft,
     update_dramaturgy_order,
 )
@@ -628,3 +630,22 @@ def test_disable_dramaturgy_craft_flags_clears_all_craft_fields(tmp_path: Path) 
     assert confirmed is not None
     assert confirmed.craft_flags_disabled is True
     assert all(not entry.use_transition_to_next for entry in confirmed.recommended_folder_order)
+
+
+def test_max_contrast_roles_scales_slowly() -> None:
+    assert max_contrast_roles_for_chapter_count(2) == 0
+    assert max_contrast_roles_for_chapter_count(3) == 0
+    assert max_contrast_roles_for_chapter_count(4) == 1
+    assert max_contrast_roles_for_chapter_count(12) == 2
+    assert max_contrast_roles_for_chapter_count(18) == 3
+
+
+def test_rebalance_contrast_roles_demotes_excess_to_setup() -> None:
+    entries = [
+        DramaturgyFolderEntry(folder_name=f"C{i}", order_index=i, dramaturgy_role="contrast")
+        for i in range(6)
+    ]
+    result = rebalance_contrast_roles(entries)
+    roles = [e.dramaturgy_role for e in result]
+    assert roles.count("contrast") == 1
+    assert roles.count("setup") == 5

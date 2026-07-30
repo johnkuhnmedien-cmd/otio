@@ -109,6 +109,7 @@ LLM_INPUT_INFO = {
         "Project Brief · Film-Kontext (Titel, Promise, Arc) · "
         "Kapitel-Dramaturgie (Rolle, Reason, Wortziel) · "
         "FILM CHAPTER MAP (alle Überschriften + Rolle + Reason) · "
+        "Satzanfang-Inventar (Phrase/Stem max. 2× filmweit) · "
         "Rhetoric-Slot-Ledger (filmweit, jeder Slot max. 1×) · "
         "ab Kapitel 3: erster/letzter Satz der zwei Vorgänger (Opening-Varianz) · "
         "Kontrast/Gemeinsamkeit/Übergänge nur bei Dramaturgie-Brief · "

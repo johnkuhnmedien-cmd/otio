@@ -236,7 +236,8 @@ def test_dramaturgy_prompt_variety_mode_contains_variety_instructions() -> None:
         planning_mode="variety",
     )
     assert "MAXIMUM VARIETY" in prompt
-    assert "narrative contrast" in prompt
+    assert "Use role \"contrast\" SPARINGLY" in prompt
+    assert "narrative interest" in prompt
 
 
 def test_dramaturgy_prompt_requests_json_only() -> None:

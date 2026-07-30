@@ -59,6 +59,15 @@ from otio_app.services.without_voiceover_enhanced.script_prompts import (
     build_enhanced_folder_script_prompt,
     build_enhanced_script_revision_prompt,
 )
+from otio_app.services.without_voiceover_enhanced.script_opening_inventory import (
+    build_opening_inventory_prompt_block,
+    clear_opening_inventory,
+    load_opening_inventory,
+    merge_opening_for_folder,
+    remove_opening_for_folder,
+    save_opening_inventory,
+    validate_opening_against_inventory,
+)
 from otio_app.services.without_voiceover_enhanced.script_rhetoric import (
     build_rhetoric_ledger_prompt_block,
     clear_rhetoric_ledger,
@@ -190,14 +199,22 @@ def _build_script_neighbor_context(
     previous_name: str | None,
     next_name: str | None,
     existing_draft: EnhancedScriptDocument | None,
-) -> tuple[str, str, str, str, str]:
-    """Kapitelliste, Film-Links, Rhetoric-Ledger, Nachbar-Sätze, Editorial-Craft."""
+) -> tuple[str, str, str, str, str, str]:
+    """Kapitelliste, Film-Links, Opening-Inventar, Rhetoric, Nachbar-Sätze, Craft."""
     folder_order = [item.folder_name for item in entries]
     chapter_order_text = build_chapter_order_block(
         entries,
         current_folder_name=entry.folder_name,
     )
     film_wide_editorial_links_text = build_film_wide_editorial_links_block()
+
+    opening_inventory = remove_opening_for_folder(
+        load_opening_inventory(project), entry.folder_name
+    )
+    opening_inventory_text = build_opening_inventory_prompt_block(
+        opening_inventory,
+        exclude_folder=entry.folder_name,
+    )
 
     # Claims dieses Kapitels freigeben, damit Re-Generate denselben Slot neu setzen kann.
     ledger = remove_rhetoric_claims_for_folder(
@@ -230,6 +247,7 @@ def _build_script_neighbor_context(
     return (
         chapter_order_text,
         film_wide_editorial_links_text,
+        opening_inventory_text,
         rhetoric_ledger_text,
         recent_neighbor_excerpts_text,
         editorial_neighbor_craft_text,
@@ -675,6 +693,7 @@ def generate_enhanced_script_for_folder(
     (
         chapter_order_text,
         film_wide_editorial_links_text,
+        opening_inventory_text,
         rhetoric_ledger_text,
         recent_neighbor_excerpts_text,
         editorial_neighbor_craft_text,
@@ -706,6 +725,7 @@ def generate_enhanced_script_for_folder(
         recent_neighbor_excerpts_text=recent_neighbor_excerpts_text,
         editorial_neighbor_craft_text=editorial_neighbor_craft_text,
         rhetoric_ledger_text=rhetoric_ledger_text,
+        opening_inventory_text=opening_inventory_text,
         language=project.language,
     )
 
@@ -754,6 +774,21 @@ def generate_enhanced_script_for_folder(
                 error="Rhetoric-Ledger: " + " ".join(rhetoric_errors),
             )
 
+        opening_for_validation = remove_opening_for_folder(
+            load_opening_inventory(project), folder_name
+        )
+        opening_errors = validate_opening_against_inventory(
+            narration_full=partial.narration_full,
+            inventory=opening_for_validation,
+            folder_name=folder_name,
+        )
+        if opening_errors:
+            return FolderScriptBuildResult(
+                folder_name=folder_name,
+                status="FAIL",
+                error="Satzanfang-Inventar: " + " ".join(opening_errors),
+            )
+
         folder_order = [item.folder_name for item in entries]
         merged = merge_folder_script_into_document(
             existing_draft,
@@ -769,6 +804,14 @@ def generate_enhanced_script_for_folder(
                 ledger_for_validation,
                 folder_name=folder_name,
                 usage=usage,
+            ),
+        )
+        save_opening_inventory(
+            project,
+            merge_opening_for_folder(
+                opening_for_validation,
+                folder_name=folder_name,
+                narration_full=partial.narration_full,
             ),
         )
         _invalidate_script_lock(project)
@@ -805,6 +848,7 @@ def generate_all_enhanced_scripts(
     if replace_existing and entries:
         save_script_draft(project, EnhancedScriptDocument(script_status="draft"))
         clear_rhetoric_ledger(project)
+        clear_opening_inventory(project)
         _invalidate_script_lock(project)
     results: list[FolderScriptBuildResult] = []
     total = len(entries)

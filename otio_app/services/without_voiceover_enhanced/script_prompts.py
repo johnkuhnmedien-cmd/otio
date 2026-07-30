@@ -206,6 +206,7 @@ def build_enhanced_folder_script_prompt(
     recent_neighbor_excerpts_text: str = "",
     editorial_neighbor_craft_text: str = "",
     rhetoric_ledger_text: str = "",
+    opening_inventory_text: str = "",
     language: str = "de",
 ) -> str:
     """Ein Dramaturgie-Kapitel / Ordner — nur gesprochene Narration (keine Assets)."""
@@ -223,6 +224,7 @@ def build_enhanced_folder_script_prompt(
     neighbor_excerpts_block = _optional_block(recent_neighbor_excerpts_text)
     editorial_neighbor_block = _optional_block(editorial_neighbor_craft_text)
     rhetoric_ledger_block = _optional_block(rhetoric_ledger_text)
+    opening_inventory_block = _optional_block(opening_inventory_text)
     return f"""\
 You are writing documentary narration for ONE chapter of a multi-location travel film.
 
@@ -234,6 +236,7 @@ STRICTLY AVOID these phrases and patterns:
 {forbidden}
 - pure inventories of visible objects
 - image-caption narration ("the picture shows…")
+- repeating the same first-sentence template as earlier chapters (see OPENING INVENTORY)
 
 THIS CHAPTER ONLY
 - folder_name (EXACT): {folder_name}
@@ -244,7 +247,7 @@ THIS CHAPTER ONLY
 - Write ONLY the spoken narration for this chapter — not the whole film.
 - Every segment MUST set folder_name to exactly "{folder_name}".
 - Use ID prefixes starting with "{id_prefix}" (e.g. {id_prefix}segment_001).
-{chapter_order_block}{film_wide_block}{rhetoric_ledger_block}{neighbor_excerpts_block}{editorial_neighbor_block}
+{chapter_order_block}{film_wide_block}{opening_inventory_block}{rhetoric_ledger_block}{neighbor_excerpts_block}{editorial_neighbor_block}
 {_json_schema_block(id_prefix=id_prefix).replace("EXACT_FOLDER_NAME", folder_name)}
 
 PROJECT BRIEF:
