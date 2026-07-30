@@ -196,6 +196,73 @@ def test_save_profile_to_library_then_load_into_another_project(
     assert load_style_profile(other_project).library_name == "Ruhige Dokumentation"
 
 
+def test_loading_raw_library_into_project_does_not_raise_streamlit_api_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: Laden nach Widget-Instanziierung setzte session_state der
+    Radio/Textarea-Keys → StreamlitAPIException."""
+    from otio_app.models import Project, ProjectMode
+    from otio_app.services.voiceover_generation.models import STYLE_MODE_RAW_TEXT
+    from otio_app.services.voiceover_generation.raw_style_library_service import (
+        save_raw_to_library,
+    )
+    from otio_app.services.voiceover_generation.style_reference_service import (
+        load_style_references,
+    )
+    import otio_app.services.voiceover_generation.raw_style_library_service as raw_lib
+    import otio_app.services.voiceover_generation.style_profile_library_service as profile_lib
+
+    monkeypatch.setenv("REPRO_ROOT", str(tmp_path))
+    monkeypatch.setenv("REPRO_PROJECT_ID", PROJECT_ID)
+    global_data = tmp_path / "global_data"
+    raw_lib.ensure_data_dir = lambda: global_data
+    profile_lib.ensure_data_dir = lambda: global_data
+
+    save_raw_to_library(
+        "Wunder DE",
+        raw_reference_text="Ruhige Kapitel-Prosa mit konkreten Ortsdetails.",
+        raw_intro_reference_text="Kurzer Intro-Hook mit Versprechen.",
+    )
+
+    at = AppTest.from_file(str(SCRIPT_PATH))
+    at.run()
+    assert not at.exception, at.exception
+
+    mode_radio = next(
+        radio
+        for radio in at.radio
+        if radio.label == "Wie soll der Stil an die späteren LLM-Schritte gehen?"
+    )
+    at = mode_radio.set_value(STYLE_MODE_RAW_TEXT).run()
+    assert not at.exception, at.exception
+
+    select_raw = next(
+        selectbox
+        for selectbox in at.selectbox
+        if selectbox.label == "Gespeicherter Raw-Text-Satz"
+    )
+    at = select_raw.set_value("Wunder DE").run()
+    load_buttons = [b for b in at.button if b.label == "In dieses Projekt laden"]
+    assert len(load_buttons) == 1
+    at = load_buttons[0].click().run()
+    assert not at.exception, at.exception
+
+    project = Project(
+        id=PROJECT_ID,
+        name="Repro",
+        project_root=str(tmp_path / "USA"),
+        work_dir=str(tmp_path / "USA" / "_otio"),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER,
+        asset_subdir_names=["Grand Canyon"],
+        selected_asset_subdirs=["Grand Canyon"],
+    )
+    loaded = load_style_references(project)
+    assert loaded.style_mode == STYLE_MODE_RAW_TEXT
+    assert "Kapitel-Prosa" in loaded.raw_reference_text
+    assert "Intro-Hook" in loaded.raw_intro_reference_text
+    assert loaded.raw_library_name == "Wunder DE"
+
+
 def test_loading_from_library_via_ui_tags_project_profile_with_library_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
