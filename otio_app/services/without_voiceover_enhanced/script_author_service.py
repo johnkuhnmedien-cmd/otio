@@ -51,12 +51,23 @@ from otio_app.services.without_voiceover_enhanced.script_lock_service import (
 from otio_app.services.without_voiceover_enhanced.script_neighbor_context import (
     build_chapter_order_block,
     build_editorial_neighbor_craft_block,
+    build_film_wide_editorial_links_block,
     build_recent_neighbor_excerpts_block,
     recent_prior_chapter_excerpts,
 )
 from otio_app.services.without_voiceover_enhanced.script_prompts import (
     build_enhanced_folder_script_prompt,
     build_enhanced_script_revision_prompt,
+)
+from otio_app.services.without_voiceover_enhanced.script_rhetoric import (
+    build_rhetoric_ledger_prompt_block,
+    clear_rhetoric_ledger,
+    load_rhetoric_ledger,
+    merge_rhetoric_claims_for_folder,
+    parse_rhetoric_usage,
+    remove_rhetoric_claims_for_folder,
+    save_rhetoric_ledger,
+    validate_rhetoric_usage_against_ledger,
 )
 
 DEFAULT_ENHANCED_SCRIPT_MODEL = "openai:gpt-5.4-mini"
@@ -179,13 +190,20 @@ def _build_script_neighbor_context(
     previous_name: str | None,
     next_name: str | None,
     existing_draft: EnhancedScriptDocument | None,
-) -> tuple[str, str, str]:
-    """Kapitelliste, Nachbar-Satz-Auszüge (ab Kapitel 3), Editorial-Craft-Block."""
+) -> tuple[str, str, str, str, str]:
+    """Kapitelliste, Film-Links, Rhetoric-Ledger, Nachbar-Sätze, Editorial-Craft."""
     folder_order = [item.folder_name for item in entries]
     chapter_order_text = build_chapter_order_block(
-        folder_order,
+        entries,
         current_folder_name=entry.folder_name,
     )
+    film_wide_editorial_links_text = build_film_wide_editorial_links_block()
+
+    # Claims dieses Kapitels freigeben, damit Re-Generate denselben Slot neu setzen kann.
+    ledger = remove_rhetoric_claims_for_folder(
+        load_rhetoric_ledger(project), entry.folder_name
+    )
+    rhetoric_ledger_text = build_rhetoric_ledger_prompt_block(ledger)
 
     chapter_index = folder_order.index(entry.folder_name)
     prior_folder_names: list[str] = []
@@ -209,7 +227,13 @@ def _build_script_neighbor_context(
         previous_folder_name=previous_name,
         next_folder_name=next_name,
     )
-    return chapter_order_text, recent_neighbor_excerpts_text, editorial_neighbor_craft_text
+    return (
+        chapter_order_text,
+        film_wide_editorial_links_text,
+        rhetoric_ledger_text,
+        recent_neighbor_excerpts_text,
+        editorial_neighbor_craft_text,
+    )
 
 
 def parse_enhanced_script_response(
@@ -648,15 +672,19 @@ def generate_enhanced_script_for_folder(
     target, min_words, max_words = _word_targets_for_folder(project, entry)
     folder_slug = safe_folder_slug(folder_name)
     existing_draft = load_script_draft(project)
-    chapter_order_text, recent_neighbor_excerpts_text, editorial_neighbor_craft_text = (
-        _build_script_neighbor_context(
-            project=project,
-            entries=entries,
-            entry=entry,
-            previous_name=previous_name,
-            next_name=next_name,
-            existing_draft=existing_draft,
-        )
+    (
+        chapter_order_text,
+        film_wide_editorial_links_text,
+        rhetoric_ledger_text,
+        recent_neighbor_excerpts_text,
+        editorial_neighbor_craft_text,
+    ) = _build_script_neighbor_context(
+        project=project,
+        entries=entries,
+        entry=entry,
+        previous_name=previous_name,
+        next_name=next_name,
+        existing_draft=existing_draft,
     )
 
     prompt = build_enhanced_folder_script_prompt(
@@ -674,8 +702,10 @@ def generate_enhanced_script_for_folder(
         previous_folder_name=previous_name,
         next_folder_name=next_name,
         chapter_order_text=chapter_order_text,
+        film_wide_editorial_links_text=film_wide_editorial_links_text,
         recent_neighbor_excerpts_text=recent_neighbor_excerpts_text,
         editorial_neighbor_craft_text=editorial_neighbor_craft_text,
+        rhetoric_ledger_text=rhetoric_ledger_text,
         language=project.language,
     )
 
@@ -705,6 +735,25 @@ def generate_enhanced_script_for_folder(
                 status="FAIL",
                 error="LLM-Antwort enthielt keine Segmente.",
             )
+
+        payload = _extract_json(raw_text) if isinstance(raw_text, str) else raw_text
+        usage = parse_rhetoric_usage(payload if isinstance(payload, dict) else None)
+        ledger_for_validation = remove_rhetoric_claims_for_folder(
+            load_rhetoric_ledger(project), folder_name
+        )
+        rhetoric_errors = validate_rhetoric_usage_against_ledger(
+            usage=usage,
+            ledger=ledger_for_validation,
+            folder_name=folder_name,
+            narration_full=partial.narration_full,
+        )
+        if rhetoric_errors:
+            return FolderScriptBuildResult(
+                folder_name=folder_name,
+                status="FAIL",
+                error="Rhetoric-Ledger: " + " ".join(rhetoric_errors),
+            )
+
         folder_order = [item.folder_name for item in entries]
         merged = merge_folder_script_into_document(
             existing_draft,
@@ -714,6 +763,14 @@ def generate_enhanced_script_for_folder(
             folder_order=folder_order,
         )
         save_script_draft(project, merged)
+        save_rhetoric_ledger(
+            project,
+            merge_rhetoric_claims_for_folder(
+                ledger_for_validation,
+                folder_name=folder_name,
+                usage=usage,
+            ),
+        )
         _invalidate_script_lock(project)
         return FolderScriptBuildResult(
             folder_name=folder_name,
@@ -747,6 +804,7 @@ def generate_all_enhanced_scripts(
     entries = list_enabled_dramaturgy_folders(project)
     if replace_existing and entries:
         save_script_draft(project, EnhancedScriptDocument(script_status="draft"))
+        clear_rhetoric_ledger(project)
         _invalidate_script_lock(project)
     results: list[FolderScriptBuildResult] = []
     total = len(entries)

@@ -1,6 +1,6 @@
 """Nachbar-Kontext für Enhanced-Skript-Prompts (Schritt ④).
 
-- Kapitelliste (nur Überschriften) immer in Filmreihenfolge
+- Kapitelliste (Überschriften + Rolle + Reason) immer in Filmreihenfolge
 - Erste/letzte Sätze der zwei unmittelbar vorherigen Kapitel (ab Kapitel 3)
 - Kontrast/Gemeinsamkeit/Übergänge nur bei explizitem dramaturgischem Brief
 """
@@ -18,6 +18,7 @@ from otio_app.services.without_voiceover_enhanced.segment_alignment_service impo
 __all__ = [
     "first_and_last_sentence",
     "build_chapter_order_block",
+    "build_film_wide_editorial_links_block",
     "build_recent_neighbor_excerpts_block",
     "build_editorial_neighbor_craft_block",
     "recent_prior_chapter_excerpts",
@@ -35,15 +36,64 @@ def first_and_last_sentence(narration: str) -> tuple[str | None, str | None]:
 
 
 def build_chapter_order_block(
-    chapter_names: list[str],
+    chapters: list[DramaturgyFolderEntry] | list[str],
     *,
     current_folder_name: str,
 ) -> str:
-    lines: list[str] = []
-    for index, name in enumerate(chapter_names, start=1):
+    """Nummerierte Kapitelliste; bei Entries inkl. Rolle + Reason-Zeile."""
+    map_lines: list[str] = []
+    note_lines: list[str] = []
+    for index, item in enumerate(chapters, start=1):
+        if isinstance(item, str):
+            name = item
+            role = ""
+            reason = ""
+        else:
+            name = item.folder_name
+            role = (item.dramaturgy_role or "").strip()
+            reason = (item.reason or "").strip()
         marker = " ← THIS CHAPTER" if name == current_folder_name else ""
-        lines.append(f"{index}. {name}{marker}")
-    return "\n".join(lines)
+        role_part = f"  [{role}]" if role else ""
+        map_lines.append(f"{index:2d}. {name}{role_part}{marker}")
+        if reason:
+            note_lines.append(f"{index:2d}. {name} — {reason}")
+
+    blocks = [
+        "FILM CHAPTER MAP (headings + dramaturgy role — NOT narration text):",
+        "",
+        "Use this map to place THIS chapter in the whole film.",
+        "You may reference ANY chapter by number/heading when editorially justified",
+        "(forward glance several chapters ahead, or callback to an early chapter).",
+        "Do NOT recite or summarize the full list in spoken narration.",
+        "",
+        *map_lines,
+    ]
+    if note_lines:
+        blocks.extend(
+            [
+                "",
+                "CHAPTER EDITORIAL NOTES (one line per chapter — foreshadow/callback "
+                "orientation only; do NOT treat as spoken copy; do NOT invent beyond these):",
+                "",
+                *note_lines,
+            ]
+        )
+    return "\n".join(blocks)
+
+
+def build_film_wide_editorial_links_block() -> str:
+    return (
+        "FILM-WIDE EDITORIAL LINKS (OPTIONAL — most chapters stay self-contained):\n"
+        "- FORWARD GLANCE: You MAY hint at a LATER chapter (not only the next one) "
+        "when this place naturally sets up something unique still to come — "
+        "claim slot stay_tuned_payoff and/or named_future_highlight if you do.\n"
+        "- CALLBACK: You MAY briefly recall an EARLIER non-adjacent chapter when "
+        "this place completes or echoes a thread — claim callback_early_chapter / "
+        "distant_contrast / distant_commonality as appropriate.\n"
+        "- Prefer at most ONE such film-wide link in this chapter.\n"
+        "- Never spoil concrete reveals from later payoff chapters.\n"
+        "- DEFAULT: no cross-chapter teaser if nothing natural fits."
+    )
 
 
 def recent_prior_chapter_excerpts(
@@ -130,9 +180,10 @@ def build_editorial_neighbor_craft_block(
         return (
             "EDITORIAL NEIGHBOR LINKS:\n"
             "- No explicit contrast, commonality, or transition brief for this chapter.\n"
-            "- Write a self-contained section. You may glance at FILM CHAPTER ORDER for "
+            "- Write a self-contained section. You may glance at FILM CHAPTER MAP for "
             "orientation, but do NOT force bridges, teasers, callbacks, contrast, or "
-            "commonality unless they arise naturally from the place itself."
+            "commonality unless they arise naturally from the place itself "
+            "(and then claim the matching RHETORIC SLOT)."
         )
 
     lines = [

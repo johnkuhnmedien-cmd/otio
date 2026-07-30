@@ -108,13 +108,13 @@ LLM_INPUT_INFO = {
     "enhanced_script": (
         "Project Brief · Film-Kontext (Titel, Promise, Arc) · "
         "Kapitel-Dramaturgie (Rolle, Reason, Wortziel) · "
-        "Kapitelliste (nur Überschriften, Filmreihenfolge) · "
+        "FILM CHAPTER MAP (alle Überschriften + Rolle + Reason) · "
+        "Rhetoric-Slot-Ledger (filmweit, jeder Slot max. 1×) · "
         "ab Kapitel 3: erster/letzter Satz der zwei Vorgänger (Opening-Varianz) · "
         "Kontrast/Gemeinsamkeit/Übergänge nur bei Dramaturgie-Brief · "
         "Vorgänger-/Nachfolger-Kapitel · Style Profile · verifizierte "
-        "Fakten/Metadaten · Regeln gegen Bildunterschriften & "
-        "erfundene Fakten. Ein Call = nur dieses Kapitel — "
-        "kein Inventar, keine Asset-Zuordnung (kommt im Cut Plan)."
+        "Fakten/Metadaten. LLM liefert Skript + rhetoric_usage. "
+        "Ein Call = nur dieses Kapitel — kein Inventar, keine Asset-Zuordnung."
     ),
     "enhanced_script_revision": (
         "Nur dein Freitext + das bereits erzeugte Kapitel-Skript. "

@@ -101,8 +101,22 @@ OUTPUT (JSON only):
       "status": "fact_check_required",
       "note": "..."
     }}
+  ],
+  "rhetoric_usage": [
+    {{
+      "slot_id": "stay_tuned_payoff|named_future_highlight|callback_early_chapter|film_arc_echo|superlative_unique_once|distant_contrast|distant_commonality|opener_rhetorical_question|opener_time_of_day|opener_wide_landscape",
+      "used": true,
+      "evidence_quote": "exact phrase from narration_full",
+      "related_chapter_ref": "chapter heading from FILM CHAPTER MAP or empty"
+    }}
   ]
 }}
+
+rhetoric_usage:
+- Prefer an empty array [].
+- Include only slots you actually used (used=true). Omit unused slots.
+- At most 2 used:true entries per chapter.
+- evidence_quote MUST appear in narration_full.
 """
 
 
@@ -188,8 +202,10 @@ def build_enhanced_folder_script_prompt(
     previous_folder_name: str | None,
     next_folder_name: str | None,
     chapter_order_text: str = "",
+    film_wide_editorial_links_text: str = "",
     recent_neighbor_excerpts_text: str = "",
     editorial_neighbor_craft_text: str = "",
+    rhetoric_ledger_text: str = "",
     language: str = "de",
 ) -> str:
     """Ein Dramaturgie-Kapitel / Ordner — nur gesprochene Narration (keine Assets)."""
@@ -197,22 +213,16 @@ def build_enhanced_folder_script_prompt(
     id_prefix = f"{folder_slug}_"
     prev = previous_folder_name or "(none — first enabled chapter)"
     nxt = next_folder_name or "(none — last enabled chapter)"
-    chapter_order_block = ""
-    if (chapter_order_text or "").strip():
-        chapter_order_block = f"""
-FILM CHAPTER ORDER (headings only — use for orientation; do not narrate the whole list):
-{chapter_order_text.strip()}
-"""
-    neighbor_excerpts_block = ""
-    if (recent_neighbor_excerpts_text or "").strip():
-        neighbor_excerpts_block = f"""
-{recent_neighbor_excerpts_text.strip()}
-"""
-    editorial_neighbor_block = ""
-    if (editorial_neighbor_craft_text or "").strip():
-        editorial_neighbor_block = f"""
-{editorial_neighbor_craft_text.strip()}
-"""
+
+    def _optional_block(text: str) -> str:
+        cleaned = (text or "").strip()
+        return f"\n{cleaned}\n" if cleaned else ""
+
+    chapter_order_block = _optional_block(chapter_order_text)
+    film_wide_block = _optional_block(film_wide_editorial_links_text)
+    neighbor_excerpts_block = _optional_block(recent_neighbor_excerpts_text)
+    editorial_neighbor_block = _optional_block(editorial_neighbor_craft_text)
+    rhetoric_ledger_block = _optional_block(rhetoric_ledger_text)
     return f"""\
 You are writing documentary narration for ONE chapter of a multi-location travel film.
 
@@ -234,7 +244,7 @@ THIS CHAPTER ONLY
 - Write ONLY the spoken narration for this chapter — not the whole film.
 - Every segment MUST set folder_name to exactly "{folder_name}".
 - Use ID prefixes starting with "{id_prefix}" (e.g. {id_prefix}segment_001).
-{chapter_order_block}{neighbor_excerpts_block}{editorial_neighbor_block}
+{chapter_order_block}{film_wide_block}{rhetoric_ledger_block}{neighbor_excerpts_block}{editorial_neighbor_block}
 {_json_schema_block(id_prefix=id_prefix).replace("EXACT_FOLDER_NAME", folder_name)}
 
 PROJECT BRIEF:
