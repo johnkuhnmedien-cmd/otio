@@ -109,9 +109,9 @@ LLM_INPUT_INFO = {
         "Project Brief · Film-Kontext (Titel, Promise, Arc) · "
         "Kapitel-Dramaturgie (Rolle, Reason, Wortziel) · "
         "Vorgänger-/Nachfolger-Kapitel · Style Profile · verifizierte "
-        "Fakten/Metadaten · Asset-Inventar nur als visuelle Ressource "
-        "(keine Inhaltsgrenze) · Regeln gegen Bildunterschriften & "
-        "erfundene Fakten. Ein Call = nur dieses Kapitel."
+        "Fakten/Metadaten · Regeln gegen Bildunterschriften & "
+        "erfundene Fakten. Ein Call = nur dieses Kapitel — "
+        "kein Inventar, keine Asset-Zuordnung (kommt im Cut Plan)."
     ),
     "enhanced_script_revision": (
         "Nur dein Freitext + das bereits erzeugte Kapitel-Skript. "

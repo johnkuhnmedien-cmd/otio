@@ -199,12 +199,12 @@ def test_script_prompt_forbids_image_caption_phrases() -> None:
         dramaturgy_text="Dramaturgy",
         style_profile_text="Style",
         verified_facts_text="Facts",
-        asset_inventory_summary="Assets",
     )
     for phrase in FORBIDDEN_PHRASES:
         assert phrase in prompt
-    assert "VISUAL RESOURCE" in prompt
-    assert "must NOT fully constrain" in prompt
+    assert "visual_intents" not in prompt
+    assert "LOCAL ASSET" not in prompt
+    assert "VISUAL RESOURCE" not in prompt
 
 
 def test_parse_script_separates_visual_intents_and_marks_unverified() -> None:
@@ -1089,7 +1089,6 @@ def test_folder_script_prompt_binds_to_dramaturgy_chapter() -> None:
         chapter_dramaturgy_text="folder_name: Canyon\ndramaturgy_role: hook",
         style_profile_text="Style",
         verified_facts_text="Facts",
-        asset_inventory_summary="- Canyon: 3 assets",
         folder_name="Canyon",
         folder_slug="canyon",
         dramaturgy_role="hook",
@@ -1106,6 +1105,8 @@ def test_folder_script_prompt_binds_to_dramaturgy_chapter() -> None:
     assert "120-180" in prompt
     assert "next chapter in the film: Desert" in prompt
     assert "THIS CHAPTER DRAMATURGY:" in prompt
+    assert "LOCAL ASSETS" not in prompt
+    assert "visual_intents" not in prompt
     for phrase in FORBIDDEN_PHRASES:
         assert phrase in prompt
 

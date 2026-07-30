@@ -17,7 +17,6 @@ from otio_app.defaults import (
 from otio_app.models import Project
 from otio_app.project_layout import safe_folder_slug
 from otio_app.services.gemini_client import _extract_json
-from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.plan_llm_client import generate_plan_text_with_metadata
 from otio_app.services.voiceover_generation.dramaturgy_service import load_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.folder_voiceover_settings_service import (
@@ -90,22 +89,6 @@ def _verified_facts_text(project: Project) -> str:
             if value:
                 parts.append(f"{field_name}: {value}")
     return "\n".join(parts) if parts else "(keine verifizierten Fakten hinterlegt)"
-
-
-def _asset_inventory_summary_for_folder(project: Project, folder_name: str) -> str:
-    inventory = load_folder_inventory(project, folder_name)
-    if inventory is None:
-        return f"- {folder_name}: (kein Inventory — visual resource only)"
-    asset_count = len(getattr(inventory, "assets", []) or [])
-    return f"- {folder_name}: {asset_count} assets (visual resource only)"
-
-
-def _asset_inventory_summary(project: Project) -> str:
-    lines = [
-        _asset_inventory_summary_for_folder(project, folder)
-        for folder in project.selected_asset_subdirs
-    ]
-    return "\n".join(lines) if lines else "(keine lokalen Assets inventarisiert)"
 
 
 def list_enabled_dramaturgy_folders(project: Project) -> list[DramaturgyFolderEntry]:
@@ -608,7 +591,6 @@ def generate_enhanced_script_for_folder(
         chapter_dramaturgy_text=_chapter_dramaturgy_text(entry),
         style_profile_text=_style_text(project),
         verified_facts_text=_verified_facts_text(project),
-        asset_inventory_summary=_asset_inventory_summary_for_folder(project, folder_name),
         folder_name=folder_name,
         folder_slug=folder_slug,
         dramaturgy_role=entry.dramaturgy_role,
