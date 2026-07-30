@@ -87,7 +87,12 @@ def _padded(values: list[str], size: int = _REF_SLOTS) -> list[str]:
     return padded
 
 
+def _refs_loaded_key(project_id: str) -> str:
+    return f"vo_style_refs_loaded_{project_id}"
+
+
 def _apply_refs_to_session(project_id: str, refs: VoiceoverStyleReferences) -> None:
+    """Nur aufrufen, BEVOR die zugehörigen Widgets in diesem Run instanziert werden."""
     st.session_state[_mode_key(project_id)] = normalize_style_mode(refs.style_mode)
     st.session_state[_raw_key(project_id)] = refs.raw_reference_text or ""
     st.session_state[_raw_intro_key(project_id)] = refs.raw_intro_reference_text or ""
@@ -95,6 +100,15 @@ def _apply_refs_to_session(project_id: str, refs: VoiceoverStyleReferences) -> N
         st.session_state[_ref_key(project_id, "intro", index)] = text
     for index, text in enumerate(_padded(refs.segment_reference_texts)):
         st.session_state[_ref_key(project_id, "segment", index)] = text
+
+
+def _schedule_refs_reload_from_disk(project_id: str) -> None:
+    """Nach Widget-Instanziierung: nicht session_state der Widget-Keys setzen.
+
+    Stattdessen den Load-Marker löschen und per st.rerun() die Referenzen
+    am Anfang des nächsten Runs aus der Datei in die Widgets laden.
+    """
+    st.session_state.pop(_refs_loaded_key(project_id), None)
 
 
 def _render_model_settings_editor(project: Project) -> None:
@@ -298,7 +312,7 @@ def _render_raw_style_library(
                 if st.button("In dieses Projekt laden", key=f"vo_raw_lib_load_{project.id}"):
                     entry = get_raw_from_library(selected_name)
                     if entry is not None:
-                        saved = save_style_references(
+                        save_style_references(
                             project,
                             VoiceoverStyleReferences(
                                 project_id=project.id,
@@ -308,7 +322,9 @@ def _render_raw_style_library(
                                 raw_library_name=selected_name,
                             ),
                         )
-                        _apply_refs_to_session(project.id, saved)
+                        # Widgets (mode/raw textareas) sind in diesem Run schon da —
+                        # session_state der Keys hier nicht setzen (StreamlitAPIException).
+                        _schedule_refs_reload_from_disk(project.id)
                         st.success(f"„{selected_name}“ übernommen.")
                         st.rerun()
             with col_delete:
@@ -364,7 +380,7 @@ def render_style_references_page() -> None:
     if not require_without_voiceover_mode(project):
         return
 
-    loaded_key = f"vo_style_refs_loaded_{project.id}"
+    loaded_key = _refs_loaded_key(project.id)
     if loaded_key not in st.session_state:
         _apply_refs_to_session(project.id, load_style_references(project))
         st.session_state[loaded_key] = True
