@@ -158,7 +158,8 @@ def test_raw_style_mode_roundtrip_and_prompt_context(tmp_path: Path) -> None:
     assert "calm documentary" not in context
 
     intro_context = style_context_text_for_prompts(project, for_intro=True)
-    assert "RAW INTRO STYLE REFERENCE" in intro_context
+    assert "RAW INTRO STRUCTURAL REFERENCE" in intro_context
+    assert "STRUCTURAL TEMPLATE" in intro_context
     assert "cinematic question" in intro_context
     assert "quiet trail guide" not in intro_context
 
@@ -223,3 +224,16 @@ def test_profile_mode_still_uses_style_profile_json(tmp_path: Path) -> None:
 def test_format_raw_style_reference_for_prompts_empty() -> None:
     text = format_raw_style_reference_for_prompts("   ")
     assert "kein Raw-Style-Text" in text
+
+
+def test_format_raw_style_reference_structural_template() -> None:
+    text = format_raw_style_reference_for_prompts(
+        "Vignette. Pause. Name. Question.",
+        label="RAW INTRO STRUCTURAL REFERENCE",
+        as_structural_template=True,
+    )
+    assert "STRUCTURAL TEMPLATE" in text
+    assert "Mirror this Intro's STRUCTURE" in text
+    assert "Vignette. Pause. Name. Question." in text
+    assert "Do NOT copy wording" in text
+    assert "style inspiration" not in text

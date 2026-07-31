@@ -47,11 +47,22 @@ def format_raw_style_reference_for_prompts(
     raw_text: str,
     *,
     label: str = "RAW STYLE REFERENCE",
+    as_structural_template: bool = False,
 ) -> str:
     text = (raw_text or "").strip()
     if not text:
         return (
             "(kein Raw-Style-Text hinterlegt — neutraler dokumentarischer Standardstil)"
+        )
+    if as_structural_template:
+        return (
+            f"{label} — STRUCTURAL TEMPLATE for the Intro.\n"
+            "Mirror this Intro's STRUCTURE only: beat order, vignette rhythm, "
+            "pause/pacing markers if present, escalation to naming the place, "
+            "open questions, and host/promise close.\n"
+            "Write NEW content for THIS project (different places, facts, angles). "
+            "Do NOT copy wording, place names, or sentences verbatim:\n"
+            f"{text}"
         )
     return (
         f"{label} — use only as style inspiration; "
@@ -94,7 +105,8 @@ def style_context_text_for_prompts(
             text = intro_text or (refs.raw_reference_text or "")
             return format_raw_style_reference_for_prompts(
                 text,
-                label="RAW INTRO STYLE REFERENCE",
+                label="RAW INTRO STRUCTURAL REFERENCE",
+                as_structural_template=True,
             )
         return format_raw_style_reference_for_prompts(refs.raw_reference_text)
 

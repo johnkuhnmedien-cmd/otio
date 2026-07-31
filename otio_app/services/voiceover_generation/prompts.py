@@ -1180,11 +1180,12 @@ def build_intro_hook_prompt(
     inventory_by_folder: dict[str, list[dict]] | None = None,
     style_context_text: str | None = None,
 ) -> str:
-    """Baut den Prompt zur Erzeugung von genau 5 Intro-Hook-Kandidaten.
+    """Baut den Prompt für genau 5 Intro-Inhaltsvarianten.
 
-    Quelle: nur kurze Kapitel-Signale aus der Dramaturgie (Name, Rolle, Reason,
-    Scores) für die freigegebenen/gelockten Kapitel — **kein** Fließtext,
-    keine Folder-VO-Sätze, kein Inventory.
+    Eine gemeinsame STRUCTURE (aus Raw-Intro-Referenz / Style) — fünf
+    unterschiedliche Inhaltswahlen. Quelle: nur kurze Kapitel-Signale aus der
+    Dramaturgie (Name, Rolle, Reason, Scores) — **kein** Fließtext, keine
+    Folder-VO-Sätze, kein Inventory.
     """
     del inventory_by_folder
     entries_by_folder = {
@@ -1209,13 +1210,13 @@ def build_intro_hook_prompt(
     must_include_block = ", ".join(settings.must_include) or "(keine Angabe)"
     ready_list = ", ".join(ready_names) or "(none)"
 
-    return f"""You are a documentary editor writing the OPENING HOOK for a \
+    return f"""You are a documentary editor writing the OPENING INTRO for a \
 multi-location travel/nature documentary. You receive SHORT chapter signals \
 only (location name, dramaturgy role, reason, scores) — NOT the spoken \
 chapter scripts / voice-over body text.
 
 Do not invent plot details that are not implied by the chapter signals, \
-project brief, or style. Create a strong documentary opening hook.
+project brief, or structural style reference. Write a strong documentary Intro.
 
 Do not invent asset IDs. No scripts, sentence_items, or inventory are provided. \
 For visual_beats, set primary_asset_id to "" and needs_supplement_asset=true \
@@ -1226,20 +1227,20 @@ with a concrete supplement_reason.
 ## Project
 - Project title: {project_brief.video_title or "(untitled)"}
 - Desired tone tags: {tone_tags}
-- Hook tone (from settings): {settings.tone}
+- Intro tone (from settings): {settings.tone}
 - Core narrative arc: {dramaturgy_plan.narrative_arc or "-"}
 - Core promise: {dramaturgy_plan.core_promise or "-"}
 
 ## Active global negative rules (MUST be respected)
 {active_negative_rules}
 
-## Forbidden phrases (global + style + hook settings)
+## Forbidden phrases (global + style + intro settings)
 {forbidden_block}
 
-## Style Profile (respect it — do not copy any reference text)
+## Intro structural / style reference (STRUCTURE first — do not copy wording)
 {_style_summary_block(style_profile, style_context_text=style_context_text)}
 
-## Hook rules for this project
+## Intro rules for this project
 - allow_questions: {settings.allow_questions}
 - allow_strong_claim: {settings.allow_strong_claim}
 - allow_direct_place_name: {settings.allow_direct_place_name}
@@ -1247,6 +1248,9 @@ with a concrete supplement_reason.
 - must include (topics/ideas, not literal phrases): {must_include_block}
 - editor's extra instructions: {settings.freeform_rule_for_llm or "(none)"}
 - target_words: {settings.target_words} (min {settings.min_words}, max {settings.max_words})
+- Soft guidance only when a structural raw Intro reference is present: prefer \
+matching that reference's beat count and pacing; stay near the word window \
+when possible without breaking the structure.
 
 ## Ready chapters (use ONLY these folder_name values in used_folders / source_folder_name)
 {ready_list}
@@ -1255,20 +1259,25 @@ with a concrete supplement_reason.
 {chapter_blocks}
 
 ## Task
-Analyze the chapter signals above and decide:
-- Which location has the STRONGEST hook potential?
-- Which CONTRAST between locations works best as an opener?
-- What OPEN QUESTION creates suspense?
-- Which visual motif works best as an entry point?
-- Which COMBINATION of locations creates the strongest opening?
-- Which hook best matches the desired documentary style?
+ONE shared Intro STRUCTURE. FIVE different CONTENT variants.
 
-Produce EXACTLY 5 hook candidates (exactly 5, no more, no fewer), each a \
-distinct strategic approach (e.g. mystery, contrast, surprise, \
-cinematic_promise, question, emotional). Each hook must read like real \
-documentary prose — never like a list of assets or a plot summary.
+1. Infer the structural template from the Intro structural / style reference \
+above (beat order, vignette rhythm, pauses/pacing, naming beat, tension/history \
+beat, open questions, host/promise close). If no structural reference is \
+available, use a clean documentary Intro with the same beat roles.
+2. Keep that SAME structure for every candidate.
+3. Vary only the CONTENT across the 5 candidates: different place selections, \
+facts, contrasts, and question angles drawn from the chapter signals.
+4. Do NOT produce 5 different hook strategies (mystery vs contrast vs question, \
+etc.). Strategy/structure is fixed; content changes.
 
-For each candidate, also provide visual_beats: a beat breakdown of the hook \
+Produce EXACTLY 5 intro candidates (exactly 5, no more, no fewer). Each must \
+read like real documentary prose — never like a list of assets or a plot \
+summary. Preserve structural markers from the reference when present \
+(e.g. [cinematic], [pause …], [serious], [intense]) adapted to this project's \
+language and content — do not invent a different macro-structure.
+
+For each candidate, also provide visual_beats: a beat breakdown of the intro \
 text. Set source_folder_name to a ready chapter name from above when relevant. \
 Leave source_sentence_id and primary_asset_id empty (""), set \
 needs_supplement_asset=true, and give a concrete supplement_reason describing \
@@ -1282,7 +1291,7 @@ this shape:
     {{
       "hook_id": "hook_001",
       "hook_text": "...",
-      "hook_type": "mystery|contrast|surprise|cinematic_promise|question|emotional",
+      "hook_type": "short_slug_for_this_content_focus",
       "used_folders": [],
       "used_sentence_ids": [],
       "visual_beats": [
@@ -1301,7 +1310,7 @@ this shape:
         }}
       ],
       "hook_potential_score": 0.0,
-      "reason": "...",
+      "reason": "what content choices differ vs other variants; structure is shared",
       "risks": []
     }}
   ]

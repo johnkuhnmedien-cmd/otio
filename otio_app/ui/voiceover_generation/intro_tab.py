@@ -1,4 +1,4 @@
-"""Intro-Hook aus allen Ordner-Voice-overs — Top-5-Vorschläge, Bestätigung (Phase 5)."""
+"""Intro aus Ordner-Signalen — 5 Inhaltsvarianten einer Struktur, Bestätigung."""
 
 from __future__ import annotations
 
@@ -31,6 +31,10 @@ from otio_app.services.voiceover_generation.models import IntroHookCandidate
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
 from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
 from otio_app.ui.project_context import render_project_selector
+from otio_app.services.voiceover_generation.llm_pricing import (
+    estimate_call_cost_usd,
+    format_usd,
+)
 from otio_app.ui.voiceover_generation._shared import (
     LLM_INPUT_INFO,
     render_llm_model_selectbox,
@@ -39,6 +43,13 @@ from otio_app.ui.voiceover_generation._shared import (
 )
 
 import streamlit as st
+
+# Output-Token-Ceiling für Intro (5 Varianten + visual_beats). Unverbrauchtes
+# Limit kostet nichts. Anthropic streamt oberhalb ~20k automatisch.
+_INTRO_MAX_OUTPUT_TOKENS_MIN = 16_384
+_INTRO_MAX_OUTPUT_TOKENS_MAX = 100_000
+_INTRO_MAX_OUTPUT_TOKENS_DEFAULT = 65_536
+_INTRO_MAX_OUTPUT_TOKENS_STEP = 4_096
 
 
 def _render_prerequisites(project: Project) -> bool:
@@ -221,6 +232,43 @@ def _render_model_settings(project: Project) -> tuple[str, str]:
     return role_settings.provider, role_settings.model
 
 
+def _render_max_tokens_slider(
+    project: Project,
+    *,
+    provider: str,
+    model: str,
+) -> int:
+    slider_key = f"vo_intro_max_tokens_{project.id}"
+    if slider_key not in st.session_state:
+        st.session_state[slider_key] = _INTRO_MAX_OUTPUT_TOKENS_DEFAULT
+
+    max_tokens = st.slider(
+        "Max. Output-Tokens (Ceiling)",
+        min_value=_INTRO_MAX_OUTPUT_TOKENS_MIN,
+        max_value=_INTRO_MAX_OUTPUT_TOKENS_MAX,
+        step=_INTRO_MAX_OUTPUT_TOKENS_STEP,
+        key=slider_key,
+        help=(
+            "Obergrenze für die Antwortlänge (5 Intro-Varianten + visual_beats). "
+            "Du zahlst nur die tatsächlich erzeugten Output-Tokens — nicht "
+            "automatisch das volle Limit. Bei Truncation höher stellen."
+        ),
+    )
+    estimate = estimate_call_cost_usd(
+        provider=provider,
+        model=model,
+        input_tokens=0,
+        output_tokens_ceiling=int(max_tokens),
+    )
+    st.caption(
+        f"**Output-Worst-Case** ({estimate.price.label}): "
+        f"{estimate.output_tokens_ceiling:,} Tok → "
+        f"{format_usd(estimate.output_ceiling_cost_usd)}. "
+        f"Aktuelles Limit: max_tokens={int(max_tokens):,}."
+    )
+    return int(max_tokens)
+
+
 def _render_visual_beats_table(candidate: IntroHookCandidate) -> None:
     if not candidate.visual_beats:
         st.caption("Keine visual_beats vorhanden.")
@@ -251,7 +299,7 @@ def _render_candidate(project: Project, candidate: IntroHookCandidate, *, is_con
         with col1:
             st.metric("Wortanzahl", candidate.word_count)
         with col2:
-            st.metric("Hook-Typ", candidate.hook_type)
+            st.metric("Inhalt / Fokus", candidate.hook_type)
         with col3:
             st.metric("Score", f"{candidate.hook_potential_score:.2f}")
 
@@ -260,7 +308,7 @@ def _render_candidate(project: Project, candidate: IntroHookCandidate, *, is_con
         text_key = f"vo_intro_hook_text_{candidate.hook_id}_{project.id}"
         if text_key not in st.session_state:
             st.session_state[text_key] = candidate.hook_text
-        hook_text = st.text_area("Hook-Text", key=text_key, height=100)
+        hook_text = st.text_area("Intro-Text", key=text_key, height=160)
 
         if candidate.reason:
             st.write(f"**Begründung:** {candidate.reason}")
@@ -278,13 +326,13 @@ def _render_candidate(project: Project, candidate: IntroHookCandidate, *, is_con
                 st.rerun()
         with col_confirm:
             if st.button(
-                "Diesen Hook wählen / bestätigen",
+                "Diese Variante wählen / bestätigen",
                 key=f"vo_intro_confirm_{candidate.hook_id}_{project.id}",
                 type="primary",
             ):
                 update_intro_hook_candidate(project, candidate.hook_id, {"hook_text": hook_text})
                 confirm_intro_hook(project, candidate.hook_id, edited_hook_text=hook_text)
-                st.success("Intro-Hook bestätigt.")
+                st.success("Intro bestätigt.")
                 st.rerun()
 
 
@@ -308,25 +356,46 @@ def render_intro_page() -> None:
     confirmed_hook = load_confirmed_intro_hook(project)
     candidates_document = load_intro_hook_candidates(project)
 
-    st.subheader("Intro-Hooks generieren")
+    st.subheader("Intro-Varianten generieren")
+    st.caption(
+        "Eine Intro-Struktur (Raw-Intro-Referenz) × fünf unterschiedliche Inhalte. "
+        "Nicht fünf verschiedene Hook-Strategien."
+    )
+    max_output_tokens = _render_max_tokens_slider(
+        project, provider=provider, model=model
+    )
     if confirmed_hook is not None:
         st.info(
-            "Es gibt bereits einen bestätigten Intro-Hook. Neue Kandidaten "
-            "ersetzen ihn nicht automatisch."
+            "Es gibt bereits ein bestätigtes Intro. Neue Varianten "
+            "ersetzen es nicht automatisch."
         )
 
-    label = "Intro-Hooks neu generieren" if candidates_document is not None else "Top 5 Intro-Hooks generieren"
+    label = (
+        "Intro-Varianten neu generieren"
+        if candidates_document is not None
+        else "5 Intro-Varianten generieren"
+    )
     if st.button(label, key=f"vo_intro_generate_{project.id}", type="primary"):
-        with st.spinner("Intro-Hooks werden generiert…"):
+        with st.spinner("Intro-Varianten werden generiert…"):
             if candidates_document is not None:
-                result = regenerate_intro_hook_candidates(project, provider=provider, model=model)
+                result = regenerate_intro_hook_candidates(
+                    project,
+                    provider=provider,
+                    model=model,
+                    max_output_tokens=max_output_tokens,
+                )
             else:
-                result = build_intro_hook_candidates(project, provider=provider, model=model)
+                result = build_intro_hook_candidates(
+                    project,
+                    provider=provider,
+                    model=model,
+                    max_output_tokens=max_output_tokens,
+                )
         st.session_state[f"vo_intro_last_result_{project.id}"] = {
             "status": result.status, "error": result.error, "llm_run_id": result.llm_run_id,
         }
         if result.status == STATUS_PASS:
-            st.success(f"{len(result.document.candidates)} Kandidaten erzeugt.")
+            st.success(f"{len(result.document.candidates)} Varianten erzeugt.")
         else:
             st.error(f"Fehlgeschlagen ({result.status}): {result.error}")
         st.rerun()
@@ -339,25 +408,27 @@ def render_intro_page() -> None:
         )
 
     if candidates_document is None:
-        st.info("Noch keine Intro-Hook-Kandidaten vorhanden.")
+        st.info("Noch keine Intro-Varianten vorhanden.")
         return
 
     if candidates_document.risks:
         st.warning("Hinweise zum letzten Lauf:\n" + "\n".join(f"- {risk}" for risk in candidates_document.risks))
 
-    st.subheader("Kandidaten")
+    st.subheader("Varianten")
     confirmed_hook_id = confirmed_hook.hook_id if confirmed_hook is not None else None
     for candidate in candidates_document.candidates:
         _render_candidate(project, candidate, is_confirmed=candidate.hook_id == confirmed_hook_id)
 
-    st.subheader("Bestätigter Hook")
+    st.subheader("Bestätigtes Intro")
     if confirmed_hook is None:
-        st.info("Noch kein Intro-Hook bestätigt.")
+        st.info("Noch kein Intro bestätigt.")
         return
 
     st.success(f"Bestätigt: `{confirmed_hook.hook_id}` ({confirmed_hook.confirmed_at.isoformat()})")
     st.write(confirmed_hook.hook_text)
-    st.caption(f"Wortanzahl: {confirmed_hook.word_count} · Typ: {confirmed_hook.hook_type}")
+    st.caption(
+        f"Wortanzahl: {confirmed_hook.word_count} · Inhalt / Fokus: {confirmed_hook.hook_type}"
+    )
     if confirmed_hook.visual_beats:
         st.markdown("**Visuelle Zuordnung**")
         rows = [

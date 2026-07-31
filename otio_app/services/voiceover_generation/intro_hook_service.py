@@ -1,8 +1,9 @@
-"""Intro-Hook-Erzeugung aus allen bestätigten Folder-Voice-overs (Phase 5).
+"""Intro-Erzeugung aus allen bestätigten Folder-Voice-overs (Phase 5).
 
-Erzeugt genau 5 Hook-Kandidaten mit vollständiger visueller Zuordnung
-(visual_beats). Schreibt niemals EditPlanDocuments und löst nie OTIO-Export
-aus. intro_hook.confirmed.json entsteht ausschließlich durch explizite
+Erzeugt genau 5 Inhaltsvarianten einer gemeinsamen Intro-Struktur
+(Raw-Intro-Referenz) mit visueller Zuordnung (visual_beats). Schreibt
+niemals EditPlanDocuments und löst nie OTIO-Export aus.
+intro_hook.confirmed.json entsteht ausschließlich durch explizite
 Nutzerbestätigung (confirm_intro_hook) — niemals automatisch.
 """
 
@@ -289,8 +290,14 @@ def _parse_candidate(raw: Any, *, index: int) -> IntroHookCandidate | None:
     if not isinstance(raw, dict):
         return None
     hook_text = str(raw.get("hook_text", ""))
-    hook_type = str(raw.get("hook_type", "")).strip().lower()
-    if hook_type not in INTRO_HOOK_TYPES:
+    # Freier Inhalts-Fokus-Slug (strukturelle Intro-Varianten); Legacy-Typen
+    # bleiben gültig. Unbekannt/leer → cinematic_promise.
+    hook_type = str(raw.get("hook_type", "")).strip().lower().replace(" ", "_")
+    if not hook_type:
+        hook_type = INTRO_HOOK_TYPE_CINEMATIC_PROMISE
+    elif hook_type not in INTRO_HOOK_TYPES and not all(
+        ch.isalnum() or ch in {"_", "-"} for ch in hook_type
+    ):
         hook_type = INTRO_HOOK_TYPE_CINEMATIC_PROMISE
     try:
         score = float(raw.get("hook_potential_score", 0.0))
@@ -528,11 +535,15 @@ def build_intro_hook_candidates(
     *,
     provider: str,
     model: str,
+    max_output_tokens: int | None = None,
 ) -> IntroHookBuildResult:
-    """Erzeugt genau 5 Intro-Hook-Kandidaten.
+    """Erzeugt genau 5 Intro-Inhaltsvarianten (gleiche Struktur, anderer Content).
 
     Klassisch: alle aktiven Ordner mit bestätigtem Folder-Voice-over.
     Enhanced: Script Lock + Kapitel-Skript für jeden aktiven Dramaturgie-Ordner.
+
+    max_output_tokens hebt das Antwort-Ceiling an (5 Varianten + visual_beats
+    können das Default-Limit leicht sprengen).
     """
     missing = missing_intro_source_folder_names(project)
     if missing:
@@ -589,7 +600,11 @@ def build_intro_hook_candidates(
     model_id = resolve_llm_model_id(provider, model)
 
     try:
-        llm_response = generate_plan_text_with_metadata(prompt=prompt, model=model_id)
+        llm_response = generate_plan_text_with_metadata(
+            prompt=prompt,
+            model=model_id,
+            max_output_tokens=max_output_tokens,
+        )
     except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
         # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu
         # lassen (nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall).
@@ -718,8 +733,17 @@ def build_intro_hook_candidates(
 
 
 def regenerate_intro_hook_candidates(
-    project: Project, *, provider: str, model: str
+    project: Project,
+    *,
+    provider: str,
+    model: str,
+    max_output_tokens: int | None = None,
 ) -> IntroHookBuildResult:
     """Alias für build_intro_hook_candidates — überschreibt NIE einen
     bestätigten Hook (§9), nur die Kandidaten-Datei."""
-    return build_intro_hook_candidates(project, provider=provider, model=model)
+    return build_intro_hook_candidates(
+        project,
+        provider=provider,
+        model=model,
+        max_output_tokens=max_output_tokens,
+    )

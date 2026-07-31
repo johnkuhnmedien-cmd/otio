@@ -27,6 +27,7 @@ from otio_app.project_layout import (
 from otio_app.services.plan_llm_client import PlanLlmNotConfiguredError, PlanLlmResponse
 from otio_app.services.voiceover_generation.dramaturgy_service import save_confirmed_dramaturgy
 from otio_app.services.voiceover_generation.intro_hook_service import (
+    _parse_candidate,
     build_intro_hook_candidates,
     confirm_intro_hook,
     folder_drafts_from_locked_enhanced_script,
@@ -252,6 +253,23 @@ def test_build_writes_intro_hook_candidates_json(tmp_path: Path) -> None:
     assert len(result.document.candidates) == 5
     path = get_intro_hook_candidates_path(project.language_work_dir_path)
     assert path.is_file()
+
+
+def test_build_intro_hook_candidates_passes_max_output_tokens(tmp_path: Path) -> None:
+    project = _make_project_with_confirmed_folder_voiceovers(tmp_path)
+    with patch(
+        f"{_INTRO_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(),
+    ) as mock_generate:
+        result = build_intro_hook_candidates(
+            project,
+            provider="anthropic",
+            model="claude-sonnet-5",
+            max_output_tokens=65536,
+        )
+
+    assert result.status == STATUS_PASS
+    assert mock_generate.call_args.kwargs["max_output_tokens"] == 65536
 
 
 def test_candidates_contain_llm_run_id(tmp_path: Path) -> None:
@@ -560,3 +578,33 @@ def test_no_api_key_leak_in_trace_files(tmp_path: Path, monkeypatch: pytest.Monk
             assert secret_key not in path.read_text(encoding="utf-8"), f"API-Key geleakt in {path}"
     candidates_path = get_intro_hook_candidates_path(project.language_work_dir_path)
     assert secret_key not in candidates_path.read_text(encoding="utf-8")
+
+def test_parse_candidate_accepts_content_focus_slug():
+    candidate = _parse_candidate(
+        {
+            "hook_id": "hook_001",
+            "hook_text": "Drei Orte. Eine Frage. Heute gehen wir dem nach.",
+            "hook_type": "cliffs_then_basalt_then_name",
+            "used_folders": [],
+            "visual_beats": [],
+            "hook_potential_score": 0.7,
+            "reason": "Andere Ortswahl, gleiche Struktur.",
+        },
+        index=1,
+    )
+    assert candidate is not None
+    assert candidate.hook_type == "cliffs_then_basalt_then_name"
+
+
+def test_parse_candidate_rejects_garbage_hook_type():
+    candidate = _parse_candidate(
+        {
+            "hook_id": "hook_001",
+            "hook_text": "Text",
+            "hook_type": "??? bad type !!!",
+        },
+        index=1,
+    )
+    assert candidate is not None
+    assert candidate.hook_type == "cinematic_promise"
+
