@@ -19,7 +19,6 @@ from otio_app.services.without_voiceover_enhanced.script_author_service import (
     folders_present_in_script,
     generate_all_enhanced_scripts,
     generate_enhanced_script_for_folder,
-    group_segments_by_folder,
     list_enabled_dramaturgy_folders,
     looks_like_asset_inventory_script,
     revise_all_enhanced_scripts,
@@ -197,18 +196,26 @@ def _render_chapter_scripts(
     max_tokens: int,
 ) -> None:
     entries = list_enabled_dramaturgy_folders(project)
-    folder_order = [entry.folder_name for entry in entries]
     role_by_folder = {
         entry.folder_name: entry.dramaturgy_role for entry in entries
     }
     order_by_folder = {entry.folder_name: entry.order_index for entry in entries}
-    groups = group_segments_by_folder(document, folder_order=folder_order)
-    present = {name for name, _ in groups if name}
 
-    # Auch Dramaturgie-Kapitel ohne Skript anzeigen (zum ersten Erzeugen).
+    # Segmente nach Ordner bucketen, Anzeige strikt in Dramaturgie-Reihenfolge —
+    # auch Kapitel ohne Skript an ihrer Platznummer (nicht ans Ende schieben).
+    buckets: dict[str, list] = {}
+    for segment in document.segments:
+        key = segment.folder_name or ""
+        buckets.setdefault(key, []).append(segment)
+
+    groups: list[tuple[str, list]] = []
+    seen: set[str] = set()
     for entry in entries:
-        if entry.folder_name not in present:
-            groups.append((entry.folder_name, []))
+        groups.append((entry.folder_name, list(buckets.get(entry.folder_name, []))))
+        seen.add(entry.folder_name)
+    for name, segs in buckets.items():
+        if name not in seen:
+            groups.append((name, segs))
 
     if not groups and not entries:
         st.info("Noch kein Kapitel-Skript vorhanden.")
@@ -463,10 +470,28 @@ def _render_script_revision_section(
 ) -> None:
     st.subheader("Skript mit Freitext nachbearbeiten")
     render_llm_input_info(LLM_INPUT_INFO["enhanced_script_revision"])
-    present = sorted(folders_present_in_script(document))
+    entries = list_enabled_dramaturgy_folders(project)
+    present_set = folders_present_in_script(document)
+    # Dramaturgie-Reihenfolge; nur Kapitel die schon ein Skript haben.
+    present = [
+        entry.folder_name
+        for entry in entries
+        if entry.folder_name in present_set
+    ]
+    # Orphans (Skript ohne Dramaturgie-Eintrag) ans Ende.
+    present += sorted(name for name in present_set if name not in set(present))
     if not present:
         st.info("Noch kein Kapitel-Skript zum Nachbearbeiten vorhanden.")
         return
+    st.caption(
+        f"{len(present)} Kapitel mit Skript"
+        + (
+            f" (von {len(entries)} in der Dramaturgie) — "
+            "nur vorhandene Skripte werden nachbearbeitet; offene Kapitel vorher erzeugen."
+            if entries
+            else "."
+        )
+    )
 
     selected = st.selectbox(
         "Kapitel für Nachbearbeitung",

@@ -303,7 +303,9 @@ def test_ensure_all_inventory_folders_unit() -> None:
     ]
     merged, missing = ensure_all_inventory_folders(entries, summaries)
     assert missing == ["B"]
-    assert [e.folder_name for e in merged] == ["A", "C", "B"]
+    # Inventory-Nachbarschaft: B zwischen A und C, nicht ans Ende.
+    assert [e.folder_name for e in merged] == ["A", "B", "C"]
+    assert [e.order_index for e in merged] == [1, 2, 3]
 
 
 def test_confirm_restores_missing_inventory_folders(tmp_path: Path) -> None:
