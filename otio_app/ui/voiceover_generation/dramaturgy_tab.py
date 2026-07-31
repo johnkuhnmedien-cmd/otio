@@ -448,10 +448,27 @@ def render_dramaturgy_page() -> None:
     if st.button(confirm_label, type="primary", key=f"vo_dramaturgy_confirm_{project.id}"):
         updated_draft = update_dramaturgy_order(project, edited_rows)
         confirmed_plan = confirm_dramaturgy_plan(project, updated_draft)
-        st.success("Dramaturgie bestätigt.")
+        chapter_count = len(confirmed_plan.recommended_folder_order)
+        enabled_count = sum(
+            1 for entry in confirmed_plan.recommended_folder_order if entry.enabled
+        )
+        st.success(
+            f"Dramaturgie bestätigt — {enabled_count}/{chapter_count} Kapitel aktiv."
+        )
+        restored = [
+            risk
+            for risk in confirmed_plan.risks
+            if "Automatisch ergänzte Ordner" in risk
+        ]
+        if restored:
+            st.warning(
+                "Fehlende Ordner wurden aus dem Inventory ergänzt (LLM-Antwort war "
+                "unvollständig, oft durch Truncation):\n\n" + "\n".join(restored)
+            )
         st.caption(f"Pfad: `{get_dramaturgy_plan_confirmed_path(project.language_work_dir_path)}`")
         with st.expander("Bestätigter Plan (JSON)"):
             st.json(confirmed_plan.model_dump(mode="json"))
+        st.rerun()
 
     st.caption(f"Draft-Pfad: `{get_dramaturgy_plan_draft_path(project.language_work_dir_path)}`")
     st.caption(
