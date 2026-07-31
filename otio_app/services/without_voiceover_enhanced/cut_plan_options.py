@@ -38,6 +38,8 @@ ENHANCED_DEFAULT_MIN_ASSET_REUSE_DISTANCE_SHOTS = 4
 ENHANCED_DEFAULT_VOICEOVER_PREROLL_SEC = 1.0
 ENHANCED_DEFAULT_VOICEOVER_POSTROLL_SEC = 5.0
 ENHANCED_DEFAULT_SHORT_ASSET_TOLERANCE_SEC = 1.0
+# LLM-Planung: von jeder Motion-Asset-Nutzdauer abziehen (Frame-Drift / Nachlauf).
+LLM_ASSET_DURATION_SAFETY_SEC = 1.0
 
 TIMING_MODE_FIXED = "fixed"
 TIMING_MODE_LLM = "llm"
@@ -485,9 +487,19 @@ SHOT / ASSET CONSTRAINTS (PROJECT SETTINGS — BINDING):
 - Aim for each visual shot to cover roughly {options.shot_min_sec:.1f}s–{options.shot_max_sec:.1f}s of narration time.
 - Do not plan a single shot longer than {options.shot_max_sec:.1f}s; split long spans into multiple shots.
 - Each LOCAL ASSET / SUPPLEMENT entry includes duration_seconds and description — use both.
-- Prefer assets whose duration_seconds (when known) is >= the intended shot span.
-- Short-asset tolerance: an asset may be up to {options.short_asset_tolerance_sec:.1f}s shorter than the planned shot. Within that tolerance you may keep the asset — Python will shorten that shot and lengthen a neighbor (even past shot_max). Beyond it choose another asset, shorten the span, or emit a coverage_gap. Python will NOT freeze-pad / tpad motion video.
-- Never plan a motion-video shot longer than the asset's usable length. There is no video hold.
+- MANDATORY planning usable length for EVERY motion asset:
+  planning_usable = max(0, duration_seconds - usable_in_s - {LLM_ASSET_DURATION_SAFETY_SEC:.1f})
+  Always subtract this {LLM_ASSET_DURATION_SAFETY_SEC:.1f}s safety margin before judging fit
+  (covers frame rounding, closing span drift, and Nachlauf/postroll). Never plan a
+  tight fit that only works with the raw usable length.
+- Prefer assets whose planning_usable is >= the intended shot span (for first/last
+  slots: include Vorlauf/preroll or Nachlauf/postroll in that span).
+- Short-asset tolerance: after applying the {LLM_ASSET_DURATION_SAFETY_SEC:.1f}s safety
+  margin, an asset may be up to {options.short_asset_tolerance_sec:.1f}s shorter than
+  the planned shot. Within that tolerance you may keep the asset — Python will
+  shorten that shot and lengthen a neighbor (even past shot_max). Beyond it choose
+  another asset, shorten the span, or emit a coverage_gap. Python will NOT freeze-pad / tpad motion video.
+- Never plan a motion-video shot longer than planning_usable. There is no video hold.
 {preroll_rule}
 {postroll_rule}
 {opening_closing_rules}

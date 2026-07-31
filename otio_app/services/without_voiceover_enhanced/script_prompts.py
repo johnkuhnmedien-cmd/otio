@@ -426,8 +426,9 @@ ASSET RULES:
 - Every shot with local_asset_id null must reference exactly one coverage_gap_id.
 - A shot with a suitable local asset must have coverage_gap_id null.
 - Prefer varied local assets across neighboring shots when equally suitable.
-- Usable video length ≈ duration_seconds - usable_in_s (black/lead-in). Prefer assets
-  whose usable length covers the intended shot span.
+- Usable video length for planning =
+  max(0, duration_seconds - usable_in_s - 1.0) (black/lead-in + 1.0s safety).
+  Prefer assets whose planning usable length covers the intended shot span.
 - Photos/stills: do not plan long static holds as if they were motion clips;
   keep still spans short unless a deliberate still is justified.
 
@@ -727,8 +728,10 @@ SLOT / ASSET RULES:
   (upgrade gap).
 - none: local_asset_id null AND coverage_gap_id + inline gap fields
   (required gap).
-- Prefer assets whose usable length (duration_seconds - usable_in_s) covers
-  the intended span. Never assume freeze/tpad video-hold padding.
+- Prefer assets whose planning usable length
+  (duration_seconds - usable_in_s - 1.0s safety) covers the intended span
+  (closing slot: include Nachlauf/postroll). Never assume freeze/tpad video-hold
+  padding. Do not plan tight fits against the raw usable length.
 - Opening slot (first) and closing slot (last): different assets from their
   immediate neighbor; max usage + reuse distance apply with no exemption.
 - narrative_function for first/last may be chapter_open / chapter_close.
@@ -818,6 +821,9 @@ FINAL VALIDATION BEFORE RETURNING JSON:
 - All sentence_ids exist in SENTENCE TIMINGS
 - All local_asset_id values exist in LOCAL ASSETS (or null)
 - Boundaries chronological; first=VO start; last=VO end
+- Every motion local_asset_id has planning_usable
+  (duration_seconds - usable_in_s - 1.0s) >= intended slot span
+  (last slot: include Nachlauf/postroll)
 - weak/none slots have coverage_gap_id + needed_visual + search_concepts
   (2–4 English keyword phrases, 2–5 words each — not prose)
 - strong/acceptable slots have coverage_gap_id null
@@ -1022,8 +1028,10 @@ SLOT / ASSET RULES:
   (upgrade gap).
 - none: local_asset_id null AND coverage_gap_id + inline gap fields
   (required gap).
-- Prefer assets whose usable length covers the intended span when possible.
-  Never assume freeze/tpad video-hold padding. Obey shot_min/shot_max from
+- Prefer assets whose planning usable length
+  (duration_seconds - usable_in_s - 1.0s safety) covers the intended span
+  when possible (closing slot: include Nachlauf/postroll). Never assume
+  freeze/tpad video-hold padding. Obey shot_min/shot_max from
   SHOT / ASSET CONSTRAINTS.
 - Opening slot (first) and closing slot (last): different assets from their
   immediate neighbor when both assigned; max usage + reuse distance apply.
@@ -1135,6 +1143,9 @@ FINAL VALIDATION BEFORE RETURNING JSON:
 - Keyword picture cuts use mid_sentence + explicit offset_seconds at onset
 - Prefer words[].offset_seconds when words[] is present
 - No keyword picture starts before its spoken keyword
+- Every motion local_asset_id has planning_usable
+  (duration_seconds - usable_in_s - 1.0s) >= intended slot span
+  (last slot: include Nachlauf/postroll)
 - weak/none slots have coverage_gap_id + needed_visual + search_concepts
 - strong/acceptable slots have coverage_gap_id null
 - No absolute timeline seconds / frames
@@ -1351,6 +1362,9 @@ FINAL VALIDATION:
 - First boundary: first Intro sentence, position start (offset 0/null)
 - Last boundary: last Intro sentence, position end (not a keyword mid_sentence)
 - Last slot covers through remaining VO after the last keyword cut
+- Every motion local_asset_id has planning_usable
+  (duration_seconds - usable_in_s - 1.0s) >= intended slot span
+  (first/last: include Vorlauf/Nachlauf)
 - asset_fit is only strong or none
 - Opening/closing assets differ when both assigned
 - All local_asset_id values exist in BUNDLED INVENTORY (or null)
@@ -1516,7 +1530,8 @@ FINAL VALIDATION BEFORE RETURNING JSON:
 - start_cut_alignment set on every shot.
 - Shots chronological and non-overlapping on the narration carpet.
 - No uncovered narration spans between consecutive shots.
-- Asset usable length covers each shot (duration_seconds - usable_in_s).
+- Asset planning usable length covers each shot
+  (duration_seconds - usable_in_s - 1.0s safety), including closing + postroll.
   Never assume freeze/tpad video-hold padding for short motion video.
 - Every chapter has opening coverage at narration start and closing coverage at
   narration end, including the configured preroll/postroll intent.
