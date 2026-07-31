@@ -1150,22 +1150,42 @@ def _is_bridge_resolved_shot(shot: ResolvedShot) -> bool:
 def _canonical_plan_shot_id(shot_id: str) -> str:
     """Parent-Slot für synthetische Teile (z. B. ``slot_007__shortfall``).
 
-    Shortfall-Placeholder müssen dieselbe Kapitel-/Segment-Zuordnung wie der
-    Asset-Kopf erhalten — sonst verschiebt die Kapitelhülle nur den Kopf und
-    erzeugt Überlappung + Lücke von Vorlauf-Länge.
+    Shortfall-/Closing-Fallback-Teile müssen dieselbe Kapitel-/Segment-Zuordnung
+    wie der Asset-Kopf erhalten — sonst verschiebt die Kapitelhülle nur den Kopf
+    und erzeugt Überlappung + Lücke von Vorlauf-Länge.
     """
     text = str(shot_id or "").strip()
-    if text.endswith("__shortfall"):
-        return text[: -len("__shortfall")]
+    for suffix in ("__shortfall", "__closing_fallback"):
+        if text.endswith(suffix):
+            return text[: -len(suffix)]
     return text
 
 
 def _resolved_shot_sort_key(shot: ResolvedShot) -> tuple:
-    """Dichte Reihenfolge: Parent vor ``__shortfall`` bei gleichem Start."""
+    """Dichte Reihenfolge: Parent vor Shortfall/Fallback bei gleichem Start."""
     sid = str(shot.shot_id or "")
-    shortfall = 1 if sid.endswith("__shortfall") else 0
+    if sid.endswith("__shortfall"):
+        tail = 1
+    elif sid.endswith("__closing_fallback"):
+        tail = 2
+    else:
+        tail = 0
     parent = _canonical_plan_shot_id(sid)
-    return (float(shot.timeline_start_seconds), parent, shortfall, sid)
+    return (float(shot.timeline_start_seconds), parent, tail, sid)
+
+
+def _closing_fallback_asset_for_chapter(
+    chapter_id: str,
+    *,
+    closing_fallback_asset_id: str | None = None,
+    closing_fallback_by_chapter: dict[str, str] | None = None,
+) -> str:
+    """Fallback-Closer für ein Kapitel (Map hat Vorrang vor Einzel-Feld)."""
+    by_chapter = closing_fallback_by_chapter or {}
+    mapped = str(by_chapter.get(chapter_id) or "").strip()
+    if mapped:
+        return mapped
+    return str(closing_fallback_asset_id or "").strip()
 
 
 def _apply_chapter_envelopes(
@@ -1182,6 +1202,11 @@ def _apply_chapter_envelopes(
     errors: list[str],
     narration_timeline: NarrationTimelineDocument | None = None,
     include_chapter: Callable[[str], bool] | None = None,
+    catalog: AssetCatalog | None = None,
+    closing_fallback_asset_id: str | None = None,
+    closing_fallback_by_chapter: dict[str, str] | None = None,
+    head_trim: float = 0.0,
+    short_tolerance: float = 0.0,
 ) -> list[ResolvedChapterEnvelope]:
     """Kapitelhüllen: Vor-/Nachlauf am Opening/Closing-CONTENT-Shot.
 
@@ -1192,6 +1217,8 @@ def _apply_chapter_envelopes(
     - ``chapter_audio_end`` aus Audio-Segment-Ende (ceil), Start floor
 
     ``include_chapter``: optional nur bestimmte Kapitel (z. B. Intro-only Resolve).
+    Bei abschließender Narrations-Lücke kann ``closing_fallback_asset_id`` /
+    ``closing_fallback_by_chapter`` einen Reserve-Closer einfügen.
     """
     chapters = _chapters_from_locked(locked)
     if include_chapter is not None:
@@ -1299,12 +1326,99 @@ def _apply_chapter_envelopes(
         lead_tol = max(0.0, float(preroll)) + max(ausklang_tol, 1.5)
 
         if raw_last_shot_end < raw_audio_end - ausklang_tol - 1e-9:
-            errors.append(
+            gap_msg = (
                 f"Abschließende visuelle Lücke während der Narration in Kapitel "
                 f"{chapter_id}: letzter Shot endet bei {raw_last_shot_end:.3f}s, "
                 f"Audio bei {raw_audio_end:.3f}s "
                 f"(>{ausklang_tol:.3f}s Ausklang-Toleranz)."
             )
+            fallback_id = _closing_fallback_asset_for_chapter(
+                chapter_id,
+                closing_fallback_asset_id=closing_fallback_asset_id,
+                closing_fallback_by_chapter=closing_fallback_by_chapter,
+            )
+            last_raw = max(
+                ch_shots,
+                key=lambda s: (raw_shot_times[s.shot_id][1], s.shot_id),
+            )
+            inserted = False
+            if fallback_id and catalog is not None:
+                if fallback_id == str(last_raw.asset_id or "").strip():
+                    errors.append(
+                        f"{gap_msg} closing_fallback_asset_id={fallback_id!r} "
+                        "ist identisch mit dem letzten Shot — Reserve unbrauchbar."
+                    )
+                else:
+                    fallback_entry, lookup_err = lookup_catalog_entry(
+                        catalog, fallback_id
+                    )
+                    if fallback_entry is None:
+                        errors.append(
+                            f"{gap_msg} closing_fallback_asset_id={fallback_id!r} "
+                            f"nicht auflösbar ({lookup_err})."
+                        )
+                    else:
+                        parent_id = _canonical_plan_shot_id(last_raw.shot_id)
+                        fallback_shot_id = f"{parent_id}__closing_fallback"
+                        try:
+                            fallback_shot = _resolve_shot_media(
+                                project,
+                                shot_id=fallback_shot_id,
+                                asset_id=str(
+                                    fallback_entry.get("canonical_id")
+                                    or fallback_id
+                                ),
+                                entry=fallback_entry,
+                                timeline_start=raw_last_shot_end,
+                                timeline_end=raw_audio_end,
+                                fps=fps,
+                                head_trim=head_trim,
+                                short_tolerance=short_tolerance,
+                                editorial_function="chapter_close_fallback",
+                                may_overlap_pause=False,
+                                repairs=repairs,
+                            )
+                        except TimelineResolveError as exc:
+                            errors.append(
+                                f"{gap_msg} Closing-Fallback {fallback_id!r} "
+                                f"fehlgeschlagen: {exc}"
+                            )
+                        else:
+                            fallback_shot.folder_name = chapter_id
+                            fallback_shot.chapter_id = chapter_id
+                            fallback_shot.asset_fit = "acceptable"
+                            fallback_shot.asset_fit_reason = (
+                                "closing_fallback_asset_id — Reserve für "
+                                "abschließende Narrations-Lücke"
+                            )
+                            ordered.append(fallback_shot)
+                            ch_shots.append(fallback_shot)
+                            raw_shot_times[fallback_shot.shot_id] = (
+                                raw_last_shot_end,
+                                raw_audio_end,
+                            )
+                            shot_start_segment[fallback_shot.shot_id] = (
+                                shot_start_segment.get(last_raw.shot_id, "")
+                            )
+                            raw_last_shot_end = raw_audio_end
+                            inserted = True
+                            repairs.append(
+                                f"Kapitel {chapter_id}: Closing-Fallback "
+                                f"{fallback_id} als {fallback_shot_id} "
+                                f"({raw_shot_times[fallback_shot.shot_id][0]:.3f}s"
+                                f"–{raw_audio_end:.3f}s) eingefügt."
+                            )
+            if not inserted:
+                if not fallback_id:
+                    errors.append(
+                        f"{gap_msg} Kein closing_fallback_asset_id gesetzt "
+                        "(LLM Cut erneut ausführen)."
+                    )
+                elif catalog is None:
+                    errors.append(
+                        f"{gap_msg} Asset-Katalog fehlt für Closing-Fallback "
+                        f"{fallback_id!r}."
+                    )
         elif raw_last_shot_end + 1e-9 < raw_audio_end:
             last_raw = max(
                 ch_shots,

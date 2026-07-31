@@ -326,6 +326,11 @@ class UnifiedCutPlanDocument(BaseModel):
     # Optional LLM-Vorschlag wenn Settings-Modus=llm (Umsetzung im Resolver).
     voiceover_preroll_sec: Optional[float] = None
     voiceover_postroll_sec: Optional[float] = None
+    # Kapitel-Plan: Reserve-Closer, falls der letzte Slot vor Audio-Ende endet.
+    # Python Timing hängt ihn nur bei abschließender Narrations-Lücke an.
+    closing_fallback_asset_id: Optional[str] = None
+    # Merged Gesamtplan: Fallback pro Kapitel-/Folder-Name.
+    closing_fallback_by_chapter: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate_boundary_slot_chain(self) -> "UnifiedCutPlanDocument":

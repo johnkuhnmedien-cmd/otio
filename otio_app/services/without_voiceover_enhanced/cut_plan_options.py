@@ -472,13 +472,20 @@ OPENING / CLOSING SHOTS PER CHAPTER (BINDING — closes edge gaps):
     for that tail.
   - Mark it with editorial_function like "closing", "chapter_close", or
     "outro" when the schema allows free editorial_function text.
+- ALWAYS also set top-level closing_fallback_asset_id (BINDING reserve closer):
+  - A LOCAL ASSETS id that Python Timing may append ONLY if the last planned
+    shot ends before VO/audio end (closing coverage shortfall).
+  - Prefer a photo/still or a long atmospheric motion clip that can also carry
+    the postroll/Nachlauf ({postroll:.1f}s) after VO ends.
+  - MUST differ from the last slot's local_asset_id and from the opening asset.
+  - If the last shot already covers VO end, Python leaves this unused.
 - Do NOT leave the first or last spoken seconds of a chapter without a planned
   shot. Python will fail closed on leading/trailing narration gaps; opening and
   closing shots are how you prevent those gaps.
 - Opening/closing shots still obey shot_min/shot_max for the narration-covered
   portion; do not invent one giant shot for the whole chapter.
 - Opening and closing shots COUNT toward max asset usage and the asset reuse
-  gap — no exemption.
+  gap — no exemption. closing_fallback_asset_id also counts if Python uses it.
 """
 
     return f"""

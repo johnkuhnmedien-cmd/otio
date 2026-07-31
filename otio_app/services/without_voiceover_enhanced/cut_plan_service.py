@@ -2111,6 +2111,7 @@ def merge_and_persist_unified_cuts(
     seen_pause: set[str] = set()
     preroll: float | None = None
     postroll: float | None = None
+    closing_fallback_by_chapter: dict[str, str] = {}
 
     for result in ok:
         plan = result.plan
@@ -2119,6 +2120,16 @@ def merge_and_persist_unified_cuts(
             preroll = plan.voiceover_preroll_sec
         if plan.voiceover_postroll_sec is not None and postroll is None:
             postroll = plan.voiceover_postroll_sec
+        folder_name = str(result.folder_name or "").strip()
+        if folder_name and plan.closing_fallback_asset_id:
+            closing_fallback_by_chapter[folder_name] = str(
+                plan.closing_fallback_asset_id
+            ).strip()
+        for chapter_key, asset_id in (plan.closing_fallback_by_chapter or {}).items():
+            key = str(chapter_key or "").strip()
+            value = str(asset_id or "").strip()
+            if key and value and key not in closing_fallback_by_chapter:
+                closing_fallback_by_chapter[key] = value
         for pause in plan.pause_directives:
             # E2E-4: chapter_transition wird durch Kapitelhülle abgedeckt.
             if str(pause.pause_function or "").strip().lower() == "chapter_transition":
@@ -2159,6 +2170,7 @@ def merge_and_persist_unified_cuts(
         slots=slots,
         voiceover_preroll_sec=preroll,
         voiceover_postroll_sec=postroll,
+        closing_fallback_by_chapter=closing_fallback_by_chapter,
     )
     rough, coverage = unified_to_rough(merged)
     from otio_app.services.without_voiceover_enhanced.gap_search_concepts import (
@@ -2302,6 +2314,8 @@ def mini_repair_unified_plan(
         slots=new_slots,
         voiceover_preroll_sec=plan.voiceover_preroll_sec,
         voiceover_postroll_sec=plan.voiceover_postroll_sec,
+        closing_fallback_asset_id=plan.closing_fallback_asset_id,
+        closing_fallback_by_chapter=dict(plan.closing_fallback_by_chapter or {}),
     )
 
 

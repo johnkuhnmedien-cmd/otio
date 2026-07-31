@@ -758,6 +758,7 @@ OUTPUT SCHEMA:
 {{
   "voiceover_preroll_sec": null,
   "voiceover_postroll_sec": null,
+  "closing_fallback_asset_id": "existing_asset_id_not_equal_last_slot",
   "pause_directives": [
     {{
       "after_segment_id": "segment_001",
@@ -805,6 +806,7 @@ OUTPUT SCHEMA:
 
 Include voiceover_preroll_sec / voiceover_postroll_sec only when SHOT/ASSET
 CONSTRAINTS ask the LLM to decide; otherwise null/omit.
+Always set closing_fallback_asset_id (reserve closer for Python Timing).
 
 GAP / SEARCH CONCEPT RULES (CRITICAL):
 
@@ -820,6 +822,8 @@ FINAL VALIDATION BEFORE RETURNING JSON:
 - All cut_id / slot_id / coverage_gap_id unique where present
 - All sentence_ids exist in SENTENCE TIMINGS
 - All local_asset_id values exist in LOCAL ASSETS (or null)
+- closing_fallback_asset_id exists in LOCAL ASSETS and differs from the last
+  slot local_asset_id (prefer photo/still or long atmosphere)
 - Boundaries chronological; first=VO start; last=VO end
 - Every motion local_asset_id has planning_usable
   (duration_seconds - usable_in_s - 1.0s) >= intended slot span
@@ -1061,6 +1065,7 @@ OUTPUT SCHEMA:
 {{
   "voiceover_preroll_sec": null,
   "voiceover_postroll_sec": null,
+  "closing_fallback_asset_id": "existing_asset_id_not_equal_last_slot",
   "pause_directives": [
     {{
       "after_segment_id": "segment_001",
@@ -1122,6 +1127,7 @@ OUTPUT SCHEMA:
 
 Omit voiceover_preroll_sec / voiceover_postroll_sec (or set null) — Python
 applies chapter envelope settings later. Do not invent holds inside the VO.
+Always set closing_fallback_asset_id (reserve closer for Python Timing).
 
 GAP / SEARCH CONCEPT RULES (CRITICAL):
 
@@ -1138,6 +1144,8 @@ FINAL VALIDATION BEFORE RETURNING JSON:
 - All cut_id / slot_id / coverage_gap_id unique where present
 - All sentence_ids exist in SENTENCE TIMINGS
 - All local_asset_id values exist in LOCAL ASSETS (or null)
+- closing_fallback_asset_id exists in LOCAL ASSETS and differs from the last
+  slot local_asset_id (prefer photo/still or long atmosphere)
 - Boundaries chronological; first=VO start; last=VO end
 - Last boundary is sentence end (not a keyword mid_sentence)
 - Keyword picture cuts use mid_sentence + explicit offset_seconds at onset
