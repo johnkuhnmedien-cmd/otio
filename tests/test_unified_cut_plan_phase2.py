@@ -46,6 +46,7 @@ def test_build_unified_cut_prompt_contains_core_contract() -> None:
     assert "medium: ~2–3s" in prompt or "medium: ~2-3s" in prompt
     assert "Vorlauf/Nachlauf are applied later by Python" in prompt
     assert "No video-hold assumptions" in prompt
+    assert "1.0s safety" in prompt
     assert "LOCKED SCRIPT:" in prompt
     assert "LOCAL ASSETS" in prompt
 

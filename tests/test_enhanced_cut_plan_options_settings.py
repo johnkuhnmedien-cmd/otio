@@ -196,6 +196,8 @@ def test_prompt_constraints_in_rough_and_final() -> None:
     assert "No two consecutive shots share the same non-intro asset_id" in final
     assert "will NOT freeze-pad" in text
     assert "There is no video hold" in text
+    assert "planning_usable" in text
+    assert "1.0s safety" in text or "- 1.0" in text
     assert "uncovered narration spans" in rough.lower()
     assert "freeze-frame / tpad / video-hold" in rough.lower()
     assert "Never assume freeze/tpad video-hold" in final
