@@ -21,6 +21,7 @@ from otio_app.services.voiceover_generation.dramaturgy_service import (
     build_dramaturgy_plan,
     confirm_dramaturgy_plan,
     disable_dramaturgy_craft_flags,
+    ensure_all_inventory_folders,
     load_confirmed_dramaturgy,
     load_dramaturgy_draft,
     max_contrast_roles_for_chapter_count,
@@ -33,7 +34,11 @@ from otio_app.services.voiceover_generation.llm_trace_service import (
     STATUS_PARSE_FAILED,
     STATUS_PASS,
 )
-from otio_app.services.voiceover_generation.models import DramaturgyFolderEntry, DramaturgyPlan
+from otio_app.services.voiceover_generation.models import (
+    DramaturgyFolderEntry,
+    DramaturgyPlan,
+    FolderInventorySummary,
+)
 
 _SERVICE_MODULE = "otio_app.services.voiceover_generation.dramaturgy_service"
 
@@ -255,6 +260,77 @@ def test_build_dramaturgy_plan_filters_hallucinated_folder_names(tmp_path: Path)
     assert result.status == STATUS_PASS
     folder_names = {entry.folder_name for entry in result.plan.recommended_folder_order}
     assert folder_names == {"Grand Canyon"}
+
+
+def test_build_dramaturgy_plan_restores_folders_omitted_by_llm(tmp_path: Path) -> None:
+    """Regression: Truncation/Auslassung → nur 30 von 32 Ordnern im JSON."""
+    project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone", "Zion"])
+    incomplete = json.dumps(
+        {
+            "project_title": "Test",
+            "recommended_folder_order": [
+                {"folder_name": "Grand Canyon", "order_index": 1, "dramaturgy_role": "opener"},
+                {"folder_name": "Zion", "order_index": 2, "dramaturgy_role": "climax"},
+            ],
+        }
+    )
+    with patch(
+        f"{_SERVICE_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(incomplete),
+    ):
+        result = build_dramaturgy_plan(project, provider="anthropic", model="claude-sonnet-5")
+
+    assert result.status == STATUS_PASS
+    names = [entry.folder_name for entry in result.plan.recommended_folder_order]
+    assert set(names) == {"Grand Canyon", "Yellowstone", "Zion"}
+    yellowstone = next(
+        e for e in result.plan.recommended_folder_order if e.folder_name == "Yellowstone"
+    )
+    assert yellowstone.enabled is True
+    assert yellowstone.dramaturgy_role == "setup"
+    assert any("Yellowstone" in risk for risk in result.plan.risks)
+
+
+def test_ensure_all_inventory_folders_unit() -> None:
+    entries = [
+        DramaturgyFolderEntry(folder_name="A", order_index=1),
+        DramaturgyFolderEntry(folder_name="C", order_index=2),
+    ]
+    summaries = [
+        FolderInventorySummary(folder_name="A"),
+        FolderInventorySummary(folder_name="B", estimated_voiceover_word_count=140),
+        FolderInventorySummary(folder_name="C"),
+    ]
+    merged, missing = ensure_all_inventory_folders(entries, summaries)
+    assert missing == ["B"]
+    assert [e.folder_name for e in merged] == ["A", "C", "B"]
+
+
+def test_confirm_restores_missing_inventory_folders(tmp_path: Path) -> None:
+    project = _make_project(tmp_path, ["Grand Canyon", "Yellowstone", "Zion"])
+    from otio_app.services.voiceover_generation.folder_inventory_summary import (
+        build_and_save_folder_inventory_summaries,
+    )
+
+    build_and_save_folder_inventory_summaries(project)
+    draft = DramaturgyPlan(
+        project_id=project.id,
+        recommended_folder_order=[
+            DramaturgyFolderEntry(folder_name="Grand Canyon", order_index=1, enabled=True),
+            DramaturgyFolderEntry(folder_name="Zion", order_index=2, enabled=True),
+        ],
+    )
+    confirmed = confirm_dramaturgy_plan(project, draft)
+    assert len(confirmed.recommended_folder_order) == 3
+    assert {e.folder_name for e in confirmed.recommended_folder_order} == {
+        "Grand Canyon",
+        "Yellowstone",
+        "Zion",
+    }
+    # Draft synced for UI
+    reloaded_draft = load_dramaturgy_draft(project)
+    assert reloaded_draft is not None
+    assert len(reloaded_draft.recommended_folder_order) == 3
 
 
 def test_build_dramaturgy_plan_invalid_json_does_not_overwrite_existing_draft(

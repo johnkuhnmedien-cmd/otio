@@ -31,6 +31,7 @@ from otio_app.services.gemini_client import _extract_json
 from otio_app.services.plan_llm_client import generate_plan_text_with_metadata
 from otio_app.services.voiceover_generation.folder_inventory_summary import (
     build_and_save_folder_inventory_summaries,
+    load_folder_inventory_summaries,
 )
 from otio_app.services.voiceover_generation.llm_trace_service import (
     STAGE_DRAMATURGY,
@@ -49,6 +50,7 @@ from otio_app.services.voiceover_generation.model_settings_service import resolv
 from otio_app.services.voiceover_generation.models import (
     DramaturgyFolderEntry,
     DramaturgyPlan,
+    FolderInventorySummary,
     LlmRunManifest,
     as_str_list,
 )
@@ -223,6 +225,61 @@ def rebalance_contrast_roles(
     return rebalanced
 
 
+def ensure_all_inventory_folders(
+    entries: list[DramaturgyFolderEntry],
+    folder_summaries: list[FolderInventorySummary],
+) -> tuple[list[DramaturgyFolderEntry], list[str]]:
+    """Hängt Inventory-Ordner an, die in der LLM-Antwort fehlen (z. B. Truncation).
+
+    Erfundene Namen werden vorher schon herausgefiltert; hier geht es um das
+    Gegenteil — kein Kapitel darf stillschweigend verloren gehen.
+    """
+    present = {entry.folder_name for entry in entries}
+    missing_summaries = [
+        summary
+        for summary in folder_summaries
+        if summary.folder_name not in present
+    ]
+    if not missing_summaries:
+        return list(entries), []
+
+    max_order = max((entry.order_index for entry in entries), default=0)
+    appended: list[DramaturgyFolderEntry] = []
+    for offset, summary in enumerate(missing_summaries, start=1):
+        target, min_words, max_words = _normalize_recommended_word_targets(
+            summary.estimated_voiceover_word_count
+            or VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
+            summary.estimated_min_words or VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
+            summary.estimated_max_words or VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
+        )
+        appended.append(
+            DramaturgyFolderEntry(
+                folder_name=summary.folder_name,
+                order_index=max_order + offset,
+                enabled=True,
+                dramaturgy_role=DRAMATURGY_ROLE_SETUP,
+                reason=(
+                    "Automatisch ergänzt — fehlte in der LLM-Antwort "
+                    "(häufig bei Truncation / zu niedrigem Token-Limit)."
+                ),
+                visual_strength_score=summary.visual_strength_score,
+                asset_diversity_score=summary.asset_diversity_score,
+                recommended_word_count=target,
+                recommended_min_words=min_words,
+                recommended_max_words=max_words,
+                risks=list(summary.risks),
+            )
+        )
+    return list(entries) + appended, [s.folder_name for s in missing_summaries]
+
+
+def _inventory_summaries_for_project(project: Project) -> list[FolderInventorySummary]:
+    loaded = load_folder_inventory_summaries(project)
+    if loaded is not None and loaded.folder_summaries:
+        return list(loaded.folder_summaries)
+    return build_and_save_folder_inventory_summaries(project)
+
+
 def confirm_dramaturgy_plan(project: Project, edited_plan: DramaturgyPlan) -> DramaturgyPlan:
     """Bestätigt einen (ggf. manuell bearbeiteten) Dramaturgie-Plan.
 
@@ -230,27 +287,52 @@ def confirm_dramaturgy_plan(project: Project, edited_plan: DramaturgyPlan) -> Dr
     Ordner zuerst (in ihrer relativen Reihenfolge), danach deaktivierte
     Ordner. Nur `enabled` entscheidet, ob ein Ordner in Phase 4 aktiv für die
     Voice-over-Erzeugung berücksichtigt wird — deaktivierte Ordner bleiben im
-    Plan sichtbar (Audit), zählen aber nicht als aktiv."""
+    Plan sichtbar (Audit), zählen aber nicht als aktiv.
+
+    Fehlende Inventory-Ordner (LLM-Lücken) werden vor dem Speichern ergänzt.
+    """
+    entries, missing_names = ensure_all_inventory_folders(
+        list(edited_plan.recommended_folder_order),
+        _inventory_summaries_for_project(project),
+    )
     enabled_entries = sorted(
-        (entry for entry in edited_plan.recommended_folder_order if entry.enabled),
+        (entry for entry in entries if entry.enabled),
         key=lambda entry: entry.order_index,
     )
     disabled_entries = sorted(
-        (entry for entry in edited_plan.recommended_folder_order if not entry.enabled),
+        (entry for entry in entries if not entry.enabled),
         key=lambda entry: entry.order_index,
     )
     normalized_entries = [
         entry.model_copy(update={"order_index": index})
         for index, entry in enumerate(enabled_entries + disabled_entries, start=1)
     ]
+    risks = list(edited_plan.risks)
+    if missing_names:
+        risks.append(
+            "Automatisch ergänzte Ordner (fehlten in der Dramaturgie-Antwort): "
+            + ", ".join(missing_names)
+        )
     confirmed = edited_plan.model_copy(
         update={
             "recommended_folder_order": normalized_entries,
             "confirmed_at": datetime.now(timezone.utc),
             "status": DRAMATURGY_STATUS_CONFIRMED,
+            "risks": risks,
         }
     )
-    return save_confirmed_dramaturgy(project, confirmed)
+    saved = save_confirmed_dramaturgy(project, confirmed)
+    # Draft mitziehen, damit die Tabelle dieselbe Kapitelzahl zeigt wie Folder VO.
+    save_dramaturgy_draft(
+        project,
+        saved.model_copy(
+            update={
+                "status": DRAMATURGY_STATUS_DRAFT,
+                "confirmed_at": None,
+            }
+        ),
+    )
+    return saved
 
 
 def update_dramaturgy_order(project: Project, edited_rows: list[dict]) -> DramaturgyPlan:
@@ -525,7 +607,16 @@ def build_dramaturgy_plan(
     # LLM-Halluzinationen (erfundene Ordnernamen).
     valid_folder_names = {summary.folder_name for summary in folder_summaries}
     entries = [entry for entry in entries if entry.folder_name in valid_folder_names]
+    # Fehlende Inventory-Ordner wieder anhängen (LLM-Truncation / Auslassungen).
+    entries, missing_names = ensure_all_inventory_folders(entries, folder_summaries)
     entries = rebalance_contrast_roles(entries)
+
+    risks = as_str_list(payload.get("risks"))
+    if missing_names:
+        risks.append(
+            "Automatisch ergänzte Ordner (fehlten in der LLM-Antwort): "
+            + ", ".join(missing_names)
+        )
 
     plan = DramaturgyPlan(
         project_id=project.id,
@@ -545,7 +636,7 @@ def build_dramaturgy_plan(
         style_profile_hash=content_hash_of_model(style_profile),
         llm_run_id=run_id,
         status=DRAMATURGY_STATUS_DRAFT,
-        risks=as_str_list(payload.get("risks")),
+        risks=risks,
         craft_flags_disabled=True,
     )
     saved = save_dramaturgy_draft(project, plan)
