@@ -125,6 +125,8 @@ __all__ = [
     "IntroHookCandidatesDocument",
     "ConfirmedIntroHook",
     "ElevenLabsSettings",
+    "ElevenLabsLanguageVoiceDefaults",
+    "ElevenLabsVoiceDefaultsDocument",
     "TtsRunManifest",
     "VoiceoverAudioItem",
     "VoiceoverAudioManifest",
@@ -735,6 +737,26 @@ class ElevenLabsSettings(BaseModel):
     use_speaker_boost: bool = True
     speed: float = 1.0
     language_code: str = ""
+
+
+class ElevenLabsLanguageVoiceDefaults(BaseModel):
+    """Globale Voice-Defaults für eine Sprache — ohne project_id / API-Key."""
+
+    voice_id: str = ""
+    model_id: str = ELEVENLABS_DEFAULT_MODEL_ID
+    output_format: str = ELEVENLABS_DEFAULT_OUTPUT_FORMAT
+    stability: float = 0.5
+    similarity_boost: float = 0.75
+    style: float = 0.0
+    use_speaker_boost: bool = True
+    speed: float = 1.0
+    language_code: str = ""
+
+
+class ElevenLabsVoiceDefaultsDocument(BaseModel):
+    """App-weite Defaults, keyed by language folder name (DE, EN, …)."""
+
+    by_language: dict[str, ElevenLabsLanguageVoiceDefaults] = Field(default_factory=dict)
 
 
 class TtsRunManifest(BaseModel):

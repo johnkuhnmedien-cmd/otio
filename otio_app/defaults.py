@@ -111,6 +111,8 @@ FOLDER_VOICEOVERS_CONFIRMED_FILENAME = "folder_voiceovers.confirmed.json"
 INTRO_HOOK_CANDIDATES_FILENAME = "intro_hook_candidates.json"
 INTRO_HOOK_CONFIRMED_FILENAME = "intro_hook.confirmed.json"
 ELEVENLABS_SETTINGS_FILENAME = "elevenlabs_settings.json"
+# Globale Voice-Defaults pro Sprache unter data/ (nicht projektspezifisch).
+ELEVENLABS_VOICE_DEFAULTS_FILENAME = "elevenlabs_voice_defaults.json"
 VOICEOVER_AUDIO_MANIFEST_FILENAME = "voiceover_audio_manifest.json"
 VOICEOVER_AUDIO_QA_REPORT_FILENAME = "voiceover_audio_qa_report.json"
 CONFIRMED_VOICEOVER_PROJECT_PLAN_FILENAME = "confirmed_voiceover_project_plan.json"
