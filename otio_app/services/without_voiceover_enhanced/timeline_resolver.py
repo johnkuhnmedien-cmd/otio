@@ -105,16 +105,34 @@ def _resolve_local_path(project: Project, raw: str | Path) -> Path:
     return path
 
 
+def _stem_slug_variants(stem: str) -> list[str]:
+    """Slug-Varianten für Stem-Legacy-IDs.
+
+    Slim / ``asset_id_for_path`` kollabiert Nicht-Alnum (inkl. ``&`` + Spaces)
+    zu einem ``_``. Die ältere char-weise Variante erzeugt bei ``&`` dagegen
+    ``___`` — beides als Alias registrieren, Lookup bleibt kompatibel.
+    """
+    text = (stem or "").strip()
+    if not text:
+        return []
+    collapsed = re.sub(r"[^a-zA-Z0-9]+", "_", text).strip("_").lower()
+    raw = "".join(ch if ch.isalnum() else "_" for ch in text).strip("_").lower()
+    out: list[str] = []
+    for slug in (collapsed, raw):
+        if slug and slug not in out:
+            out.append(slug)
+    return out
+
+
 def _stem_legacy_asset_ids(path: Path | str) -> list[str]:
     """Legacy-IDs aus Dateiname — inkl. ohne Clean-Suffix ``_3840x2160``."""
     stem = Path(path).stem.strip()
-    slug = "".join(ch if ch.isalnum() else "_" for ch in stem).strip("_").lower()
-    if not slug:
-        return []
-    aliases = [f"asset_{slug}"]
-    stripped = _RESOLUTION_STEM_SUFFIX_RE.sub("", slug).strip("_")
-    if stripped and stripped != slug:
-        aliases.append(f"asset_{stripped}")
+    aliases: list[str] = []
+    for slug in _stem_slug_variants(stem):
+        aliases.append(f"asset_{slug}")
+        stripped = _RESOLUTION_STEM_SUFFIX_RE.sub("", slug).strip("_")
+        if stripped and stripped != slug:
+            aliases.append(f"asset_{stripped}")
     # stabil, ohne Duplikate
     seen: set[str] = set()
     out: list[str] = []
@@ -125,13 +143,44 @@ def _stem_legacy_asset_ids(path: Path | str) -> list[str]:
     return out
 
 
+def _slim_id_filename_map(project: Project, folder: str) -> dict[str, str]:
+    """Slim-Inventar: ``local_asset_id`` → Dateiname (LLM-Cut-Quelle)."""
+    from otio_app.project_layout import get_folder_inventory_path
+    from otio_app.services.inventory_prompt_view import (
+        load_slim_folder_inventory_file,
+        slim_inventory_path_for,
+    )
+
+    slim_path = slim_inventory_path_for(
+        get_folder_inventory_path(project.work_dir_path, folder)
+    )
+    doc = load_slim_folder_inventory_file(slim_path)
+    if doc is None:
+        return {}
+    out: dict[str, str] = {}
+    for item in doc.get("assets") or []:
+        if not isinstance(item, dict):
+            continue
+        asset_id = str(item.get("id") or "").strip()
+        file_name = str(item.get("file") or "").strip()
+        if asset_id and file_name:
+            out[asset_id] = file_name
+    return out
+
+
 def _preferred_stem_legacy_id(path: Path | str) -> str:
-    """Cut-Plan-kompatible Stem-ID (ohne ``_3840x2160``), sonst erste Alias."""
+    """Cut-Plan-/Slim-kompatible Stem-ID (kollabiert, ohne ``_3840x2160``)."""
     aliases = _stem_legacy_asset_ids(path)
     if not aliases:
         return ""
-    # Letzte Alias ist die ohne Auflösungs-Suffix, sofern vorhanden.
-    return aliases[-1]
+    # `_stem_legacy_asset_ids` listet zuerst die kollabierte Slim-Form; darunter
+    # Varianten ohne Auflösungs-Suffix bevorzugen.
+    without_resolution: list[str] = []
+    for alias in aliases:
+        slug = alias[6:] if alias.startswith("asset_") else alias
+        if not _RESOLUTION_STEM_SUFFIX_RE.search(slug):
+            without_resolution.append(alias)
+    return without_resolution[0] if without_resolution else aliases[0]
 
 
 def _catalog_folder_names(project: Project) -> list[str]:
@@ -576,71 +625,93 @@ def build_asset_catalog(
             or missing_inventory_paths > 0
             or len(result.by_id) == registered_before
         )
-        if not need_disk_fallback:
-            continue
-
-        for media_path in _folder_candidates(folder):
-            try:
-                if not media_path.is_file():
+        if need_disk_fallback:
+            for media_path in _folder_candidates(folder):
+                try:
+                    if not media_path.is_file():
+                        continue
+                except OSError:
                     continue
-            except OSError:
-                continue
-            if is_http_url(str(media_path)):
-                continue
-            if _stem_already_registered(media_path):
-                continue
-            path = media_path
-            try:
-                from otio_app.services.clean_media import resolve_effective_media_path
-
-                preferred = resolve_effective_media_path(project, folder, media_path)
-                if preferred.is_file():
-                    path = preferred
-            except Exception:  # noqa: BLE001
+                if is_http_url(str(media_path)):
+                    continue
+                if _stem_already_registered(media_path):
+                    continue
                 path = media_path
-            if not path.is_file():
-                continue
-            if _stem_already_registered(path):
-                continue
-            stem_legacy = (
-                _preferred_stem_legacy_id(media_path)
-                or _preferred_stem_legacy_id(path)
-            )
-            canonical = canonicalize_inventory_asset_id(
-                project,
-                path=path,
-                folder_name=folder,
-                existing_id=stem_legacy,
-            )
-            if canonical in result.by_id:
-                continue
-            register_id = stem_legacy or canonical
-            entry = _probe_entry(
-                project,
-                path=path,
-                folder=folder,
-                asset_id=register_id,
-                usable_in=None,
-                media_type_hint=(
-                    "photo" if is_image_media(path) else "video"
-                ),
-                fps=fps,
-                probe_cache=probe_cache,
-            )
-            entry["canonical_id"] = register_id
-            _register(
-                register_id,
-                entry,
-                raw_id=register_id,
-                alias_paths=[media_path, path],
-            )
-            if register_id != canonical:
+                try:
+                    from otio_app.services.clean_media import resolve_effective_media_path
+
+                    preferred = resolve_effective_media_path(
+                        project, folder, media_path
+                    )
+                    if preferred.is_file():
+                        path = preferred
+                except Exception:  # noqa: BLE001
+                    path = media_path
+                if not path.is_file():
+                    continue
+                if _stem_already_registered(path):
+                    continue
+                stem_legacy = (
+                    _preferred_stem_legacy_id(media_path)
+                    or _preferred_stem_legacy_id(path)
+                )
+                canonical = canonicalize_inventory_asset_id(
+                    project,
+                    path=path,
+                    folder_name=folder,
+                    existing_id=stem_legacy,
+                )
+                if canonical in result.by_id:
+                    continue
+                register_id = stem_legacy or canonical
+                entry = _probe_entry(
+                    project,
+                    path=path,
+                    folder=folder,
+                    asset_id=register_id,
+                    usable_in=None,
+                    media_type_hint=(
+                        "photo" if is_image_media(path) else "video"
+                    ),
+                    fps=fps,
+                    probe_cache=probe_cache,
+                )
+                entry["canonical_id"] = register_id
                 _register(
-                    canonical,
+                    register_id,
                     entry,
                     raw_id=register_id,
                     alias_paths=[media_path, path],
                 )
+                if register_id != canonical:
+                    _register(
+                        canonical,
+                        entry,
+                        raw_id=register_id,
+                        alias_paths=[media_path, path],
+                    )
+
+        # Slim-IDs (LLM-Cut) immer als Alias auf indexierte Dateien legen.
+        # Besonders relevant bei Ordner-/Dateinamen mit ``&``: Slim kollabiert
+        # Sonderzeichen, ältere Stem-Aliasse erzeugten ``___``.
+        slim_by_file = _slim_id_filename_map(project, folder)
+        if slim_by_file:
+            entries_by_name: dict[str, dict] = {}
+            for entry in result.by_id.values():
+                if str(entry.get("folder") or "") != folder:
+                    continue
+                name = Path(str(entry.get("path") or "")).name.lower()
+                if name and name not in entries_by_name:
+                    entries_by_name[name] = entry
+            for slim_id, file_name in slim_by_file.items():
+                if not slim_id or slim_id in result.by_id:
+                    continue
+                if result.legacy_to_ids.get(slim_id):
+                    continue
+                entry = entries_by_name.get(file_name.lower())
+                if entry is None:
+                    continue
+                _register(slim_id, entry, raw_id=slim_id)
 
     accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
     if accepted is not None:
