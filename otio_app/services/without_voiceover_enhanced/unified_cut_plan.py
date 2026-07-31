@@ -299,6 +299,21 @@ def parse_unified_cut_response(
         if fit == "none":
             slot.local_asset_id = None
 
+    raw_fallback = payload.get("closing_fallback_asset_id")
+    closing_fallback = (
+        None
+        if _nullish(raw_fallback)
+        else str(raw_fallback).strip() or None
+    )
+    raw_by_chapter = payload.get("closing_fallback_by_chapter") or {}
+    fallback_by_chapter: dict[str, str] = {}
+    if isinstance(raw_by_chapter, dict):
+        for key, value in raw_by_chapter.items():
+            chapter = str(key or "").strip()
+            asset = None if _nullish(value) else str(value).strip()
+            if chapter and asset:
+                fallback_by_chapter[chapter] = asset
+
     try:
         return UnifiedCutPlanDocument(
             script_version=script_version,
@@ -309,6 +324,8 @@ def parse_unified_cut_response(
             voiceover_postroll_sec=_optional_float(
                 payload.get("voiceover_postroll_sec")
             ),
+            closing_fallback_asset_id=closing_fallback,
+            closing_fallback_by_chapter=fallback_by_chapter,
         )
     except Exception as exc:  # noqa: BLE001
         raise UnifiedCutPlanError(str(exc)) from exc

@@ -1347,6 +1347,11 @@ def resolve_unified_timeline(
         errors=errors,
         narration_timeline=timeline,
         include_chapter=include_chapter,
+        catalog=catalog,
+        closing_fallback_asset_id=plan.closing_fallback_asset_id,
+        closing_fallback_by_chapter=dict(plan.closing_fallback_by_chapter or {}),
+        head_trim=head_trim,
+        short_tolerance=short_tolerance,
     )
     # Platzhalter ohne Medien: Vor-/Nachlauf-Hold-Fehler sind soft bei open gaps.
     if allow_open_gaps:
