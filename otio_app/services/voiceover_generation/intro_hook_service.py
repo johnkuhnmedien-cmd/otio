@@ -1,8 +1,9 @@
-"""Intro-Hook-Erzeugung aus allen bestätigten Folder-Voice-overs (Phase 5).
+"""Intro-Erzeugung aus allen bestätigten Folder-Voice-overs (Phase 5).
 
-Erzeugt genau 5 Hook-Kandidaten mit vollständiger visueller Zuordnung
-(visual_beats). Schreibt niemals EditPlanDocuments und löst nie OTIO-Export
-aus. intro_hook.confirmed.json entsteht ausschließlich durch explizite
+Erzeugt genau 5 Inhaltsvarianten einer gemeinsamen Intro-Struktur
+(Raw-Intro-Referenz) mit visueller Zuordnung (visual_beats). Schreibt
+niemals EditPlanDocuments und löst nie OTIO-Export aus.
+intro_hook.confirmed.json entsteht ausschließlich durch explizite
 Nutzerbestätigung (confirm_intro_hook) — niemals automatisch.
 """
 
@@ -289,8 +290,14 @@ def _parse_candidate(raw: Any, *, index: int) -> IntroHookCandidate | None:
     if not isinstance(raw, dict):
         return None
     hook_text = str(raw.get("hook_text", ""))
-    hook_type = str(raw.get("hook_type", "")).strip().lower()
-    if hook_type not in INTRO_HOOK_TYPES:
+    # Freier Inhalts-Fokus-Slug (strukturelle Intro-Varianten); Legacy-Typen
+    # bleiben gültig. Unbekannt/leer → cinematic_promise.
+    hook_type = str(raw.get("hook_type", "")).strip().lower().replace(" ", "_")
+    if not hook_type:
+        hook_type = INTRO_HOOK_TYPE_CINEMATIC_PROMISE
+    elif hook_type not in INTRO_HOOK_TYPES and not all(
+        ch.isalnum() or ch in {"_", "-"} for ch in hook_type
+    ):
         hook_type = INTRO_HOOK_TYPE_CINEMATIC_PROMISE
     try:
         score = float(raw.get("hook_potential_score", 0.0))
@@ -529,7 +536,7 @@ def build_intro_hook_candidates(
     provider: str,
     model: str,
 ) -> IntroHookBuildResult:
-    """Erzeugt genau 5 Intro-Hook-Kandidaten.
+    """Erzeugt genau 5 Intro-Inhaltsvarianten (gleiche Struktur, anderer Content).
 
     Klassisch: alle aktiven Ordner mit bestätigtem Folder-Voice-over.
     Enhanced: Script Lock + Kapitel-Skript für jeden aktiven Dramaturgie-Ordner.

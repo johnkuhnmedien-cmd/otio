@@ -1155,6 +1155,10 @@ def test_intro_hook_prompt_requests_exactly_5_candidates() -> None:
         settings=_sample_intro_settings(),
     )
     assert "EXACTLY 5" in prompt
+    assert "ONE shared Intro STRUCTURE" in prompt
+    assert "FIVE different CONTENT variants" in prompt
+    assert "distinct strategic approach" not in prompt
+    assert "Do NOT produce 5 different hook strategies" in prompt
 
 
 def test_intro_hook_prompt_contains_do_not_merely_summarize() -> None:
@@ -1165,8 +1169,9 @@ def test_intro_hook_prompt_contains_do_not_merely_summarize() -> None:
         confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
         settings=_sample_intro_settings(),
     )
-    assert "Create a strong documentary opening hook" in prompt
+    assert "Write a strong documentary Intro" in prompt
     assert "Do not invent plot details" in prompt
+    assert "Intro structural / style reference" in prompt
 
 
 def test_intro_hook_prompt_forbids_inventing_asset_ids() -> None:
