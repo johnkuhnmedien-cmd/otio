@@ -111,10 +111,16 @@ def _is_blocked_ip(address: str) -> bool:
     )
 
 
+# Spezieller Provider für manuelle Gap-URL-Zuordnung: jeder öffentliche HTTPS-Host,
+# aber weiter fail-closed gegen Localhost/private IPs / Credentials.
+MANUAL_URL_PROVIDER = "manual_url"
+
+
 def resolve_and_validate_host(
     hostname: str,
     *,
     allowed_suffixes: Iterable[str],
+    allow_any_public_host: bool = False,
 ) -> list[str]:
     """DNS auflösen und gegen Allowlist + private IPs prüfen."""
     host = (hostname or "").strip().lower().rstrip(".")
@@ -122,7 +128,7 @@ def resolve_and_validate_host(
         raise SafeFetchError("Leerer Hostname.")
     if host in {"localhost", "localhost.localdomain"}:
         raise SafeFetchError("Localhost ist nicht erlaubt.")
-    if not _host_allowed(host, allowed_suffixes):
+    if not allow_any_public_host and not _host_allowed(host, allowed_suffixes):
         raise SafeFetchError(f"Host nicht in Allowlist: {host}")
     try:
         infos = socket.getaddrinfo(host, None)
@@ -160,10 +166,16 @@ def validate_fetch_url(
     host = (parsed.hostname or "").strip().lower()
     if not host:
         raise SafeFetchError("URL ohne Hostname.")
-    suffixes = PROVIDER_HOST_SUFFIXES.get((provider or "").strip().lower(), ())
-    if not suffixes:
+    provider_key = (provider or "").strip().lower()
+    allow_any = provider_key == MANUAL_URL_PROVIDER
+    suffixes = PROVIDER_HOST_SUFFIXES.get(provider_key, ())
+    if not allow_any and not suffixes:
         raise SafeFetchError(f"Unbekannter/unerlaubter Provider: {provider}")
-    resolve_and_validate_host(host, allowed_suffixes=suffixes)
+    resolve_and_validate_host(
+        host,
+        allowed_suffixes=suffixes,
+        allow_any_public_host=allow_any,
+    )
     return raw, host
 
 

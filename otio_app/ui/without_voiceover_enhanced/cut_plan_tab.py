@@ -2131,10 +2131,12 @@ def _render_section_funnel(project) -> None:
     st.markdown("**Offene Gaps manuell zuordnen**")
     st.caption(
         "Links Gap · Mitte Search-Queries (kopierbar) + Google-Bilder-Links · "
-        "Rechts lokaler Dateipfad → wird nach stock/downloads kopiert, "
-        "export_ready gesetzt und inventarisiert. Danach **Python Timing** "
-        "des betroffenen Kapitels erneut (Gap-Merge übernimmt das Asset in "
-        "die Timeline/OTIO). Google lädt nichts herunter — nur Browser-Links."
+        "Rechts lokaler Dateipfad **oder HTTPS-Direktlink** zu Bild/Video → "
+        "App lädt/kopiert nach stock/downloads, setzt export_ready und "
+        "inventarisiert. Danach **Python Timing** des betroffenen Kapitels "
+        "erneut (Gap-Merge übernimmt das Asset in die Timeline/OTIO). "
+        "Google-Bilder-Links laden nichts — bitte Direkt-URL des Bildes "
+        "(Rechtsklick → Bildadresse) einfügen."
     )
     show_manual_gaps_key = f"enh_show_manual_gap_assign_{project.id}"
     st.checkbox(
@@ -2153,7 +2155,7 @@ def _render_section_funnel(project) -> None:
         with head_m:
             st.caption("Search Queries + Google Bilder")
         with head_r:
-            st.caption("Lokaler Dateipfad")
+            st.caption("Pfad oder HTTPS-Bild-URL")
         for gap_id in open_gap_ids:
             gap = gap_by_id.get(gap_id)
             if gap is None:
@@ -2178,12 +2180,15 @@ def _render_section_funnel(project) -> None:
             with col_path:
                 path_key = f"enh_manual_gap_path_{project.id}_{gap.gap_id}"
                 path_value = st.text_input(
-                    f"Pfad für {gap.gap_id}",
+                    f"Pfad/URL für {gap.gap_id}",
                     value="",
                     key=path_key,
                     label_visibility="collapsed",
-                    placeholder="/pfad/zur/datei.mp4",
-                    help="Lokaler Dateipfad — keine http(s)-URL.",
+                    placeholder="/pfad/datei.jpg oder https://…/bild.jpg",
+                    help=(
+                        "Lokaler Dateipfad oder direkter HTTPS-Link zu Bild/Video. "
+                        "Bei Google: Bild öffnen → Rechtsklick → Bildadresse kopieren."
+                    ),
                 )
                 if st.button(
                     "Zuordnen & inventarisieren",

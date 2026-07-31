@@ -213,21 +213,95 @@ def test_assign_local_file_copies_accepts_and_inventories(tmp_path: Path) -> Non
     assert list_open_gaps_for_manual_assign(project) == []
 
 
-def test_assign_rejects_url_and_missing_file(tmp_path: Path) -> None:
+def test_assign_rejects_http_and_missing_file(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _lock(project)
     _write_open_gap(project)
-    with pytest.raises(ManualGapAssignError, match="lokale Dateipfade"):
+    with pytest.raises(ManualGapAssignError, match="Nur HTTPS"):
         assign_local_file_to_open_gap(
             project,
             gap_id="gap_open_1",
-            source_path="https://example.com/a.jpg",
+            source_path="http://example.com/a.jpg",
         )
     with pytest.raises(ManualGapAssignError, match="nicht gefunden"):
         assign_local_file_to_open_gap(
             project,
             gap_id="gap_open_1",
             source_path=str(tmp_path / "missing.jpg"),
+        )
+
+
+def test_assign_https_url_downloads_accepts_and_inventories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services.without_voiceover_enhanced.stock import safe_fetch
+    from otio_app.services.without_voiceover_enhanced.stock.safe_fetch import (
+        SafeFetchResult,
+    )
+
+    project = _project(tmp_path)
+    _lock(project)
+    gap = _write_open_gap(project)
+    jpeg = _jpeg_bytes(color=(70, 80, 90))
+
+    def _fake_fetch(url: str, *, provider: str, headers=None):  # noqa: ANN001
+        assert provider == "manual_url"
+        assert url.startswith("https://")
+        return SafeFetchResult(
+            url=url,
+            content=jpeg,
+            content_type="image/jpeg",
+            final_url=url,
+        )
+
+    monkeypatch.setattr(safe_fetch, "fetch_full_media_bytes", _fake_fetch)
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.manual_gap_assign_service.fetch_full_media_bytes",
+        _fake_fetch,
+    )
+
+    result = assign_local_file_to_open_gap(
+        project,
+        gap_id=gap.gap_id,
+        source_path="https://cdn.example.com/photos/westport.jpg",
+    )
+    assigned = result.candidate
+    assert assigned.provider == "manual"
+    assert assigned.license == "manual_url"
+    assert assigned.download_url == "https://cdn.example.com/photos/westport.jpg"
+    assert assigned.media_validation_status == "export_ready"
+    assert Path(assigned.local_media_path or "").is_file()
+
+    accepted = load_model(accepted_supplements_path(project), AcceptedSupplementsDocument)
+    assert accepted is not None
+    assert len(accepted.supplements) == 1
+    inventory = load_folder_inventory(project, "Canyon")
+    assert any(a.asset_id == assigned.candidate_id for a in inventory.assets)
+
+
+def test_assign_https_url_rejects_private_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from otio_app.services.without_voiceover_enhanced.stock.safe_fetch import (
+        SafeFetchError,
+    )
+
+    project = _project(tmp_path)
+    _lock(project)
+    _write_open_gap(project)
+
+    def _blocked(*_a, **_k):  # noqa: ANN001
+        raise SafeFetchError("Private/reservierte IP blockiert: 127.0.0.1")
+
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.manual_gap_assign_service.fetch_full_media_bytes",
+        _blocked,
+    )
+    with pytest.raises(ManualGapAssignError, match="Download fehlgeschlagen"):
+        assign_local_file_to_open_gap(
+            project,
+            gap_id="gap_open_1",
+            source_path="https://127.0.0.1/secret.jpg",
         )
 
 
@@ -321,6 +395,8 @@ def test_ui_manual_gap_assign_markers() -> None:
     assert "st.info" in source
     assert "Python Timing" in source
     assert "Gap-Merge übernimmt" in source
+    assert "HTTPS-Direktlink" in source or "https://…/bild.jpg" in source
+    assert "Pfad oder HTTPS-Bild-URL" in source
 
 
 def test_google_images_search_url_encodes_query() -> None:
