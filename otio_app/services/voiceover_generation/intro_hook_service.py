@@ -535,11 +535,15 @@ def build_intro_hook_candidates(
     *,
     provider: str,
     model: str,
+    max_output_tokens: int | None = None,
 ) -> IntroHookBuildResult:
     """Erzeugt genau 5 Intro-Inhaltsvarianten (gleiche Struktur, anderer Content).
 
     Klassisch: alle aktiven Ordner mit bestätigtem Folder-Voice-over.
     Enhanced: Script Lock + Kapitel-Skript für jeden aktiven Dramaturgie-Ordner.
+
+    max_output_tokens hebt das Antwort-Ceiling an (5 Varianten + visual_beats
+    können das Default-Limit leicht sprengen).
     """
     missing = missing_intro_source_folder_names(project)
     if missing:
@@ -596,7 +600,11 @@ def build_intro_hook_candidates(
     model_id = resolve_llm_model_id(provider, model)
 
     try:
-        llm_response = generate_plan_text_with_metadata(prompt=prompt, model=model_id)
+        llm_response = generate_plan_text_with_metadata(
+            prompt=prompt,
+            model=model_id,
+            max_output_tokens=max_output_tokens,
+        )
     except Exception as exc:  # noqa: BLE001 — jeder LLM-/SDK-/Netzwerkfehler soll als
         # kontrollierter FAIL-Status zurückkommen statt die Streamlit-Seite crashen zu
         # lassen (nicht nur der eng gefasste PlanLlmNotConfiguredError-Fall).
@@ -725,8 +733,17 @@ def build_intro_hook_candidates(
 
 
 def regenerate_intro_hook_candidates(
-    project: Project, *, provider: str, model: str
+    project: Project,
+    *,
+    provider: str,
+    model: str,
+    max_output_tokens: int | None = None,
 ) -> IntroHookBuildResult:
     """Alias für build_intro_hook_candidates — überschreibt NIE einen
     bestätigten Hook (§9), nur die Kandidaten-Datei."""
-    return build_intro_hook_candidates(project, provider=provider, model=model)
+    return build_intro_hook_candidates(
+        project,
+        provider=provider,
+        model=model,
+        max_output_tokens=max_output_tokens,
+    )

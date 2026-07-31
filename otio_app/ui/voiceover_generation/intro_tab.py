@@ -31,6 +31,10 @@ from otio_app.services.voiceover_generation.models import IntroHookCandidate
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
 from otio_app.services.voiceover_generation.style_profile_service import load_style_profile
 from otio_app.ui.project_context import render_project_selector
+from otio_app.services.voiceover_generation.llm_pricing import (
+    estimate_call_cost_usd,
+    format_usd,
+)
 from otio_app.ui.voiceover_generation._shared import (
     LLM_INPUT_INFO,
     render_llm_model_selectbox,
@@ -39,6 +43,13 @@ from otio_app.ui.voiceover_generation._shared import (
 )
 
 import streamlit as st
+
+# Output-Token-Ceiling für Intro (5 Varianten + visual_beats). Unverbrauchtes
+# Limit kostet nichts. Anthropic streamt oberhalb ~20k automatisch.
+_INTRO_MAX_OUTPUT_TOKENS_MIN = 16_384
+_INTRO_MAX_OUTPUT_TOKENS_MAX = 100_000
+_INTRO_MAX_OUTPUT_TOKENS_DEFAULT = 65_536
+_INTRO_MAX_OUTPUT_TOKENS_STEP = 4_096
 
 
 def _render_prerequisites(project: Project) -> bool:
@@ -221,6 +232,43 @@ def _render_model_settings(project: Project) -> tuple[str, str]:
     return role_settings.provider, role_settings.model
 
 
+def _render_max_tokens_slider(
+    project: Project,
+    *,
+    provider: str,
+    model: str,
+) -> int:
+    slider_key = f"vo_intro_max_tokens_{project.id}"
+    if slider_key not in st.session_state:
+        st.session_state[slider_key] = _INTRO_MAX_OUTPUT_TOKENS_DEFAULT
+
+    max_tokens = st.slider(
+        "Max. Output-Tokens (Ceiling)",
+        min_value=_INTRO_MAX_OUTPUT_TOKENS_MIN,
+        max_value=_INTRO_MAX_OUTPUT_TOKENS_MAX,
+        step=_INTRO_MAX_OUTPUT_TOKENS_STEP,
+        key=slider_key,
+        help=(
+            "Obergrenze für die Antwortlänge (5 Intro-Varianten + visual_beats). "
+            "Du zahlst nur die tatsächlich erzeugten Output-Tokens — nicht "
+            "automatisch das volle Limit. Bei Truncation höher stellen."
+        ),
+    )
+    estimate = estimate_call_cost_usd(
+        provider=provider,
+        model=model,
+        input_tokens=0,
+        output_tokens_ceiling=int(max_tokens),
+    )
+    st.caption(
+        f"**Output-Worst-Case** ({estimate.price.label}): "
+        f"{estimate.output_tokens_ceiling:,} Tok → "
+        f"{format_usd(estimate.output_ceiling_cost_usd)}. "
+        f"Aktuelles Limit: max_tokens={int(max_tokens):,}."
+    )
+    return int(max_tokens)
+
+
 def _render_visual_beats_table(candidate: IntroHookCandidate) -> None:
     if not candidate.visual_beats:
         st.caption("Keine visual_beats vorhanden.")
@@ -313,6 +361,9 @@ def render_intro_page() -> None:
         "Eine Intro-Struktur (Raw-Intro-Referenz) × fünf unterschiedliche Inhalte. "
         "Nicht fünf verschiedene Hook-Strategien."
     )
+    max_output_tokens = _render_max_tokens_slider(
+        project, provider=provider, model=model
+    )
     if confirmed_hook is not None:
         st.info(
             "Es gibt bereits ein bestätigtes Intro. Neue Varianten "
@@ -327,9 +378,19 @@ def render_intro_page() -> None:
     if st.button(label, key=f"vo_intro_generate_{project.id}", type="primary"):
         with st.spinner("Intro-Varianten werden generiert…"):
             if candidates_document is not None:
-                result = regenerate_intro_hook_candidates(project, provider=provider, model=model)
+                result = regenerate_intro_hook_candidates(
+                    project,
+                    provider=provider,
+                    model=model,
+                    max_output_tokens=max_output_tokens,
+                )
             else:
-                result = build_intro_hook_candidates(project, provider=provider, model=model)
+                result = build_intro_hook_candidates(
+                    project,
+                    provider=provider,
+                    model=model,
+                    max_output_tokens=max_output_tokens,
+                )
         st.session_state[f"vo_intro_last_result_{project.id}"] = {
             "status": result.status, "error": result.error, "llm_run_id": result.llm_run_id,
         }

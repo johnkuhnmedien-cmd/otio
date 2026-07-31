@@ -255,6 +255,23 @@ def test_build_writes_intro_hook_candidates_json(tmp_path: Path) -> None:
     assert path.is_file()
 
 
+def test_build_intro_hook_candidates_passes_max_output_tokens(tmp_path: Path) -> None:
+    project = _make_project_with_confirmed_folder_voiceovers(tmp_path)
+    with patch(
+        f"{_INTRO_MODULE}.generate_plan_text_with_metadata",
+        return_value=_fake_response(),
+    ) as mock_generate:
+        result = build_intro_hook_candidates(
+            project,
+            provider="anthropic",
+            model="claude-sonnet-5",
+            max_output_tokens=65536,
+        )
+
+    assert result.status == STATUS_PASS
+    assert mock_generate.call_args.kwargs["max_output_tokens"] == 65536
+
+
 def test_candidates_contain_llm_run_id(tmp_path: Path) -> None:
     project = _make_project_with_confirmed_folder_voiceovers(tmp_path)
     with patch(f"{_INTRO_MODULE}.generate_plan_text_with_metadata", return_value=_fake_response()):
