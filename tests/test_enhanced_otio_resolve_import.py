@@ -718,6 +718,66 @@ def test_catalog_empty_asset_id_registers_stem_legacy(tmp_path: Path) -> None:
     )
 
 
+def test_stem_legacy_ids_collapse_ampersand_like_slim() -> None:
+    """``&`` + Spaces → ein ``_`` (Slim), plus Legacy-``___`` als Alias."""
+    from otio_app.services.generic_outro_selector import asset_id_for_path
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        _preferred_stem_legacy_id,
+        _stem_legacy_asset_ids,
+    )
+
+    name = "Kinsale & Old Head_asset00001.mp4"
+    slim_id = asset_id_for_path(name)
+    assert slim_id == "asset_kinsale_old_head_asset00001"
+    aliases = _stem_legacy_asset_ids(name)
+    assert slim_id in aliases
+    assert "asset_kinsale___old_head_asset00001" in aliases
+    assert _preferred_stem_legacy_id(name) == slim_id
+
+
+def test_catalog_ampersand_folder_matches_slim_asset_id(tmp_path: Path) -> None:
+    """Kapitel mit ``&``: Slim-ID aus Dateiname muss Python Timing finden."""
+    from otio_app.services.generic_outro_selector import asset_id_for_path
+    from otio_app.services.inventory_prompt_view import write_slim_folder_inventory
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        lookup_catalog_entry,
+    )
+
+    project = _project(tmp_path)
+    folder = "Kinsale & Old Head"
+    (Path(project.project_root) / folder).mkdir(parents=True)
+    project.asset_subdir_names = [folder]
+    project.selected_asset_subdirs = [folder]
+    original = (
+        Path(project.project_root) / folder / "Kinsale & Old Head_asset00001.mp4"
+    )
+    original.write_bytes(b"\x00" * 64)
+    inv = AssetFolderAnalysis(
+        folder=folder,
+        assets=[
+            AssetMediaAnalysis(
+                path=str(original),
+                description="coastal cliffs",
+                asset_id="",
+                media_type="video",
+            )
+        ],
+        media_files=[str(original)],
+    )
+    inv_path = get_folder_inventory_path(project.work_dir_path, folder)
+    save_folder_inventory(inv_path, inv)
+    write_slim_folder_inventory(inv_path, inv, probe_duration=False)
+
+    slim_id = asset_id_for_path(original.name)
+    assert slim_id == "asset_kinsale_old_head_asset00001"
+
+    catalog = build_asset_catalog(project, fps=25.0)
+    entry, err = lookup_catalog_entry(catalog, slim_id)
+    assert err is None, err
+    assert entry is not None
+    assert Path(entry["path"]).resolve() == original.resolve()
+
+
 def test_catalog_indexes_clean_when_inventory_paths_missing(tmp_path: Path) -> None:
     """Inventar zeigt auf fehlende Clean-Namen; echte Clean-Dateien trotzdem indexieren."""
     from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
