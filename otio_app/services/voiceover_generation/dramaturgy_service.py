@@ -225,14 +225,43 @@ def rebalance_contrast_roles(
     return rebalanced
 
 
+def _entry_from_inventory_summary(
+    summary: FolderInventorySummary,
+    *,
+    order_index: int,
+) -> DramaturgyFolderEntry:
+    target, min_words, max_words = _normalize_recommended_word_targets(
+        summary.estimated_voiceover_word_count
+        or VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
+        summary.estimated_min_words or VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
+        summary.estimated_max_words or VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
+    )
+    return DramaturgyFolderEntry(
+        folder_name=summary.folder_name,
+        order_index=order_index,
+        enabled=True,
+        dramaturgy_role=DRAMATURGY_ROLE_SETUP,
+        reason=(
+            "Automatisch ergänzt — fehlte in der LLM-Antwort "
+            "(häufig bei Truncation / zu niedrigem Token-Limit)."
+        ),
+        visual_strength_score=summary.visual_strength_score,
+        asset_diversity_score=summary.asset_diversity_score,
+        recommended_word_count=target,
+        recommended_min_words=min_words,
+        recommended_max_words=max_words,
+        risks=list(summary.risks),
+    )
+
+
 def ensure_all_inventory_folders(
     entries: list[DramaturgyFolderEntry],
     folder_summaries: list[FolderInventorySummary],
 ) -> tuple[list[DramaturgyFolderEntry], list[str]]:
-    """Hängt Inventory-Ordner an, die in der LLM-Antwort fehlen (z. B. Truncation).
+    """Fügt fehlende Inventory-Ordner ein (LLM-Truncation), ohne LLM-Reihenfolge zu zerstören.
 
-    Erfundene Namen werden vorher schon herausgefiltert; hier geht es um das
-    Gegenteil — kein Kapitel darf stillschweigend verloren gehen.
+    Fehlende Kapitel werden nahe dem vorherigen Nachbarn aus der Inventory-
+    Reihenfolge eingefügt (nicht pauschal ans Ende), danach order_index 1..N.
     """
     present = {entry.folder_name for entry in entries}
     missing_summaries = [
@@ -243,34 +272,50 @@ def ensure_all_inventory_folders(
     if not missing_summaries:
         return list(entries), []
 
-    max_order = max((entry.order_index for entry in entries), default=0)
-    appended: list[DramaturgyFolderEntry] = []
-    for offset, summary in enumerate(missing_summaries, start=1):
-        target, min_words, max_words = _normalize_recommended_word_targets(
-            summary.estimated_voiceover_word_count
-            or VOICEOVER_GEN_DEFAULT_FOLDER_TARGET_WORDS,
-            summary.estimated_min_words or VOICEOVER_GEN_DEFAULT_FOLDER_MIN_WORDS,
-            summary.estimated_max_words or VOICEOVER_GEN_DEFAULT_FOLDER_MAX_WORDS,
+    summary_order = [summary.folder_name for summary in folder_summaries]
+    summary_by_name = {summary.folder_name: summary for summary in folder_summaries}
+    result = list(entries)
+
+    for summary in missing_summaries:
+        name = summary.folder_name
+        try:
+            summary_idx = summary_order.index(name)
+        except ValueError:
+            summary_idx = -1
+
+        insert_at = len(result)
+        if summary_idx >= 0:
+            for prev_name in reversed(summary_order[:summary_idx]):
+                for index, entry in enumerate(result):
+                    if entry.folder_name == prev_name:
+                        insert_at = index + 1
+                        break
+                else:
+                    continue
+                break
+            else:
+                # Kein Vorgänger in der LLM-Liste — vor dem nächsten vorhandenen
+                # Inventory-Nachfolger einfügen, sonst ans Ende.
+                for next_name in summary_order[summary_idx + 1 :]:
+                    for index, entry in enumerate(result):
+                        if entry.folder_name == next_name:
+                            insert_at = index
+                            break
+                    else:
+                        continue
+                    break
+
+        new_entry = _entry_from_inventory_summary(
+            summary_by_name[name],
+            order_index=insert_at + 1,
         )
-        appended.append(
-            DramaturgyFolderEntry(
-                folder_name=summary.folder_name,
-                order_index=max_order + offset,
-                enabled=True,
-                dramaturgy_role=DRAMATURGY_ROLE_SETUP,
-                reason=(
-                    "Automatisch ergänzt — fehlte in der LLM-Antwort "
-                    "(häufig bei Truncation / zu niedrigem Token-Limit)."
-                ),
-                visual_strength_score=summary.visual_strength_score,
-                asset_diversity_score=summary.asset_diversity_score,
-                recommended_word_count=target,
-                recommended_min_words=min_words,
-                recommended_max_words=max_words,
-                risks=list(summary.risks),
-            )
-        )
-    return list(entries) + appended, [s.folder_name for s in missing_summaries]
+        result.insert(insert_at, new_entry)
+
+    renumbered = [
+        entry.model_copy(update={"order_index": index})
+        for index, entry in enumerate(result, start=1)
+    ]
+    return renumbered, [summary.folder_name for summary in missing_summaries]
 
 
 def _inventory_summaries_for_project(project: Project) -> list[FolderInventorySummary]:
