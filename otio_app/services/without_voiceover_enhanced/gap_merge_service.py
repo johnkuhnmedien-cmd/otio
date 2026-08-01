@@ -499,6 +499,123 @@ def _candidates_for_gap(
     return [c for c in ready if (c.gap_id or "").strip() == gid]
 
 
+def _is_manual_accepted(item: StockCandidate) -> bool:
+    return (
+        str(item.provider or "").strip().lower() == "manual"
+        or str(getattr(item, "assign_status", "") or "").strip().lower() == "manual"
+    )
+
+
+def _export_ready_accepted_for_gap(
+    project: Project, gap_id: str
+) -> list[StockCandidate]:
+    """export_ready Accepted-Supplements für eine Gap (Manual oder Funnel)."""
+    accepted = load_model(
+        accepted_supplements_path(project), AcceptedSupplementsDocument
+    )
+    if accepted is None:
+        return []
+    out: list[StockCandidate] = []
+    for item in accepted.supplements or []:
+        if str(item.gap_id or "").strip() != gap_id:
+            continue
+        if str(item.media_validation_status or "").strip() != "export_ready":
+            continue
+        out.append(item)
+    return out
+
+
+def _rebuild_gap_merge_aggregates(report: GapMergeReport) -> GapMergeReport:
+    """Leitet Listenfelder aus ``slots`` neu ab."""
+    merged_shot_ids: list[str] = []
+    kept_local_shot_ids: list[str] = []
+    open_none_gap_ids: list[str] = []
+    review_shot_ids: list[str] = []
+    errors: list[str] = []
+    for slot in report.slots or []:
+        status = str(slot.status or "").strip().lower()
+        sid = str(slot.shot_id or "").strip()
+        gid = str(slot.coverage_gap_id or "").strip()
+        if status == "merged" and sid:
+            merged_shot_ids.append(sid)
+        elif status == "kept_local_weak" and sid:
+            kept_local_shot_ids.append(sid)
+        elif status == "open_none" and gid:
+            open_none_gap_ids.append(gid)
+        if slot.review_flag and sid:
+            review_shot_ids.append(sid)
+        if status in {"failed", "open_none"} and slot.message:
+            errors.append(f"{sid or gid}: {slot.message}")
+    open_count = len(set(open_none_gap_ids))
+    report.merged_shot_ids = list(dict.fromkeys(merged_shot_ids))
+    report.kept_local_shot_ids = list(dict.fromkeys(kept_local_shot_ids))
+    report.open_none_gap_ids = list(dict.fromkeys(open_none_gap_ids))
+    report.review_shot_ids = list(dict.fromkeys(review_shot_ids))
+    # Bewahre explizite Report-Errors, ergänze Slot-Errors.
+    report.errors = list(dict.fromkeys(list(report.errors or []) + errors))
+    report.message = (
+        f"Merge: {len(report.merged_shot_ids)} ersetzt, "
+        f"{len(report.kept_local_shot_ids)} weak behalten, "
+        f"{open_count} none offen, "
+        f"{len(report.review_shot_ids)} Review-Flags."
+    )
+    return report
+
+
+def merge_gap_merge_reports(
+    existing: GapMergeReport | None,
+    incoming: GapMergeReport,
+) -> GapMergeReport:
+    """Kapitel-Merge in bestehenden globalen Report einpflegen.
+
+    Gleiche ``cut_plan_run_id``: Slots anderer Gaps/Shots bleiben erhalten.
+    Andere/fehlende Run-ID: Incoming ersetzt den Report.
+    """
+    incoming_run = str(incoming.cut_plan_run_id or "").strip()
+    if existing is None:
+        return _rebuild_gap_merge_aggregates(incoming.model_copy(deep=True))
+    existing_run = str(existing.cut_plan_run_id or "").strip()
+    if incoming_run and existing_run and incoming_run != existing_run:
+        return _rebuild_gap_merge_aggregates(incoming.model_copy(deep=True))
+    if incoming_run and not existing_run:
+        return _rebuild_gap_merge_aggregates(incoming.model_copy(deep=True))
+
+    touched_gaps = {
+        str(slot.coverage_gap_id or "").strip()
+        for slot in incoming.slots or []
+        if str(slot.coverage_gap_id or "").strip()
+    }
+    touched_shots = {
+        str(slot.shot_id or "").strip()
+        for slot in incoming.slots or []
+        if str(slot.shot_id or "").strip()
+    }
+    kept = [
+        slot
+        for slot in existing.slots or []
+        if str(slot.coverage_gap_id or "").strip() not in touched_gaps
+        and str(slot.shot_id or "").strip() not in touched_shots
+    ]
+    merged = GapMergeReport(
+        schema_version=incoming.schema_version or existing.schema_version,
+        script_version=incoming.script_version or existing.script_version,
+        cut_plan_run_id=incoming_run or existing_run,
+        slots=kept + list(incoming.slots or []),
+        repairs=list(
+            dict.fromkeys(list(existing.repairs or []) + list(incoming.repairs or []))
+        ),
+        errors=list(incoming.errors or []),
+    )
+    return _rebuild_gap_merge_aggregates(merged)
+
+
+def _persist_gap_merge_report(project: Project, report: GapMergeReport) -> None:
+    """Schreibt Gap-Merge-Report — bei Kapitel-Läufen mit bestehendem Report mergen."""
+    existing = load_model(gap_merge_report_path(project), GapMergeReport)
+    merged = merge_gap_merge_reports(existing, report)
+    write_json(gap_merge_report_path(project), merged)
+
+
 def _write_merge_rejection_to_funnel(
     project: Project,
     *,
@@ -507,7 +624,20 @@ def _write_merge_rejection_to_funnel(
     cut_plan_run_id: str,
     message: str,
 ) -> None:
-    """E2E-4: Merge lehnt Gap ab → Funnel-Report öffnen für Re-Ranking."""
+    """E2E-4: Merge lehnt Gap ab → Funnel ggf. neu öffnen für Re-Ranking.
+
+    Solange ein ``export_ready`` Accepted-Fill für die Gap existiert (Manual
+    oder Funnel-Download), bleibt der Fill erhalten — Python Timing darf
+    Zuordnungen nicht auf „offen“ zurücksetzen.
+    """
+    accepted_ready = _export_ready_accepted_for_gap(project, gap_id)
+    has_accepted_fill = bool(accepted_ready)
+    keep_ids = {
+        str(item.candidate_id or "").strip()
+        for item in accepted_ready
+        if item.candidate_id
+    }
+
     report = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
     if report is None:
         return
@@ -515,6 +645,9 @@ def _write_merge_rejection_to_funnel(
     if cut_plan_run_id and funnel_run and funnel_run != cut_plan_run_id:
         return
     rejected = [str(x).strip() for x in rejected_candidate_ids if str(x).strip()]
+    # Aktuelle export_ready Accepted nie verwerfen.
+    rejected = [cid for cid in rejected if cid and cid not in keep_ids]
+
     found = False
     for index, gap_rep in enumerate(report.gaps):
         if gap_rep.gap_id != gap_id:
@@ -525,15 +658,26 @@ def _write_merge_rejection_to_funnel(
             if str(x).strip()
         }
         existing.update(rejected)
-        gap_rep.filled = False
-        gap_rep.export_ready_candidate_id = None
-        gap_rep.review_ready_candidate_id = None
-        gap_rep.rejected_candidate_ids = sorted(existing)
-        gap_rep.message = message or "Merge: kein geeigneter Kandidat."
+        if has_accepted_fill:
+            gap_rep.rejected_candidate_ids = sorted(existing)
+            gap_rep.filled = True
+            if not gap_rep.export_ready_candidate_id and accepted_ready:
+                gap_rep.export_ready_candidate_id = str(
+                    accepted_ready[0].candidate_id or ""
+                ) or None
+            note = "Accepted-Fill behalten (Timing/Merge)."
+            prev = str(gap_rep.message or "").strip()
+            gap_rep.message = f"{prev} — {note}".strip(" —") if prev else note
+        else:
+            gap_rep.filled = False
+            gap_rep.export_ready_candidate_id = None
+            gap_rep.review_ready_candidate_id = None
+            gap_rep.rejected_candidate_ids = sorted(existing)
+            gap_rep.message = message or "Merge: kein geeigneter Kandidat."
         report.gaps[index] = gap_rep
         found = True
         break
-    if not found:
+    if not found and not has_accepted_fill:
         report.gaps.append(
             SupplementFunnelGapReport(
                 gap_id=gap_id,
@@ -542,33 +686,29 @@ def _write_merge_rejection_to_funnel(
                 message=message or "Merge: kein geeigneter Kandidat.",
             )
         )
-    report.filled_gap_ids = [g for g in report.filled_gap_ids if g != gap_id]
-    if gap_id not in report.open_gap_ids:
-        report.open_gap_ids.append(gap_id)
+    if has_accepted_fill:
+        if gap_id not in (report.filled_gap_ids or []):
+            report.filled_gap_ids = list(report.filled_gap_ids or []) + [gap_id]
+        report.open_gap_ids = [g for g in (report.open_gap_ids or []) if g != gap_id]
+    else:
+        report.filled_gap_ids = [g for g in report.filled_gap_ids if g != gap_id]
+        if gap_id not in report.open_gap_ids:
+            report.open_gap_ids.append(gap_id)
     write_json(supplement_funnel_report_path(project), report)
 
-    # Rejected Accepted-Einträge entfernen, damit Funnel neu rankt.
-    # Manual-Assign nie löschen — Redaktionsentscheidung bleibt erhalten.
+    # Nur nicht-export_ready / nicht-keep Rejects aus Accepted entfernen.
+    # export_ready Fills (Manual + Funnel) bleiben für Status/UI erhalten.
     if rejected:
         accepted = load_model(
             accepted_supplements_path(project), AcceptedSupplementsDocument
         )
         if accepted is not None:
             reject_set = set(rejected)
-
-            def _is_manual(item: StockCandidate) -> bool:
-                return (
-                    str(item.provider or "").strip().lower() == "manual"
-                    or str(getattr(item, "assign_status", "") or "")
-                    .strip()
-                    .lower()
-                    == "manual"
-                )
-
             kept = [
                 s
                 for s in accepted.supplements
-                if _is_manual(s)
+                if _is_manual_accepted(s)
+                or str(s.candidate_id or "").strip() in keep_ids
                 or s.candidate_id not in reject_set
                 or (s.gap_id or "").strip() != gap_id
             ]
@@ -765,6 +905,34 @@ def merge_export_ready_gaps_into_timeline(
                 )
                 updated_shots.append(shot)
                 continue
+            accepted_ready = (
+                _export_ready_accepted_for_gap(project, gap_id)
+                if local_fit == "none"
+                else []
+            )
+            if local_fit == "none" and accepted_ready:
+                # Accepted-Fill bleibt „erfüllt“ — Timing setzt Funnel nicht zurück.
+                keep = accepted_ready[0]
+                result = GapMergeSlotResult(
+                    shot_id=shot.shot_id,
+                    coverage_gap_id=gap_id,
+                    status="skipped",
+                    previous_asset_id=shot.asset_id or "",
+                    new_asset_id=str(keep.candidate_id or ""),
+                    local_fit=local_fit,
+                    message=(
+                        f"{pick_msg} — Accepted-Fill behalten "
+                        f"({keep.candidate_id})."
+                    ),
+                )
+                report.slots.append(result)
+                repairs.append(
+                    f"{shot.shot_id}: Accepted-Fill für {gap_id} behalten, "
+                    f"Merge übersprungen ({pick_msg})."
+                )
+                updated_shots.append(shot)
+                continue
+
             result = GapMergeSlotResult(
                 shot_id=shot.shot_id,
                 coverage_gap_id=gap_id,
@@ -911,7 +1079,7 @@ def merge_export_ready_gaps_into_timeline(
     if persist:
         write_json(resolved_timeline_path(project), merged_timeline)
     if persist_report:
-        write_json(gap_merge_report_path(project), report)
+        _persist_gap_merge_report(project, report)
 
     if require_closed_none and report.open_none_gap_ids:
         raise GapMergeError(

@@ -23,6 +23,7 @@ from otio_app.services.without_voiceover_enhanced.cut_rhythm_validator import (
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.models import (
     BOUNDARY_POSITIONS,
+    CoverageGapsDocument,
     FinalCutPlanDocument,
     FinalShot,
     NarrationAnchor,
@@ -1483,6 +1484,16 @@ def resolve_unified_timeline(
 
         coverage_shadow = enrich_coverage_search_concepts(
             project, coverage_shadow, plan=plan
+        )
+        from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+            carry_over_user_confirmed_weak,
+        )
+
+        previous_coverage = load_model(
+            coverage_gaps_path(project), CoverageGapsDocument
+        )
+        coverage_shadow = carry_over_user_confirmed_weak(
+            coverage_shadow, previous_coverage
         )
         write_json(unified_cut_plan_path(project), plan)
         write_json(narration_timeline_path(project), timeline)
