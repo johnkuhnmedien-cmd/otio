@@ -82,8 +82,6 @@ from otio_app.services.without_voiceover_enhanced.supplement_funnel_job import (
 from otio_app.services.without_voiceover_enhanced.gap_status_service import (
     summarize_gap_status,
 )
-from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
-)
 from otio_app.ui.polling import poll_while_running
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_locked_script,
