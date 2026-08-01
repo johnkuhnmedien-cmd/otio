@@ -1146,6 +1146,19 @@ def test_intro_hook_prompt_contains_chapter_signals_not_scripts() -> None:
     assert "NOT the spoken" in prompt
 
 
+def test_intro_hook_prompt_enumeration_sentence_break_guidance() -> None:
+    prompt = build_intro_hook_prompt(
+        project_brief=_sample_brief(),
+        style_profile=None,
+        dramaturgy_plan=_sample_dramaturgy_plan(),
+        confirmed_folder_voiceovers=_sample_confirmed_folder_voiceovers(),
+        settings=_sample_intro_settings(),
+    )
+    assert "Enumeration / tease pacing" in prompt
+    assert "ONLY at sentence ends" in prompt
+    assert "separate short sentences" in prompt
+
+
 def test_intro_hook_prompt_requests_exactly_5_candidates() -> None:
     prompt = build_intro_hook_prompt(
         project_brief=_sample_brief(),

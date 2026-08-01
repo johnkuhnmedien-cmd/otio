@@ -1233,31 +1233,82 @@ INTRO-SPECIFIC RULES (CRITICAL — differ from chapter cuts):
 - Use only segment_ids / sentence_ids from the Intro inputs.
 - Use only local_asset_id values that exist in BUNDLED INVENTORY.
 
-KEYWORD / ENUMERATION SYNC (CRITICAL — do not show places early):
+KEYWORD / CONTEXT CUTS (CRITICAL — understand the whole Intro first):
 
-- When the VO names a concrete place, landmark, chapter topic, or list item,
-  the picture for that item MUST start at the spoken keyword onset — not
-  earlier in the same sentence or list.
+- Read the FULL Intro VO (all sentences) before placing any cut. Cuts must
+  follow meaning and dramaturgy, not keyword spotting alone.
+- NOT every named place / landmark / topic / list word requires its own cut.
+  Only cut when a new visual subject is editorially meaningful — a real
+  reveal, contrast, or list beat that deserves its own picture.
+- When you DO cut to a named subject, that picture MUST start at the spoken
+  keyword onset — never earlier in the same sentence or list.
 - Bad: show Antelope Canyon while the VO is still on a previous place / still
   leading into the list.
-- Good: cut to Antelope Canyon exactly as \"Antelope\" / the place keyword begins.
-- Lists / enumerations in the hook: one short picture cut per list item, each
-  starting at that item's keyword onset.
-- Do NOT pre-roll list-item pictures during filler / connective speech before
-  their keyword.
-- After the LAST list/keyword cut: that closing picture continues through any
-  remaining VO (outro line, tag, breath) until the true VO end. Do NOT place
-  the final boundary at the last keyword — place it at the last sentence end.
+- Also bad: fire a new cut on every capitalized place name even when the VO
+  is still building one continuous thought (keeps Intro restless / too short).
+- Good: cut to Antelope Canyon exactly as \"Antelope\" begins — IF that item
+  warrants a distinct picture in context.
+- Lists / enumerations: prefer one picture per list item ONLY when items are
+  distinct visual beats. If several names are connective / too dense for
+  readable pictures, keep one hold across them (or cut only on the strongest
+  items) and use pauses (below) so pictures are not cramped.
+- Do NOT pre-roll a next-subject picture during filler / connective speech
+  before its keyword.
+- After the LAST justified keyword/list cut: that closing picture continues
+  through any remaining VO (outro line, tag, breath) until the true VO end.
+  Do NOT place the final boundary at the last keyword — place it at the last
+  sentence end.
 - Opening hold is separate: slot 1 may begin 4.0s before VO (Python preroll).
-  From VO start onward, keyword-onset sync applies to every place/list cut.
-- Prefer WORD TIMINGS: for keyword/list cuts, set alignment \"mid_sentence\"
-  and offset_seconds from words[].offset_seconds of the spoken keyword (or
-  the first word of a multi-word place name). Fall back to text proportion
-  only when words[] is missing for that sentence.
+  From VO start onward, keyword-onset sync applies to justified place/list
+  cuts only.
+- Prefer WORD TIMINGS: for justified keyword/list cuts, set alignment
+  \"mid_sentence\" and offset_seconds from words[].offset_seconds of the spoken
+  keyword (or the first word of a multi-word place name). Fall back to text
+  proportion only when words[] is missing for that sentence.
 - Example (mid-list cut only — NOT the final boundary):
   words[] contains {{\"text\":\"Antelope\",\"offset_seconds\":1.4}} →
   boundary at that sentence_id with offset_seconds=1.4, position=\"middle\",
   alignment=\"mid_sentence\".
+
+ENUMERATION / SENTENCE BREAKS (for pause landing):
+
+- Python can insert pulled pauses ONLY at sentence boundaries
+  (pause_directives.after_sentence_id). There is no mid-comma pause.
+- When the locked Intro already splits list/tease items into separate
+  sentences, treat those sentence ends as natural breath points: place
+  pause_directives after list-item sentences so each picture has room
+  (prefer duration_class medium; short if the next beat is immediate;
+  long only for a major reveal).
+- If many place names sit inside ONE long comma-list sentence, do NOT invent
+  fake sentence_ids. Prefer fewer justified keyword cuts + holds rather than
+  a machine-gun of sub-second pictures. Still sync any cut you do make to
+  keyword onset.
+
+PAUSE RULES (same pipeline as chapters — Intro may emit pauses):
+
+Allowed pause_function:
+breath | emphasis | anticipation | reveal |
+chapter_transition | reflection | no_pause
+
+Allowed duration_class: short | medium | long
+
+Allowed visual_behavior:
+hold_current_shot | next_shot_may_start_during_pause |
+cut_at_pause_start | cut_at_pause_end | editorial_choice
+
+- Prefer after_sentence_id for pauses inside a segment (and set
+  after_segment_id to that sentence's segment).
+- Emit a pause when list/tease pacing is too fast for readable pictures, or
+  when a reveal / emphasis beat needs air — especially between enumeration
+  sentences.
+- Prefer visual_behavior hold_current_shot so the current picture breathes
+  across the pause (unless a cut-at-pause decision is clearly better).
+- Do not output pause durations in seconds; Python resolves duration_class.
+- Every pause directive needs a concise editorial_reason.
+- At most one pause directive per after_sentence_id / after_segment_id.
+- Use no_pause only when an important boundary should explicitly stay
+  continuous. Empty pause_directives is allowed when no pause is needed.
+- Do not invent segment_ids / sentence_ids outside Intro inputs.
 
 INTRO VO duration (measured): {duration:.3f}s.
 
@@ -1282,9 +1333,9 @@ TIMING / BOUNDARY RULES:
   - NEVER put mid_sentence / sentence_boundary / in_pause into position.
 - Boundaries use sentence_id + position and/or offset_seconds (seconds from
   that sentence start). When both are present, offset_seconds wins.
-- For keyword/list cuts (interior boundaries only): set offset_seconds
-  explicitly AND alignment=\"mid_sentence\". Example interior cut:
-  {{\"sentence_id\":\"…\",\"position\":\"middle\",\"offset_seconds\":1.4,
+- For justified keyword/list cuts (interior boundaries only): set
+  offset_seconds explicitly AND alignment=\"mid_sentence\". Example interior
+  cut: {{\"sentence_id\":\"…\",\"position\":\"middle\",\"offset_seconds\":1.4,
   \"alignment\":\"mid_sentence\"}}
 - First boundary: first Intro sentence, position \"start\", offset_seconds 0
   or null, alignment \"sentence_boundary\".
@@ -1311,7 +1362,16 @@ OUTPUT SCHEMA:
 {{
   "voiceover_preroll_sec": 4.0,
   "voiceover_postroll_sec": 6.5,
-  "pause_directives": [],
+  "pause_directives": [
+    {{
+      "after_segment_id": "Intro_segment_001",
+      "after_sentence_id": "Intro_segment_001__s002_or_null",
+      "pause_function": "breath|emphasis|anticipation|reveal|chapter_transition|reflection|no_pause",
+      "duration_class": "short|medium|long",
+      "visual_behavior": "hold_current_shot|next_shot_may_start_during_pause|cut_at_pause_start|cut_at_pause_end|editorial_choice",
+      "editorial_reason": "Why this Intro pause (e.g. breath between list places)."
+    }}
+  ],
   "boundaries": [
     {{
       "cut_id": "{slug}_cut_000",
@@ -1369,16 +1429,19 @@ FINAL VALIDATION:
 - Boundaries chronological; first = VO start; last = VO end
 - First boundary: first Intro sentence, position start (offset 0/null)
 - Last boundary: last Intro sentence, position end (not a keyword mid_sentence)
-- Last slot covers through remaining VO after the last keyword cut
+- Last slot covers through remaining VO after the last justified keyword cut
 - Every motion local_asset_id has planning_usable
   (duration_seconds - usable_in_s - 1.0s) >= intended slot span
   (first/last: include Vorlauf/Nachlauf)
 - asset_fit is only strong or none
 - Opening/closing assets differ when both assigned
 - All local_asset_id values exist in BUNDLED INVENTORY (or null)
-- Keyword/list picture cuts use mid_sentence + words[].offset_seconds when
-  words[] is present (else text-proportion offset_seconds)
+- Justified keyword/list picture cuts use mid_sentence + words[].offset_seconds
+  when words[] is present (else text-proportion offset_seconds)
 - No place/list picture starts before its spoken keyword (except slot-1 preroll)
+- Not every keyword becomes a cut — cuts follow full-text context
+- pause_directives (if any) use only Intro segment/sentence ids; pauses land
+  on sentence boundaries (after_sentence_id preferred)
 - Preroll/postroll are outside the VO window — do not leave narration uncovered
 
 LOCKED SCRIPT (Intro only):

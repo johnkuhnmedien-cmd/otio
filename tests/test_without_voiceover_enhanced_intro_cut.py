@@ -16,6 +16,7 @@ from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
 from otio_app.services.without_voiceover_enhanced.models import (
     CutBoundary,
     CutSlot,
+    PauseDirective,
     ResolvedAudioSegment,
     ResolvedChapterEnvelope,
     ResolvedShot,
@@ -105,7 +106,10 @@ def test_intro_prompt_rules() -> None:
     assert "shot_min" in prompt
     assert "shot_max" in prompt
     assert "NOT enforced" in prompt
-    assert "KEYWORD / ENUMERATION SYNC" in prompt
+    assert "KEYWORD / CONTEXT CUTS" in prompt
+    assert "KEYWORD / ENUMERATION SYNC" not in prompt
+    assert "NOT every named place" in prompt
+    assert "understand" in prompt.lower() or "FULL Intro VO" in prompt
     assert "keyword onset" in prompt
     assert "words[]" in prompt
     assert "Prefer WORD TIMINGS" in prompt
@@ -114,13 +118,18 @@ def test_intro_prompt_rules() -> None:
     assert "mid_sentence" in prompt
     assert "ElevenLabs" in prompt
     assert "When both are present, offset_seconds wins." in prompt
-    assert "Do NOT pre-roll list-item pictures" in prompt
+    assert "Do NOT pre-roll" in prompt
     assert "NEVER put mid_sentence" in prompt
     assert "TWO DIFFERENT FIELDS" in prompt
     assert "do NOT fill gaps inside the VO" in prompt
-    assert "After the LAST list/keyword cut" in prompt
+    assert "After the LAST justified keyword/list cut" in prompt
     assert "Last boundary: last Intro sentence, position end" in prompt
     assert "first = VO start; last = VO end" in prompt
+    assert "PAUSE RULES" in prompt
+    assert "pause_directives" in prompt
+    assert "after_sentence_id" in prompt
+    assert "ENUMERATION / SENTENCE BREAKS" in prompt
+    assert "ONLY at sentence boundaries" in prompt
     assert "Antelope" in prompt
 
 
@@ -155,8 +164,25 @@ def test_clamp_intro_closing_hold() -> None:
 
 
 def test_split_and_merge_intro_body() -> None:
+    intro_pause = PauseDirective(
+        after_segment_id="Intro_segment_001",
+        after_sentence_id="Intro_segment_001__s001",
+        pause_function="emphasis",
+        duration_class="medium",
+        visual_behavior="hold_current_shot",
+        editorial_reason="breath between list places",
+    )
+    body_pause = PauseDirective(
+        after_segment_id="Yosemite_segment_001",
+        after_sentence_id="seg_a__s001",
+        pause_function="breath",
+        duration_class="short",
+        visual_behavior="hold_current_shot",
+        editorial_reason="chapter breath",
+    )
     intro = UnifiedCutPlanDocument(
         script_version="v1",
+        pause_directives=[intro_pause],
         boundaries=[
             _bound("Intro_cut_000", "Intro_segment_001__s001", "start"),
             _bound("Intro_cut_001", "Intro_segment_001__s001", "end"),
@@ -167,6 +193,7 @@ def test_split_and_merge_intro_body() -> None:
     )
     body = UnifiedCutPlanDocument(
         script_version="v1",
+        pause_directives=[body_pause],
         boundaries=[
             _bound("Yosemite_cut_000", "seg_a__s001", "start"),
             _bound("Yosemite_cut_001", "seg_a__s002", "end"),
@@ -180,12 +207,22 @@ def test_split_and_merge_intro_body() -> None:
     assert merged.slots[1].slot_id.startswith("Yosemite_")
     assert merged.slots[1].start_sentence_id == "seg_a__s001"
     assert len(merged.boundaries) == 3  # intro 2 + body without first
+    assert len(merged.pause_directives) == 2
+    assert merged.pause_directives[0].after_sentence_id == (
+        "Intro_segment_001__s001"
+    )
 
     split_intro, split_body = split_intro_from_unified(merged)
     assert split_intro is not None
     assert split_body is not None
     assert len(split_intro.slots) == 1
     assert len(split_body.slots) == 1
+    assert len(split_intro.pause_directives) == 1
+    assert split_intro.pause_directives[0].pause_function == "emphasis"
+    assert len(split_body.pause_directives) == 1
+    assert split_body.pause_directives[0].after_segment_id.startswith(
+        "Yosemite"
+    )
 
 
 def test_resolve_intro_timeline_requires_intro_plan(tmp_path) -> None:
