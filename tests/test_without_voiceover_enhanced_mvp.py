@@ -365,9 +365,9 @@ def test_pause_resolver_identical_inputs_identical_outputs_and_pause_without_cut
         pause_directives=directives,
     )
     assert first.model_dump() == second.model_dump()
-    assert first.entries[0].pause_after_seconds == 2.50
-    assert first.entries[1].start_seconds == pytest.approx(4.50)
-    # Pause without picture cut is representable: directive has visual_behavior hold.
+    # Pause-Directives sind abgeschaltet — Segmente liegen direkt hintereinander.
+    assert first.entries[0].pause_after_seconds == 0.0
+    assert first.entries[1].start_seconds == pytest.approx(2.0)
     hold = PauseDirective(
         after_segment_id="segment_001",
         pause_function="breath",
@@ -379,7 +379,7 @@ def test_pause_resolver_identical_inputs_identical_outputs_and_pause_without_cut
         segment_timings=timings,
         pause_directives=[hold],
     )
-    assert timeline.entries[0].pause_after_seconds == 0.50
+    assert timeline.entries[0].pause_after_seconds == 0.0
 
 
 def test_audio_duration_measured_from_file(tmp_path: Path) -> None:

@@ -401,6 +401,7 @@ def persist_intro_unified_plan(
 
     locked = require_locked_script(project)
     intro_plan = enforce_intro_strong_only(intro_plan)
+    intro_plan = intro_plan.model_copy(update={"pause_directives": []})
     write_json(intro_unified_cut_plan_path(project), intro_plan)
     # Alter Resolved-Stand darf OTIO nicht mehr antreiben.
     invalidate_intro_resolved_timeline(project)
@@ -414,6 +415,7 @@ def persist_intro_unified_plan(
         body=body,
         script_version=locked.script_version,
     )
+    merged = merged.model_copy(update={"pause_directives": []})
     rough, coverage = unified_to_rough(merged)
     coverage = enrich_coverage_search_concepts(project, coverage, plan=merged)
     from otio_app.services.without_voiceover_enhanced.gap_status_service import (
@@ -428,14 +430,7 @@ def persist_intro_unified_plan(
     write_json(unified_cut_plan_path(project), merged)
     write_json(rough_cut_plan_path(project), rough)
     write_json(coverage_gaps_path(project), coverage)
-    write_json(
-        pause_directives_path(project),
-        {
-            "directives": [
-                d.model_dump(mode="json") for d in merged.pause_directives
-            ]
-        },
-    )
+    write_json(pause_directives_path(project), {"directives": []})
     return merged
 
 

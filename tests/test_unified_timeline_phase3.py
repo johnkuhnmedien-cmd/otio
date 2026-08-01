@@ -116,11 +116,10 @@ def test_position_fraction_mapping_and_edge_margin() -> None:
     assert POSITION_FRACTION["late"] == 0.75
 
 
-def test_boundary_to_absolute_accounts_for_intra_pause() -> None:
+def test_boundary_to_absolute_ignores_disabled_pause_directives() -> None:
     timeline = _timeline()
     sentence_index = _sentences()
-    # s002 startet bei Source 4.4; nach Intra-Pause (mid silence 4.2, +2.5s)
-    # absolute = 4.4 + 2.5 = 6.9
+    # Pause-Directives sind abgeschaltet — s002 start = Source 4.4 absolut.
     boundary = CutBoundary(
         cut_id="b1",
         sentence_id="seg_001__s002",
@@ -130,8 +129,7 @@ def test_boundary_to_absolute_accounts_for_intra_pause() -> None:
     absolute = boundary_to_absolute_seconds(
         boundary, timeline, sentence_index=sentence_index, fps=25.0
     )
-    # 6.9s → Frame-Rundung bei 25fps: 6.88s
-    assert absolute == pytest.approx(6.88)
+    assert absolute == pytest.approx(4.4)
 
 
 def test_resolve_timed_slots_chain_and_gap_fields() -> None:
@@ -193,10 +191,10 @@ def test_resolve_timed_slots_chain_and_gap_fields() -> None:
     assert timed[1].is_open_gap is True
     assert timed[1].coverage_gap_id == "gap_002"
     assert timed[1].duration_seconds > 0
-    # Slot 1 endet an s002 start (= 6.9); Slot 2 bis s003 end (+intra) = 12+2.5=14.5
+    # Ohne Intra-Pause: Slot 1 endet an s002 start (4.4); Slot 2 bis s003 end (12.0).
     assert timed[0].start_seconds == pytest.approx(0.0)
-    assert timed[0].end_seconds == pytest.approx(6.88)
-    assert timed[1].end_seconds == pytest.approx(14.48)
+    assert timed[0].end_seconds == pytest.approx(4.4)
+    assert timed[1].end_seconds == pytest.approx(12.0)
 
 
 def test_clamp_shortens_overlong_slot_by_nudging_shared_boundary() -> None:

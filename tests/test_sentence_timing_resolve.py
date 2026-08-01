@@ -92,19 +92,17 @@ def test_intra_sentence_pause_expands_timeline_without_stretching_audio() -> Non
     )
     entry = timeline.entries[0]
     assert entry.audio_duration_seconds == 3.0
-    assert len(entry.intra_pauses) == 1
-    assert entry.intra_pauses[0].source_split_seconds == 1.2
-    assert entry.intra_pauses[0].pause_seconds == 2.50
-    # Wanduhr = Audio + Intra-Pause; Segment 2 startet später.
-    assert entry.end_seconds == 5.5
-    assert timeline.entries[1].start_seconds == 5.5
+    # Pause-Directives sind abgeschaltet — keine Intra-Pausen / pause_after.
+    assert entry.intra_pauses == []
+    assert entry.pause_after_seconds == 0.0
+    assert entry.end_seconds == 3.0
+    assert timeline.entries[1].start_seconds == 3.0
 
-    # Source-Zeit nach dem Split liegt hinter der Gap.
     assert source_seconds_to_timeline(entry, 1.0) == 1.0
-    assert source_seconds_to_timeline(entry, 1.4) == 3.9
+    assert source_seconds_to_timeline(entry, 1.4) == 1.4
 
 
-def test_resolved_audio_splits_at_silence_midpoint() -> None:
+def test_resolved_audio_no_split_when_pauses_disabled() -> None:
     timings = [
         SegmentTiming(
             segment_id="seg_001",
@@ -130,13 +128,10 @@ def test_resolved_audio_splits_at_silence_midpoint() -> None:
         timeline=timeline,
         timing_map={item.segment_id: item for item in timings},
     )
-    assert len(pieces) == 2
+    assert len(pieces) == 1
     assert pieces[0].source_start_seconds == 0.0
-    assert pieces[0].source_end_seconds == 1.2
-    assert pieces[0].pause_after_seconds == 0.50
-    assert pieces[1].source_start_seconds == 1.2
-    assert pieces[1].source_end_seconds == 3.0
-    # Kein Time-Stretch: Summe der Source-Längen = Audio-Dauer.
+    assert pieces[0].source_end_seconds == 3.0
+    assert pieces[0].pause_after_seconds == 0.0
     source_total = sum(
         (p.source_end_seconds or 0) - p.source_start_seconds for p in pieces
     )
@@ -200,7 +195,8 @@ def test_cut_rhythm_notes_when_distribution_skewed() -> None:
 
 
 def test_prompts_include_sentence_blocks_when_provided() -> None:
-    assert "65%" in DEFAULT_CUT_RHYTHM_TARGETS
+    assert "70%" in DEFAULT_CUT_RHYTHM_TARGETS
+    assert "pause_directives" in DEFAULT_CUT_RHYTHM_TARGETS
     rough = build_rough_cut_prompt(
         locked_script_json="{}",
         segment_timings_json="[]",
@@ -212,7 +208,7 @@ def test_prompts_include_sentence_blocks_when_provided() -> None:
     )
     assert "SENTENCE TIMINGS" in rough
     assert "CUT RHYTHM TARGETS" in rough
-    assert "after_sentence_id" in rough
+    assert "pause_directives are DISABLED" in rough
     assert "start_cut_alignment" in rough
 
     final = build_final_cut_prompt(

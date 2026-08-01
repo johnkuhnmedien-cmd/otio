@@ -125,11 +125,10 @@ def test_intro_prompt_rules() -> None:
     assert "After the LAST justified keyword/list cut" in prompt
     assert "Last boundary: last Intro sentence, position end" in prompt
     assert "first = VO start; last = VO end" in prompt
-    assert "PAUSE RULES" in prompt
-    assert "pause_directives" in prompt
-    assert "after_sentence_id" in prompt
-    assert "ENUMERATION / SENTENCE BREAKS" in prompt
-    assert "ONLY at sentence boundaries" in prompt
+    assert "PAUSE RULES (DISABLED)" in prompt
+    assert '"pause_directives": []' in prompt
+    assert "ENUMERATION PACING" in prompt
+    assert "Pulled pause_directives are DISABLED" in prompt
     assert "Antelope" in prompt
 
 

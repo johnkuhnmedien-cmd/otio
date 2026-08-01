@@ -1155,7 +1155,6 @@ def test_intro_hook_prompt_enumeration_sentence_break_guidance() -> None:
         settings=_sample_intro_settings(),
     )
     assert "Enumeration / tease pacing" in prompt
-    assert "ONLY at sentence ends" in prompt
     assert "separate short sentences" in prompt
 
 

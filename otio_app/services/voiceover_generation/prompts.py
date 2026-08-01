@@ -1253,8 +1253,6 @@ matching that reference's beat count and pacing; stay near the word window \
 when possible without breaking the structure.
 
 ## Enumeration / tease pacing (CRITICAL for later picture cuts)
-- Later editing can pull pauses ONLY at sentence ends. A long comma-chained \
-place list leaves no landing spot for breath between pictures.
 - When teasing several places / landmarks as distinct visual beats, write \
 them as separate short sentences (or clearly separate spoken sentences), \
 not one breathless comma list — so each named beat can hold its own picture.

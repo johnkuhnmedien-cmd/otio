@@ -768,29 +768,8 @@ def parse_rough_cut_response(raw: str | dict[str, Any], script_version: str) -> 
     if not isinstance(payload, dict):
         raise CutPlanError("Grober Cut Plan ist kein JSON-Objekt.")
 
+    # Pause-Directives abgeschaltet — Schema-Key bleibt akzeptiert.
     directives: list[PauseDirective] = []
-    for item in payload.get("pause_directives") or []:
-        if not isinstance(item, dict):
-            continue
-        after_segment = str(item.get("after_segment_id") or "")
-        after_sentence_raw = item.get("after_sentence_id")
-        after_sentence = (
-            None if _nullish(after_sentence_raw) else str(after_sentence_raw)
-        )
-        if not after_segment and not after_sentence:
-            continue
-        directives.append(
-            PauseDirective(
-                after_segment_id=after_segment,
-                after_sentence_id=after_sentence,
-                pause_function=str(item.get("pause_function") or "breath"),
-                duration_class=str(item.get("duration_class") or "medium"),
-                visual_behavior=str(
-                    item.get("visual_behavior") or "editorial_choice"
-                ),
-                editorial_reason=str(item.get("editorial_reason") or ""),
-            )
-        )
 
     for item in payload.get("shots") or []:
         if isinstance(item, dict) and (
@@ -1156,29 +1135,18 @@ def merge_and_persist_rough_cuts(
         details = "; ".join(f"{r.folder_name}: {r.error}" for r in fail) or "unbekannt"
         raise CutPlanError(f"LLM-Lauf 2 fehlgeschlagen für alle Kapitel. {details}")
 
-    merged_pauses: list[PauseDirective] = []
     merged_shots: list[RoughShot] = []
     merged_gaps: list[CoverageGap] = []
-    seen_pause_keys: set[str] = set()
     for result in ok:
         assert result.rough is not None
         assert result.coverage is not None
-        for pause in result.rough.pause_directives:
-            sentence_id = str(pause.after_sentence_id or "").strip()
-            if sentence_id:
-                key = f"sentence:{sentence_id}"
-            else:
-                key = f"segment:{pause.after_segment_id}"
-            if key in seen_pause_keys:
-                continue
-            seen_pause_keys.add(key)
-            merged_pauses.append(pause)
+        # Pause-Directives abgeschaltet — nicht mergen.
         merged_shots.extend(result.rough.shots)
         merged_gaps.extend(result.coverage.gaps)
 
     rough = RoughCutPlanDocument(
         script_version=locked.script_version,
-        pause_directives=merged_pauses,
+        pause_directives=[],
         shots=merged_shots,
     )
     coverage = CoverageGapsDocument(
@@ -1194,13 +1162,10 @@ def merge_and_persist_rough_cuts(
     timeline = build_narration_timeline(
         script_version=locked.script_version,
         segment_timings=timings.segments,
-        pause_directives=rough.pause_directives,
+        pause_directives=[],
         sentence_index=sentence_index_by_id(load_segment_alignments(project)),
     )
-    write_json(
-        pause_directives_path(project),
-        {"directives": [d.model_dump(mode="json") for d in rough.pause_directives]},
-    )
+    write_json(pause_directives_path(project), {"directives": []})
     write_json(narration_timeline_path(project), timeline)
     write_json(rough_cut_plan_path(project), rough)
     write_json(coverage_gaps_path(project), coverage)
@@ -2114,7 +2079,6 @@ def merge_and_persist_unified_cuts(
     boundaries: list[CutBoundary] = []
     slots: list[CutSlot] = []
     pauses: list[PauseDirective] = []
-    seen_pause: set[str] = set()
     preroll: float | None = None
     postroll: float | None = None
     closing_fallback_by_chapter: dict[str, str] = {}
@@ -2136,22 +2100,8 @@ def merge_and_persist_unified_cuts(
             value = str(asset_id or "").strip()
             if key and value and key not in closing_fallback_by_chapter:
                 closing_fallback_by_chapter[key] = value
-        for pause in plan.pause_directives:
-            # E2E-4: chapter_transition wird durch Kapitelhülle abgedeckt.
-            if str(pause.pause_function or "").strip().lower() == "chapter_transition":
-                continue
-            sentence_id = str(pause.after_sentence_id or "").strip()
-            key = (
-                f"sentence:{sentence_id}"
-                if sentence_id
-                else f"segment:{pause.after_segment_id}"
-            )
-            if key in seen_pause:
-                continue
-            seen_pause.add(key)
-            pauses.append(pause)
-        # E2E-4: keine bridge_*-Slots. Kapitel N+1 teilt die letzte Grenze von N
-        # (VO-Ende ≈ VO-Start bei ignorierter chapter_transition-Pause).
+        # Pause-Directives abgeschaltet — nicht mergen.
+        # E2E-4: keine bridge_*-Slots. Kapitel N+1 teilt die letzte Grenze von N.
         if not boundaries:
             boundaries.extend(plan.boundaries)
             slots.extend(plan.slots)
@@ -2202,9 +2152,10 @@ def merge_and_persist_unified_cuts(
             body=merged,
             script_version=locked.script_version,
         )
+        # Pause-Directives bleiben leer (auch wenn Intro-Fragment noch welche hat).
+        merged = merged.model_copy(update={"pause_directives": []})
         rough, coverage = unified_to_rough(merged)
         coverage = enrich_coverage_search_concepts(project, coverage, plan=merged)
-        pauses = list(merged.pause_directives)
 
     from otio_app.services.without_voiceover_enhanced.gap_status_service import (
         carry_over_user_confirmed_weak,
@@ -2217,10 +2168,7 @@ def merge_and_persist_unified_cuts(
     write_json(unified_cut_plan_path(project), merged)
     write_json(rough_cut_plan_path(project), rough)
     write_json(coverage_gaps_path(project), coverage)
-    write_json(
-        pause_directives_path(project),
-        {"directives": [d.model_dump(mode="json") for d in pauses]},
-    )
+    write_json(pause_directives_path(project), {"directives": []})
     # Manuelle/Funnel-Fills mit gleicher Gap-ID auf neue Run-ID übernehmen.
     rebind_gap_fills_to_current_run(project)
     return merged
