@@ -19,6 +19,7 @@ from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.models import (
     CutSlot,
+    PauseDirective,
     ResolvedAudioSegment,
     ResolvedChapterEnvelope,
     ResolvedShot,
@@ -186,6 +187,13 @@ def _is_intro_id(value: str, *, slug: str) -> bool:
     return text.startswith(prefix) or text.lower().startswith("intro_")
 
 
+def _is_intro_pause(directive: PauseDirective, *, slug: str) -> bool:
+    """Pause gehört zum Intro, wenn Segment- oder Sentence-ID Intro-Präfix hat."""
+    segment = str(directive.after_segment_id or "")
+    sentence = str(directive.after_sentence_id or "")
+    return _is_intro_id(segment, slug=slug) or _is_intro_id(sentence, slug=slug)
+
+
 def enforce_intro_strong_only(plan: UnifiedCutPlanDocument) -> UnifiedCutPlanDocument:
     """Nur strong behalten; acceptable/weak → none + Gap-Felder."""
     updated_slots: list[CutSlot] = []
@@ -263,7 +271,11 @@ def split_intro_from_unified(
     if intro_bounds and intro_slots and len(intro_bounds) == len(intro_slots) + 1:
         intro_doc = UnifiedCutPlanDocument(
             script_version=plan.script_version,
-            pause_directives=[],
+            pause_directives=[
+                p
+                for p in plan.pause_directives
+                if _is_intro_pause(p, slug=intro_slug)
+            ],
             boundaries=intro_bounds,
             slots=intro_slots,
             voiceover_preroll_sec=plan.voiceover_preroll_sec,
@@ -300,9 +312,7 @@ def split_intro_from_unified(
                 pause_directives=[
                     p
                     for p in plan.pause_directives
-                    if not str(getattr(p, "after_segment_id", "") or "")
-                    .lower()
-                    .startswith("intro")
+                    if not _is_intro_pause(p, slug=intro_slug)
                 ],
                 boundaries=body_bounds,
                 slots=body_slots,
