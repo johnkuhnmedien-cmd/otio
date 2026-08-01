@@ -569,7 +569,9 @@ ELEVENLABS_MODEL_PRESETS = (
     "eleven_v3",
 )
 ELEVENLABS_DEFAULT_MODEL_ID = "eleven_multilingual_v2"
-ELEVENLABS_DEFAULT_OUTPUT_FORMAT = "mp3_44100_128"
+# WAV 48 kHz (ElevenLabs output_format) — Resolve-freundlich; echte WAV-Container
+# (nicht raw PCM). API: query param output_format, siehe ElevenLabs TTS convert.
+ELEVENLABS_DEFAULT_OUTPUT_FORMAT = "wav_48000"
 ELEVENLABS_API_BASE_URL = "https://api.elevenlabs.io/v1"
 ELEVENLABS_MODEL_ID_V3 = "eleven_v3"
 
