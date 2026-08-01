@@ -42,8 +42,8 @@ def test_build_unified_cut_prompt_contains_core_contract() -> None:
     assert "SENTENCE TIMINGS" in prompt
     assert "words[]" in prompt
     assert "USED-IN LEDGER" in prompt
-    assert "every 4th–6th" in prompt or "every 4th-6th" in prompt
-    assert "medium: ~2–3s" in prompt or "medium: ~2-3s" in prompt
+    assert "PAUSE RULES (DISABLED)" in prompt
+    assert '"pause_directives": []' in prompt
     assert "Vorlauf/Nachlauf are applied later by Python" in prompt
     assert "No video-hold assumptions" in prompt
     assert "1.0s safety" in prompt
@@ -174,7 +174,7 @@ def test_parse_unified_cut_response_from_dict() -> None:
     assert plan.script_version == "script-v2"
     assert len(plan.boundaries) == 3
     assert len(plan.slots) == 2
-    assert len(plan.pause_directives) == 1
+    assert len(plan.pause_directives) == 0  # pause_directives disabled
     assert plan.slots[0].asset_fit == "strong"
     assert plan.slots[0].coverage_gap_id is None
     assert plan.slots[1].asset_fit == "none"

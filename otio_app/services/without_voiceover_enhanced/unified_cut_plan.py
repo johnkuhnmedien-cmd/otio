@@ -235,29 +235,9 @@ def parse_unified_cut_response(
     if not isinstance(payload, dict):
         raise UnifiedCutPlanError("Unified Cut Plan ist kein JSON-Objekt.")
 
+    # Pause-Directives sind abgeschaltet (Kapitel + Intro): Schema-Key bleibt
+    # akzeptiert, wird aber nicht übernommen.
     directives: list[PauseDirective] = []
-    for item in payload.get("pause_directives") or []:
-        if not isinstance(item, dict):
-            continue
-        after_segment = str(item.get("after_segment_id") or "")
-        after_sentence_raw = item.get("after_sentence_id")
-        after_sentence = (
-            None if _nullish(after_sentence_raw) else str(after_sentence_raw)
-        )
-        if not after_segment and not after_sentence:
-            continue
-        directives.append(
-            PauseDirective(
-                after_segment_id=after_segment,
-                after_sentence_id=after_sentence,
-                pause_function=str(item.get("pause_function") or "breath"),
-                duration_class=str(item.get("duration_class") or "medium"),
-                visual_behavior=str(
-                    item.get("visual_behavior") or "editorial_choice"
-                ),
-                editorial_reason=str(item.get("editorial_reason") or ""),
-            )
-        )
 
     boundaries_raw = payload.get("boundaries") or []
     slots_raw = payload.get("slots") or []

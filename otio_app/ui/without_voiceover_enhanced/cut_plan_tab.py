@@ -1652,9 +1652,8 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
     plan = load_model(unified_cut_plan_path(project), UnifiedCutPlanDocument)
     if plan is not None:
         st.caption(
-            f"Globaler Unified Plan: {len(plan.slots)} Slots · "
-            f"{len(plan.pause_directives)} Pausen "
-            "(Intro + Kapitel gemerged)."
+            f"Globaler Unified Plan: {len(plan.slots)} Slots "
+            "(Intro + Kapitel gemerged; Pause-Directives deaktiviert)."
         )
     else:
         st.caption("Noch kein globaler Unified Plan — Kapitel-LLM zuerst.")
@@ -1688,7 +1687,7 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
 
 
 def _render_section_rough(project) -> None:
-    st.subheader("1. Groben Cut Plan und Pausen erzeugen")
+    st.subheader("1. Groben Cut Plan erzeugen")
     _render_slim_status(project)
     rough_tokens, rough_chapters = _estimate_rough_cut_input_tokens(project)
     rough_provider, rough_model, _rough_max = _render_enhanced_cut_model(
@@ -1725,7 +1724,7 @@ def _render_section_rough(project) -> None:
                     f"({resolve_llm_model_id(rough_provider, rough_model)})…"
                 )
 
-            with st.spinner("Pausen + grober Cut — Kapitel nacheinander…"):
+            with st.spinner("Grober Cut — Kapitel nacheinander…"):
                 results = generate_all_rough_cuts(
                     project,
                     provider=rough_provider,
@@ -1738,7 +1737,6 @@ def _render_section_rough(project) -> None:
             fail = [r for r in results if r.status != "PASS"]
             st.success(
                 f"{len(ok)}/{len(results)} Kapitel · {len(rough.shots)} Shots · "
-                f"{len(rough.pause_directives)} Pausen · "
                 f"{len(coverage.gaps)} Coverage Gaps."
             )
             for result in fail:
@@ -1775,10 +1773,7 @@ def _render_section_rough(project) -> None:
     rough_meta = load_model(rough_cut_plan_path(project), RoughCutPlanDocument)
     if rough_meta is not None:
         st.checkbox(
-            (
-                f"Rough-Cut Details laden · {len(rough_meta.shots)} Shots · "
-                f"{len(rough_meta.pause_directives)} Pausen"
-            ),
+            f"Rough-Cut Details laden · {len(rough_meta.shots)} Shots",
             key=show_rough_key,
         )
         if st.session_state.get(show_rough_key):

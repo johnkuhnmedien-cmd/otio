@@ -138,49 +138,15 @@ def build_narration_timeline(
 ) -> NarrationTimelineDocument:
     """Ende Voice-Segment + aufgelöste Pause = Beginn nächstes Segment.
 
-    Intra-Segment-Pausen (``after_sentence_id``): Segment-Wanduhr verlängert sich
-    um die Pausenlänge; Audio wird später am Silence-Midpoint gesplittet (kein
-    Time-Stretch). Gleiche Inputs → identische Zeiten.
+    Pause-Directives sind deaktiviert (Intro + Kapitel): Eingaben werden
+    ignoriert — keine Intra-Pausen, kein ``pause_after``. Schema/Parameter
+    bleiben für API-Kompatibilität erhalten.
     """
+    del pause_directives, sentence_index  # Pausen bewusst abgeschaltet.
     if not segment_timings:
         raise PauseResolveError("Keine Segment-Timings vorhanden.")
 
     ordered = list(segment_timings)
-    sentences = sentence_index or {}
-
-    pause_by_segment: dict[str, PauseDirective] = {}
-    pauses_by_sentence_segment: dict[str, list[PauseDirective]] = {}
-    for directive in pause_directives:
-        if directive.pause_function == "no_pause":
-            continue
-        # E2E-4: chapter_transition = Nachlauf+Vorlauf der Kapitelhülle, keine
-        # Narrationspause / kein visueller Bridge-Slot.
-        if str(directive.pause_function or "").strip().lower() == "chapter_transition":
-            continue
-        # Validate duration class early (deterministic failure).
-        resolve_pause_duration_seconds(
-            directive.duration_class,
-            pause_function=directive.pause_function,
-        )
-        sentence_id = str(directive.after_sentence_id or "").strip()
-        if sentence_id:
-            sentence = sentences.get(sentence_id)
-            if sentence is None:
-                raise PauseResolveError(
-                    f"Unbekannte after_sentence_id für Pause: {sentence_id}"
-                )
-            segment_id = sentence.segment_id
-            pauses_by_sentence_segment.setdefault(segment_id, []).append(directive)
-            continue
-        after_segment = str(directive.after_segment_id or "").strip()
-        if not after_segment:
-            continue
-        if after_segment in pause_by_segment:
-            raise PauseResolveError(
-                f"Doppelte Pause nach Segment {after_segment}"
-            )
-        pause_by_segment[after_segment] = directive
-
     entries: list[NarrationTimelineEntry] = []
     cursor = 0.0
     for index, timing in enumerate(ordered):
@@ -194,41 +160,25 @@ def build_narration_timeline(
                 f"{timing.script_version} != {script_version}"
             )
         audio_duration = float(timing.duration_seconds)
-        intra, trailing_pause = _build_intra_pauses(
-            segment_id=timing.segment_id,
-            audio_duration_seconds=audio_duration,
-            sentence_directives=pauses_by_sentence_segment.get(timing.segment_id, []),
-            sentence_index=sentences,
-        )
-        intra_total = sum(float(item.pause_seconds) for item in intra)
         start = cursor
-        end = start + audio_duration + intra_total
-        pause_seconds = 0.0
-        directive = pause_by_segment.get(timing.segment_id)
-        if directive is not None:
-            pause_seconds = resolve_pause_duration_seconds(
-                directive.duration_class,
-                pause_function=directive.pause_function,
-            )
-        # Trailing (letzter Satz) und Segment-Pause: nicht doppelt zählen.
-        pause_seconds = max(float(pause_seconds), float(trailing_pause))
-        next_start = end + pause_seconds
+        end = start + audio_duration
+        next_start = end
         entries.append(
             NarrationTimelineEntry(
                 segment_id=timing.segment_id,
                 start_seconds=round(start, 6),
                 end_seconds=round(end, 6),
-                pause_after_seconds=round(pause_seconds, 6),
+                pause_after_seconds=0.0,
                 next_segment_start_seconds=(
                     round(next_start, 6) if index < len(ordered) - 1 else None
                 ),
                 audio_duration_seconds=round(audio_duration, 6),
-                intra_pauses=intra,
+                intra_pauses=[],
             )
         )
         cursor = next_start
 
-    total = entries[-1].end_seconds + entries[-1].pause_after_seconds
+    total = entries[-1].end_seconds
     return NarrationTimelineDocument(
         script_version=script_version,
         total_duration_seconds=round(total, 6),

@@ -22,18 +22,11 @@ CUT RHYTHM TARGETS (BINDING STYLE TARGETS — aim for this distribution):
 - Shot length: typically 10–17 seconds of narration time (median around 13.5s).
   Prefer this band unless a deliberate hold or micro-cut is editorially justified.
 - Cut placement mix (self-classify each boundary via alignment):
-  - ~65% mid_sentence (cut during a spoken sentence, not at its edge)
-  - ~25% sentence_boundary (cut at a sentence start/end)
-  - ~10% in_pause (cut during an explicit pause)
-- Pause style: prefer more frequent pulled pauses — roughly every 4th–6th
-  sentence boundary when editorially justified (esp. paragraph ends / reveals).
-  duration_class mapping (Python applies seconds later):
-  - short: keep original silence (~0.3–0.8s)
-  - medium: ~2–3s pulled pause
-  - long: ~3–5s pulled pause
-  - chapter_transition: ~3–8s after the chapter's last segment
-- Shots often continue across pauses (visual_behavior hold_current_shot /
-  cut_at_pause_*). Do not invent sentence boundaries missing from SENTENCE TIMINGS.
+  - ~70% mid_sentence (cut during a spoken sentence, not at its edge)
+  - ~30% sentence_boundary (cut at a sentence start/end)
+- Do NOT emit pause_directives — pulled pauses are disabled. Prefer
+  mid_sentence / sentence_boundary only (alignment \"in_pause\" is unused).
+- Do not invent sentence boundaries missing from SENTENCE TIMINGS.
 """
 
 
@@ -335,11 +328,11 @@ SENTENCE ANCHORS (when SENTENCE TIMINGS are provided):
 - Prefer sentence anchors for mid-sentence cuts and sentence-boundary cuts.
 - A sentence anchor has this form:
   {"type": "sentence", "sentence_id": "Sedona_segment_001__s002", "position": "start|early|middle|late|end"}
-- You may still use segment or pause anchors when appropriate.
-- Pause inside a segment (between sentences): set pause_directives[].after_sentence_id
-  to the sentence_id AFTER which the pause occurs (and after_segment_id to that sentence's segment).
+- You may still use segment anchors when appropriate.
+- pause_directives are DISABLED — always return [].
 - Every shot MUST set start_cut_alignment to exactly one of:
   mid_sentence | sentence_boundary | in_pause
+  (prefer mid_sentence / sentence_boundary; in_pause is unused).
 - Do not invent sentence_ids. Use only IDs from SENTENCE TIMINGS.
 """
 
@@ -354,9 +347,9 @@ You are LLM 2, the editorial rough-cut planner for a documentary pipeline.
 
 Your task is to create:
 
-1. editorial pause decisions,
-2. a rough visual edit plan,
-3. concrete coverage gaps where no suitable local asset exists.
+1. a rough visual edit plan,
+2. concrete coverage gaps where no suitable local asset exists.
+   (pause_directives are disabled — always return an empty array.)
 
 The locked narration provides a continuous time carpet.
 The visual edit plan cuts freely across that time carpet.
@@ -432,30 +425,11 @@ ASSET RULES:
 - Photos/stills: do not plan long static holds as if they were motion clips;
   keep still spans short unless a deliberate still is justified.
 
-PAUSE RULES:
+PAUSE RULES (DISABLED):
 
-Allowed pause_function values:
-
-breath | emphasis | anticipation | reveal |
-chapter_transition | reflection | no_pause
-
-Allowed duration_class values:
-
-short | medium | long
-
-Allowed visual_behavior values:
-
-hold_current_shot |
-next_shot_may_start_during_pause |
-cut_at_pause_start |
-cut_at_pause_end |
-editorial_choice
-
-- Do not output pause durations in seconds or milliseconds.
-- Emit a pause directive only when the boundary decision is editorially meaningful.
-- Use no_pause only when an important boundary should explicitly remain continuous.
-- Every pause directive must include an editorial reason.
-- At most one pause directive may exist for the same after_segment_id.
+- Always return \"pause_directives\": [].
+- Do not invent pulled pauses; natural TTS silence in the audio is enough.
+- Chapter spacing uses Vorlauf/Nachlauf envelopes, not pause_directives.
 
 SHOT RULES:
 
@@ -504,16 +478,7 @@ Use empty arrays when no entries exist.
 OUTPUT SCHEMA:
 
 {{
-  "pause_directives": [
-    {{
-      "after_segment_id": "segment_001",
-      "after_sentence_id": "segment_001__s002_or_null",
-      "pause_function": "breath|emphasis|anticipation|reveal|chapter_transition|reflection|no_pause",
-      "duration_class": "short|medium|long",
-      "visual_behavior": "hold_current_shot|next_shot_may_start_during_pause|cut_at_pause_start|cut_at_pause_end|editorial_choice",
-      "editorial_reason": "Concise editorial explanation."
-    }}
-  ],
+  "pause_directives": [],
   "shots": [
     {{
       "shot_id": "shot_001",
@@ -675,10 +640,10 @@ You are the UNIFIED cut planner for a documentary pipeline (single LLM pass).
 
 Your task is to create ONE complete chapter plan:
 
-1. editorial pause decisions,
-2. a continuous cut-boundary chain across the VO (voice-over) time carpet,
-3. one slot between every consecutive pair of boundaries,
-4. honest local asset_fit ratings; for weak/none include inline gap specs.
+1. a continuous cut-boundary chain across the VO (voice-over) time carpet,
+2. one slot between every consecutive pair of boundaries,
+3. honest local asset_fit ratings; for weak/none include inline gap specs.
+   (pause_directives are disabled — always return an empty array.)
 
 FORMAT PRINCIPLE (CRITICAL):
 
@@ -715,6 +680,7 @@ BOUNDARY RULES:
 
 - Every boundary MUST set alignment to exactly one of:
   mid_sentence | sentence_boundary | in_pause
+- Prefer mid_sentence or sentence_boundary (in_pause is unused — pauses off).
 - Boundaries must be chronologically non-decreasing on the VO carpet.
 - First boundary: first chapter sentence at position start (or offset 0).
 - Last boundary: last chapter sentence at position end (or end offset).
@@ -736,20 +702,11 @@ SLOT / ASSET RULES:
   immediate neighbor; max usage + reuse distance apply with no exemption.
 - narrative_function for first/last may be chapter_open / chapter_close.
 
-PAUSE RULES:
+PAUSE RULES (DISABLED):
 
-Allowed pause_function:
-breath | emphasis | anticipation | reveal |
-chapter_transition | reflection | no_pause
-
-Allowed duration_class: short | medium | long
-
-Allowed visual_behavior:
-hold_current_shot | next_shot_may_start_during_pause |
-cut_at_pause_start | cut_at_pause_end | editorial_choice
-
-- Prefer after_sentence_id for pauses inside a segment.
-- Do not output pause durations in seconds.
+- Always return \"pause_directives\": [].
+- Do not invent pulled pauses; natural TTS silence in the audio is enough.
+- Chapter spacing uses Vorlauf/Nachlauf envelopes, not pause_directives.
 
 RETURN STRICT JSON ONLY. No Markdown. No comments. No trailing commas.
 
@@ -759,16 +716,7 @@ OUTPUT SCHEMA:
   "voiceover_preroll_sec": null,
   "voiceover_postroll_sec": null,
   "closing_fallback_asset_id": "existing_asset_id_not_equal_last_slot",
-  "pause_directives": [
-    {{
-      "after_segment_id": "segment_001",
-      "after_sentence_id": "segment_001__s004_or_null",
-      "pause_function": "breath|emphasis|anticipation|reveal|chapter_transition|reflection|no_pause",
-      "duration_class": "short|medium|long",
-      "visual_behavior": "hold_current_shot|next_shot_may_start_during_pause|cut_at_pause_start|cut_at_pause_end|editorial_choice",
-      "editorial_reason": "..."
-    }}
-  ],
+  "pause_directives": [],
   "boundaries": [
     {{
       "cut_id": "cut_000",
@@ -931,10 +879,10 @@ You are the KEYWORD-SYNC cut planner for a documentary pipeline (unified format)
 
 Your task is to create ONE complete chapter plan:
 
-1. editorial pause decisions,
-2. a continuous cut-boundary chain across the VO (voice-over) time carpet,
-3. one slot between every consecutive pair of boundaries,
-4. honest local asset_fit ratings; for weak/none include inline gap specs.
+1. a continuous cut-boundary chain across the VO (voice-over) time carpet,
+2. one slot between every consecutive pair of boundaries,
+3. honest local asset_fit ratings; for weak/none include inline gap specs.
+   (pause_directives are disabled — always return an empty array.)
 
 MODE RULES (CRITICAL — differ from rhythm chapter cuts):
 
@@ -1043,20 +991,11 @@ SLOT / ASSET RULES:
 - The last slot must span from its start boundary through the full remaining
   VO to the last boundary (VO end).
 
-PAUSE RULES:
+PAUSE RULES (DISABLED):
 
-Allowed pause_function:
-breath | emphasis | anticipation | reveal |
-chapter_transition | reflection | no_pause
-
-Allowed duration_class: short | medium | long
-
-Allowed visual_behavior:
-hold_current_shot | next_shot_may_start_during_pause |
-cut_at_pause_start | cut_at_pause_end | editorial_choice
-
-- Prefer after_sentence_id for pauses inside a segment.
-- Do not output pause durations in seconds.
+- Always return \"pause_directives\": [].
+- Do not invent pulled pauses; natural TTS silence in the audio is enough.
+- Chapter spacing uses Vorlauf/Nachlauf envelopes, not pause_directives.
 
 RETURN STRICT JSON ONLY. No Markdown. No comments. No trailing commas.
 
@@ -1066,16 +1005,7 @@ OUTPUT SCHEMA:
   "voiceover_preroll_sec": null,
   "voiceover_postroll_sec": null,
   "closing_fallback_asset_id": "existing_asset_id_not_equal_last_slot",
-  "pause_directives": [
-    {{
-      "after_segment_id": "segment_001",
-      "after_sentence_id": "segment_001__s004_or_null",
-      "pause_function": "breath|emphasis|anticipation|reveal|chapter_transition|reflection|no_pause",
-      "duration_class": "short|medium|long",
-      "visual_behavior": "hold_current_shot|next_shot_may_start_during_pause|cut_at_pause_start|cut_at_pause_end|editorial_choice",
-      "editorial_reason": "..."
-    }}
-  ],
+  "pause_directives": [],
   "boundaries": [
     {{
       "cut_id": "{slug}_cut_000",
@@ -1270,45 +1200,18 @@ KEYWORD / CONTEXT CUTS (CRITICAL — understand the whole Intro first):
   boundary at that sentence_id with offset_seconds=1.4, position=\"middle\",
   alignment=\"mid_sentence\".
 
-ENUMERATION / SENTENCE BREAKS (for pause landing):
+ENUMERATION PACING (no pulled pauses):
 
-- Python can insert pulled pauses ONLY at sentence boundaries
-  (pause_directives.after_sentence_id). There is no mid-comma pause.
-- When the locked Intro already splits list/tease items into separate
-  sentences, treat those sentence ends as natural breath points: place
-  pause_directives after list-item sentences so each picture has room
-  (prefer duration_class medium; short if the next beat is immediate;
-  long only for a major reveal).
-- If many place names sit inside ONE long comma-list sentence, do NOT invent
-  fake sentence_ids. Prefer fewer justified keyword cuts + holds rather than
-  a machine-gun of sub-second pictures. Still sync any cut you do make to
-  keyword onset.
+- Pulled pause_directives are DISABLED for Intro. Do not invent pauses.
+- If many place names sit inside ONE long comma-list sentence, prefer fewer
+  justified keyword cuts + holds rather than a machine-gun of sub-second
+  pictures. Still sync any cut you do make to keyword onset.
 
-PAUSE RULES (same pipeline as chapters — Intro may emit pauses):
+PAUSE RULES (DISABLED):
 
-Allowed pause_function:
-breath | emphasis | anticipation | reveal |
-chapter_transition | reflection | no_pause
-
-Allowed duration_class: short | medium | long
-
-Allowed visual_behavior:
-hold_current_shot | next_shot_may_start_during_pause |
-cut_at_pause_start | cut_at_pause_end | editorial_choice
-
-- Prefer after_sentence_id for pauses inside a segment (and set
-  after_segment_id to that sentence's segment).
-- Emit a pause when list/tease pacing is too fast for readable pictures, or
-  when a reveal / emphasis beat needs air — especially between enumeration
-  sentences.
-- Prefer visual_behavior hold_current_shot so the current picture breathes
-  across the pause (unless a cut-at-pause decision is clearly better).
-- Do not output pause durations in seconds; Python resolves duration_class.
-- Every pause directive needs a concise editorial_reason.
-- At most one pause directive per after_sentence_id / after_segment_id.
-- Use no_pause only when an important boundary should explicitly stay
-  continuous. Empty pause_directives is allowed when no pause is needed.
-- Do not invent segment_ids / sentence_ids outside Intro inputs.
+- Always return \"pause_directives\": [].
+- Natural TTS silence in the locked audio is enough; Python will not insert
+  pulled gaps from directives.
 
 INTRO VO duration (measured): {duration:.3f}s.
 
@@ -1362,16 +1265,7 @@ OUTPUT SCHEMA:
 {{
   "voiceover_preroll_sec": 4.0,
   "voiceover_postroll_sec": 6.5,
-  "pause_directives": [
-    {{
-      "after_segment_id": "Intro_segment_001",
-      "after_sentence_id": "Intro_segment_001__s002_or_null",
-      "pause_function": "breath|emphasis|anticipation|reveal|chapter_transition|reflection|no_pause",
-      "duration_class": "short|medium|long",
-      "visual_behavior": "hold_current_shot|next_shot_may_start_during_pause|cut_at_pause_start|cut_at_pause_end|editorial_choice",
-      "editorial_reason": "Why this Intro pause (e.g. breath between list places)."
-    }}
-  ],
+  "pause_directives": [],
   "boundaries": [
     {{
       "cut_id": "{slug}_cut_000",
@@ -1440,8 +1334,7 @@ FINAL VALIDATION:
   when words[] is present (else text-proportion offset_seconds)
 - No place/list picture starts before its spoken keyword (except slot-1 preroll)
 - Not every keyword becomes a cut — cuts follow full-text context
-- pause_directives (if any) use only Intro segment/sentence ids; pauses land
-  on sentence boundaries (after_sentence_id preferred)
+- pause_directives must be []
 - Preroll/postroll are outside the VO window — do not leave narration uncovered
 
 LOCKED SCRIPT (Intro only):
@@ -1614,7 +1507,7 @@ LOCKED SCRIPT:
 NARRATION TIMELINE:
 {narration_timeline_json}
 {sentence_block}
-PAUSE DIRECTIVES:
+PAUSE DIRECTIVES (DISABLED — expect empty / ignore):
 {pause_directives_json}
 
 ROUGH CUT:
