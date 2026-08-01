@@ -54,10 +54,17 @@ def audio_extension_for_output_format(output_format: str) -> tuple[str, bool]:
     """Leitet die Dateiendung aus dem ElevenLabs output_format ab.
 
     Gibt (extension, is_uncertain) zurück — is_uncertain=True bedeutet, dass
-    die Endung nur geraten wurde (§5: 'sonst .mp3 mit Warnung')."""
+    die Endung nur geraten wurde (§5: 'sonst .mp3 mit Warnung').
+
+    ``wav_*`` liefert von ElevenLabs einen echten WAV-Container (empfohlen,
+    Default ``wav_48000``). ``pcm_*`` ist raw PCM ohne Header — wird hier
+    ebenfalls als ``.wav`` abgelegt (Legacy); für Resolve ``wav_*`` nutzen.
+    """
     fmt = (output_format or "").strip().lower()
     if fmt.startswith("mp3"):
         return ".mp3", False
+    if fmt.startswith("opus"):
+        return ".opus", False
     if fmt.startswith(("pcm", "wav", "ulaw", "alaw")):
         return ".wav", False
     return ".mp3", True

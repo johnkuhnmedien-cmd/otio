@@ -129,8 +129,17 @@ def render_elevenlabs_settings_form(
         output_format = st.text_input(
             "Output-Format",
             key=keys["format"],
-            help="z. B. mp3_44100_128, pcm_16000, wav_44100",
+            help=(
+                "ElevenLabs output_format (Query-Param). Standard: wav_48000 "
+                "(Resolve-tauglich). Alternativen: wav_44100 (Pro+), "
+                "mp3_44100_128, pcm_48000."
+            ),
         )
+        if str(output_format or "").strip().lower().startswith("mp3"):
+            st.caption(
+                "Hinweis: Für DaVinci Resolve besser **wav_48000** — MP3 kann "
+                "Waveform zeigen aber stumm abspielen. Nach Formatwechsel TTS neu erzeugen."
+            )
         stability = st.slider(
             "Stability",
             0.0,

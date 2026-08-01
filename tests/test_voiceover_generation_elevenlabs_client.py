@@ -48,7 +48,7 @@ def test_default_settings_have_expected_values(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     settings = default_elevenlabs_settings(project)
     assert settings.model_id == "eleven_multilingual_v2"
-    assert settings.output_format == "mp3_44100_128"
+    assert settings.output_format == "wav_48000"
     assert settings.stability == 0.5
     assert settings.similarity_boost == 0.75
     assert settings.style == 0.0
@@ -111,6 +111,12 @@ def test_is_elevenlabs_configured_false_when_missing(monkeypatch: pytest.MonkeyP
 def test_audio_extension_for_mp3_format() -> None:
     ext, uncertain = audio_extension_for_output_format("mp3_44100_128")
     assert ext == ".mp3"
+    assert uncertain is False
+
+
+def test_audio_extension_for_wav_48000_format() -> None:
+    ext, uncertain = audio_extension_for_output_format("wav_48000")
+    assert ext == ".wav"
     assert uncertain is False
 
 
