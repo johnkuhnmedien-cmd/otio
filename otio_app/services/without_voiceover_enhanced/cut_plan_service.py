@@ -1185,6 +1185,12 @@ def merge_and_persist_rough_cuts(
         script_version=locked.script_version,
         gaps=merged_gaps,
     )
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        carry_over_user_confirmed_weak,
+    )
+
+    previous_coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    coverage = carry_over_user_confirmed_weak(coverage, previous_coverage)
     timeline = build_narration_timeline(
         script_version=locked.script_version,
         segment_timings=timings.segments,
@@ -2200,6 +2206,14 @@ def merge_and_persist_unified_cuts(
         coverage = enrich_coverage_search_concepts(project, coverage, plan=merged)
         pauses = list(merged.pause_directives)
 
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        carry_over_user_confirmed_weak,
+        rebind_gap_fills_to_current_run,
+    )
+
+    previous_coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    coverage = carry_over_user_confirmed_weak(coverage, previous_coverage)
+
     write_json(unified_cut_plan_path(project), merged)
     write_json(rough_cut_plan_path(project), rough)
     write_json(coverage_gaps_path(project), coverage)
@@ -2208,10 +2222,6 @@ def merge_and_persist_unified_cuts(
         {"directives": [d.model_dump(mode="json") for d in pauses]},
     )
     # Manuelle/Funnel-Fills mit gleicher Gap-ID auf neue Run-ID übernehmen.
-    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
-        rebind_gap_fills_to_current_run,
-    )
-
     rebind_gap_fills_to_current_run(project)
     return merged
 

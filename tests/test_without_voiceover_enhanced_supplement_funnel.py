@@ -748,7 +748,7 @@ def test_ui_two_funnel_buttons_and_gap_keys() -> None:
     assert "enh_funnel_gap_multiselect_{project.id}" in source
     assert "disabled=selected_disabled" in source
     assert "disabled=all_disabled" in source
-    assert "list_open_funnel_gap_ids" in source
+    assert "_start_funnel_job(list(open_gap_ids))" in source
     # Bereiche getrennt (Radio, nicht st.tabs — Tabs führen alles aus)
     assert "_SECTION_FUNNEL" in source
     assert "_render_section_funnel" in source
@@ -2128,7 +2128,9 @@ def test_ui_multiselect_project_scoped_and_same_service() -> None:
     # Beide Buttons starten denselben Hintergrund-Job-Helper
     assert source.count("_start_funnel_job(") >= 3
     assert "get_supplement_funnel_job_manager" in source
-    assert "list_open_funnel_gap_ids(project)" in source
+    # „Alle offenen“ nutzt Statuszeilen-Liste (open_gap_ids), nicht die
+    # strengere Merge-Liste — sonst werden erfüllte Accepted erneut angefordert.
+    assert "_start_funnel_job(list(open_gap_ids))" in source
     assert "Mehrfachauswahl wird ignoriert" in source
     assert "_render_section_funnel" in source
     svc = Path(

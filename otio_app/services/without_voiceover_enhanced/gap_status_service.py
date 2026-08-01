@@ -29,12 +29,42 @@ from otio_app.services.without_voiceover_enhanced.paths import (
 
 __all__ = [
     "GapStatusSummary",
+    "carry_over_user_confirmed_weak",
     "compute_cut_plan_run_id",
     "compute_cut_plan_run_id_from_path",
     "is_weak_upgrade_gap",
     "rebind_gap_fills_to_current_run",
     "summarize_gap_status",
 ]
+
+
+def carry_over_user_confirmed_weak(
+    coverage: CoverageGapsDocument,
+    previous: CoverageGapsDocument | None,
+) -> CoverageGapsDocument:
+    """Behält Weak-Bestätigungen bei Coverage-Rebuild (gleiche Gap-ID)."""
+    if previous is None or not previous.gaps:
+        return coverage
+    confirmed = {
+        str(gap.gap_id or "").strip()
+        for gap in previous.gaps
+        if str(gap.gap_id or "").strip()
+        and bool(getattr(gap, "user_confirmed_weak", False))
+    }
+    if not confirmed:
+        return coverage
+    updated: list[CoverageGap] = []
+    changed = False
+    for gap in coverage.gaps or []:
+        gid = str(gap.gap_id or "").strip()
+        if gid in confirmed and not bool(getattr(gap, "user_confirmed_weak", False)):
+            updated.append(gap.model_copy(update={"user_confirmed_weak": True}))
+            changed = True
+        else:
+            updated.append(gap)
+    if not changed:
+        return coverage
+    return coverage.model_copy(update={"gaps": updated})
 
 
 @dataclass

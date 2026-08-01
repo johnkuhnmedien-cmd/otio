@@ -406,6 +406,15 @@ def persist_intro_unified_plan(
     )
     rough, coverage = unified_to_rough(merged)
     coverage = enrich_coverage_search_concepts(project, coverage, plan=merged)
+    from otio_app.services.without_voiceover_enhanced.gap_status_service import (
+        carry_over_user_confirmed_weak,
+    )
+    from otio_app.services.without_voiceover_enhanced.models import (
+        CoverageGapsDocument,
+    )
+
+    previous_coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    coverage = carry_over_user_confirmed_weak(coverage, previous_coverage)
     write_json(unified_cut_plan_path(project), merged)
     write_json(rough_cut_plan_path(project), rough)
     write_json(coverage_gaps_path(project), coverage)

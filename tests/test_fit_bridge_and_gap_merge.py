@@ -427,7 +427,7 @@ def test_gap_merge_keeps_weak_without_better_supplement(tmp_path: Path) -> None:
 
 
 def test_merge_rejection_keeps_manual_accepted(tmp_path: Path) -> None:
-    """Merge-Reject darf Manual-Assign nicht aus Accepted löschen."""
+    """Merge-Reject darf export_ready Accepted-/Manual-Fills nicht zurücksetzen."""
     from otio_app.services.without_voiceover_enhanced.gap_merge_service import (
         _write_merge_rejection_to_funnel,
     )
@@ -490,7 +490,11 @@ def test_merge_rejection_keeps_manual_accepted(tmp_path: Path) -> None:
     assert accepted is not None
     ids = {s.candidate_id for s in accepted.supplements}
     assert "manual_keep" in ids
-    assert "stock_drop" not in ids
+    # export_ready Accepted (Manual + Stock) bleiben — Timing setzt Fills nicht zurück.
+    assert "stock_drop" in ids
+    funnel = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
+    assert funnel is not None
+    assert "gap_m" in funnel.filled_gap_ids
 
 
 def test_gap_merge_fail_closed_open_none(tmp_path: Path) -> None:
