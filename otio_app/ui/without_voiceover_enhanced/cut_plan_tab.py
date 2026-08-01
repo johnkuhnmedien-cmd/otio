@@ -83,7 +83,6 @@ from otio_app.services.without_voiceover_enhanced.gap_status_service import (
     summarize_gap_status,
 )
 from otio_app.services.without_voiceover_enhanced.supplement_funnel_service import (
-    list_open_funnel_gap_ids,
 )
 from otio_app.ui.polling import poll_while_running
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
@@ -2101,13 +2100,15 @@ def _render_section_funnel(project) -> None:
             key="enh_funnel_all_open",
             disabled=all_disabled,
             help=(
-                "Verarbeitet alle aktuell offenen Coverage Gaps sequenziell. "
+                "Verarbeitet genau die Gaps aus der Statuszeile "
+                f"(aktuell offen: {open_gaps_count}). "
                 "Mehrfachauswahl wird ignoriert. Läuft im Hintergrund — "
                 "Abbrechen möglich."
             ),
         ):
-            # Service-Liste erst beim Start (lädt Report) — nicht bei jedem Rerun.
-            _start_funnel_job(list_open_funnel_gap_ids(project))
+            # Dieselbe Liste wie „Aktuell: offen N“ — nicht die strengere
+            # Merge-fähigkeits-Liste (die erfüllte Accepted erneut anfordern würde).
+            _start_funnel_job(list(open_gap_ids))
     with cols_funnel[1]:
         selected_disabled = (not selected_open_ids) or funnel_running
         if st.button(
@@ -2119,7 +2120,7 @@ def _render_section_funnel(project) -> None:
                 "Gleicher Funnel-Service wie „Alle“. Läuft im Hintergrund."
             ),
         ):
-            current_open = set(list_open_funnel_gap_ids(project))
+            current_open = set(open_gap_ids)
             valid_selected = [
                 gid for gid in selected_open_ids if gid in current_open
             ]
