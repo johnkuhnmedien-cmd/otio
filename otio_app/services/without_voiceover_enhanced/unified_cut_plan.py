@@ -224,20 +224,58 @@ def _parse_slot(item: dict[str, Any], *, index: int) -> CutSlot:
         raise UnifiedCutPlanError(f"{slot_id}: {exc}") from exc
 
 
+def _parse_pause_directive(item: dict[str, Any]) -> PauseDirective | None:
+    function = str(item.get("pause_function") or "").strip().lower()
+    if not function or function == "no_pause":
+        return None
+    duration = str(item.get("duration_class") or "").strip().lower()
+    if not duration:
+        raise UnifiedCutPlanError("pause_directive ohne duration_class.")
+    try:
+        return PauseDirective(
+            after_segment_id=str(item.get("after_segment_id") or ""),
+            after_sentence_id=(
+                None
+                if _nullish(item.get("after_sentence_id"))
+                else str(item.get("after_sentence_id"))
+            ),
+            pause_function=function,
+            duration_class=duration,
+            visual_behavior=str(
+                item.get("visual_behavior") or "editorial_choice"
+            ),
+            editorial_reason=str(item.get("editorial_reason") or ""),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise UnifiedCutPlanError(f"pause_directive ungültig: {exc}") from exc
+
+
 def parse_unified_cut_response(
     raw: str | dict[str, Any],
     script_version: str,
     *,
     folder_slug: str = "",
+    allow_pause_directives: bool = False,
+    nullify_weak_assets: bool = False,
 ) -> UnifiedCutPlanDocument:
     """Parst LLM-JSON → UnifiedCutPlanDocument (inkl. optionaler ID-Prefix)."""
     payload = _extract_json(raw) if isinstance(raw, str) else raw
     if not isinstance(payload, dict):
         raise UnifiedCutPlanError("Unified Cut Plan ist kein JSON-Objekt.")
 
-    # Pause-Directives sind abgeschaltet (Kapitel + Intro): Schema-Key bleibt
-    # akzeptiert, wird aber nicht übernommen.
+    # Default: Pause-Directives abgeschaltet (Rhythm / Keyword-Sync / Intro).
+    # Keyword Flow: allow_pause_directives=True übernimmt gültige Directives.
     directives: list[PauseDirective] = []
+    if allow_pause_directives:
+        raw_directives = payload.get("pause_directives") or []
+        if not isinstance(raw_directives, list):
+            raise UnifiedCutPlanError("pause_directives muss ein Array sein.")
+        for item in raw_directives:
+            if not isinstance(item, dict):
+                continue
+            parsed = _parse_pause_directive(item)
+            if parsed is not None:
+                directives.append(parsed)
 
     boundaries_raw = payload.get("boundaries") or []
     slots_raw = payload.get("slots") or []
@@ -277,6 +315,9 @@ def parse_unified_cut_response(
         if fit in {"strong", "acceptable"}:
             slot.coverage_gap_id = None
         if fit == "none":
+            slot.local_asset_id = None
+        # Keyword Flow: weak darf kein Asset behalten.
+        if nullify_weak_assets and fit == "weak":
             slot.local_asset_id = None
 
     raw_fallback = payload.get("closing_fallback_asset_id")

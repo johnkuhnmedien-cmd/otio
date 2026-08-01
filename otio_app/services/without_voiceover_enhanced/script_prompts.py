@@ -1107,6 +1107,284 @@ DRAMATURGY:
 """
 
 
+def build_keyword_flow_unified_cut_prompt(
+    *,
+    locked_script_json: str,
+    segment_timings_json: str,
+    local_assets_json: str,
+    style_profile_text: str,
+    dramaturgy_text: str,
+    folder_name: str = "",
+    folder_slug: str = "",
+    previous_folder_name: str | None = None,
+    next_folder_name: str | None = None,
+    include_middle_frames: bool = False,
+    shot_constraints_text: str = "",
+    sentence_timings_json: str = "",
+    used_in_ledger_text: str = "",
+) -> str:
+    """Kapitel-Unified-Cut: Keyword Flow (context-first, echte Onsets, sichere Pausen).
+
+    Output-Schema bleibt unified-cut-v1. Keine DEFAULT_CUT_RHYTHM_TARGETS.
+    """
+    chapter_scope = ""
+    if folder_name:
+        slug = folder_slug or folder_name
+        prev = previous_folder_name or "(none — this is the first chapter)"
+        nxt = next_folder_name or "(none — this is the last chapter)"
+        chapter_scope = f"""
+CHAPTER SCOPE (CRITICAL):
+
+- Plan ONLY the chapter "{folder_name}" (id prefix: {slug}_).
+- Inputs below contain only this chapter.
+- Use only segment_ids / sentence_ids / local_asset_id values from this chapter.
+- Prefix every cut_id, slot_id and coverage_gap_id with "{slug}_".
+- Do not invent material for previous or next chapters.
+- Previous chapter: {prev}
+- Next chapter: {nxt}
+- If a next chapter exists, prefer pause_function "chapter_transition" after
+  this chapter's last VO sentence when editorially justified.
+- Do NOT plan the Maps folder opener — Python inserts a technical 9s map
+  opener before VO when a single valid map exists.
+"""
+
+    vision_rules = ""
+    if include_middle_frames:
+        vision_rules = """
+MIDDLE-FRAME VISION (OPTIONAL INPUT):
+
+- After the text prompt you may receive JPEG stills labeled
+  "IMAGE for local_asset_id=<id>".
+- Use images together with LOCAL ASSETS metadata to choose assets.
+- Never invent an asset ID that is not listed in LOCAL ASSETS.
+"""
+
+    sentence_block = ""
+    if sentence_timings_json.strip():
+        sentence_block = f"""
+SENTENCE TIMINGS (authoritative; cleaned spoken words from ElevenLabs).
+Times are relative to each segment's audio. Each sentence includes words[]
+with text / start_seconds / end_seconds / offset_seconds / original_word_index
+(and optional word_ref). Direction tags and punctuation-only tokens are
+already removed. Prefer words[].offset_seconds for keyword onset cuts.
+NEVER invent or estimate word onsets from character position or sentence length.
+{sentence_timings_json}
+"""
+
+    ledger_block = ""
+    if used_in_ledger_text.strip():
+        ledger_block = f"""
+USED-IN LEDGER (filmwide so far — respect max usage / reuse distance):
+{used_in_ledger_text.strip()}
+"""
+
+    slug = folder_slug or folder_name or "chapter"
+
+    return f"""\
+You are the KEYWORD FLOW cut planner for a documentary pipeline (unified-cut-v1).
+
+KEYWORD FLOW MARKER: context-first, keyword-anchored, honest gaps, safe pauses.
+
+Your task is to create ONE complete chapter plan:
+
+1. a continuous cut-boundary chain across the VO time carpet,
+2. one slot between every consecutive pair of boundaries,
+3. honest local asset_fit ratings; for weak/none include inline gap specs,
+4. pause_directives only when a safe editorial pause extension is justified.
+
+MODE RULES (CRITICAL — KEYWORD FLOW):
+
+- Keyword Flow is context-first and keyword-anchored.
+- Before assigning an asset, understand the full meaning of the current passage,
+  relevant preceding and following sentences, the concrete entity or visual
+  subject, pronoun/reference relationships, whether narration requires exact
+  identity, and whether the passage is factual, atmospheric, transitional or
+  reflective.
+- Do not assign assets from isolated word matches.
+{chapter_scope}{vision_rules}{ledger_block}{shot_constraints_text}
+NAMED ENTITY PRIORITY (BINDING):
+
+1. concrete named entity (e.g. Salto Ángel)
+2. concrete qualified motif phrase
+3. general motif class (e.g. waterfall)
+4. atmospheric correspondence
+
+- When a concrete entity is named, do NOT use an arbitrary asset of the same
+  general category. Concrete waterfall ≠ any waterfall; concrete church ≠ any
+  church; concrete monument ≠ any monument.
+- If the exact identity is not present in LOCAL ASSETS: asset_fit weak or none,
+  local_asset_id MUST be null, and create a Coverage Gap. Never invent identity
+  from visual similarity.
+- Resolve pronouns across sentences when unambiguous. If ambiguous: do not invent
+  identity; rate fit cautiously; gap when a concrete unproven identity is required.
+
+ATMOSPHERIC PASSAGES WITHOUT KEYWORD:
+
+- Not every slot needs a spoken keyword.
+- For mood / atmosphere / culture / reflection / change / place character /
+  transitions: derive a semantic visual_intent from the full context.
+- Prefer alignment sentence_boundary or in_pause for non-keyword shots.
+- mid_sentence ONLY when offset_seconds is exactly a delivered cleaned word onset.
+- Do not invent artificial keywords.
+
+KEYWORD BOUNDARIES:
+
+- For a keyword mid-sentence cut: use sentence_id from SENTENCE TIMINGS,
+  set offset_seconds EXACTLY to the delivered onset of the first keyword word,
+  set alignment=\"mid_sentence\".
+- Always supply the exact real keyword onset first. Python may shift the PICTURE
+  cut within ±1.5 seconds for shot_min/max / safe pause / valid chain — never
+  invent offsets yourself.
+- Never estimate onsets from text proportion or character position.
+
+LONG THEME BLOCKS:
+
+- A shot need not run until the next keyword.
+- If narration stays on the same motif longer than shot_max, insert additional
+  semantically fitting shots (even / uneven splits, detail changes, scale changes,
+  sentence boundaries, or safe pauses).
+- Forbidden: one overlong shot, silently exceeding shot_max, random filler,
+  mechanical one-asset-per-sentence or one-asset-per-keyword.
+
+PAUSE DIRECTIVES (KEYWORD FLOW ONLY — ENABLED):
+
+- You may emit pause_directives to request ADDITIONAL silence between spoken units.
+- Prefer after_sentence_id between consecutive sentences with real word times.
+- pause_function: breath|emphasis|anticipation|reveal|chapter_transition|reflection|no_pause
+- duration_class: short|medium|long  (Python adds +0.35 / +0.80 / +1.50 seconds)
+- visual_behavior: hold_current_shot|next_shot_may_start_during_pause|cut_at_pause_start|cut_at_pause_end|editorial_choice
+- Do NOT output absolute pause seconds, milliseconds, or frames.
+- Python enforces 5 timeline frames after previous_word_end and 5 frames before
+  next_word_start. Unsafe pauses are rejected.
+- Use pauses to help a short following shot reach shot_min when editorially justified
+  (e.g. 3s narration + long pause → ≥ shot_min). The following shot must still be
+  strong/acceptable and visually meaningful — never weak filler.
+- A transition shot may start during the pause and continue into the next sentence.
+- No pause-only shot under shot_min.
+
+ASSET FIT (KEYWORD FLOW — BINDING):
+
+- strong / acceptable: asset may be used; coverage_gap_id null.
+- weak / none: local_asset_id MUST be null; coverage_gap_id + gap fields REQUIRED.
+- Never keep a weak asset just to fill a slot.
+- Gap search_concepts: 2–4 English phrases, 2–5 words each, concrete to the missing motif.
+
+CLOSING:
+
+- The last slot is the primary Closing Shot (strong/acceptable), able to carry
+  Settings postroll/Nachlauf (Python applies the duration).
+- Always set closing_fallback_asset_id to a DIFFERENT chapter-local
+  strong/acceptable asset with the same closing intent.
+- Python uses fallback only if primary is technically/rule-unusable.
+
+FORMAT PRINCIPLE (CRITICAL):
+
+- Output N slots and exactly N+1 boundaries (unified-cut-v1).
+- Boundary i ends slot i and starts slot i+1.
+- First boundary = VO start; last boundary = VO end.
+- Do NOT invent absolute timeline seconds, frames, or timecodes.
+- TWO FIELDS: position=start|early|middle|late|end;
+  alignment=mid_sentence|sentence_boundary|in_pause — never mix them.
+- For in_pause cuts, Python keeps the cut inside the safe pause window.
+
+RETURN STRICT JSON ONLY. No Markdown. No comments. No trailing commas.
+
+OUTPUT SCHEMA:
+
+{{
+  "voiceover_preroll_sec": null,
+  "voiceover_postroll_sec": null,
+  "closing_fallback_asset_id": "existing_asset_id_not_equal_last_slot",
+  "pause_directives": [
+    {{
+      "after_segment_id": "segment_001",
+      "after_sentence_id": "segment_001__s001",
+      "pause_function": "anticipation",
+      "duration_class": "long",
+      "visual_behavior": "next_shot_may_start_during_pause",
+      "editorial_reason": "safe space before the next named subject"
+    }}
+  ],
+  "boundaries": [
+    {{
+      "cut_id": "{slug}_cut_000",
+      "sentence_id": "segment_001__s001",
+      "position": "start",
+      "offset_seconds": 0,
+      "alignment": "sentence_boundary"
+    }},
+    {{
+      "cut_id": "{slug}_cut_001",
+      "sentence_id": "segment_001__s002",
+      "position": "middle",
+      "offset_seconds": 1.2,
+      "alignment": "mid_sentence"
+    }},
+    {{
+      "cut_id": "{slug}_cut_00N",
+      "sentence_id": "segment_00N__s00N",
+      "position": "end",
+      "offset_seconds": null,
+      "alignment": "sentence_boundary"
+    }}
+  ],
+  "slots": [
+    {{
+      "slot_id": "{slug}_slot_001",
+      "local_asset_id": "existing_asset_id_or_null",
+      "asset_fit": "strong|acceptable|weak|none",
+      "asset_fit_reason": "context-first match or why identity is missing",
+      "visual_intent": "...",
+      "narrative_function": "chapter_open|orientation|context|evidence|atmosphere|transition|contrast|reveal|reflection|chapter_close",
+      "coverage_gap_id": "{slug}_gap_001_or_null",
+      "source_range_intent": "representative_middle_section",
+      "needed_visual": "prose description of the missing visual",
+      "search_concepts": [
+        "2-4 English stock search phrases",
+        "each 2-5 words, no full sentences"
+      ],
+      "must_include": ["..."],
+      "must_avoid": ["..."],
+      "desired_motion": "static|pan|tilt|tracking|drone|handheld|zoom|unknown",
+      "desired_framing": "close|medium|wide|aerial|pov",
+      "preferred_media_type": "video|photo|either",
+      "fact_check_required": false,
+      "covered_sentence_ids": ["segment_001__s001"]
+    }}
+  ]
+}}
+
+FINAL VALIDATION BEFORE RETURNING JSON:
+
+- len(slots) == len(boundaries) - 1
+- All IDs unique / chapter-prefixed where required
+- All sentence_ids exist in SENTENCE TIMINGS
+- All local_asset_id values exist in LOCAL ASSETS (or null)
+- closing_fallback_asset_id differs from last slot local_asset_id
+- Keyword mid_sentence offsets match delivered cleaned word onsets
+- weak/none → local_asset_id null + gap fields
+- strong/acceptable → coverage_gap_id null
+- Respect shot_min / shot_max / max_asset_usage / reuse distance from SETTINGS
+- No Maps opener planning; no absolute timeline seconds
+
+LOCKED SCRIPT:
+{locked_script_json}
+
+SEGMENT TIMINGS:
+{segment_timings_json}
+{sentence_block}
+LOCAL ASSETS (slim; chapter-local only):
+{local_assets_json}
+
+STYLE PROFILE:
+{style_profile_text}
+
+DRAMATURGY:
+{dramaturgy_text}
+"""
+
+
+
 def build_intro_unified_cut_prompt(
     *,
     locked_script_json: str,

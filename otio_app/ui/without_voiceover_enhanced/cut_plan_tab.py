@@ -34,6 +34,7 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     TIMING_MODE_FIXED,
     TIMING_MODE_LLM,
     UNIFIED_CUT_STYLE_CHOICES,
+    UNIFIED_CUT_STYLE_KEYWORD_FLOW,
     UNIFIED_CUT_STYLE_KEYWORD_SYNC,
     UNIFIED_CUT_STYLE_RHYTHM,
     CutPlanOptions,
@@ -551,6 +552,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
         style_labels = {
             UNIFIED_CUT_STYLE_RHYTHM: "Rhythmus (shot_min/max)",
             UNIFIED_CUT_STYLE_KEYWORD_SYNC: "Keyword-Sync (Wort↔Bild)",
+            UNIFIED_CUT_STYLE_KEYWORD_FLOW: "Keyword Flow",
         }
         style_options = list(UNIFIED_CUT_STYLE_CHOICES)
         style_index = (
@@ -569,7 +571,9 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             help=(
                 "Rhythmus: bisheriger Prompt + shot_min/max + Word-Timestamps. "
                 "Keyword-Sync: eigener Prompt (Buzzword-Onset) mit denselben "
-                "Cut-Settings und Word-Timestamps."
+                "Cut-Settings und Word-Timestamps. "
+                "Keyword Flow: context-first mit echten Wort-Onsets, "
+                "±1,5-s-Platzierung und redaktionellen Pausen."
             ),
         )
         if (
@@ -580,6 +584,14 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 "Keyword-Sync: Schnitte folgen Keyword-/Themen-Onsets "
                 "(Wort-Timestamps). Shot-Min/Max und die übrigen Cut-Settings "
                 "werden mitgegeben und gelten für LLM + Python."
+            )
+        if (
+            cut_plan_mode == CUT_PLAN_MODE_UNIFIED
+            and unified_cut_style == UNIFIED_CUT_STYLE_KEYWORD_FLOW
+        ):
+            st.caption(
+                "Kontextbasierter Keyword-Schnitt mit echten Wort-Onsets, "
+                "flexibler ±1,5-s-Platzierung und redaktionellen Pausen."
             )
         enable_unified_mini_repair = st.checkbox(
             "Unified Mini-Repair nach Gap-Merge (optional, Default aus)",
