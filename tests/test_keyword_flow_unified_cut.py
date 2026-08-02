@@ -195,6 +195,9 @@ def test_word_cleaning_keeps_speech_drops_tags() -> None:
 def test_parse_keyword_flow_nullifies_weak_and_keeps_pauses() -> None:
     payload = {
         "closing_fallback_asset_id": "asset_b",
+        "closing_fallback_asset_fit": "strong",
+        "closing_fallback_asset_fit_reason": "reserve closer",
+        "closing_fallback_visual_intent": "same closing intent as primary",
         "pause_directives": [
             {
                 "after_segment_id": "seg",
@@ -256,6 +259,10 @@ def test_parse_keyword_flow_nullifies_weak_and_keeps_pauses() -> None:
     assert plan.slots[0].local_asset_id is None
     assert plan.slots[0].coverage_gap_id
     assert plan.slots[1].local_asset_id == "asset_a"
+    assert plan.closing_fallback_asset_id == "asset_b"
+    assert plan.closing_fallback_asset_fit == "strong"
+    assert plan.closing_fallback_asset_fit_reason == "reserve closer"
+    assert plan.closing_fallback_visual_intent == "same closing intent as primary"
     assert len(plan.pause_directives) == 1
     assert plan.pause_directives[0].duration_class == "long"
     rough, coverage = unified_to_rough(plan)
@@ -618,6 +625,9 @@ def test_closing_validator_requires_distinct_fallback() -> None:
     plan = UnifiedCutPlanDocument(
         script_version="v1",
         closing_fallback_asset_id="same",
+        closing_fallback_asset_fit="acceptable",
+        closing_fallback_asset_fit_reason="x",
+        closing_fallback_visual_intent="y",
         boundaries=[
             CutBoundary(
                 cut_id="b0",
@@ -643,3 +653,35 @@ def test_closing_validator_requires_distinct_fallback() -> None:
     )
     errs = validate_keyword_flow_closing(plan)
     assert any("nicht dem Primary" in e for e in errs)
+
+
+def test_legacy_plan_without_fallback_fit_still_parses() -> None:
+    """Ältere Pläne bleiben lesbar; Fit-Felder sind optional im Schema."""
+    payload = {
+        "closing_fallback_asset_id": "asset_b",
+        "boundaries": [
+            {
+                "cut_id": "c0",
+                "sentence_id": "seg__s001",
+                "position": "start",
+                "offset_seconds": 0,
+                "alignment": "sentence_boundary",
+            },
+            {
+                "cut_id": "c1",
+                "sentence_id": "seg__s001",
+                "position": "end",
+                "alignment": "sentence_boundary",
+            },
+        ],
+        "slots": [
+            {
+                "slot_id": "s1",
+                "local_asset_id": "asset_a",
+                "asset_fit": "strong",
+            }
+        ],
+    }
+    plan = parse_unified_cut_response(payload, "script-v1")
+    assert plan.closing_fallback_asset_id == "asset_b"
+    assert plan.closing_fallback_asset_fit is None

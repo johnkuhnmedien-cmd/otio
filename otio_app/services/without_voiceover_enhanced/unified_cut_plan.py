@@ -326,6 +326,18 @@ def parse_unified_cut_response(
         if _nullish(raw_fallback)
         else str(raw_fallback).strip() or None
     )
+    raw_fb_fit = payload.get("closing_fallback_asset_fit")
+    closing_fallback_fit = (
+        None
+        if _nullish(raw_fb_fit)
+        else str(raw_fb_fit).strip().lower() or None
+    )
+    closing_fallback_fit_reason = str(
+        payload.get("closing_fallback_asset_fit_reason") or ""
+    ).strip()
+    closing_fallback_visual_intent = str(
+        payload.get("closing_fallback_visual_intent") or ""
+    ).strip()
     raw_by_chapter = payload.get("closing_fallback_by_chapter") or {}
     fallback_by_chapter: dict[str, str] = {}
     if isinstance(raw_by_chapter, dict):
@@ -346,6 +358,9 @@ def parse_unified_cut_response(
                 payload.get("voiceover_postroll_sec")
             ),
             closing_fallback_asset_id=closing_fallback,
+            closing_fallback_asset_fit=closing_fallback_fit,
+            closing_fallback_asset_fit_reason=closing_fallback_fit_reason,
+            closing_fallback_visual_intent=closing_fallback_visual_intent,
             closing_fallback_by_chapter=fallback_by_chapter,
         )
     except Exception as exc:  # noqa: BLE001

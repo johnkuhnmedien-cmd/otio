@@ -1275,6 +1275,10 @@ CLOSING:
   Settings postroll/Nachlauf (Python applies the duration).
 - Always set closing_fallback_asset_id to a DIFFERENT chapter-local
   strong/acceptable asset with the same closing intent.
+- ALWAYS also set (Keyword Flow binding; schema stays unified-cut-v1):
+  closing_fallback_asset_fit = strong|acceptable (never weak/none),
+  closing_fallback_asset_fit_reason (non-empty),
+  closing_fallback_visual_intent (same closing intent as primary).
 - Python uses fallback only if primary is technically/rule-unusable.
 
 FORMAT PRINCIPLE (CRITICAL):
@@ -1295,6 +1299,9 @@ OUTPUT SCHEMA:
   "voiceover_preroll_sec": null,
   "voiceover_postroll_sec": null,
   "closing_fallback_asset_id": "existing_asset_id_not_equal_last_slot",
+  "closing_fallback_asset_fit": "strong|acceptable",
+  "closing_fallback_asset_fit_reason": "why this reserve closer is strong/acceptable",
+  "closing_fallback_visual_intent": "same closing intent as primary",
   "pause_directives": [
     {{
       "after_segment_id": "segment_001",
@@ -1361,6 +1368,8 @@ FINAL VALIDATION BEFORE RETURNING JSON:
 - All sentence_ids exist in SENTENCE TIMINGS
 - All local_asset_id values exist in LOCAL ASSETS (or null)
 - closing_fallback_asset_id differs from last slot local_asset_id
+- closing_fallback_asset_fit is strong or acceptable (never weak/none)
+- closing_fallback_asset_fit_reason and closing_fallback_visual_intent non-empty
 - Keyword mid_sentence offsets match delivered cleaned word onsets
 - weak/none → local_asset_id null + gap fields
 - strong/acceptable → coverage_gap_id null

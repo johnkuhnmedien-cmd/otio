@@ -1276,6 +1276,7 @@ def resolve_unified_timeline(
     )
 
     resolved_shots: list[ResolvedShot] = []
+    running_usage: dict[str, int] = {}
     for timed in timed_slots:
         # E2E-4: Legacy-Bridge-Slots aus alten Plänen überspringen.
         if (
@@ -1323,6 +1324,9 @@ def resolve_unified_timeline(
             and last_content_slot_id is not None
             and timed.slot_id == last_content_slot_id
         )
+        closing_need = max(
+            0.0, float(timed.end_seconds) - float(timed.start_seconds)
+        )
         if is_keyword_flow_closing:
             from otio_app.services.without_voiceover_enhanced.keyword_flow_closing import (
                 KeywordFlowClosingError,
@@ -1334,6 +1338,11 @@ def resolve_unified_timeline(
                     primary_id=asset_id,
                     fallback_id=str(plan.closing_fallback_asset_id or ""),
                     catalog=catalog,
+                    min_duration_seconds=closing_need,
+                    expected_folder=start_chapter or None,
+                    usage_counts=running_usage,
+                    max_asset_usage=int(options.max_asset_usage),
+                    plan=plan,
                 )
             except KeywordFlowClosingError as exc:
                 errors.append(f"{timed.slot_id}: {exc}")
@@ -1406,6 +1415,11 @@ def resolve_unified_timeline(
                         fallback_id=str(plan.closing_fallback_asset_id or ""),
                         catalog=catalog,
                         primary_failure=msg,
+                        min_duration_seconds=closing_need,
+                        expected_folder=start_chapter or None,
+                        usage_counts=running_usage,
+                        max_asset_usage=int(options.max_asset_usage),
+                        plan=plan,
                     )
                     resolved = _resolve_shot_media(
                         project,
@@ -1485,6 +1499,9 @@ def resolve_unified_timeline(
         if not resolved.folder_name:
             resolved.folder_name = start_chapter
         resolved_shots.append(resolved)
+        chosen = str(resolved.asset_id or asset_id or "").strip()
+        if chosen and not resolved.open_gap:
+            running_usage[chosen] = int(running_usage.get(chosen, 0)) + 1
 
     ordered = sorted(resolved_shots, key=_resolved_shot_sort_key)
 

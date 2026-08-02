@@ -2129,6 +2129,10 @@ def merge_and_persist_unified_cuts(
     preroll: float | None = None
     postroll: float | None = None
     closing_fallback_by_chapter: dict[str, str] = {}
+    closing_fallback_asset_id: str | None = None
+    closing_fallback_asset_fit: str | None = None
+    closing_fallback_asset_fit_reason = ""
+    closing_fallback_visual_intent = ""
     from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
         is_keyword_flow_unified_style,
         load_cut_plan_options,
@@ -2155,6 +2159,19 @@ def merge_and_persist_unified_cuts(
             value = str(asset_id or "").strip()
             if key and value and key not in closing_fallback_by_chapter:
                 closing_fallback_by_chapter[key] = value
+        # Letztes Kapitel mit Closing-Angaben gewinnt top-level (additiv KF).
+        if plan.closing_fallback_asset_id:
+            closing_fallback_asset_id = str(plan.closing_fallback_asset_id).strip()
+        if plan.closing_fallback_asset_fit:
+            closing_fallback_asset_fit = str(plan.closing_fallback_asset_fit).strip()
+        if plan.closing_fallback_asset_fit_reason:
+            closing_fallback_asset_fit_reason = str(
+                plan.closing_fallback_asset_fit_reason
+            ).strip()
+        if plan.closing_fallback_visual_intent:
+            closing_fallback_visual_intent = str(
+                plan.closing_fallback_visual_intent
+            ).strip()
         if keep_keyword_flow_pauses:
             pauses.extend(list(plan.pause_directives or []))
         # E2E-4: keine bridge_*-Slots. Kapitel N+1 teilt die letzte Grenze von N.
@@ -2182,6 +2199,10 @@ def merge_and_persist_unified_cuts(
         slots=slots,
         voiceover_preroll_sec=preroll,
         voiceover_postroll_sec=postroll,
+        closing_fallback_asset_id=closing_fallback_asset_id,
+        closing_fallback_asset_fit=closing_fallback_asset_fit,
+        closing_fallback_asset_fit_reason=closing_fallback_asset_fit_reason,
+        closing_fallback_visual_intent=closing_fallback_visual_intent,
         closing_fallback_by_chapter=closing_fallback_by_chapter,
     )
     rough, coverage = unified_to_rough(merged)
@@ -2339,6 +2360,9 @@ def mini_repair_unified_plan(
         voiceover_preroll_sec=plan.voiceover_preroll_sec,
         voiceover_postroll_sec=plan.voiceover_postroll_sec,
         closing_fallback_asset_id=plan.closing_fallback_asset_id,
+        closing_fallback_asset_fit=plan.closing_fallback_asset_fit,
+        closing_fallback_asset_fit_reason=plan.closing_fallback_asset_fit_reason,
+        closing_fallback_visual_intent=plan.closing_fallback_visual_intent,
         closing_fallback_by_chapter=dict(plan.closing_fallback_by_chapter or {}),
     )
 

@@ -866,6 +866,9 @@ def test_38_103_to_113_closing_and_fallback() -> None:
     plan_ok = UnifiedCutPlanDocument(
         script_version="v1",
         closing_fallback_asset_id="fallback_a",
+        closing_fallback_asset_fit="acceptable",
+        closing_fallback_asset_fit_reason="reserve closer",
+        closing_fallback_visual_intent="same closing intent as primary",
         boundaries=[
             _boundary("b0", "s", offset=0.0),
             _boundary("b1", "s", position="end"),
@@ -876,9 +879,46 @@ def test_38_103_to_113_closing_and_fallback() -> None:
     )
     assert validate_keyword_flow_closing(plan_ok) == []
 
+    plan_missing_fit = UnifiedCutPlanDocument(
+        script_version="v1",
+        closing_fallback_asset_id="fallback_a",
+        boundaries=[
+            _boundary("b0", "s", offset=0.0),
+            _boundary("b1", "s", position="end"),
+        ],
+        slots=[
+            CutSlot(slot_id="last", local_asset_id="close_a", asset_fit="strong"),
+        ],
+    )
+    assert any(
+        "closing_fallback_asset_fit fehlt" in e
+        for e in validate_keyword_flow_closing(plan_missing_fit)
+    )
+
+    plan_weak_fb = UnifiedCutPlanDocument(
+        script_version="v1",
+        closing_fallback_asset_id="fallback_a",
+        closing_fallback_asset_fit="weak",
+        closing_fallback_asset_fit_reason="too weak",
+        closing_fallback_visual_intent="same",
+        boundaries=[
+            _boundary("b0", "s", offset=0.0),
+            _boundary("b1", "s", position="end"),
+        ],
+        slots=[
+            CutSlot(slot_id="last", local_asset_id="close_a", asset_fit="strong"),
+        ],
+    )
+    assert any(
+        "unzulässig" in e for e in validate_keyword_flow_closing(plan_weak_fb)
+    )
+
     plan_weak_close = UnifiedCutPlanDocument(
         script_version="v1",
         closing_fallback_asset_id="fallback_a",
+        closing_fallback_asset_fit="acceptable",
+        closing_fallback_asset_fit_reason="reserve",
+        closing_fallback_visual_intent="same",
         boundaries=[
             _boundary("b0", "s", offset=0.0),
             _boundary("b1", "s", position="end"),
@@ -891,5 +931,7 @@ def test_38_103_to_113_closing_and_fallback() -> None:
 
     prompt = _kf_prompt()
     assert "closing_fallback_asset_id" in prompt
+    assert "closing_fallback_asset_fit" in prompt
+    assert "closing_fallback_visual_intent" in prompt
     opts = CutPlanOptions()
     assert opts.voiceover_postroll_sec >= 0.0

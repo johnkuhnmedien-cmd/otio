@@ -181,17 +181,23 @@ def _write_alignment_words(
     )
 
 
-def _build_chapter_a_project(tmp_path: Path) -> tuple[Project, dict[str, str]]:
-    root = tmp_path / "KFProd"
+def _build_chapter_a_project(
+    tmp_path: Path,
+    *,
+    project_dirname: str = "KFProd",
+    project_name: str = "KF E2E",
+    project_id: str = "kf-e2e",
+) -> tuple[Project, dict[str, str]]:
+    root = tmp_path / project_dirname
     work = root / DEFAULT_ENHANCED_WORK_SUBDIR
     work.mkdir(parents=True)
     for name in ("ChapterA", "Maps"):
         (root / name).mkdir()
     project = Project(
-        id="kf-e2e",
-        name="KF E2E",
-        project_root=str(root),
-        work_dir=str(work),
+        id=project_id,
+        name=project_name,
+        project_root=str(root.resolve()),
+        work_dir=str(work.resolve()),
         language="de",
         project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
         fps=25.0,
@@ -319,6 +325,9 @@ def _plan_with_pause_and_closing(ids: dict[str, str]) -> UnifiedCutPlanDocument:
     return UnifiedCutPlanDocument(
         script_version="script-v1",
         closing_fallback_asset_id=ids["fallback"],
+        closing_fallback_asset_fit="acceptable",
+        closing_fallback_asset_fit_reason="reserve closer same chapter intent",
+        closing_fallback_visual_intent="same closing intent as primary",
         pause_directives=[
             PauseDirective(
                 after_segment_id=ids["seg"],
@@ -544,3 +553,185 @@ def test_rhythm_and_keyword_sync_strip_pause_directives() -> None:
     sync = parse_unified_cut_response(payload, "script-v1", allow_pause_directives=False)
     assert sync.pause_directives == []
     assert UNIFIED_CUT_STYLE_RHYTHM and UNIFIED_CUT_STYLE_KEYWORD_SYNC
+
+
+def _otio_target_urls(otio_path: Path) -> list[str]:
+    tl = otio.adapters.read_from_file(str(otio_path))
+    urls: list[str] = []
+    for track in tl.tracks:
+        for clip in track:
+            if not isinstance(clip, otio.schema.Clip):
+                continue
+            media = clip.media_reference
+            if media is None:
+                continue
+            target = getattr(media, "target_url", None)
+            if target:
+                urls.append(str(target))
+    return urls
+
+
+def test_closing_primary_valid_keeps_primary(tmp_path: Path) -> None:
+    project, ids = _build_chapter_a_project(tmp_path)
+    plan = _plan_with_pause_and_closing(ids)
+    resolved = resolve_unified_timeline(
+        project, plan, allow_open_gaps=False, persist=True
+    )
+    assert not resolved.errors, resolved.errors
+    assert not any("Fallback" in r for r in resolved.repairs)
+    close_shots = [s for s in resolved.shots if s.asset_id == ids["close"]]
+    assert close_shots
+    out = export_otio_from_resolved_timeline(
+        project, basename="kf_primary_ok", resolved=resolved
+    )
+    urls = _otio_target_urls(out)
+    assert any(u.endswith("close_a.mp4") for u in urls)
+    assert not any(u.endswith("fallback_a.mp4") for u in urls)
+
+
+def test_closing_primary_damaged_uses_fallback_in_otio(tmp_path: Path) -> None:
+    """Primary existiert lokal, ist aber technisch unbrauchbar → Fallback im OTIO."""
+    project, ids = _build_chapter_a_project(tmp_path)
+    primary = Path(project.project_root) / "ChapterA" / "close_a.mp4"
+    primary.write_bytes(b"not-a-valid-video-file")
+    plan = _plan_with_pause_and_closing(ids)
+    assert plan.closing_fallback_asset_fit == "acceptable"
+    resolved = resolve_unified_timeline(
+        project, plan, allow_open_gaps=False, persist=True
+    )
+    assert not resolved.errors, resolved.errors
+    assert any("Fallback" in r and ids["fallback"] in r for r in resolved.repairs)
+    assert any(s.asset_id == ids["fallback"] for s in resolved.shots)
+    editorial_close = [
+        s
+        for s in resolved.shots
+        if s.asset_id == ids["close"]
+        and not str(s.editorial_function or "").startswith("technical_")
+    ]
+    assert not editorial_close
+    out = export_otio_from_resolved_timeline(
+        project, basename="kf_primary_damaged", resolved=resolved
+    )
+    urls = _otio_target_urls(out)
+    assert any("fallback_a.mp4" in u for u in urls)
+    assert not any("close_a.mp4" in u for u in urls)
+
+
+def test_closing_primary_too_short_uses_fallback(tmp_path: Path) -> None:
+    project, ids = _build_chapter_a_project(tmp_path)
+    primary = Path(project.project_root) / "ChapterA" / "close_a.mp4"
+    _ffmpeg_color_video(primary, duration=0.4, color="red")
+    plan = _plan_with_pause_and_closing(ids)
+    resolved = resolve_unified_timeline(
+        project, plan, allow_open_gaps=False, persist=True
+    )
+    assert not resolved.errors, resolved.errors
+    assert any("Fallback" in r for r in resolved.repairs)
+    assert any(s.asset_id == ids["fallback"] for s in resolved.shots)
+    out = export_otio_from_resolved_timeline(
+        project, basename="kf_primary_short", resolved=resolved
+    )
+    assert any("fallback_a.mp4" in u for u in _otio_target_urls(out))
+
+
+def test_closing_usage_rule_forces_fallback(tmp_path: Path) -> None:
+    project, ids = _build_chapter_a_project(tmp_path)
+    save_cut_plan_options(
+        project,
+        CutPlanOptions(
+            cut_plan_mode=CUT_PLAN_MODE_UNIFIED,
+            unified_cut_style=UNIFIED_CUT_STYLE_KEYWORD_FLOW,
+            shot_min_sec=4.0,
+            shot_max_sec=9.0,
+            voiceover_preroll_sec=1.0,
+            voiceover_postroll_sec=2.0,
+            video_head_trim_sec=0.0,
+            still_image_style_enabled=False,
+            max_asset_usage=1,
+        ),
+    )
+    plan = _plan_with_pause_and_closing(ids)
+    # Erster Slot verbraucht Primary Closing → Usage-Regel zwingt Fallback.
+    plan.slots[0].local_asset_id = ids["close"]
+    resolved = resolve_unified_timeline(
+        project, plan, allow_open_gaps=False, persist=True
+    )
+    assert not resolved.errors, resolved.errors
+    assert any("Fallback" in r for r in resolved.repairs)
+    editorial = [
+        s
+        for s in resolved.shots
+        if not str(s.editorial_function or "").startswith("technical_")
+        and s.asset_id
+    ]
+    close_uses = [s for s in editorial if s.asset_id == ids["close"]]
+    assert len(close_uses) == 1
+    assert any(s.asset_id == ids["fallback"] for s in editorial)
+
+
+def test_closing_fallback_damaged_blocks(tmp_path: Path) -> None:
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        UnifiedTimelineError,
+    )
+
+    project, ids = _build_chapter_a_project(tmp_path)
+    primary = Path(project.project_root) / "ChapterA" / "close_a.mp4"
+    primary.write_bytes(b"broken-primary")
+    fallback = Path(project.project_root) / "ChapterA" / "fallback_a.mp4"
+    fallback.write_bytes(b"broken-fallback")
+    plan = _plan_with_pause_and_closing(ids)
+    with pytest.raises(UnifiedTimelineError):
+        resolve_unified_timeline(
+            project, plan, allow_open_gaps=False, persist=True
+        )
+
+
+def test_closing_weak_fallback_fit_blocks(tmp_path: Path) -> None:
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        UnifiedTimelineError,
+    )
+
+    project, ids = _build_chapter_a_project(tmp_path)
+    plan = _plan_with_pause_and_closing(ids)
+    plan.closing_fallback_asset_fit = "weak"
+    with pytest.raises(UnifiedTimelineError, match="Fallback-Fit|unzulässig|weak"):
+        resolve_unified_timeline(
+            project, plan, allow_open_gaps=False, persist=True
+        )
+
+
+def test_persistent_local_and_portable_otio_refs(tmp_path: Path) -> None:
+    from otio_app.services.without_voiceover_enhanced.otio_export_service import (
+        export_portable_otio_package,
+    )
+
+    project, ids = _build_chapter_a_project(tmp_path)
+    plan = _plan_with_pause_and_closing(ids)
+    resolved = resolve_unified_timeline(
+        project, plan, allow_open_gaps=False, persist=True
+    )
+    assert not resolved.errors, resolved.errors
+    local = export_otio_from_resolved_timeline(
+        project, basename="kf_persist_local", resolved=resolved
+    )
+    package = export_portable_otio_package(
+        project, basename="kf_persist_portable", allow_errors=False
+    )
+    portable_otio = package / "timeline.otio"
+    assert local.is_file()
+    assert portable_otio.is_file()
+    for url in _otio_target_urls(local):
+        assert not url.lower().startswith("http")
+        assert "/tmp/kf_" not in url
+        assert Path(url).is_file()
+    package_resolved = package.resolve()
+    for url in _otio_target_urls(portable_otio):
+        assert not url.lower().startswith("http")
+        assert "/tmp/kf_" not in url
+        target = Path(url)
+        if not target.is_absolute():
+            target = (package / url).resolve()
+        else:
+            target = target.resolve()
+        assert target.is_file()
+        assert str(target).startswith(str(package_resolved))
