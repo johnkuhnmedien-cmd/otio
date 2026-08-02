@@ -1826,9 +1826,30 @@ def generate_unified_cut_for_folder(
             else _dramaturgy_text(project)
         )
         segment_ids = [seg.segment_id for seg in context.script_slice.segments]
-        sentence_timings_json = build_sentence_timings_json_for_segments(
-            project, segment_ids=segment_ids
+        from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+            is_keyword_flow_unified_style,
+            is_keyword_sync_unified_style,
         )
+
+        use_keyword_flow = (not is_intro) and is_keyword_flow_unified_style(options)
+        sentence_timings_json = build_sentence_timings_json_for_segments(
+            project,
+            segment_ids=segment_ids,
+            keyword_flow_clean=use_keyword_flow,
+        )
+        if use_keyword_flow:
+            from otio_app.services.without_voiceover_enhanced.sentence_timing_prompt import (
+                chapter_has_usable_keyword_flow_words,
+            )
+
+            rows = json.loads(sentence_timings_json or "[]")
+            if not isinstance(rows, list) or not chapter_has_usable_keyword_flow_words(
+                rows
+            ):
+                raise CutPlanError(
+                    "Keyword Flow benötigt echte ElevenLabs-Wort-Timestamps "
+                    "für dieses Kapitel."
+                )
         if is_intro:
             from otio_app.services.without_voiceover_enhanced.script_prompts import (
                 build_intro_unified_cut_prompt,
@@ -1857,11 +1878,35 @@ def generate_unified_cut_for_folder(
                 intro_audio_duration_seconds=intro_duration,
             )
         else:
-            from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
-                is_keyword_sync_unified_style,
-            )
+            if use_keyword_flow:
+                from otio_app.services.without_voiceover_enhanced.script_prompts import (
+                    build_keyword_flow_unified_cut_prompt,
+                )
 
-            if is_keyword_sync_unified_style(options):
+                prompt = build_keyword_flow_unified_cut_prompt(
+                    locked_script_json=context.script_slice.model_dump_json(
+                        indent=2
+                    ),
+                    segment_timings_json=context.timings_slice.model_dump_json(
+                        indent=2
+                    ),
+                    local_assets_json=json.dumps(
+                        local_assets, ensure_ascii=False, indent=2
+                    ),
+                    style_profile_text=_style_text(project),
+                    dramaturgy_text=dramaturgy_text,
+                    folder_name=folder_name,
+                    folder_slug=context.folder_slug,
+                    previous_folder_name=context.previous_folder_name,
+                    next_folder_name=context.next_folder_name,
+                    include_middle_frames=include_frames,
+                    shot_constraints_text=format_shot_constraints_for_prompt(
+                        options
+                    ),
+                    sentence_timings_json=sentence_timings_json,
+                    used_in_ledger_text=used_in_ledger_text,
+                )
+            elif is_keyword_sync_unified_style(options):
                 from otio_app.services.without_voiceover_enhanced.script_prompts import (
                     build_keyword_sync_unified_cut_prompt,
                 )
@@ -1948,6 +1993,8 @@ def generate_unified_cut_for_folder(
             raw_text,
             locked.script_version,
             folder_slug=context.folder_slug,
+            allow_pause_directives=use_keyword_flow,
+            nullify_weak_assets=use_keyword_flow,
         )
         if not plan.slots:
             raise CutPlanError("LLM-Antwort enthielt keine Slots.")
@@ -2082,6 +2129,18 @@ def merge_and_persist_unified_cuts(
     preroll: float | None = None
     postroll: float | None = None
     closing_fallback_by_chapter: dict[str, str] = {}
+    closing_fallback_asset_id: str | None = None
+    closing_fallback_asset_fit: str | None = None
+    closing_fallback_asset_fit_reason = ""
+    closing_fallback_visual_intent = ""
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        is_keyword_flow_unified_style,
+        load_cut_plan_options,
+    )
+
+    keep_keyword_flow_pauses = is_keyword_flow_unified_style(
+        load_cut_plan_options(project)
+    )
 
     for result in ok:
         plan = result.plan
@@ -2100,7 +2159,21 @@ def merge_and_persist_unified_cuts(
             value = str(asset_id or "").strip()
             if key and value and key not in closing_fallback_by_chapter:
                 closing_fallback_by_chapter[key] = value
-        # Pause-Directives abgeschaltet — nicht mergen.
+        # Letztes Kapitel mit Closing-Angaben gewinnt top-level (additiv KF).
+        if plan.closing_fallback_asset_id:
+            closing_fallback_asset_id = str(plan.closing_fallback_asset_id).strip()
+        if plan.closing_fallback_asset_fit:
+            closing_fallback_asset_fit = str(plan.closing_fallback_asset_fit).strip()
+        if plan.closing_fallback_asset_fit_reason:
+            closing_fallback_asset_fit_reason = str(
+                plan.closing_fallback_asset_fit_reason
+            ).strip()
+        if plan.closing_fallback_visual_intent:
+            closing_fallback_visual_intent = str(
+                plan.closing_fallback_visual_intent
+            ).strip()
+        if keep_keyword_flow_pauses:
+            pauses.extend(list(plan.pause_directives or []))
         # E2E-4: keine bridge_*-Slots. Kapitel N+1 teilt die letzte Grenze von N.
         if not boundaries:
             boundaries.extend(plan.boundaries)
@@ -2121,11 +2194,15 @@ def merge_and_persist_unified_cuts(
 
     merged = UnifiedCutPlanDocument(
         script_version=locked.script_version,
-        pause_directives=pauses,
+        pause_directives=pauses if keep_keyword_flow_pauses else [],
         boundaries=boundaries,
         slots=slots,
         voiceover_preroll_sec=preroll,
         voiceover_postroll_sec=postroll,
+        closing_fallback_asset_id=closing_fallback_asset_id,
+        closing_fallback_asset_fit=closing_fallback_asset_fit,
+        closing_fallback_asset_fit_reason=closing_fallback_asset_fit_reason,
+        closing_fallback_visual_intent=closing_fallback_visual_intent,
         closing_fallback_by_chapter=closing_fallback_by_chapter,
     )
     rough, coverage = unified_to_rough(merged)
@@ -2152,8 +2229,9 @@ def merge_and_persist_unified_cuts(
             body=merged,
             script_version=locked.script_version,
         )
-        # Pause-Directives bleiben leer (auch wenn Intro-Fragment noch welche hat).
-        merged = merged.model_copy(update={"pause_directives": []})
+        # Intro behält keine Pause-Directives; Körper-Keyword-Flow behält seine.
+        body_pauses = list(pauses) if keep_keyword_flow_pauses else []
+        merged = merged.model_copy(update={"pause_directives": body_pauses})
         rough, coverage = unified_to_rough(merged)
         coverage = enrich_coverage_search_concepts(project, coverage, plan=merged)
 
@@ -2168,7 +2246,16 @@ def merge_and_persist_unified_cuts(
     write_json(unified_cut_plan_path(project), merged)
     write_json(rough_cut_plan_path(project), rough)
     write_json(coverage_gaps_path(project), coverage)
-    write_json(pause_directives_path(project), {"directives": []})
+    write_json(
+        pause_directives_path(project),
+        {
+            "directives": [
+                d.model_dump(mode="json") for d in (merged.pause_directives or [])
+            ]
+            if keep_keyword_flow_pauses
+            else []
+        },
+    )
     # Manuelle/Funnel-Fills mit gleicher Gap-ID auf neue Run-ID übernehmen.
     rebind_gap_fills_to_current_run(project)
     return merged
@@ -2273,6 +2360,9 @@ def mini_repair_unified_plan(
         voiceover_preroll_sec=plan.voiceover_preroll_sec,
         voiceover_postroll_sec=plan.voiceover_postroll_sec,
         closing_fallback_asset_id=plan.closing_fallback_asset_id,
+        closing_fallback_asset_fit=plan.closing_fallback_asset_fit,
+        closing_fallback_asset_fit_reason=plan.closing_fallback_asset_fit_reason,
+        closing_fallback_visual_intent=plan.closing_fallback_visual_intent,
         closing_fallback_by_chapter=dict(plan.closing_fallback_by_chapter or {}),
     )
 

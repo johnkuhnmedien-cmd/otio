@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    KEYWORD_FLOW_PAUSE_SAFETY_FRAMES,
+)
 from otio_app.services.without_voiceover_enhanced.models import (
     IntraPauseMarker,
     NarrationTimelineDocument,
@@ -11,6 +16,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
     SentenceTiming,
 )
 from otio_app.services.without_voiceover_enhanced.pause_config import (
+    resolve_keyword_flow_pause_duration_seconds,
     resolve_pause_duration_seconds,
 )
 
@@ -129,26 +135,205 @@ def _build_intra_pauses(
     return markers, round(trailing_pause, 6)
 
 
+def _word_end_before(
+    words: list[dict[str, Any]],
+    *,
+    at_or_before: float,
+) -> float | None:
+    best: float | None = None
+    for word in words:
+        end = float(word.get("end_seconds") or 0.0)
+        if end <= at_or_before + 1e-9:
+            if best is None or end > best:
+                best = end
+    return best
+
+
+def _word_start_after(
+    words: list[dict[str, Any]],
+    *,
+    at_or_after: float,
+) -> float | None:
+    best: float | None = None
+    for word in words:
+        start = float(word.get("start_seconds") or 0.0)
+        if start >= at_or_after - 1e-9:
+            if best is None or start < best:
+                best = start
+    return best
+
+
+def _build_keyword_flow_intra_pauses(
+    *,
+    segment_id: str,
+    audio_duration_seconds: float,
+    sentence_directives: list[PauseDirective],
+    sentence_index: dict[str, SentenceTiming],
+    segment_words: list[dict[str, Any]],
+    fps: float,
+    repairs: list[str] | None = None,
+) -> tuple[list[IntraPauseMarker], float]:
+    """Fail-closed Pausenverlängerung mit 5-Frame-Sicherheitsabstand."""
+    notes = repairs if repairs is not None else []
+    if not sentence_directives:
+        return [], 0.0
+    rate = float(fps) if float(fps) > 0 else 25.0
+    safety = KEYWORD_FLOW_PAUSE_SAFETY_FRAMES / rate
+    sentences = _sentences_for_segment(sentence_index, segment_id)
+    by_id = {item.sentence_id: item for item in sentences}
+    markers: list[IntraPauseMarker] = []
+    trailing_pause = 0.0
+    seen: set[str] = set()
+
+    for directive in sentence_directives:
+        function = str(directive.pause_function or "").strip().lower()
+        if function == "no_pause":
+            continue
+        sentence_id = str(directive.after_sentence_id or "").strip()
+        if not sentence_id:
+            # Segment-trailing Pause ohne Satzanker — nur nach Segmentende.
+            try:
+                extra = resolve_keyword_flow_pause_duration_seconds(
+                    directive.duration_class,
+                    pause_function=directive.pause_function,
+                )
+            except ValueError as exc:
+                raise PauseResolveError(str(exc)) from exc
+            if extra > 0:
+                trailing_pause = max(trailing_pause, float(extra))
+            continue
+        if sentence_id in seen:
+            continue
+        sentence = by_id.get(sentence_id)
+        if sentence is None:
+            raise PauseResolveError(
+                f"Keyword Flow: unbekannte after_sentence_id {sentence_id}."
+            )
+        next_sentence = None
+        for candidate in sentences:
+            if candidate.start_seconds > sentence.end_seconds + 1e-9:
+                next_sentence = candidate
+                break
+        try:
+            extra = resolve_keyword_flow_pause_duration_seconds(
+                directive.duration_class,
+                pause_function=directive.pause_function,
+            )
+        except ValueError as exc:
+            raise PauseResolveError(str(exc)) from exc
+        if extra <= 0:
+            continue
+
+        prev_end = _word_end_before(
+            segment_words, at_or_before=float(sentence.end_seconds) + 0.05
+        )
+        if prev_end is None:
+            raise PauseResolveError(
+                f"Keyword Flow: Pause nach {sentence_id} ohne vorheriges Wortende."
+            )
+        if next_sentence is None:
+            # Trailing nach letztem Satz: zusätzliche Stille nach Segmentende.
+            seen.add(sentence_id)
+            trailing_pause = max(trailing_pause, float(extra))
+            notes.append(
+                f"keyword_flow_pause: {sentence_id} trailing +{extra:.2f}s "
+                f"(after last sentence)."
+            )
+            continue
+
+        next_start = _word_start_after(
+            segment_words, at_or_after=float(next_sentence.start_seconds) - 0.05
+        )
+        if next_start is None:
+            raise PauseResolveError(
+                f"Keyword Flow: Pause nach {sentence_id} ohne nächstes Wort."
+            )
+        natural_gap = float(next_start) - float(prev_end)
+        # Überlappende / unsicher trennbare Wörter: fail-closed.
+        if natural_gap + 1e-9 < 0:
+            raise PauseResolveError(
+                f"Keyword Flow: Pause nach {sentence_id} innerhalb unsicherem "
+                f"Audioabschnitt (prev_end={prev_end:.3f}s > "
+                f"next_start={next_start:.3f}s)."
+            )
+        # Zusätzliche Stille wird eingefügt — keine 10-Frame-Naturstille voraussetzen.
+        # Nach Einfügen muss ±5 Frames Abstand zum vorherigen/nächsten Wort existieren.
+        if natural_gap + float(extra) + 1e-9 < 2.0 * safety:
+            raise PauseResolveError(
+                f"Keyword Flow: Pause nach {sentence_id} ohne 5-Frame-"
+                f"Sicherheitsbereich nach Einfügen "
+                f"(natural_gap={natural_gap:.3f}s + extra={extra:.3f}s "
+                f"< {2.0 * safety:.3f}s)."
+            )
+        # Split an belegter Wort-/Satzgrenze (Mitte der natürlichen Lücke,
+        # auch wenn die Lücke kleiner als 2×Safety ist).
+        split = mid_silence_split_seconds(
+            sentence=sentence,
+            next_sentence=next_sentence,
+            audio_duration_seconds=audio_duration_seconds,
+        )
+        split = max(float(prev_end), min(float(split), float(next_start)))
+        seen.add(sentence_id)
+        markers.append(
+            IntraPauseMarker(
+                after_sentence_id=sentence_id,
+                source_split_seconds=round(float(split), 6),
+                pause_seconds=round(float(extra), 6),
+            )
+        )
+        # Post-insert safe window (Timeline relativ zur Split-Nachbarschaft).
+        safe_start, safe_end = safe_pause_window_timeline(
+            previous_word_end_timeline=float(prev_end),
+            next_word_start_timeline=float(next_start) + float(extra),
+            fps=rate,
+        )
+        notes.append(
+            f"keyword_flow_pause: {sentence_id} +{extra:.2f}s at source "
+            f"{split:.3f}s (safety={safety:.3f}s @{rate:.0f}fps; "
+            f"safe_window={safe_start:.3f}–{safe_end:.3f}s)."
+        )
+    markers.sort(key=lambda item: item.source_split_seconds)
+    return markers, round(trailing_pause, 6)
+
+
 def build_narration_timeline(
     *,
     script_version: str,
     segment_timings: list[SegmentTiming],
     pause_directives: list[PauseDirective],
     sentence_index: dict[str, SentenceTiming] | None = None,
+    enable_keyword_flow_pauses: bool = False,
+    segment_words_by_id: dict[str, list[dict[str, Any]]] | None = None,
+    fps: float = 25.0,
+    repairs: list[str] | None = None,
 ) -> NarrationTimelineDocument:
     """Ende Voice-Segment + aufgelöste Pause = Beginn nächstes Segment.
 
-    Pause-Directives sind deaktiviert (Intro + Kapitel): Eingaben werden
-    ignoriert — keine Intra-Pausen, kein ``pause_after``. Schema/Parameter
-    bleiben für API-Kompatibilität erhalten.
+    Default (Rhythm / Keyword-Sync / Intro): Pause-Directives werden ignoriert.
+    Keyword Flow: fail-closed Verlängerung mit Wortgrenzen + 5-Frame-Safety.
     """
-    del pause_directives, sentence_index  # Pausen bewusst abgeschaltet.
     if not segment_timings:
         raise PauseResolveError("Keine Segment-Timings vorhanden.")
 
     ordered = list(segment_timings)
     entries: list[NarrationTimelineEntry] = []
     cursor = 0.0
+    index_map = sentence_index or {}
+    words_by_seg = segment_words_by_id or {}
+
+    # Directives nach Segment gruppieren (via after_sentence_id → segment).
+    directives_by_segment: dict[str, list[PauseDirective]] = {}
+    if enable_keyword_flow_pauses and pause_directives:
+        for directive in pause_directives:
+            sid = str(directive.after_sentence_id or "").strip()
+            if sid and sid in index_map:
+                seg = index_map[sid].segment_id
+            else:
+                seg = str(directive.after_segment_id or "").strip()
+            if not seg:
+                continue
+            directives_by_segment.setdefault(seg, []).append(directive)
+
     for index, timing in enumerate(ordered):
         if timing.audio_status != "valid":
             raise PauseResolveError(
@@ -160,27 +345,59 @@ def build_narration_timeline(
                 f"{timing.script_version} != {script_version}"
             )
         audio_duration = float(timing.duration_seconds)
+        intra: list[IntraPauseMarker] = []
+        pause_after = 0.0
+        if enable_keyword_flow_pauses:
+            intra, pause_after = _build_keyword_flow_intra_pauses(
+                segment_id=timing.segment_id,
+                audio_duration_seconds=audio_duration,
+                sentence_directives=list(
+                    directives_by_segment.get(timing.segment_id) or []
+                ),
+                sentence_index=index_map,
+                segment_words=list(words_by_seg.get(timing.segment_id) or []),
+                fps=fps,
+                repairs=repairs,
+            )
         start = cursor
-        end = start + audio_duration
-        next_start = end
+        timeline_audio_end = start + audio_duration
+        for pause in intra:
+            timeline_audio_end += float(pause.pause_seconds)
+        end = timeline_audio_end
+        next_start = end + float(pause_after)
         entries.append(
             NarrationTimelineEntry(
                 segment_id=timing.segment_id,
                 start_seconds=round(start, 6),
                 end_seconds=round(end, 6),
-                pause_after_seconds=0.0,
+                pause_after_seconds=round(float(pause_after), 6),
                 next_segment_start_seconds=(
                     round(next_start, 6) if index < len(ordered) - 1 else None
                 ),
                 audio_duration_seconds=round(audio_duration, 6),
-                intra_pauses=[],
+                intra_pauses=intra,
             )
         )
         cursor = next_start
 
-    total = entries[-1].end_seconds
+    total = entries[-1].end_seconds + float(entries[-1].pause_after_seconds or 0.0)
     return NarrationTimelineDocument(
         script_version=script_version,
         total_duration_seconds=round(total, 6),
         entries=entries,
+    )
+
+
+def safe_pause_window_timeline(
+    *,
+    previous_word_end_timeline: float,
+    next_word_start_timeline: float,
+    fps: float,
+) -> tuple[float, float]:
+    """safe_pause_start/end mit 5 Timelineframes Abstand."""
+    rate = float(fps) if float(fps) > 0 else 25.0
+    margin = KEYWORD_FLOW_PAUSE_SAFETY_FRAMES / rate
+    return (
+        round(float(previous_word_end_timeline) + margin, 6),
+        round(float(next_word_start_timeline) - margin, 6),
     )

@@ -8,8 +8,10 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from otio_app.models import Project
+from otio_app.project_layout import safe_folder_slug
 from otio_app.services.inventory_loader import load_folder_inventory
 from otio_app.services.media_utils import (
     is_image_media,
@@ -1207,6 +1209,8 @@ def _apply_chapter_envelopes(
     closing_fallback_by_chapter: dict[str, str] | None = None,
     head_trim: float = 0.0,
     short_tolerance: float = 0.0,
+    enable_map_opener: bool = False,
+    map_decisions: dict[str, Any] | None = None,
 ) -> list[ResolvedChapterEnvelope]:
     """Kapitelhüllen: Vor-/Nachlauf am Opening/Closing-CONTENT-Shot.
 
@@ -1478,6 +1482,49 @@ def _apply_chapter_envelopes(
 
         chapter_preroll = float(preroll)
         chapter_postroll = float(postroll)
+        map_shot: ResolvedShot | None = None
+        if enable_map_opener:
+            from otio_app.services.without_voiceover_enhanced.keyword_flow_maps import (
+                decide_map_opener,
+            )
+
+            decision = decide_map_opener(project, chapter_id)
+            if map_decisions is not None:
+                map_decisions[chapter_id] = {
+                    "status": decision.status,
+                    "warning": decision.warning,
+                    "asset_id": decision.asset_id,
+                    "media_path": decision.media_path,
+                    "source_duration_seconds": decision.source_duration_seconds,
+                    "opener_seconds": decision.opener_seconds,
+                }
+            if decision.warning:
+                repairs.append(decision.warning)
+            if decision.status == "used" and decision.media_path:
+                chapter_preroll = float(decision.opener_seconds)
+                map_shot = ResolvedShot(
+                    shot_id=f"{safe_folder_slug(chapter_id)}_map_opener",
+                    asset_id=str(decision.asset_id or "map_opener"),
+                    timeline_start_seconds=0.0,
+                    timeline_end_seconds=float(decision.opener_seconds),
+                    source_start_seconds=0.0,
+                    source_end_seconds=float(decision.opener_seconds),
+                    editorial_function="technical_chapter_map_opener",
+                    folder_name=chapter_id,
+                    chapter_id=chapter_id,
+                    resolved_media_path=str(decision.media_path),
+                    resolved_media_kind="video",
+                    resolved_available_start_seconds=0.0,
+                    resolved_media_duration_seconds=float(
+                        decision.source_duration_seconds or decision.opener_seconds
+                    ),
+                    asset_fit="strong",
+                    asset_fit_reason="keyword_flow map opener (audio ignored)",
+                )
+                repairs.append(
+                    f"Kapitel {chapter_id}: Map-Opener {decision.opener_seconds:.1f}s "
+                    f"vor VO ({decision.asset_id})."
+                )
 
         chapter_video_start = _seconds_to_frame(cursor, fps)
         chapter_audio_start = _seconds_to_frame(
@@ -1505,13 +1552,27 @@ def _apply_chapter_envelopes(
             if shot.timeline_end_seconds < shot.timeline_start_seconds:
                 shot.timeline_end_seconds = shot.timeline_start_seconds
 
+        if map_shot is not None:
+            map_shot.timeline_start_seconds = round(chapter_video_start, 6)
+            map_shot.timeline_end_seconds = round(chapter_audio_start, 6)
+            map_shot.chapter_id = chapter_id
+            map_shot.folder_name = chapter_id
+            ordered.append(map_shot)
+            ch_shots.append(map_shot)
+            raw_shot_times[map_shot.shot_id] = (
+                raw_audio_start - float(chapter_preroll),
+                raw_audio_start,
+            )
+
         first = min(ch_shots, key=lambda s: (s.timeline_start_seconds, s.shot_id))
         last = max(ch_shots, key=lambda s: (s.timeline_end_seconds, s.shot_id))
 
         preroll_hold_id = ""
         postroll_hold_id = ""
+        # Map-Opener ersetzt den normalen Vorlauf — kein Content-Preroll-Hold.
         if (
-            chapter_preroll > 1e-9
+            map_shot is None
+            and chapter_preroll > 1e-9
             and first.timeline_start_seconds > chapter_video_start + 1e-9
         ):
             first.timeline_start_seconds = round(chapter_video_start, 6)
@@ -1576,13 +1637,28 @@ def _apply_chapter_envelopes(
         cursor = chapter_video_end
 
     # Envelope-Validierung: preroll/postroll je Kapitel == Settings (Intro ausgenommen).
+    # Keyword-Flow Map-Opener ersetzt den Settings-Vorlauf (typisch 9.0s).
+    map_opener_chapters = {
+        str(shot.chapter_id or shot.folder_name or "")
+        for shot in ordered
+        if str(shot.editorial_function or "") == "technical_chapter_map_opener"
+    }
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        KEYWORD_FLOW_MAP_OPENER_SEC,
+    )
+
     for env in envelopes:
         if _is_intro_folder(env.chapter_id):
             continue
-        if abs(env.preroll_seconds - float(preroll)) > 1e-3:
+        expected_preroll = (
+            float(KEYWORD_FLOW_MAP_OPENER_SEC)
+            if env.chapter_id in map_opener_chapters
+            else float(preroll)
+        )
+        if abs(env.preroll_seconds - expected_preroll) > 1e-3:
             errors.append(
                 f"Kapitel {env.chapter_id}: preroll {env.preroll_seconds:.2f}s "
-                f"≠ Settings {preroll:.2f}s."
+                f"≠ erwartet {expected_preroll:.2f}s."
             )
         if abs(env.postroll_seconds - float(postroll)) > 1e-3:
             errors.append(

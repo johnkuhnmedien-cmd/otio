@@ -63,11 +63,16 @@ def _append_log_file(line: str) -> None:
             continue
 
 
-def render_activity_panel(*, expanded: bool = False) -> None:
+def render_activity_panel(
+    *,
+    expanded: bool = False,
+    key_scope: str = "sidebar",
+) -> None:
     """Zeigt laufende Jobs, Thread-Status und letzte Script-Läufe."""
     reconcile_all_jobs()
     running = running_job_count()
     run_count = int(st.session_state.get(_RUN_COUNT_KEY, 0))
+    scope = str(key_scope or "sidebar").strip() or "sidebar"
 
     with st.expander("🔍 Hintergrund-Aktivität", expanded=expanded or running > 0):
         st.caption(
@@ -114,7 +119,10 @@ def render_activity_panel(*, expanded: bool = False) -> None:
                 + ", ".join(f"`{path}`" for path in existing_logs[:2])
             )
 
-        if st.button("Alle Hintergrund-Jobs zurücksetzen", key="force_reset_all_jobs"):
+        if st.button(
+            "Alle Hintergrund-Jobs zurücksetzen",
+            key=f"force_reset_all_jobs_{scope}",
+        ):
             reset_count = force_reset_all_jobs()
             line = (
                 f"{datetime.now(timezone.utc).isoformat()} · "

@@ -329,6 +329,11 @@ class UnifiedCutPlanDocument(BaseModel):
     # Kapitel-Plan: Reserve-Closer, falls der letzte Slot vor Audio-Ende endet.
     # Python Timing hängt ihn nur bei abschließender Narrations-Lücke an.
     closing_fallback_asset_id: Optional[str] = None
+    # Keyword Flow (additiv, unified-cut-v1): redaktionelle Fallback-Angaben.
+    # Ältere Pläne bleiben ohne diese Felder lesbar; neue KF-Pläne verlangen sie.
+    closing_fallback_asset_fit: Optional[str] = None
+    closing_fallback_asset_fit_reason: str = ""
+    closing_fallback_visual_intent: str = ""
     # Merged Gesamtplan: Fallback pro Kapitel-/Folder-Name.
     closing_fallback_by_chapter: dict[str, str] = Field(default_factory=dict)
 

@@ -13,6 +13,7 @@ from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
 )
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     CutPlanOptions,
+    is_keyword_flow_unified_style,
     load_cut_plan_options,
     resolve_timing_seconds,
 )
@@ -634,11 +635,26 @@ def resolve_timed_slots(
     catalog: AssetCatalog | None = None,
     slot_usable_max: list[float | None] | None = None,
     segment_to_chapter: dict[str, str] | None = None,
+    keyword_flow: bool = False,
+    sentence_rows_by_id: dict[str, dict] | None = None,
 ) -> list[TimedSlot]:
     """Grenzen-Kette → TimedSlots (VO-absolut, vor Kapitel-Hülle)."""
     notes = repairs if repairs is not None else []
     if not plan.slots:
         return []
+
+    if keyword_flow and sentence_rows_by_id is not None:
+        from otio_app.services.without_voiceover_enhanced.keyword_flow_timing import (
+            KeywordFlowTimingError,
+            validate_keyword_flow_mid_sentence_onsets,
+        )
+
+        try:
+            validate_keyword_flow_mid_sentence_onsets(
+                plan, sentence_rows_by_id=sentence_rows_by_id
+            )
+        except KeywordFlowTimingError as exc:
+            raise UnifiedTimelineError(str(exc)) from exc
 
     raw_times: list[float] = []
     for boundary in plan.boundaries:
@@ -679,7 +695,7 @@ def resolve_timed_slots(
     # Intro only: Cut-Plan shot_min/max aushebeln — LLM darf präzise
     # Keyword-Kurzschnitte (~1s) und lange Closing-Holds über Rest-VO behalten.
     # Technischer Floor/Ceiling bleiben TECH_MIN/TECH_MAX.
-    # Keyword-Sync (Körper): shot_min/max gelten weiter (Settings → LLM + Clamp).
+    # Keyword-Sync/Flow (Körper): shot_min/max gelten weiter (Settings → LLM + Clamp).
     intro_editorial_min = TECH_MIN_SHOT_SECONDS
     intro_editorial_max = TECH_MAX_SHOT_SECONDS
     slot_editorial_mins = [
@@ -701,6 +717,7 @@ def resolve_timed_slots(
         if slot_usable_max is not None
         else _slot_usable_max_from_catalog(plan, catalog, head_trim=head_trim)
     )
+    onset_anchor_times = list(raw_times)
     times = _clamp_boundary_times(
         raw_times,
         editorial_min=editorial_min,
@@ -713,6 +730,21 @@ def resolve_timed_slots(
         max_media_iterations=2,
         fps=fps,
     )
+    if keyword_flow:
+        from otio_app.services.without_voiceover_enhanced.keyword_flow_timing import (
+            KeywordFlowTimingError,
+            apply_keyword_flow_onset_tolerance,
+        )
+
+        try:
+            times = apply_keyword_flow_onset_tolerance(
+                plan=plan,
+                raw_times=onset_anchor_times,
+                clamped_times=times,
+                repairs=notes,
+            )
+        except KeywordFlowTimingError as exc:
+            raise UnifiedTimelineError(str(exc)) from exc
     # Nach Clamp: Intro-VO-Teppich erneut an Audio-Start/Ende pinnen.
     # Sonst kann usable-Toleranz-Klemme die letzte Grenze vor das VO-Ende ziehen
     # → schwarzes Bild bei laufendem Intro-Audio.
@@ -737,7 +769,7 @@ def resolve_timed_slots(
         end_sid = str(end_b.sentence_id or "").strip()
         fit = str(slot.asset_fit or "none").strip().lower()
         asset_id = slot.local_asset_id
-        if fit == "none":
+        if fit == "none" or (keyword_flow and fit == "weak"):
             asset_id = None
         slots.append(
             TimedSlot(
@@ -1131,12 +1163,56 @@ def resolve_unified_timeline(
             raise UnifiedTimelineError(
                 "Keine Segment-Timings für den gewählten Kapitel-Filter."
             )
-    timeline = build_narration_timeline(
-        script_version=locked.script_version,
-        segment_timings=timing_segments,
-        pause_directives=list(plan.pause_directives),
-        sentence_index=sentence_index,
-    )
+    keyword_flow = is_keyword_flow_unified_style(options)
+    if keyword_flow:
+        from otio_app.services.without_voiceover_enhanced.keyword_flow_closing import (
+            validate_keyword_flow_closing,
+        )
+
+        closing_errors = validate_keyword_flow_closing(plan, catalog=catalog)
+        if closing_errors:
+            errors.extend(closing_errors)
+    words_by_segment: dict[str, list[dict]] = {}
+    sentence_rows_by_id: dict[str, dict] | None = None
+    if keyword_flow:
+        from otio_app.services.without_voiceover_enhanced.keyword_flow_timing import (
+            sentence_rows_from_alignments,
+        )
+        from otio_app.services.without_voiceover_enhanced.sentence_timing_prompt import (
+            load_elevenlabs_alignment_for_segment,
+            words_from_elevenlabs_alignment,
+        )
+
+        for timing in timing_segments:
+            raw = load_elevenlabs_alignment_for_segment(project, timing.segment_id)
+            seg_words = words_from_elevenlabs_alignment(raw)
+            words_by_segment[timing.segment_id] = [
+                {**word, "original_word_index": index}
+                for index, word in enumerate(seg_words)
+            ]
+        sentence_rows_by_id = sentence_rows_from_alignments(
+            sentence_index=sentence_index,
+            words_by_segment=words_by_segment,
+        )
+    try:
+        timeline = build_narration_timeline(
+            script_version=locked.script_version,
+            segment_timings=timing_segments,
+            pause_directives=list(plan.pause_directives),
+            sentence_index=sentence_index,
+            enable_keyword_flow_pauses=keyword_flow,
+            segment_words_by_id=words_by_segment,
+            fps=fps,
+            repairs=repairs,
+        )
+    except Exception as exc:  # noqa: BLE001
+        from otio_app.services.without_voiceover_enhanced.pause_resolver import (
+            PauseResolveError,
+        )
+
+        if isinstance(exc, PauseResolveError):
+            raise UnifiedTimelineError(str(exc)) from exc
+        raise
 
     # Ziel-Dauer in Slots nachziehen (Funnel-Dauerfilter, Phase 4).
     timed_slots = resolve_timed_slots(
@@ -1148,6 +1224,8 @@ def resolve_unified_timeline(
         repairs=repairs,
         catalog=catalog,
         segment_to_chapter=segment_to_chapter,
+        keyword_flow=keyword_flow,
+        sentence_rows_by_id=sentence_rows_by_id,
     )
     assert_timed_slots_contiguous(timed_slots, fps=fps)
     for slot, timed in zip(plan.slots, timed_slots):
@@ -1185,7 +1263,20 @@ def resolve_unified_timeline(
     head_trim = max(0.0, float(options.video_head_trim_sec))
     short_tolerance = max(0.0, float(options.short_asset_tolerance_sec))
 
+    content_timed_slots = [
+        timed
+        for timed in timed_slots
+        if not (
+            str(timed.slot_id).startswith("bridge_")
+            or str(timed.narrative_function or "") == "chapter_transition"
+        )
+    ]
+    last_content_slot_id = (
+        content_timed_slots[-1].slot_id if content_timed_slots else None
+    )
+
     resolved_shots: list[ResolvedShot] = []
+    running_usage: dict[str, int] = {}
     for timed in timed_slots:
         # E2E-4: Legacy-Bridge-Slots aus alten Plänen überspringen.
         if (
@@ -1228,38 +1319,72 @@ def resolve_unified_timeline(
             continue
 
         asset_id = str(timed.asset_id or "")
-        entry, lookup_error = lookup_catalog_entry(catalog, asset_id)
-        if entry is None:
-            if allow_open_gaps and timed.asset_fit in {"weak", "none"}:
-                resolved_shots.append(
-                    _placeholder_resolved_shot(
-                        project, timed, fps=fps, asset_id=asset_id
-                    )
-                )
-                repairs.append(
-                    f"{timed.slot_id}: Asset {asset_id} nicht auflösbar — "
-                    f"Platzhalter ({lookup_error})."
-                )
-                continue
-            errors.append(f"{timed.slot_id}: {lookup_error}")
-            continue
-
-        media_path = Path(str(entry.get("path") or ""))
-        if is_http_url(str(media_path)) or not media_path.is_file():
-            msg = (
-                f"{timed.slot_id}: lokale Datei fehlt/ungültig für {asset_id}: "
-                f"{media_path}"
+        is_keyword_flow_closing = bool(
+            keyword_flow
+            and last_content_slot_id is not None
+            and timed.slot_id == last_content_slot_id
+        )
+        closing_need = max(
+            0.0, float(timed.end_seconds) - float(timed.start_seconds)
+        )
+        if is_keyword_flow_closing:
+            from otio_app.services.without_voiceover_enhanced.keyword_flow_closing import (
+                KeywordFlowClosingError,
+                choose_closing_asset_for_resolve,
             )
-            if allow_open_gaps and timed.asset_fit in {"weak", "none"}:
-                resolved_shots.append(
-                    _placeholder_resolved_shot(
-                        project, timed, fps=fps, asset_id=asset_id
-                    )
+
+            try:
+                asset_id, entry, choice_note = choose_closing_asset_for_resolve(
+                    primary_id=asset_id,
+                    fallback_id=str(plan.closing_fallback_asset_id or ""),
+                    catalog=catalog,
+                    min_duration_seconds=closing_need,
+                    expected_folder=start_chapter or None,
+                    usage_counts=running_usage,
+                    max_asset_usage=int(options.max_asset_usage),
+                    plan=plan,
                 )
-                repairs.append(msg)
+            except KeywordFlowClosingError as exc:
+                errors.append(f"{timed.slot_id}: {exc}")
                 continue
-            errors.append(msg)
-            continue
+            if "fallback" in choice_note:
+                repairs.append(
+                    f"{timed.slot_id}: Closing Primary unbrauchbar — "
+                    f"Fallback {asset_id} verwendet ({choice_note})."
+                )
+        else:
+            entry, lookup_error = lookup_catalog_entry(catalog, asset_id)
+            if entry is None:
+                if allow_open_gaps and timed.asset_fit in {"weak", "none"}:
+                    resolved_shots.append(
+                        _placeholder_resolved_shot(
+                            project, timed, fps=fps, asset_id=asset_id
+                        )
+                    )
+                    repairs.append(
+                        f"{timed.slot_id}: Asset {asset_id} nicht auflösbar — "
+                        f"Platzhalter ({lookup_error})."
+                    )
+                    continue
+                errors.append(f"{timed.slot_id}: {lookup_error}")
+                continue
+
+            media_path = Path(str(entry.get("path") or ""))
+            if is_http_url(str(media_path)) or not media_path.is_file():
+                msg = (
+                    f"{timed.slot_id}: lokale Datei fehlt/ungültig für {asset_id}: "
+                    f"{media_path}"
+                )
+                if allow_open_gaps and timed.asset_fit in {"weak", "none"}:
+                    resolved_shots.append(
+                        _placeholder_resolved_shot(
+                            project, timed, fps=fps, asset_id=asset_id
+                        )
+                    )
+                    repairs.append(msg)
+                    continue
+                errors.append(msg)
+                continue
 
         try:
             resolved = _resolve_shot_media(
@@ -1278,51 +1403,93 @@ def resolve_unified_timeline(
             )
         except TimelineResolveError as exc:
             msg = str(exc)
-            is_short = "zu kurz" in msg.lower()
-            # Zu kurz: Asset behalten + roter Shortfall-Placeholder (statt
-            # komplettem Slate). Andere open-gap-Fälle: voller Placeholder.
-            if allow_open_gaps and (
-                timed.asset_fit in {"weak", "none"} or is_short
-            ):
-                if is_short:
-                    _mark_slot_as_duration_gap(
-                        plan,
-                        timed.slot_id,
-                        reason="Asset zu kurz für berechnete Narrationsdauer",
+            if is_keyword_flow_closing:
+                from otio_app.services.without_voiceover_enhanced.keyword_flow_closing import (
+                    KeywordFlowClosingError,
+                    choose_closing_asset_for_resolve,
+                )
+
+                try:
+                    fb_id, fb_entry, choice_note = choose_closing_asset_for_resolve(
+                        primary_id=str(timed.asset_id or ""),
+                        fallback_id=str(plan.closing_fallback_asset_id or ""),
+                        catalog=catalog,
+                        primary_failure=msg,
+                        min_duration_seconds=closing_need,
+                        expected_folder=start_chapter or None,
+                        usage_counts=running_usage,
+                        max_asset_usage=int(options.max_asset_usage),
+                        plan=plan,
                     )
-                    short_parts = _short_asset_with_red_placeholder_tail(
+                    resolved = _resolve_shot_media(
                         project,
-                        timed,
-                        entry=entry,
-                        asset_id=asset_id,
+                        shot_id=timed.slot_id,
+                        asset_id=str(fb_entry.get("canonical_id") or fb_id),
+                        entry=fb_entry,
+                        timeline_start=timed.start_seconds,
+                        timeline_end=timed.end_seconds,
                         fps=fps,
                         head_trim=head_trim,
                         short_tolerance=short_tolerance,
+                        editorial_function=timed.narrative_function,
+                        may_overlap_pause=False,
                         repairs=repairs,
                     )
-                    for part in short_parts:
-                        if not part.folder_name:
-                            part.folder_name = start_chapter
-                    resolved_shots.extend(short_parts)
-                else:
-                    resolved_shots.append(
-                        _placeholder_resolved_shot(
+                    asset_id = fb_id
+                    entry = fb_entry
+                    repairs.append(
+                        f"{timed.slot_id}: Closing Primary Resolve fehlgeschlagen — "
+                        f"Fallback {fb_id} verwendet ({choice_note})."
+                    )
+                except (KeywordFlowClosingError, TimelineResolveError) as fb_exc:
+                    errors.append(f"{timed.slot_id}: {fb_exc}")
+                    continue
+            else:
+                is_short = "zu kurz" in msg.lower()
+                # Zu kurz: Asset behalten + roter Shortfall-Placeholder (statt
+                # komplettem Slate). Andere open-gap-Fälle: voller Placeholder.
+                if allow_open_gaps and (
+                    timed.asset_fit in {"weak", "none"} or is_short
+                ):
+                    if is_short:
+                        _mark_slot_as_duration_gap(
+                            plan,
+                            timed.slot_id,
+                            reason="Asset zu kurz für berechnete Narrationsdauer",
+                        )
+                        short_parts = _short_asset_with_red_placeholder_tail(
                             project,
                             timed,
-                            fps=fps,
+                            entry=entry,
                             asset_id=asset_id,
-                            coverage_gap_id=timed.coverage_gap_id
-                            or f"gap_{timed.slot_id}",
-                            asset_fit=None,
-                            asset_fit_reason=None,
+                            fps=fps,
+                            head_trim=head_trim,
+                            short_tolerance=short_tolerance,
+                            repairs=repairs,
                         )
-                    )
-                    repairs.append(
-                        f"{timed.slot_id}: als Gap markiert — {msg}"
-                    )
+                        for part in short_parts:
+                            if not part.folder_name:
+                                part.folder_name = start_chapter
+                        resolved_shots.extend(short_parts)
+                    else:
+                        resolved_shots.append(
+                            _placeholder_resolved_shot(
+                                project,
+                                timed,
+                                fps=fps,
+                                asset_id=asset_id,
+                                coverage_gap_id=timed.coverage_gap_id
+                                or f"gap_{timed.slot_id}",
+                                asset_fit=None,
+                                asset_fit_reason=None,
+                            )
+                        )
+                        repairs.append(
+                            f"{timed.slot_id}: als Gap markiert — {msg}"
+                        )
+                    continue
+                errors.append(msg)
                 continue
-            errors.append(msg)
-            continue
 
         resolved.asset_fit = timed.asset_fit
         resolved.asset_fit_reason = timed.asset_fit_reason
@@ -1332,9 +1499,13 @@ def resolve_unified_timeline(
         if not resolved.folder_name:
             resolved.folder_name = start_chapter
         resolved_shots.append(resolved)
+        chosen = str(resolved.asset_id or asset_id or "").strip()
+        if chosen and not resolved.open_gap:
+            running_usage[chosen] = int(running_usage.get(chosen, 0)) + 1
 
     ordered = sorted(resolved_shots, key=_resolved_shot_sort_key)
 
+    map_decisions: dict[str, dict] = {}
     chapter_envelopes = _apply_chapter_envelopes(
         project,
         locked=locked,
@@ -1353,7 +1524,16 @@ def resolve_unified_timeline(
         closing_fallback_by_chapter=dict(plan.closing_fallback_by_chapter or {}),
         head_trim=head_trim,
         short_tolerance=short_tolerance,
+        enable_map_opener=keyword_flow,
+        map_decisions=map_decisions if keyword_flow else None,
     )
+    if keyword_flow and map_decisions:
+        repairs.append(
+            "keyword_flow_map_decisions: "
+            + ", ".join(
+                f"{cid}={info.get('status')}" for cid, info in map_decisions.items()
+            )
+        )
     # Platzhalter ohne Medien: Vor-/Nachlauf-Hold-Fehler sind soft bei open gaps.
     if allow_open_gaps:
         soft: list[str] = []

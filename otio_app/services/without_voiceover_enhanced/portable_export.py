@@ -300,24 +300,59 @@ def write_package_readme(path: Path, *, basename: str) -> None:
     path.write_text(
         f"""# {basename} — portables Enhanced-OTIO-Paket
 
-## Import in DaVinci Resolve
+## Import in DaVinci Resolve (macOS / Windows / Linux)
 
-1. Neues leeres Resolve-Projekt öffnen.
-2. `timeline.otio` importieren.
-3. Bei Relink einmal den Ordner `media/` auswählen.
-4. Nicht nach gleichnamigen Originaldateien (z. B. `Asset00011.mov`) suchen —
-   jede Datei im Paket hat bereits einen eindeutigen Namen.
+Resolve Studio löst relative `media/...`-Pfade in `timeline.otio` **nicht**
+zuverlässig relativ zur OTIO-Datei auf. Deshalb:
+
+1. ZIP **vollständig** entpacken.
+2. Ordnerstruktur **nicht** verändern (`timeline.otio`, `media/`, Manifest,
+   Relink-Script müssen Geschwister bleiben).
+3. Terminal **im Paketordner** öffnen.
+4. Relink auf dem Zielrechner ausführen:
+
+   ```bash
+   python3 relink_for_resolve.py
+   ```
+
+5. Anschließend **`timeline_resolve.otio`** in DaVinci Resolve importieren.
+6. **Nicht** die transportneutrale `timeline.otio` direkt in Resolve importieren
+   (führt typischerweise zu Media Offline).
+
+Das Relink-Script schreibt nur `timeline_resolve.otio` mit absoluten
+`file://`-URIs des Zielrechners. Es kopiert oder verändert keine Medien und
+überschreibt niemals `timeline.otio`.
+
+Voraussetzungen: Python 3 und `ffprobe` (FFmpeg) im PATH für die
+Videovalidierung.
 
 ## Inhalt
 
-- `timeline.otio` — Produktions-Timeline (`allow_errors=False`)
+- `timeline.otio` — transportneutrale Produktions-Timeline (`media/...`)
+- `timeline_resolve.otio` — nach Relink: absolute `file://`-URIs (Zielrechner)
+- `relink_for_resolve.py` — einmal auf dem Zielrechner ausführen
 - `media/` — eindeutig benannte Medien (Hardlink oder Kopie)
-- `media_manifest.json` — Originalpfad ↔ Paketdatei
+- `media_manifest.json` — verbindliche Zuordnung + Prüfsummen
+- `README.md` — diese Anleitung
 
 Originalquelldateien wurden nicht umbenannt.
 """,
         encoding="utf-8",
     )
+
+
+def install_resolve_relink_script(package_root: Path) -> Path:
+    """Kopiert das standalone Relink-Script in den Paketordner."""
+    source = Path(__file__).resolve().parent / "relink_for_resolve.py"
+    if not source.is_file():
+        raise PortableExportError(f"Relink-Script fehlt im Repo: {source}")
+    dest = Path(package_root) / "relink_for_resolve.py"
+    shutil.copy2(source, dest)
+    try:
+        dest.chmod(dest.stat().st_mode | 0o111)
+    except OSError:
+        pass
+    return dest
 
 
 def lookup_packaged_path(

@@ -34,6 +34,7 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     TIMING_MODE_FIXED,
     TIMING_MODE_LLM,
     UNIFIED_CUT_STYLE_CHOICES,
+    UNIFIED_CUT_STYLE_KEYWORD_FLOW,
     UNIFIED_CUT_STYLE_KEYWORD_SYNC,
     UNIFIED_CUT_STYLE_RHYTHM,
     CutPlanOptions,
@@ -551,6 +552,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
         style_labels = {
             UNIFIED_CUT_STYLE_RHYTHM: "Rhythmus (shot_min/max)",
             UNIFIED_CUT_STYLE_KEYWORD_SYNC: "Keyword-Sync (Wort↔Bild)",
+            UNIFIED_CUT_STYLE_KEYWORD_FLOW: "Keyword Flow",
         }
         style_options = list(UNIFIED_CUT_STYLE_CHOICES)
         style_index = (
@@ -569,7 +571,9 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             help=(
                 "Rhythmus: bisheriger Prompt + shot_min/max + Word-Timestamps. "
                 "Keyword-Sync: eigener Prompt (Buzzword-Onset) mit denselben "
-                "Cut-Settings und Word-Timestamps."
+                "Cut-Settings und Word-Timestamps. "
+                "Keyword Flow: context-first mit echten Wort-Onsets, "
+                "±1,5-s-Platzierung und redaktionellen Pausen."
             ),
         )
         if (
@@ -580,6 +584,14 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 "Keyword-Sync: Schnitte folgen Keyword-/Themen-Onsets "
                 "(Wort-Timestamps). Shot-Min/Max und die übrigen Cut-Settings "
                 "werden mitgegeben und gelten für LLM + Python."
+            )
+        if (
+            cut_plan_mode == CUT_PLAN_MODE_UNIFIED
+            and unified_cut_style == UNIFIED_CUT_STYLE_KEYWORD_FLOW
+        ):
+            st.caption(
+                "Kontextbasierter Keyword-Schnitt mit echten Wort-Onsets, "
+                "flexibler ±1,5-s-Platzierung und redaktionellen Pausen."
             )
         enable_unified_mini_repair = st.checkbox(
             "Unified Mini-Repair nach Gap-Merge (optional, Default aus)",
@@ -1388,7 +1400,12 @@ def _render_chapter_cut_rows(
 def _render_section_unified(project, options: CutPlanOptions | None = None) -> None:
     st.subheader("1. Unified Cut Plan (LLM) → 2. Python Timing")
     _render_slim_status(project)
-    body_chapters = list_body_chapter_names(project)
+    try:
+        body_chapters = list_body_chapter_names(project)
+    except Exception as exc:  # noqa: BLE001
+        # Fail soft in UI when script lock / chapter list is incomplete (smoke/dev).
+        st.warning(f"Kapitel-Liste nicht verfügbar: {exc}")
+        body_chapters = []
     chapter_count = max(1, len(body_chapters))
     rough_provider, rough_model, rough_max = _render_enhanced_cut_model(
         project,
@@ -2611,16 +2628,20 @@ def _render_section_final(project) -> None:
         st.markdown("###### Portables Paket (optional)")
         st.caption(
             "Für Transfer oder Archivierung. Kann Hardlinks oder Kopien nach "
-            "`media/` erzeugen und erheblichen Speicherplatz benötigen."
+            "`media/` erzeugen. Nach dem Entpacken einmal Relink-Script ausführen, "
+            "danach `timeline_resolve.otio` in Resolve importieren."
         )
         if st.button(
-            "Portables Paket erzeugen",
+            "Portables Paket für Transfer erzeugen",
             key=f"enh_final_otio_export_portable_{project.id}",
             disabled=has_errors,
             help=(
                 "Fail-closed: blockiert bei Resolve-/Medienfehlern."
                 if has_errors
-                else "Speicherintensiv: Hardlinks oder Kopien nach media/."
+                else (
+                    "Nach dem Entpacken einmal das enthaltene Relink-Script "
+                    "ausführen. Danach timeline_resolve.otio in Resolve importieren."
+                )
             ),
         ):
             try:
@@ -2633,6 +2654,10 @@ def _render_section_final(project) -> None:
                 st.warning(
                     f"Portables Paket geschrieben: `{package_dir}` "
                     f"({media_count} Medien). Speicherplatz prüfen."
+                )
+                st.caption(
+                    "Nach Entpacken: `python3 relink_for_resolve.py` → "
+                    "`timeline_resolve.otio` in Resolve importieren."
                 )
             except EnhancedOtioExportError as exc:
                 st.error(str(exc))

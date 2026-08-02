@@ -51,15 +51,21 @@ CUT_PLAN_MODE_UNIFIED = "unified"
 CutPlanMode = Literal["legacy", "unified"]
 CUT_PLAN_MODE_CHOICES: tuple[str, ...] = (CUT_PLAN_MODE_LEGACY, CUT_PLAN_MODE_UNIFIED)
 
-# Unified-Stil: Rhythmus vs Keyword-Sync (Wort↔Bild).
-# Beide Modi erhalten Word-Timestamps + Cut-Settings (inkl. shot_min/max).
+# Unified-Stil: Rhythmus vs Keyword-Sync vs Keyword-Flow.
+# Alle Modi erhalten Word-Timestamps + Cut-Settings (inkl. shot_min/max).
 UNIFIED_CUT_STYLE_RHYTHM = "rhythm"
 UNIFIED_CUT_STYLE_KEYWORD_SYNC = "keyword_sync"
-UnifiedCutStyle = Literal["rhythm", "keyword_sync"]
+UNIFIED_CUT_STYLE_KEYWORD_FLOW = "keyword_flow"
+UnifiedCutStyle = Literal["rhythm", "keyword_sync", "keyword_flow"]
 UNIFIED_CUT_STYLE_CHOICES: tuple[str, ...] = (
     UNIFIED_CUT_STYLE_RHYTHM,
     UNIFIED_CUT_STYLE_KEYWORD_SYNC,
+    UNIFIED_CUT_STYLE_KEYWORD_FLOW,
 )
+# Keyword-Onset-Toleranz (nur keyword_flow, Python-seitig).
+KEYWORD_FLOW_ONSET_TOLERANCE_SEC = 1.5
+KEYWORD_FLOW_PAUSE_SAFETY_FRAMES = 5
+KEYWORD_FLOW_MAP_OPENER_SEC = 9.0
 
 STILL_BACKGROUND_CHOICES = (
     STILL_BACKGROUND_VINTAGE,
@@ -189,6 +195,9 @@ def _normalize_unified_cut_style(value: Any, *, default: str) -> str:
         "keyword": UNIFIED_CUT_STYLE_KEYWORD_SYNC,
         "keywordsync": UNIFIED_CUT_STYLE_KEYWORD_SYNC,
         "buzzword": UNIFIED_CUT_STYLE_KEYWORD_SYNC,
+        "keywordflow": UNIFIED_CUT_STYLE_KEYWORD_FLOW,
+        "semantic_keyword_flow": UNIFIED_CUT_STYLE_KEYWORD_FLOW,
+        "semantickeywordflow": UNIFIED_CUT_STYLE_KEYWORD_FLOW,
     }
     text = aliases.get(text, text)
     return text if text in UNIFIED_CUT_STYLE_CHOICES else default
@@ -201,6 +210,16 @@ def is_keyword_sync_unified_style(options: CutPlanOptions | None) -> bool:
     return (
         str(options.unified_cut_style or "").strip().lower()
         == UNIFIED_CUT_STYLE_KEYWORD_SYNC
+    )
+
+
+def is_keyword_flow_unified_style(options: CutPlanOptions | None) -> bool:
+    """True wenn Unified Keyword-Flow aktiv (context-first + sichere Pausen)."""
+    if options is None:
+        return False
+    return (
+        str(options.unified_cut_style or "").strip().lower()
+        == UNIFIED_CUT_STYLE_KEYWORD_FLOW
     )
 
 
