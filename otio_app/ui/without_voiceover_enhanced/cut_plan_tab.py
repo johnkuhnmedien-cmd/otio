@@ -2628,16 +2628,20 @@ def _render_section_final(project) -> None:
         st.markdown("###### Portables Paket (optional)")
         st.caption(
             "Für Transfer oder Archivierung. Kann Hardlinks oder Kopien nach "
-            "`media/` erzeugen und erheblichen Speicherplatz benötigen."
+            "`media/` erzeugen. Nach dem Entpacken einmal Relink-Script ausführen, "
+            "danach `timeline_resolve.otio` in Resolve importieren."
         )
         if st.button(
-            "Portables Paket erzeugen",
+            "Portables Paket für Transfer erzeugen",
             key=f"enh_final_otio_export_portable_{project.id}",
             disabled=has_errors,
             help=(
                 "Fail-closed: blockiert bei Resolve-/Medienfehlern."
                 if has_errors
-                else "Speicherintensiv: Hardlinks oder Kopien nach media/."
+                else (
+                    "Nach dem Entpacken einmal das enthaltene Relink-Script "
+                    "ausführen. Danach timeline_resolve.otio in Resolve importieren."
+                )
             ),
         ):
             try:
@@ -2650,6 +2654,10 @@ def _render_section_final(project) -> None:
                 st.warning(
                     f"Portables Paket geschrieben: `{package_dir}` "
                     f"({media_count} Medien). Speicherplatz prüfen."
+                )
+                st.caption(
+                    "Nach Entpacken: `python3 relink_for_resolve.py` → "
+                    "`timeline_resolve.otio` in Resolve importieren."
                 )
             except EnhancedOtioExportError as exc:
                 st.error(str(exc))

@@ -44,6 +44,7 @@ from otio_app.services.without_voiceover_enhanced.paths import (
 from otio_app.services.without_voiceover_enhanced.portable_export import (
     PortableExportError,
     assert_portable_target_urls,
+    install_resolve_relink_script,
     lookup_packaged_path,
     package_dir_for_export,
     relative_media_target_url,
@@ -1310,6 +1311,7 @@ def export_portable_otio_package(
     safe_basename = package_root.name.removesuffix("_package")
     write_media_manifest(package_root / "media_manifest.json", entries)
     write_package_readme(package_root / "README.md", basename=safe_basename)
+    install_resolve_relink_script(package_root)
 
     out_otio = package_root / "timeline.otio"
     otio.adapters.write_to_file(timeline, str(out_otio))

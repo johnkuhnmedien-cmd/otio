@@ -788,7 +788,7 @@ def test_ui_local_export_is_primary() -> None:
     assert "Lokale Produktions-OTIO erzeugen" in src
     assert 'type="primary"' in src
     local_pos = src.index("Lokale Produktions-OTIO erzeugen")
-    portable_pos = src.index("Portables Paket erzeugen")
+    portable_pos = src.index("Portables Paket für Transfer erzeugen")
     assert local_pos < portable_pos
     assert "erheblichen Speicherplatz" in src
     assert "Vorhandene Videos werden nicht kopiert" in src
@@ -805,7 +805,7 @@ def test_ui_cut_plan_decouples_llm3_and_has_named_otio_export() -> None:
     assert "Python-Finalisierung starten" in src
     assert "Dateiname / Export-Basename" in src
     assert "Lokale Produktions-OTIO erzeugen" in src
-    assert "Portables Paket erzeugen" in src
+    assert "Portables Paket für Transfer erzeugen" in src
     assert 'key="enh_final_cut_llm"' in src
     assert 'key="enh_final_cut_python"' in src
 

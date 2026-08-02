@@ -121,15 +121,16 @@ def _render_otio_export_section(
     st.caption(
         "Für Transfer oder Archivierung. "
         "Kann Hardlinks oder vollständige Kopien der verwendeten Medien erzeugen "
-        "und erheblichen Speicherplatz benötigen."
+        "und erheblichen Speicherplatz benötigen. "
+        "Nicht als direkt fertiges Resolve-Paket — nach dem Entpacken einmal Relink."
     )
     if st.button(
-        "Portables Paket erzeugen",
+        "Portables Paket für Transfer erzeugen",
         key=f"enh_otio_export_portable_{project.id}",
         disabled=has_errors,
         help=(
-            "Speicherintensiv: Hardlinks oder Kopien nach media/. "
-            "Nicht automatisch mit dem lokalen Export."
+            "Nach dem Entpacken einmal das enthaltene Relink-Script ausführen. "
+            "Danach timeline_resolve.otio in Resolve importieren."
             if not has_errors
             else "Fail-closed: blockiert bei Resolve-/Medienfehlern."
         ),
@@ -146,7 +147,12 @@ def _render_otio_export_section(
                 f"Portables Paket geschrieben: `{package_dir}` "
                 f"({len(media_files)} Medien). Speicherplatz prüfen."
             )
-            st.caption("`timeline.otio` · `media_manifest.json` · `media/`")
+            st.caption(
+                "`timeline.otio` · `relink_for_resolve.py` · "
+                "`media_manifest.json` · `media/` · `README.md` — "
+                "nach Entpacken: `python3 relink_for_resolve.py`, "
+                "dann `timeline_resolve.otio` in Resolve importieren."
+            )
             with st.expander("Paketmedien anzeigen", expanded=False):
                 for name in media_files:
                     st.write(f"- `{name}`")
