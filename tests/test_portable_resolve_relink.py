@@ -17,6 +17,8 @@ from otio_app.services.without_voiceover_enhanced.otio_export_service import (
 )
 from otio_app.services.without_voiceover_enhanced.relink_for_resolve import (
     RelinkError,
+    _positive_ffprobe_duration,
+    _validate_video,
     package_root_from_script,
     path_to_file_uri,
     relink_package,
@@ -267,6 +269,138 @@ def test_relink_revalidates_video(tmp_path: Path) -> None:
     )
     with pytest.raises(RelinkError, match="Video|ffprobe|ungültig"):
         relink_package(package)
+
+
+def _ffprobe_payload(
+    *,
+    stream_duration: object | None = "2.5",
+    format_duration: object | None = "2.5",
+    width: int = 320,
+    height: int = 240,
+) -> dict:
+    stream: dict = {
+        "codec_type": "video",
+        "width": width,
+        "height": height,
+    }
+    if stream_duration is not None:
+        stream["duration"] = stream_duration
+    fmt: dict = {}
+    if format_duration is not None:
+        fmt["duration"] = format_duration
+    return {"streams": [stream], "format": fmt}
+
+
+def _patch_ffprobe(monkeypatch: pytest.MonkeyPatch, payload: dict) -> None:
+    class _Result:
+        returncode = 0
+        stdout = json.dumps(payload)
+        stderr = ""
+
+    monkeypatch.setattr(
+        "otio_app.services.without_voiceover_enhanced.relink_for_resolve.subprocess.run",
+        lambda *args, **kwargs: _Result(),
+    )
+
+
+def test_validate_video_positive_stream_duration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    media = tmp_path / "ok.mp4"
+    media.write_bytes(b"x" * 64)
+    _patch_ffprobe(
+        monkeypatch,
+        _ffprobe_payload(stream_duration="1.25", format_duration=None),
+    )
+    _validate_video(media)
+
+
+def test_validate_video_format_duration_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    media = tmp_path / "fmt.mp4"
+    media.write_bytes(b"x" * 64)
+    # Fehlende Stream-Dauer → Format-Dauer.
+    _patch_ffprobe(
+        monkeypatch,
+        _ffprobe_payload(stream_duration=None, format_duration="3.0"),
+    )
+    _validate_video(media)
+    # Stream-Dauer 0 ist nicht positiv → Format-Dauer.
+    _patch_ffprobe(
+        monkeypatch,
+        _ffprobe_payload(stream_duration="0", format_duration="1.5"),
+    )
+    _validate_video(media)
+
+
+def test_validate_video_missing_durations_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    media = tmp_path / "nodur.mp4"
+    media.write_bytes(b"x" * 64)
+    _patch_ffprobe(
+        monkeypatch,
+        _ffprobe_payload(stream_duration=None, format_duration=None),
+    )
+    with pytest.raises(RelinkError, match="positive Dauer"):
+        _validate_video(media)
+
+
+def test_validate_video_zero_durations_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    media = tmp_path / "zero.mp4"
+    media.write_bytes(b"x" * 64)
+    _patch_ffprobe(
+        monkeypatch,
+        _ffprobe_payload(stream_duration="0", format_duration="0.0"),
+    )
+    with pytest.raises(RelinkError, match="positive Dauer"):
+        _validate_video(media)
+
+
+def test_validate_video_negative_duration_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    media = tmp_path / "neg.mp4"
+    media.write_bytes(b"x" * 64)
+    _patch_ffprobe(
+        monkeypatch,
+        _ffprobe_payload(stream_duration="-1", format_duration="-0.5"),
+    )
+    with pytest.raises(RelinkError, match="positive Dauer"):
+        _validate_video(media)
+
+
+def test_validate_video_non_numeric_duration_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    media = tmp_path / "nan.mp4"
+    media.write_bytes(b"x" * 64)
+    _patch_ffprobe(
+        monkeypatch,
+        _ffprobe_payload(stream_duration="n/a", format_duration="???"),
+    )
+    with pytest.raises(RelinkError, match="positive Dauer"):
+        _validate_video(media)
+    assert _positive_ffprobe_duration("n/a") is None
+    assert _positive_ffprobe_duration("2.0") == pytest.approx(2.0)
+
+
+def test_validate_video_nonzero_filesize_without_duration_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dateigröße darf fehlende positive Dauer nicht ersetzen."""
+    media = tmp_path / "sized.mp4"
+    media.write_bytes(b"not-empty-but-no-duration" * 32)
+    assert media.stat().st_size > 0
+    _patch_ffprobe(
+        monkeypatch,
+        _ffprobe_payload(stream_duration="0", format_duration=None),
+    )
+    with pytest.raises(RelinkError, match="positive Dauer"):
+        _validate_video(media)
 
 
 def test_local_production_export_unchanged_by_relink(tmp_path: Path) -> None:

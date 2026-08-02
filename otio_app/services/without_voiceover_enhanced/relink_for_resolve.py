@@ -123,6 +123,21 @@ def _packaged_name_from_target_url(target_url: str) -> str:
     return name
 
 
+def _positive_ffprobe_duration(raw: Any) -> float | None:
+    """Nur strikt positive numerische Dauer; sonst None (fehlend/ungültig/≤0)."""
+    if raw is None:
+        return None
+    if isinstance(raw, str) and not raw.strip():
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value > 0.0:
+        return value
+    return None
+
+
 def _validate_video(path: Path) -> None:
     try:
         result = subprocess.run(
@@ -168,17 +183,19 @@ def _validate_video(path: Path) -> None:
     height = int(stream.get("height") or 0)
     if width <= 0 or height <= 0:
         raise RelinkError(f"Ungültige Auflösung in {path.name}")
-    duration = stream.get("duration")
-    if duration is None:
-        duration = (payload.get("format") or {}).get("duration")
-    try:
-        dur = float(duration or 0.0)
-    except (TypeError, ValueError):
-        dur = 0.0
-    if dur <= 0.0:
-        # Manche Container ohne Stream-Dauer — Dateigröße als Fallback-Gate.
-        if path.stat().st_size <= 0:
-            raise RelinkError(f"Video ohne Dauer/leer: {path.name}")
+    # Fail-closed: positive Dauer aus Stream, sonst Format. Nie Dateigröße.
+    stream_duration = _positive_ffprobe_duration(stream.get("duration"))
+    if stream_duration is not None:
+        return
+    format_duration = _positive_ffprobe_duration(
+        (payload.get("format") or {}).get("duration")
+    )
+    if format_duration is not None:
+        return
+    raise RelinkError(
+        f"Video ohne positive Dauer (Stream-/Format-Dauer fehlen "
+        f"oder ≤0): {path.name}"
+    )
 
 
 def _validate_audio(path: Path) -> None:
