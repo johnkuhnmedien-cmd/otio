@@ -1263,6 +1263,18 @@ def resolve_unified_timeline(
     head_trim = max(0.0, float(options.video_head_trim_sec))
     short_tolerance = max(0.0, float(options.short_asset_tolerance_sec))
 
+    content_timed_slots = [
+        timed
+        for timed in timed_slots
+        if not (
+            str(timed.slot_id).startswith("bridge_")
+            or str(timed.narrative_function or "") == "chapter_transition"
+        )
+    ]
+    last_content_slot_id = (
+        content_timed_slots[-1].slot_id if content_timed_slots else None
+    )
+
     resolved_shots: list[ResolvedShot] = []
     for timed in timed_slots:
         # E2E-4: Legacy-Bridge-Slots aus alten Plänen überspringen.
@@ -1306,38 +1318,64 @@ def resolve_unified_timeline(
             continue
 
         asset_id = str(timed.asset_id or "")
-        entry, lookup_error = lookup_catalog_entry(catalog, asset_id)
-        if entry is None:
-            if allow_open_gaps and timed.asset_fit in {"weak", "none"}:
-                resolved_shots.append(
-                    _placeholder_resolved_shot(
-                        project, timed, fps=fps, asset_id=asset_id
-                    )
-                )
-                repairs.append(
-                    f"{timed.slot_id}: Asset {asset_id} nicht auflösbar — "
-                    f"Platzhalter ({lookup_error})."
-                )
-                continue
-            errors.append(f"{timed.slot_id}: {lookup_error}")
-            continue
-
-        media_path = Path(str(entry.get("path") or ""))
-        if is_http_url(str(media_path)) or not media_path.is_file():
-            msg = (
-                f"{timed.slot_id}: lokale Datei fehlt/ungültig für {asset_id}: "
-                f"{media_path}"
+        is_keyword_flow_closing = bool(
+            keyword_flow
+            and last_content_slot_id is not None
+            and timed.slot_id == last_content_slot_id
+        )
+        if is_keyword_flow_closing:
+            from otio_app.services.without_voiceover_enhanced.keyword_flow_closing import (
+                KeywordFlowClosingError,
+                choose_closing_asset_for_resolve,
             )
-            if allow_open_gaps and timed.asset_fit in {"weak", "none"}:
-                resolved_shots.append(
-                    _placeholder_resolved_shot(
-                        project, timed, fps=fps, asset_id=asset_id
-                    )
+
+            try:
+                asset_id, entry, choice_note = choose_closing_asset_for_resolve(
+                    primary_id=asset_id,
+                    fallback_id=str(plan.closing_fallback_asset_id or ""),
+                    catalog=catalog,
                 )
-                repairs.append(msg)
+            except KeywordFlowClosingError as exc:
+                errors.append(f"{timed.slot_id}: {exc}")
                 continue
-            errors.append(msg)
-            continue
+            if "fallback" in choice_note:
+                repairs.append(
+                    f"{timed.slot_id}: Closing Primary unbrauchbar — "
+                    f"Fallback {asset_id} verwendet ({choice_note})."
+                )
+        else:
+            entry, lookup_error = lookup_catalog_entry(catalog, asset_id)
+            if entry is None:
+                if allow_open_gaps and timed.asset_fit in {"weak", "none"}:
+                    resolved_shots.append(
+                        _placeholder_resolved_shot(
+                            project, timed, fps=fps, asset_id=asset_id
+                        )
+                    )
+                    repairs.append(
+                        f"{timed.slot_id}: Asset {asset_id} nicht auflösbar — "
+                        f"Platzhalter ({lookup_error})."
+                    )
+                    continue
+                errors.append(f"{timed.slot_id}: {lookup_error}")
+                continue
+
+            media_path = Path(str(entry.get("path") or ""))
+            if is_http_url(str(media_path)) or not media_path.is_file():
+                msg = (
+                    f"{timed.slot_id}: lokale Datei fehlt/ungültig für {asset_id}: "
+                    f"{media_path}"
+                )
+                if allow_open_gaps and timed.asset_fit in {"weak", "none"}:
+                    resolved_shots.append(
+                        _placeholder_resolved_shot(
+                            project, timed, fps=fps, asset_id=asset_id
+                        )
+                    )
+                    repairs.append(msg)
+                    continue
+                errors.append(msg)
+                continue
 
         try:
             resolved = _resolve_shot_media(
@@ -1356,51 +1394,88 @@ def resolve_unified_timeline(
             )
         except TimelineResolveError as exc:
             msg = str(exc)
-            is_short = "zu kurz" in msg.lower()
-            # Zu kurz: Asset behalten + roter Shortfall-Placeholder (statt
-            # komplettem Slate). Andere open-gap-Fälle: voller Placeholder.
-            if allow_open_gaps and (
-                timed.asset_fit in {"weak", "none"} or is_short
-            ):
-                if is_short:
-                    _mark_slot_as_duration_gap(
-                        plan,
-                        timed.slot_id,
-                        reason="Asset zu kurz für berechnete Narrationsdauer",
+            if is_keyword_flow_closing:
+                from otio_app.services.without_voiceover_enhanced.keyword_flow_closing import (
+                    KeywordFlowClosingError,
+                    choose_closing_asset_for_resolve,
+                )
+
+                try:
+                    fb_id, fb_entry, choice_note = choose_closing_asset_for_resolve(
+                        primary_id=str(timed.asset_id or ""),
+                        fallback_id=str(plan.closing_fallback_asset_id or ""),
+                        catalog=catalog,
+                        primary_failure=msg,
                     )
-                    short_parts = _short_asset_with_red_placeholder_tail(
+                    resolved = _resolve_shot_media(
                         project,
-                        timed,
-                        entry=entry,
-                        asset_id=asset_id,
+                        shot_id=timed.slot_id,
+                        asset_id=str(fb_entry.get("canonical_id") or fb_id),
+                        entry=fb_entry,
+                        timeline_start=timed.start_seconds,
+                        timeline_end=timed.end_seconds,
                         fps=fps,
                         head_trim=head_trim,
                         short_tolerance=short_tolerance,
+                        editorial_function=timed.narrative_function,
+                        may_overlap_pause=False,
                         repairs=repairs,
                     )
-                    for part in short_parts:
-                        if not part.folder_name:
-                            part.folder_name = start_chapter
-                    resolved_shots.extend(short_parts)
-                else:
-                    resolved_shots.append(
-                        _placeholder_resolved_shot(
+                    asset_id = fb_id
+                    entry = fb_entry
+                    repairs.append(
+                        f"{timed.slot_id}: Closing Primary Resolve fehlgeschlagen — "
+                        f"Fallback {fb_id} verwendet ({choice_note})."
+                    )
+                except (KeywordFlowClosingError, TimelineResolveError) as fb_exc:
+                    errors.append(f"{timed.slot_id}: {fb_exc}")
+                    continue
+            else:
+                is_short = "zu kurz" in msg.lower()
+                # Zu kurz: Asset behalten + roter Shortfall-Placeholder (statt
+                # komplettem Slate). Andere open-gap-Fälle: voller Placeholder.
+                if allow_open_gaps and (
+                    timed.asset_fit in {"weak", "none"} or is_short
+                ):
+                    if is_short:
+                        _mark_slot_as_duration_gap(
+                            plan,
+                            timed.slot_id,
+                            reason="Asset zu kurz für berechnete Narrationsdauer",
+                        )
+                        short_parts = _short_asset_with_red_placeholder_tail(
                             project,
                             timed,
-                            fps=fps,
+                            entry=entry,
                             asset_id=asset_id,
-                            coverage_gap_id=timed.coverage_gap_id
-                            or f"gap_{timed.slot_id}",
-                            asset_fit=None,
-                            asset_fit_reason=None,
+                            fps=fps,
+                            head_trim=head_trim,
+                            short_tolerance=short_tolerance,
+                            repairs=repairs,
                         )
-                    )
-                    repairs.append(
-                        f"{timed.slot_id}: als Gap markiert — {msg}"
-                    )
+                        for part in short_parts:
+                            if not part.folder_name:
+                                part.folder_name = start_chapter
+                        resolved_shots.extend(short_parts)
+                    else:
+                        resolved_shots.append(
+                            _placeholder_resolved_shot(
+                                project,
+                                timed,
+                                fps=fps,
+                                asset_id=asset_id,
+                                coverage_gap_id=timed.coverage_gap_id
+                                or f"gap_{timed.slot_id}",
+                                asset_fit=None,
+                                asset_fit_reason=None,
+                            )
+                        )
+                        repairs.append(
+                            f"{timed.slot_id}: als Gap markiert — {msg}"
+                        )
+                    continue
+                errors.append(msg)
                 continue
-            errors.append(msg)
-            continue
 
         resolved.asset_fit = timed.asset_fit
         resolved.asset_fit_reason = timed.asset_fit_reason

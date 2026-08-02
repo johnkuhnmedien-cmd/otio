@@ -1400,7 +1400,12 @@ def _render_chapter_cut_rows(
 def _render_section_unified(project, options: CutPlanOptions | None = None) -> None:
     st.subheader("1. Unified Cut Plan (LLM) → 2. Python Timing")
     _render_slim_status(project)
-    body_chapters = list_body_chapter_names(project)
+    try:
+        body_chapters = list_body_chapter_names(project)
+    except Exception as exc:  # noqa: BLE001
+        # Fail soft in UI when script lock / chapter list is incomplete (smoke/dev).
+        st.warning(f"Kapitel-Liste nicht verfügbar: {exc}")
+        body_chapters = []
     chapter_count = max(1, len(body_chapters))
     rough_provider, rough_model, rough_max = _render_enhanced_cut_model(
         project,

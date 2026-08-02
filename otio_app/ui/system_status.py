@@ -18,7 +18,7 @@ def render_system_status_page() -> None:
     with st.expander("Erwartete Merkmale dieses Stands", expanded=False):
         for marker in expected_feature_markers():
             st.caption(f"• {marker}")
-    render_activity_panel(expanded=True)
+    render_activity_panel(expanded=True, key_scope="systemstatus")
     st.divider()
     for result in run_all_checks():
         icon = "✅" if result.ok else "❌"

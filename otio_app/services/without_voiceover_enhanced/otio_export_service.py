@@ -548,11 +548,27 @@ def validate_resolved_timeline_for_production(
             )
 
             # Intro: feste 4s / 5–8s Hüllen — nicht gegen Kapitel-Settings prüfen.
+            # Keyword-Flow Map-Opener ersetzt den Settings-Vorlauf.
             if not _is_intro_folder(chapter.chapter_id):
-                if abs(chapter.preroll_seconds - preroll) > 1e-3:
+                from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+                    KEYWORD_FLOW_MAP_OPENER_SEC,
+                )
+
+                has_map_opener = any(
+                    str(shot.chapter_id or shot.folder_name or "")
+                    == str(chapter.chapter_id)
+                    and str(shot.editorial_function or "")
+                    == "technical_chapter_map_opener"
+                    for shot in resolved.shots
+                )
+                expected_preroll = (
+                    float(KEYWORD_FLOW_MAP_OPENER_SEC) if has_map_opener else float(preroll)
+                )
+                if abs(chapter.preroll_seconds - expected_preroll) > 1e-3:
                     errors.append(
                         f"Kapitel {chapter.chapter_id}: preroll "
-                        f"{chapter.preroll_seconds:.2f}s ≠ Settings {preroll:.2f}s."
+                        f"{chapter.preroll_seconds:.2f}s ≠ erwartet "
+                        f"{expected_preroll:.2f}s."
                     )
                 if abs(chapter.postroll_seconds - postroll) > 1e-3:
                     errors.append(

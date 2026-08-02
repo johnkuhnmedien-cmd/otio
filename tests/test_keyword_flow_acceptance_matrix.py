@@ -288,6 +288,56 @@ def test_32_22_to_29_word_cleaning() -> None:
     assert cleaned[0]["start_seconds"] == 0.0
     assert is_direction_or_non_speech_token("[cinematic]")
     assert is_direction_or_non_speech_token("-")
+    # Spoken numbers / decimals must survive (pause-tag digits still removed).
+    with_numbers = clean_words_for_keyword_flow_prompt(
+        [
+            {
+                "text": "400",
+                "offset_seconds": 0.0,
+                "start_seconds": 0.0,
+                "end_seconds": 0.2,
+                "original_word_index": 0,
+            },
+            {
+                "text": "1889",
+                "offset_seconds": 0.2,
+                "start_seconds": 0.2,
+                "end_seconds": 0.5,
+                "original_word_index": 1,
+            },
+            {
+                "text": "12.5",
+                "offset_seconds": 0.5,
+                "start_seconds": 0.5,
+                "end_seconds": 0.8,
+                "original_word_index": 2,
+            },
+            {
+                "text": "[pause",
+                "offset_seconds": 0.8,
+                "start_seconds": 0.8,
+                "end_seconds": 0.81,
+                "original_word_index": 3,
+            },
+            {
+                "text": "2",
+                "offset_seconds": 0.81,
+                "start_seconds": 0.81,
+                "end_seconds": 0.82,
+                "original_word_index": 4,
+            },
+            {
+                "text": "seconds]",
+                "offset_seconds": 0.82,
+                "start_seconds": 0.82,
+                "end_seconds": 0.83,
+                "original_word_index": 5,
+            },
+        ],
+        sentence_id="n",
+    )
+    num_texts = [w["text"] for w in with_numbers]
+    assert num_texts == ["400", "1889", "12.5"]
 
 
 def test_32_30_missing_words_block_preflight() -> None:

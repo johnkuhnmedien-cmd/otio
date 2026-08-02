@@ -1637,13 +1637,28 @@ def _apply_chapter_envelopes(
         cursor = chapter_video_end
 
     # Envelope-Validierung: preroll/postroll je Kapitel == Settings (Intro ausgenommen).
+    # Keyword-Flow Map-Opener ersetzt den Settings-Vorlauf (typisch 9.0s).
+    map_opener_chapters = {
+        str(shot.chapter_id or shot.folder_name or "")
+        for shot in ordered
+        if str(shot.editorial_function or "") == "technical_chapter_map_opener"
+    }
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        KEYWORD_FLOW_MAP_OPENER_SEC,
+    )
+
     for env in envelopes:
         if _is_intro_folder(env.chapter_id):
             continue
-        if abs(env.preroll_seconds - float(preroll)) > 1e-3:
+        expected_preroll = (
+            float(KEYWORD_FLOW_MAP_OPENER_SEC)
+            if env.chapter_id in map_opener_chapters
+            else float(preroll)
+        )
+        if abs(env.preroll_seconds - expected_preroll) > 1e-3:
             errors.append(
                 f"Kapitel {env.chapter_id}: preroll {env.preroll_seconds:.2f}s "
-                f"≠ Settings {preroll:.2f}s."
+                f"≠ erwartet {expected_preroll:.2f}s."
             )
         if abs(env.postroll_seconds - float(postroll)) > 1e-3:
             errors.append(

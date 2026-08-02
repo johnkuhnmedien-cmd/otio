@@ -156,7 +156,12 @@ def attach_words_to_sentence_row(
 
 
 def is_direction_or_non_speech_token(text: str) -> bool:
-    """True für Regie-Tags, Pause-Tag-Teile, Dash-only und reine Interpunktion."""
+    """True für Regie-Tags, Pause-Tag-Teile, Dash-only und reine Interpunktion.
+
+    Gesprochene Zahlen (400, 1889) und Dezimalzahlen (12.5) bleiben erhalten.
+    Pause-Tag-Ziffern werden in ``clean_words_for_keyword_flow_prompt``
+    über den Tag-Span entfernt, nicht pauschal hier.
+    """
     raw = str(text or "").strip()
     if not raw:
         return True
@@ -169,10 +174,32 @@ def is_direction_or_non_speech_token(text: str) -> bool:
         return True
     if _DASH_ONLY_RE.match(raw):
         return True
-    # Reine Zahl, die nur als Regie-Teil vorkommt (z. B. "2" in "[pause 2 seconds]").
-    if re.fullmatch(r"\d+", raw):
-        return True
     return False
+
+
+def _pause_tag_span_indices(texts: list[str]) -> set[int]:
+    """Indizes aller Tokens, die zu einem ``[pause …]``-Span gehören (inkl. Zahlen)."""
+    drop: set[int] = set()
+    index = 0
+    while index < len(texts):
+        raw = str(texts[index] or "").strip()
+        lowered = raw.lower()
+        starts_pause = (lowered.startswith("[") and "pause" in lowered) or lowered in {
+            "[pause",
+            "pause",
+        }
+        if not starts_pause:
+            index += 1
+            continue
+        cursor = index
+        while cursor < len(texts):
+            drop.add(cursor)
+            token = str(texts[cursor] or "").strip()
+            if "]" in token:
+                break
+            cursor += 1
+        index = cursor + 1
+    return drop
 
 
 def clean_words_for_keyword_flow_prompt(
@@ -181,9 +208,13 @@ def clean_words_for_keyword_flow_prompt(
     sentence_id: str = "",
 ) -> list[dict[str, Any]]:
     """Bereinigte Prompt-Wortsicht; Zeiten unverändert, keine Schätzung."""
+    texts = [str(word.get("text") or "") for word in words]
+    pause_span = _pause_tag_span_indices(texts)
     cleaned: list[dict[str, Any]] = []
     for index, word in enumerate(words):
-        text = str(word.get("text") or "")
+        if index in pause_span:
+            continue
+        text = texts[index]
         if is_direction_or_non_speech_token(text):
             continue
         original_index = int(word.get("original_word_index", index))

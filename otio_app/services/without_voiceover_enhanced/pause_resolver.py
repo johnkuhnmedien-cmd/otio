@@ -248,32 +248,31 @@ def _build_keyword_flow_intra_pauses(
             raise PauseResolveError(
                 f"Keyword Flow: Pause nach {sentence_id} ohne nächstes Wort."
             )
-        # Natürliches Fenster muss nach ±5 Frames noch Platz für extra haben.
         natural_gap = float(next_start) - float(prev_end)
-        if natural_gap + 1e-9 < 2.0 * safety:
+        # Überlappende / unsicher trennbare Wörter: fail-closed.
+        if natural_gap + 1e-9 < 0:
+            raise PauseResolveError(
+                f"Keyword Flow: Pause nach {sentence_id} innerhalb unsicherem "
+                f"Audioabschnitt (prev_end={prev_end:.3f}s > "
+                f"next_start={next_start:.3f}s)."
+            )
+        # Zusätzliche Stille wird eingefügt — keine 10-Frame-Naturstille voraussetzen.
+        # Nach Einfügen muss ±5 Frames Abstand zum vorherigen/nächsten Wort existieren.
+        if natural_gap + float(extra) + 1e-9 < 2.0 * safety:
             raise PauseResolveError(
                 f"Keyword Flow: Pause nach {sentence_id} ohne 5-Frame-"
-                f"Sicherheitsbereich (natural_gap={natural_gap:.3f}s, "
-                f"need>={2.0 * safety:.3f}s)."
+                f"Sicherheitsbereich nach Einfügen "
+                f"(natural_gap={natural_gap:.3f}s + extra={extra:.3f}s "
+                f"< {2.0 * safety:.3f}s)."
             )
-        # Split in der Mitte der natürlichen Stille; zusätzliche Stille wird
-        # als IntraPause eingefügt (Audio unverändert, Folgezeiten verschieben).
+        # Split an belegter Wort-/Satzgrenze (Mitte der natürlichen Lücke,
+        # auch wenn die Lücke kleiner als 2×Safety ist).
         split = mid_silence_split_seconds(
             sentence=sentence,
             next_sentence=next_sentence,
             audio_duration_seconds=audio_duration_seconds,
         )
-        # Sicherstellen, dass Split + Safety nicht in Wörter fällt.
-        if split < float(prev_end) + safety - 1e-9:
-            raise PauseResolveError(
-                f"Keyword Flow: Pause-Split nach {sentence_id} berührt "
-                "vorheriges Wortende."
-            )
-        if split > float(next_start) - safety + 1e-9:
-            raise PauseResolveError(
-                f"Keyword Flow: Pause-Split nach {sentence_id} fällt in "
-                "den nächsten Satz."
-            )
+        split = max(float(prev_end), min(float(split), float(next_start)))
         seen.add(sentence_id)
         markers.append(
             IntraPauseMarker(
@@ -282,9 +281,16 @@ def _build_keyword_flow_intra_pauses(
                 pause_seconds=round(float(extra), 6),
             )
         )
+        # Post-insert safe window (Timeline relativ zur Split-Nachbarschaft).
+        safe_start, safe_end = safe_pause_window_timeline(
+            previous_word_end_timeline=float(prev_end),
+            next_word_start_timeline=float(next_start) + float(extra),
+            fps=rate,
+        )
         notes.append(
             f"keyword_flow_pause: {sentence_id} +{extra:.2f}s at source "
-            f"{split:.3f}s (safety={safety:.3f}s @{rate:.0f}fps)."
+            f"{split:.3f}s (safety={safety:.3f}s @{rate:.0f}fps; "
+            f"safe_window={safe_start:.3f}–{safe_end:.3f}s)."
         )
     markers.sort(key=lambda item: item.source_split_seconds)
     return markers, round(trailing_pause, 6)

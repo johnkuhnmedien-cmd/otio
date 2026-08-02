@@ -175,14 +175,18 @@ def test_word_cleaning_keeps_speech_drops_tags() -> None:
         {"text": "—", "start_seconds": 1.5, "end_seconds": 1.6, "offset_seconds": 1.5, "original_word_index": 6},
         {"text": "...", "start_seconds": 1.7, "end_seconds": 1.8, "offset_seconds": 1.7, "original_word_index": 7},
         {"text": "waterfall?", "start_seconds": 2.0, "end_seconds": 2.4, "offset_seconds": 2.0, "original_word_index": 8},
+        {"text": "400", "start_seconds": 2.5, "end_seconds": 2.8, "offset_seconds": 2.5, "original_word_index": 9},
+        {"text": "1889", "start_seconds": 2.9, "end_seconds": 3.2, "offset_seconds": 2.9, "original_word_index": 10},
+        {"text": "12.5", "start_seconds": 3.3, "end_seconds": 3.6, "offset_seconds": 3.3, "original_word_index": 11},
     ]
     cleaned = clean_words_for_keyword_flow_prompt(raw, sentence_id="seg__s001")
     texts = [w["text"] for w in cleaned]
-    assert texts == ["tower,", "monastery.", "waterfall?"]
+    assert texts == ["tower,", "monastery.", "waterfall?", "400", "1889", "12.5"]
     assert cleaned[0]["start_seconds"] == 0.2
     assert cleaned[0]["word_ref"] == "seg__s001#1"
     assert is_direction_or_non_speech_token("[cinematic]")
     assert is_direction_or_non_speech_token("-")
+    assert not is_direction_or_non_speech_token("400")
     assert not chapter_has_usable_keyword_flow_words(
         [{"words": [{"text": "[cinematic]", "offset_seconds": 0}]}]
     )
@@ -323,6 +327,61 @@ def test_safe_pause_window_five_frames() -> None:
     margin = 5 / 29.97
     assert start29 == pytest.approx(10.0 + margin)
     assert end29 == pytest.approx(12.0 - margin)
+
+
+def test_keyword_flow_pause_allows_small_natural_gap_when_extra_creates_safety() -> None:
+    """Natural gap < 10 frames is OK if inserted silence creates ±5-frame window."""
+    sentences = {
+        "seg__s001": SentenceTiming(
+            sentence_id="seg__s001",
+            segment_id="seg",
+            text="One.",
+            start_seconds=0.0,
+            end_seconds=1.0,
+            duration_seconds=1.0,
+        ),
+        "seg__s002": SentenceTiming(
+            sentence_id="seg__s002",
+            segment_id="seg",
+            text="Two.",
+            start_seconds=1.1,
+            end_seconds=2.0,
+            duration_seconds=0.9,
+        ),
+    }
+    # Natural gap only 0.2s (5 frames @25fps) — previously blocked as < 0.4s.
+    words = [
+        {"text": "One", "start_seconds": 0.0, "end_seconds": 0.95},
+        {"text": "Two", "start_seconds": 1.15, "end_seconds": 1.9},
+    ]
+    timeline = build_narration_timeline(
+        script_version="v1",
+        segment_timings=[
+            SegmentTiming(
+                segment_id="seg",
+                script_version="v1",
+                audio_path="/tmp/x.wav",
+                duration_seconds=2.0,
+                audio_status="valid",
+            )
+        ],
+        pause_directives=[
+            PauseDirective(
+                after_sentence_id="seg__s001",
+                pause_function="anticipation",
+                duration_class="long",
+                visual_behavior="next_shot_may_start_during_pause",
+            )
+        ],
+        sentence_index=sentences,
+        enable_keyword_flow_pauses=True,
+        segment_words_by_id={"seg": words},
+        fps=25.0,
+        repairs=[],
+    )
+    assert timeline.entries[0].intra_pauses
+    assert timeline.entries[0].intra_pauses[0].pause_seconds == pytest.approx(1.5)
+    assert words[1]["start_seconds"] == 1.15
 
 
 def test_keyword_flow_pauses_shift_timeline_not_source_words() -> None:
