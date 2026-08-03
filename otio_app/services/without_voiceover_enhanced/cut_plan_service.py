@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# Unified-LLM: 1 Erstversuch + Retries bei Parse-/Schema-Fehlern (z. B. slots≠boundaries−1).
+UNIFIED_CUT_LLM_MAX_ATTEMPTS = 3
 
 from otio_app.models import Project
 from otio_app.project_layout import safe_folder_slug
@@ -1703,6 +1709,51 @@ def generate_final_cut_plan(
 
 # --- Unified Cut Plan (Phase 7) -------------------------------------------------
 
+
+def _is_retryable_unified_cut_error(exc: BaseException) -> bool:
+    """True für LLM-Antwort-/Schemafehler; False für fehlende Voraussetzungen."""
+    from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
+        UnifiedCutPlanError,
+    )
+
+    if isinstance(exc, UnifiedCutPlanError):
+        return True
+    if isinstance(exc, CutPlanError):
+        message = str(exc).lower()
+        return "keine slots" in message or "enthielt keine slots" in message
+    if type(exc).__name__ in {"ValidationError", "JSONDecodeError"}:
+        return True
+    message = str(exc).lower()
+    markers = (
+        "invariante verletzt",
+        "len(slots)",
+        "boundaries",
+        "validation error",
+        "unified cut plan",
+        "kein json",
+        "json-objekt",
+        "expecting value",
+        "unterminated string",
+    )
+    return any(marker in message for marker in markers)
+
+
+def _unified_cut_retry_prompt_suffix(*, failed_attempt: int, error: str) -> str:
+    """Kurzer Repair-Hinweis für den Folgelauf (ohne Prompt-Rewrite)."""
+    clipped = " ".join(str(error or "").split())
+    if len(clipped) > 400:
+        clipped = clipped[:397] + "..."
+    return (
+        f"\n\nPREVIOUS ATTEMPT FAILED (attempt {failed_attempt}).\n"
+        f"Error: {clipped}\n"
+        "Return corrected JSON only. Hard requirements:\n"
+        "- len(slots) == len(boundaries) - 1\n"
+        "- at least 2 boundaries (VO start + VO end)\n"
+        "- unique cut_id / slot_id values\n"
+        "- chronological boundaries; first=VO start; last=VO end\n"
+    )
+
+
 @dataclass
 class FolderUnifiedCutResult:
     folder_name: str
@@ -1712,6 +1763,7 @@ class FolderUnifiedCutResult:
     slot_count: int = 0
     pause_count: int = 0
     gap_count: int = 0
+    attempts: int = 1
 
 
 def _used_in_ledger_text(plans: list[Any]) -> str:
@@ -1968,50 +2020,102 @@ def generate_unified_cut_for_folder(
             else []
         )
         model_id = resolve_llm_model_id(provider, model)
-        if llm_callable is not None:
+        last_error: BaseException | None = None
+        for attempt in range(1, UNIFIED_CUT_LLM_MAX_ATTEMPTS + 1):
+            prompt_for_call = prompt
+            if last_error is not None:
+                prompt_for_call = prompt + _unified_cut_retry_prompt_suffix(
+                    failed_attempt=attempt - 1,
+                    error=str(last_error),
+                )
             try:
-                raw = llm_callable(prompt=prompt, model=model_id, images=images)
-            except TypeError:
-                raw = llm_callable(prompt=prompt, model=model_id)
-            raw_text = (
-                raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
-            )
-        else:
-            # Intro/Unified: Thinking aus — sonst frisst Sonnet/Opus das
-            # Output-Budget (und die Rechnung) für internes Reasoning.
-            # Intro-Output bewusst begrenzt; Körper-Kapitel behalten Default.
-            max_out = 8_192 if is_intro else None
-            raw_text = generate_plan_text_with_metadata(
-                prompt=prompt,
-                model=model_id,
-                images=images or None,
-                disable_thinking=True,
-                max_output_tokens=max_out,
-            ).raw_text
+                if llm_callable is not None:
+                    try:
+                        raw = llm_callable(
+                            prompt=prompt_for_call, model=model_id, images=images
+                        )
+                    except TypeError:
+                        raw = llm_callable(prompt=prompt_for_call, model=model_id)
+                    raw_text = (
+                        raw
+                        if isinstance(raw, str)
+                        else getattr(raw, "raw_text", str(raw))
+                    )
+                else:
+                    # Intro/Unified: Thinking aus — sonst frisst Sonnet/Opus das
+                    # Output-Budget (und die Rechnung) für internes Reasoning.
+                    # Intro-Output bewusst begrenzt; Körper-Kapitel behalten Default.
+                    max_out = 8_192 if is_intro else None
+                    raw_text = generate_plan_text_with_metadata(
+                        prompt=prompt_for_call,
+                        model=model_id,
+                        images=images or None,
+                        disable_thinking=True,
+                        max_output_tokens=max_out,
+                    ).raw_text
 
-        plan = parse_unified_cut_response(
-            raw_text,
-            locked.script_version,
-            folder_slug=context.folder_slug,
-            allow_pause_directives=use_keyword_flow,
-            nullify_weak_assets=use_keyword_flow,
-        )
-        if not plan.slots:
-            raise CutPlanError("LLM-Antwort enthielt keine Slots.")
-        if is_intro:
-            from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
-                enforce_intro_strong_only,
-            )
+                plan = parse_unified_cut_response(
+                    raw_text,
+                    locked.script_version,
+                    folder_slug=context.folder_slug,
+                    allow_pause_directives=use_keyword_flow,
+                    nullify_weak_assets=use_keyword_flow,
+                )
+                if not plan.slots:
+                    raise CutPlanError("LLM-Antwort enthielt keine Slots.")
+                if is_intro:
+                    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+                        enforce_intro_strong_only,
+                    )
 
-            plan = enforce_intro_strong_only(plan)
-        _rough, coverage = unified_to_rough(plan)
+                    plan = enforce_intro_strong_only(plan)
+                _rough, coverage = unified_to_rough(plan)
+                if attempt > 1:
+                    logger.info(
+                        "Unified Cut „%s“ ok nach Retry %s/%s",
+                        display_name,
+                        attempt,
+                        UNIFIED_CUT_LLM_MAX_ATTEMPTS,
+                    )
+                return FolderUnifiedCutResult(
+                    folder_name=display_name,
+                    status="PASS",
+                    plan=plan,
+                    slot_count=len(plan.slots),
+                    pause_count=len(plan.pause_directives),
+                    gap_count=len(coverage.gaps),
+                    attempts=attempt,
+                )
+            except Exception as exc:  # noqa: BLE001
+                if (
+                    attempt < UNIFIED_CUT_LLM_MAX_ATTEMPTS
+                    and _is_retryable_unified_cut_error(exc)
+                ):
+                    logger.warning(
+                        "Unified Cut „%s“ Versuch %s/%s fehlgeschlagen (%s) — Retry",
+                        display_name,
+                        attempt,
+                        UNIFIED_CUT_LLM_MAX_ATTEMPTS,
+                        exc,
+                    )
+                    last_error = exc
+                    continue
+                error_text = str(exc)
+                if attempt > 1:
+                    error_text = (
+                        f"{error_text} (nach {attempt} Versuchen)"
+                    )
+                return FolderUnifiedCutResult(
+                    folder_name=display_name,
+                    status="FAIL",
+                    error=error_text,
+                    attempts=attempt,
+                )
         return FolderUnifiedCutResult(
             folder_name=display_name,
-            status="PASS",
-            plan=plan,
-            slot_count=len(plan.slots),
-            pause_count=len(plan.pause_directives),
-            gap_count=len(coverage.gaps),
+            status="FAIL",
+            error=str(last_error or "Unified Cut fehlgeschlagen."),
+            attempts=UNIFIED_CUT_LLM_MAX_ATTEMPTS,
         )
     except Exception as exc:  # noqa: BLE001
         return FolderUnifiedCutResult(
