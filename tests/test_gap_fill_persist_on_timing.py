@@ -178,6 +178,53 @@ def test_carry_over_user_confirmed_weak() -> None:
             CoverageGap(
                 gap_id="gap_w",
                 needed_visual="x",
+                priority="medium",
+                user_confirmed_weak=True,
+            ),
+            CoverageGap(
+                gap_id="gap_high",
+                needed_visual="z",
+                priority="high",
+                user_confirmed_weak=True,
+            ),
+        ],
+    )
+    rebuilt = CoverageGapsDocument(
+        script_version="v1",
+        cut_plan_run_id="run2",
+        gaps=[
+            CoverageGap(
+                gap_id="gap_w",
+                needed_visual="x",
+                priority="medium",
+                user_confirmed_weak=False,
+            ),
+            CoverageGap(
+                gap_id="gap_high",
+                needed_visual="z",
+                priority="high",
+                user_confirmed_weak=False,
+            ),
+            CoverageGap(gap_id="gap_new", needed_visual="y", priority="medium"),
+        ],
+    )
+    out = carry_over_user_confirmed_weak(rebuilt, previous)
+    by_id = {g.gap_id: g for g in out.gaps}
+    assert by_id["gap_w"].user_confirmed_weak is True
+    assert by_id["gap_high"].user_confirmed_weak is False
+    assert by_id["gap_new"].user_confirmed_weak is False
+
+
+def test_carry_over_skips_when_gap_became_high_none() -> None:
+    """Rhythmus-Weak → neuer Lauf same ID als high/none: Flag nicht übernehmen."""
+    previous = CoverageGapsDocument(
+        script_version="v1",
+        cut_plan_run_id="run1",
+        gaps=[
+            CoverageGap(
+                gap_id="Dublin_gap_001",
+                needed_visual="doors",
+                priority="medium",
                 user_confirmed_weak=True,
             )
         ],
@@ -186,14 +233,16 @@ def test_carry_over_user_confirmed_weak() -> None:
         script_version="v1",
         cut_plan_run_id="run2",
         gaps=[
-            CoverageGap(gap_id="gap_w", needed_visual="x", user_confirmed_weak=False),
-            CoverageGap(gap_id="gap_new", needed_visual="y"),
+            CoverageGap(
+                gap_id="Dublin_gap_001",
+                needed_visual="doors",
+                priority="high",
+                user_confirmed_weak=False,
+            )
         ],
     )
     out = carry_over_user_confirmed_weak(rebuilt, previous)
-    by_id = {g.gap_id: g for g in out.gaps}
-    assert by_id["gap_w"].user_confirmed_weak is True
-    assert by_id["gap_new"].user_confirmed_weak is False
+    assert out.gaps[0].user_confirmed_weak is False
 
 
 def test_timing_merge_keeps_manual_fill_status(tmp_path: Path) -> None:

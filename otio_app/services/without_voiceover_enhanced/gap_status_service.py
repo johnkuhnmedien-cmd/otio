@@ -34,6 +34,7 @@ __all__ = [
     "compute_cut_plan_run_id_from_path",
     "is_weak_upgrade_gap",
     "rebind_gap_fills_to_current_run",
+    "sanitize_stale_user_confirmed_weak",
     "summarize_gap_status",
 ]
 
@@ -42,7 +43,12 @@ def carry_over_user_confirmed_weak(
     coverage: CoverageGapsDocument,
     previous: CoverageGapsDocument | None,
 ) -> CoverageGapsDocument:
-    """Behält Weak-Bestätigungen bei Coverage-Rebuild (gleiche Gap-ID)."""
+    """Behält Weak-Bestätigungen bei Coverage-Rebuild (gleiche Gap-ID).
+
+    Nur für echte Weak-Upgrade-Gaps (``priority=medium``). High/none-Gaps
+    (typisch nach Cut-Settings-/Style-Wechsel) erben keine alte Bestätigung —
+    sonst bleiben Placeholder-Slots in der UI fälschlich „erfüllt“.
+    """
     if previous is None or not previous.gaps:
         return coverage
     confirmed = {
@@ -50,6 +56,7 @@ def carry_over_user_confirmed_weak(
         for gap in previous.gaps
         if str(gap.gap_id or "").strip()
         and bool(getattr(gap, "user_confirmed_weak", False))
+        and is_weak_upgrade_gap(gap)
     }
     if not confirmed:
         return coverage
@@ -57,7 +64,11 @@ def carry_over_user_confirmed_weak(
     changed = False
     for gap in coverage.gaps or []:
         gid = str(gap.gap_id or "").strip()
-        if gid in confirmed and not bool(getattr(gap, "user_confirmed_weak", False)):
+        if (
+            gid in confirmed
+            and is_weak_upgrade_gap(gap)
+            and not bool(getattr(gap, "user_confirmed_weak", False))
+        ):
             updated.append(gap.model_copy(update={"user_confirmed_weak": True}))
             changed = True
         else:
@@ -65,6 +76,34 @@ def carry_over_user_confirmed_weak(
     if not changed:
         return coverage
     return coverage.model_copy(update={"gaps": updated})
+
+
+def sanitize_stale_user_confirmed_weak(project: Project) -> int:
+    """Löscht ``user_confirmed_weak`` auf Gaps, die keine Weak-Upgrades sind.
+
+    Heilt Alt-Läufe (z. B. Rhythmus → Keyword Flow), in denen Bestätigungen
+    per Gap-ID auf high/none-Gaps mitgeschleppt wurden.
+    """
+    coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    if coverage is None or not coverage.gaps:
+        return 0
+    updated: list[CoverageGap] = []
+    cleared = 0
+    for gap in coverage.gaps:
+        if bool(getattr(gap, "user_confirmed_weak", False)) and not is_weak_upgrade_gap(
+            gap
+        ):
+            updated.append(gap.model_copy(update={"user_confirmed_weak": False}))
+            cleared += 1
+        else:
+            updated.append(gap)
+    if not cleared:
+        return 0
+    write_json(
+        coverage_gaps_path(project),
+        coverage.model_copy(update={"gaps": updated}),
+    )
+    return cleared
 
 
 @dataclass
@@ -489,8 +528,8 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
     - Accepted export_ready (gleiche Run-ID) schließt ebenfalls — auch ohne
       aktuellen Funnel-Eintrag.
     - Merge (merged | kept_local_weak) schließt weiterhin.
-    - ``user_confirmed_weak`` (Redaktion behält lokales Weak) schließt Weak-
-      Upgrade-Gaps ohne besseres Supplement.
+    - ``user_confirmed_weak`` schließt nur Weak-Upgrade-Gaps (priority=medium).
+      Stale Flags auf high/none werden zurückgesetzt.
     - Stale Funnel/Merge (andere/fehlende Run-ID) zählen nicht — Accepted-
       Fills mit gleicher Gap-ID werden zuvor auf den aktuellen Lauf rebound.
     """
@@ -501,6 +540,12 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
     run_id = str(getattr(coverage, "cut_plan_run_id", "") or "").strip()
     if not run_id:
         run_id = compute_cut_plan_run_id_from_path(unified_cut_plan_path(project))
+
+    cleared_stale_weak = sanitize_stale_user_confirmed_weak(project)
+    if cleared_stale_weak:
+        coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+        if coverage is None or not coverage.gaps:
+            return GapStatusSummary(message="Keine Coverage Gaps.")
 
     rebound = rebind_gap_fills_to_current_run(project)
 
@@ -532,11 +577,14 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
         gid = (gap.gap_id or "").strip()
         if not gid:
             continue
+        weak_confirmed = bool(getattr(gap, "user_confirmed_weak", False)) and (
+            is_weak_upgrade_gap(gap)
+        )
         if (
             gid in merge_closed
             or gid in funnel_ready
             or gid in accepted_ready
-            or bool(getattr(gap, "user_confirmed_weak", False))
+            or weak_confirmed
         ):
             filled_ids.append(gid)
         else:
@@ -552,6 +600,10 @@ def summarize_gap_status(project: Project) -> GapStatusSummary:
     if restored:
         notes.append(
             f"{restored} Fill(s) aus Funnel/Dateien wiederhergestellt"
+        )
+    if cleared_stale_weak:
+        notes.append(
+            f"{cleared_stale_weak} veraltete Weak-Bestätigung(en) zurückgesetzt"
         )
     if funnel_stale:
         notes.append("Funnel-Report gehört zu einem älteren Cut-Plan-Lauf")
