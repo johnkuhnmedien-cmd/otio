@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
+from otio_app.defaults import ELEVENLABS_MODEL_ID_V3
 from otio_app.services.voiceover_generation.elevenlabs_client import is_elevenlabs_configured
+from otio_app.services.voiceover_generation.elevenlabs_settings_service import (
+    load_elevenlabs_settings,
+)
 from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
     AudioTimingError,
     load_segment_timings,
@@ -13,14 +19,21 @@ from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
     synthesize_locked_script_audio,
     validate_timings_against_script,
 )
+from otio_app.services.without_voiceover_enhanced.enhanced_tts_text import (
+    build_segment_tts_text,
+)
 from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
     ENHANCED_INTRO_FOLDER_NAME,
     confirmed_intro_text,
     ensure_confirmed_intro_in_locked_script,
     is_intro_folder_name,
 )
+from otio_app.services.without_voiceover_enhanced.io_utils import load_model
+from otio_app.services.without_voiceover_enhanced.models import SegmentAlignment
+from otio_app.services.without_voiceover_enhanced.paths import (
+    segment_sentence_alignment_path,
+)
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
-    chapter_narration_text,
     group_segments_by_folder,
     list_enabled_dramaturgy_folders,
 )
@@ -33,6 +46,17 @@ from otio_app.ui.voiceover_generation.elevenlabs_settings_ui import (
     voice_id_is_set,
 )
 from otio_app.ui.without_voiceover_enhanced._shared import get_enhanced_project
+
+
+def _stored_tts_text(project, segment_id: str) -> str | None:
+    path = segment_sentence_alignment_path(project, segment_id)
+    if not Path(path).is_file():
+        return None
+    alignment = load_model(path, SegmentAlignment)
+    if alignment is None:
+        return None
+    text = (alignment.tts_text or "").strip()
+    return text or None
 
 
 def _format_tts_progress(
@@ -193,16 +217,18 @@ def render_enhanced_audio_page() -> None:
             progress.empty()
             st.error(str(exc))
 
+    settings = load_elevenlabs_settings(project)
     st.subheader("Kapitel")
+    st.caption(
+        "Die Kapitelvorschau unten ist **nicht** der API-Text. "
+        f"An ElevenLabs geht pro Segment der **TTS-Text** "
+        f"(bei `{ELEVENLABS_MODEL_ID_V3}` inkl. `[short pause]` / `[pause]` / "
+        "`[long pause]` aus Autorenpausen)."
+    )
     for folder_name, segments in groups:
         label = folder_name or "(ohne Kapitelzuordnung)"
         if is_intro_folder_name(folder_name):
             label = f"{ENHANCED_INTRO_FOLDER_NAME} (Hook)"
-        narration = (
-            chapter_narration_text(locked, folder_name)
-            if folder_name
-            else " ".join(seg.text for seg in segments)
-        )
         ready = sum(
             1
             for seg in segments
@@ -214,7 +240,6 @@ def render_enhanced_audio_page() -> None:
             f"{label} · {ready}/{len(segments)} Segmente vertont",
             expanded=True,
         ):
-            st.write(narration[:500] + ("…" if len(narration) > 500 else ""))
             if folder_name:
                 button_label = (
                     "Intro vertonen"
@@ -269,17 +294,34 @@ def render_enhanced_audio_page() -> None:
                         progress.empty()
                         st.error(str(exc))
             for seg in segments:
+                planned_tts = build_segment_tts_text(
+                    text=seg.text or "",
+                    author_pause_after_seconds=float(
+                        getattr(seg, "author_pause_after_seconds", 0.0) or 0.0
+                    ),
+                    model_id=settings.model_id,
+                )
+                stored_tts = _stored_tts_text(project, seg.segment_id)
+                pause = float(getattr(seg, "author_pause_after_seconds", 0.0) or 0.0)
+                pause_note = f" · author_pause={pause:g}s" if pause > 0 else ""
                 item = timing_by_id.get(seg.segment_id)
                 if item is None:
-                    st.caption(f"`{seg.segment_id}` · noch kein Audio")
+                    st.markdown(f"**`{seg.segment_id}`** · noch kein Audio{pause_note}")
                 else:
-                    st.caption(
-                        f"`{seg.segment_id}` · {item.duration_seconds:.2f}s · "
-                        f"{item.audio_status} · v={item.script_version}"
+                    st.markdown(
+                        f"**`{seg.segment_id}`** · {item.duration_seconds:.2f}s · "
+                        f"{item.audio_status} · v={item.script_version}{pause_note}"
                     )
                     st.caption(item.audio_path)
                     if item.timestamps_path:
                         st.caption(f"Timestamps: `{item.timestamps_path}`")
+                st.caption("TTS-Text an ElevenLabs:")
+                st.code(stored_tts or planned_tts, language=None)
+                if stored_tts and stored_tts.strip() != planned_tts.strip():
+                    st.warning(
+                        "Gespeicherter TTS-Text weicht vom aktuellen Skript ab — "
+                        "Kapitel neu vertonen."
+                    )
 
     errors: list[str] = []
     try:
