@@ -371,14 +371,19 @@ def intro_resolved_matches_plan(
 ) -> bool:
     """True wenn Resolved zur aktuellen Slot-Anzahl des Intro-Plans passt.
 
-    ``__shortfall``-Tails zählen nicht als zusätzliche Plan-Slots.
+    Envelope-Shots außerhalb der Slotkette (Shortfall-Tails; Map-Opener
+    falls jemals gesetzt) zählen nicht als zusätzliche Plan-Slots.
     """
     if plan is None or resolved is None:
         return False
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        _is_non_plan_envelope_shot,
+    )
+
     parent_shots = [
         shot
         for shot in resolved.shots
-        if not str(shot.shot_id or "").endswith("__shortfall")
+        if not _is_non_plan_envelope_shot(shot)
     ]
     return len(parent_shots) == len(plan.slots)
 

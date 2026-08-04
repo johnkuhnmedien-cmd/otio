@@ -117,21 +117,38 @@ def load_chapter_resolved(
     )
 
 
+def _is_non_plan_envelope_shot(shot: ResolvedShot) -> bool:
+    """Shots außerhalb der Unified-Plan-Slotkette (Match-/Offen-Zähler).
+
+    - ``__shortfall``: Dauer-Lücken-Tail nach einem Slot
+    - Keyword-Flow Map-Opener: technischer 9s-Vorspann vor dem Kapitel
+    """
+    shot_id = str(getattr(shot, "shot_id", "") or "")
+    if shot_id.endswith("__shortfall"):
+        return True
+    editorial = str(getattr(shot, "editorial_function", "") or "").strip().lower()
+    if editorial == "technical_chapter_map_opener":
+        return True
+    if shot_id.endswith("_map_opener"):
+        return True
+    return False
+
+
 def chapter_resolved_matches_plan(
     plan: UnifiedCutPlanDocument | None,
     resolved: ResolvedTimelineDocument | None,
 ) -> bool:
     """True wenn jedes Plan-Slot einen Parent-Shot hat.
 
-    ``__shortfall``-Tails zählen nicht extra — sonst wirken Kapitel mit
-    Dauer-Shortfall permanent „offen“ und fallen aus dem OTIO-Merge.
+    ``__shortfall``-Tails und Keyword-Flow-Map-Opener zählen nicht extra —
+    sonst wirken gültige Kapitel permanent „offen“ (Timing/Alle-OTIO).
     """
     if plan is None or resolved is None:
         return False
     parent_shots = [
         shot
         for shot in resolved.shots
-        if not str(shot.shot_id or "").endswith("__shortfall")
+        if not _is_non_plan_envelope_shot(shot)
     ]
     return len(parent_shots) == len(plan.slots)
 
