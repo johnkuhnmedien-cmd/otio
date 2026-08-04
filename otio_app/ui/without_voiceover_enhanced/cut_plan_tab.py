@@ -585,6 +585,9 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 "(Wort-Timestamps). Shot-Min/Max und die übrigen Cut-Settings "
                 "werden mitgegeben und gelten für LLM + Python."
             )
+        keyword_flow_allow_onset_overflow = bool(
+            current.keyword_flow_allow_onset_overflow
+        )
         if (
             cut_plan_mode == CUT_PLAN_MODE_UNIFIED
             and unified_cut_style == UNIFIED_CUT_STYLE_KEYWORD_FLOW
@@ -592,6 +595,18 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             st.caption(
                 "Kontextbasierter Keyword-Schnitt mit echten Wort-Onsets, "
                 "flexibler ±1,5-s-Platzierung und redaktionellen Pausen."
+            )
+            keyword_flow_allow_onset_overflow = st.checkbox(
+                "Keyword-Onset-Toleranz überschreitbar (Timing trotzdem akzeptieren)",
+                value=bool(current.keyword_flow_allow_onset_overflow),
+                key=f"enh_opt_kf_onset_overflow_{project.id}",
+                help=(
+                    "Default aus: Python Timing bricht ab, wenn die nötige "
+                    "Bildverschiebung zu einem Keyword-Onset > ±1,5 s liegt. "
+                    "Wenn aktiv: Timing wird mit den geklemmten Zeiten "
+                    "trotzdem geschrieben; die Überschreitung erscheint als Warnung "
+                    "unter Hinweise/Repairs. Audio wird nicht getrimmt."
+                ),
             )
         enable_unified_mini_repair = st.checkbox(
             "Unified Mini-Repair nach Gap-Merge (optional, Default aus)",
@@ -901,6 +916,9 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             schema_version="1.5",
             cut_plan_mode=str(cut_plan_mode),  # type: ignore[arg-type]
             unified_cut_style=str(unified_cut_style),  # type: ignore[arg-type]
+            keyword_flow_allow_onset_overflow=bool(
+                keyword_flow_allow_onset_overflow
+            ),
             enable_unified_mini_repair=bool(enable_unified_mini_repair),
             unified_mini_repair_threshold=float(unified_mini_repair_threshold),
             include_middle_frames=bool(include_middle_frames),
