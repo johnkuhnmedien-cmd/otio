@@ -28,6 +28,7 @@ __all__ = [
     "map_author_pause_seconds_to_v3_tag",
     "replace_timed_pause_markers_for_tts",
     "build_segment_tts_text",
+    "build_chapter_tts_text",
     "strip_author_pause_markers",
 ]
 
@@ -94,3 +95,40 @@ def build_segment_tts_text(
     if not body:
         return tag
     return f"{body} {tag}"
+
+
+def build_chapter_tts_text(
+    segments: list[object],
+    *,
+    model_id: str,
+) -> tuple[str, list[tuple[str, str]]]:
+    """Baut den Kapitel-TTS-Text für **einen** ElevenLabs-Call.
+
+    Returns:
+        full_tts_text: gesamter an ElevenLabs gesendeter Text inkl. v3-Pause-Tags
+        align_parts: ``(segment_id, spoken_body)`` ohne trailing Pause-Tag —
+            für Character-Timestamp-Alignment gegen ``full_tts_text``
+    """
+    pieces: list[str] = []
+    align_parts: list[tuple[str, str]] = []
+    for segment in segments:
+        segment_id = str(getattr(segment, "segment_id", "") or "").strip()
+        raw_text = str(getattr(segment, "text", "") or "")
+        pause_after = float(
+            getattr(segment, "author_pause_after_seconds", 0.0) or 0.0
+        )
+        body = replace_timed_pause_markers_for_tts(raw_text, model_id=model_id)
+        if not body.strip() or not segment_id:
+            continue
+        full_piece = build_segment_tts_text(
+            text=raw_text,
+            author_pause_after_seconds=pause_after,
+            model_id=model_id,
+        )
+        if not full_piece.strip():
+            continue
+        pieces.append(full_piece.strip())
+        align_parts.append((segment_id, body.strip()))
+    if not pieces:
+        return "", []
+    return " ".join(pieces), align_parts

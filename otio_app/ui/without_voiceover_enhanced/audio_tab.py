@@ -20,7 +20,7 @@ from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
     validate_timings_against_script,
 )
 from otio_app.services.without_voiceover_enhanced.enhanced_tts_text import (
-    build_segment_tts_text,
+    build_chapter_tts_text,
 )
 from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
     ENHANCED_INTRO_FOLDER_NAME,
@@ -67,19 +67,19 @@ def _format_tts_progress(
     segment_total: int,
 ) -> str:
     label = folder_name or "(ohne Kapitel)"
-    message = f"Kapitel {chapter_index}/{chapter_total}: „{label}“"
-    if segment_total > 1:
-        message += f" · Segment {segment_index}/{segment_total}"
-    return f"{message} → ElevenLabs…"
+    return (
+        f"Kapitel {chapter_index}/{chapter_total}: „{label}“ "
+        "→ ElevenLabs (1 Call)…"
+    )
 
 
 def render_enhanced_audio_page() -> None:
     st.header("⑥ Audio / ElevenLabs (Enhanced)")
     st.caption(
-        "Nur gesperrte Skripte. Vertonung **pro Kapitel sequenziell** "
-        "(Intro zuerst, dann Dramaturgie-Kapitel) — jedes Segment ein eigener "
-        "ElevenLabs-Call. Pro Segment werden ElevenLabs-Timestamps und "
-        "abgeleitete Satzzeiten unter `audio/alignments/` gespeichert."
+        "Nur gesperrte Skripte. Vertonung **pro Kapitel in einem ElevenLabs-Call** "
+        "(Intro zuerst, dann Dramaturgie-Kapitel) — niemals Segment für Segment. "
+        "Pause-Tags stehen im Kapitel-TTS-Text; Segment-Slices und Satzzeiten "
+        "werden aus dem Chapter-Alignment abgeleitet (`audio/alignments/`)."
     )
     project = get_enhanced_project()
     if project is None:
@@ -144,7 +144,7 @@ def render_enhanced_audio_page() -> None:
             "Intro vertonen",
             key="enh_audio_intro",
             disabled=not can_tts or intro_text is None,
-            help="Nur das bestätigte Intro (Enhanced-Segment).",
+            help="Bestätigtes Intro in einem ElevenLabs-Call.",
         )
 
     if run_all:
@@ -220,10 +220,9 @@ def render_enhanced_audio_page() -> None:
     settings = load_elevenlabs_settings(project)
     st.subheader("Kapitel")
     st.caption(
-        "Die Kapitelvorschau unten ist **nicht** der API-Text. "
-        f"An ElevenLabs geht pro Segment der **TTS-Text** "
+        f"An ElevenLabs geht **ein TTS-Text pro Kapitel** "
         f"(bei `{ELEVENLABS_MODEL_ID_V3}` inkl. `[short pause]` / `[pause]` / "
-        "`[long pause]` aus Autorenpausen)."
+        "`[long pause]`). Darunter: abgeleitete Segment-Slices."
     )
     for folder_name, segments in groups:
         label = folder_name or "(ohne Kapitelzuordnung)"
@@ -236,10 +235,15 @@ def render_enhanced_audio_page() -> None:
             and timing_by_id[seg.segment_id].audio_status == "valid"
             and timing_by_id[seg.segment_id].script_version == locked.script_version
         )
+        chapter_tts, _align_parts = build_chapter_tts_text(
+            list(segments), model_id=settings.model_id
+        )
         with st.expander(
-            f"{label} · {ready}/{len(segments)} Segmente vertont",
+            f"{label} · {ready}/{len(segments)} Segmente · 1 ElevenLabs-Call",
             expanded=True,
         ):
+            st.caption("Kapitel-TTS-Text an ElevenLabs:")
+            st.code(chapter_tts, language=None)
             if folder_name:
                 button_label = (
                     "Intro vertonen"
@@ -274,7 +278,7 @@ def render_enhanced_audio_page() -> None:
 
                     try:
                         with st.spinner(
-                            f"„{folder_name}“ wird an ElevenLabs gesendet…"
+                            f"„{folder_name}“ wird in einem Call an ElevenLabs gesendet…"
                         ):
                             if is_intro_folder_name(folder_name):
                                 synthesize_intro_script_audio(
@@ -294,14 +298,6 @@ def render_enhanced_audio_page() -> None:
                         progress.empty()
                         st.error(str(exc))
             for seg in segments:
-                planned_tts = build_segment_tts_text(
-                    text=seg.text or "",
-                    author_pause_after_seconds=float(
-                        getattr(seg, "author_pause_after_seconds", 0.0) or 0.0
-                    ),
-                    model_id=settings.model_id,
-                )
-                stored_tts = _stored_tts_text(project, seg.segment_id)
                 pause = float(getattr(seg, "author_pause_after_seconds", 0.0) or 0.0)
                 pause_note = f" · author_pause={pause:g}s" if pause > 0 else ""
                 item = timing_by_id.get(seg.segment_id)
@@ -315,13 +311,14 @@ def render_enhanced_audio_page() -> None:
                     st.caption(item.audio_path)
                     if item.timestamps_path:
                         st.caption(f"Timestamps: `{item.timestamps_path}`")
-                st.caption("TTS-Text an ElevenLabs:")
-                st.code(stored_tts or planned_tts, language=None)
-                if stored_tts and stored_tts.strip() != planned_tts.strip():
-                    st.warning(
-                        "Gespeicherter TTS-Text weicht vom aktuellen Skript ab — "
-                        "Kapitel neu vertonen."
-                    )
+                spoken = (seg.text or "").strip()
+                stored = _stored_tts_text(project, seg.segment_id)
+                if stored:
+                    st.caption("Segment-Slice (Spoken Body):")
+                    st.code(stored, language=None)
+                elif spoken:
+                    st.caption("Segment-Spoken:")
+                    st.code(spoken, language=None)
 
     errors: list[str] = []
     try:

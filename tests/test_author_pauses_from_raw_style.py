@@ -14,6 +14,7 @@ from otio_app.services.without_voiceover_enhanced.models import (
     SegmentTiming,
 )
 from otio_app.services.without_voiceover_enhanced.enhanced_tts_text import (
+    build_chapter_tts_text,
     build_segment_tts_text,
     map_author_pause_seconds_to_v3_tag,
 )
@@ -189,6 +190,36 @@ def test_style_guard_flags_missing_author_pauses() -> None:
         folder_name="Dublin",
         segments=segments,
     )
+
+
+def test_chapter_tts_text_is_one_payload_with_pause_tags() -> None:
+    segments = [
+        ScriptSegment(
+            segment_id="a_001",
+            text="Fact one.",
+            sequence_index=1,
+            folder_name="Dublin",
+            author_pause_after_seconds=3.0,
+        ),
+        ScriptSegment(
+            segment_id="a_002",
+            text="Fact two.",
+            sequence_index=2,
+            folder_name="Dublin",
+            author_pause_after_seconds=2.0,
+        ),
+        ScriptSegment(
+            segment_id="a_003",
+            text="Fact three.",
+            sequence_index=3,
+            folder_name="Dublin",
+            author_pause_after_seconds=0.0,
+        ),
+    ]
+    full, parts = build_chapter_tts_text(segments, model_id="eleven_v3")
+    assert full == "Fact one. [pause] Fact two. [short pause] Fact three."
+    assert [sid for sid, _ in parts] == ["a_001", "a_002", "a_003"]
+    assert [body for _, body in parts] == ["Fact one.", "Fact two.", "Fact three."]
 
 
 def test_tts_text_injects_eleven_v3_pause_tags() -> None:
