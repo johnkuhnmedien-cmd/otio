@@ -31,6 +31,9 @@ from otio_app.services.voiceover_generation.models import (
 )
 from otio_app.services.voiceover_generation.project_brief_service import load_project_brief
 from otio_app.services.voiceover_generation.style_reference_service import (
+    compute_style_context_hash,
+    is_raw_style_mode,
+    load_style_references,
     style_context_text_for_prompts,
 )
 from otio_app.services.without_voiceover_enhanced.models import (
@@ -54,6 +57,14 @@ from otio_app.services.without_voiceover_enhanced.script_neighbor_context import
     build_film_wide_editorial_links_block,
     build_recent_neighbor_excerpts_block,
     recent_prior_chapter_excerpts,
+)
+from otio_app.services.without_voiceover_enhanced.raw_chapter_style_structure import (
+    analyze_raw_chapter_style_structure,
+    detect_raw_chapter_style_violations,
+    prepare_raw_chapter_reference,
+)
+from otio_app.services.without_voiceover_enhanced.script_chapter_link_guard import (
+    detect_chapter_link_violations,
 )
 from otio_app.services.without_voiceover_enhanced.script_prompts import (
     build_enhanced_folder_script_prompt,
@@ -99,8 +110,14 @@ def _brief_text(project: Project) -> str:
     return brief.model_dump_json(indent=2)
 
 
-def _style_text(project: Project) -> str:
-    return style_context_text_for_prompts(project, detailed=True)
+def _style_text(project: Project, *, for_chapter: bool = True) -> str:
+    return style_context_text_for_prompts(
+        project, detailed=True, for_chapter=for_chapter
+    )
+
+
+def _style_is_raw_chapter(project: Project) -> bool:
+    return is_raw_style_mode(load_style_references(project))
 
 
 def _verified_facts_text(project: Project) -> str:
@@ -135,13 +152,14 @@ def _film_context_text(plan: DramaturgyPlan) -> str:
     return (
         f"project_title: {plan.project_title or '-'}\n"
         f"core_promise: {plan.core_promise or '-'}\n"
-        f"narrative_arc: {plan.narrative_arc or '-'}\n"
-        f"global_transition_strategy: {plan.global_transition_strategy or '-'}"
+        "narrative_arc (SILENT EDITORIAL METADATA — DO NOT VERBALIZE): "
+        f"{plan.narrative_arc or '-'}"
     )
 
 
 def _chapter_dramaturgy_text(entry: DramaturgyFolderEntry) -> str:
     return (
+        "SILENT EDITORIAL METADATA — DO NOT VERBALIZE\n"
         f"folder_name: {entry.folder_name}\n"
         f"order_index: {entry.order_index}\n"
         f"dramaturgy_role: {entry.dramaturgy_role}\n"
@@ -206,7 +224,12 @@ def _build_script_neighbor_context(
         entries,
         current_folder_name=entry.folder_name,
     )
-    film_wide_editorial_links_text = build_film_wide_editorial_links_block()
+    setting = _folder_voiceover_setting_for(project, entry.folder_name)
+    allow_callback = bool(setting and setting.callback_to_previous)
+    film_wide_editorial_links_text = build_film_wide_editorial_links_block(
+        allow_callback=allow_callback,
+        allow_forward_glance=False,
+    )
 
     opening_inventory = remove_opening_for_folder(
         load_opening_inventory(project), entry.folder_name
@@ -237,7 +260,6 @@ def _build_script_neighbor_context(
     )
     recent_neighbor_excerpts_text = build_recent_neighbor_excerpts_block(excerpts)
 
-    setting = _folder_voiceover_setting_for(project, entry.folder_name)
     editorial_neighbor_craft_text = build_editorial_neighbor_craft_block(
         entry=entry,
         setting=setting,
@@ -289,6 +311,7 @@ def parse_enhanced_script_response(
                 folder_name=folder_name or str(item.get("folder_name") or ""),
                 folder_order_index=folder_order_index
                 or int(item.get("folder_order_index") or 0),
+                paragraph_break_after=bool(item.get("paragraph_break_after", False)),
             )
         )
 
@@ -343,7 +366,7 @@ def parse_enhanced_script_response(
 
     narration = str(payload.get("narration_full") or "").strip()
     if not narration:
-        narration = " ".join(s.text for s in segments)
+        narration = _join_segment_texts(segments)
 
     for segment in segments:
         if segment.fact_check_required and segment.segment_id not in {
@@ -377,6 +400,19 @@ def _invalidate_script_lock(project: Project) -> None:
         locked.unlink()
 
 
+def _join_segment_texts(segments: list[ScriptSegment]) -> str:
+    """Rekonstruiert Narration mit optionalen Absatzgrenzen."""
+    nonempty = [seg for seg in segments if (seg.text or "").strip()]
+    if not nonempty:
+        return ""
+    chunks: list[str] = [nonempty[0].text.strip()]
+    for prev, nxt in zip(nonempty, nonempty[1:]):
+        sep = "\n\n" if bool(getattr(prev, "paragraph_break_after", False)) else " "
+        chunks.append(sep)
+        chunks.append(nxt.text.strip())
+    return "".join(chunks)
+
+
 def _resequence_document(
     document: EnhancedScriptDocument,
     folder_order: list[str],
@@ -393,7 +429,7 @@ def _resequence_document(
     for index, segment in enumerate(segments, start=1):
         segment.sequence_index = index
     document.segments = segments
-    document.narration_full = " ".join(seg.text for seg in segments)
+    document.narration_full = _join_segment_texts(segments)
     document.forbidden_phrases_found = detect_forbidden_phrases(document.narration_full)
     document.script_status = "draft"
     return document
@@ -466,6 +502,10 @@ def merge_folder_script_into_document(
         coverage_needs=keep_needs + list(folder_partial.coverage_needs),
         fact_check_hints=keep_hints + list(folder_partial.fact_check_hints),
         source_brief_hash=base.source_brief_hash,
+        source_style_context_hash=(
+            folder_partial.source_style_context_hash
+            or base.source_style_context_hash
+        ),
     )
     return _resequence_document(merged, folder_order)
 
@@ -482,12 +522,88 @@ def chapter_narration_text(
 ) -> str:
     if document is None:
         return ""
-    parts = [
-        seg.text.strip()
-        for seg in document.segments
-        if seg.folder_name == folder_name and seg.text.strip()
-    ]
-    return " ".join(parts)
+    return _join_segment_texts(
+        [
+            seg
+            for seg in document.segments
+            if seg.folder_name == folder_name and seg.text.strip()
+        ]
+    )
+
+
+CHAPTER_LINK_REPAIR_INSTRUCTION = """\
+REPAIR REQUIRED
+
+The previous answer used a forbidden spoken connection between chapters.
+
+Rewrite the complete chapter as a self-contained mini-documentary.
+
+Start directly with the location, a concrete defining feature, its historical importance, or a verified fact.
+
+Do not describe leaving another place, travelling here, continuing the journey, the road to the next location, or what comes next.
+
+Preserve the factual content and target length.
+Return the complete required JSON again.
+"""
+
+RAW_STYLE_REPAIR_INSTRUCTION = """\
+RAW STYLE REPAIR REQUIRED
+
+The previous answer did not follow the binding prose architecture of the Raw Chapter Reference.
+
+Rewrite the complete chapter.
+
+Match the reference's:
+- directness
+- sentence-length pattern
+- factual density
+- one-main-idea-per-beat rhythm
+- restrained use of atmosphere
+- concrete treatment of places and landmarks
+
+Do not copy facts, place names, wording or sentences from the reference.
+
+Do not include pause labels or production directions.
+
+Keep the chapter-specific verified content and target length.
+
+Return the complete required JSON again.
+"""
+
+
+def _validate_chapter_link_usage_audit(
+    payload: dict[str, Any] | None,
+    *,
+    narration_full: str,
+    allow_from_previous: bool,
+    allow_to_next: bool,
+    allow_callback: bool,
+) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    usage = payload.get("chapter_link_usage")
+    if usage is None:
+        return []
+    if not isinstance(usage, dict):
+        return ["chapter_link_usage muss ein Objekt sein."]
+    errors: list[str] = []
+    narration = narration_full or ""
+    for key, allowed in (
+        ("from_previous", allow_from_previous),
+        ("to_next", allow_to_next),
+        ("callback", allow_callback),
+    ):
+        if bool(usage.get(key)) and not allowed:
+            errors.append(
+                f"chapter_link_usage.{key}=true ohne Erlaubnis."
+            )
+    for quote in usage.get("evidence_quotes") or []:
+        text = str(quote or "").strip()
+        if text and text not in narration:
+            errors.append(
+                f"chapter_link_usage evidence_quote fehlt in narration_full: «{text[:80]}»"
+            )
+    return errors
 
 
 def segments_for_folder(
@@ -690,6 +806,21 @@ def generate_enhanced_script_for_folder(
     target, min_words, max_words = _word_targets_for_folder(project, entry)
     folder_slug = safe_folder_slug(folder_name)
     existing_draft = load_script_draft(project)
+    setting = _folder_voiceover_setting_for(project, folder_name)
+    allow_from = bool(setting and setting.transition_from_previous)
+    allow_to = bool(setting and setting.transition_to_next)
+    allow_callback = bool(setting and setting.callback_to_previous)
+    allow_contrast = bool(setting and setting.use_contrast_with_previous)
+    allow_commonality = bool(setting and setting.use_commonality_with_previous)
+    style_is_raw = _style_is_raw_chapter(project)
+    style_hash = compute_style_context_hash(project)
+    raw_structure = None
+    if style_is_raw:
+        refs = load_style_references(project)
+        raw_structure = analyze_raw_chapter_style_structure(
+            prepare_raw_chapter_reference(refs.raw_reference_text or "")
+        )
+
     (
         chapter_order_text,
         film_wide_editorial_links_text,
@@ -706,120 +837,199 @@ def generate_enhanced_script_for_folder(
         existing_draft=existing_draft,
     )
 
-    prompt = build_enhanced_folder_script_prompt(
-        project_brief_text=_brief_text(project),
-        film_context_text=_film_context_text(plan),
-        chapter_dramaturgy_text=_chapter_dramaturgy_text(entry),
-        style_profile_text=_style_text(project),
-        verified_facts_text=_verified_facts_text(project),
-        folder_name=folder_name,
-        folder_slug=folder_slug,
-        dramaturgy_role=entry.dramaturgy_role,
-        target_words=target,
-        min_words=min_words,
-        max_words=max_words,
-        previous_folder_name=previous_name,
-        next_folder_name=next_name,
-        chapter_order_text=chapter_order_text,
-        film_wide_editorial_links_text=film_wide_editorial_links_text,
-        recent_neighbor_excerpts_text=recent_neighbor_excerpts_text,
-        editorial_neighbor_craft_text=editorial_neighbor_craft_text,
-        rhetoric_ledger_text=rhetoric_ledger_text,
-        opening_inventory_text=opening_inventory_text,
-        language=project.language,
-    )
-
     model_id = resolve_llm_model_id(provider, model)
+    repair_instruction = ""
+    last_error = "Skripterzeugung fehlgeschlagen."
     try:
-        if llm_callable is not None:
-            raw = llm_callable(
-                prompt=prompt,
-                model=model_id,
-                max_output_tokens=max_output_tokens,
-            )
-            raw_text = raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
-        else:
-            raw_text = generate_plan_text_with_metadata(
-                prompt=prompt,
-                model=model_id,
-                max_output_tokens=max_output_tokens,
-            ).raw_text
-        partial = parse_enhanced_script_response(
-            raw_text,
-            folder_name=folder_name,
-            folder_order_index=entry.order_index,
-        )
-        if not partial.segments:
-            return FolderScriptBuildResult(
+        for attempt in range(2):
+            prompt = build_enhanced_folder_script_prompt(
+                project_brief_text=_brief_text(project),
+                film_context_text=_film_context_text(plan),
+                chapter_dramaturgy_text=_chapter_dramaturgy_text(entry),
+                style_profile_text=_style_text(project, for_chapter=True),
+                verified_facts_text=_verified_facts_text(project),
                 folder_name=folder_name,
-                status="FAIL",
-                error="LLM-Antwort enthielt keine Segmente.",
-            )
-
-        payload = _extract_json(raw_text) if isinstance(raw_text, str) else raw_text
-        usage = parse_rhetoric_usage(payload if isinstance(payload, dict) else None)
-        ledger_for_validation = remove_rhetoric_claims_for_folder(
-            load_rhetoric_ledger(project), folder_name
-        )
-        rhetoric_errors = validate_rhetoric_usage_against_ledger(
-            usage=usage,
-            ledger=ledger_for_validation,
-            folder_name=folder_name,
-            narration_full=partial.narration_full,
-        )
-        if rhetoric_errors:
-            return FolderScriptBuildResult(
-                folder_name=folder_name,
-                status="FAIL",
-                error="Rhetoric-Ledger: " + " ".join(rhetoric_errors),
+                folder_slug=folder_slug,
+                dramaturgy_role=entry.dramaturgy_role,
+                target_words=target,
+                min_words=min_words,
+                max_words=max_words,
+                previous_folder_name=previous_name,
+                next_folder_name=next_name,
+                chapter_order_text=chapter_order_text,
+                film_wide_editorial_links_text=film_wide_editorial_links_text,
+                recent_neighbor_excerpts_text=recent_neighbor_excerpts_text,
+                editorial_neighbor_craft_text=editorial_neighbor_craft_text,
+                rhetoric_ledger_text=rhetoric_ledger_text,
+                opening_inventory_text=opening_inventory_text,
+                language=project.language,
+                transition_from_previous=allow_from,
+                transition_to_next=allow_to,
+                callback_to_previous=allow_callback,
+                use_contrast_with_previous=allow_contrast,
+                use_commonality_with_previous=allow_commonality,
+                style_is_raw_chapter=style_is_raw,
+                repair_instruction=repair_instruction,
             )
 
-        opening_for_validation = remove_opening_for_folder(
-            load_opening_inventory(project), folder_name
-        )
-        opening_errors = validate_opening_against_inventory(
-            narration_full=partial.narration_full,
-            inventory=opening_for_validation,
-            folder_name=folder_name,
-        )
-        if opening_errors:
-            return FolderScriptBuildResult(
+            if llm_callable is not None:
+                raw = llm_callable(
+                    prompt=prompt,
+                    model=model_id,
+                    max_output_tokens=max_output_tokens,
+                )
+                raw_text = (
+                    raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
+                )
+            else:
+                raw_text = generate_plan_text_with_metadata(
+                    prompt=prompt,
+                    model=model_id,
+                    max_output_tokens=max_output_tokens,
+                ).raw_text
+            partial = parse_enhanced_script_response(
+                raw_text,
                 folder_name=folder_name,
-                status="FAIL",
-                error="Satzanfang-Inventar: " + " ".join(opening_errors),
+                folder_order_index=entry.order_index,
             )
+            if not partial.segments:
+                last_error = "LLM-Antwort enthielt keine Segmente."
+                return FolderScriptBuildResult(
+                    folder_name=folder_name,
+                    status="FAIL",
+                    error=last_error,
+                )
 
-        folder_order = [item.folder_name for item in entries]
-        merged = merge_folder_script_into_document(
-            existing_draft,
-            partial,
-            folder_name=folder_name,
-            folder_order_index=entry.order_index,
-            folder_order=folder_order,
-        )
-        save_script_draft(project, merged)
-        save_rhetoric_ledger(
-            project,
-            merge_rhetoric_claims_for_folder(
-                ledger_for_validation,
-                folder_name=folder_name,
+            payload = _extract_json(raw_text) if isinstance(raw_text, str) else raw_text
+            payload_dict = payload if isinstance(payload, dict) else None
+            usage = parse_rhetoric_usage(payload_dict)
+            ledger_for_validation = remove_rhetoric_claims_for_folder(
+                load_rhetoric_ledger(project), folder_name
+            )
+            rhetoric_errors = validate_rhetoric_usage_against_ledger(
                 usage=usage,
-            ),
-        )
-        save_opening_inventory(
-            project,
-            merge_opening_for_folder(
-                opening_for_validation,
+                ledger=ledger_for_validation,
                 folder_name=folder_name,
                 narration_full=partial.narration_full,
-            ),
-        )
-        _invalidate_script_lock(project)
+            )
+            if rhetoric_errors:
+                return FolderScriptBuildResult(
+                    folder_name=folder_name,
+                    status="FAIL",
+                    error="Rhetoric-Ledger: " + " ".join(rhetoric_errors),
+                )
+
+            opening_for_validation = remove_opening_for_folder(
+                load_opening_inventory(project), folder_name
+            )
+            opening_errors = validate_opening_against_inventory(
+                narration_full=partial.narration_full,
+                inventory=opening_for_validation,
+                folder_name=folder_name,
+            )
+            if opening_errors:
+                return FolderScriptBuildResult(
+                    folder_name=folder_name,
+                    status="FAIL",
+                    error="Satzanfang-Inventar: " + " ".join(opening_errors),
+                )
+
+            link_errors = detect_chapter_link_violations(
+                partial.narration_full,
+                language=project.language,
+                allow_from_previous=allow_from,
+                allow_to_next=allow_to,
+                allow_callback=allow_callback,
+            )
+            link_errors.extend(
+                _validate_chapter_link_usage_audit(
+                    payload_dict,
+                    narration_full=partial.narration_full,
+                    allow_from_previous=allow_from,
+                    allow_to_next=allow_to,
+                    allow_callback=allow_callback,
+                )
+            )
+            style_errors: list[str] = []
+            if style_is_raw:
+                style_errors = detect_raw_chapter_style_violations(
+                    partial.narration_full,
+                    structure=raw_structure,
+                    folder_name=folder_name,
+                )
+
+            if link_errors or style_errors:
+                last_error = " ".join(link_errors + style_errors)
+                if attempt == 0:
+                    repair_instruction = (
+                        CHAPTER_LINK_REPAIR_INSTRUCTION
+                        if link_errors
+                        else RAW_STYLE_REPAIR_INSTRUCTION
+                    )
+                    if link_errors and style_errors:
+                        repair_instruction = (
+                            CHAPTER_LINK_REPAIR_INSTRUCTION
+                            + "\n\n"
+                            + RAW_STYLE_REPAIR_INSTRUCTION
+                        )
+                    continue
+                return FolderScriptBuildResult(
+                    folder_name=folder_name,
+                    status="FAIL",
+                    error=(
+                        "Kapitel-Narration nach Repair weiterhin ungültig: "
+                        + last_error
+                    ),
+                )
+
+            partial = partial.model_copy(
+                update={"source_style_context_hash": style_hash}
+            )
+            folder_order = [item.folder_name for item in entries]
+            merged = merge_folder_script_into_document(
+                existing_draft,
+                partial,
+                folder_name=folder_name,
+                folder_order_index=entry.order_index,
+                folder_order=folder_order,
+            )
+            merged = merged.model_copy(
+                update={
+                    "source_style_context_hash": style_hash,
+                    "script_status": "draft",
+                }
+            )
+            save_script_draft(project, merged)
+            save_rhetoric_ledger(
+                project,
+                merge_rhetoric_claims_for_folder(
+                    ledger_for_validation,
+                    folder_name=folder_name,
+                    usage=usage,
+                ),
+            )
+            save_opening_inventory(
+                project,
+                merge_opening_for_folder(
+                    opening_for_validation,
+                    folder_name=folder_name,
+                    narration_full=partial.narration_full,
+                ),
+            )
+            _invalidate_script_lock(project)
+            return FolderScriptBuildResult(
+                folder_name=folder_name,
+                status="PASS",
+                document=merged,
+                segment_count=sum(
+                    1 for s in merged.segments if s.folder_name == folder_name
+                ),
+            )
+
         return FolderScriptBuildResult(
             folder_name=folder_name,
-            status="PASS",
-            document=merged,
-            segment_count=sum(1 for s in merged.segments if s.folder_name == folder_name),
+            status="FAIL",
+            error=last_error,
         )
     except Exception as exc:  # noqa: BLE001
         return FolderScriptBuildResult(

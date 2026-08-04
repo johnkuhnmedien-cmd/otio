@@ -9,6 +9,9 @@ from otio_app.services.voiceover_generation.model_settings_service import (
     load_model_settings,
     save_model_settings,
 )
+from otio_app.services.voiceover_generation.style_reference_service import (
+    compute_style_context_hash,
+)
 from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
     mark_audio_stale_for_changed_segments,
 )
@@ -352,6 +355,8 @@ def _render_chapter_scripts(
                                 st.error(str(exc))
                     else:
                         st.write(segment.text)
+                    if bool(getattr(segment, "paragraph_break_after", False)):
+                        st.write("")
 
             chapter_intents = [
                 intent
@@ -399,11 +404,34 @@ def render_enhanced_folder_voiceovers_page() -> None:
 
     draft = load_script_draft(project)
     locked = load_locked_script(project)
+    current_style_hash = compute_style_context_hash(project)
+    style_stale = bool(
+        draft is not None
+        and draft.segments
+        and draft.source_style_context_hash
+        and draft.source_style_context_hash != current_style_hash
+    )
+    if style_stale and locked is not None:
+        # Style Reference geändert — Lock ungültig, Draft bleibt sichtbar.
+        try:
+            from otio_app.services.without_voiceover_enhanced.paths import (
+                script_locked_path,
+            )
+
+            path = script_locked_path(project)
+            if path.is_file():
+                path.unlink()
+        except OSError:
+            pass
+        locked = None
 
     st.divider()
     col_lock, _ = st.columns(2)
     with col_lock:
-        if st.button("Script Lock", disabled=draft is None or not draft.segments):
+        if st.button(
+            "Script Lock",
+            disabled=draft is None or not draft.segments or style_stale,
+        ):
             try:
                 locked = lock_script(project, draft)
                 st.success(
@@ -414,12 +442,20 @@ def render_enhanced_folder_voiceovers_page() -> None:
             except ScriptLockError as exc:
                 st.error(str(exc))
 
-    if locked is not None:
+    if style_stale:
+        st.error(
+            "**STALE_STYLE** — Die Style Reference wurde nach der Skripterzeugung geändert. "
+            "Die vorhandenen Kapitel verwenden noch den vorherigen Stil. "
+            "Kapitel neu erzeugen und anschließend erneut bestätigen."
+        )
+    elif locked is not None:
         st.info(f"Gesperrt: `{locked.script_version}` · status=`{locked.script_status}`")
     elif draft is not None and draft.segments:
         st.warning("Skript ist noch nicht gesperrt — ElevenLabs benötigt Script Lock.")
 
     show = locked or draft or EnhancedScriptDocument(script_status="draft")
+    if style_stale and show.segments:
+        show = show.model_copy(update={"script_status": "STALE_STYLE"})
 
     if show.forbidden_phrases_found:
         real = [

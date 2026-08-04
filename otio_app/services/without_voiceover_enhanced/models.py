@@ -40,6 +40,8 @@ class ScriptSegment(BaseModel):
     # Dramaturgie-Kapitel — leer bei älteren Drafts ohne Ordner-Zuordnung.
     folder_name: str = ""
     folder_order_index: int = 0
+    # Additive Beat-/Absatzgrenze nach diesem Segment (kein TTS-Pause-Marker).
+    paragraph_break_after: bool = False
 
 
 class VisualIntent(BaseModel):
@@ -77,7 +79,7 @@ class FactCheckHint(BaseModel):
 class EnhancedScriptDocument(BaseModel):
     schema_version: str = "enhanced-script-v1"
     script_version: str = "script-v1"
-    script_status: str = "draft"  # draft | locked
+    script_status: str = "draft"  # draft | locked | STALE_STYLE
     narration_full: str = ""
     segments: list[ScriptSegment] = Field(default_factory=list)
     visual_beats: list[VisualBeat] = Field(default_factory=list)
@@ -87,6 +89,7 @@ class EnhancedScriptDocument(BaseModel):
     forbidden_phrases_found: list[str] = Field(default_factory=list)
     locked_at: Optional[str] = None
     source_brief_hash: str = ""
+    source_style_context_hash: str = ""
 
 
 class SegmentTiming(BaseModel):

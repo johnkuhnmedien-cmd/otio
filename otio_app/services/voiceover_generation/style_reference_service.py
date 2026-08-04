@@ -5,6 +5,7 @@ Nur Klartext (.txt/.md) wird unterstützt — keine PDF/DOCX-Verarbeitung.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime, timezone
@@ -43,17 +44,66 @@ def is_raw_style_mode(refs: VoiceoverStyleReferences) -> bool:
     return normalize_style_mode(refs.style_mode) == STYLE_MODE_RAW_TEXT
 
 
+def format_raw_chapter_reference_for_prompts(raw_text: str) -> str:
+    """Binding prose-architecture block for Enhanced chapter scripts."""
+    from otio_app.services.without_voiceover_enhanced.raw_chapter_style_structure import (
+        analyze_raw_chapter_style_structure,
+        format_raw_chapter_structure_signals,
+        prepare_raw_chapter_reference,
+    )
+
+    prepared = prepare_raw_chapter_reference(raw_text)
+    if not prepared.cleaned_text.strip():
+        return (
+            "(kein Raw-Style-Text hinterlegt — neutraler dokumentarischer Standardstil)"
+        )
+    structure = analyze_raw_chapter_style_structure(prepared)
+    signals = format_raw_chapter_structure_signals(structure)
+    return (
+        "RAW CHAPTER PROSE REFERENCE — BINDING PROSE ARCHITECTURE\n\n"
+        "Use the reference below as the primary prose-architecture model for this chapter.\n\n"
+        "Silently analyze and reproduce its:\n"
+        "- sentence-length distribution\n"
+        "- paragraph and beat rhythm\n"
+        "- factual density\n"
+        "- directness of openings\n"
+        "- ratio of factual explanation to atmosphere\n"
+        "- use of concrete landmarks, names, dates and visible details\n"
+        "- narrator distance and formality\n"
+        "- amount of metaphor and personification\n"
+        "- way of moving between subjects inside one location\n\n"
+        "Preserve the reference's LEVEL OF DIRECTNESS.\n\n"
+        "Do not merely borrow its general mood.\n\n"
+        "Do not copy:\n"
+        "- wording\n"
+        "- sentences\n"
+        "- facts\n"
+        "- dates\n"
+        "- place names\n"
+        "- unique metaphors\n\n"
+        "When this reference conflicts with generic style advice, follow this reference "
+        "for prose form. Factuality, schema and explicit editor instructions still remain "
+        "binding.\n\n"
+        f"{signals}\n\n"
+        "REFERENCE TEXT:\n"
+        f"{prepared.cleaned_text}"
+    )
+
+
 def format_raw_style_reference_for_prompts(
     raw_text: str,
     *,
     label: str = "RAW STYLE REFERENCE",
     as_structural_template: bool = False,
+    for_chapter: bool = False,
 ) -> str:
     text = (raw_text or "").strip()
     if not text:
         return (
             "(kein Raw-Style-Text hinterlegt — neutraler dokumentarischer Standardstil)"
         )
+    if for_chapter:
+        return format_raw_chapter_reference_for_prompts(text)
     if as_structural_template:
         return (
             f"{label} — STRUCTURAL TEMPLATE for the Intro.\n"
@@ -92,11 +142,13 @@ def style_context_text_for_prompts(
     *,
     detailed: bool = False,
     for_intro: bool = False,
+    for_chapter: bool = False,
 ) -> str:
     """Textblock für LLM-Prompts: Raw-Referenz oder Style Profile.
 
     for_intro=True nutzt im Raw-Modus bevorzugt ``raw_intro_reference_text``
     (Fallback: allgemeiner ``raw_reference_text``).
+    for_chapter=True formatiert Raw-Text als verbindliche Kapitel-Prosaarchitektur.
     """
     refs = load_style_references(project)
     if is_raw_style_mode(refs):
@@ -108,7 +160,10 @@ def style_context_text_for_prompts(
                 label="RAW INTRO STRUCTURAL REFERENCE",
                 as_structural_template=True,
             )
-        return format_raw_style_reference_for_prompts(refs.raw_reference_text)
+        return format_raw_style_reference_for_prompts(
+            refs.raw_reference_text,
+            for_chapter=for_chapter,
+        )
 
     from otio_app.services.voiceover_generation.style_profile_service import (
         load_style_profile,
@@ -120,6 +175,35 @@ def style_context_text_for_prompts(
             return "(kein Style Profile)"
         return profile.model_dump_json(indent=2)
     return format_style_profile_summary_for_prompts(profile)
+
+
+def compute_style_context_hash(project: Project) -> str:
+    """Stabiler Hash über aktiven Style-Modus und relevante Referenzinhalte."""
+    refs = load_style_references(project)
+    mode = normalize_style_mode(refs.style_mode)
+    if mode == STYLE_MODE_RAW_TEXT:
+        from otio_app.services.without_voiceover_enhanced.raw_chapter_style_structure import (
+            prepare_raw_chapter_reference,
+        )
+
+        prepared = prepare_raw_chapter_reference(refs.raw_reference_text or "")
+        payload = {
+            "mode": mode,
+            "raw": prepared.cleaned_text,
+            "raw_intro": (refs.raw_intro_reference_text or "").strip(),
+        }
+    else:
+        from otio_app.services.voiceover_generation.style_profile_service import (
+            load_style_profile,
+        )
+
+        profile = load_style_profile(project)
+        payload = {
+            "mode": mode,
+            "profile": profile.model_dump(mode="json") if profile is not None else None,
+        }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def load_style_references(project: Project) -> VoiceoverStyleReferences:
@@ -157,6 +241,12 @@ def save_style_references(
 ) -> VoiceoverStyleReferences:
     """Speichert die konsolidierte JSON und zusätzlich jeden Upload als reine
     Textdatei unter style_references/uploads/ (Audit-Spur, keine Binärdaten)."""
+    previous_hash = ""
+    try:
+        previous_hash = compute_style_context_hash(project)
+    except Exception:  # noqa: BLE001 — vor erstem Save / fehlende Artefakte
+        previous_hash = ""
+
     raw_text = refs.raw_reference_text or ""
     if len(raw_text) > MAX_RAW_REFERENCE_CHARS:
         raw_text = raw_text[:MAX_RAW_REFERENCE_CHARS]
@@ -184,5 +274,22 @@ def save_style_references(
         ):
             safe_name = _safe_upload_filename(index, name)
             (uploads_dir / safe_name).write_text(text, encoding="utf-8")
+
+    try:
+        new_hash = compute_style_context_hash(project)
+    except Exception:  # noqa: BLE001
+        new_hash = previous_hash
+    if previous_hash and new_hash and previous_hash != new_hash:
+        # Enhanced Script Lock invalidieren — Draft bleibt zur Ansicht erhalten.
+        try:
+            from otio_app.services.without_voiceover_enhanced.paths import (
+                script_locked_path,
+            )
+
+            locked = script_locked_path(project)
+            if locked.is_file():
+                locked.unlink()
+        except Exception:  # noqa: BLE001 — Classic/non-enhanced projects
+            pass
 
     return normalized
