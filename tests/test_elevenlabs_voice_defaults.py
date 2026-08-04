@@ -144,3 +144,37 @@ def test_language_defaults_file_never_contains_api_key(
     text = get_elevenlabs_voice_defaults_path().read_text(encoding="utf-8").lower()
     assert "api_key" not in text
     assert "xi-api-key" not in text
+
+
+def test_language_defaults_migrate_legacy_mp3_to_wav(
+    tmp_path: Path, voice_defaults_dir: Path
+) -> None:
+    path = get_elevenlabs_voice_defaults_path()
+    path.write_text(
+        '{"by_language":{"EN":{"voice_id":"voice-en",'
+        '"output_format":"mp3_44100_128","model_id":"eleven_v3"}}}',
+        encoding="utf-8",
+    )
+    loaded = load_language_voice_defaults("en")
+    assert loaded is not None
+    assert loaded.output_format == "wav_48000"
+    assert '"wav_48000"' in path.read_text(encoding="utf-8")
+
+
+def test_project_settings_migrate_legacy_mp3_to_wav(
+    tmp_path: Path, voice_defaults_dir: Path
+) -> None:
+    project = _make_project(tmp_path, language="en")
+    settings_path = get_elevenlabs_settings_path(project.language_work_dir_path)
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        ElevenLabsSettings(
+            project_id=project.id,
+            voice_id="voice-project",
+            output_format="mp3_44100_128",
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    loaded = load_elevenlabs_settings(project)
+    assert loaded.output_format == "wav_48000"
+    assert '"wav_48000"' in settings_path.read_text(encoding="utf-8")

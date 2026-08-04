@@ -44,6 +44,23 @@ def _make_project(tmp_path: Path) -> Project:
 # --- Settings ---
 
 
+def test_normalize_elevenlabs_output_format_defaults_and_migrates() -> None:
+    from otio_app.defaults import normalize_elevenlabs_output_format
+
+    assert normalize_elevenlabs_output_format("") == "wav_48000"
+    assert normalize_elevenlabs_output_format(None) == "wav_48000"
+    assert (
+        normalize_elevenlabs_output_format(
+            "mp3_44100_128", migrate_legacy_default=True
+        )
+        == "wav_48000"
+    )
+    assert (
+        normalize_elevenlabs_output_format("mp3_44100_128") == "mp3_44100_128"
+    )
+    assert normalize_elevenlabs_output_format("wav_24000") == "wav_24000"
+
+
 def test_default_settings_have_expected_values(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     settings = default_elevenlabs_settings(project)
@@ -208,6 +225,7 @@ def test_synthesize_parses_audio_and_alignment(monkeypatch: pytest.MonkeyPatch) 
     call_kwargs = mock_post.call_args.kwargs
     assert call_kwargs["headers"]["xi-api-key"] == "sk_test_key"
     assert "with-timestamps" in mock_post.call_args.args[0]
+    assert call_kwargs["params"]["output_format"] == "wav_48000"
 
 
 def test_synthesize_error_never_contains_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -14,7 +14,10 @@ from typing import Any
 
 import requests
 
-from otio_app.defaults import ELEVENLABS_API_BASE_URL
+from otio_app.defaults import (
+    ELEVENLABS_API_BASE_URL,
+    normalize_elevenlabs_output_format,
+)
 from otio_app.services.api_keys import get_api_key
 from otio_app.services.voiceover_generation.models import ElevenLabsSettings
 
@@ -88,7 +91,7 @@ def build_tts_request_metadata(text: str, settings: ElevenLabsSettings) -> dict[
     metadata: dict[str, Any] = {
         "voice_id": settings.voice_id,
         "model_id": settings.model_id,
-        "output_format": settings.output_format,
+        "output_format": normalize_elevenlabs_output_format(settings.output_format),
         "voice_settings": _voice_settings_payload(settings),
         "text_length": len(text),
     }
@@ -125,9 +128,10 @@ def synthesize_speech_with_timestamps(
     if settings.language_code.strip():
         body["language_code"] = settings.language_code.strip()
 
-    params: dict[str, str] = {}
-    if settings.output_format.strip():
-        params["output_format"] = settings.output_format.strip()
+    # Immer setzen — ohne Query-Param fällt die API auf mp3_44100_128 zurück.
+    params: dict[str, str] = {
+        "output_format": normalize_elevenlabs_output_format(settings.output_format),
+    }
 
     try:
         response = requests.post(

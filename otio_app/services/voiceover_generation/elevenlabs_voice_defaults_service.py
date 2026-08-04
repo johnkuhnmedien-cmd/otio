@@ -10,7 +10,10 @@ import json
 from pathlib import Path
 
 from otio_app.config import ensure_data_dir
-from otio_app.defaults import ELEVENLABS_VOICE_DEFAULTS_FILENAME
+from otio_app.defaults import (
+    ELEVENLABS_VOICE_DEFAULTS_FILENAME,
+    normalize_elevenlabs_output_format,
+)
 from otio_app.project_layout import language_folder_name
 from otio_app.services.voiceover_generation.models import (
     ElevenLabsLanguageVoiceDefaults,
@@ -64,7 +67,22 @@ def load_language_voice_defaults(
 ) -> ElevenLabsLanguageVoiceDefaults | None:
     key = normalize_voice_defaults_language(language)
     document = load_voice_defaults_document()
-    return document.by_language.get(key)
+    entry = document.by_language.get(key)
+    if entry is None:
+        return None
+    normalized_format = normalize_elevenlabs_output_format(
+        entry.output_format,
+        migrate_legacy_default=True,
+    )
+    if normalized_format == entry.output_format:
+        return entry
+    migrated = entry.model_copy(update={"output_format": normalized_format})
+    updated = dict(document.by_language)
+    updated[key] = migrated
+    save_voice_defaults_document(
+        ElevenLabsVoiceDefaultsDocument(by_language=updated)
+    )
+    return migrated
 
 
 def save_language_voice_defaults(
@@ -73,6 +91,12 @@ def save_language_voice_defaults(
 ) -> ElevenLabsLanguageVoiceDefaults:
     key = normalize_voice_defaults_language(language)
     entry = language_defaults_from_settings(defaults)
+    # Leeres Format → wav; absichtliches mp3 bleibt beim Speichern erhalten.
+    entry = entry.model_copy(
+        update={
+            "output_format": normalize_elevenlabs_output_format(entry.output_format),
+        }
+    )
     document = load_voice_defaults_document()
     updated = dict(document.by_language)
     updated[key] = entry
@@ -100,7 +124,7 @@ def language_defaults_from_settings(
     return ElevenLabsLanguageVoiceDefaults(
         voice_id=settings.voice_id,
         model_id=settings.model_id,
-        output_format=settings.output_format,
+        output_format=normalize_elevenlabs_output_format(settings.output_format),
         stability=settings.stability,
         similarity_boost=settings.similarity_boost,
         style=settings.style,
@@ -119,7 +143,10 @@ def settings_from_language_defaults(
         project_id=project_id,
         voice_id=defaults.voice_id,
         model_id=defaults.model_id,
-        output_format=defaults.output_format,
+        output_format=normalize_elevenlabs_output_format(
+            defaults.output_format,
+            migrate_legacy_default=True,
+        ),
         stability=defaults.stability,
         similarity_boost=defaults.similarity_boost,
         style=defaults.style,

@@ -572,8 +572,34 @@ ELEVENLABS_DEFAULT_MODEL_ID = "eleven_multilingual_v2"
 # WAV 48 kHz (ElevenLabs output_format) — Resolve-freundlich; echte WAV-Container
 # (nicht raw PCM). API: query param output_format, siehe ElevenLabs TTS convert.
 ELEVENLABS_DEFAULT_OUTPUT_FORMAT = "wav_48000"
+# Früherer App-/API-Default — wird beim Laden auf wav_48000 migriert.
+ELEVENLABS_LEGACY_DEFAULT_OUTPUT_FORMAT = "mp3_44100_128"
+ELEVENLABS_OUTPUT_FORMAT_PRESETS = (
+    ELEVENLABS_DEFAULT_OUTPUT_FORMAT,
+    "wav_44100",
+    "wav_24000",
+    ELEVENLABS_LEGACY_DEFAULT_OUTPUT_FORMAT,
+    "pcm_48000",
+)
 ELEVENLABS_API_BASE_URL = "https://api.elevenlabs.io/v1"
 ELEVENLABS_MODEL_ID_V3 = "eleven_v3"
+
+
+def normalize_elevenlabs_output_format(
+    value: object,
+    *,
+    migrate_legacy_default: bool = False,
+) -> str:
+    """Leer → wav_48000; optional alter API-/App-Default mp3_44100_128 → wav."""
+    fmt = str(value or "").strip()
+    if not fmt:
+        return ELEVENLABS_DEFAULT_OUTPUT_FORMAT
+    if (
+        migrate_legacy_default
+        and fmt.lower() == ELEVENLABS_LEGACY_DEFAULT_OUTPUT_FORMAT
+    ):
+        return ELEVENLABS_DEFAULT_OUTPUT_FORMAT
+    return fmt
 
 # --- Pausen innerhalb eines Folder-Voice-overs (Nutzerfeedback Juli 2026) ---
 # Qualitativ statt exakter Sekundenzahl: eleven_v3 unterstützt KEINE
