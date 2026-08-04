@@ -430,3 +430,39 @@ def test_legacy_coverage_without_run_id_still_lists_open_gaps(tmp_path: Path) ->
     # summarize_gap_status: Funnel-filled zählt für UI none weiterhin.
     assert "gap_1" in status.filled_gap_ids
     assert "gap_2" in status.open_gap_ids
+
+
+def test_stale_weak_confirm_on_high_gap_is_reset(tmp_path: Path) -> None:
+    """Alt-Bestätigung auf high/none zählt nicht und wird aus Coverage gelöscht."""
+    project = _project(tmp_path)
+    write_json(
+        coverage_gaps_path(project),
+        CoverageGapsDocument(
+            script_version="script-v1",
+            cut_plan_run_id="run_new",
+            gaps=[
+                CoverageGap(
+                    gap_id="Dublin_gap_001",
+                    needed_visual="doors",
+                    priority="high",
+                    user_confirmed_weak=True,
+                ),
+                CoverageGap(
+                    gap_id="gap_weak_ok",
+                    needed_visual="light",
+                    priority="medium",
+                    user_confirmed_weak=True,
+                ),
+            ],
+        ),
+    )
+    status = summarize_gap_status(project)
+    assert "Dublin_gap_001" in status.open_gap_ids
+    assert "gap_weak_ok" in status.filled_gap_ids
+    assert "veraltete Weak-Bestätigung" in (status.message or "")
+
+    reloaded = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    assert reloaded is not None
+    by_id = {g.gap_id: g for g in reloaded.gaps}
+    assert by_id["Dublin_gap_001"].user_confirmed_weak is False
+    assert by_id["gap_weak_ok"].user_confirmed_weak is True
