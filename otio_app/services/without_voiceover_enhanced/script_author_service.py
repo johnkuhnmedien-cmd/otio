@@ -63,6 +63,13 @@ from otio_app.services.without_voiceover_enhanced.raw_chapter_style_structure im
     detect_raw_chapter_style_violations,
     prepare_raw_chapter_reference,
 )
+from otio_app.services.without_voiceover_enhanced.script_chapter_text import (
+    ChapterDisplayTextError,
+    chapter_display_text,
+    join_spoken_segment_texts,
+    normalize_author_pause_seconds,
+    parse_chapter_display_text,
+)
 from otio_app.services.without_voiceover_enhanced.script_chapter_link_guard import (
     detect_chapter_link_violations,
 )
@@ -312,6 +319,9 @@ def parse_enhanced_script_response(
                 folder_order_index=folder_order_index
                 or int(item.get("folder_order_index") or 0),
                 paragraph_break_after=bool(item.get("paragraph_break_after", False)),
+                author_pause_after_seconds=normalize_author_pause_seconds(
+                    item.get("author_pause_after_seconds", 0.0)
+                ),
             )
         )
 
@@ -366,7 +376,7 @@ def parse_enhanced_script_response(
 
     narration = str(payload.get("narration_full") or "").strip()
     if not narration:
-        narration = _join_segment_texts(segments)
+        narration = join_spoken_segment_texts(segments)
 
     for segment in segments:
         if segment.fact_check_required and segment.segment_id not in {
@@ -400,19 +410,6 @@ def _invalidate_script_lock(project: Project) -> None:
         locked.unlink()
 
 
-def _join_segment_texts(segments: list[ScriptSegment]) -> str:
-    """Rekonstruiert Narration mit optionalen Absatzgrenzen."""
-    nonempty = [seg for seg in segments if (seg.text or "").strip()]
-    if not nonempty:
-        return ""
-    chunks: list[str] = [nonempty[0].text.strip()]
-    for prev, nxt in zip(nonempty, nonempty[1:]):
-        sep = "\n\n" if bool(getattr(prev, "paragraph_break_after", False)) else " "
-        chunks.append(sep)
-        chunks.append(nxt.text.strip())
-    return "".join(chunks)
-
-
 def _resequence_document(
     document: EnhancedScriptDocument,
     folder_order: list[str],
@@ -429,7 +426,7 @@ def _resequence_document(
     for index, segment in enumerate(segments, start=1):
         segment.sequence_index = index
     document.segments = segments
-    document.narration_full = _join_segment_texts(segments)
+    document.narration_full = join_spoken_segment_texts(segments)
     document.forbidden_phrases_found = detect_forbidden_phrases(document.narration_full)
     document.script_status = "draft"
     return document
@@ -520,9 +517,26 @@ def chapter_narration_text(
     document: EnhancedScriptDocument | None,
     folder_name: str,
 ) -> str:
+    """Nur gesprochener Kapiteltext (ohne sichtbare Pausemarker)."""
     if document is None:
         return ""
-    return _join_segment_texts(
+    return join_spoken_segment_texts(
+        [
+            seg
+            for seg in document.segments
+            if seg.folder_name == folder_name and seg.text.strip()
+        ]
+    )
+
+
+def chapter_display_text_for_folder(
+    document: EnhancedScriptDocument | None,
+    folder_name: str,
+) -> str:
+    """Sichtbare Kapitelansicht inkl. [pause X seconds]."""
+    if document is None:
+        return ""
+    return chapter_display_text(
         [
             seg
             for seg in document.segments
@@ -568,6 +582,19 @@ Do not include pause labels or production directions.
 Keep the chapter-specific verified content and target length.
 
 Return the complete required JSON again.
+"""
+
+RAW_STYLE_PAUSE_REPAIR_INSTRUCTION = """\
+RAW STYLE REPAIR REQUIRED
+
+The Raw Chapter Reference uses explicit timed pauses between factual beats.
+
+The previous response did not reproduce that pause rhythm.
+
+Set author_pause_after_seconds on appropriate segment boundaries, using the observed duration range from the reference.
+
+Do not write pause labels inside spoken text.
+Return the complete JSON again.
 """
 
 
@@ -956,22 +983,41 @@ def generate_enhanced_script_for_folder(
                     partial.narration_full,
                     structure=raw_structure,
                     folder_name=folder_name,
+                    segments=partial.segments,
                 )
 
             if link_errors or style_errors:
                 last_error = " ".join(link_errors + style_errors)
                 if attempt == 0:
-                    repair_instruction = (
-                        CHAPTER_LINK_REPAIR_INSTRUCTION
-                        if link_errors
-                        else RAW_STYLE_REPAIR_INSTRUCTION
-                    )
+                    pause_errs = [
+                        err
+                        for err in style_errors
+                        if "zeitlich markierte Pausen" in err
+                        or "author_pause_after_seconds" in err
+                    ]
+                    other_style = [
+                        err for err in style_errors if err not in pause_errs
+                    ]
+                    if pause_errs and not other_style:
+                        style_repair = RAW_STYLE_PAUSE_REPAIR_INSTRUCTION
+                    elif pause_errs and other_style:
+                        style_repair = (
+                            RAW_STYLE_REPAIR_INSTRUCTION
+                            + "\n\n"
+                            + RAW_STYLE_PAUSE_REPAIR_INSTRUCTION
+                        )
+                    else:
+                        style_repair = RAW_STYLE_REPAIR_INSTRUCTION
                     if link_errors and style_errors:
                         repair_instruction = (
                             CHAPTER_LINK_REPAIR_INSTRUCTION
                             + "\n\n"
-                            + RAW_STYLE_REPAIR_INSTRUCTION
+                            + style_repair
                         )
+                    elif link_errors:
+                        repair_instruction = CHAPTER_LINK_REPAIR_INSTRUCTION
+                    else:
+                        repair_instruction = style_repair
                     continue
                 return FolderScriptBuildResult(
                     folder_name=folder_name,

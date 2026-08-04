@@ -118,6 +118,7 @@ RULES FOR SEGMENTS
 - Never split mid-word.
 - Write spoken narration only — no shot lists, asset IDs, or visual editing plans.
 - Optional paragraph_break_after=true marks a natural factual/topic beat boundary (not a spoken pause label).
+- Timed pauses use author_pause_after_seconds (0..8). Never write [pause X seconds] into segment.text.
 """
 
 _DEFAULT_DOCUMENTARY_STYLE_RULES = """\
@@ -146,6 +147,7 @@ OUTPUT (JSON only):
       "semantic_function": "atmosphere|history|geography|culture|fact|transition",
       "fact_check_required": false,
       "paragraph_break_after": false,
+      "author_pause_after_seconds": 0.0,
       "folder_name": "EXACT_FOLDER_NAME"
     }}
   ],
@@ -194,6 +196,19 @@ chapter_link_usage:
 style_reference_usage:
 - Audit only — not spoken.
 - matched_features must describe prose traits, never copy facts or wording from the reference.
+
+AUTHOR PAUSES
+- When the Raw Chapter Reference uses explicit timed pauses, reproduce that rhythm with
+  author_pause_after_seconds on segments.
+- Use 0 when no pause follows.
+- Use the reference's observed duration range.
+- Shorter pauses connect closely related facts.
+- Longer pauses follow a major geographic change, important historical statement,
+  strong visual reveal, or completed subject block.
+- Do not use the same duration mechanically after every segment.
+- Do not write [pause X seconds] inside segment.text or narration_full.
+- The application will render the marker from author_pause_after_seconds.
+- Every positive author pause should normally also set paragraph_break_after=true.
 """
 
 

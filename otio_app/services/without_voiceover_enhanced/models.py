@@ -42,6 +42,36 @@ class ScriptSegment(BaseModel):
     folder_order_index: int = 0
     # Additive Beat-/Absatzgrenze nach diesem Segment (kein TTS-Pause-Marker).
     paragraph_break_after: bool = False
+    # Autorenpause nach dem Segment (sichtbarer Marker + Timeline; nicht gesprochen).
+    author_pause_after_seconds: float = 0.0
+
+    @field_validator("author_pause_after_seconds", mode="before")
+    @classmethod
+    def _normalize_author_pause(cls, value: object) -> float:
+        import math
+
+        if value is None or value == "":
+            return 0.0
+        if isinstance(value, bool):
+            raise ValueError("author_pause_after_seconds darf kein Boolean sein.")
+        if isinstance(value, str):
+            value = value.strip().replace(",", ".")
+            if not value:
+                return 0.0
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("author_pause_after_seconds muss endlich sein.")
+        if number < 0:
+            raise ValueError("author_pause_after_seconds darf nicht negativ sein.")
+        if number > 8.0 + 1e-9:
+            raise ValueError("author_pause_after_seconds maximal 8 Sekunden.")
+        return round(number, 2)
+
+    @model_validator(mode="after")
+    def _author_pause_implies_paragraph_break(self) -> "ScriptSegment":
+        if float(self.author_pause_after_seconds or 0.0) > 0 and not self.paragraph_break_after:
+            self.paragraph_break_after = True
+        return self
 
 
 class VisualIntent(BaseModel):

@@ -18,6 +18,7 @@ from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
 from otio_app.services.without_voiceover_enhanced.models import EnhancedScriptDocument
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
     DEFAULT_ENHANCED_SCRIPT_MAX_OUTPUT_TOKENS,
+    chapter_display_text_for_folder,
     chapter_narration_text,
     folders_present_in_script,
     generate_all_enhanced_scripts,
@@ -246,12 +247,17 @@ def _render_chapter_scripts(
             if folder_name in order_by_folder
             else (segments[0].folder_order_index if segments else "—")
         )
-        narration = (
+        spoken = (
             chapter_narration_text(document, folder_name)
             if folder_name and segments
             else (" ".join(seg.text for seg in segments) if segments else "")
         )
-        words = _word_count(narration)
+        display = (
+            chapter_display_text_for_folder(document, folder_name)
+            if folder_name and segments
+            else spoken
+        )
+        words = _word_count(spoken)
         status = "offen" if not segments else f"{words} Wörter · {len(segments)} Segment(e)"
         with st.expander(
             f"{order_index} · {label} · Rolle `{role}` · {status}",
@@ -290,15 +296,19 @@ def _render_chapter_scripts(
             if folder_name and editable:
                 text_key = f"enh_chapter_text_{project.id}_{folder_name}"
                 if text_key not in st.session_state:
-                    st.session_state[text_key] = narration
-                if st.session_state.get(f"{text_key}__src") != narration:
-                    st.session_state[text_key] = narration
-                    st.session_state[f"{text_key}__src"] = narration
+                    st.session_state[text_key] = display
+                if st.session_state.get(f"{text_key}__src") != display:
+                    st.session_state[text_key] = display
+                    st.session_state[f"{text_key}__src"] = display
 
                 new_text = st.text_area(
                     "Voice-over-Text (Kapitel)",
                     key=text_key,
                     height=220,
+                    help=(
+                        "Sichtbare Autorenpausen als [pause N seconds] zwischen "
+                        "Absätzen. ElevenLabs spricht nur den Fließtext."
+                    ),
                 )
                 if st.button(
                     "Kapitel-Text speichern",
@@ -310,8 +320,8 @@ def _render_chapter_scripts(
                         )
                         mark_audio_stale_for_changed_segments(project)
                         st.success(
-                            "Kapitel gespeichert — Script Lock aufgehoben "
-                            "(ein Segment für dieses Kapitel)."
+                            "Kapitel gespeichert — Script Lock aufgehoben. "
+                            "Autorenpausen bleiben erhalten."
                         )
                         st.rerun()
                     except ScriptLockError as exc:
@@ -321,14 +331,20 @@ def _render_chapter_scripts(
                     "Segment(e) · Vertonung unter ⑥ Audio pro Kapitel"
                 )
             else:
-                st.write(narration)
+                st.write(display)
                 st.caption(f"{words} Wörter · {len(segments)} Segment(e)")
 
             with st.expander("Segmente (Cut-Plan / Feinbearbeitung)", expanded=False):
                 for segment in segments:
+                    pause = float(
+                        getattr(segment, "author_pause_after_seconds", 0.0) or 0.0
+                    )
+                    pause_note = (
+                        f" · author_pause={pause:g}s" if pause > 0 else ""
+                    )
                     st.markdown(
                         f"**{segment.sequence_index}. `{segment.segment_id}`** "
-                        f"({segment.semantic_function})"
+                        f"({segment.semantic_function}{pause_note})"
                     )
                     if editable and folder_name:
                         seg_key = f"enh_seg_{project.id}_{segment.segment_id}"
