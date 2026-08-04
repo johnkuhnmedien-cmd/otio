@@ -13,9 +13,11 @@ __all__ = [
     "ChapterDisplayTextError",
     "normalize_author_pause_seconds",
     "format_author_pause_marker",
+    "strip_author_pause_markers_from_text",
     "join_spoken_segment_texts",
     "chapter_display_text",
     "parse_chapter_display_text",
+    "migrate_inline_pause_markers_in_segment",
 ]
 
 MAX_AUTHOR_PAUSE_SECONDS = 8.0
@@ -76,16 +78,38 @@ def format_author_pause_marker(seconds: float) -> str:
     return f"[pause {text} seconds]"
 
 
+def strip_author_pause_markers_from_text(text: str) -> str:
+    """Entfernt `[pause N seconds]` aus einem Textblock (für narration_full)."""
+    cleaned = AUTHOR_PAUSE_MARKER_RE.sub(" ", text or "")
+    # Marker-Zeilen und doppelte Leerzeichen glätten, Absätze erhalten.
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def join_spoken_segment_texts(segments: list[ScriptSegment]) -> str:
     """Nur gesprochener Text — ohne Pausemarker, mit optionalen Absatzgrenzen."""
     nonempty = [seg for seg in segments if (seg.text or "").strip()]
     if not nonempty:
         return ""
-    chunks: list[str] = [nonempty[0].text.strip()]
+
+    def _spoken(seg: ScriptSegment) -> str:
+        return strip_author_pause_markers_from_text(seg.text or "")
+
+    first = _spoken(nonempty[0])
+    chunks: list[str] = [first] if first else []
     for prev, nxt in zip(nonempty, nonempty[1:]):
+        spoken = _spoken(nxt)
+        if not spoken:
+            continue
+        if not chunks:
+            chunks.append(spoken)
+            continue
         sep = "\n\n" if bool(getattr(prev, "paragraph_break_after", False)) else " "
         chunks.append(sep)
-        chunks.append(nxt.text.strip())
+        chunks.append(spoken)
     return "".join(chunks)
 
 
@@ -197,3 +221,46 @@ def parse_chapter_display_text(
                 "dürfen nicht im Fließtext liegen."
             )
     return segments
+
+
+def migrate_inline_pause_markers_in_segment(
+    segment: ScriptSegment,
+) -> list[ScriptSegment]:
+    """Wandelt zeilenweise `[pause N seconds]` in author_pause_after_seconds um.
+
+    Schlägt die Darstellung fehl (Marker mitten im Satz), bleibt das Segment
+    unverändert — die Marker gehen dann über den TTS-Text-Builder an eleven_v3.
+    """
+    text = segment.text or ""
+    if not AUTHOR_PAUSE_MARKER_RE.search(text):
+        return [segment]
+    prefix = segment.segment_id.rsplit("_", 1)[0] if "_" in segment.segment_id else segment.segment_id
+    try:
+        parsed = parse_chapter_display_text(
+            text,
+            folder_name=segment.folder_name,
+            folder_order_index=segment.folder_order_index,
+            segment_id_prefix=prefix or "segment",
+            default_semantic_function=segment.semantic_function or "narration",
+        )
+    except ChapterDisplayTextError:
+        return [segment]
+
+    migrated: list[ScriptSegment] = []
+    for index, item in enumerate(parsed):
+        segment_id = segment.segment_id if index == 0 else f"{prefix}_{index + 1:03d}"
+        pause = normalize_author_pause_seconds(item.author_pause_after_seconds)
+        migrated.append(
+            segment.model_copy(
+                update={
+                    "segment_id": segment_id,
+                    "text": item.text,
+                    "sequence_index": item.sequence_index,
+                    "author_pause_after_seconds": pause,
+                    "paragraph_break_after": bool(
+                        item.paragraph_break_after or pause > 0
+                    ),
+                }
+            )
+        )
+    return migrated or [segment]

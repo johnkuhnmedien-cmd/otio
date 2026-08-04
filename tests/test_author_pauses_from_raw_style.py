@@ -13,7 +13,12 @@ from otio_app.services.without_voiceover_enhanced.models import (
     ScriptSegment,
     SegmentTiming,
 )
+from otio_app.services.without_voiceover_enhanced.enhanced_tts_text import (
+    build_segment_tts_text,
+    map_author_pause_seconds_to_v3_tag,
+)
 from otio_app.services.without_voiceover_enhanced.pause_resolver import (
+    author_pause_after_map_from_script,
     build_narration_timeline,
 )
 from otio_app.services.without_voiceover_enhanced.raw_chapter_style_structure import (
@@ -184,6 +189,55 @@ def test_style_guard_flags_missing_author_pauses() -> None:
         folder_name="Dublin",
         segments=segments,
     )
+
+
+def test_tts_text_injects_eleven_v3_pause_tags() -> None:
+    assert map_author_pause_seconds_to_v3_tag(2.0) == "[short pause]"
+    assert map_author_pause_seconds_to_v3_tag(3.0) == "[pause]"
+    assert map_author_pause_seconds_to_v3_tag(4.0) == "[long pause]"
+
+    with_field = build_segment_tts_text(
+        text="Achill Island lies west.",
+        author_pause_after_seconds=3.0,
+        model_id="eleven_v3",
+    )
+    assert with_field == "Achill Island lies west. [pause]"
+
+    with_inline = build_segment_tts_text(
+        text="Fact one.\n\n[pause 3 seconds]\n\nFact two.",
+        author_pause_after_seconds=0.0,
+        model_id="eleven_v3",
+    )
+    assert "[pause]" in with_inline
+    assert "[pause 3 seconds]" not in with_inline
+    assert "Fact one." in with_inline and "Fact two." in with_inline
+
+    non_v3 = build_segment_tts_text(
+        text="Fact one. [pause 3 seconds] Fact two.",
+        author_pause_after_seconds=3.0,
+        model_id="eleven_multilingual_v2",
+    )
+    assert "[pause" not in non_v3
+    assert non_v3 == "Fact one. Fact two."
+
+
+def test_author_pause_map_skips_timeline_gaps_for_eleven_v3() -> None:
+    doc = EnhancedScriptDocument(
+        segments=[
+            ScriptSegment(
+                segment_id="A",
+                text="One.",
+                sequence_index=1,
+                folder_name="Dublin",
+                author_pause_after_seconds=3.0,
+            )
+        ]
+    )
+    assert author_pause_after_map_from_script(doc) == {"A": 3.0}
+    assert author_pause_after_map_from_script(doc, model_id="eleven_v3") == {}
+    assert author_pause_after_map_from_script(
+        doc, model_id="eleven_multilingual_v2"
+    ) == {"A": 3.0}
 
 
 def test_narration_timeline_applies_author_and_keyword_pauses() -> None:

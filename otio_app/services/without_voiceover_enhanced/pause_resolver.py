@@ -296,8 +296,20 @@ def _build_keyword_flow_intra_pauses(
     return markers, round(trailing_pause, 6)
 
 
-def author_pause_after_map_from_script(script: Any) -> dict[str, float]:
-    """segment_id → author_pause_after_seconds aus Locked/Draft-Script."""
+def author_pause_after_map_from_script(
+    script: Any,
+    *,
+    model_id: str | None = None,
+) -> dict[str, float]:
+    """segment_id → author_pause_after_seconds aus Locked/Draft-Script.
+
+    Bei `eleven_v3` sind Autorenpausen bereits als Bracket-Tags im TTS-Audio
+    enthalten — dann keine zusätzliche Timeline-Stille (sonst Doppelpausen).
+    """
+    from otio_app.defaults import ELEVENLABS_MODEL_ID_V3
+
+    if model_id == ELEVENLABS_MODEL_ID_V3:
+        return {}
     out: dict[str, float] = {}
     for segment in getattr(script, "segments", None) or []:
         sid = str(getattr(segment, "segment_id", "") or "").strip()

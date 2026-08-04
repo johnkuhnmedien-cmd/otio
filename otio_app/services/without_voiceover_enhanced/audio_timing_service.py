@@ -30,6 +30,9 @@ from otio_app.services.without_voiceover_enhanced.script_author_service import (
     group_segments_by_folder,
     list_enabled_dramaturgy_folders,
 )
+from otio_app.services.without_voiceover_enhanced.enhanced_tts_text import (
+    build_segment_tts_text,
+)
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     ScriptLockError,
     require_locked_script,
@@ -110,8 +113,15 @@ def _synthesize_segments(
                 segment_index,
                 segment_total,
             )
+        tts_text = build_segment_tts_text(
+            text=segment.text or "",
+            author_pause_after_seconds=float(
+                getattr(segment, "author_pause_after_seconds", 0.0) or 0.0
+            ),
+            model_id=settings.model_id,
+        )
         try:
-            result = synthesize_speech_with_timestamps(segment.text, settings)
+            result = synthesize_speech_with_timestamps(tts_text, settings)
         except ElevenLabsTtsError as exc:
             raise AudioTimingError(str(exc)) from exc
         audio_path = out_dir / f"{segment.segment_id}{ext}"
@@ -123,7 +133,7 @@ def _synthesize_segments(
             script_version=locked.script_version,
             audio_path=str(audio_path),
             audio_duration_seconds=duration,
-            tts_text=segment.text,
+            tts_text=tts_text,
             alignment=result.alignment,
             normalized_alignment=result.normalized_alignment,
             response_metadata=result.response_metadata,

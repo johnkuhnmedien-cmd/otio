@@ -1159,6 +1159,9 @@ def merge_and_persist_rough_cuts(
 
     previous_coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
     coverage = carry_over_user_confirmed_weak(coverage, previous_coverage)
+    from otio_app.services.voiceover_generation.elevenlabs_settings_service import (
+        load_elevenlabs_settings,
+    )
     from otio_app.services.without_voiceover_enhanced.pause_resolver import (
         author_pause_after_map_from_script,
     )
@@ -1168,7 +1171,10 @@ def merge_and_persist_rough_cuts(
         segment_timings=timings.segments,
         pause_directives=[],
         sentence_index=sentence_index_by_id(load_segment_alignments(project)),
-        author_pause_after_by_segment=author_pause_after_map_from_script(locked),
+        author_pause_after_by_segment=author_pause_after_map_from_script(
+            locked,
+            model_id=load_elevenlabs_settings(project).model_id,
+        ),
     )
     write_json(pause_directives_path(project), {"directives": []})
     write_json(narration_timeline_path(project), timeline)

@@ -21,14 +21,29 @@ from otio_app.services.without_voiceover_enhanced.script_chapter_text import (
     ChapterDisplayTextError,
     chapter_display_text,
     join_spoken_segment_texts,
+    migrate_inline_pause_markers_in_segment,
     normalize_author_pause_seconds,
     parse_chapter_display_text,
+    strip_author_pause_markers_from_text,
 )
 from otio_app.services.without_voiceover_enhanced.script_prompts import FORBIDDEN_PHRASES
 
 
 class ScriptLockError(RuntimeError):
     pass
+
+
+def _normalize_document_pause_markers(document: EnhancedScriptDocument) -> None:
+    """Zeilenweise Pausemarker → author_pause_after_seconds; narration bereinigen.
+
+    Verbleibende Inline-Marker (z. B. mitten im Intro-Fließtext) bleiben in
+    segment.text und werden beim TTS für eleven_v3 in Bracket-Tags umgewandelt.
+    """
+    migrated: list[ScriptSegment] = []
+    for segment in document.segments:
+        migrated.extend(migrate_inline_pause_markers_in_segment(segment))
+    document.segments = migrated
+    document.narration_full = join_spoken_segment_texts(document.segments)
 
 
 def _validate_author_pauses_for_lock(document: EnhancedScriptDocument) -> None:
@@ -40,15 +55,16 @@ def _validate_author_pauses_for_lock(document: EnhancedScriptDocument) -> None:
             raise ScriptLockError(
                 f"{segment.segment_id}: {exc}"
             ) from exc
-        if AUTHOR_PAUSE_MARKER_RE.search(segment.text or ""):
-            raise ScriptLockError(
-                f"{segment.segment_id}: Pausemarker dürfen nicht in segment.text stehen."
-            )
+    # narration_full muss frei von Produktionsmarkern sein (gesprochener Text).
+    if AUTHOR_PAUSE_MARKER_RE.search(document.narration_full or ""):
+        document.narration_full = strip_author_pause_markers_from_text(
+            document.narration_full or ""
+        )
     if AUTHOR_PAUSE_MARKER_RE.search(document.narration_full or ""):
         raise ScriptLockError(
             "Pausemarker dürfen nicht in narration_full stehen."
         )
-    # Roundtrip nur wenn Autorenpausen gesetzt sind (Marker trennen Beats).
+    # Roundtrip nur für Kapitel ohne verbleibende Inline-Marker in segment.text.
     folders = sorted(
         {seg.folder_name for seg in document.segments if seg.folder_name}
     )
@@ -59,6 +75,8 @@ def _validate_author_pauses_for_lock(document: EnhancedScriptDocument) -> None:
             if seg.folder_name == folder_name and (seg.text or "").strip()
         ]
         if not any(float(seg.author_pause_after_seconds or 0.0) > 0 for seg in segs):
+            continue
+        if any(AUTHOR_PAUSE_MARKER_RE.search(seg.text or "") for seg in segs):
             continue
         rendered = chapter_display_text(segs)
         try:
@@ -145,6 +163,7 @@ def lock_script(project: Project, document: EnhancedScriptDocument | None = None
     ensure_confirmed_intro_in_document(project, draft)
     if not draft.segments:
         raise ScriptLockError("Skript enthält keine Segmente.")
+    _normalize_document_pause_markers(draft)
     _validate_author_pauses_for_lock(draft)
     draft.narration_full = join_spoken_segment_texts(draft.segments)
     forbidden = detect_forbidden_phrases(draft.narration_full)
