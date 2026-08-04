@@ -195,6 +195,53 @@ def test_chapter_status_matches_ignores_shortfall_tails() -> None:
     assert chapter_resolved_matches_plan(plan, resolved)
 
 
+def test_chapter_status_matches_ignores_keyword_flow_map_opener() -> None:
+    """Map-Opener ist kein Plan-Slot — Timing/Alle-OTIO dürfen nicht „offen“ bleiben."""
+    plan = _plan("Kilkenny", slots=1)
+    resolved = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=14.0,
+        shots=[
+            ResolvedShot(
+                shot_id="Kilkenny_map_opener",
+                asset_id="map_a",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=9.0,
+                source_start_seconds=0.0,
+                source_end_seconds=9.0,
+                editorial_function="technical_chapter_map_opener",
+            ),
+            ResolvedShot(
+                shot_id="Kilkenny_slot_001",
+                asset_id="asset_a",
+                timeline_start_seconds=9.0,
+                timeline_end_seconds=14.0,
+                source_start_seconds=0.0,
+                source_end_seconds=5.0,
+            ),
+        ],
+    )
+    assert chapter_resolved_matches_plan(plan, resolved)
+    # Ohne Ausnahme wäre 2 Shots ≠ 1 Slot → false „Plan geändert“.
+    stale = resolved.model_copy(
+        update={
+            "shots": [
+                *resolved.shots,
+                ResolvedShot(
+                    shot_id="extra_slot",
+                    asset_id="asset_b",
+                    timeline_start_seconds=14.0,
+                    timeline_end_seconds=16.0,
+                    source_start_seconds=0.0,
+                    source_end_seconds=2.0,
+                ),
+            ]
+        }
+    )
+    assert not chapter_resolved_matches_plan(plan, stale)
+
+
 def test_build_merged_skips_chapters_without_matching_timing(tmp_path) -> None:
     """Alle-OTIO darf fehlendes Timing nicht still nachrechnen."""
     from otio_app.services.without_voiceover_enhanced.models import (
