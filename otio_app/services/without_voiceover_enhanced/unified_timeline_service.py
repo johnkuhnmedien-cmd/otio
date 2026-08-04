@@ -742,6 +742,9 @@ def resolve_timed_slots(
                 raw_times=onset_anchor_times,
                 clamped_times=times,
                 repairs=notes,
+                allow_overflow=bool(
+                    getattr(options, "keyword_flow_allow_onset_overflow", False)
+                ),
             )
         except KeywordFlowTimingError as exc:
             raise UnifiedTimelineError(str(exc)) from exc

@@ -575,6 +575,16 @@ def test_onset_tolerance_priority_and_block() -> None:
             clamped_times=[0.0, 7.0, 12.0],
             repairs=[],
         )
+    overflow_repairs: list[str] = []
+    overflow = apply_keyword_flow_onset_tolerance(
+        plan=plan,
+        raw_times=[0.0, 5.0, 12.0],
+        clamped_times=[0.0, 7.0, 12.0],
+        repairs=overflow_repairs,
+        allow_overflow=True,
+    )
+    assert overflow[1] == pytest.approx(7.0)
+    assert any("WARNING accepted onset overflow" in r for r in overflow_repairs)
 
 
 def test_twelve_second_theme_pause_extends_second_shot() -> None:

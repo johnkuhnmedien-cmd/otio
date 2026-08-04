@@ -111,11 +111,15 @@ def apply_keyword_flow_onset_tolerance(
     clamped_times: list[float],
     repairs: list[str],
     tolerance_sec: float = KEYWORD_FLOW_ONSET_TOLERANCE_SEC,
+    allow_overflow: bool = False,
 ) -> list[float]:
     """Bildgrenzen nur innerhalb ±tolerance um Keyword-Onsets; sonst Fehler.
 
     Priorität bei mehreren Kandidaten: exakter Onset → später → früher.
     Audio wird nicht getrimmt.
+
+    ``allow_overflow=True``: Clamp-Zeiten trotz Überschreitung behalten und als
+    Repair/Warnung loggen (kein harter Abbruch).
     """
     if len(raw_times) != len(clamped_times) or len(raw_times) != len(plan.boundaries):
         return clamped_times
@@ -128,11 +132,16 @@ def apply_keyword_flow_onset_tolerance(
         desired = float(clamped_times[index])
         delta = desired - onset
         if abs(delta) > tol + 1e-9:
-            raise KeywordFlowTimingError(
+            message = (
                 f"{boundary.cut_id}: notwendige Keyword-Verschiebung "
                 f"{delta:+.3f}s überschreitet ±{tol:.1f}s "
                 f"(onset={onset:.3f}s, desired={desired:.3f}s)."
             )
+            if not allow_overflow:
+                raise KeywordFlowTimingError(message)
+            repairs.append(f"WARNING accepted onset overflow: {message}")
+            out[index] = desired
+            continue
         # Im Fenster: Clamp-Ergebnis behalten (exact bleibt exact).
         pick = desired
         out[index] = pick
@@ -148,13 +157,17 @@ def apply_keyword_flow_onset_tolerance(
             onset = float(raw_times[index])
             fixed = out[index - 1]
             if abs(fixed - onset) > tol + 1e-9:
-                raise KeywordFlowTimingError(
+                message = (
                     f"{boundary.cut_id}: Monotonie-Korrektur {fixed:.3f}s "
                     f"außerhalb ±{tol:.1f}s um Onset {onset:.3f}s."
                 )
-            repairs.append(
-                f"{boundary.cut_id}: keyword_flow monotone clamp → {fixed:.3f}s."
-            )
+                if not allow_overflow:
+                    raise KeywordFlowTimingError(message)
+                repairs.append(f"WARNING accepted onset overflow: {message}")
+            else:
+                repairs.append(
+                    f"{boundary.cut_id}: keyword_flow monotone clamp → {fixed:.3f}s."
+                )
             out[index] = fixed
     return out
 

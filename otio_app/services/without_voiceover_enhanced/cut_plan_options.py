@@ -86,6 +86,9 @@ class CutPlanOptions(BaseModel):
     cut_plan_mode: CutPlanMode = CUT_PLAN_MODE_LEGACY
     # Unified Stil: Rhythmus (Default) oder Keyword-Sync (Wort↔Bild).
     unified_cut_style: UnifiedCutStyle = UNIFIED_CUT_STYLE_RHYTHM
+    # Keyword Flow: bei True Timing trotz Onset-Verschiebung > ±1.5s akzeptieren
+    # (Clamp-Zeiten behalten, als Repair/Warnung loggen). Default strikt.
+    keyword_flow_allow_onset_overflow: bool = False
     # Phase 6: optionaler Mini-Repair nach Gap-Merge (Default aus).
     enable_unified_mini_repair: bool = False
     unified_mini_repair_threshold: float = Field(default=0.20, ge=0.0, le=1.0)
@@ -259,6 +262,12 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
         unified_cut_style=_normalize_unified_cut_style(  # type: ignore[arg-type]
             raw.get("unified_cut_style", defaults.unified_cut_style),
             default=defaults.unified_cut_style,
+        ),
+        keyword_flow_allow_onset_overflow=bool(
+            raw.get(
+                "keyword_flow_allow_onset_overflow",
+                defaults.keyword_flow_allow_onset_overflow,
+            )
         ),
         enable_unified_mini_repair=bool(
             raw.get(
