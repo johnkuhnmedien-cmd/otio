@@ -433,6 +433,75 @@ class CoverageGapsDocument(BaseModel):
     gaps: list[CoverageGap] = Field(default_factory=list)
 
 
+class CoverageGapExternalSavePaths(BaseModel):
+    """Zielpfade für eine externe App (Suche → Datei ablegen → Timing)."""
+
+    drop_dir: str = ""
+    drop_dir_absolute: str = ""
+    inventory_path: str = ""
+    inventory_path_absolute: str = ""
+    clean_dir: str = ""
+    clean_dir_absolute: str = ""
+    note: str = (
+        "Medien-Datei (mp4/mov/jpg/png/…) in drop_dir ablegen. "
+        "Beim nächsten Python Timing / Cut-Plan-Refresh wird sie "
+        "automatisch für diesen Gap übernommen."
+    )
+
+
+class CoverageGapExternalFilledAsset(BaseModel):
+    candidate_id: str = ""
+    local_media_path: str = ""
+    media_type: str = ""
+    provider: str = ""
+    cut_plan_run_id: str = ""
+
+
+class CoverageGapExternalEntry(BaseModel):
+    gap_id: str
+    status: str = "open"  # open | filled
+    folder_name: str = ""
+    folder_slug: str = ""
+    slot_id: str = ""
+    related_shot_ids: list[str] = Field(default_factory=list)
+    needed_visual: str = ""
+    editorial_purpose: str = ""
+    reason: str = ""
+    search_concepts: list[str] = Field(default_factory=list)
+    search_queries: list[str] = Field(default_factory=list)
+    must_include: list[str] = Field(default_factory=list)
+    must_avoid: list[str] = Field(default_factory=list)
+    desired_motion: str = ""
+    desired_framing: str = ""
+    preferred_media_type: str = "video"
+    target_duration_seconds: Optional[float] = None
+    priority: str = "high"
+    covered_sentence_ids: list[str] = Field(default_factory=list)
+    save: CoverageGapExternalSavePaths = Field(
+        default_factory=CoverageGapExternalSavePaths
+    )
+    filled_asset: Optional[CoverageGapExternalFilledAsset] = None
+
+
+class CoverageGapsExternalDocument(BaseModel):
+    """Spiegel von Coverage Gaps für externe Such-/Download-Apps.
+
+    Wird bei jedem Coverage-Update neu geschrieben und bleibt damit aktuell.
+    """
+
+    schema_version: str = "enhanced-coverage-gaps-external-v1"
+    updated_at: str = ""
+    script_version: str = ""
+    cut_plan_run_id: str = ""
+    project_root: str = ""
+    work_dir: str = ""
+    export_path: str = ""
+    export_path_absolute: str = ""
+    open_count: int = 0
+    filled_count: int = 0
+    gaps: list[CoverageGapExternalEntry] = Field(default_factory=list)
+
+
 class StockCandidate(BaseModel):
     candidate_id: str
     provider: str

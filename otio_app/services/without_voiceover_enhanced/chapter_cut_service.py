@@ -501,6 +501,13 @@ def resolve_chapter_timeline(
             f"Kapitel-Plan fehlt für „{folder_name}“ — zuerst LLM Cut."
         )
 
+    from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+        ingest_coverage_gap_inbox,
+    )
+
+    # Externe App: Dateien in coverage/inbox/{gap_id}/ vor Timing übernehmen.
+    ingest_coverage_gap_inbox(project)
+
     open_gaps = chapter_open_gap_ids(project, folder_name)
     if open_gaps:
         preview = ", ".join(open_gaps[:5])

@@ -173,8 +173,12 @@ def confirm_weak_local_asset_for_gap(
         )
         for g in coverage.gaps
     ]
-    write_json(
-        coverage_gaps_path(project),
+    from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+        persist_coverage_gaps,
+    )
+
+    persist_coverage_gaps(
+        project,
         coverage.model_copy(update={"gaps": updated}),
     )
     return WeakGapConfirmResult(

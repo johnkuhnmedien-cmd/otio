@@ -376,6 +376,11 @@ def _persist_accepted(
             supplements=supplements,
         ),
     )
+    from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+        refresh_coverage_gaps_external_export,
+    )
+
+    refresh_coverage_gaps_external_export(project)
     return candidate
 
 

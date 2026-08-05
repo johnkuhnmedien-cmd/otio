@@ -231,6 +231,11 @@ def _upsert_accepted(project: Project, candidate: StockCandidate) -> None:
             supplements=supplements,
         ),
     )
+    from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+        refresh_coverage_gaps_external_export,
+    )
+
+    refresh_coverage_gaps_external_export(project)
 
 
 def _mark_gap_filled_in_funnel_report(

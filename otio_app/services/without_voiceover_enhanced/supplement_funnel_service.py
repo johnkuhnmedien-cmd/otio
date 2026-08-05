@@ -611,6 +611,11 @@ def _persist_export_ready(
             script_version=locked.script_version, supplements=supplements
         ),
     )
+    from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+        refresh_coverage_gaps_external_export,
+    )
+
+    refresh_coverage_gaps_external_export(project)
 
     gap_report.export_ready_candidate_id = candidate.candidate_id
     gap_report.filled = True
