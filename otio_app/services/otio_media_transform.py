@@ -198,19 +198,24 @@ def ensure_export_media_for_export(
     original_path: Path,
     *,
     notes: list[str] | None = None,
+    auto_zoom_fill: bool | None = None,
 ) -> Path:
-    """Transkodiert bei Bedarf (Zoom) und verifiziert die Ausgabe."""
+    """Transkodiert bei Bedarf (Zoom) und verifiziert die Ausgabe.
+
+    ``auto_zoom_fill=None`` → Clean-Media-Setting. Explizites True/False
+    überschreibt das Setting (Enhanced-OTIO erzwingt Cover-Fill).
+    """
     from otio_app.services.clean_media import (
-        CLEAN_STATUS_CLEAN,
         CLEAN_STATUS_FAILED,
         process_media_file,
         resolve_effective_media_path,
     )
     from otio_app.services.clean_media_settings import load_clean_media_settings
-    from otio_app.services.edit_plan_rules import load_edit_plan_rules
 
-    clean_settings = load_clean_media_settings(project)
-    auto_zoom_fill = clean_settings.auto_zoom_fill
+    if auto_zoom_fill is None:
+        auto_zoom_fill = bool(load_clean_media_settings(project).auto_zoom_fill)
+    else:
+        auto_zoom_fill = bool(auto_zoom_fill)
     fallback = resolve_effective_media_path(project, folder_name, original_path)
     if is_image_media(original_path):
         return fallback
@@ -224,10 +229,20 @@ def ensure_export_media_for_export(
         and src_h
         and media_needs_aspect_fill(src_w, src_h, project.width, project.height)
     )
+    # Auch exakte Aspect-Abweichung mit falscher Pixelgröße (z. B. 2048×1080
+    # → 1920×1080) muss transcodiert werden — _zoom_transcode_required prüft
+    # Zielpixel, needs_zoom nur Aspect. Deshalb hier zusätzlich Zielpixel.
+    needs_target_pixels = bool(
+        src_w
+        and src_h
+        and not media_matches_target_resolution(
+            src_w, src_h, project.width, project.height
+        )
+    )
     if not export_processing_required(
         auto_zoom_fill=auto_zoom_fill,
         is_image=False,
-        needs_zoom=needs_zoom,
+        needs_zoom=needs_zoom or needs_target_pixels,
     ):
         return fallback
 
@@ -236,11 +251,18 @@ def ensure_export_media_for_export(
             return Path(entry.clean_path).expanduser().resolve()
         return fallback
 
-    entry = process_media_file(project, folder_name, original_path)
+    entry = process_media_file(
+        project,
+        folder_name,
+        original_path,
+        auto_zoom_fill=auto_zoom_fill,
+    )
     media_path = _resolved_path(entry)
 
     out_w, out_h = media_resolution_probe(media_path)
-    still_wrong = auto_zoom_fill and needs_zoom and not media_matches_target_resolution(
+    still_wrong = auto_zoom_fill and (
+        needs_zoom or needs_target_pixels
+    ) and not media_matches_target_resolution(
         out_w,
         out_h,
         project.width,
@@ -252,13 +274,14 @@ def ensure_export_media_for_export(
             folder_name,
             original_path,
             force_transcode=True,
+            auto_zoom_fill=auto_zoom_fill,
         )
         media_path = _resolved_path(entry)
         if entry.status == CLEAN_STATUS_FAILED and entry.error and notes is not None:
             notes.append(f"{original_path.name}: Export-Transcode fehlgeschlagen — {entry.error}")
         out_w, out_h = media_resolution_probe(media_path)
 
-    if auto_zoom_fill and needs_zoom:
+    if auto_zoom_fill and (needs_zoom or needs_target_pixels):
         warning = aspect_fill_warning(project, media_path, label=original_path.name)
         if warning:
             if notes is not None:
@@ -277,6 +300,7 @@ def ensure_zoomed_media_for_export(
     original_path: Path,
     *,
     notes: list[str] | None = None,
+    auto_zoom_fill: bool | None = None,
 ) -> Path:
     """Abwärtskompatibel — delegiert an ensure_export_media_for_export."""
     return ensure_export_media_for_export(
@@ -284,6 +308,7 @@ def ensure_zoomed_media_for_export(
         folder_name,
         original_path,
         notes=notes,
+        auto_zoom_fill=auto_zoom_fill,
     )
 
 

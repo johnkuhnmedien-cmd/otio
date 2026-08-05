@@ -30,7 +30,11 @@ from otio_app.services.media_utils import (
 )
 
 
-def _auto_zoom_enabled(project: Project) -> bool:
+def _auto_zoom_enabled(
+    project: Project, *, override: bool | None = None
+) -> bool:
+    if override is not None:
+        return bool(override)
     from otio_app.services.clean_media_settings import load_clean_media_settings
 
     return load_clean_media_settings(project).auto_zoom_fill
@@ -739,9 +743,13 @@ def _zoom_transcode_required(
     project: Project,
     media_path: Path,
     probe: MediaProbeInfo,
+    *,
+    auto_zoom_fill: bool | None = None,
 ) -> bool:
     """True wenn Auto-Zoom aktiv ist und die Pixel-Auflösung nicht exakt passt."""
-    if not _auto_zoom_enabled(project) or is_image_media(media_path):
+    if not _auto_zoom_enabled(project, override=auto_zoom_fill) or is_image_media(
+        media_path
+    ):
         return False
     if not probe.width or not probe.height:
         return True
@@ -758,6 +766,7 @@ def process_media_file(
     media_path: Path,
     *,
     force_transcode: bool = False,
+    auto_zoom_fill: bool | None = None,
 ) -> CleanMediaEntry:
     """Validiert und transkodiert bei Bedarf; Original bleibt unverändert."""
     if not path_is_readable_file(media_path):
@@ -773,9 +782,11 @@ def process_media_file(
     source_probe = entry.probe or probe_media(media_path)
     from otio_app.services.edit_plan_rules import export_rule_options, load_edit_plan_rules
 
-    zoom_transcode = _zoom_transcode_required(project, media_path, source_probe)
+    auto_zoom_fill = _auto_zoom_enabled(project, override=auto_zoom_fill)
+    zoom_transcode = _zoom_transcode_required(
+        project, media_path, source_probe, auto_zoom_fill=auto_zoom_fill
+    )
     export_transcode = zoom_transcode
-    auto_zoom_fill = _auto_zoom_enabled(project)
 
     if export_transcode:
         output_path = export_processed_output_path_for_media(
