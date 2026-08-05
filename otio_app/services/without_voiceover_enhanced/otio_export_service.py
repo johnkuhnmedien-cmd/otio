@@ -460,20 +460,28 @@ def _ensure_shot_media_for_export(
             f"{label}: Medientyp weder Video noch Bild · {path}"
         )
 
-    folder = str(shot.folder_name or "").strip()
-    # Vorhandenes Clean bevorzugen (TC bereits 00:00:00:00).
-    if folder:
-        try:
-            from otio_app.services.clean_media import (
-                path_is_readable_file,
-                resolve_effective_media_path,
-            )
+    folder = str(shot.folder_name or "").strip() or "_enhanced"
+    # Video-Aspect-Fill auf Projektgröße (Cover/Crop), analog klassischem
+    # auto_zoom_fill — Enhanced erzwingt das beim OTIO-Export, damit Resolve
+    # keine Letterbox bei Ultrawide-Stock (z. B. 2048×1080) zeigt.
+    # Still-Holds oben sind bereits gerendert und werden übersprungen.
+    try:
+        from otio_app.services.otio_media_transform import (
+            ensure_export_media_for_export,
+        )
 
-            preferred = resolve_effective_media_path(project, folder, path)
-            if path_is_readable_file(preferred):
-                path = preferred.resolve()
-        except Exception:  # noqa: BLE001
-            pass
+        filled = ensure_export_media_for_export(
+            project,
+            folder,
+            path,
+            auto_zoom_fill=True,
+        )
+        if filled.is_file():
+            path = filled.resolve()
+    except Exception as exc:  # noqa: BLE001
+        raise EnhancedOtioExportError(
+            f"{label}: Video-Aspect-Fill fehlgeschlagen — {exc}"
+        ) from exc
 
     probe_avail, media_dur, rate = _validate_video_file(path, label=label, fps=fps)
     source_start = float(shot.source_start_seconds)
