@@ -2012,7 +2012,8 @@ def generate_unified_cut_for_folder(
             raw_text,
             locked.script_version,
             folder_slug=context.folder_slug,
-            allow_pause_directives=use_keyword_flow,
+            allow_pause_directives=False,
+            reject_nonempty_pause_directives=use_keyword_flow,
             nullify_weak_assets=use_keyword_flow,
         )
         if not plan.slots:
@@ -2152,14 +2153,8 @@ def merge_and_persist_unified_cuts(
     closing_fallback_asset_fit: str | None = None
     closing_fallback_asset_fit_reason = ""
     closing_fallback_visual_intent = ""
-    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
-        is_keyword_flow_unified_style,
-        load_cut_plan_options,
-    )
-
-    keep_keyword_flow_pauses = is_keyword_flow_unified_style(
-        load_cut_plan_options(project)
-    )
+    # Keyword Flow erzeugt/verlängert keine Pausen mehr — Directives immer [].
+    keep_keyword_flow_pauses = False
 
     for result in ok:
         plan = result.plan

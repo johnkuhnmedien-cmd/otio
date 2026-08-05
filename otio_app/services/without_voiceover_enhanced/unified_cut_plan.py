@@ -256,26 +256,39 @@ def parse_unified_cut_response(
     *,
     folder_slug: str = "",
     allow_pause_directives: bool = False,
+    reject_nonempty_pause_directives: bool = False,
     nullify_weak_assets: bool = False,
 ) -> UnifiedCutPlanDocument:
     """Parst LLM-JSON → UnifiedCutPlanDocument (inkl. optionaler ID-Prefix)."""
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE,
+    )
+
     payload = _extract_json(raw) if isinstance(raw, str) else raw
     if not isinstance(payload, dict):
         raise UnifiedCutPlanError("Unified Cut Plan ist kein JSON-Objekt.")
 
-    # Default: Pause-Directives abgeschaltet (Rhythm / Keyword-Sync / Intro).
-    # Keyword Flow: allow_pause_directives=True übernimmt gültige Directives.
+    # Default: Pause-Directives abgeschaltet (Rhythm / Keyword-Sync / Intro / KF).
+    # Keyword Flow: nicht-leere Directives fail-closed (keine stillen Strips).
     directives: list[PauseDirective] = []
+    raw_directives = payload.get("pause_directives") or []
+    if raw_directives and not isinstance(raw_directives, list):
+        raise UnifiedCutPlanError("pause_directives muss ein Array sein.")
+    if not isinstance(raw_directives, list):
+        raw_directives = []
+    parsed_directives: list[PauseDirective] = []
+    for item in raw_directives:
+        if not isinstance(item, dict):
+            continue
+        parsed = _parse_pause_directive(item)
+        if parsed is not None:
+            parsed_directives.append(parsed)
+    if parsed_directives and reject_nonempty_pause_directives:
+        raise UnifiedCutPlanError(
+            KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE
+        )
     if allow_pause_directives:
-        raw_directives = payload.get("pause_directives") or []
-        if not isinstance(raw_directives, list):
-            raise UnifiedCutPlanError("pause_directives muss ein Array sein.")
-        for item in raw_directives:
-            if not isinstance(item, dict):
-                continue
-            parsed = _parse_pause_directive(item)
-            if parsed is not None:
-                directives.append(parsed)
+        directives = parsed_directives
 
     boundaries_raw = payload.get("boundaries") or []
     slots_raw = payload.get("slots") or []

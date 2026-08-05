@@ -328,16 +328,7 @@ def _plan_with_pause_and_closing(ids: dict[str, str]) -> UnifiedCutPlanDocument:
         closing_fallback_asset_fit="acceptable",
         closing_fallback_asset_fit_reason="reserve closer same chapter intent",
         closing_fallback_visual_intent="same closing intent as primary",
-        pause_directives=[
-            PauseDirective(
-                after_segment_id=ids["seg"],
-                after_sentence_id=ids["s1"],
-                pause_function="anticipation",
-                duration_class="long",
-                visual_behavior="next_shot_may_start_during_pause",
-                editorial_reason="theme breath",
-            )
-        ],
+        pause_directives=[],
         boundaries=[
             CutBoundary(
                 cut_id="c0",
@@ -398,9 +389,10 @@ def test_spoken_numbers_kept_pause_tag_digits_removed() -> None:
     assert "[pause" not in texts
 
 
-def test_production_otio_has_intra_pause_gap_and_map(tmp_path: Path) -> None:
+def test_production_otio_has_map_and_no_keyword_flow_audio_gaps(tmp_path: Path) -> None:
     project, ids = _build_chapter_a_project(tmp_path)
     plan = _plan_with_pause_and_closing(ids)
+    assert plan.pause_directives == []
     resolved = resolve_unified_timeline(
         project, plan, allow_open_gaps=False, persist=True
     )
@@ -411,20 +403,14 @@ def test_production_otio_has_intra_pause_gap_and_map(tmp_path: Path) -> None:
         str(s.editorial_function or "") == "technical_chapter_map_opener"
         for s in resolved.shots
     )
-    # Intra-pause must appear as audio split + pause_after on resolved segments.
-    paused = [
-        a
-        for a in resolved.audio_segments
-        if float(a.pause_after_seconds or 0.0) >= 1.45
-    ]
-    assert paused, resolved.audio_segments
-    assert any(
-        float(a.pause_after_seconds or 0.0) == pytest.approx(1.5, abs=0.05)
+    # Keyword Flow darf keine künstliche Stille mehr einfügen.
+    assert all(
+        float(a.pause_after_seconds or 0.0) == pytest.approx(0.0)
         for a in resolved.audio_segments
     )
 
     out = export_otio_from_resolved_timeline(
-        project, basename="kf_e2e_pause", resolved=resolved
+        project, basename="kf_e2e_no_pause", resolved=resolved
     )
     assert out.is_file()
     tl = otio.adapters.read_from_file(str(out))
@@ -432,26 +418,18 @@ def test_production_otio_has_intra_pause_gap_and_map(tmp_path: Path) -> None:
     video = next(t for t in tl.tracks if t.kind == otio.schema.TrackKind.Video)
 
     gaps = [c for c in audio if isinstance(c, otio.schema.Gap)]
-    assert gaps, "Audio-Track muss Pause als Gap enthalten"
     pause_gaps = [
         g for g in gaps if abs(g.duration().to_seconds() - 1.5) < 0.05
     ]
-    assert pause_gaps, f"keine 1.5s Gap, found {[g.duration().to_seconds() for g in gaps]}"
+    assert not pause_gaps, "OTIO darf keine KF-Pausen-Gaps enthalten"
 
     clips = [c for c in audio if isinstance(c, otio.schema.Clip)]
-    assert len(clips) >= 2
-    # Source ranges contiguous without overlap/loss for same media.
-    ranges = []
+    assert clips
+    covered = 0.0
     for clip in clips:
         src = clip.source_range
         assert src is not None
-        ranges.append(
-            (src.start_time.to_seconds(), src.start_time.to_seconds() + src.duration.to_seconds())
-        )
-    ranges.sort()
-    for prev, curr in zip(ranges, ranges[1:]):
-        assert curr[0] + 1e-6 >= prev[1] - 1e-6 or abs(curr[0] - prev[1]) < 1e-3
-    covered = sum(end - start for start, end in ranges)
+        covered += src.duration.to_seconds()
     assert covered == pytest.approx(12.0, abs=0.15)
 
     # Map opener on video before VO: first video clip ~9s technical map.
@@ -459,6 +437,31 @@ def test_production_otio_has_intra_pause_gap_and_map(tmp_path: Path) -> None:
     assert vclips
     first = vclips[0]
     assert first.duration().to_seconds() == pytest.approx(9.0, abs=0.08)
+
+
+def test_old_plan_with_pause_directives_blocks_resolve(tmp_path: Path) -> None:
+    from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
+        UnifiedTimelineError,
+    )
+
+    project, ids = _build_chapter_a_project(tmp_path)
+    plan = _plan_with_pause_and_closing(ids)
+    plan = plan.model_copy(
+        update={
+            "pause_directives": [
+                PauseDirective(
+                    after_segment_id=ids["seg"],
+                    after_sentence_id=ids["s1"],
+                    pause_function="anticipation",
+                    duration_class="long",
+                )
+            ]
+        }
+    )
+    with pytest.raises(
+        UnifiedTimelineError, match="nicht mehr unterstützte Pausenverlängerungen"
+    ):
+        resolve_unified_timeline(project, plan, allow_open_gaps=False, persist=False)
 
 
 def test_closing_fallback_used_when_primary_file_missing(tmp_path: Path) -> None:

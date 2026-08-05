@@ -637,6 +637,7 @@ def resolve_timed_slots(
     segment_to_chapter: dict[str, str] | None = None,
     keyword_flow: bool = False,
     sentence_rows_by_id: dict[str, dict] | None = None,
+    segment_words_by_id: dict[str, list[dict]] | None = None,
 ) -> list[TimedSlot]:
     """Grenzen-Kette → TimedSlots (VO-absolut, vor Kapitel-Hülle)."""
     notes = repairs if repairs is not None else []
@@ -656,8 +657,49 @@ def resolve_timed_slots(
         except KeywordFlowTimingError as exc:
             raise UnifiedTimelineError(str(exc)) from exc
 
+    words_by_segment = segment_words_by_id or {}
     raw_times: list[float] = []
     for boundary in plan.boundaries:
+        align = str(getattr(boundary, "alignment", "") or "").strip().lower()
+        if keyword_flow and align == "in_pause":
+            from otio_app.services.without_voiceover_enhanced.pause_resolver import (
+                PauseResolveError,
+                clamp_in_pause_cut_to_natural_window,
+                source_seconds_to_timeline,
+            )
+
+            sentence_id = str(boundary.sentence_id or "").strip()
+            sentence = sentence_index.get(sentence_id)
+            if sentence is None:
+                raise UnifiedTimelineError(
+                    f"{boundary.cut_id}: unbekannte Sentence-ID {sentence_id}."
+                )
+            segment_id = segment_id_from_sentence_id(sentence_id) or sentence.segment_id
+            entry_map = {entry.segment_id: entry for entry in timeline.entries}
+            entry = entry_map.get(segment_id)
+            if entry is None:
+                raise UnifiedTimelineError(
+                    f"{boundary.cut_id}: Segment {segment_id} fehlt in Narration-Timeline."
+                )
+            requested = float(sentence.start_seconds) + boundary_source_offset_seconds(
+                boundary, sentence, alignment=align
+            )
+            try:
+                clamped_source = clamp_in_pause_cut_to_natural_window(
+                    requested_source_seconds=requested,
+                    segment_words=list(words_by_segment.get(segment_id) or []),
+                    fps=fps,
+                )
+            except PauseResolveError as exc:
+                raise UnifiedTimelineError(str(exc)) from exc
+            if abs(clamped_source - requested) > 1e-6:
+                notes.append(
+                    f"{boundary.cut_id}: in_pause in natürliches Fenster "
+                    f"{requested:.3f}s → {clamped_source:.3f}s."
+                )
+            absolute = source_seconds_to_timeline(entry, clamped_source)
+            raw_times.append(_seconds_to_frame(absolute, fps))
+            continue
         raw_times.append(
             boundary_to_absolute_seconds(
                 boundary,
@@ -878,8 +920,9 @@ def build_narration_timeline_from_unified(
     return build_narration_timeline(
         script_version=locked.script_version,
         segment_timings=list(timings.segments),
-        pause_directives=list(plan.pause_directives),
+        pause_directives=[],
         sentence_index=sentence_index,
+        enable_keyword_flow_pauses=False,
         author_pause_after_by_segment=author_pause_after_map_from_script(
             locked,
             model_id=load_elevenlabs_settings(project).model_id,
@@ -1185,10 +1228,18 @@ def resolve_unified_timeline(
             )
     keyword_flow = is_keyword_flow_unified_style(options)
     if keyword_flow:
+        from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+            KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE,
+            plan_has_unsupported_keyword_flow_pause_directives,
+        )
         from otio_app.services.without_voiceover_enhanced.keyword_flow_closing import (
             validate_keyword_flow_closing,
         )
 
+        if plan_has_unsupported_keyword_flow_pause_directives(plan):
+            raise UnifiedTimelineError(
+                KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE
+            )
         closing_errors = validate_keyword_flow_closing(plan, catalog=catalog)
         if closing_errors:
             errors.extend(closing_errors)
@@ -1222,12 +1273,14 @@ def resolve_unified_timeline(
             author_pause_after_map_from_script,
         )
 
+        # Keyword Flow: keine pause_directives, keine eingefügte Stille,
+        # keine Verschiebung von Narration/Wortzeiten.
         timeline = build_narration_timeline(
             script_version=locked.script_version,
             segment_timings=timing_segments,
-            pause_directives=list(plan.pause_directives),
+            pause_directives=[],
             sentence_index=sentence_index,
-            enable_keyword_flow_pauses=keyword_flow,
+            enable_keyword_flow_pauses=False,
             segment_words_by_id=words_by_segment,
             fps=fps,
             repairs=repairs,
@@ -1257,6 +1310,7 @@ def resolve_unified_timeline(
         segment_to_chapter=segment_to_chapter,
         keyword_flow=keyword_flow,
         sentence_rows_by_id=sentence_rows_by_id,
+        segment_words_by_id=words_by_segment,
     )
     assert_timed_slots_contiguous(timed_slots, fps=fps)
     for slot, timed in zip(plan.slots, timed_slots):

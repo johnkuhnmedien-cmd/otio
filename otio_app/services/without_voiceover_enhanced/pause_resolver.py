@@ -417,6 +417,50 @@ def build_narration_timeline(
     )
 
 
+def clamp_in_pause_cut_to_natural_window(
+    *,
+    requested_source_seconds: float,
+    segment_words: list[dict[str, Any]],
+    fps: float,
+) -> float:
+    """Schneidet ``in_pause`` nur in echte natürliche Pause + 5-Frame-Safety.
+
+    Keine Stille einfügen, keine Pause verlängern. Ist das Fenster zu klein,
+    wird fail-closed abgebrochen.
+    """
+    words = list(segment_words or [])
+    if not words:
+        raise PauseResolveError(
+            "Keyword Flow: in_pause-Schnitt ohne Wortzeiten — "
+            "keine natürliche Pause prüfbar."
+        )
+    requested = float(requested_source_seconds)
+    prev_end = _word_end_before(words, at_or_before=requested + 1e-9)
+    next_start = _word_start_after(words, at_or_after=requested - 1e-9)
+    if prev_end is None or next_start is None:
+        raise PauseResolveError(
+            "Keyword Flow: in_pause-Schnitt ohne umgebende Wörter — "
+            "natürliche Pause nicht bestimmbar."
+        )
+    if float(next_start) <= float(prev_end) + 1e-9:
+        raise PauseResolveError(
+            "Keyword Flow: in_pause-Schnitt ohne echte natürliche Pause "
+            f"(prev_end={prev_end:.3f}s, next_start={next_start:.3f}s)."
+        )
+    safe_start, safe_end = safe_pause_window_timeline(
+        previous_word_end_timeline=float(prev_end),
+        next_word_start_timeline=float(next_start),
+        fps=fps,
+    )
+    if safe_end + 1e-9 < safe_start:
+        raise PauseResolveError(
+            "Keyword Flow: natürliche Pause zu klein für in_pause-Schnitt "
+            f"(safe_window={safe_start:.3f}–{safe_end:.3f}s). "
+            "Keine Pausenverlängerung — andere Boundary wählen."
+        )
+    return round(max(safe_start, min(requested, safe_end)), 6)
+
+
 def safe_pause_window_timeline(
     *,
     previous_word_end_timeline: float,

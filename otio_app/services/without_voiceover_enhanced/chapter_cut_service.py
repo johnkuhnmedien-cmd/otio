@@ -69,6 +69,9 @@ class ChapterCutStatus:
     open_gap_ids: list[str] = field(default_factory=list)
     # Plan/Resolved existieren, gehören aber zu einer anderen Skriptversion.
     stale_for_script_version: bool = False
+    # Keyword-Flow-Plan mit nicht-leeren pause_directives (nicht mehr unterstützt).
+    stale_for_unsupported_pauses: bool = False
+    unsupported_pause_message: str = ""
 
     @property
     def open_gap_count(self) -> int:
@@ -77,7 +80,11 @@ class ChapterCutStatus:
     @property
     def timing_ready(self) -> bool:
         """Python Timing nur mit Plan und ohne offene Coverage Gaps."""
-        return self.has_plan and self.open_gap_count == 0
+        return (
+            self.has_plan
+            and self.open_gap_count == 0
+            and not self.stale_for_unsupported_pauses
+        )
 
 
 @dataclass
@@ -267,9 +274,20 @@ def get_chapter_cut_status(
     resolved_present = resolved is not None and bool(
         resolved.shots or resolved.audio_segments
     )
-    # Alte Cuts nach Skript-Neu-Erzeugung zählen nicht als „fertig“.
-    has_plan = plan_present and plan_version_ok
-    has_resolved = resolved_present and resolved_version_ok
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE,
+        is_keyword_flow_unified_style,
+        load_cut_plan_options,
+        plan_has_unsupported_keyword_flow_pause_directives,
+    )
+
+    unsupported_pauses = bool(
+        is_keyword_flow_unified_style(load_cut_plan_options(project))
+        and plan_has_unsupported_keyword_flow_pause_directives(plan)
+    )
+    # Alte Cuts nach Skript-Neu-Erzeugung / Pause-Directives zählen nicht als fertig.
+    has_plan = plan_present and plan_version_ok and not unsupported_pauses
+    has_resolved = resolved_present and resolved_version_ok and not unsupported_pauses
     matches = (
         has_plan
         and has_resolved
@@ -279,13 +297,23 @@ def get_chapter_cut_status(
         (plan_present and not plan_version_ok)
         or (resolved_present and not resolved_version_ok)
     )
+    if unsupported_pauses and KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE not in errors:
+        errors = list(errors) + [KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE]
     return ChapterCutStatus(
         folder_name=folder_name,
         folder_slug=slug,
         has_plan=has_plan,
-        plan_slots=len(plan.slots) if plan is not None and plan_version_ok else 0,
+        plan_slots=(
+            len(plan.slots)
+            if plan is not None and plan_version_ok and not unsupported_pauses
+            else 0
+        ),
         has_resolved=has_resolved,
-        resolved_shots=len(resolved.shots) if resolved is not None and resolved_version_ok else 0,
+        resolved_shots=(
+            len(resolved.shots)
+            if resolved is not None and resolved_version_ok and not unsupported_pauses
+            else 0
+        ),
         matches=matches,
         plan_path=plan_path,
         resolved_path=resolved_path,
@@ -293,6 +321,12 @@ def get_chapter_cut_status(
         repairs=repairs,
         open_gap_ids=open_ids if has_plan else [],
         stale_for_script_version=stale,
+        stale_for_unsupported_pauses=unsupported_pauses,
+        unsupported_pause_message=(
+            KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE
+            if unsupported_pauses
+            else ""
+        ),
     )
 
 
@@ -531,6 +565,17 @@ def resolve_chapter_timeline(
         raise ChapterCutError(
             f"Kapitel-Plan fehlt für „{folder_name}“ — zuerst LLM Cut."
         )
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE,
+        is_keyword_flow_unified_style,
+        load_cut_plan_options,
+        plan_has_unsupported_keyword_flow_pause_directives,
+    )
+
+    if is_keyword_flow_unified_style(
+        load_cut_plan_options(project)
+    ) and plan_has_unsupported_keyword_flow_pause_directives(plan):
+        raise ChapterCutError(KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE)
 
     from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
         ingest_coverage_gap_inbox,
@@ -923,6 +968,19 @@ def export_chapter_otio(
     if plan is None or not plan.slots:
         raise EnhancedOtioExportError(
             f"Kapitel-Plan fehlt für „{folder_name}“ — zuerst LLM Cut."
+        )
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE,
+        is_keyword_flow_unified_style,
+        load_cut_plan_options,
+        plan_has_unsupported_keyword_flow_pause_directives,
+    )
+
+    if is_keyword_flow_unified_style(
+        load_cut_plan_options(project)
+    ) and plan_has_unsupported_keyword_flow_pause_directives(plan):
+        raise EnhancedOtioExportError(
+            KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE
         )
     if resolved is None or not chapter_resolved_matches_plan(plan, resolved):
         try:
