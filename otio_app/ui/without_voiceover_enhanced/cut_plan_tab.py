@@ -30,6 +30,7 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     CUT_PLAN_MODE_LEGACY,
     CUT_PLAN_MODE_UNIFIED,
     STILL_BACKGROUND_CHOICES,
+    STILL_PAN_MODE_CHOICES,
     TIMING_MODE_CHOICES,
     TIMING_MODE_FIXED,
     TIMING_MODE_LLM,
@@ -908,12 +909,75 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             disabled=not still_image_dynamic_zoom_enabled,
             help=(
                 "End-Zoom relativ zum Start (1.12 = +12 % über die Shot-Dauer). "
-                "Wirkt erst beim nächsten OTIO-Export."
+                "Wirkt erst beim nächsten OTIO-Export. "
+                "Mit Schwenk: zusätzliches Zoom-in während des Pans."
             ),
         )
+        pan_labels = {
+            "off": "Aus",
+            "ltr": "Links → Rechts",
+            "rtl": "Rechts → Links",
+            "alternate": "Abwechselnd L→R / R→L",
+        }
+        pan_options = list(STILL_PAN_MODE_CHOICES)
+        pan_index = (
+            pan_options.index(current.still_image_pan_mode)
+            if current.still_image_pan_mode in pan_options
+            else 0
+        )
+        still_image_pan_mode = st.selectbox(
+            "Still-Schwenk (Cover 16:9 + Pan)",
+            options=pan_options,
+            index=pan_index,
+            format_func=lambda v: pan_labels.get(v, v),
+            key=f"enh_opt_still_pan_{project.id}",
+            help=(
+                "Nur für Fotos nahe 16:9: Frame komplett füllen (Cover) und "
+                "horizontal schwenken — Extra-Zoom verhindert schwarze Ränder. "
+                "1:1 / stark abweichende Formate: Fallback mit Zoom 0.8, "
+                "Dynamic Zoom und Vintage/Paper-Edge-Hintergrund. "
+                "Wirkt beim nächsten OTIO-Export."
+            ),
+        )
+        still_image_pan_travel = st.number_input(
+            "Schwenk-Weg (Anteil der Bildbreite)",
+            min_value=0.05,
+            max_value=0.30,
+            value=float(current.still_image_pan_travel),
+            step=0.01,
+            key=f"enh_opt_still_pan_travel_{project.id}",
+            disabled=still_image_pan_mode == "off",
+            help=(
+                "0.12 = ca. 12 % der Frame-Breite. Mehr Weg = stärkerer Schwenk "
+                "und etwas mehr Zoom (keine Ränder)."
+            ),
+        )
+        pan_a1, pan_a2 = st.columns(2)
+        with pan_a1:
+            still_image_pan_min_aspect = st.number_input(
+                "Pan ab Aspect min (Breite/Höhe)",
+                min_value=1.0,
+                max_value=3.0,
+                value=float(current.still_image_pan_min_aspect),
+                step=0.05,
+                key=f"enh_opt_still_pan_min_ar_{project.id}",
+                disabled=still_image_pan_mode == "off",
+                help="Default 1.50 (~3:2). Darunter → Vintage-Fallback.",
+            )
+        with pan_a2:
+            still_image_pan_max_aspect = st.number_input(
+                "Pan bis Aspect max (Breite/Höhe)",
+                min_value=1.0,
+                max_value=4.0,
+                value=float(current.still_image_pan_max_aspect),
+                step=0.05,
+                key=f"enh_opt_still_pan_max_ar_{project.id}",
+                disabled=still_image_pan_mode == "off",
+                help="Default 2.05. Darüber → Vintage-Fallback. 16:9 ≈ 1.78.",
+            )
 
         draft = CutPlanOptions(
-            schema_version="1.5",
+            schema_version="1.7",
             cut_plan_mode=str(cut_plan_mode),  # type: ignore[arg-type]
             unified_cut_style=str(unified_cut_style),  # type: ignore[arg-type]
             keyword_flow_allow_onset_overflow=bool(
@@ -948,6 +1012,10 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             still_image_background_style=str(still_image_background_style),
             still_image_dynamic_zoom_enabled=bool(still_image_dynamic_zoom_enabled),
             still_image_dynamic_zoom_factor=float(still_image_dynamic_zoom_factor),
+            still_image_pan_mode=str(still_image_pan_mode),
+            still_image_pan_travel=float(still_image_pan_travel),
+            still_image_pan_min_aspect=float(still_image_pan_min_aspect),
+            still_image_pan_max_aspect=float(still_image_pan_max_aspect),
         )
         if st.button(
             "Cut Plan Settings speichern",

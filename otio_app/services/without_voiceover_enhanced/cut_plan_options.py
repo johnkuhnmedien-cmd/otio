@@ -79,9 +79,28 @@ DEFAULT_STILL_DYNAMIC_ZOOM_FACTOR = 1.12
 STILL_DYNAMIC_ZOOM_FACTOR_MIN = 1.02
 STILL_DYNAMIC_ZOOM_FACTOR_MAX = 1.35
 
+# Horizontaler Still-Schwenk (Cover-Fill + Extra-Zoom gegen schwarze Ränder).
+STILL_PAN_MODE_OFF = "off"
+STILL_PAN_MODE_LTR = "ltr"
+STILL_PAN_MODE_RTL = "rtl"
+STILL_PAN_MODE_ALTERNATE = "alternate"
+STILL_PAN_MODE_CHOICES = (
+    STILL_PAN_MODE_OFF,
+    STILL_PAN_MODE_LTR,
+    STILL_PAN_MODE_RTL,
+    STILL_PAN_MODE_ALTERNATE,
+)
+DEFAULT_STILL_PAN_TRAVEL = 0.12
+STILL_PAN_TRAVEL_MIN = 0.05
+STILL_PAN_TRAVEL_MAX = 0.30
+# Cover+Pan nur wenn Bild-Seitenverhältnis nahe 16:9 (sonst Vintage-Fallback).
+DEFAULT_STILL_PAN_MIN_ASPECT = 1.50  # ~3:2
+DEFAULT_STILL_PAN_MAX_ASPECT = 2.05  # etwas breiter als 16:9
+STILL_PAN_FALLBACK_ZOOM = 0.8
+
 
 class CutPlanOptions(BaseModel):
-    schema_version: str = "1.5"
+    schema_version: str = "1.7"
     # Phase 7: Unified (1 LLM) vs Legacy (Rough + Final).
     cut_plan_mode: CutPlanMode = CUT_PLAN_MODE_LEGACY
     # Unified Stil: Rhythmus (Default) oder Keyword-Sync (Wort↔Bild).
@@ -160,6 +179,20 @@ class CutPlanOptions(BaseModel):
         ge=STILL_DYNAMIC_ZOOM_FACTOR_MIN,
         le=STILL_DYNAMIC_ZOOM_FACTOR_MAX,
     )
+    # Cover-Fill 16:9 + horizontaler Schwenk (kein Letterbox / keine schwarzen Ränder).
+    still_image_pan_mode: str = STILL_PAN_MODE_OFF
+    still_image_pan_travel: float = Field(
+        default=DEFAULT_STILL_PAN_TRAVEL,
+        ge=STILL_PAN_TRAVEL_MIN,
+        le=STILL_PAN_TRAVEL_MAX,
+    )
+    # Cover+Pan nur in diesem Aspect-Fenster (Breite/Höhe); sonst Fallback.
+    still_image_pan_min_aspect: float = Field(
+        default=DEFAULT_STILL_PAN_MIN_ASPECT, ge=1.0, le=3.0
+    )
+    still_image_pan_max_aspect: float = Field(
+        default=DEFAULT_STILL_PAN_MAX_ASPECT, ge=1.0, le=4.0
+    )
 
 
 def default_cut_plan_options() -> CutPlanOptions:
@@ -185,6 +218,43 @@ def _clamp_int(value: Any, *, default: int, lo: int, hi: int) -> int:
 def _normalize_mode(value: Any, *, default: str) -> str:
     text = str(value or default).strip().lower()
     return text if text in TIMING_MODE_CHOICES else default
+
+
+def _normalize_still_pan_mode(value: Any, *, default: str = STILL_PAN_MODE_OFF) -> str:
+    text = str(value or default).strip().lower().replace("-", "_")
+    aliases = {
+        "left_to_right": STILL_PAN_MODE_LTR,
+        "left→right": STILL_PAN_MODE_LTR,
+        "right_to_left": STILL_PAN_MODE_RTL,
+        "right→left": STILL_PAN_MODE_RTL,
+        "both": STILL_PAN_MODE_ALTERNATE,
+        "lr": STILL_PAN_MODE_LTR,
+        "rl": STILL_PAN_MODE_RTL,
+    }
+    text = aliases.get(text, text)
+    return text if text in STILL_PAN_MODE_CHOICES else default
+
+
+def resolve_still_pan_direction(
+    mode: str,
+    *,
+    shot_id: str = "",
+    shot_index: int = 0,
+) -> str | None:
+    """Liefert ``ltr``/``rtl`` oder ``None`` wenn Pan aus ist."""
+    normalized = _normalize_still_pan_mode(mode)
+    if normalized == STILL_PAN_MODE_OFF:
+        return None
+    if normalized == STILL_PAN_MODE_LTR:
+        return STILL_PAN_MODE_LTR
+    if normalized == STILL_PAN_MODE_RTL:
+        return STILL_PAN_MODE_RTL
+    # alternate: gerade Indizes L→R, ungerade R→L (stabil über shot_id-Hash).
+    if shot_id:
+        parity = sum(ord(ch) for ch in shot_id) % 2
+    else:
+        parity = int(shot_index) % 2
+    return STILL_PAN_MODE_LTR if parity == 0 else STILL_PAN_MODE_RTL
 
 
 def _normalize_cut_plan_mode(value: Any, *, default: str) -> str:
@@ -416,6 +486,31 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
             default=defaults.still_image_dynamic_zoom_factor,
             lo=STILL_DYNAMIC_ZOOM_FACTOR_MIN,
             hi=STILL_DYNAMIC_ZOOM_FACTOR_MAX,
+        ),
+        still_image_pan_mode=_normalize_still_pan_mode(
+            raw.get("still_image_pan_mode", defaults.still_image_pan_mode)
+        ),
+        still_image_pan_travel=_clamp_float(
+            raw.get("still_image_pan_travel", defaults.still_image_pan_travel),
+            default=defaults.still_image_pan_travel,
+            lo=STILL_PAN_TRAVEL_MIN,
+            hi=STILL_PAN_TRAVEL_MAX,
+        ),
+        still_image_pan_min_aspect=_clamp_float(
+            raw.get(
+                "still_image_pan_min_aspect", defaults.still_image_pan_min_aspect
+            ),
+            default=defaults.still_image_pan_min_aspect,
+            lo=1.0,
+            hi=3.0,
+        ),
+        still_image_pan_max_aspect=_clamp_float(
+            raw.get(
+                "still_image_pan_max_aspect", defaults.still_image_pan_max_aspect
+            ),
+            default=defaults.still_image_pan_max_aspect,
+            lo=1.0,
+            hi=4.0,
         ),
     )
 
