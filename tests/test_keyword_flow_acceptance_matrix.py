@@ -427,6 +427,8 @@ def test_33_34_to_44_context_prompt_rules() -> None:
     assert "NAMED ENTITY PRIORITY" in prompt
     assert "general category" in prompt.lower() or "waterfall" in prompt.lower()
     assert "exact identity" in prompt.lower()
+    assert "CHAPTER-LOCAL IDENTITY" in prompt
+    assert "verlassenes Dorf" in prompt
     assert "pronoun" in prompt.lower() or "reference" in prompt.lower()
     assert "ATMOSPHERIC" in prompt
     assert "Do not invent artificial keywords" in prompt

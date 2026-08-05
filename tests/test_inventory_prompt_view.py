@@ -11,6 +11,7 @@ from otio_app.services.inventory_prompt_view import (
     build_slim_folder_inventory,
     load_slim_folder_inventory_file,
     slim_assets_for_cut_plan_prompt,
+    slim_assets_from_slim_document,
     slim_inventory_path_for,
 )
 
@@ -53,6 +54,30 @@ def _folder() -> AssetFolderAnalysis:
             ),
         ],
     )
+
+
+def test_slim_prompt_rows_list_videos_before_photos() -> None:
+    slim = {
+        "kapitel": "Achill Island",
+        "assets": [
+            {
+                "id": "photo_a",
+                "file": "a.jpg",
+                "type": "photo",
+                "dauer_s": None,
+                "beschreibung": "Deserted Village still",
+            },
+            {
+                "id": "video_b",
+                "file": "b.mp4",
+                "type": "video",
+                "dauer_s": 12.0,
+                "beschreibung": "Ruinen eines verlassenen Dorfes",
+            },
+        ],
+    }
+    rows = slim_assets_from_slim_document(slim, folder_name="Achill Island")
+    assert [r["local_asset_id"] for r in rows] == ["video_b", "photo_a"]
 
 
 def test_slim_dedupe_prefers_video_over_longer_photo_description(monkeypatch) -> None:

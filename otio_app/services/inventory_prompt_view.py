@@ -65,7 +65,10 @@ def slim_assets_from_slim_document(
     *,
     folder_name: str,
 ) -> list[dict[str, Any]]:
-    """Slim-Disk-Dokument → Cut-Plan-Prompt-Rows (EN-Keys)."""
+    """Slim-Disk-Dokument → Cut-Plan-Prompt-Rows (EN-Keys).
+
+    Videos stehen vor Fotos, damit der Cut-LLM Motion-Kandidaten zuerst sieht.
+    """
     out: list[dict[str, Any]] = []
     for item in slim.get("assets") or []:
         if not isinstance(item, dict):
@@ -91,6 +94,12 @@ def slim_assets_from_slim_document(
             if key in item:
                 row[key] = item[key]
         out.append(row)
+    out.sort(
+        key=lambda row: (
+            0 if str(row.get("media_type") or "").lower() == "video" else 1,
+            str(row.get("local_asset_id") or ""),
+        )
+    )
     return out
 
 
@@ -186,12 +195,17 @@ def build_slim_folder_inventory(
             chosen[key] = asset
         first_index.setdefault(key, index)
 
-    ordered = sorted(
-        chosen.values(),
-        key=lambda asset: first_index.get(
-            _dedupe_key(Path(str(asset.path)).name), 10_000
-        ),
-    )
+    def _order_key(asset: AssetMediaAnalysis) -> tuple[int, int]:
+        path = str(asset.path or "")
+        type_label = _media_type_label(path, getattr(asset, "media_type", None))
+        # Videos first in slim / prompt — LLM sees motion inventory before stills.
+        type_rank = 0 if type_label == "video" else 1
+        return (
+            type_rank,
+            first_index.get(_dedupe_key(Path(path).name), 10_000),
+        )
+
+    ordered = sorted(chosen.values(), key=_order_key)
 
     assets_out: list[dict[str, Any]] = []
     for asset in ordered:

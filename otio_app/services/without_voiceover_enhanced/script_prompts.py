@@ -31,15 +31,21 @@ CUT RHYTHM TARGETS (BINDING STYLE TARGETS — aim for this distribution):
 
 # Binding for body-chapter unified cuts (rhythm / keyword_sync / keyword_flow).
 VIDEO_OVER_PHOTO_ASSET_RULES = """\
-VIDEO OVER PHOTO (BINDING):
+VIDEO OVER PHOTO (BINDING — OUTRANKS NAME-TAGGED STILLS):
 
-- Prefer local VIDEO over PHOTO/still whenever a video visibly shows the spoken
-  subject or required motif (e.g. sheep, bridge, bay, deserted village).
-- Do NOT choose a photo merely because its description matches secondary habitat
-  or wording more closely than a usable video of the same subject.
+- Prefer chapter-local VIDEO over PHOTO/still whenever a video clearly shows the
+  spoken subject or required motif (sheep, deserted village / abandoned cottages,
+  bay/beach, cliffs, Atlantic Drive coastal road, etc.).
+- Do NOT prefer a PHOTO just because its description contains the English proper
+  name (Deserted Village, Slievemore, Keem Bay, Atlantic Drive) while a local
+  VIDEO shows the same motif in German or without that exact English label.
+  Example: video \"Ruinen eines verlassenen Dorfes\" / stone cottages beats a
+  still titled \"Deserted Village at Slievemore\".
+- Manual/stock stills (ids often starting with manual_) are LAST RESORT for body
+  slots — use them only when no suitable local video shows the motif.
 - Do NOT open a coverage gap when a local video already shows the subject.
 - Set preferred_media_type to \"video\" for body slots unless no suitable video
-  exists (then photo/either). Photos are last resort for body slots, not equals.
+  exists. Photos are not equals of videos.
 - Closing fallback may still use a long photo/atmosphere asset when no suitable
   closing video remains.
 """
@@ -1415,9 +1421,18 @@ NAMED ENTITY PRIORITY (BINDING):
 - When a concrete entity is named, do NOT use an arbitrary asset of the same
   general category. Concrete waterfall ≠ any waterfall; concrete church ≠ any
   church; concrete monument ≠ any monument.
-- If the exact identity is not present in LOCAL ASSETS: asset_fit weak or none,
+- CHAPTER-LOCAL IDENTITY (overrides English proper-name pedantry):
+  Inside THIS chapter folder, a local VIDEO whose description clearly depicts the
+  spoken motif counts as exact identity present — even in German and even if the
+  English proper name is missing. Treat as matches, for example:
+  - \"verlassenes Dorf\" / abandoned stone cottages / village ruins ≡ Deserted Village
+  - \"Schafe\" / marked sheep on Achill ≡ sheep (do not require \"blanket bog\" wording)
+  - coastal bay / curved beach between headlands ≡ the chapter's named bay (e.g. Keem)
+  - cliff-edge coastal road under Atlantic weather ≡ Atlantic Drive motif
+  Prefer that VIDEO over any PHOTO that only wins by spelling the English name.
+- If NO local video or photo shows the motif at all: asset_fit weak or none,
   local_asset_id MUST be null, and create a Coverage Gap. Never invent identity
-  from visual similarity.
+  from a wrong place (e.g. a different island's ruins).
 - Resolve pronouns across sentences when unambiguous. If ambiguous: do not invent
   identity; rate fit cautiously; gap when a concrete unproven identity is required.
 

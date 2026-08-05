@@ -134,7 +134,9 @@ def test_keyword_flow_prompt_contract() -> None:
     assert "CUT RHYTHM TARGETS" not in prompt
     assert "local_asset_id MUST be null" in prompt
     assert "VIDEO OVER PHOTO" in prompt
-    assert "Prefer local VIDEO over PHOTO" in prompt
+    assert "CHAPTER-LOCAL IDENTITY" in prompt
+    assert "verlassenes Dorf" in prompt
+    assert "Prefer chapter-local VIDEO over PHOTO" in prompt or "Prefer local VIDEO" in prompt
 
 
 def test_rhythm_and_keyword_sync_prompts_unchanged_markers() -> None:
