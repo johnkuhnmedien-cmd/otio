@@ -219,8 +219,8 @@ style_reference_usage:
 - matched_features must describe prose traits, never copy facts or wording from the reference.
 
 AUTHOR PAUSES
-- When the Raw Chapter Reference uses explicit timed pauses, reproduce that rhythm with
-  author_pause_after_seconds on segments.
+- When the Raw Chapter Reference uses explicit timed pauses, record that rhythm with
+  author_pause_after_seconds on segments (editorial metadata only).
 - Use 0 when no pause follows.
 - Use the reference's observed duration range.
 - Shorter pauses connect closely related facts.
@@ -228,7 +228,8 @@ AUTHOR PAUSES
   strong visual reveal, or completed subject block.
 - Do not use the same duration mechanically after every segment.
 - Do not write [pause X seconds] inside segment.text or narration_full.
-- The application will render the marker from author_pause_after_seconds.
+- The application does NOT inject pauses into TTS or timeline audio; the editor
+  inserts pauses into the single chapter audio file.
 - Every positive author pause should normally also set paragraph_break_after=true.
 """
 
