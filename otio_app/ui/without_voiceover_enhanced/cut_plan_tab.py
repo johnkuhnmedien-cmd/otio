@@ -1382,11 +1382,22 @@ def _render_chapter_cut_rows(
         plan = load_chapter_unified_plan(project, folder)
         if plan is not None and plan.slots:
             with st.expander(f"LLM Cut · {folder}", expanded=False):
+                filled_gaps = set(
+                    summarize_gap_status(project).filled_gap_ids
+                )
                 for slot in plan.slots[:40]:
+                    gap_id = (slot.coverage_gap_id or "").strip()
+                    fit = str(slot.asset_fit or "")
+                    if gap_id and gap_id in filled_gaps:
+                        gap_label = f"filled:{gap_id}"
+                    elif gap_id and fit in {"weak", "none"}:
+                        gap_label = f"open:{gap_id}"
+                    else:
+                        gap_label = gap_id or "—"
                     st.caption(
                         f"{slot.slot_id}: fit={slot.asset_fit} · "
                         f"asset={slot.local_asset_id or '—'} · "
-                        f"gap={slot.coverage_gap_id or '—'}"
+                        f"gap={gap_label}"
                     )
                 if len(plan.slots) > 40:
                     st.caption(f"… +{len(plan.slots) - 40} weitere Slots")
@@ -1404,7 +1415,17 @@ def _render_chapter_cut_rows(
                     end = float(shot.timeline_end_seconds)
                     dur = max(0.0, end - start)
                     fit = (shot.asset_fit or "—").strip() or "—"
-                    gap = (shot.coverage_gap_id or "—").strip() or "—"
+                    gap_id = (shot.coverage_gap_id or "").strip()
+                    # Nach Gap-Merge bleibt coverage_gap_id oft als Spur —
+                    # offen ist nur open_gap/placeholder ohne erfülltes Asset.
+                    if bool(getattr(shot, "open_gap", False)) or bool(
+                        getattr(shot, "is_placeholder", False)
+                    ):
+                        gap = gap_id or "open"
+                    elif gap_id:
+                        gap = f"filled:{gap_id}"
+                    else:
+                        gap = "—"
                     st.caption(
                         f"{shot.shot_id}: "
                         f"{start:.2f}–{end:.2f}s ({dur:.2f}s) · "

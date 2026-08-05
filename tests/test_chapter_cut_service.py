@@ -164,6 +164,45 @@ def test_chapter_status_matches() -> None:
     assert not chapter_resolved_matches_plan(plan, stale)
 
 
+def test_chapter_open_gap_ids_uses_plan_even_if_coverage_missing(tmp_path) -> None:
+    """Plan-none-Slot blockiert Timing auch ohne Eintrag in coverage_gaps.json."""
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        chapter_open_gap_ids,
+        persist_chapter_unified_plan,
+    )
+
+    project = _project(tmp_path)
+    folder = "Achill Island"
+    plan = _plan("Achill_Island", slots=2)
+    plan.slots[0] = plan.slots[0].model_copy(
+        update={
+            "asset_fit": "none",
+            "local_asset_id": None,
+            "coverage_gap_id": "Achill_Island_gap_001",
+        }
+    )
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.refresh_merged_unified_cut_plan",
+        return_value=None,
+    ):
+        persist_chapter_unified_plan(project, folder, plan, refresh_merged=False)
+
+    # coverage_gaps fehlt / leer → früher: open=[], Timing freigegeben.
+    open_ids = chapter_open_gap_ids(
+        project, folder, open_gap_id_set=set(), filled_gap_id_set=set()
+    )
+    assert open_ids == ["Achill_Island_gap_001"]
+
+    # Nach Manual/Funnel-Fill: nicht mehr offen.
+    filled = chapter_open_gap_ids(
+        project,
+        folder,
+        open_gap_id_set=set(),
+        filled_gap_id_set={"Achill_Island_gap_001"},
+    )
+    assert filled == []
+
+
 def test_chapter_status_matches_ignores_shortfall_tails() -> None:
     """Dauer-Shortfall darf Kapitel nicht als „Timing fehlt“ markieren."""
     plan = _plan("Yo", slots=1)

@@ -171,22 +171,42 @@ def chapter_open_gap_ids(
     folder_name: str,
     *,
     open_gap_id_set: set[str] | None = None,
+    filled_gap_id_set: set[str] | None = None,
 ) -> list[str]:
-    """Offene Coverage-Gap-IDs eines Kapitel-Plans (Reihenfolge der Slots)."""
+    """Offene Coverage-Gap-IDs eines Kapitel-Plans (Reihenfolge der Slots).
+
+    Quelle der Wahrheit ist der **Kapitel-Plan** (weak/none-Slots). Ein Gap
+    gilt nur dann als geschlossen, wenn Funnel/Accepted/Merge ihn erfüllt hat.
+    Früher: Schnittmenge mit coverage_gaps.open — fehlte die Gap dort (Sync-
+    Drift), blieb Timing fälschlich freigeschaltet und der Funnel leer.
+    """
     plan = load_chapter_unified_plan(project, folder_name)
     if plan is None or not plan.slots:
         return []
-    if open_gap_id_set is None:
+    if filled_gap_id_set is None or open_gap_id_set is None:
         from otio_app.services.without_voiceover_enhanced.gap_status_service import (
             summarize_gap_status,
         )
 
-        open_gap_id_set = set(summarize_gap_status(project).open_gap_ids)
+        summary = summarize_gap_status(project)
+        if filled_gap_id_set is None:
+            filled_gap_id_set = set(summary.filled_gap_ids)
+        if open_gap_id_set is None:
+            open_gap_id_set = set(summary.open_gap_ids)
+    filled = set(filled_gap_id_set or ())
+    # open_gap_id_set bleibt für Call-Sites/Tests nutzbar, ist aber nicht mehr
+    # die einzige Freigabe-Bedingung.
+    del open_gap_id_set
     seen: set[str] = set()
     ordered: list[str] = []
     for slot in plan.slots:
+        fit = str(getattr(slot, "asset_fit", "") or "").strip().lower()
+        if fit not in {"weak", "none"}:
+            continue
         gid = str(getattr(slot, "coverage_gap_id", "") or "").strip()
-        if not gid or gid not in open_gap_id_set or gid in seen:
+        if not gid:
+            gid = f"gap_{slot.slot_id}"
+        if gid in filled or gid in seen:
             continue
         seen.add(gid)
         ordered.append(gid)
@@ -219,6 +239,7 @@ def get_chapter_cut_status(
     folder_name: str,
     *,
     open_gap_id_set: set[str] | None = None,
+    filled_gap_id_set: set[str] | None = None,
 ) -> ChapterCutStatus:
     slug = chapter_folder_slug(folder_name)
     plan_path = chapter_unified_cut_plan_path(project, folder_name)
@@ -231,7 +252,10 @@ def get_chapter_cut_status(
         errors = list(resolved.errors or [])
         repairs = list(resolved.repairs or [])
     open_ids = chapter_open_gap_ids(
-        project, folder_name, open_gap_id_set=open_gap_id_set
+        project,
+        folder_name,
+        open_gap_id_set=open_gap_id_set,
+        filled_gap_id_set=filled_gap_id_set,
     )
     plan_version_ok = plan is None or _artifact_matches_locked_script_version(
         project, getattr(plan, "script_version", None)
@@ -277,9 +301,16 @@ def list_chapter_cut_statuses(project: Project) -> list[ChapterCutStatus]:
         summarize_gap_status,
     )
 
-    open_set = set(summarize_gap_status(project).open_gap_ids)
+    summary = summarize_gap_status(project)
+    open_set = set(summary.open_gap_ids)
+    filled_set = set(summary.filled_gap_ids)
     return [
-        get_chapter_cut_status(project, name, open_gap_id_set=open_set)
+        get_chapter_cut_status(
+            project,
+            name,
+            open_gap_id_set=open_set,
+            filled_gap_id_set=filled_set,
+        )
         for name in list_body_chapter_names(project)
     ]
 
