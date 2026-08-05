@@ -1753,6 +1753,31 @@ def _used_in_ledger_text(plans: list[Any]) -> str:
     return "\n".join(lines)
 
 
+# Parse-/Invariantenfehler (z. B. len(slots)≠len(boundaries)-1): 1 automatischer
+# Retry mit Repair-Hinweis — wie bei der Kapitel-Skript-Erzeugung.
+UNIFIED_CUT_PARSE_ATTEMPTS = 2
+
+
+def _unified_cut_parse_repair_instruction(error: str) -> str:
+    """Anhang für den zweiten LLM-Versuch nach kaputtem Unified-Cut-JSON."""
+    detail = (error or "").strip()
+    if len(detail) > 500:
+        detail = detail[:500] + "…"
+    return (
+        "REPAIR — PREVIOUS JSON WAS INVALID\n"
+        "Your previous response failed validation and must be regenerated.\n"
+        f"Parser error: {detail}\n"
+        "Hard requirements:\n"
+        "- Return STRICT JSON only (no Markdown).\n"
+        "- len(slots) MUST equal len(boundaries) - 1.\n"
+        "- First boundary = VO start; last boundary = VO end.\n"
+        "- Every consecutive boundary pair defines exactly one slot.\n"
+        "- Do not omit slots; do not add orphan boundaries.\n"
+        "- pause_directives must be [].\n"
+        "Count boundaries and slots before returning."
+    )
+
+
 def generate_unified_cut_for_folder(
     project: Project,
     folder_name: str,
@@ -1763,7 +1788,7 @@ def generate_unified_cut_for_folder(
     context: _ChapterCutContext | None = None,
     used_in_ledger_text: str = "",
 ) -> FolderUnifiedCutResult:
-    """Ein Unified-LLM-Call für genau ein Kapitel."""
+    """Ein Unified-LLM-Call für genau ein Kapitel (mit Parse-Retry)."""
     from otio_app.services.voiceover_generation.model_settings_service import (
         resolve_llm_model_id,
     )
@@ -1774,6 +1799,7 @@ def generate_unified_cut_for_folder(
         build_unified_cut_prompt,
     )
     from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
+        UnifiedCutPlanError,
         parse_unified_cut_response,
         unified_to_rough,
     )
@@ -1987,37 +2013,56 @@ def generate_unified_cut_for_folder(
             else []
         )
         model_id = resolve_llm_model_id(provider, model)
-        if llm_callable is not None:
-            try:
-                raw = llm_callable(prompt=prompt, model=model_id, images=images)
-            except TypeError:
-                raw = llm_callable(prompt=prompt, model=model_id)
-            raw_text = (
-                raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
-            )
-        else:
-            # Intro/Unified: Thinking aus — sonst frisst Sonnet/Opus das
-            # Output-Budget (und die Rechnung) für internes Reasoning.
-            # Intro-Output bewusst begrenzt; Körper-Kapitel behalten Default.
-            max_out = 8_192 if is_intro else None
-            raw_text = generate_plan_text_with_metadata(
-                prompt=prompt,
-                model=model_id,
-                images=images or None,
-                disable_thinking=True,
-                max_output_tokens=max_out,
-            ).raw_text
+        plan = None
+        last_parse_error = ""
+        for attempt in range(UNIFIED_CUT_PARSE_ATTEMPTS):
+            attempt_prompt = prompt
+            if last_parse_error:
+                attempt_prompt = (
+                    f"{prompt}\n\n{_unified_cut_parse_repair_instruction(last_parse_error)}"
+                )
+            if llm_callable is not None:
+                try:
+                    raw = llm_callable(
+                        prompt=attempt_prompt, model=model_id, images=images
+                    )
+                except TypeError:
+                    raw = llm_callable(prompt=attempt_prompt, model=model_id)
+                raw_text = (
+                    raw if isinstance(raw, str) else getattr(raw, "raw_text", str(raw))
+                )
+            else:
+                # Intro/Unified: Thinking aus — sonst frisst Sonnet/Opus das
+                # Output-Budget (und die Rechnung) für internes Reasoning.
+                # Intro-Output bewusst begrenzt; Körper-Kapitel behalten Default.
+                max_out = 8_192 if is_intro else None
+                raw_text = generate_plan_text_with_metadata(
+                    prompt=attempt_prompt,
+                    model=model_id,
+                    images=images or None,
+                    disable_thinking=True,
+                    max_output_tokens=max_out,
+                ).raw_text
 
-        plan = parse_unified_cut_response(
-            raw_text,
-            locked.script_version,
-            folder_slug=context.folder_slug,
-            allow_pause_directives=False,
-            reject_nonempty_pause_directives=use_keyword_flow,
-            nullify_weak_assets=use_keyword_flow,
-        )
-        if not plan.slots:
-            raise CutPlanError("LLM-Antwort enthielt keine Slots.")
+            try:
+                plan = parse_unified_cut_response(
+                    raw_text,
+                    locked.script_version,
+                    folder_slug=context.folder_slug,
+                    allow_pause_directives=False,
+                    reject_nonempty_pause_directives=use_keyword_flow,
+                    nullify_weak_assets=use_keyword_flow,
+                )
+                if not plan.slots:
+                    raise CutPlanError("LLM-Antwort enthielt keine Slots.")
+                break
+            except (UnifiedCutPlanError, CutPlanError) as exc:
+                last_parse_error = str(exc)
+                if attempt + 1 >= UNIFIED_CUT_PARSE_ATTEMPTS:
+                    raise
+                continue
+
+        assert plan is not None
         if is_intro:
             from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
                 enforce_intro_strong_only,
