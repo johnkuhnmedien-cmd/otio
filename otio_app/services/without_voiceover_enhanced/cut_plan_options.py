@@ -93,10 +93,14 @@ STILL_PAN_MODE_CHOICES = (
 DEFAULT_STILL_PAN_TRAVEL = 0.12
 STILL_PAN_TRAVEL_MIN = 0.05
 STILL_PAN_TRAVEL_MAX = 0.30
+# Cover+Pan nur wenn Bild-Seitenverhältnis nahe 16:9 (sonst Vintage-Fallback).
+DEFAULT_STILL_PAN_MIN_ASPECT = 1.50  # ~3:2
+DEFAULT_STILL_PAN_MAX_ASPECT = 2.05  # etwas breiter als 16:9
+STILL_PAN_FALLBACK_ZOOM = 0.8
 
 
 class CutPlanOptions(BaseModel):
-    schema_version: str = "1.6"
+    schema_version: str = "1.7"
     # Phase 7: Unified (1 LLM) vs Legacy (Rough + Final).
     cut_plan_mode: CutPlanMode = CUT_PLAN_MODE_LEGACY
     # Unified Stil: Rhythmus (Default) oder Keyword-Sync (Wort↔Bild).
@@ -181,6 +185,13 @@ class CutPlanOptions(BaseModel):
         default=DEFAULT_STILL_PAN_TRAVEL,
         ge=STILL_PAN_TRAVEL_MIN,
         le=STILL_PAN_TRAVEL_MAX,
+    )
+    # Cover+Pan nur in diesem Aspect-Fenster (Breite/Höhe); sonst Fallback.
+    still_image_pan_min_aspect: float = Field(
+        default=DEFAULT_STILL_PAN_MIN_ASPECT, ge=1.0, le=3.0
+    )
+    still_image_pan_max_aspect: float = Field(
+        default=DEFAULT_STILL_PAN_MAX_ASPECT, ge=1.0, le=4.0
     )
 
 
@@ -484,6 +495,22 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
             default=defaults.still_image_pan_travel,
             lo=STILL_PAN_TRAVEL_MIN,
             hi=STILL_PAN_TRAVEL_MAX,
+        ),
+        still_image_pan_min_aspect=_clamp_float(
+            raw.get(
+                "still_image_pan_min_aspect", defaults.still_image_pan_min_aspect
+            ),
+            default=defaults.still_image_pan_min_aspect,
+            lo=1.0,
+            hi=3.0,
+        ),
+        still_image_pan_max_aspect=_clamp_float(
+            raw.get(
+                "still_image_pan_max_aspect", defaults.still_image_pan_max_aspect
+            ),
+            default=defaults.still_image_pan_max_aspect,
+            lo=1.0,
+            hi=4.0,
         ),
     )
 

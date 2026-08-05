@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     STILL_PAN_MODE_ALTERNATE,
     STILL_PAN_MODE_LTR,
@@ -13,6 +15,7 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     resolve_still_pan_direction,
 )
 from otio_app.services.without_voiceover_enhanced.media_hold import (
+    still_aspect_allows_cover_pan,
     still_hold_cover_pan_filter,
 )
 
@@ -21,7 +24,9 @@ def test_pan_defaults_off() -> None:
     opts = default_cut_plan_options()
     assert opts.still_image_pan_mode == STILL_PAN_MODE_OFF
     assert opts.still_image_pan_travel == 0.12
-    assert opts.schema_version == "1.6"
+    assert opts.still_image_pan_min_aspect == 1.50
+    assert opts.still_image_pan_max_aspect == 2.05
+    assert opts.schema_version == "1.7"
 
 
 def test_normalize_legacy_keeps_pan_off() -> None:
@@ -83,7 +88,26 @@ def test_cut_plan_options_accepts_pan_fields() -> None:
     opts = CutPlanOptions(
         still_image_pan_mode="alternate",
         still_image_pan_travel=0.18,
+        still_image_pan_min_aspect=1.6,
+        still_image_pan_max_aspect=1.9,
     )
     dumped = opts.model_dump()
     assert dumped["still_image_pan_mode"] == "alternate"
     assert dumped["still_image_pan_travel"] == 0.18
+    assert dumped["still_image_pan_min_aspect"] == 1.6
+
+
+def test_square_image_does_not_allow_cover_pan(tmp_path: Path) -> None:
+    from PIL import Image
+
+    square = tmp_path / "square.jpg"
+    Image.new("RGB", (1000, 1000), (20, 40, 60)).save(square, quality=90)
+    assert still_aspect_allows_cover_pan(square) is False
+
+    wide = tmp_path / "wide.jpg"
+    Image.new("RGB", (1920, 1080), (20, 40, 60)).save(wide, quality=90)
+    assert still_aspect_allows_cover_pan(wide) is True
+
+    three_two = tmp_path / "32.jpg"
+    Image.new("RGB", (1500, 1000), (20, 40, 60)).save(three_two, quality=90)
+    assert still_aspect_allows_cover_pan(three_two) is True

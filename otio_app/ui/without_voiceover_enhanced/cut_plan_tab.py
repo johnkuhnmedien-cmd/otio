@@ -932,9 +932,10 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             format_func=lambda v: pan_labels.get(v, v),
             key=f"enh_opt_still_pan_{project.id}",
             help=(
-                "Foto füllt den 16:9-Frame komplett (Cover, kein Letterbox) und "
-                "schwenkt horizontal. Extra-Zoom verhindert schwarze Ränder links/rechts. "
-                "Bei aktivem Schwenk wird der Vintage-Still-Style übersprungen. "
+                "Nur für Fotos nahe 16:9: Frame komplett füllen (Cover) und "
+                "horizontal schwenken — Extra-Zoom verhindert schwarze Ränder. "
+                "1:1 / stark abweichende Formate: Fallback mit Zoom 0.8, "
+                "Dynamic Zoom und Vintage/Paper-Edge-Hintergrund. "
                 "Wirkt beim nächsten OTIO-Export."
             ),
         )
@@ -951,9 +952,32 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 "und etwas mehr Zoom (keine Ränder)."
             ),
         )
+        pan_a1, pan_a2 = st.columns(2)
+        with pan_a1:
+            still_image_pan_min_aspect = st.number_input(
+                "Pan ab Aspect min (Breite/Höhe)",
+                min_value=1.0,
+                max_value=3.0,
+                value=float(current.still_image_pan_min_aspect),
+                step=0.05,
+                key=f"enh_opt_still_pan_min_ar_{project.id}",
+                disabled=still_image_pan_mode == "off",
+                help="Default 1.50 (~3:2). Darunter → Vintage-Fallback.",
+            )
+        with pan_a2:
+            still_image_pan_max_aspect = st.number_input(
+                "Pan bis Aspect max (Breite/Höhe)",
+                min_value=1.0,
+                max_value=4.0,
+                value=float(current.still_image_pan_max_aspect),
+                step=0.05,
+                key=f"enh_opt_still_pan_max_ar_{project.id}",
+                disabled=still_image_pan_mode == "off",
+                help="Default 2.05. Darüber → Vintage-Fallback. 16:9 ≈ 1.78.",
+            )
 
         draft = CutPlanOptions(
-            schema_version="1.6",
+            schema_version="1.7",
             cut_plan_mode=str(cut_plan_mode),  # type: ignore[arg-type]
             unified_cut_style=str(unified_cut_style),  # type: ignore[arg-type]
             keyword_flow_allow_onset_overflow=bool(
@@ -990,6 +1014,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             still_image_dynamic_zoom_factor=float(still_image_dynamic_zoom_factor),
             still_image_pan_mode=str(still_image_pan_mode),
             still_image_pan_travel=float(still_image_pan_travel),
+            still_image_pan_min_aspect=float(still_image_pan_min_aspect),
+            still_image_pan_max_aspect=float(still_image_pan_max_aspect),
         )
         if st.button(
             "Cut Plan Settings speichern",

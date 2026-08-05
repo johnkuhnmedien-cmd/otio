@@ -165,6 +165,41 @@ def still_hold_video_filter(
     return "scale=ceil(iw/2)*2:ceil(ih/2)*2"
 
 
+def probe_image_aspect_ratio(image_path: Path) -> float | None:
+    """Breite/Höhe des Bildes (EXIF-orientiert) oder ``None``."""
+    try:
+        from PIL import Image, ImageOps
+    except Exception:  # noqa: BLE001
+        return None
+    source = Path(image_path).expanduser()
+    if not source.is_file():
+        return None
+    try:
+        with Image.open(source) as opened:
+            image = ImageOps.exif_transpose(opened)
+            width, height = image.size
+    except Exception:  # noqa: BLE001
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return float(width) / float(height)
+
+
+def still_aspect_allows_cover_pan(
+    image_path: Path,
+    *,
+    min_aspect: float = 1.50,
+    max_aspect: float = 2.05,
+) -> bool:
+    """True wenn das Bild nahe Landscape-16:9 liegt (Cover+Pan sinnvoll)."""
+    aspect = probe_image_aspect_ratio(image_path)
+    if aspect is None:
+        return False
+    lo = min(float(min_aspect), float(max_aspect))
+    hi = max(float(min_aspect), float(max_aspect))
+    return lo <= aspect <= hi
+
+
 def still_hold_dynamic_zoom_filter(
     *,
     duration_seconds: float,
