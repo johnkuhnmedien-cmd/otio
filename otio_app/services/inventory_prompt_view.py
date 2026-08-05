@@ -141,15 +141,24 @@ def _dauer_s_for_asset(
     return round(float(duration), 3)
 
 
-def _asset_rank(asset: AssetMediaAnalysis) -> tuple[int, int, int]:
-    """Höher = bevorzugter Vertreter bei Duplikaten."""
+def _asset_rank(asset: AssetMediaAnalysis) -> tuple[int, int, int, int]:
+    """Höher = bevorzugter Vertreter bei Duplikaten.
+
+    Video schlägt Foto/Still bei gleichem Stem — Cut Plan soll Motion bevorzugen.
+    Danach: längere Beschreibung, ohne Auflösungs-/Clean-Suffix.
+    """
     path = str(asset.path or "")
-    name = Path(path).name.lower()
+    type_label = _media_type_label(path, getattr(asset, "media_type", None))
+    is_video = 1 if type_label == "video" else 0
     has_resolution = 1 if _RESOLUTION_SUFFIX_RE.search(Path(path).stem) else 0
     is_variant = 1 if _VARIANT_SUFFIX_RE.search(Path(path).stem) else 0
     desc_len = len((asset.description or "").strip())
-    # Bevorzuge Einträge ohne Auflösungs-/Clean-Suffix und längere Beschreibung.
-    return (desc_len, 0 if has_resolution else 1, 0 if is_variant else 1)
+    return (
+        is_video,
+        desc_len,
+        0 if has_resolution else 1,
+        0 if is_variant else 1,
+    )
 
 
 def build_slim_folder_inventory(

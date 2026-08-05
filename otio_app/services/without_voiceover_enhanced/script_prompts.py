@@ -29,6 +29,21 @@ CUT RHYTHM TARGETS (BINDING STYLE TARGETS — aim for this distribution):
 - Do not invent sentence boundaries missing from SENTENCE TIMINGS.
 """
 
+# Binding for body-chapter unified cuts (rhythm / keyword_sync / keyword_flow).
+VIDEO_OVER_PHOTO_ASSET_RULES = """\
+VIDEO OVER PHOTO (BINDING):
+
+- Prefer local VIDEO over PHOTO/still whenever a video visibly shows the spoken
+  subject or required motif (e.g. sheep, bridge, bay, deserted village).
+- Do NOT choose a photo merely because its description matches secondary habitat
+  or wording more closely than a usable video of the same subject.
+- Do NOT open a coverage gap when a local video already shows the subject.
+- Set preferred_media_type to \"video\" for body slots unless no suitable video
+  exists (then photo/either). Photos are last resort for body slots, not equals.
+- Closing fallback may still use a long photo/atmosphere asset when no suitable
+  closing video remains.
+"""
+
 
 _SHARED_SCRIPT_CORE_RULES = """\
 GOAL
@@ -882,7 +897,7 @@ SLOT / ASSET RULES:
   (upgrade gap).
 - none: local_asset_id null AND coverage_gap_id + inline gap fields
   (required gap).
-- Prefer assets whose planning usable length
+{VIDEO_OVER_PHOTO_ASSET_RULES}- Prefer assets whose planning usable length
   (duration_seconds - usable_in_s - 1.0s safety) covers the intended span
   (closing slot: include Nachlauf/postroll). Never assume freeze/tpad video-hold
   padding. Do not plan tight fits against the raw usable length.
@@ -1168,7 +1183,7 @@ SLOT / ASSET RULES:
   (upgrade gap).
 - none: local_asset_id null AND coverage_gap_id + inline gap fields
   (required gap).
-- Prefer assets whose planning usable length
+{VIDEO_OVER_PHOTO_ASSET_RULES}- Prefer assets whose planning usable length
   (duration_seconds - usable_in_s - 1.0s safety) covers the intended span
   when possible (closing slot: include Nachlauf/postroll). Never assume
   freeze/tpad video-hold padding. Obey shot_min/shot_max from
@@ -1456,7 +1471,7 @@ ASSET FIT (KEYWORD FLOW — BINDING):
 - weak / none: local_asset_id MUST be null; coverage_gap_id + gap fields REQUIRED.
 - Never keep a weak asset just to fill a slot.
 - Gap search_concepts: 2–4 English phrases, 2–5 words each, concrete to the missing motif.
-
+{VIDEO_OVER_PHOTO_ASSET_RULES}
 CLOSING:
 
 - The last slot is the primary Closing Shot (strong/acceptable), able to carry

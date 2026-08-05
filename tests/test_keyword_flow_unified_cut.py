@@ -133,6 +133,8 @@ def test_keyword_flow_prompt_contract() -> None:
     assert "unified-cut-v1" in prompt
     assert "CUT RHYTHM TARGETS" not in prompt
     assert "local_asset_id MUST be null" in prompt
+    assert "VIDEO OVER PHOTO" in prompt
+    assert "Prefer local VIDEO over PHOTO" in prompt
 
 
 def test_rhythm_and_keyword_sync_prompts_unchanged_markers() -> None:
