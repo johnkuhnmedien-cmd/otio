@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import subprocess
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from otio_app.models import Project
@@ -61,9 +62,45 @@ from otio_app.services.without_voiceover_enhanced.segment_alignment_service impo
 # Bei Kapitel-TTS ist segment_index/segment_total immer 1/1 (ein Call).
 TtsProgressCallback = Callable[[str, int, int, int, int], None]
 
+CHAPTER_AUDIO_READY = "ready"
+CHAPTER_AUDIO_OPEN = "open"
+CHAPTER_AUDIO_STALE = "stale"
+CHAPTER_AUDIO_PARTIAL = "partial"
+
 
 class AudioTimingError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ChapterAudioStatus:
+    """UI-/Orchestrierungsstatus eines Kapitels (nicht segmentweise)."""
+
+    folder_name: str
+    label: str
+    status: str  # ready | open | stale | partial
+    segment_count: int
+    ready_segment_count: int
+    duration_seconds: float
+    chapter_audio_path: str = ""
+
+    @property
+    def is_open(self) -> bool:
+        return self.status in {
+            CHAPTER_AUDIO_OPEN,
+            CHAPTER_AUDIO_STALE,
+            CHAPTER_AUDIO_PARTIAL,
+        }
+
+    @property
+    def status_label(self) -> str:
+        if self.status == CHAPTER_AUDIO_READY:
+            return "vertont"
+        if self.status == CHAPTER_AUDIO_STALE:
+            return "veraltet"
+        if self.status == CHAPTER_AUDIO_PARTIAL:
+            return "unvollständig"
+        return "offen"
 
 
 def measure_audio_duration_seconds(path: Path) -> float:
@@ -331,6 +368,121 @@ def _synthesize_chapter(
         live_segment_ids=live_order,
     )
     return document
+
+
+def list_chapter_audio_statuses(project: Project) -> list[ChapterAudioStatus]:
+    """Kapitelstatus für die Audio-UI: vertont / offen / veraltet / unvollständig."""
+    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+        ENHANCED_INTRO_FOLDER_NAME,
+        ensure_confirmed_intro_in_locked_script,
+        is_intro_folder_name,
+    )
+
+    ensure_confirmed_intro_in_locked_script(project)
+    locked = require_locked_script(project)
+    folder_order = [
+        entry.folder_name for entry in list_enabled_dramaturgy_folders(project)
+    ]
+    groups = group_segments_by_folder(locked, folder_order=folder_order)
+    timings = load_segment_timings(project)
+    timing_by_id = {
+        item.segment_id: item for item in (timings.segments if timings else [])
+    }
+    script_version = locked.script_version
+    ext, _ = audio_extension_for_output_format(
+        load_elevenlabs_settings(project).output_format
+    )
+
+    rows: list[ChapterAudioStatus] = []
+    for folder_name, segments in groups:
+        label = folder_name or "(ohne Kapitelzuordnung)"
+        if is_intro_folder_name(folder_name):
+            label = f"{ENHANCED_INTRO_FOLDER_NAME} (Hook)"
+        ready_count = 0
+        stale_count = 0
+        duration = 0.0
+        for seg in segments:
+            item = timing_by_id.get(seg.segment_id)
+            if item is None:
+                continue
+            if item.script_version != script_version:
+                stale_count += 1
+                continue
+            if item.audio_status == "valid" and Path(item.audio_path).is_file():
+                ready_count += 1
+                duration += float(item.duration_seconds or 0.0)
+            elif item.audio_status == "stale":
+                stale_count += 1
+        total = len(segments)
+        if total == 0:
+            status = CHAPTER_AUDIO_OPEN
+        elif ready_count == total:
+            status = CHAPTER_AUDIO_READY
+        elif stale_count > 0 and ready_count == 0:
+            status = CHAPTER_AUDIO_STALE
+        elif ready_count > 0:
+            status = CHAPTER_AUDIO_PARTIAL
+        else:
+            status = CHAPTER_AUDIO_OPEN
+        chapter_path = chapter_audio_path(project, folder_name or label, ext)
+        rows.append(
+            ChapterAudioStatus(
+                folder_name=folder_name or "",
+                label=label,
+                status=status,
+                segment_count=total,
+                ready_segment_count=ready_count,
+                duration_seconds=round(duration, 2),
+                chapter_audio_path=str(chapter_path) if chapter_path.is_file() else "",
+            )
+        )
+    return rows
+
+
+def synthesize_open_chapters_audio(
+    project: Project,
+    *,
+    progress_callback: TtsProgressCallback | None = None,
+) -> SegmentTimingsDocument:
+    """Vertont nur offene/veraltete/unvollständige Kapitel (je 1 Call)."""
+    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+        ensure_confirmed_intro_in_locked_script,
+    )
+
+    ensure_confirmed_intro_in_locked_script(project)
+    locked = require_locked_script(project)
+    statuses = list_chapter_audio_statuses(project)
+    open_folders = [row.folder_name for row in statuses if row.is_open]
+    if not open_folders:
+        existing = load_segment_timings(project)
+        if existing is None:
+            raise AudioTimingError("Keine offenen Kapitel — und kein Audio vorhanden.")
+        return existing
+
+    folder_order = [
+        entry.folder_name for entry in list_enabled_dramaturgy_folders(project)
+    ]
+    groups = dict(group_segments_by_folder(locked, folder_order=folder_order))
+    timings = load_segment_timings(project)
+    chapter_total = len(open_folders)
+    for chapter_index, folder_name in enumerate(open_folders, start=1):
+        segments = groups.get(folder_name) or [
+            seg for seg in locked.segments if seg.folder_name == folder_name
+        ]
+        if not segments:
+            continue
+        timings = _synthesize_chapter(
+            project,
+            segments=segments,
+            existing=timings,
+            chapter_index=chapter_index,
+            chapter_total=chapter_total,
+            folder_name=folder_name,
+            progress_callback=progress_callback,
+        )
+    if timings is None:
+        raise AudioTimingError("Keine offenen Kapitel konnten vertont werden.")
+    return timings
 
 
 def synthesize_locked_script_audio(

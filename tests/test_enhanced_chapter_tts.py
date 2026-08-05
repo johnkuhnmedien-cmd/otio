@@ -21,7 +21,11 @@ from otio_app.services.voiceover_generation.models import (
     ElevenLabsSettings,
 )
 from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
+    CHAPTER_AUDIO_OPEN,
+    CHAPTER_AUDIO_READY,
+    list_chapter_audio_statuses,
     synthesize_folder_script_audio,
+    synthesize_open_chapters_audio,
 )
 from otio_app.services.without_voiceover_enhanced.models import (
     EnhancedScriptDocument,
@@ -139,6 +143,11 @@ def test_folder_tts_uses_single_elevenlabs_call(
         _fake_slice,
     )
 
+    statuses_before = list_chapter_audio_statuses(project)
+    assert len(statuses_before) == 1
+    assert statuses_before[0].status == CHAPTER_AUDIO_OPEN
+    assert statuses_before[0].is_open is True
+
     doc = synthesize_folder_script_audio(project, "Dublin")
     assert len(calls) == 1
     assert calls[0] == "One. [pause] Two. [short pause] Three."
@@ -147,3 +156,11 @@ def test_folder_tts_uses_single_elevenlabs_call(
     chapter_file = chapter_audio_path(project, "Dublin", ".wav")
     assert chapter_file.is_file()
     assert chapter_file.read_bytes() == b"FAKEWAV"
+
+    statuses_after = list_chapter_audio_statuses(project)
+    assert statuses_after[0].status == CHAPTER_AUDIO_READY
+    assert statuses_after[0].is_open is False
+
+    # Bereits vertont → Alle offenen macht keinen weiteren Call.
+    synthesize_open_chapters_audio(project)
+    assert len(calls) == 1
