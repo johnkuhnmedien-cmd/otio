@@ -300,14 +300,26 @@ def _export_styled_still_hold(
     image_path: Path,
     fps: float,
     label: str,
+    shot_index: int = 0,
 ) -> Path:
     """Still-Style → Hold-MP4 (Resolve braucht Video mit Dauer)."""
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        resolve_still_pan_direction,
+    )
+
     options = load_cut_plan_options(project)
+    pan_direction = resolve_still_pan_direction(
+        str(options.still_image_pan_mode),
+        shot_id=str(shot.shot_id or ""),
+        shot_index=shot_index,
+    )
+    # Cover+Pan braucht das Originalfoto — Vintage-Letterbox würde Ränder erzeugen.
+    use_style = bool(options.still_image_style_enabled) and pan_direction is None
     styled = ensure_styled_still_for_export(
         project,
         shot.folder_name or "_enhanced",
         image_path,
-        enabled=bool(options.still_image_style_enabled),
+        enabled=use_style,
         zoom=float(options.still_image_zoom),
         background_style=str(options.still_image_background_style),
     )
@@ -318,11 +330,13 @@ def _export_styled_still_hold(
     try:
         hold = ensure_still_hold_video(
             project,
-            styled_path,
+            styled_path if pan_direction is None else image_path,
             duration_seconds=timeline_dur,
             fps=fps,
             dynamic_zoom=bool(options.still_image_dynamic_zoom_enabled),
             zoom_factor=float(options.still_image_dynamic_zoom_factor),
+            pan_direction=pan_direction,
+            pan_travel=float(options.still_image_pan_travel),
         )
     except MediaHoldError as exc:
         raise EnhancedOtioExportError(f"{label}: {exc}") from exc
@@ -352,13 +366,22 @@ def _ensure_shot_media_for_export(
 
     # Still-Style / dynamischer Zoom: Originalbild nutzen — auch wenn Resolve
     # schon still_hold.mp4 geschrieben hat (sonst greifen Settings nicht).
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        resolve_still_pan_direction,
+    )
+
     options = load_cut_plan_options(project)
+    pan_direction = resolve_still_pan_direction(
+        str(options.still_image_pan_mode),
+        shot_id=str(shot.shot_id or ""),
+    )
     original_still = _original_still_path_for_export(
         project, shot, path=path, catalog=catalog, fps=fps
     )
     restyle = original_still is not None and (
         bool(options.still_image_style_enabled)
         or bool(options.still_image_dynamic_zoom_enabled)
+        or pan_direction is not None
     )
     if restyle and original_still is not None:
         hold_path = _export_styled_still_hold(
@@ -386,6 +409,8 @@ def _ensure_shot_media_for_export(
                 fps=fps,
                 dynamic_zoom=bool(options.still_image_dynamic_zoom_enabled),
                 zoom_factor=float(options.still_image_dynamic_zoom_factor),
+                pan_direction=pan_direction,
+                pan_travel=float(options.still_image_pan_travel),
             )
         except MediaHoldError as exc:
             raise EnhancedOtioExportError(f"{label}: {exc}") from exc

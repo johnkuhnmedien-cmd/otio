@@ -196,6 +196,55 @@ def still_hold_dynamic_zoom_filter(
     )
 
 
+def still_hold_cover_pan_filter(
+    *,
+    duration_seconds: float,
+    fps: float,
+    width: int,
+    height: int,
+    direction: str = "ltr",
+    pan_travel: float = 0.12,
+    end_zoom_factor: float = 1.0,
+) -> str:
+    """16:9 Cover-Fill + horizontaler Schwenk ohne schwarze Ränder.
+
+    1. Foto füllt den Frame komplett (``increase`` + Crop, kein Letterbox).
+    2. Extra-Zoom ``z = 1/(1-travel)`` schafft Spielraum für den Schwenk.
+    3. ``x`` wandert L→R oder R→L über die Shot-Dauer.
+    Optional leichtes zusätzliches Zoom-in über ``end_zoom_factor`` (>1).
+    """
+    rate = max(1.0, float(fps) or 25.0)
+    frames = max(2, int(round(max(0.01, float(duration_seconds)) * rate)))
+    denom = max(1, frames - 1)
+    tw = max(2, (int(width) // 2) * 2)
+    th = max(2, (int(height) // 2) * 2)
+    travel = max(0.05, min(0.30, float(pan_travel)))
+    # Sichtbarer Anteil = 1/z → z muss ≥ 1/(1-travel) sein, sonst Ränder.
+    z_start = 1.0 / (1.0 - travel)
+    end_mult = max(1.0, float(end_zoom_factor) or 1.0)
+    z_end = z_start * end_mult
+    if abs(z_end - z_start) < 1e-4:
+        z_expr = f"{z_start:.4f}"
+    else:
+        z_expr = f"{z_start:.4f}+({z_end:.4f}-{z_start:.4f})*on/{denom}"
+    direction_key = (direction or "ltr").strip().lower()
+    if direction_key in {"rtl", "right_to_left", "rl"}:
+        x_expr = f"(iw-iw/zoom)*(1-on/{denom})"
+    else:
+        x_expr = f"(iw-iw/zoom)*on/{denom}"
+    y_expr = "ih/2-(ih/zoom/2)"
+    return (
+        f"scale={tw}:{th}:force_original_aspect_ratio=increase,"
+        f"crop={tw}:{th},"
+        f"scale=iw*2:ih*2,"
+        f"zoompan=z='{z_expr}':"
+        f"x='{x_expr}':y='{y_expr}':"
+        f"d=1:s={tw}x{th}:fps={rate:.3f},"
+        "setsar=1,"
+        "format=yuv420p"
+    )
+
+
 def ensure_still_hold_video(
     project: Project,
     image_path: Path,
@@ -206,6 +255,8 @@ def ensure_still_hold_video(
     height: int | None = None,
     dynamic_zoom: bool = False,
     zoom_factor: float = 1.12,
+    pan_direction: str | None = None,
+    pan_travel: float = 0.12,
 ) -> Path:
     """JPEG/PNG → kurzes H.264-Video der geplanten Haltedauer (Resolve-sicher)."""
     if duration_seconds <= 0:
@@ -216,10 +267,26 @@ def ensure_still_hold_video(
     rate = max(1.0, float(fps) or 25.0)
     tw = int(width) if width is not None else int(getattr(project, "width", 0) or 0)
     th = int(height) if height is not None else int(getattr(project, "height", 0) or 0)
+    pan_dir = (pan_direction or "").strip().lower() or None
+    if pan_dir in {"off", "none", "0"}:
+        pan_dir = None
+    use_pan = pan_dir in {"ltr", "rtl", "left_to_right", "right_to_left", "lr", "rl"}
     use_dynamic = (
         bool(dynamic_zoom) and float(zoom_factor) > 1.001 and tw > 0 and th > 0
     )
-    if use_dynamic:
+    if use_pan and tw > 0 and th > 0:
+        # Cover+Pan hat Vorrang vor Letterbox/zentriertem Zoom.
+        vf = still_hold_cover_pan_filter(
+            duration_seconds=duration_seconds,
+            fps=rate,
+            width=tw,
+            height=th,
+            direction="rtl" if pan_dir in {"rtl", "right_to_left", "rl"} else "ltr",
+            pan_travel=float(pan_travel),
+            end_zoom_factor=float(zoom_factor) if use_dynamic else 1.0,
+        )
+        cache_tag = f"still_pan_v1_{pan_dir}_{float(pan_travel):.3f}"
+    elif use_dynamic:
         vf = still_hold_dynamic_zoom_filter(
             duration_seconds=duration_seconds,
             fps=rate,
@@ -237,7 +304,11 @@ def ensure_still_hold_video(
         f"{rate:.3f}",
         f"{tw}x{th}",
         vf,
-        f"{cache_tag}_{float(zoom_factor):.3f}" if use_dynamic else cache_tag,
+        (
+            f"{cache_tag}_{float(zoom_factor):.3f}"
+            if (use_dynamic or use_pan)
+            else cache_tag
+        ),
     )
     out = _hold_cache_dir(project) / f"still_hold_{key}.mp4"
     if out.is_file() and out.stat().st_size > 0:

@@ -30,6 +30,7 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     CUT_PLAN_MODE_LEGACY,
     CUT_PLAN_MODE_UNIFIED,
     STILL_BACKGROUND_CHOICES,
+    STILL_PAN_MODE_CHOICES,
     TIMING_MODE_CHOICES,
     TIMING_MODE_FIXED,
     TIMING_MODE_LLM,
@@ -908,12 +909,51 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             disabled=not still_image_dynamic_zoom_enabled,
             help=(
                 "End-Zoom relativ zum Start (1.12 = +12 % über die Shot-Dauer). "
-                "Wirkt erst beim nächsten OTIO-Export."
+                "Wirkt erst beim nächsten OTIO-Export. "
+                "Mit Schwenk: zusätzliches Zoom-in während des Pans."
+            ),
+        )
+        pan_labels = {
+            "off": "Aus",
+            "ltr": "Links → Rechts",
+            "rtl": "Rechts → Links",
+            "alternate": "Abwechselnd L→R / R→L",
+        }
+        pan_options = list(STILL_PAN_MODE_CHOICES)
+        pan_index = (
+            pan_options.index(current.still_image_pan_mode)
+            if current.still_image_pan_mode in pan_options
+            else 0
+        )
+        still_image_pan_mode = st.selectbox(
+            "Still-Schwenk (Cover 16:9 + Pan)",
+            options=pan_options,
+            index=pan_index,
+            format_func=lambda v: pan_labels.get(v, v),
+            key=f"enh_opt_still_pan_{project.id}",
+            help=(
+                "Foto füllt den 16:9-Frame komplett (Cover, kein Letterbox) und "
+                "schwenkt horizontal. Extra-Zoom verhindert schwarze Ränder links/rechts. "
+                "Bei aktivem Schwenk wird der Vintage-Still-Style übersprungen. "
+                "Wirkt beim nächsten OTIO-Export."
+            ),
+        )
+        still_image_pan_travel = st.number_input(
+            "Schwenk-Weg (Anteil der Bildbreite)",
+            min_value=0.05,
+            max_value=0.30,
+            value=float(current.still_image_pan_travel),
+            step=0.01,
+            key=f"enh_opt_still_pan_travel_{project.id}",
+            disabled=still_image_pan_mode == "off",
+            help=(
+                "0.12 = ca. 12 % der Frame-Breite. Mehr Weg = stärkerer Schwenk "
+                "und etwas mehr Zoom (keine Ränder)."
             ),
         )
 
         draft = CutPlanOptions(
-            schema_version="1.5",
+            schema_version="1.6",
             cut_plan_mode=str(cut_plan_mode),  # type: ignore[arg-type]
             unified_cut_style=str(unified_cut_style),  # type: ignore[arg-type]
             keyword_flow_allow_onset_overflow=bool(
@@ -948,6 +988,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             still_image_background_style=str(still_image_background_style),
             still_image_dynamic_zoom_enabled=bool(still_image_dynamic_zoom_enabled),
             still_image_dynamic_zoom_factor=float(still_image_dynamic_zoom_factor),
+            still_image_pan_mode=str(still_image_pan_mode),
+            still_image_pan_travel=float(still_image_pan_travel),
         )
         if st.button(
             "Cut Plan Settings speichern",
