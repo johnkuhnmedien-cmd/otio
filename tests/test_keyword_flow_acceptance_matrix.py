@@ -545,7 +545,7 @@ def test_35_60_to_65_pause_durations_and_fps_margin() -> None:
     assert end2 == pytest.approx(11.9)
 
 
-def test_35_66_to_71_pause_shifts_timeline_keeps_source() -> None:
+def test_35_66_to_71_no_silence_keeps_source_and_timeline() -> None:
     sentences = {
         "seg__s001": SentenceTiming(
             sentence_id="seg__s001",
@@ -589,85 +589,49 @@ def test_35_66_to_71_pause_shifts_timeline_keeps_source() -> None:
             )
         ],
         sentence_index=sentences,
-        enable_keyword_flow_pauses=True,
+        enable_keyword_flow_pauses=False,
         segment_words_by_id={"seg": words},
         fps=25.0,
         repairs=repairs,
     )
-    assert timeline.entries[0].intra_pauses[0].pause_seconds == pytest.approx(1.5)
+    assert timeline.entries[0].intra_pauses == []
     assert words[1]["start_seconds"] == 1.6  # source-relative unchanged
-    # Timeline end grows by pause.
-    assert timeline.entries[0].end_seconds == pytest.approx(3.0 + 1.5)
-    start, end = safe_pause_window_timeline(
-        previous_word_end_timeline=0.8,
-        next_word_start_timeline=0.8 + (1.6 - 0.8) + 1.5,
-        fps=25.0,
+    assert timeline.entries[0].end_seconds == pytest.approx(3.0)
+    assert not any("keyword_flow_pause" in r for r in repairs)
+
+
+def test_35_72_73_too_small_natural_pause_not_extended() -> None:
+    from otio_app.services.without_voiceover_enhanced.pause_resolver import (
+        clamp_in_pause_cut_to_natural_window,
     )
-    assert start >= 0.8 + 0.2 - 1e-9
-    assert end <= 0.8 + (1.6 - 0.8) + 1.5 - 0.2 + 1e-9
 
-
-def test_35_72_73_unsafe_or_wordless_pause_blocks() -> None:
-    sentences = {
-        "seg__s001": SentenceTiming(
-            sentence_id="seg__s001",
-            segment_id="seg",
-            text="One.",
-            start_seconds=0.0,
-            end_seconds=1.0,
-            duration_seconds=1.0,
-        ),
-        "seg__s002": SentenceTiming(
-            sentence_id="seg__s002",
-            segment_id="seg",
-            text="Two.",
-            start_seconds=1.05,
-            end_seconds=2.0,
-            duration_seconds=0.95,
-        ),
-    }
-    with pytest.raises(PauseResolveError):
-        build_narration_timeline(
-            script_version="v1",
-            segment_timings=[
-                SegmentTiming(
-                    segment_id="seg",
-                    script_version="v1",
-                    audio_path="/tmp/x.wav",
-                    duration_seconds=2.0,
-                    audio_status="valid",
-                )
-            ],
-            pause_directives=[
-                PauseDirective(
-                    after_sentence_id="seg__s001",
-                    pause_function="breath",
-                    duration_class="short",
-                )
-            ],
-            sentence_index=sentences,
-            enable_keyword_flow_pauses=True,
-            segment_words_by_id={"seg": []},
+    words = [
+        {"text": "One", "start_seconds": 0.0, "end_seconds": 1.0},
+        {"text": "Two", "start_seconds": 1.3, "end_seconds": 2.0},
+    ]
+    with pytest.raises(PauseResolveError, match="natürliche Pause zu klein"):
+        clamp_in_pause_cut_to_natural_window(
+            requested_source_seconds=1.15,
+            segment_words=words,
             fps=25.0,
         )
 
 
-def test_35_74_twelve_second_theme_long_pause() -> None:
-    first = 9.0
-    second_narration = 3.0
-    pause = resolve_keyword_flow_pause_duration_seconds("long")
-    second_shot = second_narration + pause
-    assert first <= 9.0
-    assert second_shot == pytest.approx(4.5)
-    assert second_shot >= 4.0
-
-
-def test_35_75_to_77_pause_editorial_prompt_rules() -> None:
+def test_35_74_shot_min_not_repaired_via_pause() -> None:
     prompt = _kf_prompt()
+    assert "Never repair shot_min/shot_max by requesting or extending a pause" in prompt
+    second_narration = 3.0
+    assert second_narration < 4.0
+
+
+def test_35_75_to_77_pause_directives_disabled_in_prompt() -> None:
+    prompt = _kf_prompt()
+    assert "PAUSE RULES (DISABLED)" in prompt
+    assert '"pause_directives": []' in prompt
+    assert "next_shot_may_start_during_pause" not in prompt
     assert "strong" in prompt and "acceptable" in prompt
     assert "weak" in prompt.lower()
     assert "shot_min" in prompt
-    assert "next_shot_may_start_during_pause" in prompt
 
 
 # --- §36 Coverage gaps --------------------------------------------------
@@ -723,7 +687,8 @@ def test_36_78_to_86_keyword_flow_gap_nullify() -> None:
         payload,
         "script-v1",
         folder_slug="Chap",
-        allow_pause_directives=True,
+        allow_pause_directives=False,
+        reject_nonempty_pause_directives=True,
         nullify_weak_assets=True,
     )
     assert plan.slots[0].local_asset_id is None

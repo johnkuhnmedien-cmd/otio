@@ -66,6 +66,12 @@ UNIFIED_CUT_STYLE_CHOICES: tuple[str, ...] = (
 KEYWORD_FLOW_ONSET_TOLERANCE_SEC = 1.5
 KEYWORD_FLOW_PAUSE_SAFETY_FRAMES = 5
 KEYWORD_FLOW_MAP_OPENER_SEC = 9.0
+# Alte Pläne mit pause_directives sind für Keyword Flow blockiert (keine
+# Pausenverlängerung mehr). Meldung unverändert an UI/Timing/OTIO durchreichen.
+KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE = (
+    "Dieser Keyword-Flow-Plan enthält nicht mehr unterstützte "
+    "Pausenverlängerungen. Bitte den LLM-Cut für dieses Kapitel neu erzeugen."
+)
 
 STILL_BACKGROUND_CHOICES = (
     STILL_BACKGROUND_VINTAGE,
@@ -287,13 +293,29 @@ def is_keyword_sync_unified_style(options: CutPlanOptions | None) -> bool:
 
 
 def is_keyword_flow_unified_style(options: CutPlanOptions | None) -> bool:
-    """True wenn Unified Keyword-Flow aktiv (context-first + sichere Pausen)."""
+    """True wenn Unified Keyword-Flow aktiv (context-first, ohne Pausenverlängerung)."""
     if options is None:
         return False
     return (
         str(options.unified_cut_style or "").strip().lower()
         == UNIFIED_CUT_STYLE_KEYWORD_FLOW
     )
+
+
+def plan_has_unsupported_keyword_flow_pause_directives(plan: object | None) -> bool:
+    """True wenn Plan nicht-leere Pause-Directives enthält (KF: veraltet)."""
+    if plan is None:
+        return False
+    for directive in list(getattr(plan, "pause_directives", None) or []):
+        function = str(getattr(directive, "pause_function", "") or "").strip().lower()
+        if function and function != "no_pause":
+            return True
+        # Auch Roh-Dicts aus Persistenz abdecken.
+        if isinstance(directive, dict):
+            function = str(directive.get("pause_function") or "").strip().lower()
+            if function and function != "no_pause":
+                return True
+    return False
 
 
 def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:

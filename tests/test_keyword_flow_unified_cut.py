@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE,
     UNIFIED_CUT_STYLE_KEYWORD_FLOW,
     UNIFIED_CUT_STYLE_KEYWORD_SYNC,
     UNIFIED_CUT_STYLE_RHYTHM,
@@ -15,6 +16,7 @@ from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
     _normalize_unified_cut_style,
     is_keyword_flow_unified_style,
     is_keyword_sync_unified_style,
+    plan_has_unsupported_keyword_flow_pause_directives,
 )
 from otio_app.services.without_voiceover_enhanced.keyword_flow_timing import (
     KeywordFlowTimingError,
@@ -37,6 +39,7 @@ from otio_app.services.without_voiceover_enhanced.pause_config import (
 from otio_app.services.without_voiceover_enhanced.pause_resolver import (
     PauseResolveError,
     build_narration_timeline,
+    clamp_in_pause_cut_to_natural_window,
     safe_pause_window_timeline,
 )
 from otio_app.services.without_voiceover_enhanced.script_prompts import (
@@ -51,6 +54,7 @@ from otio_app.services.without_voiceover_enhanced.sentence_timing_prompt import 
     is_direction_or_non_speech_token,
 )
 from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
+    UnifiedCutPlanError,
     parse_unified_cut_response,
     unified_to_rough,
 )
@@ -88,7 +92,8 @@ def test_ui_contains_keyword_flow_label() -> None:
     ).read_text(encoding="utf-8")
     assert 'UNIFIED_CUT_STYLE_KEYWORD_FLOW: "Keyword Flow"' in source
     assert "echten Wort-Onsets" in source
-    assert "±1,5-s-Platzierung" in source
+    assert "±1,5-s-Bildplatzierung" in source
+    assert "redaktionellen Pausen" not in source
 
 
 def test_dispatch_uses_keyword_flow_builder() -> None:
@@ -128,6 +133,10 @@ def test_keyword_flow_prompt_contract() -> None:
     assert "max asset usage 2" in prompt
     assert "reuse gap 4" in prompt
     assert "5 timeline frames" in prompt
+    assert "PAUSE RULES (DISABLED)" in prompt
+    assert '"pause_directives": []' in prompt
+    assert "Do not invent pulled pauses" in prompt or "do not request ADDITIONAL silence" in prompt
+    assert "Never repair shot_min/shot_max by requesting or extending a pause" in prompt
     assert "Do NOT plan the Maps folder opener" in prompt
     assert "closing_fallback_asset_id" in prompt
     assert "unified-cut-v1" in prompt
@@ -137,6 +146,7 @@ def test_keyword_flow_prompt_contract() -> None:
     assert "CHAPTER-LOCAL IDENTITY" in prompt
     assert "verlassenes Dorf" in prompt
     assert "Prefer chapter-local VIDEO over PHOTO" in prompt or "Prefer local VIDEO" in prompt
+    assert "PAUSE DIRECTIVES (KEYWORD FLOW ONLY — ENABLED)" not in prompt
 
 
 def test_rhythm_and_keyword_sync_prompts_unchanged_markers() -> None:
@@ -196,22 +206,13 @@ def test_word_cleaning_keeps_speech_drops_tags() -> None:
     )
 
 
-def test_parse_keyword_flow_nullifies_weak_and_keeps_pauses() -> None:
+def test_parse_keyword_flow_nullifies_weak_and_requires_empty_pauses() -> None:
     payload = {
         "closing_fallback_asset_id": "asset_b",
         "closing_fallback_asset_fit": "strong",
         "closing_fallback_asset_fit_reason": "reserve closer",
         "closing_fallback_visual_intent": "same closing intent as primary",
-        "pause_directives": [
-            {
-                "after_segment_id": "seg",
-                "after_sentence_id": "seg__s001",
-                "pause_function": "anticipation",
-                "duration_class": "long",
-                "visual_behavior": "next_shot_may_start_during_pause",
-                "editorial_reason": "space",
-            }
-        ],
+        "pause_directives": [],
         "boundaries": [
             {
                 "cut_id": "c0",
@@ -257,7 +258,8 @@ def test_parse_keyword_flow_nullifies_weak_and_keeps_pauses() -> None:
         payload,
         "script-v1",
         folder_slug="Chap",
-        allow_pause_directives=True,
+        allow_pause_directives=False,
+        reject_nonempty_pause_directives=True,
         nullify_weak_assets=True,
     )
     assert plan.slots[0].local_asset_id is None
@@ -267,11 +269,54 @@ def test_parse_keyword_flow_nullifies_weak_and_keeps_pauses() -> None:
     assert plan.closing_fallback_asset_fit == "strong"
     assert plan.closing_fallback_asset_fit_reason == "reserve closer"
     assert plan.closing_fallback_visual_intent == "same closing intent as primary"
-    assert len(plan.pause_directives) == 1
-    assert plan.pause_directives[0].duration_class == "long"
+    assert plan.pause_directives == []
     rough, coverage = unified_to_rough(plan)
     assert coverage.gaps
     assert rough.shots[0].local_asset_id is None
+
+
+def test_parse_keyword_flow_blocks_nonempty_pause_directives() -> None:
+    payload = {
+        "pause_directives": [
+            {
+                "after_segment_id": "seg",
+                "after_sentence_id": "seg__s001",
+                "pause_function": "anticipation",
+                "duration_class": "long",
+            }
+        ],
+        "boundaries": [
+            {
+                "cut_id": "c0",
+                "sentence_id": "seg__s001",
+                "position": "start",
+                "offset_seconds": 0,
+                "alignment": "sentence_boundary",
+            },
+            {
+                "cut_id": "c1",
+                "sentence_id": "seg__s001",
+                "position": "end",
+                "alignment": "sentence_boundary",
+            },
+        ],
+        "slots": [
+            {
+                "slot_id": "s1",
+                "local_asset_id": "asset_a",
+                "asset_fit": "strong",
+            }
+        ],
+    }
+    with pytest.raises(
+        UnifiedCutPlanError, match="nicht mehr unterstützte Pausenverlängerungen"
+    ):
+        parse_unified_cut_response(
+            payload,
+            "script-v1",
+            reject_nonempty_pause_directives=True,
+            nullify_weak_assets=True,
+        )
 
 
 def test_parse_rhythm_still_keeps_weak_asset_and_strips_pauses() -> None:
@@ -340,62 +385,7 @@ def test_safe_pause_window_five_frames() -> None:
     assert end29 == pytest.approx(12.0 - margin)
 
 
-def test_keyword_flow_pause_allows_small_natural_gap_when_extra_creates_safety() -> None:
-    """Natural gap < 10 frames is OK if inserted silence creates ±5-frame window."""
-    sentences = {
-        "seg__s001": SentenceTiming(
-            sentence_id="seg__s001",
-            segment_id="seg",
-            text="One.",
-            start_seconds=0.0,
-            end_seconds=1.0,
-            duration_seconds=1.0,
-        ),
-        "seg__s002": SentenceTiming(
-            sentence_id="seg__s002",
-            segment_id="seg",
-            text="Two.",
-            start_seconds=1.1,
-            end_seconds=2.0,
-            duration_seconds=0.9,
-        ),
-    }
-    # Natural gap only 0.2s (5 frames @25fps) — previously blocked as < 0.4s.
-    words = [
-        {"text": "One", "start_seconds": 0.0, "end_seconds": 0.95},
-        {"text": "Two", "start_seconds": 1.15, "end_seconds": 1.9},
-    ]
-    timeline = build_narration_timeline(
-        script_version="v1",
-        segment_timings=[
-            SegmentTiming(
-                segment_id="seg",
-                script_version="v1",
-                audio_path="/tmp/x.wav",
-                duration_seconds=2.0,
-                audio_status="valid",
-            )
-        ],
-        pause_directives=[
-            PauseDirective(
-                after_sentence_id="seg__s001",
-                pause_function="anticipation",
-                duration_class="long",
-                visual_behavior="next_shot_may_start_during_pause",
-            )
-        ],
-        sentence_index=sentences,
-        enable_keyword_flow_pauses=True,
-        segment_words_by_id={"seg": words},
-        fps=25.0,
-        repairs=[],
-    )
-    assert timeline.entries[0].intra_pauses
-    assert timeline.entries[0].intra_pauses[0].pause_seconds == pytest.approx(1.5)
-    assert words[1]["start_seconds"] == 1.15
-
-
-def test_keyword_flow_pauses_shift_timeline_not_source_words() -> None:
+def test_keyword_flow_never_inserts_silence_or_shifts_narration() -> None:
     sentences = {
         "seg__s001": SentenceTiming(
             sentence_id="seg__s001",
@@ -418,15 +408,6 @@ def test_keyword_flow_pauses_shift_timeline_not_source_words() -> None:
         {"text": "One", "start_seconds": 0.0, "end_seconds": 0.8},
         {"text": "Two", "start_seconds": 1.6, "end_seconds": 2.4},
     ]
-    directives = [
-        PauseDirective(
-            after_segment_id="seg",
-            after_sentence_id="seg__s001",
-            pause_function="anticipation",
-            duration_class="long",
-            visual_behavior="next_shot_may_start_during_pause",
-        )
-    ]
     repairs: list[str] = []
     timeline = build_narration_timeline(
         script_version="v1",
@@ -439,87 +420,79 @@ def test_keyword_flow_pauses_shift_timeline_not_source_words() -> None:
                 audio_status="valid",
             )
         ],
-        pause_directives=directives,
+        pause_directives=[
+            PauseDirective(
+                after_segment_id="seg",
+                after_sentence_id="seg__s001",
+                pause_function="anticipation",
+                duration_class="long",
+                visual_behavior="next_shot_may_start_during_pause",
+            )
+        ],
         sentence_index=sentences,
-        enable_keyword_flow_pauses=True,
+        enable_keyword_flow_pauses=False,
         segment_words_by_id={"seg": words},
         fps=25.0,
         repairs=repairs,
     )
-    assert timeline.entries[0].intra_pauses
-    assert timeline.entries[0].intra_pauses[0].pause_seconds == pytest.approx(1.5)
-    # Source-relative word times unchanged.
+    assert timeline.entries[0].intra_pauses == []
+    assert timeline.entries[0].pause_after_seconds == 0.0
+    assert timeline.entries[0].end_seconds == pytest.approx(3.0)
     assert words[1]["start_seconds"] == 1.6
-    assert any("keyword_flow_pause" in r for r in repairs)
+    assert not any("keyword_flow_pause" in r for r in repairs)
 
 
-def test_keyword_flow_pause_disabled_by_default() -> None:
-    timeline = build_narration_timeline(
+def test_natural_in_pause_window_used_without_extending() -> None:
+    words = [
+        {"text": "One", "start_seconds": 0.0, "end_seconds": 1.0},
+        {"text": "Two", "start_seconds": 2.0, "end_seconds": 3.0},
+    ]
+    # Requested mid natural pause; safe window @25fps is 1.2–1.8.
+    clamped = clamp_in_pause_cut_to_natural_window(
+        requested_source_seconds=1.5,
+        segment_words=words,
+        fps=25.0,
+    )
+    assert clamped == pytest.approx(1.5)
+    clamped_edge = clamp_in_pause_cut_to_natural_window(
+        requested_source_seconds=1.05,
+        segment_words=words,
+        fps=25.0,
+    )
+    assert clamped_edge == pytest.approx(1.2)
+
+
+def test_too_small_natural_pause_is_not_extended() -> None:
+    words = [
+        {"text": "One", "start_seconds": 0.0, "end_seconds": 1.0},
+        {"text": "Two", "start_seconds": 1.3, "end_seconds": 2.0},
+    ]
+    # Natural gap 0.3s < 2×0.2s safety → fail closed, no silence insert.
+    with pytest.raises(PauseResolveError, match="natürliche Pause zu klein"):
+        clamp_in_pause_cut_to_natural_window(
+            requested_source_seconds=1.15,
+            segment_words=words,
+            fps=25.0,
+        )
+
+
+def test_old_keyword_flow_plan_with_pause_directives_is_stale() -> None:
+    plan = UnifiedCutPlanDocument(
         script_version="v1",
-        segment_timings=[
-            SegmentTiming(
-                segment_id="seg",
-                script_version="v1",
-                audio_path="/tmp/x.wav",
-                duration_seconds=2.0,
-                audio_status="valid",
-            )
-        ],
         pause_directives=[
             PauseDirective(
-                after_sentence_id="x",
-                pause_function="breath",
+                after_sentence_id="seg__s001",
+                pause_function="anticipation",
                 duration_class="long",
             )
         ],
+        boundaries=[],
+        slots=[],
     )
-    assert timeline.entries[0].intra_pauses == []
-    assert timeline.entries[0].pause_after_seconds == 0.0
-
-
-def test_pause_without_words_blocks() -> None:
-    sentences = {
-        "seg__s001": SentenceTiming(
-            sentence_id="seg__s001",
-            segment_id="seg",
-            text="One.",
-            start_seconds=0.0,
-            end_seconds=1.0,
-            duration_seconds=1.0,
-        ),
-        "seg__s002": SentenceTiming(
-            sentence_id="seg__s002",
-            segment_id="seg",
-            text="Two.",
-            start_seconds=1.2,
-            end_seconds=2.0,
-            duration_seconds=0.8,
-        ),
-    }
-    with pytest.raises(PauseResolveError, match="ohne vorheriges Wortende"):
-        build_narration_timeline(
-            script_version="v1",
-            segment_timings=[
-                SegmentTiming(
-                    segment_id="seg",
-                    script_version="v1",
-                    audio_path="/tmp/x.wav",
-                    duration_seconds=2.0,
-                    audio_status="valid",
-                )
-            ],
-            pause_directives=[
-                PauseDirective(
-                    after_sentence_id="seg__s001",
-                    pause_function="breath",
-                    duration_class="short",
-                )
-            ],
-            sentence_index=sentences,
-            enable_keyword_flow_pauses=True,
-            segment_words_by_id={"seg": []},
-            fps=25.0,
-        )
+    assert plan_has_unsupported_keyword_flow_pause_directives(plan)
+    assert "nicht mehr unterstützte Pausenverlängerungen" in (
+        KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE
+    )
 
 
 def test_onset_tolerance_priority_and_block() -> None:
@@ -591,16 +564,25 @@ def test_onset_tolerance_priority_and_block() -> None:
     assert any("WARNING accepted onset overflow" in r for r in overflow_repairs)
 
 
-def test_twelve_second_theme_pause_extends_second_shot() -> None:
-    """12s Thema, shot_max 9 / shot_min 4: 3s + long(+1.5) → 4.5s Shot."""
-    # Narration pieces conceptually 9s + 3s; pause adds 1.5 to second shot span.
-    first = 9.0
+def test_shot_min_not_repaired_via_pause_extension() -> None:
+    """shot_min-Verstoß darf nicht durch Pause-Verlängerung repariert werden."""
+    prompt = build_keyword_flow_unified_cut_prompt(
+        locked_script_json="{}",
+        segment_timings_json="{}",
+        local_assets_json="[]",
+        style_profile_text="style",
+        dramaturgy_text="dram",
+        folder_name="Glendalough",
+        folder_slug="Glendalough",
+        shot_constraints_text="SHOT / ASSET CONSTRAINTS\n- shot_min 4 / shot_max 9\n",
+        sentence_timings_json="[]",
+    )
+    assert "Never repair shot_min/shot_max by requesting or extending a pause" in prompt
+    assert "3s narration + long pause" not in prompt
+    # Ohne Pause bleibt ein 3s-Narrationsstück unter shot_min=4 — Pause ist kein Fix.
     second_narration = 3.0
-    pause = resolve_keyword_flow_pause_duration_seconds("long")
-    second_shot = second_narration + pause
-    assert first <= 9.0 + 1e-9
-    assert second_shot == pytest.approx(4.5)
-    assert second_shot >= 4.0
+    assert second_narration < 4.0
+    assert resolve_keyword_flow_pause_duration_seconds("long") == pytest.approx(1.5)
 
 
 def test_map_decision_missing_and_intro_skip(tmp_path: Path) -> None:

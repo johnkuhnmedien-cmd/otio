@@ -1393,14 +1393,14 @@ USED-IN LEDGER (filmwide so far — respect max usage / reuse distance):
     return f"""\
 You are the KEYWORD FLOW cut planner for a documentary pipeline (unified-cut-v1).
 
-KEYWORD FLOW MARKER: context-first, keyword-anchored, honest gaps, safe pauses.
+KEYWORD FLOW MARKER: context-first, keyword-anchored, honest gaps, no pause extensions.
 
 Your task is to create ONE complete chapter plan:
 
 1. a continuous cut-boundary chain across the VO time carpet,
 2. one slot between every consecutive pair of boundaries,
 3. honest local asset_fit ratings; for weak/none include inline gap specs,
-4. pause_directives only when a safe editorial pause extension is justified.
+4. always return \"pause_directives\": [] — never request or extend pauses.
 
 MODE RULES (CRITICAL — KEYWORD FLOW):
 
@@ -1452,8 +1452,8 @@ KEYWORD BOUNDARIES:
   set offset_seconds EXACTLY to the delivered onset of the first keyword word,
   set alignment=\"mid_sentence\".
 - Always supply the exact real keyword onset first. Python may shift the PICTURE
-  cut within ±1.5 seconds for shot_min/max / safe pause / valid chain — never
-  invent offsets yourself.
+  cut within ±1.5 seconds for shot_min/max / valid chain — never invent offsets
+  yourself. Python never inserts silence and never shifts narration/word times.
 - Never estimate onsets from text proportion or character position.
 
 LONG THEME BLOCKS:
@@ -1461,25 +1461,24 @@ LONG THEME BLOCKS:
 - A shot need not run until the next keyword.
 - If narration stays on the same motif longer than shot_max, insert additional
   semantically fitting shots (even / uneven splits, detail changes, scale changes,
-  sentence boundaries, or safe pauses).
+  or sentence boundaries).
 - Forbidden: one overlong shot, silently exceeding shot_max, random filler,
   mechanical one-asset-per-sentence or one-asset-per-keyword.
+- Never repair shot_min/shot_max by requesting or extending a pause.
 
-PAUSE DIRECTIVES (KEYWORD FLOW ONLY — ENABLED):
+PAUSE RULES (DISABLED):
 
-- You may emit pause_directives to request ADDITIONAL silence between spoken units.
-- Prefer after_sentence_id between consecutive sentences with real word times.
-- pause_function: breath|emphasis|anticipation|reveal|chapter_transition|reflection|no_pause
-- duration_class: short|medium|long  (Python adds +0.35 / +0.80 / +1.50 seconds)
-- visual_behavior: hold_current_shot|next_shot_may_start_during_pause|cut_at_pause_start|cut_at_pause_end|editorial_choice
-- Do NOT output absolute pause seconds, milliseconds, or frames.
-- Python enforces 5 timeline frames after previous_word_end and 5 frames before
-  next_word_start. Unsafe pauses are rejected.
-- Use pauses to help a short following shot reach shot_min when editorially justified
-  (e.g. 3s narration + long pause → ≥ shot_min). The following shot must still be
-  strong/acceptable and visually meaningful — never weak filler.
-- A transition shot may start during the pause and continue into the next sentence.
-- No pause-only shot under shot_min.
+- Always return \"pause_directives\": [].
+- Do not invent pulled pauses; do not request ADDITIONAL silence.
+- Do not extend any existing natural pause.
+- Natural TTS silence may be used only as a visual cut window via
+  alignment=\"in_pause\" — and only inside the real pause, with 5 timeline frames
+  after the previous word end and 5 timeline frames before the next word start.
+- If that natural window is too small: do not force an in_pause cut, do not
+  invent silence, choose another valid boundary, or leave a gap / fail closed.
+- shot_min/shot_max violations must NOT be repaired via pause extension.
+  Allowed instead: shift a boundary within ±1.5s, add fitting slots, reassign
+  assets, or fail closed for a new cut.
 
 ASSET FIT (KEYWORD FLOW — BINDING):
 
@@ -1508,7 +1507,8 @@ FORMAT PRINCIPLE (CRITICAL):
 - Do NOT invent absolute timeline seconds, frames, or timecodes.
 - TWO FIELDS: position=start|early|middle|late|end;
   alignment=mid_sentence|sentence_boundary|in_pause — never mix them.
-- For in_pause cuts, Python keeps the cut inside the safe pause window.
+- For in_pause cuts, Python keeps the cut inside the real natural pause window
+  (5 timeline frames safety); it never inserts or extends silence.
 
 RETURN STRICT JSON ONLY. No Markdown. No comments. No trailing commas.
 
@@ -1521,16 +1521,7 @@ OUTPUT SCHEMA:
   "closing_fallback_asset_fit": "strong|acceptable",
   "closing_fallback_asset_fit_reason": "why this reserve closer is strong/acceptable",
   "closing_fallback_visual_intent": "same closing intent as primary",
-  "pause_directives": [
-    {{
-      "after_segment_id": "segment_001",
-      "after_sentence_id": "segment_001__s001",
-      "pause_function": "anticipation",
-      "duration_class": "long",
-      "visual_behavior": "next_shot_may_start_during_pause",
-      "editorial_reason": "safe space before the next named subject"
-    }}
-  ],
+  "pause_directives": [],
   "boundaries": [
     {{
       "cut_id": "{slug}_cut_000",

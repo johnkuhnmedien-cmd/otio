@@ -573,8 +573,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 "Rhythmus: bisheriger Prompt + shot_min/max + Word-Timestamps. "
                 "Keyword-Sync: eigener Prompt (Buzzword-Onset) mit denselben "
                 "Cut-Settings und Word-Timestamps. "
-                "Keyword Flow: context-first mit echten Wort-Onsets, "
-                "±1,5-s-Platzierung und redaktionellen Pausen."
+                "Keyword Flow: context-first mit echten Wort-Onsets und "
+                "flexibler ±1,5-s-Bildplatzierung."
             ),
         )
         if (
@@ -594,8 +594,8 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             and unified_cut_style == UNIFIED_CUT_STYLE_KEYWORD_FLOW
         ):
             st.caption(
-                "Kontextbasierter Keyword-Schnitt mit echten Wort-Onsets, "
-                "flexibler ±1,5-s-Platzierung und redaktionellen Pausen."
+                "Kontextbasierter Keyword-Schnitt mit echten Wort-Onsets und flexibler "
+                "±1,5-s-Bildplatzierung."
             )
             keyword_flow_allow_onset_overflow = st.checkbox(
                 "Keyword-Onset-Toleranz überschreitbar (Timing trotzdem akzeptieren)",
@@ -1343,7 +1343,11 @@ def _render_chapter_cut_rows(
         name_col, llm_col, timing_col, otio_col = st.columns([2.2, 1, 1, 1])
         with name_col:
             st.markdown(f"**{label}**")
-            if status.stale_for_script_version:
+            if status.stale_for_unsupported_pauses:
+                detail = status.unsupported_pause_message or (
+                    "veraltet (Pausenverlängerungen) — LLM Cut erneut"
+                )
+            elif status.stale_for_script_version:
                 detail = "veraltet (Skript geändert) — LLM Cut erneut"
             else:
                 detail = (
