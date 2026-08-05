@@ -699,6 +699,8 @@ class SupplementFunnelReport(BaseModel):
     # Informativ: akzeptierte Kandidaten mit partial/missing Lizenzdaten.
     license_incomplete_count: int = 0
     fallback_used_count: int = 0
+    # Nach Stock-Fail: generische Ordner-Assets als Accepted (Enhanced).
+    generic_fallback_count: int = 0
     message: str = ""
     stopped: bool = False
 
