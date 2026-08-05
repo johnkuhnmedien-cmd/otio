@@ -1183,24 +1183,33 @@ def _render_intro_cut_section(
     )
     if intro_plan is not None:
         from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+            intro_plan_matches_locked_script,
             intro_resolved_matches_plan,
         )
 
+        plan_current = intro_plan_matches_locked_script(project, intro_plan)
         n_plan = len(intro_plan.slots)
         n_res = len(intro_resolved.shots) if intro_resolved is not None else 0
-        st.caption(
-            f"Intro-Plan: {n_plan} Slots · "
-            f"Resolved: {n_res} Shots"
-            + ("" if intro_resolved is not None else " (fehlt)")
-        )
-        if intro_resolved is not None and not intro_resolved_matches_plan(
-            intro_plan, intro_resolved
-        ):
+        if not plan_current:
             st.warning(
-                f"Plan ({n_plan} Slots) und Resolved ({n_res} Shots) passen nicht — "
-                "altes Timing. Bitte **Intro: Python Timing** erneut, sonst "
-                "exportiert OTIO den alten Stand."
+                f"Intro-Plan gehört zu Skriptversion "
+                f"`{intro_plan.script_version}` — aktuelles Locked-Script ist "
+                "neuer. Bitte **Intro: LLM Schnitt** erneut."
             )
+        else:
+            st.caption(
+                f"Intro-Plan: {n_plan} Slots · "
+                f"Resolved: {n_res} Shots"
+                + ("" if intro_resolved is not None else " (fehlt)")
+            )
+            if intro_resolved is not None and not intro_resolved_matches_plan(
+                intro_plan, intro_resolved, project=project
+            ):
+                st.warning(
+                    f"Plan ({n_plan} Slots) und Resolved ({n_res} Shots) passen nicht — "
+                    "altes Timing. Bitte **Intro: Python Timing** erneut, sonst "
+                    "exportiert OTIO den alten Stand."
+                )
     st.divider()
 
 
@@ -1266,17 +1275,20 @@ def _render_chapter_cut_rows(
         name_col, llm_col, timing_col, otio_col = st.columns([2.2, 1, 1, 1])
         with name_col:
             st.markdown(f"**{label}**")
-            detail = (
-                f"{status.plan_slots} Slots"
-                if status.has_plan
-                else "kein Plan"
-            )
-            if status.has_resolved:
-                detail += f" · {status.resolved_shots} Shots"
-            elif status.has_plan:
-                detail += " · Timing fehlt"
-            if status.open_gap_count:
-                detail += f" · {status.open_gap_count} Gaps offen"
+            if status.stale_for_script_version:
+                detail = "veraltet (Skript geändert) — LLM Cut erneut"
+            else:
+                detail = (
+                    f"{status.plan_slots} Slots"
+                    if status.has_plan
+                    else "kein Plan"
+                )
+                if status.has_resolved:
+                    detail += f" · {status.resolved_shots} Shots"
+                elif status.has_plan:
+                    detail += " · Timing fehlt"
+                if status.open_gap_count:
+                    detail += f" · {status.open_gap_count} Gaps offen"
             st.caption(detail)
         with llm_col:
             run_llm = st.button(

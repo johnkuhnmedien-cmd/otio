@@ -78,6 +78,19 @@ def audio_dir(project: Project) -> Path:
     return enhanced_generation_root(project) / AUDIO_SUBDIR
 
 
+def chapter_audio_dir(project: Project) -> Path:
+    """``audio/chapters/`` — ein TTS-Audiofile pro Kapitel."""
+    return audio_dir(project) / "chapters"
+
+
+def chapter_audio_path(project: Project, folder_name: str, extension: str) -> Path:
+    from otio_app.project_layout import safe_folder_slug
+
+    slug = safe_folder_slug((folder_name or "").strip() or "chapter")
+    ext = extension if extension.startswith(".") else f".{extension}"
+    return chapter_audio_dir(project) / f"{slug}{ext}"
+
+
 def cut_dir(project: Project) -> Path:
     return enhanced_generation_root(project) / CUT_SUBDIR
 

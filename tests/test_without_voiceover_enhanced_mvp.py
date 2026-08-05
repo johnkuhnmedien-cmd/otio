@@ -1129,10 +1129,12 @@ def test_folder_script_prompt_binds_to_dramaturgy_chapter() -> None:
         language="de",
     )
     assert 'folder_name (EXACT): Canyon' in prompt
-    assert "dramaturgy_role: hook" in prompt
+    assert "dramaturgy_role" in prompt and "hook" in prompt
     assert "target_words: 150" in prompt
     assert "120-180" in prompt
-    assert "next chapter in the film: Desert" in prompt
+    # Ohne transition_to_next wird der Nachbarname nicht im Craft-Block genannt.
+    assert "silent orientation only" in prompt
+    assert "transition to next: FORBIDDEN" in prompt
     assert "THIS CHAPTER DRAMATURGY:" in prompt
     assert "LOCAL ASSETS" not in prompt
     assert "visual_intents" not in prompt
@@ -1193,8 +1195,9 @@ def test_editorial_neighbor_craft_self_contained_without_hints() -> None:
         previous_folder_name="Canyon",
         next_folder_name="Coast",
     )
-    assert "self-contained" in block.lower()
-    assert "do NOT force bridges" in block
+    assert "No spoken neighboring-chapter link is permitted." in block
+    assert "unless they arise naturally" not in block
+    assert "departure" in block.lower()
 
 
 def test_editorial_neighbor_craft_includes_contrast_hint() -> None:
@@ -1205,12 +1208,16 @@ def test_editorial_neighbor_craft_includes_contrast_hint() -> None:
     )
     block = build_editorial_neighbor_craft_block(
         entry=entry,
-        setting=FolderVoiceoverSetting(folder_name="Desert"),
+        setting=FolderVoiceoverSetting(
+            folder_name="Desert",
+            use_contrast_with_previous=True,
+        ),
         previous_folder_name="Canyon",
         next_folder_name="Coast",
     )
     assert "Dry heat vs canyon shade." in block
-    assert "only where" in block.lower()
+    assert "CONTRAST" in block
+    assert "travel bridge" in block.lower() or "transition_from_previous" in block
 
 
 def test_folder_script_prompt_includes_chapter_order_and_neighbor_excerpts() -> None:

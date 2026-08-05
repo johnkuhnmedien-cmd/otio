@@ -145,6 +145,44 @@ def test_lock_script_merges_confirmed_intro(tmp_path: Path) -> None:
     assert reloaded.segments[0].segment_id == ENHANCED_INTRO_SEGMENT_ID
 
 
+def test_lock_script_accepts_intro_with_pause_markers(tmp_path: Path) -> None:
+    """Intro-Hooks mit [pause N seconds] dürfen Script Lock nicht blockieren.
+
+    Marker werden strukturiert; TTS injiziert daraus eleven_v3-Tags.
+    """
+    project = _project(tmp_path)
+    _save_intro(
+        project,
+        "Willkommen in Irland.\n\n[pause 3 seconds]\n\nDie Küste wartet.",
+    )
+    save_script_draft(
+        project,
+        EnhancedScriptDocument(
+            narration_full="Kapitel eins.",
+            segments=[
+                ScriptSegment(
+                    segment_id="Rocamadour_segment_001",
+                    text="Kapitel eins.",
+                    sequence_index=1,
+                    folder_name="Rocamadour",
+                    folder_order_index=1,
+                )
+            ],
+        ),
+    )
+    locked = lock_script(project)
+    intro_segs = [
+        seg for seg in locked.segments if seg.folder_name == ENHANCED_INTRO_FOLDER_NAME
+    ]
+    assert len(intro_segs) == 2
+    assert intro_segs[0].segment_id == ENHANCED_INTRO_SEGMENT_ID
+    assert intro_segs[0].text == "Willkommen in Irland."
+    assert intro_segs[0].author_pause_after_seconds == 3.0
+    assert "[pause" not in intro_segs[0].text
+    assert "[pause" not in (locked.narration_full or "")
+    assert intro_segs[1].text == "Die Küste wartet."
+
+
 def test_group_segments_puts_intro_first_even_if_not_in_folder_order(
     tmp_path: Path,
 ) -> None:

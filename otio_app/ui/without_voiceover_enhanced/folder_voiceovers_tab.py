@@ -9,12 +9,16 @@ from otio_app.services.voiceover_generation.model_settings_service import (
     load_model_settings,
     save_model_settings,
 )
+from otio_app.services.voiceover_generation.style_reference_service import (
+    compute_style_context_hash,
+)
 from otio_app.services.without_voiceover_enhanced.audio_timing_service import (
     mark_audio_stale_for_changed_segments,
 )
 from otio_app.services.without_voiceover_enhanced.models import EnhancedScriptDocument
 from otio_app.services.without_voiceover_enhanced.script_author_service import (
     DEFAULT_ENHANCED_SCRIPT_MAX_OUTPUT_TOKENS,
+    chapter_display_text_for_folder,
     chapter_narration_text,
     folders_present_in_script,
     generate_all_enhanced_scripts,
@@ -243,12 +247,17 @@ def _render_chapter_scripts(
             if folder_name in order_by_folder
             else (segments[0].folder_order_index if segments else "—")
         )
-        narration = (
+        spoken = (
             chapter_narration_text(document, folder_name)
             if folder_name and segments
             else (" ".join(seg.text for seg in segments) if segments else "")
         )
-        words = _word_count(narration)
+        display = (
+            chapter_display_text_for_folder(document, folder_name)
+            if folder_name and segments
+            else spoken
+        )
+        words = _word_count(spoken)
         status = "offen" if not segments else f"{words} Wörter · {len(segments)} Segment(e)"
         with st.expander(
             f"{order_index} · {label} · Rolle `{role}` · {status}",
@@ -287,15 +296,19 @@ def _render_chapter_scripts(
             if folder_name and editable:
                 text_key = f"enh_chapter_text_{project.id}_{folder_name}"
                 if text_key not in st.session_state:
-                    st.session_state[text_key] = narration
-                if st.session_state.get(f"{text_key}__src") != narration:
-                    st.session_state[text_key] = narration
-                    st.session_state[f"{text_key}__src"] = narration
+                    st.session_state[text_key] = display
+                if st.session_state.get(f"{text_key}__src") != display:
+                    st.session_state[text_key] = display
+                    st.session_state[f"{text_key}__src"] = display
 
                 new_text = st.text_area(
                     "Voice-over-Text (Kapitel)",
                     key=text_key,
                     height=220,
+                    help=(
+                        "Sichtbare Autorenpausen als [pause N seconds] zwischen "
+                        "Absätzen. ElevenLabs spricht nur den Fließtext."
+                    ),
                 )
                 if st.button(
                     "Kapitel-Text speichern",
@@ -307,8 +320,8 @@ def _render_chapter_scripts(
                         )
                         mark_audio_stale_for_changed_segments(project)
                         st.success(
-                            "Kapitel gespeichert — Script Lock aufgehoben "
-                            "(ein Segment für dieses Kapitel)."
+                            "Kapitel gespeichert — Script Lock aufgehoben. "
+                            "Autorenpausen bleiben erhalten."
                         )
                         st.rerun()
                     except ScriptLockError as exc:
@@ -318,14 +331,20 @@ def _render_chapter_scripts(
                     "Segment(e) · Vertonung unter ⑥ Audio pro Kapitel"
                 )
             else:
-                st.write(narration)
+                st.write(display)
                 st.caption(f"{words} Wörter · {len(segments)} Segment(e)")
 
             with st.expander("Segmente (Cut-Plan / Feinbearbeitung)", expanded=False):
                 for segment in segments:
+                    pause = float(
+                        getattr(segment, "author_pause_after_seconds", 0.0) or 0.0
+                    )
+                    pause_note = (
+                        f" · author_pause={pause:g}s" if pause > 0 else ""
+                    )
                     st.markdown(
                         f"**{segment.sequence_index}. `{segment.segment_id}`** "
-                        f"({segment.semantic_function})"
+                        f"({segment.semantic_function}{pause_note})"
                     )
                     if editable and folder_name:
                         seg_key = f"enh_seg_{project.id}_{segment.segment_id}"
@@ -352,6 +371,8 @@ def _render_chapter_scripts(
                                 st.error(str(exc))
                     else:
                         st.write(segment.text)
+                    if bool(getattr(segment, "paragraph_break_after", False)):
+                        st.write("")
 
             chapter_intents = [
                 intent
@@ -399,11 +420,34 @@ def render_enhanced_folder_voiceovers_page() -> None:
 
     draft = load_script_draft(project)
     locked = load_locked_script(project)
+    current_style_hash = compute_style_context_hash(project)
+    style_stale = bool(
+        draft is not None
+        and draft.segments
+        and draft.source_style_context_hash
+        and draft.source_style_context_hash != current_style_hash
+    )
+    if style_stale and locked is not None:
+        # Style Reference geändert — Lock ungültig, Draft bleibt sichtbar.
+        try:
+            from otio_app.services.without_voiceover_enhanced.paths import (
+                script_locked_path,
+            )
+
+            path = script_locked_path(project)
+            if path.is_file():
+                path.unlink()
+        except OSError:
+            pass
+        locked = None
 
     st.divider()
     col_lock, _ = st.columns(2)
     with col_lock:
-        if st.button("Script Lock", disabled=draft is None or not draft.segments):
+        if st.button(
+            "Script Lock",
+            disabled=draft is None or not draft.segments or style_stale,
+        ):
             try:
                 locked = lock_script(project, draft)
                 st.success(
@@ -414,12 +458,20 @@ def render_enhanced_folder_voiceovers_page() -> None:
             except ScriptLockError as exc:
                 st.error(str(exc))
 
-    if locked is not None:
+    if style_stale:
+        st.error(
+            "**STALE_STYLE** — Die Style Reference wurde nach der Skripterzeugung geändert. "
+            "Die vorhandenen Kapitel verwenden noch den vorherigen Stil. "
+            "Kapitel neu erzeugen und anschließend erneut bestätigen."
+        )
+    elif locked is not None:
         st.info(f"Gesperrt: `{locked.script_version}` · status=`{locked.script_status}`")
     elif draft is not None and draft.segments:
         st.warning("Skript ist noch nicht gesperrt — ElevenLabs benötigt Script Lock.")
 
     show = locked or draft or EnhancedScriptDocument(script_status="draft")
+    if style_stale and show.segments:
+        show = show.model_copy(update={"script_status": "STALE_STYLE"})
 
     if show.forbidden_phrases_found:
         real = [

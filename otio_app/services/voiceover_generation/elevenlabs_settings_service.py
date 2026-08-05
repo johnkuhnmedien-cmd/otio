@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 from typing import Literal
 
+from otio_app.defaults import normalize_elevenlabs_output_format
 from otio_app.models import Project
 from otio_app.project_layout import get_elevenlabs_settings_path
 from otio_app.services.voiceover_generation.elevenlabs_voice_defaults_service import (
@@ -62,26 +63,62 @@ def elevenlabs_settings_source(project: Project) -> SettingsSource:
     return "builtin"
 
 
+def _with_normalized_output_format(
+    settings: ElevenLabsSettings,
+    *,
+    migrate_legacy_default: bool = False,
+) -> ElevenLabsSettings:
+    normalized = normalize_elevenlabs_output_format(
+        settings.output_format,
+        migrate_legacy_default=migrate_legacy_default,
+    )
+    if normalized == settings.output_format:
+        return settings
+    return settings.model_copy(update={"output_format": normalized})
+
+
 def load_elevenlabs_settings(project: Project) -> ElevenLabsSettings:
     path = get_elevenlabs_settings_path(project.language_work_dir_path)
     if path.is_file():
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-            return ElevenLabsSettings.model_validate(payload)
+            raw_format = str(payload.get("output_format") or "").strip()
+            loaded = _with_normalized_output_format(
+                ElevenLabsSettings.model_validate(payload),
+                migrate_legacy_default=True,
+            )
+            # Persistiere Migration weg vom alten MP3-Default (Resolve).
+            if loaded.output_format != raw_format:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    loaded.model_copy(update={"project_id": project.id}).model_dump_json(
+                        indent=2
+                    ),
+                    encoding="utf-8",
+                )
+            return loaded
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
             pass
 
     language_defaults = load_language_voice_defaults(project.language)
     if language_defaults is not None:
-        return settings_from_language_defaults(
-            project_id=project.id,
-            defaults=language_defaults,
+        return _with_normalized_output_format(
+            settings_from_language_defaults(
+                project_id=project.id,
+                defaults=language_defaults,
+            ),
+            migrate_legacy_default=True,
         )
     return default_elevenlabs_settings(project)
 
 
 def save_elevenlabs_settings(project: Project, settings: ElevenLabsSettings) -> ElevenLabsSettings:
-    normalized = settings.model_copy(update={"project_id": project.id})
+    normalized = settings.model_copy(
+        update={
+            "project_id": project.id,
+            "output_format": normalize_elevenlabs_output_format(settings.output_format),
+        }
+    )
     path = get_elevenlabs_settings_path(project.language_work_dir_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(normalized.model_dump_json(indent=2), encoding="utf-8")

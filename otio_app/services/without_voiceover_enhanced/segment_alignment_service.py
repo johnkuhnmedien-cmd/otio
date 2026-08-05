@@ -34,6 +34,7 @@ __all__ = [
     "load_segment_alignments",
     "persist_segment_tts_alignment",
     "rebuild_segment_alignments_index",
+    "rebase_alignment_to_slice",
     "split_segment_into_sentences",
 ]
 
@@ -48,6 +49,43 @@ def split_segment_into_sentences(text: str) -> list[str]:
         return []
     parts = [part.strip() for part in _SENTENCE_SPLIT_RE.split(cleaned) if part.strip()]
     return parts or [cleaned]
+
+
+def rebase_alignment_to_slice(
+    alignment: dict[str, Any],
+    *,
+    start_seconds: float,
+    end_seconds: float,
+) -> dict[str, Any]:
+    """Schneidet Character-Timestamps auf ``[start, end)`` und rebaset auf 0."""
+    chars = alignment.get("characters") or []
+    starts = alignment.get("character_start_times_seconds") or []
+    ends = alignment.get("character_end_times_seconds") or []
+    n = min(len(chars), len(starts), len(ends))
+    if n <= 0:
+        return {
+            "characters": [],
+            "character_start_times_seconds": [],
+            "character_end_times_seconds": [],
+        }
+    start = float(start_seconds)
+    end = float(end_seconds)
+    out_chars: list[Any] = []
+    out_starts: list[float] = []
+    out_ends: list[float] = []
+    for index in range(n):
+        char_start = float(starts[index])
+        char_end = float(ends[index])
+        if char_end <= start + 1e-9 or char_start >= end - 1e-9:
+            continue
+        out_chars.append(chars[index])
+        out_starts.append(round(max(0.0, char_start - start), 6))
+        out_ends.append(round(max(0.0, min(char_end, end) - start), 6))
+    return {
+        "characters": out_chars,
+        "character_start_times_seconds": out_starts,
+        "character_end_times_seconds": out_ends,
+    }
 
 
 def build_segment_alignment(

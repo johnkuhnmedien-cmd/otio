@@ -365,17 +365,49 @@ def invalidate_intro_resolved_timeline(project: Project) -> bool:
     return True
 
 
+def intro_plan_matches_locked_script(
+    project: Project,
+    plan: UnifiedCutPlanDocument | None,
+) -> bool:
+    """False wenn Intro-Plan zu einer anderen Skriptversion gehört."""
+    if plan is None or not plan.slots:
+        return False
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        _artifact_matches_locked_script_version,
+    )
+
+    return _artifact_matches_locked_script_version(
+        project, getattr(plan, "script_version", None)
+    )
+
+
 def intro_resolved_matches_plan(
     plan: UnifiedCutPlanDocument | None,
     resolved: ResolvedTimelineDocument | None,
+    *,
+    project: Project | None = None,
 ) -> bool:
     """True wenn Resolved zur aktuellen Slot-Anzahl des Intro-Plans passt.
 
     Envelope-Shots außerhalb der Slotkette (Shortfall-Tails; Map-Opener
     falls jemals gesetzt) zählen nicht als zusätzliche Plan-Slots.
+    Mit ``project`` zusätzlich Skriptversions-Check (nach Script-Regen).
     """
     if plan is None or resolved is None:
         return False
+    if project is not None:
+        from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+            _artifact_matches_locked_script_version,
+        )
+
+        if not _artifact_matches_locked_script_version(
+            project, getattr(plan, "script_version", None)
+        ):
+            return False
+        if not _artifact_matches_locked_script_version(
+            project, getattr(resolved, "script_version", None)
+        ):
+            return False
     from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
         _is_non_plan_envelope_shot,
     )
@@ -761,7 +793,7 @@ def export_intro_otio(
     needs_resolve = (
         intro_resolved is None
         or (not intro_resolved.shots and not intro_resolved.audio_segments)
-        or not intro_resolved_matches_plan(plan, intro_resolved)
+        or not intro_resolved_matches_plan(plan, intro_resolved, project=project)
     )
     if needs_resolve:
         # Frisches Intro-Timing aus dem aktuellen Plan.

@@ -296,6 +296,34 @@ def _build_keyword_flow_intra_pauses(
     return markers, round(trailing_pause, 6)
 
 
+def author_pause_after_map_from_script(
+    script: Any,
+    *,
+    model_id: str | None = None,
+) -> dict[str, float]:
+    """segment_id → author_pause_after_seconds aus Locked/Draft-Script.
+
+    Bei `eleven_v3` sind Autorenpausen bereits als Bracket-Tags im TTS-Audio
+    enthalten — dann keine zusätzliche Timeline-Stille (sonst Doppelpausen).
+    """
+    from otio_app.defaults import ELEVENLABS_MODEL_ID_V3
+
+    if model_id == ELEVENLABS_MODEL_ID_V3:
+        return {}
+    out: dict[str, float] = {}
+    for segment in getattr(script, "segments", None) or []:
+        sid = str(getattr(segment, "segment_id", "") or "").strip()
+        if not sid:
+            continue
+        try:
+            value = float(getattr(segment, "author_pause_after_seconds", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            value = 0.0
+        if value > 0:
+            out[sid] = round(value, 2)
+    return out
+
+
 def build_narration_timeline(
     *,
     script_version: str,
@@ -306,11 +334,13 @@ def build_narration_timeline(
     segment_words_by_id: dict[str, list[dict[str, Any]]] | None = None,
     fps: float = 25.0,
     repairs: list[str] | None = None,
+    author_pause_after_by_segment: dict[str, float] | None = None,
 ) -> NarrationTimelineDocument:
     """Ende Voice-Segment + aufgelöste Pause = Beginn nächstes Segment.
 
     Default (Rhythm / Keyword-Sync / Intro): Pause-Directives werden ignoriert.
     Keyword Flow: fail-closed Verlängerung mit Wortgrenzen + 5-Frame-Safety.
+    Autorenpausen aus dem Locked Script gelten in allen Cut-Stilen additiv.
     """
     if not segment_timings:
         raise PauseResolveError("Keine Segment-Timings vorhanden.")
@@ -320,6 +350,8 @@ def build_narration_timeline(
     cursor = 0.0
     index_map = sentence_index or {}
     words_by_seg = segment_words_by_id or {}
+    author_pauses = author_pause_after_by_segment or {}
+    repair_notes = repairs if repairs is not None else []
 
     # Directives nach Segment gruppieren (via after_sentence_id → segment).
     directives_by_segment: dict[str, list[PauseDirective]] = {}
@@ -346,9 +378,9 @@ def build_narration_timeline(
             )
         audio_duration = float(timing.duration_seconds)
         intra: list[IntraPauseMarker] = []
-        pause_after = 0.0
+        keyword_pause_after = 0.0
         if enable_keyword_flow_pauses:
-            intra, pause_after = _build_keyword_flow_intra_pauses(
+            intra, keyword_pause_after = _build_keyword_flow_intra_pauses(
                 segment_id=timing.segment_id,
                 audio_duration_seconds=audio_duration,
                 sentence_directives=list(
@@ -357,8 +389,18 @@ def build_narration_timeline(
                 sentence_index=index_map,
                 segment_words=list(words_by_seg.get(timing.segment_id) or []),
                 fps=fps,
-                repairs=repairs,
+                repairs=repair_notes,
             )
+        author_pause_after = max(
+            0.0, float(author_pauses.get(timing.segment_id, 0.0) or 0.0)
+        )
+        if author_pause_after > 0:
+            note = (
+                f"author_pause: {timing.segment_id} +{author_pause_after:.2f}s"
+            )
+            if note not in repair_notes:
+                repair_notes.append(note)
+        pause_after = float(author_pause_after) + float(keyword_pause_after)
         start = cursor
         timeline_audio_end = start + audio_duration
         for pause in intra:

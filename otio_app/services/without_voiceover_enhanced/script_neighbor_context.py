@@ -2,7 +2,7 @@
 
 - Kapitelliste (Überschriften + Rolle + Reason) immer in Filmreihenfolge
 - Erste/letzte Sätze der zwei unmittelbar vorherigen Kapitel (ab Kapitel 3)
-- Kontrast/Gemeinsamkeit/Übergänge nur bei explizitem dramaturgischem Brief
+- Gesprochene Übergänge nur bei expliziten FolderVoiceoverSetting-Flags
 """
 
 from __future__ import annotations
@@ -59,12 +59,12 @@ def build_chapter_order_block(
             note_lines.append(f"{index:2d}. {name} — {reason}")
 
     blocks = [
-        "FILM CHAPTER MAP (headings + dramaturgy role — NOT narration text):",
+        "FILM CHAPTER MAP — SILENT EDITORIAL METADATA (NOT spoken narration):",
         "",
-        "Use this map to place THIS chapter in the whole film.",
-        "You may reference ANY chapter by number/heading when editorially justified",
-        "(forward glance several chapters ahead, or callback to an early chapter).",
-        "Do NOT recite or summarize the full list in spoken narration.",
+        "Use this map only for silent film orientation: order, emphasis, contrast.",
+        "Do NOT recite, summarize, or verbalize the map, roles, reasons, or chapter order.",
+        "Do NOT invent spoken bridges from this map unless SPOKEN CHAPTER LINK "
+        "PERMISSIONS explicitly allow a direction.",
         "",
         *map_lines,
     ]
@@ -72,8 +72,8 @@ def build_chapter_order_block(
         blocks.extend(
             [
                 "",
-                "CHAPTER EDITORIAL NOTES (one line per chapter — foreshadow/callback "
-                "orientation only; do NOT treat as spoken copy; do NOT invent beyond these):",
+                "CHAPTER EDITORIAL NOTES — SILENT METADATA ONLY "
+                "(do NOT treat as spoken copy; do NOT invent beyond these):",
                 "",
                 *note_lines,
             ]
@@ -81,19 +81,37 @@ def build_chapter_order_block(
     return "\n".join(blocks)
 
 
-def build_film_wide_editorial_links_block() -> str:
-    return (
-        "FILM-WIDE EDITORIAL LINKS (OPTIONAL — most chapters stay self-contained):\n"
-        "- FORWARD GLANCE: You MAY hint at a LATER chapter (not only the next one) "
-        "when this place naturally sets up something unique still to come — "
-        "claim slot stay_tuned_payoff and/or named_future_highlight if you do.\n"
-        "- CALLBACK: You MAY briefly recall an EARLIER non-adjacent chapter when "
-        "this place completes or echoes a thread — claim callback_early_chapter / "
-        "distant_contrast / distant_commonality as appropriate.\n"
-        "- Prefer at most ONE such film-wide link in this chapter.\n"
-        "- Never spoil concrete reveals from later payoff chapters.\n"
-        "- DEFAULT: no cross-chapter teaser if nothing natural fits."
-    )
+def build_film_wide_editorial_links_block(
+    *,
+    allow_callback: bool = False,
+    allow_forward_glance: bool = False,
+) -> str:
+    if not allow_callback and not allow_forward_glance:
+        return (
+            "FILM-WIDE EDITORIAL LINKS:\n"
+            "No film-wide spoken link is permitted for this chapter.\n"
+            "Use the chapter map only for silent editorial orientation."
+        )
+    lines = [
+        "FILM-WIDE EDITORIAL LINKS (only where explicitly permitted):",
+    ]
+    if allow_forward_glance:
+        lines.append(
+            "- FORWARD GLANCE: You MAY briefly hint at a LATER chapter when "
+            "editorially justified — claim stay_tuned_payoff / named_future_highlight."
+        )
+    else:
+        lines.append("- FORWARD GLANCE: FORBIDDEN for this chapter.")
+    if allow_callback:
+        lines.append(
+            "- CALLBACK: You MAY briefly recall an EARLIER non-adjacent chapter — "
+            "claim callback_early_chapter / distant_contrast / distant_commonality."
+        )
+    else:
+        lines.append("- CALLBACK: FORBIDDEN for this chapter.")
+    lines.append("- Prefer at most ONE such film-wide link in this chapter.")
+    lines.append("- Never spoil concrete reveals from later payoff chapters.")
+    return "\n".join(lines)
 
 
 def recent_prior_chapter_excerpts(
@@ -120,13 +138,13 @@ def build_recent_neighbor_excerpts_block(
     if not excerpts:
         return ""
     lines = [
-        "RECENT NEIGHBOR NARRATION (first/last sentence only — context, do NOT copy):",
+        "RECENT NEIGHBOR NARRATION (first/last sentence only — opening variety context, do NOT copy):",
         "",
         "OPENING VARIETY (BINDING):",
         "- Do NOT open this chapter with a sentence that mirrors the opening pattern,",
         "  rhythm, or stock phrasing of the recent chapters below.",
-        "- Vary structure and entry point — not every chapter should start with the same",
-        "  landscape, time-of-day, or \"Hier beginnt…\" template.",
+        "- Vary structure and entry point — prefer a direct place/fact opening.",
+        "- Neighbor excerpts are NOT permission to mention those chapters.",
         "",
     ]
     for folder_name, first_sentence, last_sentence in excerpts:
@@ -151,16 +169,6 @@ def _craft_flags_active(setting: FolderVoiceoverSetting | None) -> bool:
     )
 
 
-def _dramaturgy_neighbor_hints_active(entry: DramaturgyFolderEntry) -> bool:
-    return any(
-        (
-            (entry.transition_from_previous_hint or "").strip(),
-            (entry.transition_goal_to_next or "").strip(),
-            (entry.contrast_or_commonality_hint or "").strip(),
-        )
-    )
-
-
 def build_editorial_neighbor_craft_block(
     *,
     entry: DramaturgyFolderEntry,
@@ -168,66 +176,94 @@ def build_editorial_neighbor_craft_block(
     previous_folder_name: str | None,
     next_folder_name: str | None,
 ) -> str:
-    """Kontrast/Gemeinsamkeit/Übergänge — nur wenn Brief oder Flags aktiv sind."""
+    """Gesprochene Nachbarlinks — nur bei aktiven FolderVoiceoverSetting-Flags."""
     contrast_hint = (entry.contrast_or_commonality_hint or "").strip()
     from_hint = (entry.transition_from_previous_hint or "").strip()
     to_hint = (entry.transition_goal_to_next or "").strip()
 
     flags_active = _craft_flags_active(setting)
-    hints_active = _dramaturgy_neighbor_hints_active(entry)
-
-    if not flags_active and not hints_active:
+    if not flags_active:
         return (
             "EDITORIAL NEIGHBOR LINKS:\n"
-            "- No explicit contrast, commonality, or transition brief for this chapter.\n"
-            "- Write a self-contained section. You may glance at FILM CHAPTER MAP for "
-            "orientation, but do NOT force bridges, teasers, callbacks, contrast, or "
-            "commonality unless they arise naturally from the place itself "
-            "(and then claim the matching RHETORIC SLOT)."
+            "No spoken neighboring-chapter link is permitted.\n"
+            "Do not mention departure, arrival, route, journey continuation, "
+            "the previous chapter, or the next chapter."
         )
 
     lines = [
-        "EDITORIAL NEIGHBOR LINKS (apply ONLY where the brief below is meaningful — "
-        "do not pad every chapter with forced bridges):",
+        "EDITORIAL NEIGHBOR LINKS (apply ONLY where the matching setting is ALLOWED — "
+        "never invent road/departure/arrival formulas):",
     ]
-    if from_hint:
-        lines.append(f"- transition from previous hint: {from_hint}")
-    if to_hint:
-        lines.append(f"- transition goal toward next: {to_hint}")
-    if contrast_hint:
-        lines.append(f"- contrast or commonality hint: {contrast_hint}")
 
-    if setting is not None:
-        if setting.transition_from_previous and previous_folder_name:
+    assert setting is not None
+    if setting.transition_from_previous:
+        if from_hint:
+            lines.append(f"- transition from previous hint: {from_hint}")
+        if previous_folder_name:
             lines.append(
-                f"- OPEN with a short bridge from the previous chapter "
-                f'("{previous_folder_name}") near the START — only if editorially justified.'
+                f"- OPEN with exactly one short thematic/geographic/historical bridge "
+                f'from "{previous_folder_name}" — not a pure travel formula.'
             )
-        if setting.transition_to_next and next_folder_name:
+        else:
             lines.append(
-                f'- END with a brief forward-looking bridge toward the VERY NEXT chapter '
-                f'("{next_folder_name}") — teaser only, no spoilers; it follows immediately.'
+                "- OPEN with exactly one short thematic bridge from the previous "
+                "chapter — not a pure travel formula."
             )
-        if setting.callback_to_previous and previous_folder_name:
+    if setting.transition_to_next:
+        if to_hint:
+            lines.append(f"- transition goal toward next: {to_hint}")
+        if next_folder_name:
             lines.append(
-                f"- Later in the text, a brief CALLBACK to "
-                f'"{previous_folder_name}" is requested.'
+                f'- END with exactly one short forward bridge toward "{next_folder_name}" '
+                f"— teaser only, no spoilers, no journey lecture."
             )
-        if setting.use_contrast_with_previous and previous_folder_name:
+        else:
             lines.append(
-                f'- Weave in a meaningful CONTRAST with the previous chapter '
-                f'("{previous_folder_name}") where it genuinely helps the story.'
+                "- END with exactly one short forward bridge toward the next chapter "
+                "— teaser only, no spoilers."
             )
-        if setting.use_commonality_with_previous and previous_folder_name:
+    if setting.callback_to_previous:
+        if previous_folder_name:
             lines.append(
-                f'- Weave in a meaningful COMMONALITY with the previous chapter '
-                f'("{previous_folder_name}") where it genuinely helps the story.'
+                f'- Later in the text, a brief CALLBACK to "{previous_folder_name}" '
+                f"is requested (not a departure scene)."
             )
-
-    if hints_active and not flags_active:
-        lines.append(
-            "- Use the hints above only where they fit naturally — skip forced segues "
-            "if the place does not support them."
-        )
+        else:
+            lines.append(
+                "- Later in the text, a brief CALLBACK to the previous chapter "
+                "is requested (not a departure scene)."
+            )
+    if setting.use_contrast_with_previous:
+        if contrast_hint and (
+            setting.use_contrast_with_previous or setting.use_commonality_with_previous
+        ):
+            lines.append(f"- contrast or commonality hint: {contrast_hint}")
+        if previous_folder_name:
+            lines.append(
+                f'- Weave in a meaningful CONTRAST with "{previous_folder_name}" '
+                f"in fact selection/framing. Do NOT open with a travel bridge unless "
+                f"transition_from_previous is also ALLOWED."
+            )
+        else:
+            lines.append(
+                "- Weave in a meaningful CONTRAST with the previous chapter in fact "
+                "selection/framing — no travel bridge unless transition_from_previous "
+                "is ALLOWED."
+            )
+    if setting.use_commonality_with_previous:
+        if contrast_hint and not setting.use_contrast_with_previous:
+            lines.append(f"- contrast or commonality hint: {contrast_hint}")
+        if previous_folder_name:
+            lines.append(
+                f'- Weave in a meaningful COMMONALITY with "{previous_folder_name}" '
+                f"in fact selection/framing. Do NOT open with a travel bridge unless "
+                f"transition_from_previous is also ALLOWED."
+            )
+        else:
+            lines.append(
+                "- Weave in a meaningful COMMONALITY with the previous chapter in fact "
+                "selection/framing — no travel bridge unless transition_from_previous "
+                "is ALLOWED."
+            )
 
     return "\n".join(lines)

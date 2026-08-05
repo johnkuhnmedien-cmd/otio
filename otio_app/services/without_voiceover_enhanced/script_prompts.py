@@ -30,7 +30,7 @@ CUT RHYTHM TARGETS (BINDING STYLE TARGETS — aim for this distribution):
 """
 
 
-_SHARED_SCRIPT_RULES = """\
+_SHARED_SCRIPT_CORE_RULES = """\
 GOAL
 Write editorial narration focused on:
 - history of the place
@@ -57,16 +57,79 @@ ALLOWED:
 - atmospheric language
 - concrete local details
 - history and peculiarities
-- dramaturgical transitions
 
-BAD: "Das Bild zeigt Berge bei Sonnenuntergang."
-GOOD: "Am Abend, wenn die Sonne hinter den Gipfeln verschwindet, beginnen die Felsen beinahe wie Kristalle zu funkeln."
+DRAMATURGY VS. SPOKEN NARRATION
+
+- Dramaturgy metadata is silent editorial guidance.
+- It controls what this chapter emphasizes, not how the narrator travels between chapters.
+- Write this chapter as an independent mini-documentary about its location.
+- Begin directly with the place, its defining feature, its significance, a concrete landmark, or a verified fact.
+- Do not describe leaving the previous chapter, travelling toward this chapter, arriving here, or continuing toward the next chapter unless explicit spoken-link permission is provided below.
+- Do not verbalize dramaturgy_role, reason, narrative_arc, chapter order, or transition strategy.
+
+INFORMATIVE CHAPTER PROSE
+
+Prefer:
+- geographic orientation
+- historical development
+- cultural importance
+- concrete landmarks
+- visible and explainable features
+- dates, names and cause-and-effect relationships when supported
+- one or two restrained atmospheric observations
+
+Avoid:
+- abstract literary interpretation
+- personification of cities or landscapes
+- vague statements about feeling history
+- travel-blog filler
+- road, route, departure and arrival narration
+- poetic language replacing factual information
+
+Do not use routine formulas such as:
+- Leaving [place] behind...
+- Leave [place] behind...
+- From here, the journey continues...
+- The road leads...
+- The road out of...
+- Before long, [place] appears...
+- Moving on...
+- Heading toward...
+- Our next stop...
+- The landscape changes again...
+- Wir verlassen [Ort]...
+- Von hier aus führt die Reise...
+- Die Reise geht weiter...
+- Unser nächster Halt...
+- En quittant...
+- La route mène / continue...
+- Notre prochain arrêt...
+- Saliendo de...
+- El camino conduce / continúa...
+- Nuestra próxima parada...
+- Deixando ... para trás...
+- A estrada leva / continua...
+- Lasciando ... alle spalle...
+- La strada porta / continua...
+- La nostra prossima tappa...
 
 RULES FOR SEGMENTS
 - A segment may be a short sentence, several tightly related sentences, or a clause at a natural speech boundary.
 - Never split mid-word.
 - Write spoken narration only — no shot lists, asset IDs, or visual editing plans.
+- Optional paragraph_break_after=true marks a natural factual/topic beat boundary (not a spoken pause label).
+- Timed pauses use author_pause_after_seconds (0..8). Never write [pause X seconds] into segment.text.
 """
+
+_DEFAULT_DOCUMENTARY_STYLE_RULES = """\
+DEFAULT DOCUMENTARY STYLE EXAMPLES (only when no binding Raw Chapter Reference is active):
+
+BAD: "Das Bild zeigt Berge bei Sonnenuntergang."
+GOOD: "Am Abend, wenn die Sonne hinter den Gipfeln verschwindet, beginnen die Felsen beinahe wie Kristalle zu funkeln."
+"""
+
+# Rückwärtskompatibel für Legacy-Prompts / Imports.
+_SHARED_SCRIPT_RULES = _SHARED_SCRIPT_CORE_RULES + "\n" + _DEFAULT_DOCUMENTARY_STYLE_RULES
 
 
 def _json_schema_block(*, id_prefix: str = "") -> str:
@@ -83,6 +146,8 @@ OUTPUT (JSON only):
       "sequence_index": 1,
       "semantic_function": "atmosphere|history|geography|culture|fact|transition",
       "fact_check_required": false,
+      "paragraph_break_after": false,
+      "author_pause_after_seconds": 0.0,
       "folder_name": "EXACT_FOLDER_NAME"
     }}
   ],
@@ -102,7 +167,18 @@ OUTPUT (JSON only):
       "evidence_quote": "exact phrase from narration_full",
       "related_chapter_ref": "chapter heading from FILM CHAPTER MAP or empty"
     }}
-  ]
+  ],
+  "chapter_link_usage": {{
+    "from_previous": false,
+    "to_next": false,
+    "callback": false,
+    "evidence_quotes": []
+  }},
+  "style_reference_usage": {{
+    "mode": "raw_text|style_profile|default",
+    "matched_features": ["direct opening", "short factual beats", "restrained atmosphere"],
+    "intentional_deviations": []
+  }}
 }}
 
 rhetoric_usage:
@@ -110,6 +186,29 @@ rhetoric_usage:
 - Include only slots you actually used (used=true). Omit unused slots.
 - At most 2 used:true entries per chapter.
 - evidence_quote MUST appear in narration_full.
+
+chapter_link_usage:
+- Audit only — not spoken.
+- evidence_quotes MUST appear exactly in narration_full.
+- Without a used spoken link: all booleans false and evidence_quotes [].
+- Never set a boolean true unless SPOKEN CHAPTER LINK PERMISSIONS allow that direction.
+
+style_reference_usage:
+- Audit only — not spoken.
+- matched_features must describe prose traits, never copy facts or wording from the reference.
+
+AUTHOR PAUSES
+- When the Raw Chapter Reference uses explicit timed pauses, reproduce that rhythm with
+  author_pause_after_seconds on segments.
+- Use 0 when no pause follows.
+- Use the reference's observed duration range.
+- Shorter pauses connect closely related facts.
+- Longer pauses follow a major geographic change, important historical statement,
+  strong visual reveal, or completed subject block.
+- Do not use the same duration mechanically after every segment.
+- Do not write [pause X seconds] inside segment.text or narration_full.
+- The application will render the marker from author_pause_after_seconds.
+- Every positive author pause should normally also set paragraph_break_after=true.
 """
 
 
@@ -179,6 +278,31 @@ only the narration that should be spoken aloud for this chapter.
 """
 
 
+def _permission_label(allowed: bool) -> str:
+    return "ALLOWED" if allowed else "FORBIDDEN"
+
+
+def build_spoken_chapter_link_permissions_block(
+    *,
+    transition_from_previous: bool = False,
+    transition_to_next: bool = False,
+    callback_to_previous: bool = False,
+    use_contrast_with_previous: bool = False,
+    use_commonality_with_previous: bool = False,
+) -> str:
+    return (
+        "SPOKEN CHAPTER LINK PERMISSIONS\n\n"
+        f"- transition from previous: {_permission_label(transition_from_previous)}\n"
+        f"- transition to next: {_permission_label(transition_to_next)}\n"
+        f"- callback to previous: {_permission_label(callback_to_previous)}\n"
+        f"- content contrast with previous: {_permission_label(use_contrast_with_previous)}\n"
+        f"- content commonality with previous: {_permission_label(use_commonality_with_previous)}\n"
+        "\n"
+        "Contrast/commonality may shape which facts you emphasize. They do NOT grant "
+        "departure, arrival, road, or journey formulas and do NOT require an opening bridge."
+    )
+
+
 def build_enhanced_folder_script_prompt(
     *,
     project_brief_text: str,
@@ -201,16 +325,54 @@ def build_enhanced_folder_script_prompt(
     rhetoric_ledger_text: str = "",
     opening_inventory_text: str = "",
     language: str = "de",
+    transition_from_previous: bool = False,
+    transition_to_next: bool = False,
+    callback_to_previous: bool = False,
+    use_contrast_with_previous: bool = False,
+    use_commonality_with_previous: bool = False,
+    style_is_raw_chapter: bool = False,
+    repair_instruction: str = "",
 ) -> str:
     """Ein Dramaturgie-Kapitel / Ordner — nur gesprochene Narration (keine Assets)."""
     forbidden = "\n".join(f'- "{p}"' for p in FORBIDDEN_PHRASES)
     id_prefix = f"{folder_slug}_"
-    prev = previous_folder_name or "(none — first enabled chapter)"
-    nxt = next_folder_name or "(none — last enabled chapter)"
 
     def _optional_block(text: str) -> str:
         cleaned = (text or "").strip()
         return f"\n{cleaned}\n" if cleaned else ""
+
+    shared_rules = _SHARED_SCRIPT_CORE_RULES
+    if not style_is_raw_chapter:
+        shared_rules = _SHARED_SCRIPT_RULES
+
+    # Nachbarnamen nur nennen, wenn eine passende Erlaubnis aktiv ist.
+    show_previous = any(
+        (
+            transition_from_previous,
+            callback_to_previous,
+            use_contrast_with_previous,
+            use_commonality_with_previous,
+        )
+    )
+    show_next = transition_to_next
+    prev_line = (
+        f"- previous chapter in the film: {previous_folder_name}"
+        if show_previous and previous_folder_name
+        else "- previous chapter in the film: (silent orientation only — do not name unless permitted below)"
+    )
+    next_line = (
+        f"- next chapter in the film: {next_folder_name}"
+        if show_next and next_folder_name
+        else "- next chapter in the film: (silent orientation only — do not name unless permitted below)"
+    )
+
+    permissions_block = build_spoken_chapter_link_permissions_block(
+        transition_from_previous=transition_from_previous,
+        transition_to_next=transition_to_next,
+        callback_to_previous=callback_to_previous,
+        use_contrast_with_previous=use_contrast_with_previous,
+        use_commonality_with_previous=use_commonality_with_previous,
+    )
 
     chapter_order_block = _optional_block(chapter_order_text)
     film_wide_block = _optional_block(film_wide_editorial_links_text)
@@ -218,13 +380,40 @@ def build_enhanced_folder_script_prompt(
     editorial_neighbor_block = _optional_block(editorial_neighbor_craft_text)
     rhetoric_ledger_block = _optional_block(rhetoric_ledger_text)
     opening_inventory_block = _optional_block(opening_inventory_text)
+    repair_block = _optional_block(repair_instruction)
+
+    style_label = (
+        "RAW CHAPTER PROSE REFERENCE / STYLE CONTEXT"
+        if style_is_raw_chapter
+        else "STYLE PROFILE"
+    )
+    # Raw-Modus: Binding-Referenz früh (nach Rolle/Sprache/Sicherheit), vor Dramaturgie.
+    if style_is_raw_chapter:
+        early_style_block = f"\n{style_label}:\n{style_profile_text}\n"
+        late_style_block = ""
+        priority_block = """
+PROMPT PRIORITY (BINDING)
+1. Schema, safety and factuality
+2. Explicit editor instructions / must-include / must-avoid
+3. Raw Chapter Prose Architecture
+4. Project-specific chapter content
+5. Silent dramaturgy metadata
+6. Generic default style rules
+
+When generic style advice conflicts with the Raw Chapter Reference, follow the Raw Reference for prose form.
+"""
+    else:
+        early_style_block = ""
+        late_style_block = f"\n{style_label}:\n{style_profile_text}\n"
+        priority_block = ""
+
     return f"""\
 You are writing documentary narration for ONE chapter of a multi-location travel film.
 
 LANGUAGE: {language}
 
-{_SHARED_SCRIPT_RULES}
-
+{shared_rules}
+{priority_block}{early_style_block}
 STRICTLY AVOID these phrases and patterns:
 {forbidden}
 - pure inventories of visible objects
@@ -233,28 +422,27 @@ STRICTLY AVOID these phrases and patterns:
 
 THIS CHAPTER ONLY
 - folder_name (EXACT): {folder_name}
-- dramaturgy_role: {dramaturgy_role}
-- previous chapter in the film: {prev}
-- next chapter in the film: {nxt}
+- dramaturgy_role (SILENT METADATA — do not verbalize): {dramaturgy_role}
+{prev_line}
+{next_line}
 - target_words: {target_words} (soft target; stay within {min_words}-{max_words})
 - Write ONLY the spoken narration for this chapter — not the whole film.
 - Every segment MUST set folder_name to exactly "{folder_name}".
 - Use ID prefixes starting with "{id_prefix}" (e.g. {id_prefix}segment_001).
-{chapter_order_block}{film_wide_block}{opening_inventory_block}{rhetoric_ledger_block}{neighbor_excerpts_block}{editorial_neighbor_block}
+
+{permissions_block}
+{repair_block}{chapter_order_block}{film_wide_block}{opening_inventory_block}{rhetoric_ledger_block}{neighbor_excerpts_block}{editorial_neighbor_block}
 {_json_schema_block(id_prefix=id_prefix).replace("EXACT_FOLDER_NAME", folder_name)}
 
 PROJECT BRIEF:
 {project_brief_text}
 
-FILM CONTEXT (global arc — do not rewrite other chapters):
+FILM CONTEXT (silent orientation — do not rewrite other chapters; do not verbalize narrative_arc):
 {film_context_text}
 
 THIS CHAPTER DRAMATURGY:
 {chapter_dramaturgy_text}
-
-STYLE PROFILE:
-{style_profile_text}
-
+{late_style_block}
 VERIFIED FACTS / METADATA (only these may be stated as facts):
 {verified_facts_text}
 """

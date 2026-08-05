@@ -3,6 +3,9 @@
 Die klassische Intro-Bestätigung liegt unter
 `intro_hook.confirmed.json`. Enhanced Audio/Cut/Timeline erwarten Intro
 als Kapitel-Segment im gesperrten Skript (`folder_name="Intro"`).
+
+Pausemarker im Hook-Text (`[pause N seconds]`) werden in strukturierte
+`author_pause_after_seconds` überführt; beim TTS entstehen daraus eleven_v3-Tags.
 """
 
 from __future__ import annotations
@@ -20,6 +23,12 @@ from otio_app.services.without_voiceover_enhanced.models import (
 from otio_app.services.without_voiceover_enhanced.paths import (
     script_draft_path,
     script_locked_path,
+)
+from otio_app.services.without_voiceover_enhanced.script_chapter_text import (
+    AUTHOR_PAUSE_MARKER_RE,
+    ChapterDisplayTextError,
+    join_spoken_segment_texts,
+    parse_chapter_display_text,
 )
 from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     load_locked_script,
@@ -44,14 +53,64 @@ def confirmed_intro_text(project: Project) -> str | None:
 
 
 def _rebuild_narration_full(document: EnhancedScriptDocument) -> None:
-    document.narration_full = " ".join(
-        seg.text.strip() for seg in document.segments if seg.text.strip()
-    )
+    document.narration_full = join_spoken_segment_texts(document.segments)
 
 
 def _renumber_sequence_indices(document: EnhancedScriptDocument) -> None:
     for index, segment in enumerate(document.segments, start=1):
         segment.sequence_index = index
+
+
+def _intro_segments_from_text(text: str) -> list[ScriptSegment]:
+    """Baut Intro-Segmente; zeilenweise Pausemarker → author_pause_after_seconds."""
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    if AUTHOR_PAUSE_MARKER_RE.search(raw):
+        try:
+            parsed = parse_chapter_display_text(
+                raw,
+                folder_name=ENHANCED_INTRO_FOLDER_NAME,
+                folder_order_index=0,
+                segment_id_prefix="Intro_segment",
+                default_semantic_function="intro_hook",
+            )
+            return [
+                seg.model_copy(update={"text_changed": False})
+                for seg in parsed
+            ]
+        except ChapterDisplayTextError:
+            pass
+    return [
+        ScriptSegment(
+            segment_id=ENHANCED_INTRO_SEGMENT_ID,
+            text=raw,
+            sequence_index=0,
+            semantic_function="intro_hook",
+            folder_name=ENHANCED_INTRO_FOLDER_NAME,
+            folder_order_index=0,
+        )
+    ]
+
+
+def _intro_segments_equivalent(
+    existing: list[ScriptSegment],
+    desired: list[ScriptSegment],
+) -> bool:
+    if len(existing) != len(desired):
+        return False
+    for left, right in zip(existing, desired):
+        if (left.text or "").strip() != (right.text or "").strip():
+            return False
+        if float(left.author_pause_after_seconds or 0.0) != float(
+            right.author_pause_after_seconds or 0.0
+        ):
+            return False
+        if left.folder_name != ENHANCED_INTRO_FOLDER_NAME:
+            return False
+        if int(left.folder_order_index or 0) != 0:
+            return False
+    return True
 
 
 def _merge_intro_visual_intents(
@@ -90,61 +149,30 @@ def ensure_confirmed_intro_in_document(
     project: Project,
     document: EnhancedScriptDocument,
 ) -> bool:
-    """Fügt/aktualisiert das Intro-Segment im Dokument. True wenn geändert."""
+    """Fügt/aktualisiert Intro-Segment(e) im Dokument. True wenn geändert."""
     text = confirmed_intro_text(project)
     if text is None:
         return False
 
     changed = False
+    desired = _intro_segments_from_text(text)
+    if not desired:
+        return False
+
     intro_segments = [
         seg for seg in document.segments if is_intro_folder_name(seg.folder_name)
     ]
-    if intro_segments:
-        primary = intro_segments[0]
-        if primary.text.strip() != text:
-            primary.text = text
-            primary.text_changed = True
-            changed = True
-        if primary.folder_name != ENHANCED_INTRO_FOLDER_NAME:
-            primary.folder_name = ENHANCED_INTRO_FOLDER_NAME
-            changed = True
-        if primary.folder_order_index != 0:
-            primary.folder_order_index = 0
-            changed = True
-        # Canonical segment id if still using a generic intro name.
-        if primary.segment_id != ENHANCED_INTRO_SEGMENT_ID and primary.segment_id.startswith(
-            "Intro"
-        ):
-            # Keep existing id to avoid orphaning already synthesized audio.
-            pass
-        # Drop duplicate intro folders/segments beyond the first.
-        if len(intro_segments) > 1:
-            keep_id = primary.segment_id
-            document.segments = [
-                seg
-                for seg in document.segments
-                if not is_intro_folder_name(seg.folder_name) or seg.segment_id == keep_id
-            ]
-            changed = True
-        # Ensure Intro segment is first.
-        if document.segments and document.segments[0].segment_id != primary.segment_id:
-            document.segments = [
-                seg for seg in document.segments if seg.segment_id != primary.segment_id
-            ]
-            document.segments.insert(0, primary)
-            changed = True
-    else:
-        document.segments.insert(
-            0,
-            ScriptSegment(
-                segment_id=ENHANCED_INTRO_SEGMENT_ID,
-                text=text,
-                sequence_index=0,
-                semantic_function="intro_hook",
-                folder_name=ENHANCED_INTRO_FOLDER_NAME,
-                folder_order_index=0,
-            ),
-        )
+    non_intro = [
+        seg for seg in document.segments if not is_intro_folder_name(seg.folder_name)
+    ]
+
+    if not _intro_segments_equivalent(intro_segments, desired):
+        # Preserve first existing intro segment_id when still a single segment,
+        # so already synthesized audio is not orphaned.
+        if len(desired) == 1 and intro_segments:
+            primary_id = intro_segments[0].segment_id
+            desired[0] = desired[0].model_copy(update={"segment_id": primary_id})
+        document.segments = [*desired, *non_intro]
         changed = True
 
     if _merge_intro_visual_intents(document, project):

@@ -8,7 +8,12 @@ from __future__ import annotations
 
 import streamlit as st
 
-from otio_app.defaults import ELEVENLABS_MODEL_PRESETS
+from otio_app.defaults import (
+    ELEVENLABS_DEFAULT_OUTPUT_FORMAT,
+    ELEVENLABS_MODEL_PRESETS,
+    ELEVENLABS_OUTPUT_FORMAT_PRESETS,
+    normalize_elevenlabs_output_format,
+)
 from otio_app.models import Project
 from otio_app.project_layout import language_folder_name
 from otio_app.services.voiceover_generation.elevenlabs_client import (
@@ -75,7 +80,10 @@ def _sync_form_widgets_from_settings(
     keys = _widget_keys(project, key_prefix)
     st.session_state[keys["voice_id"]] = settings.voice_id
     st.session_state[keys["model"]] = settings.model_id
-    st.session_state[keys["format"]] = settings.output_format
+    st.session_state[keys["format"]] = normalize_elevenlabs_output_format(
+        settings.output_format,
+        migrate_legacy_default=True,
+    )
     st.session_state[keys["stability"]] = settings.stability
     st.session_state[keys["similarity"]] = settings.similarity_boost
     st.session_state[keys["style"]] = settings.style
@@ -126,13 +134,20 @@ def render_elevenlabs_settings_form(
 
     col1, col2 = st.columns(2)
     with col1:
-        output_format = st.text_input(
+        format_options = list(ELEVENLABS_OUTPUT_FORMAT_PRESETS)
+        current_format = normalize_elevenlabs_output_format(
+            st.session_state.get(keys["format"], settings.output_format)
+        )
+        if current_format not in format_options:
+            format_options = [current_format, *format_options]
+        output_format = st.selectbox(
             "Output-Format",
+            options=format_options,
             key=keys["format"],
             help=(
-                "ElevenLabs output_format (Query-Param). Standard: wav_48000 "
-                "(Resolve-tauglich). Alternativen: wav_44100 (Pro+), "
-                "mp3_44100_128, pcm_48000."
+                f"ElevenLabs output_format. Standard: {ELEVENLABS_DEFAULT_OUTPUT_FORMAT} "
+                "(Resolve-tauglich, echter WAV-Container). "
+                "Nach Formatwechsel TTS neu erzeugen."
             ),
         )
         if str(output_format or "").strip().lower().startswith("mp3"):

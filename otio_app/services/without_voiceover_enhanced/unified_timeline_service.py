@@ -868,11 +868,22 @@ def build_narration_timeline_from_unified(
     if timings is None:
         raise UnifiedTimelineError("Segment-Timings fehlen.")
     sentence_index = sentence_index_by_id(load_segment_alignments(project))
+    from otio_app.services.voiceover_generation.elevenlabs_settings_service import (
+        load_elevenlabs_settings,
+    )
+    from otio_app.services.without_voiceover_enhanced.pause_resolver import (
+        author_pause_after_map_from_script,
+    )
+
     return build_narration_timeline(
         script_version=locked.script_version,
         segment_timings=list(timings.segments),
         pause_directives=list(plan.pause_directives),
         sentence_index=sentence_index,
+        author_pause_after_by_segment=author_pause_after_map_from_script(
+            locked,
+            model_id=load_elevenlabs_settings(project).model_id,
+        ),
     )
 
 
@@ -1198,6 +1209,13 @@ def resolve_unified_timeline(
             words_by_segment=words_by_segment,
         )
     try:
+        from otio_app.services.voiceover_generation.elevenlabs_settings_service import (
+            load_elevenlabs_settings,
+        )
+        from otio_app.services.without_voiceover_enhanced.pause_resolver import (
+            author_pause_after_map_from_script,
+        )
+
         timeline = build_narration_timeline(
             script_version=locked.script_version,
             segment_timings=timing_segments,
@@ -1207,6 +1225,10 @@ def resolve_unified_timeline(
             segment_words_by_id=words_by_segment,
             fps=fps,
             repairs=repairs,
+            author_pause_after_by_segment=author_pause_after_map_from_script(
+                locked,
+                model_id=load_elevenlabs_settings(project).model_id,
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         from otio_app.services.without_voiceover_enhanced.pause_resolver import (

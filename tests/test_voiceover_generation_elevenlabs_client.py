@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from otio_app.models import Project, ProjectMode
 from otio_app.project_layout import get_elevenlabs_settings_path, get_voiceover_generation_dir
@@ -42,6 +43,23 @@ def _make_project(tmp_path: Path) -> Project:
 
 
 # --- Settings ---
+
+
+def test_normalize_elevenlabs_output_format_defaults_and_migrates() -> None:
+    from otio_app.defaults import normalize_elevenlabs_output_format
+
+    assert normalize_elevenlabs_output_format("") == "wav_48000"
+    assert normalize_elevenlabs_output_format(None) == "wav_48000"
+    assert (
+        normalize_elevenlabs_output_format(
+            "mp3_44100_128", migrate_legacy_default=True
+        )
+        == "wav_48000"
+    )
+    assert (
+        normalize_elevenlabs_output_format("mp3_44100_128") == "mp3_44100_128"
+    )
+    assert normalize_elevenlabs_output_format("wav_24000") == "wav_24000"
 
 
 def test_default_settings_have_expected_values(tmp_path: Path) -> None:
@@ -208,6 +226,60 @@ def test_synthesize_parses_audio_and_alignment(monkeypatch: pytest.MonkeyPatch) 
     call_kwargs = mock_post.call_args.kwargs
     assert call_kwargs["headers"]["xi-api-key"] == "sk_test_key"
     assert "with-timestamps" in mock_post.call_args.args[0]
+    assert call_kwargs["params"]["output_format"] == "wav_48000"
+    assert isinstance(call_kwargs["timeout"], tuple)
+    assert call_kwargs["timeout"][0] == 30.0
+    assert call_kwargs["timeout"][1] >= 180.0
+
+
+def test_synthesize_retries_remote_disconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    from otio_app.services.voiceover_generation import elevenlabs_client as client_mod
+    from otio_app.services.voiceover_generation.elevenlabs_client import (
+        tts_request_timeout_seconds,
+    )
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "sk_test_key")
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+    settings = ElevenLabsSettings(project_id="p1", voice_id="voice-abc")
+
+    assert tts_request_timeout_seconds("x" * 100, output_format="wav_48000") >= 180.0
+
+    mock_ok = MagicMock(status_code=200)
+    mock_ok.json.return_value = _sample_response_payload()
+    side_effects = [
+        requests.exceptions.ConnectionError(
+            "('Connection aborted.', RemoteDisconnected("
+            "'Remote end closed connection without response'))"
+        ),
+        mock_ok,
+    ]
+    with patch(
+        f"{_CLIENT_MODULE}.requests.post", side_effect=side_effects
+    ) as mock_post:
+        result = synthesize_speech_with_timestamps("Hi there.", settings)
+
+    assert result.audio_bytes == b"FAKE_MP3_BYTES"
+    assert mock_post.call_count == 2
+    assert result.response_metadata.get("tts_attempts") == 2
+
+
+def test_synthesize_remote_disconnect_exhausted_has_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from otio_app.services.voiceover_generation import elevenlabs_client as client_mod
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "sk_test_key")
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+    settings = ElevenLabsSettings(project_id="p1", voice_id="voice-abc")
+    err = requests.exceptions.ConnectionError(
+        "('Connection aborted.', RemoteDisconnected("
+        "'Remote end closed connection without response'))"
+    )
+    with patch(f"{_CLIENT_MODULE}.requests.post", side_effect=err):
+        with pytest.raises(ElevenLabsTtsError, match="wav_") as exc_info:
+            synthesize_speech_with_timestamps("Long text " * 40, settings)
+    assert "RemoteDisconnected" in str(exc_info.value)
+    assert "sk_test" not in str(exc_info.value).lower()
 
 
 def test_synthesize_error_never_contains_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

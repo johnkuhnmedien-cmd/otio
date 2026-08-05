@@ -1,12 +1,25 @@
-"""ElevenLabs-Segment-Audio + echte Dauerablesung (without_voiceover_enhanced)."""
+"""ElevenLabs-Kapitel-Audio + abgeleitete Segment-Timestamps (Enhanced).
+
+Jedes Dramaturgie-Kapitel (inkl. Intro) wird in **einem** ElevenLabs-Call
+vertont — niemals Segment für Segment. Aus dem Chapter-Alignment werden
+anschließend Segment-Slices + satzbezogene Timings abgeleitet, damit Cut-Plan /
+Timeline / OTIO unverändert pro Segment arbeiten können.
+"""
 
 from __future__ import annotations
 
+import json
+import subprocess
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from otio_app.models import Project
+from otio_app.project_layout import safe_folder_slug
 from otio_app.services.media_utils import probe_duration_seconds
+from otio_app.services.voiceover_generation.audio_alignment_service import (
+    _align_segments,
+)
 from otio_app.services.voiceover_generation.elevenlabs_client import (
     ElevenLabsTtsError,
     audio_extension_for_output_format,
@@ -16,6 +29,9 @@ from otio_app.services.voiceover_generation.elevenlabs_client import (
 from otio_app.services.voiceover_generation.elevenlabs_settings_service import (
     load_elevenlabs_settings,
 )
+from otio_app.services.without_voiceover_enhanced.enhanced_tts_text import (
+    build_chapter_tts_text,
+)
 from otio_app.services.without_voiceover_enhanced.io_utils import load_model, write_json
 from otio_app.services.without_voiceover_enhanced.models import (
     SegmentTiming,
@@ -23,6 +39,8 @@ from otio_app.services.without_voiceover_enhanced.models import (
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
     audio_dir,
+    chapter_audio_dir,
+    chapter_audio_path,
     segment_sentence_alignment_path,
     segment_timings_path,
 )
@@ -36,15 +54,53 @@ from otio_app.services.without_voiceover_enhanced.script_lock_service import (
 )
 from otio_app.services.without_voiceover_enhanced.segment_alignment_service import (
     persist_segment_tts_alignment,
+    rebase_alignment_to_slice,
     rebuild_segment_alignments_index,
 )
 
 # folder_name, chapter_index, chapter_total, segment_index, segment_total
+# Bei Kapitel-TTS ist segment_index/segment_total immer 1/1 (ein Call).
 TtsProgressCallback = Callable[[str, int, int, int, int], None]
+
+CHAPTER_AUDIO_READY = "ready"
+CHAPTER_AUDIO_OPEN = "open"
+CHAPTER_AUDIO_STALE = "stale"
+CHAPTER_AUDIO_PARTIAL = "partial"
 
 
 class AudioTimingError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ChapterAudioStatus:
+    """UI-/Orchestrierungsstatus eines Kapitels (nicht segmentweise)."""
+
+    folder_name: str
+    label: str
+    status: str  # ready | open | stale | partial
+    segment_count: int
+    ready_segment_count: int
+    duration_seconds: float
+    chapter_audio_path: str = ""
+
+    @property
+    def is_open(self) -> bool:
+        return self.status in {
+            CHAPTER_AUDIO_OPEN,
+            CHAPTER_AUDIO_STALE,
+            CHAPTER_AUDIO_PARTIAL,
+        }
+
+    @property
+    def status_label(self) -> str:
+        if self.status == CHAPTER_AUDIO_READY:
+            return "vertont"
+        if self.status == CHAPTER_AUDIO_STALE:
+            return "veraltet"
+        if self.status == CHAPTER_AUDIO_PARTIAL:
+            return "unvollständig"
+        return "offen"
 
 
 def measure_audio_duration_seconds(path: Path) -> float:
@@ -73,14 +129,79 @@ def mark_audio_stale_for_changed_segments(project: Project) -> SegmentTimingsDoc
         return doc
 
     changed_ids = {s.segment_id for s in locked.segments if s.text_changed}
+    # Ganzes Kapitel stale, sobald ein Segment darin geändert wurde.
+    stale_folders = {
+        seg.folder_name
+        for seg in locked.segments
+        if seg.segment_id in changed_ids
+    }
+    folder_by_segment = {
+        seg.segment_id: seg.folder_name for seg in locked.segments
+    }
     for item in doc.segments:
-        if item.segment_id in changed_ids or item.script_version != locked.script_version:
+        folder = folder_by_segment.get(item.segment_id)
+        if (
+            item.segment_id in changed_ids
+            or item.script_version != locked.script_version
+            or (folder is not None and folder in stale_folders)
+        ):
             item.audio_status = "stale"
     write_json(segment_timings_path(project), doc)
     return doc
 
 
-def _synthesize_segments(
+def _extract_audio_slice(
+    source: Path,
+    destination: Path,
+    *,
+    start_seconds: float,
+    end_seconds: float,
+) -> None:
+    """Schneidet ``[start, end]`` aus dem Kapitel-Audio (ffmpeg)."""
+    start = max(0.0, float(start_seconds))
+    end = max(start + 0.05, float(end_seconds))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source),
+        "-ss",
+        f"{start:.3f}",
+        "-to",
+        f"{end:.3f}",
+        "-vn",
+        str(destination),
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, check=False, timeout=180
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise AudioTimingError(
+            f"ffmpeg-Slice fehlgeschlagen für {destination.name}: {exc}"
+        ) from exc
+    if result.returncode != 0 or not destination.is_file():
+        detail = (result.stderr or b"").decode("utf-8", errors="replace")[:400]
+        raise AudioTimingError(
+            f"ffmpeg-Slice fehlgeschlagen für {destination.name}: {detail}"
+        )
+
+
+def _char_alignment_source(
+    alignment: dict,
+    normalized_alignment: dict,
+) -> dict:
+    char_source = alignment or {}
+    starts = char_source.get("character_start_times_seconds") or []
+    if starts:
+        return char_source
+    if normalized_alignment:
+        return normalized_alignment
+    return {}
+
+
+def _synthesize_chapter(
     project: Project,
     *,
     segments,
@@ -90,61 +211,149 @@ def _synthesize_segments(
     folder_name: str = "",
     progress_callback: TtsProgressCallback | None = None,
 ) -> SegmentTimingsDocument:
+    """Ein ElevenLabs-Call für alle Segmente eines Kapitels."""
     if not is_elevenlabs_configured():
         raise AudioTimingError("ElevenLabs ist nicht konfiguriert.")
     locked = require_locked_script(project)
     settings = load_elevenlabs_settings(project)
-    out_dir = audio_dir(project) / "segments"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ext, _ = audio_extension_for_output_format(settings.output_format)
-
-    by_id = {item.segment_id: item for item in (existing.segments if existing else [])}
-    segment_total = len(segments)
     label = folder_name or (segments[0].folder_name if segments else "") or "(ohne Kapitel)"
-    for segment_index, segment in enumerate(segments, start=1):
-        if progress_callback is not None:
-            progress_callback(
-                label,
-                chapter_index,
-                chapter_total,
-                segment_index,
-                segment_total,
-            )
-        try:
-            result = synthesize_speech_with_timestamps(segment.text, settings)
-        except ElevenLabsTtsError as exc:
-            raise AudioTimingError(str(exc)) from exc
-        audio_path = out_dir / f"{segment.segment_id}{ext}"
-        audio_path.write_bytes(result.audio_bytes)
-        duration = measure_audio_duration_seconds(audio_path)
-        alignment = persist_segment_tts_alignment(
-            project,
-            segment_id=segment.segment_id,
-            script_version=locked.script_version,
-            audio_path=str(audio_path),
-            audio_duration_seconds=duration,
-            tts_text=segment.text,
-            alignment=result.alignment,
-            normalized_alignment=result.normalized_alignment,
-            response_metadata=result.response_metadata,
+    if progress_callback is not None:
+        progress_callback(label, chapter_index, chapter_total, 1, 1)
+
+    full_tts, align_parts = build_chapter_tts_text(
+        list(segments), model_id=settings.model_id
+    )
+    if not full_tts.strip() or not align_parts:
+        raise AudioTimingError(f"Kein sprechbarer Text für Kapitel „{label}“.")
+
+    try:
+        result = synthesize_speech_with_timestamps(full_tts, settings)
+    except ElevenLabsTtsError as exc:
+        raise AudioTimingError(str(exc)) from exc
+
+    ext, _ = audio_extension_for_output_format(settings.output_format)
+    chapter_audio_dir(project).mkdir(parents=True, exist_ok=True)
+    chapter_path = chapter_audio_path(project, label, ext)
+    chapter_path.write_bytes(result.audio_bytes)
+    chapter_duration = measure_audio_duration_seconds(chapter_path)
+
+    # Chapter-Rohdaten für Diagnose ablegen.
+    chapter_meta_dir = chapter_audio_dir(project) / safe_folder_slug(label)
+    chapter_meta_dir.mkdir(parents=True, exist_ok=True)
+    (chapter_meta_dir / "chapter_tts_text.txt").write_text(full_tts, encoding="utf-8")
+    (chapter_meta_dir / "elevenlabs_timestamps.json").write_text(
+        json.dumps(
+            {
+                "alignment": result.alignment or {},
+                "normalized_alignment": result.normalized_alignment or {},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    if result.response_metadata:
+        (chapter_meta_dir / "elevenlabs_tts_response_metadata.json").write_text(
+            json.dumps(result.response_metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
-        by_id[segment.segment_id] = SegmentTiming(
-            segment_id=segment.segment_id,
+
+    char_source = _char_alignment_source(
+        result.alignment or {}, result.normalized_alignment or {}
+    )
+    times_by_id, align_warnings = _align_segments(full_tts, align_parts, char_source)
+    if not times_by_id:
+        # Ohne Character-Timestamps: proportionale Aufteilung über Kapiteldauer.
+        total_chars = sum(len(body) for _, body in align_parts) or 1
+        cursor = 0.0
+        for segment_id, spoken_body in align_parts:
+            share = len(spoken_body) / total_chars
+            start = cursor
+            end = min(chapter_duration, start + chapter_duration * share)
+            times_by_id[segment_id] = (start, end)
+            cursor = end
+        align_warnings = list(align_warnings) + [
+            "chapter_proportional_fallback_without_character_timestamps"
+        ]
+    if align_warnings:
+        (chapter_meta_dir / "alignment_warnings.json").write_text(
+            json.dumps(align_warnings, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    segment_out_dir = audio_dir(project) / "segments"
+    segment_out_dir.mkdir(parents=True, exist_ok=True)
+    by_id = {item.segment_id: item for item in (existing.segments if existing else [])}
+
+    for index, (segment_id, spoken_body) in enumerate(align_parts):
+        spoken_start, spoken_end = times_by_id.get(
+            segment_id, (0.0, chapter_duration)
+        )
+        start = max(0.0, float(spoken_start))
+        if index + 1 < len(align_parts):
+            next_id = align_parts[index + 1][0]
+            next_start = float(times_by_id.get(next_id, (chapter_duration, 0.0))[0])
+            # Slice bis zum Start des nächsten Segments → Autorenpause bleibt
+            # im Audio des aktuellen Segments (v3-Tags).
+            end = max(start + 0.05, next_start)
+        else:
+            end = max(start + 0.05, float(spoken_end), chapter_duration)
+        end = min(chapter_duration, max(end, float(spoken_end), start + 0.05))
+
+        segment_audio = segment_out_dir / f"{segment_id}{ext}"
+        # Ein Segment oder Slice deckt das ganze Chapter-File ab → kopieren,
+        # kein ffmpeg nötig (Tests / kurze Kapitel).
+        covers_full_chapter = (
+            abs(start) < 1e-6 and abs(end - chapter_duration) < 0.05
+        )
+        if covers_full_chapter:
+            segment_audio.write_bytes(result.audio_bytes)
+        else:
+            _extract_audio_slice(
+                chapter_path,
+                segment_audio,
+                start_seconds=start,
+                end_seconds=end,
+            )
+        duration = measure_audio_duration_seconds(segment_audio)
+
+        sliced_alignment = rebase_alignment_to_slice(
+            char_source, start_seconds=start, end_seconds=end
+        )
+        # Sentence-Alignment auf Spoken-Body (ohne Pause-Tag); Pause steckt
+        # im Slice-Tail und in der Segmentdauer.
+        alignment_doc = persist_segment_tts_alignment(
+            project,
+            segment_id=segment_id,
             script_version=locked.script_version,
-            audio_path=str(audio_path),
+            audio_path=str(segment_audio),
+            audio_duration_seconds=duration,
+            tts_text=spoken_body,
+            alignment=sliced_alignment,
+            normalized_alignment={},
+            response_metadata={
+                **(result.response_metadata or {}),
+                "chapter_tts": True,
+                "chapter_folder": label,
+                "chapter_audio_path": str(chapter_path),
+                "chapter_slice_start_seconds": round(start, 6),
+                "chapter_slice_end_seconds": round(end, 6),
+                "chapter_tts_text_length": len(full_tts),
+            },
+        )
+        by_id[segment_id] = SegmentTiming(
+            segment_id=segment_id,
+            script_version=locked.script_version,
+            audio_path=str(segment_audio),
             duration_seconds=duration,
             audio_status="valid",
-            timestamps_path=alignment.timestamps_path,
-            alignment_path=str(
-                segment_sentence_alignment_path(project, segment.segment_id)
-            ),
+            timestamps_path=alignment_doc.timestamps_path,
+            alignment_path=str(segment_sentence_alignment_path(project, segment_id)),
         )
 
-    # Drop timings for segments that no longer exist in the locked script.
     live_ids = {seg.segment_id for seg in locked.segments}
     live_order = [seg.segment_id for seg in locked.segments]
     merged = [by_id[seg_id] for seg_id in by_id if seg_id in live_ids]
-    # Stable order = locked script order
     order = {seg.segment_id: index for index, seg in enumerate(locked.segments)}
     merged.sort(key=lambda item: order.get(item.segment_id, 10_000))
 
@@ -161,12 +370,130 @@ def _synthesize_segments(
     return document
 
 
+def list_chapter_audio_statuses(project: Project) -> list[ChapterAudioStatus]:
+    """Kapitelstatus für die Audio-UI: vertont / offen / veraltet / unvollständig."""
+    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+        ENHANCED_INTRO_FOLDER_NAME,
+        ensure_confirmed_intro_in_locked_script,
+        is_intro_folder_name,
+    )
+
+    ensure_confirmed_intro_in_locked_script(project)
+    locked = require_locked_script(project)
+    folder_order = [
+        entry.folder_name for entry in list_enabled_dramaturgy_folders(project)
+    ]
+    groups = group_segments_by_folder(locked, folder_order=folder_order)
+    timings = load_segment_timings(project)
+    timing_by_id = {
+        item.segment_id: item for item in (timings.segments if timings else [])
+    }
+    script_version = locked.script_version
+    ext, _ = audio_extension_for_output_format(
+        load_elevenlabs_settings(project).output_format
+    )
+
+    rows: list[ChapterAudioStatus] = []
+    for folder_name, segments in groups:
+        label = folder_name or "(ohne Kapitelzuordnung)"
+        if is_intro_folder_name(folder_name):
+            label = f"{ENHANCED_INTRO_FOLDER_NAME} (Hook)"
+        ready_count = 0
+        stale_count = 0
+        duration = 0.0
+        for seg in segments:
+            item = timing_by_id.get(seg.segment_id)
+            if item is None:
+                continue
+            if item.script_version != script_version:
+                stale_count += 1
+                continue
+            if item.audio_status == "valid" and Path(item.audio_path).is_file():
+                ready_count += 1
+                duration += float(item.duration_seconds or 0.0)
+            elif item.audio_status == "stale":
+                stale_count += 1
+        total = len(segments)
+        if total == 0:
+            status = CHAPTER_AUDIO_OPEN
+        elif ready_count == total:
+            status = CHAPTER_AUDIO_READY
+        elif stale_count > 0 and ready_count == 0:
+            status = CHAPTER_AUDIO_STALE
+        elif ready_count > 0:
+            status = CHAPTER_AUDIO_PARTIAL
+        else:
+            status = CHAPTER_AUDIO_OPEN
+        chapter_path = chapter_audio_path(project, folder_name or label, ext)
+        rows.append(
+            ChapterAudioStatus(
+                folder_name=folder_name or "",
+                label=label,
+                status=status,
+                segment_count=total,
+                ready_segment_count=ready_count,
+                duration_seconds=round(duration, 2),
+                chapter_audio_path=str(chapter_path) if chapter_path.is_file() else "",
+            )
+        )
+    return rows
+
+
+def synthesize_open_chapters_audio(
+    project: Project,
+    *,
+    progress_callback: TtsProgressCallback | None = None,
+) -> SegmentTimingsDocument:
+    """Vertont nur offene/veraltete/unvollständige Kapitel (je 1 Call)."""
+    from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
+        ensure_confirmed_intro_in_locked_script,
+    )
+
+    ensure_confirmed_intro_in_locked_script(project)
+    locked = require_locked_script(project)
+    statuses = list_chapter_audio_statuses(project)
+    open_folders = [row.folder_name for row in statuses if row.is_open]
+    if not open_folders:
+        existing = load_segment_timings(project)
+        if existing is None:
+            raise AudioTimingError("Keine offenen Kapitel — und kein Audio vorhanden.")
+        return existing
+
+    folder_order = [
+        entry.folder_name for entry in list_enabled_dramaturgy_folders(project)
+    ]
+    groups = dict(group_segments_by_folder(locked, folder_order=folder_order))
+    timings = load_segment_timings(project)
+    chapter_total = len(open_folders)
+    for chapter_index, folder_name in enumerate(open_folders, start=1):
+        segments = groups.get(folder_name) or [
+            seg for seg in locked.segments if seg.folder_name == folder_name
+        ]
+        if not segments:
+            continue
+        timings = _synthesize_chapter(
+            project,
+            segments=segments,
+            existing=timings,
+            chapter_index=chapter_index,
+            chapter_total=chapter_total,
+            folder_name=folder_name,
+            progress_callback=progress_callback,
+        )
+    if timings is None:
+        raise AudioTimingError("Keine offenen Kapitel konnten vertont werden.")
+    return timings
+
+
 def synthesize_locked_script_audio(
     project: Project,
     *,
     progress_callback: TtsProgressCallback | None = None,
 ) -> SegmentTimingsDocument:
-    """Erzeugt Audiodateien sequenziell: Intro (falls bestätigt), dann Kapitel."""
+    """Erzeugt Audiodateien sequenziell: Intro (falls bestätigt), dann Kapitel.
+
+    Pro Kapitel genau **ein** ElevenLabs-Call.
+    """
     from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
         ensure_confirmed_intro_in_locked_script,
     )
@@ -183,7 +510,7 @@ def synthesize_locked_script_audio(
     timings: SegmentTimingsDocument | None = None
     chapter_total = len(groups)
     for chapter_index, (folder_name, segments) in enumerate(groups, start=1):
-        timings = _synthesize_segments(
+        timings = _synthesize_chapter(
             project,
             segments=segments,
             existing=timings,
@@ -202,7 +529,7 @@ def synthesize_folder_script_audio(
     *,
     progress_callback: TtsProgressCallback | None = None,
 ) -> SegmentTimingsDocument:
-    """Vertont nur die Segmente eines Dramaturgie-Kapitels (wie klassisch pro Ordner)."""
+    """Vertont ein Dramaturgie-Kapitel in einem ElevenLabs-Call."""
     from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
         ENHANCED_INTRO_FOLDER_NAME,
         ensure_confirmed_intro_in_locked_script,
@@ -221,7 +548,7 @@ def synthesize_folder_script_audio(
             f"Keine Segmente für Kapitel „{folder_name}“ im gesperrten Skript."
         )
     existing = load_segment_timings(project)
-    return _synthesize_segments(
+    return _synthesize_chapter(
         project,
         segments=folder_segments,
         existing=existing,
@@ -237,7 +564,7 @@ def synthesize_intro_script_audio(
     *,
     progress_callback: TtsProgressCallback | None = None,
 ) -> SegmentTimingsDocument:
-    """Vertont das bestätigte Intro als Enhanced-Segment (Intro_segment_001)."""
+    """Vertont das bestätigte Intro in einem ElevenLabs-Call."""
     from otio_app.services.without_voiceover_enhanced.intro_script_bridge import (
         ENHANCED_INTRO_FOLDER_NAME,
         confirmed_intro_text,
