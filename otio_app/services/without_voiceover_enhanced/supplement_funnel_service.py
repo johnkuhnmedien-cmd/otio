@@ -781,6 +781,35 @@ def _resolve_requested_gaps(
     return ordered
 
 
+def _mark_gap_open_or_generic_fallback(
+    project: Project,
+    *,
+    gap: CoverageGap,
+    report: SupplementFunnelReport,
+    gap_report: SupplementFunnelGapReport,
+    ledger: Any,
+    stock_message: str,
+) -> None:
+    """Stock für diesen Gap gescheitert → generischen Ordner-Fallback versuchen."""
+    from otio_app.services.without_voiceover_enhanced.generic_gap_fallback_service import (
+        try_generic_fallback_after_stock_fail,
+    )
+
+    gap_report.message = stock_message
+    if try_generic_fallback_after_stock_fail(
+        project,
+        gap=gap,
+        report=report,
+        gap_report=gap_report,
+        ledger=ledger,
+    ):
+        if gap.gap_id not in report.filled_gap_ids:
+            report.filled_gap_ids.append(gap.gap_id)
+        return
+    if gap.gap_id not in report.open_gap_ids:
+        report.open_gap_ids.append(gap.gap_id)
+
+
 def run_supplement_funnel_for_gaps(
     project: Project,
     *,
@@ -864,6 +893,11 @@ def run_supplement_funnel_for_gaps(
         llm_model=funnel_model,
         requested_gap_ids=[g.gap_id for g in gaps],
     )
+    from otio_app.services.without_voiceover_enhanced.generic_gap_fallback_service import (
+        build_asset_usage_ledger,
+    )
+
+    generic_ledger = build_asset_usage_ledger(project)
 
     previous = load_model(supplement_funnel_report_path(project), SupplementFunnelReport)
     funnel_ok = _funnel_report_matches_cut_plan(
@@ -989,9 +1023,15 @@ def run_supplement_funnel_for_gaps(
         record_by_id = {r.candidate_id: r for r in records}
 
         if not selected:
-            gap_report.message = "Keine geeigneten Kandidaten."
-            report.gaps.append(gap_report)
-            report.open_gap_ids.append(gap.gap_id)
+            _mark_gap_open_or_generic_fallback(
+                project,
+                gap=gap,
+                report=report,
+                gap_report=gap_report,
+                ledger=generic_ledger,
+                stock_message="Keine geeigneten Kandidaten.",
+            )
+            _upsert_gap_report(report, gap_report)
             continue
 
         distribution = format_provider_distribution(pool.provider_candidate_counts)
@@ -1062,9 +1102,15 @@ def run_supplement_funnel_for_gaps(
                 text_llm=text_llm,
             )
         except FunnelRankError as exc:
-            gap_report.message = f"Textprüfung fehlgeschlagen: {exc}"
-            report.gaps.append(gap_report)
-            report.open_gap_ids.append(gap.gap_id)
+            _mark_gap_open_or_generic_fallback(
+                project,
+                gap=gap,
+                report=report,
+                gap_report=gap_report,
+                ledger=generic_ledger,
+                stock_message=f"Textprüfung fehlgeschlagen: {exc}",
+            )
+            _upsert_gap_report(report, gap_report)
             continue
 
         if should_stop and should_stop():
@@ -1180,10 +1226,16 @@ def run_supplement_funnel_for_gaps(
                     vision_llm=vision_llm,
                 )
             except FunnelRankError as exc:
-                gap_report.message = f"Thumbnailprüfung fehlgeschlagen: {exc}"
                 preview_bytes.clear()
-                report.gaps.append(gap_report)
-                report.open_gap_ids.append(gap.gap_id)
+                _mark_gap_open_or_generic_fallback(
+                    project,
+                    gap=gap,
+                    report=report,
+                    gap_report=gap_report,
+                    ledger=generic_ledger,
+                    stock_message=f"Thumbnailprüfung fehlgeschlagen: {exc}",
+                )
+                _upsert_gap_report(report, gap_report)
                 batches = []
                 break
             for cid, scores in thumb_scores.items():
@@ -1214,8 +1266,10 @@ def run_supplement_funnel_for_gaps(
                 report.open_gap_ids.append(gap.gap_id)
             _upsert_gap_report(report, gap_report)
             break
-        if gap.gap_id in report.open_gap_ids and gap_report.message.startswith(
-            "Thumbnail"
+        # Thumbnail-Fail-Pfad hat Gap bereits offen oder via Generic gefüllt.
+        if gap_report.filled or (
+            gap.gap_id in report.open_gap_ids
+            and (gap_report.message or "").startswith("Thumbnail")
         ):
             continue
 
@@ -1245,9 +1299,15 @@ def run_supplement_funnel_for_gaps(
         finalist_ids = pick_finalists_from_batches(records, batch_ids=batches)
         if not finalist_ids:
             gap_report.candidates = records
-            gap_report.message = "Keine Finalisten verfügbar."
-            report.gaps.append(gap_report)
-            report.open_gap_ids.append(gap.gap_id)
+            _mark_gap_open_or_generic_fallback(
+                project,
+                gap=gap,
+                report=report,
+                gap_report=gap_report,
+                ledger=generic_ledger,
+                stock_message="Keine Finalisten verfügbar.",
+            )
+            _upsert_gap_report(report, gap_report)
             preview_bytes.clear()
             continue
 
@@ -1303,9 +1363,15 @@ def run_supplement_funnel_for_gaps(
             )
         except FunnelRankError as exc:
             gap_report.candidates = records
-            gap_report.message = f"Finalvergleich fehlgeschlagen: {exc}"
-            report.gaps.append(gap_report)
-            report.open_gap_ids.append(gap.gap_id)
+            _mark_gap_open_or_generic_fallback(
+                project,
+                gap=gap,
+                report=report,
+                gap_report=gap_report,
+                ledger=generic_ledger,
+                stock_message=f"Finalvergleich fehlgeschlagen: {exc}",
+            )
+            _upsert_gap_report(report, gap_report)
             preview_bytes.clear()
             continue
 
@@ -1319,9 +1385,15 @@ def run_supplement_funnel_for_gaps(
         ]
         if not download_order:
             gap_report.candidates = records
-            gap_report.message = "Nur manual_review — kein automatischer Download."
-            report.gaps.append(gap_report)
-            report.open_gap_ids.append(gap.gap_id)
+            _mark_gap_open_or_generic_fallback(
+                project,
+                gap=gap,
+                report=report,
+                gap_report=gap_report,
+                ledger=generic_ledger,
+                stock_message="Nur manual_review — kein automatischer Download.",
+            )
+            _upsert_gap_report(report, gap_report)
             continue
 
         gap_report.winner_candidate_id = download_order[0].candidate_id
@@ -1412,11 +1484,17 @@ def run_supplement_funnel_for_gaps(
             if gap.gap_id not in report.filled_gap_ids:
                 report.filled_gap_ids.append(gap.gap_id)
         else:
-            gap_report.message = (
-                f"Kein export_ready nach {gap_report.full_download_attempts} "
-                "Download-Versuch(en)."
+            _mark_gap_open_or_generic_fallback(
+                project,
+                gap=gap,
+                report=report,
+                gap_report=gap_report,
+                ledger=generic_ledger,
+                stock_message=(
+                    f"Kein export_ready nach {gap_report.full_download_attempts} "
+                    "Download-Versuch(en)."
+                ),
             )
-            report.open_gap_ids.append(gap.gap_id)
         _upsert_gap_report(report, gap_report)
 
     report.message = (
@@ -1425,7 +1503,8 @@ def run_supplement_funnel_for_gaps(
         f"{len(report.open_gap_ids)} offen · "
         f"{report.full_download_count} Voll-Downloads · "
         f"{report.technically_invalid_count} technisch ungültig · "
-        f"{report.fallback_used_count} Fallbacks"
+        f"{report.fallback_used_count} Stock-Fallbacks · "
+        f"{int(report.generic_fallback_count or 0)} Generic-Fallbacks"
         + (" · abgebrochen" if report.stopped else "")
     )
     write_json(supplement_funnel_report_path(project), report)

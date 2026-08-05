@@ -2280,6 +2280,63 @@ def _render_section_funnel(project) -> None:
             else:
                 _start_funnel_job(valid_selected)
 
+    st.markdown("**Generischer Ordner-Fallback**")
+    st.caption(
+        "Wenn Stock/Funnel für einen Gap scheitert, versucht der Funnel "
+        "automatisch ein neutrales Asset aus dem Kapitel-Inventar. "
+        "Hier zusätzlich manuell für alle noch offenen Gaps nachziehen."
+    )
+    if st.button(
+        f"Generische Ordner-Assets für offene Gaps ({open_gaps_count})",
+        key=f"enh_generic_fallback_open_{project.id}",
+        disabled=(not open_gap_ids) or funnel_running,
+        help=(
+            "Weist offenen Gaps vorhandene, neutrale Inventar-Assets zu "
+            "(kein Stock-Download). Respektiert max_asset_usage."
+        ),
+    ):
+        try:
+            from otio_app.services.without_voiceover_enhanced.generic_gap_fallback_service import (
+                apply_generic_fallback_to_open_gaps,
+            )
+
+            batch = apply_generic_fallback_to_open_gaps(project)
+            filled_ids = [
+                r.gap_id for r in batch.results if r.status == "filled"
+            ]
+            st.session_state[f"enh_funnel_pending_deselect_{project.id}"] = (
+                filled_ids
+            )
+            flash_key = f"enh_manual_gap_flash_{project.id}"
+            if batch.filled_count:
+                flash = [
+                    (
+                        "success",
+                        f"{batch.filled_count} Gap(s) mit generischem "
+                        "Ordner-Asset gefüllt. Als Nächstes **Python Timing**.",
+                    )
+                ]
+                if batch.failed_count:
+                    flash.append(
+                        (
+                            "info",
+                            f"{batch.failed_count} Gap(s) ohne passendes "
+                            "Ordner-Asset — bitte manuell zuordnen.",
+                        )
+                    )
+            else:
+                flash = [
+                    (
+                        "info",
+                        "Kein generisches Ordner-Asset verfügbar "
+                        f"({batch.failed_count} Gap(s) geprüft).",
+                    )
+                ]
+            st.session_state[flash_key] = flash
+            st.rerun()
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Generic-Fallback fehlgeschlagen: {exc}")
+
     st.markdown("**Offene Gaps manuell zuordnen**")
     st.caption(
         "Links Gap · Mitte Search-Queries (kopierbar) + Google-Bilder-Links · "
