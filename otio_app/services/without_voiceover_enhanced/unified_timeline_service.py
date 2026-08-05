@@ -1148,6 +1148,12 @@ def resolve_unified_timeline(
     if plan is None:
         raise UnifiedTimelineError("Unified Cut Plan fehlt.")
 
+    from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+        ingest_coverage_gap_inbox,
+    )
+
+    ingest_coverage_gap_inbox(project)
+
     timings = load_segment_timings(project)
     if timings is None:
         raise UnifiedTimelineError("Segment-Timings fehlen.")
@@ -1704,7 +1710,11 @@ def resolve_unified_timeline(
         write_json(narration_timeline_path(project), timeline)
         write_json(final_cut_plan_path(project), final_shadow)
         write_json(rough_cut_plan_path(project), rough_shadow)
-        write_json(coverage_gaps_path(project), coverage_shadow)
+        from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+            persist_coverage_gaps,
+        )
+
+        persist_coverage_gaps(project, coverage_shadow)
         write_json(resolved_timeline_path(project), document)
         write_json(repair_log_path(project), {"repairs": repairs, "errors": errors})
 

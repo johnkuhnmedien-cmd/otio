@@ -34,6 +34,8 @@ NARRATION_TIMELINE_FILENAME = "narration_timeline.json"
 ROUGH_CUT_PLAN_FILENAME = "rough_cut_plan.json"
 UNIFIED_CUT_PLAN_FILENAME = "unified_cut_plan.json"
 COVERAGE_GAPS_FILENAME = "coverage_gaps.json"
+COVERAGE_GAPS_EXTERNAL_FILENAME = "coverage_gaps_external.json"
+COVERAGE_INBOX_SUBDIR = "inbox"
 STOCK_SEARCH_RESULTS_FILENAME = "search_results.json"
 ACCEPTED_SUPPLEMENTS_FILENAME = "accepted_supplements.json"
 SUPPLEMENT_RESOLVE_REPORT_FILENAME = "supplement_resolve_report.json"
@@ -215,6 +217,22 @@ def unified_cut_plan_path(project: Project) -> Path:
 
 def coverage_gaps_path(project: Project) -> Path:
     return coverage_dir(project) / COVERAGE_GAPS_FILENAME
+
+
+def coverage_gaps_external_path(project: Project) -> Path:
+    """Immer aktuelle Gap-Liste für externe Such-/Download-Apps."""
+    return coverage_dir(project) / COVERAGE_GAPS_EXTERNAL_FILENAME
+
+
+def coverage_inbox_dir(project: Project) -> Path:
+    """Drop-Root: externe Apps legen Fill-Medien pro Gap hier ab."""
+    return coverage_dir(project) / COVERAGE_INBOX_SUBDIR
+
+
+def coverage_gap_inbox_dir(project: Project, gap_id: str) -> Path:
+    from otio_app.project_layout import safe_folder_slug
+
+    return coverage_inbox_dir(project) / safe_folder_slug(gap_id or "gap")
 
 
 def stock_search_results_path(project: Project) -> Path:

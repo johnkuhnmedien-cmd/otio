@@ -466,7 +466,11 @@ def persist_intro_unified_plan(
     coverage = carry_over_user_confirmed_weak(coverage, previous_coverage)
     write_json(unified_cut_plan_path(project), merged)
     write_json(rough_cut_plan_path(project), rough)
-    write_json(coverage_gaps_path(project), coverage)
+    from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+        persist_coverage_gaps,
+    )
+
+    persist_coverage_gaps(project, coverage)
     write_json(pause_directives_path(project), {"directives": []})
     return merged
 

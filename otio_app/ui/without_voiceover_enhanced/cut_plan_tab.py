@@ -1950,6 +1950,18 @@ def _render_section_funnel(project) -> None:
         )
 
     coverage = load_model(coverage_gaps_path(project), CoverageGapsDocument)
+    from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+        ingest_coverage_gap_inbox,
+        refresh_coverage_gaps_external_export,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import (
+        coverage_gaps_external_path,
+    )
+
+    # Inbox-Drops der externen App übernehmen, External-JSON aktuell halten.
+    ingest_coverage_gap_inbox(project)
+    external_doc = refresh_coverage_gaps_external_export(project)
+
     # Fix 4: Run-ID-aware Zähler (weak offen bis Merge; stale Funnel ignorieren).
     gap_status = summarize_gap_status(project)
     open_gap_ids = list(gap_status.open_gap_ids)
@@ -1962,6 +1974,12 @@ def _render_section_funnel(project) -> None:
         f"Aktuell: offen **{open_gaps_count}** · "
         f"erfüllt **{filled_gaps_count}** · "
         f"gesamt **{total_gaps}**"
+    )
+    st.caption(
+        "Externe App: "
+        f"`{external_doc.export_path or coverage_gaps_external_path(project)}` "
+        "— Gap-ID, Suchbegriffe, Drop-Ordner (`coverage/inbox/{gap_id}/`). "
+        "Immer aktuell bei Gap-/Fill-Änderungen."
     )
     if gap_status.message:
         st.caption(gap_status.message)

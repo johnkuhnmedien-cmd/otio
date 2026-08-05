@@ -99,8 +99,12 @@ def sanitize_stale_user_confirmed_weak(project: Project) -> int:
             updated.append(gap)
     if not cleared:
         return 0
-    write_json(
-        coverage_gaps_path(project),
+    from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+        persist_coverage_gaps,
+    )
+
+    persist_coverage_gaps(
+        project,
         coverage.model_copy(update={"gaps": updated}),
     )
     return cleared
@@ -464,6 +468,11 @@ def rebind_gap_fills_to_current_run(project: Project) -> dict[str, int]:
                 supplements=updated,
             ),
         )
+        from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+            refresh_coverage_gaps_external_export,
+        )
+
+        refresh_coverage_gaps_external_export(project)
 
     funnel_n = 0
     # Funnel nur anpassen, wenn Accepted-Fills den neuen Lauf verankern —

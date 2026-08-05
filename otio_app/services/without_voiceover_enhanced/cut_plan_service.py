@@ -1179,7 +1179,11 @@ def merge_and_persist_rough_cuts(
     write_json(pause_directives_path(project), {"directives": []})
     write_json(narration_timeline_path(project), timeline)
     write_json(rough_cut_plan_path(project), rough)
-    write_json(coverage_gaps_path(project), coverage)
+    from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+        persist_coverage_gaps,
+    )
+
+    persist_coverage_gaps(project, coverage)
     return rough, coverage
 
 
@@ -1245,7 +1249,11 @@ def search_supplements_for_gaps(
 
     # E2E-2.1: Prosa in search_concepts vor der Stocksuche ersetzen.
     coverage = enrich_coverage_search_concepts(project, coverage)
-    write_json(coverage_gaps_path(project), coverage)
+    from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+        persist_coverage_gaps,
+    )
+
+    persist_coverage_gaps(project, coverage)
 
     enabled = enabled_provider_names(project)
     if not enabled:
@@ -2256,7 +2264,11 @@ def merge_and_persist_unified_cuts(
 
     write_json(unified_cut_plan_path(project), merged)
     write_json(rough_cut_plan_path(project), rough)
-    write_json(coverage_gaps_path(project), coverage)
+    from otio_app.services.without_voiceover_enhanced.coverage_gap_external_export import (
+        persist_coverage_gaps,
+    )
+
+    persist_coverage_gaps(project, coverage)
     write_json(
         pause_directives_path(project),
         {
