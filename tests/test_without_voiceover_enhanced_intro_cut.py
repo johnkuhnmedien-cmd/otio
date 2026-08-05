@@ -750,3 +750,68 @@ def test_filter_resolved_timeline_to_intro() -> None:
     assert len(intro.shots) == 1
     assert intro.shots[0].shot_id == "Intro_slot_001"
     assert intro.total_duration_seconds == 16.5
+
+
+def test_intro_plan_stale_when_locked_script_version_changes(tmp_path) -> None:
+    """Nach Script-Regen zählen alte Intro-Cuts nicht mehr als aktuell."""
+    from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+    from otio_app.models import Project, ProjectMode
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        intro_plan_matches_locked_script,
+        intro_resolved_matches_plan,
+    )
+    from otio_app.services.without_voiceover_enhanced.io_utils import write_json
+    from otio_app.services.without_voiceover_enhanced.models import (
+        EnhancedScriptDocument,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import script_locked_path
+
+    root = tmp_path / "proj"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    project = Project(
+        name="IntroStale",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="de",
+        asset_subdir_names=["Yosemite"],
+        selected_asset_subdirs=["Yosemite"],
+        fps=25.0,
+    )
+    plan = UnifiedCutPlanDocument(
+        script_version="v1",
+        boundaries=[
+            _bound("Intro_cut_000", "Intro_segment_001__s001", "start"),
+            _bound("Intro_cut_001", "Intro_segment_001__s001", "end"),
+        ],
+        slots=[_slot("Intro_slot_001", "strong", "yo_01")],
+    )
+    resolved = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=1.0,
+        shots=[
+            ResolvedShot(
+                shot_id="Intro_slot_001",
+                asset_id="yo_01",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=1.0,
+                source_start_seconds=0.0,
+                source_end_seconds=1.0,
+            )
+        ],
+    )
+    write_json(
+        script_locked_path(project),
+        EnhancedScriptDocument(
+            script_version="script-v2",
+            script_status="locked",
+            narration_full="New intro.",
+            segments=[],
+        ),
+    )
+    assert intro_plan_matches_locked_script(project, plan) is False
+    assert intro_resolved_matches_plan(plan, resolved, project=project) is False
+    # Ohne project-Arg bleibt der Slot-Count-Check (Abwärtskompatibilität).
+    assert intro_resolved_matches_plan(plan, resolved) is True

@@ -67,6 +67,8 @@ class ChapterCutStatus:
     errors: list[str] = field(default_factory=list)
     repairs: list[str] = field(default_factory=list)
     open_gap_ids: list[str] = field(default_factory=list)
+    # Plan/Resolved existieren, gehören aber zu einer anderen Skriptversion.
+    stale_for_script_version: bool = False
 
     @property
     def open_gap_count(self) -> int:
@@ -191,6 +193,27 @@ def chapter_open_gap_ids(
     return ordered
 
 
+def _artifact_matches_locked_script_version(
+    project: Project,
+    artifact_version: str | None,
+) -> bool:
+    """False wenn ein Locked-Script existiert und die Version abweicht.
+
+    Ohne Locked-Script (Tests/Partial-State) gelten Artefakte weiterhin als aktuell.
+    """
+    from otio_app.services.without_voiceover_enhanced.script_lock_service import (
+        load_locked_script,
+    )
+
+    locked = load_locked_script(project)
+    if locked is None:
+        return True
+    current = str(locked.script_version or "").strip()
+    if not current:
+        return True
+    return str(artifact_version or "").strip() == current
+
+
 def get_chapter_cut_status(
     project: Project,
     folder_name: str,
@@ -210,20 +233,42 @@ def get_chapter_cut_status(
     open_ids = chapter_open_gap_ids(
         project, folder_name, open_gap_id_set=open_gap_id_set
     )
+    plan_version_ok = plan is None or _artifact_matches_locked_script_version(
+        project, getattr(plan, "script_version", None)
+    )
+    resolved_version_ok = resolved is None or _artifact_matches_locked_script_version(
+        project, getattr(resolved, "script_version", None)
+    )
+    plan_present = plan is not None and bool(plan.slots)
+    resolved_present = resolved is not None and bool(
+        resolved.shots or resolved.audio_segments
+    )
+    # Alte Cuts nach Skript-Neu-Erzeugung zählen nicht als „fertig“.
+    has_plan = plan_present and plan_version_ok
+    has_resolved = resolved_present and resolved_version_ok
+    matches = (
+        has_plan
+        and has_resolved
+        and chapter_resolved_matches_plan(plan, resolved)
+    )
+    stale = bool(
+        (plan_present and not plan_version_ok)
+        or (resolved_present and not resolved_version_ok)
+    )
     return ChapterCutStatus(
         folder_name=folder_name,
         folder_slug=slug,
-        has_plan=plan is not None and bool(plan.slots),
-        plan_slots=len(plan.slots) if plan is not None else 0,
-        has_resolved=resolved is not None
-        and bool(resolved.shots or resolved.audio_segments),
-        resolved_shots=len(resolved.shots) if resolved is not None else 0,
-        matches=chapter_resolved_matches_plan(plan, resolved),
+        has_plan=has_plan,
+        plan_slots=len(plan.slots) if plan is not None and plan_version_ok else 0,
+        has_resolved=has_resolved,
+        resolved_shots=len(resolved.shots) if resolved is not None and resolved_version_ok else 0,
+        matches=matches,
         plan_path=plan_path,
         resolved_path=resolved_path,
         errors=errors,
         repairs=repairs,
-        open_gap_ids=open_ids,
+        open_gap_ids=open_ids if has_plan else [],
+        stale_for_script_version=stale,
     )
 
 
@@ -756,8 +801,14 @@ def _ensure_intro_resolved(project: Project) -> ResolvedTimelineDocument | None:
     )
 
     if intro_resolved is None or not intro_resolved_matches_plan(
-        intro_plan, intro_resolved
+        intro_plan, intro_resolved, project=project
     ):
+        # Veralteter Intro-Plan (andere Skriptversion) → kein Auto-Resolve;
+        # Aufrufer muss Intro-LLM erneut laufen lassen.
+        if not _artifact_matches_locked_script_version(
+            project, getattr(intro_plan, "script_version", None)
+        ):
+            return None
         intro_resolved = resolve_intro_timeline(project)
     return intro_resolved
 

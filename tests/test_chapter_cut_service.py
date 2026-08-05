@@ -469,6 +469,67 @@ def test_get_chapter_cut_status_green(tmp_path) -> None:
     assert status.matches
     assert status.plan_slots == 1
     assert status.resolved_shots == 1
+    assert status.stale_for_script_version is False
+
+
+def test_get_chapter_cut_status_stale_when_script_version_changes(tmp_path) -> None:
+    """Nach Skript-Regen/Lock zählen alte LLM-Cuts nicht mehr als fertig."""
+    from otio_app.services.without_voiceover_enhanced.models import (
+        EnhancedScriptDocument,
+        ScriptSegment,
+    )
+    from otio_app.services.without_voiceover_enhanced.paths import script_locked_path
+    from otio_app.services.without_voiceover_enhanced.chapter_cut_service import (
+        list_chapters_needing_unified_cut,
+    )
+
+    project = _project(tmp_path)
+    folder = "Yosemite"
+    plan = _plan("Yosemite", slots=1)  # script_version=v1
+    write_json(chapter_unified_cut_plan_path(project, folder), plan)
+    write_json(
+        chapter_resolved_timeline_path(project, folder),
+        ResolvedTimelineDocument(
+            script_version="v1",
+            fps=25.0,
+            total_duration_seconds=1.0,
+            shots=[
+                ResolvedShot(
+                    shot_id="s1",
+                    asset_id="a",
+                    timeline_start_seconds=0.0,
+                    timeline_end_seconds=1.0,
+                    source_start_seconds=0.0,
+                    source_end_seconds=1.0,
+                )
+            ],
+        ),
+    )
+    write_json(
+        script_locked_path(project),
+        EnhancedScriptDocument(
+            script_version="script-v2",
+            script_status="locked",
+            narration_full="New script.",
+            segments=[
+                ScriptSegment(
+                    segment_id="yo_1",
+                    folder_name="Yosemite",
+                    text="New script.",
+                    sequence_index=1,
+                )
+            ],
+        ),
+    )
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.chapter_cut_service.list_body_chapter_names",
+        return_value=["Yosemite"],
+    ):
+        status = get_chapter_cut_status(project, folder)
+        assert status.has_plan is False
+        assert status.matches is False
+        assert status.stale_for_script_version is True
+        assert list_chapters_needing_unified_cut(project) == ["Yosemite"]
 
 
 def test_refresh_merged_does_not_wipe_other_resolved(tmp_path) -> None:
