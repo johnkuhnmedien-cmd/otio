@@ -92,6 +92,7 @@ def test_prompt_requires_author_pause_field_in_raw_mode() -> None:
     assert "author_pause_after_seconds" in prompt
     assert "AUTHOR PAUSES" in prompt
     assert "Do not write [pause X seconds] inside segment.text" in prompt
+    assert "does NOT inject pauses into TTS or timeline audio" in prompt
 
 
 def test_parser_stores_author_pause_seconds() -> None:
@@ -192,7 +193,7 @@ def test_style_guard_flags_missing_author_pauses() -> None:
     )
 
 
-def test_chapter_tts_text_is_one_payload_with_pause_tags() -> None:
+def test_chapter_tts_text_is_one_payload_without_pause_tags() -> None:
     segments = [
         ScriptSegment(
             segment_id="a_001",
@@ -217,12 +218,13 @@ def test_chapter_tts_text_is_one_payload_with_pause_tags() -> None:
         ),
     ]
     full, parts = build_chapter_tts_text(segments, model_id="eleven_v3")
-    assert full == "Fact one. [pause] Fact two. [short pause] Fact three."
+    assert full == "Fact one. Fact two. Fact three."
+    assert "[pause" not in full
     assert [sid for sid, _ in parts] == ["a_001", "a_002", "a_003"]
     assert [body for _, body in parts] == ["Fact one.", "Fact two.", "Fact three."]
 
 
-def test_tts_text_injects_eleven_v3_pause_tags() -> None:
+def test_tts_text_strips_pause_markers_without_injecting_tags() -> None:
     assert map_author_pause_seconds_to_v3_tag(2.0) == "[short pause]"
     assert map_author_pause_seconds_to_v3_tag(3.0) == "[pause]"
     assert map_author_pause_seconds_to_v3_tag(4.0) == "[long pause]"
@@ -232,15 +234,14 @@ def test_tts_text_injects_eleven_v3_pause_tags() -> None:
         author_pause_after_seconds=3.0,
         model_id="eleven_v3",
     )
-    assert with_field == "Achill Island lies west. [pause]"
+    assert with_field == "Achill Island lies west."
 
     with_inline = build_segment_tts_text(
         text="Fact one.\n\n[pause 3 seconds]\n\nFact two.",
         author_pause_after_seconds=0.0,
         model_id="eleven_v3",
     )
-    assert "[pause]" in with_inline
-    assert "[pause 3 seconds]" not in with_inline
+    assert "[pause" not in with_inline
     assert "Fact one." in with_inline and "Fact two." in with_inline
 
     non_v3 = build_segment_tts_text(
@@ -252,7 +253,7 @@ def test_tts_text_injects_eleven_v3_pause_tags() -> None:
     assert non_v3 == "Fact one. Fact two."
 
 
-def test_author_pause_map_skips_timeline_gaps_for_eleven_v3() -> None:
+def test_author_pause_map_never_injects_timeline_gaps() -> None:
     doc = EnhancedScriptDocument(
         segments=[
             ScriptSegment(
@@ -264,11 +265,11 @@ def test_author_pause_map_skips_timeline_gaps_for_eleven_v3() -> None:
             )
         ]
     )
-    assert author_pause_after_map_from_script(doc) == {"A": 3.0}
+    assert author_pause_after_map_from_script(doc) == {}
     assert author_pause_after_map_from_script(doc, model_id="eleven_v3") == {}
     assert author_pause_after_map_from_script(
         doc, model_id="eleven_multilingual_v2"
-    ) == {"A": 3.0}
+    ) == {}
 
 
 def test_narration_timeline_applies_author_and_keyword_pauses() -> None:

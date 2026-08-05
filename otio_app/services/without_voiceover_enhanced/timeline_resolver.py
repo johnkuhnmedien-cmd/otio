@@ -899,6 +899,14 @@ def _build_resolved_audio_segments(
             continue
         audio_path = timing.audio_path
         audio_dur = _entry_audio_duration(entry)
+        base_source = max(
+            0.0, float(getattr(timing, "source_start_seconds", 0.0) or 0.0)
+        )
+        timing_end = float(getattr(timing, "source_end_seconds", 0.0) or 0.0)
+        if timing_end > base_source + 1e-9:
+            audio_dur = min(audio_dur, timing_end - base_source) if audio_dur > 0 else (
+                timing_end - base_source
+            )
         intra = sorted(entry.intra_pauses, key=lambda p: p.source_split_seconds)
         if not intra:
             audio_segments.append(
@@ -908,8 +916,8 @@ def _build_resolved_audio_segments(
                     timeline_start_seconds=entry.start_seconds,
                     timeline_end_seconds=entry.end_seconds,
                     pause_after_seconds=entry.pause_after_seconds,
-                    source_start_seconds=0.0,
-                    source_end_seconds=round(audio_dur, 6),
+                    source_start_seconds=round(base_source, 6),
+                    source_end_seconds=round(base_source + audio_dur, 6),
                 )
             )
             continue
@@ -936,8 +944,8 @@ def _build_resolved_audio_segments(
                     timeline_start_seconds=round(timeline_cursor, 6),
                     timeline_end_seconds=round(timeline_cursor + piece_dur, 6),
                     pause_after_seconds=round(float(pause.pause_seconds), 6),
-                    source_start_seconds=round(source_cursor, 6),
-                    source_end_seconds=round(split, 6),
+                    source_start_seconds=round(base_source + source_cursor, 6),
+                    source_end_seconds=round(base_source + split, 6),
                     split_label=f"after:{pause.after_sentence_id}",
                 )
             )
@@ -950,7 +958,7 @@ def _build_resolved_audio_segments(
             # Rest an letzte Piece-Grenze mergen statt Waisenclip.
             if audio_segments and audio_segments[-1].segment_id == entry.segment_id:
                 prev = audio_segments[-1]
-                prev.source_end_seconds = round(audio_dur, 6)
+                prev.source_end_seconds = round(base_source + audio_dur, 6)
                 prev.timeline_end_seconds = round(
                     prev.timeline_end_seconds + remainder, 6
                 )
@@ -969,8 +977,8 @@ def _build_resolved_audio_segments(
                             timeline_cursor + max(remainder, audio_dur), 6
                         ),
                         pause_after_seconds=round(pause_after, 6),
-                        source_start_seconds=0.0,
-                        source_end_seconds=round(audio_dur, 6),
+                        source_start_seconds=round(base_source, 6),
+                        source_end_seconds=round(base_source + audio_dur, 6),
                     )
                 )
             continue
@@ -982,8 +990,8 @@ def _build_resolved_audio_segments(
                 timeline_start_seconds=round(timeline_cursor, 6),
                 timeline_end_seconds=round(timeline_cursor + remainder, 6),
                 pause_after_seconds=round(pause_after, 6),
-                source_start_seconds=round(source_cursor, 6),
-                source_end_seconds=round(audio_dur, 6),
+                source_start_seconds=round(base_source + source_cursor, 6),
+                source_end_seconds=round(base_source + audio_dur, 6),
                 split_label="tail" if source_cursor > 1e-9 else "",
             )
         )

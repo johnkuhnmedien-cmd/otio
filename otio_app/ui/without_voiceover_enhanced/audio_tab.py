@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import streamlit as st
 
-from otio_app.defaults import ELEVENLABS_MODEL_ID_V3
 from otio_app.services.voiceover_generation.elevenlabs_client import is_elevenlabs_configured
 from otio_app.services.voiceover_generation.elevenlabs_settings_service import (
     load_elevenlabs_settings,
@@ -207,8 +206,8 @@ def render_enhanced_audio_page() -> None:
 
     st.subheader("Kapitel")
     st.caption(
-        f"Ein TTS-Call pro Zeile"
-        f"{' · Pause-Tags für ' + ELEVENLABS_MODEL_ID_V3 if settings.model_id == ELEVENLABS_MODEL_ID_V3 else ''}."
+        "Ein TTS-Call und eine Audiodatei pro Kapitel · "
+        "Pausen baust du selbst in die Kapitel-WAV ein."
     )
 
     for row in chapter_rows:

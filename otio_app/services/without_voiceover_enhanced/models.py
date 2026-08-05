@@ -130,6 +130,9 @@ class SegmentTiming(BaseModel):
     audio_status: str = "valid"  # valid | stale | missing | unreadable
     timestamps_path: str = ""
     alignment_path: str = ""
+    # Offsets innerhalb der Kapitel-Audiodatei (eine Datei pro Kapitel).
+    source_start_seconds: float = 0.0
+    source_end_seconds: float = 0.0
 
 
 class SegmentTimingsDocument(BaseModel):

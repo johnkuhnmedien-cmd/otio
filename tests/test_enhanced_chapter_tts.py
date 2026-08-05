@@ -124,9 +124,6 @@ def test_folder_tts_uses_single_elevenlabs_call(
             response_metadata={"status_code": 200},
         )
 
-    def _fake_slice(source, destination, *, start_seconds, end_seconds):  # noqa: ANN001
-        Path(destination).write_bytes(b"SLICE")
-
     monkeypatch.setattr(
         "otio_app.services.without_voiceover_enhanced.audio_timing_service."
         "synthesize_speech_with_timestamps",
@@ -137,11 +134,6 @@ def test_folder_tts_uses_single_elevenlabs_call(
         "measure_audio_duration_seconds",
         lambda path: 3.0,
     )
-    monkeypatch.setattr(
-        "otio_app.services.without_voiceover_enhanced.audio_timing_service."
-        "_extract_audio_slice",
-        _fake_slice,
-    )
 
     statuses_before = list_chapter_audio_statuses(project)
     assert len(statuses_before) == 1
@@ -150,16 +142,25 @@ def test_folder_tts_uses_single_elevenlabs_call(
 
     doc = synthesize_folder_script_audio(project, "Dublin")
     assert len(calls) == 1
-    assert calls[0] == "One. [pause] Two. [short pause] Three."
+    assert calls[0] == "One. Two. Three."
     assert len(doc.segments) == 3
     assert all(item.audio_status == "valid" for item in doc.segments)
     chapter_file = chapter_audio_path(project, "Dublin", ".wav")
     assert chapter_file.is_file()
     assert chapter_file.read_bytes() == b"FAKEWAV"
+    assert all(item.audio_path == str(chapter_file) for item in doc.segments)
+    assert not (chapter_file.parent.parent / "segments").exists()
 
     statuses_after = list_chapter_audio_statuses(project)
     assert statuses_after[0].status == CHAPTER_AUDIO_READY
     assert statuses_after[0].is_open is False
+
+    # Offsets liegen in der Kapitel-WAV; OTIO nutzt source_start, kein Slice-File.
+    assert doc.segments[0].source_start_seconds == 0.0
+    assert doc.segments[-1].source_end_seconds == 3.0
+    assert all(
+        item.source_end_seconds > item.source_start_seconds for item in doc.segments
+    )
 
     # Bereits vertont → Alle offenen macht keinen weiteren Call.
     synthesize_open_chapters_audio(project)

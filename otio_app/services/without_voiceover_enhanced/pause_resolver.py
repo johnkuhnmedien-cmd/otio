@@ -301,27 +301,14 @@ def author_pause_after_map_from_script(
     *,
     model_id: str | None = None,
 ) -> dict[str, float]:
-    """segment_id → author_pause_after_seconds aus Locked/Draft-Script.
+    """Autorenpausen werden nicht mehr als Timeline-Stille eingefügt.
 
-    Bei `eleven_v3` sind Autorenpausen bereits als Bracket-Tags im TTS-Audio
-    enthalten — dann keine zusätzliche Timeline-Stille (sonst Doppelpausen).
+    Es gibt nur eine Audiodatei pro Kapitel; Pausen baut der Nutzer selbst ein.
+    ``author_pause_after_seconds`` bleibt Metadaten im Script (Rhythmus-Hinweis),
+    LLM/Python fassen die Audio nicht an.
     """
-    from otio_app.defaults import ELEVENLABS_MODEL_ID_V3
-
-    if model_id == ELEVENLABS_MODEL_ID_V3:
-        return {}
-    out: dict[str, float] = {}
-    for segment in getattr(script, "segments", None) or []:
-        sid = str(getattr(segment, "segment_id", "") or "").strip()
-        if not sid:
-            continue
-        try:
-            value = float(getattr(segment, "author_pause_after_seconds", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            value = 0.0
-        if value > 0:
-            out[sid] = round(value, 2)
-    return out
+    del script, model_id
+    return {}
 
 
 def build_narration_timeline(

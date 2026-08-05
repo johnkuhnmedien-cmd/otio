@@ -1,15 +1,15 @@
 """ElevenLabs-Kapitel-Audio + abgeleitete Segment-Timestamps (Enhanced).
 
 Jedes Dramaturgie-Kapitel (inkl. Intro) wird in **einem** ElevenLabs-Call
-vertont — niemals Segment für Segment. Aus dem Chapter-Alignment werden
-anschließend Segment-Slices + satzbezogene Timings abgeleitet, damit Cut-Plan /
-Timeline / OTIO unverändert pro Segment arbeiten können.
+vertont — eine Audiodatei pro Kapitel, keine Segment-Slices. Aus dem
+Chapter-Alignment werden Segment-Offsets + satzbezogene Timings abgeleitet,
+damit Cut-Plan / Timeline / OTIO pro Segment arbeiten können. Pausen baut der
+Nutzer selbst in die Kapitel-WAV ein.
 """
 
 from __future__ import annotations
 
 import json
-import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,7 +38,6 @@ from otio_app.services.without_voiceover_enhanced.models import (
     SegmentTimingsDocument,
 )
 from otio_app.services.without_voiceover_enhanced.paths import (
-    audio_dir,
     chapter_audio_dir,
     chapter_audio_path,
     segment_sentence_alignment_path,
@@ -150,44 +149,6 @@ def mark_audio_stale_for_changed_segments(project: Project) -> SegmentTimingsDoc
     return doc
 
 
-def _extract_audio_slice(
-    source: Path,
-    destination: Path,
-    *,
-    start_seconds: float,
-    end_seconds: float,
-) -> None:
-    """Schneidet ``[start, end]`` aus dem Kapitel-Audio (ffmpeg)."""
-    start = max(0.0, float(start_seconds))
-    end = max(start + 0.05, float(end_seconds))
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(source),
-        "-ss",
-        f"{start:.3f}",
-        "-to",
-        f"{end:.3f}",
-        "-vn",
-        str(destination),
-    ]
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, check=False, timeout=180
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        raise AudioTimingError(
-            f"ffmpeg-Slice fehlgeschlagen für {destination.name}: {exc}"
-        ) from exc
-    if result.returncode != 0 or not destination.is_file():
-        detail = (result.stderr or b"").decode("utf-8", errors="replace")[:400]
-        raise AudioTimingError(
-            f"ffmpeg-Slice fehlgeschlagen für {destination.name}: {detail}"
-        )
-
-
 def _char_alignment_source(
     alignment: dict,
     normalized_alignment: dict,
@@ -281,8 +242,7 @@ def _synthesize_chapter(
             encoding="utf-8",
         )
 
-    segment_out_dir = audio_dir(project) / "segments"
-    segment_out_dir.mkdir(parents=True, exist_ok=True)
+    # Eine Audiodatei pro Kapitel — keine Segment-Slices, keine Audio-Mutation.
     by_id = {item.segment_id: item for item in (existing.segments if existing else [])}
 
     for index, (segment_id, spoken_body) in enumerate(align_parts):
@@ -293,40 +253,20 @@ def _synthesize_chapter(
         if index + 1 < len(align_parts):
             next_id = align_parts[index + 1][0]
             next_start = float(times_by_id.get(next_id, (chapter_duration, 0.0))[0])
-            # Slice bis zum Start des nächsten Segments → Autorenpause bleibt
-            # im Audio des aktuellen Segments (v3-Tags).
             end = max(start + 0.05, next_start)
         else:
             end = max(start + 0.05, float(spoken_end), chapter_duration)
         end = min(chapter_duration, max(end, float(spoken_end), start + 0.05))
-
-        segment_audio = segment_out_dir / f"{segment_id}{ext}"
-        # Ein Segment oder Slice deckt das ganze Chapter-File ab → kopieren,
-        # kein ffmpeg nötig (Tests / kurze Kapitel).
-        covers_full_chapter = (
-            abs(start) < 1e-6 and abs(end - chapter_duration) < 0.05
-        )
-        if covers_full_chapter:
-            segment_audio.write_bytes(result.audio_bytes)
-        else:
-            _extract_audio_slice(
-                chapter_path,
-                segment_audio,
-                start_seconds=start,
-                end_seconds=end,
-            )
-        duration = measure_audio_duration_seconds(segment_audio)
+        duration = max(0.05, end - start)
 
         sliced_alignment = rebase_alignment_to_slice(
             char_source, start_seconds=start, end_seconds=end
         )
-        # Sentence-Alignment auf Spoken-Body (ohne Pause-Tag); Pause steckt
-        # im Slice-Tail und in der Segmentdauer.
         alignment_doc = persist_segment_tts_alignment(
             project,
             segment_id=segment_id,
             script_version=locked.script_version,
-            audio_path=str(segment_audio),
+            audio_path=str(chapter_path),
             audio_duration_seconds=duration,
             tts_text=spoken_body,
             alignment=sliced_alignment,
@@ -344,11 +284,13 @@ def _synthesize_chapter(
         by_id[segment_id] = SegmentTiming(
             segment_id=segment_id,
             script_version=locked.script_version,
-            audio_path=str(segment_audio),
+            audio_path=str(chapter_path),
             duration_seconds=duration,
             audio_status="valid",
             timestamps_path=alignment_doc.timestamps_path,
             alignment_path=str(segment_sentence_alignment_path(project, segment_id)),
+            source_start_seconds=round(start, 6),
+            source_end_seconds=round(end, 6),
         )
 
     live_ids = {seg.segment_id for seg in locked.segments}
