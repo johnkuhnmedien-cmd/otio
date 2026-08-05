@@ -11,6 +11,7 @@ from otio_app.services.inventory_prompt_view import (
     build_slim_folder_inventory,
     load_slim_folder_inventory_file,
     slim_assets_for_cut_plan_prompt,
+    slim_assets_from_slim_document,
     slim_inventory_path_for,
 )
 
@@ -53,6 +54,65 @@ def _folder() -> AssetFolderAnalysis:
             ),
         ],
     )
+
+
+def test_slim_prompt_rows_list_videos_before_photos() -> None:
+    slim = {
+        "kapitel": "Achill Island",
+        "assets": [
+            {
+                "id": "photo_a",
+                "file": "a.jpg",
+                "type": "photo",
+                "dauer_s": None,
+                "beschreibung": "Deserted Village still",
+            },
+            {
+                "id": "video_b",
+                "file": "b.mp4",
+                "type": "video",
+                "dauer_s": 12.0,
+                "beschreibung": "Ruinen eines verlassenen Dorfes",
+            },
+        ],
+    }
+    rows = slim_assets_from_slim_document(slim, folder_name="Achill Island")
+    assert [r["local_asset_id"] for r in rows] == ["video_b", "photo_a"]
+
+
+def test_slim_dedupe_prefers_video_over_longer_photo_description(monkeypatch) -> None:
+    """Gleiche Basisdatei: Video gewinnt gegen Foto, auch bei kürzerer Beschreibung."""
+    monkeypatch.setattr(
+        "otio_app.services.inventory_prompt_view.probe_duration_seconds",
+        lambda path: 10.0 if path.suffix == ".mp4" else None,
+    )
+    folder = AssetFolderAnalysis(
+        folder="Achill Island",
+        description="Achill",
+        media_files=[],
+        assets=[
+            AssetMediaAnalysis(
+                path="/media/sheep_cliff.jpg",
+                description=(
+                    "A verified Achill Island landscape where sheep are visibly "
+                    "grazing across wet or heath-like blanket bog, with the habitat "
+                    "readable as an extensive open terrain."
+                ),
+                asset_id="photo_sheep",
+                media_type="image",
+            ),
+            AssetMediaAnalysis(
+                path="/media/sheep_cliff.mp4",
+                description="Markierte Schafe auf einer Klippe an der Küste.",
+                asset_id="video_sheep",
+                media_type="video",
+            ),
+        ],
+    )
+    slim = build_slim_folder_inventory(folder, probe_duration=True)
+    ids = [a["id"] for a in slim["assets"]]
+    assert ids == ["video_sheep"]
+    assert slim["assets"][0]["type"] == "video"
 
 
 def test_build_slim_filters_and_dedupes(monkeypatch) -> None:

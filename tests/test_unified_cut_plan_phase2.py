@@ -49,6 +49,8 @@ def test_build_unified_cut_prompt_contains_core_contract() -> None:
     assert "1.0s safety" in prompt
     assert "LOCKED SCRIPT:" in prompt
     assert "LOCAL ASSETS" in prompt
+    assert "VIDEO OVER PHOTO" in prompt
+    assert "Prefer chapter-local VIDEO over PHOTO" in prompt
 
 
 def test_build_unified_cut_prompt_optional_blocks_omitted_when_empty() -> None:
