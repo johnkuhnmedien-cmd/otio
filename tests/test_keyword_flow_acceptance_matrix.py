@@ -154,6 +154,13 @@ def test_31_06_intro_ignores_keyword_flow() -> None:
         dramaturgy_text="d",
     )
     assert "KEYWORD FLOW MARKER" not in intro
+    # Reserve closer id only — no KF fit fields in the JSON schema.
+    assert "closing_fallback_asset_id" in intro
+    assert '"closing_fallback_asset_fit"' not in intro
+    intro_svc = Path(
+        "otio_app/services/without_voiceover_enhanced/intro_cut_service.py"
+    ).read_text(encoding="utf-8")
+    assert "apply_keyword_flow_rules=False" in intro_svc
 
 
 def test_31_07_rhythm_unchanged_marker() -> None:

@@ -580,6 +580,9 @@ def resolve_intro_timeline(
             include_chapter=is_intro_folder_name,
             preroll_override=INTRO_OPENING_HOLD_SEC,
             postroll_override=postroll,
+            # Intro nutzt eigenen Prompt (strong-only) — keine KF-Body-
+            # Pflichtfelder (closing_fallback_asset_fit / …).
+            apply_keyword_flow_rules=False,
         )
     except UnifiedTimelineError as exc:
         raise IntroCutError(str(exc)) from exc
