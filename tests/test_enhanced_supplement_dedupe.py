@@ -186,6 +186,67 @@ def test_download_reuses_without_network(tmp_path: Path) -> None:
     assert path == media
 
 
+def test_scan_finds_same_path_different_ids(tmp_path: Path) -> None:
+    """Gleicher Dateipfad, zwei Asset-IDs — auch ohne Provider-Metadata."""
+    project = _project(tmp_path)
+    media = Path(project.project_root) / "Cliffs of Moher" / "same.mp4"
+    media.write_bytes(b"same-bytes")
+    inv = AssetFolderAnalysis(
+        folder="Cliffs of Moher",
+        assets=[
+            AssetMediaAnalysis(path=str(media), asset_id="manual_a"),
+            AssetMediaAnalysis(path=str(media), asset_id="manual_b"),
+        ],
+        media_files=[str(media)],
+    )
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, "Cliffs of Moher"), inv
+    )
+    groups = scan_enhanced_inventory_duplicates(project)
+    assert len(groups) == 1
+    assert set(groups[0].remove_asset_ids) | {groups[0].keep_asset_id} == {
+        "manual_a",
+        "manual_b",
+    }
+
+
+def test_scan_discovers_inventory_json_when_project_lists_empty(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    project.asset_subdir_names = []
+    project.selected_asset_subdirs = []
+    media = Path(project.project_root) / "Cliffs of Moher" / "x.mp4"
+    media.write_bytes(b"x")
+    inv = AssetFolderAnalysis(
+        folder="Cliffs of Moher",
+        assets=[
+            AssetMediaAnalysis(
+                path=str(media),
+                asset_id="pexels_video_1",
+                provider="pexels",
+                license_metadata={
+                    "provider": "pexels",
+                    "provider_asset_id": "1",
+                },
+            ),
+            AssetMediaAnalysis(
+                path=str(media),
+                asset_id="supplement_pexels_1",
+                provider="pexels",
+                license_metadata={
+                    "provider": "pexels",
+                    "provider_asset_id": "1",
+                },
+            ),
+        ],
+        media_files=[str(media)],
+    )
+    save_folder_inventory(
+        get_folder_inventory_path(project.work_dir_path, "Cliffs of Moher"), inv
+    )
+    groups = scan_enhanced_inventory_duplicates(project)
+    assert len(groups) == 1
+
+
 def test_cleanup_collapses_inventory_duplicates(tmp_path: Path) -> None:
     project = _project(tmp_path)
     keep = Path(project.project_root) / "Cliffs of Moher" / "keep.mp4"

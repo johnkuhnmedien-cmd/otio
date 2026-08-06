@@ -2365,7 +2365,8 @@ def _render_section_funnel(project) -> None:
     st.caption(
         "Mehrere Funnel-/Cut-Plan-Läufe können dasselbe Stock-Asset unter "
         "verschiedenen IDs speichern — dann greifen max usage / Abstand nicht. "
-        "Aufräumen klappt Inventar-Zeilen mit gleicher Provider-ID zusammen "
+        "Aufräumen klappt Inventar-Zeilen zusammen bei gleicher Provider-ID, "
+        "gleichem Dateipfad oder gleichem Download-Hash "
         "(z. B. `pexels_video_123` und `supplement_pexels_123`). "
         "Danach Keyword-Flow-Cut neu erzeugen."
     )
@@ -2376,18 +2377,28 @@ def _render_section_funnel(project) -> None:
 
     enh_dup_groups = scan_enhanced_inventory_duplicates(project)
     enh_dup_count = sum(len(g.remove_asset_ids) for g in enh_dup_groups)
-    st.caption(
-        f"Gefunden: **{enh_dup_count}** Doppel-ID(s) in "
-        f"**{len(enh_dup_groups)}** Gruppe(n)."
-        if enh_dup_groups
-        else "Keine Provider-ID-Duplikate im Enhanced-Inventar."
-    )
+    if enh_dup_groups:
+        st.caption(
+            f"Gefunden: **{enh_dup_count}** Doppel-ID(s) in "
+            f"**{len(enh_dup_groups)}** Gruppe(n)."
+        )
+    else:
+        st.info(
+            "Kein Inventar-Duplikat gefunden (Provider-ID / gleicher Pfad / "
+            "gleicher Download-Hash). Der Aufräumen-Button ist deshalb "
+            "deaktiviert. Duplikate unter `{Ordner}/_supplemental/` bitte "
+            "über **0 Clean Media** bzw. Supplement-Assets aufräumen."
+        )
     dedupe_col1, dedupe_col2 = st.columns(2)
     with dedupe_col1:
         if st.button(
             "Duplikate prüfen",
             key=f"enh_inv_dedupe_preview_{project.id}",
             disabled=not enh_dup_groups,
+            help=(
+                "Vorschau der gefundenen Inventar-Duplikate. "
+                "Grau = aktuell keine Treffer."
+            ),
         ):
             with st.expander("Duplikat-Vorschau", expanded=True):
                 for group in enh_dup_groups:
@@ -2404,7 +2415,8 @@ def _render_section_funnel(project) -> None:
             type="primary",
             disabled=not enh_dup_groups or funnel_running,
             help=(
-                "Entfernt doppelte Inventar-Zeilen derselben Provider-Asset-ID. "
+                "Entfernt doppelte Inventar-Zeilen (Provider-ID, gleicher Pfad "
+                "oder gleicher Download-Hash). Grau = nichts zum Aufräumen. "
                 "Optional danach Cut neu erzeugen."
             ),
         ):

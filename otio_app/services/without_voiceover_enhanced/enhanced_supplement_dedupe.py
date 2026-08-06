@@ -489,16 +489,88 @@ def _keeper_inventory_rank(asset: Any) -> tuple:
     return (clean_bonus, approved, pass_bonus, stable_bonus, size)
 
 
+def _inventory_folder_names(
+    project: Project,
+    folder_names: Iterable[str] | None = None,
+) -> list[str]:
+    """Ordner aus Argument, Projektliste und vorhandenen Inventory-JSONs."""
+    if folder_names is not None:
+        return [name for name in folder_names if str(name or "").strip()]
+
+    names: list[str] = []
+    for name in project.asset_subdir_names or []:
+        if name and name not in names:
+            names.append(name)
+    for name in project.selected_asset_subdirs or []:
+        if name and name not in names:
+            names.append(name)
+
+    # Alle Inventory-JSONs unter _otio_enhanced/inventory/ — auch wenn die
+    # Projektliste unvollständig ist (sonst Scan = 0 und Button bleibt grau).
+    try:
+        from otio_app.project_layout import get_inventory_dir
+
+        inv_dir = get_inventory_dir(project.work_dir_path)
+        if inv_dir.is_dir():
+            for path in sorted(inv_dir.glob("*.json")):
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    continue
+                folder = str(payload.get("folder") or "").strip()
+                if folder and folder not in names:
+                    names.append(folder)
+    except Exception:  # noqa: BLE001
+        pass
+    return names
+
+
+def _resolved_path_key(raw_path: str | None) -> str | None:
+    path = _path_ok(raw_path)
+    if path is None:
+        return None
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    return f"path:{resolved}"
+
+
+def _content_hash_key(raw_path: str | None) -> str | None:
+    """SHA256 nur für Supplement-/Stock-Downloads (nicht alle Originale)."""
+    path = _path_ok(raw_path)
+    if path is None:
+        return None
+    norm = str(path).replace("\\", "/").lower()
+    if "stock/downloads" not in norm and "/_supplemental/" not in norm:
+        return None
+    try:
+        from otio_app.services.media_utils import file_sha256
+
+        digest = file_sha256(path)
+    except Exception:  # noqa: BLE001
+        return None
+    if not digest:
+        return None
+    return f"sha256:{digest}"
+
+
+def _identity_for_group_key(key: str, sample: Any) -> ProviderIdentity:
+    ident = provider_identity_for_inventory_asset(sample)
+    if ident is not None:
+        return ident
+    # Synthetische Identity für Pfad-/Hash-Gruppen (UI + Cleanup).
+    kind, _, rest = key.partition(":")
+    slug = safe_folder_slug((rest or key)[:48]) or "dup"
+    return ProviderIdentity(provider=kind or "dup", provider_asset_id=slug)
+
+
 def scan_enhanced_inventory_duplicates(
     project: Project,
     folder_names: Iterable[str] | None = None,
 ) -> list[InventoryDuplicateGroup]:
-    """Inventar-Zeilen mit gleicher Provider-ID → Keeper + entfernen."""
-    folders = list(
-        folder_names
-        if folder_names is not None
-        else (project.asset_subdir_names or project.selected_asset_subdirs or [])
-    )
+    """Inventar-Duplikate: gleiche Provider-ID, gleicher Dateipfad oder gleicher Hash."""
+    folders = _inventory_folder_names(project, folder_names)
     groups: list[InventoryDuplicateGroup] = []
     for folder in folders:
         inventory = load_folder_inventory(project, folder)
@@ -506,18 +578,92 @@ def scan_enhanced_inventory_duplicates(
             continue
         by_key: dict[str, list[Any]] = {}
         for asset in inventory.assets or []:
+            keys: list[str] = []
             ident = provider_identity_for_inventory_asset(asset)
-            if ident is None:
+            if ident is not None:
+                keys.append(ident.key)
+            path_key = _resolved_path_key(getattr(asset, "path", None))
+            if path_key:
+                keys.append(path_key)
+            hash_key = _content_hash_key(getattr(asset, "path", None))
+            if hash_key:
+                keys.append(hash_key)
+            # Deduplizierte Keys pro Asset, damit ein Asset nicht mehrfach
+            # in derselben Gruppe landet.
+            for key in dict.fromkeys(keys):
+                by_key.setdefault(key, []).append(asset)
+
+        # Assets können über mehrere Keys verknüpft sein (provider + path).
+        # Union-Find über Asset-IDs, damit z. B. A~B (path) und B~C (provider)
+        # eine Gruppe werden.
+        parent: dict[str, str] = {}
+
+        def _find(x: str) -> str:
+            root = x
+            while parent.get(root, root) != root:
+                root = parent[root]
+            while parent.get(x, x) != x:
+                nxt = parent[x]
+                parent[x] = root
+                x = nxt
+            return root
+
+        def _union(a: str, b: str) -> None:
+            ra, rb = _find(a), _find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        asset_by_id: dict[str, Any] = {}
+        for assets in by_key.values():
+            ids = []
+            for asset in assets:
+                aid = str(getattr(asset, "asset_id", "") or "").strip()
+                if not aid:
+                    continue
+                asset_by_id[aid] = asset
+                parent.setdefault(aid, aid)
+                ids.append(aid)
+            for left, right in zip(ids, ids[1:]):
+                _union(left, right)
+
+        clusters: dict[str, list[Any]] = {}
+        for aid, asset in asset_by_id.items():
+            clusters.setdefault(_find(aid), []).append(asset)
+
+        for _root, assets in sorted(clusters.items()):
+            # Einzigartige Asset-IDs
+            unique: dict[str, Any] = {}
+            for asset in assets:
+                aid = str(getattr(asset, "asset_id", "") or "").strip()
+                if aid and aid not in unique:
+                    unique[aid] = asset
+            if len(unique) < 2:
                 continue
-            by_key.setdefault(ident.key, []).append(asset)
-        for key, assets in sorted(by_key.items()):
-            if len(assets) < 2:
-                continue
-            ranked = sorted(assets, key=_keeper_inventory_rank, reverse=True)
+            ranked = sorted(unique.values(), key=_keeper_inventory_rank, reverse=True)
             keep = ranked[0]
             remove = ranked[1:]
-            ident = provider_identity_for_inventory_asset(keep)
-            assert ident is not None
+            # Prefer a real provider key for the group label when available.
+            sample_key = next(
+                (
+                    k
+                    for k, bucket in by_key.items()
+                    if any(
+                        str(getattr(a, "asset_id", "")) == str(keep.asset_id)
+                        for a in bucket
+                    )
+                    and ":" in k
+                    and not k.startswith("path:")
+                    and not k.startswith("sha256:")
+                ),
+                None,
+            )
+            if sample_key is None:
+                sample_key = (
+                    _resolved_path_key(getattr(keep, "path", None))
+                    or _content_hash_key(getattr(keep, "path", None))
+                    or f"dup:{keep.asset_id}"
+                )
+            ident = _identity_for_group_key(sample_key, keep)
             groups.append(
                 InventoryDuplicateGroup(
                     folder_name=folder,
