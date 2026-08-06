@@ -240,6 +240,19 @@ def test_dramaturgy_prompt_variety_mode_contains_variety_instructions() -> None:
     assert "narrative interest" in prompt
 
 
+def test_dramaturgy_prompt_spectacle_first_mode_contains_wow_instructions() -> None:
+    prompt = build_dramaturgy_prompt(
+        project_brief=_sample_brief(),
+        style_profile=_sample_style_profile(),
+        folder_summaries=_sample_folder_summaries(),
+        planning_mode="spectacle_first",
+    )
+    assert "SPECTACLE FIRST" in prompt
+    assert "visual_strength_score" in prompt
+    assert "toward the END" in prompt or "toward the end" in prompt.lower()
+    assert "famous" in prompt.lower() or "widely known" in prompt
+
+
 def test_dramaturgy_prompt_requests_json_only() -> None:
     prompt = build_dramaturgy_prompt(
         project_brief=_sample_brief(),

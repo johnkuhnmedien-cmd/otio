@@ -52,7 +52,7 @@ def test_dramaturgy_page_renders_without_exception(without_voiceover_project: Pr
 def test_dramaturgy_page_has_both_plan_buttons(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Zwei Planungsmodi: Geographie vs. abwechslungsreiche Dramaturgie."""
+    """Drei Planungsmodi: Geographie, Abwechslung, visuell stärkste zuerst."""
     project_id = "dram-two-buttons"
     project_root = tmp_path / "USA"
     (project_root / "Grand Canyon").mkdir(parents=True)
@@ -73,6 +73,7 @@ def test_dramaturgy_page_has_both_plan_buttons(
     button_labels = {button.label for button in at.button}
     assert "Dramaturgie nach Geographie planen" in button_labels
     assert "Abwechslungsreiche Dramaturgie planen" in button_labels
+    assert "Visuell stärkste Orte zuerst planen" in button_labels
     assert "Dramaturgie ohne Thinking" not in button_labels
 
     captions = " ".join(caption.value for caption in at.caption)
@@ -82,6 +83,7 @@ def test_dramaturgy_page_has_both_plan_buttons(
     slider_labels = [slider.label for slider in at.slider]
     assert "Max. Output-Tokens (Ceiling)" in slider_labels
     assert "Abwechslung" in captions
+    assert "verblüffend" in captions or "spannendsten" in captions
 
 
 def test_dramaturgy_page_writes_no_edit_plan_documents(
