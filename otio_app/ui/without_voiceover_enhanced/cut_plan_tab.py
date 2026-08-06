@@ -1347,7 +1347,7 @@ def _render_chapter_cut_rows(
                 detail = status.unsupported_pause_message or (
                     "veraltet (Pausenverlängerungen) — LLM Cut erneut"
                 )
-            elif status.stale_for_script_version:
+            elif status.stale_for_script_version and not status.has_plan:
                 detail = "veraltet (Skript geändert) — LLM Cut erneut"
             else:
                 detail = (
@@ -1357,8 +1357,8 @@ def _render_chapter_cut_rows(
                 )
                 if status.has_resolved:
                     detail += f" · {status.resolved_shots} Shots"
-                elif status.has_plan:
-                    detail += " · Timing fehlt"
+                if status.timing_mismatch_detail:
+                    detail += f" · ⚠ {status.timing_mismatch_detail}"
                 if status.open_gap_count:
                     detail += f" · {status.open_gap_count} Gaps offen"
             st.caption(detail)
@@ -1596,6 +1596,24 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
         f"{len(open_timing_names)} ohne passendes Python-Timing · "
         f"{blocked_timing} Timing blockiert (offene Gaps)."
     )
+    if open_timing_names:
+        preview = ", ".join(open_timing_names[:8])
+        more = (
+            f" (+{len(open_timing_names) - 8})"
+            if len(open_timing_names) > 8
+            else ""
+        )
+        st.warning(
+            f"Python Timing offen für: **{preview}{more}** "
+            "— in der Liste ohne ✅ / mit „Timing fehlt“ bzw. "
+            "„Timing passt nicht“."
+        )
+    if open_llm_names:
+        preview = ", ".join(open_llm_names[:8])
+        more = (
+            f" (+{len(open_llm_names) - 8})" if len(open_llm_names) > 8 else ""
+        )
+        st.caption(f"LLM Cut offen für: {preview}{more}")
     if cut_options.include_middle_frames:
         st.caption(
             "Vision aktiv: Mittel-Frames "
@@ -1736,9 +1754,26 @@ def _render_section_unified(project, options: CutPlanOptions | None = None) -> N
                     only_open=only_open,
                 )
             shots = sum(len(r.shots) for _, r in timed)
-            st.success(
-                f"{len(timed)} Kapitel aufgelöst · {shots} Shots gesamt."
-            )
+            still_open = list_chapters_needing_python_timing(project)
+            if still_open:
+                preview = ", ".join(still_open[:8])
+                more = (
+                    f" (+{len(still_open) - 8})" if len(still_open) > 8 else ""
+                )
+                st.session_state[batch_flash_key] = {
+                    "level": "warning",
+                    "text": (
+                        f"{len(timed)} Kapitel aufgelöst · {shots} Shots — "
+                        f"noch offen: {preview}{more}."
+                    ),
+                }
+            else:
+                st.session_state[batch_flash_key] = {
+                    "level": "success",
+                    "text": (
+                        f"{len(timed)} Kapitel aufgelöst · {shots} Shots gesamt."
+                    ),
+                }
             st.rerun()
         except ChapterCutError as exc:
             st.error(str(exc))

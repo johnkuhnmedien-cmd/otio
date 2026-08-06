@@ -234,6 +234,44 @@ def test_chapter_status_matches_ignores_shortfall_tails() -> None:
     assert chapter_resolved_matches_plan(plan, resolved)
 
 
+def test_chapter_status_matches_ignores_closing_fallback() -> None:
+    """Closing-Fallback ist kein Plan-Slot — sonst permanent „2 offene Timings“."""
+    plan = _plan("Yo", slots=2)
+    resolved = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=12.0,
+        shots=[
+            ResolvedShot(
+                shot_id="Yo_slot_001",
+                asset_id="asset_a",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=5.0,
+                source_start_seconds=0.0,
+                source_end_seconds=5.0,
+            ),
+            ResolvedShot(
+                shot_id="Yo_slot_002",
+                asset_id="asset_b",
+                timeline_start_seconds=5.0,
+                timeline_end_seconds=9.0,
+                source_start_seconds=0.0,
+                source_end_seconds=4.0,
+            ),
+            ResolvedShot(
+                shot_id="Yo_slot_002__closing_fallback",
+                asset_id="asset_c",
+                timeline_start_seconds=9.0,
+                timeline_end_seconds=12.0,
+                source_start_seconds=0.0,
+                source_end_seconds=3.0,
+                editorial_function="chapter_close_fallback",
+            ),
+        ],
+    )
+    assert chapter_resolved_matches_plan(plan, resolved)
+
+
 def test_chapter_status_matches_ignores_keyword_flow_map_opener() -> None:
     """Map-Opener ist kein Plan-Slot — Timing/Alle-OTIO dürfen nicht „offen“ bleiben."""
     plan = _plan("Kilkenny", slots=1)
