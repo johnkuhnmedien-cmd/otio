@@ -105,7 +105,12 @@ STILL_PAN_TRAVEL_MAX = 0.30
 DEFAULT_STILL_PAN_MIN_ASPECT = 1.50  # ~3:2
 DEFAULT_STILL_PAN_MAX_ASPECT = 2.05  # etwas breiter als 16:9
 STILL_PAN_FALLBACK_ZOOM = 0.8
-CUT_PLAN_OPTIONS_SCHEMA_VERSION = "1.9"
+# Intro-only Vorlauf/Nachlauf (LLM-Prompt + Python Timing; unabhängig von Kapiteln).
+DEFAULT_INTRO_VOICEOVER_PREROLL_SEC = 4.0
+DEFAULT_INTRO_VOICEOVER_POSTROLL_SEC = 6.5
+DEFAULT_INTRO_VOICEOVER_POSTROLL_MIN_SEC = 5.0
+DEFAULT_INTRO_VOICEOVER_POSTROLL_MAX_SEC = 8.0
+CUT_PLAN_OPTIONS_SCHEMA_VERSION = "1.10"
 
 
 class CutPlanOptions(BaseModel):
@@ -157,6 +162,19 @@ class CutPlanOptions(BaseModel):
         default=ENHANCED_DEFAULT_VOICEOVER_POSTROLL_SEC, ge=0.0, le=60.0
     )
     voiceover_postroll_mode: TimingMode = TIMING_MODE_FIXED
+    # Intro-Hüllen (Opening vor VO / Closing nach VO) — nicht Kapitel-Settings.
+    intro_voiceover_preroll_sec: float = Field(
+        default=DEFAULT_INTRO_VOICEOVER_PREROLL_SEC, ge=0.0, le=30.0
+    )
+    intro_voiceover_postroll_sec: float = Field(
+        default=DEFAULT_INTRO_VOICEOVER_POSTROLL_SEC, ge=0.0, le=60.0
+    )
+    intro_voiceover_postroll_min_sec: float = Field(
+        default=DEFAULT_INTRO_VOICEOVER_POSTROLL_MIN_SEC, ge=0.0, le=60.0
+    )
+    intro_voiceover_postroll_max_sec: float = Field(
+        default=DEFAULT_INTRO_VOICEOVER_POSTROLL_MAX_SEC, ge=0.0, le=60.0
+    )
     # Asset darf bis zu dieser Unterlänge trotzdem genutzt werden:
     # Shortfall geht an Nachbar-Clips (shot_max darf dabei überschritten werden).
     short_asset_tolerance_sec: float = Field(
@@ -449,6 +467,42 @@ def _normalize_payload(raw: dict[str, Any]) -> CutPlanOptions:
             raw.get("voiceover_postroll_mode", defaults.voiceover_postroll_mode),
             default=defaults.voiceover_postroll_mode,
         ),
+        intro_voiceover_preroll_sec=_clamp_float(
+            raw.get(
+                "intro_voiceover_preroll_sec",
+                defaults.intro_voiceover_preroll_sec,
+            ),
+            default=defaults.intro_voiceover_preroll_sec,
+            lo=0.0,
+            hi=30.0,
+        ),
+        intro_voiceover_postroll_sec=_clamp_float(
+            raw.get(
+                "intro_voiceover_postroll_sec",
+                defaults.intro_voiceover_postroll_sec,
+            ),
+            default=defaults.intro_voiceover_postroll_sec,
+            lo=0.0,
+            hi=60.0,
+        ),
+        intro_voiceover_postroll_min_sec=_clamp_float(
+            raw.get(
+                "intro_voiceover_postroll_min_sec",
+                defaults.intro_voiceover_postroll_min_sec,
+            ),
+            default=defaults.intro_voiceover_postroll_min_sec,
+            lo=0.0,
+            hi=60.0,
+        ),
+        intro_voiceover_postroll_max_sec=_clamp_float(
+            raw.get(
+                "intro_voiceover_postroll_max_sec",
+                defaults.intro_voiceover_postroll_max_sec,
+            ),
+            default=defaults.intro_voiceover_postroll_max_sec,
+            lo=0.0,
+            hi=60.0,
+        ),
         short_asset_tolerance_sec=_clamp_float(
             raw.get("short_asset_tolerance_sec", defaults.short_asset_tolerance_sec),
             default=defaults.short_asset_tolerance_sec,
@@ -553,9 +607,34 @@ def _migrate_cut_plan_options(options: CutPlanOptions) -> CutPlanOptions:
             updates["still_image_pan_travel"] = DEFAULT_STILL_PAN_TRAVEL
     if options.shot_max_sec < options.shot_min_sec:
         updates["shot_max_sec"] = options.shot_min_sec
+    # Intro-Nachlauf: min ≤ preferred ≤ max.
+    post_min = float(options.intro_voiceover_postroll_min_sec)
+    post_max = float(options.intro_voiceover_postroll_max_sec)
+    if post_max < post_min:
+        post_min, post_max = post_max, post_min
+        updates["intro_voiceover_postroll_min_sec"] = post_min
+        updates["intro_voiceover_postroll_max_sec"] = post_max
+    preferred = float(options.intro_voiceover_postroll_sec)
+    clamped_preferred = max(post_min, min(post_max, preferred))
+    if abs(clamped_preferred - preferred) > 1e-9:
+        updates["intro_voiceover_postroll_sec"] = clamped_preferred
     if not updates:
         return options
     return options.model_copy(update=updates)
+
+
+def intro_hold_timings(
+    options: CutPlanOptions | None = None,
+) -> tuple[float, float, float, float]:
+    """Intro Opening/Closing: ``(preroll, postroll_default, post_min, post_max)``."""
+    opts = options if options is not None else default_cut_plan_options()
+    preroll = max(0.0, float(opts.intro_voiceover_preroll_sec))
+    post_min = max(0.0, float(opts.intro_voiceover_postroll_min_sec))
+    post_max = max(post_min, float(opts.intro_voiceover_postroll_max_sec))
+    post_default = max(
+        post_min, min(post_max, float(opts.intro_voiceover_postroll_sec))
+    )
+    return preroll, post_default, post_min, post_max
 
 
 def load_cut_plan_options(project: Project) -> CutPlanOptions:

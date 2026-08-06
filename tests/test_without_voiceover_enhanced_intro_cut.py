@@ -102,6 +102,7 @@ def test_intro_prompt_rules() -> None:
     assert "strong" in prompt
     assert "acceptable" in prompt
     assert "4.0" in prompt
+    assert "between 5.0 and" in prompt
     assert "9.500" in prompt
     assert "shot_min" in prompt
     assert "shot_max" in prompt
@@ -132,6 +133,26 @@ def test_intro_prompt_rules() -> None:
     assert "Antelope" in prompt
 
 
+def test_intro_prompt_uses_configured_hold_timings() -> None:
+    prompt = build_intro_unified_cut_prompt(
+        locked_script_json="{}",
+        segment_timings_json="{}",
+        bundled_inventory_json='{"chapters":{}}',
+        style_profile_text="s",
+        dramaturgy_text="d",
+        intro_preroll_sec=3.0,
+        intro_postroll_sec=7.0,
+        intro_postroll_min_sec=6.0,
+        intro_postroll_max_sec=9.0,
+    )
+    assert "3.0s BEFORE Intro VO" in prompt
+    assert "voiceover_preroll_sec to 3.0" in prompt
+    assert "between 6.0 and" in prompt
+    assert "prefer ~7.0" in prompt
+    assert '"voiceover_preroll_sec": 3.0' in prompt
+    assert '"voiceover_postroll_sec": 7.0' in prompt
+
+
 def test_enforce_intro_strong_only_rejects_acceptable() -> None:
     plan = UnifiedCutPlanDocument(
         script_version="v1",
@@ -160,6 +181,18 @@ def test_clamp_intro_closing_hold() -> None:
     assert clamp_intro_closing_hold(3.0) == 5.0
     assert clamp_intro_closing_hold(7.0) == 7.0
     assert clamp_intro_closing_hold(12.0) == 8.0
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        CutPlanOptions,
+    )
+
+    opts = CutPlanOptions(
+        intro_voiceover_postroll_sec=4.0,
+        intro_voiceover_postroll_min_sec=2.0,
+        intro_voiceover_postroll_max_sec=5.0,
+    )
+    assert clamp_intro_closing_hold(None, options=opts) == 4.0
+    assert clamp_intro_closing_hold(1.0, options=opts) == 2.0
+    assert clamp_intro_closing_hold(9.0, options=opts) == 5.0
 
 
 def test_split_and_merge_intro_body() -> None:
@@ -361,6 +394,102 @@ def test_resolve_intro_timeline_calls_unified_without_persist(tmp_path) -> None:
     assert out.total_duration_seconds == 12.0
     assert intro_resolved_timeline_path(project).is_file()
     assert not resolved_timeline_path(project).exists()
+
+
+def test_resolve_intro_timeline_uses_cut_plan_intro_holds(tmp_path) -> None:
+    from unittest.mock import patch
+
+    from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+    from otio_app.models import Project, ProjectMode
+    from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+        CutPlanOptions,
+        save_cut_plan_options,
+    )
+    from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
+        intro_unified_cut_plan_path,
+        resolve_intro_timeline,
+    )
+    from otio_app.services.without_voiceover_enhanced.io_utils import write_json
+
+    root = tmp_path / "proj"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    project = Project(
+        name="IntroHolds",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="de",
+        asset_subdir_names=["Yosemite"],
+        selected_asset_subdirs=["Yosemite"],
+        fps=25.0,
+    )
+    save_cut_plan_options(
+        project,
+        CutPlanOptions(
+            intro_voiceover_preroll_sec=2.5,
+            intro_voiceover_postroll_sec=7.0,
+            intro_voiceover_postroll_min_sec=6.0,
+            intro_voiceover_postroll_max_sec=9.0,
+        ),
+    )
+    write_json(
+        intro_unified_cut_plan_path(project),
+        UnifiedCutPlanDocument(
+            script_version="v1",
+            boundaries=[
+                _bound("Intro_cut_000", "Intro_segment_001__s001", "start"),
+                _bound("Intro_cut_001", "Intro_segment_001__s001", "end"),
+            ],
+            slots=[_slot("Intro_slot_001", "strong", "yo_01")],
+            voiceover_postroll_sec=7.0,
+        ),
+    )
+    fake = ResolvedTimelineDocument(
+        script_version="v1",
+        fps=25.0,
+        total_duration_seconds=10.0,
+        audio_segments=[
+            ResolvedAudioSegment(
+                segment_id="Intro_segment_001",
+                audio_path="/tmp/intro.wav",
+                timeline_start_seconds=2.5,
+                timeline_end_seconds=8.0,
+            )
+        ],
+        shots=[
+            ResolvedShot(
+                shot_id="Intro_slot_001",
+                asset_id="yo_01",
+                timeline_start_seconds=0.0,
+                timeline_end_seconds=10.0,
+                source_start_seconds=0.0,
+                source_end_seconds=1.0,
+                folder_name="Intro",
+                chapter_id="Intro",
+            )
+        ],
+        chapters=[],
+        voiceover_preroll_sec=2.5,
+        voiceover_postroll_sec=7.0,
+    )
+    captured: dict = {}
+
+    def _fake_resolve(project, plan=None, **kwargs):
+        del project, plan
+        captured.update(kwargs)
+        return fake
+
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.unified_timeline_service.resolve_unified_timeline",
+        _fake_resolve,
+    ):
+        out = resolve_intro_timeline(project)
+
+    assert captured["preroll_override"] == 2.5
+    assert captured["postroll_override"] == 7.0
+    assert out.voiceover_preroll_sec == 2.5
+    assert out.voiceover_postroll_sec == 7.0
 
 
 def test_persist_intro_plan_invalidates_stale_resolved(tmp_path) -> None:

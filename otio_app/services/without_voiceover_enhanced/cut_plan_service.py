@@ -1908,6 +1908,13 @@ def generate_unified_cut_for_folder(
                 format_bundled_inventory_for_prompt,
             )
 
+            from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+                intro_hold_timings,
+            )
+
+            intro_preroll, intro_post, intro_post_min, intro_post_max = (
+                intro_hold_timings(options)
+            )
             prompt = build_intro_unified_cut_prompt(
                 # Kompakt: Intro-Prompt ist durch gebündeltes Inventar schon groß.
                 locked_script_json=context.script_slice.model_dump_json(),
@@ -1921,6 +1928,10 @@ def generate_unified_cut_for_folder(
                 folder_slug=context.folder_slug,
                 sentence_timings_json=sentence_timings_json,
                 intro_audio_duration_seconds=intro_duration,
+                intro_preroll_sec=intro_preroll,
+                intro_postroll_sec=intro_post,
+                intro_postroll_min_sec=intro_post_min,
+                intro_postroll_max_sec=intro_post_max,
             )
         else:
             if use_keyword_flow:
@@ -2068,7 +2079,7 @@ def generate_unified_cut_for_folder(
                 enforce_intro_strong_only,
             )
 
-            plan = enforce_intro_strong_only(plan)
+            plan = enforce_intro_strong_only(plan, options=options)
         _rough, coverage = unified_to_rough(plan)
         return FolderUnifiedCutResult(
             folder_name=display_name,
