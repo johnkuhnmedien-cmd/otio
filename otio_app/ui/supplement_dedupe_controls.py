@@ -42,7 +42,10 @@ def render_all_folders_supplement_dedupe_controls(
         f"**Alle Ordner:** {total_files} Duplikat-Datei(en) in "
         f"{len(per_folder)} von {len(folders)} Ordner(n)"
         if per_folder
-        else f"**Alle Ordner:** keine `_supplemental/`-Duplikate in {len(folders)} Ordner(n)"
+        else (
+            f"**Alle Ordner:** keine `_supplemental/`-Duplikate in {len(folders)} Ordner(n) "
+            "(weder gleiche Provider-ID noch gleicher Dateiinhalt/SHA256)"
+        )
     )
     col1, col2 = st.columns(2)
     with col1:
@@ -50,7 +53,10 @@ def render_all_folders_supplement_dedupe_controls(
             "Alle Ordner prüfen",
             key=f"{key_prefix}_all_preview_{project.id}",
             disabled=not per_folder,
-            help="Vorschau der Duplikate in allen Asset-Ordnern",
+            help=(
+                "Vorschau: Duplikate per Provider-ID oder gleichem Inhalt (SHA256), "
+                "auch bei unterschiedlichen Dateinamen. Grau = keine Treffer."
+            ),
         )
     with col2:
         cleanup_clicked = st.button(
@@ -58,7 +64,10 @@ def render_all_folders_supplement_dedupe_controls(
             key=f"{key_prefix}_all_cleanup_{project.id}",
             type="primary",
             disabled=not per_folder,
-            help="Entfernt doppelte Provider-Downloads in allen Ordnern unter `_supplemental/_…/`",
+            help=(
+                "Entfernt Duplikate unter `_supplemental/_…/` "
+                "(gleiche Provider-ID oder gleicher Dateiinhalt). Grau = nichts gefunden."
+            ),
         )
 
     if preview_clicked and per_folder:
@@ -102,22 +111,29 @@ def render_folder_supplement_dedupe_controls(
     if groups:
         st.caption(
             f"**{folder_name}**: {duplicate_files} Duplikat-Datei(en) in "
-            f"{len(groups)} Provider-Asset-Gruppe(n) unter `_supplemental/`"
+            f"{len(groups)} Gruppe(n) unter `_supplemental/` "
+            "(Provider-ID und/oder gleicher Dateiinhalt)"
         )
     else:
-        st.caption(f"**{folder_name}**: keine `_supplemental/`-Duplikate")
+        st.caption(
+            f"**{folder_name}**: keine `_supplemental/`-Duplikate "
+            "(weder gleiche Provider-ID noch gleicher Dateiinhalt/SHA256)"
+        )
         return
 
     slug = safe_folder_slug(folder_name)
     preview_clicked = st.button(
         "Duplikate prüfen",
         key=f"{key_prefix}_preview_{project.id}_{slug}",
-        help="Gleiche Pexels-/Adobe-IDs — je ID eine Datei behalten",
+        help=(
+            "Gleiche Provider-ID (Sidecar/Dateiname) oder gleicher Inhalt (SHA256) — "
+            "Dateinamen dürfen sich unterscheiden"
+        ),
     )
     cleanup_clicked = st.button(
         "Duplikate aufräumen",
         key=f"{key_prefix}_cleanup_{project.id}_{slug}",
-        help="Entfernt doppelte Downloads unter `_supplemental/_…/`",
+        help="Entfernt Duplikate unter `_supplemental/_…/` (ID oder Hash)",
     )
     if preview_clicked:
         with st.expander(f"Duplikat-Vorschau — {folder_name}", expanded=True):
