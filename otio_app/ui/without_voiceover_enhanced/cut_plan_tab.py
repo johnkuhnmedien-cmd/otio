@@ -770,6 +770,51 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
                 key=f"enh_opt_postroll_mode_{project.id}",
             )
 
+        st.markdown("##### Intro Vorlauf / Nachlauf")
+        st.caption(
+            "Nur Intro: geht in den Intro-LLM-Prompt und das Intro-Python-Timing. "
+            "Unabhängig von den Kapitel-Settings oben."
+        )
+        i1, i2, i3, i4 = st.columns(4)
+        with i1:
+            intro_voiceover_preroll_sec = st.number_input(
+                "Intro Vorlauf (s)",
+                min_value=0.0,
+                max_value=30.0,
+                value=float(current.intro_voiceover_preroll_sec),
+                step=0.5,
+                key=f"enh_opt_intro_preroll_{project.id}",
+                help="Bild vor Intro-VO (Opening-Hold).",
+            )
+        with i2:
+            intro_voiceover_postroll_sec = st.number_input(
+                "Intro Nachlauf Preferenz (s)",
+                min_value=0.0,
+                max_value=60.0,
+                value=float(current.intro_voiceover_postroll_sec),
+                step=0.5,
+                key=f"enh_opt_intro_postroll_{project.id}",
+                help="Bevorzugter Closing-Hold nach Intro-VO (LLM-Zielwert).",
+            )
+        with i3:
+            intro_voiceover_postroll_min_sec = st.number_input(
+                "Intro Nachlauf Min (s)",
+                min_value=0.0,
+                max_value=60.0,
+                value=float(current.intro_voiceover_postroll_min_sec),
+                step=0.5,
+                key=f"enh_opt_intro_postroll_min_{project.id}",
+            )
+        with i4:
+            intro_voiceover_postroll_max_sec = st.number_input(
+                "Intro Nachlauf Max (s)",
+                min_value=0.0,
+                max_value=60.0,
+                value=float(current.intro_voiceover_postroll_max_sec),
+                step=0.5,
+                key=f"enh_opt_intro_postroll_max_{project.id}",
+            )
+
         st.markdown("##### Ordner-Titel (OTIO)")
         folder_title_enabled = st.checkbox(
             "Ordner-Titel einblenden",
@@ -975,7 +1020,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             )
 
         draft = CutPlanOptions(
-            schema_version="1.9",
+            schema_version="1.10",
             cut_plan_mode=str(cut_plan_mode),  # type: ignore[arg-type]
             unified_cut_style=str(unified_cut_style),  # type: ignore[arg-type]
             keyword_flow_allow_onset_overflow=bool(
@@ -998,6 +1043,10 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             voiceover_preroll_mode=str(voiceover_preroll_mode),  # type: ignore[arg-type]
             voiceover_postroll_sec=float(voiceover_postroll_sec),
             voiceover_postroll_mode=str(voiceover_postroll_mode),  # type: ignore[arg-type]
+            intro_voiceover_preroll_sec=float(intro_voiceover_preroll_sec),
+            intro_voiceover_postroll_sec=float(intro_voiceover_postroll_sec),
+            intro_voiceover_postroll_min_sec=float(intro_voiceover_postroll_min_sec),
+            intro_voiceover_postroll_max_sec=float(intro_voiceover_postroll_max_sec),
             short_asset_tolerance_sec=float(short_asset_tolerance_sec),
             folder_title_enabled=bool(folder_title_enabled),
             folder_title_font=str(folder_title_font or current.folder_title_font),

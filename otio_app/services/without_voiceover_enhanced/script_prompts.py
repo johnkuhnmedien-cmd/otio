@@ -1615,10 +1615,18 @@ def build_intro_unified_cut_prompt(
     folder_slug: str = "Intro",
     sentence_timings_json: str = "",
     intro_audio_duration_seconds: float = 0.0,
+    intro_preroll_sec: float = 4.0,
+    intro_postroll_sec: float = 6.5,
+    intro_postroll_min_sec: float = 5.0,
+    intro_postroll_max_sec: float = 8.0,
 ) -> str:
     """Unified-Schema, aber Intro-Sonderregeln (strong-only, bundeltes Inventar)."""
     slug = folder_slug or folder_name or "Intro"
     duration = max(0.1, float(intro_audio_duration_seconds or 0.0))
+    preroll = max(0.0, float(intro_preroll_sec))
+    post_min = max(0.0, float(intro_postroll_min_sec))
+    post_max = max(post_min, float(intro_postroll_max_sec))
+    post_default = max(post_min, min(post_max, float(intro_postroll_sec)))
     sentence_block = ""
     if sentence_timings_json.strip():
         sentence_block = f"""
@@ -1646,10 +1654,11 @@ INTRO-SPECIFIC RULES (CRITICAL — differ from chapter cuts):
 - Never use asset_fit \"acceptable\" or \"weak\". If the best local asset is only
   acceptable/weak, set local_asset_id to null, asset_fit \"none\", and create a
   coverage_gap (inline gap fields + search_concepts).
-- Opening: Python will hold the first slot for 4.0s BEFORE Intro VO starts.
-  Set voiceover_preroll_sec to 4.0.
-- Closing: Python will hold the last slot for 5–8s AFTER Intro VO ends.
-  Set voiceover_postroll_sec between 5 and 8 (prefer ~6.5 unless justified).
+- Opening: Python will hold the first slot for {preroll:.1f}s BEFORE Intro VO
+  starts. Set voiceover_preroll_sec to {preroll:.1f}.
+- Closing: Python will hold the last slot for {post_min:.1f}–{post_max:.1f}s
+  AFTER Intro VO ends. Set voiceover_postroll_sec between {post_min:.1f} and
+  {post_max:.1f} (prefer ~{post_default:.1f} unless justified).
 - CRITICAL: preroll/postroll do NOT fill gaps inside the VO. Your boundaries
   must already cover the full VO carpet (start→end). Python only adds hold
   before first VO and after last VO — it will NOT extend a last shot that
@@ -1690,9 +1699,9 @@ KEYWORD / CONTEXT CUTS (CRITICAL — understand the whole Intro first):
   through any remaining VO (outro line, tag, breath) until the true VO end.
   Do NOT place the final boundary at the last keyword — place it at the last
   sentence end.
-- Opening hold is separate: slot 1 may begin 4.0s before VO (Python preroll).
-  From VO start onward, keyword-onset sync applies to justified place/list
-  cuts only.
+- Opening hold is separate: slot 1 may begin {preroll:.1f}s before VO
+  (Python preroll). From VO start onward, keyword-onset sync applies to
+  justified place/list cuts only.
 - Prefer WORD TIMINGS: for justified keyword/list cuts, set alignment
   \"mid_sentence\" and offset_seconds from words[].offset_seconds of the spoken
   keyword (or the first word of a multi-word place name). Fall back to text
@@ -1765,8 +1774,8 @@ RETURN STRICT JSON ONLY. No Markdown. No comments. No trailing commas.
 OUTPUT SCHEMA:
 
 {{
-  "voiceover_preroll_sec": 4.0,
-  "voiceover_postroll_sec": 6.5,
+  "voiceover_preroll_sec": {preroll:.1f},
+  "voiceover_postroll_sec": {post_default:.1f},
   "closing_fallback_asset_id": "different_strong_asset_than_last_slot",
   "pause_directives": [],
   "boundaries": [

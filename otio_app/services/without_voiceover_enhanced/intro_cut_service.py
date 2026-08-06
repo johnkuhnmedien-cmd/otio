@@ -8,6 +8,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 from otio_app.models import Project
+from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
+    DEFAULT_INTRO_VOICEOVER_POSTROLL_MAX_SEC,
+    DEFAULT_INTRO_VOICEOVER_POSTROLL_MIN_SEC,
+    DEFAULT_INTRO_VOICEOVER_POSTROLL_SEC,
+    DEFAULT_INTRO_VOICEOVER_PREROLL_SEC,
+    CutPlanOptions,
+    intro_hold_timings,
+    load_cut_plan_options,
+)
 from otio_app.services.without_voiceover_enhanced.cut_plan_service import (
     _local_assets_payload,
     generate_unified_cut_for_folder,
@@ -41,10 +50,11 @@ from otio_app.services.without_voiceover_enhanced.script_lock_service import (
     require_locked_script,
 )
 
-INTRO_OPENING_HOLD_SEC = 4.0
-INTRO_CLOSING_HOLD_DEFAULT_SEC = 6.5
-INTRO_CLOSING_HOLD_MIN_SEC = 5.0
-INTRO_CLOSING_HOLD_MAX_SEC = 8.0
+# Defaults = Cut-Plan-Settings (UI). Konstanten bleiben für Tests/Import-Kompatibilität.
+INTRO_OPENING_HOLD_SEC = DEFAULT_INTRO_VOICEOVER_PREROLL_SEC
+INTRO_CLOSING_HOLD_DEFAULT_SEC = DEFAULT_INTRO_VOICEOVER_POSTROLL_SEC
+INTRO_CLOSING_HOLD_MIN_SEC = DEFAULT_INTRO_VOICEOVER_POSTROLL_MIN_SEC
+INTRO_CLOSING_HOLD_MAX_SEC = DEFAULT_INTRO_VOICEOVER_POSTROLL_MAX_SEC
 
 INTRO_BUNDLED_INVENTORY_FILENAME = "intro_bundled_inventory.json"
 INTRO_RESOLVED_TIMELINE_FILENAME = "intro_resolved_timeline.json"
@@ -75,16 +85,21 @@ def intro_unified_cut_plan_path(project: Project) -> Path:
     return cut_dir(project) / INTRO_CUT_PLAN_FILENAME
 
 
-def clamp_intro_closing_hold(value: float | None) -> float:
-    hold = (
-        INTRO_CLOSING_HOLD_DEFAULT_SEC
-        if value is None
-        else float(value)
-    )
-    return max(
-        INTRO_CLOSING_HOLD_MIN_SEC,
-        min(INTRO_CLOSING_HOLD_MAX_SEC, hold),
-    )
+def clamp_intro_closing_hold(
+    value: float | None,
+    *,
+    default: float = INTRO_CLOSING_HOLD_DEFAULT_SEC,
+    min_sec: float = INTRO_CLOSING_HOLD_MIN_SEC,
+    max_sec: float = INTRO_CLOSING_HOLD_MAX_SEC,
+    options: CutPlanOptions | None = None,
+) -> float:
+    if options is not None:
+        _preroll, default, min_sec, max_sec = intro_hold_timings(options)
+        del _preroll
+    hold = default if value is None else float(value)
+    lo = min(float(min_sec), float(max_sec))
+    hi = max(float(min_sec), float(max_sec))
+    return max(lo, min(hi, hold))
 
 
 def build_bundled_inventory_for_intro(
@@ -194,7 +209,11 @@ def _is_intro_pause(directive: PauseDirective, *, slug: str) -> bool:
     return _is_intro_id(segment, slug=slug) or _is_intro_id(sentence, slug=slug)
 
 
-def enforce_intro_strong_only(plan: UnifiedCutPlanDocument) -> UnifiedCutPlanDocument:
+def enforce_intro_strong_only(
+    plan: UnifiedCutPlanDocument,
+    *,
+    options: CutPlanOptions | None = None,
+) -> UnifiedCutPlanDocument:
     """Nur strong behalten; acceptable/weak → none + Gap-Felder."""
     updated_slots: list[CutSlot] = []
     for index, slot in enumerate(plan.slots, start=1):
@@ -231,8 +250,10 @@ def enforce_intro_strong_only(plan: UnifiedCutPlanDocument) -> UnifiedCutPlanDoc
                 }
             )
         )
-    preroll = INTRO_OPENING_HOLD_SEC
-    postroll = clamp_intro_closing_hold(plan.voiceover_postroll_sec)
+    preroll, _post_default, _lo, _hi = intro_hold_timings(options)
+    postroll = clamp_intro_closing_hold(
+        plan.voiceover_postroll_sec, options=options
+    )
     return plan.model_copy(
         update={
             "slots": updated_slots,
@@ -437,7 +458,8 @@ def persist_intro_unified_plan(
     )
 
     locked = require_locked_script(project)
-    intro_plan = enforce_intro_strong_only(intro_plan)
+    options = load_cut_plan_options(project)
+    intro_plan = enforce_intro_strong_only(intro_plan, options=options)
     intro_plan = intro_plan.model_copy(update={"pause_directives": []})
     write_json(intro_unified_cut_plan_path(project), intro_plan)
     # Alter Resolved-Stand darf OTIO nicht mehr antreiben.
@@ -517,7 +539,8 @@ def generate_intro_unified_cut(
     if result.status != "PASS" or result.plan is None:
         raise IntroCutError(result.error or "Intro Unified Cut fehlgeschlagen.")
 
-    plan = enforce_intro_strong_only(result.plan)
+    options = load_cut_plan_options(project)
+    plan = enforce_intro_strong_only(result.plan, options=options)
     persist_intro_unified_plan(project, plan)
     gap_count = sum(1 for s in plan.slots if str(s.asset_fit) == "none")
     return IntroCutGenerateResult(
@@ -553,9 +576,9 @@ def resolve_intro_timeline(
 ) -> ResolvedTimelineDocument:
     """Intro-only Python Timing aus ``intro_unified_cut_plan.json``.
 
-    Nutzt den Intro-Plan (ohne Cut-Plan shot_min), Opening 4s / Closing 5–8s.
-    Schreibt nur ``intro_resolved_timeline.json`` — die Gesamt-Timeline bleibt
-    unverändert.
+    Nutzt den Intro-Plan (ohne Cut-Plan shot_min) und Intro-Hold-Settings
+    (Vorlauf / Nachlauf min–max). Schreibt nur ``intro_resolved_timeline.json``
+    — die Gesamt-Timeline bleibt unverändert.
     """
     del provider, model, llm_callable  # API-Kompatibilität zur UI.
     from otio_app.services.without_voiceover_enhanced.unified_timeline_service import (
@@ -569,8 +592,12 @@ def resolve_intro_timeline(
         raise IntroCutError(
             "Intro-Cut-Plan fehlt — zuerst „Intro: LLM Schnitt“."
         )
-    plan = enforce_intro_strong_only(plan)
-    postroll = clamp_intro_closing_hold(plan.voiceover_postroll_sec)
+    options = load_cut_plan_options(project)
+    preroll, _post_default, _lo, _hi = intro_hold_timings(options)
+    plan = enforce_intro_strong_only(plan, options=options)
+    postroll = clamp_intro_closing_hold(
+        plan.voiceover_postroll_sec, options=options
+    )
     try:
         resolved = resolve_unified_timeline(
             project,
@@ -578,7 +605,7 @@ def resolve_intro_timeline(
             allow_open_gaps=True,
             persist=False,
             include_chapter=is_intro_folder_name,
-            preroll_override=INTRO_OPENING_HOLD_SEC,
+            preroll_override=preroll,
             postroll_override=postroll,
             # Intro nutzt eigenen Prompt (strong-only) — keine KF-Body-
             # Pflichtfelder (closing_fallback_asset_fit / …).
@@ -612,7 +639,7 @@ def resolve_intro_timeline(
     # Explizite Intro-Hüllen (nicht Kapitel-Settings).
     intro_resolved = intro_resolved.model_copy(
         update={
-            "voiceover_preroll_sec": INTRO_OPENING_HOLD_SEC,
+            "voiceover_preroll_sec": preroll,
             "voiceover_postroll_sec": postroll,
             "errors": list(resolved.errors or []),
             "repairs": list(resolved.repairs or []),

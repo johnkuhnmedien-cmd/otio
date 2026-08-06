@@ -26,7 +26,7 @@ def test_pan_defaults_off() -> None:
     assert opts.still_image_pan_travel == 0.02
     assert opts.still_image_pan_min_aspect == 1.50
     assert opts.still_image_pan_max_aspect == 2.05
-    assert opts.schema_version == "1.9"
+    assert opts.schema_version == "1.10"
 
 
 def test_normalize_legacy_keeps_pan_off() -> None:
@@ -34,7 +34,7 @@ def test_normalize_legacy_keeps_pan_off() -> None:
     assert opts.still_image_pan_mode == STILL_PAN_MODE_OFF
     assert 0.01 <= opts.still_image_pan_travel <= 0.30
     assert opts.still_image_pan_travel == 0.02
-    assert opts.schema_version == "1.9"
+    assert opts.schema_version == "1.10"
 
 
 def test_normalize_migrates_legacy_pan_travel() -> None:
@@ -46,7 +46,7 @@ def test_normalize_migrates_legacy_pan_travel() -> None:
         }
     )
     assert opts.still_image_pan_travel == 0.02
-    assert opts.schema_version == "1.9"
+    assert opts.schema_version == "1.10"
 
     opts_mid = _normalize_payload(
         {
@@ -55,7 +55,7 @@ def test_normalize_migrates_legacy_pan_travel() -> None:
         }
     )
     assert opts_mid.still_image_pan_travel == 0.02
-    assert opts_mid.schema_version == "1.9"
+    assert opts_mid.schema_version == "1.10"
 
 
 def test_normalize_clamps_pan_travel() -> None:
