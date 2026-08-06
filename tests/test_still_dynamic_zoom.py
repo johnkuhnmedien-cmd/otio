@@ -53,7 +53,7 @@ def test_cut_plan_options_model_accepts_dynamic_fields() -> None:
         still_image_dynamic_zoom_enabled=True,
         still_image_dynamic_zoom_factor=1.2,
     )
-    assert opts.schema_version == "1.7"
+    assert opts.schema_version == "1.8"
     dumped = opts.model_dump()
     assert dumped["still_image_dynamic_zoom_enabled"] is True
     assert dumped["still_image_dynamic_zoom_factor"] == 1.2

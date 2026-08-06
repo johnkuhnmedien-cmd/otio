@@ -941,14 +941,15 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
         )
         still_image_pan_travel = st.number_input(
             "Schwenk-Weg (Anteil der Bildbreite)",
-            min_value=0.05,
+            min_value=0.02,
             max_value=0.30,
             value=float(current.still_image_pan_travel),
             step=0.01,
             key=f"enh_opt_still_pan_travel_{project.id}",
             help=(
-                "0.12 = ca. 12 % der Frame-Breite. Mehr Weg = stärkerer Schwenk "
-                "und etwas mehr Zoom (keine Ränder). Gilt für Cover-fähige Stills."
+                "Default 0.04 = ca. 4 % der Frame-Breite (subtil). "
+                "Mehr Weg = stärkerer Schwenk und etwas mehr Zoom. "
+                "Gilt für Cover-fähige Stills."
             ),
         )
         pan_a1, pan_a2 = st.columns(2)
@@ -974,7 +975,7 @@ def _render_cut_plan_settings(project) -> CutPlanOptions:
             )
 
         draft = CutPlanOptions(
-            schema_version="1.7",
+            schema_version="1.8",
             cut_plan_mode=str(cut_plan_mode),  # type: ignore[arg-type]
             unified_cut_style=str(unified_cut_style),  # type: ignore[arg-type]
             keyword_flow_allow_onset_overflow=bool(

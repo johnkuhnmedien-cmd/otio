@@ -23,16 +23,30 @@ from otio_app.services.without_voiceover_enhanced.media_hold import (
 def test_pan_defaults_off() -> None:
     opts = default_cut_plan_options()
     assert opts.still_image_pan_mode == STILL_PAN_MODE_OFF
-    assert opts.still_image_pan_travel == 0.12
+    assert opts.still_image_pan_travel == 0.04
     assert opts.still_image_pan_min_aspect == 1.50
     assert opts.still_image_pan_max_aspect == 2.05
-    assert opts.schema_version == "1.7"
+    assert opts.schema_version == "1.8"
 
 
 def test_normalize_legacy_keeps_pan_off() -> None:
     opts = _normalize_payload({"schema_version": "1.5", "shot_min_sec": 4.0})
     assert opts.still_image_pan_mode == STILL_PAN_MODE_OFF
-    assert 0.05 <= opts.still_image_pan_travel <= 0.30
+    assert 0.02 <= opts.still_image_pan_travel <= 0.30
+    assert opts.still_image_pan_travel == 0.04
+    assert opts.schema_version == "1.8"
+
+
+def test_normalize_migrates_legacy_pan_travel() -> None:
+    opts = _normalize_payload(
+        {
+            "schema_version": "1.7",
+            "still_image_pan_mode": "ltr",
+            "still_image_pan_travel": 0.12,
+        }
+    )
+    assert opts.still_image_pan_travel == 0.04
+    assert opts.schema_version == "1.8"
 
 
 def test_normalize_clamps_pan_travel() -> None:
@@ -204,7 +218,7 @@ def test_export_near_16x9_covers_even_when_pan_mode_off(tmp_path: Path) -> None:
     assert out == out_hold.resolve()
     assert seen["image_path"] == photo.resolve() or seen["image_path"] == photo
     assert seen["pan_direction"] == STILL_PAN_MODE_LTR
-    assert float(seen["pan_travel"] or 0) >= 0.05
+    assert float(seen["pan_travel"] or 0) >= 0.02
     # Style darf für Cover-Stills nicht aktiv sein.
     assert styled.call_args.kwargs.get("enabled") is False
 
