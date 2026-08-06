@@ -386,6 +386,7 @@ def _ensure_shot_media_for_export(
     *,
     fps: float,
     catalog: AssetCatalog | None = None,
+    media_fill_cache: dict[str, Path] | None = None,
 ) -> tuple[Path, float, float, float, float]:
     """Validiert Shot-Medien.
 
@@ -393,6 +394,9 @@ def _ensure_shot_media_for_export(
 
     Führendes Schwarz gehört in Clean Media (``_trim_tiny_leading_black``),
     nicht in den OTIO-Export.
+
+    ``media_fill_cache``: optionaler Pfad-Cache (Gate + Export teilen denselben),
+    damit Aspect-Fill nicht zweimal pro Asset läuft.
     """
     label = f"{shot.shot_id} / {shot.asset_id}"
     if not (shot.resolved_media_path or "").strip():
@@ -461,27 +465,35 @@ def _ensure_shot_media_for_export(
         )
 
     folder = str(shot.folder_name or "").strip() or "_enhanced"
-    # Video-Aspect-Fill auf Projektgröße (Cover/Crop), analog klassischem
-    # auto_zoom_fill — Enhanced erzwingt das beim OTIO-Export, damit Resolve
-    # keine Letterbox bei Ultrawide-Stock (z. B. 2048×1080) zeigt.
-    # Still-Holds oben sind bereits gerendert und werden übersprungen.
+    # Nur Cover-Fill wenn Aspect ≠ Projekt-16:9 (z. B. 2048×1080).
+    # Bereits 16:9 (auch andere Pixelgröße) wird nicht neu encodiert.
+    cache_key = ""
     try:
-        from otio_app.services.otio_media_transform import (
-            ensure_export_media_for_export,
-        )
+        cache_key = str(path.resolve())
+    except OSError:
+        cache_key = str(path)
+    if media_fill_cache is not None and cache_key in media_fill_cache:
+        path = media_fill_cache[cache_key]
+    else:
+        try:
+            from otio_app.services.otio_media_transform import (
+                ensure_export_media_for_export,
+            )
 
-        filled = ensure_export_media_for_export(
-            project,
-            folder,
-            path,
-            auto_zoom_fill=True,
-        )
-        if filled.is_file():
-            path = filled.resolve()
-    except Exception as exc:  # noqa: BLE001
-        raise EnhancedOtioExportError(
-            f"{label}: Video-Aspect-Fill fehlgeschlagen — {exc}"
-        ) from exc
+            filled = ensure_export_media_for_export(
+                project,
+                folder,
+                path,
+                auto_zoom_fill=True,
+            )
+            if filled.is_file():
+                path = filled.resolve()
+            if media_fill_cache is not None and cache_key:
+                media_fill_cache[cache_key] = path
+        except Exception as exc:  # noqa: BLE001
+            raise EnhancedOtioExportError(
+                f"{label}: Video-Aspect-Fill fehlgeschlagen — {exc}"
+            ) from exc
 
     probe_avail, media_dur, rate = _validate_video_file(path, label=label, fps=fps)
     source_start = float(shot.source_start_seconds)
@@ -529,6 +541,8 @@ def _ensure_shot_media_for_export(
 def validate_resolved_timeline_for_production(
     project: Project,
     resolved: ResolvedTimelineDocument,
+    *,
+    media_fill_cache: dict[str, Path] | None = None,
 ) -> list[str]:
     """Unabhängig von resolved.errors — reale Medien-/Range-/Kapitel-Prüfung."""
     errors: list[str] = []
@@ -709,7 +723,11 @@ def validate_resolved_timeline_for_production(
         try:
             path, avail_start, source_start, source_end, _rate = (
                 _ensure_shot_media_for_export(
-                    project, shot, fps=fps, catalog=catalog
+                    project,
+                    shot,
+                    fps=fps,
+                    catalog=catalog,
+                    media_fill_cache=media_fill_cache,
                 )
             )
         except EnhancedOtioExportError as exc:
@@ -952,13 +970,17 @@ def export_otio_from_resolved_timeline(
         raise EnhancedOtioExportError("Aufgelöste Timeline fehlt — kein OTIO-Export.")
 
     fps = float(resolved.fps or project.fps or 25.0)
+    # Gate + Clip-Bau teilen denselben Fill-Cache (kein Doppel-Transcode).
+    media_fill_cache: dict[str, Path] = {}
 
     if not allow_errors:
         if resolved.errors:
             raise EnhancedOtioExportError(
                 "Aufgelöste Timeline enthält Fehler: " + "; ".join(resolved.errors)
             )
-        gate_errors = validate_resolved_timeline_for_production(project, resolved)
+        gate_errors = validate_resolved_timeline_for_production(
+            project, resolved, media_fill_cache=media_fill_cache
+        )
         if gate_errors:
             raise EnhancedOtioExportError(
                 "Produktions-Export blockiert (Medien/Range-Gate): "
@@ -991,7 +1013,11 @@ def export_otio_from_resolved_timeline(
         try:
             media_path, avail_start, source_start, source_end, rate = (
                 _ensure_shot_media_for_export(
-                    project, shot, fps=fps, catalog=catalog
+                    project,
+                    shot,
+                    fps=fps,
+                    catalog=catalog,
+                    media_fill_cache=media_fill_cache,
                 )
             )
         except EnhancedOtioExportError:
@@ -1161,11 +1187,14 @@ def export_portable_otio_package(
         raise EnhancedOtioExportError("Aufgelöste Timeline fehlt — kein OTIO-Export.")
 
     fps = float(resolved.fps or project.fps or 25.0)
+    media_fill_cache: dict[str, Path] = {}
     if resolved.errors:
         raise EnhancedOtioExportError(
             "Aufgelöste Timeline enthält Fehler: " + "; ".join(resolved.errors)
         )
-    gate_errors = validate_resolved_timeline_for_production(project, resolved)
+    gate_errors = validate_resolved_timeline_for_production(
+        project, resolved, media_fill_cache=media_fill_cache
+    )
     if gate_errors:
         raise EnhancedOtioExportError(
             "Produktions-Export blockiert (Medien/Range-Gate): "
@@ -1215,7 +1244,11 @@ def export_portable_otio_package(
             video_track.append(otio.schema.Gap(source_range=_time_range(gap, fps)))
         media_path, avail_start, source_start, source_end, rate = (
             _ensure_shot_media_for_export(
-                project, shot, fps=fps, catalog=catalog
+                project,
+                shot,
+                fps=fps,
+                catalog=catalog,
+                media_fill_cache=media_fill_cache,
             )
         )
         source_duration = source_end - source_start
