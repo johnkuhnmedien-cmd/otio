@@ -72,6 +72,8 @@ class ChapterCutStatus:
     # Keyword-Flow-Plan mit nicht-leeren pause_directives (nicht mehr unterstützt).
     stale_for_unsupported_pauses: bool = False
     unsupported_pause_message: str = ""
+    # Warum timing_ready∧¬matches (UI: welche Kapitel sind die „2 offenen“).
+    timing_mismatch_detail: str = ""
 
     @property
     def open_gap_count(self) -> int:
@@ -130,13 +132,17 @@ def _is_non_plan_envelope_shot(shot: ResolvedShot) -> bool:
     """Shots außerhalb der Unified-Plan-Slotkette (Match-/Offen-Zähler).
 
     - ``__shortfall``: Dauer-Lücken-Tail nach einem Slot
+    - ``__closing_fallback``: Reserve-Closer bei Narrations-Restlücke
     - Keyword-Flow Map-Opener: technischer 9s-Vorspann vor dem Kapitel
     """
     shot_id = str(getattr(shot, "shot_id", "") or "")
-    if shot_id.endswith("__shortfall"):
+    if shot_id.endswith("__shortfall") or shot_id.endswith("__closing_fallback"):
         return True
     editorial = str(getattr(shot, "editorial_function", "") or "").strip().lower()
-    if editorial == "technical_chapter_map_opener":
+    if editorial in {
+        "technical_chapter_map_opener",
+        "chapter_close_fallback",
+    }:
         return True
     if shot_id.endswith("_map_opener"):
         return True
@@ -149,8 +155,9 @@ def chapter_resolved_matches_plan(
 ) -> bool:
     """True wenn jedes Plan-Slot einen Parent-Shot hat.
 
-    ``__shortfall``-Tails und Keyword-Flow-Map-Opener zählen nicht extra —
-    sonst wirken gültige Kapitel permanent „offen“ (Timing/Alle-OTIO).
+    ``__shortfall``-Tails, ``__closing_fallback`` und Keyword-Flow-Map-Opener
+    zählen nicht extra — sonst wirken gültige Kapitel permanent „offen“
+    (Timing/Alle-OTIO).
     """
     if plan is None or resolved is None:
         return False
@@ -160,6 +167,24 @@ def chapter_resolved_matches_plan(
         if not _is_non_plan_envelope_shot(shot)
     ]
     return len(parent_shots) == len(plan.slots)
+
+
+def chapter_timing_mismatch_detail(
+    plan: UnifiedCutPlanDocument | None,
+    resolved: ResolvedTimelineDocument | None,
+) -> str:
+    """Kurzer UI-Hinweis warum Plan und Resolved nicht matchen."""
+    if plan is None:
+        return "kein Plan"
+    if resolved is None:
+        return "Timing fehlt"
+    parent_count = sum(
+        1 for shot in resolved.shots if not _is_non_plan_envelope_shot(shot)
+    )
+    slot_count = len(plan.slots)
+    if parent_count == slot_count:
+        return ""
+    return f"Timing passt nicht ({parent_count} Parent-Shots ≠ {slot_count} Slots)"
 
 
 def invalidate_chapter_resolved_timeline(project: Project, folder_name: str) -> bool:
@@ -297,6 +322,16 @@ def get_chapter_cut_status(
         (plan_present and not plan_version_ok)
         or (resolved_present and not resolved_version_ok)
     )
+    mismatch_detail = ""
+    if has_plan and not matches and not unsupported_pauses:
+        if not has_resolved:
+            mismatch_detail = "Timing fehlt"
+        elif stale:
+            mismatch_detail = "Timing veraltet (Skript geändert)"
+        else:
+            mismatch_detail = chapter_timing_mismatch_detail(plan, resolved) or (
+                "Timing passt nicht zum Plan"
+            )
     if unsupported_pauses and KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE not in errors:
         errors = list(errors) + [KEYWORD_FLOW_UNSUPPORTED_PAUSE_EXTENSIONS_MESSAGE]
     return ChapterCutStatus(
@@ -327,6 +362,7 @@ def get_chapter_cut_status(
             if unsupported_pauses
             else ""
         ),
+        timing_mismatch_detail=mismatch_detail,
     )
 
 
