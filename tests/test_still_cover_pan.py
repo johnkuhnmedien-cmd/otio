@@ -20,18 +20,18 @@ from otio_app.services.without_voiceover_enhanced.media_hold import (
 )
 
 
-def test_pan_defaults_off() -> None:
+def test_pan_defaults_alternate() -> None:
     opts = default_cut_plan_options()
-    assert opts.still_image_pan_mode == STILL_PAN_MODE_OFF
+    assert opts.still_image_pan_mode == STILL_PAN_MODE_ALTERNATE
     assert opts.still_image_pan_travel == 0.02
     assert opts.still_image_pan_min_aspect == 1.50
     assert opts.still_image_pan_max_aspect == 2.05
     assert opts.schema_version == "1.10"
 
 
-def test_normalize_legacy_keeps_pan_off() -> None:
+def test_normalize_legacy_defaults_pan_alternate() -> None:
     opts = _normalize_payload({"schema_version": "1.5", "shot_min_sec": 4.0})
-    assert opts.still_image_pan_mode == STILL_PAN_MODE_OFF
+    assert opts.still_image_pan_mode == STILL_PAN_MODE_ALTERNATE
     assert 0.01 <= opts.still_image_pan_travel <= 0.30
     assert opts.still_image_pan_travel == 0.02
     assert opts.schema_version == "1.10"
@@ -73,10 +73,15 @@ def test_resolve_still_pan_direction_modes() -> None:
     assert resolve_still_pan_direction("off") is None
     assert resolve_still_pan_direction("ltr") == STILL_PAN_MODE_LTR
     assert resolve_still_pan_direction("rtl") == STILL_PAN_MODE_RTL
-    a = resolve_still_pan_direction(STILL_PAN_MODE_ALTERNATE, shot_id="shot_a")
-    b = resolve_still_pan_direction(STILL_PAN_MODE_ALTERNATE, shot_id="shot_b")
-    assert a in {STILL_PAN_MODE_LTR, STILL_PAN_MODE_RTL}
-    assert b in {STILL_PAN_MODE_LTR, STILL_PAN_MODE_RTL}
+    assert resolve_still_pan_direction(
+        STILL_PAN_MODE_ALTERNATE, shot_index=0
+    ) == STILL_PAN_MODE_LTR
+    assert resolve_still_pan_direction(
+        STILL_PAN_MODE_ALTERNATE, shot_index=1
+    ) == STILL_PAN_MODE_RTL
+    assert resolve_still_pan_direction(
+        STILL_PAN_MODE_ALTERNATE, shot_index=2
+    ) == STILL_PAN_MODE_LTR
 
 
 def test_cover_pan_filter_fills_and_pans() -> None:
@@ -87,13 +92,15 @@ def test_cover_pan_filter_fills_and_pans() -> None:
         height=1080,
         direction="ltr",
         pan_travel=0.12,
+        end_zoom_factor=1.2,  # muss ignoriert werden (kein Zoom-in)
     )
     assert "force_original_aspect_ratio=increase" in vf
     assert "crop=1920:1080" in vf
     assert "zoompan=" in vf
     assert "1920x1080" in vf
-    # z = 1/(1-0.12) ≈ 1.1364
-    assert "1.1364" in vf
+    # z = 1/(1-0.12) ≈ 1.1364 — konstant, keine Zoom-Animation
+    assert "z='1.1364'" in vf
+    assert "1.1364+" not in vf
     assert "(iw-iw/zoom)*on/" in vf
 
     vf_rtl = still_hold_cover_pan_filter(
