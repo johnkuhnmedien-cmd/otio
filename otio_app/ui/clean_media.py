@@ -370,8 +370,10 @@ def render_clean_media_page() -> None:
     with st.expander("Supplement-Duplikate unter `_supplemental/` aufräumen", expanded=False):
         st.caption(
             "Ohne Voice-Over gibt es keinen Supplement-Assets-Tab. "
-            "Hier kannst du doppelte Provider-Downloads in "
-            "`{Ordner}/_supplemental/_…/` bereinigen (auch relevant für Clean Media)."
+            "Hier kannst du doppelte Downloads in "
+            "`{Ordner}/_supplemental/_…/` bereinigen (auch relevant für Clean Media). "
+            "Erkennung unabhängig vom Dateinamen: gleiche Provider-ID in Sidecar/Name "
+            "**oder** gleicher Dateiinhalt (Größe + SHA256)."
         )
         from otio_app.ui.supplement_dedupe_controls import (
             render_all_folders_supplement_dedupe_controls,

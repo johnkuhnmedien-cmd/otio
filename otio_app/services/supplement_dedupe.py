@@ -106,6 +106,27 @@ def _identity_from_path(path: Path, *, default_provider: str) -> tuple[str, str]
     return provider, match.group("asset_id")
 
 
+def iter_supplement_media_paths(project: Project, folder_name: str) -> list[Path]:
+    """Alle Mediendateien unter ``{folder}/_supplemental/_provider/`` (auch ohne ID)."""
+    root = get_folder_supplemental_dir(project.project_root_path, folder_name)
+    if not root.is_dir():
+        return []
+    found: list[Path] = []
+    try:
+        children = sorted(root.iterdir(), key=lambda path: path.name.casefold())
+    except OSError:
+        return []
+    for provider_dir in children:
+        try:
+            if not provider_dir.is_dir() or not provider_dir.name.startswith("_"):
+                continue
+        except OSError:
+            continue
+        for media_path in list_media_files(provider_dir):
+            found.append(media_path)
+    return found
+
+
 def iter_supplement_on_disk(project: Project, folder_name: str) -> list[SupplementOnDisk]:
     """Alle Supplement-Medien eines Ordners mit Provider-Asset-Identität."""
     root = get_folder_supplemental_dir(project.project_root_path, folder_name)
@@ -197,28 +218,154 @@ def _keeper_rank(entry: SupplementOnDisk) -> tuple:
     return (approved, downloaded, mtime, size)
 
 
+def _file_size(path: Path) -> int:
+    try:
+        return int(path.stat().st_size)
+    except OSError:
+        return -1
+
+
+def _on_disk_for_path(
+    path: Path,
+    *,
+    default_provider: str = "unknown",
+) -> SupplementOnDisk:
+    identity = _identity_from_path(path, default_provider=default_provider)
+    if identity is not None:
+        provider, provider_asset_id = identity
+    else:
+        # Ordnername ``_adobe`` / ``_pexels`` als Provider-Hinweis.
+        parent = path.parent.name
+        provider = _provider_from_dir(path.parent) if parent.startswith("_") else default_provider
+        provider = normalize_provider_name(provider)
+        provider_asset_id = ""
+    return SupplementOnDisk(
+        path=path,
+        provider=provider,
+        provider_asset_id=provider_asset_id,
+        sidecar=load_sidecar(path),
+    )
+
+
+def normalize_provider_name(provider: str) -> str:
+    text = (provider or "").strip().casefold()
+    if text.startswith("_"):
+        text = text[1:]
+    if text in {"adobe", "adobestock"}:
+        return "adobe_stock"
+    return text or "unknown"
+
+
 def scan_supplement_duplicates(project: Project, folder_name: str) -> list[DuplicateGroup]:
-    """Gruppiert gleiche Provider-Asset-IDs; Keeper bleibt, Rest ist entfernen."""
-    by_key: dict[tuple[str, str], list[SupplementOnDisk]] = {}
-    for entry in iter_supplement_on_disk(project, folder_name):
-        by_key.setdefault((entry.provider, entry.provider_asset_id), []).append(entry)
+    """Duplikate unter ``_supplemental/``: Provider-ID **oder** gleicher Dateiinhalt.
+
+    Dateinamen dürfen sich unterscheiden — gleiche SHA256 (bei gleicher Größe)
+    gelten als Duplikat. Dateien ohne Provider-ID in Name/Sidecar werden über
+    den Hash trotzdem erfasst.
+    """
+    from otio_app.services.media_utils import file_sha256
+
+    identified = iter_supplement_on_disk(project, folder_name)
+    all_paths = iter_supplement_media_paths(project, folder_name)
+    by_path: dict[str, SupplementOnDisk] = {}
+    for entry in identified:
+        by_path[_path_key(entry.path)] = entry
+    for path in all_paths:
+        key = _path_key(path)
+        if key not in by_path:
+            by_path[key] = _on_disk_for_path(path)
+
+    if len(by_path) < 2:
+        return []
+
+    # Union-Find über Pfad-Keys.
+    parent: dict[str, str] = {key: key for key in by_path}
+
+    def _find(x: str) -> str:
+        root = x
+        while parent.get(root, root) != root:
+            root = parent[root]
+        while parent.get(x, x) != x:
+            nxt = parent[x]
+            parent[x] = root
+            x = nxt
+        return root
+
+    def _union(a: str, b: str) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    # 1) Gleiche Provider-Asset-ID
+    by_provider: dict[tuple[str, str], list[str]] = {}
+    for key, entry in by_path.items():
+        if not entry.provider_asset_id:
+            continue
+        by_provider.setdefault(
+            (entry.provider, entry.provider_asset_id), []
+        ).append(key)
+    for keys in by_provider.values():
+        for left, right in zip(keys, keys[1:]):
+            _union(left, right)
+
+    # 2) Gleicher Inhalt: erst nach Dateigröße clustern, dann SHA256
+    by_size: dict[int, list[str]] = {}
+    for key, entry in by_path.items():
+        size = _file_size(entry.path)
+        if size <= 0:
+            continue
+        by_size.setdefault(size, []).append(key)
+
+    for size, keys in by_size.items():
+        if len(keys) < 2:
+            continue
+        by_hash: dict[str, list[str]] = {}
+        for key in keys:
+            try:
+                digest = file_sha256(by_path[key].path)
+            except OSError:
+                continue
+            if not digest:
+                continue
+            by_hash.setdefault(digest, []).append(key)
+        for hash_keys in by_hash.values():
+            for left, right in zip(hash_keys, hash_keys[1:]):
+                _union(left, right)
+
+    clusters: dict[str, list[SupplementOnDisk]] = {}
+    for key, entry in by_path.items():
+        clusters.setdefault(_find(key), []).append(entry)
 
     groups: list[DuplicateGroup] = []
-    for (provider, provider_asset_id), entries in sorted(by_key.items()):
-        if len(entries) < 2:
+    for entries in clusters.values():
+        # Einzigartige Pfade
+        unique: dict[str, SupplementOnDisk] = {}
+        for entry in entries:
+            unique[_path_key(entry.path)] = entry
+        if len(unique) < 2:
             continue
-        ranked = sorted(entries, key=_keeper_rank, reverse=True)
-        keep = ranked[0].path
+        ranked = sorted(unique.values(), key=_keeper_rank, reverse=True)
+        keep_entry = ranked[0]
         remove = [item.path for item in ranked[1:]]
+        provider = keep_entry.provider
+        provider_asset_id = keep_entry.provider_asset_id
+        if not provider_asset_id:
+            # Hash-Gruppe ohne Provider-ID — Label für UI.
+            try:
+                provider_asset_id = f"sha256:{file_sha256(keep_entry.path)[:12]}"
+            except OSError:
+                provider_asset_id = keep_entry.path.stem[:32]
+            if not provider or provider == "unknown":
+                provider = "content"
         groups.append(
             DuplicateGroup(
                 provider=provider,
                 provider_asset_id=provider_asset_id,
-                keep=keep,
+                keep=keep_entry.path,
                 remove=remove,
             )
         )
-    return groups
+    return sorted(groups, key=lambda g: (g.provider, g.provider_asset_id))
 
 
 def _delete_path(path: Path) -> bool:

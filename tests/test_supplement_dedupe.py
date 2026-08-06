@@ -112,6 +112,38 @@ def test_find_existing_by_provider_asset_id(tmp_path: Path) -> None:
     )
 
 
+def test_scan_detects_same_content_different_filenames(tmp_path: Path) -> None:
+    """Gleicher Bytes-Inhalt, unterschiedliche Namen → Duplikat via SHA256."""
+    project = _project(tmp_path)
+    dest = get_provider_supplemental_dir(
+        project.project_root_path, "Antelope Canyon", "pexels"
+    )
+    dest.mkdir(parents=True, exist_ok=True)
+    payload = b"identical-stock-bytes-for-hash-dedupe"
+    first = dest / "funnel_run_a_clip.mp4"
+    second = dest / "manual_rename_other_clip.mp4"
+    first.write_bytes(payload)
+    second.write_bytes(payload)
+    # Unique third file — must not be grouped with the pair.
+    unique = dest / "other_unique.mp4"
+    unique.write_bytes(b"completely-different-bytes")
+
+    groups = scan_supplement_duplicates(project, "Antelope Canyon")
+    assert len(groups) == 1
+    assert groups[0].count == 2
+    kept = groups[0].keep
+    removed = set(groups[0].remove)
+    assert kept in {first, second}
+    assert removed == {first, second} - {kept}
+    assert unique not in removed and groups[0].keep != unique
+
+    report = cleanup_supplement_duplicates(project, "Antelope Canyon", dry_run=False)
+    assert len(report.deleted_media) == 1
+    assert kept is not None and kept.exists()
+    assert not next(iter(removed)).exists()
+    assert unique.exists()
+
+
 def test_scan_and_cleanup_keeps_approved(tmp_path: Path) -> None:
     project = _project(tmp_path)
     older = _write_dup(
