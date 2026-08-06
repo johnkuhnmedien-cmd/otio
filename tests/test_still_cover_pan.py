@@ -276,12 +276,13 @@ def test_export_square_still_uses_paper_edge_fallback(tmp_path: Path) -> None:
         height=1080,
         fps=25.0,
     )
+    # Auch bei Setting „vintage“ muss Quadrat Paper-Edge bekommen.
     save_cut_plan_options(
         project,
         CutPlanOptions(
             still_image_style_enabled=False,
             still_image_pan_mode=STILL_PAN_MODE_OFF,
-            still_image_background_style="none",
+            still_image_background_style="vintage",
         ),
     )
     shot = ResolvedShot(

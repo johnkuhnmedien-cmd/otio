@@ -311,7 +311,6 @@ def _export_styled_still_hold(
     from otio_app.services.without_voiceover_enhanced.cut_plan_options import (
         STILL_BACKGROUND_NONE,
         STILL_BACKGROUND_PAPER_EDGE,
-        STILL_BACKGROUND_VINTAGE,
         STILL_PAN_FALLBACK_ZOOM,
         STILL_PAN_MODE_ALTERNATE,
         resolve_still_pan_direction,
@@ -346,12 +345,11 @@ def _export_styled_still_hold(
             shot_index=shot_index,
         )
     else:
-        # Zu quadratisch/hochkant: 0.8 + Paper/Vintage (+ Dyn-Zoom).
+        # Zu quadratisch/hochkant: immer 0.8 + Paper-Edge (+ Dyn-Zoom).
+        # Vintage allein liefert glatte Kanten — Nutzer will den Papierrand.
         use_style = True
         style_zoom = float(STILL_PAN_FALLBACK_ZOOM)
-        bg = str(options.still_image_background_style or STILL_BACKGROUND_VINTAGE)
-        if bg not in {STILL_BACKGROUND_VINTAGE, STILL_BACKGROUND_PAPER_EDGE}:
-            bg = STILL_BACKGROUND_PAPER_EDGE
+        bg = STILL_BACKGROUND_PAPER_EDGE
         use_dynamic = True
         hold_source_is_original = False
         effective_pan = None
