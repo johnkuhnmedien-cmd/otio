@@ -134,13 +134,18 @@ def _is_non_plan_envelope_shot(shot: ResolvedShot) -> bool:
     - ``__shortfall``: Dauer-Lücken-Tail nach einem Slot
     - ``__closing_fallback``: Reserve-Closer bei Narrations-Restlücke
     - Keyword-Flow Map-Opener: technischer 9s-Vorspann vor dem Kapitel
+    - Intro Vorlauf/Nachlauf: eigene technische Envelope-Shots
     """
     shot_id = str(getattr(shot, "shot_id", "") or "")
     if shot_id.endswith("__shortfall") or shot_id.endswith("__closing_fallback"):
         return True
+    if shot_id.endswith("_preroll") or shot_id.endswith("_postroll"):
+        return True
     editorial = str(getattr(shot, "editorial_function", "") or "").strip().lower()
     if editorial in {
         "technical_chapter_map_opener",
+        "technical_chapter_preroll",
+        "technical_chapter_postroll",
         "chapter_close_fallback",
     }:
         return True

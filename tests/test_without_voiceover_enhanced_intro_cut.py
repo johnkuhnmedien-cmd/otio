@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from otio_app.services.without_voiceover_enhanced.intro_cut_service import (
     INTRO_CLOSING_HOLD_DEFAULT_SEC,
     INTRO_CLOSING_HOLD_MAX_SEC,
@@ -102,7 +104,10 @@ def test_intro_prompt_rules() -> None:
     assert "strong" in prompt
     assert "acceptable" in prompt
     assert "4.0" in prompt
-    assert "between 5.0 and" in prompt
+    assert "voiceover_postroll_sec between" in prompt
+    assert "5.0 and 8.0" in prompt
+    assert "SEPARATE preroll shot" in prompt
+    assert "SEPARATE postroll shot" in prompt
     assert "9.500" in prompt
     assert "shot_min" in prompt
     assert "shot_max" in prompt
@@ -145,12 +150,16 @@ def test_intro_prompt_uses_configured_hold_timings() -> None:
         intro_postroll_min_sec=6.0,
         intro_postroll_max_sec=9.0,
     )
-    assert "3.0s BEFORE Intro VO" in prompt
-    assert "voiceover_preroll_sec to 3.0" in prompt
-    assert "between 6.0 and" in prompt
+    assert "SEPARATE preroll shot for 3.0s" in prompt
+    assert "voiceover_preroll_sec to" in prompt and "3.0" in prompt
+    assert "voiceover_postroll_sec between" in prompt
+    assert "6.0 and 9.0" in prompt
     assert "prefer ~7.0" in prompt
     assert '"voiceover_preroll_sec": 3.0' in prompt
     assert '"voiceover_postroll_sec": 7.0' in prompt
+    assert "SEPARATE postroll shot" in prompt
+    assert "not an extension of slot 1" in prompt
+    assert "extension of the last VO slot" in prompt
 
 
 def test_enforce_intro_strong_only_rejects_acceptable() -> None:
@@ -174,6 +183,137 @@ def test_enforce_intro_strong_only_rejects_acceptable() -> None:
     assert out.slots[1].asset_fit == "strong"
     assert out.voiceover_preroll_sec == INTRO_OPENING_HOLD_SEC
     assert out.voiceover_postroll_sec == INTRO_CLOSING_HOLD_MAX_SEC  # clamped from 9
+
+
+def test_intro_envelopes_are_independent_shots(tmp_path) -> None:
+    """Vorlauf/Nachlauf = eigene Shots; Content startet erst mit VO."""
+    from unittest.mock import patch
+
+    from otio_app.defaults import DEFAULT_ENHANCED_WORK_SUBDIR
+    from otio_app.models import Project, ProjectMode
+    from otio_app.services.without_voiceover_enhanced.models import (
+        EnhancedScriptDocument,
+        FinalCutPlanDocument,
+        FinalShot,
+        NarrationAnchor,
+        ScriptSegment,
+    )
+    from otio_app.services.without_voiceover_enhanced.timeline_resolver import (
+        _apply_chapter_envelopes,
+    )
+
+    root = tmp_path / "proj"
+    work = root / DEFAULT_ENHANCED_WORK_SUBDIR
+    work.mkdir(parents=True)
+    media = root / "still.jpg"
+    media.write_bytes(b"fake")
+    project = Project(
+        id="intro-env",
+        name="Irland",
+        project_root=str(root),
+        work_dir=str(work),
+        project_mode=ProjectMode.WITHOUT_VOICEOVER_ENHANCED,
+        language="de",
+        asset_subdir_names=["Dublin"],
+        selected_asset_subdirs=["Dublin"],
+        fps=25.0,
+        width=1920,
+        height=1080,
+    )
+    locked = EnhancedScriptDocument(
+        script_version="v1",
+        segments=[
+            ScriptSegment(
+                segment_id="Intro_segment_001",
+                folder_name="Intro",
+                text="hello",
+                sequence_index=1,
+            )
+        ],
+    )
+    final = FinalCutPlanDocument(
+        script_version="v1",
+        shots=[
+            FinalShot(
+                shot_id="Intro_slot_001",
+                asset_id="doors",
+                narration_start_anchor=NarrationAnchor(
+                    segment_id="Intro_segment_001", offset_seconds=0.0
+                ),
+                narration_end_anchor=NarrationAnchor(
+                    segment_id="Intro_segment_001", offset_seconds=6.0
+                ),
+            )
+        ],
+    )
+    content = ResolvedShot(
+        shot_id="Intro_slot_001",
+        asset_id="doors",
+        timeline_start_seconds=0.0,
+        timeline_end_seconds=6.0,
+        source_start_seconds=0.0,
+        source_end_seconds=6.0,
+        folder_name="Intro",
+        chapter_id="Intro",
+        resolved_media_path=str(media),
+        resolved_media_kind="image",
+        resolved_media_duration_seconds=6.0,
+        hold_mode="freeze_video",
+    )
+    audio = ResolvedAudioSegment(
+        segment_id="Intro_segment_001",
+        audio_path="/tmp/intro.wav",
+        timeline_start_seconds=0.0,
+        timeline_end_seconds=6.0,
+    )
+    ordered = [content]
+    repairs: list[str] = []
+    errors: list[str] = []
+
+    def _fake_reapply(project, shot, *, fps, repairs, label):
+        del project, fps, repairs, label
+        shot.source_end_seconds = max(
+            0.01, shot.timeline_end_seconds - shot.timeline_start_seconds
+        )
+
+    with patch(
+        "otio_app.services.without_voiceover_enhanced.timeline_resolver._reapply_hold_for_timeline_span",
+        _fake_reapply,
+    ):
+        envs = _apply_chapter_envelopes(
+            project,
+            locked=locked,
+            final=final,
+            ordered=ordered,
+            audio_segments=[audio],
+            preroll=4.0,
+            postroll=6.5,
+            fps=25.0,
+            repairs=repairs,
+            errors=errors,
+        )
+
+    assert not errors
+    assert len(envs) == 1
+    env = envs[0]
+    by_id = {s.shot_id: s for s in ordered}
+    assert "Intro_preroll" in by_id
+    assert "Intro_postroll" in by_id
+    preroll = by_id["Intro_preroll"]
+    postroll = by_id["Intro_postroll"]
+    body = by_id["Intro_slot_001"]
+    assert preroll.editorial_function == "technical_chapter_preroll"
+    assert postroll.editorial_function == "technical_chapter_postroll"
+    assert preroll.timeline_start_seconds == pytest.approx(0.0, abs=1e-3)
+    assert preroll.timeline_end_seconds == pytest.approx(env.chapter_audio_start, abs=1e-3)
+    assert body.timeline_start_seconds == pytest.approx(env.chapter_audio_start, abs=1e-3)
+    assert body.timeline_end_seconds == pytest.approx(env.chapter_audio_end, abs=1e-3)
+    assert postroll.timeline_start_seconds == pytest.approx(env.chapter_audio_end, abs=1e-3)
+    assert postroll.timeline_end_seconds == pytest.approx(env.chapter_video_end, abs=1e-3)
+    assert env.preroll_hold_shot_id == "Intro_preroll"
+    assert env.postroll_hold_shot_id == "Intro_postroll"
+    assert body.timeline_start_seconds > preroll.timeline_start_seconds + 1e-6
+    assert postroll.timeline_start_seconds >= body.timeline_end_seconds - 1e-6
 
 
 def test_clamp_intro_closing_hold() -> None:

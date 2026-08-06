@@ -1198,6 +1198,56 @@ def _closing_fallback_asset_for_chapter(
     return str(closing_fallback_asset_id or "").strip()
 
 
+def _make_independent_envelope_shot(
+    project: Project,
+    template: ResolvedShot,
+    *,
+    shot_id: str,
+    timeline_start: float,
+    timeline_end: float,
+    editorial_function: str,
+    fps: float,
+    repairs: list[str],
+    errors: list[str],
+    label: str,
+) -> ResolvedShot | None:
+    """Eigener Vorlauf-/Nachlauf-Shot (nicht Verlängerung des VO-Content-Shots)."""
+    need = max(0.0, float(timeline_end) - float(timeline_start))
+    if need <= 1e-9:
+        return None
+    shot = ResolvedShot(
+        shot_id=shot_id,
+        asset_id=str(template.asset_id or ""),
+        timeline_start_seconds=round(float(timeline_start), 6),
+        timeline_end_seconds=round(float(timeline_end), 6),
+        source_start_seconds=float(template.source_start_seconds or 0.0),
+        source_end_seconds=float(template.source_end_seconds or 0.0),
+        editorial_function=editorial_function,
+        folder_name=str(template.folder_name or template.chapter_id or ""),
+        chapter_id=str(template.chapter_id or template.folder_name or ""),
+        resolved_media_path=template.resolved_media_path,
+        resolved_media_kind=template.resolved_media_kind,
+        resolved_available_start_seconds=template.resolved_available_start_seconds,
+        resolved_media_duration_seconds=template.resolved_media_duration_seconds,
+        hold_mode=template.hold_mode or "",
+        asset_fit=template.asset_fit,
+        asset_fit_reason=f"independent envelope ({editorial_function})",
+        open_gap=False,
+    )
+    try:
+        _reapply_hold_for_timeline_span(
+            project,
+            shot,
+            fps=fps,
+            repairs=repairs,
+            label=label,
+        )
+    except TimelineResolveError as exc:
+        errors.append(str(exc))
+        return None
+    return shot
+
+
 def _apply_chapter_envelopes(
     project: Project,
     *,
@@ -1219,14 +1269,18 @@ def _apply_chapter_envelopes(
     short_tolerance: float = 0.0,
     enable_map_opener: bool = False,
     map_decisions: dict[str, Any] | None = None,
+    independent_envelope_shots: bool | None = None,
 ) -> list[ResolvedChapterEnvelope]:
-    """Kapitelhüllen: Vor-/Nachlauf am Opening/Closing-CONTENT-Shot.
+    """Kapitelhüllen: Vor-/Nachlauf vor/nach dem VO-Carpet.
 
     E2E-4:
     - ``chapter_video_end = chapter_audio_end + postroll`` am chapter_close
     - ``chapter_video_start(N+1) = chapter_video_end(N)`` (kein Bridge-Slot)
-    - ``last_shot_id`` / ``postroll_hold_shot_id`` = letzter CONTENT-Shot
     - ``chapter_audio_end`` aus Audio-Segment-Ende (ceil), Start floor
+
+    Intro (und optional ``independent_envelope_shots=True``): eigener Vorlauf-
+    und Nachlauf-Shot — Content-Shots starten erst mit VO / enden mit VO.
+    Kapitel-Default: Vor-/Nachlauf verlängert Opening/Closing-Content-Shot.
 
     ``include_chapter``: optional nur bestimmte Kapitel (z. B. Intro-only Resolve).
     Bei abschließender Narrations-Lücke kann ``closing_fallback_asset_id`` /
@@ -1572,23 +1626,79 @@ def _apply_chapter_envelopes(
                 raw_audio_start,
             )
 
-        first = min(ch_shots, key=lambda s: (s.timeline_start_seconds, s.shot_id))
-        last = max(ch_shots, key=lambda s: (s.timeline_end_seconds, s.shot_id))
+        content_shots = [
+            s
+            for s in ch_shots
+            if str(s.editorial_function or "")
+            not in {
+                "technical_chapter_map_opener",
+                "technical_chapter_preroll",
+                "technical_chapter_postroll",
+            }
+        ]
+        if not content_shots:
+            content_shots = list(ch_shots)
+        content_first = min(
+            content_shots, key=lambda s: (s.timeline_start_seconds, s.shot_id)
+        )
+        content_last = max(
+            content_shots, key=lambda s: (s.timeline_end_seconds, s.shot_id)
+        )
+
+        # Intro: immer eigene Vorlauf-/Nachlauf-Shots. Optional global erzwingen.
+        use_independent_envelopes = (
+            True
+            if independent_envelope_shots is True
+            else (
+                False
+                if independent_envelope_shots is False
+                else _is_intro_folder(chapter_id)
+            )
+        )
 
         preroll_hold_id = ""
         postroll_hold_id = ""
-        # Map-Opener ersetzt den normalen Vorlauf — kein Content-Preroll-Hold.
-        if (
-            map_shot is None
+        slug = safe_folder_slug(chapter_id)
+
+        # Map-Opener ersetzt den Settings-Vorlauf — kein zweiter Preroll-Shot.
+        if map_shot is not None and chapter_preroll > 1e-9:
+            preroll_hold_id = map_shot.shot_id
+        elif (
+            use_independent_envelopes
             and chapter_preroll > 1e-9
-            and first.timeline_start_seconds > chapter_video_start + 1e-9
+            and content_first.resolved_media_path
         ):
-            first.timeline_start_seconds = round(chapter_video_start, 6)
-            preroll_hold_id = first.shot_id
+            preroll_shot = _make_independent_envelope_shot(
+                project,
+                content_first,
+                shot_id=f"{slug}_preroll",
+                timeline_start=chapter_video_start,
+                timeline_end=chapter_audio_start,
+                editorial_function="technical_chapter_preroll",
+                fps=fps,
+                repairs=repairs,
+                errors=errors,
+                label=f"Kapitel-{chapter_id}-Vorlauf-Shot",
+            )
+            if preroll_shot is not None:
+                ordered.append(preroll_shot)
+                ch_shots.append(preroll_shot)
+                preroll_hold_id = preroll_shot.shot_id
+                repairs.append(
+                    f"Kapitel {chapter_id}: unabhängiger Vorlauf-Shot "
+                    f"{chapter_preroll:.1f}s vor VO ({preroll_shot.asset_id})."
+                )
+        elif (
+            chapter_preroll > 1e-9
+            and content_first.timeline_start_seconds > chapter_video_start + 1e-9
+        ):
+            # Legacy: Content-Opening in den Vorlauf verlängern.
+            content_first.timeline_start_seconds = round(chapter_video_start, 6)
+            preroll_hold_id = content_first.shot_id
             try:
                 _reapply_hold_for_timeline_span(
                     project,
-                    first,
+                    content_first,
                     fps=fps,
                     repairs=repairs,
                     label=f"Kapitel-{chapter_id}-Vorlauf",
@@ -1596,18 +1706,46 @@ def _apply_chapter_envelopes(
             except TimelineResolveError as exc:
                 errors.append(str(exc))
         elif chapter_preroll > 1e-9:
-            preroll_hold_id = first.shot_id
+            preroll_hold_id = content_first.shot_id
 
         if (
-            chapter_postroll > 1e-9
-            and last.timeline_end_seconds < chapter_video_end - 1e-9
+            use_independent_envelopes
+            and chapter_postroll > 1e-9
+            and content_last.resolved_media_path
         ):
-            last.timeline_end_seconds = round(chapter_video_end, 6)
-            postroll_hold_id = last.shot_id
+            # Content endet mit VO; eigener Nachlauf-Shot danach.
+            if content_last.timeline_end_seconds > chapter_audio_end + 1e-9:
+                content_last.timeline_end_seconds = round(chapter_audio_end, 6)
+            postroll_shot = _make_independent_envelope_shot(
+                project,
+                content_last,
+                shot_id=f"{slug}_postroll",
+                timeline_start=chapter_audio_end,
+                timeline_end=chapter_video_end,
+                editorial_function="technical_chapter_postroll",
+                fps=fps,
+                repairs=repairs,
+                errors=errors,
+                label=f"Kapitel-{chapter_id}-Nachlauf-Shot",
+            )
+            if postroll_shot is not None:
+                ordered.append(postroll_shot)
+                ch_shots.append(postroll_shot)
+                postroll_hold_id = postroll_shot.shot_id
+                repairs.append(
+                    f"Kapitel {chapter_id}: unabhängiger Nachlauf-Shot "
+                    f"{chapter_postroll:.1f}s nach VO ({postroll_shot.asset_id})."
+                )
+        elif (
+            chapter_postroll > 1e-9
+            and content_last.timeline_end_seconds < chapter_video_end - 1e-9
+        ):
+            content_last.timeline_end_seconds = round(chapter_video_end, 6)
+            postroll_hold_id = content_last.shot_id
             try:
                 _reapply_hold_for_timeline_span(
                     project,
-                    last,
+                    content_last,
                     fps=fps,
                     repairs=repairs,
                     label=f"Kapitel-{chapter_id}-Nachlauf",
@@ -1615,7 +1753,10 @@ def _apply_chapter_envelopes(
             except TimelineResolveError as exc:
                 errors.append(str(exc))
         elif chapter_postroll > 1e-9:
-            postroll_hold_id = last.shot_id
+            postroll_hold_id = content_last.shot_id
+
+        first = min(ch_shots, key=lambda s: (s.timeline_start_seconds, s.shot_id))
+        last = max(ch_shots, key=lambda s: (s.timeline_end_seconds, s.shot_id))
 
         if _is_bridge_resolved_shot(last) or str(last.shot_id).startswith("bridge_"):
             errors.append(
@@ -1700,7 +1841,8 @@ def _apply_chapter_envelopes(
         repairs.append(
             f"Kapitelhüllen: {len(envelopes)} Kapitel mit Vorlauf {preroll:.2f}s "
             f"und Nachlauf {postroll:.2f}s pro Kapitel "
-            f"(Nachlauf am Inhalts-Closing-Shot; kein Bridge-Slot)."
+            f"(Intro: eigene Vor-/Nachlauf-Shots; Kapitel: Content-Hold; "
+            f"kein Bridge-Slot)."
         )
     return envelopes
 
