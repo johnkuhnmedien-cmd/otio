@@ -1242,6 +1242,9 @@ def resolve_unified_timeline(
         from otio_app.services.without_voiceover_enhanced.keyword_flow_closing import (
             validate_keyword_flow_closing,
         )
+        from otio_app.services.without_voiceover_enhanced.enhanced_supplement_dedupe import (
+            build_asset_reuse_key_index,
+        )
         from otio_app.services.without_voiceover_enhanced.unified_cut_plan import (
             enforce_asset_reuse_as_coverage_gaps,
         )
@@ -1263,6 +1266,7 @@ def resolve_unified_timeline(
             ),
             intro_asset_ids=intro_asset_ids,
             prefer_closing_fallback=True,
+            reuse_key_index=build_asset_reuse_key_index(project),
         )
         for note in reuse_notes:
             repairs.append(f"reuse→gap: {note}")
@@ -1707,8 +1711,20 @@ def resolve_unified_timeline(
     filled_shots = [
         shot for shot in editorial_shots if not shot.open_gap and shot.asset_id
     ]
+    from otio_app.services.without_voiceover_enhanced.enhanced_supplement_dedupe import (
+        build_asset_reuse_key_index,
+        reuse_identity_key,
+    )
+
+    reuse_index = build_asset_reuse_key_index(project)
+
+    def _reuse_key(asset_id: str | None) -> str:
+        return reuse_identity_key(asset_id, index=reuse_index)
+
     for prev, curr in zip(filled_shots, filled_shots[1:]):
-        if not prev.asset_id or prev.asset_id != curr.asset_id:
+        if not prev.asset_id or not curr.asset_id:
+            continue
+        if _reuse_key(prev.asset_id) != _reuse_key(curr.asset_id):
             continue
         # Nur direkt benachbart auf der redaktionellen Spur (Gaps dazwischen OK).
         prev_i = next(
@@ -1733,14 +1749,22 @@ def resolve_unified_timeline(
             f"{prev.shot_id} → {curr.shot_id}."
         )
 
-    usage_counts = Counter(shot.asset_id for shot in filled_shots)
-    for asset_id, count in sorted(usage_counts.items()):
-        folder = str((catalog.by_id.get(asset_id) or {}).get("folder") or "")
+
+    # Provider-kanonisch: pexels_video_123 und supplement_pexels_123 = dieselbe Nutzung.
+    usage_counts: Counter[str] = Counter()
+    usage_examples: dict[str, str] = {}
+    for shot in filled_shots:
+        key = _reuse_key(shot.asset_id)
+        usage_counts[key] += 1
+        usage_examples.setdefault(key, str(shot.asset_id))
+    for key, count in sorted(usage_counts.items()):
+        example_id = usage_examples.get(key, key)
+        folder = str((catalog.by_id.get(example_id) or {}).get("folder") or "")
         if _is_intro_folder(folder):
             continue
         if count > int(options.max_asset_usage):
             errors.append(
-                f"Asset {asset_id} wird {count}× genutzt "
+                f"Asset {example_id} ({key}) wird {count}× genutzt "
                 f"(max_asset_usage={options.max_asset_usage})."
             )
 
@@ -1757,7 +1781,8 @@ def resolve_unified_timeline(
         )
         if _is_intro_folder(folder):
             continue
-        prev_index = last_index.get(shot.asset_id)
+        key = _reuse_key(shot.asset_id)
+        prev_index = last_index.get(key)
         if prev_index is not None:
             gap_shots = index - prev_index - 1
             if gap_shots < min_gap:
@@ -1771,7 +1796,7 @@ def resolve_unified_timeline(
                     errors.append(message)
                 else:
                     repairs.append(message)
-        last_index[shot.asset_id] = index
+        last_index[key] = index
 
     repairs.extend(assess_cut_rhythm(final_shadow, ordered))
 

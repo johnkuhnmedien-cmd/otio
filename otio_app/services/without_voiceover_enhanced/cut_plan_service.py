@@ -2109,6 +2109,10 @@ def generate_unified_cut_for_folder(
                 enforce_asset_reuse_as_coverage_gaps,
             )
 
+            from otio_app.services.without_voiceover_enhanced.enhanced_supplement_dedupe import (
+                build_asset_reuse_key_index,
+            )
+
             plan, _reuse_notes = enforce_asset_reuse_as_coverage_gaps(
                 plan,
                 max_asset_usage=int(options.max_asset_usage),
@@ -2117,6 +2121,7 @@ def generate_unified_cut_for_folder(
                 ),
                 prior_usage_counts=prior_usage_counts,
                 prior_editorial_asset_ids=prior_editorial_asset_ids,
+                reuse_key_index=build_asset_reuse_key_index(project),
             )
         _rough, coverage = unified_to_rough(plan)
         return FolderUnifiedCutResult(

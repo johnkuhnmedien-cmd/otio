@@ -324,8 +324,33 @@ def download_full_candidate_safe(
     candidate: StockCandidate,
     *,
     gap_id: str,
+    folder_name: str | None = None,
+    allow_reuse: bool = True,
 ) -> Path:
-    """Voll-Download mit SSRF-Schutz; URL nie als local_media_path speichern."""
+    """Voll-Download mit SSRF-Schutz; URL nie als local_media_path speichern.
+
+    Bei bekannter ``provider_asset_id`` wird zuerst Inventar / Accepted
+    (inkl. Geschwister-Sprachen) / ``_supplemental`` / Cut-Plan-Manifest
+    geprüft — kein zweiter Netz-Download desselben Stock-Assets.
+    """
+    if allow_reuse:
+        from otio_app.services.without_voiceover_enhanced.enhanced_supplement_dedupe import (
+            find_existing_enhanced_provider_asset,
+            provider_identity_for_candidate,
+        )
+
+        identity = provider_identity_for_candidate(candidate)
+        if identity is not None:
+            existing = find_existing_enhanced_provider_asset(
+                project,
+                provider=identity.provider,
+                provider_asset_id=identity.provider_asset_id,
+                folder_name=folder_name,
+            )
+            if existing is not None:
+                candidate.local_media_path = str(existing.path)
+                return existing.path
+
     url = (candidate.download_url or "").strip()
     if not url:
         raise SupplementFunnelError(
@@ -1426,14 +1451,26 @@ def run_supplement_funnel_for_gaps(
                 ),
             )
             media_path: Path | None = None
+            folder = _folder_for_gap(project, gap, locked)
             try:
                 if download_callable is not None:
-                    media_path = download_callable(
-                        project, candidate, gap_id=gap.gap_id
-                    )
+                    try:
+                        media_path = download_callable(
+                            project,
+                            candidate,
+                            gap_id=gap.gap_id,
+                            folder_name=folder,
+                        )
+                    except TypeError:
+                        media_path = download_callable(
+                            project, candidate, gap_id=gap.gap_id
+                        )
                 else:
                     media_path = download_full_candidate_safe(
-                        project, candidate, gap_id=gap.gap_id
+                        project,
+                        candidate,
+                        gap_id=gap.gap_id,
+                        folder_name=folder,
                     )
             except Exception as exc:  # noqa: BLE001
                 record.funnel_status = transition(
